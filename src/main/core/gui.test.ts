@@ -92,18 +92,18 @@ describe('a window’s port', () => {
 
   it('serves a hand-written channel for the window its port belongs to', async () => {
     const channels = {
-      call: vi.fn(() => 'team.corral'),
+      call: vi.fn(() => null),
       listen: vi.fn(() => () => undefined),
       gone: vi.fn(),
     };
     const core = { ...fakeCore(), channels };
     const window = connect(new WindowPorts(core), 7);
 
-    await expect(window.request('channel', 'canvas:save', ['{}', false])).resolves.toEqual({
+    await expect(window.request('channel', 'session:close', ['a'])).resolves.toEqual({
       ok: true,
-      value: 'team.corral',
+      value: null,
     });
-    expect(channels.call).toHaveBeenCalledWith(7, 'canvas:save', ['{}', false]);
+    expect(channels.call).toHaveBeenCalledWith(7, 'session:close', ['a']);
     expect(core.call).not.toHaveBeenCalled();
   });
 

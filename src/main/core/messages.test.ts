@@ -4,7 +4,7 @@ import path from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { MAX_MESSAGE_BYTES, MAX_PAGE_BYTES, MAX_WAITING } from '../../shared/api/limits';
+import { MAX_LABEL, MAX_MESSAGE_BYTES, MAX_PAGE_BYTES, MAX_WAITING } from '../../shared/api/limits';
 import { OPS } from '../../shared/api/registry';
 import type { Message } from '../../shared/model/messages';
 import type { Entry } from '../../shared/model/session';
@@ -16,6 +16,8 @@ import type { SessionEvent, SessionMode, SettingsOptions } from '../../shared/se
 import type { UsageWindows } from '../../shared/usage';
 import { callTool } from '../api/mcp';
 import type { Connector, SessionHost } from '../sessions/connector';
+import { CanvasMemory } from '../memory';
+import { CATALOG, DEFAULT_ADAPTER } from '../sessions/adapters';
 import { FakeConnector } from '../sessions/fake';
 import { TerminalConnector } from '../sessions/claude-code/connector';
 import { FakeClaude } from '../sessions/claude-code/fake-claude';
@@ -25,10 +27,20 @@ import { HookTruster } from '../sessions/codex/terminal/trust';
 import { CodexTui } from '../sessions/codex/terminal/tui';
 import { UsageReader } from '../sessions/codex/terminal/usage';
 import type { AgentCaller, Caller, OutsideCaller } from './caller';
+import { Documents } from './canvas/documents';
+import { commitDocument } from './canvas/test-documents';
 import { createCore } from './core';
 import type { Core } from './core';
+import { isActive } from './delivery/messages';
 import { STORE_FILE } from './store/open';
-import { forgetRun, keepCanvases, keepMessages, openedLast, readOnDisk } from './store/test-store';
+import {
+  forgetRun,
+  keepCanvases,
+  keepMessages,
+  openedLast,
+  openTestStore,
+  readOnDisk,
+} from './store/test-store';
 import { CALLERS, CANVAS, NO_DESKTOP, OTHER_CANVAS } from './test-registry';
 
 /*
@@ -118,11 +130,21 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  const stores = (core?.engines.opened() ?? []).flatMap(
+    (canvas) => core?.engines.canvas(canvas)?.messages ?? [],
+  );
+  const indexed = () => stores.map((messages) => messages.active());
+  const kept = () => stores.map((messages) => messages.all().filter(isActive));
+  const [before, keptBefore] = [indexed(), kept()];
   await core?.close();
   core = undefined;
   vi.useRealTimers();
   vi.restoreAllMocks();
   await rm(profile, { recursive: true, force: true });
+  // What delivery acts on is what each canvas's store keeps that it acts on, whatever the test
+  // did, and once the core has closed.
+  expect(before).toEqual(keptBefore);
+  expect(indexed()).toEqual(kept());
 });
 
 const realNow = Date.now.bind(Date);
@@ -165,6 +187,28 @@ async function keepCanvas(
     }),
   );
   await keepCanvases(profile, { [CANVAS]: { file, project } });
+}
+
+/**
+ * Commits the canvas's document as its file holds it now, while no core has the profile open, as
+ * your edits in the app would.
+ */
+async function editInApp(): Promise<void> {
+  const store = await openTestStore(profile);
+  try {
+    const memory = new CanvasMemory(store);
+    const documents = new Documents({
+      store,
+      memory,
+      catalog: CATALOG,
+      defaultAdapter: DEFAULT_ADAPTER,
+    });
+    const text = await readFile(path.join(profile, 'canvas.corral'), 'utf8');
+    await commitDocument(documents, CANVAS, documents.read(text));
+    await memory.flush();
+  } finally {
+    await store.close();
+  }
 }
 
 /**
@@ -494,7 +538,10 @@ describe('delivery', () => {
   });
 
   it('quotes a long name, and a long reason a session won’t start, cut short', async () => {
-    await keepCanvas([{ ...BUILDER_AGENT, label: `Builder ${'x'.repeat(MAX_MESSAGE_BYTES)}` }], []);
+    await keepCanvas(
+      [{ ...BUILDER_AGENT, label: `Builder ${'x'.repeat(MAX_LABEL - 'Builder '.length)}` }],
+      [],
+    );
     await start({
       appServer: refusing(`This login can’t run here: ${'because '.repeat(MAX_MESSAGE_BYTES / 8)}`),
     });
@@ -780,7 +827,7 @@ describe('delivery', () => {
         },
         YOU,
       ),
-    ).toEqual({ ok: true, value: {} });
+    ).toEqual({ ok: true, value: { revs: {} } });
     await vi.waitFor(async () => {
       const reply = (await inbox(BUILDER)).find((message) => message.replyTo === id);
       expect(reply?.state).toBe('replied');
@@ -1416,7 +1463,11 @@ async function receive(to = 'builder', caller: Caller = OUTSIDE): Promise<string
 /** A received turn withdrawn before its fake session finishes. */
 async function withdrawReceived(to = 'builder', caller: Caller = OUTSIDE): Promise<string> {
   const id = await receive(to, caller);
-  expect(await ok('withdraw', { id }, caller)).toEqual({ reached: true, interrupted: true });
+  expect(await ok('withdraw', { id }, caller)).toEqual({
+    reached: true,
+    interrupted: true,
+    revs: {},
+  });
   expect((await find(id, caller))?.state).toBe('withdrawn');
   return id;
 }
@@ -1535,7 +1586,7 @@ describe('telling an agent of a withdrawal after receipt', () => {
     await start();
     await ok('run.pause', { target: { agent: 'builder' } }, YOU);
     const id = await send('builder', 'Never sent');
-    expect(await ok('withdraw', { id })).toEqual({ reached: false, interrupted: false });
+    expect(await ok('withdraw', { id })).toEqual({ reached: false, interrupted: false, revs: {} });
     await ok('run.unpause', { target: { agent: 'builder' } }, YOU);
     const next = await send('builder', 'New work', OTHER);
     await vi.waitFor(async () => {
@@ -1559,6 +1610,7 @@ describe('telling an agent of a withdrawal after receipt', () => {
     expect(await ok('withdraw', { id: queued }, YOU)).toEqual({
       reached: false,
       interrupted: false,
+      revs: {},
     });
     await ok('session.interrupt', { agent: 'builder' }, YOU);
     await vi.waitFor(async () => {
@@ -1667,7 +1719,7 @@ describe('telling an agent of a withdrawal after receipt', () => {
     await vi.waitFor(async () => {
       expect((await find(next, YOU))?.state).toBe('delivering');
     });
-    expect(await ok('withdraw', { id })).toEqual({ reached: true, interrupted: true });
+    expect(await ok('withdraw', { id })).toEqual({ reached: true, interrupted: true, revs: {} });
     await vi.waitFor(async () => {
       expect((await find(next, YOU))?.state).toBe('replied');
     });
@@ -2856,6 +2908,7 @@ describe('a restart', () => {
       AGENTS.filter(({ id }) => id !== 'helper'),
       [['builder', 'checker']],
     );
+    await editInApp();
     await start();
     await vi.waitFor(async () => {
       expect(await find(theirs)).toMatchObject({ state: 'withdrawn', by: 'corrallm' });
@@ -2921,12 +2974,16 @@ describe('pauses', () => {
     await ok('run.pause', { target: { agent: 'builder' } });
     expect(await ok('run.unpause', { target: { agent: 'builder' } })).toEqual({
       held: [{ by: 'you', on: 'builder' }],
+      revs: {},
     });
     const id = await send('builder', 'Still paused?');
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect((await find(id))?.state).toBe('pending');
     // Yours released too, it runs again.
-    expect(await ok('run.unpause', { target: { agent: 'builder' } }, YOU)).toEqual({ held: [] });
+    expect(await ok('run.unpause', { target: { agent: 'builder' } }, YOU)).toEqual({
+      held: [],
+      revs: {},
+    });
     await vi.waitFor(async () => {
       expect((await find(id))?.state).toBe('replied');
     });
@@ -2950,6 +3007,7 @@ describe('pauses', () => {
     // You release only Builder's own pauses; its group's still holds it.
     expect(await ok('run.unpause', { target: { agent: 'builder' } }, YOU)).toEqual({
       held: [{ by: 'you', on: 'team' }],
+      revs: {},
     });
   });
 
@@ -2976,7 +3034,7 @@ describe('pauses', () => {
           'Builder is held by your pause on its group "Team": release it with run.unpause on that group. It is also paused by "other": only the party that set a pause, or the user, can release it.',
       },
     });
-    expect(await ok('run.unpause', { target: { group: 'team' } })).toEqual({ held: [] });
+    expect(await ok('run.unpause', { target: { group: 'team' } })).toEqual({ held: [], revs: {} });
   });
 
   it.each([
@@ -3042,14 +3100,20 @@ describe('pauses', () => {
     expect(
       await core?.call('run.unpause', { canvas: CANVAS, target: { agent: 'builder' } }, OUTSIDE),
     ).toMatchObject({ ok: false, error: { code: 'refused' } });
-    expect(await ok('run.unpause', { target: { agent: 'builder' } }, OTHER)).toEqual({ held: [] });
+    expect(await ok('run.unpause', { target: { agent: 'builder' } }, OTHER)).toEqual({
+      held: [],
+      revs: {},
+    });
   });
 
   it('lets a token release a kill it made', async () => {
     await keepCanvas();
     await start();
     await ok('run.kill', { target: { agent: 'builder' } });
-    expect(await ok('run.unpause', { target: { agent: 'builder' } })).toEqual({ held: [] });
+    expect(await ok('run.unpause', { target: { agent: 'builder' } })).toEqual({
+      held: [],
+      revs: {},
+    });
     const id = await send('builder', 'Back again');
     await vi.waitFor(async () => {
       expect((await find(id))?.state).toBe('replied');
@@ -3489,11 +3553,11 @@ describe('reads', () => {
     });
     expect(await started.call('withdraw', { id }, both)).toEqual({
       ok: true,
-      value: { reached: false, interrupted: false },
+      value: { reached: false, interrupted: false, revs: {} },
     });
     const next = await send('builder', 'Say hello over MCP', both);
     expect(await callTool(started, both, 'withdraw', { id: next })).toMatchObject({
-      structuredContent: { reached: false, interrupted: false },
+      structuredContent: { reached: false, interrupted: false, revs: {} },
     });
     expect(await find(id)).toMatchObject({ state: 'withdrawn' });
     expect(await find(next)).toMatchObject({ state: 'withdrawn' });

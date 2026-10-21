@@ -21,8 +21,8 @@ describe('a link the user clicks', () => {
 
   it('calls link.open for the browser and link.reveal for a file, with only the URL', () => {
     const api = {
-      linkOpen: vi.fn<GuiApi['linkOpen']>().mockResolvedValue({ opened: true }),
-      linkReveal: vi.fn<GuiApi['linkReveal']>().mockResolvedValue({ revealed: false }),
+      linkOpen: vi.fn<GuiApi['linkOpen']>().mockResolvedValue({ opened: true, revs: {} }),
+      linkReveal: vi.fn<GuiApi['linkReveal']>().mockResolvedValue({ revealed: false, revs: {} }),
     };
     const open = openLinkWith(() => api);
     open('https://docs.example.com/a');

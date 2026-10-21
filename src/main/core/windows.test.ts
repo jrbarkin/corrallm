@@ -48,8 +48,10 @@ describe('the windows and their canvases', () => {
     expect(await shown.canvasOf(contents)).toBe(next);
     expect(shown.showing(first)).toEqual([]);
     expect(shown.showing(next)).toEqual([contents]);
+    expect(shown.shownIn(contents)).toBe(next);
     // A window that showed none (its restore failed) leaves nothing.
     const fresh = window();
+    expect(shown.shownIn(fresh)).toBeUndefined();
     await shown.show(fresh, newCanvasId());
     expect(left).toHaveBeenCalledOnce();
   });

@@ -5,10 +5,10 @@ import { parseRole } from '../role';
 import { EFFORT_PATTERN, MODEL_PATTERN } from '../session';
 import type { AgentSettings } from '../session';
 import { USAGE_WINDOWS } from '../usage';
-import { MAX_NODE_ID } from './canvas';
+import { MAX_LABEL, MAX_POSITION, MAX_NODE_ID } from './canvas';
 import type { CanvasDocument, CanvasNode, Link } from './canvas';
 import { GROUP_COLORS } from './geometry';
-import { isRepeat, MAX_ROUNDS, MAX_SECONDS, sameTarget } from './queue';
+import { isIf, isRepeat, MAX_ROUNDS, MAX_SECONDS, sameTarget } from './queue';
 import { PARTY_PATTERN } from './messages';
 import type { PartyId } from './messages';
 import type {
@@ -62,9 +62,11 @@ import type {
  * repeat is { "id", "repeat", "until", "rounds", "otherwise" }: the steps, messages, waits and
  * delays it runs each round; when it stops (a condition, as an if-then has one, but not timedOut,
  * or { "kind": "repeatEnds", "agent", "item" } to go round with another agent's repeat); at most
- * how many rounds (1 to 20); and then "ask" or "goOn". Ids are unique across a queue, the items in
- * its repeats included, since waits name them. A link's dots are the ones it was drawn between
- * ("top" or "bottom"). Where the queues' run is, and what the user decided in it, is never saved.
+ * how many rounds (1 to 20); and then "ask" or "goOn". Ids are unique across a queue, the items its
+ * if-thens and repeats hold included, since waits name them. A link's dots are the ones it was drawn
+ * between ("top" or "bottom"). Its ids and text hold no broken character (a lone surrogate), which
+ * the core's database and its rows' keys can't keep as it is. Where the queues' run is, and what
+ * the user decided in it, is never saved.
  */
 const FORMAT = 'corrallm';
 const NOT_A_CANVAS = 'This is not a corrallm canvas';
@@ -90,30 +92,115 @@ interface FileLink {
   dots?: [string, string];
 }
 
-/** A canvas as the text of its `.corral` file. */
+/**
+ * The fields a file's objects hold (an item, a condition, a time, a wait's target, an agent's
+ * settings), in the order the file writes them, which is the order they are read in: so a canvas's
+ * text depends only on what it means, never on the order its fields were set in.
+ */
+const FIELD_ORDER = [
+  'id',
+  'by',
+  'kind',
+  'action',
+  'message',
+  'if',
+  'waitFor',
+  'delay',
+  'approve',
+  'repeat',
+  'target',
+  'instruction',
+  'expect',
+  'then',
+  'until',
+  'rounds',
+  'otherwise',
+  'timeout',
+  'agent',
+  'item',
+  'text',
+  'wholeLine',
+  'resets',
+  'backend',
+  'window',
+  'percent',
+  'seconds',
+  'at',
+  'model',
+  'effort',
+  'mode',
+];
+const FIELD_RANK = new Map(FIELD_ORDER.map((field, i) => [field, i]));
+
+/**
+ * `value` with every object's fields in the order a file writes them (FIELD_ORDER, then any other,
+ * as an adapter's id, by name), at every depth: what queue items and settings are written and kept
+ * as.
+ */
+export function inFileOrder<T>(value: T): T {
+  if (Array.isArray(value)) return value.map(inFileOrder) as T;
+  if (!isRecord(value)) return value;
+  const rank = (field: string) => FIELD_RANK.get(field) ?? FIELD_ORDER.length;
+  return Object.fromEntries(
+    Object.entries(value)
+      .sort(([a], [b]) => rank(a) - rank(b) || (a < b ? -1 : a > b ? 1 : 0))
+      .map(([field, one]) => [field, inFileOrder(one)]),
+  ) as T;
+}
+
+/** A canvas as the text of its `.corral` file. An agent's empty queue is written as none. */
 export function toFile({ id, arrange, nodes, links }: CanvasDocument): string {
-  const saved = nodes.map((n): FileNode => {
-    const agent = n.type === 'agent' ? n.data : undefined;
-    const role = readRole(agent?.role, `${n.id}.role`);
-    return {
-      id: n.id,
-      kind: n.type === 'frame' ? 'group' : 'agent',
-      label: n.data.label,
-      position: { x: n.position.x, y: n.position.y },
-      ...(n.parentId === undefined ? {} : { parent: n.parentId }),
-      ...(agent?.adapter === undefined ? {} : { adapter: agent.adapter }),
-      ...(agent?.connection === undefined ? {} : { connection: agent.connection }),
-      ...(agent?.settings === undefined ? {} : { settings: agent.settings }),
-      ...(role === undefined ? {} : { role }),
-      ...(n.data.color === undefined ? {} : { color: n.data.color }),
-      ...(agent?.queue === undefined ? {} : { queue: agent.queue }),
-    };
-  });
+  const saved = nodes.map(fileNodeOf);
   const drawn = links.map(({ source, target, dots }): FileLink => ({
     agents: [source, target],
     ...(dots ? { dots } : {}),
   }));
   return `${JSON.stringify({ format: FORMAT, version: CANVAS_VERSION, id, ...(arrange ? { arrange: true } : {}), nodes: saved, links: drawn }, null, 2)}\n`;
+}
+
+/** A node as its canvas's file holds it. An agent's empty queue is written as none. */
+function fileNodeOf(n: CanvasNode): FileNode {
+  const agent = n.type === 'agent' ? n.data : undefined;
+  const role = readRole(agent?.role, `${n.id}.role`);
+  return {
+    id: n.id,
+    kind: n.type === 'frame' ? 'group' : 'agent',
+    label: n.data.label,
+    position: { x: n.position.x, y: n.position.y },
+    ...(n.parentId === undefined ? {} : { parent: n.parentId }),
+    ...(agent?.adapter === undefined ? {} : { adapter: agent.adapter }),
+    ...(agent?.connection === undefined ? {} : { connection: agent.connection }),
+    ...(agent?.settings === undefined ? {} : { settings: inFileOrder(agent.settings) }),
+    ...(role === undefined ? {} : { role }),
+    ...(n.data.color === undefined ? {} : { color: n.data.color }),
+    ...(agent?.queue === undefined || agent.queue.length === 0
+      ? {}
+      : { queue: inFileOrder(agent.queue) }),
+  };
+}
+
+/**
+ * Why `node` couldn't be read from its canvas's file as it is, against `catalog`, an agent naming
+ * no adapter running `defaultAdapter`: what fromFile reads of a node (its id, label, position,
+ * adapter, connection, settings, role, colour and queue; not what it sits in, nor its links).
+ * Undefined if it could.
+ */
+export function nodeFault(
+  node: CanvasNode,
+  catalog: Catalog,
+  defaultAdapter: AdapterId,
+): string | undefined {
+  try {
+    readNode(
+      JSON.parse(JSON.stringify(fileNodeOf(node))) as unknown,
+      `node "${node.id}"`,
+      catalog,
+      defaultAdapter,
+    );
+    return undefined;
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  }
 }
 
 /**
@@ -266,17 +353,19 @@ function readNode(
     }
     return v;
   });
-  const queue = optional(node.queue, `${where}.queue`, (v, at) => {
+  const read = optional(node.queue, `${where}.queue`, (v, at) => {
     if (kind === 'group') throw new Error(`${at}: a group has no queue`);
     return readQueue(v, at);
   });
+  // An empty queue is none, as it is written.
+  const queue = read?.length === 0 ? undefined : read;
   return {
     id,
     kind,
-    label: text(node.label, `${where}.label`),
+    label: label(node.label, `${where}.label`),
     position: {
-      x: number(position.x, `${where}.position.x`),
-      y: number(position.y, `${where}.position.y`),
+      x: coordinate(position.x, `${where}.position.x`),
+      y: coordinate(position.y, `${where}.position.y`),
     },
     ...(node.parent === undefined ? {} : { parent: name(node.parent, `${where}.parent`) }),
     ...(adapter === undefined ? {} : { adapter }),
@@ -352,22 +441,25 @@ function readSettings(
 }
 
 /**
- * A queue: its items, with ids unique across it, the items in its repeats included (waits name
- * them).
+ * A queue: its items, with ids unique across the whole of it, the items its if-thens and repeats
+ * hold included (waits name them, and the core keeps each item by its agent and its id).
  */
 function readQueue(value: unknown, where: string): QueueItem[] {
   const queue = items(value, where, readItem);
-  const ids = new Set(queue.map((item) => item.id));
+  const ids = new Set<string>();
+  const unique = (id: string, at: string) => {
+    if (ids.has(id)) throw new Error(`${at}.id: "${id}" is used twice in this queue`);
+    ids.add(id);
+  };
   for (const [i, item] of queue.entries()) {
-    if (!isRepeat(item)) continue;
-    for (const [j, inner] of item.repeat.entries()) {
-      if (ids.has(inner.id)) {
-        throw new Error(
-          `${where}[${String(i)}].repeat[${String(j)}].id: "${inner.id}" is used twice in this queue`,
-        );
-      }
-      ids.add(inner.id);
-    }
+    const at = `${where}[${String(i)}]`;
+    unique(item.id, at);
+    const [key, inner] = isRepeat(item)
+      ? ['repeat', item.repeat]
+      : isIf(item)
+        ? ['then', item.then]
+        : ['', []];
+    for (const [j, one] of inner.entries()) unique(one.id, `${at}.${key}[${String(j)}]`);
   }
   return queue;
 }
@@ -395,9 +487,13 @@ function readItem(value: unknown, where: string): QueueItem {
   return readStep(value, where);
 }
 
-/** Queue text keeps its author when the canvas is saved and opened again. */
+/**
+ * Queue text keeps its author when the canvas is saved and opened again: a party other than you,
+ * since text you wrote has none. A file saying you wrote it says what saying nothing says.
+ * Provenance a shared file may claim, never authority: nothing reads it to decide anything.
+ */
 function author(item: Record<string, unknown>, where: string): { by?: PartyId } {
-  if (item.by === undefined) return {};
+  if (item.by === undefined || item.by === 'you') return {};
   if (typeof item.by !== 'string' || !PARTY_PATTERN.test(item.by))
     throw new Error(`${where}.by must be a party id`);
   return { by: item.by as PartyId };
@@ -669,6 +765,8 @@ function record(value: unknown, where: string): Record<string, unknown> {
 
 function text(value: unknown, where: string): string {
   if (typeof value !== 'string') throw new Error(`${where} must be text`);
+  if (!value.isWellFormed())
+    throw new Error(`${where} holds a broken character (a lone surrogate)`);
   return value;
 }
 
@@ -683,11 +781,27 @@ function catalogId(value: unknown, where: string, what: string): string {
 /** An id, or a name like an action's: text that is not empty. */
 function name(value: unknown, where: string): string {
   if (typeof value !== 'string' || value === '') throw new Error(`${where} must be non-empty text`);
-  return value;
+  return text(value, where);
 }
 
 function number(value: unknown, where: string): number {
   if (typeof value !== 'number' || !Number.isFinite(value))
     throw new Error(`${where} must be a number`);
   return value;
+}
+
+function label(value: unknown, where: string): string {
+  const read = text(value, where);
+  if (!read.trim()) throw new Error(`${where} must not be blank`);
+  if (read.length > MAX_LABEL)
+    throw new Error(`${where} must be at most ${String(MAX_LABEL)} characters`);
+  return read;
+}
+function coordinate(value: unknown, where: string): number {
+  const read = number(value, where);
+  if (Math.abs(read) > MAX_POSITION)
+    throw new Error(
+      `${where} must be between -${String(MAX_POSITION)} and ${String(MAX_POSITION)}`,
+    );
+  return read;
 }

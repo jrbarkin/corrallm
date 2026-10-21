@@ -4,9 +4,10 @@ import type { PartyId } from './messages';
 
 /*
  * What waits for someone (API Spec §5.9): one shape for a hold the run has for you, a prompt an
- * agent's session shows, and, in later phases, a message to you, a token's proposal and a canvas
- * file changed on disk. The engine words each once (src/shared/engine/needs.ts), in the host's
- * locale, so the GUI and every party read the same sentences.
+ * agent's session shows, a token's proposal and a canvas file changed on disk (the core's: B9), and,
+ * in a later phase, a message to you. The engine words holds and prompts once
+ * (src/shared/engine/needs.ts), in the host's locale, and the core its proposals and file reviews
+ * (core/canvas/proposals.ts, reviews.ts), so the GUI and every party read the same sentences.
  *
  * Keep this module free of Node, Electron and DOM imports: it is compiled into every process.
  */
@@ -15,8 +16,8 @@ import type { PartyId } from './messages';
  * hold: a hold the run has for you (an OK, a usage ask, a problem decision, a condition's yes or
  * no, a session that would not start). prompt: what an agent's session asks (a permission, its
  * questions, a plan, an MCP server's request), or what a Terminal agent's CLI asks in its terminal.
- * message, proposal, file: a message to you, a token's delete or discard, a canvas file changed on
- * disk (later phases).
+ * proposal: a token's delete or discard. file: a canvas file changed on disk, which you apply or
+ * keep corrallm's canvas over. message: a message to you (a later phase).
  */
 export const NEED_KINDS = ['hold', 'prompt', 'message', 'proposal', 'file'] as const;
 export type NeedKind = (typeof NEED_KINDS)[number];

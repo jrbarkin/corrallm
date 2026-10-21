@@ -247,6 +247,64 @@ describe('CanvasMemory', () => {
     expect(reader.prepare('SELECT count(*) AS kept FROM conversation').get()).toEqual({ kept: 0 });
   });
 
+  it('never forgets a canvas open, nor one with edits not saved, however long since it was used', async () => {
+    // TEAM is open (a window shows it, or the core holds it); OTHER has edits not saved.
+    const memory = new CanvasMemory(store, 1, (canvas) => canvas === OTHER);
+    await memory.setFile(TEAM, at('/1.corral'));
+    await store.write(() => {
+      store.prepare('INSERT INTO open_canvas (canvas_id, opened_at) VALUES (?, 1)').run(TEAM);
+    });
+    await memory.setFile(OTHER, at('/2.corral'));
+    await memory.setFile(THIRD, at('/3.corral'));
+    const FOURTH = '44444444-4444-4444-8444-444444444444' as CanvasId;
+    await memory.setFile(FOURTH, at('/4.corral'));
+    // Only one canvas is kept beyond those spared: the one used last.
+    expect(await memory.get(THIRD)).toEqual({ conversations: {} });
+    expect((await memory.get(FOURTH)).file).toBe('/4.corral');
+    expect((await memory.get(TEAM)).file).toBe('/1.corral');
+    expect((await memory.get(OTHER)).file).toBe('/2.corral');
+    // Drafts too: one with edits not saved is kept, however many come after it.
+    const DRAFT = '55555555-5555-4555-8555-555555555555' as CanvasId;
+    const drafts = new CanvasMemory(store, 1, (canvas) => canvas === DRAFT || canvas === OTHER);
+    await store.write(() => {
+      drafts.ensure(DRAFT);
+    });
+    for (const id of ['66666666-6666-4666-8666-666666666666', THREAD] as CanvasId[]) {
+      await store.write(() => {
+        drafts.ensure(id);
+      });
+    }
+    const kept = reader
+      .prepare('SELECT id FROM canvas WHERE file IS NULL ORDER BY id')
+      .all()
+      .map(({ id }) => id);
+    expect(kept).toEqual([THREAD, DRAFT]);
+  });
+
+  it('forgets a canvas when asked, with everything kept of it, at once and across restarts', async () => {
+    const memory = new CanvasMemory(store);
+    await memory.update(TEAM, () => ({
+      file: at('/1.corral'),
+      conversations: { codex: { a: { id: THREAD } } },
+    }));
+    await memory.setFile(OTHER, at('/2.corral'));
+    // A change not on disk yet is forgotten with it, and never written after.
+    void memory.update(TEAM, (kept) => ({ ...kept, project: at('/work') }));
+    let forgotten: unknown;
+    await memory.forget(TEAM).then(() => {
+      forgotten = reader.prepare('SELECT id FROM canvas ORDER BY id').all();
+    });
+    expect(forgotten).toEqual([{ id: OTHER }]);
+    expect(await memory.get(TEAM)).toEqual({ conversations: {} });
+    expect(memory.keeps(TEAM)).toBe(false);
+    expect(await memory.canvasWithFile('/1.corral')).toBeUndefined();
+    await memory.setFile(THIRD, at('/3.corral'));
+    await reopen();
+    const again = new CanvasMemory(store);
+    expect(again.keeps(TEAM)).toBe(false);
+    expect(reader.prepare('SELECT count(*) AS kept FROM conversation').get()).toEqual({ kept: 0 });
+  });
+
   it('keeps a row for a canvas only its run refers to, a draft, forgetting no other canvas for it', async () => {
     const memory = new CanvasMemory(store, 2);
     await memory.setFile(TEAM, at('/1.corral'));

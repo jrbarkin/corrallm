@@ -1,44 +1,43 @@
 import type { CanvasId } from './canvas';
 
-/** Queue/run metadata only. Native CLIs remain the source of conversation history. */
+/**
+ * Queue/run metadata only: the canvas's document is the core's (core/canvas/documents.ts), and
+ * native CLIs remain the source of conversation history.
+ */
 export interface RunCheckpoint {
   version: 2;
-  workflow: string;
   state: string;
   messages: string;
   updatedAt: number;
 }
 
 /**
- * What a window restores: main owns the canvas's path and gives its id and a generation token,
+ * What a window restores: the core owns the canvas's path and gives its id and a generation token,
  * never a writable path.
  */
 export interface RunContext {
   id: CanvasId;
   token: string;
   checkpoint: RunCheckpoint | null;
-  name: string | null;
-  project?: { name: string; path: string };
-  savedText?: string;
-  warning?: string;
+}
+
+/** Restore notices come from the core alongside the run, rather than document metadata. */
+export interface RunRestore extends RunContext {
+  notices?: readonly string[];
 }
 
 export const MAX_RUN_BYTES = 32 * 1024 * 1024;
 const MAX_JSON_NODES = 200_000;
 
-/** Main bounds the opaque JSON; the renderer validates its workflow/run schema in depth. */
-export function parseRunCheckpoint(
-  value: unknown,
-  /** The workflow is one already read as it is (a run's, unchanged): its JSON isn't read again. */
-  checked: { workflow?: boolean } = {},
-): RunCheckpoint {
+/** The core bounds the opaque JSON; the renderer validates its run schema in depth. */
+export function parseRunCheckpoint(value: unknown): RunCheckpoint {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     throw new TypeError('Expected a run checkpoint');
   }
   const record = value as Record<string, unknown>;
   if (
     Object.keys(record).some(
-      (key) => !['version', 'workflow', 'state', 'messages', 'updatedAt'].includes(key),
+      (key) => !['version', 'state', 'messages', 'updatedAt'].includes(key),
     ) ||
     record.version !== 2 ||
     typeof record.updatedAt !== 'number' ||
@@ -48,12 +47,11 @@ export function parseRunCheckpoint(
     throw new TypeError('Invalid run checkpoint version or timestamp');
   }
   let size = 0;
-  for (const key of ['workflow', 'state', 'messages'] as const) {
+  for (const key of ['state', 'messages'] as const) {
     const text = record[key];
     if (typeof text !== 'string') throw new TypeError(`Expected run ${key} JSON`);
     size += text.length;
     if (size > MAX_RUN_BYTES) throw new RangeError('The run checkpoint is too large');
-    if (key === 'workflow' && checked.workflow === true) continue;
     let parsed: unknown;
     try {
       parsed = JSON.parse(text);

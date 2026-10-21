@@ -3,10 +3,12 @@ import type { OpResult } from '../../shared/api/errors';
 /*
  * Repeated requests (Core Server §5.4): a write may carry a `request` id, and the same caller's
  * repeat of it gets the first call's result instead of running again, so an MCP client's retry, or
- * a window's double dispatch, applies nothing twice. A result is kept only when its op came to it
- * by itself: a call cancelled (its caller left, a preempting op stopped it) or broken by what
- * nobody expected leaves nothing a retry can count on, so its repeat runs again, once the call
- * before it is done. Each caller keeps its own recent requests, so none pushes out another's.
+ * a window's double dispatch, applies nothing twice. core.call keys a request by its op and its
+ * arguments too, so a call that carries an id another call carried is its own call, never answered
+ * with that one's result. A result is kept only when its op came to it by itself: a call cancelled
+ * (its caller left, a preempting op stopped it) or broken by what nobody expected leaves nothing a
+ * retry can count on, so its repeat runs again, once the call before it is done. Each caller keeps
+ * its own recent requests, so none pushes out another's.
  */
 
 /** How many of a caller's recent requests are kept. */

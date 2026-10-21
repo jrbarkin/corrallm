@@ -29,6 +29,7 @@ afterEach(async () => {
   await rm(profile, { recursive: true, force: true });
   vi.unstubAllEnvs();
   vi.restoreAllMocks();
+  spawned.mockReset();
 });
 
 it('starts a usable core even when a stale CLI cannot be signalled', async () => {
@@ -69,6 +70,68 @@ it('starts a usable core even when a stale CLI cannot be signalled', async () =>
     version: 1,
     children: [{ pid: 42, started: 1000 }],
   });
+});
+
+it('ends a helper still running as it closes, and starts none once closing', async () => {
+  // A settings read in flight as corrallm quits: its login shell runs, and once that answers,
+  // the read would start the CLI it asks.
+  const shell = Object.assign(new EventEmitter(), { pid: 42, kill: vi.fn() });
+  const cli = Object.assign(new EventEmitter(), { pid: 43, kill: vi.fn() });
+  spawned.mockReturnValueOnce(shell).mockReturnValueOnce(cli);
+  vi.stubEnv('CORRALLM_CLAUDE_PATH', path.join(profile, 'no-claude'));
+  vi.stubEnv('CORRALLM_CODEX_PATH', path.join(profile, 'no-codex'));
+  const running = new Set([42, 43]);
+  const signal = vi.fn((group: number) => {
+    running.delete(group);
+    (group === 42 ? shell : cli).emit('exit', null, 'SIGTERM');
+  });
+  const answered = Promise.withResolvers<undefined>();
+  const asked = Promise.withResolvers<undefined>();
+  core = await createCore(
+    {
+      profile,
+      app: { name: 'corrallm', version: '1' },
+      check: true,
+      distribution: 'local',
+      fakeSessions: true,
+      children: {
+        platform: 'linux',
+        inspect: (pid) => (running.has(pid) ? { started: 1000, group: pid } : undefined),
+        alive: (group) => running.has(group),
+        signal,
+        wait: () => Promise.resolve(),
+        now: () => 1000,
+      },
+      sessions: {
+        connectors: {},
+        environment: async () => {
+          spawn('fake-shell', [], {});
+          asked.resolve(undefined);
+          await answered.promise;
+          spawn('fake-cli', [], {});
+          return {};
+        },
+      },
+    },
+    NO_DESKTOP,
+  );
+  const reading = Promise.resolve(core.channels.call(7, 'session:options', ['codex']));
+  await asked.promise;
+  const file = path.join(profile, 'sessions', 'pids.json');
+  expect(JSON.parse(await readFile(file, 'utf8'))).toEqual({
+    version: 1,
+    children: [{ pid: 42, started: 1000 }],
+  });
+  const closing = core.close();
+  core = undefined;
+  await closing;
+  expect(signal).toHaveBeenCalledExactlyOnceWith(42, 'SIGTERM');
+  expect(JSON.parse(await readFile(file, 'utf8'))).toEqual({ version: 1, children: [] });
+  answered.resolve(undefined);
+  await reading.catch(() => undefined);
+  expect(spawned).toHaveBeenCalledTimes(1);
+  expect(cli.kill).not.toHaveBeenCalled();
+  expect(JSON.parse(await readFile(file, 'utf8'))).toEqual({ version: 1, children: [] });
 });
 
 it.each(['operation', 'channel', 'engine'] as const)(

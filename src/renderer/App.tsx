@@ -1,11 +1,9 @@
 import { useEffect, useState } from 'react';
 
-import type { CanvasId } from '../shared/canvas';
 import type { SessionBackend } from '../shared/engine/transcript/receive';
 import { api } from './api/client';
 import { findProjectFiles } from './agent/completion';
 import { GraphEditor } from './graph/GraphEditor';
-import type { CanvasFiles } from './graph/GraphEditor';
 import { fromMain } from './ipc-error';
 import { OpenLinkContext, openLinkWith } from './open-link';
 import type { OpenLink } from './open-link';
@@ -14,25 +12,15 @@ import { topics } from './api/topics';
 import type { UsageSource } from './usage/store';
 import type { RunSource } from './run/persistence';
 
+/**
+ * The window's run, journaled by the core: read once the editor's mirror holds the canvas shown
+ * (B9 Design §9), and saved without the document, which is the core's.
+ */
 const runSource: RunSource = {
-  get: async () => {
-    const [context, { c }] = await Promise.all([window.api.getRun(), api.windowGet()]);
-    return { ...context, id: c as CanvasId };
-  },
+  get: () => window.api.getRun(),
   save: (token, checkpoint) => window.api.saveRun(token, checkpoint),
   ready: (request, error) => window.api.runReady(request, error),
   onStopping: (listener) => window.api.onRunStopping(listener),
-};
-
-/**
- * Canvases are opened and saved by the core process (src/main/canvas.ts), which also keeps the
- * folder their agents work in (src/main/project.ts).
- */
-const files: CanvasFiles = {
-  open: () => window.api.openCanvas(),
-  save: (text, choose) => window.api.saveCanvas(text, choose),
-  forget: () => window.api.forgetCanvas(),
-  chooseProject: () => window.api.chooseProject(),
 };
 
 /** Connected agents' sessions run in the core process (src/main/sessions/). */
@@ -127,7 +115,6 @@ export function App() {
       </header>
       <OpenLinkContext.Provider value={openLink}>
         <GraphEditor
-          files={files}
           sessionBackend={sessionBackend}
           terminalBackend={terminalBackend}
           usageSource={usageSource}

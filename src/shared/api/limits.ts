@@ -48,6 +48,32 @@ export const DEFAULT_PAGE = 50;
  */
 export const MAX_PAGE_BYTES = 60 * 1024;
 
+/**
+ * The longest id of a Needs item: what it is, its agent's id escaped (encodeURIComponent: up to 9
+ * characters for each of its own) and what of the agent's it is.
+ */
+export const MAX_NEED_ID = 4096;
+
+/** The longest name of an agent or a group an op gives it, in characters. */
+export { MAX_LABEL, MAX_POSITION } from '../model/canvas';
+
+/** The most nodes one op names, or moves, on a canvas. */
+export const MAX_OP_NODES = 500;
+
+/** Initial children in one queue.add container, bounded with their nested wait targets. */
+export const MAX_INITIAL_QUEUE_ITEMS = 16;
+
+/** The most ops one canvas.batch holds. */
+export const MAX_BATCH_OPS = 100;
+/**
+ * The most bytes of JSON one canvas.batch's ops take together: each may be as large as it may be
+ * alone, but not all of them at once, which no request could hold.
+ */
+export const MAX_BATCH_BYTES = 16 * 1024 * 1024;
+
+/** The most entities a doc op may say it expects the revisions of (Core Server §5.4). */
+export const MAX_EXPECT = 100;
+
 /** How many lines of a prompt's detail are shown, then how many more there are. */
 export const MAX_DETAIL_LINES = 12;
 
@@ -78,3 +104,10 @@ export const TOKEN_IN_FLIGHT = 8;
 export const TOKEN_WAITS = 16;
 /** At most this many writes a second per token. */
 export const TOKEN_WRITES_PER_SECOND = 30;
+
+/** The most blanks a template's `values` fill in one call (canvas.create, insertTemplate). */
+export const MAX_TEMPLATE_FIELDS = 128;
+/** The longest text one blank is filled with, in characters. */
+export const MAX_TEMPLATE_VALUE = 16_384;
+/** The most agents a call chooses an adapter or a connection for, of a template's. */
+export const MAX_TEMPLATE_AGENTS = 256;

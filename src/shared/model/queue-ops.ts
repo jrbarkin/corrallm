@@ -19,7 +19,11 @@ import type { Built } from './structure';
 export type Neighbour =
   { before: string | null; after?: never } | { after: string | null; before?: never };
 
-/** Adds an item to the queue or a named container, minting ids and recording its text's author. */
+/**
+ * Adds an item to the queue or a named container, minting ids and recording its text's author:
+ * `by`, unless it is yours, which is no one's (`by` names only another party: provenance, which a
+ * shared file may claim, never authority; nothing reads it to decide anything).
+ */
 export function add(
   doc: CanvasDocument,
   { agent, entry, into }: { agent: string; entry: QueueEntry; into?: string },
@@ -75,7 +79,10 @@ export function move(
   });
 }
 
-/** Changes one field, recording a new author only when its authored text changes. */
+/**
+ * Changes one field, recording a new author only when its authored text changes: `by`, or no one
+ * for yours, which makes the text yours.
+ */
 export function update(
   doc: CanvasDocument,
   { agent, item, change }: { agent: string; item: string; change: QueueChange },
@@ -84,7 +91,7 @@ export function update(
   const edit = <T extends QueueItem>(one: T): T => {
     if (one.id !== item) return one;
     const next = changeItem(one, change);
-    return (next === one || !textChanged(one, next) ? next : { ...next, by }) as T;
+    return (next === one || !textChanged(one, next) ? next : authoredBy(next, by)) as T;
   };
   return lists(doc, agent, (queue) => queue.map(edit));
 }
@@ -187,12 +194,20 @@ function authored(entry: QueueEntry, by: PartyId, newId: () => string): QueueIte
     const body = { ...entry };
     Reflect.deleteProperty(body, 'id');
     Reflect.deleteProperty(body, 'by');
-    return { id: newId(), by, ...body };
+    return { id: newId(), ...(by === 'you' ? {} : { by }), ...body };
   };
   const item = mint(entry);
   if ('then' in item) return { ...item, then: item.then.map(mint) };
   if ('repeat' in item) return { ...item, repeat: item.repeat.map(mint) };
   return item;
+}
+
+/** `item` written by `by`: its author, or none, for yours. */
+function authoredBy<T extends { by?: PartyId }>(item: T, by: PartyId): T {
+  const next = { ...item };
+  if (by === 'you') delete next.by;
+  else next.by = by;
+  return next;
 }
 
 function accepts(container: QueueItem, entry: QueueEntry): boolean {

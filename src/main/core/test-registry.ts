@@ -4,7 +4,7 @@ import { withEnvelope } from '../../shared/api/define';
 import type { OpDef } from '../../shared/api/define';
 import { brandedId, idsIn, NeedId } from '../../shared/api/ids';
 import type { Brand, IdRef } from '../../shared/api/ids';
-import { PARTIES } from '../../shared/api/surface';
+import { A, L, M, PARTIES, W, Y } from '../../shared/api/surface';
 import type { Party, Reach, Rule, Surface } from '../../shared/api/surface';
 import type { CanvasId } from '../../shared/canvas';
 import type { Dispatcher, Implementation, OpContext, Registry, RuleCheck } from './call';
@@ -23,7 +23,7 @@ import type { Resolver } from './reach';
 
 export const CANVAS = '0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b' as CanvasId;
 export const OTHER_CANVAS = '0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5c' as CanvasId;
-export const PROPOSAL = NeedId.parse('0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5d');
+export const PROPOSAL = NeedId.parse('proposal/0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5d');
 
 /**
  * The canvas's agents: `lead` (a lead, whose team is `helper`, nested inside it), `worker` (with
@@ -69,30 +69,20 @@ function reachesAgent(id: string, caller: TokenCaller, reach: Reach): boolean {
 export const RESOLVERS: Readonly<Record<string, Resolver>> = {
   CanvasId: (id, caller) =>
     caller.kind === 'outside' ? caller.canvases.includes(id as CanvasId) : caller.canvas === id,
-  AgentId: (id, caller, reach, canvas) =>
+  AgentId: (id, caller, reach, { canvas }) =>
     (canvas === undefined || canvas === CANVAS) && reachesAgent(id, caller, reach),
 };
 
 const Canvas = brandedId('CanvasId', z.uuid());
 const Agent = brandedId('AgentId', z.string().min(1).max(64));
 
-const Y = { you: 'all' } as const;
+/** Every caller but you. */
 const T = {
   lead: 'linked',
   worker: 'linked',
   'outside-read': 'canvas',
   'outside-write': 'canvas',
 } as const;
-const A = {
-  you: 'all',
-  lead: 'linked',
-  worker: 'linked',
-  'outside-read': 'canvas',
-  'outside-write': 'canvas',
-} as const;
-const L = { you: 'all', lead: 'team', 'outside-write': 'canvas' } as const;
-const M = { you: 'all', lead: 'linked', worker: 'linked', 'outside-write': 'canvas' } as const;
-const W = { you: 'all', 'outside-write': 'canvas' } as const;
 
 const SURFACES = {
   'test.read': { access: A, kind: 'read', scope: 'none', varies: ['caller'] },
@@ -217,10 +207,14 @@ export function testRegistry(): Registry & {
     ),
     'test.stop': heard('test.stop', () => ({ stopped: true })),
   };
-  const rules: Partial<Record<Rule, RuleCheck>> = {
-    'shell-text': ({ body }: { body: string }) =>
-      body.startsWith('!') ? { refuse: 'Only what you typed may run a shell command.' } : undefined,
-    discard: () => ({ propose: PROPOSAL }),
+  const rules: Partial<Record<Rule, Record<string, RuleCheck>>> = {
+    'shell-text': {
+      'test.message': ({ body }: { body: string }) =>
+        body.startsWith('!')
+          ? { refuse: 'Only what you typed may run a shell command.' }
+          : undefined,
+    },
+    discard: { 'test.delete': () => ({ propose: PROPOSAL }) },
   };
   return { surface: SURFACES, ops: OPS, implementations, rules, calls, released };
 }
@@ -323,9 +317,9 @@ export interface UnreachableCall {
 
 /**
  * The calls of op `name` naming what a token party doesn't reach (Core Server §3.7: reach,
- * generated per op and party): for each token party in its audience, each of its valid arguments
- * with each id in it swapped, in turn, for each id of its kind `world` says the party doesn't
- * reach, as far as the op lets it.
+ * generated per op and party): for each token party in its audience, each of its valid arguments,
+ * and those meeting a rule (which reach is checked before), with each id in it swapped, in turn,
+ * for each id of its kind `world` says the party doesn't reach, as far as the op lets it.
  */
 export function unreachableCalls(
   core: Pick<Dispatcher, 'ops' | 'surface'>,
@@ -340,27 +334,41 @@ export function unreachableCalls(
     const reach = party === 'you' ? undefined : surface.access[party];
     if (reach === undefined) return [];
     const caller = CALLERS[party] as TokenCaller;
-    return validFor(fixture, party).flatMap((args) =>
-      idsIn(def.input, args).flatMap((ref) =>
-        (world[ref.brand]?.(caller, reach) ?? []).map((id) => ({
-          party,
-          args: withId(args, ref, id),
-        })),
-      ),
+    return [...validFor(fixture, party), ...Object.values(fixture.meetsRule ?? {})].flatMap(
+      (args) =>
+        idsIn(def.input, args).flatMap((ref) =>
+          (world[ref.brand]?.(caller, reach) ?? []).map((id) => ({
+            party,
+            args: withId(args, ref, id),
+          })),
+        ),
     );
   });
 }
 
-/** `args` with `id` in place of the id `ref` found in it, by its path (`.agent`, `.nodes[0]`). */
+/**
+ * `args` with `id` in place of the id `ref` found in it, by its path (`.agent`, `.nodes[0]`): as
+ * the key of what it keyed, for a map's key.
+ */
 function withId(args: unknown, ref: IdRef, id: string): unknown {
   const root: Record<PropertyKey, unknown> = { args: structuredClone(args) };
+  let parent = root;
   let holder = root;
   let at: PropertyKey = 'args';
+  let held: PropertyKey = 'args';
   for (const [, key, index] of ref.path.matchAll(/\.([^.[]+)|\[(\d+)\]/g)) {
+    parent = holder;
+    held = at;
     holder = holder[at] as Record<PropertyKey, unknown>;
     at = key ?? Number(index);
   }
-  holder[at] = id;
+  if (ref.key) {
+    parent[held] = Object.fromEntries(
+      Object.entries(holder).map(([key, value]) => [key === at ? id : key, value]),
+    );
+  } else {
+    holder[at] = id;
+  }
   return root.args;
 }
 

@@ -29,8 +29,8 @@ import {
 } from '../../shared/model/words';
 import { runCatalog } from './agents';
 import type { AgentAction } from './agents';
-import type { GraphNode } from './graph';
-import type { RepeatChange } from './edits';
+import type { AgentNode, CanvasNode } from '../../shared/model/canvas';
+import type { AddEntry, RepeatChange } from './edits';
 import { agentName } from '../../shared/model/queries';
 import {
   CONDITIONS,
@@ -51,7 +51,6 @@ import type {
   Condition,
   QueueApproval,
   QueueDelay,
-  QueueEntry as ModelQueueEntry,
   QueueIf,
   QueueItem,
   QueueMessage,
@@ -71,9 +70,6 @@ import '../run/run.css';
 
 const EMPTY: readonly QueueItem[] = [];
 
-/** The wait chooser supplies its id until queue.add returns it through the operation. */
-export type QueueEntry = ModelQueueEntry & { id?: string };
-
 /** A wait's target (its `index`), whose agent was just picked: next, which of its steps. */
 export interface StepChoice {
   waitId: string;
@@ -87,7 +83,7 @@ interface Target {
   name: string;
 }
 
-const nameOf = (node: GraphNode | undefined) =>
+const nameOf = (node: AgentNode | undefined) =>
   node ? node.data.label || 'Unnamed agent' : 'Deleted agent';
 
 /** Data attributes a row carries: how links mark its task, and where the queues' run is with it. */
@@ -111,20 +107,20 @@ export interface Picking {
 
 /** What QueueEditor and QueueRow edit, and with what. */
 interface QueueProps {
-  node: GraphNode;
+  node: AgentNode;
   /** Every node of the graph: the agents steps can act on, and their names. */
-  nodes: readonly GraphNode[];
+  nodes: readonly CanvasNode[];
   agent: AdapterId;
   /** What the agent can do. */
   actions: readonly AgentAction[];
   /** `into`: the id of the if-then or repeat to add to. */
-  onAdd: (entry: QueueEntry, into?: string) => void;
+  onAdd: AddEntry;
   onRemove: (itemId: string) => void;
-  onMove: (itemId: string, index: number) => void;
+  onMove: (itemId: string, before: string | null) => void | Promise<void>;
   onRetarget: (itemId: string, target: string | undefined) => void;
-  onEditMessage: (itemId: string, message: string) => void;
+  onEditMessage: (itemId: string, message: string) => void | Promise<void>;
   /** Sets what a step is to do, in the user's words ('' takes it off). */
-  onInstruction: (itemId: string, instruction: string) => void;
+  onInstruction: (itemId: string, instruction: string) => void | Promise<void>;
   /** Expects a step to fail ('fails'), or (undefined) to succeed. */
   onExpect: (itemId: string, expect: QueueStep['expect']) => void;
   onCondition: (ifId: string, condition: Condition) => void;
@@ -198,10 +194,15 @@ export function QueueEditor({
   const shown = only ? queue.filter(only) : queue;
   const planned = queue.filter((item) => !isMessage(item) || item.submission === undefined);
   const movable = shown.filter((item) => !isMessage(item) || item.submission === undefined);
-  /** Moves an item to `index` among those shown: to where the item now there is in the queue. */
-  const moveShown = (itemId: string, index: number) => {
-    const at = movable[Math.min(Math.max(index, 0), movable.length - 1)];
-    if (at) onMove(itemId, planned.indexOf(at));
+  /** The end of a filtered view comes just after its last visible sibling. */
+  const moveShown = (itemId: string, before: string | null) => {
+    if (before !== null) return onMove(itemId, before);
+    const last = movable.filter((item) => item.id !== itemId).at(-1);
+    const next =
+      last === undefined
+        ? undefined
+        : planned.slice(planned.indexOf(last) + 1).find((item) => item.id !== itemId);
+    return onMove(itemId, next?.id ?? null);
   };
 
   return (
@@ -326,7 +327,7 @@ function ItemRow({
         context={context}
         onMove={props.onMove}
         onAdd={(entry) => {
-          props.onAdd(entry, item.id);
+          return props.onAdd(entry, item.id);
         }}
         onRepeat={(change) => {
           props.onRepeat(item.id, change);
@@ -342,7 +343,7 @@ function ItemRow({
       context={context}
       onMove={props.onMove}
       onAdd={(entry) => {
-        props.onAdd(entry, item.id);
+        return props.onAdd(entry, item.id);
       }}
       onCondition={(condition) => {
         props.onCondition(item.id, condition);
@@ -392,7 +393,7 @@ function contextOf({
   rowOf,
   picking,
 }: QueueProps): Context {
-  const others = nodes.filter((n) => n.type === 'agent' && n.id !== node.id);
+  const others = nodes.filter((n) => n.type === 'agent').filter((n) => n.id !== node.id);
   const engine = runCatalog();
   const name = (id: string | undefined) => (id === undefined ? 'this agent' : agentName(nodes, id));
   const targetLabel = (target: WaitTarget) => waitTargetLabel(nodes, target, engine);
@@ -452,7 +453,7 @@ interface AddContext {
   /** What names a usage backend in the queue's words: the run's catalog (runCatalog). */
   catalog: EngineCatalog;
   actions: readonly AgentAction[];
-  others: readonly GraphNode[];
+  others: readonly AgentNode[];
   itemLabel: (item: QueueItem) => string;
   onChooseStep?: (choice: StepChoice) => void;
 }
@@ -466,8 +467,8 @@ interface Context extends AddContext {
   describe: (item: QueueItem) => string;
   onRemove: (itemId: string) => void;
   onRetarget: (itemId: string, target: string | undefined) => void;
-  onEditMessage: (itemId: string, message: string) => void;
-  onInstruction: (itemId: string, instruction: string) => void;
+  onEditMessage: (itemId: string, message: string) => void | Promise<void>;
+  onInstruction: (itemId: string, instruction: string) => void | Promise<void>;
   onExpect: (itemId: string, expect: QueueStep['expect']) => void;
   onWaitFor: (waitId: string, targets: WaitTarget[]) => void;
   onTime: (itemId: string, time: Time | undefined) => void;
@@ -496,16 +497,16 @@ export function QueueAddMenu({
   onAdd,
   onChooseStep,
 }: {
-  node: GraphNode;
-  nodes: readonly GraphNode[];
+  node: AgentNode;
+  nodes: readonly CanvasNode[];
   actions: readonly AgentAction[];
   /** Its name, telling it from the queue's own ⊕. */
   label?: string;
   up?: boolean;
-  onAdd: (entry: QueueEntry) => void;
+  onAdd: AddEntry;
   onChooseStep?: (choice: StepChoice) => void;
 }) {
-  const others = nodes.filter((n) => n.type === 'agent' && n.id !== node.id);
+  const others = nodes.filter((n) => n.type === 'agent').filter((n) => n.id !== node.id);
   const engine = runCatalog();
   const context = {
     owner: node.id,
@@ -866,10 +867,10 @@ function StepRow({
   context: Context;
 }) {
   const [expecting, setExpecting] = useState(false);
-  const { problem: instructionProblem, ...instruction } = useDraft(
+  const { problem, ...instruction } = useDraft(
     item.instruction ?? '',
     (text) => {
-      context.onInstruction(item.id, text);
+      return context.onInstruction(item.id, text);
     },
     { multiline: true },
   );
@@ -914,13 +915,17 @@ function StepRow({
         placeholder={command ? 'Arguments' : 'What to do'}
         {...instruction}
       />
-      {instructionProblem && <span role="alert">{instructionProblem}</span>}
       <TargetChip item={item} label={`Change the agent ${item.action} acts on`} context={context} />
       <RowCountdown id={item.id} context={context} />
       <GoOn item={item} context={context} />
       <RemoveButton item={item} context={context} />
       <UsageHeld item={item} context={context} />
       <TaskResult item={item} context={context} />
+      {problem && (
+        <p className="graph-queue-result graph-queue-problem" role="alert">
+          {problem}
+        </p>
+      )}
       {fails && <Expectation item={item} context={context} open={expecting} onToggle={toggle} />}
       {expecting && (
         <ExpectPicker
@@ -1065,10 +1070,10 @@ function MessageRow({
   handle: HandleProps;
   context: Context;
 }) {
-  const { problem: messageProblem, ...message } = useDraft(
+  const { problem, ...message } = useDraft(
     item.message,
     (text) => {
-      context.onEditMessage(item.id, text);
+      return context.onEditMessage(item.id, text);
     },
     { multiline: true },
   );
@@ -1114,12 +1119,16 @@ function MessageRow({
         placeholder="Tell the agent what to do"
         {...message}
       />
-      {messageProblem && <span role="alert">{messageProblem}</span>}
       <RowCountdown id={item.id} context={context} />
       <GoOn item={item} context={context} />
       <RemoveButton item={item} context={context} />
       <UsageHeld item={item} context={context} />
       <TaskResult item={item} context={context} />
+      {problem && (
+        <p className="graph-queue-result graph-queue-problem" role="alert">
+          {problem}
+        </p>
+      )}
     </div>
   );
 }
@@ -1130,7 +1139,7 @@ function MessageRow({
  * once its repeat is over.
  */
 function waitOptions(context: AddContext) {
-  const option = (agent: GraphNode, item: QueueItem, detail: string) => ({
+  const option = (agent: AgentNode, item: QueueItem, detail: string) => ({
     target: { agent: agent.id, item: item.id },
     label: `${nameOf(agent)}: ${context.itemLabel(item)}`,
     detail,
@@ -1588,8 +1597,8 @@ function IfRow({
   item: QueueIf;
   handle: HandleProps;
   context: Context;
-  onMove: (itemId: string, index: number) => void;
-  onAdd: (entry: QueueEntry) => void;
+  onMove: (itemId: string, before: string | null) => void | Promise<void>;
+  onAdd: AddEntry;
   onCondition: (condition: Condition) => void;
 }) {
   const [editing, setEditing] = useState(false);
@@ -1698,7 +1707,7 @@ function AddMenu({
   /** The agent every action and message added is aimed at; by default, the queue's own. */
   target?: string;
   context: AddContext;
-  onAdd: (entry: QueueEntry) => void;
+  onAdd: AddEntry;
 }) {
   // A wait added to a repeat waits round by round.
   const context = place === 'repeat' ? { ...given, inRepeat: true } : given;
@@ -1739,7 +1748,7 @@ function AddMenu({
           }
           onPick={(choice) => {
             if (choice.kind === 'action' && target !== undefined) {
-              onAdd({ action: choice.action.name, target });
+              void onAdd({ action: choice.action.name, target });
               close();
               return;
             }
@@ -1761,7 +1770,7 @@ function AddMenu({
           usage={context.usage}
           catalog={context.catalog}
           onPick={(condition) => {
-            if (condition.kind !== 'repeatEnds') onAdd({ if: condition, then: [] });
+            if (condition.kind !== 'repeatEnds') void onAdd({ if: condition, then: [] });
             close();
           }}
           onCancel={close}
@@ -1774,7 +1783,7 @@ function AddMenu({
           catalog={context.catalog}
           onPick={(until) => {
             if (until.kind !== 'timedOut' && until.kind !== 'usageAbove') {
-              onAdd({ repeat: [], until, rounds: DEFAULT_ROUNDS, otherwise: 'ask' });
+              void onAdd({ repeat: [], until, rounds: DEFAULT_ROUNDS, otherwise: 'ask' });
             }
             close();
           }}
@@ -1790,9 +1799,10 @@ function AddMenu({
             close();
             if (target.id === undefined) return;
             // All of its work, until one of its steps is picked (beside).
-            const id = crypto.randomUUID();
-            onAdd({ id, waitFor: [{ agent: target.id }] });
-            context.onChooseStep?.({ waitId: id, index: 0, agent: target.id });
+            const agent = target.id;
+            void Promise.resolve(onAdd({ waitFor: [{ agent }] })).then((waitId) => {
+              if (waitId !== undefined) context.onChooseStep?.({ waitId, index: 0, agent });
+            });
           }}
           onCancel={close}
         />
@@ -1801,7 +1811,7 @@ function AddMenu({
         <WaitPicker
           context={context}
           onPick={(target) => {
-            onAdd({ waitFor: [target] });
+            void onAdd({ waitFor: [target] });
             close();
           }}
           onCancel={close}
@@ -1813,7 +1823,7 @@ function AddMenu({
           usage={context.usage}
           catalog={context.catalog}
           onPick={(time) => {
-            if (time) onAdd({ delay: time });
+            if (time) void onAdd({ delay: time });
             close();
           }}
           onCancel={close}
@@ -1822,7 +1832,7 @@ function AddMenu({
       {step === 'ok' && (
         <OkPicker
           onPick={(approve) => {
-            onAdd({ approve });
+            void onAdd({ approve });
             close();
           }}
           onCancel={close}
@@ -1833,7 +1843,7 @@ function AddMenu({
           label="New message to the agent"
           multiline
           onSubmit={(message) => {
-            onAdd({ message, ...(target === undefined ? {} : { target }) });
+            void onAdd({ message, ...(target === undefined ? {} : { target }) });
             close();
           }}
           onCancel={close}
@@ -1843,7 +1853,10 @@ function AddMenu({
         <TargetPicker
           context={context}
           onPick={(target) => {
-            onAdd({ action: step.name, ...(target.id === undefined ? {} : { target: target.id }) });
+            void onAdd({
+              action: step.name,
+              ...(target.id === undefined ? {} : { target: target.id }),
+            });
             close();
           }}
           onCancel={close}
@@ -2147,8 +2160,8 @@ function RepeatRow({
   item: QueueRepeat;
   handle: HandleProps;
   context: Context;
-  onMove: (itemId: string, index: number) => void;
-  onAdd: (entry: QueueEntry) => void;
+  onMove: (itemId: string, before: string | null) => void | Promise<void>;
+  onAdd: AddEntry;
   onRepeat: (change: RepeatChange) => void;
 }) {
   const [editing, setEditing] = useState<'until' | 'rounds' | 'otherwise'>();

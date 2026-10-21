@@ -1,3 +1,4 @@
+import type { ProducedOf } from '../../../shared/api/registry';
 import type { Implementations, OpServices } from '.';
 import { windowOf } from './window';
 
@@ -6,9 +7,11 @@ export function topicsOps({
   topics,
 }: OpServices): Pick<Implementations, 'topics.subscribe' | 'topics.unsubscribe'> {
   return {
-    'topics.subscribe': ({ topic }, ctx) => topics.subscribe(windowOf(ctx), topic, ctx),
-    'topics.unsubscribe': async ({ topic }, ctx) => {
-      await topics.unsubscribe(windowOf(ctx), topic);
+    // A canvas's entities are its document's rows, which its schema describes loosely.
+    'topics.subscribe': (request, ctx) =>
+      topics.subscribe(windowOf(ctx), request, ctx) as Promise<ProducedOf<'topics.subscribe'>>,
+    'topics.unsubscribe': async (request, ctx) => {
+      await topics.unsubscribe(windowOf(ctx), request);
       return {};
     },
   };

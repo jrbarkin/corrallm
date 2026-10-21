@@ -14,8 +14,7 @@ import {
 } from '../graph/agents';
 import { editsOf } from '../graph/edits';
 import type { QueueEdits } from '../graph/edits';
-import { canvasNodes } from '../graph/graph';
-import type { GraphNode } from '../graph/graph';
+import type { CanvasNode } from '../../shared/model/canvas';
 import { holdText, itemLabel, taskLabel } from '../../shared/model/words';
 import { chooseTarget, findItem, isMessage, isRepeat, isWait } from '../../shared/model/queue';
 import type { WaitTarget } from '../../shared/model/queue';
@@ -88,7 +87,7 @@ export function QueuesView({
   settingsOptions,
   onClose,
 }: {
-  nodes: readonly GraphNode[];
+  nodes: readonly CanvasNode[];
   sessions: Readonly<Record<string, Session>>;
   run: Run;
   edits: QueueEdits;
@@ -201,8 +200,11 @@ export function QueuesView({
   const marks = queueMarks(layout, run, asking, engine, activeEnds);
   /** What the wait being picked waits for now, in the lane it is picked in: undefined for all. */
   const waitChosen = choosing
-    ? findItem(nodes.find((n) => n.id === choosing.owner)?.data.queue ?? [], choosing.choice.waitId)
-        ?.item
+    ? findItem(
+        nodes.filter((n) => n.type === 'agent').find((n) => n.id === choosing.owner)?.data.queue ??
+          [],
+        choosing.choice.waitId,
+      )?.item
     : undefined;
   const choosingTarget =
     choosing && waitChosen && isWait(waitChosen)
@@ -213,11 +215,14 @@ export function QueuesView({
     if (!choosing) return;
     const { owner, choice } = choosing;
     setChoosing(undefined);
-    const wait = findItem(nodes.find((n) => n.id === owner)?.data.queue ?? [], choice.waitId)?.item;
+    const wait = findItem(
+      nodes.filter((n) => n.type === 'agent').find((n) => n.id === owner)?.data.queue ?? [],
+      choice.waitId,
+    )?.item;
     if (!wait || !isWait(wait)) return;
     const target: WaitTarget =
       item === undefined ? { agent: choice.agent } : { agent: choice.agent, item };
-    edits.setWaitFor(owner, wait.id, chooseTarget(wait.waitFor, choice.index, target));
+    void edits.setWaitFor(owner, wait.id, chooseTarget(wait.waitFor, choice.index, target));
   };
 
   /**
@@ -236,7 +241,7 @@ export function QueuesView({
         : undefined;
   };
   /** What the run holds for the user: a session that would not start says so in its lane's head. */
-  const asks = useMemo(() => heldAsks(canvasNodes(nodes), run, engine), [nodes, run, engine]);
+  const asks = useMemo(() => heldAsks(nodes, run, engine), [nodes, run, engine]);
   const agents = Object.entries(run.agents);
   const count = (which: (id: string, status: string) => boolean) =>
     agents.filter(([id, a]) => which(id, a.status)).length;
@@ -439,7 +444,7 @@ function LaneCells({
 }: {
   lane: Lane;
   column: number;
-  nodes: readonly GraphNode[];
+  nodes: readonly CanvasNode[];
   /** What names a usage backend in its words. */
   catalog: EngineCatalog;
   grid: RefObject<HTMLDivElement | null>;
@@ -470,22 +475,35 @@ function LaneCells({
   const items = lane.cells
     .map((cell) => cell.item)
     .filter((item) => !isMessage(item) || item.submission === undefined);
-  const { dragging, handle } = useSortable(
+  const { ordered, dragging, handle } = useSortable(
     items,
-    (itemId, index) => {
-      edits.move(id, itemId, index);
+    (itemId, before) => {
+      return edits.move(id, itemId, before);
     },
     () =>
       [...(grid.current?.querySelectorAll<HTMLElement>('.queues-cell') ?? [])].filter(
         (cell) => cell.dataset.lane === id && cell.hasAttribute('data-sortable'),
       ),
   );
+  // A lane previews only its own order; its document stays in the mirror until drop commits.
+  let previewAt = 0;
+  const queue = (node.data.queue ?? []).map((item) =>
+    items.includes(item) ? (ordered[previewAt++] ?? item) : item,
+  );
+  const shown =
+    dragging === undefined
+      ? lane
+      : (lanesOf(
+          nodes.map((other) =>
+            other.id === id ? { ...node, data: { ...node.data, queue } } : other,
+          ),
+        ).lanes.find((one) => one.agent.id === id) ?? lane);
   const agentRun = run.agents[id];
   /** Where the agent has nothing to do until what it waits for is done. */
-  const idle = lane.cells.flatMap(({ row }, n) => {
-    const previous = lane.cells[n - 1];
+  const idle = shown.cells.flatMap(({ row }, n) => {
+    const previous = shown.cells[n - 1];
     const after = previous ? previous.row + previous.span : 0;
-    const before = lane.cells[n];
+    const before = shown.cells[n];
     const held =
       run.running && agentRun?.status === 'waiting' && agentRun.current === before?.item.id;
     return row > after ? [{ from: after, to: row, held }] : [];
@@ -616,7 +634,7 @@ function LaneCells({
           style={{ gridColumn: column, gridRow: `${String(from + 2)} / ${String(to + 2)}` }}
         />
       ))}
-      {lane.cells.map(({ item, row, span, inner }) => (
+      {shown.cells.map(({ item, row, span, inner }) => (
         <div
           key={item.id}
           className={item.id === dragging ? 'queues-cell dragging' : 'queues-cell'}
@@ -657,7 +675,7 @@ function LaneCells({
           )}
         </div>
       ))}
-      <div className="queues-end-cell" style={{ gridColumn: column, gridRow: lane.end + 2 }}>
+      <div className="queues-end-cell" style={{ gridColumn: column, gridRow: shown.end + 2 }}>
         <QueueEnd
           marks={marks(id, null)}
           pick={
@@ -677,7 +695,7 @@ function LaneCells({
           label={`Add to ${name(id)}'s queue`}
           up={false}
           onAdd={(entry) => {
-            edits.add(id, entry);
+            return edits.add(id, entry);
           }}
           onChooseStep={onChoose}
         />

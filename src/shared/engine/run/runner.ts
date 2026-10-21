@@ -1079,7 +1079,8 @@ export class RunStore {
     now: number,
   ): AgentRun {
     if (run.paused) {
-      if (run.problem || run.status === 'stopped') return run;
+      // A pause holds an unanswered question too; it must not turn it into an ordinary wait.
+      if (run.problem || run.status === 'asking' || run.status === 'stopped') return run;
       const done = (node.data.queue ?? []).every((item) => run.outcomes[item.id] !== undefined);
       const next: AgentRun = { ...run, status: done ? 'done' : 'waiting' };
       if (run.current && run.outcomes[run.current] !== undefined) delete next.current;

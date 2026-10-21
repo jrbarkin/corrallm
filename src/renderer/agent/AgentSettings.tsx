@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import { useDraft } from '../useDraft';
+import { useDraft, useLabel } from '../useDraft';
 
 import { adapterIn } from '../../shared/adapter';
 import type { AdapterId } from '../../shared/adapter';
@@ -10,7 +10,7 @@ import type { AgentSettings, SettingsOptions } from '../../shared/session';
 import { catalog, continuesIn } from '../catalog';
 import { adapterName, connectionInfo, connectionOf, DEFAULT_AGENT } from '../graph/agents';
 import type { AgentConnection } from '../graph/agents';
-import type { GraphNode } from '../graph/graph';
+import type { AgentNode } from '../../shared/model/canvas';
 import { AgentChip } from './AgentChip';
 import { SettingsMenu } from './Settings';
 import type { Session } from '../../shared/model/session';
@@ -24,7 +24,7 @@ export function AgentSettingsSummary({
   options,
   onOpen,
 }: {
-  node: GraphNode;
+  node: AgentNode;
   options: Options;
   onOpen: () => void;
 }) {
@@ -77,7 +77,7 @@ export function AgentSettingsPanel({
   onFresh,
   onClose,
 }: {
-  node: GraphNode;
+  node: AgentNode;
   session: Session;
   options: Options;
   onRename: (name: string) => void;
@@ -89,7 +89,7 @@ export function AgentSettingsPanel({
   onClose: () => void;
 }) {
   const sheet = useRef<HTMLDivElement>(null);
-  const { problem: titleProblem, ...title } = useDraft(node.data.label, onRename);
+  const { problem: titleProblem, ...title } = useLabel(node.data.label, onRename);
   const { problem, ...role } = useDraft(node.data.role ?? '', (raw) => onRole(parseRole(raw)), {
     multiline: true,
     validate: parseRole,
@@ -206,6 +206,7 @@ export function AgentSettingsPanel({
             aria-label="Role"
             aria-describedby="agent-role-help"
             {...role}
+            aria-invalid={problem !== undefined}
             maxLength={MAX_ROLE_LENGTH}
             rows={6}
             placeholder="For example: Review changes for correctness and explain concrete risks."

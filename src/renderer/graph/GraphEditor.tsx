@@ -1,6 +1,4 @@
 import {
-  applyEdgeChanges,
-  applyNodeChanges,
   Background,
   ConnectionMode,
   ControlButton,
@@ -16,13 +14,27 @@ import {
 import type { Connection, Edge, EdgeTypes, NodeTypes } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
-import type { MouseEvent as ReactMouseEvent } from 'react';
+import type { MouseEvent as ReactMouseEvent, SyntheticEvent } from 'react';
 
 import { absolutePosition, groupColors } from '../../shared/model/geometry';
-import { autosize } from './geometry';
-import { newCanvasId } from '../../shared/canvas';
+import { nodeView } from './flow';
+import { CanvasSource } from './source';
+import {
+  released,
+  projectSelection,
+  EMPTY_SELECTION,
+  selectOnly as onlySelection,
+} from './selection';
+import type { Selection } from './selection';
+import { projectOverlay } from './overlay';
+import type { Overlays } from './overlay';
+import { api as windowApi } from '../api/client';
+import { topics as windowTopics } from '../api/topics';
+import type { TopicMirror } from '../api/topics';
+import type { GuiApi } from '../../shared/gui-link';
+import * as Structure from '../../shared/model/structure';
 import type { CanvasId } from '../../shared/canvas';
-import type { CanvasFile, ProjectFolder } from '../../shared/ipc';
+import type { AgentData, CanvasDocument } from '../../shared/model/canvas';
 import { UNASKING_MODES } from '../../shared/session';
 import type { AgentSettingsChange, InstalledClis } from '../../shared/session';
 import { NO_USAGE } from '../../shared/usage';
@@ -32,7 +44,7 @@ import { NO_BACKEND } from '../../shared/engine/transcript/receive';
 import type { SessionBackend } from '../../shared/engine/transcript/receive';
 import { adapterOf, catalog, continuesIn } from '../catalog';
 import { ipcErrorMessage } from '../ipc-error';
-import { flushDrafts } from '../useDraft';
+import { draftCall, flushDrafts } from '../useDraft';
 import { QueuesView } from '../queues/QueuesView';
 import { lanesOf } from '../queues/lanes';
 import { queueMarks } from '../queues/marks';
@@ -58,63 +70,23 @@ import type { TerminalBackend } from '../terminal/backend';
 import { GraphActionsContext } from './actions';
 import { agentLabel, connectionOf, DEFAULT_AGENT, runCatalog } from './agents';
 import type { GraphActions } from './actions';
-import {
-  addAgent,
-  addParent,
-  addToQueue,
-  canConnect,
-  canvasNodes,
-  connect,
-  deleteEdge,
-  deleteSelection,
-  documentOf,
-  editMessage,
-  EMPTY_GRAPH,
-  graphOf,
-  groupMembers,
-  groupSelection,
-  moveInQueue,
-  removeFromQueue,
-  renameNode,
-  retarget,
-  selectOnly,
-  setAgent,
-  setApproval,
-  setCondition,
-  setConnection,
-  setExpect,
-  setInstruction,
-  setRepeat,
-  setRole,
-  setSettings,
-  setTime,
-  setWaitFor,
-  spawnAgent,
-  ungroupSelection,
-} from './graph';
 import { areLinked, groupMembers as groupAgentIds, isGroup } from '../../shared/model/queries';
-import type { Graph } from './graph';
+import type { Graph } from './flow';
 import { ExampleGallery } from './ExampleGallery';
 import type { TemplateChoices } from './ExampleGallery';
-import { exampleOf } from '../../shared/examples';
-import type { Example } from '../../shared/examples';
 import { FileBar } from './FileBar';
-import { fromFile, toFile } from '../../shared/model/file';
-import { fillTemplate } from '../../shared/model/templates';
-import { withAgents, withConnections } from './templates';
-import { insertGraph } from './insert';
 import { fileAction, keyAction, SHORTCUTS } from './keys';
-import { arrange } from './layout';
 import type { KeyAction } from './keys';
 import { ConnectMenu } from './ConnectMenu';
 import type { MenuPlace } from './ConnectMenu';
 import { AgentNodeView, GroupNodeView, LinkView, WorkEdgeView } from './nodes';
 import { AgentContextMenu } from './AgentContextMenu';
 import type { WorkFlowEdge } from './nodes';
-import { QuestionsSidebar } from './Questions';
+import { NeedsSidebar } from './NeedsSidebar';
+import { Canvases } from './Canvases';
 import { workEdges } from '../../shared/model/work';
 import { WorkDetail } from './WorkDetail';
-import type { QueueEdits } from './edits';
+import { operationEdits } from './edits';
 import './GraphEditor.css';
 
 const nodeTypes = { agent: AgentNodeView, frame: GroupNodeView } satisfies NodeTypes;
@@ -125,60 +97,63 @@ const MULTI_SELECT_KEYS = ['Meta', 'Control', 'Shift'];
 
 type Command = Exclude<KeyAction, 'rename'>;
 
-/** The graph operation behind a shortcut or button. New ids are made here, not in updaters. */
-function operation(command: Command): (graph: Graph) => Graph {
-  switch (command) {
-    case 'delete':
-      return deleteSelection;
-    case 'ungroup':
-      return ungroupSelection;
-    case 'group': {
-      const id = crypto.randomUUID();
-      return (graph) => groupSelection(graph, 'frame', id);
-    }
-    case 'groupUnderParent': {
-      const id = crypto.randomUUID();
-      return (graph) => groupSelection(graph, 'agent', id);
-    }
-  }
-}
-
-/** Where canvases are saved and opened from (window.api in the app; see src/main/canvas.ts). */
-export interface CanvasFiles {
-  /** Asks for a file to open: resolves with it, or null if cancelled. */
-  open: () => Promise<CanvasFile | null>;
-  /** Saves a canvas's text (to a file picked anew, if `choose`): resolves with its name, or null. */
-  save: (text: string, choose: boolean) => Promise<string | null>;
-  /** Begins a new canvas, with no file (the next save asks where): resolves with its id. */
-  forget: () => Promise<CanvasId>;
-  /** Asks for the folder the canvas's agents work in: resolves with it, or null if cancelled. */
-  chooseProject?: () => Promise<ProjectFolder | null>;
-}
-
 /**
- * The editor, with (given `files`) a bar to open and save canvases as `.corral` files, (given
+ * The editor, with a file bar backed by core operations and (given
  * `sessionBackend`, and `terminalBackend` for their terminals) agents connected to the real CLI
  * through the main process, and (given `usageSource`) the usage readings and rules main keeps.
  */
 export function GraphEditor({
-  initialGraph = EMPTY_GRAPH,
-  files,
+  canvas,
+  client = windowApi,
+  mirror = windowTopics,
+  initialSelection = EMPTY_SELECTION,
+  files = true,
   sessionBackend,
   terminalBackend = NO_TERMINAL,
   usageSource,
   runSource,
 }: {
-  initialGraph?: Graph;
-  files?: CanvasFiles;
+  canvas?: CanvasId;
+  client?: GuiApi;
+  mirror?: TopicMirror;
+  initialSelection?: Selection;
+  files?: boolean;
   sessionBackend?: SessionBackend;
   terminalBackend?: TerminalBackend;
   usageSource?: UsageSource;
   runSource?: RunSource;
 }) {
+  const [shown, setShown] = useState<CanvasId>();
+  const [failure, setFailure] = useState<string>();
+  useEffect(() => {
+    if (canvas !== undefined) return;
+    let live = true;
+    void client.windowGet().then(
+      ({ canvas }) => {
+        if (live) setShown(canvas as CanvasId);
+      },
+      (error: unknown) => {
+        if (live) setFailure(ipcErrorMessage(error));
+      },
+    );
+    return () => {
+      live = false;
+    };
+  }, [canvas, client]);
+  const visible = canvas ?? shown;
+  if (visible === undefined)
+    return (
+      <div className="graph-editor" aria-busy={!failure}>
+        {failure && <p role="alert">{failure}</p>}
+      </div>
+    );
   return (
     <ReactFlowProvider>
       <Editor
-        initialGraph={initialGraph}
+        canvas={visible}
+        client={client}
+        mirror={mirror}
+        initialSelection={initialSelection}
         files={files}
         sessionBackend={sessionBackend}
         terminalBackend={terminalBackend}
@@ -189,47 +164,39 @@ export function GraphEditor({
   );
 }
 
-/** A template as a canvas: its blanks filled in, its agents given their types and connections. */
-function fromTemplate(example: Example, { values, agents, connections }: TemplateChoices): Graph {
-  return withConnections(
-    withAgents(
-      fillTemplate(graphOf(fromFile(example.text, catalog(), DEFAULT_AGENT)), values),
-      agents,
-    ),
-    connections,
-  );
-}
-
 function Editor({
-  initialGraph,
+  canvas,
+  client: api,
+  mirror,
+  initialSelection,
   files,
   sessionBackend,
   terminalBackend,
   usageSource,
   runSource,
 }: {
-  initialGraph: Graph;
-  files: CanvasFiles | undefined;
+  canvas: CanvasId;
+  client: GuiApi;
+  mirror: TopicMirror;
+  initialSelection: Selection;
+  files: boolean;
   sessionBackend: SessionBackend | undefined;
   terminalBackend: TerminalBackend;
   usageSource: UsageSource | undefined;
   runSource: RunSource | undefined;
 }) {
-  const [graph, setRawGraph] = useState(initialGraph);
-  /** The canvas's id: main's (a file's, or a draft's), which its file's text holds. */
-  const [canvasId, setCanvasId] = useState(newCanvasId);
-  /**
-   * The canvas's file (its name; undefined if never saved) and the graph last saved to it, whose
-   * text is the canvas's, by its id.
-   */
-  const [saved, setSaved] = useState(() => ({
-    name: undefined as string | undefined,
-    graph: initialGraph,
-  }));
+  const [binding] = useState(() => new CanvasSource(canvas, mirror));
+  const canonical = useSyncExternalStore(binding.subscribe, binding.read);
+  const canvasId = binding.canvas;
+  const [selection, setSelection] = useState(initialSelection);
+  const [overlays, setOverlays] = useState<Overlays>(new Map());
+  const empty = useMemo(
+    () => ({ id: canvasId, arrange: false, nodes: [], links: [] }) satisfies CanvasDocument,
+    [canvasId],
+  );
+  const [notice, setNotice] = useState<readonly string[]>();
   /** Why the last open or save failed. */
   const [problem, setProblem] = useState<string>();
-  /** The folder the canvas's agents work in (main keeps it; this is what the file bar shows). */
-  const [project, setProject] = useState<ProjectFolder | null>(null);
   /** How many canvases have been loaded: the view fits each one, once React Flow has its nodes. */
   const [loads, setLoads] = useState(0);
   /** Every backend's usage reading and rule (main's: one per backend, for every canvas). */
@@ -254,15 +221,8 @@ function Editor({
    * steps and questions through their native connections. An agent whose session would not
    * start is switched to the connection the user chose for it there.
    */
-  const [{ engine, sessionStore, runStore, persistence, documentState }] = useState(() => {
+  const [{ engine, sessionStore, runStore, persistence }] = useState(() => {
     let persistence: RunPersistence | undefined = undefined;
-    let workflow = toFile(documentOf(initialGraph, canvasId));
-    const documentState = {
-      read: () => workflow,
-      write: (next: string) => {
-        workflow = next;
-      },
-    };
     const engine = new Engine({
       catalog: runCatalog(),
       backend: sessionBackend ?? NO_BACKEND,
@@ -276,8 +236,11 @@ function Editor({
           }
         : {}),
       connect: (agent, connection) => {
-        // How an agent runs changes nothing laid out.
-        setRawGraph((g) => setConnection(g, agent, connection));
+        void api
+          .agentSetConnection({ canvas: binding.canvas, agent, connection })
+          .catch((error: unknown) => {
+            setProblem(ipcErrorMessage(error));
+          });
       },
       later: (run, ms) => {
         const timer = setTimeout(run, ms);
@@ -294,10 +257,11 @@ function Editor({
       persistence = new RunPersistence(runSource, {
         capture: () => ({
           version: 2,
-          workflow: documentState.read(),
           ...engine.checkpoint(),
           updatedAt: Date.now(),
         }),
+        ready: () => binding.ready(),
+        beforeSave: flushDrafts,
         freeze: async () => {
           await flushDrafts();
           runStore.pause();
@@ -305,36 +269,24 @@ function Editor({
         error: (error) => {
           setProblem(`Could not save or restore run progress: ${ipcErrorMessage(error)}`);
         },
-        restore: (context) => {
+        restore: async (context) => {
           const checkpoint = context.checkpoint;
-          const next = checkpoint
-            ? graphOf(fromFile(checkpoint.workflow, catalog(), DEFAULT_AGENT))
-            : context.savedText
-              ? graphOf(fromFile(context.savedText, catalog(), DEFAULT_AGENT))
-              : undefined;
-          const savedGraph = context.savedText
-            ? graphOf(fromFile(context.savedText, catalog(), DEFAULT_AGENT))
-            : EMPTY_GRAPH;
           if (checkpoint) Engine.check(checkpoint);
-          setCanvasId(context.id);
-          if (next) {
-            engine.reset();
-            documentState.write(toFile(documentOf(next, context.id)));
-            setLoads((n) => n + 1);
-            setRawGraph(next);
-            engine.update(canvasNodes(next.nodes));
-            if (checkpoint) engine.restore(checkpoint);
-            setSaved({ name: context.name ?? undefined, graph: savedGraph });
-          }
-          setProject(context.project ?? null);
-          if (context.warning) setProblem(context.warning);
+          binding.bind(context.id);
+          await binding.ready();
+          engine.reset();
+          if (binding.required().document.nodes.length > 0) setLoads((n) => n + 1);
+          engine.update(binding.required().document.nodes);
+          if (checkpoint) engine.restore(checkpoint);
+          if (context.notices?.length) setProblem(context.notices.join(' '));
         },
       });
-    return { engine, sessionStore, runStore, persistence, documentState };
+    return { engine, sessionStore, runStore, persistence };
   });
   const sessions = useSyncExternalStore(sessionStore.subscribe, sessionStore.snapshot);
   const run = useSyncExternalStore(runStore.subscribe, runStore.snapshot);
   const [restoring, setRestoring] = useState(runSource !== undefined);
+  const switching = useRef(false);
   const [restoreFailed, setRestoreFailed] = useState(false);
   useEffect(() => {
     if (!persistence) return;
@@ -372,17 +324,17 @@ function Editor({
       persistence.dispose();
     };
   }, [persistence, runStore, sessionStore]);
-  useEffect(() => {
-    documentState.write(toFile(documentOf(graph, canvasId)));
-    persistence?.changed();
-  }, [graph, canvasId, documentState, persistence]);
+  const model = canonical?.document ?? empty;
+  const graph: Graph = useMemo(() => canonical?.graph ?? { nodes: [], edges: [] }, [canonical]);
+  const name = canonical?.meta.name ?? undefined;
+  const project = canonical?.meta.project ?? null;
   /** Submitted messages are visible rows; the saved graph and the runner keep planned work only. */
   const displayNodes = useMemo(
-    () => withSubmissions(graph.nodes, sessions),
-    [graph.nodes, sessions],
+    () => withSubmissions(model.nodes, sessions),
+    [model.nodes, sessions],
   );
   /** The canvas's nodes as the run reads them (the model's, src/shared/model/canvas.ts). */
-  const runNodes = useMemo(() => canvasNodes(graph.nodes), [graph.nodes]);
+  const runNodes = model.nodes;
   /** What the run holds for the user (OKs), in graph order: shown on the canvas and in agents. */
   const asks = useMemo(() => heldAsks(runNodes, run, engine.catalog), [runNodes, run, engine]);
   /** How every queue's tasks are marked, wherever a queue is shown: links, and where the run is. */
@@ -431,14 +383,6 @@ function Editor({
       }}
     />
   );
-  const text = useMemo(() => toFile(documentOf(graph, canvasId)), [graph, canvasId]);
-  const savedText = useMemo(
-    () => toFile(documentOf(saved.graph, canvasId)),
-    [saved.graph, canvasId],
-  );
-  const edited = text !== savedText;
-  /** What would discard unsaved changes, while the user is asked first. */
-  const [discarding, setDiscarding] = useState<{ run: () => void }>();
   // What agents can be set to is read there (its own settings count): again for another folder.
   useEffect(() => {
     sessionStore.forgetOptions();
@@ -524,21 +468,81 @@ function Editor({
     drawn !== undefined ||
     agentMenu !== undefined ||
     settingsAgent !== undefined ||
-    discarding !== undefined ||
     gallery ||
     queues !== undefined;
   // The keyboard handler and file commands read these without re-subscribing on every change.
-  const latest = useRef({ graph, modal, text, edited });
+  const latest = useRef({ graph, modal });
   useEffect(() => {
-    latest.current = { graph, modal, text, edited };
+    latest.current = { graph, modal };
   });
-  /** Every change to the graph goes through here, so it stays arranged while arranging is on. */
-  const setGraph = useCallback((op: (graph: Graph) => Graph) => {
-    setRawGraph((g) => {
-      const next = op(g);
-      return next.arrange ? arrange(next) : next;
+  const perform = useCallback(<T,>(pending: Promise<T>, done?: (value: T) => void) => {
+    void pending.then(done, (error: unknown) => {
+      setProblem(ipcErrorMessage(error));
     });
   }, []);
+  const selectOne = useCallback(
+    (id: string) => {
+      setSelection((current) => onlySelection(current, id));
+      store.setState({ nodesSelectionActive: false });
+    },
+    [store],
+  );
+  const clearSelection = useCallback(() => {
+    setSelection(EMPTY_SELECTION);
+    store.setState({ nodesSelectionActive: false });
+  }, [store]);
+  const removed = useCallback((cleared: readonly string[]) => {
+    setNotice(cleared.length > 0 ? cleared : undefined);
+  }, []);
+  const execute = useCallback(
+    (command: Command) => {
+      const selected = [...selection.nodes].filter((id) =>
+        latest.current.graph.nodes.some((node) => node.id === id),
+      );
+      if (command === 'delete') {
+        const links = latest.current.graph.edges
+          .filter((edge) => selection.edges.has(edge.id))
+          .map((edge) => ({ a: edge.source, b: edge.target }));
+        if (selected.length === 0 && links.length === 0) return;
+        perform(api.canvasDelete({ canvas: canvasId, nodes: selected, links }), (result) => {
+          if ('cleared' in result) removed(result.cleared);
+          clearSelection();
+        });
+      } else if (command === 'ungroup') {
+        const after = released(model.nodes, selected);
+        perform(api.canvasUngroup({ canvas: canvasId, nodes: selected }), () => {
+          setSelection(after);
+        });
+      } else {
+        perform(
+          api.canvasGroup({
+            canvas: canvasId,
+            nodes: selected,
+            kind: command === 'group' ? 'frame' : 'agent',
+          }),
+          (result) => {
+            if ('id' in result) selectOne(result.id);
+          },
+        );
+      }
+    },
+    [api, canvasId, selection, perform, selectOne, clearSelection, removed, model.nodes],
+  );
+  const moveNodes = (moves: readonly { node: string; position: { x: number; y: number } }[]) => {
+    perform(
+      api.canvasMove({ canvas: canvasId, moves: [...moves] }).finally(() => {
+        setOverlays((current) => {
+          const next = new Map(current);
+          for (const { node: id } of moves) {
+            const measured = next.get(id)?.measured;
+            if (measured) next.set(id, { measured });
+            else next.delete(id);
+          }
+          return next;
+        });
+      }),
+    );
+  };
 
   const nodeElement = useCallback(
     (id: string) =>
@@ -562,116 +566,81 @@ function Editor({
    * Changes what a connected agent is set to run with by the adapter it runs now (its settings,
    * saved with it). What it runs with changes nothing laid out; an unavailable connector has none to change.
    */
-  const updateSettings = useCallback((id: string, change: AgentSettingsChange) => {
-    setRawGraph((g) => {
-      const node = g.nodes.find((n) => n.id === id);
-      const connection = node ? connectionOf(node.data) : 'unavailable';
-      if (!node || connection === 'unavailable') return g;
-      const adapter = adapterOf(connection);
-      return setSettings(g, id, adapter, change);
-    });
-  }, []);
-
-  // Also dismisses React Flow's selection rectangle, which would keep covering the old selection.
-  const apply = useCallback(
-    (op: (graph: Graph) => Graph) => {
-      setGraph(op);
-      store.setState({ nodesSelectionActive: false });
+  const updateSettings = useCallback(
+    (id: string, change: AgentSettingsChange) => {
+      const node = binding.required().document.nodes.find((n) => n.id === id);
+      const connection = node?.type === 'agent' ? connectionOf(node.data) : 'unavailable';
+      if (connection === 'unavailable') return;
+      void draftCall(() =>
+        api.agentSetSettings({
+          canvas: binding.canvas,
+          agent: id,
+          adapter: adapterOf(connection),
+          settings: change,
+        }),
+      ).catch((error: unknown) => {
+        setProblem(ipcErrorMessage(error));
+      });
     },
-    [store, setGraph],
+    [api, binding],
   );
+
+  const changeAgent = (id: string, adapter: string, connection: string) => {
+    const node = binding.required().document.nodes.find((n) => n.id === id);
+    return draftCall(() =>
+      node?.type === 'agent' && (node.data.adapter ?? DEFAULT_AGENT) === adapter
+        ? api.agentSetConnection({ canvas: binding.canvas, agent: id, connection })
+        : api.agentSetType({ canvas: binding.canvas, agent: id, adapter, connection }),
+    );
+  };
 
   const actions = useMemo<GraphActions>(
     () => ({
       queueState: (id) => queueControlText(run, id),
-      groupState: (id) => groupControlText(graph.nodes, run, id),
+      groupState: (id) => groupControlText(model.nodes, run, id),
       editing,
       startEditing: setEditing,
       stopEditing: () => {
         setEditing(undefined);
       },
-      rename: (id, label) => {
-        setGraph((g) => renameNode(g, id, label));
+      rename: (node, label) =>
+        api.canvasRename({ canvas: canvasId, node, label }).catch((error: unknown) => {
+          setProblem(ipcErrorMessage(error));
+          throw error;
+        }),
+      remove: (node) => {
+        perform(api.canvasDelete({ canvas: canvasId, nodes: [node] }), (result) => {
+          if ('cleared' in result) removed(result.cleared);
+        });
       },
-      remove: (id) => {
-        apply((g) => deleteSelection(selectOnly(g, id)));
+      ungroup: (node) => {
+        const after = released(model.nodes, [node]);
+        perform(api.canvasUngroup({ canvas: canvasId, nodes: [node] }), () => {
+          setSelection(after);
+        });
       },
-      ungroup: (id) => {
-        apply((g) => ungroupSelection(selectOnly(g, id)));
-      },
-      addParent: (id) => {
-        apply((g) => addParent(g, id));
+      addParent: (node) => {
+        perform(api.canvasAddParent({ canvas: canvasId, frame: node }), (result) => {
+          if ('id' in result) selectOne(result.id);
+        });
       },
       removeEdge: (id) => {
-        setGraph((g) => deleteEdge(g, id));
+        const edge = latest.current.graph.edges.find((edge) => edge.id === id);
+        if (edge) perform(api.canvasUnlink({ canvas: canvasId, a: edge.source, b: edge.target }));
       },
       openWork: (from, to) => {
         setWork({ from, to });
       },
     }),
-    [apply, editing, setGraph, graph.nodes, run],
+    [api, canvasId, editing, model.nodes, perform, removed, run, selectOne],
   );
 
-  const edits = useMemo<QueueEdits>(
-    () => ({
-      add: (owner, entry, into) => {
-        const id = entry.id ?? crypto.randomUUID();
-        setGraph((g) => {
-          let first = true;
-          return addToQueue(
-            g,
-            owner,
-            entry,
-            () => {
-              const next = first ? id : crypto.randomUUID();
-              first = false;
-              return next;
-            },
-            into,
-          );
-        });
-      },
-      remove: (owner, itemId) => {
-        setGraph((g) => removeFromQueue(g, owner, itemId));
-      },
-      move: (owner, itemId, index) => {
-        setGraph((g) => moveInQueue(g, owner, itemId, index));
-      },
-      retarget: (owner, itemId, target) => {
-        setGraph((g) => retarget(g, owner, itemId, target));
-      },
-      editMessage: (owner, itemId, message) => {
-        setGraph((g) => editMessage(g, owner, itemId, message));
-      },
-      setInstruction: (owner, itemId, instruction) => {
-        setGraph((g) => setInstruction(g, owner, itemId, instruction));
-      },
-      setExpect: (owner, itemId, expect) => {
-        setGraph((g) => setExpect(g, owner, itemId, expect));
-      },
-      setCondition: (owner, ifId, condition) => {
-        setGraph((g) => setCondition(g, owner, ifId, condition));
-      },
-      setWaitFor: (owner, waitId, targets) => {
-        setGraph((g) => setWaitFor(g, owner, waitId, targets));
-      },
-      setTime: (owner, itemId, time) => {
-        setGraph((g) => setTime(g, owner, itemId, time));
-      },
-      setApproval: (owner, okId, approve) => {
-        setGraph((g) => setApproval(g, owner, okId, approve));
-      },
-      setRepeat: (owner, repeatId, change) => {
-        setGraph((g) => setRepeat(g, owner, repeatId, change));
-      },
-      goOn: (owner, itemId) => {
-        runStore.goOn(owner, itemId);
-      },
-      decide: (owner, itemId, answer) => {
-        runStore.decide(owner, itemId, answer);
-      },
-    }),
-    [setGraph, runStore],
+  const edits = useMemo(
+    () =>
+      operationEdits(api, canvasId, runStore, (error) => {
+        setProblem(ipcErrorMessage(error));
+      }),
+    [api, canvasId, runStore],
   );
   const closeWork = useCallback(() => {
     setWork(undefined);
@@ -694,20 +663,17 @@ function Editor({
       void fitView({ nodes: [{ id: inserted }], padding: 0.3, maxZoom: 1 });
   }, [inserted, fitView]);
 
-  /**
-   * Replaces the canvas with canvas `id` from a file (`name`), or a new one, and fits the view to
-   * it.
-   */
+  /** Reset the view and run, subscribe to the switched canvas and fit its first snapshot. */
   const load = useCallback(
-    (next: Graph, name: string | undefined, id: CanvasId) => {
-      setCanvasId(id);
-      documentState.write(toFile(documentOf(next, id)));
-      setLoads((n) => n + 1);
-      setRawGraph(next);
+    async (id: CanvasId) => {
+      binding.bind(id);
+      clearSelection();
+      setOverlays(new Map());
+
       runStore.reset();
       // Another canvas: main has ended the old one's connected sessions.
       sessionStore.reset();
-      setSaved({ name, graph: next });
+
       setEditing(undefined);
       setOpened({ ids: [] });
       setSettingsAgent(undefined);
@@ -715,173 +681,134 @@ function Editor({
       setDrawn(undefined);
       setAgentMenu(undefined);
       setProblem(undefined);
+      setNotice(undefined);
+      await binding.ready();
+      if (binding.required().document.nodes.length > 0) setLoads((n) => n + 1);
     },
-    [runStore, sessionStore, documentState],
+    [runStore, sessionStore, binding, clearSelection],
   );
-  /**
-   * The file commands. New and Open replace the canvas, so while it has unsaved changes (`edited`)
-   * they ask first; Save writes `text`, the canvas's file text.
-   */
   const commands = useMemo(() => {
-    if (!files) return undefined;
-    /** Runs `run` now, or once the user agrees to discard unsaved changes. */
-    const unless = (edited: boolean, run: () => void) => {
-      if (edited) setDiscarding({ run });
-      else run();
-    };
     const failed = (doing: string) => (error: unknown) => {
+      setRestoreFailed(persistence?.failedInitialization() ?? false);
       setProblem(`Could not ${doing}: ${ipcErrorMessage(error)}`);
     };
-    const { chooseProject } = files;
-    return {
-      new: (edited: boolean) => {
-        unless(edited, () => {
-          if (persistence) {
-            runStore.pause();
-            void persistence
-              .prepareForReplacement()
-              .then(() =>
-                persistence.transition(async () => {
-                  load(EMPTY_GRAPH, undefined, await files.forget());
-                  setProject(null);
-                }, false),
-              )
-              .then(() => {
-                setRestoreFailed(false);
-                persistence.changed();
-              }, failed('start a new canvas'));
-            return;
-          }
-          setProject(null);
-          files.forget().then((id) => {
-            load(EMPTY_GRAPH, undefined, id);
-          }, failed('start a new canvas'));
-        });
-      },
-      open: (edited: boolean) => {
-        unless(edited, () => {
-          if (persistence) {
-            runStore.pause();
-            void persistence
-              .prepareForReplacement()
-              .then(() =>
-                persistence.transition(
-                  files.open,
-                  (file) => file !== null,
-                  async () => {
-                    const id = await files.forget();
-                    setCanvasId(id);
-                    setProject(null);
-                    setSaved({ name: undefined, graph: EMPTY_GRAPH });
-                  },
-                ),
-              )
-              .then(
-                () => {
-                  setRestoreFailed(false);
-                  persistence.changed();
-                },
-                (error: unknown) => {
-                  setRestoreFailed(persistence.failedInitialization());
-                  failed('open the canvas')(error);
-                },
-              );
-            return;
-          }
-          files.open().then((file) => {
-            if (!file) return;
-            try {
-              load(graphOf(fromFile(file.text, catalog(), DEFAULT_AGENT)), file.name, file.id);
-              setProject(file.project ?? null);
-            } catch (error) {
-              setProblem(`Could not open ${file.name}: ${ipcErrorMessage(error)}`);
-              // Main took it as the canvas's file: never save this canvas over it.
-              setProject(null);
-              files.forget().then(setCanvasId, failed('open the canvas'));
-            }
-          }, failed('open the canvas'));
-        });
-      },
-      /** Opens a template as a new canvas, saved nowhere yet, as `choices` fill it in. */
-      example: (example: Example, choices: TemplateChoices, edited: boolean) => {
-        unless(edited, () => {
-          if (persistence) {
-            runStore.pause();
-            void persistence
-              .prepareForReplacement()
-              .then(() =>
-                persistence.transition(async () => {
-                  load(fromTemplate(example, choices), undefined, await files.forget());
-                  setProject(null);
-                }, false),
-              )
-              .then(() => {
-                setRestoreFailed(false);
-                persistence.changed();
-              }, failed('open the template'));
-            return;
-          }
-          setProject(null);
-          files.forget().then((id) => {
-            load(fromTemplate(example, choices), undefined, id);
-          }, failed('open the template'));
-        });
-      },
-      /** Asks for the folder the canvas's agents work in. */
-      chooseProject:
-        chooseProject &&
-        (() => {
-          chooseProject().then((folder) => {
-            if (folder) setProject(folder);
-            if (persistence)
-              void persistence.rebind(false).then(() => {
-                persistence.changed();
-              }, failed('remember the project folder'));
-          }, failed('choose the project folder'));
-        }),
-      save: (text: string, choose: boolean) => {
-        if (persistence) {
-          void persistence
-            .flush()
-            .then(() =>
-              persistence.transition(async () => {
-                const name = await files.save(text, choose);
-                if (name !== null)
-                  setSaved({ name, graph: graphOf(fromFile(text, catalog(), DEFAULT_AGENT)) });
-              }, false),
-            )
-            .then(() => {
-              persistence.changed();
-            }, failed('save the canvas'));
-          return;
+    /**
+     * A switch (B9 Design §9: New, Open, a template's New): one op, after which the window shows
+     * the canvas it names. The canvas before stays open in the core, its changes with it, so
+     * nothing asks to discard them; the window says so when it had any.
+     */
+    const switchTo = async (action: () => Promise<CanvasId | null>, keepsBefore = true) => {
+      if (switching.current) return;
+      switching.current = true;
+      setRestoring(true);
+      try {
+        await flushDrafts();
+        // Read, not required: a canvas that could not be restored can still be switched from.
+        const before = binding.read();
+        // The persistence barrier holds automated sends. Pausing here would interrupt a live
+        // turn even if Open is cancelled; only a successful switch resets the old run.
+        if (persistence) await persistence.switch(action, load);
+        else {
+          const id = await action();
+          if (id !== null) await load(id);
         }
-        files.save(text, choose).then((name) => {
-          if (name !== null)
-            setSaved({ name, graph: graphOf(fromFile(text, catalog(), DEFAULT_AGENT)) });
-        }, failed('save the canvas'));
+        // A cancelled Open after a failed restore leaves it failed: only another canvas recovers.
+        setRestoreFailed(persistence?.failedInitialization() ?? false);
+        if (keepsBefore && before && before.document.id !== binding.canvas && before.meta.edited)
+          setNotice([
+            `${before.meta.name ?? 'The previous canvas'} stays open with its changes. Find it in Canvases.`,
+          ]);
+        persistence?.changed();
+      } finally {
+        switching.current = false;
+        setRestoring(false);
+      }
+    };
+    return {
+      show: (canvas: CanvasId) =>
+        switchTo(async () => {
+          await api.windowShow({ canvas });
+          return canvas;
+        }),
+      close: (canvas: CanvasId, discard: boolean) =>
+        switchTo(async () => {
+          const result = await api.canvasClose({ canvas, ...(discard ? { discard: true } : {}) });
+          return 'canvas' in result && result.canvas ? (result.canvas as CanvasId) : null;
+        }, false),
+      reply: async (to: string, choice: string) => {
+        let result: Awaited<ReturnType<GuiApi['reply']>> | undefined;
+        await switchTo(async () => {
+          result = await api.reply({ canvas: binding.canvas, to, answer: { choice } });
+          return result.canvas ? (result.canvas as CanvasId) : null;
+        }, false);
+        if (!result) throw new Error('A canvas switch is already under way.');
+        if (result.canvas && result.outcome) setNotice([`Proposal ${result.outcome}.`]);
+        return result;
+      },
+      new: () => {
+        void switchTo(async () => {
+          const result = await api.canvasCreate({});
+          return 'canvas' in result ? (result.canvas as CanvasId) : null;
+        }).catch(failed('start a new canvas'));
+      },
+      open: () => {
+        void switchTo(async () => {
+          const result = await api.canvasOpen({});
+          return result.canvas as CanvasId | null;
+        }).catch(failed('open the canvas'));
+      },
+      example: (template: string, choices: TemplateChoices) => {
+        void switchTo(async () => {
+          const result = await api.canvasCreate({
+            template,
+            values: choices.values,
+            agents: Object.fromEntries(
+              Object.entries(choices.agents).flatMap(([key, value]) =>
+                value === undefined ? [] : [[key, value]],
+              ),
+            ),
+            connections: choices.connections,
+          });
+          return 'canvas' in result ? (result.canvas as CanvasId) : null;
+        }).catch(failed('open the template'));
+      },
+      chooseProject: () => {
+        void flushDrafts(async () => {
+          await persistence?.flush();
+          await api.projectChoose({ canvas: binding.canvas });
+        }).catch(failed('choose the project folder'));
+      },
+      save: (choose: boolean) => {
+        void flushDrafts(async () => {
+          await persistence?.flush();
+          if (choose || binding.required().meta.name === null)
+            await api.canvasSaveAs({ canvas: binding.canvas });
+          else await api.canvasSave({ canvas: binding.canvas });
+        }).catch(failed('save the canvas'));
       },
     };
-  }, [files, load, persistence, runStore]);
+  }, [load, persistence, api, binding]);
   useEffect(() => {
     if (files)
-      document.title = `${saved.name ?? 'Untitled'}${edited ? ' (edited)' : ''} — corrallm`;
-  }, [files, saved.name, edited]);
+      document.title = `${name ?? 'Untitled'}${canonical?.meta.edited ? ' (edited)' : ''} — corrallm`;
+  }, [files, name, canonical?.meta.edited]);
   const cancelDrawn = useCallback(() => {
     setDrawn(undefined);
   }, []);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      const file = commands ? fileAction(event) : null;
+      if (switching.current || restoring) return;
+      const file = files ? fileAction(event) : null;
       if (restoreFailed && file !== 'new' && file !== 'open') return;
-      if (commands && file) {
+      if (files && file) {
         event.preventDefault();
         void flushDrafts(() => {
           if (file === 'save' || file === 'saveAs') {
-            commands.save(latest.current.text, file === 'saveAs');
+            commands.save(file === 'saveAs');
           } else if (!latest.current.modal) {
-            if (file === 'new') commands.new(latest.current.edited);
-            else commands.open(latest.current.edited);
+            if (file === 'new') commands.new();
+            else commands.open();
           }
         }).catch((error: unknown) => {
           setProblem(ipcErrorMessage(error));
@@ -894,10 +821,12 @@ function Editor({
       event.preventDefault();
       void flushDrafts(() => {
         if (action !== 'rename') {
-          apply(operation(action));
+          execute(action);
           return;
         }
-        const [only, ...others] = latest.current.graph.nodes.filter((n) => n.selected);
+        const [only, ...others] = latest.current.graph.nodes.filter((n) =>
+          selection.nodes.has(n.id),
+        );
         if (only && others.length === 0) setEditing(only.id);
       }).catch((error: unknown) => {
         setProblem(ipcErrorMessage(error));
@@ -907,13 +836,14 @@ function Editor({
     return () => {
       document.removeEventListener('keydown', onKeyDown);
     };
-  }, [apply, commands, restoreFailed]);
+  }, [execute, commands, files, restoreFailed, restoring, selection]);
 
   /** Adds a node where the pointer is: into the innermost group there, if any. */
   const addAtPointer = (event: ReactMouseEvent) => {
-    const id = crypto.randomUUID();
-    const center = screenToFlowPosition({ x: event.clientX, y: event.clientY });
-    apply((g) => addAgent(g, id, center));
+    const at = screenToFlowPosition({ x: event.clientX, y: event.clientY });
+    perform(api.canvasAddAgent({ canvas: canvasId, adapter: DEFAULT_AGENT, at }), (result) => {
+      if ('id' in result) selectOne(result.id);
+    });
   };
   const onDoubleClick = (event: ReactMouseEvent) => {
     if (event.target instanceof Element && event.target.classList.contains('react-flow__pane')) {
@@ -926,8 +856,9 @@ function Editor({
   // to trust the folder as it starts) glows, through classes React Flow puts on it (GraphEditor.css).
   // Screen readers hear an agent's type with its label.
   const nodes = useMemo(() => {
-    const colors = groupColors(displayNodes);
-    return displayNodes.map((n) => {
+    const colors = groupColors(graph.nodes);
+    const dataById = new Map<string, AgentData>(displayNodes.map((node) => [node.id, node.data]));
+    return projectOverlay(projectSelection(graph, selection), overlays).nodes.map((n) => {
       const color = colors.get(n.id);
       const status = sessions[n.id]?.status ?? 'idle';
       // Waiting on a permission answer is asking too, as is what its CLI asks in its terminal.
@@ -940,17 +871,19 @@ function Editor({
         ...(asking ? ['asking'] : []),
         ...(status === 'idle' ? [] : ['working']),
       ];
-      const name = n.data.label || 'Unnamed agent';
-      const type = agentLabel(n.data.adapter ?? DEFAULT_AGENT, connectionOf(n.data), {
+      const data = dataById.get(n.id) ?? n.data;
+      const name = data.label || 'Unnamed agent';
+      const type = agentLabel(data.adapter ?? DEFAULT_AGENT, connectionOf(data), {
         short: true,
       });
-      return {
-        ...n,
-        ...(classes.length === 0 ? {} : { className: classes.join(' ') }),
-        ...(n.type === 'agent' ? { ariaLabel: `${name}, ${type}` } : {}),
-      };
+      return nodeView(
+        n,
+        classes.join(' '),
+        n.type === 'agent' ? `${name}, ${type}` : undefined,
+        data,
+      );
     });
-  }, [displayNodes, sessions, run]);
+  }, [displayNodes, graph, selection, overlays, sessions, run]);
   /** What needs the user, as the engine derives it: the run's holds, and what sessions ask. */
   const needed = useMemo(() => {
     const input = {
@@ -983,6 +916,7 @@ function Editor({
       .map((e) => ({
         ...e,
         className: 'graph-link',
+        selected: selection.edges.has(e.id),
         ariaLabel: `${name(e.source)} and ${name(e.target)} can talk`,
       }));
     const arrows: WorkFlowEdge[] = work.map(({ from, to, count, conditional }) => {
@@ -1011,12 +945,14 @@ function Editor({
       };
     });
     return [...links, ...arrows];
-  }, [graph.nodes, graph.edges]);
+  }, [graph.nodes, graph.edges, selection.edges]);
 
-  const selectedIds = graph.nodes.filter((n) => n.selected).map((n) => n.id);
+  const selectedIds = [...selection.nodes].filter((id) =>
+    graph.nodes.some((node) => node.id === id),
+  );
   const nameOf = (id: string) =>
     (graph.nodes.find((n) => n.id === id)?.data.label ?? '') || 'Unnamed agent';
-  const openedNode = displayNodes.find((n) => n.id === front);
+  const openedNode = displayNodes.filter((n) => n.type === 'agent').find((n) => n.id === front);
   /** The other agents opened from the agent view's rail, as its stack shows them. */
   const stack = openedIds.slice(1).flatMap((id) => {
     const n = graph.nodes.find((other) => other.id === id);
@@ -1031,22 +967,43 @@ function Editor({
         ]
       : [];
   });
-  const canGroup = groupMembers(graph.nodes).length > 0;
+  const canGroup = Structure.groupMembers(model.nodes, [...selection.nodes]).length > 0;
+
+  const blockSwitchInput = (event: SyntheticEvent) => {
+    if (switching.current) {
+      event.preventDefault();
+      event.stopPropagation();
+    }
+  };
 
   if (restoreFailed) {
     return (
-      <div className="graph-editor">
+      <div
+        className="graph-editor"
+        inert={restoring}
+        aria-busy={restoring}
+        onClickCapture={blockSwitchInput}
+        onDoubleClickCapture={blockSwitchInput}
+        onPointerDownCapture={blockSwitchInput}
+        onKeyDownCapture={blockSwitchInput}
+      >
         <div className="graph-file-panel">
           <p className="graph-file-problem graph-panel" role="alert">
             {problem ?? 'Run progress could not be restored.'} The saved progress has been kept.
             Choose New or Open to continue.
           </p>
-          {commands && (
+          {files && (
             <div className="graph-file graph-panel" role="toolbar" aria-label="Canvas recovery">
+              <Canvases
+                canvas={canvasId}
+                mirror={mirror}
+                onShow={commands.show}
+                onClose={commands.close}
+              />
               <button
                 type="button"
                 onClick={() => {
-                  commands.new(false);
+                  commands.new();
                 }}
               >
                 New
@@ -1054,7 +1011,7 @@ function Editor({
               <button
                 type="button"
                 onClick={() => {
-                  commands.open(false);
+                  commands.open();
                 }}
               >
                 Open…
@@ -1066,7 +1023,7 @@ function Editor({
     );
   }
 
-  const settingsNode = graph.nodes.find(
+  const settingsNode = model.nodes.find(
     (node) => node.id === settingsAgent && node.type === 'agent',
   );
   const menuNode = agentMenu && graph.nodes.find((node) => node.id === agentMenu.id);
@@ -1091,7 +1048,12 @@ function Editor({
         ref={wrapper}
         inert={restoring}
         aria-busy={restoring}
+        onClickCapture={blockSwitchInput}
+        onDoubleClickCapture={blockSwitchInput}
+        onPointerDownCapture={blockSwitchInput}
         onKeyDownCapture={(event) => {
+          blockSwitchInput(event);
+          if (event.isPropagationStopped()) return;
           if (event.key !== 'ContextMenu' && !(event.key === 'F10' && event.shiftKey)) return;
           if (
             !(event.target instanceof HTMLElement) ||
@@ -1107,18 +1069,116 @@ function Editor({
           setAgentMenu({ id, x: box.left + 16, y: box.bottom });
         }}
       >
+        {notice && (
+          <div role="status" className="graph-panel">
+            <ul>
+              {notice.map((text, i) => (
+                <li key={i}>{text}</li>
+              ))}
+            </ul>
+            <button
+              type="button"
+              aria-label="Dismiss cleared references"
+              onClick={() => {
+                setNotice(undefined);
+              }}
+            >
+              ×
+            </button>
+          </div>
+        )}
+        {!files && problem && (
+          <p role="alert" className="graph-panel">
+            {problem}
+          </p>
+        )}
         <ReactFlow
           nodes={nodes}
           edges={edges}
           nodeTypes={nodeTypes}
           nodesDraggable={!arranging}
           edgeTypes={edgeTypes}
+          onSelectionStart={() => {
+            // The pane resets controlled selection before computing its first rectangle, but
+            // leaves its internal selected flags set. Clear those too, so a previously selected
+            // node inside the rectangle is included in the new selection changes.
+            const flow = store.getState();
+            flow.unselectNodesAndEdges({ nodes: [...flow.nodeLookup.values()] });
+          }}
           onNodesChange={(changes) => {
-            // Containers fit their children, so a dragged child resizes every container around it.
-            setGraph((g) => ({ ...g, nodes: autosize(applyNodeChanges(changes, g.nodes)) }));
+            setSelection((current) => {
+              const nodes = new Set(current.nodes);
+              for (const change of changes)
+                if (change.type === 'select') {
+                  if (change.selected) nodes.add(change.id);
+                  else nodes.delete(change.id);
+                }
+              return { ...current, nodes };
+            });
+            // React Flow places a moved node in its parent as it holds that parent now; the
+            // overlay keeps it there in canvas coordinates, whatever the commit does to the parent.
+            const { nodeLookup } = store.getState();
+            const placed = new Map(
+              changes.flatMap((change) => {
+                if (change.type !== 'position' || !change.position) return [];
+                const parent = nodeLookup.get(change.id)?.parentId;
+                const origin =
+                  parent === undefined
+                    ? undefined
+                    : nodeLookup.get(parent)?.internals.positionAbsolute;
+                return [
+                  [
+                    change.id,
+                    {
+                      x: (origin?.x ?? 0) + change.position.x,
+                      y: (origin?.y ?? 0) + change.position.y,
+                    },
+                  ] as const,
+                ];
+              }),
+            );
+            setOverlays((current) => {
+              const next = new Map(current);
+              for (const change of changes) {
+                const at = change.type === 'position' ? placed.get(change.id) : undefined;
+                if (at && change.type === 'position')
+                  next.set(change.id, {
+                    ...next.get(change.id),
+                    at,
+                    dragging: change.dragging ?? false,
+                  });
+                if (change.type === 'dimensions' && change.dimensions)
+                  next.set(change.id, { ...next.get(change.id), measured: change.dimensions });
+              }
+              return next;
+            });
+            const nudges = changes.flatMap((change) =>
+              change.type === 'position' && change.position && change.dragging === undefined
+                ? [{ node: change.id, position: change.position }]
+                : [],
+            );
+            if (nudges.length > 0 && !arranging) moveNodes(nudges);
           }}
           onEdgesChange={(changes) => {
-            setGraph((g) => ({ ...g, edges: applyEdgeChanges(changes, g.edges) }));
+            setSelection((current) => {
+              const edges = new Set(current.edges);
+              for (const change of changes)
+                if (change.type === 'select') {
+                  if (change.selected) edges.add(change.id);
+                  else edges.delete(change.id);
+                }
+              return { ...current, edges };
+            });
+          }}
+          onNodeDragStop={(_event, node, dragged) => {
+            const roots = new Set(
+              Structure.roots(
+                model.nodes,
+                dragged.map((one) => one.id),
+              ).map((one) => one.id),
+            );
+            const moved = dragged.length > 0 ? dragged.filter((one) => roots.has(one.id)) : [node];
+            moveNodes(moved.map((one) => ({ node: one.id, position: one.position })));
           }}
           // A drawn edge asks what it makes (ConnectMenu), where the drag ended.
           onConnect={(connection) => {
@@ -1148,7 +1208,7 @@ function Editor({
           onNodeContextMenu={(event, node) => {
             showAgentMenu(event, node.id);
           }}
-          isValidConnection={(connection) => canConnect(graph, connection)}
+          isValidConnection={(connection) => Structure.canLink(model, connection)}
           connectionMode={ConnectionMode.Loose}
           onDoubleClick={onDoubleClick}
           onNodeDoubleClick={(event, node) => {
@@ -1164,7 +1224,7 @@ function Editor({
               return;
             }
             // A plain click keeps a multi-selection; this is about the double-clicked node only.
-            apply((g) => selectOnly(g, node.id));
+            selectOne(node.id);
             // A node opens in a panel; a group, which has no queue, is renamed in place.
             if (node.type === 'frame') {
               setEditing(node.id);
@@ -1195,7 +1255,7 @@ function Editor({
                   : 'Arrange automatically'
               }
               onClick={() => {
-                setGraph((g) => ({ ...g, arrange: !g.arrange }));
+                perform(api.canvasSetArrange({ canvas: canvasId, on: !arranging }));
               }}
             >
               <svg viewBox="0 0 16 16" aria-hidden="true">
@@ -1228,7 +1288,7 @@ function Editor({
                   : 'Only agents in the same group can be grouped'
               }
               onClick={() => {
-                apply(operation('group'));
+                execute('group');
               }}
             >
               Group
@@ -1237,67 +1297,67 @@ function Editor({
               type="button"
               title="Delete the selected agents (Delete). A deleted group's nodes are kept."
               onClick={() => {
-                apply(operation('delete'));
+                execute('delete');
               }}
             >
               Delete
             </button>
           </NodeToolbar>
-          {needed.needs.length > 0 && (
-            <Panel position="top-right">
-              <QuestionsSidebar
-                needs={needed.needs}
-                input={needed.input}
-                onDecide={edits.decide}
-                onAnswer={(agentId, promptId, index, answer) => {
-                  sessionStore.answerQuestion(agentId, promptId, index, answer);
-                }}
-                onOpen={(agentId) => {
-                  apply((g) => selectOnly(g, agentId));
-                  setOpened({ ids: [agentId] });
-                }}
-              />
-            </Panel>
-          )}
-          {commands && (
+          <Panel position="top-right">
+            <NeedsSidebar
+              key={canvasId}
+              canvas={canvasId}
+              mirror={mirror}
+              onReply={commands.reply}
+              needs={needed.needs}
+              input={needed.input}
+              onDecide={edits.decide}
+              onAnswer={(agentId, promptId, index, answer) => {
+                sessionStore.answerQuestion(agentId, promptId, index, answer);
+              }}
+              onOpen={(agentId) => {
+                selectOne(agentId);
+                setOpened({ ids: [agentId] });
+              }}
+            />
+          </Panel>
+          {files && (
             <Panel position="top-left">
               <FileBar
-                name={saved.name}
-                edited={edited}
-                {...(commands.chooseProject
-                  ? { project: { folder: project, onChoose: commands.chooseProject } }
-                  : {})}
+                canvases={
+                  <Canvases
+                    canvas={canvasId}
+                    mirror={mirror}
+                    onShow={commands.show}
+                    onClose={commands.close}
+                  />
+                }
+                name={name}
+                edited={canonical?.meta.edited ?? false}
+                project={{ folder: project, onChoose: commands.chooseProject }}
                 problem={problem}
-                discarding={discarding !== undefined}
                 onNew={() => {
-                  commands.new(edited);
+                  commands.new();
                 }}
                 onOpen={() => {
-                  commands.open(edited);
+                  commands.open();
                 }}
                 onSave={() => {
                   void flushDrafts(() => {
-                    commands.save(latest.current.text, false);
+                    commands.save(false);
                   }).catch((error: unknown) => {
                     setProblem(ipcErrorMessage(error));
                   });
                 }}
                 onSaveAs={() => {
                   void flushDrafts(() => {
-                    commands.save(latest.current.text, true);
+                    commands.save(true);
                   }).catch((error: unknown) => {
                     setProblem(ipcErrorMessage(error));
                   });
                 }}
                 onExamples={() => {
                   setGallery(true);
-                }}
-                onDiscard={() => {
-                  discarding?.run();
-                  setDiscarding(undefined);
-                }}
-                onKeep={() => {
-                  setDiscarding(undefined);
                 }}
                 onDismiss={() => {
                   setProblem(undefined);
@@ -1306,8 +1366,8 @@ function Editor({
               />
             </Panel>
           )}
-          {!commands && backends.length > 0 && <Panel position="top-left">{gauges}</Panel>}
-          {commands && graph.nodes.length === 0 && (
+          {!files && backends.length > 0 && <Panel position="top-left">{gauges}</Panel>}
+          {files && graph.nodes.length === 0 && (
             <Panel position="top-center" className="graph-panel graph-start">
               <button
                 type="button"
@@ -1337,27 +1397,34 @@ function Editor({
             from={opened.from?.id === openedNode.id ? opened.from.rect : undefined}
             stack={stack}
             onNewAgent={(relation, from) => {
-              const id = crypto.randomUUID();
-              apply((g) => spawnAgent(g, openedNode.id, id, relation));
-              setOpened(({ ids }) => ({ ids: [id, ...ids], from: { id, rect: from } }));
+              perform(
+                api.canvasSpawnAgent({ canvas: canvasId, from: openedNode.id, relation }),
+                (result) => {
+                  if ('id' in result) {
+                    selectOne(result.id);
+                    setOpened(({ ids }) => ({
+                      ids: [result.id, ...ids],
+                      from: { id: result.id, rect: from },
+                    }));
+                  }
+                },
+              );
             }}
             onSwitch={(id, from) => {
-              apply((g) => selectOnly(g, id));
+              selectOne(id);
               setOpened(({ ids }) => ({
                 ids: [id, ...ids.filter((other) => other !== id)],
                 from: { id, rect: from },
               }));
             }}
             onRename={(label) => {
-              setGraph((g) => renameNode(g, openedNode.id, label));
+              perform(api.canvasRename({ canvas: canvasId, node: openedNode.id, label }));
             }}
             connection={connectionOf(openedNode.data)}
             project={project}
             terminal={terminalBackend}
             onAgent={(agent, connection) => {
-              setGraph((g) =>
-                setConnection(setAgent(g, openedNode.id, agent), openedNode.id, connection),
-              );
+              perform(changeAgent(openedNode.id, agent, connection));
             }}
             onOpenSettings={() => {
               setSettingsAgent(openedNode.id);
@@ -1367,15 +1434,22 @@ function Editor({
               // command typed for it once the agent runs there.
               const terminal = continuesIn(connectionOf(openedNode.data));
               if (terminal === undefined) return;
-              if (command !== undefined) {
-                sessionStore.sendOnceIn(
-                  openedNode.id,
-                  terminal,
-                  openedNode.data.adapter ?? DEFAULT_AGENT,
-                  command,
-                );
-              }
-              setGraph((g) => setConnection(g, openedNode.id, terminal));
+              perform(
+                api.agentSetConnection({
+                  canvas: canvasId,
+                  agent: openedNode.id,
+                  connection: terminal,
+                }),
+                () => {
+                  if (command !== undefined)
+                    sessionStore.sendOnceIn(
+                      openedNode.id,
+                      terminal,
+                      openedNode.data.adapter ?? DEFAULT_AGENT,
+                      command,
+                    );
+                },
+              );
             }}
             edits={edits}
             marks={marks}
@@ -1493,7 +1567,7 @@ function Editor({
             backLabel={queues.from === undefined ? 'Canvas' : nameOf(queues.from)}
             onOpenAgent={(id) => {
               setQueues(undefined);
-              apply((g) => selectOnly(g, id));
+              selectOne(id);
               setOpened({ ids: [id] });
             }}
             onClose={closeQueues}
@@ -1504,26 +1578,28 @@ function Editor({
             canInsert={graph.nodes.length > 0}
             installed={installed}
             onPick={(template, choices, use) => {
-              const example = exampleOf(template.id);
-              if (!example) {
-                setProblem('That template is no longer available in this build.');
-                return;
-              }
               setGallery(false);
               if (use === 'new') {
-                commands?.example(example, choices, edited);
+                commands.example(template.id, choices);
                 return;
               }
-              // Inserted as one group, beside what is there, and brought into view.
-              const group = crypto.randomUUID();
-              setGraph((g) =>
-                insertGraph(g, fromTemplate(example, choices), {
-                  group,
-                  name: example.name,
-                  newId: () => crypto.randomUUID(),
+              perform(
+                api.canvasInsertTemplate({
+                  canvas: canvasId,
+                  template: template.id,
+                  values: choices.values,
+                  agents: Object.fromEntries(
+                    Object.entries(choices.agents).map(([key, value]) => [key, value ?? null]),
+                  ),
+                  connections: choices.connections,
                 }),
+                (result) => {
+                  if ('group' in result) {
+                    selectOne(result.group);
+                    setInserted(result.group);
+                  }
+                },
               );
-              setInserted(group);
             }}
             onClose={closeGallery}
           />
@@ -1535,40 +1611,74 @@ function Editor({
             linked={areLinked(graph.edges, drawn.source, drawn.target)}
             at={drawn.at}
             onTalk={() => {
-              setGraph((g) => connect(g, drawn));
+              perform(
+                api.canvasLink({
+                  canvas: canvasId,
+                  a: drawn.source,
+                  b: drawn.target,
+                  ...(drawn.sourceHandle && drawn.targetHandle
+                    ? {
+                        dots: [
+                          drawn.sourceHandle as 'top' | 'bottom',
+                          drawn.targetHandle as 'top' | 'bottom',
+                        ],
+                      }
+                    : {}),
+                }),
+              );
               setDrawn(undefined);
             }}
             onWork={() => {
-              setGraph((g) => connect(g, drawn));
+              if (!areLinked(graph.edges, drawn.source, drawn.target))
+                perform(
+                  api.canvasLink({
+                    canvas: canvasId,
+                    a: drawn.source,
+                    b: drawn.target,
+                    ...(drawn.sourceHandle && drawn.targetHandle
+                      ? {
+                          dots: [
+                            drawn.sourceHandle as 'top' | 'bottom',
+                            drawn.targetHandle as 'top' | 'bottom',
+                          ],
+                        }
+                      : {}),
+                  }),
+                );
               setDrawn(undefined);
               setWork({ from: drawn.source, to: drawn.target });
             }}
             onCancel={cancelDrawn}
           />
         )}
-        {settingsNode && (
+        {settingsNode?.type === 'agent' && (
           <AgentSettingsPanel
             key={`settings:${settingsNode.id}`}
             node={settingsNode}
             session={sessions[settingsNode.id] ?? NEW_SESSION}
             options={(adapter) => sessionStore.settingsOptions(adapter)}
             onRename={(name) => {
-              setGraph((g) => renameNode(g, settingsNode.id, name));
+              perform(api.canvasRename({ canvas: canvasId, node: settingsNode.id, label: name }));
             }}
             onRole={(role) => {
-              setRawGraph((g) => setRole(g, settingsNode.id, role));
-            }}
-            onAgent={(agent, connection) => {
-              setGraph((g) =>
-                setConnection(setAgent(g, settingsNode.id, agent), settingsNode.id, connection),
+              return draftCall(() =>
+                api.agentSetRole({ canvas: canvasId, agent: settingsNode.id, role: role ?? '' }),
               );
             }}
+            onAgent={(agent, connection) => {
+              perform(changeAgent(settingsNode.id, agent, connection));
+            }}
             onSettings={(adapter, settings) => {
-              setRawGraph((g) =>
-                setSettings(g, settingsNode.id, adapter, {
-                  model: settings.model ?? null,
-                  effort: settings.effort ?? null,
-                  mode: settings.mode ?? null,
+              perform(
+                api.agentSetSettings({
+                  canvas: canvasId,
+                  agent: settingsNode.id,
+                  adapter,
+                  settings: {
+                    model: settings.model ?? null,
+                    effort: settings.effort ?? null,
+                    mode: settings.mode ?? null,
+                  },
                 }),
               );
             }}

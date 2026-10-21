@@ -3,11 +3,15 @@ import { useState } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { AdapterId } from '../../shared/adapter';
+import { MAX_LABEL } from '../../shared/api/limits';
 import { MAX_ROLE_LENGTH } from '../../shared/session';
 import type { AgentSettings, SettingsOptions } from '../../shared/session';
 import type { AgentConnection } from '../graph/agents';
-import { setAgent, setConnection, setRole } from '../graph/graph';
-import type { GraphNode } from '../graph/graph';
+import * as AgentOps from '../../shared/model/agent-ops';
+import { catalog } from '../catalog';
+import { DEFAULT_AGENT } from '../graph/agents';
+import type { CanvasId } from '../../shared/canvas';
+import type { AgentNode } from '../../shared/model/canvas';
 import { AgentSettingsPanel, AgentSettingsSummary } from './AgentSettings';
 import { SettingsMenu } from './Settings';
 import { NEW_SESSION } from '../../shared/model/session';
@@ -17,7 +21,7 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-const agent = (data: Partial<GraphNode['data']> = {}): GraphNode => ({
+const agent = (data: Partial<AgentNode['data']> = {}): AgentNode => ({
   id: 'a',
   type: 'agent',
   position: { x: 0, y: 0 },
@@ -38,30 +42,40 @@ function Editor({
   onFresh = () => undefined,
   onClose = () => undefined,
 }: {
-  initial?: GraphNode;
+  initial?: AgentNode;
   session?: Session;
   onRole?: (role: string | undefined) => void;
   onRestart?: () => void;
   onFresh?: () => void;
   onClose?: () => void;
 }) {
+  const asDoc = (node: AgentNode) => ({
+    id: '7d0c2b9e-4f1a-4c3d-9e8b-2a1f0e6d5c4b' as CanvasId,
+    arrange: false,
+    nodes: [node],
+    links: [],
+  });
   const [node, setNode] = useState(initial);
   const [open, setOpen] = useState(false);
   const changeRole = (role: string | undefined) => {
     onRole(role);
     setNode(
-      (current) => setRole({ nodes: [current], edges: [] }, current.id, role).nodes[0] ?? current,
+      (current) =>
+        (AgentOps.setRole(asDoc(current), { agent: current.id, role }).next.nodes[0] as
+          AgentNode | undefined) ?? current,
     );
   };
   const changeAgent = (next: AdapterId, connection: AgentConnection) => {
-    setNode(
-      (current) =>
-        setConnection(
-          setAgent({ nodes: [current], edges: [] }, current.id, next),
-          current.id,
-          connection,
-        ).nodes[0] ?? current,
-    );
+    const context = { catalog: catalog(), defaultAdapter: DEFAULT_AGENT };
+    setNode((current) => {
+      const typed = AgentOps.setType(asDoc(current), { agent: current.id, adapter: next }, context);
+      const connected = AgentOps.setConnection(
+        typed.next,
+        { agent: current.id, connection },
+        context,
+      );
+      return (connected.next.nodes[0] as AgentNode | undefined) ?? current;
+    });
   };
   const changeSettings = (cli: AdapterId, settings: AgentSettings) => {
     setNode((current) => ({
@@ -165,6 +179,35 @@ describe('shared agent settings', () => {
     expect(onRole).not.toHaveBeenCalled();
     expect(onClose).not.toHaveBeenCalled();
   });
+
+  it.each(['Enter', 'blur', 'idle'] as const)(
+    'restores a blank name on %s and bounds names',
+    (how) => {
+      vi.useFakeTimers();
+      try {
+        render(<Editor />);
+        const { panel } = open();
+        const name = panel.getByRole<HTMLInputElement>('textbox', { name: 'Name' });
+        expect(name.maxLength).toBe(MAX_LABEL);
+        for (const draft of ['   ', `${' '.repeat(MAX_LABEL)}x`]) {
+          focus(name);
+          fireEvent.change(name, { target: { value: draft } });
+          if (how === 'Enter') fireEvent.keyDown(name, { key: 'Enter' });
+          else if (how === 'blur') fireEvent.blur(name);
+          else
+            act(() => {
+              vi.advanceTimersByTime(600);
+            });
+          expect(name.value).toBe('Reviewer');
+        }
+        fireEvent.change(name, { target: { value: 'x'.repeat(MAX_LABEL + 1) } });
+        fireEvent.blur(name);
+        expect(name.value).toBe('x'.repeat(MAX_LABEL));
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it('retains spaces in a focused local role draft and saves normalized instructions on leave', () => {
     const onRole = vi.fn();

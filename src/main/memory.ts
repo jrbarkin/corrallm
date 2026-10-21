@@ -61,13 +61,17 @@ const KEPT = `(file IS NOT NULL OR project IS NOT NULL
  * LIMIT canvases used most recently (`used_at`, which each change moves past every other's) with a
  * file, folder or conversations, and the LIMIT drafts used most recently (each New makes one, with
  * its run), forgetting the others with everything the database keeps of them: drafts never push
- * out a canvas kept for its file or folder. The paths it reads back are
+ * out a canvas kept for its file or folder. It never forgets a canvas open (`open_canvas`: until it
+ * is closed), nor one whose document has edits not saved (`spare`: B9 Design §2), however long
+ * since it was used; it forgets one when asked to (`forget`: a draft discarded). The paths it reads back are
  * trusted: it wrote them, from the app's dialogs. What isn't right (a path that isn't absolute, a
  * conversation whose id isn't a session's) is left out.
  */
 export class CanvasMemory {
   readonly #store: Database;
   readonly #limit: number;
+  /** Whether a canvas holds what forgetting it would lose: edits not saved. */
+  readonly #spare: (canvas: CanvasId) => boolean;
   /** Every change asked for so far, written or failed. */
   #writing: Promise<unknown> = Promise.resolve();
   /**
@@ -79,16 +83,88 @@ export class CanvasMemory {
   #changes = 0;
   /** Why the last write failed, until a write leaves nothing unwritten. */
   #writeError: Error | undefined;
+  /** What hears a canvas it keeps change (undefined: which canvases it keeps). */
+  readonly #listeners = new Set<(canvas: CanvasId | undefined) => void>();
+  /** The canvases the change being applied changed. */
+  #touched: CanvasId[] = [];
 
-  constructor(store: Database, limit = LIMIT) {
+  /**
+   * `spare`: whether a canvas has what forgetting it would lose (its document's edits not saved),
+   * asked within a write of only the canvases it would forget otherwise.
+   */
+  constructor(store: Database, limit = LIMIT, spare: (canvas: CanvasId) => boolean = () => false) {
     this.#store = store;
     this.#limit = limit;
+    this.#spare = spare;
+  }
+
+  /** Its file association now, including changes in the write currently being applied. */
+  fileOf(canvas: CanvasId): TrustedPath | undefined {
+    return this.#current(canvas).file;
   }
 
   /** What it remembers of a canvas, with every change asked for so far. */
   async get(canvas: CanvasId): Promise<Remembered> {
     await this.#writing;
     return this.#current(canvas);
+  }
+
+  /**
+   * Every canvas it keeps, the one used most recently first, with every change asked for so far:
+   * its file and its folder.
+   */
+  async list(): Promise<{ canvas: CanvasId; file?: TrustedPath; project?: TrustedPath }[]> {
+    await this.#writing;
+    const changed = [...this.#unwritten].reverse();
+    const kept = this.#store
+      .prepare('SELECT id, file, project FROM canvas ORDER BY used_at DESC')
+      .all()
+      .flatMap(({ id, file, project }) =>
+        isCanvasId(id) && !this.#unwritten.has(id)
+          ? [
+              {
+                canvas: id,
+                ...(isAbsolute(file) ? { file: mintTrustedPath(file) } : {}),
+                ...(isAbsolute(project) ? { project: mintTrustedPath(project) } : {}),
+              },
+            ]
+          : [],
+      );
+    return [
+      ...changed.map(
+        ([
+          canvas,
+          {
+            remembered: { file, project },
+          },
+        ]) => ({
+          canvas,
+          ...(file === undefined ? {} : { file }),
+          ...(project === undefined ? {} : { project }),
+        }),
+      ),
+      ...kept,
+    ];
+  }
+
+  /** Whether it keeps `canvas`, with every change asked for so far. */
+  keeps(canvas: CanvasId): boolean {
+    return (
+      this.#unwritten.has(canvas) ||
+      this.#store.prepare('SELECT 1 AS kept FROM canvas WHERE id = ?').get(canvas) !== undefined
+    );
+  }
+
+  /**
+   * Hears what it keeps change: a canvas's file, folder or conversations (once the change is
+   * written, or failed to be), and which canvases it keeps (undefined, as it is changed). Returns
+   * what stops it hearing them.
+   */
+  subscribe(listener: (canvas: CanvasId | undefined) => void): () => void {
+    this.#listeners.add(listener);
+    return () => {
+      this.#listeners.delete(listener);
+    };
   }
 
   /** The canvas whose file `file` is, if any. */
@@ -106,16 +182,17 @@ export class CanvasMemory {
 
   /**
    * Sets the file a canvas is opened from and saved to (undefined: none, a draft's). Another canvas
-   * that had that file has it no more.
+   * that had that file has it no more. An optional SQL callback runs in the same savepoint;
+   * with one, failure rejects rather than being left to flush (the document save needs both).
    */
-  setFile(canvas: CanvasId, file: TrustedPath | undefined): Promise<void> {
+  setFile(canvas: CanvasId, file: TrustedPath | undefined, within?: () => void): Promise<void> {
     return this.#change(() => {
       const other = file === undefined ? undefined : this.#withFile(file);
       if (other !== undefined && other !== canvas) {
         this.#set(other, withFile(this.#current(other), undefined));
       }
       this.#set(canvas, withFile(this.#current(canvas), file));
-    });
+    }, within);
   }
 
   /**
@@ -126,7 +203,26 @@ export class CanvasMemory {
     const made = this.#store
       .prepare('INSERT INTO canvas (id, used_at) VALUES (?, ?) ON CONFLICT (id) DO NOTHING')
       .run(canvas, this.#nextUse());
-    if (made.changes > 0) this.#forgetOldest();
+    if (made.changes > 0) {
+      this.#forgetOldest();
+      this.#tell(undefined);
+    }
+  }
+
+  /**
+   * Forgets `canvas`, with everything the database keeps of it (its document, run, messages and
+   * conversations), and any change of it not on disk yet. On disk once it resolves; rejects,
+   * forgetting nothing, if it couldn't be written.
+   */
+  forget(canvas: CanvasId): Promise<void> {
+    return this.#change(
+      () => {
+        this.#unwritten.delete(canvas);
+        this.#store.prepare('DELETE FROM canvas WHERE id = ?').run(canvas);
+        this.#tell(undefined);
+      },
+      () => undefined,
+    );
   }
 
   /** Resolves once every change so far is on disk; rejects while a write that failed isn't. */
@@ -136,13 +232,17 @@ export class CanvasMemory {
   }
 
   /** Makes a change, then writes every canvas changed whose row isn't on disk as it is. */
-  #change(apply: () => void): Promise<void> {
+  #change(apply: () => void, within?: () => void): Promise<void> {
     let written: () => void = () => undefined;
-    const writing = this.#store
-      .write(() => {
-        apply();
-        written = this.#writeUnwritten();
-      })
+    let touched: CanvasId[] = [];
+    const attempt = this.#store.write(() => {
+      this.#touched = [];
+      apply();
+      touched = this.#touched;
+      written = this.#writeUnwritten();
+      within?.();
+    });
+    const writing = attempt
       .then(
         () => {
           written();
@@ -154,9 +254,23 @@ export class CanvasMemory {
           this.#writeError = error instanceof Error ? error : new Error(String(error));
           console.error('Could not remember the canvas:', error);
         },
-      );
+      )
+      .then(() => {
+        for (const canvas of new Set(touched)) this.#tell(canvas);
+      });
     this.#writing = Promise.all([this.#writing, writing]);
-    return writing;
+    return within === undefined ? writing : attempt.then(() => undefined);
+  }
+
+  /** Tells what hears it that `canvas` changed (undefined: which canvases it keeps). */
+  #tell(canvas: CanvasId | undefined): void {
+    for (const listener of this.#listeners) {
+      try {
+        listener(canvas);
+      } catch (error) {
+        console.error('Could not tell of a remembered canvas:', error);
+      }
+    }
   }
 
   /**
@@ -189,6 +303,7 @@ export class CanvasMemory {
   #set(canvas: CanvasId, remembered: Remembered): void {
     this.#unwritten.delete(canvas);
     this.#unwritten.set(canvas, { remembered, change: ++this.#changes });
+    this.#touched.push(canvas);
   }
 
   /** The canvas whose file `file` is now, if any. */
@@ -280,17 +395,25 @@ export class CanvasMemory {
   /**
    * Forgets every canvas kept with a file, folder or conversations but the LIMIT used most
    * recently, and every draft but the LIMIT used most recently, with all the database keeps of
-   * them.
+   * them: never one open, nor one with edits not saved (`spare`).
    */
   #forgetOldest(): void {
+    let forgot = 0;
+    const forget = this.#store.prepare('DELETE FROM canvas WHERE id = ?');
     for (const kind of [KEPT, `NOT ${KEPT}`]) {
-      this.#store
+      const old = this.#store
         .prepare(
-          `DELETE FROM canvas WHERE id IN
-             (SELECT id FROM canvas WHERE ${kind} ORDER BY used_at DESC LIMIT -1 OFFSET ?)`,
+          `SELECT id FROM canvas WHERE ${kind}
+             AND NOT EXISTS (SELECT 1 FROM open_canvas WHERE open_canvas.canvas_id = canvas.id)
+           ORDER BY used_at DESC LIMIT -1 OFFSET ?`,
         )
-        .run(this.#limit);
+        .all(this.#limit);
+      for (const { id } of old) {
+        if (isCanvasId(id) && this.#spare(id)) continue;
+        forgot += Number(forget.run(id ?? null).changes);
+      }
     }
+    if (forgot > 0) this.#tell(undefined);
   }
 }
 

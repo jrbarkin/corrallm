@@ -32,20 +32,25 @@ export type Access = { readonly you?: 'all' } & Readonly<
 /** Ops in one scope run one at a time (core/scopes.ts): the app's, a canvas's, an agent's. */
 export type Scope = 'app' | 'canvas' | 'agent' | 'none';
 
-/** The rules that narrow what a token may do (Core Server §3.6: R1 to R13, by key). */
+/**
+ * The rules that narrow what a token may do (Core Server §3.6: R1 to R13, by key; and B9 Design
+ * §4's R14, `managers`).
+ */
 export type Rule =
   | 'shell-text'
   | 'mode-permits'
   | 'human-choice'
   | 'discard'
   | 'restore-code'
+  | 'self'
   | 'human-gate'
   | 'connection'
   | 'sticky'
   | 'team'
   | 'new-agent'
   | 'role'
-  | 'links';
+  | 'links'
+  | 'managers';
 
 /** 'read' changes nothing (MCP's readOnlyHint); 'doc' is a pure document edit; 'command' the rest. */
 export type Kind = 'read' | 'doc' | 'command';
@@ -72,6 +77,14 @@ export interface Surface {
   /** It runs ahead of its scope's queue, aborting what it supersedes (an interrupt, a stop). */
   readonly preempt?: true;
   /**
+   * It removes or replaces what owns scopes beneath its own (B9 Design §3): from when it comes
+   * until it ends, it holds the whole canvas ('canvas': closing it, or, in the app's scope,
+   * replacing the canvas its `replace` names, if it names one), or the agents its arguments remove
+   * or switch ('agents'), aborting what runs there, then takes its turn as usual. Only in the app's
+   * scope or a canvas's.
+   */
+  readonly drains?: 'canvas' | 'agents';
+  /**
    * It waits for what comes (a long poll): a token's limit on calls in flight leaves it out, and
    * its limit on waits in flight counts it instead. Only a read on MCP alone (the transport
    * deviation).
@@ -89,18 +102,32 @@ export interface Surface {
   readonly reads?: TopicKind;
 }
 
+/*
+ * The audiences ops share (Core Server §4's shorthands), which the core's test registry uses too.
+ */
+
 /** Reads no agent makes: you, and outside tokens on their canvases. */
-const O = { you: 'all', 'outside-read': 'canvas', 'outside-write': 'canvas' } as const;
+export const O = { you: 'all', 'outside-read': 'canvas', 'outside-write': 'canvas' } as const;
 /** Reads leads make too, on the agents they reach. */
-const R = { ...O, lead: 'linked' } as const;
+export const R = { ...O, lead: 'linked' } as const;
 /** Reads every caller makes: you, leads and workers on the agents they reach, outside tokens. */
-const A = { ...R, worker: 'linked' } as const;
+export const A = { ...R, worker: 'linked' } as const;
 /** Operations only you may call, in the GUI. */
-const Y = { you: 'all' } as const;
+export const Y = { you: 'all' } as const;
 /** Writes on agents and queues: you; leads, on their team; outside write tokens. */
-const L = { you: 'all', lead: 'team', 'outside-write': 'canvas' } as const;
+export const L = { you: 'all', lead: 'team', 'outside-write': 'canvas' } as const;
+/**
+ * Canvas-wide writes no agent makes, and resuming another conversation: you, and outside write
+ * tokens (a lead acts only on its team).
+ */
+export const W = { you: 'all', 'outside-write': 'canvas' } as const;
 /** Conversation writes: you; leads and workers, on the agents they reach; outside write tokens. */
-const M = { you: 'all', lead: 'linked', worker: 'linked', 'outside-write': 'canvas' } as const;
+export const M = {
+  you: 'all',
+  lead: 'linked',
+  worker: 'linked',
+  'outside-write': 'canvas',
+} as const;
 /** Outside tokens alone, read-only or read-write, on their canvases. */
 const T = { 'outside-read': 'canvas', 'outside-write': 'canvas' } as const;
 
@@ -113,6 +140,170 @@ export const SURFACE = {
   'templates.list': { access: R, kind: 'read', scope: 'none' },
   'settings.get': { access: R, kind: 'read', scope: 'none', reads: 'settings' },
   'project.files': { access: R, kind: 'read', scope: 'none' },
+  // A canvas's lifetime and where it is kept (B9 Design §1, §8). A path comes only from a dialog
+  // you complete (D1: canvas.open, canvas.saveAs, project.choose). A token's call that would
+  // discard work, or close a canvas a window shows, comes to you as a proposal (R4's argument
+  // half). Closing or replacing a canvas drains it, as choosing its folder does.
+  'canvas.create': {
+    access: W,
+    kind: 'command',
+    scope: 'app',
+    rules: ['discard', 'new-agent'],
+    drains: 'canvas',
+    destructive: true,
+  },
+  'canvas.open': { access: Y, kind: 'command', scope: 'app', drains: 'canvas' },
+  'canvas.save': {
+    access: W,
+    kind: 'command',
+    scope: 'canvas',
+    rules: ['discard'],
+    destructive: true,
+  },
+  'canvas.saveAs': { access: Y, kind: 'command', scope: 'canvas' },
+  'canvas.close': {
+    access: W,
+    kind: 'command',
+    scope: 'canvas',
+    rules: ['discard'],
+    drains: 'canvas',
+    destructive: true,
+  },
+  'project.choose': { access: Y, kind: 'command', scope: 'canvas', drains: 'canvas' },
+  // A token lists only its own canvases; a lead's canvas holds only what it reaches (§3.4).
+  'canvas.list': { access: R, kind: 'read', scope: 'none', reads: 'canvases', varies: ['items'] },
+  'canvas.get': {
+    access: R,
+    kind: 'read',
+    scope: 'none',
+    reads: 'canvas',
+    varies: ['nodes', 'links', 'entities'],
+  },
+  'canvas.rename': { access: L, kind: 'doc', scope: 'canvas', self: 'allowed' },
+  'canvas.insertTemplate': {
+    access: L,
+    kind: 'doc',
+    scope: 'canvas',
+    self: 'allowed',
+    rules: ['new-agent'],
+  },
+  'canvas.setArrange': { access: W, kind: 'doc', scope: 'canvas' },
+  'canvas.addAgent': { access: L, kind: 'doc', scope: 'canvas', rules: ['new-agent'] },
+  'canvas.spawnAgent': {
+    access: L,
+    kind: 'doc',
+    scope: 'canvas',
+    rules: ['new-agent'],
+    self: 'allowed',
+  },
+  // A token's delete of an agent comes to you as a proposal (R4), unless another rule refuses it.
+  'canvas.delete': {
+    access: L,
+    kind: 'doc',
+    scope: 'canvas',
+    rules: ['human-gate', 'links', 'discard'],
+    self: 'refused',
+    drains: 'agents',
+    destructive: true,
+  },
+  'canvas.link': { access: L, kind: 'doc', scope: 'canvas', rules: ['links'], self: 'allowed' },
+  'canvas.unlink': { access: L, kind: 'doc', scope: 'canvas', rules: ['links'], self: 'allowed' },
+  'canvas.group': {
+    access: L,
+    kind: 'doc',
+    scope: 'canvas',
+    rules: ['new-agent', 'managers'],
+    self: 'allowed',
+  },
+  'canvas.ungroup': {
+    access: L,
+    kind: 'doc',
+    scope: 'canvas',
+    rules: ['managers'],
+    self: 'allowed',
+  },
+  'canvas.addParent': {
+    access: L,
+    kind: 'doc',
+    scope: 'canvas',
+    rules: ['new-agent', 'managers'],
+    self: 'allowed',
+  },
+  'canvas.move': { access: L, kind: 'doc', scope: 'canvas', self: 'allowed' },
+  // Several doc ops as one commit: every change rule a batch can meet is checked on its whole
+  // change (R8 only through agent.setConnection or agent.setType, which are yours alone), and each
+  // inner op is checked as the caller's own call, its own `self` included. It drains the agents its
+  // inner ops would.
+  'canvas.batch': {
+    access: L,
+    kind: 'doc',
+    scope: 'canvas',
+    rules: [
+      'discard',
+      'mode-permits',
+      'self',
+      'human-gate',
+      'new-agent',
+      'role',
+      'links',
+      'managers',
+    ],
+    self: 'allowed',
+    drains: 'agents',
+    destructive: true,
+  },
+  'agent.setType': {
+    access: Y,
+    kind: 'doc',
+    scope: 'canvas',
+    rules: ['connection'],
+    drains: 'agents',
+  },
+  'agent.setConnection': {
+    access: Y,
+    kind: 'doc',
+    scope: 'canvas',
+    rules: ['connection'],
+    drains: 'agents',
+  },
+  'agent.setSettings': {
+    access: L,
+    kind: 'doc',
+    scope: 'canvas',
+    rules: ['mode-permits', 'self'],
+    self: 'refused',
+  },
+  'agent.setRole': {
+    access: L,
+    kind: 'doc',
+    scope: 'canvas',
+    rules: ['self', 'role'],
+    self: 'refused',
+  },
+  // Adding carries no rule: an OK, or work after one, is a token's to add (revision R34).
+  'queue.add': { access: L, kind: 'doc', scope: 'canvas', self: 'allowed' },
+  'queue.remove': {
+    access: L,
+    kind: 'doc',
+    scope: 'canvas',
+    rules: ['human-gate'],
+    self: 'allowed',
+    destructive: true,
+  },
+  'queue.move': {
+    access: L,
+    kind: 'doc',
+    scope: 'canvas',
+    rules: ['human-gate'],
+    self: 'allowed',
+  },
+  'queue.update': {
+    access: L,
+    kind: 'doc',
+    scope: 'canvas',
+    rules: ['human-gate'],
+    self: 'allowed',
+  },
   agents: { access: A, kind: 'read', scope: 'none', varies: ['agents'] },
   status: {
     access: R,
@@ -136,6 +327,8 @@ export const SURFACE = {
     self: 'refused',
   },
   withdraw: { access: M, kind: 'command', scope: 'canvas', preempt: true, destructive: true },
+  // Answers a Needs item its caller may answer: in B9, a proposal (yours alone, R3).
+  reply: { access: M, kind: 'command', scope: 'canvas', rules: ['human-choice'] },
   'session.get': {
     access: A,
     kind: 'read',
@@ -182,6 +375,7 @@ export const SURFACE = {
   'link.open': { access: Y, kind: 'command', scope: 'none' },
   'link.reveal': { access: Y, kind: 'command', scope: 'none' },
   'window.get': { access: Y, kind: 'read', scope: 'none' },
+  'window.show': { access: Y, kind: 'command', scope: 'none' },
   'terminal.attach': { access: Y, kind: 'command', scope: 'none' },
   'terminal.detach': { access: Y, kind: 'command', scope: 'none' },
   'terminal.input': { access: Y, kind: 'command', scope: 'none' },

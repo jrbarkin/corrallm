@@ -92,7 +92,9 @@ type GuiCalls = {
     : (args: InputOf<N>) => Promise<GuiResult<N>>;
 };
 
-type GuiResult<N extends GuiOp> = N extends 'topics.subscribe' ? TopicSnapshot : ResultOf<N>;
+type GuiResult<N extends GuiOp> = N extends 'topics.subscribe'
+  ? TopicSnapshot & Pick<ResultOf<N>, 'revs'>
+  : ResultOf<N>;
 
 /** A view's event listener, over the same port as its operations. */
 export interface GuiEventApi {

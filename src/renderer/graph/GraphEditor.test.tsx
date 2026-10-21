@@ -1,9 +1,12 @@
+import { renderReady, events } from '../test-render';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { StrictMode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { MAX_LABEL } from '../../shared/api/limits';
 import { canvasIdOf, newCanvasId } from '../../shared/canvas';
-import type { CanvasFile } from '../../shared/ipc';
+import type { CanvasId } from '../../shared/canvas';
+import type { ProjectFolder } from '../../shared/ipc';
 import type { QueueItem } from '../../shared/model/queue';
 import type { RunCheckpoint } from '../../shared/run';
 import type { UsageState } from '../../shared/usage';
@@ -17,11 +20,13 @@ import type { RunSource } from '../run/persistence';
 import { automaticBackend, fakeBackend } from '../../shared/engine/test-backend';
 import type { UsageSource } from '../usage/store';
 import { fromFile, toFile } from '../../shared/model/file';
-import { GraphEditor } from './GraphEditor';
-import type { CanvasFiles } from './GraphEditor';
+import { GraphEditor } from '../test-graph';
+import type { FakeCanvas } from '../test-canvas';
+import { expectOneOp } from '../test-api';
+import type { GuiOp } from '../../shared/api/surface';
 import { PADDING } from '../../shared/model/geometry';
-import type { Graph, GraphNode } from './graph';
-import { documentOf, graphOf } from './graph';
+import type { Graph, GraphNode } from './flow';
+import { documentOf, graphOf } from '../test-graph-data';
 import { DEFAULT_AGENT } from './agents';
 
 // jsdom cannot draw xterm.js: a fake terminal stands in for a Terminal agent's (test-screen.ts).
@@ -53,15 +58,35 @@ const frame: GraphNode = {
   measured: { width: 400, height: 300 },
 };
 
-function setup(initialGraph?: Graph, files?: CanvasFiles) {
+/** The fake core a test editor runs on (test-canvas.ts), as it renders. */
+function core() {
+  const held: { canvas?: FakeCanvas } = {};
+  return {
+    onCanvas: (made: FakeCanvas) => {
+      held.canvas = made;
+    },
+    get canvas(): FakeCanvas {
+      if (!held.canvas) throw new Error('No canvas core yet');
+      return held.canvas;
+    },
+  };
+}
+/** The operations named `op` the editor called, in order. */
+const calls = (canvas: FakeCanvas, op: GuiOp) =>
+  canvas.core.operations.filter((call) => call.op === op);
+
+async function setup(initialGraph?: Graph, files = false) {
   const fake = automaticBackend();
-  const { container } = render(
+  const held = core();
+  const { container } = await renderReady(
     <GraphEditor
       sessionBackend={fake.backend}
       {...(initialGraph ? { initialGraph } : {})}
-      {...(files ? { files } : {})}
+      files={files}
+      onCanvas={held.onCanvas}
     />,
   );
+  const { canvas } = held;
   const nodes = (selector = '.react-flow__node') => [
     ...container.querySelectorAll<HTMLElement>(selector),
   ];
@@ -72,7 +97,7 @@ function setup(initialGraph?: Graph, files?: CanvasFiles) {
   };
   const pane = container.querySelector('.react-flow__pane');
   if (!pane) throw new Error('no pane');
-  return { container, nodes, node, pane, fake };
+  return { container, nodes, node, pane, fake, canvas };
 }
 
 const button = (name: string) => screen.getByRole<HTMLButtonElement>('button', { name });
@@ -110,12 +135,7 @@ describe('GraphEditor', () => {
     'waits for in-flight drafts before %s',
     async (gesture) => {
       const saving = Promise.withResolvers<undefined>();
-      const files = {
-        open: vi.fn<CanvasFiles['open']>().mockResolvedValue(null),
-        save: vi.fn<CanvasFiles['save']>().mockResolvedValue('team.corral'),
-        forget: vi.fn<CanvasFiles['forget']>().mockResolvedValue(newCanvasId()),
-      };
-      const { fake, node } = setup(
+      const { fake, node, canvas } = await setup(
         {
           nodes: [
             agentNode('a', 0, 0, {
@@ -128,7 +148,7 @@ describe('GraphEditor', () => {
           ],
           edges: [],
         },
-        files,
+        true,
       );
       if (gesture === 'run') fireEvent.click(button('Show all queues'));
       if (gesture === 'composer') fireEvent.doubleClick(node('a'));
@@ -151,7 +171,7 @@ describe('GraphEditor', () => {
           await Promise.resolve();
         });
         expect(save).toHaveBeenCalledOnce();
-        expect(files.save).not.toHaveBeenCalled();
+        expect(canvas.files.saved).toEqual([]);
         expect(fake.backend.send).not.toHaveBeenCalled();
       } finally {
         await act(async () => {
@@ -160,9 +180,9 @@ describe('GraphEditor', () => {
         });
       }
       await waitFor(() => {
-        expect(
-          gesture === 'save' || gesture === 'shortcut' ? files.save : fake.backend.send,
-        ).toHaveBeenCalledOnce();
+        if (gesture === 'save' || gesture === 'shortcut')
+          expect(canvas.files.saved).toHaveLength(1);
+        else expect(fake.backend.send).toHaveBeenCalledOnce();
       });
     },
   );
@@ -173,8 +193,8 @@ describe('GraphEditor', () => {
     const source = {
       get: vi
         .fn<RunSource['get']>()
-        .mockResolvedValue({ id: newCanvasId(), token: 'current', checkpoint: null, name: null }),
-      save: vi.fn<RunSource['save']>().mockResolvedValue(null),
+        .mockResolvedValue({ id: newCanvasId(), token: 'current', checkpoint: null }),
+      save: vi.fn<RunSource['save']>().mockResolvedValue(0),
       ready: vi.fn<RunSource['ready']>().mockResolvedValue(null),
       onStopping: (listener: (request: string) => void) => {
         stopping = listener;
@@ -184,7 +204,7 @@ describe('GraphEditor', () => {
       },
     };
     const fake = automaticBackend();
-    render(<GraphEditor runSource={source} sessionBackend={fake.backend} />);
+    await renderReady(<GraphEditor runSource={source} sessionBackend={fake.backend} />);
     await waitFor(() => {
       expect(source.save).toHaveBeenCalled();
     });
@@ -210,22 +230,22 @@ describe('GraphEditor', () => {
   });
 
   it('commits the agent name before the composer sends without blur', async () => {
-    const { fake, node } = setup({
+    const { fake, node } = await setup({
       nodes: [agentNode('a', 0, 0, { data: { label: 'a', connection: 'claude-code.sdk' } })],
       edges: [],
     });
-    fireEvent.doubleClick(node('a'));
+    await events.doubleClick(node('a'));
     const view = within(screen.getByRole('dialog', { name: 'a' }));
     const name = view.getByRole('textbox', { name: 'Name' });
-    fireEvent.change(name, { target: { value: 'Drafted name' } });
+    await events.change(name, { target: { value: 'Drafted name' } });
     expect(screen.getByRole('dialog', { name: 'a' })).toBeTruthy();
     fake.backend.send.mockImplementationOnce(() => {
       expect(screen.getByRole('dialog', { name: 'Drafted name' })).toBeTruthy();
       return Promise.resolve(null);
     });
     const composer = view.getByRole('textbox', { name: 'Message a' });
-    fireEvent.change(composer, { target: { value: 'Hello' } });
-    fireEvent.keyDown(composer, { key: 'Enter' });
+    await events.change(composer, { target: { value: 'Hello' } });
+    await events.keyDown(composer, { key: 'Enter' });
     await waitFor(() => {
       expect(fake.backend.send).toHaveBeenCalledOnce();
     });
@@ -233,25 +253,23 @@ describe('GraphEditor', () => {
   });
 
   it('saves the drafted label from the file shortcut before blur', async () => {
-    const files = {
-      open: vi.fn<CanvasFiles['open']>().mockResolvedValue(null),
-      save: vi.fn<CanvasFiles['save']>().mockResolvedValue('team.corral'),
-      forget: vi.fn<CanvasFiles['forget']>().mockResolvedValue(newCanvasId()),
-    };
-    setup({ nodes: [agentNode('a', 0, 0, { selected: true })], edges: [] }, files);
-    fireEvent.keyDown(document.body, { key: 'F2' });
-    fireEvent.change(labelInput(), { target: { value: 'Drafted label' } });
-    fireEvent.keyDown(labelInput(), { key: 's', ctrlKey: true });
+    const { canvas } = await setup(
+      { nodes: [agentNode('a', 0, 0, { selected: true })], edges: [] },
+      true,
+    );
+    await events.keyDown(document.body, { key: 'F2' });
+    await events.change(labelInput(), { target: { value: 'Drafted label' } });
+    await events.keyDown(labelInput(), { key: 's', ctrlKey: true });
     await waitFor(() => {
-      expect(files.save).toHaveBeenCalledOnce();
+      expect(canvas.files.saved).toHaveLength(1);
     });
     expect(
-      fromFile(files.save.mock.calls[0]?.[0] ?? '', catalog(), DEFAULT_AGENT).nodes[0]?.data.label,
+      fromFile(canvas.files.saved[0] ?? '', catalog(), DEFAULT_AGENT).nodes[0]?.data.label,
     ).toBe('Drafted label');
   });
 
   it('runs a pending message draft before the idle commit or blur', async () => {
-    const { fake } = setup({
+    const { fake } = await setup({
       nodes: [
         agentNode('a', 0, 0, {
           data: {
@@ -263,13 +281,13 @@ describe('GraphEditor', () => {
       ],
       edges: [],
     });
-    fireEvent.click(button('Show all queues'));
+    await events.click(button('Show all queues'));
     const queues = within(screen.getByRole('dialog', { name: 'All queues' }));
     const input = queues.getByRole('textbox', { name: 'Message to the agent' });
-    fireEvent.focus(input);
-    fireEvent.change(input, { target: { value: 'Run this draft' } });
+    await events.focus(input);
+    await events.change(input, { target: { value: 'Run this draft' } });
     // A synthetic click deliberately skips blur: Run itself must flush the draft.
-    fireEvent.click(queues.getByRole('button', { name: 'Run' }));
+    await events.click(queues.getByRole('button', { name: 'Run' }));
     await waitFor(() => {
       expect(fake.backend.send).toHaveBeenCalledOnce();
     });
@@ -284,14 +302,7 @@ describe('GraphEditor', () => {
     'saves exactly the settings the sheet shows after clearing %s',
     async (field, choice, expected) => {
       const other = { model: 'gpt-6-luna', mode: 'auto' };
-      const files = {
-        open: vi.fn<CanvasFiles['open']>().mockResolvedValue(null),
-        save: vi.fn<CanvasFiles['save']>().mockResolvedValue('team.corral'),
-        forget: vi
-          .fn<CanvasFiles['forget']>()
-          .mockImplementation(() => Promise.resolve(newCanvasId())),
-      };
-      const { node, fake } = setup(
+      const { node, fake, canvas } = await setup(
         {
           nodes: [
             agentNode('a', 0, 0, {
@@ -307,31 +318,31 @@ describe('GraphEditor', () => {
           ],
           edges: [],
         },
-        files,
+        true,
       );
       fake.backend.options.mockResolvedValue({
         models: [{ value: 'opus', label: 'Opus', efforts: [{ value: 'low', label: 'Low' }] }],
         defaults: { model: 'opus', effort: 'low', mode: 'manual' },
       });
-      fireEvent.contextMenu(node('a'));
-      fireEvent.click(screen.getByRole('menuitem', { name: 'Settings…' }));
+      await events.contextMenu(node('a'));
+      await events.click(screen.getByRole('menuitem', { name: 'Settings…' }));
       const sheet = within(screen.getByRole('dialog', { name: 'Agent settings: Reviewer' }));
       await waitFor(() => {
         expect(sheet.getByRole('button', { name: 'Model: Opus' })).toBeTruthy();
       });
-      fireEvent.click(sheet.getByRole('button', { name: field }));
-      fireEvent.click(
+      await events.click(sheet.getByRole('button', { name: field }));
+      await events.click(
         sheet.getByRole('menuitemradio', { name: (name) => name.startsWith(choice) }),
       );
       expect(
         sheet.getByRole('button', { name: `${field.split(':')[0] ?? ''}: ${choice}` }),
       ).toBeTruthy();
-      fireEvent.click(sheet.getByRole('button', { name: 'Close agent settings' }));
-      fireEvent.click(button('Save'));
+      await events.click(sheet.getByRole('button', { name: 'Close agent settings' }));
+      await events.click(button('Save'));
       await waitFor(() => {
-        expect(files.save).toHaveBeenCalledOnce();
+        expect(canvas.files.saved).toHaveLength(1);
       });
-      const loaded = fromFile(files.save.mock.calls[0]?.[0] ?? '', catalog(), DEFAULT_AGENT);
+      const loaded = fromFile(canvas.files.saved[0] ?? '', catalog(), DEFAULT_AGENT);
       expect(loaded.nodes[0]?.data).toHaveProperty('settings', {
         'claude-code': expected,
         codex: other,
@@ -358,7 +369,6 @@ describe('GraphEditor', () => {
     const id = newCanvasId();
     const checkpoint: RunCheckpoint = {
       version: 2,
-      workflow: toFile(documentOf(saved, id)),
       state: JSON.stringify({
         version: 2,
         run: {
@@ -382,10 +392,9 @@ describe('GraphEditor', () => {
       get: vi.fn<RunSource['get']>().mockResolvedValue({
         id,
         token: 'saved',
-        name: 'saved.corral',
         checkpoint,
       }),
-      save: vi.fn<RunSource['save']>().mockResolvedValue(null),
+      save: vi.fn<RunSource['save']>().mockResolvedValue(0),
       ready: vi.fn<RunSource['ready']>().mockResolvedValue(null),
       onStopping: (listener: (request: string) => void) => {
         stopping.add(listener);
@@ -395,27 +404,22 @@ describe('GraphEditor', () => {
       },
     };
     const sessions = fakeBackend();
-    const { container, unmount } = render(
+    const { container, unmount } = await renderReady(
       <StrictMode>
-        <GraphEditor runSource={source} sessionBackend={sessions.backend} />
+        <GraphEditor initialGraph={saved} runSource={source} sessionBackend={sessions.backend} />
       </StrictMode>,
     );
     const card = await screen.findByLabelText('Restored, Claude · SDK');
     expect(source.get).toHaveBeenCalledOnce();
     expect(sessions.backend.send).not.toHaveBeenCalled();
-    fireEvent.click(card);
-    fireEvent.keyDown(document.body, { key: 'F2' });
-    fireEvent.change(labelInput(), { target: { value: 'Shown' } });
-    fireEvent.keyDown(labelInput(), { key: 'Enter' });
-    await waitFor(() => {
-      const saved = source.save.mock.calls.at(-1)?.[1];
-      expect(
-        saved && graphOf(fromFile(saved.workflow, catalog(), DEFAULT_AGENT)).nodes[0]?.data.label,
-      ).toBe('Shown');
-    });
-    fireEvent.click(button('Show all queues'));
+    await events.click(card);
+    await events.keyDown(document.body, { key: 'F2' });
+    await events.change(labelInput(), { target: { value: 'Shown' } });
+    await events.keyDown(labelInput(), { key: 'Enter' });
+    await screen.findByLabelText('Shown, Claude · SDK');
+    await events.click(button('Show all queues'));
     const queues = within(screen.getByRole('dialog', { name: 'All queues' }));
-    fireEvent.click(queues.getByRole('button', { name: 'Resume' }));
+    await events.click(queues.getByRole('button', { name: 'Resume' }));
     await waitFor(() => {
       expect(sessions.backend.send).toHaveBeenCalledOnce();
     });
@@ -426,10 +430,9 @@ describe('GraphEditor', () => {
     await waitFor(() => {
       expect(source.ready).toHaveBeenCalledExactlyOnceWith('quit', null);
     });
-    const stopped = source.save.mock.calls.at(-1)?.[1];
-    expect(
-      stopped && graphOf(fromFile(stopped.workflow, catalog(), DEFAULT_AGENT)).nodes[0]?.data.label,
-    ).toBe('Shown');
+    const [, stopped] = source.save.mock.calls.at(-1) ?? [];
+    // A token and a checkpoint, never a document beside them.
+    for (const call of source.save.mock.calls) expect(call).toHaveLength(2);
     expect(stopped && readRun(stopped.state).run).toMatchObject({
       running: false,
       paused: true,
@@ -461,7 +464,7 @@ describe('GraphEditor', () => {
       simulate: vi.fn<UsageSource['simulate']>().mockResolvedValue({}),
     };
     const sessions = fakeBackend();
-    const { unmount } = render(
+    const { unmount } = await renderReady(
       <StrictMode>
         <GraphEditor
           initialGraph={{
@@ -501,9 +504,9 @@ describe('GraphEditor', () => {
         });
     });
     expect(screen.getByRole('button', { name: /^Codex usage: 95%/ })).toBeTruthy();
-    fireEvent.click(button('Show all queues'));
+    await events.click(button('Show all queues'));
     const queues = within(screen.getByRole('dialog', { name: 'All queues' }));
-    fireEvent.click(queues.getByRole('button', { name: 'Run' }));
+    await events.click(queues.getByRole('button', { name: 'Run' }));
     expect(queues.getByRole('button', { name: 'Wait for the reset' })).toBeTruthy();
     expect(sessions.backend.send).not.toHaveBeenCalled();
     unmount();
@@ -512,7 +515,7 @@ describe('GraphEditor', () => {
 
   it('keeps legacy unsupported work unsent and offers a real connection without fabricating completion', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
-    const { fake } = setup({
+    const { fake } = await setup({
       nodes: [
         agentNode('legacy', 0, 0, {
           data: {
@@ -524,9 +527,9 @@ describe('GraphEditor', () => {
       ],
       edges: [],
     });
-    fireEvent.click(button('Show all queues'));
+    await events.click(button('Show all queues'));
     const queues = within(screen.getByRole('dialog', { name: 'All queues' }));
-    fireEvent.click(queues.getByRole('button', { name: 'Run' }));
+    await events.click(queues.getByRole('button', { name: 'Run' }));
     await act(async () => {
       await vi.advanceTimersByTimeAsync(60_000);
     });
@@ -539,14 +542,14 @@ describe('GraphEditor', () => {
     expect(within(row).queryByText('Running')).toBeNull();
     expect(fake.backend.start).not.toHaveBeenCalled();
     expect(fake.backend.send).not.toHaveBeenCalled();
-    fireEvent.click(queues.getByRole('button', { name: 'Open Legacy' }));
+    await events.click(queues.getByRole('button', { name: 'Open Legacy' }));
     const view = within(screen.getByRole('dialog', { name: 'Legacy' }));
     expect(view.getByText(/qwen has no connector yet/)).toBeTruthy();
     expect(view.queryByRole('textbox', { name: 'Message Legacy' })).toBeNull();
     expect(view.queryByText(/scripted session|SUCCEEDED/)).toBeNull();
-    fireEvent.click(view.getByRole('button', { name: 'Choose a connected agent' }));
+    await events.click(view.getByRole('button', { name: 'Choose a connected agent' }));
     const settings = within(screen.getByRole('dialog', { name: 'Agent settings: Legacy' }));
-    fireEvent.click(settings.getByRole('button', { name: /^Agent:/ }));
+    await events.click(settings.getByRole('button', { name: /^Agent:/ }));
     expect(
       settings
         .getAllByRole('option')
@@ -555,9 +558,9 @@ describe('GraphEditor', () => {
     ).not.toMatch(/Simulated|qwen|gemini/i);
   });
 
-  it('draws agents whose adapters are named like what every object inherits as Not connected', () => {
+  it('draws agents whose adapters are named like what every object inherits as Not connected', async () => {
     const steps = [{ id: 'run', action: 'Bash' }];
-    const { container } = setup({
+    const { container } = await setup({
       nodes: [
         agentNode('s', 0, 0, {
           data: { label: 'S', adapter: 'toString', connection: 'toString', queue: steps },
@@ -570,10 +573,10 @@ describe('GraphEditor', () => {
       tag.getAttribute('title'),
     );
     expect(tags).toEqual(['Agent: toString · Not connected', 'Agent: constructor · Not connected']);
-    fireEvent.click(button('Show all queues'));
+    await events.click(button('Show all queues'));
     const queues = within(screen.getByRole('dialog', { name: 'All queues' }));
     expect(queues.getByRole('group', { name: 'S: Bash' })).toBeTruthy();
-    fireEvent.click(queues.getByRole('button', { name: 'Open C' }));
+    await events.click(queues.getByRole('button', { name: 'Open C' }));
     const view = within(screen.getByRole('dialog', { name: 'C' }));
     expect(view.getByText(/constructor has no connector yet/)).toBeTruthy();
   });
@@ -583,33 +586,26 @@ describe('GraphEditor', () => {
       nodes: [agentNode('a', 0, 0), agentNode('b', 400, 0), frame],
       edges: [],
     };
-    const files = {
-      open: vi.fn<CanvasFiles['open']>().mockResolvedValue(null),
-      save: vi.fn<CanvasFiles['save']>().mockResolvedValue('team.corral'),
-      forget: vi
-        .fn<CanvasFiles['forget']>()
-        .mockImplementation(() => Promise.resolve(newCanvasId())),
-    };
-    const { node } = setup(initial, files);
-    fireEvent.contextMenu(node('F'));
+    const { node, canvas } = await setup(initial, true);
+    await events.contextMenu(node('F'));
     expect(screen.getByRole('menu', { name: 'Group 1 controls' })).toBeTruthy();
-    fireEvent.keyDown(screen.getByRole('menuitem', { name: /^Pause/ }), { key: 'Escape' });
+    await events.keyDown(screen.getByRole('menuitem', { name: /^Pause/ }), { key: 'Escape' });
     expect(screen.queryByRole('menu')).toBeNull();
-    fireEvent.contextMenu(node('a'), { clientX: 100, clientY: 200 });
+    await events.contextMenu(node('a'), { clientX: 100, clientY: 200 });
     const menu = within(screen.getByRole('menu', { name: 'a controls' }));
-    fireEvent.click(menu.getByRole('menuitem', { name: /^Pause/ }));
+    await events.click(menu.getByRole('menuitem', { name: /^Pause/ }));
     expect(screen.queryByRole('menu')).toBeNull();
     expect(within(node('a')).getByText('Paused')).toBeTruthy();
     expect(within(node('b')).queryByText('Paused')).toBeNull();
     expect(document.title).toBe('Untitled — corrallm');
-    fireEvent.click(button('Save'));
+    await events.click(button('Save'));
     await waitFor(() => {
-      expect(files.save).toHaveBeenCalledOnce();
+      expect(canvas.files.saved).toHaveLength(1);
     });
-    const text = files.save.mock.calls[0]?.[0] ?? '';
+    const text = canvas.files.saved[0] ?? '';
     expect(text).toBe(toFile(documentOf(initial, canvasIdOf(text))));
-    fireEvent.contextMenu(node('a'));
-    fireEvent.click(screen.getByRole('menuitem', { name: /^Resume/ }));
+    await events.contextMenu(node('a'));
+    await events.click(screen.getByRole('menuitem', { name: /^Resume/ }));
     expect(within(node('a')).queryByText('Paused')).toBeNull();
   });
 
@@ -623,56 +619,49 @@ describe('GraphEditor', () => {
       ],
       edges: [],
     };
-    const files = {
-      open: vi.fn<CanvasFiles['open']>().mockResolvedValue(null),
-      save: vi.fn<CanvasFiles['save']>().mockResolvedValue('team.corral'),
-      forget: vi
-        .fn<CanvasFiles['forget']>()
-        .mockImplementation(() => Promise.resolve(newCanvasId())),
-    };
-    const { node } = setup(initial, files);
+    const { node, canvas } = await setup(initial, true);
     // Let the canvas save its measured group geometry before testing runtime-only controls.
-    fireEvent.click(button('Save'));
+    await events.click(button('Save'));
     await waitFor(() => {
       expect(document.title).toBe('team.corral — corrallm');
     });
-    const saved = files.save.mock.calls[0]?.[0];
-    fireEvent.contextMenu(node('a'));
-    fireEvent.click(screen.getByRole('menuitem', { name: /^Pause/ }));
+    const saved = canvas.files.saved[0];
+    await events.contextMenu(node('a'));
+    await events.click(screen.getByRole('menuitem', { name: /^Pause/ }));
     node('F').focus();
-    fireEvent.keyDown(node('F'), { key: 'F10', shiftKey: true });
-    fireEvent.click(screen.getByRole('menuitem', { name: /^Pause/ }));
+    await events.keyDown(node('F'), { key: 'F10', shiftKey: true });
+    await events.click(screen.getByRole('menuitem', { name: /^Pause/ }));
     expect(within(node('F')).getByText('Paused')).toBeTruthy();
     expect(within(node('child')).getByText('Paused')).toBeTruthy();
-    fireEvent.contextMenu(node('parent'));
+    await events.contextMenu(node('parent'));
     const parentMenu = within(screen.getByRole('menu', { name: 'parent controls' }));
     expect(parentMenu.getByRole('menuitem', { name: /^Pause separately/ })).toBeTruthy();
-    fireEvent.click(parentMenu.getByRole('menuitem', { name: /^Pause group/ }));
-    fireEvent.contextMenu(node('F'));
-    fireEvent.click(screen.getByRole('menuitem', { name: /^Resume/ }));
+    await events.click(parentMenu.getByRole('menuitem', { name: /^Pause group/ }));
+    await events.contextMenu(node('F'));
+    await events.click(screen.getByRole('menuitem', { name: /^Resume/ }));
     expect(within(node('F')).queryByText('Paused')).toBeNull();
     expect(within(node('a')).getByText('Paused')).toBeTruthy();
     expect(within(node('parent')).getByText('Paused')).toBeTruthy();
     expect(within(node('child')).getByText('Paused')).toBeTruthy();
-    fireEvent.contextMenu(node('parent'));
-    fireEvent.click(screen.getByRole('menuitem', { name: /^Resume group/ }));
+    await events.contextMenu(node('parent'));
+    await events.click(screen.getByRole('menuitem', { name: /^Resume group/ }));
     expect(within(node('parent')).queryByText('Paused')).toBeNull();
     expect(within(node('child')).queryByText('Paused')).toBeNull();
     expect(within(node('a')).getByText('Paused')).toBeTruthy();
     expect(document.title).toBe('team.corral — corrallm');
-    fireEvent.click(button('Save'));
+    await events.click(button('Save'));
     await waitFor(() => {
-      expect(files.save).toHaveBeenCalledTimes(2);
+      expect(canvas.files.saved).toHaveLength(2);
     });
-    expect(files.save.mock.calls[1]?.[0]).toBe(saved);
+    expect(canvas.files.saved[1]).toBe(saved);
   });
 
-  it('opens agent controls with the keyboard and dismisses without changing the agent', () => {
-    const { node } = setup({ nodes: [agentNode('a', 0, 0)], edges: [] });
+  it('opens agent controls with the keyboard and dismisses without changing the agent', async () => {
+    const { node } = await setup({ nodes: [agentNode('a', 0, 0)], edges: [] });
     node('a').focus();
-    fireEvent.keyDown(node('a'), { key: 'F10', shiftKey: true });
+    await events.keyDown(node('a'), { key: 'F10', shiftKey: true });
     expect(screen.getByRole('menu', { name: 'a controls' })).toBeTruthy();
-    fireEvent.keyDown(screen.getByRole('menuitem', { name: /^Pause/ }), { key: 'Escape' });
+    await events.keyDown(screen.getByRole('menuitem', { name: /^Pause/ }), { key: 'Escape' });
     expect(screen.queryByRole('menu')).toBeNull();
     expect(document.activeElement).toBe(node('a'));
     expect(within(node('a')).queryByText('Paused')).toBeNull();
@@ -692,23 +681,22 @@ describe('GraphEditor', () => {
       ],
       edges: [],
     };
-    const files = {
-      open: vi.fn<CanvasFiles['open']>().mockResolvedValue(null),
-      save: vi.fn<CanvasFiles['save']>().mockResolvedValue('team.corral'),
-      forget: vi
-        .fn<CanvasFiles['forget']>()
-        .mockImplementation(() => Promise.resolve(newCanvasId())),
-    };
-    const { container } = render(
-      <GraphEditor initialGraph={initial} files={files} sessionBackend={sessions.backend} />,
+    const held = core();
+    const { container } = await renderReady(
+      <GraphEditor
+        initialGraph={initial}
+        files
+        onCanvas={held.onCanvas}
+        sessionBackend={sessions.backend}
+      />,
     );
     const card = container.querySelector('.react-flow__node[data-id="a"]');
     if (!card) throw new Error('no agent');
-    fireEvent.doubleClick(card);
+    await events.doubleClick(card);
     const view = within(screen.getByRole('dialog', { name: 'a' }));
     const composer = view.getByRole('textbox', { name: 'Message a' });
-    fireEvent.change(composer, { target: { value: 'Inspect the failure' } });
-    fireEvent.keyDown(composer, { key: 'Enter' });
+    await events.change(composer, { target: { value: 'Inspect the failure' } });
+    await events.keyDown(composer, { key: 'Enter' });
     await waitFor(() => {
       expect(sessions.backend.send).toHaveBeenCalledTimes(1);
     });
@@ -735,12 +723,12 @@ describe('GraphEditor', () => {
     expect(
       side.getByText('Inspect the failure').closest('[data-submission]')?.getAttribute('data-run'),
     ).toBe('completed');
-    fireEvent.click(view.getByRole('button', { name: 'All queues' }));
+    await events.click(view.getByRole('button', { name: 'All queues' }));
     const queues = within(screen.getByRole('dialog', { name: 'All queues' }));
     const manual = queues.getByRole('group', { name: 'a: Message “Inspect the failure”' });
     expect(manual.querySelector('[data-submission]')?.getAttribute('data-run')).toBe('completed');
     expect(within(manual).queryByRole('button')).toBeNull();
-    fireEvent.click(queues.getByRole('button', { name: 'Run' }));
+    await events.click(queues.getByRole('button', { name: 'Run' }));
     await waitFor(() => {
       expect(sessions.backend.send).toHaveBeenCalledTimes(2);
     });
@@ -751,14 +739,14 @@ describe('GraphEditor', () => {
     expect(
       screen.getByRole('dialog', { name: 'All queues' }).querySelectorAll('[data-submission]'),
     ).toHaveLength(1);
-    fireEvent.click(queues.getByRole('button', { name: 'Back' }));
-    fireEvent.click(view.getByRole('button', { name: 'Back to the canvas' }));
+    await events.click(queues.getByRole('button', { name: 'Back' }));
+    await events.click(view.getByRole('button', { name: 'Back to the canvas' }));
     expect(document.title).toBe('Untitled — corrallm');
-    fireEvent.click(button('Save'));
+    await events.click(button('Save'));
     await waitFor(() => {
-      expect(files.save).toHaveBeenCalledTimes(1);
+      expect(held.canvas.files.saved).toHaveLength(1);
     });
-    const text = files.save.mock.calls[0]?.[0] ?? '';
+    const text = held.canvas.files.saved[0] ?? '';
     expect(text).toBe(toFile(documentOf(initial, canvasIdOf(text))));
   });
 
@@ -768,16 +756,16 @@ describe('GraphEditor', () => {
       nodes: [agentNode('a', 0, 0, { data: { label: 'a', connection: 'claude-code.sdk' } })],
       edges: [],
     };
-    const { container } = render(
+    const { container } = await renderReady(
       <GraphEditor initialGraph={initial} sessionBackend={sessions.backend} />,
     );
     const card = container.querySelector('.react-flow__node[data-id="a"]');
     if (!card) throw new Error('no agent');
-    fireEvent.doubleClick(card);
+    await events.doubleClick(card);
     const view = within(screen.getByRole('dialog', { name: 'a' }));
     const composer = view.getByRole('textbox', { name: 'Message a' });
-    fireEvent.change(composer, { target: { value: '/mcp' } });
-    fireEvent.keyDown(composer, { key: 'Enter' });
+    await events.change(composer, { target: { value: '/mcp' } });
+    await events.keyDown(composer, { key: 'Enter' });
     const side = within(view.getByRole('complementary', { name: 'Questions and queue' }));
     expect(side.getByText('/mcp').closest('[data-submission]')?.getAttribute('data-run')).toBe(
       'completed',
@@ -788,20 +776,20 @@ describe('GraphEditor', () => {
     expect(sessions.backend.send).not.toHaveBeenCalled();
   });
 
-  it('adds a node on double-click on the empty canvas', () => {
-    const { nodes, pane } = setup();
-    fireEvent.doubleClick(pane, { clientX: 200, clientY: 100 });
+  it('adds a node on double-click on the empty canvas', async () => {
+    const { nodes, pane } = await setup();
+    await events.doubleClick(pane, { clientX: 200, clientY: 100 });
     expect(nodes().map((n) => n.textContent)).toEqual(['Agent 1']);
   });
 
-  it("starts a new agent's queue with a message to write, counted on its card once written", () => {
-    const { nodes, pane } = setup();
-    fireEvent.doubleClick(pane, { clientX: 200, clientY: 100 });
+  it("starts a new agent's queue with a message to write, counted on its card once written", async () => {
+    const { nodes, pane } = await setup();
+    await events.doubleClick(pane, { clientX: 200, clientY: 100 });
     const [card] = nodes();
     if (!card) throw new Error('no node');
     const count = () => card.querySelector('.graph-queue-count')?.getAttribute('data-count');
     expect(count()).toBeUndefined();
-    fireEvent.doubleClick(card);
+    await events.doubleClick(card);
     const panel = within(screen.getByRole('dialog', { name: 'Agent 1' }));
     expect(panel.getAllByRole('button', { name: /^Move / }).map((b) => b.ariaLabel)).toEqual([
       'Move Message',
@@ -810,14 +798,14 @@ describe('GraphEditor', () => {
       name: 'Message to the agent',
     });
     expect(message.value).toBe('');
-    fireEvent.change(message, { target: { value: 'Fix the flaky test' } });
+    await events.change(message, { target: { value: 'Fix the flaky test' } });
     expect(count()).toBeUndefined();
-    fireEvent.blur(message);
+    await events.blur(message);
     expect(count()).toBe('1');
   });
 
-  it('says what a step is to do in the box beside it: arguments, for a command', () => {
-    const { node } = setup({
+  it('says what a step is to do in the box beside it: arguments, for a command', async () => {
+    const { node } = await setup({
       nodes: [
         agentNode('a', 0, 0, {
           data: {
@@ -832,11 +820,11 @@ describe('GraphEditor', () => {
       ],
       edges: [],
     });
-    fireEvent.doubleClick(node('a'));
+    await events.doubleClick(node('a'));
     const panel = within(screen.getByRole('dialog', { name: 'a' }));
     const what = panel.getByRole<HTMLTextAreaElement>('textbox', { name: 'What Bash is to do' });
     expect(what.placeholder).toBe('What to do');
-    fireEvent.change(what, { target: { value: 'run npm test' } });
+    await events.change(what, { target: { value: 'run npm test' } });
     expect(
       panel.getByRole<HTMLTextAreaElement>('textbox', { name: 'What Bash is to do' }).value,
     ).toBe('run npm test');
@@ -846,8 +834,8 @@ describe('GraphEditor', () => {
     ).toBe('Arguments');
   });
 
-  it('expects a step to fail from its action, then shows it in a chip; not a slash command', () => {
-    const { node } = setup({
+  it('expects a step to fail from its action, then shows it in a chip; not a slash command', async () => {
+    const { node } = await setup({
       nodes: [
         agentNode('a', 0, 0, {
           data: {
@@ -862,103 +850,125 @@ describe('GraphEditor', () => {
       ],
       edges: [],
     });
-    fireEvent.doubleClick(node('a'));
+    await events.doubleClick(node('a'));
     const panel = within(screen.getByRole('dialog', { name: 'a' }));
     const chip = () =>
       panel.queryByRole('button', { name: 'Change what Bash is expected to do: fail' });
     const action = panel.getByRole('button', { name: 'Change what Bash is expected to do' });
     expect(action.textContent).toBe('Bash');
     expect(chip()).toBeNull();
-    fireEvent.click(action);
-    fireEvent.click(panel.getByRole('option', { name: /^Fail/ }));
+    await events.click(action);
+    await events.click(panel.getByRole('option', { name: /^Fail/ }));
     expect(chip()?.textContent).toBe('expect: fails');
     // A command's turn is not judged pass or fail: nothing to expect of it.
     expect(
       panel.queryByRole('button', { name: /^Change what \/code-review is expected/ }),
     ).toBeNull();
-    fireEvent.click(chip() ?? action);
-    fireEvent.click(panel.getByRole('option', { name: /^Succeed/ }));
+    await events.click(chip() ?? action);
+    await events.click(panel.getByRole('option', { name: /^Succeed/ }));
     expect(chip()).toBeNull();
   });
 
-  it('adds a node inside a group when double-clicking its body', () => {
-    const { nodes, node } = setup({ nodes: [frame], edges: [] });
-    fireEvent.doubleClick(node('F'), { clientX: 200, clientY: 150 });
+  it('adds a node inside a group when double-clicking its body', async () => {
+    const { nodes, node } = await setup({ nodes: [frame], edges: [] });
+    await events.doubleClick(node('F'), { clientX: 100, clientY: 60 });
     expect(nodes('.react-flow__node-frame.parent')).toHaveLength(1);
     expect(screen.queryByRole('textbox')).toBeNull();
   });
 
-  it('renames a node in place on F2: Enter keeps the text, Escape restores it', () => {
-    const { node } = setup({ nodes: [agentNode('a', 0, 0, { selected: true })], edges: [] });
-    fireEvent.keyDown(document.body, { key: 'F2' });
+  it('bounds in-place labels and restores a blank label before it can be saved', async () => {
+    const { node, canvas } = await setup(
+      { nodes: [agentNode('a', 0, 0, { selected: true })], edges: [] },
+      true,
+    );
+    await events.keyDown(document.body, { key: 'F2' });
+    expect(labelInput().maxLength).toBe(MAX_LABEL);
+    await events.change(labelInput(), { target: { value: ' ' } });
+    await events.keyDown(labelInput(), { key: 'Enter' });
+    expect(node('a').textContent).toContain('a');
+    await events.keyDown(document.body, { key: 'F2' });
+    await events.change(labelInput(), { target: { value: 'x'.repeat(MAX_LABEL + 1) } });
+    await events.blur(labelInput());
+    await events.click(button('Save'));
+    await waitFor(() => {
+      expect(canvas.files.saved).toHaveLength(1);
+    });
+    expect(
+      fromFile(canvas.files.saved[0] ?? '', catalog(), DEFAULT_AGENT).nodes[0]?.data.label,
+    ).toBe('x'.repeat(MAX_LABEL));
+  });
+
+  it('renames a node in place on F2: Enter keeps the text, Escape restores it', async () => {
+    const { node } = await setup({ nodes: [agentNode('a', 0, 0, { selected: true })], edges: [] });
+    await events.keyDown(document.body, { key: 'F2' });
     expect(document.activeElement).toBe(labelInput());
-    fireEvent.change(labelInput(), { target: { value: 'Alpha' } });
-    fireEvent.keyDown(labelInput(), { key: 'Enter' });
+    await events.change(labelInput(), { target: { value: 'Alpha' } });
+    await events.keyDown(labelInput(), { key: 'Enter' });
     expect(screen.queryByRole('textbox')).toBeNull();
     expect(node('a').textContent).toBe('Alpha');
 
-    fireEvent.keyDown(document.body, { key: 'F2' });
-    fireEvent.change(labelInput(), { target: { value: 'Beta' } });
-    fireEvent.keyDown(labelInput(), { key: 'Escape' });
+    await events.keyDown(document.body, { key: 'F2' });
+    await events.change(labelInput(), { target: { value: 'Beta' } });
+    await events.keyDown(labelInput(), { key: 'Escape' });
     expect(node('a').textContent).toBe('Alpha');
   });
 
-  it('edits text instead of deleting while typing in a label', () => {
-    const { nodes } = setup({ nodes: [agentNode('a', 0, 0, { selected: true })], edges: [] });
-    fireEvent.keyDown(document.body, { key: 'F2' });
-    fireEvent.keyDown(labelInput(), { key: 'Backspace' });
+  it('edits text instead of deleting while typing in a label', async () => {
+    const { nodes } = await setup({ nodes: [agentNode('a', 0, 0, { selected: true })], edges: [] });
+    await events.keyDown(document.body, { key: 'F2' });
+    await events.keyDown(labelInput(), { key: 'Backspace' });
     expect(nodes()).toHaveLength(1);
   });
 
-  it('renames a group in place on a double-click on its label bar', () => {
-    const { node } = setup({ nodes: [frame], edges: [] });
+  it('renames a group in place on a double-click on its label bar', async () => {
+    const { node } = await setup({ nodes: [frame], edges: [] });
     const title = node('F').querySelector('.graph-frame-title');
     if (!title) throw new Error('no title bar');
-    fireEvent.doubleClick(title);
-    fireEvent.change(labelInput(), { target: { value: 'Team' } });
-    fireEvent.keyDown(labelInput(), { key: 'Enter' });
+    await events.doubleClick(title);
+    await events.change(labelInput(), { target: { value: 'Team' } });
+    await events.keyDown(labelInput(), { key: 'Enter' });
     expect(node('F').textContent).toBe('Team');
     expect(screen.queryByRole('dialog')).toBeNull();
   });
 
-  it('opens a double-clicked agent in a panel, where its queue is edited', () => {
-    const { node, nodes } = setup({
+  it('opens a double-clicked agent in a panel, where its queue is edited', async () => {
+    const { node, nodes } = await setup({
       nodes: [agentNode('a', 0, 0), agentNode('b', 0, 100)],
       edges: [],
     });
-    fireEvent.doubleClick(node('a'));
+    await events.doubleClick(node('a'));
     const panel = within(screen.getByRole('dialog', { name: 'a' }));
     /** The queue, top to bottom, by its rows' handles (an if-then's rows follow it). */
     const order = () =>
       panel.queryAllByRole('button', { name: /^Move / }).map((b) => b.getAttribute('aria-label'));
     const field = () => panel.getByRole('combobox');
-    const plus = (name = 'Add to queue') => {
-      fireEvent.click(panel.getByRole('button', { name }));
+    const plus = async (name = 'Add to queue') => {
+      await events.click(panel.getByRole('button', { name }));
     };
 
     // An action of the agent (Claude's, by default), then the agent it acts on.
-    plus();
-    fireEvent.click(panel.getByRole('option', { name: /^Read / }));
-    fireEvent.keyDown(field(), { key: 'Enter' }); // this agent
+    await plus();
+    await events.click(panel.getByRole('option', { name: /^Read / }));
+    await events.keyDown(field(), { key: 'Enter' }); // this agent
     // Typing finds actions by what they do, after matches on their names: "run shell" finds Bash.
-    plus();
-    fireEvent.change(field(), { target: { value: 'run shell' } });
-    fireEvent.keyDown(field(), { key: 'Enter' });
-    fireEvent.change(field(), { target: { value: 'b' } });
-    fireEvent.keyDown(field(), { key: 'Enter' });
+    await plus();
+    await events.change(field(), { target: { value: 'run shell' } });
+    await events.keyDown(field(), { key: 'Enter' });
+    await events.change(field(), { target: { value: 'b' } });
+    await events.keyDown(field(), { key: 'Enter' });
     expect(panel.getByRole('button', { name: 'Change the agent Bash acts on' }).textContent).toBe(
       '→ b',
     );
 
     // An if-then, with a message to the agent inside it.
-    plus();
-    fireEvent.click(panel.getByRole('option', { name: /^If… then/ }));
-    fireEvent.click(panel.getByRole('option', { name: 'the previous step failed' }));
-    plus('Add to If the previous step failed');
-    fireEvent.click(panel.getByRole('option', { name: /^Message/ }));
+    await plus();
+    await events.click(panel.getByRole('option', { name: /^If… then/ }));
+    await events.click(panel.getByRole('option', { name: 'the previous step failed' }));
+    await plus('Add to If the previous step failed');
+    await events.click(panel.getByRole('option', { name: /^Message/ }));
     const note = panel.getByRole('textbox', { name: 'New message to the agent' });
-    fireEvent.change(note, { target: { value: 'Try again, more carefully' } });
-    fireEvent.keyDown(note, { key: 'Enter' });
+    await events.change(note, { target: { value: 'Try again, more carefully' } });
+    await events.keyDown(note, { key: 'Enter' });
     expect(order()).toEqual([
       'Move Read',
       'Move Bash',
@@ -969,66 +979,66 @@ describe('GraphEditor', () => {
       name: 'Message to the agent',
     });
     expect(message.value).toBe('Try again, more carefully');
-    fireEvent.change(message, { target: { value: 'Ask me first' } });
+    await events.change(message, { target: { value: 'Ask me first' } });
     expect(message.value).toBe('Ask me first');
 
     // Reorder from a handle (focus stays on it), retarget from a chip, remove.
     const handle = panel.getByRole('button', { name: 'Move Bash' });
-    fireEvent.keyDown(handle, { key: 'ArrowUp' });
+    await events.keyDown(handle, { key: 'ArrowUp' });
     expect(order().slice(0, 2)).toEqual(['Move Bash', 'Move Read']);
     expect(document.activeElement).toBe(handle);
-    fireEvent.click(panel.getByRole('button', { name: 'Change the agent Read acts on' }));
-    fireEvent.click(panel.getByRole('option', { name: 'b' }));
+    await events.click(panel.getByRole('button', { name: 'Change the agent Read acts on' }));
+    await events.click(panel.getByRole('option', { name: 'b' }));
     expect(panel.getByRole('button', { name: 'Change the agent Read acts on' }).textContent).toBe(
       '→ b',
     );
-    fireEvent.click(panel.getByRole('button', { name: 'Remove Read' }));
+    await events.click(panel.getByRole('button', { name: 'Remove Read' }));
     expect(order()).toEqual(['Move Bash', 'Move If the previous step failed', 'Move Message']);
 
     // Escape closes a dropdown first, then the panel; shortcuts are off while it is open.
-    plus();
-    fireEvent.keyDown(field(), { key: 'Escape' });
+    await plus();
+    await events.keyDown(field(), { key: 'Escape' });
     expect(panel.queryByRole('combobox')).toBeNull();
     expect(screen.getByRole('dialog')).toBeTruthy();
-    fireEvent.keyDown(document.body, { key: 'Delete' });
-    fireEvent.keyDown(document.body, { key: 'Escape' });
+    await events.keyDown(document.body, { key: 'Delete' });
+    await events.keyDown(document.body, { key: 'Escape' });
     expect(screen.queryByRole('dialog')).toBeNull();
     expect(nodes().map((n) => n.dataset.id)).toEqual(['a', 'b']);
     expect(node('a').querySelector('.graph-queue-count')?.getAttribute('data-count')).toBe('2');
   });
 
-  it('takes an if-then condition in your own words, for the agent to judge, and edits it', () => {
-    const { node } = setup({ nodes: [agentNode('a', 0, 0)], edges: [] });
-    fireEvent.doubleClick(node('a'));
+  it('takes an if-then condition in your own words, for the agent to judge, and edits it', async () => {
+    const { node } = await setup({ nodes: [agentNode('a', 0, 0)], edges: [] });
+    await events.doubleClick(node('a'));
     const panel = within(screen.getByRole('dialog', { name: 'a' }));
     const field = () => panel.getByRole<HTMLInputElement>('combobox');
     const chip = () => panel.getByRole('button', { name: /^Change the condition: / });
-    fireEvent.click(panel.getByRole('button', { name: 'Add to queue' }));
-    fireEvent.click(panel.getByRole('option', { name: /^If… then/ }));
-    fireEvent.change(field(), { target: { value: 'the tests mention a flaky test' } });
-    fireEvent.keyDown(field(), { key: 'Enter' });
+    await events.click(panel.getByRole('button', { name: 'Add to queue' }));
+    await events.click(panel.getByRole('option', { name: /^If… then/ }));
+    await events.change(field(), { target: { value: 'the tests mention a flaky test' } });
+    await events.keyDown(field(), { key: 'Enter' });
     expect(chip().textContent).toBe('the tests mention a flaky test');
 
     // Its chip reopens the dropdown with its words in the field, to change them.
-    fireEvent.click(chip());
+    await events.click(chip());
     expect(field().value).toBe('the tests mention a flaky test');
-    fireEvent.change(field(), { target: { value: 'a test is flaky' } });
-    fireEvent.keyDown(field(), { key: 'Enter' });
+    await events.change(field(), { target: { value: 'a test is flaky' } });
+    await events.keyDown(field(), { key: 'Enter' });
     expect(chip().textContent).toBe('a test is flaky');
     expect(panel.getByRole('button', { name: 'Move If a test is flaky' })).toBeTruthy();
   });
 
-  it('queues a delay, picked by typing how long, and changes it from its chip', () => {
-    const { node } = setup({ nodes: [agentNode('a', 0, 0)], edges: [] });
-    fireEvent.doubleClick(node('a'));
+  it('queues a delay, picked by typing how long, and changes it from its chip', async () => {
+    const { node } = await setup({ nodes: [agentNode('a', 0, 0)], edges: [] });
+    await events.doubleClick(node('a'));
     const panel = within(screen.getByRole('dialog', { name: 'a' }));
     const field = () => panel.getByRole<HTMLInputElement>('combobox');
     const options = () => panel.getAllByRole('option').map((o) => o.firstChild?.textContent);
-    fireEvent.click(panel.getByRole('button', { name: 'Add to queue' }));
+    await events.click(panel.getByRole('button', { name: 'Add to queue' }));
     // Typing "wait" finds both ways to wait.
-    fireEvent.change(field(), { target: { value: 'wait' } });
+    await events.change(field(), { target: { value: 'wait' } });
     expect(options().slice(0, 2)).toEqual(['Wait for…', 'Wait a while…']);
-    fireEvent.click(panel.getByRole('option', { name: /^Wait a while…/ }));
+    await events.click(panel.getByRole('option', { name: /^Wait a while…/ }));
     expect(field().getAttribute('aria-label')).toBe('Wait how long?');
     expect(field().placeholder).toBe('10 minutes, 1 hour, until 9:00…');
     // A Claude agent's delay can also wait for Claude's usage to reset.
@@ -1043,29 +1053,29 @@ describe('GraphEditor', () => {
       'Until Claude’s usage resets (weekly)',
     ]);
     // What is typed is read as the times it can mean, listed first.
-    fireEvent.change(field(), { target: { value: '15' } });
+    await events.change(field(), { target: { value: '15' } });
     expect(options()).toEqual(['15 minutes', '15 hours', '15 seconds', 'Until 3:00 PM']);
-    fireEvent.click(panel.getByRole('option', { name: '15 minutes' }));
+    await events.click(panel.getByRole('option', { name: '15 minutes' }));
     expect(panel.getByRole('button', { name: 'Move Wait 15 minutes' })).toBeTruthy();
 
     // Its chip reopens the picker with its time typed in, to change it.
     const chip = () => panel.getByRole('button', { name: /^Change how long it waits: / });
     expect(chip().textContent).toBe('15 minutes');
-    fireEvent.click(chip());
+    await events.click(chip());
     expect(field().value).toBe('15 minutes');
-    fireEvent.change(field(), { target: { value: '1h30' } });
-    fireEvent.keyDown(field(), { key: 'Enter' });
+    await events.change(field(), { target: { value: '1h30' } });
+    await events.keyDown(field(), { key: 'Enter' });
     expect(chip().getAttribute('aria-label')).toBe('Change how long it waits: 1 hour 30 minutes');
     expect(panel.getByRole('button', { name: 'Move Wait 1 hour 30 minutes' })).toBeTruthy();
   });
 
-  it("gives a wait a time limit from its 'at most…' chip, and takes it off again", () => {
+  it("gives a wait a time limit from its 'at most…' chip, and takes it off again", async () => {
     const queue = [{ id: 'w', waitFor: [{ agent: 'a' }] }];
-    const { node } = setup({
+    const { node } = await setup({
       nodes: [agentNode('a', 0, 0), agentNode('b', 0, 100, { data: { label: 'b', queue } })],
       edges: [],
     });
-    fireEvent.doubleClick(node('b'));
+    await events.doubleClick(node('b'));
     const panel = within(screen.getByRole('dialog', { name: 'b' }));
     const add = panel.getByRole('button', { name: 'Add a time limit' });
     expect([add.textContent, add.title, add.hasAttribute('data-more')]).toEqual([
@@ -1073,24 +1083,24 @@ describe('GraphEditor', () => {
       'Go on anyway if it is not done in time',
       true,
     ]);
-    fireEvent.click(add);
+    await events.click(add);
     expect(panel.getByRole('combobox').getAttribute('aria-label')).toBe('Go on anyway after…');
-    fireEvent.click(panel.getByRole('option', { name: '30 minutes' }));
+    await events.click(panel.getByRole('option', { name: '30 minutes' }));
     const limit = panel.getByRole('button', { name: 'Change the time limit: at most 30 minutes' });
     expect(limit.textContent).toBe('at most 30 minutes');
     expect(panel.getByRole('button', { name: 'Move Wait for a, at most 30 minutes' })).toBeTruthy();
     expect(panel.queryByRole('button', { name: 'Add a time limit' })).toBeNull();
 
     // Its chip offers to take it off first.
-    fireEvent.click(limit);
+    await events.click(limit);
     expect(panel.getAllByRole('option')[0]?.textContent).toBe('No time limit');
-    fireEvent.click(panel.getByRole('option', { name: 'No time limit' }));
+    await events.click(panel.getByRole('option', { name: 'No time limit' }));
     expect(panel.getByRole('button', { name: 'Move Wait for a' })).toBeTruthy();
     expect(panel.getByRole('button', { name: 'Add a time limit' })).toBeTruthy();
   });
 
-  it('checks whether a wait ran out of time, striking the condition out where no wait is before it', () => {
-    const { node } = setup({
+  it('checks whether a wait ran out of time, striking the condition out where no wait is before it', async () => {
+    const { node } = await setup({
       nodes: [
         agentNode('a', 0, 0, { data: { label: 'a', queue: [{ id: 'm', message: 'Build it' }] } }),
         agentNode('b', 0, 100, {
@@ -1106,10 +1116,10 @@ describe('GraphEditor', () => {
       ],
       edges: [],
     });
-    fireEvent.doubleClick(node('a'));
+    await events.doubleClick(node('a'));
     const panel = within(screen.getByRole('dialog', { name: 'a' }));
-    fireEvent.click(panel.getByRole('button', { name: 'Add to queue' }));
-    fireEvent.click(panel.getByRole('option', { name: /^If… then/ }));
+    await events.click(panel.getByRole('button', { name: 'Add to queue' }));
+    await events.click(panel.getByRole('option', { name: /^If… then/ }));
     expect(panel.getAllByRole('option').map((o) => o.firstChild?.textContent)).toEqual([
       'the previous step succeeded',
       'the previous step failed',
@@ -1118,7 +1128,7 @@ describe('GraphEditor', () => {
       // A Claude agent's If can check Claude's usage.
       'Claude’s usage is over…',
     ]);
-    fireEvent.click(panel.getByRole('option', { name: 'the wait ran out of time' }));
+    await events.click(panel.getByRole('option', { name: 'the wait ran out of time' }));
     // After a message, there is no wait to run out of time.
     const chip = panel.getByRole('button', {
       name: 'Change the condition: the wait ran out of time',
@@ -1127,8 +1137,8 @@ describe('GraphEditor', () => {
     expect(chip.title).toBe('No wait right before this If');
 
     // After a wait, it can hold: a delay between the two is passed over.
-    fireEvent.click(panel.getByRole('button', { name: 'Back to the canvas' }));
-    fireEvent.doubleClick(node('b'));
+    await events.click(panel.getByRole('button', { name: 'Back to the canvas' }));
+    await events.doubleClick(node('b'));
     const other = within(screen.getByRole('dialog', { name: 'b' }));
     const fits = other.getByRole('button', {
       name: 'Change the condition: the wait ran out of time',
@@ -1137,74 +1147,74 @@ describe('GraphEditor', () => {
     expect(fits.title).toBe('');
   });
 
-  it('queues your OK on the work before it, or on what you name, and changes it from its chip', () => {
-    const { node } = setup({ nodes: [agentNode('a', 0, 0)], edges: [] });
-    fireEvent.doubleClick(node('a'));
+  it('queues your OK on the work before it, or on what you name, and changes it from its chip', async () => {
+    const { node } = await setup({ nodes: [agentNode('a', 0, 0)], edges: [] });
+    await events.doubleClick(node('a'));
     const panel = within(screen.getByRole('dialog', { name: 'a' }));
     const field = () => panel.getByRole<HTMLInputElement>('combobox');
     const options = () => panel.getAllByRole('option').map((o) => o.firstChild?.textContent);
-    const plus = (name = 'Add to queue') => {
-      fireEvent.click(panel.getByRole('button', { name }));
+    const plus = async (name = 'Add to queue') => {
+      await events.click(panel.getByRole('button', { name }));
     };
     // Typing "wait", "ok" or "approve" finds it.
-    plus();
-    fireEvent.change(field(), { target: { value: 'wait' } });
+    await plus();
+    await events.change(field(), { target: { value: 'wait' } });
     expect(options().slice(0, 3)).toEqual(['Wait for…', 'Wait a while…', 'Wait for your OK…']);
     for (const typed of ['ok', 'approve']) {
-      fireEvent.change(field(), { target: { value: typed } });
+      await events.change(field(), { target: { value: typed } });
       expect(options()[0]).toBe('Wait for your OK…');
     }
     const choice = panel.getByRole('option', { name: /^Wait for your OK…/ });
     expect(choice.textContent).toBe(
       'Wait for your OK… Hold here until you approve, ask for changes, or stop',
     );
-    fireEvent.click(choice);
+    await events.click(choice);
     expect(field().getAttribute('aria-label')).toBe('Your OK on…');
     expect(field().placeholder).toBe('What you check, e.g. the spec in SPEC.md…');
     expect(options()).toEqual(['The work before it']);
-    fireEvent.click(panel.getByRole('option', { name: 'The work before it' }));
+    await events.click(panel.getByRole('option', { name: 'The work before it' }));
     expect(panel.getByRole('button', { name: 'Move Your OK on the work before it' })).toBeTruthy();
 
     // Or on what you name, in your own words.
-    plus();
-    fireEvent.click(panel.getByRole('option', { name: /^Wait for your OK…/ }));
-    fireEvent.change(field(), { target: { value: 'the spec in SPEC.md' } });
+    await plus();
+    await events.click(panel.getByRole('option', { name: /^Wait for your OK…/ }));
+    await events.change(field(), { target: { value: 'the spec in SPEC.md' } });
     expect(panel.getAllByRole('option').map((o) => o.textContent)).toEqual([
       '“the spec in SPEC.md” In your own words',
     ]);
-    fireEvent.keyDown(field(), { key: 'Enter' });
+    await events.keyDown(field(), { key: 'Enter' });
     const chip = () => panel.getByRole('button', { name: /^Change what you OK: the spec/ });
     expect(chip().getAttribute('aria-label')).toBe('Change what you OK: the spec in SPEC.md');
     expect(chip().textContent).toBe('the spec in SPEC.md');
     expect(chip().closest('.graph-queue-row')?.getAttribute('data-mark')).toBe('ok');
 
     // Its chip reopens the picker with its words in the field.
-    fireEvent.click(chip());
+    await events.click(chip());
     expect(field().value).toBe('the spec in SPEC.md');
-    fireEvent.change(field(), { target: { value: 'the spec in SPEC.md and its tests' } });
-    fireEvent.keyDown(field(), { key: 'Enter' });
+    await events.change(field(), { target: { value: 'the spec in SPEC.md and its tests' } });
+    await events.keyDown(field(), { key: 'Enter' });
     expect(chip().textContent).toBe('the spec in SPEC.md and its tests');
 
     // An if-then holds steps and messages, not OKs.
-    plus();
-    fireEvent.click(panel.getByRole('option', { name: /^If… then/ }));
-    fireEvent.click(panel.getByRole('option', { name: 'the previous step failed' }));
-    plus('Add to If the previous step failed');
+    await plus();
+    await events.click(panel.getByRole('option', { name: /^If… then/ }));
+    await events.click(panel.getByRole('option', { name: 'the previous step failed' }));
+    await plus('Add to If the previous step failed');
     expect(options()).not.toContain('Wait for your OK…');
     expect(options()).toContain('Message');
   });
 
-  it('repeats steps until a condition holds, a few rounds at most, changed from its chips', () => {
-    const { node } = setup({ nodes: [agentNode('a', 0, 0)], edges: [] });
-    fireEvent.doubleClick(node('a'));
+  it('repeats steps until a condition holds, a few rounds at most, changed from its chips', async () => {
+    const { node } = await setup({ nodes: [agentNode('a', 0, 0)], edges: [] });
+    await events.doubleClick(node('a'));
     const panel = within(screen.getByRole('dialog', { name: 'a' }));
     const field = () => panel.getByRole<HTMLInputElement>('combobox');
     const options = () => panel.getAllByRole('option').map((o) => o.firstChild?.textContent);
-    const plus = (name = 'Add to queue') => {
-      fireEvent.click(panel.getByRole('button', { name }));
+    const plus = async (name = 'Add to queue') => {
+      await events.click(panel.getByRole('button', { name }));
     };
     // Offered right after If… then; "repeat", "loop" or "round" finds it.
-    plus();
+    await plus();
     expect(options().slice(0, 6)).toEqual([
       'If… then',
       'Repeat until…',
@@ -1214,14 +1224,14 @@ describe('GraphEditor', () => {
       'Message',
     ]);
     for (const typed of ['repeat', 'loop', 'round']) {
-      fireEvent.change(field(), { target: { value: typed } });
+      await events.change(field(), { target: { value: typed } });
       expect(options()[0]).toBe('Repeat until…');
     }
     const choice = panel.getByRole('option', { name: /^Repeat until…/ });
     expect(choice.textContent).toBe(
       'Repeat until… Loop: run steps again until a condition holds, a few rounds at most',
     );
-    fireEvent.click(choice);
+    await events.click(choice);
     expect(field().getAttribute('aria-label')).toBe('Repeat until…');
     expect(field().placeholder).toBe('Pick when to stop, or describe it…');
     expect(options()).toEqual([
@@ -1229,10 +1239,10 @@ describe('GraphEditor', () => {
       'its last step fails',
       'the output contains…',
     ]);
-    fireEvent.click(panel.getByRole('option', { name: 'the output contains…' }));
+    await events.click(panel.getByRole('option', { name: 'the output contains…' }));
     const text = panel.getByRole('textbox', { name: 'Text to look for' });
-    fireEvent.change(text, { target: { value: 'Converged' } });
-    fireEvent.keyDown(text, { key: 'Enter' });
+    await events.change(text, { target: { value: 'Converged' } });
+    await events.keyDown(text, { key: 'Enter' });
 
     // A card: when it stops, up to 3 rounds, then ask me; each a chip.
     expect(
@@ -1248,34 +1258,34 @@ describe('GraphEditor', () => {
     expect([rounds().textContent, then().textContent]).toEqual(['up to 3 rounds', 'then ask me']);
 
     // Typing 5 finds 5 rounds; Go on carries on with the queue.
-    fireEvent.click(rounds());
+    await events.click(rounds());
     expect(field().getAttribute('aria-label')).toBe('How many rounds at most?');
     expect(options()).toHaveLength(20);
-    fireEvent.change(field(), { target: { value: '5' } });
+    await events.change(field(), { target: { value: '5' } });
     expect(options()[0]).toBe('5 rounds');
-    fireEvent.keyDown(field(), { key: 'Enter' });
+    await events.keyDown(field(), { key: 'Enter' });
     expect(rounds().getAttribute('aria-label')).toBe('Change how many rounds: up to 5 rounds');
-    fireEvent.click(then());
+    await events.click(then());
     expect(panel.getAllByRole('option').map((o) => o.textContent)).toEqual([
       'Ask me Stop and ask: one more round, or go on',
       'Go on Carry on with the queue; an If after it sees that it failed',
     ]);
-    fireEvent.click(panel.getByRole('option', { name: /^Go on/ }));
+    await events.click(panel.getByRole('option', { name: /^Go on/ }));
     expect(then().getAttribute('aria-label')).toBe(
       'Change what happens after the last round: then go on',
     );
     expect(then().textContent).toBe('then go on');
 
     // Its own ⊕ adds what it runs each round: waits, delays, messages and actions; no if-thens.
-    plus('Add to Repeat until the output contains “Converged”');
+    await plus('Add to Repeat until the output contains “Converged”');
     expect(options().slice(0, 4)).toEqual(['Wait for…', 'Wait a while…', 'Message', 'Read']);
     expect(options()).not.toContain('If… then');
     expect(options()).not.toContain('Repeat until…');
     expect(options()).not.toContain('Wait for your OK…');
-    fireEvent.click(panel.getByRole('option', { name: /^Message/ }));
+    await events.click(panel.getByRole('option', { name: /^Message/ }));
     const note = panel.getByRole('textbox', { name: 'New message to the agent' });
-    fireEvent.change(note, { target: { value: 'Tune the model' } });
-    fireEvent.keyDown(note, { key: 'Enter' });
+    await events.change(note, { target: { value: 'Tune the model' } });
+    await events.keyDown(note, { key: 'Enter' });
     const inner = panel.getByRole('list', { name: 'Each round: the output contains “Converged”' });
     expect(
       within(inner)
@@ -1284,16 +1294,16 @@ describe('GraphEditor', () => {
     ).toEqual(['Move Message']);
 
     // Its condition, in your own words, is changed starting from them.
-    fireEvent.click(until);
-    fireEvent.change(field(), { target: { value: 'the loss stops falling' } });
-    fireEvent.keyDown(field(), { key: 'Enter' });
+    await events.click(until);
+    await events.change(field(), { target: { value: 'the loss stops falling' } });
+    await events.keyDown(field(), { key: 'Enter' });
     const words = panel.getByRole('button', { name: /^Change when it stops: / });
     expect(words.textContent).toBe('the loss stops falling');
-    fireEvent.click(words);
+    await events.click(words);
     expect(field().value).toBe('the loss stops falling');
   });
 
-  it("goes round with another agent's repeat, and waits for a step inside one, round by round", () => {
+  it("goes round with another agent's repeat, and waits for a step inside one, round by round", async () => {
     const judging = {
       id: 'judging',
       repeat: [{ id: 'judge', message: 'Judge both versions' }],
@@ -1301,26 +1311,26 @@ describe('GraphEditor', () => {
       rounds: 2,
       otherwise: 'goOn' as const,
     };
-    const { node } = setup({
+    const { node } = await setup({
       nodes: [
         agentNode('j', 0, 0, { data: { label: 'Judge', queue: [judging] } }),
         agentNode('c', 0, 100, { data: { label: 'Claude', queue: [] } }),
       ],
       edges: [],
     });
-    fireEvent.doubleClick(node('c'));
+    await events.doubleClick(node('c'));
     const panel = within(screen.getByRole('dialog', { name: 'Claude' }));
-    const plus = (name = 'Add to queue') => {
-      fireEvent.click(panel.getByRole('button', { name }));
+    const plus = async (name = 'Add to queue') => {
+      await events.click(panel.getByRole('button', { name }));
     };
-    plus();
-    fireEvent.click(panel.getByRole('option', { name: /^Repeat until…/ }));
+    await plus();
+    await events.click(panel.getByRole('option', { name: /^Repeat until…/ }));
     // Another agent's repeat, after the conditions: go round with it.
     const leader = panel.getByRole('option', { name: /^Judge's repeat ends/ });
     expect(leader.textContent).toBe(
       "Judge's repeat ends Go round with it: as many rounds as Judge's repeat",
     );
-    fireEvent.click(leader);
+    await events.click(leader);
     // It runs as many rounds as the judge's: its own are not shown.
     expect(
       panel.getByRole('button', { name: "Change when it stops: Judge's repeat ends" }),
@@ -1329,11 +1339,13 @@ describe('GraphEditor', () => {
     expect(panel.queryByRole('button', { name: /^Change what happens after/ })).toBeNull();
 
     // A wait inside it, for a step inside the judge's repeat, picked in the judge's queue beside.
-    plus("Add to Repeat until Judge's repeat ends");
-    fireEvent.click(panel.getByRole('option', { name: /^Wait for…/ }));
-    fireEvent.click(panel.getByRole('option', { name: 'Judge' }));
+    await plus("Add to Repeat until Judge's repeat ends");
+    await events.click(panel.getByRole('option', { name: /^Wait for…/ }));
+    await events.click(panel.getByRole('option', { name: 'Judge' }));
     const beside = within(panel.getByRole('complementary', { name: "Judge's queue" }));
-    fireEvent.click(beside.getByRole('button', { name: 'Wait for Judge: “Judge both versions”' }));
+    await events.click(
+      beside.getByRole('button', { name: 'Wait for Judge: “Judge both versions”' }),
+    );
     expect(
       panel.getByRole('button', { name: 'Move Wait for Judge: “Judge both versions”' }),
     ).toBeTruthy();
@@ -1343,23 +1355,23 @@ describe('GraphEditor', () => {
     // Its own waits are offered the steps inside Claude's repeat: each round inside a repeat, and
     // once that repeat is over outside one.
     const choices = () => beside.getAllByRole('option').map((o) => o.textContent);
-    fireEvent.click(
+    await events.click(
       beside.getByRole('button', { name: 'Add to Repeat until the output contains “WINNER”' }),
     );
-    fireEvent.click(beside.getByRole('option', { name: /^Wait for…/ }));
+    await events.click(beside.getByRole('option', { name: /^Wait for…/ }));
     expect(choices()).toEqual([
       'Claude All of its work',
       'Claude: its repeat All of its rounds',
       'Claude: its wait This step, each round',
     ]);
-    fireEvent.keyDown(beside.getByRole('combobox'), { key: 'Escape' });
-    fireEvent.click(beside.getByRole('button', { name: "Add to Judge's queue" }));
-    fireEvent.click(beside.getByRole('option', { name: /^Wait for…/ }));
+    await events.keyDown(beside.getByRole('combobox'), { key: 'Escape' });
+    await events.click(beside.getByRole('button', { name: "Add to Judge's queue" }));
+    await events.click(beside.getByRole('option', { name: /^Wait for…/ }));
     expect(choices().at(-1)).toBe('Claude: its wait This step, once its repeat is over');
-    fireEvent.keyDown(beside.getByRole('combobox'), { key: 'Escape' });
+    await events.keyDown(beside.getByRole('combobox'), { key: 'Escape' });
 
     // Claude's repeat goes round with the judge's, so it is not offered back to the judge.
-    fireEvent.click(beside.getByRole('button', { name: /^Change when it stops/ }));
+    await events.click(beside.getByRole('button', { name: /^Change when it stops/ }));
     expect(beside.getAllByRole('option').map((o) => o.firstChild?.textContent)).toEqual([
       'its last step succeeds',
       'its last step fails',
@@ -1373,7 +1385,7 @@ describe('GraphEditor', () => {
       { id: 'ok', approve },
       { id: 'next', action: 'Grep' },
     ];
-    const { node } = setup({
+    const { node } = await setup({
       nodes: [
         agentNode('a', 0, 0, { data: { label: 'Planner', queue: queue('the spec in SPEC.md') } }),
         agentNode('b', 0, 100, { data: { label: 'Builder', queue: queue('') } }),
@@ -1383,12 +1395,12 @@ describe('GraphEditor', () => {
     });
     const sidebar = () => screen.queryByRole('complementary', { name: 'Needs you' });
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
-    fireEvent.click(screen.getByRole('button', { name: 'Show all queues' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Run' }));
+    await events.click(screen.getByRole('button', { name: 'Show all queues' }));
+    await events.click(screen.getByRole('button', { name: 'Run' }));
     await act(async () => {
       await vi.advanceTimersByTimeAsync(4000);
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Back' }));
+    await events.click(screen.getByRole('button', { name: 'Back' }));
     expect(['a', 'b', 'c'].map((id) => node(id).classList.contains('asking'))).toEqual([
       true,
       true,
@@ -1409,11 +1421,11 @@ describe('GraphEditor', () => {
     expect(card('Builder').getByText('Your OK on the work before it?')).toBeTruthy();
 
     // Approve, Stop here and Ask for changes act on the run; each card then leaves.
-    fireEvent.click(card('Planner').getByRole('button', { name: 'Approve' }));
-    fireEvent.click(card('Builder').getByRole('button', { name: 'Stop here' }));
+    await events.click(card('Planner').getByRole('button', { name: 'Approve' }));
+    await events.click(card('Builder').getByRole('button', { name: 'Stop here' }));
     const reply = card('Tester').getByRole('textbox', { name: 'What should change?' });
-    fireEvent.change(reply, { target: { value: 'Test the empty state' } });
-    fireEvent.click(card('Tester').getByRole('button', { name: 'Ask for changes' }));
+    await events.change(reply, { target: { value: 'Test the empty state' } });
+    await events.click(card('Tester').getByRole('button', { name: 'Ask for changes' }));
     expect(sidebar()).toBeNull();
     expect(['a', 'b', 'c'].map((id) => node(id).classList.contains('asking'))).toEqual([
       false,
@@ -1422,7 +1434,7 @@ describe('GraphEditor', () => {
     ]);
     // The Tester works on the changes asked for, in its session.
     expect(node('c').classList.contains('working')).toBe(true);
-    fireEvent.click(screen.getByRole('button', { name: 'Show all queues' }));
+    await events.click(screen.getByRole('button', { name: 'Show all queues' }));
     const queues = within(screen.getByRole('dialog', { name: 'All queues' }));
     const run = (name: string) =>
       queues.getByRole('group', { name }).querySelector('[data-run]')?.getAttribute('data-run');
@@ -1432,8 +1444,8 @@ describe('GraphEditor', () => {
     expect(run('Tester: Your OK on the tests')).toBe('running');
   });
 
-  it('shows a usage gauge per backend, with its rule and Simulate usage…, and holds the run by it', () => {
-    const { node } = setup({
+  it('shows a usage gauge per backend, with its rule and Simulate usage…, and holds the run by it', async () => {
+    const { node } = await setup({
       nodes: [
         agentNode('a', 0, 0, {
           data: {
@@ -1457,42 +1469,42 @@ describe('GraphEditor', () => {
     expect(screen.queryByRole('button', { name: /^Gemini usage/ })).toBeNull();
 
     // Its panel: no reading yet, where readings come from, and the rule, set from chips.
-    fireEvent.click(gauge('Claude'));
+    await events.click(gauge('Claude'));
     const dialog = screen.getByRole('dialog', { name: 'Claude usage' });
     const panel = within(dialog);
     expect(panel.getByText('Not read yet')).toBeTruthy();
     expect(panel.getByText(/Read from Claude Code’s status line/)).toBeTruthy();
-    fireEvent.click(panel.getByRole('button', { name: 'Add a rule…' }));
-    fireEvent.click(panel.getByRole('option', { name: /^Pause and ask me/ }));
-    fireEvent.click(panel.getByRole('button', { name: 'Change the share: 80%' }));
-    fireEvent.change(panel.getByRole('combobox'), { target: { value: '90' } });
-    fireEvent.keyDown(panel.getByRole('combobox'), { key: 'Enter' });
+    await events.click(panel.getByRole('button', { name: 'Add a rule…' }));
+    await events.click(panel.getByRole('option', { name: /^Pause and ask me/ }));
+    await events.click(panel.getByRole('button', { name: 'Change the share: 80%' }));
+    await events.change(panel.getByRole('combobox'), { target: { value: '90' } });
+    await events.keyDown(panel.getByRole('combobox'), { key: 'Enter' });
     expect(panel.getByRole('button', { name: 'Change the share: 90%' })).toBeTruthy();
     expect(
       panel.getByRole('button', { name: 'Change what happens: Pause and ask me' }),
     ).toBeTruthy();
 
     // Simulated usage, to try it: the gauge fills, amber past the rule's share.
-    fireEvent.click(panel.getByRole('button', { name: 'Simulate usage…' }));
-    fireEvent.change(panel.getByRole('textbox', { name: '5-hour window: share used (%)' }), {
+    await events.click(panel.getByRole('button', { name: 'Simulate usage…' }));
+    await events.change(panel.getByRole('textbox', { name: '5-hour window: share used (%)' }), {
       target: { value: '95' },
     });
-    fireEvent.click(panel.getByRole('button', { name: 'Simulate' }));
+    await events.click(panel.getByRole('button', { name: 'Simulate' }));
     expect(gauge('Claude').getAttribute('aria-label')).toBe(
       'Claude usage: 95% of 5-hour window, 30% of weekly window',
     );
     expect(gauge('Claude').hasAttribute('data-over')).toBe(true);
     expect(panel.getByText(/^Simulated /)).toBeTruthy();
-    fireEvent.keyDown(dialog, { key: 'Escape' });
+    await events.keyDown(dialog, { key: 'Escape' });
     expect(screen.queryByRole('dialog', { name: 'Claude usage' })).toBeNull();
 
     // Run: the Builder is held before its first task, and asked about on the canvas.
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
-    fireEvent.click(screen.getByRole('button', { name: 'Show all queues' }));
+    await events.click(screen.getByRole('button', { name: 'Show all queues' }));
     const queues = within(screen.getByRole('dialog', { name: 'All queues' }));
     // All queues shows the gauges too.
     expect(queues.getByRole('button', { name: /^Claude usage:/ })).toBeTruthy();
-    fireEvent.click(queues.getByRole('button', { name: 'Run' }));
+    await events.click(queues.getByRole('button', { name: 'Run' }));
     const row = queues.getByRole('group', { name: 'Builder: Edit' });
     expect(row.querySelector('[data-run]')?.getAttribute('data-run')).toBe('asking');
     expect(
@@ -1502,87 +1514,87 @@ describe('GraphEditor', () => {
     expect(queues.getByRole('button', { name: 'Decide for Builder' }).title).toBe(
       'Builder: Claude has used 95% of its 5-hour window (over 90%)',
     );
-    fireEvent.click(queues.getByRole('button', { name: 'Back' }));
+    await events.click(queues.getByRole('button', { name: 'Back' }));
     expect(node('a').classList.contains('asking')).toBe(true);
     const sidebar = within(screen.getByRole('complementary', { name: 'Needs you' }));
     expect(
       sidebar.getByText('Claude has used 95% of its 5-hour window (over 90%). Go on?'),
     ).toBeTruthy();
-    fireEvent.click(sidebar.getByRole('button', { name: 'Go on' }));
+    await events.click(sidebar.getByRole('button', { name: 'Go on' }));
     expect(screen.queryByRole('complementary', { name: 'Needs you' })).toBeNull();
     expect(node('a').classList.contains('asking')).toBe(false);
   });
 
-  it("checks a Claude agent's usage in an If, and waits for its window to reset", () => {
-    const { node } = setup({
+  it("checks a Claude agent's usage in an If, and waits for its window to reset", async () => {
+    const { node } = await setup({
       nodes: [
         agentNode('a', 0, 0),
         agentNode('g', 0, 100, { data: { label: 'g', adapter: 'gemini' } }),
       ],
       edges: [],
     });
-    fireEvent.doubleClick(node('a'));
+    await events.doubleClick(node('a'));
     const panel = within(screen.getByRole('dialog', { name: 'a' }));
     const options = () => panel.getAllByRole('option').map((o) => o.firstChild?.textContent);
-    fireEvent.click(panel.getByRole('button', { name: 'Add to queue' }));
-    fireEvent.click(panel.getByRole('option', { name: /^If… then/ }));
-    fireEvent.click(panel.getByRole('option', { name: /^Claude’s usage is over…/ }));
+    await events.click(panel.getByRole('button', { name: 'Add to queue' }));
+    await events.click(panel.getByRole('option', { name: /^If… then/ }));
+    await events.click(panel.getByRole('option', { name: /^Claude’s usage is over…/ }));
     // The share is typed; each window is offered for it.
-    fireEvent.change(panel.getByRole('combobox', { name: 'Claude’s usage is over…' }), {
+    await events.change(panel.getByRole('combobox', { name: 'Claude’s usage is over…' }), {
       target: { value: '85' },
     });
     expect(options().slice(0, 2)).toEqual([
       'Over 85% of the 5-hour window',
       'Over 85% of the weekly window',
     ]);
-    fireEvent.click(panel.getByRole('option', { name: 'Over 85% of the weekly window' }));
+    await events.click(panel.getByRole('option', { name: 'Over 85% of the weekly window' }));
     expect(
       panel.getByRole('button', { name: 'Move If Claude’s usage is over 85% (weekly)' }),
     ).toBeTruthy();
 
-    fireEvent.click(panel.getByRole('button', { name: 'Add to queue' }));
-    fireEvent.click(panel.getByRole('option', { name: /^Wait a while…/ }));
-    fireEvent.click(panel.getByRole('option', { name: 'Until Claude’s usage resets (5-hour)' }));
+    await events.click(panel.getByRole('button', { name: 'Add to queue' }));
+    await events.click(panel.getByRole('option', { name: /^Wait a while…/ }));
+    await events.click(panel.getByRole('option', { name: 'Until Claude’s usage resets (5-hour)' }));
     expect(
       panel.getByRole('button', {
         name: 'Change how long it waits: until Claude’s usage resets (5-hour)',
       }),
     ).toBeTruthy();
-    fireEvent.click(panel.getByRole('button', { name: 'Back to the canvas' }));
+    await events.click(panel.getByRole('button', { name: 'Back to the canvas' }));
 
     // A Gemini agent's usage is not read: neither is offered.
-    fireEvent.doubleClick(node('g'));
+    await events.doubleClick(node('g'));
     const other = within(screen.getByRole('dialog', { name: 'g' }));
-    fireEvent.click(other.getByRole('button', { name: 'Add to queue' }));
-    fireEvent.click(other.getByRole('option', { name: /^If… then/ }));
+    await events.click(other.getByRole('button', { name: 'Add to queue' }));
+    await events.click(other.getByRole('option', { name: /^If… then/ }));
     expect(other.queryByRole('option', { name: /usage/ })).toBeNull();
   });
 
-  it("checks a Codex agent's usage in an If and a wait; its gauge says where readings come from", () => {
-    const { node } = setup({
+  it("checks a Codex agent's usage in an If and a wait; its gauge says where readings come from", async () => {
+    const { node } = await setup({
       nodes: [agentNode('x', 0, 0, { data: { label: 'Coder', adapter: 'codex' } })],
       edges: [],
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Codex usage: no reading' }));
+    await events.click(screen.getByRole('button', { name: 'Codex usage: no reading' }));
     const gauge = within(screen.getByRole('dialog', { name: 'Codex usage' }));
     expect(gauge.getByText(/Read from Codex’s app server/)).toBeTruthy();
-    fireEvent.keyDown(screen.getByRole('dialog', { name: 'Codex usage' }), { key: 'Escape' });
+    await events.keyDown(screen.getByRole('dialog', { name: 'Codex usage' }), { key: 'Escape' });
 
-    fireEvent.doubleClick(node('x'));
+    await events.doubleClick(node('x'));
     const panel = within(screen.getByRole('dialog', { name: 'Coder' }));
-    fireEvent.click(panel.getByRole('button', { name: 'Add to queue' }));
-    fireEvent.click(panel.getByRole('option', { name: /^If… then/ }));
-    fireEvent.click(panel.getByRole('option', { name: /^Codex’s usage is over…/ }));
-    fireEvent.change(panel.getByRole('combobox', { name: 'Codex’s usage is over…' }), {
+    await events.click(panel.getByRole('button', { name: 'Add to queue' }));
+    await events.click(panel.getByRole('option', { name: /^If… then/ }));
+    await events.click(panel.getByRole('option', { name: /^Codex’s usage is over…/ }));
+    await events.change(panel.getByRole('combobox', { name: 'Codex’s usage is over…' }), {
       target: { value: '80' },
     });
-    fireEvent.click(panel.getByRole('option', { name: 'Over 80% of the 5-hour window' }));
+    await events.click(panel.getByRole('option', { name: 'Over 80% of the 5-hour window' }));
     expect(
       panel.getByRole('button', { name: 'Move If Codex’s usage is over 80% (5-hour)' }),
     ).toBeTruthy();
-    fireEvent.click(panel.getByRole('button', { name: 'Add to queue' }));
-    fireEvent.click(panel.getByRole('option', { name: /^Wait a while…/ }));
-    fireEvent.click(panel.getByRole('option', { name: 'Until Codex’s usage resets (weekly)' }));
+    await events.click(panel.getByRole('button', { name: 'Add to queue' }));
+    await events.click(panel.getByRole('option', { name: /^Wait a while…/ }));
+    await events.click(panel.getByRole('option', { name: 'Until Codex’s usage resets (weekly)' }));
     expect(
       panel.getByRole('button', {
         name: 'Change how long it waits: until Codex’s usage resets (weekly)',
@@ -1590,28 +1602,28 @@ describe('GraphEditor', () => {
     ).toBeTruthy();
   });
 
-  it('offers an agent whose connection spends no usage backend no usage condition or reset', () => {
+  it('offers an agent whose connection spends no usage backend no usage condition or reset', async () => {
     // An Agent SDK agent runs on an API key: its connection declares no usage backend.
-    const { node } = setup({
+    const { node } = await setup({
       nodes: [agentNode('s', 0, 0, { data: { label: 'Keyed', connection: 'claude-code.sdk' } })],
       edges: [],
     });
-    fireEvent.doubleClick(node('s'));
+    await events.doubleClick(node('s'));
     const panel = within(screen.getByRole('dialog', { name: 'Keyed' }));
     const options = () => panel.getAllByRole('option').map((o) => o.firstChild?.textContent);
     // Neither the queue's own ⊕ nor the one above its message box.
     for (const add of ['Add to queue', 'Queue something']) {
-      fireEvent.click(panel.getByRole('button', { name: add }));
-      fireEvent.click(panel.getByRole('option', { name: /^If… then/ }));
+      await events.click(panel.getByRole('button', { name: add }));
+      await events.click(panel.getByRole('option', { name: /^If… then/ }));
       expect(options()).toEqual([
         'the previous step succeeded',
         'the previous step failed',
         'the output contains…',
         'the wait ran out of time',
       ]);
-      fireEvent.keyDown(panel.getByRole('combobox'), { key: 'Escape' });
-      fireEvent.click(panel.getByRole('button', { name: add }));
-      fireEvent.click(panel.getByRole('option', { name: /^Wait a while…/ }));
+      await events.keyDown(panel.getByRole('combobox'), { key: 'Escape' });
+      await events.click(panel.getByRole('button', { name: add }));
+      await events.click(panel.getByRole('option', { name: /^Wait a while…/ }));
       expect(options()).toEqual([
         '5 minutes',
         '10 minutes',
@@ -1620,11 +1632,11 @@ describe('GraphEditor', () => {
         '4 hours',
         'Until 9:00 AM',
       ]);
-      fireEvent.keyDown(panel.getByRole('combobox'), { key: 'Escape' });
+      await events.keyDown(panel.getByRole('combobox'), { key: 'Escape' });
     }
   });
 
-  it('keeps a usage condition and reset an agent spending no usage backend has, editable', () => {
+  it('keeps a usage condition and reset an agent spending no usage backend has, editable', async () => {
     // Written while it ran in a Terminal, or shared in a file: each still names its backend.
     const queue: QueueItem[] = [
       {
@@ -1634,33 +1646,33 @@ describe('GraphEditor', () => {
       },
       { id: 'reset', delay: { resets: 'weekly', backend: 'claude-code' } },
     ];
-    const { node } = setup({
+    const { node } = await setup({
       nodes: [
         agentNode('s', 0, 0, { data: { label: 'Keyed', connection: 'claude-code.sdk', queue } }),
       ],
       edges: [],
     });
-    fireEvent.doubleClick(node('s'));
+    await events.doubleClick(node('s'));
     const panel = within(screen.getByRole('dialog', { name: 'Keyed' }));
     const options = () => panel.getAllByRole('option').map((o) => o.firstChild?.textContent);
     const field = () => panel.getByRole<HTMLInputElement>('combobox');
 
-    fireEvent.click(
+    await events.click(
       panel.getByRole('button', {
         name: 'Change the condition: Claude’s usage is over 80% (5-hour)',
       }),
     );
-    fireEvent.click(panel.getByRole('option', { name: /^Claude’s usage is over…/ }));
+    await events.click(panel.getByRole('option', { name: /^Claude’s usage is over…/ }));
     expect(field().value).toBe('80%');
-    fireEvent.change(field(), { target: { value: '90 weekly' } });
-    fireEvent.click(panel.getByRole('option', { name: 'Over 90% of the weekly window' }));
+    await events.change(field(), { target: { value: '90 weekly' } });
+    await events.click(panel.getByRole('option', { name: 'Over 90% of the weekly window' }));
     expect(
       panel.getByRole('button', {
         name: 'Change the condition: Claude’s usage is over 90% (weekly)',
       }),
     ).toBeTruthy();
 
-    fireEvent.click(
+    await events.click(
       panel.getByRole('button', {
         name: 'Change how long it waits: until Claude’s usage resets (weekly)',
       }),
@@ -1668,12 +1680,12 @@ describe('GraphEditor', () => {
     expect(field().value).toBe('until Claude’s usage resets (weekly)');
     expect(options()).toEqual(['Until Claude’s usage resets (weekly)']);
     // Its own backend's other window too.
-    fireEvent.change(field(), { target: { value: 'resets' } });
+    await events.change(field(), { target: { value: 'resets' } });
     expect(options()).toEqual([
       'Until Claude’s usage resets (5-hour)',
       'Until Claude’s usage resets (weekly)',
     ]);
-    fireEvent.click(panel.getByRole('option', { name: 'Until Claude’s usage resets (5-hour)' }));
+    await events.click(panel.getByRole('option', { name: 'Until Claude’s usage resets (5-hour)' }));
     expect(
       panel.getByRole('button', {
         name: 'Change how long it waits: until Claude’s usage resets (5-hour)',
@@ -1681,17 +1693,17 @@ describe('GraphEditor', () => {
     ).toBeTruthy();
   });
 
-  it("offers a Claude agent Claude Code's own tools, Workflow included", () => {
-    const { node } = setup({ nodes: [agentNode('a', 0, 0)], edges: [] });
-    fireEvent.doubleClick(node('a'));
+  it("offers a Claude agent Claude Code's own tools, Workflow included", async () => {
+    const { node } = await setup({ nodes: [agentNode('a', 0, 0)], edges: [] });
+    await events.doubleClick(node('a'));
     const panel = within(screen.getByRole('dialog', { name: 'a' }));
-    fireEvent.click(panel.getByRole('button', { name: 'Add to queue' }));
-    fireEvent.change(panel.getByRole('combobox'), { target: { value: 'workflow' } });
+    await events.click(panel.getByRole('button', { name: 'Add to queue' }));
+    await events.change(panel.getByRole('combobox'), { target: { value: 'workflow' } });
     expect(panel.getAllByRole('option')[0]?.firstChild?.textContent).toBe('Workflow');
   });
 
-  it("shows each node's agent type, and changes it from the node's panel", () => {
-    const { node } = setup({
+  it("shows each node's agent type, and changes it from the node's panel", async () => {
+    const { node } = await setup({
       nodes: [
         agentNode('a', 0, 0, { data: { label: 'a', adapter: 'codex' } }),
         agentNode('b', 0, 100),
@@ -1702,55 +1714,55 @@ describe('GraphEditor', () => {
     expect([tag('a'), tag('b')]).toEqual(['codex', 'claude-code']);
     expect(node('a').getAttribute('aria-label')).toBe('a, Codex · Terminal');
 
-    fireEvent.doubleClick(node('a'));
+    await events.doubleClick(node('a'));
     const panel = within(screen.getByRole('dialog', { name: 'a' }));
-    fireEvent.click(panel.getByRole('button', { name: 'Agent: Codex · Terminal' }));
+    await events.click(panel.getByRole('button', { name: 'Agent: Codex · Terminal' }));
     expect(panel.queryByRole('option', { name: /qwen/i })).toBeNull();
     expect(panel.queryByRole('option', { name: /Simulated/ })).toBeNull();
-    fireEvent.click(panel.getByRole('option', { name: /^Claude · Agent SDK/ }));
+    await events.click(panel.getByRole('option', { name: /^Claude · Agent SDK/ }));
     expect(tag('a')).toBe('claude-code');
-    expect(panel.getByRole('button', { name: 'Agent: Claude · Agent SDK' })).toBeTruthy();
+    expect(await panel.findByRole('button', { name: 'Agent: Claude · Agent SDK' })).toBeTruthy();
   });
 
-  it('opens only a double-clicked node that is part of a multi-selection', () => {
-    const { node, nodes } = setup({
+  it('opens only a double-clicked node that is part of a multi-selection', async () => {
+    const { node, nodes } = await setup({
       nodes: [agentNode('a', 0, 0, { selected: true }), agentNode('b', 0, 100, { selected: true })],
       edges: [],
     });
-    fireEvent.doubleClick(node('a'));
+    await events.doubleClick(node('a'));
     expect(nodes('.react-flow__node.selected').map((n) => n.dataset.id)).toEqual(['a']);
     expect(screen.getByRole('dialog', { name: 'a' })).toBeTruthy();
   });
 
-  it("groups a selection from its actions, and ungroups from the group's", () => {
-    const { nodes } = setup({
+  it("groups a selection from its actions, and ungroups from the group's", async () => {
+    const { nodes } = await setup({
       nodes: [agentNode('a', 0, 0, { selected: true }), agentNode('b', 0, 100, { selected: true })],
       edges: [],
     });
-    fireEvent.click(actions('a b').getByRole('button', { name: 'Group' }));
+    await events.click(actions('a b').getByRole('button', { name: 'Group' }));
     const [group] = nodes('.react-flow__node-frame');
     expect(group?.textContent).toBe('Group 1');
     expect(group?.classList.contains('selected')).toBe(true);
 
     const title = group?.querySelector('.graph-frame-title');
     if (!title) throw new Error('no title bar');
-    fireEvent.mouseEnter(title);
-    fireEvent.click(actions(group?.dataset.id ?? '').getByRole('button', { name: 'Ungroup' }));
+    await events.mouseEnter(title);
+    await events.click(actions(group?.dataset.id ?? '').getByRole('button', { name: 'Ungroup' }));
     expect(nodes('.react-flow__node-frame')).toHaveLength(0);
     expect(nodes('.react-flow__node.selected').map((n) => n.dataset.id)).toEqual(['a', 'b']);
   });
 
-  it('groups with the keyboard shortcut', () => {
-    const { nodes } = setup({
+  it('groups with the keyboard shortcut', async () => {
+    const { nodes } = await setup({
       nodes: [agentNode('a', 0, 0, { selected: true }), agentNode('b', 0, 100, { selected: true })],
       edges: [],
     });
-    fireEvent.keyDown(document.body, { key: 'g', code: 'KeyG', ctrlKey: true });
+    await events.keyDown(document.body, { key: 'g', code: 'KeyG', ctrlKey: true });
     expect(nodes('.react-flow__node-frame').map((n) => n.textContent)).toEqual(['Group 1']);
   });
 
-  it("cannot group nodes from different groups, and the selection's Group button says why", () => {
-    setup({
+  it("cannot group nodes from different groups, and the selection's Group button says why", async () => {
+    await setup({
       nodes: [
         frame,
         agentNode('a', 20, 52, { parentId: 'F', selected: true }),
@@ -1763,34 +1775,34 @@ describe('GraphEditor', () => {
     expect(group.title).toBe('Only agents in the same group can be grouped');
   });
 
-  it("gives a group a parent node from the '+' on its top border", () => {
-    const { node, nodes } = setup({
+  it("gives a group a parent node from the '+' on its top border", async () => {
+    const { node, nodes } = await setup({
       nodes: [frame, agentNode('a', 20, 52, { parentId: 'F' })],
       edges: [],
     });
-    fireEvent.click(button('Add a parent agent'));
+    await events.click(button('Add a parent agent'));
     expect(nodes('.react-flow__node-agent.parent').map((n) => n.dataset.id)).toEqual(['F']);
     expect(node('F').textContent).toBe('Agent 1');
     expect(node('F').classList.contains('selected')).toBe(true);
   });
 
-  it("shows a node's actions on hover: Delete, and Remove from group inside a group", () => {
-    const { node, nodes } = setup({
+  it("shows a node's actions on hover: Delete, and Remove from group inside a group", async () => {
+    const { node, nodes } = await setup({
       nodes: [frame, agentNode('a', 20, 52, { parentId: 'F' }), agentNode('b', 500, 0)],
       edges: [],
     });
     const card = (id: string) => node(id).querySelector('.graph-card') ?? node(id);
-    fireEvent.mouseEnter(card('a'));
-    fireEvent.click(actions('a').getByRole('button', { name: 'Remove from group' }));
+    await events.mouseEnter(card('a'));
+    await events.click(actions('a').getByRole('button', { name: 'Remove from group' }));
     expect(nodes('.react-flow__node.parent')).toHaveLength(0);
 
-    fireEvent.mouseEnter(card('b'));
-    fireEvent.click(actions('b').getByRole('button', { name: 'Delete' }));
+    await events.mouseEnter(card('b'));
+    await events.click(actions('b').getByRole('button', { name: 'Delete' }));
     expect(nodes().map((n) => n.dataset.id)).toEqual(['F', 'a']);
   });
 
-  it("colours each group's nodes, and gives a new group the next colour", () => {
-    const { node } = setup({
+  it("colours each group's nodes, and gives a new group the next colour", async () => {
+    const { node } = await setup({
       nodes: [
         { ...frame, data: { label: 'Group 1', color: 0 } },
         agentNode('a', 20, 52, { parentId: 'F' }),
@@ -1801,12 +1813,12 @@ describe('GraphEditor', () => {
     });
     const color = (id: string) => /group-color-(\d+)/.exec(node(id).className)?.[1];
     expect([color('F'), color('a'), color('b')]).toEqual(['0', '0', undefined]);
-    fireEvent.keyDown(document.body, { key: 'g', code: 'KeyG', ctrlKey: true });
+    await events.keyDown(document.body, { key: 'g', code: 'KeyG', ctrlKey: true });
     expect([color('b'), color('c')]).toEqual(['1', '1']);
   });
 
-  it('arranges the graph while the toggle is on, and lets nodes be dragged again when off', () => {
-    const { node } = setup({
+  it('arranges the graph while the toggle is on, and lets nodes be dragged again when off', async () => {
+    const { node } = await setup({
       nodes: [agentNode('a', 300, 300), agentNode('b', 0, 0)],
       edges: [{ id: 'a->b', source: 'a', target: 'b' }],
     });
@@ -1816,23 +1828,23 @@ describe('GraphEditor', () => {
     expect(toggle.getAttribute('aria-pressed')).toBe('false');
     expect(y('a')).toBeGreaterThan(y('b'));
 
-    fireEvent.click(toggle);
+    await events.click(toggle);
     expect(toggle.getAttribute('aria-pressed')).toBe('true');
     expect(y('a')).toBeLessThan(y('b'));
     expect(node('a').classList.contains('draggable')).toBe(false);
 
-    fireEvent.click(toggle);
+    await events.click(toggle);
     expect(toggle.getAttribute('aria-pressed')).toBe('false');
     expect(y('a')).toBeLessThan(y('b'));
     expect(node('a').classList.contains('draggable')).toBe(true);
   });
 
-  it('draws the work a queue gives another agent as an arrow, which opens the work between them', () => {
+  it('draws the work a queue gives another agent as an arrow, which opens the work between them', async () => {
     const queue = [
       { id: 'm', message: 'Fix the tests' },
       { id: 's', action: 'Read', target: 'b' },
     ];
-    const { container } = setup({
+    const { container } = await setup({
       nodes: [agentNode('a', 0, 0, { data: { label: 'a', queue } }), agentNode('b', 0, 100)],
       edges: [{ id: 'a->b', source: 'a', target: 'b' }],
     });
@@ -1841,13 +1853,13 @@ describe('GraphEditor', () => {
     expect(edge('work:a->b')?.getAttribute('aria-label')).toBe('Work from a for b: 1 queued');
     expect(edge('a->b')).toBeNull();
 
-    fireEvent.click(button('Open the work from a for b'));
+    await events.click(button('Open the work from a for b'));
     const panel = within(screen.getByRole('dialog', { name: 'Work from a for b' }));
     const order = () => panel.queryAllByRole('button', { name: /^Move / }).map((b) => b.ariaLabel);
     // Only a's items for b, not its message; ⊕ queues one of a's actions, aimed at b.
     expect(order()).toEqual(['Move Read']);
-    fireEvent.click(panel.getByRole('button', { name: 'Queue work for b' }));
-    fireEvent.click(panel.getByRole('option', { name: /^Bash / }));
+    await events.click(panel.getByRole('button', { name: 'Queue work for b' }));
+    await events.click(panel.getByRole('option', { name: /^Bash / }));
     expect(order()).toEqual(['Move Read', 'Move Bash']);
     expect(panel.getByRole('button', { name: 'Change the agent Bash acts on' }).textContent).toBe(
       '→ b',
@@ -1855,90 +1867,90 @@ describe('GraphEditor', () => {
     expect(button('Open the work from a for b').textContent).toBe('2');
 
     // Without work, the link shows again.
-    fireEvent.click(panel.getByRole('button', { name: 'Remove Read' }));
-    fireEvent.click(panel.getByRole('button', { name: 'Remove Bash' }));
+    await events.click(panel.getByRole('button', { name: 'Remove Read' }));
+    await events.click(panel.getByRole('button', { name: 'Remove Bash' }));
     expect(edge('work:a->b')).toBeNull();
     expect(edge('a->b')?.getAttribute('aria-label')).toBe('a and b can talk');
-    fireEvent.keyDown(document.body, { key: 'Escape' });
+    await events.keyDown(document.body, { key: 'Escape' });
     expect(screen.queryByRole('dialog')).toBeNull();
   });
 
-  it('sends a message to another agent, which draws an arrow, marked "if" on a condition', () => {
+  it('sends a message to another agent, which draws an arrow, marked "if" on a condition', async () => {
     const queue = [
       { id: 'i', if: { kind: 'failed' as const }, then: [{ id: 'm', message: 'Take over' }] },
     ];
-    const { container, node } = setup({
+    const { container, node } = await setup({
       nodes: [agentNode('a', 0, 0, { data: { label: 'a', queue } }), agentNode('lead', 0, 100)],
       edges: [],
     });
-    fireEvent.doubleClick(node('a'));
+    await events.doubleClick(node('a'));
     const panel = within(screen.getByRole('dialog', { name: 'a' }));
     const chip = panel.getByRole('button', { name: 'Change the agent the message goes to' });
     expect(chip.textContent).toBe('→ this agent');
-    fireEvent.click(chip);
-    fireEvent.click(panel.getByRole('option', { name: 'lead' }));
+    await events.click(chip);
+    await events.click(panel.getByRole('option', { name: 'lead' }));
     expect(chip.textContent).toBe('→ lead');
-    fireEvent.keyDown(document.body, { key: 'Escape' });
+    await events.keyDown(document.body, { key: 'Escape' });
     const edge = container.querySelector('[data-testid="rf__edge-work:a->lead"]');
     expect(edge?.getAttribute('aria-label')).toBe('Work from a for lead: 1 queued, on a condition');
     const count = () => button('Open the work from a for lead');
     expect(count().textContent).toBe('if 1');
 
     // The work panel's ⊕ sends messages too: no longer all on a condition.
-    fireEvent.click(count());
+    await events.click(count());
     const work = within(screen.getByRole('dialog', { name: 'Work from a for lead' }));
-    fireEvent.click(work.getByRole('button', { name: 'Queue work for lead' }));
-    fireEvent.click(work.getByRole('option', { name: /^Message/ }));
+    await events.click(work.getByRole('button', { name: 'Queue work for lead' }));
+    await events.click(work.getByRole('option', { name: /^Message/ }));
     const text = work.getByRole('textbox', { name: 'New message to the agent' });
-    fireEvent.change(text, { target: { value: 'Start now' } });
-    fireEvent.keyDown(text, { key: 'Enter' });
+    await events.change(text, { target: { value: 'Start now' } });
+    await events.keyDown(text, { key: 'Enter' });
     expect(count().textContent).toBe('2');
   });
 
-  it('queues a wait for other agents, drawn as an arrow from each, opening to the waiting queue', () => {
-    const { container, node } = setup({
+  it('queues a wait for other agents, drawn as an arrow from each, opening to the waiting queue', async () => {
+    const { container, node } = await setup({
       nodes: [agentNode('a', 0, 0), agentNode('b', 0, 100), agentNode('c', 200, 0)],
       edges: [],
     });
     const edge = (id: string) => container.querySelector(`[data-testid="rf__edge-${id}"]`);
-    fireEvent.doubleClick(node('b'));
+    await events.doubleClick(node('b'));
     const panel = within(screen.getByRole('dialog', { name: 'b' }));
-    fireEvent.click(panel.getByRole('button', { name: 'Add to queue' }));
-    fireEvent.click(panel.getByRole('option', { name: /^Wait for…/ }));
-    fireEvent.click(panel.getByRole('option', { name: 'a' }));
+    await events.click(panel.getByRole('button', { name: 'Add to queue' }));
+    await events.click(panel.getByRole('option', { name: /^Wait for…/ }));
+    await events.click(panel.getByRole('option', { name: 'a' }));
     // Another agent joins the wait: the queue goes on once both have finished.
-    fireEvent.click(panel.getByRole('button', { name: 'Wait for something else' }));
+    await events.click(panel.getByRole('button', { name: 'Wait for something else' }));
     expect(panel.getAllByRole('option').map((o) => o.textContent)).toEqual(['c']);
-    fireEvent.click(panel.getByRole('option', { name: 'c' }));
+    await events.click(panel.getByRole('option', { name: 'c' }));
     expect(panel.getByRole('button', { name: 'Move Wait for a and c' })).toBeTruthy();
-    fireEvent.click(panel.getByRole('button', { name: 'Back to the canvas' }));
+    await events.click(panel.getByRole('button', { name: 'Back to the canvas' }));
     expect(edge('work:a->b')?.getAttribute('aria-label')).toBe('Work from a for b: 1 queued');
     expect(edge('work:c->b')).not.toBeNull();
 
     // The arrow opens the queue that waits, where an agent can come off the wait.
-    fireEvent.click(button('Open the work from a for b'));
+    await events.click(button('Open the work from a for b'));
     const work = within(screen.getByRole('dialog', { name: 'Work from a for b' }));
     const waiting = within(work.getByRole('region', { name: "In b's queue" }));
-    fireEvent.click(waiting.getByRole('button', { name: 'Stop waiting for a' }));
+    await events.click(waiting.getByRole('button', { name: 'Stop waiting for a' }));
     expect(edge('work:a->b')).toBeNull();
     expect(edge('work:c->b')).not.toBeNull();
   });
 
-  it("picks the step to wait for in the other agent's queue, shown beside, linked to the wait", () => {
+  it("picks the step to wait for in the other agent's queue, shown beside, linked to the wait", async () => {
     const queue = [
       { id: 'research', action: 'Workflow' },
       { id: 'm', message: 'Write up what you found' },
     ];
-    const { node } = setup({
+    const { node } = await setup({
       nodes: [agentNode('a', 0, 0, { data: { label: 'a', queue } }), agentNode('b', 0, 100)],
       edges: [],
     });
-    fireEvent.doubleClick(node('b'));
+    await events.doubleClick(node('b'));
     const view = within(screen.getByRole('dialog', { name: 'b' }));
     const links = () => screen.getByRole('dialog', { name: 'b' }).querySelectorAll('[data-link]');
-    fireEvent.click(view.getByRole('button', { name: 'Add to queue' }));
-    fireEvent.click(view.getByRole('option', { name: /^Wait for…/ }));
-    fireEvent.click(view.getByRole('option', { name: 'a' }));
+    await events.click(view.getByRole('button', { name: 'Add to queue' }));
+    await events.click(view.getByRole('option', { name: /^Wait for…/ }));
+    await events.click(view.getByRole('option', { name: 'a' }));
 
     // b waits for all of a's work until a step of a's, in its queue beside b's, is picked.
     expect(view.getByRole('button', { name: 'Move Wait for a' })).toBeTruthy();
@@ -1954,7 +1966,7 @@ describe('GraphEditor', () => {
       "Wait for all of a's work",
     ]);
     expect(beside.getByRole('button', { name: 'Remove Workflow' })).toBeTruthy();
-    fireEvent.click(beside.getByRole('button', { name: 'Wait for a: Workflow' }));
+    await events.click(beside.getByRole('button', { name: 'Wait for a: Workflow' }));
     const wait = view.getByRole('button', { name: 'Move Wait for a: Workflow' });
     // Marked as tasks are wherever a queue shows: the wait, and the step it waits for.
     expect(wait.closest('[data-mark]')?.getAttribute('data-mark')).toBe('wait');
@@ -1965,28 +1977,28 @@ describe('GraphEditor', () => {
     expect(links()).toHaveLength(1);
 
     // Its chip picks again; Escape stops picking, then hides a's queue, then closes the view.
-    fireEvent.click(view.getByRole('button', { name: 'Change what it waits for: a: Workflow' }));
-    fireEvent.click(beside.getByRole('button', { name: "Wait for all of a's work" }));
+    await events.click(view.getByRole('button', { name: 'Change what it waits for: a: Workflow' }));
+    await events.click(beside.getByRole('button', { name: "Wait for all of a's work" }));
     expect(view.getByRole('button', { name: 'Move Wait for a' })).toBeTruthy();
-    fireEvent.click(view.getByRole('button', { name: 'Change what it waits for: a' }));
-    fireEvent.keyDown(document.body, { key: 'Escape' });
+    await events.click(view.getByRole('button', { name: 'Change what it waits for: a' }));
+    await events.keyDown(document.body, { key: 'Escape' });
     expect(beside.queryByRole('button', { name: /^Wait for / })).toBeNull();
-    fireEvent.keyDown(document.body, { key: 'Escape' });
+    await events.keyDown(document.body, { key: 'Escape' });
     expect(view.queryByRole('complementary', { name: "a's queue" })).toBeNull();
     expect(screen.getByRole('dialog', { name: 'b' })).toBeTruthy();
   });
 
-  it('deletes a selected link from its button', () => {
-    const { container } = setup({
+  it('deletes a selected link from its button', async () => {
+    const { container } = await setup({
       nodes: [agentNode('a', 0, 0), agentNode('b', 0, 100)],
       edges: [{ id: 'a->b', source: 'a', target: 'b', selected: true }],
     });
-    fireEvent.click(button('Delete link'));
+    await events.click(button('Delete link'));
     expect(container.querySelector('[data-testid="rf__edge-a->b"]')).toBeNull();
   });
 
-  it('deletes a group but keeps its contents, and removes edges of deleted agents', () => {
-    const { container, nodes } = setup({
+  it('deletes a group but keeps its contents, and removes edges of deleted agents', async () => {
+    const { container, nodes } = await setup({
       nodes: [
         { ...frame, selected: true },
         agentNode('a', 20, 52, { parentId: 'F' }),
@@ -1995,13 +2007,13 @@ describe('GraphEditor', () => {
       edges: [{ id: 'a->b', source: 'a', target: 'b' }],
     });
     expect(container.querySelector('[data-testid="rf__edge-a->b"]')).not.toBeNull();
-    fireEvent.keyDown(document.body, { key: 'Delete' });
+    await events.keyDown(document.body, { key: 'Delete' });
     expect(nodes().map((n) => n.textContent)).toEqual(['a']);
     expect(container.querySelector('[data-testid="rf__edge-a->b"]')).toBeNull();
   });
 
-  it('fits every container to its children when React Flow reports changes', () => {
-    const { container } = setup({
+  it('fits every container to its children when React Flow reports changes', async () => {
+    const { container } = await setup({
       nodes: [
         { ...frame, id: 'H', width: 300, height: 300, measured: { width: 300, height: 300 } },
         {
@@ -2024,8 +2036,8 @@ describe('GraphEditor', () => {
     expect(width('H')).toBe(width('G') + 2 * PADDING);
   });
 
-  it('names links by the labels of their agents, and follows renames', () => {
-    const { container, node } = setup({
+  it('names links by the labels of their agents, and follows renames', async () => {
+    const { container, node } = await setup({
       nodes: [
         agentNode('a', 0, 0, { data: { label: 'Alpha' } }),
         agentNode('b', 0, 100, { data: { label: 'Beta' } }),
@@ -2035,187 +2047,225 @@ describe('GraphEditor', () => {
     const edge = () => container.querySelector('[data-testid="rf__edge-a->b"]');
     expect(edge()?.getAttribute('aria-label')).toBe('Alpha and Beta can talk');
     // Renamed in the panel a double-click opens.
-    fireEvent.doubleClick(node('a'));
-    fireEvent.change(screen.getByRole('textbox', { name: 'Name' }), { target: { value: 'Gamma' } });
+    await events.doubleClick(node('a'));
+    await events.change(screen.getByRole('textbox', { name: 'Name' }), {
+      target: { value: 'Gamma' },
+    });
     expect(edge()?.getAttribute('aria-label')).toBe('Alpha and Beta can talk');
-    fireEvent.keyDown(screen.getByRole('textbox', { name: 'Name' }), { key: 'Enter' });
+    await events.keyDown(screen.getByRole('textbox', { name: 'Name' }), { key: 'Enter' });
     expect(screen.getByRole('dialog', { name: 'Gamma' })).toBeTruthy();
     expect(edge()?.getAttribute('aria-label')).toBe('Gamma and Beta can talk');
   });
 
   describe('canvas files', () => {
-    /** Stands in for window.api: opens `opened`, saves as team.corral. */
-    const fakeFiles = (opened: CanvasFile | null = null) => ({
-      open: vi.fn<CanvasFiles['open']>().mockResolvedValue(opened),
-      save: vi.fn<CanvasFiles['save']>().mockResolvedValue('team.corral'),
-      forget: vi
-        .fn<CanvasFiles['forget']>()
-        .mockImplementation(() => Promise.resolve(newCanvasId())),
-    });
     const coder: Graph = {
       nodes: [agentNode('x', 0, 0, { data: { label: 'Coder' } })],
       edges: [],
     };
+    /** What the Open dialog picks: `graph` as the canvas `id`'s file `name`. */
+    const opening = (graph: Graph, id: CanvasId, name: string, project?: ProjectFolder) => ({
+      document: documentOf(graph, id),
+      name,
+      ...(project ? { project } : {}),
+    });
 
     it('saves arrangement as an edit even on an empty canvas, restores it on open, and omits it when off', async () => {
-      const files = fakeFiles();
-      const { unmount } = render(<GraphEditor files={files} />);
+      const first = core();
+      const { unmount } = await renderReady(<GraphEditor files onCanvas={first.onCanvas} />);
       expect(document.title).toBe('Untitled — corrallm');
-      fireEvent.click(button('Arrange automatically'));
+      await events.click(button('Arrange automatically'));
       expect(document.title).toBe('Untitled (edited) — corrallm');
-      fireEvent.click(button('Save'));
+      await events.click(button('Save'));
       await waitFor(() => {
-        expect(files.save).toHaveBeenCalledOnce();
+        expect(first.canvas.files.saved).toHaveLength(1);
       });
-      const text = files.save.mock.calls[0]?.[0] ?? '';
+      const text = first.canvas.files.saved[0] ?? '';
       expect(JSON.parse(text)).toHaveProperty('arrange', true);
       unmount();
-      const reopened = fakeFiles({ id: canvasIdOf(text), name: 'team.corral', text });
-      const { pane, nodes } = setup(undefined, reopened);
-      fireEvent.click(button('Open…'));
+      const { pane, nodes, canvas } = await setup(undefined, true);
+      canvas.files.open = {
+        document: fromFile(text, catalog(), DEFAULT_AGENT),
+        name: 'team.corral',
+      };
+      await events.click(button('Open…'));
       await waitFor(() => {
         expect(button('Arrange automatically').getAttribute('aria-pressed')).toBe('true');
       });
       expect(document.title).toBe('team.corral — corrallm');
-      fireEvent.doubleClick(pane, { clientX: 200, clientY: 100 });
+      await events.doubleClick(pane, { clientX: 200, clientY: 100 });
       expect(nodes()[0]?.classList.contains('draggable')).toBe(false);
       expect(button('Arrange automatically').getAttribute('aria-pressed')).toBe('true');
-      fireEvent.click(button('Arrange automatically'));
+      await events.click(button('Arrange automatically'));
       expect(document.title).toBe('team.corral (edited) — corrallm');
       expect(nodes()[0]?.classList.contains('draggable')).toBe(true);
-      fireEvent.click(button('Save'));
+      await events.click(button('Save'));
       await waitFor(() => {
-        expect(reopened.save).toHaveBeenCalledOnce();
+        expect(canvas.files.saved).toHaveLength(1);
       });
-      expect(JSON.parse(reopened.save.mock.calls[0]?.[0] ?? '')).not.toHaveProperty('arrange');
+      expect(calls(canvas, 'canvas.save')).toHaveLength(1);
+      expect(JSON.parse(canvas.files.saved[0] ?? '')).not.toHaveProperty('arrange');
     });
 
     it('saves the canvas, and titles the window with its file and whether it is edited', async () => {
-      const files = fakeFiles();
-      const { pane } = setup(undefined, files);
+      const { pane, canvas } = await setup(undefined, true);
       expect(document.title).toBe('Untitled — corrallm');
-      fireEvent.doubleClick(pane, { clientX: 200, clientY: 100 });
+      await events.doubleClick(pane, { clientX: 200, clientY: 100 });
       expect(document.title).toBe('Untitled (edited) — corrallm');
 
-      fireEvent.click(button('Save'));
+      // Never saved: Save picks its file, as Save As does.
+      canvas.core.operations.length = 0;
+      await events.click(button('Save'));
       await waitFor(() => {
         expect(document.title).toBe('team.corral — corrallm');
       });
-      const [text, choose] = files.save.mock.calls[0] ?? [];
-      expect(choose).toBe(false);
+      expectOneOp(canvas.core, 'canvas.saveAs', { canvas: canvas.document.id });
       expect(
-        graphOf(fromFile(text ?? '', catalog(), DEFAULT_AGENT)).nodes.map((n) => n.data.label),
+        graphOf(fromFile(canvas.files.saved[0] ?? '', catalog(), DEFAULT_AGENT)).nodes.map(
+          (n) => n.data.label,
+        ),
       ).toEqual(['Agent 1']);
 
       // Ctrl/⌘ Shift S saves as, Ctrl/⌘ S saves.
-      fireEvent.keyDown(document.body, { key: 's', ctrlKey: true, shiftKey: true });
-      expect(files.save).toHaveBeenLastCalledWith(expect.any(String), true);
-      fireEvent.keyDown(document.body, { key: 's', ctrlKey: true });
-      expect(files.save).toHaveBeenLastCalledWith(expect.any(String), false);
+      canvas.core.operations.length = 0;
+      await events.keyDown(document.body, { key: 's', ctrlKey: true, shiftKey: true });
+      await waitFor(() => {
+        expectOneOp(canvas.core, 'canvas.saveAs', { canvas: canvas.document.id });
+      });
+      canvas.core.operations.length = 0;
+      await events.keyDown(document.body, { key: 's', ctrlKey: true });
+      await waitFor(() => {
+        expectOneOp(canvas.core, 'canvas.save', { canvas: canvas.document.id });
+      });
     });
 
-    it('opens a canvas file and starts new ones, asking before unsaved changes are lost', async () => {
+    it('opens a canvas and starts new ones while keeping the previous canvas open', async () => {
       const id = newCanvasId();
-      const files = fakeFiles({ id, name: 'review.corral', text: toFile(documentOf(coder, id)) });
-      const { pane, nodes } = setup(undefined, files);
-      fireEvent.doubleClick(pane, { clientX: 200, clientY: 100 });
+      const { pane, nodes, canvas } = await setup(undefined, true);
+      canvas.files.open = opening(coder, id, 'review.corral');
+      await events.doubleClick(pane, { clientX: 200, clientY: 100 });
 
-      fireEvent.click(button('Open…'));
-      const ask = screen.getByRole('alertdialog', { name: 'Discard unsaved changes?' });
-      fireEvent.click(within(ask).getByRole('button', { name: 'Cancel' }));
-      expect(files.open).not.toHaveBeenCalled();
-      expect(nodes().map((n) => n.textContent)).toEqual(['Agent 1']);
-
-      fireEvent.click(button('Open…'));
-      fireEvent.click(button('Discard'));
+      canvas.core.operations.length = 0;
+      await events.click(button('Open…'));
+      expect(screen.queryByRole('alertdialog')).toBeNull();
       await waitFor(() => {
         expect(nodes().map((n) => n.textContent)).toEqual(['Coder']);
       });
+      expectOneOp(canvas.core, 'canvas.open', {});
+      expect(canvas.document.id).toBe(id);
       expect(document.title).toBe('review.corral — corrallm');
+      expect(screen.getByRole('status').textContent).toContain('stays open with its changes');
 
-      // Nothing to lose: New asks nothing, and the canvas is main's new draft.
-      fireEvent.click(button('New'));
+      // Nothing to lose: New asks nothing, and the canvas is the core's new draft.
+      canvas.core.operations.length = 0;
+      await events.click(button('New'));
       expect(screen.queryByRole('alertdialog')).toBeNull();
-      expect(files.forget).toHaveBeenCalled();
       await waitFor(() => {
         expect(nodes()).toEqual([]);
       });
+      expectOneOp(canvas.core, 'canvas.create', {});
+      expect(canvas.document.id).not.toBe(id);
       expect(document.title).toBe('Untitled — corrallm');
     });
 
     it('opens an example as a new canvas, from an empty canvas or the file bar', async () => {
-      const files = fakeFiles();
-      const { nodes } = setup(undefined, files);
-      fireEvent.click(button('Start from a template…'));
+      const { nodes, canvas } = await setup(undefined, true);
+      await events.click(button('Start from a template…'));
       const gallery = within(screen.getByRole('dialog', { name: 'Templates' }));
-      fireEvent.click(await gallery.findByRole('button', { name: /^Team lead/ }));
-      fireEvent.click(gallery.getByRole('button', { name: 'Create canvas' }));
+      await events.click(await gallery.findByRole('button', { name: /^Team lead/ }));
+      await events.click(gallery.getByRole('button', { name: 'Create canvas' }));
       expect(screen.queryByRole('dialog')).toBeNull();
-      // A new canvas, with main's new draft's id.
-      expect(files.forget).toHaveBeenCalled();
+      // The template is the canvas, created by the core operation.
       await waitFor(() => {
         expect(nodes().map((n) => n.textContent)).toContain('Lead');
       });
-      expect(document.title).toBe('Untitled — corrallm');
+      expect(calls(canvas, 'canvas.create')).toEqual([
+        {
+          op: 'canvas.create',
+          args: expect.objectContaining({ template: expect.any(String) as unknown }) as unknown,
+        },
+      ]);
+      expect(document.title).toBe('Untitled (edited) — corrallm');
       // Not empty now: the file bar still has them.
       expect(screen.queryByRole('button', { name: 'Start from a template…' })).toBeNull();
-      fireEvent.click(button('Templates…'));
-      fireEvent.keyDown(document.body, { key: 'Escape' });
+      await events.click(button('Templates…'));
+      await events.keyDown(document.body, { key: 'Escape' });
       expect(screen.queryByRole('dialog')).toBeNull();
     });
 
-    it('shows the folder its agents work in, chooses another, and brings it back with the canvas', async () => {
-      const files = {
-        ...fakeFiles({
-          id: newCanvasId(),
-          name: 'shop.corral',
-          text: toFile(documentOf(coder, newCanvasId())),
-          project: { name: 'shop', path: '/work/shop' },
-        }),
-        chooseProject: vi
-          .fn<NonNullable<CanvasFiles['chooseProject']>>()
-          .mockResolvedValueOnce({ name: 'app', path: '/work/app' })
-          .mockResolvedValueOnce(null),
+    it('creates another template canvas with no folder after choosing the first canvas’s folder', async () => {
+      const { nodes, canvas } = await setup(undefined, true);
+      canvas.files.folders.push({ name: 'app', path: '/work/app' });
+      const create = async (name: string) => {
+        await events.click(button('Templates…'));
+        const gallery = within(await screen.findByRole('dialog', { name: 'Templates' }));
+        await events.click(await gallery.findByRole('button', { name: new RegExp(`^${name}`) }));
+        await events.click(gallery.getByRole('button', { name: 'Create canvas' }));
+        await screen.findByRole('button', { name: 'Choose a project folder' });
       };
-      setup(undefined, files);
-      fireEvent.click(button('Choose a project folder'));
+      await create('Independent cross-check');
+      await events.click(button('Choose a project folder'));
+      await screen.findByRole('button', { name: 'Project folder: app' });
+      await create('Review loop');
+      expect(screen.queryByRole('alertdialog')).toBeNull();
+      expect(calls(canvas, 'canvas.create').map(({ args }) => args)).toEqual([
+        expect.objectContaining({ template: expect.any(String) as unknown }),
+        expect.objectContaining({ template: expect.any(String) as unknown }),
+      ]);
+      expect(nodes().map((node) => node.textContent)).toContain('Reviewer');
+    });
+
+    it('shows the folder its agents work in, chooses another, and brings it back with the canvas', async () => {
+      const id = newCanvasId();
+      const { canvas } = await setup(undefined, true);
+      canvas.files.open = opening(coder, id, 'shop.corral', { name: 'shop', path: '/work/shop' });
+      canvas.files.folders.push({ name: 'app', path: '/work/app' }, null);
+      await events.click(button('Choose a project folder'));
       await waitFor(() => {
         expect(button('Project folder: app').title).toMatch(/^\/work\/app\n/);
       });
       // Cancelled: it keeps the folder it had.
-      fireEvent.click(button('Project folder: app'));
+      await events.click(button('Project folder: app'));
       await waitFor(() => {
-        expect(files.chooseProject).toHaveBeenCalledTimes(2);
+        expect(calls(canvas, 'project.choose')).toHaveLength(2);
       });
       expect(button('Project folder: app')).toBeTruthy();
 
-      // A new canvas has none; an opened one has the folder main remembered with its file.
-      fireEvent.click(button('New'));
-      expect(button('Choose a project folder')).toBeTruthy();
-      fireEvent.click(button('Open…'));
+      // A new canvas has none; an opened one has the folder the core remembered with its file.
+      await events.click(button('New'));
+      await waitFor(() => {
+        expect(button('Choose a project folder')).toBeTruthy();
+      });
+      await events.click(button('Open…'));
       await waitFor(() => {
         expect(button('Project folder: shop')).toBeTruthy();
       });
     });
 
     it("fills in a template's blanks before it opens", async () => {
-      const { nodes, node } = setup(undefined, fakeFiles());
-      fireEvent.click(button('Start from a template…'));
+      const { nodes } = await setup(undefined, true);
+      await events.click(button('Start from a template…'));
       const gallery = within(screen.getByRole('dialog', { name: 'Templates' }));
-      fireEvent.click(await gallery.findByRole('button', { name: /^TDD relay/ }));
+      await events.click(await gallery.findByRole('button', { name: /^TDD relay/ }));
       // Each blank starts from the template's own example; Back returns to the templates.
       const framework = gallery.getByRole('textbox', { name: 'Which test framework?' });
       expect((framework as HTMLTextAreaElement).value).toBe('pytest');
-      fireEvent.change(framework, { target: { value: 'Vitest' } });
-      fireEvent.change(gallery.getByRole('textbox', { name: 'What should they build?' }), {
+      await events.change(framework, { target: { value: 'Vitest' } });
+      await events.change(gallery.getByRole('textbox', { name: 'What should they build?' }), {
         target: { value: 'A slugify(text) helper in src/text.ts.' },
       });
-      fireEvent.click(gallery.getByRole('button', { name: 'Create canvas' }));
+      await events.click(gallery.getByRole('button', { name: 'Create canvas' }));
       expect(screen.queryByRole('dialog')).toBeNull();
       await waitFor(() => {
         expect(nodes().map((n) => n.textContent)).toEqual(['Tester', 'Implementer', 'Refactorer']);
       });
-      fireEvent.doubleClick(node('tester'));
+      await act(async () => {
+        const tester = nodes('.react-flow__node-agent').find(
+          (node) => node.textContent === 'Tester',
+        );
+        if (!tester) throw new Error('No Tester');
+        fireEvent.doubleClick(tester);
+        await Promise.resolve();
+      });
       const message = within(screen.getByRole('dialog', { name: 'Tester' })).getAllByRole(
         'textbox',
         { name: 'Message to the agent' },
@@ -2226,15 +2276,15 @@ describe('GraphEditor', () => {
     });
 
     it('inserts a template into the canvas as a group, each agent of the type chosen', async () => {
-      const { nodes, container } = setup(coder, fakeFiles());
-      fireEvent.click(button('Templates…'));
+      const { nodes, container } = await setup(coder, true);
+      await events.click(button('Templates…'));
       const gallery = within(screen.getByRole('dialog', { name: 'Templates' }));
-      fireEvent.click(await gallery.findByRole('button', { name: /^TDD relay/ }));
+      await events.click(await gallery.findByRole('button', { name: /^TDD relay/ }));
       // Each agent starts as the template names it; the Tester is left to the default agent.
       const tester = gallery.getByRole('combobox', { name: "Tester's agent" });
       expect((tester as HTMLSelectElement).value).toBe('codex');
-      fireEvent.change(tester, { target: { value: '' } });
-      fireEvent.click(gallery.getByRole('button', { name: 'Insert into this canvas' }));
+      await events.change(tester, { target: { value: '' } });
+      await events.click(gallery.getByRole('button', { name: 'Insert into this canvas' }));
       expect(screen.queryByRole('dialog')).toBeNull();
       expect(nodes().map((n) => n.textContent)).toEqual([
         'Coder',
@@ -2258,12 +2308,12 @@ describe('GraphEditor', () => {
     it('runs a template’s agents through native connections even before their CLI is installed', async () => {
       const sessions = fakeBackend();
       sessions.backend.installed.mockResolvedValue({ 'claude-code': true, codex: false });
-      const { container } = render(
-        <GraphEditor files={fakeFiles()} sessionBackend={sessions.backend} />,
+      const { container } = await renderReady(
+        <GraphEditor files sessionBackend={sessions.backend} />,
       );
-      fireEvent.click(button('Start from a template…'));
+      await events.click(button('Start from a template…'));
       const gallery = within(screen.getByRole('dialog', { name: 'Templates' }));
-      fireEvent.click(await gallery.findByRole('button', { name: /^TDD relay/ }));
+      await events.click(await gallery.findByRole('button', { name: /^TDD relay/ }));
       const how = (role: string) =>
         gallery.getByRole<HTMLSelectElement>('combobox', { name: `How ${role} runs` });
       const options = (role: string) => [...how(role).options].map((o) => o.textContent);
@@ -2275,11 +2325,11 @@ describe('GraphEditor', () => {
       expect(how('Tester').value).toBe('codex.terminal');
       expect(options('Tester')).toEqual(['Terminal (CLI not found)', 'App Server (CLI not found)']);
       // Another type runs as that type does by default.
-      fireEvent.change(gallery.getByRole('combobox', { name: "Tester's agent" }), {
+      await events.change(gallery.getByRole('combobox', { name: "Tester's agent" }), {
         target: { value: 'claude-code' },
       });
       expect(how('Tester').value).toBe('claude-code.terminal');
-      fireEvent.change(how('Refactorer'), { target: { value: 'codex.app-server' } });
+      await events.change(how('Refactorer'), { target: { value: 'codex.app-server' } });
       // Only adapters this build has are offered.
       expect(
         [
@@ -2292,9 +2342,9 @@ describe('GraphEditor', () => {
         ['codex', 'Codex'],
       ]);
 
-      fireEvent.click(gallery.getByRole('button', { name: 'Create canvas' }));
+      await events.click(gallery.getByRole('button', { name: 'Create canvas' }));
       const cards = () =>
-        [...container.querySelectorAll('.react-flow__node')].map((n) =>
+        [...container.querySelectorAll('.react-flow__node-agent')].map((n) =>
           n.getAttribute('aria-label'),
         );
       await waitFor(() => {
@@ -2309,240 +2359,157 @@ describe('GraphEditor', () => {
         await new Promise((resolve) => setTimeout(resolve, 0));
       });
       expect(sessions.backend.start).not.toHaveBeenCalled();
-      const implementer = container.querySelector('.react-flow__node[data-id="implementer"]');
+      const implementer = [...container.querySelectorAll('.react-flow__node-agent')].find(
+        (node) => node.textContent === 'Implementer',
+      );
       if (!implementer) throw new Error('no Implementer');
-      fireEvent.doubleClick(implementer);
+      await events.doubleClick(implementer);
       await waitFor(() => {
         expect(sessions.backend.start).toHaveBeenCalledTimes(1);
       });
-      expect(sessions.backend.start).toHaveBeenCalledWith('implementer', {
+      expect(sessions.backend.start).toHaveBeenCalledWith(implementer.getAttribute('data-id'), {
         connection: 'claude-code.terminal',
         model: null,
         mode: null,
       });
     });
 
-    it.each([
-      'unreadable journal',
-      'invalid workflow',
-      'invalid queue state',
-      'invalid submitted messages',
-      'invalid saved canvas',
-    ])('recovers from %s with New while keeping native work unavailable', async (failure) => {
-      const files = fakeFiles();
-      let replaced = false;
-      const [before, draft] = [newCanvasId(), newCanvasId()];
-      files.forget.mockImplementation(() => {
-        replaced = true;
-        return Promise.resolve(draft);
-      });
-      const source = {
-        get: vi.fn(() => {
-          if (!replaced && failure === 'unreadable journal')
-            return Promise.reject(new Error('Unreadable journal'));
-          return Promise.resolve({
-            id: replaced ? draft : before,
-            token: replaced ? 'new-draft' : 'old',
-            name: null,
-            checkpoint: replaced
-              ? null
-              : {
-                  version: 2 as const,
-                  workflow:
-                    failure === 'invalid workflow' ? '{}' : toFile(documentOf(coder, before)),
-                  state:
-                    failure === 'invalid queue state'
-                      ? '{}'
-                      : JSON.stringify({
-                          version: 2,
-                          run: { running: false, agents: {} },
-                          replies: [],
-                          held: [],
-                          arrived: [],
-                          ended: [],
-                          past: [],
-                          due: [],
-                          usageDecided: [],
-                          warned: [],
-                        }),
-                  messages:
-                    failure === 'invalid submitted messages' ? '{}' : '{"version":1,"agents":[]}',
-                  updatedAt: 1,
-                },
-            ...(failure === 'invalid saved canvas' && !replaced
-              ? { savedText: 'unreadable saved canvas' }
-              : {}),
-          });
-        }),
-        save: vi.fn().mockResolvedValue(null),
-        ready: vi.fn().mockResolvedValue(null),
-        onStopping: () => () => undefined,
-      };
-      const sessions = fakeBackend();
-      const { container } = render(
-        <GraphEditor
-          initialGraph={coder}
-          files={files}
-          runSource={source}
-          sessionBackend={sessions.backend}
-        />,
-      );
-      expect((await screen.findByRole('alert')).textContent).toContain('Could not');
-      expect(container.querySelector('.react-flow__node')).toBeNull();
-      expect(sessions.backend.start).not.toHaveBeenCalled();
-      fireEvent.click(button('New'));
-      await waitFor(() => {
-        expect(container.querySelector('.react-flow')).not.toBeNull();
-      });
-      expect(files.forget).toHaveBeenCalledOnce();
-      await waitFor(() => {
-        expect(source.save).toHaveBeenCalled();
-      });
-      expect(source.save.mock.calls.every(([token]) => token === 'new-draft')).toBe(true);
-    });
-
-    it('saves each canvas with main’s id for it: the restored one’s, a new draft’s, an opened file’s', async () => {
-      const [restored, draft, opened] = [newCanvasId(), newCanvasId(), newCanvasId()];
-      let shown = restored;
-      const files = fakeFiles({
-        id: opened,
-        name: 'team.corral',
-        text: toFile(documentOf(coder, opened)),
-      });
-      files.forget.mockImplementation(() => {
-        shown = draft;
-        return Promise.resolve(draft);
-      });
-      files.open.mockImplementation(() => {
-        shown = opened;
-        return Promise.resolve({
-          id: opened,
-          name: 'team.corral',
-          text: toFile(documentOf(coder, opened)),
-        });
-      });
-      const runSource = {
-        get: vi.fn(() =>
-          Promise.resolve({
-            id: shown,
-            token: shown,
-            checkpoint: null,
-            name: shown === opened ? 'team.corral' : null,
-            ...(shown === opened ? { savedText: toFile(documentOf(coder, opened)) } : {}),
+    it.each(['unreadable journal', 'invalid queue state', 'invalid submitted messages'])(
+      'recovers from %s with New while keeping native work unavailable',
+      async (failure) => {
+        const held = core();
+        let replaced = false;
+        const [before, draft] = [newCanvasId(), newCanvasId()];
+        const source = {
+          get: vi.fn(() => {
+            if (!replaced && failure === 'unreadable journal')
+              return Promise.reject(new Error('Unreadable journal'));
+            return Promise.resolve({
+              id: replaced ? draft : before,
+              token: replaced ? 'new-draft' : 'old',
+              checkpoint: replaced
+                ? null
+                : {
+                    version: 2 as const,
+                    state:
+                      failure === 'invalid queue state'
+                        ? '{}'
+                        : JSON.stringify({
+                            version: 2,
+                            run: { running: false, agents: {} },
+                            replies: [],
+                            held: [],
+                            arrived: [],
+                            ended: [],
+                            past: [],
+                            due: [],
+                            usageDecided: [],
+                            warned: [],
+                          }),
+                    messages:
+                      failure === 'invalid submitted messages' ? '{}' : '{"version":1,"agents":[]}',
+                    updatedAt: 1,
+                  },
+            });
           }),
-        ),
-        save: vi.fn().mockResolvedValue(null),
+          save: vi.fn().mockResolvedValue(null),
+          ready: vi.fn().mockResolvedValue(null),
+          onStopping: () => () => undefined,
+        };
+        const sessions = fakeBackend();
+        const { container } = await renderReady(
+          <GraphEditor
+            initialGraph={coder}
+            files
+            onCanvas={(made) => {
+              held.onCanvas(made);
+              made.core.reply('canvas.create', (args) => {
+                replaced = true;
+                return made.create(args);
+              });
+            }}
+            runSource={source}
+            sessionBackend={sessions.backend}
+          />,
+        );
+        expect((await screen.findByRole('alert')).textContent).toContain('Could not');
+        expect(container.querySelector('.react-flow__node')).toBeNull();
+        expect(sessions.backend.start).not.toHaveBeenCalled();
+        await events.click(button('New'));
+        await waitFor(() => {
+          expect(container.querySelector('.react-flow')).not.toBeNull();
+        });
+        expectOneOp(held.canvas.core, 'canvas.create', {});
+        await waitFor(() => {
+          expect(source.save).toHaveBeenCalled();
+        });
+        expect(source.save.mock.calls.every(([token]) => token === 'new-draft')).toBe(true);
+      },
+    );
+
+    it('saves run checkpoints without sending a document, a restored canvas’s or a draft’s', async () => {
+      const id = newCanvasId();
+      const runSource = {
+        get: vi.fn(() => Promise.resolve({ id, token: 'restored', checkpoint: null })),
+        save: vi.fn<RunSource['save']>().mockResolvedValue(0),
         ready: vi.fn().mockResolvedValue(null),
         onStopping: () => () => undefined,
       };
-      render(<GraphEditor files={files} runSource={runSource} />);
-      // Restored: unsaved, and not edited.
+      await renderReady(<GraphEditor files runSource={runSource} />);
       await waitFor(() => {
         expect(runSource.save).toHaveBeenCalled();
       });
-      expect(document.title).toBe('Untitled — corrallm');
-      const saves = async (id: string) => {
-        const before = files.save.mock.calls.length;
-        fireEvent.keyDown(document.body, { key: 's', ctrlKey: true });
-        await waitFor(() => {
-          expect(files.save.mock.calls).toHaveLength(before + 1);
-        });
-        expect(canvasIdOf(files.save.mock.calls.at(-1)?.[0] ?? '')).toBe(id);
-        // Saved, it is not edited: its text and the saved text hold the same id.
-        await waitFor(() => {
-          expect(document.title).not.toContain('(edited)');
-        });
-      };
-      await saves(restored);
-      fireEvent.click(button('New'));
-      await waitFor(() => {
-        expect(runSource.get).toHaveBeenCalledTimes(2);
-      });
-      await saves(draft);
-      fireEvent.click(button('Open…'));
-      await waitFor(() => {
-        expect(document.title).toBe('team.corral — corrallm');
-      });
-      await saves(opened);
+      // A token and a checkpoint, never a document beside them.
+      for (const call of runSource.save.mock.calls) expect(call).toHaveLength(2);
+      expect(runSource.save).toHaveBeenCalledWith('restored', expect.any(Object));
     });
 
-    it('keeps a rejected persisted file detached from the retained canvas on the next Save', async () => {
-      let association: 'original' | 'invalid' | 'draft' = 'original';
-      const ids = { original: newCanvasId(), invalid: newCanvasId(), draft: newCanvasId() };
-      const files = fakeFiles({
-        id: ids.invalid,
-        name: 'invalid.corral',
-        text: 'Remember the milk',
-      });
-      files.open.mockImplementation(() => {
-        association = 'invalid';
-        return Promise.resolve({
-          id: ids.invalid,
-          name: 'invalid.corral',
-          text: 'Remember the milk',
-        });
-      });
-      files.forget.mockImplementation(() => {
-        association = 'draft';
-        return Promise.resolve(ids.draft);
-      });
-      const savedAssociations: string[] = [];
-      files.save.mockImplementation(() => {
-        savedAssociations.push(association);
-        return Promise.resolve('recovered.corral');
-      });
+    it('keeps the canvas, saving it under its own token, when the core refuses a file', async () => {
+      const id = newCanvasId();
+      const held = core();
       const runSource = {
         get: vi.fn(() =>
           Promise.resolve({
-            id: ids[association],
-            token: association,
+            id,
+            token: 'kept',
             checkpoint: null,
-            name: association === 'draft' ? null : `${association}.corral`,
-            ...(association === 'draft'
-              ? {}
-              : {
-                  savedText:
-                    association === 'invalid'
-                      ? 'Remember the milk'
-                      : toFile(documentOf(coder, ids.original)),
-                }),
           }),
         ),
         save: vi.fn().mockResolvedValue(null),
         ready: vi.fn().mockResolvedValue(null),
         onStopping: () => () => undefined,
       };
-      const { container } = render(<GraphEditor files={files} runSource={runSource} />);
+      const { container } = await renderReady(
+        <GraphEditor initialGraph={coder} files onCanvas={held.onCanvas} runSource={runSource} />,
+      );
+      held.canvas.files.open = new Error('notes.corral: This is not a corrallm canvas');
       await waitFor(() => {
         expect(button('Open…').disabled).toBe(false);
       });
-      fireEvent.click(button('Open…'));
-      expect((await screen.findByRole('alert')).textContent).toContain(
-        'This is not a corrallm canvas',
+      await events.click(button('Open…'));
+      expect((await screen.findByRole('alert')).textContent).toMatch(
+        /^Could not open the canvas: notes\.corral: This is not a corrallm canvas/,
       );
-      expect(files.forget).toHaveBeenCalledOnce();
+      expect(calls(held.canvas, 'canvas.create')).toEqual([]);
       expect(container.querySelector('.react-flow__node[data-id="x"]')).not.toBeNull();
-      fireEvent.click(button('Save'));
+      await events.click(button('Save'));
       await waitFor(() => {
-        expect(savedAssociations).toEqual(['draft']);
+        expect(held.canvas.files.saved).toHaveLength(1);
       });
-      expect(runSource.save.mock.calls.at(-1)?.[0]).toBe('draft');
+      expect(canvasIdOf(held.canvas.files.saved[0] ?? '')).toBe(id);
+      expect(runSource.save.mock.calls.every(([token]) => token === 'kept')).toBe(true);
     });
 
     it('says why a file cannot be opened, and keeps the canvas', async () => {
-      const files = fakeFiles({
-        id: newCanvasId(),
-        name: 'notes.corral',
-        text: 'Remember the milk',
-      });
-      const { nodes } = setup(coder, files);
-      fireEvent.click(button('Open…'));
+      const { nodes, canvas } = await setup(coder, true);
+      canvas.files.open = new Error('notes.corral: This is not a corrallm canvas');
+      await events.click(button('Open…'));
       expect((await screen.findByRole('alert')).textContent).toMatch(
-        /^Could not open notes\.corral: This is not a corrallm canvas/,
+        /^Could not open the canvas: notes\.corral: This is not a corrallm canvas/,
       );
       expect(nodes().map((n) => n.textContent)).toEqual(['Coder']);
-      // Main took the file as the canvas's; it must not be saved over.
-      expect(files.forget).toHaveBeenCalled();
+      // The core never took it as the canvas's file: one refused Open, and nothing begun anew.
+      expectOneOp(canvas.core, 'canvas.open', {});
     });
   });
 });

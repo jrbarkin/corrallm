@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
 import { newCanvasId } from '../../shared/canvas';
@@ -13,8 +13,8 @@ import { QuestionsSidebar } from './Questions';
 import { actionsOf, runCatalog } from './agents';
 import { editsOf } from './edits';
 import type { QueueEdits } from './edits';
-import { canvasNodes } from './graph';
-import type { GraphNode } from './graph';
+import { canvasNodes } from '../test-graph-data';
+import type { AgentNode } from '../../shared/model/canvas';
 import { QueueEditor } from './QueueEditor';
 
 function edits(): QueueEdits {
@@ -36,7 +36,7 @@ function edits(): QueueEdits {
   };
 }
 
-const agent = (id: string, queue: QueueItem[]): GraphNode => ({
+const agent = (id: string, queue: QueueItem[]): AgentNode => ({
   id,
   type: 'agent',
   position: { x: 0, y: 0 },
@@ -323,7 +323,7 @@ describe('submitted messages in the shared queue row', () => {
     ).toBeNull();
     expect(screen.getByRole('button', { name: 'Wait for a: Read' })).toBeTruthy();
     fireEvent.keyDown(screen.getByRole('button', { name: 'Move Read' }), { key: 'ArrowDown' });
-    expect(edit.move).toHaveBeenCalledExactlyOnceWith('a', 'one', 1);
+    expect(edit.move).toHaveBeenCalledExactlyOnceWith('a', 'one', null);
   });
 
   it('uses the same read-only rows and planned reorder positions in All queues', () => {
@@ -354,7 +354,7 @@ describe('submitted messages in the shared queue row', () => {
     expect(row.querySelector('[data-run="completed"]')).not.toBeNull();
     expect(within(row).queryByRole('button')).toBeNull();
     fireEvent.keyDown(screen.getByRole('button', { name: 'Move Read' }), { key: 'ArrowDown' });
-    expect(edit.move).toHaveBeenCalledExactlyOnceWith('a', 'one', 1);
+    expect(edit.move).toHaveBeenCalledExactlyOnceWith('a', 'one', null);
   });
 
   it('does not offer submitted messages as wait targets in the dropdown', () => {
@@ -375,4 +375,33 @@ describe('submitted messages in the shared queue row', () => {
     expect(screen.queryByRole('option', { name: /Check the failing test/ })).toBeNull();
     expect(screen.getByRole('option', { name: /b: Read/ })).toBeTruthy();
   });
+});
+
+it('chooses a wait step only after queue.add supplies the wait id', async () => {
+  const a = agent('a', []);
+  const b = agent('b', [{ id: 'work', action: 'Read' }]);
+  const edit = edits();
+  const added = Promise.withResolvers<string>();
+  edit.add = vi.fn(() => added.promise);
+  const choose = vi.fn();
+  render(
+    <QueueEditor
+      node={a}
+      nodes={[a, b]}
+      agent="Claude"
+      actions={actionsOf('claude-code')}
+      {...editsOf(edit, 'a')}
+      onChooseStep={choose}
+    />,
+  );
+  fireEvent.click(screen.getByRole('button', { name: 'Add to queue' }));
+  fireEvent.click(screen.getByRole('option', { name: /^Wait for…/ }));
+  fireEvent.click(screen.getByRole('option', { name: 'b' }));
+  expect(edit.add).toHaveBeenCalledExactlyOnceWith('a', { waitFor: [{ agent: 'b' }] }, undefined);
+  expect(choose).not.toHaveBeenCalled();
+  await act(async () => {
+    added.resolve('core-wait');
+    await added.promise;
+  });
+  expect(choose).toHaveBeenCalledExactlyOnceWith({ waitId: 'core-wait', index: 0, agent: 'b' });
 });

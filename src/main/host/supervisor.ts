@@ -91,6 +91,16 @@ export class CoreSupervisor {
     );
   }
 
+  /** Tells the core `window` gained focus, once a core is up. */
+  windowFocused(window: WindowId): void {
+    void this.core.then(
+      (core) => {
+        core.windowFocused(window);
+      },
+      () => undefined,
+    );
+  }
+
   /** Forks a core and asks it up; one that can't come up is killed. */
   async #bringUp(): Promise<CoreProcess> {
     const core = this.#options.fork();

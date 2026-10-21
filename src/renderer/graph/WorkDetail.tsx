@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react';
 
 import { actionsOf, DEFAULT_AGENT } from './agents';
-import type { GraphNode } from './graph';
+import type { AgentNode, CanvasNode } from '../../shared/model/canvas';
 import { editsOf } from './edits';
 import type { QueueEdits } from './edits';
 import { QueueEditor } from './QueueEditor';
@@ -25,7 +25,7 @@ export function WorkDetail({
   from: string;
   to: string;
   /** Every node of the graph: the two agents, and what their steps can act on. */
-  nodes: readonly GraphNode[];
+  nodes: readonly CanvasNode[];
   edits: QueueEdits;
   /** How each agent's tasks are marked (queues/marks.ts). */
   marks: (agent: string, item: string | null) => RowMarks;
@@ -43,14 +43,14 @@ export function WorkDetail({
     };
   }, [onClose]);
 
-  const source = nodes.find((n) => n.id === from);
-  const target = nodes.find((n) => n.id === to);
+  const source = nodes.filter((n) => n.type === 'agent').find((n) => n.id === from);
+  const target = nodes.filter((n) => n.type === 'agent').find((n) => n.id === to);
   if (!source || !target) return null;
-  const name = (node: GraphNode) => node.data.label || 'Unnamed agent';
+  const name = (node: AgentNode) => node.data.label || 'Unnamed agent';
   const waits = target.data.queue?.some((item) => isWorkBetween(item, to, from, to)) ?? false;
 
   /** The part of `owner`'s queue that makes this work. */
-  const part = (owner: GraphNode, add: 'nothing' | { workFor: string }) => {
+  const part = (owner: AgentNode, add: 'nothing' | { workFor: string }) => {
     const agent = owner.data.adapter ?? DEFAULT_AGENT;
     return (
       <section className="graph-work-part" aria-label={`In ${name(owner)}'s queue`}>

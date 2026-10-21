@@ -1,18 +1,18 @@
-import { act, fireEvent, render, screen, within } from '@testing-library/react';
+import { renderReady, events } from '../test-render';
+import { act, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { newCanvasId } from '../../shared/canvas';
 import type { SessionEvent, SettingsOptions } from '../../shared/session';
 import type { TerminalEvent } from '../../shared/terminal';
 import { catalog } from '../catalog';
 import { fromFile } from '../../shared/model/file';
-import { GraphEditor } from '../graph/GraphEditor';
-import type { CanvasFiles } from '../graph/GraphEditor';
-import type { Graph, GraphNode } from '../graph/graph';
+import { GraphEditor } from '../test-graph';
+import type { FakeCanvas } from '../test-canvas';
+import type { Graph, GraphNode } from '../graph/flow';
 import { OpenLinkContext } from '../open-link';
 import { fakeBackend } from '../../shared/engine/test-backend';
 import { fakeScreens, fakeTerminals, keyboardLayout, macKeyboard } from './test-screen';
-import { graphOf } from '../graph/graph';
+import { graphOf } from '../test-graph-data';
 import { DEFAULT_AGENT } from '../graph/agents';
 
 // jsdom cannot draw xterm.js: a fake terminal stands in (test-screen.ts).
@@ -58,13 +58,8 @@ async function open({
   /** What main reads of what its CLI's agents can be set to, or why it could not. */
   options?: SettingsOptions | Error;
 } = {}) {
-  /** Where the canvas is saved, as a .corral file's text. */
-  const save = vi.fn<CanvasFiles['save']>().mockResolvedValue('team.corral');
-  const files: CanvasFiles = {
-    open: () => Promise.resolve(null),
-    save,
-    forget: () => Promise.resolve(newCanvasId()),
-  };
+  /** The fake core the editor runs on: what it saved, as each .corral file's text. */
+  let core: FakeCanvas | undefined;
   const sessions = fakeBackend();
   if (start) sessions.backend.start.mockImplementation(start);
   if (options instanceof Error) sessions.backend.options.mockRejectedValue(options);
@@ -75,11 +70,14 @@ async function open({
     edges: [],
   };
   const openLink = vi.fn<(url: string) => void>();
-  const { container } = render(
+  const { container } = await renderReady(
     <OpenLinkContext.Provider value={openLink}>
       <GraphEditor
         initialGraph={graph}
-        files={files}
+        files
+        onCanvas={(made) => {
+          core = made;
+        }}
         sessionBackend={sessions.backend}
         terminalBackend={terminals.backend}
       />
@@ -90,13 +88,13 @@ async function open({
     if (!element) throw new Error('no agent');
     return element;
   };
-  fireEvent.doubleClick(card());
+  await events.doubleClick(card());
   await settle();
   const view = within(screen.getByRole('dialog', { name: 'a' }));
   return {
     sessions,
     terminals,
-    save,
+    saved: () => core?.files.saved ?? [],
     openLink,
     card,
     view,
@@ -219,7 +217,7 @@ describe('a Terminal agent', () => {
       },
       { type: 'status', status: 'waiting' },
     );
-    fireEvent.click(view.getByRole('button', { name: 'Back to the canvas' }));
+    await events.click(view.getByRole('button', { name: 'Back to the canvas' }));
     await settle();
     const sidebar = within(screen.getByRole('complementary', { name: 'Needs you' }));
     expect(sidebar.getByRole('heading', { level: 2 }).textContent).toBe('Needs you 4');
@@ -237,7 +235,7 @@ describe('a Terminal agent', () => {
     );
 
     // Open terminal: the agent's view, where the user answers it.
-    fireEvent.click(
+    await events.click(
       within(cards[0] ?? document.body).getByRole('button', { name: 'Open terminal' }),
     );
     await settle();
@@ -260,14 +258,14 @@ describe('a Terminal agent', () => {
     expect(status()?.textContent).toBe('Trust this folder in the terminal');
     expect(status()?.getAttribute('data-status')).toBe('waiting');
     expect(card().classList.contains('asking')).toBe(true);
-    fireEvent.click(view.getByRole('button', { name: 'Back to the canvas' }));
+    await events.click(view.getByRole('button', { name: 'Back to the canvas' }));
     await settle();
     const sidebar = within(screen.getByRole('complementary', { name: 'Needs you' }));
     const asked = sidebar.getByRole('group', { name: 'a asks, in its terminal' });
     expect(asked.textContent).toBe(
       'aClaude Code asks whether you trust this folder before it works in it.Trust this folder in the terminal.Open terminal',
     );
-    fireEvent.click(within(asked).getByRole('button', { name: 'Open terminal' }));
+    await events.click(within(asked).getByRole('button', { name: 'Open terminal' }));
     await settle();
     // Trusted there: it no longer needs the user.
     session({ type: 'asking', asks: [] });
@@ -309,7 +307,7 @@ describe('a Terminal agent', () => {
       },
       { type: 'status', status: 'waiting' },
     );
-    fireEvent.click(view.getByRole('button', { name: 'Back to the canvas' }));
+    await events.click(view.getByRole('button', { name: 'Back to the canvas' }));
     await settle();
     const sidebar = within(screen.getByRole('complementary', { name: 'Needs you' }));
     const cards = sidebar.getAllByRole('group', { name: 'a asks, in its terminal' });
@@ -378,7 +376,7 @@ describe('a Terminal agent', () => {
     expect(view.getByText('Claude Code isn’t running.')).toBeTruthy();
     expect(view.getByText('Choose a project folder for this canvas first.')).toBeTruthy();
     fail = false;
-    fireEvent.click(view.getByRole('button', { name: 'Try again' }));
+    await events.click(view.getByRole('button', { name: 'Try again' }));
     await settle();
     expect(sessions.backend.start).toHaveBeenCalledTimes(2);
   });
@@ -392,7 +390,7 @@ describe('a Terminal agent', () => {
     show({ type: 'exit', code: 0 });
     session({ type: 'closed' });
     expect(view.getByText('Claude Code exited.')).toBeTruthy();
-    fireEvent.click(view.getByRole('button', { name: 'Start it again' }));
+    await events.click(view.getByRole('button', { name: 'Start it again' }));
     await settle();
     expect(sessions.backend.start).toHaveBeenCalledTimes(2);
     // Its new run's screen replaces the last.
@@ -411,16 +409,16 @@ describe('a Terminal agent', () => {
     const shot = new File(['png'], 'Screen Shot.png', { type: 'image/png' });
     const dragged = { dataTransfer: { types: ['Files'], files: [shot], dropEffect: 'none' } };
     // Not before Claude Code runs in it.
-    fireEvent.drop(terminal, dragged);
+    await events.drop(terminal, dragged);
     expect(terminals.backend.drop).not.toHaveBeenCalled();
 
     show(SCREEN);
     act(() => {
       fakeScreens.latest().finish();
     });
-    fireEvent.dragOver(terminal, dragged);
+    await events.dragOver(terminal, dragged);
     expect(terminal.hasAttribute('data-dragging')).toBe(true);
-    fireEvent.drop(terminal, dragged);
+    await events.drop(terminal, dragged);
     expect(terminal.hasAttribute('data-dragging')).toBe(false);
     expect(terminals.backend.drop).toHaveBeenCalledWith('a', [shot]);
   });
@@ -437,7 +435,7 @@ describe('a Terminal agent', () => {
     expect(terminal.redraws).toBe(1);
     show({ type: 'exit', code: 0 });
     session({ type: 'closed' });
-    fireEvent.click(view.getByRole('button', { name: 'Start it again' }));
+    await events.click(view.getByRole('button', { name: 'Start it again' }));
     await settle();
     terminals.backend.resize.mockClear();
     // The new CLI's screen comes at main's size: the view takes it, then its own again.
@@ -461,10 +459,10 @@ describe('a Terminal agent', () => {
       { type: 'status', status: 'working' },
       { type: 'user', id: 'typed', text: 'Fix the tests' },
     );
-    fireEvent.click(view.getByRole('button', { name: 'All queues' }));
+    await events.click(view.getByRole('button', { name: 'All queues' }));
     const queues = within(screen.getByRole('dialog', { name: 'All queues' }));
-    fireEvent.click(queues.getByRole('button', { name: 'Run' }));
-    fireEvent.click(queues.getByRole('button', { name: 'Open a' }));
+    await events.click(queues.getByRole('button', { name: 'Run' }));
+    await events.click(queues.getByRole('button', { name: 'Open a' }));
     await settle();
     const queued = within(view.getByRole('list', { name: 'Queued messages' }));
     expect(queued.getByText('Write the docs')).toBeTruthy();
@@ -497,10 +495,10 @@ describe('a Terminal agent', () => {
         { id: 'flaky', if: { kind: 'freeText', text: 'a test is flaky' }, then: [] },
       ],
     });
-    fireEvent.click(view.getByRole('button', { name: 'All queues' }));
+    await events.click(view.getByRole('button', { name: 'All queues' }));
     const queues = within(screen.getByRole('dialog', { name: 'All queues' }));
-    fireEvent.click(queues.getByRole('button', { name: 'Run' }));
-    fireEvent.click(queues.getByRole('button', { name: 'Open a' }));
+    await events.click(queues.getByRole('button', { name: 'Run' }));
+    await events.click(queues.getByRole('button', { name: 'Open a' }));
     await settle();
     /** Main types the last message in, and Claude Code answers it (its Stop hook's last reply). */
     const answer = async (text: string, reply: string) => {
@@ -532,7 +530,7 @@ describe('a Terminal agent', () => {
     const needs = within(terminalSession.getByRole('group', { name: 'Needs you' }));
     expect(needs.getByText(/The answer did not clearly say yes or no/)).toBeTruthy();
     expect(sessions.backend.send).toHaveBeenCalledTimes(3);
-    fireEvent.click(needs.getByRole('button', { name: 'Condition does not hold' }));
+    await events.click(needs.getByRole('button', { name: 'Condition does not hold' }));
     expect(terminalSession.queryByRole('group', { name: 'Needs you' })).toBeNull();
     expect(sessions.backend.send).toHaveBeenCalledTimes(3);
   });
@@ -558,10 +556,10 @@ describe('a Terminal agent', () => {
     const terminalSession = within(view.getByRole('region', { name: 'Session' }));
     expect(terminalSession.getByRole('note').textContent).toBe(unheard);
 
-    fireEvent.click(view.getByRole('button', { name: 'All queues' }));
+    await events.click(view.getByRole('button', { name: 'All queues' }));
     const queues = within(screen.getByRole('dialog', { name: 'All queues' }));
-    fireEvent.click(queues.getByRole('button', { name: 'Run' }));
-    fireEvent.click(queues.getByRole('button', { name: 'Open a' }));
+    await events.click(queues.getByRole('button', { name: 'Run' }));
+    await events.click(queues.getByRole('button', { name: 'Open a' }));
     await settle();
     // Its turn ends (Claude Code's screen says so), with no reply heard.
     const sent = sessions.sent();
@@ -589,10 +587,10 @@ describe('a Terminal agent', () => {
         { id: 'next', action: 'Read' },
       ],
     });
-    fireEvent.click(view.getByRole('button', { name: 'All queues' }));
+    await events.click(view.getByRole('button', { name: 'All queues' }));
     const queues = within(screen.getByRole('dialog', { name: 'All queues' }));
-    fireEvent.click(queues.getByRole('button', { name: 'Run' }));
-    fireEvent.click(queues.getByRole('button', { name: 'Open a' }));
+    await events.click(queues.getByRole('button', { name: 'Run' }));
+    await events.click(queues.getByRole('button', { name: 'Open a' }));
     await settle();
     const side = within(view.getByRole('complementary', { name: 'Questions and queue' }));
     const row = () =>
@@ -616,8 +614,8 @@ describe('a Terminal agent', () => {
     expect(ask.disabled).toBe(true);
 
     // The changes go to Claude Code as a message: main types them into the terminal.
-    fireEvent.change(changes, { target: { value: 'Cover the empty state too' } });
-    fireEvent.click(ask);
+    await events.change(changes, { target: { value: 'Cover the empty state too' } });
+    await events.click(ask);
     await settle();
     expect(sessions.backend.send).toHaveBeenCalledWith('a', {
       id: expect.any(String) as unknown,
@@ -639,7 +637,7 @@ describe('a Terminal agent', () => {
       },
     );
     expect(row()?.dataset.run).toBe('asking');
-    fireEvent.click(asks().getByRole('button', { name: 'Approve' }));
+    await events.click(asks().getByRole('button', { name: 'Approve' }));
     expect(row()?.dataset.run).toBe('succeeded');
     expect(bar()).toBeNull();
   });
@@ -657,10 +655,10 @@ describe('a Terminal agent', () => {
         },
       ],
     });
-    fireEvent.click(view.getByRole('button', { name: 'All queues' }));
+    await events.click(view.getByRole('button', { name: 'All queues' }));
     const queues = within(screen.getByRole('dialog', { name: 'All queues' }));
-    fireEvent.click(queues.getByRole('button', { name: 'Run' }));
-    fireEvent.click(queues.getByRole('button', { name: 'Open a' }));
+    await events.click(queues.getByRole('button', { name: 'Run' }));
+    await events.click(queues.getByRole('button', { name: 'Open a' }));
     await settle();
     const asks = within(view.getByRole('group', { name: 'Needs you' }));
     expect(asks.getByText('1 round done, and still not: its last step succeeds.')).toBeTruthy();
@@ -670,8 +668,8 @@ describe('a Terminal agent', () => {
       'Try this',
     ]);
     const next = asks.getByRole('textbox', { name: 'What should it try next?' });
-    fireEvent.change(next, { target: { value: 'Try a smaller fix' } });
-    fireEvent.keyDown(next, { key: 'Enter' });
+    await events.change(next, { target: { value: 'Try a smaller fix' } });
+    await events.keyDown(next, { key: 'Enter' });
     await settle();
     expect(sessions.backend.send).toHaveBeenCalledWith('a', {
       id: expect.any(String) as unknown,
@@ -682,11 +680,11 @@ describe('a Terminal agent', () => {
   it('lets its terminal go when the view closes, and shows it again when it opens', async () => {
     const { terminals, view, card } = await open();
     const first = fakeScreens.latest();
-    fireEvent.click(view.getByRole('button', { name: 'Back to the canvas' }));
+    await events.click(view.getByRole('button', { name: 'Back to the canvas' }));
     await settle();
     expect(terminals.backend.detach).toHaveBeenCalledWith('a');
     expect(first.disposed).toBe(true);
-    fireEvent.doubleClick(card());
+    await events.doubleClick(card());
     await settle();
     expect(terminals.backend.attach).toHaveBeenCalledTimes(2);
     expect(fakeScreens.latest()).not.toBe(first);
@@ -708,13 +706,13 @@ describe('the Option key in a Terminal agent’s terminal', () => {
     expect(option.getAttribute('aria-pressed')).toBe('false');
     expect(fakeScreens.latest().optionIsMeta).toBe(false);
 
-    fireEvent.click(option);
+    await events.click(option);
     expect(option.getAttribute('aria-pressed')).toBe('true');
     expect(fakeScreens.latest().optionIsMeta).toBe(true);
     // Kept for the user: the next terminal shown starts with it.
-    fireEvent.click(view.getByRole('button', { name: 'Back to the canvas' }));
+    await events.click(view.getByRole('button', { name: 'Back to the canvas' }));
     await settle();
-    fireEvent.doubleClick(card());
+    await events.doubleClick(card());
     await settle();
     expect(fakeScreens.made).toHaveLength(2);
     expect(fakeScreens.latest().optionIsMeta).toBe(true);
@@ -756,7 +754,7 @@ describe('a Terminal agent’s settings', () => {
       .map((item) => item.firstChild?.textContent);
 
   it('starts Claude Code with what it is set to, chosen beside its chip, the user’s own shown', async () => {
-    const { sessions, save, view } = await open({
+    const { sessions, saved, view } = await open({
       data: { connection: 'claude-code.terminal', settings: { 'claude-code': { model: 'haiku' } } },
       options: CLAUDE,
     });
@@ -769,25 +767,25 @@ describe('a Terminal agent’s settings', () => {
     // What it starts with, the user's own where nothing is chosen.
     const button = () => view.getByRole('button', { name: 'Agent settings: a' });
     expect(button().textContent).toContain('Claude · Terminal · Haiku · Auto');
-    fireEvent.click(button());
+    await events.click(button());
     await settle();
     const panel = within(screen.getByRole('dialog', { name: 'Agent settings: a' }));
     expect(panel.getByRole('button', { name: 'Model: Haiku' })).toBeTruthy();
     expect(panel.getByRole('button', { name: 'Mode: Default (Auto)' })).toBeTruthy();
 
-    fireEvent.click(panel.getByRole('button', { name: 'Model: Haiku' }));
+    await events.click(panel.getByRole('button', { name: 'Model: Haiku' }));
     expect(items(panel.getByRole('menu', { name: 'Model' }))).toEqual([
       'Default (Opus)',
       'Opus',
       'Haiku',
     ]);
-    fireEvent.click(panel.getByRole('menuitemradio', { name: /^Default \(Opus\)/ }));
+    await events.click(panel.getByRole('menuitemradio', { name: /^Default \(Opus\)/ }));
     // Back to the user's own: their effort shows too, as Opus has it.
     expect(button().textContent).toContain('Opus · Extra high · Auto');
-    fireEvent.click(panel.getByRole('button', { name: 'Effort: Default (Extra high)' }));
-    fireEvent.click(panel.getByRole('menuitemradio', { name: /^Low/ }));
+    await events.click(panel.getByRole('button', { name: 'Effort: Default (Extra high)' }));
+    await events.click(panel.getByRole('menuitemradio', { name: /^Low/ }));
     // Never a mode that never asks: that is chosen in its terminal, each time.
-    fireEvent.click(panel.getByRole('button', { name: 'Mode: Default (Auto)' }));
+    await events.click(panel.getByRole('button', { name: 'Mode: Default (Auto)' }));
     expect(items(panel.getByRole('menu', { name: 'Mode' }))).toEqual([
       'Default (Auto)',
       'Manual',
@@ -795,20 +793,22 @@ describe('a Terminal agent’s settings', () => {
       'Plan',
       'Auto',
     ]);
-    fireEvent.click(panel.getByRole('menuitemradio', { name: /^Plan/ }));
+    await events.click(panel.getByRole('menuitemradio', { name: /^Plan/ }));
     expect(button().textContent).toContain('Opus · Low · Plan');
     // Saved with the agent, in the canvas's file.
-    fireEvent.keyDown(document.body, { key: 's', ctrlKey: true });
-    const [text] = save.mock.calls.at(-1) ?? [];
-    expect(graphOf(fromFile(text ?? '', catalog(), DEFAULT_AGENT)).nodes[0]?.data.settings).toEqual(
-      {
-        'claude-code': { effort: 'low', mode: 'plan' },
-      },
-    );
+    await events.keyDown(document.body, { key: 's', ctrlKey: true });
+    await waitFor(() => {
+      expect(saved()).toHaveLength(1);
+    });
+    expect(
+      graphOf(fromFile(saved().at(-1) ?? '', catalog(), DEFAULT_AGENT)).nodes[0]?.data.settings,
+    ).toEqual({
+      'claude-code': { effort: 'low', mode: 'plan' },
+    });
 
     // Its session runs as it started: restarted, it starts with these, resuming its conversation.
     expect(sessions.backend.start).toHaveBeenCalledOnce();
-    fireEvent.click(panel.getByRole('button', { name: 'Restart with these' }));
+    await events.click(panel.getByRole('button', { name: 'Restart with these' }));
     await settle();
     expect(sessions.backend.close).toHaveBeenCalledWith('a');
     expect(sessions.backend.start).toHaveBeenLastCalledWith('a', {
@@ -828,11 +828,11 @@ describe('a Terminal agent’s settings', () => {
       },
       options: CLAUDE,
     });
-    fireEvent.click(view.getByRole('button', { name: 'Agent settings: a' }));
+    await events.click(view.getByRole('button', { name: 'Agent settings: a' }));
     await settle();
     const panel = within(screen.getByRole('dialog', { name: 'Agent settings: a' }));
-    fireEvent.click(panel.getByRole('button', { name: 'Model: Default (Opus)' }));
-    fireEvent.click(panel.getByRole('menuitemradio', { name: /^Haiku/ }));
+    await events.click(panel.getByRole('button', { name: 'Model: Default (Opus)' }));
+    await events.click(panel.getByRole('menuitemradio', { name: /^Haiku/ }));
     expect(panel.getByRole('button', { name: 'Effort: Default' })).toBeTruthy();
     session({ type: 'user', id: 'typed', text: 'Fix it' }, { type: 'status', status: 'working' });
     expect(
@@ -859,10 +859,10 @@ describe('a Terminal agent’s settings', () => {
     const button = view.getByRole('button', { name: 'Agent settings: a' });
     // Codex's Default needs no more saying; the model's own effort, its config setting none.
     expect(button.textContent).toContain('Codex · Terminal · GPT-6.1-Sol · Low · Default');
-    fireEvent.click(button);
+    await events.click(button);
     await settle();
     const panel = within(screen.getByRole('dialog', { name: 'Agent settings: a' }));
-    fireEvent.click(panel.getByRole('button', { name: 'Mode: Default' }));
+    await events.click(panel.getByRole('button', { name: 'Mode: Default' }));
     // Its Default is the user's own config: no more to choose than Read only.
     expect(items(panel.getByRole('menu', { name: 'Mode' }))).toEqual(['Default', 'Read only']);
   });
@@ -884,7 +884,7 @@ describe('a Terminal agent’s settings', () => {
     });
     const button = view.getByRole('button', { name: 'Agent settings: a' });
     expect(button.textContent).toContain('Claude · Terminal · haiku · Plan');
-    fireEvent.click(button);
+    await events.click(button);
     await settle();
     expect(
       within(screen.getByRole('dialog', { name: 'Agent settings: a' })).getByRole('alert')

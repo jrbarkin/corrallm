@@ -5,7 +5,7 @@ import { NEED_KINDS } from '../../model/needs';
 import { TURN_REASONS } from '../../session';
 import { define } from '../define';
 import type { OpDef } from '../define';
-import { AgentId, MessageId, OpCanvas } from '../ids';
+import { AgentId, MessageId, NeedId, OpCanvas } from '../ids';
 import { MAX_MESSAGE_BYTES, MAX_PAGE, MAX_WAIT_SECONDS } from '../limits';
 import type { OpName } from '../surface';
 
@@ -180,6 +180,32 @@ export const conversationOps = {
       timeoutSeconds: z.int().min(0).max(MAX_WAIT_SECONDS),
     }),
     output: z.strictObject({ messages: z.array(Message), next: Cursor }),
+  }),
+  reply: define('reply', {
+    summary:
+      'Answers something waiting for an answer (an item `needs` lists, by its id) with one of ' +
+      'its choices. So far that is a proposal (a token’s delete, waiting for the user) or the ' +
+      'review of a canvas file changed on disk, which only the user answers. A proposal: Allow ' +
+      'applies it as the user, unless what it touched changed since (then it is settled stale and ' +
+      'nothing changes), and Refuse changes nothing; its proposer gets a record either way, whose ' +
+      'id this returns. A review: Apply makes the file’s canvas the user’s change, unless the ' +
+      'file changed again since (then it is superseded by a review of what is there now, which ' +
+      'this names as `raised`), and Keep keeps the canvas as corrallm has it, for its next save ' +
+      'to write over the file. Returns how it was settled.',
+    input: z.strictObject({
+      canvas,
+      to: NeedId,
+      answer: z.strictObject({ choice: z.string().min(1).max(64) }),
+    }),
+    output: z.strictObject({
+      id: z.uuid().optional(),
+      canvas: z
+        .uuid()
+        .optional()
+        .meta({ description: 'The calling window’s replacement canvas, when Allow moved it.' }),
+      outcome: z.enum(['allowed', 'refused', 'stale', 'applied', 'kept', 'superseded']).optional(),
+      raised: NeedId.optional(),
+    }),
   }),
   withdraw: define('withdraw', {
     summary:

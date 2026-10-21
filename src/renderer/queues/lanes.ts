@@ -1,4 +1,4 @@
-import type { GraphNode } from '../graph/graph';
+import type { AgentNode, CanvasNode } from '../../shared/model/canvas';
 import {
   isApproval,
   isDelay,
@@ -23,7 +23,7 @@ export interface Cell {
 
 /** An agent's queue, as a lane: its items in their rows, and the row its end marker is in. */
 export interface Lane {
-  agent: GraphNode;
+  agent: AgentNode;
   cells: Cell[];
   end: number;
 }
@@ -83,7 +83,7 @@ interface Dependency {
  * a loop of waits are laid out as if they did not wait; the loop is stuck unless a time limit
  * breaks it.
  */
-export function lanesOf(nodes: readonly GraphNode[]): Lanes {
+export function lanesOf(nodes: readonly CanvasNode[]): Lanes {
   const agents = nodes.filter((n) => n.type === 'agent');
   const byId = new Map(agents.map((a) => [a.id, a]));
   const key = (agent: string, item: string | null) => JSON.stringify([agent, item]);

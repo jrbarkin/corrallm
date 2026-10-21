@@ -70,6 +70,7 @@ const { request, createWindow, makeHost, forkCore, cores, reconnect } = vi.hoist
         exited: exited.promise,
         connect: vi.fn(),
         windowGone: vi.fn(),
+        windowFocused: vi.fn(),
         kill: vi.fn(),
       };
     }),
@@ -151,6 +152,23 @@ describe('starting the app’s core', () => {
       });
     },
   );
+});
+
+it('tells the core when a window gains focus, so the canvas it shows has its file checked', async () => {
+  app.whenReady.mockResolvedValueOnce();
+  await import('./index');
+  await vi.waitFor(() => {
+    expect(createWindow).toHaveBeenCalledOnce();
+  });
+  const focus = app.on.mock.calls.find(([name]) => name === 'browser-window-focus')?.[1] as (
+    event: unknown,
+    window: unknown,
+  ) => void;
+  focus({}, { webContents: { id: 7 } });
+  const core = forkCore.mock.results[0]?.value as { windowFocused: (window: number) => void };
+  await vi.waitFor(() => {
+    expect(core.windowFocused).toHaveBeenCalledExactlyOnceWith(7);
+  });
 });
 
 describe('a hidden app that cannot save before closing', () => {

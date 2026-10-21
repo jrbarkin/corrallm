@@ -20,7 +20,7 @@ import type { Implementations, OpServices } from '.';
 export function conversationOps(
   services: OpServices,
 ): Pick<Implementations, 'agents' | 'status' | 'needs' | 'messages' | 'message' | 'withdraw'> {
-  const { engines, isLead, locale } = services;
+  const { engines, states, isLead, locale, proposals, reviews } = services;
   const lead = (canvas: CanvasId, { caller }: OpContext) =>
     caller.kind === 'agent' && isLead(canvas, caller.agent);
 
@@ -29,11 +29,18 @@ export function conversationOps(
     agentsReached(open.document, ctx.caller, reachFor(op, ctx), lead(open.document.id, ctx));
 
   /**
-   * What waits on an open canvas for the caller: yours, with their choices, for you; for anyone
-   * else, yours on the agents it reaches without them, and an agent's team's prompts too.
+   * What waits on an open canvas for the caller: yours (the run's holds, the sessions' prompts,
+   * the proposals and the review of its file changed on disk waiting for you), with their choices,
+   * for you; for anyone else, yours on the agents it reaches without them (never a review, which
+   * is on no agent), and an agent's team's prompts too.
    */
   const waiting = (open: OpenCanvas, ctx: OpContext, reach: readonly string[]): NeedsItem[] => {
-    const items = needs(needsInput(open, locale));
+    const id = open.document.id;
+    const items = [
+      ...needs(needsInput(open, locale)),
+      ...proposals.items(id),
+      ...reviews.items(id),
+    ];
     if (ctx.caller.kind === 'human') return items;
     const { caller } = ctx;
     const team = caller.kind === 'agent' ? teamOf(open.document.nodes, caller.agent) : [];
@@ -97,6 +104,15 @@ export function conversationOps(
       };
     },
     needs: ({ canvas }, ctx) => {
+      // A canvas the core keeps but doesn't run (the app's, until B11): what waits on it in the
+      // core, the proposals and the review of its file waiting for you (B9 Design §7), which only
+      // you see there.
+      const id = canvas as string | undefined as CanvasId | undefined;
+      if (id !== undefined && !engines.canvas(id) && states.keeps(id)) {
+        return {
+          items: ctx.caller.kind === 'human' ? [...proposals.items(id), ...reviews.items(id)] : [],
+        };
+      }
       const open = openCanvas(engines, canvas);
       return { items: waiting(open, ctx, reached(open, 'needs', ctx)) };
     },

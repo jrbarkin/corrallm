@@ -1,16 +1,23 @@
-import type { RunCheckpoint, RunContext } from '../../shared/run';
+import type { CanvasId } from '../../shared/canvas';
+import type { RunCheckpoint, RunRestore } from '../../shared/run';
 
-/** Main owns storage and native conversation identity; the renderer supplies queue metadata. */
+/**
+ * The core owns storage, the canvas's document and native conversation identity; the renderer
+ * supplies run metadata only. Document gestures use operations.
+ */
 export interface RunSource {
-  get: () => Promise<RunContext>;
-  save: (token: string, checkpoint: RunCheckpoint | null) => Promise<null>;
+  get: () => Promise<RunRestore>;
+  save: (token: string, checkpoint: RunCheckpoint | null) => Promise<unknown>;
   ready: (request: string, error: string | null) => Promise<null>;
   onStopping: (listener: (request: string) => void) => () => void;
 }
 
 interface Owner {
   capture: () => RunCheckpoint;
-  restore: (context: RunContext) => void;
+  /** Resolves once the mirror holds the shown canvas: its run is read only after (B9 Design §9). */
+  ready: () => Promise<void>;
+  beforeSave?: () => Promise<void>;
+  restore: (context: RunRestore) => void | Promise<void>;
   freeze: () => void | Promise<void>;
   error: (error: unknown) => void;
 }
@@ -18,8 +25,8 @@ interface Owner {
 /** Serial checkpoint writes and an acknowledged freeze before main closes native sessions. */
 export class RunPersistence {
   #token: string | undefined;
-  #context: Promise<RunContext> | undefined;
-  #loading: Promise<RunContext> | undefined;
+  #context: Promise<RunRestore> | undefined;
+  #loading: Promise<RunRestore> | undefined;
   #writes: Promise<unknown> = Promise.resolve();
   #disposed = false;
   #last = '';
@@ -36,13 +43,13 @@ export class RunPersistence {
   }
 
   /** Starts hearing main again after cleanup, without restoring over current work. */
-  initialize(): Promise<RunContext> {
+  initialize(): Promise<RunRestore> {
     this.#disposed = false;
     const source = this.#source;
     const owner = this.#owner;
     this.#unsubscribe ??= source.onStopping((request) => {
       if (this.#failedInitialization) {
-        const unchanged = this.#failedBaseline === contentsKey(owner.capture());
+        const unchanged = this.#failedBaseline === contentsKey(owner);
         const error = unchanged
           ? null
           : 'Run progress could not be loaded. Use New or Open before closing changed work.';
@@ -50,10 +57,9 @@ export class RunPersistence {
         void source.ready(request, error).catch(owner.error);
         return;
       }
-      void (async () => {
-        await owner.freeze();
-        await this.flush();
-      })()
+      void Promise.resolve()
+        .then(() => owner.freeze())
+        .then(() => this.flush())
         .then(
           () => source.ready(request, null),
           (error: unknown) => {
@@ -66,14 +72,14 @@ export class RunPersistence {
     return this.#load();
   }
 
-  #load(): Promise<RunContext> {
-    this.#loading ??= (this.#context ??= this.#source.get())
-      .then((context) => {
+  #load(): Promise<RunRestore> {
+    this.#loading ??= (this.#context ??= this.#owner.ready().then(() => this.#source.get()))
+      .then(async (context) => {
         if (this.#disposed) {
           this.#loading = undefined;
           return context;
         }
-        this.#owner.restore(context);
+        await this.#owner.restore(context);
         this.#token = context.token;
         this.#last = '';
         return context;
@@ -81,54 +87,15 @@ export class RunPersistence {
       .catch((error: unknown) => {
         if (!this.#failedInitialization) {
           this.#failedInitialization = true;
-          this.#failedBaseline = contentsKey(this.#owner.capture());
+          this.#failedBaseline = contentsKey(this.#owner);
         }
         throw error;
       });
     return this.#loading;
   }
 
-  /** A rejected restore stays untouched until the user explicitly chooses another canvas. */
-  async prepareForReplacement(): Promise<void> {
-    try {
-      await this.flush();
-    } catch (error) {
-      if (!this.#failedInitialization) throw error;
-    }
-  }
-
   failedInitialization(): boolean {
     return this.#failedInitialization;
-  }
-
-  /**
-   * Call after main opens/saves/forgets a canvas: it rotates the storage generation. A flush asked
-   * for meanwhile (as main quits) waits for it, then saves under the new token.
-   */
-  async rebind(restore: boolean): Promise<RunContext> {
-    let release: (() => void) | undefined;
-    const before = this.#changing;
-    const changing = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    this.#changing = changing;
-    try {
-      await before;
-      await this.#writes.catch(() => undefined);
-      this.#token = undefined;
-      const context = await this.#source.get();
-      if (this.#disposed) return context;
-      if (restore) this.#owner.restore(context);
-      this.#token = context.token;
-      this.#last = '';
-      this.#context = this.#loading = Promise.resolve(context);
-      this.#failedInitialization = false;
-      this.#failedBaseline = undefined;
-      return context;
-    } finally {
-      if (this.#changing === changing) this.#changing = undefined;
-      release?.();
-    }
   }
 
   changed(): void {
@@ -136,13 +103,20 @@ export class RunPersistence {
     void this.flush().catch(this.#owner.error);
   }
 
+  /** The switch under way, if any: a flush saves under the token it installs. */
+  #switching(): Promise<void> | undefined {
+    return this.#changing;
+  }
+
   async flush(): Promise<void> {
+    for (let changing = this.#switching(); changing; changing = this.#switching()) await changing;
     await this.#load();
-    while (this.#changing) await this.#changing;
+    if (this.#owner.beforeSave) await this.#owner.beforeSave();
+    for (let changing = this.#switching(); changing; changing = this.#switching()) await changing;
     if (this.#disposed || !this.#token) throw new Error('The run storage is not available.');
     const token = this.#token;
     const checkpoint = this.#owner.capture();
-    const key = JSON.stringify([token, checkpoint.workflow, checkpoint.state, checkpoint.messages]);
+    const key = JSON.stringify([token, checkpoint.state, checkpoint.messages]);
     if (key === this.#last) {
       await this.#writes;
       return;
@@ -150,9 +124,7 @@ export class RunPersistence {
     this.#last = key;
     const write = this.#writes
       .catch(() => undefined)
-      .then(async () => {
-        await this.#source.save(token, checkpoint);
-      })
+      .then(() => this.#source.save(token, checkpoint))
       .catch((error: unknown) => {
         if (this.#last === key) this.#last = '';
         throw error;
@@ -161,51 +133,61 @@ export class RunPersistence {
     await write;
   }
 
-  /** Hold writes/sends across main's canvas-token change, without interrupting native work. */
-  async transition<T>(
-    action: () => Promise<T>,
-    restore: boolean | ((value: T) => boolean),
-    rejectedRestore?: () => Promise<unknown>,
-  ): Promise<T> {
-    let release: (() => void) | undefined;
+  /**
+   * A switch (B9 Design §9): drafts flushed and the old run saved, then `action`, the one op that
+   * switches (null: cancelled, keeping the canvas and its token), then `open` (the stores reset and
+   * the new canvas's mirror awaited), then its run read and restored under its new token. A flush
+   * asked for meanwhile waits for it.
+   */
+  async switch(
+    action: () => Promise<CanvasId | null>,
+    open: (canvas: CanvasId) => Promise<void>,
+  ): Promise<void> {
     const before = this.#changing;
-    const changing = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    this.#changing = changing;
+    const done = Promise.withResolvers<undefined>();
+    this.#changing = done.promise;
     try {
       await before;
-      await this.#writes;
-      const result = await action();
-      const shouldRestore = typeof restore === 'function' ? restore(result) : restore;
-      let context: RunContext;
       try {
-        context = await this.#source.get();
-        if (shouldRestore) this.#owner.restore(context);
-      } catch (error) {
-        // The selected file is already main's canvas. Detach it before the retained
-        // renderer state can save, then bind that state to the recovered draft.
-        if (shouldRestore && rejectedRestore) {
-          this.#token = undefined;
-          await rejectedRestore();
-          const recovered = await this.#source.get();
-          this.#token = recovered.token;
-          this.#last = '';
-          this.#context = this.#loading = Promise.resolve(recovered);
-          this.#failedInitialization = false;
-          this.#failedBaseline = undefined;
+        await this.#load();
+        await this.#owner.beforeSave?.();
+        // This switch owns the barrier; a public flush waits until the new token is installed.
+        if (this.#token && !this.#disposed) {
+          const token = this.#token,
+            checkpoint = this.#owner.capture();
+          this.#writes = this.#writes
+            .catch(() => undefined)
+            .then(() => this.#source.save(token, checkpoint));
+          await this.#writes;
         }
+      } catch (error) {
+        if (!this.#failedInitialization) throw error;
+      }
+      const canvas = await action();
+      if (canvas === null) return;
+      this.#token = undefined;
+      try {
+        await open(canvas);
+        const context = await this.#source.get();
+        if (this.#disposed) return;
+        await this.#owner.restore(context);
+        this.#token = context.token;
+        this.#last = '';
+        this.#context = this.#loading = Promise.resolve(context);
+        this.#failedInitialization = false;
+        this.#failedBaseline = undefined;
+      } catch (error) {
+        this.#failedInitialization = true;
+        this.#failedBaseline = contentsKey(this.#owner);
+        this.#context = this.#loading = Promise.reject(
+          error instanceof Error ? error : new Error(String(error)),
+        );
+        void this.#loading.catch(() => undefined);
         throw error;
       }
-      this.#token = context.token;
-      this.#last = '';
-      this.#context = this.#loading = Promise.resolve(context);
-      this.#failedInitialization = false;
-      this.#failedBaseline = undefined;
-      return result;
     } finally {
-      if (this.#changing === changing) this.#changing = undefined;
-      release?.();
+      if (this.#changing === done.promise) this.#changing = undefined;
+      done.resolve(undefined);
     }
   }
 
@@ -216,6 +198,7 @@ export class RunPersistence {
   }
 }
 
-function contentsKey(checkpoint: RunCheckpoint): string {
-  return JSON.stringify([checkpoint.workflow, checkpoint.state, checkpoint.messages]);
+function contentsKey(owner: Owner): string {
+  const { state, messages } = owner.capture();
+  return JSON.stringify([state, messages]);
 }

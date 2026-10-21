@@ -2,6 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 import type { ChangeEvent, KeyboardEvent } from 'react';
 import { flushSync } from 'react-dom';
 
+import { MAX_LABEL } from '../shared/api/limits';
 import { ipcErrorMessage } from './ipc-error';
 
 const IDLE_MS = 600;
@@ -60,14 +61,19 @@ export function useDraft(
   onCommit: (text: string) => unknown,
   {
     multiline = false,
+    normalize,
     validate,
-  }: { multiline?: boolean; validate?: (text: string) => unknown } = {},
+  }: {
+    multiline?: boolean;
+    normalize?: (text: string) => string;
+    validate?: (text: string) => unknown;
+  } = {},
 ) {
   const [text, setText] = useState(value);
   const [focused, setFocused] = useState(false);
   const [problem, setProblem] = useState<string>();
   const [savingDraft, setSavingDraft] = useState(false);
-  const latest = useRef({ value, onCommit, validate });
+  const latest = useRef({ value, onCommit, normalize, validate });
   const state = useRef({
     dirty: false,
     failed: false,
@@ -78,7 +84,7 @@ export function useDraft(
     timer: undefined as ReturnType<typeof setTimeout> | undefined,
   });
   useLayoutEffect(() => {
-    latest.current = { value, onCommit, validate };
+    latest.current = { value, onCommit, normalize, validate };
   });
   useLayoutEffect(() => {
     const draft = state.current;
@@ -93,8 +99,6 @@ export function useDraft(
     pending.delete(commit);
     if (!draft.dirty) return draft.inflight ?? !draft.failed;
     draft.dirty = false;
-    const changed = draft.text !== draft.original && draft.text !== latest.current.value;
-    if (!changed) return true;
     const { version } = draft;
     const finish = (error?: { reason: unknown }): boolean => {
       if (draft.version === version) {
@@ -111,7 +115,13 @@ export function useDraft(
     committing = calls;
     let failure: { reason: unknown } | undefined;
     try {
+      if (latest.current.normalize) {
+        draft.text = latest.current.normalize(draft.text);
+        setText(draft.text);
+      }
       latest.current.validate?.(draft.text);
+      const changed = draft.text !== draft.original && draft.text !== latest.current.value;
+      if (!changed) return finish();
       const result = latest.current.onCommit(draft.text);
       if (result instanceof Promise) calls.add(result);
     } catch (reason) {
@@ -140,6 +150,7 @@ export function useDraft(
     return () => {
       pending.delete(commit);
       clearTimeout(draft.timer);
+      draft.version++;
       if (--fields === 0) {
         for (const type of ['pointerdown', 'click', 'dragstart', 'drop', 'keydown'])
           document.removeEventListener(type, beforeGesture, true);
@@ -210,5 +221,18 @@ export function useDraft(
       }
       return undefined;
     },
+  };
+}
+
+/** Canvas labels obey the file’s bounds, with blank edits restoring the saved label. */
+export function useLabel(value: string, onCommit: (text: string) => unknown) {
+  return {
+    ...useDraft(value, onCommit, {
+      normalize: (text) => {
+        const bounded = text.slice(0, MAX_LABEL).replace(/[\uD800-\uDBFF]$/, '');
+        return bounded.trim() ? bounded : value;
+      },
+    }),
+    maxLength: MAX_LABEL,
   };
 }

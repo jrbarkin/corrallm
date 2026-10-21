@@ -8,12 +8,43 @@
     "api.templates.list",
     "api.settings.get",
     "api.project.files",
+    "api.canvas.create",
+    "api.canvas.open",
+    "api.canvas.save",
+    "api.canvas.saveAs",
+    "api.canvas.close",
+    "api.project.choose",
+    "api.canvas.list",
+    "api.canvas.get",
+    "api.canvas.rename",
+    "api.canvas.insertTemplate",
+    "api.canvas.setArrange",
+    "api.canvas.addAgent",
+    "api.canvas.spawnAgent",
+    "api.canvas.delete",
+    "api.canvas.link",
+    "api.canvas.unlink",
+    "api.canvas.group",
+    "api.canvas.ungroup",
+    "api.canvas.addParent",
+    "api.canvas.move",
+    "api.canvas.batch",
+    "api.agent.setType",
+    "api.agent.setConnection",
+    "api.agent.setSettings",
+    "api.agent.setRole",
+    "api.queue.add",
+    "api.queue.remove",
+    "api.queue.move",
+    "api.queue.update",
+    "api.reply",
     "api.usage.get",
     "api.usage.setRule",
     "api.usage.simulate",
     "api.link.open",
     "api.link.reveal",
     "api.window.get",
+    "api.window.show",
     "api.terminal.attach",
     "api.terminal.detach",
     "api.terminal.input",
@@ -22,14 +53,35 @@
   ],
   "mcp": {
     "lead": [
+      "agent_setRole",
+      "agent_setSettings",
       "agents",
       "app_info",
+      "canvas_addAgent",
+      "canvas_addParent",
+      "canvas_batch",
+      "canvas_delete",
+      "canvas_get",
+      "canvas_group",
+      "canvas_insertTemplate",
+      "canvas_link",
+      "canvas_list",
+      "canvas_move",
+      "canvas_rename",
+      "canvas_spawnAgent",
+      "canvas_ungroup",
+      "canvas_unlink",
       "catalog_get",
       "catalog_installed",
       "message",
       "messages",
       "needs",
       "project_files",
+      "queue_add",
+      "queue_move",
+      "queue_remove",
+      "queue_update",
+      "reply",
       "run_kill",
       "run_pause",
       "run_unpause",
@@ -49,6 +101,7 @@
       "message",
       "messages",
       "needs",
+      "reply",
       "session_get",
       "session_transcript",
       "usage_get",
@@ -57,6 +110,8 @@
     "outside-read": [
       "agents",
       "app_info",
+      "canvas_get",
+      "canvas_list",
       "catalog_get",
       "catalog_installed",
       "messages",
@@ -71,14 +126,39 @@
       "wait"
     ],
     "outside-write": [
+      "agent_setRole",
+      "agent_setSettings",
       "agents",
       "app_info",
+      "canvas_addAgent",
+      "canvas_addParent",
+      "canvas_batch",
+      "canvas_close",
+      "canvas_create",
+      "canvas_delete",
+      "canvas_get",
+      "canvas_group",
+      "canvas_insertTemplate",
+      "canvas_link",
+      "canvas_list",
+      "canvas_move",
+      "canvas_rename",
+      "canvas_save",
+      "canvas_setArrange",
+      "canvas_spawnAgent",
+      "canvas_ungroup",
+      "canvas_unlink",
       "catalog_get",
       "catalog_installed",
       "message",
       "messages",
       "needs",
       "project_files",
+      "queue_add",
+      "queue_move",
+      "queue_remove",
+      "queue_update",
+      "reply",
       "run_kill",
       "run_pause",
       "run_unpause",
@@ -94,10 +174,10 @@
     ]
   },
   "counts": {
-    "lead": 19,
-    "worker": 10,
-    "outside-read": 14,
-    "outside-write": 20
+    "lead": 40,
+    "worker": 11,
+    "outside-read": 16,
+    "outside-write": 45
   },
   "unhosted": {
     "agents": "B11",
@@ -114,6 +194,11 @@
     "run.unpause": "B11"
   },
   "deviations": {
+    "canvas.open": "trust-gate",
+    "canvas.saveAs": "trust-gate",
+    "project.choose": "trust-gate",
+    "agent.setType": "permissions",
+    "agent.setConnection": "permissions",
     "topics.subscribe": "transport",
     "topics.unsubscribe": "transport",
     "usage.setRule": "spending-guard",
@@ -121,6 +206,7 @@
     "link.open": "os-action",
     "link.reveal": "os-action",
     "window.get": "view",
+    "window.show": "view",
     "terminal.attach": "view",
     "terminal.detach": "view",
     "terminal.input": "acts-as-you",
@@ -130,12 +216,12 @@
   },
   "schemas": {
     "topics.subscribe": {
-      "input": "eb59d888d198bdf1",
-      "output": "ba803cbcde9ca0e3"
+      "input": "10579f0d8cce3ace",
+      "output": "46b6cfcf7645af6b"
     },
     "topics.unsubscribe": {
-      "input": "eb59d888d198bdf1",
-      "output": "e5fa5cc18e054cdd"
+      "input": "10579f0d8cce3ace",
+      "output": "647bbd6cc7b4f077"
     },
     "app.info": {
       "input": "e5fa5cc18e054cdd",
@@ -157,6 +243,122 @@
       "input": "c42bffd7c0a78bc0",
       "output": "48481aeb891f3b2d"
     },
+    "canvas.create": {
+      "input": "3394f69e468a0469",
+      "output": "0868276782705988"
+    },
+    "canvas.open": {
+      "input": "8ed9ce92c68e70c8",
+      "output": "14a5e45382fc099f"
+    },
+    "canvas.save": {
+      "input": "f676d264f07b5166",
+      "output": "c1cc906bb41f6113"
+    },
+    "canvas.saveAs": {
+      "input": "f676d264f07b5166",
+      "output": "932560765e6d94c1"
+    },
+    "canvas.close": {
+      "input": "1a908234579fefb6",
+      "output": "557b8245cb52b258"
+    },
+    "project.choose": {
+      "input": "f676d264f07b5166",
+      "output": "6547d4e49ce2db33"
+    },
+    "canvas.list": {
+      "input": "e5fa5cc18e054cdd",
+      "output": "a31906654477cc03"
+    },
+    "canvas.get": {
+      "input": "41356bc15da6df1b",
+      "output": "9fc524dd502d7945"
+    },
+    "canvas.rename": {
+      "input": "7c9d45e28398fe9e",
+      "output": "647bbd6cc7b4f077"
+    },
+    "canvas.insertTemplate": {
+      "input": "0425c47e9c4bb128",
+      "output": "97f24d47c6400a47"
+    },
+    "canvas.setArrange": {
+      "input": "bec4dc305819fe45",
+      "output": "647bbd6cc7b4f077"
+    },
+    "canvas.addAgent": {
+      "input": "0f3ca90703374a72",
+      "output": "ebd0120825103788"
+    },
+    "canvas.spawnAgent": {
+      "input": "6f3b714de36712b7",
+      "output": "ebd0120825103788"
+    },
+    "canvas.delete": {
+      "input": "13089a4ee94a5b15",
+      "output": "d6eb9a964d2422be"
+    },
+    "canvas.link": {
+      "input": "621da187728c140f",
+      "output": "647bbd6cc7b4f077"
+    },
+    "canvas.unlink": {
+      "input": "9fbc9faaf2444f51",
+      "output": "647bbd6cc7b4f077"
+    },
+    "canvas.group": {
+      "input": "f03685873a1a715d",
+      "output": "ebd0120825103788"
+    },
+    "canvas.ungroup": {
+      "input": "b5f57f90e952d92e",
+      "output": "647bbd6cc7b4f077"
+    },
+    "canvas.addParent": {
+      "input": "d338ea8434911d34",
+      "output": "ebd0120825103788"
+    },
+    "canvas.move": {
+      "input": "75d231ce281d8f76",
+      "output": "647bbd6cc7b4f077"
+    },
+    "canvas.batch": {
+      "input": "aa3b1a41e3b86acb",
+      "output": "774dad2f1bf247cd"
+    },
+    "agent.setType": {
+      "input": "ae31f270ae564f34",
+      "output": "647bbd6cc7b4f077"
+    },
+    "agent.setConnection": {
+      "input": "1c2f2508eb96bb91",
+      "output": "647bbd6cc7b4f077"
+    },
+    "agent.setSettings": {
+      "input": "4a7da49e2038ee1b",
+      "output": "647bbd6cc7b4f077"
+    },
+    "agent.setRole": {
+      "input": "9ec5f7819f183ec2",
+      "output": "647bbd6cc7b4f077"
+    },
+    "queue.add": {
+      "input": "6c0526a84b580c24",
+      "output": "ebd0120825103788"
+    },
+    "queue.remove": {
+      "input": "59877be71de6830f",
+      "output": "647bbd6cc7b4f077"
+    },
+    "queue.move": {
+      "input": "04b29796baa7cc10",
+      "output": "647bbd6cc7b4f077"
+    },
+    "queue.update": {
+      "input": "db4f4d577744625b",
+      "output": "647bbd6cc7b4f077"
+    },
     "agents": {
       "input": "41356bc15da6df1b",
       "output": "48d08855f6623662"
@@ -175,15 +377,19 @@
     },
     "message": {
       "input": "2fcad0392e13265b",
-      "output": "cd9ed4fd3afce36e"
+      "output": "49e43c944945473f"
     },
     "wait": {
       "input": "d429567b08fb223f",
       "output": "ab20146cfb571ed1"
     },
+    "reply": {
+      "input": "bbfd718db9f62552",
+      "output": "8a91f59b7538cc09"
+    },
     "withdraw": {
       "input": "c0fce69c0611e40f",
-      "output": "3d1b490b47599ef4"
+      "output": "85372e4cca6901df"
     },
     "session.get": {
       "input": "c804536f3eb2a39b",
@@ -195,7 +401,7 @@
     },
     "session.interrupt": {
       "input": "dafe7f6753754290",
-      "output": "e5fa5cc18e054cdd"
+      "output": "647bbd6cc7b4f077"
     },
     "settings.get": {
       "input": "e5fa5cc18e054cdd",
@@ -203,15 +409,15 @@
     },
     "run.pause": {
       "input": "a85fe9cb1eb6d55a",
-      "output": "e5fa5cc18e054cdd"
+      "output": "647bbd6cc7b4f077"
     },
     "run.kill": {
       "input": "a85fe9cb1eb6d55a",
-      "output": "e5fa5cc18e054cdd"
+      "output": "647bbd6cc7b4f077"
     },
     "run.unpause": {
       "input": "a85fe9cb1eb6d55a",
-      "output": "b2777e9d642af147"
+      "output": "c8f56788bf9f4dd8"
     },
     "usage.get": {
       "input": "e5fa5cc18e054cdd",
@@ -219,43 +425,47 @@
     },
     "usage.setRule": {
       "input": "9019a4803080df29",
-      "output": "e5fa5cc18e054cdd"
+      "output": "647bbd6cc7b4f077"
     },
     "usage.simulate": {
       "input": "8cbbd0959972a51d",
-      "output": "e5fa5cc18e054cdd"
+      "output": "647bbd6cc7b4f077"
     },
     "link.open": {
       "input": "c15bb3817c6ef6b3",
-      "output": "e66a3e83d3926508"
+      "output": "3862d4a18485e975"
     },
     "link.reveal": {
       "input": "c15bb3817c6ef6b3",
-      "output": "b40c0d650f7a979a"
+      "output": "c6b8a38dadae7227"
     },
     "window.get": {
       "input": "e5fa5cc18e054cdd",
-      "output": "fe7f4592313235fe"
+      "output": "bebf6761c9f323e8"
+    },
+    "window.show": {
+      "input": "fa0f4b73e7d579d1",
+      "output": "647bbd6cc7b4f077"
     },
     "terminal.attach": {
       "input": "a80925bfbd4d86d2",
-      "output": "e5fa5cc18e054cdd"
+      "output": "647bbd6cc7b4f077"
     },
     "terminal.detach": {
       "input": "a80925bfbd4d86d2",
-      "output": "e5fa5cc18e054cdd"
+      "output": "647bbd6cc7b4f077"
     },
     "terminal.input": {
       "input": "e2ae5af40f432ab7",
-      "output": "e5fa5cc18e054cdd"
+      "output": "647bbd6cc7b4f077"
     },
     "terminal.resize": {
       "input": "6f7b91a783617018",
-      "output": "e5fa5cc18e054cdd"
+      "output": "647bbd6cc7b4f077"
     },
     "terminal.drop": {
       "input": "2007c6b60eae3b5c",
-      "output": "e5fa5cc18e054cdd"
+      "output": "647bbd6cc7b4f077"
     }
   }
 }

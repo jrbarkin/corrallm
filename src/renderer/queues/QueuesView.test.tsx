@@ -1,10 +1,11 @@
-import { act, fireEvent, render, screen, within } from '@testing-library/react';
+import { renderReady, events } from '../test-render';
+import { act, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { automaticBackend } from '../../shared/engine/test-backend';
 
-import { GraphEditor } from '../graph/GraphEditor';
-import type { Graph, GraphNode } from '../graph/graph';
+import { GraphEditor } from '../test-graph';
+import type { Graph, GraphNode } from '../graph/flow';
 import type { QueueItem } from '../../shared/model/queue';
 
 vi.mock('../terminal/screen', async () => {
@@ -35,9 +36,9 @@ const graph: Graph = {
   edges: [],
 };
 
-function setup(initial: Graph = graph) {
+async function setup(initial: Graph = graph) {
   const fake = automaticBackend();
-  const { container } = render(
+  const { container } = await renderReady(
     <GraphEditor initialGraph={initial} sessionBackend={fake.backend} />,
   );
   const card = (id: string) => {
@@ -55,9 +56,9 @@ afterEach(() => {
 });
 
 describe('the queues view', () => {
-  it("shows every agent's queue in a lane, with ribbons for its waits and the work it hands on", () => {
-    const { queues } = setup();
-    fireEvent.click(screen.getByRole('button', { name: 'Show all queues' }));
+  it("shows every agent's queue in a lane, with ribbons for its waits and the work it hands on", async () => {
+    const { queues } = await setup();
+    await events.click(screen.getByRole('button', { name: 'Show all queues' }));
     const view = within(queues());
     expect(view.getAllByRole('group').map((g) => g.getAttribute('aria-label'))).toEqual([
       'a: Workflow',
@@ -73,7 +74,7 @@ describe('the queues view', () => {
       'wait',
     ]);
     // Pointing at the wait shows its ribbon over the other.
-    fireEvent.pointerOver(
+    await events.pointerOver(
       within(view.getByRole('group', { name: 'b: Wait for a: Workflow' })).getByText('Wait for'),
     );
     expect(
@@ -81,33 +82,33 @@ describe('the queues view', () => {
         .filter((ribbon) => ribbon.hasAttribute('data-active'))
         .map((r) => r.getAttribute('data-kind')),
     ).toEqual(['wait']);
-    fireEvent.keyDown(document.body, { key: 'Escape' });
+    await events.keyDown(document.body, { key: 'Escape' });
     expect(screen.queryByRole('dialog', { name: 'All queues' })).toBeNull();
   });
 
-  it('opens from inside an agent, and opens an agent from its lane', () => {
-    const { card, queues } = setup();
-    fireEvent.doubleClick(card('b'));
+  it('opens from inside an agent, and opens an agent from its lane', async () => {
+    const { card, queues } = await setup();
+    await events.doubleClick(card('b'));
     const b = within(screen.getByRole('dialog', { name: 'b' }));
-    fireEvent.click(b.getByRole('button', { name: 'All queues' }));
+    await events.click(b.getByRole('button', { name: 'All queues' }));
     // Escape closes the queues, not the agent under them.
-    fireEvent.keyDown(document.body, { key: 'Escape' });
+    await events.keyDown(document.body, { key: 'Escape' });
     expect(screen.getByRole('dialog', { name: 'b' })).toBeTruthy();
-    fireEvent.click(b.getByRole('button', { name: 'All queues' }));
-    fireEvent.click(within(queues()).getByRole('button', { name: 'Open a' }));
+    await events.click(b.getByRole('button', { name: 'All queues' }));
+    await events.click(within(queues()).getByRole('button', { name: 'Open a' }));
     expect(screen.queryByRole('dialog', { name: 'All queues' })).toBeNull();
     expect(screen.getByRole('dialog', { name: 'a' })).toBeTruthy();
   });
 
-  it('marks waits that wait on each other as stuck', () => {
-    const { queues } = setup({
+  it('marks waits that wait on each other as stuck', async () => {
+    const { queues } = await setup({
       nodes: [
         agent('a', 0, [{ id: 'w', waitFor: [{ agent: 'b', item: 'w' }] }]),
         agent('b', 100, [{ id: 'w', waitFor: [{ agent: 'a', item: 'w' }] }]),
       ],
       edges: [],
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Show all queues' }));
+    await events.click(screen.getByRole('button', { name: 'Show all queues' }));
     expect(
       within(queues())
         .getAllByRole('group')
@@ -115,22 +116,22 @@ describe('the queues view', () => {
     ).toEqual(['a: Wait for b: its wait (stuck)', 'b: Wait for a: its wait (stuck)']);
   });
 
-  it('edits each queue in its lane', () => {
-    const { queues } = setup();
-    fireEvent.click(screen.getByRole('button', { name: 'Show all queues' }));
+  it('edits each queue in its lane', async () => {
+    const { queues } = await setup();
+    await events.click(screen.getByRole('button', { name: 'Show all queues' }));
     const view = within(queues());
     // a's message, rewritten in place; b's Edit, removed.
     const message = within(
       view.getByRole('group', { name: 'a: Message “Here is what I found” → b' }),
     ).getByRole('textbox', { name: 'Message to the agent' });
-    fireEvent.change(message, { target: { value: 'Notes are in NOTES.md' } });
-    fireEvent.click(view.getByRole('button', { name: 'Remove Edit' }));
+    await events.change(message, { target: { value: 'Notes are in NOTES.md' } });
+    await events.click(view.getByRole('button', { name: 'Remove Edit' }));
     // A message added at the end of b's lane.
-    fireEvent.click(view.getByRole('button', { name: "Add to b's queue" }));
-    fireEvent.click(view.getByRole('option', { name: /^Message/ }));
+    await events.click(view.getByRole('button', { name: "Add to b's queue" }));
+    await events.click(view.getByRole('option', { name: /^Message/ }));
     const text = view.getByRole('textbox', { name: 'New message to the agent' });
-    fireEvent.change(text, { target: { value: 'Ship it' } });
-    fireEvent.keyDown(text, { key: 'Enter' });
+    await events.change(text, { target: { value: 'Ship it' } });
+    await events.keyDown(text, { key: 'Enter' });
     expect(view.getAllByRole('group').map((g) => g.getAttribute('aria-label'))).toEqual([
       'a: Workflow',
       'a: Message “Notes are in NOTES.md” → b',
@@ -140,49 +141,49 @@ describe('the queues view', () => {
     ]);
   });
 
-  it("picks what a wait waits for by clicking it in the other agent's lane", () => {
-    const { queues } = setup();
-    fireEvent.click(screen.getByRole('button', { name: 'Show all queues' }));
+  it("picks what a wait waits for by clicking it in the other agent's lane", async () => {
+    const { queues } = await setup();
+    await events.click(screen.getByRole('button', { name: 'Show all queues' }));
     const view = within(queues());
     const change = () =>
       view.getByRole('button', { name: 'Change what it waits for: a: Workflow' });
     // Escape lets go of the pick, and leaves the view open.
-    fireEvent.click(change());
-    fireEvent.keyDown(document.body, { key: 'Escape' });
+    await events.click(change());
+    await events.keyDown(document.body, { key: 'Escape' });
     expect(view.queryByRole('button', { name: 'Wait for a: Workflow' })).toBeNull();
     expect(screen.getByRole('dialog', { name: 'All queues' })).toBeTruthy();
 
-    fireEvent.click(change());
-    fireEvent.click(view.getByRole('button', { name: 'Wait for a: “Here is what I found”' }));
+    await events.click(change());
+    await events.click(view.getByRole('button', { name: 'Wait for a: “Here is what I found”' }));
     expect(view.getByRole('group', { name: /^b: Wait for/ }).getAttribute('aria-label')).toBe(
       'b: Wait for a: “Here is what I found”',
     );
     // Its end: all of a's work.
-    fireEvent.click(view.getByRole('button', { name: /^Change what it waits for/ }));
-    fireEvent.click(view.getByRole('button', { name: "Wait for all of a's work" }));
+    await events.click(view.getByRole('button', { name: /^Change what it waits for/ }));
+    await events.click(view.getByRole('button', { name: "Wait for all of a's work" }));
     expect(view.getByRole('group', { name: /^b: Wait for/ }).getAttribute('aria-label')).toBe(
       'b: Wait for a',
     );
   });
 
-  it('runs the queues, marking the task each agent is on, until stopped', () => {
-    const { queues } = setup();
-    fireEvent.click(screen.getByRole('button', { name: 'Show all queues' }));
+  it('runs the queues, marking the task each agent is on, until stopped', async () => {
+    const { queues } = await setup();
+    await events.click(screen.getByRole('button', { name: 'Show all queues' }));
     const view = within(queues());
     const run = (name: string) =>
       view.getByRole('group', { name }).querySelector('[data-run]')?.getAttribute('data-run');
-    fireEvent.click(view.getByRole('button', { name: 'Run' }));
+    await events.click(view.getByRole('button', { name: 'Run' }));
     // a does its Workflow; b builds, and waits for a's Workflow after.
     expect(run('a: Workflow')).toBe('running');
     expect(run('b: Edit')).toBe('running');
     expect(view.getByRole('status').textContent).toBe('2 working · 0 waiting');
-    fireEvent.click(view.getByRole('button', { name: 'Stop' }));
+    await events.click(view.getByRole('button', { name: 'Stop' }));
     expect(run('a: Workflow')).toBe('stopped');
     expect(view.getByRole('status').textContent).toBe('Paused');
     expect(view.getByRole('button', { name: 'Resume' })).toBeTruthy();
     // Run again: an agent's own queue marks the task it is on too.
-    fireEvent.click(view.getByRole('button', { name: 'Run again' }));
-    fireEvent.click(view.getByRole('button', { name: 'Open a' }));
+    await events.click(view.getByRole('button', { name: 'Run again' }));
+    await events.click(view.getByRole('button', { name: 'Open a' }));
     const own = within(screen.getByRole('dialog', { name: 'a' })).getByRole('button', {
       name: 'Move Workflow',
     });
@@ -190,14 +191,14 @@ describe('the queues view', () => {
   });
 
   it('shows when the run needs the user: an agent asks permission, and the lane opens it', async () => {
-    const { queues, fake } = setup({
+    const { queues, fake } = await setup({
       nodes: [agent('a', 0, [{ id: 'fix', message: 'Fix the flaky test' }])],
       edges: [],
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Show all queues' }));
+    await events.click(screen.getByRole('button', { name: 'Show all queues' }));
     const view = within(queues());
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
-    fireEvent.click(view.getByRole('button', { name: 'Run' }));
+    await events.click(view.getByRole('button', { name: 'Run' }));
     await act(async () => {
       await Promise.resolve();
     });
@@ -212,12 +213,12 @@ describe('the queues view', () => {
     const task = view.getByRole('group', { name: 'a: Message “Fix the flaky test”' });
     expect(task.querySelector('[data-run]')?.getAttribute('data-run')).toBe('asking');
     expect(view.getByRole('status').textContent).toBe('0 working · 0 waiting · 1 needs you');
-    fireEvent.click(view.getByRole('button', { name: 'Answer a' }));
+    await events.click(view.getByRole('button', { name: 'Answer a' }));
     expect(screen.getByRole('dialog', { name: 'a' })).toBeTruthy();
   });
 
   it('shows how a step expected to fail went from explicit native verdicts', async () => {
-    const { queues, fake } = setup({
+    const { queues, fake } = await setup({
       nodes: [
         agent('a', 0, [
           { id: 'red', action: 'Bash', instruction: 'Run the new tests.', expect: 'fails' },
@@ -225,7 +226,7 @@ describe('the queues view', () => {
       ],
       edges: [],
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Show all queues' }));
+    await events.click(screen.getByRole('button', { name: 'Show all queues' }));
     const view = within(queues());
     const task = () =>
       view.getByRole('group', { name: 'a: Bash “Run the new tests.” (expected to fail)' });
@@ -253,20 +254,20 @@ describe('the queues view', () => {
         );
       });
     };
-    fireEvent.click(view.getByRole('button', { name: 'Run' }));
+    await events.click(view.getByRole('button', { name: 'Run' }));
     expect(within(task()).queryByText(/as expected|was expected/)).toBeNull();
     await end('FAILED');
     expect(run()).toBe('succeeded');
     expect(within(task()).getByText('failed, as expected')).toBeTruthy();
-    fireEvent.click(view.getByRole('button', { name: 'Run' }));
+    await events.click(view.getByRole('button', { name: 'Run' }));
     await end('SUCCEEDED');
     expect(run()).toBe('asking');
     expect(within(task()).getByText('passed, but was expected to fail')).toBeTruthy();
     expect(within(task()).queryByText('failed, as expected')).toBeNull();
   });
 
-  it('counts down a delay the run holds a lane at, and goes on from it when told', () => {
-    const { queues } = setup({
+  it('counts down a delay the run holds a lane at, and goes on from it when told', async () => {
+    const { queues } = await setup({
       nodes: [
         agent('a', 0, [
           { id: 'pause', delay: { seconds: 60 } },
@@ -275,12 +276,12 @@ describe('the queues view', () => {
       ],
       edges: [],
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Show all queues' }));
+    await events.click(screen.getByRole('button', { name: 'Show all queues' }));
     const view = within(queues());
     vi.useFakeTimers({
       toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'],
     });
-    fireEvent.click(view.getByRole('button', { name: 'Run' }));
+    await events.click(view.getByRole('button', { name: 'Run' }));
     const pause = view.getByRole('group', { name: 'a: Wait 1 minute' });
     const run = (name: string) =>
       view.getByRole('group', { name }).querySelector('[data-run]')?.getAttribute('data-run');
@@ -293,15 +294,15 @@ describe('the queues view', () => {
     expect(timer.textContent).toBe('0:59 left');
     expect(view.getByRole('status').textContent).toBe('0 working · 1 waiting');
 
-    fireEvent.click(within(pause).getByRole('button', { name: 'Go on now: Wait 1 minute' }));
+    await events.click(within(pause).getByRole('button', { name: 'Go on now: Wait 1 minute' }));
     expect(run('a: Wait 1 minute')).toBe('succeeded');
     expect(run('a: Read')).toBe('running');
     expect(within(pause).queryByRole('timer')).toBeNull();
     expect(within(pause).queryByRole('button', { name: /^Go on now/ })).toBeNull();
   });
 
-  it('goes on without what a wait waits for once its time limit passes, its ribbon dashed', () => {
-    const { queues } = setup({
+  it('goes on without what a wait waits for once its time limit passes, its ribbon dashed', async () => {
+    const { queues, fake } = await setup({
       nodes: [
         agent('a', 0, [{ id: 'slow', message: 'Take your time' }]),
         agent('b', 100, [
@@ -311,7 +312,9 @@ describe('the queues view', () => {
       ],
       edges: [],
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Show all queues' }));
+    // Explicitly keep the native turn open beyond the wait's deadline.
+    fake.backend.send.mockImplementationOnce(() => Promise.resolve(null));
+    await events.click(screen.getByRole('button', { name: 'Show all queues' }));
     const view = within(queues());
     const name = 'b: Wait for a, at most 2 seconds';
     const run = (task: string) =>
@@ -320,7 +323,7 @@ describe('the queues view', () => {
     vi.useFakeTimers({
       toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'],
     });
-    fireEvent.click(view.getByRole('button', { name: 'Run' }));
+    await events.click(view.getByRole('button', { name: 'Run' }));
     expect(run(name)).toBe('waiting');
     expect(within(view.getByRole('group', { name })).getByRole('timer').textContent).toBe(
       '0:02 left',
@@ -353,11 +356,11 @@ describe('the queues view', () => {
 
     /** Runs `asking` in All queues until a holds for your OK. */
     async function held() {
-      const { queues } = setup(asking);
-      fireEvent.click(screen.getByRole('button', { name: 'Show all queues' }));
+      const { queues } = await setup(asking);
+      await events.click(screen.getByRole('button', { name: 'Show all queues' }));
       const view = within(queues());
       vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
-      fireEvent.click(view.getByRole('button', { name: 'Run' }));
+      await events.click(view.getByRole('button', { name: 'Run' }));
       await act(async () => {
         await vi.advanceTimersByTimeAsync(4000);
       });
@@ -383,12 +386,12 @@ describe('the queues view', () => {
       // Its lane head says the run needs you, and takes you to the decision.
       const pill = view.getByRole('button', { name: 'Decide for a' });
       expect(pill.title).toBe('a waits for your OK');
-      fireEvent.click(pill);
+      await events.click(pill);
       const approve = ok.getByRole('button', { name: 'Approve' });
       expect(document.activeElement).toBe(approve);
       expect(screen.getByRole('dialog', { name: 'All queues' })).toBeTruthy();
 
-      fireEvent.click(approve);
+      await events.click(approve);
       expect(row(OK).dataset.run).toBe('succeeded');
       expect(ok.queryByRole('button', { name: 'Approve' })).toBeNull();
       expect(row('a: Edit').dataset.run).toBe('running');
@@ -398,10 +401,10 @@ describe('the queues view', () => {
 
     it('asks the agent for changes in your words, at the OK', async () => {
       const { view, row, ok } = await held();
-      fireEvent.click(ok.getByRole('button', { name: 'Ask for changes…' }));
+      await events.click(ok.getByRole('button', { name: 'Ask for changes…' }));
       const note = ok.getByRole('textbox', { name: 'What should change?' });
-      fireEvent.change(note, { target: { value: 'Cover the empty state too' } });
-      fireEvent.keyDown(note, { key: 'Enter' });
+      await events.change(note, { target: { value: 'Cover the empty state too' } });
+      await events.keyDown(note, { key: 'Enter' });
       // The agent works on them, at the OK.
       expect(row(OK).dataset.run).toBe('running');
       expect(row(OK).querySelector('.graph-queue-ok-asked')?.textContent).toBe(
@@ -410,7 +413,7 @@ describe('the queues view', () => {
       expect(ok.queryByRole('button', { name: 'Approve' })).toBeNull();
       expect(view.getByRole('status').textContent).toBe('1 working · 1 waiting');
       // Its session has them, as your message.
-      fireEvent.click(view.getByRole('button', { name: 'Open a' }));
+      await events.click(view.getByRole('button', { name: 'Open a' }));
       const transcript = within(
         within(screen.getByRole('dialog', { name: 'a' })).getByRole('log', { name: 'Transcript' }),
       );
@@ -421,7 +424,7 @@ describe('the queues view', () => {
       const { queues, view, row, ok } = await held();
       const stop = ok.getByRole('button', { name: 'Stop here' });
       expect(stop.title).toBe('Stop this queue here, and whatever waits on it');
-      fireEvent.click(stop);
+      await events.click(stop);
       expect(row(OK).dataset.run).toBe('stopped');
       expect(row('b: Wait for a: Your OK on the spec in SPEC.md').dataset.run).toBe('stopped');
       expect(row('a: Edit').dataset.run).toBeUndefined();
@@ -434,7 +437,7 @@ describe('the queues view', () => {
 
   it('shows a repeat as one card, its round in a pill, and asks once it is out of rounds', async () => {
     // The native fixture explicitly succeeds and never emits APPROVED.
-    const { queues } = setup({
+    const { queues } = await setup({
       nodes: [
         agent('a', 0, [
           {
@@ -450,7 +453,7 @@ describe('the queues view', () => {
       edges: [],
     });
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
-    fireEvent.click(screen.getByRole('button', { name: 'Show all queues' }));
+    await events.click(screen.getByRole('button', { name: 'Show all queues' }));
     const view = within(queues());
     const name = 'a: Repeat until the output contains “APPROVED” (up to 1 round)';
     // In the view open now: it is closed and opened again.
@@ -462,7 +465,7 @@ describe('the queues view', () => {
       return found;
     };
     const step = () => card().querySelector<HTMLElement>('[data-at="[\\"a\\",\\"build\\"]"]');
-    fireEvent.click(view.getByRole('button', { name: 'Run' }));
+    await events.click(view.getByRole('button', { name: 'Run' }));
     expect(card().dataset.round).toBe('Round 1 of 1');
     expect(step()?.dataset.run).toBe('running');
     await act(async () => {
@@ -479,14 +482,14 @@ describe('the queues view', () => {
     ).toEqual(['One more round', 'Try this…', 'Go on']);
 
     // The canvas's Needs you sidebar asks too: one more round runs another.
-    fireEvent.click(view.getByRole('button', { name: 'Back' }));
+    await events.click(view.getByRole('button', { name: 'Back' }));
     const sidebar = within(screen.getByRole('complementary', { name: 'Needs you' }));
     expect(
       sidebar.getByText('1 round done, and still not: the output contains “APPROVED”.'),
     ).toBeTruthy();
-    fireEvent.click(sidebar.getByRole('button', { name: 'One more round' }));
+    await events.click(sidebar.getByRole('button', { name: 'One more round' }));
     expect(screen.queryByRole('complementary', { name: 'Needs you' })).toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: 'Show all queues' }));
+    await events.click(screen.getByRole('button', { name: 'Show all queues' }));
     expect(card().dataset.round).toBe('Round 2 of 2');
     expect(step()?.dataset.run).toBe('running');
     expect(card().dataset.run).toBeUndefined();

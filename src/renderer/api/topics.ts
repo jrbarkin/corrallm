@@ -59,6 +59,11 @@ export class TopicMirror {
     return this.#topics.get(topic)?.state as TopicStates[K] | undefined;
   }
 
+  /** The revision of the topic's snapshot: none before its first. */
+  revision(topic: TopicKey): number | undefined {
+    return this.#topics.get(topic)?.rev;
+  }
+
   subscribe(topic: TopicKey, listener: () => void): () => void {
     const entry = this.#entry(topic);
     entry.listeners.add(listener);
@@ -215,7 +220,7 @@ export class TopicMirror {
         if (state === previous) state = { ...previous };
         Reflect.deleteProperty(state, key);
       }
-      entry.state = state;
+      entry.state = state as TopicSnapshot['state'];
     }
     entry.rev = change.rev;
     this.#tell(entry);
@@ -258,11 +263,14 @@ export class TopicMirror {
 export const topics = new TopicMirror(bridge);
 
 /** The latest pushed state: undefined until the core answers the first subscription. */
-export function useTopic<K extends TopicKey>(topic: K): TopicStates[K] | undefined {
+export function useTopic<K extends TopicKey>(
+  topic: K,
+  mirror: TopicMirror = topics,
+): TopicStates[K] | undefined {
   const subscribe = useCallback(
-    (listener: () => void) => topics.subscribe(topic, listener),
-    [topic],
+    (listener: () => void) => mirror.subscribe(topic, listener),
+    [topic, mirror],
   );
-  const snapshot = useCallback(() => topics.snapshot(topic), [topic]);
+  const snapshot = useCallback(() => mirror.snapshot(topic), [topic, mirror]);
   return useSyncExternalStore(subscribe, snapshot);
 }

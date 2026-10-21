@@ -2,8 +2,11 @@ import { describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 
 import { TOKEN_IN_FLIGHT, TOKEN_WRITES_PER_SECOND } from '../../shared/api/limits';
-import { createDispatcher, OpFailure, scopeOf } from './call';
-import type { DispatchOptions } from './call';
+import { withEnvelope } from '../../shared/api/define';
+import { createDispatcher, drainsOf, OpFailure, scopeOf } from './call';
+import type { DispatchOptions, OpContext } from './call';
+import type { Committer } from './canvas/commit';
+import { CommitFailed } from './canvas/documents';
 import { partyOf } from './caller';
 import type { AgentCaller, Caller, OutsideCaller } from './caller';
 import { asHuman } from './gui';
@@ -71,7 +74,393 @@ describe('scopeOf', () => {
   });
 });
 
+describe('drainsOf', () => {
+  it('drains every scope beneath a canvas’s, or those of the agents an op removes or switches', () => {
+    expect(
+      drainsOf({ scope: 'canvas', drains: 'canvas' }, { canvas: CANVAS, discard: true }),
+    ).toEqual([['app', CANVAS]]);
+    expect(
+      drainsOf({ scope: 'canvas', drains: 'agents' }, { canvas: CANVAS, agent: 'helper' }),
+    ).toEqual([['app', CANVAS, 'helper']]);
+    expect(
+      drainsOf(
+        { scope: 'canvas', drains: 'agents' },
+        { canvas: CANVAS, nodes: ['helper', 'team'], links: [] },
+      ),
+    ).toEqual([
+      ['app', CANVAS, 'helper'],
+      ['app', CANVAS, 'team'],
+    ]);
+    expect(drainsOf({ scope: 'canvas' }, { canvas: CANVAS, agent: 'helper' })).toEqual([]);
+  });
+
+  it('drains, for an op in the app’s scope, the canvas it replaces, and none when it replaces none', () => {
+    const create = { scope: 'app', drains: 'canvas' } as const;
+    expect(drainsOf(create, { replace: { canvas: CANVAS, discard: true } })).toEqual([
+      ['app', CANVAS],
+    ]);
+    expect(drainsOf(create, { template: { id: 'review-loop' } })).toEqual([]);
+  });
+});
+
 describe('core.call', () => {
+  it('revokes a queued lead-only call before it gets its scope', async () => {
+    const registry = testRegistry();
+    const entered = Promise.withResolvers<undefined>();
+    const release = Promise.withResolvers<undefined>();
+    let lead = true;
+    const holdSurface = registry.surface['test.hold'];
+    const agentSurface = registry.surface['test.agent'];
+    if (!holdSurface || !agentSurface) throw new Error('The registry lacks its fixture ops.');
+    const core = createDispatcher(
+      {
+        ...registry,
+        surface: {
+          ...registry.surface,
+          'test.hold': { ...holdSurface, scope: 'canvas' },
+          'test.agent': { ...agentSurface, scope: 'canvas' },
+        },
+        implementations: {
+          ...registry.implementations,
+          'test.hold': async () => {
+            entered.resolve(undefined);
+            await release.promise;
+            return { stopped: true };
+          },
+        },
+      },
+      { isLead: () => lead, resolvers: RESOLVERS, check: true },
+    );
+    const held = core.call('test.hold', { canvas: CANVAS, agent: 'helper' }, CALLERS.you);
+    await entered.promise;
+    const waiting = core.call('test.agent', { canvas: CANVAS, agent: 'helper' }, CALLERS.lead);
+    lead = false;
+    release.resolve(undefined);
+    await held;
+    expect(await waiting).toMatchObject({ ok: false, error: { code: 'forbidden' } });
+    expect(registry.calls['test.agent']).toEqual([]);
+  });
+
+  it('rechecks lead status as a commit builds after the implementation already started', async () => {
+    const registry = testRegistry();
+    const entered = Promise.withResolvers<undefined>();
+    const release = Promise.withResolvers<undefined>();
+    let lead = true;
+    const core = createDispatcher(
+      {
+        ...registry,
+        implementations: {
+          ...registry.implementations,
+          'test.agent': ({ canvas, agent }: { canvas: string; agent: string }, ctx: OpContext) =>
+            ctx.commit(canvas, (doc) => ({ next: doc, result: { agent } })),
+        },
+      },
+      {
+        isLead: () => lead,
+        resolvers: RESOLVERS,
+        check: true,
+        commit: async (_canvas, build) => {
+          entered.resolve(undefined);
+          await release.promise;
+          return {
+            result: build({ id: CANVAS, arrange: false, nodes: [], links: [] }).result,
+            rev: 2,
+          };
+        },
+      },
+    );
+    const waiting = core.call('test.agent', { canvas: CANVAS, agent: 'helper' }, CALLERS.lead);
+    await entered.promise;
+    lead = false;
+    release.resolve(undefined);
+    expect(await waiting).toMatchObject({ ok: false, error: { code: 'forbidden' } });
+  });
+  it.each(['call', 'prepare'] as const)(
+    'uses the current party when an existing turn tries ctx.%s',
+    async (how) => {
+      const registry = testRegistry();
+      const surface = registry.surface['test.agent'];
+      if (!surface) throw new Error('No fixture op');
+      const entered = Promise.withResolvers<undefined>();
+      const release = Promise.withResolvers<undefined>();
+      let lead = true;
+      const core = createDispatcher(
+        {
+          ...registry,
+          surface: { ...registry.surface, 'test.agent': { ...surface, kind: 'doc' } },
+          implementations: {
+            ...registry.implementations,
+            'test.agent': ({ canvas, agent }: { canvas: string; agent: string }, ctx: OpContext) =>
+              ctx.commit(canvas, (doc) => ({ next: doc, result: { agent } })),
+            'test.tokens': async (_args, ctx: OpContext) => {
+              entered.resolve(undefined);
+              await release.promise;
+              const args = { canvas: CANVAS, agent: 'helper' };
+              if (how === 'call') {
+                await ctx.call('test.agent', args);
+                return { done: true };
+              }
+              const build = await ctx.prepare('test.agent', args);
+              return ctx.commit(CANVAS, (doc) => ({
+                next: build(doc).next,
+                result: { done: true },
+              }));
+            },
+          },
+        },
+        {
+          isLead: () => lead,
+          resolvers: RESOLVERS,
+          check: true,
+          commit: (_canvas, build) =>
+            Promise.resolve({
+              result: build({ id: CANVAS, arrange: false, nodes: [], links: [] }).result,
+              rev: 2,
+            }),
+        },
+      );
+      const waiting = core.call('test.tokens', {}, CALLERS.lead);
+      await entered.promise;
+      lead = false;
+      release.resolve(undefined);
+      expect(await waiting).toMatchObject({ ok: false, error: { code: 'forbidden' } });
+    },
+  );
+  it('lets a draining op stop what holds an agent’s scope on its canvas, then run', async () => {
+    const registry = testRegistry();
+    const surface = {
+      access: { you: 'all' },
+      kind: 'command',
+      scope: 'canvas',
+      drains: 'canvas',
+    } as const;
+    const core = createDispatcher(
+      {
+        ...registry,
+        surface: { ...registry.surface, 'test.close': surface },
+        ops: {
+          ...registry.ops,
+          'test.close': withEnvelope(surface, {
+            summary: 'Closes a canvas.',
+            input: z.strictObject({ canvas: z.uuid() }),
+            output: z.strictObject({ closed: z.boolean() }),
+          }),
+        },
+        implementations: { ...registry.implementations, 'test.close': () => ({ closed: true }) },
+      },
+      { isLead, resolvers: RESOLVERS, check: true },
+    );
+    const holding = core.call('test.hold', { canvas: CANVAS, agent: 'peer' }, CALLERS.you);
+    await vi.waitFor(() => {
+      expect(registry.calls['test.hold']).toHaveLength(1);
+    });
+    expect(await core.call('test.close', { canvas: CANVAS }, CALLERS.you)).toEqual({
+      ok: true,
+      value: { closed: true, revs: {} },
+    });
+    expect(await holding).toEqual({ ok: true, value: { stopped: true } });
+  });
+
+  it('lets an op in the app’s scope drain the canvas it replaces, and none when it replaces none', async () => {
+    const registry = testRegistry();
+    const surface = {
+      access: { you: 'all' },
+      kind: 'command',
+      scope: 'app',
+      drains: 'canvas',
+    } as const;
+    const core = createDispatcher(
+      {
+        ...registry,
+        surface: { ...registry.surface, 'test.create': surface },
+        ops: {
+          ...registry.ops,
+          'test.create': withEnvelope(surface, {
+            summary: 'Creates a canvas, maybe in place of another.',
+            input: z.strictObject({ replace: z.strictObject({ canvas: z.uuid() }).optional() }),
+            output: z.strictObject({ created: z.boolean() }),
+          }),
+        },
+        implementations: { ...registry.implementations, 'test.create': () => ({ created: true }) },
+      },
+      { isLead, resolvers: RESOLVERS, check: true },
+    );
+    const holding = core.call('test.hold', { canvas: CANVAS, agent: 'peer' }, CALLERS.you);
+    await vi.waitFor(() => {
+      expect(registry.calls['test.hold']).toHaveLength(1);
+    });
+    expect(await core.call('test.create', {}, CALLERS.you)).toMatchObject({ ok: true });
+    expect(registry.released).toEqual([]);
+    expect(
+      await core.call('test.create', { replace: { canvas: CANVAS } }, CALLERS.you),
+    ).toMatchObject({ ok: true });
+    expect(await holding).toEqual({ ok: true, value: { stopped: true } });
+  });
+
+  it('refuses text with a broken character (a lone surrogate) anywhere in its arguments', async () => {
+    const registry = testRegistry();
+    const surface = { access: { you: 'all' }, kind: 'command', scope: 'none' } as const;
+    const core = createDispatcher(
+      {
+        ...registry,
+        surface: { ...registry.surface, 'test.labels': surface },
+        ops: {
+          ...registry.ops,
+          'test.labels': withEnvelope(surface, {
+            summary: 'Labels things.',
+            input: z.strictObject({
+              labels: z.record(z.string().max(10), z.string().max(10)).optional(),
+            }),
+            output: z.strictObject({}),
+          }),
+        },
+        implementations: { ...registry.implementations, 'test.labels': () => ({}) },
+      },
+      { isLead, resolvers: RESOLVERS, check: true },
+    );
+    const broken = (where: string) => ({
+      ok: false,
+      error: {
+        code: 'invalid',
+        sentence: `Invalid arguments (${where}): it holds a broken character (a lone surrogate).`,
+      },
+    });
+    expect(await core.call('test.message', message({ body: 'hello \ud800' }), CALLERS.you)).toEqual(
+      broken('body'),
+    );
+    expect(await core.call('test.agent', { canvas: CANVAS, agent: '\udc00' }, CALLERS.you)).toEqual(
+      broken('agent'),
+    );
+    // A key too, named by what holds it.
+    expect(await core.call('test.labels', { labels: { 'a\ud800': 'x' } }, CALLERS.you)).toEqual(
+      broken('labels'),
+    );
+    expect([registry.calls['test.message'], registry.calls['test.agent']]).toEqual([[], []]);
+    // Whole surrogate pairs are text like any other.
+    expect(await core.call('test.labels', { labels: { '𝔸': '𝔸' } }, CALLERS.you)).toMatchObject({
+      ok: true,
+    });
+  });
+
+  it('gives every write’s result the revisions it reached, and a read’s none', async () => {
+    const { core } = setup();
+    expect(await core.call('test.agent', { canvas: CANVAS, agent: 'helper' }, CALLERS.you)).toEqual(
+      { ok: true, value: { agent: 'helper', revs: {} } },
+    );
+    expect(await core.call('test.read', {}, CALLERS.you)).toEqual({
+      ok: true,
+      value: { caller: 'you', same: 1 },
+    });
+  });
+
+  describe('ctx.commit', () => {
+    /** The test registry with test.agent committing a change to its canvas's document. */
+    function committing(commit: Committer) {
+      const registry = testRegistry();
+      return createDispatcher(
+        {
+          ...registry,
+          implementations: {
+            ...registry.implementations,
+            'test.agent': ({ canvas, agent }: { canvas?: string; agent: string }, ctx: OpContext) =>
+              ctx.commit(canvas, (document) => ({ next: document, result: { agent } })),
+          },
+        },
+        { isLead, resolvers: RESOLVERS, check: true, commit, openCanvases: () => [] },
+      );
+    }
+    const DOCUMENT = { id: CANVAS, arrange: false, nodes: [], links: [] };
+
+    it('commits as the caller’s party, giving the call the revision it reached', async () => {
+      const calls: unknown[] = [];
+      const core = committing((canvas, build, call) => {
+        calls.push({ canvas, op: call.op, by: call.by, request: call.request });
+        call.noReturn();
+        return Promise.resolve({ result: build(DOCUMENT).result, rev: 7 });
+      });
+      const args = { canvas: CANVAS, agent: 'helper', request: REQUEST };
+      expect(await core.call('test.agent', args, CALLERS['outside-write'])).toEqual({
+        ok: true,
+        value: { agent: 'helper', revs: { [`canvas:${CANVAS}`]: 7 } },
+      });
+      expect(calls).toEqual([
+        { canvas: CANVAS, op: 'test.agent', by: 'outside:orchestrator', request: REQUEST },
+      ]);
+    });
+
+    it('gives a commit that changed nothing no revision', async () => {
+      const core = committing((_canvas, build) =>
+        Promise.resolve({ result: build(DOCUMENT).result }),
+      );
+      expect(
+        await core.call('test.agent', { canvas: CANVAS, agent: 'helper' }, CALLERS.you),
+      ).toEqual({ ok: true, value: { agent: 'helper', revs: {} } });
+    });
+
+    it('runs a request again whose commit couldn’t be written', async () => {
+      let tries = 0;
+      const core = committing((_canvas, build) => {
+        tries += 1;
+        if (tries === 1) throw new CommitFailed(new Error('The disk is full.'));
+        return Promise.resolve({ result: build(DOCUMENT).result, rev: 2 });
+      });
+      const args = { canvas: CANVAS, agent: 'helper', request: REQUEST };
+      expect(await core.call('test.agent', args, CALLERS.you)).toEqual({
+        ok: false,
+        error: {
+          code: 'unavailable',
+          sentence: 'The change couldn’t be written, so nothing changed: The disk is full.',
+        },
+      });
+      expect(await core.call('test.agent', args, CALLERS.you)).toMatchObject({
+        ok: true,
+        value: { revs: { [`canvas:${CANVAS}`]: 2 } },
+      });
+      expect(tries).toBe(2);
+    });
+
+    it('refuses a commit in a core that keeps no documents', async () => {
+      const registry = testRegistry();
+      const bare = createDispatcher(
+        {
+          ...registry,
+          implementations: {
+            ...registry.implementations,
+            'test.agent': ({ canvas }: { canvas?: string }, ctx: OpContext) =>
+              ctx.commit(canvas, (document) => ({ next: document, result: {} })),
+          },
+        },
+        { isLead, resolvers: RESOLVERS },
+      );
+      expect(
+        await bare.call('test.agent', { canvas: CANVAS, agent: 'helper' }, CALLERS.you),
+      ).toEqual({
+        ok: false,
+        error: { code: 'unavailable', sentence: 'This core keeps no canvas’s document.' },
+      });
+    });
+  });
+
+  it('answers a conflict with what the entities it names are now', async () => {
+    const registry = testRegistry();
+    const current = { 'node/helper': { rev: 3, value: null } };
+    const core = createDispatcher(
+      {
+        ...registry,
+        implementations: {
+          ...registry.implementations,
+          'test.agent': () => {
+            throw new OpFailure('conflict', 'It changed.', current);
+          },
+        },
+      },
+      { isLead, resolvers: RESOLVERS, check: true },
+    );
+    expect(await core.call('test.agent', { canvas: CANVAS, agent: 'helper' }, CALLERS.you)).toEqual(
+      { ok: false, error: { code: 'conflict', sentence: 'It changed.', current } },
+    );
+  });
+
   it('answers with the op’s result, as a value', async () => {
     const { core } = setup();
     expect(await core.call('test.read', {}, CALLERS.you)).toEqual({
@@ -210,7 +599,7 @@ describe('core.call', () => {
     // With one, it is filled in.
     expect(await core.call('test.agent', { agent: 'helper' }, CALLERS['outside-write'])).toEqual({
       ok: true,
-      value: { agent: 'helper' },
+      value: { agent: 'helper', revs: {} },
     });
     expect(
       (
@@ -239,7 +628,7 @@ describe('core.call', () => {
     });
     expect(await core.call('test.piped', piped(' peer '), CALLERS.worker)).toEqual({
       ok: true,
-      value: { sent: 'peer' },
+      value: { sent: 'peer', revs: {} },
     });
   });
 
@@ -258,7 +647,7 @@ describe('core.call', () => {
     // You reach everything.
     expect(await core.call('test.piped', { canvas: CANVAS, to: 'PEER' }, CALLERS.you)).toEqual({
       ok: true,
-      value: { sent: 'peer' },
+      value: { sent: 'peer', revs: {} },
     });
   });
 
@@ -288,7 +677,7 @@ describe('core.call', () => {
     expect(calls['test.message']).toEqual([]);
     expect(await core.call('test.message', message({ body: '!ls' }), CALLERS.you)).toEqual({
       ok: true,
-      value: { sent: 'peer' },
+      value: { sent: 'peer', revs: {} },
     });
   });
 
@@ -302,8 +691,67 @@ describe('core.call', () => {
     expect(calls['test.delete']).toEqual([]);
     expect(await core.call('test.delete', args, CALLERS.you)).toEqual({
       ok: true,
-      value: { deleted: 'stranger' },
+      value: { deleted: 'stranger', revs: {} },
     });
+  });
+
+  it('checks a token’s rules in the op’s scope, once what runs there before it is done', async () => {
+    const registry = testRegistry();
+    const checked: string[] = [];
+    const core = createDispatcher(
+      {
+        ...registry,
+        rules: {
+          'shell-text': {
+            'test.message': ({ body }: { body: string }) => {
+              checked.push(body);
+              return undefined;
+            },
+          },
+        },
+      },
+      { isLead, resolvers: RESOLVERS, check: true },
+    );
+    const peer = { canvas: CANVAS, agent: 'peer' };
+    const holding = core.call('test.hold', peer, CALLERS.you);
+    await vi.waitFor(() => {
+      expect(registry.calls['test.hold']).toHaveLength(1);
+    });
+    const sending = core.call('test.message', message(), CALLERS['outside-write']);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(checked).toEqual([]);
+    await core.call('test.stop', peer, CALLERS.you);
+    await holding;
+    expect(await sending).toEqual({ ok: true, value: { sent: 'peer', revs: {} } });
+    expect(checked).toEqual(['hello']);
+  });
+
+  it('keeps a rule’s check by the op carrying it, refusing an op whose check isn’t kept', async () => {
+    const registry = testRegistry();
+    const core = createDispatcher(
+      {
+        ...registry,
+        // The shell-text rule is checked on test.message alone; the proposing rule on no op (as a
+        // rule only checked on the change at commit).
+        rules: { 'shell-text': { 'test.agent': () => undefined } },
+      },
+      { isLead, resolvers: RESOLVERS, check: true },
+    );
+    expect(await core.call('test.message', message(), CALLERS.worker)).toEqual({
+      ok: false,
+      error: {
+        code: 'refused',
+        sentence: 'No check is kept for the rule shell-text on test.message.',
+      },
+    });
+    expect(registry.calls['test.message']).toEqual([]);
+    expect(
+      await core.call(
+        'test.delete',
+        { canvas: CANVAS, agent: 'stranger' },
+        CALLERS['outside-write'],
+      ),
+    ).toEqual({ ok: true, value: { deleted: 'stranger', revs: {} } });
   });
 
   it('returns a repeated request’s first result, once per caller', async () => {
@@ -322,6 +770,62 @@ describe('core.call', () => {
     ]);
     expect(both[0]).toEqual(both[1]);
     expect(calls['test.agent']).toHaveLength(1);
+  });
+
+  it('answers a caller’s repeated request before it resolves reach: a retry of what removed its target gets its first result', async () => {
+    let there = true;
+    const { core, calls, registry } = setup({
+      resolvers: {
+        ...RESOLVERS,
+        // `gone` is reached until the op removes it.
+        AgentId: (id, caller, reach, at) =>
+          id === 'gone' ? there : (RESOLVERS.AgentId?.(id, caller, reach, at) ?? false),
+      },
+    });
+    registry.implementations['test.agent'] = ({ agent }: { agent: string }) => {
+      calls['test.agent'].push(agent);
+      there = false;
+      return { agent };
+    };
+    const token = CALLERS['outside-write'] as OutsideCaller;
+    const args = { canvas: CANVAS, agent: 'gone', request: REQUEST };
+    const first = await core.call('test.agent', args, token);
+    expect(first).toEqual({ ok: true, value: { agent: 'gone', revs: {} } });
+    expect(await core.call('test.agent', args, token)).toEqual(first);
+    expect(calls['test.agent']).toHaveLength(1);
+    // Anything else naming it finds nothing: a call of no request, or another caller's of the
+    // same id, which is its own.
+    for (const [again, caller] of [
+      [{ canvas: CANVAS, agent: 'gone' }, token],
+      [args, { ...token, token: 'another-token' }],
+    ] as const) {
+      expect(await core.call('test.agent', again, caller)).toMatchObject({
+        ok: false,
+        error: { code: 'not-found' },
+      });
+    }
+    expect(calls['test.agent']).toHaveLength(1);
+  });
+
+  it('never answers a call with the result of another that carried its request id', async () => {
+    const { core, calls } = setup();
+    const call = (agent: string, more: object = {}) =>
+      core.call('test.agent', { canvas: CANVAS, agent, request: REQUEST, ...more }, CALLERS.you);
+    const first = await call('helper');
+    expect(first).toEqual({ ok: true, value: { agent: 'helper', revs: {} } });
+    // Its own call, run as one.
+    expect(await call('worker')).toEqual({ ok: true, value: { agent: 'worker', revs: {} } });
+    expect(calls['test.agent']).toHaveLength(2);
+    // Each repeated is answered with its own result, however its keys were sent.
+    expect(
+      await core.call(
+        'test.agent',
+        { request: REQUEST, agent: 'helper', canvas: CANVAS },
+        CALLERS.you,
+      ),
+    ).toEqual(first);
+    expect(await call('worker')).toEqual({ ok: true, value: { agent: 'worker', revs: {} } });
+    expect(calls['test.agent']).toHaveLength(2);
   });
 
   it('runs a request again whose first call was cancelled, once that call has unwound', async () => {
@@ -354,12 +858,12 @@ describe('core.call', () => {
       ok: false,
       error: { code: 'refused', sentence: 'The call was cancelled.' },
     });
-    expect(await retry).toEqual({ ok: true, value: { agent: 'helper' } });
+    expect(await retry).toEqual({ ok: true, value: { agent: 'helper', revs: {} } });
     expect(runs).toBe(2);
     // The retry's result is the one kept.
     expect(await core.call('test.agent', args, CALLERS['outside-write'])).toEqual({
       ok: true,
-      value: { agent: 'helper' },
+      value: { agent: 'helper', revs: {} },
     });
     expect(runs).toBe(2);
   });
@@ -395,7 +899,7 @@ describe('core.call', () => {
       throw new Error('The disk is full.');
     });
     expect(broken.first).toMatchObject({ ok: false, error: { code: 'unavailable' } });
-    expect(broken.again).toEqual({ ok: true, value: { agent: 'again' } });
+    expect(broken.again).toEqual({ ok: true, value: { agent: 'again', revs: {} } });
     // So is one a preempting op stopped, whatever it threw as it unwound.
     const stopped = crypto.randomUUID();
     const holding = call(stopped);
@@ -409,7 +913,7 @@ describe('core.call', () => {
       });
     });
     outcomes.push(() => ({ agent: 'again' }));
-    expect(await call(stopped)).toEqual({ ok: true, value: { agent: 'again' } });
+    expect(await call(stopped)).toEqual({ ok: true, value: { agent: 'again', revs: {} } });
   });
 
   it('keeps each caller’s recent requests apart, so none pushes out another’s', async () => {
@@ -499,7 +1003,7 @@ describe('core.call', () => {
     await vi.waitFor(async () => {
       expect(await core.call('test.stop', args, CALLERS.you)).toEqual({
         ok: true,
-        value: { stopped: true },
+        value: { stopped: true, revs: {} },
       });
     });
     expect(await holding).toEqual({ ok: true, value: { stopped: true } });

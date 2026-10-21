@@ -2,8 +2,13 @@ import { z } from 'zod';
 
 import type { JsonSchema } from '../session';
 import type { OpDef } from './define';
+import { agentOps } from './ops/agent';
+import { queueOps } from './ops/queue';
 import { appOps } from './ops/app';
+import { batchOps } from './ops/batch';
+import { canvasOps } from './ops/canvas';
 import { catalogOps } from './ops/catalog';
+import { filesOps } from './ops/files';
 import { conversationOps } from './ops/conversation';
 import { linkOps } from './ops/link';
 import { projectOps } from './ops/project';
@@ -29,6 +34,11 @@ export const OPS = {
   ...catalogOps,
   ...templatesOps,
   ...projectOps,
+  ...filesOps,
+  ...canvasOps,
+  ...batchOps,
+  ...agentOps,
+  ...queueOps,
   ...conversationOps,
   ...sessionOps,
   ...settingsOps,
@@ -43,6 +53,10 @@ export const OPS = {
 export type ArgsOf<N extends OpName> = z.output<(typeof OPS)[N]['input']>;
 /** What op `N` returns. */
 export type ResultOf<N extends OpName> = z.output<(typeof OPS)[N]['output']>;
+
+/** What op `N`'s implementation returns: its result but the revisions core.call adds to a write's. */
+export type ProducedOf<N extends OpName> = WithoutRevs<ResultOf<N>>;
+type WithoutRevs<T> = T extends { revs: unknown } ? Omit<T, 'revs'> : T;
 
 /** The operations `party` may call, by name, sorted: the tools MCP lists to it. */
 export function opsFor(surface: Readonly<Record<string, Surface>>, party: Party): string[] {

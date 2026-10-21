@@ -2,7 +2,7 @@ import { act, fireEvent, render, screen } from '@testing-library/react';
 import { useLayoutEffect, useState } from 'react';
 import { afterEach, expect, it, vi } from 'vitest';
 
-import { flushDrafts, useDraft } from './useDraft';
+import { draftCall, flushDrafts, useDraft } from './useDraft';
 import { fakeCore, expectOneOp } from './test-api';
 
 function Field({
@@ -11,7 +11,7 @@ function Field({
   multiline = false,
 }: {
   value?: string;
-  commit?: (text: string) => void;
+  commit?: (text: string) => unknown;
   multiline?: boolean;
 }) {
   const { problem, ...draft } = useDraft(value, commit, { multiline });
@@ -316,6 +316,128 @@ it('awaits an operation sent by a draft even when its UI callback returns void',
     core.dispose();
   }
 });
+
+it.each(['returned', 'registered'])(
+  'keeps blurred text until a %s operation reaches its mirror revision',
+  async (how) => {
+    const core = fakeCore();
+    core.snapshot('usage', { readings: [], rules: {} });
+    core.respond('usage.setRule', { revs: { usage: 1 } });
+    const commit = () => {
+      const call = core.api.usageSetRule({ backend: 'codex', rule: null });
+      if (how === 'returned') return call;
+      return undefined;
+    };
+    const view = render(<Field commit={commit} multiline />);
+    try {
+      type('First line\nSecond line');
+      fireEvent.pointerDown(document.body);
+      fireEvent.blur(field());
+      expect(field().value).toBe('First line\nSecond line');
+      act(() => {
+        field().focus();
+      });
+      expect(field().value).toBe('First line\nSecond line');
+      fireEvent.blur(field());
+      await vi.waitFor(() => {
+        expectOneOp(core, 'usage.setRule', { backend: 'codex', rule: null });
+      });
+      expect(field().value).toBe('First line\nSecond line');
+    } finally {
+      view.rerender(<Field value="First line\nSecond line" commit={commit} multiline />);
+      await act(async () => {
+        core.change({ topic: 'usage', rev: 1, replace: { readings: [], rules: {} } });
+        await flushDrafts();
+      });
+      core.dispose();
+    }
+    view.rerender(<Field value="Changed elsewhere" commit={commit} multiline />);
+    expect(field().value).toBe('Changed elsewhere');
+  },
+);
+
+it('waits for both a returned promise and the operations registered by that callback', async () => {
+  const registered = Promise.withResolvers<undefined>();
+  const returned = Promise.withResolvers<undefined>();
+  const commit = () => {
+    void draftCall(() => registered.promise);
+    return returned.promise;
+  };
+  const view = render(<Field commit={commit} />);
+  type('Draft');
+  fireEvent.blur(field());
+  try {
+    expect(field().value).toBe('Draft');
+    await act(async () => {
+      returned.resolve(undefined);
+      await returned.promise;
+    });
+    expect(field().value).toBe('Draft');
+  } finally {
+    view.rerender(<Field value="Draft" commit={commit} />);
+    await act(async () => {
+      registered.resolve(undefined);
+      returned.resolve(undefined);
+      await flushDrafts();
+    });
+  }
+});
+
+it.each(['returned', 'registered'])(
+  'keeps a refused %s draft and its error at the field while the next operation still goes',
+  async (how) => {
+    const core = fakeCore();
+    const saved = Promise.withResolvers<undefined>();
+    const commit = () => {
+      const call = draftCall(() => saved.promise);
+      if (how === 'returned') return call;
+      return undefined;
+    };
+    render(<Field commit={commit} />);
+    type('Refused draft');
+    fireEvent.blur(field());
+    const following = core.api.linkOpen({ url: 'https://example.com' });
+    await act(async () => {
+      saved.reject(new Error('Held by the run.'));
+      await Promise.allSettled([following, flushDrafts()]);
+    });
+    try {
+      expect(field().value).toBe('Refused draft');
+      expect(field().getAttribute('aria-invalid')).toBe('true');
+      expect(screen.getByRole('alert').textContent).toBe('Held by the run.');
+      expectOneOp(core, 'link.open', { url: 'https://example.com' });
+      act(() => {
+        field().focus();
+      });
+      expect(field().value).toBe('Refused draft');
+      fireEvent.keyDown(field(), { key: 'Escape' });
+      fireEvent.blur(field());
+      expect(field().value).toBe('Original');
+      expect(screen.queryByRole('alert')).toBeNull();
+    } finally {
+      core.dispose();
+    }
+  },
+);
+
+it.each(['resolves', 'rejects'])(
+  'does not revive an abandoned draft when its earlier operation %s',
+  async (outcome) => {
+    const saved = Promise.withResolvers<undefined>();
+    render(<Field commit={() => draftCall(() => saved.promise)} />);
+    type('Abandoned draft');
+    fireEvent.keyDown(field(), { key: 'Enter' });
+    fireEvent.keyDown(field(), { key: 'Escape' });
+    fireEvent.blur(field());
+    await act(async () => {
+      if (outcome === 'resolves') saved.resolve(undefined);
+      else saved.reject(new Error('Late refusal'));
+      await Promise.allSettled([flushDrafts()]);
+    });
+    expect(field().value).toBe('Original');
+    expect(screen.queryByRole('alert')).toBeNull();
+  },
+);
 
 it('keeps a failed draft at its field and lets the following operation through', async () => {
   const core = fakeCore();

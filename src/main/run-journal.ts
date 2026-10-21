@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 
@@ -28,7 +28,6 @@ interface JournalDeps {
   store: Database;
   /** What the canvases' rows are kept by. */
   memory: CanvasMemory;
-  projectOf(canvas: CanvasId): string | undefined;
   /** What opening the database found to say (core/store/open.ts): said with the first run restored. */
   said?: readonly string[];
 }
@@ -40,12 +39,10 @@ const EARLIER = 'This run belongs to an earlier canvas';
  * Each canvas's run, journaled by the canvas's id in the profile's database (Core Database §5),
  * where each party's `wait` has read to in its messages, and the canvas the profile had open last:
  *
- *   run            the run's state
- *   run_workflow   the workflow it runs, written only when its hash changes: whether it did is
- *                  read from the row, within the write, so a write of the run's state alone
- *                  never writes the workflow again
+ *   run            the run's state (the document it runs is the core's: core/canvas/documents.ts)
  *   read_position  each party's read position in the canvas's messages
- *   open_canvas    the canvas the profile had open last: a window that shows none restores it
+ *   open_canvas    each canvas open, until it is closed, and when it was used last: a window that
+ *                  shows none restores the one used last
  *
  * Its writes go through the database's write lane, in order, each on the drive once it resolves
  * (the commit that holds it returned and the log was flushed); the core's canvases journal their
@@ -63,6 +60,8 @@ export class RunJournal {
   #said: string | undefined;
   /** Every write asked for so far, written or failed. */
   #writing: Promise<unknown> = Promise.resolve();
+  /** What hears a canvas's run journaled, or which canvases are open change. */
+  readonly #listeners = new Set<(canvas: CanvasId) => void>();
 
   constructor(deps: JournalDeps) {
     this.#deps = deps;
@@ -86,17 +85,19 @@ export class RunJournal {
     return canvas;
   }
 
-  /** What a window showing `canvas` restores: its run, its file's name and text, its folder. */
-  async get(canvas: CanvasId): Promise<RunContext> {
+  /**
+   * What a window showing `canvas`, or the core opening it, restores: its run, what to say of it,
+   * and its file's text as it is on disk (none for a canvas with no file, or whose file is gone).
+   */
+  async get(canvas: CanvasId): Promise<RunContext & { savedText?: string; warning?: string }> {
     await this.flush();
     const entry = this.#entry(canvas);
     const row = this.#deps.store
       .prepare(
         `SELECT c.file AS file, r.canvas_id AS ran, json_extract(r.state, '$.version') AS version,
            json_extract(r.state, '$.state') AS state, json_extract(r.state, '$.messages') AS messages,
-           w.workflow AS workflow, r.updated_at AS updated_at
+           r.updated_at AS updated_at
          FROM canvas c LEFT JOIN run r ON r.canvas_id = c.id
-           LEFT JOIN run_workflow w ON w.canvas_id = c.id
          WHERE c.id = ?`,
       )
       .get(canvas);
@@ -109,7 +110,6 @@ export class RunJournal {
       try {
         checkpoint = parseRunCheckpoint({
           version: row.version,
-          workflow: row.workflow,
           state: row.state,
           messages: row.messages,
           updatedAt: row.updated_at,
@@ -141,13 +141,10 @@ export class RunJournal {
         await this.#deps.memory.setFile(canvas, undefined);
       }
     }
-    const folder = this.#deps.projectOf(canvas);
     return {
       id: canvas,
       token: entry.token,
       checkpoint,
-      name: file === undefined || savedText === undefined ? null : path.basename(file),
-      ...(folder === undefined ? {} : { project: { name: path.basename(folder), path: folder } }),
       ...(savedText === undefined ? {} : { savedText }),
       ...(entry.warning === undefined ? {} : { warning: entry.warning }),
     };
@@ -163,11 +160,27 @@ export class RunJournal {
   }
 
   /**
+   * Hears a canvas's run journaled, or the canvas the profile has open change: as the write holding
+   * it is made. Returns what stops it hearing them.
+   */
+  subscribe(listener: (canvas: CanvasId) => void): () => void {
+    this.#listeners.add(listener);
+    return () => {
+      this.#listeners.delete(listener);
+    };
+  }
+
+  /** Throws unless `token` is the canvas's generation's: a renderer's of the canvas it shows. */
+  check(canvas: CanvasId, token: string): void {
+    if (this.#entry(canvas).token !== token) throw new Error(EARLIER);
+  }
+
+  /**
    * Journals a canvas's run (null: none), for the renderer whose token is its canvas's, keeping
    * where each party's `wait` has read to. On disk once it resolves.
    */
   async save(canvas: CanvasId, token: string, checkpoint: RunCheckpoint | null): Promise<void> {
-    if (this.#entry(canvas).token !== token) throw new Error(EARLIER);
+    this.check(canvas, token);
     await this.#write(() => {
       this.keep(canvas, token, checkpoint);
     });
@@ -187,14 +200,7 @@ export class RunJournal {
       store.prepare('DELETE FROM run WHERE canvas_id = ?').run(canvas);
       return;
     }
-    // The workflow the row has, unchanged, was read as it was written: it isn't read again. (One
-    // that isn't text has no hash: parseRunCheckpoint refuses it.)
-    const hash = typeof checkpoint.workflow === 'string' ? sha256(checkpoint.workflow) : '';
-    const kept = store.prepare('SELECT hash FROM run_workflow WHERE canvas_id = ?').get(canvas);
-    const unchanged = kept?.hash === hash;
-    const { version, workflow, state, messages, updatedAt } = parseRunCheckpoint(checkpoint, {
-      workflow: unchanged,
-    });
+    const { version, state, messages, updatedAt } = parseRunCheckpoint(checkpoint);
     if (Buffer.byteLength(JSON.stringify(checkpoint), 'utf8') > MAX_RUN_BYTES) {
       throw new RangeError('The run checkpoint is too large');
     }
@@ -209,13 +215,7 @@ export class RunJournal {
         `{"version":${String(version)},"state":${state},"messages":${messages}}`,
         updatedAt,
       );
-    if (unchanged) return;
-    store
-      .prepare(
-        `INSERT INTO run_workflow (canvas_id, workflow, hash) VALUES (?, ?, ?)
-         ON CONFLICT (canvas_id) DO UPDATE SET workflow = excluded.workflow, hash = excluded.hash`,
-      )
-      .run(canvas, workflow, hash);
+    this.#tell(canvas);
   }
 
   /** Within a write: moves `party`'s read position in the canvas's messages forward to `seq`. */
@@ -240,20 +240,35 @@ export class RunJournal {
     });
   }
 
-  /** New: a new draft, its id. The canvas before keeps its run. */
-  async draft(): Promise<CanvasId> {
-    const canvas = newCanvasId();
-    this.#entries.set(canvas, { token: randomUUID() });
+  /** The canvas is open (the core runs it): until it is closed, beside any other open. */
+  async open(canvas: CanvasId): Promise<void> {
     await this.#write(() => {
       this.#markOpen(canvas);
     });
-    return canvas;
   }
 
-  /** A canvas was saved (Save As too, which keeps its id): it is the one the profile has open. */
+  /**
+   * A canvas was saved (Save As too, which keeps its id): if it is open, it is the one the profile
+   * used last. One closed stays closed.
+   */
   async saved(canvas: CanvasId): Promise<void> {
     await this.#write(() => {
-      this.#markOpen(canvas);
+      this.#deps.store
+        .prepare('UPDATE open_canvas SET opened_at = ? WHERE canvas_id = ?')
+        .run(this.#nextOpen(), canvas);
+      this.#tell(canvas);
+    });
+  }
+
+  /**
+   * The canvas is closed (B9 Design §2): no longer open, so a window that shows none restores
+   * another, and canvas memory may forget it once it is used least recently and holds no edits.
+   * What is kept of it stays. On disk once it resolves.
+   */
+  async close(canvas: CanvasId): Promise<void> {
+    await this.#write(() => {
+      this.#deps.store.prepare('DELETE FROM open_canvas WHERE canvas_id = ?').run(canvas);
+      this.#tell(canvas);
     });
   }
 
@@ -278,23 +293,45 @@ export class RunJournal {
     return written;
   }
 
-  /** Within a write: `canvas` is the one the profile has open now, and the only one. */
+  /**
+   * Within a write: `canvas` is open, the one the profile used last: open beside the others open,
+   * until it is closed.
+   */
   #markOpen(canvas: CanvasId): void {
     const { store, memory } = this.#deps;
     memory.ensure(canvas);
-    store.prepare('DELETE FROM open_canvas WHERE canvas_id <> ?').run(canvas);
     store
       .prepare(
         `INSERT INTO open_canvas (canvas_id, opened_at) VALUES (?, ?)
          ON CONFLICT (canvas_id) DO UPDATE SET opened_at = excluded.opened_at`,
       )
-      .run(canvas, Date.now());
+      .run(canvas, this.#nextOpen());
+    this.#tell(canvas);
+  }
+
+  /**
+   * Within a write: when a canvas used now was: now, unless another was opened at or after it (in
+   * the same millisecond, or by a clock set back since), then just after that one.
+   */
+  #nextOpen(): number {
+    const last = this.#deps.store
+      .prepare('SELECT max(opened_at) AS last FROM open_canvas')
+      .get()?.last;
+    return Math.max(Date.now(), typeof last === 'number' ? last + 1 : 0);
+  }
+
+  /** Tells what hears it of `canvas`. */
+  #tell(canvas: CanvasId): void {
+    for (const listener of this.#listeners) {
+      try {
+        listener(canvas);
+      } catch (error) {
+        console.error('Could not tell of a journaled run:', error);
+      }
+    }
   }
 }
 
-function sha256(text: string): string {
-  return createHash('sha256').update(text).digest('hex');
-}
 function isAbsolute(value: unknown): value is string {
   return typeof value === 'string' && path.isAbsolute(value);
 }

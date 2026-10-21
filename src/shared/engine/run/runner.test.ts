@@ -1298,6 +1298,22 @@ describe('RunStore', () => {
       });
     });
 
+    it('holds such canvas text whoever its author says it is: a shared file may say you', () => {
+      const a = codex(
+        'a',
+        [
+          { id: 'mine', message: '!rm -rf ~', by: 'you' },
+          { id: 'theirs', message: '!rm -rf ~', by: 'outside:orchestrator' },
+        ],
+        'codex.terminal',
+      );
+      const { store, where, sent, tick } = setup([a], manual);
+      store.start();
+      tick();
+      expect(sent).toEqual([]);
+      expect(where()).toEqual({ a: 'asking mine' });
+    });
+
     it('sends canvas text starting with "!" to a connection that runs no shell command from it', () => {
       const a = codex('a', [{ id: 'own', message: '!ls' }], 'codex.app-server');
       const b = codex('b', [{ id: 'hand', message: '!ls', target: 'a' }], 'codex.terminal');

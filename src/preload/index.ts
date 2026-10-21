@@ -56,10 +56,6 @@ const api: AppApi = {
   saveRun: (token, checkpoint) => invoke(API_CHANNELS.saveRun, token, checkpoint),
   runReady: (requestId, error) => invoke(API_CHANNELS.runReady, requestId, error),
   onRunStopping: (listener) => listen(API_EVENTS.onRunStopping, listener),
-  openCanvas: () => invoke(API_CHANNELS.openCanvas),
-  saveCanvas: (text, choose) => invoke(API_CHANNELS.saveCanvas, text, choose),
-  forgetCanvas: () => invoke(API_CHANNELS.forgetCanvas),
-  chooseProject: () => invoke(API_CHANNELS.chooseProject),
   startSession: (agentId, options) => invoke(API_CHANNELS.startSession, agentId, options),
   sendToSession: (agentId, message) => invoke(API_CHANNELS.sendToSession, agentId, message),
   answerSession: (agentId, promptId, answer) =>
@@ -87,7 +83,7 @@ const api: AppApi = {
       (file) => file !== '',
     );
     return paths.length === 0
-      ? Promise.resolve({ ok: true, value: {} } as const)
+      ? Promise.resolve({ ok: true, value: { revs: {} } } as const)
       : (core.call('terminal.drop', {
           agent,
           paths,

@@ -7,7 +7,7 @@ import type { OpDef } from './define';
 import { DEVIATIONS, REASONS } from './deviations';
 import { brandedId, brandsIn, children, defOf, ID_BRANDS, NeedId } from './ids';
 import type { Brand } from './ids';
-import { MAX_REQUEST_BYTES } from './limits';
+import { MAX_EXPECT, MAX_REQUEST_BYTES } from './limits';
 import { inputSchemaOf, OPS, opsFor, outputSchemaOf, toolName, toolOf } from './registry';
 import { RULES } from './rules';
 import type { RuleRow } from './rules';
@@ -71,9 +71,10 @@ const ID_KEYS = new Set([
   'frame',
   'group',
   'parent',
+  'target',
 ]);
 /** The brands that name an agent, which an op open to a token must say whether it may aim at itself. */
-const AGENT_BRANDS: readonly Brand[] = ['AgentId', 'NodeId'];
+const AGENT_BRANDS: readonly Brand[] = ['AgentId', 'NodeId', 'GroupId'];
 
 /** Whether `schema` takes strings that aren't a branded id (a literal or an enum is a fixed word). */
 function takesUnbrandedText(schema: z.ZodType): boolean {
@@ -88,7 +89,10 @@ function takesUnbrandedText(schema: z.ZodType): boolean {
 function unbrandedIds(schema: z.ZodType, path = ''): string[] {
   return children(schema).flatMap(({ key, schema: child }) => {
     const at = key === undefined ? path : `${path}.${key}`;
-    if (key !== undefined && ID_KEYS.has(key) && takesUnbrandedText(child)) return [at];
+    // Queue entries and changes call their authored text `message`; other message fields name ids.
+    const messageText = key === 'message' && child.meta()?.contentMediaType === 'text/plain';
+    if (key !== undefined && ID_KEYS.has(key) && !messageText && takesUnbrandedText(child))
+      return [at];
     return unbrandedIds(child, at);
   });
 }
@@ -132,9 +136,18 @@ const CHAR_BYTES = 6;
 
 /**
  * The most bytes a JSON value the schema accepts can take, or where it is unbounded: a string
- * without a maximum length, a list without a maximum count, a map without both.
+ * without a maximum length, a list without a maximum count, a map without both. A value bounded as
+ * a whole too (`maxBytes`, which its schema checks: canvas.batch's ops) takes at most that, once
+ * every part of it is bounded.
  */
 function worstCase(schema: JsonSchema, path = ''): number | { unbounded: string } {
+  const parts = worstOfParts(schema, path);
+  const whole = schema.maxBytes;
+  return typeof parts === 'number' && typeof whole === 'number' ? Math.min(parts, whole) : parts;
+}
+
+/** The most bytes a JSON value the schema accepts can take, by its parts. */
+function worstOfParts(schema: JsonSchema, path: string): number | { unbounded: string } {
   const most = (list: (number | { unbounded: string })[]) =>
     list.reduce<number | { unbounded: string }>(
       (a, b) => (typeof a !== 'number' ? a : typeof b !== 'number' ? b : Math.max(a, b)),
@@ -256,6 +269,12 @@ function problems(registry: Registry): string[] {
     } else if (worst > MAX_REQUEST_BYTES) {
       found.push(`${name}: its input may take ${String(worst)} bytes, over MAX_REQUEST_BYTES`);
     }
+    if (surface.kind === 'doc' && surface.scope !== 'canvas') {
+      found.push(`${name}: changes a document, but doesn’t run in a canvas’s scope`);
+    }
+    if (surface.drains !== undefined && surface.scope !== 'app' && surface.scope !== 'canvas') {
+      found.push(`${name}: drains, but runs in neither the app’s scope nor a canvas’s`);
+    }
     if (surface.waits && (surface.kind !== 'read' || deviation !== 'transport')) {
       found.push(`${name}: waits, but isn't a read on MCP alone (the transport deviation)`);
     }
@@ -329,6 +348,16 @@ describe('T1: the surface’s rules', () => {
     input?: z.ZodObject<z.core.$ZodShape, z.core.$strict>,
     output?: z.ZodType,
   ): [Surface, OpDef] => [surface, read(surface, input, output)];
+
+  it('distinguishes explicitly authored message text from message ids', () => {
+    const text = z.string().max(100).meta({ contentMediaType: 'text/plain' });
+    expect(unbrandedIds(z.strictObject({ message: text }))).toEqual([]);
+    expect(unbrandedIds(z.strictObject({ message: z.string().max(100) }))).toEqual(['.message']);
+    expect(unbrandedIds(z.strictObject({ agent: text, before: z.string().max(100) }))).toEqual([
+      '.agent',
+      '.before',
+    ]);
+  });
 
   it.each<[string, Registry, string]>([
     [
@@ -412,6 +441,26 @@ describe('T1: the surface’s rules', () => {
         ),
       }),
       'test.id: .to is an id, not branded',
+    ],
+    [
+      'an agent a step is aimed at that isn’t branded',
+      registry({
+        'test.id': op(
+          { access: both, kind: 'read', scope: 'none' },
+          z.strictObject({ target: z.string().max(9) }),
+        ),
+      }),
+      'test.id: .target is an id, not branded',
+    ],
+    [
+      'an op naming a group, open to a token, without self',
+      registry({
+        'test.group': op(
+          { access: both, kind: 'read', scope: 'none' },
+          z.strictObject({ group: brandedId('GroupId', z.string().max(9)) }),
+        ),
+      }),
+      'test.group: names an agent, open to a token, and declares no self',
     ],
     [
       'an id behind a preprocess that isn’t branded',
@@ -504,6 +553,16 @@ describe('T1: the surface’s rules', () => {
       'test.big: its input may take 60000043 bytes, over MAX_REQUEST_BYTES',
     ],
     [
+      'a list bounded as a whole, but not in its parts',
+      registry({
+        'test.whole': op(
+          { access: both, kind: 'read', scope: 'none' },
+          z.strictObject({ words: z.array(z.string()).max(10).meta({ maxBytes: 1000 }) }),
+        ),
+      }),
+      'test.whole: .words[] is unbounded',
+    ],
+    [
       'a long poll that writes',
       registry(
         { 'test.poll': op({ access: tokens, kind: 'command', scope: 'none', waits: true }) },
@@ -515,6 +574,25 @@ describe('T1: the surface’s rules', () => {
       'a long poll on both surfaces',
       registry({ 'test.poll': op({ access: both, kind: 'read', scope: 'none', waits: true }) }),
       "test.poll: waits, but isn't a read on MCP alone (the transport deviation)",
+    ],
+    [
+      'a doc op outside a canvas’s scope',
+      registry({ 'test.doc': op({ access: both, kind: 'doc', scope: 'agent' }) }),
+      'test.doc: changes a document, but doesn’t run in a canvas’s scope',
+    ],
+    [
+      'an op that drains, in an agent’s scope',
+      registry({
+        'test.close': op({ access: both, kind: 'command', scope: 'agent', drains: 'canvas' }),
+      }),
+      'test.close: drains, but runs in neither the app’s scope nor a canvas’s',
+    ],
+    [
+      'an op that drains, in no scope',
+      registry({
+        'test.close': op({ access: both, kind: 'command', scope: 'none', drains: 'agents' }),
+      }),
+      'test.close: drains, but runs in neither the app’s scope nor a canvas’s',
     ],
     [
       'a varies field not in the result',
@@ -550,8 +628,15 @@ describe('T1: the surface’s rules', () => {
                 words: z.array(z.string().max(5)).max(3),
               }),
             ),
+            // A doc op's envelope, the entities it expects, is bounded.
+            'test.doc': op(
+              { access: both, kind: 'doc', scope: 'canvas', self: 'allowed' },
+              z.strictObject({ agent: Agent }),
+            ),
+            // An op in the app's scope may drain the canvas it replaces.
+            'test.create': op({ access: both, kind: 'command', scope: 'app', drains: 'canvas' }),
           },
-          { unhosted: { 'test.agent': 'B11' } },
+          { unhosted: { 'test.agent': 'B11', 'test.doc': 'B11', 'test.create': 'B11' } },
         ),
       ),
     ).toEqual([]);
@@ -593,11 +678,44 @@ describe('the envelope', () => {
     ).toBe(false);
   });
 
+  it('gives a doc op the revisions it expects of entities, by their keys, at most MAX_EXPECT', () => {
+    const doc = withEnvelope(surface({ kind: 'doc', scope: 'canvas' }), def);
+    const expected = { 'node/lead': 3, 'link/lead/worker': 1, 'item/lead/plan': 0 };
+    expect(doc.input.parse({ n: 1, expect: expected })).toEqual({ n: 1, expect: expected });
+    for (const expect_ of [
+      { meta: 1 },
+      { 'canvas/lead': 1 },
+      { 'node/lead': -1 },
+      { 'node/lead': 1.5 },
+      Object.fromEntries(
+        Array.from({ length: MAX_EXPECT + 1 }, (_, i) => [`node/agent-${String(i)}`, 1]),
+      ),
+    ]) {
+      expect(doc.input.safeParse({ n: 1, expect: expect_ }).success, JSON.stringify(expect_)).toBe(
+        false,
+      );
+    }
+    // Only doc ops change entities.
+    expect(withEnvelope(surface(), def).input.safeParse({ n: 1, expect: {} }).success).toBe(false);
+  });
+
+  it('gives every write’s result the revisions it reached, and a read’s none', () => {
+    const revs = { 'canvas:0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b': 4 };
+    for (const kind of ['command', 'doc'] as const) {
+      const write = withEnvelope(surface({ kind, scope: 'canvas' }), def);
+      expect(write.output.parse({ n: 1, revs })).toEqual({ n: 1, revs });
+      expect(write.output.safeParse({ n: 1 }).success).toBe(false);
+    }
+    expect(
+      withEnvelope(surface({ kind: 'read' }), def).output.safeParse({ n: 1, revs }).success,
+    ).toBe(false);
+  });
+
   it('lets an op that may become a proposal return { proposed }, and its outputSchema say so', () => {
     const proposing = withEnvelope(surface({ rules: ['discard'], destructive: true }), def);
-    const proposed = { proposed: NeedId.parse('0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b') };
+    const proposed = { proposed: NeedId.parse('proposal/0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b') };
     expect(proposing.output.parse(proposed)).toEqual(proposed);
-    expect(proposing.output.parse({ n: 2 })).toEqual({ n: 2 });
+    expect(proposing.output.parse({ n: 2, revs: {} })).toEqual({ n: 2, revs: {} });
     expect(outputSchemaOf(proposing)).toMatchObject({
       type: 'object',
       anyOf: [{ type: 'object' }, { type: 'object' }],

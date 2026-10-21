@@ -1,0 +1,133 @@
+import { adapterIn } from '../adapter';
+import type { AdapterId, Catalog } from '../adapter';
+import type { CanvasDocument, CanvasNode } from './canvas';
+import { nodeFault } from './file';
+import { agentName } from './queries';
+import { findItem, isIf, isMessage, isRepeat, isRepeatEnds, isWait } from './queue';
+import type { QueueItem } from './queue';
+import { entityOf } from './rows';
+import type { EntityKey, ItemRow, NodeRow, Row } from './rows';
+
+/*
+ * What a change to a canvas's document must hold to, whoever makes it (revision R34, B9 Design
+ * §4): what it wrote, as its canvas's file would hold it (fromFile's reading of each node it added
+ * or changed in more than where it sits, and of each agent whose queue it wrote); each step it
+ * wrote (one it added, or whose fields it changed) naming an action its agent's adapter declares;
+ * and what each item it wrote names, there: the agent it goes to, what a wait waits for, the repeat
+ * one goes round with. What it moved within its container, or left as it was, is kept unread
+ * (a drag, or an arrange moving every node, reads no queue): an older file's step keeps its action
+ * until someone rewrites it. An adapter this build lacks declares nothing it can read, so its steps keep
+ * theirs. Nothing here reads who wrote an item (`by`).
+ */
+
+/** What a change touched: each entity, as it was and is (none: added, or removed). */
+export type Touched = ReadonlyMap<EntityKey, { before: Row | null; after: Row | null }>;
+
+/** Why `next`, by what `touched` changed of it, can't be kept, in a sentence; undefined if it can. */
+export function editFault(
+  next: CanvasDocument,
+  touched: Touched,
+  catalog: Catalog,
+  defaultAdapter: AdapterId,
+): string | undefined {
+  const nodes = new Map(next.nodes.map((node) => [node.id, node]));
+  const read = new Set<string>();
+  const written = new Map<string, Set<string>>();
+  for (const [key, { before, after }] of touched) {
+    if (after === null) continue;
+    const entity = entityOf(key);
+    if (entity === 'node' && !(before !== null && movedOnly(before as NodeRow, after as NodeRow))) {
+      read.add((after as NodeRow).id);
+    }
+    if (entity !== 'item') continue;
+    const row = after as ItemRow;
+    if (before !== null && sameJson((before as ItemRow).body, row.body)) {
+      // A move keeps its authored fields, but its new container must be able to hold it.
+      if ((before as ItemRow).container !== row.container) read.add(row.agent);
+      continue;
+    }
+    read.add(row.agent);
+    const ids = written.get(row.agent) ?? new Set<string>();
+    ids.add(row.id);
+    written.set(row.agent, ids);
+  }
+  for (const id of read) {
+    const node = nodes.get(id);
+    const fault = node && nodeFault(node, catalog, defaultAdapter);
+    if (fault) return `That change can’t be kept: ${fault}.`;
+  }
+  for (const [id, ids] of written) {
+    const node = nodes.get(id);
+    if (node?.type !== 'agent') continue;
+    for (const item of itemsOf(node.data.queue ?? [])) {
+      if (!ids.has(item.id)) continue;
+      const fault = itemFault(next.nodes, node, item, catalog, defaultAdapter);
+      if (fault) return fault;
+    }
+  }
+  return undefined;
+}
+
+/** Why `item`, which a change wrote in `owner`'s queue, can't be kept; undefined if it can. */
+function itemFault(
+  nodes: readonly CanvasNode[],
+  owner: CanvasNode,
+  item: QueueItem,
+  catalog: Catalog,
+  defaultAdapter: AdapterId,
+): string | undefined {
+  const agentOf = (id: string) => {
+    const node = nodes.find((one) => one.id === id);
+    return node?.type === 'agent' ? node : undefined;
+  };
+  if ('action' in item) {
+    const adapter = adapterIn(
+      catalog,
+      (owner.type === 'agent' ? owner.data.adapter : undefined) ?? defaultAdapter,
+    );
+    if (adapter && !adapter.actions.some(({ name }) => name === item.action)) {
+      return `${adapter.name} declares no action "${item.action}", so ${agentName(nodes, owner.id)} can’t take that step (${item.id}).`;
+    }
+  }
+  if ((isMessage(item) || 'action' in item) && item.target !== undefined) {
+    if (!agentOf(item.target)) return `There is no agent ${item.target} for ${item.id} to go to.`;
+  }
+  if (isWait(item)) {
+    for (const { agent, item: awaited } of item.waitFor) {
+      const node = agentOf(agent);
+      if (!node) return `There is no agent ${agent} for ${item.id} to wait for.`;
+      if (awaited !== undefined && !findItem(node.data.queue ?? [], awaited)) {
+        return `${agentName(nodes, agent)} has no queue item ${awaited} for ${item.id} to wait for.`;
+      }
+    }
+  }
+  if (isRepeat(item) && isRepeatEnds(item.until)) {
+    const { agent, item: leader } = item.until;
+    const node = agentOf(agent);
+    if (!node) return `There is no agent ${agent} for ${item.id} to go round with.`;
+    const found = findItem(node.data.queue ?? [], leader)?.item;
+    if (!found || !isRepeat(found)) {
+      return `${agentName(nodes, agent)} has no repeat ${leader} for ${item.id} to go round with.`;
+    }
+  }
+  return undefined;
+}
+
+/** Whether a node's row changed in where it sits alone: its place, or its position. */
+function movedOnly(was: NodeRow, is: NodeRow): boolean {
+  const unplaced = (row: NodeRow) => ({ ...row, place: 0, x: 0, y: 0 });
+  return sameJson(unplaced(was), unplaced(is));
+}
+
+/** Whether two plain values are the same, as JSON says them. */
+function sameJson(a: unknown, b: unknown): boolean {
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
+/** A queue's items, at any depth: what each if-then and repeat holds after it. */
+function itemsOf(queue: readonly QueueItem[]): QueueItem[] {
+  return queue.flatMap((item) => [
+    item,
+    ...(isIf(item) ? item.then : isRepeat(item) ? item.repeat : []),
+  ]);
+}

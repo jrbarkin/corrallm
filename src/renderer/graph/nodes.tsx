@@ -12,12 +12,12 @@ import { startTransition, useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 
 import type { AdapterId } from '../../shared/adapter';
-import { useDraft } from '../useDraft';
+import { useLabel } from '../useDraft';
 import { useGraphActions } from './actions';
 import { pointOnBezier } from './curve';
 import { agentLabel, connectionInfo, connectionOf, DEFAULT_AGENT } from './agents';
 import type { AgentConnection } from './agents';
-import type { GraphNode } from './graph';
+import type { GraphNode } from './flow';
 import { SHORTCUTS } from './keys';
 import { isBlank } from '../../shared/model/queue';
 
@@ -249,8 +249,8 @@ function Label({ id, label }: { id: string; label: string }) {
 
 function LabelInput({ id, label }: { id: string; label: string }) {
   const { rename, stopEditing } = useGraphActions();
-  const { problem, ...draft } = useDraft(label, (text) => {
-    rename(id, text);
+  const { problem, ...draft } = useLabel(label, (text) => {
+    return rename(id, text);
   });
   const input = useRef<HTMLInputElement>(null);
   useEffect(() => {

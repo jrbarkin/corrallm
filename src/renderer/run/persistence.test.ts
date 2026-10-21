@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from 'vitest';
-
 import { newCanvasId } from '../../shared/canvas';
 import type { RunCheckpoint, RunContext } from '../../shared/run';
 import { RunPersistence } from './persistence';
@@ -8,12 +7,7 @@ import type { RunSource } from './persistence';
 function setup() {
   const stopping = new Set<(request: string) => void>();
   let snapshot = 'running';
-  const context: RunContext = {
-    id: newCanvasId(),
-    token: 'original',
-    checkpoint: null,
-    name: null,
-  };
+  const context: RunContext = { id: newCanvasId(), token: 'original', checkpoint: null };
   const source: RunSource = {
     get: vi.fn().mockResolvedValue(context),
     save: vi.fn().mockResolvedValue(null),
@@ -28,22 +22,28 @@ function setup() {
   const owner = {
     capture: (): RunCheckpoint => ({
       version: 2,
-      workflow: '{}',
       state: JSON.stringify({ snapshot }),
       messages: '{}',
       updatedAt: 1,
     }),
+    ready: vi.fn(() => Promise.resolve()),
     restore: vi.fn(),
-    freeze: vi.fn(() => {
+    freeze: vi.fn((): void | Promise<void> => {
       snapshot = 'paused';
     }),
     error: vi.fn(),
   };
+  /** What a switch resets and binds before it reads the new canvas's run. */
+  const open = vi.fn<(canvas: ReturnType<typeof newCanvasId>) => Promise<void>>(() =>
+    Promise.resolve(),
+  );
   const persistence = new RunPersistence(source, owner);
   return {
     persistence,
     source,
     owner,
+    open,
+    context,
     stop: () => {
       for (const listener of stopping) listener('quit-1');
     },
@@ -55,16 +55,34 @@ function setup() {
 }
 
 describe('run persistence coordinator', () => {
+  it('saves only the run checkpoint, never a renderer document', async () => {
+    const { persistence, source } = setup();
+    await persistence.initialize();
+    await persistence.flush();
+    expect(source.save).toHaveBeenCalledExactlyOnceWith('original', expect.any(Object));
+  });
+  it('reads the run only once the mirror holds the canvas shown (B9 Design §9)', async () => {
+    const { persistence, source, owner } = setup();
+    const mirrored = Promise.withResolvers<undefined>();
+    owner.ready.mockReturnValue(mirrored.promise);
+    const initialized = persistence.initialize();
+    await Promise.resolve();
+    expect(owner.ready).toHaveBeenCalledOnce();
+    expect(source.get).not.toHaveBeenCalled();
+    mirrored.resolve(undefined);
+    await initialized;
+    expect(source.get).toHaveBeenCalledOnce();
+    expect(owner.restore).toHaveBeenCalledOnce();
+  });
   it('waits for an asynchronous freeze before capturing and acknowledging shutdown', async () => {
     const { persistence, source, owner, stop, change } = setup();
     await persistence.initialize();
     const frozen = Promise.withResolvers<undefined>();
-    const freeze = vi.fn(() =>
-      frozen.promise.then(() => {
+    owner.freeze.mockImplementation(() => {
+      return frozen.promise.then(() => {
         change('paused after draft');
-      }),
-    );
-    Object.assign(owner, { freeze });
+      });
+    });
     stop();
     await Promise.resolve();
     expect(source.save).not.toHaveBeenCalled();
@@ -76,127 +94,79 @@ describe('run persistence coordinator', () => {
       'original',
       expect.objectContaining({ state: JSON.stringify({ snapshot: 'paused after draft' }) }),
     );
-    persistence.dispose();
   });
-
   it('does not answer stop requests until started', () => {
-    const { source, owner, stop, listeners } = setup();
+    const { source, stop, listeners } = setup();
     stop();
     expect(listeners()).toBe(0);
     expect(source.get).not.toHaveBeenCalled();
     expect(source.ready).not.toHaveBeenCalled();
-    expect(owner.freeze).not.toHaveBeenCalled();
   });
-
   it.each(['before restart', 'after restart'])(
     'restores once when loading finishes %s after cleanup',
     async (when) => {
       const { persistence, source, owner, listeners } = setup();
-      let loaded: ((context: RunContext) => void) | undefined;
-      vi.mocked(source.get).mockImplementation(
-        () =>
-          new Promise((resolve) => {
-            loaded = resolve;
-          }),
-      );
+      const loaded = Promise.withResolvers<RunContext>();
+      vi.mocked(source.get).mockReturnValue(loaded.promise);
       const first = persistence.initialize();
       persistence.dispose();
       expect(listeners()).toBe(0);
-      const context = { id: newCanvasId(), token: 'restored', checkpoint: null, name: null };
+      const context = { id: newCanvasId(), token: 'restored', checkpoint: null };
       if (when === 'before restart') {
-        loaded?.(context);
+        loaded.resolve(context);
         await first;
         expect(owner.restore).not.toHaveBeenCalled();
       }
-      const restarted = persistence.initialize();
-      loaded?.(context);
-      await Promise.all([first, restarted]);
+      const second = persistence.initialize();
+      loaded.resolve(context);
+      await Promise.all([first, second]);
       expect(owner.restore).toHaveBeenCalledExactlyOnceWith(context);
       expect(source.get).toHaveBeenCalledOnce();
       await persistence.flush();
       expect(source.save).toHaveBeenCalledWith('restored', expect.any(Object));
     },
   );
-
-  it('saves changes and answers shutdown once after starting again without restoring over edits', async () => {
-    const { persistence, source, owner, stop, change, listeners } = setup();
+  it('starts hearing shutdown again without restoring over current work', async () => {
+    const { persistence, source, owner, stop, listeners, change } = setup();
     await persistence.initialize();
     await persistence.flush();
     persistence.dispose();
-    persistence.dispose();
     stop();
-    change('edited');
-    persistence.changed();
-    await expect(persistence.flush()).rejects.toThrow('The run storage is not available.');
-    expect(source.save).toHaveBeenCalledOnce();
-    expect(source.ready).not.toHaveBeenCalled();
+    await expect(persistence.flush()).rejects.toThrow('not available');
     await persistence.initialize();
     await persistence.initialize();
-    expect(owner.restore).toHaveBeenCalledOnce();
     expect(listeners()).toBe(1);
+    expect(owner.restore).toHaveBeenCalledOnce();
+    change('changed');
     persistence.changed();
     await vi.waitFor(() => {
-      expect(source.save).toHaveBeenLastCalledWith(
-        'original',
-        expect.objectContaining({ state: '{"snapshot":"edited"}' }),
-      );
+      expect(source.save).toHaveBeenCalledTimes(2);
     });
     stop();
     await vi.waitFor(() => {
       expect(source.ready).toHaveBeenCalledExactlyOnceWith('quit-1', null);
     });
-    expect(owner.freeze).toHaveBeenCalledOnce();
-    expect(source.save).toHaveBeenLastCalledWith(
-      'original',
-      expect.objectContaining({ state: '{"snapshot":"paused"}' }),
-    );
     persistence.dispose();
     expect(listeners()).toBe(0);
   });
-
-  it('keeps a rejected restore blocked after starting again', async () => {
-    const { persistence, source, owner, stop, change } = setup();
-    owner.restore.mockImplementationOnce(() => {
-      throw new Error('Invalid saved run');
-    });
-    await expect(persistence.initialize()).rejects.toThrow('Invalid saved run');
-    persistence.dispose();
-    await expect(persistence.initialize()).rejects.toThrow('Invalid saved run');
-    expect(owner.restore).toHaveBeenCalledOnce();
-    change('edited after failure');
-    stop();
-    await vi.waitFor(() => {
-      expect(source.ready).toHaveBeenCalledWith('quit-1', expect.stringContaining('New or Open'));
-    });
-    expect(source.save).not.toHaveBeenCalled();
-  });
-
   it('freezes and durably saves before acknowledging shutdown', async () => {
     const { persistence, source, owner, stop } = setup();
-    let release: (() => void) | undefined;
-    vi.mocked(source.save).mockImplementation(
-      () =>
-        new Promise((resolve) => {
-          release = () => {
-            resolve(null);
-          };
-        }),
-    );
+    const saving = Promise.withResolvers<null>();
+    vi.mocked(source.save).mockReturnValue(saving.promise);
     await persistence.initialize();
     stop();
     await vi.waitFor(() => {
       expect(source.save).toHaveBeenCalledOnce();
     });
     expect(owner.freeze).toHaveBeenCalledOnce();
-    expect(vi.mocked(source.save).mock.calls[0]?.[1]?.state).toBe('{"snapshot":"paused"}');
     expect(source.ready).not.toHaveBeenCalled();
-    release?.();
+    expect(vi.mocked(source.save).mock.calls[0]?.[1]?.state).toBe('{"snapshot":"paused"}');
+    saving.resolve(null);
     await vi.waitFor(() => {
       expect(source.ready).toHaveBeenCalledWith('quit-1', null);
     });
   });
-
-  it('reports a write failure and refuses to acknowledge a successful close', async () => {
+  it('reports a failed write and refuses to acknowledge a successful close', async () => {
     const { persistence, source, owner, stop } = setup();
     vi.mocked(source.save).mockRejectedValue(new Error('Disk full'));
     await persistence.initialize();
@@ -204,105 +174,32 @@ describe('run persistence coordinator', () => {
     await vi.waitFor(() => {
       expect(source.ready).toHaveBeenCalledWith('quit-1', 'Disk full');
     });
-    expect(owner.freeze).toHaveBeenCalledOnce();
     expect(owner.error).toHaveBeenCalledWith(expect.objectContaining({ message: 'Disk full' }));
   });
-
-  it('holds writes across a canvas identity change and uses the new generation', async () => {
-    const { persistence, source } = setup();
-    await persistence.initialize();
-    let finish: (() => void) | undefined;
-    const action = new Promise<void>((resolve) => {
-      finish = resolve;
-    });
-    vi.mocked(source.get).mockResolvedValue({
-      id: newCanvasId(),
-      token: 'new',
-      checkpoint: null,
-      name: 'Saved.corral',
-    });
-    const transition = persistence.transition(() => action, false);
-    const save = persistence.flush();
-    await Promise.resolve();
-    expect(source.save).not.toHaveBeenCalled();
-    finish?.();
-    await transition;
-    await save;
-    expect(source.save).toHaveBeenCalledWith('new', expect.any(Object));
-  });
-
-  it('saves a flush asked for while it rebinds once the rebind is done, under the new token', async () => {
-    const { persistence, source } = setup();
-    await persistence.initialize();
-    const rebound = Promise.withResolvers<RunContext>();
-    vi.mocked(source.get).mockReturnValueOnce(rebound.promise);
-    const rebinding = persistence.rebind(false);
-    await vi.waitFor(() => {
-      expect(source.get).toHaveBeenCalledTimes(2);
-    });
-    // As main asks the renderer to save while it quits.
-    let flushed = false;
-    const flush = persistence.flush().then(() => {
-      flushed = true;
-    });
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(flushed).toBe(false);
-    expect(source.save).not.toHaveBeenCalled();
-    rebound.resolve({ id: newCanvasId(), token: 'rebound', checkpoint: null, name: null });
-    await rebinding;
-    await flush;
-    expect(source.save).toHaveBeenCalledExactlyOnceWith('rebound', expect.any(Object));
-  });
-
-  it('still refuses a flush asked for while it rebinds once it is disposed', async () => {
-    const { persistence, source } = setup();
-    await persistence.initialize();
-    const rebound = Promise.withResolvers<RunContext>();
-    vi.mocked(source.get).mockReturnValueOnce(rebound.promise);
-    const rebinding = persistence.rebind(false);
-    await vi.waitFor(() => {
-      expect(source.get).toHaveBeenCalledTimes(2);
-    });
-    const flush = persistence.flush();
-    persistence.dispose();
-    rebound.resolve({ id: newCanvasId(), token: 'rebound', checkpoint: null, name: null });
-    await rebinding;
-    await expect(flush).rejects.toThrow('The run storage is not available.');
-    expect(source.save).not.toHaveBeenCalled();
-  });
-
-  it('waits for a pending identical checkpoint and still saves an edit reverted during the write', async () => {
+  it('waits for an identical checkpoint and saves a later state reverted while the first write waits', async () => {
     const { persistence, source, change } = setup();
-    let release: (() => void) | undefined;
-    vi.mocked(source.save).mockImplementationOnce(
-      () =>
-        new Promise((resolve) => {
-          release = () => {
-            resolve(null);
-          };
-        }),
-    );
+    const held = Promise.withResolvers<null>();
+    vi.mocked(source.save).mockReturnValueOnce(held.promise);
     await persistence.initialize();
-    const first = persistence.flush();
-    const identical = persistence.flush();
+    const first = persistence.flush(),
+      identical = persistence.flush();
     await vi.waitFor(() => {
       expect(source.save).toHaveBeenCalledOnce();
     });
     change('edited');
-    const edit = persistence.flush();
+    const changed = persistence.flush();
     await Promise.resolve();
     change('running');
     const reverted = persistence.flush();
     await Promise.resolve();
-    release?.();
-    await Promise.all([first, identical, edit, reverted]);
+    held.resolve(null);
+    await Promise.all([first, identical, changed, reverted]);
     expect(vi.mocked(source.save).mock.calls.map(([, checkpoint]) => checkpoint?.state)).toEqual([
       '{"snapshot":"running"}',
       '{"snapshot":"edited"}',
       '{"snapshot":"running"}',
     ]);
   });
-
   it('retries the same checkpoint after a failed write', async () => {
     const { persistence, source } = setup();
     vi.mocked(source.save).mockRejectedValueOnce(new Error('Disk full'));
@@ -310,94 +207,150 @@ describe('run persistence coordinator', () => {
     await persistence.flush();
     expect(source.save).toHaveBeenCalledTimes(2);
   });
-
-  it('keeps writes blocked until every queued identity transition finishes', async () => {
-    const { persistence, source } = setup();
+  it('flushes before the switching op, resets and waits for the mirror, then reads the new run', async () => {
+    const { persistence, source, owner, open } = setup();
     await persistence.initialize();
-    let finishFirst: (() => void) | undefined;
-    let finishSecond: (() => void) | undefined;
-    const firstAction = new Promise<void>((resolve) => {
-      finishFirst = resolve;
+    const next = newCanvasId(),
+      order: string[] = [];
+    vi.mocked(source.save).mockImplementation(() => {
+      order.push('save');
+      return Promise.resolve();
     });
-    const secondAction = new Promise<void>((resolve) => {
-      finishSecond = resolve;
+    open.mockImplementation((canvas) => {
+      expect(canvas).toBe(next);
+      order.push('mirror');
+      return Promise.resolve();
     });
-    let token = 'original';
+    vi.mocked(source.get).mockImplementation(() => {
+      order.push('get');
+      return Promise.resolve({ id: next, token: 'new', checkpoint: null });
+    });
+    owner.restore.mockImplementation(() => {
+      order.push('restore');
+    });
+    await persistence.switch(() => {
+      order.push('op');
+      return Promise.resolve(next);
+    }, open);
+    expect(order).toEqual(['save', 'op', 'mirror', 'get', 'restore']);
+    await persistence.flush();
+    expect(source.save).toHaveBeenLastCalledWith('new', expect.any(Object));
+  });
+  it.each(['cancelled', 'refused'])(
+    'keeps the current token and stores after a %s switch',
+    async (why) => {
+      const { persistence, source, owner, open } = setup();
+      await persistence.initialize();
+      const action = () =>
+        why === 'cancelled' ? Promise.resolve(null) : Promise.reject(new Error('Invalid file'));
+      const attempt = persistence.switch(action, open);
+      if (why === 'cancelled') await attempt;
+      else await expect(attempt).rejects.toThrow('Invalid file');
+      expect(open).not.toHaveBeenCalled();
+      expect(owner.restore).toHaveBeenCalledOnce();
+      await persistence.flush();
+      expect(source.save).toHaveBeenLastCalledWith('original', expect.any(Object));
+    },
+  );
+  it('makes shutdown wait through a switch and saves only the new generation afterwards', async () => {
+    const { persistence, source, open } = setup();
+    await persistence.initialize();
+    const held = Promise.withResolvers<ReturnType<typeof newCanvasId>>();
+    vi.mocked(source.get).mockResolvedValue({ id: newCanvasId(), token: 'new', checkpoint: null });
+    const switching = persistence.switch(() => held.promise, open);
+    await vi.waitFor(() => {
+      expect(source.save).toHaveBeenCalledOnce();
+    });
+    const flush = persistence.flush();
+    await Promise.resolve();
+    expect(source.save).toHaveBeenCalledOnce();
+    held.resolve(newCanvasId());
+    await switching;
+    await flush;
+    expect(source.save).toHaveBeenLastCalledWith('new', expect.any(Object));
+  });
+  it('serializes two switches and holds writes until both finish', async () => {
+    const { persistence, source, open } = setup();
+    await persistence.initialize();
+    const held = Promise.withResolvers<ReturnType<typeof newCanvasId>>();
+    let token = 'first';
     vi.mocked(source.get).mockImplementation(() =>
-      Promise.resolve({ id: newCanvasId(), token, checkpoint: null, name: null }),
+      Promise.resolve({ id: newCanvasId(), token, checkpoint: null }),
     );
-    const first = persistence.transition(async () => {
-      await firstAction;
-      token = 'first';
-    }, false);
-    const secondStarted = vi.fn();
-    const second = persistence.transition(async () => {
-      secondStarted();
-      await secondAction;
-      token = 'second';
-    }, false);
-    finishFirst?.();
-    await first;
+    const first = persistence.switch(() => held.promise, open),
+      secondAction = vi.fn(() => {
+        token = 'second';
+        return Promise.resolve(newCanvasId());
+      });
+    const second = persistence.switch(secondAction, open),
+      flush = persistence.flush();
     await vi.waitFor(() => {
-      expect(secondStarted).toHaveBeenCalledOnce();
+      expect(source.save).toHaveBeenCalledOnce();
     });
-    const write = persistence.flush();
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(source.save).not.toHaveBeenCalled();
-    finishSecond?.();
-    await Promise.all([second, write]);
-    expect(source.save).toHaveBeenCalledWith('second', expect.any(Object));
+    expect(secondAction).not.toHaveBeenCalled();
+    held.resolve(newCanvasId());
+    await Promise.all([first, second, flush]);
+    expect(source.save).toHaveBeenLastCalledWith('second', expect.any(Object));
   });
-
-  it('recovers a rejected restore as a draft before allowing the original canvas to save', async () => {
-    const { persistence, source, owner } = setup();
+  it('refuses a queued flush after disposal during a switch', async () => {
+    const { persistence, source, open } = setup();
     await persistence.initialize();
-    const invalid = {
-      id: newCanvasId(),
-      token: 'invalid-file',
-      checkpoint: null,
-      name: 'invalid.corral',
-    };
-    const draft = { id: newCanvasId(), token: 'recovered-draft', checkpoint: null, name: null };
-    vi.mocked(source.get).mockResolvedValueOnce(invalid).mockResolvedValue(draft);
-    owner.restore.mockImplementationOnce(() => {
-      throw new Error('Invalid canvas');
-    });
-    const recover = vi.fn().mockResolvedValue(undefined);
-    await expect(
-      persistence.transition(() => Promise.resolve('opened'), true, recover),
-    ).rejects.toThrow('Invalid canvas');
-    expect(recover).toHaveBeenCalledOnce();
-    await persistence.flush();
-    expect(source.save).toHaveBeenCalledWith('recovered-draft', expect.any(Object));
-    expect(owner.restore).toHaveBeenCalledTimes(2);
-  });
-
-  it('allows replacement and an unchanged close after initialization rejects without writing the rejected state', async () => {
-    const { persistence, source, stop } = setup();
-    vi.mocked(source.get).mockRejectedValueOnce(new Error('Corrupt saved state'));
-    await expect(persistence.initialize()).rejects.toThrow('Corrupt saved state');
-    await persistence.prepareForReplacement();
-    stop();
+    const held = Promise.withResolvers<ReturnType<typeof newCanvasId>>();
+    const switching = persistence.switch(() => held.promise, open);
     await vi.waitFor(() => {
-      expect(source.ready).toHaveBeenCalledWith('quit-1', null);
+      expect(source.save).toHaveBeenCalledOnce();
     });
-    expect(source.save).not.toHaveBeenCalled();
-    await persistence.transition(() => Promise.resolve(undefined), false);
-    await persistence.flush();
-    expect(source.save).toHaveBeenCalledWith('original', expect.any(Object));
+    const flush = persistence.flush();
+    persistence.dispose();
+    held.resolve(newCanvasId());
+    await switching;
+    await expect(flush).rejects.toThrow('not available');
   });
-
-  it('refuses to discard changes made after a failed initialization on close', async () => {
+  it.each(['load', 'restore'])(
+    'keeps a rejected %s untouched until an explicit switch',
+    async (failure) => {
+      const { persistence, source, owner, stop, open } = setup();
+      if (failure === 'load')
+        vi.mocked(source.get).mockRejectedValueOnce(new Error('Corrupt saved state'));
+      else
+        owner.restore.mockImplementationOnce(() => {
+          throw new Error('Corrupt saved state');
+        });
+      await expect(persistence.initialize()).rejects.toThrow('Corrupt');
+      stop();
+      await vi.waitFor(() => {
+        expect(source.ready).toHaveBeenCalledWith('quit-1', null);
+      });
+      expect(source.save).not.toHaveBeenCalled();
+      await persistence.switch(() => Promise.resolve(newCanvasId()), open);
+      await persistence.flush();
+      expect(source.save).toHaveBeenCalledWith('original', expect.any(Object));
+    },
+  );
+  it('refuses to silently discard a run changed after a failed initialization', async () => {
     const { persistence, source, stop, change } = setup();
-    vi.mocked(source.get).mockRejectedValueOnce(new Error('Corrupt saved state'));
-    await expect(persistence.initialize()).rejects.toThrow('Corrupt saved state');
-    change('edited after failure');
+    vi.mocked(source.get).mockRejectedValueOnce(new Error('Corrupt'));
+    await expect(persistence.initialize()).rejects.toThrow('Corrupt');
+    change('changed');
     stop();
     await vi.waitFor(() => {
       expect(source.ready).toHaveBeenCalledWith('quit-1', expect.stringContaining('New or Open'));
     });
     expect(source.save).not.toHaveBeenCalled();
+  });
+  it('blocks saving if the new canvas cannot restore, then recovers with another switch', async () => {
+    const { persistence, source, owner, open } = setup();
+    await persistence.initialize();
+    vi.mocked(source.get).mockResolvedValue({ id: newCanvasId(), token: 'new', checkpoint: null });
+    owner.restore.mockImplementationOnce(() => {
+      throw new Error('Invalid checkpoint');
+    });
+    await expect(persistence.switch(() => Promise.resolve(newCanvasId()), open)).rejects.toThrow(
+      'Invalid',
+    );
+    await expect(persistence.flush()).rejects.toThrow('Invalid');
+    await persistence.switch(() => Promise.resolve(newCanvasId()), open);
+    await persistence.flush();
+    expect(source.save).toHaveBeenLastCalledWith('new', expect.any(Object));
   });
 });

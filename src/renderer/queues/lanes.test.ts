@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
-import type { GraphNode } from '../graph/graph';
+import type { AgentNode } from '../../shared/model/canvas';
 import type { QueueItem, QueueRepeat, RepeatedItem } from '../../shared/model/queue';
 import { lanesOf } from './lanes';
 
-const agent = (id: string, queue: QueueItem[] = []): GraphNode => ({
+const agent = (id: string, queue: QueueItem[] = []): AgentNode => ({
   id,
   type: 'agent',
   position: { x: 0, y: 0 },
@@ -12,7 +12,7 @@ const agent = (id: string, queue: QueueItem[] = []): GraphNode => ({
 });
 
 /** Each lane's items, by row: `null` where a row is empty. */
-const rows = (nodes: GraphNode[]) => {
+const rows = (nodes: AgentNode[]) => {
   const { lanes } = lanesOf(nodes);
   const count = Math.max(0, ...lanes.flatMap((lane) => lane.cells.map((cell) => cell.row + 1)));
   return Object.fromEntries(

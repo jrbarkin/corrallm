@@ -1,3 +1,4 @@
+import { asHuman } from './gui';
 import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -15,7 +16,13 @@ import { createCore } from './core';
 import type { Core } from './core';
 import { STORE_FILE } from './store/open';
 import { snapshots, takeSnapshot } from './store/snapshots';
-import { journaledRun, keepCanvases, keepMessages, refuseWrites } from './store/test-store';
+import {
+  journaledRun,
+  keepCanvases,
+  keepMessages,
+  readOnDisk,
+  refuseWrites,
+} from './store/test-store';
 import { CALLERS, NO_DESKTOP } from './test-registry';
 
 /** A canvas with one Codex agent whose queue sends it a message (its id is the file's). */
@@ -81,7 +88,7 @@ async function start(codex: Connector<SessionMode>): Promise<Core> {
 }
 
 describe('the core runs each canvas’s engine', () => {
-  it('keeps the renderer’s edited checkpoint when a manual send reads the canvas’s messages', async () => {
+  it('keeps the renderer’s checkpoint and edits when a manual send reads the canvas’s messages', async () => {
     await keepCanvas();
     await (await start(new FakeConnector({ adapter: 'codex' }))).engines.open(CANVAS);
     await core?.close();
@@ -112,16 +119,25 @@ describe('the core runs each canvas’s engine', () => {
     ]);
     expect(app.engines.opened()).toEqual([]);
     const checkpoint = context.checkpoint;
-    if (!checkpoint) throw new Error('No checkpoint was restored.');
-    const workflow = JSON.parse(checkpoint.workflow) as { nodes: { label: string }[] };
-    const worker = workflow.nodes[0];
-    if (!worker) throw new Error('No worker was restored.');
-    worker.label = 'Edited in renderer';
-    const edited = { ...checkpoint, workflow: JSON.stringify(workflow), updatedAt: Date.now() };
+    if (!checkpoint) throw new Error('Nothing was restored.');
+    const edited = { ...checkpoint, updatedAt: Date.now() };
+    const loaded = await app.call('canvas.get', { canvas: CANVAS }, asHuman(7));
+    if (!loaded.ok) throw new Error(loaded.error.sentence);
+    const renamed = await app.call(
+      'canvas.rename',
+      { canvas: CANVAS, node: 'worker', label: 'Edited in renderer', request: crypto.randomUUID() },
+      asHuman(7),
+    );
+    if (!renamed.ok) throw new Error(renamed.error.sentence);
     await app.channels.call(7, 'run:save', [context.token, edited]);
     await app.close();
     core = undefined;
     expect(journaledRun(profile, CANVAS)).toEqual(edited);
+    expect(
+      readOnDisk(profile, (disk) =>
+        disk.prepare("SELECT label FROM node WHERE canvas_id = ? AND id = 'worker'").get(CANVAS),
+      ),
+    ).toEqual({ label: 'Edited in renderer' });
     expect(app.engines.opened()).toEqual([]);
   });
 
@@ -307,13 +323,50 @@ describe('the core runs each canvas’s engine', () => {
     expect(codex.started).toEqual([]);
   });
 
-  it('refuses an unsaved canvas, though its run was journaled and its folder kept', async () => {
+  it('opens a canvas the core keeps the document of with no file, its run restored paused', async () => {
     await journalRun();
-    // A draft: the profile keeps its folder and its run, and no file.
+    // Its file forgotten: the profile keeps its folder, its run and its document, and no file.
     await keepCanvases(profile, { [CANVAS]: { project } });
+    const engine = await (
+      await start(new FakeConnector({ adapter: 'codex' }))
+    ).engines.open(CANVAS);
+    expect(engine.run.snapshot()).toMatchObject({
+      paused: true,
+      agents: { worker: { status: 'done' } },
+    });
+  });
+
+  it('refuses a draft that holds nothing, though its folder is kept', async () => {
+    const draft = '6e5d4c3b-2a19-4f08-8e7d-6c5b4a392817' as CanvasId;
+    await keepCanvases(profile, { [draft]: { project } });
     await expect(
-      (await start(new FakeConnector({ adapter: 'codex' }))).engines.open(CANVAS),
+      (await start(new FakeConnector({ adapter: 'codex' }))).engines.open(draft),
     ).rejects.toThrow(/isn’t saved/);
+  });
+
+  it('closes a canvas it runs: its run held and journaled, its sessions closed, open again paused', async () => {
+    await keepCanvas();
+    const codex = new FakeConnector({ adapter: 'codex' });
+    const started = await start(codex);
+    const engine = await started.engines.open(CANVAS);
+    expect(
+      readOnDisk(profile, (disk) => disk.prepare('SELECT canvas_id FROM open_canvas').all()),
+    ).toEqual([{ canvas_id: CANVAS }]);
+    engine.run.start();
+    await vi.waitFor(() => {
+      expect(engine.run.snapshot().agents.worker?.status).toBe('done');
+    });
+    const closing = vi.spyOn(codex, 'start');
+    await started.engines.closeCanvas(CANVAS);
+    expect(started.engines.canvas(CANVAS)).toBeUndefined();
+    expect(started.engines.opened()).toEqual([]);
+    expect(journaled().run.agents.worker).toMatchObject({ outcomes: { hello: 'succeeded' } });
+    // Nothing more of it runs, and closing it again is nothing.
+    await started.engines.closeCanvas(CANVAS);
+    expect(closing).not.toHaveBeenCalled();
+    const again = await started.engines.open(CANVAS);
+    expect(again).not.toBe(engine);
+    expect(again.run.snapshot()).toMatchObject({ running: false, paused: true });
   });
 
   it('refuses a canvas whose file holds another canvas now, though its run was journaled', async () => {

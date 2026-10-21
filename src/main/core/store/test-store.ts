@@ -107,7 +107,7 @@ async function withJournal(profile: string, use: (journal: RunJournal) => Promis
   const store = await openTestStore(profile);
   try {
     const memory = new CanvasMemory(store);
-    await use(new RunJournal({ store, memory, projectOf: () => undefined }));
+    await use(new RunJournal({ store, memory }));
   } finally {
     await store.close();
   }
@@ -118,7 +118,7 @@ export function openedLast(profile: string, canvas: CanvasId): Promise<void> {
   return withJournal(profile, (journal) => journal.opened(canvas));
 }
 
-/** Forgets the canvas's run, as a window journaling none does: it opens from its file again. */
+/** Forgets the canvas's run, as a window journaling none does. */
 export function forgetRun(profile: string, canvas: CanvasId): Promise<void> {
   return withJournal(profile, async (journal) => {
     await journal.save(canvas, (await journal.get(canvas)).token, null);
@@ -149,8 +149,8 @@ export function journaledRun(profile: string, canvas: string): RunCheckpoint | u
     disk
       .prepare(
         `SELECT json_extract(state, '$.version') AS version, json_extract(state, '$.state') AS state,
-           json_extract(state, '$.messages') AS messages, workflow, updated_at AS updatedAt
-         FROM run JOIN run_workflow USING (canvas_id) WHERE canvas_id = ?`,
+           json_extract(state, '$.messages') AS messages, updated_at AS updatedAt
+         FROM run WHERE canvas_id = ?`,
       )
       .get(canvas),
   );

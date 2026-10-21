@@ -44,6 +44,8 @@ const TOKEN_PARTIES = PARTIES.filter((party) => party !== 'you');
 
 interface Setup {
   core: Dispatcher;
+  /** Readies it for a call meeting `rule`: what undoes that. */
+  meeting?(rule: Rule): () => void;
   close(): Promise<void>;
 }
 
@@ -259,18 +261,28 @@ describe.each(REGISTRIES)('T3b on %s', (_label, fixtures, world, start) => {
     it('refuses a token’s call meeting each of its rules (or makes it a proposal), and applies yours', async () => {
       for (const [rule, args] of Object.entries(fixture.meetsRule ?? {})) {
         // The tokens first: yours may change what the rule reads (a pause you set, released).
-        for (const party of TOKEN_PARTIES.filter((p) => inAudience(name, p))) {
-          const theirs = await setup.core.call(name, args, CALLERS[party]);
-          if (PROPOSING_RULES.includes(rule as Rule)) {
-            expect(theirs.ok && 'proposed' in (theirs.value as object), `${rule}: ${party}`).toBe(
-              true,
-            );
-          } else {
-            expect(theirs, `${rule}: ${party}`).toMatchObject({
-              ok: false,
-              error: { code: 'refused' },
-            });
+        // An agent's own node is what R6 (`self`) guards: an outside token has none to meet it.
+        const meeting = TOKEN_PARTIES.filter(
+          (p) => inAudience(name, p) && (rule !== 'self' || CALLERS[p].kind === 'agent'),
+        );
+        // What the world must be for a call to meet it (R11: a party at its cap), only meanwhile.
+        const met = setup.meeting?.(rule as Rule);
+        try {
+          for (const party of meeting) {
+            const theirs = await setup.core.call(name, args, CALLERS[party]);
+            if (PROPOSING_RULES.includes(rule as Rule)) {
+              expect(theirs.ok && 'proposed' in (theirs.value as object), `${rule}: ${party}`).toBe(
+                true,
+              );
+            } else {
+              expect(theirs, `${rule}: ${party}`).toMatchObject({
+                ok: false,
+                error: { code: 'refused' },
+              });
+            }
           }
+        } finally {
+          met?.();
         }
         const yours = await setup.core.call(name, args, CALLERS.you);
         expect(yours.ok && !('proposed' in (yours.value as object)), rule).toBe(true);

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { flushSync } from 'react-dom';
-import { useDraft } from '../useDraft';
+import { useLabel } from '../useDraft';
 
 import type { AdapterId } from '../../shared/adapter';
 import type { ProjectFolder } from '../../shared/ipc';
@@ -20,7 +20,7 @@ import { actionsOf, adapterCli, DEFAULT_AGENT } from '../graph/agents';
 import type { AgentConnection } from '../graph/agents';
 import { editsOf } from '../graph/edits';
 import type { QueueEdits } from '../graph/edits';
-import type { GraphNode } from '../graph/graph';
+import type { AgentNode, CanvasNode } from '../../shared/model/canvas';
 import { chooseTarget, findItem, isApproval, isWait } from '../../shared/model/queue';
 import type { WaitTarget } from '../../shared/model/queue';
 import { QueueAddMenu, QueueEditor } from '../graph/QueueEditor';
@@ -147,9 +147,9 @@ export function AgentView({
   controls,
   onClose,
 }: {
-  node: GraphNode;
+  node: AgentNode;
   /** Every node of the graph: what queued items can act on. */
-  nodes: readonly GraphNode[];
+  nodes: readonly CanvasNode[];
   /** Where the node's card is on screen: the panel grows from it and shrinks back into it. */
   origin: () => DOMRect | undefined;
   /**
@@ -358,7 +358,7 @@ export function AgentView({
 
   /** Its own queue's edits. */
   const own = editsOf(edits, node.id);
-  const peerNode = nodes.find((n) => n.id === peer && n.type === 'agent');
+  const peerNode = nodes.filter((n) => n.type === 'agent').find((n) => n.id === peer);
   const links = useMemo(() => (peerNode ? queueLinks(node, peerNode) : []), [node, peerNode]);
   const waiting = choosing && findItem(node.data.queue ?? [], choosing.waitId)?.item;
   const chosen = waiting && isWait(waiting) ? waiting.waitFor[choosing.index] : undefined;
@@ -367,12 +367,12 @@ export function AgentView({
     if (!choosing || !waiting || !isWait(waiting)) return;
     const target: WaitTarget =
       item === undefined ? { agent: choosing.agent } : { agent: choosing.agent, item };
-    own.onWaitFor(waiting.id, chooseTarget(waiting.waitFor, choosing.index, target));
+    void own.onWaitFor(waiting.id, chooseTarget(waiting.waitFor, choosing.index, target));
     setChoosing(undefined);
   };
 
   const label = node.data.label;
-  const { problem: titleProblem, ...title } = useDraft(label, onRename);
+  const { problem: titleProblem, ...title } = useLabel(label, onRename);
   const name = label || 'Unnamed agent';
   const agent = node.data.adapter ?? DEFAULT_AGENT;
   /** The chat's first message, which names it in the queue: of the conversation it is on now. */
@@ -455,6 +455,7 @@ export function AgentView({
                 className="agent-title"
                 aria-label="Name"
                 {...title}
+                title={titleProblem}
                 placeholder="Unnamed agent"
               />
               {titleProblem && <span role="alert">{titleProblem}</span>}

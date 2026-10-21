@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { Change, TopicKey, TopicSnapshot } from '../../shared/api/topics';
 import type { CanvasId } from '../../shared/canvas';
 import { topicKey } from '../../shared/api/topics';
+import type { MetaEntity, NodeEntity } from '../../shared/model/state';
 import { TopicMirror } from './topics';
 import type { TopicSource } from './topics';
 
@@ -15,8 +16,13 @@ function source(connected = true) {
   const api: TopicSource = {
     topicsSubscribe: vi.fn<TopicSource['topicsSubscribe']>(
       (request) =>
-        new Promise<TopicSnapshot>((resolve) => {
-          pending.push({ topic: topicKey(request), resolve });
+        new Promise((resolve) => {
+          pending.push({
+            topic: topicKey(request),
+            resolve: (snapshot) => {
+              resolve({ ...snapshot, revs: {} });
+            },
+          });
         }),
     ),
     topicsUnsubscribe: vi.fn().mockResolvedValue({}),
@@ -40,6 +46,14 @@ function source(connected = true) {
     change: (batch: Change[]) => change?.(batch),
     epoch: (next: string) => epoch?.(next),
   };
+}
+/** An agent's row as a canvas's topic carries it. */
+function agent(id: string, label: string, rev = 1): NodeEntity {
+  return { id, kind: 'agent', place: 0, label, x: 0, y: 0, rev, by: 'you' };
+}
+/** A canvas's meta as its topic carries it. */
+function meta(name: string): MetaEntity {
+  return { arrange: false, name, edited: false, project: null, rev: 0, by: 'you' };
 }
 function changed(rev: number, percent: number, epoch = 'one'): Extract<Change, { topic: 'usage' }> {
   return {
@@ -70,9 +84,9 @@ describe('the topic mirror', () => {
     const topic = `canvas:${canvas}` as const;
     mirror.subscribe(topic, vi.fn());
     expect(remote.api.topicsSubscribe).toHaveBeenCalledExactlyOnceWith({ topic: 'canvas', canvas });
-    const one = { id: 'one', label: 'Builder', rev: 1 };
-    const two = { id: 'two', label: 'Reviewer', rev: 1 };
-    const initial = { meta: { name: 'Work' }, 'node/one': one, 'node/two': two };
+    const one = agent('one', 'Builder');
+    const two = agent('two', 'Reviewer');
+    const initial = { meta: meta('Work'), 'node/one': one, 'node/two': two };
     remote.pending[0]?.resolve({ epoch: 'one', rev: 0, state: initial });
     await vi.waitFor(() => {
       expect(mirror.snapshot(topic)).toBe(initial);
@@ -85,14 +99,14 @@ describe('the topic mirror', () => {
         seq: 1,
         by: 'you',
         at: 1,
-        set: { 'node/one': { ...one }, 'node/three': { id: 'three', rev: 1 } },
+        set: { 'node/one': { ...one }, 'node/three': agent('three', 'Tester') },
         remove: ['node/two'],
       },
     ]);
     expect(mirror.snapshot(topic)).toEqual({
       meta: initial.meta,
       'node/one': one,
-      'node/three': { id: 'three', rev: 1 },
+      'node/three': agent('three', 'Tester'),
     });
     expect(mirror.snapshot(topic)?.['node/one']).toBe(one);
     expect(mirror.snapshot(topic)?.meta).toBe(initial.meta);
@@ -126,19 +140,19 @@ describe('the topic mirror', () => {
     mirror.subscribe(topic, vi.fn());
     mirror.subscribe(`needs:${other}`, vi.fn());
     expect(remote.api.topicsSubscribe).toHaveBeenLastCalledWith({ topic: 'needs', canvas: other });
-    remote.pending[0]?.resolve({ epoch: 'one', rev: 1, state: { meta: { name: 'Old' } } });
+    remote.pending[0]?.resolve({ epoch: 'one', rev: 1, state: { meta: meta('Old') } });
     remote.pending[1]?.resolve({ epoch: 'one', rev: 1, state: { items: [] } });
     await vi.waitFor(() => {
       expect(mirror.snapshot(topic)).toBeDefined();
     });
     remote.change([
-      { topic, epoch: 'one', rev: 3, seq: 7, by: 'you', at: 1, set: { meta: { name: 'New' } } },
+      { topic, epoch: 'one', rev: 3, seq: 7, by: 'you', at: 1, set: { meta: meta('New') } },
     ]);
     expect(remote.api.topicsSubscribe).toHaveBeenCalledTimes(3);
-    expect(mirror.snapshot(topic)).toEqual({ meta: { name: 'Old' } });
-    remote.pending[2]?.resolve({ epoch: 'one', rev: 3, state: { meta: { name: 'New' } } });
+    expect(mirror.snapshot(topic)).toEqual({ meta: meta('Old') });
+    remote.pending[2]?.resolve({ epoch: 'one', rev: 3, state: { meta: meta('New') } });
     await vi.waitFor(() => {
-      expect(mirror.snapshot(topic)).toEqual({ meta: { name: 'New' } });
+      expect(mirror.snapshot(topic)).toEqual({ meta: meta('New') });
     });
     expect(mirror.snapshot(`needs:${other}`)).toEqual({ items: [] });
     mirror.dispose();

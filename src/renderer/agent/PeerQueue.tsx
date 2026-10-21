@@ -1,7 +1,7 @@
 import { actionsOf, DEFAULT_AGENT } from '../graph/agents';
 import { editsOf } from '../graph/edits';
 import type { QueueEdits } from '../graph/edits';
-import type { GraphNode } from '../graph/graph';
+import type { AgentNode, CanvasNode } from '../../shared/model/canvas';
 import { QueueEditor } from '../graph/QueueEditor';
 import type { RowMarks } from '../graph/QueueEditor';
 
@@ -20,8 +20,8 @@ export function PeerQueue({
   onPick,
   onClose,
 }: {
-  node: GraphNode;
-  nodes: readonly GraphNode[];
+  node: AgentNode;
+  nodes: readonly CanvasNode[];
   edits: QueueEdits;
   marks: (agent: string, item: string | null) => RowMarks;
   picking: { item: string | undefined } | undefined;

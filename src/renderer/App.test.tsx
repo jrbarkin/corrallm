@@ -1,9 +1,10 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { newCanvasId } from '../shared/canvas';
 import type { AppApi } from '../shared/ipc';
 import { App } from './App';
+import { topics } from './api/topics';
 
 vi.mock('./terminal/screen', async () => {
   const { fakeScreens } = await import('./terminal/test-screen');
@@ -14,31 +15,54 @@ vi.mock('./terminal/screen', async () => {
 function stubApi(api: Partial<AppApi>) {
   const canvas = newCanvasId();
   const usage: Partial<AppApi> = {
-    windowGet: vi.fn<AppApi['windowGet']>().mockResolvedValue({ ok: true, value: { c: canvas } }),
+    windowGet: vi.fn<AppApi['windowGet']>().mockResolvedValue({ ok: true, value: { canvas } }),
     getRun: vi
       .fn<AppApi['getRun']>()
-      .mockResolvedValue({ id: newCanvasId(), token: 'test', checkpoint: null, name: null }),
+      .mockResolvedValue({ id: canvas, token: 'test', checkpoint: null }),
     saveRun: vi.fn<AppApi['saveRun']>().mockResolvedValue(null),
     runReady: vi.fn<AppApi['runReady']>().mockResolvedValue(null),
     onRunStopping: vi.fn<AppApi['onRunStopping']>(() => () => undefined),
     topicsSubscribe: vi.fn<AppApi['topicsSubscribe']>().mockResolvedValue({
       ok: true,
-      value: { epoch: 'one', rev: 0, state: { readings: [], rules: {} } },
+      value: { epoch: 'one', rev: 0, state: { readings: [], rules: {} }, revs: {} },
     }),
     topicsUnsubscribe: vi
       .fn<AppApi['topicsUnsubscribe']>()
-      .mockResolvedValue({ ok: true, value: {} }),
+      .mockResolvedValue({ ok: true, value: { revs: {} } }),
     topicsOnChange: vi.fn<AppApi['topicsOnChange']>(() => () => undefined),
     topicsOnEpoch: vi.fn<AppApi['topicsOnEpoch']>((listener) => {
       listener('one');
       return () => undefined;
     }),
   };
-  Object.defineProperty(window, 'api', { value: { ...usage, ...api }, configurable: true });
+  const subscribe = api.topicsSubscribe ?? usage.topicsSubscribe;
+  if (!subscribe) throw new Error('No fixture subscriber');
+  const topicsSubscribe: AppApi['topicsSubscribe'] = (args) =>
+    args.topic === 'canvas'
+      ? Promise.resolve({
+          ok: true,
+          value: {
+            epoch: 'one',
+            rev: 0,
+            revs: {},
+            state: {
+              meta: { arrange: false, name: null, edited: false, project: null, rev: 0, by: 'you' },
+            },
+          },
+        })
+      : subscribe(args);
+  Object.defineProperty(window, 'api', {
+    value: { ...usage, ...api, topicsSubscribe },
+    configurable: true,
+  });
 }
 
 describe('App', () => {
-  afterEach(() => {
+  afterEach(async () => {
+    // Unmount and finish subscription cleanup while its transport still exists.
+    cleanup();
+    topics.dispose();
+    await Promise.resolve();
     Reflect.deleteProperty(window, 'api');
   });
 
@@ -61,7 +85,7 @@ describe('App', () => {
   it('subscribes to the core’s usage topic and its changes', async () => {
     const topicsSubscribe = vi.fn<AppApi['topicsSubscribe']>().mockResolvedValue({
       ok: true,
-      value: { epoch: 'one', rev: 0, state: { readings: [], rules: {} } },
+      value: { epoch: 'one', rev: 0, state: { readings: [], rules: {} }, revs: {} },
     });
     const topicsOnChange = vi.fn<AppApi['topicsOnChange']>(() => () => undefined);
     stubApi({
@@ -82,13 +106,18 @@ describe('App', () => {
 
   it('learns the canvas id from window.get when it restores run progress', async () => {
     const c = newCanvasId();
-    const windowGet = vi.fn<AppApi['windowGet']>().mockResolvedValue({ ok: true, value: { c } });
+    const windowGet = vi
+      .fn<AppApi['windowGet']>()
+      .mockResolvedValue({ ok: true, value: { canvas: c } });
     const saveRun = vi.fn<AppApi['saveRun']>().mockResolvedValue(null);
     stubApi({
       appInfo: vi
         .fn<AppApi['appInfo']>()
         .mockResolvedValue({ ok: true, value: { name: 'corrallm', version: '0.1.0' } }),
       windowGet,
+      getRun: vi
+        .fn<AppApi['getRun']>()
+        .mockResolvedValue({ id: c, token: 'test', checkpoint: null }),
       saveRun,
     });
     render(<App />);
@@ -96,10 +125,9 @@ describe('App', () => {
       expect(windowGet).toHaveBeenCalled();
     });
     await waitFor(() => {
-      const workflows = saveRun.mock.calls.flatMap(([, checkpoint]) =>
-        checkpoint ? [JSON.parse(checkpoint.workflow) as { id: string }] : [],
-      );
-      expect(workflows.at(-1)?.id).toBe(c);
+      expect(saveRun).toHaveBeenCalledWith('test', expect.any(Object));
+      // A token and a checkpoint, never a document beside them.
+      for (const call of saveRun.mock.calls) expect(call).toHaveLength(2);
     });
   });
 

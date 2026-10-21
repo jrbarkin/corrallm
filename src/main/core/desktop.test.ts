@@ -6,6 +6,8 @@ import { pathToFileURL } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { MAX_LINK_LENGTH } from '../../shared/ipc';
+import { toFile } from '../../shared/model/file';
+import type { RunContext } from '../../shared/run';
 import { createCore } from './core';
 import type { Core } from './core';
 import { mintTrustedPath } from './host';
@@ -53,11 +55,24 @@ afterEach(async () => {
   await rm(profile, { recursive: true, force: true });
 });
 
+/** Picks the project folder of the canvas `caller`'s window shows, in the folder dialog. */
+async function chooseProject(caller: typeof SEVEN) {
+  const shown = await core.call('window.get', {}, caller);
+  if (!shown.ok) throw new Error(shown.error.sentence);
+  return core.call('project.choose', { canvas: shown.value.canvas }, caller);
+}
+/** Begins a new canvas in `caller`'s window, as New does: its id. */
+async function created(caller: typeof SEVEN) {
+  const made = await core.call('canvas.create', {}, caller);
+  if (!made.ok || !('canvas' in made.value)) throw new Error('No canvas was made');
+  return made.value.canvas;
+}
+
 describe('link.open', () => {
   it('opens a normalized allowlisted URL through the host', async () => {
     expect(await core.call('link.open', { url: 'HTTPS://GITHUB.COM/openai' }, SEVEN)).toEqual({
       ok: true,
-      value: { opened: true },
+      value: { opened: true, revs: {} },
     });
     expect(host.openExternal).toHaveBeenCalledExactlyOnceWith('https://github.com/openai');
     expect(host.askOpenLink).not.toHaveBeenCalled();
@@ -67,14 +82,14 @@ describe('link.open', () => {
     const url = 'https://docs.example.com/a';
     expect(await core.call('link.open', { url }, SEVEN)).toEqual({
       ok: true,
-      value: { opened: false },
+      value: { opened: false, revs: {} },
     });
     expect(host.askOpenLink).toHaveBeenCalledExactlyOnceWith(7, 'docs.example.com', url);
     expect(host.openExternal).not.toHaveBeenCalled();
     host.askOpenLink.mockResolvedValue({ open: true, always: false });
     expect(await core.call('link.open', { url }, EIGHT)).toEqual({
       ok: true,
-      value: { opened: true },
+      value: { opened: true, revs: {} },
     });
     expect(host.askOpenLink).toHaveBeenLastCalledWith(8, 'docs.example.com', url);
     expect(host.openExternal).toHaveBeenCalledExactlyOnceWith(url);
@@ -89,7 +104,7 @@ describe('link.open', () => {
   ])('leaves %s inert', async (url) => {
     expect(await core.call('link.open', { url }, SEVEN)).toEqual({
       ok: true,
-      value: { opened: false },
+      value: { opened: false, revs: {} },
     });
     expect(host.askOpenLink).not.toHaveBeenCalled();
     expect(host.openExternal).not.toHaveBeenCalled();
@@ -99,12 +114,12 @@ describe('link.open', () => {
 describe('link.reveal', () => {
   it('reveals a real path only inside the calling window’s project folder', async () => {
     host.pickFolder.mockResolvedValue(mintTrustedPath(project));
-    await core.channels.call(7, 'project:choose', []);
+    await chooseProject(SEVEN);
     const file = path.join(project, 'notes.txt');
     await writeFile(file, 'Notes');
     expect(await core.call('link.reveal', { url: pathToFileURL(file).href }, SEVEN)).toEqual({
       ok: true,
-      value: { revealed: true },
+      value: { revealed: true, revs: {} },
     });
     expect(host.showFile).toHaveBeenCalledExactlyOnceWith(await realpath(file));
     const outside = path.join(profile, 'outside.txt');
@@ -120,7 +135,7 @@ describe('link.reveal', () => {
     ]) {
       expect(await core.call('link.reveal', { url }, SEVEN)).toEqual({
         ok: true,
-        value: { revealed: false },
+        value: { revealed: false, revs: {} },
       });
     }
     expect(host.showFile).toHaveBeenCalledOnce();
@@ -128,20 +143,20 @@ describe('link.reveal', () => {
 
   it('uses the window’s canvas, including after another window chooses a different folder', async () => {
     await core.channels.call(7, 'run:get', []);
-    await core.channels.call(8, 'canvas:forget', []);
+    await created(EIGHT);
     host.pickFolder.mockResolvedValue(mintTrustedPath(project));
-    await core.channels.call(7, 'project:choose', []);
+    await chooseProject(SEVEN);
     const file = path.join(project, 'notes.txt');
     await writeFile(file, 'Notes');
     const url = pathToFileURL(file).href;
     expect(await core.call('link.reveal', { url }, EIGHT)).toEqual({
       ok: true,
-      value: { revealed: false },
+      value: { revealed: false, revs: {} },
     });
     expect(host.showFile).not.toHaveBeenCalled();
     expect(await core.call('link.reveal', { url }, SEVEN)).toEqual({
       ok: true,
-      value: { revealed: true },
+      value: { revealed: true, revs: {} },
     });
   });
 });
@@ -166,20 +181,72 @@ describe.each(['link.open', 'link.reveal'] as const)('%s arguments', (op) => {
 });
 
 describe('window.get', () => {
+  it('never lets a run save undo a core operation: it carries the run alone, never a document', async () => {
+    const context = (await core.channels.call(7, 'run:get', [])) as RunContext;
+    const first = await core.call('canvas.get', { canvas: context.id }, SEVEN);
+    if (!first.ok) throw new Error(first.error.sentence);
+    // What a renderer had before the core's commit, which run:save once sent beside its run.
+    const stale = toFile({ id: context.id, arrange: false, nodes: [], links: [] });
+    const added = await core.call(
+      'canvas.addAgent',
+      { canvas: context.id, adapter: 'codex', at: { x: 0, y: 0 } },
+      SEVEN,
+    );
+    if (!added.ok || 'proposed' in added.value) throw new Error('Agent not added');
+    const after = await core.call('canvas.get', { canvas: context.id }, SEVEN);
+    if (!after.ok) throw new Error(after.error.sentence);
+    // A document beside the run is refused before anything is journaled or committed.
+    await expect(
+      Promise.resolve().then(() =>
+        core.channels.call(7, 'run:save', [context.token, null, stale, first.value.rev]),
+      ),
+    ).rejects.toThrow('Expected a canvas token and a run checkpoint');
+    await expect(core.channels.call(7, 'run:save', [context.token, null])).resolves.toBeNull();
+    expect(await core.call('canvas.get', { canvas: context.id }, SEVEN)).toMatchObject({
+      ok: true,
+      value: {
+        rev: after.value.rev,
+        nodes: [
+          expect.objectContaining({
+            id: added.value.id,
+            data: expect.objectContaining({ adapter: 'codex' }) as unknown,
+          }),
+        ],
+      },
+    });
+  });
+  it('lists the current running state when two journal saves have the same timestamp', async () => {
+    const context = (await core.channels.call(7, 'run:get', [])) as RunContext;
+    for (const running of [true, false, true]) {
+      await core.channels.call(7, 'run:save', [
+        context.token,
+        {
+          version: 2,
+          state: JSON.stringify({ version: 2, run: { running } }),
+          messages: '[]',
+          updatedAt: 1234,
+        },
+      ]);
+      const listed = await core.call('canvas.list', {}, SEVEN);
+      expect(listed.ok).toBe(true);
+      if (!listed.ok) throw new Error(listed.error.sentence);
+      expect(listed.value.items.find((item) => item.canvas === context.id)?.running).toBe(running);
+    }
+  });
   it('returns the calling window’s canvas, restoring it on its first call', async () => {
     const first = await core.call('window.get', {}, SEVEN);
     const context = await core.channels.call(7, 'run:get', []);
     if (!first.ok) throw new Error(first.error.sentence);
-    expect(context).toMatchObject({ id: first.value.c });
+    expect(context).toMatchObject({ id: first.value.canvas });
     await core.channels.call(8, 'run:get', []);
-    const next = await core.channels.call(7, 'canvas:forget', []);
+    const next = await created(SEVEN);
     expect(await core.call('window.get', undefined, SEVEN)).toEqual({
       ok: true,
-      value: { c: next },
+      value: { canvas: next },
     });
     expect(await core.call('window.get', {}, EIGHT)).toEqual({
       ok: true,
-      value: { c: first.value.c },
+      value: { canvas: first.value.canvas },
     });
   });
 
@@ -190,5 +257,52 @@ describe('window.get', () => {
         error: { code: 'invalid' },
       });
     }
+  });
+});
+
+describe('window.show', () => {
+  it('shows a kept canvas only in the calling window and restores its project', async () => {
+    const first = await core.call('window.get', {}, SEVEN);
+    if (!first.ok) throw new Error(first.error.sentence);
+    host.pickFolder.mockResolvedValue(mintTrustedPath(project));
+    await chooseProject(SEVEN);
+    await core.call('window.get', {}, EIGHT);
+    const draft = await created(SEVEN);
+    expect(await core.call('window.show', { canvas: first.value.canvas }, SEVEN)).toEqual({
+      ok: true,
+      value: { revs: {} },
+    });
+    expect(await core.call('window.get', {}, SEVEN)).toEqual({
+      ok: true,
+      value: { canvas: first.value.canvas },
+    });
+    expect(await core.channels.call(7, 'run:get', [])).toMatchObject({ id: first.value.canvas });
+    expect(await core.call('canvas.get', { canvas: first.value.canvas }, SEVEN)).toMatchObject({
+      ok: true,
+      value: { project: { path: project } },
+    });
+    expect(await core.call('window.get', {}, EIGHT)).toEqual({
+      ok: true,
+      value: { canvas: first.value.canvas },
+    });
+    expect(await core.call('window.show', { canvas: draft }, EIGHT)).toEqual({
+      ok: true,
+      value: { revs: {} },
+    });
+    expect(await core.call('window.get', {}, SEVEN)).toEqual({
+      ok: true,
+      value: { canvas: first.value.canvas },
+    });
+  });
+  it('refuses a missing canvas and page-supplied window without changing the shown canvas', async () => {
+    const first = await core.call('window.get', {}, SEVEN);
+    expect(await core.call('window.show', { canvas: crypto.randomUUID() }, SEVEN)).toMatchObject({
+      ok: false,
+      error: { code: 'not-found' },
+    });
+    expect(
+      await core.call('window.show', { canvas: crypto.randomUUID(), window: 8 }, SEVEN),
+    ).toMatchObject({ ok: false, error: { code: 'invalid' } });
+    expect(await core.call('window.get', {}, SEVEN)).toEqual(first);
   });
 });

@@ -140,4 +140,7 @@ link.on('windowGone', (window, closed) => {
     served.gone(window, closed);
   });
 });
+link.on('windowFocused', (window) => {
+  void ready.promise.then((core) => core.focused(window));
+});
 link.emit('ready', memoryText());

@@ -12,12 +12,14 @@ import {
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { JOURNAL_SIZE_LIMIT } from './checkpointer';
+import * as migrations from './migrations';
 import { MIGRATIONS, SCHEMA } from './migrations';
 import { APPLICATION_ID, openStore } from './open';
 import { connect } from './sqlite';
+import type { Connection } from './sqlite';
 import { SYSTEM_DEPS } from './store';
 import type { Store, StoreDeps } from './store';
 
@@ -216,6 +218,40 @@ describe('openStore', () => {
     ]);
     expect(await readdir(profile)).toEqual(files);
     expect(Buffer.compare(await readFile(file), bytes)).toBe(0);
+  });
+
+  it('is refused, left as it is, by a corrallm of schema 1, which would not read its document', async () => {
+    const { store } = await open();
+    store.tx(() => store.prepare("INSERT INTO canvas (id, used_at) VALUES ('c', 1)").run());
+    await store.close();
+    const files = await readdir(profile);
+    const bytes = await readFile(file);
+    // The code as a corrallm of schema 1 had it: the same, with its migrations alone.
+    vi.resetModules();
+    const first = MIGRATIONS.slice(0, 1);
+    vi.doMock('./migrations', () => ({
+      ...migrations,
+      MIGRATIONS: first,
+      SCHEMA: 1,
+      migrate: (connection: Connection) => {
+        migrations.migrate(connection, first);
+      },
+    }));
+    try {
+      const older = await import('./open');
+
+      const refused = await older.openStore(profile);
+
+      expect(refused.store).toBeUndefined();
+      expect(refused.said).toEqual([
+        `The core’s database (${file}) was made by a newer corrallm, which this one can’t read, and was left as it is: open this profile with that corrallm, or a newer one.`,
+      ]);
+      expect(await readdir(profile)).toEqual(files);
+      expect(Buffer.compare(await readFile(file), bytes)).toBe(0);
+    } finally {
+      vi.doUnmock('./migrations');
+      vi.resetModules();
+    }
   });
 
   it('opens a database a newer corrallm made that it may still read, keeping what it added', async () => {
@@ -456,6 +492,32 @@ describe('a damaged database', () => {
       ]);
     });
   }
+
+  it('gives no document a revision given before, restored from a snapshot', async () => {
+    const noon = Date.UTC(2026, 9, 19, 12);
+    await keepMessages(noon);
+    const kept = connect(file);
+    kept
+      .prepare(
+        `INSERT INTO document (canvas_id, rev, arrange, by_party, changed_at)
+         VALUES (?, 5, 0, 'you', 1)`,
+      )
+      .run(CANVAS);
+    kept.close();
+    // Taken as it closes: the newest snapshot, which keeps the document at revision 5.
+    const { store: snapshotted } = await open(stoppedAt(noon + 1000));
+    await snapshotted.close();
+    // Revisions given after the snapshot, which a token's `expect` may hold, lost with the database.
+    const lost = connect(file);
+    lost.prepare('UPDATE document SET rev = 9 WHERE canvas_id = ?').run(CANVAS);
+    lost.close();
+    await writeFile(file, 'This is not a database. '.repeat(500));
+    const evening = Date.UTC(2026, 9, 19, 18);
+
+    const { store } = await open(stoppedAt(evening));
+
+    expect(store.prepare('SELECT rev FROM document').all()).toEqual([{ rev: evening }]);
+  });
 
   it('never sends what waited in the snapshot it restores: unresolved, each sender told after every place given', async () => {
     const noon = Date.UTC(2026, 9, 19, 12);

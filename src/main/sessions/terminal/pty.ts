@@ -1,4 +1,4 @@
-import { recordPty } from '../process';
+import { beforeSpawn, recordPty } from '../process';
 
 /*
  * The pseudo-terminal a Terminal session's CLI runs in. node-pty is a native module: it is loaded
@@ -31,6 +31,7 @@ export type SpawnPty = (file: string, args: readonly string[], options: PtyOptio
 /** Runs `file` in a pseudo-terminal with node-pty, as an xterm-256color terminal. */
 export const spawnPty: SpawnPty = async (file, args, { cwd, env, cols, rows }) => {
   const pty = await import('node-pty');
+  beforeSpawn();
   const child = pty.spawn(file, [...args], {
     name: 'xterm-256color',
     cols,

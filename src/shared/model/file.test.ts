@@ -93,6 +93,60 @@ describe('toFile', () => {
     expect(() => read(JSON.stringify({ ...saved, arrange }))).toThrow('arrange must be a boolean');
   });
 
+  it('writes a canvas the same whatever order its fields were set in, as it reads them', () => {
+    /** `value` with its objects' fields set in the reverse order, at every depth. */
+    const reversed = (value: unknown): unknown =>
+      Array.isArray(value)
+        ? value.map(reversed)
+        : typeof value === 'object' && value !== null
+          ? Object.fromEntries(
+              Object.entries(value)
+                .reverse()
+                .map(([key, one]) => [key, reversed(one)]),
+            )
+          : value;
+    const settings = {
+      codex: { model: 'gpt-6-luna', effort: 'low', mode: 'read-only' },
+      'claude-code': { model: 'opus', mode: 'plan' },
+    };
+    const everything: QueueItem[] = [
+      ...queue,
+      { id: 's2', action: 'Bash', target: 'b', instruction: 'npm test', expect: 'fails' },
+      { id: 'd', delay: { resets: 'weekly', backend: 'codex' } },
+      { id: 'ok', approve: 'the spec' },
+      {
+        id: 'r',
+        repeat: [{ id: 'w2', waitFor: [{ agent: 'b', item: 'x' }], timeout: { at: '09:00' } }],
+        until: { kind: 'outputContains', text: 'DONE', wholeLine: true },
+        rounds: 2,
+        otherwise: 'goOn',
+      },
+      {
+        id: 'u',
+        if: { kind: 'usageAbove', backend: 'codex', window: 'weekly', percent: 80 },
+        then: [],
+      },
+    ];
+    const set = (items: unknown, all: unknown) =>
+      canvas.nodes.map((n) =>
+        n.id === 'a' && n.type === 'agent'
+          ? { ...n, data: { ...n.data, queue: items, settings: all } }
+          : n,
+      ) as CanvasDocument['nodes'];
+    const text = toFile({ ...canvas, nodes: set(everything, settings) });
+
+    expect(toFile({ ...canvas, nodes: set(reversed(everything), reversed(settings)) })).toBe(text);
+    expect(toFile(read(text))).toBe(text);
+  });
+
+  it('writes an empty queue as none, and reads one so', () => {
+    const empty = withQueue([]);
+    expect((JSON.parse(toFile(empty)) as typeof saved).nodes[1]).not.toHaveProperty('queue');
+    const file = structuredClone(saved);
+    Object.assign(file.nodes[2] ?? {}, { queue: [] });
+    expect(agentData(read(JSON.stringify(file)), 'b')).toEqual({ label: 'Reviewer' });
+  });
+
   it('writes the canvas as readable JSON', () => {
     const text = toFile(canvas);
     expect(JSON.parse(text)).toEqual(saved);
@@ -841,9 +895,88 @@ describe('fromFile', () => {
       /^nodes\[1\]\.queue\[1\]\.repeat\[0\]\.id: "x" is used twice in this queue$/,
     ],
     [
+      'an id inside an if-then that its queue already uses',
+      (f) =>
+        Object.assign(f.nodes[1] ?? {}, {
+          queue: [
+            { id: 'x', action: 'Read' },
+            { id: 'i', if: { kind: 'failed' }, then: [{ id: 'x', message: 'Again' }] },
+          ],
+        }),
+      /^nodes\[1\]\.queue\[1\]\.then\[0\]\.id: "x" is used twice in this queue$/,
+    ],
+    [
+      'an id inside an if-then that another if-then uses',
+      (f) =>
+        Object.assign(f.nodes[1] ?? {}, {
+          queue: [
+            { id: 'i', if: { kind: 'failed' }, then: [{ id: 'x', action: 'Read' }] },
+            { id: 'j', if: { kind: 'succeeded' }, then: [{ id: 'x', message: 'Again' }] },
+          ],
+        }),
+      /^nodes\[1\]\.queue\[1\]\.then\[0\]\.id: "x" is used twice in this queue$/,
+    ],
+    [
+      'an id inside a repeat that an if-then before it uses',
+      (f) =>
+        Object.assign(f.nodes[1] ?? {}, {
+          queue: [
+            { id: 'i', if: { kind: 'failed' }, then: [{ id: 'x', action: 'Read' }] },
+            {
+              id: 'r',
+              repeat: [{ id: 'x', message: 'Again' }],
+              until: { kind: 'succeeded' },
+              rounds: 3,
+              otherwise: 'ask',
+            },
+          ],
+        }),
+      /^nodes\[1\]\.queue\[1\]\.repeat\[0\]\.id: "x" is used twice in this queue$/,
+    ],
+    [
+      'an id of the queue inside an if-then before it',
+      (f) =>
+        Object.assign(f.nodes[1] ?? {}, {
+          queue: [
+            { id: 'i', if: { kind: 'failed' }, then: [{ id: 'x', action: 'Read' }] },
+            { id: 'x', message: 'Again' },
+          ],
+        }),
+      /^nodes\[1\]\.queue\[1\]\.id: "x" is used twice in this queue$/,
+    ],
+    [
+      'an if-then holding a step of its own id',
+      (f) =>
+        Object.assign(f.nodes[1] ?? {}, {
+          queue: [{ id: 'i', if: { kind: 'failed' }, then: [{ id: 'i', action: 'Read' }] }],
+        }),
+      /^nodes\[1\]\.queue\[0\]\.then\[0\]\.id: "i" is used twice in this queue$/,
+    ],
+    [
       'a link to a missing agent',
       (f) => Object.assign(f, { links: [{ agents: ['a', 'X'] }] }),
       /links\[0\]\.agents/,
+    ],
+    // Text a database or a key can't keep as it is: a lone surrogate.
+    [
+      'an id with a broken character',
+      (f) => Object.assign(f.nodes[2] ?? {}, { id: 'b\ud800' }),
+      /^nodes\[2\]\.id holds a broken character \(a lone surrogate\)$/,
+    ],
+    [
+      'a label with a broken character',
+      (f) => Object.assign(f.nodes[0] ?? {}, { label: '\udc00Team' }),
+      /^nodes\[0\]\.label holds a broken character \(a lone surrogate\)$/,
+    ],
+    [
+      'a role with a broken character',
+      (f) => Object.assign(f.nodes[2] ?? {}, { role: 'Review\ud83d' }),
+      /^nodes\[2\]\.role: The role must not hold a broken character \(a lone surrogate\)\.$/,
+    ],
+    [
+      'an item’s text with a broken character',
+      (f) => Object.assign(f.nodes[1] ?? {}, { queue: [{ id: 'm', message: 'Fix \ud800 it' }] }),
+      /^nodes\[1\]\.queue\[0\]\.message holds a broken character \(a lone surrogate\)$/,
     ],
   ])('rejects %s, saying where', (_label, breakIt, message) => {
     const file = structuredClone(saved);
@@ -855,7 +988,26 @@ describe('fromFile', () => {
 it('keeps queue text authors through a file round trip and rejects an invalid party', () => {
   const authored = withQueue([{ id: 'text', message: 'Keep its author', by: 'outside:writer' }]);
   expect(read(toFile(authored))).toEqual(authored);
+  // Its author is written after its id, as it is read: wherever the field was set.
+  expect(toFile(authored)).toMatch(/"id": "text",\s*"by": "outside:writer",\s*"message"/);
   expect(() => read(toFile(authored).replace('outside:writer', 'not-a-party'))).toThrow(
     /\.by.*party/,
   );
+});
+
+describe('canvas label and position bounds', () => {
+  it.each(['', ' \n\t'])('refuses a blank label (%j)', (label) => {
+    const copy = {
+      ...canvas,
+      nodes: canvas.nodes.map((node) => ({ ...node, data: { ...node.data, label } })),
+    };
+    expect(() => read(toFile(copy))).toThrow(/label/);
+  });
+  it.each([
+    { x: 1000001, y: 0 },
+    { x: 0, y: -1000001 },
+  ])('refuses an out-of-bounds position (%j)', (position) => {
+    const copy = { ...canvas, nodes: canvas.nodes.map((node) => ({ ...node, position })) };
+    expect(() => read(toFile(copy))).toThrow(/position/);
+  });
 });

@@ -52,6 +52,40 @@ function addMessage(id: string, canvas = CANVAS): number {
   return row?.seq as number;
 }
 
+/** Adds a document to the canvas, as its first commit would: revision 1, by you. */
+function addDocument(canvas = CANVAS): void {
+  connection
+    .prepare(
+      `INSERT INTO document (canvas_id, rev, arrange, by_party, changed_at)
+       VALUES (?, 1, 0, 'you', 1)`,
+    )
+    .run(canvas);
+}
+function addNode(id: string, kind = 'agent', parent: string | null = null, canvas = CANVAS): void {
+  connection
+    .prepare(
+      `INSERT INTO node (canvas_id, id, kind, parent_id, place, label, x, y, rev, by_party)
+       VALUES (?, ?, ?, ?, 0, ?, 0, 0, 1, 'you')`,
+    )
+    .run(canvas, id, kind, parent, id);
+}
+function addItem(agent: string, id: string, container: string | null = null): void {
+  connection
+    .prepare(
+      `INSERT INTO queue_item (canvas_id, agent_id, id, container, place, kind, body, rev, by_party)
+       VALUES (?, ?, ?, ?, 0, 'message', '{"message":"Hello"}', 1, 'you')`,
+    )
+    .run(CANVAS, agent, id, container);
+}
+function addLink(a: string, b: string, source = a): void {
+  connection
+    .prepare(
+      `INSERT INTO link (canvas_id, a, b, source, place, rev, by_party)
+       VALUES (?, ?, ?, ?, 0, 1, 'you')`,
+    )
+    .run(CANVAS, a, b, source);
+}
+
 describe('the schema', () => {
   it('migrates an empty database to the latest schema: singular tables, each STRICT', () => {
     migrate(connection);
@@ -59,14 +93,178 @@ describe('the schema', () => {
     expect(minReaderOf(connection)).toBe(MIGRATIONS.at(-1)?.minReader);
     expect(tables()).toEqual([
       { name: 'canvas', strict: 1, wr: 0 },
+      { name: 'change', strict: 1, wr: 0 },
       { name: 'conversation', strict: 1, wr: 1 },
+      { name: 'document', strict: 1, wr: 1 },
+      { name: 'file_review', strict: 1, wr: 0 },
+      { name: 'link', strict: 1, wr: 1 },
       { name: 'message', strict: 1, wr: 0 },
       { name: 'meta', strict: 1, wr: 0 },
+      { name: 'node', strict: 1, wr: 1 },
       { name: 'open_canvas', strict: 1, wr: 0 },
+      { name: 'proposal', strict: 1, wr: 0 },
+      { name: 'queue_item', strict: 1, wr: 1 },
       { name: 'read_position', strict: 1, wr: 1 },
+      { name: 'revision', strict: 1, wr: 1 },
       { name: 'run', strict: 1, wr: 0 },
-      { name: 'run_workflow', strict: 1, wr: 0 },
     ]);
+  });
+
+  it('indexes the side of every foreign key that refers, so a parent’s change finds its children', () => {
+    migrate(connection);
+    const unindexed = tables().flatMap(({ name }) => {
+      const table = String(name);
+      const keys = new Map<number, string[]>();
+      for (const { id, from } of connection
+        .prepare('SELECT id, seq, "from" FROM pragma_foreign_key_list(?) ORDER BY id, seq')
+        .all(table)) {
+        keys.set(Number(id), [...(keys.get(Number(id)) ?? []), String(from)]);
+      }
+      const indexes = connection
+        .prepare('SELECT name FROM pragma_index_list(?) WHERE partial = 0')
+        .all(table)
+        .map(({ name: index }) =>
+          connection
+            .prepare('SELECT name FROM pragma_index_info(?) ORDER BY seqno')
+            .all(String(index))
+            .map((column) => String(column.name)),
+        );
+      return [...keys.values()]
+        .filter((columns) =>
+          indexes.every((index) => columns.some((column, i) => index[i] !== column)),
+        )
+        .map((columns) => `${table} (${columns.join(', ')})`);
+    });
+    expect(unindexed).toEqual([]);
+  });
+
+  it('checks a document’s references as each statement ends, never deferring them to the commit', () => {
+    migrate(connection);
+    connection.exec('PRAGMA foreign_keys = ON');
+    addCanvas();
+    addDocument();
+    addNode('lead');
+    connection.exec('BEGIN');
+    // An item of no agent, a link to no agent, a node in no group: each refused as it is written.
+    expect(() => {
+      addItem('nobody', 'i');
+    }).toThrow(/FOREIGN KEY constraint failed/);
+    expect(() => {
+      addItem('lead', 'i', 'no repeat');
+    }).toThrow(/FOREIGN KEY constraint failed/);
+    expect(() => {
+      addLink('lead', 'nobody');
+    }).toThrow(/FOREIGN KEY constraint failed/);
+    expect(() => {
+      addNode('worker', 'agent', 'no group');
+    }).toThrow(/FOREIGN KEY constraint failed/);
+    connection.exec('COMMIT');
+    expect(
+      connection
+        .prepare("SELECT name FROM sqlite_schema WHERE sql LIKE '%DEFERRABLE%'")
+        .all()
+        .map(({ name }) => name),
+    ).toEqual([]);
+  });
+
+  it('keeps a link once, its lesser end first, drawn from either end', () => {
+    migrate(connection);
+    addCanvas();
+    addDocument();
+    addNode('a');
+    addNode('b');
+    addLink('a', 'b', 'b');
+    expect(() => {
+      addLink('b', 'a');
+    }).toThrow(/CHECK constraint failed/);
+    expect(() => {
+      addLink('a', 'b');
+    }).toThrow(/UNIQUE constraint failed/);
+    connection.exec("DELETE FROM link WHERE a = 'a'");
+    expect(() => {
+      addLink('a', 'b', 'c');
+    }).toThrow(/CHECK constraint failed/);
+  });
+
+  it('keeps a frame’s rows free of what only an agent has, and JSON fields valid', () => {
+    migrate(connection);
+    addCanvas();
+    addDocument();
+    addNode('team', 'frame');
+    expect(() =>
+      connection.prepare("UPDATE node SET role = 'Lead the team' WHERE id = 'team'").run(),
+    ).toThrow(/CHECK constraint failed/);
+    expect(() =>
+      connection.prepare("UPDATE node SET kind = 'group' WHERE id = 'team'").run(),
+    ).toThrow(/CHECK constraint failed/);
+    addNode('a');
+    expect(() =>
+      connection.prepare("UPDATE node SET settings = 'not JSON' WHERE id = 'a'").run(),
+    ).toThrow(/CHECK constraint failed/);
+    addItem('a', 'i');
+    expect(() =>
+      connection.prepare("UPDATE queue_item SET body = 'not JSON' WHERE id = 'i'").run(),
+    ).toThrow(/CHECK constraint failed/);
+    expect(() =>
+      connection.prepare("UPDATE queue_item SET kind = 'task' WHERE id = 'i'").run(),
+    ).toThrow(/CHECK constraint failed/);
+  });
+
+  it('holds one file review open per canvas at a time', () => {
+    migrate(connection);
+    addCanvas();
+    addDocument();
+    const raise = connection.prepare(
+      `INSERT INTO file_review (id, canvas_id, file_hash, file_generation, summary, raised_at)
+       VALUES (?, ?, 'h', 0, '{}', 1)`,
+    );
+    raise.run('first', CANVAS);
+    expect(() => raise.run('second', CANVAS)).toThrow(/UNIQUE constraint failed/);
+    connection
+      .prepare("UPDATE file_review SET outcome = 'kept', settled_by = 'you', settled_at = 2")
+      .run();
+    raise.run('second', CANVAS);
+  });
+
+  it('migrates a schema-1 database to schema 2 keeping its rows but its runs’ workflows, which a schema-1 corrallm may no longer open', () => {
+    const [first] = MIGRATIONS;
+    if (first === undefined) throw new Error('No schema 1');
+    migrate(connection, [first]);
+    addCanvas();
+    connection
+      .prepare("UPDATE canvas SET file = '/work/team.corral', project = '/work' WHERE id = ?")
+      .run(CANVAS);
+    connection
+      .prepare(
+        "INSERT INTO conversation (canvas_id, adapter, agent_id, native_id) VALUES (?, 'codex', 'a', 'n')",
+      )
+      .run(CANVAS);
+    connection
+      .prepare('INSERT INTO run (canvas_id, state, updated_at) VALUES (?, \'{"version":2}\', 1)')
+      .run(CANVAS);
+    connection
+      .prepare("INSERT INTO run_workflow (canvas_id, workflow, hash) VALUES (?, '{}', 'h')")
+      .run(CANVAS);
+    const seq = addMessage('m');
+    connection
+      .prepare("INSERT INTO read_position (canvas_id, party, seq) VALUES (?, 'outside:o', ?)")
+      .run(CANVAS, seq);
+    connection.prepare('INSERT INTO open_canvas (canvas_id, opened_at) VALUES (?, 1)').run(CANVAS);
+    const rowsOf = (table: string) => connection.prepare(`SELECT * FROM ${table}`).all();
+    const kept = ['canvas', 'conversation', 'run', 'message', 'read_position', 'open_canvas'];
+    const before = Object.fromEntries(kept.map((table) => [table, rowsOf(table)]));
+
+    connection.exec('PRAGMA foreign_keys = ON');
+    migrate(connection);
+
+    expect(schemaOf(connection)).toBe(2);
+    expect(minReaderOf(connection)).toBe(2);
+    expect(Object.fromEntries(kept.map((table) => [table, rowsOf(table)]))).toEqual(before);
+    // Its canvases have no document yet: each is read from its file as it next opens. The workflow
+    // a run ran went.
+    expect(rowsOf('document')).toEqual([]);
+    expect(tables().map(({ name }) => name)).not.toContain('run_workflow');
+    expect(addMessage('after')).toBe(seq + 1);
   });
 
   it('runs no migration twice', () => {
@@ -232,14 +430,55 @@ describe('the schema', () => {
       .prepare("INSERT INTO run (canvas_id, state, updated_at) VALUES (?, '{}', 1)")
       .run(CANVAS);
     connection
-      .prepare("INSERT INTO run_workflow (canvas_id, workflow, hash) VALUES (?, '{}', 'h')")
-      .run(CANVAS);
-    connection
       .prepare("INSERT INTO read_position (canvas_id, party, seq) VALUES (?, 'you', 1)")
       .run(CANVAS);
     connection.prepare('INSERT INTO open_canvas (canvas_id, opened_at) VALUES (?, 1)').run(CANVAS);
+    connection.exec('PRAGMA foreign_keys = ON');
+    addDocument();
+    addNode('team', 'frame');
+    addNode('a', 'agent', 'team');
+    addNode('b');
+    addItem('a', 'r');
+    addItem('a', 'i', 'r');
+    addLink('a', 'b');
+    connection
+      .prepare(
+        "INSERT INTO revision (canvas_id, rev, op, by_party, at) VALUES (?, 1, 'x', 'you', 1)",
+      )
+      .run(CANVAS);
+    connection
+      .prepare(
+        "INSERT INTO change (canvas_id, rev, entity, after_data) VALUES (?, 1, 'node/a', '{}')",
+      )
+      .run(CANVAS);
+    connection
+      .prepare(
+        `INSERT INTO proposal (id, canvas_id, op, args, by_party, touched, raised_at)
+         VALUES ('p', ?, 'canvas.delete', '{}', 'outside:o', '{}', 1)`,
+      )
+      .run(CANVAS);
+    connection
+      .prepare(
+        `INSERT INTO file_review (id, canvas_id, file_hash, file_generation, summary, raised_at)
+         VALUES ('f', ?, 'h', 0, '{}', 1)`,
+      )
+      .run(CANVAS);
     connection.prepare('DELETE FROM canvas WHERE id = ?').run(CANVAS);
-    const kept = ['conversation', 'run', 'run_workflow', 'message', 'read_position', 'open_canvas'];
+    const kept = [
+      'conversation',
+      'run',
+      'message',
+      'read_position',
+      'open_canvas',
+      'document',
+      'node',
+      'link',
+      'queue_item',
+      'revision',
+      'change',
+      'proposal',
+      'file_review',
+    ];
     for (const table of kept) {
       expect(connection.prepare(`SELECT count(*) AS rows FROM ${table}`).get(), table).toEqual({
         rows: 0,

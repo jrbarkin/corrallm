@@ -64,10 +64,18 @@ export class Children implements ProcessOwner {
   readonly #system: ChildSystem;
   readonly #children = new Map<number, ChildRecord>();
   readonly #stopping = new Map<number, Promise<void>>();
+  /** Each child this core started that still runs, and how to end it directly (Windows). */
+  readonly #kills = new Map<number, (signal: NodeJS.Signals | number) => void>();
+  /** Once the core closes, it starts no CLI: none may outlive it. */
+  #closed = false;
 
   constructor(profile: string, system: ChildSystem = SYSTEM) {
     this.#file = path.join(profile, 'sessions', 'pids.json');
     this.#system = system;
+  }
+
+  beforeSpawn(): void {
+    if (this.#closed) throw new Error('corrallm’s core is closing: it starts no more CLIs.');
   }
 
   run<T>(work: () => T): T {
@@ -149,6 +157,10 @@ export class Children implements ProcessOwner {
     }
     const record = child.pid === undefined ? undefined : this.#children.get(child.pid);
     if (!record) return Promise.resolve();
+    return this.#ending(record, signal);
+  }
+
+  #ending(record: ChildRecord, signal: NodeJS.Signals | number): Promise<void> {
     const existing = this.#stopping.get(record.pid);
     if (existing) return existing;
     const stopped = Promise.withResolvers<undefined>();
@@ -161,7 +173,26 @@ export class Children implements ProcessOwner {
 
   /** Finish any group cleanup already begun before the host exits. */
   async flush(): Promise<void> {
-    await Promise.all(this.#stopping.values());
+    while (this.#stopping.size > 0) await Promise.all(this.#stopping.values());
+  }
+
+  /**
+   * As the core closes, after its sessions have: ends every CLI still running (a helper a read
+   * in flight started, such as a settings read's app server or login shell) as a timed-out
+   * helper is ended, and refuses any started from now on, so that none outlives the core.
+   */
+  async close(): Promise<void> {
+    this.#closed = true;
+    if (this.#system.platform === 'win32') {
+      for (const [pid, kill] of this.#kills) {
+        kill('SIGTERM');
+        this.#kills.delete(pid);
+      }
+    } else {
+      for (const record of this.#children.values())
+        if (this.#kills.has(record.pid)) void this.#ending(record, 'SIGTERM');
+    }
+    await this.flush();
   }
 
   async #end(record: ChildRecord, signal: NodeJS.Signals | number): Promise<void> {
@@ -192,8 +223,8 @@ export class Children implements ProcessOwner {
       (exit) => {
         child.once(until ?? 'exit', exit);
       },
-      () => {
-        child.kill('SIGKILL');
+      (signal) => {
+        child.kill(signal);
       },
     );
   }
@@ -204,17 +235,25 @@ export class Children implements ProcessOwner {
       (exit) => {
         child.onExit(exit);
       },
-      () => {
-        child.kill('SIGKILL');
+      (signal) => {
+        child.kill(typeof signal === 'number' ? undefined : signal);
       },
     );
   }
 
-  #record(pid: number, onExit: (listener: () => void) => void, stop: () => void): void {
+  #record(
+    pid: number,
+    onExit: (listener: () => void) => void,
+    kill: (signal: NodeJS.Signals | number) => void,
+  ): void {
+    const stop = () => {
+      kill('SIGKILL');
+    };
     const state = { ended: false };
     let record: ChildRecord | undefined;
     onExit(() => {
       state.ended = true;
+      if (this.#kills.get(pid) === kill) this.#kills.delete(pid);
       if (record === undefined || this.#children.get(pid) !== record) return;
       if (this.#stopping.has(pid)) return;
       this.#children.delete(pid);
@@ -229,17 +268,29 @@ export class Children implements ProcessOwner {
         this.#system.platform === 'win32'
           ? { started: this.#system.now(), group: pid }
           : this.#system.inspect(pid);
-      if (state.ended || found === undefined) return; // It exited before its identity could be read.
+      if (state.ended || found === undefined) {
+        this.beforeSpawn();
+        return; // It exited before its identity could be read.
+      }
       if (pid <= 1 || pid === process.pid || found.group !== pid) {
         throw new Error('The CLI did not start in its own process group.');
       }
       record = { pid, started: found.started };
       this.#children.set(pid, record);
+      this.#kills.set(pid, kill);
       this.#write();
     } catch (error) {
       this.#children.delete(pid);
+      this.#kills.delete(pid);
       stop();
       throw error;
+    }
+    if (this.#closed) {
+      // A child already created as closing began still belongs to us. Record its verified
+      // identity first, then retain it through the same group cleanup as every owned CLI.
+      if (this.#system.platform === 'win32') kill('SIGTERM');
+      else void this.#ending(record, 'SIGTERM');
+      this.beforeSpawn();
     }
   }
 

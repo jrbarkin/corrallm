@@ -142,6 +142,14 @@ describe('forking the core process', () => {
     expect(child.posted).toEqual([{ kind: 'event', name: 'windowGone', args: [7] }]);
   });
 
+  it('tells the core a window gained focus, over the link', () => {
+    const { core, child } = start();
+
+    core.windowFocused(7);
+
+    expect(child.posted).toEqual([{ kind: 'event', name: 'windowFocused', args: [7] }]);
+  });
+
   it('answers what the core asks of the desktop with the host’s services', async () => {
     const { child } = start();
 

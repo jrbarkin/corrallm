@@ -979,6 +979,20 @@ describe.skipIf(process.platform === 'win32')('corrallm serve', () => {
     expect(items.find((message) => message.id === id)?.state).toBe('pending');
   });
 
+  it('watches its canvas’s file: one changed on disk is never read, but reviewed, a need for you', async () => {
+    const server = await serve();
+    const client = await connect(server.url);
+    await withGhost();
+    await vi.waitFor(
+      () => {
+        expect(server.stderr()).toMatch(/\[m1\.corral\] need: m1\.corral changed on disk/);
+      },
+      { timeout: 5000 },
+    );
+    const { agents } = await call<{ agents: { id: string }[] }>(client, 'agents');
+    expect(agents.map(({ id }) => id)).not.toContain('ghost');
+  });
+
   /** Runs `corrallm wait`: its exit code, and the one line it printed. */
   async function cliWait(
     args: string[],

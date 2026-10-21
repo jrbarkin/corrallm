@@ -1,7 +1,8 @@
 import type { AdapterId, Catalog } from '../../../shared/adapter';
-import type { ArgsOf, ResultOf } from '../../../shared/api/registry';
+import type { ArgsOf, ProducedOf } from '../../../shared/api/registry';
 import type { OpName } from '../../../shared/api/surface';
 import type { CanvasId } from '../../../shared/canvas';
+import type { NeedsItem } from '../../../shared/model/needs';
 import type { Settings } from '../../settings';
 import type { UsageReadings } from '../../usage';
 import type { LinkOpener } from '../../links';
@@ -12,11 +13,24 @@ import type { SessionManager } from '../../sessions/manager';
 import type { Windows } from '../windows';
 import type { Topics } from '../topics';
 import type { OpContext } from '../call';
+import type { Documents } from '../canvas/documents';
+import type { Lifecycle } from '../canvas/lifecycle';
+import type { Proposals } from '../canvas/proposals';
+import type { FileReviews } from '../canvas/reviews';
+import type { CanvasStates } from '../canvas/states';
 import type { Engines } from '../engines';
 import type { HostServices } from '../host';
 import type { TokenStore } from '../tokens';
+import { agentOps } from './agent';
+import { queueOps } from './queue';
 import { appOps } from './app';
+import { batchOps } from './batch';
+import { replyOps } from './reply';
+import { canvasOps } from './canvas';
+import { canvasToolsOps } from './canvas-tools';
+import { canvasesOps } from './canvases';
 import { catalogOps } from './catalog';
+import { filesOps } from './files';
 import { conversationOps } from './conversation';
 import { linkOps } from './link';
 import { projectOps } from './project';
@@ -37,7 +51,7 @@ import { windowOps } from './window';
  */
 
 export type Implementations = {
-  [N in OpName]: (args: ArgsOf<N>, ctx: OpContext) => ResultOf<N> | Promise<ResultOf<N>>;
+  [N in OpName]: (args: ArgsOf<N>, ctx: OpContext) => ProducedOf<N> | Promise<ProducedOf<N>>;
 };
 
 /** What the operations act on: the services the core composes (createCore). */
@@ -57,13 +71,28 @@ export interface OpServices {
   reveal: Pick<FileRevealer, 'reveal'>;
   projects: Pick<ProjectFolders, 'of'>;
   files: Pick<ProjectFiles, 'find'>;
-  windows: Pick<Windows, 'canvasOf'>;
+  windows: Pick<Windows, 'canvasOf' | 'shownIn'>;
   sessions: Pick<
     SessionManager,
     'attachTerminal' | 'detachTerminal' | 'inputTerminal' | 'resizeTerminal' | 'dropOnTerminal'
   >;
   /** The canvases the core runs. */
   engines: Engines;
+  /** Each canvas's lifetime: made, opened, saved, closed, its folder chosen. */
+  lifecycle: Lifecycle;
+  /**
+   * Each canvas's document: a canvas made, kept or dropped (canvas.create), and a file changed on
+   * disk applied or kept over (reply).
+   */
+  documents: Pick<Documents, 'create' | 'keep' | 'drop' | 'forget' | 'applyFile' | 'keepFile'>;
+  /** What the core says of each canvas it keeps: its entities, and the list of them. */
+  states: Pick<CanvasStates, 'read' | 'list' | 'keeps'>;
+  /** The proposals waiting for you on each canvas. */
+  proposals: Pick<Proposals, 'get' | 'items' | 'settled' | 'settle' | 'settlement'>;
+  /** The review of each canvas's file changed on disk, waiting for you. */
+  reviews: Pick<FileReviews, 'get' | 'items' | 'settled'>;
+  /** What waits for an answer on a canvas, for you, by its id: its Needs item. */
+  needOf: (canvas: CanvasId, id: string) => NeedsItem | undefined;
   /** Whether an agent is a lead now, as kept on this machine. */
   isLead: (canvas: CanvasId, agent: string) => boolean;
   /** The locale what the core says tells times of day in: the runtime's own, when none. */
@@ -81,7 +110,15 @@ export function implementations(services: OpServices): Implementations {
     ...catalogOps(services),
     ...templatesOps(services),
     ...projectOps(services),
+    ...filesOps(services),
+    ...canvasesOps(services),
+    ...canvasOps(services),
+    ...canvasToolsOps(services),
+    ...batchOps(),
+    ...agentOps(services),
+    ...queueOps(),
     ...conversationOps(services),
+    ...replyOps(services),
     ...sessionOps(services),
     ...settingsOps(services),
     ...runOps(services),
