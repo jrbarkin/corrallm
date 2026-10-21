@@ -211,7 +211,7 @@ export class Delivery {
     const { store } = this.#deps;
     // What its senders were told before, they were told once.
     for (const key of store.told()) this.#told.add(key);
-    for (const message of store.all()) {
+    for (const message of store.active()) {
       if (this.#inFlight(message)) this.#cutOff(message);
     }
     await this.#deps.store.durable();
@@ -229,7 +229,7 @@ export class Delivery {
     this.#alarm = undefined;
     this.#unrecordable?.();
     this.#unrecordable = undefined;
-    for (const message of this.#deps.store.all()) {
+    for (const message of this.#deps.store.active()) {
       if (!this.#inFlight(message)) continue;
       const taking = this.#withdrawing.get(message.id);
       if (taking) this.#takenBack(message, taking, false);
@@ -259,7 +259,8 @@ export class Delivery {
     const { store } = this.#deps;
     if (
       from !== 'you' &&
-      this.#waiting(to).filter((message) => message.from === from).length >= MAX_WAITING
+      (this.#waiting().get(to) ?? []).filter((message) => message.from === from).length >=
+        MAX_WAITING
     ) {
       throw new DeliveryError(
         'refused',
@@ -345,7 +346,7 @@ export class Delivery {
   async kill(agents: readonly string[], by: PartyId): Promise<void> {
     const killed = new Set(agents.map(agentParty));
     const withdrawing: Promise<Withdrawal>[] = [];
-    for (const message of this.#deps.store.all()) {
+    for (const message of this.#deps.store.active()) {
       if (message.kind !== 'text') continue;
       const why: TakeBackWhy | undefined = killed.has(message.to)
         ? 'recipient killed'
@@ -365,9 +366,11 @@ export class Delivery {
    * would let them.
    */
   stuck(): ({ agent: string } & Unstartable)[] {
+    // Looked at only once an agent won't start.
+    let waiting: Map<string, Message[]> | undefined;
     return this.#deps.nodes().flatMap((node) => {
       const stuck = node.type === 'agent' ? this.#stuckOf(node) : undefined;
-      return stuck !== undefined && this.#waiting(node.id).length > 0
+      return stuck !== undefined && (waiting ??= this.#waiting()).has(node.id)
         ? [{ agent: node.id, ...stuck }]
         : [];
     });
@@ -397,9 +400,10 @@ export class Delivery {
    * sessions won't start), and why.
    */
   unasking(): { agent: string; why: UnaskingWhy }[] {
+    const waiting = this.#waiting();
     return this.#deps.nodes().flatMap((node) => {
       if (node.type !== 'agent') return [];
-      if (!this.#waiting(node.id).some(({ from }) => from !== 'you')) return [];
+      if (!waiting.get(node.id)?.some(({ from }) => from !== 'you')) return [];
       if (this.#stuckOf(node) !== undefined) return [];
       const why = this.#asking(node);
       return why === 'asks' || why === 'reading' ? [] : [{ agent: node.id, why }];
@@ -410,7 +414,7 @@ export class Delivery {
   current(agent: string): string | undefined {
     const session = this.#deps.engine.sessions.of(agent);
     return this.#deps.store
-      .all()
+      .active()
       .find(
         (message) =>
           message.to === agentParty(agent) &&
@@ -429,7 +433,7 @@ export class Delivery {
     if (!this.#started || this.#closed) return;
     const { engine, store } = this.#deps;
     this.#withdrawGone();
-    const messages = store.all();
+    const messages = store.active();
     // Each message the session has now is delivered.
     for (const message of messages) {
       if (message.state !== 'delivering' || message.delivery === undefined) continue;
@@ -442,15 +446,8 @@ export class Delivery {
         store.update(message.id, { state: 'delivered' });
       }
     }
-    /** What waits for each agent, in the order it came. */
-    const waiting = new Map<string, Message[]>();
-    for (const message of messages) {
-      const agent = agentOf(message.to);
-      if (agent === undefined || message.state !== 'pending' || this.#recording.has(message.id)) {
-        continue;
-      }
-      waiting.set(agent, [...(waiting.get(agent) ?? []), message]);
-    }
+    /** What waits for each agent, in the order it came, once its record is on disk. */
+    const waiting = this.#waiting(messages.filter(({ id }) => !this.#recording.has(id)));
     this.#tellWaiting(messages);
     this.#followDefaults();
     let alarm: number | undefined;
@@ -532,7 +529,7 @@ export class Delivery {
       const agent = agentOf(party);
       return agent !== undefined && !here.has(agent) ? agent : undefined;
     };
-    for (const message of this.#deps.store.all()) {
+    for (const message of this.#deps.store.active()) {
       if (message.kind !== 'text' || message.state !== 'pending') continue;
       const to = gone(message.to);
       if (to === undefined && gone(message.from) === undefined) continue;
@@ -547,12 +544,20 @@ export class Delivery {
     }
   }
 
-  /** The messages waiting for agent `agent`, in the order they came. */
-  #waiting(agent: string): Message[] {
-    const party = agentParty(agent);
-    return this.#deps.store
-      .all()
-      .filter((message) => message.to === party && message.state === 'pending');
+  /**
+   * The messages waiting for each agent, of `messages` (those delivery acts on, unless given), by
+   * its id, each in the order they came: none for an agent nothing waits for.
+   */
+  #waiting(messages = this.#deps.store.active()): Map<string, Message[]> {
+    const waiting = new Map<string, Message[]>();
+    for (const message of messages) {
+      const agent = agentOf(message.to);
+      if (agent === undefined || message.state !== 'pending') continue;
+      const waits = waiting.get(agent);
+      if (waits) waits.push(message);
+      else waiting.set(agent, [message]);
+    }
+    return waiting;
   }
 
   /** What holds a message from you to agent `node` now: only a session that won't start. */
