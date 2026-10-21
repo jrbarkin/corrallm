@@ -171,6 +171,15 @@ async function center(locator: Locator): Promise<Point> {
   return { x: b.x + b.width / 2, y: b.y + b.height / 2 };
 }
 
+/** The guide's foreground window area: the canvas below its top floats/taskbar strip. */
+async function windowArea() {
+  return page.locator('.graph-editor').evaluate((editor) => {
+    const { x, y, width, height } = editor.getBoundingClientRect();
+    const strip = parseFloat(getComputedStyle(editor).getPropertyValue('--graph-window-strip'));
+    return { x, y: y + strip, width, height: height - strip };
+  });
+}
+
 /** A point on the canvas, as an offset from its top-left corner. */
 async function at(dx: number, dy: number): Promise<Point> {
   const p = await box(pane());
@@ -633,12 +642,16 @@ test('double-clicking a node opens it in a panel that grows out of it, to edit i
   expectSamePlace(first, from);
   expectSamePlace({ x: first.width, y: first.height }, { x: from.width, y: from.height });
 
-  // ...and opens to most of the editor, centred.
+  // ...and opens to most of the foreground area, centred below the top controls.
   const panel = page.getByRole('dialog', { name: 'Agent 1' });
-  const [editor, opened] = await Promise.all([box(page.locator('.graph-editor')), box(panel)]);
+  const [editor, opened] = await Promise.all([windowArea(), box(panel)]);
   expect(opened.width).toBeGreaterThan(editor.width * 0.8);
   expect(opened.height).toBeGreaterThan(editor.height * 0.8);
-  expectNear(await center(panel), await center(page.locator('.graph-editor')), 1);
+  expectNear(
+    await center(panel),
+    { x: editor.x + editor.width / 2, y: editor.y + editor.height / 2 },
+    1,
+  );
 
   // A new agent's queue starts with a message, to tell it what to do. ⊕ adds one of the agent's
   // actions and the agent it acts on, each picked by typing (or clicking). Agent 1 is a Claude
@@ -736,7 +749,7 @@ test('opens an agent as a full Claude Code-style session, and goes back to the c
   await expect
     .poll(() => view.locator('.agent-panel').evaluate((el) => el.getAnimations().length))
     .toBe(0);
-  const [editor, opened] = await Promise.all([box(page.locator('.graph-editor')), box(view)]);
+  const [editor, opened] = await Promise.all([windowArea(), box(view)]);
   expect(opened.width).toBeGreaterThan(editor.width * 0.95);
   expect(opened.height).toBeGreaterThan(editor.height * 0.9);
 
@@ -810,7 +823,7 @@ test('spawns an agent from the agent view, minimizing the first into its rail', 
       const { x, y, width, height } = el.getBoundingClientRect();
       return { x, y, width, height };
     };
-    const from = document.querySelector('[role="dialog"]');
+    const from = document.querySelector('[role="dialog"][aria-label="Agent 1"]');
     const shrinking = from?.querySelector('.agent-panel');
     from?.querySelector<HTMLElement>('[aria-label="New agent"]')?.click();
     const [shrink] = shrinking?.getAnimations() ?? [];

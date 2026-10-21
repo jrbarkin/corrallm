@@ -116,6 +116,34 @@ async function open({
 const SCREEN = { type: 'screen', data: 'Claude Code\r\n❯ ', cols: 100, rows: 30 } as const;
 
 describe('a Terminal agent', () => {
+  it('keeps the agent picker focused when a late terminal screen arrives, so Escape only closes the picker', async () => {
+    const { view, show } = await open();
+    const terminal = fakeScreens.latest();
+    // xterm focuses a real element; model its focus (and the picker's blur) in jsdom too.
+    const focus = vi.spyOn(terminal, 'focus').mockImplementation(() => {
+      terminal.element.tabIndex = -1;
+      terminal.element.focus();
+    });
+    try {
+      await events.click(view.getByRole('button', { name: /^Agent:/ }));
+      const picker = view.getByRole('combobox', { name: 'Agent' });
+      expect(document.activeElement).toBe(picker);
+      const element = view.getByLabelText('Claude Code’s terminal');
+      show(SCREEN);
+      act(() => {
+        terminal.finish();
+      });
+      expect(document.activeElement).toBe(picker);
+      await events.keyDown(document.activeElement ?? document.body, { key: 'Escape' });
+      expect(view.queryByRole('combobox', { name: 'Agent' })).toBeNull();
+      expect(screen.getByRole('dialog', { name: 'a' })).toBeTruthy();
+      expect(view.getByLabelText('Claude Code’s terminal')).toBe(element);
+      expect(terminal.disposed).toBe(false);
+    } finally {
+      focus.mockRestore();
+    }
+  });
+
   it('shows Claude Code’s own terminal in place of the transcript and composer', async () => {
     const { sessions, terminals, view, show } = await open();
     expect(view.queryByRole('log', { name: 'Transcript' })).toBeNull();

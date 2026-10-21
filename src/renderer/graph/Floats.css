@@ -1,5 +1,7 @@
 /* Canvas-first guide: three compact floats, 12px from the corners. */
 .graph-editor {
+  /* Foreground windows use the canvas below the controls, with their own 16px inset. */
+  --graph-window-strip: 48px;
   --float-bg: rgb(255 255 255 / 0.93);
   --float-line: #d5dae1;
   --float-hover: #eceff3;
@@ -215,7 +217,7 @@
 /* Leave room for the floats above today's windows; the dock's window treatment follows next. */
 .graph-editor[data-window-open] .agent-view,
 .graph-editor[data-window-open] .queues-view {
-  top: 64px;
+  top: calc(var(--graph-window-strip) + 16px);
 }
 .graph-editor[data-window-open] .canvas-folder,
 .graph-editor[data-window-open] .canvas-templates,
@@ -224,14 +226,13 @@
   display: none;
 }
 @media (max-width: 900px) {
+  .graph-editor {
+    --graph-window-strip: 92px;
+  }
   .run-float {
     top: 60px;
     max-width: calc(100% - 24px);
     flex-wrap: wrap;
-  }
-  .graph-editor[data-window-open] .agent-view,
-  .graph-editor[data-window-open] .queues-view {
-    top: 108px;
   }
 }
 

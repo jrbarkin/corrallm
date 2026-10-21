@@ -295,12 +295,12 @@ function Editor({
     void persistence.initialize().then(
       () => {
         if (!mounted) return;
-        setRestoring(false);
+        if (!switching.current) setRestoring(false);
         persistence.changed();
       },
       (error: unknown) => {
         if (!mounted) return;
-        setRestoring(false);
+        if (!switching.current) setRestoring(false);
         setRestoreFailed(true);
         setProblem(`Could not restore run progress: ${ipcErrorMessage(error)}`);
       },
@@ -800,8 +800,11 @@ function Editor({
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (switching.current || restoring) return;
+      if (switching.current) return;
       const file = files ? fileAction(event) : null;
+      // New/Open own a switch barrier, which waits for the initial restore and saves it.
+      // Remember that intent even while startup is inert; session input must still wait.
+      if (restoring && file !== 'new' && file !== 'open') return;
       if (restoreFailed && file !== 'new' && file !== 'open') return;
       if (files && file) {
         event.preventDefault();

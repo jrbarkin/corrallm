@@ -229,6 +229,57 @@ it('a settings-sheet choice commits one agent.setSettings', async () => {
   expect(writer(canvas)?.data.settings?.['claude-code']?.mode).toBe('plan');
 });
 
+it('keeps an Open shortcut pressed during initial restore, saving the run before opening and keeping the switch inert', async () => {
+  const canvas = fakeCanvas({ id: newCanvasId(), arrange: false, nodes: [], links: [] });
+  cleanups.push(() => {
+    canvas.core.dispose();
+  });
+  const restore = Promise.withResolvers<RunRestore>();
+  const opened = Promise.withResolvers<{
+    ok: true;
+    value: { canvas: null; revs: Record<string, never> };
+  }>();
+  const save = vi.fn<RunSource['save']>(() => Promise.resolve(null));
+  canvas.core.reply('canvas.open', () => {
+    expect(save).toHaveBeenCalled();
+    return opened.promise;
+  });
+  const view = render(
+    <GraphEditor
+      canvas={canvas.document.id}
+      client={canvas.core.api}
+      mirror={canvas.core.topics}
+      files
+      runSource={{
+        get: () => restore.promise,
+        save,
+        ready: () => Promise.resolve(null),
+        onStopping: () => () => undefined,
+      }}
+    />,
+  );
+  await events.keyDown(document.body, { key: 'o', ctrlKey: true });
+  expect(canvas.core.operations).toEqual([]);
+  await act(() => {
+    restore.resolve({ id: canvas.document.id, token: 'run', checkpoint: null });
+    return Promise.resolve();
+  });
+  try {
+    await waitFor(() => {
+      expectOneOp(canvas.core, 'canvas.open', {});
+    });
+    expect(view.container.querySelector('.graph-editor')?.hasAttribute('inert')).toBe(true);
+  } finally {
+    await act(() => {
+      opened.resolve({ ok: true, value: { canvas: null, revs: {} } });
+      return Promise.resolve();
+    });
+  }
+  await waitFor(() => {
+    expect(view.container.querySelector('.graph-editor')?.hasAttribute('inert')).toBe(false);
+  });
+});
+
 it('waits for the initial canvas mirror before reading run progress', async () => {
   const canvas = fakeCanvas({ id: newCanvasId(), arrange: false, nodes: [], links: [] });
   cleanups.push(() => {
