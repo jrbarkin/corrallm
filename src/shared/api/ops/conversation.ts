@@ -191,7 +191,8 @@ export const conversationOps = {
       'id this returns. A review: Apply makes the file’s canvas the user’s change, unless the ' +
       'file changed again since (then it is superseded by a review of what is there now, which ' +
       'this names as `raised`), and Keep keeps the canvas as corrallm has it, for its next save ' +
-      'to write over the file. Returns how it was settled.',
+      'to write over the file. A stalled session offers Interrupt, which stops its turn only ' +
+      'when the user chooses it. Returns how it was settled.',
     input: z.strictObject({
       canvas,
       to: NeedId,

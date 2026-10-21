@@ -58,6 +58,8 @@ import { Topics } from './topics';
 import { UsageProbe } from './usage-probe';
 import type { UsageRead } from './usage-probe';
 import { Children } from './children';
+import { StalledTurns } from './stalled';
+import type { WatchdogClock } from './stalled';
 import type { ChildSystem } from './children';
 import { openStore } from './store/open';
 import { unopened } from './store/store';
@@ -73,6 +75,8 @@ import type { StoreDeps } from './store/store';
  */
 
 export interface CoreConfig {
+  /** The silent-turn watchdog's wall clock and timers, injected independently of disk IO. */
+  watchdog?: WatchdogClock;
   /** For tests: process identity and group signalling instead of the OS. */
   children?: ChildSystem;
   /** For tests: the database's clock, timers and log flushes instead of the system's. */
@@ -173,6 +177,8 @@ export interface Core extends Dispatcher {
    * checked for a change on disk (B9 Design §5). Resolves once it is.
    */
   focused(window: WindowId): Promise<void>;
+  /** The host woke from sleep: old turns get a short period of fresh silence before warning. */
+  resumed(): void;
   /**
    * Stops: each canvas's run held where it is and journaled, every session closed, and what the
    * core keeps written out. Rejects, once all that is done, if a run couldn't be journaled.
@@ -282,6 +288,7 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     memory,
     sending: (canvas, agentId, message, send) => engines.sending(canvas, agentId, message, send),
     emit: (canvas, agentId, connection, event) => {
+      stalled.event(canvas, agentId, connection, event);
       void engines.emit(canvas, agentId, connection, event).then(
         (taken) => {
           channels.emit(canvas, 'session:event', agentId, connection, taken);
@@ -293,6 +300,12 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     },
     terminal: (canvas, agentId, event) => {
       channels.emit(canvas, 'terminal', agentId, event);
+    },
+    activity: (canvas, agent) => {
+      stalled.activity(canvas, agent);
+    },
+    ended: (canvas, agent) => {
+      stalled.ended(canvas, agent);
     },
   });
   const windows = new Windows({
@@ -410,6 +423,7 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
       ...(open ? needs(needsInput(open, config.locale)) : []),
       ...proposals.items(canvas),
       ...reviews.items(canvas),
+      ...stalled.items(canvas),
     ];
   };
   const needOf = (canvas: CanvasId, id: string) =>
@@ -447,7 +461,44 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     files,
     environment,
     ...(config.locale === undefined ? {} : { locale: config.locale }),
-    needs: (canvas) => [...proposals.items(canvas), ...reviews.items(canvas)],
+    needs: (canvas) => [
+      ...proposals.items(canvas),
+      ...reviews.items(canvas),
+      ...stalled.items(canvas),
+    ],
+  });
+  const warnings = new Set<Promise<void>>();
+  const stalled = new StalledTurns({
+    catalog: CATALOG,
+    ...(config.watchdog === undefined ? {} : { clock: config.watchdog }),
+    changed: (canvas) => {
+      topics.changed(`needs:${canvas}`, 'corrallm');
+      engines.needsChanged(canvas);
+    },
+    warning: (canvas, agent, connection, messages, text) => {
+      // This is our own notice, not CLI activity. Never feed it back into the watchdog.
+      const warning = Promise.all([
+        engines
+          .emit(canvas, agent, connection, {
+            type: 'notice',
+            id: crypto.randomUUID(),
+            level: 'warning',
+            text,
+          })
+          .then((event) => {
+            channels.emit(canvas, 'session:event', agent, connection, event);
+          }),
+        engines.stalled(canvas, agent, messages, text),
+      ])
+        .then(() => undefined)
+        .catch((error: unknown) => {
+          console.error('Could not record a silent turn’s warning:', error);
+        });
+      warnings.add(warning);
+      void warning.finally(() => {
+        warnings.delete(warning);
+      });
+    },
   });
   engines.watch({
     needs: (canvas) => {
@@ -533,6 +584,7 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
         reveal,
         windows,
         sessions,
+        stalled,
         environment,
         usage,
         engines,
@@ -627,8 +679,13 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
       const canvas = windows.shownIn(window);
       if (canvas !== undefined) await check(canvas);
     },
+    resumed: () => {
+      stalled.resume();
+    },
     close: async () => {
       closing = true;
+      stalled.close();
+      await Promise.all(warnings);
       watching.close();
       await Promise.all(checking);
       probe.stop();

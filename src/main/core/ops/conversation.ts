@@ -20,7 +20,7 @@ import type { Implementations, OpServices } from '.';
 export function conversationOps(
   services: OpServices,
 ): Pick<Implementations, 'agents' | 'status' | 'needs' | 'messages' | 'message' | 'withdraw'> {
-  const { engines, states, isLead, locale, proposals, reviews } = services;
+  const { engines, states, isLead, locale, proposals, reviews, stalled } = services;
   const lead = (canvas: CanvasId, { caller }: OpContext) =>
     caller.kind === 'agent' && isLead(canvas, caller.agent);
 
@@ -40,6 +40,7 @@ export function conversationOps(
       ...needs(needsInput(open, locale)),
       ...proposals.items(id),
       ...reviews.items(id),
+      ...stalled.items(id),
     ];
     if (ctx.caller.kind === 'human') return items;
     const { caller } = ctx;
@@ -110,7 +111,10 @@ export function conversationOps(
       const id = canvas as string | undefined as CanvasId | undefined;
       if (id !== undefined && !engines.canvas(id) && states.keeps(id)) {
         return {
-          items: ctx.caller.kind === 'human' ? [...proposals.items(id), ...reviews.items(id)] : [],
+          items:
+            ctx.caller.kind === 'human'
+              ? [...proposals.items(id), ...reviews.items(id), ...stalled.items(id)]
+              : [],
         };
       }
       const open = openCanvas(engines, canvas);

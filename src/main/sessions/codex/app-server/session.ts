@@ -320,6 +320,7 @@ export class AppServerSession implements LiveSession<CodexMode> {
     if (this.#closing) return;
     const thread = text(property(params, 'threadId'));
     const ours = thread === this.#thread.id;
+    if (ours || thread === undefined) this.#host.activity?.();
     if (method === 'turn/started' && ours) {
       this.#started(text(property(property(params, 'turn'), 'id')));
     } else if (method === 'serverRequest/resolved') {

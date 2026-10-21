@@ -143,4 +143,9 @@ link.on('windowGone', (window, closed) => {
 link.on('windowFocused', (window) => {
   void ready.promise.then((core) => core.focused(window));
 });
+link.on('resumed', () => {
+  void ready.promise.then((core) => {
+    core.resumed();
+  });
+});
 link.emit('ready', memoryText());

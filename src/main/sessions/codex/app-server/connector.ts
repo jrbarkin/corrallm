@@ -140,7 +140,10 @@ export class AppServerConnector implements Connector<CodexMode> {
         if (live.session) live.session.notification(method, params);
         else early.push({ method, params });
       },
-      onRequest: prompts.request,
+      onRequest: (method, params, id) => {
+        host.activity?.();
+        return prompts.request(method, params, id);
+      },
       ...(this.#spawn === undefined ? {} : { spawn: this.#spawn }),
     });
     try {

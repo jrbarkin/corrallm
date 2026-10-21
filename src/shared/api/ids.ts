@@ -46,7 +46,7 @@ export const NeedId = brandedId(
   z
     .string()
     .max(MAX_NEED_ID)
-    .regex(/^(?:hold|start|unasking|limited|prompt|proposal|file)\/[\s\S]+$/),
+    .regex(/^(?:hold|start|unasking|limited|prompt|proposal|file|stalled)\/[\s\S]+$/),
 );
 export type NeedId = z.infer<typeof NeedId>;
 

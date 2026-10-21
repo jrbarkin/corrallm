@@ -75,6 +75,29 @@ const rows = (canvas = CANVAS) =>
   );
 
 describe('the message store', () => {
+  it('keeps a stalled turn’s told key after receipt, settlement and a restart', async () => {
+    const messages = await store();
+    const sent = messages.add(draft('outside:orchestrator', 'agent:builder', 'delivered'));
+    const key = `stalled:${sent.id}`;
+    messages.add(
+      {
+        from: 'corrallm',
+        to: sent.from,
+        kind: 'notice',
+        body: 'No activity',
+        replyTo: sent.id,
+        state: 'delivered',
+      },
+      key,
+    );
+    expect(messages.hasTold(key)).toBe(true);
+    messages.update(sent.id, { state: 'unresolved' });
+    await messages.durable();
+    await restart();
+    const restored = await store();
+    expect(restored.hasTold(key)).toBe(true);
+    expect(restored.hasTold('stalled:another')).toBe(false);
+  });
   it('keeps each message as it changes, in the order they came, across a restart', async () => {
     const first = await store();
     const one = first.add(draft('outside:orchestrator', 'agent:builder'));

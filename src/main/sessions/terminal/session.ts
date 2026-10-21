@@ -459,7 +459,10 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
       });
     });
     pty.onData((data) => {
-      if (pty === this.#pty) this.#output(data);
+      if (pty === this.#pty) {
+        this.#host.activity?.();
+        this.#output(data);
+      }
     });
     // Until its prompt shows, a message for it waits: after a while, on the user (a dialog).
     this.#later(() => {
@@ -879,6 +882,7 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
 
   #hook(event: HookEvent): void {
     if (this.#exited || this.#closing) return;
+    this.#host.activity?.();
     this.#pass();
     for (const signal of this.#cli.hook(event)) this.#signal(signal);
   }
@@ -1061,6 +1065,7 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
   /** What its CLI gave its status line: its usage limits go to main's readings. */
   #statusLine(input: HookEvent): void {
     if (this.#exited || this.#closing) return;
+    this.#host.activity?.();
     const windows = this.#cli.statusLine?.(input);
     if (windows) this.#deps.usage?.(windows);
   }
@@ -1073,7 +1078,10 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
     if (!usage || !this.#cli.readUsage) return;
     void this.#cli.readUsage().then(
       (read) => {
-        if (read && !this.#closing) usage(read.windows);
+        if (read && !this.#closing) {
+          this.#host.activity?.();
+          usage(read.windows);
+        }
       },
       () => undefined,
     );

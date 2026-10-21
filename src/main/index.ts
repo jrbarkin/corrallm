@@ -1,6 +1,6 @@
 import path from 'node:path';
 
-import { app, BrowserWindow, dialog, session } from 'electron';
+import { app, BrowserWindow, dialog, powerMonitor, session } from 'electron';
 import type { MessageBoxOptions } from 'electron';
 import squirrelStartup from 'electron-squirrel-startup';
 
@@ -254,6 +254,9 @@ function main(): void {
       // disk (B9 Design §5): one made in another program while corrallm was in the background.
       app.on('browser-window-focus', (_event, window) => {
         supervisor.windowFocused(window.webContents.id);
+      });
+      powerMonitor.on('resume', () => {
+        supervisor.resumed();
       });
       app.on('browser-window-created', (_event, window) => {
         // macOS window close does not quit the app, but must save/freeze the run all the same.
