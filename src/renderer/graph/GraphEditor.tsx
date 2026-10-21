@@ -28,7 +28,7 @@ import type { Selection } from './selection';
 import { projectOverlay } from './overlay';
 import type { Overlays } from './overlay';
 import { api as windowApi } from '../api/client';
-import { topics as windowTopics } from '../api/topics';
+import { topics as windowTopics, useTopic } from '../api/topics';
 import type { TopicMirror } from '../api/topics';
 import type { GuiApi } from '../../shared/gui-link';
 import * as Structure from '../../shared/model/structure';
@@ -75,6 +75,7 @@ import { ExampleGallery } from './ExampleGallery';
 import type { TemplateChoices } from './ExampleGallery';
 import { CanvasMenu } from './CanvasMenu';
 import { RunFloat, ZoomFloat } from './Floats';
+import { Dock } from './Dock';
 import './Floats.css';
 import { fileAction, keyAction, SHORTCUTS } from './keys';
 import type { KeyAction } from './keys';
@@ -900,6 +901,11 @@ function Editor({
     };
     return { input, needs: needsOf(input) };
   }, [canvasId, runNodes, run, sessions, engine]);
+  const coreNeeds = useTopic(`needs:${canvasId}`, mirror);
+  const dockNeeds = new Set([
+    ...needed.needs.map((need) => need.agent.id),
+    ...(coreNeeds?.items ?? []).flatMap((need) => (need.agent ? [need.agent] : [])),
+  ]);
 
   // The links between agents that can talk (graph.edges, dashed), except where one hands the other
   // work: that is drawn from the queues as an arrow (work.ts), and implies they can talk. React Flow
@@ -1051,6 +1057,8 @@ function Editor({
       <div
         className="graph-editor"
         data-window-open={front !== undefined || queues !== undefined ? '' : undefined}
+        data-agent-open={front !== undefined ? '' : undefined}
+        data-canvas-view={queues ? 'queues' : 'graph'}
         ref={wrapper}
         inert={restoring}
         aria-busy={restoring}
@@ -1365,9 +1373,6 @@ function Editor({
             onStop={() => {
               runStore.stop();
             }}
-            onQueues={() => {
-              setQueues({});
-            }}
             gauges={gauges}
             needs={
               <NeedsSidebar
@@ -1406,6 +1411,34 @@ function Editor({
               }}
             />
           )}
+          <Dock
+            nodes={model.nodes}
+            sessions={sessions}
+            run={run}
+            needs={dockNeeds}
+            current={front}
+            queues={queues !== undefined}
+            onToggleQueues={() => {
+              void flushDrafts(() => {
+                setQueues((current) => (current ? undefined : front ? { from: front } : {}));
+              }).catch((error: unknown) => {
+                setProblem(ipcErrorMessage(error));
+              });
+            }}
+            onOpen={(id) => {
+              void flushDrafts(() => {
+                setQueues(undefined);
+                selectOne(id);
+                setOpened(({ ids }) => ({ ids: [id, ...ids.filter((other) => other !== id)] }));
+              }).catch((error: unknown) => {
+                setProblem(ipcErrorMessage(error));
+              });
+            }}
+            onNew={commands.new}
+            onTemplates={() => {
+              setGallery(true);
+            }}
+          />
         </div>
         {openedNode && (
           <AgentView

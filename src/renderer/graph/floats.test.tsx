@@ -99,13 +99,12 @@ it('zoom and Arrange share a float; each click has one intent', async () => {
     expect(action).toHaveBeenCalledOnce();
   }
 });
-it('the run float keeps Run, Pause, Stop, Resume and All queues alongside Needs and usage', async () => {
+it('the run float keeps Run, Pause, Stop and Resume alongside Needs and usage, with queues in the dock', async () => {
   const actions = {
     onRun: vi.fn(),
     onPause: vi.fn(),
     onStop: vi.fn(),
     onResume: vi.fn(),
-    onQueues: vi.fn(),
   };
   const props = {
     working: 0,
@@ -124,10 +123,9 @@ it('the run float keeps Run, Pause, Stop, Resume and All queues alongside Needs 
   view.rerender(<RunFloat {...props} run={{ running: false, paused: true, agents: {} }} />);
   await events.click(screen.getByRole('button', { name: 'Resume' }));
   await events.click(screen.getByRole('button', { name: 'Run again' }));
-  await events.click(screen.getByRole('button', { name: 'Show all queues' }));
   expect(actions.onResume).toHaveBeenCalledOnce();
   expect(actions.onRun).toHaveBeenCalledTimes(2);
-  expect(actions.onQueues).toHaveBeenCalledOnce();
+  expect(screen.queryByRole('button', { name: 'Show all queues' })).toBeNull();
   expect(screen.getByRole('button', { name: 'Needs you' })).toBeTruthy();
   expect(screen.getByText('Usage')).toBeTruthy();
 });

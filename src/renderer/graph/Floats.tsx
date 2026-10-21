@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
 import type { Run } from '../../shared/engine/run/runner';
 
-/** Global run controls stay renderer-owned until B11. All queues moves to the dock next. */
+/** Global run controls stay renderer-owned until B11. */
 export function RunFloat({
   run,
   working,
@@ -12,7 +12,6 @@ export function RunFloat({
   onPause,
   onStop,
   onResume,
-  onQueues,
 }: {
   run: Run;
   working: number;
@@ -23,7 +22,6 @@ export function RunFloat({
   onPause: () => void;
   onStop: () => void;
   onResume: () => void;
-  onQueues: () => void;
 }) {
   return (
     <div className="run-float graph-float" role="toolbar" aria-label="Run controls">
@@ -69,14 +67,6 @@ export function RunFloat({
             onClick={onRun}
           >
             {run.running || run.paused ? '↻' : '▶'}
-          </button>
-          <button
-            type="button"
-            aria-label="Show all queues"
-            title="All queues: every agent’s, side by side"
-            onClick={onQueues}
-          >
-            ▥
           </button>
           <span className="float-separator" />
         </>

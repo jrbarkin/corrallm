@@ -10,6 +10,7 @@ import { launchApp } from './launch';
 import { newCanvasId } from '../src/shared/canvas';
 import { MAX_LABEL } from '../src/shared/model/canvas';
 import { CARD_SIZE } from '../src/shared/model/geometry';
+import { MADE_UP } from '../src/shared/test-made-up';
 
 interface Point {
   x: number;
@@ -1586,4 +1587,95 @@ test('the three floats stay at the canvas corners and open their controls', asyn
     'aria-pressed',
     'true',
   );
+});
+
+test('the dock toggles All queues and flies to the taskbar to switch agents, with catalog logos as images', async () => {
+  await addAgentAt('Agent 1', 300, 200);
+  await addAgentAt('Agent 2', 750, 400);
+  const dock = page.getByRole('navigation', { name: 'Canvas agents' });
+  const queues = dock.getByRole('button', { name: 'Show all queues' });
+  await expect(
+    page
+      .getByRole('toolbar', { name: 'Run controls' })
+      .getByRole('button', { name: 'Show all queues' }),
+  ).toHaveCount(0);
+  const first = dock.getByRole('button', { name: /^Agent 1,/ });
+  const image = first.getByRole('img', { name: 'Claude Code' });
+  await expect(image).toHaveAttribute('src', /^data:image\/svg\+xml,/);
+  expect(await image.evaluate((element) => element.tagName)).toBe('IMG');
+  await expect
+    .poll(() =>
+      image.evaluate((element: HTMLImageElement) => element.complete && element.naturalWidth > 0),
+    )
+    .toBe(true);
+  await expect(first.locator('svg')).toHaveCount(0);
+  await queues.click();
+  await expect(page.getByRole('dialog', { name: 'All queues' })).toBeVisible();
+  await expect(queues).toHaveAttribute('aria-pressed', 'true');
+  await queues.click();
+  await expect(page.getByRole('dialog', { name: 'All queues' })).toHaveCount(0);
+  const original = await box(dock);
+  await first.click();
+  await expect(page.getByRole('dialog', { name: 'Agent 1' })).toBeVisible();
+  await expect(dock).toHaveAttribute('data-horizontal', '');
+  await expect(first).toHaveAttribute('aria-current', 'true');
+  await expect.poll(() => first.evaluate((element) => element.getAnimations().length)).toBe(0);
+  await expect(dock).toHaveCSS('flex-direction', 'row');
+  const top = await box(dock),
+    canvas = await box(page.locator('.graph-editor'));
+  expectNear(
+    { x: top.x + top.width / 2, y: top.y },
+    { x: canvas.x + canvas.width / 2, y: canvas.y + 10 },
+    1,
+  );
+  await dock.getByRole('button', { name: /^Agent 2,/ }).click();
+  await expect(page.getByRole('dialog', { name: 'Agent 2' })).toBeVisible();
+  await expect(page.getByRole('dialog', { name: 'Agent 1' })).toHaveCount(0);
+  await page
+    .getByRole('dialog', { name: 'Agent 2' })
+    .getByRole('button', { name: 'Back to the canvas' })
+    .click();
+  await expect(page.getByRole('dialog', { name: 'Agent 2' })).toHaveCount(0);
+  await expect(dock).not.toHaveAttribute('data-horizontal');
+  await expect.poll(() => first.evaluate((element) => element.getAnimations().length)).toBe(0);
+  expectSamePlace(await box(dock), original);
+});
+
+test('the dock gives a logo-less agent its first letter', async () => {
+  const adapter = MADE_UP.adapters[0];
+  if (!adapter) throw new Error('The made-up catalog has no adapter');
+  // Files retain adapters this build lacks. The unit test also supplies this catalog with its
+  // declared logo-less adapter; here the real app exercises the same fallback under its CSP.
+  const file = nativePath.join(dir, 'no-logo.corral');
+  await writeFile(
+    file,
+    JSON.stringify({
+      format: 'corrallm',
+      version: 2,
+      id: newCanvasId(),
+      nodes: [
+        {
+          id: 'zed',
+          kind: 'agent',
+          label: 'My Zed',
+          position: { x: 300, y: 200 },
+          adapter: adapter.id,
+        },
+      ],
+      links: [],
+    }),
+  );
+  await app.evaluate(({ dialog }, file) => {
+    Object.assign(dialog, {
+      showOpenDialog: () => Promise.resolve({ canceled: false, filePaths: [file] }),
+    });
+  }, file);
+  await canvasAction(page, 'Open…');
+  const icon = page
+    .getByRole('navigation', { name: 'Canvas agents' })
+    .getByRole('button', { name: /^My Zed,/ });
+  const logo = icon.getByRole('img', { name: adapter.id });
+  await expect(logo).toHaveText('Z');
+  expect(await logo.evaluate((element) => element.tagName)).toBe('SPAN');
+  await expect(icon.locator('img, svg')).toHaveCount(0);
 });
