@@ -7,7 +7,8 @@ import path from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { JOURNAL_SIZE_LIMIT } from './checkpointer';
+import { Checkpointer, JOURNAL_SIZE_LIMIT } from './checkpointer';
+import type { Checkpointed } from './checkpointer';
 import { openStore } from './open';
 import { connect, resultCode, SQLITE_FULL } from './sqlite';
 import type { Connection } from './sqlite';
@@ -41,6 +42,8 @@ let flushes: { fd: number; done: (error?: Error) => void }[] | undefined;
 const diskFault = vi.hoisted(() => ({
   truncate: false,
   snapshotFolder: '',
+  publication: undefined as
+    { folder: string; started: () => void; wait: Promise<void> } | undefined,
 }));
 vi.mock('node:fs', async (original) => {
   const fs = await original<typeof Fs>();
@@ -60,6 +63,15 @@ vi.mock('node:fs/promises', async (original) => {
       const handle = await fs.open(...args);
       if (String(args[0]) === diskFault.snapshotFolder) {
         handle.sync = () => Promise.reject(new Error('EIO: i/o error, fsync folder'));
+      }
+      const publication = diskFault.publication;
+      if (String(args[0]) === publication?.folder) {
+        const sync = handle.sync.bind(handle);
+        handle.sync = async () => {
+          publication.started();
+          await publication.wait;
+          await sync();
+        };
       }
       return handle;
     },
@@ -111,8 +123,10 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   diskFault.truncate = false;
   diskFault.snapshotFolder = '';
+  diskFault.publication = undefined;
   if (reader.isOpen) reader.close();
   for (const { done } of flushes?.splice(0) ?? []) done();
   flushes = undefined;
@@ -517,6 +531,50 @@ describe('tx', () => {
 });
 
 describe('checkpoints', () => {
+  it('leaves writes free while a snapshot occupies the worker, postponing idle maintenance', async () => {
+    const release = Promise.withResolvers<undefined>();
+    const entered = Promise.withResolvers<undefined>();
+    const original: (this: Checkpointer, partial: string) => Promise<void> = Reflect.get(
+      Checkpointer.prototype,
+      'snapshot',
+    );
+    vi.spyOn(Checkpointer.prototype, 'snapshot').mockImplementation(async function (
+      this: Checkpointer,
+      partial,
+    ) {
+      entered.resolve(undefined);
+      await release.promise;
+      await original.call(this, partial);
+    });
+    const checkpoint: (this: Checkpointer) => Promise<Checkpointed> = Reflect.get(
+      Checkpointer.prototype,
+      'checkpoint',
+    );
+    // A job posted to the busy worker cannot answer until the scan gives its thread back.
+    const checkpoints = vi
+      .spyOn(Checkpointer.prototype, 'checkpoint')
+      .mockImplementation(async function (this: Checkpointer) {
+        await release.promise;
+        return checkpoint.call(this);
+      });
+    await store.write(() => add('before'));
+    const snapshot = store.snapshot();
+    await entered.promise;
+    fire();
+    let committed = false;
+    const written = store.write(() => {
+      add('while busy');
+      committed = true;
+    });
+    try {
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(committed).toBe(true);
+      expect(checkpoints).not.toHaveBeenCalled();
+    } finally {
+      release.resolve(undefined);
+      await Promise.all([snapshot, written]);
+    }
+  });
   it('checkpoints the log into the database once writes stop for a second', async () => {
     const size = async () => (await stat(store.file)).size;
     await store.write(() => {
@@ -622,6 +680,33 @@ describe('checkpoints', () => {
 describe('snapshots', () => {
   const backups = () => path.join(profile, 'backups');
   const names = async () => (await readdir(backups())).sort();
+
+  it('never returns a published snapshot after failing closed during its directory sync', async () => {
+    flushes = [];
+    const written = store.write(() => add('unflushed'));
+    const rejected = written.catch((error: unknown) => error);
+    await vi.waitFor(() => {
+      expect(flushes).toHaveLength(1);
+    });
+    const entered = Promise.withResolvers<undefined>();
+    const release = Promise.withResolvers<undefined>();
+    diskFault.publication = {
+      folder: backups(),
+      started: () => {
+        entered.resolve(undefined);
+      },
+      wait: release.promise,
+    };
+    const taking = store.snapshot();
+    await entered.promise;
+    flushes[0]?.done(new Error('EIO'));
+    // Let the failed flush fail closed before the publication's last fsync returns.
+    await new Promise((resolve) => setImmediate(resolve));
+    release.resolve(undefined);
+    await expect(taking).rejects.toThrow(/could not be written/);
+    expect(await rejected).toBeInstanceOf(Error);
+    expect(await names()).toEqual([]);
+  });
   /** What a snapshot holds, read as it would be restored: on its own, checked. */
   function inSnapshot(name: string): { check: unknown; journal: unknown; notes: number } {
     const snapshot = connect(path.join(backups(), name), { readOnly: true });

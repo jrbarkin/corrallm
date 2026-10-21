@@ -1,6 +1,7 @@
 import { Worker } from 'node:worker_threads';
 
-import { CONNECT_IN_WORKER } from './sqlite';
+import { faultsOf } from './faults';
+import { BACKUP_IN_WORKER, CONNECT_IN_WORKER } from './sqlite';
 import type { Connection } from './sqlite';
 
 /*
@@ -12,7 +13,7 @@ import type { Connection } from './sqlite';
  * does so syncs the new log's header as it writes it: begun by the core's next commit, that sync
  * would be on the core's loop. Those syncs wait for the drive, as long as other programs keep it
  * busy. The store commits nothing while a checkpoint goes on, so the two connections never write
- * at once (the core's waits for none: open.ts). Its thread starts with the first checkpoint,
+ * at once (the core's waits for none: open.ts). Its thread starts with the first checkpoint or snapshot,
  * keeps no process running, and ends as the store closes. Its code is a string, run as CommonJS,
  * since the core's bundles are one file each.
  */
@@ -45,14 +46,38 @@ export interface Checkpointed {
 const CODE = `
 const { parentPort, workerData } = require('node:worker_threads');
 let connection;
-parentPort.on('message', ({ id }) => {
+parentPort.on('message', async ({ id, partial }) => {
   try {
+    if (partial !== undefined) {
+      // Its own reader: a backup never uses the checkpointing/writing connection.
+      let file = workerData.file;
+      let options = { readOnly: true };
+      const reader = ${CONNECT_IN_WORKER};
+      try {
+        await (${BACKUP_IN_WORKER})(reader, partial, { rate: 2 ** 31 - 1 });
+      } finally {
+        reader.close();
+      }
+      file = partial;
+      options = {};
+      const copy = ${CONNECT_IN_WORKER};
+      let found;
+      try {
+        copy.exec('PRAGMA journal_mode = DELETE');
+        found = copy.prepare('PRAGMA quick_check').all().map(row => String(row.quick_check));
+      } finally {
+        copy.close();
+      }
+      parentPort.postMessage({ id, done: found });
+      return;
+    }
     if (connection === undefined) {
       const file = workerData.file;
       const options = { timeout: 0 };
       connection = ${CONNECT_IN_WORKER};
       connection.exec(workerData.setUp);
     }
+
     const done = connection.prepare('PRAGMA wal_checkpoint(PASSIVE)').get();
     if (done.log === done.checkpointed) {
       const version = connection.prepare('PRAGMA user_version').get().user_version;
@@ -79,7 +104,7 @@ const SET_UP = [
 ].join('; ');
 
 interface Asked {
-  resolve: (done: Checkpointed) => void;
+  resolve: (done: Checkpointed | string[]) => void;
   reject: (error: Error) => void;
 }
 
@@ -98,11 +123,25 @@ export class Checkpointer {
    * copied all of it: what it did.
    */
   checkpoint(): Promise<Checkpointed> {
+    return this.#ask() as Promise<Checkpointed>;
+  }
+
+  /** Copies, converts and checks a snapshot, entirely off the core's loop. */
+  async snapshot(partial: string): Promise<void> {
+    const found = faultsOf((await this.#ask({ partial })) as string[]);
+    if (found !== undefined) {
+      throw new Error(
+        `The core’s database looks damaged (SQLite’s check of a snapshot of it found: ${found}), so the snapshot was not kept.`,
+      );
+    }
+  }
+
+  #ask(job: { partial?: string } = {}): Promise<Checkpointed | string[]> {
     const worker = (this.#worker ??= this.#start());
     const id = this.#next++;
     return new Promise((resolve, reject) => {
       this.#asked.set(id, { resolve, reject });
-      worker.postMessage({ id });
+      worker.postMessage({ id, ...job });
     });
   }
 
@@ -121,7 +160,7 @@ export class Checkpointer {
     worker.unref();
     worker.on(
       'message',
-      ({ id, done, error }: { id: number; done?: Checkpointed; error?: string }) => {
+      ({ id, done, error }: { id: number; done?: Checkpointed | string[]; error?: string }) => {
         const asked = this.#asked.get(id);
         this.#asked.delete(id);
         if (error !== undefined) asked?.reject(new Error(error));

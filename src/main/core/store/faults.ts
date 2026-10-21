@@ -11,6 +11,11 @@ export function faults(connection: Connection): string | undefined {
     .prepare('PRAGMA quick_check')
     .all()
     .map((row) => String(row.quick_check));
+  return faultsOf(found);
+}
+
+/** Formats a check run on this thread or the checkpointer's, without copying database pages. */
+export function faultsOf(found: readonly string[]): string | undefined {
   if (found.length === 1 && found[0] === 'ok') return undefined;
   const lines = found.flatMap((row) => row.split('\n'));
   // Its heading (*** in database main ***) says nothing of what it found.

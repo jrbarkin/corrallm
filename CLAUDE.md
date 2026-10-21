@@ -369,12 +369,15 @@ src/main/core/store/  The core's database (B9.0, Core Database §5): <profile>/c
                 write heavily to the drive: G2 holds on a quiet drive, and only the connection on a
                 thread of its own (Core Database §4's fallback, not built) would hold it under such
                 writing. `snapshot` (snapshots.ts: SQLite's backup
-                into backups/core-<time>.db, read through a connection of its own in one step,
+                into backups/core-<time>.db, read through a connection of its own in one step;
+                the backup, conversion to a rollback journal and quick check run on the
+                checkpointer's worker, never scanning the copy on the core's loop;
+                idle checkpoints wait until that snapshot ends, leaving foreground writes free;
                 quick-checked and forced to disk before it is named, never kept with a fault, the
                 newest three kept, what one cut short left removed by the next; taken as it closes
                 and every four hours) and `close` (writes, and transactions outside one, refused
-                from its start; the lane drained and flushed, the checkpointer's thread ended, a
-                TRUNCATE checkpoint, a snapshot; once). `Database` is what the stores kept in it
+                from its start; the lane drained and flushed, a TRUNCATE checkpoint, a snapshot,
+                then the checkpointer's thread ended; once). `Database` is what the stores kept in it
                 read and write through: the Store, or, when it couldn't be opened, `unopened` (every
                 read and write fails, saying why). createCore opens it first (once core.lock is
                 held: entry.ts, serve) and closes it last, after journaling; what opening it said is
