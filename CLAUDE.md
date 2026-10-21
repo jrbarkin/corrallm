@@ -363,7 +363,10 @@ src/main/core/store/  The core's database (B9.0, Core Database §5): <profile>/c
                 with; once it copied all of the log it begins it anew there, cutting it back to
                 JOURNAL_SIZE_LIMIT, and the lane commits nothing meanwhile, so the two connections
                 never write at once), run once idle a second (at most 30 s after the first
-                unchecked commit), so no drive flush waits on the core's loop while it serves (only
+                unchecked commit). An idle checkpoint with no queued write also runs incremental
+                vacuum on that worker, at most 64 pages per pass, checkpointing its result;
+                another pass waits a second of idle time, and a queued write takes priority.
+                No drive flush waits on the core's loop while it serves (only
                 opening and closing sync on it). A commit's own writes into the log do run on the
                 loop, into the system's cache, which the system holds back while other programs
                 write heavily to the drive: G2 holds on a quiet drive, and only the connection on a

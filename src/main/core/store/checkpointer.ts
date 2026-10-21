@@ -25,6 +25,9 @@ import type { Connection } from './sqlite';
  */
 export const JOURNAL_SIZE_LIMIT = 4 * 2 ** 20;
 
+/** At most 256 KiB with SQLite's usual page size, before queued writes get their turn. */
+export const VACUUM_PAGES = 64;
+
 /**
  * Begins the log anew, where SQLite may (every frame in it copied into the database, and no
  * reader using it), with a write that changes nothing: the schema's version, as it is. SQLite
@@ -46,7 +49,7 @@ export interface Checkpointed {
 const CODE = `
 const { parentPort, workerData } = require('node:worker_threads');
 let connection;
-parentPort.on('message', async ({ id, partial }) => {
+parentPort.on('message', async ({ id, partial, vacuum }) => {
   try {
     if (partial !== undefined) {
       // Its own reader: a backup never uses the checkpointing/writing connection.
@@ -77,13 +80,21 @@ parentPort.on('message', async ({ id, partial }) => {
       connection = ${CONNECT_IN_WORKER};
       connection.exec(workerData.setUp);
     }
-
+    if (vacuum) {
+      if (connection.prepare('PRAGMA auto_vacuum').get().auto_vacuum !== 2 ||
+          connection.prepare('PRAGMA freelist_count').get().freelist_count === 0) {
+        parentPort.postMessage({ id, done: 0 });
+        return;
+      }
+      connection.prepare('PRAGMA incremental_vacuum(${String(VACUUM_PAGES)})').all();
+    }
     const done = connection.prepare('PRAGMA wal_checkpoint(PASSIVE)').get();
     if (done.log === done.checkpointed) {
       const version = connection.prepare('PRAGMA user_version').get().user_version;
       connection.exec('PRAGMA user_version = ' + String(version));
     }
-    parentPort.postMessage({ id, done });
+    parentPort.postMessage({ id, done: vacuum
+      ? connection.prepare('PRAGMA freelist_count').get().freelist_count : done });
   } catch (error) {
     parentPort.postMessage({ id, error: error instanceof Error ? error.message : String(error) });
   }
@@ -104,7 +115,7 @@ const SET_UP = [
 ].join('; ');
 
 interface Asked {
-  resolve: (done: Checkpointed | string[]) => void;
+  resolve: (done: Checkpointed | string[] | number) => void;
   reject: (error: Error) => void;
 }
 
@@ -126,6 +137,11 @@ export class Checkpointer {
     return this.#ask() as Promise<Checkpointed>;
   }
 
+  /** Returns free pages still to reclaim, after one bounded pass and its checkpoint. */
+  vacuum(): Promise<number> {
+    return this.#ask({ vacuum: true }) as Promise<number>;
+  }
+
   /** Copies, converts and checks a snapshot, entirely off the core's loop. */
   async snapshot(partial: string): Promise<void> {
     const found = faultsOf((await this.#ask({ partial })) as string[]);
@@ -136,7 +152,7 @@ export class Checkpointer {
     }
   }
 
-  #ask(job: { partial?: string } = {}): Promise<Checkpointed | string[]> {
+  #ask(job: { partial?: string; vacuum?: true } = {}): Promise<Checkpointed | string[] | number> {
     const worker = (this.#worker ??= this.#start());
     const id = this.#next++;
     return new Promise((resolve, reject) => {
@@ -160,7 +176,15 @@ export class Checkpointer {
     worker.unref();
     worker.on(
       'message',
-      ({ id, done, error }: { id: number; done?: Checkpointed | string[]; error?: string }) => {
+      ({
+        id,
+        done,
+        error,
+      }: {
+        id: number;
+        done?: Checkpointed | string[] | number;
+        error?: string;
+      }) => {
         const asked = this.#asked.get(id);
         this.#asked.delete(id);
         if (error !== undefined) asked?.reject(new Error(error));

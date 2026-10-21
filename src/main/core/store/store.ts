@@ -264,6 +264,10 @@ export class Store {
    * rejects if it couldn't be, or a flush it waited for failed.
    */
   checkpoint(): Promise<void> {
+    return this.#checkpointNow(false);
+  }
+
+  #checkpointNow(idle: boolean): Promise<void> {
     if (this.#failed !== undefined) return Promise.reject(this.#failed);
     if (this.#checkpointing !== undefined) return this.#checkpointing;
     const checkpointing = (async () => {
@@ -271,7 +275,18 @@ export class Store {
       while (this.#flushing !== undefined) await this.#flushing;
       if (this.#failed !== undefined) throw this.#failed;
       try {
-        await this.#checkpointer.checkpoint();
+        const done = await this.#checkpointer.checkpoint();
+        // A queued write always takes priority. Once begun, a vacuum pass holds the lane for
+        // at most VACUUM_PAGES pages; subsequent passes must wait for another idle interval.
+        if (idle && this.#canVacuum() && done.log === done.checkpointed) {
+          const remaining = await this.#checkpointer.vacuum();
+          if (remaining > 0 && this.#canVacuum()) {
+            this.#cancelCheckpoint?.();
+            this.#cancelCheckpoint = this.#deps.later(() => {
+              this.#checkpoint();
+            }, CHECKPOINT_IDLE_MS);
+          }
+        }
       } catch (error) {
         throw new Error(`Could not checkpoint the core’s database: ${reason(error)}`, {
           cause: error,
@@ -286,6 +301,15 @@ export class Store {
         this.#flush();
       });
     return checkpointing;
+  }
+
+  #canVacuum(): boolean {
+    return (
+      !this.#shut &&
+      this.#failed === undefined &&
+      this.#queue.length === 0 &&
+      this.#snapshotting === undefined
+    );
   }
 
   /**
@@ -583,7 +607,7 @@ export class Store {
       return;
     }
     this.#uncheckpointedSince = undefined;
-    this.checkpoint().catch((error: unknown) => {
+    this.#checkpointNow(true).catch((error: unknown) => {
       // Failing closed is said once, as it fails.
       if (error !== this.#failed) console.error(error);
     });
