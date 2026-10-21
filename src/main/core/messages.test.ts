@@ -30,6 +30,7 @@ import type { AgentCaller, Caller, OutsideCaller } from './caller';
 import { Documents } from './canvas/documents';
 import { createCore } from './core';
 import type { Core } from './core';
+import { isActive } from './delivery/messages';
 import { STORE_FILE } from './store/open';
 import {
   forgetRun,
@@ -128,11 +129,21 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  const stores = (core?.engines.opened() ?? []).flatMap(
+    (canvas) => core?.engines.canvas(canvas)?.messages ?? [],
+  );
+  const indexed = () => stores.map((messages) => messages.active());
+  const kept = () => stores.map((messages) => messages.all().filter(isActive));
+  const [before, keptBefore] = [indexed(), kept()];
   await core?.close();
   core = undefined;
   vi.useRealTimers();
   vi.restoreAllMocks();
   await rm(profile, { recursive: true, force: true });
+  // What delivery acts on is what each canvas's store keeps that it acts on, whatever the test
+  // did, and once the core has closed.
+  expect(before).toEqual(keptBefore);
+  expect(indexed()).toEqual(kept());
 });
 
 const realNow = Date.now.bind(Date);

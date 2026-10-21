@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { STORE_BYTES, STORE_SETTLED_PER_PARTY } from '../../../shared/api/limits';
 import type { CanvasId } from '../../../shared/canvas';
 import {
+  agentOf,
   isSettled,
   MESSAGE_KINDS,
   MESSAGE_STATES,
@@ -20,7 +21,9 @@ import type { Database } from '../store/store';
  * places are never given again (MessageTable), so a cursor into it survives pruning, restarts and
  * restores. It keeps the newest STORE_SETTLED_PER_PARTY settled messages of each party within
  * STORE_BYTES, and every pending and unresolved one, deleting the oldest settled first (delivery
- * bounds how many wait: MAX_WAITING).
+ * bounds how many wait: MAX_WAITING). Beside them it keeps the few delivery still acts on
+ * (`active`), as they change, so that what looks at what waits (each needs pass, each delivery)
+ * costs what waits, not what is kept.
  *
  * What changes is written in the database's next commit, with whatever its canvas writes with it
  * (`writeWith`: its run, once the canvas is open), and on disk once `durable()` resolves: the commit
@@ -156,7 +159,11 @@ export class MessageStore {
   readonly #table: MessageTable;
   readonly #now: () => number;
   /** Every message kept, by id, in the store's order. */
-  #kept = new Map<string, Kept>();
+  readonly #kept = new Map<string, Kept>();
+  /** The messages kept that delivery still acts on (isActive), by id, in the store's order. */
+  #active = new Map<string, Kept>();
+  /** The latest place of a message `#active` has taken: one placed later goes last in it. */
+  #activeLast = 0;
   /** What hears each message added. */
   readonly #listeners = new Set<(message: Message) => void>();
   /**
@@ -201,7 +208,7 @@ export class MessageStore {
     }
     for (const row of rows) {
       const kept = keptOf(row, this.canvas);
-      if (kept) this.#kept.set(kept.message.id, kept);
+      if (kept) this.#set(kept);
     }
     this.#prune();
     return Promise.resolve();
@@ -209,7 +216,15 @@ export class MessageStore {
 
   /** Every message kept, in the store's order. */
   all(): Message[] {
-    return [...this.#kept.values()].map(({ message }) => message);
+    return Array.from(this.#kept.values(), ({ message }) => message);
+  }
+
+  /**
+   * Every message kept that delivery still acts on (isActive), in the store's order: those waiting,
+   * being delivered, or whose turn goes on.
+   */
+  active(): Message[] {
+    return Array.from(this.#active.values(), ({ message }) => message);
   }
 
   get(id: string): Message | undefined {
@@ -254,7 +269,7 @@ export class MessageStore {
     const kept: Kept = { seq: this.#table.place(), message, bytes: 0 };
     this.#table.ensure(this.canvas);
     this.#table.keep(kept);
-    this.#kept.set(message.id, { ...kept, bytes: sizeOf(kept) });
+    this.#set({ ...kept, bytes: sizeOf(kept) });
     return {
       message,
       reveal: () => {
@@ -262,7 +277,7 @@ export class MessageStore {
         for (const listener of this.#listeners) listener(message);
       },
       undo: () => {
-        this.#kept.delete(message.id);
+        this.#delete(message.id);
       },
     };
   }
@@ -385,9 +400,32 @@ export class MessageStore {
     };
   }
 
+  /** Keeps a message as it is now, in its place in the order, and in `#active` if it belongs. */
+  #set(kept: Kept): void {
+    const { id } = kept.message;
+    this.#kept.set(id, kept);
+    if (!isActive(kept.message)) {
+      this.#active.delete(id);
+    } else if (this.#active.has(id) || kept.seq > this.#activeLast) {
+      // As kept now, in its place, or last.
+      this.#active.set(id, kept);
+      this.#activeLast = Math.max(this.#activeLast, kept.seq);
+    } else {
+      // Active again, behind one taken since: in its place.
+      this.#active.set(id, kept);
+      this.#active = new Map([...this.#active].sort(([, a], [, b]) => a.seq - b.seq));
+    }
+  }
+
+  /** Keeps a message no more. */
+  #delete(id: string): void {
+    this.#kept.delete(id);
+    this.#active.delete(id);
+  }
+
   #keep(kept: Kept): void {
     const { message } = kept;
-    this.#kept.set(message.id, { ...kept, bytes: sizeOf(kept) });
+    this.#set({ ...kept, bytes: sizeOf(kept) });
     if (this.#unjournaled === undefined) this.#changed.set(message.id, ++this.#changes);
     else this.#lost = true;
     this.#prune();
@@ -429,10 +467,23 @@ export class MessageStore {
       bytes -= size;
     }
     for (const id of dropped) {
-      this.#kept.delete(id);
+      this.#delete(id);
       if (this.#unjournaled === undefined) this.#changed.set(id, ++this.#changes);
     }
   }
+}
+
+/**
+ * Whether delivery still acts on a message: it waits, is being delivered, or is a text to an agent
+ * whose turn goes on (delivered, not yet replied to). Delivery never acts on one settled or
+ * unresolved again.
+ */
+export function isActive({ state, kind, to }: Message): boolean {
+  return (
+    state === 'pending' ||
+    state === 'delivering' ||
+    (state === 'delivered' && kind === 'text' && agentOf(to) !== undefined)
+  );
 }
 
 /**

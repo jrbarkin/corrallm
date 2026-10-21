@@ -6,12 +6,16 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { STORE_BYTES, STORE_SETTLED_PER_PARTY } from '../../../shared/api/limits';
 import type { CanvasId } from '../../../shared/canvas';
+import { MESSAGE_KINDS, MESSAGE_STATES } from '../../../shared/model/messages';
 import type { Message } from '../../../shared/model/messages';
 import { CanvasMemory } from '../../memory';
+import { STORE_FILE } from '../store/open';
+import { settleRestored } from '../store/restored';
+import { connect } from '../store/sqlite';
 import { SYSTEM_DEPS, unopened } from '../store/store';
 import type { Store, StoreDeps } from '../store/store';
 import { openTestStore, readOnDisk, refuseWrites } from '../store/test-store';
-import { MessageStore, MessageTable } from './messages';
+import { isActive, MessageStore, MessageTable } from './messages';
 
 /*
  * A canvas's messages, kept in memory and in the profile's database: a row of `message` each, in
@@ -328,6 +332,126 @@ describe('the message store', () => {
     await messages.durable();
     expect(rows()).toEqual([]);
   });
+});
+
+describe('what delivery acts on', () => {
+  /** What `active()` must list: the messages kept that delivery acts on, in the store's order. */
+  const expectIndexed = (messages: MessageStore) => {
+    expect(messages.active()).toEqual(messages.all().filter(isActive));
+  };
+
+  it('lists the messages waiting, being delivered or whose turn goes on, as they change', async () => {
+    const messages = await store();
+    const one = messages.add(draft('outside:orchestrator', 'agent:builder'));
+    const yours = messages.add(draft('you', 'agent:checker'));
+    const record = messages.add({ ...draft('corrallm', 'outside:orchestrator'), kind: 'notice' });
+    messages.update(record.id, { state: 'delivered' });
+    const ids = () => messages.active().map(({ id }) => id);
+    expect(ids()).toEqual([one.id, yours.id]);
+    messages.update(one.id, {
+      state: 'delivering',
+      delivery: { at: 1000, as: 'as-1', attempt: 1 },
+    });
+    messages.update(one.id, { state: 'delivered' });
+    // Its turn goes on: still delivery's.
+    expect(ids()).toEqual([one.id, yours.id]);
+    expect(messages.active()[0]).toBe(messages.get(one.id));
+    messages.update(one.id, { state: 'replied' });
+    messages.update(yours.id, { state: 'withdrawn', by: 'you' }, 'Taken back.');
+    expect(ids()).toEqual([]);
+    // Back to waiting, it is in its place again, ahead of one sent since.
+    const later = messages.add(draft('outside:orchestrator', 'agent:builder'));
+    messages.update(one.id, { state: 'pending' });
+    expect(ids()).toEqual([one.id, later.id]);
+    expectIndexed(messages);
+  });
+
+  it(
+    'agrees with what it keeps through any sequence of changes, restarts and restores',
+    { timeout: 30_000 },
+    async () => {
+      // A fixed seed: the same sequence every run.
+      let seed = 0x5eed;
+      const random = () => {
+        seed = (seed + 0x6d2b79f5) | 0;
+        let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+        t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+      };
+      const pick = <T>(list: readonly T[]): T => list[Math.floor(random() * list.length)] as T;
+      const parties = [
+        'you',
+        'corrallm',
+        'agent:builder',
+        'agent:checker',
+        'outside:orchestrator',
+        'outside:other',
+      ] as const;
+      const agents = ['agent:builder', 'agent:checker'] as const;
+      const states = [...MESSAGE_STATES, 'pending', 'pending', 'delivering', 'delivered'] as const;
+      let messages = await store();
+      for (let step = 0; step < 600; step++) {
+        const ids = messages.all().map(({ id }) => id);
+        const roll = random();
+        if (roll < 0.34 || ids.length === 0) {
+          // Sent: mostly to an agent, waiting.
+          messages.add({
+            ...draft(pick(parties), random() < 0.8 ? pick(agents) : pick(parties), pick(states)),
+            kind: random() < 0.8 ? 'text' : pick(MESSAGE_KINDS),
+          });
+        } else if (roll < 0.72) {
+          // Delivered, ended, withdrawn (with a note), cut off, or back to waiting.
+          messages.update(
+            pick(ids),
+            { state: pick(states) },
+            random() < 0.1 ? 'Withdrawn after it reached you.' : undefined,
+          );
+        } else if (roll < 0.77) {
+          messages.toldWithdrawals([pick(ids), pick(ids)]);
+        } else if (roll < 0.87) {
+          // Settled traffic enough to prune the oldest settled.
+          for (let i = 0; i < 40; i++) {
+            messages.add(draft(pick(agents), 'outside:orchestrator', 'delivered'));
+          }
+        } else if (roll < 0.95) {
+          // Staged within another write: revealed once it committed, or undone as it failed.
+          const fails = random() < 0.5;
+          let staged: ReturnType<MessageStore['stageWithin']> | undefined;
+          await database
+            .write(() => {
+              staged = messages.stageWithin(draft(pick(parties), pick(agents), pick(states)));
+              if (fails) throw new Error('The settlement failed');
+            })
+            .catch(() => undefined);
+          if (fails) staged?.undo();
+          else staged?.reveal();
+        } else if (roll < 0.98) {
+          // A restart: read back from its rows.
+          await messages.durable();
+          await restart();
+          messages = await store();
+        } else {
+          // A restore from a snapshot, which settles what waited there.
+          await messages.durable();
+          await database.close();
+          const writer = connect(path.join(profile, STORE_FILE));
+          try {
+            writer.exec('BEGIN');
+            settleRestored(writer, 1000);
+            writer.exec('COMMIT');
+          } finally {
+            writer.close();
+          }
+          await restart();
+          messages = await store();
+        }
+        expectIndexed(messages);
+      }
+      // It went through each kind of change, and kept enough to prune.
+      expect(messages.all().length).toBeGreaterThan(STORE_SETTLED_PER_PARTY);
+      expect(messages.active().length).toBeGreaterThan(0);
+    },
+  );
 });
 
 describe('the message store, when its database fails', () => {
