@@ -95,8 +95,22 @@ export type SessionAction =
   | { type: 'clear' };
 
 export function reduce(session: Session, action: SessionAction): Session {
+  return reduceWithChanges(session, action);
+}
+
+/** Entry rewrites observed by SessionStore while reducing, without another transcript scan. */
+export function reduceWithChanges(
+  session: Session,
+  action: SessionAction,
+  changed?: (before: Entry, after: Entry) => void,
+): Session {
   const update = (id: string, change: (entry: Entry) => Entry): Entry[] =>
-    session.entries.map((entry) => (entry.id === id ? change(entry) : entry));
+    session.entries.map((entry) => {
+      if (entry.id !== id) return entry;
+      const next = change(entry);
+      changed?.(entry, next);
+      return next;
+    });
   /** `entries`, the turn waiting while one of their prompts is open, and working otherwise. */
   const settled = (entries: Entry[]): Session => ({
     ...session,

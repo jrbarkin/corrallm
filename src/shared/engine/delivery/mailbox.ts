@@ -22,9 +22,18 @@ import type { SessionBackend } from '../transcript/receive';
 import type { DriverIO, SessionDriver } from '../transcript/driver';
 import { UnavailableDriver } from '../transcript/unavailable';
 import { decodeSubmissions, encodeSubmissions, pruneSubmissions } from './submission-state';
-import { answersOf, NEW_SESSION, threadTitle, turnReply } from '../../model/session';
-import { reduce } from '../transcript/reduce';
-import type { Answer, MessageImage, Mode, PlanAnswer, Refusal, Session } from '../../model/session';
+import { answersOf, isOpen, NEW_SESSION, threadTitle, turnReply } from '../../model/session';
+import { reduceWithChanges } from '../transcript/reduce';
+import type {
+  Answer,
+  Entry,
+  MessageImage,
+  Mode,
+  PlanAnswer,
+  Prompt,
+  Refusal,
+  Session,
+} from '../../model/session';
 import type { SessionAction } from '../transcript/reduce';
 
 export interface SubmissionObserver {
@@ -50,6 +59,9 @@ interface Driving {
  * Claude subscription) keeps its messages queued, unsent, and says so to whoever sent them, until
  * the agent runs another way (or the session starts after all). Each agent's adapter and
  * connection are read in the catalog it is given (the run's: catalog.ts).
+ * Each session carries its open prompts, in transcript order, maintained with entry changes so
+ * Needs never scans closed history. Checkpoints keep submissions only; native history rebuilds
+ * the runtime index when it is merged, and resets/rewinds discard it with the transcript.
  */
 export class SessionStore {
   #sessions: Readonly<Record<string, Session>> = {};
@@ -351,6 +363,7 @@ export class SessionStore {
       ...this.#sessions,
       [agentId]: {
         ...session,
+        prompts: session.prompts ?? session.entries.filter(isOpen),
         submissions: pruneSubmissions([...(session.submissions ?? []), message]),
       },
     };
@@ -786,7 +799,7 @@ export class SessionStore {
     this.#sessions = {
       ...this.#sessions,
       [agentId]: {
-        ...reduce(session, action),
+        ...indexed(session, action),
         ...(submissions === undefined ? {} : { submissions }),
       },
     };
@@ -844,7 +857,14 @@ export class SessionStore {
   restoreSubmissions(serialized: string): void {
     const decoded = decodeSubmissions(serialized);
     const next = { ...this.#sessions };
-    for (const [id, submissions] of decoded) next[id] = { ...this.of(id), submissions };
+    for (const [id, submissions] of decoded) {
+      const session = this.of(id);
+      next[id] = {
+        ...session,
+        prompts: session.prompts ?? session.entries.filter(isOpen),
+        submissions,
+      };
+    }
     this.#sessions = next;
     this.#notify();
   }
@@ -852,6 +872,38 @@ export class SessionStore {
   #notify(): void {
     for (const listener of this.#listeners) listener();
   }
+}
+
+/**
+ * Keep the exact prompt objects, in transcript order, beside the transcript. Normal output never
+ * scans history to update this index. A history merge, or a generic update reopening an entry,
+ * can change their order/places arbitrarily and rebuilds once. Metadata-only session writes
+ * retain the index with their unchanged entries.
+ */
+function indexed(session: Session, action: SessionAction): Session {
+  const prompts = session.prompts ?? session.entries.filter(isOpen);
+  const replacements = new Map<Entry, Entry>();
+  const changes = { opened: false };
+  const next = reduceWithChanges(session, action, (before, after) => {
+    if (isOpen(before) || isOpen(after)) replacements.set(before, after);
+    if (!isOpen(before) && isOpen(after)) changes.opened = true;
+  });
+  if (next.entries === session.entries) return { ...next, prompts };
+  let index: readonly Prompt[] = prompts;
+  if (action.type === 'restore' || changes.opened) index = next.entries.filter(isOpen);
+  else if (action.type === 'clear' || action.type === 'end') index = [];
+  else if ((action.type === 'add' || action.type === 'ask') && isOpen(action.entry)) {
+    index = [...prompts, action.entry];
+  } else if (action.type === 'received') {
+    // Receipt can move a user entry past native messages (and remove duplicate ids).
+    index = prompts.filter((entry) => entry.id !== action.id);
+  } else if (replacements.size > 0) {
+    index = prompts.flatMap((entry) => {
+      const after = replacements.get(entry) ?? entry;
+      return isOpen(after) ? [after] : [];
+    });
+  }
+  return { ...next, prompts: index };
 }
 
 /** The files a rewind restored, as a notice names them: "notes.txt (+1 −1)", "4 files (a, b, c and 1 more; +4 −2)". */
