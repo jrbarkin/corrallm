@@ -2,7 +2,7 @@ import { renderReady, events } from '../test-render';
 import { act, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { SessionEvent, SettingsOptions } from '../../shared/session';
+import type { SessionEvent, SettingsOptions, TerminalAsk } from '../../shared/session';
 import type { TerminalEvent } from '../../shared/terminal';
 import { catalog } from '../catalog';
 import { fromFile } from '../../shared/model/file';
@@ -14,6 +14,7 @@ import { fakeBackend } from '../../shared/engine/test-backend';
 import { fakeScreens, fakeTerminals, keyboardLayout, macKeyboard } from './test-screen';
 import { graphOf } from '../test-graph-data';
 import { DEFAULT_AGENT } from '../graph/agents';
+import * as motion from '../agent/motion';
 
 // jsdom cannot draw xterm.js: a fake terminal stands in (test-screen.ts).
 vi.mock('./screen', async () => {
@@ -116,6 +117,112 @@ async function open({
 const SCREEN = { type: 'screen', data: 'Claude Code\r\n❯ ', cols: 100, rows: 30 } as const;
 
 describe('a Terminal agent', () => {
+  it.each(['finished', 'cancelled'] as const)(
+    'keeps its terminal when Needs reopens it before Back’s animation has %s',
+    async (outcome) => {
+      const closings: {
+        done: ReturnType<typeof Promise.withResolvers<Animation>>;
+        cancel: ReturnType<typeof vi.fn>;
+      }[] = [];
+      const morph = vi.spyOn(motion, 'morph').mockImplementation((_element, _small, direction) => {
+        if (direction !== 'close') return undefined;
+        const closing = { done: Promise.withResolvers<Animation>(), cancel: vi.fn() };
+        closings.push(closing);
+        return { finished: closing.done.promise, cancel: closing.cancel } as unknown as Animation;
+      });
+      const animate = vi.spyOn(motion, 'animate').mockReturnValue(undefined);
+      try {
+        const { view, show, session, sessions, terminals } = await open();
+        show(SCREEN);
+        const terminal = fakeScreens.latest();
+        act(() => {
+          terminal.finish();
+        });
+        const element = view.getByLabelText('Claude Code’s terminal');
+        for (const asks of [
+          [{ kind: 'permission', id: 'p', tool: 'Bash', summary: 'echo hello' }],
+          [
+            {
+              kind: 'question',
+              id: 'q',
+              questions: [
+                {
+                  header: 'Database',
+                  text: 'Which database?',
+                  options: [{ label: 'SQLite', description: 'One file, for tests' }],
+                  multiple: false,
+                },
+              ],
+            },
+          ],
+        ] satisfies TerminalAsk[][]) {
+          session({ type: 'asking', asks }, { type: 'status', status: 'waiting' });
+          await events.click(view.getByRole('button', { name: 'Back to the canvas' }));
+          const closing = closings.at(-1);
+          expect(closing).toBeDefined();
+          await events.click(screen.getByRole('button', { name: 'Needs you' }));
+          const needs = within(screen.getByRole('complementary', { name: 'Needs you' }));
+          await events.click(needs.getByRole('button', { name: 'Open terminal' }));
+          await act(() => {
+            if (outcome === 'finished') closing?.done.resolve({} as Animation);
+            else closing?.done.reject(new Error('Animation cancelled'));
+            return Promise.resolve();
+          });
+          // The old completion cannot close this opening or replace its terminal.
+          expect(screen.queryByRole('dialog', { name: 'a' })).not.toBeNull();
+          expect(view.getByLabelText('Claude Code’s terminal')).toBe(element);
+          expect(closing?.cancel).toHaveBeenCalledOnce();
+          expect(terminal.disposed).toBe(false);
+          session(
+            { type: 'asking', asks: [] },
+            {
+              type: 'end',
+              messages: [],
+              seconds: 0,
+              result: { status: 'completed', reason: 'completed' },
+            },
+          );
+        }
+        expect(closings).toHaveLength(2);
+        expect(morph.mock.calls.filter((call) => call[2] === 'open')).toHaveLength(3);
+        expect(terminals.backend.attach).toHaveBeenCalledOnce();
+        expect(terminals.backend.detach).not.toHaveBeenCalled();
+        expect(sessions.backend.start).toHaveBeenCalledOnce();
+      } finally {
+        morph.mockRestore();
+        animate.mockRestore();
+      }
+    },
+  );
+
+  it('keeps the agent picker focused when a late terminal screen arrives, so Escape only closes the picker', async () => {
+    const { view, show } = await open();
+    const terminal = fakeScreens.latest();
+    // xterm focuses a real element; model its focus (and the picker's blur) in jsdom too.
+    const focus = vi.spyOn(terminal, 'focus').mockImplementation(() => {
+      terminal.element.tabIndex = -1;
+      terminal.element.focus();
+    });
+    try {
+      await events.click(view.getByRole('button', { name: /^Agent:/ }));
+      const picker = view.getByRole('combobox', { name: 'Agent' });
+      expect(document.activeElement).toBe(picker);
+      const element = view.getByLabelText('Claude Code’s terminal');
+      show(SCREEN);
+      act(() => {
+        terminal.finish();
+      });
+      expect(document.activeElement).toBe(picker);
+      await events.keyDown(document.activeElement ?? document.body, { key: 'Escape' });
+      expect(view.queryByRole('combobox', { name: 'Agent' })).toBeNull();
+      expect(screen.getByRole('dialog', { name: 'a' })).toBeTruthy();
+      expect(view.getByLabelText('Claude Code’s terminal')).toBe(element);
+      expect(terminal.disposed).toBe(false);
+    } finally {
+      focus.mockRestore();
+    }
+  });
+
   it('shows Claude Code’s own terminal in place of the transcript and composer', async () => {
     const { sessions, terminals, view, show } = await open();
     expect(view.queryByRole('log', { name: 'Transcript' })).toBeNull();
@@ -219,6 +326,7 @@ describe('a Terminal agent', () => {
     );
     await events.click(view.getByRole('button', { name: 'Back to the canvas' }));
     await settle();
+    await events.click(screen.getByRole('button', { name: 'Needs you' }));
     const sidebar = within(screen.getByRole('complementary', { name: 'Needs you' }));
     expect(sidebar.getByRole('heading', { level: 2 }).textContent).toBe('Needs you 4');
     const cards = sidebar.getAllByRole('group', { name: 'a asks, in its terminal' });
@@ -260,6 +368,7 @@ describe('a Terminal agent', () => {
     expect(card().classList.contains('asking')).toBe(true);
     await events.click(view.getByRole('button', { name: 'Back to the canvas' }));
     await settle();
+    await events.click(screen.getByRole('button', { name: 'Needs you' }));
     const sidebar = within(screen.getByRole('complementary', { name: 'Needs you' }));
     const asked = sidebar.getByRole('group', { name: 'a asks, in its terminal' });
     expect(asked.textContent).toBe(
@@ -309,6 +418,7 @@ describe('a Terminal agent', () => {
     );
     await events.click(view.getByRole('button', { name: 'Back to the canvas' }));
     await settle();
+    await events.click(screen.getByRole('button', { name: 'Needs you' }));
     const sidebar = within(screen.getByRole('complementary', { name: 'Needs you' }));
     const cards = sidebar.getAllByRole('group', { name: 'a asks, in its terminal' });
     expect(cards.map((card) => card.textContent)).toEqual([
@@ -350,6 +460,7 @@ describe('a Terminal agent', () => {
     expect(status().textContent).toBe('Needs you, in the terminal');
     expect(card().classList.contains('asking')).toBe(true);
     // Listed in Needs you, as a Claude agent's terminal asks are, to answer there.
+    await events.click(screen.getByRole('button', { name: 'Needs you' }));
     const sidebar = within(screen.getByRole('complementary', { name: 'Needs you' }));
     expect(sidebar.getByRole('group', { name: 'a asks, in its terminal' }).textContent).toContain(
       'Codex needs you: see its terminal.',

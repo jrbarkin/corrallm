@@ -1,3 +1,4 @@
+import { dismissStart, canvasAction, openNeeds } from './canvas-actions';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import nativePath from 'node:path';
@@ -9,6 +10,7 @@ import { launchApp } from './launch';
 import { newCanvasId } from '../src/shared/canvas';
 import { MAX_LABEL } from '../src/shared/model/canvas';
 import { CARD_SIZE } from '../src/shared/model/geometry';
+import { MADE_UP } from '../src/shared/test-made-up';
 
 interface Point {
   x: number;
@@ -54,7 +56,7 @@ test('long names and full queues keep ordinary and parent cards at the model’s
       showOpenDialog: () => Promise.resolve({ canceled: false, filePaths: [picked] }),
     });
   }, file);
-  await page.getByRole('button', { name: 'Open…', exact: true }).click();
+  await canvasAction(page, 'Open…');
   const shown = (id: string) => page.locator(`.react-flow__node[data-id="${id}"]`);
   for (const id of ['worker', 'parent', 'child']) {
     const card = shown(id).locator('.graph-card');
@@ -111,6 +113,7 @@ test.beforeEach(async () => {
   // Reload so that errors during page load (e.g. CSP violations) are collected too.
   await page.waitForLoadState('load');
   await page.reload();
+  await dismissStart(page);
   await expect(pane()).toBeVisible();
   await page.getByRole('button', { name: 'Choose a project folder' }).click();
   // The tests use fixed canvas offsets that need the 1200×800 window at page zoom 1.
@@ -132,7 +135,9 @@ const nodes = () => page.locator('.react-flow__node');
 const edges = () => page.locator('.react-flow__edge');
 /** A node by its exact label. Children are DOM siblings of their container, not descendants. */
 const node = (label: string) =>
-  page.locator('.react-flow__node', { hasText: new RegExp(`^${label}$`) });
+  page
+    .locator('.react-flow__node')
+    .filter({ has: page.locator('.graph-label').filter({ hasText: new RegExp(`^${label}$`) }) });
 /** What you grab a group by: a frame's label bar, or a parent node's card. */
 const titleBar = (label: string) => node(label).locator('.graph-frame-title');
 const card = (label: string) => node(label).locator('.graph-card');
@@ -168,6 +173,15 @@ async function box(locator: Locator) {
 async function center(locator: Locator): Promise<Point> {
   const b = await box(locator);
   return { x: b.x + b.width / 2, y: b.y + b.height / 2 };
+}
+
+/** The guide's foreground window area: the canvas below its top floats/taskbar strip. */
+async function windowArea() {
+  return page.locator('.graph-editor').evaluate((editor) => {
+    const { x, y, width, height } = editor.getBoundingClientRect();
+    const strip = parseFloat(getComputedStyle(editor).getPropertyValue('--graph-window-strip'));
+    return { x, y: y + strip, width, height: height - strip };
+  });
 }
 
 /** A point on the canvas, as an offset from its top-left corner. */
@@ -526,8 +540,10 @@ test('moves a group like one node: drag it anywhere, and what is inside comes al
 });
 
 test("gives a group a parent from the '+' on its top border, then connects and deletes it", async () => {
-  const a = await addAgentAt('Agent 1', 450, 330);
-  const b = await addAgentAt('Agent 2', 450, 460);
+  // Leave room for the parent's card and the nested frame above its children, so Agent 3
+  // stays above the parent after it grows around that frame.
+  const a = await addAgentAt('Agent 1', 450, 330 + CARD_SIZE.height);
+  const b = await addAgentAt('Agent 2', 450, 460 + CARD_SIZE.height);
   const c = await addAgentAt('Agent 3', 900, 200);
 
   await marquee(a, b);
@@ -577,6 +593,7 @@ test("gives a group a parent from the '+' on its top border, then connects and d
   expectInside(await box(inner), await box(team));
   const teamCard = await box(card('Team'));
   expect((await box(inner)).y).toBeGreaterThanOrEqual(teamCard.y + teamCard.height);
+  expect((await box(card('Agent 3'))).y).toBeLessThan(teamCard.y);
 
   // The parent node links to nodes outside its group, and gives them work, from its own dots.
   await connect(c, team);
@@ -632,12 +649,16 @@ test('double-clicking a node opens it in a panel that grows out of it, to edit i
   expectSamePlace(first, from);
   expectSamePlace({ x: first.width, y: first.height }, { x: from.width, y: from.height });
 
-  // ...and opens to most of the editor, centred.
+  // ...and opens to most of the foreground area, centred below the top controls.
   const panel = page.getByRole('dialog', { name: 'Agent 1' });
-  const [editor, opened] = await Promise.all([box(page.locator('.graph-editor')), box(panel)]);
+  const [editor, opened] = await Promise.all([windowArea(), box(panel)]);
   expect(opened.width).toBeGreaterThan(editor.width * 0.8);
   expect(opened.height).toBeGreaterThan(editor.height * 0.8);
-  expectNear(await center(panel), await center(page.locator('.graph-editor')), 1);
+  expectNear(
+    await center(panel),
+    { x: editor.x + editor.width / 2, y: editor.y + editor.height / 2 },
+    1,
+  );
 
   // A new agent's queue starts with a message, to tell it what to do. ⊕ adds one of the agent's
   // actions and the agent it acts on, each picked by typing (or clicking). Agent 1 is a Claude
@@ -735,7 +756,7 @@ test('opens an agent as a full Claude Code-style session, and goes back to the c
   await expect
     .poll(() => view.locator('.agent-panel').evaluate((el) => el.getAnimations().length))
     .toBe(0);
-  const [editor, opened] = await Promise.all([box(page.locator('.graph-editor')), box(view)]);
+  const [editor, opened] = await Promise.all([windowArea(), box(view)]);
   expect(opened.width).toBeGreaterThan(editor.width * 0.95);
   expect(opened.height).toBeGreaterThan(editor.height * 0.9);
 
@@ -809,7 +830,7 @@ test('spawns an agent from the agent view, minimizing the first into its rail', 
       const { x, y, width, height } = el.getBoundingClientRect();
       return { x, y, width, height };
     };
-    const from = document.querySelector('[role="dialog"]');
+    const from = document.querySelector('[role="dialog"][aria-label="Agent 1"]');
     const shrinking = from?.querySelector('.agent-panel');
     from?.querySelector<HTMLElement>('[aria-label="New agent"]')?.click();
     const [shrink] = shrinking?.getAnimations() ?? [];
@@ -1232,20 +1253,21 @@ test('lines repeats up across lanes, round by round, with ribbons between the st
 test('agents show their type and ask questions, which a sidebar lists until answered', async () => {
   const a = await addAgentAt('Agent 1', 300, 200);
   await addAgentAt('Agent 2', 650, 380);
-  const tagColor = (label: string) =>
-    card(label)
-      .locator('.graph-agent')
-      .evaluate((el) => getComputedStyle(el).backgroundColor);
-  const stripe = (label: string) =>
-    card(label).evaluate((el) => getComputedStyle(el).borderLeftColor);
+  const logo = (label: string) => card(label).getByRole('img');
 
-  // Every agent has a type, colour-coded on its card; its panel changes it.
-  await expect(card('Agent 1').locator('.graph-agent')).toHaveAttribute(
-    'data-agent',
-    'claude-code',
-  );
-  const claude = await tagColor('Agent 1');
-  expect(await stripe('Agent 1')).toBe(claude);
+  // Every card shows the catalog's logo as an isolated image; its panel changes the adapter.
+  await expect(card('Agent 1')).toHaveAttribute('data-agent', 'claude-code');
+  await expect(logo('Agent 1')).toHaveAttribute('alt', 'Claude Code');
+  await expect(logo('Agent 1')).toHaveAttribute('src', /^data:image\/svg\+xml,/);
+  const claude = await logo('Agent 1').getAttribute('src');
+  await expect
+    .poll(() =>
+      logo('Agent 1').evaluate(
+        (element: HTMLImageElement) => element.complete && element.naturalWidth > 0,
+      ),
+    )
+    .toBe(true);
+  await expect(card('Agent 1').locator('svg')).toHaveCount(0);
   await a.dblclick();
   const panel = page.getByRole('dialog', { name: 'Agent 1' });
   await panel.getByRole('button', { name: /^Agent: Claude/ }).click();
@@ -1257,9 +1279,9 @@ test('agents show their type and ask questions, which a sidebar lists until answ
   await expect(panel.getByRole('option', { name: /Simulated|Qwen|Gemini/ })).toHaveCount(0);
   await page.keyboard.type('codex app server');
   await panel.getByRole('option', { name: /^Codex · App Server/ }).click();
-  await expect(card('Agent 1').locator('.graph-agent')).toHaveAttribute('data-agent', 'codex');
-  expect(await tagColor('Agent 1')).not.toBe(claude);
-  expect(await stripe('Agent 1')).toBe(await tagColor('Agent 1'));
+  await expect(card('Agent 1')).toHaveAttribute('data-agent', 'codex');
+  await expect(logo('Agent 1')).toHaveAttribute('alt', 'Codex');
+  await expect(logo('Agent 1')).not.toHaveAttribute('src', claude ?? '');
 
   // A connector's native question glows and appears on the canvas until answered.
   const composer = panel.getByRole('textbox', { name: 'Message Agent 1', exact: true });
@@ -1269,11 +1291,15 @@ test('agents show their type and ask questions, which a sidebar lists until answ
   await panel.getByRole('button', { name: 'Back to the canvas' }).click();
   await expect(panel).toHaveCount(0);
   await expect(a).toHaveClass(/asking/);
+  await expect(card('Agent 1')).toHaveAttribute('data-status', 'Needs you');
+  await expect(card('Agent 1').locator('.graph-card-status')).toContainText('Needs you');
+  await openNeeds(page);
   const sidebar = page.getByRole('complementary', { name: 'Needs you' });
   await expect(sidebar.getByRole('button', { name: 'Open Agent 1' })).toBeVisible();
   await sidebar.getByRole('button', { name: 'Yes', exact: true }).click();
   await expect(sidebar).toHaveCount(0);
   await expect(a).not.toHaveClass(/asking/);
+  await expect(card('Agent 1')).not.toHaveAttribute('data-status', 'Needs you');
 });
 
 test('groups fit their contents as a nested node is dragged out of them and back', async () => {
@@ -1467,11 +1493,13 @@ test('arranges the graph automatically while the toggle is on', async () => {
 
   // Nodes stay where the arrangement puts them; turning it off lets them be dragged again.
   const held = await box(b);
-  await drag(await center(b), { x: held.x + 200, y: held.y + 150 });
+  const grab = await center(b);
+  const drop = { x: grab.x + 200, y: grab.y + 150 };
+  await drag(grab, drop);
   expectSamePlace(await box(b), held);
   await toggle.click();
   await expect(toggle).toHaveAttribute('aria-pressed', 'false');
-  await drag(await center(b), { x: held.x + 200, y: held.y + 150 });
+  await drag(grab, drop);
   expect((await box(b)).x).toBeGreaterThan(held.x + 100);
 });
 
@@ -1506,7 +1534,7 @@ test('shows which node or frame has keyboard focus', async () => {
   const focused = page.locator('.react-flow__node:focus-visible');
   const outline = () => focused.evaluate((el) => getComputedStyle(el).outlineStyle);
   await page.keyboard.press('Tab');
-  await expect(focused).toHaveText('Group 1');
+  await expect(focused.locator('.graph-label')).toHaveText('Group 1');
   await expect(focused).not.toHaveClass(/selected/);
   expect(await outline()).toBe('dashed');
 
@@ -1517,7 +1545,7 @@ test('shows which node or frame has keyboard focus', async () => {
   await expect.poll(() => plus.evaluate((el) => getComputedStyle(el).opacity)).toBe('1');
 
   await page.keyboard.press('Tab');
-  await expect(focused).toHaveText('Agent 1');
+  await expect(focused.locator('.graph-label')).toHaveText('Agent 1');
   expect(await outline()).toBe('dashed');
 });
 
@@ -1544,4 +1572,126 @@ test('double-click works inside the rectangle a marquee leaves around the select
   expectInside({ ...between, width: 0, height: 0 }, await box(rect));
   await page.mouse.dblclick(between.x, between.y);
   await expect(node('Agent 3')).toBeVisible();
+});
+
+test('the three floats stay at the canvas corners and open their controls', async () => {
+  const canvas = await box(pane());
+  const file = page.getByRole('toolbar', { name: 'Canvas file' });
+  const run = page.getByRole('toolbar', { name: 'Run controls' });
+  const zoom = page.getByRole('toolbar', { name: 'Canvas zoom' });
+  const left = await box(file),
+    right = await box(run),
+    bottom = await box(zoom);
+  expect(Math.abs(left.x - canvas.x - 12)).toBeLessThan(1);
+  expect(Math.abs(left.y - canvas.y - 12)).toBeLessThan(1);
+  expect(Math.abs(right.x + right.width - canvas.x - canvas.width + 12)).toBeLessThan(1);
+  expect(Math.abs(right.y - canvas.y - 12)).toBeLessThan(1);
+  expect(Math.abs(bottom.x + bottom.width - canvas.x - canvas.width + 12)).toBeLessThan(1);
+  expect(Math.abs(bottom.y + bottom.height - canvas.y - canvas.height + 12)).toBeLessThan(1);
+  await expect(page.locator('.react-flow__controls')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'New', exact: true })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Canvas menu', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'New', exact: true })).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('dialog', { name: 'Canvas menu', exact: true })).toBeHidden();
+  await zoom.getByRole('button', { name: 'Arrange automatically' }).click();
+  await expect(zoom.getByRole('button', { name: 'Arrange automatically' })).toHaveAttribute(
+    'aria-pressed',
+    'true',
+  );
+});
+
+test('the dock toggles All queues and flies to the taskbar to switch agents, with catalog logos as images', async () => {
+  await addAgentAt('Agent 1', 300, 200);
+  await addAgentAt('Agent 2', 750, 400);
+  const dock = page.getByRole('navigation', { name: 'Canvas agents' });
+  const queues = dock.getByRole('button', { name: 'Show all queues' });
+  await expect(
+    page
+      .getByRole('toolbar', { name: 'Run controls' })
+      .getByRole('button', { name: 'Show all queues' }),
+  ).toHaveCount(0);
+  const first = dock.getByRole('button', { name: /^Agent 1,/ });
+  const image = first.getByRole('img', { name: 'Claude Code' });
+  await expect(image).toHaveAttribute('src', /^data:image\/svg\+xml,/);
+  expect(await image.evaluate((element) => element.tagName)).toBe('IMG');
+  await expect
+    .poll(() =>
+      image.evaluate((element: HTMLImageElement) => element.complete && element.naturalWidth > 0),
+    )
+    .toBe(true);
+  await expect(first.locator('svg')).toHaveCount(0);
+  await queues.click();
+  await expect(page.getByRole('dialog', { name: 'All queues' })).toBeVisible();
+  await expect(queues).toHaveAttribute('aria-pressed', 'true');
+  await queues.click();
+  await expect(page.getByRole('dialog', { name: 'All queues' })).toHaveCount(0);
+  const original = await box(dock);
+  await first.click();
+  await expect(page.getByRole('dialog', { name: 'Agent 1' })).toBeVisible();
+  await expect(dock).toHaveAttribute('data-horizontal', '');
+  await expect(first).toHaveAttribute('aria-current', 'true');
+  await expect.poll(() => first.evaluate((element) => element.getAnimations().length)).toBe(0);
+  await expect(dock).toHaveCSS('flex-direction', 'row');
+  const top = await box(dock),
+    canvas = await box(page.locator('.graph-editor'));
+  expectNear(
+    { x: top.x + top.width / 2, y: top.y },
+    { x: canvas.x + canvas.width / 2, y: canvas.y + 10 },
+    1,
+  );
+  await dock.getByRole('button', { name: /^Agent 2,/ }).click();
+  await expect(page.getByRole('dialog', { name: 'Agent 2' })).toBeVisible();
+  await expect(page.getByRole('dialog', { name: 'Agent 1' })).toHaveCount(0);
+  await page
+    .getByRole('dialog', { name: 'Agent 2' })
+    .getByRole('button', { name: 'Back to the canvas' })
+    .click();
+  await expect(page.getByRole('dialog', { name: 'Agent 2' })).toHaveCount(0);
+  await expect(dock).not.toHaveAttribute('data-horizontal');
+  await expect.poll(() => first.evaluate((element) => element.getAnimations().length)).toBe(0);
+  expectSamePlace(await box(dock), original);
+});
+
+test('the dock and card give a logo-less agent its first letter', async () => {
+  const adapter = MADE_UP.adapters[0];
+  if (!adapter) throw new Error('The made-up catalog has no adapter');
+  // Files retain adapters this build lacks. The unit test also supplies this catalog with its
+  // declared logo-less adapter; here the real app exercises the same fallback under its CSP.
+  const file = nativePath.join(dir, 'no-logo.corral');
+  await writeFile(
+    file,
+    JSON.stringify({
+      format: 'corrallm',
+      version: 2,
+      id: newCanvasId(),
+      nodes: [
+        {
+          id: 'zed',
+          kind: 'agent',
+          label: 'My Zed',
+          position: { x: 300, y: 200 },
+          adapter: adapter.id,
+        },
+      ],
+      links: [],
+    }),
+  );
+  await app.evaluate(({ dialog }, file) => {
+    Object.assign(dialog, {
+      showOpenDialog: () => Promise.resolve({ canceled: false, filePaths: [file] }),
+    });
+  }, file);
+  await canvasAction(page, 'Open…');
+  const icon = page
+    .getByRole('navigation', { name: 'Canvas agents' })
+    .getByRole('button', { name: /^My Zed,/ });
+  const logo = icon.getByRole('img', { name: adapter.id });
+  await expect(logo).toHaveText('Z');
+  expect(await logo.evaluate((element) => element.tagName)).toBe('SPAN');
+  await expect(icon.locator('img, svg')).toHaveCount(0);
+  const fallback = card('My Zed').getByRole('img', { name: adapter.id });
+  await expect(fallback).toHaveText('Z');
+  expect(await fallback.evaluate((element) => element.tagName)).toBe('SPAN');
+  await expect(card('My Zed').locator('img, svg')).toHaveCount(0);
 });

@@ -1,8 +1,6 @@
 import {
   Background,
   ConnectionMode,
-  ControlButton,
-  Controls,
   MarkerType,
   NodeToolbar,
   Panel,
@@ -10,6 +8,7 @@ import {
   ReactFlowProvider,
   useReactFlow,
   useStoreApi,
+  useViewport,
 } from '@xyflow/react';
 import type { Connection, Edge, EdgeTypes, NodeTypes } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
@@ -29,7 +28,7 @@ import type { Selection } from './selection';
 import { projectOverlay } from './overlay';
 import type { Overlays } from './overlay';
 import { api as windowApi } from '../api/client';
-import { topics as windowTopics } from '../api/topics';
+import { topics as windowTopics, useTopic } from '../api/topics';
 import type { TopicMirror } from '../api/topics';
 import type { GuiApi } from '../../shared/gui-link';
 import * as Structure from '../../shared/model/structure';
@@ -74,7 +73,13 @@ import { areLinked, groupMembers as groupAgentIds, isGroup } from '../../shared/
 import type { Graph } from './flow';
 import { ExampleGallery } from './ExampleGallery';
 import type { TemplateChoices } from './ExampleGallery';
-import { FileBar } from './FileBar';
+import type { TemplateInfo } from '../../shared/templates';
+import { StartSession } from './StartSession';
+import { CanvasMenu } from './CanvasMenu';
+import { RunFloat, ZoomFloat } from './Floats';
+import { Dock } from './Dock';
+import { agentCard } from './agent-status';
+import './Floats.css';
 import { fileAction, keyAction, SHORTCUTS } from './keys';
 import type { KeyAction } from './keys';
 import { ConnectMenu } from './ConnectMenu';
@@ -294,12 +299,12 @@ function Editor({
     void persistence.initialize().then(
       () => {
         if (!mounted) return;
-        setRestoring(false);
+        if (!switching.current) setRestoring(false);
         persistence.changed();
       },
       (error: unknown) => {
         if (!mounted) return;
-        setRestoring(false);
+        if (!switching.current) setRestoring(false);
         setRestoreFailed(true);
         setProblem(`Could not restore run progress: ${ipcErrorMessage(error)}`);
       },
@@ -335,6 +340,26 @@ function Editor({
   );
   /** The canvas's nodes as the run reads them (the model's, src/shared/model/canvas.ts). */
   const runNodes = model.nodes;
+  /** What needs the user, as the engine derives it: the run's holds, and what sessions ask. */
+  const needed = useMemo(() => {
+    const input = {
+      canvas: canvasId,
+      nodes: runNodes,
+      run,
+      sessions,
+      catalog: engine.catalog,
+    };
+    return { input, needs: needsOf(input) };
+  }, [canvasId, runNodes, run, sessions, engine]);
+  const coreNeeds = useTopic(`needs:${canvasId}`, mirror);
+  const dockNeeds = useMemo(
+    () =>
+      new Set([
+        ...needed.needs.map((need) => need.agent.id),
+        ...(coreNeeds?.items ?? []).flatMap((need) => (need.agent ? [need.agent] : [])),
+      ]),
+    [needed, coreNeeds],
+  );
   /** What the run holds for the user (OKs), in graph order: shown on the canvas and in agents. */
   const asks = useMemo(() => heldAsks(runNodes, run, engine.catalog), [runNodes, run, engine]);
   /** How every queue's tasks are marked, wherever a queue is shown: links, and where the run is. */
@@ -388,11 +413,15 @@ function Editor({
     sessionStore.forgetOptions();
   }, [project?.path, sessionStore]);
   /** Whether the templates gallery is open. */
-  const [gallery, setGallery] = useState(false);
+  const [gallery, setGallery] = useState<boolean | TemplateInfo>(false);
+  const [startChoice, setStartChoice] = useState<{ canvas: CanvasId; open: boolean }>();
+  const showStart =
+    canonical !== undefined &&
+    (startChoice?.canvas === canvasId ? startChoice.open : files && model.nodes.length === 0);
   /** Which CLIs the user has, asked of main as the gallery opens: its agents' default connections. */
   const [installed, setInstalled] = useState<InstalledClis>();
   useEffect(() => {
-    if (!gallery) return;
+    if (!gallery && !showStart) return;
     let open = true;
     (sessionBackend ?? NO_BACKEND).installed().then(
       (found) => {
@@ -403,7 +432,7 @@ function Editor({
     return () => {
       open = false;
     };
-  }, [gallery, sessionBackend]);
+  }, [gallery, showStart, sessionBackend]);
   /** Every agent's queue, side by side, if shown: opened from the canvas, or from an agent. */
   const [queues, setQueues] = useState<{ from?: string }>();
   /** The canvas's saved automatic layout setting (nodes cannot be dragged while it is on). */
@@ -416,7 +445,7 @@ function Editor({
    */
   const [opened, setOpened] = useState<{
     ids: readonly string[];
-    from?: { id: string; rect: DOMRect };
+    from?: { id: string; rect: DOMRect; duration?: number };
   }>({ ids: [] });
   /** Those still on the canvas (agents deleted meanwhile drop out), the one shown first. */
   const openedIds = useMemo(() => {
@@ -459,10 +488,12 @@ function Editor({
     setAgentMenu({ id, x: event.clientX, y: event.clientY });
   }, []);
   const store = useStoreApi();
-  const { screenToFlowPosition, fitView } = useReactFlow();
+  const { screenToFlowPosition, fitView, zoomIn, zoomOut } = useReactFlow();
+  const { zoom } = useViewport();
   const wrapper = useRef<HTMLDivElement>(null);
   /** Whether a panel, menu or question is open, which has the keyboard (Escape closes it). */
   const modal =
+    showStart ||
     front !== undefined ||
     work !== undefined ||
     drawn !== undefined ||
@@ -471,9 +502,9 @@ function Editor({
     gallery ||
     queues !== undefined;
   // The keyboard handler and file commands read these without re-subscribing on every change.
-  const latest = useRef({ graph, modal });
+  const latest = useRef({ graph, modal, start: showStart });
   useEffect(() => {
-    latest.current = { graph, modal };
+    latest.current = { graph, modal, start: showStart };
   });
   const perform = useCallback(<T,>(pending: Promise<T>, done?: (value: T) => void) => {
     void pending.then(done, (error: unknown) => {
@@ -596,6 +627,7 @@ function Editor({
 
   const actions = useMemo<GraphActions>(
     () => ({
+      card: (id) => agentCard(id, model.nodes, sessions, run, dockNeeds, engine.catalog),
       queueState: (id) => queueControlText(run, id),
       groupState: (id) => groupControlText(model.nodes, run, id),
       editing,
@@ -632,7 +664,19 @@ function Editor({
         setWork({ from, to });
       },
     }),
-    [api, canvasId, editing, model.nodes, perform, removed, run, selectOne],
+    [
+      api,
+      canvasId,
+      editing,
+      model.nodes,
+      perform,
+      removed,
+      run,
+      selectOne,
+      sessions,
+      dockNeeds,
+      engine.catalog,
+    ],
   );
 
   const edits = useMemo(
@@ -798,15 +842,18 @@ function Editor({
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (switching.current || restoring) return;
+      if (switching.current) return;
       const file = files ? fileAction(event) : null;
+      // New/Open own a switch barrier, which waits for the initial restore and saves it.
+      // Remember that intent even while startup is inert; session input must still wait.
+      if (restoring && file !== 'new' && file !== 'open') return;
       if (restoreFailed && file !== 'new' && file !== 'open') return;
       if (files && file) {
         event.preventDefault();
         void flushDrafts(() => {
           if (file === 'save' || file === 'saveAs') {
             commands.save(file === 'saveAs');
-          } else if (!latest.current.modal) {
+          } else if (!latest.current.modal || latest.current.start) {
             if (file === 'new') commands.new();
             else commands.open();
           }
@@ -863,6 +910,7 @@ function Editor({
       const status = sessions[n.id]?.status ?? 'idle';
       // Waiting on a permission answer is asking too, as is what its CLI asks in its terminal.
       const asking =
+        dockNeeds.has(n.id) ||
         status === 'waiting' ||
         (sessions[n.id]?.asking?.length ?? 0) > 0 ||
         (run.running && run.agents[n.id]?.status === 'asking');
@@ -883,18 +931,7 @@ function Editor({
         data,
       );
     });
-  }, [displayNodes, graph, selection, overlays, sessions, run]);
-  /** What needs the user, as the engine derives it: the run's holds, and what sessions ask. */
-  const needed = useMemo(() => {
-    const input = {
-      canvas: canvasId,
-      nodes: runNodes,
-      run,
-      sessions,
-      catalog: engine.catalog,
-    };
-    return { input, needs: needsOf(input) };
-  }, [canvasId, runNodes, run, sessions, engine]);
+  }, [displayNodes, graph, selection, overlays, sessions, run, dockNeeds]);
 
   // The links between agents that can talk (graph.edges, dashed), except where one hands the other
   // work: that is drawn from the queues as an arrow (work.ts), and implies they can talk. React Flow
@@ -1045,6 +1082,10 @@ function Editor({
     <GraphActionsContext value={actions}>
       <div
         className="graph-editor"
+        data-window-open={front !== undefined || queues !== undefined ? '' : undefined}
+        data-agent-open={front !== undefined ? '' : undefined}
+        data-canvas-view={queues ? 'queues' : 'graph'}
+        data-start-open={showStart ? '' : undefined}
         ref={wrapper}
         inert={restoring}
         aria-busy={restoring}
@@ -1070,7 +1111,7 @@ function Editor({
         }}
       >
         {notice && (
-          <div role="status" className="graph-panel">
+          <div role="status" className="graph-panel graph-canvas-notice">
             <ul>
               {notice.map((text, i) => (
                 <li key={i}>{text}</li>
@@ -1093,6 +1134,7 @@ function Editor({
           </p>
         )}
         <ReactFlow
+          inert={showStart || front !== undefined || queues !== undefined}
           nodes={nodes}
           edges={edges}
           nodeTypes={nodeTypes}
@@ -1244,36 +1286,6 @@ function Editor({
           colorMode="system"
         >
           <Background />
-          <Controls showInteractive={false}>
-            <ControlButton
-              className="graph-arrange"
-              aria-label="Arrange automatically"
-              aria-pressed={arranging}
-              title={
-                arranging
-                  ? 'Arranging automatically. Click to arrange by hand.'
-                  : 'Arrange automatically'
-              }
-              onClick={() => {
-                perform(api.canvasSetArrange({ canvas: canvasId, on: !arranging }));
-              }}
-            >
-              <svg viewBox="0 0 16 16" aria-hidden="true">
-                <path d="M6 1h4v3H6zM1 11h4v3H1zM11 11h4v3h-4zM7.5 4h1v2.5h5V11h-1V7.5h-9V11h-1V6.5h5z" />
-              </svg>
-            </ControlButton>
-            <ControlButton
-              aria-label="Show all queues"
-              title="All queues: every agent's, side by side"
-              onClick={() => {
-                setQueues({});
-              }}
-            >
-              <svg viewBox="0 0 16 16" aria-hidden="true">
-                <path d="M1 2h4v12H1zM6 2h4v8H6zM11 2h4v10h-4z" />
-              </svg>
-            </ControlButton>
-          </Controls>
           <NodeToolbar
             nodeId={selectedIds}
             isVisible={selectedIds.length > 1}
@@ -1303,70 +1315,6 @@ function Editor({
               Delete
             </button>
           </NodeToolbar>
-          <Panel position="top-right">
-            <NeedsSidebar
-              key={canvasId}
-              canvas={canvasId}
-              mirror={mirror}
-              onReply={commands.reply}
-              needs={needed.needs}
-              input={needed.input}
-              onDecide={edits.decide}
-              onAnswer={(agentId, promptId, index, answer) => {
-                sessionStore.answerQuestion(agentId, promptId, index, answer);
-              }}
-              onOpen={(agentId) => {
-                selectOne(agentId);
-                setOpened({ ids: [agentId] });
-              }}
-            />
-          </Panel>
-          {files && (
-            <Panel position="top-left">
-              <FileBar
-                canvases={
-                  <Canvases
-                    canvas={canvasId}
-                    mirror={mirror}
-                    onShow={commands.show}
-                    onClose={commands.close}
-                  />
-                }
-                name={name}
-                edited={canonical?.meta.edited ?? false}
-                project={{ folder: project, onChoose: commands.chooseProject }}
-                problem={problem}
-                onNew={() => {
-                  commands.new();
-                }}
-                onOpen={() => {
-                  commands.open();
-                }}
-                onSave={() => {
-                  void flushDrafts(() => {
-                    commands.save(false);
-                  }).catch((error: unknown) => {
-                    setProblem(ipcErrorMessage(error));
-                  });
-                }}
-                onSaveAs={() => {
-                  void flushDrafts(() => {
-                    commands.save(true);
-                  }).catch((error: unknown) => {
-                    setProblem(ipcErrorMessage(error));
-                  });
-                }}
-                onExamples={() => {
-                  setGallery(true);
-                }}
-                onDismiss={() => {
-                  setProblem(undefined);
-                }}
-                extra={gauges}
-              />
-            </Panel>
-          )}
-          {!files && backends.length > 0 && <Panel position="top-left">{gauges}</Panel>}
           {files && graph.nodes.length === 0 && (
             <Panel position="top-center" className="graph-panel graph-start">
               <button
@@ -1384,9 +1332,150 @@ function Editor({
             dots to let them talk or queue work · Drag on empty space to select · F2 to rename
           </Panel>
         </ReactFlow>
-        {openedNode && (
+        <div
+          className="canvas-floats"
+          hidden={Boolean(gallery) || work !== undefined || settingsAgent !== undefined}
+        >
+          {files && (
+            <CanvasMenu
+              canvases={
+                <Canvases
+                  canvas={canvasId}
+                  mirror={mirror}
+                  onShow={commands.show}
+                  onClose={commands.close}
+                />
+              }
+              name={name}
+              edited={canonical?.meta.edited ?? false}
+              {...(showStart
+                ? {}
+                : { project: { folder: project, onChoose: commands.chooseProject } })}
+              problem={problem}
+              onNew={() => {
+                commands.new();
+              }}
+              onOpen={() => {
+                commands.open();
+              }}
+              onSave={() => {
+                void flushDrafts(() => {
+                  commands.save(false);
+                }).catch((error: unknown) => {
+                  setProblem(ipcErrorMessage(error));
+                });
+              }}
+              onSaveAs={() => {
+                void flushDrafts(() => {
+                  commands.save(true);
+                }).catch((error: unknown) => {
+                  setProblem(ipcErrorMessage(error));
+                });
+              }}
+              onExamples={() => {
+                setStartChoice({ canvas: canvasId, open: false });
+                setGallery(true);
+              }}
+              onDismiss={() => {
+                setProblem(undefined);
+              }}
+            />
+          )}
+          <RunFloat
+            run={run}
+            working={
+              Object.keys(run.agents).filter((id) => sessions[id]?.status === 'working').length
+            }
+            queuesOpen={queues !== undefined}
+            onRun={() => {
+              void flushDrafts(() => {
+                runStore.start();
+              }).catch((error: unknown) => {
+                setProblem(ipcErrorMessage(error));
+              });
+            }}
+            onPause={() => {
+              runStore.pause();
+            }}
+            onResume={() => {
+              runStore.resume();
+            }}
+            onStop={() => {
+              runStore.stop();
+            }}
+            gauges={gauges}
+            needs={
+              <NeedsSidebar
+                key={canvasId}
+                canvas={canvasId}
+                mirror={mirror}
+                onReply={commands.reply}
+                needs={needed.needs}
+                input={needed.input}
+                onDecide={edits.decide}
+                onAnswer={(agentId, promptId, index, answer) => {
+                  sessionStore.answerQuestion(agentId, promptId, index, answer);
+                }}
+                onOpen={(agentId) => {
+                  setStartChoice({ canvas: canvasId, open: false });
+                  selectOne(agentId);
+                  setOpened({ ids: [agentId] });
+                }}
+              />
+            }
+          />
+          {front === undefined && queues === undefined && (
+            <ZoomFloat
+              zoom={zoom}
+              arranging={arranging}
+              onIn={() => {
+                void zoomIn();
+              }}
+              onOut={() => {
+                void zoomOut();
+              }}
+              onFit={() => {
+                void fitView({ padding: 0.2, maxZoom: 1 });
+              }}
+              onArrange={() => {
+                perform(api.canvasSetArrange({ canvas: canvasId, on: !arranging }));
+              }}
+            />
+          )}
+          <Dock
+            nodes={model.nodes}
+            sessions={sessions}
+            run={run}
+            needs={dockNeeds}
+            current={front}
+            queues={queues !== undefined}
+            onToggleQueues={() => {
+              void flushDrafts(() => {
+                setStartChoice({ canvas: canvasId, open: false });
+                setQueues((current) => (current ? undefined : front ? { from: front } : {}));
+              }).catch((error: unknown) => {
+                setProblem(ipcErrorMessage(error));
+              });
+            }}
+            onOpen={(id) => {
+              void flushDrafts(() => {
+                setStartChoice({ canvas: canvasId, open: false });
+                setQueues(undefined);
+                selectOne(id);
+                setOpened(({ ids }) => ({ ids: [id, ...ids.filter((other) => other !== id)] }));
+              }).catch((error: unknown) => {
+                setProblem(ipcErrorMessage(error));
+              });
+            }}
+            onStart={() => {
+              setStartChoice({ canvas: canvasId, open: true });
+            }}
+          />
+        </div>
+        {openedNode && !showStart && (
           <AgentView
             key={openedNode.id}
+            opening={opened}
             node={openedNode}
             queueState={queueControlText(run, openedNode.id)}
             onAgentContextMenu={(event) => {
@@ -1395,6 +1484,7 @@ function Editor({
             nodes={displayNodes}
             origin={openedCard}
             from={opened.from?.id === openedNode.id ? opened.from.rect : undefined}
+            openingDuration={opened.from?.duration}
             stack={stack}
             onNewAgent={(relation, from) => {
               perform(
@@ -1573,9 +1663,48 @@ function Editor({
             onClose={closeQueues}
           />
         )}
+        {showStart && !gallery && (
+          <StartSession
+            canvas={canvasId}
+            mirror={mirror}
+            project={project}
+            installed={installed}
+            onChooseProject={commands.chooseProject}
+            onClose={() => {
+              setStartChoice({ canvas: canvasId, open: false });
+            }}
+            onTemplate={(template) => {
+              setStartChoice({ canvas: canvasId, open: false });
+              setGallery(template);
+            }}
+            onShow={async (id) => {
+              await commands.show(id);
+              if (binding.canvas !== id) throw new Error('The recent canvas was not shown.');
+              setStartChoice({ canvas: id, open: false });
+            }}
+            onStart={async (adapter, connection, from) => {
+              await flushDrafts();
+              const box = wrapper.current?.getBoundingClientRect();
+              const at = box
+                ? screenToFlowPosition({ x: box.left + box.width / 2, y: box.top + box.height / 2 })
+                : { x: 0, y: 0 };
+              const result = await api.canvasAddAgent({
+                canvas: canvasId,
+                at,
+                adapter,
+                connection,
+              });
+              if (binding.canvas !== canvasId || !('id' in result)) return;
+              setStartChoice({ canvas: canvasId, open: false });
+              selectOne(result.id);
+              setOpened({ ids: [result.id], from: { id: result.id, rect: from, duration: 440 } });
+            }}
+          />
+        )}
         {gallery && (
           <ExampleGallery
-            canInsert={graph.nodes.length > 0}
+            canInsert={gallery === true && graph.nodes.length > 0}
+            initialTemplate={typeof gallery === 'object' ? gallery : undefined}
             installed={installed}
             onPick={(template, choices, use) => {
               setGallery(false);

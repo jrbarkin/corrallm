@@ -34,7 +34,7 @@
       "label": "Lead",
       "position": {
         "x": 0,
-        "y": 140
+        "y": 120.5
       },
       "adapter": "claude-code",
       "color": 1,
@@ -79,7 +79,7 @@
       "label": "Frontend",
       "position": {
         "x": 20,
-        "y": 69
+        "y": 88.5
       },
       "parent": "lead",
       "adapter": "codex"
@@ -90,7 +90,7 @@
       "label": "Backend",
       "position": {
         "x": 210,
-        "y": 69
+        "y": 88.5
       },
       "parent": "lead",
       "adapter": "claude-code"
@@ -101,7 +101,7 @@
       "label": "Tester",
       "position": {
         "x": 400,
-        "y": 69
+        "y": 88.5
       },
       "parent": "lead"
     }

@@ -1,3 +1,4 @@
+import { dismissStart, canvasAction, openNeeds } from './canvas-actions';
 import { randomUUID } from 'node:crypto';
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -47,6 +48,7 @@ test.beforeEach(async () => {
     problems.push(error.message);
   });
   await page.waitForLoadState('load');
+  await dismissStart(page);
 });
 
 test.afterEach(async () => {
@@ -116,7 +118,7 @@ async function openCanvas(queue: unknown[], dependent = false) {
     },
     { folder, canvas },
   );
-  await page.getByRole('button', { name: 'Open…', exact: true }).click();
+  await canvasAction(page, 'Open…');
   await expect(page.getByText('recovery.corral', { exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Choose a project folder' }).click();
   await expect(page.getByRole('button', { name: 'Project folder: shop' })).toBeVisible();
@@ -147,6 +149,7 @@ test('corrects a failed task in its same console, retaining attempts and releasi
 
   // The same hold appears on the canvas and in the actual agent view, beside its conversation.
   await queues.getByRole('button', { name: 'Back', exact: true }).click();
+  await openNeeds(page);
   const needs = page.getByRole('complementary', { name: 'Needs you' });
   await expect(needs.getByText('The agent reported that this step failed.')).toBeVisible();
   await expect(needs.getByRole('button', { name: 'Retry', exact: true })).toBeVisible();

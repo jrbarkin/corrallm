@@ -100,7 +100,14 @@ async function setup(initialGraph?: Graph, files = false) {
   return { container, nodes, node, pane, fake, canvas };
 }
 
-const button = (name: string) => screen.getByRole<HTMLButtonElement>('button', { name });
+const button = (name: string) => {
+  if (
+    ['New', 'Open…', 'Save', 'Save as…'].includes(name) &&
+    !screen.queryByRole('button', { name })
+  )
+    fireEvent.click(screen.getByRole('button', { name: 'Canvas menu' }));
+  return screen.getByRole<HTMLButtonElement>('button', { name });
+};
 const labelInput = () => screen.getByRole<HTMLInputElement>('textbox', { name: 'Label' });
 /** The actions shown for a node, group or selection. */
 const actions = (id: string) => {
@@ -249,7 +256,7 @@ describe('GraphEditor', () => {
     await waitFor(() => {
       expect(fake.backend.send).toHaveBeenCalledOnce();
     });
-    expect(node('a').textContent).toContain('Drafted name');
+    expect(node('a').querySelector('.graph-label')?.textContent).toContain('Drafted name');
   });
 
   it('saves the drafted label from the file shortcut before blur', async () => {
@@ -569,7 +576,7 @@ describe('GraphEditor', () => {
       ],
       edges: [],
     });
-    const tags = [...container.querySelectorAll('.graph-agent')].map((tag) =>
+    const tags = [...container.querySelectorAll('.graph-card')].map((tag) =>
       tag.getAttribute('title'),
     );
     expect(tags).toEqual(['Agent: toString · Not connected', 'Agent: constructor · Not connected']);
@@ -595,8 +602,8 @@ describe('GraphEditor', () => {
     const menu = within(screen.getByRole('menu', { name: 'a controls' }));
     await events.click(menu.getByRole('menuitem', { name: /^Pause/ }));
     expect(screen.queryByRole('menu')).toBeNull();
-    expect(within(node('a')).getByText('Paused')).toBeTruthy();
-    expect(within(node('b')).queryByText('Paused')).toBeNull();
+    expect(node('a').querySelector('[aria-label$="paused"]')).toBeTruthy();
+    expect(node('b').querySelector('[aria-label$="paused"]')).toBeNull();
     expect(document.title).toBe('Untitled — corrallm');
     await events.click(button('Save'));
     await waitFor(() => {
@@ -606,7 +613,7 @@ describe('GraphEditor', () => {
     expect(text).toBe(toFile(documentOf(initial, canvasIdOf(text))));
     await events.contextMenu(node('a'));
     await events.click(screen.getByRole('menuitem', { name: /^Resume/ }));
-    expect(within(node('a')).queryByText('Paused')).toBeNull();
+    expect(node('a').querySelector('[aria-label$="paused"]')).toBeNull();
   });
 
   it('resumes only a group’s own holds, retaining nested and individual pauses', async () => {
@@ -631,23 +638,23 @@ describe('GraphEditor', () => {
     node('F').focus();
     await events.keyDown(node('F'), { key: 'F10', shiftKey: true });
     await events.click(screen.getByRole('menuitem', { name: /^Pause/ }));
-    expect(within(node('F')).getByText('Paused')).toBeTruthy();
-    expect(within(node('child')).getByText('Paused')).toBeTruthy();
+    expect(node('F').querySelector('[aria-label$="paused"]')).toBeTruthy();
+    expect(node('child').querySelector('[aria-label$="paused"]')).toBeTruthy();
     await events.contextMenu(node('parent'));
     const parentMenu = within(screen.getByRole('menu', { name: 'parent controls' }));
     expect(parentMenu.getByRole('menuitem', { name: /^Pause separately/ })).toBeTruthy();
     await events.click(parentMenu.getByRole('menuitem', { name: /^Pause group/ }));
     await events.contextMenu(node('F'));
     await events.click(screen.getByRole('menuitem', { name: /^Resume/ }));
-    expect(within(node('F')).queryByText('Paused')).toBeNull();
-    expect(within(node('a')).getByText('Paused')).toBeTruthy();
-    expect(within(node('parent')).getByText('Paused')).toBeTruthy();
-    expect(within(node('child')).getByText('Paused')).toBeTruthy();
+    expect(node('F').querySelector('[aria-label$="paused"]')).toBeNull();
+    expect(node('a').querySelector('[aria-label$="paused"]')).toBeTruthy();
+    expect(node('parent').querySelector('[aria-label$="paused"]')).toBeTruthy();
+    expect(node('child').querySelector('[aria-label$="paused"]')).toBeTruthy();
     await events.contextMenu(node('parent'));
     await events.click(screen.getByRole('menuitem', { name: /^Resume group/ }));
-    expect(within(node('parent')).queryByText('Paused')).toBeNull();
-    expect(within(node('child')).queryByText('Paused')).toBeNull();
-    expect(within(node('a')).getByText('Paused')).toBeTruthy();
+    expect(node('parent').querySelector('[aria-label$="paused"]')).toBeNull();
+    expect(node('child').querySelector('[aria-label$="paused"]')).toBeNull();
+    expect(node('a').querySelector('[aria-label$="paused"]')).toBeTruthy();
     expect(document.title).toBe('team.corral — corrallm');
     await events.click(button('Save'));
     await waitFor(() => {
@@ -664,7 +671,7 @@ describe('GraphEditor', () => {
     await events.keyDown(screen.getByRole('menuitem', { name: /^Pause/ }), { key: 'Escape' });
     expect(screen.queryByRole('menu')).toBeNull();
     expect(document.activeElement).toBe(node('a'));
-    expect(within(node('a')).queryByText('Paused')).toBeNull();
+    expect(node('a').querySelector('[aria-label$="paused"]')).toBeNull();
   });
 
   it('shows manual turns in every queue view without saving or running them again', async () => {
@@ -779,7 +786,7 @@ describe('GraphEditor', () => {
   it('adds a node on double-click on the empty canvas', async () => {
     const { nodes, pane } = await setup();
     await events.doubleClick(pane, { clientX: 200, clientY: 100 });
-    expect(nodes().map((n) => n.textContent)).toEqual(['Agent 1']);
+    expect(nodes().map((n) => n.querySelector('.graph-label')?.textContent)).toEqual(['Agent 1']);
   });
 
   it("starts a new agent's queue with a message to write, counted on its card once written", async () => {
@@ -885,7 +892,7 @@ describe('GraphEditor', () => {
     expect(labelInput().maxLength).toBe(MAX_LABEL);
     await events.change(labelInput(), { target: { value: ' ' } });
     await events.keyDown(labelInput(), { key: 'Enter' });
-    expect(node('a').textContent).toContain('a');
+    expect(node('a').querySelector('.graph-label')?.textContent).toContain('a');
     await events.keyDown(document.body, { key: 'F2' });
     await events.change(labelInput(), { target: { value: 'x'.repeat(MAX_LABEL + 1) } });
     await events.blur(labelInput());
@@ -905,12 +912,12 @@ describe('GraphEditor', () => {
     await events.change(labelInput(), { target: { value: 'Alpha' } });
     await events.keyDown(labelInput(), { key: 'Enter' });
     expect(screen.queryByRole('textbox')).toBeNull();
-    expect(node('a').textContent).toBe('Alpha');
+    expect(node('a').querySelector('.graph-label')?.textContent).toBe('Alpha');
 
     await events.keyDown(document.body, { key: 'F2' });
     await events.change(labelInput(), { target: { value: 'Beta' } });
     await events.keyDown(labelInput(), { key: 'Escape' });
-    expect(node('a').textContent).toBe('Alpha');
+    expect(node('a').querySelector('.graph-label')?.textContent).toBe('Alpha');
   });
 
   it('edits text instead of deleting while typing in a label', async () => {
@@ -927,7 +934,7 @@ describe('GraphEditor', () => {
     await events.doubleClick(title);
     await events.change(labelInput(), { target: { value: 'Team' } });
     await events.keyDown(labelInput(), { key: 'Enter' });
-    expect(node('F').textContent).toBe('Team');
+    expect(node('F').querySelector('.graph-label')?.textContent).toBe('Team');
     expect(screen.queryByRole('dialog')).toBeNull();
   });
 
@@ -1408,6 +1415,7 @@ describe('GraphEditor', () => {
     ]);
 
     // The sidebar asks for each, in graph order, after the work it is on.
+    await events.click(screen.getByRole('button', { name: 'Needs you' }));
     const list = within(sidebar() ?? document.body);
     expect(list.getByRole('heading').textContent).toBe('Needs you 3');
     const card = (agent: string) => {
@@ -1425,6 +1433,10 @@ describe('GraphEditor', () => {
     await events.click(card('Builder').getByRole('button', { name: 'Stop here' }));
     const reply = card('Tester').getByRole('textbox', { name: 'What should change?' });
     await events.change(reply, { target: { value: 'Test the empty state' } });
+    await events.pointerDown(document.body);
+    expect(sidebar()).toBeNull();
+    await events.click(screen.getByRole('button', { name: 'Needs you' }));
+    expect(reply).toHaveProperty('value', 'Test the empty state');
     await events.click(card('Tester').getByRole('button', { name: 'Ask for changes' }));
     expect(sidebar()).toBeNull();
     expect(['a', 'b', 'c'].map((id) => node(id).classList.contains('asking'))).toEqual([
@@ -1516,6 +1528,7 @@ describe('GraphEditor', () => {
     );
     await events.click(queues.getByRole('button', { name: 'Back' }));
     expect(node('a').classList.contains('asking')).toBe(true);
+    await events.click(screen.getByRole('button', { name: 'Needs you' }));
     const sidebar = within(screen.getByRole('complementary', { name: 'Needs you' }));
     expect(
       sidebar.getByText('Claude has used 95% of its 5-hour window (over 90%). Go on?'),
@@ -1710,7 +1723,7 @@ describe('GraphEditor', () => {
       ],
       edges: [],
     });
-    const tag = (id: string) => node(id).querySelector('.graph-agent')?.getAttribute('data-agent');
+    const tag = (id: string) => node(id).querySelector('.graph-card')?.getAttribute('data-agent');
     expect([tag('a'), tag('b')]).toEqual(['codex', 'claude-code']);
     expect(node('a').getAttribute('aria-label')).toBe('a, Codex · Terminal');
 
@@ -1782,7 +1795,7 @@ describe('GraphEditor', () => {
     });
     await events.click(button('Add a parent agent'));
     expect(nodes('.react-flow__node-agent.parent').map((n) => n.dataset.id)).toEqual(['F']);
-    expect(node('F').textContent).toBe('Agent 1');
+    expect(node('F').querySelector('.graph-label')?.textContent).toBe('Agent 1');
     expect(node('F').classList.contains('selected')).toBe(true);
   });
 
@@ -2008,7 +2021,7 @@ describe('GraphEditor', () => {
     });
     expect(container.querySelector('[data-testid="rf__edge-a->b"]')).not.toBeNull();
     await events.keyDown(document.body, { key: 'Delete' });
-    expect(nodes().map((n) => n.textContent)).toEqual(['a']);
+    expect(nodes().map((n) => n.querySelector('.graph-label')?.textContent)).toEqual(['a']);
     expect(container.querySelector('[data-testid="rf__edge-a->b"]')).toBeNull();
   });
 
@@ -2021,9 +2034,9 @@ describe('GraphEditor', () => {
           id: 'G',
           parentId: 'H',
           position: { x: 20, y: 40 },
-          width: 200,
+          width: 260,
           height: 200,
-          measured: { width: 200, height: 200 },
+          measured: { width: 260, height: 200 },
         },
         agentNode('c', 400, 50, { parentId: 'G' }),
       ],
@@ -2032,7 +2045,7 @@ describe('GraphEditor', () => {
     // React Flow measures c on mount; G must shrink around it and H around G.
     const width = (id: string) =>
       parseFloat(container.querySelector<HTMLElement>(`[data-id="${id}"]`)?.style.width ?? '');
-    expect(width('G')).toBeLessThan(200);
+    expect(width('G')).toBeLessThan(260);
     expect(width('H')).toBe(width('G') + 2 * PADDING);
   });
 
@@ -2148,7 +2161,7 @@ describe('GraphEditor', () => {
       await events.click(button('Open…'));
       expect(screen.queryByRole('alertdialog')).toBeNull();
       await waitFor(() => {
-        expect(nodes().map((n) => n.textContent)).toEqual(['Coder']);
+        expect(nodes().map((n) => n.querySelector('.graph-label')?.textContent)).toEqual(['Coder']);
       });
       expectOneOp(canvas.core, 'canvas.open', {});
       expect(canvas.document.id).toBe(id);
@@ -2176,7 +2189,7 @@ describe('GraphEditor', () => {
       expect(screen.queryByRole('dialog')).toBeNull();
       // The template is the canvas, created by the core operation.
       await waitFor(() => {
-        expect(nodes().map((n) => n.textContent)).toContain('Lead');
+        expect(nodes().map((n) => n.querySelector('.graph-label')?.textContent)).toContain('Lead');
       });
       expect(calls(canvas, 'canvas.create')).toEqual([
         {
@@ -2211,7 +2224,9 @@ describe('GraphEditor', () => {
         expect.objectContaining({ template: expect.any(String) as unknown }),
         expect.objectContaining({ template: expect.any(String) as unknown }),
       ]);
-      expect(nodes().map((node) => node.textContent)).toContain('Reviewer');
+      expect(nodes().map((node) => node.querySelector('.graph-label')?.textContent)).toContain(
+        'Reviewer',
+      );
     });
 
     it('shows the folder its agents work in, chooses another, and brings it back with the canvas', async () => {
@@ -2256,11 +2271,15 @@ describe('GraphEditor', () => {
       await events.click(gallery.getByRole('button', { name: 'Create canvas' }));
       expect(screen.queryByRole('dialog')).toBeNull();
       await waitFor(() => {
-        expect(nodes().map((n) => n.textContent)).toEqual(['Tester', 'Implementer', 'Refactorer']);
+        expect(nodes().map((n) => n.querySelector('.graph-label')?.textContent)).toEqual([
+          'Tester',
+          'Implementer',
+          'Refactorer',
+        ]);
       });
       await act(async () => {
         const tester = nodes('.react-flow__node-agent').find(
-          (node) => node.textContent === 'Tester',
+          (node) => node.querySelector('.graph-label')?.textContent === 'Tester',
         );
         if (!tester) throw new Error('No Tester');
         fireEvent.doubleClick(tester);
@@ -2286,7 +2305,7 @@ describe('GraphEditor', () => {
       await events.change(tester, { target: { value: '' } });
       await events.click(gallery.getByRole('button', { name: 'Insert into this canvas' }));
       expect(screen.queryByRole('dialog')).toBeNull();
-      expect(nodes().map((n) => n.textContent)).toEqual([
+      expect(nodes().map((n) => n.querySelector('.graph-label')?.textContent)).toEqual([
         'Coder',
         'TDD relay',
         'Tester',
@@ -2295,7 +2314,7 @@ describe('GraphEditor', () => {
       ]);
       const agentOf = (label: string) =>
         [...container.querySelectorAll('.react-flow__node')]
-          .find((n) => n.textContent === label)
+          .find((n) => n.querySelector('.graph-label')?.textContent === label)
           ?.querySelector('[data-agent]')
           ?.getAttribute('data-agent');
       expect(['Tester', 'Implementer', 'Refactorer'].map(agentOf)).toEqual([
@@ -2360,7 +2379,7 @@ describe('GraphEditor', () => {
       });
       expect(sessions.backend.start).not.toHaveBeenCalled();
       const implementer = [...container.querySelectorAll('.react-flow__node-agent')].find(
-        (node) => node.textContent === 'Implementer',
+        (node) => node.querySelector('.graph-label')?.textContent === 'Implementer',
       );
       if (!implementer) throw new Error('no Implementer');
       await events.doubleClick(implementer);
@@ -2507,7 +2526,7 @@ describe('GraphEditor', () => {
       expect((await screen.findByRole('alert')).textContent).toMatch(
         /^Could not open the canvas: notes\.corral: This is not a corrallm canvas/,
       );
-      expect(nodes().map((n) => n.textContent)).toEqual(['Coder']);
+      expect(nodes().map((n) => n.querySelector('.graph-label')?.textContent)).toEqual(['Coder']);
       // The core never took it as the canvas's file: one refused Open, and nothing begun anew.
       expectOneOp(canvas.core, 'canvas.open', {});
     });

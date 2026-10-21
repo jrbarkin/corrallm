@@ -17,12 +17,18 @@
  */
 .graph-editor .react-flow {
   --graph-accent: #2563eb;
+  --graph-card-bg: #fff;
+  --graph-card-chip: #e9ecf1;
+  --graph-done: #2f8f55;
   --xy-edge-stroke: #8a8a8a;
   --xy-edge-stroke-selected: var(--graph-accent);
 }
 
 .graph-editor .react-flow.dark {
   --graph-accent: #60a5fa;
+  --graph-card-bg: #1f2329;
+  --graph-card-chip: #2b3038;
+  --graph-done: #5cc985;
 }
 
 /* An empty canvas is not a link. */
@@ -30,7 +36,7 @@
   cursor: default;
 }
 
-/* An item is a card that looks like React Flow's default node. */
+/* Canvas-first guide: logo/name, status and finished queue work. */
 .react-flow__node-agent {
   font-size: 12px;
 }
@@ -39,12 +45,20 @@
   position: relative;
   box-sizing: border-box;
   /* card.test.ts keeps these fixed dimensions equal to the model's CARD_SIZE. */
-  width: 150px;
-  height: 34px;
-  border: var(--xy-node-border-default);
-  border-radius: 4px;
-  background: var(--xy-node-background-color-default);
+  width: 186px;
+  height: 73px;
+  padding: 10px 12px;
+  display: grid;
+  grid-template-rows: 19.5px 18px 7px;
+  gap: 3px;
+  border: 1px solid var(--float-line);
+  border-radius: 10px;
+  background: var(--graph-card-bg);
   color: var(--xy-node-color-default);
+  box-shadow: 0 2px 6px rgb(0 0 0 / 0.06);
+  text-align: left;
+  font-size: 13px;
+  line-height: 1.5;
 }
 
 .react-flow__node-frame {
@@ -114,7 +128,7 @@ input.graph-label {
  */
 .react-flow__node-agent.parent::before {
   position: absolute;
-  inset: 17px 0 0;
+  inset: 36.5px 0 0;
   border: var(--xy-node-border-default);
   border-radius: 6px;
   background: color-mix(in srgb, var(--xy-node-background-color-default) 25%, transparent);
@@ -126,12 +140,11 @@ input.graph-label {
   top: 0;
   left: 50%;
   transform: translateX(-50%);
-  font-weight: 600;
   pointer-events: all;
   cursor: grab;
 }
 
-.graph-card > .graph-label,
+.graph-card-top > .graph-label,
 .graph-frame-title > .graph-label {
   min-height: 0;
   overflow: hidden;
@@ -139,8 +152,88 @@ input.graph-label {
   white-space: nowrap;
 }
 
-.graph-card > .graph-label {
+.graph-card-top > .graph-label {
+  flex: 1;
+  min-width: 0;
+  width: auto;
   height: 100%;
+  padding: 0;
+  text-align: left;
+  font-weight: 650;
+}
+.graph-card-top {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+.graph-card-status {
+  min-width: 0;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--float-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.graph-card-progress {
+  height: 3px;
+  margin-top: 4px;
+  border-radius: 2px;
+  background: var(--graph-card-chip);
+  overflow: hidden;
+}
+.graph-card-progress i {
+  display: block;
+  height: 100%;
+  background: var(--float-muted);
+}
+.graph-card-status-dot {
+  width: 8px;
+  height: 8px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--float-muted);
+}
+.graph-card[data-status='Idle'] .graph-card-status-dot {
+  visibility: hidden;
+}
+.graph-card[data-status='Working'] .graph-card-status-dot,
+.graph-card[data-status='Working'] .graph-card-progress i,
+.graph-card[data-status='Pausing'] .graph-card-status-dot {
+  background: var(--graph-accent);
+}
+.graph-card[data-status='Working'] .graph-card-status-dot {
+  animation: graph-work-pulse 1.2s ease-in-out infinite;
+}
+.graph-card[data-status='Done'] .graph-card-status-dot,
+.graph-card[data-status='Done'] .graph-card-progress i {
+  background: var(--graph-done);
+}
+.graph-card[data-status='Waiting'],
+.graph-card[data-status='Paused'],
+.graph-card[data-status='Stopped'] {
+  opacity: 0.7;
+}
+.graph-card[data-status='Needs you'] .graph-card-status-dot,
+.graph-card[data-status='Needs you'] .graph-card-progress i {
+  background: var(--float-need);
+}
+.graph-card[data-status='Needs you'] .graph-card-status {
+  color: var(--float-need);
+}
+.graph-card:hover {
+  border-color: var(--float-muted);
+}
+@keyframes graph-work-pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .graph-card[data-status='Working'] .graph-card-status-dot {
+    animation: none;
+  }
 }
 
 .graph-frame-title {
@@ -744,7 +837,7 @@ input.graph-label {
 
 .react-flow__node[class*='group-color-'] > .graph-card {
   border-color: var(--group-color);
-  background: color-mix(in srgb, var(--group-color) 14%, var(--xy-node-background-color-default));
+  background: color-mix(in srgb, var(--group-color) 14%, var(--graph-card-bg));
 }
 
 .react-flow__node-frame[class*='group-color-'] {
@@ -762,47 +855,13 @@ input.graph-label {
   background: color-mix(in srgb, var(--group-color) 7%, transparent);
 }
 
-/* The arrange toggle (in the zoom controls), when on. */
-.graph-editor .react-flow__controls-button.graph-arrange[aria-pressed='true'] {
-  background: var(--graph-accent);
-  color: white;
-}
-
-/* Agents by adapter (agents.ts), colour-coded: the tag on a node's card and the chip in its panel. */
+/* Adapter accents retained by the agent window. Cards use catalog logos. */
 [data-agent='claude-code'] {
   --agent-color: #c15f3c;
 }
 
 [data-agent='codex'] {
   --agent-color: #0e8a6b;
-}
-
-.graph-agent {
-  position: absolute;
-  top: -9px;
-  left: 8px;
-  box-sizing: border-box;
-  height: 16px;
-  max-width: calc(100% - 24px);
-  padding: 0 6px;
-  border-radius: 8px;
-  background: var(--agent-color);
-  color: white;
-  font-size: 10px;
-  font-weight: 600;
-  line-height: 16px;
-  pointer-events: none;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.graph-agent::after {
-  content: attr(data-agent);
-}
-
-.graph-agent[data-connection]::after {
-  content: attr(data-agent) ' · ' attr(data-connection);
 }
 
 .graph-agent-chip {
@@ -831,43 +890,30 @@ input.graph-label {
   right: 0;
 }
 
-/*
- * The agent's colour on its card (a stripe down the left, over any group colour) and across the
- * top of its open panel.
- */
-.react-flow__node.react-flow__node-agent > .graph-card[data-agent] {
-  border-left: 4px solid var(--agent-color);
-}
-
+/* An open panel retains its adapter accent. */
 .graph-detail[data-agent] {
   border-top: 6px solid var(--agent-color);
 }
 
 /* An agent with a question for the user glows until it is answered. */
 .react-flow__node.asking > .graph-card {
+  border-color: var(--float-need);
   animation: graph-asking 1.6s ease-in-out infinite;
 }
 
 @keyframes graph-asking {
   0%,
   100% {
-    box-shadow:
-      0 0 0 2px #f59e0b,
-      0 0 8px 2px color-mix(in srgb, #f59e0b 45%, transparent);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--float-need) 55%, transparent);
   }
-
   50% {
-    box-shadow:
-      0 0 0 2px #f59e0b,
-      0 0 20px 8px color-mix(in srgb, #f59e0b 55%, transparent);
+    box-shadow: 0 0 14px color-mix(in srgb, var(--float-need) 55%, transparent);
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
   .react-flow__node.asking > .graph-card {
-    box-shadow:
-      0 0 0 2px #f59e0b,
-      0 0 12px 4px color-mix(in srgb, #f59e0b 50%, transparent);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--float-need) 55%, transparent);
     animation: none;
   }
 }
@@ -1327,14 +1373,6 @@ input.graph-label {
   align-items: flex-start;
 }
 
-.graph-file {
-  display: flex;
-  gap: 4px;
-  align-items: center;
-  padding: 4px 6px;
-  font-size: 13px;
-}
-
 .graph-file-name {
   max-width: 220px;
   overflow: hidden;
@@ -1347,66 +1385,6 @@ input.graph-label {
 .graph-file-edited {
   margin-right: 6px;
   opacity: 0.55;
-}
-
-.graph-file button,
-.graph-file-discard button,
-.graph-file-problem button {
-  padding: 3px 9px;
-  border: 1px solid transparent;
-  border-radius: 6px;
-  background: transparent;
-  color: inherit;
-  font: inherit;
-  cursor: pointer;
-}
-
-.graph-file button:hover,
-.graph-file-discard button:hover,
-.graph-file-problem button:hover {
-  border-color: color-mix(in srgb, CanvasText 20%, transparent);
-}
-
-/* Under the file's commands: the folder the canvas's agents work in, and the usage gauges. */
-.graph-file-row {
-  display: flex;
-  gap: 6px;
-  align-items: flex-start;
-}
-
-/* The folder the canvas's agents work in, under the file's commands. */
-.graph-file-project {
-  max-width: 320px;
-  padding: 4px 10px;
-  color: inherit;
-  font: inherit;
-  font-size: 13px;
-  cursor: pointer;
-}
-
-.graph-file-project::before {
-  flex: none;
-  width: 13px;
-  height: 10px;
-  background: currentColor;
-  content: '';
-  clip-path: polygon(0 0, 42% 0, 54% 20%, 100% 20%, 100% 100%, 0 100%);
-  opacity: 0.6;
-}
-
-.graph-file-project-name {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.graph-file-project:hover {
-  border-color: color-mix(in srgb, CanvasText 40%, transparent);
-}
-
-.graph-file-project:not([data-chosen]) {
-  color: var(--graph-accent, #2563eb);
-  font-weight: 600;
 }
 
 .graph-file-discard,
@@ -2001,4 +1979,9 @@ button.graph-queue-action[aria-expanded='true'] {
 .graph-canvases-actions button:disabled {
   opacity: 0.45;
   cursor: default;
+}
+
+.react-flow__node-agent.selected > .graph-card {
+  outline: 2px solid var(--graph-accent);
+  outline-offset: 1px;
 }

@@ -1,3 +1,4 @@
+import { dismissStart, canvasAction } from './canvas-actions';
 import { randomUUID } from 'node:crypto';
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -71,6 +72,7 @@ async function launch(connection: 'claude-code.sdk' | 'claude-code.terminal') {
     if (message.type() === 'error' || message.type() === 'warning') problems.push(message.text());
   });
   await page.waitForLoadState('load');
+  await dismissStart(page);
   await expect(page.locator('.react-flow__pane')).toBeVisible();
 }
 
@@ -106,7 +108,7 @@ async function openCanvas(connection: 'claude-code.sdk' | 'claude-code.terminal'
     },
     { folder, canvas },
   );
-  await page.getByRole('button', { name: 'Open…', exact: true }).click();
+  await canvasAction(page, 'Open…');
   await expect(page.getByText('controls.corral', { exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Choose a project folder' }).click();
   await expect(page.getByRole('button', { name: 'Project folder: shop' })).toBeVisible();
@@ -280,7 +282,9 @@ test('a canvas pause chosen before Run survives reload and global Resume until t
   await menu()
     .getByRole('menuitem', { name: /^Pause/ })
     .click();
-  await expect(builder.getByText('Paused', { exact: true })).toBeVisible();
+  await expect(
+    builder.locator('.graph-agent-control').filter({ hasText: /^Paused$/ }),
+  ).toBeVisible();
   await page.getByRole('button', { name: 'Show all queues' }).click();
   await queues.getByRole('button', { name: 'Run', exact: true }).click();
   await expect(row(queues, 'independent', 'parallel')).toHaveAttribute('data-run', 'succeeded');

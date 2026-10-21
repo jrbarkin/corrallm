@@ -4,7 +4,7 @@ import { catalog } from './catalog';
 import './AdapterLogo.css';
 
 /** An adapter's own mark, isolated as an image; a missing mark gets its name's first letter. */
-export function AdapterLogo({ adapter, size }: { adapter: AdapterId; size: 16 | 18 | 30 }) {
+export function AdapterLogo({ adapter, size }: { adapter: AdapterId; size: 15 | 16 | 18 | 30 }) {
   const descriptor = adapterIn(catalog(), adapter);
   const name = descriptor?.name ?? adapter;
   return descriptor?.logo === undefined ? (

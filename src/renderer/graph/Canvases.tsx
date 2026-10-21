@@ -5,7 +5,7 @@ import { useTopic } from '../api/topics';
 import type { TopicMirror } from '../api/topics';
 import { ipcErrorMessage } from '../ipc-error';
 
-/** The core's kept canvases, most recent first. Independent of the FileBar that hosts it. */
+/** The core's kept canvases, most recent first. Independent of the canvas menu that hosts it. */
 export function Canvases({
   canvas,
   mirror,

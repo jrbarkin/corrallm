@@ -127,6 +127,8 @@ export function AgentView({
   nodes,
   origin,
   from,
+  opening,
+  openingDuration = 350,
   stack,
   onNewAgent,
   onSwitch,
@@ -148,6 +150,9 @@ export function AgentView({
   onClose,
 }: {
   node: AgentNode;
+  /** A new identity for each request to show the window, even for the same agent. */
+  opening: object;
+  openingDuration?: number | undefined;
   /** Every node of the graph: what queued items can act on. */
   nodes: readonly CanvasNode[];
   /** Where the node's card is on screen: the panel grows from it and shrinks back into it. */
@@ -197,30 +202,42 @@ export function AgentView({
   /** Whether it is on its way out: closing, or giving way to another agent. */
   const leaving = useRef(false);
   /** Whether it is minimizing into the rail, its card on top of the stack. */
-  const [minimizing, setMinimizing] = useState(false);
+  const [minimizing, setMinimizing] = useState<object>();
+  /** Animations and completions belong to one opening, never to a later request to show it. */
+  const showing = useRef<{ active: boolean; animations: Animation[] }>(undefined);
 
   useLayoutEffect(() => {
+    const current = { active: true, animations: [] as Animation[] };
+    showing.current = current;
+    leaving.current = false;
     // Not the panel: the composer has the keyboard (autoFocus).
-    if (!panel.current || !content.current || !backdrop.current) return;
-    if (from) {
-      // Out of the rail, over the backdrop already there.
-      morph(panel.current, from, 'open', { duration: 350, fade: true });
-    } else {
-      const card = origin();
-      if (!card) return;
-      morph(panel.current, card, 'open');
-      animate(backdrop.current, [{ opacity: 0 }, { opacity: 1 }], { duration: 300 });
+    if (panel.current && content.current && backdrop.current) {
+      const card = from ?? origin();
+      if (card) {
+        current.animations = [
+          morph(panel.current, card, 'open', from ? { duration: openingDuration, fade: true } : {}),
+          !from && animate(backdrop.current, [{ opacity: 0 }, { opacity: 1 }], { duration: 300 }),
+          animate(content.current, [{ opacity: 0 }, { opacity: 1 }], {
+            duration: 180,
+            delay: 160,
+            fill: 'backwards',
+          }),
+        ].filter((animation): animation is Animation => Boolean(animation));
+      }
     }
-    animate(content.current, [{ opacity: 0 }, { opacity: 1 }], {
-      duration: 180,
-      delay: 160,
-      fill: 'backwards',
-    });
-  }, [origin, from]);
+    return () => {
+      current.active = false;
+      for (const animation of current.animations) {
+        void animation.finished.catch(() => undefined);
+        animation.cancel();
+      }
+    };
+  }, [origin, from, opening, openingDuration]);
 
   const close = useCallback(() => {
     if (leaving.current) return;
     leaving.current = true;
+    const current = showing.current;
     const to = origin();
     const shrinking = (
       to && panel.current && content.current && backdrop.current
@@ -237,8 +254,12 @@ export function AgentView({
           ]
         : []
     ).filter((animation) => animation !== undefined);
-    if (shrinking.length === 0) onClose();
-    else void Promise.all(shrinking.map((animation) => animation.finished)).then(onClose, onClose);
+    current?.animations.push(...shrinking);
+    const closed = () => {
+      if (current?.active) onClose();
+    };
+    if (shrinking.length === 0) closed();
+    else void Promise.all(shrinking.map((animation) => animation.finished)).then(closed, closed);
   }, [origin, onClose]);
 
   /**
@@ -256,13 +277,14 @@ export function AgentView({
     const strip = rail.current;
     if (leaving.current || !box || !content.current || !strip) return;
     leaving.current = true;
+    const current = showing.current;
     const cards = () => [...strip.querySelectorAll<HTMLElement>('[data-stack]')];
     const card = (id: string) => cards().find((element) => element.dataset.stack === id);
     const before = new Map(cards().map((c) => [c.dataset.stack ?? '', c.getBoundingClientRect()]));
     // From where it rests, not part-way through growing.
     settle(box);
     flushSync(() => {
-      setMinimizing(true);
+      setMinimizing(opening);
     });
     const landing = card(node.id);
     const motions = [
@@ -279,7 +301,9 @@ export function AgentView({
         fill: 'forwards',
       }),
     ].filter((motion) => motion !== undefined);
+    current?.animations.push(...motions);
     const go = () => {
+      if (!current?.active) return;
       next((stacked === undefined ? undefined : card(stacked)?.getBoundingClientRect()) ?? clicked);
     };
     if (motions.length === 0) go();
@@ -431,7 +455,7 @@ export function AgentView({
         className="agent-view"
         data-agent={agent}
         role="dialog"
-        aria-modal="true"
+        aria-modal="false"
         aria-label={name}
         tabIndex={-1}
       >
@@ -699,7 +723,7 @@ export function AgentView({
         <Rail
           element={rail}
           name={name}
-          stack={minimizing ? [itself, ...stack] : stack}
+          stack={minimizing === opening ? [itself, ...stack] : stack}
           onNew={(relation, plus) => {
             minimize(undefined, plus, (at) => {
               onNewAgent(relation, at);

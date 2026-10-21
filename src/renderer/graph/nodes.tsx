@@ -11,12 +11,11 @@ import type { Edge, EdgeProps, NodeProps } from '@xyflow/react';
 import { startTransition, useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 
-import type { AdapterId } from '../../shared/adapter';
+import { AdapterLogo } from '../AdapterLogo';
 import { useLabel } from '../useDraft';
 import { useGraphActions } from './actions';
 import { pointOnBezier } from './curve';
-import { agentLabel, connectionInfo, connectionOf, DEFAULT_AGENT } from './agents';
-import type { AgentConnection } from './agents';
+import { agentLabel, connectionOf, DEFAULT_AGENT } from './agents';
 import type { GraphNode } from './flow';
 import { SHORTCUTS } from './keys';
 import { isBlank } from '../../shared/model/queue';
@@ -30,14 +29,39 @@ import { isBlank } from '../../shared/model/queue';
 export function AgentNodeView({ id, data, parentId }: NodeProps<GraphNode>) {
   const hover = useHover();
   const isParent = useStore((state) => state.parentLookup.has(id));
-  const { remove, ungroup, queueState, groupState } = useGraphActions();
+  const { remove, ungroup, queueState, groupState, card: cardOf } = useGraphActions();
+  const card = cardOf?.(id) ?? { status: 'Idle', line: 'Idle', completed: 0, total: 0 };
+  const progress = card.total === 0 ? 0 : Math.round((card.completed / card.total) * 100);
   const state = queueState?.(id);
   const group = isParent ? groupState?.(id) : undefined;
   return (
-    <div className="graph-card" data-agent={data.adapter ?? DEFAULT_AGENT} {...hover.target}>
+    <div
+      className="graph-card"
+      data-agent={data.adapter ?? DEFAULT_AGENT}
+      data-status={card.status}
+      title={`Agent: ${agentLabel(data.adapter ?? DEFAULT_AGENT, connectionOf(data))}`}
+      {...hover.target}
+    >
       <Handle type="source" id="top" position={Position.Top} />
-      <Label id={id} label={data.label} />
-      <AgentTag agent={data.adapter ?? DEFAULT_AGENT} connection={connectionOf(data)} />
+      <div className="graph-card-top">
+        <AdapterLogo adapter={data.adapter ?? DEFAULT_AGENT} size={15} />
+        <Label id={id} label={data.label} />
+        <span className="graph-card-status-dot" aria-hidden="true" />
+      </div>
+      <div className="graph-card-status" title={card.line}>
+        {card.line}
+      </div>
+      <div
+        className="graph-card-progress"
+        role="progressbar"
+        aria-label={`${data.label || 'Unnamed agent'} queue progress`}
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={progress}
+        aria-valuetext={`${String(card.completed)} of ${String(card.total)} queued items finished`}
+      >
+        <i style={{ width: `${String(progress)}%` }} />
+      </div>
       <QueueCount count={data.queue?.filter((item) => !isBlank(item)).length ?? 0} />
       {state && (
         <span
@@ -285,21 +309,6 @@ function LabelInput({ id, label }: { id: string; label: string }) {
       />
       {problem && <span role="alert">{problem}</span>}
     </>
-  );
-}
-
-/**
- * The coding agent a node runs, colour-coded, and how it runs when connected ("Claude · Terminal").
- * Drawn by CSS, so it is not part of the label.
- */
-function AgentTag({ agent, connection }: { agent: AdapterId; connection: AgentConnection }) {
-  return (
-    <span
-      className="graph-agent"
-      data-agent={agent}
-      data-connection={connectionInfo(connection).short}
-      title={`Agent: ${agentLabel(agent, connection)}`}
-    />
   );
 }
 

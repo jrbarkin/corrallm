@@ -186,7 +186,7 @@ describe('autosize', () => {
       { ...agentNode('p', 0, 0), width: 300, height: 200 },
     ]);
     expect(result[0]).toMatchObject({ position: { x: 100, y: 100 }, ...EMPTY_FRAME });
-    expect(result[1]).toEqual(agentNode('p', 75, 0));
+    expect(result[1]).toEqual(agentNode('p', (300 - CARD_SIZE.width) / 2, 0));
   });
 
   it('returns the same array when every container fits', () => {

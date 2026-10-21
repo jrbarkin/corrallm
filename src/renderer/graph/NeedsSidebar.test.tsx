@@ -39,7 +39,7 @@ const file: NeedsItem = {
     { value: 'keep', label: 'Keep' },
   ],
 };
-function setup(items: NeedsItem[]) {
+async function setup(items: NeedsItem[]) {
   const core = fakeCore();
   cores.push(core);
   core.snapshot(`needs:${canvas}`, { items });
@@ -61,6 +61,15 @@ function setup(items: NeedsItem[]) {
       onReply={(to, choice) => core.api.reply({ canvas, to, answer: { choice } })}
     />,
   );
+  if (items.length > 0) {
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Needs you' })).not.toHaveProperty(
+        'disabled',
+        true,
+      );
+    });
+    await events.click(screen.getByRole('button', { name: 'Needs you' }));
+  }
   return core;
 }
 it.each([
@@ -74,7 +83,7 @@ it.each([
   'answers %s with one reply and keeps the %s outcome after topic removal',
   async (choice, label, outcome) => {
     const item = choice === 'apply' || choice === 'keep' ? file : proposal;
-    const core = setup([item]);
+    const core = await setup([item]);
     core.reply('reply', () => {
       core.change({ topic: `needs:${canvas}`, rev: 1, replace: { items: [] } });
       return Promise.resolve({ ok: true, value: { outcome, revs: {} } });
@@ -92,7 +101,7 @@ it.each([
   },
 );
 it('shows one current review from pushed state and Keep alone for an invalid file', async () => {
-  const core = setup([]);
+  const core = await setup([]);
   expect(screen.queryByRole('complementary')).toBeNull();
   act(() => {
     core.change({
@@ -101,13 +110,17 @@ it('shows one current review from pushed state and Keep alone for an invalid fil
       replace: { items: [{ ...file, choices: [{ value: 'keep', label: 'Keep' }] }] },
     });
   });
+  await waitFor(() => {
+    expect(screen.getByRole('button', { name: 'Needs you' })).not.toHaveProperty('disabled', true);
+  });
+  await events.click(screen.getByRole('button', { name: 'Needs you' }));
   const sidebar = await screen.findByRole('complementary', { name: 'Needs you' });
   expect(within(sidebar).getAllByText(file.title)).toHaveLength(1);
   expect(within(sidebar).queryByRole('button', { name: 'Apply' })).toBeNull();
   expect(within(sidebar).getByRole('button', { name: 'Keep' })).toBeTruthy();
 });
 it('keeps a refused reply at its card and lets it be retried', async () => {
-  const core = setup([proposal]);
+  const core = await setup([proposal]);
   core.reply('reply', { ok: false, error: { code: 'unavailable', sentence: 'Not saved' } });
   await events.click(await screen.findByRole('button', { name: 'Allow' }));
   expect(await screen.findByRole('alert')).toHaveProperty('textContent', 'Not saved');

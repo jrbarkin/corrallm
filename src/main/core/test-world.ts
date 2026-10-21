@@ -488,6 +488,7 @@ export const REAL_FIXTURES: Readonly<Record<OpName, OpFixture>> = {
         canvas: CANVAS,
         at: { x: 2000, y: 0 },
         adapter: 'codex',
+        connection: 'codex.terminal',
         expect: NO_ITEM,
         request: request(40),
       },
@@ -497,6 +498,7 @@ export const REAL_FIXTURES: Readonly<Record<OpName, OpFixture>> = {
       { at: { x: 0, y: 0 } },
       { at: { x: '0', y: 0 }, adapter: 'codex' },
       { at: { x: 0, y: 0 }, adapter: '' },
+      { at: { x: 0, y: 0 }, adapter: 'codex', connection: '' },
       { at: { x: 0, y: 0 }, adapter: 'codex', extra: true },
     ],
     meetsRule: {

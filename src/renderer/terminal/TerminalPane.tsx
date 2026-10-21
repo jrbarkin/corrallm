@@ -91,6 +91,7 @@ export function TerminalPane({
   useEffect(() => {
     const element = host.current;
     if (!element) return;
+    const focusBefore = document.activeElement;
     setState({ kind: 'waiting' });
     const screen = screens(element);
     screen.onLink((url) => {
@@ -100,7 +101,14 @@ export function TerminalPane({
     shown.current = screen;
     const link = new TerminalLink(agentId, backend, screen, (next) => {
       setState(next);
-      if (next.kind === 'live') screen.focus();
+      // A snapshot can land after the user opened a picker or moved to another field.
+      // Taking its focus would blur the picker, and its Escape would close the whole window.
+      const active = document.activeElement;
+      if (
+        next.kind === 'live' &&
+        (active === focusBefore || active === document.body || (active && element.contains(active)))
+      )
+        screen.focus();
     });
     link.start();
     linked.current = link;

@@ -1,3 +1,4 @@
+import { canvasAction } from './canvas-actions';
 import { mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -59,7 +60,7 @@ for (const snapshot of [true, false]) {
       await said.getByRole('button', { name: 'Dismiss' }).click();
       await expect(said).toHaveCount(0);
       const file = page.getByRole('toolbar', { name: 'Canvas file' });
-      await file.getByRole('button', { name: 'New' }).click();
+      await canvasAction(page, 'New');
       await expect(file).toContainText('Untitled');
     } finally {
       await close();

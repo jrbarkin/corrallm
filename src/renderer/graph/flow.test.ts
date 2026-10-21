@@ -3,7 +3,7 @@ import { newCanvasId } from '../../shared/canvas';
 import { toRows } from '../../shared/model/rows';
 import type { CanvasDocument } from '../../shared/model/canvas';
 import type { Entities, Entity } from '../../shared/model/state';
-import { absolutePosition, size } from '../../shared/model/geometry';
+import { absolutePosition, size, CARD_SIZE, PADDING } from '../../shared/model/geometry';
 import { group } from '../../shared/model/structure';
 import { CanvasFlow, nodeView } from './flow';
 import type { Graph, GraphNode } from './flow';
@@ -77,9 +77,7 @@ it('keeps selection, measurements and dragging outside the document, preserving 
   const selected = projectSelection(projected.graph, selectOnly(EMPTY_SELECTION, 'a'));
   const moved = projectOverlay(
     selected,
-    new Map([
-      ['a', { at: { x: 200, y: 300 }, dragging: true, measured: { width: 150, height: 34 } }],
-    ]),
+    new Map([['a', { at: { x: 200, y: 300 }, dragging: true, measured: CARD_SIZE }]]),
   );
   expect(moved.nodes[0]).toMatchObject({
     selected: true,
@@ -181,7 +179,7 @@ it('fits a dragged child’s containers in the overlay while leaving model and o
     edges: [],
   };
   const shown = projectOverlay(graph, new Map([['a', { at: { x: 450, y: 100 }, dragging: true }]]));
-  expect(shown.nodes[0]?.width).toBe(620);
+  expect(shown.nodes[0]?.width).toBe(450 + CARD_SIZE.width + PADDING);
   expect(shown.nodes[0]?.position).toEqual({ x: 0, y: 0 });
   expect(shown.nodes[2]).toBe(graph.nodes[2]);
   expect(graph.nodes[0]?.width).toBe(340);

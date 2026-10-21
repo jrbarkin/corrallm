@@ -1,3 +1,4 @@
+import { dismissStart } from './canvas-actions';
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -46,6 +47,7 @@ test.beforeEach(async () => {
     problems.push(error.message);
   });
   await page.waitForLoadState('load');
+  await dismissStart(page);
 });
 
 test.afterEach(async () => {
@@ -56,7 +58,9 @@ test.afterEach(async () => {
 
 /** Author the SDK connection before opening a view, so no Terminal session starts first. */
 async function openSdkAgent(name: string) {
-  const card = page.locator('.react-flow__node-agent').filter({ hasText: name });
+  const card = page
+    .locator('.react-flow__node-agent')
+    .filter({ has: page.locator('.graph-label').filter({ hasText: new RegExp(`^${name}$`) }) });
   await card.click({ button: 'right' });
   await page
     .getByRole('menu', { name: `${name} controls`, exact: true })

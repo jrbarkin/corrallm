@@ -1,0 +1,214 @@
+.canvas-dock {
+  position: absolute;
+  z-index: 1;
+  top: 62px;
+  left: 12px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  width: 52px;
+  padding: 6px 0;
+  border: 1px solid var(--float-line);
+  border-radius: 14px;
+  background: var(--float-bg);
+  box-shadow: 0 10px 28px rgb(0 0 0 / 0.16);
+  color: CanvasText;
+  backdrop-filter: blur(10px);
+  pointer-events: auto;
+}
+.canvas-dock button {
+  position: relative;
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.canvas-dock button:hover {
+  background: var(--float-hover);
+}
+.canvas-dock button:focus-visible {
+  outline: 2px solid var(--graph-accent, #3a6fd8);
+  outline-offset: -2px;
+}
+.dock-agents,
+.dock-group {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+.dock-agents {
+  max-height: calc(100vh - 245px);
+  overflow: auto;
+  scrollbar-width: thin;
+}
+.dock-group {
+  padding-top: 6px;
+  border-top: 1px solid var(--float-line);
+}
+.dock-group-name {
+  width: 36px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: center;
+  font-size: 8.5px;
+  color: var(--float-muted);
+}
+.dock-logo {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  background: var(--float-hover);
+}
+.dock-status {
+  position: absolute;
+  right: 3px;
+  bottom: 3px;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  border: 2px solid var(--float-bg);
+  background: var(--float-muted);
+}
+.dock-agent[data-status='Idle'] .dock-status {
+  display: none;
+}
+.dock-agent[data-status='Working'] .dock-status,
+.dock-agent[data-status='Pausing'] .dock-status {
+  background: #3298d9;
+  animation: dock-pulse 1.2s ease-in-out infinite;
+}
+.dock-agent[data-status='Done'] .dock-status {
+  background: #2d9d75;
+}
+.dock-agent[data-status='Needs you'] .dock-status {
+  background: var(--float-need);
+}
+.dock-agent[data-needs] {
+  border-color: var(--float-need);
+  background: color-mix(in srgb, var(--float-need) 12%, transparent);
+  animation: dock-glow 1.4s ease-in-out infinite;
+}
+.dock-agent[aria-current]::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 10px;
+  bottom: 10px;
+  width: 3px;
+  border-radius: 2px;
+  background: var(--graph-accent, #3a6fd8);
+}
+.dock-toggle[aria-pressed='true'] {
+  background: var(--graph-accent, #3a6fd8);
+  color: white;
+}
+.canvas-dock .dock-toggle {
+  font-size: 22px;
+}
+.dock-start {
+  border-top: 1px solid var(--float-line);
+  padding-top: 4px;
+}
+.dock-start > button {
+  font-size: 24px;
+}
+.canvas-dock[data-horizontal] {
+  top: 10px;
+  left: 0;
+  right: 0;
+  margin: 0 auto;
+  width: max-content;
+  max-width: calc(100% - 560px);
+  height: 52px;
+  padding: 0 6px;
+  flex-direction: row;
+}
+.canvas-dock[data-horizontal] .dock-agents {
+  min-width: 0;
+  max-height: none;
+  flex-direction: row;
+}
+.canvas-dock[data-horizontal] .dock-group {
+  flex-direction: row;
+  padding: 0 0 0 6px;
+  border-top: 0;
+  border-left: 1px solid var(--float-line);
+}
+.canvas-dock[data-horizontal] .dock-group-name {
+  display: none;
+}
+.canvas-dock[data-horizontal] .dock-start {
+  border-top: 0;
+  border-left: 1px solid var(--float-line);
+  padding: 0 0 0 4px;
+}
+.canvas-dock[data-horizontal] .dock-agent[aria-current]::before {
+  left: 10px;
+  right: 10px;
+  top: auto;
+  bottom: 0;
+  width: auto;
+  height: 3px;
+}
+.canvas-dock[data-moving] .dock-agents {
+  overflow: visible;
+}
+.dock-agent[data-status='Paused'] .dock-logo,
+.dock-agent[data-status='Stopped'] .dock-logo {
+  opacity: 0.55;
+}
+.canvas-float-position,
+.run-float {
+  z-index: 2;
+}
+@media (max-width: 1100px) {
+  .graph-editor[data-agent-open] {
+    --graph-window-strip: 120px;
+  }
+  .canvas-dock[data-horizontal] {
+    top: 60px;
+    max-width: calc(100% - 24px);
+  }
+}
+@media (max-width: 900px) {
+  .graph-editor[data-agent-open] {
+    --graph-window-strip: 168px;
+  }
+  .canvas-dock[data-horizontal] {
+    top: 108px;
+  }
+}
+/* The global queues are the other canvas view; its dock stays down the left edge. */
+.graph-editor[data-canvas-view='queues']:not([data-agent-open]) .queues-view {
+  left: 84px;
+}
+@keyframes dock-pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+@keyframes dock-glow {
+  50% {
+    box-shadow: 0 0 14px color-mix(in srgb, var(--float-need) 35%, transparent);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .dock-agent[data-needs],
+  .dock-agent[data-status='Working'] .dock-status,
+  .dock-agent[data-status='Pausing'] .dock-status {
+    animation: none;
+  }
+}

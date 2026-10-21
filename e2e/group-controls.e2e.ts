@@ -1,3 +1,4 @@
+import { dismissStart, canvasAction } from './canvas-actions';
 import { randomUUID } from 'node:crypto';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -53,6 +54,7 @@ test.beforeEach(async () => {
     if (message.type() === 'error' || message.type() === 'warning') problems.push(message.text());
   });
   await page.waitForLoadState('load');
+  await dismissStart(page);
   await expect(page.locator('.react-flow__pane')).toBeVisible();
 });
 
@@ -104,7 +106,7 @@ async function openCanvas(nodes: Node[]) {
     },
     { canvas, folder: path.join(dir, 'shop') },
   );
-  await page.getByRole('button', { name: 'Open…', exact: true }).click();
+  await canvasAction(page, 'Open…');
   await expect(page.getByText('groups.corral', { exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Choose a project folder' }).click();
   await expect(page.getByRole('button', { name: 'Project folder: shop' })).toBeVisible();

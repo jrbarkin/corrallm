@@ -147,7 +147,15 @@ function setup({
     },
   };
 }
-const button = (name: string | RegExp) => screen.getByRole('button', { name });
+const button = (name: string | RegExp) => {
+  if (
+    typeof name === 'string' &&
+    ['New', 'Open…', 'Save', 'Save as…'].includes(name) &&
+    !screen.queryByRole('button', { name })
+  )
+    fireEvent.click(screen.getByRole('button', { name: 'Canvas menu' }));
+  return screen.getByRole('button', { name });
+};
 async function called(core: ReturnType<typeof fakeCanvas>['core']) {
   await waitFor(() => {
     expect(core.operations).toHaveLength(1);
@@ -351,7 +359,7 @@ it('inserts the chosen shipped template with one operation and core-minted ids',
 it('keeps Arrange when deleting an unselected agent from its controls', async () => {
   const view = setup({ arrange: true, selected: ['b'] });
   fireEvent.mouseEnter(
-    view.node('a').querySelector('.graph-agent') ??
+    view.node('a').querySelector('.adapter-logo') ??
       view.node('a').firstElementChild ??
       view.node('a'),
   );
@@ -373,6 +381,7 @@ it('keeps Arrange when opening an agent from Needs, without a document operation
     await Promise.resolve();
   });
   fireEvent.click(button('Back'));
+  fireEvent.click(button('Needs you'));
   fireEvent.click(await screen.findByRole('button', { name: 'Open a' }));
   expect(await screen.findByRole('dialog', { name: 'a' })).toBeTruthy();
   expect(view.document.arrange).toBe(true);
@@ -543,7 +552,7 @@ it('does not leave a viewport fit queued for the first node of an empty restored
   if (!pane) throw new Error('No pane');
   fireEvent.doubleClick(pane, { clientX: 300, clientY: 200 });
   await called(view.core);
-  expect(view.document.nodes[0]?.position).toEqual({ x: 225, y: 183 });
+  expect(view.document.nodes[0]?.position).toEqual({ x: 207, y: 164 });
   expect(seen.fits).toEqual([]);
   fireEvent.doubleClick(pane, { clientX: 650, clientY: 380 });
   await waitFor(() => {

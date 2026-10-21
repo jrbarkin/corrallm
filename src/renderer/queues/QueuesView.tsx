@@ -124,7 +124,7 @@ export function QueuesView({
       if (
         event.target instanceof Element &&
         event.target.closest(
-          '.agent-settings-sheet, .agent-context-menu, .search-picker, .usage-panel, .usage-gauge[aria-expanded="true"]',
+          '.float-popover-root, .agent-settings-sheet, .agent-context-menu, .search-picker, .usage-panel, .usage-gauge[aria-expanded="true"]',
         )
       ) {
         return;
@@ -273,7 +273,7 @@ export function QueuesView({
         if (event.target === event.currentTarget) onClose();
       }}
     >
-      <div className="queues-view" role="dialog" aria-modal="true" aria-label="All queues">
+      <div className="queues-view" role="dialog" aria-modal="false" aria-label="All queues">
         <header className="agent-header">
           <button type="button" className="agent-back" aria-label="Back" onClick={onClose}>
             {backLabel}

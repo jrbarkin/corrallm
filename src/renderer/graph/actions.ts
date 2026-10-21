@@ -1,7 +1,9 @@
 import { createContext, useContext } from 'react';
+import type { AgentCard } from './agent-status';
 
 /** What node and edge views can do to the graph. GraphEditor provides them. */
 export interface GraphActions {
+  card?: (id: string) => AgentCard;
   /** Runtime queue control, shown beside the agent without changing the saved workflow. */
   queueState?: (id: string) => 'Pausing' | 'Paused' | undefined;
   groupState?: (id: string) => 'Pausing' | 'Paused' | undefined;
