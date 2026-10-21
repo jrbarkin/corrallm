@@ -288,7 +288,7 @@ function check(file: string): void {
  * reads: it isn't corrallm's, a newer corrallm made it that this one can't read, or SQLite's quick
  * check finds a fault. Nothing if it may.
  */
-function unfit(reader: Connection, file: string): Damage | Refusal | undefined {
+export function unfit(reader: Connection, file: string): Error | undefined {
   if (reader.prepare('PRAGMA application_id').get()?.application_id !== APPLICATION_ID) {
     return new Damage('it isn’t corrallm’s');
   }

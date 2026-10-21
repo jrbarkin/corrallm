@@ -45,8 +45,9 @@ import type { Database } from './store/store';
  * write per COALESCE_MS, and one before every message the run sends, so a sent message's record is
  * always on disk first. Its run and its messages are one record: each write of either holds every
  * change to the other not on disk yet (a run's only if it changed since it last was), so what
- * changes together lands together, or not at all (a kill's hold and its withdrawals, a turn's reply
- * and what its end changed in the run); and a `wait` moves every read position it moves in one
+ * changes together lands together, or not at all (a kill's hold and its withdrawals, a turn's
+ * reply and what its end changed in the run). An oversized run keeps a size refusal and its last
+ * good checkpoint instead, never failing messages for size alone. A `wait` moves every read position in one
  * write with them, or none, before it returns. Each message delivering is on disk before it is
  * sent. Whoever watches hears each message added to a canvas's store, closing it included, and each
  * thing newly waiting for an answer on it (`corrallm serve` logs them).
@@ -674,9 +675,10 @@ export class Engines {
       ...running.engine.checkpoint(),
       updatedAt: Date.now(),
     };
-    this.#deps.journal.keep(running.document.id, running.token, checkpoint);
+    const problem = this.#deps.journal.keep(running.document.id, running.token, checkpoint);
     return () => {
       running.saved = Math.max(running.saved, covered);
+      this.#deps.journal.kept(running.document.id, problem);
     };
   }
 

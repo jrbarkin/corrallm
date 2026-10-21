@@ -6,19 +6,19 @@ corrallm is a cross-platform Electron desktop app (Electron Forge + Vite + React
 
 Requires Node 24.21.0 (`.nvmrc`) and pnpm 12.11.2 (`packageManager`).
 
-| Command            | Purpose                                                                                                                                           |
-| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `pnpm dev`         | `electron-forge start`: Vite dev server + HMR; press `r` in its terminal UI after main-process changes                                            |
-| `pnpm typecheck`   | `tsc -b` over the solution (node, web, tooling projects)                                                                                          |
-| `pnpm lint`        | ESLint, type-aware, zero warnings allowed (`lint:fix` to autofix)                                                                                 |
-| `pnpm format`      | Prettier write (`format:check` to verify)                                                                                                         |
-| `pnpm test`        | Vitest: `main`, `preload` (Node) and `renderer` (jsdom) projects                                                                                  |
-| `pnpm test:e2e`    | Playwright; its global setup first builds the app unsigned (`electron-forge package`) and the CLI                                                 |
-| `pnpm package`     | Packaged app for the current OS in `out/`                                                                                                         |
-| `pnpm make`        | Installers for the current OS in `out/make/`                                                                                                      |
-| `pnpm build:cli`   | The `corrallm` CLI for plain Node (`vite.cli.config.mts`) in `dist-cli/corrallm.cjs`                                                              |
-| `pnpm corrallm`    | Runs the CLI bundle: `serve`, `wait` (see Headless) or the self-test (`scripts/corrallm.mjs`; it says to run `pnpm build:cli` when it is missing) |
-| `pnpm api:surface` | Writes `src/shared/api/surface.snap.json`, every party's surface, after the registry changes                                                      |
+| Command            | Purpose                                                                                                                                                   |
+| ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `pnpm dev`         | `electron-forge start`: Vite dev server + HMR; press `r` in its terminal UI after main-process changes                                                    |
+| `pnpm typecheck`   | `tsc -b` over the solution (node, web, tooling projects)                                                                                                  |
+| `pnpm lint`        | ESLint, type-aware, zero warnings allowed (`lint:fix` to autofix)                                                                                         |
+| `pnpm format`      | Prettier write (`format:check` to verify)                                                                                                                 |
+| `pnpm test`        | Vitest: `main`, `preload` (Node) and `renderer` (jsdom) projects                                                                                          |
+| `pnpm test:e2e`    | Playwright; its global setup first builds the app unsigned (`electron-forge package`) and the CLI                                                         |
+| `pnpm package`     | Packaged app for the current OS in `out/`                                                                                                                 |
+| `pnpm make`        | Installers for the current OS in `out/make/`                                                                                                              |
+| `pnpm build:cli`   | The `corrallm` CLI for plain Node (`vite.cli.config.mts`) in `dist-cli/corrallm.cjs`                                                                      |
+| `pnpm corrallm`    | Runs the CLI bundle: `serve`, `wait`, `dump` (see Headless) or the self-test (`scripts/corrallm.mjs`; it says to run `pnpm build:cli` when it is missing) |
+| `pnpm api:surface` | Writes `src/shared/api/surface.snap.json`, every party's surface, after the registry changes                                                              |
 
 - Run one Vitest project with `pnpm exec vitest run --project main`.
 - `E2E_SKIP_BUILD=1 pnpm test:e2e` reuses the existing production build in `.vite/` and the CLI bundle in `dist-cli/` (note `pnpm dev` overwrites `.vite/`). Headless Linux: `xvfb-run -a pnpm test:e2e`.
@@ -363,18 +363,26 @@ src/main/core/store/  The core's database (B9.0, Core Database §5): <profile>/c
                 with; once it copied all of the log it begins it anew there, cutting it back to
                 JOURNAL_SIZE_LIMIT, and the lane commits nothing meanwhile, so the two connections
                 never write at once), run once idle a second (at most 30 s after the first
-                unchecked commit), so no drive flush waits on the core's loop while it serves (only
+                unchecked commit). An idle checkpoint with no queued write also runs incremental
+                vacuum on that worker, at most 64 pages per pass, checkpointing its result;
+                another pass waits a second of idle time, and a queued write takes priority.
+                No drive flush waits on the core's loop while it serves (only
                 opening and closing sync on it). A commit's own writes into the log do run on the
                 loop, into the system's cache, which the system holds back while other programs
                 write heavily to the drive: G2 holds on a quiet drive, and only the connection on a
                 thread of its own (Core Database §4's fallback, not built) would hold it under such
                 writing. `snapshot` (snapshots.ts: SQLite's backup
-                into backups/core-<time>.db, read through a connection of its own in one step,
+                into backups/core-<time>.db, read through a connection of its own in one step;
+                the backup, conversion to a rollback journal and quick check run on the
+                checkpointer's worker, never scanning the copy on the core's loop;
+                idle checkpoints wait until that snapshot ends, leaving foreground writes free;
                 quick-checked and forced to disk before it is named, never kept with a fault, the
                 newest three kept, what one cut short left removed by the next; taken as it closes
                 and every four hours) and `close` (writes, and transactions outside one, refused
-                from its start; the lane drained and flushed, the checkpointer's thread ended, a
-                TRUNCATE checkpoint, a snapshot; once). `Database` is what the stores kept in it
+                from its start; the lane drained and flushed, a TRUNCATE checkpoint, a snapshot,
+                then the checkpointer's thread ended; once). The worker captures its unused stdout
+                and stderr instead of opening the parent's terminal streams, which may already
+                have hung up when the closing snapshot starts it. `Database` is what the stores kept in it
                 read and write through: the Store, or, when it couldn't be opened, `unopened` (every
                 read and write fails, saying why). createCore opens it first (once core.lock is
                 held: entry.ts, serve) and closes it last, after journaling; what opening it said is
@@ -400,6 +408,23 @@ src/main/core/store/  The core's database (B9.0, Core Database §5): <profile>/c
                 openedLast, forgetRun) or a connection of the test's own (onDisk, journaledRun,
                 readPositions, refuseWrites: triggers that fail a table's writes), never by writing
                 its files.
+                An oversized run (over MAX_RUN_BYTES, 32 MiB) leaves its last good checkpoint in
+                place and keeps a saveError in the run's JSON in the same commit as its messages.
+                Messages still reach the drive before delivery; size alone never fails them.
+                run:get reports saveError (and a restore notice), and Needs shows a canvas-wide
+                `unsaved/<canvas>` warning, with no answer. A smaller checkpoint or forgetting
+                the run clears it. A renderer's oversized run:save records the warning then
+                rejects, so it never claims to have saved progress; core journaling can continue.
+                Restart restores only the last checkpoint that fit, paused, with that warning.
+                `dump` (store/dump.ts, cli/dump.ts) reads canvases (including their document's
+                rows and conversations), runs and messages as JSON lines in one read transaction,
+                including committed WAL rows. It uses SQLite READONLY and query_only, never the
+                store's writer, migrations, recovery, checkpoints or core.lock. It shares open.ts'
+                application-id, min-reader and integrity checks, refusing before its first line;
+                schema 1 can be inspected without migration. As with any SQLite WAL reader, it
+                participates in -shm and may create an empty -wal/-shm on a closed database;
+                it writes no database page or WAL frame. A slow output pipe pins its read view
+                (the owner's writes still continue) and is awaited, never accumulated in memory.
 src/main/api/   mcp.ts, the agents' server: MCP over streamable HTTP on 127.0.0.1, generated from
                 the registry (one tool per op, listed by the caller's party; every call through
                 core.call), the caller named by its bearer token: an agent's session or an outside
@@ -916,6 +941,7 @@ What parties send a canvas's agents (API Spec §5, Core Server §5.9), served by
 - `corrallm serve --canvas <file> [--canvas <file>…] [--profile <dir>] [--port <n>] [--new-token [--name <name>] [--hours <1-12>] [--read-only]]` runs the core under plain Node, on the app's profile (`appProfile`) or `--profile`, with the Node host (`core/host/node.ts`: no dialogs). It makes a profile it lacks 0700, takes the profile's `core.lock`, opens its database, opens each `--canvas` only if canvas memory names that very file (by real path) for the canvas it holds and keeps a project folder for it that is still there (`Core.keptCanvas`; otherwise it says, naming the file, to open the canvas and pick its folder in the app), restores each run paused (which holds only the run's own sends, so parties' messages still reach idle agents), starts MCP (`api/mcp.ts`, its callers named by `Core.clientOf`: a token's canvases are those it was granted and those its party made) on `--port` (kept as the profile's port), else `settings.json`'s `api.port` (chosen free once and kept), exiting with a sentence naming a port that is taken, writes `api.json` (0600: `{ url, port, pid, started }`), and logs a line to stderr per message, reply, notice and need (`Core.watch`, heard from before the canvases open, each named before it opens, so that what one has waiting as it opens is said by its name), every control character in it escaped (`\x1b`), since the names and titles it quotes come from canvases, agents and MCP servers. Canvases open held: nothing is delivered until every check that may refuse the start has passed (`Core.deliver`), so a refused start sends nothing; one told to stop as it starts (while it reads the login shell for `--new-token`, say) makes no token, delivers nothing and stops. It names each canvas by its file and id; on a profile other than the app's, it says to export `CORRALLM_URL`. SIGINT, SIGTERM or SIGHUP close the server, hold each run where it is, journal, end the sessions, write out the stores, close the database, remove `api.json` and release the lock; told again meanwhile, it says it is stopping already, and a stderr that went away (its terminal closed) never stops it short. Then it exits, its terminal gone or not: as the CLI exits (`cli/main.ts`' `exit`), it waits only for the streams its command printed on (`serve` never prints on stdout, which Node would open as it is first asked for, and on macOS opening a terminal that hung up never returns), and on a terminal at most a second. It exits 1 when it refuses to start.
 - `--new-token` makes an outside token for the canvases named, called `--name` (`orchestrator` by default), read-write unless `--read-only`, for `--hours`, and prints it once, with the URL and each installed adapter's `registerMcp` filled in (`{server}` `corrallm-outside`, `{url}`, `{var}` `CORRALLM_OUTSIDE_TOKEN`), so the platform holds no CLI's syntax. Claude Code expands `${CORRALLM_OUTSIDE_TOKEN}` in a header `claude mcp add` saved (checked with 2.1.303: Build Plan Q23).
 - `corrallm wait [--for <id>] [--after <cursor>] [--timeout <s>]` makes one `tools/call` POST of `wait` to `CORRALLM_URL`, else to the app profile's `api.json` while its process lives, with the token only from `CORRALLM_OUTSIDE_TOKEN`, and prints one JSON line (the result, or `{ error }`), exiting 0 (something came), 1 (the time limit passed), 2 (its token refused: none, a wrong one, one expired or replaced, the last told by `TOKEN_REPLACED`), 3 (no server answered, or a URL that isn't corrallm's on this machine, or none that can take the wait now: one that can't wait now, or the token's waits at their limit, told by `TOO_MANY_WAITS`; it may try again later) or 5 (the wait refused for what it asked: a cursor or message id the server doesn't know); a command line that can never work exits 64, with an `invalid` error line. It sends its token only to http on 127.0.0.1 or localhost (`loopbackUrl`), and finds a server in `api.json` only while a process with its pid and start time runs (`stillRuns`). `--timeout` is at most `MAX_WAIT_SECONDS`, an hour, and that by default.
+- `corrallm dump [--profile <dir>]` inspects that profile (the app's by default), with no token, server or core.lock: one read-only transaction prints JSON lines of `{ type: 'canvas' | 'run' | 'message', data }`, canvas lines also holding `document` (its rows), `conversations`, and, on schema 1, `workflow`. Known JSON columns are decoded. It reads the running owner's committed WAL, never migrates, repairs or checkpoints, refuses databases this build cannot read before printing, and exits 0 on success or 1 with a diagnostic on stderr. It does not create a missing profile or database. SQLite may create/use its reader sidecars (-shm and an empty -wal), but writes no database pages or WAL frames. A slow pipe is fully drained, with each line awaited.
 - `wait` (`core/ops/wait.ts`; MCP only, deviation `transport`; a long poll, `waits` in its surface, which the limit on calls in flight leaves out, counting it against `TOKEN_WAITS` waits in flight instead) returns the messages addressed to the caller's party on its canvases after its starting point, oldest first, a page at most, or waits for the next until `timeoutSeconds` pass, its caller gives up, or its token is replaced or expires (then it is refused, `TOKEN_REPLACED`). The starting point is `after`'s place in each canvas's store (0 in one the cursor doesn't name), else the party's read position; `for` keeps what concerns one message, and moves nothing. Cursors say which op gave them: `wait` takes only its own and `status`'s (a `messages` cursor names one canvas), and none past what a store holds. Waits that read on from the read position (no `after`, no `for`) take turns, each reading it afresh, so one message wakes only one of them with it. It never consumes. One without `for` moves the party's read position forward (`core/delivery/reads.ts`), only once it is committed (`read_position`), before it returns: the party's, not the token's, so a renewed token reads on from it. Every canvas's position moves in one write (`Engines.advance`), with what each canvas has to journal, or none: a wait whose positions can't be written fails, so no message is skipped. `status`'s cursor is at the end of every canvas the caller has.
 
 Exiting waits for every pipe to drain fully. Each terminal stream has its own one-second cap, so a terminal on stderr never cuts off wait’s piped JSON line.

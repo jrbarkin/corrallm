@@ -88,7 +88,7 @@ export const SYSTEM_DEPS: StoreDeps = {
  * between bursts of work, not in their middle.
  */
 const CHECKPOINT_IDLE_MS = 1000;
-/** The longest a store that never pauses goes without checkpointing, so its log stays short. */
+/** The longest between checkpoints, except while a snapshot occupies the worker. */
 const CHECKPOINT_AT_MOST_MS = 30_000;
 /**
  * How often the store takes a snapshot of itself besides as it closes: every four hours, so the
@@ -264,6 +264,10 @@ export class Store {
    * rejects if it couldn't be, or a flush it waited for failed.
    */
   checkpoint(): Promise<void> {
+    return this.#checkpointNow(false);
+  }
+
+  #checkpointNow(idle: boolean): Promise<void> {
     if (this.#failed !== undefined) return Promise.reject(this.#failed);
     if (this.#checkpointing !== undefined) return this.#checkpointing;
     const checkpointing = (async () => {
@@ -271,7 +275,18 @@ export class Store {
       while (this.#flushing !== undefined) await this.#flushing;
       if (this.#failed !== undefined) throw this.#failed;
       try {
-        await this.#checkpointer.checkpoint();
+        const done = await this.#checkpointer.checkpoint();
+        // A queued write always takes priority. Once begun, a vacuum pass holds the lane for
+        // at most VACUUM_PAGES pages; subsequent passes must wait for another idle interval.
+        if (idle && this.#canVacuum() && done.log === done.checkpointed) {
+          const remaining = await this.#checkpointer.vacuum();
+          if (remaining > 0 && this.#canVacuum()) {
+            this.#cancelCheckpoint?.();
+            this.#cancelCheckpoint = this.#deps.later(() => {
+              this.#checkpoint();
+            }, CHECKPOINT_IDLE_MS);
+          }
+        }
       } catch (error) {
         throw new Error(`Could not checkpoint the core’s database: ${reason(error)}`, {
           cause: error,
@@ -288,6 +303,15 @@ export class Store {
     return checkpointing;
   }
 
+  #canVacuum(): boolean {
+    return (
+      !this.#shut &&
+      this.#failed === undefined &&
+      this.#queue.length === 0 &&
+      this.#snapshotting === undefined
+    );
+  }
+
   /**
    * Takes a snapshot of the database now, as it goes on being written (one at a time: asked for
    * while one is being taken, it is that one). Resolves with its file.
@@ -296,11 +320,25 @@ export class Store {
     if (this.#failed !== undefined) return Promise.reject(this.#failed);
     if (this.#snapshotting !== undefined) return this.#snapshotting;
     const at = this.#deps.now();
-    const taking = takeSnapshot(this.file, this.#profile, at, (file) => {
-      this.#taken.push({ file, commits: this.#commits });
-    }).finally(() => {
-      this.#snapshotting = undefined;
-    });
+    const taking = takeSnapshot(
+      this.file,
+      this.#profile,
+      at,
+      (file) => {
+        if (this.#failed !== undefined) throw this.#failed;
+        this.#taken.push({ file, commits: this.#commits });
+      },
+      this.#checkpointer,
+    )
+      .then((file) => {
+        // Failure can arrive while place() awaits its rename/directory sync. Cleanup still tracks
+        // that file, but no caller may receive it as a successful snapshot of a failed store.
+        if (this.#failed !== undefined) throw this.#failed;
+        return file;
+      })
+      .finally(() => {
+        this.#snapshotting = undefined;
+      });
     this.#snapshotting = taking;
     this.#snapshotAt = at;
     return taking;
@@ -330,7 +368,6 @@ export class Store {
       await this.#forgetting;
       return;
     }
-    await this.#checkpointer.close();
     await this.#snapshotting?.catch(() => undefined);
     try {
       this.#connection.prepare('PRAGMA wal_checkpoint(TRUNCATE)').get();
@@ -342,6 +379,7 @@ export class Store {
     } catch (error) {
       console.error('Could not take a snapshot of the core’s database as it closed:', error);
     }
+    await this.#checkpointer.close();
     this.#connection.close();
     if (this.#log !== undefined) closeSync(this.#log);
   }
@@ -559,9 +597,17 @@ export class Store {
   /** Once idle: checkpoints the log, off the loop, and takes the snapshot due, if one is. */
   #checkpoint(): void {
     this.#cancelCheckpoint = undefined;
-    this.#uncheckpointedSince = undefined;
     if (this.#failed !== undefined) return;
-    this.checkpoint().catch((error: unknown) => {
+    // A synchronous scan on the shared worker cannot take a checkpoint job meanwhile. Do not
+    // hold the write lane waiting behind that scan; try maintenance again once idle later.
+    if (this.#snapshotting !== undefined) {
+      this.#cancelCheckpoint = this.#deps.later(() => {
+        this.#checkpoint();
+      }, CHECKPOINT_IDLE_MS);
+      return;
+    }
+    this.#uncheckpointedSince = undefined;
+    this.#checkpointNow(true).catch((error: unknown) => {
       // Failing closed is said once, as it fails.
       if (error !== this.#failed) console.error(error);
     });

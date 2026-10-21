@@ -121,8 +121,14 @@ function createHandlers({
       parseArgs: noArgs,
       handler: async ({ window }) => {
         const canvas = await of(window);
-        const { id, token, checkpoint, warning } = await runs.get(canvas);
-        return { id, token, checkpoint, notices: warning === undefined ? [] : [warning] };
+        const { id, token, checkpoint, warning, saveError } = await runs.get(canvas);
+        return {
+          id,
+          token,
+          checkpoint,
+          ...(saveError === undefined ? {} : { saveError }),
+          notices: [warning, saveError].filter((one) => one !== undefined),
+        };
       },
     },
     'run:save': {
@@ -131,7 +137,7 @@ function createHandlers({
         if (args.length !== 2 || typeof token !== 'string' || token.length > 100) {
           throw new TypeError('Expected a canvas token and a run checkpoint');
         }
-        return [token, checkpoint === null ? null : parseRunCheckpoint(checkpoint)];
+        return [token, checkpoint === null ? null : parseRunCheckpoint(checkpoint, true)];
       },
       handler: async ({ window }, token, checkpoint) => {
         const canvas = await of(window);

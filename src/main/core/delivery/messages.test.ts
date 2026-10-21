@@ -2,7 +2,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 
 import { STORE_BYTES, STORE_SETTLED_PER_PARTY } from '../../../shared/api/limits';
 import type { CanvasId } from '../../../shared/canvas';
@@ -12,8 +12,8 @@ import { CanvasMemory } from '../../memory';
 import { STORE_FILE } from '../store/open';
 import { settleRestored } from '../store/restored';
 import { connect } from '../store/sqlite';
-import { SYSTEM_DEPS, unopened } from '../store/store';
-import type { Store, StoreDeps } from '../store/store';
+import { Store, SYSTEM_DEPS, unopened } from '../store/store';
+import type { StoreDeps } from '../store/store';
 import { openTestStore, readOnDisk, refuseWrites } from '../store/test-store';
 import { isActive, MessageStore, MessageTable } from './messages';
 import { scanPrune } from './test-prune';
@@ -360,11 +360,17 @@ describe('the message store', () => {
 });
 
 describe('incremental pruning', () => {
-  it(
-    'keeps exactly the scan algorithm’s set through seeded changes, restarts, restores and staged rollbacks',
+  it.each([0x54b, 0x55b])(
+    'keeps exactly the scan algorithm’s set through seeded changes, restarts, restores and staged rollbacks (seed %i)',
     { timeout: 30_000 },
-    async () => {
-      let seed = 0x54b;
+    async (initialSeed) => {
+      // Exercise real SQLite closes/reopens, restores and pruning, without making an unrelated
+      // backup at every randomized restart. Snapshot publication has its own store tests.
+      const snapshots = vi.spyOn(Store.prototype, 'snapshot').mockResolvedValue('unused');
+      onTestFinished(() => {
+        snapshots.mockRestore();
+      });
+      let seed = initialSeed;
       const random = () => {
         seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
         return seed / 0x100000000;
@@ -407,7 +413,7 @@ describe('incremental pruning', () => {
         keepAdded(message);
       }
       const seen = new Set<number>();
-      for (let step = 0; step < 800; step++) {
+      for (let step = 0; step < 400; step++) {
         const ids = [...expected.keys()];
         const roll = Math.floor(random() * 10);
         seen.add(roll);
@@ -547,6 +553,7 @@ describe('incremental pruning', () => {
       expect(seen.size).toBe(10);
       expect(dropped.quota).toBeGreaterThan(0);
       expect(dropped.bytes).toBeGreaterThan(0);
+      expect(snapshots.mock.calls.length).toBeGreaterThan(40);
       await messages.durable();
       expect(rows().map(({ id }) => id)).toEqual([...expected.keys()]);
     },

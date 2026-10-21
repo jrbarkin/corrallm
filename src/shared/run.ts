@@ -19,6 +19,8 @@ export interface RunContext {
   id: CanvasId;
   token: string;
   checkpoint: RunCheckpoint | null;
+  /** Current progress exceeds the journal's bound; checkpoint is the last good one, if any. */
+  saveError?: string;
 }
 
 /** Restore notices come from the core alongside the run, rather than document metadata. */
@@ -30,7 +32,7 @@ export const MAX_RUN_BYTES = 32 * 1024 * 1024;
 const MAX_JSON_NODES = 200_000;
 
 /** The core bounds the opaque JSON; the renderer validates its run schema in depth. */
-export function parseRunCheckpoint(value: unknown): RunCheckpoint {
+export function parseRunCheckpoint(value: unknown, allowOversized = false): RunCheckpoint {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     throw new TypeError('Expected a run checkpoint');
   }
@@ -45,6 +47,14 @@ export function parseRunCheckpoint(value: unknown): RunCheckpoint {
     record.updatedAt < 0
   ) {
     throw new TypeError('Invalid run checkpoint version or timestamp');
+  }
+  if (typeof record.state !== 'string' || typeof record.messages !== 'string') {
+    throw new TypeError('Expected run state and messages JSON');
+  }
+  // Only run:save accepts an oversize envelope, so the journal can persist its refusal. Its
+  // payload is never parsed or stored. Every checkpoint reader retains the strict bound.
+  if (allowOversized && record.state.length + record.messages.length > MAX_RUN_BYTES) {
+    return record as unknown as RunCheckpoint;
   }
   let size = 0;
   for (const key of ['state', 'messages'] as const) {

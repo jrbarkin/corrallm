@@ -233,6 +233,10 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
   const journal = new RunJournal({
     store,
     memory,
+    problemChanged: (canvas) => {
+      topics.changed(`needs:${canvas}`, 'corrallm');
+      engines.needsChanged(canvas);
+    },
     // What it set aside or restored, said with the first canvas restored, as its runs' are.
     ...(opened.store === undefined ? {} : { said: opened.said }),
   });
@@ -424,6 +428,7 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
       ...proposals.items(canvas),
       ...reviews.items(canvas),
       ...stalled.items(canvas),
+      ...journal.items(canvas),
     ];
   };
   const needOf = (canvas: CanvasId, id: string) =>
@@ -465,6 +470,7 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
       ...proposals.items(canvas),
       ...reviews.items(canvas),
       ...stalled.items(canvas),
+      ...journal.items(canvas),
     ],
   });
   const warnings = new Set<Promise<void>>();
@@ -585,6 +591,7 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
         windows,
         sessions,
         stalled,
+        runProblems: (canvas) => journal.items(canvas),
         environment,
         usage,
         engines,

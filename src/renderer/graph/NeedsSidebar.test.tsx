@@ -40,6 +40,22 @@ const file: NeedsItem = {
     { value: 'keep', label: 'Keep' },
   ],
 };
+
+it('shows the core’s persistent oversized-run warning without offering an answer', async () => {
+  const problem: NeedsItem = {
+    ...proposal,
+    id: `unsaved/${canvas}`,
+    kind: 'hold',
+    by: [],
+    title: 'Run progress is too large to save',
+    detail: 'Messages are still recorded and delivered.',
+    choices: [],
+  };
+  await setup([problem]);
+  const card = screen.getByRole('article', { name: problem.title });
+  expect(within(card).getByText(problem.detail ?? '')).toBeTruthy();
+  expect(within(card).queryAllByRole('button')).toHaveLength(0);
+});
 async function setup(items: NeedsItem[], nodes: CanvasNode[] = []) {
   const core = fakeCore();
   cores.push(core);
