@@ -131,6 +131,20 @@ function initialItem(id: string): string {
 }
 
 describe('canvas structure commits through core.call', () => {
+  it('creates an agent on the user’s chosen connection in one revision', async () => {
+    const result = await edit('canvas.addAgent', { at: { x: 1500, y: 0 }, adapter: 'claude-code', connection: 'claude-code.sdk' });
+    const id = created(result);
+    expect(node(id).data).toMatchObject({ adapter: 'claude-code', connection: 'claude-code.sdk' });
+    committed('canvas.addAgent', result, [nodeKey(id), initialItem(id)]);
+  });
+  it('refuses a connection belonging to another adapter without committing', async () => {
+    expect(await core.call('canvas.addAgent', { canvas: CANVAS, at: { x: 1500, y: 0 }, adapter: 'codex', connection: 'claude-code.sdk' }, CALLERS.you)).toMatchObject({ ok: false, error: { code: 'invalid' } });
+    expect(rows()).toEqual([]);
+  });
+  it('still refuses a token creating an agent on a connection other than its first', async () => {
+    expect(await core.call('canvas.addAgent', { canvas: CANVAS, at: { x: 1500, y: 0 }, adapter: 'claude-code', connection: 'claude-code.sdk', request: '834fb544-702d-461a-9b39-ae7a3d3a4239' }, CALLERS['outside-write'])).toMatchObject({ ok: false, error: { code: 'refused' } });
+    expect(rows()).toEqual([]);
+  });
   it('adds an agent and its initial item in one revision', async () => {
     const result = await edit('canvas.addAgent', { at: { x: 1500, y: 0 }, adapter: 'codex' });
     const id = created(result);

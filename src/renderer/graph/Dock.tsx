@@ -7,7 +7,6 @@ import { queueControlText } from '../../shared/engine/run/controls';
 import { AdapterLogo } from '../AdapterLogo';
 import { slide } from '../agent/motion';
 import { agentLabel, connectionOf, DEFAULT_AGENT } from './agents';
-import { FloatPopover } from './FloatPopover';
 import './Dock.css';
 
 /** The canvas's agents, grouped as on the canvas; the same buttons become its window taskbar. */
@@ -20,8 +19,7 @@ export function Dock({
   queues,
   onToggleQueues,
   onOpen,
-  onNew,
-  onTemplates,
+  onStart,
 }: {
   nodes: readonly CanvasNode[];
   sessions: Readonly<Record<string, Session>>;
@@ -31,8 +29,7 @@ export function Dock({
   queues: boolean;
   onToggleQueues: () => void;
   onOpen: (id: string) => void;
-  onNew: () => void;
-  onTemplates: () => void;
+  onStart: () => void;
 }) {
   const root = useRef<HTMLElement>(null);
   const horizontal = current !== undefined;
@@ -163,30 +160,7 @@ export function Dock({
       </button>
       <div className="dock-agents">{(children.get(undefined) ?? []).map(group)}</div>
       <div className="dock-start" data-dock-id="start">
-        <FloatPopover label="Start a session" button={<span aria-hidden="true">+</span>}>
-          {(close) => (
-            <>
-              <button
-                type="button"
-                onClick={() => {
-                  close();
-                  onNew();
-                }}
-              >
-                New canvas
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  close();
-                  onTemplates();
-                }}
-              >
-                Browse templates
-              </button>
-            </>
-          )}
-        </FloatPopover>
+        <button type="button" aria-label="Start a session" title="Start a session" onClick={onStart}>+</button>
       </div>
     </nav>
   );

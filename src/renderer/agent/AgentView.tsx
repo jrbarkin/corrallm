@@ -128,6 +128,7 @@ export function AgentView({
   origin,
   from,
   opening,
+  openingDuration = 350,
   stack,
   onNewAgent,
   onSwitch,
@@ -151,6 +152,7 @@ export function AgentView({
   node: AgentNode;
   /** A new identity for each request to show the window, even for the same agent. */
   opening: object;
+  openingDuration?: number | undefined;
   /** Every node of the graph: what queued items can act on. */
   nodes: readonly CanvasNode[];
   /** Where the node's card is on screen: the panel grows from it and shrinks back into it. */
@@ -213,7 +215,7 @@ export function AgentView({
       const card = from ?? origin();
       if (card) {
         current.animations = [
-          morph(panel.current, card, 'open', from ? { duration: 350, fade: true } : {}),
+          morph(panel.current, card, 'open', from ? { duration: openingDuration, fade: true } : {}),
           !from && animate(backdrop.current, [{ opacity: 0 }, { opacity: 1 }], { duration: 300 }),
           animate(content.current, [{ opacity: 0 }, { opacity: 1 }], {
             duration: 180,
@@ -230,7 +232,7 @@ export function AgentView({
         animation.cancel();
       }
     };
-  }, [origin, from, opening]);
+  }, [origin, from, opening, openingDuration]);
 
   const close = useCallback(() => {
     if (leaving.current) return;

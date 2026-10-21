@@ -73,6 +73,8 @@ import { areLinked, groupMembers as groupAgentIds, isGroup } from '../../shared/
 import type { Graph } from './flow';
 import { ExampleGallery } from './ExampleGallery';
 import type { TemplateChoices } from './ExampleGallery';
+import type { TemplateInfo } from '../../shared/templates';
+import { StartSession } from './StartSession';
 import { CanvasMenu } from './CanvasMenu';
 import { RunFloat, ZoomFloat } from './Floats';
 import { Dock } from './Dock';
@@ -390,11 +392,13 @@ function Editor({
     sessionStore.forgetOptions();
   }, [project?.path, sessionStore]);
   /** Whether the templates gallery is open. */
-  const [gallery, setGallery] = useState(false);
+  const [gallery, setGallery] = useState<boolean | TemplateInfo>(false);
+  const [startChoice, setStartChoice] = useState<{ canvas: CanvasId; open: boolean }>();
+  const showStart = canonical !== undefined && (startChoice?.canvas === canvasId ? startChoice.open : files && model.nodes.length === 0);
   /** Which CLIs the user has, asked of main as the gallery opens: its agents' default connections. */
   const [installed, setInstalled] = useState<InstalledClis>();
   useEffect(() => {
-    if (!gallery) return;
+    if (!gallery && !showStart) return;
     let open = true;
     (sessionBackend ?? NO_BACKEND).installed().then(
       (found) => {
@@ -405,7 +409,7 @@ function Editor({
     return () => {
       open = false;
     };
-  }, [gallery, sessionBackend]);
+  }, [gallery, showStart, sessionBackend]);
   /** Every agent's queue, side by side, if shown: opened from the canvas, or from an agent. */
   const [queues, setQueues] = useState<{ from?: string }>();
   /** The canvas's saved automatic layout setting (nodes cannot be dragged while it is on). */
@@ -418,7 +422,7 @@ function Editor({
    */
   const [opened, setOpened] = useState<{
     ids: readonly string[];
-    from?: { id: string; rect: DOMRect };
+    from?: { id: string; rect: DOMRect; duration?: number };
   }>({ ids: [] });
   /** Those still on the canvas (agents deleted meanwhile drop out), the one shown first. */
   const openedIds = useMemo(() => {
@@ -466,6 +470,7 @@ function Editor({
   const wrapper = useRef<HTMLDivElement>(null);
   /** Whether a panel, menu or question is open, which has the keyboard (Escape closes it). */
   const modal =
+    showStart ||
     front !== undefined ||
     work !== undefined ||
     drawn !== undefined ||
@@ -474,9 +479,9 @@ function Editor({
     gallery ||
     queues !== undefined;
   // The keyboard handler and file commands read these without re-subscribing on every change.
-  const latest = useRef({ graph, modal });
+  const latest = useRef({ graph, modal, start: showStart });
   useEffect(() => {
-    latest.current = { graph, modal };
+    latest.current = { graph, modal, start: showStart };
   });
   const perform = useCallback(<T,>(pending: Promise<T>, done?: (value: T) => void) => {
     void pending.then(done, (error: unknown) => {
@@ -812,7 +817,7 @@ function Editor({
         void flushDrafts(() => {
           if (file === 'save' || file === 'saveAs') {
             commands.save(file === 'saveAs');
-          } else if (!latest.current.modal) {
+          } else if (!latest.current.modal || latest.current.start) {
             if (file === 'new') commands.new();
             else commands.open();
           }
@@ -1059,6 +1064,7 @@ function Editor({
         data-window-open={front !== undefined || queues !== undefined ? '' : undefined}
         data-agent-open={front !== undefined ? '' : undefined}
         data-canvas-view={queues ? 'queues' : 'graph'}
+        data-start-open={showStart ? '' : undefined}
         ref={wrapper}
         inert={restoring}
         aria-busy={restoring}
@@ -1107,7 +1113,7 @@ function Editor({
           </p>
         )}
         <ReactFlow
-          inert={front !== undefined || queues !== undefined}
+          inert={showStart || front !== undefined || queues !== undefined}
           nodes={nodes}
           edges={edges}
           nodeTypes={nodeTypes}
@@ -1344,6 +1350,7 @@ function Editor({
                 });
               }}
               onExamples={() => {
+                setStartChoice({ canvas: canvasId, open: false });
                 setGallery(true);
               }}
               onDismiss={() => {
@@ -1387,6 +1394,7 @@ function Editor({
                   sessionStore.answerQuestion(agentId, promptId, index, answer);
                 }}
                 onOpen={(agentId) => {
+                  setStartChoice({ canvas: canvasId, open: false });
                   selectOne(agentId);
                   setOpened({ ids: [agentId] });
                 }}
@@ -1420,6 +1428,7 @@ function Editor({
             queues={queues !== undefined}
             onToggleQueues={() => {
               void flushDrafts(() => {
+                setStartChoice({ canvas: canvasId, open: false });
                 setQueues((current) => (current ? undefined : front ? { from: front } : {}));
               }).catch((error: unknown) => {
                 setProblem(ipcErrorMessage(error));
@@ -1427,6 +1436,7 @@ function Editor({
             }}
             onOpen={(id) => {
               void flushDrafts(() => {
+                setStartChoice({ canvas: canvasId, open: false });
                 setQueues(undefined);
                 selectOne(id);
                 setOpened(({ ids }) => ({ ids: [id, ...ids.filter((other) => other !== id)] }));
@@ -1434,13 +1444,10 @@ function Editor({
                 setProblem(ipcErrorMessage(error));
               });
             }}
-            onNew={commands.new}
-            onTemplates={() => {
-              setGallery(true);
-            }}
+            onStart={() => { setStartChoice({ canvas: canvasId, open: true }); }}
           />
         </div>
-        {openedNode && (
+        {openedNode && !showStart && (
           <AgentView
             key={openedNode.id}
             opening={opened}
@@ -1452,6 +1459,7 @@ function Editor({
             nodes={displayNodes}
             origin={openedCard}
             from={opened.from?.id === openedNode.id ? opened.from.rect : undefined}
+            openingDuration={opened.from?.duration}
             stack={stack}
             onNewAgent={(relation, from) => {
               perform(
@@ -1630,9 +1638,29 @@ function Editor({
             onClose={closeQueues}
           />
         )}
+        {showStart && !gallery && (
+          <StartSession
+            canvas={canvasId} mirror={mirror} project={project} installed={installed}
+            onChooseProject={commands.chooseProject}
+            onClose={() => { setStartChoice({ canvas: canvasId, open: false }); }}
+            onTemplate={(template) => { setStartChoice({ canvas: canvasId, open: false }); setGallery(template); }}
+            onShow={commands.show}
+            onStart={async (adapter, connection, from) => {
+              await flushDrafts();
+              const box = wrapper.current?.getBoundingClientRect();
+              const at = box ? screenToFlowPosition({ x: box.left + box.width / 2, y: box.top + box.height / 2 }) : { x: 0, y: 0 };
+              const result = await api.canvasAddAgent({ canvas: canvasId, at, adapter, connection });
+              if (binding.canvas !== canvasId || !('id' in result)) return;
+              setStartChoice({ canvas: canvasId, open: false });
+              selectOne(result.id);
+              setOpened({ ids: [result.id], from: { id: result.id, rect: from, duration: 440 } });
+            }}
+          />
+        )}
         {gallery && (
           <ExampleGallery
-            canInsert={graph.nodes.length > 0}
+            canInsert={gallery === true && graph.nodes.length > 0}
+            initialTemplate={typeof gallery === 'object' ? gallery : undefined}
             installed={installed}
             onPick={(template, choices, use) => {
               setGallery(false);

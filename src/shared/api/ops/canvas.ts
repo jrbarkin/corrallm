@@ -144,6 +144,7 @@ export const canvasOps = {
       canvas: OpCanvas,
       at: Position,
       adapter: z.string().min(1).max(32).regex(ID_PATTERN),
+      connection: CatalogId.optional(),
       role: Role.optional(),
     }),
     output: z.strictObject({ id: AgentId }),

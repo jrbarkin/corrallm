@@ -261,9 +261,15 @@ export function fakeCanvas(initial: CanvasDocument) {
           built = Q.update(document, { agent, item, change: change as QueueChange }, 'you');
           break;
         }
-        case 'canvas.addAgent':
-          built = S.addAgent(document, OPS[op].input.parse(raw), context);
+        case 'canvas.addAgent': {
+          const args = OPS[op].input.parse(raw);
+          const added = S.addAgent(document, args, context);
+          built = args.connection === undefined || !('id' in added.result) ? added : {
+            ...added,
+            next: A.setConnection(added.next, { agent: added.result.id, connection: args.connection }, { catalog: catalog(), defaultAdapter: DEFAULT_AGENT }).next,
+          };
           break;
+        }
         case 'canvas.spawnAgent':
           built = S.spawnAgent(document, OPS[op].input.parse(raw), context);
           break;

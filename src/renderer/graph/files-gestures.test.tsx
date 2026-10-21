@@ -82,15 +82,12 @@ it.each([
   });
 });
 
-it('the dock’s New canvas is one create, keeping the previous canvas open', async () => {
+it('the dock opens Start without changing the current canvas', async () => {
   const canvas = setup();
   canvas.meta({ edited: true });
   await events.click(screen.getByRole('button', { name: 'Start a session' }));
-  await events.click(screen.getByRole('button', { name: 'New canvas' }));
-  await waitFor(() => {
-    expectOneOp(canvas.core, 'canvas.create', {});
-  });
-  expect(screen.queryByRole('alertdialog')).toBeNull();
+  expect(screen.getByRole('dialog', { name: 'Start a session' })).toBeTruthy();
+  expect(canvas.core.operations).toEqual([]);
 });
 
 it.each(['New', 'Open…'])('%s keeps edited work without a discard question', async (button) => {

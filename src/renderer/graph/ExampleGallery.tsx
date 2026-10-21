@@ -47,18 +47,26 @@ type Chosen = Omit<TemplateChoices, 'connections'> & {
 export function ExampleGallery({
   canInsert,
   installed,
+  initialTemplate,
   onPick,
   onClose,
 }: {
   canInsert: boolean;
   /** Which CLIs the user has; undefined while main has not said. */
   installed?: InstalledClis | undefined;
+  initialTemplate?: TemplateInfo | undefined;
   onPick: (example: TemplateInfo, choices: TemplateChoices, use: TemplateUse) => void;
   onClose: () => void;
 }) {
   const panel = useRef<HTMLDivElement>(null);
   /** The template picked, and what it is to be used with so far. */
-  const [chosen, setChosen] = useState<{ example: TemplateInfo } & Chosen>();
+  const chosenOf = (example: TemplateInfo) => ({
+    example,
+    values: Object.fromEntries(example.fields.map((f) => [f.key, f.example])),
+    agents: Object.fromEntries(example.agents.map((a) => [a.id, a.adapter])),
+    connections: {},
+  });
+  const [chosen, setChosen] = useState<({ example: TemplateInfo } & Chosen) | undefined>(() => initialTemplate ? chosenOf(initialTemplate) : undefined);
   /** How an agent of the template picked runs: as chosen, or its type's default. */
   const connectionOf = (id: string): AgentConnection =>
     chosen?.connections[id] ?? defaultConnection(chosen?.agents[id] ?? DEFAULT_AGENT);
@@ -99,12 +107,7 @@ export function ExampleGallery({
     onPick(example, { values, agents, connections }, how);
   };
   const pick = (example: TemplateInfo) => {
-    setChosen({
-      example,
-      values: Object.fromEntries(example.fields.map((f) => [f.key, f.example])),
-      agents: Object.fromEntries(example.agents.map((a) => [a.id, a.adapter])),
-      connections: {},
-    });
+    setChosen(chosenOf(example));
   };
 
   return (

@@ -57,8 +57,7 @@ const props = () => ({
   queues: false,
   onToggleQueues: vi.fn(),
   onOpen: vi.fn(),
-  onNew: vi.fn(),
-  onTemplates: vi.fn(),
+  onStart: vi.fn(),
 });
 it('lists every agent once in its nested canvas group, with catalog image logos', () => {
   render(<Dock {...props()} />);
@@ -119,7 +118,7 @@ it('shows run and session status, with Needs taking priority and clearing when a
   expect(writer.hasAttribute('data-needs')).toBe(false);
   expect(writer.title).toContain('Working');
 });
-it('toggles queues, opens an agent and offers New/Templates, one intent each', async () => {
+it('toggles queues, opens an agent and opens Start, one intent each', async () => {
   const input = props();
   const view = render(<Dock {...input} />);
   await events.click(screen.getByRole('button', { name: 'Show all queues' }));
@@ -130,15 +129,8 @@ it('toggles queues, opens an agent and offers New/Templates, one intent each', a
   );
   await events.click(screen.getByRole('button', { name: /^Reviewer,/ }));
   expect(input.onOpen).toHaveBeenCalledExactlyOnceWith('b');
-  for (const [label, action] of [
-    ['New canvas', input.onNew],
-    ['Browse templates', input.onTemplates],
-  ] as const) {
-    await events.click(screen.getByRole('button', { name: 'Start a session' }));
-    await events.click(screen.getByRole('button', { name: label }));
-    expect(action).toHaveBeenCalledOnce();
-    expect(screen.queryByRole('dialog', { name: 'Start a session' })).toBeNull();
-  }
+  await events.click(screen.getByRole('button', { name: 'Start a session' }));
+  expect(input.onStart).toHaveBeenCalledOnce();
 });
 it('keeps completed queues done during a global pause and names a pause still taking effect', () => {
   render(
