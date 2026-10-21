@@ -1,4 +1,4 @@
-import { openNeeds } from './canvas-actions';
+import { dismissStart, openNeeds } from './canvas-actions';
 import { randomUUID } from 'node:crypto';
 import { existsSync, realpathSync } from 'node:fs';
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
@@ -72,6 +72,7 @@ async function launch() {
     problems.push(error.message);
   });
   await page.waitForLoadState('load');
+  await dismissStart(page);
   await expect(page.locator('.react-flow__pane')).toBeVisible();
   await answerDialogs(path.join(dir, 'team.corral'));
 }

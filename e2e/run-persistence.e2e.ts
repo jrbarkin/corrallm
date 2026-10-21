@@ -1,3 +1,4 @@
+import { dismissStart } from './canvas-actions';
 import { existsSync } from 'node:fs';
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -53,6 +54,7 @@ async function launch() {
   page = await app.firstWindow();
   page.on('pageerror', (error) => problems.push(error.message));
   await page.waitForLoadState('load');
+  await dismissStart(page);
   await expect(page.locator('.react-flow__pane')).toBeVisible();
   await app.evaluate(
     ({ dialog }, { folder, canvas }) => {

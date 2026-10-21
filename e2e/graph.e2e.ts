@@ -1,4 +1,4 @@
-import { canvasAction, openNeeds } from './canvas-actions';
+import { dismissStart, canvasAction, openNeeds } from './canvas-actions';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import nativePath from 'node:path';
@@ -113,6 +113,7 @@ test.beforeEach(async () => {
   // Reload so that errors during page load (e.g. CSP violations) are collected too.
   await page.waitForLoadState('load');
   await page.reload();
+  await dismissStart(page);
   await expect(pane()).toBeVisible();
   await page.getByRole('button', { name: 'Choose a project folder' }).click();
   // The tests use fixed canvas offsets that need the 1200×800 window at page zoom 1.

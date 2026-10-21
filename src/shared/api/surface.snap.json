@@ -288,7 +288,7 @@
       "output": "647bbd6cc7b4f077"
     },
     "canvas.addAgent": {
-      "input": "0f3ca90703374a72",
+      "input": "7c1cc6556c9b82cd",
       "output": "ebd0120825103788"
     },
     "canvas.spawnAgent": {
@@ -324,7 +324,7 @@
       "output": "647bbd6cc7b4f077"
     },
     "canvas.batch": {
-      "input": "aa3b1a41e3b86acb",
+      "input": "1257d2b1e10134be",
       "output": "774dad2f1bf247cd"
     },
     "agent.setType": {

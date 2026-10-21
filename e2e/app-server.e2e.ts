@@ -1,3 +1,4 @@
+import { dismissStart } from './canvas-actions';
 import { randomUUID } from 'node:crypto';
 import { chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -81,6 +82,7 @@ async function launch() {
     problems.push(error.message);
   });
   await page.waitForLoadState('load');
+  await dismissStart(page);
   await expect(page.locator('.react-flow__pane')).toBeVisible();
   const canvas = path.join(dir, 'team.corral');
   await app.evaluate(

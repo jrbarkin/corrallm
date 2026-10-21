@@ -1,3 +1,4 @@
+import { dismissStart } from './canvas-actions';
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -46,6 +47,7 @@ test.beforeEach(async () => {
     problems.push(error.message);
   });
   await page.waitForLoadState('load');
+  await dismissStart(page);
 });
 
 test.afterEach(async () => {

@@ -36,14 +36,23 @@ export function canvasOps({
     'canvas.addAgent': ({ canvas, at, adapter, connection, role }, ctx) =>
       ctx.commit(canvas, (doc) => {
         const descriptor = adapterIn(catalog, adapter);
-        if (!descriptor)
-          throw new OpFailure('invalid', `There is no adapter ${adapter}.`);
-        if (connection !== undefined && !descriptor.connections.some((one) => one.id === connection))
-          throw new OpFailure('invalid', `Connection ${connection} does not belong to adapter ${adapter}.`);
+        if (!descriptor) throw new OpFailure('invalid', `There is no adapter ${adapter}.`);
+        if (
+          connection !== undefined &&
+          !descriptor.connections.some((one) => one.id === connection)
+        )
+          throw new OpFailure(
+            'invalid',
+            `Connection ${connection} does not belong to adapter ${adapter}.`,
+          );
         const built = created(structure.addAgent(doc, { at, adapter }, context), AgentId);
         let next = built.next;
         if (connection !== undefined)
-          next = agents.setConnection(next, { agent: built.result.id, connection }, { catalog, defaultAdapter }).next;
+          next = agents.setConnection(
+            next,
+            { agent: built.result.id, connection },
+            { catalog, defaultAdapter },
+          ).next;
         if (role === undefined) return { next, result: built.result };
         // Its role as it is made: in the same change, which a token may give it (R12).
         return {

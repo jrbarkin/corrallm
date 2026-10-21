@@ -1,4 +1,4 @@
-import { canvasAction } from './canvas-actions';
+import { dismissStart, canvasAction } from './canvas-actions';
 import { randomUUID } from 'node:crypto';
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -121,6 +121,7 @@ await import(${JSON.stringify(fake)});
     if (message.type() === 'error' || message.type() === 'warning') problems.push(message.text());
   });
   await page.waitForLoadState('load');
+  await dismissStart(page);
   await expect(page.locator('.react-flow__pane')).toBeVisible();
 }
 

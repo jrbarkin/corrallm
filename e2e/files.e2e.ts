@@ -1,4 +1,4 @@
-import { canvasAction } from './canvas-actions';
+import { dismissStart, canvasAction } from './canvas-actions';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -17,6 +17,7 @@ test.beforeEach(async () => {
   ({ app, close: closeApp } = await launchApp());
   page = await app.firstWindow();
   await page.waitForLoadState('load');
+  await dismissStart(page);
   dir = await mkdtemp(path.join(tmpdir(), 'corrallm-files-'));
 });
 

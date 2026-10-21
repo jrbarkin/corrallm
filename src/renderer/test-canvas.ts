@@ -264,10 +264,17 @@ export function fakeCanvas(initial: CanvasDocument) {
         case 'canvas.addAgent': {
           const args = OPS[op].input.parse(raw);
           const added = S.addAgent(document, args, context);
-          built = args.connection === undefined || !('id' in added.result) ? added : {
-            ...added,
-            next: A.setConnection(added.next, { agent: added.result.id, connection: args.connection }, { catalog: catalog(), defaultAdapter: DEFAULT_AGENT }).next,
-          };
+          built =
+            args.connection === undefined || !('id' in added.result)
+              ? added
+              : {
+                  ...added,
+                  next: A.setConnection(
+                    added.next,
+                    { agent: added.result.id, connection: args.connection },
+                    { catalog: catalog(), defaultAdapter: DEFAULT_AGENT },
+                  ).next,
+                };
           break;
         }
         case 'canvas.spawnAgent':

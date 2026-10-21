@@ -1,4 +1,4 @@
-import { canvasAction, openNeeds } from './canvas-actions';
+import { dismissStart, canvasAction, openNeeds } from './canvas-actions';
 import { randomUUID } from 'node:crypto';
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -48,6 +48,7 @@ test.beforeEach(async () => {
     problems.push(error.message);
   });
   await page.waitForLoadState('load');
+  await dismissStart(page);
 });
 
 test.afterEach(async () => {

@@ -1,3 +1,4 @@
+import { dismissStart } from './canvas-actions';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -31,6 +32,7 @@ test('simulates usage and sets a rule in main, remembered across a restart', asy
     page.on('console', (message) => {
       if (message.type() === 'error') problems.push(message.text());
     });
+    await dismissStart(page);
     await claudeCanvas(page);
     const gauge = () => page.getByRole('button', { name: /^Claude usage:/ });
     await expect(gauge()).toHaveAttribute('aria-label', 'Claude usage: no reading');

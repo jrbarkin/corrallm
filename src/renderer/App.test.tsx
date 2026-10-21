@@ -21,6 +21,14 @@ function stubApi(api: Partial<AppApi>) {
       .mockResolvedValue({ id: canvas, token: 'test', checkpoint: null }),
     saveRun: vi.fn<AppApi['saveRun']>().mockResolvedValue(null),
     runReady: vi.fn<AppApi['runReady']>().mockResolvedValue(null),
+    catalogInstalled: vi.fn<AppApi['catalogInstalled']>().mockResolvedValue({
+      ok: true,
+      value: {},
+    }),
+    templatesList: vi.fn<AppApi['templatesList']>().mockResolvedValue({
+      ok: true,
+      value: { items: [] },
+    }),
     onRunStopping: vi.fn<AppApi['onRunStopping']>(() => () => undefined),
     topicsSubscribe: vi.fn<AppApi['topicsSubscribe']>().mockResolvedValue({
       ok: true,
@@ -50,7 +58,12 @@ function stubApi(api: Partial<AppApi>) {
             },
           },
         })
-      : subscribe(args);
+      : args.topic === 'canvases'
+        ? Promise.resolve({
+            ok: true,
+            value: { epoch: 'one', rev: 0, revs: {}, state: { items: [] } },
+          })
+        : subscribe(args);
   Object.defineProperty(window, 'api', {
     value: { ...usage, ...api, topicsSubscribe },
     configurable: true,

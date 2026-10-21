@@ -1,4 +1,4 @@
-import { canvasAction, openNeeds } from './canvas-actions';
+import { dismissStart, canvasAction, openNeeds } from './canvas-actions';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -25,6 +25,7 @@ test.beforeEach(async () => {
     if (message.type() === 'error' || message.type() === 'warning') problems.push(message.text());
   });
   await page.waitForLoadState('load');
+  await dismissStart(page);
   await expect(page.getByRole('button', { name: 'Canvas menu', exact: true })).toBeVisible();
 });
 test.afterEach(async () => {

@@ -66,7 +66,9 @@ export function ExampleGallery({
     agents: Object.fromEntries(example.agents.map((a) => [a.id, a.adapter])),
     connections: {},
   });
-  const [chosen, setChosen] = useState<({ example: TemplateInfo } & Chosen) | undefined>(() => initialTemplate ? chosenOf(initialTemplate) : undefined);
+  const [chosen, setChosen] = useState<({ example: TemplateInfo } & Chosen) | undefined>(() =>
+    initialTemplate ? chosenOf(initialTemplate) : undefined,
+  );
   /** How an agent of the template picked runs: as chosen, or its type's default. */
   const connectionOf = (id: string): AgentConnection =>
     chosen?.connections[id] ?? defaultConnection(chosen?.agents[id] ?? DEFAULT_AGENT);

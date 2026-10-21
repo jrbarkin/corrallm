@@ -160,7 +160,14 @@ export function Dock({
       </button>
       <div className="dock-agents">{(children.get(undefined) ?? []).map(group)}</div>
       <div className="dock-start" data-dock-id="start">
-        <button type="button" aria-label="Start a session" title="Start a session" onClick={onStart}>+</button>
+        <button
+          type="button"
+          aria-label="Start a session"
+          title="Start a session"
+          onClick={onStart}
+        >
+          +
+        </button>
       </div>
     </nav>
   );

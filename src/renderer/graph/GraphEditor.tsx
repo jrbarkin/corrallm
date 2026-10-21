@@ -394,7 +394,9 @@ function Editor({
   /** Whether the templates gallery is open. */
   const [gallery, setGallery] = useState<boolean | TemplateInfo>(false);
   const [startChoice, setStartChoice] = useState<{ canvas: CanvasId; open: boolean }>();
-  const showStart = canonical !== undefined && (startChoice?.canvas === canvasId ? startChoice.open : files && model.nodes.length === 0);
+  const showStart =
+    canonical !== undefined &&
+    (startChoice?.canvas === canvasId ? startChoice.open : files && model.nodes.length === 0);
   /** Which CLIs the user has, asked of main as the gallery opens: its agents' default connections. */
   const [installed, setInstalled] = useState<InstalledClis>();
   useEffect(() => {
@@ -1313,7 +1315,7 @@ function Editor({
         </ReactFlow>
         <div
           className="canvas-floats"
-          hidden={gallery || work !== undefined || settingsAgent !== undefined}
+          hidden={Boolean(gallery) || work !== undefined || settingsAgent !== undefined}
         >
           {files && (
             <CanvasMenu
@@ -1327,7 +1329,9 @@ function Editor({
               }
               name={name}
               edited={canonical?.meta.edited ?? false}
-              project={{ folder: project, onChoose: commands.chooseProject }}
+              {...(showStart
+                ? {}
+                : { project: { folder: project, onChoose: commands.chooseProject } })}
               problem={problem}
               onNew={() => {
                 commands.new();
@@ -1444,7 +1448,9 @@ function Editor({
                 setProblem(ipcErrorMessage(error));
               });
             }}
-            onStart={() => { setStartChoice({ canvas: canvasId, open: true }); }}
+            onStart={() => {
+              setStartChoice({ canvas: canvasId, open: true });
+            }}
           />
         </div>
         {openedNode && !showStart && (
@@ -1640,16 +1646,31 @@ function Editor({
         )}
         {showStart && !gallery && (
           <StartSession
-            canvas={canvasId} mirror={mirror} project={project} installed={installed}
+            canvas={canvasId}
+            mirror={mirror}
+            project={project}
+            installed={installed}
             onChooseProject={commands.chooseProject}
-            onClose={() => { setStartChoice({ canvas: canvasId, open: false }); }}
-            onTemplate={(template) => { setStartChoice({ canvas: canvasId, open: false }); setGallery(template); }}
+            onClose={() => {
+              setStartChoice({ canvas: canvasId, open: false });
+            }}
+            onTemplate={(template) => {
+              setStartChoice({ canvas: canvasId, open: false });
+              setGallery(template);
+            }}
             onShow={commands.show}
             onStart={async (adapter, connection, from) => {
               await flushDrafts();
               const box = wrapper.current?.getBoundingClientRect();
-              const at = box ? screenToFlowPosition({ x: box.left + box.width / 2, y: box.top + box.height / 2 }) : { x: 0, y: 0 };
-              const result = await api.canvasAddAgent({ canvas: canvasId, at, adapter, connection });
+              const at = box
+                ? screenToFlowPosition({ x: box.left + box.width / 2, y: box.top + box.height / 2 })
+                : { x: 0, y: 0 };
+              const result = await api.canvasAddAgent({
+                canvas: canvasId,
+                at,
+                adapter,
+                connection,
+              });
               if (binding.canvas !== canvasId || !('id' in result)) return;
               setStartChoice({ canvas: canvasId, open: false });
               selectOne(result.id);

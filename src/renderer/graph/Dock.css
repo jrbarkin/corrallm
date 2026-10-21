@@ -122,18 +122,8 @@
   border-top: 1px solid var(--float-line);
   padding-top: 4px;
 }
-.dock-start > .float-popover-root > button {
+.dock-start > button {
   font-size: 24px;
-}
-.dock-start .float-popover {
-  top: auto;
-  left: calc(100% + 12px);
-  bottom: 0;
-}
-.dock-start .float-popover button {
-  width: 100%;
-  padding: 4px 8px;
-  white-space: nowrap;
 }
 .canvas-dock[data-horizontal] {
   top: 10px;
@@ -172,12 +162,6 @@
   bottom: 0;
   width: auto;
   height: 3px;
-}
-.canvas-dock[data-horizontal] .dock-start .float-popover {
-  top: calc(100% + 12px);
-  right: 0;
-  bottom: auto;
-  left: auto;
 }
 .canvas-dock[data-moving] .dock-agents {
   overflow: visible;

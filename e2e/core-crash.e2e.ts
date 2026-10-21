@@ -1,4 +1,4 @@
-import { canvasAction } from './canvas-actions';
+import { dismissStart, canvasAction } from './canvas-actions';
 import { randomUUID } from 'node:crypto';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -34,6 +34,7 @@ test.beforeEach(async () => {
   }));
   page = await app.firstWindow();
   await page.waitForLoadState('load');
+  await dismissStart(page);
 });
 
 test.afterEach(async () => {

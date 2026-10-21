@@ -1,4 +1,4 @@
-import { canvasAction } from './canvas-actions';
+import { dismissStart, canvasAction } from './canvas-actions';
 import { randomUUID } from 'node:crypto';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -34,6 +34,7 @@ test.beforeEach(async () => {
     problems.push(error.message);
   });
   await page.waitForLoadState('load');
+  await dismissStart(page);
   dir = await mkdtemp(path.join(tmpdir(), 'corrallm-sessions-'));
 });
 
