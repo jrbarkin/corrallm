@@ -71,7 +71,7 @@ export interface OpServices {
   reveal: Pick<FileRevealer, 'reveal'>;
   projects: Pick<ProjectFolders, 'of'>;
   files: Pick<ProjectFiles, 'find'>;
-  windows: Pick<Windows, 'canvasOf'>;
+  windows: Pick<Windows, 'canvasOf' | 'shownIn'>;
   sessions: Pick<
     SessionManager,
     'attachTerminal' | 'detachTerminal' | 'inputTerminal' | 'resizeTerminal' | 'dropOnTerminal'

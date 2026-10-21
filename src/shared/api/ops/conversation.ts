@@ -199,6 +199,10 @@ export const conversationOps = {
     }),
     output: z.strictObject({
       id: z.uuid().optional(),
+      canvas: z
+        .uuid()
+        .optional()
+        .meta({ description: 'The calling window’s replacement canvas, when Allow moved it.' }),
       outcome: z.enum(['allowed', 'refused', 'stale', 'applied', 'kept', 'superseded']).optional(),
       raised: NeedId.optional(),
     }),

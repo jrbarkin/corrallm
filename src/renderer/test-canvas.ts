@@ -77,8 +77,11 @@ export function fakeCanvas(initial: CanvasDocument) {
     if (prior) core.change({ topic: `canvas:${next.id}`, rev, replace: entities });
     else core.snapshot(`canvas:${next.id}`, entities, rev);
     core.respond('window.get', { canvas: next.id });
+    if (!core.state(`needs:${next.id}`)) core.snapshot(`needs:${next.id}`, { items: [] });
   };
   open(initial);
+  core.snapshot(`needs:${initial.id}`, { items: [] });
+  core.snapshot('canvases', { items: [] });
   /** The canvas's meta changed (its name, folder, whether edited), as the core says it. */
   function view(next: Partial<typeof meta>) {
     if (next.edited === false) saved = toFile(document);

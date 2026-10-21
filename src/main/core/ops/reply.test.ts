@@ -91,6 +91,7 @@ it.each(['canvas.delete', 'canvas.batch'] as const)(
           ...canvasOps({ catalog: CATALOG, defaultAdapter: DEFAULT_ADAPTER }),
           ...batchOps(),
           ...replyOps({
+            windows: { shownIn: () => undefined },
             needOf: () => undefined,
             // No file is reviewed here.
             reviews: { get: () => undefined, items: () => [], settled: () => undefined },

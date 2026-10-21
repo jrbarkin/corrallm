@@ -45,10 +45,12 @@ export function replyOps({
   engines,
   needOf,
   lifecycle,
+  windows,
 }: Pick<OpServices, 'proposals' | 'reviews' | 'needOf'> & {
   documents: Pick<OpServices['documents'], 'applyFile' | 'keepFile'>;
   engines: Pick<OpServices['engines'], 'changed'>;
   lifecycle: Pick<Lifecycle, 'touched'>;
+  windows: Pick<OpServices['windows'], 'shownIn'>;
 }): Pick<Implementations, 'reply'> {
   /** Answers the review `to` of the canvas's file with `choice`, as `ctx`'s caller. */
   async function review(canvas: CanvasId, to: string, choice: string, ctx: OpContext) {
@@ -91,7 +93,7 @@ export function replyOps({
     return { outcome: 'applied' as const };
   }
 
-  return {
+  const implementations: Pick<Implementations, 'reply'> = {
     reply: async ({ canvas, to, answer }, ctx) => {
       const id = canvas as string | undefined as CanvasId | undefined;
       if (id === undefined) throw new OpFailure('invalid', 'Name the canvas the item is on.');
@@ -177,6 +179,16 @@ export function replyOps({
         return settled('stale', 'it would change nothing now');
       }
       return { id: record.id, outcome: 'allowed' as const };
+    },
+  };
+  return {
+    reply: async (args, ctx) => {
+      const window =
+        ctx.caller.kind === 'human' && ctx.caller.window !== 'host' ? ctx.caller.window : undefined;
+      const before = window === undefined ? undefined : windows.shownIn(window);
+      const result = await implementations.reply(args, ctx);
+      const shown = window === undefined ? undefined : windows.shownIn(window);
+      return shown !== undefined && shown !== before ? { ...result, canvas: shown } : result;
     },
   };
 }

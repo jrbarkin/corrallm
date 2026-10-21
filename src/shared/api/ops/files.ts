@@ -101,7 +101,12 @@ export const filesOps = {
         .optional()
         .meta({ description: 'Discard its edits not saved: back to its file, or forgotten.' }),
     }),
-    output: z.strictObject({}),
+    output: z.strictObject({
+      canvas: z
+        .uuid()
+        .optional()
+        .meta({ description: 'The calling window’s replacement canvas, when closing moved it.' }),
+    }),
   }),
   'project.choose': define('project.choose', {
     summary:

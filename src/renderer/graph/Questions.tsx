@@ -1,4 +1,5 @@
 import { useId, useState } from 'react';
+import type { ReactNode } from 'react';
 
 import type { AdapterId } from '../../shared/adapter';
 import type { TerminalAsk } from '../../shared/session';
@@ -345,7 +346,9 @@ export function QuestionsSidebar({
   onDecide,
   onAnswer,
   onOpen,
+  extra,
 }: {
+  extra?: { cards: ReactNode; count: number };
   needs: readonly Need[];
   /** What the needs are worded with, for those shown in their words. */
   input: Omit<NeedsInput, 'stuck' | 'unasking'>;
@@ -418,9 +421,11 @@ export function QuestionsSidebar({
   return (
     <aside className="graph-questions" aria-label="Needs you">
       <h2>
-        Needs you <span className="graph-questions-count">{cards.length}</span>
+        Needs you{' '}
+        <span className="graph-questions-count">{cards.length + (extra?.count ?? 0)}</span>
       </h2>
       {cards}
+      {extra?.cards}
     </aside>
   );
 }

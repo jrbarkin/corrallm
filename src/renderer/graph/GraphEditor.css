@@ -1951,3 +1951,54 @@ button.graph-queue-action[aria-expanded='true'] {
   max-height: 200px;
   margin: 0;
 }
+
+/* Kept canvases; the same component can move into the canvas menu. */
+.graph-canvases {
+  position: relative;
+}
+.graph-canvases-list {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  z-index: 10;
+  box-sizing: border-box;
+  width: min(420px, calc(100vw - 40px));
+  max-height: calc(100vh - 160px);
+  overflow: auto;
+  padding: 12px;
+  box-shadow: 0 8px 24px color-mix(in srgb, black 18%, transparent);
+}
+.graph-canvases-list header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.graph-canvases-list h2 {
+  margin: 0;
+  font-size: 14px;
+}
+.graph-canvases-list ul {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+}
+.graph-canvases-list li {
+  padding: 10px 0;
+  border-top: 1px solid color-mix(in srgb, CanvasText 15%, transparent);
+  overflow-wrap: anywhere;
+}
+.graph-canvases-state,
+.graph-canvases-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+.graph-canvases-state {
+  font-size: 12px;
+  opacity: 0.7;
+}
+.graph-canvases-actions button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}

@@ -21,6 +21,7 @@ export function FileBar({
   onExamples,
   onDismiss,
   extra,
+  canvases,
 }: {
   /** The file's name; undefined for a canvas never saved. */
   name: string | undefined;
@@ -34,12 +35,14 @@ export function FileBar({
   onSaveAs: () => void;
   onExamples: () => void;
   onDismiss: () => void;
+  canvases?: ReactNode;
   /** Shown beside the project folder. */
   extra?: ReactNode;
 }) {
   return (
     <div className="graph-file-panel">
       <div className="graph-file graph-panel" role="toolbar" aria-label="Canvas file">
+        {canvases}
         <span className="graph-file-name" title={name ?? 'Untitled'}>
           {name ?? 'Untitled'}
         </span>

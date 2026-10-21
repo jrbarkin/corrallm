@@ -263,11 +263,14 @@ export class TopicMirror {
 export const topics = new TopicMirror(bridge);
 
 /** The latest pushed state: undefined until the core answers the first subscription. */
-export function useTopic<K extends TopicKey>(topic: K): TopicStates[K] | undefined {
+export function useTopic<K extends TopicKey>(
+  topic: K,
+  mirror: TopicMirror = topics,
+): TopicStates[K] | undefined {
   const subscribe = useCallback(
-    (listener: () => void) => topics.subscribe(topic, listener),
-    [topic],
+    (listener: () => void) => mirror.subscribe(topic, listener),
+    [topic, mirror],
   );
-  const snapshot = useCallback(() => topics.snapshot(topic), [topic]);
+  const snapshot = useCallback(() => mirror.snapshot(topic), [topic, mirror]);
   return useSyncExternalStore(subscribe, snapshot);
 }

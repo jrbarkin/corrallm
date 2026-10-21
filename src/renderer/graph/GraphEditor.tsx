@@ -82,7 +82,8 @@ import type { MenuPlace } from './ConnectMenu';
 import { AgentNodeView, GroupNodeView, LinkView, WorkEdgeView } from './nodes';
 import { AgentContextMenu } from './AgentContextMenu';
 import type { WorkFlowEdge } from './nodes';
-import { QuestionsSidebar } from './Questions';
+import { NeedsSidebar } from './NeedsSidebar';
+import { Canvases } from './Canvases';
 import { workEdges } from '../../shared/model/work';
 import { WorkDetail } from './WorkDetail';
 import { operationEdits } from './edits';
@@ -696,7 +697,7 @@ function Editor({
      * the canvas it names. The canvas before stays open in the core, its changes with it, so
      * nothing asks to discard them; the window says so when it had any.
      */
-    const switchTo = async (action: () => Promise<CanvasId | null>) => {
+    const switchTo = async (action: () => Promise<CanvasId | null>, keepsBefore = true) => {
       if (switching.current) return;
       switching.current = true;
       setRestoring(true);
@@ -713,8 +714,10 @@ function Editor({
         }
         // A cancelled Open after a failed restore leaves it failed: only another canvas recovers.
         setRestoreFailed(persistence?.failedInitialization() ?? false);
-        if (before && before.document.id !== binding.canvas && before.meta.edited)
-          setNotice([`${before.meta.name ?? 'The previous canvas'} stays open with its changes.`]);
+        if (keepsBefore && before && before.document.id !== binding.canvas && before.meta.edited)
+          setNotice([
+            `${before.meta.name ?? 'The previous canvas'} stays open with its changes. Find it in Canvases.`,
+          ]);
         persistence?.changed();
       } finally {
         switching.current = false;
@@ -722,6 +725,26 @@ function Editor({
       }
     };
     return {
+      show: (canvas: CanvasId) =>
+        switchTo(async () => {
+          await api.windowShow({ canvas });
+          return canvas;
+        }),
+      close: (canvas: CanvasId, discard: boolean) =>
+        switchTo(async () => {
+          const result = await api.canvasClose({ canvas, ...(discard ? { discard: true } : {}) });
+          return 'canvas' in result && result.canvas ? (result.canvas as CanvasId) : null;
+        }, false),
+      reply: async (to: string, choice: string) => {
+        let result: Awaited<ReturnType<GuiApi['reply']>> | undefined;
+        await switchTo(async () => {
+          result = await api.reply({ canvas: binding.canvas, to, answer: { choice } });
+          return result.canvas ? (result.canvas as CanvasId) : null;
+        }, false);
+        if (!result) throw new Error('A canvas switch is already under way.');
+        if (result.canvas && result.outcome) setNotice([`Proposal ${result.outcome}.`]);
+        return result;
+      },
       new: () => {
         void switchTo(async () => {
           const result = await api.canvasCreate({});
@@ -971,6 +994,12 @@ function Editor({
           </p>
           {files && (
             <div className="graph-file graph-panel" role="toolbar" aria-label="Canvas recovery">
+              <Canvases
+                canvas={canvasId}
+                mirror={mirror}
+                onShow={commands.show}
+                onClose={commands.close}
+              />
               <button
                 type="button"
                 onClick={() => {
@@ -1274,25 +1303,35 @@ function Editor({
               Delete
             </button>
           </NodeToolbar>
-          {needed.needs.length > 0 && (
-            <Panel position="top-right">
-              <QuestionsSidebar
-                needs={needed.needs}
-                input={needed.input}
-                onDecide={edits.decide}
-                onAnswer={(agentId, promptId, index, answer) => {
-                  sessionStore.answerQuestion(agentId, promptId, index, answer);
-                }}
-                onOpen={(agentId) => {
-                  selectOne(agentId);
-                  setOpened({ ids: [agentId] });
-                }}
-              />
-            </Panel>
-          )}
+          <Panel position="top-right">
+            <NeedsSidebar
+              key={canvasId}
+              canvas={canvasId}
+              mirror={mirror}
+              onReply={commands.reply}
+              needs={needed.needs}
+              input={needed.input}
+              onDecide={edits.decide}
+              onAnswer={(agentId, promptId, index, answer) => {
+                sessionStore.answerQuestion(agentId, promptId, index, answer);
+              }}
+              onOpen={(agentId) => {
+                selectOne(agentId);
+                setOpened({ ids: [agentId] });
+              }}
+            />
+          </Panel>
           {files && (
             <Panel position="top-left">
               <FileBar
+                canvases={
+                  <Canvases
+                    canvas={canvasId}
+                    mirror={mirror}
+                    onShow={commands.show}
+                    onClose={commands.close}
+                  />
+                }
                 name={name}
                 edited={canonical?.meta.edited ?? false}
                 project={{ folder: project, onChoose: commands.chooseProject }}

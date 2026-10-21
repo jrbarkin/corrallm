@@ -54,7 +54,8 @@ export function filesOps({
   documents,
   catalog,
   defaultAdapter,
-}: Pick<OpServices, 'lifecycle' | 'documents' | 'catalog' | 'defaultAdapter'>): Pick<
+  windows,
+}: Pick<OpServices, 'lifecycle' | 'documents' | 'catalog' | 'defaultAdapter' | 'windows'>): Pick<
   Implementations,
   FileOps
 > {
@@ -137,13 +138,16 @@ export function filesOps({
     'canvas.close': async (args, ctx) => {
       const canvas = canvasOf(args.canvas);
       lifecycle.kept(canvas);
+      const window = windowIn(ctx);
+      const before = window === undefined ? undefined : windows.shownIn(window);
       // A token's discard of edits not saved came to you as a proposal: it discards nothing.
       await lifecycle.close(canvas, {
         discard: args.discard === true && ctx.caller.kind === 'human',
         by: ctx.by,
         ...(ctx.after === undefined ? {} : { after: ctx.after }),
       });
-      return {};
+      const shown = window === undefined ? undefined : windows.shownIn(window);
+      return shown !== undefined && shown !== before ? { canvas: shown } : {};
     },
     'project.choose': async (args, ctx) => {
       const canvas = canvasOf(args.canvas);

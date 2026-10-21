@@ -428,7 +428,7 @@ describe('canvas.close', () => {
     await applied('canvas.open', {}, ELSEWHERE);
     answers.open.push(files.other);
     await applied('canvas.open', {});
-    await applied('canvas.close', { canvas: OTHER });
+    expect(await applied('canvas.close', { canvas: OTHER })).toMatchObject({ canvas: TEAM });
     const list = await listed();
     expect(list[OTHER]).toMatchObject({ open: false, shownIn: [] });
     expect(list[TEAM]).toMatchObject({ open: true });
@@ -483,7 +483,7 @@ describe('R4: what a token may not discard comes to you as a proposal', () => {
     ]);
     expect(
       await applied('reply', { canvas: OTHER, to: proposed, answer: { choice: 'allow' } }),
-    ).toMatchObject({ outcome: 'allowed' });
+    ).toMatchObject({ outcome: 'allowed', canvas: TEAM });
     expect((await listed())[OTHER]).toMatchObject({ open: false, shownIn: [] });
     expect(await proposals(OTHER)).toEqual([]);
   });
