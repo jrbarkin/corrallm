@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import type { ChildProcess } from 'node:child_process';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -12,6 +12,7 @@ import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { expect, test } from '@playwright/test';
 
+import { TOKEN_WRITES_PER_SECOND } from '../src/shared/api/limits';
 import { toolName } from '../src/shared/api/registry';
 import { keepCanvases } from '../src/main/core/store/test-store';
 
@@ -27,7 +28,9 @@ import { keepCanvases } from '../src/main/core/store/test-store';
  * MCP), so the core runs here as `corrallm serve` runs it, under plain Node (the CLI bundle the
  * global setup builds), its loop measured from inside (loop-delay.mjs), while outside orchestrators
  * (MCP clients in this test's process) send its agents messages, wait for their replies, and pause
- * and release an agent. Its agents run a fake `codex`.
+ * and release an agent; and, part way through, another sends 200 doc ops (Core Server §7.4, B9
+ * Design §11), whose commits on the canvas serialize at its log's flush (B9 Design §3). Its agents
+ * run a fake `codex`.
  */
 
 const projectDir = path.dirname(import.meta.dirname);
@@ -47,6 +50,20 @@ const SENDERS = 4;
 const SEND_EVERY_MS = 200;
 const WAITERS = 2;
 const TOGGLE_EVERY_MS = 100;
+/** The outside party that edits the canvas, on a token of its own. */
+const BUILDER = 'builder';
+/** How many doc ops it sends, and when, into the burst. */
+const DOC_OPS = 200;
+const DOC_OPS_AT = 10_000;
+/**
+ * How it paces them, as an orchestrator under its token's limits would (throttle.ts): sent back to
+ * back, they would pass TOKEN_WRITES_PER_SECOND within a second and be refused. So they go in LANES
+ * of work, each one op at a time, one op from each lane every WAVE_EVERY_MS: LANES in flight at
+ * once (within TOKEN_IN_FLIGHT), queued at the canvas's commits, and a wave's worth of writes a
+ * second under the limit (24 a second).
+ */
+const LANES = 6;
+const WAVE_EVERY_MS = (LANES * 1000) / (TOKEN_WRITES_PER_SECOND - LANES);
 
 const sha256 = (text: string) => createHash('sha256').update(text).digest('hex');
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -64,7 +81,10 @@ test.afterEach(async () => {
   await rm(dir, { recursive: true, force: true });
 });
 
-/** A profile keeping the canvas and its folder, as the app would, and a token for each party. */
+/**
+ * A profile keeping the canvas and its folder, as the app would, and a token for each party: those
+ * sending messages, then the builder.
+ */
 async function profileOf(): Promise<{ profile: string; file: string; tokens: string[] }> {
   const profile = path.join(dir, 'profile');
   const project = path.join(dir, 'project');
@@ -89,7 +109,8 @@ async function profileOf(): Promise<{ profile: string; file: string; tokens: str
     }),
   );
   await keepCanvases(profile, { [CANVAS]: { file, project } });
-  const tokens = PARTIES.map((name) => `known-load-token-of-${name}-0123456789abcdef`);
+  const names = [...PARTIES, BUILDER];
+  const tokens = names.map((name) => `known-load-token-of-${name}-0123456789abcdef`);
   const expires = Date.now() + 60 * 60 * 1000;
   await writeFile(
     path.join(profile, 'tokens.json'),
@@ -98,7 +119,7 @@ async function profileOf(): Promise<{ profile: string; file: string; tokens: str
       tokens: Object.fromEntries(
         tokens.map((token, i) => [
           sha256(token),
-          { id: PARTIES[i], name: PARTIES[i], canvases: [CANVAS], access: 'write', expires },
+          { id: names[i], name: names[i], canvases: [CANVAS], access: 'write', expires },
         ]),
       ),
     }),
@@ -157,6 +178,16 @@ async function connect(url: string, token: string): Promise<Client> {
   return client;
 }
 
+/** A canvas as canvas.get gives it, as far as the test reads it. */
+interface CanvasState {
+  arrange: boolean;
+  nodes: {
+    id: string;
+    data: { label: string; queue?: ({ id: string } & Record<string, unknown>)[] };
+  }[];
+  links: { source: string; target: string }[];
+}
+
 /** Calls a tool: its structured result, or undefined if it was refused (its sentence in `refusals`). */
 async function call<T>(
   client: Client,
@@ -175,29 +206,230 @@ async function call<T>(
   return result.structuredContent as T;
 }
 
-/** The core's loop delay over the burst, in ms, as loop-delay.mjs measured it. */
-async function measured(): Promise<{ p50: number; p99: number; max: number; samples: number }> {
-  const file = path.join(dir, 'loop.json');
-  for (let tries = 0; tries < 100 && !existsSync(file); tries++) await sleep(20);
-  return JSON.parse(await readFile(file, 'utf8')) as {
-    p50: number;
-    p99: number;
-    max: number;
-    samples: number;
-  };
+interface Delay {
+  p50: number;
+  p99: number;
+  max: number;
+  samples: number;
 }
 
-test('keeps the core’s event loop within budget under a burst of messages, waits and run saves', async () => {
+/**
+ * The core's loop delay over the burst, in ms, as loop-delay.mjs measured it: the whole, and each
+ * of its `spans` (between two SIGUSR2s), once it has written them all.
+ */
+async function measured(spans: number): Promise<Delay & { spans: Delay[] }> {
+  const file = path.join(dir, 'loop.json');
+  for (let tries = 0; tries < 100; tries++) {
+    if (existsSync(file)) {
+      const delay = JSON.parse(await readFile(file, 'utf8')) as Delay & { spans: Delay[] };
+      if (delay.spans.length === spans) return delay;
+    }
+    await sleep(20);
+  }
+  throw new Error('loop-delay.mjs never wrote what it measured');
+}
+
+/** The `p`th percentile of `values`, by nearest rank. */
+function percentile(values: number[], p: number): number {
+  const sorted = [...values].sort((a, b) => a - b);
+  return sorted[Math.max(0, Math.ceil((p / 100) * sorted.length) - 1)] ?? NaN;
+}
+
+/** What one lane of the builder's doc ops left on the canvas, as it expects to find it. */
+interface Built {
+  /** The agent it made, its name, and the queue items it added there, in their order. */
+  agent: string;
+  label: string;
+  items: { id: string; message?: string; seconds?: number }[];
+  /** The agent already there it named and added items to, and what it named it. */
+  other: string;
+  otherLabel?: string;
+  queued: string[];
+}
+
+/**
+ * The builder's DOC_OPS doc ops, in LANES: each makes an agent (half with canvas.addAgent, half
+ * spawned linked from another lane's, so the token links only agents it made: R13), then names
+ * and moves it, adds, changes, moves and removes items in its queue, and adds to the queue of an
+ * agent already there; the first lane also turns Arrange on and off. Nothing a rule would refuse
+ * or make a proposal (no deletes, R4; no links between agents that were there, R13; within R11's
+ * cap of agents made). What each lane left, how long each op took, from its call to its result,
+ * how long they took together, and why any failed.
+ */
+async function build(client: Client): Promise<{
+  lanes: Built[];
+  arrange: boolean | undefined;
+  latencies: number[];
+  took: number;
+  failed: string[];
+}> {
+  const latencies: number[] = [];
+  const failed: string[] = [];
+  const start = Date.now();
+  let arrange: boolean | undefined;
+  const made = Array.from({ length: LANES }, () => {
+    let resolve: (agent: string) => void = () => undefined;
+    const agent = new Promise<string>((done) => (resolve = done));
+    return { agent, resolve };
+  });
+  const lane = async (i: number, built: Built): Promise<void> => {
+    const count = Math.floor(DOC_OPS / LANES) + (i < DOC_OPS % LANES ? 1 : 0);
+    let sent = 0;
+    let wave = 0;
+    /** One doc op, in the lane's next wave: its result, or it throws, saying why it failed. */
+    const send = async <T>(name: string, args: Record<string, unknown>): Promise<T> => {
+      wave = Math.max(wave, Math.ceil((Date.now() - start) / WAVE_EVERY_MS));
+      await sleep(start + wave * WAVE_EVERY_MS - Date.now());
+      wave += 1;
+      sent += 1;
+      const began = performance.now();
+      const result = (await client.callTool(
+        { name: toolName(name), arguments: { canvas: CANVAS, request: randomUUID(), ...args } },
+        undefined,
+        { timeout: 60_000 },
+      )) as CallToolResult;
+      latencies.push(performance.now() - began);
+      const content = result.structuredContent;
+      if (result.isError === true || content === undefined || 'proposed' in content) {
+        const [said] = result.content as { text?: string }[];
+        throw new Error(`${name}: ${said?.text ?? JSON.stringify(content)}`);
+      }
+      return content as T;
+    };
+    const newest = (has: 'message' | 'seconds') => built.items.findLast((item) => has in item);
+    if (i < LANES / 2) {
+      const { id } = await send<{ id: string }>('canvas.addAgent', {
+        at: { x: 1000 + i * 400, y: 0 },
+        adapter: 'codex',
+      });
+      built.agent = id;
+    } else {
+      built.otherLabel = `Worker ${built.other}`;
+      await send('canvas.rename', { node: built.other, label: built.otherLabel });
+      const from = await made[i - LANES / 2]?.agent;
+      const { id } = await send<{ id: string }>('canvas.spawnAgent', { from, relation: 'linked' });
+      built.agent = id;
+    }
+    made[i]?.resolve(built.agent);
+    const partner = await made[(i + LANES / 2) % LANES]?.agent;
+    for (let step = 0; sent < count; step++) {
+      const [first] = built.items;
+      const last = built.items.at(-1);
+      switch (step % 10) {
+        case 0: {
+          const message = `Task ${String(i)}.${String(step)}`;
+          const { id } = await send<{ id: string }>('queue.add', {
+            agent: built.agent,
+            entry: { message },
+          });
+          built.items.push({ id, message });
+          break;
+        }
+        case 1: {
+          const seconds = 60 + step;
+          const { id } = await send<{ id: string }>('queue.add', {
+            agent: built.agent,
+            entry: { delay: { seconds } },
+          });
+          built.items.push({ id, seconds });
+          break;
+        }
+        case 2:
+          built.label = `Worker ${String(i)}.${String(step)}`;
+          await send('canvas.rename', { node: built.agent, label: built.label });
+          break;
+        case 3: {
+          const item = newest('message');
+          if (!item) throw new Error('No message to change');
+          item.message = `${String(item.message)}, revised`;
+          await send('queue.update', {
+            agent: built.agent,
+            item: item.id,
+            change: { kind: 'message', message: item.message },
+          });
+          break;
+        }
+        case 4:
+          await send('canvas.move', {
+            moves: [{ node: built.agent, position: { x: 1000 + i * 400, y: 300 + step * 10 } }],
+          });
+          break;
+        case 5: {
+          const { id } = await send<{ id: string }>('queue.add', {
+            agent: built.agent,
+            entry: { waitFor: [{ agent: partner }] },
+          });
+          built.items.push({ id });
+          break;
+        }
+        case 6:
+          if (!first || !last) throw new Error('No items to move');
+          await send('queue.move', { agent: built.agent, item: last.id, before: first.id });
+          built.items = [last, ...built.items.slice(0, -1)];
+          break;
+        case 7: {
+          const item = newest('seconds');
+          if (!item) throw new Error('No delay to change');
+          item.seconds = 300 + step;
+          await send('queue.update', {
+            agent: built.agent,
+            item: item.id,
+            change: { kind: 'time', time: { seconds: item.seconds } },
+          });
+          break;
+        }
+        case 8:
+          if (i === 0) {
+            arrange = !(arrange ?? false);
+            await send('canvas.setArrange', { on: arrange });
+          } else {
+            const { id } = await send<{ id: string }>('queue.add', {
+              agent: built.other,
+              entry: { message: `For ${built.other}, from lane ${String(i)}` },
+            });
+            built.queued.push(id);
+          }
+          break;
+        case 9:
+          if (!first) throw new Error('No item to remove');
+          await send('queue.remove', { agent: built.agent, item: first.id });
+          built.items = built.items.slice(1);
+          break;
+      }
+    }
+  };
+  const lanes = Array.from({ length: LANES }, (_, i): Built => ({
+    agent: '',
+    label: '',
+    items: [],
+    other: AGENTS[i] ?? '',
+    queued: [],
+  }));
+  await Promise.all(
+    lanes.map((built, i) =>
+      lane(i, built).catch((error: unknown) => {
+        failed.push(`lane ${String(i)}: ${String(error)}`);
+        // A lane that stopped never makes the agent another waits for.
+        for (const one of made) one.resolve('');
+      }),
+    ),
+  );
+  return { lanes, arrange, latencies, took: Date.now() - start, failed };
+}
+
+test('keeps the core’s event loop within budget under a burst of messages, waits, run saves and doc ops', async () => {
   test.setTimeout(180_000);
   const { profile, file, tokens } = await profileOf();
   const url = await start(profile, file);
   const clients = await Promise.all(tokens.map((token) => connect(url, token)));
+  const builder = clients.pop();
   const refusals: string[] = [];
   const done = { sent: 0, replies: 0, toggles: 0 };
 
-  // Every agent's session started, outside the burst.
+  // Every agent's session started, and the canvas read, outside the burst.
   const [first] = clients;
-  if (!first) throw new Error('No client');
+  if (!first || !builder) throw new Error('No client');
+  const before = await call<CanvasState>(builder, 'canvas.get', { canvas: CANVAS }, refusals);
   await Promise.all(
     AGENTS.map((to) => call(first, 'message', { canvas: CANVAS, to, body: 'Warm up' }, refusals)),
   );
@@ -260,21 +492,72 @@ test('keeps the core’s event loop within budget under a burst of messages, wai
       }
     })(),
   );
-  await sleep(BURST_MS);
+  // The doc ops, part way through, their span measured apart: before, during and after them.
+  const docs = sleep(DOC_OPS_AT).then(async () => {
+    serve?.kill('SIGUSR2');
+    const built = await build(builder);
+    serve?.kill('SIGUSR2');
+    return built;
+  });
+  const [built] = await Promise.all([docs, sleep(BURST_MS)]);
   serve?.kill('SIGUSR2');
   await Promise.all(work);
-  const delay = await measured();
-  for (const client of clients) await client.close();
+  const delay = await measured(3);
+  const after = await call<CanvasState>(builder, 'canvas.get', { canvas: CANVAS }, refusals);
+  for (const client of [...clients, builder]) await client.close();
 
-  console.log(
-    `G2: loop delay p50 ${delay.p50.toFixed(2)} ms, p99 ${delay.p99.toFixed(2)} ms, max ${delay.max.toFixed(2)} ms over ${String(delay.samples)} samples; ${String(done.sent)} messages sent, ${String(done.replies)} replies waited for, ${String(done.toggles)} pauses and releases, ${String(refusals.length)} calls refused`,
+  const ms = (n: number | undefined) => `${(n ?? NaN).toFixed(2)} ms`;
+  const spans = ['before the doc ops', 'during them', 'after them'].map(
+    (when, i) => `${when} p99 ${ms(delay.spans[i]?.p99)}, max ${ms(delay.spans[i]?.max)}`,
   );
-  // The burst was one: every party's messages went, and came back.
+  console.log(
+    `G2: loop delay p50 ${ms(delay.p50)}, p99 ${ms(delay.p99)}, max ${ms(delay.max)} over ${String(delay.samples)} samples (${spans.join('; ')}); ${String(done.sent)} messages sent, ${String(done.replies)} replies waited for, ${String(done.toggles)} pauses and releases, ${String(refusals.length)} calls refused; ${String(built.latencies.length)} doc ops in ${String(built.took)} ms (${String(LANES)} in flight, a wave every ${String(WAVE_EVERY_MS)} ms), each p50 ${ms(percentile(built.latencies, 50))}, p99 ${ms(percentile(built.latencies, 99))}, max ${ms(percentile(built.latencies, 100))}`,
+  );
+  // The burst was one: every party's messages went, and came back, and every doc op was made.
   expect(done.sent).toBeGreaterThan(1000);
   expect(done.replies).toBeGreaterThan(1000);
   expect(done.toggles).toBeGreaterThan(100);
+  expect(built.failed).toEqual([]);
+  expect(built.latencies).toHaveLength(DOC_OPS);
   expect(delay.p99).toBeLessThan(25);
   expect(delay.max).toBeLessThan(100);
+
+  // The canvas is as the doc ops left it: each lane's agent, named last as it named it, linked to
+  // the one it spawned or was spawned from, its queue items in the order it left them (beside the
+  // fresh one an agent is made with), as it last changed them; and the items it added to the agent
+  // already there after those it had.
+  if (!before || !after) throw new Error('No canvas');
+  const nodes = new Map(after.nodes.map((node) => [node.id, node]));
+  expect(after.nodes).toHaveLength(before.nodes.length + LANES);
+  expect(after.arrange).toBe(built.arrange);
+  expect(after.links.map(({ source, target }) => [source, target]).sort()).toEqual(
+    built.lanes
+      .slice(0, LANES / 2)
+      .map(({ agent }, i) => [agent, built.lanes[i + LANES / 2]?.agent])
+      .sort(),
+  );
+  for (const lane of built.lanes) {
+    const agent = nodes.get(lane.agent);
+    expect(agent?.data.label).toBe(lane.label);
+    const queue = agent?.data.queue ?? [];
+    expect(queue).toHaveLength(lane.items.length + 1);
+    expect(queue.slice(1)).toEqual(
+      lane.items.map(({ id, message, seconds }) =>
+        expect.objectContaining({
+          id,
+          ...(message === undefined ? {} : { message }),
+          ...(seconds === undefined ? {} : { delay: { seconds } }),
+        }),
+      ),
+    );
+    const other = nodes.get(lane.other);
+    const was = before.nodes.find(({ id }) => id === lane.other);
+    expect(other?.data.label).toBe(lane.otherLabel ?? was?.data.label);
+    expect((other?.data.queue ?? []).map(({ id }) => id)).toEqual([
+      ...(was?.data.queue?.map(({ id }) => id) ?? []),
+      ...lane.queued,
+    ]);
+  }
 
   const exited = new Promise((resolve) => serve?.once('exit', resolve));
   serve?.kill('SIGTERM');
