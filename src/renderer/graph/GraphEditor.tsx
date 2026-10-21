@@ -1410,6 +1410,7 @@ function Editor({
         {openedNode && (
           <AgentView
             key={openedNode.id}
+            opening={opened}
             node={openedNode}
             queueState={queueControlText(run, openedNode.id)}
             onAgentContextMenu={(event) => {
