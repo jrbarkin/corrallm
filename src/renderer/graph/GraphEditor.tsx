@@ -14,7 +14,7 @@ import {
 import type { Connection, Edge, EdgeTypes, NodeTypes } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
-import type { MouseEvent as ReactMouseEvent } from 'react';
+import type { MouseEvent as ReactMouseEvent, SyntheticEvent } from 'react';
 
 import { absolutePosition, groupColors } from '../../shared/model/geometry';
 import { nodeView } from './flow';
@@ -285,6 +285,7 @@ function Editor({
   const sessions = useSyncExternalStore(sessionStore.subscribe, sessionStore.snapshot);
   const run = useSyncExternalStore(runStore.subscribe, runStore.snapshot);
   const [restoring, setRestoring] = useState(runSource !== undefined);
+  const switching = useRef(false);
   const [restoreFailed, setRestoreFailed] = useState(false);
   useEffect(() => {
     if (!persistence) return;
@@ -686,7 +687,6 @@ function Editor({
     [runStore, sessionStore, binding, clearSelection],
   );
   const commands = useMemo(() => {
-    if (!files) return undefined;
     const failed = (doing: string) => (error: unknown) => {
       setRestoreFailed(persistence?.failedInitialization() ?? false);
       setProblem(`Could not ${doing}: ${ipcErrorMessage(error)}`);
@@ -697,20 +697,29 @@ function Editor({
      * nothing asks to discard them; the window says so when it had any.
      */
     const switchTo = async (action: () => Promise<CanvasId | null>) => {
-      await flushDrafts();
-      // Read, not required: a canvas that could not be restored can still be switched from.
-      const before = binding.read();
-      runStore.pause();
-      if (persistence) await persistence.switch(action, load);
-      else {
-        const id = await action();
-        if (id !== null) await load(id);
+      if (switching.current) return;
+      switching.current = true;
+      setRestoring(true);
+      try {
+        await flushDrafts();
+        // Read, not required: a canvas that could not be restored can still be switched from.
+        const before = binding.read();
+        // The persistence barrier holds automated sends. Pausing here would interrupt a live
+        // turn even if Open is cancelled; only a successful switch resets the old run.
+        if (persistence) await persistence.switch(action, load);
+        else {
+          const id = await action();
+          if (id !== null) await load(id);
+        }
+        // A cancelled Open after a failed restore leaves it failed: only another canvas recovers.
+        setRestoreFailed(persistence?.failedInitialization() ?? false);
+        if (before && before.document.id !== binding.canvas && before.meta.edited)
+          setNotice([`${before.meta.name ?? 'The previous canvas'} stays open with its changes.`]);
+        persistence?.changed();
+      } finally {
+        switching.current = false;
+        setRestoring(false);
       }
-      // A cancelled Open after a failed restore leaves it failed: only another canvas recovers.
-      setRestoreFailed(persistence?.failedInitialization() ?? false);
-      if (before && before.document.id !== binding.canvas && before.meta.edited)
-        setNotice([`${before.meta.name ?? 'The previous canvas'} stays open with its changes.`]);
-      persistence?.changed();
     };
     return {
       new: () => {
@@ -755,7 +764,7 @@ function Editor({
         }).catch(failed('save the canvas'));
       },
     };
-  }, [files, load, persistence, runStore, api, binding]);
+  }, [load, persistence, api, binding]);
   useEffect(() => {
     if (files)
       document.title = `${name ?? 'Untitled'}${canonical?.meta.edited ? ' (edited)' : ''} — corrallm`;
@@ -766,9 +775,10 @@ function Editor({
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      const file = commands ? fileAction(event) : null;
+      if (switching.current || restoring) return;
+      const file = files ? fileAction(event) : null;
       if (restoreFailed && file !== 'new' && file !== 'open') return;
-      if (commands && file) {
+      if (files && file) {
         event.preventDefault();
         void flushDrafts(() => {
           if (file === 'save' || file === 'saveAs') {
@@ -803,7 +813,7 @@ function Editor({
     return () => {
       document.removeEventListener('keydown', onKeyDown);
     };
-  }, [execute, commands, restoreFailed, selection]);
+  }, [execute, commands, files, restoreFailed, restoring, selection]);
 
   /** Adds a node where the pointer is: into the innermost group there, if any. */
   const addAtPointer = (event: ReactMouseEvent) => {
@@ -936,15 +946,30 @@ function Editor({
   });
   const canGroup = Structure.groupMembers(model.nodes, [...selection.nodes]).length > 0;
 
+  const blockSwitchInput = (event: SyntheticEvent) => {
+    if (switching.current) {
+      event.preventDefault();
+      event.stopPropagation();
+    }
+  };
+
   if (restoreFailed) {
     return (
-      <div className="graph-editor">
+      <div
+        className="graph-editor"
+        inert={restoring}
+        aria-busy={restoring}
+        onClickCapture={blockSwitchInput}
+        onDoubleClickCapture={blockSwitchInput}
+        onPointerDownCapture={blockSwitchInput}
+        onKeyDownCapture={blockSwitchInput}
+      >
         <div className="graph-file-panel">
           <p className="graph-file-problem graph-panel" role="alert">
             {problem ?? 'Run progress could not be restored.'} The saved progress has been kept.
             Choose New or Open to continue.
           </p>
-          {commands && (
+          {files && (
             <div className="graph-file graph-panel" role="toolbar" aria-label="Canvas recovery">
               <button
                 type="button"
@@ -994,7 +1019,12 @@ function Editor({
         ref={wrapper}
         inert={restoring}
         aria-busy={restoring}
+        onClickCapture={blockSwitchInput}
+        onDoubleClickCapture={blockSwitchInput}
+        onPointerDownCapture={blockSwitchInput}
         onKeyDownCapture={(event) => {
+          blockSwitchInput(event);
+          if (event.isPropagationStopped()) return;
           if (event.key !== 'ContextMenu' && !(event.key === 'F10' && event.shiftKey)) return;
           if (
             !(event.target instanceof HTMLElement) ||
@@ -1028,7 +1058,7 @@ function Editor({
             </button>
           </div>
         )}
-        {!commands && problem && (
+        {!files && problem && (
           <p role="alert" className="graph-panel">
             {problem}
           </p>
@@ -1260,7 +1290,7 @@ function Editor({
               />
             </Panel>
           )}
-          {commands && (
+          {files && (
             <Panel position="top-left">
               <FileBar
                 name={name}
@@ -1297,8 +1327,8 @@ function Editor({
               />
             </Panel>
           )}
-          {!commands && backends.length > 0 && <Panel position="top-left">{gauges}</Panel>}
-          {commands && graph.nodes.length === 0 && (
+          {!files && backends.length > 0 && <Panel position="top-left">{gauges}</Panel>}
+          {files && graph.nodes.length === 0 && (
             <Panel position="top-center" className="graph-panel graph-start">
               <button
                 type="button"
@@ -1511,7 +1541,7 @@ function Editor({
             onPick={(template, choices, use) => {
               setGallery(false);
               if (use === 'new') {
-                commands?.example(template.id, choices);
+                commands.example(template.id, choices);
                 return;
               }
               perform(

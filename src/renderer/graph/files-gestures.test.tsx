@@ -1,5 +1,7 @@
 import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { automaticBackend } from '../../shared/engine/test-backend';
+import type { RunCheckpoint, RunRestore } from '../../shared/run';
 import { newCanvasId } from '../../shared/canvas';
 import { EXAMPLES } from '../../shared/examples';
 import { templateInfo } from '../../shared/templates';
@@ -298,3 +300,176 @@ it('keeps a failed restore’s recovery after a cancelled Open, until New switch
     expect(screen.queryByRole('toolbar', { name: 'Canvas recovery' })).toBeNull();
   });
 });
+
+it('blocks input through a switch’s late restore, then preserves the next manual message', async () => {
+  const canvas = fakeCanvas({ id: newCanvasId(), arrange: false, nodes: [], links: [] });
+  cleanups.push(() => {
+    canvas.core.dispose();
+  });
+  const initial = canvas.document.id,
+    next = newCanvasId();
+  const sessions = automaticBackend();
+  const held = Promise.withResolvers<RunRestore>();
+  const save = vi.fn<RunSource['save']>(() => Promise.resolve(null));
+  let reads = 0;
+  canvas.core.reply('canvas.open', () => {
+    canvas.open({
+      id: next,
+      arrange: false,
+      nodes: [
+        {
+          id: 'b',
+          type: 'agent',
+          position: { x: 0, y: 0 },
+          data: { label: 'Fresh', adapter: 'claude-code', connection: 'claude-code.sdk' },
+        },
+      ],
+      links: [],
+    });
+    return Promise.resolve({ ok: true, value: { canvas: next, revs: {} } });
+  });
+  const view = render(
+    <GraphEditor
+      canvas={initial}
+      client={canvas.core.api}
+      mirror={canvas.core.topics}
+      sessionBackend={sessions.backend}
+      runSource={{
+        get: () =>
+          ++reads === 1
+            ? Promise.resolve({ id: initial, token: 'old', checkpoint: null })
+            : held.promise,
+        save,
+        ready: () => Promise.resolve(null),
+        onStopping: () => () => undefined,
+      }}
+    />,
+  );
+  await waitFor(() => {
+    expect(save).toHaveBeenCalled();
+  });
+  await click('Open…');
+  await waitFor(() => {
+    expect(reads).toBe(2);
+  });
+  try {
+    const root = view.container.querySelector('.graph-editor');
+    expect(root?.hasAttribute('inert')).toBe(true);
+    expect(root?.getAttribute('aria-busy')).toBe('true');
+    await events.doubleClick(await screen.findByText('Fresh'));
+    await events.keyDown(document.body, { key: 'n', ctrlKey: true });
+    await events.keyDown(document.body, { key: 's', ctrlKey: true });
+    expect(screen.queryByRole('dialog', { name: 'Fresh' })).toBeNull();
+    expect(sessions.backend.start).not.toHaveBeenCalled();
+    expectOneOp(canvas.core, 'canvas.open', {});
+  } finally {
+    await act(() => {
+      held.resolve({ id: next, token: 'new', checkpoint: null });
+      return Promise.resolve();
+    });
+  }
+  await waitFor(() => {
+    expect(view.container.querySelector('.graph-editor')?.hasAttribute('inert')).toBe(false);
+  });
+  await events.doubleClick(await screen.findByText('Fresh'));
+  const input = await screen.findByRole('textbox', { name: 'Message Fresh' });
+  await events.change(input, { target: { value: 'Sent after the switch' } });
+  await events.keyDown(input, { key: 'Enter' });
+  await waitFor(() => {
+    expect(sessions.backend.send).toHaveBeenCalledOnce();
+  });
+  await waitFor(() => {
+    expect(save).toHaveBeenLastCalledWith(
+      'new',
+      expect.objectContaining({
+        messages: expect.stringContaining('Sent after the switch') as unknown,
+      }),
+    );
+  });
+  expect(sessions.backend.close).not.toHaveBeenCalledWith('b');
+});
+
+it.each(['cancelled', 'refused'] as const)(
+  'a %s Open leaves a running queue and its turn unchanged',
+  async (outcome) => {
+    const canvas = fakeCanvas({
+      id: newCanvasId(),
+      arrange: false,
+      nodes: [
+        {
+          id: 'a',
+          type: 'agent',
+          position: { x: 0, y: 0 },
+          data: {
+            label: 'A',
+            connection: 'claude-code.sdk',
+            queue: [{ id: 'work', message: 'Keep working' }],
+          },
+        },
+      ],
+      links: [],
+    });
+    cleanups.push(() => {
+      canvas.core.dispose();
+    });
+    const id = canvas.document.id;
+    const sessions = automaticBackend();
+    // Keep this native turn open explicitly; the regression must not depend on a one-second timer.
+    sessions.backend.send.mockImplementation((agent, message) => {
+      sessions.emit(
+        agent,
+        'claude-code.sdk',
+        { type: 'user', id: message.id, text: message.text },
+        { type: 'status', status: 'working' },
+      );
+      return Promise.resolve(null);
+    });
+    const save = vi.fn<(_token: string, checkpoint: RunCheckpoint | null) => Promise<null>>(() =>
+      Promise.resolve(null),
+    );
+    if (outcome === 'refused')
+      canvas.core.reply('canvas.open', {
+        ok: false,
+        error: { code: 'invalid', sentence: 'Not a canvas' },
+      });
+    render(
+      <GraphEditor
+        canvas={id}
+        client={canvas.core.api}
+        mirror={canvas.core.topics}
+        sessionBackend={sessions.backend}
+        runSource={{
+          get: () => Promise.resolve({ id, token: 'same', checkpoint: null }),
+          save,
+          ready: () => Promise.resolve(null),
+          onStopping: () => () => undefined,
+        }}
+      />,
+    );
+    await waitFor(() => {
+      expect(save).toHaveBeenCalled();
+    });
+    await click('Show all queues');
+    const queues = within(screen.getByRole('dialog', { name: 'All queues' }));
+    await events.click(queues.getByRole('button', { name: 'Run' }));
+    await waitFor(() => {
+      expect(sessions.backend.send).toHaveBeenCalledOnce();
+    });
+    const before = JSON.parse(save.mock.calls.at(-1)?.[1]?.state ?? '{}') as unknown;
+    await events.click(queues.getByRole('button', { name: 'Back' }));
+    await click('Open…');
+    await waitFor(() => {
+      expectOneOp(canvas.core, 'canvas.open', {});
+    });
+    if (outcome === 'refused')
+      expect(await screen.findByRole('alert')).toHaveProperty(
+        'textContent',
+        expect.stringContaining('Not a canvas'),
+      );
+    expect(sessions.backend.interrupt).not.toHaveBeenCalled();
+    expect(sessions.backend.close).not.toHaveBeenCalled();
+    const after = JSON.parse(save.mock.calls.at(-1)?.[1]?.state ?? '{}') as unknown;
+    expect(after).toEqual(before);
+    expect(canvas.document.id).toBe(id);
+  },
+);
