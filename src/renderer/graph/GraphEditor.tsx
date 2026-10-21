@@ -1658,7 +1658,11 @@ function Editor({
               setStartChoice({ canvas: canvasId, open: false });
               setGallery(template);
             }}
-            onShow={commands.show}
+            onShow={async (id) => {
+              await commands.show(id);
+              if (binding.canvas !== id) throw new Error('The recent canvas was not shown.');
+              setStartChoice({ canvas: id, open: false });
+            }}
             onStart={async (adapter, connection, from) => {
               await flushDrafts();
               const box = wrapper.current?.getBoundingClientRect();

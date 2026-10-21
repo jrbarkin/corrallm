@@ -197,3 +197,89 @@ it('a refused start leaves Start open and explains the refusal', async () => {
   expect(view.getByRole('alert').textContent).toContain('This connection is unavailable.');
   expect(canvas.document.nodes).toHaveLength(0);
 });
+
+it('closes Start after returning to a canvas whose Start was left open', async () => {
+  const { canvas } = setup();
+  let view = await start();
+  await events.click(view.getByRole('button', { name: 'Start Claude Code' }));
+  const first = canvas.document;
+  await events.click(screen.getByRole('button', { name: 'Start a session' }));
+  await start();
+  await events.click(screen.getByRole('button', { name: 'Canvas menu' }));
+  await events.click(screen.getByRole('button', { name: 'New' }));
+  view = await start();
+  act(() => {
+    canvas.core.change({
+      topic: 'canvases',
+      rev: 1,
+      replace: {
+        items: [
+          {
+            canvas: first.id,
+            name: 'first.corral',
+            edited: true,
+            running: false,
+            open: true,
+            shownIn: [],
+            project: null,
+          },
+        ],
+      },
+    });
+  });
+  let shown: (() => void) | undefined;
+  canvas.core.reply(
+    'window.show',
+    () =>
+      new Promise((resolve) => {
+        shown = () => {
+          canvas.open(first);
+          resolve({ ok: true, value: {} });
+        };
+      }),
+  );
+  canvas.core.operations.length = 0;
+  await events.click(await view.findByRole('button', { name: 'Show first.corral' }));
+  expectOneOp(canvas.core, 'window.show', { canvas: first.id });
+  expect(screen.getByRole('dialog', { name: 'Start a session' })).toBeTruthy();
+  await act(async () => {
+    shown?.();
+    await Promise.resolve();
+  });
+  await waitFor(() => {
+    expect(screen.queryByRole('dialog', { name: 'Start a session' })).toBeNull();
+  });
+  expect(canvas.document.id).toBe(first.id);
+});
+it.each(['The canvas was refused.', 'Showing the canvas was cancelled.'])(
+  'keeps Start open when a recent switch fails: %s',
+  async (sentence) => {
+    const { canvas } = setup();
+    const recent = newCanvasId();
+    act(() => {
+      canvas.core.change({
+        topic: 'canvases',
+        rev: 1,
+        replace: {
+          items: [
+            {
+              canvas: recent,
+              name: 'Recent.corral',
+              edited: false,
+              running: false,
+              open: false,
+              shownIn: [],
+              project: null,
+            },
+          ],
+        },
+      });
+    });
+    canvas.core.reply('window.show', { ok: false, error: { code: 'unavailable', sentence } });
+    const view = await start();
+    await events.click(await view.findByRole('button', { name: 'Show Recent.corral' }));
+    expectOneOp(canvas.core, 'window.show', { canvas: recent });
+    expect(view.getByRole('alert').textContent).toContain(sentence);
+    expect(screen.getByRole('dialog', { name: 'Start a session' })).toBeTruthy();
+  },
+);
