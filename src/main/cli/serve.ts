@@ -43,7 +43,7 @@ import { TOKEN_VARIABLE, URL_VARIABLE } from './wait';
  */
 
 /** The name orchestrators register corrallm's MCP server under: never the agents' `corrallm`. */
-const SERVER_NAME = 'corrallm-outside';
+const SERVER_NAME = 'corrallm-server';
 
 const NOT_A_TERMINAL =
   'corrallm serve: --new-token prints a token only to a terminal, so that a person sees it once: run it in one, with stderr not redirected.';
