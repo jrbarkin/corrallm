@@ -1,6 +1,5 @@
 import type {
   FilesRewind,
-  InterruptOptions,
   McpChange,
   McpServer,
   PermissionMode,
@@ -80,7 +79,7 @@ export interface LiveSession<M extends SessionMode = PermissionMode> {
   /** Answers a prompt it emitted, by the prompt's id. */
   answer(promptId: string, answer: SessionAnswer): Promise<void>;
   /** Interrupts the turn going on, if any: it ends with an 'end' that says so. */
-  interrupt(options?: InterruptOptions): Promise<void>;
+  interrupt(): Promise<void>;
   setMode(mode: M): Promise<void>;
   setModel(model: string): Promise<void>;
   /**

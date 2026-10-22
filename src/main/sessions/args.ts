@@ -134,16 +134,7 @@ export function parseOptionsArgs(args: unknown[], catalog: Catalog): IpcArgs<'se
   return [parseAdapter(adapter, catalog)];
 }
 
-/** Only Kill and take-back ask to stop the interrupted turn's commands too. */
-export function parseInterruptArgs(args: unknown[]): IpcArgs<'session:interrupt'> {
-  if (args.length === 1) return parseAgentArgs(args);
-  const [agent, options] = expect(args, 2, 'an agent and interrupt options');
-  const { stopCommands } = record(options, 'interrupt options', ['stopCommands']);
-  if (stopCommands !== true) throw new TypeError('Expected stopCommands to be true');
-  return [parseId(agent, 'agent'), { stopCommands: true }];
-}
-
-/** For channels that take only the agent. */
+/** For channels that take only the agent: session:interrupt and session:close. */
 export function parseAgentArgs(args: unknown[]): [agentId: string] {
   const [agentId] = expect(args, 1, 'an agent');
   return [parseId(agentId, 'agent')];

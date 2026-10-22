@@ -145,24 +145,34 @@ it.each(['Kill', 'withdrawal'] as const)(
   },
 );
 
-it('Kill leaves an earlier turn’s background command alone', async () => {
-  await send('background');
-  const earlier = await command();
-  await idle();
-  await send('slow interact');
-  await vi.waitFor(async () => {
-    expect((await records()).filter((r) => r.type === 'process')).toHaveLength(2);
-  });
-  const current = await command();
-  expect(
-    (await running().call('run.kill', { canvas: CANVAS, target: { agent: 'a' } }, CALLERS.you)).ok,
-  ).toBe(true);
-  await idle();
-  expect(alive(current.pid)).toBe(false);
-  expect(alive(earlier.pid)).toBe(true);
-});
+it.each(['run.kill', 'session.interrupt'] as const)(
+  '%s leaves an earlier turn’s background command alone',
+  async (op) => {
+    await send('background');
+    const earlier = await command();
+    await idle();
+    await send('slow interact');
+    await vi.waitFor(async () => {
+      expect((await records()).filter((r) => r.type === 'process')).toHaveLength(2);
+    });
+    const current = await command();
+    expect(
+      (op === 'run.kill'
+        ? await running().call('run.kill', { canvas: CANVAS, target: { agent: 'a' } }, CALLERS.you)
+        : await running().call(
+            'session.interrupt',
+            { canvas: CANVAS, agent: 'a' },
+            CALLERS['outside-write'],
+          )
+      ).ok,
+    ).toBe(true);
+    await idle();
+    expect(alive(current.pid)).toBe(false);
+    expect(alive(earlier.pid)).toBe(true);
+  },
+);
 
-it('a plain session interrupt leaves the turn’s command running', async () => {
+it('a plain token session interrupt stops the turn’s command', async () => {
   await send('slow');
   const child = await command();
   expect(
@@ -175,6 +185,6 @@ it('a plain session interrupt leaves the turn’s command running', async () => 
     ).ok,
   ).toBe(true);
   await idle();
-  expect(alive(child.pid)).toBe(true);
-  expect((await records()).filter((r) => r.type === 'terminated')).toEqual([]);
+  expect(alive(child.pid)).toBe(false);
+  expect((await records()).filter((r) => r.type === 'terminated')).toHaveLength(1);
 });

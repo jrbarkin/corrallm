@@ -28,7 +28,7 @@ A condition in the user's words is asked of it in its own session, yes or no ("c
 
 Stop pauses with a cancelled attempt; Resume holds it for a decision and Run again explicitly starts fresh.
 
-A send's take-back also requests cleanup of that turn's commands where its connection supports it, as Kill does; an ordinary composer Stop does not request that cleanup.
+A send's take-back, Kill and the composer's Stop all use the connection's interrupt behavior, including stopping commands started by the interrupted turn where its connection supports it.
 
 Stop (and Run again) takes back what the run sent that is still going (RunIO.send returns it: SessionStore.send's take-back, off the session's queue or interrupting its turn), and no longer hears those turns end.
 

@@ -68,6 +68,30 @@ const processLog = (event) => {
     appendFileSync(process.env.FAKE_CODEX_PROCESS_LOG, `${JSON.stringify(event)}\n`);
 };
 
+/** A real sleeping child, reported as a unified-exec command with a separate process id. */
+function sleepingCommand(thread, turnId) {
+  const threadId = thread.id;
+  const child = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 30000)'], {
+    stdio: 'ignore',
+  });
+  const processId = String(nextProcess++);
+  processes.set(processId, { child, threadId });
+  child.once('exit', () => processes.delete(processId));
+  processLog({ type: 'process', processId, pid: child.pid, turnId });
+  return {
+    type: 'commandExecution',
+    id: `exec-${randomUUID()}`,
+    command: '/bin/zsh -lc "sleep 30"',
+    cwd: thread.cwd,
+    processId,
+    source: 'unifiedExecStartup',
+    status: 'inProgress',
+    commandActions: [{ type: 'unknown', command: 'sleep 30' }],
+    aggregatedOutput: null,
+    exitCode: null,
+  };
+}
+
 const STATE = process.env.FAKE_CODEX_STATE;
 /** Threads kept (they had a turn), by id: their cwd, model and turns. */
 const kept = STATE && existsSync(STATE) ? JSON.parse(readFileSync(STATE, 'utf8')) : {};
@@ -289,6 +313,10 @@ async function turn(thread, turnId, input, { review, compact } = {}) {
 
   const readOnly = thread.sandbox.type === 'readOnly';
   if (thread.plan) {
+    if (wanted.startsWith('background')) {
+      const command = sleepingCommand(thread, turnId);
+      await item(command, { ...command, status: 'completed' });
+    }
     const plan = { type: 'plan', id: `${turnId}-plan`, text: '' };
     const proposed = '# Plan\n\n1. Read the code\n2. Change it\n';
     await item(plan, { ...plan, text: proposed }, () =>
@@ -437,13 +465,7 @@ async function turn(thread, turnId, input, { review, compact } = {}) {
     said = `You picked ${answer?.result?.answers?.color?.answers?.[0] ?? 'nothing'}.`;
   }
   if (wanted.startsWith('slow') || wanted.startsWith('background')) {
-    const child = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 30000)'], {
-      stdio: 'ignore',
-    });
-    const processId = String(nextProcess++);
-    processes.set(processId, { child, threadId });
-    child.once('exit', () => processes.delete(processId));
-    processLog({ type: 'process', processId, pid: child.pid, turnId });
+    const command = sleepingCommand(thread, turnId);
     if (wanted.includes('interact')) {
       const earlier = [...processes.keys()][0];
       notify('item/started', {
@@ -459,18 +481,6 @@ async function turn(thread, turnId, input, { review, compact } = {}) {
         },
       });
     }
-    const command = {
-      type: 'commandExecution',
-      id: `exec-${randomUUID()}`,
-      command: '/bin/zsh -lc "sleep 30"',
-      cwd: thread.cwd,
-      processId,
-      source: 'unifiedExecStartup',
-      status: 'inProgress',
-      commandActions: [{ type: 'unknown', command: 'sleep 30' }],
-      aggregatedOutput: null,
-      exitCode: null,
-    };
     notify('item/started', { item: command, ...where, startedAtMs: Date.now() });
     if (wanted.startsWith('background')) {
       const completed = { ...command, status: 'completed' };
@@ -479,6 +489,7 @@ async function turn(thread, turnId, input, { review, compact } = {}) {
       return finish('completed');
     }
     for (let tick = 0; tick < 600 && !state.interrupted; tick += 1) {
+      if (wanted.includes('self-interrupt') && tick === 1) state.interrupted = true;
       notify('item/commandExecution/outputDelta', {
         ...where,
         itemId: command.id,

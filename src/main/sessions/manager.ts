@@ -11,7 +11,6 @@ import type {
   RewindRestore,
   RewindResult,
   SessionAnswer,
-  InterruptOptions,
   SessionEvent,
   SessionMode,
   SessionOptions,
@@ -182,8 +181,8 @@ export class SessionManager {
     await (await this.#session(canvas, agentId)).answer(promptId, answer);
   }
 
-  async interrupt(canvas: CanvasId, agentId: string, options?: InterruptOptions): Promise<void> {
-    await (await this.#session(canvas, agentId)).interrupt(...(options ? [options] : []));
+  async interrupt(canvas: CanvasId, agentId: string): Promise<void> {
+    await (await this.#session(canvas, agentId)).interrupt();
   }
 
   /** Switches the agent's session's mode (one of its adapter's). */

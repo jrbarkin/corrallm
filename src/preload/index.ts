@@ -60,7 +60,7 @@ const api: AppApi = {
   sendToSession: (agentId, message) => invoke(API_CHANNELS.sendToSession, agentId, message),
   answerSession: (agentId, promptId, answer) =>
     invoke(API_CHANNELS.answerSession, agentId, promptId, answer),
-  interruptSession: (...args) => invoke(API_CHANNELS.interruptSession, ...args),
+  interruptSession: (agentId) => invoke(API_CHANNELS.interruptSession, agentId),
   setSessionMode: (agentId, mode) => invoke(API_CHANNELS.setSessionMode, agentId, mode),
   setSessionModel: (agentId, model) => invoke(API_CHANNELS.setSessionModel, agentId, model),
   setSessionEffort: (agentId, effort) => invoke(API_CHANNELS.setSessionEffort, agentId, effort),

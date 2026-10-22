@@ -593,11 +593,33 @@ describe('the App Server connection', () => {
     expect(events.at(-1)).toMatchObject({ type: 'end', result: { status: 'cancelled' } });
   });
 
-  it('keeps Kill’s cleanup scope when the native turn id and command arrive after the stop', async () => {
+  it('cleans up when the native turn id and command arrive after the stop', async () => {
     const { session, ended } = await start();
     await session.send({ id: 'm1', text: 'slow' });
-    await session.interrupt({ stopCommands: true });
+    await session.interrupt();
     await ended('m1');
+    expect(await requests('thread/backgroundTerminals/terminate')).toEqual([
+      { threadId: (await requests('turn/start'))[0]?.threadId, processId: '1000' },
+    ]);
+  });
+
+  it('interrupts a plan prompt and stops the command its plan turn left running', async () => {
+    const { session, heard, ended } = await start({ mode: 'plan' });
+    await session.send({ id: 'm1', text: 'background plan' });
+    await heard('plan');
+    await session.interrupt();
+    await ended('m1');
+    expect(await requests('turn/interrupt')).toEqual([]); // The native plan turn already ended.
+    expect(await requests('thread/backgroundTerminals/terminate')).toEqual([
+      { threadId: (await requests('turn/start'))[0]?.threadId, processId: '1000' },
+    ]);
+  });
+
+  it('cleans up a turn Codex interrupts without a corrallm interrupt request', async () => {
+    const { session, ended } = await start();
+    await session.send({ id: 'm1', text: 'slow self-interrupt' });
+    await ended('m1');
+    expect(await requests('turn/interrupt')).toEqual([]);
     expect(await requests('thread/backgroundTerminals/terminate')).toEqual([
       { threadId: (await requests('turn/start'))[0]?.threadId, processId: '1000' },
     ]);
@@ -614,7 +636,7 @@ describe('the App Server connection', () => {
     await session.send({ id: 'm1', text: 'slow' });
     await heard('tool', { detail: { kind: 'output' } });
     await session.send({ id: 'm2', text: 'next' });
-    await session.interrupt({ stopCommands: true });
+    await session.interrupt();
     await vi.waitFor(async () => {
       expect(await requests('thread/backgroundTerminals/terminate')).toHaveLength(1);
     });
@@ -636,7 +658,7 @@ describe('the App Server connection', () => {
       await session.send({ id: 'm1', text: 'slow' });
       await heard('tool', { detail: { kind: 'output' } });
       await session.send({ id: 'm2', text: 'next' });
-      await session.interrupt({ stopCommands: true });
+      await session.interrupt();
       await ended('m2');
       expect(
         events.filter((event) => event.type === 'notice' && event.level === 'warning'),
@@ -652,7 +674,7 @@ describe('the App Server connection', () => {
         await vi.waitFor(() => {
           expect(new Set(events.flatMap((e) => (e.type === 'tool' ? [e.id] : []))).size).toBe(2);
         });
-        await session.interrupt({ stopCommands: true });
+        await session.interrupt();
         await ended('m3');
         expect(
           events.filter((event) => event.type === 'notice' && event.level === 'warning'),
@@ -1037,9 +1059,10 @@ describe('the App Server connection, replaying the real Codex', () => {
     expect(problems).toEqual([]);
   });
 
-  // The recording ends at turn/completed(interrupted), without a command exit: cancellation, not proof that its process stopped.
+  // The capture has no command exit or terminate response: the replay answers the added cleanup
+  // request as unsupported; the real-child tests prove cleanup on a peer that supports it.
   it('a command interrupted while it runs', async () => {
-    const { session, heard, ended, events, problems } = await replayed('interrupt', {
+    const { session, heard, ended, events, problems, sent } = await replayed('interrupt', {
       cwd: '/work/smoke/three',
       mode: 'full-access',
     });
@@ -1048,6 +1071,13 @@ describe('the App Server connection, replaying the real Codex', () => {
     await session.interrupt();
     await ended('m1');
     expect(events.at(-1)).toMatchObject({ type: 'end', result: { status: 'cancelled' } });
+    expect(sent).toContainEqual({
+      method: 'thread/backgroundTerminals/terminate',
+      params: { threadId: '01a1348f-e329-74b3-9b25-d78465fdafb2', processId: '22733' },
+    });
+    expect(
+      events.filter((event) => event.type === 'notice' && event.level === 'warning'),
+    ).toMatchObject([{ text: expect.stringContaining('22733 may still be running') as string }]);
     expect(problems).toEqual([]);
   });
 

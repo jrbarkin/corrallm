@@ -4,7 +4,6 @@ import { UNASKING_MODES } from '../../../../shared/session';
 
 import type {
   CodexMode,
-  InterruptOptions,
   ModelChoice,
   SessionAnswer,
   SessionEvent,
@@ -109,7 +108,6 @@ interface Turn {
   interrupted: boolean;
   /** Only processes started by this native turn, never an earlier turn's write_stdin target. */
   processes: Set<string>;
-  stopCommands: boolean;
   ending: boolean;
   /** The plan prompt waiting for the user, between Codex's turns. */
   plan: string | undefined;
@@ -270,11 +268,10 @@ export class AppServerSession implements LiveSession<CodexMode> {
     }
   }
 
-  async interrupt(options?: InterruptOptions): Promise<void> {
+  async interrupt(): Promise<void> {
     const turn = this.#turn;
     if (!turn) return;
     turn.interrupted = true;
-    turn.stopCommands ||= options?.stopCommands === true;
     if (turn.plan !== undefined) {
       this.#host.emit({ type: 'withdrawn', id: turn.plan });
       this.#end(turn, { status: 'cancelled', reason: 'interrupted' });
@@ -383,7 +380,6 @@ export class AppServerSession implements LiveSession<CodexMode> {
       stop: false,
       interrupted: false,
       processes: new Set(),
-      stopCommands: false,
       ending: false,
       plan: undefined,
       compact: false,
@@ -524,7 +520,6 @@ export class AppServerSession implements LiveSession<CodexMode> {
       stop: false,
       interrupted: false,
       processes: new Set(),
-      stopCommands: false,
       ending: false,
       plan: undefined,
       compact: false,
@@ -599,7 +594,7 @@ export class AppServerSession implements LiveSession<CodexMode> {
   /** Ends corrallm's turn: whoever sent its message hears; the next message, if any, goes. */
   #end(turn: Turn, result: TurnResult): void {
     if (this.#turn !== turn || turn.ending) return;
-    if (turn.stopCommands && turn.processes.size > 0) {
+    if ((turn.interrupted || result.status === 'cancelled') && turn.processes.size > 0) {
       turn.ending = true;
       // turn/completed can precede the interrupt response. Keep the turn busy until its own
       // commands are stopped, so neither the mailbox nor our queue starts another turn early.

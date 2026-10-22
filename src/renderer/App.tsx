@@ -30,8 +30,7 @@ const sessionBackend: SessionBackend = {
   send: (agentId, message) => fromMain(window.api.sendToSession(agentId, message)),
   answer: (agentId, promptId, answer) =>
     fromMain(window.api.answerSession(agentId, promptId, answer)),
-  interrupt: (agentId, options) =>
-    fromMain(window.api.interruptSession(agentId, ...(options ? [options] : []))),
+  interrupt: (agentId) => fromMain(window.api.interruptSession(agentId)),
   setMode: (agentId, mode) => fromMain(window.api.setSessionMode(agentId, mode)),
   setModel: (agentId, model) => fromMain(window.api.setSessionModel(agentId, model)),
   setEffort: (agentId, effort) => fromMain(window.api.setSessionEffort(agentId, effort)),

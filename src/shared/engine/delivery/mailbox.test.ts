@@ -294,22 +294,6 @@ describe('SessionStore', () => {
       store.reset();
     });
 
-    it('upgrades a plain Stop to Kill once, without dropping the command cleanup request', async () => {
-      const { backend } = fakeBackend();
-      const store = new SessionStore(engine, backend);
-      store.sync([{ id: 'a', connection: 'claude-code.sdk' }]);
-      store.send('a', 'claude-code', 'Active');
-      await Promise.resolve();
-      await Promise.resolve();
-      store.stop('a');
-      store.stop('a', { stopCommands: true });
-      store.stop('a', { stopCommands: true });
-      await Promise.resolve();
-      await Promise.resolve();
-      expect(backend.interrupt.mock.calls).toEqual([['a'], ['a', { stopCommands: true }]]);
-      store.reset();
-    });
-
     it.each(['reset', 'remove'] as const)(
       'clears runtime holds on %s, including agents with no session yet',
       async (action) => {

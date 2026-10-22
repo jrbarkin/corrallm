@@ -25,11 +25,6 @@ export const TURN_REASONS = [
 ] as const;
 export type TurnReason = (typeof TURN_REASONS)[number];
 
-/** Kill and taking back a delivered message also stop commands started by that turn, where supported. */
-export interface InterruptOptions {
-  stopCommands: true;
-}
-
 export interface TurnResult {
   status: 'completed' | 'failed' | 'cancelled';
   reason: TurnReason;

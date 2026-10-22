@@ -2,7 +2,6 @@ import type { AdapterId, ConnectionId } from '../../adapter';
 import { isSessionMode } from '../../session';
 import type {
   AgentStartSettings,
-  InterruptOptions,
   FilesRewind,
   InstalledClis,
   McpChange,
@@ -35,7 +34,7 @@ export interface SessionBackend {
   installed(): Promise<InstalledClis>;
   send(agentId: string, message: UserMessage): Promise<null>;
   answer(agentId: string, promptId: string, answer: SessionAnswer): Promise<null>;
-  interrupt(agentId: string, options?: InterruptOptions): Promise<null>;
+  interrupt(agentId: string): Promise<null>;
   setMode(agentId: string, mode: SessionMode): Promise<null>;
   setModel(agentId: string, model: string): Promise<null>;
   setEffort(agentId: string, effort: string | null): Promise<null>;
@@ -227,7 +226,7 @@ export class ConnectedDriver implements SessionDriver {
     this.#tell((agentId) => this.#backend.answer(agentId, id, answer));
   }
 
-  stop(options?: InterruptOptions): void {
+  stop(): void {
     const unsent = [...this.#turns].flatMap(([id, turn]) => (turn.sent ? [] : [id]));
     if (unsent.length > 0) {
       this.#end(unsent, {
@@ -236,7 +235,7 @@ export class ConnectedDriver implements SessionDriver {
       return;
     }
     // Main ends the turn, with an 'end' that says it was interrupted.
-    this.#tell((agentId) => this.#backend.interrupt(agentId, ...(options ? [options] : [])));
+    this.#tell((agentId) => this.#backend.interrupt(agentId));
   }
 
   setMode(mode: SessionMode): void {

@@ -2,7 +2,6 @@ import type { AdapterId, ConnectionId } from '../../adapter';
 import type { SubmittedMessage } from '../../model/queue';
 import { parseRole } from '../../role';
 import type {
-  InterruptOptions,
   AgentSettings,
   ElicitationAction,
   FilesRewind,
@@ -102,7 +101,7 @@ export class SessionStore {
   /** A durable conversation replacement gates new sends until the new driver can start. */
   readonly #freshening = new Map<string, Promise<void>>();
   /** A pending interrupt belongs to this turn; duplicate stop callbacks must not send another. */
-  readonly #stopping = new Map<string, boolean>();
+  readonly #stopping = new Set<string>();
   /** Automation already has a queue row; its prompt and native echoes must not create another. */
   readonly #queueMessages = new Set<string>();
   /**
@@ -331,7 +330,7 @@ export class SessionStore {
     }
     return () => {
       if (this.of(agentId).queued.some((queued) => queued.id === id)) this.unqueue(agentId, id);
-      else if (this.#turns.get(agentId) === id) this.stop(agentId, { stopCommands: true });
+      else if (this.#turns.get(agentId) === id) this.stop(agentId);
     };
   }
 
@@ -485,17 +484,15 @@ export class SessionStore {
   }
 
   /** Interrupts the turn going on, if any. */
-  stop(agentId: string, options?: InterruptOptions): void {
-    if (this.of(agentId).status === 'idle') return;
-    if (this.#stopping.has(agentId) && (!options?.stopCommands || this.#stopping.get(agentId)))
-      return;
+  stop(agentId: string): void {
+    if (this.of(agentId).status === 'idle' || this.#stopping.has(agentId)) return;
     const driver = this.#drivers.get(agentId)?.driver;
     if (!driver) return;
-    this.#stopping.set(agentId, options?.stopCommands === true);
+    this.#stopping.add(agentId);
     if (this.#heldQueues.has(agentId)) {
       this.#setAside.set(agentId, new Set(this.of(agentId).queued.map(({ id }) => id)));
     }
-    driver.stop(options);
+    driver.stop();
   }
 
   unqueue(agentId: string, queuedId: string): void {

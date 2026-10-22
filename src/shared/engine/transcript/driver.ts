@@ -1,6 +1,5 @@
 import type {
   AgentStartSettings,
-  InterruptOptions,
   MessageImage,
   MessageSender,
   SessionAnswer,
@@ -37,7 +36,7 @@ export interface SessionDriver {
   /** Passes on the user's answer to the prompt `id`, once it is complete. */
   answer(id: string, answer: SessionAnswer): void;
   /** Interrupts the turn going on, if any, as Escape does in Claude Code. */
-  stop(options?: InterruptOptions): void;
+  stop(): void;
   /** The user switched mode, model or effort: the store has already recorded it. */
   setMode(mode: Mode): void;
   setModel(model: string): void;
