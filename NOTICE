@@ -8,9 +8,9 @@ Third-party software: Claude Agent SDK
 corrallm's optional Agent SDK connection includes @anthropic-ai/claude-agent-sdk,
 unmodified, in its bundled JavaScript.
 
-The SDK is © Anthropic PBC. All rights reserved. Its use is subject to
-Anthropic's Commercial Terms of Service:
-https://www.anthropic.com/legal/commercial-terms
+The SDK is © Anthropic PBC. All rights reserved. As its own LICENSE.md says,
+its use is subject to the Legal Agreements Anthropic outlines at:
+https://code.claude.com/docs/en/legal-and-compliance
 
 The SDK is not covered by corrallm's Apache-2.0 license. Its own LICENSE.md is
 included in the packaged app as claude-agent-sdk-LICENSE.md beside this NOTICE.
