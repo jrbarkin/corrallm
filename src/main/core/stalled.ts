@@ -1,3 +1,6 @@
+import { isIP } from 'node:net';
+import { networkInterfaces } from 'node:os';
+
 import { connectionIn } from '../../shared/adapter';
 import type { Catalog, ConnectionId } from '../../shared/adapter';
 import type { CanvasId } from '../../shared/canvas';
@@ -15,13 +18,18 @@ export interface WatchdogClock {
   later: (run: () => void, ms: number) => () => void;
 }
 
+/** A local OS snapshot, not a network request. Injectable alongside the watchdog's clock. */
+export type WatchdogNetwork = () => ReturnType<typeof networkInterfaces>;
+
+type Disruption = 'wake' | 'network';
+
 interface Turn {
   canvas: CanvasId;
   agent: string;
   connection: ConnectionId;
   messages: Set<string>;
   last: number;
-  wake?: number;
+  grace?: { at: number; why: Disruption };
   notified: boolean;
   stalled: boolean;
   text: string;
@@ -30,6 +38,7 @@ interface Turn {
 interface Deps {
   catalog: Catalog;
   clock?: WatchdogClock;
+  network?: WatchdogNetwork;
   changed: (canvas: CanvasId) => void;
   warning: (
     canvas: CanvasId,
@@ -48,6 +57,9 @@ interface Deps {
 export class StalledTurns {
   readonly #deps: Deps;
   readonly #clock: WatchdogClock;
+  readonly #network: WatchdogNetwork;
+  #identity: string | undefined;
+  #networkWarned = false;
   readonly #turns = new Map<string, Turn>();
   #checked: number;
   #cancel: () => void = () => undefined;
@@ -55,6 +67,7 @@ export class StalledTurns {
 
   constructor(deps: Deps) {
     this.#deps = deps;
+    this.#network = deps.network ?? networkInterfaces;
     this.#clock = deps.clock ?? {
       now: Date.now,
       later: (run, ms) => {
@@ -102,7 +115,7 @@ export class StalledTurns {
     const turn = this.#turns.get(keyOf(canvas, agent));
     if (!turn) return;
     turn.last = this.#clock.now();
-    delete turn.wake;
+    delete turn.grace;
     if (turn.stalled) {
       turn.stalled = false;
       this.#deps.changed(canvas);
@@ -119,15 +132,37 @@ export class StalledTurns {
 
   /** Host resume, or the headless timer's equivalent. Duplicate wake reports do not extend grace. */
   resume(): void {
-    this.#woke(this.#clock.now());
+    this.#disrupted(this.#clock.now(), 'wake');
+    this.#checked = this.#clock.now();
   }
 
-  #woke(before: number): void {
+  #disrupted(before: number, why: Disruption): void {
     const now = this.#clock.now();
     for (const turn of this.#turns.values()) {
-      if (turn.last <= before) turn.wake ??= now;
+      if (turn.last <= before) turn.grace ??= { at: now, why };
     }
-    this.#checked = now;
+  }
+
+  #checkNetwork(now: number): void {
+    try {
+      const value = networkIdentity(this.#network());
+      const previous = this.#identity;
+      this.#identity = value;
+      if (previous !== undefined && previous !== value) {
+        // The sampling time is the observed change: an event between samples may have come
+        // before the link dropped. Only activity after this reading clears the shorter grace.
+        this.#disrupted(now, 'network');
+      }
+    } catch (error) {
+      // Keep the last good baseline. A failed read neither means a change nor a recovery.
+      if (!this.#networkWarned) {
+        this.#networkWarned = true;
+        console.error(
+          'Could not check the network for silent turns:',
+          error instanceof Error ? error.message : String(error),
+        );
+      }
+    }
   }
 
   items(canvas: CanvasId): NeedsItem[] {
@@ -160,14 +195,22 @@ export class StalledTurns {
     this.#cancel = this.#clock.later(() => {
       if (this.#closed) return;
       const now = this.#clock.now();
+      // Prefer the network wording if both are first observed on this tick, without extending
+      // grace already granted by an earlier wake or network change.
+      this.#checkNetwork(now);
       // Check the jump before the deadline: waking must never immediately declare a stall.
-      if (now - this.#checked > WAKE_GAP_MS) this.#woke(now - WAKE_GAP_MS);
+      if (now - this.#checked > WAKE_GAP_MS) this.#disrupted(now - WAKE_GAP_MS, 'wake');
       this.#checked = now;
       for (const turn of this.#turns.values()) {
-        const due = turn.wake === undefined ? turn.last + STALL_MS : turn.wake + WAKE_GRACE_MS;
+        const due = turn.grace === undefined ? turn.last + STALL_MS : turn.grace.at + WAKE_GRACE_MS;
         if (now < due || turn.stalled) continue;
         const cli = connectionIn(this.#deps.catalog, turn.connection)?.adapter.name ?? 'the agent';
-        const silence = turn.wake === undefined ? '20 minutes' : '2 minutes after waking';
+        const silence =
+          turn.grace === undefined
+            ? '20 minutes'
+            : turn.grace.why === 'wake'
+              ? '2 minutes after waking'
+              : '2 minutes after the network changed';
         turn.text = `No activity from ${cli} for ${silence}: its connection may have dropped. Interrupt to stop the turn.`;
         turn.stalled = true;
         this.#deps.changed(turn.canvas);
@@ -189,4 +232,46 @@ export class StalledTurns {
 
 function keyOf(canvas: CanvasId, agent: string): string {
   return JSON.stringify([canvas, agent]);
+}
+
+/** Ignore address order, IPv6 privacy suffixes and link-local-only interfaces. */
+function networkIdentity(interfaces: ReturnType<WatchdogNetwork>): string {
+  const identity = new Set<string>();
+  for (const [name, addresses] of Object.entries(interfaces)) {
+    for (const info of addresses ?? []) {
+      if (info.internal) continue;
+      if (info.family === 'IPv4' && isIP(info.address) === 4) {
+        identity.add(JSON.stringify([name, 'IPv4', info.address]));
+      } else if (info.family === 'IPv6') {
+        const prefix = ipv6Prefix(info.address);
+        if (prefix !== undefined) identity.add(JSON.stringify([name, 'IPv6', prefix]));
+      }
+    }
+  }
+  return JSON.stringify([...identity].sort());
+}
+
+function ipv6Prefix(address: string): string | undefined {
+  let ip = address.split('%')[0] ?? '';
+  if (isIP(ip) !== 6) return undefined;
+  // An embedded IPv4 suffix occupies two hextets, not one.
+  if (ip.includes('.')) {
+    const colon = ip.lastIndexOf(':');
+    const bytes = ip
+      .slice(colon + 1)
+      .split('.')
+      .map(Number);
+    const [a = 0, b = 0, c = 0, d = 0] = bytes;
+    ip = `${ip.slice(0, colon + 1)}${(a * 256 + b).toString(16)}:${(c * 256 + d).toString(16)}`;
+  }
+  const [head = '', tail] = ip.split('::');
+  const left = head === '' ? [] : head.split(':');
+  const right = tail === undefined || tail === '' ? [] : tail.split(':');
+  const groups =
+    tail === undefined
+      ? left
+      : [...left, ...Array<string>(8 - left.length - right.length).fill('0'), ...right];
+  const prefix = groups.slice(0, 4).map((group) => Number.parseInt(group, 16));
+  if (((prefix[0] ?? 0) & 0xffc0) === 0xfe80) return undefined;
+  return prefix.map((group) => group.toString(16)).join(':');
 }

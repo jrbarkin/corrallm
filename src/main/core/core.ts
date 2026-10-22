@@ -60,7 +60,7 @@ import { UsageProbe } from './usage-probe';
 import type { UsageRead } from './usage-probe';
 import { Children } from './children';
 import { StalledTurns } from './stalled';
-import type { WatchdogClock } from './stalled';
+import type { WatchdogClock, WatchdogNetwork } from './stalled';
 import type { ChildSystem } from './children';
 import { openStore } from './store/open';
 import { unopened } from './store/store';
@@ -78,6 +78,8 @@ import type { StoreDeps } from './store/store';
 export interface CoreConfig {
   /** The silent-turn watchdog's wall clock and timers, injected independently of disk IO. */
   watchdog?: WatchdogClock;
+  /** The silent-turn watchdog's local interface snapshot, injectable without real network changes. */
+  watchdogNetwork?: WatchdogNetwork;
   /** For tests: process identity and group signalling instead of the OS. */
   children?: ChildSystem;
   /** For tests: the database's clock, timers and log flushes instead of the system's. */
@@ -494,6 +496,7 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
   const stalled = new StalledTurns({
     catalog: CATALOG,
     ...(config.watchdog === undefined ? {} : { clock: config.watchdog }),
+    ...(config.watchdogNetwork === undefined ? {} : { network: config.watchdogNetwork }),
     changed: (canvas) => {
       topics.changed(`needs:${canvas}`, 'corrallm');
       engines.needsChanged(canvas);
