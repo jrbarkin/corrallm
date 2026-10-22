@@ -40,6 +40,9 @@ export async function launchApp({
     );
     const executablePath = agentElectronExecutable();
     app = await electron.launch({
+      // Playwright otherwise prepends --no-sandbox on Linux. Test the app's real sandbox,
+      // including under xvfb in Docker (whose profiles allow unprivileged user namespaces).
+      chromiumSandbox: true,
       ...(executablePath ? { executablePath } : {}),
       args: ['.', `--user-data-dir=${profile}`, ...args],
       env: {
