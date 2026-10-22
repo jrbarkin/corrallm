@@ -24,7 +24,7 @@ Requires Node 24.21.0 (`.nvmrc`) and pnpm 12.11.2 (`packageManager`).
 | `pnpm typecheck`   | `tsc -b` over the solution (node, web, tooling projects)                                                                                                  |
 | `pnpm lint`        | ESLint, type-aware, zero warnings allowed (`lint:fix` to autofix)                                                                                         |
 | `pnpm format`      | Prettier write (`format:check` to verify)                                                                                                                 |
-| `pnpm test`        | Vitest: `main`, `preload` (Node) and `renderer` (jsdom) projects                                                                                          |
+| `pnpm test`        | Vitest: `main`, `preload` (Node), `renderer` (jsdom), then `store-performance` alone                                                                      |
 | `pnpm test:e2e`    | Playwright; its global setup first builds the app unsigned (`electron-forge package`) and the CLI                                                         |
 | `pnpm package`     | Packaged app for the current OS in `out/`                                                                                                                 |
 | `pnpm make`        | Installers for the current OS in `out/make/`                                                                                                              |
@@ -33,6 +33,7 @@ Requires Node 24.21.0 (`.nvmrc`) and pnpm 12.11.2 (`packageManager`).
 | `pnpm api:surface` | Writes `src/shared/api/surface.snap.json`, every party's surface, after the registry changes                                                              |
 
 - Run one Vitest project with `pnpm exec vitest run --project main`.
+- `pnpm exec vitest run --project store-performance` runs the large-snapshot loop measurement. Its `sequence.groupOrder` runs it after the parallel pool in a full gate, with its original fixture, timeout and responsiveness bound.
 - `E2E_SKIP_BUILD=1 pnpm test:e2e` reuses the existing production build in `.vite/` and the CLI bundle in `dist-cli/` (note `pnpm dev` overwrites `.vite/`). Headless Linux: `xvfb-run -a pnpm test:e2e`.
 - `CORRALLM_AGENT_PATHS='{"claude-code":"/absolute/path/to/claude","codex":"/absolute/path/to/codex"}'` selects executables by adapter. A nonempty value is an exclusive JSON map: omitted adapters and missing executables are unavailable, with no fallback. Unset or empty uses the user's installs as usual. Invalid JSON, keys or non-absolute paths refuse core startup with a sentence. The platform's `sessions/locate.ts` resolves each adapter once per agents' environment and supplies its executable to connectors and readers (options, conversations, usage); adapters never discover an executable themselves.
 - `CORRALLM_DISTRIBUTION=commercial` (or `hosted`) when building (`pnpm package`, `pnpm make`) makes a build for a commercial or hosted product, whose App Server connection refuses a ChatGPT login (see Codex); the default is `local`.

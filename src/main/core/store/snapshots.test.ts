@@ -71,35 +71,6 @@ describe('snapshots on disk', () => {
   /** Forcing a folder's entries to disk: Windows opens no folder to. */
   const folder = (name: string) => (process.platform === 'win32' ? [] : [`fsync ${name}`]);
 
-  it('keeps the loop responsive while converting and checking a large snapshot', async () => {
-    const source = path.join(profile, 'core.db');
-    const database = connect(source);
-    try {
-      database.exec(`PRAGMA journal_mode = WAL;
-        CREATE TABLE payload (body BLOB) STRICT;
-        WITH RECURSIVE n(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM n WHERE i<131072)
-        INSERT INTO payload SELECT zeroblob(4096) FROM n`);
-      let last = performance.now();
-      let delay = 0;
-      const timer = setInterval(() => {
-        const now = performance.now();
-        delay = Math.max(delay, now - last);
-        last = now;
-      }, 5);
-      try {
-        await takeSnapshot(source, profile, Date.UTC(2026, 9, 19, 12));
-        // Include a timer delayed by the last synchronous portion of publication.
-        await new Promise((resolve) => setTimeout(resolve, 10));
-      } finally {
-        clearInterval(timer);
-      }
-      console.info(`512 MiB snapshot: maximum loop interval ${delay.toFixed(1)} ms`);
-      expect(delay).toBeLessThan(50);
-    } finally {
-      database.close();
-    }
-  }, 30_000);
-
   it('are forced to disk before they are named, and their folder after', async () => {
     const source = path.join(profile, 'core.db');
     const database = connect(source);

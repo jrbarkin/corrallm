@@ -42,7 +42,7 @@ Requires Node 24.21.0 (`.nvmrc`) and pnpm 12.11.2 (`packageManager`).
 | `pnpm typecheck`                             | TypeScript solution (node, web, tooling)                 |
 | `pnpm lint`                                  | Type-aware ESLint, zero warnings                         |
 | `pnpm format` / `pnpm format:check`          | Prettier write / verify                                  |
-| `pnpm test`                                  | Vitest main, preload and renderer                        |
+| `pnpm test`                                  | Vitest main, preload, renderer and store-performance     |
 | `pnpm exec vitest run --project main <file>` | Focused main tests                                       |
 | `pnpm test:e2e`                              | Playwright; first builds the unsigned app and CLI        |
 | `pnpm package` / `pnpm make`                 | Packaged app / installers                                |

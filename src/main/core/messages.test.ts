@@ -2735,12 +2735,15 @@ describe('usage', () => {
   it.each(['ask', 'waitForReset'])(
     'holds a party’s message by the recipient’s rule (%s) until the window resets, telling its sender once',
     async (action) => {
+      // Startup, fsync and scheduler delays must not consume the usage window's 400 ms.
+      vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+      vi.setSystemTime(Date.UTC(2026, 9, 21, 12));
       const resetsAt = Date.now() + 400;
       await overRule(action, resetsAt);
       await keepCanvas();
       await start();
       const id = await send('builder', 'Say hello');
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      await vi.advanceTimersByTimeAsync(50);
       expect((await find(id))?.state).toBe('pending');
       expect((await inbox()).filter((message) => message.kind === 'notice')).toEqual([
         expect.objectContaining({
@@ -2750,6 +2753,10 @@ describe('usage', () => {
           ) as string,
         }),
       ]);
+      await vi.advanceTimersByTimeAsync(resetsAt - Date.now() - 1);
+      expect((await find(id))?.state).toBe('pending');
+      expect(appServer.started).toEqual([]);
+      await vi.advanceTimersByTimeAsync(1);
       await vi.waitFor(
         async () => {
           expect((await find(id))?.state).toBe('replied');
