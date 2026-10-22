@@ -46,7 +46,10 @@ test.afterEach(async () => {
   expect(problems).toEqual([]);
 });
 
-async function launch(connection: 'claude-code.sdk' | 'claude-code.terminal') {
+async function launch(
+  connection: 'claude-code.sdk' | 'claude-code.terminal',
+  gates: Record<string, string> = {},
+) {
   let claude = path.resolve('src/main/sessions/claude-code/sdk/fake-claude.mjs');
   if (connection === 'claude-code.terminal') {
     claude = path.join(dir, 'claude');
@@ -61,6 +64,7 @@ async function launch(connection: 'claude-code.sdk' | 'claude-code.terminal') {
       CLAUDE_CONFIG_DIR: path.join(dir, 'config'),
       ANTHROPIC_API_KEY: 'sk-ant-fake',
       FAKE_CLAUDE_PROMPTS: path.join(dir, 'prompts.jsonl'),
+      FAKE_CLAUDE_TURN_GATES: JSON.stringify(gates),
     },
   }));
   page = await app.firstWindow();
@@ -153,8 +157,9 @@ const nativePrompts = async () =>
   (await nativeLog()).flatMap((entry) => (entry.event === 'prompt' ? [entry.text] : []));
 
 test('Pause finishes the current turn while independent work continues and a dependent waits; Resume releases once', async () => {
-  await launch('claude-code.sdk');
-  const first = 'slow control first';
+  const first = 'control first';
+  const release = path.join(dir, 'finish-first');
+  await launch('claude-code.sdk', { [first]: release });
   const next = 'control second';
   const parallel = 'control parallel';
   const dependent = 'control dependent';
@@ -179,12 +184,16 @@ test('Pause finishes the current turn while independent work continues and a dep
   ]);
   await queues.getByRole('button', { name: 'Run', exact: true }).click();
   await expect.poll(sdkPrompts).toContain(first);
+  await expect.poll(() => readFile(`${release}.waiting`, 'utf8').catch(() => '')).toBe('waiting');
   await expect(row(queues, 'builder', 'first')).toHaveAttribute('data-run', 'running');
   await control(queues, 'Pause');
   await expect(heading(queues).getByText('Pausing', { exact: true })).toBeVisible();
   await expect(queues.getByRole('status')).toContainText('1 pausing');
   await expect(row(queues, 'independent', 'parallel')).toHaveAttribute('data-run', 'succeeded');
   await expect(row(queues, 'dependent', 'wait')).toHaveAttribute('data-run', 'waiting');
+  // Release only after Pause was observed and independent work finished. The former "slow"
+  // prompt needed forty separate 100 ms timers; their scheduling delays accumulated under load.
+  await writeFile(release, 'go');
   await expect(row(queues, 'builder', 'first')).toHaveAttribute('data-run', 'succeeded', {
     timeout: 10_000,
   });
