@@ -151,7 +151,7 @@ See [AGENTS.md](AGENTS.md) for development rules and [the architecture overview]
 
 [Apache License 2.0](LICENSE).
 
-Third-party licenses: the optional Agent SDK connection bundles Anthropic's SDK, used subject to [Anthropic's Commercial Terms of Service](https://www.anthropic.com/legal/commercial-terms) and not covered by corrallm's Apache-2.0 license. See [NOTICE](NOTICE).
+Third-party licenses: the optional Agent SDK connection bundles Anthropic's SDK, used subject to [the Legal Agreements Anthropic outlines](https://code.claude.com/docs/en/legal-and-compliance), as its own license says, and not covered by corrallm's Apache-2.0 license. See [NOTICE](NOTICE).
 
 ## Troubleshooting
 
