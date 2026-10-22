@@ -99,7 +99,7 @@ export default defineConfig(
       ],
     },
   },
-  // Process boundaries (see CLAUDE.md). Core no-restricted-imports also catches `import type`.
+  // Process boundaries (see AGENTS.md and docs/architecture/core.md). Core no-restricted-imports also catches `import type`.
   {
     name: 'app/boundaries-web',
     files: ['src/renderer/**/*.{ts,tsx}', 'src/shared/**/*.ts'],

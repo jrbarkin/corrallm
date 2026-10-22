@@ -11,7 +11,7 @@ import { hostServices } from './host/services';
  * Diagnostic only, not feature code: proves, in the app as built (including a packaged, fused
  * build), that what the core needs works, first in this main process, then in a forked core
  * process (an Electron utility process, where the core runs). Triggered by
- * CORRALLM_NATIVE_SELFTEST=1; see CLAUDE.md. The checks are core/selftest.ts's: node-pty, a
+ * CORRALLM_NATIVE_SELFTEST=1; see docs/architecture/native-modules.md. The checks are core/selftest.ts's: node-pty, a
  * terminal screen, an Agent SDK query against a fake `claude` of its own (run with `node`, which
  * must be on the PATH), the core's database (Node's SQLite), loopback HTTP, spawning, and,
  * packaged, that child_process.fork is refused. Exits 0 once every check passed in both, 2 if one
