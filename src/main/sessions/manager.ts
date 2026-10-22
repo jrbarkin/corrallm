@@ -23,13 +23,15 @@ import { roleFingerprint } from '../memory';
 import type { Connector, LiveSession, SessionHost } from './connector';
 import type { Conversations } from './adapter';
 import { droppedPaste } from './terminal/drop';
+import { requireConversationId } from './adapters';
 
 const NO_PROJECT =
   'Choose a project folder for this canvas first (in the bar at the top left): its agents work in it.';
 const NOT_RUNNING = 'This agent’s session is not running.';
 const NOT_LISTED = 'That is not one of this project folder’s conversations.';
 const NO_MCP = 'This agent’s MCP servers are managed in its terminal: run /mcp in its terminal.';
-const NO_REWIND = 'This agent rewinds in its terminal: press Esc twice there.';
+const NO_REWIND =
+  'This connection cannot rewind here. In its terminal, press Esc twice if the CLI offers it.';
 const NOTHING_TO_REWIND = 'This conversation has nothing to rewind yet.';
 const NO_EFFORT = 'This agent’s effort is set in its terminal.';
 const NO_TASKS = 'This agent’s background tasks are stopped in its terminal.';
@@ -51,7 +53,9 @@ export interface SessionManagerDeps {
    * The conversations kept for a folder (adapter.ts): listed for /resume,
    * forked to rewind one (`before`: where; `fork`: the copy's id).
    */
-  conversations?: Conversations;
+  conversations?: Readonly<Partial<Record<AdapterId, Conversations>>>;
+  /** The adapter the canvas currently gives this agent, even before its session starts. */
+  adapterOf: (canvas: CanvasId, agentId: string) => Promise<AdapterId>;
   /** The folder a canvas's agents work in, if one was chosen (project.ts). */
   projectOf: (canvas: CanvasId) => string | undefined;
   /** Where each canvas's agents' conversations are remembered. */
@@ -100,8 +104,8 @@ interface Agent {
  * session with its connection's connector (connector.ts), in the canvas's project folder, resuming
  * the agent's last conversation, and passes requests on to it. It remembers each agent's
  * conversation with the canvas (memory.ts, by the canvas's id), so that sessions survive a
- * restart: one per adapter (Claude Code's session, Codex's thread), which each of its connections
- * resumes. What an agent starts with (its model, effort and mode) is the renderer's to say: its
+ * restart: one per adapter, shared by its connections. What an agent starts with (its model,
+ * effort and mode) is the renderer's to say: its
  * settings, saved in the canvas's file. A window that stops showing the canvas, a new project
  * folder, and the app quitting all end sessions.
  */
@@ -112,7 +116,10 @@ export class SessionManager {
   readonly #closing = new Map<CanvasId, Set<Promise<void>>>();
   readonly #ending = new WeakMap<Agent, Promise<void>>();
   /** The conversations each canvas was last listed (session:list): the only ones it may open. */
-  readonly #listed = new Map<CanvasId, { folder: string; ids: Set<string> }>();
+  readonly #listed = new Map<
+    CanvasId,
+    Map<string, { adapter: AdapterId; folder: string; ids: Set<string> }>
+  >();
   /**
    * The agents whose terminal each canvas's view shows (attachTerminal), and what stops the
    * running session's screen being shown there (undefined while none runs).
@@ -222,8 +229,8 @@ export class SessionManager {
   }
 
   /**
-   * Rewinds the agent's session to before one of its messages: its files (Claude Code's file
-   * checkpoints), its conversation, or both. The conversation goes back as a copy of it up to
+   * Rewinds the agent's session to before one of its messages: its connection's file
+   * checkpoints, its conversation, or both. The conversation goes back as a copy of it up to
    * that point, which becomes the agent's own (none, for its first message: it starts afresh);
    * its session ends, to resume that copy when it starts again. The original stays, for /resume.
    * Rejects, changing nothing, if the message is not in the conversation or the files can't be
@@ -239,12 +246,13 @@ export class SessionManager {
     if (!session.rewindFiles) throw new Error(NO_REWIND);
     const conversation = restore !== 'code';
     const folder = this.#deps.projectOf(canvas);
-    // Claude Code's conversation (only its connections rewind).
-    const id = (await this.#conversation(canvas, 'claude-code', agentId))?.id;
-    const kept = this.#deps.conversations;
+    const adapter = await this.#deps.adapterOf(canvas, agentId);
+    const id = (await this.#conversation(canvas, adapter, agentId))?.id;
+    const kept = this.#deps.conversations?.[adapter];
     let point: string | null = null;
     if (conversation) {
-      if (folder === undefined || id === undefined || !kept) throw new Error(NOTHING_TO_REWIND);
+      if (!kept?.before || !kept.fork) throw new Error(NO_REWIND);
+      if (folder === undefined || id === undefined) throw new Error(NOTHING_TO_REWIND);
       point = await kept.before(folder, id, messageId);
     }
     let files: FilesRewind | undefined;
@@ -252,11 +260,12 @@ export class SessionManager {
       files = await session.rewindFiles(messageId, false);
       if (!files.possible) throw new Error(files.error ?? 'Its files can’t be restored to then.');
     }
-    if (conversation && folder !== undefined && id !== undefined && kept) {
+    if (conversation && folder !== undefined && id !== undefined && kept?.fork) {
       const forked = point === null ? null : await kept.fork(folder, id, point);
+      if (forked !== null) requireConversationId(adapter, forked);
       await this.close(canvas, agentId);
-      if (forked === null) await this.#forget(canvas, 'claude-code', agentId);
-      else await this.#remember(canvas, 'claude-code', agentId, forked);
+      if (forked === null) await this.#forget(canvas, adapter, agentId);
+      else await this.#remember(canvas, adapter, agentId, forked);
     }
     return { ...(files === undefined ? {} : { files }), conversation };
   }
@@ -282,16 +291,24 @@ export class SessionManager {
   }
 
   /**
-   * The conversations Claude Code kept for the canvas's project folder, most recent first, saying
+   * The agent's adapter's conversations for the canvas's project folder, most recent first, saying
    * which is the agent's own (the one it runs, or would resume). They are the only ones the
    * renderer may then open (`resumeSession`).
    */
   async listSessions(canvas: CanvasId, agentId: string): Promise<PastSession[]> {
     const folder = this.#deps.projectOf(canvas);
     if (folder === undefined) throw new Error(NO_PROJECT);
-    const listed = (await this.#deps.conversations?.list(folder)) ?? [];
-    this.#listed.set(canvas, { folder, ids: new Set(listed.map((kept) => kept.id)) });
-    const own = (await this.#conversation(canvas, 'claude-code', agentId))?.id;
+    const adapter = await this.#deps.adapterOf(canvas, agentId);
+    const listed =
+      (await this.#deps.conversations?.[adapter]?.list(folder, await this.#deps.environment())) ??
+      [];
+    for (const kept of listed) requireConversationId(adapter, kept.id);
+    const agents =
+      this.#listed.get(canvas) ??
+      new Map<string, { adapter: AdapterId; folder: string; ids: Set<string> }>();
+    agents.set(agentId, { adapter, folder, ids: new Set(listed.map((kept) => kept.id)) });
+    this.#listed.set(canvas, agents);
+    const own = (await this.#conversation(canvas, adapter, agentId))?.id;
     return listed.map((kept) => ({ ...kept, current: kept.id === own }));
   }
 
@@ -300,12 +317,18 @@ export class SessionManager {
    * never another. The agent's session ends; it resumes that conversation when it starts again.
    */
   async resumeSession(canvas: CanvasId, agentId: string, sessionId: string): Promise<void> {
-    const listed = this.#listed.get(canvas);
-    if (!listed || listed.folder !== this.#deps.projectOf(canvas) || !listed.ids.has(sessionId)) {
+    const adapter = await this.#deps.adapterOf(canvas, agentId);
+    requireConversationId(adapter, sessionId);
+    const listed = this.#listed.get(canvas)?.get(agentId);
+    if (
+      listed?.adapter !== adapter ||
+      listed.folder !== this.#deps.projectOf(canvas) ||
+      !listed.ids.has(sessionId)
+    ) {
       throw new Error(NOT_LISTED);
     }
     await this.close(canvas, agentId);
-    await this.#remember(canvas, 'claude-code', agentId, sessionId);
+    await this.#remember(canvas, adapter, agentId, sessionId);
   }
 
   /** Stops a task the agent's session runs in the background (the session checks it does). */
@@ -410,6 +433,7 @@ export class SessionManager {
     const adapter = this.#adapterOf(connection);
     const remembered = await this.#conversation(canvas, adapter, agentId);
     const resume = remembered?.id ?? null;
+    if (resume !== null) requireConversationId(adapter, resume);
     const fingerprint = roleFingerprint(role);
     const roleChanged = remembered?.role !== fingerprint;
     const env = await this.#deps.environment();
@@ -424,6 +448,7 @@ export class SessionManager {
         this.#deps.emit(canvas, agentId, connection, event);
       },
       remember: (sessionId) => {
+        requireConversationId(adapter, sessionId);
         if (current()) void this.#remember(canvas, adapter, agentId, sessionId, fingerprint);
       },
     };
@@ -490,6 +515,7 @@ export class SessionManager {
     sessionId: string,
     fingerprint?: string,
   ): Promise<void> {
+    requireConversationId(adapter, sessionId);
     const conversation: Conversation = {
       id: sessionId,
       ...(fingerprint === undefined ? {} : { role: fingerprint }),

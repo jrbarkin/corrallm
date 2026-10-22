@@ -168,6 +168,18 @@ describe('the sender’s canvas', () => {
 });
 
 describe('session:* handlers', () => {
+  it('checks the platform’s native-id minimum before dispatch, leaving the adapter’s shape to the manager', async () => {
+    await invoke('session:resume', ['a', 's'.repeat(128)]);
+    expect(services.sessions.resumeSession).toHaveBeenCalledExactlyOnceWith(
+      CANVAS,
+      'a',
+      's'.repeat(128),
+    );
+    for (const id of ['--resume', 's'.repeat(129), 's\n']) {
+      expect(() => invoke('session:resume', ['a', id])).toThrow(/conversation's id/);
+    }
+    expect(services.sessions.resumeSession).toHaveBeenCalledOnce();
+  });
   it('pass checked arguments on, for the renderer that sent them', async () => {
     const sender = 7;
     const options = { connection: 'claude-code.sdk', model: 'opus', mode: 'plan' };
@@ -544,7 +556,12 @@ describe('session:* handlers', () => {
       ['a', '--dangerously-skip-permissions'],
       /conversation's id/,
     ],
-    ['session:resume', 'a non-UUID id', ['a', 'session-1'], /conversation's id/],
+    [
+      'session:resume',
+      'an id outside the platform minimum',
+      ['a', 'session!1'],
+      /conversation's id/,
+    ],
     [
       'session:resume',
       'a UUID followed by a newline',

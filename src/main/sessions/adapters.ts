@@ -1,5 +1,6 @@
 import type { AdapterId, Catalog } from '../../shared/adapter';
 import type { Adapter } from './adapter';
+import { isNativeId } from './id';
 import { claudeCode } from './claude-code/adapter';
 import { codex } from './codex/adapter';
 
@@ -27,3 +28,15 @@ export const CATALOG: Catalog = catalogOf(ADAPTERS);
  * renderer's DEFAULT_AGENT), until the user chooses their own (Build Plan B12).
  */
 export const DEFAULT_ADAPTER: AdapterId = claudeCode.descriptor.id;
+
+/** Validates saved unknown adapters' ids too; known adapters add their stricter shape. */
+export function isConversationId(adapter: string, value: unknown): value is string {
+  return (
+    isNativeId(value) &&
+    (ADAPTERS.find((one) => one.descriptor.id === adapter)?.isConversationId(value) ?? true)
+  );
+}
+
+export function requireConversationId(adapter: string, value: unknown): asserts value is string {
+  if (!isConversationId(adapter, value)) throw new TypeError(`Invalid ${adapter} conversation id.`);
+}

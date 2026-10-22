@@ -137,8 +137,10 @@ async function start(profile: string, file: string): Promise<string> {
   await chmod(codex, 0o755);
   const env: NodeJS.ProcessEnv = {
     ...process.env,
-    CORRALLM_CODEX_PATH: codex,
-    CORRALLM_CLAUDE_PATH: path.join(dir, 'no-claude'),
+    CORRALLM_AGENT_PATHS: JSON.stringify({
+      codex: codex,
+      'claude-code': path.join(dir, 'no-claude'),
+    }),
     LOOP_DELAY_FILE: path.join(dir, 'loop.json'),
   };
   delete env.CORRALLM_URL;

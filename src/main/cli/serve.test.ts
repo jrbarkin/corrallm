@@ -161,8 +161,10 @@ describe.skipIf(process.platform === 'win32')('corrallm serve', () => {
   function cliEnv(extra: Record<string, string> = {}): NodeJS.ProcessEnv {
     const env: NodeJS.ProcessEnv = {
       ...process.env,
-      CORRALLM_CODEX_PATH: codex,
-      CORRALLM_CLAUDE_PATH: path.join(dir, 'no-claude'),
+      CORRALLM_AGENT_PATHS: JSON.stringify({
+        codex: codex,
+        'claude-code': path.join(dir, 'no-claude'),
+      }),
       ...extra,
     };
     delete env.CORRALLM_URL;
@@ -558,7 +560,10 @@ describe.skipIf(process.platform === 'win32')('corrallm serve', () => {
       ...args,
     ];
     const quote = (part: string) => `'${part.replaceAll("'", `'\\''`)}'`;
-    const env = cliEnv({ CORRALLM_CLAUDE_PATH: FAKE_CLAUDE, ...extra });
+    const env = cliEnv({
+      CORRALLM_AGENT_PATHS: JSON.stringify({ codex, 'claude-code': FAKE_CLAUDE }),
+      ...extra,
+    });
     const child =
       process.platform === 'darwin'
         ? spawn('script', ['-q', '/dev/null', ...command], {

@@ -15,17 +15,19 @@ import type { Connector } from './connector';
  */
 export interface Adapter {
   readonly descriptor: AdapterDescriptor;
+  /** Its native conversation id's shape, applied after the platform's minimum. */
+  readonly isConversationId: (value: string) => boolean;
   /** Finds the user's executable in the agents' environment; never runs it. */
   readonly find?: (env: Readonly<Record<string, string>>) => Promise<string | undefined>;
   /** Starts each connection this adapter declares. */
   readonly connectors?: (context: ConnectorContext) => Record<ConnectionId, Connector<SessionMode>>;
   /** Reads the user's settings and choices without a session or a prompt. */
-  readonly readOptions?: OptionsReader;
+  readonly readOptions?: (context: AdapterReadContext) => Promise<SettingsOptions>;
   /** The fake used in unpackaged test builds, shared by its connections. */
   readonly fake?: (pause: number) => Connector<SessionMode>;
   readonly fakeOptions?: SettingsOptions;
   /** Conversations the CLI keeps, when it can list and fork them. */
-  readonly conversations?: Conversations;
+  readonly conversations?: (context: Pick<ConnectorContext, 'executable'>) => Conversations;
   /** Variables belonging to a parent CLI session, never inherited by another agent. */
   readonly inheritedEnv?: readonly string[];
   /** Checks of its bundled dependencies, run by the native self-test. */
@@ -40,7 +42,7 @@ export interface Adapter {
    */
   readonly readUsage?: (
     backend: UsageBackendId,
-    context: UsageReadContext,
+    context: AdapterReadContext,
   ) => Promise<UsageWindows | undefined>;
 }
 
@@ -48,6 +50,11 @@ export interface Adapter {
 export interface UsageReadContext {
   env: Readonly<Record<string, string>>;
   cwd: string;
+}
+
+/** A platform-resolved executable, supplied to every adapter reader. */
+export interface AdapterReadContext extends UsageReadContext {
+  executable: string;
 }
 
 /** How this build of corrallm is offered, set by CORRALLM_DISTRIBUTION when building. */
@@ -61,6 +68,8 @@ export interface Consent {
 
 /** What every adapter's connectors run with. */
 export interface ConnectorContext {
+  /** Resolves the platform's chosen executable in the agents' environment, never a fallback. */
+  executable: (env: Readonly<Record<string, string>>) => Promise<string>;
   clientApp: string;
   distribution: Distribution;
   consent: (key: string) => Consent;
@@ -74,9 +83,9 @@ export type OptionsReader = (context: UsageReadContext) => Promise<SettingsOptio
 export type KeptConversation = Omit<PastSession, 'current'>;
 
 export interface Conversations {
-  list(folder: string): Promise<KeptConversation[]>;
-  before(folder: string, sessionId: string, messageId: string): Promise<string | null>;
-  fork(folder: string, sessionId: string, upTo: string): Promise<string>;
+  list(folder: string, env: Readonly<Record<string, string>>): Promise<KeptConversation[]>;
+  before?(folder: string, sessionId: string, messageId: string): Promise<string | null>;
+  fork?(folder: string, sessionId: string, upTo: string): Promise<string>;
 }
 
 /** A bundled dependency's check: what it saw, or a rejection saying what failed. */

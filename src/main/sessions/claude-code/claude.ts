@@ -13,17 +13,14 @@ import { canRun, findExecutable } from '../executables';
 const EXECUTABLE = process.platform === 'win32' ? 'claude.exe' : 'claude';
 
 /**
- * Where `claude` is: the path in CORRALLM_CLAUDE_PATH if the user set one (then only that one:
+ * Where `claude` is: an explicit path if given (then only that one:
  * tests point it at a fake, and must never find the user's own), else the native installer's
  * (~/.local/bin), else the first on the agents' PATH (`env`, the login shell's). Undefined if none
  * can run.
  */
 export async function findClaude(
   env: Readonly<Record<string, string>>,
-  {
-    home = homedir(),
-    override = process.env.CORRALLM_CLAUDE_PATH,
-  }: { home?: string; override?: string | undefined } = {},
+  { home = homedir(), override }: { home?: string; override?: string | undefined } = {},
 ): Promise<string | undefined> {
   if (override) return (await canRun(override)) ? override : undefined;
   return findExecutable(EXECUTABLE, env, [path.join(home, '.local', 'bin', EXECUTABLE)]);

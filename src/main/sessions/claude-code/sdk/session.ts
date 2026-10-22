@@ -1,3 +1,4 @@
+import { isUuid, requireConversationId } from '../../id';
 import { randomUUID } from 'node:crypto';
 
 import type {
@@ -341,6 +342,7 @@ export class SdkSession implements LiveSession {
     const turned =
       message.type === 'result' || (message.type === 'system' && message.subtype === 'init');
     if (turned && message.session_id !== '' && message.session_id !== this.#sessionId) {
+      requireConversationId('claude-code', message.session_id, isUuid);
       this.#sessionId = message.session_id;
       this.#host.remember(message.session_id);
     }

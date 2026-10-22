@@ -12,14 +12,20 @@ import { EXAMPLES } from '../../shared/examples';
 import { isIf, isRepeat } from '../../shared/model/queue';
 import type { QueueItem } from '../../shared/model/queue';
 import type { Job } from '../../shared/adapter';
-import { CATALOG, DEFAULT_ADAPTER } from '../sessions/adapters';
+import { ADAPTERS, CATALOG, DEFAULT_ADAPTER } from '../sessions/adapters';
 import { FakeConnector } from '../sessions/fake';
 import { createCore } from './core';
 import type { Core, CoreConfig } from './core';
 import { STORE_FILE } from './store/open';
 import { snapshots } from './store/snapshots';
 import { connect } from './store/sqlite';
-import { journaledRun, openTestStore, readOnDisk, writeOnDisk } from './store/test-store';
+import {
+  journaledRun,
+  keepCanvases,
+  openTestStore,
+  readOnDisk,
+  writeOnDisk,
+} from './store/test-store';
 import { CALLERS, NO_DESKTOP } from './test-registry';
 import { asHuman, WindowPorts } from './gui';
 import { openWindow } from './test-window';
@@ -61,6 +67,35 @@ async function start(sessions?: CoreConfig['sessions']): Promise<Core> {
 }
 
 describe('createCore', () => {
+  it('checks saved conversation ids with the registry’s stricter adapter shape', async () => {
+    const nativeId = 'session:one';
+    const adapter = ADAPTERS.find((adapter) => !adapter.isConversationId(nativeId));
+    if (adapter === undefined) throw new Error('No adapter with a stricter id shape');
+    const canvas = newCanvasId();
+    const file = path.join(profile, 'strict-ids.corral');
+    await writeFile(
+      file,
+      JSON.stringify({ format: 'corrallm', version: 2, id: canvas, nodes: [], links: [] }),
+    );
+    await keepCanvases(profile, {
+      [canvas]: {
+        file,
+        project: profile,
+        conversations: { [adapter.descriptor.id]: { a: { id: nativeId } } },
+      },
+    });
+    const said = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const started = await start({ connectors: {}, environment: () => Promise.resolve({}) });
+    await expect(started.keptCanvas(file)).resolves.toBe(canvas);
+    expect(said.mock.calls.flat().join(' ')).toContain(
+      'conversation id is invalid; it will not be resumed',
+    );
+  });
+  it('refuses a malformed executable map before opening the profile', async () => {
+    vi.stubEnv('CORRALLM_AGENT_PATHS', 'not JSON');
+    await expect(start()).rejects.toThrow(/CORRALLM_AGENT_PATHS/);
+    expect(existsSync(path.join(profile, STORE_FILE))).toBe(false);
+  });
   it('lists each shipped template’s fields and agent roles with the jobs of all their steps', async () => {
     const started = await start({ connectors: {}, environment: () => Promise.resolve({}) });
     const jobs = (queue: QueueItem[]): Job[] => [
@@ -111,8 +146,13 @@ describe('createCore', () => {
   });
 
   it('serves both catalog operations on a window’s port', async () => {
-    vi.stubEnv('CORRALLM_CODEX_PATH', path.join(profile, 'no-codex'));
-    vi.stubEnv('CORRALLM_CLAUDE_PATH', path.join(profile, 'no-claude'));
+    vi.stubEnv(
+      'CORRALLM_AGENT_PATHS',
+      JSON.stringify({
+        codex: path.join(profile, 'no-codex'),
+        'claude-code': path.join(profile, 'no-claude'),
+      }),
+    );
     const started = await start({ connectors: {}, environment: () => Promise.resolve({}) });
     const window = openWindow(new WindowPorts(started), 1);
     try {
@@ -140,8 +180,10 @@ describe('createCore', () => {
     const codex = path.join(profile, 'codex.mjs');
     await copyFile(path.join(import.meta.dirname, '../sessions/codex/fake-codex.mjs'), codex);
     await chmod(codex, 0o755);
-    vi.stubEnv('CORRALLM_CODEX_PATH', codex);
-    vi.stubEnv('CORRALLM_CLAUDE_PATH', path.join(profile, 'no-claude'));
+    vi.stubEnv(
+      'CORRALLM_AGENT_PATHS',
+      JSON.stringify({ codex: codex, 'claude-code': path.join(profile, 'no-claude') }),
+    );
     const started = await start({
       connectors: {},
       environment: () => Promise.resolve({ PATH: path.dirname(process.execPath) }),

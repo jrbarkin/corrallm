@@ -1,13 +1,15 @@
 import { MAX_IMAGE_BYTES, MAX_IMAGES } from '../../../shared/api/limits';
 import { IMAGE_TYPES } from '../../../shared/session';
 import type { Adapter } from '../adapter';
-import { findCodex, requireCodex } from './codex';
+import { findCodex } from './codex';
+import { isUuid } from '../id';
 import { AppServerConnector } from './app-server/connector';
 import { CodexTerminalConnector } from './terminal/connector';
 import { codexOptions } from './options';
 import { FakeConnector, FAKE_CODEX_MODELS } from '../fake';
 import logo from './logo.svg?raw';
 import { UsageReader } from './terminal/usage';
+import { codexConversations } from './conversations';
 
 const HOUR = 60 * 60 * 1000;
 
@@ -137,19 +139,24 @@ export const codex: Adapter = {
     registerMcp: 'codex mcp add {server} --url {url} --bearer-token-env-var {var}',
   },
   find: findCodex,
-  connectors: ({ clientApp, distribution, consent, usage }) => {
+  isConversationId: isUuid,
+  connectors: ({ clientApp, distribution, consent, usage, executable }) => {
     const readings = usage === undefined ? {} : { usage };
     return {
-      [CODEX_TERMINAL]: new CodexTerminalConnector(readings),
+      [CODEX_TERMINAL]: new CodexTerminalConnector({ ...readings, findCodex: executable }),
       'codex.app-server': new AppServerConnector({
         clientApp,
+        findCodex: executable,
         distribution,
         consent: consent('plan'),
         ...readings,
       }),
     };
   },
-  readOptions: async ({ env, cwd }) => codexOptions({ codex: await requireCodex(env), cwd, env }),
+  readOptions: ({ env, cwd, executable }) => codexOptions({ codex: executable, cwd, env }),
+  conversations: ({ executable }) => ({
+    list: async (cwd, env) => codexConversations({ codex: await executable(env), cwd, env }),
+  }),
   fake: (pause) => new FakeConnector({ pause, adapter: 'codex' }),
   fakeOptions: {
     models: FAKE_CODEX_MODELS,
@@ -169,11 +176,8 @@ export const codex: Adapter = {
     },
   ],
   // A private app server of the user's own `codex`, asked only account/rateLimits/read.
-  readUsage: async (backend, { env, cwd }) => {
+  readUsage: async (backend, { env, cwd, executable }) => {
     if (backend !== CODEX_USAGE) return undefined;
-    const found = await findCodex(env);
-    return found === undefined
-      ? undefined
-      : (await usageReader.read({ codex: found, cwd, env }))?.windows;
+    return (await usageReader.read({ codex: executable, cwd, env }))?.windows;
   },
 };

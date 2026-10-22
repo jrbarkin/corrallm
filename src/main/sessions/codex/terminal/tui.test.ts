@@ -206,6 +206,9 @@ describe('following Codex', () => {
     for (const id of ['--dangerously-skip-permissions', 'thread-1', 42, `${RECORDED_SESSION}\n`]) {
       const signals = tui.hook({ ...event, session_id: id });
       expect(signals.some((signal) => signal.kind === 'session')).toBe(false);
+      expect(signals.find((signal) => signal.kind === 'notice')?.text).toMatch(
+        /invalid conversation id/,
+      );
       expect(signals).toContainEqual({ kind: 'prompt', text: 'hello' });
     }
   });

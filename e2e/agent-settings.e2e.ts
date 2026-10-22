@@ -98,14 +98,16 @@ await import(${JSON.stringify(fake)});
   ({ app, close: closeApp } = await launchApp({
     profile: path.join(dir, 'profile'),
     env: {
-      CORRALLM_CLAUDE_PATH: claude,
+      CORRALLM_AGENT_PATHS: JSON.stringify({
+        'claude-code': claude,
+        ...(cli === 'codex' ? { codex } : {}),
+      }),
       CLAUDE_CONFIG_DIR: path.join(dir, 'config'),
       ANTHROPIC_API_KEY: 'sk-ant-fake',
       FAKE_CLAUDE_PROMPTS: path.join(dir, 'prompts.jsonl'),
       FAKE_CLAUDE_INITIALIZE: path.join(dir, 'initialize.jsonl'),
       ...(cli === 'codex'
         ? {
-            CORRALLM_CODEX_PATH: codex,
             FAKE_CODEX_LOGIN: 'apikey',
             FAKE_CODEX_STATE: path.join(dir, 'threads.json'),
             FAKE_CODEX_LOG: path.join(dir, 'codex.jsonl'),

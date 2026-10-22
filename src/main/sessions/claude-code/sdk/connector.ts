@@ -1,3 +1,4 @@
+import { isUuid, requireConversationId } from '../../id';
 import { randomUUID } from 'node:crypto';
 import { realpath } from 'node:fs/promises';
 import { homedir } from 'node:os';
@@ -10,7 +11,6 @@ import type { ModelInfo, Options, SDKUserMessage } from '@anthropic-ai/claude-ag
 
 import { PERMISSION_MODES } from '../../../../shared/session';
 import type { ModelChoice, SessionEvent } from '../../../../shared/session';
-import { requireClaude } from '../claude';
 import { spawn } from '../../process';
 import { CLAUDE_TERMINAL } from '../adapter';
 import type { Connector, LiveSession, SessionHost, SessionSpec } from '../../connector';
@@ -48,7 +48,7 @@ export interface SdkConnectorDeps {
   query?: typeof startQuery;
   getSessionMessages?: typeof readHistory;
   /** Where `claude` is, for the agents' environment. */
-  findClaude?: (env: Readonly<Record<string, string>>) => Promise<string>;
+  findClaude: (env: Readonly<Record<string, string>>) => Promise<string>;
   /** How that `claude` is logged in (`claude auth status`; a fake in tests). */
   authStatus?: typeof askAuthStatus;
   home?: string;
@@ -88,7 +88,7 @@ export class SdkConnector implements Connector {
     clientApp,
     query = startQuery,
     getSessionMessages = readHistory,
-    findClaude = requireClaude,
+    findClaude,
     authStatus = askAuthStatus,
     home = homedir(),
   }: SdkConnectorDeps) {
@@ -96,6 +96,7 @@ export class SdkConnector implements Connector {
   }
 
   async start(spec: SessionSpec, host: SessionHost): Promise<LiveSession> {
+    if (spec.resume !== null) requireConversationId('claude-code', spec.resume, isUuid);
     const claude = await this.#deps.findClaude(spec.env);
     await this.#checkLogin(claude, spec, host);
     if (spec.resume === null) return this.#open(spec, host, claude, null);

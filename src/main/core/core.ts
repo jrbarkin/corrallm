@@ -23,10 +23,11 @@ import { ProjectFiles } from '../files';
 import { CanvasMemory } from '../memory';
 import { ProjectFolders } from '../project';
 import { RunJournal } from '../run-journal';
-import { ADAPTERS, CATALOG, DEFAULT_ADAPTER } from '../sessions/adapters';
+import { ADAPTERS, CATALOG, DEFAULT_ADAPTER, isConversationId } from '../sessions/adapters';
 import type { OptionsReader } from '../sessions/adapter';
 import type { Connector } from '../sessions/connector';
-import { createConnectors, createOptions } from '../sessions/connectors';
+import { createConnectors, createConversations, createOptions } from '../sessions/connectors';
+import { locate, parseAgentPaths } from '../sessions/locate';
 import { agentEnvironment, loginShellEnvironment } from '../sessions/environment';
 import { SessionManager } from '../sessions/manager';
 import { Settings } from '../settings';
@@ -187,6 +188,7 @@ export interface Core extends Dispatcher {
 }
 
 export async function createCore(config: CoreConfig, host: HostServices): Promise<Core> {
+  parseAgentPaths(process.env.CORRALLM_AGENT_PATHS);
   const { profile } = config;
   // Before anything reads what it keeps. One that can't be opened fails every read and write of
   // what it keeps, saying why: the core journals nothing, and sends nothing whose record can't be
@@ -204,8 +206,11 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
   const tokens = new TokenStore(path.join(profile, 'tokens.json'));
   await tokens.load();
   // A canvas with edits not saved is never forgotten (B9 Design §2), nor one open.
-  const memory: CanvasMemory = new CanvasMemory(store, undefined, (canvas: CanvasId): boolean =>
-    documents.unsaved(canvas),
+  const memory: CanvasMemory = new CanvasMemory(
+    store,
+    undefined,
+    (canvas: CanvasId): boolean => documents.unsaved(canvas),
+    isConversationId,
   );
   // The reviews of canvas files changed on disk (B9 Design §5): what waits on a canvas is read
   // again as one is raised or settled.
@@ -253,21 +258,26 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
   // limits are the account's, not a folder's); none for fake sessions.
   const readerOf = (backend: UsageBackendId): UsageRead | undefined => {
     if (config.sessions !== undefined) return config.sessions.readUsage?.[backend];
-    const read = ADAPTERS.find((adapter) =>
+    const adapter = ADAPTERS.find((adapter) =>
       adapter.usageBackends.some(({ id }) => id === backend),
-    )?.readUsage;
-    if (fake || read === undefined) return undefined;
+    );
+    const read = adapter?.readUsage;
+    if (fake || read === undefined || adapter === undefined) return undefined;
     return () =>
-      children.run(async () => read(backend, { env: await environment(), cwd: homedir() }));
+      children.run(async () => {
+        const env = await environment();
+        const executable = await locate(adapter, env);
+        return executable === undefined
+          ? undefined
+          : read(backend, { env, cwd: homedir(), executable });
+      });
   };
   const probe = new UsageProbe({
     usage,
     backends: CATALOG.usageBackends.map((backend) => backend.id),
     readerOf,
   });
-  const conversations = ADAPTERS.find(
-    (adapter) => adapter.conversations !== undefined,
-  )?.conversations;
+  const conversations = createConversations();
   const sessions = new SessionManager({
     catalog: CATALOG,
     connectors:
@@ -287,7 +297,14 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
       ...createOptions({ fake: fake || config.sessions !== undefined }),
       ...config.sessions?.options,
     },
-    ...(conversations === undefined ? {} : { conversations }),
+    conversations,
+    adapterOf: async (canvas, agentId) => {
+      const node = (await documents.load(canvas)).document.nodes.find(
+        (node) => node.id === agentId,
+      );
+      if (node?.type !== 'agent') throw new Error('That agent is not on this canvas.');
+      return node.data.adapter ?? DEFAULT_ADAPTER;
+    },
     projectOf: (canvas) => projects.of(canvas),
     memory,
     sending: (canvas, agentId, message, send) => engines.sending(canvas, agentId, message, send),

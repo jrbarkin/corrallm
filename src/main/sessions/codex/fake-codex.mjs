@@ -548,6 +548,16 @@ function handle({ method, id, params }) {
         ],
         nextCursor: null,
       });
+    case 'thread/list': {
+      const data = Object.entries(kept)
+        .filter(([, record]) => params.cwd === undefined || record.cwd === params.cwd)
+        .slice(0, params.limit ?? 50)
+        .map(([id, record]) => ({
+          ...threadObject(id, record.cwd, record.model),
+          updatedAt: 1,
+        }));
+      return reply({ data, nextCursor: null });
+    }
     case 'thread/start': {
       const thread = load(randomUUID(), params);
       reply(threadResult(thread));
