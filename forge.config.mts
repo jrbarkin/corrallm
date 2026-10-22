@@ -1,7 +1,6 @@
 import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { cp, mkdir, readdir, readFile } from 'node:fs/promises';
-import { createRequire } from 'node:module';
+import { cp, mkdir, readdir } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
@@ -16,8 +15,10 @@ import { VitePlugin } from '@electron-forge/plugin-vite';
 import type { ForgeConfig, ForgePackagerOptions } from '@electron-forge/shared-types';
 import { FuseV1Options, FuseVersion } from '@electron/fuses';
 
+import { copyNativeModule, NATIVE_MODULES } from './build/native-modules.js';
+import { shipCli, LINUX_CLI_BIN } from './build/shipped-cli.js';
+
 const projectDir = path.dirname(fileURLToPath(import.meta.url));
-const requireFromProject = createRequire(import.meta.url);
 const execFileAsync = promisify(execFile);
 
 // extraResource keeps notices visible outside app.asar. Stage the SDK's installed license under
@@ -75,7 +76,12 @@ const osxSign: ForgePackagerOptions['osxSign'] | undefined =
           /\((GPU|Renderer|Plugin)\)\.app/.test(filePath)
             ? {}
             : {
-                entitlements: path.join(projectDir, 'build/entitlements.mac.plist'),
+                entitlements: path.join(
+                  projectDir,
+                  filePath.endsWith('/Resources/cli/node')
+                    ? 'build/entitlements.node.plist'
+                    : 'build/entitlements.mac.plist',
+                ),
                 hardenedRuntime: true,
               },
       }
@@ -104,76 +110,13 @@ const windowsCertificate =
     : undefined;
 
 // ---------------------------------------------------------------------------------------------
-// Native modules. The Vite plugin packages only `.vite/`, so every module the main process
-// loads at runtime must be: (1) in package.json "dependencies", (2) externalized in
-// vite.main.config.mts, (3) listed here so it is copied into the app, and (4) have its binaries
-// covered by `asar.unpack` below.
-// ---------------------------------------------------------------------------------------------
-interface NativeModule {
-  /** Top-level entries of the package needed at runtime. */
-  files: readonly string[];
-  /** Entries of the package's "dependencies" that are only needed to compile it. */
-  buildOnlyDependencies: readonly string[];
-}
-
-const NATIVE_MODULES: Readonly<Record<string, NativeModule>> = {
-  'node-pty': {
-    files: ['package.json', 'LICENSE', 'lib', 'prebuilds'],
-    buildOnlyDependencies: ['node-addon-api'],
-  },
-};
-
-const DROPPED_FILES = /\.(pdb|map|d\.ts)$|\.test\.js$/;
-
-async function copyNativeModule(
-  name: string,
-  module: NativeModule,
-  buildPath: string,
-  platform: string,
-  arch: string,
-): Promise<void> {
-  const source = path.dirname(requireFromProject.resolve(`${name}/package.json`));
-  const destination = path.join(buildPath, 'node_modules', name);
-  const target = `${platform === 'mas' ? 'darwin' : platform}-${arch}`;
-
-  const manifest = JSON.parse(await readFile(path.join(source, 'package.json'), 'utf8')) as {
-    dependencies?: Record<string, string>;
-  };
-  const runtimeDependencies = Object.keys(manifest.dependencies ?? {}).filter(
-    (dependency) => !module.buildOnlyDependencies.includes(dependency),
-  );
-  if (runtimeDependencies.length > 0) {
-    throw new Error(
-      `${name} has runtime dependencies (${runtimeDependencies.join(', ')}) that are not copied ` +
-        'into the package. Add them to NATIVE_MODULES in forge.config.mts.',
-    );
-  }
-
-  for (const entry of module.files) {
-    await mkdir(destination, { recursive: true });
-    await cp(path.join(source, entry), path.join(destination, entry), {
-      recursive: true,
-      filter: (file) => {
-        if (DROPPED_FILES.test(file)) return false;
-        // Keep only the prebuilt binaries for the platform being packaged.
-        const [top, prebuild] = path.relative(source, file).split(path.sep);
-        return top !== 'prebuilds' || prebuild === undefined || prebuild === target;
-      },
-    });
-  }
-
-  if (
-    module.files.includes('prebuilds') &&
-    !existsSync(path.join(destination, 'prebuilds', target))
-  ) {
-    throw new Error(`${name} ships no prebuilt binary for ${target}.`);
-  }
-}
-
 // electron-installer-redhat 4.0.0's default spec fails on rpmbuild >= 4.20; build/rpm.spec.ejs
-// carries the fix. Forge's option type omits specTemplate, which the installer still honors.
-const rpmOptions: MakerRpmConfigOptions & { specTemplate: string } = {
+// carries the fix. Forge's option type omits specTemplate and desktopTemplate, which the
+// installer still honors. The desktop entry opens the app, not the command linked in /usr/bin.
+const rpmOptions: MakerRpmConfigOptions & { specTemplate: string; desktopTemplate: string } = {
   categories: ['Development'],
+  bin: LINUX_CLI_BIN,
+  desktopTemplate: path.join(projectDir, 'build/corrallm.desktop.ejs'),
   specTemplate: path.join(projectDir, 'build/rpm.spec.ejs'),
 };
 
@@ -207,6 +150,9 @@ const config = {
         agentSdkLicense,
       );
     },
+    prePackage: async () => {
+      await execFileAsync('pnpm', ['build:cli'], { cwd: projectDir });
+    },
     preStart: () => {
       // `electron-forge start` passes its environment to the app and everything it spawns:
       // keep signing credentials (possibly loaded from .env) out of it.
@@ -217,6 +163,7 @@ const config = {
       for (const [name, module] of Object.entries(NATIVE_MODULES)) {
         await copyNativeModule(name, module, buildPath, platform, arch);
       }
+      await shipCli(buildPath, platform, arch);
     },
     postPackage: async (_config, { platform, outputPaths }) => {
       // Unsigned macOS builds keep Electron's original ad-hoc signature, which packager
@@ -228,7 +175,17 @@ const config = {
       for (const outputPath of outputPaths) {
         for (const entry of await readdir(outputPath)) {
           if (!entry.endsWith('.app')) continue;
+          // Keep the bundled Node's JIT entitlement when the enclosing unsigned app is re-signed.
           await execFileAsync('codesign', [
+            '--force',
+            '--sign',
+            '-',
+            '--entitlements',
+            path.join(projectDir, 'build/entitlements.node.plist'),
+            path.join(outputPath, entry, 'Contents/Resources/cli/node'),
+          ]);
+          await execFileAsync('codesign', [
+            '--preserve-metadata=entitlements',
             '--force',
             '--deep',
             '--sign',
@@ -243,7 +200,13 @@ const config = {
     new MakerDMG({}),
     new MakerZIP({}, ['darwin']),
     new MakerSquirrel({ ...windowsCertificate }),
-    new MakerDeb({ options: { categories: ['Development'] } }),
+    new MakerDeb({
+      options: {
+        categories: ['Development'],
+        bin: LINUX_CLI_BIN,
+        desktopTemplate: path.join(projectDir, 'build/corrallm.desktop.ejs'),
+      },
+    }),
     new MakerRpm({ options: rpmOptions }),
   ],
   plugins: [

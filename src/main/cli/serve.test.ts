@@ -636,10 +636,10 @@ describe.skipIf(process.platform === 'win32')('corrallm serve', () => {
       expect(printed()).toContain(`reaching m1.corral (${CANVAS})`);
       expect(printed()).toContain(`export CORRALLM_URL=${server.url}`);
       expect(printed()).toContain(
-        `claude mcp add --transport http corrallm-outside ${server.url} --header 'Authorization: Bearer \${CORRALLM_OUTSIDE_TOKEN}'`,
+        `claude mcp add --transport http corrallm-server ${server.url} --header 'Authorization: Bearer \${CORRALLM_OUTSIDE_TOKEN}'`,
       );
       expect(printed()).toContain(
-        `codex mcp add corrallm-outside --url ${server.url} --bearer-token-env-var CORRALLM_OUTSIDE_TOKEN`,
+        `codex mcp add corrallm-server --url ${server.url} --bearer-token-env-var CORRALLM_OUTSIDE_TOKEN`,
       );
       // It works.
       const client = await connect(server.url, token);
@@ -1263,10 +1263,10 @@ describe('registrations', () => {
   it('registers corrallm only in the installed CLIs that say how, by the token’s variable', () => {
     const url = 'http://127.0.0.1:4100/mcp';
     expect(registrations({ codex: true }, url)).toEqual([
-      `codex mcp add corrallm-outside --url ${url} --bearer-token-env-var CORRALLM_OUTSIDE_TOKEN`,
+      `codex mcp add corrallm-server --url ${url} --bearer-token-env-var CORRALLM_OUTSIDE_TOKEN`,
     ]);
     expect(registrations({ 'claude-code': true, codex: false }, url)).toEqual([
-      `claude mcp add --transport http corrallm-outside ${url} --header 'Authorization: Bearer \${CORRALLM_OUTSIDE_TOKEN}'`,
+      `claude mcp add --transport http corrallm-server ${url} --header 'Authorization: Bearer \${CORRALLM_OUTSIDE_TOKEN}'`,
     ]);
     expect(registrations({}, url)).toEqual([]);
   });

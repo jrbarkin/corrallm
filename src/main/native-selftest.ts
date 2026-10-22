@@ -6,15 +6,17 @@ import { memoryText, runChecks, SELFTEST_TIMEOUT_MS, selfTestChecks } from './co
 import type { CheckResult } from './core/selftest';
 import { forkCore } from './host/core-process';
 import { hostServices } from './host/services';
+import { checkShippedCommand } from './shipped-command';
 
 /**
  * Diagnostic only, not feature code: proves, in the app as built (including a packaged, fused
  * build), that what the core needs works, first in this main process, then in a forked core
- * process (an Electron utility process, where the core runs). Triggered by
- * CORRALLM_NATIVE_SELFTEST=1; see docs/architecture/native-modules.md. The checks are core/selftest.ts's: node-pty, a
+ * process (an Electron utility process, where the core runs), then under the shipped command's
+ * own Node on supported packaged platforms. Triggered by CORRALLM_NATIVE_SELFTEST=1;
+ * see docs/architecture/native-modules.md. The checks are core/selftest.ts's: node-pty, a
  * terminal screen, an Agent SDK query against a fake `claude` of its own (run with `node`, which
- * must be on the PATH), the core's database (Node's SQLite), loopback HTTP, spawning, and,
- * packaged, that child_process.fork is refused. Exits 0 once every check passed in both, 2 if one
+ * comes from the app when packaged), the core's database (Node's SQLite), loopback HTTP, spawning,
+ * and, in Electron packaged, that child_process.fork is refused. Exits 0 once every host passed, 2 if one
  * failed (saying which) or the core process failed, 3 on a timeout, 4 on an uncaught error.
  */
 export async function runNativeSelfTest(): Promise<void> {
@@ -30,15 +32,28 @@ export async function runNativeSelfTest(): Promise<void> {
   const timeout = setTimeout(() => {
     console.error('[native-selftest] timed out');
     app.exit(3);
-  }, SELFTEST_TIMEOUT_MS);
+  }, SELFTEST_TIMEOUT_MS * 2); // Main/core's budget, then one budget for the shipped command.
 
   const packaged = app.isPackaged;
+  const hasCommand = packaged && process.platform !== 'win32';
+  if (hasCommand) {
+    // The SDK diagnostic's fake script is run by this same bundled Node, in main and core too.
+    process.env.PATH = `${path.join(process.resourcesPath, 'cli')}${path.delimiter}${process.env.PATH ?? ''}`;
+  }
   console.log(`[native-selftest] main: ${memoryText()}`);
   const inMain = report('', await runChecks(selfTestChecks({ packaged })));
   const inCore = await checkCoreProcess(packaged);
+  const inCommand =
+    !hasCommand ||
+    report(
+      'shipped: ',
+      await runChecks([
+        { name: 'shipped command', run: () => checkShippedCommand(process.resourcesPath) },
+      ]),
+    );
   clearTimeout(timeout);
   setImmediate(() => {
-    app.exit(inMain && inCore ? 0 : 2);
+    app.exit(inMain && inCore && inCommand ? 0 : 2);
   });
 }
 

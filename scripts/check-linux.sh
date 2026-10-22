@@ -3,7 +3,7 @@
 # tree (its tracked and untracked files, never ignored ones such as .env) in a Debian container,
 # runs the packaged, fused app's native self-test under xvfb-run (in main and in its core process,
 # a utility process), checks that it refuses the launch switches that could hijack it, then runs
-# the CLI bundle's self-test under plain Node. Exits non-zero if any of it fails. Needs Docker
+# the shipped CLI's self-test under its bundled Node. Exits non-zero if any of it fails. Needs Docker
 # running (Docker Desktop on an Apple Silicon Mac runs arm64 natively).
 #
 #   scripts/check-linux.sh
@@ -70,8 +70,7 @@ git ls-files -z --cached --others --exclude-standard |
         echo "refused $switch"
       done
 
-      echo "--- Native self-test of the CLI bundle"
-      pnpm build:cli
-      CORRALLM_NATIVE_SELFTEST=1 pnpm corrallm
+      echo "--- Native self-test of the shipped command, without Node on PATH"
+      PATH= CORRALLM_NATIVE_SELFTEST=1 out/corrallm-linux-arm64/resources/bin/corrallm
     '
-echo "Linux arm64: the packaged app and the CLI bundle passed."
+echo "Linux arm64: the packaged app and its shipped command passed."

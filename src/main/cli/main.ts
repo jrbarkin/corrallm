@@ -1,3 +1,5 @@
+import path from 'node:path';
+
 import { memoryText, runChecks, SELFTEST_TIMEOUT_MS, selfTestChecks } from '../core/selftest';
 import { parseCommand, USAGE, UsageError } from './args';
 import type { Command } from './args';
@@ -40,6 +42,8 @@ function exit(code: number, printed: Printed): void {
 }
 
 async function selfTest(): Promise<void> {
+  // The diagnostic's fake native script uses this runtime too, even on an empty caller PATH.
+  process.env.PATH = `${path.dirname(process.execPath)}${path.delimiter}${process.env.PATH ?? ''}`;
   const fail = (kind: string) => (error: unknown) => {
     console.error(`[native-selftest] ${kind}:`, error);
     exit(4, BOTH);
@@ -130,6 +134,9 @@ async function run(command: Command): Promise<number> {
 
 if (process.env.CORRALLM_NATIVE_SELFTEST === '1') {
   void selfTest();
+} else if (process.argv.length === 3 && ['--help', '-h'].includes(process.argv[2] ?? '')) {
+  console.log(USAGE);
+  exit(0, ['stdout']);
 } else {
   let command: Command | undefined;
   try {
