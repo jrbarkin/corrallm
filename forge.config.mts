@@ -20,6 +20,13 @@ const projectDir = path.dirname(fileURLToPath(import.meta.url));
 const requireFromProject = createRequire(import.meta.url);
 const execFileAsync = promisify(execFile);
 
+// extraResource keeps notices visible outside app.asar. Stage the SDK's installed license under
+// its own name on every build, so upgrades cannot leave a stale checked-in copy behind.
+const agentSdkLicense = path.join(
+  projectDir,
+  'node_modules/.cache/corrallm-licenses/claude-agent-sdk-LICENSE.md',
+);
+
 // ---------------------------------------------------------------------------------------------
 // Code signing: enabled only when credentials are present in the environment (see .env.example).
 // A local, git-ignored .env file is loaded if it exists. Never commit credentials.
@@ -170,8 +177,13 @@ const rpmOptions: MakerRpmConfigOptions & { specTemplate: string } = {
   specTemplate: path.join(projectDir, 'build/rpm.spec.ejs'),
 };
 
-const config: ForgeConfig = {
+const config = {
   packagerConfig: {
+    extraResource: [
+      path.join(projectDir, 'NOTICE'),
+      path.join(projectDir, 'LICENSE'),
+      agentSdkLicense,
+    ],
     asar: {
       // Binaries must be real files on disk. JS stays packed (and integrity-checked).
       // `{.**,**}` keeps the globs matching when the staging path contains a dot-directory.
@@ -188,6 +200,13 @@ const config: ForgeConfig = {
     ignoreModules: ['node-pty', 'better-sqlite3'],
   },
   hooks: {
+    generateAssets: async () => {
+      await mkdir(path.dirname(agentSdkLicense), { recursive: true });
+      await cp(
+        path.join(projectDir, 'node_modules/@anthropic-ai/claude-agent-sdk/LICENSE.md'),
+        agentSdkLicense,
+      );
+    },
     preStart: () => {
       // `electron-forge start` passes its environment to the app and everything it spawns:
       // keep signing credentials (possibly loaded from .env) out of it.
@@ -264,6 +283,6 @@ const config: ForgeConfig = {
       [FuseV1Options.WasmTrapHandlers]: true,
     }),
   ],
-};
+} satisfies ForgeConfig;
 
 export default config;

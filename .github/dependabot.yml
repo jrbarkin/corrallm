@@ -1,0 +1,18 @@
+version: 2
+# GitHub's dependency graph currently misses pnpm 12's two-document lockfile,
+# preventing its alerts/security updates; see docs/architecture/toolchain.md.
+updates:
+  - package-ecosystem: npm # Includes pnpm.
+    directory: /
+    schedule:
+      interval: weekly
+    # GitHub applies cooldown to version updates only. Security updates still
+    # meet pnpm-workspace.yaml's minimumReleaseAge before they can be installed.
+    cooldown:
+      default-days: 1
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 1
