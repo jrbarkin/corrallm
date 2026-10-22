@@ -28,6 +28,8 @@ A condition in the user's words is asked of it in its own session, yes or no ("c
 
 Stop pauses with a cancelled attempt; Resume holds it for a decision and Run again explicitly starts fresh.
 
+A send's take-back, Kill and the composer's Stop all use the connection's interrupt behavior, including stopping commands started by the interrupted turn where its connection supports it.
+
 Stop (and Run again) takes back what the run sent that is still going (RunIO.send returns it: SessionStore.send's take-back, off the session's queue or interrupting its turn), and no longer hears those turns end.
 
 Waits hold until their target is done or their time limit passes, delays until their time comes, OKs until the user decides (RunStore.decide: approve, ask for changes, which go to the agent's session, as a message like any other with the images pasted into it, before it asks again, or stop, which stops whatever waits on it; while it asks, a slash command typed in a connected agent's composer runs as a command instead, as its ask bar says).

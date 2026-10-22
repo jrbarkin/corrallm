@@ -1,5 +1,3 @@
-import { spawn } from 'node:child_process';
-import type { ChildProcess } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
@@ -15,6 +13,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { toolName } from '../../shared/api/registry';
 import type { Message } from '../../shared/model/messages';
 import { keepCanvases, readOnDisk } from '../core/store/test-store';
+import { TestChildren } from './test-children';
+import type { TestChild } from './test-children';
+import { cleanupCrash } from './test-crash-cleanup';
 
 /*
  * Gate G3 of the core's database (Core Database §8): `corrallm serve` (the CLI bundle, which the
@@ -42,9 +43,11 @@ describe.skipIf(process.platform === 'win32')('corrallm serve, killed again and 
   let profile: string;
   let file: string;
   let codexLog: string;
-  let serve: ChildProcess | undefined;
+  let serve: TestChild | undefined;
+  let children: TestChildren;
 
   beforeEach(async () => {
+    children = new TestChildren();
     dir = await mkdtemp(path.join(tmpdir(), 'corrallm-crash-'));
     profile = path.join(dir, 'profile');
     const project = path.join(dir, 'project');
@@ -91,9 +94,8 @@ describe.skipIf(process.platform === 'win32')('corrallm serve, killed again and 
   });
 
   afterEach(async () => {
-    serve?.kill('SIGKILL');
+    await cleanupCrash(dir, profile, children);
     serve = undefined;
-    await rm(dir, { recursive: true, force: true });
   });
 
   /** Starts `corrallm serve`: its URL, once it writes api.json. */
@@ -108,12 +110,13 @@ describe.skipIf(process.platform === 'win32')('corrallm serve, killed again and 
     };
     delete env.CORRALLM_URL;
     delete env.CORRALLM_OUTSIDE_TOKEN;
-    const child = spawn(
+    const child = children.spawn(
       process.execPath,
       [BUNDLE, 'serve', '--profile', profile, '--canvas', file, '--port', '0'],
-      { env, stdio: ['ignore', 'ignore', 'pipe'] },
+      env,
     );
     serve = child;
+    child.stdout.resume();
     let said = '';
     child.stderr.on('data', (chunk: Buffer) => {
       said += chunk.toString();
@@ -127,7 +130,8 @@ describe.skipIf(process.platform === 'win32')('corrallm serve, killed again and 
           // Being written.
         }
       }
-      if (child.exitCode !== null) throw new Error(`serve exited: ${said}`);
+      if (child.exitCode !== null || child.signalCode !== null)
+        throw new Error(`serve exited: ${said}`);
       await sleep(50);
     }
     throw new Error(`serve never wrote api.json: ${said}`);
@@ -137,8 +141,8 @@ describe.skipIf(process.platform === 'win32')('corrallm serve, killed again and 
   async function kill(): Promise<void> {
     const child = serve;
     serve = undefined;
-    if (child?.exitCode !== null) return;
-    const exited = new Promise((resolve) => child.once('exit', resolve));
+    if (child?.exitCode !== null || child.signalCode !== null) return;
+    const exited = children.exited(child);
     child.kill('SIGKILL');
     await exited;
   }

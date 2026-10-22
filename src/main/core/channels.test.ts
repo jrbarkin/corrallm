@@ -491,6 +491,7 @@ describe('session:* handlers', () => {
       /what to change/,
     ],
     ['session:interrupt', 'no agent', [], /an agent/],
+    ['session:interrupt', 'an extra argument', ['a', 'b'], /an agent/],
     ['session:close', 'an extra argument', ['a', 'b'], /an agent/],
     ['session:fresh', 'no agent', [], /an agent and an adapter/],
     ['session:fresh', 'no adapter', ['a'], /an agent and an adapter/],

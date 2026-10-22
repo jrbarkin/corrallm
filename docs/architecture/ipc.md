@@ -27,3 +27,5 @@ A window's call is an operation (see The registry). A hand-written channel is on
 The compiler enforces that main, preload and renderer agree on argument and result types, and that no contract channel is missing a core handler or an `AppApi` method.
 
 Core-to-renderer events: declare the event in `IpcEvents` in `src/shared/ipc.ts` (`'domain:event': [agentId: string, thing: Thing]`), add a function to `EventApi` and its event to `API_EVENTS` (the compiler checks none is missing), expose it in the preload with `core.listen` (returning a function that stops listening), and send it with `Channels.emit` over the window's port to the canvas's windows only. `run:stopping` alone stays main-to-window through `sendEvent` and `ipcRenderer`; topic state uses the port's `topic(change)` contract instead.
+
+`session:interrupt` takes only the agent; the parser rejects extra arguments. The core resolves the canvas from the calling window as for other session channels. Every interrupt uses the same connection behavior; neither a process id nor a thread id comes from the renderer.
