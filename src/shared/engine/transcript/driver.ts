@@ -3,6 +3,7 @@ import type {
   MessageImage,
   MessageSender,
   SessionAnswer,
+  TaskMessage,
   TurnResult,
 } from '../../session';
 import type { Mode, Refusal, Session } from '../../model/session';
@@ -22,6 +23,8 @@ import type { SessionAction } from './reduce';
  * sent it, when another party did.
  */
 export interface Turn {
+  origin?: 'queue';
+  task?: TaskMessage;
   id: string;
   text: string;
   images?: MessageImage[];

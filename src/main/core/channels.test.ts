@@ -195,6 +195,14 @@ describe('session:* handlers', () => {
 
     await invoke('session:send', ['a', { id: 'm1', text: 'Hi' }], sender);
     expect(services.sessions.send).toHaveBeenCalledWith(CANVAS, 'a', { id: 'm1', text: 'Hi' });
+    const taskMessage = {
+      id: 'q1',
+      text: 'Work',
+      origin: 'queue',
+      task: { agent: 'a', item: 'i'.repeat(256), attempt: 'try1' },
+    };
+    await invoke('session:send', ['a', taskMessage], sender);
+    expect(services.sessions.send).toHaveBeenLastCalledWith(CANVAS, 'a', taskMessage);
     // A pasted image may be all a message is.
     const image = { mediaType: 'image/png', data: 'iVBORw0KGgo=' };
     await invoke('session:send', ['a', { id: 'm2', text: '', images: [image] }], sender);
@@ -371,6 +379,32 @@ describe('session:* handlers', () => {
     ['session:send', 'a message without text', ['a', { id: 'm' }], /text/],
     ['session:send', 'a blank message', ['a', { id: 'm', text: '  ' }], /text/],
     ['session:send', 'a message without an id', ['a', { text: 'Hi' }], /message's id/],
+    [
+      'session:send',
+      'task metadata on a manual send',
+      ['a', { id: 'm', text: 'Work', task: { agent: 'a', item: 'i', attempt: 't' } }],
+      /queue origin/,
+    ],
+    [
+      'session:send',
+      'an incomplete task reference',
+      ['a', { id: 'm', text: 'Work', origin: 'queue', task: { agent: 'a', item: 'i' } }],
+      /attempt/,
+    ],
+    [
+      'session:send',
+      'unbounded task metadata',
+      [
+        'a',
+        {
+          id: 'm',
+          text: 'Work',
+          origin: 'queue',
+          task: { agent: 'a'.repeat(10000), item: 'i', attempt: 't' },
+        },
+      ],
+      /agent/,
+    ],
     [
       'session:send',
       'a message too long',

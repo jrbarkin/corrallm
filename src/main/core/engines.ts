@@ -62,6 +62,12 @@ const NO_SWITCH = 'Switch this agent to another connection in the corrallm app.'
 const JOURNAL_FAILED = 'Could not journal every canvas’s run as the core closed.';
 
 export interface EnginesDeps {
+  retryTask?: (
+    canvas: CanvasId,
+    agent: string,
+    connection: ConnectionId,
+    event: Extract<SessionEvent, { type: 'retry-task' }>,
+  ) => void;
   processes: Pick<Children, 'run'>;
   /** What the engines read of the catalog. */
   engineCatalog: EngineCatalog;
@@ -152,9 +158,29 @@ export class Engines {
   readonly #watchers = new Set<Watcher>();
   readonly #events = new Map<string, Promise<SessionEvent>>();
   #closed = false;
+  readonly #taskResends = new Map<
+    string,
+    { canvas: CanvasId; agent: string; connection: ConnectionId }
+  >();
+  readonly #unwatchResends: () => void;
+  readonly #reports = new Map<string, Map<string, SessionEvent>>();
+  readonly #inputs = new Map<string, Map<string, UserMessage>>();
+  readonly #resends = new Map<string, { ids: readonly string[]; inputs: UserMessage[] }>();
 
   constructor(deps: EnginesDeps) {
     this.#deps = deps;
+    this.#unwatchResends = deps.usage.subscribe(() => {
+      for (const { canvas, agent, connection } of this.#taskResends.values()) {
+        const event = this.#retryEvent(connection, { update: true });
+        void this.emit(canvas, agent, connection, event)
+          .then(() => {
+            this.#deps.retryTask?.(canvas, agent, connection, event);
+          })
+          .catch((error: unknown) => {
+            console.error('Could not update a task retry hold:', error);
+          });
+      }
+    });
   }
 
   /** A canvas the core has open, if it has. */
@@ -231,6 +257,53 @@ export class Engines {
       );
     }
     await store.durable();
+  }
+
+  ended(canvas: CanvasId, agent: string): void {
+    const key = `${canvas}\u0000${agent}`;
+    this.#inputs.delete(key);
+    this.#resends.delete(key);
+    this.#reports.delete(key);
+    this.#taskResends.delete(key);
+  }
+
+  /** Arm one explicit retry before the interrupt, never before its cancelled end arrives. */
+  async resendAfter(
+    canvas: CanvasId,
+    agent: string,
+    ids: readonly string[],
+    connection: ConnectionId,
+  ): Promise<void> {
+    const key = `${canvas}\u0000${agent}`;
+    const inputs = [...(this.#inputs.get(key)?.values() ?? [])].filter((one) =>
+      ids.includes(one.id),
+    );
+    this.#resends.set(key, { ids, inputs });
+    const tasks = inputs.flatMap((input) => (input.task === undefined ? [] : [input.task]));
+    if (tasks.length) this.#taskResends.set(key, { canvas, agent, connection });
+    const event = { ...this.#retryEvent(connection), tasks };
+    await this.emit(canvas, agent, connection, event);
+    this.#deps.retryTask?.(canvas, agent, connection, event);
+  }
+
+  async cancelResend(canvas: CanvasId, agent: string, connection: ConnectionId): Promise<void> {
+    const key = `${canvas}\u0000${agent}`;
+    this.#resends.delete(key);
+    this.#taskResends.delete(key);
+    const event = this.#retryEvent(connection, { cancel: true });
+    await this.emit(canvas, agent, connection, event);
+    this.#deps.retryTask?.(canvas, agent, connection, event);
+  }
+
+  #retryEvent(
+    connection: ConnectionId,
+    flags: { cancel?: true; update?: true } = {},
+  ): Extract<SessionEvent, { type: 'retry-task' }> {
+    const catalog = this.#deps.engineCatalog;
+    const backend = catalog.usageBackendOf({ adapter: catalog.adapterOf(connection), connection });
+    const until =
+      backend === undefined ? undefined : this.#deps.usage.exhausted(backend, Date.now());
+    return { type: 'retry-task', ...flags, ...(until === undefined ? {} : { until }) };
   }
 
   /** The canvases the core has open, in the order they opened. */
@@ -324,12 +397,136 @@ export class Engines {
     connection: ConnectionId,
     given: SessionEvent,
   ): Promise<SessionEvent> {
+    const key = `${canvas}\u0000${agentId}`;
+    if (given.type === 'started' || given.type === 'mode' || given.type === 'asking') {
+      const reports = this.#reports.get(key) ?? new Map<string, SessionEvent>();
+      if (given.type === 'started') reports.clear();
+      reports.delete(given.type);
+      reports.set(given.type, given);
+      this.#reports.set(key, reports);
+    }
+    if (given.type === 'user') {
+      const inputs = this.#inputs.get(key) ?? new Map<string, UserMessage>();
+      if (!inputs.has(given.id)) inputs.set(given.id, { id: given.id, text: given.text });
+      this.#inputs.set(key, inputs);
+    }
     const event = given.type === 'end' ? await this.#ended(connection, given) : given;
     const mail = await this.#mail.get(canvas);
     mail?.notes.receive(agentId, event);
     const running = await this.#running.get(canvas);
     for (const listener of running?.listeners ?? []) listener(agentId, connection, event);
+    if (event.type === 'end') {
+      const request = this.#resends.get(key);
+      this.#resends.delete(key);
+      if (event.result.status !== 'cancelled') this.#taskResends.delete(key);
+      for (const id of event.messages) this.#inputs.get(key)?.delete(id);
+      if (request && event.result.status === 'cancelled') {
+        // Do not hold this agent's event lane while opening delivery or committing its new rows.
+        setImmediate(() => {
+          void this.#resend(canvas, agentId, request, event.messages).catch((error: unknown) => {
+            console.error('Could not resend the interrupted turn:', error);
+          });
+        });
+      }
+    } else if (event.type === 'closed' || event.type === 'cleared') {
+      this.#taskResends.delete(key);
+      this.#resends.delete(key);
+      this.#inputs.delete(key);
+      this.#reports.delete(key);
+    }
     return event;
+  }
+
+  async #resend(
+    canvas: CanvasId,
+    agent: string,
+    request: { ids: readonly string[]; inputs: UserMessage[] },
+    ended: readonly string[],
+  ): Promise<void> {
+    // Queue attempts belong to the engine that sent them (possibly in a window until B11).
+    // Its Retry reservation handles them; do not restore a second run merely to copy no mail.
+    if (
+      request.inputs.length === request.ids.length &&
+      request.inputs.every((input) => input.task !== undefined)
+    )
+      return;
+    const stopped = () => this.#closed;
+    if (stopped()) return;
+    await this.open(canvas);
+    const open = this.#canvases.get(canvas);
+    if (!open || stopped()) return;
+    const store = open.messages;
+    const originals = store
+      .all()
+      .filter(
+        (m) =>
+          m.kind === 'text' &&
+          m.to === agentParty(agent) &&
+          m.delivery &&
+          request.ids.includes(m.delivery.as) &&
+          ended.includes(m.delivery.as),
+      );
+    const partyIds = new Set(
+      originals.flatMap((m) => (m.delivery === undefined ? [] : [m.delivery.as])),
+    );
+    const copies = originals
+      .filter((m) => m.state === 'replied')
+      .map((m) => ({
+        id: m.id,
+        from: m.from,
+        body: m.body,
+        images: request.inputs.find((input) => input.id === m.delivery?.as)?.images,
+      }));
+    for (const input of request.inputs) {
+      if (
+        partyIds.has(input.id) ||
+        input.origin !== undefined ||
+        input.from !== undefined ||
+        !ended.includes(input.id)
+      )
+        continue;
+      // Native user ids need not be UUIDs. Keep an original message record of our own,
+      // linked to its native submission by delivery.as, before making a new UUID-to-UUID link.
+      const recorded = store.add({
+        from: 'you',
+        to: agentParty(agent),
+        kind: 'text',
+        body: input.text,
+        state: 'replied',
+        turn: { status: 'cancelled', reason: 'interrupted' },
+        delivery: { at: Date.now(), as: input.id, attempt: 1 },
+      });
+      copies.push({ id: recorded.id, from: 'you', body: input.text, images: input.images });
+    }
+    for (const original of copies) {
+      const key = `resend:${original.id}`;
+      if (store.hasTold(key) || store.hasTold(`${key}:images`)) continue;
+      const next = store.add(
+        {
+          from: original.from,
+          to: agentParty(agent),
+          kind: 'text',
+          body: original.body,
+          state: 'pending',
+          replyTo: original.id,
+        },
+        original.images?.length ? `${key}:images` : key,
+      );
+      open.delivery.images(next.id, original.images);
+      store.add(
+        {
+          from: 'corrallm',
+          to: original.from,
+          kind: 'notice',
+          state: 'delivered',
+          replyTo: original.id,
+          body: `At the user's request, message ${original.id} was resent as ${next.id}. Its reply will be addressed to that new message.`,
+        },
+        `resent:${original.id}`,
+      );
+    }
+    await store.durable();
+    open.delivery.schedule();
   }
 
   /**
@@ -374,6 +571,11 @@ export class Engines {
     send: (message: UserMessage) => Promise<void>,
   ): Promise<void> {
     if (this.#closed) throw new Error('The canvas closed before its message could be sent.');
+    const key = `${canvas}\u0000${agentId}`;
+    if (message.origin === 'queue') this.#taskResends.delete(key);
+    const inputs = this.#inputs.get(key) ?? new Map<string, UserMessage>();
+    inputs.set(message.id, message);
+    this.#inputs.set(key, inputs);
     const { notes } = await this.#mailOf(canvas);
     await notes.send(agentId, message, send);
   }
@@ -420,6 +622,8 @@ export class Engines {
   async close(): Promise<void> {
     await Promise.all(this.#events.values());
     this.#closed = true;
+    this.#unwatchResends();
+    this.#taskResends.clear();
     const mail = await Promise.all(this.#mail.values());
     for (const { notes } of mail) notes.close();
     const running = await Promise.allSettled(this.#running.values());
@@ -490,7 +694,7 @@ export class Engines {
     running.journal = () => this.#write(running);
     // What its messages write, they write with its run, if that changed since it was last on disk.
     messages.writeWith(() => this.#runWithin(running, false));
-    const engine = new Engine({
+    const engine: Engine = new Engine({
       catalog: this.#deps.engineCatalog,
       backend: this.#backend(canvas, listeners),
       later: (run, ms) => {
@@ -628,6 +832,7 @@ export class Engines {
    */
   async #stop(running: Running): Promise<void> {
     running.stop();
+    running.engine.cancelResends();
     try {
       await running.delivery.close();
     } finally {
@@ -688,7 +893,14 @@ export class Engines {
     const run = <T>(call: () => T): T => this.#deps.processes.run(call);
     const done = (call: () => Promise<unknown>) => run(() => call().then(() => null));
     return {
-      start: (agentId, options) => done(() => sessions.start(canvas, agentId, options)),
+      start: (agentId, options) =>
+        done(async () => {
+          await sessions.start(canvas, agentId, options);
+          // A window may already own this native session. A newly opened core delivery driver
+          // still checks the session's actual permissions, rather than an earlier default.
+          for (const event of this.#reports.get(`${canvas}\u0000${agentId}`)?.values() ?? [])
+            for (const listener of listeners) listener(agentId, options.connection, event);
+        }),
       installed: () => run(async () => installedClis(await environment())),
       send: (agentId, message) => done(() => sessions.send(canvas, agentId, message)),
       answer: (agentId, promptId, answer) =>

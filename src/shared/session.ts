@@ -239,6 +239,13 @@ export interface MessageSender {
   name: string;
 }
 
+/** Exact run ownership of a native submission, used only for platform routing. */
+export interface TaskMessage {
+  agent: string;
+  item: string;
+  attempt: string;
+}
+
 /**
  * A message the user sends: its id (the turn it starts ends naming it), its text, and the images
  * pasted into it, if any (only connected sessions see them). `from`: who sent it, when another
@@ -247,6 +254,9 @@ export interface MessageSender {
  * its user's.
  */
 export interface UserMessage {
+  /** Platform routing only: this send belongs to the queue/run, never a manual resend. */
+  origin?: 'queue';
+  task?: TaskMessage;
   id: string;
   text: string;
   images?: MessageImage[];
@@ -467,6 +477,14 @@ export type SessionEvent =
    */
   | { type: 'history'; events: SessionEvent[] }
   | { type: 'user'; id: string; text: string }
+  /** Core-only user decision, before interruption: retry the owning run's cancelled attempt. */
+  | {
+      type: 'retry-task';
+      cancel?: boolean;
+      update?: boolean;
+      until?: number;
+      tasks?: TaskMessage[];
+    }
   | { type: 'status'; status: 'working' | 'waiting' }
   | { type: 'text'; id: string; text: string; parent?: string }
   | { type: 'thinking'; id: string; text: string; parent?: string }

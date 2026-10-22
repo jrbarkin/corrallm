@@ -31,6 +31,7 @@ interface Turn {
   last: number;
   grace?: { at: number; why: Disruption };
   notified: boolean;
+  answered?: boolean;
   stalled: boolean;
   text: string;
 }
@@ -177,12 +178,42 @@ export class StalledTurns {
               for: 'you',
               by: ['you'],
               title: turn.text,
-              choices: [{ value: 'interrupt', label: 'Interrupt' }],
+              choices: [
+                { value: 'interrupt', label: 'Interrupt' },
+                { value: 'resend', label: 'Interrupt and resend' },
+              ],
               answerIn: 'api',
             },
           ]
         : [],
     );
+  }
+
+  /** One answer belongs to this turn, even while its interrupt still awaits an end. */
+  take(
+    canvas: CanvasId,
+    agent: string,
+  ):
+    | { messages: string[]; connection: ConnectionId; current: () => boolean; release: () => void }
+    | undefined {
+    const turn = this.#turns.get(keyOf(canvas, agent));
+    if (!turn?.stalled || turn.answered) return undefined;
+    turn.answered = true;
+    turn.stalled = false;
+    this.#deps.changed(canvas);
+    const current = () => this.#turns.get(keyOf(canvas, agent)) === turn;
+    const last = turn.last;
+    return {
+      messages: [...turn.messages],
+      connection: turn.connection,
+      current,
+      release: () => {
+        if (!current()) return;
+        turn.answered = false;
+        turn.stalled = turn.last === last;
+        this.#deps.changed(canvas);
+      },
+    };
   }
 
   close(): void {
@@ -203,7 +234,7 @@ export class StalledTurns {
       this.#checked = now;
       for (const turn of this.#turns.values()) {
         const due = turn.grace === undefined ? turn.last + STALL_MS : turn.grace.at + WAKE_GRACE_MS;
-        if (now < due || turn.stalled) continue;
+        if (now < due || turn.stalled || turn.answered) continue;
         const cli = connectionIn(this.#deps.catalog, turn.connection)?.adapter.name ?? 'the agent';
         const silence =
           turn.grace === undefined

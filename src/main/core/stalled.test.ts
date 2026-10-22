@@ -59,6 +59,7 @@ describe('silent turns', () => {
     );
     expect(watchdog.items(CANVAS)[0]?.choices).toEqual([
       { value: 'interrupt', label: 'Interrupt' },
+      { value: 'resend', label: 'Interrupt and resend' },
     ]);
   });
 
@@ -218,7 +219,10 @@ describe('silent turns', () => {
         for: 'you',
         by: ['you'],
         answerIn: 'api',
-        choices: [{ value: 'interrupt', label: 'Interrupt' }],
+        choices: [
+          { value: 'interrupt', label: 'Interrupt' },
+          { value: 'resend', label: 'Interrupt and resend' },
+        ],
       }),
     ]);
     await vi.advanceTimersByTimeAsync(STALL_MS);
