@@ -81,8 +81,9 @@ export interface OpServices {
     | 'resizeTerminal'
     | 'dropOnTerminal'
     | 'interrupt'
+    | 'interruptIf'
   >;
-  stalled: Pick<StalledTurns, 'items'>;
+  stalled: Pick<StalledTurns, 'items' | 'take'>;
   runProblems?: (canvas: CanvasId) => readonly NeedsItem[];
   /** The canvases the core runs. */
   engines: Engines;

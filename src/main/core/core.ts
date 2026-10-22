@@ -329,6 +329,7 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     },
     ended: (canvas, agent) => {
       stalled.ended(canvas, agent);
+      engines.ended(canvas, agent);
     },
   });
   const windows = new Windows({
@@ -473,6 +474,9 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     files: canvasFiles,
   });
   const engines: Engines = new Engines({
+    retryTask: (canvas, agent, connection, event) => {
+      channels.emit(canvas, 'session:event', agent, connection, event);
+    },
     processes: children,
     engineCatalog: engineCatalog(CATALOG, DEFAULT_ADAPTER),
     sessions,

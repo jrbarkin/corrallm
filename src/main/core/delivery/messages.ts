@@ -316,6 +316,23 @@ export class MessageStore {
     return [...this.#kept.values()].some(({ told }) => told === key);
   }
 
+  /** This message is an explicit resend, marked in the existing durable told column. */
+  isResend(message: Message): boolean {
+    return (
+      message.replyTo !== undefined &&
+      (this.#kept.get(message.id)?.told === `resend:${message.replyTo}` ||
+        this.isImageResend(message))
+    );
+  }
+
+  /** Image bytes are live-only: a restart must not silently dispatch an incomplete resend. */
+  isImageResend(message: Message): boolean {
+    return (
+      message.replyTo !== undefined &&
+      this.#kept.get(message.id)?.told === `resend:${message.replyTo}:images`
+    );
+  }
+
   /** Changes a message: as kept, or undefined if it isn't kept (any more). */
   update(
     id: string,

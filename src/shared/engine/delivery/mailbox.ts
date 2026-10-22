@@ -1,3 +1,4 @@
+import type { SessionEvent } from '../../session';
 import type { AdapterId, ConnectionId } from '../../adapter';
 import type { SubmittedMessage } from '../../model/queue';
 import { parseRole } from '../../role';
@@ -13,6 +14,7 @@ import type {
   RewindRestore,
   RewindResult,
   SettingsOptions,
+  TaskMessage,
   TurnResult,
 } from '../../session';
 import { shellRefusal } from '../catalog';
@@ -37,6 +39,8 @@ import type {
 import type { SessionAction } from '../transcript/reduce';
 
 export interface SubmissionObserver {
+  retry?: (agent: string, request: Extract<SessionEvent, { type: 'retry-task' }>) => void;
+  ending?: (agent: string, result: TurnResult) => void;
   submitted?: (agentId: string, message: SubmittedMessage) => void;
   ended?: (agentId: string, id: string, reply: string, result: TurnResult) => void;
 }
@@ -109,6 +113,7 @@ export class SessionStore {
    * like any of theirs, but the run's own attempt, never taken for a correction typed in.
    */
   readonly #runMessages = new Set<string>();
+  readonly #tasks = new Map<string, TaskMessage>();
   readonly #displayTexts = new Map<string, string>();
   /** Who sent each message another party sent, by its id, until its turn ends. */
   readonly #senders = new Map<string, MessageSender>();
@@ -301,9 +306,10 @@ export class SessionStore {
     onRefused?: (refusal: Refusal) => void,
     origin: 'user' | 'queue' | 'run' = 'user',
     displayText?: string,
-    as: { id?: string; from?: MessageSender } = {},
+    as: { id?: string; from?: MessageSender; task?: TaskMessage } = {},
   ): () => void {
     const { id = crypto.randomUUID(), from } = as;
+    if (as.task) this.#tasks.set(id, as.task);
     this.#types.set(agentId, agent);
     if (origin === 'queue') this.#queueMessages.add(id);
     else if (origin === 'run') this.#runMessages.add(id);
@@ -543,6 +549,7 @@ export class SessionStore {
     this.#stopping.clear();
     this.#queueMessages.clear();
     this.#runMessages.clear();
+    this.#tasks.clear();
     this.#setAside.clear();
     this.#displayTexts.clear();
     this.#senders.clear();
@@ -589,8 +596,16 @@ export class SessionStore {
       entry: { id, kind: 'user', text, ...pasted, conversation },
     });
     const from = this.#senders.get(id);
+    const task = this.#tasks.get(id);
     this.#driver(agentId).start(
-      { id, text, ...pasted, ...(from === undefined ? {} : { from }) },
+      {
+        id,
+        text,
+        ...pasted,
+        ...(from === undefined ? {} : { from }),
+        ...(task === undefined ? {} : { task }),
+        ...(this.#queueMessages.has(id) || task !== undefined ? { origin: 'queue' as const } : {}),
+      },
       (interrupted, result) => {
         // The next queued message may have started already.
         if (this.#turns.get(agentId) === id) this.#turns.delete(agentId);
@@ -608,6 +623,7 @@ export class SessionStore {
     this.#onRefused.delete(id);
     this.#displayTexts.delete(id);
     this.#senders.delete(id);
+    this.#tasks.delete(id);
     return onDone;
   }
 
@@ -706,8 +722,14 @@ export class SessionStore {
   /** Hears connected sessions' events, from the first connected driver on. */
   #listen(): void {
     this.#unsubscribe ??= this.#backend.onEvent((agentId, connection, event) => {
+      if (event.type === 'retry-task') {
+        this.#observer.retry?.(agentId, event);
+        return;
+      }
       const driving = this.#drivers.get(agentId);
       if (driving?.driver instanceof ConnectedDriver && driving.connection === connection) {
+        if (event.type === 'end' && event.messages.includes(this.#turns.get(agentId) ?? ''))
+          this.#observer.ending?.(agentId, event.result);
         driving.driver.receive(event);
       }
     });

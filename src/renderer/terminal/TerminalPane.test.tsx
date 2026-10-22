@@ -590,6 +590,8 @@ describe('a Terminal agent', () => {
     expect(sessions.backend.send).toHaveBeenCalledWith('a', {
       id: expect.any(String) as unknown,
       text: 'Write the docs',
+      origin: 'queue',
+      task: { agent: 'a', item: 'q1', attempt: expect.any(String) as string },
     });
     expect(view.queryByRole('list', { name: 'Queued messages' })).toBeNull();
   });
@@ -612,9 +614,14 @@ describe('a Terminal agent', () => {
     await events.click(queues.getByRole('button', { name: 'Open a' }));
     await settle();
     /** Main types the last message in, and Claude Code answers it (its Stop hook's last reply). */
-    const answer = async (text: string, reply: string) => {
+    const answer = async (item: string, text: string, reply: string) => {
       const sent = sessions.sent();
-      expect(sessions.backend.send).toHaveBeenLastCalledWith('a', { id: sent, text });
+      expect(sessions.backend.send).toHaveBeenLastCalledWith('a', {
+        id: sent,
+        text,
+        origin: 'queue',
+        task: { agent: 'a', item, attempt: expect.any(String) as string },
+      });
       session(
         { type: 'user', id: sent, text },
         { type: 'status', status: 'working' },
@@ -629,11 +636,13 @@ describe('a Terminal agent', () => {
       await settle();
     };
     await answer(
+      'tests',
       'Use the Bash tool for this step (run shell commands).' + VERDICT,
       'Ran them: 0 failed.\nSUCCEEDED',
     );
-    await answer('Tag it', 'Tagged v1.2.');
+    await answer('tag', 'Tag it', 'Tagged v1.2.');
     await answer(
+      'flaky',
       'corrallm asks: is this true now? “a test is flaky” Start your answer with yes or no.',
       'Hard to say.',
     );

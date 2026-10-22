@@ -185,6 +185,14 @@ export class SessionManager {
     await (await this.#session(canvas, agentId)).interrupt();
   }
 
+  /** A stalled turn may end while its reply waits: never stop the next turn instead. */
+  async interruptIf(canvas: CanvasId, agentId: string, current: () => boolean): Promise<boolean> {
+    const session = await this.#session(canvas, agentId);
+    if (!current()) return false;
+    await session.interrupt();
+    return true;
+  }
+
   /** Switches the agent's session's mode (one of its adapter's). */
   async setMode(canvas: CanvasId, agentId: string, mode: SessionMode): Promise<void> {
     const agent = this.#agents.get(canvas)?.get(agentId);

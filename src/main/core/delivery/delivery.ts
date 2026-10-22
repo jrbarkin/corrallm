@@ -13,7 +13,7 @@ import type { Message, PartyId } from '../../../shared/model/messages';
 import { threadTitle } from '../../../shared/model/session';
 import { holdText, resetTime } from '../../../shared/model/words';
 import { isSessionMode } from '../../../shared/session';
-import type { TurnReason, TurnResult } from '../../../shared/session';
+import type { TurnReason, TurnResult, UserMessage } from '../../../shared/session';
 import type { UsageHold } from '../../../shared/usage';
 import type { UsageReadings } from '../../usage';
 import {
@@ -185,6 +185,7 @@ export class Delivery {
    * Nothing is delivered meanwhile.
    */
   #unrecordable: (() => void) | undefined;
+  readonly #images = new Map<string, NonNullable<UserMessage['images']>>();
   #scheduled = false;
   /** Whether it delivers yet: not until it starts, though messages may be sent before. */
   #started = false;
@@ -224,6 +225,7 @@ export class Delivery {
    */
   async close(): Promise<void> {
     this.#closed = true;
+    this.#images.clear();
     for (const stop of this.#stop) stop();
     this.#alarm?.cancel();
     this.#alarm = undefined;
@@ -236,6 +238,14 @@ export class Delivery {
       else this.#cutOff(message);
     }
     await this.#deps.store.durable();
+  }
+
+  images(id: string, images: UserMessage['images']): void {
+    if (images?.length) this.#images.set(id, images);
+  }
+
+  #yours(message: Message): boolean {
+    return message.from === 'you' && !this.#deps.store.isResend(message);
   }
 
   /** Looks again, soon, at what waits: once, however often asked before then. */
@@ -403,7 +413,7 @@ export class Delivery {
     const waiting = this.#waiting();
     return this.#deps.nodes().flatMap((node) => {
       if (node.type !== 'agent') return [];
-      if (!waiting.get(node.id)?.some(({ from }) => from !== 'you')) return [];
+      if (!waiting.get(node.id)?.some((message) => !this.#yours(message))) return [];
       if (this.#stuckOf(node) !== undefined) return [];
       const why = this.#asking(node);
       return why === 'asks' || why === 'reading' ? [] : [{ agent: node.id, why }];
@@ -433,9 +443,39 @@ export class Delivery {
     if (!this.#started || this.#closed) return;
     const { engine, store } = this.#deps;
     this.#withdrawGone();
-    const messages = store.active();
+    let messages = store.active();
+    for (const id of this.#images.keys()) {
+      const message = store.get(id);
+      if (!message || !['pending', 'delivering'].includes(message.state)) this.#images.delete(id);
+    }
     // Each message the session has now is delivered.
+    let lostImages = false;
     for (const message of messages) {
+      if (
+        message.state === 'pending' &&
+        store.isImageResend(message) &&
+        !this.#images.has(message.id)
+      ) {
+        const text =
+          'This resend could not be sent: its images were not retained after restart. Paste the images again to start a new submission.';
+        store.update(message.id, {
+          state: 'unresolved',
+          turn: { status: 'cancelled', reason: 'interrupted', message: text },
+        });
+        store.add(
+          {
+            from: 'corrallm',
+            to: message.from,
+            kind: 'notice',
+            replyTo: message.id,
+            body: text,
+            state: 'delivered',
+          },
+          `resend-images-lost:${message.id}`,
+        );
+        lostImages = true;
+        continue;
+      }
       if (message.state !== 'delivering' || message.delivery === undefined) continue;
       const agent = agentOf(message.to);
       const entry =
@@ -446,6 +486,7 @@ export class Delivery {
         store.update(message.id, { state: 'delivered' });
       }
     }
+    if (lostImages) messages = store.active();
     /** What waits for each agent, in the order it came, once its record is on disk. */
     const waiting = this.#waiting(messages.filter(({ id }) => !this.#recording.has(id)));
     this.#tellWaiting(messages);
@@ -462,11 +503,11 @@ export class Delivery {
       // holds a party's message holds every party's behind it.
       const holds = {
         yours: this.#stuckHold(node),
-        theirs: waits.some(({ from }) => from !== 'you') ? this.#holdOf(node) : undefined,
+        theirs: waits.some((message) => !this.#yours(message)) ? this.#holdOf(node) : undefined,
       };
       let next: Message | undefined;
       for (const message of waits) {
-        const hold = message.from === 'you' ? holds.yours : holds.theirs;
+        const hold = this.#yours(message) ? holds.yours : holds.theirs;
         if (!hold) {
           next ??= message;
           continue;
@@ -511,7 +552,7 @@ export class Delivery {
         }
       }
       if (next === undefined || this.#unrecordable) continue;
-      if (next.from !== 'you') this.#warnUsage(node);
+      if (!this.#yours(next)) this.#warnUsage(node);
       this.#deliver(node, next);
     }
     this.#arm(alarm);
@@ -759,7 +800,7 @@ export class Delivery {
     void this.#deps.store.durable().then(
       async () => {
         try {
-          if (message.from !== 'you') {
+          if (!this.#yours(message)) {
             try {
               await this.#deps.engine.sessions.ready(node.id);
             } catch (error) {
@@ -779,7 +820,7 @@ export class Delivery {
               .nodes()
               .find((one) => one.id === node.id && one.type === 'agent');
             if (
-              message.from !== 'you' &&
+              !this.#yours(message) &&
               (current?.type !== 'agent' ||
                 this.#deps.engine.sessions.of(node.id).running === undefined ||
                 this.#holdOf(current) !== undefined)
@@ -816,7 +857,7 @@ export class Delivery {
       (interrupted, reply, result) => {
         this.#ended(message.id, interrupted, reply, result);
       },
-      undefined,
+      this.#images.get(message.id),
       (refusal) => {
         this.#refused(node, message.id, refusal.text);
       },
@@ -829,6 +870,7 @@ export class Delivery {
             from: { party: message.from, name: partyName(this.#deps.nodes(), message.from) },
           },
     );
+    this.#images.delete(message.id);
     this.#sent.set(message.id, takeBack);
   }
 

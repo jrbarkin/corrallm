@@ -575,6 +575,8 @@ describe('a connected agent', () => {
     expect(backend.send).toHaveBeenCalledExactlyOnceWith('a', {
       id: expect.any(String) as unknown,
       text: 'Use the Bash tool for this step (run shell commands).' + VERDICT,
+      origin: 'queue',
+      task: { agent: 'a', item: 'tests', attempt: expect.any(String) as string },
     });
     expect(screen.queryByRole('complementary', { name: 'Needs you' })).toBeNull();
   });
@@ -901,6 +903,8 @@ describe('a connected agent', () => {
     expect(backend.send).toHaveBeenLastCalledWith('a', {
       id: sent(),
       text: 'Use the Read tool for this step (read files).' + VERDICT,
+      origin: 'queue',
+      task: { agent: 'a', item: 'next', attempt: expect.any(String) as string },
     });
     expect(composer.placeholder).toBe('Queue a message for a…');
   });
@@ -971,7 +975,12 @@ describe('a connected agent', () => {
     await settle();
     const question =
       'corrallm asks: is this true now? “a test is flaky” Start your answer with yes or no.';
-    expect(backend.send).toHaveBeenLastCalledWith('a', { id: sent(), text: question });
+    expect(backend.send).toHaveBeenLastCalledWith('a', {
+      id: sent(),
+      text: question,
+      origin: 'queue',
+      task: { agent: 'a', item: 'flaky', attempt: expect.any(String) as string },
+    });
     expect(transcript.getByText(question)).toBeTruthy();
     emit(
       { type: 'user', id: sent(), text: question },
@@ -993,7 +1002,12 @@ describe('a connected agent', () => {
     // The user explicitly decides the condition; the queue then goes past the If.
     await events.click(needs.getByRole('button', { name: 'Condition does not hold' }));
     await settle();
-    expect(backend.send).toHaveBeenLastCalledWith('a', { id: sent(), text: 'Carry on' });
+    expect(backend.send).toHaveBeenLastCalledWith('a', {
+      id: sent(),
+      text: 'Carry on',
+      origin: 'queue',
+      task: { agent: 'a', item: 'next', attempt: expect.any(String) as string },
+    });
   });
 
   it('lists what the run asks and what its session asks in the canvas’s Needs you sidebar', async () => {
