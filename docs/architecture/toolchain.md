@@ -57,4 +57,4 @@ Requires Node 24.21.0 (`.nvmrc`) and pnpm 12.11.2 (`packageManager`).
 - Forge 8's terminal UI hides plain logs; set `CI=1` for linear output.
 - The main, core and CLI bundles are CommonJS, where `import.meta` does not exist: `vite.main.config.mts` defines `import.meta.url` as the bundle's own file URL (`mainDefine`, which `vite.cli.config.mts` reuses; the Agent SDK uses it when loaded). Without it the bundler writes `{}.url` and main crashes at start; `e2e/sdk.e2e.ts` and the native self-test (packaged, and the CLI's) would catch it.
 - The CLI bundle must not import Electron: `vite.cli.config.mts` fails the build if it does.
-- Auto-update is a TODO in `src/main/index.ts` (Squirrel + ZIP makers are compatible with `update-electron-app`).
+- Packaged app updates use Electron's `autoUpdater` with update-electron-app's fixed public service feed on macOS and Windows; Linux checks GitHub for a newer stable release. Signed macOS only; never in dev, unpackaged e2e, the native self-test, CLI or serve. `CORRALLM_NO_UPDATE_CHECK=1` disables checks. See [App updates](updates.md) for contacted services, schedule, signature detection and the save-before-restart path.

@@ -24,4 +24,5 @@ Main owns native windows and dialogs. The Electron-free core owns profile stores
 | Trust, identity, URLs, CSP and permissions          | [Security](security.md)             |
 | Native dependencies and self-tests                  | [Native modules](native-modules.md) |
 | Commands, configuration, builds and pins            | [Toolchain](toolchain.md)           |
+| Packaged app updates and Linux release notices      | [App updates](updates.md)           |
 | Fakes, fixtures, property tests and system gates    | [Testing](testing.md)               |

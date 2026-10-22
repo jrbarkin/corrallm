@@ -6,6 +6,8 @@
 
 Main's entry is index.ts; security.ts, app-protocol.ts, csp.ts and url-policy.ts hold the security baseline. ipc.ts checks the preload's core:connect handshake; main owns windows and native UI, and hosts the core process.
 
+The packaged app's [update checker](updates.md) lives in updates.ts and host/updates.ts, never the core or CLI. Its native Restart action goes through the existing RunShutdown quit path before installation. A Linux release-page choice uses main's private `openLink` core request, served by `WindowPorts.openLink` through the existing `link.open` operation for a connected window; it shares links.ts's policy rather than opening a raw response URL.
+
 The Electron-free services here are composed only by core/core.ts: canvas.ts asks which canvas file to open or save as and which canvas a file is (core/canvas/documents.ts reads and saves it), project.ts keeps project folders, memory.ts remembers each canvas's file, folder and agents' conversations and run-journal.ts journals runs and where each party has read to (both in the core's database, core/store/), settings.ts keeps app consents and api.port, usage.ts keeps readings, exhaustion and spending rules in usage.json, and whole-file.ts writes and reads the files written whole (canvases, api.json and the JSON stores that stay files).
 
 Their state reaches the GUI through operations, topics, and the remaining hand-written channels served by core/channels.ts.

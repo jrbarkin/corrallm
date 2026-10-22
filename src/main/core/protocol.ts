@@ -20,6 +20,8 @@ export interface CoreSide {
     init: { args: [config: CoreInit]; result: CoreInitAnswer };
     /** Which windows have a canvas to freeze/save before closing. */
     shown: { args: [windows: WindowId[]]; result: WindowId[] };
+    /** A link chosen in main's native UI, dispatched as link.open at a connected window. */
+    openLink: { args: [window: WindowId, url: string]; result: null };
     /** Finishes fallible writes before closing is approved, leaving the core usable on failure. */
     flush: { args: []; result: null };
     /**
