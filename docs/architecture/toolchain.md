@@ -14,6 +14,12 @@ TypeScript: `tsconfig.json` is solution-style and references `tsconfig.node.json
 
 Forge's Vite plugin builds `src/main/index.ts` to `.vite/build/main.cjs`, `src/main/core/entry.ts` to `.vite/build/core.cjs` (with main's config), `src/preload/index.ts` to `.vite/build/preload.cjs`, and the renderer to `.vite/renderer/main_window/`. `pnpm build:cli` builds `src/main/cli/index.ts` for plain Node to `dist-cli/corrallm.cjs`, outside `.vite/`, which Forge empties on every `pnpm dev` and `pnpm package`.
 
+Forge ships root `NOTICE` and `LICENSE`, plus `claude-agent-sdk-LICENSE.md`, as extra resources outside app.asar (Contents/Resources on macOS, resources elsewhere). Its `generateAssets` hook copies the installed SDK's own LICENSE.md byte for byte into node_modules/.cache/corrallm-licenses on every build; no license copy is checked in. The optional SDK connection bundles Anthropic's unmodified SDK JavaScript under its separate terms; pnpm excludes its per-platform Claude Code binaries, and the connection uses the user's installed executable. `src/main/packaging.test.ts` checks the resource configuration and license bytes.
+
+`.github/dependabot.yml` checks npm (including pnpm) and GitHub Actions weekly, with a one-day version-update cooldown. GitHub does not apply that cooldown to security updates; pnpm's explicit `minimumReleaseAge: 1440` remains the install gate for those. Security alerts/updates and private vulnerability reporting are repository settings enabled by the maintainer, not by this file. CONTRIBUTING.md specifies DCO sign-off and SECURITY.md the private reporting policy.
+
+GitHub's [October 20, 2026 pnpm support announcement](https://github.blog/changelog/2026-10-20-dependabot-now-supports-npm-12-pnpm-11-and-12-and-bun-1-4/) identifies a current limit: version updates support pnpm 12, but the dependency graph cannot read its two-document lockfile, so alerts and security updates are not created for those locked dependencies. This repository's pnpm-lock.yaml has that format. Enabling the repository settings alone does not resolve that upstream limit.
+
 ## Commands
 
 Requires Node 24.21.0 (`.nvmrc`) and pnpm 12.11.2 (`packageManager`).

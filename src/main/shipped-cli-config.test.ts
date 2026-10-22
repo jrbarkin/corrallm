@@ -47,29 +47,28 @@ afterEach(() => {
 
 it('builds the CLI before packaging, then stages its external files beside Resources/app', async () => {
   const { default: config } = await import('../../forge.config.mjs');
-  expect(config.hooks?.prePackage).toBeTypeOf('function');
+  expect(config.hooks.prePackage).toBeTypeOf('function');
   // Forge supplies a resolved config; these hooks read none of its fields.
-  if (config.hooks?.prePackage) await Reflect.apply(config.hooks.prePackage, undefined, []);
+  await Reflect.apply(config.hooks.prePackage, undefined, []);
   expect(fakes.exec).toHaveBeenCalledWith(
     'pnpm',
     ['build:cli'],
     expect.objectContaining({ cwd: expect.any(String) as string }),
     expect.any(Function),
   );
-  if (config.hooks?.packageAfterCopy)
-    await Reflect.apply(config.hooks.packageAfterCopy, undefined, [
-      {},
-      '/tmp/example/Resources/app',
-      '',
-      'darwin',
-      'arm64',
-    ]);
+  await Reflect.apply(config.hooks.packageAfterCopy, undefined, [
+    {},
+    '/tmp/example/Resources/app',
+    '',
+    'darwin',
+    'arm64',
+  ]);
   expect(fakes.ship).toHaveBeenCalledWith('/tmp/example/Resources/app', 'darwin', 'arm64');
 });
 
 it('gives the bundled Node JIT alone under the hardened runtime, without relaxing its host app', async () => {
   const { default: config } = await import('../../forge.config.mjs');
-  const sign = config.packagerConfig?.osxSign;
+  const sign = config.packagerConfig.osxSign;
   if (!sign || typeof sign === 'boolean') throw new Error('Expected test signing configuration');
   const node = sign.optionsForFile?.('/My.app/Contents/Resources/cli/node', { platform: 'darwin' });
   expect(node).toMatchObject({

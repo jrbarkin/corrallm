@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { readdir } from 'node:fs/promises';
+import { cp, mkdir, readdir } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
@@ -20,6 +20,13 @@ import { shipCli, LINUX_CLI_BIN } from './build/shipped-cli.js';
 
 const projectDir = path.dirname(fileURLToPath(import.meta.url));
 const execFileAsync = promisify(execFile);
+
+// extraResource keeps notices visible outside app.asar. Stage the SDK's installed license under
+// its own name on every build, so upgrades cannot leave a stale checked-in copy behind.
+const agentSdkLicense = path.join(
+  projectDir,
+  'node_modules/.cache/corrallm-licenses/claude-agent-sdk-LICENSE.md',
+);
 
 // ---------------------------------------------------------------------------------------------
 // Code signing: enabled only when credentials are present in the environment (see .env.example).
@@ -113,8 +120,13 @@ const rpmOptions: MakerRpmConfigOptions & { specTemplate: string; desktopTemplat
   specTemplate: path.join(projectDir, 'build/rpm.spec.ejs'),
 };
 
-const config: ForgeConfig = {
+const config = {
   packagerConfig: {
+    extraResource: [
+      path.join(projectDir, 'NOTICE'),
+      path.join(projectDir, 'LICENSE'),
+      agentSdkLicense,
+    ],
     asar: {
       // Binaries must be real files on disk. JS stays packed (and integrity-checked).
       // `{.**,**}` keeps the globs matching when the staging path contains a dot-directory.
@@ -131,6 +143,13 @@ const config: ForgeConfig = {
     ignoreModules: ['node-pty', 'better-sqlite3'],
   },
   hooks: {
+    generateAssets: async () => {
+      await mkdir(path.dirname(agentSdkLicense), { recursive: true });
+      await cp(
+        path.join(projectDir, 'node_modules/@anthropic-ai/claude-agent-sdk/LICENSE.md'),
+        agentSdkLicense,
+      );
+    },
     prePackage: async () => {
       await execFileAsync('pnpm', ['build:cli'], { cwd: projectDir });
     },
@@ -227,6 +246,6 @@ const config: ForgeConfig = {
       [FuseV1Options.WasmTrapHandlers]: true,
     }),
   ],
-};
+} satisfies ForgeConfig;
 
 export default config;
