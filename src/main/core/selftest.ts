@@ -15,7 +15,7 @@ import { connect } from './store/sqlite';
 import type { Store } from './store/store';
 
 /*
- * The native self-test (CORRALLM_NATIVE_SELFTEST=1; see CLAUDE.md), diagnostic only: that what
+ * The native self-test (CORRALLM_NATIVE_SELFTEST=1; see docs/architecture/native-modules.md), diagnostic only: that what
  * the core needs loads and runs as bundled (CommonJS; packaged, fused), wherever it runs: the app's
  * main process (native-selftest.ts), its core process (entry.ts) and the CLI bundle under plain
  * Node (cli/main.ts). No real agent CLI, no login. Electron-free: what differs between those hosts
@@ -274,7 +274,7 @@ export async function checkSpawn(): Promise<string> {
 }
 
 /**
- * `child_process.fork` throws, as the RunAsNode fuse makes it (CLAUDE.md, Security rules): a
+ * `child_process.fork` throws, as the RunAsNode fuse makes it (docs/architecture/security.md, Fuses): a
  * packaged app can't run its own executable as Node. If a process starts, it is killed at once.
  */
 export function checkForkRefused(forkWith: typeof fork = fork): Promise<string> {
