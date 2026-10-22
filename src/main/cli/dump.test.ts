@@ -17,6 +17,7 @@ import { MessageStore, MessageTable } from '../core/delivery/messages';
 import { migrate, MIGRATIONS, SCHEMA } from '../core/store/migrations';
 import { APPLICATION_ID } from '../core/store/open';
 import { connect } from '../core/store/sqlite';
+import { SYSTEM_DEPS } from '../core/store/store';
 import type { Store } from '../core/store/store';
 import { openTestStore } from '../core/store/test-store';
 import { dump } from '../core/store/dump';
@@ -32,7 +33,12 @@ let journal: RunJournal;
 
 beforeEach(async () => {
   profile = await mkdtemp(path.join(tmpdir(), 'corrallm-dump-'));
-  store = await openTestStore(profile);
+  // Only the dump may affect these hashes. The owner's idle checkpoint/snapshot would
+  // legitimately rewrite core.db and its WAL while a slow CLI process starts.
+  store = await openTestStore(profile, {
+    ...SYSTEM_DEPS,
+    later: () => () => undefined,
+  });
   const memory = new CanvasMemory(store);
   documents = new Documents({ store, memory, catalog: CATALOG, defaultAdapter: DEFAULT_ADAPTER });
   documents.create(canvas, 'you');
