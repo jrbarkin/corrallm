@@ -93,3 +93,16 @@ it('makes the Linux command symlink target the launcher while the desktop still 
     expect(template).toContain('Exec=/usr/lib/<%= name %>/corrallm %U');
   }
 });
+
+it('requires the linked audio library and process inspection tools even with optional dependencies disabled', async () => {
+  await import('../../forge.config.mjs');
+  const options = fakes.constructor.mock.calls.map(
+    ([one]) => one as { options?: { depends?: string[]; requires?: string[] } },
+  );
+  expect(options.some((one) => one.options?.depends?.includes('libasound2t64 | libasound2'))).toBe(
+    true,
+  );
+  expect(options.some((one) => one.options?.requires?.includes('alsa-lib'))).toBe(true);
+  expect(options.some((one) => one.options?.depends?.includes('procps'))).toBe(true);
+  expect(options.some((one) => one.options?.requires?.includes('procps-ng'))).toBe(true);
+});
