@@ -593,6 +593,97 @@ describe('the App Server connection', () => {
     expect(events.at(-1)).toMatchObject({ type: 'end', result: { status: 'cancelled' } });
   });
 
+  it('cleans up when the native turn id and command arrive after the stop', async () => {
+    const { session, ended } = await start();
+    await session.send({ id: 'm1', text: 'slow' });
+    await session.interrupt();
+    await ended('m1');
+    expect(await requests('thread/backgroundTerminals/terminate')).toEqual([
+      { threadId: (await requests('turn/start'))[0]?.threadId, processId: '1000' },
+    ]);
+  });
+
+  it('interrupts a plan prompt and stops the command its plan turn left running', async () => {
+    const { session, heard, ended } = await start({ mode: 'plan' });
+    await session.send({ id: 'm1', text: 'background plan' });
+    await heard('plan');
+    await session.interrupt();
+    await ended('m1');
+    expect(await requests('turn/interrupt')).toEqual([]); // The native plan turn already ended.
+    expect(await requests('thread/backgroundTerminals/terminate')).toEqual([
+      { threadId: (await requests('turn/start'))[0]?.threadId, processId: '1000' },
+    ]);
+  });
+
+  it('cleans up a turn Codex interrupts without a corrallm interrupt request', async () => {
+    const { session, ended } = await start();
+    await session.send({ id: 'm1', text: 'slow self-interrupt' });
+    await ended('m1');
+    expect(await requests('turn/interrupt')).toEqual([]);
+    expect(await requests('thread/backgroundTerminals/terminate')).toEqual([
+      { threadId: (await requests('turn/start'))[0]?.threadId, processId: '1000' },
+    ]);
+  });
+
+  it('keeps the next turn queued until command termination answers, even after turn/completed', async () => {
+    const { session, heard, ended, events } = await start(
+      {},
+      {
+        FAKE_CODEX_TERMINATE: 'delay',
+        FAKE_CODEX_PROCESS_LOG: path.join(dir, 'processes.jsonl'),
+      },
+    );
+    await session.send({ id: 'm1', text: 'slow' });
+    await heard('tool', { detail: { kind: 'output' } });
+    await session.send({ id: 'm2', text: 'next' });
+    await session.interrupt();
+    await vi.waitFor(async () => {
+      expect(await requests('thread/backgroundTerminals/terminate')).toHaveLength(1);
+    });
+    expect(events.some((event) => event.type === 'user' && event.id === 'm2')).toBe(false);
+    await ended('m2');
+    const log = (await readFile(path.join(dir, 'processes.jsonl'), 'utf8'))
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line) as { type: string; live: string[] });
+    expect(log.map((event) => event.type)).toEqual(['turn', 'process', 'terminated', 'turn']);
+    expect(log.at(-1)?.live).toEqual([]);
+    expect(await requests('thread/backgroundTerminals/clean')).toEqual([]);
+  });
+
+  it.each(['missing', 'unknown', 'fail', 'hang'])(
+    'warns with the command id and releases the next turn when termination is %s',
+    async (behavior) => {
+      const { session, heard, ended, events } = await start({}, { FAKE_CODEX_TERMINATE: behavior });
+      await session.send({ id: 'm1', text: 'slow' });
+      await heard('tool', { detail: { kind: 'output' } });
+      await session.send({ id: 'm2', text: 'next' });
+      await session.interrupt();
+      await ended('m2');
+      expect(
+        events.filter((event) => event.type === 'notice' && event.level === 'warning'),
+      ).toMatchObject([
+        { text: expect.stringMatching(/command 1000 may still be running:/) as string },
+      ]);
+      if (behavior === 'missing' || behavior === 'unknown') {
+        await session.send({ id: 'm3', text: 'slow' });
+        await vi.waitFor(async () => {
+          expect(await requests('turn/start')).toHaveLength(3);
+        });
+        // Wait until this turn's command is running, not merely accepted.
+        await vi.waitFor(() => {
+          expect(new Set(events.flatMap((e) => (e.type === 'tool' ? [e.id] : []))).size).toBe(2);
+        });
+        await session.interrupt();
+        await ended('m3');
+        expect(
+          events.filter((event) => event.type === 'notice' && event.level === 'warning'),
+        ).toHaveLength(1);
+        expect(await requests('thread/backgroundTerminals/terminate')).toHaveLength(1);
+      }
+    },
+  );
+
   it('says why a turn failed, and when the usage limit resets', async () => {
     const { turn, events } = await start();
     await turn('fail please', 'm1');
@@ -968,9 +1059,10 @@ describe('the App Server connection, replaying the real Codex', () => {
     expect(problems).toEqual([]);
   });
 
-  // The recording ends at turn/completed(interrupted), without a command exit: cancellation, not proof that its process stopped.
+  // The capture has no command exit or terminate response: the replay answers the added cleanup
+  // request as unsupported; the real-child tests prove cleanup on a peer that supports it.
   it('a command interrupted while it runs', async () => {
-    const { session, heard, ended, events, problems } = await replayed('interrupt', {
+    const { session, heard, ended, events, problems, sent } = await replayed('interrupt', {
       cwd: '/work/smoke/three',
       mode: 'full-access',
     });
@@ -979,6 +1071,13 @@ describe('the App Server connection, replaying the real Codex', () => {
     await session.interrupt();
     await ended('m1');
     expect(events.at(-1)).toMatchObject({ type: 'end', result: { status: 'cancelled' } });
+    expect(sent).toContainEqual({
+      method: 'thread/backgroundTerminals/terminate',
+      params: { threadId: '01a1348f-e329-74b3-9b25-d78465fdafb2', processId: '22733' },
+    });
+    expect(
+      events.filter((event) => event.type === 'notice' && event.level === 'warning'),
+    ).toMatchObject([{ text: expect.stringContaining('22733 may still be running') as string }]);
     expect(problems).toEqual([]);
   });
 

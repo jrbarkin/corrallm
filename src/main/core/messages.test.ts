@@ -118,6 +118,7 @@ let options: Partial<Record<AdapterId, () => Promise<SettingsOptions>>> | undefi
 /** Which agents are leads: none unless set. */
 let leads: ((canvas: CanvasId, agent: string) => boolean) | undefined;
 let watchdog: CoreConfig['watchdog'];
+let watchdogNetwork: CoreConfig['watchdogNetwork'];
 
 beforeEach(async () => {
   profile = await mkdtemp(path.join(tmpdir(), 'corrallm-delivery-'));
@@ -129,6 +130,7 @@ beforeEach(async () => {
   options = undefined;
   leads = undefined;
   watchdog = undefined;
+  watchdogNetwork = undefined;
 });
 
 afterEach(async () => {
@@ -233,6 +235,7 @@ async function start(
       distribution: 'local',
       locale: 'en-GB',
       ...(watchdog === undefined ? {} : { watchdog }),
+      ...(watchdogNetwork === undefined ? {} : { watchdogNetwork }),
       ...(leads === undefined ? {} : { leads }),
       sessions: {
         connectors: {
@@ -354,119 +357,146 @@ describe('stalled message turns', () => {
       restored.all().filter((one) => one.kind === 'notice' && one.body === 'No activity'),
     ).toHaveLength(2);
   });
-  it('warns in the session, wakes wait once, offers Interrupt, and never interrupts by itself', async () => {
-    let now = Date.now();
-    let tick: (() => void) | undefined;
-    watchdog = {
-      now: () => now,
-      later: (run) => {
-        tick = run;
-        return () => {
-          tick = undefined;
-        };
-      },
-    };
-    let host: SessionHost | undefined;
-    const turns: string[] = [];
-    const interrupted = vi.fn(() => {
-      host?.emit({
-        type: 'end',
-        messages: [...turns],
-        seconds: 1,
-        result: { status: 'cancelled', reason: 'interrupted' },
-      });
-      return Promise.resolve();
-    });
-    const connector: Connector<SessionMode> = {
-      start: (_spec, given) => {
-        host = given;
-        given.emit({ type: 'started', model: null, mode: 'auto', models: [] });
-        return Promise.resolve({
-          send: (message) => {
-            turns.push(message.id);
-            given.emit({ type: 'user', id: message.id, text: message.text });
-            given.emit({ type: 'status', status: 'working' });
-            return Promise.resolve();
-          },
-          interrupt: interrupted,
-          close: () => Promise.resolve(),
-          answer: () => Promise.resolve(),
-          setMode: () => Promise.resolve(),
-          setModel: () => Promise.resolve(),
+  it.each(['silence', 'network'] as const)(
+    'on %s, warns in the session, wakes wait once, offers Interrupt, and never interrupts by itself',
+    async (trigger) => {
+      let interfaces: ReturnType<NonNullable<CoreConfig['watchdogNetwork']>> = {};
+      watchdogNetwork = () => interfaces;
+      let now = Date.now();
+      let tick: (() => void) | undefined;
+      watchdog = {
+        now: () => now,
+        later: (run) => {
+          tick = run;
+          return () => {
+            tick = undefined;
+          };
+        },
+      };
+      let host: SessionHost | undefined;
+      const turns: string[] = [];
+      const interrupted = vi.fn(() => {
+        host?.emit({
+          type: 'end',
+          messages: [...turns],
+          seconds: 1,
+          result: { status: 'cancelled', reason: 'interrupted' },
         });
-      },
-    };
-    await keepCanvas();
-    const running = await start({ appServer: connector });
-    const id = await send('builder', 'A long silent task');
-    await vi.waitFor(async () => {
-      expect((await find(id))?.state).toBe('delivered');
-    });
-    const waiting = running.call('wait', { for: id, timeoutSeconds: 30 }, OUTSIDE);
-    for (let i = 0; i < 80; i++) {
-      now += 15_000;
-      tick?.();
-    }
-    const result = await waiting;
-    expect(result).toMatchObject({
-      ok: true,
-      value: {
-        messages: [
+        return Promise.resolve();
+      });
+      const connector: Connector<SessionMode> = {
+        start: (_spec, given) => {
+          host = given;
+          given.emit({ type: 'started', model: null, mode: 'auto', models: [] });
+          return Promise.resolve({
+            send: (message) => {
+              turns.push(message.id);
+              given.emit({ type: 'user', id: message.id, text: message.text });
+              given.emit({ type: 'status', status: 'working' });
+              return Promise.resolve();
+            },
+            interrupt: interrupted,
+            close: () => Promise.resolve(),
+            answer: () => Promise.resolve(),
+            setMode: () => Promise.resolve(),
+            setModel: () => Promise.resolve(),
+          });
+        },
+      };
+      await keepCanvas();
+      const running = await start({ appServer: connector });
+      const id = await send('builder', 'A long silent task');
+      await vi.waitFor(async () => {
+        expect((await find(id))?.state).toBe('delivered');
+      });
+      const waiting = running.call('wait', { for: id, timeoutSeconds: 30 }, OUTSIDE);
+      if (trigger === 'network') {
+        now += 15_000;
+        tick?.(); // Baseline.
+        interfaces = {
+          en0: [
+            {
+              family: 'IPv4',
+              address: '192.0.2.1',
+              netmask: '255.255.255.0',
+              internal: false,
+              mac: '',
+              cidr: '192.0.2.1/24',
+            },
+          ],
+        };
+        now += 15_000;
+        tick?.(); // Change detected.
+      }
+      for (let i = 0; i < (trigger === 'network' ? 8 : 80); i++) {
+        now += 15_000;
+        tick?.();
+      }
+      const result = await waiting;
+      expect(result).toMatchObject({
+        ok: true,
+        value: {
+          messages: [
+            expect.objectContaining({
+              from: 'corrallm',
+              to: 'outside:orchestrator',
+              kind: 'notice',
+              replyTo: id,
+              body: expect.stringContaining(
+                trigger === 'network'
+                  ? 'No activity from Codex for 2 minutes after the network changed'
+                  : 'No activity from Codex for 20 minutes',
+              ) as unknown,
+            }),
+          ],
+        },
+      });
+      expect(interrupted).not.toHaveBeenCalled();
+      const transcript = await ok<{ entries: { kind: string; text?: string }[] }>(
+        'session.transcript',
+        { agent: 'builder' },
+        YOU,
+      );
+      expect(transcript.entries).toContainEqual(
+        expect.objectContaining({
+          kind: 'notice',
+          level: 'warning',
+          text: expect.stringContaining('No activity from Codex') as unknown,
+        }),
+      );
+      expect(await ok('needs', {}, YOU)).toMatchObject({
+        items: [
           expect.objectContaining({
-            from: 'corrallm',
-            to: 'outside:orchestrator',
-            kind: 'notice',
-            replyTo: id,
-            body: expect.stringContaining('No activity from Codex for 20 minutes') as unknown,
+            id: 'stalled/builder',
+            agent: 'builder',
+            by: ['you'],
           }),
         ],
-      },
-    });
-    expect(interrupted).not.toHaveBeenCalled();
-    const transcript = await ok<{ entries: { kind: string; text?: string }[] }>(
-      'session.transcript',
-      { agent: 'builder' },
-      YOU,
-    );
-    expect(transcript.entries).toContainEqual(
-      expect.objectContaining({
-        kind: 'notice',
-        level: 'warning',
-        text: expect.stringContaining('No activity from Codex') as unknown,
-      }),
-    );
-    expect(await ok('needs', {}, YOU)).toMatchObject({
-      items: [
-        expect.objectContaining({
-          id: 'stalled/builder',
-          agent: 'builder',
-          by: ['you'],
-        }),
-      ],
-    });
-    now += 15_000;
-    tick?.();
-    expect((await notices()).filter((one) => one.replyTo === id)).toHaveLength(1);
-    expect(
-      await running.call(
-        'reply',
-        { canvas: CANVAS, to: 'stalled/builder', answer: { choice: 'interrupt' } },
-        OUTSIDE,
-      ),
-    ).toMatchObject({ ok: false });
-    await ok('reply', { to: 'stalled/builder', answer: { choice: 'interrupt' } }, YOU);
-    expect(interrupted).toHaveBeenCalledOnce();
-    await vi.waitFor(async () => {
-      expect((await find(id))?.state).toBe('replied');
-    });
-    expect(await ok('needs', {}, YOU)).toMatchObject({ items: [] });
-    await restart({ appServer: connector });
-    now += 60 * 60_000;
-    tick?.();
-    expect(
-      (await notices()).filter((one) => one.replyTo === id && one.body.includes('No activity')),
-    ).toHaveLength(1);
-  });
+      });
+      now += 15_000;
+      tick?.();
+      expect((await notices()).filter((one) => one.replyTo === id)).toHaveLength(1);
+      expect(
+        await running.call(
+          'reply',
+          { canvas: CANVAS, to: 'stalled/builder', answer: { choice: 'interrupt' } },
+          OUTSIDE,
+        ),
+      ).toMatchObject({ ok: false });
+      await ok('reply', { to: 'stalled/builder', answer: { choice: 'interrupt' } }, YOU);
+      expect(interrupted).toHaveBeenCalledOnce();
+      await vi.waitFor(async () => {
+        expect((await find(id))?.state).toBe('replied');
+      });
+      expect(await ok('needs', {}, YOU)).toMatchObject({ items: [] });
+      await restart({ appServer: connector });
+      now += 60 * 60_000;
+      tick?.();
+      expect(
+        (await notices()).filter((one) => one.replyTo === id && one.body.includes('No activity')),
+      ).toHaveLength(1);
+    },
+  );
 });
 
 describe('delivery', () => {

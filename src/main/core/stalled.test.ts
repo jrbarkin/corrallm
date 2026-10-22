@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { NetworkInterfaceInfo } from 'node:os';
 
 import type { CanvasId } from '../../shared/canvas';
 import { CATALOG } from '../sessions/adapters';
@@ -9,13 +10,26 @@ const AGENT = 'a/b\n';
 let watchdog: StalledTurns;
 const warning = vi.fn();
 const changed = vi.fn();
+let interfaces: NodeJS.Dict<NetworkInterfaceInfo[]>;
+const network = vi.fn(() => interfaces);
+
+function address(
+  ip: string,
+  family: 'IPv4' | 'IPv6' = 'IPv4',
+  internal = false,
+): NetworkInterfaceInfo {
+  const common = { address: ip, netmask: '', mac: '', cidr: null, internal };
+  return family === 'IPv4' ? { ...common, family } : { ...common, family, scopeid: 0 };
+}
 
 beforeEach(() => {
   vi.useFakeTimers();
   vi.setSystemTime(1_000_000);
   warning.mockClear();
   changed.mockClear();
-  watchdog = new StalledTurns({ catalog: CATALOG, warning, changed });
+  interfaces = { en0: [address('192.0.2.1'), address('2001:db8:1:2::1234', 'IPv6')] };
+  network.mockClear();
+  watchdog = new StalledTurns({ catalog: CATALOG, warning, changed, network });
 });
 afterEach(() => {
   watchdog.close();
@@ -28,6 +42,163 @@ function start(id = 'message') {
 }
 
 describe('silent turns', () => {
+  it('reports a silent turn two minutes after the network identity changes', async () => {
+    start();
+    await vi.advanceTimersByTimeAsync(WATCH_EVERY_MS);
+    interfaces = { en0: [address('198.51.100.1')] };
+    await vi.advanceTimersByTimeAsync(WATCH_EVERY_MS);
+    await vi.advanceTimersByTimeAsync(WAKE_GRACE_MS - WATCH_EVERY_MS);
+    expect(warning).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(WATCH_EVERY_MS);
+    expect(warning).toHaveBeenCalledExactlyOnceWith(
+      CANVAS,
+      AGENT,
+      'codex.app-server',
+      ['message'],
+      'No activity from Codex for 2 minutes after the network changed: its connection may have dropped. Interrupt to stop the turn.',
+    );
+    expect(watchdog.items(CANVAS)[0]?.choices).toEqual([
+      { value: 'interrupt', label: 'Interrupt' },
+    ]);
+  });
+
+  it('ignores IPv6 privacy rotation, link-local and internal addresses, duplicates and ordering', async () => {
+    interfaces = {
+      en0: [
+        address('192.0.2.1'),
+        address('2001:db8:1:2::abcd', 'IPv6'),
+        address('fe80::1', 'IPv6'),
+      ],
+      lo0: [address('127.0.0.1', 'IPv4', true)],
+    };
+    start();
+    await vi.advanceTimersByTimeAsync(WATCH_EVERY_MS);
+    interfaces = {
+      lo0: [address('::1', 'IPv6', true)],
+      en0: [
+        address('febf::abcd', 'IPv6'),
+        address('2001:0DB8:0001:0002:abcd::1', 'IPv6'),
+        address('192.0.2.1'),
+        address('2001:db8:1:2::9876', 'IPv6'),
+      ],
+      en1: [address('fe90::2', 'IPv6')],
+    };
+    await vi.advanceTimersByTimeAsync(WAKE_GRACE_MS + WATCH_EVERY_MS);
+    expect(warning).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(STALL_MS);
+    expect(warning.mock.calls[0]?.[4]).toContain('20 minutes');
+  });
+
+  it.each(['IPv4 address', 'IPv6 prefix', 'interface removed', 'interface changed'])(
+    'detects a changed %s',
+    async (change) => {
+      start();
+      await vi.advanceTimersByTimeAsync(WATCH_EVERY_MS);
+      if (change === 'IPv4 address')
+        interfaces.en0 = [address('192.0.2.2'), address('2001:db8:1:2::1234', 'IPv6')];
+      else if (change === 'IPv6 prefix')
+        interfaces.en0 = [address('192.0.2.1'), address('2001:db8:1:3::1234', 'IPv6')];
+      else if (change === 'interface removed') interfaces = {};
+      else interfaces = { en1: interfaces.en0 };
+      await vi.advanceTimersByTimeAsync(WATCH_EVERY_MS + WAKE_GRACE_MS);
+      expect(warning.mock.calls[0]?.[4]).toContain('2 minutes after the network changed');
+    },
+  );
+
+  it('keeps the normal deadline for activity after a detected network change', async () => {
+    start();
+    await vi.advanceTimersByTimeAsync(WATCH_EVERY_MS);
+    interfaces = {};
+    await vi.advanceTimersByTimeAsync(WATCH_EVERY_MS);
+    watchdog.activity(CANVAS, AGENT);
+    await vi.advanceTimersByTimeAsync(WAKE_GRACE_MS);
+    expect(warning).not.toHaveBeenCalled();
+    expect(watchdog.items(CANVAS)).toEqual([]);
+    await vi.advanceTimersByTimeAsync(STALL_MS - WAKE_GRACE_MS);
+    expect(warning.mock.calls[0]?.[4]).toContain('20 minutes');
+  });
+
+  it('gives grace when activity arrives just before a network change between samples', async () => {
+    start();
+    await vi.advanceTimersByTimeAsync(WATCH_EVERY_MS);
+    await vi.advanceTimersByTimeAsync(1000);
+    watchdog.activity(CANVAS, AGENT);
+    interfaces = {};
+    await vi.advanceTimersByTimeAsync(WATCH_EVERY_MS - 1000);
+    await vi.advanceTimersByTimeAsync(WAKE_GRACE_MS);
+    expect(warning.mock.calls[0]?.[4]).toContain('2 minutes after the network changed');
+  });
+
+  it('uses the first reading only as a baseline', async () => {
+    start();
+    expect(network).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(WAKE_GRACE_MS + WATCH_EVERY_MS);
+    expect(network).toHaveBeenCalled();
+    expect(warning).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(STALL_MS);
+    expect(warning.mock.calls[0]?.[4]).toContain('20 minutes');
+  });
+
+  it.each([
+    ['2001:db8::1', '2001:0DB8:0:0:abcd::9876'],
+    ['::1:2:3:4:192.0.2.1', '0:0:1:2::ffff'],
+    ['::ffff:192.0.2.1', '0:0:0:0:0:ffff:c000:202'],
+  ])('normalizes equivalent /64 prefixes: %s → %s', async (before, after) => {
+    interfaces = { en0: [address(before, 'IPv6')] };
+    start();
+    await vi.advanceTimersByTimeAsync(WATCH_EVERY_MS);
+    interfaces = { en0: [address(after, 'IPv6')] };
+    await vi.advanceTimersByTimeAsync(WAKE_GRACE_MS + WATCH_EVERY_MS);
+    expect(warning).not.toHaveBeenCalled();
+  });
+
+  it('does not keep extending grace when the network changes repeatedly', async () => {
+    start();
+    await vi.advanceTimersByTimeAsync(WATCH_EVERY_MS);
+    interfaces = {};
+    await vi.advanceTimersByTimeAsync(WATCH_EVERY_MS);
+    for (let i = 0; i < WAKE_GRACE_MS / WATCH_EVERY_MS; i++) {
+      interfaces = { en0: [address(`192.0.2.${String(i + 2)}`)] };
+      await vi.advanceTimersByTimeAsync(WATCH_EVERY_MS);
+    }
+    expect(warning).toHaveBeenCalledOnce();
+    expect(warning.mock.calls[0]?.[4]).toContain('2 minutes after the network changed');
+  });
+
+  it('uses network wording when a late timer also observes a changed network', async () => {
+    start();
+    await vi.advanceTimersByTimeAsync(WATCH_EVERY_MS);
+    interfaces = {};
+    vi.setSystemTime(Date.now() + 60 * 60_000);
+    await vi.advanceTimersByTimeAsync(WATCH_EVERY_MS);
+    expect(warning).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(WAKE_GRACE_MS);
+    expect(warning.mock.calls[0]?.[4]).toContain('2 minutes after the network changed');
+  });
+
+  it('retains the last good identity and says a failing reader only once', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      start();
+      await vi.advanceTimersByTimeAsync(WATCH_EVERY_MS);
+      network.mockImplementation(() => {
+        throw new Error('interfaces unavailable');
+      });
+      interfaces = {};
+      await vi.advanceTimersByTimeAsync(WAKE_GRACE_MS + WATCH_EVERY_MS);
+      expect(warning).not.toHaveBeenCalled();
+      expect(error).toHaveBeenCalledOnce();
+      expect(error.mock.calls.flat().join(' ')).toContain('interfaces unavailable');
+      network.mockImplementation(() => interfaces);
+      await vi.advanceTimersByTimeAsync(WATCH_EVERY_MS + WAKE_GRACE_MS);
+      expect(warning.mock.calls[0]?.[4]).toContain('2 minutes after the network changed');
+      expect(error).toHaveBeenCalledOnce();
+    } finally {
+      network.mockImplementation(() => interfaces);
+      error.mockRestore();
+    }
+  });
+
   it('warns once, names the catalog CLI, and offers an escaped, user-only Interrupt item', async () => {
     start();
     await vi.advanceTimersByTimeAsync(STALL_MS - WATCH_EVERY_MS);

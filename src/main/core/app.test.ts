@@ -56,7 +56,11 @@ const dialogs: { open?: string; save?: string } = {};
 const picked = (file: string | undefined) =>
   Promise.resolve(file === undefined ? null : mintTrustedPath(file));
 
-async function app(sessions?: CoreConfig['sessions'], watchdog?: CoreConfig['watchdog']) {
+async function app(
+  sessions?: CoreConfig['sessions'],
+  watchdog?: CoreConfig['watchdog'],
+  watchdogNetwork?: CoreConfig['watchdogNetwork'],
+) {
   const host = {
     ...NO_DESKTOP,
     pickFolder: vi.fn(() => Promise.resolve(mintTrustedPath(folder))),
@@ -74,6 +78,7 @@ async function app(sessions?: CoreConfig['sessions'], watchdog?: CoreConfig['wat
       fakeSessions: true,
       ...(sessions === undefined ? {} : { sessions }),
       ...(watchdog === undefined ? {} : { watchdog }),
+      ...(watchdogNetwork === undefined ? {} : { watchdogNetwork }),
     },
     host,
   );
@@ -127,9 +132,14 @@ function events(window: WindowLink) {
 }
 
 describe('the app’s core and window channels', () => {
-  it.each(['codex.app-server', 'codex.terminal', 'claude-code.sdk', 'claude-code.terminal'])(
-    'warns a silent %s turn and answers its Needs item without opening a core run',
-    async (connection) => {
+  it.each(
+    ['codex.app-server', 'codex.terminal', 'claude-code.sdk', 'claude-code.terminal'].flatMap(
+      (connection) => ['wake', 'network'].map((trigger) => ({ connection, trigger })),
+    ),
+  )(
+    'warns a silent $connection turn after $trigger and answers its Needs item without opening a core run',
+    async ({ connection, trigger }) => {
+      let interfaces: ReturnType<NonNullable<CoreConfig['watchdogNetwork']>> = {};
       let now = Date.now();
       let tick: (() => void) | undefined;
       let host: SessionHost | undefined;
@@ -175,6 +185,7 @@ describe('the app’s core and window channels', () => {
             };
           },
         },
+        () => interfaces,
       );
       const window = connect(7);
       const canvas = await created(window);
@@ -194,9 +205,24 @@ describe('the app’s core and window channels', () => {
         ok: true,
         value: { items: [] },
       });
-      // A host resume gets two fresh minutes, never an immediate warning for time asleep.
-      now += 3 * 60 * 60_000;
-      core.resumed();
+      // Either host event grants two fresh minutes, never an immediate warning.
+      if (trigger === 'wake') {
+        now += 3 * 60 * 60_000;
+        core.resumed();
+      } else {
+        interfaces = {
+          en0: [
+            {
+              family: 'IPv4',
+              address: '192.0.2.1',
+              netmask: '255.255.255.0',
+              internal: false,
+              mac: '',
+              cidr: '192.0.2.1/24',
+            },
+          ],
+        };
+      }
       tick?.();
       for (let i = 0; i < 7; i++) {
         now += 15_000;
@@ -217,7 +243,11 @@ describe('the app’s core and window channels', () => {
             expect.objectContaining({
               type: 'notice',
               level: 'warning',
-              text: expect.stringContaining('No activity from') as unknown,
+              text: expect.stringContaining(
+                trigger === 'network'
+                  ? '2 minutes after the network changed'
+                  : '2 minutes after waking',
+              ) as unknown,
             }),
           ],
         ]);

@@ -50,6 +50,16 @@ function engineWith(connection: ConnectionId, message: string) {
 }
 
 describe('Engine', () => {
+  it('interrupts a killed queue turn once', async () => {
+    const { backend, engine } = engineWith('claude-code.sdk', 'Work');
+    engine.run.start();
+    await settle();
+    expect(backend.send).toHaveBeenCalledOnce();
+    engine.run.killAgent('a');
+    await settle();
+    expect(backend.interrupt).toHaveBeenCalledExactlyOnceWith('a');
+    engine.reset();
+  });
   it('never hands canvas text a session refused to Terminal once the agent switches to it', async () => {
     // A shared canvas's queue message, for an Agent SDK agent (which runs no shell command from a
     // message); its session won't start on a subscription, and the run offers to switch.
