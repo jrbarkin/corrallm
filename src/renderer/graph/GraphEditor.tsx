@@ -1072,7 +1072,7 @@ function Editor({
   const killMenuGroup = () => {
     if (!menuNode) return;
     runStore.killGroup(menuNode.id);
-    for (const id of menuMembers) sessionStore.stop(id);
+    for (const id of menuMembers) sessionStore.stop(id, { stopCommands: true });
   };
   const resumeMenuGroup = () => {
     if (menuNode) runStore.resumeGroup(menuNode.id);
@@ -1863,7 +1863,7 @@ function Editor({
               if (menuNode.type === 'frame') killMenuGroup();
               else {
                 runStore.killAgent(menuNode.id);
-                sessionStore.stop(menuNode.id);
+                sessionStore.stop(menuNode.id, { stopCommands: true });
               }
             }}
             onResume={() => {

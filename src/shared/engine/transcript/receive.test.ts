@@ -306,7 +306,7 @@ describe('a connected session', () => {
     expect(backend.send.mock.calls.at(-1)?.[1].text).toBe('Second');
     takeSecond();
     await settle();
-    expect(backend.interrupt).toHaveBeenCalledWith('a');
+    expect(backend.interrupt).toHaveBeenCalledWith('a', { stopCommands: true });
     emit(
       'a',
       'claude-code.sdk',

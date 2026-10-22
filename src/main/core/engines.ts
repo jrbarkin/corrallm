@@ -693,7 +693,8 @@ export class Engines {
       send: (agentId, message) => done(() => sessions.send(canvas, agentId, message)),
       answer: (agentId, promptId, answer) =>
         done(() => sessions.answer(canvas, agentId, promptId, answer)),
-      interrupt: (agentId) => done(() => sessions.interrupt(canvas, agentId)),
+      interrupt: (agentId, options) =>
+        done(() => sessions.interrupt(canvas, agentId, ...(options ? [options] : []))),
       setMode: (agentId, mode) => done(() => sessions.setMode(canvas, agentId, mode)),
       setModel: (agentId, model) => done(() => sessions.setModel(canvas, agentId, model)),
       setEffort: (agentId, effort) => done(() => sessions.setEffort(canvas, agentId, effort)),

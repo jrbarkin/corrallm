@@ -4,6 +4,7 @@ import { UNASKING_MODES } from '../../../../shared/session';
 
 import type {
   CodexMode,
+  InterruptOptions,
   ModelChoice,
   SessionAnswer,
   SessionEvent,
@@ -106,6 +107,10 @@ interface Turn {
   /** Interrupted before Codex's turn was known: it is interrupted once it is. */
   stop: boolean;
   interrupted: boolean;
+  /** Only processes started by this native turn, never an earlier turn's write_stdin target. */
+  processes: Set<string>;
+  stopCommands: boolean;
+  ending: boolean;
   /** The plan prompt waiting for the user, between Codex's turns. */
   plan: string | undefined;
   /** /compact's turn: it ends once its compaction has. */
@@ -119,6 +124,8 @@ type PlanAnswer = Extract<SessionAnswer, { kind: 'permission' }>['answer'];
 
 /** How many of an MCP server's tools /mcp names. */
 const MCP_TOOLS_SHOWN = 8;
+/** Cleanup is best effort: a broken server must not hold the session's next turn forever. */
+export const TERMINATE_MS = 2000;
 
 /** The models model/list lists (but the hidden ones), as the model picker offers them. */
 export function readModels(result: unknown): CodexModel[] {
@@ -178,6 +185,7 @@ export class AppServerSession implements LiveSession<CodexMode> {
   readonly #queue: UserMessage[] = [];
   #closing = false;
   #flushing: ReturnType<typeof setTimeout> | undefined;
+  #missingTerminate = false;
 
   constructor(parts: AppServerSessionParts) {
     this.#server = parts.server;
@@ -262,10 +270,11 @@ export class AppServerSession implements LiveSession<CodexMode> {
     }
   }
 
-  async interrupt(): Promise<void> {
+  async interrupt(options?: InterruptOptions): Promise<void> {
     const turn = this.#turn;
     if (!turn) return;
     turn.interrupted = true;
+    turn.stopCommands ||= options?.stopCommands === true;
     if (turn.plan !== undefined) {
       this.#host.emit({ type: 'withdrawn', id: turn.plan });
       this.#end(turn, { status: 'cancelled', reason: 'interrupted' });
@@ -331,6 +340,13 @@ export class AppServerSession implements LiveSession<CodexMode> {
     } else if (method === 'thread/settings/updated' && ours) {
       this.#keepPolicy(property(property(params, 'threadSettings'), 'sandboxPolicy'));
     }
+    if (
+      ours &&
+      (method === 'item/started' || method === 'item/completed') &&
+      property(params, 'turnId') === this.#turn?.codex
+    ) {
+      this.#commandProcess(property(params, 'item'));
+    }
     for (const event of this.#translator.notification(method, params)) this.#host.emit(event);
     if (this.#translator.pendingOutput && !this.#flushing) {
       this.#flushing = setTimeout(() => {
@@ -366,6 +382,9 @@ export class AppServerSession implements LiveSession<CodexMode> {
       codex: undefined,
       stop: false,
       interrupted: false,
+      processes: new Set(),
+      stopCommands: false,
+      ending: false,
       plan: undefined,
       compact: false,
       consent: undefined,
@@ -481,6 +500,7 @@ export class AppServerSession implements LiveSession<CodexMode> {
   #bind(turn: Turn, codex: string | undefined): void {
     if (codex === undefined || this.#turn !== turn || turn.codex !== undefined) return;
     turn.codex = codex;
+    turn.processes.clear();
     // A thread is kept once it has a turn: from now on it can be resumed.
     if (this.#remembered !== this.#thread.id) {
       this.#remembered = this.#thread.id;
@@ -503,6 +523,9 @@ export class AppServerSession implements LiveSession<CodexMode> {
       codex,
       stop: false,
       interrupted: false,
+      processes: new Set(),
+      stopCommands: false,
+      ending: false,
       plan: undefined,
       compact: false,
       consent: undefined,
@@ -515,6 +538,8 @@ export class AppServerSession implements LiveSession<CodexMode> {
     const turn = this.#turn;
     const id = text(property(codex, 'id'));
     if (!turn || (turn.codex !== undefined && turn.codex !== id)) return;
+    const items = property(codex, 'items');
+    if (Array.isArray(items)) for (const item of items) this.#commandProcess(item);
     for (const event of this.#translator.endTurn(codex)) this.#host.emit(event);
     const status = property(codex, 'status');
     const plan = this.#translator.takePlan();
@@ -573,7 +598,21 @@ export class AppServerSession implements LiveSession<CodexMode> {
 
   /** Ends corrallm's turn: whoever sent its message hears; the next message, if any, goes. */
   #end(turn: Turn, result: TurnResult): void {
-    if (this.#turn !== turn) return;
+    if (this.#turn !== turn || turn.ending) return;
+    if (turn.stopCommands && turn.processes.size > 0) {
+      turn.ending = true;
+      // turn/completed can precede the interrupt response. Keep the turn busy until its own
+      // commands are stopped, so neither the mailbox nor our queue starts another turn early.
+      void this.#terminate(turn).then(() => {
+        this.#finished(turn, result);
+      });
+      return;
+    }
+    this.#finished(turn, result);
+  }
+
+  #finished(turn: Turn, result: TurnResult): void {
+    if (this.#turn !== turn || this.#closing) return;
     this.#turn = undefined;
     this.#host.emit({
       type: 'end',
@@ -583,6 +622,66 @@ export class AppServerSession implements LiveSession<CodexMode> {
     });
     const next = this.#queue.shift();
     if (next) this.#run(next);
+  }
+
+  #commandProcess(item: unknown): void {
+    const turn = this.#turn;
+    if (!turn || property(item, 'type') !== 'commandExecution') return;
+    const id = text(property(item, 'processId'));
+    if (id === undefined) return;
+    if (typeof property(item, 'exitCode') === 'number') turn.processes.delete(id);
+    // write_stdin can touch a command started by an earlier turn: it is not ours to stop.
+    else if (property(item, 'source') !== 'unifiedExecInteraction') turn.processes.add(id);
+  }
+
+  async #terminate(turn: Turn): Promise<void> {
+    await Promise.all(
+      [...turn.processes].map(async (processId) => {
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        try {
+          if (this.#missingTerminate) return;
+          await Promise.race([
+            this.#server
+              .request('thread/backgroundTerminals/terminate', {
+                threadId: this.#thread.id,
+                processId,
+              })
+              .then((result) => {
+                // false means the process is already gone, not that a live process was left alone.
+                if (typeof property(result, 'terminated') !== 'boolean') {
+                  throw new Error('Codex did not confirm whether the command stopped');
+                }
+              }),
+            new Promise<never>((_, reject) => {
+              timer = setTimeout(() => {
+                reject(new Error('Codex did not answer in two seconds'));
+              }, TERMINATE_MS);
+            }),
+          ]);
+        } catch (error) {
+          if (this.#closing) return;
+          const missing =
+            error instanceof RpcFailure &&
+            (error.code === RPC_ERRORS.methodNotFound ||
+              (error.code === RPC_ERRORS.invalidRequest &&
+                /unknown variant|unknown method/i.test(error.message)));
+          if (missing && this.#missingTerminate) return;
+          if (missing) this.#missingTerminate = true;
+          this.#host.emit(
+            notice(
+              'warning',
+              `Codex command ${processId} may still be running: ${
+                missing
+                  ? 'this app server does not support stopping one command. Update Codex to enable it.'
+                  : failureText(error)
+              }`,
+            ),
+          );
+        } finally {
+          clearTimeout(timer);
+        }
+      }),
+    );
   }
 
   /** Runs one of Codex's slash commands (commands.ts). */

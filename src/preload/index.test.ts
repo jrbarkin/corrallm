@@ -341,6 +341,8 @@ describe('preload', () => {
     });
     await api.interruptSession('a');
     expect(channel).toHaveBeenLastCalledWith('session:interrupt', 'a');
+    await api.interruptSession('a', { stopCommands: true });
+    expect(channel).toHaveBeenLastCalledWith('session:interrupt', 'a', { stopCommands: true });
     await api.setSessionMode('a', 'plan');
     expect(channel).toHaveBeenLastCalledWith('session:mode', 'a', 'plan');
     await api.setSessionModel('a', 'opus');

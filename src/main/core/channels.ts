@@ -10,6 +10,7 @@ import type { Windows } from './windows';
 import type { HostServices, WindowId } from './host';
 import {
   parseAgentArgs,
+  parseInterruptArgs,
   parseAnswerArgs,
   parseEffortArgs,
   parseFreshArgs,
@@ -186,9 +187,9 @@ function createHandlers({
       },
     },
     'session:interrupt': {
-      parseArgs: parseAgentArgs,
-      handler: async ({ window }, agentId) => {
-        await sessions.interrupt(await of(window), agentId);
+      parseArgs: parseInterruptArgs,
+      handler: async ({ window }, agentId, options) => {
+        await sessions.interrupt(await of(window), agentId, ...(options ? [options] : []));
         return null;
       },
     },

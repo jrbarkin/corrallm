@@ -3,6 +3,7 @@ import type { GuiBridge } from './gui-link';
 import type { RunCheckpoint, RunRestore } from './run';
 import type {
   FilesRewind,
+  InterruptOptions,
   McpChange,
   McpServer,
   PastSession,
@@ -65,7 +66,7 @@ export interface IpcContract {
     result: null;
   };
   /** Interrupts the turn an agent's session is on, as Escape does in Claude Code. */
-  'session:interrupt': { args: [agentId: string]; result: null };
+  'session:interrupt': { args: [agentId: string, options?: InterruptOptions]; result: null };
   /** Switches an agent's session's mode (one of its CLI's: permission mode, or Codex's preset). */
   'session:mode': { args: [agentId: string, mode: SessionMode]; result: null };
   /** Switches an agent's session's model (a value from the models it offers). */

@@ -593,6 +593,75 @@ describe('the App Server connection', () => {
     expect(events.at(-1)).toMatchObject({ type: 'end', result: { status: 'cancelled' } });
   });
 
+  it('keeps Kill’s cleanup scope when the native turn id and command arrive after the stop', async () => {
+    const { session, ended } = await start();
+    await session.send({ id: 'm1', text: 'slow' });
+    await session.interrupt({ stopCommands: true });
+    await ended('m1');
+    expect(await requests('thread/backgroundTerminals/terminate')).toEqual([
+      { threadId: (await requests('turn/start'))[0]?.threadId, processId: '1000' },
+    ]);
+  });
+
+  it('keeps the next turn queued until command termination answers, even after turn/completed', async () => {
+    const { session, heard, ended, events } = await start(
+      {},
+      {
+        FAKE_CODEX_TERMINATE: 'delay',
+        FAKE_CODEX_PROCESS_LOG: path.join(dir, 'processes.jsonl'),
+      },
+    );
+    await session.send({ id: 'm1', text: 'slow' });
+    await heard('tool', { detail: { kind: 'output' } });
+    await session.send({ id: 'm2', text: 'next' });
+    await session.interrupt({ stopCommands: true });
+    await vi.waitFor(async () => {
+      expect(await requests('thread/backgroundTerminals/terminate')).toHaveLength(1);
+    });
+    expect(events.some((event) => event.type === 'user' && event.id === 'm2')).toBe(false);
+    await ended('m2');
+    const log = (await readFile(path.join(dir, 'processes.jsonl'), 'utf8'))
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line) as { type: string; live: string[] });
+    expect(log.map((event) => event.type)).toEqual(['turn', 'process', 'terminated', 'turn']);
+    expect(log.at(-1)?.live).toEqual([]);
+    expect(await requests('thread/backgroundTerminals/clean')).toEqual([]);
+  });
+
+  it.each(['missing', 'unknown', 'fail', 'hang'])(
+    'warns with the command id and releases the next turn when termination is %s',
+    async (behavior) => {
+      const { session, heard, ended, events } = await start({}, { FAKE_CODEX_TERMINATE: behavior });
+      await session.send({ id: 'm1', text: 'slow' });
+      await heard('tool', { detail: { kind: 'output' } });
+      await session.send({ id: 'm2', text: 'next' });
+      await session.interrupt({ stopCommands: true });
+      await ended('m2');
+      expect(
+        events.filter((event) => event.type === 'notice' && event.level === 'warning'),
+      ).toMatchObject([
+        { text: expect.stringMatching(/command 1000 may still be running:/) as string },
+      ]);
+      if (behavior === 'missing' || behavior === 'unknown') {
+        await session.send({ id: 'm3', text: 'slow' });
+        await vi.waitFor(async () => {
+          expect(await requests('turn/start')).toHaveLength(3);
+        });
+        // Wait until this turn's command is running, not merely accepted.
+        await vi.waitFor(() => {
+          expect(new Set(events.flatMap((e) => (e.type === 'tool' ? [e.id] : []))).size).toBe(2);
+        });
+        await session.interrupt({ stopCommands: true });
+        await ended('m3');
+        expect(
+          events.filter((event) => event.type === 'notice' && event.level === 'warning'),
+        ).toHaveLength(1);
+        expect(await requests('thread/backgroundTerminals/terminate')).toHaveLength(1);
+      }
+    },
+  );
+
   it('says why a turn failed, and when the usage limit resets', async () => {
     const { turn, events } = await start();
     await turn('fail please', 'm1');

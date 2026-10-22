@@ -42,7 +42,7 @@ export function runOps({
       // the other. One being delivered is withdrawn once its interrupted turn ends, with the note
       // its recipient is told of it, should it have reached it.
       const withdrawing = delivery.kill(members, by);
-      for (const agent of members) engine.sessions.stop(agent);
+      for (const agent of members) engine.sessions.stop(agent, { stopCommands: true });
       await saved(
         open.journal().then(async () => {
           await withdrawing;
