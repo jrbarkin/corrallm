@@ -145,7 +145,7 @@ Signing and notarization are turned on only when the matching environment variab
 
 ## Contributing
 
-See [`CLAUDE.md`](CLAUDE.md) for the project layout, security rules and how to add an IPC channel.
+See [AGENTS.md](AGENTS.md) for development rules and [the architecture overview](docs/architecture/overview.md) for the layout, security mechanisms and IPC recipe.
 
 ## License
 
