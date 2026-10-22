@@ -9,9 +9,7 @@ const ROOT = path.resolve(import.meta.dirname, '..', '..');
 function codePaths(markdown: string): string[] {
   return [...markdown.matchAll(/(?<!`)`([^`\n]+)`(?!`)/g)].flatMap((match) => {
     const value = match[1] ?? '';
-    return /^(?:src|e2e|scripts|build)\//.test(value) && !/[<>…*{}]/.test(value)
-      ? [value]
-      : [];
+    return /^(?:src|e2e|scripts|build)\//.test(value) && !/[<>…*{}]/.test(value) ? [value] : [];
   });
 }
 
@@ -33,12 +31,14 @@ describe('repository instructions and architecture docs', () => {
   });
 
   it('keeps every concrete backticked repository path valid', () => {
-    const missing = [path.join(ROOT, 'AGENTS.md'), ...markdownFiles(path.join(ROOT, 'docs'))]
-      .flatMap((file) =>
-        codePaths(readFileSync(file, 'utf8')).flatMap((target) =>
-          existsSync(path.join(ROOT, target)) ? [] : [`${path.relative(ROOT, file)}: ${target}`],
-        ),
-      );
+    const missing = [
+      path.join(ROOT, 'AGENTS.md'),
+      ...markdownFiles(path.join(ROOT, 'docs')),
+    ].flatMap((file) =>
+      codePaths(readFileSync(file, 'utf8')).flatMap((target) =>
+        existsSync(path.join(ROOT, target)) ? [] : [`${path.relative(ROOT, file)}: ${target}`],
+      ),
+    );
     expect(missing).toEqual([]);
   });
 

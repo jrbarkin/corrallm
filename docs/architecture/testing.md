@@ -8,8 +8,6 @@ Playwright Electron tests (*.e2e.ts) and their global setup.
 
 Launch the app with launchApp() (launch.ts): a throwaway profile, so the real app's saved state never leaks in, and no `claude` or `codex` unless the test points the app at a fake.
 
-
-
 - Test-driven by default. For a bug, first write a test that reproduces it and fails, then fix it, then confirm the test passes. For new behaviour, write the tests with (or before) the code.
 
 - The test suite is the regression guard, not ad-hoc review. Keep tests robust and meaningful: assert behaviour users or callers rely on, not incidental details. Prefer unit tests for logic, and add Playwright e2e only for what needs the real app (pointer interactions, CSP, packaging).

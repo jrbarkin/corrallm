@@ -10,45 +10,45 @@ These are the canonical instructions for every agent. Before changing an area, r
 
 Start with [the overview](docs/architecture/overview.md). Paths include their tests.
 
-| Code area | Read |
-| --- | --- |
-| `src/main/core/`, main services and `src/main/host/` | [Core](docs/architecture/core.md) |
-| `src/main/core/store/` | [Store](docs/architecture/store.md) |
-| `src/shared/api/`, core operations/dispatch/rules/topics, `src/main/api/` | [Registry](docs/architecture/registry.md) |
-| `src/main/core/delivery/` | [Messages](docs/architecture/messages.md) |
-| `src/main/cli/` | [Headless](docs/architecture/headless.md) |
-| `src/main/core/canvas/`, `src/shared/model/`, canvas memory, projects and files | [Canvas](docs/architecture/canvas.md), [Core](docs/architecture/core.md) |
-| `src/main/run-journal.ts`, `src/renderer/run/`, restore and switching | [Run recovery](docs/architecture/run-recovery.md) |
-| Adapter descriptors and catalog consumers | [Catalog](docs/architecture/catalog.md) |
-| `src/main/sessions/`, agent settings | [Sessions](docs/architecture/sessions.md) |
-| `src/main/sessions/claude-code/` | [Claude Code](docs/architecture/claude-code.md), [Sessions](docs/architecture/sessions.md) |
-| `src/main/sessions/codex/` | [Codex](docs/architecture/codex.md), [Sessions](docs/architecture/sessions.md) |
-| Usage in main, renderer and shared | [Usage](docs/architecture/usage.md) |
-| `src/renderer/` (graph, agent, queues, terminal, search) | [Renderer](docs/architecture/renderer.md) |
-| `src/shared/engine/` | [Engine](docs/architecture/engine.md) |
-| `src/preload/`, `src/shared/ipc.ts`, `src/main/ipc.ts`, core channels and links | [IPC](docs/architecture/ipc.md), [Security](docs/architecture/security.md) |
-| Security, CSP, URLs, trust, tokens, paths and permissions | [Security](docs/architecture/security.md) |
-| Native dependencies, packaging and self-tests | [Native modules](docs/architecture/native-modules.md) |
-| Configs, dependencies, `build/`, `scripts/` | [Toolchain](docs/architecture/toolchain.md) |
-| Test infrastructure, fakes, fixtures and `e2e/` | [Testing](docs/architecture/testing.md), plus the area's doc |
+| Code area                                                                       | Read                                                                                       |
+| ------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| `src/main/core/`, main services and `src/main/host/`                            | [Core](docs/architecture/core.md)                                                          |
+| `src/main/core/store/`                                                          | [Store](docs/architecture/store.md)                                                        |
+| `src/shared/api/`, core operations/dispatch/rules/topics, `src/main/api/`       | [Registry](docs/architecture/registry.md)                                                  |
+| `src/main/core/delivery/`                                                       | [Messages](docs/architecture/messages.md)                                                  |
+| `src/main/cli/`                                                                 | [Headless](docs/architecture/headless.md)                                                  |
+| `src/main/core/canvas/`, `src/shared/model/`, canvas memory, projects and files | [Canvas](docs/architecture/canvas.md), [Core](docs/architecture/core.md)                   |
+| `src/main/run-journal.ts`, `src/renderer/run/`, restore and switching           | [Run recovery](docs/architecture/run-recovery.md)                                          |
+| Adapter descriptors and catalog consumers                                       | [Catalog](docs/architecture/catalog.md)                                                    |
+| `src/main/sessions/`, agent settings                                            | [Sessions](docs/architecture/sessions.md)                                                  |
+| `src/main/sessions/claude-code/`                                                | [Claude Code](docs/architecture/claude-code.md), [Sessions](docs/architecture/sessions.md) |
+| `src/main/sessions/codex/`                                                      | [Codex](docs/architecture/codex.md), [Sessions](docs/architecture/sessions.md)             |
+| Usage in main, renderer and shared                                              | [Usage](docs/architecture/usage.md)                                                        |
+| `src/renderer/` (graph, agent, queues, terminal, search)                        | [Renderer](docs/architecture/renderer.md)                                                  |
+| `src/shared/engine/`                                                            | [Engine](docs/architecture/engine.md)                                                      |
+| `src/preload/`, `src/shared/ipc.ts`, `src/main/ipc.ts`, core channels and links | [IPC](docs/architecture/ipc.md), [Security](docs/architecture/security.md)                 |
+| Security, CSP, URLs, trust, tokens, paths and permissions                       | [Security](docs/architecture/security.md)                                                  |
+| Native dependencies, packaging and self-tests                                   | [Native modules](docs/architecture/native-modules.md)                                      |
+| Configs, dependencies, `build/`, `scripts/`                                     | [Toolchain](docs/architecture/toolchain.md)                                                |
+| Test infrastructure, fakes, fixtures and `e2e/`                                 | [Testing](docs/architecture/testing.md), plus the area's doc                               |
 
 ## Commands and done gate
 
 Requires Node 24.21.0 (`.nvmrc`) and pnpm 12.11.2 (`packageManager`).
 
-| Command | Purpose |
-| --- | --- |
-| `pnpm dev` | Forge + Vite + HMR; press `r` after main-process changes |
-| `pnpm typecheck` | TypeScript solution (node, web, tooling) |
-| `pnpm lint` | Type-aware ESLint, zero warnings |
-| `pnpm format` / `pnpm format:check` | Prettier write / verify |
-| `pnpm test` | Vitest main, preload and renderer |
-| `pnpm exec vitest run --project main <file>` | Focused main tests |
-| `pnpm test:e2e` | Playwright; first builds the unsigned app and CLI |
-| `pnpm package` / `pnpm make` | Packaged app / installers |
-| `pnpm build:cli` | Plain Node CLI in `dist-cli/` |
-| `pnpm corrallm` | CLI: serve, wait, dump or native self-test |
-| `pnpm api:surface` | Regenerate the API snapshot; review its diff |
+| Command                                      | Purpose                                                  |
+| -------------------------------------------- | -------------------------------------------------------- |
+| `pnpm dev`                                   | Forge + Vite + HMR; press `r` after main-process changes |
+| `pnpm typecheck`                             | TypeScript solution (node, web, tooling)                 |
+| `pnpm lint`                                  | Type-aware ESLint, zero warnings                         |
+| `pnpm format` / `pnpm format:check`          | Prettier write / verify                                  |
+| `pnpm test`                                  | Vitest main, preload and renderer                        |
+| `pnpm exec vitest run --project main <file>` | Focused main tests                                       |
+| `pnpm test:e2e`                              | Playwright; first builds the unsigned app and CLI        |
+| `pnpm package` / `pnpm make`                 | Packaged app / installers                                |
+| `pnpm build:cli`                             | Plain Node CLI in `dist-cli/`                            |
+| `pnpm corrallm`                              | CLI: serve, wait, dump or native self-test               |
+| `pnpm api:surface`                           | Regenerate the API snapshot; review its diff             |
 
 Before calling a change done: `pnpm typecheck && pnpm lint && pnpm format:check && pnpm test && pnpm test:e2e`.
 See [toolchain](docs/architecture/toolchain.md) for executable overrides, build environments and the packaged self-test; [testing](docs/architecture/testing.md) for load/crash gates and production-build reuse.
