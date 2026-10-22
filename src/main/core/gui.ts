@@ -55,6 +55,14 @@ export class WindowPorts {
     this.#options = options;
   }
 
+  /** Main's native UI uses the same operation and policy as a clicked renderer link. */
+  async openLink(window: WindowId, url: string): Promise<void> {
+    if (!this.#windows.has(window))
+      throw new Error('The app window closed before opening the link.');
+    const answer = await this.#core.call('link.open', { url }, asHuman(window));
+    if (!answer.ok) throw new Error(answer.error.sentence);
+  }
+
   /** Serves `port` as `window`'s, in place of the one it had (its page reloaded). */
   open(window: WindowId, port: WindowPort): void {
     this.gone(window);

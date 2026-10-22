@@ -263,6 +263,13 @@ describe('ESLint’s boundary around shared code', () => {
 });
 
 describe('main’s files', () => {
+  it('loads the update checker only in the app, never the CLI or core process', () => {
+    for (const entry of ['src/main/cli/main.ts', 'src/main/core/entry.ts']) {
+      expect(loadedBy(entry)).not.toContain('src/main/updates.ts');
+      expect(loadedBy(entry)).not.toContain('src/main/host/updates.ts');
+    }
+    expect(loadedBy('src/main/index.ts')).toContain('src/main/host/updates.ts');
+  });
   it('import Electron only in the host and the app’s own entry, window and security', () => {
     const importers = mainFiles().filter((file) => read(file).includes("from 'electron'"));
     const allowed = [

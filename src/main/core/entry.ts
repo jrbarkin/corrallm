@@ -116,6 +116,10 @@ const link = new CoreLink<CoreSide, HostSide>(
       return null;
     },
     shown: async (asked) => (await ready.promise).shown(asked),
+    openLink: async (window, url) => {
+      await (await windows.promise).openLink(window, url);
+      return null;
+    },
     flush: async () => {
       await (await ready.promise).flush();
       return null;
