@@ -1,0 +1,12 @@
+[Desktop Entry]
+Name=<%= productName %>
+StartupWMClass=<%= productName %>
+Comment=<%= description %>
+Exec=/usr/lib/<%= name %>/corrallm %U
+Icon=<%= name %>
+Type=Application
+Terminal=false
+StartupNotify=true
+<% if (categories && categories.length) { %>Categories=<%= categories.join(';') %>;
+<% } %><% if (mimeType && mimeType.length) { %>MimeType=<%= mimeType.join(';') %>;
+<% } %>

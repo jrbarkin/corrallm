@@ -1,0 +1,19 @@
+#!/bin/sh
+set -eu
+
+# Resolve installation links without depending on Node, realpath or utilities on PATH.
+target=$0
+case "$target" in /*) ;; *) target=$PWD/$target ;; esac
+links=0
+while [ -L "$target" ]; do
+  links=$((links + 1))
+  if [ "$links" -gt 40 ]; then
+    printf '%s\n' 'corrallm: too many launcher symlinks' >&2
+    exit 1
+  fi
+  directory=$(CDPATH= cd -P "${target%/*}" && pwd)
+  link=$(/usr/bin/readlink "$target")
+  case "$link" in /*) target=$link ;; *) target=$directory/$link ;; esac
+done
+directory=$(CDPATH= cd -P "${target%/*}" && pwd)
+exec "$directory/../cli/node" "$directory/../cli/corrallm.cjs" "$@"
