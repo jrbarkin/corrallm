@@ -75,6 +75,36 @@ function setup(nodes: AgentNode[], extra: Partial<RunIO> = {}) {
 }
 
 describe('per-agent run controls', () => {
+  it.each(['before', 'after'])(
+    'keeps completion when Pause arrives %s the native end, even after a long silence',
+    (when) => {
+      let now = 1234;
+      const { store, sent, reply } = setup(
+        [node('a', [message('one')]), node('b', [message('other')])],
+        { now: () => now },
+      );
+      store.start();
+      const attempt = store.snapshot().agents.a?.attempts?.one?.[0]?.id;
+      // Completion is an event, not a deadline; neither pause nor a late callback drops it.
+      now += 30 * 60_000;
+      if (when === 'before') store.pauseAgent('a');
+      reply('a');
+      if (when === 'after') store.pauseAgent('a');
+      expect(store.snapshot().agents.a).toMatchObject({
+        status: 'done',
+        paused: true,
+        outcomes: { one: 'succeeded' },
+        attempts: { one: [{ id: attempt, status: 'succeeded' }] },
+      });
+      expect(sent.every(({ withdrawn }) => !withdrawn)).toBe(true);
+      expect(store.snapshot().agents.b?.status).toBe('running');
+      reply('b');
+      expect(store.snapshot().agents.b?.outcomes.other).toBe('succeeded');
+      store.resumeAgent('a');
+      expect(sent).toHaveLength(2);
+    },
+  );
+
   it('keeps each party’s pause apart: a party releases its own, you release any', () => {
     const { store, texts } = setup([node('a', [message('one')]), node('b', [message('two')])]);
     store.pauseAgent('a', 'outside:orchestrator');
