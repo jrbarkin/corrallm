@@ -6,6 +6,8 @@
 
 Playwright Electron tests (*.e2e.ts) and their global setup.
 
+Global setup builds through Forge once. Its child gets `CORRALLM_E2E_BUILD=1` and `CORRALLM_UNSIGNED=1`: only together do they skip staging the shipped Node/command, since the specs launch the unpackaged production bundles. Forge still copies the app's native modules and builds the headless CLI bundle once in `prePackage`. Normal package/native gates keep full staging. `src/main/e2e-build.test.ts` checks that setup and the complete-build requirement for `E2E_SKIP_BUILD`; `src/main/shipped-cli-config.test.ts` checks the unsigned-only bypass, signing and Node-based Vite invocation without running Forge or native modules.
+
 Launch the app with launchApp() (launch.ts): a throwaway profile, so the real app's saved state never leaks in, and no `claude` or `codex` unless the test points the app at a fake.
 
 - Test-driven by default. For a bug, first write a test that reproduces it and fails, then fix it, then confirm the test passes. For new behaviour, write the tests with (or before) the code.
@@ -27,6 +29,8 @@ Launch the app with launchApp() (launch.ts): a throwaway profile, so the real ap
 - The vacuum/write test (`src/main/core/store/vacuum.test.ts`) gates the write's flush and checks ordering: the current bounded vacuum pass finishes, the queued write runs and becomes durable, and no second pass gets ahead of it. It does not time the drive's real fsync; the separate reclamation test still checks the 64-page bound.
 
 - Command-shipping unit tests use an injected download, fixture tarballs and fake native runtime files: they check all four targets, cached and downloaded checksum failures, only the required files staged outside ASAR, Forge hooks and signing, Linux command/desktop targets, and symlinked launchers with an empty PATH. They never load a native addon. The packaged app's native self-test additionally runs the actual shipped launcher with an empty PATH, including its pty round trip; `scripts/check-macos.sh` and `scripts/check-linux.sh` exercise the signed or ad hoc packaged resources rather than a checkout's Node or node_modules.
+
+- `src/main/shipped-command.test.ts` runs the launcher against the test's Node with a tiny stand-in bundle and hostile preload/module-search settings, checking they never reach the runtime. The packaged self-test also supplies a failing preload rather than clearing `NODE_OPTIONS` itself; neither test can hide a launcher that forgets to sanitize it.
 
 - Dump tests keep the owner's maintenance timers under test control, with real WAL flushes: an idle checkpoint legitimately rewrites the database and WAL, so a read-only dump's byte-hash assertion must compare a quiet owner. Usage-reset delivery tests control Date and timers, checking the hold just before reset and delivery after it; setup and fsync time never consume their usage window.
 

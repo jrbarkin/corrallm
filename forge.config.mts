@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { cp, mkdir, readdir } from 'node:fs/promises';
+import { createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
@@ -20,6 +21,9 @@ import { shipCli, LINUX_CLI_BIN } from './build/shipped-cli.js';
 
 const projectDir = path.dirname(fileURLToPath(import.meta.url));
 const execFileAsync = promisify(execFile);
+const require = createRequire(import.meta.url);
+// Invoke Vite through Node: pnpm's Windows .cmd shim cannot be spawned with execFile.
+const viteCli = path.join(path.dirname(require.resolve('vite/package.json')), 'bin/vite.js');
 
 // extraResource keeps notices visible outside app.asar. Stage the SDK's installed license under
 // its own name on every build, so upgrades cannot leave a stale checked-in copy behind.
@@ -50,6 +54,8 @@ const SIGNING_ENV = [
 // CORRALLM_UNSIGNED=1 skips signing and notarization even when credentials are set (used by the
 // e2e build, which only needs the Vite output).
 const unsigned = process.env.CORRALLM_UNSIGNED === '1';
+// e2e launches .vite/ with its own Electron; it never uses a packaged command or Node.
+const e2eBuild = unsigned && process.env.CORRALLM_E2E_BUILD === '1';
 
 const {
   APPLE_SIGNING_IDENTITY,
@@ -142,7 +148,7 @@ const config = {
   rebuildConfig: {
     // These ship Node-API prebuilds that work in Electron as-is. Without this,
     // @electron/rebuild would recompile them from source.
-    ignoreModules: ['node-pty', 'better-sqlite3'],
+    ignoreModules: ['node-pty'],
   },
   hooks: {
     generateAssets: async () => {
@@ -153,7 +159,9 @@ const config = {
       );
     },
     prePackage: async () => {
-      await execFileAsync('pnpm', ['build:cli'], { cwd: projectDir });
+      await execFileAsync(process.execPath, [viteCli, 'build', '--config', 'vite.cli.config.mts'], {
+        cwd: projectDir,
+      });
     },
     preStart: () => {
       // `electron-forge start` passes its environment to the app and everything it spawns:
@@ -165,7 +173,7 @@ const config = {
       for (const [name, module] of Object.entries(NATIVE_MODULES)) {
         await copyNativeModule(name, module, buildPath, platform, arch);
       }
-      await shipCli(buildPath, platform, arch);
+      if (!e2eBuild) await shipCli(buildPath, platform, arch);
     },
     postPackage: async (_config, { platform, outputPaths }) => {
       // Unsigned macOS builds keep Electron's original ad-hoc signature, which packager
@@ -178,14 +186,16 @@ const config = {
         for (const entry of await readdir(outputPath)) {
           if (!entry.endsWith('.app')) continue;
           // Keep the bundled Node's JIT entitlement when the enclosing unsigned app is re-signed.
-          await execFileAsync('codesign', [
-            '--force',
-            '--sign',
-            '-',
-            '--entitlements',
-            path.join(projectDir, 'build/entitlements.node.plist'),
-            path.join(outputPath, entry, 'Contents/Resources/cli/node'),
-          ]);
+          if (!e2eBuild) {
+            await execFileAsync('codesign', [
+              '--force',
+              '--sign',
+              '-',
+              '--entitlements',
+              path.join(projectDir, 'build/entitlements.node.plist'),
+              path.join(outputPath, entry, 'Contents/Resources/cli/node'),
+            ]);
+          }
           await execFileAsync('codesign', [
             '--preserve-metadata=entitlements',
             '--force',
