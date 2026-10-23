@@ -42,7 +42,7 @@ export class FakeConnector implements Connector<SessionMode> {
   readonly ids: string[] = [];
   /** Every session it started, each with the messages it was sent. */
   readonly sessions: FakeSession[] = [];
-  readonly #pause: number;
+  readonly #step: () => Promise<void>;
   readonly #mode: SessionMode | null;
   readonly #asks: boolean | undefined;
   readonly #adapter: AdapterId;
@@ -51,15 +51,23 @@ export class FakeConnector implements Connector<SessionMode> {
    * `pause`: how long (ms) between the events of a turn; `adapter`: the one it stands in for;
    * `mode`: its native setting, which applies when no mode is chosen (null: one it never reports,
    * as a CLI that never says its mode); `asks`: whether that setting asks, as it says where its
-   * mode doesn't (a policy that is no mode).
+   * mode doesn't (a policy that is no mode). `step` replaces the delay with a test-controlled
+   * scheduler, so tests of another clock can run turns without advancing that clock.
    */
   constructor({
     pause = 0,
     adapter = 'claude-code',
     mode,
     asks,
-  }: { pause?: number; adapter?: AdapterId; mode?: SessionMode | null; asks?: boolean } = {}) {
-    this.#pause = pause;
+    step = () => new Promise<void>((resolve) => setTimeout(resolve, pause)),
+  }: {
+    pause?: number;
+    adapter?: AdapterId;
+    mode?: SessionMode | null;
+    asks?: boolean;
+    step?: () => Promise<void>;
+  } = {}) {
+    this.#step = step;
     this.#adapter = adapter;
     this.#mode = mode === undefined ? (adapter === 'codex' ? 'auto' : 'manual') : mode;
     this.#asks = asks;
@@ -84,7 +92,7 @@ export class FakeConnector implements Connector<SessionMode> {
       ...(codex ? { effort: spec.effort ?? null } : {}),
       ...(spec.mode === null && this.#asks !== undefined ? { asks: this.#asks } : {}),
     });
-    const session = new FakeSession(mode, host, this.#pause);
+    const session = new FakeSession(mode, host, this.#step);
     this.sessions.push(session);
     return Promise.resolve(session);
   }
@@ -108,14 +116,14 @@ class FakeSession implements LiveSession<SessionMode> {
   readonly sent: UserMessage[] = [];
   #mode: SessionMode | null;
   readonly #host: SessionHost;
-  readonly #pause: number;
+  readonly #step: () => Promise<void>;
   #turn: Turn | undefined;
   #turns = 0;
 
-  constructor(mode: SessionMode | null, host: SessionHost, pause: number) {
+  constructor(mode: SessionMode | null, host: SessionHost, step: () => Promise<void>) {
     this.#mode = mode;
     this.#host = host;
-    this.#pause = pause;
+    this.#step = step;
   }
 
   send(message: UserMessage): Promise<void> {
@@ -168,7 +176,7 @@ class FakeSession implements LiveSession<SessionMode> {
     const emit = this.#host.emit.bind(this.#host);
     const started = Date.now();
     const step = async () => {
-      await new Promise((resolve) => setTimeout(resolve, this.#pause));
+      await this.#step();
       return !turn.stopped;
     };
     /** Shows a prompt, and waits for its answer (undefined: the turn was stopped). */

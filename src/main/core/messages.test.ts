@@ -2482,12 +2482,15 @@ describe('exhausted usage', () => {
    */
   async function exhausted({
     manual = false,
+    immediate = false,
     another = false,
     unwritable = false,
     resetsAt = RESET,
   } = {}): Promise<void> {
     vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
     vi.setSystemTime(NOW);
+    if (immediate)
+      appServer = new FakeConnector({ adapter: 'codex', step: () => Promise.resolve() });
     await keepCanvas();
     if (manual) await openedLast(profile, CANVAS);
     if (another) {
@@ -2549,30 +2552,51 @@ describe('exhausted usage', () => {
       return;
     }
     const id = await send('builder', 'Use the last of the window');
-    await vi.waitFor(async () => {
+    const check = async () => {
       expect((await inbox()).find(({ replyTo }) => replyTo === id)?.turn).toEqual({
         status: 'failed',
         reason: 'usage-limit',
         resetsAt,
       });
-    });
+    };
+    if (immediate) {
+      await repliesTo([id]);
+      await check();
+    } else await vi.waitFor(check);
+  }
+
+  /** Resolves on the replies themselves; unlike vi.waitFor it never spends real polling time or advances fake time. */
+  function repliesTo(ids: readonly string[], kind: Message['kind'] = 'text'): Promise<void> {
+    const current = core;
+    if (!current) throw new Error('No core');
+    const pending = new Set(ids);
+    const done = Promise.withResolvers<undefined>();
+    const heard = (message: Message) => {
+      if (message.kind === kind && message.replyTo !== undefined) pending.delete(message.replyTo);
+      if (pending.size === 0) done.resolve(undefined);
+    };
+    const unwatch = current.watch({ message: heard });
+    // A fast turn may have replied before the message call returned its id.
+    for (const message of current.engines.canvas(CANVAS)?.messages.all() ?? []) heard(message);
+    return done.promise.finally(unwatch);
   }
 
   it('holds without a rule, tells each sender once and delivers at the reset on its own clock', async () => {
-    await exhausted();
+    await exhausted({ immediate: true });
     const first = await send('builder', 'First');
     const second = await send('builder', 'Second');
     const other = await send('builder', 'Other', OTHER);
+    await repliesTo([first, other], 'notice');
     expect((await find(first))?.state).toBe('pending');
     expect((await find(second))?.state).toBe('pending');
     expect((await notices()).map(({ body }) => body)).toEqual([NOTICE]);
     expect((await notices(OTHER)).map(({ body }) => body)).toEqual([NOTICE]);
+    const replied = repliesTo([first, second, other]);
     await vi.advanceTimersByTimeAsync(RESET - Date.now() + 1);
-    await vi.waitFor(async () => {
-      expect((await find(first))?.state).toBe('replied');
-      expect((await find(second))?.state).toBe('replied');
-      expect((await find(other, OTHER))?.state).toBe('replied');
-    });
+    await replied;
+    expect((await find(first))?.state).toBe('replied');
+    expect((await find(second))?.state).toBe('replied');
+    expect((await find(other, OTHER))?.state).toBe('replied');
     expect(await notices()).toHaveLength(1);
   });
 
@@ -2591,18 +2615,17 @@ describe('exhausted usage', () => {
   });
 
   it('keeps the hold and what it told each sender across a restart', async () => {
-    await exhausted();
+    await exhausted({ immediate: true });
     const id = await send('builder', 'After the reset');
-    await vi.waitFor(async () => {
-      expect(await notices()).toHaveLength(1);
-    });
+    await repliesTo([id], 'notice');
+    expect(await notices()).toHaveLength(1);
     await restart();
     expect((await find(id))?.state).toBe('pending');
     expect(await notices()).toHaveLength(1);
+    const replied = repliesTo([id]);
     await vi.advanceTimersByTimeAsync(RESET - Date.now() + 1);
-    await vi.waitFor(async () => {
-      expect((await find(id))?.state).toBe('replied');
-    });
+    await replied;
+    expect((await find(id))?.state).toBe('replied');
     expect(await notices()).toHaveLength(1);
   });
 
