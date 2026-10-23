@@ -8,8 +8,8 @@
 export interface ClosingDeps {
   /** Saves the run while keeping the core usable: rejects saying why it could not. */
   save: () => Promise<void>;
-  /** Closes what it can without saving (the sessions, the stores): never rejects. */
-  abandon: () => Promise<void>;
+  /** Closes without saving; only an explicit second-close escape may bound cleanup. Never rejects. */
+  abandon: (escape?: true) => Promise<void>;
   /** Asks whether to close anyway, saying why saving failed: true if the user says so. */
   ask: (why: string) => Promise<boolean>;
   /** Closes: quits the app, or closes the window. */
@@ -40,7 +40,7 @@ export class Closing {
       case 'closing':
         return true;
       case 'saving':
-        void this.#close(this.#deps.abandon());
+        void this.#close(this.#deps.abandon(true));
         return false;
       case 'asking':
         return false;
