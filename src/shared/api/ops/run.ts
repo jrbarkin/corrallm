@@ -3,7 +3,8 @@ import { z } from 'zod';
 import { define } from '../define';
 import type { OpDef } from '../define';
 import { PARTY_PATTERN } from '../../model/messages';
-import { AgentId, GroupId, OpCanvas } from '../ids';
+import { AgentId, GroupId, ItemId, OpCanvas } from '../ids';
+import { RunViewSchema } from './b11-data';
 import type { OpName } from '../surface';
 
 /** The run (Core Server §4 F): holding and releasing an agent's queue, or a group's. */
@@ -43,3 +44,47 @@ export const runOps = {
     }),
   }),
 } satisfies Partial<Record<OpName, OpDef>>;
+
+/** B11 X2: prepared only; X9 registers these when the core services exist. */
+export const b11RunOps = {
+  'run.get': define(
+    { kind: 'read' },
+    {
+      summary: 'The current run, projected for the caller.',
+      input: z.strictObject({ canvas }),
+      output: RunViewSchema,
+    },
+  ),
+  'run.start': define(
+    { kind: 'command' },
+    {
+      summary: 'Starts the queues afresh, recording each message before sending it.',
+      input: z.strictObject({ canvas }),
+      output: z.strictObject({}),
+    },
+  ),
+  'run.stop': define(
+    { kind: 'command' },
+    {
+      summary: 'Stops the run and takes back its sends; parties’ messages remain deliverable.',
+      input: z.strictObject({ canvas }),
+      output: z.strictObject({}),
+    },
+  ),
+  'run.resume': define(
+    { kind: 'command' },
+    {
+      summary: 'Resumes paused progress without starting a new run.',
+      input: z.strictObject({ canvas }),
+      output: z.strictObject({}),
+    },
+  ),
+  'run.goOn': define(
+    { kind: 'command' },
+    {
+      summary: 'Ends the current delay or time limit early.',
+      input: z.strictObject({ canvas, agent: AgentId, item: ItemId }),
+      output: z.strictObject({}),
+    },
+  ),
+};

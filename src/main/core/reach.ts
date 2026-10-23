@@ -44,6 +44,7 @@ const WORDS: Readonly<Record<Brand, string>> = {
   NeedId: 'Needs item',
   MessageId: 'message',
   ConversationId: 'conversation',
+  EntryId: 'transcript entry',
   TaskId: 'task',
   TokenId: 'token',
 };

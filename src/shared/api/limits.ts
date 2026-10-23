@@ -48,6 +48,9 @@ export const DEFAULT_PAGE = 50;
  */
 export const MAX_PAGE_BYTES = 60 * 1024;
 
+/** A window topic frame; a single oversized snapshot entry is the documented exception. */
+export const MAX_TOPIC_FRAME = 1024 * 1024;
+
 /**
  * The longest id of a Needs item: what it is, its agent's id escaped (encodeURIComponent: up to 9
  * characters for each of its own) and what of the agent's it is.
