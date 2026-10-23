@@ -31,9 +31,9 @@ import { TOKEN_VARIABLE, URL_VARIABLE } from './wait';
  * since a command line, which an agent can type as easily as you, never grants folder trust. Each
  * run restores paused, which holds only the run's own sends, so orchestrators' messages still
  * reach idle agents; but nothing is delivered until every check that may refuse the start has
- * passed (each canvas opened, the port listened on, the token made), so a refused start sends
- * nothing. It listens on --port, which it keeps for later starts, else the port the profile keeps
- * (chosen free once), writes api.json, and says on stderr each message, reply and thing newly
+ * passed (each canvas opened, the port listened on, the token made, api.json published), so a
+ * refused start sends nothing. It listens on --port, which it keeps for later starts, else the
+ * port the profile keeps (chosen free once), writes api.json, and says on stderr each message, reply and thing newly
  * waiting for an answer, with every control character shown escaped, since what it says comes from
  * canvases, agents and MCP servers. --new-token makes an outside token for the canvases named,
  * shown once, on a terminal only, with how to register corrallm by its variable in each installed
@@ -102,6 +102,7 @@ export async function serveCommand(command: ServeCommand, io: ServeIO): Promise<
   void io.stopped.then(() => {
     stopping = true;
   });
+  const isStopping = () => stopping;
   const stop = () => {
     say('corrallm serve: stopping…');
     return 0;
@@ -199,20 +200,29 @@ export async function serveCommand(command: ServeCommand, io: ServeIO): Promise<
       }
     }
 
-    // Every check passed: what waits on each canvas goes from now on, unless it was told to stop.
     if (stopping) return stop();
+    // Discovery is a startup check too: a failed publication must never release queued messages
+    // or announce a server that corrallm wait cannot find yet.
+    try {
+      await writeApiFile(profile, {
+        url,
+        port: server.port,
+        pid: process.pid,
+        started: processStart(),
+      });
+      wroteApi = true;
+    } catch (error) {
+      say(`corrallm serve: could not write ${path.join(profile, 'api.json')}: ${reasonOf(error)}`);
+      return 1;
+    }
+    // Every check passed: what waits on each canvas goes from now on, unless it was told to stop
+    // while the discovery file was being written (leave() still removes it then).
+    if (isStopping()) return stop();
     await opened.deliver();
     say(`corrallm serve: serving ${served} at ${url}, on the profile ${profile}. Ctrl-C stops it.`);
     if (!command.newToken) {
       for (const line of findIt) say(`corrallm serve: ${line}`);
     }
-    await writeApiFile(profile, {
-      url,
-      port: server.port,
-      pid: process.pid,
-      started: processStart(),
-    });
-    wroteApi = true;
     await io.stopped;
     return stop();
   };
