@@ -17,7 +17,6 @@ import type { Settings } from '../settings';
 import { createCore } from './core';
 import type { Core } from './core';
 import { WindowPorts } from './gui';
-import { readOnDisk } from './store/test-store';
 import { CALLERS, CANVAS, NO_DESKTOP } from './test-registry';
 import { openWindow } from './test-window';
 import { REAL_FIXTURES, startWorld } from './test-world';
@@ -266,6 +265,7 @@ describe('T3c: usage and settings topics', () => {
  */
 class Copy {
   readonly topic: TopicKey;
+  readonly initial: unknown;
   rev: number;
   state: unknown;
   /** Each change applied, in order. */
@@ -273,6 +273,7 @@ class Copy {
 
   constructor(topic: TopicKey, snapshot: TopicSnapshot) {
     this.topic = topic;
+    this.initial = snapshot.state;
     this.rev = snapshot.rev;
     this.state = snapshot.state;
   }
@@ -424,22 +425,23 @@ describe('T3c: the canvas, canvases and needs topics', () => {
   it('sends a canvas’s changes as what each commit changed, in order of its sequence', () => {
     const yours = copies.get('you')?.get(`canvas:${CANVAS}`);
     expect(yours?.changes.length).toBeGreaterThan(DOC_OPS.length);
+    const before = { ...(yours?.initial as Entities) };
     for (const change of yours?.changes ?? []) {
       expect('replace' in change).toBe(false);
       if (!('set' in change)) continue;
-      const op = readOnDisk(world.profile, (disk) =>
-        disk
-          .prepare('SELECT op FROM revision WHERE canvas_id = ? AND rev = ?')
-          .get(CANVAS, change.rev),
-      )?.op;
-      // Ordinary edits change a few entities, including renumbered places. Inserting a whole
-      // template or laying out the canvas can legitimately change most of it in one commit.
-      if (op !== 'canvas.insertTemplate' && op !== 'canvas.setArrange') {
-        expect(Object.keys(change.set).length + (change.remove?.length ?? 0)).toBeLessThan(25);
-      }
-      for (const entity of Object.values(change.set)) {
+      // Arrange can move most of the canvas after any structural edit. Check the actual diff,
+      // not its size: unchanged entities must not be sent, and removed ones must have existed.
+      for (const [key, entity] of Object.entries(change.set)) {
+        expect(entity, `${key} sent unchanged at revision ${String(change.rev)}`).not.toEqual(
+          before[key],
+        );
         expect(entity.rev).toBeLessThanOrEqual(change.rev);
       }
+      for (const key of change.remove ?? []) {
+        expect(Object.hasOwn(before, key), `${key} removed twice`).toBe(true);
+        Reflect.deleteProperty(before, key);
+      }
+      Object.assign(before, change.set);
     }
     // One sequence for the canvas's topics, shared by `canvas:<c>` and `needs:<c>`.
     const seqs = sent.map(({ seq }) => seq);

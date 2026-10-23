@@ -8,6 +8,8 @@ import { OPS } from '../../../shared/api/registry';
 import { SURFACE } from '../../../shared/api/surface';
 import type { CanvasDocument } from '../../../shared/model/canvas';
 import { toFile } from '../../../shared/model/file';
+import { arrange } from '../../../shared/model/layout';
+import * as structure from '../../../shared/model/structure';
 import { itemKey, linkKey, nodeKey } from '../../../shared/model/rows';
 import { CATALOG, DEFAULT_ADAPTER } from '../../sessions/adapters';
 import { FakeConnector } from '../../sessions/fake';
@@ -131,6 +133,103 @@ function initialItem(id: string): string {
 }
 
 describe('canvas structure commits through core.call', () => {
+  it('keeps empty revs for a structural no-op on an arranged parent group', async () => {
+    const group = created(await edit('canvas.group', { nodes: ['a', 'b'], kind: 'frame' }));
+    await edit('canvas.setArrange', { on: true });
+    await edit('canvas.addParent', { frame: group });
+    const before = doc();
+    const written = rows();
+    expect(await edit('canvas.delete', { nodes: [], links: [] })).toEqual({
+      cleared: [],
+      revs: {},
+    });
+    expect(doc()).toBe(before);
+    expect(rows()).toEqual(written);
+  });
+  it.each([
+    ['canvas.addAgent', { at: { x: 1500, y: 800 }, adapter: 'codex' }],
+    ['canvas.spawnAgent', { from: 'a', relation: 'linked' }],
+    ['canvas.delete', { nodes: ['a'] }],
+    ['canvas.link', { a: 'a', b: 'c' }],
+    ['canvas.unlink', { a: 'b', b: 'c' }],
+    ['canvas.group', { nodes: ['a', 'b'], kind: 'frame' }],
+    ['canvas.ungroup', {}],
+    ['canvas.addParent', {}],
+  ])(
+    '%s commits the arranged positions in its one revision while Arrange is on',
+    async (name, args) => {
+      let group: string | undefined;
+      if (name === 'canvas.ungroup' || name === 'canvas.addParent')
+        group = created(await edit('canvas.group', { nodes: ['a', 'b'], kind: 'frame' }));
+      await edit('canvas.setArrange', { on: true });
+      const previous = doc();
+      const before = rows().length;
+      const result = await edit(name, {
+        ...args,
+        ...(group === undefined
+          ? {}
+          : name === 'canvas.ungroup'
+            ? { nodes: [group] }
+            : { frame: group }),
+      });
+      const after = doc();
+      // Compare one layout of the pure edit's result, including group fitting, not a second
+      // layout of an already laid-out result (rounding can move a parent group's origin again).
+      const context = {
+        defaultAdapter: DEFAULT_ADAPTER,
+        newId: () => (typeof result.id === 'string' ? result.id : 'new-item'),
+      };
+      let next: CanvasDocument;
+      switch (name) {
+        case 'canvas.addAgent':
+          next = structure.addAgent(
+            previous,
+            { at: { x: 1500, y: 800 }, adapter: 'codex' },
+            context,
+          ).next;
+          break;
+        case 'canvas.spawnAgent':
+          next = structure.spawnAgent(previous, { from: 'a', relation: 'linked' }, context).next;
+          break;
+        case 'canvas.delete':
+          next = structure.remove(previous, { nodes: ['a'] }).next;
+          break;
+        case 'canvas.link':
+          next = structure.link(previous, { source: 'a', target: 'c' }).next;
+          break;
+        case 'canvas.unlink':
+          next = structure.unlink(previous, { source: 'b', target: 'c' }).next;
+          break;
+        case 'canvas.group':
+          next = structure.group(previous, { nodes: ['a', 'b'], kind: 'frame' }, context).next;
+          break;
+        case 'canvas.ungroup':
+          if (group === undefined) throw new Error('No group to ungroup');
+          next = structure.ungroup(previous, { nodes: [group] }).next;
+          break;
+        case 'canvas.addParent':
+          if (group === undefined) throw new Error('No group to head');
+          next = structure.addParent(previous, { id: group }, context).next;
+          break;
+        default:
+          throw new Error(`No structural build for ${name}`);
+      }
+      const positions = (one: CanvasDocument) =>
+        one.nodes.map(({ id, position, parentId }) => ({ id, position, parentId }));
+      expect(positions(after)).toEqual(positions(arrange(next)));
+      const change = rows().slice(before);
+      expect(change.length).toBeGreaterThan(0);
+      expect(new Set(change.map(({ rev }) => rev)).size).toBe(1);
+      expect(result.revs).toEqual({ [KEY]: change[0]?.rev });
+      const read = await core.call('canvas.get', { canvas: CANVAS }, CALLERS.you);
+      expect(read.ok).toBe(true);
+      if (!read.ok) throw new Error(read.error.sentence);
+      expect(
+        read.value.nodes.map(({ id, position, parentId }) => ({ id, position, parentId })),
+      ).toEqual(positions(after));
+    },
+  );
+
   it('creates an agent on the user’s chosen connection in one revision', async () => {
     const result = await edit('canvas.addAgent', {
       at: { x: 1500, y: 0 },
