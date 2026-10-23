@@ -179,6 +179,32 @@ describe('WorkspaceStore', () => {
     expect(workspaces.worktreesOf(OTHER).map(({ id }) => id)).toEqual([W3]);
   });
 
+  it('keeps a lone agent’s workspace as its group’s once it heads one, and back, while it is in use', async () => {
+    await withWorktrees(W1, W2);
+    // The agent gained its first member: the same checkout is the group's.
+    expect(await workspaces.write((w) => w.setOwner(W1, `group/${W1}`))).toMatchObject({
+      id: W1,
+      owner: `group/${W1}`,
+    });
+    expect(workspaces.activeWorktree(CANVAS, REPOSITORY, `group/${W1}`)?.id).toBe(W1);
+    expect(workspaces.activeWorktree(CANVAS, REPOSITORY, `agent/${W1}`)).toBeUndefined();
+    expect(await workspaces.write((w) => w.setOwner(W1, `agent/${W1}`))).toMatchObject({
+      owner: `agent/${W1}`,
+    });
+    // Never two in use for one owner.
+    await expect(workspaces.write((w) => w.setOwner(W2, `agent/${W1}`))).rejects.toThrow(
+      /UNIQUE constraint failed/,
+    );
+    // One kept is no one's any more.
+    await workspaces.write((w) => w.retain(W2));
+    await expect(workspaces.write((w) => w.setOwner(W2, 'agent/b'))).rejects.toMatchObject({
+      code: 'refused',
+    });
+    await expect(
+      workspaces.write((w) => w.setOwner(W1, 'team' as 'agent/team')),
+    ).rejects.toMatchObject({ code: 'invalid' });
+  });
+
   it('moves a workspace through its states only from where it is, refusing a stale or impossible move', async () => {
     await withWorktrees(W1);
     const states = async (...moves: Parameters<WorkspaceStore['transition']>[1][]) => {

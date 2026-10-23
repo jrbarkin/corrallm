@@ -513,7 +513,7 @@ export class WorkspaceStore {
       'UPDATE agent_worktree SET generation = ? WHERE canvas_id = ? AND agent_id = ?',
     );
     for (const binding of this.bindingsTo(kept.canvas, id)) {
-      // A change waiting stays past it, or is installed at its own generation.
+      // A change waiting moves past it too: it is no longer the plan as it was reviewed.
       const next = this.#next(binding.generation);
       if (binding.desired !== null && next >= binding.desired.generation) {
         this.#store
