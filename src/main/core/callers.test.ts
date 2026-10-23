@@ -299,3 +299,67 @@ describe.each(REGISTRIES)('T3b on %s', (_label, fixtures, world, start) => {
     });
   });
 });
+
+describe('proposal reach', () => {
+  it('hides a multi-agent proposal from a worker reaching only its first agent', async () => {
+    const world = await startWorld();
+    try {
+      const core = world.core;
+      expect(
+        await core.call(
+          'canvas.unlink',
+          { canvas: CANVAS, a: 'worker', b: 'condemned-b' },
+          CALLERS.you,
+        ),
+      ).toMatchObject({ ok: true });
+      expect(
+        await core.call(
+          'queue.add',
+          { canvas: CANVAS, agent: 'condemned-b', entry: { message: 'Private work' } },
+          CALLERS.you,
+        ),
+      ).toMatchObject({ ok: true });
+      const proposed = await core.call(
+        'canvas.delete',
+        { canvas: CANVAS, nodes: ['condemned-a', 'condemned-b'] },
+        CALLERS['outside-write'],
+      );
+      expect(proposed).toMatchObject({
+        ok: true,
+        value: { proposed: expect.any(String) as string },
+      });
+      const yours = await core.call('needs', { canvas: CANVAS }, CALLERS.you);
+      expect(yours.ok && JSON.stringify(yours.value)).toContain('Condemned-b');
+      const result = await core.call('needs', { canvas: CANVAS }, CALLERS.worker);
+      expect(result.ok, JSON.stringify(result)).toBe(true);
+      if (!result.ok) throw new Error(result.error.sentence);
+      expect(JSON.stringify(result.value.items)).not.toContain('Condemned-b');
+      expect(JSON.stringify(result.value.items)).not.toContain('Private work');
+      if (!proposed.ok || !('proposed' in proposed.value)) throw new Error('Not proposed');
+      // A known id must not reveal the hidden title through reply's refusal either.
+      expect(
+        await core.call(
+          'reply',
+          { canvas: CANVAS, to: proposed.value.proposed, answer: { choice: 'allow' } },
+          CALLERS.worker,
+        ),
+      ).toMatchObject({ ok: false, error: { code: 'not-found' } });
+      // Reaching all named agents still reveals the proposal, without choices.
+      expect(
+        await core.call(
+          'canvas.link',
+          { canvas: CANVAS, a: 'worker', b: 'condemned-b' },
+          CALLERS.you,
+        ),
+      ).toMatchObject({ ok: true });
+      const reachable = await core.call('needs', { canvas: CANVAS }, CALLERS.worker);
+      expect(reachable.ok && JSON.stringify(reachable.value)).toContain('Condemned-b');
+      if (!reachable.ok) throw new Error(reachable.error.sentence);
+      expect(reachable.value.items).toContainEqual(
+        expect.objectContaining({ id: proposed.value.proposed, choices: [] }),
+      );
+    } finally {
+      await world.close();
+    }
+  });
+});

@@ -1,13 +1,17 @@
 import { randomUUID } from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
 
 import type { NeedId } from '../../../shared/api/ids';
+import { MAX_OPEN_PROPOSALS } from '../../../shared/api/limits';
 import { SURFACE } from '../../../shared/api/surface';
 import type { CanvasId } from '../../../shared/canvas';
 import type { CanvasNode } from '../../../shared/model/canvas';
+import { agentOf } from '../../../shared/model/messages';
 import type { Message, PartyId } from '../../../shared/model/messages';
 import type { NeedsItem } from '../../../shared/model/needs';
 import { andList } from '../../../shared/model/words';
 import type { MessageStore, Staged } from '../delivery/messages';
+import { OpFailure } from '../call';
 import { nameOf, partyText } from '../parties';
 import type { Database } from '../store/store';
 import type { ChangeSet } from './change';
@@ -67,6 +71,8 @@ export interface Lost {
   what: string;
   title: string;
   detail?: string;
+  /** Every agent its words name as being deleted; all must be in a token reader's reach. */
+  agents?: readonly string[];
   /** The first agent it would delete. */
   agent?: string;
 }
@@ -134,9 +140,22 @@ export class Proposals {
     }
   }
 
-  /** The Needs items of the proposals waiting on a canvas, for you, oldest first. */
-  items(canvas: CanvasId): NeedsItem[] {
-    return this.open(canvas).map(itemOf);
+  /**
+   * The waiting proposals, oldest first. A token's reach must cover every agent their words name,
+   * never only the first removed agent; command proposals (on no agent) stay yours alone.
+   */
+  items(canvas: CanvasId, reach?: readonly string[]): NeedsItem[] {
+    return this.open(canvas)
+      .filter((proposal) => {
+        if (reach === undefined) return true;
+        const author = agentOf(proposal.by);
+        return (
+          proposal.lost.agents !== undefined &&
+          proposal.lost.agents.every((agent) => reach.includes(agent)) &&
+          (author === undefined || reach.includes(author))
+        );
+      })
+      .map(itemOf);
   }
 
   /**
@@ -161,7 +180,6 @@ export class Proposals {
     const { op, args, by } = raised;
     const open = this.#read(canvas);
     if (open === undefined) throw new Error('The canvas’s proposals can’t be read.');
-    const uuid = this.#newId();
     let touched: Readonly<Record<string, number>>;
     let lost: Lost;
     let before: Readonly<Record<string, number>> | undefined;
@@ -174,18 +192,43 @@ export class Proposals {
     } else {
       ({ touched, lost } = raised);
     }
-    const proposal: Proposal = {
-      id: `proposal/${uuid}` as NeedId,
-      canvas,
-      op,
-      args,
-      by,
-      touched,
-      ...(before === undefined ? {} : { before }),
-      lost,
-      at: this.#now(),
-    };
-    await this.#deps.store.write(() => {
+    // Check inside the write lane too: two raises may have awaited conversations together.
+    const { proposal, made } = await this.#deps.store.write(() => {
+      const rows = this.#deps.store
+        .prepare(
+          `SELECT id, op, args, by_party, touched, lost, raised_at FROM proposal
+         WHERE canvas_id = ? AND by_party = ? AND outcome IS NULL`,
+        )
+        .all(canvas, by);
+      for (const row of rows) {
+        const pending = proposalOf(row, canvas);
+        if (
+          pending?.op === op &&
+          isDeepStrictEqual(pending.args, args) &&
+          isDeepStrictEqual(pending.touched, touched) &&
+          isDeepStrictEqual(pending.before, before)
+        ) {
+          return { proposal: pending, made: false };
+        }
+      }
+      if (rows.length >= MAX_OPEN_PROPOSALS) {
+        throw new OpFailure(
+          'refused',
+          `A party may have at most ${String(MAX_OPEN_PROPOSALS)} open proposals on a canvas: settle one before proposing another.`,
+        );
+      }
+      const uuid = this.#newId();
+      const proposal: Proposal = {
+        id: `proposal/${uuid}` as NeedId,
+        canvas,
+        op,
+        args,
+        by,
+        touched,
+        ...(before === undefined ? {} : { before }),
+        lost,
+        at: this.#now(),
+      };
       this.#deps.store
         .prepare(
           `INSERT INTO proposal (id, canvas_id, op, args, by_party, touched, lost, raised_at)
@@ -201,9 +244,10 @@ export class Proposals {
           JSON.stringify(lost),
           proposal.at,
         );
+      return { proposal, made: true };
     });
     open.set(proposal.id, proposal);
-    this.#deps.changed?.(canvas, by);
+    if (made) this.#deps.changed?.(canvas, by);
     return proposal.id;
   }
 
@@ -373,6 +417,7 @@ function wordsOf(
   return {
     what,
     title,
+    agents: removed.map((node) => node.id),
     ...(inner === undefined
       ? {}
       : {
@@ -416,7 +461,9 @@ function proposalOf(row: Record<string, unknown>, canvas: CanvasId): Proposal | 
       (isDocOp(op) ? !revisions(before) : before !== undefined) ||
       !isRecord(lost) ||
       typeof lost.what !== 'string' ||
-      typeof lost.title !== 'string'
+      typeof lost.title !== 'string' ||
+      (lost.agents !== undefined &&
+        (!Array.isArray(lost.agents) || !lost.agents.every((agent) => typeof agent === 'string')))
     ) {
       return undefined;
     }

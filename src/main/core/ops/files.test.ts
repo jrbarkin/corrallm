@@ -5,7 +5,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { OpResult } from '../../../shared/api/errors';
-import { MAX_MESSAGE_BYTES } from '../../../shared/api/limits';
+import { MAX_CREATED_CANVASES, MAX_MESSAGE_BYTES } from '../../../shared/api/limits';
 import type { OpName } from '../../../shared/api/surface';
 import type { CanvasId } from '../../../shared/canvas';
 import type { CanvasDocument } from '../../../shared/model/canvas';
@@ -179,6 +179,46 @@ const queueOf = (document: CanvasDocument, id: string): QueueItem[] => {
 };
 
 describe('canvas.create', () => {
+  it('caps open canvases by creating party across renewal and restart, freeing a closed slot', async () => {
+    const made: CanvasId[] = [];
+    for (let i = 0; i < MAX_CREATED_CANVASES; i++) {
+      const { canvas } = await applied('canvas.create', {}, TOKEN);
+      made.push(canvas as CanvasId);
+    }
+    await core.close();
+    core = await start();
+    const renewed: OutsideCaller = { ...TOKEN, token: 'renewed' };
+    const before = Object.keys(await listed());
+    expect(await call('canvas.create', {}, renewed)).toMatchObject({
+      ok: false,
+      error: { code: 'refused' },
+    });
+    expect(Object.keys(await listed())).toEqual(before);
+    await applied('canvas.create', {}, { ...TOKEN, name: 'other-party' });
+    await applied('canvas.create', {}, YOU);
+    await applied(
+      'canvas.close',
+      { canvas: made[0] },
+      { ...renewed, canvases: [...renewed.canvases, ...made] },
+    );
+    // Two concurrent creates cannot both claim the one available slot.
+    const results = await Promise.all([
+      call('canvas.create', {}, renewed),
+      call('canvas.create', {}, renewed),
+    ]);
+    expect(results.filter((result) => result.ok)).toHaveLength(1);
+    expect(results.filter((result) => !result.ok)).toMatchObject([
+      { ok: false, error: { code: 'refused' } },
+    ]);
+    // Replacing an owned open canvas does not consume another open slot.
+    await applied(
+      'canvas.create',
+      { replace: { canvas: made[1] } },
+      { ...renewed, canvases: [...renewed.canvases, ...made] },
+    );
+    expect((await listed())[String(made[1])]).toMatchObject({ open: false });
+  });
+
   it('makes an empty canvas, open, shown in your window, kept once it holds something', async () => {
     const { canvas } = (await applied('canvas.create', {})) as { canvas: CanvasId };
     expect(await listed()).toMatchObject({

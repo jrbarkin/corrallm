@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 
 import { AgentId, NodeId } from '../../../shared/api/ids';
 import { MAX_OP_NODES } from '../../../shared/api/limits';
+import { agentOf } from '../../../shared/model/messages';
 import { insert } from '../../../shared/model/insert';
 import { arrange } from '../../../shared/model/layout';
 import type { CanvasId } from '../../../shared/canvas';
@@ -43,12 +44,12 @@ export function canvasToolsOps({
         // The one fill, canvas.create's too: the text a party other than you filled in is its.
         const { name, document: part } = filledTemplate(
           { template, values, agents, connections },
-          ctx.by,
+          ctx.proposedBy ?? ctx.by,
           context,
         );
         if (part.nodes.length + 1 > MAX_OP_NODES)
           throw new OpFailure('invalid', 'That template has too many nodes.');
-        const into = parent ?? (ctx.caller.kind === 'agent' ? ctx.caller.agent : undefined);
+        const into = parent ?? agentOf(ctx.proposedBy ?? ctx.by);
         if (into !== undefined && !doc.nodes.some((node) => node.id === into))
           throw new OpFailure('not-found', `There is no node ${into}.`);
         const built = insert(

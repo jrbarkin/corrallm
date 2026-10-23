@@ -46,6 +46,12 @@ Allow (`reply`) runs the op again as you through ctx.call, recording `revision.p
 
 Refuse settles it.
 
+A token sees a proposal's words only when it reaches every agent those words name (all removed agents and an agent proposer); otherwise `needs` omits the whole item and its NeedId resolves as not-found, so `reply` cannot quote the hidden title in a refusal. The user still sees it in full. `Lost.agents` keeps the full list, including agents beyond the five named in the title. Allow carries the original `proposedBy` into its build context: a template's implicit parent and filled text's authorship remain the proposer's, including inside a batch, while the revision itself is the user's and records who proposed it. This uses the party already kept with the proposal, without a caller-supplied authorship override.
+
+One party may keep at most MAX_OPEN_PROPOSALS (32) open proposals per canvas. Identical pending calls with the same arguments, touched revisions and canvas baseline reuse their proposal id, even without a request id and after token renewal or restart; changed baselines or settled proposals are never reused. The lookup and limit run inside the store's write lane, so concurrent raises cannot pass the cap. Settling one frees its slot.
+
+A token's party may have at most MAX_CREATED_CANVASES (16) open canvases it created. `canvas.create` checks the durable creator and open-canvas records in its app scope, across tokens and restarts, refusing before it makes anything. Closing one frees a slot; replacing one of its own open canvases keeps the same count. Other parties and the user's canvases have separate counts; the user is not capped.
+
 A proposal of a close, a replace or a save (R4's argument half) has no snapshot: its document's and file's fingerprints (`document:<c>`, `file:<c>`) guard it, and its replay drains as the op does (`Scopes.draining`: a replace of the canvas the reply is on drains it around the reply, never waiting for the reply).
 
 The proposer's record is a `settled` message from corrallm, which its `wait` returns; proposals survive restarts, in `needs` and `needs:<c>` (in the app, the core's items before B11) and serve's log.

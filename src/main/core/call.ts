@@ -89,6 +89,8 @@ export interface OpContext {
   readonly party: Party;
   /** The party the caller is: what each change it commits is stamped with. */
   readonly by: PartyId;
+  /** On Allow, the original proposer: defaults and filled text retain their original meaning. */
+  readonly proposedBy?: PartyId;
   /** Aborts when a preempting op supersedes it, or its caller gives up: then it unwinds. */
   readonly signal: AbortSignal;
   /** Marks a direct document write irreversible, checking cancellation first, as commit does. */
@@ -401,6 +403,7 @@ export function createDispatcher(registry: Registry, options: DispatchOptions = 
         return partyOf(caller, isLead);
       },
       by,
+      ...(options.proposedBy === undefined ? {} : { proposedBy: options.proposedBy }),
       signal: turn.signal,
       noReturn: () => {
         turn.noReturn();
