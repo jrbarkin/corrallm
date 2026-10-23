@@ -1482,7 +1482,9 @@ test('arranges the graph automatically while the toggle is on', async () => {
   // A new node joins the arrangement, clear of the others.
   const d = await addAgentAt('Agent 4', 150, 560);
   const document = await page.evaluate(async () => {
-    const result = await window.api.canvasGet({});
+    const shown = await window.api.windowGet({});
+    if (!shown.ok) throw new Error(shown.error.sentence);
+    const result = await window.api.canvasGet({ canvas: shown.value.canvas });
     if (!result.ok) throw new Error(result.error.sentence);
     const { canvas, arrange, nodes, links } = result.value;
     return { id: canvas, arrange, nodes, links };
