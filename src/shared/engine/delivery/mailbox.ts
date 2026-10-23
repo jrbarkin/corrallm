@@ -114,6 +114,7 @@ export class SessionStore {
    */
   readonly #runMessages = new Set<string>();
   readonly #tasks = new Map<string, TaskMessage>();
+  readonly #retryOf = new Map<string, string>();
   readonly #displayTexts = new Map<string, string>();
   /** Who sent each message another party sent, by its id, until its turn ends. */
   readonly #senders = new Map<string, MessageSender>();
@@ -306,10 +307,11 @@ export class SessionStore {
     onRefused?: (refusal: Refusal) => void,
     origin: 'user' | 'queue' | 'run' = 'user',
     displayText?: string,
-    as: { id?: string; from?: MessageSender; task?: TaskMessage } = {},
+    as: { id?: string; from?: MessageSender; task?: TaskMessage; retryOf?: string } = {},
   ): () => void {
     const { id = crypto.randomUUID(), from } = as;
     if (as.task) this.#tasks.set(id, as.task);
+    if (as.retryOf) this.#retryOf.set(id, as.retryOf);
     this.#types.set(agentId, agent);
     if (origin === 'queue') this.#queueMessages.add(id);
     else if (origin === 'run') this.#runMessages.add(id);
@@ -550,6 +552,7 @@ export class SessionStore {
     this.#queueMessages.clear();
     this.#runMessages.clear();
     this.#tasks.clear();
+    this.#retryOf.clear();
     this.#setAside.clear();
     this.#displayTexts.clear();
     this.#senders.clear();
@@ -624,6 +627,7 @@ export class SessionStore {
     this.#displayTexts.delete(id);
     this.#senders.delete(id);
     this.#tasks.delete(id);
+    this.#retryOf.delete(id);
     return onDone;
   }
 
@@ -790,6 +794,7 @@ export class SessionStore {
             id: message.id,
             text: this.#displayTexts.get(message.id) ?? message.text,
             status,
+            ...(this.#retryOf.has(message.id) ? { retryOf: this.#retryOf.get(message.id)! } : {}),
             ...(message.images?.length ? { images: message.images } : {}),
             ...(after === undefined ? {} : { after }),
           };

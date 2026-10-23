@@ -278,10 +278,16 @@ export class Engines {
     const inputs = [...(this.#inputs.get(key)?.values() ?? [])].filter((one) =>
       ids.includes(one.id),
     );
-    this.#resends.set(key, { ids, inputs });
+    const hosted = this.#running.has(canvas);
+    if (hosted) this.#resends.set(key, { ids, inputs });
     const tasks = inputs.flatMap((input) => (input.task === undefined ? [] : [input.task]));
-    if (tasks.length) this.#taskResends.set(key, { canvas, agent, connection });
-    const event = { ...this.#retryEvent(connection), tasks };
+    // A window still owns its run and manual submissions until B11. Hand its manual
+    // decision back to that owner, just like a task retry; never open a second engine.
+    const messages = hosted
+      ? []
+      : inputs.filter((input) => input.origin === undefined && input.from === undefined);
+    if (tasks.length || messages.length) this.#taskResends.set(key, { canvas, agent, connection });
+    const event = { ...this.#retryEvent(connection), tasks, messages };
     await this.emit(canvas, agent, connection, event);
     this.#deps.retryTask?.(canvas, agent, connection, event);
   }
@@ -452,8 +458,7 @@ export class Engines {
       return;
     const stopped = () => this.#closed;
     if (stopped()) return;
-    await this.open(canvas);
-    const open = this.#canvases.get(canvas);
+    const open = await this.#running.get(canvas);
     if (!open || stopped()) return;
     const store = open.messages;
     const originals = store
@@ -562,7 +567,8 @@ export class Engines {
 
   /**
    * Every session send carries untold withdrawals from its message store. The app's run stays
-   * in the renderer until B11: reading its notes never composes or journals another run.
+   * in the renderer until B11: reading its notes or resending its manual submissions never
+   * composes or journals another run. Its retry decision goes back to the owning engine.
    */
   async sending(
     canvas: CanvasId,

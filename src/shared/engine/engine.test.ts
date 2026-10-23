@@ -50,6 +50,22 @@ function engineWith(connection: ConnectionId, message: string) {
 }
 
 describe('Engine', () => {
+  it('resends a manual submission typed directly in its native terminal', async () => {
+    const { backend, engine, emit } = engineWith('claude-code.terminal', 'Work');
+    await engine.sessions.ready('a', 'claude-code');
+    emit('a', 'claude-code.terminal',
+      { type: 'started', model: null, mode: 'manual', models: [] },
+      { type: 'user', id: 'native-prompt', text: 'Typed in the terminal' },
+      { type: 'status', status: 'working' },
+      { type: 'retry-task', messages: [{ id: 'native-prompt', text: 'Typed in the terminal' }] },
+      { type: 'end', messages: ['native-prompt'], seconds: 1, result: { status: 'cancelled', reason: 'interrupted' } },
+    );
+    await settle();
+    expect(backend.send).toHaveBeenCalledOnce();
+    expect(engine.sessions.of('a').submissions?.[1]).toMatchObject({ retryOf: 'native-prompt' });
+    engine.reset();
+  });
+
   it('resends the window-owned manual submission once, after its cancelled end, retaining images and its link', async () => {
     const { backend, engine, emit, sent } = engineWith('claude-code.sdk', 'Work');
     const images = [{ mediaType: 'image/png' as const, data: 'AQ==' }];

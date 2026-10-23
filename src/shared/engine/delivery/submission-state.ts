@@ -11,7 +11,7 @@ const MAX_RECENT_RECORDS = 100;
 /** The saved history budget, below the file reader's limit. */
 const MAX_SAVED_BYTES = 4 * 1024 * 1024;
 const STATUSES = ['queued', 'running', 'completed', 'failed', 'cancelled'] as const;
-const RECORD_KEYS = ['id', 'text', 'images', 'status', 'after', 'result', 'task', 'unresolved'];
+const RECORD_KEYS = ['id', 'text', 'images', 'status', 'after', 'result', 'task', 'unresolved', 'retryOf'];
 
 /** Keeps the newest settled records and every unfinished submission. */
 export function pruneSubmissions(
@@ -105,6 +105,7 @@ export function decodeSubmissions(serialized: string): Map<string, SubmittedMess
         ...(value.images === undefined ? {} : { images: images(value.images) }),
         ...(value.after === undefined ? {} : { after: id(value.after) }),
         ...(task === undefined ? {} : { task: { agent: id(task.agent), item: id(task.item) } }),
+        ...(value.retryOf === undefined ? {} : { retryOf: id(value.retryOf) }),
         ...(unresolved
           ? {
               unresolved: true,

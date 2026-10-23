@@ -1,6 +1,6 @@
 import type { ConnectionId } from '../adapter';
 import type { CanvasNode } from '../model/canvas';
-import type { TaskMessage } from '../session';
+import type { TaskMessage, UserMessage } from '../session';
 import type { UsageState } from '../usage';
 import type { EngineCatalog } from './catalog';
 import { SessionStore } from './delivery/mailbox';
@@ -56,6 +56,10 @@ export class Engine {
     string,
     { recipient: string; item: string; attempt: string; until: number; confirmed: boolean }
   >();
+  readonly #manualRetries = new Map<
+    string,
+    { messages: UserMessage[]; until: number; confirmed: boolean }
+  >();
   #cancelRetry: (() => void) | undefined;
   #checkingRetry = false;
   readonly #io: EngineIO;
@@ -75,16 +79,38 @@ export class Engine {
       {
         retry: (recipient, request) => {
           if (request.cancel) {
+            this.#manualRetries.delete(recipient);
             for (const [owner, requested] of this.#retries)
               if (requested.recipient === recipient) this.#retries.delete(owner);
             this.#checkRetries();
           } else if (request.update) {
+            const manual = this.#manualRetries.get(recipient);
+            if (manual) manual.until = request.until ?? 0;
             for (const requested of this.#retries.values())
               if (requested.recipient === recipient) requested.until = request.until ?? 0;
             this.#checkRetries();
-          } else this.#retryInterrupted(recipient, request.tasks ?? [], request.until ?? 0);
+          } else {
+            // Only the engine that owns these live submissions may retry them. Repeated
+            // decisions and another window's history never authorize another send.
+            const submissions = sessions.of(recipient).submissions ?? [];
+            const messages = (request.messages ?? []).filter((message) =>
+              submissions.some((one) => one.id === message.id && one.status === 'running'),
+            );
+            if (messages.length)
+              this.#manualRetries.set(recipient, {
+                messages,
+                until: request.until ?? 0,
+                confirmed: false,
+              });
+            this.#retryInterrupted(recipient, request.tasks ?? [], request.until ?? 0);
+          }
         },
         ending: (recipient, result) => {
+          const manual = this.#manualRetries.get(recipient);
+          if (manual) {
+            if (result.status === 'cancelled') manual.confirmed = true;
+            else this.#manualRetries.delete(recipient);
+          }
           for (const [owner, requested] of this.#retries) {
             if (requested.recipient !== recipient) continue;
             const last = this.run.snapshot().agents[owner]?.attempts?.[requested.item]?.at(-1);
@@ -165,7 +191,7 @@ export class Engine {
   }
 
   #checkRetries(): void {
-    if (this.#retries.size === 0) {
+    if (this.#retries.size === 0 && this.#manualRetries.size === 0) {
       this.#cancelRetry?.();
       this.#cancelRetry = undefined;
       return;
@@ -176,6 +202,37 @@ export class Engine {
       this.#checkingRetry = false;
       this.#cancelRetry?.();
       this.#cancelRetry = undefined;
+      for (const [recipient, requested] of this.#manualRetries) {
+        const session = this.sessions.of(recipient);
+        const connection = this.#connections.get(recipient);
+        const originals = requested.messages.map((message) =>
+          session.submissions?.find((one) => one.id === message.id),
+        );
+        if (
+          connection === undefined || session.running === undefined ||
+          originals.some((one) => one === undefined ||
+            (one.status !== 'running' && (!requested.confirmed || one.status !== 'cancelled')))
+        ) {
+          this.#manualRetries.delete(recipient);
+          continue;
+        }
+        if (!requested.confirmed || originals.some((one) => one?.status === 'running')) continue;
+        const rule = this.run.usageRule(recipient, this.#io.now());
+        if (
+          requested.until > this.#io.now() ||
+          session.status !== 'idle' || session.queued.length > 0 ||
+          (session.asking?.length ?? 0) > 0 ||
+          this.run.holding({ agent: recipient }).length > 0 || this.run.sending(recipient) ||
+          (rule !== undefined && rule.action !== 'warn' && rule.hold.resetsAt !== null) ||
+          (session.mode === null ? session.asks !== true : this.catalog.neverAsks(connection, session.mode))
+        ) continue;
+        this.#manualRetries.delete(recipient);
+        for (const message of requested.messages)
+          this.sessions.send(
+            recipient, this.catalog.adapterOf(connection), message.text,
+            undefined, message.images, undefined, 'user', undefined, { retryOf: message.id },
+          );
+      }
       for (const [owner, requested] of this.#retries) {
         const run = this.run.snapshot();
         const at = run.agents[owner];
@@ -218,7 +275,7 @@ export class Engine {
         this.#retries.delete(owner);
         this.run.decide(owner, requested.item, { choice: 'retry' });
       }
-      if (this.#retries.size)
+      if (this.#retries.size || this.#manualRetries.size)
         this.#cancelRetry = this.#io.later(() => {
           this.#cancelRetry = undefined;
           this.#checkRetries();
@@ -272,6 +329,7 @@ export class Engine {
   /** Forgets the run and every session, as for another canvas. */
   cancelResends(): void {
     this.#retries.clear();
+    this.#manualRetries.clear();
     this.#cancelRetry?.();
     this.#cancelRetry = undefined;
   }
