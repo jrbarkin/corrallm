@@ -11,7 +11,17 @@ const MAX_RECENT_RECORDS = 100;
 /** The saved history budget, below the file reader's limit. */
 const MAX_SAVED_BYTES = 4 * 1024 * 1024;
 const STATUSES = ['queued', 'running', 'completed', 'failed', 'cancelled'] as const;
-const RECORD_KEYS = ['id', 'text', 'images', 'status', 'after', 'result', 'task', 'unresolved', 'retryOf'];
+const RECORD_KEYS = [
+  'id',
+  'text',
+  'images',
+  'status',
+  'after',
+  'result',
+  'task',
+  'unresolved',
+  'retryOf',
+];
 
 /** Keeps the newest settled records and every unfinished submission. */
 export function pruneSubmissions(

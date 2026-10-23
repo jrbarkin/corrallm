@@ -485,10 +485,14 @@ it('hands the manual resend back to the window’s engine, including its images 
     }
   });
   const owner = new Engine({
-    catalog: TEST_ENGINE, backend: fake.backend, now: Date.now,
+    catalog: TEST_ENGINE,
+    backend: fake.backend,
+    now: Date.now,
     later: (run, ms) => {
       const timer = setTimeout(run, ms);
-      return () => { clearTimeout(timer); };
+      return () => {
+        clearTimeout(timer);
+      };
     },
     connect: () => undefined,
   });
@@ -497,11 +501,15 @@ it('hands the manual resend back to the window’s engine, including its images 
     owner.restore(checkpoint);
     const images = [{ mediaType: 'image/png' as const, data: 'AQ==' }];
     owner.sessions.send('a', 'codex', 'From its owner', undefined, images);
-    await vi.waitFor(() => { expect(sent).toHaveLength(1); });
+    await vi.waitFor(() => {
+      expect(sent).toHaveLength(1);
+    });
     const original = required(sent[0]);
     await stall();
     await cancelWindowTurn();
-    await vi.waitFor(() => { expect(sent).toHaveLength(2); });
+    await vi.waitFor(() => {
+      expect(sent).toHaveLength(2);
+    });
     expect(sent[1]).toMatchObject({ text: original.text, images });
     expect(owner.sessions.of('a').submissions).toMatchObject([
       { id: original.id, status: 'cancelled' },
@@ -509,7 +517,7 @@ it('hands the manual resend back to the window’s engine, including its images 
     ]);
     expect(open).not.toHaveBeenCalled();
     expect(core.engines.opened()).toEqual([]);
-    const context = await core.channels.call(7, 'run:get', []) as RunRestore;
+    const context = (await core.channels.call(7, 'run:get', [])) as RunRestore;
     const saved = { version: 2 as const, ...owner.checkpoint(), updatedAt: Date.now() };
     await core.channels.call(7, 'run:save', [context.token, saved]);
     await core.flush();

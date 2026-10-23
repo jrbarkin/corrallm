@@ -105,12 +105,17 @@ export class Engine {
             this.#retryInterrupted(recipient, request.tasks ?? [], request.until ?? 0);
           }
         },
-        ending: (recipient, result) => {
+        ending: (recipient, result, messages, sent) => {
           const manual = this.#manualRetries.get(recipient);
-          if (manual) {
-            if (result.status === 'cancelled') manual.confirmed = true;
+          if (manual?.messages.some((one) => messages.includes(one.id))) {
+            if (
+              result.status === 'cancelled' &&
+              manual.messages.every((one) => messages.includes(one.id))
+            )
+              manual.confirmed = true;
             else this.#manualRetries.delete(recipient);
           }
+          if (!sent) return;
           for (const [owner, requested] of this.#retries) {
             if (requested.recipient !== recipient) continue;
             const last = this.run.snapshot().agents[owner]?.attempts?.[requested.item]?.at(-1);
@@ -209,9 +214,13 @@ export class Engine {
           session.submissions?.find((one) => one.id === message.id),
         );
         if (
-          connection === undefined || session.running === undefined ||
-          originals.some((one) => one === undefined ||
-            (one.status !== 'running' && (!requested.confirmed || one.status !== 'cancelled')))
+          connection === undefined ||
+          session.running === undefined ||
+          originals.some(
+            (one) =>
+              one === undefined ||
+              (one.status !== 'running' && (!requested.confirmed || one.status !== 'cancelled')),
+          )
         ) {
           this.#manualRetries.delete(recipient);
           continue;
@@ -220,17 +229,32 @@ export class Engine {
         const rule = this.run.usageRule(recipient, this.#io.now());
         if (
           requested.until > this.#io.now() ||
-          session.status !== 'idle' || session.queued.length > 0 ||
+          session.status !== 'idle' ||
+          session.queued.length > 0 ||
           (session.asking?.length ?? 0) > 0 ||
-          this.run.holding({ agent: recipient }).length > 0 || this.run.sending(recipient) ||
+          this.run.holding({ agent: recipient }).length > 0 ||
+          this.run.sending(recipient) ||
           (rule !== undefined && rule.action !== 'warn' && rule.hold.resetsAt !== null) ||
-          (session.mode === null ? session.asks !== true : this.catalog.neverAsks(connection, session.mode))
-        ) continue;
-        this.#manualRetries.delete(recipient);
-        for (const message of requested.messages)
+          (session.mode === null
+            ? session.asks !== true
+            : this.catalog.neverAsks(connection, session.mode))
+        )
+          continue;
+        // Re-check the holds for each native submission, rather than queuing fresh-user sends
+        // that could bypass a pause imposed while the first retry is running.
+        const message = requested.messages.shift();
+        if (!requested.messages.length) this.#manualRetries.delete(recipient);
+        if (message)
           this.sessions.send(
-            recipient, this.catalog.adapterOf(connection), message.text,
-            undefined, message.images, undefined, 'user', undefined, { retryOf: message.id },
+            recipient,
+            this.catalog.adapterOf(connection),
+            message.text,
+            undefined,
+            message.images,
+            undefined,
+            'user',
+            undefined,
+            { retryOf: message.id },
           );
       }
       for (const [owner, requested] of this.#retries) {
@@ -322,6 +346,7 @@ export class Engine {
 
   /** Restores a checkpoint, over the canvas's nodes it was last given: the run, held paused. */
   restore(saved: EngineCheckpoint): void {
+    this.cancelResends();
     this.sessions.restoreSubmissions(saved.messages);
     this.run.restore(saved.state);
   }

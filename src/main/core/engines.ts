@@ -158,7 +158,7 @@ export class Engines {
   readonly #watchers = new Set<Watcher>();
   readonly #events = new Map<string, Promise<SessionEvent>>();
   #closed = false;
-  readonly #taskResends = new Map<
+  readonly #ownerResends = new Map<
     string,
     { canvas: CanvasId; agent: string; connection: ConnectionId }
   >();
@@ -170,14 +170,14 @@ export class Engines {
   constructor(deps: EnginesDeps) {
     this.#deps = deps;
     this.#unwatchResends = deps.usage.subscribe(() => {
-      for (const { canvas, agent, connection } of this.#taskResends.values()) {
+      for (const { canvas, agent, connection } of this.#ownerResends.values()) {
         const event = this.#retryEvent(connection, { update: true });
         void this.emit(canvas, agent, connection, event)
           .then(() => {
             this.#deps.retryTask?.(canvas, agent, connection, event);
           })
           .catch((error: unknown) => {
-            console.error('Could not update a task retry hold:', error);
+            console.error('Could not update a retry hold:', error);
           });
       }
     });
@@ -264,7 +264,7 @@ export class Engines {
     this.#inputs.delete(key);
     this.#resends.delete(key);
     this.#reports.delete(key);
-    this.#taskResends.delete(key);
+    this.#ownerResends.delete(key);
   }
 
   /** Arm one explicit retry before the interrupt, never before its cancelled end arrives. */
@@ -286,7 +286,7 @@ export class Engines {
     const messages = hosted
       ? []
       : inputs.filter((input) => input.origin === undefined && input.from === undefined);
-    if (tasks.length || messages.length) this.#taskResends.set(key, { canvas, agent, connection });
+    if (tasks.length || messages.length) this.#ownerResends.set(key, { canvas, agent, connection });
     const event = { ...this.#retryEvent(connection), tasks, messages };
     await this.emit(canvas, agent, connection, event);
     this.#deps.retryTask?.(canvas, agent, connection, event);
@@ -295,7 +295,7 @@ export class Engines {
   async cancelResend(canvas: CanvasId, agent: string, connection: ConnectionId): Promise<void> {
     const key = `${canvas}\u0000${agent}`;
     this.#resends.delete(key);
-    this.#taskResends.delete(key);
+    this.#ownerResends.delete(key);
     const event = this.#retryEvent(connection, { cancel: true });
     await this.emit(canvas, agent, connection, event);
     this.#deps.retryTask?.(canvas, agent, connection, event);
@@ -424,10 +424,10 @@ export class Engines {
     if (event.type === 'end') {
       const request = this.#resends.get(key);
       this.#resends.delete(key);
-      if (event.result.status !== 'cancelled') this.#taskResends.delete(key);
+      if (event.result.status !== 'cancelled') this.#ownerResends.delete(key);
       for (const id of event.messages) this.#inputs.get(key)?.delete(id);
       if (request && event.result.status === 'cancelled') {
-        // Do not hold this agent's event lane while opening delivery or committing its new rows.
+        // Do not hold this agent's event lane while committing its new rows.
         setImmediate(() => {
           void this.#resend(canvas, agentId, request, event.messages).catch((error: unknown) => {
             console.error('Could not resend the interrupted turn:', error);
@@ -435,7 +435,7 @@ export class Engines {
         });
       }
     } else if (event.type === 'closed' || event.type === 'cleared') {
-      this.#taskResends.delete(key);
+      this.#ownerResends.delete(key);
       this.#resends.delete(key);
       this.#inputs.delete(key);
       this.#reports.delete(key);
@@ -578,7 +578,7 @@ export class Engines {
   ): Promise<void> {
     if (this.#closed) throw new Error('The canvas closed before its message could be sent.');
     const key = `${canvas}\u0000${agentId}`;
-    if (message.origin === 'queue') this.#taskResends.delete(key);
+    if (message.origin === 'queue') this.#ownerResends.delete(key);
     const inputs = this.#inputs.get(key) ?? new Map<string, UserMessage>();
     inputs.set(message.id, message);
     this.#inputs.set(key, inputs);
@@ -629,7 +629,7 @@ export class Engines {
     await Promise.all(this.#events.values());
     this.#closed = true;
     this.#unwatchResends();
-    this.#taskResends.clear();
+    this.#ownerResends.clear();
     const mail = await Promise.all(this.#mail.values());
     for (const { notes } of mail) notes.close();
     const running = await Promise.allSettled(this.#running.values());

@@ -40,7 +40,7 @@ import type { SessionAction } from '../transcript/reduce';
 
 export interface SubmissionObserver {
   retry?: (agent: string, request: Extract<SessionEvent, { type: 'retry-task' }>) => void;
-  ending?: (agent: string, result: TurnResult) => void;
+  ending?: (agent: string, result: TurnResult, messages: readonly string[], sent: boolean) => void;
   submitted?: (agentId: string, message: SubmittedMessage) => void;
   ended?: (agentId: string, id: string, reply: string, result: TurnResult) => void;
 }
@@ -732,8 +732,13 @@ export class SessionStore {
       }
       const driving = this.#drivers.get(agentId);
       if (driving?.driver instanceof ConnectedDriver && driving.connection === connection) {
-        if (event.type === 'end' && event.messages.includes(this.#turns.get(agentId) ?? ''))
-          this.#observer.ending?.(agentId, event.result);
+        if (event.type === 'end')
+          this.#observer.ending?.(
+            agentId,
+            event.result,
+            event.messages,
+            event.messages.includes(this.#turns.get(agentId) ?? ''),
+          );
         driving.driver.receive(event);
       }
     });
@@ -790,11 +795,12 @@ export class SessionStore {
           );
         } else {
           const after = this.#position(agentId);
+          const retryOf = this.#retryOf.get(message.id);
           created = {
             id: message.id,
             text: this.#displayTexts.get(message.id) ?? message.text,
             status,
-            ...(this.#retryOf.has(message.id) ? { retryOf: this.#retryOf.get(message.id)! } : {}),
+            ...(retryOf === undefined ? {} : { retryOf }),
             ...(message.images?.length ? { images: message.images } : {}),
             ...(after === undefined ? {} : { after }),
           };
