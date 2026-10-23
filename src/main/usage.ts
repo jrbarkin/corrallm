@@ -266,10 +266,10 @@ export class UsageReadings {
   }
 
   /**
-   * Writes what it keeps, after every write before it. A failed write is logged, as for readings
-   * and rules; a `durable` one (a hold's) rejects instead, for its caller to say.
+   * Forces every replacement to disk, after every write before it: a later reading must not
+   * weaken a durable hold. A hold's failure rejects for its caller to say; others are logged.
    */
-  #write(durable = false): Promise<void> {
+  #write(rejectOnFailure = false): Promise<void> {
     const { readings, rules } = this.state();
     const exhausted = [...this.#exhausted].filter(([, limit]) => limit.resetsAt > this.#now());
     const unknown = this.#unknown;
@@ -293,11 +293,11 @@ export class UsageReadings {
       },
     };
     const text = `${JSON.stringify(file, null, 2)}\n`;
-    const write = this.#writing.then(() => writeWhole(this.#file, text, { durable }));
+    const write = this.#writing.then(() => writeWhole(this.#file, text, { durable: true }));
     this.#writing = write.catch((error: unknown) => {
-      if (!durable) console.error('Could not remember usage readings:', error);
+      if (!rejectOnFailure) console.error('Could not remember usage readings:', error);
     });
-    return durable ? write : this.#writing;
+    return rejectOnFailure ? write : this.#writing;
   }
 }
 

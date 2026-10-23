@@ -32,6 +32,61 @@ vi.mock('node:fs/promises', async (original) => {
   };
 });
 
+it('durably replaces a hard-limit file when a later reading is saved', async () => {
+  const profile = await mkdtemp(path.join(tmpdir(), 'corrallm-usage-durable-'));
+  const now = Date.now();
+  const resetsAt = now + 60_000;
+  const usage = new UsageReadings({
+    file: path.join(profile, 'usage.json'),
+    backends: ['codex'],
+    now: () => now,
+  });
+  try {
+    await usage.exhaust('codex', resetsAt);
+    events.length = 0;
+    usage.take('codex', { fiveHour: { usedPercent: 100, resetsAt } });
+    await usage.flush();
+    expect(events).toEqual([
+      'file synced',
+      ...(process.platform === 'win32' ? [] : ['directory synced']),
+    ]);
+    const again = new UsageReadings({
+      file: path.join(profile, 'usage.json'),
+      backends: ['codex'],
+      now: () => now,
+    });
+    await again.load();
+    expect(again.exhausted('codex')).toBe(resetsAt);
+  } finally {
+    await usage.flush();
+    await rm(profile, { recursive: true, force: true });
+  }
+});
+
+it('forces a saved usage rule and its directory to disk', async () => {
+  const profile = await mkdtemp(path.join(tmpdir(), 'corrallm-usage-durable-'));
+  const usage = new UsageReadings({ file: path.join(profile, 'usage.json'), backends: ['codex'] });
+  events.length = 0;
+  try {
+    const rule = { window: 'weekly', percent: 80, action: 'ask' } as const;
+    usage.setRule('codex', rule);
+    await usage.flush();
+    expect(events).toEqual([
+      'file synced',
+      ...(process.platform === 'win32' ? [] : ['directory synced']),
+    ]);
+    const again = new UsageReadings({
+      file: path.join(profile, 'usage.json'),
+      backends: ['codex'],
+    });
+    await again.load();
+    expect(again.state().rules).toEqual({ codex: rule });
+  } finally {
+    await usage.flush();
+    await rm(profile, { recursive: true, force: true });
+  }
+});
+
 it('awaits the exhausted limit’s file and directory syncs before publishing it', async () => {
   const profile = await mkdtemp(path.join(tmpdir(), 'corrallm-usage-durable-'));
   const writing = Promise.withResolvers<undefined>();

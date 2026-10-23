@@ -90,9 +90,6 @@ const api: AppApi = {
           ...(request === undefined ? {} : { request }),
         }) as ReturnType<GuiBridge['terminalDrop']>);
   },
-  getUsage: () => invoke(API_CHANNELS.getUsage),
-  setUsageRule: (backend, rule) => invoke(API_CHANNELS.setUsageRule, backend, rule),
-  simulateUsage: (backend, windows) => invoke(API_CHANNELS.simulateUsage, backend, windows),
   onSessionEvent: (listener) => core.listen(API_EVENTS.onSessionEvent, listener),
   terminalOnEvent: (listener) => core.listen('terminal', listener),
 };

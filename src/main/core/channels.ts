@@ -5,7 +5,6 @@ import type { Catalog } from '../../shared/adapter';
 import type { CoreChannel, IpcArgs, IpcResult } from '../../shared/ipc';
 import { parseRunCheckpoint } from '../../shared/run';
 import type { RunJournal } from '../run-journal';
-import { parseBackend, parseRule, parseWindows } from '../../shared/usage';
 import type { Windows } from './windows';
 import type { HostServices, WindowId } from './host';
 import {
@@ -25,7 +24,6 @@ import {
   parseStopTaskArgs,
 } from '../sessions/args';
 import type { SessionManager } from '../sessions/manager';
-import type { UsageReadings } from '../usage';
 
 /** Turns the raw, untrusted arguments into the channel's contract tuple, or throws. */
 export type ArgsParser<C extends CoreChannel> = (args: unknown[]) => IpcArgs<C>;
@@ -39,7 +37,7 @@ export type ChannelHandler<C extends CoreChannel> = (
 ) => IpcResult<C> | Promise<IpcResult<C>>;
 
 /**
- * What the handlers act on: the catalog, which canvas each window shows, runs, sessions and usage.
+ * What the handlers act on: the catalog, which canvas each window shows, runs and sessions.
  * A handler looks up the window's canvas before calling its service.
  */
 export interface ChannelServices {
@@ -69,7 +67,6 @@ export interface ChannelServices {
     | 'previewRewind'
     | 'rewind'
   >;
-  usage: Pick<UsageReadings, 'state' | 'setRule' | 'simulate'>;
 }
 
 /** `ArgsParser` for channels that take no arguments. */
@@ -86,33 +83,12 @@ type HandlerTable = {
   [C in CoreChannel]: { parseArgs: ArgsParser<C>; handler: ChannelHandler<C> };
 };
 
-/** The usage backends the catalog lists: those whose usage corrallm reads. */
-const backendsOf = (catalog: Catalog) => catalog.usageBackends.map((backend) => backend.id);
-
-/** `ArgsParser` for usage:rule: a backend the catalog lists, and a rule or null. */
-export function parseUsageRuleArgs(args: unknown[], catalog: Catalog): IpcArgs<'usage:rule'> {
-  const [backend, rule] = args;
-  if (args.length !== 2) throw new TypeError('Expected a backend and a rule (or null)');
-  return [parseBackend(backend, backendsOf(catalog)), rule === null ? null : parseRule(rule)];
-}
-
-/** `ArgsParser` for usage:simulate: a backend, and its windows (checked as a reading's) or null. */
-export function parseSimulateArgs(args: unknown[], catalog: Catalog): IpcArgs<'usage:simulate'> {
-  const [backend, windows] = args;
-  if (args.length !== 2) throw new TypeError('Expected a backend and its windows (or null)');
-  return [
-    parseBackend(backend, backendsOf(catalog)),
-    windows === null ? null : parseWindows(windows, Date.now()),
-  ];
-}
-
 function createHandlers({
   catalog,
   windows,
   runs,
   shutdown,
   sessions,
-  usage,
 }: ChannelServices): HandlerTable {
   /** The canvas the sender's window shows: what every canvas's channel acts on. */
   const of = (window: WindowId) => windows.canvasOf(window);
@@ -267,21 +243,6 @@ function createHandlers({
       parseArgs: parseMcpChangeArgs,
       handler: async ({ window }, agentId, server, change) =>
         sessions.changeMcpServer(await of(window), agentId, server, change),
-    },
-    'usage:get': { parseArgs: noArgs, handler: () => usage.state() },
-    'usage:rule': {
-      parseArgs: (args) => parseUsageRuleArgs(args, catalog),
-      handler: (_caller, backend, rule) => {
-        usage.setRule(backend, rule);
-        return null;
-      },
-    },
-    'usage:simulate': {
-      parseArgs: (args) => parseSimulateArgs(args, catalog),
-      handler: (_caller, backend, windows) => {
-        usage.simulate(backend, windows);
-        return null;
-      },
     },
   };
 }
