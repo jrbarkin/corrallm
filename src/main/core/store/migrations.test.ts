@@ -572,9 +572,9 @@ function bind(agent: string, workspace: string, canvas = CANVAS): void {
 function addJob(id: string, workspace: string, kind: string, outcome: string | null = null): void {
   connection
     .prepare(
-      `INSERT INTO worktree_job (id, workspace_id, kind, phase, generation, payload, outcome,
+      `INSERT INTO worktree_job (id, workspace_id, kind, phase, generation, payload, intent_hash, outcome,
          created_at, updated_at)
-       VALUES (?, ?, ?, 'intent', 1, '{}', ?, 1, 1)`,
+       VALUES (?, ?, ?, 'intent', 1, '{}', 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', ?, 1, 1)`,
     )
     .run(id, workspace, kind, outcome);
 }

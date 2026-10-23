@@ -372,19 +372,19 @@ describe('WorkspaceStore', () => {
     // a plan no longer the one reviewed.
     await workspaces.write((w) => w.plan(CANVAS, 'b', 'group/team'));
     expect(workspaces.binding(CANVAS, 'b')?.desired).toEqual({
-      generation: 9001,
+      generation: 9002,
       owner: 'group/team',
     });
     const advanced = await workspaces.write((w) => w.advance(W1));
     expect(advanced.generation).toBe(2);
     expect(workspaces.bindingsTo(CANVAS, W1)).toEqual([
-      { canvas: CANVAS, agent: 'a', workspace: W1, generation: 9001, desired: null },
+      { canvas: CANVAS, agent: 'a', workspace: W1, generation: 9003, desired: null },
       {
         canvas: CANVAS,
         agent: 'b',
         workspace: W1,
-        generation: 9001,
-        desired: { generation: 9002, owner: 'group/team' },
+        generation: 9004,
+        desired: { generation: 9005, owner: 'group/team' },
       },
     ]);
     // No plan without a binding, nor a binding to what is kept, gone, or another canvas's.
@@ -813,15 +813,172 @@ describe('WorkspaceStore', () => {
     await store.write(() => {
       store
         .prepare(
-          `INSERT INTO worktree_job (id, workspace_id, kind, phase, generation, payload, created_at,
+          `INSERT INTO worktree_job (id, workspace_id, kind, phase, generation, payload, intent_hash, created_at,
              updated_at)
-           VALUES (?, ?, 'teleport', 'intent', 1, '{}', 1, 1)`,
+           VALUES (?, ?, 'teleport', 'intent', 1, '{}', 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', 1, 1)`,
         )
         .run(J1, W1);
     });
     expect(() => workspaces.job(J1)).toThrow(/worktree_job .*can’t be read/);
     expect(() => workspaces.openJobs()).toThrow(/worktree_job .*can’t be read/);
     expect(() => workspaces.jobsOf(W1)).toThrow(/worktree_job .*can’t be read/);
+  });
+
+  it('never reuses a cleared plan or deleted binding generation, even after a restart and a clock rollback', async () => {
+    await withWorktrees(W1, W2);
+    const first = await workspaces.write((w) => w.bind(CANVAS, 'a', W1));
+    const planned = await workspaces.write((w) => w.plan(CANVAS, 'a', 'group/team'));
+    await workspaces.write((w) => w.clearPlan(CANVAS, 'a'));
+    const replanned = await workspaces.write((w) => w.plan(CANVAS, 'a', 'group/other'));
+    expect.soft(replanned.desired?.generation).toBeGreaterThan(planned.desired?.generation ?? 0);
+    const highest = replanned.desired?.generation ?? first.generation;
+    await workspaces.write((w) => {
+      w.unbind(CANVAS, 'a');
+    });
+    const replaced = await workspaces.write((w) => w.bind(CANVAS, 'a', W2));
+    expect(replaced.generation).toBeGreaterThan(highest);
+    await workspaces.write((w) => {
+      w.unbind(CANVAS, 'a');
+    });
+    reader.close();
+    await store.close();
+    store = await openTestStore(profile);
+    reader = onDisk(profile);
+    now = 500;
+    workspaces = new WorkspaceStore({ store, now: () => now });
+    const again = await workspaces.write((w) => w.bind(CANVAS, 'a', W2));
+    expect(again.generation).toBeGreaterThan(replaced.generation);
+  });
+
+  it('rolls back generation allocation with a refused binding write', async () => {
+    await withWorktrees(W1);
+    const binding = await workspaces.write((w) => w.bind(CANVAS, 'a', W1));
+    const before = store.prepare('SELECT workspace_generation FROM meta WHERE id = 1').get();
+    const release = refuseWrites(profile, 'agent_worktree', 'The disk is full');
+    try {
+      await expect(workspaces.write((w) => w.plan(CANVAS, 'a', 'group/team'))).rejects.toThrow(
+        'The disk is full',
+      );
+    } finally {
+      release();
+    }
+    expect(workspaces.binding(CANVAS, 'a')).toEqual(binding);
+    expect(store.prepare('SELECT workspace_generation FROM meta WHERE id = 1').get()).toEqual(
+      before,
+    );
+    expect(
+      (await workspaces.write((w) => w.plan(CANVAS, 'a', 'group/team'))).desired?.generation,
+    ).toBe(binding.generation + 1);
+  });
+
+  it('accepts the picked branch’s full Git ref, without loosening generated branch names', async () => {
+    await withWorktrees();
+    for (const [id, baseRef] of [
+      [W1, 'refs/heads/feature/é+@-topic'],
+      [W2, 'refs/heads/topic/-part'],
+    ] as const) {
+      expect(
+        await workspaces.write((w) => w.createWorktree({ ...tree(id), baseRef })),
+      ).toMatchObject({ baseRef });
+    }
+    for (const baseRef of [
+      '--orphan',
+      'refs/heads/a..b',
+      'refs/heads/a@{b',
+      'refs/heads/.hidden',
+      'refs/heads/a.lock',
+      'refs/heads/a\\b',
+      'refs/heads/a?b',
+      'refs/heads/a b',
+    ]) {
+      await expect(
+        workspaces.write((w) => w.createWorktree({ ...tree(W3), baseRef })),
+      ).rejects.toMatchObject({ code: 'invalid' });
+    }
+    await expect(
+      workspaces.write((w) => w.createWorktree({ ...tree(W3), branchRef: 'refs/heads/feature/é' })),
+    ).rejects.toMatchObject({ code: 'invalid' });
+  });
+
+  it('recognizes the original job intent after its progress payload changes', async () => {
+    await withWorktrees(W1);
+    const job = {
+      id: J1,
+      workspace: W1,
+      kind: 'create' as const,
+      phase: 'intent',
+      generation: 1,
+      payload: { base: OID, destination: tree(W1).path },
+    };
+    await workspaces.write((w) => w.recordJob(job));
+    const advanced = await workspaces.write((w) =>
+      w.advanceJob(J1, { from: 'intent', to: 'registered', payload: { registered: true } }),
+    );
+    reader.close();
+    await store.close();
+    store = await openTestStore(profile);
+    reader = onDisk(profile);
+    workspaces = new WorkspaceStore({ store, now: () => now });
+    expect(await workspaces.write((w) => w.recordJob(job))).toEqual(advanced);
+    expect(
+      await workspaces.write((w) =>
+        w.recordJob({ ...job, payload: { destination: tree(W1).path, base: OID } }),
+      ),
+    ).toEqual(advanced);
+    await expect(
+      workspaces.write((w) =>
+        w.recordJob({ ...job, payload: { base: 'b'.repeat(40), destination: tree(W1).path } }),
+      ),
+    ).rejects.toMatchObject({ code: 'refused' });
+  });
+
+  it('validates kept values as strictly as new ones, instead of trusting their SQLite types', async () => {
+    await withWorktrees(W1);
+    await workspaces.write((w) => {
+      w.bind(CANVAS, 'a', W1);
+      w.recordJob({
+        id: J1,
+        workspace: W1,
+        kind: 'create',
+        phase: 'intent',
+        generation: 1,
+        payload: {},
+      });
+      w.offerSetup(W1, {
+        command: 'npm ci',
+        source: 'detected',
+        specHash: HASH,
+        copyManifestHash: HASH,
+      });
+      w.setProjectCommand(REPOSITORY, 'npm ci', 'posix');
+    });
+    const cases = [
+      ['repository', 'picked_root', 'relative', () => workspaces.repository(REPOSITORY)],
+      ['repository', 'identity', 'bad\nidentity', () => workspaces.repository(REPOSITORY)],
+      ['worktree', 'branch_ref', '--help', () => workspaces.worktree(W1)],
+      ['worktree', 'base_oid', 'HEAD', () => workspaces.worktree(W1)],
+      ['worktree', 'path', 'relative', () => workspaces.worktree(W1)],
+      ['agent_worktree', 'agent_id', '', () => workspaces.bindingsOf(CANVAS)],
+      ['worktree_job', 'phase', 'Not a phase', () => workspaces.job(J1)],
+      ['worktree_job', 'payload', JSON.stringify('x'.repeat(70_000)), () => workspaces.job(J1)],
+      ['worktree_setup', 'spec_hash', 'not a hash', () => workspaces.setup(W1)],
+      ['worktree_setup', 'command_snapshot', 'echo a\necho b', () => workspaces.setup(W1)],
+      [
+        'project_setup',
+        'always_spec_hash',
+        'not a hash',
+        () => workspaces.projectSetup(REPOSITORY),
+      ],
+      ['project_setup', 'command', 'echo a\necho b', () => workspaces.projectSetup(REPOSITORY)],
+    ] as const;
+    for (const [table, column, bad, read] of cases) {
+      await store.write(() => {
+        const previous = store.prepare(`SELECT ${column} AS value FROM ${table}`).get()?.value;
+        store.prepare(`UPDATE ${table} SET ${column} = ?`).run(bad);
+        expect.soft(read, `${table}.${column}`).toThrow(/can’t be read/);
+        store.prepare(`UPDATE ${table} SET ${column} = ?`).run(previous ?? null);
+      });
+    }
   });
 
   it('fails every read and write, saying why, when the database couldn’t be opened', async () => {

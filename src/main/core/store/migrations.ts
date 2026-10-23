@@ -286,6 +286,11 @@ export const MIGRATIONS: readonly Migration[] = [
     version: 3,
     minReader: 3,
     sql: `
+      -- Binding/plan generations survive clearing plans and deleting bindings, even with a clock
+      -- set back. Allocated in the same write as their binding, never from in-memory counters.
+      ALTER TABLE meta ADD COLUMN workspace_generation INTEGER NOT NULL DEFAULT 0
+        CHECK (workspace_generation >= 0);
+
       -- Conversations, kept by the workspace their CLI ran in too: each of an agent's checkouts
       -- has a history of its own. Every one kept so far ran in the picked project folder itself.
       -- Rebuilt first, so that the tables made after it take the pages the old one leaves.
@@ -391,6 +396,7 @@ export const MIGRATIONS: readonly Migration[] = [
         generation INTEGER NOT NULL CHECK (generation >= 0),
         expected_identity TEXT,
         payload TEXT NOT NULL CHECK (json_valid(payload)),
+        intent_hash TEXT NOT NULL CHECK (length(intent_hash) = 64),
         outcome TEXT,
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL

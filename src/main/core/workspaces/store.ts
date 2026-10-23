@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 
 import { isCanvasId } from '../../../shared/canvas';
 import type { CanvasId } from '../../../shared/canvas';
@@ -514,13 +515,14 @@ export class WorkspaceStore {
     );
     for (const binding of this.bindingsTo(kept.canvas, id)) {
       // A change waiting moves past it too: it is no longer the plan as it was reviewed.
-      const next = this.#next(binding.generation);
-      if (binding.desired !== null && next >= binding.desired.generation) {
+      const next = this.#next(Math.max(binding.generation, binding.desired?.generation ?? 0));
+      if (binding.desired !== null) {
+        const desired = this.#next(next);
         this.#store
           .prepare(
             'UPDATE agent_worktree SET desired_generation = ? WHERE canvas_id = ? AND agent_id = ?',
           )
-          .run(next + 1, binding.canvas, binding.agent);
+          .run(desired, binding.canvas, binding.agent);
       }
       move.run(next, binding.canvas, binding.agent);
     }
@@ -650,7 +652,14 @@ export class WorkspaceStore {
    * never takes one an older session of it was started at.
    */
   #next(after: number): number {
-    return Math.max(Math.trunc(this.#now()), after + 1);
+    const last = this.#store
+      .prepare('SELECT workspace_generation FROM meta WHERE id = 1')
+      .get()?.workspace_generation;
+    checkGeneration(last);
+    const next = Math.max(Math.trunc(this.#now()), after + 1, last + 1);
+    checkGeneration(next);
+    this.#store.prepare('UPDATE meta SET workspace_generation = ? WHERE id = 1').run(next);
+    return next;
   }
 
   // Jobs.
@@ -698,7 +707,8 @@ export class WorkspaceStore {
         kept.kind === asked.kind &&
         kept.generation === asked.generation &&
         kept.expectedIdentity === asked.expectedIdentity &&
-        JSON.stringify(kept.payload) === JSON.stringify(asked.payload);
+        this.#store.prepare('SELECT intent_hash FROM worktree_job WHERE id = ?').get(asked.id)
+          ?.intent_hash === intentHash(asked.payload);
       if (same) return kept;
       throw new WorkspaceStoreError('refused', `The job ${asked.id} was recorded as another.`);
     }
@@ -713,8 +723,8 @@ export class WorkspaceStore {
     this.#store
       .prepare(
         `INSERT INTO worktree_job (id, workspace_id, kind, phase, generation, expected_identity,
-           payload, outcome, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)`,
+           payload, intent_hash, outcome, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)`,
       )
       .run(
         recorded.id,
@@ -724,6 +734,7 @@ export class WorkspaceStore {
         recorded.generation,
         recorded.expectedIdentity,
         JSON.stringify(recorded.payload),
+        intentHash(recorded.payload),
         at,
         at,
       );
@@ -1054,8 +1065,41 @@ function checkParty(value: unknown): asserts value is PartyId {
 function isRef(value: unknown, branch: boolean): value is string {
   if (typeof value !== 'string' || value.length > MAX_REF) return false;
   const parts = value.split('/');
-  if (parts[0] !== 'refs' || (branch && parts[1] !== 'heads') || parts.length < 3) return false;
-  return parts.slice(1).every((part) => REF_PART.test(part) && !part.includes('..'));
+  if (parts[0] !== 'refs' || (branch && parts[1] !== 'heads') || parts.length < (branch ? 3 : 2))
+    return false;
+  if (branch) return parts.slice(1).every((part) => REF_PART.test(part) && !part.includes('..'));
+  // A captured native ref is not a generated name: Git permits Unicode and punctuation here.
+  // Full refs always start with refs/, so even a dash within a component cannot become a flag.
+  if (
+    CONTROL.test(value) ||
+    [' ', '~', '^', ':', '?', '*', '[', '\\'].some((part) => value.includes(part)) ||
+    value.includes('..') ||
+    value.includes('@{')
+  )
+    return false;
+  return (
+    parts
+      .slice(1)
+      .every((part) => part !== '' && !part.startsWith('.') && !part.endsWith('.lock')) &&
+    !value.endsWith('.')
+  );
+}
+
+/** Compare the immutable intent, not a job's mutable progress; object-key order is immaterial. */
+function intentHash(payload: Json): string {
+  const canonical = (value: Json): Json =>
+    Array.isArray(value)
+      ? value.map(canonical)
+      : value !== null && typeof value === 'object'
+        ? Object.fromEntries(
+            Object.entries(value)
+              .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+              .map(([key, item]) => [key, canonical(item)]),
+          )
+        : value;
+  return createHash('sha256')
+    .update(JSON.stringify(canonical(payload)))
+    .digest('hex');
 }
 
 /** A setup command you set: one line of at most MAX_COMMAND_BYTES, no control character. */
@@ -1196,36 +1240,46 @@ function oneOf<T extends string>(value: unknown, values: readonly T[]): T {
 }
 function owner(value: unknown): WorkspaceOwnerKey {
   const key = text(value);
-  if (!OWNER.test(key)) throw new TypeError('Not an owner');
-  return key as WorkspaceOwnerKey;
+  checkOwner(key);
+  return key;
+}
+
+function generation(value: unknown): number {
+  const found = int(value);
+  checkGeneration(found);
+  return found;
 }
 
 function repositoryOf(row: Row): RepositoryRecord {
   return readRow('repository', row, () => ({
-    id: text(row.id),
-    pickedRoot: text(row.picked_root),
-    realRoot: text(row.real_root),
-    commonDir: text(row.common_dir),
-    identity: text(row.identity),
-    rootKind: oneOf(row.root_kind, ROOT_KINDS),
-    ownedRoot: text(row.owned_root),
-    generation: int(row.generation),
+    ...checkRepository({
+      id: text(row.id),
+      pickedRoot: text(row.picked_root),
+      realRoot: text(row.real_root),
+      commonDir: text(row.common_dir),
+      identity: text(row.identity),
+      rootKind: oneOf(row.root_kind, ROOT_KINDS),
+      ownedRoot: text(row.owned_root),
+    }),
+    generation: generation(row.generation),
   }));
 }
 
 function canvasRepositoryOf(row: Row): CanvasRepository {
   return readRow('canvas_repository', row, () => {
     const canvas = text(row.canvas_id);
-    if (!isCanvasId(canvas)) throw new TypeError('Not a canvas');
-    return { canvas, repository: textOrNull(row.repository_id), generation: int(row.generation) };
+    checkCanvas(canvas);
+    const repository = textOrNull(row.repository_id);
+    if (repository !== null) checkUuid(repository, 'repository');
+    return { canvas, repository, generation: generation(row.generation) };
   });
 }
 
 function worktreeOf(row: Row): WorktreeRecord {
   return readRow('worktree', row, () => {
     const canvas = text(row.canvas_id);
-    if (!isCanvasId(canvas)) throw new TypeError('Not a canvas');
-    return {
+    checkCanvas(canvas);
+    const checked = checkWorktree({
       id: text(row.id),
       canvas,
       repository: text(row.repository_id),
@@ -1236,10 +1290,17 @@ function worktreeOf(row: Row): WorktreeRecord {
       baseRef: textOrNull(row.base_ref),
       baseOid: text(row.base_oid),
       forkedFrom: textOrNull(row.forked_from),
-      state: oneOf(row.state, STATES),
-      generation: int(row.generation),
+    });
+    const state = oneOf(row.state, STATES);
+    const errorCode = textOrNull(row.error_code);
+    if (errorCode !== null) checkCode(errorCode, 'error code');
+    if (SAYS_WHY.includes(state) && errorCode === null) throw new TypeError('Missing error code');
+    return {
+      ...checked,
+      state,
+      generation: generation(row.generation),
       createdAt: int(row.created_at),
-      errorCode: textOrNull(row.error_code),
+      errorCode,
     };
   });
 }
@@ -1247,31 +1308,34 @@ function worktreeOf(row: Row): WorktreeRecord {
 function bindingOf(row: Row): AgentBinding {
   return readRow('agent_worktree', row, () => {
     const canvas = text(row.canvas_id);
-    if (!isCanvasId(canvas)) throw new TypeError('Not a canvas');
-    const desired = intOrNull(row.desired_generation);
-    return {
-      canvas,
-      agent: text(row.agent_id),
-      workspace: text(row.workspace_id),
-      generation: int(row.generation),
-      desired:
-        desired === null ? null : { generation: desired, owner: owner(row.desired_owner_key) },
-    };
+    checkCanvas(canvas);
+    const agent = text(row.agent_id);
+    checkAgent(agent);
+    const workspace = text(row.workspace_id);
+    checkUuid(workspace, 'workspace');
+    const active = generation(row.generation);
+    const planned = intOrNull(row.desired_generation);
+    const desired =
+      planned === null ? null : { generation: planned, owner: owner(row.desired_owner_key) };
+    if (desired !== null && desired.generation <= active) throw new TypeError('Not a later plan');
+    return { canvas, agent, workspace, generation: active, desired };
   });
 }
 
 function jobOf(row: Row): JobRecord {
   return readRow('worktree_job', row, () => {
-    const outcome = row.outcome === null ? null : oneOf(row.outcome, OUTCOMES);
+    checkHash(row.intent_hash, 'intent hash');
     return {
-      id: text(row.id),
-      workspace: text(row.workspace_id),
-      kind: oneOf(row.kind, JOB_KINDS),
-      phase: text(row.phase),
-      generation: int(row.generation),
-      expectedIdentity: textOrNull(row.expected_identity),
-      payload: JSON.parse(text(row.payload)) as Json,
-      outcome,
+      ...checkJob({
+        id: text(row.id),
+        workspace: text(row.workspace_id),
+        kind: oneOf(row.kind, JOB_KINDS),
+        phase: text(row.phase),
+        generation: generation(row.generation),
+        expectedIdentity: textOrNull(row.expected_identity),
+        payload: JSON.parse(text(row.payload)) as Json,
+      }),
+      outcome: row.outcome === null ? null : oneOf(row.outcome, OUTCOMES),
       createdAt: int(row.created_at),
       updatedAt: int(row.updated_at),
     };
@@ -1280,30 +1344,41 @@ function jobOf(row: Row): JobRecord {
 
 function setupOf(row: Row): SetupRecord {
   return readRow('worktree_setup', row, () => {
+    const workspace = text(row.workspace_id);
+    checkUuid(workspace, 'workspace');
     const approvedBy = textOrNull(row.approved_by);
-    if (approvedBy !== null && !PARTY_PATTERN.test(approvedBy)) throw new TypeError('Not a party');
+    if (approvedBy !== null) checkParty(approvedBy);
+    const logKey = textOrNull(row.log_key);
+    if (logKey !== null && !LOG_KEY.test(logKey)) throw new TypeError('Not a log key');
     return {
-      workspace: text(row.workspace_id),
-      generation: int(row.generation),
-      command: textOrNull(row.command_snapshot),
-      source: oneOf(row.source, SOURCES),
-      specHash: text(row.spec_hash),
-      copyManifestHash: text(row.copy_manifest_hash),
+      workspace,
+      generation: generation(row.generation),
+      ...checkOffer({
+        command: textOrNull(row.command_snapshot),
+        source: oneOf(row.source, SOURCES),
+        specHash: text(row.spec_hash),
+        copyManifestHash: text(row.copy_manifest_hash),
+      }),
       state: oneOf(row.state, SETUP_STATES),
-      approvedBy: approvedBy as PartyId | null,
+      approvedBy,
       approvedAt: intOrNull(row.approved_at),
-      logKey: textOrNull(row.log_key),
+      logKey,
       exitCode: intOrNull(row.exit_code),
     };
   });
 }
 
 function projectSetupOf(row: Row): ProjectSetup {
-  return readRow('project_setup', row, () => ({
-    repository: text(row.repository_id),
-    command: textOrNull(row.command),
-    shellKind: row.shell_kind === null ? null : oneOf(row.shell_kind, SHELL_KINDS),
-    alwaysSpecHash: textOrNull(row.always_spec_hash),
-    changedAt: int(row.changed_at),
-  }));
+  return readRow('project_setup', row, () => {
+    const repository = text(row.repository_id);
+    checkUuid(repository, 'repository');
+    const command = textOrNull(row.command);
+    const shellKind = row.shell_kind === null ? null : oneOf(row.shell_kind, SHELL_KINDS);
+    if ((command === null) !== (shellKind === null))
+      throw new TypeError('Missing command or shell');
+    if (command !== null) checkCommand(command);
+    const alwaysSpecHash = textOrNull(row.always_spec_hash);
+    if (alwaysSpecHash !== null) checkHash(alwaysSpecHash, 'spec hash');
+    return { repository, command, shellKind, alwaysSpecHash, changedAt: int(row.changed_at) };
+  });
 }
