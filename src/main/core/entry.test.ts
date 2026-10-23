@@ -129,9 +129,9 @@ describe('the core process’s init', () => {
       ok: true,
       value: { ok: true, value: { name: 'corrallm', version: '1.2.3' } },
     });
-    expect(await window.request('channel', 'usage:get', [])).toEqual({
+    expect(await window.request('call', 'usage.get', {})).toEqual({
       ok: true,
-      value: { readings: [], rules: { codex: rule } },
+      value: { ok: true, value: { readings: [], rules: { codex: rule } } },
     });
     expect(await window.request('call', 'app.info', {})).toEqual({
       ok: true,

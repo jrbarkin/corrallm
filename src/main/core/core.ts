@@ -364,7 +364,6 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     runs: journal,
     shutdown: { ready: (window, request, error) => host.runReady(window, request, error) },
     sessions,
-    usage,
   });
   const isLead = config.leads ?? (() => false);
   // What the core says of each canvas it keeps: its `canvas:<c>` topic, from each commit, and the

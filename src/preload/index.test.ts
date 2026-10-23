@@ -154,6 +154,17 @@ describe('topic events', () => {
 });
 
 describe('the window’s port to the core', () => {
+  it('exposes usage only through operations, with no legacy channel functions', async () => {
+    const api = await exposed();
+    for (const name of ['getUsage', 'setUsageRule', 'simulateUsage']) {
+      expect(api).not.toHaveProperty(name);
+      expect(API_CHANNELS).not.toHaveProperty(name);
+    }
+    expect(api).toHaveProperty('usageGet');
+    expect(api).toHaveProperty('usageSetRule');
+    expect(api).toHaveProperty('usageSimulate');
+  });
+
   it('is asked of main as the preload loads, and kept from the page', async () => {
     const api = await exposed();
 
@@ -388,7 +399,7 @@ describe('preload', () => {
 
     stop();
     remote.emit('event', 'session:event', ['a', 'claude-code.sdk', event]);
-    await api.getUsage();
+    await api.getRun();
     expect(heard).toHaveBeenCalledOnce();
   });
 
@@ -483,7 +494,7 @@ describe('preload', () => {
 
     stop();
     remote.emit('event', 'terminal', ['a', { type: 'output', data: 'hi' }]);
-    await api.getUsage();
+    await api.getRun();
     expect(heard).toHaveBeenCalledOnce();
   });
 
@@ -506,18 +517,24 @@ describe('preload', () => {
     expect(api).not.toHaveProperty('installedClis');
   });
 
-  it('calls the usage channels with their arguments', async () => {
+  it('calls usage operations with their arguments', async () => {
     const api = await exposed();
-    postPort(answerInfo);
-    channel.mockResolvedValue({ readings: [], rules: {} });
-    await expect(api.getUsage()).resolves.toEqual({ readings: [], rules: {} });
-    expect(channel).toHaveBeenLastCalledWith('usage:get');
+    const state = { readings: [], rules: {} };
+    const heard = postPort((op) => ({
+      ok: true,
+      value: op === 'usage.get' ? state : { revs: {} },
+    }));
+    await expect(api.usageGet()).resolves.toEqual({ ok: true, value: state });
     const rule = { window: 'weekly', percent: 90, action: 'warn' } as const;
-    await api.setUsageRule('claude-code', rule);
-    expect(channel).toHaveBeenLastCalledWith('usage:rule', 'claude-code', rule);
+    await api.usageSetRule({ backend: 'claude-code', rule });
     const windows = { fiveHour: { usedPercent: 85, resetsAt: null } };
-    await api.simulateUsage('claude-code', windows);
-    expect(channel).toHaveBeenLastCalledWith('usage:simulate', 'claude-code', windows);
+    await api.usageSimulate({ backend: 'claude-code', windows });
+    expect(heard).toEqual([
+      ['usage.get', undefined],
+      ['usage.setRule', { backend: 'claude-code', rule }],
+      ['usage.simulate', { backend: 'claude-code', windows }],
+    ]);
+    expect(channel).not.toHaveBeenCalled();
   });
 });
 
@@ -556,7 +573,7 @@ describe('channels waiting for the core', () => {
   it('expires a queued channel after 10 seconds without replaying it on a late port', async () => {
     const api = await exposed();
     vi.useFakeTimers();
-    const failed = expect(api.getUsage()).rejects.toThrow('corrallm’s core isn’t answering yet.');
+    const failed = expect(api.getRun()).rejects.toThrow('corrallm’s core isn’t answering yet.');
     await vi.advanceTimersByTimeAsync(10_000);
     await failed;
     postPort(answerInfo);

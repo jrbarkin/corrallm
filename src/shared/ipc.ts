@@ -1,4 +1,4 @@
-import type { AdapterId, ConnectionId, UsageBackendId } from './adapter';
+import type { AdapterId, ConnectionId } from './adapter';
 import type { GuiBridge } from './gui-link';
 import type { RunCheckpoint, RunRestore } from './run';
 import type {
@@ -15,7 +15,6 @@ import type {
   SettingsOptions,
   UserMessage,
 } from './session';
-import type { UsageRule, UsageState, UsageWindows } from './usage';
 
 /**
  * The hand-written channels between the renderer and the core. Each one's name, argument tuple
@@ -121,18 +120,6 @@ export interface IpcContract {
     args: [agentId: string, server: string, change: McpChange];
     result: McpServer[];
   };
-  /** Every backend's latest usage reading (as remembered across restarts), and the usage rules. */
-  'usage:get': { args: []; result: UsageState };
-  /** Sets a backend's usage rule, or (null) takes it off. Subscribed windows hear the usage topic. */
-  'usage:rule': { args: [backend: UsageBackendId, rule: UsageRule | null]; result: null };
-  /**
-   * Simulates a backend's usage (to try rules without spending real usage), or (null) forgets
-   * its reading. A real reading replaces a simulated one. Subscribed windows hear the usage topic.
-   */
-  'usage:simulate': {
-    args: [backend: UsageBackendId, windows: UsageWindows | null];
-    result: null;
-  };
 }
 
 /** Events the core and main send the renderer: each one's name, and what it carries. */
@@ -193,9 +180,6 @@ export interface InvokeApi {
   settingsOptions(...args: IpcArgs<'session:options'>): Promise<IpcResult<'session:options'>>;
   mcpServers(...args: IpcArgs<'session:mcp'>): Promise<IpcResult<'session:mcp'>>;
   changeMcpServer(...args: IpcArgs<'session:mcp-change'>): Promise<IpcResult<'session:mcp-change'>>;
-  getUsage(): Promise<IpcResult<'usage:get'>>;
-  setUsageRule(...args: IpcArgs<'usage:rule'>): Promise<IpcResult<'usage:rule'>>;
-  simulateUsage(...args: IpcArgs<'usage:simulate'>): Promise<IpcResult<'usage:simulate'>>;
 }
 
 /** A function per event: it listens for the event, and returns a function that stops listening. */
@@ -232,9 +216,6 @@ export const API_CHANNELS = {
   settingsOptions: 'session:options',
   mcpServers: 'session:mcp',
   changeMcpServer: 'session:mcp-change',
-  getUsage: 'usage:get',
-  setUsageRule: 'usage:rule',
-  simulateUsage: 'usage:simulate',
 } as const satisfies Record<keyof InvokeApi, IpcChannel>;
 
 /** Which event each `EventApi` function listens for. */

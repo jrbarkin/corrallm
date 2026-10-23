@@ -58,13 +58,6 @@ function fakeServices() {
         defaults: { model: null, effort: null, mode: null },
       }),
     },
-    usage: {
-      state: vi
-        .fn<ChannelServices['usage']['state']>()
-        .mockReturnValue({ readings: [], rules: {} }),
-      setRule: vi.fn<ChannelServices['usage']['setRule']>(),
-      simulate: vi.fn<ChannelServices['usage']['simulate']>(),
-    },
   };
 }
 
@@ -91,6 +84,9 @@ describe('the channel surface', () => {
     'canvas:save',
     'canvas:forget',
     'project:choose',
+    'usage:get',
+    'usage:rule',
+    'usage:simulate',
     'catalog:get',
     'session:clis',
     'link:open',
@@ -639,63 +635,6 @@ describe('session:* handlers', () => {
     expect(() => invoke(channel, args)).toThrow(message);
     expect(Object.values(services.sessions).every((fn) => fn.mock.calls.length === 0)).toBe(true);
     expect(services.windows.canvasOf).not.toHaveBeenCalled();
-  });
-});
-
-describe('usage:* handlers', () => {
-  it('pass checked arguments on', () => {
-    expect(invoke('usage:get', [])).toEqual({ readings: [], rules: {} });
-    const rule = { window: 'fiveHour', percent: 80, action: 'ask' };
-    invoke('usage:rule', ['claude-code', rule]);
-    expect(services.usage.setRule).toHaveBeenCalledWith('claude-code', rule);
-    invoke('usage:rule', ['claude-code', null]);
-    expect(services.usage.setRule).toHaveBeenLastCalledWith('claude-code', null);
-    const resetsAt = Date.now() + 60 * 60 * 1000;
-    invoke('usage:simulate', [
-      'codex',
-      { weekly: { usedPercent: 91, resetsAt, extra: 'dropped' }, other: {} },
-    ]);
-    expect(services.usage.simulate).toHaveBeenCalledWith('codex', {
-      weekly: { usedPercent: 91, resetsAt },
-    });
-    invoke('usage:simulate', ['claude-code', null]);
-    expect(services.usage.simulate).toHaveBeenLastCalledWith('claude-code', null);
-  });
-
-  it.each([
-    ['usage:get', 'an argument', ['claude-code'], /no arguments/],
-    ['usage:rule', 'no rule', ['claude-code'], /a backend and a rule/],
-    ['usage:rule', 'a backend corrallm reads no usage of', ['gemini', null], /Expected one of/],
-    ['usage:rule', 'an old backend id', ['Claude', null], /Expected one of/],
-    [
-      'usage:rule',
-      'a share out of range',
-      ['claude-code', { window: 'weekly', percent: 100, action: 'ask' }],
-      /1 to 99/,
-    ],
-    [
-      'usage:rule',
-      'an action not built yet',
-      ['claude-code', { window: 'weekly', percent: 80, action: 'nextBackend' }],
-      /Expected one of/,
-    ],
-    ['usage:simulate', 'no windows', ['claude-code'], /a backend and its windows/],
-    [
-      'usage:simulate',
-      'a share over 100',
-      ['claude-code', { fiveHour: { usedPercent: 150, resetsAt: null } }],
-      /from 0 to 100/,
-    ],
-    [
-      'usage:simulate',
-      'a reset too far ahead',
-      ['claude-code', { fiveHour: { usedPercent: 50, resetsAt: Date.now() + 30 * 86_400_000 } }],
-      /reset/,
-    ],
-  ])('%s rejects %s', (channel, _label, args, message) => {
-    expect(() => invoke(channel, args)).toThrow(message);
-    expect(services.usage.setRule).not.toHaveBeenCalled();
-    expect(services.usage.simulate).not.toHaveBeenCalled();
   });
 });
 
