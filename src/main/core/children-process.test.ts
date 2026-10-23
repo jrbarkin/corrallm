@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { spawn } from '../sessions/process';
 import { Children } from './children';
+import { isProcessStart } from './process-identity';
 
 let profile: string;
 beforeEach(async () => {
@@ -28,11 +29,14 @@ describe.skipIf(process.platform === 'win32')('owned POSIX processes', () => {
     try {
       const file = path.join(profile, 'sessions', 'pids.json');
       const state = JSON.parse(await readFile(file, 'utf8')) as {
-        children: { pid: number; started: number }[];
+        children: { pid: number; started: unknown }[];
       };
       expect(state.children).toHaveLength(1);
       expect(state.children[0]?.pid).toBe(child.pid);
-      expect(state.children[0]?.started).toBeGreaterThan(0);
+      expect(isProcessStart(state.children[0]?.started)).toBe(true);
+      if (process.platform === 'linux') {
+        expect(typeof state.children[0]?.started).toBe('object');
+      }
       await exited;
       expect(JSON.parse(await readFile(file, 'utf8'))).toEqual({ version: 1, children: [] });
     } finally {

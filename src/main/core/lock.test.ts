@@ -5,7 +5,8 @@ import path from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { lockProfile, ProfileLocked } from './lock';
+import { lockProfile, processStart, ProfileLocked } from './lock';
+import type { LockHolder } from './lock';
 
 /*
  * One owner per profile (Core Server §7.6): <profile>/core.lock, opened O_EXCL, holding the pid and
@@ -26,7 +27,7 @@ afterEach(async () => {
 });
 
 /** When this process started, as the lock keeps it. */
-const STARTED = Date.now() - process.uptime() * 1000;
+const STARTED = processStart();
 
 /** A pid no process has: one that ran and has exited. */
 async function deadPid(): Promise<number> {
@@ -43,9 +44,11 @@ async function held(): Promise<unknown> {
 describe('lockProfile', () => {
   it('takes the profile, keeping who holds it, and lets it go', async () => {
     const lock = await lockProfile(profile, 'serve');
-    const kept = (await held()) as { owner: string; pid: number; started: number };
+    const kept = (await held()) as LockHolder;
     expect(kept).toMatchObject({ owner: 'serve', pid: process.pid });
-    expect(Math.abs(kept.started - STARTED)).toBeLessThan(500);
+    if (typeof kept.started === 'number' && typeof STARTED === 'number') {
+      expect(Math.abs(kept.started - STARTED)).toBeLessThan(500);
+    } else expect(kept.started).toEqual(STARTED);
     lock.release();
     await expect(stat(lockFile)).rejects.toThrow(/ENOENT/);
     // Released, it can be taken again.
@@ -108,7 +111,12 @@ describe('lockProfile', () => {
       // This process started after the lock's: its pid was reused.
       await writeFile(
         lockFile,
-        JSON.stringify({ owner: 'serve', pid: process.pid, started: STARTED - 60 * 60 * 1000 }),
+        JSON.stringify({
+          owner: 'serve',
+          pid: process.pid,
+          started:
+            typeof STARTED === 'number' ? STARTED - 60 * 60 * 1000 : { ...STARTED, ticks: '0' },
+        }),
       );
       const lock = await lockProfile(profile, 'app');
       expect(await held()).toMatchObject({ owner: 'app', pid: process.pid });

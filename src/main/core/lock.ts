@@ -1,7 +1,9 @@
-import { execFileSync } from 'node:child_process';
 import { readFileSync, rmSync } from 'node:fs';
 import { open, readFile, rm, stat } from 'node:fs/promises';
 import path from 'node:path';
+
+import { inspectProcess, isProcessStart, sameStart } from './process-identity';
+import type { ProcessStart } from './process-identity';
 
 /*
  * One owner per profile (Core Server §7.6): <profile>/core.lock, opened O_EXCL, holds the pid and
@@ -22,8 +24,8 @@ export type LockOwner = 'app' | 'serve';
 export interface LockHolder {
   owner: LockOwner;
   pid: number;
-  /** When its process started, in epoch ms. */
-  started: number;
+  /** Boot identity and start ticks on Linux; epoch ms on macOS and Windows. */
+  started: ProcessStart;
 }
 
 /** A profile this process holds, until it lets it go. */
@@ -171,18 +173,23 @@ function read(text: string): LockHolder | undefined {
   if (typeof value !== 'object' || value === null) return undefined;
   const { owner, pid, started } = value as Record<string, unknown>;
   if (owner !== 'app' && owner !== 'serve') return undefined;
-  if (!Number.isSafeInteger(pid) || (pid as number) <= 0 || !Number.isFinite(started)) {
+  if (!Number.isSafeInteger(pid) || (pid as number) <= 0 || !isProcessStart(started)) {
     return undefined;
   }
-  return { owner, pid: pid as number, started: started as number };
+  return { owner, pid: pid as number, started };
 }
 
 function sameHolder(a: LockHolder | undefined, b: LockHolder): boolean {
-  return a?.owner === b.owner && a.pid === b.pid && a.started === b.started;
+  return a?.owner === b.owner && a.pid === b.pid && sameStart(a.started, b.started);
 }
 
-/** When this process started, in epoch ms, as a lock (or api.json) keeps it. */
-export function processStart(): number {
+/** This process's start identity, as a lock (or api.json) keeps it. */
+export function processStart(): ProcessStart {
+  if (process.platform === 'linux') {
+    const own = inspectProcess(process.pid);
+    if (own === undefined) throw new Error('Could not identify corrallm’s process.');
+    return own.started;
+  }
   return Math.round(Date.now() - process.uptime() * 1000);
 }
 
@@ -190,7 +197,7 @@ export function processStart(): number {
  * Whether the process a lock (or api.json) names still runs: its pid is alive, and wasn't given to
  * another process since (one that started after it did).
  */
-export function stillRuns({ pid, started }: { pid: number; started: number }): boolean {
+export function stillRuns({ pid, started }: { pid: number; started: ProcessStart }): boolean {
   if (pid <= 0) return false;
   try {
     process.kill(pid, 0);
@@ -198,23 +205,18 @@ export function stillRuns({ pid, started }: { pid: number; started: number }): b
     // EPERM: it runs, as someone else.
     if (!isCode(error, 'EPERM')) return false;
   }
-  const actual = startOf(pid);
-  return actual === undefined || actual <= started + SAME_START_MS;
-}
-
-/** When process `pid` started, as `ps` tells it (to the second); undefined where it can't. */
-function startOf(pid: number): number | undefined {
-  if (process.platform === 'win32') return undefined;
+  if (process.platform === 'win32') return true;
   try {
-    const text = execFileSync('ps', ['-o', 'lstart=', '-p', String(pid)], {
-      encoding: 'utf8',
-      env: { ...process.env, LC_ALL: 'C' },
-      stdio: ['ignore', 'pipe', 'ignore'],
-    }).trim();
-    const at = Date.parse(text);
-    return Number.isNaN(at) ? undefined : at;
+    const actual = inspectProcess(pid)?.started;
+    if (actual === undefined) return false;
+    // A wall-clock record cannot prove a live Linux pid was reused. Keep its lock.
+    if (process.platform === 'linux' && typeof started === 'number') return true;
+    return typeof actual === 'number' && typeof started === 'number'
+      ? actual <= started + SAME_START_MS
+      : sameStart(actual, started);
   } catch {
-    return undefined;
+    // A denied inspection cannot authorize taking a live owner's profile.
+    return true;
   }
 }
 

@@ -3,6 +3,8 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 
 import { stillRuns } from '../core/lock';
+import { isProcessStart } from '../core/process-identity';
+import type { ProcessStart } from '../core/process-identity';
 import { writeWhole } from '../whole-file';
 
 /*
@@ -17,8 +19,8 @@ export interface ApiFile {
   url: string;
   port: number;
   pid: number;
-  /** When the server's process started, in epoch ms. */
-  started: number;
+  /** Boot identity and start ticks on Linux; epoch ms on macOS and Windows. */
+  started: ProcessStart;
 }
 
 const API_FILE = 'api.json';
@@ -46,10 +48,12 @@ export async function readApiFile(profile: string): Promise<ApiFile | undefined>
     typeof url !== 'string' ||
     !Number.isSafeInteger(port) ||
     !Number.isSafeInteger(pid) ||
-    !Number.isFinite(started)
+    !isProcessStart(started)
   ) {
     return undefined;
   }
-  const api = { url, port: port as number, pid: pid as number, started: started as number };
+  // Unlike a lock (which must be kept conservatively), an unidentifiable server is not used.
+  if (process.platform === 'linux' && typeof started === 'number') return undefined;
+  const api = { url, port: port as number, pid: pid as number, started };
   return stillRuns(api) ? api : undefined;
 }
