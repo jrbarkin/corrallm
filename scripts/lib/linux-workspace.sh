@@ -26,8 +26,9 @@ case "$mode" in
     step 'Check formatting' pnpm format:check
     step 'Unit tests' pnpm test
     # The ordinary global setup builds both production bundles; no E2E_SKIP_BUILD shortcut.
+    # CI=1 keeps build logs linear but must not turn a failing spec into a pass on retry.
     step 'End-to-end tests (including production build)' \
-      xvfb-run -a -s '-screen 0 1280x1024x24' pnpm test:e2e --trace retain-on-failure --reporter=list,html
+      xvfb-run -a -s '-screen 0 1280x1024x24' pnpm test:e2e --retries=0 --trace retain-on-failure --reporter=list,html
     ;;
   smoke)
     step 'Package Linux app' pnpm package --platform linux --arch "$arch"

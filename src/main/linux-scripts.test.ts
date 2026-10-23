@@ -158,7 +158,7 @@ it('runs every gate in order, including the e2e global build under xvfb, stoppin
     'lint',
     'format:check',
     'test',
-    'test:e2e --trace retain-on-failure --reporter=list,html',
+    'test:e2e --retries=0 --trace retain-on-failure --reporter=list,html',
   ]);
 });
 
