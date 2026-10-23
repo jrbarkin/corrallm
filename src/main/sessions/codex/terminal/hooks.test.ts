@@ -1,13 +1,17 @@
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { spawn } from 'node:child_process';
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { HOOK_TOKEN, HookServer } from '../../terminal/hooks';
+import { HOOK_HEADER, HOOK_TOKEN, HookServer } from '../../terminal/hooks';
 import type { HookEvent, HookRegistration } from '../../terminal/hooks';
 import {
   computedTrust,
   hookCommand,
   hookHash,
+  folderTrust,
   hookOverrides,
   sessionHooks,
   trustOverride,
@@ -17,10 +21,18 @@ import { recordedTerminal } from './recorded';
 
 const posix = process.platform !== 'win32';
 
+let dir: string;
+let header: string;
+beforeEach(async () => {
+  dir = await mkdtemp(path.join(tmpdir(), 'corrallm-hook-'));
+  header = path.join(dir, `header with 'quotes' $dollar % and spaces`);
+  await writeFile(header, 'Authorization: Bearer x\n', { mode: 0o600 });
+});
 let registrations: HookRegistration[] = [];
-afterEach(() => {
+afterEach(async () => {
   for (const registration of registrations) registration.release();
   registrations = [];
+  await rm(dir, { recursive: true, force: true });
 });
 
 /** Runs a hook's command as Codex does (with a shell, the event on its stdin). */
@@ -44,18 +56,119 @@ function runHook(
 }
 
 describe('the command a hook runs', () => {
+  it.skipIf(!posix)(
+    'the e2e TUI trusts and runs the file-backed hooks without a token environment',
+    async () => {
+      const heard: HookEvent[] = [];
+      const registration = await new HookServer().register((event) => heard.push(event));
+      registrations.push(registration);
+      await writeFile(header, `Authorization: Bearer ${registration.token}\n`);
+      const hooks = sessionHooks(registration.url, 'darwin');
+      // Pipes suffice for this fake's input parser; no native pty or real CLI in a unit test.
+      const child = spawn(
+        process.execPath,
+        [
+          '--import',
+          'data:text/javascript,process.stdin.setRawMode=()=>{}',
+          path.resolve('e2e/fake-codex-tui.mjs'),
+          '-C',
+          dir,
+          ...hookOverrides(hooks).flatMap((one) => ['-c', one]),
+          '-c',
+          trustOverride(computedTrust(hooks)),
+          '-c',
+          folderTrust(dir),
+        ],
+        {
+          cwd: dir,
+          env: { PATH: process.env.PATH ?? '', SHELL: '/bin/sh', [HOOK_HEADER]: header },
+        },
+      );
+      const closed = new Promise<void>((resolve, reject) => {
+        child.on('error', reject);
+        child.on('close', () => {
+          resolve();
+        });
+      });
+      let output = '';
+      child.stdout.on('data', (chunk: Buffer) => {
+        output += chunk.toString('utf8');
+      });
+      try {
+        await vi.waitFor(
+          () => {
+            expect(output).toContain('Ready');
+          },
+          { timeout: 5000, interval: 10 },
+        );
+        expect(output).not.toContain('Hooks need review');
+        child.stdin.write('hello\r');
+        await vi.waitFor(
+          () => {
+            expect(heard).toContainEqual(
+              expect.objectContaining({ hook_event_name: 'UserPromptSubmit', prompt: 'hello' }),
+            );
+          },
+          { timeout: 5000, interval: 10 },
+        );
+      } finally {
+        child.kill('SIGTERM');
+        const force = setTimeout(() => {
+          child.kill('SIGKILL');
+        }, 2000);
+        try {
+          await closed;
+        } finally {
+          clearTimeout(force);
+        }
+      }
+    },
+    15_000,
+  );
+
+  it.skipIf(!posix)(
+    'keeps the token out of curl argv and environment, and hides errors',
+    async () => {
+      const captured = path.join(dir, 'captured.json');
+      await writeFile(
+        path.join(dir, 'curl'),
+        `#!${process.execPath}
+const fs = require('node:fs');
+fs.writeFileSync(process.env.CAPTURE, JSON.stringify({ args: process.argv.slice(2), env: process.env }));
+process.stdout.write('unwanted output');
+process.stderr.write('unwanted error');
+process.exit(9);
+`,
+        { mode: 0o700 },
+      );
+      const command = hookCommand('http://127.0.0.1:9/hook', 'linux');
+      expect(command).not.toContain(HOOK_TOKEN);
+      expect(
+        await runHook(command, '{}', { PATH: dir, [HOOK_HEADER]: header, CAPTURE: captured }),
+      ).toEqual({ code: 0, out: '' });
+      const seen = JSON.parse(await readFile(captured, 'utf8')) as {
+        args: string[];
+        env: Record<string, string>;
+      };
+      expect(seen.args).toContain(`@${header}`);
+      expect(seen.args.join(' ')).not.toContain('Bearer');
+      expect(seen.env).not.toHaveProperty(HOOK_TOKEN);
+    },
+  );
+
   it.skipIf(!posix)('posts the event to corrallm’s server with the session’s token', async () => {
     const server = new HookServer();
     const heard: HookEvent[] = [];
     const registration = await server.register((event) => heard.push(event));
     registrations.push(registration);
+    await writeFile(header, `Authorization: Bearer ${registration.token}\n`);
     const event = {
       session_id: 's1',
       hook_event_name: 'Stop',
       last_assistant_message: 'It’s “done”',
     };
     const run = await runHook(hookCommand(registration.url, 'darwin'), JSON.stringify(event), {
-      [HOOK_TOKEN]: registration.token,
+      [HOOK_HEADER]: header,
     });
     expect(run).toEqual({ code: 0, out: '' });
     expect(heard).toEqual([event]);
@@ -65,15 +178,18 @@ describe('the command a hook runs', () => {
     'prints nothing and succeeds when corrallm is not there to hear it',
     async () => {
       const run = await runHook(hookCommand('http://127.0.0.1:9/hook', 'linux'), '{}', {
-        [HOOK_TOKEN]: 'x',
+        [HOOK_HEADER]: header,
       });
       expect(run).toEqual({ code: 0, out: '' });
     },
   );
 
-  it('reads the token from the environment on Windows too', () => {
+  it('reads a header file on Windows too, without expanding a secret', () => {
     const command = hookCommand('http://127.0.0.1:4000/hook', 'win32');
-    expect(command).toContain(`Bearer %${HOOK_TOKEN}%`);
+    expect(command).toContain(`-H "@%${HOOK_HEADER}%"`);
+    expect(command).not.toContain(HOOK_TOKEN);
+    expect(command).toContain('--max-time 5');
+    expect(command).toContain('exit /b 0');
     expect(command).toMatch(/^curl\.exe /);
     expect(command).not.toContain('secret');
   });
@@ -82,10 +198,15 @@ describe('the command a hook runs', () => {
 describe('a session’s hooks, as overrides', () => {
   it('adds a command hook for each event corrallm follows', () => {
     const hooks = sessionHooks('http://127.0.0.1:4000/hook', 'darwin');
-    expect(hooks.map((hook) => hook.event)).toEqual(['UserPromptSubmit', 'Stop', 'Interrupt']);
+    expect(hooks.map((hook) => hook.event)).toEqual([
+      'SessionStart',
+      'UserPromptSubmit',
+      'Stop',
+      'Interrupt',
+    ]);
     const [first] = hookOverrides(hooks);
     expect(first).toBe(
-      `hooks.UserPromptSubmit=[{hooks=[{type="command",command=${JSON.stringify(hooks[0]?.command)},timeout=10}]}]`,
+      `hooks.SessionStart=[{hooks=[{type="command",command=${JSON.stringify(hooks[0]?.command)},timeout=10}]}]`,
     );
   });
 

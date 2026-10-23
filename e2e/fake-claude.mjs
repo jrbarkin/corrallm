@@ -121,7 +121,7 @@ async function hook(name, fields = {}) {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      Authorization: `Bearer ${process.env.CORRALLM_HOOK_TOKEN ?? ''}`,
+      Authorization: group.hooks[0].headers.Authorization,
     },
     body: JSON.stringify({
       session_id: sessionId,

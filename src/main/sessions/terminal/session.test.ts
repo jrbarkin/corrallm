@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, statSync } from 'node:fs';
 import { mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -152,6 +152,89 @@ const last = <T extends SessionEvent['type']>(type: T) =>
   events.findLast((event): event is Extract<SessionEvent, { type: T }> => event.type === type);
 
 describe('a Terminal session', () => {
+  it('keeps hook authorization in private files, never command arguments or child environments', async () => {
+    await start({ env: { ...SPEC.env, [HOOK_TOKEN]: 'inherited-secret' } });
+    const run = claude();
+    const settingsFile = run.arg('--settings') ?? '';
+    const settings = JSON.parse(readFileSync(settingsFile, 'utf8')) as {
+      hooks: Record<
+        string,
+        { hooks: { command?: string; headers?: { Authorization: string } }[] }[]
+      >;
+    };
+    const command = settings.hooks.SessionStart?.[0]?.hooks[0]?.command ?? '';
+    expect(command).not.toContain(HOOK_TOKEN);
+    expect(run.options.env).not.toHaveProperty(HOOK_TOKEN);
+    const header = run.options.env.CORRALLM_HOOK_HEADER ?? '';
+    expect(path.dirname(header)).toBe(path.dirname(settingsFile));
+    expect(statSync(header).mode & 0o777).toBe(0o600);
+    expect(statSync(settingsFile).mode & 0o777).toBe(0o600);
+    const authorization = readFileSync(header, 'utf8').trim();
+    expect(authorization).toMatch(/^Authorization: Bearer [0-9a-f]{48}$/);
+    expect(settings.hooks.Stop?.[0]?.hooks[0]?.headers?.Authorization).toBe(
+      authorization.slice('Authorization: '.length),
+    );
+    const token = authorization.slice('Authorization: Bearer '.length);
+    expect(run.args.join(' ')).not.toContain(token);
+    expect(JSON.stringify(run.options.env)).not.toContain(token);
+    expect(command).not.toContain(token);
+  });
+
+  it('reports native permissions from its command SessionStart hook before any prompt is typed', async () => {
+    fake.sessionStart = 'default';
+    await start();
+    await until(() => {
+      expect(last('mode')).toMatchObject({ mode: 'manual' });
+    });
+    expect(claude().prompts).toEqual([]);
+    const settings = JSON.parse(readFileSync(claude().arg('--settings') ?? '', 'utf8')) as {
+      hooks: { SessionStart?: { hooks: { type: string; command: string }[] }[] };
+    };
+    expect(settings.hooks.SessionStart?.[0]?.hooks[0]).toMatchObject({ type: 'command' });
+    await until(() => {
+      expect(claude().answers).toContainEqual({ hook: 'SessionStart', answer: '{}' });
+    });
+  });
+
+  it.each([{ httpHookAllowedEnvVars: ['OTHER'] }, { httpHookAllowedEnvVars: [] }])(
+    'registers its file-backed hooks without an unheard warning under %j',
+    async (settings) => {
+      fake.sessionStart = 'default';
+      const home = path.join(dir, 'home');
+      await mkdir(path.join(home, '.claude'), { recursive: true });
+      await writeFile(path.join(home, '.claude', 'settings.json'), JSON.stringify(settings));
+      await start({ env: { ...SPEC.env, HOME: home } });
+      const kept = JSON.parse(readFileSync(claude().arg('--settings') ?? '', 'utf8')) as {
+        hooks: Record<string, { hooks: { type: string; headers?: { Authorization: string } }[] }[]>;
+      };
+      expect(kept.hooks.SessionStart?.[0]?.hooks[0]).toMatchObject({ type: 'command' });
+      expect(kept.hooks.Stop?.[0]?.hooks[0]?.type).toBe('http');
+      expect(kept.hooks.Stop?.[0]?.hooks[0]?.headers?.Authorization).toMatch(
+        /^Bearer [0-9a-f]{48}$/,
+      );
+      await until(() => {
+        expect(last('mode')).toMatchObject({ mode: 'manual' });
+      });
+      expect(last('unheard')).toBeUndefined();
+    },
+  );
+
+  it.each([{ disableAllHooks: true }, { allowedHttpHookUrls: ['https://example.test/*'] }])(
+    'does not bypass hook restrictions with the command startup post (%j)',
+    async (settings) => {
+      fake.sessionStart = 'default';
+      const home = path.join(dir, 'home');
+      await mkdir(path.join(home, '.claude'), { recursive: true });
+      await writeFile(path.join(home, '.claude', 'settings.json'), JSON.stringify(settings));
+      await start({ env: { ...SPEC.env, HOME: home } });
+      const kept = JSON.parse(readFileSync(claude().arg('--settings') ?? '', 'utf8')) as {
+        hooks: Record<string, unknown>;
+      };
+      expect(kept.hooks).toEqual({});
+      expect(last('unheard')).toBeDefined();
+    },
+  );
+
   it('does not pass a modern snapshot flag to an older CLI on role launch or resume', async () => {
     help = '  --model <model>  Model\n  --append-system-prompt <prompt>  Append instructions';
     const id = '0b3a7d52-6a0c-4f39-9c4e-2f8f0c1d9e11';
@@ -266,7 +349,7 @@ describe('a Terminal session', () => {
 
     const { env } = run.options;
     expect(env).toMatchObject({ PATH: '/usr/bin', TERM: 'xterm-256color', COLORTERM: 'truecolor' });
-    expect(env[HOOK_TOKEN]).toMatch(/^[0-9a-f]{48}$/);
+    expect(env).not.toHaveProperty(HOOK_TOKEN);
     // It must report its status to corrallm's terminal.
     expect(env).not.toHaveProperty('CLAUDE_CODE_DISABLE_TERMINAL_TITLE');
 

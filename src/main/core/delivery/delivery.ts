@@ -660,7 +660,7 @@ export class Delivery {
         return catalog.neverAsks(connection, session.mode) ? 'mode' : 'asks';
       }
       if (session.asks !== undefined) return session.asks ? 'asks' : 'mode';
-      return 'unknown';
+      return 'unknown-running';
     } else {
       const mode = node.data.settings?.[catalog.adapterOf(connection)]?.mode;
       if (mode !== undefined && isSessionMode(mode) && catalog.isStartMode(connection, mode)) {
@@ -1181,6 +1181,8 @@ function unaskingText(name: string, why: UnaskingWhy): string {
       return `${name}’s CLI defaults to a mode that never asks before it acts, so your message waits until ${name} runs in one that asks, which only the user can set.`;
     case 'unknown':
       return `corrallm can’t tell whether ${name}’s CLI defaults to a mode that asks before it acts, so your message waits until ${name} runs in one that asks, which only the user can set.`;
+    case 'unknown-running':
+      return `corrallm can’t tell whether ${name}’s running session asks before it acts, so your message waits until it reports that it asks: only the user can switch its mode or restart it.`;
   }
 }
 

@@ -50,9 +50,9 @@ export interface NeedsInput {
 /**
  * Why an agent would act on a party's message without asking: its session runs in a mode (or on
  * settings) that never asks; it would run in its CLI's own default, which never asks; or corrallm
- * can't tell what that default does.
+ * can't tell what that default or the already-running session does.
  */
-export type UnaskingWhy = 'mode' | 'default' | 'unknown';
+export type UnaskingWhy = 'mode' | 'default' | 'unknown' | 'unknown-running';
 
 /** Something that waits for you, as derived: whose it is, and what it is. */
 export type Need =
@@ -172,15 +172,19 @@ export function needsItem(
         ...yours,
         kind: 'hold',
         title:
-          need.why === 'mode'
-            ? `${name} runs without asking, so messages from other parties wait`
-            : need.why === 'default'
-              ? `${name}’s CLI defaults to a mode that never asks, so messages from other parties wait`
-              : `corrallm can’t tell whether ${name}’s CLI defaults to a mode that asks, so messages from other parties wait`,
+          need.why === 'unknown-running'
+            ? `corrallm can’t tell whether ${name}’s running session asks, so messages from other parties wait`
+            : need.why === 'mode'
+              ? `${name} runs without asking, so messages from other parties wait`
+              : need.why === 'default'
+                ? `${name}’s CLI defaults to a mode that never asks, so messages from other parties wait`
+                : `corrallm can’t tell whether ${name}’s CLI defaults to a mode that asks, so messages from other parties wait`,
         detail:
-          need.why === 'mode'
-            ? 'They go once it runs in a mode that asks again.'
-            : 'They go once it runs in a mode that asks: set it to start in one.',
+          need.why === 'unknown-running'
+            ? 'Switch it to a mode that asks, or set one in its settings and restart it.'
+            : need.why === 'mode'
+              ? 'They go once it runs in a mode that asks again.'
+              : 'They go once it runs in a mode that asks: set it to start in one.',
         choices: [],
         answerIn: 'api',
       };

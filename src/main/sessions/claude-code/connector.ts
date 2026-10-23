@@ -8,7 +8,7 @@ import { claudeFlags } from './claude';
 import type { Connector, LiveSession, SessionHost, SessionSpec } from '../connector';
 import { ClaudeCode } from './claude-code';
 import { FirstRuns } from './first-run';
-import { HOOK_TOKEN, HookServer } from '../terminal/hooks';
+import { HookServer } from '../terminal/hooks';
 import { spawnPty } from '../terminal/pty';
 import type { SpawnPty } from '../terminal/pty';
 import { TerminalSession, TIMING } from '../terminal/session';
@@ -27,13 +27,10 @@ const TERMINAL = { TERM: 'xterm-256color', COLORTERM: 'truecolor', TERM_PROGRAM:
 
 /**
  * The environment Claude Code runs in, in corrallm's terminal: the agents' (the user's login
- * shell's), as a terminal sets it up, with its hooks' token (hooks.ts). Claude Code reports its
+ * shell's), as a terminal sets it up. Claude Code reports its
  * status to the terminal unless told not to (CLAUDE_CODE_DISABLE_TERMINAL_TITLE); corrallm needs it.
  */
-export function terminalEnvironment(
-  env: Readonly<Record<string, string>>,
-  token: string,
-): Record<string, string> {
+export function terminalEnvironment(env: Readonly<Record<string, string>>): Record<string, string> {
   const rest = Object.fromEntries(
     Object.entries(env).filter(([name]) => name !== 'CLAUDE_CODE_DISABLE_TERMINAL_TITLE'),
   );
@@ -42,7 +39,6 @@ export function terminalEnvironment(
     ...TERMINAL,
     // Claude Code draws with Unicode: a terminal without a locale gets a UTF-8 one.
     ...(rest.LANG === undefined && rest.LC_ALL === undefined ? { LANG: 'en_US.UTF-8' } : {}),
-    [HOOK_TOKEN]: token,
   };
 }
 
@@ -126,7 +122,7 @@ export class TerminalConnector implements Connector {
       spawn: this.#spawn,
       hooks: this.#hooks,
       tmp: this.#tmp,
-      env: (token) => terminalEnvironment(spec.env, token),
+      env: () => terminalEnvironment(spec.env),
       timing: this.#timing,
       usage: (windows) => this.#usage?.(CLAUDE_USAGE, windows),
       firstRun: this.#firstRuns.take(folder),

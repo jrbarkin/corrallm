@@ -1,3 +1,4 @@
+import { readFileSync, statSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -35,6 +36,7 @@ let runs: Replay[];
 let sessions: LiveSession<CodexMode>[];
 /** What of its recordings the pseudo-terminals leave out. */
 let without: (record: TerminalRecord) => boolean;
+let startupPermission: string | undefined;
 
 beforeEach(async () => {
   dir = await mkdtemp(path.join(tmpdir(), 'corrallm-codex-terminal-'));
@@ -43,6 +45,7 @@ beforeEach(async () => {
   runs = [];
   sessions = [];
   without = () => false;
+  startupPermission = undefined;
 });
 afterEach(async () => {
   await Promise.all(sessions.map((session) => session.close()));
@@ -70,7 +73,13 @@ async function start(
     // Codex is not asked: the computed trust.
     truster: new HookTruster({ start: () => Promise.reject(new Error('not here')) }),
     spawn: (_file, args, options) => {
-      const run = new Replay(recordings[runs.length] ?? 'prompts', args, options, without);
+      const run = new Replay(
+        recordings[runs.length] ?? 'prompts',
+        args,
+        options,
+        without,
+        startupPermission,
+      );
       runs.push(run);
       return Promise.resolve(run);
     },
@@ -114,6 +123,34 @@ const seen = () =>
 const ends = () => events.filter((event) => event.type === 'end').length;
 
 describe('Codex in a terminal, as the real one ran', () => {
+  it('keeps hook authorization in a private file, never command arguments or child environments', async () => {
+    await start(['prompts'], { env: { ...SPEC.env, CORRALLM_HOOK_TOKEN: 'inherited-secret' } });
+    const run = runs[0];
+    if (!run) throw new Error('No terminal');
+    const commands = run.args.filter((arg) => /^hooks\.(?!state)/.test(arg));
+    expect(commands).toHaveLength(4);
+    for (const command of commands) expect(command).not.toContain('CORRALLM_HOOK_TOKEN');
+    expect(run.options.env).not.toHaveProperty('CORRALLM_HOOK_TOKEN');
+    const header = run.options.env.CORRALLM_HOOK_HEADER ?? '';
+    expect(path.dirname(path.dirname(header))).toBe(dir);
+    expect(statSync(header).mode & 0o777).toBe(0o600);
+    const authorization = readFileSync(header, 'utf8').trim();
+    expect(authorization).toMatch(/^Authorization: Bearer [0-9a-f]{48}$/);
+    const token = authorization.slice('Authorization: Bearer '.length);
+    expect(run.args.join(' ')).not.toContain(token);
+    expect(JSON.stringify(run.options.env)).not.toContain(token);
+  });
+
+  it('reports native permissions from its SessionStart hook before any prompt is typed', async () => {
+    startupPermission = 'default';
+    await start(['prompts'], { mode: null });
+    await until(() => {
+      expect(events).toContainEqual({ type: 'mode', mode: 'auto' });
+    });
+    expect(runs[0]?.args.some((arg) => arg.startsWith('hooks.SessionStart='))).toBe(true);
+    expect(runs[0]?.written.some((text) => text.includes(PASTE_START))).toBe(false);
+  });
+
   it('resumes without a role without reading native instructions, even if the read would fail', async () => {
     const readInstructions = vi.fn(() => Promise.reject(new Error('Could not read config')));
     await start(['resume'], { resume: RECORDED_SESSION, roleChanged: false }, { readInstructions });
