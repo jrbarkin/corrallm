@@ -234,7 +234,8 @@ export function agentsReached(
 export function resolvers(
   engines: Engines,
   isLead: (canvas: CanvasId, agent: string) => boolean,
-  needOf: (canvas: CanvasId, id: string) => NeedsItem | undefined = () => undefined,
+  needOf: (canvas: CanvasId, id: string, reach?: readonly string[]) => NeedsItem | undefined = () =>
+    undefined,
 ): Readonly<Partial<Record<Brand, Resolver>>> {
   const lead = (caller: TokenCaller, canvas: CanvasId) =>
     caller.kind === 'agent' && isLead(canvas, caller.agent);
@@ -279,8 +280,15 @@ export function resolvers(
     NeedId: (id, caller, reach, { canvas }) => {
       if (canvas === undefined || !canvasesOf(caller).includes(canvas as CanvasId)) return false;
       const open = engines.canvas(canvas as CanvasId);
-      const item = needOf(canvas as CanvasId, id);
-      if (!open || item?.agent === undefined) return false;
+      if (!open) return false;
+      // A proposal may name more than its first agent. Resolve it through the same visibility
+      // filter as needs, before R3 can quote its title in a refusal.
+      const item = needOf(
+        canvas as CanvasId,
+        id,
+        agentsReached(open.document, caller, reach, lead(caller, canvas as CanvasId)),
+      );
+      if (item?.agent === undefined) return false;
       return reachesAgent(
         open.document,
         caller,

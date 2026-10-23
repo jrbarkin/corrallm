@@ -89,6 +89,11 @@ export const MAX_DETAIL_LINES = 12;
  */
 export const MAX_CREATED_AGENTS = 8;
 
+/** Open canvases a token's party may have created, across token renewals and restarts. */
+export const MAX_CREATED_CANVASES = 16;
+/** Distinct open proposals one party may keep on one canvas; identical pending calls reuse one. */
+export const MAX_OPEN_PROPOSALS = 32;
+
 /** The longest a `wait` waits for what comes, in seconds (API Spec §7.7). */
 export const MAX_WAIT_SECONDS = 3600;
 

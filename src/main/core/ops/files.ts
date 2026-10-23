@@ -1,3 +1,4 @@
+import { MAX_CREATED_CANVASES } from '../../../shared/api/limits';
 import type { CanvasId } from '../../../shared/canvas';
 import { newCanvasId } from '../../../shared/canvas';
 import type { ArgsOf } from '../../../shared/api/registry';
@@ -55,10 +56,11 @@ export function filesOps({
   catalog,
   defaultAdapter,
   windows,
-}: Pick<OpServices, 'lifecycle' | 'documents' | 'catalog' | 'defaultAdapter' | 'windows'>): Pick<
-  Implementations,
-  FileOps
-> {
+  states,
+}: Pick<
+  OpServices,
+  'lifecycle' | 'documents' | 'catalog' | 'defaultAdapter' | 'windows' | 'states'
+>): Pick<Implementations, FileOps> {
   return {
     'canvas.create': async (args, ctx) => {
       const { template, values, agents, connections, replace } = args;
@@ -71,6 +73,20 @@ export function filesOps({
           replace.canvas as string as CanvasId,
           replace.discard === true && ctx.caller.kind === 'human',
         );
+      if (ctx.caller.kind !== 'human') {
+        // canvas.create has the app lane: concurrent calls cannot claim the same free slot.
+        const owned = new Set(documents.createdBy(ctx.by));
+        const open = (await states.list()).filter((item) => item.open && owned.has(item.canvas));
+        const replacesOwn = open.some(
+          (item) => item.canvas === (replace?.canvas as string | undefined),
+        );
+        if (open.length - Number(replacesOwn) >= MAX_CREATED_CANVASES) {
+          throw new OpFailure(
+            'refused',
+            `A party may have at most ${String(MAX_CREATED_CANVASES)} open canvases it created: close one before making another.`,
+          );
+        }
+      }
       const canvas = newCanvasId();
       // Built before anything is made: a template there isn't makes nothing.
       const document =
@@ -79,7 +95,7 @@ export function filesOps({
           : templateDocument(
               canvas,
               { template, ...defined({ values, agents, connections }) },
-              ctx.by,
+              ctx.proposedBy ?? ctx.by,
               { catalog, defaultAdapter },
             );
       documents.create(canvas, ctx.by);
