@@ -18,6 +18,7 @@ import type { Message } from '../../shared/model/messages';
 import { keepCanvases, writeOnDisk } from '../core/store/test-store';
 import { registrations } from './serve';
 import { TestChildren } from './test-children';
+import { startupShell } from './test-startup-shell';
 import type { TestChild } from './test-children';
 
 /*
@@ -723,10 +724,9 @@ describe.skipIf(process.platform === 'win32')('corrallm serve', () => {
       const shell = path.join(dir, 'slow-shell');
       const reading = path.join(dir, 'shell-reading');
       const release = path.join(dir, 'shell-release');
-      await writeFile(
-        shell,
-        `#!/bin/sh\necho $PPID > "${reading}"\nwhile [ ! -f "${release}" ]; do sleep 0.05; done\nexec /bin/sh -c "$2"\n`,
-      );
+      // Linux script first invokes $SHELL -c to launch the wrapped command. Only serve's later
+      // -ilc environment read may write this gate's parent pid or block startup.
+      await writeFile(shell, startupShell(reading, release));
       await chmod(shell, 0o755);
       const { child, printed, exited } = onTerminal([], { SHELL: shell });
       // Told to stop while serve (the shell's parent) reads it.
