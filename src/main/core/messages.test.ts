@@ -12,7 +12,7 @@ import { withoutChoices } from '../../shared/engine/needs';
 import type { NeedsItem } from '../../shared/model/needs';
 import type { CanvasId } from '../../shared/canvas';
 import type { AdapterId } from '../../shared/adapter';
-import type { SessionEvent, SessionMode, SettingsOptions } from '../../shared/session';
+import type { SessionEvent, SessionMode, SettingsOptions, UserMessage } from '../../shared/session';
 import type { UsageWindows } from '../../shared/usage';
 import { callTool } from '../api/mcp';
 import type { Connector, SessionHost } from '../sessions/connector';
@@ -1161,6 +1161,98 @@ async function needsOf(): Promise<NeedsItem[]> {
 }
 
 describe('a mode that never asks', () => {
+  it.each(['codex', 'claude-code'] as const)(
+    'delivers a party message to %s Terminal from its startup hook, without a typed prompt',
+    async (adapter) => {
+      await terminalStartup(adapter, 'default');
+      const id = await send('shell', 'Work from another party');
+      await vi.waitFor(() => {
+        expect(startupSends).toHaveBeenCalledOnce();
+      });
+      expect(startupSends.mock.calls[0]?.[0].text).toBe(`${FRAME(id)}Work from another party`);
+      expect((await find(id))?.delivery).toBeDefined();
+    },
+  );
+
+  it.each(['codex', 'claude-code'] as const)(
+    'holds the first party message when %s Terminal’s startup hook reports bypass',
+    async (adapter) => {
+      await terminalStartup(adapter, 'bypassPermissions');
+      const id = await send('shell', 'Must wait');
+      await vi.waitFor(() => {
+        const session = core?.engines.canvas(CANVAS)?.engine.sessions.of('shell');
+        expect(session?.mode).toBe(adapter === 'codex' ? 'full-access' : 'bypassPermissions');
+      });
+      expect(startupSends).not.toHaveBeenCalled();
+      expect((await find(id))?.state).toBe('pending');
+    },
+  );
+
+  let startupSends: ReturnType<typeof vi.fn<(message: UserMessage) => void>>;
+  async function terminalStartup(
+    adapter: 'codex' | 'claude-code',
+    permissionMode: string,
+  ): Promise<void> {
+    await keepCanvas(
+      [{ id: 'shell', label: 'Shell', adapter, connection: `${adapter}.terminal` }],
+      [],
+    );
+    options = {
+      [adapter]: () =>
+        Promise.resolve({
+          models: [],
+          defaults: { model: null, effort: null, mode: null, asks: true },
+        }),
+    };
+    const timing = {
+      key: 0,
+      enter: 1,
+      echo: 300,
+      confirm: 500,
+      settle: 5,
+      startup: 2000,
+      batch: 1,
+      kill: 50,
+    };
+    const connector: Connector<SessionMode> =
+      adapter === 'claude-code'
+        ? new TerminalConnector({
+            spawn: (file, args, spec) =>
+              Promise.resolve(new FakeClaude(file, args, spec, { sessionStart: permissionMode })),
+            findClaude: () => Promise.resolve('/fake/claude'),
+            flags: () => Promise.resolve(new Set()),
+            home: profile,
+            tmp: profile,
+            timing,
+          })
+        : new CodexTerminalConnector({
+            spawn: (_file, args, spec) =>
+              Promise.resolve(new Replay('prompts', args, spec, () => false, permissionMode)),
+            findCodex: () => Promise.resolve('/fake/codex'),
+            version: () => Promise.resolve('0.160.1'),
+            truster: new HookTruster({ start: () => Promise.reject(new Error('not here')) }),
+            readInstructions: () => Promise.resolve(undefined),
+            reader: new UsageReader({
+              start: () => Promise.reject(new Error('No usage in this test')),
+            }),
+            tmp: profile,
+            timing,
+          });
+    startupSends = vi.fn();
+    const observed: Connector<SessionMode> = {
+      start: async (spec, host) => {
+        const live = await connector.start({ ...spec, env: { HOME: profile } }, host);
+        const send = live.send.bind(live);
+        live.send = (message) => {
+          startupSends(message);
+          return send(message);
+        };
+        return live;
+      },
+    };
+    await start(adapter === 'codex' ? { terminal: observed } : { claude: observed });
+  }
+
   const DEFAULT_WAITS =
     'Builder’s CLI defaults to a mode that never asks before it acts, so your message waits until Builder runs in one that asks, which only the user can set.';
   const UNKNOWN_WAITS =
@@ -1402,9 +1494,19 @@ describe('a mode that never asks', () => {
     const first = await send('shell', 'First');
     await vi.waitFor(async () => {
       expect((await notices()).map(({ replyTo, body }) => [replyTo, body])).toEqual([
-        [first, UNKNOWN_WAITS.replaceAll('Builder', 'Shell')],
+        [
+          first,
+          'corrallm can’t tell whether Shell’s running session asks before it acts, so your message waits until it reports that it asks: only the user can switch its mode or restart it.',
+        ],
       ]);
     });
+    expect(await needsOf()).toEqual([
+      expect.objectContaining({
+        title:
+          'corrallm can’t tell whether Shell’s running session asks, so messages from other parties wait',
+        detail: 'Switch it to a mode that asks, or set one in its settings and restart it.',
+      }),
+    ]);
     expect(codex.reads()).toBe(0);
   });
 

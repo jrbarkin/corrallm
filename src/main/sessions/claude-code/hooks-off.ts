@@ -2,8 +2,6 @@ import { readdir, readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import path from 'node:path';
 
-import { HOOK_TOKEN } from '../terminal/hooks';
-
 /*
  * Whether the user's or their organization's Claude Code settings turn off the hooks corrallm
  * listens to (hooks.ts), read when a Terminal session starts from the settings files Claude Code
@@ -17,8 +15,10 @@ import { HOOK_TOKEN } from '../terminal/hooks';
  * - allowManagedHooksOnly, or strictPluginOnlyCustomization locking hooks (managed settings only):
  *   hooks other than the organization's and its plugins';
  * - allowedHttpHookUrls (lists merge across settings) without a pattern for corrallm's hook
- *   server, on 127.0.0.1;
- * - httpHookAllowedEnvVars (merged too) without its token's variable, which its hooks send.
+ *   server, on 127.0.0.1.
+ *
+ * httpHookAllowedEnvVars only restricts header-variable interpolation; our HTTP headers are
+ * literal values in the private settings file, so that setting cannot turn our hooks off.
  *
  * Not read: managed settings from a server or an OS policy (a macOS profile, the Windows registry).
  */
@@ -28,8 +28,7 @@ export type HooksSetting =
   | 'disableAllHooks'
   | 'allowManagedHooksOnly'
   | 'strictPluginOnlyCustomization'
-  | 'allowedHttpHookUrls'
-  | 'httpHookAllowedEnvVars';
+  | 'allowedHttpHookUrls';
 
 /** What turns corrallm's hooks off: the setting, where it is set, and whether the status line too. */
 export interface HooksOff {
@@ -96,10 +95,6 @@ export async function hooksOff({
   const urls = merged(sources, 'allowedHttpHookUrls');
   if (urls && !urls.values.some((pattern) => matches(pattern, url))) {
     return { setting: 'allowedHttpHookUrls', where: urls.where, statusLine: false };
-  }
-  const vars = merged(sources, 'httpHookAllowedEnvVars');
-  if (vars && !vars.values.includes(HOOK_TOKEN)) {
-    return { setting: 'httpHookAllowedEnvVars', where: vars.where, statusLine: false };
   }
   return undefined;
 }

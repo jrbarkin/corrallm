@@ -1,6 +1,6 @@
-import { HOOK_TOKEN } from '../terminal/hooks';
+import { postHookCommand } from '../terminal/hooks';
 
-/** The events corrallm hears. (HTTP hooks cannot run on SessionStart.) */
+/** The events heard through HTTP; SessionStart requires a command hook. */
 export const HOOK_EVENTS = [
   'UserPromptSubmit',
   'Stop',
@@ -23,24 +23,26 @@ const TIMEOUT_S = 5;
 
 /**
  * The settings (for `claude --settings <file>`) that add corrallm's hooks: each event posted to
- * `url`, with the token from the session's environment. Claude Code merges them with the user's
- * and the project's hooks.
+ * `url`: HTTP headers live in this private settings file; commands read a private header file.
+ * Claude Code merges these hooks with the user's and the project's hooks.
  */
-export function hookSettings(url: string): { hooks: Record<string, HookGroup[]> } {
+export function hookSettings(url: string, token: string): { hooks: Record<string, HookGroup[]> } {
   const hook = {
     type: 'http',
     url,
-    headers: { Authorization: `Bearer $${HOOK_TOKEN}` },
-    allowedEnvVars: [HOOK_TOKEN],
+    headers: { Authorization: `Bearer ${token}` },
     timeout: TIMEOUT_S,
   };
   return {
-    hooks: Object.fromEntries(
-      HOOK_EVENTS.map((name) => {
-        const matcher = MATCHERS[name];
-        return [name, [{ ...(matcher === undefined ? {} : { matcher }), hooks: [hook] }]];
-      }),
-    ),
+    hooks: {
+      SessionStart: [{ hooks: [{ type: 'command', command: postHookCommand(url), timeout: 10 }] }],
+      ...Object.fromEntries(
+        HOOK_EVENTS.map((name) => {
+          const matcher = MATCHERS[name];
+          return [name, [{ ...(matcher === undefined ? {} : { matcher }), hooks: [hook] }]];
+        }),
+      ),
+    },
   };
 }
 

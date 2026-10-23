@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 import type {
@@ -16,6 +16,7 @@ import type { LiveSession, SessionHost, SessionSpec, TerminalScreen } from '../c
 import { isNativeId } from '../id';
 import type { TerminalCli, TerminalSignal } from './cli';
 import type { FirstRunTurn } from './first-run';
+import { HOOK_HEADER, HOOK_TOKEN } from './hooks';
 import type { HookEvent, HookRegistration, HookServer } from './hooks';
 import type { Pty, SpawnPty } from './pty';
 import { Screen } from './screen';
@@ -154,7 +155,7 @@ export interface TerminalSessionDeps<M extends SessionMode = PermissionMode> {
   /** Where its settings file goes (a folder of its own is made in it). */
   tmp: string;
   /** Its environment: the agents' (spec.env), as a terminal sets it up (connector.ts). */
-  env: (token: string) => Record<string, string>;
+  env: () => Record<string, string>;
   timing: TerminalTiming;
   /**
    * Takes what its CLI says of its account's usage limits (cli.ts: `statusLine`, `readUsage`), for
@@ -279,6 +280,11 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
           }),
       );
       this.#settingsDir = await mkdtemp(path.join(this.#deps.tmp, 'corrallm-terminal-'));
+      await writeFile(
+        path.join(this.#settingsDir, 'hook-header'),
+        `Authorization: Bearer ${this.#registration.token}\n`,
+        { mode: 0o600 },
+      );
       await this.#cli.prepare(this.#settingsDir, this.#registration);
       const turn = this.#deps.firstRun?.ready;
       if (turn === undefined) await this.#start();
@@ -443,7 +449,12 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
     });
     const pty = await this.#deps.spawn(this.#deps.executable, args, {
       cwd: this.#spec.cwd,
-      env: this.#deps.env(this.#registration?.token ?? ''),
+      env: {
+        ...Object.fromEntries(
+          Object.entries(this.#deps.env()).filter(([name]) => name.toUpperCase() !== HOOK_TOKEN),
+        ),
+        [HOOK_HEADER]: path.join(this.#settingsDir ?? '', 'hook-header'),
+      },
       ...this.#size,
     });
     if (this.#closing) {

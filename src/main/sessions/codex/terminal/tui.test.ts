@@ -75,6 +75,7 @@ describe('starting Codex', () => {
       (value) => /^hooks\.\w+=/.test(value) && !value.startsWith('hooks.state'),
     );
     expect(hooks.map((value) => value.split('=')[0])).toEqual([
+      'hooks.SessionStart',
       'hooks.UserPromptSubmit',
       'hooks.Stop',
       'hooks.Interrupt',

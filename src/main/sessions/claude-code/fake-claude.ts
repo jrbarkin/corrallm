@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 
-import { HOOK_TOKEN } from '../terminal/hooks';
+import { HOOK_HEADER } from '../terminal/hooks';
 import type { Pty, PtyOptions } from '../terminal/pty';
 
 /*
@@ -18,6 +18,8 @@ const PROBES = '\x1b]11;?\x07\x1b[c\x1b[>0q\x1b[?u\x1b]7501;?\x07\x1b[c';
 const RULE = '─'.repeat(40);
 
 export interface FakeClaudeOptions {
+  /** Emulates SessionStart, in this permission mode, before any prompt is typed. */
+  sessionStart?: string;
   /** Test graceful native exit after this many Ctrl+C keys. */
   exitOnCtrlC?: number;
   /** Whether it reports its status (Claude Code 2.1.295 and later do). */
@@ -77,6 +79,7 @@ export class FakeClaude implements Pty {
     this.args = args;
     this.options = options;
     this.#options = fake;
+    this.#mode = fake.sessionStart ?? this.#mode;
     this.#trusting = fake.trust ?? false;
     setTimeout(() => {
       this.#boot();
@@ -153,10 +156,18 @@ export class FakeClaude implements Pty {
     const file = this.arg('--settings');
     if (file === undefined) return;
     const settings = JSON.parse(readFileSync(file, 'utf8')) as {
-      hooks: Record<string, { matcher?: string; hooks: { url: string }[] }[] | undefined>;
+      hooks: Record<
+        string,
+        | {
+            matcher?: string;
+            hooks: { url?: string; command?: string; headers?: { Authorization: string } }[];
+          }[]
+        | undefined
+      >;
     };
     const group = settings.hooks[name]?.[0];
-    const url = group?.hooks[0]?.url;
+    const hook = group?.hooks[0];
+    const url = hook?.url ?? /http:\/\/127\.0\.0\.1:\d+\/hook/.exec(hook?.command ?? '')?.[0];
     if (url === undefined) return;
     // Only for the tools its matcher names, if it names any.
     const tool = fields.tool_name;
@@ -167,7 +178,11 @@ export class FakeClaude implements Pty {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${this.options.env[HOOK_TOKEN] ?? ''}`,
+        Authorization:
+          hook?.headers?.Authorization ??
+          readFileSync(this.options.env[HOOK_HEADER] ?? '', 'utf8')
+            .trim()
+            .slice('Authorization: '.length),
       },
       body: JSON.stringify({
         session_id: this.sessionId,
@@ -267,6 +282,8 @@ export class FakeClaude implements Pty {
   }
 
   #ready(state: 'idle'): void {
+    if (this.#options.sessionStart !== undefined)
+      void this.hook('SessionStart', { source: 'startup' });
     this.report(`state=${state}`);
     this.#state = state;
     this.#busyUntil = Date.now() + (this.#options.busy ?? 0);
