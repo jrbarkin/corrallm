@@ -14,6 +14,7 @@ import { Proposals } from '../canvas/proposals';
 import { FileReviews } from '../canvas/reviews';
 import { commitDocument } from '../canvas/test-documents';
 import { MessageStore, MessageTable } from '../delivery/messages';
+import { WorkspaceStore } from '../workspaces/store';
 import { mintTrustedPath as trusted } from '../host';
 import * as migrations from './migrations';
 import { MIGRATIONS } from './migrations';
@@ -401,6 +402,103 @@ describe('migration 3 on a profile', () => {
       });
     } finally {
       await store.close();
+    }
+  });
+});
+
+describe('a profile at schema 3', () => {
+  const REPOSITORY = '7c0e9a1e-1b6f-4b4f-9f3a-2d1c0b9a8e70';
+  const WORKSPACE = '9d1c5a0e-0f4e-4c11-8a51-0b1f2e3d4c51';
+  const JOB = 'c0ffee00-0000-4000-8000-000000000001';
+  const HASH = 'b'.repeat(64);
+
+  /** Every workspace record the profile keeps of the canvas, as the workspace store reads it. */
+  function records(store: Store) {
+    const workspaces = new WorkspaceStore({ store });
+    return {
+      repository: workspaces.repository(REPOSITORY),
+      canvas: workspaces.canvasRepository(CANVAS),
+      worktrees: workspaces.worktreesOf(CANVAS),
+      bindings: workspaces.bindingsOf(CANVAS),
+      jobs: workspaces.openJobs(),
+      setup: workspaces.setup(WORKSPACE),
+      project: workspaces.projectSetup(REPOSITORY),
+    };
+  }
+
+  it('keeps its workspace records as it opens again, and as it restores its snapshot', async () => {
+    const store = await openTestStore(profile, QUIET);
+    const memory = new CanvasMemory(store);
+    const workspaces = new WorkspaceStore({ store, now: () => 1000 });
+    await store.write(() => {
+      memory.ensure(CANVAS);
+    });
+    await workspaces.write((w) => {
+      w.addRepository({
+        id: REPOSITORY,
+        pickedRoot: '/work/app',
+        realRoot: '/work/app',
+        commonDir: '/work/app/.git',
+        identity: 'repository identity',
+        rootKind: 'project',
+        ownedRoot: '/work/app/.corral/worktrees/profile',
+      });
+      w.bindCanvas(CANVAS, REPOSITORY);
+      w.createWorktree({
+        id: WORKSPACE,
+        canvas: CANVAS,
+        repository: REPOSITORY,
+        owner: 'group/team',
+        path: `/work/app/.corral/worktrees/profile/${WORKSPACE}`,
+        branchRef: `refs/heads/corrallm/profile/${WORKSPACE}`,
+        baseCheckout: '/work/app',
+        baseRef: null,
+        baseOid: 'a'.repeat(40),
+        forkedFrom: null,
+      });
+      w.bind(CANVAS, 'lead', WORKSPACE);
+      w.recordJob({
+        id: JOB,
+        workspace: WORKSPACE,
+        kind: 'create',
+        phase: 'registered',
+        generation: 1,
+        payload: { ref: `refs/heads/corrallm/profile/${WORKSPACE}` },
+      });
+      w.offerSetup(WORKSPACE, {
+        command: 'npm ci',
+        source: 'detected',
+        specHash: HASH,
+        copyManifestHash: HASH,
+      });
+      w.setAlways(REPOSITORY, HASH);
+    });
+    const before = records(store);
+    expect(before.worktrees).toHaveLength(1);
+    expect(before.jobs).toHaveLength(1);
+    // Closed, it takes a snapshot of itself.
+    await store.close();
+
+    const again = await openTestStore(profile, QUIET);
+    try {
+      expect(schemaOn(profile)).toEqual({ version: 3, minReader: 3 });
+      expect(records(again)).toEqual(before);
+    } finally {
+      await again.close();
+    }
+
+    // Damaged since: restored from its snapshot, at schema 3, its records as they were.
+    await writeFile(path.join(profile, STORE_FILE), 'This is not a database. '.repeat(500));
+    const { store: restored, said } = await openStore(profile, QUIET);
+    if (restored === undefined) throw new Error(said.join(' '));
+    try {
+      expect(said[1]).toMatch(/^It was restored from its snapshot of /);
+      expect(schemaOn(profile)).toEqual({ version: 3, minReader: 3 });
+      expect(records(restored)).toEqual(before);
+      // Kept, with its workspace: never forgotten while it owns one.
+      await expect(new CanvasMemory(restored).forget(CANVAS)).resolves.toBe(false);
+    } finally {
+      await restored.close();
     }
   });
 });
