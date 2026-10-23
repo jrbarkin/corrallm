@@ -9,7 +9,7 @@ import { mintTrustedPath } from './core/host';
 import type { HostServices } from './core/host';
 import type { Store } from './core/store/store';
 import { openTestStore } from './core/store/test-store';
-import { CanvasMemory } from './memory';
+import { CanvasMemory, PROJECT_WORKSPACE } from './memory';
 import { ProjectFolders } from './project';
 
 const WINDOW = 7;
@@ -82,7 +82,7 @@ describe('project folders', () => {
     await memory.setFile(canvas, file);
     await memory.update(canvas, (m) => ({
       ...m,
-      conversations: { codex: { coder: { id: THREAD } } },
+      conversations: { [PROJECT_WORKSPACE]: { codex: { coder: { id: THREAD } } } },
     }));
 
     pick(app);
@@ -92,7 +92,7 @@ describe('project folders', () => {
     expect(await new CanvasMemory(store).get(canvas)).toEqual({
       file,
       project: app,
-      conversations: { codex: { coder: { id: THREAD } } },
+      conversations: { [PROJECT_WORKSPACE]: { codex: { coder: { id: THREAD } } } },
     });
   });
 

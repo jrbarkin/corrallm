@@ -427,9 +427,14 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
   const proposals = new Proposals({
     store,
     messages: (canvas) => engines.messagesOf(canvas),
+    // The agents with a conversation kept, in any workspace and any adapter's CLI.
     conversations: async (canvas) => {
       const { conversations } = await memory.get(canvas);
-      return new Set(Object.values(conversations).flatMap((byAgent) => Object.keys(byAgent)));
+      return new Set(
+        Object.values(conversations).flatMap((byAdapter) =>
+          Object.values(byAdapter).flatMap((byAgent) => Object.keys(byAgent)),
+        ),
+      );
     },
     changed: (canvas, by) => {
       topics.changed(`needs:${canvas}`, by);

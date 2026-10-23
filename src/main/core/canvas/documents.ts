@@ -549,14 +549,18 @@ export class Documents {
 
   /**
    * Forgets the canvas, a draft discarded (B9 Design §5): its document, and everything the profile
-   * keeps of it (canvas memory's `forget`). On disk once it resolves; rejects, forgetting nothing,
-   * if it couldn't be written.
+   * keeps of it (canvas memory's `forget`), unless it owns a workspace record, which keeps all of
+   * it. Resolves with whether it forgot it, once that is on disk; rejects, forgetting nothing, if
+   * it couldn't be written.
    */
-  forget(canvas: CanvasId): Promise<void> {
+  forget(canvas: CanvasId): Promise<boolean> {
     return this.#queue(canvas, async () => {
-      await this.#deps.memory.forget(canvas);
-      this.#lives.delete(canvas);
-      this.#unsaved.delete(canvas);
+      const forgot = await this.#deps.memory.forget(canvas);
+      if (forgot) {
+        this.#lives.delete(canvas);
+        this.#unsaved.delete(canvas);
+      }
+      return forgot;
     });
   }
 

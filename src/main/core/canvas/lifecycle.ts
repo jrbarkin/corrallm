@@ -245,7 +245,9 @@ export class Lifecycle {
     for (const window of windows.showing(canvas)) await windows.show(window, await journal.last());
     await sessions.closeCanvas(canvas);
     if (discard && file === undefined) {
-      const forget = () => documents.forget(canvas);
+      const forget = async () => {
+        await documents.forget(canvas);
+      };
       if (after) after(forget);
       else await forget();
     }

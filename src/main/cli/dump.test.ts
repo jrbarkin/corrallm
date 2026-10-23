@@ -15,12 +15,13 @@ import { Documents } from '../core/canvas/documents';
 import { commitDocument } from '../core/canvas/test-documents';
 import { MessageStore, MessageTable } from '../core/delivery/messages';
 import { migrate, MIGRATIONS, SCHEMA } from '../core/store/migrations';
-import { APPLICATION_ID } from '../core/store/open';
+import { APPLICATION_ID, STORE_FILE } from '../core/store/open';
 import { connect } from '../core/store/sqlite';
 import { SYSTEM_DEPS } from '../core/store/store';
 import type { Store } from '../core/store/store';
-import { openTestStore } from '../core/store/test-store';
+import { madeAtSchema, openTestStore } from '../core/store/test-store';
 import { dump } from '../core/store/dump';
+import { WorkspaceStore } from '../core/workspaces/store';
 
 const exec = promisify(execFile);
 const BUNDLE = path.resolve('dist-cli/corrallm.cjs');
@@ -185,6 +186,132 @@ it('holds one consistent read while awaiting a slow output pipe and the owner co
     { type: 'message', data: { body: 'Hello\nthere' } },
   ]);
   expect(lines).toHaveLength(3);
+});
+
+it('dumps each repository with its setup, and each canvas’s workspace records, in the same read', async () => {
+  const workspaces = new WorkspaceStore({ store, now: () => 1000 });
+  const repository = '7c0e9a1e-1b6f-4b4f-9f3a-2d1c0b9a8e70';
+  const workspace = '9d1c5a0e-0f4e-4c11-8a51-0b1f2e3d4c51';
+  const job = 'c0ffee00-0000-4000-8000-000000000001';
+  const hash = 'b'.repeat(64);
+  await workspaces.write((w) => {
+    w.addRepository({
+      id: repository,
+      pickedRoot: '/work/app',
+      realRoot: '/work/app',
+      commonDir: '/work/app/.git',
+      identity: 'repository identity',
+      rootKind: 'project',
+      ownedRoot: '/work/app/.corral/worktrees/profile',
+    });
+    w.setProjectCommand(repository, 'make setup', 'posix');
+    w.bindCanvas(canvas, repository);
+    w.createWorktree({
+      id: workspace,
+      canvas,
+      repository,
+      owner: 'agent/a',
+      path: `/work/app/.corral/worktrees/profile/${workspace}`,
+      branchRef: `refs/heads/corrallm/profile/${workspace}`,
+      baseCheckout: '/work/app',
+      baseRef: 'refs/heads/main',
+      baseOid: 'a'.repeat(40),
+      forkedFrom: null,
+    });
+    w.bind(canvas, 'a', workspace);
+    w.recordJob({
+      id: job,
+      workspace,
+      kind: 'create',
+      phase: 'intent',
+      generation: 1,
+      payload: { base: 'a'.repeat(40) },
+    });
+    w.offerSetup(workspace, {
+      command: 'make setup',
+      source: 'configured',
+      specHash: hash,
+      copyManifestHash: hash,
+    });
+  });
+  const lines: string[] = [];
+  await dump(store.file, (line) => {
+    lines.push(line);
+    return Promise.resolve();
+  });
+  expect(lines.map((line) => JSON.parse(line) as unknown)).toMatchObject([
+    {
+      type: 'repository',
+      data: { id: repository, real_root: '/work/app', root_kind: 'project', generation: 0 },
+      setup: { repository_id: repository, command: 'make setup', shell_kind: 'posix' },
+    },
+    {
+      type: 'canvas',
+      data: { id: canvas },
+      repository: { canvas_id: canvas, repository_id: repository, generation: 1 },
+      worktrees: [
+        {
+          id: workspace,
+          owner_key: 'agent/a',
+          state: 'creating',
+          branch_ref: `refs/heads/corrallm/profile/${workspace}`,
+          setup: { workspace_id: workspace, state: 'pending', command_snapshot: 'make setup' },
+          // Its payload decoded, as other JSON columns are.
+          jobs: [{ id: job, kind: 'create', phase: 'intent', payload: { base: 'a'.repeat(40) } }],
+        },
+      ],
+      bindings: [{ agent_id: 'a', workspace_id: workspace, generation: 1000 }],
+    },
+    { type: 'run' },
+    { type: 'message' },
+  ]);
+  expect(lines).toHaveLength(4);
+});
+
+it('dumps a schema-2 database without migrating it: no workspace records, conversations by agent', async () => {
+  const older = await mkdtemp(path.join(tmpdir(), 'corrallm-dump-2-'));
+  try {
+    const old = madeAtSchema(older, 2);
+    try {
+      old
+        .prepare('INSERT INTO canvas (id, project, used_at) VALUES (?, ?, 1)')
+        .run(canvas, '/work');
+      old
+        .prepare(
+          `INSERT INTO conversation (canvas_id, adapter, agent_id, native_id)
+           VALUES (?, 'codex', 'a', 'thread')`,
+        )
+        .run(canvas);
+    } finally {
+      old.close();
+    }
+    const file = path.join(older, STORE_FILE);
+    const before = await readFile(file);
+    const lines: string[] = [];
+    await dump(file, (line) => {
+      lines.push(line);
+      return Promise.resolve();
+    });
+    const [line, ...rest] = lines.map((one) => JSON.parse(one) as Record<string, unknown>);
+    expect(rest).toEqual([]);
+    expect(line).toMatchObject({
+      type: 'canvas',
+      data: { id: canvas, project: '/work' },
+      conversations: [{ adapter: 'codex', agent_id: 'a', native_id: 'thread' }],
+      document: null,
+    });
+    expect(Object.keys(line ?? {})).not.toContain('worktrees');
+    expect(Object.keys(line ?? {})).not.toContain('repository');
+    expect(await readFile(file)).toEqual(before);
+    const schema = connect(file, { readOnly: true });
+    try {
+      expect(schema.prepare('PRAGMA user_version').get()).toEqual({ user_version: 2 });
+    } finally {
+      schema.close();
+    }
+  } finally {
+    await rm(older, { recursive: true, force: true });
+  }
 });
 
 it('dumps an older readable schema without migrating it', async () => {

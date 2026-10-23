@@ -4,7 +4,15 @@ import path from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { migrate, MIGRATIONS, minReaderOf, SCHEMA, schemaOf, SEQUENCES } from './migrations';
+import {
+  migrate,
+  MIGRATIONS,
+  minReaderOf,
+  PROJECT_WORKSPACE,
+  SCHEMA,
+  schemaOf,
+  SEQUENCES,
+} from './migrations';
 import type { Migration } from './migrations';
 import { connect } from './sqlite';
 import type { Connection } from './sqlite';
@@ -92,7 +100,9 @@ describe('the schema', () => {
     expect(schemaOf(connection)).toBe(SCHEMA);
     expect(minReaderOf(connection)).toBe(MIGRATIONS.at(-1)?.minReader);
     expect(tables()).toEqual([
+      { name: 'agent_worktree', strict: 1, wr: 1 },
       { name: 'canvas', strict: 1, wr: 0 },
+      { name: 'canvas_repository', strict: 1, wr: 0 },
       { name: 'change', strict: 1, wr: 0 },
       { name: 'conversation', strict: 1, wr: 1 },
       { name: 'document', strict: 1, wr: 1 },
@@ -102,11 +112,16 @@ describe('the schema', () => {
       { name: 'meta', strict: 1, wr: 0 },
       { name: 'node', strict: 1, wr: 1 },
       { name: 'open_canvas', strict: 1, wr: 0 },
+      { name: 'project_setup', strict: 1, wr: 0 },
       { name: 'proposal', strict: 1, wr: 0 },
       { name: 'queue_item', strict: 1, wr: 1 },
       { name: 'read_position', strict: 1, wr: 1 },
+      { name: 'repository', strict: 1, wr: 0 },
       { name: 'revision', strict: 1, wr: 1 },
       { name: 'run', strict: 1, wr: 0 },
+      { name: 'worktree', strict: 1, wr: 0 },
+      { name: 'worktree_job', strict: 1, wr: 0 },
+      { name: 'worktree_setup', strict: 1, wr: 0 },
     ]);
   });
 
@@ -255,7 +270,7 @@ describe('the schema', () => {
     const before = Object.fromEntries(kept.map((table) => [table, rowsOf(table)]));
 
     connection.exec('PRAGMA foreign_keys = ON');
-    migrate(connection);
+    migrate(connection, MIGRATIONS.slice(0, 2));
 
     expect(schemaOf(connection)).toBe(2);
     expect(minReaderOf(connection)).toBe(2);
@@ -423,9 +438,16 @@ describe('the schema', () => {
     addMessage('m');
     connection
       .prepare(
-        "INSERT INTO conversation (canvas_id, adapter, agent_id, native_id) VALUES (?, 'x', 'a', 'n')",
+        `INSERT INTO conversation (canvas_id, adapter, agent_id, workspace_key, native_id)
+         VALUES (?, 'x', 'a', ?, 'n')`,
       )
-      .run(CANVAS);
+      .run(CANVAS, PROJECT_WORKSPACE);
+    addRepository();
+    connection
+      .prepare(
+        'INSERT INTO canvas_repository (canvas_id, repository_id, generation) VALUES (?, ?, 1)',
+      )
+      .run(CANVAS, REPOSITORY);
     connection
       .prepare("INSERT INTO run (canvas_id, state, updated_at) VALUES (?, '{}', 1)")
       .run(CANVAS);
@@ -466,6 +488,7 @@ describe('the schema', () => {
     connection.prepare('DELETE FROM canvas WHERE id = ?').run(CANVAS);
     const kept = [
       'conversation',
+      'canvas_repository',
       'run',
       'message',
       'read_position',
@@ -485,5 +508,396 @@ describe('the schema', () => {
       });
     }
     expect(connection.prepare('SELECT count(*) AS rows FROM canvas').get()).toEqual({ rows: 1 });
+    // A repository is the profile's, whichever canvases pick it.
+    expect(rows('repository')).toBe(1);
+  });
+});
+
+const REPOSITORY = '7c0e9a1e-1b6f-4b4f-9f3a-2d1c0b9a8e70';
+const OTHER_CANVAS = '1b7f7b6f-5cc4-4d4f-9b9d-4f8f3d2f0e21';
+const W1 = '9d1c5a0e-0f4e-4c11-8a51-0b1f2e3d4c51';
+const W2 = '9d1c5a0e-0f4e-4c11-8a51-0b1f2e3d4c52';
+const W3 = '9d1c5a0e-0f4e-4c11-8a51-0b1f2e3d4c53';
+const W4 = '9d1c5a0e-0f4e-4c11-8a51-0b1f2e3d4c54';
+const OID = 'a'.repeat(40);
+const ACTIVE = ['creating', 'setup', 'ready', 'missing', 'error'];
+const KEPT = ['retained', 'removing'];
+
+function addRepository(id = REPOSITORY): void {
+  connection
+    .prepare(
+      `INSERT INTO repository
+         (id, picked_root, real_root, common_dir, identity, root_kind, owned_root, generation)
+       VALUES (?, '/work/app', '/work/app', '/work/app/.git', 'identity', 'project',
+         '/work/app/.corral/worktrees/p', 1)`,
+    )
+    .run(id);
+}
+
+/** Adds a workspace of the canvas's repository, its checkout and branch its own unless given. */
+function addWorktree(
+  id: string,
+  owner: string,
+  {
+    state = 'ready',
+    canvas = CANVAS,
+    branch = `refs/heads/corrallm/p/${id}`,
+    path: at = `/work/app/.corral/worktrees/p/${id}`,
+    forkedFrom = null,
+  }: {
+    state?: string;
+    canvas?: string;
+    branch?: string;
+    path?: string;
+    forkedFrom?: string | null;
+  } = {},
+): void {
+  connection
+    .prepare(
+      `INSERT INTO worktree (id, canvas_id, repository_id, owner_key, path, branch_ref,
+         base_checkout, base_oid, forked_from, state, generation, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, '/work/app', ?, ?, ?, 1, 1)`,
+    )
+    .run(id, canvas, REPOSITORY, owner, at, branch, OID, forkedFrom, state);
+}
+
+function bind(agent: string, workspace: string, canvas = CANVAS): void {
+  connection
+    .prepare(
+      'INSERT INTO agent_worktree (canvas_id, agent_id, workspace_id, generation) VALUES (?, ?, ?, 1)',
+    )
+    .run(canvas, agent, workspace);
+}
+
+function addJob(id: string, workspace: string, kind: string, outcome: string | null = null): void {
+  connection
+    .prepare(
+      `INSERT INTO worktree_job (id, workspace_id, kind, phase, generation, payload, intent_hash, outcome,
+         created_at, updated_at)
+       VALUES (?, ?, ?, 'intent', 1, '{}', 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', ?, 1, 1)`,
+    )
+    .run(id, workspace, kind, outcome);
+}
+
+const count = (table: string): unknown =>
+  connection.prepare(`SELECT count(*) AS rows FROM ${table}`).get()?.rows;
+
+describe('schema 3: workspaces', () => {
+  beforeEach(() => {
+    migrate(connection);
+    connection.exec('PRAGMA foreign_keys = ON');
+    addCanvas();
+    addRepository();
+  });
+
+  it('keeps one active workspace per owner of a canvas’s repository, and any number kept or being removed', () => {
+    for (const state of ACTIVE) {
+      addWorktree(W1, 'group/team', { state });
+      for (const other of ACTIVE) {
+        expect(() => {
+          addWorktree(W2, 'group/team', { state: other });
+        }, `${state} then ${other}`).toThrow(/UNIQUE constraint failed/);
+      }
+      connection.prepare('DELETE FROM worktree WHERE id = ?').run(W1);
+    }
+    addWorktree(W1, 'group/team', { state: 'retained' });
+    addWorktree(W2, 'group/team', { state: 'removing' });
+    addWorktree(W3, 'group/team', { state: 'ready' });
+    // Another owner, or another canvas's group of the same id, has its own.
+    addWorktree(W4, 'agent/team', { state: 'ready' });
+    connection.prepare('DELETE FROM worktree WHERE id = ?').run(W4);
+    addCanvas(OTHER_CANVAS);
+    addWorktree(W4, 'group/team', { canvas: OTHER_CANVAS });
+    // A kept one may not become active again while another is.
+    for (const state of ACTIVE) {
+      expect(() =>
+        connection.prepare('UPDATE worktree SET state = ? WHERE id = ?').run(state, W1),
+      ).toThrow(/UNIQUE constraint failed/);
+    }
+    for (const state of KEPT) {
+      connection.prepare('UPDATE worktree SET state = ? WHERE id = ?').run(state, W3);
+    }
+    expect(() =>
+      connection.prepare("UPDATE worktree SET state = 'gone' WHERE id = ?").run(W1),
+    ).toThrow(/CHECK constraint failed/);
+    expect(() => {
+      addWorktree('9d1c5a0e-0f4e-4c11-8a51-0b1f2e3d4c55', 'team');
+    }).toThrow(/CHECK constraint failed/);
+  });
+
+  it('never gives a branch of a repository, or a checkout, to two workspaces', () => {
+    addWorktree(W1, 'agent/a', { state: 'retained', branch: 'refs/heads/shared' });
+    expect(() => {
+      addWorktree(W2, 'agent/b', { branch: 'refs/heads/shared' });
+    }).toThrow(/UNIQUE constraint failed: worktree\.repository_id, worktree\.branch_ref/);
+    expect(() => {
+      addWorktree(W2, 'agent/b', { path: `/work/app/.corral/worktrees/p/${W1}` });
+    }).toThrow(/UNIQUE constraint failed: worktree\.path/);
+    addWorktree(W2, 'agent/b');
+  });
+
+  it('keeps a canvas that owns a workspace, in any state, until its last workspace record goes', () => {
+    for (const state of [...ACTIVE, ...KEPT]) {
+      addWorktree(W1, 'agent/a', { state });
+      expect(
+        () => connection.prepare('DELETE FROM canvas WHERE id = ?').run(CANVAS),
+        state,
+      ).toThrow(/FOREIGN KEY constraint failed/);
+      connection.prepare('DELETE FROM worktree WHERE id = ?').run(W1);
+    }
+    connection
+      .prepare(
+        'INSERT INTO canvas_repository (canvas_id, repository_id, generation) VALUES (?, ?, 1)',
+      )
+      .run(CANVAS, REPOSITORY);
+    connection.prepare('DELETE FROM canvas WHERE id = ?').run(CANVAS);
+    expect({ canvases: count('canvas'), bound: count('canvas_repository') }).toEqual({
+      canvases: 0,
+      bound: 0,
+    });
+    // Nor is a repository forgotten while a canvas or a workspace refers to it.
+    addCanvas();
+    connection
+      .prepare(
+        'INSERT INTO canvas_repository (canvas_id, repository_id, generation) VALUES (?, ?, 1)',
+      )
+      .run(CANVAS, REPOSITORY);
+    expect(() => connection.prepare('DELETE FROM repository').run()).toThrow(
+      /FOREIGN KEY constraint failed/,
+    );
+    // A canvas whose project folder isn't a repository keeps its generation, with none.
+    connection.prepare('UPDATE canvas_repository SET repository_id = NULL, generation = 2').run();
+    addWorktree(W1, 'agent/a');
+    expect(() => connection.prepare('DELETE FROM repository').run()).toThrow(
+      /FOREIGN KEY constraint failed/,
+    );
+  });
+
+  it('keeps an agent’s binding when its node goes, and its workspace while a binding refers to it', () => {
+    addDocument();
+    addNode('a');
+    addWorktree(W1, 'agent/a');
+    bind('a', W1);
+    connection.prepare("DELETE FROM node WHERE id = 'a'").run();
+    expect(count('agent_worktree')).toBe(1);
+    expect(() => connection.prepare('DELETE FROM worktree WHERE id = ?').run(W1)).toThrow(
+      /FOREIGN KEY constraint failed/,
+    );
+    // Only a workspace of its own canvas.
+    addCanvas(OTHER_CANVAS);
+    addWorktree(W2, 'agent/a', { canvas: OTHER_CANVAS });
+    expect(() => {
+      bind('b', W2);
+    }).toThrow(/FOREIGN KEY constraint failed/);
+    expect(() => {
+      bind('b', 'no workspace');
+    }).toThrow(/FOREIGN KEY constraint failed/);
+    // A plan waits beside it: the owner it is for, and its generation, past the active one.
+    connection
+      .prepare(
+        "UPDATE agent_worktree SET desired_generation = 2, desired_owner_key = 'group/team' WHERE agent_id = 'a'",
+      )
+      .run();
+    for (const [generation, owner] of [
+      [2, null],
+      [null, 'group/team'],
+      [1, 'group/team'],
+      [2, 'team'],
+    ] as const) {
+      expect(
+        () =>
+          connection
+            .prepare(
+              "UPDATE agent_worktree SET desired_generation = ?, desired_owner_key = ? WHERE agent_id = 'a'",
+            )
+            .run(generation, owner),
+        `${String(generation)} ${String(owner)}`,
+      ).toThrow(/CHECK constraint failed/);
+    }
+    connection.prepare('DELETE FROM agent_worktree').run();
+    connection.prepare('DELETE FROM worktree WHERE id = ?').run(W1);
+  });
+
+  it('keeps one open job of a kind per workspace, and its jobs and setup go with it', () => {
+    addWorktree(W1, 'agent/a');
+    addWorktree(W2, 'agent/b', { forkedFrom: W1 });
+    addJob('j1', W1, 'create');
+    expect(() => {
+      addJob('j2', W1, 'create');
+    }).toThrow(/UNIQUE constraint failed/);
+    addJob('j2', W1, 'remove');
+    connection.prepare("UPDATE worktree_job SET outcome = 'done' WHERE id = 'j1'").run();
+    addJob('j3', W1, 'create');
+    expect(() =>
+      connection.prepare("UPDATE worktree_job SET payload = 'not JSON' WHERE id = 'j3'").run(),
+    ).toThrow(/CHECK constraint failed/);
+    connection
+      .prepare(
+        `INSERT INTO worktree_setup (workspace_id, generation, source, spec_hash,
+           copy_manifest_hash, state)
+         VALUES (?, 1, 'none', ?, ?, 'pending')`,
+      )
+      .run(W1, 'b'.repeat(64), 'c'.repeat(64));
+    connection.prepare('DELETE FROM worktree WHERE id = ?').run(W1);
+    expect({ jobs: count('worktree_job'), setups: count('worktree_setup') }).toEqual({
+      jobs: 0,
+      setups: 0,
+    });
+    // What was forked from it no longer names it.
+    expect(connection.prepare('SELECT forked_from FROM worktree WHERE id = ?').get(W2)).toEqual({
+      forked_from: null,
+    });
+  });
+
+  it('keeps what a setup runs consistent with where it came from and who allowed it', () => {
+    addWorktree(W1, 'agent/a');
+    const offer = connection.prepare(
+      `INSERT OR REPLACE INTO worktree_setup (workspace_id, generation, command_snapshot, source,
+         spec_hash, copy_manifest_hash, state, approved_by, approved_at)
+       VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    const hash = 'b'.repeat(64);
+    offer.run(W1, 'pnpm install', 'detected', hash, hash, 'pending', null, null);
+    offer.run(W1, 'pnpm install', 'detected', hash, hash, 'running', 'you', 2);
+    offer.run(W1, null, 'none', hash, hash, 'skipped', null, null);
+    for (const [command, source, state, by, at] of [
+      [null, 'detected', 'pending', null, null],
+      ['pnpm install', 'none', 'pending', null, null],
+      ['pnpm install', 'repository', 'pending', null, null],
+      ['pnpm install', 'detected', 'started', null, null],
+      ['pnpm install', 'detected', 'running', 'you', null],
+      // Nothing runs, nor ran, unallowed.
+      ['pnpm install', 'detected', 'running', null, null],
+      ['pnpm install', 'detected', 'done', null, null],
+      ['pnpm install', 'detected', 'interrupted', null, null],
+    ] as const) {
+      expect(() => offer.run(W1, command, source, hash, hash, state, by, at)).toThrow(
+        /CHECK constraint failed/,
+      );
+    }
+    const project = connection.prepare(
+      `INSERT OR REPLACE INTO project_setup (repository_id, command, shell_kind, always_spec_hash,
+         changed_at)
+       VALUES (?, ?, ?, ?, 1)`,
+    );
+    project.run(REPOSITORY, null, null, hash);
+    project.run(REPOSITORY, 'make setup', 'posix', null);
+    expect(() => project.run(REPOSITORY, 'make setup', null, null)).toThrow(
+      /CHECK constraint failed/,
+    );
+    expect(() => project.run(REPOSITORY, null, 'posix', null)).toThrow(/CHECK constraint failed/);
+    expect(() => project.run('no repository', null, null, null)).toThrow(
+      /FOREIGN KEY constraint failed/,
+    );
+  });
+
+  it('keeps an agent’s conversation in each workspace it ran in apart', () => {
+    const remember = connection.prepare(
+      `INSERT INTO conversation (canvas_id, adapter, agent_id, workspace_key, native_id)
+       VALUES (?, 'x', 'a', ?, ?)`,
+    );
+    remember.run(CANVAS, PROJECT_WORKSPACE, 'in the project folder');
+    remember.run(CANVAS, W1, 'in its worktree');
+    expect(() => remember.run(CANVAS, W1, 'again')).toThrow(/UNIQUE constraint failed/);
+    expect(() => remember.run(CANVAS, '', 'nowhere')).toThrow(/CHECK constraint failed/);
+  });
+});
+
+describe('migration 3', () => {
+  it('migrates a schema-2 database to schema 3 keeping every row, its conversations in the picked project folder, which a schema-2 corrallm may no longer open', () => {
+    migrate(connection, MIGRATIONS.slice(0, 2));
+    connection.exec('PRAGMA foreign_keys = ON');
+    addCanvas();
+    connection
+      .prepare("UPDATE canvas SET file = '/work/team.corral', project = '/work' WHERE id = ?")
+      .run(CANVAS);
+    addCanvas(OTHER_CANVAS);
+    const remember = connection.prepare(
+      `INSERT INTO conversation (canvas_id, adapter, agent_id, native_id, role_fingerprint)
+       VALUES (?, ?, ?, ?, ?)`,
+    );
+    remember.run(CANVAS, 'claude-code', 'lead', '0b3a7d52-6a0c-4f39-9c4e-2f8f0c1d9e11', 'none');
+    remember.run(CANVAS, 'codex', 'lead', '0199a3f0-1234-7000-8000-123456789abc', 'f'.repeat(64));
+    remember.run(CANVAS, 'codex', 'worker', 'thread', null);
+    // Kept as it was, though no corrallm would resume it.
+    remember.run(OTHER_CANVAS, 'codex', 'a', '--resume', null);
+    connection
+      .prepare('INSERT INTO run (canvas_id, state, updated_at) VALUES (?, \'{"version":2}\', 1)')
+      .run(CANVAS);
+    const seq = addMessage('m');
+    connection
+      .prepare("INSERT INTO read_position (canvas_id, party, seq) VALUES (?, 'outside:o', ?)")
+      .run(CANVAS, seq);
+    connection.prepare('INSERT INTO open_canvas (canvas_id, opened_at) VALUES (?, 1)').run(CANVAS);
+    addDocument();
+    addNode('team', 'frame');
+    addNode('lead', 'agent', 'team');
+    addNode('worker');
+    addItem('lead', 'r');
+    addItem('lead', 'i', 'r');
+    addLink('lead', 'worker');
+    connection
+      .prepare(
+        "INSERT INTO revision (canvas_id, rev, op, by_party, at) VALUES (?, 1, 'x', 'you', 1)",
+      )
+      .run(CANVAS);
+    connection
+      .prepare(
+        "INSERT INTO change (canvas_id, rev, entity, after_data) VALUES (?, 1, 'node/lead', '{}')",
+      )
+      .run(CANVAS);
+    connection
+      .prepare(
+        `INSERT INTO proposal (id, canvas_id, op, args, by_party, touched, raised_at)
+         VALUES ('p', ?, 'canvas.delete', '{}', 'outside:o', '{}', 1)`,
+      )
+      .run(CANVAS);
+    connection
+      .prepare(
+        `INSERT INTO file_review (id, canvas_id, file_hash, file_generation, summary, raised_at)
+         VALUES ('f', ?, 'h', 0, '{}', 1)`,
+      )
+      .run(CANVAS);
+    const rowsOf = (table: string) => connection.prepare(`SELECT * FROM ${table}`).all();
+    const kept = [
+      'canvas',
+      'run',
+      'message',
+      'read_position',
+      'open_canvas',
+      'document',
+      'node',
+      'link',
+      'queue_item',
+      'revision',
+      'change',
+      'proposal',
+      'file_review',
+    ];
+    const before = Object.fromEntries(kept.map((table) => [table, rowsOf(table)]));
+    const conversations = () =>
+      connection.prepare('SELECT * FROM conversation ORDER BY canvas_id, adapter, agent_id').all();
+    const talked = conversations();
+
+    migrate(connection);
+
+    expect(schemaOf(connection)).toBe(3);
+    expect(minReaderOf(connection)).toBe(3);
+    expect(Object.fromEntries(kept.map((table) => [table, rowsOf(table)]))).toEqual(before);
+    expect(conversations()).toEqual(
+      talked.map((row) => ({ ...row, workspace_key: PROJECT_WORKSPACE })),
+    );
+    for (const table of [
+      'repository',
+      'canvas_repository',
+      'worktree',
+      'agent_worktree',
+      'worktree_job',
+      'worktree_setup',
+      'project_setup',
+    ]) {
+      expect(count(table), table).toBe(0);
+    }
+    expect(addMessage('after')).toBe(seq + 1);
   });
 });
