@@ -197,11 +197,19 @@ function main(): void {
       // An approved quit waits for the complete core teardown. Only a second quit while
       // saving is stuck bounds that wait, as the user's explicit escape.
       let finishing: Promise<void> | undefined;
+      let quitFailed = false;
+      let readyToQuit = false;
+      const failQuit = (why: string, error: unknown) => {
+        const alreadyFailed = quitFailed;
+        quitFailed = true;
+        console.error(why, error);
+        if (readyToQuit && !alreadyFailed) app.exit(1);
+      };
       const abandon = (escape?: true) => (finishing ??= finish(escape));
       const finish = async (escape?: true) => {
         supervisor.stop();
         const closed = ask('close').catch((error: unknown) => {
-          console.error('Could not finish closing the core:', error);
+          failQuit('Could not finish closing the core:', error);
         });
         if (!escape) {
           await closed;
@@ -250,6 +258,11 @@ function main(): void {
         ask: askAnyway('Quit'),
         done: () => {
           void abandon().then(() => {
+            readyToQuit = true;
+            if (quitFailed) {
+              app.exit(1);
+              return;
+            }
             // quitAndInstall closes windows before before-quit: call it only after saving and
             // core shutdown have been approved here, never straight from the update dialog.
             if (!updates?.finishQuit()) app.quit();
@@ -257,7 +270,9 @@ function main(): void {
         },
       });
       app.on('before-quit', (event) => {
-        if (!quit.request()) event.preventDefault();
+        // Closing has approved the irreversible teardown, but a repeated native quit must
+        // still wait until done() has finished closing the core.
+        if (!quit.request() || !readyToQuit) event.preventDefault();
       });
       // A window gaining focus has the core check the file of the canvas it shows for a change on
       // disk (B9 Design §5): one made in another program while corrallm was in the background.
@@ -272,19 +287,37 @@ function main(): void {
         const close = new Closing({
           save: () => persistWindows([window]),
           abandon: () => Promise.resolve(),
-          ask: askAnyway('Close', window),
+          ask: (why) =>
+            // A window's earlier save can settle after the app has taken over shutdown. Its
+            // result cannot reopen a dialog or turn that approved quit into a save failure.
+            quit.approved ? Promise.resolve(false) : askAnyway('Close', window)(why),
           done: () => {
-            window.close();
+            if (!quit.approved) window.close();
           },
         });
         window.on('close', (event) => {
-          if (quit.approved) return;
+          if (quit.approved) {
+            if (!readyToQuit) event.preventDefault();
+            return;
+          }
           // Quitting saves every window: a close meanwhile waits for it.
           if (quit.busy || !close.request()) event.preventDefault();
         });
       });
 
-      await openMainWindow();
+      try {
+        await openMainWindow();
+      } catch (error) {
+        // Destroying a window mid-load rejects loadURL as ERR_ABORTED or ERR_FAILED. Only
+        // an approved quit makes those expected; other startup errors still fail on stderr.
+        const code = error instanceof Error && 'code' in error ? error.code : undefined;
+        if (!quit.approved) throw error;
+        if (code !== 'ERR_ABORTED' && code !== 'ERR_FAILED') {
+          // Preserve the error exit, but still let the approved core teardown finish first.
+          failQuit('Failed to start:', error);
+        }
+      }
+      if (quit.approved) return;
 
       updates = startAppUpdates({
         requestQuit: () => {

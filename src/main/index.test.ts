@@ -387,6 +387,168 @@ describe('waiting for the approved core shutdown', () => {
   });
 });
 
+describe('quit races', () => {
+  function beforeQuit() {
+    const callback = app.on.mock.calls.find(([name]) => name === 'before-quit')?.[1] as
+      ((event: { preventDefault(): void }) => void) | undefined;
+    if (!callback) throw new Error('No quit handler');
+    return callback;
+  }
+
+  it('blocks a repeated before-quit until the approved core close has completed', async () => {
+    app.whenReady.mockResolvedValueOnce();
+    const window = Object.assign(new EventEmitter(), { webContents: { id: 7 }, close: vi.fn() });
+    getAllWindows.mockReturnValue([window]);
+    const closed = Promise.withResolvers<{ ok: true; value: null }>();
+    request.mockImplementation((name) =>
+      name === 'close'
+        ? closed.promise
+        : Promise.resolve({ ok: true, value: name === 'shown' ? [] : null }),
+    );
+    await import('./index');
+    await vi.waitFor(() => {
+      expect(startAppUpdates).toHaveBeenCalledOnce();
+    });
+    const created = app.on.mock.calls.find(([name]) => name === 'browser-window-created')?.[1] as (
+      event: unknown,
+      window: unknown,
+    ) => void;
+    created({}, window);
+    vi.useFakeTimers();
+    const quit = beforeQuit();
+    quit({ preventDefault: vi.fn() });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(request).toHaveBeenCalledWith('close');
+    const preventDefault = vi.fn();
+    quit({ preventDefault });
+    expect(preventDefault).toHaveBeenCalledOnce();
+    const windowClose = vi.fn();
+    window.emit('close', { preventDefault: windowClose });
+    expect(windowClose).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(9000);
+    expect(app.quit).not.toHaveBeenCalled();
+    expect(app.exit).not.toHaveBeenCalled();
+    closed.resolve({ ok: true, value: null });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(app.quit).toHaveBeenCalledOnce();
+    const final = vi.fn();
+    quit({ preventDefault: final });
+    expect(final).not.toHaveBeenCalled();
+    const finalWindowClose = vi.fn();
+    window.emit('close', { preventDefault: finalWindowClose });
+    expect(finalWindowClose).not.toHaveBeenCalled();
+    expect(request.mock.calls.filter(([name]) => name === 'close')).toHaveLength(1);
+  });
+
+  it.each(['resolves', 'rejects'])(
+    'does not let a window save that %s override an approved app quit',
+    async (outcome) => {
+      vi.stubEnv('CORRALLM_HIDE_WINDOW', '1');
+      app.whenReady.mockResolvedValueOnce();
+      const contents = { id: 7, isDestroyed: () => false, isCrashed: () => false, send: vi.fn() };
+      const window = Object.assign(new EventEmitter(), { webContents: contents, close: vi.fn() });
+      getAllWindows.mockReturnValue([window]);
+      const windowSave = Promise.withResolvers<{ ok: true; value: null }>();
+      const closed = Promise.withResolvers<{ ok: true; value: null }>();
+      let flushes = 0;
+      request.mockImplementation((name) => {
+        if (name === 'flush' && ++flushes === 1) return windowSave.promise;
+        if (name === 'close') return closed.promise;
+        return Promise.resolve({ ok: true, value: name === 'shown' ? [] : null });
+      });
+      const stderr = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      await import('./index');
+      await vi.waitFor(() => {
+        expect(startAppUpdates).toHaveBeenCalledOnce();
+      });
+      const created = app.on.mock.calls.find(
+        ([name]) => name === 'browser-window-created',
+      )?.[1] as (event: unknown, window: unknown) => void;
+      created({}, window);
+      vi.useFakeTimers();
+      window.emit('close', { preventDefault: vi.fn() });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(flushes).toBe(1);
+      beforeQuit()({ preventDefault: vi.fn() }); // Playwright's app.quit(), while a window close waits.
+      await vi.advanceTimersByTimeAsync(0);
+      expect(request).toHaveBeenCalledWith('close');
+      if (outcome === 'rejects') windowSave.reject(new Error('The core is closing.'));
+      else windowSave.resolve({ ok: true, value: null });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(window.close).not.toHaveBeenCalled();
+      expect(app.exit).not.toHaveBeenCalled();
+      closed.resolve({ ok: true, value: null });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(app.quit).toHaveBeenCalledOnce();
+      expect(app.exit).not.toHaveBeenCalled();
+      expect(stderr).not.toHaveBeenCalled();
+      expect(showMessageBox).not.toHaveBeenCalled();
+    },
+  );
+
+  it('still reports a real initial window load failure before quit is approved', async () => {
+    app.whenReady.mockResolvedValueOnce();
+    const failure = new Error('The initial window could not load.');
+    createWindow.mockRejectedValueOnce(failure);
+    const stderr = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    await import('./index');
+    await vi.waitFor(() => {
+      expect(app.exit).toHaveBeenCalledExactlyOnceWith(1);
+    });
+    expect(stderr).toHaveBeenCalledWith('Failed to start:', failure);
+    expect(app.quit).not.toHaveBeenCalled();
+  });
+
+  it.each(['ERR_ABORTED', 'ERR_FAILED', 'ERR_FILE_NOT_FOUND'])(
+    'handles an initial window’s %s after an approved app quit without hiding real failures',
+    async (code) => {
+      app.whenReady.mockResolvedValueOnce();
+      const opening = Promise.withResolvers<undefined>();
+      createWindow.mockReturnValueOnce(opening.promise);
+      const closed = Promise.withResolvers<{ ok: true; value: null }>();
+      request.mockImplementation((name) =>
+        name === 'close'
+          ? closed.promise
+          : Promise.resolve({ ok: true, value: name === 'shown' ? [] : null }),
+      );
+      const stderr = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      await import('./index');
+      await vi.waitFor(() => {
+        expect(createWindow).toHaveBeenCalledOnce();
+      });
+      vi.useFakeTimers();
+      beforeQuit()({ preventDefault: vi.fn() }); // firstWindow() does not wait for loadURL to finish.
+      await vi.advanceTimersByTimeAsync(0);
+      expect(request).toHaveBeenCalledWith('close');
+      const failure = Object.assign(new Error(`${code} loading app://main_window/index.html`), {
+        code,
+      });
+      if (code === 'ERR_FILE_NOT_FOUND') {
+        opening.reject(failure);
+        await vi.advanceTimersByTimeAsync(0);
+        expect(app.quit).not.toHaveBeenCalled();
+        expect(app.exit).not.toHaveBeenCalled();
+      }
+      closed.resolve({ ok: true, value: null });
+      await vi.advanceTimersByTimeAsync(0);
+      if (code !== 'ERR_FILE_NOT_FOUND') {
+        expect(app.quit).toHaveBeenCalledOnce();
+        opening.reject(failure);
+        await vi.advanceTimersByTimeAsync(0);
+      }
+      if (code === 'ERR_FILE_NOT_FOUND') {
+        expect(app.quit).not.toHaveBeenCalled();
+        expect(app.exit).toHaveBeenCalledExactlyOnceWith(1);
+        expect(stderr).toHaveBeenCalledWith('Failed to start:', failure);
+      } else {
+        expect(app.exit).not.toHaveBeenCalled();
+        expect(stderr).not.toHaveBeenCalled();
+      }
+      expect(startAppUpdates).not.toHaveBeenCalled();
+    },
+  );
+});
+
 describe('single-instance startup', () => {
   it('quits a second instance before reading user data or creating a window', async () => {
     app.requestSingleInstanceLock.mockReturnValue(false);
@@ -647,13 +809,14 @@ describe('a core that crashes', () => {
   });
 });
 
-it('finishes an approved quit if teardown fails, without offering to keep a closed core open', async () => {
+it('reports a failed approved core teardown on stderr and exits nonzero, without offering to keep a closed core open', async () => {
   app.whenReady.mockResolvedValueOnce();
+  const closed = Promise.withResolvers<{ ok: true; value: null }>();
   request.mockImplementation((name) => {
-    if (name === 'close') return Promise.reject(new Error('The final journal write failed.'));
+    if (name === 'close') return closed.promise;
     return Promise.resolve({ ok: true, value: name === 'shown' ? [] : null });
   });
-  vi.spyOn(console, 'error').mockImplementation(() => undefined);
+  const stderr = vi.spyOn(console, 'error').mockImplementation(() => undefined);
   await import('./index');
   await vi.waitFor(() => {
     expect(createWindow).toHaveBeenCalledOnce();
@@ -661,9 +824,19 @@ it('finishes an approved quit if teardown fails, without offering to keep a clos
   const beforeQuit = app.on.mock.calls.find(([name]) => name === 'before-quit')?.[1] as (
     event: unknown,
   ) => void;
+  vi.useFakeTimers();
   beforeQuit({ preventDefault: vi.fn() });
-  await vi.waitFor(() => {
-    expect(app.quit).toHaveBeenCalledOnce();
-  });
+  await vi.advanceTimersByTimeAsync(9000);
+  expect(request).toHaveBeenCalledWith('close');
+  expect(app.quit).not.toHaveBeenCalled();
+  expect(app.exit).not.toHaveBeenCalled();
+  closed.reject(new Error('The final journal write failed.'));
+  await vi.advanceTimersByTimeAsync(0);
+  expect(app.exit).toHaveBeenCalledExactlyOnceWith(1);
+  expect(app.quit).not.toHaveBeenCalled();
+  expect(stderr).toHaveBeenCalledWith(
+    'Could not finish closing the core:',
+    expect.objectContaining({ message: 'The final journal write failed.' }),
+  );
   expect(showMessageBox).not.toHaveBeenCalled();
 });
