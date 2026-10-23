@@ -28,7 +28,7 @@ import {
 import type { Connector, LiveSession, SessionHost } from './connector';
 import type { Conversations } from './adapter';
 import { droppedPaste } from './terminal/drop';
-import { requireConversationId } from './adapters';
+import { isConversationId, requireConversationId } from './adapters';
 
 const NO_PROJECT =
   'Choose a project folder for this canvas first (in the bar at the top left): its agents work in it.';
@@ -312,10 +312,15 @@ export class SessionManager {
     const folder = this.#deps.projectOf(canvas);
     if (folder === undefined) throw new Error(NO_PROJECT);
     const adapter = await this.#deps.adapterOf(canvas, agentId);
-    const listed =
+    const found =
       (await this.#deps.conversations?.[adapter]?.list(folder, await this.#deps.environment())) ??
       [];
-    for (const kept of listed) requireConversationId(adapter, kept.id);
+    const listed = found.filter((kept) => isConversationId(adapter, kept.id));
+    if (listed.length !== found.length) {
+      console.warn(
+        `Skipped ${String(found.length - listed.length)} invalid ${adapter} conversation ids from the resume list.`,
+      );
+    }
     const agents =
       this.#listed.get(canvas) ??
       new Map<string, { adapter: AdapterId; folder: string; ids: Set<string> }>();
