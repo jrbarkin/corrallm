@@ -4,7 +4,6 @@ import path from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { HOOK_TOKEN } from '../terminal/hooks';
 import { hooksOff, hooksOffWarning } from './hooks-off';
 
 const URL = 'http://127.0.0.1:52817/hook';
@@ -46,7 +45,7 @@ describe('Claude Code settings that turn corrallm’s hooks off', () => {
     await expect(off()).resolves.toBeUndefined();
     await user('{ not json');
     await project({ disableAllHooks: false, allowedHttpHookUrls: ['http://127.0.0.1:*'] });
-    await local({ httpHookAllowedEnvVars: [HOOK_TOKEN, 'OTHER'] });
+    await local({ httpHookAllowedEnvVars: ['OTHER'] });
     await expect(off()).resolves.toBeUndefined();
   });
 
@@ -103,16 +102,16 @@ describe('Claude Code settings that turn corrallm’s hooks off', () => {
     });
   });
 
-  it('finds the token kept out of corrallm’s hooks', async () => {
-    await policy({ httpHookAllowedEnvVars: ['OTHER_TOKEN'] });
-    await expect(off()).resolves.toEqual({
-      setting: 'httpHookAllowedEnvVars',
-      where: 'your organization’s managed settings',
-      statusLine: false,
-    });
-    await user({ httpHookAllowedEnvVars: [HOOK_TOKEN] });
-    await expect(off()).resolves.toBeUndefined();
-  });
+  it.each(['user', 'managed'] as const)(
+    'ignores the %s header-variable allowlist for literal headers',
+    async (source) => {
+      const write = source === 'user' ? user : policy;
+      await write({ httpHookAllowedEnvVars: ['OTHER'] });
+      await expect(off()).resolves.toBeUndefined();
+      await write({ httpHookAllowedEnvVars: [] });
+      await expect(off()).resolves.toBeUndefined();
+    },
+  );
 });
 
 describe('the warning', () => {

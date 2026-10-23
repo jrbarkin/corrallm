@@ -196,22 +196,44 @@ describe('a Terminal session', () => {
     });
   });
 
-  it.each([
-    { disableAllHooks: true },
-    { allowedHttpHookUrls: ['https://example.test/*'] },
-    { httpHookAllowedEnvVars: [] },
-  ])('does not bypass hook restrictions with the command startup post (%j)', async (settings) => {
-    fake.sessionStart = 'default';
-    const home = path.join(dir, 'home');
-    await mkdir(path.join(home, '.claude'), { recursive: true });
-    await writeFile(path.join(home, '.claude', 'settings.json'), JSON.stringify(settings));
-    await start({ env: { ...SPEC.env, HOME: home } });
-    const kept = JSON.parse(readFileSync(claude().arg('--settings') ?? '', 'utf8')) as {
-      hooks: Record<string, unknown>;
-    };
-    expect(kept.hooks).toEqual({});
-    expect(last('unheard')).toBeDefined();
-  });
+  it.each([{ httpHookAllowedEnvVars: ['OTHER'] }, { httpHookAllowedEnvVars: [] }])(
+    'registers its file-backed hooks without an unheard warning under %j',
+    async (settings) => {
+      fake.sessionStart = 'default';
+      const home = path.join(dir, 'home');
+      await mkdir(path.join(home, '.claude'), { recursive: true });
+      await writeFile(path.join(home, '.claude', 'settings.json'), JSON.stringify(settings));
+      await start({ env: { ...SPEC.env, HOME: home } });
+      const kept = JSON.parse(readFileSync(claude().arg('--settings') ?? '', 'utf8')) as {
+        hooks: Record<string, { hooks: { type: string; headers?: { Authorization: string } }[] }[]>;
+      };
+      expect(kept.hooks.SessionStart?.[0]?.hooks[0]).toMatchObject({ type: 'command' });
+      expect(kept.hooks.Stop?.[0]?.hooks[0]?.type).toBe('http');
+      expect(kept.hooks.Stop?.[0]?.hooks[0]?.headers?.Authorization).toMatch(
+        /^Bearer [0-9a-f]{48}$/,
+      );
+      await until(() => {
+        expect(last('mode')).toMatchObject({ mode: 'manual' });
+      });
+      expect(last('unheard')).toBeUndefined();
+    },
+  );
+
+  it.each([{ disableAllHooks: true }, { allowedHttpHookUrls: ['https://example.test/*'] }])(
+    'does not bypass hook restrictions with the command startup post (%j)',
+    async (settings) => {
+      fake.sessionStart = 'default';
+      const home = path.join(dir, 'home');
+      await mkdir(path.join(home, '.claude'), { recursive: true });
+      await writeFile(path.join(home, '.claude', 'settings.json'), JSON.stringify(settings));
+      await start({ env: { ...SPEC.env, HOME: home } });
+      const kept = JSON.parse(readFileSync(claude().arg('--settings') ?? '', 'utf8')) as {
+        hooks: Record<string, unknown>;
+      };
+      expect(kept.hooks).toEqual({});
+      expect(last('unheard')).toBeDefined();
+    },
+  );
 
   it('does not pass a modern snapshot flag to an older CLI on role launch or resume', async () => {
     help = '  --model <model>  Model\n  --append-system-prompt <prompt>  Append instructions';
