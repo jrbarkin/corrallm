@@ -273,7 +273,7 @@ describe('the app’s core and window channels', () => {
       });
     },
   );
-  it('shares usage between operations and the remaining channels', async () => {
+  it('shares usage operations between windows', async () => {
     const { core, connect } = await app();
     const seven = connect(7);
     const eight = connect(8);
@@ -286,8 +286,8 @@ describe('the app’s core and window channels', () => {
       value: { ok: true, value: { revs: {} } },
     });
     const state = { readings: [], rules: { codex: rule } };
-    expect(await channel(eight, 'usage:get')).toEqual(state);
-    await channel(eight, 'usage:rule', 'codex', null);
+    expect(await call(eight, 'usage.get', {})).toEqual(state);
+    await call(eight, 'usage.setRule', { backend: 'codex', rule: null });
     await expect(core.call('usage.get', {}, CALLERS.you)).resolves.toEqual({
       ok: true,
       value: { readings: [], rules: {} },
@@ -319,7 +319,7 @@ describe('the app’s core and window channels', () => {
         ['a', 'codex.app-server', expect.objectContaining({ type: 'started' })],
       ]);
     });
-    await channel(eight, 'usage:get');
+    await call(eight, 'usage.get', {});
     expect(b).toEqual([]);
   });
 
@@ -364,7 +364,7 @@ describe('the app’s core and window channels', () => {
         ['terminal', ['a', { type: 'screen', data: 'hello', cols: 80, rows: 24 }]],
       ]);
     });
-    await channel(eight, 'usage:get');
+    await call(eight, 'usage.get', {});
     expect(b).toEqual([]);
   });
 
@@ -469,7 +469,10 @@ describe('the app’s core and window channels', () => {
       model: null,
       mode: 'auto',
     });
-    await channel(window, 'usage:rule', 'codex', { window: 'weekly', percent: 80, action: 'ask' });
+    await call(window, 'usage.setRule', {
+      backend: 'codex',
+      rule: { window: 'weekly', percent: 80, action: 'ask' },
+    });
     await core.flush();
 
     expect(journaledRun(profile, id)).toEqual(checkpoint);
