@@ -24,6 +24,13 @@ export interface Migration {
   sql: string;
 }
 
+/**
+ * The workspace key of a conversation whose CLI ran in the canvas's picked project folder itself,
+ * rather than in a workspace of its own (whose key is the workspace's id): every conversation
+ * schema 2 kept ran there. Kept in the database, so never changed.
+ */
+export const PROJECT_WORKSPACE = 'project';
+
 export const MIGRATIONS: readonly Migration[] = [
   {
     // B9.0's tables. Part B, which puts today's stores behind them, may still reshape them before
@@ -268,6 +275,169 @@ export const MIGRATIONS: readonly Migration[] = [
       ) STRICT;
       CREATE INDEX file_review_by_canvas ON file_review (canvas_id);
       CREATE UNIQUE INDEX file_review_open ON file_review (canvas_id) WHERE outcome IS NULL;
+    `,
+  },
+  {
+    // Workspaces: a canvas's agents work in checkouts of their own of the repository picked as its
+    // project folder (Git worktrees, a group's agents sharing one), each conversation kept by the
+    // checkout its CLI ran in. A corrallm of schema 2 would start every agent in the project folder
+    // itself, resuming there conversations of another checkout, so it may no longer open the
+    // database. Nothing here touches a repository: workspaces are made once it is open.
+    version: 3,
+    minReader: 3,
+    sql: `
+      -- Binding/plan generations survive clearing plans and deleting bindings, even with a clock
+      -- set back. Allocated in the same write as their binding, never from in-memory counters.
+      ALTER TABLE meta ADD COLUMN workspace_generation INTEGER NOT NULL DEFAULT 0
+        CHECK (workspace_generation >= 0);
+
+      -- Conversations, kept by the workspace their CLI ran in too: each of an agent's checkouts
+      -- has a history of its own. Every one kept so far ran in the picked project folder itself.
+      -- Rebuilt first, so that the tables made after it take the pages the old one leaves.
+      CREATE TABLE conversation_by_workspace (
+        canvas_id TEXT NOT NULL REFERENCES canvas (id) ON DELETE CASCADE,
+        adapter TEXT NOT NULL,
+        agent_id TEXT NOT NULL,
+        workspace_key TEXT NOT NULL CHECK (workspace_key <> ''),
+        native_id TEXT NOT NULL,
+        role_fingerprint TEXT,
+        PRIMARY KEY (canvas_id, adapter, agent_id, workspace_key)
+      ) STRICT, WITHOUT ROWID;
+      INSERT INTO conversation_by_workspace
+        (canvas_id, adapter, agent_id, workspace_key, native_id, role_fingerprint)
+        SELECT canvas_id, adapter, agent_id, '${PROJECT_WORKSPACE}', native_id, role_fingerprint
+        FROM conversation;
+      DROP TABLE conversation;
+      ALTER TABLE conversation_by_workspace RENAME TO conversation;
+
+      -- A repository a project folder is, on this profile: the checkout picked (as picked, and its
+      -- real path), its common Git directory and what identifies it, and the folder its workspaces'
+      -- checkouts are made in: inside the picked checkout ('project') or the profile ('profile').
+      -- Its generation moves on whenever what is known of it changes.
+      CREATE TABLE repository (
+        id TEXT PRIMARY KEY NOT NULL,
+        picked_root TEXT NOT NULL,
+        real_root TEXT NOT NULL,
+        common_dir TEXT NOT NULL,
+        identity TEXT NOT NULL,
+        root_kind TEXT NOT NULL CHECK (root_kind IN ('project', 'profile')),
+        owned_root TEXT NOT NULL,
+        generation INTEGER NOT NULL CHECK (generation >= 0),
+        UNIQUE (real_root, identity)
+      ) STRICT;
+
+      -- The repository a canvas's project folder is (none: a folder that isn't one, which its
+      -- agents share), and the canvas's project generation, which moves on with every change of it.
+      CREATE TABLE canvas_repository (
+        canvas_id TEXT PRIMARY KEY NOT NULL REFERENCES canvas (id) ON DELETE CASCADE,
+        repository_id TEXT REFERENCES repository (id) ON DELETE RESTRICT,
+        generation INTEGER NOT NULL CHECK (generation >= 0)
+      ) STRICT;
+      CREATE INDEX canvas_repository_by_repository ON canvas_repository (repository_id);
+
+      -- A canvas's workspace: its own checkout of the repository (path) on its own branch
+      -- (branch_ref), made from the picked checkout's commit (base_oid, and the branch it was on,
+      -- base_ref) or forked from another workspace's; the outermost group or lone agent it is for
+      -- (owner_key), its state and generation. Each owner has at most one active (neither kept,
+      -- 'retained', nor 'removing') at a time. A canvas that has one, in any state, is never
+      -- forgotten: what it holds may be the only copy of an agent's work.
+      CREATE TABLE worktree (
+        id TEXT PRIMARY KEY NOT NULL,
+        canvas_id TEXT NOT NULL REFERENCES canvas (id) ON DELETE RESTRICT,
+        repository_id TEXT NOT NULL REFERENCES repository (id) ON DELETE RESTRICT,
+        owner_key TEXT NOT NULL CHECK (owner_key GLOB 'agent/?*' OR owner_key GLOB 'group/?*'),
+        path TEXT NOT NULL UNIQUE,
+        branch_ref TEXT NOT NULL,
+        base_checkout TEXT NOT NULL,
+        base_ref TEXT,
+        base_oid TEXT NOT NULL,
+        forked_from TEXT REFERENCES worktree (id) ON DELETE SET NULL,
+        state TEXT NOT NULL CHECK (state IN
+          ('creating', 'setup', 'ready', 'missing', 'error', 'retained', 'removing')),
+        generation INTEGER NOT NULL CHECK (generation >= 0),
+        created_at INTEGER NOT NULL,
+        error_code TEXT,
+        UNIQUE (canvas_id, id),
+        UNIQUE (repository_id, branch_ref)
+      ) STRICT;
+      CREATE UNIQUE INDEX worktree_active ON worktree (canvas_id, repository_id, owner_key)
+        WHERE state NOT IN ('retained', 'removing');
+      CREATE INDEX worktree_by_fork ON worktree (forked_from);
+
+      -- Each agent's workspace, of its own canvas, and the generation of that binding; while a
+      -- change of it waits, the owner it is to move to and the generation it would have then. No
+      -- reference to the agent's node: a binding outlives its node until what removing it leaves
+      -- is settled, and its workspace is kept while a binding refers to it.
+      CREATE TABLE agent_worktree (
+        canvas_id TEXT NOT NULL,
+        agent_id TEXT NOT NULL,
+        workspace_id TEXT NOT NULL,
+        generation INTEGER NOT NULL CHECK (generation >= 0),
+        desired_generation INTEGER,
+        desired_owner_key TEXT,
+        PRIMARY KEY (canvas_id, agent_id),
+        FOREIGN KEY (canvas_id, workspace_id) REFERENCES worktree (canvas_id, id)
+          ON DELETE RESTRICT,
+        CHECK ((desired_generation IS NULL) = (desired_owner_key IS NULL)),
+        CHECK (desired_generation > generation),
+        CHECK (desired_owner_key GLOB 'agent/?*' OR desired_owner_key GLOB 'group/?*')
+      ) STRICT, WITHOUT ROWID;
+      CREATE INDEX agent_worktree_by_workspace ON agent_worktree (canvas_id, workspace_id);
+
+      -- What is to be done to a workspace, recorded before any of it is, so that a restart
+      -- finishes it rather than doing it again: its kind, the phase it reached, the generation it
+      -- is for, the repository identity it expects, what it needs (payload) and how it ended (none
+      -- while it goes on). At most one of each kind goes on for a workspace at a time.
+      CREATE TABLE worktree_job (
+        id TEXT PRIMARY KEY NOT NULL,
+        workspace_id TEXT NOT NULL REFERENCES worktree (id) ON DELETE CASCADE,
+        kind TEXT NOT NULL,
+        phase TEXT NOT NULL,
+        generation INTEGER NOT NULL CHECK (generation >= 0),
+        expected_identity TEXT,
+        payload TEXT NOT NULL CHECK (json_valid(payload)),
+        intent_hash TEXT NOT NULL CHECK (length(intent_hash) = 64),
+        outcome TEXT,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      ) STRICT;
+      CREATE INDEX worktree_job_by_workspace ON worktree_job (workspace_id, created_at);
+      CREATE UNIQUE INDEX worktree_job_open ON worktree_job (workspace_id, kind)
+        WHERE outcome IS NULL;
+
+      -- A workspace's setup, a generation at a time: the command as it was offered (none if there
+      -- is none), where it came from, the hashes of exactly what runs and how (spec_hash) and of
+      -- the local files copied in (copy_manifest_hash), its state, who allowed it to run and
+      -- when, and the key of its output's log and how it exited. Nothing runs unallowed.
+      CREATE TABLE worktree_setup (
+        workspace_id TEXT PRIMARY KEY NOT NULL REFERENCES worktree (id) ON DELETE CASCADE,
+        generation INTEGER NOT NULL CHECK (generation >= 0),
+        command_snapshot TEXT,
+        source TEXT NOT NULL CHECK (source IN ('configured', 'detected', 'none')),
+        spec_hash TEXT NOT NULL,
+        copy_manifest_hash TEXT NOT NULL,
+        state TEXT NOT NULL
+          CHECK (state IN ('pending', 'running', 'done', 'skipped', 'failed', 'interrupted')),
+        approved_by TEXT,
+        approved_at INTEGER,
+        log_key TEXT,
+        exit_code INTEGER,
+        CHECK ((source = 'none') = (command_snapshot IS NULL)),
+        CHECK ((approved_by IS NULL) = (approved_at IS NULL)),
+        CHECK (state IN ('pending', 'skipped') OR approved_by IS NOT NULL)
+      ) STRICT;
+
+      -- How a repository's workspaces are set up on this profile: the command you set for it
+      -- (none: the one detected, if any) and how it runs, the hash of exactly what you allowed to
+      -- run always (none: each workspace asks), and when either last changed.
+      CREATE TABLE project_setup (
+        repository_id TEXT PRIMARY KEY NOT NULL REFERENCES repository (id) ON DELETE CASCADE,
+        command TEXT,
+        shell_kind TEXT,
+        always_spec_hash TEXT,
+        changed_at INTEGER NOT NULL,
+        CHECK ((command IS NULL) = (shell_kind IS NULL))
+      ) STRICT;
     `,
   },
 ];

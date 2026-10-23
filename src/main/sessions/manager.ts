@@ -19,7 +19,12 @@ import type {
 } from '../../shared/session';
 import type { TerminalEvent } from '../../shared/terminal';
 import type { CanvasMemory, Conversation } from '../memory';
-import { roleFingerprint } from '../memory';
+import {
+  conversationsIn,
+  PROJECT_WORKSPACE,
+  roleFingerprint,
+  withConversationsIn,
+} from '../memory';
 import type { Connector, LiveSession, SessionHost } from './connector';
 import type { Conversations } from './adapter';
 import { droppedPaste } from './terminal/drop';
@@ -417,10 +422,15 @@ export class SessionManager {
     if (this.#agents.get(canvas)?.size === 0) this.#agents.delete(canvas);
   }
 
-  /** The canvas has a new project folder: its sessions end and are forgotten, to start afresh there. */
+  /**
+   * The canvas has a new project folder: its sessions end, and the conversations its CLIs ran in
+   * the old one are forgotten, to start afresh in the new one.
+   */
   async projectChanged(canvas: CanvasId): Promise<void> {
     await this.#endAll(canvas, true);
-    await this.#deps.memory.update(canvas, (remembered) => ({ ...remembered, conversations: {} }));
+    await this.#deps.memory.update(canvas, (remembered) =>
+      withConversationsIn(remembered, PROJECT_WORKSPACE, {}),
+    );
   }
 
   /** Ends every session, as the app quits: resolves once they have all closed. */
@@ -489,26 +499,36 @@ export class SessionManager {
     return adapter?.modes.some((one) => one.id === mode) ?? false;
   }
 
+  /**
+   * The workspace whose conversations an agent's CLI resumes: the one it runs in. Every agent runs
+   * in the canvas's project folder itself for now.
+   */
+  #workspaceOf(): string {
+    return PROJECT_WORKSPACE;
+  }
+
   /** The agent's conversation in `adapter`, as remembered with the canvas: what it resumes. */
   async #conversation(
     canvas: CanvasId,
     adapter: AdapterId,
     agentId: string,
   ): Promise<Conversation | undefined> {
-    const conversations = (await this.#deps.memory.get(canvas)).conversations[adapter] ?? {};
+    const remembered = await this.#deps.memory.get(canvas);
+    const byAdapter = conversationsIn(remembered, this.#workspaceOf());
+    const conversations = (Object.hasOwn(byAdapter, adapter) ? byAdapter[adapter] : {}) ?? {};
     return Object.hasOwn(conversations, agentId) ? conversations[agentId] : undefined;
   }
 
   /** Forgets the agent's conversation in `adapter`: it starts afresh next time. */
   async #forget(canvas: CanvasId, adapter: AdapterId, agentId: string): Promise<void> {
+    const workspace = this.#workspaceOf();
     await this.#deps.memory.update(canvas, (remembered) => {
-      const kept = Object.entries(remembered.conversations[adapter] ?? {}).filter(
-        ([agent]) => agent !== agentId,
-      );
-      return {
-        ...remembered,
-        conversations: { ...remembered.conversations, [adapter]: Object.fromEntries(kept) },
-      };
+      const byAdapter = conversationsIn(remembered, workspace);
+      const kept = Object.entries(byAdapter[adapter] ?? {}).filter(([agent]) => agent !== agentId);
+      return withConversationsIn(remembered, workspace, {
+        ...byAdapter,
+        [adapter]: Object.fromEntries(kept),
+      });
     });
   }
 
@@ -528,13 +548,14 @@ export class SessionManager {
       id: sessionId,
       ...(fingerprint === undefined ? {} : { role: fingerprint }),
     };
-    await this.#deps.memory.update(canvas, (remembered) => ({
-      ...remembered,
-      conversations: {
-        ...remembered.conversations,
-        [adapter]: { ...remembered.conversations[adapter], [agentId]: conversation },
-      },
-    }));
+    const workspace = this.#workspaceOf();
+    await this.#deps.memory.update(canvas, (remembered) => {
+      const byAdapter = conversationsIn(remembered, workspace);
+      return withConversationsIn(remembered, workspace, {
+        ...byAdapter,
+        [adapter]: { ...byAdapter[adapter], [agentId]: conversation },
+      });
+    });
   }
 
   /** Shows the agent's session's screen in its canvas's view, if it has a view and a screen. */
