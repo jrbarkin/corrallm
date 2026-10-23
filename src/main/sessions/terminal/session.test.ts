@@ -500,8 +500,8 @@ describe('a Terminal session', () => {
     });
     expect(claude().prompts).toEqual(['Fix the bug']);
     expect(seen(1)).toEqual([
-      'user:Fix the bug',
       'status:working',
+      'user:Fix the bug',
       'mode:manual',
       'text:Done: Fix the bug',
       'end:done',
@@ -561,8 +561,8 @@ describe('a Terminal session', () => {
       expect(last('end')).toBeDefined();
     });
     expect(seen(1)).toEqual([
-      'user:ask to run the tests',
       'status:working',
+      'user:ask to run the tests',
       'mode:manual',
       'asking:permission',
       'status:waiting',
@@ -754,7 +754,9 @@ describe('a Terminal session', () => {
     fake.trust = true;
     const session = await start();
     await session.send({ id: 'm1', text: 'never typed' });
+    expect(events.filter((event) => event.type === 'user')).toEqual([]);
     await session.interrupt();
+    expect(events.filter((event) => event.type === 'user')).toEqual([]);
     expect(last('end')).toMatchObject({
       messages: ['m1'],
       result: { status: 'cancelled', reason: 'interrupted' },
@@ -843,10 +845,10 @@ describe('a Terminal session', () => {
     expect(claude().prompts).toEqual(['Hello']);
     expect(seen(1)).toEqual([
       'asking:trust',
-      'user:Hello',
       'status:waiting',
       'asking:',
       'status:working',
+      'user:Hello',
       'mode:manual',
       'text:Done: Hello',
       'end:done',
@@ -878,7 +880,7 @@ describe('a Terminal session', () => {
     // A message for it waits too, on the other agent's dialog, not on the user here.
     await b.send({ id: 'm1', text: 'Hello from b' });
     await new Promise((resolve) => setTimeout(resolve, TIMING.startup + 30));
-    expect(second.map((event) => event.type)).toEqual(['started', 'user', 'status']);
+    expect(second.map((event) => event.type)).toEqual(['started', 'status']);
     expect(second.at(-1)).toEqual({ type: 'status', status: 'working' });
 
     // Trusted in the first one's terminal: the other starts, asks nothing, and takes its message.
@@ -891,6 +893,9 @@ describe('a Terminal session', () => {
       expect(second.findLast((event) => event.type === 'end')).toBeDefined();
     });
     expect(runs[1]?.prompts).toEqual(['Hello from b']);
+    expect(second.filter((event) => event.type === 'user')).toEqual([
+      { type: 'user', id: 'm1', text: 'Hello from b' },
+    ]);
     expect(second.filter((event) => event.type === 'asking')).toEqual([]);
     // Its view starts afresh, from the new process's screen.
     const fresh = shown.findLastIndex((event) => event.type === 'screen');
@@ -957,8 +962,8 @@ describe('a Terminal session', () => {
       expect(last('end')).toBeDefined();
     });
     expect(seen(1)).toEqual([
-      'user:fail please',
       'status:working',
+      'user:fail please',
       'mode:manual',
       'notice:error:Limit reached',
       'end:failed',
@@ -980,8 +985,8 @@ describe('a Terminal session', () => {
       expect(last('end')).toBeDefined();
     });
     expect(seen(1)).toEqual([
-      'user:Hello',
       'status:working',
+      'user:Hello',
       'mode:manual',
       'text:Done: Hello',
       'end:done',

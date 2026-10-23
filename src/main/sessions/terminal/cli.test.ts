@@ -400,8 +400,8 @@ describe('a Terminal session of another CLI', () => {
     });
     expect(runs[0]?.written).toContain(`${PASTE_START}Hello\nthere${PASTE_END}`);
     expect(seen().slice(1)).toEqual([
-      'user:Hello\nthere',
       'status:working',
+      'user:Hello\nthere',
       'text:Done',
       'end:done',
     ]);
@@ -436,7 +436,7 @@ describe('a Terminal session of another CLI', () => {
     await until(() => {
       expect(last('end')).toBeDefined();
     });
-    expect(seen().slice(1)).toEqual(['user:Hello', 'status:working', 'text:Done', 'end:done']);
+    expect(seen().slice(1)).toEqual(['status:working', 'user:Hello', 'text:Done', 'end:done']);
   });
 
   it('types only into its prompt as drawn, though its title says it is ready', async () => {
