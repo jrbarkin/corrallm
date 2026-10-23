@@ -95,10 +95,13 @@ const OWNS_WORKSPACE = 'EXISTS (SELECT 1 FROM worktree WHERE worktree.canvas_id 
  * kept here.
  *
  * A file belongs to one canvas at most. Changes go through the store's write lane, in order, each
- * reading what those before it left, and are on disk once they resolve. A change is remembered as
- * it is made (what `get` reads), and written with every canvas changed whose row isn't on disk as
- * it is yet: one whose write failed is said, written again with the next, and fails `flush` until
- * it is on disk, so no conversation remembered is lost to a write that failed once. It keeps the
+ * reading what those before it left, and are on disk once they resolve. An ordinary change is
+ * remembered as it is made (what `get` reads), and written with every canvas changed whose row
+ * isn't on disk as it is yet: one whose write failed is said, written again with the next, and
+ * fails `flush` until it is on disk, so no conversation remembered is lost to a write that failed
+ * once. An atomic change (with `within`, a Save As or forget) instead rejects and restores its
+ * earlier pending memory on failure, telling no listener; later memory changes wait for it to
+ * settle so none can persist its rejected staging. It keeps the
  * LIMIT canvases used most recently (`used_at`, which each change moves past every other's) with a
  * file, folder or conversations, and the LIMIT drafts used most recently (each New makes one, with
  * its run), forgetting the others with everything the database keeps of them: drafts never push
@@ -120,6 +123,10 @@ export class CanvasMemory {
   readonly #conversationId: (adapter: string, id: string) => boolean;
   /** Every change asked for so far, written or failed. */
   #writing: Promise<unknown> = Promise.resolve();
+  /** Atomic changes must settle before later memory changes can read or persist their staging. */
+  #atomic: Promise<void> | undefined;
+  /** Notifications made inside an atomic write, told only once its commit succeeds. */
+  #notifications: Set<CanvasId | undefined> | undefined;
   /**
    * The canvases changed whose rows aren't on disk as they are yet, as changed (the canvas changed
    * last, last), each with the number of its last change: a write marks one on disk only if it
@@ -291,35 +298,78 @@ export class CanvasMemory {
   #change(apply: () => void, within?: () => void): Promise<void> {
     let written: () => void = () => undefined;
     let touched: CanvasId[] = [];
-    const attempt = this.#store.write(() => {
-      this.#touched = [];
-      apply();
-      touched = this.#touched;
-      written = this.#writeUnwritten();
-      within?.();
-    });
+    let undo: () => void = () => undefined;
+    let notify = within === undefined;
+    const notifications = new Set<CanvasId | undefined>();
+    const run = () => {
+      if (within !== undefined) {
+        const before = new Map(this.#unwritten);
+        let undone = false;
+        undo = () => {
+          if (undone) return;
+          undone = true;
+          this.#unwritten.clear();
+          for (const [canvas, entry] of before) this.#unwritten.set(canvas, entry);
+        };
+      }
+      const previous = this.#notifications;
+      if (within !== undefined) this.#notifications = notifications;
+      try {
+        this.#touched = [];
+        apply();
+        touched = this.#touched;
+        written = this.#writeUnwritten();
+        within?.();
+      } catch (error) {
+        // Restore before the store starts another savepoint, not just in a later rejection job.
+        undo();
+        throw error;
+      } finally {
+        this.#notifications = previous;
+      }
+    };
+    const attempt = this.#atomic
+      ? this.#atomic.then(() => this.#store.write(run))
+      : this.#store.write(run);
     const writing = attempt
       .then(
         () => {
           written();
+          notify = true;
           if (this.#unwritten.size === 0) this.#writeError = undefined;
         },
         // Ordinary changes remain nonfatal, but shutdown must not lose native resume IDs: what
         // failed stays unwritten, for the next write, and fails `flush` meanwhile.
         (error: unknown) => {
-          this.#writeError = error instanceof Error ? error : new Error(String(error));
+          if (within === undefined)
+            this.#writeError = error instanceof Error ? error : new Error(String(error));
+          else {
+            undo();
+            if (this.#unwritten.size === 0) this.#writeError = undefined;
+          }
           console.error('Could not remember the canvas:', error);
         },
       )
       .then(() => {
-        for (const canvas of new Set(touched)) this.#tell(canvas);
+        if (notify)
+          for (const canvas of new Set([...touched, ...notifications])) this.#tell(canvas);
       });
+    if (within !== undefined) {
+      this.#atomic = writing;
+      void writing.then(() => {
+        if (this.#atomic === writing) this.#atomic = undefined;
+      });
+    }
     this.#writing = Promise.all([this.#writing, writing]);
     return within === undefined ? writing : attempt.then(() => undefined);
   }
 
   /** Tells what hears it that `canvas` changed (undefined: which canvases it keeps). */
   #tell(canvas: CanvasId | undefined): void {
+    if (this.#notifications !== undefined) {
+      this.#notifications.add(canvas);
+      return;
+    }
     for (const listener of this.#listeners) {
       try {
         listener(canvas);
