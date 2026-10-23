@@ -7,6 +7,16 @@ import { AgentId, OpCanvas } from '../ids';
 import { MAX_PAGE } from '../limits';
 import type { OpName } from '../surface';
 import { TurnResult } from './conversation';
+import { ConversationId, EntryId, TaskId } from '../ids';
+import {
+  CatalogId,
+  Effort as EffortValue,
+  ManualText,
+  Model,
+  ModelChoice,
+  SessionSummarySchema,
+} from './b11-data';
+import { MCP_CHANGES, MCP_STATUSES, REWIND_RESTORES, MAX_MCP_NAME_LENGTH } from '../../session';
 
 /** Sessions (Core Server §4 G): an agent's session as it is, its transcript, and interrupting it. */
 
@@ -21,12 +31,6 @@ const ToolDetail = z.union([
   }),
   z.strictObject({ kind: z.literal('output'), text: z.string() }),
 ]);
-
-const Effort = z.strictObject({
-  value: z.string(),
-  label: z.string(),
-  description: z.string().optional(),
-});
 
 const Question = z.strictObject({
   header: z.string(),
@@ -177,64 +181,7 @@ export const sessionOps = {
       'is queued and asked, the model, mode and effort it runs, what it runs in the background, ' +
       'what it has used, and what it replied last.',
     input: z.strictObject({ canvas, agent: AgentId }),
-    output: z.strictObject({
-      agent: z.string(),
-      connection: z.string(),
-      status: z.enum(['idle', 'working', 'waiting']),
-      paused: z.boolean(),
-      queued: z.int(),
-      prompts: z.int(),
-      unheard: z.string().optional(),
-      tasks: z.array(
-        z.strictObject({
-          id: z.string(),
-          description: z.string(),
-          kind: z.enum(['agent', 'command', 'other']),
-          tool: z.string().optional(),
-        }),
-      ),
-      commands: z.array(
-        z.strictObject({ name: z.string(), description: z.string(), argumentHint: z.string() }),
-      ),
-      mode: z.string().nullable(),
-      model: z.string().nullable(),
-      effort: z.string().nullable(),
-      models: z.array(
-        z.strictObject({
-          value: z.string(),
-          label: z.string(),
-          description: z.string().optional(),
-          efforts: z.array(Effort).optional(),
-          defaultEffort: z.string().optional(),
-        }),
-      ),
-      modes: z.array(z.string()).optional(),
-      running: z
-        .strictObject({
-          model: z.string().optional(),
-          effort: z.string().optional(),
-          mode: z.string().optional(),
-          role: z.string().optional(),
-        })
-        .optional(),
-      usage: z
-        .strictObject({
-          costUsd: z.number().nullable(),
-          contextTokens: z.number().nullable(),
-          contextWindow: z.number().nullable(),
-          limits: z
-            .array(
-              z.strictObject({
-                name: z.string(),
-                usedPercent: z.number(),
-                resetsAt: z.number().nullable(),
-              }),
-            )
-            .optional(),
-        })
-        .optional(),
-      reply: z.string().nullable(),
-    }),
+    output: SessionSummarySchema,
   }),
   'session.transcript': define('session.transcript', {
     summary:
@@ -260,3 +207,167 @@ export const sessionOps = {
     output: z.strictObject({}),
   }),
 } satisfies Partial<Record<OpName, OpDef>>;
+
+export { SessionSummarySchema } from './b11-data';
+const AgentInput = z.strictObject({ canvas, agent: AgentId });
+const RewindInput = z.strictObject({ canvas, agent: AgentId, message: EntryId });
+const FilesRewind = z.strictObject({
+  possible: z.boolean(),
+  error: z.string().optional(),
+  files: z.array(z.string()),
+  added: z.number(),
+  removed: z.number(),
+});
+const ServerName = z.string().min(1).max(MAX_MCP_NAME_LENGTH);
+const PastSession = z.strictObject({
+  id: ConversationId,
+  title: z.string(),
+  modified: z.number(),
+  bytes: z.number().optional(),
+  branch: z.string().optional(),
+  current: z.boolean(),
+});
+
+/** Prepared B11 schemas; no live transport/audience is widened until X9 registration. */
+export const b11SessionOps = {
+  'session.open': define(
+    { kind: 'command' },
+    {
+      summary: 'Ensures the agent’s session is open using core-owned settings and cwd.',
+      input: AgentInput,
+      output: z.strictObject({}),
+    },
+  ),
+  'session.setMode': define(
+    { kind: 'command' },
+    {
+      summary: 'Changes the live mode and its saved setting, as the user only.',
+      input: AgentInput.extend({ mode: CatalogId }),
+      output: z.strictObject({}),
+    },
+  ),
+  'session.setModel': define(
+    { kind: 'command' },
+    {
+      summary: 'Changes the live and saved model.',
+      input: AgentInput.extend({ model: Model }),
+      output: z.strictObject({}),
+    },
+  ),
+  'session.setEffort': define(
+    { kind: 'command' },
+    {
+      summary: 'Changes the live and saved effort; null uses the model’s default.',
+      input: AgentInput.extend({ effort: EffortValue.nullable() }),
+      output: z.strictObject({}),
+    },
+  ),
+  'session.stopTask': define(
+    { kind: 'command' },
+    {
+      summary: 'Stops a background task the session reports.',
+      input: AgentInput.extend({ task: TaskId }),
+      output: z.strictObject({}),
+    },
+  ),
+  'session.restart': define(
+    { kind: 'command' },
+    {
+      summary: 'Restarts an idle session with current saved settings.',
+      input: AgentInput,
+      output: z.strictObject({}),
+    },
+  ),
+  'session.newConversation': define(
+    { kind: 'command' },
+    {
+      summary: 'Starts a new conversation without deleting native history.',
+      input: AgentInput,
+      output: z.strictObject({}),
+    },
+  ),
+  'session.conversations': define(
+    { kind: 'read' },
+    {
+      summary: 'Lists this adapter’s conversations in this agent’s verified workspace.',
+      input: AgentInput,
+      output: z.strictObject({ items: z.array(PastSession) }),
+    },
+  ),
+  'session.resumeConversation': define(
+    { kind: 'command' },
+    {
+      summary: 'Resumes an admitted conversation that no running session claims.',
+      input: AgentInput.extend({ conversation: ConversationId }),
+      output: z.strictObject({}),
+    },
+  ),
+  'session.rewindPreview': define(
+    { kind: 'read' },
+    {
+      summary: 'Previews file restoration before a native transcript message.',
+      input: RewindInput,
+      output: FilesRewind,
+    },
+  ),
+  'session.rewind': define(
+    { kind: 'command', rules: ['restore-code'] },
+    {
+      summary: 'Rewinds files, conversation or both; a token’s code restoration proposes first.',
+      input: RewindInput.extend({ restore: z.enum(REWIND_RESTORES) }),
+      output: z.strictObject({ files: FilesRewind.optional(), conversation: z.boolean() }),
+    },
+  ),
+  'session.mcpServers': define(
+    { kind: 'read' },
+    {
+      summary: 'Lists the session’s MCP servers.',
+      input: AgentInput,
+      output: z.strictObject({
+        items: z.array(
+          z.strictObject({
+            name: ServerName,
+            status: z.enum(MCP_STATUSES),
+            scope: z.string().optional(),
+            server: z.string().optional(),
+            tools: z.number().optional(),
+            error: z.string().optional(),
+          }),
+        ),
+      }),
+    },
+  ),
+  'session.changeMcpServer': define(
+    { kind: 'command' },
+    {
+      summary: 'Changes one MCP server the session reports.',
+      input: AgentInput.extend({ server: ServerName, change: z.enum(MCP_CHANGES) }),
+      output: z.strictObject({}),
+    },
+  ),
+  'session.options': define(
+    { kind: 'read' },
+    {
+      summary: 'Reads the adapter’s options and user defaults in the optional agent workspace.',
+      input: z.strictObject({ canvas, agent: AgentId.optional(), adapter: CatalogId }),
+      output: z.strictObject({
+        models: z.array(ModelChoice),
+        defaults: z.strictObject({
+          model: z.string().nullable(),
+          effort: z.string().nullable(),
+          mode: z.string().nullable(),
+          asks: z.boolean().optional(),
+        }),
+      }),
+    },
+  ),
+  'session.continueIn': define(
+    { kind: 'command' },
+    {
+      summary:
+        'Switches connection, opens it and sends optional manual input once, as the user only.',
+      input: AgentInput.extend({ connection: CatalogId, then: ManualText.optional() }),
+      output: z.strictObject({ id: z.uuid().optional() }),
+    },
+  ),
+};

@@ -48,11 +48,17 @@ export const DEFAULT_PAGE = 50;
  */
 export const MAX_PAGE_BYTES = 60 * 1024;
 
+/** A window topic frame; a single oversized snapshot entry is the documented exception. */
+export const MAX_TOPIC_FRAME = 1024 * 1024;
+
 /**
  * The longest id of a Needs item: what it is, its agent's id escaped (encodeURIComponent: up to 9
  * characters for each of its own) and what of the agent's it is.
  */
 export const MAX_NEED_ID = 4096;
+
+/** Typed reply content, leaving room for an escaped Need id and the operation's envelope. */
+export const MAX_REPLY_ANSWER_BYTES = MAX_REQUEST_BYTES - 6 * MAX_NEED_ID - 4096;
 
 /** The longest name of an agent or a group an op gives it, in characters. */
 export { MAX_LABEL, MAX_POSITION } from '../model/canvas';
