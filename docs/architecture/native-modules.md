@@ -4,7 +4,7 @@
 
 ## `src/main/native-selftest.ts`
 
-The native self-test in the app: main's checks, then the core process's, then the shipped command's under its own Node on macOS and Linux (see Commands). The command is invoked with an empty PATH; its pty round trip proves that the external node-pty copy loads under plain Node. Windows shipping is held; its main/core checks remain.
+The native self-test in the app: main's checks, then the core process's, then the shipped command's under its own Node on macOS and Linux (see Commands). The command is invoked with an empty PATH and a deliberately failing `NODE_OPTIONS` preload, which its launcher must remove; its pty round trip proves that the external node-pty copy loads under plain Node. Windows shipping is held; its main/core checks remain.
 
 ## Native modules
 

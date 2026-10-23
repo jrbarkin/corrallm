@@ -33,7 +33,7 @@ export const mainDefine = {
 export const NATIVE_EXTERNALS = ['node-pty'];
 
 // Merged by Forge with its defaults (CJS output in .vite/build, Node builtins and electron
-// external). Native modules ship in node_modules instead (see NATIVE_MODULES in forge.config.mts).
+// external). Native modules ship in node_modules instead (see NATIVE_MODULES in build/native-modules.ts).
 export default defineConfig(({ command }) => ({
   define: mainDefine,
   build: {

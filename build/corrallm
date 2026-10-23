@@ -1,6 +1,9 @@
 #!/bin/sh
 set -eu
 
+# Plain Node has no Electron fuses. Never inherit a caller's preload or module-search hooks.
+unset NODE_OPTIONS NODE_PATH NODE_REPL_EXTERNAL_MODULE
+
 # Resolve installation links without depending on Node, realpath or utilities on PATH.
 target=$0
 case "$target" in /*) ;; *) target=$PWD/$target ;; esac
