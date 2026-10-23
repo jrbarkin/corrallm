@@ -1,6 +1,6 @@
-import { HOOK_TOKEN } from '../terminal/hooks';
+import { HOOK_TOKEN, postHookCommand } from '../terminal/hooks';
 
-/** The events corrallm hears. (HTTP hooks cannot run on SessionStart.) */
+/** The events heard through HTTP; SessionStart requires a command hook. */
 export const HOOK_EVENTS = [
   'UserPromptSubmit',
   'Stop',
@@ -26,7 +26,7 @@ const TIMEOUT_S = 5;
  * `url`, with the token from the session's environment. Claude Code merges them with the user's
  * and the project's hooks.
  */
-export function hookSettings(url: string): { hooks: Record<string, HookGroup[]> } {
+export function hookSettings(url: string, startup = true): { hooks: Record<string, HookGroup[]> } {
   const hook = {
     type: 'http',
     url,
@@ -35,12 +35,21 @@ export function hookSettings(url: string): { hooks: Record<string, HookGroup[]> 
     timeout: TIMEOUT_S,
   };
   return {
-    hooks: Object.fromEntries(
-      HOOK_EVENTS.map((name) => {
-        const matcher = MATCHERS[name];
-        return [name, [{ ...(matcher === undefined ? {} : { matcher }), hooks: [hook] }]];
-      }),
-    ),
+    hooks: {
+      ...(startup
+        ? {
+            SessionStart: [
+              { hooks: [{ type: 'command', command: postHookCommand(url), timeout: 10 }] },
+            ],
+          }
+        : {}),
+      ...Object.fromEntries(
+        HOOK_EVENTS.map((name) => {
+          const matcher = MATCHERS[name];
+          return [name, [{ ...(matcher === undefined ? {} : { matcher }), hooks: [hook] }]];
+        }),
+      ),
+    },
   };
 }
 

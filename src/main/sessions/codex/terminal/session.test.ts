@@ -35,6 +35,7 @@ let runs: Replay[];
 let sessions: LiveSession<CodexMode>[];
 /** What of its recordings the pseudo-terminals leave out. */
 let without: (record: TerminalRecord) => boolean;
+let startupPermission: string | undefined;
 
 beforeEach(async () => {
   dir = await mkdtemp(path.join(tmpdir(), 'corrallm-codex-terminal-'));
@@ -43,6 +44,7 @@ beforeEach(async () => {
   runs = [];
   sessions = [];
   without = () => false;
+  startupPermission = undefined;
 });
 afterEach(async () => {
   await Promise.all(sessions.map((session) => session.close()));
@@ -70,7 +72,13 @@ async function start(
     // Codex is not asked: the computed trust.
     truster: new HookTruster({ start: () => Promise.reject(new Error('not here')) }),
     spawn: (_file, args, options) => {
-      const run = new Replay(recordings[runs.length] ?? 'prompts', args, options, without);
+      const run = new Replay(
+        recordings[runs.length] ?? 'prompts',
+        args,
+        options,
+        without,
+        startupPermission,
+      );
       runs.push(run);
       return Promise.resolve(run);
     },
@@ -114,6 +122,16 @@ const seen = () =>
 const ends = () => events.filter((event) => event.type === 'end').length;
 
 describe('Codex in a terminal, as the real one ran', () => {
+  it('reports native permissions from its SessionStart hook before any prompt is typed', async () => {
+    startupPermission = 'default';
+    await start(['prompts'], { mode: null });
+    await until(() => {
+      expect(events).toContainEqual({ type: 'mode', mode: 'auto' });
+    });
+    expect(runs[0]?.args.some((arg) => arg.startsWith('hooks.SessionStart='))).toBe(true);
+    expect(runs[0]?.written.some((text) => text.includes(PASTE_START))).toBe(false);
+  });
+
   it('resumes without a role without reading native instructions, even if the read would fail', async () => {
     const readInstructions = vi.fn(() => Promise.reject(new Error('Could not read config')));
     await start(['resume'], { resume: RECORDED_SESSION, roleChanged: false }, { readInstructions });

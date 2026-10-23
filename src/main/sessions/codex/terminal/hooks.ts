@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 
-import { HOOK_TOKEN } from '../../terminal/hooks';
+import { postHookCommand } from '../../terminal/hooks';
 
 /*
  * Codex's hooks, reporting to corrallm. A Codex Terminal session is started with command hooks of
@@ -17,12 +17,13 @@ import { HOOK_TOKEN } from '../../terminal/hooks';
  * Codex itself: trust.ts).
  */
 
-/** The events corrallm hears: a prompt Codex took, its turn's end (with its reply), an interrupt. */
-export const CODEX_HOOK_EVENTS = ['UserPromptSubmit', 'Stop', 'Interrupt'] as const;
+/** The events corrallm hears: startup permissions, a prompt, its turn's end and an interrupt. */
+export const CODEX_HOOK_EVENTS = ['SessionStart', 'UserPromptSubmit', 'Stop', 'Interrupt'] as const;
 export type CodexHookEvent = (typeof CODEX_HOOK_EVENTS)[number];
 
 /** Each event's name in Codex's hook keys and hashes (its hook_event_key_label). */
 const LABELS: Record<CodexHookEvent, string> = {
+  SessionStart: 'session_start',
   UserPromptSubmit: 'user_prompt_submit',
   Stop: 'stop',
   Interrupt: 'interrupt',
@@ -30,11 +31,14 @@ const LABELS: Record<CodexHookEvent, string> = {
 
 /**
  * How long Codex waits for each, in seconds (it waits before it goes on; Interrupt's may be at
- * most 3). The command itself gives up sooner (`MAX_SECONDS`).
+ * most 3). The command itself gives up sooner (five seconds).
  */
-const TIMEOUTS: Record<CodexHookEvent, number> = { UserPromptSubmit: 10, Stop: 10, Interrupt: 2 };
-/** How long a post may take before the command gives up on it. */
-const MAX_SECONDS = 5;
+const TIMEOUTS: Record<CodexHookEvent, number> = {
+  SessionStart: 10,
+  UserPromptSubmit: 10,
+  Stop: 10,
+  Interrupt: 2,
+};
 
 /** One of a session's hooks: the event, the command Codex runs for it, how long it waits. */
 export interface SessionHook {
@@ -52,18 +56,7 @@ export interface SessionHook {
  * turn.
  */
 export function hookCommand(url: string, platform: NodeJS.Platform = process.platform): string {
-  if (platform === 'win32') {
-    return (
-      `curl.exe -s -o NUL --max-time ${String(MAX_SECONDS)} -X POST ` +
-      `-H "Authorization: Bearer %${HOOK_TOKEN}%" -H "Content-Type: application/json" ` +
-      `--data-binary @- ${url} & exit /b 0`
-    );
-  }
-  const post =
-    `curl -s -o /dev/null --max-time ${String(MAX_SECONDS)} -X POST ` +
-    `-H "Authorization: Bearer $${HOOK_TOKEN}" -H "Content-Type: application/json" ` +
-    `--data-binary @- ${url}`;
-  return `/bin/sh -c 'if command -v curl >/dev/null 2>&1; then ${post}; else cat >/dev/null; fi; exit 0'`;
+  return postHookCommand(url, platform === 'win32' ? 'cmd' : 'posix');
 }
 
 /** A session's hooks, each posting to `url`. */

@@ -1,6 +1,6 @@
 import { HOOK_TOKEN } from '../../terminal/hooks';
 import type { Pty, PtyOptions } from '../../terminal/pty';
-import { recordedTerminal } from './recorded';
+import { RECORDED_SESSION, recordedTerminal } from './recorded';
 import type { TerminalFixture, TerminalRecord } from './recorded';
 import { PASTE_END, PASTE_START } from './tui';
 
@@ -30,11 +30,34 @@ export class Replay implements Pty {
     args: readonly string[],
     options: PtyOptions,
     without: (record: TerminalRecord) => boolean = () => false,
+    permissionMode?: string,
   ) {
     this.#records = recordedTerminal(name).filter((record) => !without(record));
     this.args = args;
     this.options = options;
-    void this.#play();
+    void this.#start(permissionMode);
+  }
+
+  async #start(permissionMode: string | undefined): Promise<void> {
+    if (
+      permissionMode !== undefined &&
+      this.args.some((arg) => arg.startsWith('hooks.SessionStart='))
+    ) {
+      await fetch(this.#url(), {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${this.options.env[HOOK_TOKEN] ?? ''}` },
+        body: JSON.stringify({
+          hook_event_name: 'SessionStart',
+          cwd: this.options.cwd,
+          model: 'recorded-model',
+          source: 'startup',
+          transcript_path: null,
+          session_id: RECORDED_SESSION,
+          permission_mode: permissionMode,
+        }),
+      });
+    }
+    await this.#play();
   }
 
   onData(listener: (data: string) => void): void {

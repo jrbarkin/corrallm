@@ -82,10 +82,15 @@ describe('the command a hook runs', () => {
 describe('a session’s hooks, as overrides', () => {
   it('adds a command hook for each event corrallm follows', () => {
     const hooks = sessionHooks('http://127.0.0.1:4000/hook', 'darwin');
-    expect(hooks.map((hook) => hook.event)).toEqual(['UserPromptSubmit', 'Stop', 'Interrupt']);
+    expect(hooks.map((hook) => hook.event)).toEqual([
+      'SessionStart',
+      'UserPromptSubmit',
+      'Stop',
+      'Interrupt',
+    ]);
     const [first] = hookOverrides(hooks);
     expect(first).toBe(
-      `hooks.UserPromptSubmit=[{hooks=[{type="command",command=${JSON.stringify(hooks[0]?.command)},timeout=10}]}]`,
+      `hooks.SessionStart=[{hooks=[{type="command",command=${JSON.stringify(hooks[0]?.command)},timeout=10}]}]`,
     );
   });
 

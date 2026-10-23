@@ -152,6 +152,39 @@ const last = <T extends SessionEvent['type']>(type: T) =>
   events.findLast((event): event is Extract<SessionEvent, { type: T }> => event.type === type);
 
 describe('a Terminal session', () => {
+  it('reports native permissions from its command SessionStart hook before any prompt is typed', async () => {
+    fake.sessionStart = 'default';
+    await start();
+    await until(() => {
+      expect(last('mode')).toMatchObject({ mode: 'manual' });
+    });
+    expect(claude().prompts).toEqual([]);
+    const settings = JSON.parse(readFileSync(claude().arg('--settings') ?? '', 'utf8')) as {
+      hooks: { SessionStart?: { hooks: { type: string; command: string }[] }[] };
+    };
+    expect(settings.hooks.SessionStart?.[0]?.hooks[0]).toMatchObject({ type: 'command' });
+    await until(() => {
+      expect(claude().answers).toContainEqual({ hook: 'SessionStart', answer: '{}' });
+    });
+  });
+
+  it.each([
+    { disableAllHooks: true },
+    { allowedHttpHookUrls: ['https://example.test/*'] },
+    { httpHookAllowedEnvVars: [] },
+  ])('does not bypass hook restrictions with the command startup post (%j)', async (settings) => {
+    fake.sessionStart = 'default';
+    const home = path.join(dir, 'home');
+    await mkdir(path.join(home, '.claude'), { recursive: true });
+    await writeFile(path.join(home, '.claude', 'settings.json'), JSON.stringify(settings));
+    await start({ env: { ...SPEC.env, HOME: home } });
+    const kept = JSON.parse(readFileSync(claude().arg('--settings') ?? '', 'utf8')) as {
+      hooks: Record<string, unknown>;
+    };
+    expect(kept.hooks.SessionStart).toBeUndefined();
+    expect(last('unheard')).toBeDefined();
+  });
+
   it('does not pass a modern snapshot flag to an older CLI on role launch or resume', async () => {
     help = '  --model <model>  Model\n  --append-system-prompt <prompt>  Append instructions';
     const id = '0b3a7d52-6a0c-4f39-9c4e-2f8f0c1d9e11';

@@ -150,3 +150,19 @@ export class HookServer {
     });
   }
 }
+
+/** Posts a native hook’s JSON stdin, never interpolating it into shell text. Quiet, bounded, no decision. */
+export function postHookCommand(url: string, shell: 'posix' | 'cmd' = 'posix'): string {
+  if (shell === 'cmd') {
+    return (
+      `curl.exe -s -o NUL --max-time 5 -X POST ` +
+      `-H "Authorization: Bearer %${HOOK_TOKEN}%" -H "Content-Type: application/json" ` +
+      `--data-binary @- ${url} & exit /b 0`
+    );
+  }
+  const post =
+    `curl -s -o /dev/null --max-time 5 -X POST ` +
+    `-H "Authorization: Bearer $${HOOK_TOKEN}" -H "Content-Type: application/json" ` +
+    `--data-binary @- ${url}`;
+  return `/bin/sh -c 'if command -v curl >/dev/null 2>&1; then ${post}; else cat >/dev/null; fi; exit 0'`;
+}

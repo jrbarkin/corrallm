@@ -138,13 +138,13 @@ export class ClaudeCode implements TerminalCli<PermissionMode> {
       env: this.#env,
       cwd,
     });
+    // Respect restrictions on our HTTP endpoint for the command-type startup post too.
+    const off = await hooksOff({ cwd, env: this.#env, managed: this.#managed, url: hooks.url });
     await writeFile(
       path.join(dir, SETTINGS),
-      JSON.stringify({ ...hookSettings(hooks.url), ...statusLine }),
+      JSON.stringify({ ...hookSettings(hooks.url, off === undefined), ...statusLine }),
       { mode: 0o600 },
     );
-    // Its settings may turn corrallm's hooks off: read (never changed), to say what won't work.
-    const off = await hooksOff({ cwd, env: this.#env, managed: this.#managed, url: hooks.url });
     this.#unheard = off && hooksOffWarning(off);
   }
 
