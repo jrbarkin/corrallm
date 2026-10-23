@@ -6,8 +6,11 @@ import { isCanvasId } from '../shared/canvas';
 import type { CanvasId } from '../shared/canvas';
 import { mintTrustedPath } from './core/host';
 import type { TrustedPath } from './core/host';
+import { PROJECT_WORKSPACE } from './core/store/migrations';
 import type { Database } from './core/store/store';
 import { isNativeId } from './sessions/id';
+
+export { PROJECT_WORKSPACE };
 
 /** A native conversation an agent runs in a CLI: its id, and the role it launched with. */
 export interface Conversation {
@@ -20,15 +23,48 @@ export interface Conversation {
 }
 
 /**
+ * The conversations of a canvas's agents in one workspace, by adapter and then by agent (each
+ * CLI's: the one every connection of it resumes).
+ */
+export type ConversationsByAdapter = Readonly<
+  Record<string, Readonly<Record<string, Conversation>>>
+>;
+
+/**
  * What the core remembers of a canvas: the file it was opened from or saved to (none for a draft),
- * the folder its agents work in, and its agents' conversations, by adapter and then by agent
- * (each CLI's: the one every connection of it resumes). What its agents are set to run with (their
- * models, efforts, modes and role text) is in the canvas's file itself.
+ * the folder its agents work in, and its agents' conversations, by the workspace each CLI ran in
+ * (PROJECT_WORKSPACE: the project folder itself; else the workspace's id), since a CLI resumes a
+ * conversation only in the folder it ran in. What its agents are set to run with (their models,
+ * efforts, modes and role text) is in the canvas's file itself.
  */
 export interface Remembered {
   file?: TrustedPath;
   project?: TrustedPath;
-  conversations: Readonly<Record<string, Readonly<Record<string, Conversation>>>>;
+  conversations: Readonly<Record<string, ConversationsByAdapter>>;
+}
+
+/** The conversations remembered in `workspace` (none if none is). */
+export function conversationsIn(remembered: Remembered, workspace: string): ConversationsByAdapter {
+  return (
+    (Object.hasOwn(remembered.conversations, workspace)
+      ? remembered.conversations[workspace]
+      : undefined) ?? {}
+  );
+}
+
+/** `remembered` with the conversations in `workspace` replaced (none: forgotten). */
+export function withConversationsIn(
+  remembered: Remembered,
+  workspace: string,
+  conversations: ConversationsByAdapter,
+): Remembered {
+  const others = Object.entries(remembered.conversations).filter(([key]) => key !== workspace);
+  const kept = Object.values(conversations).some((agents) => Object.keys(agents).length > 0);
+  // Built from entries, so that a workspace keyed __proto__ is the canvas's own.
+  return {
+    ...remembered,
+    conversations: Object.fromEntries(kept ? [...others, [workspace, conversations]] : others),
+  };
 }
 
 /** The role a conversation launched with, without keeping its text; 'none' means no role. */
@@ -45,6 +81,11 @@ const LIMIT = 200;
 /** A canvas kept with a file, folder or conversations: not a draft, which has its run at most. */
 const KEPT = `(file IS NOT NULL OR project IS NOT NULL
   OR EXISTS (SELECT 1 FROM conversation WHERE conversation.canvas_id = canvas.id))`;
+/**
+ * A canvas that owns a workspace record, in any state (active, kept or being removed): its
+ * checkout may hold the only copy of an agent's work, so the canvas is kept until the last one goes.
+ */
+const OWNS_WORKSPACE = 'EXISTS (SELECT 1 FROM worktree WHERE worktree.canvas_id = canvas.id)';
 
 /**
  * What the core remembers of each canvas between runs, by the canvas's id, in the profile's
@@ -63,9 +104,12 @@ const KEPT = `(file IS NOT NULL OR project IS NOT NULL
  * its run), forgetting the others with everything the database keeps of them: drafts never push
  * out a canvas kept for its file or folder. It never forgets a canvas open (`open_canvas`: until it
  * is closed), nor one whose document has edits not saved (`spare`: B9 Design §2), however long
- * since it was used; it forgets one when asked to (`forget`: a draft discarded). The paths it reads back are
- * trusted: it wrote them, from the app's dialogs. What isn't right (a path that isn't absolute, a
- * conversation whose id isn't a session's) is left out.
+ * since it was used; it forgets one when asked to (`forget`: a draft discarded). Neither by use nor
+ * when asked does it forget a canvas that owns a workspace record (`worktree`, in any state), whose
+ * checkout may hold the only copy of an agent's work: it is kept, all of it, until its last
+ * workspace record is gone. The paths it reads back are trusted: it wrote them, from the app's
+ * dialogs. What isn't right (a path that isn't absolute, a conversation whose id isn't a
+ * session's) is left out.
  */
 export class CanvasMemory {
   readonly #store: Database;
@@ -219,18 +263,22 @@ export class CanvasMemory {
 
   /**
    * Forgets `canvas`, with everything the database keeps of it (its document, run, messages and
-   * conversations), and any change of it not on disk yet. On disk once it resolves; rejects,
-   * forgetting nothing, if it couldn't be written.
+   * conversations), and any change of it not on disk yet: unless it owns a workspace record, which
+   * keeps it, all of it, as it is. Resolves with whether it forgot it, once that is on disk;
+   * rejects, forgetting nothing, if it couldn't be written.
    */
-  forget(canvas: CanvasId): Promise<void> {
+  forget(canvas: CanvasId): Promise<boolean> {
+    let forgot = false;
     return this.#change(
       () => {
+        if (this.#ownsWorkspace(canvas)) return;
         this.#unwritten.delete(canvas);
         this.#store.prepare('DELETE FROM canvas WHERE id = ?').run(canvas);
+        forgot = true;
         this.#tell(undefined);
       },
       () => undefined,
-    );
+    ).then(() => forgot);
   }
 
   /** Resolves once every change so far is on disk; rejects while a write that failed isn't. */
@@ -314,6 +362,14 @@ export class CanvasMemory {
     this.#touched.push(canvas);
   }
 
+  /** Within a write: whether `canvas` owns a workspace record, in any state. */
+  #ownsWorkspace(canvas: CanvasId): boolean {
+    return (
+      this.#store.prepare(`SELECT ${OWNS_WORKSPACE} AS owns FROM canvas WHERE id = ?`).get(canvas)
+        ?.owns === 1
+    );
+  }
+
   /** The canvas whose file `file` is now, if any. */
   #withFile(file: string): CanvasId | undefined {
     for (const [canvas, { remembered }] of this.#unwritten) {
@@ -326,38 +382,50 @@ export class CanvasMemory {
   #read(canvas: CanvasId): Remembered {
     const row = this.#store.prepare('SELECT file, project FROM canvas WHERE id = ?').get(canvas);
     if (row === undefined) return NOTHING;
-    const byAdapter = new Map<string, [agent: string, conversation: Conversation][]>();
+    /** By workspace, then adapter: each adapter's agents' conversations. */
+    const byWorkspace = new Map<string, Map<string, [agent: string, Conversation][]>>();
     const rows = this.#store
       .prepare(
-        `SELECT adapter, agent_id, native_id, role_fingerprint FROM conversation
-         WHERE canvas_id = ? ORDER BY adapter, agent_id`,
+        `SELECT workspace_key, adapter, agent_id, native_id, role_fingerprint FROM conversation
+         WHERE canvas_id = ? ORDER BY workspace_key, adapter, agent_id`,
       )
       .all(canvas);
-    for (const { adapter, agent_id: agent, native_id: id, role_fingerprint: role } of rows) {
+    for (const row of rows) {
+      const { workspace_key: workspace, adapter, agent_id: agent } = row;
+      const { native_id: id, role_fingerprint: role } = row;
+      if (typeof workspace !== 'string' || workspace === '') continue;
       if (typeof adapter !== 'string' || !ID_PATTERN.test(adapter)) continue;
       if (typeof agent !== 'string') continue;
       if (!isNativeId(id) || !this.#conversationId(adapter, id)) {
         console.error(`A saved ${adapter} conversation id is invalid; it will not be resumed.`);
         continue;
       }
-      const agents = byAdapter.get(adapter) ?? [];
+      const adapters = byWorkspace.get(workspace) ?? new Map<string, [string, Conversation][]>();
+      const agents = adapters.get(adapter) ?? [];
       agents.push([agent, isFingerprint(role) ? { id, role } : { id }]);
-      byAdapter.set(adapter, agents);
+      adapters.set(adapter, agents);
+      byWorkspace.set(workspace, adapters);
     }
     const { file, project } = row;
     return {
       ...(isAbsolute(file) ? { file: mintTrustedPath(file) } : {}),
       ...(isAbsolute(project) ? { project: mintTrustedPath(project) } : {}),
+      // Built from entries, so that an agent or a workspace keyed __proto__ is the canvas's own.
       conversations: Object.fromEntries(
-        [...byAdapter].map(([adapter, agents]) => [adapter, Object.fromEntries(agents)]),
+        [...byWorkspace].map(([workspace, adapters]) => [
+          workspace,
+          Object.fromEntries(
+            [...adapters].map(([adapter, agents]) => [adapter, Object.fromEntries(agents)]),
+          ),
+        ]),
       ),
     };
   }
 
   /**
    * Writes what is remembered of `canvas`, as the canvas used most recently: its row, and its
-   * conversations (those it no longer has deleted; each column written by name, so that what a
-   * newer corrallm keeps beside them stays).
+   * conversations in each workspace (those it no longer has deleted; each column written by name,
+   * so that what a newer corrallm keeps beside them stays).
    */
   #keep(canvas: CanvasId, { file, project, conversations }: Remembered): void {
     this.#store
@@ -368,29 +436,33 @@ export class CanvasMemory {
       )
       .run(canvas, file ?? null, project ?? null, this.#nextUse());
     const kept = this.#store
-      .prepare('SELECT adapter, agent_id FROM conversation WHERE canvas_id = ?')
+      .prepare('SELECT workspace_key, adapter, agent_id FROM conversation WHERE canvas_id = ?')
       .all(canvas);
     const forget = this.#store.prepare(
-      'DELETE FROM conversation WHERE canvas_id = ? AND adapter = ? AND agent_id = ?',
+      `DELETE FROM conversation
+       WHERE canvas_id = ? AND adapter = ? AND agent_id = ? AND workspace_key = ?`,
     );
-    for (const { adapter, agent_id: agent } of kept) {
+    for (const { workspace_key: workspace, adapter, agent_id: agent } of kept) {
       const agents =
-        typeof adapter === 'string' && Object.hasOwn(conversations, adapter)
-          ? conversations[adapter]
+        typeof workspace === 'string' && typeof adapter === 'string'
+          ? ownOf(ownOf(conversations, workspace), adapter)
           : undefined;
       if (agents === undefined || typeof agent !== 'string' || !Object.hasOwn(agents, agent)) {
-        forget.run(canvas, adapter ?? null, agent ?? null);
+        forget.run(canvas, adapter ?? null, agent ?? null, workspace ?? null);
       }
     }
     const remember = this.#store.prepare(
-      `INSERT INTO conversation (canvas_id, adapter, agent_id, native_id, role_fingerprint)
-       VALUES (?, ?, ?, ?, ?)
-       ON CONFLICT (canvas_id, adapter, agent_id) DO UPDATE SET
+      `INSERT INTO conversation
+         (canvas_id, adapter, agent_id, workspace_key, native_id, role_fingerprint)
+       VALUES (?, ?, ?, ?, ?, ?)
+       ON CONFLICT (canvas_id, adapter, agent_id, workspace_key) DO UPDATE SET
          native_id = excluded.native_id, role_fingerprint = excluded.role_fingerprint`,
     );
-    for (const [adapter, agents] of Object.entries(conversations)) {
-      for (const [agent, { id, role }] of Object.entries(agents)) {
-        remember.run(canvas, adapter, agent, id, role ?? null);
+    for (const [workspace, adapters] of Object.entries(conversations)) {
+      for (const [adapter, agents] of Object.entries(adapters)) {
+        for (const [agent, { id, role }] of Object.entries(agents)) {
+          remember.run(canvas, adapter, agent, workspace, id, role ?? null);
+        }
       }
     }
   }
@@ -407,7 +479,8 @@ export class CanvasMemory {
   /**
    * Forgets every canvas kept with a file, folder or conversations but the LIMIT used most
    * recently, and every draft but the LIMIT used most recently, with all the database keeps of
-   * them: never one open, nor one with edits not saved (`spare`).
+   * them: never one open, nor one that owns a workspace record, nor one with edits not saved
+   * (`spare`).
    */
   #forgetOldest(): void {
     let forgot = 0;
@@ -417,6 +490,7 @@ export class CanvasMemory {
         .prepare(
           `SELECT id FROM canvas WHERE ${kind}
              AND NOT EXISTS (SELECT 1 FROM open_canvas WHERE open_canvas.canvas_id = canvas.id)
+             AND NOT ${OWNS_WORKSPACE}
            ORDER BY used_at DESC LIMIT -1 OFFSET ?`,
         )
         .all(this.#limit);
@@ -435,6 +509,11 @@ function withFile(remembered: Remembered, file: TrustedPath | undefined): Rememb
   if (file === undefined) delete next.file;
   else next.file = file;
   return next;
+}
+
+/** `record`'s own value at `key`, never its prototype's (none if it has none). */
+function ownOf<T>(record: Readonly<Record<string, T>> | undefined, key: string): T | undefined {
+  return record !== undefined && Object.hasOwn(record, key) ? record[key] : undefined;
 }
 
 /** A role's fingerprint as roleFingerprint gives it. */

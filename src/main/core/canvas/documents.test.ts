@@ -918,12 +918,39 @@ describe('a canvas made, closed or discarded (B9 Design §1, §2, §5)', () => {
     const draft = newCanvasId();
     await made(draft, canvasOf(draft));
     expect(documentRow(draft)).toBeDefined();
-    await documents.forget(draft);
+    await expect(documents.forget(draft)).resolves.toBe(true);
     expect(documents.loaded(draft)).toBeUndefined();
     expect(documentRow(draft)).toBeUndefined();
     expect(count('node', draft)).toBe(0);
     expect(memory.keeps(draft)).toBe(false);
     expect(documents.unsaved(draft)).toBe(false);
+  });
+
+  it('keeps a draft discarded whose agents’ work a workspace holds, all of it', async () => {
+    const draft = newCanvasId();
+    await made(draft, canvasOf(draft));
+    await store.write(() => {
+      store
+        .prepare(
+          `INSERT INTO repository (id, picked_root, real_root, common_dir, identity, root_kind,
+             owned_root, generation)
+           VALUES ('r', '/work', '/work', '/work/.git', 'i', 'project', '/work/w', 0)`,
+        )
+        .run();
+      store
+        .prepare(
+          `INSERT INTO worktree (id, canvas_id, repository_id, owner_key, path, branch_ref,
+             base_checkout, base_oid, state, generation, created_at)
+           VALUES ('w', ?, 'r', 'agent/lead', '/work/w/w', 'refs/heads/w', '/work', ?, 'retained',
+             0, 1)`,
+        )
+        .run(draft, 'a'.repeat(40));
+    });
+    await expect(documents.forget(draft)).resolves.toBe(false);
+    expect(documents.loaded(draft)?.document).toEqual(canvasOf(draft));
+    expect(documentRow(draft)).toBeDefined();
+    expect(count('node', draft)).toBeGreaterThan(0);
+    expect(memory.keeps(draft)).toBe(true);
   });
 });
 

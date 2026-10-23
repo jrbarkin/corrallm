@@ -4,12 +4,13 @@ import type { CanvasId } from '../../../shared/canvas';
 import type { Message } from '../../../shared/model/messages';
 import { parseRunCheckpoint } from '../../../shared/run';
 import type { RunCheckpoint } from '../../../shared/run';
-import { CanvasMemory } from '../../memory';
-import type { Remembered } from '../../memory';
+import { CanvasMemory, PROJECT_WORKSPACE, withConversationsIn } from '../../memory';
+import type { ConversationsByAdapter } from '../../memory';
 import { RunJournal } from '../../run-journal';
 import { MessageTable } from '../delivery/messages';
 import { mintTrustedPath as trusted } from '../host';
-import { openStore, STORE_FILE } from './open';
+import { migrate, MIGRATIONS } from './migrations';
+import { APPLICATION_ID, openStore, STORE_FILE } from './open';
 import { connect } from './sqlite';
 import type { Connection } from './sqlite';
 import type { Store, StoreDeps } from './store';
@@ -26,11 +27,14 @@ export async function openTestStore(profile: string, deps?: StoreDeps): Promise<
   return store;
 }
 
-/** What a test keeps of a canvas: its file, its project folder and its agents' conversations. */
+/**
+ * What a test keeps of a canvas: its file, its project folder and its agents' conversations, run
+ * in the project folder itself (by adapter, then agent).
+ */
 export interface Kept {
   file?: string;
   project?: string;
-  conversations?: Remembered['conversations'];
+  conversations?: ConversationsByAdapter;
 }
 
 /**
@@ -47,11 +51,17 @@ export async function keepCanvases(
     const memory = new CanvasMemory(store);
     for (const [canvas, { file, project, conversations = {} }] of Object.entries(canvases)) {
       await memory.setFile(canvas as CanvasId, file === undefined ? undefined : trusted(file));
-      await memory.update(canvas as CanvasId, (remembered) => ({
-        ...(remembered.file === undefined ? {} : { file: remembered.file }),
-        ...(project === undefined ? {} : { project: trusted(project) }),
-        conversations,
-      }));
+      await memory.update(canvas as CanvasId, (remembered) =>
+        withConversationsIn(
+          {
+            ...(remembered.file === undefined ? {} : { file: remembered.file }),
+            ...(project === undefined ? {} : { project: trusted(project) }),
+            conversations: {},
+          },
+          PROJECT_WORKSPACE,
+          conversations,
+        ),
+      );
     }
     await memory.flush();
   } finally {
@@ -123,6 +133,26 @@ export function forgetRun(profile: string, canvas: CanvasId): Promise<void> {
   return withJournal(profile, async (journal) => {
     await journal.save(canvas, (await journal.get(canvas)).token, null);
   });
+}
+
+/**
+ * Makes the profile's database as a corrallm of `schema` made it (its migrations up to there
+ * alone), for a test to keep in it what that corrallm kept, through the connection it returns,
+ * which the test closes. The profile must have no database yet.
+ */
+export function madeAtSchema(profile: string, schema: number): Connection {
+  const connection = connect(path.join(profile, STORE_FILE));
+  try {
+    connection.exec(`PRAGMA auto_vacuum = INCREMENTAL;
+      PRAGMA application_id = ${String(APPLICATION_ID)};
+      PRAGMA journal_mode = WAL;
+      PRAGMA foreign_keys = ON`);
+    migrate(connection, MIGRATIONS.slice(0, schema));
+    return connection;
+  } catch (error) {
+    connection.close();
+    throw error;
+  }
 }
 
 /** A connection to the profile's database that only reads: what is on disk, whoever has it open. */

@@ -13,7 +13,8 @@ import type { FilesRewind, SessionEvent, SessionOptions } from '../../shared/ses
 import type { TerminalEvent } from '../../shared/terminal';
 import type { Store } from '../core/store/store';
 import { openTestStore, readOnDisk } from '../core/store/test-store';
-import { CanvasMemory } from '../memory';
+import { CanvasMemory, conversationsIn, PROJECT_WORKSPACE } from '../memory';
+import type { ConversationsByAdapter, Remembered } from '../memory';
 import type { Connector, LiveSession, SessionHost, SessionSpec } from './connector';
 import { unavailable } from './connector';
 import { FakeConnector } from './fake';
@@ -88,8 +89,16 @@ function shownCanvas() {
   return canvas;
 }
 
-/** What the canvas remembers of its agents' conversations in each CLI. */
-const conversations = async (canvas: CanvasId) => (await memory.get(canvas)).conversations;
+/**
+ * What the canvas remembers of its agents' conversations in each CLI, run in its project folder
+ * (where every agent runs until workspaces are resolved).
+ */
+const conversations = async (canvas: CanvasId) =>
+  conversationsIn(await memory.get(canvas), PROJECT_WORKSPACE);
+/** Conversations kept as run in the project folder. */
+const inProject = (byAdapter: ConversationsByAdapter): Remembered['conversations'] => ({
+  [PROJECT_WORKSPACE]: byAdapter,
+});
 
 beforeEach(async () => {
   dir = await mkdtemp(path.join(tmpdir(), 'corrallm-sessions-'));
@@ -179,7 +188,9 @@ describe('SessionManager', () => {
       const id = '0b3a7d52-6a0c-4f39-9c4e-2f8f0c1d9e11';
       const adapter = connection === 'claude-code.sdk' ? 'claude-code' : 'codex';
       const canvas = shownCanvas();
-      await memory.update(canvas, () => ({ conversations: { [adapter]: { a: { id } } } }));
+      await memory.update(canvas, () => ({
+        conversations: inProject({ [adapter]: { a: { id } } }),
+      }));
       const codex = new FakeConnector({ adapter: 'codex' });
       const sessions = manager({ 'codex.app-server': codex });
       const connector = connection === 'claude-code.sdk' ? fake : codex;
@@ -242,7 +253,7 @@ describe('SessionManager', () => {
       /not running/,
     );
     const disk = new CanvasMemory(store);
-    expect((await disk.get(canvas)).conversations).toEqual({
+    expect(conversationsIn(await disk.get(canvas), PROJECT_WORKSPACE)).toEqual({
       'claude-code': { a: { id: claudeId, role: 'none' } },
       codex: { b: { id: otherCodexId, role: 'none' } },
     });
@@ -286,7 +297,8 @@ describe('SessionManager', () => {
     release?.();
     await Promise.all([closing, fresh]);
     expect(
-      (await new CanvasMemory(store).get(canvas)).conversations['claude-code']?.a,
+      conversationsIn(await new CanvasMemory(store).get(canvas), PROJECT_WORKSPACE)['claude-code']
+        ?.a,
     ).toBeUndefined();
   });
 
@@ -310,7 +322,7 @@ describe('SessionManager', () => {
     await sessions.start(canvas, 'a', { ...OPTIONS, connection: 'claude-code.terminal' });
     const otherId = '0b3a7d52-6a0c-4f39-9c4e-2f8f0c1d9e12';
     await memory.update(other, () => ({
-      conversations: { 'claude-code': { a: { id: otherId } } },
+      conversations: inProject({ 'claude-code': { a: { id: otherId } } }),
     }));
     const fresh = sessions.fresh(canvas, 'a', 'claude-code');
     await vi.waitFor(() => {
@@ -323,8 +335,12 @@ describe('SessionManager', () => {
     release?.();
     await Promise.all([fresh, closing]);
     const disk = new CanvasMemory(store);
-    expect((await disk.get(canvas)).conversations['claude-code']?.a).toBeUndefined();
-    expect((await disk.get(other)).conversations['claude-code']?.a?.id).toBe(otherId);
+    expect(
+      conversationsIn(await disk.get(canvas), PROJECT_WORKSPACE)['claude-code']?.a,
+    ).toBeUndefined();
+    expect(conversationsIn(await disk.get(other), PROJECT_WORKSPACE)['claude-code']?.a?.id).toBe(
+      otherId,
+    );
     await sessions.start(other, 'a', OPTIONS);
     expect(fake.started.at(-1)?.resume).toBe(otherId);
   });
@@ -462,7 +478,9 @@ describe('SessionManager', () => {
     expect(fake.started.at(-1)).toMatchObject({ model: null, mode: null, effort: null });
     await memory.flush();
     expect(await memory.get(canvas)).toEqual({
-      conversations: { 'claude-code': { a: { id: fake.ids[0], role: 'none' } } },
+      conversations: {
+        [PROJECT_WORKSPACE]: { 'claude-code': { a: { id: fake.ids[0], role: 'none' } } },
+      },
     });
   });
 
@@ -960,7 +978,7 @@ describe('SessionManager and kept conversations', () => {
     const canvas = shownCanvas();
     const sessions = manager();
     await memory.update(canvas, () => ({
-      conversations: { 'claude-code': { a: { id: '--resume' } } },
+      conversations: inProject({ 'claude-code': { a: { id: '--resume' } } }),
     }));
     try {
       await sessions.start(canvas, 'a', OPTIONS);
@@ -992,10 +1010,10 @@ describe('SessionManager and kept conversations', () => {
     const canvas = shownCanvas();
     adapters.set('a', 'codex');
     await memory.update(canvas, () => ({
-      conversations: {
+      conversations: inProject({
         'claude-code': { a: { id: KEPT_ONE } },
         codex: { a: { id: KEPT_TWO } },
-      },
+      }),
     }));
     await expect(sessions.listSessions(canvas, 'a')).resolves.toEqual([
       { id: KEPT_TWO, title: 'Codex thread', modified: 2000, current: true },
