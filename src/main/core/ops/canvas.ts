@@ -5,8 +5,11 @@ import { AgentId, NodeId } from '../../../shared/api/ids';
 import type { CanvasDocument, CanvasNode } from '../../../shared/model/canvas';
 import * as agents from '../../../shared/model/agent-ops';
 import * as structure from '../../../shared/model/structure';
+import { arrange } from '../../../shared/model/layout';
 import type { Built, Created, StructureContext } from '../../../shared/model/structure';
 import { OpFailure } from '../call';
+import type { OpContext } from '../call';
+import type { Built as CommitBuild } from '../canvas/documents';
 import type { Implementations, OpServices } from '.';
 
 /** Each structural op builds one pure change over the document ctx.commit supplies. */
@@ -27,6 +30,19 @@ export function canvasOps({
   | 'canvas.move'
 > {
   const context: StructureContext = { newId: randomUUID, defaultAdapter };
+  // Layout is part of the same pure build, so its changed positions share the op's revision,
+  // rules and provenance (including a spawn's copies) rather than a later renderer edit.
+  const commit = <R>(
+    ctx: OpContext,
+    canvas: string | undefined,
+    build: (doc: CanvasDocument) => CommitBuild<R>,
+  ) =>
+    ctx.commit(canvas, (doc) => {
+      const built = build(doc);
+      return built.next !== doc && built.next.arrange
+        ? { ...built, next: arrange(built.next) }
+        : built;
+    });
   return {
     'canvas.rename': ({ canvas, node, label }, ctx) =>
       ctx.commit(canvas, (doc) => {
@@ -34,7 +50,7 @@ export function canvasOps({
         return { next: structure.rename(doc, { id: node, label }).next, result: {} };
       }),
     'canvas.addAgent': ({ canvas, at, adapter, connection, role }, ctx) =>
-      ctx.commit(canvas, (doc) => {
+      commit(ctx, canvas, (doc) => {
         const descriptor = adapterIn(catalog, adapter);
         if (!descriptor) throw new OpFailure('invalid', `There is no adapter ${adapter}.`);
         if (
@@ -61,13 +77,13 @@ export function canvasOps({
         };
       }),
     'canvas.spawnAgent': ({ canvas, from, relation }, ctx) =>
-      ctx.commit(canvas, (doc) => {
+      commit(ctx, canvas, (doc) => {
         requireNode(doc, from, 'agent');
         const built = created(structure.spawnAgent(doc, { from, relation }, context), AgentId);
         return { ...built, copies: new Map([[built.result.id, from]]) };
       }),
     'canvas.delete': ({ canvas, nodes = [], links = [] }, ctx) =>
-      ctx.commit(canvas, (doc) => {
+      commit(ctx, canvas, (doc) => {
         for (const node of nodes) requireNode(doc, node);
         for (const { a, b } of links) requireLink(doc, a, b);
         return structure.remove(doc, {
@@ -76,7 +92,7 @@ export function canvasOps({
         });
       }),
     'canvas.link': ({ canvas, a, b, source = a, dots }, ctx) =>
-      ctx.commit(canvas, (doc) => {
+      commit(ctx, canvas, (doc) => {
         requireEnds(doc, a, b);
         if (source !== a && source !== b)
           throw new OpFailure('invalid', 'The drawn source must be one of the link’s ends.');
@@ -88,24 +104,24 @@ export function canvasOps({
         return { next, result: {} };
       }),
     'canvas.unlink': ({ canvas, a, b }, ctx) =>
-      ctx.commit(canvas, (doc) => {
+      commit(ctx, canvas, (doc) => {
         requireLink(doc, a, b);
         return { next: structure.unlink(doc, { source: a, target: b }).next, result: {} };
       }),
     'canvas.group': ({ canvas, nodes, kind }, ctx) =>
-      ctx.commit(canvas, (doc) => {
+      commit(ctx, canvas, (doc) => {
         for (const node of nodes) requireNode(doc, node);
         if (structure.groupMembers(doc.nodes, nodes).length === 0)
           throw new OpFailure('invalid', 'The nodes must share a container to be grouped.');
         return created(structure.group(doc, { nodes, kind }, context), NodeId);
       }),
     'canvas.ungroup': ({ canvas, nodes }, ctx) =>
-      ctx.commit(canvas, (doc) => {
+      commit(ctx, canvas, (doc) => {
         for (const node of nodes) requireNode(doc, node);
         return { next: structure.ungroup(doc, { nodes }).next, result: {} };
       }),
     'canvas.addParent': ({ canvas, frame }, ctx) =>
-      ctx.commit(canvas, (doc) => {
+      commit(ctx, canvas, (doc) => {
         requireNode(doc, frame, 'frame');
         return created(structure.addParent(doc, { id: frame }, context), AgentId);
       }),

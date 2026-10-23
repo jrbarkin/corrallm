@@ -10,6 +10,8 @@ import { launchApp } from './launch';
 import { newCanvasId } from '../src/shared/canvas';
 import { MAX_LABEL } from '../src/shared/model/canvas';
 import { CARD_SIZE } from '../src/shared/model/geometry';
+import type { CanvasDocument } from '../src/shared/model/canvas';
+import { arrange } from '../src/shared/model/layout';
 import { MADE_UP } from '../src/shared/test-made-up';
 
 interface Point {
@@ -1479,6 +1481,32 @@ test('arranges the graph automatically while the toggle is on', async () => {
 
   // A new node joins the arrangement, clear of the others.
   const d = await addAgentAt('Agent 4', 150, 560);
+  const document = await page.evaluate(async () => {
+    const shown = await window.api.windowGet({});
+    if (!shown.ok) throw new Error(shown.error.sentence);
+    const result = await window.api.canvasGet({ canvas: shown.value.canvas });
+    if (!result.ok) throw new Error(result.error.sentence);
+    const { canvas, arrange, nodes, links } = result.value;
+    return { id: canvas, arrange, nodes, links };
+  });
+  expect(document.nodes).toHaveLength(4);
+  const expected = arrange(document as CanvasDocument)
+    .nodes.map(({ id, position }) => ({ id, ...position }))
+    .sort((a, b) => a.id.localeCompare(b.id));
+  // Check canvas coordinates, independent of viewport pan/zoom, and wait for the committed
+  // positions to reach the view. Mere non-overlap also passed when the new card was never laid out.
+  await expect
+    .poll(() =>
+      page.locator('.react-flow__node').evaluateAll((nodes) =>
+        nodes
+          .map((node) => {
+            const position = new DOMMatrix(getComputedStyle(node).transform);
+            return { id: node.getAttribute('data-id') ?? '', x: position.m41, y: position.m42 };
+          })
+          .sort((a, b) => a.id.localeCompare(b.id)),
+      ),
+    )
+    .toEqual(expected);
   const boxes = await Promise.all([a, b, c, d].map(box));
   for (const [i, one] of boxes.entries()) {
     for (const other of boxes.slice(i + 1)) {

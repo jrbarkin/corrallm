@@ -323,7 +323,15 @@ export function fakeCanvas(initial: CanvasDocument) {
           break;
         case 'canvas.setArrange': {
           const { on } = OPS[op].input.parse(raw);
-          built = { next: { ...document, arrange: on }, result: {} };
+          built = {
+            next:
+              on === document.arrange
+                ? document
+                : on
+                  ? arrange({ ...document, arrange: true })
+                  : { ...document, arrange: false },
+            result: {},
+          };
           break;
         }
         case 'canvas.insertTemplate': {
@@ -360,7 +368,23 @@ export function fakeCanvas(initial: CanvasDocument) {
         default:
           throw new Error(`No fake canvas operation ${op}`);
       }
-      const next = built.next.arrange ? arrange(built.next) : built.next;
+      // Match the core's structural commit wrapper and template insertion. Explicit moves,
+      // renames, agent/queue edits and an unchanged Arrange setting do not trigger layout.
+      const structural: readonly GuiOp[] = [
+        'canvas.addAgent',
+        'canvas.spawnAgent',
+        'canvas.delete',
+        'canvas.link',
+        'canvas.unlink',
+        'canvas.group',
+        'canvas.ungroup',
+        'canvas.addParent',
+        'canvas.insertTemplate',
+      ];
+      const next =
+        structural.includes(op) && built.next !== document && built.next.arrange
+          ? arrange(built.next)
+          : built.next;
       const revision = keep(next);
       return Promise.resolve({
         ok: true,
