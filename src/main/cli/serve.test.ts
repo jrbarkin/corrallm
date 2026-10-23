@@ -722,12 +722,13 @@ describe.skipIf(process.platform === 'win32')('corrallm serve', () => {
       // Started again to make a token, its login shell slow to say the environment CLIs run in.
       const shell = path.join(dir, 'slow-shell');
       const reading = path.join(dir, 'shell-reading');
+      const release = path.join(dir, 'shell-release');
       await writeFile(
         shell,
-        `#!/bin/sh\necho $PPID > "${reading}"\nsleep 2\nexec /bin/sh -c "$2"\n`,
+        `#!/bin/sh\necho $PPID > "${reading}"\nwhile [ ! -f "${release}" ]; do sleep 0.05; done\nexec /bin/sh -c "$2"\n`,
       );
       await chmod(shell, 0o755);
-      const { printed, exited } = onTerminal([], { SHELL: shell });
+      const { child, printed, exited } = onTerminal([], { SHELL: shell });
       // Told to stop while serve (the shell's parent) reads it.
       const pid = await vi.waitFor(
         async () => {
@@ -737,7 +738,34 @@ describe.skipIf(process.platform === 'win32')('corrallm serve', () => {
         },
         { timeout: 20_000, interval: 50 },
       );
-      process.kill(pid, 'SIGTERM');
+      // Keep the environment read blocked until serve has acknowledged shutdown. Repeated
+      // signals are safe (and say 'stopping already'); no scheduler speed chooses the phase.
+      const heard = Promise.withResolvers<undefined>();
+      const listen = () => {
+        if (printed().includes('stopping already:')) heard.resolve(undefined);
+      };
+      child.stdout.on('data', listen);
+      const signal = () => {
+        try {
+          process.kill(pid, 'SIGTERM');
+        } catch (error) {
+          heard.reject(new Error('Could not signal startup shutdown.', { cause: error }));
+        }
+      };
+      const repeatSignal = setInterval(signal, 25);
+      try {
+        signal();
+        await Promise.race([
+          heard.promise,
+          exited.then(() => {
+            throw new Error('serve exited before acknowledging startup shutdown.');
+          }),
+        ]);
+      } finally {
+        clearInterval(repeatSignal);
+        child.stdout.off('data', listen);
+        await writeFile(release, 'go');
+      }
       expect(await exited).toBe(0);
       expect(printed()).toContain('stopping…');
       expect(printed()).not.toMatch(/^ {2}[A-Za-z0-9_-]{43}$/m);

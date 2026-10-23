@@ -661,6 +661,10 @@ test('starts Claude Code again from its view once it exits, drawn at the view’
   await chooseProject();
   const { view, terminal } = await openShop();
   const screen = terminal.locator('.xterm-screen');
+  // The panel grows for 380 ms; a live CLI is ready before that geometry is settled.
+  await expect
+    .poll(() => view.locator('.agent-panel').evaluate((el) => el.getAnimations().length))
+    .toBe(0);
   const fitted = await screen.boundingBox();
   await typeIn(terminal, '/exit', 'Enter');
   await expect(view.getByText('Claude Code exited.')).toBeVisible();
