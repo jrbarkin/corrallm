@@ -1,7 +1,13 @@
 import path from 'node:path';
+import { lstat } from 'node:fs/promises';
 
 import { BrowserWindow, dialog, webContents } from 'electron';
-import type { OpenDialogOptions, OpenDialogReturnValue, SaveDialogOptions } from 'electron';
+import type {
+  MessageBoxOptions,
+  OpenDialogOptions,
+  OpenDialogReturnValue,
+  SaveDialogOptions,
+} from 'electron';
 
 import { CANVAS_EXTENSION } from '../../shared/ipc';
 import type { WindowId } from '../core/host';
@@ -42,15 +48,39 @@ export const saveCanvasDialog: Handlers<HostSide>['pickCanvasToSave'] = async (
   window,
   defaultPath,
 ): Promise<string | null> => {
-  const options: SaveDialogOptions = { filters: FILTERS, defaultPath };
+  const options: SaveDialogOptions = {
+    filters: FILTERS,
+    defaultPath,
+    properties: ['showOverwriteConfirmation'],
+  };
   const owner = parent(window);
   const { canceled, filePath } = owner
     ? await dialog.showSaveDialog(owner, options)
     : await dialog.showSaveDialog(options);
   if (canceled || !filePath) return null;
-  return path.extname(filePath) === `.${CANVAS_EXTENSION}`
-    ? filePath
-    : `${filePath}.${CANVAS_EXTENSION}`;
+  if (path.extname(filePath) === `.${CANVAS_EXTENSION}`) return filePath;
+  const extended = `${filePath}.${CANVAS_EXTENSION}`;
+  try {
+    // The native dialog confirmed filePath, not the name after adding our extension. lstat also
+    // catches a dangling symlink, which saving here would replace just like an existing file.
+    await lstat(extended);
+  } catch (error) {
+    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return extended;
+    throw error;
+  }
+  const confirmation: MessageBoxOptions = {
+    type: 'warning',
+    message: `“${path.basename(extended)}” already exists. Replace it?`,
+    detail: 'Saving here will replace the existing file.',
+    buttons: ['Replace', 'Cancel'],
+    defaultId: 1,
+    cancelId: 1,
+    noLink: true,
+  };
+  const { response } = owner
+    ? await dialog.showMessageBox(owner, confirmation)
+    : await dialog.showMessageBox(confirmation);
+  return response === 0 ? extended : null;
 };
 
 /** The folder dialog for a canvas's project folder (HostServices.pickFolder). */

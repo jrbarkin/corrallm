@@ -180,6 +180,87 @@ describe('CanvasMemory', () => {
     expect(await memory.canvasWithFile('/work/team.corral')).toBeUndefined();
   });
 
+  it.each(['within', 'after callback'] as const)(
+    'rolls back a failed atomic file association (%s), even before a queued unrelated write',
+    async (failure) => {
+      const memory = new CanvasMemory(store);
+      await memory.setFile(TEAM, at('/work/team.corral'));
+      await memory.setFile(OTHER, at('/work/other.corral'));
+      const changed = vi.fn();
+      memory.subscribe(changed);
+      vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      const fault = new Error('The save’s final write failed');
+      if (failure === 'after callback') {
+        const write = store.write.bind(store);
+        vi.spyOn(store, 'write').mockImplementationOnce((run) =>
+          write(() => {
+            run();
+            throw fault;
+          }),
+        );
+      }
+      const saving = memory.setFile(TEAM, at('/work/other.corral'), () => {
+        if (failure === 'within') throw fault;
+      });
+      const rejected = expect(saving).rejects.toBe(fault);
+      const later = memory.update(THIRD, (m) => ({ ...m, project: at('/work/third') }));
+      await rejected;
+      expect(memory.fileOf(TEAM)).toBe('/work/team.corral');
+      expect(memory.fileOf(OTHER)).toBe('/work/other.corral');
+      expect((await memory.get(TEAM)).file).toBe('/work/team.corral');
+      expect((await memory.get(OTHER)).file).toBe('/work/other.corral');
+      await later;
+      expect(changed.mock.calls.flat()).toEqual([THIRD]);
+      expect(
+        reader.prepare('SELECT id, file FROM canvas WHERE file IS NOT NULL ORDER BY id').all(),
+      ).toEqual([
+        { id: TEAM, file: '/work/team.corral' },
+        { id: OTHER, file: '/work/other.corral' },
+      ]);
+      await expect(memory.flush()).resolves.toBeUndefined();
+    },
+  );
+
+  it.each(['delete', 'after callback'] as const)(
+    'keeps pending memory and emits no forget notification after a failed %s',
+    async (failure) => {
+      const memory = new CanvasMemory(store);
+      await memory.setFile(TEAM, at('/work/team.corral'));
+      vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      store.exec(`CREATE TRIGGER refuse_conversation BEFORE INSERT ON conversation
+        BEGIN SELECT RAISE(ABORT, 'conversation write failed'); END`);
+      await memory.update(TEAM, (m) => ({
+        ...m,
+        project: at('/work/app'),
+        conversations: inProject({ codex: { a: { id: THREAD } } }),
+      }));
+      const before = await memory.get(TEAM);
+      const changed = vi.fn();
+      memory.subscribe(changed);
+      if (failure === 'delete') {
+        store.exec(`CREATE TRIGGER refuse_delete BEFORE DELETE ON canvas
+          BEGIN SELECT RAISE(ABORT, 'forget failed'); END`);
+      } else {
+        const write = store.write.bind(store);
+        vi.spyOn(store, 'write').mockImplementationOnce((run) =>
+          write(() => {
+            run();
+            throw new Error('forget failed');
+          }),
+        );
+      }
+      await expect(memory.forget(TEAM)).rejects.toThrow('forget failed');
+      expect(await memory.get(TEAM)).toEqual(before);
+      expect(changed).not.toHaveBeenCalled();
+      store.exec('DROP TRIGGER refuse_conversation');
+      if (failure === 'delete') store.exec('DROP TRIGGER refuse_delete');
+      await memory.update(OTHER, (m) => ({ ...m, project: at('/work/other') }));
+      await expect(memory.flush()).resolves.toBeUndefined();
+      await reopen();
+      expect(await new CanvasMemory(store).get(TEAM)).toEqual(before);
+    },
+  );
+
   it('forgets a conversation, and only that one, keeping the rest of the canvas', async () => {
     const memory = new CanvasMemory(store);
     await memory.update(TEAM, () => ({

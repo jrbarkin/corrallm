@@ -12,6 +12,8 @@ The Electron-free services here are composed only by core/core.ts: canvas.ts ask
 
 Their state reaches the GUI through operations, topics, and the remaining hand-written channels served by core/channels.ts.
 
+Canvas memory retains failed ordinary updates for retry (native conversation IDs must not be lost). A change with an atomic SQL callback (`setFile` while saving, or `forget`) instead restores its previous pending memory and emits no notification if its write fails. Later memory changes wait for that atomic write to settle, so none can persist a rejected file association; earlier ordinary updates still retry. Notifications of a successful atomic change follow its durable commit.
+
 ## `src/main/core/`
 
 The core: corrallm's one server, owning profile stores, messages and sessions (the canvas is the core's; the app's run stays in the renderer until B11), in an Electron utility process in the app and under plain Node headless.
@@ -52,7 +54,7 @@ Each commit is told synchronously to `Documents.subscribe`'s listeners (its revi
 
 ## `src/main/host/`
 
-Main only, as the core's host: services.ts answers HostServices with dialogs (dialogs.ts), external links and file reveal.
+Main only, as the core's host: services.ts answers HostServices with dialogs (dialogs.ts), external links and file reveal. The Save dialog requests native overwrite confirmation. If adding `.corral` changes the chosen name and that final path exists (including a dangling symlink), it asks Replace or Cancel for that name before returning it; Cancel is the default.
 
 The core checks links (main/links.ts) and project-folder containment (main/reveal.ts) before asking the host to act. core/windows.ts keeps which canvas each window shows and ends its sessions on reload, crash, close or a canvas change. core-process.ts forks the core process (utilityProcess.fork, stdio piped back, a CoreLink over its parentPort on which main answers HostServices, and windows' ports posted beside it), which main does before the first window; ports.ts hands each window that asks (core:connect) a MessageChannelMain's end, the core the other (naming the core's epoch), tells the core when a window is gone (closed, crashed, reloaded), and reloads every window once a new core is up after a crash (until B9 and B11 move the canvas and run into the core, a page restores its canvas from the journal, paused); supervise.ts is what to do when the core exits (restart a crash at most 3 times in 60 s, then give up; a clean exit is none), and supervisor.ts carries it out (CoreSupervisor: forks and inits each core, the next epoch each restart, what asks the core waiting while a new one comes up; a new core that can't come up counts as another stop, one refused the profile gives up at once; giving up is "corrallm's core keeps stopping", in a native dialog, and the app exits).
 
