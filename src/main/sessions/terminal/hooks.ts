@@ -7,13 +7,15 @@ import { foreignRequest } from '../../loopback';
 
 /*
  * The local server terminal CLIs' hooks report to: JSON events, routed by the session's bearer
- * token (HOOK_TOKEN in its environment). It only listens, answering with no decision. A foreign
+ * token (read from its private header file). It only listens, answering with no decision. A foreign
  * Host or any Origin is refused before the token (loopback.ts); no media type is checked until
  * a recording says what the CLIs' HTTP hooks send (Build Plan Q26).
  */
 
-/** The variable in a session's environment that holds its hooks' token. */
+/** The old secret variable: stripped from every Terminal child's environment. */
 export const HOOK_TOKEN = 'CORRALLM_HOOK_TOKEN';
+/** Only this non-secret path is inherited by a CLI and the commands its hooks run. */
+export const HOOK_HEADER = 'CORRALLM_HOOK_HEADER';
 /** The largest hook event read, in bytes: a prompt or a reply can be long. */
 const MAX_BODY = 4 * 1024 * 1024;
 /** A hook event, as a CLI posts it: JSON, untrusted (never act on it beyond reading). */
@@ -156,13 +158,13 @@ export function postHookCommand(url: string, shell: 'posix' | 'cmd' = 'posix'): 
   if (shell === 'cmd') {
     return (
       `curl.exe -s -o NUL --max-time 5 -X POST ` +
-      `-H "Authorization: Bearer %${HOOK_TOKEN}%" -H "Content-Type: application/json" ` +
-      `--data-binary @- ${url} & exit /b 0`
+      `-H "@%${HOOK_HEADER}%" -H "Content-Type: application/json" ` +
+      `--data-binary @- ${url} >NUL 2>&1 & exit /b 0`
     );
   }
   const post =
     `curl -s -o /dev/null --max-time 5 -X POST ` +
-    `-H "Authorization: Bearer $${HOOK_TOKEN}" -H "Content-Type: application/json" ` +
+    `-H "@$${HOOK_HEADER}" -H "Content-Type: application/json" ` +
     `--data-binary @- ${url}`;
-  return `/bin/sh -c 'if command -v curl >/dev/null 2>&1; then ${post}; else cat >/dev/null; fi; exit 0'`;
+  return `/bin/sh -c 'if command -v curl >/dev/null 2>&1; then ${post}; else cat >/dev/null; fi; exit 0' >/dev/null 2>&1`;
 }

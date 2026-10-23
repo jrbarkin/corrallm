@@ -1,3 +1,4 @@
+import { readFileSync, statSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -122,6 +123,24 @@ const seen = () =>
 const ends = () => events.filter((event) => event.type === 'end').length;
 
 describe('Codex in a terminal, as the real one ran', () => {
+  it('keeps hook authorization in a private file, never command arguments or child environments', async () => {
+    await start(['prompts'], { env: { ...SPEC.env, CORRALLM_HOOK_TOKEN: 'inherited-secret' } });
+    const run = runs[0];
+    if (!run) throw new Error('No terminal');
+    const commands = run.args.filter((arg) => /^hooks\.(?!state)/.test(arg));
+    expect(commands).toHaveLength(4);
+    for (const command of commands) expect(command).not.toContain('CORRALLM_HOOK_TOKEN');
+    expect(run.options.env).not.toHaveProperty('CORRALLM_HOOK_TOKEN');
+    const header = run.options.env.CORRALLM_HOOK_HEADER ?? '';
+    expect(path.dirname(path.dirname(header))).toBe(dir);
+    expect(statSync(header).mode & 0o777).toBe(0o600);
+    const authorization = readFileSync(header, 'utf8').trim();
+    expect(authorization).toMatch(/^Authorization: Bearer [0-9a-f]{48}$/);
+    const token = authorization.slice('Authorization: Bearer '.length);
+    expect(run.args.join(' ')).not.toContain(token);
+    expect(JSON.stringify(run.options.env)).not.toContain(token);
+  });
+
   it('reports native permissions from its SessionStart hook before any prompt is typed', async () => {
     startupPermission = 'default';
     await start(['prompts'], { mode: null });

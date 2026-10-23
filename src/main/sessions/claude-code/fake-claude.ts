@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 
-import { HOOK_TOKEN } from '../terminal/hooks';
+import { HOOK_HEADER } from '../terminal/hooks';
 import type { Pty, PtyOptions } from '../terminal/pty';
 
 /*
@@ -158,7 +158,11 @@ export class FakeClaude implements Pty {
     const settings = JSON.parse(readFileSync(file, 'utf8')) as {
       hooks: Record<
         string,
-        { matcher?: string; hooks: { url?: string; command?: string }[] }[] | undefined
+        | {
+            matcher?: string;
+            hooks: { url?: string; command?: string; headers?: { Authorization: string } }[];
+          }[]
+        | undefined
       >;
     };
     const group = settings.hooks[name]?.[0];
@@ -174,7 +178,11 @@ export class FakeClaude implements Pty {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${this.options.env[HOOK_TOKEN] ?? ''}`,
+        Authorization:
+          hook?.headers?.Authorization ??
+          readFileSync(this.options.env[HOOK_HEADER] ?? '', 'utf8')
+            .trim()
+            .slice('Authorization: '.length),
       },
       body: JSON.stringify({
         session_id: this.sessionId,

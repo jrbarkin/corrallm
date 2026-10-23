@@ -8,7 +8,7 @@ import { postHookCommand } from '../../terminal/hooks';
  * (`-c hooks.<Event>=[…]`; the user's config.toml is never touched, and their own hooks still
  * run): on the events corrallm follows, Codex runs a command that posts the event (the JSON Codex
  * writes to its stdin) to main's hook server (sessions/terminal/hooks.ts), with the bearer token
- * only that session has (in its environment). The command prints nothing and always succeeds, so
+ * only that session has (in its private header file). The command prints nothing and always succeeds, so
  * Codex goes on as it would without it.
  *
  * Codex runs a hook only once the user has trusted it (else its TUI stops at "Hooks need review"):
@@ -48,7 +48,7 @@ export interface SessionHook {
 }
 
 /**
- * The command that posts a hook event to `url`, with the token from its environment. Codex runs
+ * The command that posts a hook event to `url`, with the token from its private header file (only the path is in its environment). Codex runs
  * it with the user's login shell (`$SHELL -lc`, which may be zsh, fish or another; on Windows
  * `cmd /C`), so on POSIX it runs its own `/bin/sh`, whose syntax is known. Without curl it reads
  * the event and drops it (corrallm then follows Codex by its window title alone). It never fails:

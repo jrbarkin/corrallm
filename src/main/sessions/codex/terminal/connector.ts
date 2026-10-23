@@ -6,7 +6,7 @@ import type { UsageBackendId } from '../../../../shared/adapter';
 import type { UsageWindows } from '../../../../shared/usage';
 import { CODEX_USAGE } from '../adapter';
 import type { Connector, LiveSession, SessionHost, SessionSpec } from '../../connector';
-import { HOOK_TOKEN, HookServer } from '../../terminal/hooks';
+import { HookServer } from '../../terminal/hooks';
 import { spawnPty } from '../../terminal/pty';
 import type { SpawnPty } from '../../terminal/pty';
 import { TerminalSession, TIMING } from '../../terminal/session';
@@ -52,12 +52,9 @@ export const CODEX_TIMING: Partial<TerminalTiming> = { enter: 200, startup: 8000
 
 /**
  * The environment Codex runs in, in corrallm's terminal: the agents' (the user's login shell's),
- * as a terminal sets it up, with its hooks' token (hooks.ts).
+ * as a terminal sets it up.
  */
-export function codexEnvironment(
-  env: Readonly<Record<string, string>>,
-  token: string,
-): Record<string, string> {
+export function codexEnvironment(env: Readonly<Record<string, string>>): Record<string, string> {
   const rest = Object.fromEntries(
     Object.entries(env).filter(([name]) => !CODEX_COMMAND_VARIABLES.includes(name)),
   );
@@ -66,7 +63,6 @@ export function codexEnvironment(
     ...TERMINAL,
     // Codex draws with Unicode: a terminal without a locale gets a UTF-8 one.
     ...(rest.LANG === undefined && rest.LC_ALL === undefined ? { LANG: 'en_US.UTF-8' } : {}),
-    [HOOK_TOKEN]: token,
   };
 }
 
@@ -155,7 +151,7 @@ export class CodexTerminalConnector implements Connector<CodexMode> {
       spawn: this.#spawn,
       hooks: this.#hooks,
       tmp: this.#tmp,
-      env: (token) => codexEnvironment(spec.env, token),
+      env: () => codexEnvironment(spec.env),
       timing: this.#timing,
       ...(usage === undefined
         ? {}

@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, statSync } from 'node:fs';
 import { mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -152,6 +152,34 @@ const last = <T extends SessionEvent['type']>(type: T) =>
   events.findLast((event): event is Extract<SessionEvent, { type: T }> => event.type === type);
 
 describe('a Terminal session', () => {
+  it('keeps hook authorization in private files, never command arguments or child environments', async () => {
+    await start({ env: { ...SPEC.env, [HOOK_TOKEN]: 'inherited-secret' } });
+    const run = claude();
+    const settingsFile = run.arg('--settings') ?? '';
+    const settings = JSON.parse(readFileSync(settingsFile, 'utf8')) as {
+      hooks: Record<
+        string,
+        { hooks: { command?: string; headers?: { Authorization: string } }[] }[]
+      >;
+    };
+    const command = settings.hooks.SessionStart?.[0]?.hooks[0]?.command ?? '';
+    expect(command).not.toContain(HOOK_TOKEN);
+    expect(run.options.env).not.toHaveProperty(HOOK_TOKEN);
+    const header = run.options.env.CORRALLM_HOOK_HEADER ?? '';
+    expect(path.dirname(header)).toBe(path.dirname(settingsFile));
+    expect(statSync(header).mode & 0o777).toBe(0o600);
+    expect(statSync(settingsFile).mode & 0o777).toBe(0o600);
+    const authorization = readFileSync(header, 'utf8').trim();
+    expect(authorization).toMatch(/^Authorization: Bearer [0-9a-f]{48}$/);
+    expect(settings.hooks.Stop?.[0]?.hooks[0]?.headers?.Authorization).toBe(
+      authorization.slice('Authorization: '.length),
+    );
+    const token = authorization.slice('Authorization: Bearer '.length);
+    expect(run.args.join(' ')).not.toContain(token);
+    expect(JSON.stringify(run.options.env)).not.toContain(token);
+    expect(command).not.toContain(token);
+  });
+
   it('reports native permissions from its command SessionStart hook before any prompt is typed', async () => {
     fake.sessionStart = 'default';
     await start();
@@ -181,7 +209,7 @@ describe('a Terminal session', () => {
     const kept = JSON.parse(readFileSync(claude().arg('--settings') ?? '', 'utf8')) as {
       hooks: Record<string, unknown>;
     };
-    expect(kept.hooks.SessionStart).toBeUndefined();
+    expect(kept.hooks).toEqual({});
     expect(last('unheard')).toBeDefined();
   });
 
@@ -299,7 +327,7 @@ describe('a Terminal session', () => {
 
     const { env } = run.options;
     expect(env).toMatchObject({ PATH: '/usr/bin', TERM: 'xterm-256color', COLORTERM: 'truecolor' });
-    expect(env[HOOK_TOKEN]).toMatch(/^[0-9a-f]{48}$/);
+    expect(env).not.toHaveProperty(HOOK_TOKEN);
     // It must report its status to corrallm's terminal.
     expect(env).not.toHaveProperty('CLAUDE_CODE_DISABLE_TERMINAL_TITLE');
 

@@ -1,4 +1,6 @@
-import { HOOK_TOKEN } from '../../terminal/hooks';
+import { readFileSync } from 'node:fs';
+
+import { HOOK_HEADER } from '../../terminal/hooks';
 import type { Pty, PtyOptions } from '../../terminal/pty';
 import { RECORDED_SESSION, recordedTerminal } from './recorded';
 import type { TerminalFixture, TerminalRecord } from './recorded';
@@ -45,7 +47,11 @@ export class Replay implements Pty {
     ) {
       await fetch(this.#url(), {
         method: 'POST',
-        headers: { Authorization: `Bearer ${this.options.env[HOOK_TOKEN] ?? ''}` },
+        headers: {
+          Authorization: readFileSync(this.options.env[HOOK_HEADER] ?? '', 'utf8')
+            .trim()
+            .slice('Authorization: '.length),
+        },
         body: JSON.stringify({
           hook_event_name: 'SessionStart',
           cwd: this.options.cwd,
@@ -134,7 +140,11 @@ export class Replay implements Pty {
           // Codex waits for its hooks before it goes on.
           await fetch(this.#url(), {
             method: 'POST',
-            headers: { Authorization: `Bearer ${this.options.env[HOOK_TOKEN] ?? ''}` },
+            headers: {
+              Authorization: readFileSync(this.options.env[HOOK_HEADER] ?? '', 'utf8')
+                .trim()
+                .slice('Authorization: '.length),
+            },
             body: JSON.stringify(record.data.ev),
           });
           due = Math.max(due, performance.now());

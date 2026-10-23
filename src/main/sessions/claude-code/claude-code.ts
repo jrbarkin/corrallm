@@ -142,7 +142,10 @@ export class ClaudeCode implements TerminalCli<PermissionMode> {
     const off = await hooksOff({ cwd, env: this.#env, managed: this.#managed, url: hooks.url });
     await writeFile(
       path.join(dir, SETTINGS),
-      JSON.stringify({ ...hookSettings(hooks.url, off === undefined), ...statusLine }),
+      JSON.stringify({
+        ...(off === undefined ? hookSettings(hooks.url, hooks.token) : { hooks: {} }),
+        ...statusLine,
+      }),
       { mode: 0o600 },
     );
     this.#unheard = off && hooksOffWarning(off);

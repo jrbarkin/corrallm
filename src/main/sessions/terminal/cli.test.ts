@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -7,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CodexMode, SessionEvent } from '../../../shared/session';
 import type { LiveSession, SessionSpec } from '../connector';
 import type { Launch, TerminalCli, TerminalSignal } from './cli';
-import { HOOK_TOKEN, HookServer } from './hooks';
+import { HOOK_HEADER, HookServer } from './hooks';
 import type { HookEvent, HookRegistration } from './hooks';
 import type { Pty, PtyOptions } from './pty';
 import type { Screen } from './screen';
@@ -222,7 +223,11 @@ class FakeTitled implements Pty {
   async hook(name: string, fields: Record<string, unknown> = {}): Promise<void> {
     await fetch(this.url(), {
       method: 'POST',
-      headers: { Authorization: `Bearer ${this.options.env[HOOK_TOKEN] ?? ''}` },
+      headers: {
+        Authorization: readFileSync(this.options.env[HOOK_HEADER] ?? '', 'utf8')
+          .trim()
+          .slice('Authorization: '.length),
+      },
       body: JSON.stringify({ session_id: this.id, hook_event_name: name, ...fields }),
     });
   }
@@ -320,7 +325,7 @@ async function start(
       },
       hooks,
       tmp: dir,
-      env: (token) => ({ ...SPEC.env, [HOOK_TOKEN]: token }),
+      env: () => ({ ...SPEC.env }),
       timing: {
         ...TIMING,
         key: 0,

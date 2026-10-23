@@ -1,11 +1,18 @@
 import { describe, expect, it } from 'vitest';
 
-import { HOOK_TOKEN } from '../terminal/hooks';
+import { HOOK_HEADER, HOOK_TOKEN } from '../terminal/hooks';
 import { hookSettings } from './hooks';
 
 describe('hookSettings', () => {
-  it('posts the events corrallm follows to its server, with the token from the environment', () => {
-    const settings = hookSettings('http://127.0.0.1:4000/hook');
+  it('uses a private header file in its Bash command hook, including Git Bash on Windows', () => {
+    const settings = hookSettings('http://127.0.0.1:4000/hook', 'secret');
+    const command = settings.hooks.SessionStart?.[0]?.hooks[0]?.command;
+    expect(command).toContain(`-H "@$${HOOK_HEADER}"`);
+    expect(command).not.toContain('secret');
+    expect(command).not.toContain(HOOK_TOKEN);
+  });
+  it('posts the events corrallm follows to its server, with the token from its private settings', () => {
+    const settings = hookSettings('http://127.0.0.1:4000/hook', 'secret');
     expect(Object.keys(settings.hooks)).toEqual([
       'SessionStart',
       'UserPromptSubmit',
@@ -32,8 +39,7 @@ describe('hookSettings', () => {
           {
             type: 'http',
             url: 'http://127.0.0.1:4000/hook',
-            headers: { Authorization: `Bearer $${HOOK_TOKEN}` },
-            allowedEnvVars: [HOOK_TOKEN],
+            headers: { Authorization: 'Bearer secret' },
             timeout: 5,
           },
         ],
