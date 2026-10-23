@@ -46,8 +46,18 @@ export function NeedsSidebar({
       )
       .map((item) => [item.id, item]),
   );
-  // Keep the answered card through the topic's removal (which may arrive before reply resolves).
-  for (const [id, settlement] of settlements) current.set(id, settlement.item);
+  // Pending replies and successful outcomes survive topic removal. A failed reply belongs only
+  // to the live item, so a vanished prompt cannot leave a button or badge that can never work.
+  const gone = [...settlements].filter(
+    ([id, settlement]) => !settlement.pending && !settlement.outcome && !current.has(id),
+  );
+  if (gone.length > 0) {
+    const kept = new Map(settlements);
+    for (const [id] of gone) kept.delete(id);
+    setSettlements(kept);
+  }
+  for (const [id, settlement] of settlements)
+    if (settlement.pending || settlement.outcome) current.set(id, settlement.item);
   const answer = async (item: CoreNeed, choice: string) => {
     const update = (value: Settlement) => {
       setSettlements((previous) => new Map(previous).set(item.id, value));
