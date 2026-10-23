@@ -5,6 +5,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { PROPOSING_RULES } from '../../shared/api/define';
+import { MAX_OPEN_PROPOSALS } from '../../shared/api/limits';
 import type { OpResult } from '../../shared/api/errors';
 import { OPS } from '../../shared/api/registry';
 import { OP_NAMES, SURFACE } from '../../shared/api/surface';
@@ -31,6 +32,7 @@ import type { Store } from './store/store';
 import { keepCanvases, openTestStore, readOnDisk } from './store/test-store';
 import type { Kept } from './store/test-store';
 import { CALLERS, CANVAS, isLead, NO_DESKTOP, PROPOSAL } from './test-registry';
+import { TEMPLATE } from './test-world';
 
 /*
  * T9 (Core Server §3.7, B9 Design §11): no token reaches what a rule forbids, by whatever op it
@@ -1562,5 +1564,83 @@ it('rechecks reach before returning a repeated conflict with current rows', asyn
   expect(await call('canvas.rename', args, LEAD)).toMatchObject({
     ok: false,
     error: { code: 'not-found' },
+  });
+});
+
+describe('proposal defaults and bounds', () => {
+  it.each(['parent', 'authorship'])(
+    'keeps a lead’s template %s when its batch is allowed after a restart',
+    async (field) => {
+      const proposed = await propose(
+        'canvas.batch',
+        {
+          ops: [
+            {
+              op: 'canvas.insertTemplate',
+              args: { template: TEMPLATE, values: { feature: 'Keep this authorship' } },
+            },
+            { op: 'canvas.delete', args: { nodes: ['helper'] } },
+          ],
+        },
+        LEAD,
+      );
+      await core.close();
+      core = await start();
+      expect(await answer(proposed, 'allow')).toMatchObject({
+        ok: true,
+        value: { outcome: 'allowed' },
+      });
+      const group = doc().nodes.find(
+        (one) => one.type === 'frame' && one.data.label === 'Spec first',
+      );
+      expect(group).toBeDefined();
+      if (field === 'parent') expect(group?.parentId).toBe('lead');
+      else {
+        const filled = doc()
+          .nodes.flatMap((one) => (one.type === 'agent' ? (one.data.queue ?? []) : []))
+          .find((item) => 'message' in item && item.message.includes('Keep this authorship'));
+        expect(filled).toMatchObject({ by: 'agent:lead' });
+      }
+      expect(lastRevision()).toMatchObject({ by_party: 'you', proposed_by: 'agent:lead' });
+    },
+  );
+
+  it('deduplicates identical pending deletes without request ids, across renewal and restart', async () => {
+    const proposed = await propose('canvas.delete', { nodes: ['b'] });
+    for (let i = 0; i < MAX_OPEN_PROPOSALS + 8; i++)
+      expect(await propose('canvas.delete', { nodes: ['b'] }, RENEWED)).toBe(proposed);
+    expect(await proposals()).toHaveLength(1);
+    await core.close();
+    core = await start();
+    expect(await propose('canvas.delete', { nodes: ['b'] }, RENEWED)).toBe(proposed);
+    expect(await proposals()).toHaveLength(1);
+    // A changed baseline is a different proposal; a settled one is never reused.
+    await applied('canvas.rename', { node: 'b', label: 'Bee' }, YOU);
+    const fresh = await propose('canvas.delete', { nodes: ['b'] });
+    expect(fresh).not.toBe(proposed);
+    expect(await answer(fresh, 'refuse')).toMatchObject({ ok: true });
+    expect(await propose('canvas.delete', { nodes: ['b'] })).not.toBe(fresh);
+  });
+
+  it('caps distinct open proposals per party and canvas and frees a settled slot', async () => {
+    const pending: string[] = [];
+    const args = (i: number) => ({
+      ops: [
+        { op: 'canvas.rename', args: { node: 'c', label: `Choice ${String(i)}` } },
+        { op: 'canvas.delete', args: { nodes: ['b'] } },
+      ],
+    });
+    for (let i = 0; i < MAX_OPEN_PROPOSALS; i++)
+      pending.push(await propose('canvas.batch', args(i)));
+    await core.close();
+    core = await start();
+    await refused('canvas.batch', args(MAX_OPEN_PROPOSALS), RENEWED);
+    expect(await proposals()).toHaveLength(MAX_OPEN_PROPOSALS);
+    // A repeat still works at the cap, and other parties/canvases have separate budgets.
+    expect(await propose('canvas.batch', args(0), RENEWED)).toBe(pending[0]);
+    await propose('canvas.delete', { nodes: ['helper'] }, LEAD);
+    await applied('canvas.delete', { nodes: ['solo'] }, OUTSIDE, SECOND);
+    expect(await answer(String(pending[0]), 'refuse')).toMatchObject({ ok: true });
+    await propose('canvas.batch', args(MAX_OPEN_PROPOSALS), RENEWED);
   });
 });

@@ -93,7 +93,10 @@ export interface OpServices {
    * Each canvas's document: a canvas made, kept or dropped (canvas.create), and a file changed on
    * disk applied or kept over (reply).
    */
-  documents: Pick<Documents, 'create' | 'keep' | 'drop' | 'forget' | 'applyFile' | 'keepFile'>;
+  documents: Pick<
+    Documents,
+    'create' | 'keep' | 'drop' | 'forget' | 'applyFile' | 'keepFile' | 'createdBy'
+  >;
   /** What the core says of each canvas it keeps: its entities, and the list of them. */
   states: Pick<CanvasStates, 'read' | 'list' | 'keeps'>;
   /** The proposals waiting for you on each canvas. */

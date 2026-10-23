@@ -445,18 +445,18 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
    * What waits for you on a canvas: its run's holds and sessions' prompts, the proposals, and the
    * review of its file changed on disk.
    */
-  const waitingFor = (canvas: CanvasId): NeedsItem[] => {
+  const waitingFor = (canvas: CanvasId, reach?: readonly string[]): NeedsItem[] => {
     const open = engines.canvas(canvas);
     return [
       ...(open ? needs(needsInput(open, config.locale)) : []),
-      ...proposals.items(canvas),
+      ...proposals.items(canvas, reach),
       ...reviews.items(canvas),
       ...stalled.items(canvas),
       ...journal.items(canvas),
     ];
   };
-  const needOf = (canvas: CanvasId, id: string) =>
-    waitingFor(canvas).find((item) => item.id === id);
+  const needOf = (canvas: CanvasId, id: string, reach?: readonly string[]) =>
+    waitingFor(canvas, reach).find((item) => item.id === id);
   const stores = () =>
     Promise.all([
       memory.flush(),
