@@ -42,11 +42,11 @@ A smaller checkpoint or forgetting the run clears it.
 
 A renderer's oversized run:save records the warning then rejects, so it never claims to have saved progress; core journaling can continue.
 
-Restart restores only the last checkpoint that fit, paused, with that warning. `dump` (store/dump.ts, cli/dump.ts) reads canvases (including their document's rows and conversations), runs and messages as JSON lines in one read transaction, including committed WAL rows.
+Restart restores only the last checkpoint that fit, paused, with that warning. `dump` (store/dump.ts, cli/dump.ts) reads repositories (schema 3, with their setup), canvases (including their document's rows, conversations and, from schema 3, their workspace records: repository, worktrees with their setups and jobs, bindings), runs and messages as JSON lines in one read transaction, including committed WAL rows.
 
 It uses SQLite READONLY and query_only, never the store's writer, migrations, recovery, checkpoints or core.lock.
 
-It shares open.ts' application-id, min-reader and integrity checks, refusing before its first line; schema 1 can be inspected without migration.
+It shares open.ts' application-id, min-reader and integrity checks, refusing before its first line; schemas 1 and 2 can be inspected without migration.
 
 As with any SQLite WAL reader, it participates in -shm and may create an empty -wal/-shm on a closed database; it writes no database page or WAL frame.
 
