@@ -5,7 +5,15 @@ import { define } from '../define';
 import { brandsIn, idsIn } from '../ids';
 import { OPS } from '../registry';
 import { SURFACE } from '../surface';
-import { MAX_IMAGE_BYTES, MAX_IMAGE_TOTAL, MAX_IMAGES, MAX_MESSAGE_BYTES } from '../limits';
+import {
+  MAX_IMAGE_BYTES,
+  MAX_IMAGE_TOTAL,
+  MAX_IMAGES,
+  MAX_MESSAGE_BYTES,
+  MAX_REQUEST_BYTES,
+  MAX_REPLY_ANSWER_BYTES,
+  MAX_NEED_ID,
+} from '../limits';
 import { MAX_NODE_ID } from '../../model/canvas';
 import { NEW_SESSION } from '../../model/session';
 import { runView, sessionView } from '../../model/views';
@@ -14,6 +22,7 @@ import { MAX_FORM_FIELDS, MAX_QUESTIONS } from '../../session';
 import { b11RunOps } from './run';
 import { b11SessionOps } from './session';
 import { b11ConversationOps, ReplyAnswer } from './conversation';
+import { Images } from './b11-data';
 
 const canvas = '00000000-0000-4000-8000-000000000001';
 const request = '00000000-0000-4000-8000-000000000002';
@@ -174,6 +183,14 @@ describe('prepared operation schemas, not registrations', () => {
       { ...image, mediaType: 'image/svg+xml' },
     ])
       expect(input.safeParse({ ...args, then: { text: 'hi', images: [bad] } }).success).toBe(false);
+  });
+
+  it('describes aggregate byte bounds to the registry, not just per-value limits', () => {
+    const images = z.toJSONSchema(Images);
+    const answers = z.toJSONSchema(ReplyAnswer);
+    expect(images.maxBytes).toBeLessThan(MAX_REQUEST_BYTES - 4096);
+    expect(answers.maxBytes).toBe(MAX_REPLY_ANSWER_BYTES);
+    expect(MAX_REPLY_ANSWER_BYTES + 6 * MAX_NEED_ID + 4096).toBe(MAX_REQUEST_BYTES);
   });
 
   it('caps prompt collections and rejects native flags at every prepared entry point', () => {

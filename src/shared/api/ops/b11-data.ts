@@ -52,7 +52,9 @@ export const Images = z
     (images) =>
       images.reduce((bytes, image) => bytes + imageBytes(image.data), 0) <= MAX_IMAGE_TOTAL,
     'The pasted images exceed their total byte limit',
-  );
+  )
+  // Base64 needs no JSON escaping. Allow padding and media/object keys for each bounded image.
+  .meta({ maxBytes: 4 * Math.ceil(MAX_IMAGE_TOTAL / 3) + MAX_IMAGES * 100 });
 export const ManualText = z.strictObject({ text: Body, images: Images.optional() });
 const Party = z.string().regex(PARTY_PATTERN);
 const Outcome = z.enum(['succeeded', 'failed', 'cancelled', 'skipped', 'timedOut', 'stopped']);

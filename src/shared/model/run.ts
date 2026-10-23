@@ -61,8 +61,8 @@ export interface AgentRun {
    */
   status: 'running' | 'waiting' | 'asking' | 'stopped' | 'done';
   /**
-   * While its task has no connection, or its session would not start (an Agent SDK agent on a
-   * Claude subscription): the destination, how it ran, why it could not, and a connection to try.
+   * While its task has no connection, or its session would not start: the destination, how it
+   * ran, why it could not, and a connection to try.
    * An unavailable task stays unsent; otherwise its message waits in the session's queue.
    */
   refused?: { agent: string; connection: ConnectionId; text: string; switchTo?: ConnectionId };

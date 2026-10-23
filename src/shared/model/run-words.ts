@@ -22,7 +22,7 @@ export interface AskChoice {
   key: string;
   label: string;
   title?: string;
-  /** What it means, shown under it (as Claude Code shows its questions' options). */
+  /** What it means, shown under the choice. */
   detail?: string;
   /** The answer most expected, shown filled. */
   primary?: boolean;

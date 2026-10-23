@@ -17,7 +17,7 @@ import {
   PLAN_MODES,
   ELICITATION_ACTIONS,
 } from '../../session';
-import { MAX_REQUEST_BYTES } from '../limits';
+import { MAX_REPLY_ANSWER_BYTES } from '../limits';
 
 /**
  * Conversation (Core Server §4 H; API Spec §7.2): what parties send agents, what waits for whom,
@@ -282,9 +282,10 @@ export const ReplyAnswer = z
     }),
   ])
   .refine(
-    (answer) => new TextEncoder().encode(JSON.stringify(answer)).length < MAX_REQUEST_BYTES - 4096,
+    (answer) => new TextEncoder().encode(JSON.stringify(answer)).length <= MAX_REPLY_ANSWER_BYTES,
     'The answer exceeds the request byte budget',
-  );
+  )
+  .meta({ maxBytes: MAX_REPLY_ANSWER_BYTES });
 
 /** R22 images and typed replies prepared separately; registered operations retain today’s shapes. */
 export const b11ConversationOps = {
