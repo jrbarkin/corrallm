@@ -1753,11 +1753,135 @@ async function withdrawReceived(to = 'builder', caller: Caller = OUTSIDE): Promi
   return id;
 }
 
+/** A real Terminal session held at its fake CLI's folder-trust dialog. */
+async function startAtTrust() {
+  await keepCanvas(
+    [
+      {
+        id: 'builder',
+        label: 'Builder',
+        adapter: DEFAULT_ADAPTER,
+        connection: `${DEFAULT_ADAPTER}.terminal`,
+      },
+    ],
+    [],
+  );
+  const runs: FakeClaude[] = [];
+  const connector = new TerminalConnector({
+    spawn: (file, args, spec) => {
+      const run = new FakeClaude(file, args, spec, { trust: true, sessionStart: 'default' });
+      runs.push(run);
+      return Promise.resolve(run);
+    },
+    findClaude: () => Promise.resolve('/fake/cli'),
+    flags: () => Promise.resolve(new Set()),
+    home: profile,
+    tmp: profile,
+    timing: {
+      key: 0,
+      enter: 1,
+      echo: 300,
+      confirm: 500,
+      settle: 5,
+      startup: 120,
+      batch: 1,
+      kill: 50,
+    },
+  });
+  return { runs, start: () => start({ claude: connector }) };
+}
+
 describe('telling an agent of a withdrawal after receipt', () => {
   beforeEach(() => {
     appServer = new FakeConnector({ adapter: 'codex', pause: 100 });
     terminal = new FakeConnector({ adapter: 'codex', pause: 100 });
   });
+
+  it('withdraws a Terminal message waiting at folder trust without a false receipt or note', async () => {
+    const terminal = await startAtTrust();
+    await terminal.start();
+    const id = await send('builder', 'Never received', YOU);
+    await vi.waitFor(() => {
+      expect(
+        core?.engines.canvas(CANVAS)?.engine.sessions.of('builder').asking ?? [],
+      ).toContainEqual(expect.objectContaining({ kind: 'trust' }));
+      expect(core?.engines.canvas(CANVAS)?.engine.sessions.of('builder').status).toBe('waiting');
+    });
+    expect(await ok('withdraw', { id }, YOU)).toEqual({
+      reached: false,
+      interrupted: false,
+      revs: {},
+    });
+    const cli = terminal.runs[0];
+    if (!cli) throw new Error('No terminal');
+    cli.write('\r');
+    const next = await send('builder', 'New work', YOU);
+    await vi.waitFor(async () => {
+      expect((await find(next, YOU))?.state).toBe('replied');
+    });
+    expect(cli.prompts).toEqual(['New work']);
+  });
+
+  it('keeps a withdrawal note untold when its Terminal carrier is interrupted before typing', async () => {
+    const terminal = await startAtTrust();
+    const original = crypto.randomUUID();
+    await keepMessages(profile, CANVAS, [
+      {
+        message: {
+          id: original,
+          from: 'outside:orchestrator',
+          to: 'agent:builder',
+          kind: 'text',
+          body: 'Old work',
+          state: 'withdrawn',
+          by: 'outside:orchestrator',
+          at: 1000,
+        },
+        withdrawal: { text: withdrawalNote(original) },
+      },
+    ]);
+    await terminal.start();
+    const carrier = await send('builder', 'Unreceived carrier', YOU);
+    await vi.waitFor(async () => {
+      expect((await find(carrier, YOU))?.state).toMatch(/deliver/);
+    });
+    await vi.waitFor(() => {
+      expect(terminal.runs).toHaveLength(1);
+      expect(core?.engines.canvas(CANVAS)?.engine.sessions.of('builder').status).toBe('waiting');
+    });
+    await ok('withdraw', { id: carrier }, YOU);
+    expect(core?.engines.canvas(CANVAS)?.messages.withdrawals('agent:builder')).toEqual([
+      { id: original, text: withdrawalNote(original) },
+    ]);
+    const cli = terminal.runs[0];
+    if (!cli) throw new Error('No terminal');
+    cli.write('\r');
+    const next = await send('builder', 'Received carrier', YOU);
+    await vi.waitFor(async () => {
+      expect((await find(next, YOU))?.state).toBe('replied');
+    });
+    expect(cli.prompts).toEqual([`[corrallm] ${withdrawalNote(original)}\n\nReceived carrier`]);
+    expect(core?.engines.canvas(CANVAS)?.messages.withdrawals('agent:builder')).toEqual([]);
+  });
+
+  it.each(['manual', 'queue'] as const)(
+    'sends the withdrawal note alone before a %s slash command, leaving the command unchanged',
+    async (origin) => {
+      await keepCanvas([{ ...BUILDER_AGENT, queue: [{ id: 'review', action: '/review' }] }], []);
+      const engine = await (await start()).engines.open(CANVAS);
+      const id = await withdrawReceived();
+      if (origin === 'manual') await send('builder', '  /compact', YOU);
+      else engine.run.start();
+      await vi.waitFor(() => {
+        expect(sent(appServer).slice(1)).toEqual([
+          `[corrallm] ${withdrawalNote(id)}`,
+          origin === 'manual' ? '  /compact' : '/review',
+        ]);
+      });
+      expect(appServer.sessions[0]?.sent[1]?.from).toEqual({ party: 'corrallm', name: 'corrallm' });
+      expect(appServer.sessions[0]?.sent[2]?.from).toBeUndefined();
+    },
+  );
 
   it.each(['builder', 'shell'])(
     'shows the exact withdrawal-bearing messages sent to %s, in order, live and after resuming',

@@ -312,7 +312,6 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
     }
     const turn = this.#turn ?? this.#begin();
     turn.messages.push(message.id);
-    this.#emit({ type: 'user', id: message.id, text: message.text });
     this.#pending.push(message);
     this.#updateStatus();
     this.#check();
@@ -780,6 +779,8 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
       return;
     }
     this.#write(ENTER);
+    // A queued message is not a receipt: trust dialogs and user drafts may hold it indefinitely.
+    this.#emit({ type: 'user', id: message.id, text: message.text });
     this.#awaiting = true;
     this.#unconfirmed.push(this.#cli.submitted(message.text));
     this.#confirm(0);
@@ -902,7 +903,7 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
   #signal(signal: TerminalSignal<M>): void {
     switch (signal.kind) {
       case 'notice':
-        this.#host.emit({ type: 'notice', id: randomUUID(), level: 'warning', text: signal.text });
+        this.#emit({ type: 'notice', id: randomUUID(), level: 'warning', text: signal.text });
         return;
       case 'session':
         if (signal.id !== this.#id && isNativeId(signal.id)) {

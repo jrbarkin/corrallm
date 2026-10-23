@@ -106,6 +106,8 @@ export class CodexTui implements TerminalCli<CodexMode> {
   #model: string | undefined;
   /** Permissions last heard from a hook; terminal changes are visible only at the next hook. */
   #mode: CodexMode | undefined;
+  /** A malformed native id is warned about once, while its hooks are still heard. */
+  readonly #invalidIds = new Set<unknown>();
 
   constructor({
     trust,
@@ -211,11 +213,13 @@ export class CodexTui implements TerminalCli<CodexMode> {
     const signals: TerminalSignal<CodexMode>[] = [];
     const id = text('session_id');
     if (isUuid(id)) signals.push({ kind: 'session', id });
-    else if (event.session_id !== undefined)
+    else if (event.session_id !== undefined && !this.#invalidIds.has(event.session_id)) {
+      this.#invalidIds.add(event.session_id);
       signals.push({
         kind: 'notice',
         text: 'Codex reported an invalid conversation id; it will not be resumed.',
       });
+    }
     const model = text('model');
     if (model !== undefined && model !== this.#model && MODEL_PATTERN.test(model)) {
       this.#model = model;

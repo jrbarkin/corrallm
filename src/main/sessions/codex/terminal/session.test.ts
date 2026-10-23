@@ -222,13 +222,13 @@ describe('Codex in a terminal, as the real one ran', () => {
     });
     expect(seen()).toEqual([
       'started',
-      'user:Say hi in one word.',
       'status:working',
+      'user:Say hi in one word.',
       'model:gpt-6-luna',
       'text:Hi',
       'end:done',
-      'user:Create a file named bye.txt containing the word bye.',
       'status:working',
+      'user:Create a file named bye.txt containing the word bye.',
       // Listed outside its terminal while it waits (Needs you), until the user answers there.
       'asking:Codex needs you: see its terminal.',
       'status:waiting',
@@ -321,8 +321,8 @@ describe('Codex in a terminal, as the real one ran', () => {
       expect(ends()).toBe(3);
     });
     expect(seen().slice(-3)).toEqual([
-      'user:Write the numbers from 1 to 400, one per line, as plain text.',
       'status:working',
+      'user:Write the numbers from 1 to 400, one per line, as plain text.',
       'end:interrupted',
     ]);
     expect(seen().filter((event) => event.startsWith('end:'))).toEqual([
@@ -488,6 +488,32 @@ describe('a turn Codex ends without its Stop hook, as at a usage limit', () => {
       });
     },
   );
+
+  it('emits a hook notice after the delayed end rather than in the earlier turn', async () => {
+    const { run, reading } = await pendingEnd();
+    const url = /http:\/\/127\.0\.0\.1:\d+\/hook/.exec(run.args.join(' '))?.[0];
+    if (!url) throw new Error('No hook URL');
+    const authorization = readFileSync(run.options.env.CORRALLM_HOOK_HEADER ?? '', 'utf8')
+      .trim()
+      .slice('Authorization: '.length);
+    await fetch(url, {
+      method: 'POST',
+      headers: { Authorization: authorization },
+      body: JSON.stringify({ hook_event_name: 'SessionStart', session_id: 'invalid-id' }),
+    });
+    const before = events.filter(
+      (event) => event.type === 'notice' && event.text.includes('invalid conversation id'),
+    );
+    reading.resolve(undefined);
+    await until(() => {
+      expect(ends()).toBe(1);
+    });
+    expect(before).toEqual([]);
+    const notice = events.findIndex(
+      (event) => event.type === 'notice' && event.text.includes('invalid conversation id'),
+    );
+    expect(notice).toBeGreaterThan(events.findIndex((event) => event.type === 'end'));
+  });
 
   it('never holds the next turn past its own end or emits a late duplicate when usage stays pending', async () => {
     const { run, reading } = await pendingEnd();
