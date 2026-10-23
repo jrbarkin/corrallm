@@ -22,6 +22,7 @@ export type Brand =
   | 'NeedId'
   | 'MessageId'
   | 'ConversationId'
+  | 'EntryId'
   | 'TaskId'
   | 'TokenId';
 
@@ -83,6 +84,18 @@ export type ItemId = z.infer<typeof ItemId>;
 /** A message (API Spec §5.2), by the id the core minted. */
 export const MessageId = brandedId('MessageId', z.uuid());
 export type MessageId = z.infer<typeof MessageId>;
+
+/** Native ids meet R42a's platform minimum; the adapter applies its stricter shape later. */
+const NativeId = () =>
+  z
+    .string()
+    .min(1)
+    .max(128)
+    .regex(/^(?!-)[A-Za-z0-9._:-]+$/);
+export const ConversationId = brandedId('ConversationId', NativeId());
+export const TaskId = brandedId('TaskId', NativeId());
+/** A native transcript message/checkpoint, beside its agent; not a durable mailbox UUID. */
+export const EntryId = brandedId('EntryId', NativeId());
 
 /**
  * An entity of a canvas's document, by its key (src/shared/model/rows.ts): `node/<id>`,

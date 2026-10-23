@@ -5,6 +5,9 @@ import { MAX_EXPECT } from './limits';
 import { SURFACE } from './surface';
 import type { OpName, Rule, Surface } from './surface';
 
+/** Schema preparation needs only envelope metadata, never an unregistered audience or scope. */
+export type Envelope = Pick<Surface, 'kind' | 'rules'>;
+
 /*
  * An operation's schemas, beside its surface (Core Server §3.1). `define` adds the envelope its
  * surface calls for, so no op declares it itself: a write takes a `request` id, which core.call
@@ -69,20 +72,20 @@ type Extended<O extends z.ZodType, Shape extends z.core.$ZodShape> =
     ? z.ZodObject<z.core.util.Extend<Own, Shape>, Config>
     : never;
 
-type Proposes<S extends Surface> = S extends { rules: readonly (infer R)[] }
+type Proposes<S extends Envelope> = S extends { rules: readonly (infer R)[] }
   ? [Extract<R, 'discard' | 'restore-code'>] extends [never]
     ? false
     : true
   : false;
 
 /** What a write returns: its result and the revisions it reached, or a proposal. */
-type Written<S extends Surface, O extends z.ZodType> =
+type Written<S extends Envelope, O extends z.ZodType> =
   Proposes<S> extends true
     ? z.ZodUnion<[Extended<O, typeof REVS>, typeof Proposed]>
     : Extended<O, typeof REVS>;
 
 /** An op's definition with the envelope its surface `S` calls for. */
-export type Enveloped<S extends Surface, I extends Input, O extends z.ZodType> = OpDef<
+export type Enveloped<S extends Envelope, I extends Input, O extends z.ZodType> = OpDef<
   S['kind'] extends 'read'
     ? I
     : S['kind'] extends 'doc'
@@ -92,7 +95,7 @@ export type Enveloped<S extends Surface, I extends Input, O extends z.ZodType> =
 >;
 
 /** `def` with the envelope `surface` calls for. Throws for a write whose result isn't an object. */
-export function withEnvelope<S extends Surface, I extends Input, O extends z.ZodType>(
+export function withEnvelope<S extends Envelope, I extends Input, O extends z.ZodType>(
   surface: S,
   def: OpDef<I, O>,
 ): Enveloped<S, I, O> {
@@ -111,6 +114,12 @@ export function withEnvelope<S extends Surface, I extends Input, O extends z.Zod
 export function define<N extends OpName, I extends Input, O extends z.ZodType>(
   name: N,
   def: OpDef<I, O>,
-): Enveloped<(typeof SURFACE)[N], I, O> {
-  return withEnvelope(SURFACE[name], def);
+): Enveloped<(typeof SURFACE)[N], I, O>;
+/** Prepare bounded schemas before their implementation/registration; this grants no access. */
+export function define<S extends Envelope, I extends Input, O extends z.ZodType>(
+  envelope: S,
+  def: OpDef<I, O>,
+): Enveloped<S, I, O>;
+export function define(name: OpName | Envelope, def: OpDef<Input>): OpDef {
+  return withEnvelope(typeof name === 'string' ? SURFACE[name] : name, def);
 }

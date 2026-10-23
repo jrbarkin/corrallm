@@ -8,6 +8,16 @@ import type { OpDef } from '../define';
 import { AgentId, MessageId, NeedId, OpCanvas } from '../ids';
 import { MAX_MESSAGE_BYTES, MAX_PAGE, MAX_WAIT_SECONDS } from '../limits';
 import type { OpName } from '../surface';
+import { Body as B11Body, Images } from './b11-data';
+import {
+  MAX_ANSWER_LENGTH,
+  MAX_FORM_FIELDS,
+  MAX_ID_LENGTH,
+  MAX_QUESTIONS,
+  PLAN_MODES,
+  ELICITATION_ACTIONS,
+} from '../../session';
+import { MAX_REPLY_ANSWER_BYTES } from '../limits';
 
 /**
  * Conversation (Core Server §4 H; API Spec §7.2): what parties send agents, what waits for whom,
@@ -219,3 +229,106 @@ export const conversationOps = {
     output: z.strictObject({ reached: z.boolean(), interrupted: z.boolean() }),
   }),
 } satisfies Partial<Record<OpName, OpDef>>;
+
+const AnswerText = z.string().max(MAX_ANSWER_LENGTH);
+const FieldName = z.string().min(1).max(MAX_ID_LENGTH);
+const FormValue = z.union([
+  AnswerText,
+  z.number(),
+  z.boolean(),
+  z.array(AnswerText).max(MAX_FORM_FIELDS),
+]);
+const FormValues = z
+  .record(FieldName, FormValue)
+  .refine((values) => Object.keys(values).length <= MAX_FORM_FIELDS, 'Too many form fields')
+  .meta({ maxProperties: MAX_FORM_FIELDS });
+const QuestionAnswers = z
+  .record(FieldName, z.union([AnswerText, z.array(AnswerText).max(MAX_FORM_FIELDS)]))
+  .refine(
+    (answers) => Object.keys(answers).length > 0 && Object.keys(answers).length <= MAX_QUESTIONS,
+    'Answer the bounded set of questions',
+  )
+  .meta({ minProperties: 1, maxProperties: MAX_QUESTIONS });
+const PermissionAnswer = z
+  .strictObject({ permission: z.enum(['once', 'always', 'deny']), feedback: AnswerText.optional() })
+  .refine(
+    (answer) => answer.feedback === undefined || answer.permission === 'deny',
+    'Feedback accompanies a denial',
+  );
+/** Strict disjoint answer forms; C7 checks that a live Need offers the particular answer. */
+export const ReplyAnswer = z
+  .union([
+    z
+      .strictObject({
+        choice: z.string().min(1).max(64),
+        text: B11Body.optional(),
+        images: Images.optional(),
+      })
+      .refine(
+        (answer) => answer.images === undefined || answer.text !== undefined,
+        'Images accompany typed text',
+      ),
+    z.strictObject({ text: B11Body, images: Images.optional() }),
+    z.strictObject({ answers: QuestionAnswers }),
+    PermissionAnswer,
+    z.strictObject({
+      plan: z.union([
+        z.strictObject({ approve: z.literal(true), mode: z.enum(PLAN_MODES) }),
+        z.strictObject({ approve: z.literal(false), feedback: AnswerText }),
+      ]),
+    }),
+    z.strictObject({
+      form: z.strictObject({ action: z.enum(ELICITATION_ACTIONS), values: FormValues.optional() }),
+    }),
+  ])
+  .refine(
+    (answer) => new TextEncoder().encode(JSON.stringify(answer)).length <= MAX_REPLY_ANSWER_BYTES,
+    'The answer exceeds the request byte budget',
+  )
+  .meta({ maxBytes: MAX_REPLY_ANSWER_BYTES });
+
+/** R22 images and typed replies prepared separately; registered operations retain today’s shapes. */
+export const b11ConversationOps = {
+  message: define(
+    { kind: 'command' },
+    {
+      summary:
+        'Records and sends a message with optional live images; provenance comes from the caller.',
+      input: z.strictObject({
+        canvas,
+        to: AgentId,
+        body: B11Body,
+        images: Images.optional(),
+        replyTo: MessageId.optional(),
+      }),
+      output: z.strictObject({ id: z.uuid() }),
+    },
+  ),
+  reply: define(
+    { kind: 'command' },
+    {
+      summary: 'Answers the current run hold or native prompt with a bounded typed answer.',
+      input: z.strictObject({ canvas, to: NeedId, answer: ReplyAnswer }),
+      output: z.strictObject({
+        id: z.uuid().optional(),
+        canvas: z.uuid().optional(),
+        outcome: z
+          .enum([
+            'allowed',
+            'refused',
+            'stale',
+            'applied',
+            'kept',
+            'superseded',
+            'answered',
+            'started',
+            'skipped',
+            'completed',
+            'retained',
+          ])
+          .optional(),
+        raised: NeedId.optional(),
+      }),
+    },
+  ),
+};
