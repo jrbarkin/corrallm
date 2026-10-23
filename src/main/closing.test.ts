@@ -35,7 +35,7 @@ describe('Closing', () => {
       expect(deps.done).toHaveBeenCalledTimes(1);
     });
     expect(deps.ask).toHaveBeenCalledWith('The disk is full');
-    expect(deps.abandon).toHaveBeenCalledTimes(1);
+    expect(deps.abandon).toHaveBeenCalledExactlyOnceWith();
     expect(closing.request()).toBe(true);
   });
 
@@ -60,7 +60,7 @@ describe('Closing', () => {
     await vi.waitFor(() => {
       expect(deps.done).toHaveBeenCalledTimes(1);
     });
-    expect(deps.abandon).toHaveBeenCalledTimes(1);
+    expect(deps.abandon).toHaveBeenCalledExactlyOnceWith(true);
     expect(deps.ask).not.toHaveBeenCalled();
   });
 });

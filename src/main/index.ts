@@ -40,7 +40,7 @@ const FORBIDDEN_SWITCHES = [
   'browser-subprocess-path',
 ] as const;
 
-/** How long closing without saving waits for the agents' sessions to end. */
+/** How long an explicit second-quit escape waits for the core to close. */
 const ABANDON_MS = 5000;
 
 function main(): void {
@@ -194,17 +194,23 @@ function main(): void {
         );
         await ask('flush');
       };
-      // Closing without saving, after the user said to: give the core a few seconds to finish.
+      // An approved quit waits for the complete core teardown. Only a second quit while
+      // saving is stuck bounds that wait, as the user's explicit escape.
       let finishing: Promise<void> | undefined;
-      const abandon = () => (finishing ??= finish());
-      const finish = async () => {
+      const abandon = (escape?: true) => (finishing ??= finish(escape));
+      const finish = async (escape?: true) => {
         supervisor.stop();
+        const closed = ask('close').catch((error: unknown) => {
+          console.error('Could not finish closing the core:', error);
+        });
+        if (!escape) {
+          await closed;
+          return;
+        }
         let timer: ReturnType<typeof setTimeout> | undefined;
         try {
           await Promise.race([
-            ask('close').catch((error: unknown) => {
-              console.error('Could not finish closing the core:', error);
-            }),
+            closed,
             new Promise((resolve) => {
               timer = setTimeout(resolve, ABANDON_MS);
             }),
