@@ -40,7 +40,7 @@ import type { SessionAction } from '../transcript/reduce';
 
 export interface SubmissionObserver {
   retry?: (agent: string, request: Extract<SessionEvent, { type: 'retry-task' }>) => void;
-  ending?: (agent: string, result: TurnResult) => void;
+  ending?: (agent: string, result: TurnResult, messages: readonly string[], sent: boolean) => void;
   submitted?: (agentId: string, message: SubmittedMessage) => void;
   ended?: (agentId: string, id: string, reply: string, result: TurnResult) => void;
 }
@@ -114,6 +114,7 @@ export class SessionStore {
    */
   readonly #runMessages = new Set<string>();
   readonly #tasks = new Map<string, TaskMessage>();
+  readonly #retryOf = new Map<string, string>();
   readonly #displayTexts = new Map<string, string>();
   /** Who sent each message another party sent, by its id, until its turn ends. */
   readonly #senders = new Map<string, MessageSender>();
@@ -306,10 +307,11 @@ export class SessionStore {
     onRefused?: (refusal: Refusal) => void,
     origin: 'user' | 'queue' | 'run' = 'user',
     displayText?: string,
-    as: { id?: string; from?: MessageSender; task?: TaskMessage } = {},
+    as: { id?: string; from?: MessageSender; task?: TaskMessage; retryOf?: string } = {},
   ): () => void {
     const { id = crypto.randomUUID(), from } = as;
     if (as.task) this.#tasks.set(id, as.task);
+    if (as.retryOf) this.#retryOf.set(id, as.retryOf);
     this.#types.set(agentId, agent);
     if (origin === 'queue') this.#queueMessages.add(id);
     else if (origin === 'run') this.#runMessages.add(id);
@@ -550,6 +552,7 @@ export class SessionStore {
     this.#queueMessages.clear();
     this.#runMessages.clear();
     this.#tasks.clear();
+    this.#retryOf.clear();
     this.#setAside.clear();
     this.#displayTexts.clear();
     this.#senders.clear();
@@ -624,6 +627,7 @@ export class SessionStore {
     this.#displayTexts.delete(id);
     this.#senders.delete(id);
     this.#tasks.delete(id);
+    this.#retryOf.delete(id);
     return onDone;
   }
 
@@ -728,8 +732,13 @@ export class SessionStore {
       }
       const driving = this.#drivers.get(agentId);
       if (driving?.driver instanceof ConnectedDriver && driving.connection === connection) {
-        if (event.type === 'end' && event.messages.includes(this.#turns.get(agentId) ?? ''))
-          this.#observer.ending?.(agentId, event.result);
+        if (event.type === 'end')
+          this.#observer.ending?.(
+            agentId,
+            event.result,
+            event.messages,
+            event.messages.includes(this.#turns.get(agentId) ?? ''),
+          );
         driving.driver.receive(event);
       }
     });
@@ -786,10 +795,12 @@ export class SessionStore {
           );
         } else {
           const after = this.#position(agentId);
+          const retryOf = this.#retryOf.get(message.id);
           created = {
             id: message.id,
             text: this.#displayTexts.get(message.id) ?? message.text,
             status,
+            ...(retryOf === undefined ? {} : { retryOf }),
             ...(message.images?.length ? { images: message.images } : {}),
             ...(after === undefined ? {} : { after }),
           };

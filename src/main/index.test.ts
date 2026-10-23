@@ -290,6 +290,103 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
+describe('waiting for the approved core shutdown', () => {
+  it.each([
+    { update: false, anyway: false },
+    { update: true, anyway: false },
+    { update: false, anyway: true },
+    { update: true, anyway: true },
+  ])(
+    'awaits a nine-second core close (update: $update, Quit anyway: $anyway)',
+    async ({ update, anyway }) => {
+      app.whenReady.mockResolvedValueOnce();
+      if (anyway) {
+        showMessageBox.mockResolvedValueOnce({ response: 1 });
+        vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      }
+      let coreClosed = false;
+      request.mockImplementation((name) => {
+        if (name === 'close')
+          return new Promise((resolve) => {
+            setTimeout(() => {
+              coreClosed = true;
+              resolve({ ok: true, value: null });
+            }, 9000);
+          });
+        if (name === 'flush' && anyway) return Promise.reject(new Error('Disk full'));
+        return Promise.resolve({ ok: true, value: name === 'shown' ? [] : null });
+      });
+      const install = vi.fn();
+      const finishQuit = vi.fn(() => {
+        if (update) install();
+        return update;
+      });
+      let restart: (() => void) | undefined;
+      startAppUpdates.mockImplementationOnce((actions) => {
+        restart = actions.requestQuit;
+        return { finishQuit, cancelRestart: vi.fn(), stop: vi.fn() };
+      });
+      await import('./index');
+      await vi.waitFor(() => {
+        expect(startAppUpdates).toHaveBeenCalledOnce();
+      });
+      const beforeQuit = app.on.mock.calls.find(
+        ([name]) => name === 'before-quit',
+      )?.[1] as (event: { preventDefault(): void }) => void;
+      app.quit.mockImplementation(() => {
+        beforeQuit({ preventDefault: vi.fn() });
+      });
+      vi.useFakeTimers();
+      if (update) restart?.();
+      else beforeQuit({ preventDefault: vi.fn() });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(request).toHaveBeenCalledWith('close');
+      // An update first requests the ordinary quit; only the final quit/install is under test.
+      app.quit.mockClear();
+      await vi.advanceTimersByTimeAsync(8999);
+      expect(coreClosed).toBe(false);
+      expect(app.quit).not.toHaveBeenCalled();
+      expect(finishQuit).not.toHaveBeenCalled();
+      expect(install).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(coreClosed).toBe(true);
+      expect(finishQuit).toHaveBeenCalledOnce();
+      expect(app.quit).toHaveBeenCalledTimes(update ? 0 : 1);
+      expect(install).toHaveBeenCalledTimes(update ? 1 : 0);
+      expect(request.mock.calls.filter(([name]) => name === 'close')).toHaveLength(1);
+    },
+  );
+
+  it('keeps the five-second escape for an explicit second quit while saving hangs', async () => {
+    app.whenReady.mockResolvedValueOnce();
+    request.mockImplementation((name) => {
+      if (name === 'flush' || name === 'close') return new Promise(() => undefined);
+      return Promise.resolve({ ok: true, value: name === 'shown' ? [] : null });
+    });
+    const finishQuit = vi.fn(() => false);
+    startAppUpdates.mockReturnValueOnce({ finishQuit, cancelRestart: vi.fn(), stop: vi.fn() });
+    await import('./index');
+    await vi.waitFor(() => {
+      expect(startAppUpdates).toHaveBeenCalledOnce();
+    });
+    const beforeQuit = app.on.mock.calls.find(([name]) => name === 'before-quit')?.[1] as (event: {
+      preventDefault(): void;
+    }) => void;
+    vi.useFakeTimers();
+    beforeQuit({ preventDefault: vi.fn() });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(request).toHaveBeenCalledWith('flush');
+    beforeQuit({ preventDefault: vi.fn() });
+    await vi.advanceTimersByTimeAsync(4999);
+    expect(app.quit).not.toHaveBeenCalled();
+    expect(finishQuit).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(app.quit).toHaveBeenCalledOnce();
+    expect(finishQuit).toHaveBeenCalledOnce();
+    expect(request.mock.calls.filter(([name]) => name === 'close')).toHaveLength(1);
+  });
+});
+
 describe('single-instance startup', () => {
   it('quits a second instance before reading user data or creating a window', async () => {
     app.requestSingleInstanceLock.mockReturnValue(false);
