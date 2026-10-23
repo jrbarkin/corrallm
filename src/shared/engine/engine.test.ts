@@ -50,6 +50,105 @@ function engineWith(connection: ConnectionId, message: string) {
 }
 
 describe('Engine', () => {
+  it('resends the window-owned manual submission once, after its cancelled end, retaining images and its link', async () => {
+    const { backend, engine, emit, sent } = engineWith('claude-code.sdk', 'Work');
+    const images = [{ mediaType: 'image/png' as const, data: 'AQ==' }];
+    engine.sessions.send('a', 'claude-code', 'Manual work', undefined, images);
+    await settle();
+    const original = sent();
+    emit('a', 'claude-code.sdk', { type: 'started', model: null, mode: 'manual', models: [] });
+    emit('a', 'claude-code.sdk', {
+      type: 'retry-task',
+      messages: [{ id: original, text: 'Manual work', images }],
+    });
+    expect(backend.send).toHaveBeenCalledTimes(1);
+    emit('a', 'claude-code.sdk', {
+      type: 'end',
+      messages: [original],
+      seconds: 1,
+      result: { status: 'cancelled', reason: 'interrupted' },
+    });
+    await settle();
+    expect(backend.send).toHaveBeenCalledTimes(2);
+    expect(backend.send.mock.calls[1]?.[1]).toMatchObject({ text: 'Manual work', images });
+    expect(sent()).not.toBe(original);
+    expect(engine.sessions.of('a').submissions).toMatchObject([
+      { id: original, status: 'cancelled' },
+      { id: sent(), status: 'running', retryOf: original },
+    ]);
+    emit('a', 'claude-code.sdk', {
+      type: 'retry-task',
+      messages: [{ id: original, text: 'Manual work', images }],
+    });
+    await settle();
+    expect(backend.send).toHaveBeenCalledTimes(2);
+    const checkpoint = engine.checkpoint();
+    Engine.check(checkpoint);
+    engine.reset();
+    engine.restore(checkpoint);
+    expect(engine.sessions.of('a').submissions?.[1]).toMatchObject({ retryOf: original });
+    engine.reset();
+  });
+
+  it('holds a window-owned manual resend through pause, permission and backend holds', async () => {
+    const { backend, engine, emit, sent } = engineWith('claude-code.sdk', 'Work');
+    engine.sessions.send('a', 'claude-code', 'Manual work');
+    await settle();
+    const original = sent();
+    emit('a', 'claude-code.sdk', { type: 'started', model: null, mode: 'manual', models: [] });
+    engine.run.pauseAgent('a');
+    emit('a', 'claude-code.sdk', {
+      type: 'retry-task',
+      messages: [{ id: original, text: 'Manual work' }],
+      until: Date.now() + 60_000,
+    });
+    emit('a', 'claude-code.sdk', {
+      type: 'end',
+      messages: [original],
+      seconds: 1,
+      result: { status: 'cancelled', reason: 'interrupted' },
+    });
+    await settle();
+    expect(backend.send).toHaveBeenCalledTimes(1);
+    emit('a', 'claude-code.sdk', { type: 'retry-task', update: true });
+    await settle();
+    expect(backend.send).toHaveBeenCalledTimes(1);
+    emit('a', 'claude-code.sdk', { type: 'mode', mode: 'bypassPermissions' });
+    engine.run.resumeAgent('a');
+    await settle();
+    expect(backend.send).toHaveBeenCalledTimes(1);
+    emit('a', 'claude-code.sdk', { type: 'mode', mode: 'manual' });
+    await settle();
+    expect(backend.send).toHaveBeenCalledTimes(2);
+    engine.reset();
+  });
+
+  it.each(['completed', 'cancelled'] as const)(
+    'drops a manual resend when the turn is %s or its interrupt was refused',
+    async (status) => {
+      const { backend, engine, emit, sent } = engineWith('claude-code.sdk', 'Work');
+      engine.sessions.send('a', 'claude-code', 'Manual work');
+      await settle();
+      const original = sent();
+      emit('a', 'claude-code.sdk', { type: 'started', model: null, mode: 'manual', models: [] });
+      emit('a', 'claude-code.sdk', {
+        type: 'retry-task',
+        messages: [{ id: original, text: 'Manual work' }],
+      });
+      if (status === 'cancelled')
+        emit('a', 'claude-code.sdk', { type: 'retry-task', cancel: true });
+      emit('a', 'claude-code.sdk', {
+        type: 'end',
+        messages: [original],
+        seconds: 1,
+        result: { status, reason: status === 'completed' ? 'completed' : 'interrupted' },
+      });
+      await settle();
+      expect(backend.send).toHaveBeenCalledTimes(1);
+      engine.reset();
+    },
+  );
+
   it('retries the renderer-owned task only after the core requested its cancelled end', async () => {
     const { backend, engine, emit, sent } = engineWith('claude-code.sdk', 'Work');
     engine.run.start();
