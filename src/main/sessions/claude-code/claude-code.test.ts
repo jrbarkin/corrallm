@@ -77,6 +77,9 @@ describe('Claude Code session ids', () => {
     for (const id of ['--dangerously-skip-permissions', 'session-1', 42, `${SESSION}\n`]) {
       const signals = claude.hook({ ...event, session_id: id });
       expect(signals.some((signal) => signal.kind === 'session')).toBe(false);
+      expect(signals.find((signal) => signal.kind === 'notice')?.text).toMatch(
+        /invalid conversation id/,
+      );
       expect(signals).toContainEqual({ kind: 'prompt', text: 'hello' });
     }
   });

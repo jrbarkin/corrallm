@@ -1,5 +1,6 @@
 import type { InstalledClis } from '../../shared/session';
 import { ADAPTERS } from './adapters';
+import { locate } from './locate';
 
 /** Which catalog adapters' executables are found in the agents' environment. Runs none of them. */
 export async function installedClis(env: Readonly<Record<string, string>>): Promise<InstalledClis> {
@@ -7,7 +8,7 @@ export async function installedClis(env: Readonly<Record<string, string>>): Prom
     await Promise.all(
       ADAPTERS.map(
         async (adapter) =>
-          [adapter.descriptor.id, (await adapter.find?.(env)) !== undefined] as const,
+          [adapter.descriptor.id, (await locate(adapter, env)) !== undefined] as const,
       ),
     ),
   );

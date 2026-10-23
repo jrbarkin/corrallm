@@ -69,6 +69,15 @@ export function replay(name: Fixture): Replay {
     };
     createInterface({ input: stdin }).on('line', (text) => {
       const message = JSON.parse(text) as Record<string, unknown>;
+      // The interruption recording predates corrallm's per-command cleanup. Keep its native
+      // traffic exact, but answer this added request as an older peer without that method.
+      if (name === 'interrupt' && message.method === 'thread/backgroundTerminals/terminate') {
+        sent.push({ method: message.method, params: message.params });
+        stdout.write(
+          `${JSON.stringify({ id: message.id, error: { code: -32601, message: 'This recording has no command termination response.' } })}\n`,
+        );
+        return;
+      }
       // Role reconciliation reads current settings before resume. Older captures predate that
       // read-only request; supply an empty native setting without consuming recorded history.
       if (message.method === 'config/read' && lines[cursor]?.msg.method !== 'config/read') {

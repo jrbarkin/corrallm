@@ -19,6 +19,7 @@ interface FakeCore extends CoreProcess {
   readonly connect: Mock<CoreProcess['connect']>;
   readonly windowGone: Mock<CoreProcess['windowGone']>;
   readonly windowFocused: Mock<CoreProcess['windowFocused']>;
+  readonly resumed: Mock<CoreProcess['resumed']>;
   readonly kill: Mock<CoreProcess['kill']>;
 }
 
@@ -31,6 +32,7 @@ function fakeCore(): FakeCore {
     connect: vi.fn<CoreProcess['connect']>(),
     windowGone: vi.fn<CoreProcess['windowGone']>(),
     windowFocused: vi.fn<CoreProcess['windowFocused']>(),
+    resumed: vi.fn<CoreProcess['resumed']>(),
     kill: vi.fn<CoreProcess['kill']>(),
   };
 }
@@ -99,6 +101,7 @@ describe('starting the core', () => {
     supervisor.connect(7, port);
     supervisor.windowGone(8, true);
     supervisor.windowFocused(7);
+    supervisor.resumed();
     expect(core(0).connect).not.toHaveBeenCalled();
 
     await starting;
@@ -106,6 +109,7 @@ describe('starting the core', () => {
     expect(core(0).connect).toHaveBeenCalledExactlyOnceWith(7, port);
     expect(core(0).windowGone).toHaveBeenCalledExactlyOnceWith(8, true);
     expect(core(0).windowFocused).toHaveBeenCalledExactlyOnceWith(7);
+    expect(core(0).resumed).toHaveBeenCalledOnce();
   });
 });
 

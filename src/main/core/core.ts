@@ -23,10 +23,11 @@ import { ProjectFiles } from '../files';
 import { CanvasMemory } from '../memory';
 import { ProjectFolders } from '../project';
 import { RunJournal } from '../run-journal';
-import { ADAPTERS, CATALOG, DEFAULT_ADAPTER } from '../sessions/adapters';
+import { ADAPTERS, CATALOG, DEFAULT_ADAPTER, isConversationId } from '../sessions/adapters';
 import type { OptionsReader } from '../sessions/adapter';
 import type { Connector } from '../sessions/connector';
-import { createConnectors, createOptions } from '../sessions/connectors';
+import { createConnectors, createConversations, createOptions } from '../sessions/connectors';
+import { locate, parseAgentPaths } from '../sessions/locate';
 import { agentEnvironment, loginShellEnvironment } from '../sessions/environment';
 import { SessionManager } from '../sessions/manager';
 import { Settings } from '../settings';
@@ -58,6 +59,8 @@ import { Topics } from './topics';
 import { UsageProbe } from './usage-probe';
 import type { UsageRead } from './usage-probe';
 import { Children } from './children';
+import { StalledTurns } from './stalled';
+import type { WatchdogClock, WatchdogNetwork } from './stalled';
 import type { ChildSystem } from './children';
 import { openStore } from './store/open';
 import { unopened } from './store/store';
@@ -73,6 +76,10 @@ import type { StoreDeps } from './store/store';
  */
 
 export interface CoreConfig {
+  /** The silent-turn watchdog's wall clock and timers, injected independently of disk IO. */
+  watchdog?: WatchdogClock;
+  /** The silent-turn watchdog's local interface snapshot, injectable without real network changes. */
+  watchdogNetwork?: WatchdogNetwork;
   /** For tests: process identity and group signalling instead of the OS. */
   children?: ChildSystem;
   /** For tests: the database's clock, timers and log flushes instead of the system's. */
@@ -173,6 +180,8 @@ export interface Core extends Dispatcher {
    * checked for a change on disk (B9 Design §5). Resolves once it is.
    */
   focused(window: WindowId): Promise<void>;
+  /** The host woke from sleep: old turns get a short period of fresh silence before warning. */
+  resumed(): void;
   /**
    * Stops: each canvas's run held where it is and journaled, every session closed, and what the
    * core keeps written out. Rejects, once all that is done, if a run couldn't be journaled.
@@ -181,6 +190,7 @@ export interface Core extends Dispatcher {
 }
 
 export async function createCore(config: CoreConfig, host: HostServices): Promise<Core> {
+  parseAgentPaths(process.env.CORRALLM_AGENT_PATHS);
   const { profile } = config;
   // Before anything reads what it keeps. One that can't be opened fails every read and write of
   // what it keeps, saying why: the core journals nothing, and sends nothing whose record can't be
@@ -198,8 +208,11 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
   const tokens = new TokenStore(path.join(profile, 'tokens.json'));
   await tokens.load();
   // A canvas with edits not saved is never forgotten (B9 Design §2), nor one open.
-  const memory: CanvasMemory = new CanvasMemory(store, undefined, (canvas: CanvasId): boolean =>
-    documents.unsaved(canvas),
+  const memory: CanvasMemory = new CanvasMemory(
+    store,
+    undefined,
+    (canvas: CanvasId): boolean => documents.unsaved(canvas),
+    isConversationId,
   );
   // The reviews of canvas files changed on disk (B9 Design §5): what waits on a canvas is read
   // again as one is raised or settled.
@@ -227,6 +240,10 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
   const journal = new RunJournal({
     store,
     memory,
+    problemChanged: (canvas) => {
+      topics.changed(`needs:${canvas}`, 'corrallm');
+      engines.needsChanged(canvas);
+    },
     // What it set aside or restored, said with the first canvas restored, as its runs' are.
     ...(opened.store === undefined ? {} : { said: opened.said }),
   });
@@ -243,21 +260,26 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
   // limits are the account's, not a folder's); none for fake sessions.
   const readerOf = (backend: UsageBackendId): UsageRead | undefined => {
     if (config.sessions !== undefined) return config.sessions.readUsage?.[backend];
-    const read = ADAPTERS.find((adapter) =>
+    const adapter = ADAPTERS.find((adapter) =>
       adapter.usageBackends.some(({ id }) => id === backend),
-    )?.readUsage;
-    if (fake || read === undefined) return undefined;
+    );
+    const read = adapter?.readUsage;
+    if (fake || read === undefined || adapter === undefined) return undefined;
     return () =>
-      children.run(async () => read(backend, { env: await environment(), cwd: homedir() }));
+      children.run(async () => {
+        const env = await environment();
+        const executable = await locate(adapter, env);
+        return executable === undefined
+          ? undefined
+          : read(backend, { env, cwd: homedir(), executable });
+      });
   };
   const probe = new UsageProbe({
     usage,
     backends: CATALOG.usageBackends.map((backend) => backend.id),
     readerOf,
   });
-  const conversations = ADAPTERS.find(
-    (adapter) => adapter.conversations !== undefined,
-  )?.conversations;
+  const conversations = createConversations();
   const sessions = new SessionManager({
     catalog: CATALOG,
     connectors:
@@ -277,11 +299,19 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
       ...createOptions({ fake: fake || config.sessions !== undefined }),
       ...config.sessions?.options,
     },
-    ...(conversations === undefined ? {} : { conversations }),
+    conversations,
+    adapterOf: async (canvas, agentId) => {
+      const node = (await documents.load(canvas)).document.nodes.find(
+        (node) => node.id === agentId,
+      );
+      if (node?.type !== 'agent') throw new Error('That agent is not on this canvas.');
+      return node.data.adapter ?? DEFAULT_ADAPTER;
+    },
     projectOf: (canvas) => projects.of(canvas),
     memory,
     sending: (canvas, agentId, message, send) => engines.sending(canvas, agentId, message, send),
     emit: (canvas, agentId, connection, event) => {
+      stalled.event(canvas, agentId, connection, event);
       void engines.emit(canvas, agentId, connection, event).then(
         (taken) => {
           channels.emit(canvas, 'session:event', agentId, connection, taken);
@@ -293,6 +323,13 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     },
     terminal: (canvas, agentId, event) => {
       channels.emit(canvas, 'terminal', agentId, event);
+    },
+    activity: (canvas, agent) => {
+      stalled.activity(canvas, agent);
+    },
+    ended: (canvas, agent) => {
+      stalled.ended(canvas, agent);
+      engines.ended(canvas, agent);
     },
   });
   const windows = new Windows({
@@ -410,6 +447,8 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
       ...(open ? needs(needsInput(open, config.locale)) : []),
       ...proposals.items(canvas),
       ...reviews.items(canvas),
+      ...stalled.items(canvas),
+      ...journal.items(canvas),
     ];
   };
   const needOf = (canvas: CanvasId, id: string) =>
@@ -435,6 +474,9 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     files: canvasFiles,
   });
   const engines: Engines = new Engines({
+    retryTask: (canvas, agent, connection, event) => {
+      channels.emit(canvas, 'session:event', agent, connection, event);
+    },
     processes: children,
     engineCatalog: engineCatalog(CATALOG, DEFAULT_ADAPTER),
     sessions,
@@ -447,7 +489,46 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     files,
     environment,
     ...(config.locale === undefined ? {} : { locale: config.locale }),
-    needs: (canvas) => [...proposals.items(canvas), ...reviews.items(canvas)],
+    needs: (canvas) => [
+      ...proposals.items(canvas),
+      ...reviews.items(canvas),
+      ...stalled.items(canvas),
+      ...journal.items(canvas),
+    ],
+  });
+  const warnings = new Set<Promise<void>>();
+  const stalled = new StalledTurns({
+    catalog: CATALOG,
+    ...(config.watchdog === undefined ? {} : { clock: config.watchdog }),
+    ...(config.watchdogNetwork === undefined ? {} : { network: config.watchdogNetwork }),
+    changed: (canvas) => {
+      topics.changed(`needs:${canvas}`, 'corrallm');
+      engines.needsChanged(canvas);
+    },
+    warning: (canvas, agent, connection, messages, text) => {
+      // This is our own notice, not CLI activity. Never feed it back into the watchdog.
+      const warning = Promise.all([
+        engines
+          .emit(canvas, agent, connection, {
+            type: 'notice',
+            id: crypto.randomUUID(),
+            level: 'warning',
+            text,
+          })
+          .then((event) => {
+            channels.emit(canvas, 'session:event', agent, connection, event);
+          }),
+        engines.stalled(canvas, agent, messages, text),
+      ])
+        .then(() => undefined)
+        .catch((error: unknown) => {
+          console.error('Could not record a silent turn’s warning:', error);
+        });
+      warnings.add(warning);
+      void warning.finally(() => {
+        warnings.delete(warning);
+      });
+    },
   });
   engines.watch({
     needs: (canvas) => {
@@ -533,6 +614,8 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
         reveal,
         windows,
         sessions,
+        stalled,
+        runProblems: (canvas) => journal.items(canvas),
         environment,
         usage,
         engines,
@@ -627,8 +710,13 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
       const canvas = windows.shownIn(window);
       if (canvas !== undefined) await check(canvas);
     },
+    resumed: () => {
+      stalled.resume();
+    },
     close: async () => {
       closing = true;
+      stalled.close();
+      await Promise.all(warnings);
       watching.close();
       await Promise.all(checking);
       probe.stop();

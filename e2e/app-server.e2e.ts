@@ -12,7 +12,7 @@ import { launchApp } from './launch';
 /*
  * A Codex agent through its app server, in the built app: main runs the App Server connection
  * against a fake `codex` (src/main/sessions/codex/fake-codex.mjs, found through
- * CORRALLM_CODEX_PATH) that speaks the app server's JSON-RPC in the real one's shapes, never Codex
+ * CORRALLM_AGENT_PATHS) that speaks the app server's JSON-RPC in the real one's shapes, never Codex
  * itself. It keeps its threads in a file, so that a restarted app resumes them.
  */
 
@@ -68,7 +68,10 @@ test.afterEach(async () => {
 
 async function launch() {
   closeApp = undefined;
-  ({ app, close: closeApp } = await launchApp({ env: { CORRALLM_CODEX_PATH: codex }, profile }));
+  ({ app, close: closeApp } = await launchApp({
+    env: { CORRALLM_AGENT_PATHS: JSON.stringify({ codex: codex }) },
+    profile,
+  }));
   page = await app.firstWindow();
   problems = [];
   page.on('console', (message) => {

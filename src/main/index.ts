@@ -1,6 +1,6 @@
 import path from 'node:path';
 
-import { app, BrowserWindow, dialog, session } from 'electron';
+import { app, BrowserWindow, dialog, powerMonitor, session } from 'electron';
 import type { MessageBoxOptions } from 'electron';
 import squirrelStartup from 'electron-squirrel-startup';
 
@@ -14,12 +14,14 @@ import { forkCore } from './host/core-process';
 import { CorePorts } from './host/ports';
 import { hostServices } from './host/services';
 import { CoreSupervisor } from './host/supervisor';
+import { startAppUpdates } from './host/updates';
 import { registerIpcHandlers, sendEvent } from './ipc';
 import { runNativeSelfTest } from './native-selftest';
 import { RunShutdown } from './run-shutdown';
 import { hardenSession, installNavigationGuards } from './security';
 import { originKey } from './url-policy';
 import { createMainWindow } from './window';
+import type { AppUpdates } from './updates';
 
 // Defined only under `electron-forge start`. Production builds (packaged or not) serve the
 // renderer from app://, so dev-only relaxations key off this rather than app.isPackaged.
@@ -70,10 +72,6 @@ function main(): void {
   const fakeSessions = !app.isPackaged && process.env.CORRALLM_FAKE_SESSIONS === '1';
   // On macOS, also no Dock icon or menu bar, from the start rather than once the app is ready.
   if (hidden && process.platform === 'darwin') app.setActivationPolicy('accessory');
-
-  // TODO(auto-update): call updateElectronApp() (update-electron-app) here when app.isPackaged.
-  // Works with the Squirrel.Windows and macOS ZIP makers; needs published releases and a
-  // Developer ID-signed macOS build. Linux deb/rpm updates come from the package manager.
 
   const trustedOrigin =
     devServerUrl === undefined ? `${APP_SCHEME}://${rendererHost}` : originKey(devServerUrl);
@@ -161,7 +159,9 @@ function main(): void {
         refuseLocked(error);
         return;
       }
+      let updates: AppUpdates | undefined = undefined;
       app.once('will-quit', () => {
+        updates?.stop();
         supervisor.stop();
       });
       /** Asks the core up now (waiting while a new one comes up), failing with its sentence. */
@@ -233,6 +233,7 @@ function main(): void {
           const { response } = await (window
             ? dialog.showMessageBox(window, options)
             : dialog.showMessageBox(options));
+          if (verb === 'Quit' && response !== 1) updates?.cancelRestart();
           return response === 1;
         };
       const quit = new Closing({
@@ -243,7 +244,9 @@ function main(): void {
         ask: askAnyway('Quit'),
         done: () => {
           void abandon().then(() => {
-            app.quit();
+            // quitAndInstall closes windows before before-quit: call it only after saving and
+            // core shutdown have been approved here, never straight from the update dialog.
+            if (!updates?.finishQuit()) app.quit();
           });
         },
       });
@@ -254,6 +257,9 @@ function main(): void {
       // disk (B9 Design §5): one made in another program while corrallm was in the background.
       app.on('browser-window-focus', (_event, window) => {
         supervisor.windowFocused(window.webContents.id);
+      });
+      powerMonitor.on('resume', () => {
+        supervisor.resumed();
       });
       app.on('browser-window-created', (_event, window) => {
         // macOS window close does not quit the app, but must save/freeze the run all the same.
@@ -273,6 +279,18 @@ function main(): void {
       });
 
       await openMainWindow();
+
+      updates = startAppUpdates({
+        requestQuit: () => {
+          // A second quit while saving explicitly abandons it. An update instead joins it.
+          if (!quit.busy && !quit.approved) app.quit();
+        },
+        openRelease: async (url) => {
+          const window = BrowserWindow.getAllWindows()[0];
+          if (!window) throw new Error('There is no app window to open the release page.');
+          await ask('openLink', window.webContents.id, url);
+        },
+      });
 
       // macOS: re-create a window when the dock icon is clicked and none are open.
       app.on('activate', () => {

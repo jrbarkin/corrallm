@@ -170,6 +170,8 @@ export type Prompt = Extract<Entry, { kind: 'permission' | 'question' | 'plan' |
 
 export interface Session {
   entries: Entry[];
+  /** Runtime index maintained by SessionStore; plain session inputs may supply entries alone. */
+  prompts?: readonly Prompt[];
   /** Live manual messages only: not automation sends or restored native history. */
   submissions?: readonly SubmittedMessage[];
   /** Working on a turn; waiting (mid-turn) for the user to answer a prompt; or idle. */

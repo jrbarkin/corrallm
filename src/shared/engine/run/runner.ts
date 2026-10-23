@@ -1,4 +1,4 @@
-import type { MessageImage, TurnResult } from '../../session';
+import type { MessageImage, TaskMessage, TurnResult } from '../../session';
 import { WINDOW_NAMES, windowNow } from '../../usage';
 import type { ConnectionId, UsageBackendId } from '../../adapter';
 import type { AgentNode, CanvasNode } from '../../model/canvas';
@@ -66,6 +66,8 @@ export interface TaskProblem {
 /** A concise execution record, without the session's tool transcript. */
 export interface TaskAttempt {
   id: string;
+  /** The cancelled/failed attempt the user explicitly retried. */
+  retryOf?: string;
   startedAt: number;
   endedAt?: number;
   status: 'running' | 'succeeded' | 'failed' | 'uncertain' | 'cancelled';
@@ -199,6 +201,7 @@ export interface RunIO {
     /** A typed reply at an OK or repeat: also appears as a manual Message row. */
     origin?: 'user',
     displayText?: string,
+    task?: TaskMessage,
   ) => () => void;
   /** Tells the user something about the run, in an agent's session (a notice there). */
   tell: (agent: AgentNode, text: string) => void;
@@ -228,6 +231,16 @@ export interface RunIO {
  * holds an agent: a timer can fire late (a sleeping laptop) and the clock can be changed.
  */
 const ALARM_MS = 60_000;
+
+function taskMessage(
+  agent: string,
+  item: string,
+  attempts: NonNullable<AgentRun['attempts']>,
+): TaskMessage {
+  const attempt = attempts[item]?.at(-1);
+  if (!attempt) throw new Error('A run message needs its task attempt.');
+  return { agent, item, attempt: attempt.id };
+}
 
 /**
  * What a correction the user typed sends: their note, then what it corrects. A note that starts
@@ -903,7 +916,9 @@ export class RunStore {
     item: string,
     message?: string,
   ): NonNullable<AgentRun['attempts']> {
+    const prior = at?.attempts?.[item]?.at(-1);
     const attempt: TaskAttempt = {
+      ...(prior && prior.status !== 'running' ? { retryOf: prior.id } : {}),
       id: crypto.randomUUID(),
       startedAt: this.#io.now(),
       status: 'running',
@@ -1567,6 +1582,7 @@ export class RunStore {
     const attempts = this.#attempts(this.#run.agents[node.id], current);
     this.#send(node, conditionQuestion(condition), {
       holder: { agent: node.id, token },
+      task: taskMessage(node.id, current, attempts),
       ended: ({ failed, reply, result }) => {
         if (this.#busy.get(node.id) !== token) return;
         this.#busy.delete(node.id);
@@ -1736,6 +1752,7 @@ export class RunStore {
         this.#send(node, text, {
           ended,
           holder,
+          task: taskMessage(agent, task.id, attempts),
           ...(correction
             ? { origin: 'user', displayText: correction.note, images: correction.images }
             : {}),
@@ -1767,6 +1784,7 @@ export class RunStore {
           {
             ended,
             holder,
+            task: taskMessage(agent, task.id, attempts),
             ...(correction
               ? { origin: 'user', displayText: correction.note, images: correction.images }
               : {}),
@@ -1875,12 +1893,14 @@ export class RunStore {
       holder,
       origin,
       displayText,
+      task,
     }: {
       ended?: (turn: TurnEnd) => void;
       images?: readonly MessageImage[] | undefined;
       holder?: { agent: string; token: object };
       origin?: 'user';
       displayText?: string;
+      task?: TaskMessage;
     } = {},
   ): void {
     // Its turn may end at once (a session that cannot start): then there is nothing to take back.
@@ -1934,6 +1954,7 @@ export class RunStore {
           }),
         origin,
         displayText,
+        task,
       );
       pending.withdraw = () => {
         if (sent.over) return;

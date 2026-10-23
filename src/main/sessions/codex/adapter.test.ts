@@ -110,16 +110,19 @@ describe.skipIf(process.platform === 'win32')("Codex's usage reader", () => {
       const fake = path.join(dir, 'codex.mjs');
       await copyFile(path.join(import.meta.dirname, 'fake-codex.mjs'), fake);
       await chmod(fake, 0o755);
-      vi.stubEnv('CORRALLM_CODEX_PATH', fake);
-      const context = { env: { PATH: path.dirname(process.execPath) }, cwd: dir };
+      vi.stubEnv('CORRALLM_AGENT_PATHS', JSON.stringify({ codex: fake }));
+      const context = { env: { PATH: path.dirname(process.execPath) }, cwd: dir, executable: fake };
       expect(await codex.readUsage?.('codex', context)).toMatchObject({
         fiveHour: { usedPercent: 12 },
         weekly: { usedPercent: 3 },
       });
       // Not its backend; no codex.
       expect(await codex.readUsage?.('claude-code', context)).toBeUndefined();
-      vi.stubEnv('CORRALLM_CODEX_PATH', path.join(dir, 'no-codex'));
-      expect(await codex.readUsage?.('codex', context)).toBeUndefined();
+      vi.stubEnv('CORRALLM_AGENT_PATHS', JSON.stringify({ codex: path.join(dir, 'no-codex') }));
+      // Discovery is the platform's, not this reader's: it uses only the supplied executable.
+      expect(await codex.readUsage?.('codex', context)).toMatchObject({
+        fiveHour: { usedPercent: 12 },
+      });
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

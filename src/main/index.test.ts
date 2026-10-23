@@ -2,37 +2,49 @@ import { EventEmitter } from 'node:events';
 
 import type { WebContents } from 'electron';
 import type { RunShutdown } from './run-shutdown';
+import { AppUpdates } from './updates';
+import type { UpdateEvents } from './updates';
+import type { AppUpdateActions } from './host/updates';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { app, registerPrivileges, installGuards, getAllWindows, showMessageBox, showErrorBox } =
-  vi.hoisted(() => ({
-    app: {
-      isPackaged: false,
-      requestSingleInstanceLock: vi.fn(() => true),
-      quit: vi.fn(),
-      exit: vi.fn(),
-      setActivationPolicy: vi.fn(),
-      whenReady: vi.fn(() => new Promise<void>(() => undefined)),
-      enableSandbox: vi.fn(),
-      on: vi.fn(),
-      once: vi.fn(),
-      getPath: vi.fn(() => '/app/profile'),
-      getName: vi.fn(() => 'corrallm'),
-      getVersion: vi.fn(() => '1.2.3'),
-      getLocale: vi.fn(() => 'en-US'),
-      commandLine: { hasSwitch: vi.fn(() => false) },
-    },
-    getAllWindows: vi.fn<() => unknown[]>(() => []),
-    showMessageBox: vi.fn(() => new Promise<{ response: number }>(() => undefined)),
-    showErrorBox: vi.fn(),
-    registerPrivileges: vi.fn(),
-    installGuards: vi.fn(),
-  }));
+const {
+  app,
+  powerMonitor,
+  registerPrivileges,
+  installGuards,
+  getAllWindows,
+  showMessageBox,
+  showErrorBox,
+} = vi.hoisted(() => ({
+  app: {
+    isPackaged: false,
+    requestSingleInstanceLock: vi.fn(() => true),
+    quit: vi.fn(),
+    exit: vi.fn(),
+    setActivationPolicy: vi.fn(),
+    whenReady: vi.fn(() => new Promise<void>(() => undefined)),
+    enableSandbox: vi.fn(),
+    on: vi.fn(),
+    once: vi.fn(),
+    getPath: vi.fn(() => '/app/profile'),
+    getName: vi.fn(() => 'corrallm'),
+    getVersion: vi.fn(() => '1.2.3'),
+    getLocale: vi.fn(() => 'en-US'),
+    commandLine: { hasSwitch: vi.fn(() => false) },
+  },
+  powerMonitor: { on: vi.fn() },
+  getAllWindows: vi.fn<() => unknown[]>(() => []),
+  showMessageBox: vi.fn(() => new Promise<{ response: number }>(() => undefined)),
+  showErrorBox: vi.fn(),
+  registerPrivileges: vi.fn(),
+  installGuards: vi.fn(),
+}));
 
 // The core and windows are faked: boot and closing never start sessions or write user data.
 vi.mock('electron', () => ({
   app,
+  powerMonitor,
   BrowserWindow: { getAllWindows },
   dialog: { showMessageBox, showErrorBox },
   session: { defaultSession: {} },
@@ -51,6 +63,16 @@ vi.mock('./security', () => ({
   isTrustedSender: vi.fn(),
 }));
 vi.mock('./native-selftest', () => ({ runNativeSelfTest: vi.fn() }));
+const { startAppUpdates } = vi.hoisted(() => ({
+  startAppUpdates: vi.fn<
+    (_actions: AppUpdateActions) => Pick<AppUpdates, 'finishQuit' | 'cancelRestart' | 'stop'>
+  >(() => ({
+    finishQuit: () => false,
+    cancelRestart: () => undefined,
+    stop: () => undefined,
+  })),
+}));
+vi.mock('./host/updates', () => ({ startAppUpdates }));
 const { request, createWindow, makeHost, forkCore, cores, reconnect } = vi.hoisted(() => {
   const request = vi.fn<
     (name: string, ...args: unknown[]) => Promise<{ ok: true; value: unknown }>
@@ -71,6 +93,7 @@ const { request, createWindow, makeHost, forkCore, cores, reconnect } = vi.hoist
         connect: vi.fn(),
         windowGone: vi.fn(),
         windowFocused: vi.fn(),
+        resumed: vi.fn(),
         kill: vi.fn(),
       };
     }),
@@ -95,6 +118,7 @@ beforeEach(() => {
   request.mockReset();
   request.mockResolvedValue({ ok: true, value: null });
   app.requestSingleInstanceLock.mockReturnValue(true);
+  app.quit.mockReset();
   app.isPackaged = false;
   app.whenReady.mockImplementation(() => new Promise<void>(() => undefined));
   vi.stubGlobal('MAIN_WINDOW_VITE_DEV_SERVER_URL', undefined);
@@ -102,6 +126,161 @@ beforeEach(() => {
   vi.stubGlobal('CORRALLM_DISTRIBUTION', 'local');
   vi.stubEnv('CORRALLM_NATIVE_SELFTEST', undefined);
   vi.stubEnv('CORRALLM_HIDE_WINDOW', undefined);
+});
+
+describe('an update restart', () => {
+  it('opens its release page through the core operation for an existing window', async () => {
+    app.whenReady.mockResolvedValueOnce();
+    getAllWindows.mockReturnValue([{ webContents: { id: 7 } }]);
+    await import('./index');
+    await vi.waitFor(() => {
+      expect(startAppUpdates).toHaveBeenCalledOnce();
+    });
+    const actions = startAppUpdates.mock.calls[0]?.[0];
+    await actions?.openRelease('https://github.com/jrbarkin/corrallm/releases/tag/v1.3.0');
+    expect(request).toHaveBeenCalledWith(
+      'openLink',
+      7,
+      'https://github.com/jrbarkin/corrallm/releases/tag/v1.3.0',
+    );
+  });
+
+  it.each([false, true])(
+    'saves and flushes before installation (quit already saving: %s)',
+    async (alreadySaving) => {
+      app.whenReady.mockResolvedValueOnce();
+      const contents = { id: 7, isDestroyed: () => false, isCrashed: () => false, send: vi.fn() };
+      getAllWindows.mockReturnValue([{ webContents: contents }]);
+      const flushed = Promise.withResolvers<{ ok: true; value: null }>();
+      const closed = Promise.withResolvers<{ ok: true; value: null }>();
+      request.mockImplementation((name) =>
+        name === 'flush'
+          ? flushed.promise
+          : name === 'close'
+            ? closed.promise
+            : Promise.resolve({ ok: true, value: name === 'shown' ? [7] : null }),
+      );
+      let events: UpdateEvents | undefined;
+      const install = vi.fn();
+      let updates: AppUpdates | undefined;
+      startAppUpdates.mockImplementationOnce((actions) => {
+        updates = new AppUpdates({
+          ...actions,
+          packaged: true,
+          development: false,
+          selfTest: false,
+          disabled: false,
+          unsigned: false,
+          platform: 'darwin',
+          arch: 'arm64',
+          version: '1.2.3',
+          signedMac: () => Promise.resolve(true),
+          fetch: vi.fn(),
+          prompt: () => Promise.resolve(0),
+          log: vi.fn(),
+          updater: {
+            listen: (listeners) => {
+              events = listeners;
+              return () => undefined;
+            },
+            setFeedURL: vi.fn(),
+            checkForUpdates: vi.fn(),
+            quitAndInstall: install,
+          },
+        });
+        void updates.start();
+        return updates;
+      });
+      await import('./index');
+      await vi.waitFor(() => {
+        expect(events).toBeDefined();
+      });
+      const beforeQuit = app.on.mock.calls.find(
+        ([name]) => name === 'before-quit',
+      )?.[1] as (event: { preventDefault(): void }) => void;
+      app.quit.mockImplementation(() => {
+        beforeQuit({ preventDefault: vi.fn() });
+      });
+      if (alreadySaving) app.quit();
+      events?.downloaded('1.3.0');
+      await vi.waitFor(() => {
+        expect(contents.send).toHaveBeenCalledOnce();
+      });
+      expect(app.quit).toHaveBeenCalledOnce(); // Never a second request that forces Closing to abandon.
+      expect(install).not.toHaveBeenCalled();
+      expect(request.mock.calls.map(([name]) => name)).toEqual(['init', 'shown']);
+      makeHost.mock.calls[0]?.[0].ready(
+        contents as unknown as WebContents,
+        contents.send.mock.calls[0]?.[1] as string,
+        null,
+      );
+      await vi.waitFor(() => {
+        expect(request).toHaveBeenCalledWith('flush');
+      });
+      expect(install).not.toHaveBeenCalled();
+      flushed.resolve({ ok: true, value: null });
+      await vi.waitFor(() => {
+        expect(request).toHaveBeenCalledWith('close');
+      });
+      expect(install).not.toHaveBeenCalled();
+      closed.resolve({ ok: true, value: null });
+      await vi.waitFor(() => {
+        expect(install).toHaveBeenCalledOnce();
+      });
+      expect(request.mock.calls.map(([name]) => name)).toEqual(['init', 'shown', 'flush', 'close']);
+      updates?.stop();
+    },
+  );
+
+  it.each(['renderer', 'core'])(
+    'never installs when %s saving fails and Keep corrallm open is chosen',
+    async (where) => {
+      app.whenReady.mockResolvedValueOnce();
+      showMessageBox.mockResolvedValueOnce({ response: 0 });
+      vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      const contents = { id: 7, isDestroyed: () => false, isCrashed: () => false, send: vi.fn() };
+      getAllWindows.mockReturnValue([{ webContents: contents }]);
+      request.mockImplementation((name) =>
+        name === 'flush'
+          ? Promise.reject(new Error('Disk full'))
+          : Promise.resolve({ ok: true, value: name === 'shown' ? [7] : null }),
+      );
+      let restart: (() => void) | undefined;
+      const finishQuit = vi.fn(() => true);
+      const cancelRestart = vi.fn();
+      startAppUpdates.mockImplementationOnce((actions) => {
+        restart = actions.requestQuit;
+        return { finishQuit, cancelRestart, stop: () => undefined };
+      });
+      await import('./index');
+      await vi.waitFor(() => {
+        expect(restart).toBeDefined();
+      });
+      const beforeQuit = app.on.mock.calls.find(
+        ([name]) => name === 'before-quit',
+      )?.[1] as (event: { preventDefault(): void }) => void;
+      app.quit.mockImplementation(() => {
+        beforeQuit({ preventDefault: vi.fn() });
+      });
+      restart?.();
+      await vi.waitFor(() => {
+        expect(contents.send).toHaveBeenCalledOnce();
+      });
+      makeHost.mock.calls[0]?.[0].ready(
+        contents as unknown as WebContents,
+        contents.send.mock.calls[0]?.[1] as string,
+        where === 'renderer' ? 'Disk full' : null,
+      );
+      await vi.waitFor(() => {
+        expect(cancelRestart).toHaveBeenCalledOnce();
+      });
+      expect(showMessageBox).toHaveBeenCalledOnce();
+      expect(finishQuit).not.toHaveBeenCalled();
+      expect(request.mock.calls.map(([name]) => name)).toEqual(
+        where === 'renderer' ? ['init', 'shown'] : ['init', 'shown', 'flush'],
+      );
+    },
+  );
 });
 
 afterEach(() => {
@@ -168,6 +347,22 @@ it('tells the core when a window gains focus, so the canvas it shows has its fil
   const core = forkCore.mock.results[0]?.value as { windowFocused: (window: number) => void };
   await vi.waitFor(() => {
     expect(core.windowFocused).toHaveBeenCalledExactlyOnceWith(7);
+  });
+});
+
+it('tells the current core when powerMonitor reports resume', async () => {
+  app.whenReady.mockResolvedValueOnce();
+  await import('./index');
+  await vi.waitFor(() => {
+    expect(createWindow).toHaveBeenCalledOnce();
+  });
+  const resume = powerMonitor.on.mock.calls.find(([name]) => name === 'resume')?.[1] as
+    (() => void) | undefined;
+  expect(resume).toBeTypeOf('function');
+  resume?.();
+  const core = forkCore.mock.results[0]?.value as { resumed: () => void };
+  await vi.waitFor(() => {
+    expect(core.resumed).toHaveBeenCalledOnce();
   });
 });
 

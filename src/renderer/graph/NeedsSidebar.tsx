@@ -10,6 +10,7 @@ import { ipcErrorMessage } from '../ipc-error';
 import { QuestionsSidebar } from './Questions';
 import type { Need } from '../../shared/engine/needs';
 import { promptQuestions } from '../../shared/model/session';
+import { agentName } from '../../shared/model/queries';
 import { FloatPopover } from './FloatPopover';
 
 type CoreNeed = ResultOf<'needs'>['items'][number];
@@ -36,7 +37,13 @@ export function NeedsSidebar({
   const [settlements, setSettlements] = useState<ReadonlyMap<string, Settlement>>(new Map());
   const current = new Map(
     (state?.items ?? [])
-      .filter((item) => item.kind === 'file' || item.kind === 'proposal')
+      .filter(
+        (item) =>
+          item.kind === 'file' ||
+          item.kind === 'proposal' ||
+          item.id.startsWith('stalled/') ||
+          item.id.startsWith('unsaved/'),
+      )
       .map((item) => [item.id, item]),
   );
   // Keep the answered card through the topic's removal (which may arrive before reply resolves).
@@ -91,7 +98,13 @@ export function NeedsSidebar({
               return (
                 <article key={item.id} className="graph-question" aria-label={item.title}>
                   <span className="graph-question-header">
-                    {item.kind === 'file' ? 'File review' : 'Proposal'}
+                    {item.kind === 'file'
+                      ? 'File review'
+                      : item.id.startsWith('stalled/')
+                        ? `Silent session: ${item.agent === undefined ? 'agent' : agentName(questions.input.nodes, item.agent)}`
+                        : item.id.startsWith('unsaved/')
+                          ? 'Run progress'
+                          : 'Proposal'}
                   </span>
                   <p className="graph-question-text">{item.title}</p>
                   {item.detail && <p className="graph-question-detail">{item.detail}</p>}

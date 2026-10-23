@@ -13,7 +13,7 @@ import type {
 import type { TerminalEvent } from '../../../shared/terminal';
 import type { UsageWindows } from '../../../shared/usage';
 import type { LiveSession, SessionHost, SessionSpec, TerminalScreen } from '../connector';
-import { isSessionId } from '../id';
+import { isNativeId } from '../id';
 import type { TerminalCli, TerminalSignal } from './cli';
 import type { FirstRunTurn } from './first-run';
 import type { HookEvent, HookRegistration, HookServer } from './hooks';
@@ -257,7 +257,7 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
     this.#deps = deps;
     this.#cli = deps.cli;
     this.#id = spec.resume ?? deps.cli.newId();
-    if (this.#id !== null && !isSessionId(this.#id)) {
+    if (this.#id !== null && !isNativeId(this.#id)) {
       throw new TypeError('Expected a UUID session id');
     }
     this.#resuming = spec.resume !== null;
@@ -459,7 +459,10 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
       });
     });
     pty.onData((data) => {
-      if (pty === this.#pty) this.#output(data);
+      if (pty === this.#pty) {
+        this.#host.activity?.();
+        this.#output(data);
+      }
     });
     // Until its prompt shows, a message for it waits: after a while, on the user (a dialog).
     this.#later(() => {
@@ -879,6 +882,7 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
 
   #hook(event: HookEvent): void {
     if (this.#exited || this.#closing) return;
+    this.#host.activity?.();
     this.#pass();
     for (const signal of this.#cli.hook(event)) this.#signal(signal);
   }
@@ -886,8 +890,11 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
   /** Acts on what a hook told (cli.ts: TerminalSignal). */
   #signal(signal: TerminalSignal<M>): void {
     switch (signal.kind) {
+      case 'notice':
+        this.#host.emit({ type: 'notice', id: randomUUID(), level: 'warning', text: signal.text });
+        return;
       case 'session':
-        if (signal.id !== this.#id && isSessionId(signal.id)) {
+        if (signal.id !== this.#id && isNativeId(signal.id)) {
           this.#id = signal.id;
           this.#host.remember(signal.id);
         }
@@ -1061,6 +1068,7 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
   /** What its CLI gave its status line: its usage limits go to main's readings. */
   #statusLine(input: HookEvent): void {
     if (this.#exited || this.#closing) return;
+    this.#host.activity?.();
     const windows = this.#cli.statusLine?.(input);
     if (windows) this.#deps.usage?.(windows);
   }
@@ -1073,7 +1081,10 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
     if (!usage || !this.#cli.readUsage) return;
     void this.#cli.readUsage().then(
       (read) => {
-        if (read && !this.#closing) usage(read.windows);
+        if (read && !this.#closing) {
+          this.#host.activity?.();
+          usage(read.windows);
+        }
       },
       () => undefined,
     );

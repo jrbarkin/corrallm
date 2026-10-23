@@ -19,6 +19,7 @@ describe('the catalog', () => {
     const named = (id: string, name: string): Adapter => ({
       descriptor: { ...CATALOG.adapters[0], id, name } as AdapterDescriptor,
       usageBackends: [],
+      isConversationId: () => true,
     });
     expect(ids(catalogOf([named('b', 'Zed'), named('a', 'Aider')]).adapters)).toEqual(['a', 'b']);
   });

@@ -1,3 +1,4 @@
+import type { SessionEvent } from '../../session';
 import type { AdapterId, ConnectionId } from '../../adapter';
 import type { SubmittedMessage } from '../../model/queue';
 import { parseRole } from '../../role';
@@ -13,6 +14,7 @@ import type {
   RewindRestore,
   RewindResult,
   SettingsOptions,
+  TaskMessage,
   TurnResult,
 } from '../../session';
 import { shellRefusal } from '../catalog';
@@ -22,12 +24,23 @@ import type { SessionBackend } from '../transcript/receive';
 import type { DriverIO, SessionDriver } from '../transcript/driver';
 import { UnavailableDriver } from '../transcript/unavailable';
 import { decodeSubmissions, encodeSubmissions, pruneSubmissions } from './submission-state';
-import { answersOf, NEW_SESSION, threadTitle, turnReply } from '../../model/session';
-import { reduce } from '../transcript/reduce';
-import type { Answer, MessageImage, Mode, PlanAnswer, Refusal, Session } from '../../model/session';
+import { answersOf, isOpen, NEW_SESSION, threadTitle, turnReply } from '../../model/session';
+import { reduceWithChanges } from '../transcript/reduce';
+import type {
+  Answer,
+  Entry,
+  MessageImage,
+  Mode,
+  PlanAnswer,
+  Prompt,
+  Refusal,
+  Session,
+} from '../../model/session';
 import type { SessionAction } from '../transcript/reduce';
 
 export interface SubmissionObserver {
+  retry?: (agent: string, request: Extract<SessionEvent, { type: 'retry-task' }>) => void;
+  ending?: (agent: string, result: TurnResult) => void;
   submitted?: (agentId: string, message: SubmittedMessage) => void;
   ended?: (agentId: string, id: string, reply: string, result: TurnResult) => void;
 }
@@ -50,6 +63,9 @@ interface Driving {
  * Claude subscription) keeps its messages queued, unsent, and says so to whoever sent them, until
  * the agent runs another way (or the session starts after all). Each agent's adapter and
  * connection are read in the catalog it is given (the run's: catalog.ts).
+ * Each session carries its open prompts, in transcript order, maintained with entry changes so
+ * Needs never scans closed history. Checkpoints keep submissions only; native history rebuilds
+ * the runtime index when it is merged, and resets/rewinds discard it with the transcript.
  */
 export class SessionStore {
   #sessions: Readonly<Record<string, Session>> = {};
@@ -97,6 +113,7 @@ export class SessionStore {
    * like any of theirs, but the run's own attempt, never taken for a correction typed in.
    */
   readonly #runMessages = new Set<string>();
+  readonly #tasks = new Map<string, TaskMessage>();
   readonly #displayTexts = new Map<string, string>();
   /** Who sent each message another party sent, by its id, until its turn ends. */
   readonly #senders = new Map<string, MessageSender>();
@@ -289,9 +306,10 @@ export class SessionStore {
     onRefused?: (refusal: Refusal) => void,
     origin: 'user' | 'queue' | 'run' = 'user',
     displayText?: string,
-    as: { id?: string; from?: MessageSender } = {},
+    as: { id?: string; from?: MessageSender; task?: TaskMessage } = {},
   ): () => void {
     const { id = crypto.randomUUID(), from } = as;
+    if (as.task) this.#tasks.set(id, as.task);
     this.#types.set(agentId, agent);
     if (origin === 'queue') this.#queueMessages.add(id);
     else if (origin === 'run') this.#runMessages.add(id);
@@ -351,6 +369,7 @@ export class SessionStore {
       ...this.#sessions,
       [agentId]: {
         ...session,
+        prompts: session.prompts ?? session.entries.filter(isOpen),
         submissions: pruneSubmissions([...(session.submissions ?? []), message]),
       },
     };
@@ -530,6 +549,7 @@ export class SessionStore {
     this.#stopping.clear();
     this.#queueMessages.clear();
     this.#runMessages.clear();
+    this.#tasks.clear();
     this.#setAside.clear();
     this.#displayTexts.clear();
     this.#senders.clear();
@@ -576,8 +596,16 @@ export class SessionStore {
       entry: { id, kind: 'user', text, ...pasted, conversation },
     });
     const from = this.#senders.get(id);
+    const task = this.#tasks.get(id);
     this.#driver(agentId).start(
-      { id, text, ...pasted, ...(from === undefined ? {} : { from }) },
+      {
+        id,
+        text,
+        ...pasted,
+        ...(from === undefined ? {} : { from }),
+        ...(task === undefined ? {} : { task }),
+        ...(this.#queueMessages.has(id) || task !== undefined ? { origin: 'queue' as const } : {}),
+      },
       (interrupted, result) => {
         // The next queued message may have started already.
         if (this.#turns.get(agentId) === id) this.#turns.delete(agentId);
@@ -595,6 +623,7 @@ export class SessionStore {
     this.#onRefused.delete(id);
     this.#displayTexts.delete(id);
     this.#senders.delete(id);
+    this.#tasks.delete(id);
     return onDone;
   }
 
@@ -693,8 +722,14 @@ export class SessionStore {
   /** Hears connected sessions' events, from the first connected driver on. */
   #listen(): void {
     this.#unsubscribe ??= this.#backend.onEvent((agentId, connection, event) => {
+      if (event.type === 'retry-task') {
+        this.#observer.retry?.(agentId, event);
+        return;
+      }
       const driving = this.#drivers.get(agentId);
       if (driving?.driver instanceof ConnectedDriver && driving.connection === connection) {
+        if (event.type === 'end' && event.messages.includes(this.#turns.get(agentId) ?? ''))
+          this.#observer.ending?.(agentId, event.result);
         driving.driver.receive(event);
       }
     });
@@ -786,7 +821,7 @@ export class SessionStore {
     this.#sessions = {
       ...this.#sessions,
       [agentId]: {
-        ...reduce(session, action),
+        ...indexed(session, action),
         ...(submissions === undefined ? {} : { submissions }),
       },
     };
@@ -844,7 +879,14 @@ export class SessionStore {
   restoreSubmissions(serialized: string): void {
     const decoded = decodeSubmissions(serialized);
     const next = { ...this.#sessions };
-    for (const [id, submissions] of decoded) next[id] = { ...this.of(id), submissions };
+    for (const [id, submissions] of decoded) {
+      const session = this.of(id);
+      next[id] = {
+        ...session,
+        prompts: session.prompts ?? session.entries.filter(isOpen),
+        submissions,
+      };
+    }
     this.#sessions = next;
     this.#notify();
   }
@@ -852,6 +894,38 @@ export class SessionStore {
   #notify(): void {
     for (const listener of this.#listeners) listener();
   }
+}
+
+/**
+ * Keep the exact prompt objects, in transcript order, beside the transcript. Normal output never
+ * scans history to update this index. A history merge, or a generic update reopening an entry,
+ * can change their order/places arbitrarily and rebuilds once. Metadata-only session writes
+ * retain the index with their unchanged entries.
+ */
+function indexed(session: Session, action: SessionAction): Session {
+  const prompts = session.prompts ?? session.entries.filter(isOpen);
+  const replacements = new Map<Entry, Entry>();
+  const changes = { opened: false };
+  const next = reduceWithChanges(session, action, (before, after) => {
+    if (isOpen(before) || isOpen(after)) replacements.set(before, after);
+    if (!isOpen(before) && isOpen(after)) changes.opened = true;
+  });
+  if (next.entries === session.entries) return { ...next, prompts };
+  let index: readonly Prompt[] = prompts;
+  if (action.type === 'restore' || changes.opened) index = next.entries.filter(isOpen);
+  else if (action.type === 'clear' || action.type === 'end') index = [];
+  else if ((action.type === 'add' || action.type === 'ask') && isOpen(action.entry)) {
+    index = [...prompts, action.entry];
+  } else if (action.type === 'received') {
+    // Receipt can move a user entry past native messages (and remove duplicate ids).
+    index = prompts.filter((entry) => entry.id !== action.id);
+  } else if (replacements.size > 0) {
+    index = prompts.flatMap((entry) => {
+      const after = replacements.get(entry) ?? entry;
+      return isOpen(after) ? [after] : [];
+    });
+  }
+  return { ...next, prompts: index };
 }
 
 /** The files a rewind restored, as a notice names them: "notes.txt (+1 −1)", "4 files (a, b, c and 1 more; +4 −2)". */

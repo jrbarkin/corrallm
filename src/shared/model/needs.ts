@@ -15,7 +15,8 @@ import type { PartyId } from './messages';
 /**
  * hold: a hold the run has for you (an OK, a usage ask, a problem decision, a condition's yes or
  * no, a session that would not start). prompt: what an agent's session asks (a permission, its
- * questions, a plan, an MCP server's request), or what a Terminal agent's CLI asks in its terminal.
+ * questions, a plan, an MCP server's request), what a Terminal agent's CLI asks in its terminal,
+ * or the core's warning of a stalled turn (Interrupt, only by you).
  * proposal: a token's delete or discard. file: a canvas file changed on disk, which you apply or
  * keep corrallm's canvas over. message: a message to you (a later phase).
  */

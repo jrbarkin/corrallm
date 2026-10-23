@@ -4,7 +4,7 @@ import { homedir, tmpdir } from 'node:os';
 import type { UsageBackendId } from '../../../shared/adapter';
 import type { UsageWindows } from '../../../shared/usage';
 import { CLAUDE_USAGE } from './adapter';
-import { claudeFlags, requireClaude } from './claude';
+import { claudeFlags } from './claude';
 import type { Connector, LiveSession, SessionHost, SessionSpec } from '../connector';
 import { ClaudeCode } from './claude-code';
 import { FirstRuns } from './first-run';
@@ -50,7 +50,7 @@ export interface TerminalConnectorOptions {
   /** Starts the pseudo-terminal (node-pty; a fake in tests). */
   spawn?: SpawnPty;
   /** Finds the `claude` to run, in the agents' environment. */
-  findClaude?: (env: Readonly<Record<string, string>>) => Promise<string>;
+  findClaude: (env: Readonly<Record<string, string>>) => Promise<string>;
   /** The flags that `claude` takes (its --help's: claude.ts). */
   flags?: (claude: string, env: Readonly<Record<string, string>>) => Promise<ReadonlySet<string>>;
   /** Where sessions' settings files go. */
@@ -80,13 +80,13 @@ export class TerminalConnector implements Connector {
 
   constructor({
     spawn = spawnPty,
-    findClaude = (env) => requireClaude(env),
+    findClaude,
     flags = claudeFlags(),
     tmp = tmpdir(),
     timing = {},
     home = homedir(),
     usage,
-  }: TerminalConnectorOptions = {}) {
+  }: TerminalConnectorOptions) {
     this.#spawn = spawn;
     this.#findClaude = findClaude;
     this.#flags = flags;

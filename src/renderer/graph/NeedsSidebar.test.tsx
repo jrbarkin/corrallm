@@ -1,6 +1,7 @@
 import { cleanup, render, screen, waitFor, act, within } from '@testing-library/react';
 import { afterEach, expect, it } from 'vitest';
 import type { NeedsItem } from '../../shared/model/needs';
+import type { CanvasNode } from '../../shared/model/canvas';
 import { newCanvasId } from '../../shared/canvas';
 import { fakeCore, expectOneOp } from '../test-api';
 import { events } from '../test-render';
@@ -39,7 +40,23 @@ const file: NeedsItem = {
     { value: 'keep', label: 'Keep' },
   ],
 };
-async function setup(items: NeedsItem[]) {
+
+it('shows the core’s persistent oversized-run warning without offering an answer', async () => {
+  const problem: NeedsItem = {
+    ...proposal,
+    id: `unsaved/${canvas}`,
+    kind: 'hold',
+    by: [],
+    title: 'Run progress is too large to save',
+    detail: 'Messages are still recorded and delivered.',
+    choices: [],
+  };
+  await setup([problem]);
+  const card = screen.getByRole('article', { name: problem.title });
+  expect(within(card).getByText(problem.detail ?? '')).toBeTruthy();
+  expect(within(card).queryAllByRole('button')).toHaveLength(0);
+});
+async function setup(items: NeedsItem[], nodes: CanvasNode[] = []) {
   const core = fakeCore();
   cores.push(core);
   core.snapshot(`needs:${canvas}`, { items });
@@ -50,7 +67,7 @@ async function setup(items: NeedsItem[]) {
       needs={[]}
       input={{
         canvas,
-        nodes: [],
+        nodes,
         run: { running: false, agents: {} },
         sessions: {},
         catalog: runCatalog(),
@@ -118,6 +135,25 @@ it('shows one current review from pushed state and Keep alone for an invalid fil
   expect(within(sidebar).getAllByText(file.title)).toHaveLength(1);
   expect(within(sidebar).queryByRole('button', { name: 'Apply' })).toBeNull();
   expect(within(sidebar).getByRole('button', { name: 'Keep' })).toBeTruthy();
+});
+
+it('shows a stalled session with an Interrupt choice answered through one reply', async () => {
+  const item: NeedsItem = {
+    ...proposal,
+    id: 'stalled/builder',
+    agent: 'builder',
+    kind: 'prompt',
+    title: 'No activity from Codex for 20 minutes: its connection may have dropped.',
+    choices: [{ value: 'interrupt', label: 'Interrupt' }],
+  };
+  const core = await setup(
+    [item],
+    [{ id: 'builder', type: 'agent', position: { x: 0, y: 0 }, data: { label: 'Builder' } }],
+  );
+  expect(await screen.findByText('Silent session: Builder')).toBeTruthy();
+  core.reply('reply', () => Promise.resolve({ ok: true, value: { revs: {} } }));
+  await events.click(await screen.findByRole('button', { name: 'Interrupt' }));
+  expectOneOp(core, 'reply', { canvas, to: item.id, answer: { choice: 'interrupt' } });
 });
 it('keeps a refused reply at its card and lets it be retried', async () => {
   const core = await setup([proposal]);

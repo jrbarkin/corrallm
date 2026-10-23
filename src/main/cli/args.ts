@@ -16,6 +16,7 @@ export const USAGE = `Usage:
   corrallm serve --canvas <file> [--canvas <file>…] [--profile <dir>] [--port <n>]
                  [--new-token [--name <name>] [--hours <1-${String(MAX_TOKEN_HOURS)}>] [--read-only]]
   corrallm wait [--for <message id>] [--after <cursor>] [--timeout <seconds>]
+  corrallm dump [--profile <dir>]
   CORRALLM_NATIVE_SELFTEST=1 corrallm    (the native self-test, under plain Node)`;
 
 /** A command line that isn't one of the command's: what is wrong with it. */
@@ -43,7 +44,13 @@ export interface WaitCommand {
   timeout: number;
 }
 
-export type Command = ServeCommand | WaitCommand;
+/** `corrallm dump`: inspects a profile without taking it from its owner. */
+export interface DumpCommand {
+  command: 'dump';
+  profile?: string;
+}
+
+export type Command = ServeCommand | WaitCommand | DumpCommand;
 
 /** Reads a command line (after `corrallm`); throws UsageError, saying why, if it isn't one. */
 export function parseCommand(argv: readonly string[]): Command {
@@ -53,10 +60,14 @@ export function parseCommand(argv: readonly string[]): Command {
       return parseServe(rest);
     case 'wait':
       return parseWait(rest);
+    case 'dump': {
+      const { values } = read(rest, { profile: { type: 'string' } });
+      return { command, ...(values.profile === undefined ? {} : { profile: values.profile }) };
+    }
     case undefined:
-      throw new UsageError('Name a command: serve or wait.');
+      throw new UsageError('Name a command: serve, wait or dump.');
     default:
-      throw new UsageError(`corrallm has no command “${command}”: serve or wait.`);
+      throw new UsageError(`corrallm has no command “${command}”: serve, wait or dump.`);
   }
 }
 

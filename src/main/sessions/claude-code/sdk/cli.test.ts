@@ -92,6 +92,44 @@ async function waitFor(events: SessionEvent[], matches: (event: SessionEvent) =>
 }
 
 describe('SdkConnector through the Agent SDK', () => {
+  it('holds only the selected fake turn until its explicit gate opens, and still honours interruption', async () => {
+    const release = path.join(folder, 'release-turn');
+    const text = 'controlled first turn';
+    const { session, events } = await start('acceptEdits', {
+      ANTHROPIC_API_KEY: 'sk-ant-test',
+      FAKE_CLAUDE_TURN_GATES: JSON.stringify({ [text]: release }),
+    });
+    const first = '00000000-0000-4000-8000-00000000000a';
+    // An unselected turn remains automatic, even while the gate is closed.
+    await session.send({ id: first, text: 'ordinary message' });
+    await waitFor(events, (event) => event.type === 'end' && event.messages.includes(first));
+    const held = '00000000-0000-4000-8000-00000000000b';
+    await session.send({ id: held, text });
+    await expect
+      .poll(() => readFile(`${release}.waiting`, 'utf8').catch(() => ''), { timeout: 10_000 })
+      .toBe('waiting');
+    expect(events.filter((event) => event.type === 'end' && event.messages.includes(held))).toEqual(
+      [],
+    );
+    await writeFile(release, 'go');
+    await waitFor(events, (event) => event.type === 'end' && event.messages.includes(held));
+    expect(
+      events.filter((event) => event.type === 'end' && event.messages.includes(held)),
+    ).toMatchObject([{ result: { status: 'completed', reason: 'completed' } }]);
+    await rm(release);
+    const interrupted = '00000000-0000-4000-8000-00000000000c';
+    await rm(`${release}.waiting`);
+    await session.send({ id: interrupted, text });
+    await expect
+      .poll(() => readFile(`${release}.waiting`, 'utf8').catch(() => ''), { timeout: 10_000 })
+      .toBe('waiting');
+    await session.interrupt();
+    await waitFor(events, (event) => event.type === 'end' && event.messages.includes(interrupted));
+    expect(
+      events.filter((event) => event.type === 'end' && event.messages.includes(interrupted)),
+    ).toMatchObject([{ result: { status: 'cancelled', reason: 'interrupted' } }]);
+  }, 20_000);
+
   it('starts the CLI, plays a turn with a permission prompt, and ends it', async () => {
     const { session, events, remembered } = await start();
     expect(events[0]).toMatchObject({ type: 'started', model: 'default', mode: 'manual' });

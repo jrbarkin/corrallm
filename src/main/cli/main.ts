@@ -1,6 +1,9 @@
+import path from 'node:path';
+
 import { memoryText, runChecks, SELFTEST_TIMEOUT_MS, selfTestChecks } from '../core/selftest';
 import { parseCommand, USAGE, UsageError } from './args';
 import type { Command } from './args';
+import { dumpCommand } from './dump';
 import { USAGE_ERROR } from './node';
 import { writtenOut } from './output';
 import { serveCommand } from './serve';
@@ -12,16 +15,18 @@ import { waitCommand } from './wait';
  * dist-cli/corrallm.cjs, and `pnpm corrallm` runs it: its entry (index.ts) imports this once the
  * Node it runs on will do. `serve` runs the core headless, with its MCP
  * server for orchestrators outside corrallm (serve.ts); `wait` waits for what comes to one
- * (wait.ts). A command line that isn't one of theirs exits 64 (EX_USAGE), apart from every code
+ * (wait.ts); `dump` inspects an existing database without its owner (dump.ts). A command line
+ * that isn't one of theirs exits 64 (EX_USAGE), apart from every code
  * `wait` exits with, saying why on stderr (and, for `wait`, as its one JSON line). With
  * CORRALLM_NATIVE_SELFTEST=1 it runs the native self-test instead: the core's checks, as the app
  * runs them in its core process, exiting the same way: 0 once every check passed, 2 if one failed,
  * 3 on a timeout, 4 on an uncaught error.
  */
 
-/** Where a command prints: `serve` only on stderr, `wait` only its JSON line on stdout. */
+/** `serve` prints on stderr, `wait` on stdout; dump tracks whichever it actually used. */
 type Printed = readonly ('stdout' | 'stderr')[];
 const BOTH: Printed = ['stdout', 'stderr'];
+const dumpPrinted = new Set<'stdout' | 'stderr'>();
 
 /**
  * Exits with `code` once what was printed on `printed` has been written out: as long as a pipe's
@@ -37,6 +42,8 @@ function exit(code: number, printed: Printed): void {
 }
 
 async function selfTest(): Promise<void> {
+  // The diagnostic's fake native script uses this runtime too, even on an empty caller PATH.
+  process.env.PATH = `${path.dirname(process.execPath)}${path.delimiter}${process.env.PATH ?? ''}`;
   const fail = (kind: string) => (error: unknown) => {
     console.error(`[native-selftest] ${kind}:`, error);
     exit(4, BOTH);
@@ -81,6 +88,22 @@ function stopSignal(again: () => void): Promise<NodeJS.Signals> {
 
 async function run(command: Command): Promise<number> {
   switch (command.command) {
+    case 'dump':
+      return dumpCommand(command, {
+        env: process.env,
+        print: (line) =>
+          new Promise((resolve, reject) => {
+            dumpPrinted.add('stdout');
+            process.stdout.write(`${line}\n`, (error) => {
+              if (error) reject(error);
+              else resolve();
+            });
+          }),
+        error: (line) => {
+          dumpPrinted.add('stderr');
+          process.stderr.write(`${line}\n`);
+        },
+      });
     case 'serve':
       // What goes wrong where nothing waits for it is said, and the server goes on.
       process.on('unhandledRejection', (error) => {
@@ -111,6 +134,9 @@ async function run(command: Command): Promise<number> {
 
 if (process.env.CORRALLM_NATIVE_SELFTEST === '1') {
   void selfTest();
+} else if (process.argv.length === 3 && ['--help', '-h'].includes(process.argv[2] ?? '')) {
+  console.log(USAGE);
+  exit(0, ['stdout']);
 } else {
   let command: Command | undefined;
   try {
@@ -130,11 +156,17 @@ if (process.env.CORRALLM_NATIVE_SELFTEST === '1') {
     const serving = command.command === 'serve';
     run(command).then(
       (code) => {
-        exit(code, serving ? ['stderr'] : ['stdout']);
+        exit(
+          code,
+          command.command === 'dump' ? [...dumpPrinted] : serving ? ['stderr'] : ['stdout'],
+        );
       },
       (error: unknown) => {
         console.error(`corrallm ${command.command}:`, error);
-        exit(4, serving ? ['stderr'] : BOTH);
+        exit(
+          4,
+          command.command === 'dump' ? [...dumpPrinted, 'stderr'] : serving ? ['stderr'] : BOTH,
+        );
       },
     );
   }

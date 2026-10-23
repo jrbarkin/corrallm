@@ -91,6 +91,8 @@ it.each(['canvas.delete', 'canvas.batch'] as const)(
           ...canvasOps({ catalog: CATALOG, defaultAdapter: DEFAULT_ADAPTER }),
           ...batchOps(),
           ...replyOps({
+            stalled: { items: () => [], take: () => undefined },
+            sessions: { interruptIf: () => Promise.resolve(false) },
             windows: { shownIn: () => undefined },
             needOf: () => undefined,
             // No file is reviewed here.
@@ -99,7 +101,11 @@ it.each(['canvas.delete', 'canvas.batch'] as const)(
               applyFile: () => Promise.reject(new Error('No file is reviewed here.')),
               keepFile: () => Promise.reject(new Error('No file is reviewed here.')),
             },
-            engines: { changed: () => undefined },
+            engines: {
+              changed: () => undefined,
+              resendAfter: () => Promise.resolve(),
+              cancelResend: () => Promise.resolve(),
+            },
             // Its proposal touched only entities: no document's or file's fingerprint is read.
             lifecycle: { touched: () => Promise.resolve(undefined) },
             proposals: {

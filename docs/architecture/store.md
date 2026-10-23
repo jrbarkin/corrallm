@@ -1,0 +1,51 @@
+# Core database
+
+[Architecture index](overview.md) · [Canonical instructions](../../AGENTS.md)
+
+## `src/main/core/store/`
+
+The core's database (B9.0, Core Database §5): <profile>/core.db, through Node's SQLite, which sqlite.ts alone reaches, lazily (`process.getBuiltinModule`, never a static import, which the bundler would hoist above the CLI's check of Node's version; a test keeps it so). open.ts is openStore, which never rejects: core.db made 0600 before SQLite opens it (so its -wal and -shm are too); one that was there checked read-only first (a transaction a crash left in its rollback journal, as while it is set up, rolled back first; corrallm's application id, meta.min_reader, quick_check: faults.ts); then incremental vacuuming on a new one, WAL, synchronous NORMAL (no sync as SQLite commits: the store flushes its log itself) and F_FULLFSYNC on macOS for each sync SQLite does make (checkpoints), foreign keys, an untrusted schema, a 4 MiB journal size limit, no automatic checkpoints, no busy timeout (the core is the only writer), and migrations.ts' forward-only migrations (each with its user_version and meta.min_reader in one transaction, run with foreign keys off, so one may rebuild a table others refer to, and refused if it leaves a reference to nothing; schema 1: canvas, conversation, run, run_workflow, message, read_position, open_canvas, meta; schema 2, B9's, min_reader 2, so a corrallm of schema 1 refuses it: a canvas's document as rows, document, node, link and queue_item (WITHOUT ROWID, foreign keys checked as each statement ends, never deferred), its revisions and what each changed (revision, change), proposal and file_review; every table STRICT, the side of every foreign key that refers indexed).
+
+One a newer corrallm made that this one can't read is refused, left untouched; a damaged one is set aside (core.rejected-<uuid>.db, its -wal first, then -shm and -journal) and the newest snapshot passing the same checks restored, else it starts empty, saying so; a profile with snapshots but no core.db (a restore cut short) is restored the same way, saying so.
+
+Every open numbers each never-reused sequence (migrations.ts' SEQUENCES: message's seq) on from the clock in ms, past every place given before, those whose rows a crash cut off and those a database a restore replaced gave included, so a cursor from before reads what comes next; a restore raises each document's revision the same way (a token's `expect` holds them), and a restore, or an empty start in place of a database, then settles in the same transaction what waited in the snapshot (restored.ts: a message pending there may have gone since, so it is unresolved, never sent, and its sender told by a notice).
+
+What opening wrote is checkpointed (TRUNCATE) before the store is used, so it is on the drive, and the log begun anew (checkpointer.ts' `beginLog`: a write that changes nothing, since SQLite syncs a new log's header on the connection that begins it). store.ts is the open Store: `prepare` (cached), `tx` (transaction.ts: BEGIN IMMEDIATE, a synchronous function, COMMIT, a savepoint within one, rolled back only if SQLite hasn't, as on a full disk; its log flushed on the loop: tests only), `write` (the lane: writes queued in one turn of the loop share one commit, each in a savepoint, each resolving only once that commit returned and its log was flushed to the drive, off the loop: Node's fsync on its thread pool, F_FULLFSYNC on macOS, one flush at a time for every commit made before it began: "on disk before it is sent").
+
+A failed flush fails the store closed: every write and read refused from then on, saying why (once on stderr), until the core opens it again; what it committed since its last flush that worked taken back best effort (the log cut back to where those commits began, as `wal_checkpoint(NOOP)` said before each, and closed while a connection that only reads holds the database, so SQLite checkpoints none of it, and the next open recovers the log up to there alone; every snapshot published since removed, including one whose rename succeeded but publication rejected).
+
+Limit: if cutting the log or syncing that cut itself fails, a write whose flush failed may come back after a restart, in doubt as in PostgreSQL and SQLite.
+
+The store says so on stderr.
+
+No recovery marker is written or checked at open.
+
+Successful writes cost only their WAL flush; normal opens and writes create only core.db, -wal and -shm (snapshots are taken separately, as it closes or once due). `checkpoint` (checkpointer.ts: PASSIVE, once every commit made is flushed, on a worker thread with a connection of its own, whose code is a string run as CommonJS, since the bundles are one file each; sqlite.ts gives the expression it connects with; once it copied all of the log it begins it anew there, cutting it back to JOURNAL_SIZE_LIMIT, and the lane commits nothing meanwhile, so the two connections never write at once), run once idle a second (at most 30 s after the first unchecked commit).
+
+An idle checkpoint with no queued write also runs incremental vacuum on that worker, at most 64 pages per pass, checkpointing its result; another pass waits a second of idle time, and a queued write takes priority.
+
+No drive flush waits on the core's loop while it serves (only opening and closing sync on it).
+
+A commit's own writes into the log do run on the loop, into the system's cache, which the system holds back while other programs write heavily to the drive: G2 holds on a quiet drive, and only the connection on a thread of its own (Core Database §4's fallback, not built) would hold it under such writing. `snapshot` (snapshots.ts: SQLite's backup into backups/core-<time>.db, read through a connection of its own in one step; the backup, conversion to a rollback journal and quick check run on the checkpointer's worker, never scanning the copy on the core's loop; idle checkpoints wait until that snapshot ends, leaving foreground writes free; quick-checked and forced to disk before it is named, never kept with a fault, the newest three kept, what one cut short left removed by the next; taken as it closes and every four hours) and `close` (writes, and transactions outside one, refused from its start; the lane drained and flushed, a TRUNCATE checkpoint, a snapshot, then the checkpointer's thread ended; once).
+
+The worker captures its unused stdout and stderr instead of opening the parent's terminal streams, which may already have hung up when the closing snapshot starts it. `Database` is what the stores kept in it read and write through: the Store, or, when it couldn't be opened, `unopened` (every read and write fails, saying why). createCore opens it first (once core.lock is held: entry.ts, serve) and closes it last, after journaling; what opening it said is said with the first canvas restored, as the journal's warnings are.
+
+Kept in it: canvas memory (memory.ts: canvas, conversation; a change remembered as it is made, and written with every canvas changed whose row isn't on disk as it is yet, so one whose write failed is written with the next, and fails `flush` until it is; the 200 canvases used most recently with a file, folder or conversations, by used_at, and apart from them the 200 drafts used most recently (each New makes one, with its run), so drafts never push out a saved canvas; the rest forgotten with all the database keeps of them, their runs and documents included, but never one open nor one with edits not saved, `Documents.unsaved` (a canvas displaced from its file by another's Save As counts as unsaved, even when its text still matches the saved hash); `forget` drops one, a draft discarded), each canvas's document (canvas/documents.ts: document, node, link, queue_item, revision, change) and the run journal (run-journal.ts: run, read_position, open_canvas, each referring to its canvas's row, which it makes for a draft: `ensure`; `keep` and `moveRead` within a write another store makes too) and the message store (delivery/messages.ts: message, each message a row with what it told and its withdrawal note). test-store.ts seeds and reads a profile's database for tests, through the stores' API (keepCanvases, keepMessages, openedLast, forgetRun) or a connection of the test's own (onDisk, journaledRun, readPositions, refuseWrites: triggers that fail a table's writes), never by writing its files.
+
+An oversized run (over MAX_RUN_BYTES, 32 MiB) leaves its last good checkpoint in place and keeps a saveError in the run's JSON in the same commit as its messages.
+
+Messages still reach the drive before delivery; size alone never fails them. run:get reports saveError (and a restore notice), and Needs shows a canvas-wide `unsaved/<canvas>` warning, with no answer.
+
+A smaller checkpoint or forgetting the run clears it.
+
+A renderer's oversized run:save records the warning then rejects, so it never claims to have saved progress; core journaling can continue.
+
+Restart restores only the last checkpoint that fit, paused, with that warning. `dump` (store/dump.ts, cli/dump.ts) reads canvases (including their document's rows and conversations), runs and messages as JSON lines in one read transaction, including committed WAL rows.
+
+It uses SQLite READONLY and query_only, never the store's writer, migrations, recovery, checkpoints or core.lock.
+
+It shares open.ts' application-id, min-reader and integrity checks, refusing before its first line; schema 1 can be inspected without migration.
+
+As with any SQLite WAL reader, it participates in -shm and may create an empty -wal/-shm on a closed database; it writes no database page or WAL frame.
+
+A slow output pipe pins its read view (the owner's writes still continue) and is awaited, never accumulated in memory.

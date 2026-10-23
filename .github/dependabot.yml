@@ -1,0 +1,28 @@
+version: 2
+# GitHub's dependency graph currently misses pnpm 12's two-document lockfile,
+# preventing its alerts/security updates; see docs/architecture/toolchain.md.
+updates:
+  - package-ecosystem: npm # Includes pnpm.
+    directory: /
+    schedule:
+      interval: weekly
+    # GitHub applies cooldown to version updates only. Security updates still
+    # meet pnpm-workspace.yaml's minimumReleaseAge before they can be installed.
+    cooldown:
+      default-days: 1
+    # Deliberate pins (docs/architecture/native-modules.md and toolchain.md): node-pty stays at
+    # 1.2.0-beta.14 (beta.15 regresses on Windows); TypeScript stays on 6.0 (typescript-eslint
+    # doesn't support 7); Electron majors are upgraded by hand (each moves the Node the shipped
+    # command's pinned Node must match).
+    ignore:
+      - dependency-name: node-pty
+      - dependency-name: typescript
+        update-types: ['version-update:semver-major', 'version-update:semver-minor']
+      - dependency-name: electron
+        update-types: ['version-update:semver-major']
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 1

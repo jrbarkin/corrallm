@@ -40,13 +40,8 @@ export function connect(file: string, options: ConnectOptions = {}): Connection 
 export const CONNECT_IN_WORKER =
   "new (process.getBuiltinModule('node:sqlite').DatabaseSync)(file, options)";
 
-/**
- * Copies `source`'s database into `file`, `rate` pages a step (each step on Node's thread pool).
- * Resolves with how many pages it copied.
- */
-export function backup(source: Connection, file: string, rate: number): Promise<number> {
-  return sqlite().backup(source, file, { rate });
-}
+/** SQLite's asynchronous backup, reached through the same wrapper on the worker. */
+export const BACKUP_IN_WORKER = "process.getBuiltinModule('node:sqlite').backup";
 
 /**
  * The primary result code of an error SQLite gave (its extended code's low byte: a primary key's

@@ -30,7 +30,7 @@ import type { AgentCaller, Caller, OutsideCaller } from './caller';
 import { Documents } from './canvas/documents';
 import { commitDocument } from './canvas/test-documents';
 import { createCore } from './core';
-import type { Core } from './core';
+import type { Core, CoreConfig } from './core';
 import { isActive } from './delivery/messages';
 import { STORE_FILE } from './store/open';
 import {
@@ -117,6 +117,8 @@ let readUsage: Partial<Record<string, () => Promise<UsageWindows | undefined>>> 
 let options: Partial<Record<AdapterId, () => Promise<SettingsOptions>>> | undefined;
 /** Which agents are leads: none unless set. */
 let leads: ((canvas: CanvasId, agent: string) => boolean) | undefined;
+let watchdog: CoreConfig['watchdog'];
+let watchdogNetwork: CoreConfig['watchdogNetwork'];
 
 beforeEach(async () => {
   profile = await mkdtemp(path.join(tmpdir(), 'corrallm-delivery-'));
@@ -127,6 +129,8 @@ beforeEach(async () => {
   readUsage = undefined;
   options = undefined;
   leads = undefined;
+  watchdog = undefined;
+  watchdogNetwork = undefined;
 });
 
 afterEach(async () => {
@@ -230,6 +234,8 @@ async function start(
       check: true,
       distribution: 'local',
       locale: 'en-GB',
+      ...(watchdog === undefined ? {} : { watchdog }),
+      ...(watchdogNetwork === undefined ? {} : { watchdogNetwork }),
       ...(leads === undefined ? {} : { leads }),
       sessions: {
         connectors: {
@@ -319,6 +325,179 @@ const REFUSING = refusing();
 
 const FRAME = (id: string) =>
   `[corrallm] Message from "orchestrator" (an orchestrator outside corrallm, not the user; message ${id}):\n`;
+
+describe('stalled message turns', () => {
+  it('tells every sender of a coalesced turn once, including after the store is reloaded', async () => {
+    await keepCanvas();
+    const running = await start({}, false);
+    const messages = await running.engines.messagesOf(CANVAS);
+    const ids = ['0', '1', '2'];
+    const parties = ['outside:orchestrator', 'outside:orchestrator', 'you'] as const;
+    const sent = parties.map((from, i) =>
+      messages.add({
+        from,
+        to: 'agent:builder',
+        kind: 'text',
+        body: 'Hello',
+        state: 'delivered',
+        delivery: { at: Date.now(), as: String(i), attempt: 1 },
+      }),
+    );
+    await running.engines.stalled(CANVAS, 'builder', ids, 'No activity');
+    await running.engines.stalled(CANVAS, 'builder', ids, 'No activity');
+    const notices = () =>
+      messages.all().filter((one) => one.kind === 'notice' && one.body === 'No activity');
+    expect(notices().map((one) => one.to)).toEqual(['outside:orchestrator', 'you']);
+    const again = await restart();
+    const restored = await again.engines.messagesOf(CANVAS);
+    // Even if a resumed connector reports those same ids, their notices have a kept key.
+    for (const message of sent) restored.update(message.id, { state: 'delivered' });
+    await again.engines.stalled(CANVAS, 'builder', ids, 'No activity');
+    expect(
+      restored.all().filter((one) => one.kind === 'notice' && one.body === 'No activity'),
+    ).toHaveLength(2);
+  });
+  it.each(['silence', 'network'] as const)(
+    'on %s, warns in the session, wakes wait once, offers Interrupt, and never interrupts by itself',
+    async (trigger) => {
+      let interfaces: ReturnType<NonNullable<CoreConfig['watchdogNetwork']>> = {};
+      watchdogNetwork = () => interfaces;
+      let now = Date.now();
+      let tick: (() => void) | undefined;
+      watchdog = {
+        now: () => now,
+        later: (run) => {
+          tick = run;
+          return () => {
+            tick = undefined;
+          };
+        },
+      };
+      let host: SessionHost | undefined;
+      const turns: string[] = [];
+      const interrupted = vi.fn(() => {
+        host?.emit({
+          type: 'end',
+          messages: [...turns],
+          seconds: 1,
+          result: { status: 'cancelled', reason: 'interrupted' },
+        });
+        return Promise.resolve();
+      });
+      const connector: Connector<SessionMode> = {
+        start: (_spec, given) => {
+          host = given;
+          given.emit({ type: 'started', model: null, mode: 'auto', models: [] });
+          return Promise.resolve({
+            send: (message) => {
+              turns.push(message.id);
+              given.emit({ type: 'user', id: message.id, text: message.text });
+              given.emit({ type: 'status', status: 'working' });
+              return Promise.resolve();
+            },
+            interrupt: interrupted,
+            close: () => Promise.resolve(),
+            answer: () => Promise.resolve(),
+            setMode: () => Promise.resolve(),
+            setModel: () => Promise.resolve(),
+          });
+        },
+      };
+      await keepCanvas();
+      const running = await start({ appServer: connector });
+      const id = await send('builder', 'A long silent task');
+      await vi.waitFor(async () => {
+        expect((await find(id))?.state).toBe('delivered');
+      });
+      const waiting = running.call('wait', { for: id, timeoutSeconds: 30 }, OUTSIDE);
+      if (trigger === 'network') {
+        now += 15_000;
+        tick?.(); // Baseline.
+        interfaces = {
+          en0: [
+            {
+              family: 'IPv4',
+              address: '192.0.2.1',
+              netmask: '255.255.255.0',
+              internal: false,
+              mac: '',
+              cidr: '192.0.2.1/24',
+            },
+          ],
+        };
+        now += 15_000;
+        tick?.(); // Change detected.
+      }
+      for (let i = 0; i < (trigger === 'network' ? 8 : 80); i++) {
+        now += 15_000;
+        tick?.();
+      }
+      const result = await waiting;
+      expect(result).toMatchObject({
+        ok: true,
+        value: {
+          messages: [
+            expect.objectContaining({
+              from: 'corrallm',
+              to: 'outside:orchestrator',
+              kind: 'notice',
+              replyTo: id,
+              body: expect.stringContaining(
+                trigger === 'network'
+                  ? 'No activity from Codex for 2 minutes after the network changed'
+                  : 'No activity from Codex for 20 minutes',
+              ) as unknown,
+            }),
+          ],
+        },
+      });
+      expect(interrupted).not.toHaveBeenCalled();
+      const transcript = await ok<{ entries: { kind: string; text?: string }[] }>(
+        'session.transcript',
+        { agent: 'builder' },
+        YOU,
+      );
+      expect(transcript.entries).toContainEqual(
+        expect.objectContaining({
+          kind: 'notice',
+          level: 'warning',
+          text: expect.stringContaining('No activity from Codex') as unknown,
+        }),
+      );
+      expect(await ok('needs', {}, YOU)).toMatchObject({
+        items: [
+          expect.objectContaining({
+            id: 'stalled/builder',
+            agent: 'builder',
+            by: ['you'],
+          }),
+        ],
+      });
+      now += 15_000;
+      tick?.();
+      expect((await notices()).filter((one) => one.replyTo === id)).toHaveLength(1);
+      expect(
+        await running.call(
+          'reply',
+          { canvas: CANVAS, to: 'stalled/builder', answer: { choice: 'interrupt' } },
+          OUTSIDE,
+        ),
+      ).toMatchObject({ ok: false });
+      await ok('reply', { to: 'stalled/builder', answer: { choice: 'interrupt' } }, YOU);
+      expect(interrupted).toHaveBeenCalledOnce();
+      await vi.waitFor(async () => {
+        expect((await find(id))?.state).toBe('replied');
+      });
+      expect(await ok('needs', {}, YOU)).toMatchObject({ items: [] });
+      await restart({ appServer: connector });
+      now += 60 * 60_000;
+      tick?.();
+      expect(
+        (await notices()).filter((one) => one.replyTo === id && one.body.includes('No activity')),
+      ).toHaveLength(1);
+    },
+  );
+});
 
 describe('delivery', () => {
   it('delivers a message to an idle agent with no run going, framed, and its reply comes back once', async () => {
@@ -2586,12 +2765,15 @@ describe('usage', () => {
   it.each(['ask', 'waitForReset'])(
     'holds a party’s message by the recipient’s rule (%s) until the window resets, telling its sender once',
     async (action) => {
+      // Startup, fsync and scheduler delays must not consume the usage window's 400 ms.
+      vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+      vi.setSystemTime(Date.UTC(2026, 9, 21, 12));
       const resetsAt = Date.now() + 400;
       await overRule(action, resetsAt);
       await keepCanvas();
       await start();
       const id = await send('builder', 'Say hello');
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      await vi.advanceTimersByTimeAsync(50);
       expect((await find(id))?.state).toBe('pending');
       expect((await inbox()).filter((message) => message.kind === 'notice')).toEqual([
         expect.objectContaining({
@@ -2601,6 +2783,10 @@ describe('usage', () => {
           ) as string,
         }),
       ]);
+      await vi.advanceTimersByTimeAsync(resetsAt - Date.now() - 1);
+      expect((await find(id))?.state).toBe('pending');
+      expect(appServer.started).toEqual([]);
+      await vi.advanceTimersByTimeAsync(1);
       await vi.waitFor(
         async () => {
           expect((await find(id))?.state).toBe('replied');

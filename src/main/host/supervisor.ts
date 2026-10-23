@@ -101,6 +101,16 @@ export class CoreSupervisor {
     );
   }
 
+  /** Forwards the host's resume to whichever core is up now. */
+  resumed(): void {
+    void this.core.then(
+      (core) => {
+        core.resumed();
+      },
+      () => undefined,
+    );
+  }
+
   /** Forks a core and asks it up; one that can't come up is killed. */
   async #bringUp(): Promise<CoreProcess> {
     const core = this.#options.fork();

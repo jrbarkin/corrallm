@@ -1,5 +1,6 @@
 import type { ConnectionId } from '../adapter';
 import type { CanvasNode } from '../model/canvas';
+import type { TaskMessage } from '../session';
 import type { UsageState } from '../usage';
 import type { EngineCatalog } from './catalog';
 import { SessionStore } from './delivery/mailbox';
@@ -50,8 +51,17 @@ export class Engine {
   readonly catalog: EngineCatalog;
   readonly sessions: SessionStore;
   readonly run: RunStore;
+  readonly #connections = new Map<string, ConnectionId>();
+  readonly #retries = new Map<
+    string,
+    { recipient: string; item: string; attempt: string; until: number; confirmed: boolean }
+  >();
+  #cancelRetry: (() => void) | undefined;
+  #checkingRetry = false;
+  readonly #io: EngineIO;
 
   constructor(io: EngineIO) {
+    this.#io = io;
     this.catalog = io.catalog;
     // The run hears what the user sends an agent it holds, and how its turn ends; a message is
     // shown where the agent's queue is.
@@ -63,6 +73,30 @@ export class Engine {
         return at?.current ?? Object.keys(at?.outcomes ?? {}).at(-1);
       },
       {
+        retry: (recipient, request) => {
+          if (request.cancel) {
+            for (const [owner, requested] of this.#retries)
+              if (requested.recipient === recipient) this.#retries.delete(owner);
+            this.#checkRetries();
+          } else if (request.update) {
+            for (const requested of this.#retries.values())
+              if (requested.recipient === recipient) requested.until = request.until ?? 0;
+            this.#checkRetries();
+          } else this.#retryInterrupted(recipient, request.tasks ?? [], request.until ?? 0);
+        },
+        ending: (recipient, result) => {
+          for (const [owner, requested] of this.#retries) {
+            if (requested.recipient !== recipient) continue;
+            const last = this.run.snapshot().agents[owner]?.attempts?.[requested.item]?.at(-1);
+            if (
+              result.status === 'cancelled' &&
+              last?.id === requested.attempt &&
+              last.status === 'running'
+            )
+              requested.confirmed = true;
+            else this.#retries.delete(owner);
+          }
+        },
         submitted: (agent, message) => {
           if (message.text.trim().startsWith('/')) return;
           const task = this.run.observeSubmission(agent, message.id, message.text);
@@ -79,7 +113,7 @@ export class Engine {
         sessions.holdQueue(agent, held);
       },
       ...(io.beforeSend ? { beforeSend: io.beforeSend } : {}),
-      send: (agent, text, done, images, refused, origin, displayText) =>
+      send: (agent, text, done, images, refused, origin, displayText, task) =>
         sessions.send(
           agent.id,
           agent.data.adapter ?? io.catalog.defaultAdapter,
@@ -92,6 +126,7 @@ export class Engine {
           // What the user typed for the run (an OK's changes) is theirs, but the run's attempt.
           origin === 'user' ? 'run' : 'queue',
           displayText,
+          task === undefined ? {} : { task },
         ),
       tell: (agent, text) => {
         sessions.notice(agent.id, 'warning', text);
@@ -105,6 +140,90 @@ export class Engine {
       unheard: (agent) => sessions.of(agent.id).unheard !== undefined,
       ...(io.locale === undefined ? {} : { locale: io.locale }),
     });
+    this.run.subscribe(() => {
+      this.#checkRetries();
+    });
+    sessions.subscribe(() => {
+      this.#checkRetries();
+    });
+  }
+
+  #retryInterrupted(recipient: string, tasks: readonly TaskMessage[], until: number): void {
+    for (const task of tasks) {
+      const at = this.run.snapshot().agents[task.agent];
+      const attempt = at?.attempts?.[task.item]?.at(-1);
+      if (at?.current === task.item && attempt?.id === task.attempt && attempt.status === 'running')
+        this.#retries.set(task.agent, {
+          recipient,
+          item: task.item,
+          attempt: task.attempt,
+          until,
+          confirmed: false,
+        });
+    }
+    this.#checkRetries();
+  }
+
+  #checkRetries(): void {
+    if (this.#retries.size === 0) {
+      this.#cancelRetry?.();
+      this.#cancelRetry = undefined;
+      return;
+    }
+    if (this.#checkingRetry) return;
+    this.#checkingRetry = true;
+    queueMicrotask(() => {
+      this.#checkingRetry = false;
+      this.#cancelRetry?.();
+      this.#cancelRetry = undefined;
+      for (const [owner, requested] of this.#retries) {
+        const run = this.run.snapshot();
+        const at = run.agents[owner];
+        const last = at?.attempts?.[requested.item]?.at(-1);
+        const session = this.sessions.of(requested.recipient);
+        if (
+          at?.current !== requested.item ||
+          last?.id !== requested.attempt ||
+          (last.status !== 'running' &&
+            (!requested.confirmed ||
+              at.problem?.kind !== 'cancelled' ||
+              at.problem.agent !== requested.recipient)) ||
+          session.running === undefined
+        ) {
+          this.#retries.delete(owner);
+          continue;
+        }
+        if (last.status === 'running') continue;
+        const rule = this.run.usageRule(requested.recipient, this.#io.now());
+        const connection = this.#connections.get(requested.recipient);
+        if (connection === undefined) {
+          this.#retries.delete(owner);
+          continue;
+        }
+        if (
+          requested.until > this.#io.now() ||
+          !run.running ||
+          run.paused ||
+          at.paused ||
+          session.status !== 'idle' ||
+          session.queued.length > 0 ||
+          (session.asking?.length ?? 0) > 0 ||
+          this.run.holding({ agent: requested.recipient }).length ||
+          (rule !== undefined && rule.action !== 'warn' && rule.hold.resetsAt !== null) ||
+          (session.mode === null
+            ? session.asks !== true
+            : this.catalog.neverAsks(connection, session.mode))
+        )
+          continue;
+        this.#retries.delete(owner);
+        this.run.decide(owner, requested.item, { choice: 'retry' });
+      }
+      if (this.#retries.size)
+        this.#cancelRetry = this.#io.later(() => {
+          this.#cancelRetry = undefined;
+          this.#checkRetries();
+        }, 250);
+    });
   }
 
   /**
@@ -112,6 +231,10 @@ export class Engine {
    * is set to run with, before the run reads the queues, which may send agents messages.
    */
   update(nodes: readonly CanvasNode[]): void {
+    this.#connections.clear();
+    for (const node of nodes)
+      if (node.type === 'agent')
+        this.#connections.set(node.id, this.catalog.connectionOf(node.data));
     this.sessions.sync(
       nodes.flatMap((n) =>
         n.type === 'agent'
@@ -147,7 +270,14 @@ export class Engine {
   }
 
   /** Forgets the run and every session, as for another canvas. */
+  cancelResends(): void {
+    this.#retries.clear();
+    this.#cancelRetry?.();
+    this.#cancelRetry = undefined;
+  }
+
   reset(): void {
+    this.cancelResends();
     this.run.reset();
     this.sessions.reset();
   }

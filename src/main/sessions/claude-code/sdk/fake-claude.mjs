@@ -14,6 +14,9 @@
 // Recovery fixtures opt in with "recovery-failed", "recovery-missing" or "recovery-corrected":
 // explicit FAILED, no verdict or explicit SUCCEEDED. FAKE_CLAUDE_PROMPTS logs received prompts
 // as JSON lines, only when a test gives it a file of its own.
+// FAKE_CLAUDE_TURN_GATES is a JSON map from exact prompt text to release-file paths: a selected
+// turn writes <path>.waiting, then waits for <path> (or an interrupt). Tests release work by
+// state, without racing a fixed-length slow stream against a UI action on a loaded machine.
 //
 // `claude auth status --json` says how it is logged in, as the real one would: with a cloud
 // provider (CLAUDE_CODE_USE_BEDROCK, …), an API key (ANTHROPIC_API_KEY), or an apiKeyHelper in
@@ -37,7 +40,7 @@
 // and, unless they say to accept them, where the sender's permission class (fromMode) isn't its
 // own, a sender that declares none being held only while it bypasses permissions.
 //
-// The connector's tests and the e2e tests point corrallm at it (CORRALLM_CLAUDE_PATH): a path
+// The connector's tests and the e2e tests point corrallm at it (CORRALLM_AGENT_PATHS): a path
 // ending in .mjs, so the SDK runs it with `node`.
 import { randomUUID } from 'node:crypto';
 import {
@@ -51,6 +54,7 @@ import {
 import { createInterface } from 'node:readline';
 
 const args = process.argv.slice(2);
+const turnGates = JSON.parse(process.env.FAKE_CLAUDE_TURN_GATES ?? '{}');
 /** A flag's value, given as the SDK gives it ("--resume=<id>"), or as two arguments. */
 const option = (name) => {
   const joined = args.find((arg) => arg.startsWith(`${name}=`));
@@ -617,7 +621,13 @@ async function play(message) {
     uuid: randomUUID(),
   });
 
-  const got = text.includes('a form') ? await elicit() : undefined;
+  const gate = turnGates[text];
+  if (typeof gate === 'string') {
+    writeFileSync(`${gate}.waiting`, 'waiting');
+    while (!current.interrupted && contents(gate) === null) await pause(20);
+  }
+
+  const got = !current.interrupted && text.includes('a form') ? await elicit() : undefined;
   const recovery = text.includes('recovery-corrected')
     ? 'The original task is complete.\nSUCCEEDED'
     : text.includes('recovery-failed')

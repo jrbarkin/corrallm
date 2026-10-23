@@ -116,6 +116,10 @@ const link = new CoreLink<CoreSide, HostSide>(
       return null;
     },
     shown: async (asked) => (await ready.promise).shown(asked),
+    openLink: async (window, url) => {
+      await (await windows.promise).openLink(window, url);
+      return null;
+    },
     flush: async () => {
       await (await ready.promise).flush();
       return null;
@@ -142,5 +146,10 @@ link.on('windowGone', (window, closed) => {
 });
 link.on('windowFocused', (window) => {
   void ready.promise.then((core) => core.focused(window));
+});
+link.on('resumed', () => {
+  void ready.promise.then((core) => {
+    core.resumed();
+  });
 });
 link.emit('ready', memoryText());

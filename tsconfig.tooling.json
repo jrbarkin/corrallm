@@ -9,5 +9,11 @@
     // Config files are loaded by Node/Vite directly, which need explicit .ts extensions.
     "allowImportingTsExtensions": true
   },
-  "include": ["*.config.ts", "*.config.mts", "e2e/**/*", "src/renderer/global.d.ts"]
+  "include": [
+    "*.config.ts",
+    "*.config.mts",
+    "build/**/*.ts",
+    "e2e/**/*",
+    "src/renderer/global.d.ts"
+  ]
 }

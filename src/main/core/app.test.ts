@@ -13,6 +13,7 @@ import type { CoreChannel, IpcArgs, IpcResult } from '../../shared/ipc';
 import type { CoreLink } from '../../shared/link';
 import { toFile } from '../../shared/model/file';
 import type { TerminalEvent } from '../../shared/terminal';
+import type { SessionHost } from '../sessions/connector';
 import { FakeConnector } from '../sessions/fake';
 import { createCore } from './core';
 import type { Core, CoreConfig } from './core';
@@ -32,8 +33,13 @@ beforeEach(async () => {
   profile = await mkdtemp(path.join(tmpdir(), 'corrallm-app-core-'));
   folder = path.join(profile, 'project');
   await mkdir(folder);
-  vi.stubEnv('CORRALLM_CLAUDE_PATH', path.join(profile, 'no-claude'));
-  vi.stubEnv('CORRALLM_CODEX_PATH', path.join(profile, 'no-codex'));
+  vi.stubEnv(
+    'CORRALLM_AGENT_PATHS',
+    JSON.stringify({
+      'claude-code': path.join(profile, 'no-claude'),
+      codex: path.join(profile, 'no-codex'),
+    }),
+  );
 });
 afterEach(async () => {
   delete dialogs.open;
@@ -50,7 +56,11 @@ const dialogs: { open?: string; save?: string } = {};
 const picked = (file: string | undefined) =>
   Promise.resolve(file === undefined ? null : mintTrustedPath(file));
 
-async function app(sessions?: CoreConfig['sessions']) {
+async function app(
+  sessions?: CoreConfig['sessions'],
+  watchdog?: CoreConfig['watchdog'],
+  watchdogNetwork?: CoreConfig['watchdogNetwork'],
+) {
   const host = {
     ...NO_DESKTOP,
     pickFolder: vi.fn(() => Promise.resolve(mintTrustedPath(folder))),
@@ -67,6 +77,8 @@ async function app(sessions?: CoreConfig['sessions']) {
       locale: 'en-US',
       fakeSessions: true,
       ...(sessions === undefined ? {} : { sessions }),
+      ...(watchdog === undefined ? {} : { watchdog }),
+      ...(watchdogNetwork === undefined ? {} : { watchdogNetwork }),
     },
     host,
   );
@@ -120,6 +132,147 @@ function events(window: WindowLink) {
 }
 
 describe('the app’s core and window channels', () => {
+  it.each(
+    ['codex.app-server', 'codex.terminal', 'claude-code.sdk', 'claude-code.terminal'].flatMap(
+      (connection) => ['wake', 'network'].map((trigger) => ({ connection, trigger })),
+    ),
+  )(
+    'warns a silent $connection turn after $trigger and answers its Needs item without opening a core run',
+    async ({ connection, trigger }) => {
+      let interfaces: ReturnType<NonNullable<CoreConfig['watchdogNetwork']>> = {};
+      let now = Date.now();
+      let tick: (() => void) | undefined;
+      let host: SessionHost | undefined;
+      const interrupt = vi.fn(() => {
+        host?.emit({
+          type: 'end',
+          messages: ['m'],
+          seconds: 1,
+          result: { status: 'cancelled', reason: 'interrupted' },
+        });
+        return Promise.resolve();
+      });
+      const { core, connect } = await app(
+        {
+          connectors: {
+            [connection]: {
+              start: (_spec, given) => {
+                host = given;
+                given.emit({ type: 'started', model: null, mode: null, models: [] });
+                return Promise.resolve({
+                  send: (message) => {
+                    given.emit({ type: 'user', id: message.id, text: message.text });
+                    given.emit({ type: 'status', status: 'working' });
+                    return Promise.resolve();
+                  },
+                  interrupt,
+                  close: () => Promise.resolve(),
+                  answer: () => Promise.resolve(),
+                  setMode: () => Promise.resolve(),
+                  setModel: () => Promise.resolve(),
+                });
+              },
+            },
+          },
+          environment: () => Promise.resolve({}),
+        },
+        {
+          now: () => now,
+          later: (run) => {
+            tick = run;
+            return () => {
+              tick = undefined;
+            };
+          },
+        },
+        () => interfaces,
+      );
+      const window = connect(7);
+      const canvas = await created(window);
+      await chooseProject(window);
+      const heard = events(window);
+      await channel(window, 'session:start', 'a', { connection, model: null, mode: null });
+      await channel(window, 'session:send', 'a', { id: 'm', text: 'Hello' });
+      expect(core.engines.opened()).toEqual([]);
+      for (let i = 0; i < 79; i++) {
+        now += 15_000;
+        tick?.();
+      }
+      host?.activity?.(); // Raw output counts even with no attached terminal view.
+      now += 15_000;
+      tick?.();
+      expect(await core.call('needs', { canvas }, CALLERS.you)).toMatchObject({
+        ok: true,
+        value: { items: [] },
+      });
+      // Either host event grants two fresh minutes, never an immediate warning.
+      if (trigger === 'wake') {
+        now += 3 * 60 * 60_000;
+        core.resumed();
+      } else {
+        interfaces = {
+          en0: [
+            {
+              family: 'IPv4',
+              address: '192.0.2.1',
+              netmask: '255.255.255.0',
+              internal: false,
+              mac: '',
+              cidr: '192.0.2.1/24',
+            },
+          ],
+        };
+      }
+      tick?.();
+      for (let i = 0; i < 7; i++) {
+        now += 15_000;
+        tick?.();
+      }
+      expect(await core.call('needs', { canvas }, CALLERS.you)).toMatchObject({
+        ok: true,
+        value: { items: [] },
+      });
+      now += 15_000;
+      tick?.();
+      await vi.waitFor(() => {
+        expect(heard).toContainEqual([
+          'session:event',
+          [
+            'a',
+            connection,
+            expect.objectContaining({
+              type: 'notice',
+              level: 'warning',
+              text: expect.stringContaining(
+                trigger === 'network'
+                  ? '2 minutes after the network changed'
+                  : '2 minutes after waking',
+              ) as unknown,
+            }),
+          ],
+        ]);
+      });
+      expect(await core.call('needs', { canvas }, CALLERS.you)).toMatchObject({
+        ok: true,
+        value: {
+          items: [expect.objectContaining({ id: 'stalled/a', agent: 'a' })],
+        },
+      });
+      expect(interrupt).not.toHaveBeenCalled();
+      expect(
+        await core.call(
+          'reply',
+          { canvas, to: 'stalled/a', answer: { choice: 'interrupt' } },
+          CALLERS.you,
+        ),
+      ).toMatchObject({ ok: true });
+      expect(interrupt).toHaveBeenCalledOnce();
+      expect(await core.call('needs', { canvas }, CALLERS.you)).toMatchObject({
+        ok: true,
+        value: { items: [] },
+      });
+    },
+  );
   it('shares usage between operations and the remaining channels', async () => {
     const { core, connect } = await app();
     const seven = connect(7);

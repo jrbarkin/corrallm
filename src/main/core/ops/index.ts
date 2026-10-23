@@ -20,6 +20,7 @@ import type { FileReviews } from '../canvas/reviews';
 import type { CanvasStates } from '../canvas/states';
 import type { Engines } from '../engines';
 import type { HostServices } from '../host';
+import type { StalledTurns } from '../stalled';
 import type { TokenStore } from '../tokens';
 import { agentOps } from './agent';
 import { queueOps } from './queue';
@@ -74,8 +75,16 @@ export interface OpServices {
   windows: Pick<Windows, 'canvasOf' | 'shownIn'>;
   sessions: Pick<
     SessionManager,
-    'attachTerminal' | 'detachTerminal' | 'inputTerminal' | 'resizeTerminal' | 'dropOnTerminal'
+    | 'attachTerminal'
+    | 'detachTerminal'
+    | 'inputTerminal'
+    | 'resizeTerminal'
+    | 'dropOnTerminal'
+    | 'interrupt'
+    | 'interruptIf'
   >;
+  stalled: Pick<StalledTurns, 'items' | 'take'>;
+  runProblems?: (canvas: CanvasId) => readonly NeedsItem[];
   /** The canvases the core runs. */
   engines: Engines;
   /** Each canvas's lifetime: made, opened, saved, closed, its folder chosen. */

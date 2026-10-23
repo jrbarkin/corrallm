@@ -109,9 +109,9 @@ export function needsOf({
       return found ? [{ kind: 'limited', agent: found, backend, until }] : [];
     }),
     ...agents.flatMap((node) =>
-      (sessions[node.id]?.entries ?? [])
-        .filter(isOpen)
-        .map((prompt): Need => ({ kind: 'prompt', agent: node, prompt })),
+      (sessions[node.id]?.prompts ?? sessions[node.id]?.entries.filter(isOpen) ?? []).map(
+        (prompt): Need => ({ kind: 'prompt', agent: node, prompt }),
+      ),
     ),
     ...agents.flatMap((node) =>
       (sessions[node.id]?.asking ?? []).map((ask): Need => ({ kind: 'ask', agent: node, ask })),

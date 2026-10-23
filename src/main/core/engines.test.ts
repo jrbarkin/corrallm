@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { CanvasId } from '../../shared/canvas';
 import type { SessionMode } from '../../shared/session';
+import { MAX_RUN_BYTES } from '../../shared/run';
 import type { RunContext } from '../../shared/run';
 import type { Connector } from '../sessions/connector';
 import { FakeConnector } from '../sessions/fake';
@@ -88,6 +89,59 @@ async function start(codex: Connector<SessionMode>): Promise<Core> {
 }
 
 describe('the core runs each canvas’s engine', () => {
+  it('records and delivers messages while its run is too large to keep, and says why', async () => {
+    await keepCanvas();
+    const codex = new FakeConnector({ adapter: 'codex' });
+    const recordAtSend: unknown[] = [];
+    const watched: Connector<SessionMode> = {
+      start: async (spec, host) => {
+        const session = await codex.start(spec, host);
+        const send = session.send.bind(session);
+        session.send = (message) => {
+          recordAtSend.push(
+            readOnDisk(profile, (db) =>
+              db
+                .prepare("SELECT state FROM message WHERE json_extract(delivery, '$.as') = ?")
+                .get(message.id),
+            ),
+          );
+          return send(message);
+        };
+        return session;
+      },
+    };
+    const started = await start(watched);
+    await started.engines.open(CANVAS);
+    const open = started.engines.canvas(CANVAS);
+    if (!open) throw new Error('Canvas did not open');
+    const checkpoint = open.engine.checkpoint();
+    vi.spyOn(open.engine, 'checkpoint').mockReturnValue({
+      ...checkpoint,
+      state: JSON.stringify({ text: 'x'.repeat(MAX_RUN_BYTES) }),
+    });
+    // Force an actual run change; every following message write used to throw from keep().
+    open.engine.run.pause();
+    await expect(open.journal()).resolves.toBeUndefined();
+    const sent = await started.call(
+      'message',
+      { canvas: CANVAS, to: 'worker', body: 'Still deliver' },
+      asHuman(7),
+    );
+    if (!sent.ok) throw new Error(JSON.stringify(sent.error));
+    expect(sent).toMatchObject({ ok: true });
+    await vi.waitFor(() => {
+      expect(codex.sessions[0]?.sent).toHaveLength(1);
+    });
+    expect(recordAtSend).toEqual([{ state: 'delivering' }]);
+    const items = await started.call('needs', { canvas: CANVAS }, CALLERS.you);
+    if (!items.ok) throw new Error(items.error.sentence);
+    expect(
+      items.value.items.some((item) => item.title.includes('too large') && item.for === 'you'),
+    ).toBe(true);
+    expect(((await started.channels.call(7, 'run:get', [])) as RunContext).saveError).toMatch(
+      /too large/,
+    );
+  });
   it('keeps the renderer’s checkpoint and edits when a manual send reads the canvas’s messages', async () => {
     await keepCanvas();
     await (await start(new FakeConnector({ adapter: 'codex' }))).engines.open(CANVAS);

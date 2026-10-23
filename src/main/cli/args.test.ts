@@ -10,6 +10,15 @@ import { parseCommand, UsageError } from './args';
 const ID = '0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b';
 
 describe('parseCommand', () => {
+  it('reads a read-only dump of the app profile or an explicit profile', () => {
+    expect(parseCommand(['dump'])).toEqual({ command: 'dump' });
+    expect(parseCommand(['dump', '--profile', '/a profile'])).toEqual({
+      command: 'dump',
+      profile: '/a profile',
+    });
+    expect(() => parseCommand(['dump', '--canvas', 'a.corral'])).toThrow(/--canvas/);
+    expect(() => parseCommand(['dump', 'extra'])).toThrow(/extra/);
+  });
   it('reads serve: its canvases, profile and port', () => {
     expect(
       parseCommand([

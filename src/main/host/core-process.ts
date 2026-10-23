@@ -39,6 +39,8 @@ export interface CoreProcess {
   windowGone(window: WindowId, closed?: boolean): void;
   /** Tells the core that `window` gained focus. */
   windowFocused(window: WindowId): void;
+  /** Tells the core the machine woke from sleep. */
+  resumed(): void;
   kill(): void;
 }
 
@@ -69,6 +71,9 @@ export function forkCore({ entry, output, check, host }: CoreProcessOptions): Co
     },
     windowFocused: (window) => {
       link.emit('windowFocused', window);
+    },
+    resumed: () => {
+      link.emit('resumed');
     },
     kill: () => {
       child.kill();

@@ -1,5 +1,3 @@
-import { execFile, spawn } from 'node:child_process';
-import type { ChildProcess } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { chmod, copyFile, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
@@ -7,7 +5,6 @@ import { createServer } from 'node:net';
 import { createServer as createHttpServer, request } from 'node:http';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { promisify } from 'node:util';
 
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
@@ -20,6 +17,8 @@ import { SURFACE } from '../../shared/api/surface';
 import type { Message } from '../../shared/model/messages';
 import { keepCanvases, writeOnDisk } from '../core/store/test-store';
 import { registrations } from './serve';
+import { TestChildren } from './test-children';
+import type { TestChild } from './test-children';
 
 /*
  * `corrallm serve` and `corrallm wait` (Build Plan B7; API Spec §8.6), as a person runs them: the
@@ -47,7 +46,6 @@ const EXPIRED = 'known-expired-token-0123456789abcdef';
 const SECOND_ONLY = 'known-second-canvas-token-0123456789abcdef';
 const HOUR = 60 * 60 * 1000;
 
-const execFileAsync = promisify(execFile);
 const sha256 = (text: string) => createHash('sha256').update(text).digest('hex');
 
 describe.skipIf(process.platform === 'win32')('corrallm serve', () => {
@@ -56,12 +54,15 @@ describe.skipIf(process.platform === 'win32')('corrallm serve', () => {
   let file: string;
   let codex: string;
   let codexLog: string;
-  let running: Serve[];
+  let children: TestChildren;
   let clients: Client[];
   /** Every tool result an MCP client got, as JSON: none may hold a token. */
   let results: string[];
 
   beforeEach(async () => {
+    children = new TestChildren();
+    clients = [];
+    results = [];
     dir = await mkdtemp(path.join(tmpdir(), 'corrallm-serve-'));
     profile = path.join(dir, 'profile');
     await mkdir(profile);
@@ -96,20 +97,18 @@ describe.skipIf(process.platform === 'win32')('corrallm serve', () => {
     codex = path.join(dir, 'codex');
     codexLog = path.join(dir, 'codex.log');
     await fakeCodex();
-    running = [];
-    clients = [];
-    results = [];
   });
 
   afterEach(async () => {
+    // Stop even a child whose startup never finished, before removing any of its files.
+    await children.close();
     for (const client of clients) await client.close().catch(() => undefined);
-    for (const serve of running) await serve.stop().catch(() => undefined);
     for (const result of results) {
       for (const token of [TOKEN, READ_ONLY, EXPIRED, SECOND_ONLY])
         expect(result).not.toContain(token);
     }
     await rm(dir, { recursive: true, force: true });
-  });
+  }, 15_000);
 
   /** The `codex` agents run: the fake, keeping its threads and log in `dir`, with `env` set. */
   async function fakeCodex(env: Record<string, string> = {}): Promise<void> {
@@ -161,8 +160,10 @@ describe.skipIf(process.platform === 'win32')('corrallm serve', () => {
   function cliEnv(extra: Record<string, string> = {}): NodeJS.ProcessEnv {
     const env: NodeJS.ProcessEnv = {
       ...process.env,
-      CORRALLM_CODEX_PATH: codex,
-      CORRALLM_CLAUDE_PATH: path.join(dir, 'no-claude'),
+      CORRALLM_AGENT_PATHS: JSON.stringify({
+        codex: codex,
+        'claude-code': path.join(dir, 'no-claude'),
+      }),
       ...extra,
     };
     delete env.CORRALLM_URL;
@@ -171,7 +172,7 @@ describe.skipIf(process.platform === 'win32')('corrallm serve', () => {
   }
 
   interface Serve {
-    child: ChildProcess;
+    child: TestChild;
     url: string;
     pid: number;
     stderr(): string;
@@ -181,16 +182,16 @@ describe.skipIf(process.platform === 'win32')('corrallm serve', () => {
 
   /** Starts `corrallm serve` on the profile, serving the canvas on a free port. */
   async function serve(args: string[] = [], extra: Record<string, string> = {}): Promise<Serve> {
-    const child = spawn(
+    const child = children.spawn(
       process.execPath,
       [BUNDLE, 'serve', '--profile', profile, '--canvas', file, '--port', '0', ...args],
-      { env: cliEnv(extra), stdio: ['ignore', 'pipe', 'pipe'] },
+      cliEnv(extra),
     );
     let stderr = '';
     child.stderr.on('data', (chunk: Buffer) => {
       stderr += chunk.toString();
     });
-    const exited = new Promise<number | null>((resolve) => child.once('exit', resolve));
+    const exited = children.exited(child);
     const api = await apiFile(exited, () => stderr);
     const started: Serve = {
       child,
@@ -198,12 +199,8 @@ describe.skipIf(process.platform === 'win32')('corrallm serve', () => {
       pid: api.pid,
       stderr: () => stderr,
       exited,
-      stop: async () => {
-        if (child.exitCode === null && child.signalCode === null) child.kill('SIGTERM');
-        return exited;
-      },
+      stop: () => children.stop(child),
     };
-    running.push(started);
     return started;
   }
 
@@ -244,15 +241,16 @@ describe.skipIf(process.platform === 'win32')('corrallm serve', () => {
     at = profile,
   ): Promise<{ code: number | null; stderr: string }> {
     const port = args.includes('--port') ? [] : ['--port', '0'];
-    const child = spawn(process.execPath, [BUNDLE, 'serve', '--profile', at, ...port, ...args], {
-      env: cliEnv(),
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
+    const child = children.spawn(
+      process.execPath,
+      [BUNDLE, 'serve', '--profile', at, ...port, ...args],
+      cliEnv(),
+    );
     let stderr = '';
     child.stderr.on('data', (chunk: Buffer) => {
       stderr += chunk.toString();
     });
-    const code = await new Promise<number | null>((resolve) => child.once('exit', resolve));
+    const code = await children.exited(child);
     return { code, stderr };
   }
 
@@ -388,7 +386,7 @@ describe.skipIf(process.platform === 'win32')('corrallm serve', () => {
     // Only you may read where it listens, and what it keeps.
     expect((await stat(path.join(profile, 'api.json'))).mode & 0o777).toBe(0o600);
     expect((await stat(path.join(profile, 'core.db'))).mode & 0o777).toBe(0o600);
-  });
+  }, 15_000);
 
   it('says nothing it is given as it came: no control character from a canvas or a prompt reaches its terminal', async () => {
     // A shared canvas's agent named to move the cursor, erase a line and ring the bell.
@@ -404,7 +402,7 @@ describe.skipIf(process.platform === 'win32')('corrallm serve', () => {
     expect(server.stderr()).toContain('Builder\\x1b[1A\\x1b[2K\\x07\\x9b');
     // No control character but the line breaks between its lines.
     expect(server.stderr().replaceAll('\n', '')).not.toMatch(/\p{Cc}/u);
-  });
+  }, 15_000);
 
   it('wakes the orchestrator when its message’s turn waits for you, lists it without choices, and an interrupt withdraws it', async () => {
     const server = await serve();
@@ -430,7 +428,7 @@ describe.skipIf(process.platform === 'win32')('corrallm serve', () => {
     );
     expect(reply.turn).toMatchObject({ status: 'cancelled', reason: 'interrupted' });
     expect((await call<{ items: unknown[] }>(client, 'needs')).items).toEqual([]);
-  });
+  }, 15_000);
 
   it('refuses a token’s shell text to a Terminal agent at once, and delivers it framed to the App Server', async () => {
     const server = await serve();
@@ -444,7 +442,7 @@ describe.skipIf(process.platform === 'win32')('corrallm serve', () => {
     expect(reply.body).toContain(
       `(an orchestrator outside corrallm, not the user; message ${id}):\n!ls`,
     );
-  });
+  }, 15_000);
 
   it('runs a canvas only from the file corrallm keeps for it, in the folder picked in the app', async () => {
     const unknown = await canvasFile('unknown.corral', '0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4b03');
@@ -487,7 +485,7 @@ describe.skipIf(process.platform === 'win32')('corrallm serve', () => {
     const fresh = path.join(dir, 'profiles', 'orchestration');
     expect((await refused(['--canvas', file], fresh)).code).toBe(1);
     expect((await stat(fresh)).mode & 0o777).toBe(0o700);
-  });
+  }, 30_000);
 
   it('sends nothing when it refuses to start after opening a canvas: a message waiting still waits', async () => {
     const first = await serve();
@@ -526,7 +524,7 @@ describe.skipIf(process.platform === 'win32')('corrallm serve', () => {
     const reply = await waitFor(again, (message) => message.replyTo === behind);
     expect(reply).toMatchObject({ kind: 'text', turn: { status: 'completed' } });
     expect(await sent()).toHaveLength(1);
-  });
+  }, 30_000);
 
   it('refuses a new token with stderr on a pipe, so a person sees it when it is made', async () => {
     const before = await readFile(path.join(profile, 'tokens.json'), 'utf8');
@@ -534,7 +532,7 @@ describe.skipIf(process.platform === 'win32')('corrallm serve', () => {
     expect(code).toBe(1);
     expect(stderr).toMatch(/terminal/);
     expect(await readFile(path.join(profile, 'tokens.json'), 'utf8')).toBe(before);
-  });
+  }, 15_000);
 
   /**
    * Starts `corrallm serve --new-token` on a terminal (script(1): a pty), in its environment with
@@ -543,7 +541,7 @@ describe.skipIf(process.platform === 'win32')('corrallm serve', () => {
   function onTerminal(
     args: string[],
     extra: Record<string, string> = {},
-  ): { child: ChildProcess; printed: () => string; exited: Promise<number | null> } {
+  ): { child: TestChild; printed: () => string; exited: Promise<number | null> } {
     const command = [
       process.execPath,
       BUNDLE,
@@ -557,26 +555,13 @@ describe.skipIf(process.platform === 'win32')('corrallm serve', () => {
       '--new-token',
       ...args,
     ];
-    const quote = (part: string) => `'${part.replaceAll("'", `'\\''`)}'`;
-    const env = cliEnv({ CORRALLM_CLAUDE_PATH: FAKE_CLAUDE, ...extra });
-    const child =
-      process.platform === 'darwin'
-        ? spawn('script', ['-q', '/dev/null', ...command], {
-            env,
-            // Its input no terminal (macOS's script reads the terminal's settings from it).
-            stdio: ['ignore', 'pipe', 'pipe'],
-          })
-        : spawn('script', ['-qec', command.map(quote).join(' '), '/dev/null'], {
-            env,
-            stdio: ['ignore', 'pipe', 'pipe'],
-          });
-    let printed = '';
-    child.stdout.on('data', (chunk: Buffer) => {
-      printed += chunk.toString();
-    });
-    // Once its output is all read: a child's last output can come after it exits.
-    const exited = new Promise<number | null>((resolve) => child.once('close', resolve));
-    return { child, printed: () => printed.replaceAll('\r\n', '\n'), exited };
+    return children.terminal(
+      command,
+      cliEnv({
+        CORRALLM_AGENT_PATHS: JSON.stringify({ codex, 'claude-code': FAKE_CLAUDE }),
+        ...extra,
+      }),
+    );
   }
 
   /**
@@ -588,6 +573,7 @@ describe.skipIf(process.platform === 'win32')('corrallm serve', () => {
   ): Promise<{ printed: () => string; server: Serve }> {
     const { child, printed, exited } = onTerminal(args);
     const api = await apiFile(exited, printed);
+    children.target(child, api.pid);
     // api.json is written as it serves, but the token it printed first comes through the terminal.
     await vi.waitFor(
       () => {
@@ -602,15 +588,10 @@ describe.skipIf(process.platform === 'win32')('corrallm serve', () => {
       stderr: printed,
       exited,
       stop: async () => {
-        try {
-          process.kill(api.pid, 'SIGTERM');
-        } catch {
-          // Gone already.
-        }
+        await children.stop(child);
         return exited;
       },
     };
-    running.push(server);
     return { printed, server };
   }
 
@@ -629,6 +610,7 @@ describe.skipIf(process.platform === 'win32')('corrallm serve', () => {
       if (newToken) expect(printed.indexOf(hint)).toBeLessThan(serving);
       else expect(printed.indexOf(hint)).toBeGreaterThan(serving);
     },
+    30_000,
   );
 
   it.skipIf(process.platform !== 'darwin' && process.platform !== 'linux')(
@@ -654,15 +636,16 @@ describe.skipIf(process.platform === 'win32')('corrallm serve', () => {
       expect(printed()).toContain(`reaching m1.corral (${CANVAS})`);
       expect(printed()).toContain(`export CORRALLM_URL=${server.url}`);
       expect(printed()).toContain(
-        `claude mcp add --transport http corrallm-outside ${server.url} --header 'Authorization: Bearer \${CORRALLM_OUTSIDE_TOKEN}'`,
+        `claude mcp add --transport http corrallm-server ${server.url} --header 'Authorization: Bearer \${CORRALLM_OUTSIDE_TOKEN}'`,
       );
       expect(printed()).toContain(
-        `codex mcp add corrallm-outside --url ${server.url} --bearer-token-env-var CORRALLM_OUTSIDE_TOKEN`,
+        `codex mcp add corrallm-server --url ${server.url} --bearer-token-env-var CORRALLM_OUTSIDE_TOKEN`,
       );
       // It works.
       const client = await connect(server.url, token);
       expect((await call<{ agents: unknown[] }>(client, 'agents')).agents).toHaveLength(2);
     },
+    30_000,
   );
 
   it.skipIf(process.platform !== 'darwin' && process.platform !== 'linux')(
@@ -692,7 +675,7 @@ describe.skipIf(process.platform === 'win32')('corrallm serve', () => {
         if (alive()) process.kill(server.pid, 'SIGKILL');
       }
     },
-    20_000,
+    30_000,
   );
 
   it.skipIf(process.platform !== 'darwin' && process.platform !== 'linux')(
@@ -719,6 +702,7 @@ describe.skipIf(process.platform === 'win32')('corrallm serve', () => {
       expect(messages.map(({ replyTo, kind }) => [replyTo, kind])).toEqual([[id, 'text']]);
       expect(await post(server.url, HEADERS, LIST)).toBe(401);
     },
+    30_000,
   );
 
   it.skipIf(process.platform !== 'darwin' && process.platform !== 'linux')(
@@ -770,22 +754,20 @@ describe.skipIf(process.platform === 'win32')('corrallm serve', () => {
       const reply = await waitFor(again, (message) => message.replyTo === behind);
       expect(reply).toMatchObject({ kind: 'text', turn: { status: 'completed' } });
     },
+    30_000,
   );
 
   it('keeps the port it chose, and exits naming a port that is taken', async () => {
-    const first = spawn(
+    const first = children.spawn(
       process.execPath,
       [BUNDLE, 'serve', '--profile', profile, '--canvas', file],
-      {
-        env: cliEnv(),
-        stdio: ['ignore', 'pipe', 'pipe'],
-      },
+      cliEnv(),
     );
     let said = '';
     first.stderr.on('data', (chunk: Buffer) => {
       said += chunk.toString();
     });
-    const exited = new Promise<number | null>((resolve) => first.once('exit', resolve));
+    const exited = children.exited(first);
     const api = await apiFile(exited, () => said);
     const settings = JSON.parse(await readFile(path.join(profile, 'settings.json'), 'utf8')) as {
       api?: { port?: number };
@@ -798,19 +780,16 @@ describe.skipIf(process.platform === 'win32')('corrallm serve', () => {
     const squatter = createServer();
     await new Promise<void>((resolve) => squatter.listen(api.port, '127.0.0.1', resolve));
     try {
-      const child = spawn(
+      const child = children.spawn(
         process.execPath,
         [BUNDLE, 'serve', '--profile', profile, '--canvas', file],
-        {
-          env: cliEnv(),
-          stdio: ['ignore', 'pipe', 'pipe'],
-        },
+        cliEnv(),
       );
       let stderr = '';
       child.stderr.on('data', (chunk: Buffer) => {
         stderr += chunk.toString();
       });
-      const code = await new Promise<number | null>((resolve) => child.once('exit', resolve));
+      const code = await children.exited(child);
       expect(code).toBe(1);
       expect(stderr).toContain(String(api.port));
       expect(stderr).toContain('--port');
@@ -827,19 +806,16 @@ describe.skipIf(process.platform === 'win32')('corrallm serve', () => {
     const given = await serve(['--port', String(port)]);
     expect(given.url).toBe(`http://127.0.0.1:${String(port)}/mcp`);
     expect(await given.stop()).toBe(0);
-    const kept = spawn(
+    const kept = children.spawn(
       process.execPath,
       [BUNDLE, 'serve', '--profile', profile, '--canvas', file],
-      {
-        env: cliEnv(),
-        stdio: ['ignore', 'pipe', 'pipe'],
-      },
+      cliEnv(),
     );
-    const keptExited = new Promise<number | null>((resolve) => kept.once('exit', resolve));
+    const keptExited = children.exited(kept);
     expect((await apiFile(keptExited, () => '')).port).toBe(port);
     kept.kill('SIGTERM');
     expect(await keptExited).toBe(0);
-  });
+  }, 30_000);
 
   it.each([
     ['Ctrl-C (SIGINT)', 'SIGINT', false],
@@ -852,7 +828,7 @@ describe.skipIf(process.platform === 'win32')('corrallm serve', () => {
       const client = await connect(server.url);
       const slow = await midTurn(client);
       // Its stderr's reader gone (a pipe to `tee` stopped first), each line it says fails.
-      if (deaf) server.child.stderr?.destroy();
+      if (deaf) server.child.stderr.destroy();
       server.child.kill(signal);
       expect(await server.exited).toBe(0);
       expect(existsSync(path.join(profile, 'api.json'))).toBe(false);
@@ -869,6 +845,7 @@ describe.skipIf(process.platform === 'win32')('corrallm serve', () => {
         items.find((message) => message.kind === 'notice' && message.replyTo === slow)?.body,
       ).toMatch(/cut off/);
     },
+    15_000,
   );
 
   it('stops cleanly though told again as it stops: it says so, and still lets the profile go', async () => {
@@ -894,7 +871,7 @@ describe.skipIf(process.platform === 'win32')('corrallm serve', () => {
     expect(
       items.find((message) => message.kind === 'notice' && message.replyTo === slow)?.body,
     ).toMatch(/cut off/);
-  });
+  }, 15_000);
 
   it('says, as it starts after a crash, what it cut off, and a run it discarded', async () => {
     const first = await serve();
@@ -915,7 +892,7 @@ describe.skipIf(process.platform === 'win32')('corrallm serve', () => {
     expect(server.stderr()).toMatch(
       /\[m1\.corral\] The run progress could not be restored, so it was discarded \(/,
     );
-  });
+  }, 30_000);
 
   it('sets a damaged database aside and serves on from its snapshot, saying so', async () => {
     const first = await serve();
@@ -937,7 +914,7 @@ describe.skipIf(process.platform === 'win32')('corrallm serve', () => {
     expect(items.map(({ id: kept }) => kept)).toContain(id);
     const next = await call<{ id: string }>(again, 'message', { to: 'builder', body: 'After' });
     await waitFor(again, (message) => message.replyTo === next.id);
-  });
+  }, 30_000);
 
   /** Adds Ghost to the canvas: on a connection this build lacks, so what is sent it waits for you. */
   async function withGhost(): Promise<void> {
@@ -961,7 +938,7 @@ describe.skipIf(process.platform === 'win32')('corrallm serve', () => {
     await vi.waitFor(() => {
       expect(server.stderr()).toMatch(/\[m1\.corral\] need on Ghost: Ghost can’t start/);
     });
-  });
+  }, 15_000);
 
   it('names its canvas by its file in what it says of a need there as it opens', async () => {
     await withGhost();
@@ -977,7 +954,7 @@ describe.skipIf(process.platform === 'win32')('corrallm serve', () => {
     const again = await connect(server.url);
     const { items } = await call<{ items: Message[] }>(again, 'messages');
     expect(items.find((message) => message.id === id)?.state).toBe('pending');
-  });
+  }, 15_000);
 
   it('watches its canvas’s file: one changed on disk is never read, but reviewed, a need for you', async () => {
     const server = await serve();
@@ -991,7 +968,7 @@ describe.skipIf(process.platform === 'win32')('corrallm serve', () => {
     );
     const { agents } = await call<{ agents: { id: string }[] }>(client, 'agents');
     expect(agents.map(({ id }) => id)).not.toContain('ghost');
-  });
+  }, 15_000);
 
   /** Runs `corrallm wait`: its exit code, and the one line it printed. */
   async function cliWait(
@@ -1001,9 +978,7 @@ describe.skipIf(process.platform === 'win32')('corrallm serve', () => {
     const full = cliEnv();
     for (const [key, value] of Object.entries(env)) full[key] = value;
     try {
-      const { stdout } = await execFileAsync(process.execPath, [BUNDLE, 'wait', ...args], {
-        env: full,
-      });
+      const { stdout } = await children.run(process.execPath, [BUNDLE, 'wait', ...args], full);
       return { code: 0, line: stdout };
     } catch (error) {
       const { code, stdout } = error as { code: number; stdout: string };
@@ -1122,10 +1097,10 @@ describe.skipIf(process.platform === 'win32')('corrallm serve', () => {
     } finally {
       await new Promise((resolve) => squatter.close(resolve));
     }
-  });
+  }, 30_000);
 
   async function copyDir(from: string, to: string): Promise<void> {
-    await execFileAsync('cp', ['-R', from, to]);
+    await children.run('cp', ['-R', from, to]);
   }
 
   it('owns the profile alone: it refuses while the app or another serve holds it, and takes over a lock left behind', async () => {
@@ -1158,7 +1133,7 @@ describe.skipIf(process.platform === 'win32')('corrallm serve', () => {
     expect(await server.stop()).toBe(0);
     expect(existsSync(path.join(profile, 'core.lock'))).toBe(false);
     expect(existsSync(path.join(profile, 'api.json'))).toBe(false);
-  });
+  }, 30_000);
 
   it('tells apart two canvases whose files share a name, by their ids', async () => {
     // The second canvas kept in a file named as the first's, in another folder.
@@ -1173,7 +1148,7 @@ describe.skipIf(process.platform === 'win32')('corrallm serve', () => {
     await vi.waitFor(() => {
       expect(server.stderr()).toContain(`[m1.corral ${SECOND}] message ${id}`);
     });
-  });
+  }, 15_000);
 
   it('checks every request’s token, its canvases and access, and refuses a page’s request or a body that isn’t JSON', async () => {
     const server = await serve(['--canvas', path.join(dir, 'second.corral')]);
@@ -1203,7 +1178,7 @@ describe.skipIf(process.platform === 'win32')('corrallm serve', () => {
       code: 'not-found',
     });
     expect((await call<{ agents: unknown[] }>(elsewhere, 'agents')).agents).toHaveLength(2);
-  });
+  }, 15_000);
 
   it('restarts with the same token: the thread resumes, a waiting message waits, one cut off is unresolved, and the token is in no child’s arguments', async () => {
     let server = await serve();
@@ -1220,7 +1195,7 @@ describe.skipIf(process.platform === 'win32')('corrallm serve', () => {
       expect(items.find((message) => message.id === slow)?.state).toBe('delivered');
     });
     // Mid-turn: no process serve started holds a token in its arguments.
-    const { stdout } = await execFileAsync('ps', ['-A', '-ww', '-o', 'pid=,ppid=,args=']);
+    const { stdout } = await children.run('ps', ['-A', '-ww', '-o', 'pid=,ppid=,args=']);
     const rows = stdout
       .split('\n')
       .map((line) => /^\s*(\d+)\s+(\d+)\s+(.*)$/.exec(line))
@@ -1235,11 +1210,11 @@ describe.skipIf(process.platform === 'win32')('corrallm serve', () => {
         }
       }
     }
-    const children = rows.filter(
+    const descendantRows = rows.filter(
       ([, pid]) => descendants.has(Number(pid)) && Number(pid) !== server.pid,
     );
-    expect(children.some(([, , , args]) => args?.includes('fake-codex.mjs'))).toBe(true);
-    for (const [, , , args] of children) expect(args).not.toContain(TOKEN);
+    expect(descendantRows.some(([, , , args]) => args?.includes('fake-codex.mjs'))).toBe(true);
+    for (const [, , , args] of descendantRows) expect(args).not.toContain(TOKEN);
 
     expect(await server.stop()).toBe(0);
     server = await serve();
@@ -1281,17 +1256,17 @@ describe.skipIf(process.platform === 'win32')('corrallm serve', () => {
     client = await connect(server.url);
     const after = await call<{ items: Message[] }>(client, 'messages');
     expect(after.items.find((message) => message.id === later)?.state).toBe('pending');
-  });
+  }, 30_000);
 });
 
 describe('registrations', () => {
   it('registers corrallm only in the installed CLIs that say how, by the token’s variable', () => {
     const url = 'http://127.0.0.1:4100/mcp';
     expect(registrations({ codex: true }, url)).toEqual([
-      `codex mcp add corrallm-outside --url ${url} --bearer-token-env-var CORRALLM_OUTSIDE_TOKEN`,
+      `codex mcp add corrallm-server --url ${url} --bearer-token-env-var CORRALLM_OUTSIDE_TOKEN`,
     ]);
     expect(registrations({ 'claude-code': true, codex: false }, url)).toEqual([
-      `claude mcp add --transport http corrallm-outside ${url} --header 'Authorization: Bearer \${CORRALLM_OUTSIDE_TOKEN}'`,
+      `claude mcp add --transport http corrallm-server ${url} --header 'Authorization: Bearer \${CORRALLM_OUTSIDE_TOKEN}'`,
     ]);
     expect(registrations({}, url)).toEqual([]);
   });

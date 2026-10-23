@@ -2,6 +2,7 @@ import { adapterIn, connectionIn, isStartMode } from '../../shared/adapter';
 import type { AdapterId, Catalog } from '../../shared/adapter';
 import type { IpcArgs } from '../../shared/ipc';
 import { parseRole } from '../../shared/role';
+import { MAX_NODE_ID } from '../../shared/model/canvas';
 import {
   CODEX_MODES,
   ELICITATION_ACTIONS,
@@ -30,7 +31,7 @@ import type {
   SessionOptions,
   UserMessage,
 } from '../../shared/session';
-import { isSessionId } from './id';
+import { isNativeId } from './id';
 
 /*
  * Parsers for the session:* channels' arguments, which come from an untrusted renderer: each
@@ -81,7 +82,24 @@ function parseStartMode(
 
 export function parseSendArgs(args: unknown[]): IpcArgs<'session:send'> {
   const [agentId, message] = expect(args, 2, 'an agent and a message');
-  const { id, text, images } = record(message, 'the message', ['id', 'text', 'images']);
+  const { id, text, images, origin, task } = record(message, 'the message', [
+    'id',
+    'text',
+    'images',
+    'origin',
+    'task',
+  ]);
+  if (origin !== undefined && origin !== 'queue') throw new TypeError('Expected a queue origin');
+  let taskMessage;
+  if (task !== undefined) {
+    if (origin !== 'queue') throw new TypeError('Expected a queue origin for the task');
+    const fields = record(task, 'the task', ['agent', 'item', 'attempt']);
+    taskMessage = {
+      agent: parseId(fields.agent, 'agent', MAX_NODE_ID),
+      item: parseId(fields.item, 'item', MAX_NODE_ID),
+      attempt: parseId(fields.attempt, 'attempt'),
+    };
+  }
   const pasted = images === undefined ? [] : parseImages(images);
   // A message may be only an image.
   if (typeof text !== 'string' || (text.trim() === '' && pasted.length === 0)) {
@@ -91,6 +109,8 @@ export function parseSendArgs(args: unknown[]): IpcArgs<'session:send'> {
   const parsed: UserMessage = {
     id: parseId(id, 'message'),
     text,
+    ...(origin === undefined ? {} : { origin }),
+    ...(taskMessage === undefined ? {} : { task: taskMessage }),
     ...(pasted.length === 0 ? {} : { images: pasted }),
   };
   return [parseId(agentId, 'agent'), parsed];
@@ -158,7 +178,7 @@ function parseAdapter(value: unknown, catalog: Catalog): AdapterId {
 /** session:resume: an agent, and the id of a conversation (main opens it only if it listed it). */
 export function parseResumeArgs(args: unknown[]): IpcArgs<'session:resume'> {
   const [agentId, sessionId] = expect(args, 2, 'an agent and a conversation');
-  if (!isSessionId(sessionId)) {
+  if (!isNativeId(sessionId)) {
     throw new TypeError("Expected the conversation's id");
   }
   return [parseId(agentId, 'agent'), sessionId];
@@ -316,8 +336,8 @@ function parseModel(value: unknown): string {
 }
 
 /** An id the renderer gives an agent, a message or a prompt: short, non-empty text. */
-function parseId(value: unknown, what: string): string {
-  if (typeof value !== 'string' || value === '' || value.length > MAX_ID_LENGTH) {
+function parseId(value: unknown, what: string, max = MAX_ID_LENGTH): string {
+  if (typeof value !== 'string' || value === '' || value.length > max) {
     throw new TypeError(`Expected the ${what}'s id`);
   }
   return value;

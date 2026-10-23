@@ -1,3 +1,4 @@
+import { isUuid, requireConversationId } from '../../id';
 import { randomUUID } from 'node:crypto';
 import { realpath } from 'node:fs/promises';
 import { homedir } from 'node:os';
@@ -9,7 +10,7 @@ import { CODEX_TERMINAL, CODEX_USAGE } from '../adapter';
 import type { Connector, LiveSession, SessionHost, SessionSpec } from '../../connector';
 import { displayPath, notice, property, text } from '../../transcript';
 import type { Places } from '../../transcript';
-import { checkVersion, requireCodex } from '../codex';
+import { checkVersion } from '../codex';
 import { appServerRefusal, ASK_EACH_SESSION, codexLogin } from '../login';
 import type { Distribution, Consent } from '../../adapter';
 import { startAppServer } from '../rpc';
@@ -45,7 +46,7 @@ export interface AppServerConnectorDeps {
   /** What Codex is told runs it ("corrallm/0.1.0"). */
   clientApp: string;
   /** Finds the `codex` to run, in the agents' environment. */
-  findCodex?: (env: Readonly<Record<string, string>>) => Promise<string>;
+  findCodex: (env: Readonly<Record<string, string>>) => Promise<string>;
   /** Starts the app server's process (child_process.spawn; a fake in tests). */
   spawn?: SpawnAppServer;
   /** How this build is offered: only a local one runs on a ChatGPT login (login.ts). */
@@ -76,7 +77,7 @@ export class AppServerConnector implements Connector<CodexMode> {
 
   constructor({
     clientApp,
-    findCodex = (env) => requireCodex(env),
+    findCodex,
     spawn,
     distribution = 'local',
     consent = ASK_EACH_SESSION,
@@ -95,6 +96,7 @@ export class AppServerConnector implements Connector<CodexMode> {
   }
 
   async start(spec: SessionSpec<CodexMode>, host: SessionHost): Promise<LiveSession<CodexMode>> {
+    if (spec.resume !== null) requireConversationId('codex', spec.resume, isUuid);
     const codex = await this.#findCodex(spec.env);
     const realCwd = await realpath(spec.cwd).catch(() => spec.cwd);
     const places: Places = {
@@ -140,7 +142,10 @@ export class AppServerConnector implements Connector<CodexMode> {
         if (live.session) live.session.notification(method, params);
         else early.push({ method, params });
       },
-      onRequest: prompts.request,
+      onRequest: (method, params, id) => {
+        host.activity?.();
+        return prompts.request(method, params, id);
+      },
       ...(this.#spawn === undefined ? {} : { spawn: this.#spawn }),
     });
     try {
@@ -270,7 +275,7 @@ export class AppServerConnector implements Connector<CodexMode> {
 function threadInfo(result: unknown, places: Places): ThreadInfo {
   const thread = property(result, 'thread');
   const id = text(property(thread, 'id'));
-  if (id === undefined) throw new Error('Codex’s app server started no thread.');
+  requireConversationId('codex', id, isUuid);
   const sources = property(result, 'instructionSources');
   return {
     id,

@@ -58,6 +58,8 @@ export interface SessionSpec<M extends SessionMode = PermissionMode> {
 
 /** Where a session reports to. */
 export interface SessionHost {
+  /** CLI activity with no session event (raw screen output, a hook, untranslated progress). */
+  activity?(): void;
   /**
    * Tells the renderer what happened (see `SessionEvent` for the order events come in). Emit
    * 'started' once the session runs, and 'closed' if it stops by itself (its process exits).

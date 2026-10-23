@@ -7,7 +7,7 @@ import type { CanvasId } from '../shared/canvas';
 import { mintTrustedPath } from './core/host';
 import type { TrustedPath } from './core/host';
 import type { Database } from './core/store/store';
-import { isSessionId } from './sessions/id';
+import { isNativeId } from './sessions/id';
 
 /** A native conversation an agent runs in a CLI: its id, and the role it launched with. */
 export interface Conversation {
@@ -72,6 +72,8 @@ export class CanvasMemory {
   readonly #limit: number;
   /** Whether a canvas holds what forgetting it would lose: edits not saved. */
   readonly #spare: (canvas: CanvasId) => boolean;
+  /** The host's stricter check for an adapter it knows. The storage layer always checks R42a. */
+  readonly #conversationId: (adapter: string, id: string) => boolean;
   /** Every change asked for so far, written or failed. */
   #writing: Promise<unknown> = Promise.resolve();
   /**
@@ -92,10 +94,16 @@ export class CanvasMemory {
    * `spare`: whether a canvas has what forgetting it would lose (its document's edits not saved),
    * asked within a write of only the canvases it would forget otherwise.
    */
-  constructor(store: Database, limit = LIMIT, spare: (canvas: CanvasId) => boolean = () => false) {
+  constructor(
+    store: Database,
+    limit = LIMIT,
+    spare: (canvas: CanvasId) => boolean = () => false,
+    conversationId: (adapter: string, id: string) => boolean = () => true,
+  ) {
     this.#store = store;
     this.#limit = limit;
     this.#spare = spare;
+    this.#conversationId = conversationId;
   }
 
   /** Its file association now, including changes in the write currently being applied. */
@@ -327,7 +335,11 @@ export class CanvasMemory {
       .all(canvas);
     for (const { adapter, agent_id: agent, native_id: id, role_fingerprint: role } of rows) {
       if (typeof adapter !== 'string' || !ID_PATTERN.test(adapter)) continue;
-      if (typeof agent !== 'string' || !isSessionId(id)) continue;
+      if (typeof agent !== 'string') continue;
+      if (!isNativeId(id) || !this.#conversationId(adapter, id)) {
+        console.error(`A saved ${adapter} conversation id is invalid; it will not be resumed.`);
+        continue;
+      }
       const agents = byAdapter.get(adapter) ?? [];
       agents.push([agent, isFingerprint(role) ? { id, role } : { id }]);
       byAdapter.set(adapter, agents);

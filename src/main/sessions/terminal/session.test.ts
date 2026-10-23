@@ -44,9 +44,11 @@ let readings: [UsageBackendId, UsageWindows][];
 let help: string;
 /** While set, the fake pty starts only once it resolves. */
 let spawning: Promise<void> | undefined;
+let activity: number;
 
 beforeEach(async () => {
   spawning = undefined;
+  activity = 0;
   dir = await mkdtemp(path.join(tmpdir(), 'corrallm-terminal-'));
   runs = [];
   fake = {};
@@ -105,6 +107,9 @@ async function start(
     {
       emit: (event) => sink.push(event),
       remember: (id) => remembered.push(id),
+      activity: () => {
+        activity++;
+      },
     },
   );
   sessions.push(session);
@@ -271,6 +276,16 @@ describe('a Terminal session', () => {
       hooks: Record<string, { hooks: { url: string }[] }[]>;
     };
     expect(hooks.UserPromptSubmit?.[0]?.hooks[0]?.url).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/hook$/);
+  });
+
+  it('reports raw screen output and hooks as activity without an attached terminal view', async () => {
+    await start();
+    const before = activity;
+    claude().print('Still working…');
+    expect(activity).toBeGreaterThan(before);
+    const printed = activity;
+    await claude().hook('Notification', { message: 'Progress' });
+    expect(activity).toBeGreaterThan(printed);
   });
 
   it.skipIf(process.platform === 'win32')(

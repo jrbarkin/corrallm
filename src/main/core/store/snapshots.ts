@@ -2,8 +2,7 @@ import { closeSync, openSync } from 'node:fs';
 import { copyFile, mkdir, open, readdir, rename, rm } from 'node:fs/promises';
 import path from 'node:path';
 
-import { faults } from './faults';
-import { backup, connect } from './sqlite';
+import { Checkpointer } from './checkpointer';
 
 /*
  * Snapshots of the core's database (Core Database §5), in <profile>/backups/ (the user's alone):
@@ -20,6 +19,8 @@ import { backup, connect } from './sqlite';
  * starts again a backup whose source another connection changed between its steps. In one step it
  * copies one consistent read, on Node's thread pool, while the core goes on writing beside it
  * (the write-ahead log never makes a reader and the writer wait for each other).
+ * The checkpointer's worker owns that reader, converts the copy to a rollback journal and
+ * quick-checks it: no scan of a snapshot runs on the core's loop.
  */
 
 export const SNAPSHOT_FOLDER = 'backups';
@@ -28,9 +29,6 @@ export const SNAPSHOTS_KEPT = 3;
 
 /** The files SQLite keeps beside a database while it is open. */
 const SIDECARS = ['', '-journal', '-wal', '-shm'];
-/** Every page in one step: the most node:sqlite takes. */
-const ONE_STEP = 2 ** 31 - 1;
-
 /** A snapshot's name: when it was taken, in UTC (core-2026-10-19T12-00-00-000Z.db). */
 export function snapshotName(at: number): string {
   return `core-${new Date(at).toISOString().replace(/[:.]/g, '-')}.db`;
@@ -70,6 +68,7 @@ export async function takeSnapshot(
   profile: string,
   at: number,
   publishing?: (file: string) => void,
+  checkpointer?: Checkpointer,
 ): Promise<string> {
   const folder = path.join(profile, SNAPSHOT_FOLDER);
   await mkdir(folder, { recursive: true, mode: 0o700 });
@@ -82,24 +81,11 @@ export async function takeSnapshot(
   try {
     // Made the user's alone before SQLite writes it, as core.db is.
     closeSync(openSync(partial, 'wx', 0o600));
-    const reader = connect(source, { readOnly: true });
+    const worker = checkpointer ?? new Checkpointer(source);
     try {
-      await backup(reader, partial, ONE_STEP);
+      await worker.snapshot(partial);
     } finally {
-      reader.close();
-    }
-    // The backup keeps the database's write-ahead log mode: a snapshot is one file, with none.
-    const copy = connect(partial);
-    try {
-      copy.exec('PRAGMA journal_mode = DELETE');
-      const found = faults(copy);
-      if (found !== undefined) {
-        throw new Error(
-          `The core’s database looks damaged (SQLite’s check of a snapshot of it found: ${found}), so the snapshot was not kept.`,
-        );
-      }
-    } finally {
-      copy.close();
+      if (checkpointer === undefined) await worker.close();
     }
     // The final name can exist even when place rejects (its directory fsync), or pruning fails.
     publishing?.(file);

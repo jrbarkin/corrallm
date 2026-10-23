@@ -12,6 +12,7 @@ import {
 import type { Message, PartyId } from '../../../shared/model/messages';
 import type { CanvasMemory } from '../../memory';
 import type { Database } from '../store/store';
+import { Sequence } from './sequence';
 
 /*
  * A canvas's messages, as the core keeps them (API Spec §5.3, Core Server §5.9): in memory, in the
@@ -24,6 +25,9 @@ import type { Database } from '../store/store';
  * bounds how many wait: MAX_WAITING). Beside them it keeps the few delivery still acts on
  * (`active`), as they change, so that what looks at what waits (each needs pass, each delivery)
  * costs what waits, not what is kept.
+ * Settled records are indexed by sequence, globally and for both parties, and bytes counted as
+ * records change. Pruning checks only new records and the at-most-two occurrences crossing each
+ * changed party's quota, then removes the oldest settled records while over the byte budget.
  *
  * What changes is written in the database's next commit, with whatever its canvas writes with it
  * (`writeWith`: its run, once the canvas is open), and on disk once `durable()` resolves: the commit
@@ -164,6 +168,12 @@ export class MessageStore {
   #active = new Map<string, Kept>();
   /** The latest place of a message `#active` has taken: one placed later goes last in it. */
   #activeLast = 0;
+  /** Only records eligible for pruning: globally, and by both parties, in original order. */
+  readonly #settled = new Sequence();
+  readonly #parties = new Map<PartyId, Sequence>();
+  /** Records that may just have fallen outside both parties’ newest-message quotas. */
+  readonly #candidates = new Set<string>();
+  #bytes = 0;
   /** What hears each message added. */
   readonly #listeners = new Set<(message: Message) => void>();
   /**
@@ -301,6 +311,28 @@ export class MessageStore {
     );
   }
 
+  /** A durable notice already told this, even if its message's turn has ended since. */
+  hasTold(key: string): boolean {
+    return [...this.#kept.values()].some(({ told }) => told === key);
+  }
+
+  /** This message is an explicit resend, marked in the existing durable told column. */
+  isResend(message: Message): boolean {
+    return (
+      message.replyTo !== undefined &&
+      (this.#kept.get(message.id)?.told === `resend:${message.replyTo}` ||
+        this.isImageResend(message))
+    );
+  }
+
+  /** Image bytes are live-only: a restart must not silently dispatch an incomplete resend. */
+  isImageResend(message: Message): boolean {
+    return (
+      message.replyTo !== undefined &&
+      this.#kept.get(message.id)?.told === `resend:${message.replyTo}:images`
+    );
+  }
+
   /** Changes a message: as kept, or undefined if it isn't kept (any more). */
   update(
     id: string,
@@ -403,7 +435,19 @@ export class MessageStore {
   /** Keeps a message as it is now, in its place in the order, and in `#active` if it belongs. */
   #set(kept: Kept): void {
     const { id } = kept.message;
+    const before = this.#kept.get(id);
+    this.#bytes += kept.bytes - (before?.bytes ?? 0);
+    const was = before !== undefined && prunable(before);
+    const now = prunable(kept);
+    const same =
+      was &&
+      now &&
+      before.seq === kept.seq &&
+      before.message.from === kept.message.from &&
+      before.message.to === kept.message.to;
+    if (was && !same) this.#unsettle(before);
     this.#kept.set(id, kept);
+    if (now && !same) this.#settle(kept);
     if (!isActive(kept.message)) {
       this.#active.delete(id);
     } else if (this.#active.has(id) || kept.seq > this.#activeLast) {
@@ -419,8 +463,44 @@ export class MessageStore {
 
   /** Keeps a message no more. */
   #delete(id: string): void {
+    const kept = this.#kept.get(id);
+    if (kept) {
+      this.#bytes -= kept.bytes;
+      if (prunable(kept)) this.#unsettle(kept);
+    }
     this.#kept.delete(id);
     this.#active.delete(id);
+  }
+
+  #settle({ seq, message: { id, from, to } }: Kept): void {
+    this.#settled.set(seq, id);
+    this.#candidates.add(id);
+    for (const party of new Set([from, to])) {
+      let sequence = this.#parties.get(party);
+      if (!sequence) {
+        sequence = new Sequence();
+        this.#parties.set(party, sequence);
+      }
+      sequence.set(seq, id, from === to ? 2 : 1);
+      if (sequence.weight <= STORE_SETTLED_PER_PARTY) continue;
+      // One new record moves at most two occurrences over the boundary (a self-send counts
+      // twice). An older insertion may also be outside itself, hence id above. This covers bulk
+      // load and staged records too, without walking the rest of this party's kept messages.
+      for (const offset of [STORE_SETTLED_PER_PARTY, STORE_SETTLED_PER_PARTY + 1]) {
+        const candidate = sequence.newest(offset);
+        if (candidate !== undefined) this.#candidates.add(candidate);
+      }
+    }
+  }
+
+  #unsettle({ seq, message: { id, from, to } }: Kept): void {
+    this.#settled.delete(seq);
+    this.#candidates.delete(id);
+    for (const party of new Set([from, to])) {
+      const sequence = this.#parties.get(party);
+      sequence?.delete(seq);
+      if (sequence?.weight === 0) this.#parties.delete(party);
+    }
   }
 
   #keep(kept: Kept): void {
@@ -445,32 +525,37 @@ export class MessageStore {
    * drops are deleted with the next write.
    */
   #prune(): void {
-    const kept = [...this.#kept.values()];
-    const counts = new Map<PartyId, number>();
-    const dropped = new Set<string>();
-    const settled = ({ message, withdrawal }: Kept) =>
-      isSettled(message) && (withdrawal === undefined || withdrawal.told === true);
-    for (const one of kept.toReversed()) {
-      if (!settled(one)) continue;
-      const { message } = one;
-      const parties = [message.from, message.to];
-      const wanted = parties.some((party) => (counts.get(party) ?? 0) < STORE_SETTLED_PER_PARTY);
-      for (const party of parties) counts.set(party, (counts.get(party) ?? 0) + 1);
-      if (!wanted) dropped.add(message.id);
+    for (const id of this.#candidates) {
+      const kept = this.#kept.get(id);
+      if (!kept || !prunable(kept)) continue;
+      const { from, to } = kept.message;
+      const wanted = [from, to].some((party) => {
+        const sequence = this.#parties.get(party);
+        return (
+          sequence !== undefined &&
+          (sequence.weight <= STORE_SETTLED_PER_PARTY ||
+            sequence.newer(kept.seq) < STORE_SETTLED_PER_PARTY)
+        );
+      });
+      if (!wanted) this.#drop(id);
     }
-    let bytes = kept.reduce((sum, one) => (dropped.has(one.message.id) ? sum : sum + one.bytes), 0);
-    for (const one of kept) {
-      if (bytes <= STORE_BYTES) break;
-      const { message, bytes: size } = one;
-      if (dropped.has(message.id) || !settled(one)) continue;
-      dropped.add(message.id);
-      bytes -= size;
-    }
-    for (const id of dropped) {
-      this.#delete(id);
-      if (this.#unjournaled === undefined) this.#changed.set(id, ++this.#changes);
+    this.#candidates.clear();
+    while (this.#bytes > STORE_BYTES) {
+      const id = this.#settled.first();
+      if (id === undefined) break; // Pending, unresolved and untold withdrawals are never dropped.
+      this.#drop(id);
     }
   }
+
+  #drop(id: string): void {
+    this.#delete(id);
+    if (this.#unjournaled === undefined) this.#changed.set(id, ++this.#changes);
+  }
+}
+
+/** An untold withdrawal is protected even after its turn has settled. */
+function prunable({ message, withdrawal }: Kept): boolean {
+  return isSettled(message) && (withdrawal === undefined || withdrawal.told === true);
 }
 
 /**

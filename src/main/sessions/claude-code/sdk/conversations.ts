@@ -7,6 +7,7 @@ import {
 } from '@anthropic-ai/claude-agent-sdk';
 
 import type { KeptConversation } from '../../adapter';
+import { isNativeId, isUuid, requireConversationId } from '../../id';
 
 /*
  * The conversations Claude Code keeps for a folder: the transcripts its CLI writes, whichever
@@ -52,6 +53,7 @@ export class Conversations {
     return [...listed]
       .sort((a, b) => b.lastModified - a.lastModified)
       .map((info): KeptConversation => {
+        requireConversationId('claude-code', info.sessionId, isUuid);
         const title = line(info.customTitle) || line(info.summary) || line(info.firstPrompt);
         return {
           id: info.sessionId,
@@ -72,6 +74,8 @@ export class Conversations {
    * message is not in that conversation.
    */
   async before(folder: string, sessionId: string, messageId: string): Promise<string | null> {
+    requireConversationId('claude-code', sessionId, isUuid);
+    if (!isNativeId(messageId)) throw new TypeError('Invalid message id for a rewind.');
     const messages = await this.#deps.getSessionMessages(sessionId, {
       dir: await this.#real(folder),
       includeSystemMessages: true,
@@ -83,10 +87,13 @@ export class Conversations {
 
   /** A copy of conversation `sessionId` up to entry `upTo`, as a new conversation: its id. */
   async fork(folder: string, sessionId: string, upTo: string): Promise<string> {
+    requireConversationId('claude-code', sessionId, isUuid);
+    if (!isNativeId(upTo)) throw new TypeError('Invalid message id for a rewind.');
     const { sessionId: forked } = await this.#deps.forkSession(sessionId, {
       dir: await this.#real(folder),
       upToMessageId: upTo,
     });
+    requireConversationId('claude-code', forked, isUuid);
     return forked;
   }
 

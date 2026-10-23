@@ -12,7 +12,7 @@ import type { SpawnPty } from '../../terminal/pty';
 import { TerminalSession, TIMING } from '../../terminal/session';
 import type { TerminalTiming } from '../../terminal/session';
 import { appendRole } from '../app-server/instructions';
-import { checkVersion, codexVersion, requireCodex } from '../codex';
+import { checkVersion, codexVersion } from '../codex';
 import { nativeDeveloperInstructions } from './instructions';
 import type { InstructionsContext } from './instructions';
 import { HookTruster } from './trust';
@@ -74,7 +74,7 @@ export interface CodexTerminalConnectorOptions {
   /** Starts the pseudo-terminal (node-pty; a fake in tests). */
   spawn?: SpawnPty;
   /** Finds the `codex` to run, in the agents' environment. */
-  findCodex?: (env: Readonly<Record<string, string>>) => Promise<string>;
+  findCodex: (env: Readonly<Record<string, string>>) => Promise<string>;
   /** Says which version a `codex` is. */
   version?: (codex: string, env: Readonly<Record<string, string>>) => Promise<string>;
   /** Trusts sessions' hooks (asking Codex itself once per version). */
@@ -107,7 +107,7 @@ export class CodexTerminalConnector implements Connector<CodexMode> {
 
   constructor({
     spawn = spawnPty,
-    findCodex = (env) => requireCodex(env),
+    findCodex,
     version = codexVersion,
     truster = new HookTruster(),
     reader = new UsageReader(),
@@ -116,7 +116,7 @@ export class CodexTerminalConnector implements Connector<CodexMode> {
     tmp = tmpdir(),
     timing = {},
     platform = process.platform,
-  }: CodexTerminalConnectorOptions = {}) {
+  }: CodexTerminalConnectorOptions) {
     this.#spawn = spawn;
     this.#findCodex = findCodex;
     this.#version = version;

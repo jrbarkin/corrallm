@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// A fake `codex` for the e2e tests (CORRALLM_CODEX_PATH points at it): Codex's interactive CLI as
+// A fake `codex` for the e2e tests (CORRALLM_AGENT_PATHS points at it): Codex's interactive CLI as
 // corrallm's terminal sees it, printing what the real one does (recorded from 0.160.1, see
 // src/main/sessions/codex/terminal/fixtures/): its terminal probes, its window titles (Ready, a
 // spinner and Working or Starting, "[ ! ] Action Required"), a shaded composer with a dim

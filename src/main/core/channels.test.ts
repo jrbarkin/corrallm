@@ -168,6 +168,18 @@ describe('the sender’s canvas', () => {
 });
 
 describe('session:* handlers', () => {
+  it('checks the platform’s native-id minimum before dispatch, leaving the adapter’s shape to the manager', async () => {
+    await invoke('session:resume', ['a', 's'.repeat(128)]);
+    expect(services.sessions.resumeSession).toHaveBeenCalledExactlyOnceWith(
+      CANVAS,
+      'a',
+      's'.repeat(128),
+    );
+    for (const id of ['--resume', 's'.repeat(129), 's\n']) {
+      expect(() => invoke('session:resume', ['a', id])).toThrow(/conversation's id/);
+    }
+    expect(services.sessions.resumeSession).toHaveBeenCalledOnce();
+  });
   it('pass checked arguments on, for the renderer that sent them', async () => {
     const sender = 7;
     const options = { connection: 'claude-code.sdk', model: 'opus', mode: 'plan' };
@@ -183,6 +195,14 @@ describe('session:* handlers', () => {
 
     await invoke('session:send', ['a', { id: 'm1', text: 'Hi' }], sender);
     expect(services.sessions.send).toHaveBeenCalledWith(CANVAS, 'a', { id: 'm1', text: 'Hi' });
+    const taskMessage = {
+      id: 'q1',
+      text: 'Work',
+      origin: 'queue',
+      task: { agent: 'a', item: 'i'.repeat(256), attempt: 'try1' },
+    };
+    await invoke('session:send', ['a', taskMessage], sender);
+    expect(services.sessions.send).toHaveBeenLastCalledWith(CANVAS, 'a', taskMessage);
     // A pasted image may be all a message is.
     const image = { mediaType: 'image/png', data: 'iVBORw0KGgo=' };
     await invoke('session:send', ['a', { id: 'm2', text: '', images: [image] }], sender);
@@ -361,6 +381,32 @@ describe('session:* handlers', () => {
     ['session:send', 'a message without an id', ['a', { text: 'Hi' }], /message's id/],
     [
       'session:send',
+      'task metadata on a manual send',
+      ['a', { id: 'm', text: 'Work', task: { agent: 'a', item: 'i', attempt: 't' } }],
+      /queue origin/,
+    ],
+    [
+      'session:send',
+      'an incomplete task reference',
+      ['a', { id: 'm', text: 'Work', origin: 'queue', task: { agent: 'a', item: 'i' } }],
+      /attempt/,
+    ],
+    [
+      'session:send',
+      'unbounded task metadata',
+      [
+        'a',
+        {
+          id: 'm',
+          text: 'Work',
+          origin: 'queue',
+          task: { agent: 'a'.repeat(10000), item: 'i', attempt: 't' },
+        },
+      ],
+      /agent/,
+    ],
+    [
+      'session:send',
       'a message too long',
       ['a', { id: 'm', text: 'x'.repeat(MAX_MESSAGE_LENGTH + 1) }],
       /too long/,
@@ -479,6 +525,7 @@ describe('session:* handlers', () => {
       /what to change/,
     ],
     ['session:interrupt', 'no agent', [], /an agent/],
+    ['session:interrupt', 'an extra argument', ['a', 'b'], /an agent/],
     ['session:close', 'an extra argument', ['a', 'b'], /an agent/],
     ['session:fresh', 'no agent', [], /an agent and an adapter/],
     ['session:fresh', 'no adapter', ['a'], /an agent and an adapter/],
@@ -544,7 +591,12 @@ describe('session:* handlers', () => {
       ['a', '--dangerously-skip-permissions'],
       /conversation's id/,
     ],
-    ['session:resume', 'a non-UUID id', ['a', 'session-1'], /conversation's id/],
+    [
+      'session:resume',
+      'an id outside the platform minimum',
+      ['a', 'session!1'],
+      /conversation's id/,
+    ],
     [
       'session:resume',
       'a UUID followed by a newline',

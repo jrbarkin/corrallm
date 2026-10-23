@@ -23,7 +23,7 @@ export default defineConfig({
   build: {
     outDir: 'dist-cli',
     emptyOutDir: true,
-    // Readable stack traces: the CLI is a development tool, not shipped.
+    // Readable stack traces in the shipped command as well as the checkout's CLI.
     minify: false,
     lib: {
       entry: 'src/main/cli/index.ts',

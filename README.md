@@ -2,7 +2,7 @@
 
 **An orchestrator for coding agents that can adopt any agentic workflow, and combine them.**
 
-Coding agents such as Claude Code, Codex, Gemini CLI and Qwen Code keep getting better, and the ways people organize them change just as fast: test-first relays, spec-driven plans, review panels, races judged blind, swarms. Most tools build in one of these ways of working, or leave you to script your own orchestration. corrallm is GUI-first and takes that busy work away: pick a workflow off the shelf, say what to build, and go; or adapt it, and run several side by side as parts of one larger effort.
+Coding agents such as Claude Code and Codex keep getting better, and the ways people organize them change just as fast: test-first relays, spec-driven plans, review panels, races judged blind, swarms. Most tools build in one of these ways of working, or leave you to script your own orchestration. corrallm is GUI-first and takes that busy work away: pick a workflow off the shelf, say what to build, and go; or adapt it, and run several side by side as parts of one larger effort.
 
 - **A canvas of agents.** Each agent is one of those CLIs, with its own session and a queue of work.
 - **Queues you can read.** Steps (the agent's own actions, with what to do in your words, and expected to fail when they should, as tests written first are), messages, if-thens, and waits on other agents' work make the order and hand-offs of a workflow explicit, and editable.
@@ -135,6 +135,8 @@ To check a packaged build without opening it, run it with `CORRALLM_NATIVE_SELFT
 | `pnpm package`   | Package the app for the current OS into `out/`        |
 | `pnpm make`      | Build installers for the current OS into `out/make/`  |
 
+Local CI runs the done gate in [AGENTS.md](AGENTS.md), plus packaging and its native self-test on macOS. For Linux, with Docker running, use `scripts/ci-linux.sh arm64`, `scripts/check-linux.sh arm64` and `scripts/check-linux-packages.sh arm64`; repeat with `x64` (slow emulation on Apple Silicon). These cover e2e under Xvfb and clean deb/rpm installations. GitHub CI is disabled until the repository is public. See [local CI](docs/architecture/toolchain.md#local-ci-while-the-repository-is-private).
+
 ## Debugging
 
 In VS Code, run the **Electron: Main + Renderer** launch configuration. It starts the app under the main-process debugger and attaches a Chrome debugger to the window.
@@ -145,11 +147,13 @@ Signing and notarization are turned on only when the matching environment variab
 
 ## Contributing
 
-See [`CLAUDE.md`](CLAUDE.md) for the project layout, security rules and how to add an IPC channel.
+See [AGENTS.md](AGENTS.md) for development rules and [the architecture overview](docs/architecture/overview.md) for the layout, security mechanisms and IPC recipe.
 
 ## License
 
 [Apache License 2.0](LICENSE).
+
+Third-party licenses: the optional Agent SDK connection bundles Anthropic's SDK, used subject to [the Legal Agreements Anthropic outlines](https://code.claude.com/docs/en/legal-and-compliance), as its own license says, and not covered by corrallm's Apache-2.0 license. See [NOTICE](NOTICE).
 
 ## Troubleshooting
 

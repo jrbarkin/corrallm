@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// A fake `claude` for the e2e tests (CORRALLM_CLAUDE_PATH points at it): Claude Code's interactive
+// A fake `claude` for the e2e tests (CORRALLM_AGENT_PATHS points at it): Claude Code's interactive
 // CLI as corrallm's terminal sees it, printing what the real one does (recorded from 2.1.296):
 // its terminal probes, Program Status reports (OSC 7501), a prompt box with a dim placeholder,
 // the folder trust dialog, and the hooks it was given in --settings, posted to their server.

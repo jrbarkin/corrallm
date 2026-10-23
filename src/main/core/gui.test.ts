@@ -39,6 +39,25 @@ function connect(served: WindowPorts, window: number) {
 const OP = 'app.info';
 
 describe('a window’s port', () => {
+  it('routes a main native dialog’s release link through link.open as that connected window', async () => {
+    const core = fakeCore();
+    core.call.mockResolvedValue({ ok: true, value: { opened: true } });
+    const served = new WindowPorts(core);
+    connect(served, 7);
+    await served.openLink(7, 'https://github.com/jrbarkin/corrallm/releases/tag/v1.0.0');
+    expect(core.call).toHaveBeenCalledExactlyOnceWith(
+      'link.open',
+      { url: 'https://github.com/jrbarkin/corrallm/releases/tag/v1.0.0' },
+      { kind: 'human', window: 7 },
+    );
+    await expect(served.openLink(8, 'https://github.com/')).rejects.toThrow(/window/);
+    expect(core.call).toHaveBeenCalledOnce();
+    core.call.mockResolvedValueOnce({
+      ok: false,
+      error: { code: 'refused', sentence: 'No link now' },
+    });
+    await expect(served.openLink(7, 'bad')).rejects.toThrow('No link now');
+  });
   it('calls each operation as you, at the window the port is for', async () => {
     const core = fakeCore();
     const served = new WindowPorts(core);

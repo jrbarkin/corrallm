@@ -51,7 +51,10 @@ test.afterEach(async () => {
 });
 
 async function launch() {
-  ({ app, close: closeApp } = await launchApp({ env: { CORRALLM_CODEX_PATH: codex }, profile }));
+  ({ app, close: closeApp } = await launchApp({
+    env: { CORRALLM_AGENT_PATHS: JSON.stringify({ codex: codex }) },
+    profile,
+  }));
   page = await app.firstWindow();
   problems = [];
   page.on('console', (message) => {

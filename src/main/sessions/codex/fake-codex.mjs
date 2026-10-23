@@ -11,7 +11,8 @@
 //   (item/commandExecution/requestApproval, Yes, a rule for `npm test`, or No: cancel);
 // - "edit": patches hello.txt (a fileChange), asking first in a read-only sandbox;
 // - "ask": asks a question (item/tool/requestUserInput) and replies with the answer;
-// - "slow": simulates `sleep 30` with a timer loop until turn/interrupt; it spawns no command;
+// - "slow": starts a sleeping Node child, left running after turn/interrupt;
+// - "background": starts the same child, but completes the turn while it still runs;
 // - "todo": keeps a plan (turn/plan/updated);
 // - "fail": fails, out of usage (an error, then the turn failed);
 // - "crash": exits at once, saying so on stderr;
@@ -29,6 +30,7 @@
 // (the sandbox and approvals a thread given none runs with, as the user's config.toml would set
 // them: read-only and on-request by default).
 import { randomUUID } from 'node:crypto';
+import { spawn } from 'node:child_process';
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { createInterface } from 'node:readline';
 
@@ -58,6 +60,37 @@ let nextRequest = 0;
 const asked = new Map();
 /** Threads loaded in this server, by id: their settings, and the turn going on. */
 const threads = new Map();
+/** App-server process ids are not OS pids. Each belongs to its thread. */
+const processes = new Map();
+let nextProcess = 1000;
+const processLog = (event) => {
+  if (process.env.FAKE_CODEX_PROCESS_LOG)
+    appendFileSync(process.env.FAKE_CODEX_PROCESS_LOG, `${JSON.stringify(event)}\n`);
+};
+
+/** A real sleeping child, reported as a unified-exec command with a separate process id. */
+function sleepingCommand(thread, turnId) {
+  const threadId = thread.id;
+  const child = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 30000)'], {
+    stdio: 'ignore',
+  });
+  const processId = String(nextProcess++);
+  processes.set(processId, { child, threadId });
+  child.once('exit', () => processes.delete(processId));
+  processLog({ type: 'process', processId, pid: child.pid, turnId });
+  return {
+    type: 'commandExecution',
+    id: `exec-${randomUUID()}`,
+    command: '/bin/zsh -lc "sleep 30"',
+    cwd: thread.cwd,
+    processId,
+    source: 'unifiedExecStartup',
+    status: 'inProgress',
+    commandActions: [{ type: 'unknown', command: 'sleep 30' }],
+    aggregatedOutput: null,
+    exitCode: null,
+  };
+}
 
 const STATE = process.env.FAKE_CODEX_STATE;
 /** Threads kept (they had a turn), by id: their cwd, model and turns. */
@@ -201,6 +234,7 @@ function load(id, params) {
 
 /** One turn: what the thread does with `input`, as the real one says it. */
 async function turn(thread, turnId, input, { review, compact } = {}) {
+  processLog({ type: 'turn', turnId, live: [...processes.keys()] });
   const threadId = thread.id;
   const where = { threadId, turnId };
   const state = { interrupted: false };
@@ -279,6 +313,10 @@ async function turn(thread, turnId, input, { review, compact } = {}) {
 
   const readOnly = thread.sandbox.type === 'readOnly';
   if (thread.plan) {
+    if (wanted.startsWith('background')) {
+      const command = sleepingCommand(thread, turnId);
+      await item(command, { ...command, status: 'completed' });
+    }
     const plan = { type: 'plan', id: `${turnId}-plan`, text: '' };
     const proposed = '# Plan\n\n1. Read the code\n2. Change it\n';
     await item(plan, { ...plan, text: proposed }, () =>
@@ -426,19 +464,32 @@ async function turn(thread, turnId, input, { review, compact } = {}) {
     if (state.interrupted) return finish('interrupted');
     said = `You picked ${answer?.result?.answers?.color?.answers?.[0] ?? 'nothing'}.`;
   }
-  if (wanted.startsWith('slow')) {
-    const command = {
-      type: 'commandExecution',
-      id: `exec-${randomUUID()}`,
-      command: '/bin/zsh -lc "sleep 30"',
-      cwd: thread.cwd,
-      status: 'inProgress',
-      commandActions: [{ type: 'unknown', command: 'sleep 30' }],
-      aggregatedOutput: null,
-      exitCode: null,
-    };
+  if (wanted.startsWith('slow') || wanted.startsWith('background')) {
+    const command = sleepingCommand(thread, turnId);
+    if (wanted.includes('interact')) {
+      const earlier = [...processes.keys()][0];
+      notify('item/started', {
+        ...where,
+        item: {
+          type: 'commandExecution',
+          id: `exec-${randomUUID()}`,
+          command: 'write_stdin',
+          processId: earlier,
+          source: 'unifiedExecInteraction',
+          status: 'inProgress',
+          exitCode: null,
+        },
+      });
+    }
     notify('item/started', { item: command, ...where, startedAtMs: Date.now() });
+    if (wanted.startsWith('background')) {
+      const completed = { ...command, status: 'completed' };
+      notify('item/completed', { item: completed, ...where, completedAtMs: Date.now() });
+      items.push(completed);
+      return finish('completed');
+    }
     for (let tick = 0; tick < 600 && !state.interrupted; tick += 1) {
+      if (wanted.includes('self-interrupt') && tick === 1) state.interrupted = true;
       notify('item/commandExecution/outputDelta', {
         ...where,
         itemId: command.id,
@@ -484,7 +535,7 @@ async function turn(thread, turnId, input, { review, compact } = {}) {
   finish('completed');
 }
 
-function handle({ method, id, params }) {
+async function handle({ method, id, params }) {
   const reply = (result) => send({ id, result });
   const fail = (code, message) => send({ error: { code, message }, id });
   if (process.env.FAKE_CODEX_LOG) {
@@ -548,6 +599,16 @@ function handle({ method, id, params }) {
         ],
         nextCursor: null,
       });
+    case 'thread/list': {
+      const data = Object.entries(kept)
+        .filter(([, record]) => params.cwd === undefined || record.cwd === params.cwd)
+        .slice(0, params.limit ?? 50)
+        .map(([id, record]) => ({
+          ...threadObject(id, record.cwd, record.model),
+          updatedAt: 1,
+        }));
+      return reply({ data, nextCursor: null });
+    }
     case 'thread/start': {
       const thread = load(randomUUID(), params);
       reply(threadResult(thread));
@@ -613,6 +674,26 @@ function handle({ method, id, params }) {
       }
       return reply({});
     }
+    case 'thread/backgroundTerminals/terminate': {
+      const behavior = process.env.FAKE_CODEX_TERMINATE;
+      if (behavior === 'hang') return;
+      if (behavior === 'missing') return fail(-32601, 'Method not found');
+      if (behavior === 'unknown')
+        return fail(
+          -32600,
+          'Invalid request: unknown variant `thread/backgroundTerminals/terminate`',
+        );
+      if (behavior === 'fail') return fail(-32603, 'Could not stop the process');
+      if (behavior === 'delay') await pause(100);
+      const running = processes.get(params.processId);
+      if (!running || running.threadId !== params.threadId) return reply({ terminated: false });
+      running.child.once('exit', () => {
+        processLog({ type: 'terminated', processId: params.processId });
+        reply({ terminated: true });
+      });
+      running.child.kill();
+      return;
+    }
     default:
       return fail(-32600, `Invalid request: unknown variant \`${method}\``);
   }
@@ -634,11 +715,26 @@ createInterface({ input: process.stdin }).on('line', (line) => {
     initialized = true;
     return;
   }
-  if (message.id !== undefined) handle(message);
+  if (message.id !== undefined) void handle(message);
 });
 // Its input ends: it exits, as the real one does (FAKE_CODEX_LINGER ms later, if set).
 const linger = Number(process.env.FAKE_CODEX_LINGER ?? 0);
-process.stdin.on('end', () => {
+const close = async () => {
+  await Promise.all(
+    [...processes.values()].map(
+      ({ child }) =>
+        new Promise((resolve) => {
+          child.once('exit', resolve);
+          child.kill('SIGKILL');
+        }),
+    ),
+  );
   if (linger > 0) setTimeout(() => process.exit(0), linger);
   else process.exit(0);
+};
+process.stdin.on('end', () => {
+  void close();
+});
+process.on('SIGTERM', () => {
+  void close();
 });
