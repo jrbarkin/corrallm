@@ -16,7 +16,13 @@ export async function checkShippedCommand(
   run: Run = (file, options) => execute(file, [], { ...options, maxBuffer: 4 * 1024 * 1024 }),
 ): Promise<string> {
   const { stdout } = await run(path.join(resources, 'bin/corrallm'), {
-    env: { ...process.env, PATH: '', NODE_OPTIONS: '', CORRALLM_NATIVE_SELFTEST: '1' },
+    env: {
+      ...process.env,
+      PATH: '',
+      // Prove the launcher strips preloads; clearing this here would hide a broken launcher.
+      NODE_OPTIONS: '--require=/corrallm-selftest-must-not-preload.cjs',
+      CORRALLM_NATIVE_SELFTEST: '1',
+    },
     timeout: SELFTEST_TIMEOUT_MS,
   });
   return stdout.trim();
