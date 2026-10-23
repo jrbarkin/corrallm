@@ -361,11 +361,11 @@ describe('a Terminal session', () => {
     expect(hooks.UserPromptSubmit?.[0]?.hooks[0]?.url).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/hook$/);
   });
 
-  it('reports raw screen output and hooks as activity without an attached terminal view', async () => {
+  it('counts hooks but not raw screen redraws as activity without an attached terminal view', async () => {
     await start();
     const before = activity;
     claude().print('Still working…');
-    expect(activity).toBeGreaterThan(before);
+    expect(activity).toBe(before);
     const printed = activity;
     await claude().hook('Notification', { message: 'Progress' });
     expect(activity).toBeGreaterThan(printed);

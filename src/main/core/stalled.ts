@@ -29,6 +29,9 @@ interface Turn {
   connection: ConnectionId;
   messages: Set<string>;
   last: number;
+  waiting: boolean;
+  prompts: Set<string>;
+  asking: boolean;
   grace?: { at: number; why: Disruption };
   notified: boolean;
   answered?: boolean;
@@ -101,17 +104,38 @@ export class StalledTurns {
         connection,
         messages: new Set(),
         last: this.#clock.now(),
+        waiting: false,
+        prompts: new Set(),
+        asking: false,
         notified: false,
         stalled: false,
         text: '',
       };
       this.#turns.set(key, turn);
     }
-    if (event.type === 'user') turn?.messages.add(event.id);
+    if (turn) {
+      if (event.type === 'user') turn.messages.add(event.id);
+      if (event.type === 'status') {
+        turn.waiting = event.status === 'waiting';
+        // SDK answers need not emit withdrawn: working says no prompt still holds it.
+        if (!turn.waiting) turn.prompts.clear();
+      } else if (event.type === 'asking') {
+        turn.asking = event.asks.length > 0;
+      } else if (event.type === 'withdrawn') {
+        turn.prompts.delete(event.id);
+      } else if (
+        event.type === 'permission' ||
+        event.type === 'question' ||
+        event.type === 'plan' ||
+        event.type === 'elicitation'
+      ) {
+        turn.prompts.add(event.id);
+      }
+    }
     this.activity(canvas, agent);
   }
 
-  /** Raw output/hooks/progress count too, even if a connector has no transcript event for them. */
+  /** Meaningful connector activity counts too, even without a transcript event. */
   activity(canvas: CanvasId, agent: string): void {
     const turn = this.#turns.get(keyOf(canvas, agent));
     if (!turn) return;
@@ -140,7 +164,7 @@ export class StalledTurns {
   #disrupted(before: number, why: Disruption): void {
     const now = this.#clock.now();
     for (const turn of this.#turns.values()) {
-      if (turn.last <= before) turn.grace ??= { at: now, why };
+      if (!waitingForUser(turn) && turn.last <= before) turn.grace ??= { at: now, why };
     }
   }
 
@@ -210,7 +234,7 @@ export class StalledTurns {
       release: () => {
         if (!current()) return;
         turn.answered = false;
-        turn.stalled = turn.last === last;
+        turn.stalled = !waitingForUser(turn) && turn.last === last;
         this.#deps.changed(canvas);
       },
     };
@@ -234,7 +258,7 @@ export class StalledTurns {
       this.#checked = now;
       for (const turn of this.#turns.values()) {
         const due = turn.grace === undefined ? turn.last + STALL_MS : turn.grace.at + WAKE_GRACE_MS;
-        if (now < due || turn.stalled || turn.answered) continue;
+        if (waitingForUser(turn) || now < due || turn.stalled || turn.answered) continue;
         const cli = connectionIn(this.#deps.catalog, turn.connection)?.adapter.name ?? 'the agent';
         const silence =
           turn.grace === undefined
@@ -259,6 +283,10 @@ export class StalledTurns {
       this.#arm();
     }, WATCH_EVERY_MS);
   }
+}
+
+function waitingForUser(turn: Turn): boolean {
+  return turn.waiting || turn.asking || turn.prompts.size > 0;
 }
 
 function keyOf(canvas: CanvasId, agent: string): string {
