@@ -820,6 +820,57 @@ describe('delivery', () => {
     });
   });
 
+  it('lets another party kill and message other agents while a withdrawal awaits its native turn end', async () => {
+    await keepCanvas();
+    const interrupted = Promise.withResolvers<undefined>();
+    const turnEnd = Promise.withResolvers<undefined>();
+    const slow = new FakeConnector({ adapter: 'codex', step: () => turnEnd.promise });
+    await start({
+      appServer: {
+        start: async (spec, host) => {
+          const live = await (spec.agentId === 'builder' ? slow : appServer).start(spec, host);
+          if (spec.agentId === 'builder') {
+            const interrupt = live.interrupt.bind(live);
+            vi.spyOn(live, 'interrupt').mockImplementation(() => {
+              interrupted.resolve(undefined);
+              return interrupt();
+            });
+          }
+          return live;
+        },
+      },
+    });
+    const id = await receive();
+    let withdrawn = false;
+    const withdrawing = ok('withdraw', { id }).then((result) => {
+      withdrawn = true;
+      return result;
+    });
+    await interrupted.promise;
+    let killed = false;
+    let sent: string | undefined;
+    const killing = ok('run.kill', { target: { agent: 'checker' } }, OTHER).then(() => {
+      killed = true;
+    });
+    const sending = send('helper', 'Independent work', OTHER).then((id) => {
+      sent = id;
+    });
+    try {
+      await vi.waitFor(() => {
+        expect(killed).toBe(true);
+        expect(sent).toBeDefined();
+      });
+      await vi.waitFor(async () => {
+        expect(sent && (await find(sent, OTHER))?.state).toBe('replied');
+      });
+      expect(withdrawn).toBe(false);
+    } finally {
+      turnEnd.resolve(undefined);
+      await Promise.all([withdrawing, killing, sending]);
+    }
+    expect(await withdrawing).toEqual({ reached: true, interrupted: true, revs: {} });
+  });
+
   it('holds a party’s message while its agent runs in a mode that never asks, telling its sender and you', async () => {
     await keepCanvas();
     const engine = await (await start()).engines.open(CANVAS);

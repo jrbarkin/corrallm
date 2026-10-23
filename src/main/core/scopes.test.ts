@@ -263,6 +263,49 @@ describe('Scopes', () => {
     expect(log).toContain('elsewhere done');
   });
 
+  it('releases descendant lanes once the preempt starts, before it finishes', async () => {
+    const scopes = new Scopes();
+    const log: string[] = [];
+    const active = controlled(log, 'active');
+    const queued = controlled(log, 'queued');
+    const stop = controlled(log, 'stop');
+    const kill = controlled(log, 'kill');
+    const unwound = Promise.withResolvers<undefined>();
+    const running = scopes.run(['app', 'c', 'a'], {}, undefined, async (signal, noReturn) => {
+      await active.op(signal, noReturn);
+      await unwound.promise;
+    });
+    await active.started;
+    const next = scopes.run(['app', 'c', 'a'], {}, undefined, queued.op);
+    const stopping = scopes.run(['app', 'c'], { preempt: true }, undefined, stop.op);
+    const killing = scopes.run(['app', 'c', 'b'], { preempt: true }, undefined, kill.op);
+    const parent = controlled(log, 'parent');
+    const behind = scopes.run(['app', 'c'], {}, undefined, parent.op);
+    try {
+      await tick();
+      // Even an empty descendant lane waits while the old work unwinds.
+      expect([...log]).toEqual(['active started', 'active aborted']);
+      unwound.resolve(undefined);
+      await stop.started;
+      await tick();
+      expect([...log]).toEqual([
+        'active started',
+        'active aborted',
+        'stop started',
+        'queued started',
+        'kill started',
+      ]);
+    } finally {
+      unwound.resolve(undefined);
+      stop.release();
+      queued.release();
+      kill.release();
+      parent.release();
+      await Promise.all([running, next, stopping, killing, behind]);
+    }
+    expect(log.indexOf('parent started')).toBeGreaterThan(log.indexOf('stop done'));
+  });
+
   it('lets a draining op abort what runs in the scopes it drains, then take its turn in its own as usual', async () => {
     const scopes = new Scopes();
     const log: string[] = [];

@@ -5,9 +5,10 @@
  * by the next op on its agent. Ops in other scopes, and ops with none (reads, `wait`), run at once.
  * A preempting op (an interrupt, a stop, a kill, a withdraw) skips its scope's queue: it aborts what
  * runs in its scope and in the scopes beneath it, waits for that to unwind, and runs ahead of what
- * is queued, so a stop is never stuck behind a slow start. Preempting ops never abort each other
- * (two withdraws both take their message back): those that overlap run one at a time, in the order
- * they came. A draining op (closing a canvas, deleting an agent) holds the scopes it drains beneath
+ * is queued, so a stop is never stuck behind a slow start. Descendant lanes wait until it starts,
+ * then can run while it awaits a native turn's end. Preempting ops never abort each other (two
+ * withdraws both take their message back): in one scope they run one at a time, in the order they
+ * came. A draining op (closing a canvas, deleting an agent) holds the scopes it drains beneath
  * its own from the moment it comes until it ends, so nothing runs on what it removes or switches
  * meanwhile: it aborts what runs there (a preempting op it lets finish), supersedes what waits
  * there, and starts nothing there until it ends (what comes meanwhile waits for it). It takes its
@@ -101,8 +102,17 @@ export class Scopes {
         } finally {
           lane.held--;
         }
-        return await this.#enter(lane, key, path, true, signal, op);
+        return await this.#enter(lane, key, path, true, signal, (signal, noReturn) => {
+          try {
+            return op(signal, noReturn);
+          } finally {
+            // The preempt has entered its own lane ahead of queued descendants. Its async work
+            // may await a native turn indefinitely; independent descendant lanes can run now.
+            this.#release(held);
+          }
+        });
       } finally {
+        // It may have been cancelled before entering its lane.
         this.#release(held);
       }
     }
@@ -117,7 +127,7 @@ export class Scopes {
   }
 
   #release(drain: Drain): void {
-    this.#drains.delete(drain);
+    if (!this.#drains.delete(drain)) return;
     for (const [key, lane] of this.#lanes) if (holds(drain, lane.path)) this.#next(key, lane);
   }
 
