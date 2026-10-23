@@ -162,3 +162,41 @@ it('keeps a refused reply at its card and lets it be retried', async () => {
   expect(await screen.findByRole('alert')).toHaveProperty('textContent', 'Not saved');
   expect(screen.getByRole('button', { name: 'Allow' })).not.toHaveProperty('disabled', true);
 });
+
+it.each(['before', 'after'] as const)(
+  'removes a failed reply card and its badge when the topic removes it %s the refusal',
+  async (when) => {
+    const core = await setup([proposal]);
+    const reply = Promise.withResolvers<{
+      ok: false;
+      error: { code: 'not-found'; sentence: string };
+    }>();
+    core.reply('reply', () => reply.promise);
+    await events.click(screen.getByRole('button', { name: 'Allow' }));
+    const remove = () => {
+      core.change({ topic: `needs:${canvas}`, rev: 1, replace: { items: [] } });
+    };
+    if (when === 'before') act(remove);
+    await act(() => {
+      reply.resolve({ ok: false, error: { code: 'not-found', sentence: 'No longer waiting' } });
+      return Promise.resolve();
+    });
+    if (when === 'after') {
+      expect(await screen.findByRole('alert')).toHaveProperty('textContent', 'No longer waiting');
+      act(remove);
+    }
+    await waitFor(() => {
+      expect(screen.queryByRole('article', { name: proposal.title })).toBeNull();
+    });
+    const bell = screen.getByRole('button', { name: 'Needs you' });
+    expect(bell).toHaveProperty('disabled', true);
+    expect(bell.querySelector('.float-needs-count')).toBeNull();
+    // A later prompt may reuse an id (stalled/<agent> does): it starts without the old error.
+    act(() => {
+      core.change({ topic: `needs:${canvas}`, rev: 2, replace: { items: [proposal] } });
+    });
+    await events.click(screen.getByRole('button', { name: 'Needs you' }));
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Allow' })).toHaveProperty('disabled', false);
+  },
+);

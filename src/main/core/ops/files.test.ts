@@ -12,6 +12,8 @@ import type { CanvasDocument } from '../../../shared/model/canvas';
 import type { NeedsItem } from '../../../shared/model/needs';
 import type { QueueItem } from '../../../shared/model/queue';
 import { FakeConnector } from '../../sessions/fake';
+import { SessionManager } from '../../sessions/manager';
+import type { RunContext } from '../../../shared/run';
 import type { Caller, OutsideCaller } from '../caller';
 import { createCore } from '../core';
 import type { Core } from '../core';
@@ -349,6 +351,21 @@ describe('canvas.create', () => {
 });
 
 describe('canvas.open', () => {
+  it('keeps sessions and the run token when Open picks the canvas already shown', async () => {
+    await applied('window.show', { canvas: OTHER });
+    const before = (await core.channels.call(1, 'run:get', [])) as RunContext;
+    const close = vi.spyOn(SessionManager.prototype, 'closeCanvas');
+    try {
+      answers.open.push(files.other);
+      expect(await applied('canvas.open', {})).toMatchObject({ canvas: OTHER });
+      expect(close).not.toHaveBeenCalled();
+      expect(await core.channels.call(1, 'run:get', [])).toMatchObject({ token: before.token });
+      await expect(core.channels.call(1, 'run:save', [before.token, null])).resolves.toBeNull();
+    } finally {
+      close.mockRestore();
+    }
+  });
+
   it('opens nothing, replacing nothing, when the dialog is cancelled', async () => {
     expect(await applied('canvas.open', { replace: { canvas: TEAM } })).toEqual({
       canvas: null,

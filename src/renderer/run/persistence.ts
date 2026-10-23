@@ -148,8 +148,9 @@ export class RunPersistence {
     this.#changing = done.promise;
     try {
       await before;
+      let current: CanvasId | undefined;
       try {
-        await this.#load();
+        current = (await this.#load()).id;
         await this.#owner.beforeSave?.();
         // This switch owns the barrier; a public flush waits until the new token is installed.
         if (this.#token && !this.#disposed) {
@@ -164,7 +165,7 @@ export class RunPersistence {
         if (!this.#failedInitialization) throw error;
       }
       const canvas = await action();
-      if (canvas === null) return;
+      if (canvas === null || canvas === current) return;
       this.#token = undefined;
       try {
         await open(canvas);
