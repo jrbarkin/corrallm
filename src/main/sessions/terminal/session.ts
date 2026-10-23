@@ -197,6 +197,8 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
   /** The latest state the CLI reported of the session itself, and whether it ever reported one. */
   #state: State | undefined;
   #reporting = false;
+  /** Last meaningful report per source and native task: redraws repeat the same state. */
+  readonly #reports = new Map<string, string>();
   #turn: Turn | undefined;
   /** An ended turn being classified, ahead of anything the CLI does in its next turn. */
   #ending: { end: Extract<SessionEvent, { type: 'end' }>; events: SessionEvent[] } | undefined;
@@ -463,6 +465,7 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
       return;
     }
     this.#pty = pty;
+    this.#reports.clear();
     this.#spawned = Date.now();
     this.#exit = new Promise((resolve) => {
       pty.onExit(({ exitCode }) => {
@@ -471,7 +474,6 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
     });
     pty.onData((data) => {
       if (pty === this.#pty) {
-        this.#host.activity?.();
         this.#output(data);
       }
     });
@@ -492,7 +494,7 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
       },
       title: (title) => {
         const report = this.#cli.title?.(title);
-        if (report) this.#status(report);
+        if (report) this.#status(report, 'title');
       },
       // A view's terminal answers what the CLI asks; with none, this screen does.
       answersQueries: () => this.#link === undefined,
@@ -636,7 +638,14 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
    * A report of the CLI's state (Program Status, or what its title says): the session's own drives
    * its turns; its tasks' are left out.
    */
-  #status(report: ProgramStatus): void {
+  #status(report: ProgramStatus, source = 'status'): void {
+    const record = JSON.stringify([source, report.id ?? '']);
+    const value = JSON.stringify(report);
+    if (this.#reports.get(record) !== value) {
+      if (report.state === 'clear' && report.id === undefined) this.#reports.clear();
+      this.#reports.set(record, value);
+      this.#host.activity?.();
+    }
     this.#pass();
     this.#block(report);
     if (report.id !== undefined || report.state === 'clear') return;

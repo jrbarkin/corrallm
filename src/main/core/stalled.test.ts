@@ -1,6 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { tmpdir } from 'node:os';
 import type { NetworkInterfaceInfo } from 'node:os';
+import { mkdtemp, rm } from 'node:fs/promises';
+import path from 'node:path';
 
+import type { SessionEvent } from '../../shared/session';
+import { TerminalSession, TIMING } from '../sessions/terminal/session';
+import type { TerminalCli } from '../sessions/terminal/cli';
+import type { Pty } from '../sessions/terminal/pty';
+import { HookServer } from '../sessions/terminal/hooks';
 import type { CanvasId } from '../../shared/canvas';
 import { CATALOG } from '../sessions/adapters';
 import { StalledTurns, STALL_MS, WAKE_GRACE_MS, WATCH_EVERY_MS } from './stalled';
@@ -42,6 +50,181 @@ function start(id = 'message') {
 }
 
 describe('silent turns', () => {
+  it.each(['normal deadline', 'wake', 'network change'])(
+    'does not flag a permission wait past its %s, and restarts silence once working',
+    async (disruption) => {
+      start();
+      watchdog.event(CANVAS, AGENT, 'codex.app-server', {
+        type: 'permission',
+        id: 'approval',
+        tool: 'Run',
+        summary: 'May I?',
+        always: null,
+      });
+      watchdog.event(CANVAS, AGENT, 'codex.app-server', { type: 'status', status: 'waiting' });
+      await vi.advanceTimersByTimeAsync(WATCH_EVERY_MS);
+      if (disruption === 'wake') watchdog.resume();
+      if (disruption === 'network change') interfaces = {};
+      await vi.advanceTimersByTimeAsync(STALL_MS * 2);
+      expect(warning).not.toHaveBeenCalled();
+      expect(watchdog.items(CANVAS)).toEqual([]);
+      // SDK answers close their prompt by reporting working, without a withdrawn event.
+      watchdog.event(CANVAS, AGENT, 'codex.app-server', { type: 'status', status: 'working' });
+      await vi.advanceTimersByTimeAsync(STALL_MS - WATCH_EVERY_MS);
+      expect(warning).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(WATCH_EVERY_MS);
+      expect(warning).toHaveBeenCalledOnce();
+      expect(warning.mock.calls[0]?.[4]).toContain('20 minutes');
+    },
+  );
+
+  it.each<SessionEvent>([
+    { type: 'status', status: 'waiting' },
+    { type: 'permission', id: 'p', tool: 'Run', summary: 'May I?', always: null },
+    { type: 'question', id: 'p', questions: [] },
+    { type: 'plan', id: 'p', plan: 'A plan' },
+    { type: 'elicitation', id: 'p', server: 'server', message: 'A question' },
+    { type: 'asking', asks: [{ kind: 'trust', id: 'trust' }] },
+  ])('suspends silence on $type even without another waiting signal', async (event) => {
+    start();
+    watchdog.event(CANVAS, AGENT, 'codex.app-server', event);
+    await vi.advanceTimersByTimeAsync(STALL_MS * 2);
+    expect(warning).not.toHaveBeenCalled();
+    expect(watchdog.items(CANVAS)).toEqual([]);
+    if (event.type === 'asking') {
+      watchdog.event(CANVAS, AGENT, 'codex.app-server', { type: 'asking', asks: [] });
+    } else if ('id' in event) {
+      watchdog.event(CANVAS, AGENT, 'codex.app-server', { type: 'withdrawn', id: event.id });
+    } else {
+      watchdog.event(CANVAS, AGENT, 'codex.app-server', { type: 'status', status: 'working' });
+    }
+    await vi.advanceTimersByTimeAsync(STALL_MS);
+    expect(warning).toHaveBeenCalledOnce();
+  });
+
+  it('clears a stalled Need while the turn waits on the user, including after a wake', async () => {
+    start();
+    await vi.advanceTimersByTimeAsync(STALL_MS);
+    expect(watchdog.items(CANVAS)).toHaveLength(1);
+    watchdog.event(CANVAS, AGENT, 'codex.app-server', { type: 'status', status: 'waiting' });
+    expect(watchdog.items(CANVAS)).toEqual([]);
+    watchdog.resume();
+    await vi.advanceTimersByTimeAsync(STALL_MS);
+    expect(watchdog.items(CANVAS)).toEqual([]);
+    expect(warning).toHaveBeenCalledOnce();
+  });
+
+  it('keeps waiting until every prompt closes, despite unrelated activity', async () => {
+    start();
+    watchdog.event(CANVAS, AGENT, 'codex.app-server', { type: 'plan', id: 'one', plan: 'Plan' });
+    watchdog.event(CANVAS, AGENT, 'codex.app-server', {
+      type: 'question',
+      id: 'two',
+      questions: [],
+    });
+    watchdog.event(CANVAS, AGENT, 'codex.app-server', { type: 'withdrawn', id: 'one' });
+    watchdog.activity(CANVAS, AGENT);
+    await vi.advanceTimersByTimeAsync(STALL_MS * 2);
+    expect(warning).not.toHaveBeenCalled();
+    watchdog.event(CANVAS, AGENT, 'codex.app-server', { type: 'withdrawn', id: 'two' });
+    await vi.advanceTimersByTimeAsync(STALL_MS - WATCH_EVERY_MS);
+    expect(warning).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(WATCH_EVERY_MS);
+    expect(warning).toHaveBeenCalledOnce();
+  });
+
+  it('flags a silent Terminal turn despite a spinner frame every second for twenty minutes', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'corrallm-spinner-'));
+    const hooks = new HookServer();
+    const registration = vi.spyOn(hooks, 'register').mockResolvedValue({
+      url: 'http://127.0.0.1/hook',
+      statusUrl: 'http://127.0.0.1/status',
+      token: 'test-token',
+      release: () => undefined,
+    });
+    let output: (data: string) => void = () => undefined;
+    let exit: (event: { exitCode: number }) => void = () => undefined;
+    const pty: Pty = {
+      pid: 4242,
+      write: () => undefined,
+      resize: () => undefined,
+      pause: () => undefined,
+      resume: () => undefined,
+      kill: () => {
+        exit({ exitCode: 0 });
+      },
+      onData: (listener) => {
+        output = listener;
+      },
+      onExit: (listener) => {
+        exit = listener;
+      },
+    };
+    const cli: TerminalCli<never> = {
+      name: 'Test CLI',
+      words: {
+        answer: '',
+        mode: '',
+        model: '',
+        login: '',
+        waiting: { permission: '', question: '', auth: '', none: '' },
+      },
+      newId: () => null,
+      prepare: () => Promise.resolve(),
+      args: () => [],
+      resumeFailed: () => false,
+      keystrokes: () => [],
+      submitted: (text) => text,
+      draft: () => undefined,
+      hook: () => [],
+      title: () => ({ state: 'working' }),
+    };
+    const session = new TerminalSession(
+      { agentId: AGENT, cwd: dir, env: {}, model: null, mode: null, resume: null },
+      {
+        remember: () => undefined,
+        emit: (event) => {
+          watchdog.event(CANVAS, AGENT, 'codex.terminal', event);
+        },
+        activity: () => {
+          watchdog.activity(CANVAS, AGENT);
+        },
+      },
+      {
+        executable: '/fake/cli',
+        cli,
+        spawn: () => Promise.resolve(pty),
+        hooks,
+        tmp: dir,
+        env: () => ({}),
+        timing: { ...TIMING, kill: 1 },
+      },
+    );
+    try {
+      await session.launch();
+      for (let second = 0; second <= STALL_MS / 1000; second++) {
+        // Neither the changing activity title nor an identical Program Status proves progress.
+        output(
+          `\x1b]0;Working (${String(second)}s)\x07\x1b]7501;state=working:progress=0\x07\r${second % 2 ? '◐' : '◓'} Working ${String(second)}s`,
+        );
+        await vi.advanceTimersByTimeAsync(1000);
+      }
+      expect(watchdog.items(CANVAS)).toHaveLength(1);
+      expect(warning).toHaveBeenCalledOnce();
+      // Native progress still proves activity even without a hook or transcript event.
+      output('\x1b]7501;state=working:progress=10\x07');
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(watchdog.items(CANVAS)).toEqual([]);
+    } finally {
+      watchdog.close();
+      const closing = session.close();
+      await vi.advanceTimersByTimeAsync(100);
+      await closing;
+      registration.mockRestore();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it('reports a silent turn two minutes after the network identity changes', async () => {
     start();
     await vi.advanceTimersByTimeAsync(WATCH_EVERY_MS);
@@ -229,7 +412,7 @@ describe('silent turns', () => {
     expect(warning).toHaveBeenCalledTimes(1);
   });
 
-  it('counts every session event and raw connector activity, clearing a warning on activity', async () => {
+  it('counts session events and meaningful connector activity, clearing a warning on activity', async () => {
     start();
     await vi.advanceTimersByTimeAsync(STALL_MS - WATCH_EVERY_MS);
     watchdog.event(CANVAS, AGENT, 'codex.app-server', {

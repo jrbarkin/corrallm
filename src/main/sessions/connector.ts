@@ -58,7 +58,7 @@ export interface SessionSpec<M extends SessionMode = PermissionMode> {
 
 /** Where a session reports to. */
 export interface SessionHost {
-  /** CLI activity with no session event (raw screen output, a hook, untranslated progress). */
+  /** CLI activity with no session event (a hook or untranslated progress, not cosmetic redraws). */
   activity?(): void;
   /**
    * Tells the renderer what happened (see `SessionEvent` for the order events come in). Emit
