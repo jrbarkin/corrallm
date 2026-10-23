@@ -214,6 +214,25 @@ describe('following Codex', () => {
     }
   });
 
+  it('warns once per invalid native session id while still hearing every hook', async () => {
+    const tui = await prepared();
+    for (const id of ['bad-id', 'another-bad-id']) {
+      const first = tui.hook({
+        hook_event_name: 'UserPromptSubmit',
+        session_id: id,
+        prompt: 'hello',
+      });
+      expect(first.filter((signal) => signal.kind === 'notice')).toHaveLength(1);
+      const later = tui.hook({
+        hook_event_name: 'UserPromptSubmit',
+        session_id: id,
+        prompt: 'again',
+      });
+      expect(later.filter((signal) => signal.kind === 'notice')).toEqual([]);
+      expect(later).toContainEqual({ kind: 'prompt', text: 'again' });
+    }
+  });
+
   it('reads what its title and hooks say, as the real Codex said it', async () => {
     expect(await replayed()).toEqual([
       // Ready, then its MCP servers start: a message sent meanwhile is held.

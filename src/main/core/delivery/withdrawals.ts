@@ -38,12 +38,13 @@ export class WithdrawalNotes {
     const notes = this.#store.withdrawals(`agent:${agent}`).filter(({ id }) => !claimed.has(id));
     if (notes.length === 0) return sendOpen(message);
     const text = notes.map(({ text }) => text).join('\n');
-    const shell =
+    const command =
       message.from === undefined &&
-      this.#prefixes.some((prefix) => message.text.trimStart().startsWith(prefix));
-    const id = shell ? randomUUID() : message.id;
+      (message.text.trimStart().startsWith('/') ||
+        this.#prefixes.some((prefix) => message.text.trimStart().startsWith(prefix)));
+    const id = command ? randomUUID() : message.id;
     let ended: (() => void) | undefined;
-    const finished = shell
+    const finished = command
       ? new Promise<void>((resolve) => {
           ended = resolve;
         })
@@ -51,7 +52,7 @@ export class WithdrawalNotes {
     this.#carrying.set(id, { agent, ids: notes.map(({ id }) => id), ...(ended ? { ended } : {}) });
     try {
       await this.#store.durable();
-      if (shell) {
+      if (command) {
         await sendOpen({
           id,
           text: `[corrallm] ${text}`,
