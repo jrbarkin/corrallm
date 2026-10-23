@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { chmod, copyFile, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { createServer as createHttpServer, request } from 'node:http';
@@ -14,8 +14,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { opsFor, toolName } from '../../shared/api/registry';
 import { SURFACE } from '../../shared/api/surface';
+import type { CanvasId } from '../../shared/canvas';
 import type { Message } from '../../shared/model/messages';
-import { keepCanvases, writeOnDisk } from '../core/store/test-store';
+import { keepCanvases, keepMessages, readOnDisk, writeOnDisk } from '../core/store/test-store';
 import { registrations } from './serve';
 import { TestChildren } from './test-children';
 import { startupShell } from './test-startup-shell';
@@ -526,6 +527,88 @@ describe.skipIf(process.platform === 'win32')('corrallm serve', () => {
     expect(reply).toMatchObject({ kind: 'text', turn: { status: 'completed' } });
     expect(await sent()).toHaveLength(1);
   }, 30_000);
+
+  it('refuses an unwritable api.json without delivering a queued message or saying it serves', async () => {
+    const id = 'b072b045-bd48-4f93-9226-cb2524298b87';
+    await keepMessages(profile, CANVAS as CanvasId, [
+      {
+        message: {
+          id,
+          from: 'outside:orchestrator',
+          to: 'agent:builder',
+          kind: 'text',
+          body: 'Wait until discovery is published',
+          state: 'pending',
+          at: Date.now(),
+        },
+      },
+    ]);
+    const api = path.join(profile, 'api.json');
+    await mkdir(api);
+    const { code, stderr } = await refused(['--canvas', file]);
+    expect(code, stderr).toBe(1);
+    expect(stderr).toContain('api.json');
+    expect(stderr).not.toContain('corrallm serve: serving ');
+    expect(existsSync(path.join(profile, 'core.lock'))).toBe(false);
+    expect(
+      readOnDisk(
+        profile,
+        (disk) => disk.prepare('SELECT state FROM message WHERE id = ?').get(id)?.state,
+      ),
+    ).toBe('pending');
+    const sent = async () =>
+      existsSync(codexLog)
+        ? (await readFile(codexLog, 'utf8'))
+            .split('\n')
+            .filter((line) => line.includes('"turn/start"') && line.includes(id))
+        : [];
+    expect(await sent()).toEqual([]);
+
+    await rm(api, { recursive: true });
+    const server = await serve();
+    const client = await connect(server.url);
+    const reply = await waitFor(client, (message) => message.replyTo === id);
+    expect(reply).toMatchObject({ turn: { status: 'completed' } });
+    expect(await sent()).toHaveLength(1);
+  }, 15_000);
+
+  it('has readable api.json as soon as serving is printed', async () => {
+    const child = children.spawn(
+      process.execPath,
+      [BUNDLE, 'serve', '--profile', profile, '--canvas', file, '--port', '0'],
+      cliEnv(),
+    );
+    const printed = Promise.withResolvers<unknown>();
+    let stderr = '';
+    let heard = false;
+    child.stderr.on('data', (chunk: Buffer) => {
+      stderr += chunk.toString();
+      if (!heard && stderr.includes('corrallm serve: serving ')) {
+        heard = true;
+        try {
+          printed.resolve(
+            JSON.parse(readFileSync(path.join(profile, 'api.json'), 'utf8')) as unknown,
+          );
+        } catch (error) {
+          printed.reject(error);
+        }
+      }
+    });
+    try {
+      const api = await Promise.race([
+        printed.promise,
+        children.exited(child).then((code) => {
+          throw new Error(`serve exited ${String(code)} before serving: ${stderr}`);
+        }),
+      ]);
+      expect(api).toMatchObject({
+        url: expect.stringMatching(/^http:\/\/127\.0\.0\.1:/) as string,
+        pid: child.pid,
+      });
+    } finally {
+      await children.stop(child);
+    }
+  }, 15_000);
 
   it('refuses a new token with stderr on a pipe, so a person sees it when it is made', async () => {
     const before = await readFile(path.join(profile, 'tokens.json'), 'utf8');

@@ -50,10 +50,15 @@ export class Conversations {
       // A worktree's conversations resume in that worktree, not here.
       includeWorktrees: false,
     });
-    return [...listed]
+    const valid = listed.filter((info) => isNativeId(info.sessionId) && isUuid(info.sessionId));
+    if (valid.length !== listed.length) {
+      console.warn(
+        `Skipped ${String(listed.length - valid.length)} invalid claude-code conversation ids from the resume list.`,
+      );
+    }
+    return valid
       .sort((a, b) => b.lastModified - a.lastModified)
       .map((info): KeptConversation => {
-        requireConversationId('claude-code', info.sessionId, isUuid);
         const title = line(info.customTitle) || line(info.summary) || line(info.firstPrompt);
         return {
           id: info.sessionId,

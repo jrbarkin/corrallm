@@ -35,6 +35,11 @@ The App Server connection (see Codex below): connector.ts starts the app server 
 
 - Session ids are UUIDs (`sessions/id.ts`), checked in hook signals, resume IPC arguments, remembered sessions loaded from disk, and both Terminal CLIs' argv builders.
 
+The thread/list reader skips a thread in the chosen folder whose id fails the platform minimum
+or UUID shape, instead of failing the whole resume list. It emits one count-only warning per
+listing and preserves the valid threads' order by updatedAt. Threads from other folders remain
+excluded, and a failed request still fails the list and closes its private App Server.
+
 And no message takes Codex's App Server out of its sandbox: `/permissions full-access` is refused, since Full access is the mode menu's, which asks first.
 
 The App Server's `/diff` also disables external diff, textconv and filter drivers; file suggestions must never run a repository's fsmonitor.
