@@ -37,7 +37,9 @@ interface JournalDeps {
 const MISSING = 'The saved canvas is missing. Its run was restored as an unsaved canvas.';
 const EARLIER = 'This run belongs to an earlier canvas';
 const TOO_LARGE =
-  'The run checkpoint is too large (over 32 MiB), so current run progress cannot be kept. Messages are still recorded and delivered. Restarting restores only the last checkpoint that fit, if any.';
+  'The run checkpoint is too large (over 32 MiB), so current run progress cannot be kept. Further run prompts are held; parties’ messages are still recorded and delivered. Restarting restores only the last checkpoint that fit, if any.';
+const TOO_COMPLEX =
+  'The run checkpoint is too complex (too many JSON values or nesting too deep), so current run progress cannot be kept. Further run prompts are held; parties’ messages are still recorded and delivered. Restarting restores only the last checkpoint that fit, if any.';
 
 /**
  * Each canvas's run, journaled by the canvas's id in the profile's database (Core Database §5),
@@ -195,8 +197,8 @@ export class RunJournal {
 
   /**
    * Within a write: journals a canvas's run (null: none), as `save` does, with whatever else the
-   * write holds. An oversized run keeps only a size refusal beside the last good checkpoint,
-   * returning that refusal; other invalid data, SQL failures and a wrong token still throw.
+   * write holds. A run beyond the size or complexity bound keeps its refusal beside the last
+   * good checkpoint; other invalid data, SQL failures and a wrong token still throw.
    */
   keep(canvas: CanvasId, token: string, checkpoint: RunCheckpoint | null): string | undefined {
     if (this.#entries.get(canvas)?.token !== token) throw new Error(EARLIER);
@@ -210,15 +212,16 @@ export class RunJournal {
     if (Buffer.byteLength(JSON.stringify(checkpoint), 'utf8') > MAX_RUN_BYTES) {
       // A size limit is not a drive failure. Retain the last good run and commit this marker
       // with its messages, rather than rolling messages back or sending without their record.
-      store
-        .prepare(
-          `INSERT INTO run (canvas_id, state, updated_at) VALUES (?, json_object('saveError', ?), ?)
-        ON CONFLICT(canvas_id) DO UPDATE SET state = json_set(run.state, '$.saveError', ?)`,
-        )
-        .run(canvas, TOO_LARGE, checkpoint.updatedAt, TOO_LARGE);
-      return TOO_LARGE;
+      return this.#refused(canvas, checkpoint, TOO_LARGE);
     }
-    const { version, state, messages, updatedAt } = parseRunCheckpoint(checkpoint);
+    let parsed: RunCheckpoint;
+    try {
+      parsed = parseRunCheckpoint(checkpoint);
+    } catch (error) {
+      if (error instanceof RangeError) return this.#refused(canvas, checkpoint, TOO_COMPLEX);
+      throw error;
+    }
+    const { version, state, messages, updatedAt } = parsed;
     // Its state and messages are JSON texts (parseRunCheckpoint read them): kept as they are.
     store
       .prepare(
@@ -233,7 +236,18 @@ export class RunJournal {
     return undefined;
   }
 
-  /** Called only after the containing write is durable, including a size refusal's marker. */
+  /** Keep the last good checkpoint and this bound's marker in the containing message write. */
+  #refused(canvas: CanvasId, checkpoint: RunCheckpoint, problem: string): string {
+    this.#deps.store
+      .prepare(
+        `INSERT INTO run (canvas_id, state, updated_at) VALUES (?, json_object('saveError', ?), ?)
+         ON CONFLICT(canvas_id) DO UPDATE SET state = json_set(run.state, '$.saveError', ?)`,
+      )
+      .run(canvas, problem, checkpoint.updatedAt, problem);
+    return problem;
+  }
+
+  /** Called only after the containing write is durable, including a bound refusal's marker. */
   kept(canvas: CanvasId, problem: string | undefined): void {
     const before = this.#problems.get(canvas);
     this.#problems.set(canvas, problem);
@@ -241,7 +255,7 @@ export class RunJournal {
     this.#tell(canvas);
   }
 
-  /** The persisted size refusal, cached until another run write lands. */
+  /** The persisted size or complexity refusal, cached until another run write lands. */
   problem(canvas: CanvasId): string | undefined {
     if (!this.#problems.has(canvas)) {
       const value = this.#deps.store
@@ -252,7 +266,7 @@ export class RunJournal {
     return this.#problems.get(canvas);
   }
 
-  /** A canvas-wide warning: no answer can make an oversized checkpoint durable. */
+  /** A canvas-wide hold: no answer can make an unbounded checkpoint durable. */
   items(canvas: CanvasId): NeedsItem[] {
     const problem = this.problem(canvas);
     return problem === undefined
@@ -264,7 +278,10 @@ export class RunJournal {
             kind: 'hold',
             for: 'you',
             by: [],
-            title: 'Run progress is too large to save',
+            title:
+              problem === TOO_COMPLEX
+                ? 'Run progress is too complex to save'
+                : 'Run progress is too large to save',
             detail: problem,
             choices: [],
             answerIn: 'api',
