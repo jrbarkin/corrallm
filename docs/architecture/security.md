@@ -40,7 +40,7 @@ What both local servers (MCP, hooks) check before the token: their own Host, no 
 
 - Read-only Git commands share `SAFE_GIT_OPTIONS` (`main/git.ts`), disabling fsmonitor and implicit bare repositories.
 
-- Packaged builds exit if launched with a switch in `FORBIDDEN_SWITCHES` (`src/main/index.ts`): remote debugging, or launcher prefixes such as `--gpu-launcher` that would make the app run an arbitrary executable. CI asserts this.
+- Packaged builds exit if launched with a switch in `FORBIDDEN_SWITCHES` (`src/main/index.ts`): remote debugging, or launcher prefixes such as `--gpu-launcher` that would make the app run an arbitrary executable. Unit tests cover every listed switch, before initialization and the native self-test. The local packaged gates (`scripts/check-macos.sh` and `scripts/check-linux.sh`) additionally require exit 1 for remote-debugging-port, gpu-launcher and renderer-cmd-prefix; the macOS gate first verifies the bundle with `codesign --verify --deep --strict`.
 
 - Fuses (`forge.config.mts`) must stay as configured: RunAsNode, `NODE_OPTIONS` and Node inspect flags disabled; ASAR integrity and OnlyLoadAppFromAsar enabled (integrity is enforced on macOS and Windows only). Consequences: `child_process.fork` throws in packaged builds (use `utilityProcess.fork`, as the core process is forked, or `spawn`; the packaged self-test checks it throws), and Playwright cannot drive the packaged app.
 

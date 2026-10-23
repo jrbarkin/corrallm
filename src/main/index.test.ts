@@ -31,7 +31,7 @@ const {
     getName: vi.fn(() => 'corrallm'),
     getVersion: vi.fn(() => '1.2.3'),
     getLocale: vi.fn(() => 'en-US'),
-    commandLine: { hasSwitch: vi.fn(() => false) },
+    commandLine: { hasSwitch: vi.fn<(name: string) => boolean>(() => false) },
   },
   powerMonitor: { on: vi.fn() },
   getAllWindows: vi.fn<() => unknown[]>(() => []),
@@ -120,6 +120,7 @@ beforeEach(() => {
   app.requestSingleInstanceLock.mockReturnValue(true);
   app.quit.mockReset();
   app.isPackaged = false;
+  app.commandLine.hasSwitch.mockReturnValue(false);
   app.whenReady.mockImplementation(() => new Promise<void>(() => undefined));
   vi.stubGlobal('MAIN_WINDOW_VITE_DEV_SERVER_URL', undefined);
   vi.stubGlobal('MAIN_WINDOW_VITE_NAME', 'main_window');
@@ -547,6 +548,27 @@ describe('quit races', () => {
       expect(startAppUpdates).not.toHaveBeenCalled();
     },
   );
+});
+
+describe('packaged launch switches', () => {
+  it.each([
+    'remote-debugging-port',
+    'remote-debugging-pipe',
+    'renderer-cmd-prefix',
+    'gpu-launcher',
+    'utility-cmd-prefix',
+    'browser-subprocess-path',
+  ])('refuses --%s before initialization, even for a native self-test', async (name) => {
+    app.isPackaged = true;
+    app.commandLine.hasSwitch.mockImplementation((candidate) => candidate === name);
+    vi.stubEnv('CORRALLM_NATIVE_SELFTEST', '1');
+    await import('./index');
+
+    expect(app.exit).toHaveBeenCalledExactlyOnceWith(1);
+    expect(app.whenReady).not.toHaveBeenCalled();
+    expect(app.requestSingleInstanceLock).not.toHaveBeenCalled();
+    expect(registerPrivileges).not.toHaveBeenCalled();
+  });
 });
 
 describe('single-instance startup', () => {

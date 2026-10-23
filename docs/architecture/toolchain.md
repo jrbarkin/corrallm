@@ -73,7 +73,7 @@ macOS signing discovers the bundled Node with the other enclosed binaries. It us
 
 ## Local CI while the repository is private
 
-The GitHub CI workflow is disabled on GitHub until the repository is public; `.github/workflows/ci.yml` stays checked in. Local gates are CI meanwhile. On macOS run the done gate in AGENTS.md, then `pnpm package` and the packaged native self-test above. Keep the machine awake and avoid overlapping gates for the load measurements.
+The GitHub CI workflow is disabled on GitHub until the repository is public; `.github/workflows/ci.yml` stays checked in. Local gates are CI meanwhile. On macOS run the done gate in AGENTS.md, then `pnpm package` and `scripts/check-macos.sh` (or pass `arm64` or `x64` explicitly). The script checks the exact output bundle: `codesign --verify --deep --strict`, executable node-pty spawn-helper, the native self-test in main/core/shipped Node, the three refused launch switches (exit 1), and the shipped command's self-test and --help with an empty PATH. It does not rebuild or download anything, and reports the failed step before stopping. Keep the machine awake and avoid overlapping gates for the load measurements.
 
 On Linux use Docker (Docker Desktop on macOS), from the checkout:
 
@@ -92,7 +92,7 @@ The shared build image is Debian bookworm with the Node and pnpm pins read from 
 
 Docker containers use an init process, a 1 GiB shared-memory segment and unconfined seccomp/AppArmor profiles so Chromium can create user namespaces. Electron's sandbox stays enabled; do not add --no-sandbox. A host that disallows unprivileged user namespaces must allow them before this gate can pass.
 
-`ci-linux.sh` installs with the frozen lockfile, downloads Electron, runs typecheck, lint, format:check and all unit projects, then runs the whole Playwright suite under xvfb-run. It does not set E2E_SKIP_BUILD: the normal global setup makes the production build. There are no new Linux skips. Failed Playwright traces and reports remain in the architecture's -results and -report Docker volumes. To recover diagnostics, for example:
+`ci-linux.sh` installs with the frozen lockfile, downloads Electron, runs typecheck, lint, format:check and all unit projects, then runs the whole Playwright suite under xvfb-run with `--retries=0`; a failed first attempt fails the local gate even though `CI=1` enables linear Forge output. It does not set E2E_SKIP_BUILD: the normal global setup makes the production build. There are no new Linux skips. Failed Playwright traces and reports remain in the architecture's -results and -report Docker volumes. To recover diagnostics, for example:
 
 ```sh
 mkdir -p node_modules/.cache/probes/linux-arm64-results

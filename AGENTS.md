@@ -50,7 +50,7 @@ Requires Node 24.21.0 (`.nvmrc`) and pnpm 12.11.2 (`packageManager`).
 | `pnpm corrallm`                              | CLI: serve, wait, dump or native self-test               |
 | `pnpm api:surface`                           | Regenerate the API snapshot; review its diff             |
 
-Before calling a change done on macOS: `pnpm typecheck && pnpm lint && pnpm format:check && pnpm test && pnpm test:e2e`, then `pnpm package` and the packaged native self-test. The Linux half runs locally in Docker: `scripts/ci-linux.sh`, `scripts/check-linux.sh` and `scripts/check-linux-packages.sh`, each with `arm64` and `x64`. GitHub CI is disabled until the repository is public.
+Before calling a change done on macOS: `pnpm typecheck && pnpm lint && pnpm format:check && pnpm test && pnpm test:e2e`, then `pnpm package` and `scripts/check-macos.sh` (bundle signature, native self-test, refused switches and shipped command). The Linux half runs locally in Docker: `scripts/ci-linux.sh`, `scripts/check-linux.sh` and `scripts/check-linux-packages.sh`, each with `arm64` and `x64`. GitHub CI is disabled until the repository is public.
 See [toolchain](docs/architecture/toolchain.md) for executable overrides, build environments and the packaged self-test; [testing](docs/architecture/testing.md) for load/crash gates and production-build reuse.
 
 ## Testing rules
