@@ -89,6 +89,84 @@ async function start(codex: Connector<SessionMode>): Promise<Core> {
 }
 
 describe('the core runs each canvas’s engine', () => {
+  it.each(['oversized', 'complex'] as const)(
+    'holds its next queue send when the checkpoint is %s while a token’s message still reaches the agent',
+    async (limit) => {
+      await keepCanvas();
+      const codex = new FakeConnector({ adapter: 'codex' });
+      const started = await start(codex);
+      const engine = await started.engines.open(CANVAS);
+      const checkpoint = engine.checkpoint();
+      const limited = vi.spyOn(engine, 'checkpoint').mockReturnValue({
+        ...checkpoint,
+        state: JSON.stringify(
+          limit === 'oversized'
+            ? { text: 'x'.repeat(MAX_RUN_BYTES) }
+            : Array<number>(200_001).fill(0),
+        ),
+      });
+      const reason = limit === 'oversized' ? /too large/ : /too complex/;
+      engine.run.start();
+      // Await the actual dispatch decision, not a timeout that could hide a late queue send.
+      await vi.waitFor(() => {
+        expect(engine.run.sending('worker')).toBe(false);
+        expect(
+          engine.run.snapshot().agents.worker?.problem !== undefined ||
+            codex.sessions.some((session) => session.sent.length > 0),
+        ).toBe(true);
+      });
+      expect(codex.started).toEqual([]);
+      expect(engine.run.snapshot().agents.worker?.problem?.text).toMatch(reason);
+      const needs = await started.call('needs', { canvas: CANVAS }, CALLERS.you);
+      if (!needs.ok) throw new Error(needs.error.sentence);
+      const hold = needs.value.items.find(
+        (item) => item.id === `unsaved/${encodeURIComponent(CANVAS)}`,
+      );
+      expect(hold?.detail).toMatch(reason);
+      expect(hold?.for).toBe('you');
+      expect(hold?.kind).toBe('hold');
+      const message = await started.call(
+        'message',
+        {
+          canvas: CANVAS,
+          to: 'worker',
+          body: 'Party work still goes',
+        },
+        {
+          kind: 'outside',
+          token: 'write-token',
+          name: 'orchestrator',
+          access: 'write',
+          canvases: [CANVAS],
+        },
+      );
+      expect(message).toMatchObject({ ok: true });
+      await vi.waitFor(() => {
+        expect(codex.sessions[0]?.sent).toHaveLength(1);
+      });
+      expect(codex.sessions[0]?.sent[0]?.text).toContain('Party work still goes');
+      expect(codex.sessions[0]?.sent[0]?.text).not.toContain('Say hello');
+      await vi.waitFor(() => {
+        expect(
+          started.engines
+            .canvas(CANVAS)
+            ?.messages.all()
+            .find((item) => item.body === 'Party work still goes')?.state,
+        ).toBe('replied');
+      });
+      // A checkpoint that fits clears the canvas hold; an explicit Run then sends as usual.
+      limited.mockRestore();
+      engine.run.start();
+      await vi.waitFor(() => {
+        expect(engine.run.snapshot().agents.worker?.outcomes).toEqual({ hello: 'succeeded' });
+      });
+      expect(codex.sessions[0]?.sent).toHaveLength(2);
+      const healthy = await started.call('needs', { canvas: CANVAS }, CALLERS.you);
+      if (!healthy.ok) throw new Error(healthy.error.sentence);
+      expect(healthy.value.items.some((item) => item.id.startsWith('unsaved/'))).toBe(false);
+    },
+  );
+
   it('records and delivers messages while its run is too large to keep, and says why', async () => {
     await keepCanvas();
     const codex = new FakeConnector({ adapter: 'codex' });

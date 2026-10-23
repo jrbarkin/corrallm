@@ -46,8 +46,9 @@ import type { Database } from './store/store';
  * always on disk first. Its run and its messages are one record: each write of either holds every
  * change to the other not on disk yet (a run's only if it changed since it last was), so what
  * changes together lands together, or not at all (a kill's hold and its withdrawals, a turn's
- * reply and what its end changed in the run). An oversized run keeps a size refusal and its last
- * good checkpoint instead, never failing messages for size alone. A `wait` moves every read position in one
+ * reply and what its end changed in the run). An oversized or over-complex run keeps its refusal and last
+ * good checkpoint instead, never failing messages for a run bound alone; its before-send gate
+ * holds run prompts until their checkpoint can be kept. A `wait` moves every read position in one
  * write with them, or none, before it returns. Each message delivering is on disk before it is
  * sent. Whoever watches hears each message added to a canvas's store, closing it included, and each
  * thing newly waiting for an answer on it (`corrallm serve` logs them).
@@ -715,7 +716,13 @@ export class Engines {
       connect: (agent) => {
         engine.sessions.notice(agent, 'warning', NO_SWITCH);
       },
-      beforeSend: () => this.#write(running),
+      beforeSend: async () => {
+        await this.#write(running);
+        // A committed refusal marker keeps parties' messages durable, but cannot authorize a
+        // run prompt whose in-flight state was not kept. RunStore holds that attempt in Needs.
+        const problem = journal.problem(canvas);
+        if (problem !== undefined) throw new Error(problem);
+      },
       ...(this.#deps.locale === undefined ? {} : { locale: this.#deps.locale }),
     });
     running.engine = engine;
