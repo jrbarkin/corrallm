@@ -751,19 +751,26 @@ function Editor({
         const before = binding.read();
         // The persistence barrier holds automated sends. Pausing here would interrupt a live
         // turn even if Open is cancelled; only a successful switch resets the old run.
-        if (persistence) await persistence.switch(action, load);
-        else {
+        const target = async () => {
           const id = await action();
+          return id === binding.canvas ? null : id;
+        };
+        if (persistence) await persistence.switch(target, load);
+        else {
+          const id = await target();
           if (id !== null) await load(id);
         }
-        // A cancelled Open after a failed restore leaves it failed: only another canvas recovers.
-        setRestoreFailed(persistence?.failedInitialization() ?? false);
         if (keepsBefore && before && before.document.id !== binding.canvas && before.meta.edited)
           setNotice([
             `${before.meta.name ?? 'The previous canvas'} stays open with its changes. Find it in Canvases.`,
           ]);
         persistence?.changed();
+      } catch (error) {
+        setProblem(`Could not switch canvases: ${ipcErrorMessage(error)}`);
+        throw error;
       } finally {
+        // Every switch path exposes a failed restore. A cancelled Open keeps an earlier failure.
+        setRestoreFailed(persistence?.failedInitialization() ?? false);
         switching.current = false;
         setRestoring(false);
       }
@@ -780,9 +787,17 @@ function Editor({
           return 'canvas' in result && result.canvas ? (result.canvas as CanvasId) : null;
         }, false),
       reply: async (to: string, choice: string) => {
+        const canvas = binding.canvas;
+        // Only Allow of a proposal can move the window. A stalled CLI's interrupt may never
+        // resolve: keep other agents' input and checkpoint writes usable while it is pending.
+        if (!to.startsWith('proposal/') || choice !== 'allow') {
+          await flushDrafts();
+          await persistence?.flush();
+          return api.reply({ canvas, to, answer: { choice } });
+        }
         let result: Awaited<ReturnType<GuiApi['reply']>> | undefined;
         await switchTo(async () => {
-          result = await api.reply({ canvas: binding.canvas, to, answer: { choice } });
+          result = await api.reply({ canvas, to, answer: { choice } });
           return result.canvas ? (result.canvas as CanvasId) : null;
         }, false);
         if (!result) throw new Error('A canvas switch is already under way.');

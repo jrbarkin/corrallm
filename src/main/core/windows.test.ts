@@ -56,6 +56,16 @@ describe('the windows and their canvases', () => {
     expect(left).toHaveBeenCalledOnce();
   });
 
+  it('keeps the current canvas and its sessions when asked to show it again', async () => {
+    const { windows: shown, left } = windows();
+    const contents = window();
+    const canvas = await shown.canvasOf(contents);
+    await shown.show(contents, canvas);
+    expect(left).not.toHaveBeenCalled();
+    expect(await shown.canvasOf(contents)).toBe(canvas);
+    expect(shown.showing(canvas)).toEqual([contents]);
+  });
+
   it('ends a gone window’s sessions, keeping its canvas for the page that reconnects', async () => {
     const { windows: shown, left } = windows();
     const contents = window();

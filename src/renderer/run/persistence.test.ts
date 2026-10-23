@@ -252,6 +252,20 @@ describe('run persistence coordinator', () => {
       expect(source.save).toHaveBeenLastCalledWith('original', expect.any(Object));
     },
   );
+  it('keeps the current token and stores when the switch returns the same canvas', async () => {
+    const { persistence, source, owner, open, context, change } = setup();
+    await persistence.initialize();
+    change('new work');
+    await persistence.switch(() => Promise.resolve(context.id), open);
+    expect(open).not.toHaveBeenCalled();
+    expect(source.get).toHaveBeenCalledOnce();
+    expect(owner.restore).toHaveBeenCalledOnce();
+    await persistence.flush();
+    expect(source.save).toHaveBeenLastCalledWith(
+      'original',
+      expect.objectContaining({ state: JSON.stringify({ snapshot: 'new work' }) }),
+    );
+  });
   it('makes shutdown wait through a switch and saves only the new generation afterwards', async () => {
     const { persistence, source, open } = setup();
     await persistence.initialize();

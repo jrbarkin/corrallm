@@ -48,7 +48,7 @@ export interface LifecycleDeps {
   >;
   memory: Pick<CanvasMemory, 'get' | 'keeps'>;
   journal: Pick<RunJournal, 'opened' | 'open' | 'close' | 'last' | 'saved'>;
-  windows: Pick<Windows, 'canvasOf' | 'show' | 'showing'>;
+  windows: Pick<Windows, 'canvasOf' | 'show' | 'showing' | 'shownIn'>;
   projects: Pick<ProjectFolders, 'choose' | 'restore' | 'of'>;
   sessions: Pick<SessionManager, 'closeCanvas' | 'projectChanged'>;
   engines: Pick<Engines, 'closeCanvas'>;
@@ -152,6 +152,8 @@ export class Lifecycle {
     const opened = await this.#deps.files.open(window);
     if (opened === null) return null;
     const { id, copy } = opened;
+    // Opening the file already shown changes neither its native sessions nor its run generation.
+    if (this.#deps.windows.shownIn(window) === id) return id;
     await this.#deps.journal.opened(id, copy);
     await this.#deps.windows.show(window, id);
     await this.#deps.projects.restore(id);

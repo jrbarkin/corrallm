@@ -59,6 +59,7 @@ export class Windows {
   /** The window shows `canvas` now (it opened or began it): the canvas before leaves it. */
   async show(window: WindowId, canvas: CanvasId): Promise<void> {
     const before = this.#shown.get(window);
+    if (before === canvas) return;
     this.#canvases.set(window, Promise.resolve(canvas));
     this.#shown.set(window, canvas);
     this.#tell();
