@@ -6,7 +6,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import type { OpError, OpResult } from '../../shared/api/errors';
 import { toolName } from '../../shared/api/registry';
-import { GUI_OPS, PARTIES } from '../../shared/api/surface';
+import { GUI_OPS } from '../../shared/api/surface';
 import type { Party } from '../../shared/api/surface';
 import { callTool, startApiServer } from '../api/mcp';
 import type { ApiServer } from '../api/mcp';
@@ -15,18 +15,17 @@ import type { Dispatcher } from './call';
 import type { TokenCaller } from './caller';
 import { WindowPorts } from './gui';
 import {
-  allValid,
   CALLERS,
   isLead,
   RESOLVERS,
   TEST_FIXTURES,
   TEST_OUT_OF_REACH,
   testRegistry,
-  unreachableCalls,
 } from './test-registry';
 import type { OpFixture, OutOfReach } from './test-registry';
 import { openWindow } from './test-window';
 import { REAL_FIXTURES, REAL_OUT_OF_REACH, startWorld } from './test-world';
+import { transportCases } from './test-transport';
 
 /*
  * T3a (Core Server §3.7): each transport adds nothing. A transport is factored as identify (who
@@ -59,14 +58,6 @@ function unwrap(result: CallToolResult): OpResult<unknown> {
   expect(text?.text).toBe(JSON.stringify(result.structuredContent));
   return { ok: true, value: result.structuredContent };
 }
-
-/** Every argument list an op's fixture names, and those naming what a party doesn't reach. */
-const argsOf = (core: Dispatcher, name: string, fixture: OpFixture, world: OutOfReach) => [
-  ...allValid(fixture),
-  ...fixture.invalid,
-  ...Object.values(fixture.meetsRule ?? {}),
-  ...unreachableCalls(core, name, fixture, world).map(({ args }) => args),
-];
 
 interface Setup {
   core: Dispatcher;
@@ -133,14 +124,12 @@ describe.each(REGISTRIES)('T3a on %s', (_label, fixtures, world, start) => {
   it.each(Object.entries(fixtures))(
     'answers %s through MCP’s dispatch as directly, for every caller',
     async (name, fixture) => {
-      for (const args of argsOf(setup.core, name, fixture, world)) {
-        for (const party of PARTIES) {
-          const direct = await setup.core.call(name, args, CALLERS[party]);
-          const mcp = unwrap(await callTool(setup.core, CALLERS[party], toolName(name), args));
-          expect(JSON.stringify(mcp), `${party}: ${JSON.stringify(args)}`).toBe(
-            JSON.stringify(direct),
-          );
-        }
+      for (const { party, args } of transportCases(setup.core, name, fixture, world)) {
+        const direct = await setup.core.call(name, args, CALLERS[party]);
+        const mcp = unwrap(await callTool(setup.core, CALLERS[party], toolName(name), args));
+        expect(JSON.stringify(mcp), `${party}: ${JSON.stringify(args)}`).toBe(
+          JSON.stringify(direct),
+        );
       }
     },
   );
@@ -149,22 +138,22 @@ describe.each(REGISTRIES)('T3a on %s', (_label, fixtures, world, start) => {
     'answers %s over HTTP as directly, for every caller a token can be',
     async (name, fixture) => {
       // MCP carries arguments as an object, or none.
-      const sendable = argsOf(setup.core, name, fixture, world).filter(
-        (args) =>
+      const sendable = transportCases(setup.core, name, fixture, world, [...clients.keys()]).filter(
+        ({ args }) =>
           args === undefined || (typeof args === 'object' && args !== null && !Array.isArray(args)),
       );
-      for (const args of sendable) {
-        for (const [party, client] of clients) {
-          const direct = await setup.core.call(name, args, CALLERS[party]);
-          const result = await client.callTool({
-            name: toolName(name),
-            ...(args === undefined ? {} : { arguments: args as Record<string, unknown> }),
-          });
-          expect(
-            JSON.stringify(unwrap(result as CallToolResult)),
-            `${party}: ${JSON.stringify(args)}`,
-          ).toBe(JSON.stringify(direct));
-        }
+      for (const { party, args } of sendable) {
+        const client = clients.get(party);
+        if (!client) throw new Error(`No client for ${party}`);
+        const direct = await setup.core.call(name, args, CALLERS[party]);
+        const result = await client.callTool({
+          name: toolName(name),
+          ...(args === undefined ? {} : { arguments: args as Record<string, unknown> }),
+        });
+        expect(
+          JSON.stringify(unwrap(result as CallToolResult)),
+          `${party}: ${JSON.stringify(args)}`,
+        ).toBe(JSON.stringify(direct));
       }
     },
   );
@@ -186,7 +175,13 @@ describe('T3a on a window’s port', () => {
   });
 
   it.each(GUI_OPS)('answers %s through a window’s port as directly, for you', async (name) => {
-    for (const args of argsOf(setup.core, name, REAL_FIXTURES[name], REAL_OUT_OF_REACH)) {
+    for (const { args } of transportCases(
+      setup.core,
+      name,
+      REAL_FIXTURES[name],
+      REAL_OUT_OF_REACH,
+      ['you'],
+    )) {
       const direct = await setup.core.call(name, args, CALLERS.you);
       const answer = await window.link.request('call', name, args);
       expect(answer.ok).toBe(true);
