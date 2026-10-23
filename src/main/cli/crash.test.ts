@@ -228,8 +228,10 @@ describe.skipIf(process.platform === 'win32')('corrallm serve, killed again and 
     let inFlight: string[] = [];
     /** Every message cut off so. */
     const cutOff = new Set<string>();
+    const slow = new Set<string>();
 
     for (let crash = 0; crash <= CRASHES; crash++) {
+      const seenBefore = await turns();
       const url = await start();
       // Unresolved as the canvas opens again, never sent again.
       await vi.waitFor(() => {
@@ -238,36 +240,69 @@ describe.skipIf(process.platform === 'win32')('corrallm serve, killed again and 
       });
       const clients = await Promise.all(TOKENS.map((token) => connect(url, token)));
       const stop = { now: false };
-      const traffic = clients.flatMap((client, p) => [
-        (async () => {
-          for (let n = 0; !stop.now && n < 5; n++) {
-            // Every third turn goes on until it is interrupted: in flight as the core is killed.
-            const slow = (crash + n) % 3 === 0 ? 'slow ' : '';
-            const to = AGENTS[(p + n) % AGENTS.length];
-            const sent = await call<{ id: string }>(client, 'message', {
-              canvas: CANVAS,
-              to,
-              body: `${slow}crash ${String(crash)} party ${String(p)} message ${String(n)}`,
-            });
-            if (sent) acknowledged.add(sent.id);
-            await sleep(30);
-          }
-        })(),
-        (async () => {
-          while (!stop.now) {
-            const got = await call<{ messages: Message[] }>(client, 'wait', { timeoutSeconds: 1 });
-            if (got === undefined) return;
-            waited[p]?.push(...got.messages.map(({ id }) => id));
-          }
-        })(),
-      ]);
-      // Killed at some point in the traffic, a different one each time.
-      await sleep(250 + ((crash * 337) % 900));
-      stop.now = true;
-      await kill();
-      // What they were asking the server that went is cut off.
-      for (const client of clients) await client.close().catch(() => undefined);
-      await Promise.all(traffic);
+      const release = Promise.withResolvers<undefined>();
+      const sendBatch = async (client: Client, p: number, from: number, to: number) => {
+        for (let n = from; !stop.now && n < to; n++) {
+          const waiting = (crash + n) % 3 === 0;
+          const sent = await call<{ id: string }>(client, 'message', {
+            canvas: CANVAS,
+            to: AGENTS[(p + n) % AGENTS.length],
+            body: `${waiting ? 'slow ' : ''}crash ${String(crash)} party ${String(p)} message ${String(n)}`,
+          });
+          if (sent) {
+            acknowledged.add(sent.id);
+            if (waiting) slow.add(sent.id);
+          } else if (from === 0) throw new Error('A message failed before the crash.');
+        }
+      };
+      const traffic = clients.map(async (client, p) => {
+        while (!stop.now) {
+          const got = await call<{ messages: Message[] }>(client, 'wait', { timeoutSeconds: 1 });
+          if (got === undefined) return;
+          waited[p]?.push(...got.messages.map(({ id }) => id));
+        }
+      });
+      try {
+        // Six acknowledged messages per round guarantee the original >30 coverage on a slow host.
+        await Promise.all(clients.map((client, p) => sendBatch(client, p, 0, 3)));
+        // Crash at two or three actual native receipts, with a slow turn still in flight. Old
+        // queued work can supply those receipts after a restart, before this round's work goes.
+        await vi.waitFor(
+          async () => {
+            const counted = await turns();
+            const added = [...counted].filter(([id, count]) => count > (seenBefore.get(id) ?? 0));
+            expect(added.length).toBeGreaterThanOrEqual(2 + (crash % 2));
+            const kept = onDisk();
+            expect(
+              [...kept].some(
+                ([id, message]) =>
+                  slow.has(id) &&
+                  counted.has(id) &&
+                  ['delivering', 'delivered'].includes(message.state),
+              ),
+            ).toBe(true);
+            expect(waited.flat().length).toBeGreaterThan(0);
+          },
+          { timeout: 30_000, interval: 25 },
+        );
+        // More writes race the SIGKILL, just as they did in the timed version.
+        traffic.push(
+          ...clients.map(async (client, p) => {
+            await release.promise;
+            await sendBatch(client, p, 3, 5);
+          }),
+        );
+        release.resolve(undefined);
+        await Promise.resolve();
+        stop.now = true;
+        await kill();
+      } finally {
+        stop.now = true;
+        release.resolve(undefined);
+        // What they were asking the server that went is cut off.
+        for (const client of clients) await client.close().catch(() => undefined);
+        await Promise.all(traffic);
+      }
 
       // Nothing acknowledged is lost; no read position goes back.
       const kept = onDisk();
@@ -287,12 +322,29 @@ describe.skipIf(process.platform === 'win32')('corrallm serve, killed again and 
 
     // One last run, to let what waited go: every message went to its agent at most once, and
     // what was cut off by a crash never went again.
+    const beforeLast = await turns();
+    const pending = new Set(
+      [...onDisk().values()].filter((message) => message.state === 'pending').map(({ to }) => to),
+    );
     await start();
     await vi.waitFor(() => {
       const kept = onDisk();
       for (const id of inFlight) expect(kept.get(id)?.state, id).toBe('unresolved');
     });
-    await sleep(1500);
+    await vi.waitFor(
+      async () => {
+        const kept = onDisk();
+        const counted = await turns();
+        const recipients = new Set(
+          [...counted].flatMap(([id, count]) => {
+            const message = kept.get(id);
+            return count > (beforeLast.get(id) ?? 0) && message ? [message.to] : [];
+          }),
+        );
+        for (const agent of pending) expect(recipients.has(agent), agent).toBe(true);
+      },
+      { timeout: 30_000, interval: 25 },
+    );
     await kill();
     const counted = await turns();
     expect(acknowledged.size).toBeGreaterThan(30);
