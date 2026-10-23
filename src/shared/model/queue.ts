@@ -54,6 +54,8 @@ export interface SubmittedMessage {
   /** The live reply; omitted from persisted submission records. */
   reply?: string;
   task?: { agent: string; item: string };
+  /** The cancelled manual submission explicitly resent by the user. */
+  retryOf?: string;
   /** The previous process stopped before this submission had a definitive result. */
   unresolved?: boolean;
 }

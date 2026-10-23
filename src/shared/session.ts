@@ -477,13 +477,15 @@ export type SessionEvent =
    */
   | { type: 'history'; events: SessionEvent[] }
   | { type: 'user'; id: string; text: string }
-  /** Core-only user decision, before interruption: retry the owning run's cancelled attempt. */
+  /** Core-only user decision, before interruption: retry in the engine that owns the turn. */
   | {
       type: 'retry-task';
       cancel?: boolean;
       update?: boolean;
       until?: number;
       tasks?: TaskMessage[];
+      /** Window-owned manual submissions; the core must not compose another run for them. */
+      messages?: UserMessage[];
     }
   | { type: 'status'; status: 'working' | 'waiting' }
   | { type: 'text'; id: string; text: string; parent?: string }
