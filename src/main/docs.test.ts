@@ -30,6 +30,36 @@ describe('repository instructions and architecture docs', () => {
     expect(readFileSync(path.join(ROOT, 'CLAUDE.md'), 'utf8')).toBe('@AGENTS.md\n');
   });
 
+  it('documents the kept-file CLI exception without giving command lines TrustedPath authority', () => {
+    const agents = readFileSync(path.join(ROOT, 'AGENTS.md'), 'utf8');
+    expect(agents.includes('No command line mints a `TrustedPath`')).toBe(true);
+    expect(/`--canvas`[^\n]*canvas memory/.test(agents)).toBe(true);
+    expect(agents.includes('No CLI/renderer argument supplies a project/file path')).toBe(false);
+  });
+
+  it('keeps model and effort argv guards in the canonical security rules', () => {
+    const agents = readFileSync(path.join(ROOT, 'AGENTS.md'), 'utf8');
+    expect(agents.includes('`MODEL_PATTERN`')).toBe(true);
+    expect(agents.includes('`EFFORT_PATTERN`')).toBe(true);
+    expect(/model and effort[^\n]*never[^\n]*leading dash/i.test(agents)).toBe(true);
+  });
+
+  it.each(['claude-code', 'codex'])(
+    'documents %s native ids as adapter checks after R42a',
+    (adapter) => {
+      const doc = readFileSync(path.join(ROOT, `docs/architecture/${adapter}.md`), 'utf8');
+      expect(doc.includes('Session ids are UUIDs (`sessions/id.ts`)')).toBe(false);
+      expect(doc.includes('[R42a](sessions.md#connected-sessions)')).toBe(true);
+      expect(doc.includes('`isConversationId`')).toBe(true);
+    },
+  );
+
+  it('links the slash-permission refusal to the adapter’s local safety section', () => {
+    const doc = readFileSync(path.join(ROOT, 'docs/architecture/codex.md'), 'utf8');
+    const commands = doc.split('\n').find((line) => line.includes('Slash commands are'));
+    expect(commands?.includes('[Native IDs and safety](#native-ids-and-safety)')).toBe(true);
+  });
+
   it('keeps every concrete backticked repository path valid', () => {
     const missing = [
       path.join(ROOT, 'AGENTS.md'),

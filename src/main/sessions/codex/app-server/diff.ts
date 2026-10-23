@@ -1,6 +1,6 @@
 import { execFile } from '../../process';
 
-import { SAFE_GIT_OPTIONS } from '../../../git';
+import { SAFE_GIT_OPTIONS, safeGitDiffArgs } from '../../../git';
 
 /*
  * /diff, as Codex's TUI does it (codex-rs/tui/src/get_git_diff.rs, rust-v0.160.1): git's diff of
@@ -26,14 +26,7 @@ const GIT_MS = 15_000;
 const MAX_BUFFER = 32 * 1024 * 1024;
 /** At most this many untracked files are shown. */
 const MAX_UNTRACKED = 100;
-const DIFF = [
-  'diff',
-  '--no-color',
-  '--no-textconv',
-  '--no-ext-diff',
-  '--submodule=short',
-  '--ignore-submodules=dirty',
-];
+const DIFF_OPTIONS = ['--no-color', '--submodule=short', '--ignore-submodules=dirty'];
 
 /** Runs git with the agents' environment. */
 export function runGit(env: Readonly<Record<string, string>>): RunGit {
@@ -68,18 +61,8 @@ export async function gitDiff(
     ['config', '--null', '--name-only', '--get-regexp', '^filter\\..*\\.(clean|process)$'],
     cwd,
   );
-  const drivers = new Set(
-    filters.stdout.split('\0').flatMap((key) => /^(.*)\.(?:clean|process)$/.exec(key)?.[1] ?? []),
-  );
-  const off = [...drivers].flatMap((driver) => [
-    '-c',
-    `${driver}.clean=`,
-    '-c',
-    `${driver}.process=`,
-    '-c',
-    `${driver}.required=false`,
-  ]);
-  const tracked = (await git([...off, ...DIFF], cwd)).stdout;
+  const diff = [...safeGitDiffArgs('diff', filters.stdout.split('\0')), ...DIFF_OPTIONS];
+  const tracked = (await git(diff, cwd)).stdout;
   const untracked = (await git(['ls-files', '--others', '--exclude-standard', '-z'], cwd)).stdout
     .split('\0')
     .filter((file) => file !== '')
@@ -87,7 +70,7 @@ export async function gitDiff(
   const nothing = platform === 'win32' ? 'NUL' : '/dev/null';
   const added = await Promise.all(
     untracked.map(
-      async (file) => (await git([...off, ...DIFF, '--no-index', '--', nothing, file], cwd)).stdout,
+      async (file) => (await git([...diff, '--no-index', '--', nothing, file], cwd)).stdout,
     ),
   );
   return splitDiff([tracked, ...added].join('\n'));
