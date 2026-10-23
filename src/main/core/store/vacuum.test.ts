@@ -16,11 +16,17 @@ import { openTestStore } from './test-store';
 let profile: string;
 let store: Store;
 let idle: (() => void) | undefined;
+let beforeFlush: () => Promise<void>;
 
 beforeEach(async () => {
+  beforeFlush = () => Promise.resolve();
   profile = await mkdtemp(path.join(tmpdir(), 'corrallm-vacuum-'));
   store = await openTestStore(profile, {
     ...SYSTEM_DEPS,
+    flush: async (fd) => {
+      await beforeFlush();
+      await SYSTEM_DEPS.flush(fd);
+    },
     later: (run) => {
       idle = run;
       return () => {
@@ -120,33 +126,47 @@ it('skips vacuum when a write queued during its checkpoint', async () => {
   expect(free()).toBe(freed);
 });
 
-it('lets a write arriving during one vacuum pass commit promptly, before another pass', async () => {
+it('commits a write arriving during one vacuum pass before another pass', async () => {
   await prunedMessages();
   const original: (this: Checkpointer) => Promise<number> = Reflect.get(
     Checkpointer.prototype,
     'vacuum',
   );
   const passes = vi.spyOn(Checkpointer.prototype, 'vacuum');
+  const flushing = Promise.withResolvers<undefined>();
+  const release = Promise.withResolvers<undefined>();
+  beforeFlush = () => {
+    flushing.resolve(undefined);
+    return release.promise;
+  };
+  const order: string[] = [];
   let written: Promise<void> | undefined;
-  let delay = 0;
-  passes.mockImplementation(function (this: Checkpointer) {
+  passes.mockImplementation(async function (this: Checkpointer) {
+    order.push('vacuum');
     const pass = original.call(this);
-    const began = performance.now();
     written = store
       .write(() => {
+        order.push('write');
         store.exec('UPDATE canvas SET used_at = used_at + 1');
       })
       .then(() => {
-        delay = performance.now() - began;
+        order.push('committed');
       });
-    return pass;
+    const remaining = await pass;
+    order.push('vacuum finished');
+    return remaining;
   });
-  idle?.();
-  await vi.waitFor(() => {
-    expect(written).toBeDefined();
-  });
+  try {
+    idle?.();
+    await flushing.promise;
+    // A slow drive may hold the flush arbitrarily long: no second vacuum may get ahead of it,
+    // and the write must not be acknowledged until its flush completes.
+    expect(order).toEqual(['vacuum', 'vacuum finished', 'write']);
+    expect(passes).toHaveBeenCalledTimes(1);
+  } finally {
+    release.resolve(undefined);
+  }
   await written;
   expect(passes).toHaveBeenCalledTimes(1);
-  expect(delay).toBeLessThan(250);
-  console.info(`write queued during vacuum: ${delay.toFixed(1)} ms`);
+  expect(order).toEqual(['vacuum', 'vacuum finished', 'write', 'committed']);
 });
