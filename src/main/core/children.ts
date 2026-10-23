@@ -1,4 +1,3 @@
-import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import {
   closeSync,
@@ -14,17 +13,19 @@ import path from 'node:path';
 
 import { withProcesses } from '../sessions/process';
 import type { ProcessOwner } from '../sessions/process';
+import { inspectProcess, isProcessStart, sameStart } from './process-identity';
+import type { ProcessStart } from './process-identity';
 
 interface ChildRecord {
   pid: number;
-  /** The process's actual start time, as ps reports it, rather than when it was noticed. */
-  started: number;
+  /** The process's OS start identity, rather than when it was noticed. */
+  started: ProcessStart;
 }
 
 /** The OS seam: tests never need permission to inspect or signal another process. */
 export interface ChildSystem {
   platform: NodeJS.Platform;
-  inspect: (pid: number) => { started: number; group: number } | undefined;
+  inspect: (pid: number) => { started: ProcessStart; group: number } | undefined;
   alive: (group: number) => boolean;
   signal: (group: number, signal: NodeJS.Signals | number) => void;
   wait: (ms: number) => Promise<void>;
@@ -68,6 +69,8 @@ export class Children implements ProcessOwner {
   readonly #kills = new Map<number, (signal: NodeJS.Signals | number) => void>();
   /** Once the core closes, it starts no CLI: none may outlive it. */
   #closed = false;
+  /** Never replace a registry whose unread records have not been preserved. */
+  #registryBlocked = false;
 
   constructor(profile: string, system: ChildSystem = SYSTEM) {
     this.#file = path.join(profile, 'sessions', 'pids.json');
@@ -76,6 +79,9 @@ export class Children implements ProcessOwner {
 
   beforeSpawn(): void {
     if (this.#closed) throw new Error('corrallm’s core is closing: it starts no more CLIs.');
+    if (this.#registryBlocked) {
+      throw new Error(`The unread CLI process record ${this.#file} could not be preserved.`);
+    }
   }
 
   run<T>(work: () => T): T {
@@ -90,6 +96,18 @@ export class Children implements ProcessOwner {
     } catch (error) {
       if (!isCode(error, 'ENOENT')) {
         console.warn(`Could not read CLI process record ${this.#file}:`, error);
+        this.#registryBlocked = true;
+        const rejected = path.join(path.dirname(this.#file), `pids.rejected-${randomUUID()}.json`);
+        try {
+          renameSync(this.#file, rejected);
+          this.#syncDirectory();
+          this.#registryBlocked = false;
+        } catch (failure) {
+          console.warn(
+            `Could not preserve CLI process record ${this.#file}; refusing new CLIs:`,
+            failure,
+          );
+        }
         return;
       }
       stale = [];
@@ -295,6 +313,9 @@ export class Children implements ProcessOwner {
   }
 
   #write(): void {
+    if (this.#registryBlocked) {
+      throw new Error(`The unread CLI process record ${this.#file} could not be preserved.`);
+    }
     const directory = path.dirname(this.#file);
     mkdirSync(directory, { recursive: true, mode: 0o700 });
     const partial = `${this.#file}.${randomUUID()}.partial`;
@@ -310,47 +331,27 @@ export class Children implements ProcessOwner {
         closeSync(handle);
       }
       renameSync(partial, this.#file);
-      if (this.#system.platform !== 'win32') {
-        const folder = openSync(directory, 'r');
-        try {
-          fsyncSync(folder);
-        } finally {
-          closeSync(folder);
-        }
-      }
+      this.#syncDirectory();
     } finally {
       rmSync(partial, { force: true });
+    }
+  }
+
+  #syncDirectory(): void {
+    if (this.#system.platform === 'win32') return;
+    const folder = openSync(path.dirname(this.#file), 'r');
+    try {
+      fsyncSync(folder);
+    } finally {
+      closeSync(folder);
     }
   }
 }
 
 function same(found: ReturnType<ChildSystem['inspect']>, record: ChildRecord): boolean {
-  return found?.started === record.started && found.group === record.pid;
-}
-
-/** ps supplies the same start-time identity as core.lock, plus the private group to verify. */
-function inspectProcess(pid: number): ReturnType<ChildSystem['inspect']> {
-  let text: string;
-  try {
-    text = execFileSync('ps', ['-o', 'lstart=', '-o', 'pgid=', '-p', String(pid)], {
-      encoding: 'utf8',
-      env: { ...process.env, LC_ALL: 'C' },
-      stdio: ['ignore', 'pipe', 'pipe'],
-    }).trim();
-  } catch (error) {
-    // A missing pid is ps's empty exit 1. A denied inspection never authorizes a signal.
-    const failed = error as { status?: number; stdout?: string; stderr?: string };
-    if (failed.status === 1 && failed.stdout?.trim() === '' && failed.stderr?.trim() === '')
-      return undefined;
-    throw error;
-  }
-  const fields = /^(.+?)\s+(\d+)$/.exec(text);
-  const started = Date.parse(fields?.[1] ?? '');
-  const group = Number(fields?.[2]);
-  if (!Number.isFinite(started) || !Number.isSafeInteger(group) || group <= 0) {
-    throw new Error(`Could not identify process ${String(pid)}.`);
-  }
-  return { started, group };
+  return (
+    found !== undefined && sameStart(found.started, record.started) && found.group === record.pid
+  );
 }
 
 function records(text: string): ChildRecord[] {
@@ -365,17 +366,20 @@ function records(text: string): ChildRecord[] {
   ) {
     throw new Error('The CLI process record could not be read.');
   }
-  return (file.children as unknown[]).flatMap((child) => {
-    if (typeof child !== 'object' || child === null) return [];
+  return (file.children as unknown[]).map((child) => {
+    if (typeof child !== 'object' || child === null) {
+      throw new Error('The CLI process record has an invalid identity.');
+    }
     const { pid, started } = child as Record<string, unknown>;
-    return typeof pid === 'number' &&
-      Number.isSafeInteger(pid) &&
-      pid > 1 &&
-      typeof started === 'number' &&
-      Number.isFinite(started) &&
-      started >= 0
-      ? [{ pid, started }]
-      : [];
+    if (
+      typeof pid !== 'number' ||
+      !Number.isSafeInteger(pid) ||
+      pid <= 1 ||
+      !isProcessStart(started)
+    ) {
+      throw new Error('The CLI process record has an invalid identity.');
+    }
+    return { pid, started };
   });
 }
 

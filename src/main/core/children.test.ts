@@ -1,5 +1,5 @@
 import { EventEmitter } from 'node:events';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -55,6 +55,23 @@ async function stale(pid = 42, started = 1000) {
 }
 
 describe('the core’s CLI children', () => {
+  it.each([
+    '{broken',
+    '{"version":2,"children":[{"pid":99,"started":500}]}',
+    '{"version":1,"children":[{"pid":99,"started":500},{"pid":42,"started":"unknown"}]}',
+  ])('preserves an unread registry before the first new spawn: %s', async (text) => {
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    await writeFile(file, text);
+    await children.recover();
+    children.node(new Child(42));
+    const rejected = (await readdir(path.dirname(file))).filter((name) =>
+      /^pids\.rejected-[\da-f-]+\.json$/.test(name),
+    );
+    expect(rejected).toHaveLength(1);
+    expect(await readFile(path.join(path.dirname(file), rejected[0] ?? ''), 'utf8')).toBe(text);
+    expect(await remembered()).toEqual({ version: 1, children: [{ pid: 42, started: 1000 }] });
+  });
+
   it('ends a timed-out helper’s whole group, retaining its identity until descendants have stopped', async () => {
     const child = new Child(42);
     children.node(child);
@@ -432,7 +449,11 @@ describe('the core’s CLI children', () => {
     await writeFile(file, '{broken');
     await expect(children.recover()).resolves.toBeUndefined();
     expect(warning).toHaveBeenCalledWith(expect.stringContaining(file), expect.any(Error));
-    expect(await readFile(file, 'utf8')).toBe('{broken');
+    const rejected = (await readdir(path.dirname(file))).find((name) =>
+      name.startsWith('pids.rejected-'),
+    );
+    expect(rejected).toBeDefined();
+    expect(await readFile(path.join(path.dirname(file), rejected ?? ''), 'utf8')).toBe('{broken');
   });
 
   it('warns and allows startup when the process file cannot be read', async () => {

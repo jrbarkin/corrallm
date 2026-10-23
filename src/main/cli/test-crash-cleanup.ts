@@ -3,6 +3,7 @@ import path from 'node:path';
 
 import { Children } from '../core/children';
 import type { ChildSystem } from '../core/children';
+import { isProcessStart } from '../core/process-identity';
 import type { TestChildren } from './test-children';
 
 /** Crash-test teardown must finish the parent and its recorded CLI groups before removal. */
@@ -57,9 +58,7 @@ async function recorded(file: string): Promise<number[]> {
       !Number.isSafeInteger(row.pid) ||
       row.pid <= 1 ||
       !('started' in row) ||
-      typeof row.started !== 'number' ||
-      !Number.isFinite(row.started) ||
-      row.started < 0
+      !isProcessStart(row.started)
     ) {
       throw new Error('The crash-test CLI registry has an invalid identity; the folder was kept.');
     }
