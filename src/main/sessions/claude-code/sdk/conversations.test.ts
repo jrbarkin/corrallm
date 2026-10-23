@@ -38,6 +38,35 @@ function conversations({
 }
 
 describe('Conversations', () => {
+  it('keeps valid conversations around malformed ids and warns once', async () => {
+    const id = '0b3a7d52-6a0c-4f39-9c4e-2f8f0c1d9e12';
+    const other = '0b3a7d52-6a0c-4f39-9c4e-2f8f0c1d9e13';
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const { kept, read, fork } = conversations({
+      listed: [
+        { sessionId: id, summary: 'Own', lastModified: 1000 },
+        { sessionId: '--resume', summary: 'Unsafe', lastModified: 2000 },
+        { sessionId: 'future:session', summary: 'Unknown shape', lastModified: 3000 },
+        { sessionId: other, summary: 'Recent', lastModified: 4000 },
+      ],
+    });
+    try {
+      await expect(kept.list('/work/shop')).resolves.toEqual([
+        { id: other, title: 'Recent', modified: 4000 },
+        { id, title: 'Own', modified: 1000 },
+      ]);
+      expect(warning).toHaveBeenCalledOnce();
+      expect(warning.mock.calls[0]?.[0]).toContain('2');
+      for (const bad of ['--resume', 'future:session']) {
+        await expect(kept.before('/work/shop', bad, 'u1')).rejects.toThrow(/conversation id/);
+        await expect(kept.fork('/work/shop', bad, 'u1')).rejects.toThrow(/conversation id/);
+      }
+      expect(read).not.toHaveBeenCalled();
+      expect(fork).not.toHaveBeenCalled();
+    } finally {
+      warning.mockRestore();
+    }
+  });
   it('refuses an option before reading or forking a conversation file', async () => {
     const { kept, read, fork } = conversations();
     await expect(kept.before('/work/shop', '--resume', 'u1')).rejects.toThrow(/conversation id/);

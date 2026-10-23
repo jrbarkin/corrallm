@@ -42,6 +42,10 @@ The SDK fake also accepts `FAKE_CLAUDE_TURN_GATES`, a test-only JSON map from ex
 
 - Session ids are UUIDs (`sessions/id.ts`), checked in hook signals, resume IPC arguments, remembered sessions loaded from disk, and both Terminal CLIs' argv builders. Claude resume uses `--resume=<id>`; an id must never be read as a CLI flag.
 
+The SDK's conversation list skips entries whose sessionId fails the platform minimum or UUID
+shape, keeping the valid entries sorted by lastModified. One count-only warning per listing says
+how many were skipped. Explicit rewind reads, forks and fork results retain their strict id checks.
+
 corrallm only reads Claude Code's settings files (the user's, the project's and the organization's managed ones) to tell whether they turn its hooks off (`hooks-off.ts`), and never overrides them (its `--settings` never set `disableAllHooks` or the hook allowlists).
 
 The [SessionStart hook](https://code.claude.com/docs/en/hooks#sessionstart) reports `permission_mode` without needing a prompt. It uses a quiet command hook (HTTP hooks cannot handle SessionStart) to post JSON stdin with the session token from its private 0600 header file; no event text enters a command line, no response is printed or used as a decision, and curl gives up after five seconds. Claude Code runs command hooks in Bash (Git Bash on Windows); the post uses `/bin/sh` and the same shared command-post helper as Codex’s POSIX hooks. All other events keep their HTTP hooks. The startup command is omitted whenever the existing hooks-off reader finds restrictions, including the HTTP URL allowlist, so the command transport does not bypass them. Native folder trust still precedes hooks. The fake CLI can emulate this startup report separately from its older recorded prompt/turn behavior.

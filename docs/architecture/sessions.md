@@ -27,6 +27,13 @@ bound to its canvas, agent, adapter and project folder. Claude Code lists and fo
 conversations through the Agent SDK; Codex lists its project's threads through a private App
 Server's `thread/list`, without starting a thread. A connection without rewind refuses it.
 
+Malformed native conversation ids in list results are skipped, preserving the valid conversations,
+their order and the agent's current marker. The manager and each adapter's reader warn once per
+listing with the number skipped, never the invalid ids themselves. Only the valid ids enter the
+manager's resume allowlist; an explicit resume or rewind still rejects an invalid id before
+closing a session, reading a transcript or forking it. A provider's actual listing failure still
+rejects the request.
+
 Native conversation ids meet R42a at every boundary: 1–128 ASCII letters, digits, `.`, `_`,
 `:`, or `-`, with no leading `-`, then the adapter's `isConversationId` (UUIDs for both shipped
 adapters). IPC checks the minimum; the manager checks the agent's adapter, including list and

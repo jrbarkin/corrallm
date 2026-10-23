@@ -9,16 +9,34 @@ import { codexConversations } from './conversations';
 import type { AppServer } from './rpc';
 import { startAppServer } from './rpc';
 
-it('refuses an unsafe id from the project’s thread list', async () => {
-  const request = vi
-    .fn<AppServer['request']>()
-    .mockResolvedValue({ data: [{ id: '--resume', cwd: '/work/project', updatedAt: 1 }] });
+it('keeps valid threads around malformed ids in the project’s list and warns once', async () => {
+  const id = '01a1344c-68e9-7bf2-a777-b062d871bb26';
+  const other = '01a1344c-68e9-7bf2-a777-b062d871bb27';
+  const warning = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+  const request = vi.fn<AppServer['request']>().mockResolvedValue({
+    data: [
+      { id, cwd: '/work/project', updatedAt: 1 },
+      { id: '--resume', cwd: '/work/project', updatedAt: 2 },
+      { id: 'future:thread', cwd: '/work/project', updatedAt: 3 },
+      { id: other, cwd: '/work/project', updatedAt: 4 },
+      { id: 'elsewhere', cwd: '/elsewhere', updatedAt: 5 },
+    ],
+  });
   const close = vi.fn<AppServer['close']>().mockResolvedValue();
   const start = vi.fn().mockResolvedValue({ request, close });
-  await expect(
-    codexConversations({ codex: '/fake/codex', cwd: '/work/project', env: {} }, { start }),
-  ).rejects.toThrow(/conversation id/);
-  expect(close).toHaveBeenCalledOnce();
+  try {
+    await expect(
+      codexConversations({ codex: '/fake/codex', cwd: '/work/project', env: {} }, { start }),
+    ).resolves.toEqual([
+      { id: other, title: 'Untitled conversation', modified: 4000 },
+      { id, title: 'Untitled conversation', modified: 1000 },
+    ]);
+    expect(warning).toHaveBeenCalledOnce();
+    expect(warning.mock.calls[0]?.[0]).toContain('2');
+    expect(close).toHaveBeenCalledOnce();
+  } finally {
+    warning.mockRestore();
+  }
 });
 
 it('reads the fake Codex’s kept threads through its real App Server transport', async () => {

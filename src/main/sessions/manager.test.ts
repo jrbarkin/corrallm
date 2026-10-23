@@ -989,15 +989,42 @@ describe('SessionManager and kept conversations', () => {
       said.mockRestore();
     }
   });
-  it('refuses an invalid native id returned by a conversation provider', async () => {
-    const sessions = manager();
-    const canvas = shownCanvas();
-    listKept.mockResolvedValue([{ id: '--resume', title: 'Unsafe', modified: 1 }]);
-    await expect(sessions.listSessions(canvas, 'a')).rejects.toThrow(/conversation.*id/i);
-    await expect(sessions.resumeSession(canvas, 'a', '--resume')).rejects.toThrow(
-      /conversation.*id/i,
-    );
-  });
+  it.each(CATALOG.adapters.map(({ id }) => id))(
+    'lists valid %s conversations around malformed ids, but still refuses to resume a malformed id',
+    async (adapter) => {
+      const warning = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      const sessions = manager({}, { [adapter]: { list: listKept } });
+      const canvas = shownCanvas();
+      adapters.set('a', adapter);
+      await memory.update(canvas, () => ({
+        conversations: inProject({ [adapter]: { a: { id: KEPT_ONE } } }),
+      }));
+      listKept.mockResolvedValue([
+        { id: KEPT_TWO, title: 'Recent', modified: 2000 },
+        { id: 'future:thread', title: 'Unknown shape', modified: 1500 },
+        { id: '--resume', title: 'Unsafe', modified: 1200 },
+        { id: KEPT_ONE, title: 'Own', modified: 1000 },
+      ]);
+      try {
+        await expect(sessions.listSessions(canvas, 'a')).resolves.toEqual([
+          { id: KEPT_TWO, title: 'Recent', modified: 2000, current: false },
+          { id: KEPT_ONE, title: 'Own', modified: 1000, current: true },
+        ]);
+        expect(warning).toHaveBeenCalledOnce();
+        expect(warning.mock.calls[0]?.[0]).toContain('2');
+        for (const id of ['--resume', 'future:thread']) {
+          await expect(sessions.resumeSession(canvas, 'a', id)).rejects.toThrow(
+            /conversation.*id/i,
+          );
+        }
+        expect((await conversations(canvas))[adapter]?.a?.id).toBe(KEPT_ONE);
+        await sessions.resumeSession(canvas, 'a', KEPT_TWO);
+        expect((await conversations(canvas))[adapter]?.a?.id).toBe(KEPT_TWO);
+      } finally {
+        warning.mockRestore();
+      }
+    },
+  );
   it('lists and resumes a Codex agent’s own threads without reading or changing Claude’s ids', async () => {
     const codex = new FakeConnector({ adapter: 'codex' });
     const list = vi
