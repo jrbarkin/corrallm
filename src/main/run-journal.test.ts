@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { newCanvasId } from '../shared/canvas';
 import type { CanvasId } from '../shared/canvas';
+import { MessageStore, MessageTable } from './core/delivery/messages';
 import { MAX_RUN_BYTES } from '../shared/run';
 import type { RunCheckpoint } from '../shared/run';
 import { mintTrustedPath } from './core/host';
@@ -87,6 +88,62 @@ afterEach(async () => {
 });
 
 describe('RunJournal', () => {
+  it.each([
+    ['state', 'depth'],
+    ['state', 'nodes'],
+    ['messages', 'depth'],
+    ['messages', 'nodes'],
+  ] as const)(
+    'commits messages and a save error with the last good run when %s exceeds JSON %s',
+    async (field, limit) => {
+      const runs = journal();
+      const canvas = await runs.last();
+      const { token } = await runs.get(canvas);
+      await runs.save(canvas, token, checkpoint);
+      let deep: unknown = {};
+      for (let i = 0; i < 66; i++) deep = [deep];
+      const complex = {
+        ...checkpoint,
+        [field]: JSON.stringify(limit === 'depth' ? deep : Array<number>(200_001).fill(0)),
+      };
+      expect(Buffer.byteLength(JSON.stringify(complex))).toBeLessThan(MAX_RUN_BYTES);
+      const messages = new MessageStore(canvas, new MessageTable(store, memory), () => 456);
+      await messages.load();
+      messages.writeWith(() => {
+        const problem = runs.keep(canvas, token, complex);
+        return () => {
+          runs.kept(canvas, problem);
+        };
+      });
+      const sent = messages.add({
+        from: 'outside:orchestrator',
+        to: 'agent:worker',
+        kind: 'text',
+        body: 'Still record this',
+        state: 'pending',
+      });
+      try {
+        await expect(messages.durable()).resolves.toBeUndefined();
+        expect(reader.prepare('SELECT body FROM message WHERE id = ?').get(sent.id)).toEqual({
+          body: 'Still record this',
+        });
+        const saved = await runs.get(canvas);
+        expect(saved.checkpoint).toEqual(checkpoint);
+        expect(saved.saveError).toMatch(/complex/);
+      } finally {
+        messages.writeWith(undefined);
+        await messages.durable();
+      }
+      await reopen();
+      const next = journal();
+      const restored = await next.get(canvas);
+      expect(restored.checkpoint).toEqual(checkpoint);
+      expect(restored.saveError).toMatch(/complex/);
+      await next.save(canvas, (await next.get(canvas)).token, checkpoint);
+      expect(next.problem(canvas)).toBeUndefined();
+    },
+  );
+
   it('keeps the last good run and a durable explanation when the next run is oversized', async () => {
     const runs = journal();
     const canvas = await runs.last();
