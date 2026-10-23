@@ -21,7 +21,8 @@ step 'Download Electron' pnpm exec install-electron
 case "$mode" in
   ci)
     step 'Typecheck' pnpm typecheck
-    step 'Lint' pnpm lint
+    # Type-aware lint over the whole solution needs more than V8's default heap in an 8 GB container.
+    step 'Lint' env NODE_OPTIONS=--max-old-space-size=4096 pnpm lint
     step 'Check formatting' pnpm format:check
     step 'Unit tests' pnpm test
     # The ordinary global setup builds both production bundles; no E2E_SKIP_BUILD shortcut.
