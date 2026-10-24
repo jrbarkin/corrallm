@@ -157,15 +157,17 @@ function importSubmissions(
     }
     for (const record of records) {
       const id = ids.get(record.id) ?? randomUUID();
-      const display = displayOf(record);
       const there = represented.get(record.id);
       if (there !== undefined) {
         // Its own record stays as the core kept it; it only gains where its submission showed.
-        if (there.display === null && display !== undefined) {
-          redisplay.run(JSON.stringify(display), there.id);
+        const shown = displayOf(record);
+        if (there.display === null && shown !== undefined) {
+          redisplay.run(JSON.stringify(shown), there.id);
         }
         continue;
       }
+      const body = bodyOf(record.text);
+      const display = displayOf(record, body);
       const resendOf =
         record.retryOf === undefined
           ? undefined
@@ -175,7 +177,7 @@ function importSubmissions(
         canvas,
         to,
         record.retryOf === undefined ? 'manual' : 'resend',
-        record.text,
+        body,
         display === undefined ? null : JSON.stringify(display),
         resendOf ?? null,
         JSON.stringify(record.result ?? plainResult(record.status)),
@@ -191,14 +193,35 @@ function aliasOf(to: string, alias: unknown): string | undefined {
   return typeof alias === 'string' ? `${to}\u0000${alias}` : undefined;
 }
 
-/** Where a submission showed in its agent's queue, and how many images it carried. */
-function displayOf(record: Submission): Record<string, unknown> | undefined {
+/**
+ * Where a submission showed in its agent's queue, how many images it carried, and its whole text
+ * where `body`, its message's, holds it cut.
+ */
+function displayOf(record: Submission, body?: string): Record<string, unknown> | undefined {
   const display = {
     ...(record.after === undefined ? {} : { after: record.after }),
     ...(record.task === undefined ? {} : { task: record.task }),
+    ...(body === undefined || body === record.text ? {} : { text: record.text }),
     ...(record.images === undefined || record.images === 0 ? {} : { images: record.images }),
   };
   return Object.keys(display).length === 0 ? undefined : display;
+}
+
+/*
+ * A message's body, frozen as schema 4 holds it: at most MAX_MESSAGE_BYTES (16 KiB) of UTF-8. A
+ * submission held up to MAX_MESSAGE_LENGTH characters: a longer one's body is cut on a character's
+ * boundary, marked so, its whole text in its display.
+ */
+const MAX_BODY_BYTES = 16 * 1024;
+const CUT = '\n\n[corrallm: cut here; the whole message is in its transcript]';
+
+function bodyOf(text: string): string {
+  const bytes = new TextEncoder().encode(text);
+  if (bytes.length <= MAX_BODY_BYTES) return text;
+  const room = MAX_BODY_BYTES - new TextEncoder().encode(CUT).length;
+  // The decoder ends a character cut in two with U+FFFD, dropped here.
+  const kept = new TextDecoder('utf-8', { fatal: false }).decode(bytes.slice(0, room));
+  return `${kept.replace(/\uFFFD$/u, '')}${CUT}`;
 }
 
 /** A result for a record that kept none: its status, with that status's plainest reason. */
