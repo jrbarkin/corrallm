@@ -41,6 +41,25 @@ describe.skipIf(process.platform === 'win32')('loginShellEnvironment', () => {
     expect(env.HOME).toBe(dir);
   });
 
+  it('preserves supplied login and fake configuration through the POSIX login shell', async () => {
+    const supplied = {
+      SHELL: '/bin/sh',
+      HOME: dir,
+      PATH: `${path.dirname(process.execPath)}:/usr/bin:/bin`,
+      ANTHROPIC_API_KEY: 'fake-api-key',
+      CLAUDE_CONFIG_DIR: dir,
+      FAKE_CODEX_DEVELOPER_INSTRUCTIONS: 'Native project guidance',
+    };
+    const read = await loginShellEnvironment({ env: supplied, platform: 'linux' });
+    for (const name of [
+      'ANTHROPIC_API_KEY',
+      'CLAUDE_CONFIG_DIR',
+      'FAKE_CODEX_DEVELOPER_INSTRUCTIONS',
+    ]) {
+      expect(read[name], name).toBe(supplied[name as keyof typeof supplied]);
+    }
+  });
+
   it('falls back to the app’s own environment if the shell fails or takes too long', async () => {
     const base = { SHELL: await fakeShell('exit 3'), PATH: '/usr/bin:/bin' };
     expect(await loginShellEnvironment({ env: base })).toEqual(base);

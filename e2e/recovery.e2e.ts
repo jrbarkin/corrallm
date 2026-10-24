@@ -30,6 +30,7 @@ test.beforeEach(async () => {
   dir = await mkdtemp(path.join(tmpdir(), 'corrallm-recovery-'));
   log = path.join(dir, 'prompts.jsonl');
   ({ app, close: closeApp } = await launchApp({
+    diagnoseFailure: () => test.info().status !== test.info().expectedStatus,
     env: {
       CORRALLM_AGENT_PATHS: JSON.stringify({ 'claude-code': FAKE_CLAUDE }),
       ANTHROPIC_API_KEY: 'sk-ant-fake',
