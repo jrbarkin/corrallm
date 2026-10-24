@@ -67,14 +67,31 @@ it.each([
     const calls = await commands();
     expect(calls[0]).toEqual(expect.arrayContaining(['build', '--platform', platform]));
     const listed = (await exec('tar', ['-tf', context])).stdout.trim().split('\n');
-    expect(listed.sort()).toEqual(['linux-build.Dockerfile', 'linux-node-path.sh']);
-    expect(calls[0]).toEqual(expect.arrayContaining(['--file', 'linux-build.Dockerfile']));
+    expect(listed.sort()).toEqual(['Dockerfile', 'linux-node-path.sh']);
+    expect(calls[0]?.at(-1)).toBe('-');
     const run = calls.find((args) => args[0] === 'run');
     expect(run).toEqual(expect.arrayContaining(['--platform', platform, 'ci', arch]));
     expect(run?.join(' ')).not.toContain(`${root}:`);
     expect(run?.join(' ')).not.toContain('--no-sandbox');
   },
 );
+
+it('names exactly one Dockerfile source for an archived image context', async () => {
+  const { env, commands, context } = await fixture();
+  await exec('bash', ['scripts/ci-linux.sh'], { cwd: root, env });
+  const build = (await commands()).find((args) => args[0] === 'build');
+  const named = (build ?? []).filter(
+    (arg) => arg === '-f' || arg === '--file' || arg.startsWith('--file=') || /^-f.+/.test(arg),
+  );
+  expect(named).toEqual([]);
+  expect(build?.at(-1)).toBe('-');
+  const files = (await exec('tar', ['-tf', context])).stdout.trim().split('\n');
+  expect(files.sort()).toEqual(['Dockerfile', 'linux-node-path.sh']);
+  const contents = (await exec('tar', ['-xOf', context, 'Dockerfile'])).stdout;
+  expect(contents).toBe(
+    await readFile(path.join(root, 'scripts/lib/linux-build.Dockerfile'), 'utf8'),
+  );
+});
 
 it('refuses an unknown architecture before doing anything in Docker', async () => {
   const { env } = await fixture();

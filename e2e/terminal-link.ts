@@ -1,3 +1,4 @@
+import { platform } from 'node:os';
 import type { Locator, Page } from '@playwright/test';
 
 /** Click a link only after xterm has found it. Discovery is asynchronous, notably with software
@@ -21,11 +22,15 @@ export async function clickTerminalLink(
   const at = cell(col);
   await page.mouse.move(away.x, away.y);
   await page.mouse.move(at.x, at.y, { steps: 2 });
-  await view.locator('.xterm.xterm-cursor-pointer').waitFor({ state: 'visible', timeout: 5000 });
-  await page.keyboard.down('ControlOrMeta');
+  // xterm 6's Linkifier decorates screenElement, not the outer .xterm element (WebGL too).
+  await view
+    .locator('.xterm-screen.xterm-cursor-pointer')
+    .waitFor({ state: 'visible', timeout: 5000 });
+  const modifier = platform() === 'darwin' ? 'Meta' : 'Control';
+  await page.keyboard.down(modifier);
   try {
     await page.mouse.click(at.x, at.y);
   } finally {
-    await page.keyboard.up('ControlOrMeta');
+    await page.keyboard.up(modifier);
   }
 }
