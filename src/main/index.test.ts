@@ -1,6 +1,7 @@
 import { EventEmitter } from 'node:events';
 
 import type { WebContents } from 'electron';
+import type { AppApi } from '../shared/ipc';
 import type { RunShutdown } from './run-shutdown';
 import { AppUpdates } from './updates';
 import type { UpdateEvents } from './updates';
@@ -41,6 +42,15 @@ const {
   installGuards: vi.fn(),
 }));
 
+const { rendererOn, exposeApi, rendererChannel } = vi.hoisted(() => ({
+  rendererOn: vi.fn<(name: string, receive: (event: unknown, request: string) => void) => void>(),
+  exposeApi: vi.fn<(name: string, api: AppApi) => void>(),
+  rendererChannel: vi.fn<(name: string, args: unknown[]) => Promise<null>>(),
+}));
+vi.mock('../preload/core', () => ({
+  connectCore: () => ({ channel: rendererChannel }),
+}));
+
 // The core and windows are faked: boot and closing never start sessions or write user data.
 vi.mock('electron', () => ({
   app,
@@ -50,6 +60,9 @@ vi.mock('electron', () => ({
   session: { defaultSession: {} },
   shell: {},
   ipcMain: { handle: vi.fn() },
+  ipcRenderer: { on: rendererOn, removeListener: vi.fn() },
+  contextBridge: { exposeInMainWorld: exposeApi },
+  webUtils: {},
 }));
 vi.mock('electron-squirrel-startup', () => ({ default: false }));
 vi.mock('./app-protocol', () => ({
@@ -395,6 +408,70 @@ describe('quit races', () => {
     if (!callback) throw new Error('No quit handler');
     return callback;
   }
+
+  it('quits cleanly when app.quit arrives after window.get but before the renderer owns its run', async () => {
+    app.whenReady.mockResolvedValueOnce();
+    vi.stubEnv('CORRALLM_HIDE_WINDOW', '1');
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const window = new EventEmitter();
+    const contents = {
+      id: 7,
+      isDestroyed: () => false,
+      isCrashed: () => false,
+      send: vi.fn((name: string, request: string) => {
+        rendererOn.mock.calls.find(([event]) => event === name)?.[1]({}, request);
+      }),
+    };
+    Object.assign(window, { webContents: contents, close: vi.fn() });
+    getAllWindows.mockReturnValue([window]);
+    const loading = Promise.withResolvers<undefined>();
+    const closed = Promise.withResolvers<{ ok: true; value: null }>();
+    createWindow.mockReturnValueOnce(loading.promise);
+    request.mockImplementation((name) =>
+      name === 'close'
+        ? closed.promise
+        : Promise.resolve({ ok: true, value: name === 'shown' ? [7] : null }),
+    );
+    await import('../preload/index');
+    await import('./index');
+    await vi.waitFor(() => {
+      expect(createWindow).toHaveBeenCalledOnce();
+    });
+    vi.useFakeTimers();
+    // Playwright ElectronApplication.close evaluates app.quit(), without waiting for React.
+    beforeQuit()({ preventDefault: vi.fn() });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(contents.send).toHaveBeenCalledOnce();
+    // React mounts the editor only after window.get has returned. Its run owner registers
+    // here; the shutdown request must not have disappeared in that gap.
+    const api = exposeApi.mock.calls[0]?.[1];
+    if (!api) throw new Error('The preload did not expose its API.');
+    rendererChannel.mockImplementation((name, args) => {
+      expect(name).toBe('run:ready');
+      makeHost.mock.calls[0]?.[0].ready(
+        contents as unknown as WebContents,
+        args[0] as string,
+        null,
+      );
+      return Promise.resolve(null);
+    });
+    const saving = Promise.withResolvers<undefined>();
+    api.onRunStopping((id) => {
+      void saving.promise.then(() => api.runReady(id, null));
+    });
+    await vi.advanceTimersByTimeAsync(100);
+    expect(request).not.toHaveBeenCalledWith('flush');
+    saving.resolve(undefined);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(app.quit).not.toHaveBeenCalled();
+    closed.resolve({ ok: true, value: null });
+    loading.resolve(undefined);
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(app.exit).not.toHaveBeenCalled();
+    expect(request).toHaveBeenCalledWith('close');
+    expect(app.quit).toHaveBeenCalledOnce();
+    expect(console.error).not.toHaveBeenCalled();
+  });
 
   it('blocks a repeated before-quit until the approved core close has completed', async () => {
     app.whenReady.mockResolvedValueOnce();

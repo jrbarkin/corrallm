@@ -28,4 +28,6 @@ persistence.ts saves the engine's checkpoint to the core and restores it (run:sa
 
 The update dialog's Restart to update uses this same quit path, joining a save already in progress; only its approved completion calls Squirrel's quitAndInstall. Keep corrallm open clears the restart intent, including when the failure came from the core's flush. Later leaves the downloaded update staged for a normal quit/start. Updates never restart the app on their own; B14's run-aware quit question will apply to this path too. See [App updates](updates.md).
 
+An early quit still saves: `window.get` can mark a canvas shown before React mounts the editor that owns its run. The preload listens for `run:stopping` immediately and retains that request until the run owner subscribes, including across an effect cleanup/remount. Main waits for its acknowledgement and then the complete core close as usual; an owner that never answers still fails the save timeout rather than silently dropping work.
+
 - TODO(V2): full assistant transcripts and terminal-screen snapshots. The native CLI owns conversation history today; this checkpoint preserves queue state and result evidence, not a full conversation copy.
