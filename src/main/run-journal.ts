@@ -4,14 +4,13 @@ import path from 'node:path';
 
 import { isCanvasId, newCanvasId } from '../shared/canvas';
 import type { CanvasId } from '../shared/canvas';
-import { decodeSubmissions } from '../shared/engine/delivery/submission-state';
 import { MAX_CANVAS_BYTES } from '../shared/ipc';
 import type { PartyId } from '../shared/model/messages';
 import type { NeedsItem } from '../shared/model/needs';
 import { MAX_RUN_BYTES, parseRunCheckpoint } from '../shared/run';
 import type { RunCheckpoint, RunContext } from '../shared/run';
 import type { MessageStore } from './core/delivery/messages';
-import { keepSubmissions, submissionsOf } from './core/delivery/submissions';
+import { keepSubmissions, recordsIn, submissionsOf } from './core/delivery/submissions';
 import { mintTrustedPath } from './core/host';
 import type { TrustedPath } from './core/host';
 import type { Database } from './core/store/store';
@@ -221,9 +220,9 @@ export class RunJournal {
   /**
    * Within a write: journals a canvas's run (null: none), as `save` does, with whatever else the
    * write holds, its submissions your messages in `messages`, the canvas's store, whose changes
-   * the write must hold too. A run beyond the size or complexity bound keeps its refusal beside
-   * the last good checkpoint, and none of its submissions; other invalid data, SQL failures and
-   * a wrong token still throw.
+   * the write must hold too (a record no engine restores left out). A run beyond the size or
+   * complexity bound keeps its refusal beside the last good checkpoint, and none of its
+   * submissions; other invalid data, SQL failures and a wrong token still throw.
    */
   keep(
     canvas: CanvasId,
@@ -252,8 +251,8 @@ export class RunJournal {
       throw error;
     }
     const { state, updatedAt } = parsed;
-    // What a submission record must be, read before anything is written.
-    const submissions = decodeSubmissions(parsed.messages);
+    // Its submission records, read before anything is written.
+    const submissions = recordsIn(parsed.messages);
     // Its state is a JSON text (parseRunCheckpoint read it): kept as it is.
     store
       .prepare(

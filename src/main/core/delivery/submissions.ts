@@ -1,4 +1,4 @@
-import { encodeRecords } from '../../../shared/engine/delivery/submission-state';
+import { decodeSubmissions, encodeRecords } from '../../../shared/engine/delivery/submission-state';
 import { agentOf, agentParty } from '../../../shared/model/messages';
 import type { Message, MessageDisplay } from '../../../shared/model/messages';
 import type { SubmittedMessage } from '../../../shared/model/queue';
@@ -41,6 +41,42 @@ function bridgeOf(store: MessageStore): Bridged {
 }
 
 const keyOf = (to: string, as: string): string => `${to}\u0000${as}`;
+
+/**
+ * The submission records of a checkpoint, as the engine restores them (decodeSubmissions): each
+ * one no engine restores (a native prompt longer than it keeps, an id it doesn't) left out, said
+ * on the console, rather than failing the write that journals the run and its messages. Throws
+ * for what isn't an engine's records at all.
+ */
+export function recordsIn(serialized: string): Map<string, SubmittedMessage[]> {
+  try {
+    return decodeSubmissions(serialized);
+  } catch (error) {
+    const root: unknown = JSON.parse(serialized);
+    if (!isRecord(root) || root.version !== 1 || !Array.isArray(root.agents)) throw error;
+    const kept = new Map<string, SubmittedMessage[]>();
+    let left = 0;
+    for (const agent of root.agents as unknown[]) {
+      const submissions = isRecord(agent) ? agent.submissions : undefined;
+      if (!isRecord(agent) || !Array.isArray(submissions)) throw error;
+      for (const one of submissions as unknown[]) {
+        try {
+          for (const [id, records] of decodeSubmissions(
+            JSON.stringify({ version: 1, agents: [{ id: agent.id, submissions: [one] }] }),
+          )) {
+            kept.set(id, [...(kept.get(id) ?? []), ...records]);
+          }
+        } catch {
+          left += 1;
+        }
+      }
+    }
+    console.error(
+      `${String(left)} submission record(s) no engine restores were left out of the run’s messages.`,
+    );
+    return kept;
+  }
+}
 
 /**
  * Keeps each agent's submissions as your messages in the canvas's store: within the write that
@@ -249,6 +285,10 @@ function aliases(store: MessageStore): Map<string, Message> {
     if (!found.has(key)) found.set(key, message);
   }
   return found;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 /** An id the engine restores (submission-state.ts' decodeSubmissions). */

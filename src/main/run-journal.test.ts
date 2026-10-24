@@ -711,20 +711,30 @@ describe('RunJournal', () => {
       expect(messages.all()).toHaveLength(3);
     });
 
-    it('refuses a checkpoint whose submissions no engine kept, writing none of it', async () => {
+    it('leave out a record no engine restores, never failing the write; refuse what isn’t records', async () => {
+      const said = vi.spyOn(console, 'error').mockImplementation(() => undefined);
       const [canvas] = await named('team.corral');
       const runs = journal();
       const { token } = await runs.get(canvas);
       await runs.save(canvas, token, checkpoint);
-      const lost = records({ lead: [{ id: 'native-1', text: 'Lost', status: 'lost' }] });
-      await expect(runs.save(canvas, token, { ...checkpoint, messages: lost })).rejects.toThrow(
-        'Invalid submission records',
+      // A prompt pasted into a Terminal longer than any engine keeps, and a status none kept.
+      const kept = records({
+        lead: [
+          { id: 'native-1', text: 'x'.repeat(200_001), status: 'completed', result: done },
+          { id: 'native-2', text: 'Kept', status: 'completed', result: done },
+          { id: 'native-3', text: 'Lost', status: 'lost' },
+        ],
+      });
+      await runs.save(canvas, token, { ...checkpoint, messages: kept, updatedAt: 234 });
+      expect(ran(canvas)).toMatchObject({ updated_at: 234 });
+      expect((await messagesOf(canvas)).all().map(({ body }) => body)).toEqual(['Kept']);
+      expect(said).toHaveBeenCalledWith(
+        '2 submission record(s) no engine restores were left out of the run’s messages.',
       );
       await expect(
         runs.save(canvas, token, { ...checkpoint, messages: '[]', updatedAt: 456 }),
       ).rejects.toThrow('Invalid submission records');
-      expect(ran(canvas)).toMatchObject({ updated_at: 123 });
-      expect((await messagesOf(canvas)).all()).toEqual([]);
+      expect(ran(canvas)).toMatchObject({ updated_at: 234 });
     });
   });
 
