@@ -32,6 +32,8 @@ A send's take-back, Kill and the composer's Stop all use the connection's interr
 
 Stop (and Run again) takes back what the run sent that is still going (RunIO.send returns it: SessionStore.send's take-back, off the session's queue or interrupting its turn), and no longer hears those turns end.
 
+Where its host keeps a durable mailbox (`RunIO.mailbox`, `RunMailbox`: the core's, never the renderer's until B11's cutover), each send of a task's attempt is recorded there first, synchronously, and linked to its attempt (`TaskAttempt.messageId`) before the write that journals the run (`beforeSend`), so that write holds both and the session gets it under the message's id only once they are on disk; it is settled once, as its turn ends (in the same turn as the run's result), as it is taken back or never goes, or unresolved when its record couldn't be kept (see [Messages](messages.md)).
+
 Waits hold until their target is done or their time limit passes, delays until their time comes, OKs until the user decides (RunStore.decide: approve, ask for changes, which go to the agent's session, as a message like any other with the images pasted into it, before it asks again, or stop, which stops whatever waits on it; while it asks, a slash command typed in a connected agent's composer runs as a command instead, as its ask bar says).
 
 A repeat runs in rounds (AgentRun.rounds), its condition decided once per round of the round's last task that ran; out of rounds it fails and goes on, or asks (decide: one more round, what to try next, or go on).

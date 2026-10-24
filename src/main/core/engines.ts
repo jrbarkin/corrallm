@@ -6,9 +6,10 @@ import type { EngineCatalog } from '../../shared/engine/catalog';
 import { Engine } from '../../shared/engine/engine';
 import { needs } from '../../shared/engine/needs';
 import type { NeedsInput } from '../../shared/engine/needs';
+import type { RunMailbox } from '../../shared/engine/run/runner';
 import type { SessionBackend } from '../../shared/engine/transcript/receive';
 import type { CanvasDocument } from '../../shared/model/canvas';
-import type { Message, PartyId } from '../../shared/model/messages';
+import type { Message, MessageDisplay, PartyId } from '../../shared/model/messages';
 import { agentParty } from '../../shared/model/messages';
 import type { NeedsItem } from '../../shared/model/needs';
 import type { RunCheckpoint } from '../../shared/run';
@@ -24,7 +25,7 @@ import type { SessionManager } from '../sessions/manager';
 import type { UsageReadings } from '../usage';
 import type { Documents } from './canvas/documents';
 import { Delivery } from './delivery/delivery';
-import { MessageStore } from './delivery/messages';
+import { capBody, MessageStore, sentByRun } from './delivery/messages';
 import type { MessageTable } from './delivery/messages';
 import { WithdrawalNotes } from './delivery/withdrawals';
 import { ReadPositions } from './delivery/reads';
@@ -260,16 +261,16 @@ export class Engines {
   ): Promise<void> {
     const store = await this.messagesOf(canvas);
     const parties = new Set<PartyId>();
-    const messages = store
-      .active()
-      .filter(
-        (message) =>
-          message.kind === 'text' &&
-          message.to === agentParty(agent) &&
-          message.delivery !== undefined &&
-          ids.includes(message.delivery.as) &&
-          (message.state === 'delivering' || message.state === 'delivered'),
-      );
+    const messages = store.active().filter(
+      (message) =>
+        message.kind === 'text' &&
+        // The run's own sends tell no sender: the run holds their tasks.
+        !sentByRun(message) &&
+        message.to === agentParty(agent) &&
+        message.delivery !== undefined &&
+        ids.includes(message.delivery.as) &&
+        (message.state === 'delivering' || message.state === 'delivered'),
+    );
     for (const message of messages) {
       if (parties.has(message.from) || message.from === 'corrallm') continue;
       parties.add(message.from);
@@ -569,16 +570,16 @@ export class Engines {
     const open = await this.#running.get(canvas);
     if (!open || stopped()) return;
     const store = open.messages;
-    const originals = store
-      .all()
-      .filter(
-        (m) =>
-          m.kind === 'text' &&
-          m.to === agentParty(agent) &&
-          m.delivery &&
-          request.ids.includes(m.delivery.as) &&
-          ended.includes(m.delivery.as),
-      );
+    const originals = store.all().filter(
+      (m) =>
+        m.kind === 'text' &&
+        // The run retries its own attempts (retryAttempt): never copied as a party's.
+        !sentByRun(m) &&
+        m.to === agentParty(agent) &&
+        m.delivery &&
+        request.ids.includes(m.delivery.as) &&
+        ended.includes(m.delivery.as),
+    );
     const partyIds = new Set(
       originals.flatMap((m) => (m.delivery === undefined ? [] : [m.delivery.as])),
     );
@@ -878,6 +879,8 @@ export class Engines {
         const problem = journal.problem(canvas);
         if (problem !== undefined) throw new Error(problem);
       },
+      // Each attempt the run sends is a message first, written with the run (B11 Design §3).
+      mailbox: runMailbox(messages),
       ...(this.#deps.locale === undefined ? {} : { locale: this.#deps.locale }),
     });
     running.engine = engine;
@@ -1108,6 +1111,45 @@ export class Engines {
       },
     };
   }
+}
+
+/**
+ * The run's mailbox over a canvas's message store (B11 Design §3): each of a task's attempts the
+ * run sends is a message, origin `run`, from corrallm (from the queue's agent for a hand-off to
+ * another), or, for a correction you typed with it, yours as you typed it (origin `manual`, what
+ * you typed its display, beside the held task it corrects), its task link the attempt, delivering
+ * under its own id; never a reply, a notice or a party's message to deliver. Its body is capped as
+ * any message's is: the session gets the whole of it, from memory.
+ */
+function runMailbox(messages: MessageStore): RunMailbox {
+  return {
+    record: ({ to, owner, text, task, images, typed }) => {
+      const display: MessageDisplay = {
+        ...(typed === undefined
+          ? {}
+          : { text: typed, task: { agent: task.agent, item: task.item } }),
+        ...(images > 0 ? { images } : {}),
+      };
+      const message = messages.add({
+        from: typed !== undefined ? 'you' : owner === to ? 'corrallm' : agentParty(owner),
+        to: agentParty(to),
+        kind: 'text',
+        origin: typed === undefined ? 'run' : 'manual',
+        ...(Object.keys(display).length === 0 ? {} : { display }),
+        body: capBody(text, 'prompt'),
+        task,
+        state: 'delivering',
+      });
+      messages.update(message.id, { delivery: { at: message.at, as: message.id, attempt: 1 } });
+      return message.id;
+    },
+    settle: (id, { state, turn }) => {
+      const message = messages.get(id);
+      // Cut off meanwhile (the core stopping), it stays as that left it.
+      if (message?.state !== 'delivering' && message?.state !== 'delivered') return;
+      messages.update(id, { state, turn, ...(state === 'withdrawn' ? { by: 'corrallm' } : {}) });
+    },
+  };
 }
 
 /** What an open canvas's needs are worded from. */

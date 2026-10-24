@@ -88,10 +88,51 @@ export interface TurnEnd {
   result?: TurnResult;
 }
 
+/** One of the run's sends of a task's attempt, as its durable mailbox records it (RunMailbox). */
+export interface RunSend {
+  /** The agent whose session it goes to. */
+  to: string;
+  /** The agent whose queue's task it is (another than `to` for a hand-off). */
+  owner: string;
+  /** What is sent, as the session gets it. */
+  text: string;
+  /** The attempt it is: owner, item and attempt. */
+  task: TaskMessage;
+  /** How many images it carries (their bytes are never kept). */
+  images: number;
+  /** What you typed, for a correction of yours the run sends with its task. */
+  typed?: string;
+}
+
+/** How one of the run's sends ended, as its message records it. */
+export type RunSendEnd =
+  /** Its turn ended, however. */
+  | { state: 'replied'; turn: TurnResult }
+  /** Taken back, or never handed to its session (the run stopped, its text refused). */
+  | { state: 'withdrawn'; turn: TurnResult }
+  /** Its record couldn't be kept, so it never went. */
+  | { state: 'unresolved'; turn: TurnResult };
+
+/**
+ * The durable mailbox the core keeps (B11 Design §3): each of a task's attempts the run sends is a
+ * message there, recorded (`record`, in memory) before the write that journals the run's state
+ * (RunIO.beforeSend), so that write holds the message and its attempt's link (TaskAttempt.messageId)
+ * and its session gets it only once both are on disk; then settled once (`settle`) as its turn
+ * ends, in the same write as what that end changed in the run, or as it is taken back or never
+ * goes. The renderer's run has none until B11's cutover: its sends are as before.
+ */
+export interface RunMailbox {
+  /** Records a send: its message's id, the one its session is sent it under. */
+  record: (send: RunSend) => string;
+  settle: (id: string, end: RunSendEnd) => void;
+}
+
 /** What a run needs from its surroundings. */
 export interface RunIO {
   /** Writes the current checkpoint out before an automated prompt leaves for a session. */
   beforeSend?: () => Promise<void>;
+  /** Where the run's sends of its tasks' attempts are recorded first: the core's alone. */
+  mailbox?: RunMailbox;
   /** Holds queued session dispatch without blocking a fresh manual console intervention. */
   hold?: (agentId: string, held: boolean) => void;
   /**
@@ -111,6 +152,8 @@ export interface RunIO {
     origin?: 'user',
     displayText?: string,
     task?: TaskMessage,
+    /** The id it is sent under: its message's, where the mailbox recorded it (RunIO.mailbox). */
+    id?: string,
   ) => () => void;
   /** Tells the user something about the run, in an agent's session (a notice there). */
   tell: (agent: AgentNode, text: string) => void;
@@ -177,6 +220,16 @@ const UNHEARD =
   'verdict; output checks and conditions in your words wait for your judgment.';
 
 const IDLE: Run = { running: false, agents: {} };
+
+/** How a send the run took back ended, as its message records it. */
+const TAKEN_BACK: TurnResult = { status: 'cancelled', reason: 'taken-back' };
+
+/** A turn's end as its message records it, where its session gave no result. */
+function resultOf({ failed }: TurnEnd): TurnResult {
+  return failed
+    ? { status: 'failed', reason: 'error' }
+    : { status: 'completed', reason: 'completed' };
+}
 
 // Checkpoints restore paused with in-flight prompts unresolved; only an explicit Retry replays
 // submitted work. Native conversation history remains the source for inspecting its effects.
@@ -1816,6 +1869,26 @@ export class RunStore {
     const sent = { over: false };
     let ready = this.#io.beforeSend === undefined;
     let started = false;
+    // An attempt's send is recorded first, where the core keeps a mailbox: its message goes in the
+    // write that journals the run (beforeSend), the attempt linked to it, and is settled once.
+    const { mailbox } = this.#io;
+    const id =
+      mailbox === undefined || task === undefined
+        ? undefined
+        : mailbox.record({
+            to: to.id,
+            owner: holder?.agent ?? to.id,
+            text,
+            task,
+            images: images?.length ?? 0,
+            ...(origin === 'user' ? { typed: displayText ?? text } : {}),
+          });
+    let settled = false;
+    const settle = (end: RunSendEnd) => {
+      if (id === undefined || settled) return;
+      settled = true;
+      mailbox?.settle(id, end);
+    };
     const dispatch = () => {
       if (sent.over || !ready || started) return;
       if (
@@ -1839,11 +1912,9 @@ export class RunStore {
           if (sent.over) return;
           sent.over = true;
           this.#sent.delete(sent);
-          ended?.({
-            failed: true,
-            reply: '',
-            result: { status: 'failed', reason: 'declined', message: refusal },
-          });
+          const result: TurnResult = { status: 'failed', reason: 'declined', message: refusal };
+          settle({ state: 'withdrawn', turn: result });
+          ended?.({ failed: true, reply: '', result });
         });
         return;
       }
@@ -1854,6 +1925,8 @@ export class RunStore {
           if (sent.over) return;
           sent.over = true;
           this.#sent.delete(sent);
+          // In the same turn as what its end changes in the run: one write holds both.
+          settle({ state: 'replied', turn: turn.result ?? resultOf(turn) });
           ended?.(turn);
         },
         images,
@@ -1864,10 +1937,12 @@ export class RunStore {
         origin,
         displayText,
         task,
+        id,
       );
       pending.withdraw = () => {
         if (sent.over) return;
         sent.over = true;
+        settle({ state: 'withdrawn', turn: TAKEN_BACK });
         withdraw();
       };
     };
@@ -1878,12 +1953,17 @@ export class RunStore {
       dispatch,
       withdraw: () => {
         sent.over = true;
+        settle({ state: 'withdrawn', turn: TAKEN_BACK });
       },
     };
     this.#sent.set(sent, pending);
     if (this.#io.beforeSend) {
       void Promise.resolve()
-        .then(() => this.#io.beforeSend?.())
+        .then(() => {
+          // The attempt the message is for is the run's by now: linked to it in the same write.
+          if (id !== undefined && task !== undefined) this.#link(task, id);
+          return this.#io.beforeSend?.();
+        })
         .then(
           () => {
             ready = true;
@@ -1897,18 +1977,42 @@ export class RunStore {
             if (sent.over) return;
             sent.over = true;
             this.#sent.delete(sent);
-            ended?.({
-              failed: true,
-              reply: '',
-              result: {
-                status: 'failed',
-                reason: 'error',
-                message: `The run could not be saved, so the prompt was not sent: ${error instanceof Error ? error.message : String(error)}`,
-              },
-            });
+            const result: TurnResult = {
+              status: 'failed',
+              reason: 'error',
+              message: `The run could not be saved, so the prompt was not sent: ${error instanceof Error ? error.message : String(error)}`,
+            };
+            settle({ state: 'unresolved', turn: result });
+            ended?.({ failed: true, reply: '', result });
           },
         );
-    } else dispatch();
+    } else {
+      if (id !== undefined && task !== undefined) this.#link(task, id);
+      dispatch();
+    }
+  }
+
+  /**
+   * Links a task's attempt to the message the mailbox recorded for it (TaskAttempt.messageId), once
+   * the attempt is the run's: before the write that journals both.
+   */
+  #link({ agent, item, attempt }: TaskMessage, id: string): void {
+    const at = this.#run.agents[agent];
+    const attempts = at?.attempts?.[item];
+    if (!at || !attempts?.some((one) => one.id === attempt && one.messageId === undefined)) return;
+    this.#set({
+      ...this.#run,
+      agents: {
+        ...this.#run.agents,
+        [agent]: {
+          ...at,
+          attempts: {
+            ...at.attempts,
+            [item]: attempts.map((one) => (one.id === attempt ? { ...one, messageId: id } : one)),
+          },
+        },
+      },
+    });
   }
 
   /**

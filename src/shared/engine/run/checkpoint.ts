@@ -53,6 +53,7 @@ const attempt = (v: unknown): v is TaskAttempt =>
   number(v.startedAt) &&
   oneOf(v.status, ['running', 'succeeded', 'failed', 'uncertain', 'cancelled']) &&
   optional(v, 'retryOf', string) &&
+  optional(v, 'messageId', string) &&
   optional(v, 'endedAt', number) &&
   ['reason', 'text', 'message'].every((key) => optional(v, key, string));
 

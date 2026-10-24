@@ -349,11 +349,17 @@ it('retries a run task as its own new attempt, whose reply advances the queue', 
   await vi.waitFor(() => {
     expect(sent).toHaveLength(2);
   });
-  expect(engine.run.snapshot().agents.a?.attempts?.task).toMatchObject([
+  const attempts = engine.run.snapshot().agents.a?.attempts?.task;
+  expect(attempts).toMatchObject([
     { id: first?.id, status: 'cancelled' },
     { status: 'running', retryOf: first?.id },
   ]);
-  expect(await texts()).toEqual([]); // Its retry belongs to the run, never a detached manual send.
+  // Its retry belongs to the run: each attempt its own message, never a detached manual send.
+  const store = await core.engines.messagesOf(CANVAS);
+  const rows = await texts();
+  expect(rows.map((m) => store.originOf(m.id))).toEqual(['run', 'run']);
+  expect(rows.map((m) => m.task?.attempt)).toEqual(attempts?.map(({ id }) => id));
+  expect(rows.map((m) => m.id)).toEqual(attempts?.map(({ messageId }) => messageId));
   end('completed');
   await vi.waitFor(() => {
     expect(engine.run.snapshot().agents.a).toMatchObject({

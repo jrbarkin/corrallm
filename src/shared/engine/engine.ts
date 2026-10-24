@@ -7,6 +7,7 @@ import { SessionStore } from './delivery/mailbox';
 import { decodeSubmissions } from './delivery/submission-state';
 import { readRun } from './run/checkpoint';
 import { RunStore } from './run/runner';
+import type { RunMailbox } from './run/runner';
 import type { SessionBackend } from './transcript/receive';
 
 /*
@@ -36,6 +37,11 @@ export interface EngineIO {
   connect: (agent: string, connection: ConnectionId) => void;
   /** Writes the engine's checkpoint out, before an automated message leaves for a session. */
   beforeSend?: () => Promise<void>;
+  /**
+   * Where the run's sends of its tasks' attempts are recorded before they go (RunMailbox): the
+   * core's message store. The renderer's engine has none until B11's cutover.
+   */
+  mailbox?: RunMailbox;
   /** The locale the run tells times of day in (the host's): the runtime's own, when none. */
   locale?: string;
 }
@@ -144,7 +150,8 @@ export class Engine {
         sessions.holdQueue(agent, held);
       },
       ...(io.beforeSend ? { beforeSend: io.beforeSend } : {}),
-      send: (agent, text, done, images, refused, origin, displayText, task) =>
+      ...(io.mailbox ? { mailbox: io.mailbox } : {}),
+      send: (agent, text, done, images, refused, origin, displayText, task, id) =>
         sessions.send(
           agent.id,
           agent.data.adapter ?? io.catalog.defaultAdapter,
@@ -157,7 +164,7 @@ export class Engine {
           // What the user typed for the run (an OK's changes) is theirs, but the run's attempt.
           origin === 'user' ? 'run' : 'queue',
           displayText,
-          task === undefined ? {} : { task },
+          { ...(task === undefined ? {} : { task }), ...(id === undefined ? {} : { id }) },
         ),
       tell: (agent, text) => {
         sessions.notice(agent.id, 'warning', text);
