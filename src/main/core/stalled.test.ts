@@ -11,6 +11,7 @@ import type { Pty } from '../sessions/terminal/pty';
 import { HookServer } from '../sessions/terminal/hooks';
 import type { CanvasId } from '../../shared/canvas';
 import { CATALOG } from '../sessions/adapters';
+import { ClaudeCode } from '../sessions/claude-code/claude-code';
 import { StalledTurns, STALL_MS, WAKE_GRACE_MS, WATCH_EVERY_MS } from './stalled';
 
 const CANVAS = '01234567-1234-4123-8123-123456789abc' as CanvasId;
@@ -213,6 +214,124 @@ describe('silent turns', () => {
       expect(warning).toHaveBeenCalledOnce();
       // Native progress still proves activity even without a hook or transcript event.
       output('\x1b]7501;state=working:progress=10\x07');
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(watchdog.items(CANVAS)).toEqual([]);
+    } finally {
+      watchdog.close();
+      const closing = session.close();
+      await vi.advanceTimersByTimeAsync(100);
+      await closing;
+      registration.mockRestore();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('flags a silent Claude Code Terminal turn despite its status line refreshing every second for twenty minutes', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'corrallm-statusline-'));
+    const hooks = new HookServer();
+    let post: (input: Record<string, unknown>) => void = () => undefined;
+    const registration = vi.spyOn(hooks, 'register').mockImplementation((_listener, status) => {
+      post = (input) => status?.(input);
+      return Promise.resolve({
+        url: 'http://127.0.0.1/hook',
+        statusUrl: 'http://127.0.0.1/status',
+        token: 'test-token',
+        release: () => undefined,
+      });
+    });
+    let exit: (event: { exitCode: number }) => void = () => undefined;
+    const pty: Pty = {
+      pid: 4243,
+      write: () => undefined,
+      resize: () => undefined,
+      pause: () => undefined,
+      resume: () => undefined,
+      kill: () => {
+        exit({ exitCode: 0 });
+      },
+      onData: () => undefined,
+      onExit: (listener) => {
+        exit = listener;
+      },
+    };
+    // Claude Code's own reading of its status line input; the rest of the CLI is a stand-in.
+    const claude = new ClaudeCode({ cwd: dir, home: dir, env: {} });
+    const cli: TerminalCli<never> = {
+      name: 'Test CLI',
+      words: {
+        answer: '',
+        mode: '',
+        model: '',
+        login: '',
+        waiting: { permission: '', question: '', auth: '', none: '' },
+      },
+      newId: () => null,
+      prepare: () => Promise.resolve(),
+      args: () => [],
+      resumeFailed: () => false,
+      keystrokes: () => [],
+      submitted: (text) => text,
+      draft: () => undefined,
+      hook: () => [],
+      statusLine: (input) => claude.statusLine(input),
+    };
+    const session = new TerminalSession(
+      { agentId: AGENT, cwd: dir, env: {}, model: null, mode: null, resume: null },
+      {
+        remember: () => undefined,
+        emit: (event) => {
+          watchdog.event(CANVAS, AGENT, 'claude-code.terminal', event);
+        },
+        activity: () => {
+          watchdog.activity(CANVAS, AGENT);
+        },
+      },
+      {
+        executable: '/fake/cli',
+        cli,
+        spawn: () => Promise.resolve(pty),
+        hooks,
+        tmp: dir,
+        env: () => ({}),
+        timing: { ...TIMING, kill: 1 },
+      },
+    );
+    // What Claude Code 2.1.310 gives its status line, as its refreshInterval re-runs it: only its
+    // clock moves (and its limits, which other sessions of the account use too).
+    const input = (second: number, output = 4521) => ({
+      hook_event_name: 'Status',
+      session_id: '0b3a7d52-6a0c-4f39-9c4e-2f8f0c1d9e11',
+      model: { id: 'claude-opus-4-1', display_name: 'Opus' },
+      cost: {
+        total_cost_usd: 0.01234 + (output - 4521) / 1e6,
+        total_duration_ms: 45_000 + second * 1000,
+        total_api_duration_ms: 2300 + (output - 4521),
+        total_lines_added: 156,
+        total_lines_removed: 23,
+      },
+      context_window: {
+        total_input_tokens: 15_234,
+        total_output_tokens: output,
+        context_window_size: 200_000,
+        used_percentage: 8,
+        remaining_percentage: 92,
+      },
+      rate_limits: {
+        five_hour: { used_percentage: 23 + (second % 7), resets_at: 1_791_810_000 },
+      },
+    });
+    try {
+      await session.launch();
+      watchdog.event(CANVAS, AGENT, 'claude-code.terminal', { type: 'user', id: 'm', text: 'Go' });
+      watchdog.event(CANVAS, AGENT, 'claude-code.terminal', { type: 'status', status: 'working' });
+      for (let second = 0; second <= STALL_MS / 1000; second++) {
+        post(input(second));
+        await vi.advanceTimersByTimeAsync(1000);
+      }
+      expect(watchdog.items(CANVAS)).toHaveLength(1);
+      expect(warning).toHaveBeenCalledOnce();
+      // Its model at work moves its tokens and API time: that is activity.
+      post(input(STALL_MS / 1000 + 1, 4600));
       await vi.advanceTimersByTimeAsync(1000);
       expect(watchdog.items(CANVAS)).toEqual([]);
     } finally {

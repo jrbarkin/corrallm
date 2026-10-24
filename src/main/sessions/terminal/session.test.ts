@@ -371,6 +371,17 @@ describe('a Terminal session', () => {
     expect(activity).toBeGreaterThan(printed);
   });
 
+  it('tells the user once that Claude Code reported an invalid conversation id, however many hooks carry it', async () => {
+    await start();
+    for (const prompt of ['first', 'second', 'third']) {
+      await claude().hook('Notification', { session_id: 'not-a-uuid', message: prompt });
+    }
+    await claude().hook('Stop', { session_id: 'not-a-uuid' });
+    expect(
+      seen().filter((one) => one.startsWith('notice:') && one.includes('invalid conversation id')),
+    ).toHaveLength(1);
+  });
+
   it.skipIf(process.platform === 'win32')(
     'hears Claude Code’s usage limits from the status line it is given',
     async () => {
