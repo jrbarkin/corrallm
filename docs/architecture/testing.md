@@ -14,6 +14,10 @@ Linux Docker e2e uses Mesa llvmpipe, Xvfb's GLX extension and Chromium's ANGLE O
 
 Launch the app with launchApp() (launch.ts): a throwaway profile, so the real app's saved state never leaks in, and no `claude` or `codex` unless the test points the app at a fake.
 
+Failed SDK/control/recovery/settings, graph and terminal specs opt into `launchApp`’s `diagnoseFailure` callback. Before closing, it prints bounded app stdout/stderr and window text (including session startup refusals) to the test log. The SDK and App Server fakes also write opt-in startup facts into the throwaway profile: executable, Node version, cwd and booleans for supplied fake configuration, never credentials, instructions or prompt bodies. The failed spec prints those files too, before deleting the profile. This distinguishes a missing runtime/spawn from an auth refusal or environment loss without needing the Docker trace volume. Successful specs stay quiet.
+
+Terminal link e2e uses `e2e/terminal-link.ts`: re-read the screen’s geometry and wait for xterm’s link pointer before Ctrl-click (Cmd on macOS). Link providers answer asynchronously; clicking immediately after pointer movement can race them repeatedly on software rendering. Plain-click and out-of-project file assertions remain. Queue drag e2e waits for the complete expected order from the core’s mirror. Long graph stories keep the existing 60-second deadline and their assertions in smaller tests: link/work versus deletion, each nested drag direction and return, and three batches covering all nine gallery templates. Each gallery batch still switches consecutively between canvases and checks their reset project folder.
+
 - Test-driven by default. For a bug, first write a test that reproduces it and fails, then fix it, then confirm the test passes. For new behaviour, write the tests with (or before) the code.
 
 - The test suite is the regression guard, not ad-hoc review. Keep tests robust and meaningful: assert behaviour users or callers rely on, not incidental details. Prefer unit tests for logic, and add Playwright e2e only for what needs the real app (pointer interactions, CSP, packaging).

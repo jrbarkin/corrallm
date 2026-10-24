@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { platform, tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -23,13 +23,24 @@ export async function launchApp({
   env: extra = {},
   profile: given,
   args = [],
-}: { env?: Record<string, string>; profile?: string; args?: string[] } = {}): Promise<{
+  diagnoseFailure = () => false,
+}: {
+  env?: Record<string, string>;
+  profile?: string;
+  args?: string[];
+  /** The spec supplies its outcome; global setup has no running test. */
+  diagnoseFailure?: () => boolean;
+} = {}): Promise<{
   app: ElectronApplication;
   close: () => Promise<void>;
 }> {
   const profile = given ?? mkdtempSync(path.join(tmpdir(), 'corrallm-e2e-'));
   const remove = () => {
     if (given === undefined) rmSync(profile, { recursive: true, force: true });
+  };
+  const diagnostics = {
+    FAKE_CLAUDE_DIAGNOSTICS: path.join(profile, 'fake-sdk-startup.jsonl'),
+    FAKE_CODEX_DIAGNOSTICS: path.join(profile, 'fake-app-server-startup.jsonl'),
   };
   let app: ElectronApplication;
   try {
@@ -55,6 +66,7 @@ export async function launchApp({
         ...env,
         // Paths with nothing there: only the CLIs a test gives are found (main looks nowhere else).
         CORRALLM_AGENT_PATHS: '{}',
+        ...diagnostics,
         ...extra,
         CORRALLM_HIDE_WINDOW: '1',
       },
@@ -63,12 +75,39 @@ export async function launchApp({
     remove();
     throw error;
   }
+  // Keep bounded tails, not the environment (which can hold credentials). Startup failures
+  // often become session notices rather than page errors; include the UI before teardown too.
+  let output = '';
+  for (const stream of ['stdout', 'stderr'] as const) {
+    app.process()[stream]?.on('data', (chunk: Buffer) => {
+      output = `${output}[${stream}] ${chunk.toString('utf8')}`.slice(-32_768);
+    });
+  }
   return {
     app,
     close: async () => {
       // Its process, read while the app is open: Playwright forgets it once the app closes.
       const child = app.process();
       try {
+        if (diagnoseFailure()) {
+          for (const [name, file] of Object.entries(diagnostics)) {
+            let text: string;
+            try {
+              text = readFileSync(file, 'utf8').slice(-32_768);
+            } catch {
+              text = '(not started, or diagnostic variable did not reach the fake)';
+            }
+            console.error(`[e2e ${name}]\n${text}`);
+          }
+          console.error(`[e2e app output]\n${output || '(no output)'}`);
+          for (const page of app.windows()) {
+            const text = await page
+              .locator('body')
+              .innerText({ timeout: 2000 })
+              .catch(() => '(window unavailable)');
+            console.error(`[e2e window before close]\n${text.slice(-32_768)}`);
+          }
+        }
         await app.close();
         const code = child.exitCode;
         if (code !== 0) throw new Error(`corrallm exited with code ${String(code)} while closing.`);
