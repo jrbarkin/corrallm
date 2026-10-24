@@ -124,3 +124,6 @@ export const MAX_TEMPLATE_FIELDS = 128;
 export const MAX_TEMPLATE_VALUE = 16_384;
 /** The most agents a call chooses an adapter or a connection for, of a template's. */
 export const MAX_TEMPLATE_AGENTS = 256;
+
+/** Maximum UTF-8 reply text carried in a session summary, never its transcript. */
+export const MAX_SESSION_REPLY_BYTES = 4096;

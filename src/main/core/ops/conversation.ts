@@ -1,7 +1,6 @@
 import { DEFAULT_PAGE } from '../../../shared/api/limits';
 import type { AGENT_STATES } from '../../../shared/api/ops/conversation';
 import { needs, withoutChoices } from '../../../shared/engine/needs';
-import { isOpen } from '../../../shared/model/session';
 import type { CanvasId } from '../../../shared/canvas';
 import type { NeedsItem } from '../../../shared/model/needs';
 import { agentName, areLinked, teamOf } from '../../../shared/model/queries';
@@ -14,6 +13,7 @@ import { needsInput } from '../engines';
 import type { OpenCanvas } from '../engines';
 import { agentsReached } from '../reach';
 import { agentOf, openCanvas, pageOf, reachFor } from './open';
+import { messagesSeen, promptsOf } from './views';
 import type { Implementations, OpServices } from '.';
 
 /** Conversation (Core Server §4 H; API Spec §7.2). */
@@ -133,13 +133,11 @@ export function conversationOps(
       if (after !== undefined && from === undefined) {
         throw new OpFailure('invalid', 'That cursor isn’t one this canvas gave.');
       }
-      const party = partyIdOf(ctx.caller);
+      // The messages the caller sees, whole (as its topic gives them), then paged.
       const items = pageOf(
-        open.messages
-          .all()
+        messagesSeen(open, ctx.caller)
           .filter(
             (message) =>
-              (ctx.caller.kind === 'human' || message.from === party || message.to === party) &&
               (other === undefined || message.from === other || message.to === other) &&
               (open.messages.seqOf(message.id) ?? 0) > (from ?? 0),
           )
@@ -189,10 +187,4 @@ export function stateOf(
   if (session.status === 'working') return 'working';
   if (delivery.limited().some(({ agent }) => agent === id)) return 'limited';
   return engine.run.snapshot().agents[id]?.paused ? 'paused' : 'idle';
-}
-
-/** How many prompts of its own an agent waits on an answer to: its session's, and its terminal's. */
-export function promptsOf({ engine }: OpenCanvas, id: string): number {
-  const session = engine.sessions.of(id);
-  return session.entries.filter(isOpen).length + (session.asking?.length ?? 0);
 }

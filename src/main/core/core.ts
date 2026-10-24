@@ -9,6 +9,7 @@ import type { CanvasId } from '../../shared/canvas';
 import type { OpResult } from '../../shared/api/errors';
 import { MAX_CREATED_AGENTS } from '../../shared/api/limits';
 import { OPS } from '../../shared/api/registry';
+import { topicRequest } from '../../shared/api/topics';
 import type { ResultOf } from '../../shared/api/registry';
 import { SURFACE } from '../../shared/api/surface';
 import type { OpName, Party, Reach } from '../../shared/api/surface';
@@ -64,6 +65,7 @@ import { answerTokenRequest } from './token-requests';
 import { privateTokenProfile } from './token-profile';
 import type { TokenAnswer, TokenRequest } from './token-socket';
 import { TokenStore } from './tokens';
+import { RuntimeSource } from './runtime-topics';
 import { Topics } from './topics';
 import { UsageProbe } from './usage-probe';
 import type { UsageRead } from './usage-probe';
@@ -254,6 +256,15 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     },
   });
   const settings = new Settings(path.join(profile, 'settings.json'));
+  // What the canvases the core runs publish beside their documents (B11 §5): their run, sessions
+  // and messages, from their engines once they open.
+  const runtime = new RuntimeSource({
+    get engines() {
+      return engines;
+    },
+    isLead: (canvas, agent) => isLead(canvas, agent),
+    problem: (canvas) => journal.problem(canvas),
+  });
   const projects = new ProjectFolders({ host, memory });
   const directories = new ProjectDirectories(projects);
   const journal = new RunJournal({
@@ -264,6 +275,7 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     problemChanged: (canvas) => {
       topics.changed(`needs:${canvas}`, 'corrallm');
       engines.needsChanged(canvas);
+      runtime.problemChanged(canvas);
     },
     // What it set aside or restored, said with the first canvas restored, as its runs' are.
     ...(opened.store === undefined ? {} : { said: opened.said }),
@@ -401,6 +413,7 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     store,
     shownIn: (canvas) => windows.showing(canvas),
     running: () => engines.opened(),
+    live: (canvas) => engines.canvas(canvas)?.engine.run.snapshot().running,
   });
   const topics = new Topics({
     read: (name, args, caller, signal) => dispatcher.call(name, args, caller, signal),
@@ -417,6 +430,14 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
         all: seesAll(caller, reach),
       };
     },
+    runtime: {
+      source: runtime,
+      // A runtime topic is read through its projection, under its reading op's audience and reach.
+      project: (topic, caller, signal) => {
+        const { topic: kind, ...args } = topicRequest(topic);
+        return dispatcher.project(runtime.projections[kind], args, caller, signal);
+      },
+    },
   });
   states.listen({
     canvas: (canvas, change) => {
@@ -425,6 +446,10 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     list: () => {
       topics.changed('canvases', 'corrallm');
     },
+  });
+  // Each commit to a canvas's document: its agents, how they run, who reaches what.
+  documents.subscribe(({ canvas }) => {
+    runtime.documentChanged(canvas);
   });
   memory.subscribe((canvas) => {
     follow();
@@ -566,12 +591,32 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
       });
     },
   });
+  // Whether the run of each canvas the core runs is running, as canvas.list says it from the live
+  // run (B11 §5), not the journal's coalesced write: the list is read again as that changes.
+  const live = new Map<CanvasId, { running: boolean; stop?: () => void }>();
   engines.watch({
     needs: (canvas) => {
       topics.changed(`needs:${canvas}`, 'corrallm');
     },
-    opened: () => {
+    opened: (canvas) => {
       follow();
+      const run = engines.canvas(canvas)?.engine.run;
+      if (run) {
+        live.get(canvas)?.stop?.();
+        const it: { running: boolean; stop?: () => void } = { running: run.snapshot().running };
+        it.stop = run.subscribe(() => {
+          const running = run.snapshot().running;
+          if (running === it.running) return;
+          it.running = running;
+          states.listChanged();
+        });
+        live.set(canvas, it);
+      }
+      states.listChanged();
+    },
+    closed: (canvas) => {
+      live.get(canvas)?.stop?.();
+      live.delete(canvas);
       states.listChanged();
     },
   });
@@ -703,9 +748,11 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
       }),
       openCanvases: () => engines.opened(),
       holds: holder(engines),
+      publication: topics,
       ...(config.limitsClock === undefined ? {} : { now: config.limitsClock }),
     },
   );
+  runtime.start();
   // Held backends are read from now on, so a limit that ended while the core was down is noticed.
   probe.start();
   // The canvases open from before, watched from now on.
@@ -714,6 +761,8 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     surface: dispatcher.surface,
     ops: dispatcher.ops,
     partyOf: (caller) => dispatcher.partyOf(caller),
+    project: (projection, raw, caller, signal) =>
+      dispatcher.project(projection, raw, caller, signal),
     call: <N extends OpName>(name: N, raw: unknown, caller: Caller, signal?: AbortSignal) =>
       children.run(() => dispatcher.call(name, raw, caller, signal)) as Promise<
         OpResult<ResultOf<N>>
@@ -767,6 +816,7 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
       probe.stop();
       states.close();
       topics.close();
+      runtime.close();
       try {
         await engines.close();
       } finally {

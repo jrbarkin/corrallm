@@ -82,8 +82,9 @@ export function topicRequest(
   for (const kind of ['run', 'sessions', 'messages'] as const)
     if (topic.startsWith(`${kind}:`))
       return RuntimeTopic.parse({ topic: kind, canvas: topic.slice(kind.length + 1) });
-  if (topic.startsWith('canvas:')) return { topic: 'canvas', canvas: topic.slice(7) as CanvasId };
-  if (topic.startsWith('needs:')) return { topic: 'needs', canvas: topic.slice(6) as CanvasId };
+  for (const kind of CANVAS_TOPICS)
+    if (topic.startsWith(`${kind}:`))
+      return { topic: kind, canvas: topic.slice(kind.length + 1) as CanvasId };
   return { topic: topic as 'usage' | 'settings' | 'canvases' };
 }
 
@@ -101,14 +102,18 @@ export function topicKey(
       ? `session:${canvas}:${encodeURIComponent(parsed.agent)}`
       : `${parsed.topic}:${canvas}`;
   }
-  if (request.topic === 'canvas' || request.topic === 'needs') {
-    if (request.canvas === undefined) throw new Error(`A ${request.topic} topic names its canvas.`);
-    return `${request.topic}:${request.canvas as CanvasId}`;
+  const kind = CANVAS_TOPICS.find((one) => one === request.topic);
+  if (kind !== undefined) {
+    if (request.canvas === undefined) throw new Error(`A ${kind} topic names its canvas.`);
+    return `${kind}:${request.canvas as CanvasId}`;
   }
   return request.topic as 'usage' | 'settings' | 'canvases';
 }
 
-/** Prepared B11 contracts only. TOPICS and the live subscription schema stay unchanged until C8. */
+/**
+ * The runtime topics, which the core publishes (core/topics.ts): TOPICS and the live subscription
+ * schema stay B9's until B11 X9 registers them for windows.
+ */
 export const RUNTIME_TOPICS = ['run', 'sessions', 'session', 'messages'] as const;
 export const RuntimeTopic = z
   .union([
@@ -135,15 +140,13 @@ export interface RuntimeTopicStates {
     readonly next: string;
   };
 }
-interface AgentChanges<T> {
+export interface AgentChanges<T> {
   readonly set: Readonly<Record<AgentId, T>>;
   readonly remove?: readonly AgentId[];
 }
 export interface RunTopChange {
   readonly running?: boolean;
   readonly paused?: boolean | null;
-  readonly individualPauses?: RunView['individualPauses'] | null;
-  readonly groupPauses?: RunView['groupPauses'] | null;
   readonly notices?: RunView['notices'];
   readonly saveError?: string | null;
 }
@@ -156,7 +159,11 @@ export type RuntimeChange = {
     readonly by: PartyId | 'cli';
     readonly at: number;
   } & (K extends `run:${CanvasId}`
-    ? { readonly top?: RunTopChange; readonly agents?: AgentChanges<RunView['agents'][AgentId]> }
+    ? {
+        readonly top?: RunTopChange;
+        readonly agents?: AgentChanges<RunView['agents'][AgentId]>;
+        readonly groups?: AgentChanges<RunView['groups'][string]>;
+      }
     : K extends `sessions:${CanvasId}`
       ? { readonly agents: AgentChanges<SessionSummary> }
       : K extends `session:${CanvasId}:${string}`
@@ -193,14 +200,14 @@ export type RuntimeSnapshotFrame<S = unknown, E = unknown> = {
 );
 export type RuntimeSnapshotFor<K extends RuntimeTopicKey> = RuntimeSnapshotFrame<
   K extends `run:${CanvasId}`
-    ? Omit<RunView, 'agents'>
+    ? Omit<RunView, 'agents' | 'groups'>
     : K extends `session:${CanvasId}:${string}`
       ? SessionSummary
       : K extends `messages:${CanvasId}`
         ? { readonly next: string }
         : Record<string, never>,
   K extends `run:${CanvasId}`
-    ? RunView['agents'][AgentId]
+    ? RunView['agents'][AgentId] | RunView['groups'][string]
     : K extends `session:${CanvasId}:${string}`
       ? EntryView
       : K extends `messages:${CanvasId}`
@@ -208,7 +215,11 @@ export type RuntimeSnapshotFor<K extends RuntimeTopicKey> = RuntimeSnapshotFrame
         : SessionSummary
 > & { readonly topic: K };
 
-/** C1's sole size exception is a chunk containing one intrinsically oversized entry. */
+/**
+ * C1's sole size exception is a chunk holding one entry that doesn't fit a frame with its chunk's
+ * envelope: intrinsically oversized, or so near the cap that no frame within it can hold it. A
+ * chunk is never cut inside an entry, so that entry goes alone (B11 §16.3).
+ */
 export function snapshotFrameFits(frame: RuntimeSnapshotFrame): boolean {
   const bytes = (data: unknown) => new TextEncoder().encode(JSON.stringify(data)).length;
   if (frame.kind === 'begin' && (!Number.isSafeInteger(frame.count) || frame.count < 0))
@@ -217,15 +228,19 @@ export function snapshotFrameFits(frame: RuntimeSnapshotFrame): boolean {
     return false;
   if (frame.kind === 'end' && (!Number.isSafeInteger(frame.rev) || frame.rev < 0)) return false;
   if (bytes(frame) <= MAX_TOPIC_FRAME) return true;
-  return (
-    frame.kind === 'chunk' &&
-    frame.entries.length === 1 &&
-    bytes(frame.entries[0]?.value) > MAX_TOPIC_FRAME
-  );
+  return frame.kind === 'chunk' && frame.entries.length === 1;
 }
 
 /** The canvas a canvas's topic is of; none for a global topic. */
-export function canvasOfTopic(topic: TopicKey): CanvasId | undefined {
-  const request = topicRequest(topic);
-  return 'canvas' in request ? request.canvas : undefined;
+export function canvasOfTopic(topic: TopicKey | RuntimeTopicKey): CanvasId | undefined {
+  const request = isRuntimeTopic(topic) ? topicRequest(topic) : topicRequest(topic);
+  return 'canvas' in request ? (request.canvas as CanvasId) : undefined;
 }
+
+/** Whether a topic's key is a runtime topic's (B11 §16.4): a canvas's run, sessions or messages. */
+export function isRuntimeTopic(topic: string): topic is RuntimeTopicKey {
+  return /^(?:run|sessions|session|messages):/.test(topic);
+}
+
+/** What a subscriber is sent of its topics, in order: their changes, and a snapshot's frames. */
+export type TopicUpdate = Change | RuntimeChange | RuntimeSnapshotFrame;
