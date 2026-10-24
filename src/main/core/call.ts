@@ -111,6 +111,11 @@ export interface OpContext {
    */
   readonly guard?: unknown;
   /**
+   * On Allow of a confirmation of what becomes of a tree (B9a C7: a kept tree's removal), your
+   * decision, bound to what it held when you were asked, which the op checks again.
+   */
+  readonly cleanup?: CleanupDecision;
+  /**
    * Commits to canvas `canvas`'s document (the canvas the op names) what `build` makes of it,
    * purely, from the live one (B9 Design §3): checked against the revisions the call expects and,
    * for a token, the change rules, then written past the call's point of no return. Resolves with
@@ -423,6 +428,7 @@ export function createDispatcher(registry: Registry, options: DispatchOptions = 
       },
       ...(options.after === undefined ? {} : { after: options.after }),
       ...(options.guard === undefined ? {} : { guard: options.guard }),
+      ...(options.cleanup === undefined ? {} : { cleanup: options.cleanup }),
       commit: async (canvas, build) => {
         if (commit === undefined) {
           throw new OpFailure('unavailable', 'This core keeps no canvas’s document.');

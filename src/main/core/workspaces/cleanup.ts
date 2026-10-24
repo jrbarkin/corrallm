@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 
 import type { CanvasId } from '../../../shared/canvas';
+import { OpFailure } from '../call';
 import { checkCheckout } from './checkout';
 import { GitError } from './git';
 import type { GitRunner } from './git';
@@ -255,7 +256,9 @@ export class WorkspaceCleanup {
    * decision. Its removal runs once the write is on disk (`remove`), or as the core next starts.
    */
   intend(workspaces: WorkspaceStore, workspace: string, removal: Removal): void {
-    const tree = workspaces.markRemoving(workspace);
+    const kept = workspaces.worktree(workspace);
+    // One whose removal failed before is decided again, as it is.
+    const tree = kept?.state === 'removing' ? kept : workspaces.markRemoving(workspace);
     const open = workspaces.openJob(workspace, 'remove');
     // Decided again (a kept tree removed after a failed attempt): its decision is the latest.
     if (open !== undefined) workspaces.finishJob(open.id, 'superseded');
@@ -301,6 +304,53 @@ export class WorkspaceCleanup {
   async close(): Promise<void> {
     this.#closing = true;
     await Promise.allSettled([...this.#removing.values()]);
+  }
+
+  /**
+   * A kept tree's Remove (the Kept worktrees section's, B9a C7): removed now if it is safe, or as
+   * you decided (`decision`: a discard bound to what it held when you were asked, a conflict if it
+   * holds anything else now); else what it holds, for you to be asked about. Not-found for a tree
+   * the canvas doesn't keep (in use, or another canvas's).
+   */
+  async removeKept(
+    canvas: CanvasId,
+    workspace: string,
+    decision?: CleanupDecision,
+  ): Promise<{ removed: true } | { retained: true } | { asks: TreeState }> {
+    const tree = this.#deps.workspaces.worktree(workspace);
+    if (tree?.canvas !== canvas || (tree.state !== 'retained' && tree.state !== 'removing')) {
+      throw new OpFailure('not-found', `The canvas keeps no worktree ${workspace}.`);
+    }
+    const state = await this.assess(tree);
+    let removal: Removal;
+    if (decision !== undefined) {
+      if (
+        decision.choice !== 'discard' ||
+        decision.fingerprints[workspace] !== fingerprint(state)
+      ) {
+        throw new OpFailure(
+          'conflict',
+          'The worktree changed since you were asked about it: decide again on what it holds now.',
+        );
+      }
+      removal = { branch: true, force: true, approved: fingerprint(state), tip: state.tip };
+    } else if (safe(state)) {
+      removal = { branch: true, force: false, approved: null, tip: state.tip };
+    } else {
+      return { asks: state };
+    }
+    await this.#deps.workspaces.write((w) => {
+      this.intend(w, workspace, removal);
+    });
+    this.#changed(canvas);
+    const ended = await this.remove(workspace);
+    if (ended === 'removed') return { removed: true };
+    if (ended === 'retained') return { retained: true };
+    const why = this.#deps.workspaces.worktree(workspace)?.errorCode;
+    throw new OpFailure(
+      'unavailable',
+      `It couldn’t be removed now${why === null || why === undefined ? '' : ` (${why})`}: it is kept for removal, and tried again as corrallm next starts, or when you remove it again.`,
+    );
   }
 
   /** As the core starts, after its children's recovery: every removal not finished, again. */

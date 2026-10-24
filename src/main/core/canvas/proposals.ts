@@ -194,7 +194,13 @@ export class Proposals {
           /** What the trees it leaves with no agent hold now (B9a C7). */
           trees?: readonly TreeState[];
         }
-      | { touched: Readonly<Record<string, number>>; lost: Lost; guard?: RewindGuard }
+      | {
+          touched: Readonly<Record<string, number>>;
+          lost: Lost;
+          guard?: RewindGuard;
+          /** What the tree a command removes holds now (B9a C7: a kept tree's removal). */
+          trees?: readonly TreeState[];
+        }
     ),
   ): Promise<NeedId> {
     const { op, args, by } = raised;
@@ -215,6 +221,8 @@ export class Proposals {
       cleanup = trees.length === 0 ? undefined : { trees };
     } else {
       ({ touched, lost, guard } = raised);
+      const trees = raised.trees ?? [];
+      cleanup = trees.length === 0 ? undefined : { trees };
     }
     // Check inside the write lane too: two raises may have awaited conversations together.
     const { proposal, made } = await this.#deps.store.write(() => {
@@ -396,6 +404,8 @@ export function isDocOp(op: string): boolean {
 export function itemOf(proposal: Proposal): NeedsItem {
   const { lost } = proposal;
   const asks = proposal.cleanup?.trees.some((tree) => !safe(tree)) === true;
+  // A kept tree's removal: discard what it holds, or don't.
+  const removes = proposal.op === 'worktree.remove';
   return {
     id: proposal.id,
     canvas: proposal.canvas,
@@ -405,32 +415,42 @@ export function itemOf(proposal: Proposal): NeedsItem {
     by: ['you'],
     title: lost.title,
     ...(lost.detail === undefined ? {} : { detail: lost.detail }),
-    choices: asks
+    choices: removes
       ? [
           {
-            value: 'allow',
-            label: 'Delete, keep its work',
-            description:
-              'Delete it; its worktree and branch are kept, in Kept worktrees, unless they changed since.',
-            humanOnly: YOURS,
-          },
-          {
             value: 'discard',
-            label: 'Delete, and discard its worktree and branch',
-            description: 'Delete it and remove its worktree and branch, with the work in them.',
+            label: 'Remove it and its branch',
+            description: 'Remove the worktree and its branch, with the work in them.',
             humanOnly: YOURS,
           },
           { value: 'refuse', label: 'Cancel', humanOnly: YOURS },
         ]
-      : [
-          {
-            value: 'allow',
-            label: 'Allow',
-            description: 'Apply it as yours, unless what it changes has changed since.',
-            humanOnly: YOURS,
-          },
-          { value: 'refuse', label: 'Refuse', humanOnly: YOURS },
-        ],
+      : asks
+        ? [
+            {
+              value: 'allow',
+              label: 'Delete, keep its work',
+              description:
+                'Delete it; its worktree and branch are kept, in Kept worktrees, unless they changed since.',
+              humanOnly: YOURS,
+            },
+            {
+              value: 'discard',
+              label: 'Delete, and discard its worktree and branch',
+              description: 'Delete it and remove its worktree and branch, with the work in them.',
+              humanOnly: YOURS,
+            },
+            { value: 'refuse', label: 'Cancel', humanOnly: YOURS },
+          ]
+        : [
+            {
+              value: 'allow',
+              label: 'Allow',
+              description: 'Apply it as yours, unless what it changes has changed since.',
+              humanOnly: YOURS,
+            },
+            { value: 'refuse', label: 'Refuse', humanOnly: YOURS },
+          ],
     answerIn: 'api',
   };
 }
@@ -497,6 +517,11 @@ function wordsOf(
     ...(details.length === 0 ? {} : { detail: details.join(' ') }),
     ...(only === undefined ? {} : { agent: only.id }),
   };
+}
+
+/** What a kept tree holds, in words, for its removal's confirmation. */
+export function keptWords(tree: TreeState): string {
+  return treeWords([], [tree]) ?? 'It is clean.';
 }
 
 /**

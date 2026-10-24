@@ -103,6 +103,46 @@ export class WorkspaceGate {
     }
   }
 
+  /**
+   * Runs `work`, which changes who works in `trees` (a rebind's Switch, B9a C7), under the gate:
+   * refused (OpFailure, changing nothing) if a mutation of any of them goes on, or any agent working
+   * in one may be writing; otherwise with new work for every member held until it ends. `work` hears
+   * who those members are. No agent is exempt: each member's session is the Switch's to end.
+   */
+  async drain<T>(
+    canvas: CanvasId,
+    trees: readonly TreeKey[],
+    work: (members: readonly string[]) => Promise<T>,
+  ): Promise<T> {
+    const keys = [...new Set(trees)].map((tree) => keyOf(canvas, tree));
+    if (keys.some((key) => this.#going.has(key))) throw new OpFailure('unavailable', BUSY);
+    const ended = Promise.withResolvers<undefined>();
+    for (const [at, key] of keys.entries()) {
+      const tree = [...new Set(trees)][at];
+      if (tree !== undefined)
+        this.#going.set(key, { canvas, tree, agent: '', done: ended.promise });
+    }
+    try {
+      const members = [
+        ...new Set((await Promise.all(trees.map((tree) => this.members(canvas, tree)))).flat()),
+      ];
+      const writing = members.flatMap((one) => {
+        const why = this.#deps.writing(canvas, one);
+        return why === undefined ? [] : [`${this.#deps.nameOf(canvas, one)} ${why}`];
+      });
+      if (writing.length > 0) {
+        throw new OpFailure(
+          'unavailable',
+          `Switching changes where every agent of those worktrees works, and ${andList(writing)}: try again once ${writing.length === 1 ? 'it is' : 'they are'} idle.`,
+        );
+      }
+      return await work(members);
+    } finally {
+      for (const key of keys) this.#going.delete(key);
+      ended.resolve(undefined);
+    }
+  }
+
   /** The agents of the canvas working in `tree`: its members, in document order. */
   async members(canvas: CanvasId, tree: TreeKey): Promise<string[]> {
     const agents = this.#deps.agents(canvas);

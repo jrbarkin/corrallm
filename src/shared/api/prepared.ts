@@ -53,6 +53,15 @@ export const PREPARED_SURFACE = {
   // B11 C7: `reply` with its typed answers (a run's holds, a session's prompts), the live op's
   // surface: R3 on every token's call, then the reply router's checks (core/replies.ts).
   reply: { access: M, kind: 'command', scope: 'canvas', rules: ['human-choice'] },
+  // B9a C7: a kept tree removed, yours alone; one holding work asks you to confirm (`discard`'s
+  // proposal envelope, for you).
+  'worktree.remove': {
+    access: Y,
+    kind: 'command',
+    scope: 'canvas',
+    rules: ['discard'],
+    destructive: true,
+  },
 } as const satisfies Record<string, Surface>;
 
 export type PreparedName = keyof typeof PREPARED_SURFACE;
@@ -61,6 +70,7 @@ export type PreparedName = keyof typeof PREPARED_SURFACE;
 export const PREPARED_DEVIATIONS = {
   'session.setMode': 'permissions',
   'session.continueIn': 'permissions',
+  'worktree.remove': 'trust-gate',
 } as const satisfies Partial<Record<PreparedName, Reason>>;
 
 /** The rule row they bring: R5's. */

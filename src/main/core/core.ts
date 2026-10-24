@@ -33,6 +33,7 @@ import { WorkspaceStore } from './workspaces/store';
 import type { TreeKey } from './workspaces/gate';
 import { ownerNode } from './workspaces/planner';
 import type { WorkspaceCleanup } from './workspaces/cleanup';
+import { WorkspaceChanges } from './workspaces/rebind';
 import type { WorktreeRecord } from './workspaces/store';
 import { RunJournal } from '../run-journal';
 import { ADAPTERS, CATALOG, DEFAULT_ADAPTER, isConversationId } from '../sessions/adapters';
@@ -276,6 +277,28 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     },
   });
   const workspaceStore = new WorkspaceStore({ store });
+  /**
+   * A tree's owner's name: as its canvas names its agent or group now, else as it last did (a
+   * deleted agent's, from the canvas's kept changes): none once neither does.
+   */
+  const ownerName = (canvas: CanvasId, owner: string): string | undefined => {
+    const nodes = documents.loaded(canvas)?.document.nodes;
+    const id = ownerNode(owner);
+    if (nodes?.some((node) => node.id === id) === true) return nameOf(nodes, id);
+    try {
+      const row = store
+        .prepare(
+          `SELECT before_data FROM change WHERE canvas_id = ? AND entity = ?
+             AND before_data IS NOT NULL ORDER BY rev DESC LIMIT 1`,
+        )
+        .get(canvas, nodeKey(id));
+      const before: unknown = row === undefined ? undefined : JSON.parse(String(row.before_data));
+      const label = (before as { label?: unknown } | undefined)?.label;
+      return typeof label === 'string' && label !== '' ? label : undefined;
+    } catch {
+      return undefined;
+    }
+  };
   // A tree no agent works in any more (B9a C7): removed with its last agent once safe, else kept
   // unless you discard it, its removal finished across restarts.
   const cleanup = config.cleanup?.({
@@ -285,25 +308,7 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     writers: (tree) => sessions.writingIn(tree.canvas, tree.id),
     setupRunning: (workspace) => setups?.running(workspace) === true,
     forgetSetup: (workspace) => setups?.forget(workspace) ?? Promise.resolve(),
-    // Its owner's name: as the canvas names it now, else as it last did (a deleted agent's).
-    nameOf: (canvas, owner) => {
-      const nodes = documents.loaded(canvas)?.document.nodes;
-      const id = ownerNode(owner);
-      if (nodes?.some((node) => node.id === id) === true) return nameOf(nodes, id);
-      try {
-        const row = store
-          .prepare(
-            `SELECT before_data FROM change WHERE canvas_id = ? AND entity = ?
-               AND before_data IS NOT NULL ORDER BY rev DESC LIMIT 1`,
-          )
-          .get(canvas, nodeKey(id));
-        const before: unknown = row === undefined ? undefined : JSON.parse(String(row.before_data));
-        const label = (before as { label?: unknown } | undefined)?.label;
-        return typeof label === 'string' && label !== '' ? label : undefined;
-      } catch {
-        return undefined;
-      }
-    },
+    nameOf: (canvas, owner) => ownerName(canvas, owner),
     changed: (canvas) => {
       topics.changed(`needs:${canvas}`, 'corrallm');
       engines.needsChanged(canvas);
@@ -487,6 +492,26 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     },
     nameOf: (canvas, agent) => nameOf(engines.canvas(canvas)?.document.nodes ?? [], agent),
   });
+  // A workspace change waiting for you (B9a C7): its card, and its Switch.
+  const changes = new WorkspaceChanges({
+    workspaces: workspaceStore,
+    gate,
+    close: async (canvas, agent) => {
+      const open = engines.canvas(canvas);
+      if (open === undefined) await sessions.close(canvas, agent);
+      else await open.engine.sessions.close(agent);
+    },
+    nameOf: (canvas, id) => {
+      const nodes = documents.loaded(canvas)?.document.nodes ?? [];
+      return nameOf(nodes, id);
+    },
+    messages: (canvas) => engines.messagesOf(canvas),
+    messagesNow: (canvas) => engines.canvas(canvas)?.messages,
+    changed: (canvas) => {
+      topics.changed(`needs:${canvas}`, 'corrallm');
+      engines.needsChanged(canvas);
+    },
+  });
   const windows = new Windows({
     restore: async () => {
       const canvas = await journal.last();
@@ -610,6 +635,7 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
       ...stalled.items(canvas),
       ...journal.items(canvas),
       ...(setups?.items(canvas) ?? []),
+      ...changes.items(canvas),
     ];
   };
   const needOf = (canvas: CanvasId, id: string, reach?: readonly string[]) =>
@@ -663,6 +689,7 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
       ...stalled.items(canvas),
       ...journal.items(canvas),
       ...(setups?.items(canvas) ?? []),
+      ...changes.items(canvas),
     ],
   });
   const warnings = new Set<Promise<void>>();
@@ -783,7 +810,14 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
       surface: prepared ? { ...SURFACE, ...PREPARED_SURFACE } : SURFACE,
       ops: prepared ? { ...OPS, ...PREPARED_OPS } : OPS,
       implementations: {
-        ...(prepared ? preparedOps(control) : {}),
+        ...(prepared
+          ? preparedOps(control, {
+              ...(cleanup === undefined ? {} : { cleanup }),
+              proposals,
+              nameOf: ownerName,
+              workspaces: workspaceStore,
+            })
+          : {}),
         ...implementations({
           topics,
           app: config.app,
@@ -812,6 +846,8 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
           tokens,
           ...(config.locale === undefined ? {} : { locale: config.locale }),
           ...(setups === undefined ? {} : { setups }),
+          workspaceReplies: [changes.handler()],
+          workspaceItems: (canvas) => changes.items(canvas),
           // B11 C7: the reply router answers what the runtime asks once its typed reply is
           // registered (X9; the core's tests register it early).
           ...(prepared

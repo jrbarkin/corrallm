@@ -236,6 +236,16 @@ export class SessionStore {
   }
 
   /**
+   * Ends the agent's session without starting another (a workspace's Switch, B9a C7): what it is
+   * sent next starts one, where the agent works then.
+   */
+  async close(agentId: string): Promise<void> {
+    if (!this.#drivers.has(agentId)) return;
+    await this.#backend.close(agentId).catch(() => null);
+    this.#letGo(agentId);
+  }
+
+  /**
    * Starts a new native conversation with the current role and settings, without a prompt.
    * Main first durably forgets the selected CLI's remembered id; previous native history and
    * observed manual rows remain available. Active turns are never interrupted by this action.

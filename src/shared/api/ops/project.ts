@@ -4,7 +4,7 @@ import { MAX_SETUP_COMMAND_BYTES, UNSEEN_IN_COMMAND } from '../../model/worktree
 import { MAX_FILE_MATCHES, MAX_FILE_QUERY_LENGTH } from '../../session';
 import { define } from '../define';
 import type { OpDef } from '../define';
-import { OpCanvas } from '../ids';
+import { OpCanvas, WorktreeId } from '../ids';
 import type { OpName } from '../surface';
 
 /** Project files (Core Server §4 B, §7.3), relative to the canvas's chosen folder. */
@@ -47,3 +47,22 @@ export const projectOps = {
     output: z.strictObject({ cleared: z.boolean() }),
   }),
 } satisfies Partial<Record<OpName, OpDef>>;
+
+/**
+ * B9a C7's worktree op, prepared (X12 registers it with worktree.list and its topic): a kept tree
+ * removed, safely, or its confirmation raised for you.
+ */
+export const b9aWorktreeOps = {
+  'worktree.remove': define(
+    { kind: 'command', rules: ['discard'] },
+    {
+      summary:
+        'Removes a worktree the canvas keeps (its agents gone), with its branch: at once if it is ' +
+        'clean, merged and no one writes there, else once the user confirms discarding what it ' +
+        'holds. Only the user removes one. Returns whether it was removed, or kept because it ' +
+        'changed since.',
+      input: z.strictObject({ canvas: OpCanvas, worktree: WorktreeId }),
+      output: z.strictObject({ removed: z.boolean(), retained: z.boolean().optional() }),
+    },
+  ),
+};

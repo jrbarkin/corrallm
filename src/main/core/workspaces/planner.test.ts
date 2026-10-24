@@ -22,7 +22,8 @@ import { keepCanvases, onDisk, openTestStore } from '../store/test-store';
 import { CALLERS, NO_DESKTOP } from '../test-registry';
 import { WorkspacePlanner } from './planner';
 import { WorkspaceStore } from './store';
-import type { NewRepository, NewWorktree, WorktreeState } from './store';
+import type { NewRepository, NewWorktree, WorktreeRecord, WorktreeState } from './store';
+import type { TreeState } from './cleanup';
 
 /*
  * B9a C6: who works where follows every change to a canvas's document, at its commit seam (an op's
@@ -288,6 +289,65 @@ describe('the document seam', () => {
     expect(binding('b')?.desired).toBeNull();
     await documents.revert(CANVAS, { op: 'canvas.close', by: 'you' });
     expect(binding('b')).toMatchObject({ workspace: B, desired: { owner: 'group/f' } });
+  });
+});
+
+describe('trees left with no agent (B9a C7)', () => {
+  /** What each tree holds, as the cleanup would assess it: clean and merged, or with work. */
+  const held = (workspace: string, work: boolean): TreeState => ({
+    workspace,
+    head: OID,
+    tip: OID,
+    changed: work ? 1 : 0,
+    untracked: 0,
+    paths: work ? ['README.md'] : [],
+    merged: true,
+    writers: [],
+    setup: false,
+    status: work ? 'dirty' : 'clean',
+  });
+
+  it('removes a safe one with its last agent on a file’s Apply and a discard, keeping one with work', async () => {
+    const removed: string[] = [];
+    const cleanup = {
+      assess: (tree: WorktreeRecord) => Promise.resolve(held(tree.id, tree.id === B)),
+      intend: (w: WorkspaceStore, workspace: string) => {
+        w.markRemoving(workspace);
+      },
+      remove: (workspace: string) => {
+        removed.push(workspace);
+        return Promise.resolve('removed' as const);
+      },
+    };
+    const cleaning = new Documents({
+      store,
+      memory,
+      catalog: CATALOG,
+      defaultAdapter: DEFAULT_ADAPTER,
+      reviews,
+      workspaces: new WorkspacePlanner({ workspaces, cleanup }),
+    });
+    const file = path.join(profile, 'team.corral');
+    await writeFile(file, toFile(LONE));
+    await memory.setFile(CANVAS, mintTrustedPath(file));
+    await cleaning.load(CANVAS);
+    await seed(
+      [
+        [A, 'agent/a', 'ready'],
+        [B, 'agent/b', 'ready'],
+      ],
+      { a: A, b: B },
+    );
+    // On disk, both agents are gone: Apply removes them, a's clean tree with it, b's kept.
+    await writeFile(file, toFile(canvasOf()));
+    await cleaning.review(CANVAS);
+    const review = reviews.open(CANVAS);
+    if (!review) throw new Error('No review');
+    const turn = { signal: new AbortController().signal, noReturn: () => undefined };
+    await cleaning.applyFile(CANVAS, review, 'you', turn);
+    expect(workspaces.worktree(A)?.state).toBe('removing');
+    expect(workspaces.worktree(B)?.state).toBe('retained');
+    expect(removed).toEqual([A]);
   });
 });
 

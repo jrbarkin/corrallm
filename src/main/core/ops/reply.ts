@@ -60,7 +60,11 @@ export function replyOps({
   sessions,
   setups,
   replies,
-}: Pick<OpServices, 'proposals' | 'reviews' | 'needOf' | 'setups' | 'replies'> & {
+  workspaceReplies,
+}: Pick<
+  OpServices,
+  'proposals' | 'reviews' | 'needOf' | 'setups' | 'replies' | 'workspaceReplies'
+> & {
   documents: Pick<OpServices['documents'], 'applyFile' | 'keepFile'>;
   engines: Pick<OpServices['engines'], 'changed' | 'resendAfter' | 'cancelResend'>;
   lifecycle: Pick<Lifecycle, 'touched'>;
@@ -237,7 +241,14 @@ export function replyOps({
       ),
   };
 
-  const router = new ReplyRouter([proposal, review, silent, setup, ...(replies ?? [window])]);
+  const router = new ReplyRouter([
+    proposal,
+    review,
+    silent,
+    setup,
+    ...(workspaceReplies ?? []),
+    ...(replies ?? [window]),
+  ]);
 
   const answer = (
     args: { canvas?: string | undefined; to: string; answer: Answer },

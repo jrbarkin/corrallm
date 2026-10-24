@@ -24,7 +24,8 @@ export type Brand =
   | 'ConversationId'
   | 'EntryId'
   | 'TaskId'
-  | 'TokenId';
+  | 'TokenId'
+  | 'WorktreeId';
 
 /** Each id schema's brand, at run time. */
 export const ID_BRANDS = z.registry<{ brand: Brand }>();
@@ -50,6 +51,13 @@ export const NeedId = brandedId(
     .regex(/^(?:hold|start|unasking|limited|prompt|proposal|file|stalled|setup|rebind)\/[\s\S]+$/),
 );
 export type NeedId = z.infer<typeof NeedId>;
+
+/**
+ * A workspace of a canvas (B9a), by its record's id: resolved only among the records that canvas
+ * owns, never a raw lookup; no token reaches one until a design grants it.
+ */
+export const WorktreeId = brandedId('WorktreeId', z.uuid());
+export type WorktreeId = z.infer<typeof WorktreeId>;
 
 /** A canvas, by its stable id (src/shared/canvas.ts). */
 export const CanvasId = brandedId('CanvasId', z.uuid());

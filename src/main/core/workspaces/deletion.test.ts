@@ -122,6 +122,8 @@ async function start({ file = true }: { file?: boolean } = {}): Promise<{
       app: { name: 'corrallm', version: '9.8.7' },
       check: true,
       distribution: 'local',
+      // worktree.remove, prepared for X12 to register.
+      preparedOps: true,
       sessions: {
         connectors: { 'claude-code.terminal': terminal },
         environment: () => Promise.resolve({}),
@@ -285,6 +287,123 @@ describe('deleting the last agent of a worktree', { timeout: 60_000 }, () => {
     ).toMatchObject({ outcome: 'allowed' });
     expect(stateOf(trees.a.id)).toBe('retained');
     expect(git(trees.a.path, made.env, 'status', '--porcelain')).toContain('README.md');
+  });
+});
+
+describe('a kept worktree', { timeout: 60_000 }, () => {
+  it('is removed once safe, or once you confirm discarding what it holds; yours alone', async () => {
+    const { core: on, trees } = await start();
+    for (const [agent, tree] of [
+      ['a', trees.a],
+      ['b', trees.b],
+    ] as const) {
+      writeFileSync(path.join(tree.path, 'notes.md'), 'draft\n');
+      const asked = (await ok(on, 'canvas.delete', { nodes: [agent] })) as { proposed: string };
+      await ok(on, 'reply', { to: asked.proposed, answer: { choice: 'allow' } });
+    }
+    expect([stateOf(trees.a.id), stateOf(trees.b.id)]).toEqual(['retained', 'retained']);
+    // No token removes one.
+    expect(await call(on, 'worktree.remove', { worktree: trees.a.id }, ORCHESTRATOR)).toMatchObject(
+      { ok: false, error: { code: 'human-only' } },
+    );
+    // Holding work, it asks you first.
+    const asked = (await ok(on, 'worktree.remove', { worktree: trees.a.id })) as {
+      proposed: string;
+    };
+    expect(await needOf(on, asked.proposed)).toMatchObject({
+      title: 'Remove Builder’s kept worktree? It holds work.',
+      detail: 'Its worktree has 1 untracked file (notes.md).',
+      choices: [{ value: 'discard' }, { value: 'refuse' }],
+    });
+    expect(stateOf(trees.a.id)).toBe('retained');
+    expect(
+      await ok(on, 'reply', { to: asked.proposed, answer: { choice: 'discard' } }),
+    ).toMatchObject({ outcome: 'allowed' });
+    expect(stateOf(trees.a.id)).toBeUndefined();
+    expect(existsSync(trees.a.path)).toBe(false);
+    expect(branchAt(trees.a.branchRef)).toBeUndefined();
+    // Cleaned up meanwhile: removed at once, with nothing to confirm.
+    rmSync(path.join(trees.b.path, 'notes.md'));
+    expect(await ok(on, 'worktree.remove', { worktree: trees.b.id })).toMatchObject({
+      removed: true,
+    });
+    expect(stateOf(trees.b.id)).toBeUndefined();
+    expect(cleanup?.kept(CANVAS)).toEqual([]);
+    // One the canvas doesn't keep is none of its to remove.
+    expect(await call(on, 'worktree.remove', { worktree: trees.b.id })).toMatchObject({
+      ok: false,
+      error: { code: 'not-found' },
+    });
+  });
+});
+
+describe('a workspace change', { timeout: 60_000 }, () => {
+  it('waits for your Switch, at the plan it shows, keeping the worktree left', async () => {
+    const { core: on, trees } = await start();
+    await ok(on, 'canvas.group', { nodes: ['a', 'b'], kind: 'frame' });
+    const pending = ((await ok(on, 'needs', {})) as { items: NeedsItem[] }).items.filter((item) =>
+      item.id.startsWith('rebind/'),
+    );
+    expect(pending).toEqual([
+      expect.objectContaining({
+        kind: 'worktree',
+        by: ['you'],
+        title: expect.stringMatching(/^Move Reviewer to .+’s worktree\?$/) as string,
+        choices: [expect.objectContaining({ value: 'switch' })],
+      }),
+    ]);
+    const [card] = pending;
+    if (card === undefined) throw new Error('no card');
+    expect(card).not.toHaveProperty('agent');
+    // No token sees it, nor answers it.
+    expect(
+      ((await ok(on, 'needs', {}, ORCHESTRATOR)) as { items: NeedsItem[] }).items,
+    ).not.toContainEqual(expect.objectContaining({ id: card.id }));
+    expect(
+      await call(on, 'reply', { to: card.id, answer: { choice: 'switch' } }, ORCHESTRATOR),
+    ).toMatchObject({ ok: false, error: { code: 'not-found' } });
+    // A card of an earlier plan of the same change is stale: never switched for the one now.
+    const [, owner, generation] = card.id.split('/');
+    const earlier = `rebind/${String(owner)}/${String(Number(generation) - 1)}`;
+    expect(await call(on, 'reply', { to: earlier, answer: { choice: 'switch' } })).toMatchObject({
+      ok: false,
+      error: { code: 'conflict' },
+    });
+    const now = card;
+    const switched = (await ok(on, 'reply', { to: now.id, answer: { choice: 'switch' } })) as {
+      outcome: string;
+    };
+    expect(switched.outcome).toBe('completed');
+    const disk = onDisk(made.profile);
+    try {
+      expect(
+        disk
+          .prepare(
+            'SELECT agent_id, workspace_id, desired_owner_key FROM agent_worktree ORDER BY agent_id',
+          )
+          .all(),
+      ).toEqual([
+        { agent_id: 'a', workspace_id: trees.a.id, desired_owner_key: null },
+        { agent_id: 'b', workspace_id: trees.a.id, desired_owner_key: null },
+      ]);
+    } finally {
+      disk.close();
+    }
+    // The tree Reviewer left is kept, with its branch.
+    expect(stateOf(trees.b.id)).toBe('retained');
+    expect(branchAt(trees.b.branchRef)).toBe(made.base);
+    expect(
+      ((await ok(on, 'needs', {})) as { items: NeedsItem[] }).items.some((item) =>
+        item.id.startsWith('rebind/'),
+      ),
+    ).toBe(false);
+    expect(await call(on, 'reply', { to: now.id, answer: { choice: 'switch' } })).toMatchObject({
+      ok: false,
+      error: {
+        code: 'conflict',
+        sentence: expect.stringMatching(/You switched Reviewer/) as string,
+      },
+    });
   });
 });
 

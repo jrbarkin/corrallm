@@ -47,6 +47,7 @@ const WORDS: Readonly<Record<Brand, string>> = {
   EntryId: 'transcript entry',
   TaskId: 'task',
   TokenId: 'token',
+  WorktreeId: 'worktree',
 };
 
 /**

@@ -128,6 +128,10 @@ export interface OpServices {
    * window.
    */
   replies?: readonly ReplyHandler[];
+  /** The reply router's handlers of the workspaces' cards (a workspace change's Switch: B9a C7). */
+  workspaceReplies?: readonly ReplyHandler[];
+  /** The workspaces' cards waiting on a canvas (its workspace changes): yours alone, on no agent. */
+  workspaceItems?: (canvas: CanvasId) => readonly NeedsItem[];
 }
 
 export function implementations(services: OpServices): Implementations {
