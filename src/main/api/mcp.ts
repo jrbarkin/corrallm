@@ -9,6 +9,7 @@ import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 
+import { TOKEN_REPLACED } from '../../shared/api/errors';
 import type { OpResult } from '../../shared/api/errors';
 import { MAX_REQUEST_BYTES } from '../../shared/api/limits';
 import { opsFor, toolName, toolOf } from '../../shared/api/registry';
@@ -28,7 +29,9 @@ import { foreignRequest } from '../loopback';
  *
  * Before the token, in this order (API Spec §8.2): a Host other than its own, and any Origin
  * header, get 403 (a page in a browser: loopback.ts), and a body that isn't exactly JSON 415. The
- * body is read here, capped at MAX_REQUEST_BYTES, the bound every op's arguments fit.
+ * body is read here, capped at MAX_REQUEST_BYTES, the bound every op's arguments fit. A token it
+ * doesn't take gets 401; one its store made that no longer works (renewed, revoked, expired) gets
+ * 401 with TOKEN_REPLACED's sentence.
  */
 
 /** How far a body over MAX_REQUEST_BYTES is still read, for its answer to reach the client. */
@@ -49,6 +52,11 @@ export interface ApiServerOptions {
   core: Dispatcher;
   /** Who a bearer token belongs to: an agent's session or an outside token, or undefined. */
   clientOf: (token: string) => TokenCaller | undefined;
+  /**
+   * Whether a token it doesn't take is one its store made that no longer works (replaced,
+   * revoked or expired): its 401 then says so, as TOKEN_REPLACED.
+   */
+  stale?: (token: string) => boolean;
   /** 0 for any free port. */
   port: number;
 }
@@ -133,6 +141,12 @@ export async function startApiServer(options: ApiServerOptions): Promise<ApiServ
     const caller = token === undefined ? undefined : options.clientOf(token);
     // No token is ever you (decision 7), whatever its lookup says.
     if (caller === undefined || !isTokenCaller(caller)) {
+      if (token !== undefined && options.stale?.(token) === true) {
+        // Still a 401, which a client's headers helper hears to read its token again.
+        request.resume();
+        answerError(response, 401, -32001, TOKEN_REPLACED);
+        return;
+      }
       refuse(401);
       return;
     }

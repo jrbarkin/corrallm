@@ -8,7 +8,7 @@ import path from 'node:path';
 import { z } from 'zod';
 
 import { ID_PATTERN } from '../../shared/adapter';
-import { MAX_TOKEN_HOURS } from '../../shared/api/limits';
+import { MAX_TOKEN_CANVASES, MAX_TOKEN_HOURS } from '../../shared/api/limits';
 import { isCanvasId } from '../../shared/canvas';
 
 /*
@@ -34,8 +34,6 @@ import { isCanvasId } from '../../shared/canvas';
  */
 
 export const TOKEN_SOCKET = 'token.sock';
-/** The most canvases one token is asked for. */
-export const MAX_TOKEN_CANVASES = 32;
 /** The most bytes a request or an answer holds, as a line. */
 const MAX_LINE = 64 * 1024;
 /** How long a client may take to send its request. */
@@ -186,8 +184,15 @@ export async function serveTokenSocket({
     await rm(at, { force: true });
   }
 
+  /** Each connection open, and whether its request is being answered. */
+  const connections = new Map<Socket, { busy: boolean }>();
   const server = createServer((socket) => {
-    serveOne(socket, answer);
+    const state = { busy: false };
+    connections.set(socket, state);
+    socket.once('close', () => {
+      connections.delete(socket);
+    });
+    serveOne(socket, answer, state);
   });
   server.maxConnections = 8;
   const listening = new Promise<void>((resolve, reject) => {
@@ -232,6 +237,10 @@ export async function serveTokenSocket({
         server.close(() => {
           resolve();
         });
+        // A request being answered is answered (a token it makes is then seen); the rest go now.
+        for (const [socket, state] of connections) {
+          if (!state.busy) socket.destroy();
+        }
       })),
     removeSync: () => {
       try {
@@ -243,8 +252,15 @@ export async function serveTokenSocket({
   };
 }
 
-/** Answers one connection's request, then ends it. */
-function serveOne(socket: Socket, answer: (request: TokenRequest) => Promise<TokenAnswer>): void {
+/**
+ * Answers one connection's request, then ends it; `state.busy` while it is answered. One idle for
+ * REQUEST_MS, before its request or after its answer, is dropped.
+ */
+function serveOne(
+  socket: Socket,
+  answer: (request: TokenRequest) => Promise<TokenAnswer>,
+  state: { busy: boolean },
+): void {
   let received = Buffer.alloc(0);
   let answered = false;
   const reply = (value: TokenAnswer) => {
@@ -254,7 +270,7 @@ function serveOne(socket: Socket, answer: (request: TokenRequest) => Promise<Tok
     reply({ ok: false, sentence });
   };
   socket.setTimeout(REQUEST_MS, () => {
-    socket.destroy();
+    if (!state.busy) socket.destroy();
   });
   socket.on('error', () => undefined);
   socket.on('data', (chunk: Buffer) => {
@@ -269,7 +285,6 @@ function serveOne(socket: Socket, answer: (request: TokenRequest) => Promise<Tok
       return;
     }
     answered = true;
-    socket.setTimeout(0);
     const request = parseRequest(received.subarray(0, end).toString('utf8'));
     if (request === undefined) {
       refuse(
@@ -277,9 +292,14 @@ function serveOne(socket: Socket, answer: (request: TokenRequest) => Promise<Tok
       );
       return;
     }
-    answer(request).then(reply, (error: unknown) => {
-      refuse(error instanceof Error ? error.message : String(error));
-    });
+    state.busy = true;
+    answer(request)
+      .then(reply, (error: unknown) => {
+        refuse(error instanceof Error ? error.message : String(error));
+      })
+      .finally(() => {
+        state.busy = false;
+      });
   });
 }
 

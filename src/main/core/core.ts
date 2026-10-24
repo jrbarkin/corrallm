@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs';
 import { readFile, realpath, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import path from 'node:path';
@@ -54,6 +55,9 @@ import { implementations } from './ops';
 import { discardChecks } from './ops/files';
 import { holder, resolvers } from './reach';
 import { changeChecks, heldBy, ruleChecks } from './rules';
+import { lockProfile } from './lock';
+import { answerTokenRequest } from './token-requests';
+import type { TokenAnswer, TokenRequest } from './token-socket';
 import { TokenStore } from './tokens';
 import { Topics } from './topics';
 import { UsageProbe } from './usage-probe';
@@ -62,7 +66,7 @@ import { Children } from './children';
 import { StalledTurns } from './stalled';
 import type { WatchdogClock, WatchdogNetwork } from './stalled';
 import type { ChildSystem } from './children';
-import { openStore } from './store/open';
+import { openStore, STORE_FILE } from './store/open';
 import { unopened } from './store/store';
 import type { StoreDeps } from './store/store';
 
@@ -156,6 +160,15 @@ export interface Core extends Dispatcher {
    * kept across renewals.
    */
   clientOf(token: string): OutsideCaller | undefined;
+  /**
+   * Answers what `corrallm token new|renew|revoke` asks over the token socket (Build Plan B30), as
+   * `owner` (the app or `corrallm serve`), whose MCP server listens at `url` (null: none yet). A
+   * new token reaches only canvases whose files `keptCanvas` accepts.
+   */
+  tokenRequest(
+    request: TokenRequest,
+    host: { owner: 'app' | 'serve'; url: string | null },
+  ): Promise<TokenAnswer>;
   /** What the user chose for corrallm as a whole: the port its API server keeps, here. */
   settings: Pick<Settings, 'apiPort' | 'keepApiPort'>;
   /**
@@ -702,8 +715,16 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
       const made = documents.createdBy(`outside:${caller.name}`);
       return { ...caller, canvases: [...new Set([...caller.canvases, ...made])] };
     },
+    tokenRequest: (request, { owner, url }) =>
+      answerTokenRequest(request, {
+        owner,
+        tokens,
+        keptCanvas: (file) => keptCanvas(file, memory, 'reached'),
+        fileOf: async (canvas) => (await memory.get(canvas)).file,
+        url,
+      }),
     settings,
-    keptCanvas: (file) => keptCanvas(file, memory),
+    keptCanvas: (file) => keptCanvas(file, memory, 'served'),
     openHeld: async (canvas) => {
       await engines.open(canvas, { held: true });
       return engines.canvas(canvas)?.warnings ?? [];
@@ -746,16 +767,21 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
  * The canvas `file` holds, if canvas memory names that very file for it (by its real path) and
  * keeps a project folder for it that is still there; else rejects, saying what to do in the app.
  * The file is only read for the id it holds: the canvas opens from the file canvas memory names,
- * never from `file`.
+ * never from `file`. `use` says what the file was named for: a canvas to serve (`serve --canvas`),
+ * or one a token is to reach (`corrallm token new --canvas`).
  */
-async function keptCanvas(file: string, memory: CanvasMemory): Promise<CanvasId> {
+async function keptCanvas(
+  file: string,
+  memory: CanvasMemory,
+  use: 'served' | 'reached',
+): Promise<CanvasId> {
   const name = path.basename(file);
   let canvas: CanvasId;
   try {
     if ((await stat(file)).size > MAX_CANVAS_BYTES) throw new Error('it is too large');
     canvas = canvasIdOf(await readFile(file, 'utf8'));
   } catch (error) {
-    throw new Error(`${name} can’t be served: ${reasonOf(error)}`, { cause: error });
+    throw new Error(`${name} can’t be ${use}: ${reasonOf(error)}`, { cause: error });
   }
   const { file: kept, project } = await memory.get(canvas);
   const open = `open ${name} in corrallm and choose its project folder there`;
@@ -770,7 +796,7 @@ async function keptCanvas(file: string, memory: CanvasMemory): Promise<CanvasId>
   }
   if (asked !== keeps) {
     throw new Error(
-      `${name} is a copy of a canvas corrallm keeps at ${kept}: serve that file, or ${open} (it opens as a canvas of its own).`,
+      `${name} is a copy of a canvas corrallm keeps at ${kept}: ${use === 'served' ? 'serve' : 'name'} that file, or ${open} (it opens as a canvas of its own).`,
     );
   }
   if (project === undefined) {
@@ -783,6 +809,70 @@ async function keptCanvas(file: string, memory: CanvasMemory): Promise<CanvasId>
     );
   }
   return canvas;
+}
+
+/**
+ * Answers what `corrallm token` asks (Build Plan B30) of a profile no corrallm owns: under
+ * core.lock, taken for the moment as `token` and let go once its stores are written, over the
+ * profile's own stores, as `corrallm serve --new-token` writes them; only a new token, which names
+ * canvases by their files, opens the database, to read canvas memory. Its URL is where the
+ * profile's server will listen (the port it keeps), if it keeps one. Rejects with ProfileLocked
+ * while another process holds the profile. A profile that isn't there is never made.
+ */
+export async function answerUnowned(profile: string, request: TokenRequest): Promise<TokenAnswer> {
+  const folder = await stat(profile).catch(() => undefined);
+  if (!folder?.isDirectory()) {
+    return {
+      ok: false,
+      sentence: `No corrallm profile is at ${profile}: open the canvas in the app first, or name the profile with --profile.`,
+    };
+  }
+  const lock = await lockProfile(profile, 'token');
+  // Whatever happens, a process that ends lets the profile go.
+  const release = () => {
+    lock.release();
+  };
+  process.once('exit', release);
+  try {
+    const tokens = new TokenStore(path.join(profile, 'tokens.json'));
+    await tokens.load();
+    const port = await new Settings(path.join(profile, 'settings.json')).apiPort();
+    const url = port === undefined ? null : `http://127.0.0.1:${String(port)}/mcp`;
+    let store: Awaited<ReturnType<typeof openStore>>['store'];
+    try {
+      let memory: CanvasMemory | undefined;
+      if (request.op === 'new') {
+        // A profile with no database keeps no canvas, and gets none from a token.
+        if (!existsSync(path.join(profile, STORE_FILE))) {
+          return {
+            ok: false,
+            sentence: `The profile ${profile} keeps no canvas yet: open the canvas in corrallm and choose its project folder there.`,
+          };
+        }
+        const opened = await openStore(profile);
+        store = opened.store;
+        if (store === undefined) return { ok: false, sentence: opened.said.join(' ') };
+        memory = new CanvasMemory(store, undefined, () => false, isConversationId);
+      }
+      const answer = await answerTokenRequest(request, {
+        owner: 'none',
+        tokens,
+        keptCanvas: (file) =>
+          memory === undefined
+            ? Promise.reject(new Error('No canvas memory.'))
+            : keptCanvas(file, memory, 'reached'),
+        fileOf: async (canvas) => (await memory?.get(canvas))?.file,
+        url,
+      });
+      await tokens.flush();
+      return answer;
+    } finally {
+      await store?.close();
+    }
+  } finally {
+    process.removeListener('exit', release);
+    release();
+  }
 }
 
 function reasonOf(error: unknown): string {

@@ -8,6 +8,7 @@ import path from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
+import type { CanvasId } from '../../shared/canvas';
 import { askTokenOwner, serveTokenSocket, TokenSocketUnavailable } from './token-socket';
 import type { TokenAnswer, TokenRequest, TokenSocket } from './token-socket';
 
@@ -18,7 +19,7 @@ import type { TokenAnswer, TokenRequest, TokenSocket } from './token-socket';
  * which the OS checks on every connect. Its client asks only a socket that is its user's alone.
  */
 
-const CANVAS = '0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4b01';
+const CANVAS = '0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4b01' as CanvasId;
 const NEW: TokenRequest = {
   version: 1,
   op: 'new',

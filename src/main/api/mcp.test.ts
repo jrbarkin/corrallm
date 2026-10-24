@@ -9,6 +9,7 @@ import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import { afterEach, beforeEach, describe, expect, expectTypeOf, it } from 'vitest';
 import { z } from 'zod';
 
+import { TOKEN_REPLACED } from '../../shared/api/errors';
 import { MAX_REQUEST_BYTES } from '../../shared/api/limits';
 import { opsFor, toolName } from '../../shared/api/registry';
 import SNAPSHOT from '../../shared/api/surface.snap.json';
@@ -211,6 +212,24 @@ describe('the MCP server’s request checks', () => {
     const you = CALLERS.you as unknown as TokenCaller;
     server = await startApiServer({ core, clientOf: () => you, port: 0 });
     expect((await post(LIST)).status).toBe(401);
+  });
+
+  it('tells a token its store made that no longer works why it is refused, and a stranger nothing', async () => {
+    await server.close();
+    server = await startApiServer({
+      core,
+      clientOf,
+      stale: (token) => token === 'renewed-away',
+      port: 0,
+    });
+    // Refused before any op runs, as any token it doesn't know is (a client's helper reads its
+    // header again on a 401), with the sentence a call still going ends with.
+    const replaced = await post(LIST, { ...HEADERS, Authorization: 'Bearer renewed-away' });
+    expect(replaced.status).toBe(401);
+    expect(replaced.body).toBe(jsonRpcError(-32001, TOKEN_REPLACED));
+    const unknown = await post(LIST, { ...HEADERS, Authorization: 'Bearer never-made' });
+    expect(unknown).toEqual({ status: 401, body: '' });
+    expect(Object.values(registry.calls).flat()).toEqual([]);
   });
 
   it('answers a body that is not JSON with a parse error', async () => {

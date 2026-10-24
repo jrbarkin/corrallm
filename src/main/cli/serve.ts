@@ -15,11 +15,14 @@ import { appProfile, NODE_HOST } from '../core/host/node';
 import { lockProfile, processStart, ProfileLocked } from '../core/lock';
 import type { ProfileLock } from '../core/lock';
 import { partyName } from '../core/parties';
-import { CATALOG } from '../sessions/adapters';
+import { serveTokenSocket } from '../core/token-socket';
+import type { TokenAnswer, TokenRequest, TokenSocket } from '../core/token-socket';
 import { agentEnvironment, loginShellEnvironment } from '../sessions/environment';
 import { installedClis } from '../sessions/installed';
 import { removeApiFile, writeApiFile } from './api-file';
 import type { ServeCommand } from './args';
+import { shown } from './output';
+import { registrations, SERVER_NAME } from './register';
 import { TOKEN_VARIABLE, URL_VARIABLE } from './wait';
 
 /*
@@ -37,13 +40,14 @@ import { TOKEN_VARIABLE, URL_VARIABLE } from './wait';
  * waiting for an answer, with every control character shown escaped, since what it says comes from
  * canvases, agents and MCP servers. --new-token makes an outside token for the canvases named,
  * shown once, on a terminal only, with how to register corrallm by its variable in each installed
- * CLI that says how (its adapter's `registerMcp`). Told to stop (SIGINT, SIGTERM, SIGHUP), it holds
- * each run where it is, journals, ends its sessions, writes out what it keeps, removes api.json
- * and lets the profile go; told as it starts, it makes no token and delivers nothing.
+ * CLI that says how (its adapter's `registerMcp`). While it serves, it also serves the profile's
+ * token socket (core/token-socket.ts), so `corrallm token new|renew|revoke` makes, renews and
+ * revokes tokens on it at once, each said in the log without its value; a token it no longer takes
+ * (renewed, revoked, expired) is told so on its next call. Told to stop (SIGINT, SIGTERM, SIGHUP),
+ * it holds each run where it is, journals, ends its sessions, writes out what it keeps, removes
+ * api.json and its socket and lets the profile go; told as it starts, it makes no token and
+ * delivers nothing.
  */
-
-/** The name orchestrators register corrallm's MCP server under: never the agents' `corrallm`. */
-const SERVER_NAME = 'corrallm-server';
 
 const NOT_A_TERMINAL =
   'corrallm serve: --new-token prints a token only to a terminal, so that a person sees it once: run it in one, with stderr not redirected.';
@@ -76,7 +80,7 @@ export async function serveCommand(command: ServeCommand, io: ServeIO): Promise<
   } catch (error) {
     if (!(error instanceof ProfileLocked)) throw error;
     const advice =
-      error.holder === undefined
+      error.holder === undefined || error.holder.owner === 'token'
         ? 'Try again in a moment.'
         : error.holder.owner === 'app'
           ? 'Quit it first, or serve another profile with --profile.'
@@ -85,9 +89,11 @@ export async function serveCommand(command: ServeCommand, io: ServeIO): Promise<
     return 1;
   }
   let wroteApi = false;
+  let socket: TokenSocket | undefined;
   // Whatever happens, a process that ends lets the profile go.
   const leave = () => {
     if (wroteApi) removeApiFile(profile);
+    socket?.removeSync();
     lock.release();
   };
   process.once('exit', leave);
@@ -159,6 +165,7 @@ export async function serveCommand(command: ServeCommand, io: ServeIO): Promise<
       server = await startApiServer({
         core: opened,
         clientOf: (token) => opened.clientOf(token),
+        stale: (token) => opened.tokens.stale(token),
         port,
       });
     } catch (error) {
@@ -201,6 +208,26 @@ export async function serveCommand(command: ServeCommand, io: ServeIO): Promise<
     }
 
     if (stopping) return stop();
+    // corrallm token asks it from now on; a socket it can't serve is said, and it serves on.
+    try {
+      socket = await serveTokenSocket({
+        profile,
+        answer: async (request) => {
+          if (isStopping()) {
+            return {
+              ok: false,
+              sentence: 'corrallm serve is stopping: run corrallm token again once it has stopped.',
+            };
+          }
+          const answer = await opened.tokenRequest(request, { owner: 'serve', url });
+          say(tokenLine(request, answer, names));
+          return answer;
+        },
+      });
+    } catch (error) {
+      say(`corrallm serve: corrallm token can’t reach it: ${reasonOf(error)}`);
+    }
+    if (isStopping()) return stop();
     // Discovery is a startup check too: a failed publication must never release queued messages
     // or announce a server that corrallm wait cannot find yet.
     try {
@@ -231,6 +258,8 @@ export async function serveCommand(command: ServeCommand, io: ServeIO): Promise<
   try {
     code = await serving();
   } finally {
+    // No token is made as it stops.
+    await socket?.close();
     await server?.close();
     // Each run held where it is, journaled, every session ended, what the core keeps written out.
     const closed = await core?.close().then(
@@ -248,20 +277,23 @@ export async function serveCommand(command: ServeCommand, io: ServeIO): Promise<
 }
 
 /**
- * The commands that register corrallm's MCP server by the token's variable, in each installed CLI
- * that says how.
+ * What `corrallm token` made, renewed or revoked through the socket, as a line of the log: who and
+ * what, never the token.
  */
-export function registrations(installed: Readonly<Record<string, boolean>>, url: string): string[] {
-  return CATALOG.adapters.flatMap(({ id, registerMcp }) =>
-    registerMcp === undefined || installed[id] !== true
-      ? []
-      : [
-          registerMcp
-            .replaceAll('{server}', SERVER_NAME)
-            .replaceAll('{url}', url)
-            .replaceAll('{var}', TOKEN_VARIABLE),
-        ],
-  );
+function tokenLine(
+  request: TokenRequest,
+  answer: TokenAnswer,
+  names: ReadonlyMap<CanvasId, string>,
+): string {
+  if (!answer.ok) return `corrallm serve: corrallm token was refused: ${answer.sentence}`;
+  if (answer.op === 'revoke') {
+    return `corrallm serve: corrallm token revoked the token "${answer.name}": it is refused from now on.`;
+  }
+  const hours = request.op === 'revoke' ? 0 : request.hours;
+  const reach = answer.canvases
+    .map(({ id, file }) => names.get(id) ?? (file === undefined ? id : path.basename(file)))
+    .join(', ');
+  return `corrallm serve: corrallm token ${answer.op === 'renew' ? 'renewed' : 'made'} a token for "${answer.name}" (${answer.access === 'write' ? 'read-write' : 'read-only'}, for ${String(hours)} hour${hours === 1 ? '' : 's'}), reaching ${reach}; any earlier one of its name is refused from now on.`;
 }
 
 /**
@@ -276,7 +308,7 @@ function tokenText(
   installed: Readonly<Record<string, boolean>>,
   findIt: readonly string[],
 ): string[] {
-  const commands = registrations(installed, url);
+  const commands = registrations(installed, url).byVariable;
   return [
     `corrallm serve: a new token for "${name}" (${access === 'write' ? 'read-write' : 'read-only'}, for ${String(hours)} hour${hours === 1 ? '' : 's'}), reaching ${served}. It replaces any earlier token named "${name}". It is shown only now; corrallm keeps only its hash:`,
     '',
@@ -333,18 +365,6 @@ function where(names: ReadonlyMap<CanvasId, string>, canvas: CanvasId): string {
 /** How a turn ended, in short: "completed", "cancelled (interrupted)". */
 function turnWords({ status, reason }: TurnResult): string {
   return reason === status ? status : `${status} (${reason})`;
-}
-
-/**
- * A line as the terminal is given it: each control character (C0, DEL, C1) shown as its escape
- * (`\x1b`), so no name or title it quotes can move the cursor, erase what was said, ring, or set
- * the clipboard.
- */
-function shown(line: string): string {
-  return line.replace(
-    /\p{Cc}/gu,
-    (character) => `\\x${character.charCodeAt(0).toString(16).padStart(2, '0')}`,
-  );
 }
 
 function reasonOf(error: unknown): string {
