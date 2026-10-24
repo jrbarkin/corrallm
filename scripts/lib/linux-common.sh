@@ -20,16 +20,22 @@ linux_init() {
   # Docker must allow Chromium's user namespaces. Electron's sandbox remains enabled.
 }
 
-linux_build_image() {
-  local node_version pnpm_version
+linux_build_image() (
+  local node_version pnpm_version context
   node_version=$(cat .nvmrc)
   pnpm_version=$(sed -n 's/.*"packageManager": "pnpm@\([^"]*\)".*/\1/p' package.json)
   [ -n "$pnpm_version" ] || die 'No pinned pnpm version in package.json'
-  # A Dockerfile-only context, never the checkout or an ignored .env.
-  step 'Build Linux image' docker build --platform "$linux_platform" --tag "$linux_image" \
-    --build-arg "NODE_VERSION=$node_version" --build-arg "PNPM_VERSION=$pnpm_version" - \
-    < scripts/lib/linux-build.Dockerfile
-}
+  # Docker's stdin is the context, with its default Dockerfile as the sole recipe source.
+  # Stage only these two inputs, never the checkout or an ignored .env.
+  mkdir -p node_modules/.cache/probes
+  context=$(mktemp -d node_modules/.cache/probes/linux-build.XXXXXX)
+  trap 'rm -rf -- "$context"' EXIT
+  cp scripts/lib/linux-build.Dockerfile "$context/Dockerfile"
+  cp scripts/lib/linux-node-path.sh "$context/linux-node-path.sh"
+  COPYFILE_DISABLE=1 tar -C "$context" --format ustar --create --file - Dockerfile linux-node-path.sh |
+    step 'Build Linux image' docker build --platform "$linux_platform" --tag "$linux_image" \
+      --build-arg "NODE_VERSION=$node_version" --build-arg "PNPM_VERSION=$pnpm_version" -
+)
 
 linux_archive() {
   # Include new files and local edits, omit ignored files, skip deletions, preserve symlinks.

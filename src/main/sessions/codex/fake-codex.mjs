@@ -561,6 +561,22 @@ async function handle({ method, id, params }) {
     case 'config/read':
       if (process.env.FAKE_CODEX_CONFIG_FAIL)
         return fail(-32000, process.env.FAKE_CODEX_CONFIG_FAIL);
+      if (process.env.FAKE_CODEX_DIAGNOSTICS) {
+        try {
+          appendFileSync(
+            process.env.FAKE_CODEX_DIAGNOSTICS,
+            JSON.stringify({
+              phase: 'config/read',
+              node: process.execPath,
+              version: process.version,
+              cwd: process.cwd(),
+              nativeInstructionsPresent: Boolean(process.env.FAKE_CODEX_DEVELOPER_INSTRUCTIONS),
+            }) + '\n',
+          );
+        } catch {
+          // Diagnostic output must never change the RPC result.
+        }
+      }
       return reply({
         config: { developer_instructions: process.env.FAKE_CODEX_DEVELOPER_INSTRUCTIONS ?? null },
       });
