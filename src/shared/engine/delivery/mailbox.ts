@@ -70,6 +70,8 @@ interface Driving {
 export class SessionStore {
   #sessions: Readonly<Record<string, Session>> = {};
   readonly #listeners = new Set<() => void>();
+  /** What hears each action reduced onto a session, just before its listeners hear the change. */
+  readonly #observers = new Set<(agentId: string, action: SessionAction) => void>();
   readonly #catalog: EngineCatalog;
   readonly #backend: SessionBackend;
   readonly #drivers = new Map<string, Driving>();
@@ -148,6 +150,19 @@ export class SessionStore {
 
   /** Every session, by agent id: a new object after each change. */
   snapshot = (): Readonly<Record<string, Session>> => this.#sessions;
+
+  /**
+   * Hears each action reduced onto an agent's session, as it is reduced, just before `subscribe`'s
+   * listeners hear the change it made: where a host publishes entry changes from (B11 §5's one
+   * reducer), without scanning a transcript for what an action changed. A change made other than
+   * by an action (an agent forgotten, submissions restored) is heard by `subscribe` alone.
+   */
+  observe(observer: (agentId: string, action: SessionAction) => void): () => void {
+    this.#observers.add(observer);
+    return () => {
+      this.#observers.delete(observer);
+    };
+  }
 
   of(agentId: string): Session {
     return this.#sessions[agentId] ?? NEW_SESSION;
@@ -836,6 +851,7 @@ export class SessionStore {
         ...(submissions === undefined ? {} : { submissions }),
       },
     };
+    for (const observer of this.#observers) observer(agentId, action);
     this.#notify();
     if (created && !this.#runMessages.has(created.id)) this.#observer.submitted?.(agentId, created);
     for (const message of ended) {

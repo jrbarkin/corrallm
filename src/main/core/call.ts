@@ -114,6 +114,13 @@ export interface OpContext {
    */
   reached(canvas: string, rev: number): void;
   /**
+   * Says the op changed what topic `topic` publishes (a run's, its sessions', its messages', what
+   * waits on it): once the op is done, core.call has the publisher publish that change and adds the
+   * revision it reached to the call's `revs`, only if the topic moved while the op ran (no bump for
+   * a no-op). A per-agent session topic is never a receipt: waiting for one would open a view.
+   */
+  published(topic: ReceiptTopic): void;
+  /**
    * Runs op `name` with `args` as part of this one, in its turn, as the caller: checked as a call
    * of the caller's own would be (its audience, its arguments, the ids it names in reach, an agent
    * not aiming at itself what it may not, its argument rules), its commits made as `options` say.
@@ -145,6 +152,48 @@ export class ProposedInstead extends Error {
 
 /** An op's implementation: its arguments, parsed, to its result. */
 export type Implementation = (args: never, ctx: OpContext) => unknown;
+
+/**
+ * The topics a write's receipt may name besides a document's (`canvas:<c>`, which its commit
+ * reaches): a canvas's run, sessions, messages and Needs (B11 §5, B9a §7).
+ */
+export type ReceiptTopic =
+  `run:${CanvasId}` | `sessions:${CanvasId}` | `messages:${CanvasId}` | `needs:${CanvasId}`;
+
+/**
+ * What publishes topics, as core.call asks it for an op's receipts: a mark of where publication is
+ * as an op begins, and, once it ends, each topic's revision once its change is published, for those
+ * that moved since the mark.
+ */
+export interface Publication {
+  mark(): number;
+  /** The change `topic` has waiting is the op's, by `by` (said as the op says it changed it). */
+  attribute(topic: ReceiptTopic, by: PartyId): void;
+  receipts(
+    topics: readonly ReceiptTopic[],
+    since: number,
+  ): Promise<Readonly<Record<string, number>>>;
+}
+
+/**
+ * A topic's internal read projection (B11 §5): what a caller may see of a topic's state, read under
+ * the audience, reach and self rule of the op that `reads` it (`surface`, named `name`), so that a
+ * topic is never a second authorization path. No transport serves it.
+ */
+export interface Projection {
+  readonly name: string;
+  readonly surface: Surface;
+  /** Its arguments: strict, bounded, every id branded, so reach finds each one. */
+  readonly input: z.ZodType;
+  readonly read: (args: never, ctx: ProjectionContext) => unknown;
+}
+
+/** What a projection is read with: who reads it, as what party now. */
+export interface ProjectionContext {
+  readonly caller: Caller;
+  readonly party: Party;
+  readonly signal?: AbortSignal | undefined;
+}
 
 /** What a rule makes of a token's call: refused (saying why), a proposal for you, or nothing. */
 export type RuleOutcome = { refuse: string } | { propose: NeedId } | undefined;
@@ -185,6 +234,8 @@ export interface DispatchOptions {
   holds?: (canvas: CanvasId, ref: IdRef, caller: Caller) => boolean;
   /** Commits an op's change to a canvas's document (canvas/commit.ts). Without it, none can. */
   commit?: Committer;
+  /** What publishes topics, for the receipts writes return. Without it, a write has none. */
+  publication?: Publication;
   /**
    * Whether each call's arguments and result are checked to be plain data (as CoreLink checks
    * what crosses a port) and each result against its schema: in dev and tests.
@@ -206,6 +257,17 @@ export interface Dispatcher {
     caller: Caller,
     signal?: AbortSignal,
   ): Promise<OpResult<unknown>>;
+  /**
+   * Reads `projection` with `raw` as `caller`, checked as a call of the op it is read under would
+   * be (its audience, its arguments, every id they name in reach, an agent not aiming at itself
+   * what it may not): its state, or why not. No transport calls it; the topics do.
+   */
+  project(
+    projection: Projection,
+    raw: unknown,
+    caller: Caller,
+    signal?: AbortSignal,
+  ): Promise<OpResult<unknown>>;
 }
 
 /** An op's turn in its scope: its signal, what says it is past its point of no return, its revs. */
@@ -214,6 +276,8 @@ interface Turn {
   noReturn(): void;
   /** The revision of each topic its commits reached. */
   revs: Record<string, number>;
+  /** The topics it said it changed (`published`). */
+  published: Set<ReceiptTopic>;
 }
 
 /** An op's arguments as a proposal of it keeps them: but its request and expect, its own. */
@@ -245,6 +309,7 @@ export function createDispatcher(registry: Registry, options: DispatchOptions = 
     openCanvases = () => [],
     holds = () => false,
     commit,
+    publication,
     check = false,
     now = Date.now,
   } = options;
@@ -450,6 +515,10 @@ export function createDispatcher(registry: Registry, options: DispatchOptions = 
       reached: (canvas, rev) => {
         turn.revs[`canvas:${canvas}`] = rev;
       },
+      published: (topic) => {
+        turn.published.add(topic);
+        publication?.attribute(topic, by);
+      },
       call: (sub, raw, more) => {
         const op = opOf(sub);
         const parsed = admit(sub, op, raw, caller);
@@ -538,16 +607,21 @@ export function createDispatcher(registry: Registry, options: DispatchOptions = 
           ran = opSignal;
           /** The revision of each topic the op reached. */
           const revs: Record<string, number> = {};
+          const published = new Set<ReceiptTopic>();
+          const since = publication?.mark() ?? 0;
           // run checks reach and the caller's current party here, once its scope is entered.
           const result = await run(name, op, args, caller, {
             signal: opSignal,
             noReturn,
             revs,
+            published,
           });
-          // A write says what it reached: the revisions of the topics it changed.
-          return surface.kind === 'read' || isProposal(result)
-            ? result
-            : { ...(result as object), revs };
+          if (surface.kind === 'read' || isProposal(result)) return result;
+          // A write says what it reached: the revisions of the topics it changed, each once its
+          // change is published.
+          if (published.size > 0 && publication)
+            Object.assign(revs, await publication.receipts([...published], since));
+          return { ...(result as object), revs };
         },
       );
       if (check) checkResult(def, value);
@@ -609,11 +683,40 @@ export function createDispatcher(registry: Registry, options: DispatchOptions = 
     }
   }
 
+  async function project(
+    projection: Projection,
+    raw: unknown,
+    caller: Caller,
+    signal?: AbortSignal,
+  ): Promise<OpResult<unknown>> {
+    try {
+      const { name, surface } = projection;
+      const def: OpDef = { summary: name, input: projection.input, output: projection.input };
+      audience(name, surface, caller);
+      const args = parse(def, raw);
+      checkReach(name, surface, def, args, caller);
+      signal?.throwIfAborted();
+      const value = await projection.read(args as never, {
+        caller,
+        get party() {
+          return partyOf(caller, isLead);
+        },
+        signal,
+      });
+      const fault = check ? notPlainData(value, 'result') : undefined;
+      if (fault) throw new OpFailure('unavailable', `${fault}.`);
+      return { ok: true, value };
+    } catch (error) {
+      return { ok: false, error: errorOf(error, signal) };
+    }
+  }
+
   return {
     surface: registry.surface,
     ops: registry.ops,
     partyOf: (caller) => partyOf(caller, isLead),
     call,
+    project,
   };
 }
 

@@ -135,7 +135,7 @@ export interface RuntimeTopicStates {
     readonly next: string;
   };
 }
-interface AgentChanges<T> {
+export interface AgentChanges<T> {
   readonly set: Readonly<Record<AgentId, T>>;
   readonly remove?: readonly AgentId[];
 }
@@ -225,7 +225,15 @@ export function snapshotFrameFits(frame: RuntimeSnapshotFrame): boolean {
 }
 
 /** The canvas a canvas's topic is of; none for a global topic. */
-export function canvasOfTopic(topic: TopicKey): CanvasId | undefined {
-  const request = topicRequest(topic);
-  return 'canvas' in request ? request.canvas : undefined;
+export function canvasOfTopic(topic: TopicKey | RuntimeTopicKey): CanvasId | undefined {
+  const request = isRuntimeTopic(topic) ? topicRequest(topic) : topicRequest(topic);
+  return 'canvas' in request ? (request.canvas as CanvasId) : undefined;
 }
+
+/** Whether a topic's key is a runtime topic's (B11 §16.4): a canvas's run, sessions or messages. */
+export function isRuntimeTopic(topic: string): topic is RuntimeTopicKey {
+  return /^(?:run|sessions|session|messages):/.test(topic);
+}
+
+/** What a subscriber is sent of its topics, in order: their changes, and a snapshot's frames. */
+export type TopicUpdate = Change | RuntimeChange | RuntimeSnapshotFrame;

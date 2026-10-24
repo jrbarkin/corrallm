@@ -176,6 +176,8 @@ export class MessageStore {
   #bytes = 0;
   /** What hears each message added. */
   readonly #listeners = new Set<(message: Message) => void>();
+  /** What hears each message kept, changed or no longer kept (its id): the topics' source. */
+  readonly #watchers = new Set<(id: string) => void>();
   /**
    * The messages changed (or deleted) whose rows aren't on disk as they are yet, each with the
    * number of its last change: a write marks a row on disk only if it has not changed since.
@@ -284,6 +286,7 @@ export class MessageStore {
       message,
       reveal: () => {
         this.#prune();
+        this.#changedId(message.id);
         for (const listener of this.#listeners) listener(message);
       },
       undo: () => {
@@ -297,6 +300,18 @@ export class MessageStore {
     this.#listeners.add(listener);
     return () => {
       this.#listeners.delete(listener);
+    };
+  }
+
+  /**
+   * Hears, by its id, each message kept from now on, each change to one, and each one no longer
+   * kept (pruned): what a canvas's `messages:<c>` topic publishes (B11 §5). A message staged within
+   * a write is heard once revealed.
+   */
+  watch(watcher: (id: string) => void): () => void {
+    this.#watchers.add(watcher);
+    return () => {
+      this.#watchers.delete(watcher);
     };
   }
 
@@ -509,6 +524,7 @@ export class MessageStore {
     if (this.#unjournaled === undefined) this.#changed.set(message.id, ++this.#changes);
     else this.#lost = true;
     this.#prune();
+    this.#changedId(message.id);
     if (this.#scheduled || this.#unjournaled !== undefined) return;
     this.#scheduled = true;
     queueMicrotask(() => {
@@ -550,6 +566,11 @@ export class MessageStore {
   #drop(id: string): void {
     this.#delete(id);
     if (this.#unjournaled === undefined) this.#changed.set(id, ++this.#changes);
+    this.#changedId(id);
+  }
+
+  #changedId(id: string): void {
+    for (const watcher of this.#watchers) watcher(id);
   }
 }
 

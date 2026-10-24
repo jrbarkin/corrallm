@@ -130,6 +130,8 @@ export interface Watcher {
   needs?(canvas: CanvasId): void;
   /** A canvas opened. */
   opened?(canvas: CanvasId): void;
+  /** A canvas it ran closed (canvas.close, or the core closing): it runs no more here. */
+  closed?(canvas: CanvasId): void;
 }
 
 /** A canvas the core runs, with its sessions' listeners and its journal. */
@@ -609,7 +611,11 @@ export class Engines {
     try {
       await this.#stop(running);
     } finally {
-      await this.#deps.sessions.closeCanvas(canvas);
+      try {
+        await this.#deps.sessions.closeCanvas(canvas);
+      } finally {
+        for (const watcher of this.#watchers) watcher.closed?.(canvas);
+      }
     }
   }
 
@@ -637,6 +643,7 @@ export class Engines {
     for (const { notes } of mail) notes.close();
     const running = await Promise.allSettled(this.#running.values());
     this.#running.clear();
+    const closing = [...this.#canvases.keys()];
     this.#canvases.clear();
     const stopped = await Promise.allSettled(
       running.flatMap((opened) =>
@@ -647,6 +654,7 @@ export class Engines {
     await this.#deps.sessions.closeEverything();
     await Promise.all(this.#events.values());
     await Promise.all(mail.map(({ messages }) => messages.durable()));
+    for (const canvas of closing) for (const watcher of this.#watchers) watcher.closed?.(canvas);
     const failed = stopped.flatMap((result): unknown[] =>
       result.status === 'rejected' ? [result.reason] : [],
     );
