@@ -393,6 +393,19 @@ export class WorkspaceStore {
       .map(worktreeOf);
   }
 
+  /** Every canvas's workspaces in one of `states`, as they were made: what a restart checks. */
+  worktreesIn(states: readonly WorktreeState[]): WorktreeRecord[] {
+    const asked = states.filter((state) => STATES.includes(state));
+    if (asked.length === 0) return [];
+    return this.#store
+      .prepare(
+        `SELECT * FROM worktree WHERE state IN (${asked.map(() => '?').join(', ')})
+         ORDER BY created_at, id`,
+      )
+      .all(...asked)
+      .map(worktreeOf);
+  }
+
   /** The workspace in use for `owner` of the canvas's repository, if there is one. */
   activeWorktree(
     canvas: CanvasId,

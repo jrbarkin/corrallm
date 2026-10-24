@@ -55,6 +55,14 @@ describe('ProjectFiles', () => {
     expect(await files().find(folder, 'left', 50)).toEqual([]);
   });
 
+  it('never walks into the workspaces’ checkouts the core keeps in .corral', async () => {
+    await write('notes/plan.md');
+    await write('.corral/worktrees/profile/workspace/src/plan-b.md');
+    await write('canvas.corral');
+    expect(await files().find(folder, 'plan', 50)).toEqual(['notes/plan.md']);
+    expect(await files().find(folder, 'corral', 50)).toEqual(['canvas.corral']);
+  });
+
   it('does not run a repository’s fsmonitor when suggesting files', async () => {
     execFileSync('git', ['init', '-q'], { cwd: folder });
     await write('notes.md');
