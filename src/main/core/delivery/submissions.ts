@@ -1,3 +1,4 @@
+import { MAX_MESSAGE_BYTES } from '../../../shared/api/limits';
 import { decodeSubmissions, encodeRecords } from '../../../shared/engine/delivery/submission-state';
 import { agentOf, agentParty } from '../../../shared/model/messages';
 import type { Message, MessageDisplay } from '../../../shared/model/messages';
@@ -16,10 +17,13 @@ import type { MessageStore } from './messages';
  * A submission is matched, never by an equal body, to a message that represents it already: by
  * the agent it went to and the native id it was sent under (the message's delivery.as), or by its
  * own id. One that does keeps its own record, gaining only where its submission showed; one that
- * doesn't is made, once. What its engine still runs, or what waits in its session, is kept as a
- * restart would leave it (unresolved, never sent again) until its turn ends, so that it is never
- * active to delivery, which never sent it. A message made so is changed as its submission does,
- * while this core runs; one given back as a run was restored, or one delivery made, never is.
+ * doesn't is made, once: its body the submission's text, cut to the most a message holds
+ * (MAX_MESSAGE_BYTES) where it is longer, whose whole text its display then shows and gives back
+ * (a submission held more than a message may). What its engine still runs, or what waits in its
+ * session, is kept as a restart would leave it (unresolved, never sent again) until its turn ends,
+ * so that it is never active to delivery, which never sent it. A message made so is changed as its
+ * submission does, while this core runs; one given back as a run was restored, or one delivery
+ * made, never is.
  */
 
 /** What the bridge knows of a canvas's store, while this core runs. */
@@ -94,7 +98,8 @@ export function keepSubmissions(
     for (const record of submissions) {
       const key = keyOf(to, record.id);
       const { state, turn } = outcomeOf(record);
-      const display = displayOf(record);
+      const body = bodyOf(record.text);
+      const display = displayOf(record, body);
       const made = bridge.made.get(key);
       if (made !== undefined) {
         const message = store.get(made);
@@ -114,8 +119,9 @@ export function keepSubmissions(
       const there = represented.get(key) ?? (own?.to === to ? own : undefined);
       if (there !== undefined) {
         // Its own record stays as it is kept; it only gains where its submission showed.
-        if (store.displayOf(there.id) === undefined && display !== undefined) {
-          store.redisplay(there.id, display);
+        const shown = displayOf(record);
+        if (store.displayOf(there.id) === undefined && shown !== undefined) {
+          store.redisplay(there.id, shown);
         }
         continue;
       }
@@ -130,7 +136,7 @@ export function keepSubmissions(
         kind: 'text',
         origin: record.retryOf === undefined ? 'manual' : 'resend',
         ...(display === undefined ? {} : { display }),
-        body: record.text,
+        body,
         ...(resendOf === undefined ? {} : { resendOf }),
         turn,
         state,
@@ -264,15 +270,38 @@ function plainResult(status: 'completed' | 'failed' | 'cancelled'): TurnResult {
   return { status, reason };
 }
 
-/** Where a submission showed in its agent's queue. */
-function displayOf(record: SubmittedMessage): MessageDisplay | undefined {
-  if (record.after === undefined && record.task === undefined) return undefined;
+/**
+ * Where a submission showed in its agent's queue, and its whole text where `body`, its message's,
+ * holds it cut.
+ */
+function displayOf(record: SubmittedMessage, body?: string): MessageDisplay | undefined {
+  const text = body === undefined || body === record.text ? undefined : record.text;
+  if (record.after === undefined && record.task === undefined && text === undefined) {
+    return undefined;
+  }
   return {
     ...(record.after === undefined ? {} : { after: record.after }),
     ...(record.task === undefined
       ? {}
       : { task: { agent: record.task.agent, item: record.task.item } }),
+    ...(text === undefined ? {} : { text }),
   };
+}
+
+/** How a submission cut to the most a message holds is marked. */
+const CUT = '\n\n[corrallm: cut here; the whole message is in its transcript]';
+
+/**
+ * A submission's text as its message's body holds it: whole, or cut on a character's boundary to
+ * the most a message holds (MAX_MESSAGE_BYTES of UTF-8), marked so.
+ */
+function bodyOf(text: string): string {
+  const bytes = new TextEncoder().encode(text);
+  if (bytes.length <= MAX_MESSAGE_BYTES) return text;
+  const room = MAX_MESSAGE_BYTES - new TextEncoder().encode(CUT).length;
+  // The decoder ends a character cut in two with U+FFFD, dropped here.
+  const kept = new TextDecoder('utf-8', { fatal: false }).decode(bytes.slice(0, room));
+  return `${kept.replace(/\uFFFD$/u, '')}${CUT}`;
 }
 
 /** The store's messages to agents, by the agent's party and the native id each went under. */

@@ -701,7 +701,8 @@ export class Engines {
       .map((m) => ({
         id: m.id,
         from: m.from,
-        body: m.body,
+        // A submission's message may hold its text cut: its display holds the whole.
+        body: store.displayOf(m.id)?.text ?? m.body,
         images: request.inputs.find((input) => input.id === m.delivery?.as)?.images,
       }));
     for (const input of request.inputs) {
