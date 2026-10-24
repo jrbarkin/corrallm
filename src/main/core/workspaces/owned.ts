@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import {
   closeSync,
   fsyncSync,
@@ -22,15 +22,18 @@ import path from 'node:path';
  * named by its id. A path below the checkout by string prefix is not enough: every folder from the
  * checkout's real path down is checked to be a real folder (no symlink, which a repository could
  * commit), the user's, and the last one private and marked as the repository's by the core, which
- * made it. One already there that it didn't make (not marked, not empty) is refused, never adopted.
- * Nothing is written in it before it is verified. This is checkout isolation, not a sandbox: a
- * process running as the user may still change it, so it is verified again before every use.
+ * made it. The marker is kept in the repository's common Git directory, never in the checkout,
+ * where a `git clean -fdx` would take it (Git spares the checkouts themselves): it names the
+ * repository record, the root's path and the root folder's inode, so a folder put in its place
+ * isn't taken for it. One already there that the core didn't mark is refused, never adopted, unless
+ * it is empty. Nothing is written in it before it is verified. This is checkout isolation, not a
+ * sandbox: a process running as the user may still change it, so it is verified at every use.
  */
 
 /** The owned subtree's line in Git's local info/exclude (never the tracked .gitignore). */
 export const EXCLUDED = '/.corral/worktrees/';
-/** The marker the core writes in a root it made. */
-const MARKER = '.corrallm-owner';
+/** The folder of the common Git directory the core's markers are kept in. */
+const MARKERS = 'corrallm';
 const MAX_MARKER_BYTES = 4096;
 const MAX_EXCLUDE_BYTES = 1024 * 1024;
 
@@ -61,6 +64,8 @@ export class OwnedRootError extends Error {
 export interface OwnedRepository {
   id: string;
   realRoot: string;
+  /** Its common Git directory, by its real path: where the root's marker is kept. */
+  commonDir: string;
   ownedRoot: string;
 }
 
@@ -83,48 +88,65 @@ export function verifyOwnedRoot(repository: OwnedRepository): void {
   walk(repository, false);
 }
 
-function walk({ id, realRoot, ownedRoot }: OwnedRepository, make: boolean): void {
-  let real: string;
-  try {
-    real = realpathSync(realRoot);
-  } catch {
-    throw new OwnedRootError('missing', `The checkout ${realRoot} is missing.`);
-  }
-  if (real !== realRoot) {
-    throw new OwnedRootError('symlinked', `The checkout ${realRoot} isn’t its real path.`);
+function walk({ id, realRoot, commonDir, ownedRoot }: OwnedRepository, make: boolean): void {
+  for (const [what, folder] of [
+    ['checkout', realRoot],
+    ['Git directory', commonDir],
+  ] as const) {
+    let real: string;
+    try {
+      real = realpathSync(folder);
+    } catch {
+      throw new OwnedRootError('missing', `The ${what} ${folder} is missing.`);
+    }
+    if (real !== folder) {
+      throw new OwnedRootError('symlinked', `The ${what} ${folder} isn’t its real path.`);
+    }
   }
   const relative = path.relative(realRoot, ownedRoot);
   if (relative === '' || relative.startsWith('..') || path.isAbsolute(relative)) {
     throw new OwnedRootError('outside', `${ownedRoot} isn’t inside the checkout.`);
   }
   let at = realRoot;
-  let made = false;
   for (const part of relative.split(path.sep)) {
     at = path.join(at, part);
     let found = stat(at);
     if (found === undefined) {
       if (!make) throw new OwnedRootError('missing', `${at} is missing.`);
       mkdirSync(at, { mode: 0o700 });
-      made = true;
       found = stat(at);
     }
     check(at, found);
   }
-  const found = stat(ownedRoot);
-  if (found !== undefined && process.platform !== 'win32' && (found.mode & 0o077) !== 0) {
+  const found = lstatSync(ownedRoot, { bigint: true });
+  if (process.platform !== 'win32' && (Number(found.mode) & 0o077) !== 0) {
     throw new OwnedRootError('unowned', `${ownedRoot} isn’t private.`);
   }
-  const marker = path.join(ownedRoot, MARKER);
-  const expected = `${JSON.stringify({ corrallm: 'owned-root', repository: id })}\n`;
-  const kept = markerText(marker);
+  const markers = path.join(commonDir, MARKERS);
+  const marker = path.join(
+    markers,
+    `owned-root-${createHash('sha256').update(ownedRoot).digest('hex').slice(0, 32)}.json`,
+  );
+  const expected = `${JSON.stringify({
+    corrallm: 'owned-root',
+    repository: id,
+    root: ownedRoot,
+    inode: found.ino.toString(),
+  })}\n`;
+  const kept = markerText(markers, marker);
   if (kept === expected) return;
-  if (kept !== undefined) {
-    throw new OwnedRootError('unowned', `${ownedRoot} is another repository’s.`);
+  // Not marked as this folder of this repository's: only an empty one (just made, or one a crash
+  // left before its marker, or put in its place) has nothing in it to protect, and is taken.
+  if (!make || readdirSync(ownedRoot).length > 0) {
+    throw new OwnedRootError(
+      'unowned',
+      kept === undefined
+        ? `${ownedRoot} wasn’t made by corrallm.`
+        : `${ownedRoot} isn’t the folder corrallm made for this repository.`,
+    );
   }
-  // Not marked: only one the core just made, or an empty one (a crash before its marker), is ours.
-  if (!make || (!made && readdirSync(ownedRoot).length > 0)) {
-    throw new OwnedRootError('unowned', `${ownedRoot} wasn’t made by corrallm.`);
-  }
+  const folder = stat(markers);
+  if (folder === undefined) mkdirSync(markers, { mode: 0o700 });
   writeDurably(marker, expected, 0o600);
 }
 
@@ -146,7 +168,12 @@ function check(at: string, found: Stats | undefined): void {
   }
 }
 
-function markerText(marker: string): string | undefined {
+/** A marker's text (none if there is none), never through a symlink. */
+function markerText(markers: string, marker: string): string | undefined {
+  const folder = stat(markers);
+  if (folder === undefined) return undefined;
+  if (folder.isSymbolicLink()) throw new OwnedRootError('symlinked', `${markers} is a symlink.`);
+  if (!folder.isDirectory()) throw new OwnedRootError('not-folder', `${markers} isn’t a folder.`);
   const found = stat(marker);
   if (found === undefined) return undefined;
   if (!found.isFile() || found.size > MAX_MARKER_BYTES) {

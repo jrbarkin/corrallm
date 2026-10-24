@@ -177,6 +177,10 @@ describe('WorkspaceStore', () => {
       { id: W2, state: 'creating' },
     ]);
     expect(workspaces.worktreesOf(OTHER).map(({ id }) => id)).toEqual([W3]);
+    // Every canvas's, in the states asked for: what a restart checks.
+    expect(workspaces.worktreesIn(['creating']).map(({ id }) => id)).toEqual([W2, W3]);
+    expect(workspaces.worktreesIn(['retained', 'ready']).map(({ id }) => id)).toEqual([W1]);
+    expect(workspaces.worktreesIn([])).toEqual([]);
   });
 
   it('keeps a lone agent’s workspace as its group’s once it heads one, and back, while it is in use', async () => {

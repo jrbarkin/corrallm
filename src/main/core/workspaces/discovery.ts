@@ -79,12 +79,13 @@ const CONTROL = /[\u0000-\u001f\u007f]/;
 const MAX_POINTER_BYTES = 4096;
 
 /**
- * What identifies a repository beside its path: its common Git directory's inode and object
- * format, so a repository made again where one was (deleted and cloned again) is another.
+ * What identifies a repository beside its path: its common Git directory's inode, so a repository
+ * made again where one was (deleted and cloned again) is another. Checked again before its
+ * workspaces are used; throws if the directory is gone.
  */
-export function repositoryIdentity(commonDir: string, objectFormat: string): string {
+export function repositoryIdentity(commonDir: string): string {
   const { ino } = statSync(commonDir, { bigint: true });
-  return `git ${objectFormat} common-dir inode ${ino.toString()}`;
+  return `git common-dir inode ${ino.toString()}`;
 }
 
 /** The worktrees `git worktree list --porcelain -z` printed. */
@@ -371,7 +372,7 @@ export async function discoverRepository(git: GitRunner, picked: string): Promis
         realRoot,
         gitDir,
         commonDir,
-        identity: repositoryIdentity(commonDir, objectFormat),
+        identity: repositoryIdentity(commonDir),
         head: { ref, oid },
         drivers,
       },

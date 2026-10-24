@@ -61,7 +61,7 @@ describe.skipIf(process.platform === 'win32')('discoverRepository', () => {
       realRoot: at,
       gitDir: path.join(at, '.git'),
       commonDir: path.join(at, '.git'),
-      identity: repositoryIdentity(path.join(at, '.git'), 'sha1'),
+      identity: repositoryIdentity(path.join(at, '.git')),
       head: { ref: 'refs/heads/main', oid },
       drivers: [],
     });

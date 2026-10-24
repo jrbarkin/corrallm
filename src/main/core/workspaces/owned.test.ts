@@ -1,9 +1,9 @@
 import {
   chmodSync,
-  lstatSync,
   mkdirSync,
   readFileSync,
   readdirSync,
+  rmSync,
   statSync,
   symlinkSync,
   writeFileSync,
@@ -24,13 +24,15 @@ import { scratch } from './test-git';
 
 /*
  * The folder a repository's workspaces' checkouts go in (B9a Design §2, Location): made by the
- * core inside the picked checkout, its own (a marker binds it to the repository), verified before
- * anything is written in it, refusing symlinks anywhere along it and folders it didn't make; and
- * the line in Git's local info/exclude that keeps it out of the checkout's status.
+ * core inside the picked checkout, its own (a marker in the repository's common Git directory binds
+ * the folder to the repository record), verified before anything is written in it, refusing
+ * symlinks anywhere along it and folders it didn't make; and the line in Git's local info/exclude
+ * that keeps it out of the checkout's status.
  */
 
 const PROFILE = '0b6f5c1e-2a3d-4e5f-8a9b-0c1d2e3f4a5b';
 const REPOSITORY = '7c0e9a1e-1b6f-4b4f-9f3a-2d1c0b9a8e70';
+const OTHER_REPOSITORY = '9d1c5a0e-0f4e-4c11-8a51-0b1f2e3d4c51';
 
 let root: string;
 let remove: () => void;
@@ -38,15 +40,34 @@ let realRoot: string;
 
 beforeEach(() => {
   ({ root, remove } = scratch());
-  realRoot = path.join(root, 'app');
-  mkdirSync(path.join(realRoot, '.git', 'info'), { recursive: true });
+  realRoot = checkout('app');
 });
 afterEach(() => {
   remove();
 });
 
-function repository(id = REPOSITORY) {
-  return { id, realRoot, ownedRoot: projectOwnedRoot(realRoot, PROFILE) };
+/** A checkout's folder with a Git directory of its own. */
+function checkout(name: string): string {
+  const at = path.join(root, name);
+  mkdirSync(path.join(at, '.git', 'info'), { recursive: true });
+  return at;
+}
+
+function repository(id = REPOSITORY, at = realRoot) {
+  return {
+    id,
+    realRoot: at,
+    commonDir: path.join(at, '.git'),
+    ownedRoot: projectOwnedRoot(at, PROFILE),
+  };
+}
+
+function markers(at = realRoot): string[] {
+  try {
+    return readdirSync(path.join(at, '.git', 'corrallm'));
+  } catch {
+    return [];
+  }
 }
 
 function code(run: () => void): string {
@@ -60,7 +81,7 @@ function code(run: () => void): string {
 }
 
 describe.skipIf(process.platform === 'win32')('the owned root', () => {
-  it('is <checkout>/.corral/worktrees/<profile>, made private and marked as the repository’s', () => {
+  it('is <checkout>/.corral/worktrees/<profile>, made private, its marker kept in the Git directory', () => {
     const owned = repository();
     expect(owned.ownedRoot).toBe(path.join(realRoot, '.corral', 'worktrees', PROFILE));
     expect(
@@ -70,12 +91,23 @@ describe.skipIf(process.platform === 'win32')('the owned root', () => {
     ).toBe('missing');
     ensureOwnedRoot(owned);
     expect(statSync(owned.ownedRoot).mode & 0o777).toBe(0o700);
-    expect(readdirSync(owned.ownedRoot)).toEqual(['.corrallm-owner']);
-    expect(lstatSync(path.join(owned.ownedRoot, '.corrallm-owner')).mode & 0o777).toBe(0o600);
+    // Nothing in the checkout a `git clean -fdx` there could take away.
+    expect(readdirSync(owned.ownedRoot)).toEqual([]);
+    const [marker] = markers();
+    expect(marker).toMatch(/^owned-root-[0-9a-f]{32}\.json$/);
+    const file = path.join(realRoot, '.git', 'corrallm', marker ?? '');
+    expect(statSync(file).mode & 0o777).toBe(0o600);
+    expect(JSON.parse(readFileSync(file, 'utf8'))).toMatchObject({
+      corrallm: 'owned-root',
+      repository: REPOSITORY,
+      root: owned.ownedRoot,
+    });
     // Made once; verified, and made again as it is, any number of times.
     verifyOwnedRoot(owned);
+    writeFileSync(path.join(owned.ownedRoot, 'kept'), '');
     ensureOwnedRoot(owned);
-    expect(readdirSync(owned.ownedRoot)).toEqual(['.corrallm-owner']);
+    verifyOwnedRoot(owned);
+    expect(markers()).toHaveLength(1);
   });
 
   it('refuses a symlink anywhere along it, writing nothing where it leads', () => {
@@ -89,11 +121,18 @@ describe.skipIf(process.platform === 'win32')('the owned root', () => {
     ).toBe('symlinked');
     expect(readdirSync(outside)).toEqual([]);
     // Deeper too: .corral is a folder, worktrees a link.
-    const other = path.join(root, 'other');
-    mkdirSync(other);
-    realRoot = path.join(root, 'app2');
-    mkdirSync(path.join(realRoot, '.corral'), { recursive: true });
+    realRoot = checkout('app2');
+    mkdirSync(path.join(realRoot, '.corral'));
     symlinkSync(outside, path.join(realRoot, '.corral', 'worktrees'));
+    expect(
+      code(() => {
+        ensureOwnedRoot(repository());
+      }),
+    ).toBe('symlinked');
+    expect(readdirSync(outside)).toEqual([]);
+    // The marker's folder too.
+    realRoot = checkout('app3');
+    symlinkSync(outside, path.join(realRoot, '.git', 'corrallm'));
     expect(
       code(() => {
         ensureOwnedRoot(repository());
@@ -105,15 +144,14 @@ describe.skipIf(process.platform === 'win32')('the owned root', () => {
   it('refuses a checkout it isn’t given by its real path', () => {
     const link = path.join(root, 'link');
     symlinkSync(realRoot, link);
-    realRoot = link;
     expect(
       code(() => {
-        ensureOwnedRoot(repository());
+        ensureOwnedRoot(repository(REPOSITORY, link));
       }),
     ).toBe('symlinked');
   });
 
-  it('refuses a folder it didn’t make, or another repository’s', () => {
+  it('refuses a folder it didn’t make, one put in its place, or another repository’s', () => {
     const owned = repository();
     mkdirSync(owned.ownedRoot, { recursive: true, mode: 0o700 });
     writeFileSync(path.join(owned.ownedRoot, 'work.txt'), 'someone’s\n');
@@ -123,16 +161,31 @@ describe.skipIf(process.platform === 'win32')('the owned root', () => {
       }),
     ).toBe('unowned');
     expect(readdirSync(owned.ownedRoot)).toEqual(['work.txt']);
+    expect(markers()).toEqual([]);
     // An empty one is adopted: there's nothing in it to protect.
-    const empty = { ...owned, realRoot: path.join(root, 'app3') };
-    empty.ownedRoot = projectOwnedRoot(empty.realRoot, PROFILE);
-    mkdirSync(empty.ownedRoot, { recursive: true, mode: 0o700 });
-    ensureOwnedRoot(empty);
-    verifyOwnedRoot(empty);
+    rmSync(path.join(owned.ownedRoot, 'work.txt'));
+    ensureOwnedRoot(owned);
+    verifyOwnedRoot(owned);
+    // Another folder put in its place, with something in it, isn't the one marked.
+    rmSync(owned.ownedRoot, { recursive: true });
+    mkdirSync(owned.ownedRoot, { mode: 0o700 });
+    writeFileSync(path.join(owned.ownedRoot, 'work.txt'), 'someone’s\n');
+    expect(
+      code(() => {
+        verifyOwnedRoot(owned);
+      }),
+    ).toBe('unowned');
+    expect(
+      code(() => {
+        ensureOwnedRoot(owned);
+      }),
+    ).toBe('unowned');
+    rmSync(path.join(owned.ownedRoot, 'work.txt'));
+    ensureOwnedRoot(owned);
     // Marked as another repository's.
     expect(
       code(() => {
-        verifyOwnedRoot({ ...empty, id: '9d1c5a0e-0f4e-4c11-8a51-0b1f2e3d4c51' });
+        verifyOwnedRoot(repository(OTHER_REPOSITORY));
       }),
     ).toBe('unowned');
   });
