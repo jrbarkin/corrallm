@@ -18,6 +18,21 @@ import { replay } from './replay';
 /** A fake `codex` that speaks the app server's protocol (../fake-codex.mjs), run with node. */
 const FAKE = fileURLToPath(new URL('../fake-codex.mjs', import.meta.url));
 
+it('the recorded fake reports whether native instructions reached it, without their text', async () => {
+  const file = path.join(dir, 'diagnostics.jsonl');
+  const instructions = 'Native project guidance';
+  await start(
+    { role: 'Reviewer' },
+    { FAKE_CODEX_DEVELOPER_INSTRUCTIONS: instructions, FAKE_CODEX_DIAGNOSTICS: file },
+  );
+  const text = await readFile(file, 'utf8');
+  expect(text).not.toContain(instructions);
+  expect(JSON.parse(text)).toMatchObject({
+    nativeInstructionsPresent: true,
+    node: process.execPath,
+  });
+});
+
 it('refuses a resume option before finding or spawning a CLI', async () => {
   const findCodex = vi.fn().mockResolvedValue('/not-run');
   const spawn = vi.fn();

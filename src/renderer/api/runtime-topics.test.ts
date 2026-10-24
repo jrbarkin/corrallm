@@ -233,9 +233,14 @@ describe('runtime topic mirrors', () => {
       const top = { running: w.run.running, notices: w.run.notices };
       const summary = kind === 'run' ? top : kind === 'sessions' ? {} : { next: w.messages.next };
       w.mirror.subscribe(topic, vi.fn());
-      w.core.pending[0]?.resolve({ ...base, kind: 'begin', summary, count: pairs.length });
+      w.core.pending[0]?.resolve({ ...base, kind: 'begin', summary, count: 1 });
       w.core.send(
-        { ...base, kind: 'chunk', entries: pairs.map(([key, value]) => ({ key, value })) },
+        {
+          ...base,
+          kind: 'chunk',
+          index: 0,
+          entries: pairs.map(([key, value]) => ({ key, value })),
+        },
         { ...base, kind: 'end', rev: 1 },
       );
       await tick();
@@ -313,19 +318,150 @@ describe('runtime topic mirrors', () => {
     expect(w.core.requests.length).toBe(count + 1);
   });
 
+  it.each(['swap', 'repeat', 'gap'] as const)(
+    'discards a %s in chunk indices and keeps the previous snapshot until a fresh one ends',
+    async (fault) => {
+      vi.useFakeTimers();
+      vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      const w = setup();
+      const topic = w.keys.session;
+      w.mirror.subscribe(topic, vi.fn());
+      w.core.answer(0, w.session, 1);
+      await tick();
+      const first = w.mirror.snapshot(topic);
+      w.core.send(delta({ topic, rev: 3, entries: {} }));
+      const base = { topic, epoch: 'one', snapshot: 'indexed' };
+      const chunks = w.session.order.map((key, index) => ({
+        ...base,
+        kind: 'chunk' as const,
+        index,
+        entries: [{ key, value: w.session.entries[key] }],
+      }));
+      const firstChunk = chunks[0];
+      const second = chunks[1];
+      const third = chunks[2];
+      if (!firstChunk || !second || !third)
+        throw new Error('The fixture has three distinct entries.');
+      const updates =
+        fault === 'swap'
+          ? [firstChunk, third, second]
+          : fault === 'repeat'
+            ? [firstChunk, { ...second, index: 0 }, third]
+            : [firstChunk, { ...second, index: 2 }, { ...third, index: 3 }];
+      const settled = w.mirror.whenAt(topic, 3).then(
+        () => 'resolved',
+        () => 'rejected',
+      );
+      w.core.pending[1]?.resolve({ ...base, kind: 'begin', summary: w.session.summary, count: 3 });
+      await tick();
+      w.core.send(...updates, { ...base, kind: 'end', rev: 3 });
+      expect(w.mirror.snapshot(topic)).toBe(first);
+      expect(w.mirror.revision(topic)).toBe(1);
+      expect(await settled).toBe('rejected');
+      await vi.advanceTimersByTimeAsync(100);
+      expect(w.core.requests).toHaveLength(3);
+      const frames = sessionFrames(topic, w, 3);
+      w.core.pending[2]?.resolve(frame(frames, 0));
+      w.core.send(...frames.slice(1, -1));
+      await tick();
+      expect(w.mirror.revision(topic)).toBe(1);
+      w.core.send(frame(frames, -1));
+      expect(w.mirror.revision(topic)).toBe(3);
+      expect(w.mirror.snapshot(topic)).toBe(first);
+    },
+  );
+
+  it('counts chunks rather than entries and installs only at end', async () => {
+    const w = setup();
+    const topic = w.keys.session;
+    const base = { topic, epoch: 'one', snapshot: 'one-chunk' };
+    w.mirror.subscribe(topic, vi.fn());
+    w.core.pending[0]?.resolve({ ...base, kind: 'begin', summary: w.session.summary, count: 1 });
+    await tick();
+    const chunk = {
+      ...base,
+      kind: 'chunk' as const,
+      index: 0,
+      entries: w.session.order.map((key) => ({ key, value: w.session.entries[key] })),
+    };
+    w.core.send(chunk);
+    expect(w.mirror.snapshot(topic)).toBeUndefined();
+    w.core.send({ ...base, kind: 'end', rev: 1 });
+    expect(w.mirror.snapshot(topic)).toEqual(w.session);
+  });
+
+  it('publishes contiguous indices and a chunk count, with an empty history using no chunks', () => {
+    const w = setup(1100);
+    const frames = sessionFrames(w.keys.session, w);
+    const chunks = frames.filter((part) => part.kind === 'chunk');
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(frame(frames, 0)).toMatchObject({ kind: 'begin', count: chunks.length });
+    expect(chunks.map((chunk) => chunk.index)).toEqual(chunks.map((_, index) => index));
+    expect(frames.every(snapshotFrameFits)).toBe(true);
+    const empty = sessionFrames(w.keys.session, {
+      ...w,
+      session: { ...w.session, entries: {}, order: [] },
+    });
+    expect(empty.map(({ kind }) => kind)).toEqual(['begin', 'end']);
+    expect(frame(empty, 0)).toMatchObject({ count: 0 });
+  });
+
+  it.each([0, 600])(
+    'the fake publisher delivers %s retained turns through the indexed subscription',
+    async (history) => {
+      const w = setup(history);
+      const world = history ? w : { ...w, session: { ...w.session, entries: {}, order: [] } };
+      const waiting = w.mirror.whenAt(w.keys.session, 5);
+      w.core.publishSession(0, world, 5);
+      await waiting;
+      expect(w.mirror.snapshot(w.keys.session)).toEqual(world.session);
+    },
+  );
+
+  it('refuses an oversized summary at the publisher, exposing its error without publishing a partial snapshot', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const w = setup();
+    const topic = w.keys.session;
+    w.mirror.subscribe(topic, vi.fn());
+    w.core.answer(0, w.session, 1);
+    await tick();
+    const first = w.mirror.snapshot(topic);
+    w.core.send(delta({ topic, rev: 3, entries: {} }));
+    const oversized = {
+      ...w,
+      session: {
+        ...w.session,
+        summary: { ...w.session.summary, reply: 'x'.repeat(MAX_TOPIC_FRAME) },
+      },
+    };
+    expect(() => sessionFrames(topic, oversized)).toThrow(/summary.*frame/i);
+    const refused = expect(w.mirror.whenAt(topic, 3)).rejects.toThrow(/summary.*frame/i);
+    w.core.publishSession(1, oversized, 3);
+    await refused;
+    expect(w.mirror.snapshot(topic)).toBe(first);
+    expect(w.mirror.revision(topic)).toBe(1);
+    expect(w.core.requests).toHaveLength(2);
+  });
+
   it('times out a missing end and cancels its timer on disposal', async () => {
     vi.useFakeTimers();
     vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const w = setup();
     w.mirror.subscribe(w.keys.session, vi.fn());
-    const frames = sessionFrames(w.keys.session, w);
-    w.core.pending[0]?.resolve(frame(frames, 0));
+    w.core.answer(0, w.session, 1);
+    await tick();
+    const previous = w.mirror.snapshot(w.keys.session);
+    w.core.send(delta({ topic: w.keys.session, rev: 3, entries: {} }));
+    const frames = sessionFrames(w.keys.session, w, 3);
+    w.core.pending[1]?.resolve(frame(frames, 0));
     w.core.send(...frames.slice(1, -1));
     await tick();
+    expect(w.mirror.snapshot(w.keys.session)).toBe(previous);
     await vi.advanceTimersByTimeAsync(10_000);
     await vi.advanceTimersByTimeAsync(1000);
-    expect(w.core.requests).toHaveLength(2);
-    expect(w.mirror.snapshot(w.keys.session)).toBeUndefined();
+    expect(w.core.requests).toHaveLength(3);
+    expect(w.mirror.snapshot(w.keys.session)).toBe(previous);
+    expect(w.mirror.revision(w.keys.session)).toBe(1);
     w.mirror.dispose();
     expect(vi.getTimerCount()).toBe(0);
   });

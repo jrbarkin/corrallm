@@ -92,7 +92,10 @@ test.beforeEach(async () => {
   dir = await mkdtemp(nativePath.join(tmpdir(), 'corrallm-graph-'));
   const folder = nativePath.join(dir, 'project');
   await mkdir(folder);
-  ({ app, close: closeApp } = await launchApp({ env: { CORRALLM_FAKE_SESSIONS: '1' } }));
+  ({ app, close: closeApp } = await launchApp({
+    diagnoseFailure: () => test.info().status !== test.info().expectedStatus,
+    env: { CORRALLM_FAKE_SESSIONS: '1' },
+  }));
   await app.evaluate(({ dialog }, picked) => {
     Object.assign(dialog, {
       showOpenDialog: () => Promise.resolve({ canceled: false, filePaths: [picked] }),
@@ -424,7 +427,15 @@ test('a drawn edge lets two agents talk, or queues work, which their queues then
   await page.keyboard.press('Escape');
   await expect(work).toHaveCount(0);
   await expect(link).toHaveCount(1);
+});
 
+test('ignores a self-loop and deletes a selected link by its button or Backspace', async () => {
+  const a = await addAgentAt('Agent 1', 400, 150);
+  const b = await addAgentAt('Agent 2', 400, 350);
+  const [idA, idB] = await Promise.all([a.getAttribute('data-id'), b.getAttribute('data-id')]);
+  await connect(a, b);
+  const link = page.getByTestId(`rf__edge-${String(idA)}->${String(idB)}`);
+  await expect(link).toHaveCount(1);
   // A self-loop asks nothing.
   await draw(a, a);
   await expect(page.getByRole('dialog')).toHaveCount(0);
@@ -1025,10 +1036,13 @@ test('edits a queue in its lane by dragging, and animates the task each queue is
   await page.mouse.down();
   await page.mouse.move(from.x, to.y + 4, { steps: 12 });
   await page.mouse.up();
-  const after = await builder();
-  expect(after.indexOf(run)).toBeLessThan(
-    after.findIndex((label) => label.startsWith('Builder: Wait for')),
+  const expected = before.filter((label) => label !== run);
+  expected.splice(
+    expected.findIndex((label) => label.startsWith('Builder: Wait for')),
+    0,
+    run,
   );
+  await expect.poll(builder).toEqual(expected);
 
   // Run: the task each agent is on pulses; the Reviewer is held at its wait.
   await view.getByRole('button', { name: 'Run', exact: true }).click();
@@ -1304,52 +1318,63 @@ test('agents show their type and ask questions, which a sidebar lists until answ
   await expect(card('Agent 1')).not.toHaveAttribute('data-status', 'Needs you');
 });
 
-test('groups fit their contents as a nested node is dragged out of them and back', async () => {
-  const { a, b, c, inner, outer } = await nestedFrames();
-  const [outerBefore, innerBefore, bBefore, cBefore] = await Promise.all([
-    box(outer),
-    box(inner),
-    box(b),
-    box(c),
-  ]);
-  const others = async () => {
-    expectSamePlace(await box(b), bBefore);
-    expectSamePlace(await box(c), cBefore);
-  };
-  const home = await center(a);
+for (const direction of ['right', 'top-left'] as const) {
+  test(`groups fit their contents as a nested node is dragged ${direction} and back`, async () => {
+    const { a, b, c, inner, outer } = await nestedFrames();
+    const [outerBefore, innerBefore, bBefore, cBefore] = await Promise.all([
+      box(outer),
+      box(inner),
+      box(b),
+      box(c),
+    ]);
+    const others = async () => {
+      expectSamePlace(await box(b), bBefore);
+      expectSamePlace(await box(c), cBefore);
+    };
+    const home = await center(a);
 
-  // Out past the outer frame's right edge: both frames follow on every step.
-  await dragAlong(
-    home,
-    [...path(home, { x: outerBefore.x + outerBefore.width + 60, y: home.y + 40 }, 6)],
-    async () => {
+    if (direction === 'top-left') {
+      // Preserve the original cumulative sequence: first drop beyond the right edge, then
+      // cross to the top-left and return home. The other case checks all intermediate right
+      // edge positions, so this setup needs only its endpoint rather than repeating that work.
+      await dragAlong(home, [{ x: outerBefore.x + outerBefore.width + 60, y: home.y + 40 }]);
       expectInside(await box(a), await box(inner));
       expectInside(await box(inner), await box(outer));
-    },
-  );
-  expectInside(await box(inner), await box(outer));
-  await others();
+      await others();
+    }
+    const from = await center(a);
+    const to =
+      direction === 'right'
+        ? { x: outerBefore.x + outerBefore.width + 60, y: home.y + 40 }
+        : { x: outerBefore.x - 60, y: outerBefore.y - 60 };
+    // The right-edge cycle checks containment during every move as well as after drop; the
+    // top-left cycle checks refitting at drop. Both prove other agents stay put and shrink back.
+    await dragAlong(
+      from,
+      path(from, to, 6),
+      direction === 'right'
+        ? async () => {
+            expectInside(await box(a), await box(inner));
+            expectInside(await box(inner), await box(outer));
+          }
+        : undefined,
+    );
+    expectInside(await box(a), await box(inner));
+    expectInside(await box(inner), await box(outer));
+    await others();
 
-  // Out past the outer frame's top-left corner: the frames fit once the node is dropped.
-  await dragAlong(
-    await center(a),
-    path(await center(a), { x: outerBefore.x - 60, y: outerBefore.y - 60 }, 6),
-  );
-  expectInside(await box(a), await box(inner));
-  expectInside(await box(inner), await box(outer));
-  await others();
-
-  // Back home: both frames shrink to their original boxes.
-  await dragAlong(await center(a), path(await center(a), home, 6));
-  for (const [now, was] of [
-    [await box(inner), innerBefore],
-    [await box(outer), outerBefore],
-  ] as const) {
-    expectSamePlace(now, was);
-    expectSamePlace({ x: now.width, y: now.height }, { x: was.width, y: was.height });
-  }
-  await others();
-});
+    // Back home: both frames shrink to their original boxes.
+    await dragAlong(await center(a), path(await center(a), home, 6));
+    for (const [now, was] of [
+      [await box(inner), innerBefore],
+      [await box(outer), outerBefore],
+    ] as const) {
+      expectSamePlace(now, was);
+      expectSamePlace({ x: now.width, y: now.height }, { x: was.width, y: was.height });
+    }
+    await others();
+  });
+}
 
 test('groups nest and take a parent node just like nodes do', async () => {
   const a = await addAgentAt('Agent 1', 300, 200);
@@ -1389,34 +1414,30 @@ test('groups nest and take a parent node just like nodes do', async () => {
   await expect(edges()).toHaveCount(1);
 });
 
-test('opens each example from the gallery, drawing its agents and the work between them', async () => {
-  await page.getByRole('button', { name: 'Start from a template…' }).click();
-  for (const name of [
-    'Independent cross-check',
-    'Review loop',
-    'Team lead',
-    'Fan-out research',
-    'Release checks',
-    'TDD relay',
-    'Head to head',
-    'Spec first',
-    'Review panel',
-  ]) {
-    const gallery = page.getByRole('dialog', { name: 'Templates' });
-    if ((await gallery.count()) === 0)
-      await page.getByRole('button', { name: 'Templates…' }).click();
-    await gallery.getByRole('button', { name: new RegExp(`^${name}`) }).click();
-    await createTemplate();
-    await expect(gallery).toHaveCount(0);
-    await expect(nodes().nth(1), name).toBeVisible();
-    // Attached rather than visible: a straight vertical edge has no width.
-    await expect(page.locator('[data-testid^="rf__edge-work:"]').first(), name).toBeAttached();
-    // Fitted into view, clear of the file bar.
-    const bar = await box(page.getByRole('toolbar', { name: 'Canvas file' }));
-    for (const n of await nodes().all())
-      expect((await box(n)).y, name).toBeGreaterThan(bar.y + bar.height);
-  }
-});
+for (const examples of [
+  ['Independent cross-check', 'Review loop', 'Team lead'],
+  ['Fan-out research', 'Release checks', 'TDD relay'],
+  ['Head to head', 'Spec first', 'Review panel'],
+]) {
+  test(`opens gallery examples ${examples.join(', ')}, drawing their agents and work`, async () => {
+    await page.getByRole('button', { name: 'Start from a template…' }).click();
+    for (const name of examples) {
+      const gallery = page.getByRole('dialog', { name: 'Templates' });
+      if ((await gallery.count()) === 0)
+        await page.getByRole('button', { name: 'Templates…' }).click();
+      await gallery.getByRole('button', { name: new RegExp(`^${name}`) }).click();
+      await createTemplate();
+      await expect(gallery).toHaveCount(0);
+      await expect(nodes().nth(1), name).toBeVisible();
+      // Attached rather than visible: a straight vertical edge has no width.
+      await expect(page.locator('[data-testid^="rf__edge-work:"]').first(), name).toBeAttached();
+      // Fitted into view, clear of the file bar.
+      const bar = await box(page.getByRole('toolbar', { name: 'Canvas file' }));
+      for (const n of await nodes().all())
+        expect((await box(n)).y, name).toBeGreaterThan(bar.y + bar.height);
+    }
+  });
+}
 
 test('keeps work both ways readable, gives messages room, and shows the menus of long queues', async () => {
   await page.getByRole('button', { name: 'Start from a template…' }).click();

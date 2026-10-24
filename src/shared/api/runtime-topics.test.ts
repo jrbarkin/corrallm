@@ -49,7 +49,7 @@ describe('unserved B11 topic contracts', () => {
     expect(() => topicRequest(`session:${canvas}:%2f`)).toThrow();
   });
 
-  it('uses begin/count, ordered chunks and end/rev without an unbounded order header', () => {
+  it('uses a chunk count and indexed chunks without an unbounded order header', () => {
     expect(MAX_TOPIC_FRAME).toBe(1024 * 1024);
     const topic = `session:${newCanvasId()}:a` as const;
     const begin: RuntimeSnapshotFrame = {
@@ -74,6 +74,7 @@ describe('unserved B11 topic contracts', () => {
     );
     const chunk: RuntimeSnapshotFrame = {
       kind: 'chunk',
+      index: 0,
       topic,
       epoch: 'epoch',
       snapshot: 'snapshot',
@@ -83,5 +84,20 @@ describe('unserved B11 topic contracts', () => {
     expect(
       snapshotFrameFits({ ...chunk, entries: [...chunk.entries, { key: 'small', value: 'y' }] }),
     ).toBe(false);
+  });
+  it('requires a nonnegative safe integer chunk index, even for an oversized entry', () => {
+    const chunk = {
+      kind: 'chunk' as const,
+      topic: `session:${newCanvasId()}:a` as const,
+      epoch: 'one',
+      snapshot: 's',
+      index: 0,
+      entries: [{ key: 'huge', value: 'x'.repeat(MAX_TOPIC_FRAME + 1) }],
+    };
+    expect(snapshotFrameFits(chunk)).toBe(true);
+    for (const index of [-1, 0.5, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1])
+      expect(snapshotFrameFits({ ...chunk, index })).toBe(false);
+    Reflect.deleteProperty(chunk, 'index');
+    expect(snapshotFrameFits(chunk)).toBe(false);
   });
 });
