@@ -41,6 +41,7 @@ export function NeedsSidebar({
         (item) =>
           item.kind === 'file' ||
           item.kind === 'proposal' ||
+          item.kind === 'worktree' ||
           item.id.startsWith('stalled/') ||
           item.id.startsWith('unsaved/'),
       )
@@ -49,7 +50,12 @@ export function NeedsSidebar({
   // Pending replies and successful outcomes survive topic removal. A failed reply belongs only
   // to the live item, so a vanished prompt cannot leave a button or badge that can never work.
   const gone = [...settlements].filter(
-    ([id, settlement]) => !settlement.pending && !settlement.outcome && !current.has(id),
+    ([id, settlement]) =>
+      !settlement.pending &&
+      ((!settlement.outcome && !current.has(id)) ||
+        // A setup keeps the same id while it runs, fails and is retried. Its reply settles one
+        // choice, not the live card: the next state must still offer Stop or Retry.
+        (settlement.outcome && settlement.item.kind === 'worktree' && current.has(id))),
   );
   if (gone.length > 0) {
     const kept = new Map(settlements);
@@ -110,11 +116,13 @@ export function NeedsSidebar({
                   <span className="graph-question-header">
                     {item.kind === 'file'
                       ? 'File review'
-                      : item.id.startsWith('stalled/')
-                        ? `Silent session: ${item.agent === undefined ? 'agent' : agentName(questions.input.nodes, item.agent)}`
-                        : item.id.startsWith('unsaved/')
-                          ? 'Run progress'
-                          : 'Proposal'}
+                      : item.kind === 'worktree'
+                        ? 'Worktree setup'
+                        : item.id.startsWith('stalled/')
+                          ? `Silent session: ${item.agent === undefined ? 'agent' : agentName(questions.input.nodes, item.agent)}`
+                          : item.id.startsWith('unsaved/')
+                            ? 'Run progress'
+                            : 'Proposal'}
                   </span>
                   <p className="graph-question-text">{item.title}</p>
                   {item.detail && <p className="graph-question-detail">{item.detail}</p>}

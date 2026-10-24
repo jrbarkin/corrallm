@@ -10,6 +10,7 @@ import {
   mkdtempSync,
   openSync,
   readSync,
+  realpathSync,
   rmSync,
   rmdirSync,
   unlinkSync,
@@ -128,6 +129,11 @@ export async function copyLocalFiles(git: GitRunner, request: CopyRequest): Prom
   const { repository, worktree, cwd } = request;
   const source = repository.realRoot;
   const target = cwd as string;
+  checkRoot(source);
+  checkRoot(target);
+  // Profiles may have been opened through a symlink or a different spelling of their path.
+  // Compare their real location, rather than allowing an alias to bypass the exclusion.
+  const profile = request.profile === undefined ? undefined : realpathSync(request.profile);
   // Read from the picked checkout's object database: the base commit is the repository's.
   const manifest = await readManifest(git, source, worktree.baseOid);
   if (manifest === undefined) return recordOf(null, []);
@@ -143,7 +149,7 @@ export async function copyLocalFiles(git: GitRunner, request: CopyRequest): Prom
       candidates.push({ path: file.slice(0, -1), bytes: 0, ignored: ignored.has(file) });
       continue;
     }
-    const at = sourceFile(source, file, request.profile);
+    const at = sourceFile(source, file, profile);
     if ('fault' in at) {
       unsafe.set(file, at);
       candidates.push({ path: file, bytes: 0, ignored: ignored.has(file) });
@@ -174,7 +180,7 @@ export async function copyLocalFiles(git: GitRunner, request: CopyRequest): Prom
     for (const file of files) {
       const stats = found.get(file);
       if (stats === undefined) throw new CopyError('changed', `${file} changed.`, file);
-      const bytes = readSource(source, file, stats, request.profile);
+      const bytes = readSource(source, file, stats, profile);
       const sha256 = createHash('sha256').update(bytes).digest('hex');
       const { dir, at, made: newFolders } = destination(target, file, true);
       folders.push(...newFolders);
@@ -311,7 +317,9 @@ async function refuseTracked(git: GitRunner, target: string, files: readonly str
   for (const batch of batches(files)) {
     const { stdout } = await gitCall(git, {
       cwd: target,
-      args: ['ls-files', '-z', '--', ...batch.map((file) => `:(literal)${file}`)],
+      // Refuse aliases too: a picked checkout may have untracked a different spelling from
+      // the base, and a case-insensitive worktree would otherwise adopt its tracked file.
+      args: ['ls-files', '-z', '--', ...batch.map((file) => `:(icase,literal)${file}`)],
     });
     const tracked = stdout.split('\0').find((file) => file !== '');
     if (tracked !== undefined) {
@@ -364,6 +372,7 @@ function sourceFile(
   file: string,
   profile: string | undefined,
 ): { stats: Stats } | { fault: CopyFault; why: string } {
+  checkRoot(source);
   if (!safeName(file))
     return { fault: 'unsafe-path', why: `${JSON.stringify(file)} isn’t a safe name.` };
   const parts = file.split('/');
@@ -382,7 +391,9 @@ function sourceFile(
   const stats = lstatOrNone(full);
   if (stats === undefined) return { fault: 'changed', why: `${file} is gone.` };
   if (stats.isSymbolicLink()) return { fault: 'symlink', why: `${file} is a symlink.` };
-  if (!stats.isFile()) return { fault: 'not-regular', why: `${file} isn’t a regular file.` };
+  if (!stats.isFile() || stats.nlink !== 1) {
+    return { fault: 'not-regular', why: `${file} isn’t a regular file with just one link.` };
+  }
   return { stats };
 }
 
@@ -398,7 +409,7 @@ function readSource(
   const at = path.join(source, ...file.split('/'));
   let fd: number;
   try {
-    fd = openSync(at, constants.O_RDONLY | O_NOFOLLOW);
+    fd = openSync(at, constants.O_RDONLY | constants.O_NONBLOCK | O_NOFOLLOW);
   } catch (error) {
     throw (error as NodeJS.ErrnoException).code === 'ELOOP'
       ? new CopyError('symlink', `${file} is a symlink.`, file)
@@ -408,6 +419,7 @@ function readSource(
     const opened = fstatSync(fd);
     if (
       !opened.isFile() ||
+      opened.nlink !== 1 ||
       opened.ino !== listed.ino ||
       opened.dev !== listed.dev ||
       opened.size !== listed.size
@@ -443,6 +455,7 @@ function destination(
   file: string,
   make: boolean,
 ): { dir: string; at: string; made: string[] } {
+  checkRoot(target);
   if (!safeName(file))
     throw new CopyError('unsafe-path', `${JSON.stringify(file)} isn’t a safe name.`, file);
   const parts = file.split('/');
@@ -479,13 +492,37 @@ function destination(
   return { dir, at, made };
 }
 
+/** Verification predates Git's asynchronous listing: do not follow a root swapped since then. */
+function checkRoot(root: string): void {
+  const stats = lstatOrNone(root);
+  if (stats?.isSymbolicLink() === true || (stats !== undefined && realpathSync(root) !== root)) {
+    throw new CopyError('symlink', 'A checkout’s root now goes through a symlink.');
+  }
+  if (stats?.isDirectory() !== true) {
+    throw new CopyError('changed', 'A checkout’s root is no longer there as a folder.');
+  }
+}
+
 /** The hash of what is at a copy's place already: none if nothing is. */
 function existing(at: string, file: string): string | undefined {
   const stats = lstatOrNone(at);
   if (stats === undefined) return undefined;
   if (!stats.isFile()) throw new CopyError('exists', `${file} is in the worktree already.`, file);
-  const fd = openSync(at, constants.O_RDONLY | O_NOFOLLOW);
+  if (stats.nlink !== 1 || (stats.mode & 0o077) !== 0) {
+    throw new CopyError('exists', `${file} isn’t a private copy with just one link.`, file);
+  }
+  const fd = openSync(at, constants.O_RDONLY | constants.O_NONBLOCK | O_NOFOLLOW);
   try {
+    const opened = fstatSync(fd);
+    if (
+      !opened.isFile() ||
+      opened.nlink !== 1 ||
+      (opened.mode & 0o077) !== 0 ||
+      opened.ino !== stats.ino ||
+      opened.dev !== stats.dev
+    ) {
+      throw new CopyError('changed', `${file} changed while its copy was checked.`, file);
+    }
     const hash = createHash('sha256');
     const chunk = Buffer.alloc(64 * 1024);
     for (let at = 0; ;) {
@@ -514,34 +551,41 @@ function writeCopy(
     constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | O_NOFOLLOW,
     mode,
   );
+  const inode = fstatSync(fd).ino;
+  let closed = false;
+  let linked = false;
   try {
     for (let written = 0; written < bytes.length;) {
       written += writeSync(fd, bytes, written, bytes.length - written);
     }
     fsyncSync(fd);
-  } finally {
     closeSync(fd);
-  }
-  try {
+    closed = true;
     // A link fails if anything is there: nothing is ever copied over.
     linkSync(partial, at);
+    linked = true;
+    rmSync(partial, { force: true });
+    if (process.platform !== 'win32') {
+      const folder = openSync(dir, 'r');
+      try {
+        fsyncSync(folder);
+      } finally {
+        closeSync(folder);
+      }
+    }
+    return { at, ino: inode };
   } catch (error) {
+    // The caller cannot record this file until we return. Take it back here if publication or
+    // its directory flush failed; the same is true of a partial whose write/flush failed.
+    if (linked && lstatOrNone(at)?.ino === inode) unlinkSync(at);
     if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
       throw new CopyError('exists', `${path.basename(at)} appeared in the worktree.`);
     }
     throw error;
   } finally {
-    rmSync(partial, { force: true });
+    if (!closed) closeSync(fd);
+    if (lstatOrNone(partial)?.ino === inode) unlinkSync(partial);
   }
-  if (process.platform !== 'win32') {
-    const folder = openSync(dir, 'r');
-    try {
-      fsyncSync(folder);
-    } finally {
-      closeSync(folder);
-    }
-  }
-  return { at, ino: lstatSync(at).ino };
 }
 
 function recordOf(manifest: string | null, files: CopyRecord['files']): CopyRecord {

@@ -1,6 +1,7 @@
 import {
   existsSync,
   lstatSync,
+  linkSync,
   mkdirSync,
   readFileSync,
   rmSync,
@@ -147,6 +148,20 @@ describe.skipIf(process.platform === 'win32')('copyLocalFiles', () => {
     // All or nothing: not even the safe .env is copied.
     expect(existsSync(path.join(tree, '.env'))).toBe(false);
     expect(existsSync(path.join(tree, 'linked'))).toBe(false);
+  });
+
+  it('refuses a selected hard link to a file outside the checkout, copying nothing', async () => {
+    const t = await workspaces({
+      '.gitignore': '.env\n',
+      '.worktreeinclude': '.env\n',
+    });
+    const outside = path.join(t.root, 'secret');
+    write(outside, 'OUTSIDE_SECRET=1\n');
+    linkSync(outside, path.join(t.app, '.env'));
+    const { code, tree } = await refusal(t);
+    expect(code).toBe('not-regular');
+    expect(existsSync(path.join(tree, '.env'))).toBe(false);
+    expect(readFileSync(outside, 'utf8')).toBe('OUTSIDE_SECRET=1\n');
   });
 
   it('never writes through a symlink in the workspace: a folder the base has as a link refuses', async () => {

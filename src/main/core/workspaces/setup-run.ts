@@ -1,5 +1,5 @@
 import type { ChildProcess } from 'node:child_process';
-import { constants } from 'node:fs';
+import { constants, lstatSync, realpathSync } from 'node:fs';
 import { open, rm } from 'node:fs/promises';
 import type { FileHandle } from 'node:fs/promises';
 
@@ -66,7 +66,7 @@ export class SetupProcess {
   #child: ChildProcess | undefined;
   #endedBy: EndedBy | undefined;
   #finished = false;
-  #tail = '';
+  #tail: Buffer = Buffer.alloc(0);
   #headBytes = 0;
   #dropped = 0;
   #writes: Promise<void> = Promise.resolve();
@@ -85,6 +85,7 @@ export class SetupProcess {
    * started nothing and kept no log, if either can't be (the core closing refuses every spawn).
    */
   static async start(processes: SetupProcesses, launch: SetupLaunch): Promise<SetupProcess> {
+    const directory = lstatSync(launch.cwd);
     const log = await open(
       launch.log,
       constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | O_NOFOLLOW,
@@ -92,6 +93,16 @@ export class SetupProcess {
     );
     const running = new SetupProcess(processes, log);
     try {
+      const now = lstatSync(launch.cwd);
+      if (
+        !directory.isDirectory() ||
+        !now.isDirectory() ||
+        directory.dev !== now.dev ||
+        directory.ino !== now.ino ||
+        realpathSync(launch.cwd) !== launch.cwd
+      ) {
+        throw new Error('The setup checkout changed before the command could start.');
+      }
       running.#spawn(launch);
     } catch (error) {
       await log.close();
@@ -134,10 +145,17 @@ export class SetupProcess {
         });
       }, LINGER_MS);
     });
-    child.once('close', (code, signal) => {
-      this.#finish({
-        ...(exit ?? { code, signal }),
-        ...(failed === undefined ? {} : { error: failed }),
+    child.prependOnceListener('close', (code: number | null, signal: NodeJS.Signals | null) => {
+      clearTimeout(this.#timer);
+      clearTimeout(this.#linger);
+      // Closing pipes does not prove the process group ended: a background child may redirect
+      // both streams. Start cleanup before the owner's close listener releases its recovery
+      // record, and keep this attempt running until that cleanup has finished.
+      void this.#end().then(() => {
+        this.#finish({
+          ...(exit ?? { code, signal }),
+          ...(failed === undefined ? {} : { error: failed }),
+        });
       });
     });
     this.#timer = setTimeout(() => {
@@ -147,7 +165,7 @@ export class SetupProcess {
 
   /** The last of what it printed, as it printed it: untrusted text, for the setup card to escape. */
   tail(): string {
-    return this.#tail;
+    return this.#tail.toString('utf8');
   }
 
   /** Ends its whole process group (TERM, then KILL after a grace), then resolves as it exited. */
@@ -171,7 +189,12 @@ export class SetupProcess {
   }
 
   #output(chunk: Buffer): void {
-    this.#tail = (this.#tail + chunk.toString('utf8')).slice(-MAX_LOG_TAIL);
+    this.#tail = Buffer.concat([this.#tail, chunk]).subarray(-MAX_LOG_TAIL);
+    // A retained UTF-8 tail can start in a character split by the byte limit. Drop only those
+    // continuation bytes, rather than expanding them to replacement characters in its preview.
+    let start = 0;
+    while (start < this.#tail.length && ((this.#tail[start] ?? 0) & 0xc0) === 0x80) start += 1;
+    this.#tail = this.#tail.subarray(start);
     const room = MAX_LOG_HEAD - this.#headBytes;
     const kept = room > 0 ? chunk.subarray(0, room) : chunk.subarray(0, 0);
     this.#headBytes += kept.length;

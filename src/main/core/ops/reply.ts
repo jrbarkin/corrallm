@@ -116,7 +116,7 @@ export function replyOps({
           throw new OpFailure('not-found', `There is no Needs item ${to} on this canvas.`);
         }
         try {
-          return await setups.reply(id, to, answer.choice, ctx.by);
+          return await setups.reply(id, to, answer.choice, ctx.by, ctx);
         } catch (error) {
           if (error instanceof SetupError) throw new OpFailure(error.code, error.message);
           throw error;

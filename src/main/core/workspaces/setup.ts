@@ -122,6 +122,12 @@ export function specHash(spec: RunSpec): string {
     .digest('hex');
 }
 
+/** A reply's cancellation boundary, supplied by core.call. */
+export interface SetupCall {
+  /** Checks cancellation and makes the call irreversible immediately before its write. */
+  noReturn(): void;
+}
+
 /** What the setup service does for the core: what `needs`, `reply` and the op call. */
 export interface SetupService {
   /** The setup cards of a canvas's workspaces: yours alone, so on no agent. */
@@ -131,6 +137,7 @@ export interface SetupService {
     to: string,
     choice: string,
     by: PartyId,
+    call?: SetupCall,
   ): Promise<{ outcome: SetupOutcome }>;
   /** `project.setSetupCommand`: the command for the canvas's picked repository (none: detected). */
   setCommand(
@@ -648,6 +655,7 @@ export class WorkspaceSetups implements SetupService {
     to: string,
     choice: string,
     by: PartyId,
+    call?: SetupCall,
   ): Promise<{ outcome: SetupOutcome }> {
     const { workspaces } = this.#deps;
     // Yours alone, whoever claims otherwise: the registry's R3 refuses a token first.
@@ -682,20 +690,28 @@ export class WorkspaceSetups implements SetupService {
         `${to} takes ${offered.map((value) => `"${value}"`).join(' or ')}, not "${choice}".`,
       );
     }
-    if (choice === 'skip') return this.#skip(tree, setup);
-    if (choice === 'stop') return this.#stop(tree, setup);
+    if (choice === 'skip') return this.#skip(tree, setup, call);
+    if (choice === 'stop') {
+      call?.noReturn();
+      return this.#stop(tree, setup);
+    }
     if (tree.state !== 'setup') {
       throw new SetupError(
         'conflict',
         `Its worktree is ${tree.state} now, not waiting for its setup: try it again first.`,
       );
     }
-    return this.#start(tree, setup, choice === 'always');
+    return this.#start(tree, setup, choice === 'always', call);
   }
 
-  async #skip(tree: WorktreeRecord, setup: SetupRecord): Promise<{ outcome: 'skipped' }> {
+  async #skip(
+    tree: WorktreeRecord,
+    setup: SetupRecord,
+    call?: SetupCall,
+  ): Promise<{ outcome: 'skipped' }> {
     await this.#deps.workspaces
       .write((w) => {
+        call?.noReturn();
         w.skipSetup(tree.id, setup.generation);
         if (w.worktree(tree.id)?.state === 'setup') {
           w.transition(tree.id, { from: 'setup', to: 'ready' });
@@ -727,6 +743,7 @@ export class WorkspaceSetups implements SetupService {
     tree: WorktreeRecord,
     setup: SetupRecord,
     always: boolean,
+    call?: SetupCall,
   ): Promise<{ outcome: 'started' }> {
     const { workspaces, provisioner } = this.#deps;
     if (this.#closing) throw new SetupError('unavailable', 'corrallm is closing.');
@@ -746,6 +763,7 @@ export class WorkspaceSetups implements SetupService {
     // Your approval, and the attempt, on disk before anything runs.
     const started = await workspaces
       .write((w) => {
+        call?.noReturn();
         if (always) w.setAlways(repository.id, setup.specHash);
         return w.startSetup(tree.id, {
           generation: setup.generation,
@@ -819,7 +837,13 @@ export class WorkspaceSetups implements SetupService {
         ? await this.#execute(attempt, setup, spec)
         : { code: null, signal: null, endedBy: attempt.endedBy ?? 'shutdown' };
     } catch (error) {
-      exit = { code: null, signal: null, error: (error as Error).message };
+      const endedBy = endedOf(attempt);
+      exit = {
+        code: null,
+        signal: null,
+        error: (error as Error).message,
+        ...(endedBy === undefined ? {} : { endedBy }),
+      };
     } finally {
       if (slotted) this.#release();
     }
@@ -848,12 +872,14 @@ export class WorkspaceSetups implements SetupService {
       return { code: null, signal: null, endedBy: attempt.endedBy ?? 'shutdown' };
     }
     if (this.#windows) return { code: null, signal: null, error: WINDOWS };
+    const env = await this.#deps.environment();
+    const cancelled = endedOf(attempt);
+    if (cancelled !== undefined) return { code: null, signal: null, endedBy: cancelled };
     // Verified again just before it runs: never in a checkout that isn't the one made.
     const checkout = await this.#deps.provisioner.checkout(attempt.workspace);
     if (checkout.state !== 'setup') {
       return { code: null, signal: null, error: 'its worktree isn’t there as it was made.' };
     }
-    const env = await this.#deps.environment();
     const { executable, args } = launchOf(spec, env);
     const logs = this.#folder('logs');
     const key = setup.logKey ?? logKey(setup);
@@ -861,14 +887,27 @@ export class WorkspaceSetups implements SetupService {
     for (const old of readdirSync(logs)) {
       if (old.startsWith(`${attempt.workspace}.`)) rmSync(path.join(logs, old), { force: true });
     }
-    const running = await SetupProcess.start(this.#deps.processes, {
-      executable,
-      args,
-      cwd: checkout.cwd,
-      env,
-      log: path.join(logs, `${key}.log`),
-      timeoutMs: this.#deps.timeoutMs ?? TIMEOUT_MS,
-    });
+    const running = await SetupProcess.start(
+      {
+        // Opening the private log is asynchronous too. Stop can arrive during that await: refuse
+        // at the actual spawn boundary, before any instruction of an approved command can run.
+        run: (work) => {
+          if (endedOf(attempt) !== undefined || this.#closing) {
+            throw new SetupError('unavailable', 'The setup was stopped before it started.');
+          }
+          return this.#deps.processes.run(work);
+        },
+        stop: (child, signal) => this.#deps.processes.stop(child, signal),
+      },
+      {
+        executable,
+        args,
+        cwd: checkout.cwd,
+        env,
+        log: path.join(logs, `${key}.log`),
+        timeoutMs: this.#deps.timeoutMs ?? TIMEOUT_MS,
+      },
+    );
     attempt.process = running;
     this.#changed(attempt.canvas);
     // Stopped while it was being started: ended at once.

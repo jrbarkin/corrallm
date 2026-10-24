@@ -33,6 +33,17 @@ vi.setConfig({ testTimeout: 60_000 });
 const PROFILE_ID = '5f607182-93a4-4b5c-8dce-4a5b6c7d8e9f';
 const YOU = CALLERS.you;
 const TOKENS: readonly Party[] = ['lead', 'worker', 'outside-read', 'outside-write'];
+const SETUP_CARD: NeedsItem = {
+  id: setupNeedId(PROFILE_ID, 1),
+  canvas: CANVAS,
+  kind: 'worktree',
+  for: 'you',
+  by: ['you'],
+  title: 'Set up a private worktree?',
+  detail: 'PRIVATE_SETUP_COMMAND',
+  choices: [{ value: 'run', label: 'Run', humanOnly: 'Only you' }],
+  answerIn: 'api',
+};
 
 let root: string;
 let core: Core;
@@ -133,6 +144,88 @@ async function needsOf(party: Party): Promise<NeedsItem[]> {
 }
 
 describe.skipIf(process.platform === 'win32')('a worktree’s setup, through core.call', () => {
+  it('keeps setup cards and commands unreachable to every token, including batch attempts', async () => {
+    const item = SETUP_CARD;
+    vi.spyOn(made.setups, 'items').mockReturnValue([item]);
+    const reply = vi.spyOn(made.setups, 'reply');
+    const set = vi.spyOn(made.setups, 'setCommand');
+    const clear = vi.spyOn(made.setups, 'clearAlways');
+    expect((await needsOf('you')).map(({ id }) => id)).toContain(item.id);
+    for (const party of TOKENS) {
+      expect(JSON.stringify(await needsOf(party))).not.toContain('PRIVATE_SETUP_COMMAND');
+      expect((await needsOf(party)).map(({ id }) => id)).not.toContain(item.id);
+      for (const choice of ['run', 'always', 'skip', 'retry', 'stop']) {
+        expect(
+          (
+            await core.call(
+              'reply',
+              { canvas: CANVAS, to: item.id, answer: { choice } },
+              CALLERS[party],
+            )
+          ).ok,
+        ).toBe(false);
+      }
+      expect(
+        await core.call(
+          'project.setSetupCommand',
+          { canvas: CANVAS, command: 'echo attacker' },
+          CALLERS[party],
+        ),
+      ).toMatchObject({ ok: false, error: { code: 'human-only' } });
+      expect(
+        await core.call('project.clearSetupApproval', { canvas: CANVAS }, CALLERS[party]),
+      ).toMatchObject({ ok: false, error: { code: 'human-only' } });
+      for (const op of ['project.setSetupCommand', 'project.clearSetupApproval', 'reply']) {
+        expect(
+          (
+            await core.call(
+              'canvas.batch',
+              {
+                canvas: CANVAS,
+                ops: [
+                  {
+                    op,
+                    args: { command: 'echo attacker', to: item.id, answer: { choice: 'run' } },
+                  },
+                ],
+              },
+              CALLERS[party],
+            )
+          ).ok,
+        ).toBe(false);
+      }
+    }
+    expect(reply).not.toHaveBeenCalled();
+    expect(set).not.toHaveBeenCalled();
+    expect(clear).not.toHaveBeenCalled();
+  });
+
+  it('passes a human setup reply’s cancellation boundary through the router', async () => {
+    vi.spyOn(made.setups, 'items').mockReturnValue([SETUP_CARD]);
+    const checking = Promise.withResolvers<undefined>();
+    const checked = Promise.withResolvers<undefined>();
+    const approved = vi.fn();
+    vi.spyOn(made.setups, 'reply').mockImplementation(async (_canvas, _to, _choice, _by, call) => {
+      checking.resolve(undefined);
+      await checked.promise;
+      call?.noReturn();
+      approved();
+      return { outcome: 'started' };
+    });
+    const controller = new AbortController();
+    const result = core.call(
+      'reply',
+      { canvas: CANVAS, to: SETUP_CARD.id, answer: { choice: 'run' } },
+      YOU,
+      controller.signal,
+    );
+    await checking.promise;
+    controller.abort();
+    checked.resolve(undefined);
+    expect((await result).ok).toBe(false);
+    expect(approved).not.toHaveBeenCalled();
+  });
+
   it('only you set the setup command: no token is offered it or may call it, and nothing is kept', async () => {
     const pwned = path.join(root, 'pwned');
     for (const party of TOKENS) {
