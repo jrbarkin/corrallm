@@ -551,7 +551,7 @@ export class WorkspaceSetups implements SetupService {
       );
     }
     lines.push(`In: ${tree.path}, on ${tree.branchRef.slice('refs/heads/'.length)}`);
-    const copied = this.#copyRecord(tree.id);
+    const copied = this.#quietly(() => this.#copyRecord(tree.id));
     lines.push(
       copied === undefined || copied.files.length === 0
         ? 'Copied in: no local files.'
@@ -581,7 +581,7 @@ export class WorkspaceSetups implements SetupService {
       );
     }
     if (this.#windows && setup.command !== null) lines.push(WINDOWS);
-    const output = this.#output(tree.id, setup);
+    const output = this.#quietly(() => this.#output(tree.id, setup)) ?? '';
     if (output !== '') lines.push('', output);
     return {
       id: setupNeedId(tree.id, setup.generation),
@@ -594,6 +594,16 @@ export class WorkspaceSetups implements SetupService {
       choices: this.#choices(setup).map((value) => CHOICES[value]),
       answerIn: 'api',
     };
+  }
+
+  /** What a card shows of the files beside the database: none, rather than no card, if unreadable. */
+  #quietly<T>(read: () => T): T | undefined {
+    try {
+      return read();
+    } catch (error) {
+      console.error('Could not read a worktree setup’s files:', error);
+      return undefined;
+    }
   }
 
   #choices(setup: SetupRecord): SetupChoice[] {
