@@ -8,6 +8,7 @@ Main owns native windows and dialogs. The Electron-free core owns profile stores
 | --------------------------------------------------- | ----------------------------------- |
 | Composition, services, host and process ownership   | [Core](core.md)                     |
 | SQLite, durability, recovery, snapshots and dump    | [Store](store.md)                   |
+| Worktrees: discovery, the Git runner, provisioning  | [Workspaces](workspaces.md)         |
 | Operations, scopes, authorization, rules and topics | [Registry](registry.md)             |
 | Delivery, withdrawals and read positions            | [Messages](messages.md)             |
 | CLI, outside tokens, serve and wait                 | [Headless](headless.md)             |
