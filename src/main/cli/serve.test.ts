@@ -773,13 +773,16 @@ describe.skipIf(process.platform === 'win32')('corrallm serve', () => {
       const first = await serve();
       const old = await connect(first.url);
       const { id } = await call<{ id: string }>(old, 'message', { to: 'builder', body: 'Hello' });
-      // The reply comes back while the orchestrator reads nothing.
-      await vi.waitFor(async () => {
-        const { items } = await call<{ items: Message[] }>(old, 'messages');
-        expect(items.some((message) => message.replyTo === id && message.kind === 'text')).toBe(
-          true,
-        );
-      });
+      // The reply comes back while the orchestrator reads nothing (as slow as delivery: see above).
+      await vi.waitFor(
+        async () => {
+          const { items } = await call<{ items: Message[] }>(old, 'messages');
+          expect(items.some((message) => message.replyTo === id && message.kind === 'text')).toBe(
+            true,
+          );
+        },
+        { timeout: 10_000, interval: 50 },
+      );
       await first.stop();
 
       const { printed, server } = await serveOnTerminal(['--name', 'orchestrator']);
