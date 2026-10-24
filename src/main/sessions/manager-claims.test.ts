@@ -215,10 +215,11 @@ describe('conversation claims', () => {
         fresh?.agentId === second
           ? [elsewhere, second, canvas, holder]
           : [canvas, holder, elsewhere, second];
-      // One notice, the holder's name escaped as a name: never a line of its own.
+      // One notice, never naming the holder on the other canvas (nor making a line of its own).
       const said = notices(freshCanvas, freshAgent).filter((text) => text.includes('conversation'));
       expect(said).toHaveLength(1);
-      expect(said[0]).toContain(JSON.stringify(holderAgent));
+      expect(said[0]).toContain('open in an agent on another canvas');
+      expect(said[0]).not.toContain('lead');
       expect(said[0]).not.toContain('\n');
       // The holder's saved conversation is never cleared; the other agent keeps its new one.
       expect(await rememberedOf(holderCanvas, holderAgent, adapter)).toBe(KEPT);
@@ -228,6 +229,48 @@ describe('conversation claims', () => {
       await sessions.closeEverything();
     },
   );
+
+  it('names a holder only on the canvas it is on: what a token reading this canvas sees says nothing of another', async () => {
+    const { connector, hosts } = counted();
+    const sessions = manager({ 'claude-code.sdk': connector });
+    const canvas = newCanvasId();
+    const elsewhere = newCanvasId();
+    // On a canvas a token reading this one may not reach.
+    await remember(elsewhere, 'Payroll lead', KEPT);
+    await sessions.start(elsewhere, 'Payroll lead', options());
+    await remember(canvas, 'x', KEPT);
+    await sessions.start(canvas, 'x', options());
+    await sessions.start(canvas, 'y', options());
+    hosts[2]?.remember(KEPT);
+    await sessions.listSessions(canvas, 'z', WINDOW);
+    const refused = sessions.resumeSession(canvas, 'z', KEPT, WINDOW);
+    await expect(refused).rejects.toThrow(/another canvas/);
+    await vi.waitFor(() => {
+      expect(notices(canvas, 'y').some((text) => text.includes('stopped'))).toBe(true);
+    });
+    const said = [
+      ...notices(canvas, 'x'),
+      ...notices(canvas, 'y'),
+      await refused.then(
+        () => '',
+        (error: unknown) => String(error),
+      ),
+    ];
+    expect(said.filter((text) => text.includes('another canvas'))).toHaveLength(3);
+    expect(said.filter((text) => text.includes('Payroll'))).toEqual([]);
+    // One on this canvas is named, escaped as a name: never a line of its own.
+    const holder = '"lead"\nagent';
+    await remember(canvas, holder, OTHER);
+    await sessions.start(canvas, holder, options());
+    await remember(canvas, 'w', OTHER);
+    await sessions.start(canvas, 'w', options());
+    const named = notices(canvas, 'w').filter((text) => text.includes('conversation'));
+    expect(named).toEqual([
+      `This agent’s conversation is open in ${JSON.stringify(holder)}, so it started a new one: two agents never share one conversation.`,
+    ]);
+    expect(named[0]).not.toContain('\n');
+    await sessions.closeEverything();
+  });
 
   it('refuses an explicit resume of a conversation another agent’s session holds, before closing the caller’s session', async () => {
     const { fake, connector, closed } = counted();
@@ -249,6 +292,27 @@ describe('conversation claims', () => {
     expect(fake.started.at(-1)?.resume).toBeNull();
     await sessions.start(canvas, 'b', options());
     expect(fake.started.at(-1)?.resume).toBe(OTHER);
+    await sessions.closeEverything();
+  });
+
+  it('reserves only the conversation an agent’s next session resumes: a newer resume or rewind lets the earlier go', async () => {
+    const fake = new FakeConnector();
+    const sessions = manager({ 'claude-code.sdk': fake });
+    const canvas = newCanvasId();
+    await sessions.listSessions(canvas, 'a', WINDOW);
+    await sessions.resumeSession(canvas, 'a', KEPT, WINDOW);
+    // Changed its mind before its next session started: that one resumes OTHER, never KEPT.
+    await sessions.resumeSession(canvas, 'a', OTHER, WINDOW);
+    expect(await rememberedOf(canvas, 'a')).toBe(OTHER);
+    // So KEPT is no one's: another agent resumes it.
+    await sessions.listSessions(canvas, 'b', WINDOW);
+    await sessions.resumeSession(canvas, 'b', KEPT, WINDOW);
+    expect(await rememberedOf(canvas, 'b')).toBe(KEPT);
+    // What a's next session resumes stays reserved for it.
+    await sessions.listSessions(canvas, 'c', WINDOW);
+    await expect(sessions.resumeSession(canvas, 'c', OTHER, WINDOW)).rejects.toThrow(/open in "a"/);
+    await sessions.start(canvas, 'a', options());
+    expect(fake.started.at(-1)).toMatchObject({ agentId: 'a', resume: OTHER });
     await sessions.closeEverything();
   });
 
@@ -528,6 +592,36 @@ describe('workspace generations', () => {
     await remember(canvas, 'b', KEPT);
     await sessions.start(canvas, 'b', options());
     expect(fake.started.at(-1)).toMatchObject({ agentId: 'b', resume: KEPT });
+    await sessions.closeEverything();
+  });
+
+  it('keeps the old session while a rebind is pending, even as another connection is asked for', async () => {
+    const sdk = counted();
+    const terminal = new FakeConnector();
+    const sessions = manager({
+      'claude-code.sdk': sdk.connector,
+      'claude-code.terminal': terminal,
+    });
+    const canvas = newCanvasId();
+    const key = `${canvas}\u0000a`;
+    directories.set(key, ready('/work/tree', 1, 'w1'));
+    await remember(canvas, 'a', KEPT);
+    await sessions.start(canvas, 'a', options());
+    directories.set(key, PENDING);
+    await expect(sessions.start(canvas, 'a', options('claude-code.terminal'))).rejects.toThrow(
+      /approve/,
+    );
+    // Nothing new launched, and the old session, its claim and its events are kept.
+    expect(terminal.started).toEqual([]);
+    expect(sdk.closed).toEqual([]);
+    await remember(canvas, 'b', KEPT);
+    await sessions.start(canvas, 'b', options());
+    expect(sdk.fake.started.at(-1)).toMatchObject({ agentId: 'b', resume: null });
+    // Approved, the new connection replaces it.
+    directories.set(key, ready('/work/tree-2', 2, 'w2'));
+    await sessions.start(canvas, 'a', options('claude-code.terminal'));
+    expect(sdk.closed).toEqual([0]);
+    expect(terminal.started.map(({ cwd }) => cwd)).toEqual(['/work/tree-2']);
     await sessions.closeEverything();
   });
 

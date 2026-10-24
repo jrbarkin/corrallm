@@ -212,10 +212,20 @@ export class Delivery {
     // What its senders were told before, they were told once.
     for (const key of store.told()) this.#told.add(key);
     for (const message of store.active()) {
-      if (this.#inFlight(message)) this.#cutOff(message);
+      // A send the live run made before delivery started (serve held, a passive runtime) is the
+      // run's own to settle as its turn ends: only what the core last left out is cut off.
+      if (this.#inFlight(message) && !this.#runSending(message)) this.#cutOff(message);
     }
     await this.#deps.store.durable();
     this.schedule();
+  }
+
+  /** Whether a message is the live run's send of an attempt it still runs (its own to settle). */
+  #runSending(message: Message): boolean {
+    const { task } = message;
+    if (!sentByRun(message) || task === undefined) return false;
+    const last = this.#deps.engine.run.snapshot().agents[task.agent]?.attempts?.[task.item]?.at(-1);
+    return last?.id === task.attempt && last.status === 'running';
   }
 
   /**

@@ -1,4 +1,4 @@
-import { copyFile, mkdir, mkdtemp, readdir, rm } from 'node:fs/promises';
+import { copyFile, mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -378,6 +378,136 @@ describe('the run’s own sends', () => {
       expect.objectContaining({ status: 'uncertain', messageId: id }),
     ]);
     expect(rowsOnDisk()).toEqual([expect.objectContaining({ id, state: 'unresolved' })]);
+  });
+
+  it('keeps a run message its live run sent before its canvas delivered: executing cuts off only what the core last left out', async () => {
+    const { connector, sent, end } = busy();
+    const core = await start(connector);
+    // Held (serve before its checks pass, or a runtime allocated passively): the run still runs.
+    const engine = await core.engines.open(CANVAS, { held: true });
+    engine.run.start();
+    await vi.waitFor(() => {
+      expect(sent).toHaveLength(1);
+    });
+    const id = sent[0]?.id ?? '';
+    await core.engines.deliver();
+    // Its turn goes on: the message is the live run's, not one the core last left out.
+    expect((await messageOf(core, id))?.state).not.toBe('unresolved');
+    end([id]);
+    await vi.waitFor(async () => {
+      expect((await messageOf(core, id))?.state).toBe('replied');
+    });
+    expect(engine.run.snapshot().agents.worker?.attempts?.hello).toEqual([
+      expect.objectContaining({ status: 'succeeded', messageId: id }),
+    ]);
+  });
+
+  it('records a hand-off from the queue’s agent, and retries it as its owner’s attempt on its turn’s cancelled end', async () => {
+    const file = path.join(profile, 'worker.corral');
+    await writeFile(
+      file,
+      JSON.stringify({
+        format: 'corrallm',
+        version: 2,
+        id: CANVAS,
+        nodes: [
+          {
+            id: 'lead',
+            kind: 'agent',
+            label: 'Lead',
+            adapter: 'codex',
+            connection: 'codex.app-server',
+            position: { x: 0, y: 0 },
+            queue: [{ id: 'handoff', message: 'Hand this over', target: 'worker' }],
+          },
+          {
+            id: 'worker',
+            kind: 'agent',
+            label: 'Worker',
+            adapter: 'codex',
+            connection: 'codex.app-server',
+            position: { x: 200, y: 0 },
+          },
+        ],
+        links: [{ agents: ['lead', 'worker'] }],
+      }),
+    );
+    const { connector, sent, end } = busy();
+    const core = await start(connector);
+    const engine = await core.engines.open(CANVAS);
+    engine.run.start();
+    await vi.waitFor(() => {
+      expect(sent).toHaveLength(1);
+    });
+    const id = sent[0]?.id ?? '';
+    const first = engine.run.snapshot().agents.lead?.attempts?.handoff?.[0];
+    expect(await messageOf(core, id)).toMatchObject({
+      from: 'agent:lead',
+      to: 'agent:worker',
+      task: { agent: 'lead', item: 'handoff', attempt: first?.id },
+    });
+    // The worker's turn is interrupted and resent: its owner's attempt is what is retried.
+    await core.engines.resendAfter(CANVAS, 'worker', [id], 'codex.app-server');
+    end([id], 'cancelled');
+    await vi.waitFor(() => {
+      expect(sent).toHaveLength(2);
+    });
+    const attempts = engine.run.snapshot().agents.lead?.attempts?.handoff;
+    expect(attempts).toMatchObject([
+      { id: first?.id, status: 'cancelled', messageId: id },
+      { status: 'running', retryOf: first?.id, messageId: sent[1]?.id },
+    ]);
+    expect(await messageOf(core, sent[1]?.id ?? '')).toMatchObject({
+      from: 'agent:lead',
+      to: 'agent:worker',
+      task: { agent: 'lead', item: 'handoff', attempt: attempts?.[1]?.id },
+    });
+    // Nothing is copied as a party's resend.
+    const messages = (await core.engines.messagesOf(CANVAS)).all();
+    expect(messages.filter((one) => one.resendOf !== undefined)).toEqual([]);
+  });
+
+  it('records a correction you typed with a Retry as yours, its display what you typed beside the task', async () => {
+    const { connector, sent, end } = busy();
+    const core = await start(connector);
+    const engine = await core.engines.open(CANVAS);
+    engine.run.start();
+    await vi.waitFor(() => {
+      expect(sent).toHaveLength(1);
+    });
+    end([sent[0]?.id ?? ''], 'cancelled');
+    await vi.waitFor(() => {
+      expect(engine.run.snapshot().agents.worker?.problem?.kind).toBe('cancelled');
+    });
+    engine.run.decide('worker', 'hello', { reply: 'Say it in French' });
+    await vi.waitFor(() => {
+      expect(sent).toHaveLength(2);
+    });
+    const id = sent[1]?.id ?? '';
+    const [, retried] = engine.run.snapshot().agents.worker?.attempts?.hello ?? [];
+    const store = await core.engines.messagesOf(CANVAS);
+    expect(store.get(id)).toMatchObject({
+      from: 'you',
+      to: 'agent:worker',
+      task: { agent: 'worker', item: 'hello', attempt: retried?.id },
+    });
+    expect(store.originOf(id)).toBe('manual');
+    expect(store.displayOf(id)).toEqual({
+      text: 'Say it in French',
+      task: { agent: 'worker', item: 'hello' },
+    });
+    // The session got the whole correction, as sent with the task it continues.
+    expect(sent[1]?.text).toContain('Say it in French');
+    expect(retried).toMatchObject({ messageId: id });
+    // Still the run's: no party may take it back.
+    expect(await core.call('withdraw', { canvas: CANVAS, id }, CALLERS.you)).toMatchObject({
+      ok: false,
+      error: { code: 'refused' },
+    });
+    end([id]);
+    await vi.waitFor(() => {
+      expect(store.get(id)?.state).toBe('replied');
+    });
   });
 
   it('leaves the run’s message out unresolved after a crash, its attempt uncertain, sending nothing again', async () => {
