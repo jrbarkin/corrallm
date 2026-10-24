@@ -5,7 +5,8 @@ ARG PNPM_VERSION
 RUN apt-get update && apt-get install --yes --no-install-recommends \
       xvfb xauth rpm fakeroot libgtk-3-0 libnss3 libasound2 libgbm1 libxss1 libxtst6 \
       libatk-bridge2.0-0 libdrm2 libxkbcommon0 libxcomposite1 libxdamage1 libxrandr2 \
-      libcups2 libpango-1.0-0 libcairo2 libgl1-mesa-dri libgl1 fonts-liberation \
+      libcups2 libpango-1.0-0 libcairo2 libgl1-mesa-dri libgl1 libglx-mesa0 \
+      libegl1 libegl-mesa0 mesa-utils fonts-liberation \
     && rm -rf /var/lib/apt/lists/*
 RUN npm install --global "pnpm@${PNPM_VERSION}"
 RUN mkdir -p /home/node/.local/share/pnpm /home/node/.cache/electron \
