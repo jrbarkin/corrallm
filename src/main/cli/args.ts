@@ -3,19 +3,34 @@ import { parseArgs } from 'node:util';
 import { z } from 'zod';
 
 import { ID_PATTERN } from '../../shared/adapter';
-import { DEFAULT_TOKEN_HOURS, MAX_TOKEN_HOURS, MAX_WAIT_SECONDS } from '../../shared/api/limits';
+import {
+  DEFAULT_TOKEN_HOURS,
+  MAX_TOKEN_CANVASES,
+  MAX_TOKEN_HOURS,
+  MAX_WAIT_SECONDS,
+} from '../../shared/api/limits';
 
 /*
  * The `corrallm` command's command lines (API Spec §8.6), read and checked before anything runs.
  * `serve` names its canvases by their files and never a folder: a canvas's project folder is the
  * one picked for it in the app (folder trust is the app's, decision 7), so nothing here is ever a
  * TrustedPath. `wait` takes no token: an orchestrator's token comes only from its environment.
+ * Nor does `token`: it makes, renews and revokes tokens, and names canvases by their files, as
+ * `serve` does; `--into` names the file a new token is written to, whose path goes into the
+ * command that reads it back (`token header`), so it holds no character a shell would read.
  */
+
+const HOURS = `<1-${String(MAX_TOKEN_HOURS)}>`;
 
 export const USAGE = `Usage:
   corrallm serve --canvas <file> [--canvas <file>…] [--profile <dir>] [--port <n>]
-                 [--new-token [--name <name>] [--hours <1-${String(MAX_TOKEN_HOURS)}>] [--read-only]]
+                 [--new-token [--name <name>] [--hours ${HOURS}] [--read-only]]
   corrallm wait [--for <message id>] [--after <cursor>] [--timeout <seconds>]
+  corrallm token new --canvas <file> [--canvas <file>…] [--name <name>] [--hours ${HOURS}]
+                 [--read-only] [--into <file>] [--profile <dir>]
+  corrallm token renew [--name <name>] [--hours ${HOURS}] [--into <file>] [--profile <dir>]
+  corrallm token revoke [--name <name>] [--profile <dir>]
+  corrallm token header --from <file>    (an MCP client's headers helper)
   corrallm dump [--profile <dir>]
   CORRALLM_NATIVE_SELFTEST=1 corrallm    (the native self-test, under plain Node)`;
 
@@ -50,7 +65,35 @@ export interface DumpCommand {
   profile?: string;
 }
 
-export type Command = ServeCommand | WaitCommand | DumpCommand;
+/**
+ * `corrallm token`: a new token for canvas files, a renewal or a revoke of the live token of a
+ * name, on a profile (the app's unless given); a new or renewed one written `into` a file rather
+ * than shown. `header` prints the Authorization header from such a file, as an MCP client's
+ * headers helper.
+ */
+export type TokenCommand =
+  | {
+      command: 'token';
+      action: 'new';
+      name: string;
+      hours: number;
+      access: 'read' | 'write';
+      canvases: string[];
+      into?: string;
+      profile?: string;
+    }
+  | {
+      command: 'token';
+      action: 'renew';
+      name: string;
+      hours: number;
+      into?: string;
+      profile?: string;
+    }
+  | { command: 'token'; action: 'revoke'; name: string; profile?: string }
+  | { command: 'token'; action: 'header'; from: string };
+
+export type Command = ServeCommand | WaitCommand | TokenCommand | DumpCommand;
 
 /** Reads a command line (after `corrallm`); throws UsageError, saying why, if it isn't one. */
 export function parseCommand(argv: readonly string[]): Command {
@@ -60,15 +103,137 @@ export function parseCommand(argv: readonly string[]): Command {
       return parseServe(rest);
     case 'wait':
       return parseWait(rest);
+    case 'token':
+      return parseToken(rest);
     case 'dump': {
       const { values } = read(rest, { profile: { type: 'string' } });
       return { command, ...(values.profile === undefined ? {} : { profile: values.profile }) };
     }
     case undefined:
-      throw new UsageError('Name a command: serve, wait or dump.');
+      throw new UsageError('Name a command: serve, wait, token or dump.');
     default:
-      throw new UsageError(`corrallm has no command “${command}”: serve, wait or dump.`);
+      throw new UsageError(`corrallm has no command “${command}”: serve, wait, token or dump.`);
   }
+}
+
+function parseToken(argv: string[]): TokenCommand {
+  const [action, ...rest] = argv;
+  const profileOf = (profile: string | undefined) => (profile === undefined ? {} : { profile });
+  const intoOf = (into: string | undefined) => (into === undefined ? {} : { into: intoFile(into) });
+  switch (action) {
+    case 'new': {
+      const { values } = read(rest, {
+        canvas: { type: 'string', multiple: true },
+        name: { type: 'string' },
+        hours: { type: 'string' },
+        'read-only': { type: 'boolean' },
+        into: { type: 'string' },
+        profile: { type: 'string' },
+      });
+      const canvases = values.canvas ?? [];
+      if (canvases.length === 0) {
+        throw new UsageError('Name the canvases the token reaches, each with --canvas <file>.');
+      }
+      if (canvases.length > MAX_TOKEN_CANVASES) {
+        throw new UsageError(
+          `A token reaches ${String(MAX_TOKEN_CANVASES)} canvases at most: name fewer with --canvas.`,
+        );
+      }
+      return {
+        command: 'token',
+        action,
+        name: tokenName(values.name),
+        hours: tokenHours(values.hours),
+        access: values['read-only'] === true ? 'read' : 'write',
+        canvases,
+        ...intoOf(values.into),
+        ...profileOf(values.profile),
+      };
+    }
+    case 'renew': {
+      const { values } = read(rest, {
+        name: { type: 'string' },
+        hours: { type: 'string' },
+        into: { type: 'string' },
+        profile: { type: 'string' },
+        canvas: { type: 'string', multiple: true },
+        'read-only': { type: 'boolean' },
+      });
+      if (values.canvas !== undefined || values['read-only'] !== undefined) {
+        throw new UsageError(
+          'renew keeps the token’s canvases and access: for others, make a new token with corrallm token new, which replaces it too.',
+        );
+      }
+      return {
+        command: 'token',
+        action,
+        name: tokenName(values.name),
+        hours: tokenHours(values.hours),
+        ...intoOf(values.into),
+        ...profileOf(values.profile),
+      };
+    }
+    case 'revoke': {
+      const { values } = read(rest, { name: { type: 'string' }, profile: { type: 'string' } });
+      return {
+        command: 'token',
+        action,
+        name: tokenName(values.name),
+        ...profileOf(values.profile),
+      };
+    }
+    case 'header': {
+      const { values } = read(rest, { from: { type: 'string' } });
+      if (values.from === undefined || values.from === '') {
+        throw new UsageError('Name the file the token is in, with --from <file>.');
+      }
+      return { command: 'token', action, from: values.from };
+    }
+    case undefined:
+      throw new UsageError('Say what to do with a token: new, renew or revoke.');
+    default:
+      throw new UsageError(`corrallm token has no “${action}”: new, renew or revoke.`);
+  }
+}
+
+/** A token's name, as given (`orchestrator` by default): an id, or UsageError. */
+function tokenName(given: string | undefined): string {
+  const name = given ?? 'orchestrator';
+  if (!ID_PATTERN.test(name)) {
+    throw new UsageError(
+      `--name is a letter, then up to 31 letters, digits, dots, dashes or underscores, not “${name}”.`,
+    );
+  }
+  return name;
+}
+
+/** How long a token lasts, as given (DEFAULT_TOKEN_HOURS by default), or UsageError. */
+function tokenHours(given: string | undefined): number {
+  const hours = given === undefined ? DEFAULT_TOKEN_HOURS : whole(given);
+  if (hours === undefined || hours < 1 || hours > MAX_TOKEN_HOURS) {
+    throw new UsageError(
+      `--hours is how long the token lasts: 1 to ${String(MAX_TOKEN_HOURS)} hours, not “${given ?? ''}”.`,
+    );
+  }
+  return hours;
+}
+
+/**
+ * Whether a path can be named in the command that reads a token back: none of a shell's quotes,
+ * escapes or expansions, nor a control character (`--into`, which `token` checks again once it is
+ * absolute).
+ */
+export function nameableFile(file: string): boolean {
+  return file !== '' && !/['"\\$`\p{Cc}]/u.test(file);
+}
+
+function intoFile(into: string): string {
+  if (!nameableFile(into)) {
+    throw new UsageError(
+      `--into is a file whose path has no quote, backslash, $, backtick or control character (a command names it), not “${into}”.`,
+    );
+  }
+  return into;
 }
 
 function parseServe(argv: string[]): ServeCommand {
@@ -97,19 +262,11 @@ function parseServe(argv: string[]): ServeCommand {
   }
   let newToken: ServeCommand['newToken'];
   if (values['new-token'] === true) {
-    const name = values.name ?? 'orchestrator';
-    if (!ID_PATTERN.test(name)) {
-      throw new UsageError(
-        `--name is a letter, then up to 31 letters, digits, dots, dashes or underscores, not “${name}”.`,
-      );
-    }
-    const hours = values.hours === undefined ? DEFAULT_TOKEN_HOURS : whole(values.hours);
-    if (hours === undefined || hours < 1 || hours > MAX_TOKEN_HOURS) {
-      throw new UsageError(
-        `--hours is how long the token lasts: 1 to ${String(MAX_TOKEN_HOURS)} hours, not “${values.hours ?? ''}”.`,
-      );
-    }
-    newToken = { name, hours, access: values['read-only'] === true ? 'read' : 'write' };
+    newToken = {
+      name: tokenName(values.name),
+      hours: tokenHours(values.hours),
+      access: values['read-only'] === true ? 'read' : 'write',
+    };
   }
   return {
     command: 'serve',

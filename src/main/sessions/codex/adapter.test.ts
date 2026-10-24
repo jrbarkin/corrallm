@@ -96,6 +96,8 @@ describe("Codex's adapter", () => {
       expect(descriptor.registerMcp).toContain(placeholder);
     }
     expect(descriptor.registerMcp).toMatch(/^codex mcp add /);
+    // Codex reads a bearer token only from a variable, as it starts: it has no headers helper.
+    expect(descriptor.registerMcpHelper).toBeUndefined();
   });
 });
 

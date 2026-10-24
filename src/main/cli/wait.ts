@@ -7,6 +7,7 @@ import { appProfile } from '../core/host/node';
 import { loopbackUrl } from '../url-policy';
 import { readApiFile } from './api-file';
 import type { WaitCommand } from './args';
+import { readTokenFile } from './token-file';
 
 /*
  * `corrallm wait` (decision 20a; API Spec §8.6): one call of the server's `wait`, on the same
@@ -14,13 +15,17 @@ import type { WaitCommand } from './args';
  * orchestrator's CLI may move one still running after 2 minutes to the background). The server's
  * URL comes from CORRALLM_URL, else from the app's profile's api.json while its server runs, and
  * must be corrallm's own on this machine (http to 127.0.0.1 or localhost); the token only from
- * CORRALLM_OUTSIDE_TOKEN, never from the command line, which any process may read. It makes one
- * `tools/call` POST, waits a little longer than the wait, prints one JSON line (the result, with
- * `next`, or `{ error }`) and exits as EXIT says.
+ * CORRALLM_OUTSIDE_TOKEN, else from the 0600 file CORRALLM_OUTSIDE_TOKEN_FILE names, read afresh at
+ * each wait (so a renewal into it needs no restart: `corrallm token renew --into`), never from the
+ * command line, which any process may read. It makes one `tools/call` POST, waits a little longer
+ * than the wait, prints one JSON line (the result, with `next`, or `{ error }`) and exits as EXIT
+ * says.
  */
 
 /** The variable an orchestrator's token is in: what it registers corrallm's MCP server with. */
 export const TOKEN_VARIABLE = 'CORRALLM_OUTSIDE_TOKEN';
+/** The variable naming a token file (`corrallm token --into`), read when TOKEN_VARIABLE is unset. */
+export const TOKEN_FILE_VARIABLE = 'CORRALLM_OUTSIDE_TOKEN_FILE';
 /** The variable that names the server's URL, for a server on another profile than the app's. */
 export const URL_VARIABLE = 'CORRALLM_URL';
 
@@ -46,11 +51,22 @@ export async function waitCommand(
     print(JSON.stringify({ error }));
     return code;
   };
-  const token = env[TOKEN_VARIABLE];
+  let token = env[TOKEN_VARIABLE];
+  const tokenFile = env[TOKEN_FILE_VARIABLE];
+  if ((token === undefined || token === '') && tokenFile !== undefined && tokenFile !== '') {
+    try {
+      token = await readTokenFile(tokenFile);
+    } catch (error) {
+      return fail(EXIT.refused, {
+        code: 'refused',
+        sentence: `${TOKEN_FILE_VARIABLE} names no token to send: ${error instanceof Error ? error.message : String(error)}`,
+      });
+    }
+  }
   if (token === undefined || token === '') {
     return fail(EXIT.refused, {
       code: 'refused',
-      sentence: `Set ${TOKEN_VARIABLE} to the token corrallm serve --new-token printed.`,
+      sentence: `Set ${TOKEN_VARIABLE} to the token corrallm token new printed, or ${TOKEN_FILE_VARIABLE} to the file it wrote it to.`,
     });
   }
   const given = env[URL_VARIABLE];
@@ -94,12 +110,16 @@ export async function waitCommand(
     });
   }
   if (answer.status === 401 || answer.status === 403) {
+    // A token the server made that no longer works is told so, in these words.
+    const stale = rpcReply(answer)?.error?.message === TOKEN_REPLACED;
     return fail(EXIT.refused, {
       code: 'refused',
       sentence:
-        answer.status === 401
-          ? `The server refused the token in ${TOKEN_VARIABLE}: it is wrong, or it expired or was replaced.`
-          : 'The server refused the request.',
+        answer.status === 403
+          ? 'The server refused the request.'
+          : stale
+            ? TOKEN_REPLACED
+            : 'The server refused the token: it is wrong, or it expired or was replaced.',
     });
   }
   const reply = rpcReply(answer);

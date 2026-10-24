@@ -41,12 +41,14 @@ export interface OpError {
 export type OpResult<T> = { ok: true; value: T } | { ok: false; error: OpError };
 
 /**
- * What a call still going says when its outside token is replaced or expires meanwhile (`refused`):
- * the one refusal that means the token itself, as a request that brings no token, or a wrong one,
- * is answered 401 before any op runs. `corrallm wait` tells it apart by these words.
+ * What a call still going says when its outside token is replaced, revoked or expires meanwhile
+ * (`refused`): the one refusal that means the token itself, as a request that brings no token, or
+ * a wrong one, is answered 401 before any op runs; the next request of a token its server knew
+ * (renewed away, revoked, expired) is answered 401 with these words. `corrallm wait` tells it
+ * apart by them.
  */
 export const TOKEN_REPLACED =
-  'This token was replaced or expired: call with the token its maker has now (corrallm serve --new-token).';
+  'This token was replaced, revoked or expired: call with the token its maker has now (corrallm token renew).';
 
 /**
  * What a token's `wait` is refused with (`refused`) while it has as many going as it may

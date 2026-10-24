@@ -68,6 +68,7 @@ const Adapter = z.strictObject({
   ),
   connections: z.array(Connection),
   registerMcp: z.string().optional(),
+  registerMcpHelper: z.string().optional(),
 });
 
 const UsageBackend = z.strictObject({

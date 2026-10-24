@@ -1,7 +1,10 @@
+import { chmod, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import type { Server } from 'node:http';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { TOKEN_REPLACED, TOO_MANY_WAITS } from '../../shared/api/errors';
 import type { OpError } from '../../shared/api/errors';
@@ -71,5 +74,98 @@ describe('corrallm wait', () => {
     );
     expect(exit).toBe(code);
     expect(printed.map((line) => JSON.parse(line) as unknown)).toEqual([{ error }]);
+  });
+
+  it('says a token its server renewed away, revoked or let expire is that, refused with 2', async () => {
+    const tokens: string[] = [];
+    server = createServer((request, response) => {
+      request.resume();
+      tokens.push(request.headers.authorization ?? '');
+      response.writeHead(401, { 'Content-Type': 'application/json' });
+      response.end(
+        JSON.stringify({
+          jsonrpc: '2.0',
+          error: { code: -32001, message: TOKEN_REPLACED },
+          id: null,
+        }),
+      );
+    });
+    await new Promise<void>((resolve) => server?.listen(0, '127.0.0.1', resolve));
+    const { port } = server.address() as { port: number };
+    const printed: string[] = [];
+    const exit = await waitCommand(
+      { command: 'wait', timeout: 1 },
+      {
+        env: {
+          CORRALLM_URL: `http://127.0.0.1:${String(port)}/mcp`,
+          CORRALLM_OUTSIDE_TOKEN: 'an-old-token',
+        },
+        print: (line) => printed.push(line),
+      },
+    );
+    expect(exit).toBe(2);
+    expect(printed.map((line) => JSON.parse(line) as unknown)).toEqual([
+      { error: { code: 'refused', sentence: TOKEN_REPLACED } },
+    ]);
+    expect(tokens).toEqual(['Bearer an-old-token']);
+  });
+
+  describe.skipIf(process.platform === 'win32')('with its token in a file', () => {
+    let dir: string;
+    beforeEach(async () => {
+      dir = await mkdtemp(path.join(tmpdir(), 'corrallm-wait-'));
+    });
+    afterEach(async () => {
+      await rm(dir, { recursive: true, force: true });
+    });
+
+    it('reads the token afresh from the file CORRALLM_OUTSIDE_TOKEN_FILE names, only if only you can read it', async () => {
+      const sent: string[] = [];
+      server = createServer((request, response) => {
+        request.resume();
+        sent.push(request.headers.authorization ?? '');
+        response.writeHead(200, { 'Content-Type': 'application/json' });
+        response.end(
+          JSON.stringify({
+            jsonrpc: '2.0',
+            id: 1,
+            result: { content: [], structuredContent: { messages: [], next: 'n' } },
+          }),
+        );
+      });
+      await new Promise<void>((resolve) => server?.listen(0, '127.0.0.1', resolve));
+      const { port } = server.address() as { port: number };
+      const file = path.join(dir, 'token');
+      const first = 'A'.repeat(43);
+      const second = 'B'.repeat(43);
+      const wait = async () => {
+        const printed: string[] = [];
+        const exit = await waitCommand(
+          { command: 'wait', timeout: 0 },
+          {
+            env: {
+              CORRALLM_URL: `http://127.0.0.1:${String(port)}/mcp`,
+              CORRALLM_OUTSIDE_TOKEN_FILE: file,
+            },
+            print: (line) => printed.push(line),
+          },
+        );
+        return { exit, printed };
+      };
+      await writeFile(file, `${first}\n`, { mode: 0o600 });
+      expect((await wait()).exit).toBe(1);
+      // Renewed into the same file: the next wait sends the new one.
+      await writeFile(file, `${second}\n`, { mode: 0o600 });
+      expect((await wait()).exit).toBe(1);
+      expect(sent).toEqual([`Bearer ${first}`, `Bearer ${second}`]);
+
+      // A file others may read is no place for a token: refused, sending nothing, saying why.
+      await chmod(file, 0o644);
+      const { exit, printed } = await wait();
+      expect(exit).toBe(2);
+      expect(printed.join('\n')).toMatch(/yours alone/);
+      expect(printed.join('\n')).not.toContain(second);
+      expect(sent).toHaveLength(2);
+    });
   });
 });

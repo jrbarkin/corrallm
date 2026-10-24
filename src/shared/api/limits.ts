@@ -101,6 +101,8 @@ export const MAX_WAIT_SECONDS = 3600;
 export const DEFAULT_TOKEN_HOURS = 1;
 /** The longest an outside token may last, in hours (decision 8). */
 export const MAX_TOKEN_HOURS = 12;
+/** The most canvases `corrallm token new` names for one token (Build Plan B30). */
+export const MAX_TOKEN_CANVASES = 32;
 
 /**
  * At most this many calls in flight per token (Core Server §6.7), `wait` aside; you are never

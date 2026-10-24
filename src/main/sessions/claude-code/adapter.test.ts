@@ -100,4 +100,22 @@ describe("Claude Code's adapter", () => {
     }
     expect(descriptor.registerMcp).toMatch(/^claude mcp add --transport http /);
   });
+
+  it('registers an outside MCP server with a headers helper, run at every connect, so a renewed token needs no restart', () => {
+    const template = descriptor.registerMcpHelper ?? '';
+    for (const placeholder of ['{server}', '{url}', '{helper}']) {
+      expect(template).toContain(placeholder);
+    }
+    // Claude Code's own JSON for an HTTP server, single-quoted for the shell.
+    const filled = template
+      .replaceAll('{server}', 'corrallm-server')
+      .replaceAll('{url}', 'http://127.0.0.1:4100/mcp')
+      .replaceAll('{helper}', 'corrallm token header --from \\"/home/me/token\\"');
+    const [, json] = /^claude mcp add-json corrallm-server '([^']*)'$/.exec(filled) ?? [];
+    expect(JSON.parse(json ?? '')).toEqual({
+      type: 'http',
+      url: 'http://127.0.0.1:4100/mcp',
+      headersHelper: 'corrallm token header --from "/home/me/token"',
+    });
+  });
 });
