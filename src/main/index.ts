@@ -194,8 +194,8 @@ function main(): void {
         );
         await ask('flush');
       };
-      // An approved quit waits for the complete core teardown. Only a second quit while
-      // saving is stuck bounds that wait, as the user's explicit escape.
+      // An approved quit waits for the complete core teardown. Only a second quit, while
+      // saving or the core's close is stuck, bounds that wait, as the user's explicit escape.
       let finishing: Promise<void> | undefined;
       let quitFailed = false;
       let readyToQuit = false;
@@ -205,26 +205,26 @@ function main(): void {
         console.error(why, error);
         if (readyToQuit && !alreadyFailed) app.exit(1);
       };
-      const abandon = (escape?: true) => (finishing ??= finish(escape));
-      const finish = async (escape?: true) => {
+      const escaped = Promise.withResolvers<undefined>();
+      let escapeTimer: ReturnType<typeof setTimeout> | undefined;
+      const abandon = (escape?: true) => {
+        finishing ??= finish();
+        if (escape && !readyToQuit) {
+          escapeTimer ??= setTimeout(() => {
+            escaped.resolve(undefined);
+          }, ABANDON_MS);
+        }
+        return finishing;
+      };
+      const finish = async () => {
         supervisor.stop();
         const closed = ask('close').catch((error: unknown) => {
           failQuit('Could not finish closing the core:', error);
         });
-        if (!escape) {
-          await closed;
-          return;
-        }
-        let timer: ReturnType<typeof setTimeout> | undefined;
         try {
-          await Promise.race([
-            closed,
-            new Promise((resolve) => {
-              timer = setTimeout(resolve, ABANDON_MS);
-            }),
-          ]);
+          await Promise.race([closed, escaped.promise]);
         } finally {
-          clearTimeout(timer);
+          clearTimeout(escapeTimer);
         }
       };
       const askAnyway =
@@ -271,8 +271,11 @@ function main(): void {
       });
       app.on('before-quit', (event) => {
         // Closing has approved the irreversible teardown, but a repeated native quit must
-        // still wait until done() has finished closing the core.
+        // still wait until done() has finished closing the core: it gives that close only the
+        // escape's last few seconds, as the way out of one that hangs.
+        const closing = quit.approved && !readyToQuit;
         if (!quit.request() || !readyToQuit) event.preventDefault();
+        if (closing) void abandon(true);
       });
       // A window gaining focus has the core check the file of the canvas it shows for a change on
       // disk (B9 Design §5): one made in another program while corrallm was in the background.
