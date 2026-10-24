@@ -97,6 +97,128 @@ it('does not signal a reused pid and retains its diagnostic records', async () =
   expect(existsSync(path.join(directory, '42.json'))).toBe(true);
 });
 
+it('cleans records of exited servers without inspecting their identities', async () => {
+  const { system, groups } = fixture();
+  for (const pid of [42, 84]) recordTestProcess(directory, pid, undefined, system.inspect);
+  groups.clear();
+  system.inspect = vi.fn(() => {
+    throw new Error('spawnSync ps ETIMEDOUT');
+  });
+  const owner = new PassThrough();
+  const watching = watchTestLifetime(directory, owner, system);
+  owner.end();
+  await watching;
+  expect(system.inspect).not.toHaveBeenCalled();
+  expect(system.signal).not.toHaveBeenCalled();
+});
+
+it.each(['EPERM', 'ETIMEDOUT'])(
+  'confirms a recorded group is gone after an inconclusive group probe (%s)',
+  async (code) => {
+    const { system } = fixture();
+    recordTestProcess(directory, 42, undefined, system.inspect);
+    system.alive = vi
+      .fn()
+      .mockImplementationOnce(() => {
+        throw Object.assign(new Error(`group probe ${code}`), { code });
+      })
+      .mockReturnValue(false);
+    system.inspect = () => {
+      throw new Error('spawnSync ps ETIMEDOUT');
+    };
+    const owner = new PassThrough();
+    const watching = watchTestLifetime(directory, owner, system);
+    owner.end();
+    await expect(watching).resolves.toBeUndefined();
+    expect(system.signal).not.toHaveBeenCalled();
+  },
+);
+
+it.each(['SIGTERM', 'SIGKILL'] as const)(
+  'confirms a group is gone when %s itself reports EPERM',
+  async (failedSignal) => {
+    const { system, groups } = fixture();
+    recordTestProcess(directory, 42, undefined, system.inspect);
+    system.signal = vi.fn((_pid, signal) => {
+      if (signal === failedSignal) {
+        groups.delete(42);
+        throw Object.assign(new Error('kill EPERM'), { code: 'EPERM' });
+      }
+    });
+    const owner = new PassThrough();
+    const watching = watchTestLifetime(directory, owner, system);
+    owner.end();
+    await expect(watching).resolves.toBeUndefined();
+  },
+);
+
+it.each([
+  ['before SIGTERM', 'EIO'],
+  ['before SIGTERM', 'ETIMEDOUT'],
+  ['before SIGKILL', 'EIO'],
+  ['before SIGKILL', 'ETIMEDOUT'],
+] as const)('cleans a group that exits during a failed ps read %s (%s)', async (stage, code) => {
+  const { system, groups } = fixture();
+  recordTestProcess(directory, 42, undefined, system.inspect);
+  system.signal = vi.fn();
+  system.inspect = () => {
+    if (stage === 'before SIGKILL' && system.now() === 0) return { group: 42, started: 1000 };
+    // The group was alive immediately before ps ran, but exited while it was scheduled.
+    groups.delete(42);
+    throw Object.assign(new Error(`spawnSync ps ${code}`), { code });
+  };
+  const owner = new PassThrough();
+  const watching = watchTestLifetime(directory, owner, system);
+  owner.end();
+  await expect(watching).resolves.toBeUndefined();
+  expect(vi.mocked(system.signal).mock.calls).toEqual(
+    stage === 'before SIGTERM' ? [] : [[42, 'SIGTERM']],
+  );
+});
+
+it('waits for an exiting group after ps fails without signalling an unverified identity', async () => {
+  const { system, groups } = fixture();
+  recordTestProcess(directory, 42, undefined, system.inspect);
+  system.inspect = () => {
+    throw new Error('spawnSync ps ETIMEDOUT');
+  };
+  const wait = system.wait;
+  system.wait = async (ms) => {
+    await wait(ms);
+    if (system.now() >= 800) groups.delete(42);
+  };
+  const owner = new PassThrough();
+  const watching = watchTestLifetime(directory, owner, system);
+  owner.end();
+  await expect(watching).resolves.toBeUndefined();
+  expect(system.now()).toBe(800);
+  expect(system.signal).not.toHaveBeenCalled();
+});
+
+it.each(['before SIGTERM', 'before SIGKILL'] as const)(
+  'names a surviving group and the failed ps read %s while retaining its record',
+  async (stage) => {
+    const { system } = fixture();
+    recordTestProcess(directory, 42, undefined, system.inspect);
+    system.signal = vi.fn();
+    system.inspect = () => {
+      if (stage === 'before SIGKILL' && system.now() === 0) return { group: 42, started: 1000 };
+      throw new Error('spawnSync ps ETIMEDOUT');
+    };
+    const owner = new PassThrough();
+    const failed = expect(watchTestLifetime(directory, owner, system)).rejects.toThrow(
+      /Test group 42.*spawnSync ps ETIMEDOUT.*folder was kept/,
+    );
+    owner.end();
+    await failed;
+    expect(system.now()).toBe(stage === 'before SIGTERM' ? 5000 : 10_000);
+    expect(vi.mocked(system.signal).mock.calls).toEqual(
+      stage === 'before SIGTERM' ? [] : [[42, 'SIGTERM']],
+    );
+    expect(existsSync(path.join(directory, '42.json'))).toBe(true);
+  },
+);
+
 it('retains a real survivor after the complete grace and kill wait', async () => {
   const { system } = fixture();
   recordTestProcess(directory, 42, undefined, system.inspect);
@@ -109,6 +231,42 @@ it('retains a real survivor after the complete grace and kill wait', async () =>
   await failed;
   expect(system.now()).toBe(10_000);
   expect(system.signal).toHaveBeenCalledWith(42, 'SIGKILL');
+  expect(existsSync(path.join(directory, '42.json'))).toBe(true);
+});
+
+it('fails with the pid and signal error when a verified group survives denied signals', async () => {
+  const { system } = fixture();
+  recordTestProcess(directory, 42, undefined, system.inspect);
+  system.signal = vi.fn(() => {
+    throw Object.assign(new Error('kill EPERM'), { code: 'EPERM' });
+  });
+  const owner = new PassThrough();
+  const failed = expect(watchTestLifetime(directory, owner, system)).rejects.toThrow(
+    /Test group 42 did not stop; SIGKILL failed \(kill EPERM\).*folder was kept/,
+  );
+  owner.end();
+  await failed;
+  expect(system.now()).toBe(10_000);
+  expect(system.signal).toHaveBeenCalledWith(42, 'SIGTERM');
+  expect(system.signal).toHaveBeenCalledWith(42, 'SIGKILL');
+  expect(existsSync(path.join(directory, '42.json'))).toBe(true);
+});
+
+it('keeps an unverified group when neither its identity nor its liveness can be read', async () => {
+  const { system } = fixture();
+  recordTestProcess(directory, 42, undefined, system.inspect);
+  system.inspect = () => undefined;
+  system.alive = () => {
+    throw new Error('spawnSync ps ETIMEDOUT');
+  };
+  const owner = new PassThrough();
+  const failed = expect(watchTestLifetime(directory, owner, system)).rejects.toThrow(
+    /Test group 42 has no matching process identity; group probe failed \(spawnSync ps ETIMEDOUT\).*folder was kept/,
+  );
+  owner.end();
+  await failed;
+  expect(system.now()).toBe(5000);
+  expect(system.signal).not.toHaveBeenCalled();
   expect(existsSync(path.join(directory, '42.json'))).toBe(true);
 });
 
