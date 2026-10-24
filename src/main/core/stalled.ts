@@ -62,7 +62,7 @@ export class StalledTurns {
   readonly #deps: Deps;
   readonly #clock: WatchdogClock;
   readonly #network: WatchdogNetwork;
-  #identity: string | undefined;
+  #identity: ReadonlySet<string> | undefined;
   #networkWarned = false;
   readonly #turns = new Map<string, Turn>();
   #checked: number;
@@ -173,7 +173,9 @@ export class StalledTurns {
       const value = networkIdentity(this.#network());
       const previous = this.#identity;
       this.#identity = value;
-      if (previous !== undefined && previous !== value) {
+      // A new interface or address can't break a connection made before it: only a lost one is a
+      // change (one that came and later goes counts then).
+      if (previous !== undefined && [...previous].some((one) => !value.has(one))) {
         // The sampling time is the observed change: an event between samples may have come
         // before the link dropped. Only activity after this reading clears the shorter grace.
         this.#disrupted(now, 'network');
@@ -293,10 +295,18 @@ function keyOf(canvas: CanvasId, agent: string): string {
   return JSON.stringify([canvas, agent]);
 }
 
-/** Ignore address order, IPv6 privacy suffixes and link-local-only interfaces. */
-function networkIdentity(interfaces: ReturnType<WatchdogNetwork>): string {
+/**
+ * Container and VM bridges (and their veth pairs) that Docker, Podman, CNI, libvirt and macOS's
+ * vmnet make and remove as agents start and stop them. No model connection runs over one.
+ * Not br0: a host bridge can carry the host's own address.
+ */
+const VIRTUAL_BRIDGE = /^(?:docker|br-|veth|virbr|cni|podman|bridge)/;
+
+/** Ignore address order, IPv6 privacy suffixes, link-local-only and virtual bridge interfaces. */
+function networkIdentity(interfaces: ReturnType<WatchdogNetwork>): Set<string> {
   const identity = new Set<string>();
   for (const [name, addresses] of Object.entries(interfaces)) {
+    if (VIRTUAL_BRIDGE.test(name)) continue;
     for (const info of addresses ?? []) {
       if (info.internal) continue;
       if (info.family === 'IPv4' && isIP(info.address) === 4) {
@@ -307,7 +317,7 @@ function networkIdentity(interfaces: ReturnType<WatchdogNetwork>): string {
       }
     }
   }
-  return JSON.stringify([...identity].sort());
+  return identity;
 }
 
 function ipv6Prefix(address: string): string | undefined {

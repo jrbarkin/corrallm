@@ -5,7 +5,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 
 import type { ConnectionId } from '../../shared/adapter';
-import { Engine } from '../../shared/engine/engine';
+import { Engine, RETRY_CHECK_MS } from '../../shared/engine/engine';
 import { fakeBackend } from '../../shared/engine/test-backend';
 import { TEST_ENGINE } from '../../shared/engine/test-engine';
 import type { Message } from '../../shared/model/messages';
@@ -129,6 +129,7 @@ beforeEach(async () => {
 });
 afterEach(async () => {
   await core.close();
+  vi.useRealTimers();
   vi.restoreAllMocks();
   await rm(profile, { recursive: true, force: true });
 });
@@ -171,6 +172,60 @@ const texts = async () =>
   (await core.engines.messagesOf(CANVAS))
     .all()
     .filter((m) => m.kind === 'text' && m.to === 'agent:a');
+const needIds = async () => {
+  const needs = await core.call('needs', { canvas: CANVAS }, CALLERS.you);
+  if (!needs.ok) throw new Error('No needs');
+  return (needs.value as { items: { id: string }[] }).items.map(({ id }) => id);
+};
+
+/**
+ * From here the test moves setTimeout: whatever a held resend's checks would do on a later re-check
+ * happens before the guard's assertion, never after it by chance. Timers still follow real time,
+ * so nothing else waits forever.
+ */
+function controlTimers(): void {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'], shouldAdvanceTime: true });
+}
+
+/**
+ * A guard that nothing was sent: once a resend's hold is seen, past several of its re-checks and
+ * every journal write they made, so a send that went anyway has been decided and handed over.
+ */
+async function settled(): Promise<void> {
+  await vi.advanceTimersByTimeAsync(RETRY_CHECK_MS * 4);
+  await core.flush();
+}
+
+/** The resend waits on a hold, worded `why` to its sender, through its re-checks: none sent. */
+async function heldResend(origin: 'party' | 'manual' | 'run', why: string): Promise<void> {
+  const engine = required(core.engines.canvas(CANVAS)).engine;
+  await vi.waitFor(async () => {
+    if (origin === 'run') {
+      // Its reserved retry waits behind the cancelled attempt; nothing has decided a new one.
+      expect(engine.run.snapshot().agents.a?.problem?.kind).toBe('cancelled');
+      expect(await needIds()).toContain('hold/a/task');
+      return;
+    }
+    const resent = (await texts())[1];
+    expect(resent?.state).toBe('pending');
+    expect((await core.engines.messagesOf(CANVAS)).all()).toContainEqual(
+      expect.objectContaining({
+        kind: 'notice',
+        to: resent?.from,
+        replyTo: resent?.id,
+        body: expect.stringContaining(why) as string,
+      }),
+    );
+  });
+  await settled();
+  expect(sent).toHaveLength(1);
+  if (origin === 'run') {
+    expect(engine.run.snapshot().agents.a).toMatchObject({ problem: { kind: 'cancelled' } });
+    expect(engine.run.snapshot().agents.a?.attempts?.task).toMatchObject([{ status: 'cancelled' }]);
+  } else {
+    expect((await texts())[1]?.state).toBe('pending');
+  }
+}
 
 it('offers the user Interrupt and resend, and refuses a token', async () => {
   await send();
@@ -363,9 +418,15 @@ it('a Kill after choosing resend cancels the reserved run retry', async () => {
   await vi.waitFor(() => {
     expect(engine.run.snapshot().agents.a?.problem?.kind).toBe('cancelled');
   });
+  controlTimers();
   await call('run.unpause', { target: { agent: 'a' } });
-  await new Promise((resolve) => setTimeout(resolve, 30));
+  // Unpaused, the Kill's cancelled attempt waits for you; no reserved retry is left to take it.
+  await vi.waitFor(async () => {
+    expect(await needIds()).toContain('hold/a/task');
+  });
+  await settled();
   expect(sent).toHaveLength(1);
+  expect(engine.run.snapshot().agents.a).toMatchObject({ problem: { kind: 'cancelled' } });
   expect(engine.run.snapshot().agents.a?.attempts?.task).toHaveLength(1);
 });
 
@@ -384,12 +445,10 @@ it.each(['party', 'manual', 'run'] as const)(
     // Activity would clear the Need, so make this turn silent in its new mode again.
     await stall();
     await choose();
+    expect(interrupt).toHaveBeenCalledOnce();
+    controlTimers();
     end();
-    await vi.waitFor(() => {
-      expect(interrupt).toHaveBeenCalledOnce();
-    });
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(sent).toHaveLength(1);
+    await heldResend(origin, 'never asks before it acts');
     host.emit({ type: 'mode', mode: 'auto' });
     await vi.waitFor(() => {
       expect(sent).toHaveLength(2);
@@ -662,9 +721,9 @@ it.each(['party', 'manual', 'run'] as const)(
       CALLERS.you,
     );
     await choose();
+    controlTimers();
     end();
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(sent).toHaveLength(1);
+    await heldResend(origin, 'waits until it resets');
     await core.call(
       'usage.simulate',
       {

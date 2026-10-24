@@ -289,6 +289,64 @@ describe('silent turns', () => {
     },
   );
 
+  it('does not shorten a silent turn’s deadline when the snapshot gains a br-123 interface', async () => {
+    start();
+    await vi.advanceTimersByTimeAsync(WATCH_EVERY_MS);
+    interfaces = { ...interfaces, 'br-123': [address('172.18.0.1')] };
+    await vi.advanceTimersByTimeAsync(WATCH_EVERY_MS + WAKE_GRACE_MS);
+    expect(warning).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(STALL_MS);
+    expect(warning).toHaveBeenCalledOnce();
+    expect(warning.mock.calls[0]?.[4]).toContain('20 minutes');
+  });
+
+  it.each(['docker0', 'br-0a1b2c3d4e5f', 'veth1a2b3c', 'virbr0', 'cni0', 'podman1', 'bridge100'])(
+    'ignores the virtual bridge %s coming up and going down',
+    async (name) => {
+      start();
+      await vi.advanceTimersByTimeAsync(WATCH_EVERY_MS);
+      const host = interfaces;
+      interfaces = {
+        ...host,
+        [name]: [address('172.18.0.1'), address('fd00:1:2:3::1', 'IPv6')],
+      };
+      await vi.advanceTimersByTimeAsync(WATCH_EVERY_MS);
+      interfaces = { ...host, [name]: [address('172.19.0.1'), address('fd00:1:2:4::1', 'IPv6')] };
+      await vi.advanceTimersByTimeAsync(WATCH_EVERY_MS);
+      interfaces = host;
+      await vi.advanceTimersByTimeAsync(WATCH_EVERY_MS + WAKE_GRACE_MS);
+      expect(warning).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(STALL_MS);
+      expect(warning).toHaveBeenCalledOnce();
+      expect(warning.mock.calls[0]?.[4]).toContain('20 minutes');
+    },
+  );
+
+  it('still watches a host bridge such as br0, which can carry the host’s own address', async () => {
+    interfaces = { br0: [address('192.0.2.1')] };
+    start();
+    await vi.advanceTimersByTimeAsync(WATCH_EVERY_MS);
+    interfaces = { br0: [address('192.0.2.2')] };
+    await vi.advanceTimersByTimeAsync(WATCH_EVERY_MS + WAKE_GRACE_MS);
+    expect(warning.mock.calls[0]?.[4]).toContain('2 minutes after the network changed');
+  });
+
+  it('counts only a lost address as a change, not a new one, including one that later goes', async () => {
+    start();
+    await vi.advanceTimersByTimeAsync(WATCH_EVERY_MS);
+    const before = interfaces;
+    interfaces = {
+      en0: [...(before.en0 ?? []), address('192.0.2.7')],
+      utun4: [address('10.8.0.2')],
+    };
+    await vi.advanceTimersByTimeAsync(WATCH_EVERY_MS + WAKE_GRACE_MS);
+    expect(warning).not.toHaveBeenCalled();
+    interfaces = { en0: interfaces.en0 };
+    await vi.advanceTimersByTimeAsync(WATCH_EVERY_MS + WAKE_GRACE_MS);
+    expect(warning).toHaveBeenCalledOnce();
+    expect(warning.mock.calls[0]?.[4]).toContain('2 minutes after the network changed');
+  });
+
   it('keeps the normal deadline for activity after a detected network change', async () => {
     start();
     await vi.advanceTimersByTimeAsync(WATCH_EVERY_MS);

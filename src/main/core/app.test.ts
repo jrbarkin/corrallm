@@ -250,7 +250,19 @@ describe('the app’s core and window channels', () => {
   )(
     'warns a silent $connection turn after $trigger and answers its Needs item without opening a core run',
     async ({ connection, trigger }) => {
-      let interfaces: ReturnType<NonNullable<CoreConfig['watchdogNetwork']>> = {};
+      const en0 = (address: string) => ({
+        en0: [
+          {
+            family: 'IPv4' as const,
+            address,
+            netmask: '255.255.255.0',
+            internal: false,
+            mac: '',
+            cidr: `${address}/24`,
+          },
+        ],
+      });
+      let interfaces: ReturnType<NonNullable<CoreConfig['watchdogNetwork']>> = en0('192.0.2.1');
       let now = Date.now();
       let tick: (() => void) | undefined;
       let host: SessionHost | undefined;
@@ -321,18 +333,7 @@ describe('the app’s core and window channels', () => {
         now += 3 * 60 * 60_000;
         core.resumed();
       } else {
-        interfaces = {
-          en0: [
-            {
-              family: 'IPv4',
-              address: '192.0.2.1',
-              netmask: '255.255.255.0',
-              internal: false,
-              mac: '',
-              cidr: '192.0.2.1/24',
-            },
-          ],
-        };
+        interfaces = en0('198.51.100.1'); // Another network: the old address is gone.
       }
       tick?.();
       for (let i = 0; i < 7; i++) {
