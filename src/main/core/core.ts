@@ -23,6 +23,7 @@ import { FileRevealer } from '../reveal';
 import { ProjectFiles } from '../files';
 import { CanvasMemory } from '../memory';
 import { ProjectFolders } from '../project';
+import { ProjectDirectories } from './workspaces/resolver';
 import { RunJournal } from '../run-journal';
 import { ADAPTERS, CATALOG, DEFAULT_ADAPTER, isConversationId } from '../sessions/adapters';
 import type { OptionsReader } from '../sessions/adapter';
@@ -250,6 +251,7 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
   });
   const settings = new Settings(path.join(profile, 'settings.json'));
   const projects = new ProjectFolders({ host, memory });
+  const directories = new ProjectDirectories(projects);
   const journal = new RunJournal({
     store,
     memory,
@@ -320,7 +322,7 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
       if (node?.type !== 'agent') throw new Error('That agent is not on this canvas.');
       return node.data.adapter ?? DEFAULT_ADAPTER;
     },
-    projectOf: (canvas) => projects.of(canvas),
+    directories,
     memory,
     sending: (canvas, agentId, message, send) => engines.sending(canvas, agentId, message, send),
     emit: (canvas, agentId, connection, event) => {
@@ -364,7 +366,8 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     },
   });
   const reveal = new FileRevealer({
-    folderOf: (canvas) => projects.of(canvas),
+    // Reveal checks the picked project root's containment, not an agent's working directory.
+    folderOf: (canvas) => directories.projectRoot(canvas),
     show: async (file) => {
       await host.showFile(file);
     },
@@ -486,6 +489,7 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     journal,
     windows,
     projects,
+    directories,
     sessions,
     engines: { closeCanvas: (canvas) => engines.closeCanvas(canvas) },
     files: canvasFiles,
@@ -498,6 +502,7 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     engineCatalog: engineCatalog(CATALOG, DEFAULT_ADAPTER),
     sessions,
     projects,
+    directories,
     journal,
     documents,
     messages: new MessageTable(store, memory),
@@ -624,7 +629,7 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
         app: config.app,
         catalog: CATALOG,
         defaultAdapter: DEFAULT_ADAPTER,
-        projects,
+        directories,
         files,
         settings,
         links,
@@ -740,6 +745,7 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     },
     close: async () => {
       closing = true;
+      projects.close();
       stalled.close();
       await Promise.all(warnings);
       watching.close();

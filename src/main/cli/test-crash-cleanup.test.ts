@@ -23,6 +23,7 @@ afterEach(async () => {
 
 function fixture() {
   const groups = new Set<number>();
+  let now = 0;
   const system: ChildSystem = {
     platform: 'darwin',
     inspect: (pid) => (groups.has(pid) ? { started: 1000, group: pid } : undefined),
@@ -30,8 +31,11 @@ function fixture() {
     signal: vi.fn((pid: number) => {
       groups.delete(pid);
     }),
-    wait: () => Promise.resolve(),
-    now: Date.now,
+    wait: (ms) => {
+      now += ms;
+      return Promise.resolve();
+    },
+    now: () => now,
   };
   const record = async (pids: number[]) => {
     for (const pid of pids) groups.add(pid);
@@ -79,6 +83,44 @@ it('stops every recorded group and escalates one that ignores SIGTERM', async ()
     [84, 'SIGTERM'],
     [84, 'SIGKILL'],
   ]);
+  expect(existsSync(directory)).toBe(false);
+});
+
+it('polls until a killed group actually disappears under load, beyond 250 ms', async () => {
+  const { groups, system, record } = fixture();
+  await record([42]);
+  let elapsed = 0;
+  let killedAt: number | undefined;
+  system.signal = vi.fn((_pid, signal) => {
+    if (signal === 'SIGKILL') killedAt = elapsed;
+  });
+  system.wait = (ms) => {
+    elapsed += ms;
+    if (killedAt !== undefined && elapsed - killedAt >= 800) groups.clear();
+    return Promise.resolve();
+  };
+  system.now = () => elapsed;
+  await cleanupCrash(directory, profile, { close: () => Promise.resolve() }, system);
+  expect(killedAt).toBeDefined();
+  expect(elapsed - (killedAt ?? elapsed)).toBeGreaterThanOrEqual(800);
+  expect(existsSync(directory)).toBe(false);
+});
+
+it('waits for an already exiting group whose leader has disappeared, without signalling it', async () => {
+  const { groups, system, record } = fixture();
+  await record([42]);
+  let elapsed = 0;
+  system.inspect = () => undefined;
+  system.signal = vi.fn();
+  system.now = () => elapsed;
+  system.wait = (ms) => {
+    elapsed += ms;
+    if (elapsed >= 800) groups.clear();
+    return Promise.resolve();
+  };
+  await cleanupCrash(directory, profile, { close: () => Promise.resolve() }, system);
+  expect(system.signal).not.toHaveBeenCalled();
+  expect(elapsed).toBe(800);
   expect(existsSync(directory)).toBe(false);
 });
 

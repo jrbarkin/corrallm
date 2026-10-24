@@ -2,6 +2,9 @@ import { spawn } from 'node:child_process';
 import type { ChildProcessByStdio } from 'node:child_process';
 import type { Readable } from 'node:stream';
 
+import { TestLifetime } from './test-lifetime';
+import type { TestLifetimeOwner } from './test-lifetime';
+
 export type TestChild = ChildProcessByStdio<null, Readable, Readable>;
 
 export interface ChildSystem {
@@ -49,16 +52,20 @@ interface Kept {
 export class TestChildren {
   readonly #system: ChildSystem;
   readonly #children = new Map<TestChild, Kept>();
+  #lifetime: TestLifetimeOwner | undefined;
   #closing = false;
   #closed: Promise<void> | undefined;
 
-  constructor(system = SYSTEM) {
+  constructor(system = SYSTEM, lifetime?: TestLifetimeOwner) {
     this.#system = system;
+    this.#lifetime = lifetime;
   }
 
   spawn(command: string, args: readonly string[], env = process.env): TestChild {
     if (this.#closing) throw new Error('A test cannot spawn a child after teardown began.');
-    const child = this.#system.spawn(command, args, env);
+    if (this.#system === SYSTEM) this.#lifetime ??= new TestLifetime();
+    const prepared = this.#lifetime?.prepare(command, args, env) ?? { args, env };
+    const child = this.#system.spawn(command, prepared.args, prepared.env);
     let exited!: (code: number | null) => void;
     let closed!: () => void;
     const kept: Kept = {
@@ -87,6 +94,8 @@ export class TestChildren {
       exited(code);
       closed();
     });
+    // Node registers itself in its preload, before CLI startup; the parent records wrappers.
+    if (child.pid !== undefined && command !== process.execPath) this.#lifetime?.track(child.pid);
     return child;
   }
 
@@ -99,19 +108,24 @@ export class TestChildren {
     printed: () => string;
     exited: Promise<number | null>;
   } {
+    if (this.#system === SYSTEM) this.#lifetime ??= new TestLifetime();
+    const [executable, ...args] = command;
+    if (executable === undefined) throw new Error('A test terminal needs a command.');
+    const prepared = this.#lifetime?.prepare(executable, args, env) ?? { args, env };
     const launch = [
       '/bin/sh',
       '-c',
       `printf 'corrallm-test-pid:%s\\n' "$$" && exec "$@"`,
       'corrallm-test',
-      ...command,
+      executable,
+      ...prepared.args,
     ];
     const quote = (part: string) => `'${part.replaceAll("'", `'\\''`)}'`;
-    const args =
+    const scriptArgs =
       process.platform === 'darwin'
         ? ['-q', '/dev/null', ...launch]
         : ['-qec', `exec ${launch.map(quote).join(' ')}`, '/dev/null'];
-    const child = this.spawn('script', args, env);
+    const child = this.spawn('script', scriptArgs, prepared.env);
     let printed = '';
     let known = false;
     child.stdout.setEncoding('utf8').on('data', (chunk: string) => {
@@ -159,6 +173,13 @@ export class TestChildren {
     const failures = results.flatMap((result) =>
       result.status === 'rejected' ? [result.reason as unknown] : [],
     );
+    // Always release the guardian's lease, even if primary teardown failed. It also owns
+    // native CLI groups and terminal servers whose pid header never reached this worker.
+    try {
+      await this.#lifetime?.close();
+    } catch (error) {
+      failures.push(error);
+    }
     if (failures.length)
       throw new AggregateError(
         failures,
