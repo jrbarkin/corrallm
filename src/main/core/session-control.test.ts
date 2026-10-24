@@ -8,6 +8,7 @@ import type { CanvasId } from '../../shared/canvas';
 import type { FilesRewind, SessionMode } from '../../shared/session';
 import type { Connector, LiveSession } from '../sessions/connector';
 import { FakeConnector } from '../sessions/fake';
+import { SessionManager } from '../sessions/manager';
 import type { OutsideCaller } from './caller';
 import { createCore } from './core';
 import type { Core } from './core';
@@ -351,6 +352,26 @@ describe('restart and a new conversation', () => {
       expect(refused.code).toBe('refused');
       expect(refused.sentence).toMatch(/Builder has a turn going on/);
     }
+    expect(sdk.started).toHaveLength(1);
+  });
+
+  it('refuses to close a session its next launch would be held from (a rebind waiting), closing nothing', async () => {
+    const { core, sdk } = await start({ a: { id: KEPT } });
+    await ok(core, 'session.open', { agent: 'a' });
+    const pending =
+      'This agent’s workspace changes once you approve it: its new work waits until then.';
+    vi.spyOn(SessionManager.prototype, 'availability').mockResolvedValue({
+      ready: false,
+      reason: 'pending-change',
+      sentence: pending,
+    });
+    const close = vi.spyOn(SessionManager.prototype, 'close');
+    for (const op of ['session.restart', 'session.newConversation']) {
+      const refused = await fails(core, op, { agent: 'a' });
+      expect(refused.code).toBe('unavailable');
+      expect(refused.sentence).toContain(pending);
+    }
+    expect(close).not.toHaveBeenCalled();
     expect(sdk.started).toHaveLength(1);
   });
 

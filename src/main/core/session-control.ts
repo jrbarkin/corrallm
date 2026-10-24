@@ -70,6 +70,7 @@ export interface SessionControlDeps {
     | 'restarting'
     | 'previewRewind'
     | 'conversationOf'
+    | 'availability'
   >;
   gate: Pick<WorkspaceGate, 'mutate'>;
   proposals: Pick<Proposals, 'raise'>;
@@ -296,6 +297,7 @@ export class SessionControl {
     const target = this.#target(canvas, agent);
     const { open, adapter } = target;
     this.#idle(target, 'restart it');
+    await this.#launchable(target, 'restart');
     ctx.noReturn();
     await this.#effect(() => this.#deps.sessions.restarting(open.document.id, agent, adapter));
     await open.engine.sessions.restart(agent);
@@ -313,6 +315,7 @@ export class SessionControl {
   ): Promise<object> {
     const target = this.#target(canvas, agent);
     this.#idle(target, 'start a new conversation');
+    await this.#launchable(target, 'start a new conversation');
     ctx.noReturn();
     await this.#effect(() => target.open.engine.sessions.fresh(agent));
     await this.#opened(target, 'Its conversation was forgotten, but it couldn’t start again');
@@ -352,6 +355,8 @@ export class SessionControl {
     if (open.engine.sessions.of(agent).status !== 'idle') {
       throw new OpFailure('refused', `${name} has a turn going on: rewind it once it is idle.`);
     }
+    // A conversation rewind ends its session, to resume the copy: only where it can start again.
+    if (restore !== 'code') await this.#launchable(target, 'rewind its conversation');
     const apply = () => {
       ctx.noReturn();
       return this.#effect(() => open.engine.sessions.rewind(agent, message, restore));
@@ -474,6 +479,19 @@ export class SessionControl {
         'refused',
         `${name} has messages waiting to go: ${what} once they have gone.`,
       );
+    }
+  }
+
+  /**
+   * Refuses, before anything, what would end a session its next launch couldn't replace: its
+   * working directory held (a rebind waiting for you, a setup, another agent's restore). One whose
+   * binding is merely stale (an approved switch installed another) may: its next launch is in the
+   * new one.
+   */
+  async #launchable({ open, node, name }: Target, what: string): Promise<void> {
+    const availability = await this.#deps.sessions.availability(open.document.id, node.id);
+    if (!availability.ready && availability.reason !== 'stale') {
+      throw new OpFailure('unavailable', `${name} can’t ${what} now: ${availability.sentence}`);
     }
   }
 
