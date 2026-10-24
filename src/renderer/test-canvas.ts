@@ -1,3 +1,5 @@
+import type { TopicKey } from '../shared/api/topics';
+import type { MirrorTopicKey, MirrorStates } from './api/topic-wire';
 import type { CanvasId } from '../shared/canvas';
 import { newCanvasId } from '../shared/canvas';
 import { OPS } from '../shared/api/registry';
@@ -41,8 +43,9 @@ export function fakeCanvas(initial: CanvasDocument) {
   };
   const source = core.topics.snapshot.bind(core.topics);
   const revision = core.topics.revision.bind(core.topics);
-  core.topics.snapshot = (topic) => source(topic) ?? core.state(topic)?.state;
-  core.topics.revision = (topic) => revision(topic) ?? core.state(topic)?.rev;
+  core.topics.snapshot = <K extends MirrorTopicKey>(topic: K) =>
+    source(topic) ?? (core.state(topic as TopicKey)?.state as MirrorStates[K] | undefined);
+  core.topics.revision = (topic) => revision(topic) ?? core.state(topic as TopicKey)?.rev;
   const context = { newId: () => crypto.randomUUID(), defaultAdapter: DEFAULT_AGENT };
   const keep = (next: CanvasDocument) => {
     const prior = document;
