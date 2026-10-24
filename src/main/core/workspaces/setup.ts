@@ -144,6 +144,13 @@ export interface SetupService {
   ): Promise<{ changed: boolean; offered: number }>;
   /** `project.clearSetupApproval`: nothing runs by itself for the canvas's repository any more. */
   clearAlways(canvas: CanvasId): Promise<{ cleared: boolean }>;
+  /** Whether a setup command runs (or waits to run) in the workspace now: a writer there. */
+  running(workspace: string): boolean;
+  /**
+   * Its workspace removed (B9a C7's cleanup): what runs there is ended, and what its setup kept
+   * beside the database (its log, its copy record) removed.
+   */
+  forget(workspace: string): Promise<void>;
   /** As the core starts, after its process owner's recovery: what ran is interrupted. */
   recover(): Promise<void>;
   /** As the core closes, before its process owner does: what runs is ended, and interrupted. */
@@ -942,6 +949,33 @@ export class WorkspaceSetups implements SetupService {
     }
     await Promise.all(attempts.map((attempt) => attempt.done));
     await Promise.allSettled([...this.#prepares.values()]);
+  }
+
+  // As its workspace is removed.
+
+  running(workspace: string): boolean {
+    return this.#attempts.has(workspace);
+  }
+
+  async forget(workspace: string): Promise<void> {
+    const attempt = this.#attempts.get(workspace);
+    if (attempt !== undefined) {
+      attempt.endedBy ??= 'stop';
+      attempt.wake?.();
+      await attempt.process?.stop('stop');
+      await attempt.done;
+    }
+    const logs = this.#folder('logs');
+    for (const old of readdirSync(logs)) {
+      if (old.startsWith(`${workspace}.`)) rmSync(path.join(logs, old), { force: true });
+    }
+    rmSync(path.join(this.#folder('copies'), `${workspace}.json`), { force: true });
+    this.#copies.delete(workspace);
+    this.#exits.delete(workspace);
+    this.#reasons.delete(workspace);
+    for (const key of [...this.#tails.keys()]) {
+      if (key.startsWith(`${workspace}.`)) this.#tails.delete(key);
+    }
   }
 
   // Its private folder.

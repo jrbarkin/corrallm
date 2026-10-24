@@ -201,6 +201,8 @@ export class SessionManager {
    * the manager stopped waiting for them: a writer may still run there (`closing`).
    */
   readonly #unfinished = new Map<string, number>();
+  /** Each close not finished, with the workspace its session ran in (`writingIn`). */
+  readonly #closes = new Set<{ canvas: CanvasId; agent: string; workspace: string | null }>();
   /** The last generation given a session, or a reservation for an agent's next session. */
   #generations = 0;
   /**
@@ -337,6 +339,20 @@ export class SessionManager {
    */
   closing(canvas: CanvasId, agentId: string): boolean {
     return (this.#unfinished.get(keyOf(canvas, agentId)) ?? 0) > 0;
+  }
+
+  /**
+   * The agents whose sessions may be writing in a workspace's checkout now (B9a C7's cleanup): one
+   * running (or starting) there, or one closed there whose close didn't finish. By id, once each.
+   */
+  writingIn(canvas: CanvasId, workspace: string): string[] {
+    const running = [...(this.#agents.get(canvas) ?? [])].flatMap(([agent, { binding }]) =>
+      binding?.workspace === workspace ? [agent] : [],
+    );
+    const closing = [...this.#closes].flatMap((close) =>
+      close.canvas === canvas && close.workspace === workspace ? [close.agent] : [],
+    );
+    return [...new Set([...running, ...closing])];
   }
 
   async answer(
@@ -1003,6 +1019,8 @@ export class SessionManager {
     const owner: ClaimOwner = { canvas, agent: agentId, generation: agent.generation };
     const key = keyOf(canvas, agentId);
     this.#unfinished.set(key, (this.#unfinished.get(key) ?? 0) + 1);
+    const close = { canvas, agent: agentId, workspace: agent.binding?.workspace ?? null };
+    this.#closes.add(close);
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       await Promise.race([
@@ -1018,6 +1036,7 @@ export class SessionManager {
             const left = (this.#unfinished.get(key) ?? 1) - 1;
             if (left > 0) this.#unfinished.set(key, left);
             else this.#unfinished.delete(key);
+            this.#closes.delete(close);
           }),
         new Promise((resolve) => {
           timer = setTimeout(resolve, this.#deps.closeMs ?? CLOSE_MS);

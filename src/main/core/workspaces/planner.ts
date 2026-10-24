@@ -3,6 +3,8 @@ import type { CanvasDocument } from '../../../shared/model/canvas';
 import { bindingPlan } from '../../../shared/model/workspaces';
 import type { WorkspaceOwnerKey } from '../../../shared/model/workspaces';
 import { OpFailure } from '../call';
+import { safe } from './cleanup';
+import type { Removal, TreeState, WorkspaceCleanup } from './cleanup';
 import { ACTIVE_STATES } from './store';
 import type { AgentBinding, RepositoryRecord, WorkspaceStore, WorktreeRecord } from './store';
 
@@ -45,14 +47,36 @@ export type Step =
   | { kind: 'retain'; workspace: string }
   | { kind: 'owner'; workspace: string; owner: WorkspaceOwnerKey };
 
-/** What a change keeps and holds of the canvas's workspaces: none of it lost. */
+/** What a change keeps and holds of the canvas's workspaces: none of it lost unless you decide. */
 export interface Losses {
-  /** Trees it leaves with no agent: retained, with their work and branch, never removed. */
+  /** Trees it leaves with no agent: retained, with their work and branch, unless removed. */
   retained: readonly string[];
   /** Agents whose move waits for you: their sessions keep their old trees meanwhile. */
   pending: readonly string[];
   /** Agents it removes that had a workspace. */
   removed: readonly string[];
+  /**
+   * What each tree it leaves with no agent holds now (B9a C7: cleanup.ts' `assess`), for its
+   * removal's decision: removed with its last agent if safe, else asked (none without cleanup).
+   */
+  trees?: readonly TreeState[];
+}
+
+/** What was decided of each tree a commit leaves with no agent, by workspace: removed, as said. */
+export type Removals = ReadonlyMap<string, Removal>;
+
+/**
+ * Of the trees a change leaves with no agent, those safe to remove without asking (clean, merged,
+ * no one writing there): removed, with their branches. The others are kept.
+ */
+export function safeRemovals(losses: Losses | undefined): Removals {
+  return new Map(
+    (losses?.trees ?? []).flatMap((tree): [string, Removal][] =>
+      safe(tree)
+        ? [[tree.workspace, { branch: true, force: false, approved: null, tip: tree.tip }]]
+        : [],
+    ),
+  );
 }
 
 export interface WorkspacePlan {
@@ -73,6 +97,11 @@ export interface WorkspacePlannerDeps {
   workspaces: WorkspaceStore;
   /** Why new work for an agent waits now, if it does: a restore of its tree (the mutation gate). */
   holding?: (canvas: CanvasId, agent: string) => Promise<string | undefined>;
+  /**
+   * A tree's cleanup (B9a C7): what it holds, its removal marked within a commit's write, and run
+   * once that is on disk. None: trees are only ever retained.
+   */
+  cleanup?: Pick<WorkspaceCleanup, 'assess' | 'intend' | 'remove'>;
 }
 
 const RESTORING =
@@ -102,14 +131,33 @@ export class WorkspacePlanner {
         throw new OpFailure('unavailable', RESTORING);
       }
     }
-    return plan.losses;
+    const { cleanup } = this.#deps;
+    if (cleanup === undefined || plan.losses.retained.length === 0) return plan.losses;
+    const trees = await Promise.all(
+      plan.losses.retained.flatMap((id) => {
+        const tree = this.#deps.workspaces.worktree(id);
+        return tree === undefined ? [] : [cleanup.assess(tree)];
+      }),
+    );
+    return { ...plan.losses, trees };
   }
 
-  /** Within a commit's write, after its rows: its plan, made again over the records there, applied. */
-  within(commit: PlannedCommit): void {
+  /**
+   * Within a commit's write, after its rows: its plan, made again over the records there, applied;
+   * a tree it leaves with no agent removed if `removals` says so (marked `removing`, its job
+   * recorded: `removed` runs it once the write is on disk), else retained.
+   */
+  within(commit: PlannedCommit, removals?: Removals): void {
     const { steps } = this.plan(commit);
     const workspaces = this.#deps.workspaces;
     for (const step of steps) {
+      if (step.kind === 'retain') {
+        const removal = removals?.get(step.workspace);
+        if (removal !== undefined && this.#deps.cleanup !== undefined) {
+          this.#deps.cleanup.intend(workspaces, step.workspace, removal);
+          continue;
+        }
+      }
       switch (step.kind) {
         case 'unbind':
           workspaces.unbind(commit.canvas, step.agent);
@@ -130,6 +178,17 @@ export class WorkspacePlanner {
           workspaces.setOwner(step.workspace, step.owner);
           break;
       }
+    }
+  }
+
+  /** A commit's removals, once it is on disk: each tree's removal run (in the background). */
+  removed(removals: Removals | undefined): void {
+    const { cleanup } = this.#deps;
+    if (cleanup === undefined) return;
+    for (const workspace of removals?.keys() ?? []) {
+      void cleanup.remove(workspace).catch((error: unknown) => {
+        console.error('Could not remove a workspace:', error);
+      });
     }
   }
 
@@ -299,7 +358,7 @@ export function workspacePlan({
 }
 
 /** The node an owner key names (its root: a lone agent, or a group's outermost node). */
-function ownerNode(owner: WorkspaceOwnerKey): string {
+export function ownerNode(owner: string): string {
   const encoded = owner.slice(owner.indexOf('/') + 1);
   try {
     return decodeURIComponent(encoded);

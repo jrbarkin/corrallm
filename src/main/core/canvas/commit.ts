@@ -13,6 +13,10 @@ import type { Staged } from '../delivery/messages';
 import { changeSetOf } from './change';
 import type { ChangeSet } from './change';
 import type { Built, Documents, LiveDocument } from './documents';
+import { fingerprint, safe } from '../workspaces/cleanup';
+import type { CleanupDecision, Removal, TreeState } from '../workspaces/cleanup';
+import { safeRemovals } from '../workspaces/planner';
+import type { Removals } from '../workspaces/planner';
 
 /*
  * An op's commit to a canvas's document (B9 Design §3), what ctx.commit does: in the canvas's turn,
@@ -64,6 +68,11 @@ export interface CommitCall {
   proposedBy?: PartyId;
   /** What else its write holds (a proposal's settlement and its record): canvas/documents.ts. */
   within?: () => Staged;
+  /**
+   * On Allow of a deletion's confirmation (B9a C7): what you chose of the trees it leaves with no
+   * agent, bound to what each held when you were asked.
+   */
+  cleanup?: CleanupDecision;
 }
 
 /**
@@ -91,20 +100,35 @@ export interface CommitterDeps {
     change: ChangeSet,
     call: CommitCall,
     before: Readonly<Record<string, number>>,
+    trees: readonly TreeState[],
   ) => Promise<NeedId>;
 }
 
-/** Thrown in a change's check when it is yours to decide: it carries the change to propose. */
+/**
+ * Thrown in a change's check when it is yours to decide: it carries the change to propose, and what
+ * the trees it leaves with no agent hold (B9a C7: what its confirmation asks of them).
+ */
 class Proposing extends Error {
   readonly change: ChangeSet;
   readonly before: Readonly<Record<string, number>>;
-  constructor(change: ChangeSet, why: string, before: Readonly<Record<string, number>>) {
+  readonly trees: readonly TreeState[];
+  constructor(
+    change: ChangeSet,
+    why: string,
+    before: Readonly<Record<string, number>>,
+    trees: readonly TreeState[],
+  ) {
     super(why);
     this.name = 'Proposing';
     this.change = change;
     this.before = before;
+    this.trees = trees;
   }
 }
+
+/** Why a deletion leaving a tree with work in it waits for you, even yours (B9a C7). */
+const CONFIRM =
+  'Deleting the last agent of a worktree that holds work, or where one may still be writing, waits for the user to confirm what becomes of it';
 
 export function committer({ documents, rules, committed, propose }: CommitterDeps): Committer {
   return async (canvas, build, call) => {
@@ -122,7 +146,7 @@ export function committer({ documents, rules, committed, propose }: CommitterDep
           signal.throwIfAborted();
           return build(document);
         },
-        check: (change, live) => {
+        check: (change, live, losses) => {
           checkExpect(call.expect, live);
           const before = call.unchanged;
           if (before !== undefined) {
@@ -131,7 +155,22 @@ export function committer({ documents, rules, committed, propose }: CommitterDep
               live,
             );
           }
-          if (caller.kind === 'human') return;
+          // What becomes of the trees it leaves with no agent (B9a C7): yours to confirm where
+          // one holds work, whoever made the change; removed with their last agent where safe.
+          const trees = losses?.trees ?? [];
+          const { removals, asks } = decided(trees, call.cleanup);
+          const revisions = () =>
+            Object.fromEntries(Object.keys(live.rows).map((key) => [key, live.revs.get(key) ?? 0]));
+          if (caller.kind === 'human') {
+            if (asks.length === 0) return removals;
+            if (call.proposes !== true || propose === undefined) {
+              throw new OpFailure(
+                'refused',
+                `${CONFIRM}, and ${call.op} can’t ask: delete with canvas.delete or canvas.batch, which can.`,
+              );
+            }
+            throw new Proposing(change, CONFIRM, revisions(), trees);
+          }
           // Every refusal first: a proposal is only ever of what no rule refuses.
           let proposal: string | undefined;
           for (const rule of Object.values(rules)) {
@@ -139,18 +178,15 @@ export function committer({ documents, rules, committed, propose }: CommitterDep
             if (outcome && 'refuse' in outcome) throw new OpFailure('refused', outcome.refuse);
             proposal ??= outcome?.propose;
           }
-          if (proposal === undefined) return;
+          if (proposal === undefined && asks.length > 0) proposal = CONFIRM;
+          if (proposal === undefined) return removals;
           if (call.proposes !== true || propose === undefined) {
             throw new OpFailure(
               'refused',
               `${proposal}, and ${call.op} can’t come to them as a proposal: ask with canvas.delete or canvas.batch, which can.`,
             );
           }
-          throw new Proposing(
-            change,
-            proposal,
-            Object.fromEntries(Object.keys(live.rows).map((key) => [key, live.revs.get(key) ?? 0])),
-          );
+          throw new Proposing(change, proposal, revisions(), trees);
         },
         committing: () => {
           call.noReturn();
@@ -160,11 +196,46 @@ export function committer({ documents, rules, committed, propose }: CommitterDep
     } catch (error) {
       if (!(error instanceof Proposing) || propose === undefined) throw error;
       // Nothing of it applied: it waits for you.
-      return { proposed: await propose(canvas, error.change, call, error.before) };
+      return { proposed: await propose(canvas, error.change, call, error.before, error.trees) };
     }
     if (changed.committed === undefined) return { result: changed.result };
     committed?.(canvas, changed.committed.change);
     return { result: changed.result, rev: changed.committed.rev };
+  };
+}
+
+/**
+ * What is decided of the trees a change leaves with no agent: as you decided (`decision`, bound to
+ * what each held when you were asked: a conflict if any holds anything else now, or wasn't asked
+ * of), else those safe removed and the others to ask about.
+ */
+function decided(
+  trees: readonly TreeState[],
+  decision: CleanupDecision | undefined,
+): { removals: Removals; asks: readonly TreeState[] } {
+  if (decision === undefined) {
+    return {
+      removals: safeRemovals({ retained: [], pending: [], removed: [], trees }),
+      asks: trees.filter((tree) => !safe(tree)),
+    };
+  }
+  for (const tree of trees) {
+    if (decision.fingerprints[tree.workspace] !== fingerprint(tree)) {
+      throw new OpFailure(
+        'conflict',
+        'A worktree it leaves with no agent changed since you were asked about it: decide again on what it holds now.',
+      );
+    }
+  }
+  if (decision.choice === 'keep') return { removals: new Map(), asks: [] };
+  return {
+    removals: new Map(
+      trees.map((tree): [string, Removal] => [
+        tree.workspace,
+        { branch: true, force: true, approved: fingerprint(tree), tip: tree.tip },
+      ]),
+    ),
+    asks: [],
   };
 }
 

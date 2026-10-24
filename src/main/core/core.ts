@@ -15,6 +15,7 @@ import { engineCatalog } from '../../shared/engine/catalog';
 import { needs } from '../../shared/engine/needs';
 import type { NeedsItem } from '../../shared/model/needs';
 import { agentName } from '../../shared/model/queries';
+import { nodeKey } from '../../shared/model/rows';
 import { MAX_CANVAS_BYTES } from '../../shared/ipc';
 import type { SessionMode } from '../../shared/session';
 import { CanvasFiles } from '../canvas';
@@ -30,6 +31,9 @@ import { treeOf, WorkspaceGate } from './workspaces/gate';
 import { WorkspacePlanner } from './workspaces/planner';
 import { WorkspaceStore } from './workspaces/store';
 import type { TreeKey } from './workspaces/gate';
+import { ownerNode } from './workspaces/planner';
+import type { WorkspaceCleanup } from './workspaces/cleanup';
+import type { WorktreeRecord } from './workspaces/store';
 import { RunJournal } from '../run-journal';
 import { ADAPTERS, CATALOG, DEFAULT_ADAPTER, isConversationId } from '../sessions/adapters';
 import type { OptionsReader } from '../sessions/adapter';
@@ -163,6 +167,22 @@ export interface CoreConfig {
     profile: string;
     changed: (canvas: CanvasId) => void;
   }) => SetupService;
+  /**
+   * For tests, until B9a X11b composes the workspaces: their cleanup (B9a C7), made over the
+   * core's workspace records and process owner, told who may still write in a tree and whether its
+   * setup runs, what to forget of its setup, and the names its trees' owners have. None: a tree no
+   * agent works in any more is only ever retained, and a deletion asks nothing of it.
+   */
+  cleanup?: (core: {
+    workspaces: WorkspaceStore;
+    processes: Children;
+    profile: string;
+    writers: (tree: WorktreeRecord) => readonly string[];
+    setupRunning: (workspace: string) => boolean;
+    forgetSetup: (workspace: string) => Promise<void>;
+    nameOf: (canvas: CanvasId, owner: string) => string | undefined;
+    changed: (canvas: CanvasId) => void;
+  }) => WorkspaceCleanup;
 }
 
 export interface Core extends Dispatcher {
@@ -255,11 +275,46 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
       engines.needsChanged(canvas);
     },
   });
+  const workspaceStore = new WorkspaceStore({ store });
+  // A tree no agent works in any more (B9a C7): removed with its last agent once safe, else kept
+  // unless you discard it, its removal finished across restarts.
+  const cleanup = config.cleanup?.({
+    workspaces: workspaceStore,
+    processes: children,
+    profile,
+    writers: (tree) => sessions.writingIn(tree.canvas, tree.id),
+    setupRunning: (workspace) => setups?.running(workspace) === true,
+    forgetSetup: (workspace) => setups?.forget(workspace) ?? Promise.resolve(),
+    // Its owner's name: as the canvas names it now, else as it last did (a deleted agent's).
+    nameOf: (canvas, owner) => {
+      const nodes = documents.loaded(canvas)?.document.nodes;
+      const id = ownerNode(owner);
+      if (nodes?.some((node) => node.id === id) === true) return nameOf(nodes, id);
+      try {
+        const row = store
+          .prepare(
+            `SELECT before_data FROM change WHERE canvas_id = ? AND entity = ?
+               AND before_data IS NOT NULL ORDER BY rev DESC LIMIT 1`,
+          )
+          .get(canvas, nodeKey(id));
+        const before: unknown = row === undefined ? undefined : JSON.parse(String(row.before_data));
+        const label = (before as { label?: unknown } | undefined)?.label;
+        return typeof label === 'string' && label !== '' ? label : undefined;
+      } catch {
+        return undefined;
+      }
+    },
+    changed: (canvas) => {
+      topics.changed(`needs:${canvas}`, 'corrallm');
+      engines.needsChanged(canvas);
+    },
+  });
   // Who works where, at every document commit's seam (B9a C6): inert until a canvas's project is
   // a repository the core keeps (discovery and provisioning are composed with the resolver, X11b).
   const planner = new WorkspacePlanner({
-    workspaces: new WorkspaceStore({ store }),
+    workspaces: workspaceStore,
     holding: (canvas, agent) => gate.holding(canvas, agent),
+    ...(cleanup === undefined ? {} : { cleanup }),
   });
   const documents: Documents = new Documents({
     store,
@@ -796,14 +851,16 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
         committed: (canvas) => {
           engines.changed(canvas);
         },
-        // A token's change only you may make waits for you (R4).
-        propose: (canvas, change, call, before) =>
+        // A token's change only you may make waits for you (R4), and so does a deletion of yours
+        // leaving a worktree that holds work (B9a C7: its confirmation, through the same proposals).
+        propose: (canvas, change, call, before, trees) =>
           proposals.raise(canvas, {
             op: call.op,
             args: call.args ?? {},
             by: call.by,
             change,
             before,
+            ...(trees.length === 0 ? {} : { trees }),
           }),
       }),
       openCanvases: () => engines.opened(),
@@ -814,6 +871,10 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
   // A setup that was running as the last core stopped is interrupted, after the process owner's
   // recovery ended what it left (above), and before any call could start one: never rerun by itself.
   await setups?.recover();
+  // Removals the last core didn't finish, tried again (in the background: Git may take a while).
+  void cleanup?.reconcile().catch((error: unknown) => {
+    console.error('Could not finish removing the workspaces kept for removal:', error);
+  });
   // Held backends are read from now on, so a limit that ended while the core was down is noticed.
   probe.start();
   // The canvases open from before, watched from now on.
@@ -873,6 +934,10 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
         // What the core keeps is written out even if a canvas's run couldn't be, and its database
         // closed last. No CLI it started outlives it: a helper still running is ended.
         try {
+          // A workspace's removal going on finishes (or is left for the next start) first.
+          await cleanup?.close().catch((error: unknown) => {
+            console.error('Could not finish removing a workspace:', error);
+          });
           // A setup still running is ended and marked interrupted before the process owner closes.
           await setups?.close().catch((error: unknown) => {
             console.error('Could not end the worktrees’ setups:', error);

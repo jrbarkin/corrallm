@@ -36,7 +36,8 @@ import { OpFailure } from '../call';
 import type { TrustedPath } from '../host';
 import type { Staged } from '../delivery/messages';
 import type { Database } from '../store/store';
-import type { WorkspacePlanner } from '../workspaces/planner';
+import { safeRemovals } from '../workspaces/planner';
+import type { Losses, Removals, WorkspacePlanner } from '../workspaces/planner';
 import { changeSetOf } from './change';
 import type { ChangeSet } from './change';
 import { summarize } from './reviews';
@@ -129,7 +130,7 @@ export interface DocumentsDeps {
    * point of no return, which may refuse it, and who works where within the commit's write. Without
    * it, none (a document's tests).
    */
-  workspaces?: Pick<WorkspacePlanner, 'preflight' | 'within'>;
+  workspaces?: Pick<WorkspacePlanner, 'preflight' | 'within' | 'removed'>;
   now?: () => number;
 }
 
@@ -158,8 +159,12 @@ export interface Change<R> {
   revision: Revision;
   /** The next document, and the op's result, built purely from the live one. */
   build(document: CanvasDocument): Built<R>;
-  /** Refuses what it changes by throwing, before anything is written: expect, the change rules. */
-  check(change: ChangeSet, live: LiveDocument): void;
+  /**
+   * Refuses what it changes by throwing, before anything is written: expect, the change rules, the
+   * workspaces' confirmation (B9a C7: what its loss preflight found of the trees it leaves with no
+   * agent, `losses`). Says what is decided of those trees: removed, or kept (none: kept).
+   */
+  check(change: ChangeSet, live: LiveDocument, losses?: Losses): Removals | undefined;
   /** Said once it is past its point of no return: as its write is queued. */
   committing(): void;
   /**
@@ -363,8 +368,15 @@ export class Documents {
           `${review.summary.file} isn’t a canvas this corrallm reads: ${reasonOf(error)}`,
         );
       }
-      // Apply bypasses no workspace: its loss preflight runs as an op's change's does.
-      await this.#deps.workspaces?.preflight({ canvas, before: live.document, after: next });
+      // Apply bypasses no workspace: its loss preflight runs as an op's change's does. What it
+      // leaves with no agent is kept, unless safe to remove (B9a C7: a file's Apply asks nothing
+      // more of it; the trees it keeps are in the Kept worktrees).
+      const losses = await this.#deps.workspaces?.preflight({
+        canvas,
+        before: live.document,
+        after: next,
+      });
+      const removals = safeRemovals(losses);
       turn.noReturn();
       const rev = await this.#commit(
         live,
@@ -374,8 +386,10 @@ export class Documents {
         {
           hashes: { saved: this.#text(next).hash, file: review.hash },
           within: () => staged(reviews.settleWithin(review, 'applied', by)),
+          removals,
         },
       );
+      this.#deps.workspaces?.removed(removals);
       return { rev };
     });
   }
@@ -548,14 +562,23 @@ export class Documents {
       ) {
         return undefined;
       }
-      // A discard bypasses no workspace: its loss preflight runs as an op's change's does.
-      await this.#deps.workspaces?.preflight({ canvas, before: live.document, after: next });
+      // A discard bypasses no workspace: its loss preflight runs as an op's change's does, and
+      // keeps what it leaves with no agent unless that is safe to remove, as Apply does.
+      const losses = await this.#deps.workspaces?.preflight({
+        canvas,
+        before: live.document,
+        after: next,
+      });
+      const removals = safeRemovals(losses);
       // Back to its file as it is: a review open of it is moot.
       const { reviews } = this.#deps;
-      return this.#commit(live, next, rows, revision, {
+      const rev = await this.#commit(live, next, rows, revision, {
         hashes,
         ...(reviews === undefined ? {} : { within: () => staged(reviews.supersedeWithin(canvas)) }),
+        removals,
       });
+      this.#deps.workspaces?.removed(removals);
+      return rev;
     });
   }
 
@@ -643,13 +666,13 @@ export class Documents {
       if (invalid !== undefined) throw new OpFailure('invalid', invalid);
       // The workspaces' loss preflight, before the checks (nothing awaited between them and the
       // commit, so a cap a change passed is counted from then on).
-      await this.#deps.workspaces?.preflight({
+      const losses = await this.#deps.workspaces?.preflight({
         canvas,
         before: live.document,
         after: next,
         copies,
       });
-      change.check(set, live);
+      const removals = change.check(set, live, losses);
       const creating = { by: change.revision.by, canvas, count: set.created.size };
       this.#creating.add(creating);
       try {
@@ -659,7 +682,9 @@ export class Documents {
           creating,
           ...(copies === undefined ? {} : { copies }),
           ...(change.within === undefined ? {} : { within: () => change.within?.() }),
+          ...(removals === undefined ? {} : { removals }),
         });
+        this.#deps.workspaces?.removed(removals);
         return { result, committed: { rev, change: set } };
       } finally {
         this.#creating.delete(creating);
@@ -996,12 +1021,15 @@ export class Documents {
       creating,
       copies,
       within,
+      removals,
     }: {
       hashes?: { saved: string; file: string };
       creator?: PartyId;
       creating?: Creating;
       copies?: ReadonlyMap<string, string>;
       within?: () => Staged | undefined;
+      /** What is decided of the trees it leaves with no agent (B9a C7): removed, as said. */
+      removals?: Removals;
     } = {},
   ): Promise<number> {
     if (changed.length === 0 && hashes === undefined) return live.rev;
@@ -1022,12 +1050,10 @@ export class Documents {
             .run(hashes.saved, hashes.file, next.id);
         }
         // Who works where, in the same write (B9a Design §3): on disk with the document, or neither.
-        this.#deps.workspaces?.within({
-          canvas: next.id,
-          before: live.document,
-          after: next,
-          copies,
-        });
+        this.#deps.workspaces?.within(
+          { canvas: next.id, before: live.document, after: next, copies },
+          removals,
+        );
         // Last, so that nothing after it fails the write once it has staged what it holds.
         staged = within?.();
       });

@@ -18,6 +18,7 @@ import type { Committer } from './canvas/commit';
 import type { Built } from './canvas/documents';
 import type { Caller, TokenCaller } from './caller';
 import type { Staged } from './delivery/messages';
+import type { CleanupDecision } from './workspaces/cleanup';
 import { outOfReach } from './reach';
 import type { Resolver } from './reach';
 import { Requests } from './requests';
@@ -79,6 +80,11 @@ export interface CommitOptions {
   after?: (cleanup: () => Promise<void>) => void;
   /** On Allow of a command proposal: what it was raised over (R5's guard), checked again. */
   guard?: unknown;
+  /**
+   * On Allow of a deletion's confirmation (B9a C7): what you chose of the trees it leaves with no
+   * agent, bound to what each held when you were asked, which its commit checks again.
+   */
+  cleanup?: CleanupDecision;
 }
 
 /**
@@ -449,6 +455,7 @@ export function createDispatcher(registry: Registry, options: DispatchOptions = 
             args: kept(args),
             ...(options.proposedBy === undefined ? {} : { proposedBy: options.proposedBy }),
             ...(options.within === undefined ? {} : { within: options.within }),
+            ...(options.cleanup === undefined ? {} : { cleanup: options.cleanup }),
           },
         );
         if ('proposed' in done) throw new ProposedInstead(done.proposed);

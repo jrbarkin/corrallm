@@ -1,7 +1,7 @@
 import { OpFailure } from '../call';
 import type { OpContext } from '../call';
 import type { Lifecycle } from '../canvas/lifecycle';
-import { isDocOp, itemOf } from '../canvas/proposals';
+import { cleanupOf, isDocOp, itemOf } from '../canvas/proposals';
 import type { Outcome } from '../canvas/proposals';
 import { itemOf as reviewItemOf } from '../canvas/reviews';
 import { partyText } from '../parties';
@@ -110,10 +110,13 @@ export function replyOps({
       }
       const settlement = await proposals.settlement(open, 'allowed', ctx.by);
       const cleanups: (() => Promise<void>)[] = [];
+      // A deletion's trees (B9a C7): kept (Allow) or discarded, as each held when proposed.
+      const cleanup = cleanupOf(open, choice);
       try {
         await ctx.call(open.op, open.args, {
           proposedBy: open.by,
           expect,
+          ...(cleanup === undefined ? {} : { cleanup }),
           ...(open.before === undefined ? {} : { unchanged: open.before }),
           // A code restore's guard (R5), which its op checks again under the workspace gate.
           ...(open.guard === undefined ? {} : { guard: open.guard }),
