@@ -291,6 +291,7 @@ export class MessageStore {
       },
       undo: () => {
         this.#delete(message.id);
+        this.#changedId(message.id);
       },
     };
   }

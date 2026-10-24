@@ -82,8 +82,9 @@ export function topicRequest(
   for (const kind of ['run', 'sessions', 'messages'] as const)
     if (topic.startsWith(`${kind}:`))
       return RuntimeTopic.parse({ topic: kind, canvas: topic.slice(kind.length + 1) });
-  if (topic.startsWith('canvas:')) return { topic: 'canvas', canvas: topic.slice(7) as CanvasId };
-  if (topic.startsWith('needs:')) return { topic: 'needs', canvas: topic.slice(6) as CanvasId };
+  for (const kind of CANVAS_TOPICS)
+    if (topic.startsWith(`${kind}:`))
+      return { topic: kind, canvas: topic.slice(kind.length + 1) as CanvasId };
   return { topic: topic as 'usage' | 'settings' | 'canvases' };
 }
 
@@ -101,9 +102,10 @@ export function topicKey(
       ? `session:${canvas}:${encodeURIComponent(parsed.agent)}`
       : `${parsed.topic}:${canvas}`;
   }
-  if (request.topic === 'canvas' || request.topic === 'needs') {
-    if (request.canvas === undefined) throw new Error(`A ${request.topic} topic names its canvas.`);
-    return `${request.topic}:${request.canvas as CanvasId}`;
+  const kind = CANVAS_TOPICS.find((one) => one === request.topic);
+  if (kind !== undefined) {
+    if (request.canvas === undefined) throw new Error(`A ${kind} topic names its canvas.`);
+    return `${kind}:${request.canvas as CanvasId}`;
   }
   return request.topic as 'usage' | 'settings' | 'canvases';
 }

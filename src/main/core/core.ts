@@ -417,11 +417,14 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
   states.listen({
     canvas: (canvas, change) => {
       topics.publish(canvas, change);
-      runtime.documentChanged(canvas);
     },
     list: () => {
       topics.changed('canvases', 'corrallm');
     },
+  });
+  // Each commit to a canvas's document: its agents, how they run, who reaches what.
+  documents.subscribe(({ canvas }) => {
+    runtime.documentChanged(canvas);
   });
   memory.subscribe((canvas) => {
     follow();
