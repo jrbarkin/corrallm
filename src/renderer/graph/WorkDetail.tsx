@@ -27,7 +27,7 @@ export function WorkDetail({
   /** Every node of the graph: the two agents, and what their steps can act on. */
   nodes: readonly CanvasNode[];
   edits: QueueEdits;
-  /** How each agent's tasks are marked (queues/marks.ts). */
+  /** How each agent's tasks are marked (src/shared/model/queue-marks.ts). */
   marks: (agent: string, item: string | null) => RowMarks;
   onClose: () => void;
 }) {

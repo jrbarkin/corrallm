@@ -3,7 +3,7 @@ import type { ReactNode } from 'react';
 import type { CanvasNode, AgentNode } from '../../shared/model/canvas';
 import type { Session } from '../../shared/model/session';
 import type { Run } from '../../shared/engine/run/runner';
-import { agentStatus } from './agent-status';
+import { agentStatus } from '../../shared/model/run-display';
 import { AdapterLogo } from '../AdapterLogo';
 import { slide } from '../agent/motion';
 import { agentLabel, connectionOf, DEFAULT_AGENT } from './agents';

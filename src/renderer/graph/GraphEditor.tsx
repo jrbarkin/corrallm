@@ -46,7 +46,7 @@ import { ipcErrorMessage } from '../ipc-error';
 import { draftCall, flushDrafts } from '../useDraft';
 import { QueuesView } from '../queues/QueuesView';
 import { lanesOf } from '../queues/lanes';
-import { queueMarks } from '../queues/marks';
+import { queueMarks } from '../../shared/model/queue-marks';
 import { withSubmissions } from '../queues/submissions';
 import { Engine } from '../../shared/engine/engine';
 import { NEW_SESSION } from '../../shared/model/session';
@@ -78,7 +78,7 @@ import { StartSession } from './StartSession';
 import { CanvasMenu } from './CanvasMenu';
 import { RunFloat, ZoomFloat } from './Floats';
 import { Dock } from './Dock';
-import { agentCard } from './agent-status';
+import { agentCard } from '../../shared/model/run-display';
 import './Floats.css';
 import { fileAction, keyAction, SHORTCUTS } from './keys';
 import type { KeyAction } from './keys';
@@ -720,6 +720,9 @@ function Editor({
 
       setEditing(undefined);
       setOpened({ ids: [] });
+      // All queues and the inserted group name the old canvas's agents and groups.
+      setQueues(undefined);
+      setInserted(undefined);
       setSettingsAgent(undefined);
       setWork(undefined);
       setDrawn(undefined);

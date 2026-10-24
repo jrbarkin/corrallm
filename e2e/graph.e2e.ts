@@ -739,6 +739,37 @@ test('double-clicking a node opens it in a panel that grows out of it, to edit i
   await expect(panel).toHaveCount(0);
 });
 
+test('ArrowDown on a queue row’s Move handle moves it a place per press, keeping focus', async () => {
+  const a = await addAgentAt('Agent 1', 300, 200);
+  await addAgentAt('Agent 2', 800, 500);
+  await a.dblclick();
+  const panel = page.getByRole('dialog', { name: 'Agent 1' });
+  const plus = panel.getByRole('button', { name: 'Add to queue' });
+  const handles = panel.getByRole('button', { name: /^Move / });
+  const order = () => handles.evaluateAll((els) => els.map((el) => el.getAttribute('aria-label')));
+  await expect.poll(order).toEqual(['Move Message']);
+  await plus.click();
+  await panel.getByRole('option', { name: /^Read / }).click();
+  await page.keyboard.press('Enter'); // this agent
+  await plus.click();
+  await page.keyboard.type('run shell');
+  await page.keyboard.press('Enter');
+  await page.keyboard.type('2');
+  await page.keyboard.press('Enter');
+  await expect.poll(order).toEqual(['Move Message', 'Move Read', 'Move Bash']);
+
+  // Chromium blurs a focused element that a reorder moves; the second press still reaches the
+  // handle only because focus returns to it after the first move's render.
+  const handle = panel.getByRole('button', { name: 'Move Message', exact: true });
+  await handle.focus();
+  await page.keyboard.press('ArrowDown');
+  await expect.poll(order).toEqual(['Move Read', 'Move Message', 'Move Bash']);
+  await expect(handle).toBeFocused();
+  await page.keyboard.press('ArrowDown');
+  await expect.poll(order).toEqual(['Move Read', 'Move Bash', 'Move Message']);
+  await expect(handle).toBeFocused();
+});
+
 test('loads catalog logos as images under the production CSP', async () => {
   const a = await addAgentAt('Agent 1', 300, 200);
   await a.dblclick();

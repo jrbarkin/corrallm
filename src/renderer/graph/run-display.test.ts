@@ -3,7 +3,7 @@ import { NEW_SESSION } from '../../shared/model/session';
 import type { CanvasNode } from '../../shared/model/canvas';
 import type { Run } from '../../shared/engine/run/runner';
 import { runCatalog } from './agents';
-import { agentCard, agentStatus } from './agent-status';
+import { agentCard, agentStatus } from '../../shared/model/run-display';
 
 const nodes: CanvasNode[] = [
   {

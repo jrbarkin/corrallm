@@ -120,6 +120,29 @@ it('keeps live sessions, stores and the token when Open returns the shown canvas
   expect(source.save.mock.lastCall?.[1]?.messages).toContain('Keep this manual work');
 });
 
+it('closes All queues opened from an agent when the window switches to another canvas', async () => {
+  const { canvas, next, container } = await switchingView();
+  const node = container.querySelector('.react-flow__node[data-id="Before"]');
+  if (!node) throw new Error('No Before node');
+  await events.doubleClick(node);
+  await screen.findByRole('dialog', { name: 'Before' });
+  await events.click(screen.getByRole('button', { name: 'Show all queues' }));
+  expect(screen.getByRole('dialog', { name: 'All queues' })).toBeTruthy();
+  canvas.core.reply('window.show', () => {
+    canvas.open(next);
+    return Promise.resolve({ ok: true, value: { revs: {} } });
+  });
+  await events.click(screen.getByRole('button', { name: 'Canvas menu' }));
+  await events.click(screen.getByRole('button', { name: 'Canvases' }));
+  await events.click(await screen.findByRole('button', { name: 'Show after.corral' }));
+  await waitFor(() => {
+    expect(container.querySelector('.react-flow__node[data-id="After"]')).not.toBeNull();
+    expect(container.querySelector('.graph-editor')?.getAttribute('aria-busy')).toBe('false');
+  });
+  expectOneOp(canvas.core, 'window.show', { canvas: next.id });
+  expect(screen.queryByRole('dialog', { name: 'All queues' })).toBeNull();
+  expect(container.querySelector('.graph-editor')?.getAttribute('data-canvas-view')).toBe('graph');
+});
 it.each(['show', 'close', 'allow'] as const)(
   'shows recovery when the %s switch cannot read the replacement run',
   async (action) => {
