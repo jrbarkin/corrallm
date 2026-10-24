@@ -30,6 +30,21 @@ As models change, the workflows that work best change with them. corrallm is whe
 
 > Queue state, concise attempt records and manual Message metadata are stored locally for named and unsaved canvases. The native CLIs keep their conversation history; full transcript and terminal-screen snapshots are deferred to V2.
 
+## Drive corrallm from a terminal
+
+An orchestrator outside corrallm (Claude Code or Codex in another folder, or a script) can send a canvas's agents work through corrallm's MCP server, registered as `corrallm-server`, and wait for what they send back.
+
+1. **Install the command.** The app ships `corrallm`. The Debian and RPM packages link it as `/usr/bin/corrallm`; on macOS, link `corrallm.app/Contents/Resources/bin/corrallm` onto your PATH yourself for now (for example `ln -s /Applications/corrallm.app/Contents/Resources/bin/corrallm ~/.local/bin/corrallm`). From a checkout, `pnpm build:cli` and then `pnpm corrallm …`. The Windows command isn't available yet.
+2. **Open the canvas in the app**, choose its project folder there, and save it. corrallm runs a canvas only in the folder you picked in the app.
+3. **Serve it**: quit the app (one corrallm owns a profile at a time), then run `corrallm serve --canvas path/to/canvas.corral` in a terminal. It stops cleanly when that terminal closes, so run it in tmux or screen to keep it going. The app doesn't serve corrallm's MCP yet.
+4. **Make a token**, in a terminal: `corrallm token new --canvas path/to/canvas.corral --into ~/.corrallm/orchestrator.token`. It asks whichever corrallm owns the profile (`serve`, or the app while it runs), so the token works at once, or writes the profile itself when nothing does. With `--into` the token goes only to that file, readable only by you; without it, the token is shown once on your terminal. A token lasts an hour unless you say `--hours` (12 at most), reaches only the canvases you name, can write unless `--read-only`, and is named `orchestrator` unless `--name` says otherwise. corrallm keeps only its hash, and runs `corrallm token` only on a terminal, so that you make it.
+5. **Register corrallm** with the command `corrallm token` printed for each CLI you have installed, run in your orchestrator's folder. Claude Code's reads the token from the file each time it connects, through `corrallm token header --from <file>`: `claude mcp add-json corrallm-server '{"type":"http","url":"http://127.0.0.1:<port>/mcp","headersHelper":"corrallm token header --from \"<file>\""}'`. Codex's reads it from `CORRALLM_OUTSIDE_TOKEN` as Codex starts: `codex mcp add corrallm-server --url http://127.0.0.1:<port>/mcp --bearer-token-env-var CORRALLM_OUTSIDE_TOKEN`. Keep the registration local to that folder, never user-wide: corrallm's own agents run as you and load your user-wide MCP servers, and would get your orchestrator's token.
+6. **Send work and wait.** Your orchestrator calls corrallm's tools: `message` to send an agent work, `status` and `messages` to see where things are, and `wait` for what comes back. For a wait longer than its client lets a tool call run, it runs `corrallm wait --for <message id>`, which reads the token from `CORRALLM_OUTSIDE_TOKEN`, or from the file `CORRALLM_OUTSIDE_TOKEN_FILE` names. On a profile other than the app's (`--profile`), set `CORRALLM_URL` to the URL `serve` printed.
+
+**Renewing and revoking.** `corrallm token renew --into ~/.corrallm/orchestrator.token` gives the token a new value, reaching what it did, for `--hours` from now; `corrallm token revoke` removes it. Either takes effect at once: the old token's next call is refused. A client that reads the token from the file picks up the new one as it reconnects, with no restart; one that reads it from a variable keeps the old one until it starts again with the new value.
+
+**What a token can't do.** A token is never you. It reaches only the canvases it was made for, and those it creates. It can't answer what an agent asks you, pick a file or a folder, change who leads, or an agent's mode, connection or CLI, or make, renew or widen a token. Deleting an agent, or discarding or closing what you might lose, waits in the app for you to allow it.
+
 ## Development
 
 corrallm is a cross-platform (macOS, Windows, Linux) Electron desktop app built with Electron Forge, Vite, React and TypeScript.

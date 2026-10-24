@@ -6,6 +6,8 @@ import path from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
+import { opsFor } from '../../shared/api/registry';
+import { PARTIES, SURFACE } from '../../shared/api/surface';
 import { answerUnowned, createCore } from './core';
 import type { Core } from './core';
 import { lockProfile, ProfileLocked } from './lock';
@@ -202,5 +204,17 @@ describe('a token request with no owner', () => {
       sentence: expect.stringContaining(none) as string,
     });
     expect(existsSync(none)).toBe(false);
+  });
+});
+
+describe('the token socket, never MCP', () => {
+  it('is the only way to make, renew or revoke a token: no operation a token can call does', async () => {
+    const tokenParties = PARTIES.filter((party) => party !== 'you');
+    for (const party of tokenParties) {
+      expect(opsFor(SURFACE, party).filter((name) => /^tokens?\b/i.test(name))).toEqual([]);
+    }
+    // Nor does the composed core take a request for one from a token: it has no such operation.
+    const owner = await start();
+    expect(Object.keys(owner.ops).filter((name) => /token/i.test(name))).toEqual([]);
   });
 });
