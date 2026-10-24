@@ -17,7 +17,7 @@ import { MessageStore, MessageTable } from '../delivery/messages';
 import { WorkspaceStore } from '../workspaces/store';
 import { mintTrustedPath as trusted } from '../host';
 import * as migrations from './migrations';
-import { MIGRATIONS } from './migrations';
+import { MIGRATIONS, SCHEMA } from './migrations';
 import { openStore, STORE_FILE } from './open';
 import type { Connection } from './sqlite';
 import { SYSTEM_DEPS } from './store';
@@ -28,7 +28,8 @@ import { madeAtSchema, openTestStore, readOnDisk, refuseWrites } from './test-st
  * Migration 3 on a profile as the core opens it (Core Database §5): what a corrallm of schema 2
  * kept, as its stores kept it, is kept as it was, and read by today's stores; a migration that fails
  * keeps schema 2 as it was; a corrallm of schema 2 refuses the database once it is migrated; and a
- * snapshot a corrallm of schema 2 took is restored and migrated.
+ * snapshot a corrallm of schema 2 took is restored and migrated. Opened, each is migrated on to the
+ * latest schema (migration 4 after it: schema-4.test.ts), which the rows schema 2 has keep.
  */
 
 /** No timers: nothing checkpoints or takes a snapshot while a test compares the database. */
@@ -37,7 +38,14 @@ const QUIET: StoreDeps = { ...SYSTEM_DEPS, later: () => () => undefined };
 const CANVAS = '5f0c8f0e-2c4b-4d8e-9a77-1e2d3c4b5a61' as CanvasId;
 const SESSION = '0b3a7d52-6a0c-4f39-9c4e-2f8f0c1d9e11';
 const THREAD = '0199a3f0-1234-7000-8000-123456789abc';
-const CHECKPOINT = { version: 2, state: '{"cursor":1}', messages: '[]', updatedAt: 1 } as const;
+const CHECKPOINT = {
+  version: 2,
+  state: '{"cursor":1}',
+  messages: '{"version":1,"agents":[]}',
+  updatedAt: 1,
+} as const;
+/** The schema a profile is migrated to as it opens, and the oldest that may open it then. */
+const LATEST = { version: SCHEMA, minReader: SCHEMA };
 const DOCUMENT: CanvasDocument = {
   id: CANVAS,
   arrange: false,
@@ -134,15 +142,16 @@ async function keepReference(): Promise<void> {
         },
       },
     }));
-    const journal = new RunJournal({ store, memory });
-    await journal.opened(CANVAS);
-    await journal.save(CANVAS, (await journal.get(CANVAS)).token, CHECKPOINT);
     const messages = new MessageStore(CANVAS, new MessageTable(store, memory), () => 1000);
     await messages.load();
+    const journal = new RunJournal({ store, memory, messages: () => Promise.resolve(messages) });
+    await journal.opened(CANVAS);
+    await journal.save(CANVAS, (await journal.get(CANVAS)).token, CHECKPOINT);
     const sent = messages.add({
       from: 'outside:orchestrator',
       to: 'agent:lead',
       kind: 'text',
+      origin: 'party',
       state: 'pending',
       body: 'Plan the work',
     });
@@ -241,9 +250,9 @@ async function readThrough(store: Store) {
     catalog: CATALOG,
     defaultAdapter: DEFAULT_ADAPTER,
   });
-  const journal = new RunJournal({ store, memory });
   const messages = new MessageStore(CANVAS, new MessageTable(store, memory), () => 2000);
   await messages.load();
+  const journal = new RunJournal({ store, memory, messages: () => Promise.resolve(messages) });
   const proposals = new Proposals({
     store,
     messages: () => Promise.reject(new Error('No messages here')),
@@ -277,7 +286,7 @@ describe('migration 3 on a profile', () => {
 
     const store = await openTestStore(profile, QUIET);
     try {
-      expect(schemaOn(profile)).toEqual({ version: 3, minReader: 3 });
+      expect(schemaOn(profile)).toEqual(LATEST);
       expect(kept(profile)).toEqual(before);
       expect(
         readOnDisk(profile, (disk) =>
@@ -339,7 +348,7 @@ describe('migration 3 on a profile', () => {
     release();
     const store = await openTestStore(profile, QUIET);
     try {
-      expect(schemaOn(profile)).toEqual({ version: 3, minReader: 3 });
+      expect(schemaOn(profile)).toEqual(LATEST);
       // As today's stores keep it: its conversations the project folder's.
       expect(kept(profile)).toEqual(kept(reference));
     } finally {
@@ -394,7 +403,7 @@ describe('migration 3 on a profile', () => {
     if (store === undefined) throw new Error(said.join(' '));
     try {
       expect(said[1]).toMatch(/^It was restored from its snapshot of /);
-      expect(schemaOn(profile)).toEqual({ version: 3, minReader: 3 });
+      expect(schemaOn(profile)).toEqual(LATEST);
       const remembered = await new CanvasMemory(store).get(CANVAS);
       expect(remembered).toEqual({
         project: '/work',
@@ -481,7 +490,7 @@ describe('a profile at schema 3', () => {
 
     const again = await openTestStore(profile, QUIET);
     try {
-      expect(schemaOn(profile)).toEqual({ version: 3, minReader: 3 });
+      expect(schemaOn(profile)).toEqual(LATEST);
       expect(records(again)).toEqual(before);
     } finally {
       await again.close();
@@ -493,7 +502,7 @@ describe('a profile at schema 3', () => {
     if (restored === undefined) throw new Error(said.join(' '));
     try {
       expect(said[1]).toMatch(/^It was restored from its snapshot of /);
-      expect(schemaOn(profile)).toEqual({ version: 3, minReader: 3 });
+      expect(schemaOn(profile)).toEqual(LATEST);
       expect(records(restored)).toEqual(before);
       // Kept, with its workspace: never forgotten while it owns one.
       await expect(new CanvasMemory(restored).forget(CANVAS)).resolves.toBe(false);

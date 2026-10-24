@@ -14,7 +14,9 @@ import { linkAction } from '../open-link';
  * Under the production CSP (no inline styles), xterm.js draws only with its WebGL renderer: its DOM
  * renderer styles its cells with inline styles, which the CSP blocks. The WebGL addon is loaded
  * before the terminal opens, so that no DOM renderer is ever made (and again if the GPU loses
- * the context).
+ * the context). Where the page has no WebGL2 (a virtual machine without 3D acceleration, remote
+ * desktop, a blocklisted GPU), as the terminal opens or once a lost context cannot be replaced,
+ * it is not drawn at all: in its place the view says that it needs WebGL2, and what to try.
  */
 
 /** The screen as main took it: written to a terminal of its size, it shows the same. */
@@ -79,6 +81,33 @@ const NEW_LINE = '\x1b\r';
 const opensLink = (event: MouseEvent) =>
   navigator.userAgent.includes('Mac') ? event.metaKey : event.ctrlKey;
 
+/** Whether the page can make the WebGL2 context xterm.js's WebGL renderer draws with (as it asks). */
+function hasWebGL2(): boolean {
+  const gl = document.createElement('canvas').getContext('webgl2', {
+    antialias: false,
+    depth: false,
+  });
+  // Only a check: its context goes at once (a page has only so many).
+  gl?.getExtension('WEBGL_lose_context')?.loseContext();
+  return gl !== null;
+}
+
+/** What the view shows in the terminal's place where it cannot be drawn: why, and what to try. */
+function needsWebGL2(): HTMLElement {
+  const notice = document.createElement('div');
+  notice.className = 'agent-terminal-unavailable';
+  notice.setAttribute('role', 'alert');
+  const why = document.createElement('p');
+  why.textContent = 'This terminal needs WebGL2, which isn’t available here.';
+  const tips = document.createElement('p');
+  tips.textContent =
+    'corrallm draws terminals with the GPU. In a virtual machine, turn on 3D acceleration; over ' +
+    'remote desktop, try the computer’s own display; or update its graphics driver. Then close ' +
+    'this view and open it again, or restart corrallm. The CLI keeps running meanwhile.';
+  notice.append(why, tips);
+  return notice;
+}
+
 export const createScreen: ScreenFactory = (element) => {
   const links = new Set<(url: string) => void>();
   const open = (event: MouseEvent, url: string) => {
@@ -109,11 +138,27 @@ export const createScreen: ScreenFactory = (element) => {
   const fit = new FitAddon();
   terminal.loadAddon(fit);
   terminal.loadAddon(new WebLinksAddon(open));
+  /** Whether the terminal is drawn: not once disposed of, nor without WebGL2 to draw it with. */
+  let drawn = true;
+  /** What says, in its place, that it needs WebGL2. */
+  let notice: HTMLElement | undefined;
+  /** Never xterm.js's DOM renderer: the terminal goes, and the view says why. */
+  const undraw = () => {
+    drawn = false;
+    terminal.dispose();
+    notice = needsWebGL2();
+    element.append(notice);
+  };
   const webgl = (): WebglAddon => {
     const addon = new WebglAddon();
     addon.onContextLoss(() => {
       addon.dispose();
-      terminal.loadAddon(webgl());
+      try {
+        terminal.loadAddon(webgl());
+      } catch {
+        // No new context: the GPU went, or was blocklisted after it crashed.
+        undraw();
+      }
     });
     return addon;
   };
@@ -129,34 +174,39 @@ export const createScreen: ScreenFactory = (element) => {
     return true;
   });
   terminal.onData(type);
-  terminal.open(element);
-  let disposed = false;
+  if (hasWebGL2()) terminal.open(element);
+  else undraw();
 
+  // Undrawn, the view goes on with its CLI: a snapshot is done at once, and nothing is drawn.
   return {
     reset: ({ data, cols, rows }, done) => {
+      if (!drawn) {
+        done();
+        return;
+      }
       terminal.reset();
       if (terminal.cols !== cols || terminal.rows !== rows) terminal.resize(cols, rows);
       terminal.write(data, done);
     },
     write: (data) => {
-      terminal.write(data);
+      if (drawn) terminal.write(data);
     },
     fit: () => {
-      fit.fit();
+      if (drawn) fit.fit();
     },
     redraw: () => {
       requestAnimationFrame(() => {
-        if (disposed) return;
+        if (!drawn) return;
         fit.fit();
         terminal.clearTextureAtlas();
         terminal.refresh(0, terminal.rows - 1);
       });
     },
     setOptionIsMeta: (on) => {
-      terminal.options.macOptionIsMeta = on;
+      if (drawn) terminal.options.macOptionIsMeta = on;
     },
     focus: () => {
-      terminal.focus();
+      if (drawn) terminal.focus();
     },
     onInput: (listener) => {
       inputs.add(listener);
@@ -165,14 +215,17 @@ export const createScreen: ScreenFactory = (element) => {
       links.add(listener);
     },
     onResize: (listener) => {
+      if (!drawn) return;
       terminal.onResize(({ cols, rows }) => {
         listener(cols, rows);
       });
     },
     dispose: () => {
-      disposed = true;
       inputs.clear();
       links.clear();
+      notice?.remove();
+      if (!drawn) return;
+      drawn = false;
       terminal.dispose();
     },
   };

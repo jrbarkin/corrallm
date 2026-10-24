@@ -48,6 +48,9 @@ export const TEST_GROUP_SYSTEM: ChildSystem = {
     process.kill(process.platform === 'win32' ? pid : -pid, signal);
   },
   wait: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  pause: (ms) => {
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+  },
   now: () => performance.now(),
 };
 

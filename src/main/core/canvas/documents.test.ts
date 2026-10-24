@@ -627,8 +627,9 @@ describe('a canvas’s document', () => {
       store.write(() =>
         store
           .prepare(
-            `INSERT INTO message (id, canvas_id, from_party, to_party, kind, body, state, sent_at)
-             VALUES ('m', ?, 'you', 'agent:lead', 'text', 'Hello', 'pending', 1)`,
+            `INSERT INTO message (id, canvas_id, from_party, to_party, kind, origin, body, state,
+               sent_at)
+             VALUES ('m', ?, 'you', 'agent:lead', 'text', 'manual', 'Hello', 'pending', 1)`,
           )
           .run(canvas),
       ),

@@ -280,6 +280,7 @@ export class Proposals {
           from: 'corrallm',
           to: proposal.by,
           kind: 'settled',
+          origin: 'party',
           body: recordOf(proposal, outcome, by, why),
           state: 'delivered',
         });

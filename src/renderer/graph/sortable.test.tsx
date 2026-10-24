@@ -41,7 +41,7 @@ it.each(['drop', 'cancel'] as const)(
   },
 );
 
-it('keeps keyboard focus on the handle after the asynchronous move reaches the mirror', async () => {
+it('refocuses the handle after the reordered render, where Chromium blurs a moved element', async () => {
   const done = Promise.withResolvers<undefined>();
   const move = vi.fn(() => done.promise);
   const list = (ids: string[]) => (
@@ -53,14 +53,44 @@ it('keeps keyboard focus on the handle after the asynchronous move reaches the m
     />
   );
   const view = render(list(['a', 'b', 'c']));
+  const order = () => [...view.container.querySelectorAll('li')].map((row) => row.dataset.item);
   const handle = screen.getByRole('button', { name: 'a' });
   handle.focus();
-  fireEvent.keyDown(handle, { key: 'ArrowDown' });
-  expect(move).toHaveBeenCalledExactlyOnceWith('a', 'c');
-  view.rerender(list(['b', 'a', 'c']));
-  await act(async () => {
-    done.resolve(undefined);
-    await done.promise;
+  // Chromium blurs a focused element that React's keyed reconciliation moves; jsdom keeps it.
+  const rows = view.container.querySelector('ol');
+  if (!rows) throw new Error('No list');
+  let blurred = false;
+  const moved = vi.spyOn(rows, 'insertBefore').mockImplementation((node, child) => {
+    const focused = document.activeElement;
+    if (focused instanceof HTMLElement && node.contains(focused)) {
+      focused.blur();
+      blurred = document.activeElement === document.body;
+    }
+    return Node.prototype.insertBefore.call(rows, node, child);
   });
-  expect(document.activeElement).toBe(handle);
+  const focusedIn: (string | undefined)[][] = [];
+  const focus = vi.spyOn(handle, 'focus').mockImplementation(function (
+    this: HTMLElement,
+    options?: FocusOptions,
+  ) {
+    focusedIn.push(order());
+    HTMLElement.prototype.focus.call(this, options);
+  });
+  try {
+    fireEvent.keyDown(handle, { key: 'ArrowDown' });
+    expect(move).toHaveBeenCalledExactlyOnceWith('a', 'c');
+    // The mirror reaches the move's revision (re-rendering the rows) before the move resolves.
+    view.rerender(list(['b', 'a', 'c']));
+    await act(async () => {
+      done.resolve(undefined);
+      await done.promise;
+    });
+    expect(order()).toEqual(['b', 'a', 'c']);
+    expect(blurred).toBe(true);
+    expect(focusedIn.at(-1)).toEqual(['b', 'a', 'c']);
+    expect(document.activeElement).toBe(handle);
+  } finally {
+    moved.mockRestore();
+    focus.mockRestore();
+  }
 });

@@ -1,19 +1,20 @@
 import path from 'node:path';
 
 import type { CanvasId } from '../../../shared/canvas';
-import type { Message } from '../../../shared/model/messages';
+import type { Message, MessageDisplay, MessageOrigin } from '../../../shared/model/messages';
 import { parseRunCheckpoint } from '../../../shared/run';
 import type { RunCheckpoint } from '../../../shared/run';
 import { CanvasMemory, PROJECT_WORKSPACE, withConversationsIn } from '../../memory';
 import type { ConversationsByAdapter } from '../../memory';
 import { RunJournal } from '../../run-journal';
-import { MessageTable } from '../delivery/messages';
+import { MessageStore, MessageTable } from '../delivery/messages';
+import { submissionsOf } from '../delivery/submissions';
 import { mintTrustedPath as trusted } from '../host';
 import { migrate, MIGRATIONS } from './migrations';
 import { APPLICATION_ID, openStore, STORE_FILE } from './open';
 import { connect } from './sqlite';
 import type { Connection } from './sqlite';
-import type { Store, StoreDeps } from './store';
+import type { Database, Store, StoreDeps } from './store';
 
 /*
  * For tests: a profile's database, seeded and read through the store's API, as the core keeps it
@@ -70,12 +71,15 @@ export async function keepCanvases(
 }
 
 /**
- * A message as a test keeps it: as its row holds it, its place in the order (else the next), what
- * it told (for a notice), and the withdrawal its recipient must still be told of.
+ * A message as a test keeps it: as its row holds it, its place in the order (else the next), how
+ * it came to be (else yours as you typed it, or a party's), what a view shows of it, what it told
+ * (for a notice), and the withdrawal its recipient must still be told of.
  */
 export interface KeptMessage {
   seq?: number;
   message: Omit<Message, 'canvas'>;
+  origin?: MessageOrigin;
+  display?: MessageDisplay;
   told?: string;
   withdrawal?: { text: string; told?: boolean };
 }
@@ -94,11 +98,13 @@ export async function keepMessages(
     const table = new MessageTable(store, new CanvasMemory(store));
     await store.write(() => {
       table.ensure(canvas);
-      for (const { seq, message, told, withdrawal } of messages) {
+      for (const { seq, message, origin, display, told, withdrawal } of messages) {
         table.keep({
           seq: seq ?? table.place(),
           message: { ...message, canvas },
           bytes: 0,
+          origin: origin ?? (message.from === 'you' ? 'manual' : 'party'),
+          ...(display === undefined ? {} : { display }),
           ...(told === undefined ? {} : { told }),
           ...(withdrawal === undefined ? {} : { withdrawal }),
         });
@@ -110,6 +116,28 @@ export async function keepMessages(
 }
 
 /**
+ * Each canvas's one store of messages in `store`, made as first asked for, as the core's Engines
+ * makes them (messagesOf): what a test's run journal keeps submissions in.
+ */
+export function messagesIn(
+  store: Database,
+  memory: Pick<CanvasMemory, 'ensure'>,
+  now: () => number = () => Date.now(),
+): (canvas: CanvasId) => Promise<MessageStore> {
+  const table = new MessageTable(store, memory);
+  const stores = new Map<CanvasId, Promise<MessageStore>>();
+  return (canvas) => {
+    let messages = stores.get(canvas);
+    if (messages === undefined) {
+      const made = new MessageStore(canvas, table, now);
+      messages = made.load().then(() => made);
+      stores.set(canvas, messages);
+    }
+    return messages;
+  };
+}
+
+/**
  * Uses the profile's run journal, while no core has the profile open, as the app would: through
  * its canvases' windows.
  */
@@ -117,7 +145,7 @@ async function withJournal(profile: string, use: (journal: RunJournal) => Promis
   const store = await openTestStore(profile);
   try {
     const memory = new CanvasMemory(store);
-    await use(new RunJournal({ store, memory }));
+    await use(new RunJournal({ store, memory, messages: messagesIn(store, memory) }));
   } finally {
     await store.close();
   }
@@ -172,19 +200,31 @@ export function readOnDisk<T>(profile: string, read: (connection: Connection) =>
 
 /**
  * The canvas's run as journaled on disk, as the journal restores it (whoever has the database
- * open): none if it has none.
+ * open), its submissions from its messages: none if it has none.
  */
 export function journaledRun(profile: string, canvas: string): RunCheckpoint | undefined {
-  const row = readOnDisk(profile, (disk) =>
-    disk
+  const disk = onDisk(profile);
+  try {
+    const row = disk
       .prepare(
-        `SELECT json_extract(state, '$.version') AS version, json_extract(state, '$.state') AS state,
-           json_extract(state, '$.messages') AS messages, updated_at AS updatedAt
-         FROM run WHERE canvas_id = ?`,
+        `SELECT json_extract(state, '$.run') AS state, updated_at AS updatedAt
+         FROM run WHERE canvas_id = ? AND json_extract(state, '$.format') = 3`,
       )
-      .get(canvas),
-  );
-  return row === undefined ? undefined : parseRunCheckpoint({ ...row });
+      .get(canvas);
+    if (row === undefined) return undefined;
+    // Its messages, read from disk as the core's store of them reads them.
+    const reader = { prepare: (sql: string) => disk.prepare(sql) } as unknown as Database;
+    const messages = new MessageStore(
+      canvas as CanvasId,
+      new MessageTable(reader, { ensure: () => undefined }),
+      () => Date.now(),
+    );
+    // Its rows are read as load is called (it resolves at once): on disk now.
+    void messages.load();
+    return parseRunCheckpoint({ version: 2, ...row, messages: submissionsOf(messages) });
+  } finally {
+    disk.close();
+  }
 }
 
 /** Where each party has read to in the canvas's messages, as on disk: none if none has. */

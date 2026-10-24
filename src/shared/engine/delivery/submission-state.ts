@@ -38,9 +38,17 @@ function settled(message: SubmittedMessage): boolean {
 
 /** Persists queue records, never the native transcript or a full assistant reply. */
 export function encodeSubmissions(sessions: Readonly<Record<string, Session>>): string {
+  return encodeRecords(
+    Object.entries(sessions).map(([id, session]) => [id, session.submissions ?? []] as const),
+  );
+}
+
+/** Each agent's records, encoded as `encodeSubmissions` encodes a session's, within its bounds. */
+export function encodeRecords(
+  byAgent: Iterable<readonly [string, readonly SubmittedMessage[]]>,
+): string {
   const encoder = new TextEncoder();
-  const agents = Object.entries(sessions).flatMap(([id, session]) => {
-    const records = session.submissions ?? [];
+  const agents = [...byAgent].flatMap(([id, records]) => {
     const unfinished = records.filter((message) => !settled(message)).length;
     const submissions = pruneSubmissions(records, Math.max(0, MAX_RECENT_RECORDS - unfinished)).map(
       (message) => {

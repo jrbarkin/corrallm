@@ -149,7 +149,12 @@ describe('the sender’s canvas', () => {
       checkpoint: null,
       notices: ['Restored from a snapshot.'],
     });
-    const checkpoint = { version: 2, state: '{}', messages: '[]', updatedAt: 1 };
+    const checkpoint = {
+      version: 2,
+      state: '{}',
+      messages: '{"version":1,"agents":[]}',
+      updatedAt: 1,
+    };
     await invoke('run:save', ['canvas-token', checkpoint]);
     expect(services.runs.save).toHaveBeenCalledWith(CANVAS, 'canvas-token', checkpoint);
   });
@@ -170,6 +175,7 @@ describe('session:* handlers', () => {
       CANVAS,
       'a',
       's'.repeat(128),
+      'window:7',
     );
     for (const id of ['--resume', 's'.repeat(129), 's\n']) {
       expect(() => invoke('session:resume', ['a', id])).toThrow(/conversation's id/);
@@ -273,8 +279,9 @@ describe('session:* handlers', () => {
       'github',
       'reconnect',
     );
+    // Listed for the window that asked, the one caller that may then open what it lists.
     await invoke('session:list', ['a'], sender);
-    expect(services.sessions.listSessions).toHaveBeenCalledWith(CANVAS, 'a');
+    expect(services.sessions.listSessions).toHaveBeenCalledWith(CANVAS, 'a', 'window:7');
     // What an adapter's agents can be set to: read for the canvas the renderer shows.
     await invoke('session:options', ['codex'], sender);
     expect(services.sessions.settingsOptions).toHaveBeenCalledWith(CANVAS, 'codex');
@@ -286,6 +293,7 @@ describe('session:* handlers', () => {
       CANVAS,
       'a',
       '0b3a7d52-6a0c-4f39-9c4e-2f8f0c1d9e11',
+      'window:7',
     );
   });
 
@@ -639,7 +647,12 @@ describe('session:* handlers', () => {
 });
 
 describe('run journal channels', () => {
-  const checkpoint = { version: 2, state: '{}', messages: '[]', updatedAt: 1 };
+  const checkpoint = {
+    version: 2,
+    state: '{}',
+    messages: '{"version":1,"agents":[]}',
+    updatedAt: 1,
+  };
   it('uses the sender’s canvas and generation token, never a renderer-supplied path', async () => {
     const sender = 7;
     await expect(invoke('run:get', [], sender)).resolves.toMatchObject({ token: 'canvas-token' });

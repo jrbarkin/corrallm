@@ -29,11 +29,19 @@ export interface ChildSystem {
   alive: (group: number) => boolean;
   signal: (group: number, signal: NodeJS.Signals | number) => void;
   wait: (ms: number) => Promise<void>;
+  /** Blocks the thread: a new CLI is recorded inside its spawner's synchronous call. */
+  pause: (ms: number) => void;
   now: () => number;
 }
 
 const GRACE_MS = 3000;
 const KILL_WAIT_MS = 250;
+/**
+ * Linux's forkpty returns before its child calls setsid, so a new pty can still be in the core's
+ * group. Under CPU contention that lasts milliseconds, and over 100 ms has been measured.
+ */
+const OWN_GROUP_MS = 1000;
+const PAUSE = new Int32Array(new SharedArrayBuffer(4));
 const SYSTEM: ChildSystem = {
   platform: process.platform,
   inspect: inspectProcess,
@@ -50,6 +58,9 @@ const SYSTEM: ChildSystem = {
     process.kill(-group, signal);
   },
   wait: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  pause: (ms) => {
+    Atomics.wait(PAUSE, 0, 0, ms);
+  },
   now: () => Date.now(),
 };
 
@@ -285,7 +296,7 @@ export class Children implements ProcessOwner {
       const found =
         this.#system.platform === 'win32'
           ? { started: this.#system.now(), group: pid }
-          : this.#system.inspect(pid);
+          : this.#identify(pid);
       if (state.ended || found === undefined) {
         this.beforeSpawn();
         return; // It exited before its identity could be read.
@@ -310,6 +321,25 @@ export class Children implements ProcessOwner {
       else void this.#ending(record, 'SIGTERM');
       this.beforeSpawn();
     }
+  }
+
+  /**
+   * A new POSIX child's identity, once it has left the core's process group (for at most
+   * OWN_GROUP_MS). One that exits or whose pid another process takes meanwhile is gone.
+   */
+  #identify(pid: number): ReturnType<ChildSystem['inspect']> {
+    const found = this.#system.inspect(pid);
+    if (found === undefined || found.group === pid || pid <= 1 || pid === process.pid) return found;
+    const core = this.#system.inspect(process.pid)?.group;
+    const until = this.#system.now() + OWN_GROUP_MS;
+    let latest = found;
+    while (latest.group === core && this.#system.now() < until) {
+      this.#system.pause(1);
+      const next = this.#system.inspect(pid);
+      if (next === undefined || !sameStart(next.started, found.started)) return undefined;
+      latest = next;
+    }
+    return latest;
   }
 
   #write(): void {
