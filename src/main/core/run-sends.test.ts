@@ -361,6 +361,25 @@ describe('the run’s own sends', () => {
     ).toEqual([]);
   });
 
+  it('leaves the run’s message out unresolved as its canvas closes, telling no one, its attempt uncertain', async () => {
+    const { connector, sent } = busy();
+    const core = await start(connector);
+    const engine = await core.engines.open(CANVAS);
+    engine.run.start();
+    await vi.waitFor(() => {
+      expect(sent).toHaveLength(1);
+    });
+    const id = sent[0]?.id ?? '';
+    const messages = await core.engines.messagesOf(CANVAS);
+    await core.engines.closeCanvas(CANVAS);
+    expect(messages.get(id)).toMatchObject({ state: 'unresolved' });
+    expect(messages.all().filter((one) => one.kind === 'notice')).toEqual([]);
+    expect(engine.run.snapshot().agents.worker?.attempts?.hello).toEqual([
+      expect.objectContaining({ status: 'uncertain', messageId: id }),
+    ]);
+    expect(rowsOnDisk()).toEqual([expect.objectContaining({ id, state: 'unresolved' })]);
+  });
+
   it('leaves the run’s message out unresolved after a crash, its attempt uncertain, sending nothing again', async () => {
     const { connector, sent } = busy();
     const core = await start(connector);
