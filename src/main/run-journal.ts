@@ -105,6 +105,18 @@ export class RunJournal {
   }
 
   /**
+   * The canvases open (`open_canvas`: until each is closed), the one used longest ago first: what
+   * a core starting cold initializes (Engines.initialize). Rejects if they can't be read.
+   */
+  async openCanvases(): Promise<CanvasId[]> {
+    await this.flush();
+    return this.#deps.store
+      .prepare('SELECT canvas_id FROM open_canvas ORDER BY opened_at, canvas_id')
+      .all()
+      .flatMap(({ canvas_id: id }) => (isCanvasId(id) ? [id] : []));
+  }
+
+  /**
    * What a window showing `canvas`, or the core opening it, restores: its run, what to say of it,
    * and its file's text as it is on disk (none for a canvas with no file, or whose file is gone).
    */

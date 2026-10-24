@@ -1,6 +1,10 @@
 import { randomUUID } from 'node:crypto';
 
-import { STORE_BYTES, STORE_SETTLED_PER_PARTY } from '../../../shared/api/limits';
+import {
+  MAX_MESSAGE_BYTES,
+  STORE_BYTES,
+  STORE_SETTLED_PER_PARTY,
+} from '../../../shared/api/limits';
 import type { CanvasId } from '../../../shared/canvas';
 import {
   agentOf,
@@ -607,6 +611,30 @@ export class MessageStore {
 /** An untold withdrawal is protected even after its turn has settled. */
 function prunable({ message, withdrawal }: Kept): boolean {
   return isSettled(message) && (withdrawal === undefined || withdrawal.told === true);
+}
+
+/**
+ * Whether a message is one of the run's sends of a task's attempt (B11 Design §3): a text with a
+ * task link, which only the runtime's mailbox gives a message (Engines), never a caller. The run
+ * sends it and settles it; delivery never delivers, takes back or kills it as a party's.
+ */
+export function sentByRun(message: Message): boolean {
+  return message.kind === 'text' && message.task !== undefined;
+}
+
+/**
+ * A text cut to the most a message holds (MAX_MESSAGE_BYTES), marked where it was cut as the
+ * `whole` of it (a reply, a prompt) its transcript has.
+ */
+export function capBody(text: string, whole: 'reply' | 'prompt'): string {
+  const bytes = new TextEncoder().encode(text);
+  if (bytes.length <= MAX_MESSAGE_BYTES) return text;
+  const cut = `\n\n[corrallm: cut here; the whole ${whole} is in its transcript]`;
+  const room = MAX_MESSAGE_BYTES - new TextEncoder().encode(cut).length;
+  // Cut on a character's boundary: the decoder ends a character cut in two with U+FFFD, dropped
+  // here.
+  const kept = new TextDecoder('utf-8', { fatal: false }).decode(bytes.slice(0, room));
+  return `${kept.replace(/�$/u, '')}${cut}`;
 }
 
 /**

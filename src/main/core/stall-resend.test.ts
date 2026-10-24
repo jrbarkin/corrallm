@@ -370,11 +370,17 @@ it('retries a run task as its own new attempt, whose reply advances the queue', 
   await vi.waitFor(() => {
     expect(sent).toHaveLength(2);
   });
-  expect(engine.run.snapshot().agents.a?.attempts?.task).toMatchObject([
+  const attempts = engine.run.snapshot().agents.a?.attempts?.task;
+  expect(attempts).toMatchObject([
     { id: first?.id, status: 'cancelled' },
     { status: 'running', retryOf: first?.id },
   ]);
-  expect(await texts()).toEqual([]); // Its retry belongs to the run, never a detached manual send.
+  // Its retry belongs to the run: each attempt its own message, never a detached manual send.
+  const store = await core.engines.messagesOf(CANVAS);
+  const rows = await texts();
+  expect(rows.map((m) => store.originOf(m.id))).toEqual(['run', 'run']);
+  expect(rows.map((m) => m.task?.attempt)).toEqual(attempts?.map(({ id }) => id));
+  expect(rows.map((m) => m.id)).toEqual(attempts?.map(({ messageId }) => messageId));
   end('completed');
   await vi.waitFor(() => {
     expect(engine.run.snapshot().agents.a).toMatchObject({
@@ -382,6 +388,74 @@ it('retries a run task as its own new attempt, whose reply advances the queue', 
       outcomes: { task: 'succeeded' },
     });
   });
+});
+
+it('reserves a run’s retry once, in the core alone: no retry-task event reaches its engine or a window', async () => {
+  const engine = await core.engines.open(CANVAS);
+  // The window shows the canvas the core runs: it hears the canvas's session events.
+  await core.channels.call(7, 'run:get', []);
+  const events: SessionEvent[] = [];
+  const off = core.channels.listen(7, (name, args) => {
+    if (name === 'session:event') events.push((args as [string, ConnectionId, SessionEvent])[2]);
+  });
+  const retried = vi.spyOn(core.engines, 'retryAttempt');
+  try {
+    engine.run.start();
+    await vi.waitFor(() => {
+      expect(sent).toHaveLength(1);
+    });
+    const first = required(engine.run.snapshot().agents.a?.attempts?.task?.[0]);
+    await stall();
+    expect(await choose()).toMatchObject({ ok: true });
+    // Chosen again: there is no stalled turn to answer any more, and nothing more is reserved.
+    expect(await choose()).toMatchObject({ ok: false });
+    expect(interrupt).toHaveBeenCalledOnce();
+    end();
+    await vi.waitFor(() => {
+      expect(sent).toHaveLength(2);
+    });
+    expect(retried.mock.calls).toEqual([[CANVAS, { agent: 'a', item: 'task', attempt: first.id }]]);
+    expect(retried.mock.results).toEqual([{ type: 'return', value: true }]);
+    // The retry's own turn is cancelled too: nothing reserved it, so nothing retries it.
+    end();
+    await vi.waitFor(() => {
+      expect(engine.run.snapshot().agents.a?.problem?.kind).toBe('cancelled');
+    });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(sent).toHaveLength(2);
+    expect(engine.run.snapshot().agents.a?.attempts?.task).toHaveLength(2);
+    expect(events.filter((event) => event.type === 'retry-task')).toEqual([]);
+  } finally {
+    off();
+  }
+});
+
+it('retries only an attempt its owner holds cancelled, once', async () => {
+  const engine = await core.engines.open(CANVAS);
+  engine.run.start();
+  await vi.waitFor(() => {
+    expect(sent).toHaveLength(1);
+  });
+  const first = required(engine.run.snapshot().agents.a?.attempts?.task?.[0]);
+  const attempt = { agent: 'a', item: 'task', attempt: first.id };
+  // Running still: no retry of it.
+  expect(core.engines.retryAttempt(CANVAS, attempt)).toBe(false);
+  expect(core.engines.retryAttempt(CANVAS, { ...attempt, attempt: 'another' })).toBe(false);
+  end();
+  await vi.waitFor(() => {
+    expect(engine.run.snapshot().agents.a?.problem?.kind).toBe('cancelled');
+  });
+  expect(core.engines.retryAttempt(CANVAS, attempt)).toBe(true);
+  await vi.waitFor(() => {
+    expect(sent).toHaveLength(2);
+  });
+  // Retried, it is no longer the held attempt.
+  expect(core.engines.retryAttempt(CANVAS, attempt)).toBe(false);
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  expect(sent).toHaveLength(2);
+  // A canvas the core doesn't run has no attempts to retry.
+  await core.engines.closeCanvas(CANVAS);
+  expect(core.engines.retryAttempt(CANVAS, attempt)).toBe(false);
 });
 
 it('a Kill after choosing resend cancels the reserved run retry', async () => {
