@@ -1,5 +1,5 @@
 import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { platform, tmpdir } from 'node:os';
 import path from 'node:path';
 
 import { _electron as electron } from '@playwright/test';
@@ -39,12 +39,18 @@ export async function launchApp({
       ),
     );
     const executablePath = agentElectronExecutable();
+    // Docker has Mesa llvmpipe rather than a passed-through GPU. These switches belong only
+    // to this unpackaged test launch, never main's defaults or the packaged-app checks.
+    const graphics =
+      platform() === 'linux' && env.CORRALLM_E2E_GL === 'mesa'
+        ? ['--use-gl=angle', '--use-angle=gl', '--ignore-gpu-blocklist', '--ozone-platform=x11']
+        : [];
     app = await electron.launch({
       // Playwright otherwise prepends --no-sandbox on Linux. Test the app's real sandbox,
       // including under xvfb in Docker (whose profiles allow unprivileged user namespaces).
       chromiumSandbox: true,
       ...(executablePath ? { executablePath } : {}),
-      args: ['.', `--user-data-dir=${profile}`, ...args],
+      args: [...graphics, '.', `--user-data-dir=${profile}`, ...args],
       env: {
         ...env,
         // Paths with nothing there: only the CLIs a test gives are found (main looks nowhere else).

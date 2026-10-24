@@ -136,8 +136,13 @@ it('runs every gate in order, including the e2e global build under xvfb, stoppin
     );
   }
   const runEnv = {
-    ...env, PNPM_LOG: log, GRAPHICS_LOG: graphics, DISPLAY_LOG: display,
-    CORRALLM_E2E_GL: '', LIBGL_ALWAYS_SOFTWARE: '', GALLIUM_DRIVER: '',
+    ...env,
+    PNPM_LOG: log,
+    GRAPHICS_LOG: graphics,
+    DISPLAY_LOG: display,
+    CORRALLM_E2E_GL: '',
+    LIBGL_ALWAYS_SOFTWARE: '',
+    GALLIUM_DRIVER: '',
     FAIL_PNPM_STEP: 'lint',
   };
   await expect(

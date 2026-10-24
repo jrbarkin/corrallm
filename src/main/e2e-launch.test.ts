@@ -2,7 +2,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 
 const platform = vi.hoisted(() => vi.fn(() => 'linux'));
 vi.mock('node:os', async (original) => ({
-  ...(await original<typeof import('node:os')>()),
+  ...(await original<typeof Os>()),
   platform,
 }));
 
@@ -70,3 +70,4 @@ it.each([
   ]);
   await close();
 });
+import type * as Os from 'node:os';
