@@ -1,7 +1,7 @@
 import { AgentId, MessageId } from '../shared/api/ids';
 import { MAX_TOPIC_FRAME } from '../shared/api/limits';
 import type { RuntimeTopicKey, RuntimeSnapshotFrame, TopicRequest } from '../shared/api/topics';
-import { topicKey, RuntimeTopic } from '../shared/api/topics';
+import { topicKey, RuntimeTopic, snapshotFrameFits } from '../shared/api/topics';
 import { runtimeKey } from './api/topic-wire';
 import { newCanvasId } from '../shared/canvas';
 import { NEW_SESSION } from '../shared/model/session';
@@ -85,6 +85,7 @@ export function runtimeCore() {
   const pending: {
     topic: MirrorTopicKey;
     resolve: (snapshot: MirrorSnapshot | RuntimeSnapshotFrame) => void;
+    reject: (error: unknown) => void;
   }[] = [];
   const requests: unknown[] = [];
   const unsubscriptions: unknown[] = [];
@@ -98,7 +99,7 @@ export function runtimeCore() {
         request.topic === 'messages'
           ? topicKey(RuntimeTopic.parse(request))
           : topicKey(request as TopicRequest);
-      return new Promise((resolve) => pending.push({ topic: key, resolve }));
+      return new Promise((resolve, reject) => pending.push({ topic: key, resolve, reject }));
     },
     topicsUnsubscribe: (request) => {
       unsubscriptions.push(request);
@@ -128,6 +129,21 @@ export function runtimeCore() {
       epoch = value;
       restarted?.(value);
     },
+    publishSession: (index: number, world: ReturnType<typeof runtimeWorld>, rev = 0) => {
+      const subscription = pending[index];
+      if (!subscription) throw new Error('The fixture has no pending subscription.');
+      try {
+        if (subscription.topic !== world.keys.session)
+          throw new Error('The fixture names another session.');
+        const frames = sessionFrames(world.keys.session, world, rev, epoch);
+        const [begin, ...rest] = frames;
+        if (!begin) throw new Error('The fixture has no begin frame.');
+        subscription.resolve(begin);
+        changed?.(rest);
+      } catch (error) {
+        subscription.reject(error);
+      }
+    },
     answer: (index: number, state: MirrorSnapshot['state'], rev = 0) =>
       pending[index]?.resolve({ epoch, rev, state }),
   };
@@ -138,27 +154,33 @@ export function sessionFrames(
   topic: RuntimeTopicKey,
   world: ReturnType<typeof runtimeWorld>,
   rev = 0,
+  epoch = 'one',
 ): RuntimeSnapshotFrame[] {
-  const base = { topic, epoch: 'one', snapshot: 'transfer' };
-  const frames: RuntimeSnapshotFrame[] = [
-    { ...base, kind: 'begin', summary: world.session.summary, count: world.session.order.length },
-  ];
+  const base = { topic, epoch, snapshot: 'transfer' };
+  const begin = { ...base, kind: 'begin' as const, summary: world.session.summary, count: 0 };
+  const checkSummary = () => {
+    if (!snapshotFrameFits(begin)) throw new Error('The snapshot summary exceeds its frame limit.');
+  };
+  // Refuse before returning or emitting any frame. Summaries are never clipped or split.
+  checkSummary();
+  const chunks: Extract<RuntimeSnapshotFrame, { kind: 'chunk' }>[] = [];
   let entries: { key: string; value: unknown }[] = [];
   const size = (value: unknown) => new TextEncoder().encode(JSON.stringify(value)).length;
-  const emptySize = size({ ...base, kind: 'chunk', entries: [] });
-  let bytes = emptySize;
+  const emptySize = () => size({ ...base, kind: 'chunk', index: chunks.length, entries: [] });
+  let bytes = emptySize();
   for (const key of world.session.order) {
     const entry = { key, value: world.session.entries[key] };
     const entrySize = size(entry);
     if (entries.length && bytes + 1 + entrySize > MAX_TOPIC_FRAME) {
-      frames.push({ ...base, kind: 'chunk', entries });
+      chunks.push({ ...base, kind: 'chunk', index: chunks.length, entries });
       entries = [];
-      bytes = emptySize;
+      bytes = emptySize();
     }
     bytes += entrySize + (entries.length ? 1 : 0);
     entries.push(entry);
   }
-  if (entries.length) frames.push({ ...base, kind: 'chunk', entries });
-  frames.push({ ...base, kind: 'end', rev });
-  return frames;
+  if (entries.length) chunks.push({ ...base, kind: 'chunk', index: chunks.length, entries });
+  begin.count = chunks.length;
+  checkSummary();
+  return [begin, ...chunks, { ...base, kind: 'end', rev }];
 }
