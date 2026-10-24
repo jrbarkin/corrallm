@@ -23,6 +23,9 @@ import { SessionManager } from './manager';
 import type { SessionManagerDeps } from './manager';
 import type { Conversations } from './adapter';
 import { quotePath } from './terminal/drop';
+import { ProjectDirectories } from '../core/workspaces/resolver';
+import type { WorkingDirectory } from '../core/workspaces/resolver';
+import { mintTrustedPath } from '../core/host';
 
 const OPTIONS: SessionOptions = { connection: 'claude-code.sdk', model: null, mode: null };
 /** Conversations Claude Code kept, and one a rewind forked: session ids, as the CLI's are. */
@@ -51,6 +54,16 @@ let listKept: Mock<Kept['list']>;
 let before: Mock<Kept['before']>;
 let fork: Mock<Kept['fork']>;
 
+function directories() {
+  return new ProjectDirectories({
+    of: (canvas) => {
+      const folder = projects.get(canvas);
+      return folder === undefined ? undefined : mintTrustedPath(folder);
+    },
+    onAvailability: () => () => undefined,
+  });
+}
+
 function manager(
   connectors: Partial<Record<ConnectionId, Connector>> = {},
   conversations: SessionManagerDeps['conversations'] = {
@@ -63,7 +76,7 @@ function manager(
     environment: () => environment(),
     conversations,
     adapterOf: (_canvas, agent) => Promise.resolve(adapters.get(agent) ?? 'claude-code'),
-    projectOf: (canvas) => projects.get(canvas),
+    directories: directories(),
     memory,
     emit: (canvas, agentId, connection, event) => {
       const list = heard.get(canvas) ?? [];
@@ -127,6 +140,39 @@ afterEach(async () => {
 });
 
 describe('SessionManager', () => {
+  it('owns a launch while its asynchronous directory lookup is pending, so close waits for it', async () => {
+    const sessions = manager();
+    const canvas = shownCanvas();
+    const directory = Promise.withResolvers<WorkingDirectory>();
+    const resolve = vi
+      .spyOn(ProjectDirectories.prototype, 'workingDirectory')
+      .mockReturnValue(directory.promise);
+    const starting = sessions.start(canvas, 'a', OPTIONS);
+    let closing: Promise<void> | undefined;
+    try {
+      await vi.waitFor(() => {
+        expect(resolve).toHaveBeenCalledOnce();
+      });
+      let closed = false;
+      closing = sessions.closeEverything().then(() => {
+        closed = true;
+      });
+      await new Promise<void>((done) => setImmediate(done));
+      expect(closed).toBe(false);
+    } finally {
+      directory.resolve({
+        state: 'ready',
+        cwd: mintTrustedPath('/work/app'),
+        workspace: null,
+        generation: 0,
+        branch: null,
+      });
+      await starting;
+      await closing;
+      await sessions.closeEverything();
+      resolve.mockRestore();
+    }
+  });
   it.each([
     ['claude-code.sdk', 'claude-code.terminal', 'claude-code'],
     ['codex.app-server', 'codex.terminal', 'codex'],
@@ -677,7 +723,7 @@ describe('SessionManager', () => {
       catalog: CATALOG,
       connectors: {},
       environment: () => Promise.resolve({ PATH: '/usr/bin', HOME: '/home/me' }),
-      projectOf: (canvas) => projects.get(canvas),
+      directories: directories(),
       adapterOf: () => Promise.resolve('claude-code'),
       memory,
       emit: () => undefined,
@@ -693,6 +739,36 @@ describe('SessionManager', () => {
     await sessions.settingsOptions(newCanvasId(), 'claude-code');
     expect(claude).toHaveBeenLastCalledWith(expect.objectContaining({ cwd: '/home/me' }));
     await expect(sessions.settingsOptions(canvas, 'codex')).rejects.toThrow(/can’t read/);
+  });
+
+  it('asks the working-directory resolver before a conversation rewind', async () => {
+    const sessions = manager({
+      'claude-code.sdk': {
+        start: async (spec, host) => {
+          const session = await fake.start(spec, host);
+          host.remember(REMEMBERED);
+          return Object.assign(session, { rewindFiles: () => Promise.resolve({ possible: true }) });
+        },
+      },
+    });
+    const canvas = shownCanvas();
+    await sessions.start(canvas, 'a', OPTIONS);
+    const resolve = vi.spyOn(ProjectDirectories.prototype, 'workingDirectory').mockResolvedValue({
+      state: 'held',
+      reason: 'no-project',
+      sentence: 'Pick a folder first.',
+    });
+    try {
+      await expect(sessions.rewind(canvas, 'a', 'message', 'conversation')).rejects.toThrow(
+        /nothing to rewind/,
+      );
+      expect(resolve).toHaveBeenCalledWith(canvas, 'a');
+      expect(before).not.toHaveBeenCalled();
+      expect(fork).not.toHaveBeenCalled();
+    } finally {
+      resolve.mockRestore();
+      await sessions.closeEverything();
+    }
   });
 
   it('ends a canvas’s sessions once no window shows it, keeping its conversations', async () => {

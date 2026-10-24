@@ -3,6 +3,8 @@ import { homedir } from 'node:os';
 import { adapterIn, connectionIn } from '../../shared/adapter';
 import type { AdapterId, Catalog, ConnectionId } from '../../shared/adapter';
 import type { CanvasId } from '../../shared/canvas';
+import type { AgentId } from '../../shared/api/ids';
+import type { DirectoryResolver } from '../core/workspaces/resolver';
 import type {
   FilesRewind,
   McpChange,
@@ -30,8 +32,6 @@ import type { Conversations } from './adapter';
 import { droppedPaste } from './terminal/drop';
 import { isConversationId, requireConversationId } from './adapters';
 
-const NO_PROJECT =
-  'Choose a project folder for this canvas first (in the bar at the top left): its agents work in it.';
 const NOT_RUNNING = 'This agent’s session is not running.';
 const NOT_LISTED = 'That is not one of this project folder’s conversations.';
 const NO_MCP = 'This agent’s MCP servers are managed in its terminal: run /mcp in its terminal.';
@@ -61,8 +61,8 @@ export interface SessionManagerDeps {
   conversations?: Readonly<Partial<Record<AdapterId, Conversations>>>;
   /** The adapter the canvas currently gives this agent, even before its session starts. */
   adapterOf: (canvas: CanvasId, agentId: string) => Promise<AdapterId>;
-  /** The folder a canvas's agents work in, if one was chosen (project.ts). */
-  projectOf: (canvas: CanvasId) => string | undefined;
+  /** The core's working-directory seam, shared by all session entry points. */
+  directories: DirectoryResolver;
   /** Where each canvas's agents' conversations are remembered. */
   memory: CanvasMemory;
   /** Sends at the CLI boundary, with any core-owned additions, whichever caller sent it. */
@@ -148,13 +148,11 @@ export class SessionManager {
       throw new TypeError(`${options.mode} is not a mode of ${options.connection} sessions`);
     }
     if (running) await this.#end(canvas, agentId, running, false);
-    const cwd = this.#deps.projectOf(canvas);
-    if (cwd === undefined) throw new Error(NO_PROJECT);
     // What is not given is the user's own: their CLI's settings, else its defaults.
     const given: SessionOptions = { ...options, effort: options.effort ?? null };
     const agent: Agent = {
       connection: options.connection,
-      session: this.#launch(canvas, agentId, cwd, given, () => agents.get(agentId) === agent),
+      session: this.#launch(canvas, agentId, given, () => agents.get(agentId) === agent),
     };
     agents.set(agentId, agent);
     try {
@@ -231,7 +229,8 @@ export class SessionManager {
     const read = this.#deps.options?.[adapter];
     if (!read) throw new Error(NO_OPTIONS);
     const env = await this.#deps.environment();
-    return read({ cwd: this.#deps.projectOf(canvas) ?? env.HOME ?? homedir(), env });
+    // Options name an adapter, not an agent: read project-wide defaults, then the user's home.
+    return read({ cwd: this.#deps.directories.projectRoot(canvas) ?? env.HOME ?? homedir(), env });
   }
 
   /** What restoring the agent's files to how they were before a message would change. */
@@ -258,7 +257,8 @@ export class SessionManager {
     const session = await this.#session(canvas, agentId);
     if (!session.rewindFiles) throw new Error(NO_REWIND);
     const conversation = restore !== 'code';
-    const folder = this.#deps.projectOf(canvas);
+    const directory = await this.#deps.directories.workingDirectory(canvas, agentId as AgentId);
+    const folder = directory.state === 'ready' ? directory.cwd : undefined;
     const adapter = await this.#deps.adapterOf(canvas, agentId);
     const id = (await this.#conversation(canvas, adapter, agentId))?.id;
     const kept = this.#deps.conversations?.[adapter];
@@ -309,8 +309,9 @@ export class SessionManager {
    * renderer may then open (`resumeSession`).
    */
   async listSessions(canvas: CanvasId, agentId: string): Promise<PastSession[]> {
-    const folder = this.#deps.projectOf(canvas);
-    if (folder === undefined) throw new Error(NO_PROJECT);
+    const directory = await this.#deps.directories.workingDirectory(canvas, agentId as AgentId);
+    if (directory.state === 'held') throw new Error(directory.sentence);
+    const folder = directory.cwd;
     const adapter = await this.#deps.adapterOf(canvas, agentId);
     const found =
       (await this.#deps.conversations?.[adapter]?.list(folder, await this.#deps.environment())) ??
@@ -338,9 +339,11 @@ export class SessionManager {
     const adapter = await this.#deps.adapterOf(canvas, agentId);
     requireConversationId(adapter, sessionId);
     const listed = this.#listed.get(canvas)?.get(agentId);
+    const directory = await this.#deps.directories.workingDirectory(canvas, agentId as AgentId);
     if (
       listed?.adapter !== adapter ||
-      listed.folder !== this.#deps.projectOf(canvas) ||
+      directory.state !== 'ready' ||
+      listed.folder !== directory.cwd ||
       !listed.ids.has(sessionId)
     ) {
       throw new Error(NOT_LISTED);
@@ -447,10 +450,14 @@ export class SessionManager {
   async #launch(
     canvas: CanvasId,
     agentId: string,
-    cwd: string,
     { connection, model, mode, effort, role }: SessionOptions,
     current: () => boolean,
   ): Promise<LiveSession<SessionMode>> {
+    // The lookup belongs to the pending launch in #agents: concurrent starts share it, and
+    // close must still await and end it while the resolver is answering.
+    const directory = await this.#deps.directories.workingDirectory(canvas, agentId as AgentId);
+    if (directory.state === 'held') throw new Error(directory.sentence);
+    const { cwd } = directory;
     const connector = this.#deps.connectors[connection];
     if (connector === undefined) throw new Error(`corrallm can't run ${connection} sessions.`);
     const adapter = this.#adapterOf(connection);
