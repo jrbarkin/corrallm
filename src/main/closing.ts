@@ -1,8 +1,9 @@
 /*
  * Quitting, or closing a window: first the run is saved (each renderer freezes it, the core
- * journals it). If that fails, the user is asked whether to close
- * anyway, losing what wasn't saved, or keep the app open and try again later; asking to close again
- * while it saves closes at once, as a way out of a save that hangs.
+ * journals it). If that fails, the user is asked whether to close anyway, losing what wasn't
+ * saved, or keep the app open and try again later. Asking to close again while it saves closes
+ * without waiting for the save, as a way out of a save that hangs. The app's quit (index.ts) keeps
+ * the same way out once closing is approved: quitting again bounds a core close that hangs.
  */
 
 export interface ClosingDeps {

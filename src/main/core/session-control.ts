@@ -296,8 +296,9 @@ export class SessionControl {
   ): Promise<object> {
     const target = this.#target(canvas, agent);
     const { open, adapter } = target;
-    this.#idle(target, 'restart it');
     await this.#launchable(target, 'restart');
+    // Idle as it closes: nothing awaited between this check and its effect.
+    this.#idle(target, 'restart it');
     ctx.noReturn();
     await this.#effect(() => this.#deps.sessions.restarting(open.document.id, agent, adapter));
     await open.engine.sessions.restart(agent);
@@ -314,8 +315,9 @@ export class SessionControl {
     ctx: OpContext,
   ): Promise<object> {
     const target = this.#target(canvas, agent);
-    this.#idle(target, 'start a new conversation');
     await this.#launchable(target, 'start a new conversation');
+    // Idle as it closes: nothing awaited between this check and its effect.
+    this.#idle(target, 'start a new conversation');
     ctx.noReturn();
     await this.#effect(() => target.open.engine.sessions.fresh(agent));
     await this.#opened(target, 'Its conversation was forgotten, but it couldn’t start again');
@@ -352,11 +354,13 @@ export class SessionControl {
   ): Promise<RewindResult> {
     const target = this.#target(canvas, agent);
     const { open, name } = target;
+    // A conversation rewind ends its session, to resume the copy: only where it can start again.
+    if (restore !== 'code') await this.#launchable(target, 'rewind its conversation');
+    // Idle as it rewinds: nothing awaited between this check and a conversation's rewind (a code
+    // restore's gate checks every agent of its tree again, itself too).
     if (open.engine.sessions.of(agent).status !== 'idle') {
       throw new OpFailure('refused', `${name} has a turn going on: rewind it once it is idle.`);
     }
-    // A conversation rewind ends its session, to resume the copy: only where it can start again.
-    if (restore !== 'code') await this.#launchable(target, 'rewind its conversation');
     const apply = () => {
       ctx.noReturn();
       return this.#effect(() => open.engine.sessions.rewind(agent, message, restore));

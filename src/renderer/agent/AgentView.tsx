@@ -183,7 +183,7 @@ export function AgentView({
   onContinueInTerminal: (command?: string) => void;
   /** What changes its queue, and the queue shown beside it. */
   edits: QueueEdits;
-  /** How each agent's tasks are marked: links, and where the queues' run is (queues/marks.ts). */
+  /** How each agent's tasks are marked: links, and where the queues' run is (src/shared/model/queue-marks.ts). */
   marks: (agent: string, item: string | null) => RowMarks;
   /** What the queues' run holds this agent for the user to decide, if anything (src/shared/engine/run/asks.ts). */
   ask?: HeldAsk | undefined;
