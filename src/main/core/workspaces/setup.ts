@@ -348,7 +348,7 @@ export class WorkspaceSetups implements SetupService {
     if (command !== null && shell !== null) {
       return { spec: { form: 'shell', shell, command }, source: 'configured', command };
     }
-    const detection = await this.#detect(tree);
+    const detection = await this.#detect(tree, repository);
     if (detection.kind === 'suggested') {
       const { manager, command, args } = detection.spec;
       return { spec: { form: 'argv', executable: manager, args }, source: 'detected', command };
@@ -356,10 +356,13 @@ export class WorkspaceSetups implements SetupService {
     return { spec: { form: 'none' }, source: 'none', command: null, why: reasonOf(detection) };
   }
 
-  /** The fixed table's suggestion for the files at the root of the workspace's base commit. */
-  async #detect(tree: WorktreeRecord): Promise<SetupDetection> {
+  /**
+   * The fixed table's suggestion for the files at the root of the workspace's base commit, read
+   * from the picked checkout's repository: never a file's command, only which lockfiles are there.
+   */
+  async #detect(tree: WorktreeRecord, repository: RepositoryRecord): Promise<SetupDetection> {
     const { stdout } = await this.#deps.git.run({
-      cwd: tree.path,
+      cwd: repository.realRoot,
       args: ['ls-tree', '-z', '--end-of-options', tree.baseOid],
     });
     const blobs = new Map<string, string>();
@@ -373,7 +376,7 @@ export class WorkspaceSetups implements SetupService {
       try {
         packageJson = (
           await this.#deps.git.run({
-            cwd: tree.path,
+            cwd: repository.realRoot,
             args: ['cat-file', 'blob', metadata],
             maxBytes: MAX_PACKAGE_JSON,
           })
@@ -424,7 +427,7 @@ export class WorkspaceSetups implements SetupService {
       const offer: Offer =
         command !== null && shell !== null
           ? { spec: { form: 'shell', shell, command }, source: 'configured', command }
-          : await this.#detect(tree).then((detection): Offer => {
+          : await this.#detect(tree, repository).then((detection): Offer => {
               if (detection.kind === 'suggested') {
                 const { manager, command: shown, args } = detection.spec;
                 return {

@@ -128,7 +128,8 @@ export async function copyLocalFiles(git: GitRunner, request: CopyRequest): Prom
   const { repository, worktree, cwd } = request;
   const source = repository.realRoot;
   const target = cwd as string;
-  const manifest = await readManifest(git, worktree.path, worktree.baseOid);
+  // Read from the picked checkout's object database: the base commit is the repository's.
+  const manifest = await readManifest(git, source, worktree.baseOid);
   if (manifest === undefined) return recordOf(null, []);
   const listed = await selected(git, source, manifest.text);
   const ignored = await ignoredOf(git, source, listed);
