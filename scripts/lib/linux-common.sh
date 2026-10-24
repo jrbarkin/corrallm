@@ -25,10 +25,11 @@ linux_build_image() {
   node_version=$(cat .nvmrc)
   pnpm_version=$(sed -n 's/.*"packageManager": "pnpm@\([^"]*\)".*/\1/p' package.json)
   [ -n "$pnpm_version" ] || die 'No pinned pnpm version in package.json'
-  # A Dockerfile-only context, never the checkout or an ignored .env.
-  step 'Build Linux image' docker build --platform "$linux_platform" --tag "$linux_image" \
-    --build-arg "NODE_VERSION=$node_version" --build-arg "PNPM_VERSION=$pnpm_version" - \
-    < scripts/lib/linux-build.Dockerfile
+  # Only these two build inputs, never the checkout or an ignored .env.
+  COPYFILE_DISABLE=1 tar -C scripts/lib --create --file - linux-build.Dockerfile linux-node-path.sh |
+    step 'Build Linux image' docker build --platform "$linux_platform" --tag "$linux_image" \
+      --build-arg "NODE_VERSION=$node_version" --build-arg "PNPM_VERSION=$pnpm_version" \
+      --file linux-build.Dockerfile -
 }
 
 linux_archive() {

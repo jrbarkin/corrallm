@@ -20,6 +20,7 @@ async function fixture() {
   const folder = await mkdtemp(path.join(cache, 'linux-scripts-'));
   folders.push(folder);
   const log = path.join(folder, 'commands.jsonl');
+  const context = path.join(folder, 'build-context.tar');
   // The container's working-tree copy intentionally has no .git. These tests exercise Docker
   // orchestration with a small stand-in file list, not the developer's repository metadata.
   await writeFile(path.join(folder, 'git'), '#!/bin/bash\nprintf "AGENTS.md\\0deleted-file\\0"\n', {
@@ -32,20 +33,27 @@ import { appendFileSync } from 'node:fs';
 const args = process.argv.slice(2);
 appendFileSync(process.env.COMMAND_LOG, JSON.stringify(args) + '\\n');
 if (args[0] === 'build' || args.includes('--interactive')) {
-  for await (const chunk of process.stdin) { /* drain the Dockerfile or source archive */ }
+  for await (const chunk of process.stdin) {
+    if (args[0] === 'build') appendFileSync(process.env.BUILD_CONTEXT, chunk);
+  }
 }
 if (args[0] === process.env.FAIL_DOCKER_STEP || args.includes(process.env.FAIL_DOCKER_ARG)) process.exit(19);
 `,
     { mode: 0o755 },
   );
-  const env = { ...process.env, PATH: `${folder}:${process.env.PATH ?? ''}`, COMMAND_LOG: log };
+  const env = {
+    ...process.env,
+    PATH: `${folder}:${process.env.PATH ?? ''}`,
+    COMMAND_LOG: log,
+    BUILD_CONTEXT: context,
+  };
   async function commands(): Promise<string[][]> {
     return (await readFile(log, 'utf8'))
       .trim()
       .split('\n')
       .map((line) => JSON.parse(line) as string[]);
   }
-  return { folder, env, commands };
+  return { folder, env, commands, context };
 }
 
 it.each([
@@ -54,10 +62,13 @@ it.each([
 ])(
   'runs the full Linux gate in the matching %s container, without host node_modules',
   async (arch, platform) => {
-    const { env, commands } = await fixture();
+    const { env, commands, context } = await fixture();
     await exec('bash', ['scripts/ci-linux.sh', arch], { cwd: root, env });
     const calls = await commands();
     expect(calls[0]).toEqual(expect.arrayContaining(['build', '--platform', platform]));
+    const listed = (await exec('tar', ['-tf', context])).stdout.trim().split('\n');
+    expect(listed.sort()).toEqual(['linux-build.Dockerfile', 'linux-node-path.sh']);
+    expect(calls[0]).toEqual(expect.arrayContaining(['--file', 'linux-build.Dockerfile']));
     const run = calls.find((args) => args[0] === 'run');
     expect(run).toEqual(expect.arrayContaining(['--platform', platform, 'ci', arch]));
     expect(run?.join(' ')).not.toContain(`${root}:`);
@@ -206,4 +217,30 @@ it('makes only the configured Linux makers and collects their installers and run
   expect(await readFile(path.join(artifacts, 'linux-installed.sh'), 'utf8')).toContain(
     'linked_libraries',
   );
+});
+
+it.each([
+  ['/usr/bin:/bin', '/usr/local/bin:/usr/bin:/bin'],
+  ['', '/usr/local/bin'],
+  ['/usr/local/bin:/usr/bin', '/usr/local/bin:/usr/bin'],
+])('keeps the pinned Node visible in a login profile with PATH=%s', async (before, after) => {
+  const profile = path.join(root, 'scripts/lib/linux-node-path.sh');
+  const result = await exec(
+    '/bin/sh',
+    ['-c', '. "$1"; printf "%s\n%s" "$PATH" "$LOGIN_CHECK"', 'login-profile', profile],
+    {
+      env: { PATH: before, LOGIN_CHECK: 'configuration with spaces' },
+    },
+  );
+  expect(result.stdout).toBe(`${after}\nconfiguration with spaces`);
+});
+
+it('installs the Node login profile and checks both login shells as the build user', async () => {
+  const dockerfile = await readFile(path.join(root, 'scripts/lib/linux-build.Dockerfile'), 'utf8');
+  expect(dockerfile).toContain('COPY linux-node-path.sh /etc/profile.d/corrallm-node.sh');
+  expect(dockerfile).toContain('ENV SHELL=/bin/bash');
+  const loginCheck = dockerfile.slice(dockerfile.indexOf('USER node'));
+  expect(loginCheck).toContain('/bin/sh -ilc');
+  expect(loginCheck).toContain('"$SHELL" -ilc');
+  expect(loginCheck).toContain('node --version');
 });
