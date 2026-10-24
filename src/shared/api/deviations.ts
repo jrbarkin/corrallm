@@ -9,7 +9,7 @@ import type { OpName } from './surface';
 /** Why an operation may be on one surface only: a closed list, each with its sentence. */
 export const REASONS = {
   'trust-gate':
-    'A path comes only from a native dialog you complete: that choice is the trust gate.',
+    'A path comes only from a native dialog you complete, and what runs in that folder’s worktrees only from you: that choice is the trust gate.',
   'os-action': 'It acts on your desktop after your click, or reads the files you dropped.',
   'acts-as-you': 'Keystrokes into a CLI’s own interface answer what it asks there, as you.',
   view: 'It serves a window’s view: a terminal widget, or which canvas a window shows.',
@@ -28,6 +28,7 @@ export const DEVIATIONS: Partial<Record<OpName, Reason>> = {
   'canvas.open': 'trust-gate',
   'canvas.saveAs': 'trust-gate',
   'project.choose': 'trust-gate',
+  'project.setSetupCommand': 'trust-gate',
   'agent.setType': 'permissions',
   'agent.setConnection': 'permissions',
   'topics.subscribe': 'transport',
