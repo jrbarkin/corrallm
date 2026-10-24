@@ -53,6 +53,27 @@ import {
 } from 'node:fs';
 import { createInterface } from 'node:readline';
 
+// Test-only startup facts, never credentials or prompt bodies. The Linux e2e log needs to
+// distinguish no spawn, auth refusal, a missing runtime, and a missing fake configuration.
+if (process.env.FAKE_CLAUDE_DIAGNOSTICS) {
+  try {
+    appendFileSync(
+      process.env.FAKE_CLAUDE_DIAGNOSTICS,
+      JSON.stringify({
+        phase: process.argv[2] === 'auth' ? 'auth' : 'session',
+        node: process.execPath,
+        version: process.version,
+        cwd: process.cwd(),
+        apiKeyPresent: Boolean(process.env.ANTHROPIC_API_KEY),
+        configDirPresent: Boolean(process.env.CLAUDE_CONFIG_DIR),
+        promptLogPresent: Boolean(process.env.FAKE_CLAUDE_PROMPTS),
+      }) + '\n',
+    );
+  } catch {
+    // A failed diagnostic must not change the fake's protocol or exit.
+  }
+}
+
 const args = process.argv.slice(2);
 const turnGates = JSON.parse(process.env.FAKE_CLAUDE_TURN_GATES ?? '{}');
 /** A flag's value, given as the SDK gives it ("--resume=<id>"), or as two arguments. */
