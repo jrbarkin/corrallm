@@ -180,19 +180,22 @@ describe('a Terminal session', () => {
     expect(command).not.toContain(token);
   });
 
-  it('carries its pre-launch permission baseline when SessionStart has no permission_mode', async () => {
-    await start({ startupAsks: true });
-    expect(last('started')).toMatchObject({ mode: null, asks: true });
-    expect(last('mode')).toBeUndefined();
-    expect(claude().prompts).toEqual([]);
-    const settings = JSON.parse(readFileSync(claude().arg('--settings') ?? '', 'utf8')) as {
-      hooks: { SessionStart?: { hooks: { type: string; command: string }[] }[] };
-    };
-    expect(settings.hooks.SessionStart?.[0]?.hooks[0]).toMatchObject({ type: 'command' });
-    await until(() => {
-      expect(claude().answers).toContainEqual({ hook: 'SessionStart', answer: '{}' });
-    });
-  });
+  it.each([true, false])(
+    'carries its pre-launch permission baseline when SessionStart has no permission_mode (asks: %s)',
+    async (asks) => {
+      await start({ startupAsks: asks });
+      expect(last('started')).toMatchObject({ mode: null, asks });
+      expect(last('mode')).toBeUndefined();
+      expect(claude().prompts).toEqual([]);
+      const settings = JSON.parse(readFileSync(claude().arg('--settings') ?? '', 'utf8')) as {
+        hooks: { SessionStart?: { hooks: { type: string; command: string }[] }[] };
+      };
+      expect(settings.hooks.SessionStart?.[0]?.hooks[0]).toMatchObject({ type: 'command' });
+      await until(() => {
+        expect(claude().answers).toContainEqual({ hook: 'SessionStart', answer: '{}' });
+      });
+    },
+  );
 
   it.each([{ httpHookAllowedEnvVars: ['OTHER'] }, { httpHookAllowedEnvVars: [] }])(
     'registers its file-backed hooks without an unheard warning under %j',

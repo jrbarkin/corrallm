@@ -70,7 +70,7 @@ export interface DeliveryDeps {
 /**
  * Whether an agent's session asks before it acts on what it is sent, now or as it would start:
  * 'asks', or why a party's text would act unchecked (UnaskingWhy), or 'reading' while its CLI's
- * default is read.
+ * default is read or an unreported Terminal is within its startup grace.
  */
 type Asking = 'asks' | 'reading' | UnaskingWhy;
 
@@ -630,7 +630,7 @@ export class Delivery {
     const stuck = this.#stuckHold(node);
     if (stuck !== undefined) return stuck;
     const asking = this.#asking(node);
-    // Its CLI's default being read, it waits, as for a turn.
+    // A default read or unreported Terminal startup waits silently, as for a turn.
     if (asking === 'reading') return { kind: 'busy' };
     if (asking !== 'asks') return { kind: 'unasking', why: asking };
     // The run's own message on its way to it goes first, as one in its session's queue would.
@@ -656,8 +656,9 @@ export class Delivery {
    * Whether agent `node`'s session asks before it acts on what it is sent, now or as it would
    * start: one that never asks acts on whatever it is sent, so a party's text would act unchecked,
    * as would one corrallm can't tell asks. A session that runs says so by its mode (one its adapter
-   * says never asks), or, on settings that are none of its modes, by whether they ask; one that
-   * says neither is unknown until it reports permissions, even if a startup mode was requested.
+   * says never asks), or, on settings that are none of its modes, by whether they ask. Terminals
+   * carry their trusted pre-launch default until a native hook reports; one that still says
+   * neither gets a bounded silent startup hold while hooks are on, then an unknown hold.
    * One yet to start starts in
    * its saved start mode, where its connection starts in it (each asks), else its CLI's default.
    * That default is read once a session (#default; not now unless `read`: 'reading').
@@ -1149,7 +1150,7 @@ export class Delivery {
     );
   }
 
-  /** Wakes delivery when the first usage window it waits on resets. */
+  /** Wakes delivery for the next usage reset or Terminal permission startup deadline. */
   #arm(at: number | undefined): void {
     if (this.#alarm?.at === at) return;
     this.#alarm?.cancel();
