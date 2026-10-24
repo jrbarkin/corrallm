@@ -14,7 +14,9 @@ Startup verifies their pid/start time/group before ending stale groups, giving S
 
 Windows group cleanup is deferred.
 
-The core supplies SessionManager one directory resolver (`src/main/core/workspaces/resolver.ts`). Every new launch, including restart and the launch after Fresh, resolves that agent's cwd through it; conversation listing, resume's listed-folder check and conversation rewind resolve it too. The legacy implementation returns the picked project TrustedPath, workspace null, generation 0 and no branch; no-project keeps the existing refusal. Directory resolution is part of the existing pending launch: concurrent starts still share it, and closing waits for it before ending the session. Fresh itself only ends the session and forgets its conversation, so needs no cwd. Conversation memory still uses PROJECT_WORKSPACE. Adapter-wide `session:options` names no agent and uses the resolver's projectRoot accessor, falling back to the user's home folder when none was picked. This is the seam for later workspace provisioning; it does not yet bind sessions or conversations to worktrees.
+The core supplies SessionManager one directory resolver (`src/main/core/workspaces/resolver.ts`). Every new launch, including restart and the launch after Fresh, resolves that agent's cwd through it; conversation listing, resume's listed-folder check and conversation rewind resolve it too. The legacy implementation returns the picked project TrustedPath, workspace null, generation 0 and no branch; no-project keeps the existing refusal. Directory resolution is part of the existing pending launch: concurrent starts still share it, and closing waits for it before ending the session. Fresh itself only ends the session and forgets its conversation, so needs no cwd. Conversation memory still uses PROJECT_WORKSPACE. Adapter-wide `session:options` names no agent and uses the resolver's projectRoot accessor, falling back to the user's home folder when none was picked.
+
+Each session keeps the binding it launched in: the resolver's cwd, workspace and active generation (B9a Design §3, never the desired plan's). A launch held by the resolver (no project, a setup, a rebind waiting for approval) launches nothing; one whose CLI starts after that binding stopped being the active one, or while a rebind waits, is closed unheard and refused, releasing what it claimed. A running session is reused only while its binding is the active one, and replaced once another is installed (an approved transfer); while its directory is held it is kept, with its claim and events, and nothing invalidates it on a desired-plan change alone. Work dispatched to it (`send`, a conversation rewind) is refused while its directory is held or once its binding is stale, sending nothing and ending nothing; `availability(canvas, agent)` says the same without failing, for whatever dispatches to hold rather than fail. With the legacy resolver every binding is the picked folder at generation 0, so none of this changes anything until provisioning composes a resolver with generations.
 
 A bounded execFile helper closes its pipes and reports immediately on timeout or excess output while the owner finishes group cleanup before the core exits.
 
@@ -24,10 +26,14 @@ The terminal toolkit, imported by adapters; it imports no adapter and names no C
 
 ## Connected sessions
 
-Resume lists and rewinds use the agent's current adapter's conversation provider. A list is
-bound to its canvas, agent, adapter and project folder. Claude Code lists and forks its kept
-conversations through the Agent SDK; Codex lists its project's threads through a private App
-Server's `thread/list`, without starting a thread. A connection without rewind refuses it.
+Resume lists and rewinds use the agent's current adapter's conversation provider. A list is its
+caller's (the window that asked, `window:<id>`, or the canvas's own runtime), bound to its canvas,
+agent, adapter and the working-directory binding it was listed in (folder, workspace and active
+generation), for ten minutes; the caller's next list replaces it, and at most eight callers' lists
+are kept per agent. A resume is admitted only from the caller's own current list, never another
+caller's, and checked again just before the agent's session is closed. Claude Code lists and forks
+its kept conversations through the Agent SDK; Codex lists its project's threads through a private
+App Server's `thread/list`, without starting a thread. A connection without rewind refuses it.
 
 Malformed native conversation ids in list results are skipped, preserving the valid conversations,
 their order and the agent's current marker. The manager and each adapter's reader warn once per
@@ -47,6 +53,24 @@ its test helpers do not load connector runtimes or assets. Terminal hooks refuse
 an invalid id with a session warning while still reporting the rest of the event. Native ids
 live in canvas memory, not the run checkpoint. Agent and prompt ids that never enter argv or
 native conversation paths keep their own bounds.
+
+**Conversation claims** (`src/main/sessions/claims.ts`, B11 Design §7): the core keeps one
+process-wide map of live claims (composed in createCore), keyed by adapter and native id alone,
+never a folder, each held by one session generation of a canvas's agent. A launch claims its
+remembered conversation at once, nothing awaited between the check and the claim; held by another
+agent's session, it starts a new conversation instead, with one warning notice naming the holder
+(quoted and escaped as a name), and the holder's saved conversation is never cleared. An explicit
+resume is refused, before the caller's session closes, while another agent's session holds that id;
+admitted, it is reserved for the agent's next session, as a rewind's copy is. A native id a session
+reports later (`remember`, as after /clear or a Terminal's /resume) is claimed before it is
+remembered, the session's claim moving off the one it ran before; one another agent's session holds
+is a conflict: the reporting session is stopped, with an error notice saying why, and the id is
+never remembered. A claim is released only by its own generation, on a failed launch, or once its
+session has actually closed (however long after the bounded close stopped waiting), never a
+successor's; an agent's later session takes over its earlier one's claim or reservation. Fresh, a
+project change and a canvas's sessions ending let its reservations go. Claims are live state,
+never kept, and protect nothing outside this core: another profile's core, or a CLI run outside
+corrallm, may open the same conversation.
 
 The core watches each live turn for silence (`core/stalled.ts`, in the app and under `serve`): every session event counts as activity, including text, thinking, tools/progress, status and usage. The Agent SDK also counts every incoming SDK message, the App Server its incoming notifications and requests (not another thread's notifications), and both Terminals their hooks, usage/status-line readings and changes in parsed Program Status or window-title reports, even without an attached terminal view. Repeated identical reports and raw pty output do not count: a spinner or elapsed timer redrawing cannot keep a dropped connection looking alive. Parsed changes include native progress, task state and status messages; corrallm does not guess activity from adapter-specific spinner text. While the last status is waiting, a native prompt is open, or the Terminal's asking list is nonempty, the silence clock is suspended and any stalled Need clears. Permission, question, plan and elicitation events open that wait; withdrawn events remove their prompt ids, and a working status clears native prompt waits (SDK answers do not emit withdrawn). Terminal asks keep their own whole-list lifetime. Leaving the wait starts a fresh twenty minutes, and wake/network changes grant no shorter deadline to a waiting turn. Twenty minutes without activity adds one warning notice to the agent's session, naming its CLI from the catalog, and one corrallm notice to each party whose message is in that turn. The sender notice keeps a `stalled:<message>` told key across restarts and wakes `wait`; coalesced messages from one sender get one notice. It never fails or interrupts a turn automatically. Needs lists `stalled/<agent>` (the agent id escaped), a user-only prompt with Interrupt and Interrupt and resend answered by `reply`. Activity, the turn ending, or the session closing clears it; a later silence can show it again, without repeating that turn's notices. A new turn has its own warning. Main forwards Electron powerMonitor's `resume` over CoreLink; headless, the watchdog's 15-second timer detects a wall-clock gap over a minute. Old turns then get two minutes of fresh silence before warning, without counting time asleep; fresh activity restores the normal twenty-minute deadline. On every tick, in either host, it also reads `os.networkInterfaces()` locally: each non-internal interface's IPv4 addresses and IPv6 /64 prefixes, excluding `fe80::/10` link-local addresses. The identity includes interface names, normalizes IPv6 notation, and ignores order, duplicate addresses, and temporary IPv6 suffix rotation. The first successful reading is only a baseline. A change gives old silent turns the same two-minute grace, worded "2 minutes after the network changed". The first changed sample is the observed change time (at most one 15-second tick after the OS snapshot changes); subsequent activity clears grace and restores the normal deadline. Repeated wake or network reports never extend an existing grace period. A failed reader preserves the last good identity and logs once per core lifetime, without logging the addresses. The watchdog's clock/timers (`CoreConfig.watchdog`) and interface reader (`CoreConfig.watchdogNetwork`) are injectable; its timer is unref'd, and close cancels it. Restored history starts no watchdog: interrupted turns become unresolved as usual, never silently retried.
 

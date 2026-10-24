@@ -71,6 +71,8 @@ const ANOTHER = 'This canvas’s file holds another canvas now: open it in corra
 const NO_SWITCH = 'Switch this agent to another connection in the corrallm app.';
 const JOURNAL_FAILED = 'Could not journal every canvas’s run as the core closed.';
 const NOT_KEPT = 'corrallm keeps no such canvas.';
+/** Whom the session manager lists conversations for when a canvas's own runtime asks. */
+const RUNTIME_CALLER = 'runtime';
 
 /**
  * The app's runs a window still owns until B11's cutover (X12, X13; X14 deletes this seam with task
@@ -1198,9 +1200,10 @@ export class Engines {
         return folder === undefined ? [] : run(() => files.find(folder, query, MAX_FILE_MATCHES));
       },
       options: (adapter) => run(() => sessions.settingsOptions(canvas, adapter)),
-      sessions: (agentId) => run(() => sessions.listSessions(canvas, agentId)),
+      // The runtime's own lists, apart from any window's (B11 Design §7).
+      sessions: (agentId) => run(() => sessions.listSessions(canvas, agentId, RUNTIME_CALLER)),
       resume: (agentId, sessionId) =>
-        done(() => sessions.resumeSession(canvas, agentId, sessionId)),
+        done(() => sessions.resumeSession(canvas, agentId, sessionId, RUNTIME_CALLER)),
       previewRewind: (agentId, messageId) =>
         run(() => sessions.previewRewind(canvas, agentId, messageId)),
       rewind: (agentId, messageId, restore) =>
