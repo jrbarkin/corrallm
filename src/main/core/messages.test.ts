@@ -361,7 +361,19 @@ describe('stalled message turns', () => {
   it.each(['silence', 'network'] as const)(
     'on %s, warns in the session, wakes wait once, offers Interrupt, and never interrupts by itself',
     async (trigger) => {
-      let interfaces: ReturnType<NonNullable<CoreConfig['watchdogNetwork']>> = {};
+      const en0 = (address: string) => ({
+        en0: [
+          {
+            family: 'IPv4' as const,
+            address,
+            netmask: '255.255.255.0',
+            internal: false,
+            mac: '',
+            cidr: `${address}/24`,
+          },
+        ],
+      });
+      let interfaces: ReturnType<NonNullable<CoreConfig['watchdogNetwork']>> = en0('192.0.2.1');
       watchdogNetwork = () => interfaces;
       let now = Date.now();
       let tick: (() => void) | undefined;
@@ -414,18 +426,7 @@ describe('stalled message turns', () => {
       if (trigger === 'network') {
         now += 15_000;
         tick?.(); // Baseline.
-        interfaces = {
-          en0: [
-            {
-              family: 'IPv4',
-              address: '192.0.2.1',
-              netmask: '255.255.255.0',
-              internal: false,
-              mac: '',
-              cidr: '192.0.2.1/24',
-            },
-          ],
-        };
+        interfaces = en0('198.51.100.1'); // Another network: the old address is gone.
         now += 15_000;
         tick?.(); // Change detected.
       }
