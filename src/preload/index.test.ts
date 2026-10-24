@@ -539,6 +539,43 @@ describe('preload', () => {
 });
 
 describe('run persistence preload', () => {
+  it('keeps an early shutdown request until the renderer installs its run owner', async () => {
+    const api = await exposed();
+    const receive = on.mock.calls.find(([channel]) => channel === 'run:stopping')?.[1];
+    // window.get can already have restored a canvas while React has not mounted its editor.
+    receive?.({}, 'early-quit');
+    const stop = vi.fn();
+    api.onRunStopping(stop);
+    expect(stop).toHaveBeenCalledExactlyOnceWith('early-quit');
+  });
+
+  it('keeps shutdown requests across a run owner cleanup without replaying a handled one', async () => {
+    const api = await exposed();
+    const first = vi.fn();
+    const unsubscribe = api.onRunStopping(first);
+    const receive = (request: string) => {
+      for (const [name, listener] of on.mock.calls) {
+        if (
+          name === 'run:stopping' &&
+          !removeListener.mock.calls.some(
+            ([removed, handler]) => removed === name && handler === listener,
+          )
+        )
+          listener({}, request);
+      }
+    };
+    receive('handled');
+    unsubscribe();
+    receive('between-owners');
+    const next = vi.fn();
+    api.onRunStopping(next);
+    expect(first).toHaveBeenCalledExactlyOnceWith('handled');
+    expect(next).toHaveBeenCalledExactlyOnceWith('between-owners');
+    const later = vi.fn();
+    api.onRunStopping(later);
+    expect(later).not.toHaveBeenCalled();
+  });
+
   it('exposes only typed get/save/ready calls and strips the stopping event object', async () => {
     const api = await exposed();
     postPort(answerInfo);
@@ -555,7 +592,9 @@ describe('run persistence preload', () => {
     call?.[1]({}, 'request');
     expect(listener).toHaveBeenCalledWith('request');
     stop();
-    expect(removeListener).toHaveBeenCalledWith('run:stopping', call?.[1]);
+    call?.[1]({}, 'after-cleanup');
+    expect(listener).toHaveBeenCalledExactlyOnceWith('request');
+    expect(removeListener).not.toHaveBeenCalledWith('run:stopping', call?.[1]);
   });
 });
 

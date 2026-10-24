@@ -24,17 +24,28 @@ function invoke<C extends CoreChannel>(channel: C, ...args: IpcArgs<C>): Promise
   return core.channel(channel, args);
 }
 
-/** Calls `listener` with each `event` main sends; returns a function that stops it. */
-function listen(
-  event: 'run:stopping',
-  listener: (...args: IpcEventArgs<'run:stopping'>) => void,
-): () => void {
-  const receive = (_event: IpcRendererEvent, ...args: unknown[]) => {
-    listener(...(args as IpcEventArgs<'run:stopping'>));
-  };
-  ipcRenderer.on(event, receive);
+type StoppingListener = (...args: IpcEventArgs<'run:stopping'>) => void;
+const stopping = new Set<StoppingListener>();
+let pendingStop: IpcEventArgs<'run:stopping'> | undefined;
+// window.get can mark the canvas shown before React mounts its run owner. Listen for the
+// lifetime of this page, including StrictMode's cleanup gap, so an early quit cannot lose its
+// freeze/save request. Main keeps at most one request pending per window.
+ipcRenderer.on('run:stopping', (_event: IpcRendererEvent, ...args: unknown[]) => {
+  const request = args as IpcEventArgs<'run:stopping'>;
+  if (stopping.size === 0) pendingStop = request;
+  else for (const listener of [...stopping]) listener(...request);
+});
+
+/** Hears shutdown requests, including one received before the run owner mounted. */
+function onRunStopping(listener: StoppingListener): () => void {
+  stopping.add(listener);
+  if (pendingStop) {
+    const request = pendingStop;
+    pendingStop = undefined;
+    listener(...request);
+  }
   return () => {
-    ipcRenderer.removeListener(event, receive);
+    stopping.delete(listener);
   };
 }
 
@@ -55,7 +66,7 @@ const api: AppApi = {
   getRun: () => invoke(API_CHANNELS.getRun),
   saveRun: (token, checkpoint) => invoke(API_CHANNELS.saveRun, token, checkpoint),
   runReady: (requestId, error) => invoke(API_CHANNELS.runReady, requestId, error),
-  onRunStopping: (listener) => listen(API_EVENTS.onRunStopping, listener),
+  onRunStopping,
   startSession: (agentId, options) => invoke(API_CHANNELS.startSession, agentId, options),
   sendToSession: (agentId, message) => invoke(API_CHANNELS.sendToSession, agentId, message),
   answerSession: (agentId, promptId, answer) =>
