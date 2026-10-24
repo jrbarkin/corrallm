@@ -133,10 +133,11 @@ export class WorkspacePlanner {
     }
     const { cleanup } = this.#deps;
     if (cleanup === undefined || plan.losses.retained.length === 0) return plan.losses;
+    // One still being made is kept, never asked about: nothing ran there, and its job may go on.
     const trees = await Promise.all(
       plan.losses.retained.flatMap((id) => {
         const tree = this.#deps.workspaces.worktree(id);
-        return tree === undefined ? [] : [cleanup.assess(tree)];
+        return tree === undefined || tree.state === 'creating' ? [] : [cleanup.assess(tree)];
       }),
     );
     return { ...plan.losses, trees };

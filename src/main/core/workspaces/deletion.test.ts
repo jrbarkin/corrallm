@@ -76,7 +76,10 @@ function canvasText(): string {
  * Each agent's worktree made and bound to it, then the core started over the profile, with its
  * cleanup composed (as X11b will): `file` false makes the canvas a draft, its document in rows.
  */
-async function start({ file = true }: { file?: boolean } = {}): Promise<{
+async function start({
+  file = true,
+  prepared = true,
+}: { file?: boolean; prepared?: boolean } = {}): Promise<{
   core: Core;
   trees: Record<'a' | 'b', WorktreeRecord>;
 }> {
@@ -123,7 +126,7 @@ async function start({ file = true }: { file?: boolean } = {}): Promise<{
       check: true,
       distribution: 'local',
       // worktree.remove, prepared for X12 to register.
-      preparedOps: true,
+      preparedOps: prepared,
       sessions: {
         connectors: { 'claude-code.terminal': terminal },
         environment: () => Promise.resolve({}),
@@ -339,7 +342,8 @@ describe('a kept worktree', { timeout: 60_000 }, () => {
 
 describe('a workspace change', { timeout: 60_000 }, () => {
   it('waits for your Switch, at the plan it shows, keeping the worktree left', async () => {
-    const { core: on, trees } = await start();
+    // Answered through the live reply: a workspace change is the router's, registered or not.
+    const { core: on, trees } = await start({ prepared: false });
     await ok(on, 'canvas.group', { nodes: ['a', 'b'], kind: 'frame' });
     const pending = ((await ok(on, 'needs', {})) as { items: NeedsItem[] }).items.filter((item) =>
       item.id.startsWith('rebind/'),

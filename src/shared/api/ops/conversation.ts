@@ -205,7 +205,9 @@ export const conversationOps = {
       'to write over the file. A stalled session offers Interrupt or Interrupt and resend: only the user ' +
       'chooses them, and a resend starts a new attempt only after that turn ends cancelled. A ' +
       'worktree’s setup card (only the user’s) offers Run, Always, Skip, Stop or Run again: Run ' +
-      'returns once it has started, not when it is done. Returns how it was settled.',
+      'returns once it has started, not when it is done. A workspace change (only the user’s) ' +
+      'offers Switch, which moves its agents to the worktree it names, keeping the ones they ' +
+      'leave. Returns how it was settled.',
     input: z.strictObject({
       canvas,
       to: NeedId,
@@ -228,6 +230,7 @@ export const conversationOps = {
           'started',
           'skipped',
           'stopped',
+          'completed',
         ])
         .optional(),
       raised: NeedId.optional(),
