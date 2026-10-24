@@ -239,6 +239,22 @@ export function resolvers(
 ): Readonly<Partial<Record<Brand, Resolver>>> {
   const lead = (caller: TokenCaller, canvas: CanvasId) =>
     caller.kind === 'agent' && isLead(canvas, caller.agent);
+  /** The session of `agent`, beside an id, on an open canvas of the caller's, if it reaches it. */
+  const sessionOf = (
+    canvas: string | undefined,
+    agent: string | undefined,
+    caller: TokenCaller,
+    reach: Reach,
+  ) => {
+    if (canvas === undefined || agent === undefined) return undefined;
+    if (!canvasesOf(caller).includes(canvas as CanvasId)) return undefined;
+    const open = engines.canvas(canvas as CanvasId);
+    if (!open) return undefined;
+    if (!reachesAgent(open.document, caller, reach, agent, lead(caller, canvas as CanvasId))) {
+      return undefined;
+    }
+    return open.engine.sessions.of(agent);
+  };
   /** A resolver over the open canvas a call names, if the caller has that canvas. */
   const over =
     (
@@ -276,6 +292,17 @@ export function resolvers(
     EntityKey: over((world, key, caller, reach, isALead) =>
       reachesEntity(world, caller, reach, key, isALead),
     ),
+    // An entry of the transcript, or a background task, of the agent named beside it, in its
+    // session now, on an agent it reaches: never one of another agent's, and nothing on a canvas
+    // the core doesn't run (no transcript to tell).
+    EntryId: (id, caller, reach, { canvas, agent }) => {
+      const open = sessionOf(canvas, agent, caller, reach);
+      return open?.entries.some((entry) => entry.id === id) === true;
+    },
+    TaskId: (id, caller, reach, { canvas, agent }) => {
+      const open = sessionOf(canvas, agent, caller, reach);
+      return open?.tasks?.some((task) => task.id === id) === true;
+    },
     // A token sees your items on the agents it reaches (Core Server §5.1), and only those.
     NeedId: (id, caller, reach, { canvas }) => {
       if (canvas === undefined || !canvasesOf(caller).includes(canvas as CanvasId)) return false;

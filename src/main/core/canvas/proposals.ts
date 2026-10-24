@@ -3,6 +3,7 @@ import { isDeepStrictEqual } from 'node:util';
 
 import type { NeedId } from '../../../shared/api/ids';
 import { MAX_OPEN_PROPOSALS } from '../../../shared/api/limits';
+import { PREPARED_SURFACE } from '../../../shared/api/prepared';
 import { SURFACE } from '../../../shared/api/surface';
 import type { CanvasId } from '../../../shared/canvas';
 import type { CanvasNode } from '../../../shared/model/canvas';
@@ -13,6 +14,8 @@ import { andList } from '../../../shared/model/words';
 import type { MessageStore, Staged } from '../delivery/messages';
 import { OpFailure } from '../call';
 import { nameOf, partyText } from '../parties';
+import { RewindGuardSchema } from '../rewind-guard';
+import type { RewindGuard } from '../rewind-guard';
 import type { Database } from '../store/store';
 import type { ChangeSet } from './change';
 
@@ -61,6 +64,11 @@ export interface Proposal {
   before?: Readonly<Record<string, number>>;
   /** What it would do and lose, worded as it was raised. */
   lost: Lost;
+  /**
+   * For a code restore (R5): what it was of, files and all, as proposed (rewind-guard.ts), which
+   * Allow reads again before it restores anything; any difference settles it stale.
+   */
+  guard?: RewindGuard;
   /** When it was raised, in epoch ms. */
   at: number;
 }
@@ -174,7 +182,7 @@ export class Proposals {
       by: PartyId;
     } & (
       | { change: ChangeSet; before: Readonly<Record<string, number>> }
-      | { touched: Readonly<Record<string, number>>; lost: Lost }
+      | { touched: Readonly<Record<string, number>>; lost: Lost; guard?: RewindGuard }
     ),
   ): Promise<NeedId> {
     const { op, args, by } = raised;
@@ -183,6 +191,7 @@ export class Proposals {
     let touched: Readonly<Record<string, number>>;
     let lost: Lost;
     let before: Readonly<Record<string, number>> | undefined;
+    let guard: RewindGuard | undefined;
     if ('change' in raised) {
       const { change } = raised;
       touched = Object.fromEntries([...change.entities].map(([key, { rev }]) => [key, rev ?? 0]));
@@ -190,7 +199,7 @@ export class Proposals {
       lost = wordsOf(change, await this.#deps.conversations(canvas), inner);
       before = raised.before;
     } else {
-      ({ touched, lost } = raised);
+      ({ touched, lost, guard } = raised);
     }
     // Check inside the write lane too: two raises may have awaited conversations together.
     const { proposal, made } = await this.#deps.store.write(() => {
@@ -206,7 +215,8 @@ export class Proposals {
           pending?.op === op &&
           isDeepStrictEqual(pending.args, args) &&
           isDeepStrictEqual(pending.touched, touched) &&
-          isDeepStrictEqual(pending.before, before)
+          isDeepStrictEqual(pending.before, before) &&
+          isDeepStrictEqual(pending.guard, guard)
         ) {
           return { proposal: pending, made: false };
         }
@@ -227,6 +237,7 @@ export class Proposals {
         touched,
         ...(before === undefined ? {} : { before }),
         lost,
+        ...(guard === undefined ? {} : { guard }),
         at: this.#now(),
       };
       this.#deps.store
@@ -240,7 +251,8 @@ export class Proposals {
           op,
           JSON.stringify(args),
           by,
-          JSON.stringify({ touched, before }),
+          // What guards it is kept with what it touched: the guard of a code restore too.
+          JSON.stringify({ touched, before, guard }),
           JSON.stringify(lost),
           proposal.at,
         );
@@ -353,6 +365,8 @@ export class Proposals {
  * argument half: canvas.close, canvas.create, canvas.save).
  */
 export function isDocOp(op: string): boolean {
+  // A prepared op (B11 C6's, until X9 registers it) is a command: a code restore's.
+  if (Object.hasOwn(PREPARED_SURFACE, op)) return false;
   return !Object.hasOwn(SURFACE, op) || SURFACE[op as keyof typeof SURFACE].kind === 'doc';
 }
 
@@ -450,6 +464,9 @@ function proposalOf(row: Record<string, unknown>, canvas: CanvasId): Proposal | 
     const clock: unknown = JSON.parse(String(row.touched));
     if (!isRecord(clock)) return undefined;
     const { touched, before } = clock;
+    // A guard that doesn't read back as one is no proposal: it is never applied unguarded.
+    const guard = clock.guard === undefined ? undefined : RewindGuardSchema.safeParse(clock.guard);
+    if (guard?.success === false) return undefined;
     const lost: unknown = JSON.parse(String(row.lost));
     if (
       typeof id !== 'string' ||
@@ -477,6 +494,7 @@ function proposalOf(row: Record<string, unknown>, canvas: CanvasId): Proposal | 
       touched,
       ...(revisions(before) ? { before } : {}),
       lost: lost as unknown as Lost,
+      ...(guard === undefined ? {} : { guard: guard.data }),
       at,
     };
   } catch {

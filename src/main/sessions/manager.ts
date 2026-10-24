@@ -40,6 +40,8 @@ const NOT_RUNNING = 'This agent’s session is not running.';
 const NOT_LISTED = 'That is not one of this project folder’s conversations.';
 const STALE =
   'This agent’s session runs in a workspace that is no longer its own: start it again to work in its current one.';
+const STILL_CLOSING =
+  'This agent’s session hasn’t finished stopping, so its CLI may still be running: start it again once it has.';
 /** How long a list of conversations admits a resume of what it listed. */
 const LISTED_MS = 10 * 60 * 1000;
 /** The most callers' lists kept for an agent: a new one replaces the oldest. */
@@ -113,6 +115,15 @@ export interface SessionManagerDeps {
   now?: () => number;
   /** For tests: how long a session may take to close before the manager stops waiting (CLOSE_MS). */
   closeMs?: number;
+  /**
+   * The workspace mutation gate (core/workspaces/gate.ts): what a code rewind holds while it
+   * restores files every agent working in that tree sees. New work for another of those agents (a
+   * send, a launch) waits until it is done (`pass`); `holding` says so without waiting.
+   */
+  gate?: {
+    pass(canvas: CanvasId, agentId: string): Promise<void>;
+    holding(canvas: CanvasId, agentId: string): Promise<string | undefined>;
+  };
 }
 
 /**
@@ -124,13 +135,14 @@ export type Availability =
   | { ready: true }
   | {
       ready: false;
-      reason: Extract<WorkingDirectory, { state: 'held' }>['reason'] | 'stale';
+      /** The resolver's reason; `stale`: its session's binding isn't the active one; `mutating`: its tree is being restored. */
+      reason: Extract<WorkingDirectory, { state: 'held' }>['reason'] | 'stale' | 'mutating';
       sentence: string;
       need?: NeedId;
     };
 
 /** The working directory binding a session launched in, or a list of conversations was made for. */
-interface Binding {
+export interface Binding {
   cwd: string;
   workspace: WorkspaceId | null;
   /** The active binding's generation (never the desired plan's). */
@@ -184,6 +196,11 @@ export class SessionManager {
    */
   readonly #listed = new Map<CanvasId, Map<string, Map<string, Listing>>>();
   readonly #claims: ConversationClaims;
+  /**
+   * The sessions whose close has begun but not finished, by canvas and agent, however long after
+   * the manager stopped waiting for them: a writer may still run there (`closing`).
+   */
+  readonly #unfinished = new Map<string, number>();
   /** The last generation given a session, or a reservation for an agent's next session. */
   #generations = 0;
   /**
@@ -253,6 +270,8 @@ export class SessionManager {
     const agent = this.#agents.get(canvas)?.get(agentId);
     if (!agent) throw new Error(NOT_RUNNING);
     const session = await agent.session;
+    // A restore of the tree it works in (another agent's code rewind) finishes first.
+    await this.#deps.gate?.pass(canvas, agentId);
     await this.#directoryOf(canvas, agentId, agent);
     const send = (next: UserMessage) => session.send(next);
     if (this.#deps.sending) await this.#deps.sending(canvas, agentId, message, send);
@@ -270,9 +289,45 @@ export class SessionManager {
       return { ready: false, reason, sentence, ...(need === undefined ? {} : { need }) };
     }
     const binding = this.#agents.get(canvas)?.get(agentId)?.binding;
-    return binding === undefined || sameBinding(directory, binding)
+    if (binding !== undefined && !sameBinding(directory, binding)) {
+      return { ready: false, reason: 'stale', sentence: STALE };
+    }
+    const held = await this.#deps.gate?.holding(canvas, agentId);
+    return held === undefined
       ? { ready: true }
-      : { ready: false, reason: 'stale', sentence: STALE };
+      : { ready: false, reason: 'mutating', sentence: held };
+  }
+
+  /**
+   * The working directory binding the agent's session runs in (its folder, workspace and active
+   * generation as it launched), once its launch resolved it: none while none runs.
+   */
+  binding(canvas: CanvasId, agentId: string): Readonly<Binding> | undefined {
+    const binding = this.#agents.get(canvas)?.get(agentId)?.binding;
+    return binding === undefined ? undefined : { ...binding };
+  }
+
+  /** The agent's native conversation in `adapter`, as remembered: what it resumes. */
+  async conversationOf(
+    canvas: CanvasId,
+    agentId: string,
+    adapter: AdapterId,
+  ): Promise<string | undefined> {
+    return (await this.#conversation(canvas, adapter, agentId))?.id;
+  }
+
+  /** Whether the agent's session runs (or is starting) now. */
+  running(canvas: CanvasId, agentId: string): boolean {
+    return this.#agents.get(canvas)?.has(agentId) === true;
+  }
+
+  /**
+   * Whether a session of the agent's that was closed hasn't finished closing: its bounded close
+   * stopped waiting, so its CLI may still be running, and writing (B11 Design §7: an uncertain
+   * writer, which a code mutation of its tree refuses).
+   */
+  closing(canvas: CanvasId, agentId: string): boolean {
+    return (this.#unfinished.get(keyOf(canvas, agentId)) ?? 0) > 0;
   }
 
   async answer(
@@ -542,6 +597,30 @@ export class SessionManager {
     if (agent) await this.#end(canvas, agentId, agent, false);
   }
 
+  /**
+   * Ends the agent's session to start it again on the same conversation (a restart): that
+   * conversation is reserved first for the agent's next session, nothing awaited between the read
+   * and the reservation, so no other agent's launch takes it while this one closes; its next start
+   * claims it. Rejects, saying why, before anything closes if another agent's session holds it;
+   * and once closed, if the bounded close didn't finish (its CLI may still run that conversation:
+   * nothing is to start over it, and the reservation stays for its next start).
+   */
+  async restarting(canvas: CanvasId, agentId: string, adapter: AdapterId): Promise<void> {
+    await this.#settled(canvas);
+    const remembered = (await this.#conversation(canvas, adapter, agentId))?.id;
+    if (remembered !== undefined) {
+      requireConversationId(adapter, remembered);
+      const reserved = this.#claims.reserve(
+        adapter,
+        remembered,
+        this.#reservation(canvas, agentId),
+      );
+      if (!reserved.ok) throw new Error(this.#inUse(canvas, reserved.holder));
+    }
+    await this.close(canvas, agentId);
+    if (this.closing(canvas, agentId)) throw new Error(STILL_CLOSING);
+  }
+
   /** Ends this agent and forgets only the chosen adapter's ID; native history remains untouched. */
   async fresh(canvas: CanvasId, agentId: string, adapter: AdapterId): Promise<void> {
     // A session already closing still owns its conversation until it has.
@@ -608,6 +687,8 @@ export class SessionManager {
     if (directory.state === 'held') throw new Error(directory.sentence);
     const binding = bindingOf(directory);
     agent.binding = binding;
+    // A restore of the tree it is to work in (another agent's code rewind) finishes first.
+    await this.#deps.gate?.pass(canvas, agentId);
     const connector = this.#deps.connectors[connection];
     if (connector === undefined) throw new Error(`corrallm can't run ${connection} sessions.`);
     const adapter = this.#adapterOf(connection);
@@ -911,6 +992,8 @@ export class SessionManager {
       return; // It never started.
     }
     const owner: ClaimOwner = { canvas, agent: agentId, generation: agent.generation };
+    const key = keyOf(canvas, agentId);
+    this.#unfinished.set(key, (this.#unfinished.get(key) ?? 0) + 1);
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       await Promise.race([
@@ -923,6 +1006,9 @@ export class SessionManager {
           // and only what this generation holds: never a successor's.
           .finally(() => {
             this.#claims.release(owner);
+            const left = (this.#unfinished.get(key) ?? 1) - 1;
+            if (left > 0) this.#unfinished.set(key, left);
+            else this.#unfinished.delete(key);
           }),
         new Promise((resolve) => {
           timer = setTimeout(resolve, this.#deps.closeMs ?? CLOSE_MS);
@@ -955,6 +1041,10 @@ export class SessionManager {
     }
     return agents;
   }
+}
+
+function keyOf(canvas: CanvasId, agentId: string): string {
+  return `${canvas}\u0000${agentId}`;
 }
 
 /** The binding a ready working directory is. */

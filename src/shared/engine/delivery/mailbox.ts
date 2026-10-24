@@ -532,6 +532,18 @@ export class SessionStore {
     this.#drivers.get(agentId)?.driver.setEffort(effort);
   }
 
+  /**
+   * A change its live session acknowledged without going through this store (the core's live and
+   * saved settings, which wait for it): shown as the session would report it, telling no driver.
+   */
+  applied(agentId: string, change: { mode?: Mode; model?: string; effort?: string | null }): void {
+    if (change.mode !== undefined) this.#dispatch(agentId, { type: 'mode', mode: change.mode });
+    if (change.model !== undefined) this.#dispatch(agentId, { type: 'model', model: change.model });
+    if (change.effort !== undefined) {
+      this.#dispatch(agentId, { type: 'effort', effort: change.effort });
+    }
+  }
+
   /** Stops a task the agent's session runs in the background. */
   stopTask(agentId: string, taskId: string): void {
     this.#drivers.get(agentId)?.driver.stopTask(taskId);

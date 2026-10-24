@@ -182,6 +182,8 @@ export function replyOps({
           proposedBy: proposal.by,
           expect,
           ...(proposal.before === undefined ? {} : { unchanged: proposal.before }),
+          // A code restore's guard (R5), which its op checks again under the workspace gate.
+          ...(proposal.guard === undefined ? {} : { guard: proposal.guard }),
           ...(command
             ? {
                 after: (cleanup: () => Promise<void>) => {

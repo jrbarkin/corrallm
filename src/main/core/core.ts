@@ -24,6 +24,10 @@ import { ProjectFiles } from '../files';
 import { CanvasMemory } from '../memory';
 import { ProjectFolders } from '../project';
 import { ProjectDirectories } from './workspaces/resolver';
+import { treeOf, WorkspaceGate } from './workspaces/gate';
+import { WorkspacePlanner } from './workspaces/planner';
+import { WorkspaceStore } from './workspaces/store';
+import type { TreeKey } from './workspaces/gate';
 import { RunJournal } from '../run-journal';
 import { ADAPTERS, CATALOG, DEFAULT_ADAPTER, isConversationId } from '../sessions/adapters';
 import type { OptionsReader } from '../sessions/adapter';
@@ -54,8 +58,12 @@ import { Engines, needsInput } from './engines';
 import type { Watcher } from './engines';
 import type { HostServices, WindowId } from './host';
 import { implementations } from './ops';
+import { PREPARED_OPS, preparedOps, preparedRules } from './ops/prepared';
+import { PREPARED_SURFACE } from '../../shared/api/prepared';
+import type { AgentId } from '../../shared/api/ids';
+import { SessionControl } from './session-control';
 import { discardChecks } from './ops/files';
-import { quotedName } from './parties';
+import { nameOf, quotedName } from './parties';
 import { holder, resolvers } from './reach';
 import { changeChecks, heldBy, ruleChecks } from './rules';
 import { TokenStore } from './tokens';
@@ -122,6 +130,11 @@ export interface CoreConfig {
   watchFolder?: WatchFolder;
   /** Fake connectors and options for an unpackaged app's tests, admitted by its host. */
   fakeSessions?: boolean;
+  /**
+   * For the core's tests alone: B11 C6's prepared operations (shared/api/prepared.ts) registered
+   * beside the live ones, until X9 registers them. No host sets it.
+   */
+  preparedOps?: boolean;
   /**
    * For tests: what runs agents' sessions instead of each connection's own connector
    * (sessions/fake.ts), the environment they run in instead of the login shell's, what reads a
@@ -227,12 +240,19 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
       engines.needsChanged(canvas);
     },
   });
+  // Who works where, at every document commit's seam (B9a C6): inert until a canvas's project is
+  // a repository the core keeps (discovery and provisioning are composed with the resolver, X11b).
+  const planner = new WorkspacePlanner({
+    workspaces: new WorkspaceStore({ store }),
+    holding: (canvas, agent) => gate.holding(canvas, agent),
+  });
   const documents: Documents = new Documents({
     store,
     memory,
     catalog: CATALOG,
     defaultAdapter: DEFAULT_ADAPTER,
     reviews,
+    workspaces: planner,
     baselineChanged: (canvas) => {
       void states.refresh(canvas).catch((error: unknown) => {
         console.error('Could not publish the canvas’s saved baseline:', error);
@@ -343,6 +363,48 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
       stalled.ended(canvas, agent);
       engines.ended(canvas, agent);
     },
+    // A restore of a tree holds new work for the other agents working in it until it is done.
+    gate: {
+      pass: (canvas, agent): Promise<void> => gate.pass(canvas, agent),
+      holding: (canvas, agent): Promise<string | undefined> => gate.holding(canvas, agent),
+    },
+  });
+  /** The trees an agent works in: its running session's, then its working directory's now. */
+  const treesOf = async (canvas: CanvasId, agent: string): Promise<TreeKey[]> => {
+    const running = sessions.binding(canvas, agent);
+    const trees: TreeKey[] = running === undefined ? [] : [treeOf(running)];
+    const directory = await directories.workingDirectory(canvas, agent as AgentId);
+    if (directory.state === 'ready' && !trees.includes(treeOf(directory))) {
+      trees.push(treeOf(directory));
+    }
+    return trees;
+  };
+  // The workspace mutation gate (B11 R5, B9a's shared-tree seam): every agent of a tree protected.
+  const gate: WorkspaceGate = new WorkspaceGate({
+    agents: (canvas) =>
+      (engines.canvas(canvas)?.document.nodes ?? []).flatMap((node) =>
+        node.type === 'agent' ? [node.id] : [],
+      ),
+    session: (canvas, agent): TreeKey | undefined => {
+      const running = sessions.binding(canvas, agent);
+      return running === undefined ? undefined : treeOf(running);
+    },
+    trees: treesOf,
+    writing: (canvas, agent) => {
+      const open = engines.canvas(canvas);
+      const session = open?.engine.sessions.of(agent);
+      if (
+        session?.status === 'working' ||
+        session?.status === 'waiting' ||
+        open?.delivery.current(agent) !== undefined
+      ) {
+        return 'has a turn going on';
+      }
+      if ((session?.tasks?.length ?? 0) > 0) return 'runs background tasks';
+      if (sessions.closing(canvas, agent)) return 'hasn’t finished stopping its last session';
+      return undefined;
+    },
+    nameOf: (canvas, agent) => nameOf(engines.canvas(canvas)?.document.nodes ?? [], agent),
   });
   const windows = new Windows({
     restore: async () => {
@@ -490,6 +552,8 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     sessions,
     engines: { closeCanvas: (canvas) => engines.closeCanvas(canvas) },
     files: canvasFiles,
+    // The repository a new pick is isn't discovered yet (X11b composes discovery): none known.
+    workspaces: { projectChosen: (canvas) => planner.projectChosen(canvas, undefined) },
   });
   const engines: Engines = new Engines({
     // The windows that own their canvases' runs until B11's cutover hear their retry decisions.
@@ -612,6 +676,17 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
       }
     });
   }
+  // B11 C6's session services: live and saved settings, Continue in Terminal, restart, new
+  // conversation and rewind, with R5's proposal (registered by X9; tests: preparedOps).
+  const control = new SessionControl({
+    engines,
+    sessions,
+    gate,
+    proposals,
+    catalog: CATALOG,
+    defaultAdapter: DEFAULT_ADAPTER,
+  });
+  const prepared = config.preparedOps === true;
   // Every change rule a token's commit is checked against (B9 Design §4).
   const changeRules = changeChecks({
     catalog: CATALOG,
@@ -622,37 +697,41 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
   });
   const dispatcher = createDispatcher(
     {
-      surface: SURFACE,
-      ops: OPS,
-      implementations: implementations({
-        topics,
-        app: config.app,
-        catalog: CATALOG,
-        defaultAdapter: DEFAULT_ADAPTER,
-        directories,
-        files,
-        settings,
-        links,
-        reveal,
-        windows,
-        sessions,
-        stalled,
-        runProblems: (canvas) => journal.items(canvas),
-        environment,
-        usage,
-        engines,
-        states,
-        lifecycle,
-        documents,
-        proposals,
-        reviews,
-        needOf,
-        isLead,
-        host,
-        tokens,
-        ...(config.locale === undefined ? {} : { locale: config.locale }),
-      }),
+      surface: prepared ? { ...SURFACE, ...PREPARED_SURFACE } : SURFACE,
+      ops: prepared ? { ...OPS, ...PREPARED_OPS } : OPS,
+      implementations: {
+        ...(prepared ? preparedOps(control) : {}),
+        ...implementations({
+          topics,
+          app: config.app,
+          catalog: CATALOG,
+          defaultAdapter: DEFAULT_ADAPTER,
+          directories,
+          files,
+          settings,
+          links,
+          reveal,
+          windows,
+          sessions,
+          stalled,
+          runProblems: (canvas) => journal.items(canvas),
+          environment,
+          usage,
+          engines,
+          states,
+          lifecycle,
+          documents,
+          proposals,
+          reviews,
+          needOf,
+          isLead,
+          host,
+          tokens,
+          ...(config.locale === undefined ? {} : { locale: config.locale }),
+        }),
+      },
       rules: {
+        ...(prepared ? preparedRules(control) : {}),
         ...ruleChecks(engines, needOf),
         discard: discardChecks({
           lifecycle,

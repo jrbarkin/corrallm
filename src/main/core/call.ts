@@ -77,6 +77,8 @@ export interface CommitOptions {
   within?: () => Staged;
   /** A command's destructive cleanup runs after its proposal has settled. */
   after?: (cleanup: () => Promise<void>) => void;
+  /** On Allow of a command proposal: what it was raised over (R5's guard), checked again. */
+  guard?: unknown;
 }
 
 /**
@@ -97,6 +99,11 @@ export interface OpContext {
   noReturn(): void;
   /** Defers a command's final cleanup until its successful proposal settlement. */
   readonly after?: (cleanup: () => Promise<void>) => void;
+  /**
+   * On Allow of a command proposal: what it was raised over (R5's guard: rewind-guard.ts), which
+   * the op checks again before its effect, failing as a conflict (settled stale) on a difference.
+   */
+  readonly guard?: unknown;
   /**
    * Commits to canvas `canvas`'s document (the canvas the op names) what `build` makes of it,
    * purely, from the live one (B9 Design §3): checked against the revisions the call expects and,
@@ -409,6 +416,7 @@ export function createDispatcher(registry: Registry, options: DispatchOptions = 
         turn.noReturn();
       },
       ...(options.after === undefined ? {} : { after: options.after }),
+      ...(options.guard === undefined ? {} : { guard: options.guard }),
       commit: async (canvas, build) => {
         if (commit === undefined) {
           throw new OpFailure('unavailable', 'This core keeps no canvas’s document.');

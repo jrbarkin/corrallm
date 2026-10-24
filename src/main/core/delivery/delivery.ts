@@ -263,9 +263,17 @@ export class Delivery {
    * can be, and otherwise held, its sender told why. A message sent RETRY_AFTER or more after the
    * agent's session refused to start tries it again. Resolves with it, as kept; rejects, the message
    * unresolved and never sent, if its record can't reach the disk. Throws, saying why, a message
-   * from a party (anyone but you) that has MAX_WAITING waiting for that agent already.
+   * from a party (anyone but you) that has MAX_WAITING waiting for that agent already. `images`:
+   * pasted with it, live-only (a restart that loses them leaves it unresolved, never sent without
+   * them); `told`: the key it is kept with, by which what admitted it once finds it again.
    */
-  async send(from: PartyId, to: string, body: string, replyTo?: string): Promise<Message> {
+  async send(
+    from: PartyId,
+    to: string,
+    body: string,
+    replyTo?: string,
+    { images, told }: { images?: UserMessage['images']; told?: string } = {},
+  ): Promise<Message> {
     const { store } = this.#deps;
     if (
       from !== 'you' &&
@@ -277,16 +285,23 @@ export class Delivery {
         `${this.#name(to)} already has ${String(MAX_WAITING)} of your messages waiting; send another once one of them goes.`,
       );
     }
-    const message = store.add({
-      from,
-      to: agentParty(to),
-      kind: 'text',
-      // Yours is yours as you sent it; anyone else's a party's.
-      origin: from === 'you' ? 'manual' : 'party',
-      body,
-      state: 'pending',
-      ...(replyTo === undefined ? {} : { replyTo }),
-    });
+    const pasted = images?.length ?? 0;
+    const message = store.add(
+      {
+        from,
+        to: agentParty(to),
+        kind: 'text',
+        // Yours is yours as you sent it; anyone else's a party's.
+        origin: from === 'you' ? 'manual' : 'party',
+        // Its images are live-only: once a restart lost them, it is never sent without them.
+        ...(pasted > 0 ? { display: { images: pasted, requiresImages: true } } : {}),
+        body,
+        state: 'pending',
+        ...(replyTo === undefined ? {} : { replyTo }),
+      },
+      told,
+    );
+    this.images(message.id, images);
     this.#recording.add(message.id);
     try {
       await store.durable();

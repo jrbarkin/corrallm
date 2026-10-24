@@ -393,6 +393,76 @@ describe('conversation claims', () => {
     await sessions.closeEverything();
   });
 
+  it('keeps a restart’s conversation its agent’s: another agent’s launch meanwhile starts a new one', async () => {
+    const { fake, connector, closed } = counted();
+    const sessions = manager({ 'claude-code.sdk': connector });
+    const canvas = newCanvasId();
+    await remember(canvas, 'a', KEPT);
+    await sessions.start(canvas, 'a', options());
+    await sessions.restarting(canvas, 'a', 'claude-code');
+    expect(closed).toEqual([0]);
+    // Closed, but its conversation is reserved for its next session: never another agent's.
+    await remember(canvas, 'b', KEPT);
+    await sessions.start(canvas, 'b', options());
+    expect(fake.started.at(-1)).toMatchObject({ agentId: 'b', resume: null });
+    await sessions.start(canvas, 'a', options());
+    expect(fake.started.at(-1)).toMatchObject({ agentId: 'a', resume: KEPT });
+    expect(await rememberedOf(canvas, 'a')).toBe(KEPT);
+    await sessions.closeEverything();
+  });
+
+  it('refuses to start a restart over a session that hasn’t finished closing, saying so', async () => {
+    const fake = new FakeConnector();
+    const closing = Promise.withResolvers<undefined>();
+    let first = true;
+    const slow: Connector<SessionMode> = {
+      start: async (spec, host) => {
+        const session = await fake.start(spec, host);
+        if (first) {
+          first = false;
+          session.close = () => closing.promise;
+        }
+        return session;
+      },
+    };
+    const sessions = manager({ 'claude-code.sdk': slow });
+    const canvas = newCanvasId();
+    await remember(canvas, 'a', KEPT);
+    await sessions.start(canvas, 'a', options());
+    expect(sessions.closing(canvas, 'a')).toBe(false);
+    await expect(sessions.restarting(canvas, 'a', 'claude-code')).rejects.toThrow(
+      /hasn’t finished stopping/,
+    );
+    // Its CLI may still run: evidence of a writer, until it has closed.
+    expect(sessions.closing(canvas, 'a')).toBe(true);
+    closing.resolve(undefined);
+    await vi.waitFor(() => {
+      expect(sessions.closing(canvas, 'a')).toBe(false);
+    });
+    // The reservation stayed: its next start resumes the same conversation.
+    await remember(canvas, 'b', KEPT);
+    await sessions.start(canvas, 'b', options());
+    expect(fake.started.at(-1)?.resume).toBeNull();
+    await sessions.start(canvas, 'a', options());
+    expect(fake.started.at(-1)?.resume).toBe(KEPT);
+    await sessions.closeEverything();
+  });
+
+  it('refuses a restart, closing nothing, while another agent’s session holds its conversation', async () => {
+    const { connector, closed } = counted();
+    const claims = new ConversationClaims();
+    const sessions = manager({ 'claude-code.sdk': connector }, claims);
+    const canvas = newCanvasId();
+    await sessions.start(canvas, 'a', options());
+    await remember(canvas, 'b', KEPT);
+    await sessions.start(canvas, 'b', options());
+    // a remembers b's conversation (as a file copied from another canvas might say).
+    await remember(canvas, 'a', KEPT);
+    await expect(sessions.restarting(canvas, 'a', 'claude-code')).rejects.toThrow(/open in "b"/);
+    expect(closed).toEqual([]);
+    await sessions.closeEverything();
+  });
+
   it('sees no other profile’s claims: two cores may each resume one conversation (no OS-wide lock)', async () => {
     const fake = new FakeConnector();
     const [one, two] = [manager({ 'claude-code.sdk': fake }), manager({ 'claude-code.sdk': fake })];
@@ -538,5 +608,63 @@ describe('workspace generations', () => {
     directories.set(`${canvas}\u0000a`, PENDING);
     await expect(sessions.start(canvas, 'a', options())).rejects.toThrow(/approve/);
     expect(fake.started).toEqual([]);
+  });
+
+  it('says the binding a session runs in, for what checks it before a mutation', async () => {
+    const sessions = manager({ 'claude-code.sdk': new FakeConnector() });
+    const canvas = newCanvasId();
+    const key = `${canvas}\u0000a`;
+    directories.set(key, ready('/work/tree', 3, 'w1'));
+    expect(sessions.binding(canvas, 'a')).toBeUndefined();
+    expect(sessions.running(canvas, 'a')).toBe(false);
+    await sessions.start(canvas, 'a', options());
+    expect(sessions.running(canvas, 'a')).toBe(true);
+    // The binding it launched in, even once a rebind is pending.
+    directories.set(key, PENDING);
+    expect(sessions.binding(canvas, 'a')).toEqual({
+      cwd: '/work/tree',
+      workspace: 'w1',
+      generation: 3,
+    });
+    await sessions.close(canvas, 'a');
+    expect(sessions.binding(canvas, 'a')).toBeUndefined();
+  });
+
+  it('holds a send and a launch while another agent’s mutation of its tree goes on', async () => {
+    const fake = new FakeConnector();
+    const passing = Promise.withResolvers<undefined>();
+    let holding: string | undefined =
+      'Its folder is being restored: its new work waits until then.';
+    const sessions = new SessionManager({
+      catalog: CATALOG,
+      connectors: { 'claude-code.sdk': fake },
+      environment: () => Promise.resolve({}),
+      adapterOf: () => Promise.resolve('claude-code'),
+      directories: resolver(),
+      memory,
+      emit: () => undefined,
+      gate: {
+        pass: (_canvas, agent) => (agent === 'b' ? passing.promise : Promise.resolve()),
+        holding: (_canvas, agent) => Promise.resolve(agent === 'b' ? holding : undefined),
+      },
+    });
+    const canvas = newCanvasId();
+    await sessions.start(canvas, 'a', options());
+    const launching = sessions.start(canvas, 'b', options());
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(fake.started.map(({ agentId }) => agentId)).toEqual(['a']);
+    await expect(sessions.availability(canvas, 'b')).resolves.toEqual({
+      ready: false,
+      reason: 'mutating',
+      sentence: holding,
+    });
+    // Nothing fails meanwhile: it goes once the mutation is done.
+    holding = undefined;
+    passing.resolve(undefined);
+    await launching;
+    await sessions.send(canvas, 'b', { id: 'm', text: 'After' });
+    expect(fake.sessions[1]?.sent.map(({ text }) => text)).toEqual(['After']);
+    await expect(sessions.availability(canvas, 'b')).resolves.toEqual({ ready: true });
+    await sessions.closeEverything();
   });
 });

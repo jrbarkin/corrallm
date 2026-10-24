@@ -36,6 +36,7 @@ import { OpFailure } from '../call';
 import type { TrustedPath } from '../host';
 import type { Staged } from '../delivery/messages';
 import type { Database } from '../store/store';
+import type { WorkspacePlanner } from '../workspaces/planner';
 import { changeSetOf } from './change';
 import type { ChangeSet } from './change';
 import { summarize } from './reviews';
@@ -122,6 +123,13 @@ export interface DocumentsDeps {
   baselineChanged?: (canvas: CanvasId) => void;
   /** The reviews of files changed on disk. Without them, no file is checked (a document's tests). */
   reviews?: Pick<FileReviews, 'open' | 'kept' | 'raiseWithin' | 'settleWithin' | 'supersedeWithin'>;
+  /**
+   * The workspaces' side of every commit, whatever made it (an op's change, a file's Apply, a
+   * discard's revert: B9a Design §3, workspaces/planner.ts): its loss preflight before the commit's
+   * point of no return, which may refuse it, and who works where within the commit's write. Without
+   * it, none (a document's tests).
+   */
+  workspaces?: Pick<WorkspacePlanner, 'preflight' | 'within'>;
   now?: () => number;
 }
 
@@ -355,6 +363,8 @@ export class Documents {
           `${review.summary.file} isn’t a canvas this corrallm reads: ${reasonOf(error)}`,
         );
       }
+      // Apply bypasses no workspace: its loss preflight runs as an op's change's does.
+      await this.#deps.workspaces?.preflight({ canvas, before: live.document, after: next });
       turn.noReturn();
       const rev = await this.#commit(
         live,
@@ -538,6 +548,8 @@ export class Documents {
       ) {
         return undefined;
       }
+      // A discard bypasses no workspace: its loss preflight runs as an op's change's does.
+      await this.#deps.workspaces?.preflight({ canvas, before: live.document, after: next });
       // Back to its file as it is: a review open of it is moot.
       const { reviews } = this.#deps;
       return this.#commit(live, next, rows, revision, {
@@ -629,6 +641,14 @@ export class Documents {
       // Whoever makes it (revision R34): what a file would hold, and names what is there.
       const invalid = editFault(next, set.entities, this.#deps.catalog, this.#deps.defaultAdapter);
       if (invalid !== undefined) throw new OpFailure('invalid', invalid);
+      // The workspaces' loss preflight, before the checks (nothing awaited between them and the
+      // commit, so a cap a change passed is counted from then on).
+      await this.#deps.workspaces?.preflight({
+        canvas,
+        before: live.document,
+        after: next,
+        copies,
+      });
       change.check(set, live);
       const creating = { by: change.revision.by, canvas, count: set.created.size };
       this.#creating.add(creating);
@@ -637,6 +657,7 @@ export class Documents {
         const rev = await this.#commit(live, next, rows, change.revision, {
           creator: change.revision.by,
           creating,
+          ...(copies === undefined ? {} : { copies }),
           ...(change.within === undefined ? {} : { within: () => change.within?.() }),
         });
         return { result, committed: { rev, change: set } };
@@ -960,7 +981,8 @@ export class Documents {
    * revision; `live` is `next` once it is on disk. With `hashes`, its text's and its file's as read
    * from it; with `creator`, the party that created the agents it makes (none: they are read from
    * a file), whose count `creating` holds until their rows do; with `within`, what else its write
-   * holds (told once it is on disk, after those who hear commits). Throws CommitFailed, leaving
+   * holds (told once it is on disk, after those who hear commits); the workspaces' records of it,
+   * whatever made it (`copies`: the new agents copied from another). Throws CommitFailed, leaving
    * `live` as it was (and undoing what `within` staged), if the write failed.
    */
   async #commit(
@@ -972,11 +994,13 @@ export class Documents {
       hashes,
       creator,
       creating,
+      copies,
       within,
     }: {
       hashes?: { saved: string; file: string };
       creator?: PartyId;
       creating?: Creating;
+      copies?: ReadonlyMap<string, string>;
       within?: () => Staged | undefined;
     } = {},
   ): Promise<number> {
@@ -997,6 +1021,13 @@ export class Documents {
             )
             .run(hashes.saved, hashes.file, next.id);
         }
+        // Who works where, in the same write (B9a Design §3): on disk with the document, or neither.
+        this.#deps.workspaces?.within({
+          canvas: next.id,
+          before: live.document,
+          after: next,
+          copies,
+        });
         // Last, so that nothing after it fails the write once it has staged what it holds.
         staged = within?.();
       });
