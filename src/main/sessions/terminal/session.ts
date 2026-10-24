@@ -199,6 +199,8 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
   #reporting = false;
   /** Last meaningful report per source and native task: redraws repeat the same state. */
   readonly #reports = new Map<string, string>();
+  /** The progress its status line last said (TerminalCli.statusLine): timed posts repeat it. */
+  #progress: string | undefined;
   #turn: Turn | undefined;
   /** An ended turn being classified, ahead of anything the CLI does in its next turn. */
   #ending: { end: Extract<SessionEvent, { type: 'end' }>; events: SessionEvent[] } | undefined;
@@ -1086,12 +1088,18 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
 
   // ---- Usage.
 
-  /** What its CLI gave its status line: its usage limits go to main's readings. */
+  /**
+   * What its CLI gave its status line: its usage limits go to main's readings. Only a change in
+   * its progress is activity: a CLI may post it again on a timer while its model is gone.
+   */
   #statusLine(input: HookEvent): void {
     if (this.#exited || this.#closing) return;
-    this.#host.activity?.();
-    const windows = this.#cli.statusLine?.(input);
-    if (windows) this.#deps.usage?.(windows);
+    const reading = this.#cli.statusLine?.(input);
+    if (reading?.progress !== undefined && reading.progress !== this.#progress) {
+      this.#progress = reading.progress;
+      this.#host.activity?.();
+    }
+    if (reading?.usage) this.#deps.usage?.(reading.usage);
   }
 
   /**
