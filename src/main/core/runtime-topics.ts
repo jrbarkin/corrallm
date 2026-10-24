@@ -217,6 +217,8 @@ interface CanvasSource {
     summaries: Set<string> | 'all';
     entries: Map<string, EntryWork>;
     messages: Set<string>;
+    /** Whether its sessions' change came from their store (what their CLIs said), not the run. */
+    native: boolean;
     /** Anything changed, its document included (who reaches what): what a token reads again. */
     touched: boolean;
   };
@@ -232,6 +234,7 @@ function fresh(): CanvasSource['dirty'] {
     summaries: new Set(),
     entries: new Map(),
     messages: new Set(),
+    native: false,
     touched: false,
   };
 }
@@ -400,11 +403,11 @@ export class RuntimeSource {
       }
       case 'sessions': {
         const body = this.#takeSessions(source, open);
-        return body && { body, by: 'cli' };
+        return body && { body, by: source.dirty.native ? 'cli' : 'corrallm' };
       }
       case 'session': {
         const body = agent === undefined ? undefined : this.#takeSession(source, open, agent);
-        return body && { body, by: 'cli' };
+        return body && { body, by: source.dirty.native ? 'cli' : 'corrallm' };
       }
       case 'messages': {
         const body = this.#takeMessages(source, open);
@@ -478,8 +481,11 @@ export class RuntimeSource {
     const stops = [
       engine.run.subscribe(() => {
         it.dirty.run = true;
-        // An agent's summary says whether the run holds it.
-        it.dirty.summaries = 'all';
+        // An agent's summary says whether the run holds it: those whose hold changed say it again.
+        const { agents } = engine.run.snapshot();
+        if (it.dirty.summaries !== 'all')
+          for (const [agent, summary] of it.sessions ?? [])
+            if ((agents[agent]?.paused === true) !== summary.paused) it.dirty.summaries.add(agent);
         this.#changed(it);
       }),
       engine.sessions.observe((agent, action) => {
@@ -547,6 +553,7 @@ export class RuntimeSource {
       else source.dirty.entries.set(agent, { appends: [work] });
       if (work === 'diff' && source.dirty.summaries !== 'all') source.dirty.summaries.add(agent);
     };
+    source.dirty.native = true;
     if (action) {
       // A text or thinking append changes that entry alone, and no summary but its reply's.
       const { agent, action: done } = action;
