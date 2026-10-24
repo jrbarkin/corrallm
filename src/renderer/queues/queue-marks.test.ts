@@ -5,7 +5,7 @@ import type { QueueItem } from '../../shared/model/queue';
 import { runCatalog } from '../graph/agents';
 import type { AgentRun } from '../../shared/engine/run/runner';
 import { lanesOf } from './lanes';
-import { queueMarks } from './marks';
+import { queueMarks } from '../../shared/model/queue-marks';
 
 /** What names a usage backend: the catalog main declares, as the run reads it. */
 const engine = runCatalog();

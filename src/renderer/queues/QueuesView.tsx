@@ -28,7 +28,7 @@ import type { Run } from '../../shared/engine/run/runner';
 import { queueControlText } from '../../shared/engine/run/controls';
 import { lanesOf } from './lanes';
 import type { Lane, Lanes, Link } from './lanes';
-import { queueMarks, taskKey as at } from './marks';
+import { queueMarks, taskKey as at } from '../../shared/model/queue-marks';
 import { piecePaths, piecesIn, ribbonsOf } from './ribbons';
 import type { Span } from './ribbons';
 import './QueuesView.css';
