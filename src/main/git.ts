@@ -13,6 +13,10 @@ export const SAFE_GIT_OPTIONS = [
  * Read filterKeys with `git config --null --name-only --get-regexp '^filter\..*\.(clean|process)$'`
  * first: every configured driver must have its clean/process commands disabled. Throws for a driver
  * whose name holds `=`: `-c` splits at the first one, so Git could not be told to disable it.
+ * For log and show, `--no-show-signature` keeps log.showSignature from running gpg.program. A submodule is shown by
+ * its commit only and never asked whether it is dirty: either would start a git in it, with its own
+ * configuration (its external diff, its filter drivers), which no flag here reaches. Only the
+ * command-line `--ignore-submodules` outranks a committed .gitmodules' `ignore`.
  */
 export function safeGitDiffArgs(
   command: 'diff' | 'log' | 'show',
@@ -40,5 +44,9 @@ export function safeGitDiffArgs(
     command,
     '--no-ext-diff',
     '--no-textconv',
+    // Only log and show verify signatures; diff (--no-index too) refuses the option.
+    ...(command === 'diff' ? [] : ['--no-show-signature']),
+    '--submodule=short',
+    '--ignore-submodules=dirty',
   ];
 }

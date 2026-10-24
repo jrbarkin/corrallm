@@ -1,4 +1,11 @@
-import { readFileSync, readdirSync, symlinkSync, writeFileSync, mkdirSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import path from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -153,8 +160,9 @@ describe.skipIf(process.platform === 'win32')('GitRunner', () => {
       Object.keys(seen)
         .filter((key) => /^git_/i.test(key))
         .sort(),
-    ).toEqual(['GIT_NO_LAZY_FETCH', 'GIT_TERMINAL_PROMPT']);
+    ).toEqual(['GIT_ALLOW_PROTOCOL', 'GIT_NO_LAZY_FETCH', 'GIT_TERMINAL_PROMPT']);
     expect(seen).toMatchObject({
+      GIT_ALLOW_PROTOCOL: 'none',
       GIT_NO_LAZY_FETCH: '1',
       GIT_TERMINAL_PROMPT: '0',
       LC_ALL: 'C',
@@ -165,6 +173,7 @@ describe.skipIf(process.platform === 'win32')('GitRunner', () => {
       PATH: 'p',
       GIT_TERMINAL_PROMPT: '0',
       GIT_NO_LAZY_FETCH: '1',
+      GIT_ALLOW_PROTOCOL: 'none',
       LC_ALL: 'C',
     });
   });
@@ -222,6 +231,63 @@ describe.skipIf(process.platform === 'win32')('GitRunner', () => {
     git(here, env, 'config', 'core.hooksPath', configured);
     await git2.run({ cwd: here, args: ['update-ref', 'refs/heads/two', oid, ''] });
     expect(ran(sentinel)).toEqual([]);
+  });
+
+  it('uses no transport, whatever protocols the repository allows', async () => {
+    const sentinel = path.join(root, 'ran');
+    const here = path.join(root, 'here');
+    makeRepository(here, env);
+    // protocol.<name>.allow outranks protocol.allow, whichever configuration sets either.
+    git(here, env, 'config', 'protocol.ext.allow', 'always');
+    git(here, env, 'config', 'protocol.file.allow', 'always');
+    const other = path.join(root, 'other');
+    makeRepository(other, env, { 'other.md': 'other\n' });
+    const git2 = runner();
+    expect(
+      await fault(git2.run({ cwd: here, args: ['fetch', `ext::sh -c touch% ${sentinel}`] })),
+    ).toBe('failed');
+    expect(
+      await fault(git2.run({ cwd: here, args: ['fetch', `file://${other}`, 'main:theirs'] })),
+    ).toBe('failed');
+    expect(existsSync(sentinel)).toBe(false);
+    expect(() => git(here, env, 'rev-parse', '--verify', 'refs/heads/theirs')).toThrow();
+  });
+
+  it('runs no promisor remote’s command populating a partial clone, on a Git without GIT_NO_LAZY_FETCH', async () => {
+    const sentinel = path.join(root, 'ran');
+    const source = path.join(root, 'source');
+    makeRepository(source, env, { 'a.txt': 'hello\n' });
+    git(source, env, 'config', 'uploadpack.allowFilter', 'true');
+    const clone = path.join(root, 'clone');
+    git(
+      root,
+      env,
+      '-c',
+      'protocol.file.allow=always',
+      'clone',
+      '-q',
+      '--no-checkout',
+      '--filter=blob:none',
+      `file://${source}`,
+      clone,
+    );
+    git(clone, env, 'config', 'remote.origin.url', `ext::sh -c touch% ${sentinel}`);
+    git(clone, env, 'config', 'protocol.ext.allow', 'always');
+    const oid = git(clone, env, 'rev-parse', 'HEAD').trim();
+    // Git before 2.45.1 (and its 2.39.4+ backports) doesn't know GIT_NO_LAZY_FETCH.
+    const dir = path.join(root, 'bin');
+    mkdirSync(dir);
+    const older = path.join(dir, 'older-git');
+    writeFileSync(older, '#!/bin/sh\nunset GIT_NO_LAZY_FETCH\nexec git "$@"\n', { mode: 0o755 });
+    expect(
+      await fault(
+        runner({ executable: older }).run({
+          cwd: clone,
+          args: ['read-tree', '--reset', '-u', '--no-recurse-submodules', oid],
+        }),
+      ),
+    ).toBe('failed');
+    expect(existsSync(sentinel)).toBe(false);
   });
 
   it('refuses to run while its hooks folder holds anything, or isn’t a folder of its own', async () => {
@@ -408,6 +474,72 @@ describe.skipIf(process.platform === 'win32')('GitRunner', () => {
       const log = await git2.patch({ cwd: here, command: 'log', args: ['-p', '-1'], drivers });
       expect(diff.stdout).toMatch(/^-two\n\+three$/m);
       expect(log.stdout).toMatch(/^\+two$/m);
+      expect(ran(sentinel)).toEqual([]);
+    });
+
+    it('runs no signature program, whatever log.showSignature says', async () => {
+      const sentinel = path.join(root, 'ran');
+      const program = sentinelProgram(root, sentinel);
+      const here = path.join(root, 'here');
+      makeRepository(here, env);
+      // A commit carrying a signature header, as a signed one does (it needn't be valid).
+      const tree = git(here, env, 'rev-parse', 'HEAD^{tree}').trim();
+      const parent = git(here, env, 'rev-parse', 'HEAD').trim();
+      const body = [
+        `tree ${tree}`,
+        `parent ${parent}`,
+        'author Test <test@example.invalid> 1 +0000',
+        'committer Test <test@example.invalid> 1 +0000',
+        'gpgsig -----BEGIN PGP SIGNATURE-----',
+        ' ',
+        ' x',
+        ' -----END PGP SIGNATURE-----',
+        '',
+        'signed',
+        '',
+      ].join('\n');
+      const file = path.join(root, 'commit');
+      writeFileSync(file, body);
+      const signed = git(here, env, 'hash-object', '-t', 'commit', '-w', file).trim();
+      git(here, env, 'update-ref', 'refs/heads/main', signed);
+      git(here, env, 'config', 'log.showSignature', 'true');
+      git(here, env, 'config', 'gpg.program', program);
+      // The control: Git runs the repository's signature program when nothing stops it.
+      git(here, env, 'log', '-1');
+      expect(ran(sentinel).length).toBeGreaterThan(0);
+      writeFileSync(sentinel, '');
+      const git2 = runner();
+      await git2.patch({ cwd: here, command: 'log', args: ['-p', '-1'] });
+      await git2.patch({ cwd: here, command: 'show', args: [] });
+      expect(ran(sentinel)).toEqual([]);
+    });
+
+    it('runs nothing a submodule’s own configuration names', async () => {
+      const sentinel = path.join(root, 'ran');
+      const program = sentinelProgram(root, sentinel);
+      const sub = path.join(root, 'sub');
+      makeRepository(sub, env, { '.gitattributes': '*.txt filter=inner\n', 's.txt': 'aaa\n' });
+      const here = path.join(root, 'here');
+      makeRepository(here, env);
+      git(here, env, '-c', 'protocol.file.allow=always', 'submodule', 'add', '-q', sub, 'sub');
+      // A committed .gitmodules can ask for a submodule's changes to be looked at in full.
+      git(here, env, 'config', '-f', '.gitmodules', 'submodule.sub.ignore', 'none');
+      git(here, env, 'add', '.gitmodules');
+      commit(here, env, 'sub');
+      const inner = path.join(here, 'sub');
+      git(inner, env, 'config', 'filter.inner.clean', program);
+      git(inner, env, 'config', 'diff.external', program);
+      git(here, env, 'config', 'diff.submodule', 'diff');
+      // Its file changed, at its size: only its filter can say whether it differs.
+      writeFileSync(path.join(inner, 's.txt'), 'bbb\n');
+      // The control: Git asks the submodule, which runs its programs, when nothing stops it.
+      git(here, env, '-c', 'core.hooksPath=/dev/null', 'diff');
+      expect(ran(sentinel).length).toBeGreaterThan(0);
+      writeFileSync(sentinel, '');
+      const git2 = runner();
+      const { drivers } = await git2.inspect(here);
+      await git2.patch({ cwd: here, command: 'diff', args: [], drivers });
+      await git2.patch({ cwd: here, command: 'log', args: ['-p', '-1'], drivers });
       expect(ran(sentinel)).toEqual([]);
     });
   });

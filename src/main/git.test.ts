@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { SAFE_GIT_OPTIONS, safeGitDiffArgs } from './git';
 
 it.each(['diff', 'log', 'show'] as const)(
-  'keeps %s patches from running external diffs, textconv or configured filter drivers',
+  'keeps %s patches from running external diffs, textconv, configured filter drivers, signature programs or a submodule’s programs',
   (command) => {
     const args = safeGitDiffArgs(command, [
       'filter.lfs.clean',
@@ -33,6 +33,9 @@ it.each(['diff', 'log', 'show'] as const)(
       command,
       '--no-ext-diff',
       '--no-textconv',
+      ...(command === 'diff' ? [] : ['--no-show-signature']),
+      '--submodule=short',
+      '--ignore-submodules=dirty',
     ]);
     expect(SAFE_GIT_OPTIONS).toContain('core.fsmonitor=false');
     expect(SAFE_GIT_OPTIONS).toContain('safe.bareRepository=explicit');
@@ -40,7 +43,13 @@ it.each(['diff', 'log', 'show'] as const)(
 );
 
 it('disables diff programs even when there are no filter drivers', () => {
-  expect(safeGitDiffArgs('diff', [])).toEqual(['diff', '--no-ext-diff', '--no-textconv']);
+  expect(safeGitDiffArgs('diff', [])).toEqual([
+    'diff',
+    '--no-ext-diff',
+    '--no-textconv',
+    '--submodule=short',
+    '--ignore-submodules=dirty',
+  ]);
 });
 
 it('blanks an empty driver name returned by Git’s filter-key query', () => {
@@ -54,6 +63,8 @@ it('blanks an empty driver name returned by Git’s filter-key query', () => {
     'diff',
     '--no-ext-diff',
     '--no-textconv',
+    '--submodule=short',
+    '--ignore-submodules=dirty',
   ]);
 });
 

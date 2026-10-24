@@ -17,10 +17,12 @@ import { execFile } from '../../sessions/process';
  *   credential helper), and no automatic gc or maintenance (which could prune, or detach from the
  *   core's process group). Each filter driver configured where a call runs (`inspect`) has its
  *   clean, smudge and process commands blanked and its required flag cleared: no filter runs, Git
- *   LFS's included. Patches (`patch`) also take safeGitDiffArgs: no external diff or textconv.
+ *   LFS's included. Patches (`patch`) also take safeGitDiffArgs: no external diff, textconv,
+ *   signature program, or submodule's own programs.
  * - The environment is the agents' (their PATH and home), with every GIT_ variable removed, so
  *   none redirects a call (GIT_DIR, GIT_WORK_TREE, GIT_INDEX_FILE...) or configures it
- *   (GIT_CONFIG_PARAMETERS, GIT_CONFIG_COUNT...), then no prompt, no lazy fetch and C messages.
+ *   (GIT_CONFIG_PARAMETERS, GIT_CONFIG_COUNT...), then no prompt, no lazy fetch, no transport
+ *   whatever the repository allows (GIT_ALLOW_PROTOCOL), and C messages.
  * - Each call is bounded in time and output, and runs as a child the core owns (core/children.ts,
  *   through sessions/process.ts): recorded before it runs, its whole process group ended if it
  *   takes too long or says too much, and refused once the core is closing.
@@ -110,7 +112,13 @@ export interface ConfigInspection {
   refusals: string[];
 }
 
-/** The agents' environment without any of Git's own variables, then the runner's. */
+/**
+ * The agents' environment without any of Git's own variables, then the runner's. GIT_ALLOW_PROTOCOL
+ * is the only transport policy Git puts above every configuration: a repository's
+ * `protocol.<name>.allow` outranks `protocol.allow=never`, and `ext::` would then run a command (a
+ * partial clone's lazy fetch reaches it on a Git that doesn't know GIT_NO_LAZY_FETCH). Its list
+ * names no transport Git has.
+ */
 export function gitEnvironment(
   env: Readonly<Record<string, string | undefined>>,
 ): Record<string, string> {
@@ -121,6 +129,7 @@ export function gitEnvironment(
     ...Object.fromEntries(kept),
     GIT_TERMINAL_PROMPT: '0',
     GIT_NO_LAZY_FETCH: '1',
+    GIT_ALLOW_PROTOCOL: 'none',
     LC_ALL: 'C',
   };
 }
