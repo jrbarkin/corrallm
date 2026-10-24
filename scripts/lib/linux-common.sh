@@ -32,7 +32,7 @@ linux_build_image() (
   trap 'rm -rf -- "$context"' EXIT
   cp scripts/lib/linux-build.Dockerfile "$context/Dockerfile"
   cp scripts/lib/linux-node-path.sh "$context/linux-node-path.sh"
-  COPYFILE_DISABLE=1 tar -C "$context" --create --file - Dockerfile linux-node-path.sh |
+  COPYFILE_DISABLE=1 tar -C "$context" --format ustar --create --file - Dockerfile linux-node-path.sh |
     step 'Build Linux image' docker build --platform "$linux_platform" --tag "$linux_image" \
       --build-arg "NODE_VERSION=$node_version" --build-arg "PNPM_VERSION=$pnpm_version" -
 )
