@@ -42,8 +42,10 @@ export function conversationOps(
       ...reviews.items(id),
       ...stalled.items(id),
       ...(services.runProblems?.(id) ?? []),
-      // A worktree's setup card names no agent: a token's view below never holds it.
+      // A worktree's setup card names no agent: a token's view below never holds it; nor does
+      // a workspace change's (B9a C7).
       ...(ctx.caller.kind === 'human' ? (services.setups?.items(id) ?? []) : []),
+      ...(ctx.caller.kind === 'human' ? (services.workspaceItems?.(id) ?? []) : []),
     ];
     if (ctx.caller.kind === 'human') return items;
     const { caller } = ctx;

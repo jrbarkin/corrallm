@@ -17,6 +17,7 @@ import { engineCatalog } from '../../shared/engine/catalog';
 import { needs } from '../../shared/engine/needs';
 import type { NeedsItem } from '../../shared/model/needs';
 import { agentName } from '../../shared/model/queries';
+import { nodeKey } from '../../shared/model/rows';
 import { MAX_CANVAS_BYTES } from '../../shared/ipc';
 import type { SessionMode } from '../../shared/session';
 import { CanvasFiles } from '../canvas';
@@ -28,6 +29,14 @@ import { ProjectFolders } from '../project';
 import { ProjectDirectories } from './workspaces/resolver';
 import type { ProjectRootResolver } from './workspaces/resolver';
 import type { SetupService } from './workspaces/setup';
+import { treeOf, WorkspaceGate } from './workspaces/gate';
+import { WorkspacePlanner } from './workspaces/planner';
+import { WorkspaceStore } from './workspaces/store';
+import type { TreeKey } from './workspaces/gate';
+import { ownerNode } from './workspaces/planner';
+import type { WorkspaceCleanup } from './workspaces/cleanup';
+import { WorkspaceChanges } from './workspaces/rebind';
+import type { WorktreeRecord } from './workspaces/store';
 import { RunJournal } from '../run-journal';
 import { ADAPTERS, CATALOG, DEFAULT_ADAPTER, isConversationId } from '../sessions/adapters';
 import type { OptionsReader } from '../sessions/adapter';
@@ -58,8 +67,13 @@ import { Engines, needsInput } from './engines';
 import type { Watcher } from './engines';
 import type { HostServices, WindowId } from './host';
 import { implementations } from './ops';
+import { PREPARED_OPS, preparedOps, preparedRules } from './ops/prepared';
+import { PREPARED_SURFACE } from '../../shared/api/prepared';
+import type { AgentId } from '../../shared/api/ids';
+import { SessionControl } from './session-control';
+import { runReplies } from './run-replies';
 import { discardChecks } from './ops/files';
-import { quotedName } from './parties';
+import { nameOf, quotedName } from './parties';
 import { holder, resolvers } from './reach';
 import { changeChecks, heldBy, ruleChecks } from './rules';
 import { lockProfile } from './lock';
@@ -132,6 +146,11 @@ export interface CoreConfig {
   /** Fake connectors and options for an unpackaged app's tests, admitted by its host. */
   fakeSessions?: boolean;
   /**
+   * For the core's tests alone: B11 C6's prepared operations (shared/api/prepared.ts) registered
+   * beside the live ones, until X9 registers them. No host sets it.
+   */
+  preparedOps?: boolean;
+  /**
    * For tests: what runs agents' sessions instead of each connection's own connector
    * (sessions/fake.ts), the environment they run in instead of the login shell's, what reads a
    * held usage backend instead of its adapter's reader (none, for a backend left out), and what
@@ -156,6 +175,22 @@ export interface CoreConfig {
     profile: string;
     changed: (canvas: CanvasId) => void;
   }) => SetupService;
+  /**
+   * For tests, until B9a X11b composes the workspaces: their cleanup (B9a C7), made over the
+   * core's workspace records and process owner, told who may still write in a tree and whether its
+   * setup runs, what to forget of its setup, and the names its trees' owners have. None: a tree no
+   * agent works in any more is only ever retained, and a deletion asks nothing of it.
+   */
+  cleanup?: (core: {
+    workspaces: WorkspaceStore;
+    processes: Children;
+    profile: string;
+    writers: (tree: WorktreeRecord) => readonly string[];
+    setupRunning: (workspace: string) => boolean;
+    forgetSetup: (workspace: string) => Promise<void>;
+    nameOf: (canvas: CanvasId, owner: string) => string | undefined;
+    changed: (canvas: CanvasId) => void;
+  }) => WorkspaceCleanup;
 }
 
 export interface Core extends Dispatcher {
@@ -257,12 +292,58 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
       engines.needsChanged(canvas);
     },
   });
+  const workspaceStore = new WorkspaceStore({ store });
+  /**
+   * A tree's owner's name: as its canvas names its agent or group now, else as it last did (a
+   * deleted agent's, from the canvas's kept changes): none once neither does.
+   */
+  const ownerName = (canvas: CanvasId, owner: string): string | undefined => {
+    const nodes = documents.loaded(canvas)?.document.nodes;
+    const id = ownerNode(owner);
+    if (nodes?.some((node) => node.id === id) === true) return nameOf(nodes, id);
+    try {
+      const row = store
+        .prepare(
+          `SELECT before_data FROM change WHERE canvas_id = ? AND entity = ?
+             AND before_data IS NOT NULL ORDER BY rev DESC LIMIT 1`,
+        )
+        .get(canvas, nodeKey(id));
+      const before: unknown = row === undefined ? undefined : JSON.parse(String(row.before_data));
+      const label = (before as { label?: unknown } | undefined)?.label;
+      return typeof label === 'string' && label !== '' ? label : undefined;
+    } catch {
+      return undefined;
+    }
+  };
+  // A tree no agent works in any more (B9a C7): removed with its last agent once safe, else kept
+  // unless you discard it, its removal finished across restarts.
+  const cleanup = config.cleanup?.({
+    workspaces: workspaceStore,
+    processes: children,
+    profile,
+    writers: (tree) => sessions.writingIn(tree.canvas, tree.id),
+    setupRunning: (workspace) => setups?.running(workspace) === true,
+    forgetSetup: (workspace) => setups?.forget(workspace) ?? Promise.resolve(),
+    nameOf: (canvas, owner) => ownerName(canvas, owner),
+    changed: (canvas) => {
+      topics.changed(`needs:${canvas}`, 'corrallm');
+      engines.needsChanged(canvas);
+    },
+  });
+  // Who works where, at every document commit's seam (B9a C6): inert until a canvas's project is
+  // a repository the core keeps (discovery and provisioning are composed with the resolver, X11b).
+  const planner = new WorkspacePlanner({
+    workspaces: workspaceStore,
+    holding: (canvas, agent) => gate.holding(canvas, agent),
+    ...(cleanup === undefined ? {} : { cleanup }),
+  });
   const documents: Documents = new Documents({
     store,
     memory,
     catalog: CATALOG,
     defaultAdapter: DEFAULT_ADAPTER,
     reviews,
+    workspaces: planner,
     baselineChanged: (canvas) => {
       void states.refresh(canvas).catch((error: unknown) => {
         console.error('Could not publish the canvas’s saved baseline:', error);
@@ -393,6 +474,69 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     ended: (canvas, agent) => {
       stalled.ended(canvas, agent);
       engines.ended(canvas, agent);
+    },
+    // A restore of a tree holds new work for the other agents working in it until it is done.
+    gate: {
+      pass: (canvas, agent, own): Promise<void> => gate.pass(canvas, agent, own),
+      holding: (canvas, agent): Promise<string | undefined> => gate.holding(canvas, agent),
+    },
+  });
+  /** The trees an agent works in: its running session's, then its working directory's now. */
+  const treesOf = async (canvas: CanvasId, agent: string): Promise<TreeKey[]> => {
+    const running = sessions.binding(canvas, agent);
+    const trees: TreeKey[] = running === undefined ? [] : [treeOf(running)];
+    const directory = await directories.workingDirectory(canvas, agent as AgentId);
+    if (directory.state === 'ready' && !trees.includes(treeOf(directory))) {
+      trees.push(treeOf(directory));
+    }
+    return trees;
+  };
+  // The workspace mutation gate (B11 R5, B9a's shared-tree seam): every agent of a tree protected.
+  const gate: WorkspaceGate = new WorkspaceGate({
+    canvases: () => engines.opened(),
+    agents: (canvas) =>
+      (engines.canvas(canvas)?.document.nodes ?? []).flatMap((node) =>
+        node.type === 'agent' ? [node.id] : [],
+      ),
+    session: (canvas, agent): TreeKey | undefined => {
+      const running = sessions.binding(canvas, agent);
+      return running === undefined ? undefined : treeOf(running);
+    },
+    trees: treesOf,
+    writing: (canvas, agent) => {
+      const open = engines.canvas(canvas);
+      const session = open?.engine.sessions.of(agent);
+      if (
+        session?.status === 'working' ||
+        session?.status === 'waiting' ||
+        open?.delivery.current(agent) !== undefined
+      ) {
+        return 'has a turn going on';
+      }
+      if ((session?.tasks?.length ?? 0) > 0) return 'runs background tasks';
+      if (sessions.closing(canvas, agent)) return 'hasn’t finished stopping its last session';
+      return undefined;
+    },
+    nameOf: (canvas, agent) => nameOf(engines.canvas(canvas)?.document.nodes ?? [], agent),
+  });
+  // A workspace change waiting for you (B9a C7): its card, and its Switch.
+  const changes = new WorkspaceChanges({
+    workspaces: workspaceStore,
+    gate,
+    close: async (canvas, agent) => {
+      const open = engines.canvas(canvas);
+      if (open === undefined) await sessions.close(canvas, agent);
+      else await open.engine.sessions.close(agent);
+    },
+    nameOf: (canvas, id) => {
+      const nodes = documents.loaded(canvas)?.document.nodes ?? [];
+      return nameOf(nodes, id);
+    },
+    messages: (canvas) => engines.messagesOf(canvas),
+    messagesNow: (canvas) => engines.canvas(canvas)?.messages,
+    changed: (canvas) => {
+      topics.changed(`needs:${canvas}`, 'corrallm');
+      engines.needsChanged(canvas);
     },
   });
   const windows = new Windows({
@@ -531,6 +675,7 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
       ...stalled.items(canvas),
       ...journal.items(canvas),
       ...(setups?.items(canvas) ?? []),
+      ...changes.items(canvas),
     ];
   };
   const needOf = (canvas: CanvasId, id: string, reach?: readonly string[]) =>
@@ -555,6 +700,8 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     sessions,
     engines: { closeCanvas: (canvas) => engines.closeCanvas(canvas) },
     files: canvasFiles,
+    // The repository a new pick is isn't discovered yet (X11b composes discovery): none known.
+    workspaces: { projectChosen: (canvas) => planner.projectChosen(canvas, undefined) },
   });
   const engines: Engines = new Engines({
     // The windows that own their canvases' runs until B11's cutover hear their retry decisions.
@@ -582,6 +729,7 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
       ...stalled.items(canvas),
       ...journal.items(canvas),
       ...(setups?.items(canvas) ?? []),
+      ...changes.items(canvas),
     ],
   });
   const warnings = new Set<Promise<void>>();
@@ -698,6 +846,17 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
       }
     });
   }
+  // B11 C6's session services: live and saved settings, Continue in Terminal, restart, new
+  // conversation and rewind, with R5's proposal (registered by X9; tests: preparedOps).
+  const control = new SessionControl({
+    engines,
+    sessions,
+    gate,
+    proposals,
+    catalog: CATALOG,
+    defaultAdapter: DEFAULT_ADAPTER,
+  });
+  const prepared = config.preparedOps === true;
   // Every change rule a token's commit is checked against (B9 Design §4).
   const changeRules = changeChecks({
     catalog: CATALOG,
@@ -708,38 +867,62 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
   });
   const dispatcher = createDispatcher(
     {
-      surface: SURFACE,
-      ops: OPS,
-      implementations: implementations({
-        topics,
-        app: config.app,
-        catalog: CATALOG,
-        defaultAdapter: DEFAULT_ADAPTER,
-        directories,
-        files,
-        settings,
-        links,
-        reveal,
-        windows,
-        sessions,
-        stalled,
-        runProblems: (canvas) => journal.items(canvas),
-        environment,
-        usage,
-        engines,
-        states,
-        lifecycle,
-        documents,
-        proposals,
-        reviews,
-        needOf,
-        isLead,
-        host,
-        tokens,
-        ...(config.locale === undefined ? {} : { locale: config.locale }),
-        ...(setups === undefined ? {} : { setups }),
-      }),
+      surface: prepared ? { ...SURFACE, ...PREPARED_SURFACE } : SURFACE,
+      ops: prepared ? { ...OPS, ...PREPARED_OPS } : OPS,
+      implementations: {
+        ...(prepared
+          ? preparedOps(control, {
+              ...(cleanup === undefined ? {} : { cleanup }),
+              proposals,
+              nameOf: ownerName,
+              workspaces: workspaceStore,
+            })
+          : {}),
+        ...implementations({
+          topics,
+          app: config.app,
+          catalog: CATALOG,
+          defaultAdapter: DEFAULT_ADAPTER,
+          directories,
+          files,
+          settings,
+          links,
+          reveal,
+          windows,
+          sessions,
+          stalled,
+          runProblems: (canvas) => journal.items(canvas),
+          environment,
+          usage,
+          engines,
+          states,
+          lifecycle,
+          documents,
+          proposals,
+          reviews,
+          needOf,
+          isLead,
+          host,
+          tokens,
+          ...(config.locale === undefined ? {} : { locale: config.locale }),
+          ...(setups === undefined ? {} : { setups }),
+          workspaceReplies: [changes.handler()],
+          workspaceItems: (canvas) => changes.items(canvas),
+          // B11 C7: the reply router answers what the runtime asks once its typed reply is
+          // registered (X9; the core's tests register it early).
+          ...(prepared
+            ? {
+                replies: runReplies({
+                  engines,
+                  sessions,
+                  ...(config.locale === undefined ? {} : { locale: config.locale }),
+                }),
+              }
+            : {}),
+        }),
+      },
       rules: {
+        ...(prepared ? preparedRules(control) : {}),
         ...ruleChecks(engines, needOf),
         discard: discardChecks({
           lifecycle,
@@ -764,14 +947,16 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
         committed: (canvas) => {
           engines.changed(canvas);
         },
-        // A token's change only you may make waits for you (R4).
-        propose: (canvas, change, call, before) =>
+        // A token's change only you may make waits for you (R4), and so does a deletion of yours
+        // leaving a worktree that holds work (B9a C7: its confirmation, through the same proposals).
+        propose: (canvas, change, call, before, trees) =>
           proposals.raise(canvas, {
             op: call.op,
             args: call.args ?? {},
             by: call.by,
             change,
             before,
+            ...(trees.length === 0 ? {} : { trees }),
           }),
       }),
       openCanvases: () => engines.opened(),
@@ -784,6 +969,10 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
   // recovery ended what it left (above), and before any call could start one: never rerun by itself.
   await setups?.recover();
   runtime.start();
+  // Removals the last core didn't finish, tried again (in the background: Git may take a while).
+  void cleanup?.reconcile().catch((error: unknown) => {
+    console.error('Could not finish removing the workspaces kept for removal:', error);
+  });
   // Held backends are read from now on, so a limit that ended while the core was down is noticed.
   probe.start();
   // The canvases open from before, watched from now on.
@@ -854,6 +1043,10 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
         // What the core keeps is written out even if a canvas's run couldn't be, and its database
         // closed last. No CLI it started outlives it: a helper still running is ended.
         try {
+          // A workspace's removal going on finishes (or is left for the next start) first.
+          await cleanup?.close().catch((error: unknown) => {
+            console.error('Could not finish removing a workspace:', error);
+          });
           // A setup still running is ended and marked interrupted before the process owner closes.
           await setups?.close().catch((error: unknown) => {
             console.error('Could not end the worktrees’ setups:', error);

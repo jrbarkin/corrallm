@@ -10,6 +10,7 @@ import type { FileRevealer } from '../../reveal';
 import type { ProjectFiles } from '../../files';
 import type { ProjectRootResolver } from '../workspaces/resolver';
 import type { SetupService } from '../workspaces/setup';
+import type { ReplyHandler } from '../replies';
 import type { SessionManager } from '../../sessions/manager';
 import type { Windows } from '../windows';
 import type { Topics } from '../topics';
@@ -120,6 +121,17 @@ export interface OpServices {
    * is unavailable.
    */
   setups?: SetupService;
+  /**
+   * The reply router's handlers for what a canvas's runtime asks (its run's holds, its sessions'
+   * prompts: run-replies.ts) and a workspace's change (workspaces/rebind.ts), B11 C7's: composed
+   * with the prepared typed `reply` until X9 registers it. None: those are answered in corrallm's
+   * window.
+   */
+  replies?: readonly ReplyHandler[];
+  /** The reply router's handlers of the workspaces' cards (a workspace change's Switch: B9a C7). */
+  workspaceReplies?: readonly ReplyHandler[];
+  /** The workspaces' cards waiting on a canvas (its workspace changes): yours alone, on no agent. */
+  workspaceItems?: (canvas: CanvasId) => readonly NeedsItem[];
 }
 
 export function implementations(services: OpServices): Implementations {

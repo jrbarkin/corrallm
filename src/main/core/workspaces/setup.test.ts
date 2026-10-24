@@ -437,6 +437,29 @@ describe.skipIf(process.platform === 'win32')('WorkspaceSetups', () => {
     expect(h.t.workspaces.worktree(tree.id)?.state).toBe('ready');
   });
 
+  it('says it runs while it does, and once its workspace is removed ends it and forgets its log and copy record', async () => {
+    const h = await harness({ ...PNPM, 'README.md': 'hello\n' });
+    writeFileSync(path.join(h.t.app, '.env'), 'SECRET=1\n');
+    const tree = await offered(h);
+    const copies = path.join(h.t.profile, 'workspaces', 'setup', 'copies', `${tree.id}.json`);
+    const logs = path.join(h.t.profile, 'workspaces', 'setup', 'logs');
+    expect(existsSync(copies)).toBe(true);
+    const pids = path.join(h.t.root, 'pids');
+    await h.setups.setCommand(CANVAS, `sleep 300 & echo $! >> '${pids}'; wait`);
+    expect(h.setups.running(tree.id)).toBe(false);
+    await h.setups.reply(CANVAS, setupNeedId(tree.id, 2), 'run', 'you');
+    await until(() => existsSync(pids));
+    // A writer in its tree, as its cleanup asks.
+    expect(h.setups.running(tree.id)).toBe(true);
+    const [grandchild] = readFileSync(pids, 'utf8').trim().split('\n').map(Number);
+    expect(readdirSync(logs).some((log) => log.startsWith(`${tree.id}.`))).toBe(true);
+    await h.setups.forget(tree.id);
+    expect(alive(grandchild ?? 0)).toBe(false);
+    expect(h.setups.running(tree.id)).toBe(false);
+    expect(existsSync(copies)).toBe(false);
+    expect(readdirSync(logs).some((log) => log.startsWith(`${tree.id}.`))).toBe(false);
+  });
+
   it('holds a failure with its exit code and output; Retry runs it again', async () => {
     const h = await harness({ 'README.md': 'hello\n' });
     const tree = await offered(h);

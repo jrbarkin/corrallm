@@ -24,6 +24,7 @@ import { installedClis } from '../sessions/installed';
 import type { SessionManager } from '../sessions/manager';
 import type { UsageReadings } from '../usage';
 import type { Documents } from './canvas/documents';
+import { recoverDecisions } from './decisions';
 import { Delivery } from './delivery/delivery';
 import { capBody, MessageStore, sentByRun } from './delivery/messages';
 import type { MessageTable } from './delivery/messages';
@@ -146,6 +147,11 @@ export interface OpenCanvas {
    * in restored.
    */
   warnings: readonly string[];
+  /**
+   * The generation of an agent's running session (the session manager's), which its prompts'
+   * Needs ids carry: none while none runs.
+   */
+  sessionGeneration?: (agent: string) => number | undefined;
 }
 
 /** How a canvas opens. */
@@ -966,6 +972,7 @@ export class Engines {
       looking: false,
     } as Running;
     running.reads = new ReadPositions(await journal.reads(canvas));
+    running.sessionGeneration = (agent) => this.#deps.sessions.generationOf(canvas, agent);
     running.journal = () => this.#write(running);
     // What its messages write, they write with its run, if that changed since it was last on disk.
     messages.writeWith(() => this.#runWithin(running, false));
@@ -1068,6 +1075,12 @@ export class Engines {
       mail = (async () => {
         const messages = new MessageStore(canvas, this.#deps.messages, () => Date.now());
         await messages.load();
+        // A decision a crash cut off as it was being made is unresolved, never made again.
+        if (recoverDecisions(messages)) {
+          await messages.durable().catch((error: unknown) => {
+            console.error('Could not settle the answers corrallm stopped making:', error);
+          });
+        }
         return {
           messages,
           notes: new WithdrawalNotes(messages, this.#deps.engineCatalog.shellPrefixes),
@@ -1282,6 +1295,7 @@ export function needsInput(open: OpenCanvas, locale: string | undefined): NeedsI
     stuck: delivery.stuck(),
     unasking: delivery.unasking(),
     limited: delivery.limited(),
+    ...(open.sessionGeneration === undefined ? {} : { sessionGenerations: open.sessionGeneration }),
     ...(locale === undefined ? {} : { locale }),
   };
 }

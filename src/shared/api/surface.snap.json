@@ -257,7 +257,7 @@
     },
     "canvas.create": {
       "input": "3394f69e468a0469",
-      "output": "dae0e66c21820e6a"
+      "output": "6837192ee223cf50"
     },
     "canvas.open": {
       "input": "8ed9ce92c68e70c8",
@@ -265,7 +265,7 @@
     },
     "canvas.save": {
       "input": "f676d264f07b5166",
-      "output": "55483d7363689379"
+      "output": "dc2cdf0a6f25f4a5"
     },
     "canvas.saveAs": {
       "input": "f676d264f07b5166",
@@ -273,7 +273,7 @@
     },
     "canvas.close": {
       "input": "1a908234579fefb6",
-      "output": "c3007ed34a95ab3a"
+      "output": "c7d3b8a6259feb00"
     },
     "project.choose": {
       "input": "f676d264f07b5166",
@@ -309,7 +309,7 @@
     },
     "canvas.delete": {
       "input": "13089a4ee94a5b15",
-      "output": "edfe10d0207f1448"
+      "output": "4e5ad502b4237e86"
     },
     "canvas.link": {
       "input": "621da187728c140f",
@@ -337,7 +337,7 @@
     },
     "canvas.batch": {
       "input": "1257d2b1e10134be",
-      "output": "d873d1ec97de6e63"
+      "output": "d8db8b91eea3da57"
     },
     "agent.setType": {
       "input": "ae31f270ae564f34",
@@ -396,8 +396,8 @@
       "output": "e407d62a0d627a4d"
     },
     "reply": {
-      "input": "efa8b928027f6570",
-      "output": "7734ccb8847596d7"
+      "input": "21b2d898ee938c3a",
+      "output": "3e0493629d75ee20"
     },
     "withdraw": {
       "input": "c0fce69c0611e40f",

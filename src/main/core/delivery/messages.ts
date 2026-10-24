@@ -369,6 +369,19 @@ export class MessageStore {
     return [...this.#kept.values()].some(({ told }) => told === key);
   }
 
+  /** The message kept with the told key `key`, if one is (what a request admitted once). */
+  toldAs(key: string): Message | undefined {
+    for (const { message, told } of this.#kept.values()) if (told === key) return message;
+    return undefined;
+  }
+
+  /** The messages kept with a told key starting `prefix`, in the store's order. */
+  toldStarting(prefix: string): Message[] {
+    return [...this.#kept.values()].flatMap(({ message, told }) =>
+      told?.startsWith(prefix) === true ? [message] : [],
+    );
+  }
+
   /** How a message kept came to be. */
   originOf(id: string): MessageOrigin | undefined {
     return this.#kept.get(id)?.origin;

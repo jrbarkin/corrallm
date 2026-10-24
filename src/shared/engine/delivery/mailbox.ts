@@ -13,6 +13,7 @@ import type {
   PastSession,
   RewindRestore,
   RewindResult,
+  SessionAnswer,
   SettingsOptions,
   TaskMessage,
   TurnResult,
@@ -247,6 +248,16 @@ export class SessionStore {
     await this.#backend.close(agentId).catch(() => null);
     this.#letGo(agentId);
     this.#driver(agentId).open();
+  }
+
+  /**
+   * Ends the agent's session without starting another (a workspace's Switch, B9a C7): what it is
+   * sent next starts one, where the agent works then.
+   */
+  async close(agentId: string): Promise<void> {
+    if (!this.#drivers.has(agentId)) return;
+    await this.#backend.close(agentId).catch(() => null);
+    this.#letGo(agentId);
   }
 
   /**
@@ -506,6 +517,37 @@ export class SessionStore {
     this.#drivers.get(agentId)?.driver.answer(promptId, { kind: 'plan', answer });
   }
 
+  /**
+   * An answer the agent's CLI has taken already (the core's reply, B11 Design §7: told the CLI first,
+   * and awaited, so a CLI that refused it leaves its prompt open), shown on its prompt: nothing is
+   * told the CLI again.
+   */
+  answered(agentId: string, promptId: string, answer: SessionAnswer): void {
+    switch (answer.kind) {
+      case 'permission':
+        this.#dispatch(agentId, {
+          type: 'answer',
+          id: promptId,
+          answer: answer.answer,
+          ...(answer.feedback === undefined || answer.feedback.trim() === ''
+            ? {}
+            : { feedback: answer.feedback.trim() }),
+        });
+        return;
+      case 'question':
+        answer.answers.forEach((one, index) => {
+          this.#dispatch(agentId, { type: 'answerQuestion', id: promptId, index, answer: one });
+        });
+        return;
+      case 'plan':
+        this.#dispatch(agentId, { type: 'answerPlan', id: promptId, answer: answer.answer });
+        return;
+      case 'elicitation':
+        this.#dispatch(agentId, { type: 'answerElicitation', id: promptId, action: answer.action });
+        return;
+    }
+  }
+
   /** Interrupts the turn going on, if any. */
   stop(agentId: string): void {
     if (this.of(agentId).status === 'idle' || this.#stopping.has(agentId)) return;
@@ -545,6 +587,18 @@ export class SessionStore {
   setEffort(agentId: string, effort: string | null): void {
     this.#dispatch(agentId, { type: 'effort', effort });
     this.#drivers.get(agentId)?.driver.setEffort(effort);
+  }
+
+  /**
+   * A change its live session acknowledged without going through this store (the core's live and
+   * saved settings, which wait for it): shown as the session would report it, telling no driver.
+   */
+  applied(agentId: string, change: { mode?: Mode; model?: string; effort?: string | null }): void {
+    if (change.mode !== undefined) this.#dispatch(agentId, { type: 'mode', mode: change.mode });
+    if (change.model !== undefined) this.#dispatch(agentId, { type: 'model', model: change.model });
+    if (change.effort !== undefined) {
+      this.#dispatch(agentId, { type: 'effort', effort: change.effort });
+    }
   }
 
   /** Stops a task the agent's session runs in the background. */

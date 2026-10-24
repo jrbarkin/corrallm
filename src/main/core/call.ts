@@ -18,6 +18,7 @@ import type { Committer } from './canvas/commit';
 import type { Built } from './canvas/documents';
 import type { Caller, TokenCaller } from './caller';
 import type { Staged } from './delivery/messages';
+import type { CleanupDecision } from './workspaces/cleanup';
 import { outOfReach } from './reach';
 import type { Resolver } from './reach';
 import { Requests } from './requests';
@@ -77,6 +78,13 @@ export interface CommitOptions {
   within?: () => Staged;
   /** A command's destructive cleanup runs after its proposal has settled. */
   after?: (cleanup: () => Promise<void>) => void;
+  /** On Allow of a command proposal: what it was raised over (R5's guard), checked again. */
+  guard?: unknown;
+  /**
+   * On Allow of a deletion's confirmation (B9a C7): what you chose of the trees it leaves with no
+   * agent, bound to what each held when you were asked, which its commit checks again.
+   */
+  cleanup?: CleanupDecision;
 }
 
 /**
@@ -97,6 +105,16 @@ export interface OpContext {
   noReturn(): void;
   /** Defers a command's final cleanup until its successful proposal settlement. */
   readonly after?: (cleanup: () => Promise<void>) => void;
+  /**
+   * On Allow of a command proposal: what it was raised over (R5's guard: rewind-guard.ts), which
+   * the op checks again before its effect, failing as a conflict (settled stale) on a difference.
+   */
+  readonly guard?: unknown;
+  /**
+   * On Allow of a confirmation of what becomes of a tree (B9a C7: a kept tree's removal), your
+   * decision, bound to what it held when you were asked, which the op checks again.
+   */
+  readonly cleanup?: CleanupDecision;
   /**
    * Commits to canvas `canvas`'s document (the canvas the op names) what `build` makes of it,
    * purely, from the live one (B9 Design §3): checked against the revisions the call expects and,
@@ -478,6 +496,8 @@ export function createDispatcher(registry: Registry, options: DispatchOptions = 
         turn.noReturn();
       },
       ...(options.after === undefined ? {} : { after: options.after }),
+      ...(options.guard === undefined ? {} : { guard: options.guard }),
+      ...(options.cleanup === undefined ? {} : { cleanup: options.cleanup }),
       commit: async (canvas, build) => {
         if (commit === undefined) {
           throw new OpFailure('unavailable', 'This core keeps no canvas’s document.');
@@ -510,6 +530,7 @@ export function createDispatcher(registry: Registry, options: DispatchOptions = 
             args: kept(args),
             ...(options.proposedBy === undefined ? {} : { proposedBy: options.proposedBy }),
             ...(options.within === undefined ? {} : { within: options.within }),
+            ...(options.cleanup === undefined ? {} : { cleanup: options.cleanup }),
           },
         );
         if ('proposed' in done) throw new ProposedInstead(done.proposed);
