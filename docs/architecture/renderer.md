@@ -86,6 +86,8 @@ A Terminal agent's session in its agent view (TerminalPane.tsx): the CLI's own t
 
 Files dropped on it are pasted as their paths.
 
+The terminal draws only with xterm.js's WebGL renderer: the production CSP blocks its DOM renderer's inline styles, so that renderer must never draw it. screen.ts checks that the page can make a WebGL2 context before the terminal opens, and replaces a context the GPU loses. Where there is none (a virtual machine without 3D acceleration, remote desktop, a blocklisted GPU), as it opens or when the lost context cannot be replaced, the terminal is disposed of and its place says that it needs WebGL2 and what to try (turn on 3D acceleration, use the computer's own display, update the graphics driver, then reopen the view or restart corrallm). The view goes on undrawn: snapshots count as shown at once, and the CLI keeps running in main. A fallback renderer may come later; it must not weaken the CSP.
+
 What its Claude Code asks in it is listed in the canvas's Needs you sidebar (Questions.tsx's TerminalAskCard: shown, never answered; Open terminal; a permission with what its prompt shows, in short: the command in full, an edit's diff, the start of a new file), and its card glows while it asks anything; its folder trust dialog, asked as it starts (turn or not), makes the bar say "Trust this folder in the terminal".
 
 A file:// link Cmd-clicked in it is shown in the file manager if it is in the project folder (link.reveal).
