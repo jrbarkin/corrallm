@@ -40,7 +40,7 @@ The SDK fake also accepts `FAKE_CLAUDE_TURN_GATES`, a test-only JSON map from ex
 
 ## Native IDs and safety
 
-- Session ids are UUIDs (`sessions/id.ts`), checked in hook signals, resume IPC arguments, remembered sessions loaded from disk, and both Terminal CLIs' argv builders. Claude resume uses `--resume=<id>`; an id must never be read as a CLI flag.
+- Native session ids follow [R42a](sessions.md#connected-sessions): `sessions/id.ts` supplies the platform minimum, then this adapter's `isConversationId` requires UUIDs. Checks cover hook signals, resume IPC arguments, remembered sessions loaded from disk and its Terminal argv builder. Claude resume uses `--resume=<id>`; an id must never be read as a CLI flag.
 
 The SDK's conversation list skips entries whose sessionId fails the platform minimum or UUID
 shape, keeping the valid entries sorted by lastModified. One count-only warning per listing says
