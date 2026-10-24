@@ -29,6 +29,7 @@ test.beforeEach(async () => {
   // a Claude config folder of the test's own, where the fake keeps its conversations' transcripts
   // and main's Agent SDK reads them.
   ({ app, close: closeApp } = await launchApp({
+    diagnoseFailure: () => test.info().status !== test.info().expectedStatus,
     env: {
       CORRALLM_AGENT_PATHS: JSON.stringify({ 'claude-code': FAKE_CLAUDE }),
       ANTHROPIC_API_KEY: 'sk-ant-fake',
