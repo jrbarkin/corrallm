@@ -58,6 +58,7 @@ async function launch(
   }
   await chmod(claude, 0o755);
   ({ app, close: closeApp } = await launchApp({
+    diagnoseFailure: () => test.info().status !== test.info().expectedStatus,
     profile: path.join(dir, 'profile'),
     env: {
       CORRALLM_AGENT_PATHS: JSON.stringify({ 'claude-code': claude }),
