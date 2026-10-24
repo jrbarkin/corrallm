@@ -11,6 +11,7 @@ import type { PartyId } from '../../../shared/model/messages';
 import type { CanvasFiles } from '../../canvas';
 import type { CanvasMemory } from '../../memory';
 import type { ProjectFolders } from '../../project';
+import type { ProjectRootResolver } from '../workspaces/resolver';
 import type { RunJournal } from '../../run-journal';
 import type { SessionManager } from '../../sessions/manager';
 import { OpFailure } from '../call';
@@ -49,7 +50,8 @@ export interface LifecycleDeps {
   memory: Pick<CanvasMemory, 'get' | 'keeps'>;
   journal: Pick<RunJournal, 'opened' | 'open' | 'close' | 'last' | 'saved'>;
   windows: Pick<Windows, 'canvasOf' | 'show' | 'showing' | 'shownIn'>;
-  projects: Pick<ProjectFolders, 'choose' | 'restore' | 'of'>;
+  projects: Pick<ProjectFolders, 'choose' | 'restore'>;
+  directories: ProjectRootResolver;
   sessions: Pick<SessionManager, 'closeCanvas' | 'projectChanged'>;
   engines: Pick<Engines, 'closeCanvas'>;
   /** The Open and Save dialogs, and which canvas a file opened is. */
@@ -205,7 +207,8 @@ export class Lifecycle {
   async chooseProject(window: WindowId, canvas: CanvasId): Promise<ProjectFolder | null> {
     const { projects, sessions } = this.#deps;
     await projects.restore(canvas);
-    const before = projects.of(canvas);
+    // Compare the picked roots to decide whether a project change ends existing sessions.
+    const before = this.#deps.directories.projectRoot(canvas);
     const chosen = await projects.choose(window, canvas);
     if (chosen !== null && chosen.path !== before) await sessions.projectChanged(canvas);
     return chosen;

@@ -17,6 +17,7 @@ import type { SessionEvent, UserMessage } from '../../shared/session';
 import { usedUpUntil } from '../../shared/usage';
 import type { ProjectFiles } from '../files';
 import type { ProjectFolders } from '../project';
+import type { ProjectRootResolver } from './workspaces/resolver';
 import type { RunJournal } from '../run-journal';
 import { installedClis } from '../sessions/installed';
 import type { SessionManager } from '../sessions/manager';
@@ -73,7 +74,8 @@ export interface EnginesDeps {
   /** What the engines read of the catalog. */
   engineCatalog: EngineCatalog;
   sessions: SessionManager;
-  projects: ProjectFolders;
+  projects: Pick<ProjectFolders, 'restore'>;
+  directories: ProjectRootResolver;
   journal: RunJournal;
   /** Each canvas's document, its file checked as it opens. */
   documents: Pick<Documents, 'review' | 'live' | 'hasRows'>;
@@ -653,7 +655,9 @@ export class Engines {
 
   async #open(canvas: CanvasId, held: boolean): Promise<Running> {
     const { projects, journal, documents } = this.#deps;
-    if ((await projects.restore(canvas)) === undefined) throw new Error(NO_FOLDER);
+    await projects.restore(canvas);
+    // Admission needs the picked project root, not any one agent's eventual workspace.
+    if (this.#deps.directories.projectRoot(canvas) === undefined) throw new Error(NO_FOLDER);
     const context = await journal.get(canvas);
     // A canvas the core keeps the document of opens with no file (one a token made, never saved:
     // B9 Design §8); any other only from the file canvas memory names for it, while that file
@@ -902,7 +906,7 @@ export class Engines {
 
   /** Where a canvas's agents' sessions run: the core's SessionManager, in this process. */
   #backend(canvas: CanvasId, listeners: Running['listeners']): SessionBackend {
-    const { sessions, projects, files, environment } = this.#deps;
+    const { sessions, directories, files, environment } = this.#deps;
     const run = <T>(call: () => T): T => this.#deps.processes.run(call);
     const done = (call: () => Promise<unknown>) => run(() => call().then(() => null));
     return {
@@ -926,7 +930,8 @@ export class Engines {
       close: (agentId) => done(() => sessions.close(canvas, agentId)),
       fresh: (agentId, adapter) => done(() => sessions.fresh(canvas, agentId, adapter)),
       files: async (query) => {
-        const folder = projects.of(canvas);
+        // The canvas-wide file picker searches its project root, as project.files does.
+        const folder = directories.projectRoot(canvas);
         return folder === undefined ? [] : run(() => files.find(folder, query, MAX_FILE_MATCHES));
       },
       options: (adapter) => run(() => sessions.settingsOptions(canvas, adapter)),

@@ -14,6 +14,8 @@ Startup verifies their pid/start time/group before ending stale groups, giving S
 
 Windows group cleanup is deferred.
 
+The core supplies SessionManager one directory resolver (`src/main/core/workspaces/resolver.ts`). Every new launch, including restart and the launch after Fresh, resolves that agent's cwd through it; conversation listing, resume's listed-folder check and conversation rewind resolve it too. The legacy implementation returns the picked project TrustedPath, workspace null, generation 0 and no branch; no-project keeps the existing refusal. Directory resolution is part of the existing pending launch: concurrent starts still share it, and closing waits for it before ending the session. Fresh itself only ends the session and forgets its conversation, so needs no cwd. Conversation memory still uses PROJECT_WORKSPACE. Adapter-wide `session:options` names no agent and uses the resolver's projectRoot accessor, falling back to the user's home folder when none was picked. This is the seam for later workspace provisioning; it does not yet bind sessions or conversations to worktrees.
+
 A bounded execFile helper closes its pipes and reports immediately on timeout or excess output while the owner finishes group cleanup before the core exits.
 
 ## `src/main/sessions/terminal/`

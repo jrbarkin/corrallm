@@ -8,7 +8,7 @@ import type { UsageReadings } from '../../usage';
 import type { LinkOpener } from '../../links';
 import type { FileRevealer } from '../../reveal';
 import type { ProjectFiles } from '../../files';
-import type { ProjectFolders } from '../../project';
+import type { ProjectRootResolver } from '../workspaces/resolver';
 import type { SessionManager } from '../../sessions/manager';
 import type { Windows } from '../windows';
 import type { Topics } from '../topics';
@@ -70,7 +70,7 @@ export interface OpServices {
   usage: Pick<UsageReadings, 'state' | 'setRule' | 'simulate'>;
   links: Pick<LinkOpener, 'open'>;
   reveal: Pick<FileRevealer, 'reveal'>;
-  projects: Pick<ProjectFolders, 'of'>;
+  directories: ProjectRootResolver;
   files: Pick<ProjectFiles, 'find'>;
   windows: Pick<Windows, 'canvasOf' | 'shownIn'>;
   sessions: Pick<
