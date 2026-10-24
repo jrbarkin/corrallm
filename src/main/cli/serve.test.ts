@@ -20,6 +20,7 @@ import { keepCanvases, keepMessages, readOnDisk, writeOnDisk } from '../core/sto
 import { registrations } from './serve';
 import { TestChildren } from './test-children';
 import { startupShell } from './test-startup-shell';
+import { waitForServing } from './test-serve-startup';
 import type { TestChild } from './test-children';
 
 /*
@@ -110,7 +111,7 @@ describe.skipIf(process.platform === 'win32')('corrallm serve', () => {
         expect(result).not.toContain(token);
     }
     await rm(dir, { recursive: true, force: true });
-  }, 15_000);
+  }, 30_000);
 
   /** The `codex` agents run: the fake, keeping its threads and log in `dir`, with `env` set. */
   async function fakeCodex(env: Record<string, string> = {}): Promise<void> {
@@ -182,7 +183,7 @@ describe.skipIf(process.platform === 'win32')('corrallm serve', () => {
     stop(): Promise<number | null>;
   }
 
-  /** Starts `corrallm serve` on the profile, serving the canvas on a free port. */
+  /** Starts `corrallm serve`, once discovery is readable and it has said it serves. */
   async function serve(args: string[] = [], extra: Record<string, string> = {}): Promise<Serve> {
     const child = children.spawn(
       process.execPath,
@@ -194,7 +195,12 @@ describe.skipIf(process.platform === 'win32')('corrallm serve', () => {
       stderr += chunk.toString();
     });
     const exited = children.exited(child);
-    const api = await apiFile(exited, () => stderr);
+    const api = await waitForServing(
+      apiFile(exited, () => stderr),
+      exited,
+      child.stderr,
+      () => stderr,
+    );
     const started: Serve = {
       child,
       url: api.url,
