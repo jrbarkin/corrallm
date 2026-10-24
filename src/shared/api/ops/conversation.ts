@@ -45,6 +45,7 @@ export const Message = z.strictObject({
   kind: z.enum(MESSAGE_KINDS),
   body: z.string(),
   replyTo: z.uuid().optional(),
+  resendOf: z.uuid().optional(),
   task: z.strictObject({ agent: z.string(), item: z.string(), attempt: z.string() }).optional(),
   turn: TurnResult.optional(),
   state: z.enum(MESSAGE_STATES),

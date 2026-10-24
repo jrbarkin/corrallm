@@ -573,7 +573,12 @@ describe('the app’s core and window channels', () => {
     const id = await created(window);
     await chooseProject(window);
     const run = await channel(window, 'run:get');
-    const checkpoint = { version: 2, state: '{}', messages: '[]', updatedAt: 1 } as const;
+    const checkpoint = {
+      version: 2,
+      state: '{}',
+      messages: '{"version":1,"agents":[]}',
+      updatedAt: 1,
+    } as const;
     await channel(window, 'run:save', run.token, checkpoint);
     await channel(window, 'session:start', 'a', {
       connection: 'codex.app-server',
@@ -638,7 +643,12 @@ describe('the app’s core and window channels', () => {
 });
 
 describe('the canvas’s document, which the core keeps', () => {
-  const checkpoint = { version: 2, state: '{}', messages: '[]', updatedAt: 1 } as const;
+  const checkpoint = {
+    version: 2,
+    state: '{}',
+    messages: '{"version":1,"agents":[]}',
+    updatedAt: 1,
+  } as const;
   /** A canvas of one agent, `label`, as its file holds it. */
   const canvasText = (id: CanvasId, label = 'Lead', arrange = false) =>
     toFile({

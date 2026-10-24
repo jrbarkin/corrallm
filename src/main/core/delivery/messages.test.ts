@@ -16,6 +16,7 @@ import { Store, SYSTEM_DEPS, unopened } from '../store/store';
 import type { StoreDeps } from '../store/store';
 import { openTestStore, readOnDisk, refuseWrites } from '../store/test-store';
 import { isActive, MessageStore, MessageTable } from './messages';
+import type { Draft } from './messages';
 import { scanPrune } from './test-prune';
 import type { PruneRecord } from './test-prune';
 
@@ -56,14 +57,14 @@ async function store(canvas = CANVAS): Promise<MessageStore> {
   return loaded;
 }
 
-/** A message from `from` to `to`, in `state`. */
+/** A message from `from` to `to`, in `state`: yours as you typed it, or a party's. */
 function draft(
   from: Message['from'],
   to: Message['to'],
   state: Message['state'] = 'pending',
   body = 'Hello',
-): Omit<Message, 'id' | 'canvas' | 'at'> {
-  return { from, to, kind: 'text', body, state };
+): Draft {
+  return { from, to, kind: 'text', origin: from === 'you' ? 'manual' : 'party', body, state };
 }
 
 /** The canvas's messages' rows on disk, as a second connection reads them, in order. */
@@ -86,6 +87,7 @@ describe('the message store', () => {
         from: 'corrallm',
         to: sent.from,
         kind: 'notice',
+        origin: 'party',
         body: 'No activity',
         replyTo: sent.id,
         state: 'delivered',
@@ -128,6 +130,7 @@ describe('the message store', () => {
         from: 'corrallm',
         to: 'outside:orchestrator',
         kind: 'notice',
+        origin: 'party',
         body: 'Paused',
         state: 'delivered',
         replyTo: sent.id,
@@ -286,8 +289,9 @@ describe('the message store', () => {
     database.tx(() =>
       database
         .prepare(
-          `INSERT INTO message (id, canvas_id, from_party, to_party, kind, body, state, sent_at)
-           VALUES ('newer', ?, 'you', 'agent:builder', 'poll', 'Which?', 'pending', 1)`,
+          `INSERT INTO message (id, canvas_id, from_party, to_party, kind, origin, body, state,
+             sent_at)
+           VALUES ('newer', ?, 'you', 'agent:builder', 'poll', 'manual', 'Which?', 'pending', 1)`,
         )
         .run(CANVAS),
     );
@@ -297,6 +301,53 @@ describe('the message store', () => {
     again.add(draft('outside:orchestrator', 'agent:builder'));
     await again.durable();
     expect(rows().map(({ id }) => id)).toContain('newer');
+  });
+
+  it('keeps how each message came to be, what a view shows of it and what it resends, across a restart', async () => {
+    const messages = await store();
+    const original = messages.add(draft('you', 'agent:builder', 'replied'));
+    const resent = messages.add({
+      ...draft('you', 'agent:builder'),
+      origin: 'resend',
+      display: { images: 2, requiresImages: true },
+      resendOf: original.id,
+    });
+    const party = messages.add(draft('outside:orchestrator', 'agent:builder'));
+    expect(messages.redisplay(original.id, { after: 'plan' })).toBe(true);
+    await messages.durable();
+    await restart();
+    const again = await store();
+    expect(again.all()).toEqual([original, resent, party]);
+    expect(again.all().map(({ id }) => again.originOf(id))).toEqual(['manual', 'resend', 'party']);
+    expect(again.displayOf(original.id)).toEqual({ after: 'plan' });
+    expect(again.requiresImages(resent)).toBe(true);
+    expect(again.requiresImages(original)).toBe(false);
+    expect(again.resent(original.id)).toBe(true);
+    expect(again.resent(resent.id)).toBe(false);
+    expect(resent.replyTo).toBeUndefined();
+  });
+
+  it('leaves a row whose display it doesn’t know as it is', async () => {
+    const messages = await store();
+    const read = messages.add(draft('you', 'agent:builder'));
+    await messages.durable();
+    // A field of a display a newer corrallm might keep.
+    database.tx(() =>
+      database
+        .prepare(
+          `INSERT INTO message (id, canvas_id, from_party, to_party, kind, origin, body, display,
+             state, sent_at)
+           VALUES ('newer display', ?, 'you', 'agent:builder', 'text', 'manual', 'Hello',
+             '{"after":"plan","colour":"red"}', 'pending', 1)`,
+        )
+        .run(CANVAS),
+    );
+    await restart();
+    const again = await store();
+    expect(again.all().map(({ id }) => id)).toEqual([read.id]);
+    again.add(draft('outside:orchestrator', 'agent:builder'));
+    await again.durable();
+    expect(rows().map(({ id }) => id)).toContain('newer display');
   });
 
   it('writes what its canvas writes with it in the same write, or neither', async () => {

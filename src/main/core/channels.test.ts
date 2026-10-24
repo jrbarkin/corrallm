@@ -149,7 +149,12 @@ describe('the sender’s canvas', () => {
       checkpoint: null,
       notices: ['Restored from a snapshot.'],
     });
-    const checkpoint = { version: 2, state: '{}', messages: '[]', updatedAt: 1 };
+    const checkpoint = {
+      version: 2,
+      state: '{}',
+      messages: '{"version":1,"agents":[]}',
+      updatedAt: 1,
+    };
     await invoke('run:save', ['canvas-token', checkpoint]);
     expect(services.runs.save).toHaveBeenCalledWith(CANVAS, 'canvas-token', checkpoint);
   });
@@ -639,7 +644,12 @@ describe('session:* handlers', () => {
 });
 
 describe('run journal channels', () => {
-  const checkpoint = { version: 2, state: '{}', messages: '[]', updatedAt: 1 };
+  const checkpoint = {
+    version: 2,
+    state: '{}',
+    messages: '{"version":1,"agents":[]}',
+    updatedAt: 1,
+  };
   it('uses the sender’s canvas and generation token, never a renderer-supplied path', async () => {
     const sender = 7;
     await expect(invoke('run:get', [], sender)).resolves.toMatchObject({ token: 'canvas-token' });

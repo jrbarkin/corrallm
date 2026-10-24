@@ -9,6 +9,8 @@ import type { PartyId } from '../shared/model/messages';
 import type { NeedsItem } from '../shared/model/needs';
 import { MAX_RUN_BYTES, parseRunCheckpoint } from '../shared/run';
 import type { RunCheckpoint, RunContext } from '../shared/run';
+import type { MessageStore } from './core/delivery/messages';
+import { keepSubmissions, recordsIn, submissionsOf } from './core/delivery/submissions';
 import { mintTrustedPath } from './core/host';
 import type { TrustedPath } from './core/host';
 import type { Database } from './core/store/store';
@@ -29,12 +31,19 @@ interface JournalDeps {
   store: Database;
   /** What the canvases' rows are kept by. */
   memory: CanvasMemory;
+  /**
+   * The canvas's messages, the core's one store of them (Engines.messagesOf): where a run's
+   * manual submissions are kept, as your messages (delivery/submissions.ts).
+   */
+  messages: (canvas: CanvasId) => Promise<MessageStore>;
   /** What opening the database found to say (core/store/open.ts): said with the first run restored. */
   said?: readonly string[];
   problemChanged?: (canvas: CanvasId) => void;
 }
 
 const MISSING = 'The saved canvas is missing. Its run was restored as an unsaved canvas.';
+/** A run journaled in no envelope this corrallm reads (one migration 4 couldn't convert). */
+const UNREADABLE = 'it was kept in a form this corrallm can’t read';
 const EARLIER = 'This run belongs to an earlier canvas';
 const TOO_LARGE =
   'The run checkpoint is too large (over 32 MiB), so current run progress cannot be kept. Further run prompts are held; parties’ messages are still recorded and delivered. Restarting restores only the last checkpoint that fit, if any.';
@@ -45,7 +54,8 @@ const TOO_COMPLEX =
  * Each canvas's run, journaled by the canvas's id in the profile's database (Core Database §5),
  * where each party's `wait` has read to in its messages, and the canvas the profile had open last:
  *
- *   run            the run's state (the document it runs is the core's: core/canvas/documents.ts)
+ *   run            the run's state, in its envelope (B11 Design §4: `{ format: 3, run, saveError? }`;
+ *                  the document it runs is the core's: core/canvas/documents.ts)
  *   read_position  each party's read position in the canvas's messages
  *   open_canvas    each canvas open, until it is closed, and when it was used last: a window that
  *                  shows none restores the one used last
@@ -57,7 +67,9 @@ const TOO_COMPLEX =
  * forward. A window's renderer saves with the token of the canvas it showed: a save meant for a
  * canvas it has since replaced (or opened again) is refused. A run that can't be restored as one
  * is discarded, saying so. The canvas's file is read back with its run, as canvas memory wrote it,
- * from the app's dialogs.
+ * from the app's dialogs. A checkpoint's manual submissions are never kept beside its run: each is
+ * your message in the canvas's messages, in the same write, and given back from there as the run
+ * is restored (delivery/submissions.ts), until B11's views replace submissions.
  */
 export class RunJournal {
   readonly #deps: JournalDeps;
@@ -101,9 +113,9 @@ export class RunJournal {
     const entry = this.#entry(canvas);
     const row = this.#deps.store
       .prepare(
-        `SELECT c.file AS file, r.canvas_id AS ran, json_extract(r.state, '$.version') AS version,
-           json_extract(r.state, '$.state') AS state, json_extract(r.state, '$.messages') AS messages,
-           r.updated_at AS updated_at, json_extract(r.state, '$.saveError') AS save_error
+        `SELECT c.file AS file, r.canvas_id AS ran, json_extract(r.state, '$.format') AS format,
+           json_extract(r.state, '$.run') AS state, r.updated_at AS updated_at,
+           json_extract(r.state, '$.saveError') AS save_error
          FROM canvas c LEFT JOIN run r ON r.canvas_id = c.id
          WHERE c.id = ?`,
       )
@@ -114,12 +126,14 @@ export class RunJournal {
     }
     let checkpoint: RunCheckpoint | null = null;
     const saveError = typeof row?.save_error === 'string' ? row.save_error : undefined;
-    if (typeof row?.ran === 'string' && !(saveError !== undefined && row.version === null)) {
+    // A size refusal journaled with no checkpoint that fit restores none.
+    if (typeof row?.ran === 'string' && !(row.format === 3 && row.state === null)) {
       try {
+        if (row.format !== 3) throw new TypeError(UNREADABLE);
         checkpoint = parseRunCheckpoint({
-          version: row.version,
+          version: 2,
           state: row.state,
-          messages: row.messages,
+          messages: submissionsOf(await this.#deps.messages(canvas)),
           updatedAt: row.updated_at,
         });
       } catch (error) {
@@ -186,21 +200,36 @@ export class RunJournal {
 
   /**
    * Journals a canvas's run (null: none), for the renderer whose token is its canvas's, keeping
-   * where each party's `wait` has read to. On disk once it resolves.
+   * where each party's `wait` has read to, with its submissions, your messages. On disk once it
+   * resolves.
    */
   async save(canvas: CanvasId, token: string, checkpoint: RunCheckpoint | null): Promise<void> {
     this.check(canvas, token);
-    const problem = await this.#write(() => this.keep(canvas, token, checkpoint));
+    const messages = await this.#deps.messages(canvas);
+    let written: () => void = () => undefined;
+    const problem = await this.#write(() => {
+      const kept = this.keep(canvas, token, checkpoint, messages);
+      written = messages.changes();
+      return kept;
+    });
+    written();
     this.kept(canvas, problem);
     if (problem !== undefined) throw new RangeError(problem);
   }
 
   /**
    * Within a write: journals a canvas's run (null: none), as `save` does, with whatever else the
-   * write holds. A run beyond the size or complexity bound keeps its refusal beside the last
-   * good checkpoint; other invalid data, SQL failures and a wrong token still throw.
+   * write holds, its submissions your messages in `messages`, the canvas's store, whose changes
+   * the write must hold too (a record no engine restores left out). A run beyond the size or
+   * complexity bound keeps its refusal beside the last good checkpoint, and none of its
+   * submissions; other invalid data, SQL failures and a wrong token still throw.
    */
-  keep(canvas: CanvasId, token: string, checkpoint: RunCheckpoint | null): string | undefined {
+  keep(
+    canvas: CanvasId,
+    token: string,
+    checkpoint: RunCheckpoint | null,
+    messages: MessageStore,
+  ): string | undefined {
     if (this.#entries.get(canvas)?.token !== token) throw new Error(EARLIER);
     const { store, memory } = this.#deps;
     memory.ensure(canvas);
@@ -221,18 +250,17 @@ export class RunJournal {
       if (error instanceof RangeError) return this.#refused(canvas, checkpoint, TOO_COMPLEX);
       throw error;
     }
-    const { version, state, messages, updatedAt } = parsed;
-    // Its state and messages are JSON texts (parseRunCheckpoint read them): kept as they are.
+    const { state, updatedAt } = parsed;
+    // Its submission records, read before anything is written.
+    const submissions = recordsIn(parsed.messages);
+    // Its state is a JSON text (parseRunCheckpoint read it): kept as it is.
     store
       .prepare(
         `INSERT INTO run (canvas_id, state, updated_at) VALUES (?, ?, ?)
          ON CONFLICT (canvas_id) DO UPDATE SET state = excluded.state, updated_at = excluded.updated_at`,
       )
-      .run(
-        canvas,
-        `{"version":${String(version)},"state":${state},"messages":${messages}}`,
-        updatedAt,
-      );
+      .run(canvas, `{"format":3,"run":${state}}`, updatedAt);
+    keepSubmissions(messages, submissions, Date.now());
     return undefined;
   }
 
@@ -240,7 +268,8 @@ export class RunJournal {
   #refused(canvas: CanvasId, checkpoint: RunCheckpoint, problem: string): string {
     this.#deps.store
       .prepare(
-        `INSERT INTO run (canvas_id, state, updated_at) VALUES (?, json_object('saveError', ?), ?)
+        `INSERT INTO run (canvas_id, state, updated_at)
+           VALUES (?, json_object('format', 3, 'saveError', ?), ?)
          ON CONFLICT(canvas_id) DO UPDATE SET state = json_set(run.state, '$.saveError', ?)`,
       )
       .run(canvas, problem, checkpoint.updatedAt, problem);

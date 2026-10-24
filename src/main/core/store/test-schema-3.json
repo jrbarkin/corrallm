@@ -1,0 +1,666 @@
+{
+  "about": "Every row a corrallm of schema 3 (main at 767a382) kept, through its own stores and core: a canvas the core ran (a party message interrupted and resent, a manual submission with images interrupted and resent, your message cut off, a queue task run), a canvas a window ran (its manual submissions in its run checkpoint), and runs kept beside their size refusal. Made once, by a generator not kept: a migration from schema 3 is tested against what schema 3 kept, never regenerated.",
+  "schema": 3,
+  "sequence": 1792848685450,
+  "tables": {
+    "meta": [
+      {
+        "id": 1,
+        "min_reader": 3,
+        "workspace_generation": 1000
+      }
+    ],
+    "canvas": [
+      {
+        "id": "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b",
+        "file": "/var/folders/yw/8yylch6d01583v4wy0cwp02m0000gn/T/corrallm-fixture-3-wCYumf/served.corral",
+        "project": "/var/folders/yw/8yylch6d01583v4wy0cwp02m0000gn/T/corrallm-fixture-3-wCYumf/project",
+        "used_at": 1792848684637
+      },
+      {
+        "id": "5f0c8f0e-2c4b-4d8e-9a77-1e2d3c4b5a61",
+        "file": null,
+        "project": "/work/window",
+        "used_at": 1792848685351
+      },
+      {
+        "id": "6a1d9f1f-3d5c-4e9f-8b88-2f3e4d5c6b72",
+        "file": null,
+        "project": null,
+        "used_at": 1792848685461
+      },
+      {
+        "id": "7b2e0a2a-4e6d-4fa0-9c99-3a4f5e6d7c83",
+        "file": null,
+        "project": null,
+        "used_at": 1792848685562
+      }
+    ],
+    "document": [
+      {
+        "canvas_id": "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b",
+        "rev": 1,
+        "arrange": 0,
+        "saved_hash": "be7eb8f7660e4faf9488aadd5573cafc979e6d46c4d9aa9bb93fabf808b8099b",
+        "file_hash": "d334366e36ea4a76a4baf0bb23ad32b3e365eee3b05b93f37d7784485ca0f72e",
+        "writing_hash": null,
+        "file_generation": 0,
+        "created_by": null,
+        "by_party": "you",
+        "changed_at": 1792848684745
+      },
+      {
+        "canvas_id": "5f0c8f0e-2c4b-4d8e-9a77-1e2d3c4b5a61",
+        "rev": 1,
+        "arrange": 0,
+        "saved_hash": null,
+        "file_hash": null,
+        "writing_hash": null,
+        "file_generation": 0,
+        "created_by": "you",
+        "by_party": "you",
+        "changed_at": 1792848685345
+      }
+    ],
+    "node": [
+      {
+        "canvas_id": "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b",
+        "id": "a",
+        "kind": "agent",
+        "parent_id": null,
+        "place": 0,
+        "label": "Agent",
+        "x": 0,
+        "y": 0,
+        "color": null,
+        "adapter": "codex",
+        "connection": "codex.app-server",
+        "settings": null,
+        "role": null,
+        "created_by": null,
+        "rev": 1,
+        "by_party": "you"
+      },
+      {
+        "canvas_id": "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b",
+        "id": "b",
+        "kind": "agent",
+        "parent_id": null,
+        "place": 1,
+        "label": "Peer",
+        "x": 200,
+        "y": 0,
+        "color": null,
+        "adapter": "codex",
+        "connection": "codex.app-server",
+        "settings": null,
+        "role": null,
+        "created_by": null,
+        "rev": 1,
+        "by_party": "you"
+      },
+      {
+        "canvas_id": "5f0c8f0e-2c4b-4d8e-9a77-1e2d3c4b5a61",
+        "id": "helper",
+        "kind": "agent",
+        "parent_id": null,
+        "place": 1,
+        "label": "Helper",
+        "x": 300,
+        "y": 0,
+        "color": null,
+        "adapter": "claude-code",
+        "connection": "claude-code.terminal",
+        "settings": null,
+        "role": null,
+        "created_by": "you",
+        "rev": 1,
+        "by_party": "you"
+      },
+      {
+        "canvas_id": "5f0c8f0e-2c4b-4d8e-9a77-1e2d3c4b5a61",
+        "id": "lead",
+        "kind": "agent",
+        "parent_id": null,
+        "place": 0,
+        "label": "Lead",
+        "x": 0,
+        "y": 0,
+        "color": null,
+        "adapter": "claude-code",
+        "connection": "claude-code.sdk",
+        "settings": null,
+        "role": null,
+        "created_by": "you",
+        "rev": 1,
+        "by_party": "you"
+      }
+    ],
+    "link": [
+      {
+        "canvas_id": "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b",
+        "a": "a",
+        "b": "b",
+        "source": "a",
+        "dots": null,
+        "place": 0,
+        "rev": 1,
+        "by_party": "you"
+      }
+    ],
+    "queue_item": [
+      {
+        "canvas_id": "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b",
+        "agent_id": "a",
+        "id": "task",
+        "container": null,
+        "place": 0,
+        "kind": "message",
+        "body": "{\"message\":\"Queue work\"}",
+        "rev": 1,
+        "by_party": "you"
+      },
+      {
+        "canvas_id": "5f0c8f0e-2c4b-4d8e-9a77-1e2d3c4b5a61",
+        "agent_id": "lead",
+        "id": "build",
+        "container": null,
+        "place": 1,
+        "kind": "message",
+        "body": "{\"message\":\"Build it\"}",
+        "rev": 1,
+        "by_party": "you"
+      },
+      {
+        "canvas_id": "5f0c8f0e-2c4b-4d8e-9a77-1e2d3c4b5a61",
+        "agent_id": "lead",
+        "id": "plan",
+        "container": null,
+        "place": 0,
+        "kind": "message",
+        "body": "{\"message\":\"Write PLAN.md\"}",
+        "rev": 1,
+        "by_party": "you"
+      }
+    ],
+    "revision": [
+      {
+        "canvas_id": "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b",
+        "rev": 1,
+        "op": "file.open",
+        "by_party": "you",
+        "proposed_by": null,
+        "request": null,
+        "at": 1792848684745
+      },
+      {
+        "canvas_id": "5f0c8f0e-2c4b-4d8e-9a77-1e2d3c4b5a61",
+        "rev": 1,
+        "op": "canvas.rename",
+        "by_party": "you",
+        "proposed_by": null,
+        "request": null,
+        "at": 1792848685345
+      }
+    ],
+    "change": [
+      {
+        "canvas_id": "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b",
+        "rev": 1,
+        "entity": "item/a/task",
+        "rev_before": null,
+        "before_data": null,
+        "after_data": "{\"agent\":\"a\",\"id\":\"task\",\"kind\":\"message\",\"body\":{\"message\":\"Queue work\"},\"place\":0}"
+      },
+      {
+        "canvas_id": "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b",
+        "rev": 1,
+        "entity": "link/a/b",
+        "rev_before": null,
+        "before_data": null,
+        "after_data": "{\"a\":\"a\",\"b\":\"b\",\"source\":\"a\",\"place\":0}"
+      },
+      {
+        "canvas_id": "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b",
+        "rev": 1,
+        "entity": "node/a",
+        "rev_before": null,
+        "before_data": null,
+        "after_data": "{\"id\":\"a\",\"kind\":\"agent\",\"label\":\"Agent\",\"x\":0,\"y\":0,\"adapter\":\"codex\",\"connection\":\"codex.app-server\",\"place\":0}"
+      },
+      {
+        "canvas_id": "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b",
+        "rev": 1,
+        "entity": "node/b",
+        "rev_before": null,
+        "before_data": null,
+        "after_data": "{\"id\":\"b\",\"kind\":\"agent\",\"label\":\"Peer\",\"x\":200,\"y\":0,\"adapter\":\"codex\",\"connection\":\"codex.app-server\",\"place\":1}"
+      },
+      {
+        "canvas_id": "5f0c8f0e-2c4b-4d8e-9a77-1e2d3c4b5a61",
+        "rev": 1,
+        "entity": "item/lead/build",
+        "rev_before": null,
+        "before_data": null,
+        "after_data": "{\"agent\":\"lead\",\"id\":\"build\",\"kind\":\"message\",\"body\":{\"message\":\"Build it\"},\"place\":1}"
+      },
+      {
+        "canvas_id": "5f0c8f0e-2c4b-4d8e-9a77-1e2d3c4b5a61",
+        "rev": 1,
+        "entity": "item/lead/plan",
+        "rev_before": null,
+        "before_data": null,
+        "after_data": "{\"agent\":\"lead\",\"id\":\"plan\",\"kind\":\"message\",\"body\":{\"message\":\"Write PLAN.md\"},\"place\":0}"
+      },
+      {
+        "canvas_id": "5f0c8f0e-2c4b-4d8e-9a77-1e2d3c4b5a61",
+        "rev": 1,
+        "entity": "node/helper",
+        "rev_before": null,
+        "before_data": null,
+        "after_data": "{\"id\":\"helper\",\"kind\":\"agent\",\"label\":\"Helper\",\"x\":300,\"y\":0,\"adapter\":\"claude-code\",\"connection\":\"claude-code.terminal\",\"place\":1}"
+      },
+      {
+        "canvas_id": "5f0c8f0e-2c4b-4d8e-9a77-1e2d3c4b5a61",
+        "rev": 1,
+        "entity": "node/lead",
+        "rev_before": null,
+        "before_data": null,
+        "after_data": "{\"id\":\"lead\",\"kind\":\"agent\",\"label\":\"Lead\",\"x\":0,\"y\":0,\"adapter\":\"claude-code\",\"connection\":\"claude-code.sdk\",\"place\":0}"
+      }
+    ],
+    "proposal": [
+      {
+        "id": "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5d",
+        "canvas_id": "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b",
+        "op": "canvas.delete",
+        "args": "{\"nodes\":[\"b\"]}",
+        "by_party": "outside:orchestrator",
+        "touched": "{\"touched\":{\"node/b\":1},\"before\":{\"node/b\":1}}",
+        "lost": "{\"what\":\"delete Peer\",\"title\":\"Delete Peer?\"}",
+        "raised_at": 1,
+        "outcome": null,
+        "settled_by": null,
+        "settled_at": null
+      }
+    ],
+    "file_review": [
+      {
+        "id": "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a60",
+        "canvas_id": "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b",
+        "file_hash": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "file_generation": 0,
+        "summary": "{\"file\":\"served.corral\",\"from\":null,\"groups\":1}",
+        "raised_at": 1792848685265,
+        "outcome": null,
+        "settled_by": null,
+        "settled_at": null
+      }
+    ],
+    "run": [
+      {
+        "canvas_id": "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b",
+        "state": "{\"version\":2,\"state\":{\"version\":2,\"run\":{\"running\":false,\"agents\":{\"a\":{\"status\":\"done\",\"outcomes\":{\"task\":\"succeeded\"},\"attempts\":{\"task\":[{\"id\":\"261a237a-2223-4298-a8c9-5360d52716d0\",\"startedAt\":1792848684997,\"status\":\"succeeded\",\"endedAt\":1792848685053}]}},\"b\":{\"status\":\"done\",\"outcomes\":{}}},\"paused\":true},\"replies\":[[\"[\\\"a\\\",\\\"task\\\"]\",\"SUCCEEDED\"]],\"held\":[],\"arrived\":[],\"ended\":[],\"past\":[],\"due\":[],\"usageDecided\":[],\"warned\":[]},\"messages\":{\"version\":1,\"agents\":[{\"id\":\"a\",\"submissions\":[{\"id\":\"65f895b8-f0b0-409c-bfe1-73f227de4529\",\"text\":\"Manual work\",\"status\":\"cancelled\",\"result\":{\"status\":\"cancelled\",\"reason\":\"interrupted\"}},{\"id\":\"b8a52ee7-0212-4e56-87c6-e6c908db4ee3\",\"text\":\"Manual work\",\"status\":\"completed\",\"result\":{\"status\":\"completed\",\"reason\":\"completed\"}}]},{\"id\":\"b\",\"submissions\":[{\"id\":\"8c4a4850-028b-489b-af0e-7fbb4e294321\",\"text\":\"Your work\",\"status\":\"running\"}]}]}}",
+        "updated_at": 1792848685178
+      },
+      {
+        "canvas_id": "5f0c8f0e-2c4b-4d8e-9a77-1e2d3c4b5a61",
+        "state": "{\"version\":2,\"state\":{\"version\":2,\"run\":{\"running\":false,\"agents\":{\"lead\":{\"status\":\"done\",\"outcomes\":{\"plan\":\"succeeded\",\"build\":\"succeeded\"},\"attempts\":{\"plan\":[{\"id\":\"0e96bea0-05dc-4608-b076-084dd830a8d1\",\"startedAt\":1792848685356,\"status\":\"succeeded\",\"endedAt\":1792848685360}],\"build\":[{\"id\":\"ae6cd391-a98c-4fa3-a9ff-d58ac6f4b824\",\"startedAt\":1792848685360,\"status\":\"failed\",\"endedAt\":1792848685363,\"reason\":\"error\",\"text\":\"The agent could not finish this turn.\"},{\"retryOf\":\"ae6cd391-a98c-4fa3-a9ff-d58ac6f4b824\",\"id\":\"5223f3e0-1050-4e1d-a0ec-eb5f2ba42a67\",\"startedAt\":1792848685365,\"status\":\"succeeded\",\"message\":\"Try again with the tests\",\"endedAt\":1792848685366}]}},\"helper\":{\"status\":\"done\",\"outcomes\":{}}}},\"replies\":[[\"[\\\"lead\\\",\\\"plan\\\"]\",\"SUCCEEDED\"],[\"[\\\"lead\\\",\\\"build\\\"]\",\"SUCCEEDED\"]],\"held\":[],\"arrived\":[],\"ended\":[],\"past\":[],\"due\":[],\"usageDecided\":[],\"warned\":[]},\"messages\":{\"version\":1,\"agents\":[{\"id\":\"lead\",\"submissions\":[{\"id\":\"f39a5156-80d1-472c-b686-6b0a0ac8ad04\",\"text\":\"Try again with the tests\",\"status\":\"completed\",\"after\":\"build\",\"task\":{\"agent\":\"lead\",\"item\":\"build\"},\"result\":{\"status\":\"completed\",\"reason\":\"completed\"}},{\"id\":\"82572b61-2e23-42c1-b65f-d13d38f2f8ae\",\"text\":\"Explain the plan\",\"status\":\"cancelled\",\"after\":\"build\",\"result\":{\"status\":\"cancelled\",\"reason\":\"interrupted\"}},{\"id\":\"ffabed22-31ee-4b62-b430-b53b4c65b2be\",\"text\":\"Explain the plan\",\"status\":\"completed\",\"retryOf\":\"82572b61-2e23-42c1-b65f-d13d38f2f8ae\",\"after\":\"build\",\"result\":{\"status\":\"completed\",\"reason\":\"completed\"}}]},{\"id\":\"helper\",\"submissions\":[{\"id\":\"fbb640ab-dcba-44d1-a891-42a0aaaa6e61\",\"text\":\"/compact\",\"status\":\"completed\",\"result\":{\"status\":\"completed\",\"reason\":\"completed\"}},{\"id\":\"native-typed\",\"text\":\"Typed in the terminal\",\"status\":\"completed\",\"result\":{\"status\":\"completed\",\"reason\":\"completed\"}},{\"id\":\"06d960ff-1f0b-4ab5-bace-040eddebcf4f\",\"text\":\"A slow follow-up\",\"status\":\"running\"},{\"id\":\"6793db97-1559-4bca-a730-68266decdca2\",\"text\":\"Then this\",\"status\":\"queued\"}]}]}}",
+        "updated_at": 1792848685376
+      },
+      {
+        "canvas_id": "6a1d9f1f-3d5c-4e9f-8b88-2f3e4d5c6b72",
+        "state": "{\"version\":2,\"state\":{\"version\":2,\"run\":{\"running\":false,\"agents\":{}},\"replies\":[],\"held\":[],\"arrived\":[],\"ended\":[],\"past\":[],\"due\":[],\"usageDecided\":[],\"warned\":[]},\"messages\":{\"version\":1,\"agents\":[]},\"saveError\":\"The run checkpoint is too large (over 32 MiB), so current run progress cannot be kept. Further run prompts are held; parties’ messages are still recorded and delivered. Restarting restores only the last checkpoint that fit, if any.\"}",
+        "updated_at": 1000
+      },
+      {
+        "canvas_id": "7b2e0a2a-4e6d-4fa0-9c99-3a4f5e6d7c83",
+        "state": "{\"saveError\":\"The run checkpoint is too large (over 32 MiB), so current run progress cannot be kept. Further run prompts are held; parties’ messages are still recorded and delivered. Restarting restores only the last checkpoint that fit, if any.\"}",
+        "updated_at": 3000
+      }
+    ],
+    "message": [
+      {
+        "seq": 1792848684704,
+        "id": "c658b77d-04b1-4d14-a7a2-ef0bf3243956",
+        "canvas_id": "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b",
+        "from_party": "outside:orchestrator",
+        "to_party": "agent:a",
+        "kind": "text",
+        "body": "Party work",
+        "reply_to": null,
+        "task": null,
+        "turn": null,
+        "state": "replied",
+        "delivery": "{\"at\":1792848684769,\"as\":\"a2b950bb-cd72-42da-a482-56425f8c6b1c\",\"attempt\":1}",
+        "by_party": null,
+        "sent_at": 1792848684765,
+        "told": null,
+        "withdrawal": null
+      },
+      {
+        "seq": 1792848684705,
+        "id": "8a256e1f-495b-4578-9654-18093e28fb43",
+        "canvas_id": "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b",
+        "from_party": "corrallm",
+        "to_party": "outside:orchestrator",
+        "kind": "notice",
+        "body": "No activity from Codex for 20 minutes: its connection may have dropped. Interrupt to stop the turn.",
+        "reply_to": "c658b77d-04b1-4d14-a7a2-ef0bf3243956",
+        "task": null,
+        "turn": null,
+        "state": "delivered",
+        "delivery": null,
+        "by_party": null,
+        "sent_at": 1792848684830,
+        "told": "stalled:c658b77d-04b1-4d14-a7a2-ef0bf3243956",
+        "withdrawal": null
+      },
+      {
+        "seq": 1792848684706,
+        "id": "61ab9518-ef5f-4bac-bc89-4c5e81842d0b",
+        "canvas_id": "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b",
+        "from_party": "agent:a",
+        "to_party": "outside:orchestrator",
+        "kind": "text",
+        "body": "",
+        "reply_to": "c658b77d-04b1-4d14-a7a2-ef0bf3243956",
+        "task": null,
+        "turn": "{\"status\":\"cancelled\",\"reason\":\"interrupted\"}",
+        "state": "delivered",
+        "delivery": null,
+        "by_party": null,
+        "sent_at": 1792848684840,
+        "told": null,
+        "withdrawal": null
+      },
+      {
+        "seq": 1792848684707,
+        "id": "016a8540-916d-469d-a071-a797ca770e94",
+        "canvas_id": "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b",
+        "from_party": "outside:orchestrator",
+        "to_party": "agent:a",
+        "kind": "text",
+        "body": "Party work",
+        "reply_to": "c658b77d-04b1-4d14-a7a2-ef0bf3243956",
+        "task": null,
+        "turn": null,
+        "state": "replied",
+        "delivery": "{\"at\":1792848684847,\"as\":\"1f273724-43b7-442f-88d4-54eab6c64d0c\",\"attempt\":1}",
+        "by_party": null,
+        "sent_at": 1792848684842,
+        "told": "resend:c658b77d-04b1-4d14-a7a2-ef0bf3243956",
+        "withdrawal": null
+      },
+      {
+        "seq": 1792848684708,
+        "id": "7b4a53d9-7c5f-43ae-817f-803f06e7c0a7",
+        "canvas_id": "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b",
+        "from_party": "corrallm",
+        "to_party": "outside:orchestrator",
+        "kind": "notice",
+        "body": "At the user's request, message c658b77d-04b1-4d14-a7a2-ef0bf3243956 was resent as 016a8540-916d-469d-a071-a797ca770e94. Its reply will be addressed to that new message.",
+        "reply_to": "c658b77d-04b1-4d14-a7a2-ef0bf3243956",
+        "task": null,
+        "turn": null,
+        "state": "delivered",
+        "delivery": null,
+        "by_party": null,
+        "sent_at": 1792848684842,
+        "told": "resent:c658b77d-04b1-4d14-a7a2-ef0bf3243956",
+        "withdrawal": null
+      },
+      {
+        "seq": 1792848684709,
+        "id": "482e9f51-a129-4fdd-a2f6-f9461716af60",
+        "canvas_id": "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b",
+        "from_party": "agent:a",
+        "to_party": "outside:orchestrator",
+        "kind": "text",
+        "body": "Done with the party work",
+        "reply_to": "016a8540-916d-469d-a071-a797ca770e94",
+        "task": null,
+        "turn": "{\"status\":\"completed\",\"reason\":\"completed\"}",
+        "state": "delivered",
+        "delivery": null,
+        "by_party": null,
+        "sent_at": 1792848684892,
+        "told": null,
+        "withdrawal": null
+      },
+      {
+        "seq": 1792848684710,
+        "id": "a50cc696-e7ae-4215-9d0c-49e87818508c",
+        "canvas_id": "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b",
+        "from_party": "you",
+        "to_party": "agent:a",
+        "kind": "text",
+        "body": "Manual work",
+        "reply_to": null,
+        "task": null,
+        "turn": "{\"status\":\"cancelled\",\"reason\":\"interrupted\"}",
+        "state": "replied",
+        "delivery": "{\"at\":1792848684945,\"as\":\"65f895b8-f0b0-409c-bfe1-73f227de4529\",\"attempt\":1}",
+        "by_party": null,
+        "sent_at": 1792848684945,
+        "told": null,
+        "withdrawal": null
+      },
+      {
+        "seq": 1792848684711,
+        "id": "07e93b7c-93dd-42fb-b906-5a12d5a0e88f",
+        "canvas_id": "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b",
+        "from_party": "you",
+        "to_party": "agent:a",
+        "kind": "text",
+        "body": "Manual work",
+        "reply_to": "a50cc696-e7ae-4215-9d0c-49e87818508c",
+        "task": null,
+        "turn": null,
+        "state": "replied",
+        "delivery": "{\"at\":1792848684950,\"as\":\"b8a52ee7-0212-4e56-87c6-e6c908db4ee3\",\"attempt\":1}",
+        "by_party": null,
+        "sent_at": 1792848684945,
+        "told": "resend:a50cc696-e7ae-4215-9d0c-49e87818508c:images",
+        "withdrawal": null
+      },
+      {
+        "seq": 1792848684712,
+        "id": "32b6407d-30b0-46a0-8adc-f48b649b2a3a",
+        "canvas_id": "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b",
+        "from_party": "corrallm",
+        "to_party": "you",
+        "kind": "notice",
+        "body": "At the user's request, message a50cc696-e7ae-4215-9d0c-49e87818508c was resent as 07e93b7c-93dd-42fb-b906-5a12d5a0e88f. Its reply will be addressed to that new message.",
+        "reply_to": "a50cc696-e7ae-4215-9d0c-49e87818508c",
+        "task": null,
+        "turn": null,
+        "state": "delivered",
+        "delivery": null,
+        "by_party": null,
+        "sent_at": 1792848684945,
+        "told": "resent:a50cc696-e7ae-4215-9d0c-49e87818508c",
+        "withdrawal": null
+      },
+      {
+        "seq": 1792848684713,
+        "id": "0a62f9d6-6ee8-4f3a-b62f-1f7d4b9092b8",
+        "canvas_id": "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b",
+        "from_party": "agent:a",
+        "to_party": "you",
+        "kind": "text",
+        "body": "Done with the manual work",
+        "reply_to": "07e93b7c-93dd-42fb-b906-5a12d5a0e88f",
+        "task": null,
+        "turn": "{\"status\":\"completed\",\"reason\":\"completed\"}",
+        "state": "delivered",
+        "delivery": null,
+        "by_party": null,
+        "sent_at": 1792848684998,
+        "told": null,
+        "withdrawal": null
+      },
+      {
+        "seq": 1792848684714,
+        "id": "7f75709b-1309-4e92-b8e5-1793d5fd0f8a",
+        "canvas_id": "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b",
+        "from_party": "you",
+        "to_party": "agent:b",
+        "kind": "text",
+        "body": "Your work",
+        "reply_to": null,
+        "task": null,
+        "turn": null,
+        "state": "unresolved",
+        "delivery": "{\"at\":1792848685115,\"as\":\"8c4a4850-028b-489b-af0e-7fbb4e294321\",\"attempt\":1}",
+        "by_party": null,
+        "sent_at": 1792848685110,
+        "told": null,
+        "withdrawal": null
+      },
+      {
+        "seq": 1792848684715,
+        "id": "1ff5eaeb-5ba1-4478-9e94-1459334a4645",
+        "canvas_id": "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b",
+        "from_party": "corrallm",
+        "to_party": "you",
+        "kind": "notice",
+        "body": "Your message to Peer was cut off when corrallm stopped; it won’t be sent again.",
+        "reply_to": "7f75709b-1309-4e92-b8e5-1793d5fd0f8a",
+        "task": null,
+        "turn": "{\"status\":\"cancelled\",\"reason\":\"connection-closed\"}",
+        "state": "delivered",
+        "delivery": null,
+        "by_party": null,
+        "sent_at": 1792848685174,
+        "told": null,
+        "withdrawal": null
+      }
+    ],
+    "read_position": [
+      {
+        "canvas_id": "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b",
+        "party": "outside:orchestrator",
+        "seq": 1792848684709
+      }
+    ],
+    "open_canvas": [
+      {
+        "canvas_id": "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b",
+        "opened_at": 1792848685179
+      },
+      {
+        "canvas_id": "6a1d9f1f-3d5c-4e9f-8b88-2f3e4d5c6b72",
+        "opened_at": 1792848685471
+      },
+      {
+        "canvas_id": "7b2e0a2a-4e6d-4fa0-9c99-3a4f5e6d7c83",
+        "opened_at": 1792848685566
+      }
+    ],
+    "conversation": [
+      {
+        "canvas_id": "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b",
+        "adapter": "codex",
+        "agent_id": "a",
+        "workspace_key": "project",
+        "native_id": "thread-a",
+        "role_fingerprint": null
+      },
+      {
+        "canvas_id": "5f0c8f0e-2c4b-4d8e-9a77-1e2d3c4b5a61",
+        "adapter": "claude-code",
+        "agent_id": "lead",
+        "workspace_key": "project",
+        "native_id": "ffffffff-0000-4000-8000-000000000001",
+        "role_fingerprint": "none"
+      }
+    ],
+    "repository": [
+      {
+        "id": "7c0e9a1e-1b6f-4b4f-9f3a-2d1c0b9a8e70",
+        "picked_root": "/var/folders/yw/8yylch6d01583v4wy0cwp02m0000gn/T/corrallm-fixture-3-wCYumf/project",
+        "real_root": "/var/folders/yw/8yylch6d01583v4wy0cwp02m0000gn/T/corrallm-fixture-3-wCYumf/project",
+        "common_dir": "/var/folders/yw/8yylch6d01583v4wy0cwp02m0000gn/T/corrallm-fixture-3-wCYumf/project/.git",
+        "identity": "repository identity",
+        "root_kind": "project",
+        "owned_root": "/var/folders/yw/8yylch6d01583v4wy0cwp02m0000gn/T/corrallm-fixture-3-wCYumf/project/.corral/worktrees/profile",
+        "generation": 0
+      }
+    ],
+    "canvas_repository": [
+      {
+        "canvas_id": "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b",
+        "repository_id": "7c0e9a1e-1b6f-4b4f-9f3a-2d1c0b9a8e70",
+        "generation": 1
+      }
+    ],
+    "worktree": [
+      {
+        "id": "9d1c5a0e-0f4e-4c11-8a51-0b1f2e3d4c51",
+        "canvas_id": "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b",
+        "repository_id": "7c0e9a1e-1b6f-4b4f-9f3a-2d1c0b9a8e70",
+        "owner_key": "group/team",
+        "path": "/var/folders/yw/8yylch6d01583v4wy0cwp02m0000gn/T/corrallm-fixture-3-wCYumf/project/.corral/worktrees/profile/9d1c5a0e-0f4e-4c11-8a51-0b1f2e3d4c51",
+        "branch_ref": "refs/heads/corrallm/profile/9d1c5a0e-0f4e-4c11-8a51-0b1f2e3d4c51",
+        "base_checkout": "/var/folders/yw/8yylch6d01583v4wy0cwp02m0000gn/T/corrallm-fixture-3-wCYumf/project",
+        "base_ref": "refs/heads/main",
+        "base_oid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "forked_from": null,
+        "state": "creating",
+        "generation": 1,
+        "created_at": 1000,
+        "error_code": null
+      }
+    ],
+    "agent_worktree": [
+      {
+        "canvas_id": "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b",
+        "agent_id": "a",
+        "workspace_id": "9d1c5a0e-0f4e-4c11-8a51-0b1f2e3d4c51",
+        "generation": 1000,
+        "desired_generation": null,
+        "desired_owner_key": null
+      }
+    ],
+    "worktree_job": [
+      {
+        "id": "c0ffee00-0000-4000-8000-000000000001",
+        "workspace_id": "9d1c5a0e-0f4e-4c11-8a51-0b1f2e3d4c51",
+        "kind": "create",
+        "phase": "registered",
+        "generation": 1,
+        "expected_identity": null,
+        "payload": "{\"ref\":\"refs/heads/corrallm/profile/9d1c5a0e-0f4e-4c11-8a51-0b1f2e3d4c51\"}",
+        "intent_hash": "b78ee90a70ea38bc6aeaa7fca549d6d45ab098824d389f285e727e37b747a186",
+        "outcome": null,
+        "created_at": 1000,
+        "updated_at": 1000
+      }
+    ],
+    "worktree_setup": [
+      {
+        "workspace_id": "9d1c5a0e-0f4e-4c11-8a51-0b1f2e3d4c51",
+        "generation": 1,
+        "command_snapshot": "make setup",
+        "source": "configured",
+        "spec_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "copy_manifest_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "state": "pending",
+        "approved_by": null,
+        "approved_at": null,
+        "log_key": null,
+        "exit_code": null
+      }
+    ],
+    "project_setup": [
+      {
+        "repository_id": "7c0e9a1e-1b6f-4b4f-9f3a-2d1c0b9a8e70",
+        "command": "make setup",
+        "shell_kind": "posix",
+        "always_spec_hash": null,
+        "changed_at": 1000
+      }
+    ]
+  }
+}

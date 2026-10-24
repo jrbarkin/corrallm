@@ -1,7 +1,7 @@
 import type { AgentId } from '../api/ids';
 import type { ConnectionId } from '../adapter';
 import type { BackgroundTask, SlashCommand } from '../session';
-import type { Message } from './messages';
+import type { Message, MessageDisplay, MessageOrigin } from './messages';
 import type { QueueItem } from './queue';
 import type { Run } from './run';
 import { isOpen, turnReply } from './session';
@@ -62,14 +62,6 @@ export interface SessionView {
   readonly order: readonly string[];
 }
 
-export const MESSAGE_ORIGINS = ['manual', 'party', 'run', 'resend'] as const;
-export type MessageOrigin = (typeof MESSAGE_ORIGINS)[number];
-export interface MessageDisplay {
-  readonly after?: string;
-  readonly text?: string;
-  readonly images?: number;
-  readonly requiresImages?: true;
-}
 export interface MessageView extends ReadonlyData<Message> {
   readonly origin: MessageOrigin;
   readonly display?: MessageDisplay;

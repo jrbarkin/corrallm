@@ -1,3 +1,4 @@
+import { convertToSchema4 } from './conversion-4';
 import type { Connection } from './sqlite';
 import { transaction } from './transaction';
 
@@ -22,6 +23,13 @@ export interface Migration {
   /** The oldest schema whose code may still open the database once it ran (meta.min_reader). */
   minReader: number;
   sql: string;
+  /**
+   * What its SQL can't do (B11 Design §16 item 2: migration 4's alone), run by `migrate` within
+   * the migration's transaction, through its connection, after its SQL and before what it leaves
+   * is checked and its version recorded: it fails, or commits, with the rest of the migration. Its
+   * module is reached from here alone, and refuses to run anywhere else (conversion-4.ts).
+   */
+  convert?: (connection: Connection) => void;
 }
 
 /**
@@ -440,6 +448,77 @@ export const MIGRATIONS: readonly Migration[] = [
       ) STRICT;
     `,
   },
+  {
+    // B11's (B11 Design §4): how each message came to be, and what a view shows of it, so that
+    // your manual messages are the mailbox's, never a run checkpoint's; each run journaled in an
+    // envelope of its own, with no submissions beside it. A corrallm of schema 3 would journal a
+    // window's checkpoint over it, writing messages with no origin, and take a resend for a
+    // reply, so it may no longer open the database.
+    version: 4,
+    minReader: 4,
+    sql: `
+      -- How each message came to be (origin): typed by you, a party's or corrallm's, the run's,
+      -- or one you asked to send again, and the message it sends again (resend_of: never its
+      -- reply_to, which is only a reply's, or a record's about another); what a view shows of it
+      -- beside its body (display: never an image's bytes). Rebuilt, rather than given columns
+      -- with defaults, so that every row written names its origin; its rows set aside first, so
+      -- that the new table takes the pages the old one leaves. Each existing one by what made it:
+      -- Interrupt and resend's (marked by its notice key and its reply link, which move to
+      -- resend_of; one that needed images it no longer has requires them), yours, or a party's.
+      -- Every place given stays given, the newest deleted ones' too (SEQUENCES).
+      CREATE TEMP TABLE message_3 AS SELECT * FROM message;
+      CREATE TEMP TABLE message_3_sequence AS
+        SELECT seq FROM sqlite_sequence WHERE name = 'message';
+      DROP TABLE message;
+      CREATE TABLE message (
+        seq INTEGER PRIMARY KEY AUTOINCREMENT,
+        id TEXT NOT NULL UNIQUE,
+        canvas_id TEXT NOT NULL REFERENCES canvas (id) ON DELETE CASCADE,
+        from_party TEXT NOT NULL,
+        to_party TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        origin TEXT NOT NULL CHECK (origin IN ('manual', 'party', 'run', 'resend')),
+        body TEXT NOT NULL,
+        display TEXT CHECK (json_valid(display)),
+        reply_to TEXT,
+        resend_of TEXT CHECK (resend_of IS NULL OR origin = 'resend'),
+        task TEXT CHECK (json_valid(task)),
+        turn TEXT CHECK (json_valid(turn)),
+        state TEXT NOT NULL,
+        delivery TEXT CHECK (json_valid(delivery)),
+        by_party TEXT,
+        sent_at INTEGER NOT NULL,
+        told TEXT,
+        withdrawal TEXT CHECK (json_valid(withdrawal))
+      ) STRICT;
+      INSERT INTO message (seq, id, canvas_id, from_party, to_party, kind, origin, body, display,
+          reply_to, resend_of, task, turn, state, delivery, by_party, sent_at, told, withdrawal)
+        SELECT seq, id, canvas_id, from_party, to_party, kind,
+          CASE WHEN resend THEN 'resend' WHEN from_party = 'you' THEN 'manual' ELSE 'party' END,
+          body,
+          CASE WHEN resend AND told = 'resend:' || reply_to || ':images'
+            THEN '{"requiresImages":true}' END,
+          CASE WHEN resend THEN NULL ELSE reply_to END,
+          CASE WHEN resend THEN reply_to END,
+          task, turn, state, delivery, by_party, sent_at,
+          CASE WHEN resend THEN NULL ELSE told END,
+          withdrawal
+        FROM (SELECT *, coalesce(reply_to IS NOT NULL
+            AND told IN ('resend:' || reply_to, 'resend:' || reply_to || ':images'), 0) AS resend
+          FROM temp.message_3);
+      CREATE INDEX message_by_canvas ON message (canvas_id, seq);
+      INSERT INTO sqlite_sequence (name, seq)
+        SELECT 'message', 0
+        WHERE NOT EXISTS (SELECT 1 FROM sqlite_sequence WHERE name = 'message');
+      UPDATE sqlite_sequence
+        SET seq = max(seq, coalesce((SELECT seq FROM temp.message_3_sequence), 0))
+        WHERE name = 'message';
+      DROP TABLE temp.message_3;
+      DROP TABLE temp.message_3_sequence;
+    `,
+    // Each run's envelope, and its submissions your messages (conversion-4.ts).
+    convert: convertToSchema4,
+  },
 ];
 
 /** The schema this code makes and reads. */
@@ -462,13 +541,14 @@ export function migrate(
   connection: Connection,
   migrations: readonly Migration[] = MIGRATIONS,
 ): void {
-  for (const { version, minReader, sql } of migrations) {
+  for (const { version, minReader, sql, convert } of migrations) {
     if (version <= schemaOf(connection)) continue;
     const enforced = connection.prepare('PRAGMA foreign_keys').get()?.foreign_keys === 1;
     connection.exec('PRAGMA foreign_keys = OFF');
     try {
       transaction(connection, () => {
         connection.exec(sql);
+        convert?.(connection);
         const dangling = connection.prepare('PRAGMA foreign_key_check').get();
         if (dangling !== undefined) {
           throw new Error(
