@@ -1,8 +1,11 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { lstat } from 'node:fs/promises';
+import path from 'node:path';
 
 import type { CanvasId } from '../../../shared/canvas';
 import { OpFailure } from '../call';
 import { checkCheckout } from './checkout';
+import { registrations } from './discovery';
 import { GitError } from './git';
 import type { GitRunner } from './git';
 import { ProvisioningQueue } from './queue';
@@ -19,7 +22,8 @@ import type { Json, JobRecord, WorkspaceStore, WorktreeRecord } from './store';
  *   tip are both reachable from the picked checkout's HEAD now (merged; its base commit alone isn't
  *   proof), and which agents may still be writing there (a turn, a setup, a close that didn't
  *   finish). What Git couldn't read is unknown: never taken for safe. Its fingerprint changes
- *   whenever any of it does: what an approval is bound to.
+ *   whenever any of it does (a changed file written again too: each file its status names is
+ *   read as the file system has it): what an approval is bound to.
  * - **Safe** is clean, merged and with no writer: such a tree is removed with its last agent,
  *   without asking. Anything else asks you first (the deletion's confirmation, R4's proposal), and
  *   keeps the tree unless you chose to discard it.
@@ -27,11 +31,12 @@ import type { Json, JobRecord, WorkspaceStore, WorktreeRecord } from './store';
  *   delete's commit, an Allow, a kept tree's Remove): the workspace `removing`, with a `remove` job
  *   saying what was decided (its branch deleted too, the fingerprint you approved). Then, outside
  *   SQL, in its repository's lane of the provisioning queue (`remove`): its writers waited for,
- *   briefly; it is assessed again and must still be what was decided (the fingerprint you
- *   approved, or safe), else it is kept (`retained`), never destroying work added while you
- *   decided; its checkout verified, then removed by Git (forced only for a discard you approved);
- *   its branch deleted only at the commit it was decided at; its setup's log and copy record
- *   removed; and its record forgotten, its job finished, in one write. A step that fails leaves it
+ *   briefly; it is assessed again and must still be what was decided (what it held as you
+ *   approved, its writers aside, or safe), else it is kept (`retained`), never destroying work
+ *   added while you decided; its checkout verified, then removed by Git (forced only for a
+ *   discard you approved); its branch deleted only at the commit it was decided at, and only if
+ *   no checkout is on it; its setup's log and copy record removed; and its record forgotten, its
+ *   job finished, in one write. A step that fails leaves it
  *   `removing` with its error code, said in the kept trees, tried again as the core next starts
  *   (`reconcile`) or when you remove it again: never reported done before it is.
  * - **Kept trees** (`kept`): every retained or removing workspace of the profile's canvases, with
@@ -65,7 +70,11 @@ export interface TreeState {
   setup: boolean;
   /** Why it couldn't be checked, if it couldn't: unknown, never safe. */
   unknown?: string;
-  /** Its status as Git printed it, hashed: what changes when any of its files does. */
+  /**
+   * Its status as Git printed it, with each file it names as the file system has it now (its
+   * inode, size and times), hashed: what changes when any of its files does, though Git would
+   * print it as it did (a changed file written again).
+   */
   status: string;
 }
 
@@ -81,7 +90,7 @@ export function safe(state: TreeState): boolean {
   );
 }
 
-/** A tree's state's fingerprint: what an approval of its removal is bound to. */
+/** A tree's state's fingerprint: what a decision of its removal is bound to. */
 export function fingerprint(state: TreeState): string {
   const { workspace, head, tip, changed, untracked, merged, writers, setup, unknown, status } =
     state;
@@ -104,13 +113,25 @@ export function fingerprint(state: TreeState): string {
     .digest('hex');
 }
 
+/**
+ * What a tree holds, whoever may be writing there: what its removal is bound to once those
+ * writers have stopped (it waits for them first), so a decision made while an agent's session ran
+ * there (the deletion that ends it) removes it, unless that session wrote anything meanwhile.
+ */
+export function heldFingerprint(state: TreeState): string {
+  return fingerprint({ ...state, writers: [], setup: false });
+}
+
 /** What was decided of a tree no agent works in: removed (how), or kept. */
 export interface Removal {
   /** Its generated branch deleted too (only at the commit it was decided at). */
   branch: boolean;
   /** Removed whatever its checkout holds: a discard you approved. */
   force: boolean;
-  /** The fingerprint you approved (none: removed as safe, which it must still be). */
+  /**
+   * What it held as you approved (`heldFingerprint`; none: removed as safe, which it must still
+   * be).
+   */
   approved: string | null;
   /** Its branch's tip as decided: deleted only if it is still there. */
   tip: string | null;
@@ -220,6 +241,7 @@ export class WorkspaceCleanup {
         ],
       });
       const entries = statusEntries(stdout);
+      const files = await filesOf(tree.path, entries);
       const head = await this.#commit(tree.path, drivers, 'HEAD');
       const baseHead = await this.#commit(repository.realRoot, base.drivers, 'HEAD');
       const reachable = async (oid: string | null) =>
@@ -243,7 +265,7 @@ export class WorkspaceCleanup {
         merged: head !== null && (await reachable(head)) && (await reachable(tip)),
         writers,
         setup,
-        status: createHash('sha256').update(stdout).digest('hex'),
+        status: createHash('sha256').update(stdout).update('\0').update(files).digest('hex'),
       };
     } catch (error) {
       if (!(error instanceof GitError)) throw error;
@@ -333,7 +355,7 @@ export class WorkspaceCleanup {
           'The worktree changed since you were asked about it: decide again on what it holds now.',
         );
       }
-      removal = { branch: true, force: true, approved: fingerprint(state), tip: state.tip };
+      removal = { branch: true, force: true, approved: heldFingerprint(state), tip: state.tip };
     } else if (safe(state)) {
       removal = { branch: true, force: false, approved: null, tip: state.tip };
     } else {
@@ -399,7 +421,7 @@ export class WorkspaceCleanup {
     }
     // Still what was decided: never work added since.
     const decided =
-      removal.approved === null ? safe(state) : fingerprint(state) === removal.approved;
+      removal.approved === null ? safe(state) : heldFingerprint(state) === removal.approved;
     if (!decided) {
       await workspaces.write((w) => {
         w.transition(workspace, { from: 'removing', to: 'retained' });
@@ -427,8 +449,14 @@ export class WorkspaceCleanup {
       // Not the checkout made, or not readable: nothing there is removed.
       return this.#failed(workspace, `cleanup-${checked.fault}`);
     }
-    if (removal.branch && state.tip !== null && state.tip === removal.tip) {
-      // Only at the commit it was decided at: a branch someone moved since is kept.
+    if (
+      removal.branch &&
+      state.tip !== null &&
+      state.tip === removal.tip &&
+      !(await this.#checkedOut(repository.realRoot, base.drivers, tree.branchRef))
+    ) {
+      // Only at the commit it was decided at: a branch someone moved since is kept, and so is one
+      // a checkout is on (the picked one, say), which would be left on no branch.
       await git.run({
         cwd: repository.realRoot,
         drivers: base.drivers,
@@ -462,6 +490,19 @@ export class WorkspaceCleanup {
     const tree = this.#deps.workspaces.worktree(workspace);
     if (tree !== undefined) this.#changed(tree.canvas);
     return 'failed';
+  }
+
+  /**
+   * Whether any checkout of the repository (the picked one, a worktree) has `ref` checked out: one
+   * whose folder is gone (prunable) strands no checkout.
+   */
+  async #checkedOut(cwd: string, drivers: readonly string[], ref: string): Promise<boolean> {
+    const { stdout } = await this.#deps.git.run({
+      cwd,
+      drivers,
+      args: ['worktree', 'list', '--porcelain', '-z'],
+    });
+    return registrations(stdout).some(({ branch, prunable }) => branch === ref && !prunable);
   }
 
   /** The commit `ref` names where `cwd` is, if it names one. */
@@ -498,6 +539,32 @@ function removalOf(job: JobRecord | undefined): Removal {
     approved: typeof approved === 'string' ? approved : null,
     tip: typeof tip === 'string' ? tip : null,
   };
+}
+
+/**
+ * Each file a status names, as the file system has it now, never followed through a link: its
+ * inode, size, mode and modification and change times (a write moves its change time, which nothing
+ * sets back), or that it isn't there. Serialized, in the status's order.
+ */
+async function filesOf(root: string, entries: readonly { path: string }[]): Promise<string> {
+  const files = await Promise.all(
+    entries.map(async ({ path: name }) => {
+      try {
+        const stat = await lstat(path.join(root, name), { bigint: true });
+        return [
+          name,
+          String(stat.ino),
+          String(stat.size),
+          String(stat.mode),
+          String(stat.mtimeNs),
+          String(stat.ctimeNs),
+        ];
+      } catch {
+        return [name, null];
+      }
+    }),
+  );
+  return JSON.stringify(files);
 }
 
 /** The entries of `git status --porcelain=v1 -z`: each path, and whether it is untracked. */

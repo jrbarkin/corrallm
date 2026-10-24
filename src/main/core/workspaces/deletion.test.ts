@@ -40,11 +40,14 @@ const YOU = CALLERS.you;
 let made: TestWorkspaces;
 let core: Core | undefined;
 let cleanup: WorkspaceCleanup | undefined;
+/** Who else may be writing in a tree, as a session the resolver binds there would (X11b). */
+let writing: ((tree: WorktreeRecord) => readonly string[]) | undefined;
 
 beforeEach(async () => {
   made = await testWorkspaces();
   core = undefined;
   cleanup = undefined;
+  writing = undefined;
 });
 
 afterEach(async () => {
@@ -134,6 +137,7 @@ async function start({
       cleanup: (deps) => {
         cleanup = new WorkspaceCleanup({
           ...deps,
+          writers: (tree) => [...deps.writers(tree), ...(writing?.(tree) ?? [])],
           git: new GitRunner(made.runnerDeps),
           settleMs: 2000,
         });
@@ -250,6 +254,28 @@ describe('deleting the last agent of a worktree', { timeout: 60_000 }, () => {
     expect(existsSync(trees.a.path)).toBe(false);
     expect(branchAt(trees.a.branchRef)).toBeUndefined();
     expect(stateOf(trees.b.id)).toBe('setup');
+  });
+
+  it('removes it on Discard though its agent’s session ran there as you were asked', async () => {
+    const { core: on, trees } = await start();
+    // Builder's session runs in its tree for as long as Builder is on the canvas.
+    writing = (tree) => (tree.id === trees.a.id && (agents(on) ?? []).includes('a') ? ['a'] : []);
+    writeFileSync(path.join(trees.a.path, 'notes.md'), 'draft\n');
+    const asked = (await ok(on, 'canvas.delete', { nodes: ['a'] })) as { proposed: string };
+    expect((await needOf(on, asked.proposed))?.detail).toMatch(/Builder may still be writing/);
+    expect(
+      await ok(on, 'reply', { to: asked.proposed, answer: { choice: 'discard' } }),
+    ).toMatchObject({ outcome: 'allowed' });
+    expect(agents(on)).toEqual(['b']);
+    // Its session ended with it, having written nothing more: removed, as you chose.
+    await vi.waitFor(
+      () => {
+        expect(stateOf(trees.a.id)).toBeUndefined();
+      },
+      { timeout: 20_000, interval: 50 },
+    );
+    expect(existsSync(trees.a.path)).toBe(false);
+    expect(branchAt(trees.a.branchRef)).toBeUndefined();
   });
 
   it('removes a clean, merged one with its last agent, without asking', async () => {

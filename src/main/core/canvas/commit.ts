@@ -13,7 +13,7 @@ import type { Staged } from '../delivery/messages';
 import { changeSetOf } from './change';
 import type { ChangeSet } from './change';
 import type { Built, Documents, LiveDocument } from './documents';
-import { fingerprint, safe } from '../workspaces/cleanup';
+import { fingerprint, heldFingerprint, safe } from '../workspaces/cleanup';
 import type { CleanupDecision, Removal, TreeState } from '../workspaces/cleanup';
 import { safeRemovals } from '../workspaces/planner';
 import type { Removals } from '../workspaces/planner';
@@ -232,7 +232,7 @@ function decided(
     removals: new Map(
       trees.map((tree): [string, Removal] => [
         tree.workspace,
-        { branch: true, force: true, approved: fingerprint(tree), tip: tree.tip },
+        { branch: true, force: true, approved: heldFingerprint(tree), tip: tree.tip },
       ]),
     ),
     asks: [],

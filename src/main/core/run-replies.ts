@@ -32,16 +32,18 @@ import type { Answer, ReplyHandler, ReplyResult } from './replies';
  * - A refusal's Switch runs Continue in Terminal's own service (`session.continueIn`, through
  *   ctx.call as the same caller: yours alone, D9, whoever may answer the hold), with no input; the
  *   run then sends the held attempt itself, once, as its session starts on the other connection.
- * - A prompt's answer goes to its CLI first, awaited, recorded as being made before it is told: the
- *   prompt is shown answered only once the CLI took it; one the CLI refused still waits, its record
- *   withdrawn. A crash in between leaves the record unresolved, never answered again.
+ * - A prompt's answer goes to its CLI first, awaited, recorded as being made before it is told, and
+ *   told only if the session that asked it still runs (a later one asking by the same native id
+ *   asks another prompt): the prompt is shown answered only once the CLI took it; one the CLI
+ *   refused still waits, its record withdrawn. A crash in between leaves the record unresolved,
+ *   never answered again.
  * - No record holds what was answered: no words, values, answers or feedback (a secret is never
  *   written), only what kind of answer it was.
  */
 
 export interface RunRepliesDeps {
   engines: Pick<Engines, 'canvas'>;
-  sessions: Pick<SessionManager, 'answer'>;
+  sessions: Pick<SessionManager, 'answer' | 'generationOf'>;
   /** The locale holds are worded in. */
   locale?: string;
 }
@@ -293,6 +295,17 @@ export function runReplies({ engines, sessions, locale }: RunRepliesDeps): Reply
         throw new OpFailure(
           'unavailable',
           'The answer couldn’t be recorded, so it wasn’t given: try again.',
+        );
+      }
+      // Still the session that asked it, now that the record is on disk: one started since (a
+      // resumed conversation asking again, by the same native id) asks another prompt, never
+      // answered with this one's answer. Nothing is awaited from here until its CLI is told.
+      if (String(sessions.generationOf(canvas, id.agent) ?? 0) !== id.generation) {
+        withdrawnDecision(open.messages, record.id, `${name}’s session started again first`);
+        await open.messages.durable().catch(() => undefined);
+        throw new OpFailure(
+          'conflict',
+          `${name}’s session has started again since: answer what it asks now, not ${item.id}.`,
         );
       }
       ctx.noReturn();

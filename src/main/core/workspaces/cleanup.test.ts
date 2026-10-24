@@ -1,4 +1,12 @@
-import { existsSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import path from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -146,6 +154,52 @@ describe('removing a tree', { timeout: 60_000 }, () => {
     expect(made.workspaces.worktree(tree.id)).toBeUndefined();
   });
 
+  it('keeps a discard approved before a file it holds was written again, with its work', async () => {
+    const service = cleanup();
+    const tree = await kept();
+    writeFileSync(path.join(tree.path, 'notes.md'), 'draft\n');
+    writeFileSync(path.join(tree.path, 'README.md'), 'changed\n');
+    const asked = await service.assess(tree);
+    await decide(service, tree, {
+      branch: true,
+      force: true,
+      approved: fingerprint(asked),
+      tip: made.base,
+    });
+    // The same files written again while you decided: Git's status of them is as it was, but
+    // what they hold isn't, so the tree is kept with that work.
+    appendFileSync(path.join(tree.path, 'notes.md'), 'more, written while you decided\n');
+    writeFileSync(path.join(tree.path, 'README.md'), 'CHANGED\n');
+    expect(fingerprint(await service.assess(tree))).not.toBe(fingerprint(asked));
+    expect(await service.remove(tree.id)).toBe('retained');
+    expect(readFileSync(path.join(tree.path, 'notes.md'), 'utf8')).toContain('more');
+    expect(readFileSync(path.join(tree.path, 'README.md'), 'utf8')).toBe('CHANGED\n');
+    // Read again as it is, untouched: the same fingerprint.
+    const now = await service.assess(made.workspaces.worktree(tree.id) ?? tree);
+    expect(fingerprint(await service.assess(tree))).toBe(fingerprint(now));
+  });
+
+  it('removes a kept tree you chose to discard while a session was still closing there, once it has', async () => {
+    const service = cleanup();
+    const tree = await kept();
+    writeFileSync(path.join(tree.path, 'notes.md'), 'draft\n');
+    // A session whose bounded close hadn't finished as you were asked: it is a writer there.
+    writers = ['builder'];
+    const asked = await service.assess(tree);
+    expect(asked.writers).toEqual(['builder']);
+    const decision = {
+      choice: 'discard' as const,
+      fingerprints: { [tree.id]: fingerprint(asked) },
+    };
+    // It finishes closing as the removal waits for it, having written nothing more.
+    setTimeout(() => {
+      writers = [];
+    }, 10);
+    expect(await service.removeKept(CANVAS, tree.id, decision)).toEqual({ removed: true });
+    expect(existsSync(tree.path)).toBe(false);
+    expect(made.workspaces.worktree(tree.id)).toBeUndefined();
+  });
+
   it('keeps a branch moved since it was decided, removing only the tree', async () => {
     const service = cleanup();
     const tree = await kept();
@@ -154,6 +208,24 @@ describe('removing a tree', { timeout: 60_000 }, () => {
     expect(await service.remove(tree.id)).toBe('removed');
     expect(existsSync(tree.path)).toBe(false);
     expect(branchAt(tree.branchRef)).toBe(made.base);
+  });
+
+  it('keeps a branch checked out in another checkout, removing only the tree', async () => {
+    const service = cleanup();
+    const tree = await kept();
+    // Its agent moved its tree to a branch of its own, at the same commit; you then checked its
+    // generated branch out in the picked checkout, to look at it.
+    git(tree.path, made.env, 'switch', '--quiet', '-c', 'elsewhere');
+    const branch = tree.branchRef.slice('refs/heads/'.length);
+    git(made.app, made.env, 'switch', '--quiet', branch);
+    const state = await service.assess(tree);
+    expect(safe(state)).toBe(true);
+    await decide(service, tree, { branch: true, force: false, approved: null, tip: state.tip });
+    expect(await service.remove(tree.id)).toBe('removed');
+    expect(existsSync(tree.path)).toBe(false);
+    // The checkout on it is still on a branch that is there, at its commit.
+    expect(branchAt(tree.branchRef)).toBe(made.base);
+    expect(git(made.app, made.env, 'rev-parse', '--verify', 'HEAD').trim()).toBe(made.base);
   });
 
   it('keeps a tree that turned unsafe as removing waited, rather than remove it as safe', async () => {

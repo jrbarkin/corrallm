@@ -185,6 +185,41 @@ function eliciting(answers: SessionAnswer[]): Connector<SessionMode> {
   };
 }
 
+/**
+ * A connector whose every session asks permission for one tool use, by the same native id (as a
+ * resumed conversation asks again for the call it was cut off at), recording which session (by
+ * the order they started) took each answer.
+ */
+function reasking(taken: { session: number; given: SessionAnswer }[]): Connector<SessionMode> {
+  const fake = new FakeConnector({ mode: 'acceptEdits' });
+  let started = 0;
+  return {
+    start: async (spec, host) => {
+      const session: LiveSession<SessionMode> = await fake.start(spec, host);
+      started += 1;
+      const index = started;
+      session.send = (message) => {
+        host.emit({ type: 'user', id: message.id, text: message.text });
+        host.emit({ type: 'status', status: 'working' });
+        host.emit({
+          type: 'permission',
+          id: 'toolu_same',
+          tool: 'Bash',
+          summary: 'rm -rf build',
+          always: null,
+        });
+        host.emit({ type: 'status', status: 'waiting' });
+        session.answer = (_prompt, given) => {
+          taken.push({ session: index, given });
+          return Promise.resolve();
+        };
+        return Promise.resolve();
+      };
+      return session;
+    },
+  };
+}
+
 async function start(
   connectors: Partial<Record<string, Connector<SessionMode>>> = {},
 ): Promise<{ core: Core; sdk: FakeConnector; terminal: FakeConnector }> {
@@ -475,6 +510,41 @@ describe('a session’s prompt', () => {
       ok: false,
       error: { code: 'conflict', sentence: expect.stringMatching(/You denied/) as string },
     });
+  });
+
+  it('is never answered for a later session that asks again by the same native id', async () => {
+    const taken: { session: number; given: SessionAnswer }[] = [];
+    const { core } = await start({ 'claude-code.sdk': reasking(taken) });
+    const open = core.engines.canvas(CANVAS);
+    if (open === undefined) throw new Error('not open');
+    await ok(core, 'message', { to: 'b', body: 'Clean the build' });
+    const first = await waitingFor(core, isPrompt('b'));
+    // As your answer is being recorded, the session ends and another starts, which asks for the
+    // same tool use again, by the same id: a prompt of another generation, not yet answered.
+    const durable = open.messages.durable.bind(open.messages);
+    let again: NeedsItem | undefined;
+    let swapped = false;
+    vi.spyOn(open.messages, 'durable').mockImplementation(async () => {
+      await durable();
+      const recording = open.messages
+        .toldStarting(`decided:${first.id}#`)
+        .some(({ state }) => state === 'delivering');
+      if (swapped || !recording) return;
+      swapped = true;
+      await open.engine.sessions.close('b');
+      await open.delivery.send('you', 'b', 'Clean it again');
+      again = await waitingFor(core, (item) => isPrompt('b')(item) && item.id !== first.id);
+    });
+    const answered = await call(core, 'reply', { to: first.id, answer: { permission: 'once' } });
+    expect(again?.id).toMatch(/^prompt\/b\/\d+\/toolu_same$/);
+    // The later session's prompt is not what you answered: nothing told it, and it still waits.
+    expect(taken).toEqual([]);
+    expect(answered).toMatchObject({ ok: false, error: { code: 'conflict' } });
+    expect((await needsOf(core)).map(({ id }) => id)).toContain(again?.id);
+    vi.restoreAllMocks();
+    // Answered as itself, it is.
+    await ok(core, 'reply', { to: again?.id ?? '', answer: { permission: 'once' } });
+    expect(taken).toEqual([{ session: 2, given: { kind: 'permission', answer: 'once' } }]);
   });
 
   it('never writes a secret, nor shows a token the form', async () => {

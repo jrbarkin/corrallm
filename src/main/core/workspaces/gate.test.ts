@@ -114,6 +114,46 @@ describe('the workspace mutation gate', () => {
     expect(await gate.holding(OTHER, 'x')).toBeUndefined();
   });
 
+  it('drains whole trees: refused while any agent of them writes, on any canvas, none exempt', async () => {
+    const OTHER = '9e8d7c6b-5a4f-4e3d-9c2b-1a0f9e8d7c6b' as CanvasId;
+    const writing = new Map([[`${OTHER}/x`, 'has a turn going on']]);
+    const trees: Record<string, TreeKey[]> = {
+      [`${CANVAS}/a`]: [OWN],
+      [`${CANVAS}/b`]: [SHARED],
+      [`${OTHER}/x`]: [OWN],
+    };
+    const gate = new WorkspaceGate({
+      canvases: () => [CANVAS, OTHER],
+      agents: (canvas) => (canvas === CANVAS ? ['a', 'b'] : ['x']),
+      session: (canvas, agent) => trees[`${canvas}/${agent}`]?.[0],
+      trees: (canvas, agent) => Promise.resolve(trees[`${canvas}/${agent}`] ?? []),
+      writing: (canvas, agent) => writing.get(`${canvas}/${agent}`),
+      nameOf: (_canvas, agent) => agent.toUpperCase(),
+    });
+    await expect(gate.drain(CANVAS, [OWN], () => Promise.resolve())).rejects.toThrow(
+      /and an agent on another canvas has a turn going on/,
+    );
+    writing.clear();
+    const done = Promise.withResolvers<undefined>();
+    let heard: readonly string[] = [];
+    const draining = gate.drain(CANVAS, [OWN], (members) => {
+      heard = members;
+      return done.promise;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    // Every member's new work waits, its own canvas's and another's; the other tree's doesn't.
+    expect(heard).toEqual(['a']);
+    expect(await gate.holding(CANVAS, 'a')).toMatch(/being restored/);
+    expect(await gate.holding(OTHER, 'x')).toMatch(/being restored/);
+    expect(await gate.holding(CANVAS, 'b')).toBeUndefined();
+    await expect(gate.mutate(OTHER, 'x', () => Promise.resolve())).rejects.toThrow(
+      /another agent’s restore/,
+    );
+    done.resolve(undefined);
+    await draining;
+    expect(await gate.holding(CANVAS, 'a')).toBeUndefined();
+  });
+
   it('refuses an agent with no session running', async () => {
     const gate = new WorkspaceGate({
       canvases: () => [CANVAS],
