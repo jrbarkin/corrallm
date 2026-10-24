@@ -6,6 +6,7 @@ import { isDocOp, itemOf } from '../canvas/proposals';
 import type { Outcome } from '../canvas/proposals';
 import { itemOf as reviewItemOf } from '../canvas/reviews';
 import { partyText } from '../parties';
+import { SetupError } from '../workspaces/setup';
 import type { Implementations, OpServices } from '.';
 
 /*
@@ -21,6 +22,10 @@ import type { Implementations, OpServices } from '.';
  * the same commit, which the canvas's run follows; if the file changed since, the review is
  * superseded by one of what is there now (none if that is as the core has it), changing nothing.
  * Keep settles it; the canvas's next save writes it over the file.
+ *
+ * A worktree's setup card (workspaces/setup.ts, B9a): yours alone, answered only at the generation
+ * it names, so a card raised anew (its command changed) is stale; Run and Always return once your
+ * approval is on disk and the command is scheduled, not when it is done (the card says that).
  *
  * A proposal: Refuse settles it. Allow runs its op again, as you, recording who proposed it,
  * in this call's turn (ctx.call), draining its lanes: its change, the settlement and the proposer's
@@ -49,7 +54,8 @@ export function replyOps({
   windows,
   stalled,
   sessions,
-}: Pick<OpServices, 'proposals' | 'reviews' | 'needOf'> & {
+  setups,
+}: Pick<OpServices, 'proposals' | 'reviews' | 'needOf' | 'setups'> & {
   documents: Pick<OpServices['documents'], 'applyFile' | 'keepFile'>;
   engines: Pick<OpServices['engines'], 'changed' | 'resendAfter' | 'cancelResend'>;
   lifecycle: Pick<Lifecycle, 'touched'>;
@@ -103,6 +109,19 @@ export function replyOps({
       const id = canvas as string | undefined as CanvasId | undefined;
       if (id === undefined) throw new OpFailure('invalid', 'Name the canvas the item is on.');
       if (to.startsWith('file/')) return review(id, to, answer.choice, ctx);
+      if (to.startsWith('setup/')) {
+        // A worktree's setup card: yours alone (R3 refuses a token first; the service again),
+        // answered only at the generation it shows, with one of its choices.
+        if (setups === undefined) {
+          throw new OpFailure('not-found', `There is no Needs item ${to} on this canvas.`);
+        }
+        try {
+          return await setups.reply(id, to, answer.choice, ctx.by, ctx);
+        } catch (error) {
+          if (error instanceof SetupError) throw new OpFailure(error.code, error.message);
+          throw error;
+        }
+      }
       if (to.startsWith('stalled/')) {
         const item = stalled.items(id).find((one) => one.id === to);
         if (item?.agent === undefined) {

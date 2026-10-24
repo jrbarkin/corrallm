@@ -26,6 +26,8 @@ import { ProjectFiles } from '../files';
 import { CanvasMemory } from '../memory';
 import { ProjectFolders } from '../project';
 import { ProjectDirectories } from './workspaces/resolver';
+import type { ProjectRootResolver } from './workspaces/resolver';
+import type { SetupService } from './workspaces/setup';
 import { RunJournal } from '../run-journal';
 import { ADAPTERS, CATALOG, DEFAULT_ADAPTER, isConversationId } from '../sessions/adapters';
 import type { OptionsReader } from '../sessions/adapter';
@@ -75,7 +77,7 @@ import type { WatchdogClock, WatchdogNetwork } from './stalled';
 import type { ChildSystem } from './children';
 import { openStore, STORE_FILE } from './store/open';
 import { unopened } from './store/store';
-import type { StoreDeps } from './store/store';
+import type { Database, StoreDeps } from './store/store';
 
 /*
  * corrallm's core, composed: the registry's operations over the Electron-free services they act
@@ -142,6 +144,18 @@ export interface CoreConfig {
     readUsage?: Readonly<Partial<Record<UsageBackendId, UsageRead>>>;
     options?: Readonly<Partial<Record<AdapterId, OptionsReader>>>;
   };
+  /**
+   * For tests, until B9a X11b composes the workspaces: the worktrees' setup service, made over the
+   * core's database, process owner and project folders, told when a canvas's setup cards change.
+   * None: no setup card is ever raised, and setting a setup command is unavailable.
+   */
+  setups?: (core: {
+    store: Database;
+    processes: Children;
+    directories: ProjectRootResolver;
+    profile: string;
+    changed: (canvas: CanvasId) => void;
+  }) => SetupService;
 }
 
 export interface Core extends Dispatcher {
@@ -267,6 +281,17 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
   });
   const projects = new ProjectFolders({ host, memory });
   const directories = new ProjectDirectories(projects);
+  // The worktrees' setup (B9a C9, C10): its cards in Needs, yours alone, and their answers.
+  const setups = config.setups?.({
+    store,
+    processes: children,
+    directories,
+    profile,
+    changed: (canvas) => {
+      topics.changed(`needs:${canvas}`, 'corrallm');
+      engines.needsChanged(canvas);
+    },
+  });
   const journal = new RunJournal({
     store,
     memory,
@@ -505,6 +530,7 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
       ...reviews.items(canvas),
       ...stalled.items(canvas),
       ...journal.items(canvas),
+      ...(setups?.items(canvas) ?? []),
     ];
   };
   const needOf = (canvas: CanvasId, id: string, reach?: readonly string[]) =>
@@ -555,6 +581,7 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
       ...reviews.items(canvas),
       ...stalled.items(canvas),
       ...journal.items(canvas),
+      ...(setups?.items(canvas) ?? []),
     ],
   });
   const warnings = new Set<Promise<void>>();
@@ -710,6 +737,7 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
         host,
         tokens,
         ...(config.locale === undefined ? {} : { locale: config.locale }),
+        ...(setups === undefined ? {} : { setups }),
       }),
       rules: {
         ...ruleChecks(engines, needOf),
@@ -752,6 +780,9 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
       ...(config.limitsClock === undefined ? {} : { now: config.limitsClock }),
     },
   );
+  // A setup that was running as the last core stopped is interrupted, after the process owner's
+  // recovery ended what it left (above), and before any call could start one: never rerun by itself.
+  await setups?.recover();
   runtime.start();
   // Held backends are read from now on, so a limit that ended while the core was down is noticed.
   probe.start();
@@ -823,6 +854,10 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
         // What the core keeps is written out even if a canvas's run couldn't be, and its database
         // closed last. No CLI it started outlives it: a helper still running is ended.
         try {
+          // A setup still running is ended and marked interrupted before the process owner closes.
+          await setups?.close().catch((error: unknown) => {
+            console.error('Could not end the worktrees’ setups:', error);
+          });
           await children.close();
           await stores();
         } finally {

@@ -63,19 +63,21 @@ async function fault(promise: Promise<unknown>): Promise<string> {
   throw new Error('It ran.');
 }
 
-it('is the only workspace file that starts a process: every Git call goes through it', () => {
+it('is the only workspace file that starts Git: every Git call goes through it, and only the setup runner starts anything else', () => {
   const folder = import.meta.dirname;
   const sources = readdirSync(folder).filter(
     (file) => file.endsWith('.ts') && !file.endsWith('.test.ts') && !file.startsWith('test-'),
   );
   expect(sources).toContain('git.ts');
+  // The setup runner starts only the setup command you allowed (setup-run.ts), never Git.
   expect(
     sources.filter((file) =>
-      /child_process|sessions\/process|\bexecFile\(|\bspawn\(|\bfork\(/.test(
+      /child_process|sessions\/process|\bexecFile\(|\bspawn\(|\bfork\(|\bspawnOwned\(/.test(
         readFileSync(path.join(folder, file), 'utf8'),
       ),
     ),
-  ).toEqual(['git.ts']);
+  ).toEqual(['git.ts', 'setup-run.ts']);
+  expect(readFileSync(path.join(folder, 'setup-run.ts'), 'utf8')).not.toMatch(/['"`]git['"`]/);
 });
 
 describe.skipIf(process.platform === 'win32')('GitRunner', () => {

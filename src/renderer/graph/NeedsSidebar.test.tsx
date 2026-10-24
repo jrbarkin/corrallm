@@ -7,8 +7,11 @@ import { fakeCore, expectOneOp } from '../test-api';
 import { events } from '../test-render';
 import { runCatalog } from './agents';
 import { NeedsSidebar } from './NeedsSidebar';
+import css from './GraphEditor.css?raw';
 const cores: ReturnType<typeof fakeCore>[] = [];
+const detailStyle = document.createElement('style');
 afterEach(() => {
+  detailStyle.remove();
   cleanup();
   cores.splice(0).forEach((core) => {
     core.dispose();
@@ -40,6 +43,69 @@ const file: NeedsItem = {
     { value: 'keep', label: 'Keep' },
   ],
 };
+
+it('preserves the exact command’s spaces and the setup preview’s separate lines', async () => {
+  const detail = `Runs: printf 'a  b'\nIn: /a project/checkout`;
+  const rule = /\n\.graph-question-detail \{([^}]+)\}/.exec(css)?.[1] ?? '';
+  detailStyle.textContent = `.graph-question-detail { ${rule} }`;
+  document.head.append(detailStyle);
+  await setup([{ ...proposal, kind: 'worktree', detail }]);
+  const preview = screen.getByText((_, node) => node?.textContent === detail);
+  expect(preview.textContent).toBe(detail);
+  expect(getComputedStyle(preview).whiteSpace).toBe('pre-wrap');
+});
+
+it('keeps a setup’s live Stop and Retry choices after its Run reply returns started', async () => {
+  const item: NeedsItem = {
+    ...proposal,
+    id: 'setup/11111111-1111-4111-8111-111111111111/1',
+    kind: 'worktree',
+    title: 'Set up Builder’s worktree?',
+    choices: [
+      { value: 'run', label: 'Run' },
+      { value: 'skip', label: 'Skip' },
+    ],
+  };
+  const core = await setup([item]);
+  core.reply('reply', () => {
+    core.change({
+      topic: `needs:${canvas}`,
+      rev: 1,
+      replace: {
+        items: [
+          {
+            ...item,
+            title: 'Setting up Builder’s worktree',
+            choices: [{ value: 'stop', label: 'Stop' }],
+          },
+        ],
+      },
+    });
+    return Promise.resolve({ ok: true, value: { outcome: 'started', revs: {} } });
+  });
+  await events.click(screen.getByRole('button', { name: 'Run' }));
+  expectOneOp(core, 'reply', { canvas, to: item.id, answer: { choice: 'run' } });
+  expect(await screen.findByRole('button', { name: 'Stop' })).toBeTruthy();
+  act(() => {
+    core.change({
+      topic: `needs:${canvas}`,
+      rev: 2,
+      replace: {
+        items: [
+          {
+            ...item,
+            title: 'Setup failed in Builder’s worktree',
+            choices: [
+              { value: 'retry', label: 'Run again' },
+              { value: 'skip', label: 'Skip' },
+            ],
+          },
+        ],
+      },
+    });
+  });
+  expect(await screen.findByRole('button', { name: 'Run again' })).toBeTruthy();
+});
 
 it('shows the core’s persistent oversized-run warning without offering an answer', async () => {
   const problem: NeedsItem = {

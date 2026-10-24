@@ -43,6 +43,7 @@ export function NeedsSidebar({
         (item) =>
           item.kind === 'file' ||
           item.kind === 'proposal' ||
+          item.kind === 'worktree' ||
           item.id.startsWith('stalled/') ||
           item.id.startsWith('unsaved/'),
       )
@@ -56,8 +57,13 @@ export function NeedsSidebar({
   let changed = false;
   for (const [id, settlement] of settlements) {
     const live = current.has(id);
+    // A setup keeps the same id while it runs, fails and is retried. Its reply settles one
+    // choice, not the live card: the next state must still offer Stop or Retry.
+    const setupMoved =
+      live && !settlement.pending && !!settlement.outcome && settlement.item.kind === 'worktree';
     if (
-      live ? settlement.left && !settlement.pending : !settlement.pending && !settlement.outcome
+      setupMoved ||
+      (live ? settlement.left && !settlement.pending : !settlement.pending && !settlement.outcome)
     ) {
       kept.delete(id);
       changed = true;
@@ -124,11 +130,13 @@ export function NeedsSidebar({
                   <span className="graph-question-header">
                     {item.kind === 'file'
                       ? 'File review'
-                      : item.id.startsWith('stalled/')
-                        ? `Silent session: ${item.agent === undefined ? 'agent' : agentName(questions.input.nodes, item.agent)}`
-                        : item.id.startsWith('unsaved/')
-                          ? 'Run progress'
-                          : 'Proposal'}
+                      : item.kind === 'worktree'
+                        ? 'Worktree setup'
+                        : item.id.startsWith('stalled/')
+                          ? `Silent session: ${item.agent === undefined ? 'agent' : agentName(questions.input.nodes, item.agent)}`
+                          : item.id.startsWith('unsaved/')
+                            ? 'Run progress'
+                            : 'Proposal'}
                   </span>
                   <p className="graph-question-text">{item.title}</p>
                   {item.detail && <p className="graph-question-detail">{item.detail}</p>}
