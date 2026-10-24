@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import { performance } from 'node:perf_hooks';
 
@@ -20,6 +21,26 @@ export const TEST_GROUP_SYSTEM: ChildSystem = {
       return true;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ESRCH') return false;
+      if ((error as NodeJS.ErrnoException).code === 'EPERM' && process.platform !== 'win32') {
+        // A group probe can be denied even after its leader exited. Inspect every member,
+        // not just the recorded leader: descendants may still run in that private group.
+        const table = execFileSync('ps', ['-A', '-o', 'pgid=', '-o', 'stat='], {
+          encoding: 'utf8',
+          env: { ...process.env, LC_ALL: 'C' },
+          stdio: ['ignore', 'pipe', 'pipe'],
+          timeout: 1000,
+        });
+        let live = false;
+        for (const line of table.split('\n')) {
+          if (!line.trim()) continue;
+          const fields = /^\s*(\d+)\s+(\S+)\s*$/.exec(line);
+          if (fields === null)
+            throw new Error('Could not read test process groups.', { cause: error });
+          // Zombies have already exited; they cannot write or respond to another signal.
+          if (Number(fields[1]) === pid && !fields[2]?.startsWith('Z')) live = true;
+        }
+        return live;
+      }
       throw error;
     }
   },
@@ -71,41 +92,67 @@ export async function recordedTestGroups(file: string): Promise<TestGroup[]> {
 export async function stopTestGroup(record: TestGroup, system = TEST_GROUP_SYSTEM): Promise<void> {
   const matches = (found: ReturnType<ChildSystem['inspect']>) =>
     found?.group === record.pid && sameStart(found.started, record.started);
-  if (!system.alive(record.pid)) return;
+  let probeFault: string | undefined;
+  let signalFault: string | undefined;
+  const words = (error: unknown) => (error instanceof Error ? error.message : String(error));
+  const failure = (reason: string) =>
+    new Error(
+      `Test group ${String(record.pid)} ${reason}${probeFault === undefined ? '' : `; group probe failed (${probeFault})`}${signalFault === undefined ? '' : `; ${signalFault}`}; its folder was kept.`,
+    );
+  const possiblyAlive = () => {
+    try {
+      const alive = system.alive(record.pid);
+      probeFault = undefined;
+      return alive;
+    } catch (error) {
+      probeFault = words(error);
+      return true; // An inconclusive probe never establishes that a group is gone.
+    }
+  };
+  if (!possiblyAlive()) return;
   const signal = (value: NodeJS.Signals) => {
     try {
       system.signal(record.pid, value);
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error;
+      if ((error as NodeJS.ErrnoException).code !== 'ESRCH')
+        signalFault = `${value} failed (${words(error)})`;
     }
   };
   const gone = async (ms: number) => {
     const deadline = system.now() + ms;
-    while (system.alive(record.pid)) {
+    while (possiblyAlive()) {
       const left = deadline - system.now();
       if (left <= 0) return false;
       await system.wait(Math.min(50, left));
     }
     return true;
   };
-  if (!matches(system.inspect(record.pid))) {
-    // Earlier shutdown may already have killed the leader. Allow its group time to be
-    // reaped, without treating an absent or reused identity as permission to signal it.
+  const identityFault = (leaderMayHaveExited: boolean): string | undefined => {
+    try {
+      const found = system.inspect(record.pid);
+      if (matches(found) || (leaderMayHaveExited && found === undefined)) return undefined;
+      return leaderMayHaveExited ? 'changed identity' : 'has no matching process identity';
+    } catch (error) {
+      return `could not read its process identity (${words(error)})`;
+    }
+  };
+  const unverified = async (reason: string) => {
+    // A ps failure says nothing about whether the group still runs. It may have exited
+    // during that read, or be awaiting reaping after an earlier shutdown. Confirm that
+    // separately, without letting an absent, reused or unread identity authorize a signal.
     if (await gone(5000)) return;
-    throw new Error(
-      `Test group ${String(record.pid)} has no matching process identity; its folder was kept.`,
-    );
-  }
+    throw failure(reason);
+  };
+  const before = identityFault(false);
+  if (before !== undefined) return unverified(before);
   signal('SIGTERM');
   if (await gone(5000)) return;
   // A leader may exit while its descendants remain; a *different* leader is never ours.
-  const after = system.inspect(record.pid);
-  if (after !== undefined && !matches(after)) {
-    throw new Error(`Test group ${String(record.pid)} changed identity; its folder was kept.`);
-  }
+  const after = identityFault(true);
+  if (after !== undefined) return unverified(after);
   signal('SIGKILL');
   if (!(await gone(5000))) {
-    throw new Error(`Test group ${String(record.pid)} did not stop; its folder was kept.`);
+    throw failure('did not stop');
   }
 }
 
