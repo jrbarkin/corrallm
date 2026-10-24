@@ -46,6 +46,7 @@ interface Mirrored {
     id: string;
     summary: unknown;
     count: number;
+    nextIndex: number;
     entries: Map<string, unknown>;
     early: RuntimeChange[];
   };
@@ -217,6 +218,7 @@ export class TopicMirror {
               id: snapshot.snapshot,
               summary: snapshot.summary,
               count: snapshot.count,
+              nextIndex: 0,
               entries: new Map(),
               early: [],
             };
@@ -335,16 +337,18 @@ export class TopicMirror {
     )
       throw new Error('A snapshot frame arrived out of sequence or exceeded its bound.');
     if (frame.kind === 'chunk') {
+      if (frame.index !== assembly.nextIndex || frame.index >= assembly.count)
+        throw new Error('A snapshot chunk index was repeated, skipped or out of order.');
       for (const { key, value } of frame.entries) {
-        if (assembly.entries.has(key) || assembly.entries.size >= assembly.count)
-          throw new Error('A snapshot repeated a key or exceeded its entry count.');
+        if (assembly.entries.has(key)) throw new Error('A snapshot repeated an entry key.');
         assembly.entries.set(key, value);
       }
-      if (frame.entries.length) this.#deadline(entry);
+      assembly.nextIndex++;
+      this.#deadline(entry);
       return;
     }
-    if (assembly.entries.size !== assembly.count)
-      throw new Error('A snapshot ended before all its entries arrived.');
+    if (assembly.nextIndex !== assembly.count)
+      throw new Error('A snapshot ended before all its chunks arrived.');
     const state = assembledState(entry.topic, assembly.summary, [...assembly.entries]);
     this.#clearTransfer(entry);
     this.#install(entry, state, frame.rev);
