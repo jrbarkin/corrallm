@@ -20,6 +20,8 @@ interface Settlement {
   pending: boolean;
   outcome?: string;
   error?: string;
+  /** The topic dropped the item since this reply was sent: a later item under its id is new. */
+  left?: boolean;
 }
 
 /** Core proposals and file reviews beside the renderer run's holds and session questions. */
@@ -48,19 +50,31 @@ export function NeedsSidebar({
   );
   // Pending replies and successful outcomes survive topic removal. A failed reply belongs only
   // to the live item, so a vanished prompt cannot leave a button or badge that can never work.
-  const gone = [...settlements].filter(
-    ([id, settlement]) => !settlement.pending && !settlement.outcome && !current.has(id),
-  );
-  if (gone.length > 0) {
-    const kept = new Map(settlements);
-    for (const [id] of gone) kept.delete(id);
-    setSettlements(kept);
+  // An id can be raised again once it has left (stalled/<agent> is, for each silent turn): that
+  // is a new item, shown with its choices and counted, never masked by the old reply's outcome.
+  const kept = new Map(settlements);
+  let changed = false;
+  for (const [id, settlement] of settlements) {
+    const live = current.has(id);
+    if (
+      live ? settlement.left && !settlement.pending : !settlement.pending && !settlement.outcome
+    ) {
+      kept.delete(id);
+      changed = true;
+    } else if (!live && !settlement.left) {
+      kept.set(id, { ...settlement, left: true });
+      changed = true;
+    }
   }
-  for (const [id, settlement] of settlements)
+  if (changed) setSettlements(kept);
+  for (const [id, settlement] of kept)
     if (settlement.pending || settlement.outcome) current.set(id, settlement.item);
   const answer = async (item: CoreNeed, choice: string) => {
     const update = (value: Settlement) => {
-      setSettlements((previous) => new Map(previous).set(item.id, value));
+      setSettlements((previous) => {
+        const left = value.pending ? undefined : previous.get(item.id)?.left;
+        return new Map(previous).set(item.id, left ? { ...value, left } : value);
+      });
     };
     update({ item, pending: true });
     try {
@@ -72,7 +86,7 @@ export function NeedsSidebar({
   };
   const count =
     needCardsCount(questions.needs) +
-    [...current.keys()].filter((id) => !settlements.get(id)?.outcome).length;
+    [...current.keys()].filter((id) => !kept.get(id)?.outcome).length;
   const bell = (
     <>
       <svg viewBox="0 0 16 16" aria-hidden="true">
@@ -102,9 +116,9 @@ export function NeedsSidebar({
             questions.onOpen(id);
           }}
           extra={{
-            count: [...current.keys()].filter((id) => !settlements.get(id)?.outcome).length,
+            count: [...current.keys()].filter((id) => !kept.get(id)?.outcome).length,
             cards: [...current.values()].map((item) => {
-              const settlement = settlements.get(item.id);
+              const settlement = kept.get(item.id);
               return (
                 <article key={item.id} className="graph-question" aria-label={item.title}>
                   <span className="graph-question-header">

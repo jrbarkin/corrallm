@@ -6,7 +6,7 @@ import { NEW_SESSION } from '../../shared/model/session';
 import type { QueueItem, QueueMessage, SubmittedMessage } from '../../shared/model/queue';
 import { QueuesView } from '../queues/QueuesView';
 import { lanesOf } from '../queues/lanes';
-import { queueMarks } from '../queues/marks';
+import { queueMarks } from '../../shared/model/queue-marks';
 import type { Run } from '../../shared/engine/run/runner';
 import { needsOf } from '../../shared/engine/needs';
 import { QuestionsSidebar } from './Questions';

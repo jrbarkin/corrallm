@@ -19,6 +19,7 @@ it.skipIf(process.env.CORRALLM_BENCH !== '1')(
         from: `outside:p${party}`,
         to: `agent:a${party}`,
         kind: 'notice',
+        origin: 'party',
         state: 'delivered',
         body: 'A completed message',
       }).id;
@@ -27,6 +28,7 @@ it.skipIf(process.env.CORRALLM_BENCH !== '1')(
       from: 'you',
       to: 'agent:builder',
       kind: 'text',
+      origin: 'manual',
       state: 'pending',
       body: 'Waiting',
     }).id;
@@ -54,6 +56,7 @@ it.skipIf(process.env.CORRALLM_BENCH !== '1')(
         from: 'outside:p49',
         to: 'agent:a49',
         kind: 'notice',
+        origin: 'party',
         state: 'delivered',
         body: String(i),
       });

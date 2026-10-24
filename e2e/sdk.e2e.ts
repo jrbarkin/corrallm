@@ -201,14 +201,39 @@ test('opens another conversation of the project folder in an agent with /resume'
   await page.keyboard.press('Escape');
   await expect(first).toHaveCount(0);
 
-  // Agent 2 opens it.
+  // Agent 2 can't open it while Agent 1's session runs it: two agents never share a conversation.
   await page.locator('.react-flow__pane').dblclick({ position: { x: 600, y: 420 } });
-  const second = await connect('Agent 2');
-  const composer = second.getByRole('textbox', { name: 'Message Agent 2' });
+  let second = await connect('Agent 2');
+  let composer = second.getByRole('textbox', { name: 'Message Agent 2' });
   await composer.fill('/resume');
   await composer.press('Enter');
-  const picker = second.getByRole('listbox', { name: 'Resume a conversation' });
+  let picker = second.getByRole('listbox', { name: 'Resume a conversation' });
   await expect(picker.getByRole('option')).toHaveText([/^Remember the shop just now/]);
+  await picker.getByRole('option').click();
+  await expect(second.getByRole('alert')).toHaveText(
+    'That conversation is open in "Agent 1": two agents never share one conversation.',
+  );
+  await second.getByRole('button', { name: 'Close' }).click();
+  await page.keyboard.press('Escape');
+  await expect(second).toHaveCount(0);
+
+  // Once Agent 1 and its session are gone, Agent 2 opens it.
+  await page
+    .locator('.react-flow__node-agent')
+    .filter({ has: page.locator('.graph-label').filter({ hasText: /^Agent 1$/ }) })
+    .click();
+  await page.keyboard.press('Delete');
+  await expect(page.locator('.graph-label').filter({ hasText: /^Agent 1$/ })).toHaveCount(0);
+  await page
+    .locator('.react-flow__node-agent')
+    .filter({ has: page.locator('.graph-label').filter({ hasText: /^Agent 2$/ }) })
+    .dblclick();
+  second = page.getByRole('dialog', { name: 'Agent 2', exact: true });
+  composer = second.getByRole('textbox', { name: 'Message Agent 2' });
+  await composer.fill('/resume');
+  await composer.press('Enter');
+  picker = second.getByRole('listbox', { name: 'Resume a conversation' });
+  await expect(picker.getByRole('option')).toHaveText([/^Remember the shop/]);
   await picker.getByRole('option').click();
   const transcript = second.getByRole('log', { name: 'Transcript' });
   await expect(transcript.getByText('Remember the shop', { exact: true })).toBeVisible();

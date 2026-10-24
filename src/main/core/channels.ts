@@ -210,14 +210,21 @@ function createHandlers({
         return null;
       },
     },
+    // A list is the asking window's: only it may then open what it was listed (B11 Design §7).
     'session:list': {
       parseArgs: parseAgentArgs,
-      handler: async ({ window }, agentId) => sessions.listSessions(await of(window), agentId),
+      handler: async ({ window }, agentId) =>
+        sessions.listSessions(await of(window), agentId, `window:${String(window)}`),
     },
     'session:resume': {
       parseArgs: parseResumeArgs,
       handler: async ({ window }, agentId, sessionId) => {
-        await sessions.resumeSession(await of(window), agentId, sessionId);
+        await sessions.resumeSession(
+          await of(window),
+          agentId,
+          sessionId,
+          `window:${String(window)}`,
+        );
         return null;
       },
     },

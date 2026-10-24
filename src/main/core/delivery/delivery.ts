@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
-import { MAX_MESSAGE_BYTES, MAX_WAITING } from '../../../shared/api/limits';
+import { MAX_WAITING } from '../../../shared/api/limits';
 import type { AdapterId, ConnectionId } from '../../../shared/adapter';
 import type { CanvasId } from '../../../shared/canvas';
 import { needsItem, needsOf } from '../../../shared/engine/needs';
@@ -25,6 +25,7 @@ import {
   quotedParty,
   RELEASES,
 } from '../parties';
+import { capBody, sentByRun } from './messages';
 import type { MessageStore } from './messages';
 
 /*
@@ -154,8 +155,6 @@ const TITLE = 120;
  * quotes: with its titles and names, a notice stays far within MAX_MESSAGE_BYTES.
  */
 const REASON = 1000;
-/** How a reply cut to the most a message holds is marked. */
-const CUT = '\n\n[corrallm: cut here; the whole reply is in its transcript]';
 /** How long after a delivering record couldn't be committed delivery tries again. */
 const RECORD_RETRY = 1000;
 
@@ -213,10 +212,20 @@ export class Delivery {
     // What its senders were told before, they were told once.
     for (const key of store.told()) this.#told.add(key);
     for (const message of store.active()) {
-      if (this.#inFlight(message)) this.#cutOff(message);
+      // A send the live run made before delivery started (serve held, a passive runtime) is the
+      // run's own to settle as its turn ends: only what the core last left out is cut off.
+      if (this.#inFlight(message) && !this.#runSending(message)) this.#cutOff(message);
     }
     await this.#deps.store.durable();
     this.schedule();
+  }
+
+  /** Whether a message is the live run's send of an attempt it still runs (its own to settle). */
+  #runSending(message: Message): boolean {
+    const { task } = message;
+    if (!sentByRun(message) || task === undefined) return false;
+    const last = this.#deps.engine.run.snapshot().agents[task.agent]?.attempts?.[task.item]?.at(-1);
+    return last?.id === task.attempt && last.status === 'running';
   }
 
   /**
@@ -244,8 +253,9 @@ export class Delivery {
     if (images?.length) this.#images.set(id, images);
   }
 
+  /** Yours, as you typed it (manual): it goes past the run's holds; your resend waits on them. */
   #yours(message: Message): boolean {
-    return message.from === 'you' && !this.#deps.store.isResend(message);
+    return this.#deps.store.originOf(message.id) === 'manual';
   }
 
   /** Looks again, soon, at what waits: once, however often asked before then. */
@@ -281,6 +291,8 @@ export class Delivery {
       from,
       to: agentParty(to),
       kind: 'text',
+      // Yours is yours as you sent it; anyone else's a party's.
+      origin: from === 'you' ? 'manual' : 'party',
       body,
       state: 'pending',
       ...(replyTo === undefined ? {} : { replyTo }),
@@ -319,6 +331,12 @@ export class Delivery {
   async withdraw(id: string, by: PartyId): Promise<Withdrawal> {
     const message = this.#deps.store.get(id);
     if (!message) throw new DeliveryError('not-found', 'There is no such message.');
+    if (sentByRun(message)) {
+      throw new DeliveryError(
+        'refused',
+        'That message is the run’s own: stop the run, or pause or kill its agent, to take it back.',
+      );
+    }
     if (by !== 'you' && message.from !== by) {
       throw new DeliveryError('refused', 'Only a message you sent can be taken back.');
     }
@@ -357,7 +375,8 @@ export class Delivery {
     const killed = new Set(agents.map(agentParty));
     const withdrawing: Promise<Withdrawal>[] = [];
     for (const message of this.#deps.store.active()) {
-      if (message.kind !== 'text') continue;
+      // The run's own sends are the run's to take back (its kill holds and withdraws them).
+      if (message.kind !== 'text' || sentByRun(message)) continue;
       const why: TakeBackWhy | undefined = killed.has(message.to)
         ? 'recipient killed'
         : killed.has(message.from)
@@ -453,7 +472,7 @@ export class Delivery {
     for (const message of messages) {
       if (
         message.state === 'pending' &&
-        store.isImageResend(message) &&
+        store.requiresImages(message) &&
         !this.#images.has(message.id)
       ) {
         const text =
@@ -467,6 +486,7 @@ export class Delivery {
             from: 'corrallm',
             to: message.from,
             kind: 'notice',
+            origin: 'party',
             replyTo: message.id,
             body: text,
             state: 'delivered',
@@ -894,7 +914,8 @@ export class Delivery {
         from: message.to,
         to: message.from,
         kind: 'text',
-        body: cut(reply),
+        origin: 'party',
+        body: capBody(reply, 'reply'),
         replyTo: id,
         turn: result,
         state: agentOf(message.from) === undefined ? 'delivered' : 'pending',
@@ -997,9 +1018,13 @@ export class Delivery {
     }
   }
 
-  /** A message cut off as the core stopped: unresolved, never sent again, its sender told. */
+  /**
+   * A message cut off as the core stopped: unresolved, never sent again, its sender told (but for
+   * the run's own, whose attempt the run restores uncertain, telling no one).
+   */
   #cutOff(message: Message): void {
     this.#deps.store.update(message.id, { state: 'unresolved' });
+    if (sentByRun(message)) return;
     this.#notice(
       message,
       `Your message to ${this.#nameOf(message.to)} was cut off when corrallm stopped; it won’t be sent again.`,
@@ -1019,6 +1044,7 @@ export class Delivery {
       if (
         agent === undefined ||
         message.from === 'you' ||
+        sentByRun(message) ||
         !this.#inFlight(message) ||
         this.#told.has(`waiting:${message.id}`)
       ) {
@@ -1068,6 +1094,7 @@ export class Delivery {
         from: 'corrallm',
         to: message.from,
         kind: 'notice',
+        origin: 'party',
         body: text,
         replyTo: message.id,
         ...(turn === undefined ? {} : { turn }),
@@ -1224,17 +1251,6 @@ const REASON_WORDS: Readonly<Record<TurnReason, string>> = {
   'connection-closed': 'its session closed',
   error: 'an error',
 };
-
-/** A reply cut to the most a message holds, marked where it was cut. */
-function cut(reply: string): string {
-  const bytes = new TextEncoder().encode(reply);
-  if (bytes.length <= MAX_MESSAGE_BYTES) return reply;
-  const room = MAX_MESSAGE_BYTES - new TextEncoder().encode(CUT).length;
-  // Cut on a character's boundary: the decoder ends a character cut in two with U+FFFD, dropped
-  // here.
-  const kept = new TextDecoder('utf-8', { fatal: false }).decode(bytes.slice(0, room));
-  return `${kept.replace(/�$/u, '')}${CUT}`;
-}
 
 /** How a message whose record couldn't be written ended: failed, saying why (capped). */
 function unrecorded(error: unknown): TurnResult & { message: string } {

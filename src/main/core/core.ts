@@ -15,6 +15,7 @@ import type { OpName, Party, Reach } from '../../shared/api/surface';
 import { engineCatalog } from '../../shared/engine/catalog';
 import { needs } from '../../shared/engine/needs';
 import type { NeedsItem } from '../../shared/model/needs';
+import { agentName } from '../../shared/model/queries';
 import { MAX_CANVAS_BYTES } from '../../shared/ipc';
 import type { SessionMode } from '../../shared/session';
 import { CanvasFiles } from '../canvas';
@@ -31,6 +32,7 @@ import type { Connector } from '../sessions/connector';
 import { createConnectors, createConversations, createOptions } from '../sessions/connectors';
 import { locate, parseAgentPaths } from '../sessions/locate';
 import { agentEnvironment, loginShellEnvironment } from '../sessions/environment';
+import { ConversationClaims } from '../sessions/claims';
 import { SessionManager } from '../sessions/manager';
 import { Settings } from '../settings';
 import { UsageReadings } from '../usage';
@@ -54,6 +56,7 @@ import type { Watcher } from './engines';
 import type { HostServices, WindowId } from './host';
 import { implementations } from './ops';
 import { discardChecks } from './ops/files';
+import { quotedName } from './parties';
 import { holder, resolvers } from './reach';
 import { changeChecks, heldBy, ruleChecks } from './rules';
 import { TokenStore } from './tokens';
@@ -253,6 +256,8 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
   const journal = new RunJournal({
     store,
     memory,
+    // Each canvas's one store of messages, the core's, which keeps a run's submissions.
+    messages: (canvas) => engines.messagesOf(canvas),
     problemChanged: (canvas) => {
       topics.changed(`needs:${canvas}`, 'corrallm');
       engines.needsChanged(canvas);
@@ -323,6 +328,11 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     },
     directories,
     memory,
+    // The process's one map of live claims on native conversations (B11 Design §7).
+    claims: new ConversationClaims(),
+    // A claim's holder named as a notice names an agent: quoted, escaped and capped.
+    nameOf: (canvas, agent) =>
+      quotedName(agentName(documents.loaded(canvas)?.document.nodes ?? [], agent)),
     sending: (canvas, agentId, message, send) => engines.sending(canvas, agentId, message, send),
     emit: (canvas, agentId, connection, event) => {
       stalled.event(canvas, agentId, connection, event);
@@ -353,8 +363,8 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
       return canvas;
     },
     // A canvas the core runs runs on whatever window shows it, or none (decision 5); the app's,
-    // whose run is its window's until B11, ends its sessions as the window leaves it.
-    left: (canvas) => (engines.canvas(canvas) ? Promise.resolve() : sessions.closeCanvas(canvas)),
+    // whose run is its window's until B11's cutover, ends its sessions as the window leaves it.
+    left: (canvas) => engines.left(canvas),
   });
   const files = new ProjectFiles({ environment });
   const links = new LinkOpener({
@@ -389,6 +399,7 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     store,
     shownIn: (canvas) => windows.showing(canvas),
     running: () => engines.opened(),
+    live: (canvas) => engines.canvas(canvas)?.engine.run.snapshot().running,
   });
   const topics = new Topics({
     read: (name, args, caller, signal) => dispatcher.call(name, args, caller, signal),
@@ -506,8 +517,11 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     files: canvasFiles,
   });
   const engines: Engines = new Engines({
-    retryTask: (canvas, agent, connection, event) => {
-      channels.emit(canvas, 'session:event', agent, connection, event);
+    // The windows that own their canvases' runs until B11's cutover hear their retry decisions.
+    windowRuns: {
+      retry: (canvas, agent, connection, event) => {
+        channels.emit(canvas, 'session:event', agent, connection, event);
+      },
     },
     processes: children,
     engineCatalog: engineCatalog(CATALOG, DEFAULT_ADAPTER),
@@ -563,12 +577,32 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
       });
     },
   });
+  // Whether the run of each canvas the core runs is running, as canvas.list says it from the live
+  // run (B11 §5), not the journal's coalesced write: the list is read again as that changes.
+  const live = new Map<CanvasId, { running: boolean; stop?: () => void }>();
   engines.watch({
     needs: (canvas) => {
       topics.changed(`needs:${canvas}`, 'corrallm');
     },
-    opened: () => {
+    opened: (canvas) => {
       follow();
+      const run = engines.canvas(canvas)?.engine.run;
+      if (run) {
+        live.get(canvas)?.stop?.();
+        const it: { running: boolean; stop?: () => void } = { running: run.snapshot().running };
+        it.stop = run.subscribe(() => {
+          const running = run.snapshot().running;
+          if (running === it.running) return;
+          it.running = running;
+          states.listChanged();
+        });
+        live.set(canvas, it);
+      }
+      states.listChanged();
+    },
+    closed: (canvas) => {
+      live.get(canvas)?.stop?.();
+      live.delete(canvas);
       states.listChanged();
     },
   });

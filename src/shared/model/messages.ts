@@ -69,11 +69,37 @@ export const MESSAGE_KINDS = ['text', 'prompt', 'result', 'settled', 'notice'] a
 export type MessageKind = (typeof MESSAGE_KINDS)[number];
 
 /**
+ * How a message came to be (B11 §3), as the core records it, never as a caller says: typed by you
+ * (`manual`: your sends, which go past the run's holds); a party's or corrallm's (`party`: another
+ * party's message or an agent's reply, a prompt carried, a record); the run's own (`run`); or one
+ * you asked to send again (`resend`, which waits on the holds as any other's does). Who wrote it is
+ * its `from`, which this never changes.
+ */
+export const MESSAGE_ORIGINS = ['manual', 'party', 'run', 'resend'] as const;
+export type MessageOrigin = (typeof MESSAGE_ORIGINS)[number];
+
+/**
+ * What a view shows of a message beside its body: where it goes in its agent's queue (`after` the
+ * task it followed, `task` the held task it corrected), the text shown for it if not its body, how
+ * many images it carried and whether it can't be sent without them (images themselves are never
+ * kept, so one that requires them is never sent once they are gone).
+ */
+export interface MessageDisplay {
+  readonly after?: string;
+  readonly task?: { readonly agent: string; readonly item: string };
+  readonly text?: string;
+  readonly images?: number;
+  readonly requiresImages?: true;
+}
+
+/**
  * A message, as the core keeps it. `delivery`: when it was handed to the agent's session, the id
  * the session was sent it under (its turn ends naming that id), and which attempt that was.
  * `task`: the queue task a hand-off, an ask or a verdict belongs to. `turn`: how the turn an
  * agent's reply came from ended, or why a message ended withdrawn or unresolved. `by`: who
- * withdrew it. Images a message carried are never kept.
+ * withdrew it. `resendOf`: the message it sends again, at your request (never a reply to it:
+ * `replyTo` is only a reply's, or a record's about another message). Images a message carried
+ * are never kept.
  */
 export interface Message {
   id: string;
@@ -84,6 +110,7 @@ export interface Message {
   /** At most MAX_MESSAGE_BYTES of UTF-8 (src/shared/api/limits.ts). */
   body: string;
   replyTo?: string;
+  resendOf?: string;
   task?: { agent: string; item: string; attempt: string };
   turn?: TurnResult;
   state: MessageState;

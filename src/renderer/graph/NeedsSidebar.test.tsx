@@ -155,6 +155,39 @@ it('shows a stalled session with an Interrupt choice answered through one reply'
   await events.click(await screen.findByRole('button', { name: 'Interrupt' }));
   expectOneOp(core, 'reply', { canvas, to: item.id, answer: { choice: 'interrupt' } });
 });
+it('drops an answered card when its stalled id leaves and is raised again, with live buttons and a badge', async () => {
+  const item: NeedsItem = {
+    ...proposal,
+    id: 'stalled/builder',
+    agent: 'builder',
+    kind: 'prompt',
+    title: 'No activity from Codex for 20 minutes: its connection may have dropped.',
+    choices: [{ value: 'interrupt', label: 'Interrupt' }],
+  };
+  const core = await setup(
+    [item],
+    [{ id: 'builder', type: 'agent', position: { x: 0, y: 0 }, data: { label: 'Builder' } }],
+  );
+  core.reply('reply', () => {
+    core.change({ topic: `needs:${canvas}`, rev: 1, replace: { items: [] } });
+    return Promise.resolve({ ok: true, value: { revs: {} } });
+  });
+  await events.click(await screen.findByRole('button', { name: 'Interrupt' }));
+  expect((await screen.findByRole('status')).textContent).toBe('Answered.');
+  const bell = screen.getByRole('button', { name: 'Needs you' });
+  expect(bell.querySelector('.float-needs-count')).toBeNull();
+  // The agent's next turn goes silent too: the core raises the same id again.
+  act(() => {
+    core.change({ topic: `needs:${canvas}`, rev: 2, replace: { items: [item] } });
+  });
+  expect(await screen.findByRole('button', { name: 'Interrupt' })).toHaveProperty(
+    'disabled',
+    false,
+  );
+  expect(screen.queryByRole('status')).toBeNull();
+  expect(screen.queryByRole('button', { name: `Dismiss ${item.title}` })).toBeNull();
+  expect(bell.querySelector('.float-needs-count')?.textContent).toBe('1');
+});
 it('keeps a refused reply at its card and lets it be retried', async () => {
   const core = await setup([proposal]);
   core.reply('reply', { ok: false, error: { code: 'unavailable', sentence: 'Not saved' } });

@@ -1,7 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
 import type { OpResult } from '../../shared/api/errors';
-import { MAX_TOPIC_FRAME } from '../../shared/api/limits';
 import { SURFACE } from '../../shared/api/surface';
 import type { OpName, Surface, TopicKind } from '../../shared/api/surface';
 import {
@@ -519,12 +518,10 @@ export class Topics implements Publication {
     }
     if (piece.length > 0)
       chunks.push({ ...base, kind: 'chunk', index: chunks.length, entries: piece });
-    for (const chunk of chunks) {
-      if (bytesOf(chunk) <= TOPIC_BUDGET) continue;
-      if (chunk.entries.length === 1 && bytesOf(chunk.entries[0]?.value) > MAX_TOPIC_FRAME)
-        continue;
-      throw new OpFailure('unavailable', 'That topic entry cannot fit its frame envelope.');
-    }
+    // Only an entry no frame holds with its envelope may pass one, alone in its chunk (B11 §16.3).
+    for (const chunk of chunks)
+      if (bytesOf(chunk) > TOPIC_BUDGET && chunk.entries.length > 1)
+        throw new Error('A snapshot chunk of several entries passed its frame.');
     return {
       first: { ...base, kind: 'begin', summary, count: chunks.length },
       rest: [...chunks, { ...base, kind: 'end', rev }],
@@ -599,10 +596,6 @@ export class Topics implements Publication {
         subscription.view = next;
         subscription.access = access;
         if (snapshot && !body) {
-          this.#pending.set(
-            id,
-            (this.#pending.get(id) ?? []).filter((update) => update.topic !== topic),
-          );
           try {
             const { first, rest } = this.#framesOf(
               topic,
@@ -610,7 +603,7 @@ export class Topics implements Publication {
               next,
               true,
             );
-            for (const frame of [first, ...rest]) this.#enqueue(id, frame as RuntimeSnapshotFrame);
+            this.#transfer(id, topic, [first as RuntimeSnapshotFrame, ...rest], false);
           } catch {
             this.#forget(id, topic);
           }
@@ -668,9 +661,10 @@ export class Topics implements Publication {
             () => source.state(topic),
             mineSnapshot,
             index === count - 1,
+            true,
           );
         }
-        for (const { id, bodies } of theirs) {
+        for (const { id, bodies, snapshot } of theirs) {
           const subscription = this.#subscriptions.get(id)?.get(topic);
           const view = subscription?.view;
           if (view === undefined) continue;
@@ -682,13 +676,18 @@ export class Topics implements Publication {
             () => view,
             theirsSnapshot.has(id),
             index === count - 1,
+            // What waits for a copy whose authority changed was read under the old.
+            !snapshot,
           );
         }
       }
     }
   }
 
-  /** Oversized entries and authoritative orders use the same atomic transfer as subscribe. */
+  /**
+   * Oversized entries and authoritative orders use the same atomic transfer as subscribe.
+   * `keep`: whether what waits to be sent of the topic is still the subscriber's to see.
+   */
   #runtimeUpdate(
     id: SubscriberId,
     topic: RuntimeTopicKey,
@@ -697,6 +696,7 @@ export class Topics implements Publication {
     state: () => RuntimeState,
     snapshot: boolean,
     last: boolean,
+    keep: boolean,
   ): void {
     if (!snapshot) {
       this.#enqueue(id, { ...head, ...body } as TopicUpdate);
@@ -708,16 +708,39 @@ export class Topics implements Publication {
     }
     try {
       const { first, rest } = this.#framesOf(topic, head.rev, state(), true);
-      this.#pending.set(
-        id,
-        (this.#pending.get(id) ?? []).filter((update) => update.topic !== topic),
-      );
-      this.#enqueue(id, first as RuntimeSnapshotFrame);
-      for (const frame of rest) this.#enqueue(id, frame);
+      this.#transfer(id, topic, [first as RuntimeSnapshotFrame, ...rest], keep);
     } catch {
       // A refused projection must not leak data or its reason through a subscriber's copy.
       this.#forget(id, topic);
     }
+  }
+
+  /**
+   * Replaces what waits to be sent `id` of `topic` with a transfer of it, `frames`, none of what it
+   * replaces ever sent, but for the rest of a transfer whose `begin` it was sent already (its
+   * subscription's answer, or an earlier batch): that ends first, as its copy expects, the new one
+   * after it. A copy whose authority changed (`keep` false) can't be sent that rest, read under the
+   * old, nor be left mid-transfer: its subscription ends.
+   */
+  #transfer(
+    id: SubscriberId,
+    topic: RuntimeTopicKey,
+    frames: readonly RuntimeSnapshotFrame[],
+    keep: boolean,
+  ): void {
+    const pending = this.#pending.get(id) ?? [];
+    const begun = new Set(begunIn(pending, topic));
+    const sent = (update: TopicUpdate) =>
+      update.topic === topic && 'kind' in update && !begun.has(update.snapshot);
+    if (!keep && pending.some(sent)) {
+      this.#forget(id, topic);
+      return;
+    }
+    this.#pending.set(
+      id,
+      pending.filter((update) => update.topic !== topic || sent(update)),
+    );
+    for (const frame of frames) this.#enqueue(id, frame);
   }
 
   /** Whether it has closed (read anew after an await). */
@@ -871,12 +894,18 @@ export class Topics implements Publication {
             if (sameAccess(subscription.access, access)) continue;
             refreshed = true;
             const read = await runtime.project(topic, subscription.caller);
+            // The rest of a transfer begun in an earlier batch was read under the old authority:
+            // never sent, it leaves the copy mid-transfer, so its subscription ends.
+            const begun = new Set(begunIn(updates, topic));
+            const midway = updates.some(
+              (update) => update.topic === topic && 'kind' in update && !begun.has(update.snapshot),
+            );
             updates = updates.filter((update) => update.topic !== topic);
             this.#pending.set(
               id,
               (this.#pending.get(id) ?? []).filter((update) => update.topic !== topic),
             );
-            if (!read.ok) {
+            if (!read.ok || midway) {
               this.#forget(id, topic);
               continue;
             }
@@ -956,6 +985,13 @@ function sameAccess(
   next: NonNullable<Subscription['access']>,
 ): boolean {
   return previous?.world === next.world && previous?.lead === next.lead;
+}
+
+/** The transfers of `topic` whose `begin` is among `updates`, by their snapshot ids. */
+function begunIn(updates: readonly TopicUpdate[], topic: RuntimeTopicKey): string[] {
+  return updates.flatMap((update) =>
+    update.topic === topic && 'kind' in update && update.kind === 'begin' ? [update.snapshot] : [],
+  );
 }
 
 /** Appends contain no caller-specific fields once the session's unchanged reach is authorized. */

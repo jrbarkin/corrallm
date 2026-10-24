@@ -7,6 +7,7 @@ import { SessionStore } from './delivery/mailbox';
 import { decodeSubmissions } from './delivery/submission-state';
 import { readRun } from './run/checkpoint';
 import { RunStore } from './run/runner';
+import type { RunMailbox } from './run/runner';
 import type { SessionBackend } from './transcript/receive';
 
 /*
@@ -36,6 +37,11 @@ export interface EngineIO {
   connect: (agent: string, connection: ConnectionId) => void;
   /** Writes the engine's checkpoint out, before an automated message leaves for a session. */
   beforeSend?: () => Promise<void>;
+  /**
+   * Where the run's sends of its tasks' attempts are recorded before they go (RunMailbox): the
+   * core's message store. The renderer's engine has none until B11's cutover.
+   */
+  mailbox?: RunMailbox;
   /** The locale the run tells times of day in (the host's): the runtime's own, when none. */
   locale?: string;
 }
@@ -52,9 +58,14 @@ export class Engine {
   readonly sessions: SessionStore;
   readonly run: RunStore;
   readonly #connections = new Map<string, ConnectionId>();
+  /**
+   * The attempts to retry once nothing holds their recipient, by owner: until when an exhausted
+   * backend holds the recipient (read as each is looked at), and whether the turn's cancelled end
+   * confirmed it.
+   */
   readonly #retries = new Map<
     string,
-    { recipient: string; item: string; attempt: string; until: number; confirmed: boolean }
+    { recipient: string; item: string; attempt: string; until: () => number; confirmed: boolean }
   >();
   readonly #manualRetries = new Map<
     string,
@@ -86,8 +97,9 @@ export class Engine {
           } else if (request.update) {
             const manual = this.#manualRetries.get(recipient);
             if (manual) manual.until = request.until ?? 0;
+            const until = request.until ?? 0;
             for (const requested of this.#retries.values())
-              if (requested.recipient === recipient) requested.until = request.until ?? 0;
+              if (requested.recipient === recipient) requested.until = () => until;
             this.#checkRetries();
           } else {
             // Only the engine that owns these live submissions may retry them. Repeated
@@ -144,7 +156,8 @@ export class Engine {
         sessions.holdQueue(agent, held);
       },
       ...(io.beforeSend ? { beforeSend: io.beforeSend } : {}),
-      send: (agent, text, done, images, refused, origin, displayText, task) =>
+      ...(io.mailbox ? { mailbox: io.mailbox } : {}),
+      send: (agent, text, done, images, refused, origin, displayText, task, id) =>
         sessions.send(
           agent.id,
           agent.data.adapter ?? io.catalog.defaultAdapter,
@@ -157,7 +170,7 @@ export class Engine {
           // What the user typed for the run (an OK's changes) is theirs, but the run's attempt.
           origin === 'user' ? 'run' : 'queue',
           displayText,
-          task === undefined ? {} : { task },
+          { ...(task === undefined ? {} : { task }), ...(id === undefined ? {} : { id }) },
         ),
       tell: (agent, text) => {
         sessions.notice(agent.id, 'warning', text);
@@ -179,6 +192,7 @@ export class Engine {
     });
   }
 
+  /** A window-owned run's retry decision (task 62's retry-task event, until B11's cutover). */
   #retryInterrupted(recipient: string, tasks: readonly TaskMessage[], until: number): void {
     for (const task of tasks) {
       const at = this.run.snapshot().agents[task.agent];
@@ -188,11 +202,41 @@ export class Engine {
           recipient,
           item: task.item,
           attempt: task.attempt,
-          until,
+          until: () => until,
           confirmed: false,
         });
     }
     this.#checkRetries();
+  }
+
+  /**
+   * Retries a task's attempt that an interrupted turn's cancelled end cancelled, as the core's
+   * resend reservation asks on that end (Engines.retryAttempt, B11 Design §16.7): through its held
+   * problem's Retry, a new attempt with retryOf, once nothing holds its recipient (a pause, a usage
+   * rule, a backend exhausted `until` then, a mode that never asks, its session busy). Once: it is
+   * forgotten as it retries, or as its owner moves on. Whether it was taken: not for an attempt that
+   * isn't its owner's current task's last, cancelled and held for the user.
+   */
+  retryAttempt({ agent, item, attempt }: TaskMessage, until: () => number = () => 0): boolean {
+    const at = this.run.snapshot().agents[agent];
+    const last = at?.attempts?.[item]?.at(-1);
+    if (
+      at?.current !== item ||
+      last?.id !== attempt ||
+      last.status !== 'cancelled' ||
+      at.problem?.kind !== 'cancelled'
+    ) {
+      return false;
+    }
+    this.#retries.set(agent, {
+      recipient: at.problem.agent,
+      item,
+      attempt,
+      until,
+      confirmed: true,
+    });
+    this.#checkRetries();
+    return true;
   }
 
   #checkRetries(): void {
@@ -282,7 +326,7 @@ export class Engine {
           continue;
         }
         if (
-          requested.until > this.#io.now() ||
+          requested.until() > this.#io.now() ||
           !run.running ||
           run.paused ||
           at.paused ||

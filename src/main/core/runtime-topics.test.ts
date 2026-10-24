@@ -7,7 +7,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest
 
 import { MAX_TOPIC_FRAME } from '../../shared/api/limits';
 import type { Party } from '../../shared/api/surface';
-import { RuntimeTopic, topicKey } from '../../shared/api/topics';
+import { RuntimeTopic, snapshotFrameFits, topicKey } from '../../shared/api/topics';
 import type {
   RuntimeChange,
   RuntimeSnapshotFrame,
@@ -909,40 +909,101 @@ describe('runtime topics: long histories', () => {
         { type: 'text', id: 't', text: 'z'.repeat(MAX_TOPIC_FRAME + 10) },
       ]),
     );
-    const copy = await follow(core, sessionOf('worker'), CALLERS.you);
+    // Yours, and a token's copy, which reads its own.
+    const copies = [
+      await follow(core, sessionOf('worker'), CALLERS.you),
+      await follow(core, sessionOf('worker'), WRITER),
+    ];
     core.engines.canvas(CANVAS)?.engine.sessions.open('worker');
     await vi.waitFor(() => {
       expect(core.engines.canvas(CANVAS)?.engine.sessions.of('worker').entries.length).toBe(2);
     });
-    await expectCopiesRead(core, [copy]);
-    const oversized = copy.batches
-      .flat()
-      .filter((update) => Buffer.byteLength(JSON.stringify(update)) > MAX_TOPIC_FRAME);
-    expect(oversized.length).toBeGreaterThan(0);
-    for (const update of oversized)
-      expect(update).toMatchObject({ kind: 'chunk', entries: [{ key: 't' }] });
+    await expectCopiesRead(core, copies);
+    for (const copy of copies) {
+      const oversized = copy.batches
+        .flat()
+        .filter((update) => Buffer.byteLength(JSON.stringify(update)) > MAX_TOPIC_FRAME);
+      expect(oversized.length).toBeGreaterThan(0);
+      for (const update of oversized)
+        expect(update).toMatchObject({ kind: 'chunk', entries: [{ key: 't' }] });
+    }
   }, 30_000);
 
-  it('refuses an entry that leaves no room for the envelope before sending any snapshot frames', async () => {
+  it('sends an entry that leaves no room for the envelope alone in its chunk, as the mirror accepts it', async () => {
     folder = await keepWorld([{ id: 'worker' }], []);
+    // Under a frame by itself, over one with a chunk's envelope: no frame within the cap holds it.
+    const near = 'x'.repeat(MAX_TOPIC_FRAME - 200);
     const core = await start(
       folder,
       withHistory(() => [
-        { type: 'text', id: 'near-frame', text: 'x'.repeat(MAX_TOPIC_FRAME - 200) },
+        { type: 'user', id: 'u', text: 'Hello' },
+        { type: 'text', id: 'near-frame', text: near },
       ]),
     );
     const open = core.engines.canvas(CANVAS);
     open?.engine.sessions.open('worker');
     await vi.waitFor(() => {
-      expect(open?.engine.sessions.of('worker').entries).toHaveLength(1);
+      expect(open?.engine.sessions.of('worker').entries).toHaveLength(2);
     });
-    const heard: TopicUpdate[] = [];
-    await expect(
-      core.topics.follow(CALLERS.you, sessionOf('worker'), (updates) => heard.push(...updates)),
-    ).rejects.toThrow(/entry.*frame/i);
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(heard).toEqual([]);
+    const copies = [
+      await follow(core, sessionOf('worker'), CALLERS.you),
+      await follow(core, sessionOf('worker'), WRITER),
+    ];
+    await vi.waitFor(() => {
+      for (const copy of copies) expect(copy.ready).toBe(true);
+    });
+    await expectCopiesRead(core, copies);
+    for (const copy of copies) {
+      const frames = copy.batches.flat().filter((update) => 'kind' in update);
+      for (const frame of frames) expect(snapshotFrameFits(frame)).toBe(true);
+      const over = copy.batches.filter(
+        (batch) => Buffer.byteLength(JSON.stringify(batch)) > TOPIC_BUDGET,
+      );
+      expect(over).toEqual([[expect.objectContaining({ kind: 'chunk' })]]);
+      expect(over[0]?.[0]).toMatchObject({ entries: [{ key: 'near-frame' }] });
+    }
+    // Live, as such an entry is upserted: a transfer, its entry alone in its chunk.
+    const heard = copies.map((copy) => copy.batches.length);
+    open?.engine.sessions.notice('worker', 'info', near.slice(0, MAX_TOPIC_FRAME - 300));
+    await expectCopiesRead(core, copies);
+    copies.forEach((copy, i) => {
+      for (const update of copy.batches.slice(heard[i]).flat()) {
+        if ('kind' in update) expect(snapshotFrameFits(update)).toBe(true);
+        else expect(Buffer.byteLength(JSON.stringify(update))).toBeLessThanOrEqual(TOPIC_BUDGET);
+      }
+    });
   }, 30_000);
+
+  it('ends a subscription’s transfer before a replacement that follows it before it is sent', async () => {
+    folder = await keepWorld([{ id: 'worker' }], []);
+    const core = await start(
+      folder,
+      withHistory(() => turns(1200, 1500, 'past')),
+    );
+    const open = core.engines.canvas(CANVAS);
+    open?.engine.sessions.open('worker');
+    await vi.waitFor(
+      () => {
+        expect(open?.engine.sessions.of('worker').entries.length).toBe(3600);
+      },
+      { timeout: 20_000 },
+    );
+    // Subscribed: its transfer's begin answers it, its chunks and end wait for the next batch.
+    const copies = [
+      await follow(core, sessionOf('worker'), CALLERS.you),
+      await follow(core, sessionOf('worker'), WRITER),
+    ];
+    for (const copy of copies) expect(copy.ready).toBe(false);
+    // Before that batch: an entry no delta holds, said as a transfer that replaces the copy.
+    open?.engine.sessions.notice('worker', 'info', 'n'.repeat(MAX_TOPIC_FRAME));
+    await expectCopiesRead(core, copies);
+    for (const copy of copies) {
+      const frames = copy.batches.flat().filter((update) => 'kind' in update);
+      // Both transfers whole and in turn: the subscription's ended, then the replacement.
+      expect(frames.filter((frame) => frame.kind === 'end')).toHaveLength(2);
+      expect(frames.filter((frame) => frame.kind === 'begin')).toHaveLength(1);
+    }
+  }, 60_000);
 
   it('caps long replies in every summary while retaining the whole transcript in chunks', async () => {
     folder = await keepWorld([{ id: 'worker' }], []);

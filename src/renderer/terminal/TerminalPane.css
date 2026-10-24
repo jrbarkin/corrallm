@@ -29,6 +29,31 @@
   height: 100%;
 }
 
+/* In the terminal's place where it cannot be drawn (screen.ts: no WebGL2): why, and what to try. */
+.agent-terminal-unavailable {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  padding: 24px;
+  text-align: center;
+}
+
+.agent-terminal-unavailable p {
+  max-width: 520px;
+  margin: 0;
+  font-size: 13px;
+  opacity: 0.8;
+}
+
+.agent-terminal-unavailable p:first-child {
+  font-size: 15px;
+  font-weight: 600;
+  opacity: 1;
+}
+
 /* What xterm.js styles with inline styles of its theme (its DOM renderer's, never made), here. */
 .agent-terminal .xterm .xterm-viewport {
   background-color: #1c1c1f;

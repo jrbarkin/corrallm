@@ -35,6 +35,9 @@ function fixture() {
       now += ms;
       return Promise.resolve();
     },
+    pause: (ms) => {
+      now += ms;
+    },
     now: () => now,
   };
   const record = async (pids: number[]) => {

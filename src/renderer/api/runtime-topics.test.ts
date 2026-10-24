@@ -288,9 +288,14 @@ describe('runtime topic mirrors', () => {
       const base = { topic, epoch: 'one', snapshot: 's' };
       const pairs =
         kind === 'run'
-          ? Object.entries(w.run.agents).map(
-              ([key, value]) => [`agent/${encodeURIComponent(key)}`, value] as const,
-            )
+          ? [
+              ...Object.entries(w.run.agents).map(
+                ([key, value]) => [`agent/${encodeURIComponent(key)}`, value] as const,
+              ),
+              ...Object.entries(w.run.groups).map(
+                ([key, value]) => [`group/${encodeURIComponent(key)}`, value] as const,
+              ),
+            ]
           : kind === 'sessions'
             ? Object.entries(w.sessions.agents)
             : Object.entries(w.messages.items);

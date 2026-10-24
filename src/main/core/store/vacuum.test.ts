@@ -73,6 +73,7 @@ async function prunedMessages(): Promise<void> {
         from: 'you',
         to: 'agent:a',
         kind: 'text',
+        origin: 'manual',
         state: 'pending',
         body: 'x'.repeat(64 * 1024),
       }).id,

@@ -24,6 +24,8 @@ import { dump } from '../core/store/dump';
 import { WorkspaceStore } from '../core/workspaces/store';
 
 const exec = promisify(execFile);
+/** A checkpoint's submissions when it has none. */
+const NONE = '{"version":1,"agents":[]}';
 const BUNDLE = path.resolve('dist-cli/corrallm.cjs');
 const canvas = newCanvasId();
 let profile: string;
@@ -56,19 +58,20 @@ beforeEach(async () => {
     ],
     links: [],
   });
-  journal = new RunJournal({ store, memory });
+  messages = new MessageStore(canvas, new MessageTable(store, memory), () => 1000);
+  await messages.load();
+  journal = new RunJournal({ store, memory, messages: () => Promise.resolve(messages) });
   await journal.save(canvas, (await journal.get(canvas)).token, {
     version: 2,
     state: '{}',
-    messages: '[]',
+    messages: NONE,
     updatedAt: 1,
   });
-  messages = new MessageStore(canvas, new MessageTable(store, memory), () => 1000);
-  await messages.load();
   messages.add({
     from: 'you',
     to: 'agent:a',
     kind: 'text',
+    origin: 'manual',
     state: 'pending',
     body: 'Hello\nthere',
   });
@@ -126,9 +129,19 @@ it('dumps canvases with their document, runs and WAL messages without taking the
     },
     {
       type: 'run',
-      data: { canvas_id: canvas, state: { version: 2, state: {}, messages: [] }, updated_at: 1 },
+      data: { canvas_id: canvas, state: { format: 3, run: {} }, updated_at: 1 },
     },
-    { type: 'message', data: { canvas_id: canvas, body: 'Hello\nthere', state: 'pending' } },
+    {
+      type: 'message',
+      data: {
+        canvas_id: canvas,
+        origin: 'manual',
+        body: 'Hello\nthere',
+        display: null,
+        resend_of: null,
+        state: 'pending',
+      },
+    },
   ]);
   expect(await bytes()).toEqual(before);
 });
@@ -174,15 +187,22 @@ it('holds one consistent read while awaiting a slow output pipe and the owner co
     await journal.save(canvas, (await journal.get(canvas)).token, {
       version: 2,
       state: '{"new":true}',
-      messages: '[]',
+      messages: NONE,
       updatedAt: 2,
     });
-    messages.add({ from: 'you', to: 'agent:a', kind: 'text', state: 'pending', body: 'Later' });
+    messages.add({
+      from: 'you',
+      to: 'agent:a',
+      kind: 'text',
+      origin: 'manual',
+      state: 'pending',
+      body: 'Later',
+    });
     await messages.durable();
   });
   expect(lines.map((line) => JSON.parse(line) as unknown)).toMatchObject([
     { type: 'canvas' },
-    { type: 'run', data: { state: { state: {} }, updated_at: 1 } },
+    { type: 'run', data: { state: { run: {} }, updated_at: 1 } },
     { type: 'message', data: { body: 'Hello\nthere' } },
   ]);
   expect(lines).toHaveLength(3);
@@ -306,6 +326,88 @@ it('dumps a schema-2 database without migrating it: no workspace records, conver
     const schema = connect(file, { readOnly: true });
     try {
       expect(schema.prepare('PRAGMA user_version').get()).toEqual({ user_version: 2 });
+    } finally {
+      schema.close();
+    }
+  } finally {
+    await rm(older, { recursive: true, force: true });
+  }
+});
+
+it('dumps how each message came to be, what a view shows of it and what it resends', async () => {
+  const original = messages.all()[0];
+  if (original === undefined) throw new Error('No message');
+  const resent = messages.add({
+    from: 'you',
+    to: 'agent:a',
+    kind: 'text',
+    origin: 'resend',
+    display: { images: 1, requiresImages: true },
+    body: 'Hello\nthere',
+    state: 'pending',
+    resendOf: original.id,
+  });
+  await messages.durable();
+  const lines: string[] = [];
+  await dump(store.file, (line) => {
+    lines.push(line);
+    return Promise.resolve();
+  });
+  expect(lines.map((line) => JSON.parse(line) as unknown).slice(-2)).toMatchObject([
+    { type: 'message', data: { id: original.id, origin: 'manual', resend_of: null } },
+    {
+      type: 'message',
+      data: {
+        id: resent.id,
+        origin: 'resend',
+        // Decoded, as other JSON columns are.
+        display: { images: 1, requiresImages: true },
+        reply_to: null,
+        resend_of: original.id,
+      },
+    },
+  ]);
+});
+
+it('dumps a schema-3 database without migrating it: its runs and messages as schema 3 kept them', async () => {
+  const older = await mkdtemp(path.join(tmpdir(), 'corrallm-dump-3-'));
+  try {
+    const old = madeAtSchema(older, 3);
+    const legacy = { version: 2, state: { version: 2 }, messages: { version: 1, agents: [] } };
+    try {
+      old.prepare('INSERT INTO canvas (id, used_at) VALUES (?, 1)').run(canvas);
+      old
+        .prepare('INSERT INTO run (canvas_id, state, updated_at) VALUES (?, ?, 1)')
+        .run(canvas, JSON.stringify(legacy));
+      old
+        .prepare(
+          `INSERT INTO message (id, canvas_id, from_party, to_party, kind, body, reply_to, state,
+             sent_at, told)
+           VALUES ('resent', ?, 'you', 'agent:a', 'text', 'Hello', 'original', 'pending', 1,
+             'resend:original')`,
+        )
+        .run(canvas);
+    } finally {
+      old.close();
+    }
+    const file = path.join(older, STORE_FILE);
+    const before = await readFile(file);
+    const lines: string[] = [];
+    await dump(file, (line) => {
+      lines.push(line);
+      return Promise.resolve();
+    });
+    const [, run, message] = lines.map((one) => JSON.parse(one) as Record<string, unknown>);
+    expect(run).toMatchObject({ type: 'run', data: { state: legacy } });
+    expect(message).toMatchObject({
+      type: 'message',
+      data: { id: 'resent', reply_to: 'original', told: 'resend:original' },
+    });
+    expect(Object.keys(message?.data ?? {})).not.toContain('origin');
+    expect(await readFile(file)).toEqual(before);
+    const schema = connect(file, { readOnly: true });
+    try {
+      expect(schema.prepare('PRAGMA user_version').get()).toEqual({ user_version: 3 });
     } finally {
       schema.close();
     }

@@ -1,15 +1,25 @@
 import { randomUUID } from 'node:crypto';
 
-import { STORE_BYTES, STORE_SETTLED_PER_PARTY } from '../../../shared/api/limits';
+import {
+  MAX_MESSAGE_BYTES,
+  STORE_BYTES,
+  STORE_SETTLED_PER_PARTY,
+} from '../../../shared/api/limits';
 import type { CanvasId } from '../../../shared/canvas';
 import {
   agentOf,
   isSettled,
   MESSAGE_KINDS,
+  MESSAGE_ORIGINS,
   MESSAGE_STATES,
   PARTY_PATTERN,
 } from '../../../shared/model/messages';
-import type { Message, PartyId } from '../../../shared/model/messages';
+import type {
+  Message,
+  MessageDisplay,
+  MessageOrigin,
+  PartyId,
+} from '../../../shared/model/messages';
 import type { CanvasMemory } from '../../memory';
 import type { Database } from '../store/store';
 import { Sequence } from './sequence';
@@ -17,8 +27,9 @@ import { Sequence } from './sequence';
 /*
  * A canvas's messages, as the core keeps them (API Spec §5.3, Core Server §5.9): in memory, in the
  * order they came, and in the profile's database (Core Database §5), each a row of `message`, with
- * the key of what it tells, for a notice (`told`), and the note its recipient must still be told of
- * a withdrawal (`withdrawal`). Their order (`seq`) is one every canvas's messages share, whose
+ * the key of what it tells, for a notice (`told`), the note its recipient must still be told of
+ * a withdrawal (`withdrawal`), how it came to be (`origin`, which its caller says, never a party:
+ * B11 Design §3) and what a view shows of it beside its body (`display`). Their order (`seq`) is one every canvas's messages share, whose
  * places are never given again (MessageTable), so a cursor into it survives pruning, restarts and
  * restores. It keeps the newest STORE_SETTLED_PER_PARTY settled messages of each party within
  * STORE_BYTES, and every pending and unresolved one, deleting the oldest settled first (delivery
@@ -39,8 +50,17 @@ import { Sequence } from './sequence';
  * `durable` rejects once anything has changed, so nothing is sent without its record.
  */
 
+/**
+ * How a message came to be, as the core says (never an argument of a caller's), and what a view
+ * shows of it: kept beside it, never changed but for its display.
+ */
+export interface Provenance {
+  origin: MessageOrigin;
+  display?: MessageDisplay;
+}
+
 /** A message to add: the store gives it its id, its canvas and when it was sent. */
-export type Draft = Omit<Message, 'id' | 'canvas' | 'at'>;
+export type Draft = Omit<Message, 'id' | 'canvas' | 'at'> & Provenance;
 
 /**
  * What a write staged with what else it writes: told once the write's commit returned, or undone if
@@ -55,7 +75,7 @@ export interface Staged {
  * A message as the store keeps it: its place in the order, how big its record is, and, for a
  * notice, what it told (its key: Delivery tells each thing once, across restarts too).
  */
-interface Kept {
+interface Kept extends Provenance {
   seq: number;
   message: Message;
   bytes: number;
@@ -86,8 +106,8 @@ export class MessageTable {
   rows(canvas: CanvasId): Record<string, unknown>[] {
     return this.#store
       .prepare(
-        `SELECT seq, id, from_party, to_party, kind, body, reply_to, task, turn, state, delivery,
-           by_party, sent_at, told, withdrawal
+        `SELECT seq, id, from_party, to_party, kind, origin, body, display, reply_to, resend_of,
+           task, turn, state, delivery, by_party, sent_at, told, withdrawal
          FROM message WHERE canvas_id = ? ORDER BY seq`,
       )
       .all(canvas);
@@ -121,16 +141,17 @@ export class MessageTable {
    * Within a write: a message's row, as kept (each column written by name, so that what a newer
    * corrallm keeps beside them stays).
    */
-  keep({ seq, message, told, withdrawal }: Kept): void {
+  keep({ seq, message, origin, display, told, withdrawal }: Kept): void {
     this.#store
       .prepare(
-        `INSERT INTO message (seq, id, canvas_id, from_party, to_party, kind, body, reply_to, task,
-           turn, state, delivery, by_party, sent_at, told, withdrawal)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `INSERT INTO message (seq, id, canvas_id, from_party, to_party, kind, origin, body, display,
+           reply_to, resend_of, task, turn, state, delivery, by_party, sent_at, told, withdrawal)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT (id) DO UPDATE SET
-           body = excluded.body, reply_to = excluded.reply_to, task = excluded.task,
-           turn = excluded.turn, state = excluded.state, delivery = excluded.delivery,
-           by_party = excluded.by_party, told = excluded.told, withdrawal = excluded.withdrawal`,
+           body = excluded.body, display = excluded.display, reply_to = excluded.reply_to,
+           task = excluded.task, turn = excluded.turn, state = excluded.state,
+           delivery = excluded.delivery, by_party = excluded.by_party, told = excluded.told,
+           withdrawal = excluded.withdrawal`,
       )
       .run(
         seq,
@@ -139,8 +160,11 @@ export class MessageTable {
         message.from,
         message.to,
         message.kind,
+        origin,
         message.body,
+        json(display),
         message.replyTo ?? null,
+        message.resendOf ?? null,
         json(message.task),
         json(message.turn),
         message.state,
@@ -259,10 +283,17 @@ export class MessageStore {
    * Adds a message, written with the store's next write: as kept. `told`: for a notice, the key of
    * what it tells, kept with it.
    */
-  add(draft: Draft, told?: string): Message {
+  add({ origin, display, ...draft }: Draft, told?: string): Message {
     const message: Message = { id: randomUUID(), canvas: this.canvas, ...draft, at: this.#now() };
     const seq = this.#unjournaled === undefined ? this.#table.place() : ++this.#seq;
-    this.#keep({ seq, message, bytes: 0, ...(told === undefined ? {} : { told }) });
+    this.#keep({
+      seq,
+      message,
+      bytes: 0,
+      origin,
+      ...(display === undefined ? {} : { display }),
+      ...(told === undefined ? {} : { told }),
+    });
     for (const listener of this.#listeners) listener(message);
     return message;
   }
@@ -275,10 +306,16 @@ export class MessageStore {
    * hear messages, once the write's commit returned, and `undo` forgets it, if the write failed.
    * Throws, adding nothing, if the store journals nothing.
    */
-  stageWithin(draft: Draft): Staged & { message: Message } {
+  stageWithin({ origin, display, ...draft }: Draft): Staged & { message: Message } {
     if (this.#unjournaled !== undefined) throw new Error(this.#unjournaled);
     const message: Message = { id: randomUUID(), canvas: this.canvas, ...draft, at: this.#now() };
-    const kept: Kept = { seq: this.#table.place(), message, bytes: 0 };
+    const kept: Kept = {
+      seq: this.#table.place(),
+      message,
+      bytes: 0,
+      origin,
+      ...(display === undefined ? {} : { display }),
+    };
     this.#table.ensure(this.canvas);
     this.#table.keep(kept);
     this.#set({ ...kept, bytes: sizeOf(kept) });
@@ -332,21 +369,39 @@ export class MessageStore {
     return [...this.#kept.values()].some(({ told }) => told === key);
   }
 
-  /** This message is an explicit resend, marked in the existing durable told column. */
-  isResend(message: Message): boolean {
-    return (
-      message.replyTo !== undefined &&
-      (this.#kept.get(message.id)?.told === `resend:${message.replyTo}` ||
-        this.isImageResend(message))
-    );
+  /** How a message kept came to be. */
+  originOf(id: string): MessageOrigin | undefined {
+    return this.#kept.get(id)?.origin;
   }
 
-  /** Image bytes are live-only: a restart must not silently dispatch an incomplete resend. */
-  isImageResend(message: Message): boolean {
-    return (
-      message.replyTo !== undefined &&
-      this.#kept.get(message.id)?.told === `resend:${message.replyTo}:images`
-    );
+  /** What a view shows of a message kept beside its body, if anything. */
+  displayOf(id: string): MessageDisplay | undefined {
+    return this.#kept.get(id)?.display;
+  }
+
+  /**
+   * Whether a message can't be sent without the images it carried. Their bytes are live-only
+   * (Delivery's): once a restart has lost them, it is never sent without them.
+   */
+  requiresImages(message: Message): boolean {
+    return this.#kept.get(message.id)?.display?.requiresImages === true;
+  }
+
+  /** Whether a message kept resends the message `id`: each is resent once, across restarts too. */
+  resent(id: string): boolean {
+    for (const { message } of this.#kept.values()) if (message.resendOf === id) return true;
+    return false;
+  }
+
+  /** Changes what a view shows of a message: as kept, or false if it isn't kept (any more). */
+  redisplay(id: string, display: MessageDisplay | undefined): boolean {
+    const kept = this.#kept.get(id);
+    if (!kept) return false;
+    const next: Kept = { ...kept };
+    if (display === undefined) delete next.display;
+    else next.display = display;
+    this.#keep(next);
+    return true;
   }
 
   /** Changes a message: as kept, or undefined if it isn't kept (any more). */
@@ -581,6 +636,30 @@ function prunable({ message, withdrawal }: Kept): boolean {
 }
 
 /**
+ * Whether a message is one of the run's sends of a task's attempt (B11 Design §3): a text with a
+ * task link, which only the runtime's mailbox gives a message (Engines), never a caller. The run
+ * sends it and settles it; delivery never delivers, takes back or kills it as a party's.
+ */
+export function sentByRun(message: Message): boolean {
+  return message.kind === 'text' && message.task !== undefined;
+}
+
+/**
+ * A text cut to the most a message holds (MAX_MESSAGE_BYTES), marked where it was cut as the
+ * `whole` of it (a reply, a prompt) its transcript has.
+ */
+export function capBody(text: string, whole: 'reply' | 'prompt'): string {
+  const bytes = new TextEncoder().encode(text);
+  if (bytes.length <= MAX_MESSAGE_BYTES) return text;
+  const cut = `\n\n[corrallm: cut here; the whole ${whole} is in its transcript]`;
+  const room = MAX_MESSAGE_BYTES - new TextEncoder().encode(cut).length;
+  // Cut on a character's boundary: the decoder ends a character cut in two with U+FFFD, dropped
+  // here.
+  const kept = new TextDecoder('utf-8', { fatal: false }).decode(bytes.slice(0, room));
+  return `${kept.replace(/�$/u, '')}${cut}`;
+}
+
+/**
  * Whether delivery still acts on a message: it waits, is being delivered, or is a text to an agent
  * whose turn goes on (delivered, not yet replied to). Delivery never acts on one settled or
  * unresolved again.
@@ -631,20 +710,21 @@ export function readCursor(
 }
 
 /** How big a message's record is: what its byte budget counts. */
-function sizeOf({ seq, message, told, withdrawal }: Kept): number {
-  return Buffer.byteLength(JSON.stringify({ seq, message, told, withdrawal }));
+function sizeOf({ seq, message, origin, display, told, withdrawal }: Kept): number {
+  return Buffer.byteLength(JSON.stringify({ seq, message, origin, display, told, withdrawal }));
 }
 
 /** A row of `message`, read: undefined if it isn't one of the canvas's messages this code reads. */
 function keptOf(row: Record<string, unknown>, canvas: CanvasId): Kept | undefined {
   const party = (v: unknown): v is PartyId => typeof v === 'string' && PARTY_PATTERN.test(v);
-  const { seq, id, from_party: from, to_party: to, kind, body, state, sent_at: at } = row;
+  const { seq, id, from_party: from, to_party: to, kind, origin, body, state, sent_at: at } = row;
   if (
     typeof seq !== 'number' ||
     typeof id !== 'string' ||
     !party(from) ||
     !party(to) ||
     !(MESSAGE_KINDS as readonly unknown[]).includes(kind) ||
+    !(MESSAGE_ORIGINS as readonly unknown[]).includes(origin) ||
     !(MESSAGE_STATES as readonly unknown[]).includes(state) ||
     typeof body !== 'string' ||
     typeof at !== 'number'
@@ -652,7 +732,10 @@ function keptOf(row: Record<string, unknown>, canvas: CanvasId): Kept | undefine
     return undefined;
   }
   const replyTo = row.reply_to;
+  const resendOf = row.resend_of;
   const by = row.by_party;
+  const display = row.display === null ? undefined : displayOf(parsed(row.display));
+  if (display === null) return undefined;
   const task = parsed(row.task);
   const turn = parsed(row.turn);
   const delivery = parsed(row.delivery);
@@ -665,6 +748,7 @@ function keptOf(row: Record<string, unknown>, canvas: CanvasId): Kept | undefine
     kind,
     body,
     ...(typeof replyTo === 'string' ? { replyTo } : {}),
+    ...(typeof resendOf === 'string' ? { resendOf } : {}),
     ...(task === undefined ? {} : { task }),
     ...(turn === undefined ? {} : { turn }),
     state,
@@ -676,6 +760,8 @@ function keptOf(row: Record<string, unknown>, canvas: CanvasId): Kept | undefine
     seq,
     message,
     bytes: 0,
+    origin: origin as MessageOrigin,
+    ...(display === undefined ? {} : { display }),
     ...(typeof row.told === 'string' ? { told: row.told } : {}),
     ...(withdrawal !== undefined && typeof withdrawal.text === 'string'
       ? {
@@ -687,6 +773,27 @@ function keptOf(row: Record<string, unknown>, canvas: CanvasId): Kept | undefine
       : {}),
   };
   return { ...kept, bytes: sizeOf(kept) };
+}
+
+/**
+ * What a view shows of a message, as its row holds it: null if it holds anything else, so that the
+ * row is one this code doesn't read (left as it is).
+ */
+function displayOf(value: Record<string, unknown> | undefined): MessageDisplay | null {
+  if (value === undefined) return null;
+  const { after, task, text, images, requiresImages, ...others } = value;
+  const ok =
+    Object.keys(others).length === 0 &&
+    (after === undefined || typeof after === 'string') &&
+    (text === undefined || typeof text === 'string') &&
+    (images === undefined || (Number.isSafeInteger(images) && (images as number) >= 0)) &&
+    (requiresImages === undefined || requiresImages === true) &&
+    (task === undefined ||
+      (isRecord(task) &&
+        Object.keys(task).length === 2 &&
+        typeof task.agent === 'string' &&
+        typeof task.item === 'string'));
+  return ok ? value : null;
 }
 
 /** A JSON column's object, if it holds one. */

@@ -16,9 +16,10 @@ import type {
 import { isRuntimeTopic, topicRequest } from '../../shared/api/topics';
 import type { CanvasId } from '../../shared/canvas';
 import type { SessionAction } from '../../shared/engine/transcript/reduce';
-import type { PartyId } from '../../shared/model/messages';
 import type { Entry, Session } from '../../shared/model/session';
-import { MESSAGE_ORIGINS, projectData, runView } from '../../shared/model/views';
+import { MESSAGE_ORIGINS } from '../../shared/model/messages';
+import type { PartyId } from '../../shared/model/messages';
+import { projectData, runView } from '../../shared/model/views';
 import type {
   EntryView,
   MessageView,
@@ -149,6 +150,7 @@ export const RUNTIME_STATES = {
         display: z
           .strictObject({
             after: z.string().optional(),
+            task: z.strictObject({ agent: z.string(), item: z.string() }).optional(),
             text: z.string().optional(),
             images: z.int().min(0).optional(),
             requiresImages: z.literal(true).optional(),

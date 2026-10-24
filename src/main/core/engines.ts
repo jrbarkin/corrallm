@@ -6,14 +6,15 @@ import type { EngineCatalog } from '../../shared/engine/catalog';
 import { Engine } from '../../shared/engine/engine';
 import { needs } from '../../shared/engine/needs';
 import type { NeedsInput } from '../../shared/engine/needs';
+import type { RunMailbox } from '../../shared/engine/run/runner';
 import type { SessionBackend } from '../../shared/engine/transcript/receive';
 import type { CanvasDocument } from '../../shared/model/canvas';
-import type { Message, PartyId } from '../../shared/model/messages';
+import type { Message, MessageDisplay, PartyId } from '../../shared/model/messages';
 import { agentParty } from '../../shared/model/messages';
 import type { NeedsItem } from '../../shared/model/needs';
 import type { RunCheckpoint } from '../../shared/run';
 import { MAX_FILE_MATCHES } from '../../shared/session';
-import type { SessionEvent, UserMessage } from '../../shared/session';
+import type { SessionEvent, TaskMessage, UserMessage } from '../../shared/session';
 import { usedUpUntil } from '../../shared/usage';
 import type { ProjectFiles } from '../files';
 import type { ProjectFolders } from '../project';
@@ -24,7 +25,7 @@ import type { SessionManager } from '../sessions/manager';
 import type { UsageReadings } from '../usage';
 import type { Documents } from './canvas/documents';
 import { Delivery } from './delivery/delivery';
-import { MessageStore } from './delivery/messages';
+import { capBody, MessageStore, sentByRun } from './delivery/messages';
 import type { MessageTable } from './delivery/messages';
 import { WithdrawalNotes } from './delivery/withdrawals';
 import { ReadPositions } from './delivery/reads';
@@ -38,11 +39,18 @@ import type { Database } from './store/store';
  * the user picked in the app (canvas memory), its document as the core keeps it (from its rows,
  * else read from its file: core/canvas/documents.ts; a file changed on disk is reviewed, never read
  * over its rows), whose live document it reads from then on, and its run as the journal last kept
- * it, restored paused. A canvas with no file opens only if
- * the core keeps its document (one a token made), and none whose file holds another canvas. It is
- * open (the journal's `open_canvas`) until it is closed (`closeCanvas`: its run journaled, its
- * sessions ended). One opened held delivers nothing until `deliver()`, so a host that may still
- * refuse to start (`corrallm serve`) sends nothing. Whatever its engine does is journaled again: at most one
+ * it, restored paused. Each canvas has one runtime at a time (B11 Design §2), allocated once however
+ * often and concurrently asked (`load`, `open`, `initialize`), passive (its document, run and
+ * messages loaded, starting no CLI and delivering nothing) until it executes (its delivery started,
+ * once, after what was cut off is settled on disk), then closing and closed (`closeCanvas`: its run
+ * journaled, its sessions ended); a canvas allocated again while it closes waits for that close. A
+ * passive runtime needs no project folder (an agent's session consults the working-directory
+ * resolver as it starts); serve's admission (`open`) still needs one, and a file holding the canvas
+ * or the core's rows of it, never a draft that holds nothing, nor a canvas whose file holds another.
+ * It is open (the journal's `open_canvas`) until it is closed. One opened held stays passive until
+ * `deliver()`, so a host that may still refuse to start (`corrallm serve`) sends nothing. A core
+ * starting cold initializes every canvas open (`initialize`), once. Whatever its engine does is
+ * journaled again: at most one
  * write per COALESCE_MS, and one before every message the run sends, so a sent message's record is
  * always on disk first. Its run and its messages are one record: each write of either holds every
  * change to the other not on disk yet (a run's only if it changed since it last was), so what
@@ -62,14 +70,28 @@ const NO_FILE = 'This canvas isn’t saved: save it in corrallm first.';
 const ANOTHER = 'This canvas’s file holds another canvas now: open it in corrallm to run it.';
 const NO_SWITCH = 'Switch this agent to another connection in the corrallm app.';
 const JOURNAL_FAILED = 'Could not journal every canvas’s run as the core closed.';
+const NOT_KEPT = 'corrallm keeps no such canvas.';
+/** Whom the session manager lists conversations for when a canvas's own runtime asks. */
+const RUNTIME_CALLER = 'runtime';
 
-export interface EnginesDeps {
-  retryTask?: (
+/**
+ * The app's runs a window still owns until B11's cutover (X12, X13; X14 deletes this seam with task
+ * 62's retry-task event): what the core tells such a run, and only such a run. A run the core runs
+ * hears nothing of it: it retries its attempts itself (Engines.retryAttempt).
+ */
+export interface WindowRuns {
+  /** An interrupted turn's retry decision for a window-owned run, for its windows alone. */
+  retry: (
     canvas: CanvasId,
     agent: string,
     connection: ConnectionId,
     event: Extract<SessionEvent, { type: 'retry-task' }>,
   ) => void;
+}
+
+export interface EnginesDeps {
+  /** The windows that own their canvases' runs until the cutover: none under serve. */
+  windowRuns?: WindowRuns;
   processes: Pick<Children, 'run'>;
   /** What the engines read of the catalog. */
   engineCatalog: EngineCatalog;
@@ -78,7 +100,7 @@ export interface EnginesDeps {
   directories: ProjectRootResolver;
   journal: RunJournal;
   /** Each canvas's document, its file checked as it opens. */
-  documents: Pick<Documents, 'review' | 'live' | 'hasRows'>;
+  documents: Pick<Documents, 'review' | 'live' | 'loaded' | 'hasRows'>;
   /** Every canvas's messages, in the profile's database. */
   messages: MessageTable;
   /** The profile's database, whose commits hold what changes together. */
@@ -93,10 +115,22 @@ export interface EnginesDeps {
   needs?: (canvas: CanvasId) => readonly NeedsItem[];
 }
 
+/**
+ * Where a canvas's runtime is (B11 Design §2): passive, loaded but delivering nothing and starting
+ * no CLI; or executing, its delivery started. Closing removes it.
+ */
+export type RuntimeState = 'passive' | 'executing';
+
+/** How initializing a canvas open went, as a core starts cold (`initialize`). */
+export type Initialized =
+  { canvas: CanvasId; warnings: readonly string[] } | { canvas: CanvasId; error: string };
+
 /** A canvas the core runs: its document, its engine and its messages. */
 export interface OpenCanvas {
   /** Its document as the core has it now. */
   readonly document: CanvasDocument;
+  /** Whether it executes yet, or is only allocated (passive). */
+  readonly state: RuntimeState;
   engine: Engine;
   messages: MessageStore;
   delivery: Delivery;
@@ -134,8 +168,19 @@ export interface Watcher {
   closed?(canvas: CanvasId): void;
 }
 
+/** A run's attempt an Interrupt and resend reserved: its task link, and the id its turn names. */
+interface ReservedAttempt {
+  task: TaskMessage;
+  as: string;
+}
+
 /** A canvas the core runs, with its sessions' listeners and its journal. */
 interface Running extends OpenCanvas {
+  state: RuntimeState;
+  /** Its delivery starting (once: `#execute`), once it executes. */
+  executing: Promise<void> | undefined;
+  /** Whether the profile keeps it as serve admits it: in a file that holds it, or in rows. */
+  kept: boolean;
   /** Its generation's token in the journal, which its writes carry. */
   token: string;
   listeners: Set<(agentId: string, connection: ConnectionId, event: SessionEvent) => void>;
@@ -156,13 +201,19 @@ interface Running extends OpenCanvas {
 
 export class Engines {
   readonly #deps: EnginesDeps;
+  /** Each canvas's runtime, allocated once (its one initialization). */
   readonly #running = new Map<CanvasId, Promise<Running>>();
+  /** Each canvas closing: allocated again only once its close has finished. */
+  readonly #closing = new Map<CanvasId, Promise<void>>();
+  /** Every canvas open as the core started, initialized once (`initialize`). */
+  #initialized: Promise<readonly Initialized[]> | undefined;
   /** The canvases open now, once opened. */
   readonly #canvases = new Map<CanvasId, Running>();
   readonly #mail = new Map<CanvasId, Promise<{ messages: MessageStore; notes: WithdrawalNotes }>>();
   readonly #watchers = new Set<Watcher>();
   readonly #events = new Map<string, Promise<SessionEvent>>();
   #closed = false;
+  /** The window-owned runs whose retry decisions wait on a backend's hold, by canvas and agent. */
   readonly #ownerResends = new Map<
     string,
     { canvas: CanvasId; agent: string; connection: ConnectionId }
@@ -170,20 +221,26 @@ export class Engines {
   readonly #unwatchResends: () => void;
   readonly #reports = new Map<string, Map<string, SessionEvent>>();
   readonly #inputs = new Map<string, Map<string, UserMessage>>();
-  readonly #resends = new Map<string, { ids: readonly string[]; inputs: UserMessage[] }>();
+  /**
+   * Each Interrupt and resend reserved before its interrupt (by canvas and agent), on a canvas the
+   * core runs: the native turn's ids, what was sent in it, and the run's attempts it carried (from
+   * their durable messages), each retried on that turn's cancelled end (retryAttempt).
+   */
+  readonly #resends = new Map<
+    string,
+    { ids: readonly string[]; inputs: UserMessage[]; attempts: readonly ReservedAttempt[] }
+  >();
 
   constructor(deps: EnginesDeps) {
     this.#deps = deps;
     this.#unwatchResends = deps.usage.subscribe(() => {
       for (const { canvas, agent, connection } of this.#ownerResends.values()) {
-        const event = this.#retryEvent(connection, { update: true });
-        void this.emit(canvas, agent, connection, event)
-          .then(() => {
-            this.#deps.retryTask?.(canvas, agent, connection, event);
-          })
-          .catch((error: unknown) => {
-            console.error('Could not update a retry hold:', error);
-          });
+        deps.windowRuns?.retry(
+          canvas,
+          agent,
+          connection,
+          this.#retryEvent(connection, { update: true }),
+        );
       }
     });
   }
@@ -232,16 +289,16 @@ export class Engines {
   ): Promise<void> {
     const store = await this.messagesOf(canvas);
     const parties = new Set<PartyId>();
-    const messages = store
-      .active()
-      .filter(
-        (message) =>
-          message.kind === 'text' &&
-          message.to === agentParty(agent) &&
-          message.delivery !== undefined &&
-          ids.includes(message.delivery.as) &&
-          (message.state === 'delivering' || message.state === 'delivered'),
-      );
+    const messages = store.active().filter(
+      (message) =>
+        message.kind === 'text' &&
+        // The run's own sends tell no sender: the run holds their tasks.
+        !sentByRun(message) &&
+        message.to === agentParty(agent) &&
+        message.delivery !== undefined &&
+        ids.includes(message.delivery.as) &&
+        (message.state === 'delivering' || message.state === 'delivered'),
+    );
     for (const message of messages) {
       if (parties.has(message.from) || message.from === 'corrallm') continue;
       parties.add(message.from);
@@ -254,6 +311,7 @@ export class Engines {
           from: 'corrallm',
           to: message.from,
           kind: 'notice',
+          origin: 'party',
           body: text,
           replyTo: message.id,
           state: 'delivered',
@@ -272,7 +330,14 @@ export class Engines {
     this.#ownerResends.delete(key);
   }
 
-  /** Arm one explicit retry before the interrupt, never before its cancelled end arrives. */
+  /**
+   * Reserves one explicit Interrupt and resend of an agent's native turn (its ids), before its
+   * interrupt, never acting before its cancelled end arrives. On a canvas the core runs: the run's
+   * attempts in that turn (read from their durable messages) are retried on that end
+   * (retryAttempt), and the parties' and your messages in it sent again (#resend). A window that
+   * owns its canvas's run until B11's cutover is handed the decision instead (WindowRuns); no
+   * second engine is opened for it.
+   */
   async resendAfter(
     canvas: CanvasId,
     agent: string,
@@ -283,27 +348,81 @@ export class Engines {
     const inputs = [...(this.#inputs.get(key)?.values() ?? [])].filter((one) =>
       ids.includes(one.id),
     );
-    const hosted = this.#running.has(canvas);
-    if (hosted) this.#resends.set(key, { ids, inputs });
+    if (this.#running.has(canvas)) {
+      const open = this.#canvases.get(canvas);
+      const attempts = (open?.messages.active() ?? []).flatMap((message) =>
+        sentByRun(message) &&
+        message.task !== undefined &&
+        message.to === agentParty(agent) &&
+        message.delivery !== undefined &&
+        ids.includes(message.delivery.as)
+          ? [{ task: message.task, as: message.delivery.as }]
+          : [],
+      );
+      this.#resends.set(key, { ids, inputs, attempts });
+      return;
+    }
     const tasks = inputs.flatMap((input) => (input.task === undefined ? [] : [input.task]));
-    // A window still owns its run and manual submissions until B11. Hand its manual
-    // decision back to that owner, just like a task retry; never open a second engine.
-    const messages = hosted
-      ? []
-      : inputs.filter((input) => input.origin === undefined && input.from === undefined);
+    const messages = inputs.filter(
+      (input) => input.origin === undefined && input.from === undefined,
+    );
     if (tasks.length || messages.length) this.#ownerResends.set(key, { canvas, agent, connection });
-    const event = { ...this.#retryEvent(connection), tasks, messages };
-    await this.emit(canvas, agent, connection, event);
-    this.#deps.retryTask?.(canvas, agent, connection, event);
+    await this.#settledEvents(key);
+    this.#deps.windowRuns?.retry(canvas, agent, connection, {
+      ...this.#retryEvent(connection),
+      tasks,
+      messages,
+    });
   }
 
+  /** The interrupt a reservation was made for was refused: nothing is retried or sent again. */
   async cancelResend(canvas: CanvasId, agent: string, connection: ConnectionId): Promise<void> {
     const key = `${canvas}\u0000${agent}`;
     this.#resends.delete(key);
+    if (this.#running.has(canvas)) return;
     this.#ownerResends.delete(key);
-    const event = this.#retryEvent(connection, { cancel: true });
-    await this.emit(canvas, agent, connection, event);
-    this.#deps.retryTask?.(canvas, agent, connection, event);
+    await this.#settledEvents(key);
+    this.#deps.windowRuns?.retry(
+      canvas,
+      agent,
+      connection,
+      this.#retryEvent(connection, { cancel: true }),
+    );
+  }
+
+  /**
+   * Retries a run's attempt that its turn's cancelled end interrupted, as an Interrupt and resend
+   * reserved (B11 Design §16.7): the core's alone (no event, window or token reaches it), on a
+   * canvas it runs, through the attempt's held problem's Retry once nothing holds its recipient,
+   * its backend's exhaustion included, as a new attempt with retryOf. Whether the attempt was
+   * taken: not one that isn't its owner's cancelled hold (any more), nor on a canvas the core
+   * doesn't run.
+   */
+  retryAttempt(canvas: CanvasId, attempt: TaskMessage): boolean {
+    const open = this.#canvases.get(canvas);
+    if (!open) return false;
+    const { engine, document } = open;
+    return engine.retryAttempt(attempt, () => {
+      const recipient =
+        engine.run.snapshot().agents[attempt.agent]?.problem?.agent ?? attempt.agent;
+      const node = document.nodes.find((one) => one.id === recipient);
+      const backend = node?.type === 'agent' ? engine.catalog.usageBackendOf(node.data) : undefined;
+      return backend === undefined ? 0 : (this.#deps.usage.exhausted(backend, Date.now()) ?? 0);
+    });
+  }
+
+  /**
+   * A window left the canvas (closed, crashed, reloaded, or showed another): its sessions end,
+   * unless the core runs it, which a window only views (decision 5). Until B11's cutover a window
+   * owns its canvas's run, so this ends its sessions.
+   */
+  left(canvas: CanvasId): Promise<void> {
+    return this.#running.has(canvas) ? Promise.resolve() : this.#deps.sessions.closeCanvas(canvas);
+  }
+
+  /** Once the events an agent's session emitted so far are taken (each is in turn: `emit`). */
+  async #settledEvents(key: string): Promise<void> {
+    await this.#events.get(key)?.catch(() => undefined);
   }
 
   #retryEvent(
@@ -323,27 +442,101 @@ export class Engines {
   }
 
   /**
-   * The canvas's engine, opening it if it isn't yet: its document as the core keeps it, and its run
-   * as the journal last kept it, restored paused, delivering at once unless `held`. Rejects, saying
-   * why, for a canvas the profile keeps no project folder or file for, or whose file holds another
-   * canvas now.
+   * The canvas's engine, opening it if it isn't yet, as serve admits a canvas: its document as the
+   * core keeps it, and its run as the journal last kept it, restored paused, delivering at once
+   * unless `held`. Rejects, saying why, for a canvas the profile keeps no project folder or file
+   * for, or whose file holds another canvas now (one allocated passively stays so).
    */
-  open(canvas: CanvasId, { held = false }: OpenOptions = {}): Promise<Engine> {
+  async open(canvas: CanvasId, { held = false }: OpenOptions = {}): Promise<Engine> {
+    const running = await this.#allocate(canvas, true);
+    // One allocated passively before meets serve's admission now.
+    if (this.#deps.directories.projectRoot(canvas) === undefined) throw new Error(NO_FOLDER);
+    if (!running.kept && !this.#deps.documents.hasRows(canvas)) throw new Error(NO_FILE);
+    if (!held) await this.#execute(running);
+    return running.engine;
+  }
+
+  /**
+   * The canvas's engine, allocated passively if it isn't yet (B11 Design §2): its document, its run
+   * restored paused and its messages, open until it is closed, with no project folder needed,
+   * starting no CLI and delivering nothing until it executes. Rejects, saying why, for a canvas
+   * corrallm keeps nothing of, or whose file holds another canvas now.
+   */
+  async load(canvas: CanvasId): Promise<Engine> {
+    return (await this.#allocate(canvas, false)).engine;
+  }
+
+  /**
+   * Initializes every canvas open (`open_canvas`) as a core starts cold, once, however often asked:
+   * each allocated (restored paused) and executing, its delivery started only once what was cut
+   * off as the core stopped is settled on disk. How each went; one that can't is said, never
+   * stopping the others.
+   */
+  initialize(): Promise<readonly Initialized[]> {
+    if (this.#closed) return Promise.reject(new Error('The core’s canvases have closed.'));
+    if (this.#initialized === undefined) {
+      const initializing = this.#initialize();
+      initializing.catch(() => {
+        if (this.#initialized === initializing) this.#initialized = undefined;
+      });
+      this.#initialized = initializing;
+    }
+    return this.#initialized;
+  }
+
+  async #initialize(): Promise<readonly Initialized[]> {
+    const canvases = await this.#deps.journal.openCanvases();
+    return Promise.all(
+      canvases.map(async (canvas): Promise<Initialized> => {
+        try {
+          const running = await this.#allocate(canvas, false);
+          await this.#execute(running);
+          return { canvas, warnings: running.warnings };
+        } catch (error) {
+          return { canvas, error: error instanceof Error ? error.message : String(error) };
+        }
+      }),
+    );
+  }
+
+  /** Starts delivering on every canvas allocated passively (opened held): what waits goes once it can. */
+  async deliver(): Promise<void> {
+    await Promise.all([...this.#canvases.values()].map((running) => this.#execute(running)));
+  }
+
+  /**
+   * The canvas's runtime, allocated once: one already allocated (or allocating), or a new one once
+   * a close of its last has finished. `strict`: as serve admits it (#load).
+   */
+  #allocate(canvas: CanvasId, strict: boolean): Promise<Running> {
     if (this.#closed) return Promise.reject(new Error('The core’s canvases have closed.'));
     let running = this.#running.get(canvas);
     if (!running) {
-      running = this.#open(canvas, held);
-      running.catch(() => {
-        if (this.#running.get(canvas) === running) this.#running.delete(canvas);
+      const closing = this.#closing.get(canvas);
+      const allocating = (async () => {
+        await closing?.catch(() => undefined);
+        return this.#load(canvas, strict);
+      })();
+      allocating.catch(() => {
+        if (this.#running.get(canvas) === allocating) this.#running.delete(canvas);
       });
-      this.#running.set(canvas, running);
+      this.#running.set(canvas, allocating);
+      running = allocating;
     }
-    return running.then(({ engine }) => engine);
+    return running;
   }
 
-  /** Starts delivering on every canvas opened held: what waits on each goes once it can. */
-  async deliver(): Promise<void> {
-    await Promise.all([...this.#canvases.values()].map(({ delivery }) => delivery.start()));
+  /**
+   * The runtime executes: its delivery starts, once (what was being delivered as the core last
+   * stopped settled unresolved, on disk, before anything goes).
+   */
+  #execute(running: Running): Promise<void> {
+    running.executing ??= (async () => {
+      if (this.#canvases.get(running.document.id) !== running) return;
+      running.state = 'executing';
+      await running.delivery.start();
+    })();
+    return running.executing;
   }
 
   /**
@@ -425,12 +618,28 @@ export class Engines {
     const mail = await this.#mail.get(canvas);
     mail?.notes.receive(agentId, event);
     const running = await this.#running.get(canvas);
+    const request = event.type === 'end' ? this.#resends.get(key) : undefined;
+    // The reserved attempts this cancelled end is what cancels: each still running as it arrives
+    // (one a Kill or a Stop took back since is not), its message among the turn's.
+    const retrying =
+      event.type === 'end' && event.result.status === 'cancelled' && running !== undefined
+        ? (request?.attempts ?? []).filter(({ task, as }) => {
+            const last = running.engine.run.snapshot().agents[task.agent]?.attempts?.[task.item];
+            const attempt = last?.at(-1);
+            return (
+              event.messages.includes(as) &&
+              attempt?.id === task.attempt &&
+              attempt.status === 'running'
+            );
+          })
+        : [];
     for (const listener of running?.listeners ?? []) listener(agentId, connection, event);
     if (event.type === 'end') {
-      const request = this.#resends.get(key);
       this.#resends.delete(key);
       if (event.result.status !== 'cancelled') this.#ownerResends.delete(key);
       for (const id of event.messages) this.#inputs.get(key)?.delete(id);
+      // Its run holds each cancelled now: retried once nothing holds its agent.
+      for (const { task } of retrying) this.retryAttempt(canvas, task);
       if (request && event.result.status === 'cancelled') {
         // Do not hold this agent's event lane while committing its new rows.
         setImmediate(() => {
@@ -466,25 +675,36 @@ export class Engines {
     const open = await this.#running.get(canvas);
     if (!open || stopped()) return;
     const store = open.messages;
-    const originals = store
-      .all()
-      .filter(
-        (m) =>
-          m.kind === 'text' &&
-          m.to === agentParty(agent) &&
-          m.delivery &&
-          request.ids.includes(m.delivery.as) &&
-          ended.includes(m.delivery.as),
-      );
+    const originals = store.all().filter(
+      (m) =>
+        m.kind === 'text' &&
+        // The run retries its own attempts (retryAttempt): never copied as a party's.
+        !sentByRun(m) &&
+        m.to === agentParty(agent) &&
+        m.delivery &&
+        request.ids.includes(m.delivery.as) &&
+        ended.includes(m.delivery.as),
+    );
     const partyIds = new Set(
       originals.flatMap((m) => (m.delivery === undefined ? [] : [m.delivery.as])),
     );
+    // A manual submission's own message (the journal keeps each as yours: run-journal.ts), kept
+    // unresolved while its turn went on, ended with that turn: cancelled, as Delivery's are.
+    for (const m of originals) {
+      if (store.originOf(m.id) === 'manual' && m.state === 'unresolved') {
+        store.update(m.id, {
+          state: 'replied',
+          turn: { status: 'cancelled', reason: 'interrupted' },
+        });
+      }
+    }
     const copies = originals
-      .filter((m) => m.state === 'replied')
+      .filter((m) => store.get(m.id)?.state === 'replied')
       .map((m) => ({
         id: m.id,
         from: m.from,
-        body: m.body,
+        // A submission's message may hold its text cut: its display holds the whole.
+        body: store.displayOf(m.id)?.text ?? m.body,
         images: request.inputs.find((input) => input.id === m.delivery?.as)?.images,
       }));
     for (const input of request.inputs) {
@@ -501,6 +721,7 @@ export class Engines {
         from: 'you',
         to: agentParty(agent),
         kind: 'text',
+        origin: 'manual',
         body: input.text,
         state: 'replied',
         turn: { status: 'cancelled', reason: 'interrupted' },
@@ -509,25 +730,27 @@ export class Engines {
       copies.push({ id: recorded.id, from: 'you', body: input.text, images: input.images });
     }
     for (const original of copies) {
-      const key = `resend:${original.id}`;
-      if (store.hasTold(key) || store.hasTold(`${key}:images`)) continue;
-      const next = store.add(
-        {
-          from: original.from,
-          to: agentParty(agent),
-          kind: 'text',
-          body: original.body,
-          state: 'pending',
-          replyTo: original.id,
-        },
-        original.images?.length ? `${key}:images` : key,
-      );
+      // Once: its resend is kept as one (resend_of), never a reply to it (reply_to).
+      if (store.resent(original.id)) continue;
+      const images = original.images?.length ?? 0;
+      const next = store.add({
+        from: original.from,
+        to: agentParty(agent),
+        kind: 'text',
+        origin: 'resend',
+        // Its images are live-only: once a restart lost them, it is never sent without them.
+        ...(images > 0 ? { display: { images, requiresImages: true } } : {}),
+        body: original.body,
+        state: 'pending',
+        resendOf: original.id,
+      });
       open.delivery.images(next.id, original.images);
       store.add(
         {
           from: 'corrallm',
           to: original.from,
           kind: 'notice',
+          origin: 'party',
           state: 'delivered',
           replyTo: original.id,
           body: `At the user's request, message ${original.id} was resent as ${next.id}. Its reply will be addressed to that new message.`,
@@ -598,8 +821,22 @@ export class Engines {
    */
   async closeCanvas(canvas: CanvasId): Promise<void> {
     const opening = this.#running.get(canvas);
-    if (opening === undefined) return;
+    if (opening === undefined) {
+      // One closing already: done once it is.
+      await this.#closing.get(canvas);
+      return;
+    }
     this.#running.delete(canvas);
+    const closing = this.#close(canvas, opening);
+    this.#closing.set(canvas, closing);
+    try {
+      await closing;
+    } finally {
+      if (this.#closing.get(canvas) === closing) this.#closing.delete(canvas);
+    }
+  }
+
+  async #close(canvas: CanvasId, opening: Promise<Running>): Promise<void> {
     let running: Running;
     try {
       running = await opening;
@@ -641,6 +878,7 @@ export class Engines {
     this.#ownerResends.clear();
     const mail = await Promise.all(this.#mail.values());
     for (const { notes } of mail) notes.close();
+    await Promise.allSettled(this.#closing.values());
     const running = await Promise.allSettled(this.#running.values());
     this.#running.clear();
     const closing = [...this.#canvases.keys()];
@@ -661,26 +899,41 @@ export class Engines {
     if (failed.length > 0) throw new AggregateError(failed, JOURNAL_FAILED);
   }
 
-  async #open(canvas: CanvasId, held: boolean): Promise<Running> {
+  /**
+   * Loads a canvas's runtime, passive. `strict`, as serve admits a canvas, before anything is
+   * changed: only with a picked project root (not any one agent's eventual workspace), and a file
+   * that holds it or the core's rows of it (one a token made, never saved: B9 Design §8), never a
+   * draft that holds nothing, though the journal keeps one's run. Either way never one whose file
+   * holds another canvas now, nor one corrallm keeps nothing of.
+   */
+  async #load(canvas: CanvasId, strict: boolean): Promise<Running> {
     const { projects, journal, documents } = this.#deps;
     await projects.restore(canvas);
-    // Admission needs the picked project root, not any one agent's eventual workspace.
-    if (this.#deps.directories.projectRoot(canvas) === undefined) throw new Error(NO_FOLDER);
+    if (strict && this.#deps.directories.projectRoot(canvas) === undefined) {
+      throw new Error(NO_FOLDER);
+    }
     const context = await journal.get(canvas);
-    // A canvas the core keeps the document of opens with no file (one a token made, never saved:
-    // B9 Design §8); any other only from the file canvas memory names for it, while that file
-    // holds no other canvas: never a draft that holds nothing, though the journal keeps one's run.
-    if (context.savedText === undefined) {
-      if (!documents.hasRows(canvas)) throw new Error(NO_FILE);
-    } else {
+    const rows = documents.hasRows(canvas);
+    let kept = rows;
+    if (context.savedText !== undefined) {
       let holds: CanvasId | undefined;
       try {
         holds = canvasIdOf(context.savedText);
       } catch (error) {
         // One whose document the core keeps opens from it, its file reviewed (B9 Design §5).
-        if (!documents.hasRows(canvas)) throw error;
+        if (!rows) throw error;
       }
       if (holds !== undefined && holds !== canvas) throw new Error(ANOTHER);
+      kept = true;
+    }
+    if (strict && !kept) throw new Error(NO_FILE);
+    // A draft that holds nothing is loaded only while it is live here, or open (a window shows it).
+    if (
+      !kept &&
+      documents.loaded(canvas) === undefined &&
+      !(await journal.openCanvases()).includes(canvas)
+    ) {
+      throw new Error(NOT_KEPT);
     }
     // With its edits since, as the core keeps them: a file changed on disk meanwhile is never read
     // over them, but reviewed (B9 Design §5).
@@ -701,6 +954,9 @@ export class Engines {
       unwatch: messages.subscribe((message) => {
         for (const watcher of this.#watchers) watcher.message?.(message);
       }),
+      state: 'passive',
+      executing: undefined,
+      kept,
       token: context.token,
       listeners,
       timer: undefined,
@@ -735,6 +991,8 @@ export class Engines {
         const problem = journal.problem(canvas);
         if (problem !== undefined) throw new Error(problem);
       },
+      // Each attempt the run sends is a message first, written with the run (B11 Design §3).
+      mailbox: runMailbox(messages),
       ...(this.#deps.locale === undefined ? {} : { locale: this.#deps.locale }),
     });
     running.engine = engine;
@@ -763,7 +1021,6 @@ export class Engines {
       ...(this.#deps.locale === undefined ? {} : { locale: this.#deps.locale }),
     });
     running.delivery = delivery;
-    if (!held) await delivery.start();
     const changed = () => {
       running.changes += 1;
       running.timer ??= setTimeout(() => {
@@ -858,6 +1115,10 @@ export class Engines {
   async #stop(running: Running): Promise<void> {
     running.stop();
     running.engine.cancelResends();
+    // No reservation outlives its runtime: one allocated again starts with none.
+    const prefix = `${running.document.id}\u0000`;
+    for (const key of [...this.#resends.keys()])
+      if (key.startsWith(prefix)) this.#resends.delete(key);
     try {
       await running.delivery.close();
     } finally {
@@ -905,7 +1166,12 @@ export class Engines {
       ...running.engine.checkpoint(),
       updatedAt: Date.now(),
     };
-    const problem = this.#deps.journal.keep(running.document.id, running.token, checkpoint);
+    const problem = this.#deps.journal.keep(
+      running.document.id,
+      running.token,
+      checkpoint,
+      running.messages,
+    );
     return () => {
       running.saved = Math.max(running.saved, covered);
       this.#deps.journal.kept(running.document.id, problem);
@@ -943,9 +1209,10 @@ export class Engines {
         return folder === undefined ? [] : run(() => files.find(folder, query, MAX_FILE_MATCHES));
       },
       options: (adapter) => run(() => sessions.settingsOptions(canvas, adapter)),
-      sessions: (agentId) => run(() => sessions.listSessions(canvas, agentId)),
+      // The runtime's own lists, apart from any window's (B11 Design §7).
+      sessions: (agentId) => run(() => sessions.listSessions(canvas, agentId, RUNTIME_CALLER)),
       resume: (agentId, sessionId) =>
-        done(() => sessions.resumeSession(canvas, agentId, sessionId)),
+        done(() => sessions.resumeSession(canvas, agentId, sessionId, RUNTIME_CALLER)),
       previewRewind: (agentId, messageId) =>
         run(() => sessions.previewRewind(canvas, agentId, messageId)),
       rewind: (agentId, messageId, restore) =>
@@ -961,6 +1228,45 @@ export class Engines {
       },
     };
   }
+}
+
+/**
+ * The run's mailbox over a canvas's message store (B11 Design §3): each of a task's attempts the
+ * run sends is a message, origin `run`, from corrallm (from the queue's agent for a hand-off to
+ * another), or, for a correction you typed with it, yours as you typed it (origin `manual`, what
+ * you typed its display, beside the held task it corrects), its task link the attempt, delivering
+ * under its own id; never a reply, a notice or a party's message to deliver. Its body is capped as
+ * any message's is: the session gets the whole of it, from memory.
+ */
+function runMailbox(messages: MessageStore): RunMailbox {
+  return {
+    record: ({ to, owner, text, task, images, typed }) => {
+      const display: MessageDisplay = {
+        ...(typed === undefined
+          ? {}
+          : { text: typed, task: { agent: task.agent, item: task.item } }),
+        ...(images > 0 ? { images } : {}),
+      };
+      const message = messages.add({
+        from: typed !== undefined ? 'you' : owner === to ? 'corrallm' : agentParty(owner),
+        to: agentParty(to),
+        kind: 'text',
+        origin: typed === undefined ? 'run' : 'manual',
+        ...(Object.keys(display).length === 0 ? {} : { display }),
+        body: capBody(text, 'prompt'),
+        task,
+        state: 'delivering',
+      });
+      messages.update(message.id, { delivery: { at: message.at, as: message.id, attempt: 1 } });
+      return message.id;
+    },
+    settle: (id, { state, turn }) => {
+      const message = messages.get(id);
+      // Cut off meanwhile (the core stopping), it stays as that left it.
+      if (message?.state !== 'delivering' && message?.state !== 'delivered') return;
+      messages.update(id, { state, turn, ...(state === 'withdrawn' ? { by: 'corrallm' } : {}) });
+    },
+  };
 }
 
 /** What an open canvas's needs are worded from. */

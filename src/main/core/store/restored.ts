@@ -21,9 +21,9 @@ export function settleRestored(connection: Connection, now: number): void {
     "UPDATE message SET state = 'unresolved', turn = ? WHERE id = ?",
   );
   const tell = connection.prepare(
-    `INSERT INTO message (id, canvas_id, from_party, to_party, kind, body, reply_to, turn, state,
-       sent_at)
-     VALUES (?, ?, 'corrallm', ?, 'notice', ?, ?, ?, 'delivered', ?)`,
+    `INSERT INTO message (id, canvas_id, from_party, to_party, kind, origin, body, reply_to, turn,
+       state, sent_at)
+     VALUES (?, ?, 'corrallm', ?, 'notice', 'party', ?, ?, ?, 'delivered', ?)`,
   );
   for (const { id, canvas_id: canvas, from_party: from } of waited) {
     const body = `Your message ${String(id)} won’t be sent: corrallm’s database was restored from a snapshot taken while it waited, so whether it went since is unknown.`;

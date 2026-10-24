@@ -1,0 +1,710 @@
+import { copyFile, mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { RuntimeTopic } from '../../shared/api/topics';
+import type { TopicUpdate } from '../../shared/api/topics';
+import type { CanvasId } from '../../shared/canvas';
+import type { Message } from '../../shared/model/messages';
+import type { MessageView, RunAgentView } from '../../shared/model/views';
+import type { SessionHost } from '../sessions/connector';
+import type { SessionMode, UserMessage } from '../../shared/session';
+import type { Connector } from '../sessions/connector';
+import { FakeConnector } from '../sessions/fake';
+import type { OpContext } from './call';
+import type { OutsideCaller } from './caller';
+import { createCore } from './core';
+import type { Core } from './core';
+import { asHuman } from './gui';
+import { STORE_FILE } from './store/open';
+import { keepCanvases, readOnDisk, refuseWrites } from './store/test-store';
+import { CALLERS, NO_DESKTOP } from './test-registry';
+
+/*
+ * The run's own sends go through the durable mailbox (B11 Design §3): each of a task's attempts is
+ * a message, from corrallm (or, for a hand-off, the queue's agent; for a correction you typed,
+ * you), recorded with its attempt's link in the write that journals its run, on disk before its
+ * agent's session gets it; settled as its turn ends, in the write that holds the run's result, or
+ * withdrawn when it is taken back or never goes. Delivery never sends it: the run does.
+ */
+
+/** A canvas with one Codex agent whose queue sends it a message (its id is the file's). */
+const FIXTURE = path.join(import.meta.dirname, 'test-worker.corral');
+const CANVAS = '4b1f6c2e-8d3a-4e5f-9a0b-7c6d5e4f3a2b' as CanvasId;
+const ORCHESTRATOR: OutsideCaller = {
+  kind: 'outside',
+  token: 'write-token',
+  name: 'orchestrator',
+  access: 'write',
+  canvases: [CANVAS],
+};
+
+let profile: string;
+let project: string;
+const cores: Core[] = [];
+
+beforeEach(async () => {
+  profile = await mkdtemp(path.join(tmpdir(), 'corrallm-run-sends-'));
+  project = path.join(profile, 'project');
+  await mkdir(project);
+  const file = path.join(profile, 'worker.corral');
+  await copyFile(FIXTURE, file);
+  await keepCanvases(profile, { [CANVAS]: { file, project } });
+});
+
+afterEach(async () => {
+  vi.restoreAllMocks();
+  for (const core of cores.splice(0)) await core.close().catch(() => undefined);
+  await rm(profile, { recursive: true, force: true });
+});
+
+async function start(codex: Connector<SessionMode>, at = profile): Promise<Core> {
+  const core = await createCore(
+    {
+      profile: at,
+      app: { name: 'corrallm', version: '9.8.7' },
+      check: true,
+      distribution: 'local',
+      sessions: {
+        connectors: { 'codex.app-server': codex },
+        environment: () => Promise.resolve({}),
+      },
+      watchFolder: () => ({ close: () => undefined }),
+    },
+    NO_DESKTOP,
+  );
+  cores.push(core);
+  return core;
+}
+
+/** A row of `message` as on disk, its JSON columns read. */
+interface Row {
+  id: string;
+  from_party: string;
+  to_party: string;
+  origin: string;
+  state: string;
+  task: { agent: string; item: string; attempt: string } | null;
+  delivery: { as: string } | null;
+  turn: { status: string } | null;
+}
+
+/** The canvas's messages as on disk, whoever has the database open. */
+function rowsOnDisk(at = profile): Row[] {
+  return readOnDisk(at, (disk) =>
+    disk
+      .prepare(
+        'SELECT id, from_party, to_party, origin, state, task, delivery, turn FROM message WHERE canvas_id = ? ORDER BY seq',
+      )
+      .all(CANVAS)
+      .map((row) => ({
+        ...(row as unknown as Row),
+        task: JSON.parse(String(row.task ?? 'null')) as Row['task'],
+        delivery: JSON.parse(String(row.delivery ?? 'null')) as Row['delivery'],
+        turn: JSON.parse(String(row.turn ?? 'null')) as Row['turn'],
+      })),
+  );
+}
+
+/** The worker's attempts at its task, as journaled on disk. */
+function attemptsOnDisk(at = profile): { id: string; status: string; messageId?: string }[] {
+  const state = readOnDisk(at, (disk) =>
+    disk
+      .prepare("SELECT json_extract(state, '$.run') AS run FROM run WHERE canvas_id = ?")
+      .get(CANVAS),
+  );
+  if (state === undefined) return [];
+  const run = JSON.parse(String(state.run)) as {
+    run: {
+      agents: Record<string, { attempts?: Record<string, { id: string; status: string }[]> }>;
+    };
+  };
+  return run.run.agents.worker?.attempts?.hello ?? [];
+}
+
+/** A connector whose agent takes each message and works on it until the test ends its turn. */
+function busy() {
+  const codex = new FakeConnector({ adapter: 'codex' });
+  const sent: UserMessage[] = [];
+  let host: SessionHost | undefined;
+  const connector: Connector<SessionMode> = {
+    start: async (spec, given) => {
+      host = given;
+      const session = await codex.start(spec, given);
+      session.send = (message) => {
+        sent.push(message);
+        given.emit({ type: 'user', id: message.id, text: message.text });
+        given.emit({ type: 'status', status: 'working' });
+        return Promise.resolve();
+      };
+      return session;
+    },
+  };
+  /** Ends the turn of the messages `ids`, as its CLI says: completed unless said. */
+  const end = (ids: readonly string[], status: 'completed' | 'cancelled' = 'completed') => {
+    host?.emit({ type: 'text', id: `reply-${ids.join('-')}`, text: 'Hello' });
+    host?.emit({
+      type: 'end',
+      messages: [...ids],
+      seconds: 1,
+      result: { status, reason: status === 'completed' ? 'completed' : 'interrupted' },
+    });
+  };
+  return { connector, codex, sent, end };
+}
+
+async function messageOf(core: Core, id: string): Promise<Message | undefined> {
+  return (await core.engines.messagesOf(CANVAS)).get(id);
+}
+
+describe('the run’s own sends', () => {
+  it('records each attempt’s message and its link on disk before the agent’s session gets it', async () => {
+    const codex = new FakeConnector({ adapter: 'codex' });
+    /** What was on disk each time a message reached the agent's session. */
+    const before: { rows: Row[]; attempts: ReturnType<typeof attemptsOnDisk> }[] = [];
+    const ids: string[] = [];
+    const watched: Connector<SessionMode> = {
+      start: async (spec, host) => {
+        const session = await codex.start(spec, host);
+        const send = session.send.bind(session);
+        session.send = (message) => {
+          ids.push(message.id);
+          before.push({ rows: rowsOnDisk(), attempts: attemptsOnDisk() });
+          return send(message);
+        };
+        return session;
+      },
+    };
+    const core = await start(watched);
+    const engine = await core.engines.open(CANVAS);
+    engine.run.start();
+    await vi.waitFor(() => {
+      expect(engine.run.snapshot().agents.worker).toMatchObject({
+        status: 'done',
+        outcomes: { hello: 'succeeded' },
+      });
+    });
+    const [id] = ids;
+    const attempt = engine.run.snapshot().agents.worker?.attempts?.hello?.[0];
+    expect(attempt).toMatchObject({ messageId: id, status: 'succeeded' });
+    // Its message and its attempt's link were on disk first.
+    expect(before).toEqual([
+      {
+        rows: [
+          expect.objectContaining({
+            id,
+            from_party: 'corrallm',
+            to_party: 'agent:worker',
+            origin: 'run',
+            state: 'delivering',
+            task: { agent: 'worker', item: 'hello', attempt: attempt?.id },
+            delivery: expect.objectContaining({ as: id }) as unknown,
+          }),
+        ],
+        attempts: [expect.objectContaining({ id: attempt?.id, status: 'running', messageId: id })],
+      },
+    ]);
+    // Settled as its turn ended, never delivered again.
+    await vi.waitFor(() => {
+      expect(rowsOnDisk()).toEqual([
+        expect.objectContaining({
+          id,
+          state: 'replied',
+          turn: expect.objectContaining({ status: 'completed' }) as unknown,
+        }),
+      ]);
+    });
+    expect(codex.sessions.flatMap((session) => session.sent)).toHaveLength(1);
+  });
+
+  it('settles the run’s message and its result in one write, or neither', async () => {
+    const { connector, sent, end } = busy();
+    const core = await start(connector);
+    const engine = await core.engines.open(CANVAS);
+    engine.run.start();
+    await vi.waitFor(() => {
+      expect(sent).toHaveLength(1);
+    });
+    const id = sent[0]?.id ?? '';
+    await core.flush();
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const allow = refuseWrites(profile, 'message', 'The disk is full', CANVAS);
+    try {
+      end([id]);
+      await vi.waitFor(() => {
+        expect(engine.run.snapshot().agents.worker?.status).toBe('done');
+      });
+      await expect(core.engines.canvas(CANVAS)?.journal()).rejects.toThrow('The disk is full');
+      // Neither its settlement nor the run's result reached the disk: as its CLI had it.
+      expect(rowsOnDisk()).toEqual([expect.objectContaining({ id, state: 'delivered' })]);
+      expect(attemptsOnDisk()).toEqual([expect.objectContaining({ status: 'running' })]);
+    } finally {
+      allow();
+      errors.mockRestore();
+    }
+    await core.engines.canvas(CANVAS)?.journal();
+    expect(rowsOnDisk()).toEqual([expect.objectContaining({ id, state: 'replied' })]);
+    expect(attemptsOnDisk()).toEqual([expect.objectContaining({ status: 'succeeded' })]);
+  });
+
+  it('never sends a run message whose record can’t be kept', async () => {
+    const codex = new FakeConnector({ adapter: 'codex' });
+    const core = await start(codex);
+    const engine = await core.engines.open(CANVAS);
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const allow = refuseWrites(profile, 'message', 'The disk is full', CANVAS);
+    try {
+      engine.run.start();
+      await vi.waitFor(() => {
+        expect(engine.run.snapshot().agents.worker?.problem?.text).toMatch(/could not be saved/);
+      });
+    } finally {
+      allow();
+      errors.mockRestore();
+    }
+    expect(codex.started).toEqual([]);
+    const [message] = (await core.engines.messagesOf(CANVAS)).all();
+    expect(message).toMatchObject({ state: 'unresolved', turn: { status: 'failed' } });
+    expect((await core.engines.messagesOf(CANVAS)).originOf(message?.id ?? '')).toBe('run');
+  });
+
+  it('withdraws a run message taken back before it goes, never sending it', async () => {
+    const codex = new FakeConnector({ adapter: 'codex' });
+    const core = await start(codex);
+    const engine = await core.engines.open(CANVAS);
+    engine.run.start();
+    // Stopped in the same turn: its record is on its way to disk, and it never goes.
+    engine.run.stop();
+    await vi.waitFor(async () => {
+      const [message] = (await core.engines.messagesOf(CANVAS)).all();
+      expect(message).toMatchObject({
+        state: 'withdrawn',
+        by: 'corrallm',
+        turn: { status: 'cancelled', reason: 'taken-back' },
+      });
+    });
+    await core.flush();
+    expect(rowsOnDisk()).toEqual([expect.objectContaining({ state: 'withdrawn' })]);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(codex.sessions.flatMap((session) => session.sent)).toEqual([]);
+  });
+
+  it('settles a message once, whatever its native ends name, and its result arriving before the send returns', async () => {
+    const codex = new FakeConnector({ adapter: 'codex' });
+    let ends = 0;
+    // The CLI ends the turn before its send even returns, then says it ended again with another.
+    const eager: Connector<SessionMode> = {
+      start: async (spec, host) => {
+        const session = await codex.start(spec, host);
+        session.send = (message) => {
+          host.emit({ type: 'user', id: message.id, text: message.text });
+          host.emit({ type: 'text', id: 'reply', text: 'Hello' });
+          for (const messages of [[message.id], [message.id, 'another']]) {
+            ends += 1;
+            host.emit({
+              type: 'end',
+              messages,
+              seconds: 1,
+              result: { status: 'completed', reason: 'completed' },
+            });
+          }
+          return Promise.resolve();
+        };
+        return session;
+      },
+    };
+    const core = await start(eager);
+    const engine = await core.engines.open(CANVAS);
+    engine.run.start();
+    await vi.waitFor(() => {
+      expect(engine.run.snapshot().agents.worker).toMatchObject({
+        status: 'done',
+        outcomes: { hello: 'succeeded' },
+      });
+    });
+    expect(ends).toBe(2);
+    expect(engine.run.snapshot().agents.worker?.attempts?.hello).toHaveLength(1);
+    const messages = (await core.engines.messagesOf(CANVAS)).all();
+    expect(messages).toEqual([expect.objectContaining({ state: 'replied' })]);
+  });
+
+  it('is never delivered by delivery, nor taken back or killed as a party’s message', async () => {
+    const { connector, sent, end } = busy();
+    const core = await start(connector);
+    const engine = await core.engines.open(CANVAS);
+    engine.run.start();
+    await vi.waitFor(() => {
+      expect(sent).toHaveLength(1);
+    });
+    const id = sent[0]?.id ?? '';
+    expect(await core.call('withdraw', { canvas: CANVAS, id }, CALLERS.you)).toMatchObject({
+      ok: false,
+      error: { code: 'refused' },
+    });
+    // A party's message waits behind the run's, then goes once its turn ends.
+    const party = await core.call(
+      'message',
+      { canvas: CANVAS, to: 'worker', body: 'Party work' },
+      ORCHESTRATOR,
+    );
+    if (!party.ok || !('id' in party.value)) throw new Error('No message');
+    end([id]);
+    await vi.waitFor(() => {
+      expect(sent).toHaveLength(2);
+    });
+    expect(sent[1]?.text).toContain('Party work');
+    expect((await messageOf(core, id))?.state).toBe('replied');
+    end([sent[1]?.id ?? '']);
+    await vi.waitFor(async () => {
+      expect((await messageOf(core, party.value.id))?.state).toBe('replied');
+    });
+    // The run's reply goes to the run, never back to corrallm as a message.
+    expect(
+      (await core.engines.messagesOf(CANVAS)).all().filter((one) => one.replyTo === id),
+    ).toEqual([]);
+  });
+
+  it('leaves the run’s message out unresolved as its canvas closes, telling no one, its attempt uncertain', async () => {
+    const { connector, sent } = busy();
+    const core = await start(connector);
+    const engine = await core.engines.open(CANVAS);
+    engine.run.start();
+    await vi.waitFor(() => {
+      expect(sent).toHaveLength(1);
+    });
+    const id = sent[0]?.id ?? '';
+    const messages = await core.engines.messagesOf(CANVAS);
+    await core.engines.closeCanvas(CANVAS);
+    expect(messages.get(id)).toMatchObject({ state: 'unresolved' });
+    expect(messages.all().filter((one) => one.kind === 'notice')).toEqual([]);
+    expect(engine.run.snapshot().agents.worker?.attempts?.hello).toEqual([
+      expect.objectContaining({ status: 'uncertain', messageId: id }),
+    ]);
+    expect(rowsOnDisk()).toEqual([expect.objectContaining({ id, state: 'unresolved' })]);
+  });
+
+  it('keeps a run message its live run sent before its canvas delivered: executing cuts off only what the core last left out', async () => {
+    const { connector, sent, end } = busy();
+    const core = await start(connector);
+    // Held (serve before its checks pass, or a runtime allocated passively): the run still runs.
+    const engine = await core.engines.open(CANVAS, { held: true });
+    engine.run.start();
+    await vi.waitFor(() => {
+      expect(sent).toHaveLength(1);
+    });
+    const id = sent[0]?.id ?? '';
+    await core.engines.deliver();
+    // Its turn goes on: the message is the live run's, not one the core last left out.
+    expect((await messageOf(core, id))?.state).not.toBe('unresolved');
+    end([id]);
+    await vi.waitFor(async () => {
+      expect((await messageOf(core, id))?.state).toBe('replied');
+    });
+    expect(engine.run.snapshot().agents.worker?.attempts?.hello).toEqual([
+      expect.objectContaining({ status: 'succeeded', messageId: id }),
+    ]);
+  });
+
+  it('records a hand-off from the queue’s agent, and retries it as its owner’s attempt on its turn’s cancelled end', async () => {
+    const file = path.join(profile, 'worker.corral');
+    await writeFile(
+      file,
+      JSON.stringify({
+        format: 'corrallm',
+        version: 2,
+        id: CANVAS,
+        nodes: [
+          {
+            id: 'lead',
+            kind: 'agent',
+            label: 'Lead',
+            adapter: 'codex',
+            connection: 'codex.app-server',
+            position: { x: 0, y: 0 },
+            queue: [{ id: 'handoff', message: 'Hand this over', target: 'worker' }],
+          },
+          {
+            id: 'worker',
+            kind: 'agent',
+            label: 'Worker',
+            adapter: 'codex',
+            connection: 'codex.app-server',
+            position: { x: 200, y: 0 },
+          },
+        ],
+        links: [{ agents: ['lead', 'worker'] }],
+      }),
+    );
+    const { connector, sent, end } = busy();
+    const core = await start(connector);
+    const engine = await core.engines.open(CANVAS);
+    engine.run.start();
+    await vi.waitFor(() => {
+      expect(sent).toHaveLength(1);
+    });
+    const id = sent[0]?.id ?? '';
+    const first = engine.run.snapshot().agents.lead?.attempts?.handoff?.[0];
+    expect(await messageOf(core, id)).toMatchObject({
+      from: 'agent:lead',
+      to: 'agent:worker',
+      task: { agent: 'lead', item: 'handoff', attempt: first?.id },
+    });
+    // The worker's turn is interrupted and resent: its owner's attempt is what is retried.
+    await core.engines.resendAfter(CANVAS, 'worker', [id], 'codex.app-server');
+    end([id], 'cancelled');
+    await vi.waitFor(() => {
+      expect(sent).toHaveLength(2);
+    });
+    const attempts = engine.run.snapshot().agents.lead?.attempts?.handoff;
+    expect(attempts).toMatchObject([
+      { id: first?.id, status: 'cancelled', messageId: id },
+      { status: 'running', retryOf: first?.id, messageId: sent[1]?.id },
+    ]);
+    expect(await messageOf(core, sent[1]?.id ?? '')).toMatchObject({
+      from: 'agent:lead',
+      to: 'agent:worker',
+      task: { agent: 'lead', item: 'handoff', attempt: attempts?.[1]?.id },
+    });
+    // Nothing is copied as a party's resend.
+    const messages = (await core.engines.messagesOf(CANVAS)).all();
+    expect(messages.filter((one) => one.resendOf !== undefined)).toEqual([]);
+  });
+
+  it('records a correction you typed with a Retry as yours, its display what you typed beside the task', async () => {
+    const { connector, sent, end } = busy();
+    const core = await start(connector);
+    const engine = await core.engines.open(CANVAS);
+    engine.run.start();
+    await vi.waitFor(() => {
+      expect(sent).toHaveLength(1);
+    });
+    end([sent[0]?.id ?? ''], 'cancelled');
+    await vi.waitFor(() => {
+      expect(engine.run.snapshot().agents.worker?.problem?.kind).toBe('cancelled');
+    });
+    engine.run.decide('worker', 'hello', { reply: 'Say it in French' });
+    await vi.waitFor(() => {
+      expect(sent).toHaveLength(2);
+    });
+    const id = sent[1]?.id ?? '';
+    const [, retried] = engine.run.snapshot().agents.worker?.attempts?.hello ?? [];
+    const store = await core.engines.messagesOf(CANVAS);
+    expect(store.get(id)).toMatchObject({
+      from: 'you',
+      to: 'agent:worker',
+      task: { agent: 'worker', item: 'hello', attempt: retried?.id },
+    });
+    expect(store.originOf(id)).toBe('manual');
+    expect(store.displayOf(id)).toEqual({
+      text: 'Say it in French',
+      task: { agent: 'worker', item: 'hello' },
+    });
+    // The session got the whole correction, as sent with the task it continues.
+    expect(sent[1]?.text).toContain('Say it in French');
+    expect(retried).toMatchObject({ messageId: id });
+    // Still the run's: no party may take it back.
+    expect(await core.call('withdraw', { canvas: CANVAS, id }, CALLERS.you)).toMatchObject({
+      ok: false,
+      error: { code: 'refused' },
+    });
+    end([id]);
+    await vi.waitFor(() => {
+      expect(store.get(id)?.state).toBe('replied');
+    });
+  });
+
+  it('leaves the run’s message out unresolved after a crash, its attempt uncertain, sending nothing again', async () => {
+    const { connector, sent } = busy();
+    const core = await start(connector);
+    const engine = await core.engines.open(CANVAS);
+    engine.run.start();
+    await vi.waitFor(() => {
+      expect(sent).toHaveLength(1);
+    });
+    const id = sent[0]?.id ?? '';
+    const crashed = await mkdtemp(path.join(tmpdir(), 'corrallm-crashed-'));
+    try {
+      for (const file of await readdir(profile)) {
+        if (file.startsWith(STORE_FILE)) {
+          await copyFile(path.join(profile, file), path.join(crashed, file));
+        }
+      }
+      const again = busy();
+      const restarted = await start(again.connector, crashed);
+      await restarted.engines.initialize();
+      const restored = restarted.engines.canvas(CANVAS);
+      expect(restored?.engine.run.snapshot().agents.worker?.attempts?.hello).toEqual([
+        expect.objectContaining({ status: 'uncertain', messageId: id }),
+      ]);
+      expect(restored?.messages.get(id)).toMatchObject({ state: 'unresolved' });
+      // No notice to corrallm, nor to anyone, of its own message cut off.
+      expect(restored?.messages.all().filter((one) => one.kind === 'notice')).toEqual([]);
+      restored?.engine.run.resume();
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(again.sent).toEqual([]);
+    } finally {
+      await rm(crashed, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('the run’s own sends on the runtime topics', () => {
+  const MESSAGES = `messages:${CANVAS}` as const;
+  const RUN = `run:${CANVAS}` as const;
+
+  /** Subscribes one window of yours to the canvas's run and messages: every batch its port got. */
+  async function followed(core: Core): Promise<{ batches: TopicUpdate[][]; stop: () => void }> {
+    const batches: TopicUpdate[][] = [];
+    const stop = core.topics.listen(7, (updates) => {
+      batches.push([...updates]);
+    });
+    const ctx = {
+      caller: asHuman(7),
+      signal: new AbortController().signal,
+    } as unknown as OpContext;
+    for (const topic of ['run', 'messages'] as const)
+      await core.topics.subscribe(7, RuntimeTopic.parse({ topic, canvas: CANVAS }), ctx);
+    return { batches, stop };
+  }
+
+  /** The messages topic as you read it now. */
+  async function messagesTopic(core: Core): Promise<{ items: Record<string, MessageView> }> {
+    const read = await core.topics.read(MESSAGES, CALLERS.you);
+    if (!read.ok) throw new Error(read.error.sentence);
+    return read.value as { items: Record<string, MessageView> };
+  }
+
+  it('gives each its origin and display as the store keeps them: the run’s, and a correction you typed', async () => {
+    const { connector, sent, end } = busy();
+    const core = await start(connector);
+    const engine = await core.engines.open(CANVAS);
+    engine.run.start();
+    await vi.waitFor(() => {
+      expect(sent).toHaveLength(1);
+    });
+    const first = sent[0]?.id ?? '';
+    end([first], 'cancelled');
+    await vi.waitFor(() => {
+      expect(engine.run.snapshot().agents.worker?.problem?.kind).toBe('cancelled');
+    });
+    engine.run.decide('worker', 'hello', { reply: 'Say it in French' });
+    await vi.waitFor(() => {
+      expect(sent).toHaveLength(2);
+    });
+    const typed = sent[1]?.id ?? '';
+    const [attempt, retried] = engine.run.snapshot().agents.worker?.attempts?.hello ?? [];
+    await vi.waitFor(async () => {
+      const { items } = await messagesTopic(core);
+      // The run's send: from corrallm, its task the attempt (what a queue's row is projected from).
+      expect(items[first]).toMatchObject({
+        from: 'corrallm',
+        origin: 'run',
+        task: { agent: 'worker', item: 'hello', attempt: attempt?.id },
+      });
+      expect(items[first]).not.toHaveProperty('display');
+      // Your correction: linked to the run's task, yet yours, what you typed beside the task.
+      expect(items[typed]).toMatchObject({
+        from: 'you',
+        origin: 'manual',
+        task: { agent: 'worker', item: 'hello', attempt: retried?.id },
+        display: { text: 'Say it in French', task: { agent: 'worker', item: 'hello' } },
+      });
+    });
+    end([typed]);
+  });
+
+  it('lists a canvas the core runs as running from its live run, not from what the journal last kept', async () => {
+    const codex = new FakeConnector({ adapter: 'codex' });
+    const core = await start(codex);
+    const engine = await core.engines.open(CANVAS);
+    const listed = async () => {
+      const list = await core.call('canvas.list', {}, CALLERS.you);
+      if (!list.ok) throw new Error(list.error.sentence);
+      return list.value.items.find((item) => item.canvas === CANVAS)?.running;
+    };
+    expect(await listed()).toBe(false);
+    const heard: boolean[] = [];
+    const { stop } = await core.topics.follow(CALLERS.you, 'canvases', (changes) => {
+      for (const change of changes)
+        if ('replace' in change && change.topic === 'canvases') {
+          const item = change.replace.items.find((one) => one.canvas === CANVAS);
+          if (item) heard.push(item.running);
+        }
+    });
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    // Nothing of the run reaches the disk: the journal never says it runs.
+    const allow = refuseWrites(profile, 'message', 'The disk is full', CANVAS);
+    try {
+      engine.run.start();
+      await vi.waitFor(() => {
+        expect(engine.run.snapshot().agents.worker?.problem?.text).toMatch(/could not be saved/);
+      });
+      expect(engine.run.snapshot().running).toBe(true);
+      expect(await listed()).toBe(true);
+      await vi.waitFor(() => {
+        expect(heard.at(-1)).toBe(true);
+      });
+      engine.run.stop();
+      expect(await listed()).toBe(false);
+      await vi.waitFor(() => {
+        expect(heard.at(-1)).toBe(false);
+      });
+    } finally {
+      allow();
+      errors.mockRestore();
+      stop();
+    }
+  });
+
+  it('publishes a run row’s settling with the run change its turn’s end made, in one batch', async () => {
+    const { connector, sent, end } = busy();
+    const core = await start(connector);
+    const engine = await core.engines.open(CANVAS);
+    const { batches, stop } = await followed(core);
+    try {
+      engine.run.start();
+      await vi.waitFor(() => {
+        expect(sent).toHaveLength(1);
+      });
+      const id = sent[0]?.id ?? '';
+      await vi.waitFor(async () => {
+        expect((await messagesTopic(core)).items[id]?.state).toBe('delivered');
+      });
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      const before = batches.length;
+      end([id]);
+      await vi.waitFor(async () => {
+        expect((await messagesTopic(core)).items[id]?.state).toBe('replied');
+        expect(engine.run.snapshot().agents.worker?.outcomes.hello).toBe('succeeded');
+      });
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      const after = batches.slice(before);
+      const updates = after.flat();
+      const replied = updates.find(
+        (update) =>
+          update.topic === MESSAGES &&
+          'set' in update &&
+          (update.set as Record<string, MessageView>)[id]?.state === 'replied',
+      );
+      const succeeded = updates.find(
+        (update) =>
+          update.topic === RUN &&
+          'agents' in update &&
+          (update.agents.set as Record<string, RunAgentView>).worker?.outcomes.hello ===
+            'succeeded',
+      );
+      if (replied === undefined || succeeded === undefined)
+        throw new Error(`Not both published: ${JSON.stringify(after)}`);
+      // Taken in the same publication: neither topic is seen settled without the other.
+      const seqOf = (update: TopicUpdate) => ('seq' in update ? update.seq : Number.NaN);
+      expect(Math.abs(seqOf(replied) - seqOf(succeeded))).toBe(1);
+      expect(after.some((batch) => batch.includes(replied) && batch.includes(succeeded))).toBe(
+        true,
+      );
+    } finally {
+      stop();
+    }
+  });
+});

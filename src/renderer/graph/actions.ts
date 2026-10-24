@@ -1,5 +1,5 @@
 import { createContext, useContext } from 'react';
-import type { AgentCard } from './agent-status';
+import type { AgentCard } from '../../shared/model/run-display';
 
 /** What node and edge views can do to the graph. GraphEditor provides them. */
 export interface GraphActions {

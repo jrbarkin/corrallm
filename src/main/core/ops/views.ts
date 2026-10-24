@@ -3,13 +3,7 @@ import type { Message } from '../../../shared/model/messages';
 import { isOpen, turnReply } from '../../../shared/model/session';
 import type { Entry } from '../../../shared/model/session';
 import { messageView, runView, summaryReply } from '../../../shared/model/views';
-import type {
-  EntryView,
-  MessageOrigin,
-  MessageView,
-  RunView,
-  SessionView,
-} from '../../../shared/model/views';
+import type { EntryView, MessageView, RunView, SessionView } from '../../../shared/model/views';
 import type { Caller } from '../caller';
 import { partyIdOf } from '../caller';
 import { cursorOf } from '../delivery/messages';
@@ -116,20 +110,15 @@ export function messagesSeen(open: OpenCanvas, caller: Caller): Message[] {
 }
 
 /**
- * Where a message came from, as the store keeps it today: a resend's copy, a run's attempt (it is
- * linked to a task), what you sent yourself, or another party's. (B11 C3's migration 4 keeps it as
- * the message is recorded instead.)
+ * A message as a canvas's messages topic gives it: with how it came to be and what a view shows of
+ * it beside its body, as the store keeps them beside it (B11 §3, migration 4), never inferred from
+ * its sender or its task link (a correction you typed with a Retry is linked to the run's task, yet
+ * yours). A run's send keeps its `task`, the attempt, which a queue's row is projected from.
  */
-export function originOf(store: MessageStore, message: Message): MessageOrigin {
-  if (store.isResend(message)) return 'resend';
-  if (message.task !== undefined) return 'run';
-  if (message.from === 'you') return 'manual';
-  return 'party';
-}
-
-/** A message as a canvas's messages topic gives it: with where it came from. */
 export function messageViewOf(store: MessageStore, message: Message): MessageView {
-  return messageView(message, originOf(store, message));
+  const origin = store.originOf(message.id);
+  if (origin === undefined) throw new Error('That message isn’t kept (any more).');
+  return messageView(message, origin, store.displayOf(message.id));
 }
 
 /**

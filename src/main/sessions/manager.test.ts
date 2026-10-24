@@ -34,6 +34,8 @@ const KEPT_TWO = '0b3a7d52-6a0c-4f39-9c4e-2f8f0c1d9e32';
 const FORKED = '0b3a7d52-6a0c-4f39-9c4e-2f8f0c1d9e33';
 /** The conversation a rewinding agent's session remembers. */
 const REMEMBERED = '0b3a7d52-6a0c-4f39-9c4e-2f8f0c1d9e34';
+/** Who lists conversations, and resumes one listed: a window. */
+const CALLER = 'window:1';
 
 let dir: string;
 let store: Store;
@@ -759,8 +761,9 @@ describe('SessionManager', () => {
       sentence: 'Pick a folder first.',
     });
     try {
+      // Refused with why, before anything is read or forked.
       await expect(sessions.rewind(canvas, 'a', 'message', 'conversation')).rejects.toThrow(
-        /nothing to rewind/,
+        'Pick a folder first.',
       );
       expect(resolve).toHaveBeenCalledWith(canvas, 'a');
       expect(before).not.toHaveBeenCalled();
@@ -1082,19 +1085,19 @@ describe('SessionManager and kept conversations', () => {
         { id: KEPT_ONE, title: 'Own', modified: 1000 },
       ]);
       try {
-        await expect(sessions.listSessions(canvas, 'a')).resolves.toEqual([
+        await expect(sessions.listSessions(canvas, 'a', CALLER)).resolves.toEqual([
           { id: KEPT_TWO, title: 'Recent', modified: 2000, current: false },
           { id: KEPT_ONE, title: 'Own', modified: 1000, current: true },
         ]);
         expect(warning).toHaveBeenCalledOnce();
         expect(warning.mock.calls[0]?.[0]).toContain('2');
         for (const id of ['--resume', 'future:thread']) {
-          await expect(sessions.resumeSession(canvas, 'a', id)).rejects.toThrow(
+          await expect(sessions.resumeSession(canvas, 'a', id, CALLER)).rejects.toThrow(
             /conversation.*id/i,
           );
         }
         expect((await conversations(canvas))[adapter]?.a?.id).toBe(KEPT_ONE);
-        await sessions.resumeSession(canvas, 'a', KEPT_TWO);
+        await sessions.resumeSession(canvas, 'a', KEPT_TWO, CALLER);
         expect((await conversations(canvas))[adapter]?.a?.id).toBe(KEPT_TWO);
       } finally {
         warning.mockRestore();
@@ -1118,11 +1121,11 @@ describe('SessionManager and kept conversations', () => {
         codex: { a: { id: KEPT_TWO } },
       }),
     }));
-    await expect(sessions.listSessions(canvas, 'a')).resolves.toEqual([
+    await expect(sessions.listSessions(canvas, 'a', CALLER)).resolves.toEqual([
       { id: KEPT_TWO, title: 'Codex thread', modified: 2000, current: true },
     ]);
     expect(listKept).not.toHaveBeenCalled();
-    await sessions.resumeSession(canvas, 'a', KEPT_TWO);
+    await sessions.resumeSession(canvas, 'a', KEPT_TWO, CALLER);
     expect((await conversations(canvas))['claude-code']?.a?.id).toBe(KEPT_ONE);
     await sessions.start(canvas, 'a', { ...OPTIONS, connection: 'codex.app-server' });
     expect(codex.started.at(-1)?.resume).toBe(KEPT_TWO);
@@ -1137,10 +1140,10 @@ describe('SessionManager and kept conversations', () => {
   it('does not reuse a list from another adapter, agent or a switched agent', async () => {
     const sessions = manager();
     const canvas = shownCanvas();
-    await sessions.listSessions(canvas, 'a');
-    await expect(sessions.resumeSession(canvas, 'b', KEPT_ONE)).rejects.toThrow(/not one/);
+    await sessions.listSessions(canvas, 'a', CALLER);
+    await expect(sessions.resumeSession(canvas, 'b', KEPT_ONE, CALLER)).rejects.toThrow(/not one/);
     adapters.set('a', 'codex');
-    await expect(sessions.resumeSession(canvas, 'a', KEPT_ONE)).rejects.toThrow(/not one/);
+    await expect(sessions.resumeSession(canvas, 'a', KEPT_ONE, CALLER)).rejects.toThrow(/not one/);
   });
   it('lists the project folder’s conversations for /resume, saying which is the agent’s own', async () => {
     const sessions = manager();
@@ -1151,13 +1154,13 @@ describe('SessionManager and kept conversations', () => {
       { id: own, title: 'This one', modified: 3000 },
       { id: KEPT_ONE, title: 'Fix the login bug', modified: 1000 },
     ]);
-    await expect(sessions.listSessions(canvas, 'a')).resolves.toEqual([
+    await expect(sessions.listSessions(canvas, 'a', CALLER)).resolves.toEqual([
       { id: own, title: 'This one', modified: 3000, current: true },
       { id: KEPT_ONE, title: 'Fix the login bug', modified: 1000, current: false },
     ]);
     expect(listKept).toHaveBeenCalledWith('/work/app', { PATH: '/usr/bin' });
     // Without a project folder there is nothing to list.
-    await expect(sessions.listSessions(newCanvasId(), 'a')).rejects.toThrow(
+    await expect(sessions.listSessions(newCanvasId(), 'a', CALLER)).rejects.toThrow(
       /Choose a project folder/,
     );
   });
@@ -1166,8 +1169,8 @@ describe('SessionManager and kept conversations', () => {
     const sessions = manager();
     const canvas = shownCanvas();
     await sessions.start(canvas, 'a', OPTIONS);
-    await sessions.listSessions(canvas, 'a');
-    await sessions.resumeSession(canvas, 'a', KEPT_ONE);
+    await sessions.listSessions(canvas, 'a', CALLER);
+    await sessions.resumeSession(canvas, 'a', KEPT_ONE, CALLER);
     await memory.flush();
     expect((await conversations(canvas))['claude-code']?.a).toEqual({ id: KEPT_ONE });
     await expect(sessions.send(canvas, 'a', { id: 'm', text: 'Hi' })).rejects.toThrow(
@@ -1186,16 +1189,16 @@ describe('SessionManager and kept conversations', () => {
     const sessions = manager();
     const canvas = shownCanvas();
     // Never listed.
-    await expect(sessions.resumeSession(canvas, 'a', KEPT_ONE)).rejects.toThrow(
+    await expect(sessions.resumeSession(canvas, 'a', KEPT_ONE, CALLER)).rejects.toThrow(
       /not one of this project folder’s conversations/,
     );
-    await sessions.listSessions(canvas, 'a');
-    await expect(sessions.resumeSession(canvas, 'a', REMEMBERED)).rejects.toThrow(
+    await sessions.listSessions(canvas, 'a', CALLER);
+    await expect(sessions.resumeSession(canvas, 'a', REMEMBERED, CALLER)).rejects.toThrow(
       /not one of this project folder’s conversations/,
     );
     // Listed for another folder.
     projects.set(canvas, '/work/other');
-    await expect(sessions.resumeSession(canvas, 'a', KEPT_ONE)).rejects.toThrow(
+    await expect(sessions.resumeSession(canvas, 'a', KEPT_ONE, CALLER)).rejects.toThrow(
       /not one of this project folder’s conversations/,
     );
     await sessions.start(canvas, 'a', OPTIONS);

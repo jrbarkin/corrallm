@@ -215,7 +215,11 @@ export type RuntimeSnapshotFor<K extends RuntimeTopicKey> = RuntimeSnapshotFrame
         : SessionSummary
 > & { readonly topic: K };
 
-/** C1's sole size exception is a chunk containing one intrinsically oversized entry. */
+/**
+ * C1's sole size exception is a chunk holding one entry that doesn't fit a frame with its chunk's
+ * envelope: intrinsically oversized, or so near the cap that no frame within it can hold it. A
+ * chunk is never cut inside an entry, so that entry goes alone (B11 §16.3).
+ */
 export function snapshotFrameFits(frame: RuntimeSnapshotFrame): boolean {
   const bytes = (data: unknown) => new TextEncoder().encode(JSON.stringify(data)).length;
   if (frame.kind === 'begin' && (!Number.isSafeInteger(frame.count) || frame.count < 0))
@@ -224,11 +228,7 @@ export function snapshotFrameFits(frame: RuntimeSnapshotFrame): boolean {
     return false;
   if (frame.kind === 'end' && (!Number.isSafeInteger(frame.rev) || frame.rev < 0)) return false;
   if (bytes(frame) <= MAX_TOPIC_FRAME) return true;
-  return (
-    frame.kind === 'chunk' &&
-    frame.entries.length === 1 &&
-    bytes(frame.entries[0]?.value) > MAX_TOPIC_FRAME
-  );
+  return frame.kind === 'chunk' && frame.entries.length === 1;
 }
 
 /** The canvas a canvas's topic is of; none for a global topic. */
