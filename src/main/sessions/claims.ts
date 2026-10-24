@@ -58,6 +58,8 @@ export class ConversationClaims {
   /**
    * Reserves the conversation `id` of `adapter` for `owner`'s agent's next session, as `claim`
    * would claim it: held until that session takes it over, or its agent's reservations are let go.
+   * That session resumes one conversation of `adapter`, so this one replaces any the agent had
+   * reserved of it before (a resume picked again, a rewind after a resume), once it is made.
    */
   reserve(adapter: AdapterId, id: string, owner: ClaimOwner): Claimed {
     return this.#claim(adapter, id, owner, true);
@@ -107,6 +109,18 @@ export class ConversationClaims {
     const held = this.#claims.get(key)?.owner;
     if (held !== undefined && (!sameAgent(held, owner) || held.generation > owner.generation)) {
       return { ok: false, holder: held };
+    }
+    if (reserved) {
+      for (const [other, claim] of this.#claims) {
+        if (
+          other !== key &&
+          claim.reserved &&
+          sameAgent(claim.owner, owner) &&
+          other.startsWith(`${adapter}\u0000`)
+        ) {
+          this.#claims.delete(other);
+        }
+      }
     }
     this.#claims.set(key, { owner, reserved });
     return { ok: true };

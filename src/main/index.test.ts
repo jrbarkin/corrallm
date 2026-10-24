@@ -399,6 +399,54 @@ describe('waiting for the approved core shutdown', () => {
     expect(finishQuit).toHaveBeenCalledOnce();
     expect(request.mock.calls.filter(([name]) => name === 'close')).toHaveLength(1);
   });
+
+  it.each([false, true])(
+    'gives a second quit the five-second escape while an approved core close hangs (Quit anyway: %s)',
+    async (anyway) => {
+      app.whenReady.mockResolvedValueOnce();
+      if (anyway) {
+        showMessageBox.mockResolvedValueOnce({ response: 1 });
+        vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      }
+      request.mockImplementation((name) => {
+        // The save succeeds (or fails and the user quits anyway); the core's close never settles.
+        if (name === 'close') return new Promise(() => undefined);
+        if (name === 'flush' && anyway) return Promise.reject(new Error('Disk full'));
+        return Promise.resolve({ ok: true, value: name === 'shown' ? [] : null });
+      });
+      const finishQuit = vi.fn(() => false);
+      startAppUpdates.mockReturnValueOnce({ finishQuit, cancelRestart: vi.fn(), stop: vi.fn() });
+      await import('./index');
+      await vi.waitFor(() => {
+        expect(startAppUpdates).toHaveBeenCalledOnce();
+      });
+      const beforeQuit = app.on.mock.calls.find(
+        ([name]) => name === 'before-quit',
+      )?.[1] as (event: { preventDefault(): void }) => void;
+      vi.useFakeTimers();
+      beforeQuit({ preventDefault: vi.fn() });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(request).toHaveBeenCalledWith('close');
+      // With no second quit, the approved quit keeps waiting for the core.
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(app.quit).not.toHaveBeenCalled();
+      const again = vi.fn();
+      beforeQuit({ preventDefault: again });
+      expect(again).toHaveBeenCalledOnce();
+      await vi.advanceTimersByTimeAsync(4999);
+      expect(app.quit).not.toHaveBeenCalled();
+      expect(finishQuit).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(app.quit).toHaveBeenCalledOnce();
+      expect(finishQuit).toHaveBeenCalledOnce();
+      expect(app.exit).not.toHaveBeenCalled();
+      // The final quit goes through, and a third quit meanwhile started nothing more.
+      const final = vi.fn();
+      beforeQuit({ preventDefault: final });
+      expect(final).not.toHaveBeenCalled();
+      expect(request.mock.calls.filter(([name]) => name === 'close')).toHaveLength(1);
+    },
+  );
 });
 
 describe('quit races', () => {
@@ -473,7 +521,7 @@ describe('quit races', () => {
     expect(console.error).not.toHaveBeenCalled();
   });
 
-  it('blocks a repeated before-quit until the approved core close has completed', async () => {
+  it('blocks a repeated before-quit until the approved core close has completed, within its escape', async () => {
     app.whenReady.mockResolvedValueOnce();
     const window = Object.assign(new EventEmitter(), { webContents: { id: 7 }, close: vi.fn() });
     getAllWindows.mockReturnValue([window]);
@@ -503,7 +551,8 @@ describe('quit races', () => {
     const windowClose = vi.fn();
     window.emit('close', { preventDefault: windowClose });
     expect(windowClose).toHaveBeenCalledOnce();
-    await vi.advanceTimersByTimeAsync(9000);
+    // The repeated quit is the escape: it never skips the wait, only bounds it to five seconds.
+    await vi.advanceTimersByTimeAsync(4999);
     expect(app.quit).not.toHaveBeenCalled();
     expect(app.exit).not.toHaveBeenCalled();
     closed.resolve({ ok: true, value: null });

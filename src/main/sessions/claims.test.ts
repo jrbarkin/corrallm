@@ -81,4 +81,29 @@ describe('ConversationClaims', () => {
     claims.unreserve(canvas, { agent: 'a' });
     expect(claims.holder('claude-code', ID)).toEqual(session);
   });
+
+  it('keeps one reservation per agent and adapter: a newer one lets the earlier go, never a session’s claim', () => {
+    const claims = new ConversationClaims();
+    const third = '0b3a7d52-6a0c-4f39-9c4e-2f8f0c1d9e33';
+    const session = { canvas, agent: 'a', generation: 1 };
+    claims.claim('claude-code', third, session);
+    claims.reserve('claude-code', ID, { canvas, agent: 'a', generation: 2 });
+    claims.reserve('codex', ID, { canvas, agent: 'a', generation: 3 });
+    // Another canvas's agent of that id is another agent: its reservation leaves a's alone.
+    claims.reserve('claude-code', OTHER, { canvas: another, agent: 'a', generation: 4 });
+    expect(claims.holder('claude-code', ID)?.generation).toBe(2);
+    // Refused, a's newer reservation lets nothing go.
+    expect(claims.reserve('claude-code', OTHER, { canvas, agent: 'a', generation: 5 }).ok).toBe(
+      false,
+    );
+    expect(claims.holder('claude-code', ID)?.generation).toBe(2);
+    claims.unreserve(another);
+    const later = { canvas, agent: 'a', generation: 6 };
+    expect(claims.reserve('claude-code', OTHER, later)).toEqual({ ok: true });
+    expect(claims.holder('claude-code', ID)).toBeUndefined();
+    expect(claims.holder('claude-code', OTHER)).toEqual(later);
+    // Its session's claim and its other adapter's reservation stay.
+    expect(claims.holder('claude-code', third)).toEqual(session);
+    expect(claims.holder('codex', ID)?.generation).toBe(3);
+  });
 });

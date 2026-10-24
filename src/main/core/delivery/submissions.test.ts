@@ -4,7 +4,7 @@ import path from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { STORE_SETTLED_PER_PARTY } from '../../../shared/api/limits';
+import { MAX_MESSAGE_BYTES, STORE_SETTLED_PER_PARTY } from '../../../shared/api/limits';
 import type { CanvasId } from '../../../shared/canvas';
 import { decodeSubmissions } from '../../../shared/engine/delivery/submission-state';
 import type { SubmittedMessage } from '../../../shared/model/queue';
@@ -152,6 +152,23 @@ describe('a run’s submissions, as your messages', () => {
         ],
       ]),
     );
+  });
+
+  it('hold a long one within what a message holds, its whole text shown and given back', () => {
+    const text = 'é'.repeat(MAX_MESSAGE_BYTES);
+    const record: SubmittedMessage = { id: 'native-1', text, status: 'running', after: 'plan' };
+    keep({ lead: [record] });
+    const [made] = messages.all();
+    expect(Buffer.byteLength(made?.body ?? '')).toBeLessThanOrEqual(MAX_MESSAGE_BYTES);
+    expect(text.startsWith(made?.body.slice(0, 100) ?? '-')).toBe(true);
+    expect(messages.displayOf(made?.id ?? '')).toEqual({ after: 'plan', text });
+    // As its turn ends, it keeps what it shows.
+    keep({ lead: [{ ...record, status: 'completed', result: DONE }] });
+    expect(messages.get(made?.id ?? '')).toMatchObject({ state: 'replied' });
+    expect(messages.displayOf(made?.id ?? '')).toEqual({ after: 'plan', text });
+    expect(decodeSubmissions(submissionsOf(messages)).get('lead')).toEqual([
+      { id: 'native-1', text, status: 'completed', after: 'plan', result: DONE },
+    ]);
   });
 
   it('keep a message that represents one already as it is, gaining only where it showed', () => {

@@ -236,7 +236,14 @@ export class SessionManager {
     if (options.mode !== null && !this.#hasMode(options.connection, options.mode)) {
       throw new TypeError(`${options.mode} is not a mode of ${options.connection} sessions`);
     }
-    if (running) await this.#end(canvas, agentId, running, false);
+    if (running) {
+      // A held directory (a rebind waiting for approval) refuses the new session before what runs
+      // is ended: that one is kept, its claim and events too.
+      const directory = await this.#deps.directories.workingDirectory(canvas, agentId as AgentId);
+      if (directory.state === 'held') throw new Error(directory.sentence);
+      if (agents.get(agentId) !== running) return this.start(canvas, agentId, options);
+      await this.#end(canvas, agentId, running, false);
+    }
     // What is not given is the user's own: their CLI's settings, else its defaults.
     const given: SessionOptions = { ...options, effort: options.effort ?? null };
     const agent = { connection: options.connection, generation: this.#generation() } as Agent;
@@ -739,12 +746,11 @@ export class SessionManager {
         },
       };
       if (holder !== undefined && live()) {
-        const where = holder.canvas === canvas ? '' : ' on another canvas';
         this.#deps.emit(canvas, agentId, connection, {
           type: 'notice',
           id: randomUUID(),
           level: 'warning',
-          text: `This agent’s conversation is open in ${this.#nameOf(holder)}${where}, so it started a new one: two agents never share one conversation.`,
+          text: `This agent’s conversation is open in ${this.#holderIn(canvas, holder)}, so it started a new one: two agents never share one conversation.`,
         });
       }
       const session = await connector.start(
@@ -783,12 +789,11 @@ export class SessionManager {
    * it is stopped, saying why, and never remembers it; its turn isn't replayed as a fresh one.
    */
   #conflict(canvas: CanvasId, agentId: string, agent: Agent, holder: ClaimOwner): void {
-    const where = holder.canvas === canvas ? '' : ' on another canvas';
     this.#deps.emit(canvas, agentId, agent.connection, {
       type: 'notice',
       id: randomUUID(),
       level: 'error',
-      text: `This agent’s CLI opened a conversation that is open in ${this.#nameOf(holder)}${where}, so corrallm stopped this agent’s session: two agents never share one conversation. Start it again to go on in its own.`,
+      text: `This agent’s CLI opened a conversation that is open in ${this.#holderIn(canvas, holder)}, so corrallm stopped this agent’s session: two agents never share one conversation. Start it again to go on in its own.`,
     });
     void this.#end(canvas, agentId, agent, true).catch((error: unknown) => {
       console.error(`Could not stop ${agentId}'s session:`, error);
@@ -797,13 +802,17 @@ export class SessionManager {
 
   /** What a refused resume of a conversation `holder` holds says. */
   #inUse(canvas: CanvasId, holder: ClaimOwner): string {
-    const where = holder.canvas === canvas ? '' : ' on another canvas';
-    return `That conversation is open in ${this.#nameOf(holder)}${where}: two agents never share one conversation.`;
+    return `That conversation is open in ${this.#holderIn(canvas, holder)}: two agents never share one conversation.`;
   }
 
-  /** A holder's agent, as a notice names it: quoted, escaped and capped. */
-  #nameOf({ canvas, agent }: ClaimOwner): string {
-    return this.#deps.nameOf?.(canvas, agent) ?? quotedName(agent);
+  /**
+   * A conversation's holder, as told on `canvas`: its agent's name (quoted, escaped and capped) if
+   * it is on that canvas; never one on another, which whoever reads this canvas (a token granted
+   * it alone, reading its transcripts) may not reach.
+   */
+  #holderIn(canvas: CanvasId, { canvas: on, agent }: ClaimOwner): string {
+    if (on !== canvas) return 'an agent on another canvas';
+    return this.#deps.nameOf?.(on, agent) ?? quotedName(agent);
   }
 
   /** A generation reserved for the agent's next session, which takes over what it reserves. */

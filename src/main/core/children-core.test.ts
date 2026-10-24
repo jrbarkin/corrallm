@@ -52,6 +52,7 @@ it('starts a usable core even when a stale CLI cannot be signalled', async () =>
           throw new Error('EPERM');
         },
         wait: () => Promise.resolve(),
+        pause: () => undefined,
         now: () => 1000,
       },
       sessions: { connectors: {}, environment: () => Promise.resolve({}) },
@@ -105,6 +106,7 @@ it('ends a helper still running as it closes, and starts none once closing', asy
         alive: (group) => running.has(group),
         signal,
         wait: () => Promise.resolve(),
+        pause: () => undefined,
         now: () => 1000,
       },
       sessions: {
@@ -172,6 +174,7 @@ it.each(['operation', 'channel', 'engine'] as const)(
           alive: () => false,
           signal: vi.fn(),
           wait: () => Promise.resolve(),
+          pause: () => undefined,
           now: () => 1000,
         },
         sessions: {

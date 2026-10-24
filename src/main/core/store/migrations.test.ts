@@ -1281,6 +1281,32 @@ describe('migration 4', () => {
     expect(rows[3]).toMatchObject({ to_party: 'agent:a', delivery: { as: 'native-2' } });
   });
 
+  it('keeps a long submission’s body within what a message holds, its whole text where a view shows it', () => {
+    // At most 16 KiB of UTF-8 in a message's body (MAX_MESSAGE_BYTES); a submission held more.
+    const text = 'é'.repeat(16 * 1024);
+    journal3({
+      version: 2,
+      state: SAVED_RUN,
+      messages: {
+        version: 1,
+        agents: [
+          {
+            id: 'a',
+            submissions: [{ id: 'native-1', text, status: 'completed', after: 'plan' }],
+          },
+        ],
+      },
+    });
+
+    migrate(connection);
+
+    const [row] = messagesOf();
+    const body = String(row?.body);
+    expect(Buffer.byteLength(body)).toBeLessThanOrEqual(16 * 1024);
+    expect(text.startsWith(body.slice(0, 100))).toBe(true);
+    expect(row?.display).toEqual({ after: 'plan', text });
+  });
+
   it('runs its conversion only within its own migration', () => {
     const [, , , fourth] = MIGRATIONS;
     const convert = fourth?.convert;
