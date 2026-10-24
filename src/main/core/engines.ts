@@ -14,7 +14,7 @@ import { agentParty } from '../../shared/model/messages';
 import type { NeedsItem } from '../../shared/model/needs';
 import type { RunCheckpoint } from '../../shared/run';
 import { MAX_FILE_MATCHES } from '../../shared/session';
-import type { SessionEvent, UserMessage } from '../../shared/session';
+import type { SessionEvent, TaskMessage, UserMessage } from '../../shared/session';
 import { usedUpUntil } from '../../shared/usage';
 import type { ProjectFiles } from '../files';
 import type { ProjectFolders } from '../project';
@@ -72,13 +72,24 @@ const NO_SWITCH = 'Switch this agent to another connection in the corrallm app.'
 const JOURNAL_FAILED = 'Could not journal every canvas’s run as the core closed.';
 const NOT_KEPT = 'corrallm keeps no such canvas.';
 
-export interface EnginesDeps {
-  retryTask?: (
+/**
+ * The app's runs a window still owns until B11's cutover (X12, X13; X14 deletes this seam with task
+ * 62's retry-task event): what the core tells such a run, and only such a run. A run the core runs
+ * hears nothing of it: it retries its attempts itself (Engines.retryAttempt).
+ */
+export interface WindowRuns {
+  /** An interrupted turn's retry decision for a window-owned run, for its windows alone. */
+  retry: (
     canvas: CanvasId,
     agent: string,
     connection: ConnectionId,
     event: Extract<SessionEvent, { type: 'retry-task' }>,
   ) => void;
+}
+
+export interface EnginesDeps {
+  /** The windows that own their canvases' runs until the cutover: none under serve. */
+  windowRuns?: WindowRuns;
   processes: Pick<Children, 'run'>;
   /** What the engines read of the catalog. */
   engineCatalog: EngineCatalog;
@@ -153,6 +164,12 @@ export interface Watcher {
   opened?(canvas: CanvasId): void;
 }
 
+/** A run's attempt an Interrupt and resend reserved: its task link, and the id its turn names. */
+interface ReservedAttempt {
+  task: TaskMessage;
+  as: string;
+}
+
 /** A canvas the core runs, with its sessions' listeners and its journal. */
 interface Running extends OpenCanvas {
   state: RuntimeState;
@@ -192,6 +209,7 @@ export class Engines {
   readonly #watchers = new Set<Watcher>();
   readonly #events = new Map<string, Promise<SessionEvent>>();
   #closed = false;
+  /** The window-owned runs whose retry decisions wait on a backend's hold, by canvas and agent. */
   readonly #ownerResends = new Map<
     string,
     { canvas: CanvasId; agent: string; connection: ConnectionId }
@@ -199,20 +217,26 @@ export class Engines {
   readonly #unwatchResends: () => void;
   readonly #reports = new Map<string, Map<string, SessionEvent>>();
   readonly #inputs = new Map<string, Map<string, UserMessage>>();
-  readonly #resends = new Map<string, { ids: readonly string[]; inputs: UserMessage[] }>();
+  /**
+   * Each Interrupt and resend reserved before its interrupt (by canvas and agent), on a canvas the
+   * core runs: the native turn's ids, what was sent in it, and the run's attempts it carried (from
+   * their durable messages), each retried on that turn's cancelled end (retryAttempt).
+   */
+  readonly #resends = new Map<
+    string,
+    { ids: readonly string[]; inputs: UserMessage[]; attempts: readonly ReservedAttempt[] }
+  >();
 
   constructor(deps: EnginesDeps) {
     this.#deps = deps;
     this.#unwatchResends = deps.usage.subscribe(() => {
       for (const { canvas, agent, connection } of this.#ownerResends.values()) {
-        const event = this.#retryEvent(connection, { update: true });
-        void this.emit(canvas, agent, connection, event)
-          .then(() => {
-            this.#deps.retryTask?.(canvas, agent, connection, event);
-          })
-          .catch((error: unknown) => {
-            console.error('Could not update a retry hold:', error);
-          });
+        deps.windowRuns?.retry(
+          canvas,
+          agent,
+          connection,
+          this.#retryEvent(connection, { update: true }),
+        );
       }
     });
   }
@@ -302,7 +326,14 @@ export class Engines {
     this.#ownerResends.delete(key);
   }
 
-  /** Arm one explicit retry before the interrupt, never before its cancelled end arrives. */
+  /**
+   * Reserves one explicit Interrupt and resend of an agent's native turn (its ids), before its
+   * interrupt, never acting before its cancelled end arrives. On a canvas the core runs: the run's
+   * attempts in that turn (read from their durable messages) are retried on that end
+   * (retryAttempt), and the parties' and your messages in it sent again (#resend). A window that
+   * owns its canvas's run until B11's cutover is handed the decision instead (WindowRuns); no
+   * second engine is opened for it.
+   */
   async resendAfter(
     canvas: CanvasId,
     agent: string,
@@ -313,27 +344,81 @@ export class Engines {
     const inputs = [...(this.#inputs.get(key)?.values() ?? [])].filter((one) =>
       ids.includes(one.id),
     );
-    const hosted = this.#running.has(canvas);
-    if (hosted) this.#resends.set(key, { ids, inputs });
+    if (this.#running.has(canvas)) {
+      const open = this.#canvases.get(canvas);
+      const attempts = (open?.messages.active() ?? []).flatMap((message) =>
+        sentByRun(message) &&
+        message.task !== undefined &&
+        message.to === agentParty(agent) &&
+        message.delivery !== undefined &&
+        ids.includes(message.delivery.as)
+          ? [{ task: message.task, as: message.delivery.as }]
+          : [],
+      );
+      this.#resends.set(key, { ids, inputs, attempts });
+      return;
+    }
     const tasks = inputs.flatMap((input) => (input.task === undefined ? [] : [input.task]));
-    // A window still owns its run and manual submissions until B11. Hand its manual
-    // decision back to that owner, just like a task retry; never open a second engine.
-    const messages = hosted
-      ? []
-      : inputs.filter((input) => input.origin === undefined && input.from === undefined);
+    const messages = inputs.filter(
+      (input) => input.origin === undefined && input.from === undefined,
+    );
     if (tasks.length || messages.length) this.#ownerResends.set(key, { canvas, agent, connection });
-    const event = { ...this.#retryEvent(connection), tasks, messages };
-    await this.emit(canvas, agent, connection, event);
-    this.#deps.retryTask?.(canvas, agent, connection, event);
+    await this.#settledEvents(key);
+    this.#deps.windowRuns?.retry(canvas, agent, connection, {
+      ...this.#retryEvent(connection),
+      tasks,
+      messages,
+    });
   }
 
+  /** The interrupt a reservation was made for was refused: nothing is retried or sent again. */
   async cancelResend(canvas: CanvasId, agent: string, connection: ConnectionId): Promise<void> {
     const key = `${canvas}\u0000${agent}`;
     this.#resends.delete(key);
+    if (this.#running.has(canvas)) return;
     this.#ownerResends.delete(key);
-    const event = this.#retryEvent(connection, { cancel: true });
-    await this.emit(canvas, agent, connection, event);
-    this.#deps.retryTask?.(canvas, agent, connection, event);
+    await this.#settledEvents(key);
+    this.#deps.windowRuns?.retry(
+      canvas,
+      agent,
+      connection,
+      this.#retryEvent(connection, { cancel: true }),
+    );
+  }
+
+  /**
+   * Retries a run's attempt that its turn's cancelled end interrupted, as an Interrupt and resend
+   * reserved (B11 Design §16.7): the core's alone (no event, window or token reaches it), on a
+   * canvas it runs, through the attempt's held problem's Retry once nothing holds its recipient,
+   * its backend's exhaustion included, as a new attempt with retryOf. Whether the attempt was
+   * taken: not one that isn't its owner's cancelled hold (any more), nor on a canvas the core
+   * doesn't run.
+   */
+  retryAttempt(canvas: CanvasId, attempt: TaskMessage): boolean {
+    const open = this.#canvases.get(canvas);
+    if (!open) return false;
+    const { engine, document } = open;
+    return engine.retryAttempt(attempt, () => {
+      const recipient =
+        engine.run.snapshot().agents[attempt.agent]?.problem?.agent ?? attempt.agent;
+      const node = document.nodes.find((one) => one.id === recipient);
+      const backend = node?.type === 'agent' ? engine.catalog.usageBackendOf(node.data) : undefined;
+      return backend === undefined ? 0 : (this.#deps.usage.exhausted(backend, Date.now()) ?? 0);
+    });
+  }
+
+  /**
+   * A window left the canvas (closed, crashed, reloaded, or showed another): its sessions end,
+   * unless the core runs it, which a window only views (decision 5). Until B11's cutover a window
+   * owns its canvas's run, so this ends its sessions.
+   */
+  left(canvas: CanvasId): Promise<void> {
+    return this.#running.has(canvas) ? Promise.resolve() : this.#deps.sessions.closeCanvas(canvas);
+  }
+
+  /** Once the events an agent's session emitted so far are taken (each is in turn: `emit`). */
+  async #settledEvents(key: string): Promise<void> {
+    await this.#events.get(key)?.catch(() => undefined);
   }
 
   #retryEvent(
@@ -529,12 +614,28 @@ export class Engines {
     const mail = await this.#mail.get(canvas);
     mail?.notes.receive(agentId, event);
     const running = await this.#running.get(canvas);
+    const request = event.type === 'end' ? this.#resends.get(key) : undefined;
+    // The reserved attempts this cancelled end is what cancels: each still running as it arrives
+    // (one a Kill or a Stop took back since is not), its message among the turn's.
+    const retrying =
+      event.type === 'end' && event.result.status === 'cancelled' && running !== undefined
+        ? (request?.attempts ?? []).filter(({ task, as }) => {
+            const last = running.engine.run.snapshot().agents[task.agent]?.attempts?.[task.item];
+            const attempt = last?.at(-1);
+            return (
+              event.messages.includes(as) &&
+              attempt?.id === task.attempt &&
+              attempt.status === 'running'
+            );
+          })
+        : [];
     for (const listener of running?.listeners ?? []) listener(agentId, connection, event);
     if (event.type === 'end') {
-      const request = this.#resends.get(key);
       this.#resends.delete(key);
       if (event.result.status !== 'cancelled') this.#ownerResends.delete(key);
       for (const id of event.messages) this.#inputs.get(key)?.delete(id);
+      // Its run holds each cancelled now: retried once nothing holds its agent.
+      for (const { task } of retrying) this.retryAttempt(canvas, task);
       if (request && event.result.status === 'cancelled') {
         // Do not hold this agent's event lane while committing its new rows.
         setImmediate(() => {
@@ -1003,6 +1104,10 @@ export class Engines {
   async #stop(running: Running): Promise<void> {
     running.stop();
     running.engine.cancelResends();
+    // No reservation outlives its runtime: one allocated again starts with none.
+    const prefix = `${running.document.id}\u0000`;
+    for (const key of [...this.#resends.keys()])
+      if (key.startsWith(prefix)) this.#resends.delete(key);
     try {
       await running.delivery.close();
     } finally {

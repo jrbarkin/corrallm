@@ -343,8 +343,8 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
       return canvas;
     },
     // A canvas the core runs runs on whatever window shows it, or none (decision 5); the app's,
-    // whose run is its window's until B11, ends its sessions as the window leaves it.
-    left: (canvas) => (engines.canvas(canvas) ? Promise.resolve() : sessions.closeCanvas(canvas)),
+    // whose run is its window's until B11's cutover, ends its sessions as the window leaves it.
+    left: (canvas) => engines.left(canvas),
   });
   const files = new ProjectFiles({ environment });
   const links = new LinkOpener({
@@ -484,8 +484,11 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     files: canvasFiles,
   });
   const engines: Engines = new Engines({
-    retryTask: (canvas, agent, connection, event) => {
-      channels.emit(canvas, 'session:event', agent, connection, event);
+    // The windows that own their canvases' runs until B11's cutover hear their retry decisions.
+    windowRuns: {
+      retry: (canvas, agent, connection, event) => {
+        channels.emit(canvas, 'session:event', agent, connection, event);
+      },
     },
     processes: children,
     engineCatalog: engineCatalog(CATALOG, DEFAULT_ADAPTER),
