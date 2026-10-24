@@ -465,7 +465,8 @@ export type SessionEvent =
       /**
        * Whether what it runs with asks before it acts, where its mode doesn't say (null: settings
        * of the user's own that are none of its modes): false where it never asks. Left out where
-       * it can't tell, or its mode says.
+       * it can't tell, or its mode says. A Terminal may carry its trusted pre-launch default
+       * here until a native hook reports a mode.
        */
       asks?: boolean;
     }

@@ -298,14 +298,17 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
       throw error;
     }
     if (this.#id !== null) this.#host.remember(this.#id);
+    const unheard = this.#cli.unheard?.();
     this.#emit({
       type: 'started',
       model: this.#spec.model,
       mode: this.#mode,
+      ...(this.#mode === null && unheard === undefined && this.#spec.startupAsks !== undefined
+        ? { asks: this.#spec.startupAsks }
+        : {}),
       // The terminal is its own model picker.
       models: [],
     });
-    const unheard = this.#cli.unheard?.();
     if (unheard !== undefined) this.#emit({ type: 'unheard', text: unheard });
     this.#readUsage();
   }

@@ -36,7 +36,6 @@ let runs: Replay[];
 let sessions: LiveSession<CodexMode>[];
 /** What of its recordings the pseudo-terminals leave out. */
 let without: (record: TerminalRecord) => boolean;
-let startupPermission: string | undefined;
 
 beforeEach(async () => {
   dir = await mkdtemp(path.join(tmpdir(), 'corrallm-codex-terminal-'));
@@ -45,7 +44,6 @@ beforeEach(async () => {
   runs = [];
   sessions = [];
   without = () => false;
-  startupPermission = undefined;
 });
 afterEach(async () => {
   await Promise.all(sessions.map((session) => session.close()));
@@ -73,13 +71,7 @@ async function start(
     // Codex is not asked: the computed trust.
     truster: new HookTruster({ start: () => Promise.reject(new Error('not here')) }),
     spawn: (_file, args, options) => {
-      const run = new Replay(
-        recordings[runs.length] ?? 'prompts',
-        args,
-        options,
-        without,
-        startupPermission,
-      );
+      const run = new Replay(recordings[runs.length] ?? 'prompts', args, options, without);
       runs.push(run);
       return Promise.resolve(run);
     },
@@ -141,14 +133,18 @@ describe('Codex in a terminal, as the real one ran', () => {
     expect(JSON.stringify(run.options.env)).not.toContain(token);
   });
 
-  it('reports native permissions from its SessionStart hook before any prompt is typed', async () => {
-    startupPermission = 'default';
-    await start(['prompts'], { mode: null });
+  it('uses its pre-launch permission baseline until the first recorded hook after a prompt', async () => {
+    const session = await start(['prompts'], { mode: null, startupAsks: true });
+    expect(events).toContainEqual(
+      expect.objectContaining({ type: 'started', mode: null, asks: true }),
+    );
+    expect(events.filter(({ type }) => type === 'mode')).toEqual([]);
+    expect(runs[0]?.args.some((arg) => arg.startsWith('hooks.SessionStart='))).toBe(true);
+    expect(runs[0]?.written.some((text) => text.includes(PASTE_START))).toBe(false);
+    await session.send({ id: 'first', text: 'Say hi in one word.' });
     await until(() => {
       expect(events).toContainEqual({ type: 'mode', mode: 'auto' });
     });
-    expect(runs[0]?.args.some((arg) => arg.startsWith('hooks.SessionStart='))).toBe(true);
-    expect(runs[0]?.written.some((text) => text.includes(PASTE_START))).toBe(false);
   });
 
   it('resumes without a role without reading native instructions, even if the read would fail', async () => {
