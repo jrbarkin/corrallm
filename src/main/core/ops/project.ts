@@ -4,12 +4,14 @@ import type { Implementations, OpServices } from '.';
 
 /** The chosen project folder only: reading its files never opens or journals a canvas's run. */
 export function projectOps({
-  projects,
+  directories,
   files,
 }: OpServices): Pick<Implementations, 'project.files'> {
   return {
     'project.files': async ({ canvas, query }) => {
-      const folder = canvas === undefined ? undefined : projects.of(canvas as unknown as CanvasId);
+      // This canvas-wide picker names no agent, so it searches the picked project root.
+      const folder =
+        canvas === undefined ? undefined : directories.projectRoot(canvas as unknown as CanvasId);
       return {
         items: folder === undefined ? [] : await files.find(folder, query, MAX_FILE_MATCHES),
       };

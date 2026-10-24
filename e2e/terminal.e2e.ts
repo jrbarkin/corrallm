@@ -9,6 +9,7 @@ import { expect, test } from '@playwright/test';
 import type { ElectronApplication, Locator, Page } from '@playwright/test';
 
 import { launchApp } from './launch';
+import { clickTerminalLink } from './terminal-link';
 
 /*
  * Terminal agents, through the real app: Claude Code's terminal in a real pseudo-terminal (node-pty
@@ -55,6 +56,7 @@ test.afterEach(async () => {
 
 async function launch() {
   ({ app, close: closeApp } = await launchApp({
+    diagnoseFailure: () => test.info().status !== test.info().expectedStatus,
     env: {
       CORRALLM_AGENT_PATHS: JSON.stringify({ 'claude-code': claude }),
       CLAUDE_CONFIG_DIR: config,
@@ -537,23 +539,9 @@ test('opens a link Cmd-clicked in the terminal in the browser, once main has ask
   // The reply's link is on the screen's fourth row (title, blank, prompt, reply), from column 6.
   const sizes = (await logged()).filter((entry) => entry.event === 'size');
   const { cols, rows } = sizes.at(-1) as unknown as { cols: number; rows: number };
-  const screen = await view.locator('.xterm-screen').boundingBox();
-  if (!screen) throw new Error('no terminal screen');
-  const cell = (col: number, row: number) => ({
-    x: screen.x + ((col + 0.5) * screen.width) / cols,
-    y: screen.y + ((row + 0.5) * screen.height) / rows,
-  });
-  const at = cell(20, 3);
-  // Cmd-clicked, it opens once main has asked. The terminal finds a link as the pointer comes
-  // onto its cell, so it comes from another each time, until the reply on screen has it.
   await expect
     .poll(async () => {
-      const away = cell(2, 3);
-      await page.mouse.move(away.x, away.y);
-      await page.mouse.move(at.x, at.y, { steps: 2 });
-      await page.keyboard.down('ControlOrMeta');
-      await page.mouse.click(at.x, at.y);
-      await page.keyboard.up('ControlOrMeta');
+      await clickTerminalLink(page, view, { cols, rows }, 20, 3);
       return (await seen()).opened.length;
     })
     .toBeGreaterThan(0);
@@ -564,6 +552,12 @@ test('opens a link Cmd-clicked in the terminal in the browser, once main has ask
   expect(new Set(opened.opened)).toEqual(new Set(['https://docs.example.com/hooks']));
 
   // A plain click does not open it, as in a terminal (it would be asked about at once).
+  const screen = await view.locator('.xterm-screen').boundingBox();
+  if (!screen) throw new Error('no terminal screen');
+  const at = {
+    x: screen.x + (20.5 * screen.width) / cols,
+    y: screen.y + (3.5 * screen.height) / rows,
+  };
   await page.mouse.move(at.x + 4, at.y);
   await page.mouse.click(at.x + 4, at.y);
   await page.waitForTimeout(300);
@@ -595,21 +589,7 @@ test('shows a file Claude Code names, Cmd-clicked, in the file manager if it is 
   // The reply is on the screen's fourth row: "⏺ Wrote notes.txt and read outside.txt".
   const sizes = (await logged()).filter((entry) => entry.event === 'size');
   const { cols, rows } = sizes.at(-1) as unknown as { cols: number; rows: number };
-  const screen = await view.locator('.xterm-screen').boundingBox();
-  if (!screen) throw new Error('no terminal screen');
-  const cell = (col: number, row: number) => ({
-    x: screen.x + ((col + 0.5) * screen.width) / cols,
-    y: screen.y + ((row + 0.5) * screen.height) / rows,
-  });
-  const cmdClick = async (col: number) => {
-    const away = cell(2, 3);
-    const at = cell(col, 3);
-    await page.mouse.move(away.x, away.y);
-    await page.mouse.move(at.x, at.y, { steps: 2 });
-    await page.keyboard.down('ControlOrMeta');
-    await page.mouse.click(at.x, at.y);
-    await page.keyboard.up('ControlOrMeta');
-  };
+  const cmdClick = (col: number) => clickTerminalLink(page, view, { cols, rows }, col, 3);
   // notes.txt, in the project folder: shown, by its real path.
   await expect
     .poll(async () => {

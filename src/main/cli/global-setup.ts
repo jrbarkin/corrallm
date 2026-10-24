@@ -4,7 +4,8 @@ import path from 'node:path';
 
 /**
  * The vitest `main` project's global setup: builds the CLI bundle (dist-cli/corrallm.cjs, as `pnpm
- * build:cli` does), so the tests that run it (serve.test.ts) always run the current code.
+ * build:cli` does), so the tests that run it (serve.test.ts) always run the current code, plus
+ * the independent test-process guardian and its worker-death fixture (never shipping outputs).
  */
 export default function globalSetup(): void {
   const projectDir = path.resolve(import.meta.dirname, '..', '..', '..');
@@ -14,6 +15,14 @@ export default function globalSetup(): void {
   execFileSync(
     process.execPath,
     [viteCli, 'build', '--config', 'vite.cli.config.mts', '--logLevel', 'warn'],
+    {
+      cwd: projectDir,
+      stdio: 'inherit',
+    },
+  );
+  execFileSync(
+    process.execPath,
+    [viteCli, 'build', '--config', 'vite.test-lifetime.config.mts', '--logLevel', 'warn'],
     {
       cwd: projectDir,
       stdio: 'inherit',

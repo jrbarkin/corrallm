@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -68,6 +68,29 @@ describe('authStatus', () => {
     // A CLI killed for taking too long may still be exiting, and Windows keeps the folder it works
     // in busy until it has.
     await rm(dir, { recursive: true, force: true, maxRetries: 10 });
+  });
+
+  it('the recorded fake reports startup facts without logging credential values', async () => {
+    const file = path.join(dir, 'diagnostics.jsonl');
+    const key = 'sk-ant-test-do-not-log';
+    expect(
+      await authStatus(path.join(import.meta.dirname, 'fake-claude.mjs'), {
+        cwd: dir,
+        env: {
+          PATH: path.dirname(process.execPath),
+          ANTHROPIC_API_KEY: key,
+          FAKE_CLAUDE_DIAGNOSTICS: file,
+        },
+      }),
+    ).toMatchObject({ authMethod: 'api_key' });
+    const text = await readFile(file, 'utf8');
+    expect(text).not.toContain(key);
+    expect(JSON.parse(text)).toMatchObject({
+      phase: 'auth',
+      apiKeyPresent: true,
+      cwd: await realpath(dir),
+      node: process.execPath,
+    });
   });
 
   /** A fake `claude` (run with node) whose body is `code`; returns its path. */

@@ -1,7 +1,28 @@
 import { useCallback, useSyncExternalStore } from 'react';
 
-import type { Change, TopicKey, TopicSnapshot, TopicStates } from '../../shared/api/topics';
-import { topicRequest } from '../../shared/api/topics';
+import type {
+  Change,
+  RuntimeChange,
+  RuntimeSnapshotFrame,
+  RuntimeTopicStates,
+} from '../../shared/api/topics';
+import { snapshotFrameFits } from '../../shared/api/topics';
+import { MAX_TOPIC_FRAME } from '../../shared/api/limits';
+import { projectData } from '../../shared/model/views';
+import {
+  assembledState,
+  checkRuntimeState,
+  mirrorRequest,
+  runtimePatch,
+  runtimeTopic,
+} from './topic-wire';
+import type {
+  MirrorSnapshot,
+  MirrorSource,
+  MirrorStates,
+  MirrorTopicKey,
+  MirrorUpdate,
+} from './topic-wire';
 import type { GuiApi } from '../../shared/gui-link';
 import { ipcErrorMessage } from '../ipc-error';
 import { ApiError, bridge } from './bridge';
@@ -12,15 +33,25 @@ export type TopicSource = Pick<
 >;
 
 interface Mirrored {
-  topic: TopicKey;
-  state?: TopicSnapshot['state'];
+  topic: MirrorTopicKey;
+  state?: MirrorSnapshot['state'];
   rev?: number;
   listeners: Set<() => void>;
   waiters: Set<{ rev: number; resolve: () => void; reject: (error: unknown) => void }>;
   live: boolean;
   pending: boolean;
   generation: number;
-  buffered: Change[];
+  buffered: MirrorUpdate[];
+  assembly?: {
+    id: string;
+    summary: unknown;
+    count: number;
+    nextIndex: number;
+    entries: Map<string, unknown>;
+    early: RuntimeChange[];
+  };
+  timer?: ReturnType<typeof setTimeout>;
+  recovering?: boolean;
 }
 
 /** Equal row data keeps its existing objects, even after a fresh snapshot or an equal set. */
@@ -46,25 +77,26 @@ function share(previous: unknown, next: unknown): unknown {
 
 /** A window's immutable topic snapshots, with one subscription per topic while it is observed. */
 export class TopicMirror {
-  readonly #source: TopicSource;
-  readonly #topics = new Map<TopicKey, Mirrored>();
+  readonly #source: MirrorSource;
+  readonly #topics = new Map<MirrorTopicKey, Mirrored>();
   #epoch: string | undefined;
   #stops: (() => void)[] | undefined;
 
-  constructor(source: TopicSource) {
+  constructor(source: TopicSource | MirrorSource) {
+    // C8 will widen GuiApi when it registers these topics. No production runtime subscription yet.
     this.#source = source;
   }
 
-  snapshot<K extends TopicKey>(topic: K): TopicStates[K] | undefined {
-    return this.#topics.get(topic)?.state as TopicStates[K] | undefined;
+  snapshot<K extends MirrorTopicKey>(topic: K): MirrorStates[K] | undefined {
+    return this.#topics.get(topic)?.state as MirrorStates[K] | undefined;
   }
 
   /** The revision of the topic's snapshot: none before its first. */
-  revision(topic: TopicKey): number | undefined {
+  revision(topic: MirrorTopicKey): number | undefined {
     return this.#topics.get(topic)?.rev;
   }
 
-  subscribe(topic: TopicKey, listener: () => void): () => void {
+  subscribe(topic: MirrorTopicKey, listener: () => void): () => void {
     const entry = this.#entry(topic);
     entry.listeners.add(listener);
     this.#activate(entry);
@@ -75,7 +107,7 @@ export class TopicMirror {
   }
 
   /** An operation can await its changes even if no view currently observes that topic. */
-  whenAt(topic: TopicKey, rev: number): Promise<void> {
+  whenAt(topic: MirrorTopicKey, rev: number): Promise<void> {
     const entry = this.#entry(topic);
     if (entry.live && entry.rev !== undefined && entry.rev >= rev) return Promise.resolve();
     const waiting = new Promise<void>((resolve, reject) =>
@@ -85,7 +117,7 @@ export class TopicMirror {
     return waiting;
   }
 
-  #entry(topic: TopicKey): Mirrored {
+  #entry(topic: MirrorTopicKey): Mirrored {
     let entry = this.#topics.get(topic);
     if (!entry) {
       entry = {
@@ -161,24 +193,47 @@ export class TopicMirror {
   }
 
   #read(entry: Mirrored, force = false): void {
-    if (entry.pending && !force) return;
+    if ((entry.pending || entry.assembly || entry.recovering) && !force) return;
+    this.#clearTransfer(entry);
     entry.pending = true;
     entry.buffered = [];
     const generation = ++entry.generation;
-    this.#source.topicsSubscribe(topicRequest(entry.topic)).then(
+    this.#source.topicsSubscribe(mirrorRequest(entry.topic)).then(
       (snapshot) => {
         if (!entry.live || entry.generation !== generation) return;
         if (this.#epoch !== undefined && snapshot.epoch !== this.#epoch) return;
         this.#epoch = snapshot.epoch;
-        entry.state = (
-          entry.topic.startsWith('canvas:') ? share(entry.state, snapshot.state) : snapshot.state
-        ) as TopicSnapshot['state'];
-        entry.rev = snapshot.rev;
         entry.pending = false;
         const buffered = entry.buffered;
         entry.buffered = [];
-        this.#tell(entry);
-        for (const change of buffered) this.#change(change);
+        try {
+          if ('kind' in snapshot) {
+            if (
+              snapshot.kind !== 'begin' ||
+              snapshot.topic !== entry.topic ||
+              !snapshotFrameFits(snapshot)
+            )
+              throw new Error('A chunked snapshot must begin with a bounded summary.');
+            entry.assembly = {
+              id: snapshot.snapshot,
+              summary: snapshot.summary,
+              count: snapshot.count,
+              nextIndex: 0,
+              entries: new Map(),
+              early: [],
+            };
+            this.#deadline(entry);
+          } else this.#install(entry, snapshot.state, snapshot.rev, true);
+          for (const change of buffered) {
+            // A gap-triggering delta or an early event may predate the subscribe answer.
+            // End's revision decides whether it is already represented by the snapshot.
+            if (entry.assembly && !('kind' in change))
+              entry.assembly.early.push(change as RuntimeChange);
+            else this.#change(change);
+          }
+        } catch (error) {
+          this.#invalid(entry, error);
+        }
       },
       (error: unknown) => {
         if (!entry.live || entry.generation !== generation) return;
@@ -189,50 +244,160 @@ export class TopicMirror {
     );
   }
 
-  #change(change: Change): void {
+  #install(entry: Mirrored, state: MirrorSnapshot['state'], rev: number, whole = false): void {
+    if (runtimeTopic(entry.topic)) {
+      if (!Number.isSafeInteger(rev) || rev < 0 || (entry.rev !== undefined && rev < entry.rev))
+        throw new Error('A topic revision must be a nonnegative integer.');
+      if (
+        whole &&
+        new TextEncoder().encode(JSON.stringify({ epoch: this.#epoch, rev, state })).length >
+          MAX_TOPIC_FRAME
+      )
+        throw new Error('An oversized runtime snapshot must be chunked.');
+      checkRuntimeState(entry.topic, state as RuntimeTopicStates[typeof entry.topic]);
+      entry.state = projectData(
+        state as RuntimeTopicStates[typeof entry.topic],
+        entry.state as RuntimeTopicStates[typeof entry.topic] | undefined,
+      );
+    } else
+      entry.state = (
+        entry.topic.startsWith('canvas:') ? share(entry.state, state) : state
+      ) as MirrorSnapshot['state'];
+    entry.rev = rev;
+    this.#tell(entry);
+  }
+
+  #change(change: MirrorUpdate): void {
     const entry = this.#topics.get(change.topic);
-    if (!entry?.live || change.epoch !== this.#epoch) return;
+    if (!entry?.live || change.epoch !== this.#epoch || entry.recovering) return;
     if (entry.pending) {
       entry.buffered.push(change);
       return;
     }
-    if (entry.rev !== undefined && change.rev <= entry.rev) return;
-    if (entry.rev === undefined || change.rev !== entry.rev + 1) {
-      this.#read(entry);
-      entry.buffered.push(change);
+    try {
+      if ('kind' in change) {
+        this.#frame(entry, change);
+        return;
+      }
+      if (entry.assembly) throw new Error('A topic delta arrived before the snapshot ended.');
+      if (entry.rev !== undefined && change.rev <= entry.rev) return;
+      if (entry.rev === undefined || change.rev !== entry.rev + 1) {
+        this.#read(entry);
+        entry.buffered.push(change);
+        return;
+      }
+      if (runtimeTopic(change.topic)) {
+        entry.state = runtimePatch(
+          entry.state as RuntimeTopicStates[typeof change.topic],
+          change as RuntimeChange,
+        );
+      } else {
+        const legacy = change as Change;
+        if ('replace' in legacy)
+          entry.state = (
+            entry.topic.startsWith('canvas:') ? share(entry.state, legacy.replace) : legacy.replace
+          ) as MirrorSnapshot['state'];
+        else {
+          const previous = entry.state as Record<string, unknown>;
+          let state = previous;
+          for (const [key, value] of Object.entries(legacy.set)) {
+            const next = share(previous[key], value);
+            if (Object.hasOwn(previous, key) && Object.is(previous[key], next)) continue;
+            if (state === previous) state = { ...previous };
+            Object.defineProperty(state, key, {
+              value: next,
+              enumerable: true,
+              configurable: true,
+              writable: true,
+            });
+          }
+          for (const key of legacy.remove ?? []) {
+            if (!Object.hasOwn(state, key)) continue;
+            if (state === previous) state = { ...previous };
+            Reflect.deleteProperty(state, key);
+          }
+          entry.state = state as MirrorSnapshot['state'];
+        }
+      }
+      entry.rev = change.rev;
+      this.#tell(entry);
+    } catch (error) {
+      this.#invalid(entry, error);
+    }
+  }
+
+  #frame(entry: Mirrored, frame: RuntimeSnapshotFrame): void {
+    const assembly = entry.assembly;
+    if (
+      !runtimeTopic(entry.topic) ||
+      !assembly ||
+      frame.kind === 'begin' ||
+      frame.snapshot !== assembly.id ||
+      !snapshotFrameFits(frame)
+    )
+      throw new Error('A snapshot frame arrived out of sequence or exceeded its bound.');
+    if (frame.kind === 'chunk') {
+      if (frame.index !== assembly.nextIndex || frame.index >= assembly.count)
+        throw new Error('A snapshot chunk index was repeated, skipped or out of order.');
+      for (const { key, value } of frame.entries) {
+        if (assembly.entries.has(key)) throw new Error('A snapshot repeated an entry key.');
+        assembly.entries.set(key, value);
+      }
+      assembly.nextIndex++;
+      this.#deadline(entry);
       return;
     }
-    if ('replace' in change)
-      entry.state = (
-        entry.topic.startsWith('canvas:') ? share(entry.state, change.replace) : change.replace
-      ) as TopicSnapshot['state'];
-    else {
-      const previous = entry.state as Record<string, unknown>;
-      let state = previous;
-      for (const [key, value] of Object.entries(change.set)) {
-        const next = share(previous[key], value);
-        if (Object.hasOwn(previous, key) && Object.is(previous[key], next)) continue;
-        if (state === previous) state = { ...previous };
-        state[key] = next;
-      }
-      for (const key of change.remove ?? []) {
-        if (!Object.hasOwn(state, key)) continue;
-        if (state === previous) state = { ...previous };
-        Reflect.deleteProperty(state, key);
-      }
-      entry.state = state as TopicSnapshot['state'];
-    }
-    entry.rev = change.rev;
-    this.#tell(entry);
+    if (assembly.nextIndex !== assembly.count)
+      throw new Error('A snapshot ended before all its chunks arrived.');
+    const state = assembledState(entry.topic, assembly.summary, [...assembly.entries]);
+    this.#clearTransfer(entry);
+    this.#install(entry, state, frame.rev);
+    for (const change of assembly.early) this.#change(change);
+  }
+
+  #deadline(entry: Mirrored): void {
+    if (entry.timer !== undefined) clearTimeout(entry.timer);
+    entry.timer = setTimeout(() => {
+      this.#invalid(entry, new Error('The snapshot did not end within ten seconds of progress.'));
+    }, 10_000);
+  }
+
+  #clearTransfer(entry: Mirrored): void {
+    if (entry.timer !== undefined) clearTimeout(entry.timer);
+    delete entry.timer;
+    delete entry.assembly;
+    delete entry.recovering;
+  }
+
+  #invalid(entry: Mirrored, error: unknown): void {
+    this.#clearTransfer(entry);
+    entry.pending = false;
+    entry.buffered = [];
+    entry.generation++;
+    entry.recovering = true;
+    this.#reject(
+      entry,
+      new ApiError({
+        code: 'unavailable',
+        sentence: 'The topic snapshot was incomplete or inconsistent; fetching it again.',
+      }),
+    );
+    console.error('Could not mirror a topic:', ipcErrorMessage(error));
+    // A bad publisher must not cause an unbounded microtask resubscription loop.
+    entry.timer = setTimeout(() => {
+      this.#clearTransfer(entry);
+      if (entry.live) this.#read(entry);
+    }, 100);
   }
 
   #unsubscribe(entry: Mirrored): void {
     entry.live = false;
+    this.#clearTransfer(entry);
     entry.generation++;
     entry.pending = false;
     entry.buffered = [];
     delete entry.rev;
-    void this.#source.topicsUnsubscribe(topicRequest(entry.topic)).catch((error: unknown) => {
+    void this.#source.topicsUnsubscribe(mirrorRequest(entry.topic)).catch((error: unknown) => {
       console.error('Could not unsubscribe from a topic:', ipcErrorMessage(error));
     });
   }
@@ -263,10 +428,10 @@ export class TopicMirror {
 export const topics = new TopicMirror(bridge);
 
 /** The latest pushed state: undefined until the core answers the first subscription. */
-export function useTopic<K extends TopicKey>(
+export function useTopic<K extends MirrorTopicKey>(
   topic: K,
   mirror: TopicMirror = topics,
-): TopicStates[K] | undefined {
+): MirrorStates[K] | undefined {
   const subscribe = useCallback(
     (listener: () => void) => mirror.subscribe(topic, listener),
     [topic, mirror],

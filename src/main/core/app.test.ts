@@ -3,6 +3,7 @@ import type { RunCheckpoint } from '../../shared/run';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -22,6 +23,7 @@ import { mintTrustedPath } from './host';
 import { journaledRun, keepCanvases, openedLast, readOnDisk } from './store/test-store';
 import { CALLERS, NO_DESKTOP } from './test-registry';
 import { openWindow } from './test-window';
+import { ProjectDirectories } from './workspaces/resolver';
 
 type WindowLink = CoreLink<GuiSide, CoreGuiSide>;
 let profile: string;
@@ -130,6 +132,115 @@ function events(window: WindowLink) {
   });
   return heard;
 }
+
+describe('working-directory routing', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  async function setup() {
+    const fake = new FakeConnector({ adapter: 'codex' });
+    const options = vi.fn(() =>
+      Promise.resolve({
+        models: [],
+        defaults: { model: null, mode: null, effort: null },
+      }),
+    );
+    const { core, connect } = await app({
+      connectors: { 'codex.app-server': fake },
+      environment: () => Promise.resolve({ HOME: profile }),
+      options: { codex: options },
+    });
+    const window = connect(7);
+    const canvas = await created(window);
+    await chooseProject(window);
+    const { id } = await call(window, 'canvas.addAgent', {
+      canvas,
+      at: { x: 0, y: 0 },
+      adapter: 'codex',
+      connection: 'codex.app-server',
+    });
+    return { core, window, canvas, agent: id as string, options };
+  }
+
+  it.each(['start', 'restart', 'fresh'])('asks the resolver before a %s launch', async (how) => {
+    const { window, canvas, agent } = await setup();
+    const options = { connection: 'codex.app-server', model: null, mode: null };
+    if (how === 'restart') {
+      await channel(window, 'session:start', agent, options);
+      await channel(window, 'session:close', agent);
+    }
+    if (how === 'fresh') await channel(window, 'session:fresh', agent, 'codex');
+    const resolve = vi.spyOn(ProjectDirectories.prototype, 'workingDirectory').mockResolvedValue({
+      state: 'held',
+      reason: 'no-project',
+      sentence: 'Pick a folder first.',
+    });
+    await expect(channel(window, 'session:start', agent, options)).rejects.toThrow(
+      'Pick a folder first.',
+    );
+    expect(resolve).toHaveBeenCalledWith(canvas, agent);
+  });
+
+  it('asks the resolver before listing conversations', async () => {
+    const { window, canvas, agent } = await setup();
+    const resolve = vi.spyOn(ProjectDirectories.prototype, 'workingDirectory').mockResolvedValue({
+      state: 'held',
+      reason: 'no-project',
+      sentence: 'Pick a folder first.',
+    });
+    await expect(channel(window, 'session:list', agent)).rejects.toThrow('Pick a folder first.');
+    expect(resolve).toHaveBeenCalledWith(canvas, agent);
+  });
+
+  it('checks the resolved directory before accepting a listed conversation', async () => {
+    const { window, canvas, agent } = await setup();
+    const resolve = vi.spyOn(ProjectDirectories.prototype, 'workingDirectory').mockResolvedValue({
+      state: 'held',
+      reason: 'no-project',
+      sentence: 'Pick a folder first.',
+    });
+    await expect(
+      channel(window, 'session:resume', agent, '0199a3f0-1234-7000-8000-123456789abc'),
+    ).rejects.toThrow(/not one of/);
+    expect(resolve).toHaveBeenCalledWith(canvas, agent);
+  });
+
+  it('gets canvas-wide options from the root accessor, keeping the no-project home fallback', async () => {
+    const { window, canvas, options } = await setup();
+    const root = vi.spyOn(ProjectDirectories.prototype, 'projectRoot').mockReturnValue(undefined);
+    await channel(window, 'session:options', 'codex');
+    expect(root).toHaveBeenCalledWith(canvas);
+    expect(options).toHaveBeenCalledWith({ cwd: profile, env: { HOME: profile } });
+  });
+
+  it('gets project.files from the root accessor, returning empty when unavailable', async () => {
+    const { window, canvas } = await setup();
+    await writeFile(path.join(folder, 'visible.txt'), 'hello');
+    const root = vi.spyOn(ProjectDirectories.prototype, 'projectRoot').mockReturnValue(undefined);
+    expect(await call(window, 'project.files', { canvas, query: '' })).toEqual({ items: [] });
+    expect(root).toHaveBeenCalledWith(canvas);
+  });
+
+  it('gets reveal containment from the root accessor, refusing when unavailable', async () => {
+    const { window, canvas } = await setup();
+    const file = path.join(folder, 'visible.txt');
+    await writeFile(file, 'hello');
+    const root = vi.spyOn(ProjectDirectories.prototype, 'projectRoot').mockReturnValue(undefined);
+    expect(await call(window, 'link.reveal', { url: pathToFileURL(file).href })).toEqual({
+      revealed: false,
+      revs: {},
+    });
+    expect(root).toHaveBeenCalledWith(canvas);
+  });
+
+  it('uses the root accessor for the headless engine file picker too', async () => {
+    const { core, canvas } = await setup();
+    const engine = await core.engines.open(canvas);
+    await writeFile(path.join(folder, 'visible.txt'), 'hello');
+    const root = vi.spyOn(ProjectDirectories.prototype, 'projectRoot').mockReturnValue(undefined);
+    expect(await engine.sessions.findFiles('')).toEqual([]);
+    expect(root).toHaveBeenCalledWith(canvas);
+  });
+});
 
 describe('the app’s core and window channels', () => {
   it.each(

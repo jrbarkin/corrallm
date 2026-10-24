@@ -96,7 +96,7 @@ describe.skipIf(process.platform === 'win32')('corrallm serve, killed again and 
   afterEach(async () => {
     await cleanupCrash(dir, profile, children);
     serve = undefined;
-  });
+  }, 30_000);
 
   /** Starts `corrallm serve`: its URL, once it writes api.json. */
   async function start(): Promise<string> {
