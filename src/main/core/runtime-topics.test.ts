@@ -788,6 +788,41 @@ describe('runtime topics: long histories', () => {
     window.close();
   }, 60_000);
 
+  it('says a change too big for a frame as changes that each fit, at consecutive revisions', async () => {
+    folder = await keepWorld([{ id: 'worker' }], []);
+    const core = await start(
+      folder,
+      withHistory(() => turns(1200, 1500, 'past')),
+    );
+    // Subscribed before the session's history arrives, as you and as a token.
+    const yours = await follow(core, sessionOf('worker'), CALLERS.you);
+    const theirs = await follow(core, sessionOf('worker'), WRITER);
+    const open = core.engines.canvas(CANVAS);
+    open?.engine.sessions.open('worker');
+    await vi.waitFor(
+      () => {
+        expect(open?.engine.sessions.of('worker').entries.length).toBe(3600);
+      },
+      { timeout: 20_000 },
+    );
+    await expectCopiesRead(core, [yours, theirs]);
+    for (const copy of [yours, theirs]) {
+      expect(copy.changes.length).toBeGreaterThan(2);
+      for (const change of copy.changes)
+        expect(Buffer.byteLength(JSON.stringify(change))).toBeLessThanOrEqual(MAX_TOPIC_FRAME);
+    }
+    // A token's copy past a frame is a transfer too.
+    const later = await follow(core, sessionOf('worker'), READER);
+    await vi.waitFor(() => {
+      expect(later.ready).toBe(true);
+    });
+    expect(later.changes).toEqual([]);
+    expect(later.batches.flat().some((update) => 'kind' in update && update.kind === 'end')).toBe(
+      true,
+    );
+    await expectCopiesRead(core, [later]);
+  }, 60_000);
+
   it('refuses a session whose summary can’t fit its begin frame, before sending anything', async () => {
     folder = await keepWorld([{ id: 'worker' }], []);
     const core = await start(

@@ -83,7 +83,7 @@ export class TopicMirror {
   #stops: (() => void)[] | undefined;
 
   constructor(source: TopicSource | MirrorSource) {
-    // C8 will widen GuiApi when it registers these topics. No production runtime subscription yet.
+    // B11 X9 widens GuiApi as it registers the runtime topics (C8 publishes them in the core).
     this.#source = source;
   }
 

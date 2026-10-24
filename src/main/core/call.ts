@@ -185,6 +185,8 @@ export interface Projection {
   readonly surface: Surface;
   /** Its arguments: strict, bounded, every id branded, so reach finds each one. */
   readonly input: z.ZodType;
+  /** What it reads, as the topic's wire shape: checked where results are (in dev and tests). */
+  readonly output?: z.ZodType;
   readonly read: (args: never, ctx: ProjectionContext) => unknown;
 }
 
@@ -705,6 +707,12 @@ export function createDispatcher(registry: Registry, options: DispatchOptions = 
       });
       const fault = check ? notPlainData(value, 'result') : undefined;
       if (fault) throw new OpFailure('unavailable', `${fault}.`);
+      const parsed = check ? projection.output?.safeParse(value) : undefined;
+      if (parsed?.success === false)
+        throw new OpFailure(
+          'unavailable',
+          `The projection doesn’t fit its schema${issueOf(parsed.error)}.`,
+        );
       return { ok: true, value };
     } catch (error) {
       return { ok: false, error: errorOf(error, signal) };

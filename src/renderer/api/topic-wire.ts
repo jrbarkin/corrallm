@@ -26,7 +26,7 @@ export interface MirrorSnapshot {
   state: TopicSnapshot['state'] | RuntimeTopicStates[RuntimeTopicKey];
 }
 export type MirrorUpdate = Change | RuntimeChange | RuntimeSnapshotFrame;
-/** Additive receiver seam for C8; the registered GUI subscription remains B9-only until then. */
+/** Additive receiver seam for the runtime topics; the GUI subscription stays B9-only until X9. */
 export interface MirrorSource {
   topicsSubscribe(
     request: TopicRequest | RuntimeTopicRequest,
@@ -223,7 +223,7 @@ export function assembledState(
   };
 }
 
-/** Validate references needed to apply future deltas; payload field validation belongs to C8. */
+/** Validate references needed to apply future deltas; the core's projections check payloads. */
 export function checkRuntimeState(
   topic: RuntimeTopicKey,
   state: RuntimeTopicStates[RuntimeTopicKey],

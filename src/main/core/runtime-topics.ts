@@ -1,6 +1,9 @@
 import { z } from 'zod';
 
 import { AgentId, CanvasId as CanvasIdSchema } from '../../shared/api/ids';
+import { RunViewSchema, SessionSummarySchema } from '../../shared/api/ops/b11-data';
+import { Cursor, Message } from '../../shared/api/ops/conversation';
+import { TranscriptEntry } from '../../shared/api/ops/session';
 import { MAX_TOPIC_FRAME } from '../../shared/api/limits';
 import { R, SURFACE } from '../../shared/api/surface';
 import type { OpName, Party, Reach, Surface } from '../../shared/api/surface';
@@ -15,7 +18,7 @@ import type { CanvasId } from '../../shared/canvas';
 import type { SessionAction } from '../../shared/engine/transcript/reduce';
 import type { PartyId } from '../../shared/model/messages';
 import type { Entry, Session } from '../../shared/model/session';
-import { projectData, runView } from '../../shared/model/views';
+import { MESSAGE_ORIGINS, projectData, runView } from '../../shared/model/views';
 import type {
   EntryView,
   MessageView,
@@ -128,6 +131,35 @@ function reachOf(surface: Surface, party: Party): Reach | 'all' {
 const CanvasArgs = z.strictObject({ canvas: CanvasIdSchema });
 const SessionArgs = z.strictObject({ canvas: CanvasIdSchema, agent: AgentId });
 
+/** Each runtime topic's state, as its projection reads it (the wire's, shared/api/topics.ts). */
+export const RUNTIME_STATES = {
+  run: RunViewSchema,
+  sessions: z.strictObject({ agents: z.record(z.string(), SessionSummarySchema) }),
+  session: z.strictObject({
+    summary: SessionSummarySchema,
+    entries: z.record(z.string(), TranscriptEntry),
+    order: z.array(z.string()),
+  }),
+  messages: z.strictObject({
+    items: z.record(
+      z.string(),
+      Message.extend({
+        origin: z.enum(MESSAGE_ORIGINS),
+        display: z
+          .strictObject({
+            after: z.string().optional(),
+            text: z.string().optional(),
+            images: z.int().min(0).optional(),
+            requiresImages: z.literal(true).optional(),
+          })
+          .optional(),
+      }),
+    ),
+    order: z.array(z.string()),
+    next: Cursor,
+  }),
+} satisfies Readonly<Record<RuntimeKind, z.ZodType>>;
+
 /** The kind of a runtime topic, from its key. */
 export function kindOf(topic: RuntimeTopicKey): RuntimeKind {
   return topic.slice(0, topic.indexOf(':')) as RuntimeKind;
@@ -227,6 +259,7 @@ export class RuntimeSource {
         name,
         surface,
         input,
+        output: RUNTIME_STATES[kind],
         read: (args: never, ctx) => read(args, ctx, surface),
       };
     };

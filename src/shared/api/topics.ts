@@ -110,7 +110,10 @@ export function topicKey(
   return request.topic as 'usage' | 'settings' | 'canvases';
 }
 
-/** Prepared B11 contracts only. TOPICS and the live subscription schema stay unchanged until C8. */
+/**
+ * The runtime topics, which the core publishes (core/topics.ts): TOPICS and the live subscription
+ * schema stay B9's until B11 X9 registers them for windows.
+ */
 export const RUNTIME_TOPICS = ['run', 'sessions', 'session', 'messages'] as const;
 export const RuntimeTopic = z
   .union([
