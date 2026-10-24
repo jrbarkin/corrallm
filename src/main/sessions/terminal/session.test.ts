@@ -180,12 +180,10 @@ describe('a Terminal session', () => {
     expect(command).not.toContain(token);
   });
 
-  it('reports native permissions from its command SessionStart hook before any prompt is typed', async () => {
-    fake.sessionStart = 'default';
-    await start();
-    await until(() => {
-      expect(last('mode')).toMatchObject({ mode: 'manual' });
-    });
+  it('carries its pre-launch permission baseline when SessionStart has no permission_mode', async () => {
+    await start({ startupAsks: true });
+    expect(last('started')).toMatchObject({ mode: null, asks: true });
+    expect(last('mode')).toBeUndefined();
     expect(claude().prompts).toEqual([]);
     const settings = JSON.parse(readFileSync(claude().arg('--settings') ?? '', 'utf8')) as {
       hooks: { SessionStart?: { hooks: { type: string; command: string }[] }[] };
@@ -199,7 +197,6 @@ describe('a Terminal session', () => {
   it.each([{ httpHookAllowedEnvVars: ['OTHER'] }, { httpHookAllowedEnvVars: [] }])(
     'registers its file-backed hooks without an unheard warning under %j',
     async (settings) => {
-      fake.sessionStart = 'default';
       const home = path.join(dir, 'home');
       await mkdir(path.join(home, '.claude'), { recursive: true });
       await writeFile(path.join(home, '.claude', 'settings.json'), JSON.stringify(settings));
@@ -213,8 +210,9 @@ describe('a Terminal session', () => {
         /^Bearer [0-9a-f]{48}$/,
       );
       await until(() => {
-        expect(last('mode')).toMatchObject({ mode: 'manual' });
+        expect(claude().answers).toContainEqual({ hook: 'SessionStart', answer: '{}' });
       });
+      expect(last('mode')).toBeUndefined();
       expect(last('unheard')).toBeUndefined();
     },
   );
@@ -222,7 +220,6 @@ describe('a Terminal session', () => {
   it.each([{ disableAllHooks: true }, { allowedHttpHookUrls: ['https://example.test/*'] }])(
     'does not bypass hook restrictions with the command startup post (%j)',
     async (settings) => {
-      fake.sessionStart = 'default';
       const home = path.join(dir, 'home');
       await mkdir(path.join(home, '.claude'), { recursive: true });
       await writeFile(path.join(home, '.claude', 'settings.json'), JSON.stringify(settings));

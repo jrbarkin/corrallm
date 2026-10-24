@@ -467,6 +467,19 @@ export class SessionManager {
     const fingerprint = roleFingerprint(role);
     const roleChanged = remembered?.role !== fingerprint;
     const env = await this.#deps.environment();
+    // Terminals need a pre-launch baseline: their first hook may arrive only with a prompt,
+    // or omit permissions. Read here too for sessions opened by a window rather than delivery.
+    let startupAsks: boolean | undefined;
+    if (
+      mode === null &&
+      connectionIn(this.#deps.catalog, connection)?.connection.view === 'terminal'
+    ) {
+      try {
+        startupAsks = (await this.#deps.options?.[adapter]?.({ cwd, env }))?.defaults.asks;
+      } catch {
+        // Unknown: delivery gives hooks a bounded startup window, then explains the hold.
+      }
+    }
     // A session replaced (by another connection, or after it closed) is no longer heard.
     const host: SessionHost = {
       activity: () => {
@@ -489,6 +502,7 @@ export class SessionManager {
         env,
         model,
         mode,
+        ...(startupAsks === undefined ? {} : { startupAsks }),
         ...(effort === undefined ? {} : { effort }),
         ...(role === undefined ? {} : { role }),
         resume,

@@ -181,7 +181,7 @@ export function needsItem(
                 : `corrallm can’t tell whether ${name}’s CLI defaults to a mode that asks, so messages from other parties wait`,
         detail:
           need.why === 'unknown-running'
-            ? 'Switch it to a mode that asks, or set one in its settings and restart it.'
+            ? 'Check its terminal and switch it to a mode that asks, or enable its hooks if they are off.'
             : need.why === 'mode'
               ? 'They go once it runs in a mode that asks again.'
               : 'They go once it runs in a mode that asks: set it to start in one.',

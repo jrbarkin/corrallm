@@ -9,6 +9,7 @@ import type { Engine } from '../../../shared/engine/engine';
 import type { PauseCause } from '../../../shared/engine/run/runner';
 import type { AgentNode, CanvasNode } from '../../../shared/model/canvas';
 import { agentOf, agentParty, outsideOf } from '../../../shared/model/messages';
+import type { Session } from '../../../shared/model/session';
 import type { Message, PartyId } from '../../../shared/model/messages';
 import { threadTitle } from '../../../shared/model/session';
 import { holdText, resetTime } from '../../../shared/model/words';
@@ -158,6 +159,8 @@ const REASON = 1000;
 const CUT = '\n\n[corrallm: cut here; the whole reply is in its transcript]';
 /** How long after a delivering record couldn't be committed delivery tries again. */
 const RECORD_RETRY = 1000;
+/** A Terminal with hooks enabled may still be starting; do not raise a false permission hold. */
+const PERMISSION_STARTUP_MS = 30_000;
 
 export class Delivery {
   readonly #deps: DeliveryDeps;
@@ -178,6 +181,13 @@ export class Delivery {
    * or with the next message sent it RETRY_AFTER or more after a read that held its messages).
    */
   readonly #defaults = new Map<string, Default>();
+  readonly #permissionWaits = new Map<
+    string,
+    {
+      running: NonNullable<Session['running']>;
+      until: number;
+    }
+  >();
   /** What wakes delivery when a usage window resets. */
   #alarm: { at: number; cancel: () => void } | undefined;
   /**
@@ -495,6 +505,9 @@ export class Delivery {
     for (const node of this.#deps.nodes()) {
       if (node.type !== 'agent') continue;
       this.#forgetReleased(node);
+      const permission = this.#permissionWaits.get(node.id);
+      if (permission !== undefined && permission.until > this.#deps.now())
+        alarm = Math.min(alarm ?? permission.until, permission.until);
       const limited = this.#limited(node);
       if (limited !== undefined) alarm = Math.min(alarm ?? limited.until, limited.until);
       const waits = waiting.get(node.id);
@@ -656,10 +669,20 @@ export class Delivery {
     if (connection === 'unavailable') return 'asks';
     const session = sessions.of(node.id);
     if (session.running !== undefined) {
+      if (session.mode !== null || session.asks !== undefined)
+        this.#permissionWaits.delete(node.id);
       if (session.mode !== null) {
         return catalog.neverAsks(connection, session.mode) ? 'mode' : 'asks';
       }
       if (session.asks !== undefined) return session.asks ? 'asks' : 'mode';
+      if (catalog.isTerminal(connection) && session.unheard === undefined) {
+        let waiting = this.#permissionWaits.get(node.id);
+        if (waiting?.running !== session.running) {
+          waiting = { running: session.running, until: this.#deps.now() + PERMISSION_STARTUP_MS };
+          this.#permissionWaits.set(node.id, waiting);
+        }
+        if (this.#deps.now() < waiting.until) return 'reading';
+      }
       return 'unknown-running';
     } else {
       const mode = node.data.settings?.[catalog.adapterOf(connection)]?.mode;
@@ -703,6 +726,10 @@ export class Delivery {
     const agents = new Set(
       this.#deps.nodes().flatMap((node) => (node.type === 'agent' ? [node.id] : [])),
     );
+    for (const [agent, waiting] of this.#permissionWaits) {
+      if (!agents.has(agent) || this.#deps.engine.sessions.of(agent).running !== waiting.running)
+        this.#permissionWaits.delete(agent);
+    }
     for (const [agent, known] of this.#defaults) {
       if (!agents.has(agent)) {
         this.#defaults.delete(agent);
@@ -1182,7 +1209,7 @@ function unaskingText(name: string, why: UnaskingWhy): string {
     case 'unknown':
       return `corrallm can’t tell whether ${name}’s CLI defaults to a mode that asks before it acts, so your message waits until ${name} runs in one that asks, which only the user can set.`;
     case 'unknown-running':
-      return `corrallm can’t tell whether ${name}’s running session asks before it acts, so your message waits until it reports that it asks: only the user can switch its mode or restart it.`;
+      return `corrallm can’t tell whether ${name}’s running session asks before it acts, so your message waits until it reports that it asks: check its terminal and switch it to a mode that asks, or enable its hooks if they are off.`;
   }
 }
 
