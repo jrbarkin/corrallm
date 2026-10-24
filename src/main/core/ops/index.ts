@@ -9,6 +9,7 @@ import type { LinkOpener } from '../../links';
 import type { FileRevealer } from '../../reveal';
 import type { ProjectFiles } from '../../files';
 import type { ProjectRootResolver } from '../workspaces/resolver';
+import type { SetupService } from '../workspaces/setup';
 import type { SessionManager } from '../../sessions/manager';
 import type { Windows } from '../windows';
 import type { Topics } from '../topics';
@@ -113,6 +114,12 @@ export interface OpServices {
   host: HostServices;
   /** The outside tokens: whether one was replaced or expires, as a call it made still goes on. */
   tokens: Pick<TokenStore, 'revoked' | 'onRevoke' | 'expiresOf'>;
+  /**
+   * The worktrees' setup (workspaces/setup.ts): its cards, their answers and the setup command you
+   * set. None until B9a X11b composes the workspaces: then no card is raised, and setting a command
+   * is unavailable.
+   */
+  setups?: SetupService;
 }
 
 export function implementations(services: OpServices): Implementations {
