@@ -856,6 +856,60 @@ function appendedView(view: SessionView, changed: readonly Entry[], yours: boole
 }
 
 /**
+ * entriesDiff's change read only from the first raw entry that isn't the one `base` had: entries
+ * replaced there under their own id, then those appended, as upserts in their order (the order only
+ * appended to). None if anything else changed (an entry gone, or another in its place): then
+ * they are compared whole. A turn after a long history costs that history no reading but this.
+ */
+function tailDiff(
+  base: SessionBase,
+  session: Session,
+): { change: SessionBody['entries'] | undefined; base: SessionBase } | undefined {
+  const was = base.session.entries;
+  const now = session.entries;
+  if (now.length < was.length) return undefined;
+  let from = 0;
+  while (from < was.length && was[from] === now[from]) from++;
+  const replaced: { entry: Entry; at: number; raw: number }[] = [];
+  for (let raw = from; raw < was.length; raw++) {
+    const before = was[raw];
+    const entry = now[raw];
+    if (before === undefined || entry === undefined) return undefined;
+    if (before === entry) continue;
+    if (entry.id !== before.id) return undefined;
+    const at = base.byId.get(entry.id);
+    // A later entry of an id once() already has is no entry of the session's.
+    if (at?.raw === raw) replaced.push({ entry, at: at.at, raw });
+  }
+  const added: Entry[] = [];
+  const ids = new Set<string>();
+  for (let raw = was.length; raw < now.length; raw++) {
+    const entry = now[raw];
+    if (entry === undefined) return undefined;
+    if (base.byId.has(entry.id) || ids.has(entry.id)) continue;
+    ids.add(entry.id);
+    added.push(entry);
+  }
+  // The baseline is the source's own: what changed of it is replaced in place (its order, which
+  // a view it gave out holds, is new).
+  const entries = base.entries as Entry[];
+  for (const { entry, at, raw } of replaced) {
+    entries[at] = entry;
+    base.byId.set(entry.id, { entry, at, raw });
+  }
+  for (const entry of added) {
+    base.byId.set(entry.id, { entry, at: entries.length, raw: now.indexOf(entry, was.length) });
+    entries.push(entry);
+  }
+  const order = added.length === 0 ? base.order : [...base.order, ...added.map(({ id }) => id)];
+  const next: SessionBase = { session, entries, order, byId: base.byId, summary: base.summary };
+  const upsert = [...replaced.map(({ entry }) => entry), ...added].map((entry) =>
+    transcriptEntry(entry, true),
+  );
+  return { change: upsert.length === 0 ? undefined : { upsert }, base: next };
+}
+
+/**
  * What changed of a session's entries since `base`, comparing them by identity (the reducer keeps
  * every entry it leaves): those new or replaced, as upserts in their order, and the whole order
  * where anything but appending changed it.
@@ -864,6 +918,8 @@ function entriesDiff(
   base: SessionBase,
   session: Session,
 ): { change: SessionBody['entries'] | undefined; base: SessionBase } {
+  const tail = tailDiff(base, session);
+  if (tail) return tail;
   const { entries, byId } = once(session);
   const upsert = entries.flatMap((entry) =>
     base.byId.get(entry.id)?.entry === entry ? [] : [transcriptEntry(entry, true)],

@@ -1091,6 +1091,83 @@ describe('runtime topics: long histories', () => {
     );
   }, 60_000);
 
+  it('takes a turn after a long history from where its entries differ, subscribed or not', async () => {
+    folder = await keepWorld([{ id: 'worker' }], []);
+    let host: SessionHost | undefined;
+    const fake = new FakeConnector({ adapter: 'codex' });
+    const core = await start(folder, {
+      start: async (spec, sessionHost) => {
+        host = sessionHost;
+        const live = await fake.start(spec, sessionHost);
+        sessionHost.emit({ type: 'history', events: turns(667, 160, 'past') });
+        return live;
+      },
+    });
+    const sessions = core.engines.canvas(CANVAS)?.engine.sessions;
+    sessions?.open('worker');
+    await vi.waitFor(() => {
+      expect(sessions?.of('worker').entries).toHaveLength(2001);
+    });
+    const topic = sessionOf('worker');
+    const before = await follow(core, topic, CALLERS.you);
+    before.stop();
+    const scan = vi.fn();
+    const { forEach, map, flatMap } = Array.prototype;
+    const spies = (
+      [
+        ['forEach', forEach],
+        ['map', map],
+        ['flatMap', flatMap],
+      ] as const
+    ).map(([name, original]) =>
+      vi.spyOn(Array.prototype, name).mockImplementation(function (
+        this: unknown[],
+        ...args: unknown[]
+      ) {
+        // The publisher's own reading of it (the engine's reducer reads it as a turn ends).
+        if (
+          this.length >= 2001 &&
+          (this[0] as EntryView | undefined)?.id === 'past-0' &&
+          /core\/(runtime-)?topics\.ts:/.test(new Error().stack ?? '')
+        )
+          scan(name);
+        return (original as (...args: unknown[]) => unknown).apply(this, args);
+      } as never),
+    );
+    try {
+      // Nobody follows it now: its change is taken all the same, its revision moving.
+      host?.emit({ type: 'user', id: 'next', text: 'Again' });
+      host?.emit({ type: 'text', id: 'next/reply', text: 'Done' });
+      host?.emit({
+        type: 'end',
+        messages: ['next'],
+        seconds: 1,
+        result: { status: 'completed', reason: 'completed' },
+      });
+      await vi.waitFor(() => {
+        expect(sessions?.of('worker').entries.some(({ id }) => id === 'next/reply')).toBe(true);
+      });
+      // A write's receipts publish what the canvas has waiting first.
+      await core.topics.receipts([RUN as ReceiptTopic], core.topics.mark());
+      expect(scan).not.toHaveBeenCalled();
+    } finally {
+      for (const spy of spies) spy.mockRestore();
+    }
+    const copy = await follow(core, topic, CALLERS.you);
+    expect(copy.rev).toBeGreaterThan(before.rev);
+    await expectCopiesRead(core, [copy]);
+    // Followed, the next turn comes as upserts of its own entries, the order only appended to.
+    host?.emit({ type: 'user', id: 'last', text: 'Once more' });
+    await vi.waitFor(() => {
+      expect(copy.changes.at(-1)).toMatchObject({
+        entries: { upsert: [expect.objectContaining({ id: 'last' })] },
+      });
+    });
+    expect(copy.changes.at(-1)).not.toHaveProperty('entries.order');
+    await expectCopiesRead(core, [copy]);
+    copy.stop();
+  }, 60_000);
+
   it('fits the largest summaries its fixtures make in a begin frame', () => {
     // Holds larger than a frame are keyed entries, never part of the begin summary.
     const parties = [

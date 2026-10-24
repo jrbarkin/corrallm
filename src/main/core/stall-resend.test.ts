@@ -8,6 +8,7 @@ import type { ConnectionId } from '../../shared/adapter';
 import { MAX_MESSAGE_BYTES } from '../../shared/api/limits';
 import { decodeSubmissions } from '../../shared/engine/delivery/submission-state';
 import { Engine, RETRY_CHECK_MS } from '../../shared/engine/engine';
+import { holdGeneration } from '../../shared/engine/needs';
 import { fakeBackend } from '../../shared/engine/test-backend';
 import { TEST_ENGINE } from '../../shared/engine/test-engine';
 import type { Message } from '../../shared/model/messages';
@@ -214,7 +215,9 @@ async function heldResend(origin: 'party' | 'manual' | 'run', why: string): Prom
     if (origin === 'run') {
       // Its reserved retry waits behind the cancelled attempt; nothing has decided a new one.
       expect(engine.run.snapshot().agents.a?.problem?.kind).toBe('cancelled');
-      expect(await needIds()).toContain('hold/a/task');
+      expect(await needIds()).toContain(
+        `hold/a/${holdGeneration(engine.run.snapshot().agents.a)}/task`,
+      );
       return;
     }
     const resent = (await texts())[1];
@@ -530,7 +533,9 @@ it('a Kill after choosing resend cancels the reserved run retry', async () => {
   await call('run.unpause', { target: { agent: 'a' } });
   // Unpaused, the Kill's cancelled attempt waits for you; no reserved retry is left to take it.
   await vi.waitFor(async () => {
-    expect(await needIds()).toContain('hold/a/task');
+    expect(await needIds()).toContain(
+      `hold/a/${holdGeneration(engine.run.snapshot().agents.a)}/task`,
+    );
   });
   await settled();
   expect(sent).toHaveLength(1);
