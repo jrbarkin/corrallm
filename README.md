@@ -120,22 +120,22 @@ What happens when you save a file while `pnpm dev` is running:
 
 To try the production build, run `pnpm package` and open the app in `out/` (for example `open out/corrallm-darwin-arm64/corrallm.app`).
 
-To check a packaged build without opening it, run it with `CORRALLM_NATIVE_SELFTEST=1` (for example `CORRALLM_NATIVE_SELFTEST=1 out/corrallm-darwin-arm64/corrallm.app/Contents/MacOS/corrallm`): it checks that node-pty, the terminal's screen copy and the Agent SDK work in it (the SDK against a fake `claude` of its own, run with the `node` on your PATH; no login needed), and exits with 0.
+To check a packaged build without opening it, run it with `CORRALLM_NATIVE_SELFTEST=1` (for example `CORRALLM_NATIVE_SELFTEST=1 out/corrallm-darwin-arm64/corrallm.app/Contents/MacOS/corrallm`): in its main process, its core process and the shipped command, it checks that node-pty, the terminal's screen copy, the Agent SDK, SQLite, loopback HTTP and spawning work (the SDK against a fake `claude` of its own, run by the app's shipped Node rather than any `node` on your PATH; no login needed), and exits with 0.
 
 ## Common scripts
 
-| Script           | What it does                                          |
-| ---------------- | ----------------------------------------------------- |
-| `pnpm dev`       | Run the app in development mode                       |
-| `pnpm typecheck` | Type-check all TypeScript projects                    |
-| `pnpm lint`      | ESLint (type-aware rules)                             |
-| `pnpm format`    | Format all files with Prettier                        |
-| `pnpm test`      | Unit tests (Vitest) for main, preload and renderer    |
-| `pnpm test:e2e`  | Build the app (unsigned) and run the Playwright tests |
-| `pnpm package`   | Package the app for the current OS into `out/`        |
-| `pnpm make`      | Build installers for the current OS into `out/make/`  |
+| Script           | What it does                                                          |
+| ---------------- | --------------------------------------------------------------------- |
+| `pnpm dev`       | Run the app in development mode                                       |
+| `pnpm typecheck` | Type-check all TypeScript projects                                    |
+| `pnpm lint`      | ESLint (type-aware rules)                                             |
+| `pnpm format`    | Format all files with Prettier                                        |
+| `pnpm test`      | Unit tests (Vitest) for main, preload, renderer and store-performance |
+| `pnpm test:e2e`  | Build the app (unsigned) and run the Playwright tests                 |
+| `pnpm package`   | Package the app for the current OS into `out/`                        |
+| `pnpm make`      | Build installers for the current OS into `out/make/`                  |
 
-Local CI runs the done gate in [AGENTS.md](AGENTS.md), plus packaging and its native self-test on macOS. For Linux, with Docker running, use `scripts/ci-linux.sh arm64`, `scripts/check-linux.sh arm64` and `scripts/check-linux-packages.sh arm64`; repeat with `x64` (slow emulation on Apple Silicon). These cover e2e under Xvfb and clean deb/rpm installations. GitHub CI is disabled until the repository is public. See [local CI](docs/architecture/toolchain.md#local-ci-while-the-repository-is-private).
+Local CI runs the done gate in [AGENTS.md](AGENTS.md). On macOS that ends with `pnpm package` and `scripts/check-macos.sh`, which checks the packaged bundle's signature, the native self-test, the refused launch switches and the shipped command; the self-test alone skips the signature and switch checks. For Linux, with Docker running, use `scripts/ci-linux.sh arm64`, `scripts/check-linux.sh arm64` and `scripts/check-linux-packages.sh arm64`; repeat with `x64` (slow emulation on Apple Silicon). These cover e2e under Xvfb and clean deb/rpm installations. GitHub CI is disabled until the repository is public. See [local CI](docs/architecture/toolchain.md#local-ci-while-the-repository-is-private).
 
 ## Debugging
 
