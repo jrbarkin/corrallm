@@ -42,6 +42,27 @@ const LOCKS: Readonly<Record<string, string>> = {
   'composer.lock': 'composer',
 };
 
+/**
+ * The fixed table's commands, by manager: what is shown, and the argument list that runs (no shell).
+ * Nothing else is ever suggested; a setup offered from it is run only by matching it here again.
+ */
+export const SUGGESTED_COMMANDS: Readonly<
+  Record<SetupSpec['manager'], { command: string; args: readonly string[] }>
+> = {
+  npm: { command: 'npm ci', args: ['ci'] },
+  pnpm: { command: 'pnpm install --frozen-lockfile', args: ['install', '--frozen-lockfile'] },
+};
+
+/** The most a setup command you set may be: one line of at most 4 KiB (its UTF-8 bytes). */
+export const MAX_SETUP_COMMAND_BYTES = 4096;
+
+/**
+ * What a setup command you set may not hold: a control character (a new line among them), a
+ * format character (bidirectional overrides, zero-width ones) or a line or paragraph separator,
+ * any of which could make what the setup card shows differ from what runs.
+ */
+export const UNSEEN_IN_COMMAND = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u;
+
 /** Suggests what to offer, never permission to run it or a substitute for the native trust gate. */
 export function detectSetup({ files, packageJson }: SetupFiles): SetupDetection {
   const names = new Set(files);
@@ -73,14 +94,10 @@ export function detectSetup({ files, packageJson }: SetupFiles): SetupDetection 
     (typeof declared !== 'string' || /^([^@\s]+)@\S+$/.exec(declared)?.[1] !== manager)
   )
     return manual('conflicting-package-manager');
+  const { command, args } = SUGGESTED_COMMANDS[manager];
   return {
     kind: 'suggested',
-    spec: {
-      manager,
-      command: manager === 'npm' ? 'npm ci' : 'pnpm install --frozen-lockfile',
-      args: manager === 'npm' ? ['ci'] : ['install', '--frozen-lockfile'],
-      evidence: ['package.json', ...locks],
-    },
+    spec: { manager, command, args: [...args], evidence: ['package.json', ...locks] },
   };
 }
 

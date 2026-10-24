@@ -11,6 +11,7 @@ import type { Pty } from '../sessions/terminal/pty';
 import { HookServer } from '../sessions/terminal/hooks';
 import type { CanvasId } from '../../shared/canvas';
 import { CATALOG } from '../sessions/adapters';
+import { ClaudeCode } from '../sessions/claude-code/claude-code';
 import { StalledTurns, STALL_MS, WAKE_GRACE_MS, WATCH_EVERY_MS } from './stalled';
 
 const CANVAS = '01234567-1234-4123-8123-123456789abc' as CanvasId;
@@ -225,6 +226,124 @@ describe('silent turns', () => {
     }
   });
 
+  it('flags a silent Claude Code Terminal turn despite its status line refreshing every second for twenty minutes', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'corrallm-statusline-'));
+    const hooks = new HookServer();
+    let post: (input: Record<string, unknown>) => void = () => undefined;
+    const registration = vi.spyOn(hooks, 'register').mockImplementation((_listener, status) => {
+      post = (input) => status?.(input);
+      return Promise.resolve({
+        url: 'http://127.0.0.1/hook',
+        statusUrl: 'http://127.0.0.1/status',
+        token: 'test-token',
+        release: () => undefined,
+      });
+    });
+    let exit: (event: { exitCode: number }) => void = () => undefined;
+    const pty: Pty = {
+      pid: 4243,
+      write: () => undefined,
+      resize: () => undefined,
+      pause: () => undefined,
+      resume: () => undefined,
+      kill: () => {
+        exit({ exitCode: 0 });
+      },
+      onData: () => undefined,
+      onExit: (listener) => {
+        exit = listener;
+      },
+    };
+    // Claude Code's own reading of its status line input; the rest of the CLI is a stand-in.
+    const claude = new ClaudeCode({ cwd: dir, home: dir, env: {} });
+    const cli: TerminalCli<never> = {
+      name: 'Test CLI',
+      words: {
+        answer: '',
+        mode: '',
+        model: '',
+        login: '',
+        waiting: { permission: '', question: '', auth: '', none: '' },
+      },
+      newId: () => null,
+      prepare: () => Promise.resolve(),
+      args: () => [],
+      resumeFailed: () => false,
+      keystrokes: () => [],
+      submitted: (text) => text,
+      draft: () => undefined,
+      hook: () => [],
+      statusLine: (input) => claude.statusLine(input),
+    };
+    const session = new TerminalSession(
+      { agentId: AGENT, cwd: dir, env: {}, model: null, mode: null, resume: null },
+      {
+        remember: () => undefined,
+        emit: (event) => {
+          watchdog.event(CANVAS, AGENT, 'claude-code.terminal', event);
+        },
+        activity: () => {
+          watchdog.activity(CANVAS, AGENT);
+        },
+      },
+      {
+        executable: '/fake/cli',
+        cli,
+        spawn: () => Promise.resolve(pty),
+        hooks,
+        tmp: dir,
+        env: () => ({}),
+        timing: { ...TIMING, kill: 1 },
+      },
+    );
+    // What Claude Code 2.1.310 gives its status line, as its refreshInterval re-runs it: only its
+    // clock moves (and its limits, which other sessions of the account use too).
+    const input = (second: number, output = 4521) => ({
+      hook_event_name: 'Status',
+      session_id: '0b3a7d52-6a0c-4f39-9c4e-2f8f0c1d9e11',
+      model: { id: 'claude-opus-4-1', display_name: 'Opus' },
+      cost: {
+        total_cost_usd: 0.01234 + (output - 4521) / 1e6,
+        total_duration_ms: 45_000 + second * 1000,
+        total_api_duration_ms: 2300 + (output - 4521),
+        total_lines_added: 156,
+        total_lines_removed: 23,
+      },
+      context_window: {
+        total_input_tokens: 15_234,
+        total_output_tokens: output,
+        context_window_size: 200_000,
+        used_percentage: 8,
+        remaining_percentage: 92,
+      },
+      rate_limits: {
+        five_hour: { used_percentage: 23 + (second % 7), resets_at: 1_791_810_000 },
+      },
+    });
+    try {
+      await session.launch();
+      watchdog.event(CANVAS, AGENT, 'claude-code.terminal', { type: 'user', id: 'm', text: 'Go' });
+      watchdog.event(CANVAS, AGENT, 'claude-code.terminal', { type: 'status', status: 'working' });
+      for (let second = 0; second <= STALL_MS / 1000; second++) {
+        post(input(second));
+        await vi.advanceTimersByTimeAsync(1000);
+      }
+      expect(watchdog.items(CANVAS)).toHaveLength(1);
+      expect(warning).toHaveBeenCalledOnce();
+      // Its model at work moves its tokens and API time: that is activity.
+      post(input(STALL_MS / 1000 + 1, 4600));
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(watchdog.items(CANVAS)).toEqual([]);
+    } finally {
+      watchdog.close();
+      const closing = session.close();
+      await vi.advanceTimersByTimeAsync(100);
+      await closing;
+      registration.mockRestore();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it('reports a silent turn two minutes after the network identity changes', async () => {
     start();
     await vi.advanceTimersByTimeAsync(WATCH_EVERY_MS);
@@ -288,6 +407,64 @@ describe('silent turns', () => {
       expect(warning.mock.calls[0]?.[4]).toContain('2 minutes after the network changed');
     },
   );
+
+  it('does not shorten a silent turn’s deadline when the snapshot gains a br-123 interface', async () => {
+    start();
+    await vi.advanceTimersByTimeAsync(WATCH_EVERY_MS);
+    interfaces = { ...interfaces, 'br-123': [address('172.18.0.1')] };
+    await vi.advanceTimersByTimeAsync(WATCH_EVERY_MS + WAKE_GRACE_MS);
+    expect(warning).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(STALL_MS);
+    expect(warning).toHaveBeenCalledOnce();
+    expect(warning.mock.calls[0]?.[4]).toContain('20 minutes');
+  });
+
+  it.each(['docker0', 'br-0a1b2c3d4e5f', 'veth1a2b3c', 'virbr0', 'cni0', 'podman1', 'bridge100'])(
+    'ignores the virtual bridge %s coming up and going down',
+    async (name) => {
+      start();
+      await vi.advanceTimersByTimeAsync(WATCH_EVERY_MS);
+      const host = interfaces;
+      interfaces = {
+        ...host,
+        [name]: [address('172.18.0.1'), address('fd00:1:2:3::1', 'IPv6')],
+      };
+      await vi.advanceTimersByTimeAsync(WATCH_EVERY_MS);
+      interfaces = { ...host, [name]: [address('172.19.0.1'), address('fd00:1:2:4::1', 'IPv6')] };
+      await vi.advanceTimersByTimeAsync(WATCH_EVERY_MS);
+      interfaces = host;
+      await vi.advanceTimersByTimeAsync(WATCH_EVERY_MS + WAKE_GRACE_MS);
+      expect(warning).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(STALL_MS);
+      expect(warning).toHaveBeenCalledOnce();
+      expect(warning.mock.calls[0]?.[4]).toContain('20 minutes');
+    },
+  );
+
+  it('still watches a host bridge such as br0, which can carry the host’s own address', async () => {
+    interfaces = { br0: [address('192.0.2.1')] };
+    start();
+    await vi.advanceTimersByTimeAsync(WATCH_EVERY_MS);
+    interfaces = { br0: [address('192.0.2.2')] };
+    await vi.advanceTimersByTimeAsync(WATCH_EVERY_MS + WAKE_GRACE_MS);
+    expect(warning.mock.calls[0]?.[4]).toContain('2 minutes after the network changed');
+  });
+
+  it('counts only a lost address as a change, not a new one, including one that later goes', async () => {
+    start();
+    await vi.advanceTimersByTimeAsync(WATCH_EVERY_MS);
+    const before = interfaces;
+    interfaces = {
+      en0: [...(before.en0 ?? []), address('192.0.2.7')],
+      utun4: [address('10.8.0.2')],
+    };
+    await vi.advanceTimersByTimeAsync(WATCH_EVERY_MS + WAKE_GRACE_MS);
+    expect(warning).not.toHaveBeenCalled();
+    interfaces = { en0: interfaces.en0 };
+    await vi.advanceTimersByTimeAsync(WATCH_EVERY_MS + WAKE_GRACE_MS);
+    expect(warning).toHaveBeenCalledOnce();
+    expect(warning.mock.calls[0]?.[4]).toContain('2 minutes after the network changed');
+  });
 
   it('keeps the normal deadline for activity after a detected network change', async () => {
     start();

@@ -3,6 +3,7 @@ import { isDeepStrictEqual } from 'node:util';
 
 import type { NeedId } from '../../../shared/api/ids';
 import { MAX_OPEN_PROPOSALS } from '../../../shared/api/limits';
+import { PREPARED_SURFACE } from '../../../shared/api/prepared';
 import { SURFACE } from '../../../shared/api/surface';
 import type { CanvasId } from '../../../shared/canvas';
 import type { CanvasNode } from '../../../shared/model/canvas';
@@ -13,8 +14,12 @@ import { andList } from '../../../shared/model/words';
 import type { MessageStore, Staged } from '../delivery/messages';
 import { OpFailure } from '../call';
 import { nameOf, partyText } from '../parties';
+import { RewindGuardSchema } from '../rewind-guard';
+import type { RewindGuard } from '../rewind-guard';
 import type { Database } from '../store/store';
 import type { ChangeSet } from './change';
+import { fingerprint, safe } from '../workspaces/cleanup';
+import type { CleanupDecision, TreeState } from '../workspaces/cleanup';
 
 /*
  * The proposals waiting for you (Core Server §6.9, B9 Design §5). A token's op whose change no rule
@@ -61,6 +66,16 @@ export interface Proposal {
   before?: Readonly<Record<string, number>>;
   /** What it would do and lose, worded as it was raised. */
   lost: Lost;
+  /**
+   * For a code restore (R5): what it was of, files and all, as proposed (rewind-guard.ts), which
+   * Allow reads again before it restores anything; any difference settles it stale.
+   */
+  guard?: RewindGuard;
+  /**
+   * For a deletion that leaves trees with no agent (B9a C7): what each held when proposed, which
+   * its Allow (keep the work) or Discard is bound to: any difference settles it stale.
+   */
+  cleanup?: { trees: readonly TreeState[] };
   /** When it was raised, in epoch ms. */
   at: number;
 }
@@ -173,24 +188,44 @@ export class Proposals {
       args: Readonly<Record<string, unknown>>;
       by: PartyId;
     } & (
-      | { change: ChangeSet; before: Readonly<Record<string, number>> }
-      | { touched: Readonly<Record<string, number>>; lost: Lost }
+      | {
+          change: ChangeSet;
+          before: Readonly<Record<string, number>>;
+          /** What the trees it leaves with no agent hold now (B9a C7). */
+          trees?: readonly TreeState[];
+        }
+      | {
+          touched: Readonly<Record<string, number>>;
+          lost: Lost;
+          guard?: RewindGuard;
+          /** What the tree a command removes holds now (B9a C7: a kept tree's removal). */
+          trees?: readonly TreeState[];
+        }
     ),
   ): Promise<NeedId> {
-    const { op, args, by } = raised;
+    const { op, by } = raised;
+    // Its arguments as the database keeps them (a key left undefined is none), so that an identical
+    // call matches the pending one read back.
+    const args = JSON.parse(JSON.stringify(raised.args)) as Readonly<Record<string, unknown>>;
     const open = this.#read(canvas);
     if (open === undefined) throw new Error('The canvas’s proposals can’t be read.');
     let touched: Readonly<Record<string, number>>;
     let lost: Lost;
     let before: Readonly<Record<string, number>> | undefined;
+    let guard: RewindGuard | undefined;
+    let cleanup: { trees: readonly TreeState[] } | undefined;
     if ('change' in raised) {
       const { change } = raised;
       touched = Object.fromEntries([...change.entities].map(([key, { rev }]) => [key, rev ?? 0]));
       const inner = Array.isArray(args.ops) ? args.ops.length : undefined;
-      lost = wordsOf(change, await this.#deps.conversations(canvas), inner);
+      const trees = raised.trees ?? [];
+      lost = wordsOf(change, await this.#deps.conversations(canvas), inner, trees);
       before = raised.before;
+      cleanup = trees.length === 0 ? undefined : { trees };
     } else {
-      ({ touched, lost } = raised);
+      ({ touched, lost, guard } = raised);
+      const trees = raised.trees ?? [];
+      cleanup = trees.length === 0 ? undefined : { trees };
     }
     // Check inside the write lane too: two raises may have awaited conversations together.
     const { proposal, made } = await this.#deps.store.write(() => {
@@ -206,7 +241,9 @@ export class Proposals {
           pending?.op === op &&
           isDeepStrictEqual(pending.args, args) &&
           isDeepStrictEqual(pending.touched, touched) &&
-          isDeepStrictEqual(pending.before, before)
+          isDeepStrictEqual(pending.before, before) &&
+          isDeepStrictEqual(pending.guard, guard) &&
+          isDeepStrictEqual(pending.cleanup, cleanup)
         ) {
           return { proposal: pending, made: false };
         }
@@ -227,6 +264,8 @@ export class Proposals {
         touched,
         ...(before === undefined ? {} : { before }),
         lost,
+        ...(guard === undefined ? {} : { guard }),
+        ...(cleanup === undefined ? {} : { cleanup }),
         at: this.#now(),
       };
       this.#deps.store
@@ -240,7 +279,9 @@ export class Proposals {
           op,
           JSON.stringify(args),
           by,
-          JSON.stringify({ touched, before }),
+          // What guards it is kept with what it touched: the guard of a code restore too, and
+          // what the trees a deletion leaves held.
+          JSON.stringify({ touched, before, guard, cleanup }),
           JSON.stringify(lost),
           proposal.at,
         );
@@ -353,12 +394,21 @@ export class Proposals {
  * argument half: canvas.close, canvas.create, canvas.save).
  */
 export function isDocOp(op: string): boolean {
+  // A prepared op (B11 C6's, until X9 registers it) is a command: a code restore's.
+  if (Object.hasOwn(PREPARED_SURFACE, op)) return false;
   return !Object.hasOwn(SURFACE, op) || SURFACE[op as keyof typeof SURFACE].kind === 'doc';
 }
 
-/** A proposal's Needs item, for you: Allow and Refuse, both yours alone. */
+/**
+ * A proposal's Needs item, for you: Allow and Refuse, both yours alone. A deletion that leaves a
+ * tree holding work (B9a C7) offers what becomes of it instead: delete, keeping its work (Allow),
+ * delete and discard it, or cancel (Refuse).
+ */
 export function itemOf(proposal: Proposal): NeedsItem {
   const { lost } = proposal;
+  const asks = proposal.cleanup?.trees.some((tree) => !safe(tree)) === true;
+  // A kept tree's removal: discard what it holds, or don't.
+  const removes = proposal.op === 'worktree.remove';
   return {
     id: proposal.id,
     canvas: proposal.canvas,
@@ -368,16 +418,53 @@ export function itemOf(proposal: Proposal): NeedsItem {
     by: ['you'],
     title: lost.title,
     ...(lost.detail === undefined ? {} : { detail: lost.detail }),
-    choices: [
-      {
-        value: 'allow',
-        label: 'Allow',
-        description: 'Apply it as yours, unless what it changes has changed since.',
-        humanOnly: YOURS,
-      },
-      { value: 'refuse', label: 'Refuse', humanOnly: YOURS },
-    ],
+    choices: removes
+      ? [
+          {
+            value: 'discard',
+            label: 'Remove it and its branch',
+            description: 'Remove the worktree and its branch, with the work in them.',
+            humanOnly: YOURS,
+          },
+          { value: 'refuse', label: 'Cancel', humanOnly: YOURS },
+        ]
+      : asks
+        ? [
+            {
+              value: 'allow',
+              label: 'Delete, keep its work',
+              description:
+                'Delete it; its worktree and branch are kept, in Kept worktrees, unless they changed since.',
+              humanOnly: YOURS,
+            },
+            {
+              value: 'discard',
+              label: 'Delete, and discard its worktree and branch',
+              description: 'Delete it and remove its worktree and branch, with the work in them.',
+              humanOnly: YOURS,
+            },
+            { value: 'refuse', label: 'Cancel', humanOnly: YOURS },
+          ]
+        : [
+            {
+              value: 'allow',
+              label: 'Allow',
+              description: 'Apply it as yours, unless what it changes has changed since.',
+              humanOnly: YOURS,
+            },
+            { value: 'refuse', label: 'Refuse', humanOnly: YOURS },
+          ],
     answerIn: 'api',
+  };
+}
+
+/** Your decision on a deletion's proposal, of the trees it leaves (none: it asked nothing of them). */
+export function cleanupOf(proposal: Proposal, choice: string): CleanupDecision | undefined {
+  const trees = proposal.cleanup?.trees ?? [];
+  if (!trees.some((tree) => !safe(tree))) return undefined;
+  return {
+    choice: choice === 'discard' ? 'discard' : 'keep',
+    fingerprints: Object.fromEntries(trees.map((tree) => [tree.workspace, fingerprint(tree)])),
   };
 }
 
@@ -390,6 +477,7 @@ function wordsOf(
   change: ChangeSet,
   conversations: ReadonlySet<string>,
   inner: number | undefined,
+  trees: readonly TreeState[] = [],
 ): Lost {
   const { nodes } = change.before;
   const removed = nodes.filter((node) => change.removed.has(node.id));
@@ -415,22 +503,81 @@ function wordsOf(
       ? `${who} asks to ${what}: ${loses(only)}`
       : `${who} asks to ${what}: ${andList(named.map((node) => `${nameOf(nodes, node.id)} (${loses(node)})`))}`;
   const others = inner === undefined ? 0 : inner - 1;
+  const work = treeWords(nodes, trees);
+  const details = [
+    ...(work === undefined ? [] : [work]),
+    ...(inner === undefined
+      ? []
+      : [
+          `It comes in a batch with ${String(others)} other change${others === 1 ? '' : 's'}: Allow applies all of it, as one change, and Refuse none.`,
+        ]),
+  ];
   return {
     what,
-    title,
+    // Yours (a deletion of yours waiting for you to confirm it), it is a question to you.
+    title: change.by === 'you' ? `Delete ${names}? Its worktree holds work.` : title,
     agents: removed.map((node) => node.id),
-    ...(inner === undefined
-      ? {}
-      : {
-          detail: `It comes in a batch with ${String(others)} other change${others === 1 ? '' : 's'}: Allow applies all of it, as one change, and Refuse none.`,
-        }),
+    ...(details.length === 0 ? {} : { detail: details.join(' ') }),
     ...(only === undefined ? {} : { agent: only.id }),
   };
+}
+
+/** What a kept tree holds, in words, for its removal's confirmation. */
+export function keptWords(tree: TreeState): string {
+  return treeWords([], [tree]) ?? 'It is clean.';
+}
+
+/**
+ * What the trees a deletion leaves with no agent hold, in words, of those that aren't safe to
+ * remove (none if all are): "Its worktree has 2 changed files and commits not in the project’s
+ * checkout (README.md and notes.md); Builder may still be writing there."
+ */
+function treeWords(nodes: readonly CanvasNode[], trees: readonly TreeState[]): string | undefined {
+  const unsafe = trees.filter((tree) => !safe(tree));
+  if (unsafe.length === 0) return undefined;
+  const files = (count: number, kind: string) =>
+    `${String(count)} ${kind} file${count === 1 ? '' : 's'}`;
+  return unsafe
+    .map((tree) => {
+      if (tree.unknown !== undefined) {
+        return `corrallm can’t tell what its worktree holds (${tree.unknown}): it is kept unless you discard it.`;
+      }
+      const parts = [
+        ...(tree.changed > 0 ? [files(tree.changed, 'changed')] : []),
+        ...(tree.untracked > 0 ? [files(tree.untracked, 'untracked')] : []),
+        ...(tree.merged ? [] : ['commits not in the project’s checkout']),
+      ];
+      const named = tree.paths.slice(0, NAMED);
+      const more = tree.changed + tree.untracked - named.length;
+      const paths =
+        named.length === 0
+          ? ''
+          : ` (${andList([...named, ...(more > 0 ? [`${String(more)} more`] : [])])})`;
+      const holds = parts.length === 0 ? '' : `Its worktree has ${andList(parts)}${paths}.`;
+      const writers = [
+        ...tree.writers.map((agent) => nameOf(nodes, agent)),
+        ...(tree.setup ? ['its setup command'] : []),
+      ];
+      const writing = writers.length === 0 ? '' : `${andList(writers)} may still be writing there.`;
+      return [holds, writing].filter((one) => one !== '').join(' ');
+    })
+    .join(' ');
 }
 
 /** The record a proposer gets of how its proposal was settled. */
 function recordOf(proposal: Proposal, outcome: Outcome, by: PartyId, why?: string): string {
   const { id, lost } = proposal;
+  // Your own deletion's confirmation (B9a C7): told to you as yours.
+  if (proposal.by === 'you') {
+    switch (outcome) {
+      case 'allowed':
+        return `You confirmed: ${lost.what}. It is done.`;
+      case 'refused':
+        return `You cancelled: ${lost.what}. Nothing changed.`;
+      case 'stale':
+        return `Your confirmation to ${lost.what} went stale: ${why ?? 'what it would change has changed since'}, so nothing changed.`;
+    }
+  }
   const who = by === 'you' ? 'The user' : partyText([], by);
   switch (outcome) {
     case 'allowed':
@@ -450,6 +597,12 @@ function proposalOf(row: Record<string, unknown>, canvas: CanvasId): Proposal | 
     const clock: unknown = JSON.parse(String(row.touched));
     if (!isRecord(clock)) return undefined;
     const { touched, before } = clock;
+    // A guard that doesn't read back as one is no proposal: it is never applied unguarded.
+    const guard = clock.guard === undefined ? undefined : RewindGuardSchema.safeParse(clock.guard);
+    if (guard?.success === false) return undefined;
+    // Nor is what the trees of a deletion held: its Allow is bound to it.
+    const cleanup = clock.cleanup === undefined ? undefined : cleanupRead(clock.cleanup);
+    if (cleanup === null) return undefined;
     const lost: unknown = JSON.parse(String(row.lost));
     if (
       typeof id !== 'string' ||
@@ -477,11 +630,37 @@ function proposalOf(row: Record<string, unknown>, canvas: CanvasId): Proposal | 
       touched,
       ...(revisions(before) ? { before } : {}),
       lost: lost as unknown as Lost,
+      ...(guard === undefined ? {} : { guard: guard.data }),
+      ...(cleanup === undefined ? {} : { cleanup }),
       at,
     };
   } catch {
     return undefined;
   }
+}
+
+/** What the trees of a deletion held, as kept with its proposal: null if it doesn't read as that. */
+function cleanupRead(value: unknown): { trees: TreeState[] } | null {
+  if (!isRecord(value) || !Array.isArray(value.trees)) return null;
+  const strings = (list: unknown) =>
+    Array.isArray(list) && list.every((one) => typeof one === 'string');
+  const oid = (one: unknown) => one === null || typeof one === 'string';
+  const read = value.trees.every(
+    (tree: unknown) =>
+      isRecord(tree) &&
+      typeof tree.workspace === 'string' &&
+      oid(tree.head) &&
+      oid(tree.tip) &&
+      Number.isSafeInteger(tree.changed) &&
+      Number.isSafeInteger(tree.untracked) &&
+      strings(tree.paths) &&
+      typeof tree.merged === 'boolean' &&
+      strings(tree.writers) &&
+      typeof tree.setup === 'boolean' &&
+      (tree.unknown === undefined || typeof tree.unknown === 'string') &&
+      typeof tree.status === 'string',
+  );
+  return read ? { trees: value.trees as TreeState[] } : null;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -83,7 +83,7 @@ export class TopicMirror {
   #stops: (() => void)[] | undefined;
 
   constructor(source: TopicSource | MirrorSource) {
-    // C8 will widen GuiApi when it registers these topics. No production runtime subscription yet.
+    // B11 X9 widens GuiApi as it registers the runtime topics (C8 publishes them in the core).
     this.#source = source;
   }
 
@@ -276,6 +276,20 @@ export class TopicMirror {
     }
     try {
       if ('kind' in change) {
+        if (change.kind === 'begin' && !entry.assembly && runtimeTopic(entry.topic)) {
+          if (!snapshotFrameFits(change))
+            throw new Error('A replacement summary exceeded its bound.');
+          entry.assembly = {
+            id: change.snapshot,
+            summary: change.summary,
+            count: change.count,
+            nextIndex: 0,
+            entries: new Map(),
+            early: [],
+          };
+          this.#deadline(entry);
+          return;
+        }
         this.#frame(entry, change);
         return;
       }

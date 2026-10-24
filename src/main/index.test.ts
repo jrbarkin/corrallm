@@ -887,6 +887,22 @@ describe('the profile held by corrallm serve', () => {
       expect(createWindow).not.toHaveBeenCalled();
     },
   );
+
+  it('says to try again in a moment while corrallm token writes the profile’s tokens', async () => {
+    app.whenReady.mockResolvedValueOnce();
+    request.mockResolvedValueOnce({
+      ok: true,
+      value: { profileLocked: { holder: { owner: 'token', pid: 43, started: 1 } } },
+    });
+    const stderr = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    await import('./index');
+    await vi.waitFor(() => {
+      expect(app.exit).toHaveBeenCalledExactlyOnceWith(1);
+    });
+    expect(stderr).toHaveBeenCalledWith(
+      'corrallm: corrallm token (process 43) is using this profile. Try again in a moment.',
+    );
+  });
 });
 
 describe('a core that crashes', () => {

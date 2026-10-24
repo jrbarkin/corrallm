@@ -300,7 +300,7 @@ describe('wait', () => {
     expect(ended.ok).toBe(false);
     if (!ended.ok) {
       expect(ended.error.code).toBe('refused');
-      expect(ended.error.sentence).toMatch(/replaced or expired/);
+      expect(ended.error.sentence).toMatch(/replaced, revoked or expired/);
     }
 
     const waited = await call<Waited>('wait', { timeoutSeconds: 30 }, renewed.caller);

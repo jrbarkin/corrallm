@@ -4,15 +4,20 @@ import path from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { RuntimeTopic } from '../../shared/api/topics';
+import type { TopicUpdate } from '../../shared/api/topics';
 import type { CanvasId } from '../../shared/canvas';
 import type { Message } from '../../shared/model/messages';
+import type { MessageView, RunAgentView } from '../../shared/model/views';
 import type { SessionHost } from '../sessions/connector';
 import type { SessionMode, UserMessage } from '../../shared/session';
 import type { Connector } from '../sessions/connector';
 import { FakeConnector } from '../sessions/fake';
+import type { OpContext } from './call';
 import type { OutsideCaller } from './caller';
 import { createCore } from './core';
 import type { Core } from './core';
+import { asHuman } from './gui';
 import { STORE_FILE } from './store/open';
 import { keepCanvases, readOnDisk, refuseWrites } from './store/test-store';
 import { CALLERS, NO_DESKTOP } from './test-registry';
@@ -541,6 +546,165 @@ describe('the run’s own sends', () => {
       expect(again.sent).toEqual([]);
     } finally {
       await rm(crashed, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('the run’s own sends on the runtime topics', () => {
+  const MESSAGES = `messages:${CANVAS}` as const;
+  const RUN = `run:${CANVAS}` as const;
+
+  /** Subscribes one window of yours to the canvas's run and messages: every batch its port got. */
+  async function followed(core: Core): Promise<{ batches: TopicUpdate[][]; stop: () => void }> {
+    const batches: TopicUpdate[][] = [];
+    const stop = core.topics.listen(7, (updates) => {
+      batches.push([...updates]);
+    });
+    const ctx = {
+      caller: asHuman(7),
+      signal: new AbortController().signal,
+    } as unknown as OpContext;
+    for (const topic of ['run', 'messages'] as const)
+      await core.topics.subscribe(7, RuntimeTopic.parse({ topic, canvas: CANVAS }), ctx);
+    return { batches, stop };
+  }
+
+  /** The messages topic as you read it now. */
+  async function messagesTopic(core: Core): Promise<{ items: Record<string, MessageView> }> {
+    const read = await core.topics.read(MESSAGES, CALLERS.you);
+    if (!read.ok) throw new Error(read.error.sentence);
+    return read.value as { items: Record<string, MessageView> };
+  }
+
+  it('gives each its origin and display as the store keeps them: the run’s, and a correction you typed', async () => {
+    const { connector, sent, end } = busy();
+    const core = await start(connector);
+    const engine = await core.engines.open(CANVAS);
+    engine.run.start();
+    await vi.waitFor(() => {
+      expect(sent).toHaveLength(1);
+    });
+    const first = sent[0]?.id ?? '';
+    end([first], 'cancelled');
+    await vi.waitFor(() => {
+      expect(engine.run.snapshot().agents.worker?.problem?.kind).toBe('cancelled');
+    });
+    engine.run.decide('worker', 'hello', { reply: 'Say it in French' });
+    await vi.waitFor(() => {
+      expect(sent).toHaveLength(2);
+    });
+    const typed = sent[1]?.id ?? '';
+    const [attempt, retried] = engine.run.snapshot().agents.worker?.attempts?.hello ?? [];
+    await vi.waitFor(async () => {
+      const { items } = await messagesTopic(core);
+      // The run's send: from corrallm, its task the attempt (what a queue's row is projected from).
+      expect(items[first]).toMatchObject({
+        from: 'corrallm',
+        origin: 'run',
+        task: { agent: 'worker', item: 'hello', attempt: attempt?.id },
+      });
+      expect(items[first]).not.toHaveProperty('display');
+      // Your correction: linked to the run's task, yet yours, what you typed beside the task.
+      expect(items[typed]).toMatchObject({
+        from: 'you',
+        origin: 'manual',
+        task: { agent: 'worker', item: 'hello', attempt: retried?.id },
+        display: { text: 'Say it in French', task: { agent: 'worker', item: 'hello' } },
+      });
+    });
+    end([typed]);
+  });
+
+  it('lists a canvas the core runs as running from its live run, not from what the journal last kept', async () => {
+    const codex = new FakeConnector({ adapter: 'codex' });
+    const core = await start(codex);
+    const engine = await core.engines.open(CANVAS);
+    const listed = async () => {
+      const list = await core.call('canvas.list', {}, CALLERS.you);
+      if (!list.ok) throw new Error(list.error.sentence);
+      return list.value.items.find((item) => item.canvas === CANVAS)?.running;
+    };
+    expect(await listed()).toBe(false);
+    const heard: boolean[] = [];
+    const { stop } = await core.topics.follow(CALLERS.you, 'canvases', (changes) => {
+      for (const change of changes)
+        if ('replace' in change && change.topic === 'canvases') {
+          const item = change.replace.items.find((one) => one.canvas === CANVAS);
+          if (item) heard.push(item.running);
+        }
+    });
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    // Nothing of the run reaches the disk: the journal never says it runs.
+    const allow = refuseWrites(profile, 'message', 'The disk is full', CANVAS);
+    try {
+      engine.run.start();
+      await vi.waitFor(() => {
+        expect(engine.run.snapshot().agents.worker?.problem?.text).toMatch(/could not be saved/);
+      });
+      expect(engine.run.snapshot().running).toBe(true);
+      expect(await listed()).toBe(true);
+      await vi.waitFor(() => {
+        expect(heard.at(-1)).toBe(true);
+      });
+      engine.run.stop();
+      expect(await listed()).toBe(false);
+      await vi.waitFor(() => {
+        expect(heard.at(-1)).toBe(false);
+      });
+    } finally {
+      allow();
+      errors.mockRestore();
+      stop();
+    }
+  });
+
+  it('publishes a run row’s settling with the run change its turn’s end made, in one batch', async () => {
+    const { connector, sent, end } = busy();
+    const core = await start(connector);
+    const engine = await core.engines.open(CANVAS);
+    const { batches, stop } = await followed(core);
+    try {
+      engine.run.start();
+      await vi.waitFor(() => {
+        expect(sent).toHaveLength(1);
+      });
+      const id = sent[0]?.id ?? '';
+      await vi.waitFor(async () => {
+        expect((await messagesTopic(core)).items[id]?.state).toBe('delivered');
+      });
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      const before = batches.length;
+      end([id]);
+      await vi.waitFor(async () => {
+        expect((await messagesTopic(core)).items[id]?.state).toBe('replied');
+        expect(engine.run.snapshot().agents.worker?.outcomes.hello).toBe('succeeded');
+      });
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      const after = batches.slice(before);
+      const updates = after.flat();
+      const replied = updates.find(
+        (update) =>
+          update.topic === MESSAGES &&
+          'set' in update &&
+          (update.set as Record<string, MessageView>)[id]?.state === 'replied',
+      );
+      const succeeded = updates.find(
+        (update) =>
+          update.topic === RUN &&
+          'agents' in update &&
+          (update.agents.set as Record<string, RunAgentView>).worker?.outcomes.hello ===
+            'succeeded',
+      );
+      if (replied === undefined || succeeded === undefined)
+        throw new Error(`Not both published: ${JSON.stringify(after)}`);
+      // Taken in the same publication: neither topic is seen settled without the other.
+      const seqOf = (update: TopicUpdate) => ('seq' in update ? update.seq : Number.NaN);
+      expect(Math.abs(seqOf(replied) - seqOf(succeeded))).toBe(1);
+      expect(after.some((batch) => batch.includes(replied) && batch.includes(succeeded))).toBe(
+        true,
+      );
+    } finally {
+      stop();
     }
   });
 });

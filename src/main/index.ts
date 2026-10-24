@@ -98,7 +98,8 @@ function main(): void {
         refuse(
           'corrallm can’t open its profile',
           `${error.message} ${
-            error.holder === undefined
+            // corrallm token holds a profile only while it writes the profile's tokens.
+            error.holder === undefined || error.holder.owner === 'token'
               ? 'Try again in a moment.'
               : 'Stop it (Ctrl-C where it runs), then open corrallm again.'
           }`,

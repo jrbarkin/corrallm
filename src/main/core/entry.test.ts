@@ -1,6 +1,7 @@
+import { createHash } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { existsSync } from 'node:fs';
-import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { MessageChannel } from 'node:worker_threads';
@@ -11,8 +12,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CoreGuiSide, GuiSide } from '../../shared/gui-link';
 import { CoreLink } from '../../shared/link';
 import type * as CoreModule from './core';
+import { TestChildren } from '../cli/test-children';
 import type { CoreSide, HostSide } from './protocol';
+import { keepCanvases } from './store/test-store';
 import { NO_DESKTOP } from './test-registry';
+import { askTokenOwner } from './token-socket';
 
 let profile: string;
 let main: CoreLink<HostSide, CoreSide>;
@@ -220,4 +224,107 @@ describe('the profile’s lock, held by the core process', () => {
     await rm(path.join(profile, 'core.lock'));
     expect(await entry.init()).toEqual({ ok: true, value: null });
   });
+});
+
+/*
+ * `corrallm token new|renew|revoke` against the app (Build Plan B30): the core process serves the
+ * profile's token socket once it holds the profile and is composed, as `corrallm serve` does, so a
+ * token is made while the app runs, at once, with no restart.
+ */
+describe.skipIf(process.platform === 'win32')('the token socket the core process serves', () => {
+  const CANVAS = '0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4b01';
+  const BUNDLE = path.resolve('dist-cli/corrallm.cjs');
+  let outside: string;
+  let file: string;
+  let children: TestChildren;
+
+  beforeEach(async () => {
+    children = new TestChildren();
+    outside = await mkdtemp(path.join(tmpdir(), 'corrallm-entry-canvas-'));
+    const project = path.join(outside, 'project');
+    await mkdir(project);
+    file = path.join(outside, 'm1.corral');
+    await writeFile(
+      file,
+      JSON.stringify({ format: 'corrallm', version: 2, id: CANVAS, nodes: [], links: [] }),
+    );
+    await keepCanvases(profile, { [CANVAS]: { file, project } });
+  });
+  afterEach(async () => {
+    await children.close();
+    await rm(outside, { recursive: true, force: true });
+  });
+
+  it('serves corrallm token once composed: a token made at once and logged nowhere, on a socket only you can open, gone as the core closes', async () => {
+    const said: unknown[] = [];
+    for (const stream of ['log', 'error', 'warn', 'info'] as const) {
+      vi.spyOn(console, stream).mockImplementation((...args: unknown[]) => {
+        said.push(...args);
+      });
+    }
+    const entry = await start();
+    expect(await entry.init()).toEqual({ ok: true, value: null });
+    const at = path.join(profile, 'token.sock');
+    const socket = await lstat(at);
+    expect(socket.isSocket()).toBe(true);
+    expect(socket.mode & 0o777).toBe(0o600);
+
+    const answer = await askTokenOwner(profile, {
+      version: 1,
+      op: 'new',
+      name: 'bot',
+      hours: 1,
+      access: 'write',
+      canvases: [file],
+    });
+    // The app serves no MCP yet (B11): it names no URL.
+    expect(answer).toMatchObject({
+      ok: true,
+      owner: 'app',
+      op: 'new',
+      url: null,
+      canvases: [{ id: CANVAS, file }],
+    });
+    const token = answer?.ok === true && answer.op !== 'revoke' ? answer.token : '';
+    const kept = await readFile(path.join(profile, 'tokens.json'), 'utf8');
+    expect(kept).toContain(createHash('sha256').update(token).digest('hex'));
+    expect(kept).not.toContain(token);
+    expect(JSON.stringify(said)).not.toContain(token);
+    vi.restoreAllMocks();
+
+    expect(await main.request('close')).toEqual({ ok: true, value: null });
+    initialized = false;
+    expect(existsSync(at)).toBe(false);
+  });
+
+  it('answers the shipped command on a terminal: corrallm token new against the app’s core', async () => {
+    const entry = await start();
+    expect(await entry.init()).toEqual({ ok: true, value: null });
+    const { printed, exited } = children.terminal(
+      [
+        process.execPath,
+        BUNDLE,
+        'token',
+        'new',
+        '--profile',
+        profile,
+        '--canvas',
+        file,
+        '--name',
+        'bot',
+      ],
+      { ...process.env, CORRALLM_AGENT_PATHS: '{}' },
+    );
+    expect(await exited, printed()).toBe(0);
+    const token = /^ {2}([A-Za-z0-9_-]{43})$/m.exec(printed())?.[1] ?? '';
+    expect(printed().split(token)).toHaveLength(2);
+    expect(printed()).toContain('the corrallm app');
+    const kept = JSON.parse(await readFile(path.join(profile, 'tokens.json'), 'utf8')) as {
+      tokens: Record<string, { name: string; canvases: string[] }>;
+    };
+    expect(kept.tokens[createHash('sha256').update(token).digest('hex')]).toMatchObject({
+      name: 'bot',
+      canvases: [CANVAS],
+    });
+  }, 30_000);
 });

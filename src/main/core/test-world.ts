@@ -22,6 +22,11 @@ import { createCore } from './core';
 import type { Core } from './core';
 import { cursorOf } from './delivery/messages';
 import { keepCanvases, keepMessages } from './store/test-store';
+import { GitRunner } from './workspaces/git';
+import { Provisioner } from './workspaces/provision';
+import { WorkspaceSetups } from './workspaces/setup';
+import { WorkspaceStore } from './workspaces/store';
+import { git, gitEnvironment } from './workspaces/test-git';
 import { CALLERS, CANVAS, isLead, NO_DESKTOP, OTHER_CANVAS } from './test-registry';
 import type { OpFixture, OutOfReach } from './test-registry';
 
@@ -178,6 +183,22 @@ export async function startWorld(): Promise<{
   const profile = await mkdtemp(path.join(tmpdir(), 'corrallm-world-'));
   const project = path.join(profile, 'project');
   await mkdir(project);
+  // A repository with one commit and no files, so its worktrees' setup command can be kept for it.
+  const env = gitEnvironment(path.join(profile, 'home'));
+  git(project, env, 'init', '-q', '-b', 'main');
+  git(
+    project,
+    env,
+    '-c',
+    'user.name=Test',
+    '-c',
+    'user.email=test@example.invalid',
+    'commit',
+    '-q',
+    '--allow-empty',
+    '-m',
+    'first',
+  );
   const file = path.join(profile, 'world.corral');
   await writeFile(
     file,
@@ -283,6 +304,26 @@ export async function startWorld(): Promise<{
         },
         environment: () => Promise.resolve({}),
       },
+      // The worktrees' setup, as B9a X11b is to compose it: nothing provisions a worktree here.
+      setups: ({ store, processes, directories, profile: at, changed }) => {
+        const workspaces = new WorkspaceStore({ store });
+        const runner = new GitRunner({
+          environment: () => Promise.resolve(env),
+          processes,
+          hooks: path.join(at, 'workspaces', 'hooks'),
+        });
+        return new WorkspaceSetups({
+          workspaces,
+          provisioner: new Provisioner({ workspaces, git: runner, profile: WORLD_PROFILE }),
+          git: runner,
+          directories,
+          processes,
+          environment: () => Promise.resolve(env),
+          folder: path.join(at, 'workspaces', 'setup'),
+          profile: at,
+          changed,
+        });
+      },
     },
     NO_DESKTOP,
   );
@@ -373,6 +414,12 @@ const SHOW_REQUEST = '3c3d4e5f-6071-4829-9bac-1d2e3f4a5b02';
 
 /** A request id for each fixture of a canvas's lifetime that writes. */
 const lifetime = (n: number) => `3d4e5f60-7182-4a3b-8cad-2e3f4a5b6c${String(n).padStart(2, '0')}`;
+
+/** The world's profile id, which its worktrees' branches and folders would be named by. */
+const WORLD_PROFILE = '4e5f6071-8293-4a4b-9cbd-3f4a5b6c7d8e';
+/** A request id for each fixture of the worktrees' setup that writes. */
+const setupRequest = (n: number) =>
+  `4e5f6071-8293-4a4b-9cbd-3f4a5b6c7d${String(n).padStart(2, '0')}`;
 
 /** A target the lead's team holds (its helper, and its own group), and every outside token reaches. */
 const TARGETS = [
@@ -1277,6 +1324,32 @@ export const REAL_FIXTURES: Readonly<Record<OpName, OpFixture>> = {
     // The dialog is cancelled: the folder stays.
     valid: [{ canvas: CANVAS }],
     invalid: [{ canvas: 'nope' }, { canvas: CANVAS, path: '/tmp' }],
+  },
+  'project.clearSetupApproval': {
+    // Yours alone: nothing was allowed always for the world's repository, so nothing is cleared.
+    valid: [],
+    by: { you: [{ canvas: CANVAS, request: setupRequest(3) }] },
+    invalid: [{ canvas: 'nope' }, { canvas: CANVAS, command: 'make setup' }],
+  },
+  'project.setSetupCommand': {
+    // Yours alone: you set the world repository's setup command, then go back to the detected one.
+    valid: [],
+    by: {
+      you: [
+        { canvas: CANVAS, command: 'make setup', request: setupRequest(1) },
+        { canvas: CANVAS, command: null, request: setupRequest(2) },
+      ],
+    },
+    invalid: [
+      { canvas: CANVAS },
+      { canvas: CANVAS, command: '' },
+      { canvas: CANVAS, command: 'make\nsetup' },
+      { canvas: CANVAS, command: 'make \u202esetup' },
+      { canvas: CANVAS, command: 'x'.repeat(4097) },
+      { canvas: CANVAS, command: 'make setup', shell: 'bash' },
+      { canvas: CANVAS, command: 'make setup', folder: '/tmp' },
+      { canvas: 'nope', command: 'make setup' },
+    ],
   },
   wait: {
     valid: [{ timeoutSeconds: 0, after: START }, { timeoutSeconds: 0 }],

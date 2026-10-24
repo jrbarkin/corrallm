@@ -73,6 +73,18 @@ export interface TerminalUsage {
   usedUp?: number;
 }
 
+/** What its status line was given, as its CLI reads it (`statusLine`). */
+export interface StatusLineReading {
+  /** Its account's usage limits' windows, for main's readings, if it says any. */
+  usage: UsageWindows | undefined;
+  /**
+   * What in it only the CLI's work moves (its tokens, cost and the like), as text to compare;
+   * undefined if it says none. Its clock and limits are left out: a status line posted again on a
+   * timer, with the same progress, is no sign of activity.
+   */
+  progress: string | undefined;
+}
+
 /** What the session tells the user, in the CLI's own words. */
 export interface TerminalWords {
   /** Answers to prompts, modes and models are refused: they belong to its terminal. */
@@ -144,10 +156,10 @@ export interface TerminalCli<M extends SessionMode> {
   keystrokes(text: string): string[];
   /**
    * What its status line was given, posted to the hook server's /status path by a status line
-   * `prepare` set up, as usage windows, if it says any. The input is
+   * `prepare` set up: its usage windows and its progress, as far as it says. The input is
    * untrusted JSON: read, never acted on beyond.
    */
-  statusLine?(input: HookEvent): UsageWindows | undefined;
+  statusLine?(input: HookEvent): StatusLineReading;
   /**
    * Reads its account's usage limits apart from its terminal, when the session starts and after
    * each turn ends (before it ends one the CLI ended with an error without saying why, to tell

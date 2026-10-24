@@ -43,6 +43,8 @@ export interface SessionSpec<M extends SessionMode = PermissionMode> {
    * says which it is ('started', then 'mode' if the CLI says otherwise).
    */
   mode: M | null;
+  /** Trusted pre-launch default for a Terminal with no explicit mode, until a native hook reports. */
+  startupAsks?: boolean;
   /**
    * The reasoning effort to start with, where its model offers a choice (one it offers); null or
    * absent for the model's default.

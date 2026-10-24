@@ -14,6 +14,8 @@
     "api.canvas.saveAs",
     "api.canvas.close",
     "api.project.choose",
+    "api.project.setSetupCommand",
+    "api.project.clearSetupApproval",
     "api.canvas.list",
     "api.canvas.get",
     "api.canvas.rename",
@@ -197,6 +199,8 @@
     "canvas.open": "trust-gate",
     "canvas.saveAs": "trust-gate",
     "project.choose": "trust-gate",
+    "project.setSetupCommand": "trust-gate",
+    "project.clearSetupApproval": "permissions",
     "agent.setType": "permissions",
     "agent.setConnection": "permissions",
     "topics.subscribe": "transport",
@@ -217,7 +221,7 @@
   "schemas": {
     "topics.subscribe": {
       "input": "10579f0d8cce3ace",
-      "output": "46b6cfcf7645af6b"
+      "output": "ef23925375cab1ae"
     },
     "topics.unsubscribe": {
       "input": "10579f0d8cce3ace",
@@ -229,7 +233,7 @@
     },
     "catalog.get": {
       "input": "e5fa5cc18e054cdd",
-      "output": "a617933cd2efbe50"
+      "output": "e7ebb1fe5a12719e"
     },
     "catalog.installed": {
       "input": "e5fa5cc18e054cdd",
@@ -243,9 +247,17 @@
       "input": "c42bffd7c0a78bc0",
       "output": "48481aeb891f3b2d"
     },
+    "project.setSetupCommand": {
+      "input": "ccdee9f3032b4780",
+      "output": "cc83953dac5fd349"
+    },
+    "project.clearSetupApproval": {
+      "input": "f676d264f07b5166",
+      "output": "2129f9125212db6f"
+    },
     "canvas.create": {
       "input": "3394f69e468a0469",
-      "output": "e07c6cab9ac294a5"
+      "output": "6837192ee223cf50"
     },
     "canvas.open": {
       "input": "8ed9ce92c68e70c8",
@@ -253,7 +265,7 @@
     },
     "canvas.save": {
       "input": "f676d264f07b5166",
-      "output": "f21dcb9384665c5e"
+      "output": "dc2cdf0a6f25f4a5"
     },
     "canvas.saveAs": {
       "input": "f676d264f07b5166",
@@ -261,7 +273,7 @@
     },
     "canvas.close": {
       "input": "1a908234579fefb6",
-      "output": "f56df0cf0fad9a55"
+      "output": "c7d3b8a6259feb00"
     },
     "project.choose": {
       "input": "f676d264f07b5166",
@@ -297,7 +309,7 @@
     },
     "canvas.delete": {
       "input": "13089a4ee94a5b15",
-      "output": "eacc78e6efdb407f"
+      "output": "4e5ad502b4237e86"
     },
     "canvas.link": {
       "input": "621da187728c140f",
@@ -325,7 +337,7 @@
     },
     "canvas.batch": {
       "input": "1257d2b1e10134be",
-      "output": "916825fb55789244"
+      "output": "d8db8b91eea3da57"
     },
     "agent.setType": {
       "input": "ae31f270ae564f34",
@@ -365,11 +377,11 @@
     },
     "status": {
       "input": "41356bc15da6df1b",
-      "output": "02d9acf9230d7a3c"
+      "output": "cb91151f949f1731"
     },
     "needs": {
       "input": "41356bc15da6df1b",
-      "output": "ef833124be616bd3"
+      "output": "90b6a28175b9f458"
     },
     "messages": {
       "input": "aa02e84f7d3e9a8e",
@@ -384,8 +396,8 @@
       "output": "e407d62a0d627a4d"
     },
     "reply": {
-      "input": "88b277a918f436bd",
-      "output": "632503dbfed7727c"
+      "input": "21b2d898ee938c3a",
+      "output": "3e0493629d75ee20"
     },
     "withdraw": {
       "input": "c0fce69c0611e40f",
@@ -393,7 +405,7 @@
     },
     "session.get": {
       "input": "c804536f3eb2a39b",
-      "output": "db44714473c31405"
+      "output": "684cb14ca6712f1c"
     },
     "session.transcript": {
       "input": "b0a50f8eb22508f9",

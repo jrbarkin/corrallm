@@ -22,7 +22,7 @@ import { MAX_FORM_FIELDS, MAX_QUESTIONS } from '../../session';
 import { b11RunOps } from './run';
 import { b11SessionOps } from './session';
 import { b11ConversationOps, ReplyAnswer } from './conversation';
-import { Images } from './b11-data';
+import { Images, SessionSummarySchema } from './b11-data';
 
 const canvas = '00000000-0000-4000-8000-000000000001';
 const request = '00000000-0000-4000-8000-000000000002';
@@ -76,8 +76,20 @@ describe('prepared operation schemas, not registrations', () => {
     expect(b11RunOps['run.get'].output.parse(runView({ running: false, agents: {} }))).toEqual({
       running: false,
       agents: {},
+      groups: {},
       notices: [],
     });
+  });
+
+  it('bounds session summary replies by UTF-8 bytes and marks only actual cuts', () => {
+    const summary = sessionView(AgentId.parse(agent), 'adapter.terminal', NEW_SESSION).summary;
+    for (const reply of ['x'.repeat(4096), '€'.repeat(1365)])
+      expect(SessionSummarySchema.safeParse({ ...summary, reply, replyCut: true }).success).toBe(
+        true,
+      );
+    for (const reply of ['x'.repeat(4097), '€'.repeat(1366)])
+      expect(SessionSummarySchema.safeParse({ ...summary, reply }).success).toBe(false);
+    expect(SessionSummarySchema.safeParse({ ...summary, replyCut: false }).success).toBe(false);
   });
 
   it('envelopes a standalone definition without registering a name', () => {

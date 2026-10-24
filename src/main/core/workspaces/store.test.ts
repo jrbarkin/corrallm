@@ -177,6 +177,10 @@ describe('WorkspaceStore', () => {
       { id: W2, state: 'creating' },
     ]);
     expect(workspaces.worktreesOf(OTHER).map(({ id }) => id)).toEqual([W3]);
+    // Every canvas's, in the states asked for: what a restart checks.
+    expect(workspaces.worktreesIn(['creating']).map(({ id }) => id)).toEqual([W2, W3]);
+    expect(workspaces.worktreesIn(['retained', 'ready']).map(({ id }) => id)).toEqual([W1]);
+    expect(workspaces.worktreesIn([])).toEqual([]);
   });
 
   it('keeps a lone agent’s workspace as its group’s once it heads one, and back, while it is in use', async () => {
@@ -553,6 +557,20 @@ describe('WorkspaceStore', () => {
     expect(await workspaces.write((w) => w.interruptSetups())).toEqual([W1]);
     expect(workspaces.setup(W1)).toMatchObject({ state: 'interrupted', approvedBy: 'you' });
     expect(await workspaces.write((w) => w.interruptSetups())).toEqual([]);
+    // One the core ended as it closed is interrupted alone, at its generation, while it runs.
+    await workspaces.write((w) =>
+      w.startSetup(W1, { generation: 2, by: 'you', logKey: 'setup-4' }),
+    );
+    await expect(workspaces.write((w) => w.interruptSetup(W1, 1))).rejects.toMatchObject({
+      code: 'stale',
+    });
+    expect(await workspaces.write((w) => w.interruptSetup(W1, 2))).toMatchObject({
+      state: 'interrupted',
+      logKey: 'setup-4',
+    });
+    await expect(workspaces.write((w) => w.interruptSetup(W1, 2))).rejects.toMatchObject({
+      code: 'stale',
+    });
     await expect(
       workspaces.write((w) =>
         w.startSetup(W1, { generation: 2, by: 'not a party' as 'you', logKey: 'x' }),
@@ -596,7 +614,21 @@ describe('WorkspaceStore', () => {
     ).toMatchObject({ command: null, shellKind: null, alwaysSpecHash: null });
     await workspaces.write((w) => w.setAlways(REPOSITORY, null));
     expect(workspaces.projectSetup(REPOSITORY)?.alwaysSpecHash).toBeNull();
-    for (const command of ['', ' ', 'make\nsetup', 'make\u0007', 'x'.repeat(4097)]) {
+    // Nothing that would show otherwise than it runs: no control or format character (a
+    // bidirectional override, a zero-width space, C1's), no line or paragraph separator.
+    for (const command of [
+      '',
+      ' ',
+      'make\nsetup',
+      'make\u0007',
+      'x'.repeat(4097),
+      'é'.repeat(2049),
+      'make setup\u202e#',
+      'make\u200bsetup',
+      'make\u2028setup',
+      'make\u0085setup',
+      'make\ufeff',
+    ]) {
       await expect(
         workspaces.write((w) => w.setProjectCommand(REPOSITORY, command, 'posix')),
         JSON.stringify(command),

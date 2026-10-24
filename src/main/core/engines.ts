@@ -24,6 +24,7 @@ import { installedClis } from '../sessions/installed';
 import type { SessionManager } from '../sessions/manager';
 import type { UsageReadings } from '../usage';
 import type { Documents } from './canvas/documents';
+import { recoverDecisions } from './decisions';
 import { Delivery } from './delivery/delivery';
 import { capBody, MessageStore, sentByRun } from './delivery/messages';
 import type { MessageTable } from './delivery/messages';
@@ -146,6 +147,11 @@ export interface OpenCanvas {
    * in restored.
    */
   warnings: readonly string[];
+  /**
+   * The generation of an agent's running session (the session manager's), which its prompts'
+   * Needs ids carry: none while none runs.
+   */
+  sessionGeneration?: (agent: string) => number | undefined;
 }
 
 /** How a canvas opens. */
@@ -164,6 +170,8 @@ export interface Watcher {
   needs?(canvas: CanvasId): void;
   /** A canvas opened. */
   opened?(canvas: CanvasId): void;
+  /** A canvas it ran closed (canvas.close, or the core closing): it runs no more here. */
+  closed?(canvas: CanvasId): void;
 }
 
 /** A run's attempt an Interrupt and resend reserved: its task link, and the id its turn names. */
@@ -846,7 +854,11 @@ export class Engines {
     try {
       await this.#stop(running);
     } finally {
-      await this.#deps.sessions.closeCanvas(canvas);
+      try {
+        await this.#deps.sessions.closeCanvas(canvas);
+      } finally {
+        for (const watcher of this.#watchers) watcher.closed?.(canvas);
+      }
     }
   }
 
@@ -875,6 +887,7 @@ export class Engines {
     await Promise.allSettled(this.#closing.values());
     const running = await Promise.allSettled(this.#running.values());
     this.#running.clear();
+    const closing = [...this.#canvases.keys()];
     this.#canvases.clear();
     const stopped = await Promise.allSettled(
       running.flatMap((opened) =>
@@ -885,6 +898,7 @@ export class Engines {
     await this.#deps.sessions.closeEverything();
     await Promise.all(this.#events.values());
     await Promise.all(mail.map(({ messages }) => messages.durable()));
+    for (const canvas of closing) for (const watcher of this.#watchers) watcher.closed?.(canvas);
     const failed = stopped.flatMap((result): unknown[] =>
       result.status === 'rejected' ? [result.reason] : [],
     );
@@ -958,6 +972,7 @@ export class Engines {
       looking: false,
     } as Running;
     running.reads = new ReadPositions(await journal.reads(canvas));
+    running.sessionGeneration = (agent) => this.#deps.sessions.generationOf(canvas, agent);
     running.journal = () => this.#write(running);
     // What its messages write, they write with its run, if that changed since it was last on disk.
     messages.writeWith(() => this.#runWithin(running, false));
@@ -1060,6 +1075,12 @@ export class Engines {
       mail = (async () => {
         const messages = new MessageStore(canvas, this.#deps.messages, () => Date.now());
         await messages.load();
+        // A decision a crash cut off as it was being made is unresolved, never made again.
+        if (recoverDecisions(messages)) {
+          await messages.durable().catch((error: unknown) => {
+            console.error('Could not settle the answers corrallm stopped making:', error);
+          });
+        }
         return {
           messages,
           notes: new WithdrawalNotes(messages, this.#deps.engineCatalog.shellPrefixes),
@@ -1274,6 +1295,7 @@ export function needsInput(open: OpenCanvas, locale: string | undefined): NeedsI
     stuck: delivery.stuck(),
     unasking: delivery.unasking(),
     limited: delivery.limited(),
+    ...(open.sessionGeneration === undefined ? {} : { sessionGenerations: open.sessionGeneration }),
     ...(locale === undefined ? {} : { locale }),
   };
 }

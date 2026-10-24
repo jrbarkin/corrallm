@@ -56,6 +56,26 @@ export const spawn = ((
   return child;
 }) as typeof spawnProcess;
 
+/**
+ * spawn, for a command that must never run unowned (a worktree's setup): refused without an owner,
+ * and owned until its output closes too, since its leader can exit before descendants let go of it.
+ */
+export function spawnOwned(
+  command: string,
+  args: readonly string[],
+  options: SpawnOptions,
+): ChildProcess {
+  const processes = owner.getStore();
+  if (!processes) throw new Error(`${command} isn’t run: no process owner would record it.`);
+  processes.beforeSpawn();
+  const child = spawnProcess(command, args, {
+    ...options,
+    detached: process.platform !== 'win32',
+  });
+  processes.node(child, 'close');
+  return child;
+}
+
 /** The UTF-8 execFile helpers used by the core, with the same ownership as streamed CLIs. */
 export function execFile(
   command: string,

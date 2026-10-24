@@ -7,6 +7,7 @@ import { MAX_NODE_ID } from '../../../shared/model/canvas';
 import { PARTY_PATTERN } from '../../../shared/model/messages';
 import type { PartyId } from '../../../shared/model/messages';
 import type { WorkspaceOwnerKey } from '../../../shared/model/workspaces';
+import { MAX_SETUP_COMMAND_BYTES, UNSEEN_IN_COMMAND } from '../../../shared/model/worktree-setup';
 import type { Database } from '../store/store';
 
 /*
@@ -98,7 +99,7 @@ const SAYS_WHY: readonly WorktreeState[] = ['error', 'missing'];
 /** The longest path, identity, command and payload it keeps. */
 const MAX_PATH = 4096;
 const MAX_IDENTITY = 1024;
-const MAX_COMMAND_BYTES = 4096;
+const MAX_COMMAND_BYTES = MAX_SETUP_COMMAND_BYTES;
 const MAX_PAYLOAD_BYTES = 64 * 1024;
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -390,6 +391,19 @@ export class WorkspaceStore {
     return this.#store
       .prepare('SELECT * FROM worktree WHERE canvas_id = ? ORDER BY created_at, id')
       .all(canvas)
+      .map(worktreeOf);
+  }
+
+  /** Every canvas's workspaces in one of `states`, as they were made: what a restart checks. */
+  worktreesIn(states: readonly WorktreeState[]): WorktreeRecord[] {
+    const asked = states.filter((state) => STATES.includes(state));
+    if (asked.length === 0) return [];
+    return this.#store
+      .prepare(
+        `SELECT * FROM worktree WHERE state IN (${asked.map(() => '?').join(', ')})
+         ORDER BY created_at, id`,
+      )
+      .all(...asked)
       .map(worktreeOf);
   }
 
@@ -902,6 +916,25 @@ export class WorkspaceStore {
   }
 
   /**
+   * Within a write: the workspace's setup at `generation` that was running is interrupted (the core
+   * ended it as it closed, so whether it did what it does is unknown): never run again by itself.
+   */
+  interruptSetup(workspace: string, generation: number): SetupRecord {
+    const kept = this.setup(workspace);
+    if (kept === undefined) throw notFound('setup', workspace);
+    if (kept.generation !== generation || kept.state !== 'running') {
+      throw new WorkspaceStoreError(
+        'stale',
+        `The workspace ${workspace}’s setup at ${String(generation)} isn’t running.`,
+      );
+    }
+    this.#store
+      .prepare("UPDATE worktree_setup SET state = 'interrupted' WHERE workspace_id = ?")
+      .run(workspace);
+    return { ...kept, state: 'interrupted' };
+  }
+
+  /**
    * Within a write, as the core starts: every setup that was running is interrupted, since whether
    * it did what it does is unknown, and so is never run again by itself. Returns their workspaces.
    */
@@ -1102,13 +1135,17 @@ function intentHash(payload: Json): string {
     .digest('hex');
 }
 
-/** A setup command you set: one line of at most MAX_COMMAND_BYTES, no control character. */
+/**
+ * A setup command you set: one line of at most MAX_COMMAND_BYTES, with no control or format
+ * character and no line or paragraph separator (UNSEEN_IN_COMMAND), so what is shown is what runs.
+ */
 function checkCommand(value: unknown): asserts value is string {
   if (
     typeof value !== 'string' ||
     value.trim() === '' ||
     Buffer.byteLength(value, 'utf8') > MAX_COMMAND_BYTES ||
-    CONTROL.test(value)
+    CONTROL.test(value) ||
+    UNSEEN_IN_COMMAND.test(value)
   ) {
     throw invalid(
       'A setup command is one line of text, with no control characters, at most 4 KiB.',

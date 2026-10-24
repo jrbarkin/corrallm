@@ -9,7 +9,12 @@ import path from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { statusLineSettings, statusLineUsage, userStatusLine } from './statusline';
+import {
+  statusLineProgress,
+  statusLineSettings,
+  statusLineUsage,
+  userStatusLine,
+} from './statusline';
 import type { StatusLine } from './statusline';
 
 const NOW = Date.UTC(2026, 9, 12, 12, 0);
@@ -72,6 +77,58 @@ describe('statusLineUsage', () => {
       ),
     ).toEqual({ fiveHour: { usedPercent: 5, resetsAt: null } });
   });
+});
+
+describe('statusLineProgress', () => {
+  /** As 2.1.310 gives it: its clock, limits, vim mode and the like beside its work. */
+  const input = {
+    ...INPUT,
+    cost: {
+      total_cost_usd: 0.01234,
+      total_duration_ms: 45_000,
+      total_api_duration_ms: 2300,
+      total_lines_added: 156,
+      total_lines_removed: 23,
+    },
+    context_window: {
+      total_input_tokens: 15_234,
+      total_output_tokens: 4521,
+      context_window_size: 200_000,
+      used_percentage: 8,
+    },
+    vim: { mode: 'INSERT' },
+  };
+
+  it('is the same for a timed refresh: its clock, limits and the rest left out', () => {
+    expect(
+      statusLineProgress({
+        ...input,
+        cost: { ...input.cost, total_duration_ms: 46_000 },
+        rate_limits: { five_hour: { used_percentage: 43, resets_at: NOW / 1000 + 3599 } },
+        vim: { mode: 'NORMAL' },
+      }),
+    ).toBe(statusLineProgress(input));
+  });
+
+  it.each([
+    ['cost', 'total_cost_usd', 0.02],
+    ['cost', 'total_api_duration_ms', 2400],
+    ['cost', 'total_lines_added', 157],
+    ['cost', 'total_lines_removed', 24],
+    ['context_window', 'total_input_tokens', 16_000],
+    ['context_window', 'total_output_tokens', 4600],
+  ] as const)('moves with its work (%s.%s)', (group, key, value) => {
+    const progress = statusLineProgress({ ...input, [group]: { ...input[group], [key]: value } });
+    expect(progress).toBeDefined();
+    expect(progress).not.toBe(statusLineProgress(input));
+  });
+
+  it.each([[{}], [{ cost: { total_duration_ms: 1000 } }], [{ cost: { total_cost_usd: '0.1' } }]])(
+    'says nothing of %j',
+    (fields) => {
+      expect(statusLineProgress(fields)).toBeUndefined();
+    },
+  );
 });
 
 let dir: string;

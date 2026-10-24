@@ -203,7 +203,11 @@ export const conversationOps = {
       'file changed again since (then it is superseded by a review of what is there now, which ' +
       'this names as `raised`), and Keep keeps the canvas as corrallm has it, for its next save ' +
       'to write over the file. A stalled session offers Interrupt or Interrupt and resend: only the user ' +
-      'chooses them, and a resend starts a new attempt only after that turn ends cancelled. Returns how it was settled.',
+      'chooses them, and a resend starts a new attempt only after that turn ends cancelled. A ' +
+      'worktree’s setup card (only the user’s) offers Run, Always, Skip, Stop or Run again: Run ' +
+      'returns once it has started, not when it is done. A workspace change (only the user’s) ' +
+      'offers Switch, which moves its agents to the worktree it names, keeping the ones they ' +
+      'leave. Returns how it was settled.',
     input: z.strictObject({
       canvas,
       to: NeedId,
@@ -215,7 +219,20 @@ export const conversationOps = {
         .uuid()
         .optional()
         .meta({ description: 'The calling window’s replacement canvas, when Allow moved it.' }),
-      outcome: z.enum(['allowed', 'refused', 'stale', 'applied', 'kept', 'superseded']).optional(),
+      outcome: z
+        .enum([
+          'allowed',
+          'refused',
+          'stale',
+          'applied',
+          'kept',
+          'superseded',
+          'started',
+          'skipped',
+          'stopped',
+          'completed',
+        ])
+        .optional(),
       raised: NeedId.optional(),
     }),
   }),
@@ -324,6 +341,7 @@ export const b11ConversationOps = {
             'answered',
             'started',
             'skipped',
+            'stopped',
             'completed',
             'retained',
           ])

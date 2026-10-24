@@ -121,8 +121,8 @@ const windowsCertificate =
 // installer still honors. The desktop entry opens the app, not the command linked in /usr/bin.
 const rpmOptions: MakerRpmConfigOptions & { specTemplate: string; desktopTemplate: string } = {
   categories: ['Development'],
-  // Electron links libasound; core.lock and process ownership identify processes with ps.
-  requires: ['alsa-lib', 'procps-ng'],
+  // Electron links libasound. Linux process identity reads /proc, not ps.
+  requires: ['alsa-lib'],
   bin: LINUX_CLI_BIN,
   desktopTemplate: path.join(projectDir, 'build/corrallm.desktop.ejs'),
   specTemplate: path.join(projectDir, 'build/rpm.spec.ejs'),
@@ -215,8 +215,8 @@ const config = {
     new MakerDeb({
       options: {
         categories: ['Development'],
-        // The installer only recommends audio; ps is needed for core.lock and owned processes.
-        depends: ['libasound2t64 | libasound2', 'procps'],
+        // The installer only recommends audio, which Electron links.
+        depends: ['libasound2t64 | libasound2'],
         bin: LINUX_CLI_BIN,
         desktopTemplate: path.join(projectDir, 'build/corrallm.desktop.ejs'),
       },

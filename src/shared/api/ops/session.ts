@@ -179,7 +179,7 @@ export const sessionOps = {
     summary:
       'An agent’s session as it is now: whether it works, waits for the user or is idle, what ' +
       'is queued and asked, the model, mode and effort it runs, what it runs in the background, ' +
-      'what it has used, and what it replied last.',
+      'what it has used, and up to 4 KiB of its last reply (replyCut says more is in the transcript).',
     input: z.strictObject({ canvas, agent: AgentId }),
     output: SessionSummarySchema,
   }),

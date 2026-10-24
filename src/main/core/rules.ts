@@ -88,12 +88,23 @@ export function ruleChecks(
       reply: ({ canvas, to, answer }, { caller }) => {
         const item = canvas === undefined ? undefined : needOf(canvas as string as CanvasId, to);
         if (item === undefined) return undefined;
+        // R6 first: what waits on an agent is never that agent's to answer, whoever `by` names.
+        if (
+          caller.kind === 'agent' &&
+          (caller.canvas as string) === (canvas as string | undefined) &&
+          item.agent === caller.agent
+        ) {
+          return { refuse: `An agent never answers what waits on itself: ${item.title}.` };
+        }
         if (!item.by.includes(partyIdOf(caller))) {
           return {
             refuse: `Only ${andList(item.by.map((party) => partyText([], party)))} may answer this: ${item.title}.`,
           };
         }
-        const choice = item.choices.find(({ value }) => value === answer.choice);
+        // A typed answer (B11 C7's prepared reply) picks a choice too: a permission's, say.
+        const typed = answer as { choice?: string; permission?: string };
+        const chosen = typed.choice ?? typed.permission;
+        const choice = item.choices.find(({ value }) => value === chosen);
         return choice?.humanOnly === undefined
           ? undefined
           : { refuse: `Only the user may choose ${choice.label}: ${choice.humanOnly}` };

@@ -6,14 +6,17 @@
 
 declare const trusted: unique symbol;
 /**
- * A path the user picked in one of the app's dialogs, or one the core wrote itself and read back: the
- * only paths a canvas is opened from or saved to, and the only project folders agents work in.
+ * A path the user picked in one of the app's dialogs, one the core wrote itself and read back, or a
+ * workspace's checkout the core made of a picked repository, verified: the only paths a canvas is
+ * opened from or saved to, and the only folders agents work in.
  */
 export type TrustedPath = string & { readonly [trusted]: true };
 
 /**
  * Brands a path as trusted. Only its mint sites call it: the host’s dialog answers (core/host/app.ts),
- * and the stores reading back paths they wrote (memory.ts, run-journal.ts). Never a command line.
+ * the stores reading back paths they wrote (memory.ts, run-journal.ts), and a workspace's checkout
+ * once verified as the one the core made, at every use (core/workspaces/checkout.ts). Never a
+ * command line.
  */
 export function mintTrustedPath(path: string): TrustedPath {
   return path as TrustedPath;

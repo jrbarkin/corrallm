@@ -71,12 +71,14 @@ function manager(
   conversations: SessionManagerDeps['conversations'] = {
     'claude-code': { list: listKept, before, fork },
   },
+  options?: SessionManagerDeps['options'],
 ) {
   return new SessionManager({
     catalog: CATALOG,
     connectors: { 'claude-code.sdk': fake, 'claude-code.terminal': terminal, ...connectors },
     environment: () => environment(),
     conversations,
+    ...(options === undefined ? {} : { options }),
     adapterOf: (_canvas, agent) => Promise.resolve(adapters.get(agent) ?? 'claude-code'),
     directories: directories(),
     memory,
@@ -142,6 +144,74 @@ afterEach(async () => {
 });
 
 describe('SessionManager', () => {
+  it.each([true, false, undefined])(
+    'captures the trusted default at each Terminal launch (asks: %s)',
+    async (asks) => {
+      const read = vi.fn(() =>
+        Promise.resolve({
+          models: [],
+          defaults: {
+            model: null,
+            mode: null,
+            effort: null,
+            ...(asks === undefined ? {} : { asks }),
+          },
+        }),
+      );
+      const sessions = manager({}, undefined, { 'claude-code': read });
+      const canvas = shownCanvas();
+      try {
+        await sessions.start(canvas, 'a', { ...OPTIONS, connection: 'claude-code.terminal' });
+        expect(terminal.started[0]).toMatchObject({ cwd: '/work/app', mode: null });
+        if (asks === undefined) expect(terminal.started[0]).not.toHaveProperty('startupAsks');
+        else expect(terminal.started[0]).toHaveProperty('startupAsks', asks);
+        expect(read).toHaveBeenCalledWith({ cwd: '/work/app', env: { PATH: '/usr/bin' } });
+        await sessions.closeEverything();
+        await sessions.start(canvas, 'a', { ...OPTIONS, connection: 'claude-code.terminal' });
+        expect(read).toHaveBeenCalledTimes(2);
+      } finally {
+        await sessions.closeEverything();
+      }
+    },
+  );
+
+  it('keeps an explicit Terminal start mode without reading a default', async () => {
+    const read = vi.fn(() => Promise.reject(new Error('not read')));
+    const sessions = manager({}, undefined, { 'claude-code': read });
+    try {
+      await sessions.start(shownCanvas(), 'a', {
+        ...OPTIONS,
+        connection: 'claude-code.terminal',
+        mode: 'manual',
+      });
+      expect(read).not.toHaveBeenCalled();
+      expect(terminal.started[0]).toMatchObject({ mode: 'manual' });
+      expect(terminal.started[0]).not.toHaveProperty('startupAsks');
+    } finally {
+      await sessions.closeEverything();
+    }
+  });
+
+  it.each(['rejects', 'throws'])(
+    'starts a Terminal with unknown permissions when its default reader %s',
+    async (kind) => {
+      const read = () => {
+        if (kind === 'throws') throw new Error('unreadable');
+        return Promise.reject(new Error('unreadable'));
+      };
+      const sessions = manager({}, undefined, { 'claude-code': read });
+      try {
+        await sessions.start(shownCanvas(), 'a', {
+          ...OPTIONS,
+          connection: 'claude-code.terminal',
+        });
+        expect(terminal.started[0]).not.toHaveProperty('startupAsks');
+      } finally {
+        await sessions.closeEverything();
+      }
+    },
+  );
+
   it('owns a launch while its asynchronous directory lookup is pending, so close waits for it', async () => {
     const sessions = manager();
     const canvas = shownCanvas();

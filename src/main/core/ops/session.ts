@@ -1,10 +1,8 @@
 import { DEFAULT_PAGE } from '../../../shared/api/limits';
 import type { ResultOf } from '../../../shared/api/registry';
-import { turnReply } from '../../../shared/model/session';
-import type { Entry } from '../../../shared/model/session';
 import { OpFailure } from '../call';
 import { agentOf, bytesOf, openCanvas, pageOf } from './open';
-import { promptsOf } from './conversation';
+import { sessionSummary, transcriptOf } from './views';
 import type { Implementations, OpServices } from '.';
 
 type TranscriptEntry = ResultOf<'session.transcript'>['entries'][number];
@@ -14,45 +12,16 @@ export function sessionOps({
   engines,
 }: OpServices): Pick<Implementations, 'session.get' | 'session.transcript' | 'session.interrupt'> {
   return {
-    'session.get': ({ canvas, agent }) => {
-      const open = openCanvas(engines, canvas);
-      const node = agentOf(open, agent);
-      const { engine } = open;
-      const session = engine.sessions.of(agent);
-      const lastTurn = session.entries.findLast((entry) => entry.kind === 'user');
-      return {
-        agent,
-        connection: engine.catalog.connectionOf(node.data),
-        status: session.status,
-        paused: engine.run.snapshot().agents[agent]?.paused === true,
-        queued: session.queued.length,
-        prompts: promptsOf(open, agent),
-        ...(session.unheard === undefined ? {} : { unheard: session.unheard }),
-        tasks: [...(session.tasks ?? [])],
-        commands: [...(session.commands ?? [])],
-        mode: session.mode,
-        model: session.model,
-        effort: session.effort ?? null,
-        models: [...(session.models ?? [])],
-        ...(session.modes === undefined ? {} : { modes: [...session.modes] }),
-        ...(session.running === undefined ? {} : { running: session.running }),
-        ...(session.usage === undefined ? {} : { usage: session.usage }),
-        reply: lastTurn === undefined ? null : turnReply(session, lastTurn.id) || null,
-      };
-    },
+    'session.get': ({ canvas, agent }) => sessionSummary(openCanvas(engines, canvas), agent),
     'session.transcript': ({ canvas, agent, after, limit = DEFAULT_PAGE }, { caller }) => {
       const open = openCanvas(engines, canvas);
-      agentOf(open, agent);
-      const { entries } = open.engine.sessions.of(agent);
+      // The transcript as the caller sees it, whole (as its topic gives it), then paged.
+      const { entries, shown } = transcriptOf(open, agent, caller);
       const start = after === undefined ? 0 : entries.findIndex((entry) => entry.id === after) + 1;
       if (start === 0 && after !== undefined) {
         throw new OpFailure('not-found', 'That entry isn’t in its transcript (any more).');
       }
-      const yours = caller.kind === 'human';
-      const page = pageOf(
-        entries.slice(start, start + limit).map((entry) => shown(entry, yours)),
-        fitted,
-      );
+      const page = pageOf(shown.slice(start, start + limit) as TranscriptEntry[], fitted);
       return { entries: page, next: page.at(-1)?.id ?? after ?? null };
     },
     'session.interrupt': ({ canvas, agent }) => {
@@ -62,21 +31,6 @@ export function sessionOps({
       return {};
     },
   };
-}
-
-/**
- * An entry as a transcript gives it: a message's pasted images only counted; and an MCP server's
- * link (often a sign-in) left out for anyone but you (`yours`), as Needs leaves out its form: a
- * link form is yours alone (Core Server R3).
- */
-function shown(entry: Entry, yours: boolean): TranscriptEntry {
-  if (entry.kind !== 'user') {
-    const seen: Entry = { ...entry };
-    if (seen.kind === 'elicitation' && !yours) delete seen.url;
-    return seen as TranscriptEntry;
-  }
-  const { images, ...rest } = entry;
-  return images === undefined || images.length === 0 ? rest : { ...rest, images: images.length };
 }
 
 /**

@@ -9,6 +9,7 @@ import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import { afterEach, beforeEach, describe, expect, expectTypeOf, it } from 'vitest';
 import { z } from 'zod';
 
+import { TOKEN_REPLACED } from '../../shared/api/errors';
 import { MAX_REQUEST_BYTES } from '../../shared/api/limits';
 import { opsFor, toolName } from '../../shared/api/registry';
 import SNAPSHOT from '../../shared/api/surface.snap.json';
@@ -18,6 +19,7 @@ import type { Dispatcher } from '../core/call';
 import type { Caller, TokenCaller } from '../core/caller';
 import { createCore } from '../core/core';
 import type { Core } from '../core/core';
+import { TokenStore } from '../core/tokens';
 import {
   CALLERS,
   CANVAS,
@@ -212,6 +214,93 @@ describe('the MCP server’s request checks', () => {
     server = await startApiServer({ core, clientOf: () => you, port: 0 });
     expect((await post(LIST)).status).toBe(401);
   });
+
+  it('tells a token its store made that no longer works why it is refused, and a stranger nothing', async () => {
+    await server.close();
+    server = await startApiServer({
+      core,
+      clientOf,
+      stale: (token) => token === 'renewed-away',
+      port: 0,
+    });
+    // Refused before any op runs, as any token it doesn't know is (a client's helper reads its
+    // header again on a 401), with the sentence a call still going ends with.
+    const replaced = await post(LIST, { ...HEADERS, Authorization: 'Bearer renewed-away' });
+    expect(replaced.status).toBe(401);
+    expect(replaced.body).toBe(jsonRpcError(-32001, TOKEN_REPLACED));
+    const unknown = await post(LIST, { ...HEADERS, Authorization: 'Bearer never-made' });
+    expect(unknown).toEqual({ status: 401, body: '' });
+    expect(Object.values(registry.calls).flat()).toEqual([]);
+  });
+
+  it.each(['revoked', 'replaced', 'expired'])(
+    'refuses a token %s while its request body was still arriving, before dispatch',
+    async (why) => {
+      await server.close();
+      const dir = await mkdtemp(path.join(tmpdir(), 'corrallm-mcp-revoked-'));
+      let now = 1000;
+      const tokens = new TokenStore(path.join(dir, 'tokens.json'), () => now);
+      const token = await tokens.create({ name: 'bot', canvases: [CANVAS], access: 'write' });
+      const authenticated = Promise.withResolvers<undefined>();
+      server = await startApiServer({
+        core,
+        port: 0,
+        clientOf: (value) => {
+          authenticated.resolve(undefined);
+          return tokens.clientOf(value);
+        },
+        stale: (value) => tokens.stale(value),
+      });
+      const body = JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'tools/call',
+        params: { name: toolName('test.read'), arguments: {} },
+      });
+      const completed = Promise.withResolvers<{ status: number; body: string }>();
+      const sent = request(
+        server.url,
+        {
+          method: 'POST',
+          agent: false,
+          headers: {
+            ...HEADERS,
+            Authorization: `Bearer ${token}`,
+            'Content-Length': String(Buffer.byteLength(body)),
+          },
+        },
+        (response) => {
+          let text = '';
+          response.setEncoding('utf8');
+          response.on('data', (chunk: string) => {
+            text += chunk;
+          });
+          response.on('end', () => {
+            completed.resolve({ status: response.statusCode ?? 0, body: text });
+          });
+          response.on('error', completed.reject);
+        },
+      );
+      sent.on('error', completed.reject);
+      try {
+        sent.flushHeaders();
+        await authenticated.promise;
+        if (why === 'revoked') await tokens.revoke('bot');
+        else if (why === 'replaced') await tokens.renew('bot');
+        else now += 60 * 60 * 1000;
+        sent.end(body);
+        expect(await completed.promise).toEqual({
+          status: 401,
+          body: jsonRpcError(-32001, TOKEN_REPLACED),
+        });
+        expect(Object.values(registry.calls).flat()).toEqual([]);
+      } finally {
+        sent.destroy();
+        await tokens.flush();
+        await rm(dir, { recursive: true, force: true });
+      }
+    },
+  );
 
   it('answers a body that is not JSON with a parse error', async () => {
     expect(await post('not JSON')).toEqual({

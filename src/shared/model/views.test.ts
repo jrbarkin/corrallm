@@ -11,6 +11,43 @@ import { agentStatus, queueControlText, taskState } from './run-display';
 const agent = AgentId.parse('a');
 
 describe('read-only runtime projections', () => {
+  it('caps a summary reply at 4 KiB of UTF-8 without cutting a character or its transcript', () => {
+    const text = `${'€'.repeat(1365)}🙂tail`;
+    const view = sessionView(agent, 'test.connection', {
+      ...NEW_SESSION,
+      entries: [
+        { id: 'u', kind: 'user', text: 'Hi' },
+        { id: 't', kind: 'text', text },
+      ],
+    });
+    expect(view.summary.reply).toBe('€'.repeat(1365));
+    expect(view.summary).toHaveProperty('replyCut', true);
+    expect(view.entries.t).toHaveProperty('text', text);
+    const short = sessionView(agent, 'test.connection', {
+      ...NEW_SESSION,
+      entries: [
+        { id: 'u', kind: 'user', text: 'Hi' },
+        { id: 't', kind: 'text', text: 'x'.repeat(4096) },
+      ],
+    });
+    expect(short.summary.reply).toHaveLength(4096);
+    expect(short.summary).not.toHaveProperty('replyCut');
+  });
+
+  it('puts pause causes in keyed agent and group entries, keeping them out of the run summary', () => {
+    const view = runView({
+      running: true,
+      individualPauses: [{ id: 'a', by: 'you' }],
+      groupPauses: [{ id: '__proto__', by: 'outside:lead' }],
+      agents: { a: { status: 'waiting', paused: true, outcomes: {} } },
+    });
+    expect(view).not.toHaveProperty('individualPauses');
+    expect(view).not.toHaveProperty('groupPauses');
+    expect(view.agents[agent]).toHaveProperty('pauses', ['you']);
+    expect(Object.hasOwn(view.groups, '__proto__')).toBe(true);
+    expect(view.groups.__proto__).toEqual({ pauses: ['outside:lead'] });
+  });
+
   it('shares unchanged agents and nested attempts without exposing mutable engine data', () => {
     const run: Run = {
       running: true,

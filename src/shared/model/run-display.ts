@@ -1,6 +1,7 @@
+import type { AgentId } from '../api/ids';
 import type { NodeLike } from './canvas';
 import { groupMembers } from './queries';
-import type { RunSnapshot } from './views';
+import type { RunView, RunSnapshot } from './views';
 
 /*
  * Where an agent's or a group's own controls (Pause, Kill, Resume) leave it in a run: the pause
@@ -9,12 +10,16 @@ import type { RunSnapshot } from './views';
  */
 
 /** An explicit individual cause is separate from the queue's combined pause state. */
-export function individualPaused(run: RunSnapshot, agent: string): boolean {
-  return run.individualPauses?.some(({ id }) => id === agent) === true;
+export function individualPaused(run: RunSnapshot | RunView, agent: string): boolean {
+  return 'groups' in run
+    ? (run.agents[agent as AgentId]?.pauses?.length ?? 0) > 0
+    : run.individualPauses?.some(({ id }) => id === agent) === true;
 }
 
-export function groupPaused(run: RunSnapshot, group: string): boolean {
-  return run.groupPauses?.some(({ id }) => id === group) === true;
+export function groupPaused(run: RunSnapshot | RunView, group: string): boolean {
+  return 'groups' in run
+    ? (run.groups[group]?.pauses.length ?? 0) > 0
+    : run.groupPauses?.some(({ id }) => id === group) === true;
 }
 
 /** A group finishes its active member turns before its pause takes full effect. */

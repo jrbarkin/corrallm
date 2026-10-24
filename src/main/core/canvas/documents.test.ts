@@ -307,7 +307,9 @@ describe('a canvas’s document', () => {
     const changed = await documents.change(canvas, {
       revision: { op: 'canvas.rename', by: 'you' },
       build: (document) => ({ next: renamed(document, 'worker', 'Worker'), result: 'same' }),
-      check: (change) => checked.push(change),
+      check: (change) => {
+        checked.push(change);
+      },
       committing: () => checked.push('committing'),
     });
     expect(changed).toEqual({ result: 'same' });

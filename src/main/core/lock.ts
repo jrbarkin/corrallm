@@ -9,7 +9,8 @@ import type { ProcessStart } from './process-identity';
  * One owner per profile (Core Server §7.6): <profile>/core.lock, opened O_EXCL, holds the pid and
  * start time of the process that owns the profile: the app's core process (core/entry.ts takes it
  * as main asks it up, so a core that crashed leaves a lock its next one takes over) or `corrallm
- * serve`. Chromium's single-instance lock keeps two apps off one profile, but `serve` is plain
+ * serve`; or, for a moment, `corrallm token`, writing tokens.json itself while nothing owns the
+ * profile. Chromium's single-instance lock keeps two apps off one profile, but `serve` is plain
  * Node: without this, the two could write one profile's stores (its database, core.db, which only
  * the owner opens, and tokens.json) at once. A lock whose process is gone, or whose pid another process has since been
  * given (it started after the lock's did), is taken over, and so is one left half written long
@@ -18,7 +19,7 @@ import type { ProcessStart } from './process-identity';
  * several taking one over at once, only one has it.
  */
 
-export type LockOwner = 'app' | 'serve';
+export type LockOwner = 'app' | 'serve' | 'token';
 
 /** Who holds a profile: what core.lock says. */
 export interface LockHolder {
@@ -45,6 +46,7 @@ const SAME_START_MS = 2 * 1000;
 const OWNERS: Readonly<Record<LockOwner, string>> = {
   app: 'The corrallm app',
   serve: 'corrallm serve',
+  token: 'corrallm token',
 };
 
 /** Another process holds the profile: which, if its lock says. */
@@ -172,7 +174,7 @@ function read(text: string): LockHolder | undefined {
   }
   if (typeof value !== 'object' || value === null) return undefined;
   const { owner, pid, started } = value as Record<string, unknown>;
-  if (owner !== 'app' && owner !== 'serve') return undefined;
+  if (owner !== 'app' && owner !== 'serve' && owner !== 'token') return undefined;
   if (!Number.isSafeInteger(pid) || (pid as number) <= 0 || !isProcessStart(started)) {
     return undefined;
   }

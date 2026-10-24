@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs';
 import { readFile, realpath, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import path from 'node:path';
@@ -8,6 +9,7 @@ import type { CanvasId } from '../../shared/canvas';
 import type { OpResult } from '../../shared/api/errors';
 import { MAX_CREATED_AGENTS } from '../../shared/api/limits';
 import { OPS } from '../../shared/api/registry';
+import { topicRequest } from '../../shared/api/topics';
 import type { ResultOf } from '../../shared/api/registry';
 import { SURFACE } from '../../shared/api/surface';
 import type { OpName, Party, Reach } from '../../shared/api/surface';
@@ -15,6 +17,7 @@ import { engineCatalog } from '../../shared/engine/catalog';
 import { needs } from '../../shared/engine/needs';
 import type { NeedsItem } from '../../shared/model/needs';
 import { agentName } from '../../shared/model/queries';
+import { nodeKey } from '../../shared/model/rows';
 import { MAX_CANVAS_BYTES } from '../../shared/ipc';
 import type { SessionMode } from '../../shared/session';
 import { CanvasFiles } from '../canvas';
@@ -24,6 +27,16 @@ import { ProjectFiles } from '../files';
 import { CanvasMemory } from '../memory';
 import { ProjectFolders } from '../project';
 import { ProjectDirectories } from './workspaces/resolver';
+import type { ProjectRootResolver } from './workspaces/resolver';
+import type { SetupService } from './workspaces/setup';
+import { treeOf, WorkspaceGate } from './workspaces/gate';
+import { WorkspacePlanner } from './workspaces/planner';
+import { WorkspaceStore } from './workspaces/store';
+import type { TreeKey } from './workspaces/gate';
+import { ownerNode } from './workspaces/planner';
+import type { WorkspaceCleanup } from './workspaces/cleanup';
+import { WorkspaceChanges } from './workspaces/rebind';
+import type { WorktreeRecord } from './workspaces/store';
 import { RunJournal } from '../run-journal';
 import { ADAPTERS, CATALOG, DEFAULT_ADAPTER, isConversationId } from '../sessions/adapters';
 import type { OptionsReader } from '../sessions/adapter';
@@ -54,11 +67,21 @@ import { Engines, needsInput } from './engines';
 import type { Watcher } from './engines';
 import type { HostServices, WindowId } from './host';
 import { implementations } from './ops';
+import { PREPARED_OPS, preparedOps, preparedRules } from './ops/prepared';
+import { PREPARED_SURFACE } from '../../shared/api/prepared';
+import type { AgentId } from '../../shared/api/ids';
+import { SessionControl } from './session-control';
+import { runReplies } from './run-replies';
 import { discardChecks } from './ops/files';
-import { quotedName } from './parties';
+import { nameOf, quotedName } from './parties';
 import { holder, resolvers } from './reach';
 import { changeChecks, heldBy, ruleChecks } from './rules';
+import { lockProfile } from './lock';
+import { answerTokenRequest } from './token-requests';
+import { privateTokenProfile } from './token-profile';
+import type { TokenAnswer, TokenRequest } from './token-socket';
 import { TokenStore } from './tokens';
+import { RuntimeSource } from './runtime-topics';
 import { Topics } from './topics';
 import { UsageProbe } from './usage-probe';
 import type { UsageRead } from './usage-probe';
@@ -66,9 +89,9 @@ import { Children } from './children';
 import { StalledTurns } from './stalled';
 import type { WatchdogClock, WatchdogNetwork } from './stalled';
 import type { ChildSystem } from './children';
-import { openStore } from './store/open';
+import { openStore, STORE_FILE } from './store/open';
 import { unopened } from './store/store';
-import type { StoreDeps } from './store/store';
+import type { Database, StoreDeps } from './store/store';
 
 /*
  * corrallm's core, composed: the registry's operations over the Electron-free services they act
@@ -123,6 +146,11 @@ export interface CoreConfig {
   /** Fake connectors and options for an unpackaged app's tests, admitted by its host. */
   fakeSessions?: boolean;
   /**
+   * For the core's tests alone: B11 C6's prepared operations (shared/api/prepared.ts) registered
+   * beside the live ones, until X9 registers them. No host sets it.
+   */
+  preparedOps?: boolean;
+  /**
    * For tests: what runs agents' sessions instead of each connection's own connector
    * (sessions/fake.ts), the environment they run in instead of the login shell's, what reads a
    * held usage backend instead of its adapter's reader (none, for a backend left out), and what
@@ -135,6 +163,34 @@ export interface CoreConfig {
     readUsage?: Readonly<Partial<Record<UsageBackendId, UsageRead>>>;
     options?: Readonly<Partial<Record<AdapterId, OptionsReader>>>;
   };
+  /**
+   * For tests, until B9a X11b composes the workspaces: the worktrees' setup service, made over the
+   * core's database, process owner and project folders, told when a canvas's setup cards change.
+   * None: no setup card is ever raised, and setting a setup command is unavailable.
+   */
+  setups?: (core: {
+    store: Database;
+    processes: Children;
+    directories: ProjectRootResolver;
+    profile: string;
+    changed: (canvas: CanvasId) => void;
+  }) => SetupService;
+  /**
+   * For tests, until B9a X11b composes the workspaces: their cleanup (B9a C7), made over the
+   * core's workspace records and process owner, told who may still write in a tree and whether its
+   * setup runs, what to forget of its setup, and the names its trees' owners have. None: a tree no
+   * agent works in any more is only ever retained, and a deletion asks nothing of it.
+   */
+  cleanup?: (core: {
+    workspaces: WorkspaceStore;
+    processes: Children;
+    profile: string;
+    writers: (tree: WorktreeRecord) => readonly string[];
+    setupRunning: (workspace: string) => boolean;
+    forgetSetup: (workspace: string) => Promise<void>;
+    nameOf: (canvas: CanvasId, owner: string) => string | undefined;
+    changed: (canvas: CanvasId) => void;
+  }) => WorkspaceCleanup;
 }
 
 export interface Core extends Dispatcher {
@@ -160,6 +216,15 @@ export interface Core extends Dispatcher {
    * kept across renewals.
    */
   clientOf(token: string): OutsideCaller | undefined;
+  /**
+   * Answers what `corrallm token new|renew|revoke` asks over the token socket (Build Plan B30), as
+   * `owner` (the app or `corrallm serve`), whose MCP server listens at `url` (null: none yet). A
+   * new token reaches only canvases whose files `keptCanvas` accepts.
+   */
+  tokenRequest(
+    request: TokenRequest,
+    host: { owner: 'app' | 'serve'; url: string | null },
+  ): Promise<TokenAnswer>;
   /** What the user chose for corrallm as a whole: the port its API server keeps, here. */
   settings: Pick<Settings, 'apiPort' | 'keepApiPort'>;
   /**
@@ -227,12 +292,58 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
       engines.needsChanged(canvas);
     },
   });
+  const workspaceStore = new WorkspaceStore({ store });
+  /**
+   * A tree's owner's name: as its canvas names its agent or group now, else as it last did (a
+   * deleted agent's, from the canvas's kept changes): none once neither does.
+   */
+  const ownerName = (canvas: CanvasId, owner: string): string | undefined => {
+    const nodes = documents.loaded(canvas)?.document.nodes;
+    const id = ownerNode(owner);
+    if (nodes?.some((node) => node.id === id) === true) return nameOf(nodes, id);
+    try {
+      const row = store
+        .prepare(
+          `SELECT before_data FROM change WHERE canvas_id = ? AND entity = ?
+             AND before_data IS NOT NULL ORDER BY rev DESC LIMIT 1`,
+        )
+        .get(canvas, nodeKey(id));
+      const before: unknown = row === undefined ? undefined : JSON.parse(String(row.before_data));
+      const label = (before as { label?: unknown } | undefined)?.label;
+      return typeof label === 'string' && label !== '' ? label : undefined;
+    } catch {
+      return undefined;
+    }
+  };
+  // A tree no agent works in any more (B9a C7): removed with its last agent once safe, else kept
+  // unless you discard it, its removal finished across restarts.
+  const cleanup = config.cleanup?.({
+    workspaces: workspaceStore,
+    processes: children,
+    profile,
+    writers: (tree) => sessions.writingIn(tree.canvas, tree.id),
+    setupRunning: (workspace) => setups?.running(workspace) === true,
+    forgetSetup: (workspace) => setups?.forget(workspace) ?? Promise.resolve(),
+    nameOf: (canvas, owner) => ownerName(canvas, owner),
+    changed: (canvas) => {
+      topics.changed(`needs:${canvas}`, 'corrallm');
+      engines.needsChanged(canvas);
+    },
+  });
+  // Who works where, at every document commit's seam (B9a C6): inert until a canvas's project is
+  // a repository the core keeps (discovery and provisioning are composed with the resolver, X11b).
+  const planner = new WorkspacePlanner({
+    workspaces: workspaceStore,
+    holding: (canvas, agent) => gate.holding(canvas, agent),
+    ...(cleanup === undefined ? {} : { cleanup }),
+  });
   const documents: Documents = new Documents({
     store,
     memory,
     catalog: CATALOG,
     defaultAdapter: DEFAULT_ADAPTER,
     reviews,
+    workspaces: planner,
     baselineChanged: (canvas) => {
       void states.refresh(canvas).catch((error: unknown) => {
         console.error('Could not publish the canvas’s saved baseline:', error);
@@ -240,8 +351,28 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     },
   });
   const settings = new Settings(path.join(profile, 'settings.json'));
+  // What the canvases the core runs publish beside their documents (B11 §5): their run, sessions
+  // and messages, from their engines once they open.
+  const runtime = new RuntimeSource({
+    get engines() {
+      return engines;
+    },
+    isLead: (canvas, agent) => isLead(canvas, agent),
+    problem: (canvas) => journal.problem(canvas),
+  });
   const projects = new ProjectFolders({ host, memory });
   const directories = new ProjectDirectories(projects);
+  // The worktrees' setup (B9a C9, C10): its cards in Needs, yours alone, and their answers.
+  const setups = config.setups?.({
+    store,
+    processes: children,
+    directories,
+    profile,
+    changed: (canvas) => {
+      topics.changed(`needs:${canvas}`, 'corrallm');
+      engines.needsChanged(canvas);
+    },
+  });
   const journal = new RunJournal({
     store,
     memory,
@@ -250,6 +381,7 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     problemChanged: (canvas) => {
       topics.changed(`needs:${canvas}`, 'corrallm');
       engines.needsChanged(canvas);
+      runtime.problemChanged(canvas);
     },
     // What it set aside or restored, said with the first canvas restored, as its runs' are.
     ...(opened.store === undefined ? {} : { said: opened.said }),
@@ -343,6 +475,69 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
       stalled.ended(canvas, agent);
       engines.ended(canvas, agent);
     },
+    // A restore of a tree holds new work for the other agents working in it until it is done.
+    gate: {
+      pass: (canvas, agent, own): Promise<void> => gate.pass(canvas, agent, own),
+      holding: (canvas, agent): Promise<string | undefined> => gate.holding(canvas, agent),
+    },
+  });
+  /** The trees an agent works in: its running session's, then its working directory's now. */
+  const treesOf = async (canvas: CanvasId, agent: string): Promise<TreeKey[]> => {
+    const running = sessions.binding(canvas, agent);
+    const trees: TreeKey[] = running === undefined ? [] : [treeOf(running)];
+    const directory = await directories.workingDirectory(canvas, agent as AgentId);
+    if (directory.state === 'ready' && !trees.includes(treeOf(directory))) {
+      trees.push(treeOf(directory));
+    }
+    return trees;
+  };
+  // The workspace mutation gate (B11 R5, B9a's shared-tree seam): every agent of a tree protected.
+  const gate: WorkspaceGate = new WorkspaceGate({
+    canvases: () => engines.opened(),
+    agents: (canvas) =>
+      (engines.canvas(canvas)?.document.nodes ?? []).flatMap((node) =>
+        node.type === 'agent' ? [node.id] : [],
+      ),
+    session: (canvas, agent): TreeKey | undefined => {
+      const running = sessions.binding(canvas, agent);
+      return running === undefined ? undefined : treeOf(running);
+    },
+    trees: treesOf,
+    writing: (canvas, agent) => {
+      const open = engines.canvas(canvas);
+      const session = open?.engine.sessions.of(agent);
+      if (
+        session?.status === 'working' ||
+        session?.status === 'waiting' ||
+        open?.delivery.current(agent) !== undefined
+      ) {
+        return 'has a turn going on';
+      }
+      if ((session?.tasks?.length ?? 0) > 0) return 'runs background tasks';
+      if (sessions.closing(canvas, agent)) return 'hasn’t finished stopping its last session';
+      return undefined;
+    },
+    nameOf: (canvas, agent) => nameOf(engines.canvas(canvas)?.document.nodes ?? [], agent),
+  });
+  // A workspace change waiting for you (B9a C7): its card, and its Switch.
+  const changes = new WorkspaceChanges({
+    workspaces: workspaceStore,
+    gate,
+    close: async (canvas, agent) => {
+      const open = engines.canvas(canvas);
+      if (open === undefined) await sessions.close(canvas, agent);
+      else await open.engine.sessions.close(agent);
+    },
+    nameOf: (canvas, id) => {
+      const nodes = documents.loaded(canvas)?.document.nodes ?? [];
+      return nameOf(nodes, id);
+    },
+    messages: (canvas) => engines.messagesOf(canvas),
+    messagesNow: (canvas) => engines.canvas(canvas)?.messages,
+    changed: (canvas) => {
+      topics.changed(`needs:${canvas}`, 'corrallm');
+      engines.needsChanged(canvas);
+    },
   });
   const windows = new Windows({
     restore: async () => {
@@ -387,6 +582,7 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     store,
     shownIn: (canvas) => windows.showing(canvas),
     running: () => engines.opened(),
+    live: (canvas) => engines.canvas(canvas)?.engine.run.snapshot().running,
   });
   const topics = new Topics({
     read: (name, args, caller, signal) => dispatcher.call(name, args, caller, signal),
@@ -403,6 +599,14 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
         all: seesAll(caller, reach),
       };
     },
+    runtime: {
+      source: runtime,
+      // A runtime topic is read through its projection, under its reading op's audience and reach.
+      project: (topic, caller, signal) => {
+        const { topic: kind, ...args } = topicRequest(topic);
+        return dispatcher.project(runtime.projections[kind], args, caller, signal);
+      },
+    },
   });
   states.listen({
     canvas: (canvas, change) => {
@@ -411,6 +615,10 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     list: () => {
       topics.changed('canvases', 'corrallm');
     },
+  });
+  // Each commit to a canvas's document: its agents, how they run, who reaches what.
+  documents.subscribe(({ canvas }) => {
+    runtime.documentChanged(canvas);
   });
   memory.subscribe((canvas) => {
     follow();
@@ -466,6 +674,8 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
       ...reviews.items(canvas),
       ...stalled.items(canvas),
       ...journal.items(canvas),
+      ...(setups?.items(canvas) ?? []),
+      ...changes.items(canvas),
     ];
   };
   const needOf = (canvas: CanvasId, id: string, reach?: readonly string[]) =>
@@ -490,6 +700,8 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     sessions,
     engines: { closeCanvas: (canvas) => engines.closeCanvas(canvas) },
     files: canvasFiles,
+    // The repository a new pick is isn't discovered yet (X11b composes discovery): none known.
+    workspaces: { projectChosen: (canvas) => planner.projectChosen(canvas, undefined) },
   });
   const engines: Engines = new Engines({
     // The windows that own their canvases' runs until B11's cutover hear their retry decisions.
@@ -516,6 +728,8 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
       ...reviews.items(canvas),
       ...stalled.items(canvas),
       ...journal.items(canvas),
+      ...(setups?.items(canvas) ?? []),
+      ...changes.items(canvas),
     ],
   });
   const warnings = new Set<Promise<void>>();
@@ -552,12 +766,32 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
       });
     },
   });
+  // Whether the run of each canvas the core runs is running, as canvas.list says it from the live
+  // run (B11 §5), not the journal's coalesced write: the list is read again as that changes.
+  const live = new Map<CanvasId, { running: boolean; stop?: () => void }>();
   engines.watch({
     needs: (canvas) => {
       topics.changed(`needs:${canvas}`, 'corrallm');
     },
-    opened: () => {
+    opened: (canvas) => {
       follow();
+      const run = engines.canvas(canvas)?.engine.run;
+      if (run) {
+        live.get(canvas)?.stop?.();
+        const it: { running: boolean; stop?: () => void } = { running: run.snapshot().running };
+        it.stop = run.subscribe(() => {
+          const running = run.snapshot().running;
+          if (running === it.running) return;
+          it.running = running;
+          states.listChanged();
+        });
+        live.set(canvas, it);
+      }
+      states.listChanged();
+    },
+    closed: (canvas) => {
+      live.get(canvas)?.stop?.();
+      live.delete(canvas);
       states.listChanged();
     },
   });
@@ -612,6 +846,17 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
       }
     });
   }
+  // B11 C6's session services: live and saved settings, Continue in Terminal, restart, new
+  // conversation and rewind, with R5's proposal (registered by X9; tests: preparedOps).
+  const control = new SessionControl({
+    engines,
+    sessions,
+    gate,
+    proposals,
+    catalog: CATALOG,
+    defaultAdapter: DEFAULT_ADAPTER,
+  });
+  const prepared = config.preparedOps === true;
   // Every change rule a token's commit is checked against (B9 Design §4).
   const changeRules = changeChecks({
     catalog: CATALOG,
@@ -622,37 +867,62 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
   });
   const dispatcher = createDispatcher(
     {
-      surface: SURFACE,
-      ops: OPS,
-      implementations: implementations({
-        topics,
-        app: config.app,
-        catalog: CATALOG,
-        defaultAdapter: DEFAULT_ADAPTER,
-        directories,
-        files,
-        settings,
-        links,
-        reveal,
-        windows,
-        sessions,
-        stalled,
-        runProblems: (canvas) => journal.items(canvas),
-        environment,
-        usage,
-        engines,
-        states,
-        lifecycle,
-        documents,
-        proposals,
-        reviews,
-        needOf,
-        isLead,
-        host,
-        tokens,
-        ...(config.locale === undefined ? {} : { locale: config.locale }),
-      }),
+      surface: prepared ? { ...SURFACE, ...PREPARED_SURFACE } : SURFACE,
+      ops: prepared ? { ...OPS, ...PREPARED_OPS } : OPS,
+      implementations: {
+        ...(prepared
+          ? preparedOps(control, {
+              ...(cleanup === undefined ? {} : { cleanup }),
+              proposals,
+              nameOf: ownerName,
+              workspaces: workspaceStore,
+            })
+          : {}),
+        ...implementations({
+          topics,
+          app: config.app,
+          catalog: CATALOG,
+          defaultAdapter: DEFAULT_ADAPTER,
+          directories,
+          files,
+          settings,
+          links,
+          reveal,
+          windows,
+          sessions,
+          stalled,
+          runProblems: (canvas) => journal.items(canvas),
+          environment,
+          usage,
+          engines,
+          states,
+          lifecycle,
+          documents,
+          proposals,
+          reviews,
+          needOf,
+          isLead,
+          host,
+          tokens,
+          ...(config.locale === undefined ? {} : { locale: config.locale }),
+          ...(setups === undefined ? {} : { setups }),
+          workspaceReplies: [changes.handler()],
+          workspaceItems: (canvas) => changes.items(canvas),
+          // B11 C7: the reply router answers what the runtime asks once its typed reply is
+          // registered (X9; the core's tests register it early).
+          ...(prepared
+            ? {
+                replies: runReplies({
+                  engines,
+                  sessions,
+                  ...(config.locale === undefined ? {} : { locale: config.locale }),
+                }),
+              }
+            : {}),
+        }),
+      },
       rules: {
+        ...(prepared ? preparedRules(control) : {}),
         ...ruleChecks(engines, needOf),
         discard: discardChecks({
           lifecycle,
@@ -677,21 +947,32 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
         committed: (canvas) => {
           engines.changed(canvas);
         },
-        // A token's change only you may make waits for you (R4).
-        propose: (canvas, change, call, before) =>
+        // A token's change only you may make waits for you (R4), and so does a deletion of yours
+        // leaving a worktree that holds work (B9a C7: its confirmation, through the same proposals).
+        propose: (canvas, change, call, before, trees) =>
           proposals.raise(canvas, {
             op: call.op,
             args: call.args ?? {},
             by: call.by,
             change,
             before,
+            ...(trees.length === 0 ? {} : { trees }),
           }),
       }),
       openCanvases: () => engines.opened(),
       holds: holder(engines),
+      publication: topics,
       ...(config.limitsClock === undefined ? {} : { now: config.limitsClock }),
     },
   );
+  // A setup that was running as the last core stopped is interrupted, after the process owner's
+  // recovery ended what it left (above), and before any call could start one: never rerun by itself.
+  await setups?.recover();
+  runtime.start();
+  // Removals the last core didn't finish, tried again (in the background: Git may take a while).
+  void cleanup?.reconcile().catch((error: unknown) => {
+    console.error('Could not finish removing the workspaces kept for removal:', error);
+  });
   // Held backends are read from now on, so a limit that ended while the core was down is noticed.
   probe.start();
   // The canvases open from before, watched from now on.
@@ -700,6 +981,8 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     surface: dispatcher.surface,
     ops: dispatcher.ops,
     partyOf: (caller) => dispatcher.partyOf(caller),
+    project: (projection, raw, caller, signal) =>
+      dispatcher.project(projection, raw, caller, signal),
     call: <N extends OpName>(name: N, raw: unknown, caller: Caller, signal?: AbortSignal) =>
       children.run(() => dispatcher.call(name, raw, caller, signal)) as Promise<
         OpResult<ResultOf<N>>
@@ -720,8 +1003,16 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
       const made = documents.createdBy(`outside:${caller.name}`);
       return { ...caller, canvases: [...new Set([...caller.canvases, ...made])] };
     },
+    tokenRequest: (request, { owner, url }) =>
+      answerTokenRequest(request, {
+        owner,
+        tokens,
+        keptCanvas: (file) => keptCanvas(file, memory, 'reached'),
+        fileOf: async (canvas) => (await memory.get(canvas)).file,
+        url,
+      }),
     settings,
-    keptCanvas: (file) => keptCanvas(file, memory),
+    keptCanvas: (file) => keptCanvas(file, memory, 'served'),
     openHeld: async (canvas) => {
       await engines.open(canvas, { held: true });
       return engines.canvas(canvas)?.warnings ?? [];
@@ -745,12 +1036,21 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
       probe.stop();
       states.close();
       topics.close();
+      runtime.close();
       try {
         await engines.close();
       } finally {
         // What the core keeps is written out even if a canvas's run couldn't be, and its database
         // closed last. No CLI it started outlives it: a helper still running is ended.
         try {
+          // A workspace's removal going on finishes (or is left for the next start) first.
+          await cleanup?.close().catch((error: unknown) => {
+            console.error('Could not finish removing a workspace:', error);
+          });
+          // A setup still running is ended and marked interrupted before the process owner closes.
+          await setups?.close().catch((error: unknown) => {
+            console.error('Could not end the worktrees’ setups:', error);
+          });
           await children.close();
           await stores();
         } finally {
@@ -765,16 +1065,21 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
  * The canvas `file` holds, if canvas memory names that very file for it (by its real path) and
  * keeps a project folder for it that is still there; else rejects, saying what to do in the app.
  * The file is only read for the id it holds: the canvas opens from the file canvas memory names,
- * never from `file`.
+ * never from `file`. `use` says what the file was named for: a canvas to serve (`serve --canvas`),
+ * or one a token is to reach (`corrallm token new --canvas`).
  */
-async function keptCanvas(file: string, memory: CanvasMemory): Promise<CanvasId> {
+async function keptCanvas(
+  file: string,
+  memory: CanvasMemory,
+  use: 'served' | 'reached',
+): Promise<CanvasId> {
   const name = path.basename(file);
   let canvas: CanvasId;
   try {
     if ((await stat(file)).size > MAX_CANVAS_BYTES) throw new Error('it is too large');
     canvas = canvasIdOf(await readFile(file, 'utf8'));
   } catch (error) {
-    throw new Error(`${name} can’t be served: ${reasonOf(error)}`, { cause: error });
+    throw new Error(`${name} can’t be ${use}: ${reasonOf(error)}`, { cause: error });
   }
   const { file: kept, project } = await memory.get(canvas);
   const open = `open ${name} in corrallm and choose its project folder there`;
@@ -789,7 +1094,7 @@ async function keptCanvas(file: string, memory: CanvasMemory): Promise<CanvasId>
   }
   if (asked !== keeps) {
     throw new Error(
-      `${name} is a copy of a canvas corrallm keeps at ${kept}: serve that file, or ${open} (it opens as a canvas of its own).`,
+      `${name} is a copy of a canvas corrallm keeps at ${kept}: ${use === 'served' ? 'serve' : 'name'} that file, or ${open} (it opens as a canvas of its own).`,
     );
   }
   if (project === undefined) {
@@ -802,6 +1107,71 @@ async function keptCanvas(file: string, memory: CanvasMemory): Promise<CanvasId>
     );
   }
   return canvas;
+}
+
+/**
+ * Answers what `corrallm token` asks (Build Plan B30) of a profile no corrallm owns: under
+ * core.lock, taken for the moment as `token` and let go once its stores are written, over the
+ * profile's own stores, as `corrallm serve --new-token` writes them; only a new token, which names
+ * canvases by their files, opens the database, to read canvas memory. Its URL is where the
+ * profile's server will listen (the port it keeps), if it keeps one. Rejects with ProfileLocked
+ * while another process holds the profile. A profile that isn't there is never made.
+ */
+export async function answerUnowned(profile: string, request: TokenRequest): Promise<TokenAnswer> {
+  const folder = await stat(profile).catch(() => undefined);
+  if (!folder?.isDirectory()) {
+    return {
+      ok: false,
+      sentence: `No corrallm profile is at ${profile}: open the canvas in the app first, or name the profile with --profile.`,
+    };
+  }
+  profile = await privateTokenProfile(profile);
+  const lock = await lockProfile(profile, 'token');
+  // Whatever happens, a process that ends lets the profile go.
+  const release = () => {
+    lock.release();
+  };
+  process.once('exit', release);
+  try {
+    const tokens = new TokenStore(path.join(profile, 'tokens.json'));
+    await tokens.load();
+    const port = await new Settings(path.join(profile, 'settings.json')).apiPort();
+    const url = port === undefined ? null : `http://127.0.0.1:${String(port)}/mcp`;
+    let store: Awaited<ReturnType<typeof openStore>>['store'];
+    try {
+      let memory: CanvasMemory | undefined;
+      if (request.op === 'new') {
+        // A profile with no database keeps no canvas, and gets none from a token.
+        if (!existsSync(path.join(profile, STORE_FILE))) {
+          return {
+            ok: false,
+            sentence: `The profile ${profile} keeps no canvas yet: open the canvas in corrallm and choose its project folder there.`,
+          };
+        }
+        const opened = await openStore(profile);
+        store = opened.store;
+        if (store === undefined) return { ok: false, sentence: opened.said.join(' ') };
+        memory = new CanvasMemory(store, undefined, () => false, isConversationId);
+      }
+      const answer = await answerTokenRequest(request, {
+        owner: 'none',
+        tokens,
+        keptCanvas: (file) =>
+          memory === undefined
+            ? Promise.reject(new Error('No canvas memory.'))
+            : keptCanvas(file, memory, 'reached'),
+        fileOf: async (canvas) => (await memory?.get(canvas))?.file,
+        url,
+      });
+      await tokens.flush();
+      return answer;
+    } finally {
+      await store?.close();
+    }
+  } finally {
+    process.removeListener('exit', release);
+    release();
+  }
 }
 
 function reasonOf(error: unknown): string {
