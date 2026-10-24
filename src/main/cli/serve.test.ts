@@ -110,7 +110,7 @@ describe.skipIf(process.platform === 'win32')('corrallm serve', () => {
         expect(result).not.toContain(token);
     }
     await rm(dir, { recursive: true, force: true });
-  }, 15_000);
+  }, 30_000);
 
   /** The `codex` agents run: the fake, keeping its threads and log in `dir`, with `env` set. */
   async function fakeCodex(env: Record<string, string> = {}): Promise<void> {

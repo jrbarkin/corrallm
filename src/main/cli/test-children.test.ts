@@ -5,8 +5,9 @@ import { afterEach, expect, it, vi } from 'vitest';
 
 import { TestChildren } from './test-children';
 import type { ChildSystem, TestChild } from './test-children';
+import type { TestLifetimeOwner } from './test-lifetime';
 
-function fixture() {
+function fixture(lifetime?: TestLifetimeOwner) {
   const child = Object.assign(new EventEmitter(), {
     pid: 42,
     exitCode: null as number | null,
@@ -34,8 +35,48 @@ function fixture() {
     finish();
     return true;
   });
-  return { child, system, alive, finish, children: new TestChildren(system) };
+  return { child, system, alive, finish, children: new TestChildren(system, lifetime) };
 }
+
+it('prepares the independent lifetime guard before spawning and closes it during teardown', async () => {
+  const lifetime: TestLifetimeOwner = {
+    prepare: vi.fn<TestLifetimeOwner['prepare']>((command, args, env) => ({
+      args: ['guarded', ...args],
+      env: { ...env, TEST_GUARD: command },
+    })),
+    track: vi.fn(),
+    close: vi.fn(() => Promise.resolve()),
+  };
+  const { children, system } = fixture(lifetime);
+  children.spawn('server', ['serve', '--port', '0'], {});
+  expect(lifetime.prepare).toHaveBeenCalledWith('server', ['serve', '--port', '0'], {});
+  expect(system.spawn).toHaveBeenCalledWith('server', ['guarded', 'serve', '--port', '0'], {
+    TEST_GUARD: 'server',
+  });
+  expect(lifetime.track).toHaveBeenCalledWith(42);
+  await children.close();
+  expect(lifetime.close).toHaveBeenCalledOnce();
+});
+
+it('guards the Node process inside a terminal, independently of script and its pid header', async () => {
+  const lifetime: TestLifetimeOwner = {
+    prepare: vi.fn<TestLifetimeOwner['prepare']>((_command, args, env) => ({
+      args: ['--import', 'test-guard.mjs', ...args],
+      env,
+    })),
+    track: vi.fn(),
+    close: vi.fn(() => Promise.resolve()),
+  };
+  const { children } = fixture(lifetime);
+  children.terminal([process.execPath, 'bundle.cjs', 'serve', '--port', '0'], {});
+  expect(lifetime.prepare).toHaveBeenCalledWith(
+    process.execPath,
+    ['bundle.cjs', 'serve', '--port', '0'],
+    {},
+  );
+  await children.close();
+  expect(lifetime.close).toHaveBeenCalledOnce();
+});
 
 afterEach(() => {
   vi.useRealTimers();
@@ -160,6 +201,22 @@ it('reports a child that cannot be stopped instead of allowing folder removal', 
   const rejected = expect(children.close()).rejects.toThrow(/did not exit/);
   await vi.advanceTimersByTimeAsync(7000);
   await rejected;
+});
+
+it('releases the guardian even when ordinary teardown cannot stop a child', async () => {
+  vi.useFakeTimers();
+  const lifetime: TestLifetimeOwner = {
+    prepare: (_command, args, env) => ({ args, env }),
+    track: vi.fn(),
+    close: vi.fn(() => Promise.resolve()),
+  };
+  const { children, system } = fixture(lifetime);
+  system.signal = vi.fn();
+  children.spawn('test-server', []);
+  const failed = expect(children.close()).rejects.toThrow(/did not exit/);
+  await vi.advanceTimersByTimeAsync(7000);
+  await failed;
+  expect(lifetime.close).toHaveBeenCalledOnce();
 });
 
 it('handles a spawn error without waiting for an exit that never comes', async () => {
