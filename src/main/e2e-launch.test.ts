@@ -1,3 +1,5 @@
+import { PassThrough } from 'node:stream';
+
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 
 const platform = vi.hoisted(() => vi.fn(() => 'linux'));
@@ -71,3 +73,32 @@ it.each([
   await close();
 });
 import type * as Os from 'node:os';
+
+it('reports startup refusals and child stderr before closing a failed spec', async () => {
+  const stdout = new PassThrough();
+  const stderr = new PassThrough();
+  const page = {
+    locator: () => ({ innerText: () => Promise.resolve('Agent SDK refused: cannot spawn node') }),
+  };
+  const closed = vi.fn();
+  launch.mockResolvedValueOnce({
+    process: () => ({ exitCode: 0, stdout, stderr }),
+    windows: () => [page],
+    close: closed,
+  });
+  const said = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+  try {
+    const { close } = await launchApp({
+      profile: '/test-profile-not-created',
+      diagnoseFailure: () => true,
+    });
+    stdout.write('fake started\n');
+    stderr.write('SDK child: ENOENT\n');
+    await close();
+    expect(said.mock.calls.flat().join('\n')).toContain('SDK child: ENOENT');
+    expect(said.mock.calls.flat().join('\n')).toContain('Agent SDK refused: cannot spawn node');
+    expect(closed).toHaveBeenCalledOnce();
+  } finally {
+    said.mockRestore();
+  }
+});

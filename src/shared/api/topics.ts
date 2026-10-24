@@ -176,7 +176,8 @@ export type RuntimeChange = {
           });
 }[RuntimeTopicKey];
 
-/** begin has no full order list. Chunk order establishes order; deltas follow end, never precede it. */
+/** count is the number of chunks, indexed from zero. Entry order follows those chunks, without
+ * a full order header. Deltas follow end, never precede it (B11 §16.3a). */
 export type RuntimeSnapshotFrame<S = unknown, E = unknown> = {
   readonly topic: RuntimeTopicKey;
   readonly epoch: string;
@@ -185,6 +186,7 @@ export type RuntimeSnapshotFrame<S = unknown, E = unknown> = {
   | { readonly kind: 'begin'; readonly summary: S; readonly count: number }
   | {
       readonly kind: 'chunk';
+      readonly index: number;
       readonly entries: readonly { readonly key: string; readonly value: E }[];
     }
   | { readonly kind: 'end'; readonly rev: number }
@@ -210,6 +212,8 @@ export type RuntimeSnapshotFor<K extends RuntimeTopicKey> = RuntimeSnapshotFrame
 export function snapshotFrameFits(frame: RuntimeSnapshotFrame): boolean {
   const bytes = (data: unknown) => new TextEncoder().encode(JSON.stringify(data)).length;
   if (frame.kind === 'begin' && (!Number.isSafeInteger(frame.count) || frame.count < 0))
+    return false;
+  if (frame.kind === 'chunk' && (!Number.isSafeInteger(frame.index) || frame.index < 0))
     return false;
   if (frame.kind === 'end' && (!Number.isSafeInteger(frame.rev) || frame.rev < 0)) return false;
   if (bytes(frame) <= MAX_TOPIC_FRAME) return true;

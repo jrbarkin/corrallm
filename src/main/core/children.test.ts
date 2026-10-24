@@ -38,6 +38,7 @@ beforeEach(async () => {
       groups.delete(group);
     }),
     wait: vi.fn<ChildSystem['wait']>(() => Promise.resolve()),
+    pause: vi.fn<ChildSystem['pause']>(),
     now: () => 2000,
   };
   children = new Children(profile, system);
@@ -425,13 +426,71 @@ describe('the core’s CLI children', () => {
   });
 
   it('refuses to register a process outside its own group', async () => {
+    live.set(process.pid, { started: 500, group: 9 });
     live.set(42, { started: 1000, group: 7 });
     const child = new Child(42);
     expect(() => {
       children.node(child);
     }).toThrow(/process group/);
     expect(child.kill).toHaveBeenCalledWith('SIGKILL');
+    expect(system.pause).not.toHaveBeenCalled();
     expect(await remembered()).toEqual({ version: 1, children: [] });
+  });
+
+  describe('a pty still in the core’s group, as Linux forkpty’s child is until it calls setsid', () => {
+    let clock: number;
+    let paused: number;
+    beforeEach(() => {
+      clock = 2000;
+      paused = 0;
+      system.now = () => clock;
+      system.pause = vi.fn<ChildSystem['pause']>((ms) => {
+        paused += ms;
+        clock += ms;
+      });
+      live.set(process.pid, { started: 500, group: 7 });
+    });
+    const pty = (kill = vi.fn()) => {
+      children.pty({ pid: 42, kill, onExit: () => undefined });
+      return kill;
+    };
+
+    it('is recorded, not killed, once it reaches its own group', async () => {
+      let reads = 0;
+      system.inspect = vi.fn<ChildSystem['inspect']>((pid) =>
+        pid === 42 ? { started: 1000, group: ++reads === 1 ? 7 : 42 } : live.get(pid),
+      );
+      const kill = vi.fn();
+      expect(() => pty(kill)).not.toThrow();
+      expect(kill).not.toHaveBeenCalled();
+      expect(await remembered()).toEqual({ version: 1, children: [{ pid: 42, started: 1000 }] });
+    });
+
+    it('is still refused, and killed, when it never leaves the core’s group within the bound', async () => {
+      live.set(42, { started: 1000, group: 7 });
+      const kill = vi.fn();
+      expect(() => pty(kill)).toThrow(/process group/);
+      expect(kill).toHaveBeenCalledExactlyOnceWith('SIGKILL');
+      expect(paused).toBeGreaterThan(0);
+      expect(paused).toBeLessThanOrEqual(1000);
+      expect(await remembered()).toEqual({ version: 1, children: [] });
+    });
+
+    it.each(['exits', 'is replaced by another process'] as const)(
+      'is neither recorded nor signalled when it %s while waited for',
+      async (change) => {
+        let reads = 0;
+        system.inspect = vi.fn<ChildSystem['inspect']>((pid) => {
+          if (pid !== 42) return live.get(pid);
+          if (++reads === 1) return { started: 1000, group: 7 };
+          return change === 'exits' ? undefined : { started: 3000, group: 42 };
+        });
+        const kill = vi.fn();
+        expect(() => pty(kill)).not.toThrow();
+        expect(kill).not.toHaveBeenCalled();
+        expect(await remembered()).toEqual({ version: 1, children: [] });
+      },
+    );
   });
 
   it('stops a new child if its record cannot reach disk', async () => {

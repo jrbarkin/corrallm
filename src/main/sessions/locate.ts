@@ -33,24 +33,38 @@ export function parseAgentPaths(
   return Object.fromEntries(entries);
 }
 
-const located = new WeakMap<
-  Readonly<Record<string, string>>,
-  Map<Adapter, { override: string | undefined; found: Promise<string | undefined> }>
->();
+interface Located {
+  override: string | undefined;
+  found: Promise<string | undefined>;
+  /** What `found` resolved to, once it has: only ever an executable that was found. */
+  file?: string;
+}
 
-/** Resolves once for an adapter and agents' environment; adapters never perform discovery. */
+const located = new WeakMap<Readonly<Record<string, string>>, Map<Adapter, Located>>();
+
+/**
+ * An adapter's executable in the agents' environment. A search in progress is shared, and one that
+ * found an executable is kept while it can still run; a miss or a failed search is not kept, so
+ * a CLI installed, or moved, after one is found by the next. Adapters never perform discovery.
+ */
 export function locate(
   adapter: Adapter,
   env: Readonly<Record<string, string>>,
 ): Promise<string | undefined> {
   const override = process.env.CORRALLM_AGENT_PATHS;
   const paths = parseAgentPaths(override);
-  const cache =
-    located.get(env) ??
-    new Map<Adapter, { override: string | undefined; found: Promise<string | undefined> }>();
+  const cache = located.get(env) ?? new Map<Adapter, Located>();
   located.set(env, cache);
   const old = cache.get(adapter);
-  if (old !== undefined && old.override === override) return old.found;
+  if (old !== undefined && old.override === override) {
+    const kept = old.file;
+    if (kept === undefined) return old.found;
+    return canRun(kept).then((runs) => {
+      if (runs) return kept;
+      if (cache.get(adapter) === old) cache.delete(adapter);
+      return locate(adapter, env);
+    });
+  }
   const file = paths?.[adapter.descriptor.id];
   const found =
     paths === undefined
@@ -58,7 +72,15 @@ export function locate(
       : file === undefined
         ? Promise.resolve(undefined)
         : canRun(file).then((runs) => (runs ? file : undefined));
-  cache.set(adapter, { override, found });
+  const entry: Located = { override, found };
+  const forget = () => {
+    if (cache.get(adapter) === entry) cache.delete(adapter);
+  };
+  cache.set(adapter, entry);
+  found.then((executable) => {
+    if (executable === undefined) forget();
+    else entry.file = executable;
+  }, forget);
   return found;
 }
 
