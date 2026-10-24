@@ -367,6 +367,34 @@ describe.skipIf(process.platform === 'win32')('WorkspaceSetups', () => {
     expect(h.t.workspaces.projectSetup(one.repository)?.command).toBeNull();
   });
 
+  it('stops running a command by itself once you clear Always: new workspaces ask again, one running goes on', async () => {
+    const h = await harness({ 'README.md': 'hello\n' });
+    const go = path.join(h.t.root, 'go');
+    expect(await h.setups.clearAlways(CANVAS)).toEqual({ cleared: false });
+    const one = await offered(h, 'agent/one');
+    await h.setups.setCommand(
+      CANVAS,
+      `echo "$PWD" >> '${h.marker}'; while [ ! -f '${go}' ]; do sleep 0.05; done`,
+    );
+    await h.setups.reply(CANVAS, setupNeedId(one.id, 2), 'always', 'you');
+    await until(() => existsSync(h.marker));
+    expect(await h.setups.clearAlways(CANVAS)).toEqual({ cleared: true });
+    expect(h.t.workspaces.projectSetup(one.repository)).toMatchObject({
+      alwaysSpecHash: null,
+      command: expect.stringContaining('echo') as unknown,
+    });
+    // What was allowed and runs goes on.
+    expect(setupOf(h.t, one.id).state).toBe('running');
+    writeFileSync(go, '');
+    expect(await settled(h.t, one.id)).toMatchObject({ state: 'done' });
+    // A new workspace asks again.
+    const two = await offered(h, 'agent/two');
+    expect(setupOf(h.t, two.id)).toMatchObject({ state: 'pending', approvedBy: null });
+    expect(readFileSync(h.marker, 'utf8').trim().split('\n')).toEqual([one.path]);
+    expect(await h.setups.clearAlways(CANVAS)).toEqual({ cleared: false });
+    expect(await refusal(h.setups.clearAlways(OTHER))).toBe('refused');
+  });
+
   it('keeps a command only for a canvas’s picked repository', async () => {
     const h = await harness({ 'README.md': 'hello\n' });
     expect(await refusal(h.setups.setCommand(OTHER, 'make setup'))).toBe('refused');

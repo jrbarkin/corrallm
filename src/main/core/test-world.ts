@@ -1325,6 +1325,12 @@ export const REAL_FIXTURES: Readonly<Record<OpName, OpFixture>> = {
     valid: [{ canvas: CANVAS }],
     invalid: [{ canvas: 'nope' }, { canvas: CANVAS, path: '/tmp' }],
   },
+  'project.clearSetupApproval': {
+    // Yours alone: nothing was allowed always for the world's repository, so nothing is cleared.
+    valid: [],
+    by: { you: [{ canvas: CANVAS, request: setupRequest(3) }] },
+    invalid: [{ canvas: 'nope' }, { canvas: CANVAS, command: 'make setup' }],
+  },
   'project.setSetupCommand': {
     // Yours alone: you set the world repository's setup command, then go back to the detected one.
     valid: [],

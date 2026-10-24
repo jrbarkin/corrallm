@@ -137,6 +137,8 @@ export interface SetupService {
     canvas: CanvasId,
     command: string | null,
   ): Promise<{ changed: boolean; offered: number }>;
+  /** `project.clearSetupApproval`: nothing runs by itself for the canvas's repository any more. */
+  clearAlways(canvas: CanvasId): Promise<{ cleared: boolean }>;
   /** As the core starts, after its process owner's recovery: what ran is interrupted. */
   recover(): Promise<void>;
   /** As the core closes, before its process owner does: what runs is ended, and interrupted. */
@@ -394,13 +396,12 @@ export class WorkspaceSetups implements SetupService {
 
   // `project.setSetupCommand`.
 
-  async setCommand(
-    canvas: CanvasId,
-    command: string | null,
-  ): Promise<{ changed: boolean; offered: number }> {
-    const { workspaces, provisioner, directories } = this.#deps;
-    if (command !== null) checkCommand(command);
-    if (this.#closing) throw new SetupError('unavailable', 'corrallm is closing.');
+  /**
+   * The canvas's picked repository, kept: refused (saying why) for a canvas with no project folder
+   * or one that isn't a repository it can make worktrees of.
+   */
+  async #repositoryOf(canvas: CanvasId): Promise<RepositoryRecord> {
+    const { provisioner, directories } = this.#deps;
     const picked = directories.projectRoot(canvas);
     if (picked === undefined) {
       throw new SetupError(
@@ -416,7 +417,17 @@ export class WorkspaceSetups implements SetupService {
       );
     }
     if (found.kind === 'refused') throw new SetupError('refused', found.sentence);
-    const repository = found.record;
+    return found.record;
+  }
+
+  async setCommand(
+    canvas: CanvasId,
+    command: string | null,
+  ): Promise<{ changed: boolean; offered: number }> {
+    const { workspaces } = this.#deps;
+    if (command !== null) checkCommand(command);
+    if (this.#closing) throw new SetupError('unavailable', 'corrallm is closing.');
+    const repository = await this.#repositoryOf(canvas);
     const shell: ShellKind | null = command === null ? null : this.#windows ? 'windows' : 'posix';
     // What each setup still waiting would offer now, worked out before the write.
     const plans: { tree: WorktreeRecord; setup: SetupRecord; offer: Offer }[] = [];
@@ -478,6 +489,21 @@ export class WorkspaceSetups implements SetupService {
     }
     for (const affected of new Set(plans.map(({ tree }) => tree.canvas))) this.#changed(affected);
     return result;
+  }
+
+  /**
+   * Nothing runs by itself in the repository's new workspaces any more: each asks again. What
+   * runs already goes on; a setup waiting keeps its card as it is.
+   */
+  async clearAlways(canvas: CanvasId): Promise<{ cleared: boolean }> {
+    const repository = await this.#repositoryOf(canvas);
+    return this.#deps.workspaces.write((w) => {
+      if ((w.projectSetup(repository.id)?.alwaysSpecHash ?? null) === null) {
+        return { cleared: false };
+      }
+      w.setAlways(repository.id, null);
+      return { cleared: true };
+    });
   }
 
   // Its card.

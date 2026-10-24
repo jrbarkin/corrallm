@@ -210,6 +210,31 @@ describe.skipIf(process.platform === 'win32')('a worktree’s setup, through cor
     expect(readFileSync(marker, 'utf8')).toBe('ran\n');
   });
 
+  it('only you clear Always: no token is offered it or may call it', async () => {
+    const always = () =>
+      readOnDisk(path.join(root, 'profile'), (db) =>
+        db.prepare('SELECT always_spec_hash AS always FROM project_setup').all(),
+      );
+    await core.call('project.setSetupCommand', { canvas: CANVAS, command: 'echo set' }, YOU);
+    const { id } = await offered();
+    await core.call('reply', { canvas: CANVAS, to: id, answer: { choice: 'always' } }, YOU);
+    expect(always()).toEqual([{ always: expect.stringMatching(/^[0-9a-f]{64}$/) as unknown }]);
+    for (const party of TOKENS) {
+      expect(listTools(core, CALLERS[party]).map(({ name }) => name)).not.toContain(
+        toolName('project.clearSetupApproval'),
+      );
+      expect(
+        await core.call('project.clearSetupApproval', { canvas: CANVAS }, CALLERS[party]),
+      ).toMatchObject({ ok: false, error: { code: 'human-only' } });
+    }
+    expect(always()).toEqual([{ always: expect.stringMatching(/^[0-9a-f]{64}$/) as unknown }]);
+    expect(await core.call('project.clearSetupApproval', { canvas: CANVAS }, YOU)).toMatchObject({
+      ok: true,
+      value: { cleared: true },
+    });
+    expect(always()).toEqual([{ always: null }]);
+  });
+
   it('an answer to a card raised anew, its command changed, is stale and runs nothing', async () => {
     await core.call('project.setSetupCommand', { canvas: CANVAS, command: 'echo first' }, YOU);
     const { id, workspace } = await offered();

@@ -173,6 +173,8 @@ export const SURFACE = {
   // What a new worktree of the picked repository runs to set itself up (B9a Design §14 item 2):
   // yours alone, as the pick is (D1, trust-gate), never a token's, a file's or the repository's.
   'project.setSetupCommand': { access: Y, kind: 'command', scope: 'canvas' },
+  // What runs by itself in a new worktree is yours to stop allowing (D9, permissions).
+  'project.clearSetupApproval': { access: Y, kind: 'command', scope: 'canvas' },
   // A token lists only its own canvases; a lead's canvas holds only what it reaches (§3.4).
   'canvas.list': { access: R, kind: 'read', scope: 'none', reads: 'canvases', varies: ['items'] },
   'canvas.get': {

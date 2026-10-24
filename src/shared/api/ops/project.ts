@@ -38,4 +38,12 @@ export const projectOps = {
     }),
     output: z.strictObject({ changed: z.boolean(), offered: z.int().min(0) }),
   }),
+  'project.clearSetupApproval': define('project.clearSetupApproval', {
+    summary:
+      'Stops running the setup command the user allowed always for the canvas’s project ' +
+      'repository by itself: each new worktree asks again. A setup already running goes on. ' +
+      'Only the user clears it. Returns whether one was allowed always.',
+    input: z.strictObject({ canvas: OpCanvas }),
+    output: z.strictObject({ cleared: z.boolean() }),
+  }),
 } satisfies Partial<Record<OpName, OpDef>>;

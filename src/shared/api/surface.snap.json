@@ -15,6 +15,7 @@
     "api.canvas.close",
     "api.project.choose",
     "api.project.setSetupCommand",
+    "api.project.clearSetupApproval",
     "api.canvas.list",
     "api.canvas.get",
     "api.canvas.rename",
@@ -199,6 +200,7 @@
     "canvas.saveAs": "trust-gate",
     "project.choose": "trust-gate",
     "project.setSetupCommand": "trust-gate",
+    "project.clearSetupApproval": "permissions",
     "agent.setType": "permissions",
     "agent.setConnection": "permissions",
     "topics.subscribe": "transport",
@@ -248,6 +250,10 @@
     "project.setSetupCommand": {
       "input": "ccdee9f3032b4780",
       "output": "cc83953dac5fd349"
+    },
+    "project.clearSetupApproval": {
+      "input": "f676d264f07b5166",
+      "output": "2129f9125212db6f"
     },
     "canvas.create": {
       "input": "3394f69e468a0469",
