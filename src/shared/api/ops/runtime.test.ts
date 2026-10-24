@@ -101,22 +101,28 @@ describe('prepared operation schemas, not registrations', () => {
     expect(def.output.parse({ revs: {} })).toEqual({ revs: {} });
   });
 
-  it('exports each new schema without adding an op or changing the registered reply', () => {
-    const names = Object.keys({ ...b11RunOps, ...b11SessionOps });
-    for (const name of names) {
-      expect(name in OPS).toBe(false);
-      expect(name in SURFACE).toBe(false);
+  it('registers the C6 session services, run reader and typed reply, leaving other schemas prepared', () => {
+    const live = new Set([
+      'run.get',
+      'session.open',
+      'session.setMode',
+      'session.setModel',
+      'session.setEffort',
+      'session.stopTask',
+      'session.restart',
+      'session.newConversation',
+      'session.rewindPreview',
+      'session.rewind',
+      'session.continueIn',
+    ]);
+    for (const name of Object.keys({ ...b11RunOps, ...b11SessionOps })) {
+      expect(name in OPS).toBe(live.has(name));
+      expect(name in SURFACE).toBe(live.has(name));
     }
+    expect(OPS.reply).toBe(b11ConversationOps.reply);
     expect(
       OPS.reply.input.safeParse({ canvas, to: 'prompt/a/q', answer: { answers: { q: 'yes' } } })
         .success,
-    ).toBe(false);
-    expect(
-      b11ConversationOps.reply.input.safeParse({
-        canvas,
-        to: 'prompt/a/q',
-        answer: { answers: { q: 'yes' } },
-      }).success,
     ).toBe(true);
   });
 

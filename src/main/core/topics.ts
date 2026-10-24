@@ -204,7 +204,11 @@ export class Topics implements Publication {
   /** Subscribes a window to a topic, as you (the op's caller): its state now, and its revision. */
   subscribe(
     window: WindowId,
-    request: { topic: TopicName; canvas?: string | undefined } | RuntimeTopicRequest,
+    request: {
+      topic: TopicName | RuntimeTopicRequest['topic'];
+      canvas?: string | undefined;
+      agent?: string | undefined;
+    },
     ctx: OpContext,
   ): Promise<Subscribed> {
     if (ctx.caller.kind !== 'human') {
@@ -215,7 +219,11 @@ export class Topics implements Publication {
 
   unsubscribe(
     window: WindowId,
-    request: { topic: TopicName; canvas?: string | undefined } | RuntimeTopicRequest,
+    request: {
+      topic: TopicName | RuntimeTopicRequest['topic'];
+      canvas?: string | undefined;
+      agent?: string | undefined;
+    },
   ): Promise<void> {
     const topic = this.#keyOf(request);
     return this.#serialize(() => {
@@ -231,8 +239,8 @@ export class Topics implements Publication {
   follow(
     caller: Caller,
     topic: TopicKey,
-    listener: (changes: Change[]) => void,
-  ): Promise<{ snapshot: TopicSnapshot; stop: () => void }>;
+    listener: (changes: (Change | RuntimeSnapshotFrame)[]) => void,
+  ): Promise<{ snapshot: TopicSnapshot | RuntimeSnapshotFrame; stop: () => void }>;
   follow(
     caller: Caller,
     topic: RuntimeTopicKey,
@@ -241,7 +249,8 @@ export class Topics implements Publication {
   async follow(
     caller: Caller,
     topic: AnyTopic,
-    listener: ((changes: Change[]) => void) | ((updates: TopicUpdate[]) => void),
+    listener:
+      ((changes: (Change | RuntimeSnapshotFrame)[]) => void) | ((updates: TopicUpdate[]) => void),
   ): Promise<{ snapshot: Subscribed; stop: () => void }> {
     const id = Symbol('follower');
     // A B9 topic's follower hears only its own changes.
@@ -306,18 +315,24 @@ export class Topics implements Publication {
         at: Date.now(),
       };
       if (subscription.seen === undefined) {
-        this.#enqueue(id, {
+        const update: Change = {
           ...head,
           set: change.set,
           ...(change.remove === undefined ? {} : { remove: change.remove }),
-        });
+        };
+        this.#legacyUpdate(id, update, this.#deps.view?.(canvas, subscription.caller).entities);
+
         continue;
       }
       const view = this.#deps.view?.(canvas, subscription.caller);
       if (!view) continue;
       const { set, remove } = diff(subscription.seen, view.entities);
       subscription.seen = view.entities;
-      this.#enqueue(id, { ...head, set, ...(remove.length === 0 ? {} : { remove }) });
+      this.#legacyUpdate(
+        id,
+        { ...head, set, ...(remove.length === 0 ? {} : { remove }) },
+        view.entities,
+      );
     }
   }
 
@@ -387,12 +402,24 @@ export class Topics implements Publication {
     this.#scheduled.clear();
   }
 
-  #keyOf(
-    request: { topic: TopicName; canvas?: string | undefined } | RuntimeTopicRequest,
-  ): AnyTopic {
+  #keyOf(request: {
+    topic: TopicName | RuntimeTopicRequest['topic'];
+    canvas?: string | undefined;
+    agent?: string | undefined;
+  }): AnyTopic {
     try {
-      if (isRuntimeRequest(request)) return topicKey(RuntimeTopic.parse(request));
-      return topicKey(request);
+      if (isRuntimeTopic(`${request.topic}:`))
+        return topicKey(
+          RuntimeTopic.parse({
+            topic: request.topic,
+            canvas: request.canvas,
+            ...(request.agent !== undefined ? { agent: request.agent } : {}),
+          }),
+        );
+      return topicKey({
+        topic: request.topic as TopicName,
+        ...(request.canvas !== undefined ? { canvas: request.canvas } : {}),
+      });
     } catch {
       throw new OpFailure('invalid', 'Name the canvas whose topic it is.');
     }
@@ -422,19 +449,22 @@ export class Topics implements Publication {
         if (!view) throw new OpFailure('unavailable', 'This core keeps no canvas’s document.');
         // At once, so that what is committed next is said to it.
         topics.set(topic, view.all ? { caller } : { caller, seen: view.entities });
-        return { epoch: this.epoch, rev: view.rev, state: view.entities };
+        const { first, rest } = this.#framesOf(topic, view.rev, view.entities);
+        for (const frame of rest) this.#enqueue(id, frame);
+        return first;
       }
       const group = groupOf(caller);
       // A subscribe can observe a change before its source's notification reaches the queue.
       this.#replace(topic, group, state as TopicSnapshot['state'], 'corrallm');
       topics.set(topic, { caller });
-      return (
-        this.#states.get(topic)?.get(group) ?? {
-          epoch: this.epoch,
-          rev: this.#revs.get(topic)?.get(group) ?? 0,
-          state: state as TopicSnapshot['state'],
-        }
-      );
+      const snapshot = this.#states.get(topic)?.get(group) ?? {
+        epoch: this.epoch,
+        rev: this.#revs.get(topic)?.get(group) ?? 0,
+        state: state as TopicSnapshot['state'],
+      };
+      const { first, rest } = this.#framesOf(topic, snapshot.rev, snapshot.state);
+      for (const frame of rest) this.#enqueue(id, frame);
+      return first;
     });
   }
 
@@ -491,12 +521,12 @@ export class Topics implements Publication {
    * in order, each within a frame (an entry too big alone goes alone), and its `end`.
    */
   #framesOf(
-    topic: RuntimeTopicKey,
+    topic: AnyTopic,
     rev: number,
-    state: RuntimeState,
+    state: RuntimeState | TopicSnapshot['state'],
     transfer = false,
   ): { first: Subscribed; rest: RuntimeSnapshotFrame[] } {
-    const whole: RuntimeSnapshot = { epoch: this.epoch, rev, state };
+    const whole = { epoch: this.epoch, rev, state } as TopicSnapshot | RuntimeSnapshot;
     if (!transfer && bytesOf(whole) <= TOPIC_BUDGET) return { first: whole, rest: [] };
     const { summary, entries } = partsOf(topic, state);
     const base = { topic, epoch: this.epoch, snapshot: randomUUID() };
@@ -724,7 +754,7 @@ export class Topics implements Publication {
    */
   #transfer(
     id: SubscriberId,
-    topic: RuntimeTopicKey,
+    topic: AnyTopic,
     frames: readonly RuntimeSnapshotFrame[],
     keep: boolean,
   ): void {
@@ -824,7 +854,25 @@ export class Topics implements Publication {
     } as Change;
     for (const [id, topics] of this.#subscriptions) {
       const one = topics.get(topic);
-      if (one && groupOf(one.caller) === group) this.#enqueue(id, change);
+      if (one && groupOf(one.caller) === group) this.#legacyUpdate(id, change, state);
+    }
+  }
+
+  /** Existing topics use the identical transfer when their snapshot or a live change is large. */
+  #legacyUpdate(id: SubscriberId, change: Change, state: TopicSnapshot['state'] | undefined): void {
+    if (bytesOf(change) <= TOPIC_BUDGET) {
+      this.#enqueue(id, change);
+      return;
+    }
+    if (state === undefined) {
+      this.#forget(id, change.topic);
+      return;
+    }
+    try {
+      const { first, rest } = this.#framesOf(change.topic, change.rev, state, true);
+      this.#transfer(id, change.topic, [first as RuntimeSnapshotFrame, ...rest], true);
+    } catch {
+      this.#forget(id, change.topic);
     }
   }
 
@@ -938,13 +986,6 @@ export class Topics implements Publication {
   }
 }
 
-/** Whether a subscription names a runtime topic (its strict request is parsed after). */
-function isRuntimeRequest(
-  request: { topic: TopicName; canvas?: string | undefined } | RuntimeTopicRequest,
-): request is RuntimeTopicRequest {
-  return isRuntimeTopic(`${request.topic}:`);
-}
-
 /**
  * `updates` in order, as batches whose JSON each fits a frame beside its envelope: one too big
  * alone (a chunk of one big entry) goes alone.
@@ -988,7 +1029,7 @@ function sameAccess(
 }
 
 /** The transfers of `topic` whose `begin` is among `updates`, by their snapshot ids. */
-function begunIn(updates: readonly TopicUpdate[], topic: RuntimeTopicKey): string[] {
+function begunIn(updates: readonly TopicUpdate[], topic: AnyTopic): string[] {
   return updates.flatMap((update) =>
     update.topic === topic && 'kind' in update && update.kind === 'begin' ? [update.snapshot] : [],
   );

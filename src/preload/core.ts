@@ -1,7 +1,7 @@
 import { ipcRenderer } from 'electron';
 
 import type { OpResult } from '../shared/api/errors';
-import type { Change } from '../shared/api/topics';
+import type { TopicUpdate } from '../shared/api/topics';
 import { CORE_PORT } from '../shared/gui-link';
 import type { CoreGuiSide, GuiSide, GuiEvent, GuiEventArgs } from '../shared/gui-link';
 import type { CoreChannel, IpcArgs, IpcResult, IpcChannel } from '../shared/ipc';
@@ -20,7 +20,7 @@ const WAIT_MS = 10_000;
 const NOT_ANSWERING = 'corrallm’s core isn’t answering yet.';
 
 export interface CoreConnection {
-  onTopic(listener: (changes: Change[]) => void): () => void;
+  onTopic(listener: (changes: TopicUpdate[]) => void): () => void;
   onEpoch(listener: (epoch: string) => void): () => void;
   /** Calls a GUI operation as you: its whole result, with transport failures unavailable. */
   call(op: string, args: unknown): Promise<OpResult<unknown>>;
@@ -39,7 +39,7 @@ function linkOver(
   port: MessagePort,
   closed: () => void,
   receive: (name: GuiEvent, args: GuiEventArgs<GuiEvent>) => void,
-  topic: (changes: Change[]) => void,
+  topic: (changes: TopicUpdate[]) => void,
   epoch: (epoch: string) => void,
 ): Linked {
   let end: ((why: string) => void) | undefined;
@@ -80,7 +80,7 @@ export function connectCore(): CoreConnection {
   let refused: Error | undefined;
   let epoch: string | undefined;
   const epochs = new Set<(epoch: string) => void>();
-  const topics = new Set<(changes: Change[]) => void>();
+  const topics = new Set<(changes: TopicUpdate[]) => void>();
   const listeners = new Map<GuiEvent, Set<(...args: unknown[]) => void>>();
   const receive = (name: GuiEvent, args: GuiEventArgs<GuiEvent>) => {
     for (const listener of listeners.get(name) ?? []) listener(...args);

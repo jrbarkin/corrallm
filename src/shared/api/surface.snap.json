@@ -40,6 +40,23 @@
     "api.queue.move",
     "api.queue.update",
     "api.reply",
+    "api.session.open",
+    "api.session.setMode",
+    "api.session.setModel",
+    "api.session.setEffort",
+    "api.session.stopTask",
+    "api.session.restart",
+    "api.session.newConversation",
+    "api.session.rewindPreview",
+    "api.session.rewind",
+    "api.session.continueIn",
+    "api.session.get",
+    "api.session.transcript",
+    "api.session.interrupt",
+    "api.run.get",
+    "api.run.pause",
+    "api.run.kill",
+    "api.run.unpause",
     "api.usage.get",
     "api.usage.setRule",
     "api.usage.simulate",
@@ -84,11 +101,20 @@
       "queue_remove",
       "queue_update",
       "reply",
+      "run_get",
       "run_kill",
       "run_pause",
       "run_unpause",
       "session_get",
       "session_interrupt",
+      "session_newConversation",
+      "session_open",
+      "session_restart",
+      "session_rewind",
+      "session_rewindPreview",
+      "session_setEffort",
+      "session_setModel",
+      "session_stopTask",
       "session_transcript",
       "settings_get",
       "status",
@@ -119,7 +145,9 @@
       "messages",
       "needs",
       "project_files",
+      "run_get",
       "session_get",
+      "session_rewindPreview",
       "session_transcript",
       "settings_get",
       "status",
@@ -161,11 +189,20 @@
       "queue_remove",
       "queue_update",
       "reply",
+      "run_get",
       "run_kill",
       "run_pause",
       "run_unpause",
       "session_get",
       "session_interrupt",
+      "session_newConversation",
+      "session_open",
+      "session_restart",
+      "session_rewind",
+      "session_rewindPreview",
+      "session_setEffort",
+      "session_setModel",
+      "session_stopTask",
       "session_transcript",
       "settings_get",
       "status",
@@ -176,10 +213,10 @@
     ]
   },
   "counts": {
-    "lead": 40,
+    "lead": 49,
     "worker": 11,
-    "outside-read": 16,
-    "outside-write": 45
+    "outside-read": 18,
+    "outside-write": 54
   },
   "unhosted": {
     "agents": "B11",
@@ -187,13 +224,7 @@
     "needs": "B11",
     "messages": "B11",
     "message": "B11",
-    "withdraw": "B11",
-    "session.get": "B11",
-    "session.transcript": "B11",
-    "session.interrupt": "B11",
-    "run.pause": "B11",
-    "run.kill": "B11",
-    "run.unpause": "B11"
+    "withdraw": "B11"
   },
   "deviations": {
     "canvas.open": "trust-gate",
@@ -201,6 +232,8 @@
     "project.choose": "trust-gate",
     "project.setSetupCommand": "trust-gate",
     "project.clearSetupApproval": "permissions",
+    "session.setMode": "permissions",
+    "session.continueIn": "permissions",
     "agent.setType": "permissions",
     "agent.setConnection": "permissions",
     "topics.subscribe": "transport",
@@ -220,11 +253,11 @@
   },
   "schemas": {
     "topics.subscribe": {
-      "input": "10579f0d8cce3ace",
-      "output": "ef23925375cab1ae"
+      "input": "d52e3a96a8f206c0",
+      "output": "3a32b1f9b8943abd"
     },
     "topics.unsubscribe": {
-      "input": "10579f0d8cce3ace",
+      "input": "d52e3a96a8f206c0",
       "output": "647bbd6cc7b4f077"
     },
     "app.info": {
@@ -396,8 +429,8 @@
       "output": "e407d62a0d627a4d"
     },
     "reply": {
-      "input": "21b2d898ee938c3a",
-      "output": "3e0493629d75ee20"
+      "input": "64eb7ca52232e2a9",
+      "output": "c9c1b028c0775abd"
     },
     "withdraw": {
       "input": "c0fce69c0611e40f",
@@ -415,6 +448,46 @@
       "input": "dafe7f6753754290",
       "output": "647bbd6cc7b4f077"
     },
+    "session.open": {
+      "input": "dafe7f6753754290",
+      "output": "647bbd6cc7b4f077"
+    },
+    "session.setMode": {
+      "input": "3e87a9900d3ff773",
+      "output": "647bbd6cc7b4f077"
+    },
+    "session.setModel": {
+      "input": "32081c3885954099",
+      "output": "647bbd6cc7b4f077"
+    },
+    "session.setEffort": {
+      "input": "e2518f07521e530d",
+      "output": "647bbd6cc7b4f077"
+    },
+    "session.stopTask": {
+      "input": "6fdbdc18990489d6",
+      "output": "647bbd6cc7b4f077"
+    },
+    "session.restart": {
+      "input": "dafe7f6753754290",
+      "output": "647bbd6cc7b4f077"
+    },
+    "session.newConversation": {
+      "input": "dafe7f6753754290",
+      "output": "647bbd6cc7b4f077"
+    },
+    "session.rewindPreview": {
+      "input": "e38a4d613cdfe417",
+      "output": "9382131a42e254b9"
+    },
+    "session.rewind": {
+      "input": "948321df0cdae09f",
+      "output": "6b0655527549cf1a"
+    },
+    "session.continueIn": {
+      "input": "44576fef1b12e7f1",
+      "output": "54f0f0b7a5ed4bb6"
+    },
     "settings.get": {
       "input": "e5fa5cc18e054cdd",
       "output": "ca640021dc5b5fbe"
@@ -430,6 +503,10 @@
     "run.unpause": {
       "input": "a85fe9cb1eb6d55a",
       "output": "c8f56788bf9f4dd8"
+    },
+    "run.get": {
+      "input": "41356bc15da6df1b",
+      "output": "83e7c04b48aa417d"
     },
     "usage.get": {
       "input": "e5fa5cc18e054cdd",

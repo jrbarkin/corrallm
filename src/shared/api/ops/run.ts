@@ -45,7 +45,7 @@ export const runOps = {
   }),
 } satisfies Partial<Record<OpName, OpDef>>;
 
-/** B11 X2: prepared only; X9 registers these when the core services exist. */
+/** B11 schemas: run.get is registered; additional run controls await the C service contract. */
 export const b11RunOps = {
   'run.get': define(
     { kind: 'read' },

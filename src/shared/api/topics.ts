@@ -93,6 +93,9 @@ export function topicKey(request: { topic: TopicName; canvas?: string | undefine
 export function topicKey(request: RuntimeTopicRequest): RuntimeTopicKey;
 export function topicKey(
   request: { topic: TopicName; canvas?: string | undefined } | RuntimeTopicRequest,
+): TopicKey | RuntimeTopicKey;
+export function topicKey(
+  request: { topic: TopicName; canvas?: string | undefined } | RuntimeTopicRequest,
 ): TopicKey | RuntimeTopicKey {
   if (RUNTIME_TOPICS.some((kind) => kind === request.topic)) {
     const parsed = RuntimeTopic.parse(request);
@@ -111,8 +114,8 @@ export function topicKey(
 }
 
 /**
- * The runtime topics, which the core publishes (core/topics.ts): TOPICS and the live subscription
- * schema stay B9's until B11 X9 registers them for windows.
+ * The runtime topics, which the core publishes (core/topics.ts). These extend TOPICS in the live
+ * window subscription schema; no token subscribes.
  */
 export const RUNTIME_TOPICS = ['run', 'sessions', 'session', 'messages'] as const;
 export const RuntimeTopic = z
@@ -186,7 +189,7 @@ export type RuntimeChange = {
 /** count is the number of chunks, indexed from zero. Entry order follows those chunks, without
  * a full order header. Deltas follow end, never precede it (B11 §16.3a). */
 export type RuntimeSnapshotFrame<S = unknown, E = unknown> = {
-  readonly topic: RuntimeTopicKey;
+  readonly topic: TopicKey | RuntimeTopicKey;
   readonly epoch: string;
   readonly snapshot: string;
 } & (

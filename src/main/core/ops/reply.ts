@@ -39,7 +39,7 @@ import type { Implementations, OpServices } from '.';
  *   once your approval is on disk and the command is scheduled, not when it is done.
  * - What a canvas's runtime asks (its run's holds, its sessions' prompts: run-replies.ts) and a
  *   workspace's change (workspaces/rebind.ts) are answered by the handlers the core composes for
- *   them (`OpServices.replies`, B11 C7, registered by X9); without them, answer them in corrallm's
+ *   them (`OpServices.replies`, B11 C7); without them, answer them in corrallm's
  *   window.
  */
 

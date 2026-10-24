@@ -1,6 +1,5 @@
 import { GUI_OPS } from '../../shared/api/surface';
 import type { GuiOp } from '../../shared/api/surface';
-import type { Change } from '../../shared/api/topics';
 import type { CoreGuiSide, GuiSide } from '../../shared/gui-link';
 import { CoreLink } from '../../shared/link';
 import type { LinkOptions, LinkPort } from '../../shared/link';
@@ -106,9 +105,7 @@ export class WindowPorts {
       link.emit('event', name, args);
     });
     const stopTopics = this.#core.topics?.listen(window, (changes) => {
-      // A window subscribes to B9's topics alone until B11 X9 widens topics.subscribe (and this
-      // event) with the runtime topics and their transfers' frames.
-      link.emit('topic', changes as Change[]);
+      link.emit('topic', changes);
     });
     served.stop = () => {
       stopEvents?.();
