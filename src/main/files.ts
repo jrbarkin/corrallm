@@ -21,8 +21,21 @@ const MAX_DEPTH = 12;
 const GIT_MS = 5000;
 /** Yield between short batches, including when preparing a list or returning many matches. */
 const CHUNK_SIZE = 512;
-/** Folders a walk skips: dependencies, builds, and version control. */
-const SKIPPED = new Set(['node_modules', '.git', '.hg', '.svn', 'dist', 'build', 'out', '.vite']);
+/**
+ * Folders a walk skips: dependencies, builds, version control, and the workspaces' checkouts the
+ * core keeps in .corral (each agent's own, never the project folder's files).
+ */
+const SKIPPED = new Set([
+  'node_modules',
+  '.git',
+  '.hg',
+  '.svn',
+  'dist',
+  'build',
+  'out',
+  '.vite',
+  '.corral',
+]);
 
 export interface ProjectFilesDeps {
   /** The environment git runs in (the agents', which has the user's PATH). */
