@@ -60,6 +60,18 @@ describe('repository instructions and architecture docs', () => {
     expect(commands?.includes('[Native IDs and safety](#native-ids-and-safety)')).toBe(true);
   });
 
+  it.each([
+    ['README.md', 'Local CI '],
+    ['docs/architecture/toolchain.md', 'corrallm.mjs (`pnpm corrallm`)'],
+  ])('names every local gate script where %s introduces them', (file, start) => {
+    const line = readFileSync(path.join(ROOT, file), 'utf8')
+      .split('\n')
+      .find((one) => one.startsWith(start));
+    const gates = readdirSync(path.join(ROOT, 'scripts')).filter((name) => name.endsWith('.sh'));
+    expect(gates.length).toBeGreaterThan(0);
+    expect(gates.filter((name) => !line?.includes(`\`scripts/${name}`))).toEqual([]);
+  });
+
   it('keeps every concrete backticked repository path valid', () => {
     const missing = [
       path.join(ROOT, 'AGENTS.md'),
