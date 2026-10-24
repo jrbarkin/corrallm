@@ -1,3 +1,4 @@
+import { constants } from 'node:fs';
 import { open } from 'node:fs/promises';
 
 import { TOKEN_PATTERN } from '../core/tokens';
@@ -18,17 +19,30 @@ export async function readTokenFile(
   file: string,
   platform: NodeJS.Platform = process.platform,
 ): Promise<string> {
-  const handle = await open(file, 'r');
+  if (platform === 'win32') {
+    throw new Error('Token files on Windows need a private ACL check, which is held with Windows.');
+  }
+  // fstat alone is too late for a FIFO: a blocking open waits for its writer. NOFOLLOW also
+  // makes replacing the last path component with a link fail in the open itself.
+  const handle = await open(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   try {
     const stats = await handle.stat();
     if (!stats.isFile()) throw new Error(`${file} isn’t a file.`);
-    if (platform !== 'win32' && ((stats.mode & 0o077) !== 0 || stats.uid !== process.getuid?.())) {
+    if ((stats.mode & 0o077) !== 0 || stats.uid !== process.getuid?.()) {
       throw new Error(
         `${file} isn’t yours alone: a token belongs in a file only you can read (corrallm token renew --into it writes one).`,
       );
     }
     if (stats.size > MOST) throw new Error(`${file} holds more than a token.`);
-    const token = (await handle.readFile('utf8')).trim();
+    const bytes = Buffer.alloc(MOST + 1);
+    let size = 0;
+    while (size < bytes.length) {
+      const { bytesRead } = await handle.read(bytes, size, bytes.length - size, null);
+      if (bytesRead === 0) break;
+      size += bytesRead;
+    }
+    if (size > MOST) throw new Error(`${file} holds more than a token.`);
+    const token = bytes.subarray(0, size).toString('utf8').trim();
     if (!TOKEN_PATTERN.test(token)) throw new Error(`${file} holds no corrallm token.`);
     return token;
   } finally {

@@ -1,6 +1,16 @@
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { chmod, lstat, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import {
+  chmod,
+  lstat,
+  mkdir,
+  mkdtemp,
+  readFile,
+  realpath,
+  rm,
+  symlink,
+  writeFile,
+} from 'node:fs/promises';
 import { createConnection, createServer } from 'node:net';
 import type { Server, Socket } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -52,8 +62,8 @@ let servers: Server[];
 
 beforeEach(async () => {
   dir = await mkdtemp(path.join(tmpdir(), 'corrallm-socket-'));
-  profile = path.join(dir, 'profile');
-  await mkdir(profile, { mode: 0o700 });
+  await mkdir(path.join(dir, 'profile'), { mode: 0o700 });
+  profile = await realpath(path.join(dir, 'profile'));
   sockets = [];
   servers = [];
 });
@@ -80,6 +90,7 @@ async function serve(
  */
 async function plain(at: string, handle: (socket: Socket) => void) {
   const server = createServer((connection) => {
+    connection.on('error', () => undefined); // A client refusing an answer closes mid-write.
     connection.resume();
     handle(connection);
   });
@@ -188,6 +199,27 @@ describe.skipIf(process.platform === 'win32')('the token socket', () => {
     expect(existsSync(path.join(profile, 'token.sock'))).toBe(false);
   });
 
+  it('refuses a private profile under an ancestor another user can replace', async () => {
+    // A 0700 profile is still replaceable by renaming its entry in this non-sticky parent.
+    await chmod(dir, 0o777);
+    await expect(serve()).rejects.toThrow(/folder|ancestor/);
+  });
+
+  it('rechecks the ancestors before asking, and binds profile aliases at their canonical path', async () => {
+    const alias = path.join(dir, 'alias');
+    await symlink(profile, alias);
+    const socket = await serveTokenSocket({
+      profile: alias,
+      answer: (request) => Promise.resolve(made(request)),
+    });
+    sockets.push(socket);
+    expect(socket.path).toBe(path.join(profile, 'token.sock'));
+    expect(await askTokenOwner(alias, NEW)).toEqual(made(NEW));
+    // Someone has made a parent writable since bind: don't connect through that namespace.
+    await chmod(dir, 0o777);
+    await expect(askTokenOwner(alias, NEW)).rejects.toThrow(/folder|ancestor/);
+  });
+
   it('asks only a socket that is its user’s alone: never one others can open, or a link to one', async () => {
     const socket = await serve();
     await chmod(socket.path, 0o666);
@@ -249,6 +281,49 @@ describe.skipIf(process.platform === 'win32')('the token socket', () => {
       ok: false,
       sentence: 'm1.corral isn’t a canvas corrallm keeps.',
     });
+  });
+
+  it('refuses an oversized request even when its newline arrives with it', async () => {
+    let asked = 0;
+    await serve((request) => {
+      asked++;
+      return Promise.resolve(made(request));
+    });
+    const answer = JSON.parse(
+      await raw(`${' '.repeat(64 * 1024)}${JSON.stringify(NEW)}\n`),
+    ) as TokenAnswer;
+    expect(answer).toMatchObject({ ok: false });
+    expect(asked).toBe(0);
+  });
+
+  it('bounds answers in UTF-8 bytes, preserving a minted token and its full grant', async () => {
+    const answer = made(NEW);
+    if (!answer.ok || answer.op === 'revoke') throw new Error('No token.');
+    answer.canvases = Array.from({ length: 8 }, () => ({
+      id: CANVAS,
+      file: `/${'界'.repeat(4000)}`,
+    }));
+    await serve(() => Promise.resolve(answer));
+    const text = await raw(`${JSON.stringify(NEW)}\n`);
+    expect(Buffer.byteLength(text)).toBeLessThanOrEqual(64 * 1024);
+    expect(JSON.parse(text)).toMatchObject({
+      ok: true,
+      token: answer.token,
+      canvases: answer.canvases.map(({ id }) => ({ id })),
+    });
+  });
+
+  it('refuses an oversized answer from another owner in bytes rather than characters', async () => {
+    const answer = made(NEW);
+    if (!answer.ok || answer.op === 'revoke') throw new Error('No token.');
+    answer.canvases = Array.from({ length: 8 }, () => ({
+      id: CANVAS,
+      file: `/${'界'.repeat(4000)}`,
+    }));
+    await plain(path.join(profile, 'token.sock'), (socket) => {
+      socket.end(`${JSON.stringify(answer)}\n`);
+    });
+    await expect(askTokenOwner(profile, NEW)).rejects.toThrow(/understand/);
   });
 
   it('gives up on an owner that never answers, or answers what isn’t an answer', async () => {

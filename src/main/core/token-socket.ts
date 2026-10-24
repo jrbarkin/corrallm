@@ -1,5 +1,5 @@
 import { lstatSync, rmSync } from 'node:fs';
-import { chmod, lstat, rm, stat } from 'node:fs/promises';
+import { chmod, lstat, rm } from 'node:fs/promises';
 import type { Stats } from 'node:fs';
 import { createConnection, createServer } from 'node:net';
 import type { Socket } from 'node:net';
@@ -10,6 +10,7 @@ import { z } from 'zod';
 import { ID_PATTERN } from '../../shared/adapter';
 import { MAX_TOKEN_CANVASES, MAX_TOKEN_HOURS } from '../../shared/api/limits';
 import { isCanvasId } from '../../shared/canvas';
+import { privateTokenProfile } from './token-profile';
 
 /*
  * The token socket (Build Plan B30; Core Server §6.7, D7): how `corrallm token new|renew|revoke`
@@ -44,7 +45,6 @@ const ANSWER_MS = 60 * 1000;
 const MAX_PATH_BYTES = (platform: NodeJS.Platform) => (platform === 'linux' ? 107 : 103);
 /** Permission bits for anyone but the user, and for writing by anyone but the user. */
 const OTHERS = 0o077;
-const OTHERS_WRITE = 0o022;
 
 const WINDOWS =
   'corrallm token can’t reach the profile’s owner on Windows yet: that needs a named pipe only you can open, which is held with Windows.';
@@ -136,15 +136,13 @@ function socketPath(profile: string, platform: NodeJS.Platform): string {
 }
 
 /** Checks the profile folder is the user's, and no one else may write to it: rejects with why. */
-async function checkFolder(profile: string): Promise<void> {
-  const folder = await stat(profile);
-  if (!folder.isDirectory()) {
-    throw new TokenSocketUnavailable(`${profile} isn’t a folder.`);
-  }
-  if (folder.uid !== process.getuid?.() || (folder.mode & OTHERS_WRITE) !== 0) {
-    throw new TokenSocketUnavailable(
-      `The profile folder ${profile} isn’t yours alone: others may write to it, so its token socket can’t be trusted (chmod 700 it).`,
-    );
+async function checkFolder(profile: string): Promise<string> {
+  try {
+    return await privateTokenProfile(profile);
+  } catch (error) {
+    // Keep missing-path codes: a client then knows there is no owner to ask.
+    if (isCode(error, 'ENOENT') || isCode(error, 'ENOTDIR')) throw error;
+    throw new TokenSocketUnavailable(error instanceof Error ? error.message : String(error));
   }
 }
 
@@ -168,8 +166,7 @@ export async function serveTokenSocket({
   answer: (request: TokenRequest) => Promise<TokenAnswer>;
   platform?: NodeJS.Platform;
 }): Promise<TokenSocket> {
-  const at = socketPath(profile, platform);
-  await checkFolder(path.dirname(at));
+  const at = socketPath(await checkFolder(path.dirname(socketPath(profile, platform))), platform);
   const found = await lstat(at).catch((error: unknown) => {
     if (isCode(error, 'ENOENT')) return undefined;
     throw error;
@@ -264,7 +261,16 @@ function serveOne(
   let received = Buffer.alloc(0);
   let answered = false;
   const reply = (value: TokenAnswer) => {
-    if (socket.writable) socket.end(`${JSON.stringify(value)}\n`);
+    let text = `${JSON.stringify(value)}\n`;
+    if (Buffer.byteLength(text) > MAX_LINE && value.ok && value.op !== 'revoke') {
+      // File labels are optional. Never lose a minted token, or clip the grant, just because
+      // long/non-ASCII file names make its presentation exceed the wire budget.
+      text = `${JSON.stringify({ ...value, canvases: value.canvases.map(({ id }) => ({ id })) })}\n`;
+    }
+    if (Buffer.byteLength(text) > MAX_LINE) {
+      text = `${JSON.stringify({ ok: false, sentence: 'The token socket’s answer is too long.' })}\n`;
+    }
+    if (socket.writable) socket.end(text);
   };
   const refuse = (sentence: string) => {
     reply({ ok: false, sentence });
@@ -277,11 +283,12 @@ function serveOne(
     if (answered) return;
     received = Buffer.concat([received, chunk]);
     const end = received.indexOf(0x0a);
+    if ((end === -1 ? received.length : end + 1) > MAX_LINE) {
+      answered = true;
+      refuse('That request is too long to be one of corrallm token’s.');
+      return;
+    }
     if (end === -1) {
-      if (received.length > MAX_LINE) {
-        answered = true;
-        refuse('That request is too long to be one of corrallm token’s.');
-      }
       return;
     }
     answered = true;
@@ -329,17 +336,27 @@ export async function askTokenOwner(
     timeoutMs = ANSWER_MS,
   }: { platform?: NodeJS.Platform; timeoutMs?: number } = {},
 ): Promise<TokenAnswer | undefined> {
-  const at = socketPath(profile, platform);
+  let folder: string;
+  try {
+    folder = await checkFolder(path.dirname(socketPath(profile, platform)));
+  } catch (error) {
+    if (isCode(error, 'ENOENT') || isCode(error, 'ENOTDIR')) return undefined;
+    throw error;
+  }
+  const at = socketPath(folder, platform);
   const found = await lstat(at).catch((error: unknown) => {
     if (isCode(error, 'ENOENT') || isCode(error, 'ENOTDIR')) return undefined;
     throw error;
   });
   if (found === undefined) return undefined;
-  await checkFolder(path.dirname(at));
   if (!usersAlone(found)) {
     throw new TokenSocketUnavailable(
       `${at} isn’t a socket only you can open, so it may not be corrallm’s: corrallm token won’t ask it. Remove it, and start the profile’s corrallm again.`,
     );
+  }
+  const sent = `${JSON.stringify(request)}\n`;
+  if (Buffer.byteLength(sent) > MAX_LINE) {
+    throw new Error('That request is too long to be one of corrallm token’s.');
   }
   return new Promise<TokenAnswer | undefined>((resolve, reject) => {
     const socket = createConnection(at);
@@ -353,11 +370,11 @@ export async function askTokenOwner(
     };
     socket.setEncoding('utf8');
     socket.on('connect', () => {
-      socket.write(`${JSON.stringify(request)}\n`);
+      socket.write(sent);
     });
     socket.on('data', (chunk: string) => {
       received += chunk;
-      if (received.length > MAX_LINE) {
+      if (Buffer.byteLength(received) > MAX_LINE) {
         done();
         socket.destroy();
         reject(new Error('The profile’s owner answered what corrallm token doesn’t understand.'));

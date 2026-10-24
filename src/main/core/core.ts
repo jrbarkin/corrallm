@@ -58,6 +58,7 @@ import { holder, resolvers } from './reach';
 import { changeChecks, heldBy, ruleChecks } from './rules';
 import { lockProfile } from './lock';
 import { answerTokenRequest } from './token-requests';
+import { privateTokenProfile } from './token-profile';
 import type { TokenAnswer, TokenRequest } from './token-socket';
 import { TokenStore } from './tokens';
 import { Topics } from './topics';
@@ -833,6 +834,7 @@ export async function answerUnowned(profile: string, request: TokenRequest): Pro
       sentence: `No corrallm profile is at ${profile}: open the canvas in the app first, or name the profile with --profile.`,
     };
   }
+  profile = await privateTokenProfile(profile);
   const lock = await lockProfile(profile, 'token');
   // Whatever happens, a process that ends lets the profile go.
   const release = () => {

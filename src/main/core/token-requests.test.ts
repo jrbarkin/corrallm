@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { chmod, copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -144,6 +144,13 @@ describe('a token request the core that owns the profile answers', () => {
 });
 
 describe('a token request with no owner', () => {
+  it('refuses an unsafe profile before taking its lock or changing its token store', async () => {
+    await chmod(profile, 0o777);
+    await expect(answerUnowned(profile, newToken())).rejects.toThrow(/folder/);
+    expect(existsSync(path.join(profile, 'core.lock'))).toBe(false);
+    expect(existsSync(path.join(profile, 'tokens.json'))).toBe(false);
+  });
+
   it('is answered under core.lock, which it lets go, as serve --new-token writes tokens', async () => {
     const answer = await answerUnowned(profile, newToken());
     expect(answer).toMatchObject({ ok: true, owner: 'none', op: 'new', url: null });

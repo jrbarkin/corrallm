@@ -138,18 +138,21 @@ export async function startApiServer(options: ApiServerOptions): Promise<ApiServ
       return;
     }
     const token = /^Bearer (\S+)$/.exec(request.headers.authorization ?? '')?.[1];
-    const caller = token === undefined ? undefined : options.clientOf(token);
-    // No token is ever you (decision 7), whatever its lookup says.
-    if (caller === undefined || !isTokenCaller(caller)) {
-      if (token !== undefined && options.stale?.(token) === true) {
-        // Still a 401, which a client's headers helper hears to read its token again.
-        request.resume();
-        answerError(response, 401, -32001, TOKEN_REPLACED);
-        return;
+    const authenticate = (): TokenCaller | undefined => {
+      const current = token === undefined ? undefined : options.clientOf(token);
+      // No token is ever you (decision 7), whatever its lookup says.
+      if (current === undefined || !isTokenCaller(current)) {
+        if (token !== undefined && options.stale?.(token) === true) {
+          // Still a 401, which a client's headers helper hears to read its token again.
+          request.resume();
+          answerError(response, 401, -32001, TOKEN_REPLACED);
+        } else refuse(401);
+        return undefined;
       }
-      refuse(401);
-      return;
-    }
+      return current;
+    };
+    const caller = authenticate();
+    if (caller === undefined) return;
     if (closing) {
       refuse(503);
       return;
@@ -173,6 +176,10 @@ export async function startApiServer(options: ApiServerOptions): Promise<ApiServ
         answerError(response, 413, -32000, message, { Connection: 'close' });
         return;
       }
+      // A client may hold its body back across renewal, revoke or expiry. Headers alone never
+      // reserve authority for an operation that hasn't reached the dispatcher yet.
+      const current = authenticate();
+      if (current === undefined) return;
       let parsed: unknown;
       try {
         parsed = JSON.parse(body);
@@ -180,7 +187,7 @@ export async function startApiServer(options: ApiServerOptions): Promise<ApiServ
         answerError(response, 400, -32700, 'Parse error: Invalid JSON');
         return;
       }
-      serve(caller, request, response, parsed);
+      serve(current, request, response, parsed);
     });
   });
   await new Promise<void>((resolve, reject) => {
