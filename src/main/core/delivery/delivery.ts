@@ -244,8 +244,9 @@ export class Delivery {
     if (images?.length) this.#images.set(id, images);
   }
 
+  /** Yours, as you typed it (manual): it goes past the run's holds; your resend waits on them. */
   #yours(message: Message): boolean {
-    return message.from === 'you' && !this.#deps.store.isResend(message);
+    return this.#deps.store.originOf(message.id) === 'manual';
   }
 
   /** Looks again, soon, at what waits: once, however often asked before then. */
@@ -281,6 +282,8 @@ export class Delivery {
       from,
       to: agentParty(to),
       kind: 'text',
+      // Yours is yours as you sent it; anyone else's a party's.
+      origin: from === 'you' ? 'manual' : 'party',
       body,
       state: 'pending',
       ...(replyTo === undefined ? {} : { replyTo }),
@@ -453,7 +456,7 @@ export class Delivery {
     for (const message of messages) {
       if (
         message.state === 'pending' &&
-        store.isImageResend(message) &&
+        store.requiresImages(message) &&
         !this.#images.has(message.id)
       ) {
         const text =
@@ -467,6 +470,7 @@ export class Delivery {
             from: 'corrallm',
             to: message.from,
             kind: 'notice',
+            origin: 'party',
             replyTo: message.id,
             body: text,
             state: 'delivered',
@@ -894,6 +898,7 @@ export class Delivery {
         from: message.to,
         to: message.from,
         kind: 'text',
+        origin: 'party',
         body: cut(reply),
         replyTo: id,
         turn: result,
@@ -1068,6 +1073,7 @@ export class Delivery {
         from: 'corrallm',
         to: message.from,
         kind: 'notice',
+        origin: 'party',
         body: text,
         replyTo: message.id,
         ...(turn === undefined ? {} : { turn }),

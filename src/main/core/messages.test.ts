@@ -338,6 +338,7 @@ describe('stalled message turns', () => {
         from,
         to: 'agent:builder',
         kind: 'text',
+        origin: from === 'you' ? 'manual' : 'party',
         body: 'Hello',
         state: 'delivered',
         delivery: { at: Date.now(), as: String(i), attempt: 1 },

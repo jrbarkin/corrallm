@@ -250,6 +250,7 @@ export class Engines {
           from: 'corrallm',
           to: message.from,
           kind: 'notice',
+          origin: 'party',
           body: text,
           replyTo: message.id,
           state: 'delivered',
@@ -475,8 +476,18 @@ export class Engines {
     const partyIds = new Set(
       originals.flatMap((m) => (m.delivery === undefined ? [] : [m.delivery.as])),
     );
+    // A manual submission's own message (the journal keeps each as yours: run-journal.ts), kept
+    // unresolved while its turn went on, ended with that turn: cancelled, as Delivery's are.
+    for (const m of originals) {
+      if (store.originOf(m.id) === 'manual' && m.state === 'unresolved') {
+        store.update(m.id, {
+          state: 'replied',
+          turn: { status: 'cancelled', reason: 'interrupted' },
+        });
+      }
+    }
     const copies = originals
-      .filter((m) => m.state === 'replied')
+      .filter((m) => store.get(m.id)?.state === 'replied')
       .map((m) => ({
         id: m.id,
         from: m.from,
@@ -497,6 +508,7 @@ export class Engines {
         from: 'you',
         to: agentParty(agent),
         kind: 'text',
+        origin: 'manual',
         body: input.text,
         state: 'replied',
         turn: { status: 'cancelled', reason: 'interrupted' },
@@ -505,25 +517,27 @@ export class Engines {
       copies.push({ id: recorded.id, from: 'you', body: input.text, images: input.images });
     }
     for (const original of copies) {
-      const key = `resend:${original.id}`;
-      if (store.hasTold(key) || store.hasTold(`${key}:images`)) continue;
-      const next = store.add(
-        {
-          from: original.from,
-          to: agentParty(agent),
-          kind: 'text',
-          body: original.body,
-          state: 'pending',
-          replyTo: original.id,
-        },
-        original.images?.length ? `${key}:images` : key,
-      );
+      // Once: its resend is kept as one (resend_of), never a reply to it (reply_to).
+      if (store.resent(original.id)) continue;
+      const images = original.images?.length ?? 0;
+      const next = store.add({
+        from: original.from,
+        to: agentParty(agent),
+        kind: 'text',
+        origin: 'resend',
+        // Its images are live-only: once a restart lost them, it is never sent without them.
+        ...(images > 0 ? { display: { images, requiresImages: true } } : {}),
+        body: original.body,
+        state: 'pending',
+        resendOf: original.id,
+      });
       open.delivery.images(next.id, original.images);
       store.add(
         {
           from: 'corrallm',
           to: original.from,
           kind: 'notice',
+          origin: 'party',
           state: 'delivered',
           replyTo: original.id,
           body: `At the user's request, message ${original.id} was resent as ${next.id}. Its reply will be addressed to that new message.`,
@@ -893,7 +907,12 @@ export class Engines {
       ...running.engine.checkpoint(),
       updatedAt: Date.now(),
     };
-    const problem = this.#deps.journal.keep(running.document.id, running.token, checkpoint);
+    const problem = this.#deps.journal.keep(
+      running.document.id,
+      running.token,
+      checkpoint,
+      running.messages,
+    );
     return () => {
       running.saved = Math.max(running.saved, covered);
       this.#deps.journal.kept(running.document.id, problem);

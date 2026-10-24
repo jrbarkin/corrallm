@@ -50,13 +50,23 @@ const CANVAS = '0a6f6a5e-4bb3-4c3e-8a8c-3f7f2c1e9d10';
 function addCanvas(id = CANVAS): void {
   connection.prepare('INSERT INTO canvas (id, used_at) VALUES (?, 1)').run(id);
 }
-function addMessage(id: string, canvas = CANVAS): number {
-  const row = connection
-    .prepare(
-      `INSERT INTO message (id, canvas_id, from_party, to_party, kind, body, state, sent_at)
-       VALUES (?, ?, 'you', 'agent:a', 'text', 'Hello', 'pending', 1) RETURNING seq`,
-    )
-    .get(id, canvas);
+/** Adds your message to an agent; from schema 4, with how it came to be (yours: manual). */
+function addMessage(id: string, canvas = CANVAS, origin = 'manual'): number {
+  const row =
+    schemaOf(connection) < 4
+      ? connection
+          .prepare(
+            `INSERT INTO message (id, canvas_id, from_party, to_party, kind, body, state, sent_at)
+             VALUES (?, ?, 'you', 'agent:a', 'text', 'Hello', 'pending', 1) RETURNING seq`,
+          )
+          .get(id, canvas)
+      : connection
+          .prepare(
+            `INSERT INTO message (id, canvas_id, from_party, to_party, kind, origin, body, state,
+               sent_at)
+             VALUES (?, ?, 'you', 'agent:a', 'text', ?, 'Hello', 'pending', 1) RETURNING seq`,
+          )
+          .get(id, canvas, origin);
   return row?.seq as number;
 }
 
@@ -379,8 +389,8 @@ describe('the schema', () => {
     expect(() =>
       connection
         .prepare(
-          `INSERT INTO message (id, canvas_id, from_party, to_party, kind, state, sent_at)
-           VALUES ('m', ?, 'you', 'agent:a', 'text', 'pending', 1)`,
+          `INSERT INTO message (id, canvas_id, from_party, to_party, kind, origin, state, sent_at)
+           VALUES ('m', ?, 'you', 'agent:a', 'text', 'manual', 'pending', 1)`,
         )
         .run(CANVAS),
     ).toThrow(/NOT NULL constraint failed: message\.body/);
@@ -879,7 +889,7 @@ describe('migration 3', () => {
       connection.prepare('SELECT * FROM conversation ORDER BY canvas_id, adapter, agent_id').all();
     const talked = conversations();
 
-    migrate(connection);
+    migrate(connection, MIGRATIONS.slice(0, 3));
 
     expect(schemaOf(connection)).toBe(3);
     expect(minReaderOf(connection)).toBe(3);
@@ -899,5 +909,448 @@ describe('migration 3', () => {
       expect(count(table), table).toBe(0);
     }
     expect(addMessage('after')).toBe(seq + 1);
+  });
+});
+
+/** A row of `message` as a corrallm of schema 3 wrote it (MessageTable.keep at 767a382). */
+function keep3(
+  row: Partial<Record<string, string | number | null>> & { id: string },
+  canvas = CANVAS,
+): number {
+  const columns = {
+    canvas_id: canvas,
+    from_party: 'you',
+    to_party: 'agent:a',
+    kind: 'text',
+    body: 'Hello',
+    state: 'replied',
+    sent_at: 1,
+    ...row,
+  };
+  const names = Object.keys(columns);
+  return connection
+    .prepare(
+      `INSERT INTO message (${names.join(', ')}) VALUES (${names.map(() => '?').join(', ')})
+       RETURNING seq`,
+    )
+    .get(...Object.values(columns))?.seq as number;
+}
+
+/** A canvas's run as a corrallm of schema 3 journaled it (RunJournal.keep at 767a382). */
+function journal3(state: unknown, canvas = CANVAS, updatedAt = 5000): void {
+  connection
+    .prepare('INSERT INTO run (canvas_id, state, updated_at) VALUES (?, ?, ?)')
+    .run(canvas, typeof state === 'string' ? state : JSON.stringify(state), updatedAt);
+}
+
+/** A saved run as the engine of schema 3 kept one (src/shared/engine/run/checkpoint.ts). */
+const SAVED_RUN = {
+  version: 2,
+  run: { running: false, paused: true, agents: { a: { status: 'done', outcomes: {} } } },
+  replies: [],
+  held: [],
+  arrived: [],
+  ended: [],
+  past: [],
+  due: [],
+  usageDecided: [],
+  warned: [],
+};
+
+/** Every column of each message of the canvas, in their order, as JSON columns read back. */
+const messagesOf = (canvas = CANVAS) =>
+  connection
+    .prepare('SELECT * FROM message WHERE canvas_id = ? ORDER BY seq')
+    .all(canvas)
+    .map((row) =>
+      Object.fromEntries(
+        Object.entries(row).map(([key, value]) => [
+          key,
+          ['task', 'turn', 'delivery', 'withdrawal', 'display'].includes(key) &&
+          typeof value === 'string'
+            ? (JSON.parse(value) as unknown)
+            : value,
+        ]),
+      ),
+    );
+
+const stateOf = (canvas = CANVAS): unknown => {
+  const state = connection.prepare('SELECT state FROM run WHERE canvas_id = ?').get(canvas)?.state;
+  return typeof state === 'string' ? (JSON.parse(state) as unknown) : state;
+};
+
+describe('migration 4', () => {
+  beforeEach(() => {
+    migrate(connection, MIGRATIONS.slice(0, 3));
+    connection.exec('PRAGMA foreign_keys = ON');
+    addCanvas();
+  });
+
+  it('classifies each message by what made it, moving a resend’s marker to resend_of, which a schema-3 corrallm may no longer open', () => {
+    const original = '0b3a7d52-6a0c-4f39-9c4e-2f8f0c1d9e11';
+    const imaged = '0b3a7d52-6a0c-4f39-9c4e-2f8f0c1d9e12';
+    keep3({
+      id: original,
+      from_party: 'outside:orchestrator',
+      delivery: '{"at":1,"as":"n1","attempt":1}',
+    });
+    keep3({ id: imaged, delivery: '{"at":1,"as":"n2","attempt":1}' });
+    // Resends, as Interrupt and resend marked them (PR #31): by their notice key and reply link.
+    keep3({
+      id: 'resent',
+      from_party: 'outside:orchestrator',
+      state: 'pending',
+      reply_to: original,
+      told: `resend:${original}`,
+    });
+    keep3({
+      id: 'resent with images',
+      state: 'pending',
+      reply_to: imaged,
+      told: `resend:${imaged}:images`,
+    });
+    // What only looks like one keeps its link: its key names another message.
+    keep3({
+      id: 'a reply',
+      from_party: 'agent:a',
+      to_party: 'you',
+      reply_to: original,
+      told: 'resend:else',
+    });
+    keep3({
+      id: 'told',
+      from_party: 'corrallm',
+      to_party: 'outside:orchestrator',
+      kind: 'notice',
+      state: 'delivered',
+      reply_to: original,
+      told: `resent:${original}`,
+    });
+    keep3({ id: 'yours', state: 'pending' });
+    const before = messagesOf();
+
+    migrate(connection);
+
+    expect(schemaOf(connection)).toBe(4);
+    expect(minReaderOf(connection)).toBe(4);
+    const unchanged = (id: string) => ({
+      ...before.find((row) => row.id === id),
+      display: null,
+      resend_of: null,
+    });
+    expect(messagesOf()).toEqual([
+      { ...unchanged(original), origin: 'party' },
+      { ...unchanged(imaged), origin: 'manual' },
+      { ...unchanged('resent'), origin: 'resend', reply_to: null, told: null, resend_of: original },
+      {
+        ...unchanged('resent with images'),
+        origin: 'resend',
+        reply_to: null,
+        told: null,
+        resend_of: imaged,
+        display: { requiresImages: true },
+      },
+      { ...unchanged('a reply'), origin: 'party' },
+      { ...unchanged('told'), origin: 'party' },
+      { ...unchanged('yours'), origin: 'manual' },
+    ]);
+  });
+
+  it('gives no place in the order again, the newest deleted ones’ included', () => {
+    keep3({ id: 'first' });
+    const last = keep3({ id: 'second' });
+    connection.prepare("DELETE FROM message WHERE id = 'second'").run();
+    migrate(connection);
+    expect(addMessage('third')).toBe(last + 1);
+    expect(
+      connection.prepare("SELECT seq FROM sqlite_sequence WHERE name = 'message'").get(),
+    ).toEqual({ seq: last + 1 });
+  });
+
+  it('keeps each run in its own envelope, its submissions your messages, and leaves one it can’t read as it was', () => {
+    const OTHER = OTHER_CANVAS;
+    const BROKEN = '2c8e8c7f-6dd5-4e5f-8aaf-5a6b7c8d9e32';
+    const REFUSED = '3d9f9d80-7ee6-4f60-9bb0-6b7c8d9e0f43';
+    addCanvas(OTHER);
+    addCanvas(BROKEN);
+    addCanvas(REFUSED);
+    const submissions = {
+      version: 1,
+      agents: [
+        {
+          id: 'a',
+          submissions: [
+            {
+              id: 'native-1',
+              text: 'Fix it',
+              status: 'completed',
+              after: 'plan',
+              task: { agent: 'a', item: 'plan' },
+              result: { status: 'completed', reason: 'completed' },
+            },
+            {
+              id: 'native-2',
+              text: 'Explain',
+              status: 'cancelled',
+              result: { status: 'cancelled', reason: 'interrupted' },
+            },
+            { id: 'native-3', text: 'Explain', status: 'completed', retryOf: 'native-2' },
+            { id: 'native-4', text: 'Slow', status: 'running', after: 'plan' },
+            { id: 'native-5', text: 'Then this', status: 'queued' },
+            {
+              id: 'native-6',
+              text: 'Cut off before',
+              status: 'cancelled',
+              unresolved: true,
+              result: {
+                status: 'cancelled',
+                reason: 'interrupted',
+                message: 'Unresolved after restart; resume the queue to continue.',
+              },
+            },
+          ],
+        },
+      ],
+    };
+    journal3({ version: 2, state: SAVED_RUN, messages: submissions });
+    journal3(
+      {
+        version: 2,
+        state: SAVED_RUN,
+        messages: { version: 1, agents: [] },
+        saveError: 'Too large',
+      },
+      OTHER,
+      7000,
+    );
+    journal3({ saveError: 'Too large' }, REFUSED);
+    // A status no corrallm kept: its run can't be restored, so it is left for the journal to say so.
+    const broken = JSON.stringify({
+      version: 2,
+      state: SAVED_RUN,
+      messages: {
+        version: 1,
+        agents: [{ id: 'a', submissions: [{ id: 'x', text: 'x', status: 'lost' }] }],
+      },
+    });
+    journal3(broken, BROKEN);
+
+    migrate(connection);
+
+    expect(stateOf()).toEqual({ format: 3, run: SAVED_RUN });
+    expect(stateOf(OTHER)).toEqual({ format: 3, run: SAVED_RUN, saveError: 'Too large' });
+    expect(stateOf(REFUSED)).toEqual({ format: 3, saveError: 'Too large' });
+    expect(stateOf(BROKEN)).toEqual(JSON.parse(broken));
+    expect(messagesOf(BROKEN)).toEqual([]);
+    expect(connection.prepare('SELECT updated_at FROM run ORDER BY canvas_id').all()).toEqual([
+      { updated_at: 5000 },
+      { updated_at: 7000 },
+      { updated_at: 5000 },
+      { updated_at: 5000 },
+    ]);
+    const rows = messagesOf();
+    const unresolved = {
+      status: 'cancelled',
+      reason: 'interrupted',
+      message: 'Unresolved after restart; resume the queue to continue.',
+    };
+    const yours = (as: string) => ({
+      canvas_id: CANVAS,
+      from_party: 'you',
+      to_party: 'agent:a',
+      kind: 'text',
+      reply_to: null,
+      task: null,
+      delivery: { at: 5000, as, attempt: 1 },
+      by_party: null,
+      sent_at: 5000,
+      told: null,
+      withdrawal: null,
+    });
+    expect(rows).toEqual([
+      {
+        ...yours('native-1'),
+        seq: expect.any(Number) as number,
+        id: expect.any(String) as string,
+        origin: 'manual',
+        body: 'Fix it',
+        display: { after: 'plan', task: { agent: 'a', item: 'plan' } },
+        resend_of: null,
+        turn: { status: 'completed', reason: 'completed' },
+        state: 'replied',
+      },
+      {
+        ...yours('native-2'),
+        seq: expect.any(Number) as number,
+        id: expect.any(String) as string,
+        origin: 'manual',
+        body: 'Explain',
+        display: null,
+        resend_of: null,
+        turn: { status: 'cancelled', reason: 'interrupted' },
+        state: 'replied',
+      },
+      {
+        ...yours('native-3'),
+        seq: expect.any(Number) as number,
+        id: expect.any(String) as string,
+        origin: 'resend',
+        body: 'Explain',
+        display: null,
+        resend_of: rows[1]?.id,
+        // A record that kept no result keeps its status, with that status's plainest reason.
+        turn: { status: 'completed', reason: 'completed' },
+        state: 'replied',
+      },
+      // What went on, or waited, as the profile closed is unresolved, never sent again.
+      {
+        ...yours('native-4'),
+        seq: expect.any(Number) as number,
+        id: expect.any(String) as string,
+        origin: 'manual',
+        body: 'Slow',
+        display: { after: 'plan' },
+        resend_of: null,
+        turn: unresolved,
+        state: 'unresolved',
+      },
+      {
+        ...yours('native-5'),
+        seq: expect.any(Number) as number,
+        id: expect.any(String) as string,
+        origin: 'manual',
+        body: 'Then this',
+        display: null,
+        resend_of: null,
+        turn: unresolved,
+        state: 'unresolved',
+      },
+      {
+        ...yours('native-6'),
+        seq: expect.any(Number) as number,
+        id: expect.any(String) as string,
+        origin: 'manual',
+        body: 'Cut off before',
+        display: null,
+        resend_of: null,
+        turn: unresolved,
+        state: 'unresolved',
+      },
+    ]);
+    expect(new Set(rows.map(({ id }) => id)).size).toBe(6);
+    const places = rows.map(({ seq }) => seq as number);
+    expect(places).toEqual([...places].sort((a, b) => a - b));
+  });
+
+  it('gives a submission a message of its own only where none represents it yet', () => {
+    const delivered = '4e0a0e91-8ff7-4071-8cc1-7c8d9e0f1a54';
+    const own = '5f1b1fa2-9008-4182-9dd2-8d9e0f1a2b65';
+    // Your message the core delivered under the submission's native id, and one sent under its own.
+    keep3({ id: delivered, state: 'replied', delivery: '{"at":1,"as":"native-1","attempt":1}' });
+    keep3({ id: own, state: 'replied' });
+    // Another agent's message under the same native id represents only that agent's.
+    keep3({ id: 'to b', to_party: 'agent:b', delivery: '{"at":1,"as":"native-2","attempt":1}' });
+    journal3({
+      version: 2,
+      state: SAVED_RUN,
+      messages: {
+        version: 1,
+        agents: [
+          {
+            id: 'a',
+            submissions: [
+              { id: 'native-1', text: 'Hello', status: 'completed', after: 'plan' },
+              { id: own, text: 'Hello', status: 'completed' },
+              { id: 'native-2', text: 'Hello', status: 'completed' },
+            ],
+          },
+        ],
+      },
+    });
+
+    migrate(connection);
+
+    const rows = messagesOf();
+    // Each represented one keeps its own record, which only gains where its submission showed.
+    expect(rows.map(({ id, display, state }) => ({ id, display, state }))).toEqual([
+      { id: delivered, display: { after: 'plan' }, state: 'replied' },
+      { id: own, display: null, state: 'replied' },
+      { id: 'to b', display: null, state: 'replied' },
+      { id: expect.any(String) as string, display: null, state: 'replied' },
+    ]);
+    expect(rows[3]).toMatchObject({ to_party: 'agent:a', delivery: { as: 'native-2' } });
+  });
+
+  it('runs its conversion only within its own migration', () => {
+    const [, , , fourth] = MIGRATIONS;
+    const convert = fourth?.convert;
+    if (convert === undefined) throw new Error('Migration 4 converts nothing');
+    // Outside a transaction, at schema 3.
+    expect(() => {
+      convert(connection);
+    }).toThrow('Migration 4’s conversion runs only within migration 4.');
+    migrate(connection);
+    // At schema 4, within a transaction.
+    connection.exec('BEGIN');
+    try {
+      expect(() => {
+        convert(connection);
+      }).toThrow('Migration 4’s conversion runs only within migration 4.');
+    } finally {
+      connection.exec('ROLLBACK');
+    }
+  });
+
+  it('keeps nothing of migration 4 when its conversion fails, its message table’s rebuild included', () => {
+    keep3({ id: 'kept' });
+    journal3({ version: 2, state: SAVED_RUN, messages: { version: 1, agents: [] } });
+    connection.exec(
+      "CREATE TRIGGER refuse BEFORE UPDATE ON run BEGIN SELECT RAISE(ABORT, 'The disk is full'); END",
+    );
+    const before = messagesOf();
+
+    expect(() => {
+      migrate(connection);
+    }).toThrow('The disk is full');
+
+    expect(schemaOf(connection)).toBe(3);
+    expect(minReaderOf(connection)).toBe(3);
+    expect(messagesOf()).toEqual(before);
+    expect(stateOf()).toEqual({
+      version: 2,
+      state: SAVED_RUN,
+      messages: { version: 1, agents: [] },
+    });
+    connection.exec('DROP TRIGGER refuse');
+    migrate(connection);
+    expect(schemaOf(connection)).toBe(4);
+  });
+});
+
+describe('schema 4: messages', () => {
+  beforeEach(() => {
+    migrate(connection);
+    connection.exec('PRAGMA foreign_keys = ON');
+    addCanvas();
+  });
+
+  it('requires how each message came to be, and keeps what a view shows of it valid', () => {
+    const add = connection.prepare(
+      `INSERT INTO message (id, canvas_id, from_party, to_party, kind, origin, body, display,
+         resend_of, state, sent_at)
+       VALUES (?, ?, 'you', 'agent:a', 'text', ?, 'Hello', ?, ?, 'pending', 1)`,
+    );
+    add.run('manual', CANVAS, 'manual', '{"after":"plan"}', null);
+    add.run('resend', CANVAS, 'resend', '{"requiresImages":true}', 'manual');
+    // A resend whose original wasn't kept.
+    add.run('orphan', CANVAS, 'resend', null, null);
+    for (const [id, origin, display, resendOf] of [
+      ['no origin', null, null, null],
+      ['another origin', 'typed', null, null],
+      ['not JSON', 'manual', 'after plan', null],
+      ['resends, not one', 'manual', null, 'manual'],
+    ] as const) {
+      expect(() => add.run(id, CANVAS, origin, display, resendOf), id).toThrow(/constraint failed/);
+    }
   });
 });

@@ -5,11 +5,12 @@ import path from 'node:path';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 
 import type { ConnectionId } from '../../shared/adapter';
+import { decodeSubmissions } from '../../shared/engine/delivery/submission-state';
 import { Engine } from '../../shared/engine/engine';
 import { fakeBackend } from '../../shared/engine/test-backend';
 import { TEST_ENGINE } from '../../shared/engine/test-engine';
 import type { Message } from '../../shared/model/messages';
-import type { RunRestore } from '../../shared/run';
+import type { RunCheckpoint, RunRestore } from '../../shared/run';
 import type { SessionEvent, SessionMode, UserMessage } from '../../shared/session';
 import type { Connector, SessionHost } from '../sessions/connector';
 import { SessionManager } from '../sessions/manager';
@@ -140,6 +141,15 @@ async function call(
 ) {
   return core.call(name, { canvas: CANVAS, ...args }, caller);
 }
+/**
+ * The run on disk is `saved`, its submissions as the engine restores them (your messages now:
+ * delivery/submissions.ts).
+ */
+function expectJournaled(saved: RunCheckpoint): void {
+  const journaled = journaledRun(profile, CANVAS);
+  expect(journaled).toMatchObject({ version: 2, state: saved.state, updatedAt: saved.updatedAt });
+  expect(decodeSubmissions(journaled?.messages ?? '')).toEqual(decodeSubmissions(saved.messages));
+}
 function required<T>(value: T | undefined): T {
   if (value === undefined) throw new Error('Expected a recorded value');
   return value;
@@ -215,10 +225,13 @@ it('resends a party message only after cancellation, with a new id, link and one
     from: original.from,
     to: original.to,
     body: original.body,
-    replyTo: original.id,
+    resendOf: original.id,
   });
+  // A resend is no reply to its original: what reads replies never takes it for one.
+  expect(resent.replyTo).toBeUndefined();
   expect(resent.id).not.toBe(original.id);
   const messages = await core.engines.messagesOf(CANVAS);
+  expect(messages.originOf(resent.id)).toBe('resend');
   expect(messages.get(original.id)).toMatchObject({ state: 'replied' });
   const notice = messages.all().filter((m) => m.kind === 'notice' && m.body.includes('resent'));
   expect(notice).toHaveLength(1);
@@ -522,7 +535,7 @@ it('hands the manual resend back to the window’s engine, including its images 
     await core.channels.call(7, 'run:save', [context.token, saved]);
     await core.flush();
     await core.close();
-    expect(journaledRun(profile, CANVAS)).toEqual(saved);
+    expectJournaled(saved);
   } finally {
     off();
     owner.reset();
@@ -541,7 +554,12 @@ it('keeps the renderer’s checkpoint after manual resend, flush and close', asy
         {
           id: 'a',
           submissions: [
-            { id: 'later-message', text: 'Later work finished in the window', status: 'completed' },
+            {
+              id: 'later-message',
+              text: 'Later work finished in the window',
+              status: 'completed',
+              result: { status: 'completed', reason: 'completed' },
+            },
           ],
         },
       ],
@@ -551,7 +569,7 @@ it('keeps the renderer’s checkpoint after manual resend, flush and close', asy
   await core.channels.call(7, 'run:save', [restored.token, checkpoint]);
   await core.flush();
   await core.close();
-  expect(journaledRun(profile, CANVAS)).toEqual(checkpoint);
+  expectJournaled(checkpoint);
 });
 
 it('still closes window-owned sessions when the window leaves after manual resend', async () => {
@@ -581,7 +599,8 @@ it('resends an agent party’s message back to that party under its new id', asy
     expect(sent).toHaveLength(2);
   });
   const resent = required((await texts())[1]);
-  expect(resent).toMatchObject({ from: 'agent:b', replyTo: original.id });
+  expect(resent).toMatchObject({ from: 'agent:b', resendOf: original.id });
+  expect(resent.replyTo).toBeUndefined();
   host.emit({ type: 'text', id: 'new-answer', text: 'New answer' });
   end('completed');
   const messages = await core.engines.messagesOf(CANVAS);
@@ -608,8 +627,9 @@ it('keeps the new pending id, link, sender notice and holds across a restart', a
   expect((await texts())[1]).toMatchObject({
     id: resent.id,
     state: 'pending',
-    replyTo: original.id,
+    resendOf: original.id,
   });
+  expect((await core.engines.messagesOf(CANVAS)).originOf(resent.id)).toBe('resend');
   await choose();
   expect(await texts()).toHaveLength(2);
   await call('run.unpause', { target: { agent: 'a' } });

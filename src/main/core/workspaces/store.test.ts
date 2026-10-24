@@ -13,7 +13,7 @@ import { Documents } from '../canvas/documents';
 import { commitDocument } from '../canvas/test-documents';
 import { unopened } from '../store/store';
 import type { Store } from '../store/store';
-import { onDisk, openTestStore, refuseWrites } from '../store/test-store';
+import { messagesIn, onDisk, openTestStore, refuseWrites } from '../store/test-store';
 import type { Connection } from '../store/sqlite';
 import { WorkspaceStore, WorkspaceStoreError } from './store';
 import type { NewRepository, NewWorktree } from './store';
@@ -609,14 +609,21 @@ describe('WorkspaceStore', () => {
 
   it('writes within another store’s write: all of it on disk, or none of it', async () => {
     await withWorktrees();
-    const journal = new RunJournal({ store, memory });
+    const messagesOf = messagesIn(store, memory);
+    const journal = new RunJournal({ store, memory, messages: messagesOf });
     await journal.opened(CANVAS);
     const { token } = await journal.get(CANVAS);
-    const checkpoint = { version: 2, state: '{}', messages: '[]', updatedAt: 1 } as const;
+    const messages = await messagesOf(CANVAS);
+    const checkpoint = {
+      version: 2,
+      state: '{}',
+      messages: '{"version":1,"agents":[]}',
+      updatedAt: 1,
+    } as const;
     let seen: unknown;
     await store
       .write(() => {
-        journal.keep(CANVAS, token, checkpoint);
+        journal.keep(CANVAS, token, checkpoint, messages);
         workspaces.createWorktree(tree(W1));
         workspaces.bind(CANVAS, 'a', W1);
         workspaces.recordJob({
@@ -642,7 +649,7 @@ describe('WorkspaceStore', () => {
     const release = refuseWrites(profile, 'worktree_job', 'The disk is full');
     await expect(
       store.write(() => {
-        journal.keep(CANVAS, token, { ...checkpoint, updatedAt: 2 });
+        journal.keep(CANVAS, token, { ...checkpoint, updatedAt: 2 }, messages);
         workspaces.createWorktree(tree(W2));
         workspaces.recordJob({
           id: J2,

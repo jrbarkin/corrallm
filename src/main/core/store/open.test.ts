@@ -177,8 +177,9 @@ describe('openStore', () => {
     for (let i = 0; i < 200; i++) {
       writer
         .prepare(
-          `INSERT INTO message (id, canvas_id, from_party, to_party, kind, body, state, sent_at)
-           VALUES (?, 'kept', 'you', 'agent:a', 'text', ?, 'pending', 1)`,
+          `INSERT INTO message (id, canvas_id, from_party, to_party, kind, origin, body, state,
+             sent_at)
+           VALUES (?, 'kept', 'you', 'agent:a', 'text', 'manual', ?, 'pending', 1)`,
         )
         .run(`message ${String(i)}`, 'x'.repeat(500));
     }
@@ -303,8 +304,9 @@ describe('a damaged database', () => {
       for (let i = 0; i < 300; i++) {
         store
           .prepare(
-            `INSERT INTO message (id, canvas_id, from_party, to_party, kind, body, state, sent_at)
-             VALUES (?, ?, 'you', 'agent:a', 'text', ?, 'pending', 1)`,
+            `INSERT INTO message (id, canvas_id, from_party, to_party, kind, origin, body, state,
+               sent_at)
+             VALUES (?, ?, 'you', 'agent:a', 'text', 'manual', ?, 'pending', 1)`,
           )
           .run(`message ${String(i)}`, CANVAS, 'x'.repeat(200));
       }
@@ -467,8 +469,9 @@ describe('a damaged database', () => {
         (seq) =>
           lost
             .prepare(
-              `INSERT INTO message (id, canvas_id, from_party, to_party, kind, body, state, sent_at)
-               VALUES (?, ?, 'you', 'agent:a', 'text', 'Hello', 'pending', 1) RETURNING seq`,
+              `INSERT INTO message (id, canvas_id, from_party, to_party, kind, origin, body, state,
+                 sent_at)
+               VALUES (?, ?, 'you', 'agent:a', 'text', 'manual', 'Hello', 'pending', 1) RETURNING seq`,
             )
             .get(`lost ${String(seq)}`, CANVAS)?.seq,
       );
@@ -481,8 +484,9 @@ describe('a damaged database', () => {
       if (!snapshot) store.prepare('INSERT INTO canvas (id, used_at) VALUES (?, 1)').run(CANVAS);
       const next = store
         .prepare(
-          `INSERT INTO message (id, canvas_id, from_party, to_party, kind, body, state, sent_at)
-           VALUES ('after', ?, 'you', 'agent:a', 'text', 'Hello', 'pending', 1) RETURNING seq`,
+          `INSERT INTO message (id, canvas_id, from_party, to_party, kind, origin, body, state,
+             sent_at)
+           VALUES ('after', ?, 'you', 'agent:a', 'text', 'manual', 'Hello', 'pending', 1) RETURNING seq`,
         )
         .get(CANVAS)?.seq;
       expect(next).toBeGreaterThan(noon + 303);
@@ -525,8 +529,9 @@ describe('a damaged database', () => {
     const row = (id: string, from: string, state: string, kind = 'text') =>
       before
         .prepare(
-          `INSERT INTO message (id, canvas_id, from_party, to_party, kind, body, state, sent_at)
-           VALUES (?, ?, ?, 'agent:a', ?, 'Hello', ?, 1)`,
+          `INSERT INTO message (id, canvas_id, from_party, to_party, kind, origin, body, state,
+             sent_at)
+           VALUES (?, ?, ?, 'agent:a', ?, 'manual', 'Hello', ?, 1)`,
         )
         .run(id, CANVAS, from, kind, state);
     before.tx(() => {

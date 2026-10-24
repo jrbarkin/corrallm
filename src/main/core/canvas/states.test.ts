@@ -18,7 +18,7 @@ import { CATALOG, DEFAULT_ADAPTER } from '../../sessions/adapters';
 import { mintTrustedPath } from '../host';
 import type { Connection } from '../store/sqlite';
 import type { Store } from '../store/store';
-import { onDisk, openTestStore } from '../store/test-store';
+import { messagesIn, onDisk, openTestStore } from '../store/test-store';
 import { Documents } from './documents';
 import type { Revision } from './documents';
 import { CanvasStates, EDITED_EVERY } from './states';
@@ -354,7 +354,7 @@ describe('the list of canvases', () => {
     // A draft shown in a window, and one neither shown nor holding anything.
     const empty = newCanvasId();
     const hidden = newCanvasId();
-    const journal = new RunJournal({ store, memory });
+    const journal = new RunJournal({ store, memory, messages: messagesIn(store, memory) });
     await journal.opened(empty);
     await memory.update(hidden, (remembered) => remembered);
     await store.write(() => {
@@ -365,11 +365,7 @@ describe('the list of canvases', () => {
     await store.write(() => {
       store
         .prepare('INSERT INTO run (canvas_id, state, updated_at) VALUES (?, ?, ?)')
-        .run(
-          saved,
-          JSON.stringify({ version: 2, state: { version: 2, run: { running: true } } }),
-          1,
-        );
+        .run(saved, JSON.stringify({ format: 3, run: { version: 2, run: { running: true } } }), 1);
     });
 
     // A canvas never followed is read for whether it is edited; a draft that holds nothing isn't.

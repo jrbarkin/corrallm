@@ -343,7 +343,7 @@ describe('the core’s database', () => {
   const CHECKPOINT = {
     version: 2,
     state: '{"paused":true}',
-    messages: '[]',
+    messages: '{"version":1,"agents":[]}',
     updatedAt: 1,
   } as const;
 

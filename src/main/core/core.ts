@@ -240,6 +240,8 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
   const journal = new RunJournal({
     store,
     memory,
+    // Each canvas's one store of messages, the core's, which keeps a run's submissions.
+    messages: (canvas) => engines.messagesOf(canvas),
     problemChanged: (canvas) => {
       topics.changed(`needs:${canvas}`, 'corrallm');
       engines.needsChanged(canvas);

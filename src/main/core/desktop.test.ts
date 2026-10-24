@@ -223,7 +223,7 @@ describe('window.get', () => {
         {
           version: 2,
           state: JSON.stringify({ version: 2, run: { running } }),
-          messages: '[]',
+          messages: '{"version":1,"agents":[]}',
           updatedAt: 1234,
         },
       ]);

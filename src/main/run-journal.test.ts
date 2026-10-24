@@ -6,14 +6,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { newCanvasId } from '../shared/canvas';
 import type { CanvasId } from '../shared/canvas';
-import { MessageStore, MessageTable } from './core/delivery/messages';
+import { decodeSubmissions } from '../shared/engine/delivery/submission-state';
+import type { MessageStore } from './core/delivery/messages';
 import { MAX_RUN_BYTES } from '../shared/run';
 import type { RunCheckpoint } from '../shared/run';
 import { mintTrustedPath } from './core/host';
 import type { Connection } from './core/store/sqlite';
 import { SYSTEM_DEPS, unopened } from './core/store/store';
 import type { Database, Store, StoreDeps } from './core/store/store';
-import { onDisk, openTestStore } from './core/store/test-store';
+import { messagesIn, onDisk, openTestStore } from './core/store/test-store';
 import { CanvasMemory } from './memory';
 import { RunJournal } from './run-journal';
 
@@ -21,13 +22,15 @@ import { RunJournal } from './run-journal';
  * Each canvas's run, journaled in the profile's database (Core Database §5): its row in `run` (the
  * run's state), where each party's `wait` has read to in its messages (`read_position`), and the
  * canvas the profile had open last (`open_canvas`). A window saves with its canvas's generation
- * token.
+ * token; its manual submissions are your messages in the canvas's messages.
  */
 
+/** A checkpoint's submissions when it has none. */
+const NONE = '{"version":1,"agents":[]}';
 const checkpoint: RunCheckpoint = {
   version: 2,
   state: '{"paused":true}',
-  messages: '[]',
+  messages: NONE,
   updatedAt: 123,
 };
 
@@ -37,10 +40,14 @@ let memory: CanvasMemory;
 /** A second connection, which only reads: what is on disk. */
 let reader: Connection;
 
+/** The canvases' messages the journals of a test keep submissions in: one store each. */
+let messagesOf: (canvas: CanvasId) => Promise<MessageStore>;
+
 function journal(database: Database = store, said?: readonly string[]): RunJournal {
   return new RunJournal({
     store: database,
     memory,
+    messages: database === store ? messagesOf : messagesIn(database, memory),
     ...(said === undefined ? {} : { said }),
   });
 }
@@ -71,12 +78,14 @@ async function reopen(deps?: StoreDeps): Promise<void> {
   await store.close();
   store = await openTestStore(profile, deps);
   memory = new CanvasMemory(store);
+  messagesOf = messagesIn(store, memory);
 }
 
 beforeEach(async () => {
   profile = await mkdtemp(path.join(tmpdir(), 'corrallm-runs-'));
   store = await openTestStore(profile);
   memory = new CanvasMemory(store);
+  messagesOf = messagesIn(store, memory);
   reader = onDisk(profile);
 });
 afterEach(async () => {
@@ -107,10 +116,9 @@ describe('RunJournal', () => {
         [field]: JSON.stringify(limit === 'depth' ? deep : Array<number>(200_001).fill(0)),
       };
       expect(Buffer.byteLength(JSON.stringify(complex))).toBeLessThan(MAX_RUN_BYTES);
-      const messages = new MessageStore(canvas, new MessageTable(store, memory), () => 456);
-      await messages.load();
+      const messages = await messagesOf(canvas);
       messages.writeWith(() => {
-        const problem = runs.keep(canvas, token, complex);
+        const problem = runs.keep(canvas, token, complex, messages);
         return () => {
           runs.kept(canvas, problem);
         };
@@ -119,6 +127,7 @@ describe('RunJournal', () => {
         from: 'outside:orchestrator',
         to: 'agent:worker',
         kind: 'text',
+        origin: 'party',
         body: 'Still record this',
         state: 'pending',
       });
@@ -197,10 +206,8 @@ describe('RunJournal', () => {
     await runs.save(canvas, (await runs.get(canvas)).token, checkpoint).then(() => {
       seen = ran(canvas);
     });
-    expect(seen).toEqual({
-      state: '{"version":2,"state":{"paused":true},"messages":[]}',
-      updated_at: 123,
-    });
+    // In its own envelope (B11 Design §4), with no submissions beside it.
+    expect(seen).toEqual({ state: '{"format":3,"run":{"paused":true}}', updated_at: 123 });
     await runs.save(canvas, (await runs.get(canvas)).token, { ...checkpoint, updatedAt: 456 });
     expect(reader.prepare('SELECT count(*) AS runs FROM run').get()).toEqual({ runs: 1 });
     expect(reader.prepare('SELECT canvas_id FROM open_canvas').all()).toEqual([
@@ -439,8 +446,9 @@ describe('RunJournal', () => {
     const [canvas] = await named('team.corral');
     const runs = journal();
     const { token } = await runs.get(canvas);
+    const messages = await messagesOf(canvas);
     await store.write(() => {
-      runs.keep(canvas, token, checkpoint);
+      runs.keep(canvas, token, checkpoint, messages);
       runs.moveRead(canvas, 'outside:orchestrator', 3);
     });
     expect(ran(canvas)).toMatchObject({ updated_at: 123 });
@@ -449,7 +457,7 @@ describe('RunJournal', () => {
     // What it was written with failed: neither lands.
     await expect(
       store.write(() => {
-        runs.keep(canvas, token, { ...checkpoint, updatedAt: 456 });
+        runs.keep(canvas, token, { ...checkpoint, updatedAt: 456 }, messages);
         runs.moveRead(canvas, 'outside:orchestrator', 4);
         throw new Error('The message can’t be written');
       }),
@@ -461,7 +469,7 @@ describe('RunJournal', () => {
     await runs.opened(canvas);
     await expect(
       store.write(() => {
-        runs.keep(canvas, token, { ...checkpoint, updatedAt: 789 });
+        runs.keep(canvas, token, { ...checkpoint, updatedAt: 789 }, messages);
       }),
     ).rejects.toThrow(/earlier canvas/);
     expect(ran(canvas)).toMatchObject({ updated_at: 123 });
@@ -538,10 +546,14 @@ describe('RunJournal', () => {
   });
 
   it.each([
-    { reason: 'version 1', state: '{"version":1,"state":{},"messages":[]}' },
-    { reason: 'its state not JSON', state: '{"version":2,"state":"invalid","messages":[]}' },
-    { reason: 'no messages', state: '{"version":2,"state":{}}' },
-    { reason: 'its state not an object', state: '[2]' },
+    {
+      reason: 'the envelope of schema 3, which migration 4 couldn’t convert',
+      state: `{"version":2,"state":{},"messages":${NONE}}`,
+    },
+    { reason: 'another envelope', state: '{"format":4,"run":{}}' },
+    { reason: 'its run not JSON', state: '{"format":3,"run":"invalid"}' },
+    { reason: 'its run not an object', state: '{"format":3,"run":2}' },
+    { reason: 'no envelope', state: '[2]' },
   ])('discards a run with $reason, saying so, and opens without progress', async ({ state }) => {
     const [canvas] = await named('team.corral');
     const runs = journal();
@@ -558,6 +570,162 @@ describe('RunJournal', () => {
     expect((await next.get(canvas)).checkpoint).toBeNull();
     await next.save(canvas, context.token, checkpoint);
     expect((await next.get(canvas)).checkpoint).toEqual(checkpoint);
+  });
+
+  describe('a checkpoint’s submissions', () => {
+    /** Submissions, as an engine encodes its sessions' (encodeSubmissions). */
+    const records = (agents: Record<string, unknown[]>) =>
+      JSON.stringify({
+        version: 1,
+        agents: Object.entries(agents).map(([id, submissions]) => ({ id, submissions })),
+      });
+    const done = { status: 'completed', reason: 'completed' } as const;
+
+    it('are your messages, never kept beside the run, given back as it restores, across a restart', async () => {
+      const [canvas] = await named('team.corral');
+      const runs = journal();
+      await runs.opened(canvas);
+      const saved = {
+        ...checkpoint,
+        messages: records({
+          lead: [
+            {
+              id: 'native-1',
+              text: 'Fix it',
+              status: 'completed',
+              after: 'plan',
+              task: { agent: 'lead', item: 'plan' },
+              result: done,
+            },
+            { id: 'native-2', text: 'Going on', status: 'running', after: 'plan' },
+          ],
+          helper: [{ id: 'native-3', text: '/compact', status: 'completed', result: done }],
+        }),
+      };
+      await runs.save(canvas, (await runs.get(canvas)).token, saved);
+
+      expect(ran(canvas)).toEqual({ state: '{"format":3,"run":{"paused":true}}', updated_at: 123 });
+      const rows = reader
+        .prepare(
+          `SELECT from_party, to_party, kind, origin, body, display, state, turn,
+             json_extract(delivery, '$.as') AS alias
+           FROM message WHERE canvas_id = ? ORDER BY seq`,
+        )
+        .all(canvas);
+      const unresolved = JSON.stringify({
+        status: 'cancelled',
+        reason: 'interrupted',
+        message: 'Unresolved after restart; resume the queue to continue.',
+      });
+      expect(rows).toEqual([
+        {
+          from_party: 'you',
+          to_party: 'agent:lead',
+          kind: 'text',
+          origin: 'manual',
+          body: 'Fix it',
+          display: '{"after":"plan","task":{"agent":"lead","item":"plan"}}',
+          state: 'replied',
+          turn: JSON.stringify(done),
+          alias: 'native-1',
+        },
+        // What goes on is kept as a restart would leave it, never active to delivery.
+        {
+          from_party: 'you',
+          to_party: 'agent:lead',
+          kind: 'text',
+          origin: 'manual',
+          body: 'Going on',
+          display: '{"after":"plan"}',
+          state: 'unresolved',
+          turn: unresolved,
+          alias: 'native-2',
+        },
+        {
+          from_party: 'you',
+          to_party: 'agent:helper',
+          kind: 'text',
+          origin: 'manual',
+          body: '/compact',
+          display: null,
+          state: 'replied',
+          turn: JSON.stringify(done),
+          alias: 'native-3',
+        },
+      ]);
+      // Restored as the engine restored them from its checkpoint.
+      const restored = (await runs.get(canvas)).checkpoint;
+      expect(restored?.state).toBe(checkpoint.state);
+      expect(decodeSubmissions(restored?.messages ?? NONE)).toEqual(
+        decodeSubmissions(saved.messages),
+      );
+      await reopen();
+      const again = (await journal().get(canvas)).checkpoint;
+      expect(decodeSubmissions(again?.messages ?? NONE)).toEqual(decodeSubmissions(saved.messages));
+    });
+
+    it('change their message as they do; one a message represents already keeps that one’s record', async () => {
+      const [canvas] = await named('team.corral');
+      const runs = journal();
+      const { token } = await runs.get(canvas);
+      const messages = await messagesOf(canvas);
+      // Your message, which the core delivered under the native id the session sent it as.
+      const delivered = messages.add({
+        from: 'you',
+        to: 'agent:lead',
+        kind: 'text',
+        origin: 'manual',
+        body: 'Yours',
+        state: 'delivered',
+        delivery: { at: 1, as: 'native-1', attempt: 1 },
+      });
+      await messages.durable();
+      const running = records({
+        lead: [
+          { id: 'native-1', text: 'Yours', status: 'running', after: 'plan' },
+          { id: 'native-2', text: 'Mine', status: 'running' },
+        ],
+      });
+      await runs.save(canvas, token, { ...checkpoint, messages: running });
+      const ended = records({
+        lead: [
+          { id: 'native-1', text: 'Yours', status: 'completed', after: 'plan', result: done },
+          { id: 'native-2', text: 'Mine', status: 'completed', result: done },
+          { id: 'native-3', text: 'Again', status: 'completed', retryOf: 'native-2', result: done },
+        ],
+      });
+      await runs.save(canvas, token, { ...checkpoint, messages: ended });
+      const kept = messages.all();
+      expect(kept).toHaveLength(3);
+      // The core's record of its own delivery stands; it gains where it showed.
+      expect(messages.get(delivered.id)).toMatchObject({ state: 'delivered' });
+      expect(messages.displayOf(delivered.id)).toEqual({ after: 'plan' });
+      const [, mine, again] = kept;
+      expect(mine).toMatchObject({ body: 'Mine', state: 'replied', turn: done });
+      expect(messages.originOf(mine?.id ?? '')).toBe('manual');
+      expect(again).toMatchObject({ body: 'Again', state: 'replied', resendOf: mine?.id });
+      expect(messages.originOf(again?.id ?? '')).toBe('resend');
+      expect(again?.replyTo).toBeUndefined();
+      // Saved again, nothing more is made.
+      await runs.save(canvas, token, { ...checkpoint, messages: ended, updatedAt: 456 });
+      expect(messages.all()).toHaveLength(3);
+    });
+
+    it('refuses a checkpoint whose submissions no engine kept, writing none of it', async () => {
+      const [canvas] = await named('team.corral');
+      const runs = journal();
+      const { token } = await runs.get(canvas);
+      await runs.save(canvas, token, checkpoint);
+      const lost = records({ lead: [{ id: 'native-1', text: 'Lost', status: 'lost' }] });
+      await expect(runs.save(canvas, token, { ...checkpoint, messages: lost })).rejects.toThrow(
+        'Invalid submission records',
+      );
+      await expect(
+        runs.save(canvas, token, { ...checkpoint, messages: '[]', updatedAt: 456 }),
+      ).rejects.toThrow('Invalid submission records');
+      expect(ran(canvas)).toMatchObject({ updated_at: 123 });
+      expect((await messagesOf(canvas)).all()).toEqual([]);
+    });
   });
 
   it('says what the store said as it opened with the first canvas restored, once', async () => {

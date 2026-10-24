@@ -398,7 +398,7 @@ export class CanvasStates {
       }
       const state = store
         .prepare(
-          `SELECT json_extract(state, '$.state.run.running') AS running FROM run
+          `SELECT json_extract(state, '$.run.run.running') AS running FROM run
           WHERE canvas_id = ?`,
         )
         .get(canvas);
