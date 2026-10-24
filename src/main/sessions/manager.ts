@@ -322,6 +322,15 @@ export class SessionManager {
   }
 
   /**
+   * The generation of the agent's session running (or starting) now: each session the manager
+   * starts has a new one, so what an earlier session asked is never taken for what this one asks
+   * (B11 Design §7). None while none runs.
+   */
+  generationOf(canvas: CanvasId, agentId: string): number | undefined {
+    return this.#agents.get(canvas)?.get(agentId)?.generation;
+  }
+
+  /**
    * Whether a session of the agent's that was closed hasn't finished closing: its bounded close
    * stopped waiting, so its CLI may still be running, and writing (B11 Design §7: an uncertain
    * writer, which a code mutation of its tree refuses).

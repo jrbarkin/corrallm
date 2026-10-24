@@ -64,6 +64,7 @@ import { PREPARED_OPS, preparedOps, preparedRules } from './ops/prepared';
 import { PREPARED_SURFACE } from '../../shared/api/prepared';
 import type { AgentId } from '../../shared/api/ids';
 import { SessionControl } from './session-control';
+import { runReplies } from './run-replies';
 import { discardChecks } from './ops/files';
 import { nameOf, quotedName } from './parties';
 import { holder, resolvers } from './reach';
@@ -756,6 +757,17 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
           tokens,
           ...(config.locale === undefined ? {} : { locale: config.locale }),
           ...(setups === undefined ? {} : { setups }),
+          // B11 C7: the reply router answers what the runtime asks once its typed reply is
+          // registered (X9; the core's tests register it early).
+          ...(prepared
+            ? {
+                replies: runReplies({
+                  engines,
+                  sessions,
+                  ...(config.locale === undefined ? {} : { locale: config.locale }),
+                }),
+              }
+            : {}),
         }),
       },
       rules: {

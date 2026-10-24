@@ -13,6 +13,7 @@ import type {
   PastSession,
   RewindRestore,
   RewindResult,
+  SessionAnswer,
   SettingsOptions,
   TaskMessage,
   TurnResult,
@@ -489,6 +490,37 @@ export class SessionStore {
   /** Approves a plan, or not. */
   answerPlan(agentId: string, promptId: string, answer: PlanAnswer): void {
     this.#drivers.get(agentId)?.driver.answer(promptId, { kind: 'plan', answer });
+  }
+
+  /**
+   * An answer the agent's CLI has taken already (the core's reply, B11 Design §7: told the CLI first,
+   * and awaited, so a CLI that refused it leaves its prompt open), shown on its prompt: nothing is
+   * told the CLI again.
+   */
+  answered(agentId: string, promptId: string, answer: SessionAnswer): void {
+    switch (answer.kind) {
+      case 'permission':
+        this.#dispatch(agentId, {
+          type: 'answer',
+          id: promptId,
+          answer: answer.answer,
+          ...(answer.feedback === undefined || answer.feedback.trim() === ''
+            ? {}
+            : { feedback: answer.feedback.trim() }),
+        });
+        return;
+      case 'question':
+        answer.answers.forEach((one, index) => {
+          this.#dispatch(agentId, { type: 'answerQuestion', id: promptId, index, answer: one });
+        });
+        return;
+      case 'plan':
+        this.#dispatch(agentId, { type: 'answerPlan', id: promptId, answer: answer.answer });
+        return;
+      case 'elicitation':
+        this.#dispatch(agentId, { type: 'answerElicitation', id: promptId, action: answer.action });
+        return;
+    }
   }
 
   /** Interrupts the turn going on, if any. */

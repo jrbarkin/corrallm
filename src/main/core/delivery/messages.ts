@@ -359,6 +359,13 @@ export class MessageStore {
     return undefined;
   }
 
+  /** The messages kept with a told key starting `prefix`, in the store's order. */
+  toldStarting(prefix: string): Message[] {
+    return [...this.#kept.values()].flatMap(({ message, told }) =>
+      told?.startsWith(prefix) === true ? [message] : [],
+    );
+  }
+
   /** How a message kept came to be. */
   originOf(id: string): MessageOrigin | undefined {
     return this.#kept.get(id)?.origin;

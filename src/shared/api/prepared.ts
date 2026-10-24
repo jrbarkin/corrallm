@@ -1,10 +1,10 @@
 import type { Reason } from './deviations';
 import type { RuleRow } from './rules';
-import { L, R, Y } from './surface';
+import { L, M, R, Y } from './surface';
 import type { Rule, Surface } from './surface';
 
 /*
- * B11 C6's operations, prepared (B11 Design §6, §16.1): the surface each needs, its deviation and
+ * B11 C6's and C7's operations, prepared (B11 Design §6, §7, §16.1): the surface each needs, its deviation and
  * the rule row it brings, as plain data beside SURFACE, never in it. Nothing here registers an
  * operation or widens any audience: X9 moves these rows into SURFACE, DEVIATIONS and RULES with their
  * schemas (`b11SessionOps`) and the core's services (core/session-control.ts), and only then are
@@ -50,6 +50,9 @@ export const PREPARED_SURFACE = {
   },
   // §16.1: Continue in Terminal, yours alone (how an agent runs is yours).
   'session.continueIn': { access: Y, kind: 'command', scope: 'agent' },
+  // B11 C7: `reply` with its typed answers (a run's holds, a session's prompts), the live op's
+  // surface: R3 on every token's call, then the reply router's checks (core/replies.ts).
+  reply: { access: M, kind: 'command', scope: 'canvas', rules: ['human-choice'] },
 } as const satisfies Record<string, Surface>;
 
 export type PreparedName = keyof typeof PREPARED_SURFACE;

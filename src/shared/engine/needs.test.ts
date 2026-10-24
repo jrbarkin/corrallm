@@ -6,7 +6,7 @@ import type { AgentNode } from '../model/canvas';
 import type { QueueItem } from '../model/queue';
 import { NEW_SESSION } from '../model/session';
 import type { Session } from '../model/session';
-import { needs, needsOf, withoutChoices } from './needs';
+import { holdGeneration, needs, needsOf, withoutChoices } from './needs';
 import type { NeedsInput } from './needs';
 import type { Run } from './run/runner';
 import { TEST_ENGINE } from './test-engine';
@@ -60,7 +60,7 @@ describe('needs', () => {
   it('words a hold in the host’s locale', () => {
     const [item] = needs(input({ run: held, locale: 'en-GB' }));
     expect(item).toEqual({
-      id: 'hold/p/ok',
+      id: `hold/p/${holdGeneration(held.agents.p)}/ok`,
       canvas: CANVAS,
       agent: 'p',
       kind: 'hold',
@@ -97,9 +97,9 @@ describe('needs', () => {
       }),
     );
     expect(items.map(({ id, kind, answerIn }) => [id, kind, answerIn])).toEqual([
-      ['hold/p/ok', 'hold', 'api'],
-      ['prompt/b/m1/permission', 'prompt', 'api'],
-      ['prompt/t/ask-1', 'prompt', 'terminal'],
+      [`hold/p/${holdGeneration(held.agents.p)}/ok`, 'hold', 'api'],
+      ['prompt/b/0/m1/permission', 'prompt', 'api'],
+      ['prompt/t/0/ask-1', 'prompt', 'terminal'],
     ]);
     expect(items[1]).toMatchObject({
       agent: 'b',
@@ -386,5 +386,41 @@ describe('needs', () => {
       title: 'Sign in to the tracker',
       detail: 'Asked by its MCP server tracker.',
     });
+  });
+
+  it('gives a hold asked again, after changes, a retry or another run, another id (B11 §7)', () => {
+    const at = held.agents.p;
+    if (at === undefined) throw new Error('no hold');
+    const id = (run: Run) => needs(input({ run }))[0]?.id;
+    const first = id(held);
+    expect(first).toMatch(/^hold\/p\/[0-9a-f]{8}\/ok$/);
+    // The same hold read again, across a restart too: the same id.
+    expect(id({ ...held, agents: { p: { ...at } } })).toBe(first);
+    // After its changes were asked for, the OK it asks again is another.
+    expect(id({ ...held, agents: { p: { ...at, changes: { ok: ['Shorter'] } } } })).not.toBe(first);
+    // Reached again after a task ran again (another attempt), or in another run.
+    expect(
+      id({
+        ...held,
+        agents: {
+          p: { ...at, attempts: { wait: [{ id: 'a2', startedAt: 1, status: 'succeeded' }] } },
+        },
+      }),
+    ).not.toBe(first);
+    // A usage reading that only moves its percent isn't another hold.
+    const usage = { backend: 'claude', window: 'fiveHour', percent: 91, used: 91, resetsAt: 5 };
+    const asking = (percent: number): Run => ({
+      ...held,
+      agents: { p: { ...at, usage: { ...usage, percent, used: percent } as never } },
+    });
+    expect(id(asking(91))).toBe(id(asking(97)));
+  });
+
+  it('gives a prompt of another session whose native id is reused another id', () => {
+    const generations = (generation: number) => () => generation;
+    const of = (generation: number) =>
+      needs(input({ sessions: { b: asking }, sessionGenerations: generations(generation) }))[0]?.id;
+    expect(of(3)).toBe('prompt/b/3/m1/permission');
+    expect(of(4)).toBe('prompt/b/4/m1/permission');
   });
 });

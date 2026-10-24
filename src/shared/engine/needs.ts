@@ -10,7 +10,7 @@ import type { AskedQuestion, TerminalAsk, ToolDetail } from '../session';
 import type { EngineCatalog } from './catalog';
 import { heldAsks } from './run/asks';
 import type { HeldAsk } from './run/asks';
-import type { Run } from './run/runner';
+import type { AgentRun, Run } from './run/runner';
 
 /*
  * What waits for you on a canvas (API Spec §5.9), derived from the run and the sessions, never
@@ -45,6 +45,12 @@ export interface NeedsInput {
   unasking?: readonly { agent: string; why: UnaskingWhy }[];
   /** Agents spending a backend whose hard limit was hit, until its reset. */
   limited?: readonly { agent: string; backend: string; until: number }[];
+  /**
+   * The generation of each agent's running session (the core's session manager gives each session
+   * it starts a new one), which a prompt's id carries: a prompt of an earlier session whose native
+   * id a later one reuses is another prompt. None: 0.
+   */
+  sessionGenerations?: (agent: string) => number | undefined;
 }
 
 /**
@@ -127,7 +133,7 @@ export function needs(input: NeedsInput): NeedsItem[] {
 /** A need as a NeedsItem, yours: addressed to you, answered by you. */
 export function needsItem(
   need: Need,
-  { canvas, nodes, run, catalog, now = Date.now(), locale }: NeedsInput,
+  { canvas, nodes, run, catalog, now = Date.now(), locale, sessionGenerations }: NeedsInput,
 ): NeedsItem {
   const yours = { canvas, agent: need.agent.id, for: 'you' as const, by: ['you' as const] };
   switch (need.kind) {
@@ -136,7 +142,7 @@ export function needsItem(
       const usage = run.agents[agent.id]?.usage;
       const until = usage?.resetsAt;
       return {
-        id: idOf('hold', agent.id, ask.item.id),
+        id: idOf('hold', agent.id, ask.item.id, holdGeneration(run.agents[agent.id])),
         ...yours,
         kind: 'hold',
         title: ask.text,
@@ -201,13 +207,23 @@ export function needsItem(
       };
     case 'prompt':
       return {
-        id: idOf('prompt', need.agent.id, need.prompt.id),
+        id: idOf(
+          'prompt',
+          need.agent.id,
+          need.prompt.id,
+          String(sessionGenerations?.(need.agent.id) ?? 0),
+        ),
         ...yours,
         ...promptWords(need.prompt),
       };
     case 'ask':
       return {
-        id: idOf('prompt', need.agent.id, need.ask.id),
+        id: idOf(
+          'prompt',
+          need.agent.id,
+          need.ask.id,
+          String(sessionGenerations?.(need.agent.id) ?? 0),
+        ),
         ...yours,
         ...askWords(need.ask),
         choices: [],
@@ -218,15 +234,56 @@ export function needsItem(
 
 /**
  * A Needs item's id, unique on its canvas: what it is (a run's hold, a session that won't start,
- * one that runs without asking, a prompt), its agent (escaped, so that a slash in an agent's id never runs into what follows),
- * and what of the agent's it is (a queue item's id, a prompt's).
+ * one that runs without asking, a prompt), its agent (escaped, so that a slash in an agent's id
+ * never runs into what follows), for a hold or a prompt its generation (B11 Design §7: an answer
+ * to an earlier one whose textual id is reused never answers the one asked now), and what of the
+ * agent's it is (a queue item's id, a prompt's), last, as it may hold slashes.
  */
 function idOf(
   kind: 'hold' | 'start' | 'unasking' | 'limited' | 'prompt',
   agent: string,
   of?: string,
+  generation?: string,
 ): string {
-  return [kind, encodeURIComponent(agent), ...(of === undefined ? [] : [of])].join('/');
+  return [
+    kind,
+    encodeURIComponent(agent),
+    ...(generation === undefined ? [] : [generation]),
+    ...(of === undefined ? [] : [of]),
+  ].join('/');
+}
+
+/**
+ * The generation of the hold an agent's run is at (B11 Design §7), from what that hold is: its
+ * item, its problem, its refusal, its usage window, the round it is on, how many changes were
+ * asked of it, and the agent's attempts (each a UUID, so a hold reached again after any task ran
+ * again, a retry or another run, is another). What only moves while it waits (a usage reading's
+ * percent, a refusal's words) isn't in it. Hex of a 32-bit FNV-1a: stable across restarts.
+ */
+export function holdGeneration(at: AgentRun | undefined): string {
+  if (at === undefined) return '0';
+  const item = at.current;
+  const fingerprint = JSON.stringify([
+    item ?? null,
+    at.problem === undefined
+      ? null
+      : [at.problem.kind, at.problem.reason, at.problem.agent, at.problem.conditionKey ?? null],
+    at.refused === undefined
+      ? null
+      : [at.refused.agent, at.refused.connection, at.refused.switchTo ?? null],
+    at.usage === undefined ? null : [at.usage.backend, at.usage.window, at.usage.resetsAt],
+    item === undefined ? null : [at.rounds?.[item]?.round ?? 0, at.rounds?.[item]?.more ?? 0],
+    item === undefined ? 0 : (at.changes?.[item]?.length ?? 0),
+    Object.entries(at.attempts ?? {})
+      .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+      .map(([task, attempts]) => [task, attempts.map(({ id }) => id)]),
+  ]);
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < fingerprint.length; index += 1) {
+    hash ^= fingerprint.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return hash.toString(16).padStart(8, '0');
 }
 
 /**

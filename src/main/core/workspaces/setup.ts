@@ -132,6 +132,11 @@ export interface SetupService {
     choice: string,
     by: PartyId,
   ): Promise<{ outcome: SetupOutcome }>;
+  /**
+   * Why the card `to` names waits no more, if it was raised (the reply router's): settled (done or
+   * skipped), or raised anew since (what it would run changed). None if no such card was raised.
+   */
+  gone(canvas: CanvasId, to: string): SetupError | undefined;
   /** `project.setSetupCommand`: the command for the canvas's picked repository (none: detected). */
   setCommand(
     canvas: CanvasId,
@@ -642,6 +647,26 @@ export class WorkspaceSetups implements SetupService {
   }
 
   // Answering it.
+
+  gone(canvas: CanvasId, to: string): SetupError | undefined {
+    const named = NEED.exec(to);
+    const tree = named?.[1] === undefined ? undefined : this.#deps.workspaces.worktree(named[1]);
+    const setup = tree === undefined ? undefined : this.#deps.workspaces.setup(tree.id);
+    if (tree?.canvas !== canvas || setup === undefined) return undefined;
+    if (Number(named?.[2]) !== setup.generation) {
+      return new SetupError(
+        'conflict',
+        `${to} is out of date: what it would run changed, so its setup was offered again. Answer its new card.`,
+      );
+    }
+    if (setup.state === 'done' || setup.state === 'skipped') {
+      return new SetupError(
+        'conflict',
+        `${to} is settled already: its setup was ${setup.state === 'done' ? 'done' : 'skipped'}.`,
+      );
+    }
+    return undefined;
+  }
 
   async reply(
     canvas: CanvasId,

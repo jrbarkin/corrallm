@@ -338,6 +338,7 @@ export const b11ConversationOps = {
             'answered',
             'started',
             'skipped',
+            'stopped',
             'completed',
             'retained',
           ])
