@@ -177,7 +177,10 @@ export class Proposals {
       | { touched: Readonly<Record<string, number>>; lost: Lost }
     ),
   ): Promise<NeedId> {
-    const { op, args, by } = raised;
+    const { op, by } = raised;
+    // Its arguments as the database keeps them (a key left undefined is none), so that an identical
+    // call matches the pending one read back.
+    const args = JSON.parse(JSON.stringify(raised.args)) as Readonly<Record<string, unknown>>;
     const open = this.#read(canvas);
     if (open === undefined) throw new Error('The canvas’s proposals can’t be read.');
     let touched: Readonly<Record<string, number>>;
