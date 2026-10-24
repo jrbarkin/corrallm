@@ -27,8 +27,11 @@ case "$mode" in
     step 'Unit tests' pnpm test
     # The ordinary global setup builds both production bundles; no E2E_SKIP_BUILD shortcut.
     # CI=1 keeps build logs linear but must not turn a failing spec into a pass on retry.
+    # No host GPU is passed through. Exercise Mesa's desktop GL path through llvmpipe and
+    # Xvfb's GLX; launch.ts opts only unpackaged Linux tests into Chromium's OpenGL backend.
     step 'End-to-end tests (including production build)' \
-      xvfb-run -a -s '-screen 0 1280x1024x24' pnpm test:e2e --retries=0 --trace retain-on-failure --reporter=list,html
+      env LIBGL_ALWAYS_SOFTWARE=true GALLIUM_DRIVER=llvmpipe CORRALLM_E2E_GL=mesa \
+      xvfb-run -a -s '-screen 0 1920x1080x24 +extension GLX' pnpm test:e2e --retries=0 --trace retain-on-failure --reporter=list,html
     ;;
   smoke)
     step 'Package Linux app' pnpm package --platform linux --arch "$arch"

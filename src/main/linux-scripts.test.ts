@@ -124,16 +124,27 @@ it('releases the artifact volume when an installed package check fails', async (
 it('runs every gate in order, including the e2e global build under xvfb, stopping on failure', async () => {
   const { folder, env } = await fixture();
   const log = path.join(folder, 'pnpm.log');
+  const graphics = path.join(folder, 'graphics.log');
+  const display = path.join(folder, 'display.log');
   for (const name of ['pnpm', 'xvfb-run']) {
     await writeFile(
       path.join(folder, name),
       name === 'pnpm'
-        ? '#!/bin/bash\nprintf "%s\\n" "$*" >> "$PNPM_LOG"\nif [ "$*" = "$FAIL_PNPM_STEP" ]; then exit 23; fi\n'
-        : '#!/bin/bash\nshift\nshift\nshift\nexec "$@"\n',
+        ? '#!/bin/bash\nprintf "%s\\n" "$*" >> "$PNPM_LOG"\nif [ "$1" = test:e2e ]; then printf "%s\\n" "$CORRALLM_E2E_GL" "$LIBGL_ALWAYS_SOFTWARE" "$GALLIUM_DRIVER" > "$GRAPHICS_LOG"; fi\nif [ "$*" = "$FAIL_PNPM_STEP" ]; then exit 23; fi\n'
+        : '#!/bin/bash\nprintf "%s\\n" "$1" "$2" "$3" > "$DISPLAY_LOG"\nshift\nshift\nshift\nexec "$@"\n',
       { mode: 0o755 },
     );
   }
-  const runEnv = { ...env, PNPM_LOG: log, FAIL_PNPM_STEP: 'lint' };
+  const runEnv = {
+    ...env,
+    PNPM_LOG: log,
+    GRAPHICS_LOG: graphics,
+    DISPLAY_LOG: display,
+    CORRALLM_E2E_GL: '',
+    LIBGL_ALWAYS_SOFTWARE: '',
+    GALLIUM_DRIVER: '',
+    FAIL_PNPM_STEP: 'lint',
+  };
   await expect(
     exec('bash', [path.join(root, 'scripts/lib/linux-workspace.sh'), 'ci', 'arm64'], {
       cwd: folder,
@@ -160,6 +171,8 @@ it('runs every gate in order, including the e2e global build under xvfb, stoppin
     'test',
     'test:e2e --retries=0 --trace retain-on-failure --reporter=list,html',
   ]);
+  expect(await readFile(graphics, 'utf8')).toBe('mesa\ntrue\nllvmpipe\n');
+  expect(await readFile(display, 'utf8')).toBe('-a\n-s\n-screen 0 1920x1080x24 +extension GLX\n');
 });
 
 it('makes only the configured Linux makers and collects their installers and runtime checks', async () => {
