@@ -2,7 +2,7 @@ import type { Reach } from '../../../shared/api/surface';
 import type { Message } from '../../../shared/model/messages';
 import { isOpen, turnReply } from '../../../shared/model/session';
 import type { Entry } from '../../../shared/model/session';
-import { messageView, runView } from '../../../shared/model/views';
+import { messageView, runView, summaryReply } from '../../../shared/model/views';
 import type {
   EntryView,
   MessageOrigin,
@@ -56,7 +56,7 @@ export function sessionSummary(open: OpenCanvas, agent: string) {
     ...(session.modes === undefined ? {} : { modes: [...session.modes] }),
     ...(session.running === undefined ? {} : { running: session.running }),
     ...(session.usage === undefined ? {} : { usage: session.usage }),
-    reply: lastTurn === undefined ? null : turnReply(session, lastTurn.id) || null,
+    ...summaryReply(lastTurn === undefined ? null : turnReply(session, lastTurn.id) || null),
   };
 }
 

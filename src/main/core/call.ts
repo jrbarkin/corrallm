@@ -187,6 +187,8 @@ export interface Projection {
   readonly input: z.ZodType;
   /** What it reads, as the topic's wire shape: checked where results are (in dev and tests). */
   readonly output?: z.ZodType;
+  /** Immutable authority source (e.g. the canvas document), checked around an awaited read. */
+  readonly version?: (args: never) => unknown;
   readonly read: (args: never, ctx: ProjectionContext) => unknown;
 }
 
@@ -694,10 +696,11 @@ export function createDispatcher(registry: Registry, options: DispatchOptions = 
     try {
       const { name, surface } = projection;
       const def: OpDef = { summary: name, input: projection.input, output: projection.input };
-      audience(name, surface, caller);
+      const party = audience(name, surface, caller);
       const args = parse(def, raw);
       checkReach(name, surface, def, args, caller);
       signal?.throwIfAborted();
+      const version = projection.version?.(args as never);
       const value = await projection.read(args as never, {
         caller,
         get party() {
@@ -705,6 +708,12 @@ export function createDispatcher(registry: Registry, options: DispatchOptions = 
         },
         signal,
       });
+      // A projection may await a source while its caller's authority changes.
+      signal?.throwIfAborted();
+      audience(name, surface, caller);
+      checkReach(name, surface, def, args, caller);
+      if (party !== partyOf(caller, isLead) || version !== projection.version?.(args as never))
+        throw new OpFailure('not-found', 'That topic is no longer available.');
       const fault = check ? notPlainData(value, 'result') : undefined;
       if (fault) throw new OpFailure('unavailable', `${fault}.`);
       const parsed = check ? projection.output?.safeParse(value) : undefined;

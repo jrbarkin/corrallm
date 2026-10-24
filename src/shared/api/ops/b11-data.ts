@@ -16,6 +16,7 @@ import {
   MAX_IMAGE_TOTAL,
   MAX_IMAGES,
   MAX_LABEL,
+  MAX_SESSION_REPLY_BYTES,
   MAX_MESSAGE_BYTES,
 } from '../limits';
 
@@ -77,6 +78,7 @@ export const Attempt = z.strictObject({
   message: z.string().optional(),
 });
 const AgentRun = z.strictObject({
+  pauses: z.array(Party).optional(),
   paused: z.boolean().optional(),
   problem: Problem.optional(),
   attempts: z.record(ItemId, z.array(Attempt)).optional(),
@@ -105,12 +107,10 @@ const AgentRun = z.strictObject({
     })
     .optional(),
 });
-const Pause = z.strictObject({ id: z.string(), by: Party });
 export const RunViewSchema = z.strictObject({
   running: z.boolean(),
   paused: z.boolean().optional(),
-  individualPauses: z.array(Pause).optional(),
-  groupPauses: z.array(Pause).optional(),
+  groups: z.record(AgentId, z.strictObject({ pauses: z.array(Party) })),
   agents: z.record(AgentId, AgentRun),
   notices: z.array(
     z.strictObject({
@@ -196,5 +196,13 @@ export const SessionSummarySchema = z.strictObject({
         .optional(),
     })
     .optional(),
-  reply: z.string().nullable(),
+  reply: z
+    .string()
+    .max(MAX_SESSION_REPLY_BYTES)
+    .refine(
+      (text) => new TextEncoder().encode(text).length <= MAX_SESSION_REPLY_BYTES,
+      'A summary reply is at most 4 KiB of UTF-8',
+    )
+    .nullable(),
+  replyCut: z.literal(true).optional(),
 });

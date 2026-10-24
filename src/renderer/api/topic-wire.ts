@@ -127,7 +127,10 @@ export function runtimePatch(
     const agents = patch.agents
       ? keyed(old.agents, patch.agents.set, patch.agents.remove)
       : old.agents;
-    return agents === next.agents ? next : { ...next, agents };
+    const groups = patch.groups
+      ? keyed(old.groups, patch.groups.set, patch.groups.remove)
+      : old.groups;
+    return agents === next.agents && groups === next.groups ? next : { ...next, agents, groups };
   }
   if (request.topic === 'sessions') {
     const old = previous as RuntimeTopicStates[`sessions:${CanvasId}`];
@@ -209,11 +212,23 @@ export function assembledState(
       entries: values as Record<string, EntryView>,
       order: pairs.map(([key]) => key),
     };
-  if (request.topic === 'run')
+  if (request.topic === 'run') {
+    const agents: [string, unknown][] = [];
+    const groups: [string, unknown][] = [];
+    for (const [key, value] of pairs) {
+      const kind = key.slice(0, key.indexOf('/'));
+      const encoded = key.slice(kind.length + 1);
+      const id = decodeURIComponent(encoded);
+      if (encodeURIComponent(id) !== encoded || (kind !== 'agent' && kind !== 'group'))
+        throw new Error('A run entry names a canonical agent or group key.');
+      (kind === 'agent' ? agents : groups).push([id, value]);
+    }
     return {
-      ...(summary as Omit<RuntimeTopicStates[`run:${CanvasId}`], 'agents'>),
-      agents: values as RuntimeTopicStates[`run:${CanvasId}`]['agents'],
+      ...(summary as Omit<RuntimeTopicStates[`run:${CanvasId}`], 'agents' | 'groups'>),
+      agents: Object.fromEntries(agents) as RuntimeTopicStates[`run:${CanvasId}`]['agents'],
+      groups: Object.fromEntries(groups) as RuntimeTopicStates[`run:${CanvasId}`]['groups'],
     };
+  }
   if (request.topic === 'sessions')
     return { agents: values as RuntimeTopicStates[`sessions:${CanvasId}`]['agents'] };
   return {

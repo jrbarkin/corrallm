@@ -1,3 +1,5 @@
+import { MAX_SESSION_REPLY_BYTES } from '../api/limits';
+import type { PartyId } from './messages';
 import type { AgentId } from '../api/ids';
 import type { ConnectionId } from '../adapter';
 import type { BackgroundTask, SlashCommand } from '../session';
@@ -24,8 +26,13 @@ export interface RunNotice {
   readonly text: string;
   readonly agent?: AgentId;
 }
-export interface RunView extends Omit<RunSnapshot, 'agents'> {
-  readonly agents: Readonly<Record<AgentId, RunSnapshot['agents'][string]>>;
+export type RunAgentView = RunSnapshot['agents'][string] & { readonly pauses?: readonly PartyId[] };
+export interface RunGroupView {
+  readonly pauses: readonly PartyId[];
+}
+export interface RunView extends Omit<RunSnapshot, 'agents' | 'individualPauses' | 'groupPauses'> {
+  readonly agents: Readonly<Record<AgentId, RunAgentView>>;
+  readonly groups: Readonly<Record<string, RunGroupView>>;
   readonly notices: readonly RunNotice[];
   readonly saveError?: string;
 }
@@ -49,6 +56,7 @@ export interface SessionSummary {
   readonly running?: ReadonlyData<Session['running']>;
   readonly usage?: ReadonlyData<Session['usage']>;
   readonly reply: string | null;
+  readonly replyCut?: true;
 }
 
 /** Images are counted for display, never serialized as bytes on the general topic. */
@@ -91,9 +99,12 @@ export function projectData<T>(next: T, previous?: ReadonlyData<T>): ReadonlyDat
   return share(next, previous) as ReadonlyData<T>;
 }
 
+// Only snapshots this projector deep-froze can skip a visit; native input objects still detach.
+const projected = new WeakSet<object>();
 function share(next: unknown, previous: unknown): unknown {
   if (typeof next === 'function') throw new TypeError('A view contains data, never a function.');
   if (next === null || typeof next !== 'object') return next;
+  if (projected.has(next) && (previous === undefined || next === previous)) return next;
   const old =
     previous !== null && typeof previous === 'object'
       ? (previous as Record<string, unknown>)
@@ -108,9 +119,11 @@ function share(next: unknown, previous: unknown): unknown {
     entries.every(([key, value]) => Object.hasOwn(old, key) && Object.is(old[key], value))
   )
     return previous;
-  return Object.freeze(
+  const result = Object.freeze(
     Array.isArray(next) ? entries.map(([, value]) => value) : Object.fromEntries(entries),
   );
+  projected.add(result);
+  return result;
 }
 
 export function runView(
@@ -118,9 +131,25 @@ export function runView(
   previous?: RunView,
   meta: { notices?: readonly RunNotice[]; saveError?: string } = {},
 ): RunView {
+  const { agents, individualPauses, groupPauses, ...top } = run;
+  const causes = (pauses: Run['individualPauses']) => {
+    const byId = new Map<string, PartyId[]>();
+    for (const { id, by } of pauses ?? []) {
+      const parties = byId.get(id) ?? [];
+      parties.push(by);
+      byId.set(id, parties);
+    }
+    return byId;
+  };
+  const individual = causes(individualPauses);
+  const entries = new Map<string, RunAgentView>(Object.entries(agents));
+  for (const [id, pauses] of individual)
+    entries.set(id, { ...(entries.get(id) ?? { status: 'waiting', outcomes: {} }), pauses });
   return projectData(
     {
-      ...run,
+      ...top,
+      agents: Object.fromEntries(entries),
+      groups: Object.fromEntries([...causes(groupPauses)].map(([id, pauses]) => [id, { pauses }])),
       notices: meta.notices ?? [],
       ...(meta.saveError === undefined ? {} : { saveError: meta.saveError }),
     },
@@ -154,7 +183,7 @@ export function sessionView(
     ...(session.modes === undefined ? {} : { modes: session.modes }),
     ...(session.running === undefined ? {} : { running: session.running }),
     ...(session.usage === undefined ? {} : { usage: session.usage }),
-    reply: last === undefined ? null : turnReply(session, last.id) || null,
+    ...summaryReply(last === undefined ? null : turnReply(session, last.id) || null),
   };
   const entries = Object.fromEntries(
     session.entries.map((entry): readonly [string, EntryView] => {
@@ -208,4 +237,20 @@ export function queueRows(
     if (message.display?.after !== undefined && !ids.has(message.display.after))
       rows.push(Object.freeze({ kind: 'message', key: `message/${message.id}`, message }));
   return Object.freeze(rows);
+}
+
+/** Summary text only; transcript entries retain the complete reply. Count UTF-8 code points. */
+export function summaryReply(reply: string | null): Pick<SessionSummary, 'reply' | 'replyCut'> {
+  if (reply === null) return { reply };
+  let bytes = 0;
+  let end = 0;
+  for (const character of reply) {
+    const code = character.codePointAt(0) ?? 0;
+    const size = code <= 0x7f ? 1 : code <= 0x7ff ? 2 : code <= 0xffff ? 3 : 4;
+    if (bytes + size > MAX_SESSION_REPLY_BYTES)
+      return { reply: reply.slice(0, end), replyCut: true };
+    bytes += size;
+    end += character.length;
+  }
+  return { reply };
 }

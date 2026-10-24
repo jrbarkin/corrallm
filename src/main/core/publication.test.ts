@@ -169,6 +169,47 @@ describe('a topic’s projection', () => {
       });
   });
 
+  it('refuses a projection if the lead loses authority while its read is awaiting', async () => {
+    let lead = true;
+    let finish: (value: unknown) => void = () => {
+      throw new Error('Read has not started');
+    };
+    const dispatcher = createDispatcher(testRegistry(), {
+      isLead: () => lead,
+      resolvers: RESOLVERS,
+      check: true,
+    });
+    const pending = dispatcher.project(
+      {
+        ...projection,
+        read: () =>
+          new Promise((resolve) => {
+            finish = resolve;
+          }),
+      },
+      { canvas: CANVAS, agent: 'peer' },
+      CALLERS.lead,
+    );
+    lead = false;
+    finish({ secret: 'peer transcript' });
+    expect(await pending).toMatchObject({ ok: false, error: { code: 'not-found' } });
+  });
+
+  it('refuses a collection if its authority source changes while the read is awaiting', async () => {
+    let world = {};
+    const done = Promise.withResolvers<unknown>();
+    const collection: Projection = {
+      ...projection,
+      input: z.strictObject({ canvas: CanvasId }),
+      version: () => world,
+      read: () => done.promise,
+    };
+    const pending = core.project(collection, { canvas: CANVAS }, CALLERS.lead);
+    world = {};
+    done.resolve({ secret: 'former team' });
+    expect(await pending).toMatchObject({ ok: false, error: { code: 'not-found' } });
+  });
+
   it('refuses a party outside its audience', async () => {
     const yours: Projection = {
       ...projection,

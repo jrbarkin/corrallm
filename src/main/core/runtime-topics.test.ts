@@ -22,6 +22,8 @@ import type { Connector, SessionHost, SessionSpec } from '../sessions/connector'
 import { FakeConnector } from '../sessions/fake';
 import type { OpContext, ReceiptTopic } from './call';
 import type { AgentCaller, Caller, OutsideCaller } from './caller';
+import { Documents } from './canvas/documents';
+import { commitDocument } from './canvas/test-documents';
 import { createCore } from './core';
 import type { Core } from './core';
 import { asHuman, WindowPorts } from './gui';
@@ -113,6 +115,7 @@ async function keepWorld(
 async function start(
   folder: string,
   connector: Connector<SessionMode> = new FakeConnector({ adapter: 'codex' }),
+  leads = (canvas: string, agent: string) => canvas === CANVAS && agent === 'lead',
 ): Promise<Core> {
   const core = await createCore(
     {
@@ -120,7 +123,7 @@ async function start(
       app: { name: 'corrallm', version: '1.0.0' },
       check: true,
       distribution: 'local',
-      leads: (canvas, agent) => canvas === CANVAS && agent === 'lead',
+      leads,
       sessions: {
         connectors: { 'codex.app-server': connector },
         environment: () => Promise.resolve({}),
@@ -209,6 +212,17 @@ class Copy {
   }
 
   #frame(frame: RuntimeSnapshotFrame): void {
+    if (frame.kind === 'begin') {
+      expect(this.#transfer).toBeUndefined();
+      this.#transfer = {
+        id: frame.snapshot,
+        summary: frame.summary,
+        count: frame.count,
+        entries: [],
+      };
+      this.#index = 0;
+      return;
+    }
     const transfer = this.#transfer;
     if (!transfer) throw new Error(`${this.topic}: a frame outside a transfer`);
     expect(frame.snapshot).toBe(transfer.id);
@@ -220,7 +234,6 @@ class Copy {
       return;
     }
     expect(frame.kind).toBe('end');
-    if (frame.kind !== 'end') return;
     expect(this.#index).toBe(transfer.count);
     this.state = assembled(this.topic, transfer.summary, transfer.entries);
     this.rev = frame.rev;
@@ -234,7 +247,19 @@ function assembled(topic: RuntimeTopicKey, summary: unknown, entries: [string, u
   const order = entries.map(([id]) => id);
   switch (topic.split(':')[0]) {
     case 'run':
-      return { ...(summary as State), agents: record };
+      return {
+        ...(summary as State),
+        agents: Object.fromEntries(
+          entries
+            .filter(([key]) => key.startsWith('agent/'))
+            .map(([key, value]) => [decodeURIComponent(key.slice(6)), value]),
+        ),
+        groups: Object.fromEntries(
+          entries
+            .filter(([key]) => key.startsWith('group/'))
+            .map(([key, value]) => [decodeURIComponent(key.slice(6)), value]),
+        ),
+      };
     case 'sessions':
       return { agents: record };
     case 'session':
@@ -265,7 +290,12 @@ function patch(topic: RuntimeTopicKey, state: State, change: RuntimeChange): Sta
   };
   switch (topic.split(':')[0]) {
     case 'run': {
-      const { top = {}, agents } = change as unknown as {
+      const {
+        top = {},
+        agents,
+        groups,
+      } = change as unknown as {
+        groups?: { set: State; remove?: string[] };
         top?: State;
         agents?: { set: State; remove?: string[] };
       };
@@ -274,6 +304,7 @@ function patch(topic: RuntimeTopicKey, state: State, change: RuntimeChange): Sta
         if (value === null) Reflect.deleteProperty(next, field);
         else next[field] = value;
       if (agents) next.agents = keyed(state.agents as State, agents.set, agents.remove);
+      if (groups) next.groups = keyed(state.groups as State, groups.set, groups.remove);
       return next;
     }
     case 'sessions': {
@@ -823,7 +854,97 @@ describe('runtime topics: long histories', () => {
     await expectCopiesRead(core, [later]);
   }, 60_000);
 
-  it('refuses a session whose summary can’t fit its begin frame, before sending anything', async () => {
+  it('rechecks authority immediately before flushing a queued private update', async () => {
+    folder = await keepWorld();
+    let lead = true;
+    const core = await start(folder, undefined, () => lead);
+    const copy = await follow(core, sessionOf('peer'), LEAD);
+    vi.useFakeTimers();
+    try {
+      core.engines.canvas(CANVAS)?.engine.sessions.notice('peer', 'info', 'Private update');
+      const barrier = await core.topics.follow(CALLERS.you, SESSIONS, () => undefined);
+      barrier.stop();
+      lead = false;
+      await vi.advanceTimersByTimeAsync(16);
+      expect(copy.batches).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+      copy.stop();
+    }
+  }, 30_000);
+
+  it('does not revive a deleted agent’s transcript when a file restores the same id', async () => {
+    folder = await keepWorld([{ id: 'worker' }], []);
+    const subscribed = vi.spyOn(Documents.prototype, 'subscribe');
+    const core = await start(folder);
+    const documents = subscribed.mock.contexts[0] as Documents;
+    const open = core.engines.canvas(CANVAS);
+    if (!open) throw new Error('Canvas is not open');
+    const original = open.document;
+    open.engine.sessions.notice('worker', 'info', 'Old transcript');
+    const old = await follow(core, sessionOf('worker'), CALLERS.you);
+    const deleted = await core.call(
+      'canvas.delete',
+      { canvas: CANVAS, nodes: ['worker'] },
+      CALLERS.you,
+    );
+    expect(deleted.ok).toBe(true);
+    await commitDocument(documents, CANVAS, original);
+    const restored = await follow(core, sessionOf('worker'), CALLERS.you);
+    expect(restored.state).toHaveProperty('entries', {});
+    await expectCopiesRead(core, [restored]);
+    const heard = old.batches.length;
+    open.engine.sessions.notice('worker', 'info', 'New transcript');
+    await expectCopiesRead(core, [restored]);
+    expect(old.batches.length).toBe(heard);
+    old.stop();
+  }, 30_000);
+
+  it('sends a live oversized entry only as a single-entry chunk, never an oversized delta', async () => {
+    folder = await keepWorld([{ id: 'worker' }], []);
+    const core = await start(
+      folder,
+      withHistory(() => [
+        { type: 'user', id: 'u', text: 'Hello' },
+        { type: 'text', id: 't', text: 'z'.repeat(MAX_TOPIC_FRAME + 10) },
+      ]),
+    );
+    const copy = await follow(core, sessionOf('worker'), CALLERS.you);
+    core.engines.canvas(CANVAS)?.engine.sessions.open('worker');
+    await vi.waitFor(() => {
+      expect(core.engines.canvas(CANVAS)?.engine.sessions.of('worker').entries.length).toBe(2);
+    });
+    await expectCopiesRead(core, [copy]);
+    const oversized = copy.batches
+      .flat()
+      .filter((update) => Buffer.byteLength(JSON.stringify(update)) > MAX_TOPIC_FRAME);
+    expect(oversized.length).toBeGreaterThan(0);
+    for (const update of oversized)
+      expect(update).toMatchObject({ kind: 'chunk', entries: [{ key: 't' }] });
+  }, 30_000);
+
+  it('refuses an entry that leaves no room for the envelope before sending any snapshot frames', async () => {
+    folder = await keepWorld([{ id: 'worker' }], []);
+    const core = await start(
+      folder,
+      withHistory(() => [
+        { type: 'text', id: 'near-frame', text: 'x'.repeat(MAX_TOPIC_FRAME - 200) },
+      ]),
+    );
+    const open = core.engines.canvas(CANVAS);
+    open?.engine.sessions.open('worker');
+    await vi.waitFor(() => {
+      expect(open?.engine.sessions.of('worker').entries).toHaveLength(1);
+    });
+    const heard: TopicUpdate[] = [];
+    await expect(
+      core.topics.follow(CALLERS.you, sessionOf('worker'), (updates) => heard.push(...updates)),
+    ).rejects.toThrow(/entry.*frame/i);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(heard).toEqual([]);
+  }, 30_000);
+
+  it('caps long replies in every summary while retaining the whole transcript in chunks', async () => {
     folder = await keepWorld([{ id: 'worker' }], []);
     const core = await start(
       folder,
@@ -843,20 +964,74 @@ describe('runtime topics: long histories', () => {
     await vi.waitFor(() => {
       expect(open?.engine.sessions.of('worker').entries.length).toBe(3);
     });
-    const heard: TopicUpdate[][] = [];
-    await expect(
-      core.topics.follow(CALLERS.you, sessionOf('worker'), (updates) => heard.push(updates)),
-    ).rejects.toMatchObject({ code: 'unavailable' });
-    await new Promise((resolve) => setTimeout(resolve, 40));
-    expect(heard).toEqual([]);
-    // The sessions' summaries are entries there: the big one goes alone in its chunk.
+    const read = await core.call('session.get', { canvas: CANVAS, agent: 'worker' }, CALLERS.you);
+    expect(read).toMatchObject({ ok: true, value: { reply: 'z'.repeat(4096), replyCut: true } });
+    const transcript = await follow(core, sessionOf('worker'), CALLERS.you);
+    await expectCopiesRead(core, [transcript]);
+    expect(transcript.state).toHaveProperty(['summary', 'replyCut'], true);
+    expect(transcript.state).toHaveProperty(
+      ['entries', 'last/reply', 'text'],
+      'z'.repeat(MAX_TOPIC_FRAME + 10),
+    );
     const sessions = await follow(core, SESSIONS, CALLERS.you);
     await expectCopiesRead(core, [sessions]);
+    expect(sessions.state).toHaveProperty(['agents', 'worker', 'replyCut'], true);
   }, 30_000);
 
+  it('streams to many partial copies without scanning history or sending summaries again', async () => {
+    folder = await keepWorld([{ id: 'worker' }], []);
+    let host: SessionHost | undefined;
+    const fake = new FakeConnector({ adapter: 'codex' });
+    const core = await start(folder, {
+      start: async (spec, sessionHost) => {
+        host = sessionHost;
+        const live = await fake.start(spec, sessionHost);
+        sessionHost.emit({ type: 'history', events: turns(667, 160, 'past') });
+        return live;
+      },
+    });
+    const sessions = core.engines.canvas(CANVAS)?.engine.sessions;
+    sessions?.open('worker');
+    await vi.waitFor(() => {
+      expect(sessions?.of('worker').entries).toHaveLength(2001);
+    });
+    const copies = await Promise.all(
+      Array.from({ length: 12 }, () => follow(core, sessionOf('worker'), WRITER)),
+    );
+    const scan = vi.fn();
+    const filter = Array.prototype.filter;
+    const spy = vi.spyOn(Array.prototype, 'filter').mockImplementation(function (
+      this: unknown[],
+      predicate,
+      thisArg?: unknown,
+    ) {
+      if (this.length === 2001 && (this[0] as EntryView | undefined)?.id === 'past-0') scan();
+      return filter.call(this, predicate, thisArg) as unknown[];
+    });
+    const began = performance.now();
+    try {
+      host?.emit({ type: 'text', id: 'past-666/reply', text: ' more' });
+      await vi.waitFor(() => {
+        for (const copy of copies) expect(copy.changes.length).toBeGreaterThan(0);
+      });
+      expect(scan).not.toHaveBeenCalled();
+    } finally {
+      spy.mockRestore();
+    }
+    for (const copy of copies) {
+      expect(copy.changes.at(-1)).toMatchObject({
+        entries: { append: [{ id: 'past-666/reply', text: ' more' }] },
+      });
+      expect(copy.changes.at(-1)).not.toHaveProperty('summary');
+      copy.stop();
+    }
+    console.info(
+      `12 partial copies × 2,001 entries: append published in ${(performance.now() - began).toFixed(1)} ms`,
+    );
+  }, 60_000);
+
   it('fits the largest summaries its fixtures make in a begin frame', () => {
-    // The run's summary is its holds: here 1,000 agents and 200 groups, each held by four parties
-    // with long names, far past any canvas a window shows.
+    // Holds larger than a frame are keyed entries, never part of the begin summary.
     const parties = [
       'you',
       `agent:${'l'.repeat(200)}`,
@@ -869,8 +1044,8 @@ describe('runtime topics: long histories', () => {
       {
         running: true,
         paused: true,
-        individualPauses: ids('agent', 1000).flatMap((id) => parties.map((by) => ({ id, by }))),
-        groupPauses: ids('group', 200).flatMap((id) => parties.map((by) => ({ id, by }))),
+        individualPauses: ids('agent', 6000).flatMap((id) => parties.map((by) => ({ id, by }))),
+        groupPauses: ids('group', 2000).flatMap((id) => parties.map((by) => ({ id, by }))),
         agents: {},
       },
       undefined,
@@ -887,6 +1062,8 @@ describe('runtime topics: long histories', () => {
           count: Number.MAX_SAFE_INTEGER,
         }),
       );
+    expect(Buffer.byteLength(JSON.stringify(run))).toBeGreaterThan(MAX_TOPIC_FRAME);
+    expect(partsOf(RUN, run).entries).toHaveLength(8000);
     expect(begin(RUN, partsOf(RUN, run).summary)).toBeLessThanOrEqual(TOPIC_BUDGET);
     // A session's summary: every command, model and task a CLI reports, and a long last reply.
     const summary = {
@@ -918,7 +1095,8 @@ describe('runtime topics: long histories', () => {
         efforts: [{ value: 'low', label: 'Low' }],
       })),
       running: { model: 'default', effort: 'high', mode: 'auto', role: 'r'.repeat(2000) },
-      reply: 'r'.repeat(512 * 1024),
+      reply: 'r'.repeat(4096),
+      replyCut: true,
     } as unknown as SessionSummary;
     const session = sessionOf('worker');
     expect(

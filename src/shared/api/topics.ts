@@ -147,8 +147,6 @@ export interface AgentChanges<T> {
 export interface RunTopChange {
   readonly running?: boolean;
   readonly paused?: boolean | null;
-  readonly individualPauses?: RunView['individualPauses'] | null;
-  readonly groupPauses?: RunView['groupPauses'] | null;
   readonly notices?: RunView['notices'];
   readonly saveError?: string | null;
 }
@@ -161,7 +159,11 @@ export type RuntimeChange = {
     readonly by: PartyId | 'cli';
     readonly at: number;
   } & (K extends `run:${CanvasId}`
-    ? { readonly top?: RunTopChange; readonly agents?: AgentChanges<RunView['agents'][AgentId]> }
+    ? {
+        readonly top?: RunTopChange;
+        readonly agents?: AgentChanges<RunView['agents'][AgentId]>;
+        readonly groups?: AgentChanges<RunView['groups'][string]>;
+      }
     : K extends `sessions:${CanvasId}`
       ? { readonly agents: AgentChanges<SessionSummary> }
       : K extends `session:${CanvasId}:${string}`
@@ -198,14 +200,14 @@ export type RuntimeSnapshotFrame<S = unknown, E = unknown> = {
 );
 export type RuntimeSnapshotFor<K extends RuntimeTopicKey> = RuntimeSnapshotFrame<
   K extends `run:${CanvasId}`
-    ? Omit<RunView, 'agents'>
+    ? Omit<RunView, 'agents' | 'groups'>
     : K extends `session:${CanvasId}:${string}`
       ? SessionSummary
       : K extends `messages:${CanvasId}`
         ? { readonly next: string }
         : Record<string, never>,
   K extends `run:${CanvasId}`
-    ? RunView['agents'][AgentId]
+    ? RunView['agents'][AgentId] | RunView['groups'][string]
     : K extends `session:${CanvasId}:${string}`
       ? EntryView
       : K extends `messages:${CanvasId}`

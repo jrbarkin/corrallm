@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
 import type { OpResult } from '../../shared/api/errors';
+import { MAX_TOPIC_FRAME } from '../../shared/api/limits';
 import { SURFACE } from '../../shared/api/surface';
 import type { OpName, Surface, TopicKind } from '../../shared/api/surface';
 import {
@@ -112,6 +113,7 @@ interface Subscription {
   seen?: Entities;
   /** For a runtime topic seen in part (a token's): its copy, as its projection last read it. */
   view?: RuntimeState;
+  access?: { world: object | undefined; lead: boolean };
 }
 
 export interface TopicsDeps {
@@ -129,7 +131,15 @@ export interface TopicsDeps {
   runtime?: {
     source: Pick<
       RuntimeSource,
-      'listen' | 'pending' | 'touched' | 'take' | 'taken' | 'state' | 'isPending'
+      | 'listen'
+      | 'pending'
+      | 'touched'
+      | 'take'
+      | 'taken'
+      | 'state'
+      | 'isPending'
+      | 'available'
+      | 'access'
     >;
     project: (
       topic: RuntimeTopicKey,
@@ -465,7 +475,12 @@ export class Topics implements Publication {
       const { first, rest } = this.#framesOf(topic, this.#runtimeRevs.get(topic) ?? 0, state);
       let topics = this.#subscriptions.get(id);
       if (!topics) this.#subscriptions.set(id, (topics = new Map<AnyTopic, Subscription>()));
-      topics.set(topic, view === undefined ? { caller } : { caller, view });
+      topics.set(
+        topic,
+        view === undefined
+          ? { caller }
+          : { caller, view, access: runtime.source.access(topic, caller) },
+      );
       for (const frame of rest) this.#enqueue(id, frame);
       return first;
     });
@@ -480,9 +495,10 @@ export class Topics implements Publication {
     topic: RuntimeTopicKey,
     rev: number,
     state: RuntimeState,
+    transfer = false,
   ): { first: Subscribed; rest: RuntimeSnapshotFrame[] } {
     const whole: RuntimeSnapshot = { epoch: this.epoch, rev, state };
-    if (bytesOf(whole) <= TOPIC_BUDGET) return { first: whole, rest: [] };
+    if (!transfer && bytesOf(whole) <= TOPIC_BUDGET) return { first: whole, rest: [] };
     const { summary, entries } = partsOf(topic, state);
     const base = { topic, epoch: this.epoch, snapshot: randomUUID() };
     const largest = { ...base, kind: 'begin' as const, summary, count: Number.MAX_SAFE_INTEGER };
@@ -503,6 +519,12 @@ export class Topics implements Publication {
     }
     if (piece.length > 0)
       chunks.push({ ...base, kind: 'chunk', index: chunks.length, entries: piece });
+    for (const chunk of chunks) {
+      if (bytesOf(chunk) <= TOPIC_BUDGET) continue;
+      if (chunk.entries.length === 1 && bytesOf(chunk.entries[0]?.value) > MAX_TOPIC_FRAME)
+        continue;
+      throw new OpFailure('unavailable', 'That topic entry cannot fit its frame envelope.');
+    }
     return {
       first: { ...base, kind: 'begin', summary, count: chunks.length },
       rest: [...chunks, { ...base, kind: 'end', rev }],
@@ -547,11 +569,23 @@ export class Topics implements Publication {
     source.taken(canvas);
     for (const kind of ['run', 'sessions', 'messages'])
       this.#attributed.delete(`${kind}:${canvas}`);
-    const partial: { id: SubscriberId; topic: RuntimeTopicKey; bodies: RuntimeBody[] }[] = [];
+    const partial: {
+      id: SubscriberId;
+      topic: RuntimeTopicKey;
+      bodies: RuntimeBody[];
+      snapshot: boolean;
+    }[] = [];
     for (const [id, topics] of [...this.#subscriptions]) {
       for (const [topic, subscription] of [...topics]) {
-        if (!isRuntimeTopic(topic) || subscription.view === undefined) continue;
-        if (canvasOfTopic(topic) !== canvas) continue;
+        if (!isRuntimeTopic(topic) || canvasOfTopic(topic) !== canvas) continue;
+        if (!source.available(topic)) {
+          this.#forget(id, topic);
+          continue;
+        }
+        if (subscription.view === undefined) continue;
+        const access = source.access(topic, subscription.caller);
+        if (sameAccess(subscription.access, access) && !canonical.has(topic)) continue;
+        const snapshot = !sameAccess(subscription.access, access);
         const read = await runtime.project(topic, subscription.caller);
         if (this.#stopped()) return;
         if (this.#subscriptions.get(id)?.get(topic) !== subscription) continue;
@@ -563,10 +597,33 @@ export class Topics implements Publication {
         const next = projectData(read.value as RuntimeState, subscription.view);
         const body = viewDiff(topic, subscription.view, next);
         subscription.view = next;
+        subscription.access = access;
+        if (snapshot && !body) {
+          this.#pending.set(
+            id,
+            (this.#pending.get(id) ?? []).filter((update) => update.topic !== topic),
+          );
+          try {
+            const { first, rest } = this.#framesOf(
+              topic,
+              this.#runtimeRevs.get(topic) ?? 0,
+              next,
+              true,
+            );
+            for (const frame of [first, ...rest]) this.#enqueue(id, frame as RuntimeSnapshotFrame);
+          } catch {
+            this.#forget(id, topic);
+          }
+        }
         partial.push({
+          snapshot,
           id,
           topic,
-          bodies: body ? divide(topic, body, this.#headBytes(topic)) : [],
+          bodies: body
+            ? !snapshot && appendsOnly(topic, canonical.get(topic)?.bodies)
+              ? (canonical.get(topic)?.bodies ?? [])
+              : divide(topic, body, this.#headBytes(topic))
+            : [],
         });
       }
     }
@@ -577,6 +634,12 @@ export class Topics implements Publication {
     for (const topic of changed) {
       const mine = canonical.get(topic);
       const theirs = partial.filter((one) => one.topic === topic);
+      const oversize = (bodies: readonly RuntimeBody[]) =>
+        bodies.some((body) => this.#headBytes(topic) + bytesOf(body) > TOPIC_BUDGET);
+      const mineSnapshot = oversize(mine?.bodies ?? []);
+      const theirsSnapshot = new Set(
+        theirs.filter(({ bodies, snapshot }) => snapshot || oversize(bodies)).map(({ id }) => id),
+      );
       const count = Math.max(
         mine?.bodies.length ?? 0,
         ...theirs.map(({ bodies }) => bodies.length),
@@ -597,14 +660,63 @@ export class Topics implements Publication {
         for (const [id, topics] of this.#subscriptions) {
           const subscription = topics.get(topic);
           if (!subscription || subscription.view !== undefined) continue;
-          this.#enqueue(id, {
-            ...headOf(),
-            ...(mine?.bodies[index] ?? emptyBody(topic)),
-          } as TopicUpdate);
+          this.#runtimeUpdate(
+            id,
+            topic,
+            headOf(),
+            mine?.bodies[index] ?? emptyBody(topic),
+            () => source.state(topic),
+            mineSnapshot,
+            index === count - 1,
+          );
         }
-        for (const { id, bodies } of theirs)
-          this.#enqueue(id, { ...headOf(), ...(bodies[index] ?? emptyBody(topic)) } as TopicUpdate);
+        for (const { id, bodies } of theirs) {
+          const subscription = this.#subscriptions.get(id)?.get(topic);
+          const view = subscription?.view;
+          if (view === undefined) continue;
+          this.#runtimeUpdate(
+            id,
+            topic,
+            headOf(),
+            bodies[index] ?? emptyBody(topic),
+            () => view,
+            theirsSnapshot.has(id),
+            index === count - 1,
+          );
+        }
       }
+    }
+  }
+
+  /** Oversized entries and authoritative orders use the same atomic transfer as subscribe. */
+  #runtimeUpdate(
+    id: SubscriberId,
+    topic: RuntimeTopicKey,
+    head: Head,
+    body: RuntimeBody,
+    state: () => RuntimeState,
+    snapshot: boolean,
+    last: boolean,
+  ): void {
+    if (!snapshot) {
+      this.#enqueue(id, { ...head, ...body } as TopicUpdate);
+      return;
+    }
+    if (!last) {
+      this.#enqueue(id, { ...head, ...emptyBody(topic) } as TopicUpdate);
+      return;
+    }
+    try {
+      const { first, rest } = this.#framesOf(topic, head.rev, state(), true);
+      this.#pending.set(
+        id,
+        (this.#pending.get(id) ?? []).filter((update) => update.topic !== topic),
+      );
+      this.#enqueue(id, first as RuntimeSnapshotFrame);
+      for (const frame of rest) this.#enqueue(id, frame);
+    } catch {
+      // A refused projection must not leak data or its reason through a subscriber's copy.
+      this.#forget(id, topic);
     }
   }
 
@@ -720,18 +832,72 @@ export class Topics implements Publication {
     if (!pending) this.#pending.set(id, (pending = []));
     pending.push(update);
     this.#timer ??= setTimeout(() => {
-      this.#flush();
+      void this.#serialize(() => this.#flush()).catch((error: unknown) => {
+        console.error('Could not flush topic changes:', error);
+      });
     }, 16);
   }
 
   /** Sends each subscriber what waits for it, in order, in batches that each fit a frame. */
-  #flush(): void {
+  async #flush(): Promise<void> {
     this.#timer = undefined;
     const pending = [...this.#pending];
     this.#pending.clear();
-    for (const [id, updates] of pending) {
+    for (const [id, queued] of pending) {
+      let updates = queued;
       const listener = this.#listeners.get(id);
       if (!listener || updates.length === 0) continue;
+      const runtime = this.#deps.runtime;
+      // Nothing can interleave between the final synchronous stamp check and sending the batch.
+      // If reach changed during the batching delay, replace all older frames with a fresh copy.
+      if (runtime) {
+        for (;;) {
+          let refreshed = false;
+          for (const topic of new Set(updates.map((update) => update.topic))) {
+            if (!isRuntimeTopic(topic)) continue;
+            const subscription = this.#subscriptions.get(id)?.get(topic);
+            if (!subscription) {
+              updates = updates.filter((update) => update.topic !== topic);
+              continue;
+            }
+            if (subscription.view === undefined) {
+              if (!runtime.source.available(topic)) {
+                this.#forget(id, topic);
+                updates = updates.filter((update) => update.topic !== topic);
+              }
+              continue;
+            }
+            const access = runtime.source.access(topic, subscription.caller);
+            if (sameAccess(subscription.access, access)) continue;
+            refreshed = true;
+            const read = await runtime.project(topic, subscription.caller);
+            updates = updates.filter((update) => update.topic !== topic);
+            this.#pending.set(
+              id,
+              (this.#pending.get(id) ?? []).filter((update) => update.topic !== topic),
+            );
+            if (!read.ok) {
+              this.#forget(id, topic);
+              continue;
+            }
+            subscription.view = projectData(read.value as RuntimeState, subscription.view);
+            subscription.access = access;
+            try {
+              const { first, rest } = this.#framesOf(
+                topic,
+                this.#runtimeRevs.get(topic) ?? 0,
+                subscription.view,
+                true,
+              );
+              updates.push(first as RuntimeSnapshotFrame, ...rest);
+            } catch {
+              this.#forget(id, topic);
+            }
+          }
+          if (!refreshed) break;
+        }
+      }
+      if (this.#closed || this.#listeners.get(id) !== listener) continue;
       for (const batch of batches(updates)) listener(batch);
     }
   }
@@ -783,4 +949,21 @@ function diff(
     if (was !== entity && JSON.stringify(was) !== JSON.stringify(entity)) set[key] = entity;
   }
   return { set, remove: Object.keys(before).filter((key) => !Object.hasOwn(after, key)) };
+}
+
+function sameAccess(
+  previous: Subscription['access'],
+  next: NonNullable<Subscription['access']>,
+): boolean {
+  return previous?.world === next.world && previous?.lead === next.lead;
+}
+
+/** Appends contain no caller-specific fields once the session's unchanged reach is authorized. */
+function appendsOnly(topic: RuntimeTopicKey, bodies: readonly RuntimeBody[] | undefined): boolean {
+  return (
+    topic.startsWith('session:') &&
+    bodies?.every(
+      (body) => 'entries' in body && !body.summary && !body.entries.upsert && !body.entries.order,
+    ) === true
+  );
 }

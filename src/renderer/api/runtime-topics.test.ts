@@ -95,6 +95,68 @@ describe('runtime topic mirrors', () => {
     expect(w.mirror.snapshot(w.keys.run)?.agents).not.toHaveProperty(w.other);
   });
 
+  it('receives a live replacement transfer atomically, preserving unchanged entities', async () => {
+    const w = setup();
+    w.mirror.subscribe(w.keys.session, vi.fn());
+    w.core.answer(0, w.session);
+    await tick();
+    const before = w.mirror.snapshot(w.keys.session);
+    const base = { topic: w.keys.session, epoch: 'one', snapshot: 'replacement' };
+    w.core.send({
+      ...base,
+      kind: 'begin',
+      summary: { ...w.session.summary, replyCut: true },
+      count: 1,
+    });
+    w.core.send({
+      ...base,
+      kind: 'chunk',
+      index: 0,
+      entries: w.session.order.map((key) => ({ key, value: w.session.entries[key] })),
+    });
+    expect(w.mirror.snapshot(w.keys.session)).toBe(before);
+    w.core.send({ ...base, kind: 'end', rev: 1 });
+    expect(w.core.requests).toHaveLength(1);
+    expect(w.mirror.snapshot(w.keys.session)?.summary.replyCut).toBe(true);
+    expect(w.mirror.snapshot(w.keys.session)?.entries.user).toBe(before?.entries.user);
+  });
+
+  it('assembles namespaced agent and group entries with the same id, then patches only their pauses', async () => {
+    const w = setup();
+    w.mirror.subscribe(w.keys.run, vi.fn());
+    const base = { topic: w.keys.run, epoch: 'one', snapshot: 'run' };
+    w.core.pending[0]?.resolve({
+      ...base,
+      kind: 'begin',
+      summary: { running: true, notices: [] },
+      count: 1,
+    });
+    w.core.send(
+      {
+        ...base,
+        kind: 'chunk',
+        index: 0,
+        entries: [
+          { key: `agent/${encodeURIComponent(w.agent)}`, value: w.run.agents[w.agent] },
+          { key: `group/${encodeURIComponent(w.agent)}`, value: { pauses: ['you'] } },
+        ],
+      },
+      { ...base, kind: 'end', rev: 0 },
+    );
+    await tick();
+    const agent = w.mirror.snapshot(w.keys.run)?.agents[w.agent];
+    expect(w.mirror.snapshot(w.keys.run)?.groups[w.agent]?.pauses).toEqual(['you']);
+    w.core.send(
+      delta({
+        topic: w.keys.run,
+        rev: 1,
+        groups: { set: { [w.agent]: { pauses: ['outside:lead'] } } },
+      }),
+    );
+    expect(w.mirror.snapshot(w.keys.run)?.agents[w.agent]).toBe(agent);
+    expect(w.mirror.snapshot(w.keys.run)?.groups[w.agent]?.pauses).toEqual(['outside:lead']);
+  });
+
   it('sets and removes summaries with prototype-shaped agent ids safely', async () => {
     const w = setup();
     w.mirror.subscribe(w.keys.sessions, vi.fn());
@@ -226,7 +288,9 @@ describe('runtime topic mirrors', () => {
       const base = { topic, epoch: 'one', snapshot: 's' };
       const pairs =
         kind === 'run'
-          ? Object.entries(w.run.agents)
+          ? Object.entries(w.run.agents).map(
+              ([key, value]) => [`agent/${encodeURIComponent(key)}`, value] as const,
+            )
           : kind === 'sessions'
             ? Object.entries(w.sessions.agents)
             : Object.entries(w.messages.items);
@@ -291,7 +355,7 @@ describe('runtime topic mirrors', () => {
                 ...begin,
                 kind: 'begin',
                 count: 3,
-                summary: { ...w.session.summary, reply: 'x'.repeat(MAX_TOPIC_FRAME) },
+                summary: { ...w.session.summary, running: { role: 'x'.repeat(MAX_TOPIC_FRAME) } },
               }
             : begin,
         );
@@ -431,7 +495,7 @@ describe('runtime topic mirrors', () => {
       ...w,
       session: {
         ...w.session,
-        summary: { ...w.session.summary, reply: 'x'.repeat(MAX_TOPIC_FRAME) },
+        summary: { ...w.session.summary, running: { role: 'x'.repeat(MAX_TOPIC_FRAME) } },
       },
     };
     expect(() => sessionFrames(topic, oversized)).toThrow(/summary.*frame/i);

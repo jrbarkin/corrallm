@@ -80,6 +80,7 @@ interface Keyed<T> {
 export interface RunBody {
   readonly top?: RunTopChange;
   readonly agents?: Keyed<RunView['agents'][AgentId]>;
+  readonly groups?: Keyed<RunView['groups'][string]>;
 }
 export interface SessionsBody {
   readonly agents: Keyed<SessionSummary>;
@@ -109,7 +110,7 @@ export const RUN_GET = {
   kind: 'read',
   scope: 'none',
   reads: 'run',
-  varies: ['agents', 'individualPauses', 'groupPauses', 'saveError'],
+  varies: ['agents', 'groups', 'saveError'],
 } as const satisfies Surface;
 
 /** The op each runtime topic is read under: SURFACE's reader of it, or run.get's until X9. */
@@ -192,6 +193,8 @@ interface SessionBase {
   order: readonly string[];
   byId: Map<string, { entry: Entry; at: number; raw: number }>;
   summary: SessionSummary | undefined;
+  view?: SessionView;
+  redacted?: SessionView;
 }
 
 /** What a canvas's session store did since it was last taken from, for one agent. */
@@ -263,6 +266,7 @@ export class RuntimeSource {
         surface,
         input,
         output: RUNTIME_STATES[kind],
+        version: (args: { canvas: string }) => openCanvas(deps.engines, args.canvas).document,
         read: (args: never, ctx) => read(args, ctx, surface),
       };
     };
@@ -288,9 +292,13 @@ export class RuntimeSource {
           agents: Object.fromEntries(agents.map((agent) => [agent, sessionSummary(open, agent)])),
         };
       }),
-      session: projection('session', SessionArgs, ({ canvas, agent }, ctx) =>
-        sessionViewOf(openCanvas(deps.engines, canvas), agent, ctx.caller),
-      ),
+      session: projection('session', SessionArgs, ({ canvas, agent }, ctx) => {
+        const open = openCanvas(deps.engines, canvas);
+        const base = this.#canvases.get(canvas as string as CanvasId)?.session.get(agent);
+        return base?.summary && base.session === open.engine.sessions.of(agent)
+          ? sessionState(base, ctx.caller.kind === 'human')
+          : sessionViewOf(open, agent, ctx.caller);
+      }),
       messages: projection('messages', CanvasArgs, ({ canvas }, ctx) =>
         messagesViewOf(openCanvas(deps.engines, canvas), ctx.caller),
       ),
@@ -330,6 +338,14 @@ export class RuntimeSource {
     const source = this.#canvases.get(canvas);
     if (!source?.attached) return;
     source.dirty.summaries = 'all';
+    for (const agent of source.session.keys()) {
+      if (
+        !source.attached.open.document.nodes.some(
+          (node) => node.type === 'agent' && node.id === agent,
+        )
+      )
+        source.session.delete(agent);
+    }
     this.#changed(source);
   }
 
@@ -357,6 +373,26 @@ export class RuntimeSource {
       ),
       ...(dirty.messages.size > 0 ? [`messages:${canvas}` as const] : []),
     ];
+  }
+
+  /** Everything that can change an agent's projection reach, read synchronously before sending. */
+  access(topic: RuntimeTopicKey, caller: Caller): { world: object | undefined; lead: boolean } {
+    const { canvas } = argsOf(topic);
+    return {
+      world: this.#deps.engines.canvas(canvas)?.document,
+      lead: caller.kind === 'agent' && this.#deps.isLead(canvas, caller.agent),
+    };
+  }
+
+  /** Whether this runtime entity still exists; used to end copies without exposing a refusal. */
+  available(topic: RuntimeTopicKey): boolean {
+    const { canvas, agent } = argsOf(topic);
+    const open = this.#canvases.get(canvas)?.attached?.open;
+    return (
+      open !== undefined &&
+      (agent === undefined ||
+        open.document.nodes.some((node) => node.type === 'agent' && node.id === agent))
+    );
   }
 
   /** Whether anything of the canvas changed since `taken`: what a token's copy is read again on. */
@@ -435,13 +471,7 @@ export class RuntimeSource {
       case 'session': {
         const base = agent === undefined ? undefined : source.session.get(agent);
         if (!base?.summary) throw new Error(`There is no agent ${agent ?? ''}.`);
-        return {
-          summary: base.summary,
-          entries: Object.fromEntries(
-            base.entries.map((entry) => [entry.id, transcriptEntry(entry, true)]),
-          ),
-          order: base.order,
-        };
+        return sessionState(base, true);
       }
       case 'messages': {
         const messages = source.messages;
@@ -536,6 +566,7 @@ export class RuntimeSource {
       delete source.attached;
       delete source.action;
       source.dirty = fresh();
+      this.#changed(source);
     }
   }
 
@@ -765,8 +796,61 @@ function appended(
   const append = [...texts].flatMap(([id, text]) => (text === '' ? [] : [{ id, text }]));
   return {
     change: append.length === 0 ? undefined : { append },
-    base: { ...base, session, entries },
+    base: {
+      ...base,
+      session,
+      entries,
+      ...(base.view
+        ? {
+            view: appendedView(
+              base.view,
+              found.map(({ now }) => now),
+              true,
+            ),
+          }
+        : {}),
+      ...(base.redacted
+        ? {
+            redacted: appendedView(
+              base.redacted,
+              found.map(({ now }) => now),
+              false,
+            ),
+          }
+        : {}),
+    },
   };
+}
+
+/** Cached wire views advance only changed entries; a summary remains authoritative until replaced. */
+function sessionState(base: SessionBase, yours: boolean): SessionView {
+  if (!base.summary) throw new Error('That session has no summary.');
+  const key = yours ? 'view' : 'redacted';
+  let view = base[key];
+  if (!view)
+    view = projectData({
+      summary: base.summary,
+      entries: Object.fromEntries(
+        base.entries.map((entry) => [entry.id, transcriptEntry(entry, yours)]),
+      ),
+      order: base.order,
+    });
+  else if (view.summary !== base.summary)
+    view = projectData({ ...view, summary: base.summary }, view);
+  base[key] = view;
+  return view;
+}
+function appendedView(view: SessionView, changed: readonly Entry[], yours: boolean): SessionView {
+  return projectData(
+    {
+      ...view,
+      entries: {
+        ...view.entries,
+        ...Object.fromEntries(changed.map((entry) => [entry.id, transcriptEntry(entry, yours)])),
+      },
+    },
+    view,
+  );
 }
 
 /**
@@ -796,24 +880,19 @@ function entriesDiff(
 /** What changed of the run from `previous` to `next` (sharing what didn't): none if nothing. */
 export function runDiff(previous: RunView, next: RunView): RunBody | undefined {
   const top: Record<string, unknown> = {};
-  for (const key of [
-    'running',
-    'paused',
-    'individualPauses',
-    'groupPauses',
-    'notices',
-    'saveError',
-  ] as const) {
+  for (const key of ['running', 'paused', 'notices', 'saveError'] as const) {
     const was: unknown = previous[key];
     const now: unknown = next[key];
     if (was === now) continue;
     top[key] = now === undefined ? null : now;
   }
   const agents = keyedDiff(previous.agents, next.agents);
-  if (Object.keys(top).length === 0 && !agents) return undefined;
+  const groups = keyedDiff(previous.groups, next.groups);
+  if (Object.keys(top).length === 0 && !agents && !groups) return undefined;
   return {
     ...(Object.keys(top).length === 0 ? {} : { top }),
     ...(agents === undefined ? {} : { agents }),
+    ...(groups === undefined ? {} : { groups }),
   };
 }
 
@@ -930,8 +1009,20 @@ export function partsOf(
 ): { summary: unknown; entries: { key: string; value: unknown }[] } {
   switch (kindOf(topic)) {
     case 'run': {
-      const { agents, ...summary } = state as RunView;
-      return { summary, entries: Object.entries(agents).map(([key, value]) => ({ key, value })) };
+      const { agents, groups, ...summary } = state as RunView;
+      return {
+        summary,
+        entries: [
+          ...Object.entries(agents).map(([key, value]) => ({
+            key: `agent/${encodeURIComponent(key)}`,
+            value,
+          })),
+          ...Object.entries(groups).map(([key, value]) => ({
+            key: `group/${encodeURIComponent(key)}`,
+            value,
+          })),
+        ],
+      };
     }
     case 'sessions':
       return {
@@ -980,10 +1071,16 @@ export function divide(topic: RuntimeTopicKey, body: RuntimeBody, head: number):
   const OVERHEAD = 512;
   switch (kindOf(topic)) {
     case 'run': {
-      const { top, agents } = body as RunBody;
+      const { top, agents, groups } = body as RunBody;
       const sets = pack(Object.entries(agents?.set ?? {}), OVERHEAD);
       const pieces: RunBody[] = sets.map((set) => ({ agents: { set: Object.fromEntries(set) } }));
+      pieces.push(
+        ...pack(Object.entries(groups?.set ?? {}), OVERHEAD).map((set): RunBody => ({
+          groups: { set: Object.fromEntries(set) },
+        })),
+      );
       pieces.push({
+        ...(groups?.remove === undefined ? {} : { groups: { set: {}, remove: groups.remove } }),
         ...(top === undefined ? {} : { top }),
         ...(agents?.remove === undefined ? {} : { agents: { set: {}, remove: agents.remove } }),
       });

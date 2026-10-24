@@ -276,6 +276,20 @@ export class TopicMirror {
     }
     try {
       if ('kind' in change) {
+        if (change.kind === 'begin' && !entry.assembly && runtimeTopic(entry.topic)) {
+          if (!snapshotFrameFits(change))
+            throw new Error('A replacement summary exceeded its bound.');
+          entry.assembly = {
+            id: change.snapshot,
+            summary: change.summary,
+            count: change.count,
+            nextIndex: 0,
+            entries: new Map(),
+            early: [],
+          };
+          this.#deadline(entry);
+          return;
+        }
         this.#frame(entry, change);
         return;
       }
