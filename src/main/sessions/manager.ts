@@ -117,11 +117,12 @@ export interface SessionManagerDeps {
   closeMs?: number;
   /**
    * The workspace mutation gate (core/workspaces/gate.ts): what a code rewind holds while it
-   * restores files every agent working in that tree sees. New work for another of those agents (a
-   * send, a launch) waits until it is done (`pass`); `holding` says so without waiting.
+   * restores files every agent working in that tree sees. New work for those agents (a send, a
+   * launch) waits until it is done (`pass`; `own`: a send, which waits for its own agent's restore
+   * too); `holding` says so without waiting.
    */
   gate?: {
-    pass(canvas: CanvasId, agentId: string): Promise<void>;
+    pass(canvas: CanvasId, agentId: string, own?: boolean): Promise<void>;
     holding(canvas: CanvasId, agentId: string): Promise<string | undefined>;
   };
 }
@@ -277,8 +278,8 @@ export class SessionManager {
     const agent = this.#agents.get(canvas)?.get(agentId);
     if (!agent) throw new Error(NOT_RUNNING);
     const session = await agent.session;
-    // A restore of the tree it works in (another agent's code rewind) finishes first.
-    await this.#deps.gate?.pass(canvas, agentId);
+    // A restore of the tree it works in (its own code rewind too) finishes first.
+    await this.#deps.gate?.pass(canvas, agentId, true);
     await this.#directoryOf(canvas, agentId, agent);
     const send = (next: UserMessage) => session.send(next);
     if (this.#deps.sending) await this.#deps.sending(canvas, agentId, message, send);

@@ -33,6 +33,9 @@ const ORCHESTRATOR: OutsideCaller = {
 };
 const YOU = CALLERS.you;
 
+/** Another canvas, on the same project folder. */
+const OTHER = '3f1a2b3c-4d5e-4f60-8a1b-2c3d4e5f6a7b' as CanvasId;
+
 /** Three Claude Code agents on the Agent SDK, sharing the project folder (no workspaces yet). */
 function canvasText(): string {
   const agent = (id: string, label: string, x: number) => ({
@@ -59,6 +62,8 @@ const cores: Core[] = [];
 let holding: PromiseWithResolvers<undefined> | undefined;
 /** Each file restore asked of an agent's session: dry runs too. */
 let rewinds: { agent: string; message: string; dryRun: boolean }[];
+/** Whether a file restore (not a dry run) is held where it is, until released. */
+let restore: PromiseWithResolvers<undefined> | undefined;
 
 beforeEach(async () => {
   profile = await mkdtemp(path.join(tmpdir(), 'corrallm-control-'));
@@ -67,11 +72,13 @@ beforeEach(async () => {
   await writeFile(path.join(project, 'src', 'app.ts'), 'export const app = 2;\n');
   holding = undefined;
   rewinds = [];
+  restore = undefined;
 });
 
 afterEach(async () => {
   vi.restoreAllMocks();
   holding?.resolve(undefined);
+  restore?.resolve(undefined);
   for (const core of cores.splice(0)) await core.close().catch(() => undefined);
   await rm(profile, { recursive: true, force: true });
 });
@@ -83,8 +90,10 @@ function restoring(fake: FakeConnector): Connector<SessionMode> {
       const session: LiveSession<SessionMode> = await fake.start(spec, host);
       session.rewindFiles = async (message, dryRun): Promise<FilesRewind> => {
         rewinds.push({ agent: spec.agentId, message, dryRun });
-        if (!dryRun)
+        if (!dryRun) {
+          await restore?.promise;
           await writeFile(path.join(spec.cwd, 'src', 'app.ts'), 'export const app = 1;\n');
+        }
         return { possible: true, files: ['src/app.ts'], added: 1, removed: 1 };
       };
       return session;
@@ -94,11 +103,21 @@ function restoring(fake: FakeConnector): Connector<SessionMode> {
 
 async function start(
   conversations: Record<string, { id: string }> = {},
+  { other = false }: { other?: boolean } = {},
 ): Promise<{ core: Core; sdk: FakeConnector; terminal: FakeConnector }> {
   const file = path.join(profile, 'team.corral');
   await writeFile(file, canvasText());
+  // With `other`: a canvas of its own whose agent x (Writer) works in the same project folder.
+  const second = path.join(profile, 'other.corral');
+  if (other) {
+    const text = JSON.parse(canvasText()) as { id: string; nodes: { id: string; label: string }[] };
+    text.id = OTHER;
+    text.nodes = [{ ...text.nodes[0], id: 'x', label: 'Writer' }];
+    await writeFile(second, JSON.stringify(text));
+  }
   await keepCanvases(profile, {
     [CANVAS]: { file, project, conversations: { 'claude-code': conversations } },
+    ...(other ? { [OTHER]: { file: second, project } } : {}),
   });
   // A turn holds where it is while the test holds it: a turn going on.
   const step = () => holding?.promise ?? Promise.resolve();
@@ -124,6 +143,7 @@ async function start(
   );
   cores.push(core);
   await core.engines.open(CANVAS);
+  if (other) await core.engines.open(OTHER);
   return { core, sdk, terminal };
 }
 
@@ -267,6 +287,92 @@ describe('rewind and R5', () => {
     });
     expect(await appText()).toBe('export const app = 1;\n');
   });
+  it('protects an agent of another canvas working in the same folder: refused while its turn goes on, its new work held while it restores', async () => {
+    const { core, sdk } = await start({}, { other: true });
+    const message = await turn(core, 'a', 'Write the app');
+    const other = core.engines.canvas(OTHER);
+    // The other canvas's writer works in the same project folder: its turn goes on.
+    holding = Promise.withResolvers<undefined>();
+    const writing = await core.call('message', { canvas: OTHER, to: 'x', body: 'Edit it' }, YOU);
+    if (!writing.ok) throw new Error(writing.error.sentence);
+    await vi.waitFor(() => {
+      expect(other?.engine.sessions.of('x').status).toBe('working');
+    });
+    const refused = await fails(core, 'session.rewind', { agent: 'a', message, restore: 'code' });
+    expect(refused).toMatchObject({ code: 'unavailable' });
+    expect(refused.sentence).toMatch(/an agent on another canvas has a turn going on/);
+    expect(rewinds.filter(({ dryRun }) => !dryRun)).toEqual([]);
+    expect(await appText()).toBe('export const app = 2;\n');
+    holding.resolve(undefined);
+    holding = undefined;
+    await vi.waitFor(() => {
+      expect(other?.engine.sessions.of('x').status).toBe('idle');
+    });
+
+    // While it restores, the other canvas's writer's new work waits for it.
+    restore = Promise.withResolvers<undefined>();
+    const rewinding = ok(core, 'session.rewind', { agent: 'a', message, restore: 'code' });
+    await vi.waitFor(() => {
+      expect(rewinds.some(({ dryRun }) => !dryRun)).toBe(true);
+    });
+    other?.engine.sessions.send('x', 'claude-code', 'Edit it again');
+    const sentX = () =>
+      sdk.sessions
+        .filter((_session, at) => sdk.started[at]?.agentId === 'x')
+        .flatMap((session) => session.sent.map(({ text }) => text));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(sentX()).toEqual(['Edit it']);
+    restore.resolve(undefined);
+    await rewinding;
+    await vi.waitFor(() => {
+      expect(sentX()).toEqual(['Edit it', 'Edit it again']);
+    });
+  });
+
+  it('holds new work for the agent whose files it restores until the restore is done', async () => {
+    const { core, sdk } = await start();
+    const message = await turn(core, 'a', 'Write the app');
+    restore = Promise.withResolvers<undefined>();
+    const rewinding = ok(core, 'session.rewind', { agent: 'a', message, restore: 'code' });
+    await vi.waitFor(() => {
+      expect(rewinds.some(({ dryRun }) => !dryRun)).toBe(true);
+    });
+    // Its run hands it its next task meanwhile (as once another agent's turn ends): it waits.
+    const open = core.engines.canvas(CANVAS);
+    open?.engine.sessions.send('a', 'claude-code', 'Next task');
+    const sent = () => sdk.sessions.flatMap((session) => session.sent.map(({ text }) => text));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(sent()).toEqual(['Write the app']);
+    restore.resolve(undefined);
+    await rewinding;
+    expect(await appText()).toBe('export const app = 1;\n');
+    await vi.waitFor(() => {
+      expect(sent()).toEqual(['Write the app', 'Next task']);
+    });
+  });
+});
+
+describe('reach', () => {
+  it('lets a token name only an entry or task of the agent named beside it, on an agent it reaches', async () => {
+    const { core } = await start();
+    const own = await turn(core, 'a', 'Write the app');
+    const others = await turn(core, 'b', 'Review it');
+    // The builder leads, reaching itself alone here (nothing is linked to it).
+    const lead = { kind: 'agent', canvas: CANVAS, agent: 'a', session: 'a-session' } as const;
+    expect(
+      await ok(core, 'session.rewindPreview', { agent: 'a', message: own }, lead),
+    ).toMatchObject({ possible: true });
+    // Another agent's entry, named beside itself, or beside the agent the entry is of: neither.
+    for (const [agent, message] of [
+      ['a', others],
+      ['b', others],
+    ] as const) {
+      const refused = await fails(core, 'session.rewindPreview', { agent, message }, lead);
+      expect(refused.code).toBe('not-found');
+    }
+    const task = await fails(core, 'session.stopTask', { agent: 'b', task: 'task-1' }, lead);
+    expect(task.code).toBe('not-found');
+  });
 });
 
 describe('Continue in Terminal', () => {
@@ -373,6 +479,27 @@ describe('restart and a new conversation', () => {
     }
     expect(close).not.toHaveBeenCalled();
     expect(sdk.started).toHaveLength(1);
+  });
+
+  it('refuses a new conversation or a restart once a turn started while it checked, never reporting one it didn’t do', async () => {
+    const { core, sdk } = await start({ a: { id: KEPT } });
+    await ok(core, 'session.open', { agent: 'a' });
+    const open = core.engines.canvas(CANVAS);
+    // While it reads whether its next launch would be held, its run hands it a task: a turn goes on.
+    holding = Promise.withResolvers<undefined>();
+    vi.spyOn(SessionManager.prototype, 'availability').mockImplementation(() => {
+      if (open?.engine.sessions.of('a').status === 'idle') {
+        open.engine.sessions.send('a', 'claude-code', 'Next task');
+      }
+      return Promise.resolve({ ready: true });
+    });
+    for (const op of ['session.newConversation', 'session.restart']) {
+      const refused = await fails(core, op, { agent: 'a' });
+      expect(refused.code).toBe('refused');
+      expect(refused.sentence).toMatch(/Builder has a turn going on/);
+    }
+    // Its session and conversation are as they were: one start, resuming what it remembered.
+    expect(sdk.started.map(({ resume }) => resume)).toEqual([KEPT]);
   });
 
   it('starts a new conversation, forgetting only the remembered one', async () => {

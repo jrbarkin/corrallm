@@ -365,7 +365,7 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     },
     // A restore of a tree holds new work for the other agents working in it until it is done.
     gate: {
-      pass: (canvas, agent): Promise<void> => gate.pass(canvas, agent),
+      pass: (canvas, agent, own): Promise<void> => gate.pass(canvas, agent, own),
       holding: (canvas, agent): Promise<string | undefined> => gate.holding(canvas, agent),
     },
   });
@@ -381,6 +381,7 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
   };
   // The workspace mutation gate (B11 R5, B9a's shared-tree seam): every agent of a tree protected.
   const gate: WorkspaceGate = new WorkspaceGate({
+    canvases: () => engines.opened(),
     agents: (canvas) =>
       (engines.canvas(canvas)?.document.nodes ?? []).flatMap((node) =>
         node.type === 'agent' ? [node.id] : [],
