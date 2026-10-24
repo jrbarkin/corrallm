@@ -5,6 +5,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 
 import type { ConnectionId } from '../../shared/adapter';
+import { MAX_MESSAGE_BYTES } from '../../shared/api/limits';
 import { decodeSubmissions } from '../../shared/engine/delivery/submission-state';
 import { Engine } from '../../shared/engine/engine';
 import { fakeBackend } from '../../shared/engine/test-backend';
@@ -334,6 +335,26 @@ it('resends a manual submission with a new id and preserves the cancelled origin
   expect(engine.sessions.of('a').submissions).toContainEqual(
     expect.objectContaining({ id: sent[1]?.id, status: 'running' }),
   );
+});
+
+it('resends a long manual submission whole, though its message holds it cut', async () => {
+  const engine = await core.engines.open(CANVAS);
+  const text = 'é'.repeat(MAX_MESSAGE_BYTES);
+  engine.sessions.send('a', 'codex', text);
+  await vi.waitFor(() => {
+    expect(sent).toHaveLength(1);
+  });
+  // Journaled, it is your message (run-journal.ts).
+  await vi.waitFor(async () => {
+    expect(await texts()).toHaveLength(1);
+  });
+  await stall();
+  await choose();
+  end();
+  await vi.waitFor(() => {
+    expect(sent).toHaveLength(2);
+  });
+  expect(sent[1]?.text).toBe(text);
 });
 
 it('retries a run task as its own new attempt, whose reply advances the queue', async () => {
