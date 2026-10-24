@@ -38,11 +38,18 @@ import type { Database } from './store/store';
  * the user picked in the app (canvas memory), its document as the core keeps it (from its rows,
  * else read from its file: core/canvas/documents.ts; a file changed on disk is reviewed, never read
  * over its rows), whose live document it reads from then on, and its run as the journal last kept
- * it, restored paused. A canvas with no file opens only if
- * the core keeps its document (one a token made), and none whose file holds another canvas. It is
- * open (the journal's `open_canvas`) until it is closed (`closeCanvas`: its run journaled, its
- * sessions ended). One opened held delivers nothing until `deliver()`, so a host that may still
- * refuse to start (`corrallm serve`) sends nothing. Whatever its engine does is journaled again: at most one
+ * it, restored paused. Each canvas has one runtime at a time (B11 Design §2), allocated once however
+ * often and concurrently asked (`load`, `open`, `initialize`), passive (its document, run and
+ * messages loaded, starting no CLI and delivering nothing) until it executes (its delivery started,
+ * once, after what was cut off is settled on disk), then closing and closed (`closeCanvas`: its run
+ * journaled, its sessions ended); a canvas allocated again while it closes waits for that close. A
+ * passive runtime needs no project folder (an agent's session consults the working-directory
+ * resolver as it starts); serve's admission (`open`) still needs one, and a file holding the canvas
+ * or the core's rows of it, never a draft that holds nothing, nor a canvas whose file holds another.
+ * It is open (the journal's `open_canvas`) until it is closed. One opened held stays passive until
+ * `deliver()`, so a host that may still refuse to start (`corrallm serve`) sends nothing. A core
+ * starting cold initializes every canvas open (`initialize`), once. Whatever its engine does is
+ * journaled again: at most one
  * write per COALESCE_MS, and one before every message the run sends, so a sent message's record is
  * always on disk first. Its run and its messages are one record: each write of either holds every
  * change to the other not on disk yet (a run's only if it changed since it last was), so what
@@ -62,6 +69,7 @@ const NO_FILE = 'This canvas isn’t saved: save it in corrallm first.';
 const ANOTHER = 'This canvas’s file holds another canvas now: open it in corrallm to run it.';
 const NO_SWITCH = 'Switch this agent to another connection in the corrallm app.';
 const JOURNAL_FAILED = 'Could not journal every canvas’s run as the core closed.';
+const NOT_KEPT = 'corrallm keeps no such canvas.';
 
 export interface EnginesDeps {
   retryTask?: (
@@ -78,7 +86,7 @@ export interface EnginesDeps {
   directories: ProjectRootResolver;
   journal: RunJournal;
   /** Each canvas's document, its file checked as it opens. */
-  documents: Pick<Documents, 'review' | 'live' | 'hasRows'>;
+  documents: Pick<Documents, 'review' | 'live' | 'loaded' | 'hasRows'>;
   /** Every canvas's messages, in the profile's database. */
   messages: MessageTable;
   /** The profile's database, whose commits hold what changes together. */
@@ -93,10 +101,22 @@ export interface EnginesDeps {
   needs?: (canvas: CanvasId) => readonly NeedsItem[];
 }
 
+/**
+ * Where a canvas's runtime is (B11 Design §2): passive, loaded but delivering nothing and starting
+ * no CLI; or executing, its delivery started. Closing removes it.
+ */
+export type RuntimeState = 'passive' | 'executing';
+
+/** How initializing a canvas open went, as a core starts cold (`initialize`). */
+export type Initialized =
+  { canvas: CanvasId; warnings: readonly string[] } | { canvas: CanvasId; error: string };
+
 /** A canvas the core runs: its document, its engine and its messages. */
 export interface OpenCanvas {
   /** Its document as the core has it now. */
   readonly document: CanvasDocument;
+  /** Whether it executes yet, or is only allocated (passive). */
+  readonly state: RuntimeState;
   engine: Engine;
   messages: MessageStore;
   delivery: Delivery;
@@ -134,6 +154,11 @@ export interface Watcher {
 
 /** A canvas the core runs, with its sessions' listeners and its journal. */
 interface Running extends OpenCanvas {
+  state: RuntimeState;
+  /** Its delivery starting (once: `#execute`), once it executes. */
+  executing: Promise<void> | undefined;
+  /** Whether the profile keeps it as serve admits it: in a file that holds it, or in rows. */
+  kept: boolean;
   /** Its generation's token in the journal, which its writes carry. */
   token: string;
   listeners: Set<(agentId: string, connection: ConnectionId, event: SessionEvent) => void>;
@@ -154,7 +179,12 @@ interface Running extends OpenCanvas {
 
 export class Engines {
   readonly #deps: EnginesDeps;
+  /** Each canvas's runtime, allocated once (its one initialization). */
   readonly #running = new Map<CanvasId, Promise<Running>>();
+  /** Each canvas closing: allocated again only once its close has finished. */
+  readonly #closing = new Map<CanvasId, Promise<void>>();
+  /** Every canvas open as the core started, initialized once (`initialize`). */
+  #initialized: Promise<readonly Initialized[]> | undefined;
   /** The canvases open now, once opened. */
   readonly #canvases = new Map<CanvasId, Running>();
   readonly #mail = new Map<CanvasId, Promise<{ messages: MessageStore; notes: WithdrawalNotes }>>();
@@ -322,27 +352,101 @@ export class Engines {
   }
 
   /**
-   * The canvas's engine, opening it if it isn't yet: its document as the core keeps it, and its run
-   * as the journal last kept it, restored paused, delivering at once unless `held`. Rejects, saying
-   * why, for a canvas the profile keeps no project folder or file for, or whose file holds another
-   * canvas now.
+   * The canvas's engine, opening it if it isn't yet, as serve admits a canvas: its document as the
+   * core keeps it, and its run as the journal last kept it, restored paused, delivering at once
+   * unless `held`. Rejects, saying why, for a canvas the profile keeps no project folder or file
+   * for, or whose file holds another canvas now (one allocated passively stays so).
    */
-  open(canvas: CanvasId, { held = false }: OpenOptions = {}): Promise<Engine> {
+  async open(canvas: CanvasId, { held = false }: OpenOptions = {}): Promise<Engine> {
+    const running = await this.#allocate(canvas, true);
+    // One allocated passively before meets serve's admission now.
+    if (this.#deps.directories.projectRoot(canvas) === undefined) throw new Error(NO_FOLDER);
+    if (!running.kept && !this.#deps.documents.hasRows(canvas)) throw new Error(NO_FILE);
+    if (!held) await this.#execute(running);
+    return running.engine;
+  }
+
+  /**
+   * The canvas's engine, allocated passively if it isn't yet (B11 Design §2): its document, its run
+   * restored paused and its messages, open until it is closed, with no project folder needed,
+   * starting no CLI and delivering nothing until it executes. Rejects, saying why, for a canvas
+   * corrallm keeps nothing of, or whose file holds another canvas now.
+   */
+  async load(canvas: CanvasId): Promise<Engine> {
+    return (await this.#allocate(canvas, false)).engine;
+  }
+
+  /**
+   * Initializes every canvas open (`open_canvas`) as a core starts cold, once, however often asked:
+   * each allocated (restored paused) and executing, its delivery started only once what was cut
+   * off as the core stopped is settled on disk. How each went; one that can't is said, never
+   * stopping the others.
+   */
+  initialize(): Promise<readonly Initialized[]> {
+    if (this.#closed) return Promise.reject(new Error('The core’s canvases have closed.'));
+    if (this.#initialized === undefined) {
+      const initializing = this.#initialize();
+      initializing.catch(() => {
+        if (this.#initialized === initializing) this.#initialized = undefined;
+      });
+      this.#initialized = initializing;
+    }
+    return this.#initialized;
+  }
+
+  async #initialize(): Promise<readonly Initialized[]> {
+    const canvases = await this.#deps.journal.openCanvases();
+    return Promise.all(
+      canvases.map(async (canvas): Promise<Initialized> => {
+        try {
+          const running = await this.#allocate(canvas, false);
+          await this.#execute(running);
+          return { canvas, warnings: running.warnings };
+        } catch (error) {
+          return { canvas, error: error instanceof Error ? error.message : String(error) };
+        }
+      }),
+    );
+  }
+
+  /** Starts delivering on every canvas allocated passively (opened held): what waits goes once it can. */
+  async deliver(): Promise<void> {
+    await Promise.all([...this.#canvases.values()].map((running) => this.#execute(running)));
+  }
+
+  /**
+   * The canvas's runtime, allocated once: one already allocated (or allocating), or a new one once
+   * a close of its last has finished. `strict`: as serve admits it (#load).
+   */
+  #allocate(canvas: CanvasId, strict: boolean): Promise<Running> {
     if (this.#closed) return Promise.reject(new Error('The core’s canvases have closed.'));
     let running = this.#running.get(canvas);
     if (!running) {
-      running = this.#open(canvas, held);
-      running.catch(() => {
-        if (this.#running.get(canvas) === running) this.#running.delete(canvas);
+      const closing = this.#closing.get(canvas);
+      const allocating = (async () => {
+        await closing?.catch(() => undefined);
+        return this.#load(canvas, strict);
+      })();
+      allocating.catch(() => {
+        if (this.#running.get(canvas) === allocating) this.#running.delete(canvas);
       });
-      this.#running.set(canvas, running);
+      this.#running.set(canvas, allocating);
+      running = allocating;
     }
-    return running.then(({ engine }) => engine);
+    return running;
   }
 
-  /** Starts delivering on every canvas opened held: what waits on each goes once it can. */
-  async deliver(): Promise<void> {
-    await Promise.all([...this.#canvases.values()].map(({ delivery }) => delivery.start()));
+  /**
+   * The runtime executes: its delivery starts, once (what was being delivered as the core last
+   * stopped settled unresolved, on disk, before anything goes).
+   */
+  #execute(running: Running): Promise<void> {
+    running.executing ??= (async () => {
+      if (this.#canvases.get(running.document.id) !== running) return;
+      running.state = 'executing';
+      await running.delivery.start();
+    })();
+    return running.executing;
   }
 
   /**
@@ -610,8 +714,22 @@ export class Engines {
    */
   async closeCanvas(canvas: CanvasId): Promise<void> {
     const opening = this.#running.get(canvas);
-    if (opening === undefined) return;
+    if (opening === undefined) {
+      // One closing already: done once it is.
+      await this.#closing.get(canvas);
+      return;
+    }
     this.#running.delete(canvas);
+    const closing = this.#close(canvas, opening);
+    this.#closing.set(canvas, closing);
+    try {
+      await closing;
+    } finally {
+      if (this.#closing.get(canvas) === closing) this.#closing.delete(canvas);
+    }
+  }
+
+  async #close(canvas: CanvasId, opening: Promise<Running>): Promise<void> {
     let running: Running;
     try {
       running = await opening;
@@ -649,6 +767,7 @@ export class Engines {
     this.#ownerResends.clear();
     const mail = await Promise.all(this.#mail.values());
     for (const { notes } of mail) notes.close();
+    await Promise.allSettled(this.#closing.values());
     const running = await Promise.allSettled(this.#running.values());
     this.#running.clear();
     this.#canvases.clear();
@@ -667,26 +786,41 @@ export class Engines {
     if (failed.length > 0) throw new AggregateError(failed, JOURNAL_FAILED);
   }
 
-  async #open(canvas: CanvasId, held: boolean): Promise<Running> {
+  /**
+   * Loads a canvas's runtime, passive. `strict`, as serve admits a canvas, before anything is
+   * changed: only with a picked project root (not any one agent's eventual workspace), and a file
+   * that holds it or the core's rows of it (one a token made, never saved: B9 Design §8), never a
+   * draft that holds nothing, though the journal keeps one's run. Either way never one whose file
+   * holds another canvas now, nor one corrallm keeps nothing of.
+   */
+  async #load(canvas: CanvasId, strict: boolean): Promise<Running> {
     const { projects, journal, documents } = this.#deps;
     await projects.restore(canvas);
-    // Admission needs the picked project root, not any one agent's eventual workspace.
-    if (this.#deps.directories.projectRoot(canvas) === undefined) throw new Error(NO_FOLDER);
+    if (strict && this.#deps.directories.projectRoot(canvas) === undefined) {
+      throw new Error(NO_FOLDER);
+    }
     const context = await journal.get(canvas);
-    // A canvas the core keeps the document of opens with no file (one a token made, never saved:
-    // B9 Design §8); any other only from the file canvas memory names for it, while that file
-    // holds no other canvas: never a draft that holds nothing, though the journal keeps one's run.
-    if (context.savedText === undefined) {
-      if (!documents.hasRows(canvas)) throw new Error(NO_FILE);
-    } else {
+    const rows = documents.hasRows(canvas);
+    let kept = rows;
+    if (context.savedText !== undefined) {
       let holds: CanvasId | undefined;
       try {
         holds = canvasIdOf(context.savedText);
       } catch (error) {
         // One whose document the core keeps opens from it, its file reviewed (B9 Design §5).
-        if (!documents.hasRows(canvas)) throw error;
+        if (!rows) throw error;
       }
       if (holds !== undefined && holds !== canvas) throw new Error(ANOTHER);
+      kept = true;
+    }
+    if (strict && !kept) throw new Error(NO_FILE);
+    // A draft that holds nothing is loaded only while it is live here, or open (a window shows it).
+    if (
+      !kept &&
+      documents.loaded(canvas) === undefined &&
+      !(await journal.openCanvases()).includes(canvas)
+    ) {
+      throw new Error(NOT_KEPT);
     }
     // With its edits since, as the core keeps them: a file changed on disk meanwhile is never read
     // over them, but reviewed (B9 Design §5).
@@ -707,6 +841,9 @@ export class Engines {
       unwatch: messages.subscribe((message) => {
         for (const watcher of this.#watchers) watcher.message?.(message);
       }),
+      state: 'passive',
+      executing: undefined,
+      kept,
       token: context.token,
       listeners,
       timer: undefined,
@@ -769,7 +906,6 @@ export class Engines {
       ...(this.#deps.locale === undefined ? {} : { locale: this.#deps.locale }),
     });
     running.delivery = delivery;
-    if (!held) await delivery.start();
     const changed = () => {
       running.changes += 1;
       running.timer ??= setTimeout(() => {
