@@ -3430,6 +3430,16 @@ describe('usage', () => {
     });
   });
 
+  /**
+   * A clock that only the test moves, so startup, fsync and scheduler delays (a loaded machine's
+   * seconds) never consume a usage window of a second or two. Returns when the window resets.
+   */
+  function frozenWindow(ms: number): number {
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+    vi.setSystemTime(Date.UTC(2026, 9, 21, 12));
+    return Date.now() + ms;
+  }
+
   /** A run whose Builder is held by its usage rule (`action`) before its queue's message. */
   async function heldOnUsage(action: string, resetsAt: number) {
     await overRule(action, resetsAt);
@@ -3479,10 +3489,10 @@ describe('usage', () => {
   it.each(['ask', 'waitForReset'])(
     'holds a party’s message while the run holds its agent on usage (%s) until the window resets, but never yours',
     async (action) => {
-      const resetsAt = Date.now() + 1500;
+      const resetsAt = frozenWindow(1500);
       const engine = await heldOnUsage(action, resetsAt);
       const id = await send('builder', 'Say hello');
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      await vi.advanceTimersByTimeAsync(50);
       expect((await find(id))?.state).toBe('pending');
       expect(await notices()).toEqual([
         expect.objectContaining({ replyTo: id, body: expect.stringMatching(WAITS) as string }),
@@ -3495,6 +3505,7 @@ describe('usage', () => {
       expect((await find(id))?.state).toBe('pending');
       expect(sent(appServer)).toEqual(['From you']);
 
+      await vi.advanceTimersByTimeAsync(resetsAt - Date.now());
       await vi.waitFor(
         async () => {
           expect((await find(id))?.state).toBe('replied');
@@ -3531,13 +3542,14 @@ describe('usage', () => {
   );
 
   it('holds a party’s message no longer than the window of a usage hold a stopped run left', async () => {
-    const resetsAt = Date.now() + 1500;
+    const resetsAt = frozenWindow(1500);
     const engine = await heldOnUsage('waitForReset', resetsAt);
     engine.run.stop();
     expect(engine.run.snapshot().agents.builder?.usage).toMatchObject({ resetsAt });
     const id = await send('builder', 'Say hello');
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    await vi.advanceTimersByTimeAsync(50);
     expect((await find(id))?.state).toBe('pending');
+    await vi.advanceTimersByTimeAsync(resetsAt - Date.now());
     await vi.waitFor(
       async () => {
         expect((await find(id))?.state).toBe('replied');
