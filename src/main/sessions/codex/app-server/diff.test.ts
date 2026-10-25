@@ -158,5 +158,26 @@ describe.skipIf(process.platform === 'win32')(
       expect(existsSync(used)).toBe(true);
       expect(existsSync(sentinel)).toBe(false);
     });
+
+    it('allows no transport, including a remote helper named none', async () => {
+      const real = execFileSync('sh', ['-c', 'command -v git'], { env, encoding: 'utf8' }).trim();
+      const bin = path.join(root, 'bin');
+      const used = path.join(root, 'used');
+      mkdirSync(bin);
+      // An installed helper is still a repository-chosen program. Simulate a Git predating
+      // GIT_NO_LAZY_FETCH so the transport allowlist, rather than the newer flag, must stop it.
+      writeFileSync(
+        path.join(bin, 'git'),
+        `#!/bin/sh\ntouch '${used}'\nunset GIT_NO_LAZY_FETCH\nexec '${real}' "$@"\n`,
+        { mode: 0o755 },
+      );
+      writeFileSync(path.join(bin, 'git-remote-none'), `#!/bin/sh\ntouch '${sentinel}'\n`, {
+        mode: 0o755,
+      });
+      execFileSync('git', ['config', 'remote.origin.url', 'none::somewhere'], { cwd: clone, env });
+      await gitDiff(runGit({ ...env, PATH: `${bin}${path.delimiter}${env.PATH}` }), clone);
+      expect(existsSync(used)).toBe(true);
+      expect(existsSync(sentinel)).toBe(false);
+    });
   },
 );

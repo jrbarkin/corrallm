@@ -117,7 +117,7 @@ export interface ConfigInspection {
  * among them. Its GIT_ALLOW_PROTOCOL is the only transport policy Git puts above every
  * configuration: a repository's `protocol.<name>.allow` outranks `protocol.allow=never`, and
  * `ext::` would then run a command (a partial clone's lazy fetch reaches it on a Git that doesn't
- * know GIT_NO_LAZY_FETCH). Its list names no transport Git has.
+ * know GIT_NO_LAZY_FETCH). Its empty allowlist admits no transport, including external remote helpers.
  */
 export function gitEnvironment(
   env: Readonly<Record<string, string | undefined>>,

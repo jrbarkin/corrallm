@@ -1,8 +1,9 @@
 import { execFileSync } from 'node:child_process';
-import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { setImmediate } from 'node:timers/promises';
+import { deflateSync } from 'node:zlib';
 
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
@@ -89,6 +90,88 @@ describe('ProjectFiles', () => {
     now = 10_000;
     expect(await project.find(folder, 'SECOND', MAX_FILE_MATCHES)).toEqual(['second.md']);
   });
+});
+
+/* A sparse index may need a promised tree, even though ls-files reads no blob bodies. */
+describe.skipIf(process.platform === 'win32')('file suggestions in a sparse partial clone', () => {
+  it.each([false, true])(
+    'runs no remote program (Git ignores GIT_NO_LAZY_FETCH: %s)',
+    async (oldGit) => {
+      const source = path.join(folder, 'source');
+      const clone = path.join(folder, 'clone');
+      const sentinel = path.join(folder, 'ran');
+      const env = {
+        PATH: process.env.PATH ?? '',
+        HOME: folder,
+        GIT_CONFIG_NOSYSTEM: '1',
+        LC_ALL: 'C',
+      };
+      const git = (cwd: string, ...args: string[]) =>
+        execFileSync('git', args, { cwd, env, encoding: 'utf8', stdio: 'pipe' });
+      await mkdir(source);
+      git(source, 'init', '-qb', 'main');
+      for (const name of ['keep', 'omitted']) {
+        await mkdir(path.join(source, name));
+        await writeFile(path.join(source, name, 'a.txt'), `${name}\n`);
+      }
+      git(source, 'add', '.');
+      git(source, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qm', 'init');
+      git(source, 'config', 'uploadpack.allowFilter', 'true');
+      git(folder, 'clone', '-q', '--filter=blob:none', '--no-checkout', `file://${source}`, clone);
+      git(clone, 'sparse-checkout', 'set', '--cone', '--sparse-index', 'keep');
+      git(clone, 'checkout', '-q');
+      expect(git(clone, 'ls-files', '--sparse', '--stage')).toContain('040000');
+      const missing = git(clone, 'rev-parse', 'HEAD:omitted').trim();
+      const objects = git(clone, 'cat-file', '--batch-all-objects', '--batch-check=%(objectname)')
+        .trim()
+        .split('\n');
+      // Repack locally without this promised tree, retaining every other object. No network or
+      // remote helper is involved in fixture creation; the only remote so far was the temp source.
+      const kept = objects
+        .filter((oid) => oid !== missing)
+        .map((oid) => {
+          const kind = git(clone, 'cat-file', '-t', oid).trim();
+          const body = execFileSync('git', ['cat-file', kind, oid], { cwd: clone, env });
+          return {
+            oid,
+            data: deflateSync(
+              Buffer.concat([Buffer.from(`${kind} ${String(body.length)}\0`), body]),
+            ),
+          };
+        });
+      const objectDir = path.join(clone, '.git', 'objects');
+      await rename(objectDir, path.join(folder, 'old-objects'));
+      await mkdir(objectDir);
+      for (const { oid, data } of kept) {
+        const prefix = path.join(objectDir, oid.slice(0, 2));
+        await mkdir(prefix, { recursive: true });
+        await writeFile(path.join(prefix, oid.slice(2)), data);
+      }
+      git(clone, 'config', 'remote.origin.url', `ext::sh -c touch% ${sentinel}`);
+      git(clone, 'config', 'protocol.ext.allow', 'always');
+      // A real control: expanding the sparse index tries the repository's remote command.
+      git(clone, 'ls-files', '--cached', '--others', '--exclude-standard', '-z');
+      expect(await readFile(sentinel, 'utf8')).toBe('');
+      await rm(sentinel);
+      let runtime = env;
+      const used = path.join(folder, 'used');
+      if (oldGit) {
+        const real = execFileSync('sh', ['-c', 'command -v git'], { env, encoding: 'utf8' }).trim();
+        const bin = path.join(folder, 'bin');
+        await mkdir(bin);
+        await writeFile(
+          path.join(bin, 'git'),
+          `#!/bin/sh\ntouch '${used}'\nunset GIT_NO_LAZY_FETCH\nexec '${real}' "$@"\n`,
+          { mode: 0o755 },
+        );
+        runtime = { ...env, PATH: `${bin}${path.delimiter}${env.PATH}` };
+      }
+      const suggestions = new ProjectFiles({ environment: () => Promise.resolve(runtime) });
+      expect(await suggestions.find(clone, 'keep/a', 50)).toContain('keep/a.txt');
+      await expect(readFile(sentinel, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+      if (oldGit) expect(await readFile(used, 'utf8')).toBe('');
+    },
+  );
 });
 
 describe('FileList', () => {
