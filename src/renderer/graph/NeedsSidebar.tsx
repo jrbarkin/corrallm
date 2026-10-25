@@ -1,4 +1,7 @@
-import { useState } from 'react';
+import { useMemo, useState, useSyncExternalStore } from 'react';
+import type { SessionPresentation } from '../run/sessions';
+import { TerminalAskCard } from './Questions';
+import { DEFAULT_AGENT } from './agents';
 
 import type { CanvasId } from '../../shared/canvas';
 import type { GuiApi } from '../../shared/gui-link';
@@ -51,13 +54,27 @@ export function NeedsSidebar({
   onReply,
   nodes,
   onOpen,
+  presentation,
 }: {
   canvas: CanvasId;
+  presentation?: SessionPresentation;
   mirror: TopicMirror;
   nodes: readonly CanvasNode[];
   onOpen: (agent: string) => void;
   onReply: (to: string, answer: ArgsOf<'reply'>['answer']) => Promise<Reply>;
 }) {
+  const observed = useMemo(() => {
+    let revision = 0;
+    return {
+      read: () => revision,
+      subscribe: (listener: () => void) =>
+        presentation?.subscribe(() => {
+          revision++;
+          listener();
+        }) ?? (() => undefined),
+    };
+  }, [presentation]);
+  useSyncExternalStore(observed.subscribe, observed.read);
   const state = useTopic(`needs:${canvas}`, mirror);
   const [settlements, setSettlements] = useState<ReadonlyMap<string, Settlement>>(new Map());
   const current = new Map((state?.items ?? []).map((item) => [item.id, item]));
@@ -144,6 +161,32 @@ export function NeedsSidebar({
           </h2>
           {[...current.values()].map((item) => {
             const settlement = kept.get(item.id);
+            const prefix = `prompt/${encodeURIComponent(item.agent ?? '')}/`;
+            // Only the agent is encoded. The native prompt id follows the generation verbatim,
+            // and may itself contain separators (the shared Needs router uses the same shape).
+            const prompt = item.id.startsWith(prefix)
+              ? item.id.slice(prefix.length).split('/').slice(1).join('/')
+              : undefined;
+            const ask =
+              item.answerIn === 'terminal' && item.agent
+                ? presentation?.snapshot(item.agent)?.asking?.find((ask) => ask.id === prompt)
+                : undefined;
+            const node = nodes.find((node) => node.id === item.agent && node.type === 'agent');
+            if (ask && node?.type === 'agent')
+              return (
+                <TerminalAskCard
+                  key={item.id}
+                  ask={ask}
+                  agent={{
+                    name: agentName(nodes, node.id),
+                    type: node.data.adapter ?? DEFAULT_AGENT,
+                    onOpen: () => {
+                      close();
+                      onOpen(node.id);
+                    },
+                  }}
+                />
+              );
             return (
               <article
                 key={item.id}

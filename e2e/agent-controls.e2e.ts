@@ -304,7 +304,7 @@ test('a canvas pause chosen before Run survives a core crash and global Resume u
 
   await crashCore(app);
   await expect(page.locator('.react-flow__node-agent')).toHaveCount(2);
-  await page.getByRole('button', { name: 'Show all queues' }).click();
+  // The new core epoch preserves the window's All queues view (§8).
   queues = page.getByRole('dialog', { name: 'All queues', exact: true });
   await expect(queues.getByRole('status')).toHaveText('Paused');
   await queues.getByRole('button', { name: 'Resume', exact: true }).click();

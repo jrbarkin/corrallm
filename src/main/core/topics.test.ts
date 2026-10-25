@@ -84,7 +84,8 @@ describe('T3c: usage and settings topics', () => {
       const answer = await window.link.request('call', 'topics.subscribe', { topic });
       expect(answer).toMatchObject({ ok: true, value: { ok: true } });
       expect(await window.link.request('call', 'topics.unsubscribe', { topic })).toMatchObject({
-        ok: true, value: { ok: true },
+        ok: true,
+        value: { ok: true },
       });
     }
   });

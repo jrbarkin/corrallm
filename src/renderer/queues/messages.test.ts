@@ -75,3 +75,41 @@ it('reads a cancelled submission’s result from its durable reply, without rewr
   });
   expect(original.turn).toBeUndefined();
 });
+
+it('reconciles a native restart record with the observed live session without changing its mailbox row', () => {
+  const node: CanvasNode = {
+    id: 'a',
+    type: 'agent',
+    position: { x: 0, y: 0 },
+    data: { label: 'A' },
+  };
+  const message: MessageView = {
+    id: crypto.randomUUID(),
+    canvas: newCanvasId(),
+    from: 'you',
+    to: 'agent:a',
+    kind: 'text',
+    origin: 'manual',
+    body: 'Live',
+    at: 1,
+    state: 'unresolved',
+    turn: { status: 'cancelled', reason: 'connection-closed' },
+  };
+  const state = {
+    items: { [message.id]: message },
+    order: [MessageId.parse(message.id)],
+    next: '',
+  };
+  const first = messageQueues([node], state, {
+    agent: 'a',
+    submissions: [{ id: message.id, text: 'Live', status: 'running' }],
+  });
+  expect(first[0]?.type === 'agent' && first[0].data.queue?.[0]).toMatchObject({
+    submission: { status: 'running' },
+  });
+  expect(message.state).toBe('unresolved');
+  const detached = messageQueues([node], state);
+  expect(detached[0]?.type === 'agent' && detached[0].data.queue?.[0]).toMatchObject({
+    submission: { status: 'cancelled', unresolved: true },
+  });
+});

@@ -14,6 +14,7 @@ import { fromMain } from '../ipc-error';
 import type { AdapterId } from '../../shared/adapter';
 import type { SessionControls } from '../agent/AgentView';
 import { viewWrite } from '../useDraft';
+import { ApiError } from '../api/client';
 
 /** Read queries still on the transitional channels; X13 replaces these session panels. */
 export interface ManualSubmissions {
@@ -56,7 +57,7 @@ const updatePresentation = (canvas: CanvasId, agent: string, change: Presentatio
   byAgent.set(agent, { ...byAgent.get(agent), ...change });
   publishPresentation();
 };
-function nativePresentation(canvas: CanvasId): SessionPresentation {
+export function nativePresentation(canvas: CanvasId): SessionPresentation {
   return {
     snapshot: (agent) => presentations.get(canvas)?.get(agent),
     subscribe: (listener) => {
@@ -114,6 +115,22 @@ export function sessionDisplay(
   if (!summary) return NEW_SESSION;
   const shown = orderedEntries(view).map(entryOf);
   const { running, usage, modes, ...top } = copy(summary);
+  const received = new Set(
+    shown.flatMap((entry) => (entry.kind === 'user' && entry.reached ? [entry.id] : [])),
+  );
+  const queued = messages.filter(
+    (message) =>
+      message.to === `agent:${summary.agent}` &&
+      message.kind === 'text' &&
+      (message.state === 'pending' ||
+        (message.state === 'delivering' && !received.has(message.delivery?.as ?? message.id))),
+  );
+  const queuedIds = new Set(queued.map(({ id }) => id));
+  const lastUser = shown.findLastIndex((entry) => entry.kind === 'user');
+  const nativeTurn =
+    summary.status !== 'idle' && lastUser > shown.findLastIndex((entry) => entry.kind === 'end')
+      ? shown[lastUser]?.id
+      : undefined;
   return {
     ...top,
     ...(running === undefined ? {} : { running }),
@@ -136,17 +153,37 @@ export function sessionDisplay(
           message.kind === 'text' &&
           message.origin !== 'run',
       )
-      .map((message) => submissionOf(message, messages)),
+      .map((message) => {
+        const submission = submissionOf(message, messages);
+        if (queuedIds.has(message.id)) return { ...submission, status: 'queued' as const };
+        // Native Terminal submissions are durable restart records, not Delivery-owned sends.
+        // Only the live transcript can establish that this exact turn is still running.
+        if (message.state === 'unresolved' && message.delivery?.as === nativeTurn) {
+          const live = { ...submission, status: 'running' as const };
+          delete live.result;
+          delete live.unresolved;
+          return live;
+        }
+        return submission;
+      }),
     prompts: shown.filter(isOpen),
-    queued: messages
-      .filter(
-        (message) =>
-          message.to === `agent:${summary.agent}` &&
-          message.kind === 'text' &&
-          message.state === 'pending',
-      )
-      .map((message) => ({ id: message.id, text: message.display?.text ?? message.body })),
+    queued: queued.map((message) => ({
+      id: message.id,
+      text: message.display?.text ?? message.body,
+    })),
   };
+}
+
+/** The core's viewed-session lease publishes startup refusals in the session itself. */
+export function openViewedSession(
+  api: GuiApi,
+  canvas: CanvasId,
+  agent: string,
+  failed: (error: unknown) => void,
+): void {
+  void api.sessionOpen({ canvas, agent }).catch((error: unknown) => {
+    if (!(error instanceof ApiError) || error.code !== 'unavailable') failed(error);
+  });
 }
 
 /** Native controls delegate to C services; the component's retained local state is view state. */
@@ -184,7 +221,7 @@ export function sessionCommands(
       );
     },
     open: () => {
-      act(api.sessionOpen({ canvas, agent }));
+      openViewedSession(api, canvas, agent, failed);
     },
     send: (text, images) => {
       act(

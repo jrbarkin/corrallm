@@ -1,5 +1,5 @@
 import { cleanup, render, screen, waitFor, act, within } from '@testing-library/react';
-import { afterEach, expect, it } from 'vitest';
+import { afterEach, expect, it, vi } from 'vitest';
 import type { NeedsItem } from '../../shared/model/needs';
 import type { CanvasNode } from '../../shared/model/canvas';
 import { newCanvasId } from '../../shared/canvas';
@@ -287,5 +287,50 @@ it.each(['before', 'after'] as const)(
     await events.click(screen.getByRole('button', { name: 'Needs you' }));
     expect(screen.queryByRole('alert')).toBeNull();
     expect(screen.getByRole('button', { name: 'Allow' })).toHaveProperty('disabled', false);
+  },
+);
+
+it.each(['permission', 'trust'] as const)(
+  'keeps the native Terminal %s wording beside its core Need',
+  async (kind) => {
+    const ask =
+      kind === 'permission'
+        ? { kind, id: 'native:/question?%', tool: 'Bash', summary: 'echo hello' }
+        : { kind, id: 'native:/question?%' };
+    const item: NeedsItem = {
+      ...proposal,
+      kind: 'prompt',
+      id: 'prompt/a/0/native:/question?%',
+      agent: 'a',
+      title: kind === 'permission' ? 'Approve Bash: echo hello?' : 'Trust the project folder?',
+      answerIn: 'terminal',
+      choices: [],
+    };
+    const core = fakeCore();
+    cores.push(core);
+    core.snapshot(`needs:${canvas}`, { items: [item] });
+    const opened = vi.fn();
+    render(
+      <NeedsSidebar
+        canvas={canvas}
+        mirror={core.topics}
+        nodes={[{ id: 'a', type: 'agent', position: { x: 0, y: 0 }, data: { label: 'A' } }]}
+        presentation={{ snapshot: () => ({ asking: [ask] }), subscribe: () => () => undefined }}
+        onOpen={opened}
+        onReply={() => Promise.resolve({ revs: {} })}
+      />,
+    );
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Needs you' })).toHaveProperty('disabled', false);
+    });
+    await events.click(screen.getByRole('button', { name: 'Needs you' }));
+    const card = await screen.findByRole('group', { name: 'A asks, in its terminal' });
+    expect(card.textContent).toContain(
+      kind === 'permission'
+        ? 'Bashecho helloDo you want to proceed?'
+        : 'Trust this folder in the terminal.',
+    );
+    await events.click(within(card).getByRole('button', { name: 'Open terminal' }));
+    expect(opened).toHaveBeenCalledExactlyOnceWith('a');
   },
 );

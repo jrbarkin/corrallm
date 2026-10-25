@@ -844,9 +844,12 @@ function withCanvas(
   // Global topics share the subscription envelope with canvas topics, but name no canvas.
   if (
     (name === 'topics.subscribe' || name === 'topics.unsubscribe') &&
-    typeof raw === 'object' && raw !== null && 'topic' in raw &&
+    typeof raw === 'object' &&
+    raw !== null &&
+    'topic' in raw &&
     (raw.topic === 'usage' || raw.topic === 'settings' || raw.topic === 'canvases')
-  ) return raw;
+  )
+    return raw;
   const shape = (def.input as { shape?: Record<string, unknown> }).shape;
   const given = raw === undefined ? {} : raw;
   if (

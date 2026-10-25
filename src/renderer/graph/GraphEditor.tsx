@@ -51,6 +51,8 @@ import {
   sessionDisplay,
   sessionCommands,
   nativeQueries,
+  nativePresentation,
+  openViewedSession,
 } from '../run/sessions';
 import type { SessionQueries } from '../run/sessions';
 import { runCommands } from '../run/commands';
@@ -251,12 +253,16 @@ function Editor({
     },
     [report],
   );
+  const openSession = useCallback(
+    (agent: string) => {
+      openViewedSession(api, canvasId, agent, report);
+    },
+    [api, canvasId, report],
+  );
   const model = canonical?.document ?? empty;
   const graph: Graph = useMemo(() => canonical?.graph ?? { nodes: [], edges: [] }, [canonical]);
   const name = canonical?.meta.name ?? undefined;
   const project = canonical?.meta.project ?? null;
-  /** Mailbox rows are view-only; no submission ever enters the authored document. */
-  const displayNodes = useMemo(() => messageQueues(model.nodes, messages), [model.nodes, messages]);
   const runNodes = model.nodes;
   const coreNeeds = useTopic(`needs:${canvasId}`, mirror);
   const dockNeeds = useMemo(
@@ -266,21 +272,6 @@ function Editor({
   const asks = useMemo(
     () => heldAsks(runNodes, run, engineCatalog),
     [runNodes, run, engineCatalog],
-  );
-  const layout = useMemo(() => lanesOf(displayNodes), [displayNodes]);
-  const marks = useMemo(
-    () =>
-      queueMarks(
-        layout,
-        run,
-        new Set(
-          Object.entries(sessions).flatMap(([id, session]) =>
-            session.status === 'waiting' ? [id] : [],
-          ),
-        ),
-        engineCatalog,
-      ),
-    [layout, run, sessions, engineCatalog],
   );
   /** A usage gauge for each backend the agents use, with its rule and Simulate usage…. */
   const backends = useMemo(
@@ -346,6 +337,10 @@ function Editor({
   /** The agent shown in the agent view, if any. */
   const front = openedIds[0];
   /** How it runs: its session starts when its view opens, and again when that changes. */
+  const presentation = useMemo(
+    () => sessionQueries.presentation ?? nativePresentation(canvasId),
+    [sessionQueries, canvasId],
+  );
   const frontSession = useDisplayedSession(
     canvasId,
     front,
@@ -353,6 +348,36 @@ function Editor({
     summaries,
     messages,
     sessionQueries,
+  );
+  /** Pure display reconciliation with the foreground's authoritative native receipts. */
+  const displayNodes = useMemo(
+    () =>
+      messageQueues(
+        model.nodes,
+        messages,
+        front === undefined
+          ? undefined
+          : {
+              agent: front,
+              submissions: frontSession.submissions ?? [],
+            },
+      ),
+    [model.nodes, messages, front, frontSession.submissions],
+  );
+  const layout = useMemo(() => lanesOf(displayNodes), [displayNodes]);
+  const marks = useMemo(
+    () =>
+      queueMarks(
+        layout,
+        run,
+        new Set(
+          Object.entries(sessions).flatMap(([id, session]) =>
+            session.status === 'waiting' ? [id] : [],
+          ),
+        ),
+        engineCatalog,
+      ),
+    [layout, run, sessions, engineCatalog],
   );
   const frontControls = useMemo(
     () =>
@@ -962,7 +987,11 @@ function Editor({
         }}
       >
         {run.notices.map((notice) => (
-          <p key={notice.id} role={notice.level === 'info' ? 'status' : 'alert'} className="graph-panel">
+          <p
+            key={notice.id}
+            role={notice.level === 'info' ? 'status' : 'alert'}
+            className="graph-panel"
+          >
             {notice.text}
           </p>
         ))}
@@ -1133,7 +1162,7 @@ function Editor({
               setEditing(node.id);
             } else {
               setEditing(undefined);
-              act(api.sessionOpen({ canvas: canvasId, agent: node.id }));
+              openSession(node.id);
               setOpened({ ids: [node.id] });
             }
           }}
@@ -1266,12 +1295,13 @@ function Editor({
                 key={canvasId}
                 canvas={canvasId}
                 mirror={mirror}
+                presentation={presentation}
                 onReply={commands.reply}
                 nodes={model.nodes}
                 onOpen={(agentId) => {
                   setStartChoice({ canvas: canvasId, open: false });
                   selectOne(agentId);
-                  act(api.sessionOpen({ canvas: canvasId, agent: agentId }));
+                  openSession(agentId);
                   setOpened({ ids: [agentId] });
                 }}
               />
@@ -1315,7 +1345,7 @@ function Editor({
                 setStartChoice({ canvas: canvasId, open: false });
                 setQueues(undefined);
                 selectOne(id);
-                act(api.sessionOpen({ canvas: canvasId, agent: id }));
+                openSession(id);
                 setOpened(({ ids }) => ({ ids: [id, ...ids.filter((other) => other !== id)] }));
               }).catch((error: unknown) => {
                 setProblem(ipcErrorMessage(error));
@@ -1355,7 +1385,7 @@ function Editor({
               );
             }}
             onSwitch={(id, from) => {
-              act(api.sessionOpen({ canvas: canvasId, agent: id }));
+              openSession(id);
               selectOne(id);
               setOpened(({ ids }) => ({
                 ids: [id, ...ids.filter((other) => other !== id)],
@@ -1440,7 +1470,7 @@ function Editor({
             onOpenAgent={(id) => {
               setQueues(undefined);
               selectOne(id);
-              act(api.sessionOpen({ canvas: canvasId, agent: id }));
+              openSession(id);
               setOpened({ ids: [id] });
             }}
             onClose={closeQueues}

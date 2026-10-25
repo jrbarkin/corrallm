@@ -15,6 +15,7 @@ vi.mock('./terminal/screen', async () => {
 function stubApi(api: Partial<AppApi>) {
   const canvas = newCanvasId();
   const usage: Partial<AppApi> = {
+    onSessionEvent: vi.fn<AppApi['onSessionEvent']>(() => () => undefined),
     windowGet: vi.fn<AppApi['windowGet']>().mockResolvedValue({ ok: true, value: { canvas } }),
     catalogInstalled: vi.fn<AppApi['catalogInstalled']>().mockResolvedValue({
       ok: true,

@@ -1,7 +1,15 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { newCanvasId } from '../../shared/canvas';
 import { fakeCore } from '../test-api';
-import { nativeQueries, sessionCommands } from './sessions';
+import { nativeQueries, sessionCommands, sessionDisplay } from './sessions';
+import { NEW_SESSION } from '../../shared/model/session';
+import { sessionView } from '../../shared/model/views';
+import type { MessageView } from '../../shared/model/views';
+import { AgentId } from '../../shared/api/ids';
+import { catalog } from '../catalog';
+import { ApiError } from '../api/client';
+const connection = catalog().adapters[0]?.connections[0]?.id;
+if (!connection) throw new Error('The fixture needs a connection.');
 import { findProjectFiles } from '../agent/completion';
 
 vi.mock('../agent/completion', () => ({ findProjectFiles: vi.fn().mockResolvedValue([]) }));
@@ -140,5 +148,78 @@ it('a view-only draft flush also awaits an admitted manual send before the windo
   pending.resolve(null);
   await flushing;
   expect(done).toBe(true);
+  core.dispose();
+});
+
+it('keeps a handed-off manual message queued until the native user receipt arrives', () => {
+  const message: MessageView = {
+    id: crypto.randomUUID(),
+    canvas: newCanvasId(),
+    from: 'you',
+    to: 'agent:a',
+    kind: 'text',
+    origin: 'manual',
+    body: 'Then update the docs',
+    at: 1,
+    state: 'delivering',
+    delivery: { as: 'native', at: 1, attempt: 1 },
+  };
+  const view = sessionView(AgentId.parse('a'), connection, { ...NEW_SESSION, status: 'waiting' });
+  const shown = sessionDisplay(view.summary, view, [message]);
+  expect(shown.queued).toEqual([{ id: message.id, text: message.body }]);
+  expect(shown.submissions?.[0]?.status).toBe('queued');
+  const received = sessionView(AgentId.parse('a'), connection, {
+    ...NEW_SESSION,
+    status: 'working',
+    entries: [{ kind: 'user', id: 'native', text: message.body, reached: true }],
+  });
+  expect(sessionDisplay(received.summary, received, [message]).queued).toEqual([]);
+});
+
+it('shows a native manual turn still running without confusing its durable restart record for a live cancellation', () => {
+  const message: MessageView = {
+    id: crypto.randomUUID(),
+    canvas: newCanvasId(),
+    from: 'you',
+    to: 'agent:a',
+    kind: 'text',
+    origin: 'manual',
+    body: 'slow native turn',
+    at: 1,
+    state: 'unresolved',
+    turn: { status: 'cancelled', reason: 'connection-closed' },
+    delivery: { as: 'native', at: 1, attempt: 1 },
+  };
+  const live = sessionView(AgentId.parse('a'), connection, {
+    ...NEW_SESSION,
+    status: 'working',
+    entries: [{ kind: 'user', id: 'native', text: message.body, reached: true }],
+  });
+  const shown = sessionDisplay(live.summary, live, [message]);
+  expect(shown.submissions?.[0]).toMatchObject({ status: 'running' });
+  expect(shown.submissions?.[0]?.unresolved).not.toBe(true);
+  const stopped = sessionView(AgentId.parse('a'), connection, { ...NEW_SESSION });
+  expect(sessionDisplay(stopped.summary, stopped, [message]).submissions?.[0]).toMatchObject({
+    status: 'cancelled',
+    unresolved: true,
+  });
+});
+
+it('keeps a Try again startup refusal in its core session, while reporting other failures', async () => {
+  const core = fakeCore();
+  const failed = vi.fn();
+  const open = vi.spyOn(core.api, 'sessionOpen');
+  const controls = sessionCommands(core.api, newCanvasId(), 'a', core.topics, failed);
+  open.mockRejectedValueOnce(
+    new ApiError({ code: 'unavailable', sentence: 'Startup was refused.' }),
+  );
+  controls.open();
+  await Promise.resolve();
+  expect(failed).not.toHaveBeenCalled();
+  const invalid = new ApiError({ code: 'not-found', sentence: 'The agent is gone.' });
+  open.mockRejectedValueOnce(invalid);
+  controls.open();
+  await Promise.resolve();
+  expect(failed).toHaveBeenCalledExactlyOnceWith(invalid);
   core.dispose();
 });

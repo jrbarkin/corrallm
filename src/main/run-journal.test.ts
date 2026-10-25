@@ -221,6 +221,21 @@ describe('RunJournal', () => {
     expect(await journal().last()).toBe(other);
   });
 
+  it('restoring and journaling background canvases preserves the last canvas used by a window', async () => {
+    const [background] = await named('background.corral');
+    const [shown] = await named('shown.corral');
+    const runs = journal();
+    await runs.opened(background);
+    await runs.opened(shown);
+    await runs.open(background, false);
+    const token = (await runs.get(background)).token;
+    const messages = await messagesOf(background);
+    await store.write(() => {
+      runs.keep(background, token, null, messages);
+    });
+    expect(await runs.last()).toBe(shown);
+  });
+
   it('keeps each canvas open until it is closed, across restarts, the one opened last restored', async () => {
     const [team] = await named('team.corral');
     const [other] = await named('other.corral');

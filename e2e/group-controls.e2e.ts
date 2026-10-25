@@ -279,7 +279,7 @@ test('preserves stacked group and individual holds across a core crash and globa
 
   await crashCore(app);
   await expect(page.locator('.react-flow__node-frame')).toHaveCount(2);
-  await showQueues();
+  // The new epoch preserves All queues (§8); toggling it would close it.
   await expect(queues().getByRole('status')).toHaveText('Paused');
   await queues().getByRole('button', { name: 'Resume', exact: true }).click();
   for (const id of ['alpha', 'beta', 'manual']) {

@@ -1119,7 +1119,7 @@ export class Engines {
     };
     this.#canvases.set(canvas, running);
     // Open until it is closed (B9 Design §2).
-    await journal.open(canvas);
+    await journal.open(canvas, false);
     this.#look(running);
     for (const watcher of this.#watchers) watcher.opened?.(canvas);
     return running;

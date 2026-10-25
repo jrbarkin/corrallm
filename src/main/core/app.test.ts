@@ -16,6 +16,7 @@ import { toFile } from '../../shared/model/file';
 import type { TerminalEvent } from '../../shared/terminal';
 import type { SessionHost } from '../sessions/connector';
 import { FakeConnector } from '../sessions/fake';
+import { RunJournal } from '../run-journal';
 import { createCore } from './core';
 import type { Core, CoreConfig } from './core';
 import { WindowPorts } from './gui';
@@ -858,4 +859,40 @@ it('records a view-handled session command durably without dispatching it', asyn
     ),
   ).toEqual({ id: recorded.id });
   expect(core.engines.canvas(canvas)?.engine.sessions.of(agent).status).toBe('idle');
+});
+
+it('restores the last shown draft even when an older background canvas finishes initializing later', async () => {
+  const first = await app();
+  const window = first.connect(7);
+  const background = await created(window);
+  const shown = await created(window);
+  await first.core.close();
+  core = undefined;
+  const release = Promise.withResolvers<undefined>();
+  const { value: get } = Object.getOwnPropertyDescriptor(RunJournal.prototype, 'get') as {
+    value: RunJournal['get'];
+  };
+  const delayed = vi.spyOn(RunJournal.prototype, 'get').mockImplementation(async function (
+    this: RunJournal,
+    id,
+  ) {
+    if (id === background) await release.promise;
+    return get.call(this, id);
+  });
+  try {
+    const restarted = await app();
+    const initializing = restarted.core.engines.initialize();
+    try {
+      await vi.waitFor(() => {
+        expect(restarted.core.engines.canvas(shown)).toBeDefined();
+      });
+    } finally {
+      release.resolve(undefined);
+    }
+    await initializing;
+    expect(await shownIn(restarted.connect(8))).toBe(shown);
+  } finally {
+    release.resolve(undefined);
+    delayed.mockRestore();
+  }
 });

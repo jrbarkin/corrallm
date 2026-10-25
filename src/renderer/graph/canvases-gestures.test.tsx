@@ -279,7 +279,17 @@ it.each(['show', 'close', 'allow'] as const)(
       });
     });
     const view = render(
-      <GraphEditor canvas={first.id} client={canvas.core.api} mirror={canvas.core.topics} files />,
+      <GraphEditor
+        canvas={first.id}
+        client={canvas.core.api}
+        mirror={canvas.core.topics}
+        files
+        sessionQueries={{
+          ...canvas.queries,
+          manual: canvas.manual,
+          presentation: canvas.presentation,
+        }}
+      />,
     );
     await waitFor(() => {
       expect(view.container.querySelector('.graph-editor')?.hasAttribute('inert')).toBe(false);

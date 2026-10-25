@@ -224,6 +224,7 @@ export class RunJournal {
     const messages = await this.#deps.messages(canvas);
     let written: () => void = () => undefined;
     const problem = await this.#write(() => {
+      this.#markOpen(canvas);
       const kept = this.keep(canvas, token, checkpoint, messages);
       written = messages.changes();
       return kept;
@@ -249,7 +250,7 @@ export class RunJournal {
     if (this.#entries.get(canvas)?.token !== token) throw new Error(EARLIER);
     const { store, memory } = this.#deps;
     memory.ensure(canvas);
-    this.#markOpen(canvas);
+    this.#markOpen(canvas, false);
     if (checkpoint === null) {
       store.prepare('DELETE FROM run WHERE canvas_id = ?').run(canvas);
       return;
@@ -356,10 +357,10 @@ export class RunJournal {
     });
   }
 
-  /** The canvas is open (the core runs it): until it is closed, beside any other open. */
-  async open(canvas: CanvasId): Promise<void> {
+  /** The canvas is open until closed; background initialization does not change last-used order. */
+  async open(canvas: CanvasId, used = true): Promise<void> {
     await this.#write(() => {
-      this.#markOpen(canvas);
+      this.#markOpen(canvas, used);
     });
   }
 
@@ -409,17 +410,14 @@ export class RunJournal {
     return written;
   }
 
-  /**
-   * Within a write: `canvas` is open, the one the profile used last: open beside the others open,
-   * until it is closed.
-   */
-  #markOpen(canvas: CanvasId): void {
+  /** Within a write: keep the canvas open, advancing last-used order only for explicit use. */
+  #markOpen(canvas: CanvasId, used = true): void {
     const { store, memory } = this.#deps;
     memory.ensure(canvas);
     store
       .prepare(
         `INSERT INTO open_canvas (canvas_id, opened_at) VALUES (?, ?)
-         ON CONFLICT (canvas_id) DO UPDATE SET opened_at = excluded.opened_at`,
+         ON CONFLICT (canvas_id) ${used ? 'DO UPDATE SET opened_at = excluded.opened_at' : 'DO NOTHING'}`,
       )
       .run(canvas, this.#nextOpen());
     this.#tell(canvas);

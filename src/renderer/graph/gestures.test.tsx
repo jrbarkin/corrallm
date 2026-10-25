@@ -548,21 +548,42 @@ it('waits for a label operation and its mirror before saving from the file butto
 
 it('fits a nonempty initial canvas once, and preserves its viewport and queues across a new epoch', async () => {
   const view = await setup({ selected: [] });
-  await waitFor(() => expect(seen.fits).toHaveLength(1));
+  await waitFor(() => {
+    expect(seen.fits).toHaveLength(1);
+  });
   fireEvent.click(screen.getByRole('button', { name: 'Show all queues' }));
-  expect(await screen.findByRole('dialog', { name: 'All queues', exact: true })).toBeTruthy();
-  await act(async () => { view.core.epoch('replacement'); });
-  await waitFor(() => expect(view.container.querySelector('.graph-editor[inert]')).toBeNull());
-  expect(screen.getByRole('dialog', { name: 'All queues', exact: true })).toBeTruthy();
+  expect(await screen.findByRole('dialog', { name: 'All queues' })).toBeTruthy();
+  await act(() => {
+    view.core.epoch('replacement');
+    return Promise.resolve();
+  });
+  await waitFor(() => {
+    expect(view.container.querySelector('.graph-editor[inert]')).toBeNull();
+  });
+  expect(screen.getByRole('dialog', { name: 'All queues' })).toBeTruthy();
   expect(seen.fits).toHaveLength(1);
 });
 
 it('announces a restored database warning as an alert', async () => {
   const view = await setup({ selected: [] });
-  act(() => { view.core.change({ topic: `run:${view.canvas}`, rev: 1, top: {
-    notices: [{ id: 'opened/0', level: 'warning', text: 'The core’s database was damaged. It starts empty.' }],
-  } }); });
-  expect((await screen.findByRole('alert')).textContent).toContain('The core’s database was damaged.');
+  act(() => {
+    view.core.change({
+      topic: `run:${view.canvas}`,
+      rev: (view.core.state(`run:${view.canvas}`)?.rev ?? 0) + 1,
+      top: {
+        notices: [
+          {
+            id: 'opened/0',
+            level: 'warning',
+            text: 'The core’s database was damaged. It starts empty.',
+          },
+        ],
+      },
+    });
+  });
+  expect((await screen.findByRole('alert')).textContent).toContain(
+    'The core’s database was damaged.',
+  );
 });
 
 it('does not leave a viewport fit queued for the first node of an empty restored canvas', async () => {
@@ -927,4 +948,19 @@ it('drops by the previewed neighbour when another writer inserts a row during th
     item: 'first',
     before: 'third',
   });
+});
+
+it('keeps a native startup refusal in the session instead of covering the window controls with it', async () => {
+  const view = await setup({ files: true, selected: [] });
+  view.core.reply('session.open', {
+    ok: false,
+    error: { code: 'unavailable', sentence: 'The CLI is not installed.' },
+  });
+  fireEvent.doubleClick(view.node('a'));
+  expect(await screen.findByRole('dialog', { name: 'a' })).toBeTruthy();
+  await act(async () => {
+    await Promise.resolve();
+  });
+  expect(view.container.querySelector('.canvas-float-position > [role="alert"]')).toBeNull();
+  expectOneOp(view.core, 'session.open', { canvas: view.canvas, agent: 'a' });
 });

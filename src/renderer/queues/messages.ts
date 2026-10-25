@@ -6,16 +6,21 @@ import type { MessageView } from '../../shared/model/views';
 import { queueRows } from '../../shared/model/views';
 
 type Messages = RuntimeTopicStates[`messages:${CanvasId}`];
-const cached = new WeakMap<CanvasNode, { messages: Messages; node: CanvasNode }>();
+const cached = new WeakMap<
+  CanvasNode,
+  { messages: Messages; node: CanvasNode; observed?: readonly SubmittedMessage[] }
+>();
 /** The existing queue widgets' display adapter over AuthoredRow | MessageRow. Never an edit. */
 export function messageQueues(
   nodes: readonly CanvasNode[],
   messages: Messages | undefined,
+  observed?: { agent: string; submissions: readonly SubmittedMessage[] },
 ): CanvasNode[] {
   return nodes.map((node) => {
     if (node.type !== 'agent' || !messages) return node;
+    const submissions = observed?.agent === node.id ? observed.submissions : undefined;
     const kept = cached.get(node);
-    if (kept?.messages === messages) return kept.node;
+    if (kept?.messages === messages && kept.observed === submissions) return kept.node;
     const incoming = messages.order.flatMap((id) => {
       const message = messages.items[id];
       return message?.to === `agent:${node.id}` &&
@@ -36,11 +41,17 @@ export function messageQueues(
       return {
         id: message.id,
         message: text,
-        submission: submissionOf(message, Object.values(messages.items)),
+        submission:
+          submissions?.find(({ id }) => id === message.id) ??
+          submissionOf(message, Object.values(messages.items)),
       } satisfies QueueMessage;
     });
     const projected = { ...node, data: { ...node.data, queue } };
-    cached.set(node, { messages, node: projected });
+    cached.set(node, {
+      messages,
+      node: projected,
+      ...(submissions === undefined ? {} : { observed: submissions }),
+    });
     return projected;
   });
 }

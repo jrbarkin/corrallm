@@ -273,7 +273,7 @@ test('keeps an unclear condition held across a core crash until the user decides
   expect(await prompts()).toHaveLength(1);
 
   await crashCore(app);
-  await page.getByRole('button', { name: 'Show all queues' }).click();
+  // All queues stays open while the window binds the replacement core (§8).
   queues = page.getByRole('dialog', { name: 'All queues', exact: true });
   await expect(queues.getByRole('status')).toHaveText('Paused');
   await queues.getByRole('button', { name: 'Resume', exact: true }).click();
