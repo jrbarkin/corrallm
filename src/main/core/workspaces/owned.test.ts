@@ -3,6 +3,7 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
+  renameSync,
   rmSync,
   statSync,
   symlinkSync,
@@ -167,8 +168,14 @@ describe.skipIf(process.platform === 'win32')('the owned root', () => {
     ensureOwnedRoot(owned);
     verifyOwnedRoot(owned);
     // Another folder put in its place, with something in it, isn't the one marked.
-    rmSync(owned.ownedRoot, { recursive: true });
+    // Keep the old inode allocated: deleting it lets Linux immediately reuse its number for
+    // the replacement, which would test the same recorded identity rather than another one.
+    const previous = path.join(root, 'previous-root');
+    renameSync(owned.ownedRoot, previous);
     mkdirSync(owned.ownedRoot, { mode: 0o700 });
+    expect(statSync(owned.ownedRoot, { bigint: true }).ino).not.toBe(
+      statSync(previous, { bigint: true }).ino,
+    );
     writeFileSync(path.join(owned.ownedRoot, 'work.txt'), 'someone’s\n');
     expect(
       code(() => {

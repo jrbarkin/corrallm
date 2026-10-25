@@ -44,9 +44,18 @@ afterEach(async () => {
 });
 
 /** Closes the database and opens it again, as the core does when it starts again. */
-async function restart(deps?: StoreDeps): Promise<void> {
-  await database.close();
-  database = await openTestStore(profile, deps);
+async function restart(deps?: StoreDeps, signal?: AbortSignal): Promise<void> {
+  signal?.throwIfAborted();
+  const previous = database;
+  const folder = profile;
+  await previous.close();
+  signal?.throwIfAborted();
+  const opened = await openTestStore(folder, deps);
+  if (signal?.aborted) {
+    await opened.close();
+    signal.throwIfAborted();
+  }
+  database = opened;
   table = new MessageTable(database, new CanvasMemory(database));
 }
 
@@ -414,7 +423,7 @@ describe('incremental pruning', () => {
   it.each([0x54b, 0x55b])(
     'keeps exactly the scan algorithm’s set through seeded changes, restarts, restores and staged rollbacks (seed %i)',
     { timeout: 30_000 },
-    async (initialSeed) => {
+    async (initialSeed, { signal }) => {
       // Exercise real SQLite closes/reopens, restores and pruning, without making an unrelated
       // backup at every randomized restart. Snapshot publication has its own store tests.
       const snapshots = vi.spyOn(Store.prototype, 'snapshot').mockResolvedValue('unused');
@@ -465,6 +474,7 @@ describe('incremental pruning', () => {
       }
       const seen = new Set<number>();
       for (let step = 0; step < 400; step++) {
+        signal.throwIfAborted();
         const ids = [...expected.keys()];
         const roll = Math.floor(random() * 10);
         seen.add(roll);
@@ -532,6 +542,7 @@ describe('incremental pruning', () => {
           });
           if (fails) await expect(writing).rejects.toThrow('The staged settlement failed');
           else await writing;
+          signal.throwIfAborted();
           for (const one of staged.toReversed()) {
             if (fails) {
               one.undo();
@@ -544,8 +555,10 @@ describe('incremental pruning', () => {
           }
         } else {
           await messages.durable();
+          signal.throwIfAborted();
           if (roll === 9) {
             await database.close();
+            signal.throwIfAborted();
             const writer = connect(path.join(profile, STORE_FILE));
             try {
               writer.exec('BEGIN');
@@ -555,7 +568,7 @@ describe('incremental pruning', () => {
               writer.close();
             }
           }
-          await restart();
+          await restart(undefined, signal);
           // The unpruned SQL input, not the optimized load's output. Restores change pending rows
           // and add notices; rows also retain the original, immutable sender/recipient/kind.
           const parsed = (value: unknown): unknown => {
@@ -646,7 +659,7 @@ describe('what delivery acts on', () => {
   it(
     'agrees with what it keeps through any sequence of changes, restarts and restores',
     { timeout: 30_000 },
-    async () => {
+    async ({ signal }) => {
       // A fixed seed: the same sequence every run.
       let seed = 0x5eed;
       const random = () => {
@@ -668,6 +681,7 @@ describe('what delivery acts on', () => {
       const states = [...MESSAGE_STATES, 'pending', 'pending', 'delivering', 'delivered'] as const;
       let messages = await store();
       for (let step = 0; step < 600; step++) {
+        signal.throwIfAborted();
         const ids = messages.all().map(({ id }) => id);
         const roll = random();
         if (roll < 0.34 || ids.length === 0) {
@@ -700,17 +714,21 @@ describe('what delivery acts on', () => {
               if (fails) throw new Error('The settlement failed');
             })
             .catch(() => undefined);
+          signal.throwIfAborted();
           if (fails) staged?.undo();
           else staged?.reveal();
         } else if (roll < 0.98) {
           // A restart: read back from its rows.
           await messages.durable();
-          await restart();
+          signal.throwIfAborted();
+          await restart(undefined, signal);
           messages = await store();
         } else {
           // A restore from a snapshot, which settles what waited there.
           await messages.durable();
+          signal.throwIfAborted();
           await database.close();
+          signal.throwIfAborted();
           const writer = connect(path.join(profile, STORE_FILE));
           try {
             writer.exec('BEGIN');
@@ -719,7 +737,7 @@ describe('what delivery acts on', () => {
           } finally {
             writer.close();
           }
-          await restart();
+          await restart(undefined, signal);
           messages = await store();
         }
         expectIndexed(messages);
