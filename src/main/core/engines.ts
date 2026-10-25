@@ -219,6 +219,8 @@ export class Engines {
   readonly #watchers = new Set<Watcher>();
   readonly #events = new Map<string, Promise<SessionEvent>>();
   #closed = false;
+  /** Whether the core's shutdown barrier holds every canvas it runs (`freeze`). */
+  #frozen = false;
   /** The window-owned runs whose retry decisions wait on a backend's hold, by canvas and agent. */
   readonly #ownerResends = new Map<
     string,
@@ -862,6 +864,45 @@ export class Engines {
     }
   }
 
+  /**
+   * The core's shutdown barrier (B11 Design §16.5), prepared: on every canvas it runs, and every
+   * one it opens meanwhile, no run task and no delivery starts until `thaw`; turns going on go on,
+   * their ends kept, and their sessions stay usable. A message a session already queued behind its
+   * turn was handed to it before, and is its own.
+   */
+  freeze(): void {
+    this.#frozen = true;
+    for (const running of this.#canvases.values()) {
+      running.engine.run.freeze();
+      running.delivery.freeze();
+    }
+  }
+
+  /** The barrier lifted (a quit cancelled): every canvas goes on from where it is. */
+  thaw(): void {
+    if (!this.#frozen) return;
+    this.#frozen = false;
+    for (const running of this.#canvases.values()) {
+      running.engine.run.thaw();
+      running.delivery.thaw();
+    }
+  }
+
+  /**
+   * Whether a canvas it runs has work going on, which closing would cut off: its run running, or
+   * an agent's turn (what keeps the app open as its last window closes: B11 Design §8).
+   */
+  active(): boolean {
+    return [...this.#canvases.values()].some(
+      (running) =>
+        running.state === 'executing' &&
+        (running.engine.run.snapshot().running ||
+          Object.values(running.engine.sessions.snapshot()).some(
+            (session) => session.status !== 'idle',
+          )),
+    );
+  }
+
   /** Fallible saving before the app commits to closing: sessions and topics remain usable. */
   async flush(): Promise<void> {
     await Promise.all(this.#events.values());
@@ -1028,6 +1069,11 @@ export class Engines {
       ...(this.#deps.locale === undefined ? {} : { locale: this.#deps.locale }),
     });
     running.delivery = delivery;
+    // One opened while the shutdown barrier holds is held by it too.
+    if (this.#frozen) {
+      engine.run.freeze();
+      delivery.freeze();
+    }
     const changed = () => {
       running.changes += 1;
       running.timer ??= setTimeout(() => {

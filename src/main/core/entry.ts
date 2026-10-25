@@ -2,6 +2,7 @@ import { CoreLink } from '../../shared/link';
 import type { LinkPort } from '../../shared/link';
 import { createCore } from './core';
 import type { Core } from './core';
+import { Endpoint } from './endpoint';
 import { appHost } from './host/app';
 import { WindowPorts } from './gui';
 import type { WindowPort } from './gui';
@@ -20,12 +21,20 @@ import type { TokenSocket } from './token-socket';
  * `init`: it takes the profile (core.lock, one owner per profile: lock.ts) before it composes the
  * core on it, and holds it until the core closes or the process ends; while `corrallm serve` holds
  * it, init says who does and composes nothing. Main hands it each trusted window's port beside the
- * link (B8 Design §3), which it serves once composed (core/gui.ts). Once composed it also serves
- * the profile's token socket (token-socket.ts), so `corrallm token new|renew|revoke` makes tokens
- * while the app runs, until the core closes; a socket it can't serve is said, and the app runs on
- * without it. In the native self-test
- * (CORRALLM_NATIVE_SELFTEST=1, native-selftest.ts) main only asks it to run the checks, and it is
- * never composed.
+ * link (B8 Design §3), which it serves once composed (core/gui.ts).
+ *
+ * Once composed it always serves the profile's outside endpoint (B11 Design §9, §16.6: endpoint.ts),
+ * here, beside the dispatcher, never in main or a window: MCP on 127.0.0.1 on the port the profile
+ * keeps (chosen free once), with every check `corrallm serve` makes; with no outside token made,
+ * nothing authenticates. One that can't listen (the port taken) is a status (`settings.get`, and
+ * what `corrallm token` says), never a dialog, and the app runs on without it. It also serves the
+ * profile's token socket (token-socket.ts), so `corrallm token new|renew|revoke` makes tokens while
+ * the app runs, until the core closes, each naming the endpoint's URL; a socket it can't serve is
+ * said, and the app runs on without it. Then it publishes api.json, naming this process. Main asks
+ * it to prepare, cancel and commit the shutdown barrier (core.ts) as it quits or restarts to
+ * update; committing closes the token socket and the endpoint (requests going on ended, api.json
+ * removed) before the core closes. In the native self-test (CORRALLM_NATIVE_SELFTEST=1,
+ * native-selftest.ts) main only asks it to run the checks, and it is never composed.
  */
 
 // Checking that only plain data crosses costs a walk of every value: only under `pnpm dev`.
@@ -92,7 +101,11 @@ const ready = Promise.withResolvers<Core>();
 let held: ProfileLock | undefined;
 /** The profile's token socket, served while the core is up. */
 let tokenSocket: TokenSocket | undefined;
+/** The profile's outside endpoint, served while the core is up. */
+let endpoint: Endpoint | undefined;
 const release = () => {
+  // Only the api.json it wrote: a newer core's (after this one) stays.
+  endpoint?.removeSync();
   tokenSocket?.removeSync();
   tokenSocket = undefined;
   held?.release();
@@ -122,16 +135,44 @@ const link = new CoreLink<CoreSide, HostSide>(
       }
       ready.resolve(core);
       windows.resolve(new WindowPorts(core, { check }));
+      // Its outside endpoint, always (B11 Design §16.6): one that can't listen is said, quietly.
+      const outside = new Endpoint({
+        profile: config.profile,
+        core,
+        clientOf: (token) => core.clientOf(token),
+        stale: (token) => core.tokens.stale(token),
+        settings: core.settings,
+        changed: (status) => {
+          core.served(status);
+        },
+      });
+      endpoint = outside;
+      const status = await outside
+        .listen()
+        .catch((error: unknown) =>
+          outside.refused(`corrallm’s MCP server couldn’t start: ${reasonOf(error)}`),
+        );
+      if (status.state === 'unavailable') console.error(`corrallm: ${status.sentence}`);
       try {
-        // The app serves no MCP yet (B11), so its tokens name no URL.
         tokenSocket = await serveTokenSocket({
           profile: config.profile,
-          answer: (request) => core.tokenRequest(request, { owner: 'app', url: null }),
+          answer: (request) =>
+            core.tokenRequest(request, {
+              owner: 'app',
+              url: outside.url ?? null,
+              ...(outside.status.state === 'unavailable'
+                ? { unserved: outside.status.sentence }
+                : {}),
+            }),
         });
       } catch (error) {
-        console.error(
-          `corrallm token can’t reach the app: ${error instanceof Error ? error.message : String(error)}`,
-        );
+        console.error(`corrallm token can’t reach the app: ${reasonOf(error)}`);
+      }
+      // Found from now on by `corrallm wait`: api.json, naming this process.
+      if (status.state === 'listening') {
+        await outside.publish().catch((error: unknown) => {
+          console.error(`corrallm: could not write api.json: ${reasonOf(error)}`);
+        });
       }
       return null;
     },
@@ -140,20 +181,31 @@ const link = new CoreLink<CoreSide, HostSide>(
       await (await windows.promise).openLink(window, url);
       return null;
     },
+    flushDrafts: async (asked) => ({
+      unanswered: await (await windows.promise).flushDrafts(asked),
+    }),
     flush: async () => {
       await (await ready.promise).flush();
       return null;
     },
-    close: async () => {
+    prepareShutdown: async (reason) => (await ready.promise).prepareShutdown(reason),
+    cancelShutdown: async () => {
+      (await ready.promise).cancelShutdown();
+      return null;
+    },
+    commitShutdown: async () => {
       try {
-        // No token is made as the core closes.
+        // No token is made as the core closes, and no request is answered: those going on end,
+        // a long wait included, and api.json goes, before any session does.
         await tokenSocket?.close();
-        await (await ready.promise).close();
+        await endpoint?.close();
+        await (await ready.promise).commitShutdown();
       } finally {
         release();
       }
       return null;
     },
+    active: async () => (await ready.promise).active(),
     selftest: async ({ packaged }) => ({
       checks: await runChecks(selfTestChecks({ packaged })),
       memory: memoryText(),
@@ -175,3 +227,7 @@ link.on('resumed', () => {
   });
 });
 link.emit('ready', memoryText());
+
+function reasonOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}

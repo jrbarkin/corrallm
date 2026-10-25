@@ -1,4 +1,5 @@
 import type { AdapterId, Catalog } from '../../../shared/adapter';
+import type { ApiStatus } from '../../../shared/api/ops/settings';
 import type { ArgsOf, ProducedOf } from '../../../shared/api/registry';
 import type { OpName } from '../../../shared/api/surface';
 import type { CanvasId } from '../../../shared/canvas';
@@ -70,7 +71,9 @@ export interface OpServices {
   catalog: Catalog;
   /** The adapter agents run when none is chosen. */
   defaultAdapter: AdapterId;
-  settings: Pick<Settings, 'get'>;
+  settings: Pick<Settings, 'get' | 'apiPort'>;
+  /** Whether corrallm's MCP server listens now, and where, as its owner says (core/endpoint.ts). */
+  api: () => ApiStatus;
   /** The agents’ environment, read from the login shell when first needed. */
   environment: () => Promise<Readonly<Record<string, string>>>;
   usage: Pick<UsageReadings, 'state' | 'setRule' | 'simulate'>;

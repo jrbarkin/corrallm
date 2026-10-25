@@ -254,7 +254,7 @@
   "schemas": {
     "topics.subscribe": {
       "input": "d52e3a96a8f206c0",
-      "output": "3a32b1f9b8943abd"
+      "output": "3bbf784547f7a6e5"
     },
     "topics.unsubscribe": {
       "input": "d52e3a96a8f206c0",
@@ -490,7 +490,7 @@
     },
     "settings.get": {
       "input": "e5fa5cc18e054cdd",
-      "output": "ca640021dc5b5fbe"
+      "output": "a1f28cb1576ced66"
     },
     "run.pause": {
       "input": "a85fe9cb1eb6d55a",
