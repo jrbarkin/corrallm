@@ -44,7 +44,7 @@ export class ProjectDirectories implements DirectoryResolver {
   }
 
   workingDirectory(...[canvas]: [canvas: CanvasId, agent: AgentId]): Promise<WorkingDirectory> {
-    // The legacy folder is shared by every agent; C5 supplies the per-agent binding.
+    // The legacy folder is shared by every agent; WorkspaceDirectories supplies repository bindings.
     const cwd = this.#projects.of(canvas);
     return Promise.resolve(
       cwd === undefined

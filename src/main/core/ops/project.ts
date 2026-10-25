@@ -20,13 +20,10 @@ export function projectOps({
   Implementations,
   'project.files' | 'project.setSetupCommand' | 'project.clearSetupApproval'
 > {
-  /** The worktrees' setup service, or why there is none: worktrees aren't composed yet. */
+  /** The composed setup service; isolated operation fixtures may omit it. */
   const service = () => {
     if (setups === undefined) {
-      throw new OpFailure(
-        'unavailable',
-        'Agents don’t get worktrees of their own in this build yet, so there is no setup to set.',
-      );
+      throw new OpFailure('unavailable', 'The workspace setup service is unavailable.');
     }
     return setups;
   };

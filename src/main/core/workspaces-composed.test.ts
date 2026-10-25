@@ -1,12 +1,17 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { createCore } from './core';
 import type { Core, CoreConfig } from './core';
 import { FakeConnector } from '../sessions/fake';
+import * as connectors from '../sessions/connectors';
+import type { Conversations } from '../sessions/adapter';
 import { keepCanvases, readOnDisk } from './store/test-store';
 import { CALLERS, CANVAS, NO_DESKTOP } from './test-registry';
+import { OpFailure } from './call';
+import { WorkspaceGate } from './workspaces/gate';
+import { WorkspaceSetups } from './workspaces/setup';
 import { WorkspaceGit } from './workspaces/runtime-git';
 import { commit, git, gitEnvironment, makeRepository, scratch } from './workspaces/test-git';
 
@@ -17,6 +22,7 @@ let fake: FakeConnector;
 let project: string;
 let config: CoreConfig;
 let env: Record<string, string>;
+let listConversations: ReturnType<typeof vi.fn<Conversations['list']>>;
 beforeEach(async () => {
   ({ root, remove } = scratch('corrallm-workspaces-composed-'));
   project = path.join(root, 'project');
@@ -61,6 +67,10 @@ beforeEach(async () => {
     },
     sessions: { connectors: { 'codex.app-server': fake }, environment: () => Promise.resolve(env) },
   };
+  listConversations = vi.fn<Conversations['list']>().mockResolvedValue([]);
+  vi.spyOn(connectors, 'createConversations').mockReturnValue({
+    codex: { list: listConversations },
+  });
   core = await createCore(config, NO_DESKTOP);
   await core.engines.open(CANVAS);
 });
@@ -113,6 +123,12 @@ it('holds starts for setup, then runs two ungrouped agents in distinct verified 
   expect(a?.cwd).not.toBe(b?.cwd);
   expect(a?.cwd).toContain(path.join(project, '.corral', 'worktrees'));
   if (!a || !b) throw new Error('Missing fake sessions');
+  expect(await core.call('window.show', { canvas: CANVAS }, CALLERS.you)).toMatchObject({
+    ok: true,
+  });
+  await core.channels.call(1, 'session:list', ['a']);
+  await core.channels.call(1, 'session:list', ['b']);
+  expect(listConversations.mock.calls.map(([cwd]) => cwd)).toEqual([a.cwd, b.cwd]);
   writeFileSync(path.join(a.cwd, 'only-a.txt'), 'a');
   writeFileSync(path.join(b.cwd, 'only-b.txt'), 'b');
   expect(
@@ -151,7 +167,10 @@ it('keeps a message pending through provisioning and setup and explains its hold
       expect(
         mail
           .all()
-          .some((message) => message.kind === 'notice' && message.body.includes('worktree')),
+          .some(
+            (message) =>
+              message.kind === 'notice' && message.body.includes('waits for its workspace'),
+          ),
       ).toBe(true);
     },
     { timeout: 15000 },
@@ -253,6 +272,10 @@ it('recovers the same intent and binding after provisioning stops between Git ph
   );
   await core.close();
   stop.mockRestore();
+  listConversations = vi.fn<Conversations['list']>().mockResolvedValue([]);
+  vi.spyOn(connectors, 'createConversations').mockReturnValue({
+    codex: { list: listConversations },
+  });
   core = await createCore(config, NO_DESKTOP);
   await core.engines.open(CANVAS);
   await skip('a');
@@ -309,4 +332,255 @@ it('forks a spawned agent’s worktree from its source’s committed HEAD, throu
   expect(forked).not.toBe(cwd);
   expect(readFileSync(path.join(forked, 'committed.txt'), 'utf8')).toBe('kept\n');
   expect(existsSync(path.join(forked, 'uncommitted.txt'))).toBe(false);
+}, 30000);
+
+/** One shared tree, then a leaving it: a materialized split waits for Switch. */
+async function pendingSplit() {
+  await skip('a');
+  expect(
+    await core.call('session.open', { canvas: CANVAS, agent: 'a' }, CALLERS.you),
+  ).toMatchObject({ ok: true });
+  const grouped = await core.call(
+    'canvas.group',
+    { canvas: CANVAS, nodes: ['a', 'b'], kind: 'frame' },
+    CALLERS.you,
+  );
+  if (!grouped.ok) throw new Error(grouped.error.sentence);
+  expect(
+    await core.call('session.open', { canvas: CANVAS, agent: 'b' }, CALLERS.you),
+  ).toMatchObject({ ok: true });
+  const cwd = fake.started[0]?.cwd;
+  if (!cwd) throw new Error('No source checkout');
+  expect(fake.started[1]?.cwd).toBe(cwd);
+  const ungrouped = await core.call(
+    'canvas.ungroup',
+    { canvas: CANVAS, nodes: [grouped.value.id] },
+    CALLERS.you,
+  );
+  if (!ungrouped.ok) throw new Error(ungrouped.error.sentence);
+  const needs = await core.call('needs', { canvas: CANVAS }, CALLERS.you);
+  if (!needs.ok) throw new Error(needs.error.sentence);
+  const item = needs.value.items.find((one) => one.id.startsWith('rebind/'));
+  const session = fake.sessions[0];
+  if (!item || !session) throw new Error('No pending split');
+  const close = vi.spyOn(session, 'close');
+  return { cwd, item, close };
+}
+function advanceSource(cwd: string) {
+  writeFileSync(path.join(cwd, 'later.txt'), 'committed after the fork\n');
+  git(cwd, env, 'add', '--', 'later.txt');
+  commit(cwd, env, 'later work');
+  return git(cwd, env, 'rev-parse', 'HEAD').trim();
+}
+async function answerSplit(to: string, choice = 'switch') {
+  return core.call('reply', { canvas: CANVAS, to, answer: { choice } }, CALLERS.you);
+}
+
+it.each(['before-drain', 'retried'] as const)(
+  'supersedes a split whose source tip moved (%s), keeping the old binding and session',
+  async (when) => {
+    const { cwd, item, close } = await pendingSplit();
+    let head: string;
+    if (when === 'retried') {
+      const drain = vi
+        .spyOn(WorkspaceGate.prototype, 'drain')
+        .mockRejectedValueOnce(new OpFailure('unavailable', 'A writer is still running.'));
+      expect(await answerSplit(item.id)).toMatchObject({
+        ok: false,
+        error: { code: 'unavailable' },
+      });
+      drain.mockRestore();
+      head = advanceSource(cwd);
+    } else {
+      head = '';
+      vi.spyOn(WorkspaceSetups.prototype, 'prepare').mockImplementationOnce(() => {
+        head = advanceSource(cwd);
+        return Promise.resolve();
+      });
+    }
+    const answer = await answerSplit(item.id);
+    expect(answer).toMatchObject({
+      ok: true,
+      value: { outcome: 'superseded', raised: expect.any(String) as unknown },
+    });
+    expect(close).not.toHaveBeenCalled();
+    const needs = await core.call('needs', { canvas: CANVAS }, CALLERS.you);
+    if (!needs.ok || !answer.ok) throw new Error('No new change');
+    const next = needs.value.items.find((one) => one.id.startsWith('rebind/'));
+    expect(next?.id).not.toBe(item.id);
+    if (!next) throw new Error('No new change');
+    expect(await answerSplit(item.id)).toMatchObject({ ok: false, error: { code: 'conflict' } });
+    expect(await answerSplit(next.id)).toMatchObject({ ok: true, value: { outcome: 'completed' } });
+    const rows = readOnDisk(path.join(root, 'profile'), (disk) =>
+      disk
+        .prepare(
+          'SELECT w.base_oid FROM agent_worktree b JOIN worktree w ON w.id = b.workspace_id WHERE b.canvas_id = ? AND b.agent_id = ?',
+        )
+        .all(CANVAS, 'a'),
+    );
+    expect(rows).toEqual([{ base_oid: head }]);
+  },
+  30000,
+);
+
+it('says the old split worktree is missing; Switch refuses without a project-HEAD fallback, and Not now keeps the hold', async () => {
+  const { cwd, item, close } = await pendingSplit();
+  rmSync(cwd, { recursive: true, force: true });
+  expect(await answerSplit(item.id)).toMatchObject({ ok: false, error: { code: 'unavailable' } });
+  const needs = await core.call('needs', { canvas: CANVAS }, CALLERS.you);
+  if (!needs.ok) throw new Error(needs.error.sentence);
+  const missing = needs.value.items.find((one) => one.id === item.id);
+  expect(missing?.detail).toMatch(/previous worktree is missing/i);
+  expect(missing?.choices).toContainEqual(
+    expect.objectContaining({ value: 'not-now', label: 'Not now' }),
+  );
+  expect(await answerSplit(item.id, 'not-now')).toMatchObject({
+    ok: true,
+    value: { outcome: 'kept' },
+  });
+  const after = await core.call('needs', { canvas: CANVAS }, CALLERS.you);
+  expect(after).toMatchObject({
+    ok: true,
+    value: { items: expect.arrayContaining([expect.objectContaining({ id: item.id })]) as unknown },
+  });
+  expect(close).not.toHaveBeenCalled();
+  const destinations = readOnDisk(path.join(root, 'profile'), (disk) =>
+    disk
+      .prepare("SELECT id FROM worktree WHERE canvas_id = ? AND owner_key = 'agent/a'")
+      .all(CANVAS),
+  );
+  expect(destinations).toEqual([]);
+}, 30000);
+
+/** Materialized agents, with their run still owned by the app window until B11's cutover. */
+async function windowAgents() {
+  await skip('a');
+  await skip('b');
+  await core.close();
+  core = await createCore(config, NO_DESKTOP);
+  expect(await core.call('window.show', { canvas: CANVAS }, CALLERS.you)).toMatchObject({
+    ok: true,
+  });
+  for (const agent of ['a', 'b'])
+    await core.channels.call(1, 'session:start', [
+      agent,
+      { connection: 'codex.app-server', mode: null, model: null },
+    ]);
+  expect(core.engines.canvas(CANVAS)).toBeUndefined();
+}
+async function groupWindowAgents() {
+  const grouped = await core.call(
+    'canvas.group',
+    { canvas: CANVAS, nodes: ['a', 'b'], kind: 'frame' },
+    CALLERS.you,
+  );
+  if (!grouped.ok) throw new Error(grouped.error.sentence);
+  const rows = readOnDisk(path.join(root, 'profile'), (disk) =>
+    disk
+      .prepare(
+        'SELECT desired_owner_key AS owner, MAX(desired_generation) AS generation FROM agent_worktree WHERE canvas_id = ? AND desired_owner_key IS NOT NULL GROUP BY desired_owner_key',
+      )
+      .all(CANVAS),
+  );
+  const row = rows[0];
+  if (!row || typeof row.owner !== 'string') throw new Error('No pending group');
+  return `rebind/${encodeURIComponent(row.owner)}/${String(row.generation)}`;
+}
+it('publishes the Switch card while its canvas run is still owned by the window', async () => {
+  await windowAgents();
+  const to = await groupWindowAgents();
+  const needs = await core.call('needs', { canvas: CANVAS }, CALLERS.you);
+  expect(needs).toMatchObject({
+    ok: true,
+    value: { items: expect.arrayContaining([expect.objectContaining({ id: to })]) as unknown },
+  });
+}, 30000);
+it('refuses Switch while a window-owned native turn is going, without closing its session', async () => {
+  await windowAgents();
+  const native = fake.sessions.at(-1);
+  if (!native) throw new Error('No window session');
+  const close = vi.spyOn(native, 'close');
+  await core.channels.call(1, 'session:send', ['b', { id: 'native-message', text: '/question' }]);
+  const to = await groupWindowAgents();
+  expect(await answerSplit(to)).toMatchObject({
+    ok: false,
+    error: { code: 'unavailable', sentence: expect.stringContaining('turn going on') as unknown },
+  });
+  expect(close).not.toHaveBeenCalled();
+}, 30000);
+
+it('runs the composed setup only after its human approval, before admitting the agent', async () => {
+  expect(
+    await core.call(
+      'project.setSetupCommand',
+      { canvas: CANVAS, command: 'printf ready > setup-ran' },
+      CALLERS.you,
+    ),
+  ).toMatchObject({ ok: true });
+  expect(
+    await core.call('session.open', { canvas: CANVAS, agent: 'a' }, CALLERS.you),
+  ).toMatchObject({ ok: false });
+  let to: string | undefined;
+  await vi.waitFor(
+    async () => {
+      const needs = await core.call('needs', { canvas: CANVAS }, CALLERS.you);
+      if (needs.ok) to = needs.value.items.find((item) => item.id.startsWith('setup/'))?.id;
+      expect(to).toBeDefined();
+    },
+    { timeout: 15000 },
+  );
+  if (!to) throw new Error('No setup');
+  const trees = readOnDisk(path.join(root, 'profile'), (disk) =>
+    disk.prepare('SELECT path FROM worktree WHERE canvas_id = ?').all(CANVAS),
+  );
+  const cwd = trees[0]?.path;
+  if (typeof cwd !== 'string') throw new Error('No checkout');
+  expect(existsSync(path.join(cwd, 'setup-ran'))).toBe(false);
+  expect(fake.started).toHaveLength(0);
+  expect(
+    await core.call(
+      'reply',
+      { canvas: CANVAS, to, answer: { choice: 'run' } },
+      CALLERS['outside-write'],
+    ),
+  ).toMatchObject({ ok: false });
+  expect(existsSync(path.join(cwd, 'setup-ran'))).toBe(false);
+  expect(
+    await core.call('reply', { canvas: CANVAS, to, answer: { choice: 'run' } }, CALLERS.you),
+  ).toMatchObject({ ok: true, value: { outcome: 'started' } });
+  await vi.waitFor(
+    async () => {
+      expect(readFileSync(path.join(cwd, 'setup-ran'), 'utf8')).toBe('ready');
+      expect(
+        await core.call('session.open', { canvas: CANVAS, agent: 'a' }, CALLERS.you),
+      ).toMatchObject({ ok: true });
+    },
+    { timeout: 15000 },
+  );
+  expect(fake.started[0]?.cwd).toBe(cwd);
+}, 30000);
+
+it('keeps an uncertain window-session close in the Switch drain until it actually ends', async () => {
+  await windowAgents();
+  const native = fake.sessions.at(-1);
+  if (!native) throw new Error('No window session');
+  const ending = Promise.withResolvers<undefined>();
+  const close = vi.spyOn(native, 'close').mockReturnValue(ending.promise);
+  const to = await groupWindowAgents();
+  const pending = Promise.resolve(core.channels.call(1, 'session:close', ['b']));
+  try {
+    await vi.waitFor(() => {
+      expect(close).toHaveBeenCalledOnce();
+    });
+    expect(await answerSplit(to)).toMatchObject({
+      ok: false,
+      error: {
+        code: 'unavailable',
+        sentence: expect.stringContaining('finished stopping') as unknown,
+      },
+    });
+  } finally {
+    ending.resolve(undefined);
+    await pending;
+  }
 }, 30000);

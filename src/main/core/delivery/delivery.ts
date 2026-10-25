@@ -98,6 +98,7 @@ interface Unstartable {
 /** What holds a message to an agent, if anything does. */
 type Hold =
   | { kind: 'busy' }
+  | { kind: 'workspace'; sentence: string }
   | { kind: 'paused'; holding: PauseCause[] }
   | ({ kind: 'stuck' } & Unstartable)
   | { kind: 'unasking'; why: UnaskingWhy }
@@ -171,7 +172,8 @@ export class Delivery {
   availabilityChanged(): void {
     this.#directories.clear();
     this.#checkingDirectories.clear();
-    for (const agent of this.#defaults.keys()) if (this.#deps.engine.sessions.of(agent).running === undefined) this.#defaults.delete(agent);
+    for (const agent of this.#defaults.keys())
+      if (this.#deps.engine.sessions.of(agent).running === undefined) this.#defaults.delete(agent);
     this.schedule();
   }
 
@@ -183,9 +185,8 @@ export class Delivery {
       return result.ready
         ? undefined
         : {
-            kind: 'stuck',
-            text: result.sentence,
-            clears: 'Your message stays queued until its workspace is ready.',
+            kind: 'workspace',
+            sentence: result.sentence,
           };
     if (!this.#checkingDirectories.has(agent)) {
       const token = {};
@@ -621,6 +622,13 @@ export class Delivery {
             `${this.#name(node.id)} is paused by ${pausesText(this.#deps.nodes(), node.id, hold.holding)}, so your message waits until it is released: ${RELEASES}`,
           );
         }
+        if (hold.kind === 'workspace') {
+          this.#tell(
+            holdKey('workspace', node.id, hold.sentence, message.from),
+            message,
+            `${this.#name(node.id)} waits for its workspace, so your message stays queued: ${threadTitle(hold.sentence, REASON)}`,
+          );
+        }
         if (hold.kind === 'stuck') {
           this.#tell(
             holdKey('stuck', node.id, message.from),
@@ -887,6 +895,7 @@ export class Delivery {
     const { engine } = this.#deps;
     if (engine.run.holding({ agent: node.id }).length === 0) this.#forget('paused', node.id);
     if (engine.sessions.of(node.id).running !== undefined) this.#forget('stuck', node.id);
+    if (this.#directories.get(node.id)?.ready === true) this.#forget('workspace', node.id);
     if (this.#asking(node, false) === 'asks') this.#forget('unasking', node.id);
     if (this.#limited(node) === undefined) this.#forget('limited', node.id);
   }
@@ -1275,7 +1284,7 @@ export class Delivery {
 }
 
 /** The kinds of hold a sender is told of, by the agent they hold. */
-type HoldKind = 'paused' | 'stuck' | 'unasking' | 'usage' | 'limited';
+type HoldKind = 'workspace' | 'paused' | 'stuck' | 'unasking' | 'usage' | 'limited';
 
 /**
  * Whom the kill that took back `message` killed, its recipient or its sender, and who killed it, as

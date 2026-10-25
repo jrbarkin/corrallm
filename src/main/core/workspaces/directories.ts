@@ -35,6 +35,8 @@ export class WorkspaceDirectories implements DirectoryResolver {
   readonly #watching = new Map<CanvasId, () => void>();
   readonly #making = new Map<string, Promise<WorktreeRecord>>();
   readonly #errors = new Map<string, string>();
+  /** Resumed commit-intent jobs are shared by Provisioner, but must settle before the DB closes. */
+  readonly #running = new Set<Promise<WorktreeRecord>>();
   #closed = false;
   #recovering: Promise<void> | undefined;
 
@@ -160,6 +162,7 @@ export class WorkspaceDirectories implements DirectoryResolver {
       return held('creating', 'Its worktree is being made. New work waits until it is ready.');
     }
     const checked = await this.#deps.provisioner.checkout(binding.workspace);
+    if (this.#isClosed()) return held('error', 'corrallm is closing: no new work starts.');
     // No result from an old project/plan/async verification may admit a new start.
     const now = this.#deps.workspaces.binding(canvas, agent);
     if (
@@ -176,7 +179,15 @@ export class WorkspaceDirectories implements DirectoryResolver {
     // end says the canvas changed; a refusal says nothing, so no listener loops on it.
     if (checked.state === 'held' && checked.reason === 'creating') {
       const job = this.#deps.workspaces.openJob(checked.worktree.id, 'create');
-      if (job !== undefined) void this.#deps.provisioner.run(job.id).catch(() => undefined);
+      if (job !== undefined) {
+        const running = this.#deps.provisioner.run(job.id);
+        this.#running.add(running);
+        const done = () => {
+          this.#running.delete(running);
+        };
+        // In particular a busy refusal sends no changed() notification.
+        void running.then(done, done);
+      }
     }
     if (checked.state === 'held')
       return held(
@@ -323,7 +334,7 @@ export class WorkspaceDirectories implements DirectoryResolver {
 
   async close(): Promise<void> {
     this.stop();
-    await Promise.allSettled([...this.#making.values(), this.#recovering]);
+    await Promise.allSettled([...this.#making.values(), ...this.#running, this.#recovering]);
   }
 }
 

@@ -257,3 +257,32 @@ it('recovers provisioning before preparing setup, and shares recovery', async ()
   await Promise.all([directories.reconcile(), directories.reconcile()]);
   expect(order).toEqual(['provision', 'setup']);
 });
+
+it('waits for a resumed creating job before closing the directory service', async () => {
+  await workspaces.write((w) => {
+    w.recordJob({
+      id: '33333333-3333-4333-8333-333333333333',
+      workspace: tree.id,
+      kind: 'create',
+      phase: 'recorded',
+      generation: tree.generation,
+      payload: {},
+    });
+  });
+  checkout.mockResolvedValue({ state: 'held', reason: 'creating', worktree: tree });
+  const running = Promise.withResolvers<WorktreeRecord>();
+  vi.mocked(deps.provisioner.run).mockReturnValue(running.promise);
+  await directories.workingDirectory(canvas, agent);
+  expect(deps.provisioner.run).toHaveBeenCalledOnce();
+  let ended = false;
+  const closing = directories.close().then(() => {
+    ended = true;
+  });
+  try {
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(ended).toBe(false);
+  } finally {
+    running.resolve(tree);
+    await closing;
+  }
+});

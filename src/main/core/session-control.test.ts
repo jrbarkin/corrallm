@@ -37,7 +37,7 @@ const YOU = CALLERS.you;
 /** Another canvas, on the same project folder. */
 const OTHER = '3f1a2b3c-4d5e-4f60-8a1b-2c3d4e5f6a7b' as CanvasId;
 
-/** Three Claude Code agents on the Agent SDK, sharing the project folder (no workspaces yet). */
+/** Three Claude Code agents on the Agent SDK, sharing the faked project directory. */
 function canvasText(): string {
   const agent = (id: string, label: string, x: number) => ({
     id,

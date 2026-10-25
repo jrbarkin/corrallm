@@ -25,8 +25,8 @@ import { gitEnvironment, makeRepository } from './workspaces/test-git';
  * A worktree's setup through core.call, as every transport reaches it (B9a Design §14 item 2): the
  * setup command is yours alone (`project.setSetupCommand`: human-only, so no token is offered it or
  * may call it), and so is every answer to a setup card, which no token's view of Needs holds and no
- * token may name. Only your Run, at the card's generation, runs anything. The core composed as B9a
- * X11b is to compose it (CoreConfig.setups), on a real repository; the commands are fake ones.
+ * token may name. Only your Run, at the card's generation, runs anything. The service factory is overridden for focused setup tests on a real repository; the commands
+ * are fake ones. Production composes the same service without that override.
  */
 
 vi.setConfig({ testTimeout: 60_000 });

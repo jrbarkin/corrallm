@@ -124,6 +124,7 @@ export function conversationOps(
                   ...stalled.items(id),
                   ...(services.runProblems?.(id) ?? []),
                   ...(services.setups?.items(id) ?? []),
+                  ...(services.workspaceItems?.(id) ?? []),
                 ]
               : [],
         };

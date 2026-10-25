@@ -543,8 +543,7 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
   });
   /** The trees an agent works in: its running session's, then its working directory's now. */
   const treesOf = async (canvas: CanvasId, agent: string): Promise<TreeKey[]> => {
-    const running = sessions.binding(canvas, agent);
-    const trees: TreeKey[] = running === undefined ? [] : [treeOf(running)];
+    const trees: TreeKey[] = sessions.bindings(canvas, agent).map(treeOf);
     const directory = await directories.workingDirectory(canvas, agent as AgentId);
     if (directory.state === 'ready' && !trees.includes(treeOf(directory))) {
       trees.push(treeOf(directory));
@@ -553,11 +552,15 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
   };
   // The workspace mutation gate (B11 R5, B9a's shared-tree seam): every agent of a tree protected.
   const gate: WorkspaceGate = new WorkspaceGate({
-    canvases: () => engines.opened(),
-    agents: (canvas) =>
-      (engines.canvas(canvas)?.document.nodes ?? []).flatMap((node) =>
-        node.type === 'agent' ? [node.id] : [],
-      ),
+    canvases: () => [...new Set([...engines.opened(), ...sessions.canvases()])],
+    agents: (canvas) => [
+      ...new Set([
+        ...(documents.loaded(canvas)?.document.nodes ?? []).flatMap((node) =>
+          node.type === 'agent' ? [node.id] : [],
+        ),
+        ...sessions.agents(canvas),
+      ]),
+    ],
     session: (canvas, agent): TreeKey | undefined => {
       const running = sessions.binding(canvas, agent);
       return running === undefined ? undefined : treeOf(running);
@@ -574,14 +577,14 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
         return 'has a turn going on';
       }
       if ((session?.tasks?.length ?? 0) > 0) return 'runs background tasks';
-      if (sessions.closing(canvas, agent)) return 'hasn’t finished stopping its last session';
-      return undefined;
+      return sessions.writing(canvas, agent);
     },
-    nameOf: (canvas, agent) => nameOf(engines.canvas(canvas)?.document.nodes ?? [], agent),
+    nameOf: (canvas, agent) => nameOf(documents.loaded(canvas)?.document.nodes ?? [], agent),
   });
   // A workspace change waiting for you (B9a C7): its card, and its Switch.
   const changes = new WorkspaceChanges({
     workspaces: workspaceStore,
+    provisioner,
     provision: (canvas, owner) => workspaceDirectories.provision(canvas, owner as never),
     gate,
     close: async (canvas, agent) => {

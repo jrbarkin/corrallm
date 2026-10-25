@@ -70,10 +70,14 @@ export class WorkspaceGate {
 
   subscribe(listener: () => void): () => void {
     this.#listeners.add(listener);
-    return () => { this.#listeners.delete(listener); };
+    return () => {
+      this.#listeners.delete(listener);
+    };
   }
 
-  #changed(): void { for (const listener of this.#listeners) listener(); }
+  #changed(): void {
+    for (const listener of this.#listeners) listener();
+  }
   /** The mutations going on, by tree (whichever canvas's agents work there). */
   readonly #going = new Map<TreeKey, Mutation>();
 

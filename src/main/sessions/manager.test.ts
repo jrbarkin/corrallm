@@ -1458,3 +1458,20 @@ it('reads agent options in its verified workspace and refuses a held agent', asy
     'Skip or run setup first.',
   );
 });
+
+it('lists conversations from the agent’s verified workspace and never lists while held', async () => {
+  const canvas = shownCanvas();
+  workspaces.set('a', {
+    state: 'ready',
+    cwd: mintTrustedPath('/work/tree-a'),
+    workspace: '11111111-1111-4111-8111-111111111111',
+    generation: 1,
+    branch: 'corrallm/a',
+  });
+  const sessions = manager();
+  await sessions.listSessions(canvas, 'a', CALLER);
+  expect(listKept).toHaveBeenCalledExactlyOnceWith('/work/tree-a', { PATH: '/usr/bin' });
+  workspaces.set('a', { state: 'held', reason: 'pending-change', sentence: 'Switch first.' });
+  await expect(sessions.listSessions(canvas, 'a', CALLER)).rejects.toThrow('Switch first.');
+  expect(listKept).toHaveBeenCalledTimes(1);
+});

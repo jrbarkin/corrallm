@@ -160,6 +160,9 @@ interface Agent {
   binding?: Binding;
   /** Whether it is no longer heard: a start completed for a binding no longer active. */
   unheard?: boolean;
+  /** Native activity also protects window-owned sessions until the B11 cutover. */
+  working?: boolean;
+  tasks?: number;
   /** Resolves with the session once it runs; rejects if it could not start. */
   session: Promise<LiveSession<SessionMode>>;
 }
@@ -204,7 +207,7 @@ export class SessionManager {
    */
   readonly #unfinished = new Map<string, number>();
   /** Each close not finished, with the workspace its session ran in (`writingIn`). */
-  readonly #closes = new Set<{ canvas: CanvasId; agent: string; workspace: string | null }>();
+  readonly #closes = new Set<{ canvas: CanvasId; agent: string; binding: Binding | undefined }>();
   /** The last generation given a session, or a reservation for an agent's next session. */
   #generations = 0;
   /**
@@ -250,7 +253,11 @@ export class SessionManager {
     }
     // What is not given is the user's own: their CLI's settings, else its defaults.
     const given: SessionOptions = { ...options, effort: options.effort ?? null };
-    const agent = { connection: options.connection, generation: this.#generation() } as Agent;
+    const agent = {
+      connection: options.connection,
+      generation: this.#generation(),
+      working: true,
+    } as Agent;
     agent.session = this.#launch(
       canvas,
       agentId,
@@ -296,7 +303,10 @@ export class SessionManager {
   onAvailability(canvas: CanvasId, listener: () => void): () => void {
     const directory = this.#deps.directories.onAvailability(canvas, listener);
     const mutation = this.#deps.gate?.onAvailability?.(listener);
-    return () => { directory(); mutation?.(); };
+    return () => {
+      directory();
+      mutation?.();
+    };
   }
 
   async availability(canvas: CanvasId, agentId: string): Promise<Availability> {
@@ -322,6 +332,41 @@ export class SessionManager {
   binding(canvas: CanvasId, agentId: string): Readonly<Binding> | undefined {
     const binding = this.#agents.get(canvas)?.get(agentId)?.binding;
     return binding === undefined ? undefined : { ...binding };
+  }
+
+  /** All native bindings that may still write, including a close whose process hasn't ended. */
+  bindings(canvas: CanvasId, agentId: string): Readonly<Binding>[] {
+    const live = this.binding(canvas, agentId);
+    const ending = [...this.#closes].flatMap((one) =>
+      one.canvas === canvas && one.agent === agentId && one.binding !== undefined
+        ? [{ ...one.binding }]
+        : [],
+    );
+    return [...(live === undefined ? [] : [live]), ...ending];
+  }
+
+  /** Canvases with native sessions, including closes whose processes have not finished. */
+  canvases(): CanvasId[] {
+    return [...new Set([...this.#agents.keys(), ...[...this.#closes].map((one) => one.canvas)])];
+  }
+
+  /** Native sessions on a canvas, including uncertain closes: the mutation gate's members. */
+  agents(canvas: CanvasId): string[] {
+    return [
+      ...new Set([
+        ...(this.#agents.get(canvas)?.keys() ?? []),
+        ...[...this.#closes].flatMap((one) => (one.canvas === canvas ? [one.agent] : [])),
+      ]),
+    ];
+  }
+
+  /** Native activity known at receipt, even when a window owns the engine and its event lane. */
+  writing(canvas: CanvasId, agentId: string): string | undefined {
+    const agent = this.#agents.get(canvas)?.get(agentId);
+    if (agent?.working) return 'has a turn going on';
+    if ((agent?.tasks ?? 0) > 0) return 'runs background tasks';
+    if (this.closing(canvas, agentId)) return 'hasn’t finished stopping its last session';
+    return undefined;
   }
 
   /** The agent's native conversation in `adapter`, as remembered: what it resumes. */
@@ -365,7 +410,7 @@ export class SessionManager {
       binding?.workspace === workspace ? [agent] : [],
     );
     const closing = [...this.#closes].flatMap((close) =>
-      close.canvas === canvas && close.workspace === workspace ? [close.agent] : [],
+      close.canvas === canvas && close.binding?.workspace === workspace ? [close.agent] : [],
     );
     return [...new Set([...running, ...closing])];
   }
@@ -586,7 +631,14 @@ export class SessionManager {
     const reserved = this.#claims.reserve(adapter, sessionId, this.#reservation(canvas, agentId));
     if (!reserved.ok) throw new Error(this.#inUse(canvas, reserved.holder));
     await this.close(canvas, agentId);
-    await this.#remember(canvas, adapter, agentId, sessionId, undefined, directory.workspace ?? PROJECT_WORKSPACE);
+    await this.#remember(
+      canvas,
+      adapter,
+      agentId,
+      sessionId,
+      undefined,
+      directory.workspace ?? PROJECT_WORKSPACE,
+    );
   }
 
   /** Stops a task the agent's session runs in the background (the session checks it does). */
@@ -784,6 +836,11 @@ export class SessionManager {
         },
         emit: (event) => {
           if (!live()) return;
+          if (event.type === 'user' || event.type === 'status') agent.working = true;
+          if (event.type === 'started' || event.type === 'end' || event.type === 'cleared')
+            agent.working = false;
+          if (event.type === 'tasks') agent.tasks = event.tasks.length;
+          if (event.type === 'cleared') agent.tasks = 0;
           if (event.type === 'closed') {
             this.#agents.get(canvas)?.delete(agentId);
             // It stopped by itself: what it ran is no longer its.
@@ -963,7 +1020,12 @@ export class SessionManager {
   }
 
   /** Forgets the agent's conversation in `adapter`: it starts afresh next time. */
-  async #forget(canvas: CanvasId, adapter: AdapterId, agentId: string, namespace?: string): Promise<void> {
+  async #forget(
+    canvas: CanvasId,
+    adapter: AdapterId,
+    agentId: string,
+    namespace?: string,
+  ): Promise<void> {
     const workspace = namespace ?? (await this.#workspaceOf(canvas, agentId));
     await this.#deps.memory.update(canvas, (remembered) => {
       const byAdapter = conversationsIn(remembered, workspace);
@@ -1075,7 +1137,7 @@ export class SessionManager {
     const owner: ClaimOwner = { canvas, agent: agentId, generation: agent.generation };
     const key = keyOf(canvas, agentId);
     this.#unfinished.set(key, (this.#unfinished.get(key) ?? 0) + 1);
-    const close = { canvas, agent: agentId, workspace: agent.binding?.workspace ?? null };
+    const close = { canvas, agent: agentId, binding: agent.binding };
     this.#closes.add(close);
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
