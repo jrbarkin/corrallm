@@ -42,7 +42,7 @@ excluded, and a failed request still fails the list and closes its private App S
 
 And no message takes Codex's App Server out of its sandbox: `/permissions full-access` is refused, since Full access is the mode menu's, which asks first.
 
-The App Server's `/diff` uses `safeGitDiffArgs` (`src/main/git.ts`) to disable external diff, textconv and filter drivers; file suggestions must never run a repository's fsmonitor.
+The App Server's `/diff` uses `safeGitDiffArgs` (`src/main/git.ts`) to disable external diff, textconv and filter drivers, and runs git with `SAFE_GIT_ENV` so a partial clone never fetches a blob it lacks (the fetch would run whatever its remote names); file suggestions must never run a repository's fsmonitor.
 
 Codex's hooks are given and trusted for its session alone, on its command line: corrallm never writes the user's config.toml, and never runs Codex with `--dangerously-bypass-hook-trust` (which would also run the user's and the project's untrusted hooks).
 
