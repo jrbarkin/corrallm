@@ -84,7 +84,9 @@ const api: AppApi = {
   previewRewind: (agentId, messageId) => invoke(API_CHANNELS.previewRewind, agentId, messageId),
   rewindSession: (agentId, messageId, restore) =>
     invoke(API_CHANNELS.rewindSession, agentId, messageId, restore),
-  settingsOptions: (cli) => invoke(API_CHANNELS.settingsOptions, cli),
+  sessionAvailability: (agent) => invoke(API_CHANNELS.sessionAvailability, agent),
+  settingsOptions: (cli, agent) =>
+    invoke(API_CHANNELS.settingsOptions, cli, ...(agent === undefined ? [] : [agent])),
   mcpServers: (agentId) => invoke(API_CHANNELS.mcpServers, agentId),
   changeMcpServer: (agentId, server, change) =>
     invoke(API_CHANNELS.changeMcpServer, agentId, server, change),
@@ -103,6 +105,7 @@ const api: AppApi = {
         }) as ReturnType<GuiBridge['terminalDrop']>);
   },
   onSessionEvent: (listener) => core.listen(API_EVENTS.onSessionEvent, listener),
+  onSessionAvailability: (listener) => core.listen(API_EVENTS.onSessionAvailability, listener),
   terminalOnEvent: (listener) => core.listen('terminal', listener),
 };
 

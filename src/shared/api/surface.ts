@@ -139,7 +139,7 @@ export const SURFACE = {
   'catalog.installed': { access: R, kind: 'read', scope: 'none' },
   'templates.list': { access: R, kind: 'read', scope: 'none' },
   'settings.get': { access: R, kind: 'read', scope: 'none', reads: 'settings' },
-  'project.files': { access: R, kind: 'read', scope: 'none' },
+  'project.files': { access: R, kind: 'read', scope: 'none', self: 'allowed' },
   // A canvas's lifetime and where it is kept (B9 Design §1, §8). A path comes only from a dialog
   // you complete (D1: canvas.open, canvas.saveAs, project.choose). A token's call that would
   // discard work, or close a canvas a window shows, comes to you as a proposal (R4's argument
@@ -406,6 +406,26 @@ export const SURFACE = {
     kind: 'command',
     scope: 'agent',
     rules: ['sticky'],
+    self: 'allowed',
+  },
+  // The whole run (Core Server §4 F): canvas-wide, so no lead gets them. Run again takes back what
+  // the run has in flight. R9: a token resumes, or starts afresh, only what no other party stopped,
+  // decided in or holds for you to decide.
+  'run.start': {
+    access: W,
+    kind: 'command',
+    scope: 'canvas',
+    rules: ['sticky'],
+    destructive: true,
+  },
+  'run.stop': { access: W, kind: 'command', scope: 'canvas', preempt: true, destructive: true },
+  'run.resume': { access: W, kind: 'command', scope: 'canvas', rules: ['sticky'] },
+  // Go on now: a usage rule's hold is yours to end (R3).
+  'run.goOn': {
+    access: L,
+    kind: 'command',
+    scope: 'agent',
+    rules: ['human-choice'],
     self: 'allowed',
   },
   'usage.get': { access: A, kind: 'read', scope: 'none', reads: 'usage' },

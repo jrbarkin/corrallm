@@ -9,6 +9,8 @@ import { partyText } from '../parties';
 import type { ReplyHandler } from '../replies';
 import type { WorkspaceGate } from './gate';
 import { ownerNode } from './planner';
+import { ProvisionError } from './provision';
+import type { Base, Provisioner } from './provision';
 import { ACTIVE_STATES } from './store';
 import type { WorkspaceStore, WorktreeRecord } from './store';
 
@@ -33,6 +35,8 @@ const YOURS = 'Only you decide where an agent’s work goes.';
 
 export interface WorkspaceChangesDeps {
   workspaces: WorkspaceStore;
+  /** Read old committed tips through the C runner, and publish a lost checkout's state. */
+  provisioner?: Pick<Provisioner, 'base' | 'checkout'>;
   gate: Pick<WorkspaceGate, 'drain'>;
   /** Ends an agent's session without starting another (its next turn starts one where it works). */
   close: (canvas: CanvasId, agent: string) => Promise<void>;
@@ -73,7 +77,8 @@ export class WorkspaceChanges {
       prefixes: ['rebind'],
       current: (canvas, to) => this.items(canvas).find((item) => item.id === to),
       gone: (canvas, to) => this.#gone(canvas, to),
-      act: async (canvas, item, _answer, ctx) => {
+      act: async (canvas, item, answer, ctx) => {
+        if ('choice' in answer && answer.choice === 'not-now') return { outcome: 'kept' };
         const id = idOf(item.id);
         if (id === undefined) throw notFound(item.id);
         return this.#switch(canvas, id, ctx.by, () => {
@@ -101,6 +106,13 @@ export class WorkspaceChanges {
     const names = andList(agents.map((agent) => this.#deps.nameOf(canvas, agent)));
     const where = this.#where(canvas, owner, agents);
     const they = agents.length === 1 ? 'Its session keeps' : 'Their sessions keep';
+    const missing = agents.some((agent) => {
+      const binding = this.#deps.workspaces.binding(canvas, agent);
+      return (
+        binding !== undefined &&
+        this.#deps.workspaces.worktree(binding.workspace)?.state === 'missing'
+      );
+    });
     return {
       id: `rebind/${encodeURIComponent(owner)}/${String(generation)}`,
       canvas,
@@ -108,9 +120,10 @@ export class WorkspaceChanges {
       for: 'you',
       by: ['you'],
       title: `Move ${names} to ${where}?`,
-      detail: `${they} working where ${agents.length === 1 ? 'it is' : 'they are'} until you switch. Switching ends ${agents.length === 1 ? 'it' : 'them'} and starts ${agents.length === 1 ? 'it' : 'them'} again there; the worktrees they leave are kept, with their work and branches, never merged or removed. To leave them where they are, move them back.`,
+      detail: `${missing ? 'Its previous worktree is missing. Restore it before switching; Not now leaves new work held. ' : ''}${they} working where ${agents.length === 1 ? 'it is' : 'they are'} until you switch. Switching ends ${agents.length === 1 ? 'it' : 'them'} and starts ${agents.length === 1 ? 'it' : 'them'} again there; the worktrees they leave are kept, with their work and branches, never merged or removed. To leave them where they are, move them back.`,
       choices: [
         { value: 'switch', label: 'Switch, keeping the previous worktrees', humanOnly: YOURS },
+        ...(missing ? [{ value: 'not-now', label: 'Not now', humanOnly: YOURS }] : []),
       ],
       answerIn: 'api',
     };
@@ -142,6 +155,40 @@ export class WorkspaceChanges {
       : new OpFailure('conflict', `${to} is settled already: ${record.body}`);
   }
 
+  #bindings(canvas: CanvasId, agents: readonly string[]): string {
+    return JSON.stringify(
+      agents.map((agent) => {
+        const binding = this.#deps.workspaces.binding(canvas, agent);
+        return [agent, binding?.workspace, binding?.generation, binding?.desired];
+      }),
+    );
+  }
+
+  async #source(
+    canvas: CanvasId,
+    repositoryId: string,
+    workspace: string,
+  ): Promise<Base | undefined> {
+    const { provisioner, workspaces } = this.#deps;
+    if (provisioner === undefined) return undefined; // Isolated service tests can omit Git.
+    const repository = workspaces.repository(repositoryId);
+    const tree = workspaces.worktree(workspace);
+    if (repository === undefined || tree === undefined)
+      throw new OpFailure(
+        'unavailable',
+        'Its previous worktree can’t be read now: restore it before switching.',
+      );
+    try {
+      return await provisioner.base(repository, tree);
+    } catch (error) {
+      if (!(error instanceof ProvisionError)) throw error;
+      // base refuses unknown HEADs; checkout records missing/error for the card and resolver.
+      await provisioner.checkout(workspace);
+      this.#deps.changed?.(canvas);
+      throw new OpFailure('unavailable', error.message);
+    }
+  }
+
   async #switch(
     canvas: CanvasId,
     { owner, generation }: { owner: string; generation: number },
@@ -165,6 +212,17 @@ export class WorkspaceChanges {
     if (repository === null) {
       throw new OpFailure('unavailable', 'The canvas’s project folder isn’t a repository now.');
     }
+    const expected = this.#bindings(canvas, waiting.agents);
+    const sources = [
+      ...new Set(
+        waiting.agents.flatMap((agent) => {
+          const binding = workspaces.binding(canvas, agent);
+          return binding === undefined ? [] : [binding.workspace];
+        }),
+      ),
+    ];
+    // Detect a lost source before allocation too: no fallback to the project's HEAD.
+    for (const source of sources) await this.#source(canvas, repository, source);
     // Its destination, made first if it is new (provisioning waits for no one).
     let destination = workspaces.activeWorktree(canvas, repository, owner as never);
     if (destination === undefined) {
@@ -182,12 +240,51 @@ export class WorkspaceChanges {
         }),
       ),
     ];
-    await this.#deps.gate.drain(
+    const switched = await this.#deps.gate.drain(
       canvas,
       [...from, target.id].map((workspace) => `workspace:${workspace}` as const),
       async () => {
         // Still the plan you saw, now that nothing else changes there.
         const members = current().agents;
+        const bases = new Map<string, Base>();
+        for (const source of from) {
+          const base = await this.#source(canvas, repository, source);
+          if (base !== undefined) bases.set(source, base);
+        }
+        const active = workspaces.activeWorktree(canvas, repository, owner as never);
+        const source = target.forkedFrom === null ? undefined : bases.get(target.forkedFrom);
+        const staleFork =
+          workspaces.bindingsTo(canvas, target.id).length === 0 &&
+          target.forkedFrom !== null &&
+          (!from.includes(target.forkedFrom) ||
+            (source !== undefined &&
+              (source.oid !== target.baseOid ||
+                source.ref !== target.baseRef ||
+                source.checkout !== target.baseCheckout)));
+        // No desired-plan bump alone closes a session; superseding only makes a new card.
+        if (
+          workspaces.canvasRepository(canvas)?.generation !== link?.generation ||
+          this.#bindings(canvas, members) !== expected ||
+          active?.id !== target.id ||
+          active.generation !== target.generation ||
+          staleFork
+        ) {
+          await workspaces.write((w) => {
+            current();
+            noReturn();
+            const tree = w.worktree(target.id);
+            if (
+              tree !== undefined &&
+              ACTIVE_STATES.includes(tree.state) &&
+              w.bindingsTo(canvas, tree.id).length === 0
+            )
+              w.retain(tree.id);
+            for (const agent of current().agents) w.plan(canvas, agent, owner as never);
+          });
+          return false;
+        }
+        // The source reads may have yielded to another commit: recheck before closing anything.
+        current();
         noReturn();
         for (const agent of members) await this.#deps.close(canvas, agent);
         await workspaces.write((w) => {
@@ -203,9 +300,14 @@ export class WorkspaceChanges {
             }
           }
         });
+        return true;
       },
     );
     this.#deps.changed?.(canvas);
+    if (!switched) {
+      const raised = this.items(canvas).find((item) => idOf(item.id)?.owner === owner)?.id;
+      return { outcome: 'superseded' as const, ...(raised === undefined ? {} : { raised }) };
+    }
     const messages = await this.#deps.messages(canvas);
     const names = andList(waiting.agents.map((agent) => this.#deps.nameOf(canvas, agent)));
     const record = decided(messages, {

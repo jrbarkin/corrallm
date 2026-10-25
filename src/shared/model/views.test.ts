@@ -48,6 +48,19 @@ describe('read-only runtime projections', () => {
     expect(view.groups.__proto__).toEqual({ pauses: ['outside:lead'] });
   });
 
+  it('keeps who stopped the run and who decided in it out of every view', () => {
+    const view = runView({
+      running: false,
+      paused: true,
+      pausedBy: 'you',
+      decided: ['you', 'outside:lead'],
+      agents: {},
+    });
+    expect(view).toMatchObject({ running: false, paused: true });
+    expect(view).not.toHaveProperty('pausedBy');
+    expect(view).not.toHaveProperty('decided');
+  });
+
   it('shares unchanged agents and nested attempts without exposing mutable engine data', () => {
     const run: Run = {
       running: true,

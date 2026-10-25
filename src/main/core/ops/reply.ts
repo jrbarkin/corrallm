@@ -210,7 +210,7 @@ export function replyOps({
       let sent: { answered: Promise<void> } | undefined;
       try {
         if (resend) await engines.resendAfter(canvas, agent, turn.messages, turn.connection);
-        sent = await sessions.interruptIf(canvas, agent, turn.current);
+        sent = await sessions.interruptIf(canvas, agent, turn.current, resend);
       } catch (error) {
         await failed();
         throw error;

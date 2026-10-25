@@ -22,9 +22,10 @@ import type { JobRecord, Json, RepositoryRecord, WorkspaceStore, WorktreeRecord 
  * for every start of its owner, and finishing on restart what a crash cut short.
  *
  * 1. The intent comes first, within a write (`intend`, a participant a document commit's write can
- *    call too): the workspace `creating`, its generated checkout path and branch, the picked
- *    checkout's HEAD captured as its base, and a `create` job whose immutable intent hash makes a
- *    retry of it the same job. No Git, no file is touched in that write.
+ *    call too): the workspace `creating`, its generated checkout path and branch, its base (the
+ *    picked checkout's HEAD, or the committed HEAD of the workspace it forks, read by `base`
+ *    before the write), and a `create` job whose immutable intent hash makes a retry of it the
+ *    same job. No Git, no file is touched in that write.
  * 2. Then, outside SQL, in the repository's lane of the bounded queue (`run`), the job's phases,
  *    each marked on disk once done: `branch` (its ref made at the base commit, only if it didn't
  *    exist: never forced over one), `registered` (a worktree added without a checkout), and
@@ -52,7 +53,7 @@ const POPULATE_TIMEOUT_MS = 10 * 60_000;
 
 /** Why a workspace wasn't provisioned, before anything was recorded or run for it. */
 export type ProvisionErrorCode =
-  'busy' | 'not-found' | 'not-git' | 'repository-changed' | DiscoveryRefusal;
+  'busy' | 'not-found' | 'not-git' | 'repository-changed' | 'fork' | DiscoveryRefusal;
 
 export class ProvisionError extends Error {
   readonly code: ProvisionErrorCode;
@@ -186,16 +187,21 @@ export class Provisioner {
 
   /**
    * The owner's workspace: the one it has, or one made now from the picked checkout's HEAD (or
-   * `base`), once its job is done. Concurrent asks for one owner share one; the result may be in
-   * `error`, saying why. Refused before anything is recorded when the queue is full, or the
-   * repository isn't the one recorded any more.
+   * `base`, or forked `from` a workspace: its committed HEAD, as `base` reads it), once its job is
+   * done. Concurrent asks for one owner share one; the result may be in `error`, saying why.
+   * Refused before anything is recorded when the queue is full, the repository isn't the one
+   * recorded any more, or the base can't be read.
    */
   provision(request: {
     canvas: CanvasId;
     repository: RepositoryRecord;
     owner: WorkspaceOwnerKey;
     base?: Base;
+    /** The workspace a new one forks (the plan's source: planner.ts' `forkSource`). */
+    from?: WorktreeRecord | undefined;
     forkedFrom?: string | null;
+    /** Composition records the owner's initial bindings in the intent's write, before Git. */
+    within?: (workspaces: WorkspaceStore, tree: WorktreeRecord) => void;
   }): Promise<WorktreeRecord> {
     const key = `${request.canvas}\0${request.repository.id}\0${request.owner}`;
     const going = this.#provisions.get(key);
@@ -211,12 +217,26 @@ export class Provisioner {
       request.repository.id,
       request.owner,
     );
-    if (active !== undefined) return this.#resume(active);
+    if (active !== undefined) {
+      if (request.within !== undefined)
+        await this.#workspaces.write((w) => {
+          request.within?.(w, active);
+        });
+      return this.#resume(active);
+    }
     if (this.#queue.full) throw busy();
-    const base = request.base ?? (await this.#base(request.repository));
-    const { worktree, job, created } = await this.#workspaces.write((w) =>
-      this.intend(w, { ...request, base }),
-    );
+    const base = request.base ?? (await this.base(request.repository, request.from));
+    const { worktree, job, created } = await this.#workspaces.write((w) => {
+      const intended = this.intend(w, {
+        canvas: request.canvas,
+        repository: request.repository,
+        owner: request.owner,
+        base,
+        forkedFrom: request.forkedFrom ?? request.from?.id ?? null,
+      });
+      request.within?.(w, intended.worktree);
+      return intended;
+    });
     if (created) this.#changed(worktree.canvas);
     return job === undefined ? worktree : this.run(job.id);
   }
@@ -225,6 +245,36 @@ export class Provisioner {
     if (tree.state !== 'creating') return Promise.resolve(tree);
     const job = this.#workspaces.openJob(tree.id, 'create');
     return job === undefined ? Promise.resolve(tree) : this.run(job.id);
+  }
+
+  /**
+   * Outside any write: the commit a new workspace is to start from, as Git says now (B9a Design
+   * §3). The picked checkout's HEAD; or, forked `from` a workspace, that workspace's committed
+   * HEAD: the commit its verified checkout is at, and the branch checked out there, never its
+   * uncommitted files. One never made (still `creating`, or its creation failed) is at the base it
+   * was to be made from: nothing ran there. Rejects (ProvisionError), recording nothing, if that
+   * can't be read: an unknown HEAD is never taken for the project's.
+   */
+  async base(repository: RepositoryRecord, from?: WorktreeRecord): Promise<Base> {
+    if (from === undefined) return this.#base(repository);
+    if (from.repository !== repository.id) {
+      throw new ProvisionError('repository-changed', 'The worktree it forks is another project’s.');
+    }
+    const made = this.#workspaces
+      .jobsOf(from.id)
+      .some((job) => job.kind === 'create' && job.outcome === 'done');
+    if (from.state === 'creating' || !made) {
+      return { checkout: from.baseCheckout, ref: from.baseRef, oid: from.baseOid };
+    }
+    const checked = await checkCheckout(this.#git, repository, from);
+    if (!checked.ok || checked.checkout.head === null) {
+      throw new ProvisionError(
+        'fork',
+        `The worktree a new one would fork can’t be read now (${checked.ok ? 'no commit' : checked.fault}): try again once it is back.`,
+      );
+    }
+    const { path: checkout, branch: ref, head: oid } = checked.checkout;
+    return { checkout, ref, oid };
   }
 
   /** The picked checkout's HEAD now, if it is still the repository recorded. */

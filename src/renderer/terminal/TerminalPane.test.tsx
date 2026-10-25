@@ -883,7 +883,7 @@ describe('a Terminal agent’s settings', () => {
       model: 'haiku',
       mode: null,
     });
-    expect(sessions.backend.options).toHaveBeenCalledWith('claude-code');
+    expect(sessions.backend.options).toHaveBeenCalledWith('claude-code', 'a');
     // What it starts with, the user's own where nothing is chosen.
     const button = () => view.getByRole('button', { name: 'Agent settings: a' });
     expect(button().textContent).toContain('Claude · Terminal · Haiku · Auto');
@@ -975,7 +975,7 @@ describe('a Terminal agent’s settings', () => {
         defaults: { model: 'gpt-6.1-sol', effort: null, mode: 'auto' },
       },
     });
-    expect(sessions.backend.options).toHaveBeenCalledWith('codex');
+    expect(sessions.backend.options).toHaveBeenCalledWith('codex', 'a');
     const button = view.getByRole('button', { name: 'Agent settings: a' });
     // Codex's Default needs no more saying; the model's own effort, its config setting none.
     expect(button.textContent).toContain('Codex · Terminal · GPT-6.1-Sol · Low · Default');

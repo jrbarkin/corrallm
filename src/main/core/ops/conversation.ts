@@ -124,6 +124,7 @@ export function conversationOps(
                   ...stalled.items(id),
                   ...(services.runProblems?.(id) ?? []),
                   ...(services.setups?.items(id) ?? []),
+                  ...(services.workspaceItems?.(id) ?? []),
                 ]
               : [],
         };
@@ -165,10 +166,10 @@ export function conversationOps(
         return failed(error);
       }
     },
-    withdraw: ({ canvas, id }, ctx) => {
+    withdraw: async ({ canvas, id }, ctx) => {
       const open = openCanvas(engines, canvas);
       try {
-        return open.delivery.withdraw(id, partyIdOf(ctx.caller));
+        return await open.delivery.withdraw(id, partyIdOf(ctx.caller));
       } catch (error) {
         return failed(error);
       }
@@ -176,7 +177,10 @@ export function conversationOps(
   };
 }
 
-/** Throws what delivery refused as the op's failure, with its code; anything else as it is. */
+/**
+ * Throws what delivery refused, or couldn't save, as the op's failure, with its code; anything else
+ * as it is.
+ */
 function failed(error: unknown): never {
   if (error instanceof DeliveryError) throw new OpFailure(error.code, error.message);
   throw error;

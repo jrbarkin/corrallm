@@ -1,3 +1,4 @@
+import { legacyDirectories } from './workspaces/test-directories';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -233,6 +234,7 @@ async function start(
       app: { name: 'corrallm', version: '9.8.7' },
       check: true,
       distribution: 'local',
+      directoryResolver: legacyDirectories,
       locale: 'en-GB',
       ...(watchdog === undefined ? {} : { watchdog }),
       ...(watchdogNetwork === undefined ? {} : { watchdogNetwork }),
@@ -1992,6 +1994,40 @@ describe('telling an agent of a withdrawal after receipt', () => {
     terminal = new FakeConnector({ adapter: 'codex', pause: 100 });
   });
 
+  /** Keep the original and then its separate note running until their real interrupts. */
+  function heldNoteConnector() {
+    let waiting: Promise<void> | undefined;
+    let release: (() => void) | undefined;
+    let sent = 0;
+    const fake = new FakeConnector({
+      adapter: 'codex',
+      step: () => waiting ?? Promise.resolve(),
+    });
+    const start = fake.start.bind(fake);
+    vi.spyOn(fake, 'start').mockImplementation(async (spec, host) => {
+      const session = await start(spec, host);
+      const send = session.send.bind(session);
+      const interrupt = session.interrupt.bind(session);
+      session.send = (message) => {
+        if (++sent === 1 || message.from?.party === 'corrallm') {
+          const gate = Promise.withResolvers<undefined>();
+          waiting = gate.promise;
+          release = () => {
+            gate.resolve(undefined);
+          };
+        } else waiting = undefined;
+        return send(message);
+      };
+      session.interrupt = () => {
+        const stopped = interrupt();
+        release?.();
+        return stopped;
+      };
+      return session;
+    });
+    return fake;
+  }
+
   it('withdraws a Terminal message waiting at folder trust without a false receipt or note', async () => {
     const terminal = await startAtTrust();
     await terminal.start();
@@ -2077,6 +2113,87 @@ describe('telling an agent of a withdrawal after receipt', () => {
       expect(appServer.sessions[0]?.sent[2]?.from).toBeUndefined();
     },
   );
+
+  it.each([
+    ['manual', 'a Stop'],
+    ['manual', 'its take-back'],
+    ['queue', 'a Stop'],
+    ['queue', 'a Kill'],
+  ] as const)(
+    'never sends a %s slash command after %s during its withdrawal note’s own turn',
+    async (origin, stop) => {
+      appServer = heldNoteConnector();
+      await keepCanvas([{ ...BUILDER_AGENT, queue: [{ id: 'review', action: '/review' }] }], []);
+      const engine = await (await start()).engines.open(CANVAS);
+      const id = await withdrawReceived();
+      const note = `[corrallm] ${withdrawalNote(id)}`;
+      const command = origin === 'manual' ? await send('builder', '/review', YOU) : undefined;
+      if (origin === 'queue') engine.run.start();
+      await vi.waitFor(() => {
+        expect(sent(appServer).slice(1)).toEqual([note]);
+      });
+      // The note's turn runs: the CLI's current turn is the note's, not the command's.
+      if (stop === 'a Stop') await ok('session.interrupt', { agent: 'builder' }, YOU);
+      else if (stop === 'a Kill') await ok('run.kill', { target: { agent: 'builder' } }, YOU);
+      else if (command !== undefined) {
+        expect(await ok('withdraw', { id: command }, YOU)).toEqual({
+          reached: false,
+          interrupted: false,
+          revs: expect.any(Object) as Record<string, number>,
+        });
+      }
+      const attempt = () => engine.run.snapshot().agents.builder?.attempts?.review?.at(-1);
+      const reply = async () =>
+        (await inbox(YOU)).find(({ replyTo, kind }) => replyTo === command && kind === 'text');
+      await vi.waitFor(
+        async () => {
+          if (origin === 'queue') expect(attempt()?.status).not.toBe('running');
+          else if (stop === 'a Stop') expect(await reply()).toBeDefined();
+          expect(engine.sessions.of('builder').status).toBe('idle');
+        },
+        { timeout: 3000 },
+      );
+      // Its turn ended taken back, and the CLI was never sent it.
+      expect(sent(appServer).slice(1)).toEqual([note]);
+      if (origin === 'queue') expect(attempt()?.status).toBe('cancelled');
+      else if (stop === 'a Stop') {
+        expect((await reply())?.turn).toEqual({ status: 'cancelled', reason: 'taken-back' });
+      } else if (command !== undefined) {
+        expect((await find(command, YOU))?.state).toBe('withdrawn');
+      }
+      // The note was told: the next message carries none.
+      expect(core?.engines.canvas(CANVAS)?.messages.withdrawals('agent:builder')).toEqual([]);
+    },
+  );
+
+  it('never sends a shell command after a Stop during its withdrawal note’s own turn', async () => {
+    terminal = heldNoteConnector();
+    await keepCanvas();
+    await start();
+    const id = await withdrawReceived('shell');
+    const note = `[corrallm] ${withdrawalNote(id)}`;
+    const command = await send('shell', '!echo hello', YOU);
+    await vi.waitFor(() => {
+      expect(sent(terminal).slice(1)).toEqual([note]);
+    });
+    await ok('session.interrupt', { agent: 'shell' }, YOU);
+    const reply = async () =>
+      (await inbox(YOU)).find(({ replyTo, kind }) => replyTo === command && kind === 'text');
+    await vi.waitFor(
+      async () => {
+        expect(await reply()).toBeDefined();
+      },
+      { timeout: 3000 },
+    );
+    expect(sent(terminal).slice(1)).toEqual([note]);
+    expect((await reply())?.turn).toEqual({ status: 'cancelled', reason: 'taken-back' });
+    // What the user sends next goes as usual.
+    const next = await send('shell', 'After the stop', YOU);
+    await vi.waitFor(async () => {
+      expect((await find(next, YOU))?.state).toBe('replied');
+    });
+    expect(sent(terminal).slice(1)).toEqual([note, 'After the stop']);
+  });
 
   it.each(['builder', 'shell'])(
     'shows the exact withdrawal-bearing messages sent to %s, in order, live and after resuming',

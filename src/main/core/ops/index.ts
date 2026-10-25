@@ -9,7 +9,7 @@ import type { UsageReadings } from '../../usage';
 import type { LinkOpener } from '../../links';
 import type { FileRevealer } from '../../reveal';
 import type { ProjectFiles } from '../../files';
-import type { ProjectRootResolver } from '../workspaces/resolver';
+import type { DirectoryResolver } from '../workspaces/resolver';
 import type { SetupService } from '../workspaces/setup';
 import type { ReplyHandler } from '../replies';
 import type { SessionManager } from '../../sessions/manager';
@@ -79,7 +79,7 @@ export interface OpServices {
   usage: Pick<UsageReadings, 'state' | 'setRule' | 'simulate'>;
   links: Pick<LinkOpener, 'open'>;
   reveal: Pick<FileRevealer, 'reveal'>;
-  directories: ProjectRootResolver;
+  directories: DirectoryResolver;
   files: Pick<ProjectFiles, 'find'>;
   windows: Pick<Windows, 'canvasOf' | 'shownIn'>;
   sessions: Pick<
@@ -125,8 +125,7 @@ export interface OpServices {
   tokens: Pick<TokenStore, 'revoked' | 'onRevoke' | 'expiresOf'>;
   /**
    * The worktrees' setup (workspaces/setup.ts): its cards, their answers and the setup command you
-   * set. None until B9a X11b composes the workspaces: then no card is raised, and setting a command
-   * is unavailable.
+   * set. Composed by createCore; isolated implementation tests may omit it.
    */
   setups?: SetupService;
   /**

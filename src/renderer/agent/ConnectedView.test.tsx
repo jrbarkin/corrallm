@@ -1154,8 +1154,8 @@ describe('a connected agent', () => {
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 120));
     });
-    expect(backend.files).toHaveBeenLastCalledWith('ma');
-    expect(projectFiles).toHaveBeenLastCalledWith({ canvas, query: 'ma' });
+    expect(backend.files).toHaveBeenLastCalledWith('ma', 'a');
+    expect(projectFiles).toHaveBeenLastCalledWith({ canvas, query: 'ma', agent: 'a' });
     const menu = within(view.getByRole('listbox', { name: 'Files' }));
     await events.click(menu.getByRole('option', { name: 'src/main/ipc.ts' }));
     expect(composer.value).toBe('look at @src/main/ipc.ts ');

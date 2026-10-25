@@ -1582,7 +1582,7 @@ function Editor({
                   images,
                 );
               },
-              findFiles: (query) => sessionStore.findFiles(query),
+              findFiles: (query) => sessionStore.findFiles(query, openedNode.id),
               pastSessions: () => sessionStore.pastSessions(openedNode.id),
               resume: (sessionId) => sessionStore.resume(openedNode.id, sessionId),
               previewRewind: (messageId) => sessionStore.previewRewind(openedNode.id, messageId),
@@ -1626,7 +1626,7 @@ function Editor({
                 sessionStore.setEffort(openedNode.id, effort);
                 updateSettings(openedNode.id, { effort });
               },
-              settingsOptions: (adapter) => sessionStore.settingsOptions(adapter),
+              settingsOptions: (adapter) => sessionStore.settingsOptions(adapter, openedNode.id),
               restart: () => {
                 void sessionStore.restart(openedNode.id);
               },
@@ -1670,7 +1670,7 @@ function Editor({
             }}
             onAgentContextMenu={showAgentMenu}
             onOpenSettings={setSettingsAgent}
-            settingsOptions={(adapter) => sessionStore.settingsOptions(adapter)}
+            settingsOptions={(adapter, agent) => sessionStore.settingsOptions(adapter, agent)}
             {...(queues.from === undefined ? {} : { focus: queues.from })}
             backLabel={queues.from === undefined ? 'Canvas' : nameOf(queues.from)}
             onOpenAgent={(id) => {
@@ -1803,7 +1803,7 @@ function Editor({
             key={`settings:${settingsNode.id}`}
             node={settingsNode}
             session={sessions[settingsNode.id] ?? NEW_SESSION}
-            options={(adapter) => sessionStore.settingsOptions(adapter)}
+            options={(adapter) => sessionStore.settingsOptions(adapter, settingsNode.id)}
             onRename={(name) => {
               perform(api.canvasRename({ canvas: canvasId, node: settingsNode.id, label: name }));
             }}

@@ -57,6 +57,10 @@
     "api.run.pause",
     "api.run.kill",
     "api.run.unpause",
+    "api.run.start",
+    "api.run.stop",
+    "api.run.resume",
+    "api.run.goOn",
     "api.usage.get",
     "api.usage.setRule",
     "api.usage.simulate",
@@ -102,6 +106,7 @@
       "queue_update",
       "reply",
       "run_get",
+      "run_goOn",
       "run_kill",
       "run_pause",
       "run_unpause",
@@ -190,8 +195,12 @@
       "queue_update",
       "reply",
       "run_get",
+      "run_goOn",
       "run_kill",
       "run_pause",
+      "run_resume",
+      "run_start",
+      "run_stop",
       "run_unpause",
       "session_get",
       "session_interrupt",
@@ -213,10 +222,10 @@
     ]
   },
   "counts": {
-    "lead": 49,
+    "lead": 50,
     "worker": 11,
     "outside-read": 18,
-    "outside-write": 54
+    "outside-write": 58
   },
   "unhosted": {
     "agents": "B11",
@@ -277,7 +286,7 @@
       "output": "fb72ff50789dfefc"
     },
     "project.files": {
-      "input": "c42bffd7c0a78bc0",
+      "input": "ff8673078cbbc6c0",
       "output": "48481aeb891f3b2d"
     },
     "project.setSetupCommand": {
@@ -507,6 +516,22 @@
     "run.get": {
       "input": "41356bc15da6df1b",
       "output": "83e7c04b48aa417d"
+    },
+    "run.start": {
+      "input": "f676d264f07b5166",
+      "output": "647bbd6cc7b4f077"
+    },
+    "run.stop": {
+      "input": "f676d264f07b5166",
+      "output": "647bbd6cc7b4f077"
+    },
+    "run.resume": {
+      "input": "f676d264f07b5166",
+      "output": "647bbd6cc7b4f077"
+    },
+    "run.goOn": {
+      "input": "16c13631575ee302",
+      "output": "647bbd6cc7b4f077"
     },
     "usage.get": {
       "input": "e5fa5cc18e054cdd",

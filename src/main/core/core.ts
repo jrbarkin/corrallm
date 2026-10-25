@@ -27,15 +27,20 @@ import { FileRevealer } from '../reveal';
 import { ProjectFiles } from '../files';
 import { CanvasMemory } from '../memory';
 import { ProjectFolders } from '../project';
-import { ProjectDirectories } from './workspaces/resolver';
-import type { ProjectRootResolver } from './workspaces/resolver';
+import { WorkspaceDirectories } from './workspaces/directories';
+import { WorkspaceGit } from './workspaces/runtime-git';
+import { Provisioner } from './workspaces/provision';
+import { ProvisioningQueue } from './workspaces/queue';
+import { profileId } from './workspaces/profile';
+import { WorkspaceSetups } from './workspaces/setup';
+import type { DirectoryResolver, ProjectRootResolver } from './workspaces/resolver';
 import type { SetupService } from './workspaces/setup';
 import { treeOf, WorkspaceGate } from './workspaces/gate';
 import { WorkspacePlanner } from './workspaces/planner';
 import { WorkspaceStore } from './workspaces/store';
 import type { TreeKey } from './workspaces/gate';
 import { ownerNode } from './workspaces/planner';
-import type { WorkspaceCleanup } from './workspaces/cleanup';
+import { WorkspaceCleanup } from './workspaces/cleanup';
 import { WorkspaceChanges } from './workspaces/rebind';
 import type { WorktreeRecord } from './workspaces/store';
 import { RunJournal } from '../run-journal';
@@ -144,6 +149,8 @@ export interface CoreConfig {
   maxCreatedAgents?: () => number;
   /** For tests: the id each proposal raised takes (its Needs item's is proposal/<it>). */
   proposalIds?: () => string;
+  /** Tests may replace directory resolution; production hosts never supply this factory. */
+  directoryResolver?: (projects: ProjectFolders) => DirectoryResolver;
   /** For tests: what watches the folders of the open canvases' files, instead of fs.watch. */
   watchFolder?: WatchFolder;
   /** Fake connectors and options for an unpackaged app's tests, admitted by its host. */
@@ -166,9 +173,8 @@ export interface CoreConfig {
     options?: Readonly<Partial<Record<AdapterId, OptionsReader>>>;
   };
   /**
-   * For tests, until B9a X11b composes the workspaces: the worktrees' setup service, made over the
+   * For tests, overriding the composed service: the worktrees' setup service, made over the
    * core's database, process owner and project folders, told when a canvas's setup cards change.
-   * None: no setup card is ever raised, and setting a setup command is unavailable.
    */
   setups?: (core: {
     store: Database;
@@ -178,10 +184,9 @@ export interface CoreConfig {
     changed: (canvas: CanvasId) => void;
   }) => SetupService;
   /**
-   * For tests, until B9a X11b composes the workspaces: their cleanup (B9a C7), made over the
+   * For tests, overriding the composed service: their cleanup (B9a C7), made over the
    * core's workspace records and process owner, told who may still write in a tree and whether its
-   * setup runs, what to forget of its setup, and the names its trees' owners have. None: a tree no
-   * agent works in any more is only ever retained, and a deletion asks nothing of it.
+   * setup runs, what to forget of its setup, and the names its trees' owners have. Production uses the composed cleanup by default.
    */
   cleanup?: (core: {
     workspaces: WorkspaceStore;
@@ -339,6 +344,23 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     },
   });
   const workspaceStore = new WorkspaceStore({ store });
+  const workspaceQueue = new ProvisioningQueue();
+  const workspaceGit = new WorkspaceGit({
+    environment: () => environment(),
+    processes: children,
+    hooks: path.join(profile, 'workspaces', 'hooks'),
+  });
+  const provisioner = new Provisioner({
+    workspaces: workspaceStore,
+    git: workspaceGit,
+    profile: profileId(profile),
+    queue: workspaceQueue,
+    changed: (canvas) => {
+      workspaceDirectories.changed(canvas);
+      topics.changed(`needs:${canvas}`, 'corrallm');
+      engines.needsChanged(canvas);
+    },
+  });
   /**
    * A tree's owner's name: as its canvas names its agent or group now, else as it last did (a
    * deleted agent's, from the canvas's kept changes): none once neither does.
@@ -363,25 +385,31 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
   };
   // A tree no agent works in any more (B9a C7): removed with its last agent once safe, else kept
   // unless you discard it, its removal finished across restarts.
-  const cleanup = config.cleanup?.({
+  const cleanupDeps = {
     workspaces: workspaceStore,
     processes: children,
     profile,
-    writers: (tree) => sessions.writingIn(tree.canvas, tree.id),
-    setupRunning: (workspace) => setups?.running(workspace) === true,
-    forgetSetup: (workspace) => setups?.forget(workspace) ?? Promise.resolve(),
-    nameOf: (canvas, owner) => ownerName(canvas, owner),
-    changed: (canvas) => {
+    writers: (tree: WorktreeRecord) => sessions.writingIn(tree.canvas, tree.id),
+    setupRunning: (workspace: string) => setups.running(workspace),
+    forgetSetup: (workspace: string) => setups.forget(workspace),
+    nameOf: (canvas: CanvasId, owner: string) => ownerName(canvas, owner),
+    changed: (canvas: CanvasId) => {
       topics.changed(`needs:${canvas}`, 'corrallm');
       engines.needsChanged(canvas);
     },
-  });
-  // Who works where, at every document commit's seam (B9a C6): inert until a canvas's project is
-  // a repository the core keeps (discovery and provisioning are composed with the resolver, X11b).
+  };
+  const cleanup =
+    config.cleanup?.(cleanupDeps) ??
+    new WorkspaceCleanup({ ...cleanupDeps, git: workspaceGit, queue: workspaceQueue });
+  // Who works where at every document commit, sharing the resolver's repository and bindings; a
+  // tree a commit forks (a spawn's) recorded in its write, from the base its preflight read, then
+  // made as a start's is (its setup offered).
   const planner = new WorkspacePlanner({
     workspaces: workspaceStore,
     holding: (canvas, agent) => gate.holding(canvas, agent),
-    ...(cleanup === undefined ? {} : { cleanup }),
+    cleanup,
+    provisioner,
+    make: (tree) => workspaceDirectories.provision(tree.canvas, tree.owner),
   });
   const documents: Documents = new Documents({
     store,
@@ -409,18 +437,49 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     problem: (canvas) => journal.problem(canvas),
   });
   const projects = new ProjectFolders({ host, memory });
-  const directories = new ProjectDirectories(projects);
+  const workspaceDirectories = new WorkspaceDirectories({
+    projects,
+    workspaces: workspaceStore,
+    provisioner,
+    setups: {
+      prepare: (workspace) => setups.prepare?.(workspace) ?? Promise.resolve(),
+      reconcile: (canvas) => setups.reconcile?.(canvas) ?? Promise.resolve(),
+    },
+    document: async (canvas) => (await documents.load(canvas)).document,
+    documentNow: (canvas) => documents.loaded(canvas)?.document,
+    changed: (canvas) => {
+      channels.emit(canvas, 'session:availability');
+    },
+  });
+  const directories = config.directoryResolver?.(projects) ?? workspaceDirectories;
   // The worktrees' setup (B9a C9, C10): its cards in Needs, yours alone, and their answers.
-  const setups = config.setups?.({
+  const setupDeps = {
     store,
     processes: children,
     directories,
     profile,
-    changed: (canvas) => {
+    changed: (canvas: CanvasId) => {
+      workspaceDirectories.changed(canvas);
       topics.changed(`needs:${canvas}`, 'corrallm');
       engines.needsChanged(canvas);
     },
-  });
+  };
+  const setups: SetupService =
+    config.setups?.(setupDeps) ??
+    new WorkspaceSetups({
+      ...setupDeps,
+      workspaces: workspaceStore,
+      provisioner,
+      git: workspaceGit,
+      environment: () => environment(),
+      folder: path.join(profile, 'workspaces', 'setup'),
+      members: (tree) =>
+        workspaceStore
+          .bindingsTo(tree.canvas, tree.id)
+          .map(
+            ({ agent }) => ownerName(tree.canvas, `agent/${encodeURIComponent(agent)}`) ?? agent,
+          ),
+    });
   const journal = new RunJournal({
     store,
     memory,
@@ -501,7 +560,8 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     // A claim's holder named as a notice names an agent: quoted, escaped and capped.
     nameOf: (canvas, agent) =>
       quotedName(agentName(documents.loaded(canvas)?.document.nodes ?? [], agent)),
-    sending: (canvas, agentId, message, send) => engines.sending(canvas, agentId, message, send),
+    sending: (canvas, agentId, message, send, stopped) =>
+      engines.sending(canvas, agentId, message, send, stopped),
     emit: (canvas, agentId, connection, event) => {
       stalled.event(canvas, agentId, connection, event);
       void engines.emit(canvas, agentId, connection, event).then(
@@ -525,14 +585,14 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     },
     // A restore of a tree holds new work for the other agents working in it until it is done.
     gate: {
+      onAvailability: (listener) => gate.subscribe(listener),
       pass: (canvas, agent, own): Promise<void> => gate.pass(canvas, agent, own),
       holding: (canvas, agent): Promise<string | undefined> => gate.holding(canvas, agent),
     },
   });
   /** The trees an agent works in: its running session's, then its working directory's now. */
   const treesOf = async (canvas: CanvasId, agent: string): Promise<TreeKey[]> => {
-    const running = sessions.binding(canvas, agent);
-    const trees: TreeKey[] = running === undefined ? [] : [treeOf(running)];
+    const trees: TreeKey[] = sessions.bindings(canvas, agent).map(treeOf);
     const directory = await directories.workingDirectory(canvas, agent as AgentId);
     if (directory.state === 'ready' && !trees.includes(treeOf(directory))) {
       trees.push(treeOf(directory));
@@ -541,11 +601,15 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
   };
   // The workspace mutation gate (B11 R5, B9a's shared-tree seam): every agent of a tree protected.
   const gate: WorkspaceGate = new WorkspaceGate({
-    canvases: () => engines.opened(),
-    agents: (canvas) =>
-      (engines.canvas(canvas)?.document.nodes ?? []).flatMap((node) =>
-        node.type === 'agent' ? [node.id] : [],
-      ),
+    canvases: () => [...new Set([...engines.opened(), ...sessions.canvases()])],
+    agents: (canvas) => [
+      ...new Set([
+        ...(documents.loaded(canvas)?.document.nodes ?? []).flatMap((node) =>
+          node.type === 'agent' ? [node.id] : [],
+        ),
+        ...sessions.agents(canvas),
+      ]),
+    ],
     session: (canvas, agent): TreeKey | undefined => {
       const running = sessions.binding(canvas, agent);
       return running === undefined ? undefined : treeOf(running);
@@ -562,14 +626,15 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
         return 'has a turn going on';
       }
       if ((session?.tasks?.length ?? 0) > 0) return 'runs background tasks';
-      if (sessions.closing(canvas, agent)) return 'hasn’t finished stopping its last session';
-      return undefined;
+      return sessions.writing(canvas, agent);
     },
-    nameOf: (canvas, agent) => nameOf(engines.canvas(canvas)?.document.nodes ?? [], agent),
+    nameOf: (canvas, agent) => nameOf(documents.loaded(canvas)?.document.nodes ?? [], agent),
   });
   // A workspace change waiting for you (B9a C7): its card, and its Switch.
   const changes = new WorkspaceChanges({
     workspaces: workspaceStore,
+    provisioner,
+    provision: (canvas, owner) => workspaceDirectories.provision(canvas, owner as never),
     gate,
     close: async (canvas, agent) => {
       const open = engines.canvas(canvas);
@@ -583,6 +648,7 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     messages: (canvas) => engines.messagesOf(canvas),
     messagesNow: (canvas) => engines.canvas(canvas)?.messages,
     changed: (canvas) => {
+      workspaceDirectories.changed(canvas);
       topics.changed(`needs:${canvas}`, 'corrallm');
       engines.needsChanged(canvas);
     },
@@ -597,6 +663,9 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     // whose run is its window's until B11's cutover, ends its sessions as the window leaves it.
     left: (canvas) => engines.left(canvas),
   });
+  const unwatchGate = gate.subscribe(() => {
+    for (const canvas of windows.canvases()) channels.emit(canvas, 'session:availability');
+  });
   const files = new ProjectFiles({ environment });
   const links = new LinkOpener({
     file: path.join(profile, 'links.json'),
@@ -606,8 +675,9 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     },
   });
   const reveal = new FileRevealer({
-    // Reveal checks the picked project root's containment, not an agent's working directory.
+    // Reveal the picked root, with the resolver excluding every unverified/foreign workspace.
     folderOf: (canvas) => directories.projectRoot(canvas),
+    allow: (canvas, file) => workspaceDirectories.allowsReveal(canvas, file),
     show: async (file) => {
       await host.showFile(file);
     },
@@ -666,6 +736,7 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
   });
   // Each commit to a canvas's document: its agents, how they run, who reaches what.
   documents.subscribe(({ canvas }) => {
+    workspaceDirectories.changed(canvas);
     runtime.documentChanged(canvas);
   });
   memory.subscribe((canvas) => {
@@ -722,7 +793,7 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
       ...reviews.items(canvas),
       ...stalled.items(canvas),
       ...journal.items(canvas),
-      ...(setups?.items(canvas) ?? []),
+      ...setups.items(canvas),
       ...changes.items(canvas),
     ];
   };
@@ -748,8 +819,14 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     sessions,
     engines: { closeCanvas: (canvas) => engines.closeCanvas(canvas) },
     files: canvasFiles,
-    // The repository a new pick is isn't discovered yet (X11b composes discovery): none known.
-    workspaces: { projectChosen: (canvas) => planner.projectChosen(canvas, undefined) },
+    // Retain old trees before discovering the new pick: a failed discovery never widens trust.
+    workspaces: {
+      projectChosen: async (canvas) => {
+        await planner.projectChosen(canvas, undefined);
+        workspaceDirectories.invalidate(canvas);
+        if (config.directoryResolver === undefined) await workspaceDirectories.discover(canvas);
+      },
+    },
   });
   const engines: Engines = new Engines({
     // The windows that own their canvases' runs until B11's cutover hear their retry decisions.
@@ -776,7 +853,7 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
       ...reviews.items(canvas),
       ...stalled.items(canvas),
       ...journal.items(canvas),
-      ...(setups?.items(canvas) ?? []),
+      ...setups.items(canvas),
       ...changes.items(canvas),
     ],
   });
@@ -920,7 +997,7 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
       implementations: {
         ...(prepared
           ? preparedOps({
-              ...(cleanup === undefined ? {} : { cleanup }),
+              cleanup,
               proposals,
               nameOf: ownerName,
               workspaces: workspaceStore,
@@ -956,7 +1033,7 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
           host,
           tokens,
           ...(config.locale === undefined ? {} : { locale: config.locale }),
-          ...(setups === undefined ? {} : { setups }),
+          setups,
           workspaceReplies: [changes.handler()],
           workspaceItems: (canvas) => changes.items(canvas),
           replies: runReplies({
@@ -1012,10 +1089,13 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
   );
   // A setup that was running as the last core stopped is interrupted, after the process owner's
   // recovery ended what it left (above), and before any call could start one: never rerun by itself.
-  await setups?.recover();
+  if (opened.store !== undefined) await setups.recover();
+  void workspaceDirectories.reconcile().catch((error: unknown) => {
+    if (!closing) console.error('Could not finish provisioning the workspaces:', error);
+  });
   runtime.start();
   // Removals the last core didn't finish, tried again (in the background: Git may take a while).
-  void cleanup?.reconcile().catch((error: unknown) => {
+  void cleanup.reconcile().catch((error: unknown) => {
     console.error('Could not finish removing the workspaces kept for removal:', error);
   });
   // Held backends are read from now on, so a limit that ended while the core was down is noticed.
@@ -1047,6 +1127,9 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
   };
   const close = async () => {
     closing = true;
+    unwatchGate();
+    workspaceDirectories.stop();
+    workspaceGit.stop();
     projects.close();
     stalled.close();
     await Promise.all(warnings);
@@ -1063,14 +1146,15 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
       // closed last. No CLI it started outlives it: a helper still running is ended.
       try {
         // A workspace's removal going on finishes (or is left for the next start) first.
-        await cleanup?.close().catch((error: unknown) => {
+        await cleanup.close().catch((error: unknown) => {
           console.error('Could not finish removing a workspace:', error);
         });
         // A setup still running is ended and marked interrupted before the process owner closes.
-        await setups?.close().catch((error: unknown) => {
+        await setups.close().catch((error: unknown) => {
           console.error('Could not end the worktrees’ setups:', error);
         });
         await children.close();
+        await workspaceDirectories.close();
         await stores();
       } finally {
         await opened.store?.close();
