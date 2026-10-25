@@ -16,8 +16,9 @@ import type { Implementations, OpServices } from '.';
  * its own (Core Server rule R9, checked in core.call), you any; a release says what holds its
  * target still (another party's pause, or one on a group it is in). Each takes effect at once, and
  * returns once it is on disk: the canvas's run committed to the database, and for a kill, what it
- * took back with it, in the same commit (one being delivered, once its interrupted turn ends). One
- * that can't be fails, saying it is in place all the same but may not survive a restart.
+ * took back at once with it, in the same commit (one being delivered is withdrawn once its
+ * interrupted turn ends, which the kill never waits for). One that can't be fails, saying it is in
+ * place all the same but may not survive a restart.
  */
 export function runOps({
   engines,
@@ -73,14 +74,12 @@ export function runOps({
       else engine.run.killGroup(target.group, by);
       // What waits is withdrawn at once, committed with the hold: neither reaches the disk without
       // the other. One being delivered is withdrawn once its interrupted turn ends, with the note
-      // its recipient is told of it, should it have reached it.
-      const withdrawing = delivery.kill(members, by);
+      // its recipient is told of it, should it have reached it: not waited for here, since a CLI
+      // that ignores the interrupt would hold this call's scope for as long.
+      delivery.kill(members, by);
       for (const agent of members) engine.sessions.stop(agent);
       await saved(
-        open.journal().then(async () => {
-          await withdrawing;
-          await open.messages.durable();
-        }),
+        open.journal().then(() => open.messages.durable()),
         KILL_UNSAVED,
       );
       return {};

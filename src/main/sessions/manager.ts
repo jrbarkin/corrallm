@@ -55,6 +55,9 @@ const NO_TASKS = 'This agent’s background tasks are stopped in its terminal.';
 const NO_OPTIONS = 'corrallm can’t read that agent’s settings.';
 /** How long a session may take to close before the manager stops waiting for it. */
 const CLOSE_MS = 5000;
+/** How long a silent turn's interrupt waits for its CLI's answer before it counts as unanswered. */
+export const STALLED_INTERRUPT_MS = 30_000;
+const UNANSWERED = 'The CLI did not answer the interrupt.';
 
 export interface SessionManagerDeps {
   /** What every adapter declares (adapters.ts): the adapter each connection runs, and its modes. */
@@ -455,22 +458,40 @@ export class SessionManager {
   }
 
   /**
-   * A stalled turn may end while its reply waits: never stop the next turn instead. Interrupted to
-   * be resent (`resend`), it stops no send held behind it, which goes as it ends.
+   * Admits a stalled-turn interrupt without waiting in a scope for launch or the CLI's answer.
+   * `answered` is bounded by STALLED_INTERRUPT_MS, including launch; a late launch never stops
+   * a newer turn or sends an expired interrupt. A resend stops no send held behind its turn.
    */
-  async interruptIf(
+  interruptIf(
     canvas: CanvasId,
     agentId: string,
     current: () => boolean,
     resend = false,
-  ): Promise<boolean> {
+  ): Promise<{ answered: Promise<void> } | undefined> {
     const agent = this.#agents.get(canvas)?.get(agentId);
-    if (!agent) throw new Error(NOT_RUNNING);
-    const session = await agent.session;
-    if (!current()) return false;
-    if (!resend) agent.interrupts++;
-    await session.interrupt();
-    return true;
+    if (!agent) return Promise.reject(new Error(NOT_RUNNING));
+    if (!current()) return Promise.resolve(undefined);
+    let expired = false;
+    const answer = async () => {
+      const session = await agent.session;
+      if (expired || this.#agents.get(canvas)?.get(agentId) !== agent || !current()) return;
+      if (!resend) agent.interrupts++;
+      await session.interrupt();
+    };
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const answered = Promise.race([
+      answer(),
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => {
+          expired = true;
+          reject(new Error(UNANSWERED));
+        }, STALLED_INTERRUPT_MS);
+        timer.unref();
+      }),
+    ]).finally(() => {
+      clearTimeout(timer);
+    });
+    return Promise.resolve({ answered });
   }
 
   /** Switches the agent's session's mode (one of its adapter's). */

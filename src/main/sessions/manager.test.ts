@@ -19,7 +19,7 @@ import type { Connector, LiveSession, SessionHost, SessionSpec } from './connect
 import { unavailable } from './connector';
 import { FakeConnector } from './fake';
 import { CATALOG } from './adapters';
-import { SessionManager } from './manager';
+import { SessionManager, STALLED_INTERRUPT_MS } from './manager';
 import type { SessionManagerDeps } from './manager';
 import type { Conversations } from './adapter';
 import { quotePath } from './terminal/drop';
@@ -1542,3 +1542,64 @@ it('lists conversations from the agent’s verified workspace and never lists wh
   await expect(sessions.listSessions(canvas, 'a', CALLER)).rejects.toThrow('Switch first.');
   expect(listKept).toHaveBeenCalledTimes(1);
 });
+
+it.each(['ended', 'deadline'] as const)(
+  'admits a stalled interrupt while session launch waits, without interrupting it after %s',
+  async (why) => {
+    const launched = Promise.withResolvers<LiveSession>();
+    const starting = Promise.withResolvers<undefined>();
+    const interrupted = vi.fn<LiveSession['interrupt']>().mockResolvedValue(undefined);
+    const live: LiveSession = {
+      send: vi.fn().mockResolvedValue(undefined),
+      interrupt: interrupted,
+      answer: vi.fn().mockResolvedValue(undefined),
+      close: vi.fn().mockResolvedValue(undefined),
+      setMode: vi.fn().mockResolvedValue(undefined),
+      setModel: vi.fn().mockResolvedValue(undefined),
+    };
+    const sessions = manager({
+      [OPTIONS.connection]: {
+        start: () => {
+          starting.resolve(undefined);
+          return launched.promise;
+        },
+      },
+    });
+    const canvas = shownCanvas();
+    let current = true;
+    const opening = sessions.start(canvas, 'a', OPTIONS);
+    await starting.promise;
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    let admitted: Awaited<ReturnType<SessionManager['interruptIf']>>;
+    const requesting = sessions
+      .interruptIf(canvas, 'a', () => current)
+      .then((value) => {
+        admitted = value;
+        return value;
+      });
+    try {
+      await vi.waitFor(() => {
+        expect(admitted).toMatchObject({ answered: expect.any(Promise) as Promise<void> });
+      });
+      const requested = await requesting;
+      if (!requested) throw new Error('The live turn should admit an interrupt.');
+      if (why === 'deadline') {
+        const failed = expect(requested.answered).rejects.toThrow('did not answer');
+        await vi.advanceTimersByTimeAsync(STALLED_INTERRUPT_MS);
+        await failed;
+      } else current = false;
+      launched.resolve(live);
+      await opening;
+      if (why === 'ended') await requested.answered;
+      expect(interrupted).not.toHaveBeenCalled();
+    } finally {
+      current = false;
+      launched.resolve(live);
+      await opening;
+      const requested = await requesting;
+      await requested?.answered.catch(() => undefined);
+      await sessions.closeEverything();
+      vi.useRealTimers();
+    }
+  },
+);
