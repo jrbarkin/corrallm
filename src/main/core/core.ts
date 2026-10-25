@@ -7,6 +7,7 @@ import type { AdapterId, ConnectionId, UsageBackendId } from '../../shared/adapt
 import { canvasIdOf } from '../../shared/canvas';
 import type { CanvasId } from '../../shared/canvas';
 import type { OpResult } from '../../shared/api/errors';
+import type { ApiStatus } from '../../shared/api/ops/settings';
 import { MAX_CREATED_AGENTS } from '../../shared/api/limits';
 import { OPS } from '../../shared/api/registry';
 import { topicRequest } from '../../shared/api/topics';
@@ -71,6 +72,7 @@ import { MessageTable } from './delivery/messages';
 import { Engines, needsInput } from './engines';
 import type { Watcher } from './engines';
 import type { HostServices, WindowId } from './host';
+import type { ShutdownPrepared, ShutdownReason } from './protocol';
 import { implementations } from './ops';
 import { PREPARED_OPS, preparedOps } from './ops/prepared';
 import { sessionRules } from './ops/session-control';
@@ -223,15 +225,21 @@ export interface Core extends Dispatcher {
   clientOf(token: string): OutsideCaller | undefined;
   /**
    * Answers what `corrallm token new|renew|revoke` asks over the token socket (Build Plan B30), as
-   * `owner` (the app or `corrallm serve`), whose MCP server listens at `url` (null: none yet). A
-   * new token reaches only canvases whose files `keptCanvas` accepts.
+   * `owner` (the app or `corrallm serve`), whose MCP server listens at `url` (null: none, and
+   * `unserved` says why, if its owner knows). A new token reaches only canvases whose files
+   * `keptCanvas` accepts.
    */
   tokenRequest(
     request: TokenRequest,
-    host: { owner: 'app' | 'serve'; url: string | null },
+    host: { owner: 'app' | 'serve'; url: string | null; unserved?: string },
   ): Promise<TokenAnswer>;
   /** What the user chose for corrallm as a whole: the port its API server keeps, here. */
   settings: Pick<Settings, 'apiPort' | 'keepApiPort'>;
+  /**
+   * Its owner says whether the profile's MCP server listens, and where (core/endpoint.ts): what
+   * `settings.get` and its topic say, never the server itself.
+   */
+  served(status: ApiStatus): void;
   /**
    * The canvas kept in `file`, as `corrallm serve --canvas` names it: only if canvas memory names
    * that file for the canvas it holds, and keeps a project folder for it that is still there, both
@@ -257,11 +265,49 @@ export interface Core extends Dispatcher {
   /** The host woke from sleep: old turns get a short period of fresh silence before warning. */
   resumed(): void;
   /**
-   * Stops: each canvas's run held where it is and journaled, every session closed, and what the
-   * core keeps written out. Rejects, once all that is done, if a run couldn't be journaled.
+   * The shutdown barrier (B11 Design §16.5), prepared for a quit or an update's restart: no new
+   * dispatch (no run task or delivery starts; turns going on go on, their sessions usable), no
+   * write admitted (a call that would change something is refused, unavailable, saying why; reads,
+   * topic subscriptions, links and terminals go on), and every journal and store forced to disk.
+   * Asked again, the same answer, until cancelled. What it couldn't write is said, the barrier
+   * still held, for the failed-save dialog.
+   */
+  prepareShutdown(reason: ShutdownReason): Promise<ShutdownPrepared>;
+  /**
+   * The barrier lifted (Keep corrallm open): dispatch and writes go on as before, and nothing else
+   * changes. Nothing once committed, or never prepared.
+   */
+  cancelShutdown(): void;
+  /** Commits: as `close`, once however often asked, prepared or not. */
+  commitShutdown(): Promise<void>;
+  /**
+   * Stops: no write admitted, each canvas's run held where it is and journaled, every session
+   * closed, and what the core keeps written out. Rejects, once all that is done, if a run couldn't
+   * be journaled. Once: asked again, the same.
    */
   close(): Promise<void>;
+  /** Whether a canvas it runs has work going on, which closing would cut off: a run or a turn. */
+  active(): boolean;
 }
+
+/** The calls the shutdown barrier admits besides reads: what changes nothing the core keeps. */
+const ADMITTED_WHILE_STOPPING: ReadonlySet<string> = new Set([
+  'topics.subscribe',
+  'topics.unsubscribe',
+  'link.open',
+  'link.reveal',
+  'terminal.attach',
+  'terminal.detach',
+  'terminal.input',
+  'terminal.resize',
+  'terminal.drop',
+]);
+
+/** Why the barrier refuses a write. */
+const STOPPING: Readonly<Record<ShutdownReason, string>> = {
+  quit: 'corrallm is quitting: try again once it is open again.',
+  update: 'corrallm is restarting to update: try again once it is open again.',
+};
 
 export async function createCore(config: CoreConfig, host: HostServices): Promise<Core> {
   parseAgentPaths(process.env.CORRALLM_AGENT_PATHS);
@@ -379,6 +425,8 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     },
   });
   const settings = new Settings(path.join(profile, 'settings.json'));
+  /** Whether the profile's MCP server listens, as its owner last said (`served`). */
+  let api: ApiStatus = { state: 'stopped', port: null };
   // What the canvases the core runs publish beside their documents (B11 §5): their run, sessions
   // and messages, from their engines once they open.
   const runtime = new RuntimeSource({
@@ -963,6 +1011,7 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
           directories,
           files,
           settings,
+          api: () => api,
           links,
           reveal,
           windows,
@@ -1052,25 +1101,110 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
   probe.start();
   // The canvases open from before, watched from now on.
   follow();
+  /** Fallible saving, keeping the core usable if it fails. */
+  const flush = async () => {
+    await engines.flush();
+    await children.flush();
+    await stores();
+  };
+  // The shutdown barrier (B11 Design §16.5): why it holds while it does, what preparing it said,
+  // and the close it commits to, once.
+  let barrier: ShutdownReason | undefined;
+  let preparing: Promise<ShutdownPrepared> | undefined;
+  let committed: Promise<void> | undefined;
+  const hold = (reason: ShutdownReason) => {
+    barrier ??= reason;
+    engines.freeze();
+  };
+  /** Why the barrier refuses op `name` now, if it does: anything but a read or what it admits. */
+  const stopping = (name: string): OpResult<never> | undefined => {
+    if (barrier === undefined) return undefined;
+    const kind = dispatcher.surface[name]?.kind;
+    if (kind === undefined || kind === 'read' || ADMITTED_WHILE_STOPPING.has(name))
+      return undefined;
+    return { ok: false, error: { code: 'unavailable', sentence: STOPPING[barrier] } };
+  };
+  const close = async () => {
+    closing = true;
+    unwatchGate();
+    workspaceDirectories.stop();
+    workspaceGit.stop();
+    projects.close();
+    stalled.close();
+    await Promise.all(warnings);
+    watching.close();
+    await Promise.all(checking);
+    probe.stop();
+    states.close();
+    topics.close();
+    runtime.close();
+    try {
+      await engines.close();
+    } finally {
+      // What the core keeps is written out even if a canvas's run couldn't be, and its database
+      // closed last. No CLI it started outlives it: a helper still running is ended.
+      try {
+        // A workspace's removal going on finishes (or is left for the next start) first.
+        await cleanup.close().catch((error: unknown) => {
+          console.error('Could not finish removing a workspace:', error);
+        });
+        // A setup still running is ended and marked interrupted before the process owner closes.
+        await setups.close().catch((error: unknown) => {
+          console.error('Could not end the worktrees’ setups:', error);
+        });
+        await children.close();
+        await workspaceDirectories.close();
+        await stores();
+      } finally {
+        await opened.store?.close();
+      }
+    }
+  };
+  const commit = () => {
+    if (committed === undefined) {
+      hold('quit');
+      committed = close();
+    }
+    return committed;
+  };
   return {
     surface: dispatcher.surface,
     ops: dispatcher.ops,
     partyOf: (caller) => dispatcher.partyOf(caller),
     project: (projection, raw, caller, signal) =>
       dispatcher.project(projection, raw, caller, signal),
-    call: <N extends OpName>(name: N, raw: unknown, caller: Caller, signal?: AbortSignal) =>
-      children.run(() => dispatcher.call(name, raw, caller, signal)) as Promise<
+    call: <N extends OpName>(name: N, raw: unknown, caller: Caller, signal?: AbortSignal) => {
+      const refused = stopping(name);
+      if (refused) return Promise.resolve(refused);
+      return children.run(() => dispatcher.call(name, raw, caller, signal)) as Promise<
         OpResult<ResultOf<N>>
-      >,
+      >;
+    },
     engines,
     topics,
     channels,
     shown: (asked) => asked.filter((window) => windows.has(window)),
-    flush: async () => {
-      await engines.flush();
-      await children.flush();
-      await stores();
+    flush,
+    prepareShutdown: (reason) => {
+      if (committed) return Promise.resolve({ ok: true });
+      if (preparing === undefined) {
+        hold(reason);
+        preparing = flush().then(
+          () => ({ ok: true }) as const,
+          (error: unknown) => ({ failed: true, sentence: reasonOf(error) }) as const,
+        );
+      }
+      return preparing;
     },
+    cancelShutdown: () => {
+      if (committed || barrier === undefined) return;
+      barrier = undefined;
+      preparing = undefined;
+      engines.thaw();
+    },
+    commitShutdown: commit,
+    close: commit,
+    active: () => engines.active(),
     tokens,
     clientOf: (token) => {
       const caller = tokens.clientOf(token);
@@ -1078,15 +1212,20 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
       const made = documents.createdBy(`outside:${caller.name}`);
       return { ...caller, canvases: [...new Set([...caller.canvases, ...made])] };
     },
-    tokenRequest: (request, { owner, url }) =>
+    tokenRequest: (request, { owner, url, unserved }) =>
       answerTokenRequest(request, {
         owner,
         tokens,
         keptCanvas: (file) => keptCanvas(file, memory, 'reached'),
         fileOf: async (canvas) => (await memory.get(canvas)).file,
         url,
+        ...(unserved === undefined ? {} : { unserved }),
       }),
     settings,
+    served: (status) => {
+      api = status;
+      topics.changed('settings', 'corrallm');
+    },
     keptCanvas: (file) => keptCanvas(file, memory, 'served'),
     openHeld: async (canvas) => {
       await engines.open(canvas, { held: true });
@@ -1100,42 +1239,6 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     },
     resumed: () => {
       stalled.resume();
-    },
-    close: async () => {
-      closing = true;
-      unwatchGate();
-      workspaceDirectories.stop();
-      workspaceGit.stop();
-      projects.close();
-      stalled.close();
-      await Promise.all(warnings);
-      watching.close();
-      await Promise.all(checking);
-      probe.stop();
-      states.close();
-      topics.close();
-      runtime.close();
-      try {
-        await engines.close();
-      } finally {
-        // What the core keeps is written out even if a canvas's run couldn't be, and its database
-        // closed last. No CLI it started outlives it: a helper still running is ended.
-        try {
-          // A workspace's removal going on finishes (or is left for the next start) first.
-          await cleanup.close().catch((error: unknown) => {
-            console.error('Could not finish removing a workspace:', error);
-          });
-          // A setup still running is ended and marked interrupted before the process owner closes.
-          await setups.close().catch((error: unknown) => {
-            console.error('Could not end the worktrees’ setups:', error);
-          });
-          await children.close();
-          await workspaceDirectories.close();
-          await stores();
-        } finally {
-          await opened.store?.close();
-        }
-      }
     },
   };
 }

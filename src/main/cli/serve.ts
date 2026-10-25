@@ -7,19 +7,17 @@ import type { Message, PartyId } from '../../shared/model/messages';
 import type { NeedsItem } from '../../shared/model/needs';
 import { threadTitle } from '../../shared/model/session';
 import type { TurnResult } from '../../shared/session';
-import { startApiServer } from '../api/mcp';
-import type { ApiServer } from '../api/mcp';
 import { createCore } from '../core/core';
 import type { Core } from '../core/core';
+import { Endpoint } from '../core/endpoint';
 import { appProfile, NODE_HOST } from '../core/host/node';
-import { lockProfile, processStart, ProfileLocked } from '../core/lock';
+import { lockProfile, ProfileLocked } from '../core/lock';
 import type { ProfileLock } from '../core/lock';
 import { partyName } from '../core/parties';
 import { serveTokenSocket } from '../core/token-socket';
 import type { TokenAnswer, TokenRequest, TokenSocket } from '../core/token-socket';
 import { agentEnvironment, loginShellEnvironment } from '../sessions/environment';
 import { installedClis } from '../sessions/installed';
-import { removeApiFile, writeApiFile } from './api-file';
 import type { ServeCommand } from './args';
 import { shown } from './output';
 import { registrations, SERVER_NAME } from './register';
@@ -35,9 +33,10 @@ import { TOKEN_VARIABLE, URL_VARIABLE } from './wait';
  * run restores paused, which holds only the run's own sends, so orchestrators' messages still
  * reach idle agents; but nothing is delivered until every check that may refuse the start has
  * passed (each canvas opened, the port listened on, the token made, api.json published), so a
- * refused start sends nothing. It listens on --port, which it keeps for later starts, else the
- * port the profile keeps (chosen free once), writes api.json, and says on stderr each message, reply and thing newly
- * waiting for an answer, with every control character shown escaped, since what it says comes from
+ * refused start sends nothing. Its endpoint (core/endpoint.ts, the app's core's too) listens on
+ * --port, which it keeps for later starts, else the port the profile keeps (chosen free once), and
+ * writes api.json; it says on stderr each message, reply and thing newly waiting for an answer,
+ * with every control character shown escaped, since what it says comes from
  * canvases, agents and MCP servers. --new-token makes an outside token for the canvases named,
  * shown once, on a terminal only, with how to register corrallm by its variable in each installed
  * CLI that says how (its adapter's `registerMcp`). While it serves, it also serves the profile's
@@ -88,18 +87,17 @@ export async function serveCommand(command: ServeCommand, io: ServeIO): Promise<
     say(`corrallm serve: ${error.message} ${advice}`);
     return 1;
   }
-  let wroteApi = false;
+  let endpoint: Endpoint | undefined;
   let socket: TokenSocket | undefined;
   // Whatever happens, a process that ends lets the profile go.
   const leave = () => {
-    if (wroteApi) removeApiFile(profile);
+    endpoint?.removeSync();
     socket?.removeSync();
     lock.release();
   };
   process.once('exit', leave);
 
   let core: Core | undefined;
-  let server: ApiServer | undefined;
   /**
    * Whether it was told to stop. Told as it starts, it makes no token and delivers nothing, and
    * stops as soon as what it is doing then is done.
@@ -159,30 +157,30 @@ export async function serveCommand(command: ServeCommand, io: ServeIO): Promise<
       }
     }
 
+    // Its MCP server, on --port (kept for later starts), else on the port the profile keeps.
     const kept = command.port === undefined ? await opened.settings.apiPort() : undefined;
-    const port = command.port ?? kept ?? 0;
-    try {
-      server = await startApiServer({
-        core: opened,
-        clientOf: (token) => opened.clientOf(token),
-        stale: (token) => opened.tokens.stale(token),
-        port,
-      });
-    } catch (error) {
-      if ((error as { code?: unknown }).code !== 'EADDRINUSE') throw error;
+    const outside = new Endpoint({
+      profile,
+      core: opened,
+      clientOf: (token) => opened.clientOf(token),
+      stale: (token) => opened.tokens.stale(token),
+      settings: opened.settings,
+      changed: (status) => {
+        opened.served(status);
+      },
+    });
+    endpoint = outside;
+    const status = await outside.listen(command.port);
+    if (status.state !== 'listening') {
       say(
-        `corrallm serve: port ${String(port)} is taken: another program listens on it. Stop it, or serve on another port with --port, which is kept for later starts (then register corrallm there again).` +
+        `corrallm serve: port ${String(status.port)} is taken: another program listens on it. Stop it, or serve on another port with --port, which is kept for later starts (then register corrallm there again).` +
           (kept === undefined
             ? ''
             : ' If you didn’t expect that, make a new token: an orchestrator that calls this port gives its token to whatever listens there.'),
       );
       return 1;
     }
-    const { url } = server;
-    // A port given is kept, so a start without one (after a crash, say) listens there again.
-    if (command.port === undefined ? kept === undefined : command.port !== 0) {
-      await opened.settings.keepApiPort(server.port);
-    }
+    const { url } = status;
     const served = [...files].map(([canvas, name]) => `${name} (${canvas})`).join(', ');
     // `corrallm wait` finds a server by api.json only on the app's own profile.
     const findIt =
@@ -231,13 +229,7 @@ export async function serveCommand(command: ServeCommand, io: ServeIO): Promise<
     // Discovery is a startup check too: a failed publication must never release queued messages
     // or announce a server that corrallm wait cannot find yet.
     try {
-      await writeApiFile(profile, {
-        url,
-        port: server.port,
-        pid: process.pid,
-        started: processStart(),
-      });
-      wroteApi = true;
+      await outside.publish();
     } catch (error) {
       say(`corrallm serve: could not write ${path.join(profile, 'api.json')}: ${reasonOf(error)}`);
       return 1;
@@ -258,9 +250,9 @@ export async function serveCommand(command: ServeCommand, io: ServeIO): Promise<
   try {
     code = await serving();
   } finally {
-    // No token is made as it stops.
+    // No token is made as it stops; every request going on ends, and api.json goes.
     await socket?.close();
-    await server?.close();
+    await endpoint?.close();
     // Each run held where it is, journaled, every session ended, what the core keeps written out.
     const closed = await core?.close().then(
       () => true,

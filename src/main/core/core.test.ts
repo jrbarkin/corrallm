@@ -207,7 +207,11 @@ describe('createCore', () => {
     const started = await start();
     expect(await started.call('settings.get', {}, CALLERS['outside-read'])).toEqual({
       ok: true,
-      value: { defaultAdapter: DEFAULT_ADAPTER, consents },
+      value: {
+        defaultAdapter: DEFAULT_ADAPTER,
+        consents,
+        api: { state: 'stopped', port: 12345 },
+      },
     });
   });
 
@@ -215,8 +219,45 @@ describe('createCore', () => {
     const started = await start();
     expect(await started.call('settings.get', undefined, CALLERS.you)).toEqual({
       ok: true,
-      value: { defaultAdapter: DEFAULT_ADAPTER, consents: {} },
+      value: {
+        defaultAdapter: DEFAULT_ADAPTER,
+        consents: {},
+        api: { state: 'stopped', port: null },
+      },
     });
+  });
+
+  it('says whether the MCP server listens, as its owner says, a change of the settings topic', async () => {
+    const started = await start();
+    const window = openWindow(new WindowPorts(started), 7);
+    const heard: unknown[] = [];
+    window.link.on('topic', (batch) => {
+      for (const change of batch)
+        if (change.topic === 'settings' && 'replace' in change) heard.push(change.replace);
+    });
+    try {
+      await window.link.request('call', 'topics.subscribe', { topic: 'settings' });
+      const listening = {
+        state: 'listening',
+        port: 4242,
+        url: 'http://127.0.0.1:4242/mcp',
+      } as const;
+      started.served(listening);
+      expect(await started.call('settings.get', {}, CALLERS.you)).toMatchObject({
+        ok: true,
+        value: { api: listening },
+      });
+      await vi.waitFor(() => {
+        expect(heard).toEqual([expect.objectContaining({ api: listening })]);
+      });
+      const taken = { state: 'unavailable', port: 4242, sentence: 'Port 4242 is taken.' } as const;
+      started.served(taken);
+      await vi.waitFor(() => {
+        expect(heard.at(-1)).toEqual(expect.objectContaining({ api: taken }));
+      });
+    } finally {
+      window.close();
+    }
   });
 
   it('reads the usage readings and rules the profile remembers', async () => {

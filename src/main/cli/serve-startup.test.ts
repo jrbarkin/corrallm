@@ -57,6 +57,7 @@ function fixture() {
     settings: {
       keepApiPort: vi.fn(() => Promise.resolve()),
     },
+    served: vi.fn(),
     deliver: vi.fn(() => Promise.resolve()),
     close: vi.fn(() => Promise.resolve()),
   };

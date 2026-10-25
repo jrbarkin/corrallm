@@ -23,6 +23,8 @@ export interface TokenRequestServices {
   fileOf: (canvas: CanvasId) => Promise<string | undefined>;
   /** Where the owner's MCP server listens, or will: null when none does. */
   url: string | null;
+  /** Why the owner's MCP server doesn't listen, when it knows (its port taken): with `url` null. */
+  unserved?: string;
 }
 
 /** Answers `request` for the profile `services` keep. */
@@ -69,7 +71,7 @@ async function made(
   op: 'new' | 'renew',
   name: string,
   token: string,
-  { owner, tokens, fileOf, url }: TokenRequestServices,
+  { owner, tokens, fileOf, url, unserved }: TokenRequestServices,
 ): Promise<TokenAnswer> {
   const grant = tokens.grant(name);
   if (grant === undefined) throw new Error(`The token for “${name}” is gone already.`);
@@ -89,6 +91,7 @@ async function made(
     expires: grant.expires,
     canvases,
     url,
+    ...(url === null && unserved !== undefined ? { unserved } : {}),
   };
 }
 

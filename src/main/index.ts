@@ -83,6 +83,10 @@ function main(): void {
   installNavigationGuards(trustedOrigin);
 
   const openMainWindow = () => createMainWindow(rendererUrl, { devTools: !app.isPackaged, hidden });
+  // macOS stays up as ever; elsewhere, until the core is up, the last window closing quits.
+  let lastWindowClosed = () => {
+    app.quit();
+  };
 
   void app
     .whenReady()
@@ -182,8 +186,26 @@ function main(): void {
       }
       registerIpcHandlers(trustedOrigin, ports);
 
-      // Renderer acknowledgement precedes closing CLIs or flushing the profile's stores.
-      const persistWindows = async (closing: BrowserWindow[]) => {
+      /**
+       * Each window finishes the drafts it composes, over its own port, at most DRAFTS_MS each (a
+       * crashed one is skipped): rejects, for the failed-save dialog, if one didn't.
+       */
+      const flushDrafts = async (closing: BrowserWindow[]) => {
+        const { unanswered } = await ask(
+          'flushDrafts',
+          closing.map((window) => window.webContents.id),
+        );
+        if (unanswered.length > 0) {
+          throw new Error(
+            unanswered.length === 1
+              ? 'A window did not finish saving what was being typed in it before closing'
+              : `${String(unanswered.length)} windows did not finish saving what was being typed in them before closing`,
+          );
+        }
+      };
+      // Until B11 X12, a window showing a canvas runs it: it freezes and saves its run
+      // (RunShutdown's run:stopping and run:ready) before CLIs close or the stores are flushed.
+      const saveRuns = async (closing: BrowserWindow[]) => {
         const shown = await ask(
           'shown',
           closing.map((window) => window.webContents.id),
@@ -193,7 +215,6 @@ function main(): void {
             shown.includes(window.webContents.id) ? [shutdown.stop(window.webContents)] : [],
           ),
         );
-        await ask('flush');
       };
       // An approved quit waits for the complete core teardown. Only a second quit, while
       // saving or the core's close is stuck, bounds that wait, as the user's explicit escape.
@@ -219,7 +240,8 @@ function main(): void {
       };
       const finish = async () => {
         supervisor.stop();
-        const closed = ask('close').catch((error: unknown) => {
+        // The shutdown barrier committed: the endpoint closes, then every session and the stores.
+        const closed = ask('commitShutdown').catch((error: unknown) => {
           failQuit('Could not finish closing the core:', error);
         });
         try {
@@ -248,12 +270,27 @@ function main(): void {
           const { response } = await (window
             ? dialog.showMessageBox(window, options)
             : dialog.showMessageBox(options));
-          if (verb === 'Quit' && response !== 1) updates?.cancelRestart();
+          if (verb === 'Quit' && response !== 1) {
+            updates?.cancelRestart();
+            // Keep corrallm open: the barrier lifts, and the endpoint and every turn go on.
+            await ask('cancelShutdown').catch((error: unknown) => {
+              console.error('Could not keep the core going:', error);
+            });
+          }
           return response === 1;
         };
       const quit = new Closing({
+        // The drafts each window composes, then (until X12) each window's run, then the core's
+        // barrier: no new dispatch or write, everything forced to disk, sessions still usable.
         save: async () => {
-          await persistWindows(BrowserWindow.getAllWindows());
+          const windows = BrowserWindow.getAllWindows();
+          await flushDrafts(windows);
+          await saveRuns(windows);
+          const prepared = await ask(
+            'prepareShutdown',
+            updates?.restarting === true ? 'update' : 'quit',
+          );
+          if ('failed' in prepared) throw new Error(prepared.sentence);
         },
         abandon,
         ask: askAnyway('Quit'),
@@ -286,10 +323,51 @@ function main(): void {
       powerMonitor.on('resume', () => {
         supervisor.resumed();
       });
+      /** Shows a window again (B11 Design §8): the first open one, focused, else a new one. */
+      const reopen = () => {
+        if (quit.busy || quit.approved) return;
+        const [shown] = BrowserWindow.getAllWindows();
+        if (shown === undefined) {
+          void openMainWindow().catch((error: unknown) => {
+            console.error('Could not open corrallm’s window:', error);
+          });
+          return;
+        }
+        if (shown.isMinimized()) shown.restore();
+        if (!hidden) shown.show();
+        shown.focus();
+      };
+      // Opening corrallm again while it runs (the single instance's lock) shows its window: the
+      // way back to one closed while the core kept working, on every platform.
+      app.on('second-instance', reopen);
+      // Windows and Linux: the last window closing quits, unless the core has work going on
+      // (a run running, a turn): then it runs on, and opening corrallm again shows it.
+      lastWindowClosed = () => {
+        if (quit.busy || quit.approved) return;
+        void ask('active').then(
+          (active) => {
+            if (BrowserWindow.getAllWindows().length > 0 || quit.busy || quit.approved) return;
+            if (!active) {
+              app.quit();
+              return;
+            }
+            console.error(
+              'corrallm: its agents are still working, so it runs on with no window: open corrallm again to show it, and quit it there.',
+            );
+          },
+          () => {
+            app.quit();
+          },
+        );
+      };
       app.on('browser-window-created', (_event, window) => {
         // macOS window close does not quit the app, but must save/freeze the run all the same.
         const close = new Closing({
-          save: () => persistWindows([window]),
+          save: async () => {
+            await flushDrafts([window]);
+            await saveRuns([window]);
+            await ask('flush');
+          },
           abandon: () => Promise.resolve(),
           ask: (why) =>
             // A window's earlier save can settle after the app has taken over shutdown. Its
@@ -346,7 +424,7 @@ function main(): void {
     });
 
   app.on('window-all-closed', () => {
-    if (process.platform !== 'darwin') app.quit();
+    if (process.platform !== 'darwin') lastWindowClosed();
   });
 }
 

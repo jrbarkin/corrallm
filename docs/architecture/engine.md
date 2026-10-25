@@ -28,6 +28,8 @@ A condition in the user's words is asked of it in its own session, yes or no ("c
 
 Stop pauses with a cancelled attempt; Resume holds it for a decision and Run again explicitly starts fresh.
 
+The whole run's stop and its decisions are stamped with their party (Core Server rule R9), in the run's state and its checkpoint: `Run.pausedBy` is the party that stopped a paused run (`RunStore.stop(by)`: whoever stopped it first, unless you stopped it since, yours over any other's; corrallm for a run quitting, a close or a restart paused, `pause()`, which keeps a stop already made), cleared as it resumes or starts afresh; `Run.decided` lists, once each, the parties that decided something the run held for them this run (`decide(…, by)`, `goOn(…, by)`, recorded only once the decision takes effect, so a stale one records nobody), forgotten as it starts afresh. A run restored from a checkpoint keeps both, and one that was going is paused as corrallm's. Neither is in any view (`runView`): the core's run controls read them (`src/main/core/run-control.ts`: a token resumes or starts afresh only what no other party stopped or decided in).
+
 A send's take-back, Kill and the composer's Stop all use the connection's interrupt behavior, including stopping commands started by the interrupted turn where its connection supports it.
 
 Stop (and Run again) takes back what the run sent that is still going (RunIO.send returns it: SessionStore.send's take-back, off the session's queue or interrupting its turn), and no longer hears those turns end.
@@ -42,7 +44,9 @@ A wait in a repeat for a step in another repeat waits for that round of it (#res
 
 A repeat that follows another holds at the end of each round until its leader goes round, and ends with it (#follow).
 
-Delays and limits are the run's own, on the real clock (RunIO.now, one alarm re-checked at least once a minute); Go on now (RunStore.goOn) ends a hold early.
+Delays and limits are the run's own, on the real clock (RunIO.now, one alarm re-checked at least once a minute); Go on now (RunStore.goOn) ends a hold early (a delay, a wait, or a usage rule's hold, for every agent on its backend until its window resets).
+
+Its host's shutdown barrier (B11 Design §16.5, the core's `prepareShutdown`) freezes it (`RunStore.freeze`): no task starts and nothing it sends goes, but a turn going on goes on and how it ends is kept, as a pause keeps it; `thaw` (a quit cancelled) sends what it held and goes on from there. A quit committed meanwhile pauses it as ever, holding only the turns that were going as uncertain. The barrier is its host's, never in its checkpoint.
 
 A task whose session would not start (an Agent SDK agent on a Claude subscription: its message stays in that session's queue, RunIO.send's `refused`) neither fails nor goes on: its agent asks the user (AgentRun.refused: the session's words, and Switch to Terminal, which RunIO.connect does), and works again once that agent runs another way (`update`), its session sending what it kept. run/asks.ts derives what each hold for the user asks (never stored), shown on its row, All queues' lane head, the Needs you sidebar and above the agent's composer (for a Terminal agent, in the bar under its terminal, with a box of its own for the reply); needs.ts derives everything that waits for the user once (`needsOf`: those holds, every session's open prompts, what Terminal CLIs ask, and the agents whose sessions won't start while messages wait for them, from delivery), for the sidebar and, worded as NeedsItems in the host's locale (`needs`), the core, each hold's and prompt's id carrying its generation (`holdGeneration`: a fingerprint of what the hold is, its changes asked and its agent's attempts, so a hold asked again is another; a prompt's, its session's generation, which the core's session manager gives: B11 C7); run/controls.ts says where an agent's or group's own Pause, Kill and Resume leave it.
 

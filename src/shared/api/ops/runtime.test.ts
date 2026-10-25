@@ -101,9 +101,13 @@ describe('prepared operation schemas, not registrations', () => {
     expect(def.output.parse({ revs: {} })).toEqual({ revs: {} });
   });
 
-  it('registers the C6 session services, run reader and typed reply, leaving other schemas prepared', () => {
+  it('registers the C6 session services, the run reader and controls and typed reply, leaving other schemas prepared', () => {
     const live = new Set([
       'run.get',
+      'run.start',
+      'run.stop',
+      'run.resume',
+      'run.goOn',
       'session.open',
       'session.setMode',
       'session.setModel',
@@ -141,6 +145,14 @@ describe('prepared operation schemas, not registrations', () => {
     expect(b11RunOps['run.goOn'].input.safeParse({ canvas, agent, item: 'delay' }).success).toBe(
       true,
     );
+    // The hold's time as the caller saw it, if it says: a time, never a word.
+    expect(
+      b11RunOps['run.goOn'].input.safeParse({ canvas, agent, item: 'delay', until: 1_000 }).success,
+    ).toBe(true);
+    for (const until of [-1, 'soon', Number.POSITIVE_INFINITY])
+      expect(
+        b11RunOps['run.goOn'].input.safeParse({ canvas, agent, item: 'delay', until }).success,
+      ).toBe(false);
     expect(def.output.safeParse({ proposed: 'proposal/one' }).success).toBe(true);
   });
 

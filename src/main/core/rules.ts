@@ -21,6 +21,7 @@ import { partyIdOf } from './caller';
 import type { TokenCaller } from './caller';
 import type { Engines } from './engines';
 import { nameOf, partyText, pausesText, RELEASES } from './parties';
+import { resumeUndoes, startUndoes, usageGoOn } from './run-control';
 
 /*
  * How the core checks the rules that narrow what a token may do (Core Server §3.6): each rule an
@@ -109,6 +110,12 @@ export function ruleChecks(
           ? undefined
           : { refuse: `Only the user may choose ${choice.label}: ${choice.humanOnly}` };
       },
+      // Go on past a usage rule's hold lets every agent on its backend go on: yours alone.
+      'run.goOn': ({ canvas, agent, item }) => {
+        const open = openOf(canvas);
+        const refusal = open && usageGoOn(open, agent, item);
+        return refusal === undefined ? undefined : { refuse: refusal };
+      },
     },
     // R1: only what you typed may run a shell command, and a body that starts with its recipient's
     // shell prefix would (src/shared/adapter.ts ConnectionDescriptor.shellPrefix).
@@ -176,6 +183,18 @@ export function ruleChecks(
             `${nameOf(nodes, id)} is held by your ${pauses} on its ${groups} ${names}: release ${them} with run.unpause on ${those}.` +
             (others.length === 0 ? '' : ` It is also ${othersText}`),
         };
+      },
+      // Nor resumes a run another party stopped (you, over any other), nor starts one afresh past
+      // another's stop, decisions or what it holds for you (run-control.ts).
+      'run.resume': ({ canvas }, { caller }) => {
+        const open = openOf(canvas);
+        const refusal = open && resumeUndoes(open, caller);
+        return refusal === undefined ? undefined : { refuse: refusal };
+      },
+      'run.start': ({ canvas }, { caller }) => {
+        const open = openOf(canvas);
+        const refusal = open && startUndoes(open, caller);
+        return refusal === undefined ? undefined : { refuse: refusal };
       },
     },
   };

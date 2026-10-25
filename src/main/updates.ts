@@ -115,7 +115,12 @@ export class AppUpdates {
     }
   }
 
-  /** Only main's approved quit calls this, after renderer acknowledgement, core flush and close. */
+  /** Whether the quit asked for is Restart to update's: the shutdown barrier's reason. */
+  get restarting(): boolean {
+    return this.#restart;
+  }
+
+  /** Only main's approved quit calls this, after the drafts, the shutdown barrier and close. */
   finishQuit(): boolean {
     if (this.#installing) return true;
     if (!this.#restart || !this.#downloaded) return false;

@@ -63,6 +63,7 @@ const api: AppApi = {
   ...ops,
   topicsOnChange: (listener) => core.onTopic(listener),
   topicsOnEpoch: (listener) => core.onEpoch(listener),
+  draftsOnFlush: (listener) => core.onDraftsFlush(listener),
   getRun: () => invoke(API_CHANNELS.getRun),
   saveRun: (token, checkpoint) => invoke(API_CHANNELS.saveRun, token, checkpoint),
   runReady: (requestId, error) => invoke(API_CHANNELS.runReady, requestId, error),
