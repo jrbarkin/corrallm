@@ -145,6 +145,9 @@ const RETRIES =
 const CUT_OFF: TurnResult = { status: 'cancelled', reason: 'connection-closed' };
 /** What a message taken back is said to have been. */
 const TAKEN_BACK: TurnResult = { status: 'cancelled', reason: 'taken-back' };
+/** What a withdrawal whose record can't reach the disk says. */
+const WITHDRAWAL_UNSAVED =
+  'The message is taken back now, but its withdrawal could not be saved and may not survive a restart.';
 /**
  * The most characters of a prompt's title, or an agent's name, a notice quotes, on one line and
  * cut at a word: a capped title, never a whole command (API Spec §5.8).
@@ -326,7 +329,9 @@ export class Delivery {
   /**
    * Takes back a message for `by`: one still waiting is withdrawn at once; one being delivered is
    * taken off its session's queue, or its turn interrupted, and is withdrawn once that ends.
-   * Throws, saying why, a message that can't be.
+   * Resolves once its withdrawal is on disk, so a restart never delivers it. Throws, saying why, a
+   * message that can't be taken back, and 'unavailable' one taken back whose withdrawal couldn't
+   * be written (withdrawn here all the same, it may not survive a restart).
    */
   async withdraw(id: string, by: PartyId): Promise<Withdrawal> {
     const message = this.#deps.store.get(id);
@@ -343,7 +348,7 @@ export class Delivery {
     if (message.state === 'pending') {
       this.#withdrawn(message, by);
       this.schedule();
-      return { reached: false, interrupted: false };
+      return this.#saved({ reached: false, interrupted: false });
     }
     if (message.kind !== 'text') {
       throw new DeliveryError(
@@ -360,8 +365,16 @@ export class Delivery {
         'Another party’s message can be taken back only while it waits; interrupt its turn instead.',
       );
     }
-    const result = await this.#takeBack(message, by, 'withdrawn');
-    if (result.reached) await this.#deps.store.durable();
+    return this.#saved(await this.#takeBack(message, by, 'withdrawn'));
+  }
+
+  /** What a withdrawal did, once it is on disk; 'unavailable' if it can't be written. */
+  async #saved(result: Withdrawal): Promise<Withdrawal> {
+    try {
+      await this.#deps.store.durable();
+    } catch {
+      throw new DeliveryError('unavailable', WITHDRAWAL_UNSAVED);
+    }
     return result;
   }
 
@@ -1224,7 +1237,7 @@ function holdKey(kind: HoldKind, agent: string, ...rest: string[]): string {
 
 /** Why a message couldn't be sent or taken back: a code, as an operation's failure carries it. */
 export class DeliveryError extends Error {
-  readonly code: 'not-found' | 'refused' | 'conflict';
+  readonly code: 'not-found' | 'refused' | 'conflict' | 'unavailable';
 
   constructor(code: DeliveryError['code'], sentence: string) {
     super(sentence);

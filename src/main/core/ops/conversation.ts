@@ -173,7 +173,10 @@ export function conversationOps(
   };
 }
 
-/** Throws what delivery refused as the op's failure, with its code; anything else as it is. */
+/**
+ * Throws what delivery refused, or couldn't save, as the op's failure, with its code; anything else
+ * as it is.
+ */
 function failed(error: unknown): never {
   if (error instanceof DeliveryError) throw new OpFailure(error.code, error.message);
   throw error;

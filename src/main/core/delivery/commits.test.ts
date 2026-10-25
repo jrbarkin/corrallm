@@ -291,6 +291,59 @@ it('commits a kill’s hold with the withdrawals it makes at once, or neither', 
   expect(onDisk(waiting.id)?.state).toBe('withdrawn');
 });
 
+it('returns from a withdrawal of a waiting message only once it is on disk', async () => {
+  const { engines } = await start(new FakeConnector({ adapter: 'codex' }));
+  const open = engines.canvas(CANVAS);
+  await ok('run.pause', { target: { agent: 'builder' } }, CALLERS.you);
+  const { id } = await ok<{ id: string }>('message', { to: 'builder', body: 'Deploy to prod' });
+  const release = await holdCommits();
+  let settled = false;
+  let seen: string | undefined;
+  const result = ok('withdraw', { id }).then((value) => {
+    settled = true;
+    seen = onDisk(id)?.state;
+    return value;
+  });
+  try {
+    await vi.waitFor(() => {
+      expect(open?.messages.get(id)?.state).toBe('withdrawn');
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(settled).toBe(false);
+  } finally {
+    release();
+  }
+  expect(await result).toEqual({ reached: false, interrupted: false, revs: {} });
+  // As it returned, the disk had it withdrawn: a restart never delivers it.
+  expect(seen).toBe('withdrawn');
+});
+
+it('says a withdrawal may not survive a restart when it can’t be written', async () => {
+  const { engines } = await start(new FakeConnector({ adapter: 'codex' }));
+  const open = engines.canvas(CANVAS);
+  await ok('run.pause', { target: { agent: 'builder' } }, CALLERS.you);
+  const { id } = await ok<{ id: string }>('message', { to: 'builder', body: 'Deploy to prod' });
+  const allow = refuseWrites(profile, 'message', 'The disk is full');
+  try {
+    expect(await core?.call('withdraw', { canvas: CANVAS, id }, OUTSIDE)).toEqual({
+      ok: false,
+      error: {
+        code: 'unavailable',
+        sentence:
+          'The message is taken back now, but its withdrawal could not be saved and may not survive a restart.',
+      },
+    });
+    // Taken back here all the same, it is still waiting on disk.
+    expect(open?.messages.get(id)?.state).toBe('withdrawn');
+    expect(onDisk(id)?.state).toBe('pending');
+  } finally {
+    allow();
+  }
+  // It lands with the next write.
+  await open?.messages.durable();
+  expect(onDisk(id)?.state).toBe('withdrawn');
+});
+
 it('commits a turn’s reply with what its end changed in the run, or neither', async () => {
   // Builder's turns go on until the test ends them.
   let host: SessionHost | undefined;
@@ -397,19 +450,30 @@ it('delivers the next message once one taken back while it was journaled is with
   const second = await ok<{ id: string }>('message', { to: 'builder', body: 'Second' }, other);
   // The first's delivering record is held on its way to disk, and taken back meanwhile.
   const release = await holdCommits('messages');
+  let settled = false;
+  let seen: string | undefined;
+  let withdrawing: Promise<unknown> | undefined;
   try {
     await ok('run.unpause', { target: { agent: 'builder' } }, CALLERS.you);
     await vi.waitFor(() => {
       expect(messages?.get(first.id)?.state).toBe('delivering');
     });
-    expect(await ok('withdraw', { id: first.id })).toEqual({
-      reached: false,
-      interrupted: false,
-      revs: {},
+    withdrawing = ok('withdraw', { id: first.id }).then((value) => {
+      settled = true;
+      seen = onDisk(first.id)?.state;
+      return value;
     });
+    await vi.waitFor(() => {
+      expect(messages?.get(first.id)?.state).toBe('withdrawn');
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    // Never sent, it is said to be withdrawn only once that is on disk.
+    expect(settled).toBe(false);
   } finally {
     release();
   }
+  expect(await withdrawing).toEqual({ reached: false, interrupted: false, revs: {} });
+  expect(seen).toBe('withdrawn');
   await vi.waitFor(() => {
     expect(messages?.get(second.id)?.state).toBe('replied');
   });
