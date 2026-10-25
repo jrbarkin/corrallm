@@ -77,9 +77,10 @@ function nativePresentation(canvas: CanvasId): SessionPresentation {
 }
 export const nativeQueries: SessionQueries = {
   installed: () => import('../api/client').then(({ api }) => api.catalogInstalled()),
-  options: (adapter) => fromMain(window.api.settingsOptions(adapter)),
-  files: (query) =>
-    import('../agent/completion').then(({ findProjectFiles }) => findProjectFiles(query)),
+  options: (adapter, agent) =>
+    fromMain(window.api.settingsOptions(adapter, ...(agent === undefined ? [] : [agent]))),
+  files: (query, agent) =>
+    import('../agent/completion').then(({ findProjectFiles }) => findProjectFiles(query, agent)),
   sessions: (agent) => fromMain(window.api.listSessions(agent)),
   resume: (agent, conversation) => fromMain(window.api.resumeSession(agent, conversation)),
   mcp: (agent) => fromMain(window.api.mcpServers(agent)),
@@ -225,8 +226,8 @@ export function sessionCommands(
     restart: () => {
       act(api.sessionRestart({ canvas, agent }));
     },
-    settingsOptions: (adapter: AdapterId) => queries.options(adapter),
-    findFiles: (query) => queries.files(query),
+    settingsOptions: (adapter: AdapterId) => queries.options(adapter, agent),
+    findFiles: (query) => queries.files(query, agent),
     pastSessions: () => queries.sessions(agent),
     resume: (conversation) => queries.resume(agent, conversation).then(() => undefined),
     previewRewind: (message) =>

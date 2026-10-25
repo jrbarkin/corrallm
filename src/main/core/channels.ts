@@ -51,11 +51,7 @@ export interface ChannelServices {
   admitManual?: () => void;
   sessions: Pick<
     SessionManager,
-<<<<<<< HEAD
-=======
     | 'availability'
-    | 'start'
->>>>>>> origin/main
     | 'send'
     | 'answer'
     | 'interrupt'
@@ -201,23 +197,10 @@ function createHandlers(services: ChannelServices): HandlerTable {
         return null;
       },
     },
-<<<<<<< HEAD
-=======
-    'session:rewind-preview': {
-      parseArgs: parseRewindPreviewArgs,
-      handler: async ({ window }, agentId, messageId) =>
-        sessions.previewRewind(await of(window), agentId, messageId),
-    },
-    'session:rewind': {
-      parseArgs: parseRewindArgs,
-      handler: async ({ window }, agentId, messageId, restore) =>
-        sessions.rewind(await of(window), agentId, messageId, restore),
-    },
     'session:availability': {
       parseArgs: parseAgentArgs,
       handler: async ({ window }, agent) => sessions.availability(await of(window), agent),
     },
->>>>>>> origin/main
     'session:options': {
       parseArgs: (args) => parseOptionsArgs(args, catalog),
       handler: async ({ window }, adapter, agent) =>

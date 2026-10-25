@@ -1,4 +1,4 @@
-import { cleanup, screen } from '@testing-library/react';
+import { act, cleanup, screen, waitFor } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 import { newCanvasId } from '../../shared/canvas';
 import type { CanvasDocument } from '../../shared/model/canvas';
@@ -104,3 +104,27 @@ it('answering the current run hold is one typed reply', async () => {
     answer: { choice: 'approve' },
   });
 });
+
+it.each(['menu', 'settings'] as const)(
+  'also gates the portaled %s during an epoch change, preserving the view',
+  async (panel) => {
+    const { canvas, container } = await setup();
+    const card = container.querySelector('.react-flow__node[data-id="a"]');
+    if (!card) throw new Error('Missing card');
+    await events.contextMenu(card);
+    if (panel === 'settings')
+      await events.click(screen.getByRole('menuitem', { name: 'Settings…' }));
+    const shown = screen.getByRole(panel === 'settings' ? 'dialog' : 'menu', {
+      name: panel === 'settings' ? 'Agent settings: Writer' : 'Writer controls',
+    });
+    expect(shown.closest('[inert]')).toBeNull();
+    act(() => {
+      canvas.core.epoch('restarted');
+    });
+    expect(shown.closest('[inert]')).not.toBeNull();
+    await waitFor(() => {
+      expect(shown.isConnected).toBe(true);
+      expect(shown.closest('[inert]')).toBeNull();
+    });
+  },
+);

@@ -42,13 +42,9 @@ function fakeServices() {
       ),
     },
     sessions: {
-<<<<<<< HEAD
-=======
       availability: vi
         .fn<ChannelServices['sessions']['availability']>()
         .mockResolvedValue({ ready: true }),
-      start: vi.fn<ChannelServices['sessions']['start']>().mockResolvedValue(undefined),
->>>>>>> origin/main
       send: vi.fn<ChannelServices['sessions']['send']>().mockResolvedValue(undefined),
       answer: vi.fn<ChannelServices['sessions']['answer']>().mockResolvedValue(undefined),
       interrupt: vi.fn<ChannelServices['sessions']['interrupt']>().mockResolvedValue(undefined),
@@ -246,6 +242,10 @@ describe('session:* handlers', () => {
     expect(services.sessions.settingsOptions).toHaveBeenCalledWith(CANVAS, 'codex');
     await invoke('session:options', ['claude-code'], sender);
     expect(services.sessions.settingsOptions).toHaveBeenLastCalledWith(CANVAS, 'claude-code');
+    await invoke('session:options', ['codex', 'a'], sender);
+    expect(services.sessions.settingsOptions).toHaveBeenLastCalledWith(CANVAS, 'codex', 'a');
+    expect(await invoke('session:availability', ['a'], sender)).toEqual({ ready: true });
+    expect(services.sessions.availability).toHaveBeenCalledExactlyOnceWith(CANVAS, 'a');
     // Which conversations it may open is main's to say (it listed them): the id goes on.
     await invoke('session:resume', ['a', '0b3a7d52-6a0c-4f39-9c4e-2f8f0c1d9e11'], sender);
     expect(services.sessions.resumeSession).toHaveBeenCalledWith(

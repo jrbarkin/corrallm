@@ -131,16 +131,9 @@ export interface InvokeApi {
   stopSessionTask(...args: IpcArgs<'session:stopTask'>): Promise<IpcResult<'session:stopTask'>>;
   listSessions(...args: IpcArgs<'session:list'>): Promise<IpcResult<'session:list'>>;
   resumeSession(...args: IpcArgs<'session:resume'>): Promise<IpcResult<'session:resume'>>;
-<<<<<<< HEAD
-=======
-  previewRewind(
-    ...args: IpcArgs<'session:rewind-preview'>
-  ): Promise<IpcResult<'session:rewind-preview'>>;
-  rewindSession(...args: IpcArgs<'session:rewind'>): Promise<IpcResult<'session:rewind'>>;
   sessionAvailability(
     ...args: IpcArgs<'session:availability'>
   ): Promise<IpcResult<'session:availability'>>;
->>>>>>> origin/main
   settingsOptions(...args: IpcArgs<'session:options'>): Promise<IpcResult<'session:options'>>;
   mcpServers(...args: IpcArgs<'session:mcp'>): Promise<IpcResult<'session:mcp'>>;
   changeMcpServer(...args: IpcArgs<'session:mcp-change'>): Promise<IpcResult<'session:mcp-change'>>;
@@ -148,11 +141,7 @@ export interface InvokeApi {
 
 /** A function per event: it listens for the event, and returns a function that stops listening. */
 export interface EventApi {
-<<<<<<< HEAD
-=======
   onSessionAvailability(listener: () => void): () => void;
-  onRunStopping(listener: (...args: IpcEventArgs<'run:stopping'>) => void): () => void;
->>>>>>> origin/main
   onSessionEvent(listener: (...args: IpcEventArgs<'session:event'>) => void): () => void;
 }
 
@@ -175,12 +164,7 @@ export const API_CHANNELS = {
   stopSessionTask: 'session:stopTask',
   listSessions: 'session:list',
   resumeSession: 'session:resume',
-<<<<<<< HEAD
-=======
-  previewRewind: 'session:rewind-preview',
-  rewindSession: 'session:rewind',
   sessionAvailability: 'session:availability',
->>>>>>> origin/main
   settingsOptions: 'session:options',
   mcpServers: 'session:mcp',
   changeMcpServer: 'session:mcp-change',

@@ -50,16 +50,9 @@ const api: AppApi = {
   stopSessionTask: (agentId, taskId) => invoke(API_CHANNELS.stopSessionTask, agentId, taskId),
   listSessions: (agentId) => invoke(API_CHANNELS.listSessions, agentId),
   resumeSession: (agentId, sessionId) => invoke(API_CHANNELS.resumeSession, agentId, sessionId),
-<<<<<<< HEAD
-  settingsOptions: (cli) => invoke(API_CHANNELS.settingsOptions, cli),
-=======
-  previewRewind: (agentId, messageId) => invoke(API_CHANNELS.previewRewind, agentId, messageId),
-  rewindSession: (agentId, messageId, restore) =>
-    invoke(API_CHANNELS.rewindSession, agentId, messageId, restore),
   sessionAvailability: (agent) => invoke(API_CHANNELS.sessionAvailability, agent),
   settingsOptions: (cli, agent) =>
     invoke(API_CHANNELS.settingsOptions, cli, ...(agent === undefined ? [] : [agent])),
->>>>>>> origin/main
   mcpServers: (agentId) => invoke(API_CHANNELS.mcpServers, agentId),
   changeMcpServer: (agentId, server, change) =>
     invoke(API_CHANNELS.changeMcpServer, agentId, server, change),

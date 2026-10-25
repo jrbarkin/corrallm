@@ -66,6 +66,7 @@ export function AgentSettingsSummary({
 
 /** Saved agent identity, connection, standing instructions and native startup settings. */
 export function AgentSettingsPanel({
+  inert = false,
   node,
   session,
   options,
@@ -77,6 +78,7 @@ export function AgentSettingsPanel({
   onFresh,
   onClose,
 }: {
+  inert?: boolean;
   node: AgentNode;
   session: Session;
   options: Options;
@@ -139,6 +141,7 @@ export function AgentSettingsPanel({
   return createPortal(
     <div
       className="agent-settings-backdrop"
+      inert={inert}
       onPointerDown={(event) => {
         if (event.target === event.currentTarget) onClose();
       }}

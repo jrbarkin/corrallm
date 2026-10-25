@@ -398,6 +398,10 @@ describe('preload', () => {
     expect(channel).toHaveBeenLastCalledWith('session:mcp', 'a');
     await api.settingsOptions('claude-code');
     expect(channel).toHaveBeenLastCalledWith('session:options', 'claude-code');
+    await api.settingsOptions('codex', 'a');
+    expect(channel).toHaveBeenLastCalledWith('session:options', 'codex', 'a');
+    await api.sessionAvailability('a');
+    expect(channel).toHaveBeenLastCalledWith('session:availability', 'a');
     await api.changeMcpServer('a', 'github', 'disable');
     expect(channel).toHaveBeenLastCalledWith('session:mcp-change', 'a', 'github', 'disable');
     await api.resumeSession('a', '0b3a7d52-6a0c-4f39-9c4e-2f8f0c1d9e11');

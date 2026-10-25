@@ -1,9 +1,31 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { newCanvasId } from '../../shared/canvas';
 import { fakeCore } from '../test-api';
-import { sessionCommands } from './sessions';
+import { nativeQueries, sessionCommands } from './sessions';
+import { findProjectFiles } from '../agent/completion';
+
+vi.mock('../agent/completion', () => ({ findProjectFiles: vi.fn().mockResolvedValue([]) }));
 
 afterEach(() => vi.unstubAllGlobals());
+
+it('keeps the foreground agent context through the transitional options and file queries', async () => {
+  const options = { models: [], defaults: { model: null, effort: null, mode: null } };
+  const settingsOptions = vi.fn().mockResolvedValue({ ok: true, value: options });
+  vi.stubGlobal('window', { api: { settingsOptions } });
+  const core = fakeCore();
+  try {
+    const controls = sessionCommands(core.api, newCanvasId(), 'member', core.topics, vi.fn());
+    await controls.settingsOptions('codex');
+    await controls.findFiles?.('src/');
+    expect(settingsOptions).toHaveBeenCalledExactlyOnceWith('codex', 'member');
+    expect(findProjectFiles).toHaveBeenCalledExactlyOnceWith('src/', 'member');
+    settingsOptions.mockClear();
+    await nativeQueries.options('codex');
+    expect(settingsOptions).toHaveBeenCalledExactlyOnceWith('codex');
+  } finally {
+    core.dispose();
+  }
+});
 
 it('keeps manual sends on the transitional fixed channel, including images, without a window message op', async () => {
   const sendToSession = vi.fn().mockResolvedValue(null);
