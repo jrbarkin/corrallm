@@ -3,7 +3,9 @@ import { groupMembers, isGroup } from '../../../shared/model/queries';
 import { OpFailure } from '../call';
 import { partyIdOf } from '../caller';
 import type { OpenCanvas } from '../engines';
-import { agentOf, openCanvas } from './open';
+import { runSeen } from './views';
+import { RunViewSchema } from '../../../shared/api/ops/b11-data';
+import { agentOf, openCanvas, reachFor } from './open';
 import type { Implementations, OpServices } from '.';
 
 /**
@@ -17,8 +19,22 @@ import type { Implementations, OpServices } from '.';
  */
 export function runOps({
   engines,
-}: OpServices): Pick<Implementations, 'run.pause' | 'run.kill' | 'run.unpause'> {
+  isLead,
+  runError,
+}: OpServices): Pick<Implementations, 'run.get' | 'run.pause' | 'run.kill' | 'run.unpause'> {
   return {
+    'run.get': ({ canvas }, ctx) => {
+      const open = openCanvas(engines, canvas);
+      return RunViewSchema.parse(
+        runSeen(
+          open,
+          ctx.caller,
+          reachFor('run.get', ctx),
+          ctx.caller.kind === 'agent' && isLead(open.document.id, ctx.caller.agent),
+          ctx.caller.kind === 'human' ? runError?.(open.document.id) : undefined,
+        ),
+      );
+    },
     'run.pause': async ({ canvas, target }, { caller }) => {
       const open = openCanvas(engines, canvas);
       const by = partyIdOf(caller);

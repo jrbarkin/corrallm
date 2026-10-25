@@ -6,6 +6,7 @@ import path from 'node:path';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { MAX_TOPIC_FRAME } from '../../shared/api/limits';
+import { SURFACE } from '../../shared/api/surface';
 import type { Party } from '../../shared/api/surface';
 import { RuntimeTopic, snapshotFrameFits, topicKey } from '../../shared/api/topics';
 import type {
@@ -26,8 +27,8 @@ import { Documents } from './canvas/documents';
 import { commitDocument } from './canvas/test-documents';
 import { createCore } from './core';
 import type { Core } from './core';
-import { asHuman, WindowPorts } from './gui';
-import { partsOf, RUN_GET, readerOf, TOPIC_BUDGET } from './runtime-topics';
+import { WindowPorts } from './gui';
+import { partsOf, readerOf, TOPIC_BUDGET } from './runtime-topics';
 import { keepCanvases } from './store/test-store';
 import { CALLERS, CANVAS, NO_DESKTOP, OTHER_CANVAS } from './test-registry';
 import { openWindow } from './test-window';
@@ -541,8 +542,8 @@ describe('T3c: the runtime topics', { timeout: 30_000 }, () => {
     );
   }
 
-  it('reads each topic under its reading op: run.get’s until B11 X9 registers it', () => {
-    expect(readerOf('run')).toEqual({ name: 'run.get', surface: RUN_GET });
+  it('reads each topic under its reading op: the registered run.get', () => {
+    expect(readerOf('run')).toEqual({ name: 'run.get', surface: SURFACE['run.get'] });
     expect(readerOf('sessions').name).toBe('session.get');
     expect(readerOf('session').name).toBe('session.transcript');
     expect(readerOf('messages').name).toBe('messages');
@@ -780,18 +781,17 @@ describe('runtime topics: long histories', () => {
       if (box.copy) box.copy.apply(batch);
       else box.early.push(batch);
     });
-    const ctx = {
-      caller: asHuman(7),
-      signal: new AbortController().signal,
-    } as unknown as OpContext;
     const topic = sessionOf('worker');
-    const begin = await core.topics.subscribe(
-      7,
-      RuntimeTopic.parse({ topic: 'session', canvas: CANVAS, agent: 'worker' }),
-      ctx,
-    );
+    const answer = await window.link.request('call', 'topics.subscribe', {
+      topic: 'session',
+      canvas: CANVAS,
+      agent: 'worker',
+      request: randomUUID(),
+    });
+    if (!answer.ok || !answer.value.ok) throw new Error(JSON.stringify(answer));
+    const begin = answer.value.value as RuntimeSnapshotFrame;
     expect('kind' in begin && begin.kind).toBe('begin');
-    const copy = new Copy(topic, CALLERS.you, begin as RuntimeSnapshotFrame);
+    const copy = new Copy(topic, CALLERS.you, begin);
     for (const batch of box.early) copy.apply(batch);
     box.copy = copy;
     await vi.waitFor(
@@ -1312,6 +1312,20 @@ describe('runtime topics: revisions and epochs', () => {
     await rm(folder, { recursive: true, force: true });
   });
 
+  it('returns publication receipts through a registered write, and none for its no-op', async () => {
+    folder = await keepWorld();
+    const core = await start(folder);
+    const args = { canvas: CANVAS, target: { agent: 'worker' } };
+    expect(await core.call('run.pause', args, CALLERS.you)).toMatchObject({
+      ok: true,
+      value: { revs: { [RUN]: 1, [`sessions:${CANVAS}`]: 1 } },
+    });
+    expect(await core.call('run.pause', args, CALLERS.you)).toEqual({
+      ok: true,
+      value: { revs: {} },
+    });
+  });
+
   it('moves a topic’s revision at each change whether or not anyone subscribes, and only at a change', async () => {
     folder = await keepWorld();
     const core = await start(folder);
@@ -1350,6 +1364,7 @@ describe('runtime topics: revisions and epochs', () => {
     const { snapshot, stop } = await core.topics.follow(CALLERS.you, `needs:${CANVAS}`, (changes) =>
       heard.push(...changes),
     );
+    if ('kind' in snapshot) throw new Error('This fixture fits one frame.');
     expect(snapshot.rev).toBe(0);
     const mark = core.topics.mark();
     const proposed = await core.call(

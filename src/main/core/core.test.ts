@@ -230,7 +230,8 @@ describe('createCore', () => {
     const window = openWindow(new WindowPorts(started), 7);
     const heard: unknown[] = [];
     window.link.on('topic', (batch) => {
-      for (const change of batch) if (change.topic === 'settings') heard.push(change.replace);
+      for (const change of batch)
+        if (change.topic === 'settings' && 'replace' in change) heard.push(change.replace);
     });
     try {
       await window.link.request('call', 'topics.subscribe', { topic: 'settings' });

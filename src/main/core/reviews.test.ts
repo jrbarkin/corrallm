@@ -8,7 +8,6 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { OpResult } from '../../shared/api/errors';
-import type { Change } from '../../shared/api/topics';
 import type { OpName } from '../../shared/api/surface';
 import type { CanvasId } from '../../shared/canvas';
 import type { NeedsItem } from '../../shared/model/needs';
@@ -319,7 +318,7 @@ describe('a file review', () => {
 
     expect(await answer(TEAM, review.id, 'keep')).toEqual({
       ok: true,
-      value: { outcome: 'kept', revs: {} },
+      value: { outcome: 'kept', revs: expect.any(Object) as Record<string, number> },
     });
     expect(rowOf(review.id)).toMatchObject({ outcome: 'kept', settled_by: 'you' });
     expect(await reviewsOf(TEAM)).toEqual([]);
@@ -388,7 +387,10 @@ describe('a file review', () => {
     ) as { rev: number };
     expect(result).toEqual({
       ok: true,
-      value: { outcome: 'applied', revs: { [`canvas:${TEAM}`]: rev } },
+      value: {
+        outcome: 'applied',
+        revs: expect.objectContaining({ [`canvas:${TEAM}`]: rev }) as Record<string, number>,
+      },
     });
     expect(await labelsOf(TEAM)).toEqual(['Lead', 'Worker', 'Tester']);
     // The run follows it.
@@ -428,7 +430,11 @@ describe('a file review', () => {
     const now = await reviewOf(TEAM);
     expect(result).toEqual({
       ok: true,
-      value: { outcome: 'superseded', raised: now.id, revs: {} },
+      value: {
+        outcome: 'superseded',
+        raised: now.id,
+        revs: expect.any(Object) as Record<string, number>,
+      },
     });
     expect(now.detail).toMatch(/^The file adds Builder\./);
     expect(rowOf(first.id)).toMatchObject({ outcome: 'superseded', settled_by: 'corrallm' });
@@ -502,17 +508,14 @@ describe('a file review', () => {
       ['you', YOU],
       ['token', TOKEN],
     ] as const) {
-      const { snapshot, stop } = await core.topics.follow(
-        caller,
-        `needs:${TEAM}`,
-        (batch: Change[]) => {
-          for (const change of batch) {
-            if ('replace' in change) {
-              latest.set(who, (change.replace as { items: NeedsItem[] }).items);
-            }
+      const { snapshot, stop } = await core.topics.follow(caller, `needs:${TEAM}`, (batch) => {
+        for (const change of batch) {
+          if ('replace' in change) {
+            latest.set(who, (change.replace as { items: NeedsItem[] }).items);
           }
-        },
-      );
+        }
+      });
+      if ('kind' in snapshot) throw new Error('This fixture fits one frame.');
       latest.set(who, (snapshot.state as { items: NeedsItem[] }).items);
       stops.push(stop);
     }
@@ -597,6 +600,7 @@ it('adopts the live document as the saved baseline and publishes clean meta on b
   let listEdited: boolean | undefined;
   const canvasFeed = await core.topics.follow(YOU, `canvas:${TEAM}`, (changes) => {
     for (const change of changes) {
+      if ('kind' in change) throw new Error('This fixture fits one frame.');
       const rows =
         'replace' in change
           ? (change.replace as Record<string, { edited: boolean }>)

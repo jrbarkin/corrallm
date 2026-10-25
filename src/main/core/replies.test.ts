@@ -232,7 +232,6 @@ async function start(
       app: { name: 'corrallm', version: '9.8.7' },
       check: true,
       distribution: 'local',
-      preparedOps: true,
       leads: (_canvas, agent) => agent === 'a',
       sessions: {
         connectors: {

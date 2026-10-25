@@ -48,6 +48,43 @@ function delta(change: DeltaInput): RuntimeChange {
 }
 
 describe('runtime topic mirrors', () => {
+  it('assembles canvas transfers too, keeping the previous complete snapshot until end', async () => {
+    const w = setup();
+    const topic = `canvas:${w.canvas}` as const;
+    const row = {
+      id: 'a',
+      kind: 'agent' as const,
+      place: 0,
+      label: 'Agent',
+      x: 0,
+      y: 0,
+      rev: 0,
+      by: 'you' as const,
+    };
+    const initial = { 'node/a': row };
+    const stop = w.mirror.subscribe(topic, () => undefined);
+    w.core.pending[0]?.resolve({ epoch: 'one', rev: 0, state: initial });
+    await tick();
+    const before = w.mirror.snapshot(topic);
+    const base = { epoch: 'one', topic, snapshot: 'transfer' };
+    w.core.send({ ...base, kind: 'begin', summary: {}, count: 1 });
+    w.core.send({
+      ...base,
+      kind: 'chunk',
+      index: 0,
+      entries: [
+        { key: 'node/a', value: row },
+        { key: 'node/b', value: { ...row, id: 'b', place: 1, rev: 1 } },
+      ],
+    });
+    expect(w.mirror.snapshot(topic)).toBe(before);
+    w.core.send({ ...base, kind: 'end', rev: 1 });
+    expect(w.mirror.snapshot(topic)?.['node/a']).toBe(before?.['node/a']);
+    expect(w.mirror.snapshot(topic)?.['node/b']).toMatchObject({ id: 'b' });
+    expect(w.mirror.revision(topic)).toBe(1);
+    stop();
+  });
+
   it('reads each structured subscription, waits for each revision and retains equal snapshot entities', async () => {
     const w = setup();
     const states = [w.run, w.sessions, w.session, w.messages];

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import type { Change, TopicKey, TopicSnapshot } from '../../shared/api/topics';
+import type { Change, TopicKey, RuntimeTopicKey, TopicSnapshot } from '../../shared/api/topics';
 import type { CanvasId } from '../../shared/canvas';
 import { topicKey } from '../../shared/api/topics';
 import type { MetaEntity, NodeEntity } from '../../shared/model/state';
@@ -16,7 +16,10 @@ const settings = {
 function source(connected = true) {
   let change: ((changes: Change[]) => void) | undefined;
   let epoch: ((epoch: string) => void) | undefined;
-  const pending: { topic: TopicKey; resolve: (snapshot: TopicSnapshot) => void }[] = [];
+  const pending: {
+    topic: TopicKey | RuntimeTopicKey;
+    resolve: (snapshot: TopicSnapshot) => void;
+  }[] = [];
   const api: TopicSource = {
     topicsSubscribe: vi.fn<TopicSource['topicsSubscribe']>(
       (request) =>

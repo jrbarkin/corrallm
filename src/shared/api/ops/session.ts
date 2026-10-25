@@ -228,7 +228,7 @@ const PastSession = z.strictObject({
   current: z.boolean(),
 });
 
-/** Prepared B11 schemas; no live transport/audience is widened until X9 registration. */
+/** B11 schemas: C6 lifecycle/settings/rewind operations are registered; conversation/options and MCP controls await their services. */
 export const b11SessionOps = {
   'session.open': define(
     { kind: 'command' },
