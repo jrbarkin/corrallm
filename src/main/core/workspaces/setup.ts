@@ -76,7 +76,7 @@ import type {
  * yet end a setup command's whole process tree, so no setup runs there (a release blocker): its
  * card says so and offers Skip.
  *
- * Nothing composes this yet (B9a X11b): `createCore` takes it as `CoreConfig.setups`, for tests.
+ * createCore composes this for every host; CoreConfig.setups is a test override.
  */
 
 /** A setup card's id: its workspace's, at its setup's generation. */
@@ -130,6 +130,9 @@ export interface SetupCall {
 
 /** What the setup service does for the core: what `needs`, `reply` and the op call. */
 export interface SetupService {
+  /** Provisioning completed: prepare its local files and offer setup. */
+  prepare?(workspace: string): Promise<void>;
+  reconcile?(canvas?: CanvasId): Promise<void>;
   /** The setup cards of a canvas's workspaces: yours alone, so on no agent. */
   items(canvas: CanvasId): NeedsItem[];
   reply(

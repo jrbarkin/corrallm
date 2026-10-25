@@ -91,8 +91,10 @@ export function parseAnswerArgs(args: unknown[]): IpcArgs<'session:answer'> {
 
 /** session:options: one of the adapters the catalog lists. */
 export function parseOptionsArgs(args: unknown[], catalog: Catalog): IpcArgs<'session:options'> {
-  const [adapter] = expect(args, 1, 'an adapter');
-  return [parseAdapter(adapter, catalog)];
+  if (args.length < 1 || args.length > 2)
+    throw new TypeError('Expected an adapter and optionally an agent.');
+  const adapter = parseAdapter(args[0], catalog);
+  return args.length === 1 ? [adapter] : [adapter, parseId(args[1], 'agent')];
 }
 
 /** For channels that take only the agent: session:interrupt, session:list and session:mcp. */

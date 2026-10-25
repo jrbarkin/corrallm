@@ -609,3 +609,6 @@ export const MAX_MCP_NAME_LENGTH = 200;
 export const MODEL_PATTERN = /^(?!-)[\w.:/@[\]-]{1,200}$/;
 /** What a reasoning effort's value may look like ('low', 'xhigh'). */
 export const EFFORT_PATTERN = /^[a-z][a-z0-9_-]{0,39}$/;
+
+/** New dispatch waits while its core-owned working directory is unavailable. No path crosses the view boundary. */
+export type SessionAvailability = { ready: true } | { ready: false; sentence: string };

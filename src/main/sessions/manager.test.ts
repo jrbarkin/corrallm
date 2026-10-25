@@ -44,6 +44,7 @@ let fake: FakeConnector;
 let terminal: FakeConnector;
 /** Each canvas's project folder, as project.ts would know it. */
 let projects: Map<CanvasId, string>;
+let workspaces: Map<string, WorkingDirectory>;
 /** What each canvas's windows heard: agent, connection and event. */
 let heard: Map<CanvasId, [string, ConnectionId, SessionEvent][]>;
 /** What each canvas's terminal views heard: agent and event. */
@@ -57,13 +58,22 @@ let before: Mock<Kept['before']>;
 let fork: Mock<Kept['fork']>;
 
 function directories() {
-  return new ProjectDirectories({
+  const legacy = new ProjectDirectories({
     of: (canvas) => {
       const folder = projects.get(canvas);
       return folder === undefined ? undefined : mintTrustedPath(folder);
     },
     onAvailability: () => () => undefined,
   });
+  return {
+    projectRoot: (canvas: CanvasId) => legacy.projectRoot(canvas),
+    onAvailability: (canvas: CanvasId, listener: () => void) =>
+      legacy.onAvailability(canvas, listener),
+    workingDirectory: (canvas: CanvasId, agent: string) =>
+      Promise.resolve(workspaces.get(agent)).then(
+        (found) => found ?? legacy.workingDirectory(canvas, agent as never),
+      ),
+  };
 }
 
 function manager(
@@ -124,6 +134,7 @@ beforeEach(async () => {
   fake = new FakeConnector();
   terminal = new FakeConnector();
   projects = new Map();
+  workspaces = new Map();
   adapters = new Map();
   heard = new Map();
   shown = new Map();
@@ -1389,4 +1400,78 @@ describe('SessionManager rewinding a session', () => {
     await expect(sessions.previewRewind(canvas, 'a', 'u1')).rejects.toThrow(/Esc twice/);
     await expect(sessions.rewind(canvas, 'a', 'u1', 'conversation')).rejects.toThrow(/Esc twice/);
   });
+});
+
+it('keeps native conversations in the active workspace, including late reports during a pending move', async () => {
+  const canvas = shownCanvas();
+  const tree = '11111111-1111-4111-8111-111111111111';
+  workspaces.set('a', {
+    state: 'ready',
+    cwd: mintTrustedPath('/work/tree-a'),
+    workspace: tree,
+    generation: 1,
+    branch: 'corrallm/a',
+  });
+  let host: SessionHost | undefined;
+  const sessions = manager({
+    'claude-code.sdk': {
+      start: (spec, one) => {
+        host = one;
+        return fake.start(spec, one);
+      },
+    },
+  });
+  try {
+    await sessions.start(canvas, 'a', OPTIONS);
+    await memory.flush();
+    expect(conversationsIn(await memory.get(canvas), tree)['claude-code']?.a?.id).toBe(fake.ids[0]);
+    expect(
+      conversationsIn(await memory.get(canvas), PROJECT_WORKSPACE)['claude-code']?.a,
+    ).toBeUndefined();
+    workspaces.set('a', { state: 'held', reason: 'pending-change', sentence: 'Switch first.' });
+    host?.remember(KEPT_TWO);
+    await memory.flush();
+    expect(conversationsIn(await memory.get(canvas), tree)['claude-code']?.a?.id).toBe(KEPT_TWO);
+    expect(sessions.running(canvas, 'a')).toBe(true);
+  } finally {
+    await sessions.closeEverything();
+  }
+});
+
+it('reads agent options in its verified workspace and refuses a held agent', async () => {
+  const canvas = shownCanvas();
+  const read = vi
+    .fn()
+    .mockResolvedValue({ models: [], defaults: { model: null, mode: null, effort: null } });
+  const sessions = manager({}, undefined, { 'claude-code': read });
+  workspaces.set('a', {
+    state: 'ready',
+    cwd: mintTrustedPath('/work/tree-a'),
+    workspace: '11111111-1111-4111-8111-111111111111',
+    generation: 1,
+    branch: 'corrallm/a',
+  });
+  await sessions.settingsOptions(canvas, 'claude-code', 'a');
+  expect(read).toHaveBeenCalledWith({ cwd: '/work/tree-a', env: { PATH: '/usr/bin' } });
+  workspaces.set('a', { state: 'held', reason: 'setup', sentence: 'Skip or run setup first.' });
+  await expect(sessions.settingsOptions(canvas, 'claude-code', 'a')).rejects.toThrow(
+    'Skip or run setup first.',
+  );
+});
+
+it('lists conversations from the agent’s verified workspace and never lists while held', async () => {
+  const canvas = shownCanvas();
+  workspaces.set('a', {
+    state: 'ready',
+    cwd: mintTrustedPath('/work/tree-a'),
+    workspace: '11111111-1111-4111-8111-111111111111',
+    generation: 1,
+    branch: 'corrallm/a',
+  });
+  const sessions = manager();
+  await sessions.listSessions(canvas, 'a', CALLER);
+  expect(listKept).toHaveBeenCalledExactlyOnceWith('/work/tree-a', { PATH: '/usr/bin' });
+  workspaces.set('a', { state: 'held', reason: 'pending-change', sentence: 'Switch first.' });
+  await expect(sessions.listSessions(canvas, 'a', CALLER)).rejects.toThrow('Switch first.');
+  expect(listKept).toHaveBeenCalledTimes(1);
 });

@@ -63,4 +63,8 @@ What both local servers (MCP, hooks) check before the token: their own Host, no 
 
 Runtime topic subscriptions are window-only through topics.subscribe (D5), including run, sessions, per-agent transcripts and messages. Core projections reuse SURFACE readers; registering typed reply opens no answer path outside ReplyRouter and its by/self/generation checks. session.setMode and session.continueIn are human-only permission deviations (D9).
 
+<<<<<<< HEAD
 The X12 transitional manual-session bridge is limited to a trusted window’s shown canvas. Send’s authorship is fixed to you, never its message’s from/origin/task; unqueue checks both sender and recipient. Accepted messages are in the core mailbox on disk before the bridge resolves. Record stores a view-handled command without starting a CLI turn. All three refuse writes under the existing shutdown barrier. They expose no token route, path, command line, generic invoke or new window operation; X13 removes them.
+=======
+Workspace services are composed for every host. Every agent start, contextual options/history read and file search rechecks its checkout through Provisioner and `verifiedCheckout`; only a non-Git discovery permits the legacy directory. Reveal excludes foreign or unverified workspaces even though they are physically inside the picked root. A desired rebind holds new dispatch without replacing the active binding, native claim or event source; only Switch transfers it. Conversation writes from an old session stay in its captured active workspace namespace.
+>>>>>>> origin/main

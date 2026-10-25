@@ -1397,8 +1397,80 @@ function Editor({
             onShowQueues={() => {
               setQueues({ from: openedNode.id });
             }}
+<<<<<<< HEAD
             session={frontSession}
             controls={frontControls}
+=======
+            session={sessions[openedNode.id] ?? NEW_SESSION}
+            controls={{
+              recordSubmission: (text, images) => {
+                sessionStore.recordSubmission(openedNode.id, text, images);
+              },
+              open: () => {
+                sessionStore.open(openedNode.id);
+              },
+              send: (text, images) => {
+                sessionStore.send(
+                  openedNode.id,
+                  openedNode.data.adapter ?? DEFAULT_AGENT,
+                  text,
+                  undefined,
+                  images,
+                );
+              },
+              findFiles: (query) => sessionStore.findFiles(query, openedNode.id),
+              pastSessions: () => sessionStore.pastSessions(openedNode.id),
+              resume: (sessionId) => sessionStore.resume(openedNode.id, sessionId),
+              previewRewind: (messageId) => sessionStore.previewRewind(openedNode.id, messageId),
+              rewind: (messageId, restore) =>
+                sessionStore.rewind(openedNode.id, messageId, restore),
+              mcpServers: () => sessionStore.mcpServers(openedNode.id),
+              changeMcpServer: (server, change) =>
+                sessionStore.changeMcpServer(openedNode.id, server, change),
+              answerElicitation: (promptId, action, values) => {
+                sessionStore.answerElicitation(openedNode.id, promptId, action, values);
+              },
+              answer: (permissionId, answer, feedback) => {
+                sessionStore.answer(openedNode.id, permissionId, answer, feedback);
+              },
+              answerQuestion: (promptId, index, answer) => {
+                sessionStore.answerQuestion(openedNode.id, promptId, index, answer);
+              },
+              answerPlan: (promptId, answer) => {
+                sessionStore.answerPlan(openedNode.id, promptId, answer);
+              },
+              stop: () => {
+                sessionStore.stop(openedNode.id);
+              },
+              unqueue: (queuedId) => {
+                sessionStore.unqueue(openedNode.id, queuedId);
+              },
+              // What the composer chooses for a connected agent is what it is set to run with in
+              // its CLI (saved with it), as well as what its session switches to; a mode that
+              // never asks only for the session, never saved.
+              setMode: (mode) => {
+                sessionStore.setMode(openedNode.id, mode);
+                updateSettings(openedNode.id, {
+                  mode: UNASKING_MODES.includes(mode) ? null : mode,
+                });
+              },
+              setModel: (model) => {
+                sessionStore.setModel(openedNode.id, model);
+                updateSettings(openedNode.id, { model });
+              },
+              setEffort: (effort) => {
+                sessionStore.setEffort(openedNode.id, effort);
+                updateSettings(openedNode.id, { effort });
+              },
+              settingsOptions: (adapter) => sessionStore.settingsOptions(adapter, openedNode.id),
+              restart: () => {
+                void sessionStore.restart(openedNode.id);
+              },
+              stopTask: (taskId) => {
+                sessionStore.stopTask(openedNode.id, taskId);
+              },
+            }}
+>>>>>>> origin/main
             onClose={closeOpened}
           />
         )}
@@ -1433,7 +1505,11 @@ function Editor({
             }}
             onAgentContextMenu={showAgentMenu}
             onOpenSettings={setSettingsAgent}
+<<<<<<< HEAD
             settingsOptions={(adapter) => sessionQueries.options(adapter)}
+=======
+            settingsOptions={(adapter, agent) => sessionStore.settingsOptions(adapter, agent)}
+>>>>>>> origin/main
             {...(queues.from === undefined ? {} : { focus: queues.from })}
             backLabel={queues.from === undefined ? 'Canvas' : nameOf(queues.from)}
             onOpenAgent={(id) => {
@@ -1567,7 +1643,11 @@ function Editor({
             key={`settings:${settingsNode.id}`}
             node={settingsNode}
             session={sessions[settingsNode.id] ?? NEW_SESSION}
+<<<<<<< HEAD
             options={(adapter) => sessionQueries.options(adapter)}
+=======
+            options={(adapter) => sessionStore.settingsOptions(adapter, settingsNode.id)}
+>>>>>>> origin/main
             onRename={(name) => {
               perform(api.canvasRename({ canvas: canvasId, node: settingsNode.id, label: name }));
             }}

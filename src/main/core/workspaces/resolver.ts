@@ -28,14 +28,14 @@ export interface WorkingDirectoryResolver {
   onAvailability(canvas: CanvasId, listener: () => void): () => void;
 }
 
-/** Canvas-wide searches, options and reveal name no agent: they use the picked project root. */
+/** Base reads without an agent, host admission and root comparison use the picked project. */
 export interface ProjectRootResolver {
   projectRoot(canvas: CanvasId): TrustedPath | undefined;
 }
 
 export type DirectoryResolver = WorkingDirectoryResolver & ProjectRootResolver;
 
-/** Until provisioning is composed, every agent runs in the picked folder itself. */
+/** A non-repository (and isolated tests) shares the picked folder. */
 export class ProjectDirectories implements DirectoryResolver {
   readonly #projects: Pick<ProjectFolders, 'of' | 'onAvailability'>;
 
@@ -44,7 +44,7 @@ export class ProjectDirectories implements DirectoryResolver {
   }
 
   workingDirectory(...[canvas]: [canvas: CanvasId, agent: AgentId]): Promise<WorkingDirectory> {
-    // The legacy folder is shared by every agent; C5 supplies the per-agent binding.
+    // The legacy folder is shared by every agent; WorkspaceDirectories supplies repository bindings.
     const cwd = this.#projects.of(canvas);
     return Promise.resolve(
       cwd === undefined

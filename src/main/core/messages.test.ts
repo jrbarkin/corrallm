@@ -1,3 +1,4 @@
+import { legacyDirectories } from './workspaces/test-directories';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -234,6 +235,7 @@ async function start(
       app: { name: 'corrallm', version: '9.8.7' },
       check: true,
       distribution: 'local',
+      directoryResolver: legacyDirectories,
       locale: 'en-GB',
       ...(watchdog === undefined ? {} : { watchdog }),
       ...(watchdogNetwork === undefined ? {} : { watchdogNetwork }),

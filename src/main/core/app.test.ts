@@ -1,3 +1,4 @@
+import { legacyDirectories } from './workspaces/test-directories';
 import type { OpResult } from '../../shared/api/errors';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -75,6 +76,7 @@ async function app(
       app: { name: 'corrallm', version: '1.2.3' },
       check: true,
       distribution: 'local',
+      directoryResolver: legacyDirectories,
       locale: 'en-US',
       fakeSessions: true,
       ...(sessions === undefined ? {} : { sessions }),

@@ -1,3 +1,4 @@
+import { legacyDirectories } from './workspaces/test-directories';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -404,6 +405,7 @@ export async function startWorld(): Promise<{
       app: { name: 'corrallm', version: '1.0.0' },
       check: true,
       distribution: 'local',
+      directoryResolver: legacyDirectories,
       leads: isLead,
       // Each call a second after the last: no token's writes are limited here.
       limitsClock: () => (clock += 1000),
@@ -418,7 +420,7 @@ export async function startWorld(): Promise<{
         },
         environment: () => Promise.resolve({}),
       },
-      // The worktrees' setup, as B9a X11b is to compose it: nothing provisions a worktree here.
+      // Isolated setup fixtures: directory resolution is faked, and nothing allocates a tree here.
       setups: ({ store, processes, directories, profile: at, changed }) => {
         const workspaces = new WorkspaceStore({ store });
         const runner = new GitRunner({
@@ -584,6 +586,7 @@ export const REAL_FIXTURES: Readonly<Record<OpName, OpFixture>> = {
   'project.files': {
     valid: [
       { canvas: CANVAS, query: 'ipc' },
+      { canvas: CANVAS, agent: 'helper', query: 'ipc' },
       { query: '' },
       { query: 'x'.repeat(MAX_FILE_QUERY_LENGTH) },
     ],

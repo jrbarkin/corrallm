@@ -18,6 +18,7 @@ import type { Core } from './core';
 import { STORE_FILE } from './store/open';
 import { journaledRun, keepCanvases, refuseWrites } from './store/test-store';
 import { CALLERS, NO_DESKTOP } from './test-registry';
+import { legacyDirectories } from './workspaces/test-directories';
 
 /*
  * The whole run's controls as the core serves them (B11 Design §6, Core Server §4 F): run.start
@@ -85,6 +86,7 @@ async function start(codex: Connector<SessionMode>, at = profile): Promise<Core>
       app: { name: 'corrallm', version: '9.8.7' },
       check: true,
       distribution: 'local',
+      directoryResolver: legacyDirectories,
       sessions: {
         connectors: { 'codex.app-server': codex },
         environment: () => Promise.resolve({}),

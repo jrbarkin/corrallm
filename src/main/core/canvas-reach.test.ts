@@ -1,3 +1,4 @@
+import { legacyDirectories } from './workspaces/test-directories';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -65,6 +66,7 @@ async function world() {
       check: true,
       app: { name: 'probe', version: '1' },
       distribution: 'local',
+      directoryResolver: legacyDirectories,
       leads: (_canvas, agent) => agent === 'lead',
       store: {
         ...SYSTEM_DEPS,

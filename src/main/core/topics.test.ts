@@ -1,3 +1,4 @@
+import { legacyDirectories } from './workspaces/test-directories';
 import { randomUUID } from 'node:crypto';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -52,6 +53,7 @@ describe('T3c: usage and settings topics', () => {
         app: { name: 'corrallm', version: '1' },
         check: true,
         distribution: 'local',
+        directoryResolver: legacyDirectories,
         sessions: { connectors: {}, environment: () => Promise.resolve({}) },
       },
       NO_DESKTOP,
@@ -158,6 +160,7 @@ describe('T3c: usage and settings topics', () => {
         app: { name: 'corrallm', version: '1' },
         check: true,
         distribution: 'local',
+        directoryResolver: legacyDirectories,
         sessions: { connectors: {}, environment: () => Promise.resolve({}) },
       },
       NO_DESKTOP,
