@@ -411,9 +411,15 @@ export class RunStore {
         };
       } else agents[id] = at;
     }
+    const paused = resumable(agents, causes);
+    // A stop's party stays its own; a run that was going is paused as the restart pauses it.
+    const stopped = saved.run.paused === true && !saved.run.running;
     this.#run = {
       running: false,
-      ...(resumable(agents, causes) ? { paused: true } : {}),
+      ...(paused
+        ? { paused, pausedBy: stopped ? (saved.run.pausedBy ?? 'corrallm') : 'corrallm' }
+        : {}),
+      ...(saved.run.decided?.length ? { decided: saved.run.decided } : {}),
       agents,
       ...(causes.recorded
         ? { individualPauses: causes.individual, groupPauses: causes.groups }
@@ -441,36 +447,52 @@ export class RunStore {
 
   /**
    * Stops where the queues are: no task goes on, and none starts. What the run sent to sessions
-   * is taken back (off their queues, or their turns interrupted).
+   * is taken back (off their queues, or their turns interrupted). Stamped with the party `by` (you,
+   * unless said) that stopped it: see Run.pausedBy.
    */
-  stop(): void {
+  stop(by: PartyId = 'you'): void {
     this.#interrupt(
       'cancelled',
       'The run was stopped. Inspect the session before retrying this task.',
     );
     this.#cancel();
-    this.#halt();
+    this.#halt(by);
   }
 
-  /** Quitting/reloading holds in-flight work as unresolved, never as an automatic retry. */
+  /**
+   * Quitting/reloading holds in-flight work as unresolved, never as an automatic retry: corrallm's
+   * pause, unless a party had stopped the run already.
+   */
   pause(): void {
     this.#interrupt(
       'uncertain',
       'The session was interrupted. Inspect its native conversation before resolving or retrying.',
     );
     this.#cancel();
-    this.#halt();
+    this.#halt('corrallm');
   }
 
-  /** The run goes no further: paused, if it holds anything to resume (as a restored run is). */
-  #halt(): void {
-    const paused = resumable(this.#run.agents, this.#pauseCauses());
-    this.#set({ ...this.#run, running: false, ...(paused ? { paused } : {}) });
+  /**
+   * The run goes no further: paused, if it holds anything to resume (as a restored run is), by
+   * `by`; one paused already stays its earlier stop's, unless you stop it now.
+   */
+  #halt(by: PartyId): void {
+    const was = this.#run;
+    const paused = resumable(was.agents, this.#pauseCauses());
+    const earlier = was.paused === true && !was.running ? (was.pausedBy ?? 'corrallm') : undefined;
+    const next: Run = { ...was, running: false };
+    if (paused) {
+      next.paused = paused;
+      next.pausedBy = earlier === undefined || by === 'you' ? by : earlier;
+    } else delete next.pausedBy;
+    this.#set(next);
   }
 
   resume(): void {
     if (!this.#run.paused || this.#run.running) return;
-    this.#run = { ...this.#run, running: true, paused: false };
+    const next: Run = { ...this.#run, running: true, paused: false };
+    delete next.pausedBy;
+    this.#run = next;
     for (const pending of this.#sent.values()) pending.dispatch();
     this.#settle(true);
   }
@@ -696,9 +718,16 @@ export class RunStore {
   /**
    * Ends now the hold an agent is at (Go on now): a delay, as if its time had come; a wait, as if
    * its time limit had passed. Only while the run holds that agent at that item (`item`), so a
-   * click meant for one hold never ends the next.
+   * click meant for one hold never ends the next. The party `by` (you, unless said) is recorded as
+   * having decided in this run once it takes effect (Run.decided).
    */
-  goOn(agent: string, item: string): void {
+  goOn(agent: string, item: string, by: PartyId = 'you'): void {
+    this.#deciding(by, () => {
+      this.#goOn(agent, item);
+    });
+  }
+
+  #goOn(agent: string, item: string): void {
     const at = this.#run.agents[agent];
     if (!this.#run.running || at?.paused || at?.status !== 'waiting' || at.current !== item) return;
     if (at.usage) {
@@ -726,9 +755,30 @@ export class RunStore {
    * for), then runs one more round. Where its task's session would not start: `{ choice: 'switch' }`
    * switches that session's agent to the connection it offered (RunIO.connect). Only while the
    * run holds that agent at that item for the user, so a second click, a stale card or an answer
-   * after Stop does nothing.
+   * after Stop does nothing. The party `by` (you, unless said) is recorded as having decided in
+   * this run once its answer takes effect (Run.decided).
    */
-  decide(agent: string, item: string, answer: Answer): void {
+  decide(agent: string, item: string, answer: Answer, by: PartyId = 'you'): void {
+    this.#deciding(by, () => {
+      this.#decide(agent, item, answer);
+    });
+  }
+
+  /**
+   * Makes a decision of party `by`'s: the run it leaves records `by` among those who decided in
+   * it, and one that changes nothing leaves the run as it was, recording nobody.
+   */
+  #deciding(by: PartyId, decide: () => void): void {
+    const was = this.#run;
+    const decided = was.decided ?? [];
+    if (!decided.includes(by)) this.#run = { ...was, decided: [...decided, by] };
+    const marked = this.#run;
+    decide();
+    // Nothing it did published the mark: the run is as it was.
+    if (this.#run === marked) this.#run = was;
+  }
+
+  #decide(agent: string, item: string, answer: Answer): void {
     const at = this.#run.agents[agent];
     if (!this.#run.running || at?.paused || at?.status !== 'asking' || at.current !== item) return;
     if (at.refused) {
