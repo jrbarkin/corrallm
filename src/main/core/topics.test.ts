@@ -75,6 +75,20 @@ describe('T3c: usage and settings topics', () => {
     return { ...window, changes, epochs };
   }
 
+  it('subscribes to global topics with several open canvases without inferring a canvas', async () => {
+    await core.call('canvas.create', {}, CALLERS.you);
+    await core.call('canvas.create', {}, CALLERS.you);
+    const served = new WindowPorts(core);
+    const window = connect(served, 7);
+    for (const topic of ['usage', 'settings', 'canvases'] as const) {
+      const answer = await window.link.request('call', 'topics.subscribe', { topic });
+      expect(answer).toMatchObject({ ok: true, value: { ok: true } });
+      expect(await window.link.request('call', 'topics.unsubscribe', { topic })).toMatchObject({
+        ok: true, value: { ok: true },
+      });
+    }
+  });
+
   it.each(['usage', 'settings'] as const)(
     'serves %s’s read, pushes changes to subscribers, and stops on unsubscribe',
     async (topic) => {

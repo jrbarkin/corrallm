@@ -680,7 +680,7 @@ export function createDispatcher(registry: Registry, options: DispatchOptions = 
         if (admitted === 'waits') throw new OpFailure('refused', TOO_MANY_WAITS);
         release = admitted;
       }
-      const args = parse(def, withCanvas(def, raw, caller, openCanvases, holds));
+      const args = parse(def, withCanvas(name, def, raw, caller, openCanvases, holds));
       // A caller's own repeated request is answered before reach is resolved: what its first call
       // did (a delete) may have put what it names out of reach. One that runs is checked first.
       const run = async (): Promise<Attempt> => {
@@ -834,12 +834,19 @@ export function drainsOf(
  * for in its reach (which, with no canvas, would find none, as if the agent it named weren't there).
  */
 function withCanvas(
+  name: string,
   def: OpDef,
   raw: unknown,
   caller: Caller,
   openCanvases: () => readonly CanvasId[],
   holds: (canvas: CanvasId, ref: IdRef, caller: Caller) => boolean,
 ): unknown {
+  // Global topics share the subscription envelope with canvas topics, but name no canvas.
+  if (
+    (name === 'topics.subscribe' || name === 'topics.unsubscribe') &&
+    typeof raw === 'object' && raw !== null && 'topic' in raw &&
+    (raw.topic === 'usage' || raw.topic === 'settings' || raw.topic === 'canvases')
+  ) return raw;
   const shape = (def.input as { shape?: Record<string, unknown> }).shape;
   const given = raw === undefined ? {} : raw;
   if (

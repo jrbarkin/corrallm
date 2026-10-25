@@ -202,8 +202,8 @@ function Editor({
   const [notice, setNotice] = useState<readonly string[]>();
   /** Why the last open or save failed. */
   const [problem, setProblem] = useState<string>();
-  /** How many canvases have been loaded: the view fits each one, once React Flow has its nodes. */
-  const [loads, setLoads] = useState(0);
+  /** Fit each new binding once, including startup; reconnect preserves the same viewport. */
+  const fittedCanvas = useRef<CanvasId | undefined>(undefined);
   /** Every backend's usage reading and rule (main's: one per backend, for every canvas). */
   const usageStore = useRef<UsageStore | undefined>(undefined);
   const usage = useSyncExternalStore(
@@ -575,9 +575,11 @@ function Editor({
   }, []);
 
   useEffect(() => {
-    // React Flow holds the new nodes by now (its effects run first); it fits once they are measured.
-    if (loads > 0) void fitView({ padding: 0.2, maxZoom: 1 });
-  }, [loads, fitView]);
+    if (!ready || fittedCanvas.current === canvasId) return;
+    fittedCanvas.current = canvasId;
+    // Mark an empty binding too: its first newly added node must stay at the pointer.
+    if (model.nodes.length > 0) void fitView({ padding: 0.2, maxZoom: 1 });
+  }, [ready, canvasId, model.nodes.length, fitView]);
   /** The group a template was last inserted as: the view moves to show it. */
   const [inserted, setInserted] = useState<string>();
   useEffect(() => {
@@ -604,7 +606,6 @@ function Editor({
       setProblem(undefined);
       setNotice(undefined);
       await binding.ready();
-      if (binding.required().document.nodes.length > 0) setLoads((n) => n + 1);
     },
     [binding, clearSelection],
   );
@@ -961,7 +962,7 @@ function Editor({
         }}
       >
         {run.notices.map((notice) => (
-          <p key={notice.id} role="status" className="graph-panel">
+          <p key={notice.id} role={notice.level === 'info' ? 'status' : 'alert'} className="graph-panel">
             {notice.text}
           </p>
         ))}
