@@ -1,6 +1,5 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
-import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { startApiServer } from '../../api/mcp';
@@ -37,7 +36,7 @@ beforeEach(async () => {
   await client.connect(
     new StreamableHTTPClientTransport(new URL(server.url), {
       requestInit: { headers: { Authorization: 'Bearer write-token' } },
-    }) as Transport,
+    }),
   );
   await client.listTools();
 });

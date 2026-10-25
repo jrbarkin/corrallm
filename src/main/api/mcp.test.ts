@@ -5,7 +5,6 @@ import path from 'node:path';
 
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
-import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import { afterEach, beforeEach, describe, expect, expectTypeOf, it } from 'vitest';
 import { z } from 'zod';
 
@@ -72,7 +71,7 @@ async function connect(token = 'write-token', url = server.url) {
   const transport = new StreamableHTTPClientTransport(new URL(url), {
     requestInit: { headers: { Authorization: `Bearer ${token}` } },
   });
-  await client.connect(transport as Transport);
+  await client.connect(transport);
   expect(transport.sessionId).toBeUndefined();
   return client;
 }

@@ -1,6 +1,7 @@
 import { cpSync, mkdirSync, writeFileSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { createRequire } from 'node:module';
+import type * as nodeModule from 'node:module';
 import type * as os from 'node:os';
 import path from 'node:path';
 
@@ -15,6 +16,21 @@ vi.mock('node:os', async (original) => ({
   tmpdir: () => directory.root,
 }));
 vi.mock('node:child_process', () => ({ execFileSync }));
+// createRequire bypasses vi.mock('electron'). Never load Electron's real entry, which downloads
+// a binary when this patch version has not been installed in the developer's cache yet.
+vi.mock('node:module', async (original) => {
+  const actual = await original<typeof nodeModule>();
+  return {
+    createRequire(...args: Parameters<typeof actual.createRequire>) {
+      const load = actual.createRequire(...args);
+      return Object.assign(
+        (id: string): unknown =>
+          id === 'electron' ? '/stand-in/Electron.app/Contents/MacOS/Electron' : load(id),
+        load,
+      );
+    },
+  };
+});
 
 const { version } = createRequire(import.meta.url)('electron/package.json') as { version: string };
 const REQUIRED = [
