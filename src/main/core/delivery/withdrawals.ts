@@ -24,19 +24,25 @@ export class WithdrawalNotes {
   /**
    * Sends the next CLI message with any withdrawals still untold. Done at the backend, after
    * the session's queue, so manual and run messages, and messages already queued, carry them too.
+   * False if it never went: a command whose turn was stopped (`stopped`: a Stop, Kill or take-back
+   * since it was sent) before its own note's turn ended, so the CLI is never sent it.
    */
   async send(
     agent: string,
     message: UserMessage,
     send: (message: UserMessage) => Promise<void>,
-  ): Promise<void> {
+    stopped: () => boolean = () => false,
+  ): Promise<boolean> {
     const sendOpen = (next: UserMessage) => {
       if (this.#closed) throw new Error('The canvas closed before its message could be sent.');
       return send(next);
     };
     const claimed = new Set([...this.#carrying.values()].flatMap(({ ids }) => ids));
     const notes = this.#store.withdrawals(`agent:${agent}`).filter(({ id }) => !claimed.has(id));
-    if (notes.length === 0) return sendOpen(message);
+    if (notes.length === 0) {
+      await sendOpen(message);
+      return true;
+    }
     const text = notes.map(({ text }) => text).join('\n');
     const command =
       message.from === undefined &&
@@ -53,12 +59,19 @@ export class WithdrawalNotes {
     try {
       await this.#store.durable();
       if (command) {
-        await sendOpen({
-          id,
-          text: `[corrallm] ${text}`,
-          from: { party: 'corrallm', name: 'corrallm' },
-        });
-        await finished;
+        if (!stopped()) {
+          await sendOpen({
+            id,
+            text: `[corrallm] ${text}`,
+            from: { party: 'corrallm', name: 'corrallm' },
+          });
+          await finished;
+        }
+        // Stopping its note's turn stops the command's: never sent, the note told only if echoed.
+        if (stopped()) {
+          this.#carrying.delete(id);
+          return false;
+        }
         await sendOpen(message);
       } else {
         // Keep a party's header and its note in the same frame; the original body stays last.
@@ -74,6 +87,7 @@ export class WithdrawalNotes {
               : `${message.text.slice(0, split)}\n${text}\n\n${message.text.slice(split + 1)}`,
         });
       }
+      return true;
     } catch (error) {
       this.#carrying.delete(id);
       throw error;

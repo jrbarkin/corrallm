@@ -77,13 +77,17 @@ export interface SessionManagerDeps {
   directories: DirectoryResolver;
   /** Where each canvas's agents' conversations are remembered. */
   memory: CanvasMemory;
-  /** Sends at the CLI boundary, with any core-owned additions, whichever caller sent it. */
+  /**
+   * Sends at the CLI boundary, with any core-owned additions, whichever caller sent it. False if it
+   * never went (`stopped`: the agent's session was interrupted since): its turn then ends taken back.
+   */
   sending?: (
     canvas: CanvasId,
     agentId: string,
     message: UserMessage,
     send: (message: UserMessage) => Promise<void>,
-  ) => Promise<void>;
+    stopped: () => boolean,
+  ) => Promise<boolean>;
   /**
    * What an agent of each adapter can be set to run with, read in a folder for the agents'
    * environment: without a session, or a prompt.
@@ -160,6 +164,8 @@ interface Agent {
   binding?: Binding;
   /** Whether it is no longer heard: a start completed for a binding no longer active. */
   unheard?: boolean;
+  /** How often its session was interrupted: a send that one came during was stopped as it went. */
+  interrupts: number;
   /** Native activity also protects window-owned sessions until the B11 cutover. */
   working?: boolean;
   tasks?: number;
@@ -256,6 +262,7 @@ export class SessionManager {
     const agent = {
       connection: options.connection,
       generation: this.#generation(),
+      interrupts: 0,
       working: true,
     } as Agent;
     agent.session = this.#launch(
@@ -282,18 +289,30 @@ export class SessionManager {
   /**
    * Sends the agent's session a message, only while its working directory is available and the
    * binding the session runs in is the active one (checked as it is dispatched, B9a Design §3):
-   * rejects, saying why, sending nothing and ending nothing, otherwise.
+   * rejects, saying why, sending nothing and ending nothing, otherwise. One its session was
+   * interrupted while it waited (behind a withdrawal note's own turn) is never sent: its turn ends
+   * taken back.
    */
   async send(canvas: CanvasId, agentId: string, message: UserMessage): Promise<void> {
     const agent = this.#agents.get(canvas)?.get(agentId);
     if (!agent) throw new Error(NOT_RUNNING);
+    const began = this.#now();
+    const interrupts = agent.interrupts;
     const session = await agent.session;
     // A restore of the tree it works in (its own code rewind too) finishes first.
     await this.#deps.gate?.pass(canvas, agentId, true);
     await this.#directoryOf(canvas, agentId, agent);
     const send = (next: UserMessage) => session.send(next);
-    if (this.#deps.sending) await this.#deps.sending(canvas, agentId, message, send);
-    else await send(message);
+    if (!this.#deps.sending) return send(message);
+    const stopped = () => agent.interrupts !== interrupts;
+    if (await this.#deps.sending(canvas, agentId, message, send, stopped)) return;
+    if (this.#agents.get(canvas)?.get(agentId) !== agent || agent.unheard === true) return;
+    this.#deps.emit(canvas, agentId, agent.connection, {
+      type: 'end',
+      messages: [message.id],
+      seconds: Math.max(1, Math.round((this.#now() - began) / 1000)),
+      result: { status: 'cancelled', reason: 'taken-back' },
+    });
   }
 
   /**
@@ -424,14 +443,32 @@ export class SessionManager {
     await (await this.#session(canvas, agentId)).answer(promptId, answer);
   }
 
+  /**
+   * Interrupts the agent's turn: a send `sending` still holds on its way to the CLI (a command
+   * behind its withdrawal note's own turn) is stopped too.
+   */
   async interrupt(canvas: CanvasId, agentId: string): Promise<void> {
-    await (await this.#session(canvas, agentId)).interrupt();
+    const agent = this.#agents.get(canvas)?.get(agentId);
+    if (!agent) throw new Error(NOT_RUNNING);
+    agent.interrupts++;
+    await (await agent.session).interrupt();
   }
 
-  /** A stalled turn may end while its reply waits: never stop the next turn instead. */
-  async interruptIf(canvas: CanvasId, agentId: string, current: () => boolean): Promise<boolean> {
-    const session = await this.#session(canvas, agentId);
+  /**
+   * A stalled turn may end while its reply waits: never stop the next turn instead. Interrupted to
+   * be resent (`resend`), it stops no send held behind it, which goes as it ends.
+   */
+  async interruptIf(
+    canvas: CanvasId,
+    agentId: string,
+    current: () => boolean,
+    resend = false,
+  ): Promise<boolean> {
+    const agent = this.#agents.get(canvas)?.get(agentId);
+    if (!agent) throw new Error(NOT_RUNNING);
+    const session = await agent.session;
     if (!current()) return false;
+    if (!resend) agent.interrupts++;
     await session.interrupt();
     return true;
   }
