@@ -20,7 +20,10 @@ import { asHuman } from './gui';
 let core: Core | undefined;
 let root: string | undefined;
 let store: SessionStore | undefined;
+let releaseStartup: (() => void) | undefined;
 afterEach(async () => {
+  releaseStartup?.();
+  releaseStartup = undefined;
   store?.reset();
   store = undefined;
   await core?.close();
@@ -58,7 +61,12 @@ async function setup(holdRetry = false) {
   await keepCanvases(profile, { [CANVAS]: { file, project } });
   const retry = Promise.withResolvers<never>();
   const start = vi.fn<Connector<SessionMode>['start']>((_spec, host) => {
-    if (holdRetry && start.mock.calls.length > 1) return retry.promise;
+    if (holdRetry && start.mock.calls.length > 1) {
+      releaseStartup = () => {
+        retry.reject(new Error('This login cannot run here.'));
+      };
+      return retry.promise;
+    }
     host.emit({
       type: 'notice',
       id: crypto.randomUUID(),
