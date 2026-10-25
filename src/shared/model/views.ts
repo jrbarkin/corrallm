@@ -30,7 +30,14 @@ export type RunAgentView = RunSnapshot['agents'][string] & { readonly pauses?: r
 export interface RunGroupView {
   readonly pauses: readonly PartyId[];
 }
-export interface RunView extends Omit<RunSnapshot, 'agents' | 'individualPauses' | 'groupPauses'> {
+/**
+ * The run as a view shows it. Who stopped it and who decided in it (`pausedBy`, `decided`: R9's
+ * stamps, which the core's run controls read) stay the core's: no view carries them.
+ */
+export interface RunView extends Omit<
+  RunSnapshot,
+  'agents' | 'individualPauses' | 'groupPauses' | 'pausedBy' | 'decided'
+> {
   readonly agents: Readonly<Record<AgentId, RunAgentView>>;
   readonly groups: Readonly<Record<string, RunGroupView>>;
   readonly notices: readonly RunNotice[];
@@ -124,6 +131,9 @@ export function runView(
   meta: { notices?: readonly RunNotice[]; saveError?: string } = {},
 ): RunView {
   const { agents, individualPauses, groupPauses, ...top } = run;
+  // R9's stamps stay the core's.
+  delete top.pausedBy;
+  delete top.decided;
   const causes = (pauses: Run['individualPauses']) => {
     const byId = new Map<string, PartyId[]>();
     for (const { id, by } of pauses ?? []) {

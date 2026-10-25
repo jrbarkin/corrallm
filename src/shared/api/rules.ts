@@ -32,10 +32,12 @@ export const RULES = {
       'Only you change the mode an agent that exists starts in: a token leaves it out, or passes the saved one.',
   },
   // R3: as `reply` arrives, the caller must be one the item names to answer it (its `by`), and
-  // may pick no choice marked `humanOnly` (a proposal's, a file review's: yours alone).
+  // may pick no choice marked `humanOnly` (a proposal's, a file review's: yours alone); and only
+  // you go on past a usage rule's hold (run.goOn).
   'human-choice': {
     kind: 'argument',
-    sentence: 'Only you answer what only you may decide: a choice marked human-only.',
+    sentence:
+      'Only you answer what only you may decide: a choice marked human-only, or Go on past a usage rule.',
   },
   // R4: a token's commit that removes an agent becomes a proposal for you, unless another rule
   // refuses it; and so do, on their arguments, canvas.close and canvas.create's `replace` that
@@ -90,9 +92,11 @@ export const RULES = {
     kind: 'change',
     sentence: 'Only you change who manages an agent that exists: the agent it is nested in.',
   },
+  // R9: a token's run.unpause, run.resume and run.start never undo another party's pause, stop
+  // or decision.
   sticky: {
     kind: 'argument',
     sentence:
-      'A token releases only the pauses its own party set; yours stay until you release them.',
+      'A token releases only the pauses and stops its own party set, and never starts the run afresh past your decisions; yours stay until you release them.',
   },
 } as const satisfies Partial<Record<Rule, RuleRow>>;

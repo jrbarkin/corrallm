@@ -45,7 +45,10 @@ export const runOps = {
   }),
 } satisfies Partial<Record<OpName, OpDef>>;
 
-/** B11 schemas: run.get is registered; additional run controls await the C service contract. */
+/**
+ * B11's run reader and whole-run controls (Core Server §4 F), registered over the core's runtime
+ * (core/run-control.ts).
+ */
 export const b11RunOps = {
   'run.get': define(
     { kind: 'read' },
@@ -58,7 +61,11 @@ export const b11RunOps = {
   'run.start': define(
     { kind: 'command' },
     {
-      summary: 'Starts the queues afresh, recording each message before sending it.',
+      summary:
+        'Starts every queue from the top (Run, and Run again): what the run has in flight is ' +
+        'taken back and its progress forgotten, while every pause stays. Each message it sends ' +
+        'is recorded before it is sent. A token starts afresh only a run no other party stopped ' +
+        'or decided in, and none that waits for the user.',
       input: z.strictObject({ canvas }),
       output: z.strictObject({}),
     },
@@ -66,7 +73,10 @@ export const b11RunOps = {
   'run.stop': define(
     { kind: 'command' },
     {
-      summary: 'Stops the run and takes back its sends; parties’ messages remain deliverable.',
+      summary:
+        'Stops every queue where it is: what the run sent that is still going is taken back, and ' +
+        'the run sends nothing more until it is resumed or started again. Parties’ messages still ' +
+        'reach agents that aren’t paused.',
       input: z.strictObject({ canvas }),
       output: z.strictObject({}),
     },
@@ -74,7 +84,10 @@ export const b11RunOps = {
   'run.resume': define(
     { kind: 'command' },
     {
-      summary: 'Resumes paused progress without starting a new run.',
+      summary:
+        'Goes on from where a stopped run is, restarting nothing: what it finished stays finished, ' +
+        'and what its stop cut off waits for a decision. A token resumes only a run its own party ' +
+        'or a restart stopped.',
       input: z.strictObject({ canvas }),
       output: z.strictObject({}),
     },
@@ -82,8 +95,20 @@ export const b11RunOps = {
   'run.goOn': define(
     { kind: 'command' },
     {
-      summary: 'Ends the current delay or time limit early.',
-      input: z.strictObject({ canvas, agent: AgentId, item: ItemId }),
+      summary:
+        'Ends early the hold an agent is at now: a delay, as if its time had come, or a wait, as ' +
+        'if its time limit had passed. Pass `until` as run.get shows it to end only that hold. A ' +
+        'usage rule’s hold is the user’s to end.',
+      input: z.strictObject({
+        canvas,
+        agent: AgentId,
+        item: ItemId,
+        until: z
+          .number()
+          .min(0)
+          .optional()
+          .meta({ description: 'When the hold ends by itself (epoch ms), as run.get shows it.' }),
+      }),
       output: z.strictObject({}),
     },
   ),
