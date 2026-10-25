@@ -612,7 +612,9 @@ describe('a canvas’s document', () => {
     expect(
       disk.prepare('SELECT min(rev) AS first FROM change WHERE canvas_id = ?').get(canvas),
     ).toEqual({ first: 101 });
-  });
+    // 1,101 real commits through the store: about 0.5 s alone, but several times that on a loaded
+    // machine, past vitest's default 5 s. The work is the point, so the bound is generous.
+  }, 30_000);
 
   it('fails alone a write whose reference is to nothing, while what shares its commit lands', async () => {
     const canvas = newCanvasId();
