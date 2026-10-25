@@ -824,59 +824,87 @@ describe('delivery', () => {
     });
   });
 
-  it('lets another party kill and message other agents while a withdrawal awaits its native turn end', async () => {
-    await keepCanvas();
-    const interrupted = Promise.withResolvers<undefined>();
-    const turnEnd = Promise.withResolvers<undefined>();
-    const slow = new FakeConnector({ adapter: 'codex', step: () => turnEnd.promise });
-    await start({
-      appServer: {
-        start: async (spec, host) => {
-          const live = await (spec.agentId === 'builder' ? slow : appServer).start(spec, host);
-          if (spec.agentId === 'builder') {
-            const interrupt = live.interrupt.bind(live);
-            vi.spyOn(live, 'interrupt').mockImplementation(() => {
-              interrupted.resolve(undefined);
-              return interrupt();
-            });
-          }
-          return live;
-        },
-      },
-    });
-    const id = await receive();
-    let withdrawn = false;
-    const withdrawing = ok('withdraw', { id }).then((result) => {
-      withdrawn = true;
-      return result;
-    });
-    await interrupted.promise;
-    let killed = false;
-    let sent: string | undefined;
-    const killing = ok('run.kill', { target: { agent: 'checker' } }, OTHER).then(() => {
-      killed = true;
-    });
-    const sending = send('helper', 'Independent work', OTHER).then((id) => {
-      sent = id;
-    });
+  it('keeps the canvas’s lanes free while two withdrawals take back a turn whose CLI ignores the interrupt', async () => {
+    const { interrupted, turnEnd } = await startStuck();
+    const hung = await receive();
+    const queued = await send('builder', 'Then this', OTHER);
     try {
+      const first = settles(ok('withdraw', { id: hung }));
+      await interrupted.promise;
+      const second = settles(ok('withdraw', { id: queued }, OTHER));
+      const killing = settles(ok('run.kill', { target: { agent: 'builder' } }, OTHER));
+      const sending = settles(send('helper', 'Independent work', OTHER));
+      const adding = settles(
+        ok('queue.add', { agent: 'helper', entry: { message: 'Later work' } }, YOU),
+      );
+      // Each returns while Builder's turn goes on: none waits on its native end.
       await vi.waitFor(() => {
-        expect(killed).toBe(true);
-        expect(sent).toBeDefined();
+        expect(doneOf({ first, second, killing, sending, adding })).toEqual({
+          first: true,
+          second: true,
+          killing: true,
+          sending: true,
+          adding: true,
+        });
       });
+      expect(await first.promise).toEqual({
+        reached: true,
+        interrupted: true,
+        revs: expect.any(Object) as Record<string, number>,
+      });
+      expect(await second.promise).toEqual({
+        reached: false,
+        interrupted: false,
+        revs: expect.any(Object) as Record<string, number>,
+      });
+      expect(await adding.promise).toEqual({
+        id: expect.any(String) as string,
+        revs: expect.any(Object) as Record<string, number>,
+      });
+      const independent = await sending.promise;
       await vi.waitFor(async () => {
-        expect(sent && (await find(sent, OTHER))?.state).toBe('replied');
+        expect((await find(independent, OTHER))?.state).toBe('replied');
       });
-      expect(withdrawn).toBe(false);
+      expect((await find(queued, OTHER))?.state).toBe('withdrawn');
+      // The hung message is withdrawn, with its note, once its turn ends.
+      expect((await find(hung))?.state).toBe('delivered');
     } finally {
       turnEnd.resolve(undefined);
-      await Promise.all([withdrawing, killing, sending]);
     }
-    expect(await withdrawing).toEqual({
-      reached: true,
-      interrupted: true,
-      revs: expect.any(Object) as Record<string, number>,
+    await vi.waitFor(async () => {
+      expect(await find(hung)).toMatchObject({ state: 'withdrawn', by: 'outside:orchestrator' });
     });
+    expect(core?.engines.canvas(CANVAS)?.messages.withdrawals('agent:builder')).toEqual([
+      { id: hung, text: withdrawalNote(hung) },
+    ]);
+  });
+
+  it('runs a kill of the stuck agent though a canvas close comes behind a withdrawal of its hung turn', async () => {
+    const { live, interrupted, turnEnd } = await startStuck();
+    const hung = await receive();
+    try {
+      const withdrawing = settles(ok('withdraw', { id: hung }));
+      await interrupted.promise;
+      const closing = settles(live.call('canvas.close', { canvas: CANVAS, discard: true }, YOU));
+      const killing = settles(
+        live.call('run.kill', { canvas: CANVAS, target: { agent: 'builder' } }, OTHER),
+      );
+      await vi.waitFor(() => {
+        expect(doneOf({ withdrawing, closing, killing })).toEqual({
+          withdrawing: true,
+          closing: true,
+          killing: true,
+        });
+      });
+      expect(await closing.promise).toMatchObject({ ok: true });
+      // The close came first, so the kill finds the canvas closed rather than waiting forever.
+      expect(await killing.promise).toMatchObject({
+        ok: false,
+        error: { code: 'unavailable' },
+      });
+    } finally {
+      turnEnd.resolve(undefined);
+    }
   });
 
   it('holds a party’s message while its agent runs in a mode that never asks, telling its sender and you', async () => {
@@ -1851,6 +1879,65 @@ async function receive(to = 'builder', caller: Caller = OUTSIDE): Promise<string
   return id;
 }
 
+/**
+ * Starts the core (`live`) with Builder's CLI ignoring every interrupt: its turn ends only once the
+ * test resolves `turnEnd`; `interrupted` resolves once its session is first asked to interrupt.
+ */
+async function startStuck() {
+  await keepCanvas();
+  const interrupted = Promise.withResolvers<undefined>();
+  const turnEnd = Promise.withResolvers<undefined>();
+  const stuck = new FakeConnector({ adapter: 'codex', step: () => turnEnd.promise });
+  const live = await start({
+    appServer: {
+      start: async (spec, host) => {
+        const session = await (spec.agentId === 'builder' ? stuck : appServer).start(spec, host);
+        if (spec.agentId === 'builder') {
+          const interrupt = session.interrupt.bind(session);
+          vi.spyOn(session, 'interrupt').mockImplementation(() => {
+            interrupted.resolve(undefined);
+            return interrupt();
+          });
+        }
+        return session;
+      },
+    },
+  });
+  return { live, interrupted, turnEnd };
+}
+
+/** `promise`, and whether it has settled yet (`done`), however it settles. */
+function settles<T>(promise: Promise<T>): { promise: Promise<T>; done: boolean } {
+  const watched = { promise, done: false };
+  promise.then(
+    () => {
+      watched.done = true;
+    },
+    () => {
+      watched.done = true;
+    },
+  );
+  return watched;
+}
+
+/** Whether each of `calls` has settled, by name. */
+function doneOf(calls: Record<string, { done: boolean }>): Record<string, boolean> {
+  return Object.fromEntries(Object.entries(calls).map(([name, { done }]) => [name, done]));
+}
+
+/**
+ * `id`, a message `caller` may read, as it is once withdrawn and that is on disk: a take-back of one
+ * being delivered returns before its interrupted turn ends, and the message is withdrawn, with its
+ * note, as that turn ends.
+ */
+async function endsWithdrawn(id: string, caller: Caller = OUTSIDE): Promise<Message | undefined> {
+  await vi.waitFor(async () => {
+    expect((await find(id, caller))?.state).toBe('withdrawn');
+  });
+  await core?.engines.canvas(CANVAS)?.messages.durable();
+  return find(id, caller);
+}
+
 /** A received turn withdrawn before its fake session finishes. */
 async function withdrawReceived(to = 'builder', caller: Caller = OUTSIDE): Promise<string> {
   const id = await receive(to, caller);
@@ -1859,7 +1946,7 @@ async function withdrawReceived(to = 'builder', caller: Caller = OUTSIDE): Promi
     interrupted: true,
     revs: expect.any(Object) as Record<string, number>,
   });
-  expect((await find(id, caller))?.state).toBe('withdrawn');
+  await endsWithdrawn(id, caller);
   return id;
 }
 
@@ -2505,7 +2592,7 @@ describe('telling an agent of a kill after receipt', () => {
     await start();
     const id = await receive('builder');
     await ok('run.kill', { target: { agent: 'builder' } }, YOU);
-    expect(await find(id)).toMatchObject({ state: 'withdrawn', by: 'you' });
+    expect(await endsWithdrawn(id)).toMatchObject({ state: 'withdrawn', by: 'you' });
     // Killed, it is held: yours still go, and carry the note in their own frame.
     expect(await next('builder', YOU)).toBe(
       `[corrallm] ${killNote(id, 'you were killed by the user')}\n\nNew work`,
@@ -2524,7 +2611,7 @@ describe('telling an agent of a kill after receipt', () => {
       await start();
       const id = await receive('helper', BUILDER);
       await ok('run.kill', { target: { agent: killed } });
-      expect(await find(id, BUILDER)).toMatchObject({
+      expect(await endsWithdrawn(id, BUILDER)).toMatchObject({
         state: 'withdrawn',
         by: 'outside:orchestrator',
       });
@@ -2543,6 +2630,8 @@ describe('telling an agent of a kill after receipt', () => {
       receive('helper', BUILDER),
     ]);
     await ok('run.kill', { target: { group: 'team' } });
+    await endsWithdrawn(toBuilder);
+    await endsWithdrawn(toHelper, BUILDER);
     await ok('run.unpause', { target: { group: 'team' } });
     // Its recipient killed too, Helper hears of that, not of its sender's kill.
     expect(await next('builder')).toContain(
@@ -2621,6 +2710,7 @@ describe('telling an agent of a kill after receipt', () => {
       await start();
       const id = await receive(to, from);
       await ok('run.kill', { target: { agent: killed } }, killer);
+      await endsWithdrawn(id, from);
       await ok('run.unpause', { target: { agent: killed } }, YOU);
       expect(await next(to)).toContain(killNote(id, how, sender));
     },
@@ -2647,6 +2737,7 @@ describe('telling an agent of a kill after receipt', () => {
     await start();
     const id = await receive('builder');
     await ok('run.kill', { target: { agent: 'builder' } }, YOU);
+    await endsWithdrawn(id);
     const note = killNote(id, 'you were killed by the user');
     expect(
       readOnDisk(profile, (disk) =>

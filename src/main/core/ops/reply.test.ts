@@ -92,7 +92,7 @@ it.each(['canvas.delete', 'canvas.batch'] as const)(
           ...batchOps(),
           ...replyOps({
             stalled: { items: () => [], take: () => undefined },
-            sessions: { interruptIf: () => Promise.resolve(false) },
+            sessions: { interruptIf: () => Promise.resolve(undefined) },
             windows: { shownIn: () => undefined },
             needOf: () => undefined,
             // No file is reviewed here.
