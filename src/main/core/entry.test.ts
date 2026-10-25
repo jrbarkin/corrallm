@@ -32,14 +32,21 @@ beforeAll(async () => {
   await Promise.all([import('./core'), import('./endpoint')]);
 }, 60_000);
 
+/** The process's exit listeners before each test: each entry loaded adds its own. */
+let exits: NodeJS.ExitListener[] = [];
+
 beforeEach(async () => {
   vi.resetModules();
   vi.stubGlobal('MAIN_WINDOW_VITE_DEV_SERVER_URL', 'http://localhost:5173');
   profile = await mkdtemp(path.join(tmpdir(), 'corrallm-core-entry-'));
   initialized = false;
+  exits = process.listeners('exit');
 });
 afterEach(async () => {
   if (initialized) await main.request('commitShutdown');
+  for (const listener of process.listeners('exit')) {
+    if (!exits.includes(listener)) process.removeListener('exit', listener);
+  }
   for (const port of closing.splice(0)) port.close();
   if (originalParent) Object.defineProperty(process, 'parentPort', originalParent);
   else Reflect.deleteProperty(process, 'parentPort');
