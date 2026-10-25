@@ -79,6 +79,7 @@ import { sessionRules } from './ops/session-control';
 import { PREPARED_SURFACE } from '../../shared/api/prepared';
 import type { AgentId } from '../../shared/api/ids';
 import { SessionControl } from './session-control';
+import { SessionViews } from './session-views';
 import { runReplies } from './run-replies';
 import { discardChecks } from './ops/files';
 import { nameOf, quotedName } from './parties';
@@ -725,6 +726,7 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     },
     runtime: {
       source: runtime,
+      viewSession: (window, canvas, agent) => sessionViews.acquire(window, canvas, agent),
       // A runtime topic is read through its projection, under its reading op's audience and reach.
       project: (topic, caller, signal) => {
         const { topic: kind, ...args } = topicRequest(topic);
@@ -822,7 +824,15 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     windows,
     projects,
     directories,
-    sessions,
+    sessions: {
+      closeCanvas: (canvas) => sessions.closeCanvas(canvas),
+      projectChanged: async (canvas) => {
+        await sessions.projectChanged(canvas);
+        // The folder notification precedes ending the old sessions. Views may open only after
+        // that transfer has finished, not while their old binding is merely stale.
+        sessionViews.changed();
+      },
+    },
     engines: { closeCanvas: (canvas) => engines.closeCanvas(canvas) },
     files: canvasFiles,
     // Retain old trees before discovering the new pick: a failed discovery never widens trust.
@@ -987,6 +997,54 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     catalog: CATALOG,
     defaultAdapter: DEFAULT_ADAPTER,
   });
+  const sessionViews = new SessionViews({
+    inspect: async (canvas, agent) => {
+      const blocked = () => closing || barrier !== undefined;
+      if (blocked()) return undefined;
+      const open = engines.canvas(canvas);
+      const node = open?.document.nodes.find((node) => node.id === agent && node.type === 'agent');
+      if (!open || node?.type !== 'agent') return undefined;
+      const connection = open.engine.catalog.connectionOf(node.data);
+      const directory = await directories.workingDirectory(canvas, agent as AgentId);
+      if (blocked()) return undefined;
+      if (directory.state === 'held')
+        return {
+          owner: open,
+          key: JSON.stringify([connection, directory]),
+          held: directory.sentence,
+        };
+      const availability = await sessions.availability(canvas, agent);
+      if (blocked()) return undefined;
+      return {
+        owner: open,
+        key: JSON.stringify([connection, directory, availability]),
+        ...(!availability.ready ? { held: availability.sentence } : {}),
+      };
+    },
+    open: async (canvas, agent) => {
+      if (stopping('session.open') !== undefined) return false;
+      // Availability notifications can arrive outside a call's async process-owner context.
+      await children.run(() => control.open({ canvas, agent }));
+      return true;
+    },
+    say: (canvas, agent, text, held) => {
+      const open = engines.canvas(canvas);
+      if (!open?.document.nodes.some((node) => node.id === agent && node.type === 'agent')) return;
+      const last = open.engine.sessions.of(agent).entries.at(-1);
+      if (last?.kind !== 'notice' || last.text !== text)
+        open.engine.sessions.notice(agent, held ? 'info' : 'error', text);
+    },
+    watch: (canvas, changed) => {
+      const directory = sessions.onAvailability(canvas, changed);
+      const document = documents.subscribe((commit) => {
+        if (commit.canvas === canvas) changed();
+      });
+      return () => {
+        directory();
+        document();
+      };
+    },
+  });
   const prepared = config.preparedOps === true;
   // Every change rule a token's commit is checked against (B9 Design §4).
   const changeRules = changeChecks({
@@ -1133,6 +1191,7 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
   };
   const close = async () => {
     closing = true;
+    sessionViews.close();
     unwatchGate();
     workspaceDirectories.stop();
     workspaceGit.stop();
@@ -1207,6 +1266,7 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
       barrier = undefined;
       preparing = undefined;
       engines.thaw();
+      sessionViews.changed();
     },
     commitShutdown: commit,
     close: commit,

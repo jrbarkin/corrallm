@@ -108,6 +108,7 @@ export type Subscribed = TopicSnapshot | RuntimeSnapshot | RuntimeSnapshotFrame;
 
 interface Subscription {
   caller: Caller;
+  release?: () => void;
   /** For a keyed topic seen in part: the entities it was last told of. */
   seen?: Entities;
   /** For a runtime topic seen in part (a token's): its copy, as its projection last read it. */
@@ -128,6 +129,8 @@ export interface TopicsDeps {
    * projection (core.call's `project`): its audience and reach, the one authorization path.
    */
   runtime?: {
+    /** Only admitted GUI transcript subscriptions acquire a session view, never read followers. */
+    viewSession?: (window: WindowId, canvas: CanvasId, agent: string) => () => void;
     source: Pick<
       RuntimeSource,
       | 'listen'
@@ -342,6 +345,7 @@ export class Topics implements Publication {
     return () => {
       if (this.#listeners.get(id) !== listener) return;
       this.#listeners.delete(id);
+      for (const topic of this.#subscriptions.get(id)?.keys() ?? []) this.#forget(id, topic);
       this.#subscriptions.delete(id);
       this.#pending.delete(id);
     };
@@ -397,6 +401,8 @@ export class Topics implements Publication {
     this.#stopRuntime?.();
     clearTimeout(this.#timer);
     this.#listeners.clear();
+    for (const [id, topics] of this.#subscriptions)
+      for (const topic of topics.keys()) this.#forget(id, topic);
     this.#subscriptions.clear();
     this.#pending.clear();
     this.#scheduled.clear();
@@ -504,10 +510,16 @@ export class Topics implements Publication {
       const { first, rest } = this.#framesOf(topic, this.#runtimeRevs.get(topic) ?? 0, state);
       let topics = this.#subscriptions.get(id);
       if (!topics) this.#subscriptions.set(id, (topics = new Map<AnyTopic, Subscription>()));
+      const { canvas, agent } = argsOf(topic);
+      const release =
+        topics.get(topic)?.release ??
+        (typeof id === 'number' && caller.kind === 'human' && agent !== undefined
+          ? runtime.viewSession?.(id, canvas, agent)
+          : undefined);
       topics.set(
         topic,
         view === undefined
-          ? { caller }
+          ? { caller, ...(release === undefined ? {} : { release }) }
           : { caller, view, access: runtime.source.access(topic, caller) },
       );
       for (const frame of rest) this.#enqueue(id, frame);
@@ -813,6 +825,7 @@ export class Topics implements Publication {
   }
 
   #forget(id: SubscriberId, topic: AnyTopic): void {
+    this.#subscriptions.get(id)?.get(topic)?.release?.();
     this.#subscriptions.get(id)?.delete(topic);
     const pending = this.#pending.get(id);
     if (pending)

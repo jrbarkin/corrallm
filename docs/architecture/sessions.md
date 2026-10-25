@@ -28,6 +28,8 @@ The terminal toolkit, imported by adapters; it imports no adapter and names no C
 
 ## Connected sessions
 
+The first live GUI transcript subscription ensures its session is open through SessionControl, as `session.open` does, without another operation in the gesture. Viewing is a lease, never ownership: the last view disappearing leaves the session running. Window/topic leases defer release across StrictMode’s rehearsal and coalesce concurrent opens. A refused launch is shown in the session while its topic remains subscribed. Viewed sessions reopen once their connection and active workspace binding are ready after a change; a pending rebind retains the old session and claim. A project-folder transfer finishes closing the old sessions before the view opens in the new folder. Tokens and internal topic followers never open a session by reading it.
+
 Resume lists and rewinds use the agent's current adapter's conversation provider. A list is its
 caller's (the window that asked, `window:<id>`, or the canvas's own runtime), bound to its canvas,
 agent, adapter and the working-directory binding it was listed in (folder, workspace and active

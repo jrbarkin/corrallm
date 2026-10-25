@@ -74,9 +74,9 @@ it('opens a window on an empty canvas, offering the folder, installed agents, co
   await events.click(screen.getByRole('button', { name: 'Start a session' }));
   expect(await screen.findByRole('dialog', { name: 'Start a session' })).toBeTruthy();
 });
-it('adds the chosen connection with one addAgent and no implicit open and grows from the Start window', async () => {
+it('adds the chosen connection with one addAgent and no extra session.open operation and grows from the Start window', async () => {
   const morph = vi.spyOn(motion, 'morph').mockReturnValue(undefined);
-  const { canvas, sessions } = setup();
+  const { canvas } = setup();
   const view = await start();
   const dialog = screen.getByRole('dialog', { name: 'Start a session' });
   const from = new DOMRect(100, 80, 780, 420);
@@ -92,7 +92,7 @@ it('adds the chosen connection with one addAgent and no implicit open and grows 
   });
   expect(await screen.findByRole('dialog', { name: 'Agent 1' })).toBeTruthy();
   expect(screen.queryByRole('dialog', { name: 'Start a session' })).toBeNull();
-  expect(sessions.backend.start).not.toHaveBeenCalled(); // Adding is one op; a later open/send starts it.
+  // A live core opens the session as part of the window's transcript subscription lease.
   expect(morph).toHaveBeenCalledWith(expect.any(HTMLElement), from, 'open', {
     duration: 440,
     fade: true,
