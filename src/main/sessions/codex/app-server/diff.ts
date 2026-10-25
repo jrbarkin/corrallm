@@ -1,13 +1,14 @@
 import { execFile } from '../../process';
 
-import { SAFE_GIT_OPTIONS, safeGitDiffArgs } from '../../../git';
+import { SAFE_GIT_ENV, SAFE_GIT_OPTIONS, safeGitDiffArgs } from '../../../git';
 
 /*
  * /diff, as Codex's TUI does it (codex-rs/tui/src/get_git_diff.rs, rust-v0.160.1): git's diff of
  * the project folder's changes not yet staged, then its untracked files, each file's on its own.
  * Main runs git itself, with arguments of its own (nothing the renderer sent is on its command
  * line), and, as the TUI does, keeps the repository's configuration from running anything:
- * no fsmonitor, no external diff or textconv, no filter drivers.
+ * no fsmonitor, no external diff or textconv, no filter drivers, no fetch of a partial clone's
+ * missing blobs.
  */
 
 /** A file's changes: its path (as git names it, relative to the repository) and its patch. */
@@ -28,14 +29,20 @@ const MAX_BUFFER = 32 * 1024 * 1024;
 const MAX_UNTRACKED = 100;
 const DIFF_OPTIONS = ['--no-color', '--submodule=short', '--ignore-submodules=dirty'];
 
-/** Runs git with the agents' environment. */
+/** Runs git with the agents' environment, SAFE_GIT_ENV over it. */
 export function runGit(env: Readonly<Record<string, string>>): RunGit {
   return (args, cwd) =>
     new Promise((resolve, reject) => {
       execFile(
         'git',
         [...SAFE_GIT_OPTIONS, ...args],
-        { cwd, env, timeout: GIT_MS, maxBuffer: MAX_BUFFER, windowsHide: true },
+        {
+          cwd,
+          env: { ...env, ...SAFE_GIT_ENV },
+          timeout: GIT_MS,
+          maxBuffer: MAX_BUFFER,
+          windowsHide: true,
+        },
         (error, stdout) => {
           if (!error) resolve({ code: 0, stdout });
           else if (typeof error.code === 'number') resolve({ code: error.code, stdout });
