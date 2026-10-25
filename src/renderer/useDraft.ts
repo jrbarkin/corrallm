@@ -3,6 +3,7 @@ import type { ChangeEvent, KeyboardEvent } from 'react';
 import { flushSync } from 'react-dom';
 
 import { MAX_LABEL } from '../shared/api/limits';
+import type { GuiDraftsApi } from '../shared/gui-link';
 import { ipcErrorMessage } from './ipc-error';
 
 const IDLE_MS = 600;
@@ -42,6 +43,15 @@ export function flushDrafts(after?: () => unknown): Promise<void> {
   } catch (error) {
     return Promise.reject(error instanceof Error ? error : new Error(ipcErrorMessage(error)));
   }
+}
+
+/**
+ * Answers the core's `drafts.flush` (main asks it before quitting, B11 Design §16.5) with
+ * `flushDrafts`: what is being typed is committed, each field's operation answered, before the
+ * window says it is done. A field's refusal stays the field's. Returns what stops answering.
+ */
+export function answerDraftFlushes(api: Pick<GuiDraftsApi, 'draftsOnFlush'>): () => void {
+  return api.draftsOnFlush(() => flushDrafts());
 }
 
 /** Pointer actions, drags and keyboard shortcuts flush before their handlers run, portals too. */

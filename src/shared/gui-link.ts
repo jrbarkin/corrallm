@@ -62,10 +62,23 @@ export interface CoreGuiSide {
   };
 }
 
-/** What a window answers and tells the core: nothing yet. */
+/** What a window answers and tells the core. */
 export interface GuiSide {
-  requests: Record<string, never>;
+  requests: {
+    /**
+     * Finishes the drafts it is composing (B11 Design §16.5: before a quit's shutdown barrier),
+     * answering once each one's operation has been answered. View state only: no run, pause or
+     * checkpoint crosses.
+     */
+    'drafts.flush': { args: []; result: null };
+  };
   events: Record<string, never>;
+}
+
+/** The window's answer to `drafts.flush`, as its page gives it: one listener, set once. */
+export interface GuiDraftsApi {
+  /** Hears each `drafts.flush`: the flush is answered once what it returns settles. */
+  draftsOnFlush(listener: () => Promise<void>): () => void;
 }
 
 /** The name of a GUI operation's function on `window.api`: its name camel-cased (app.info → appInfo). */

@@ -199,6 +199,8 @@ export class Delivery {
   /** Whether it delivers yet: not until it starts, though messages may be sent before. */
   #started = false;
   #closed = false;
+  /** Whether the core's shutdown barrier holds it: nothing starts being delivered meanwhile. */
+  #frozen = false;
   readonly #stop: (() => void)[];
 
   constructor(deps: DeliveryDeps) {
@@ -257,6 +259,21 @@ export class Delivery {
       else this.#cutOff(message);
     }
     await this.#deps.store.durable();
+  }
+
+  /**
+   * The core's shutdown barrier (B11 Design §16.5): no message starts being delivered until `thaw`,
+   * though messages may be sent meanwhile; one being delivered goes on, and its reply comes back.
+   */
+  freeze(): void {
+    this.#frozen = true;
+  }
+
+  /** The barrier lifted (a quit cancelled): what waited goes once it can. */
+  thaw(): void {
+    if (!this.#frozen) return;
+    this.#frozen = false;
+    this.schedule();
   }
 
   images(id: string, images: UserMessage['images']): void {
@@ -484,7 +501,7 @@ export class Delivery {
    * withdrawn first.
    */
   #pump(): void {
-    if (!this.#started || this.#closed) return;
+    if (!this.#started || this.#closed || this.#frozen) return;
     const { engine, store } = this.#deps;
     this.#withdrawGone();
     let messages = store.active();

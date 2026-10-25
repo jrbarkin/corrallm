@@ -93,6 +93,8 @@ const TokenAnswerSchema = z.union([
       .min(1)
       .max(MAX_TOKEN_CANVASES),
     url: z.string().max(2048).nullable(),
+    /** Why the owner's MCP server doesn't listen (its port taken), with no URL. */
+    unserved: z.string().min(1).max(1000).optional(),
   }),
   z.strictObject({ ok: z.literal(true), owner: Owner, op: z.literal('revoke'), name: Name }),
   z.strictObject({ ok: z.literal(false), sentence: z.string().max(4000) }),

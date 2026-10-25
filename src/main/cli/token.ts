@@ -249,9 +249,9 @@ function madeText(
   const { url } = answer;
   if (url === null) {
     lines.push(
-      answer.owner === 'app'
-        ? `The app serves no MCP yet: the token works with corrallm serve on this profile once the app has quit, which prints its URL to register corrallm at, as the MCP server ${SERVER_NAME}.`
-        : `Nothing serves this profile yet: corrallm serve on it prints its URL, to register corrallm at as the MCP server ${SERVER_NAME}.`,
+      answer.owner === 'none'
+        ? `Nothing serves this profile yet: corrallm serve on it prints its URL, to register corrallm at as the MCP server ${SERVER_NAME}.`
+        : `${answer.unserved ?? 'Its MCP server isn’t listening.'} Once it listens, corrallm token renew names its URL, to register corrallm at as the MCP server ${SERVER_NAME}.`,
       '',
     );
     return lines;
