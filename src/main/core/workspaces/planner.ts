@@ -1,10 +1,12 @@
 import type { CanvasId } from '../../../shared/canvas';
 import type { CanvasDocument } from '../../../shared/model/canvas';
 import { bindingPlan } from '../../../shared/model/workspaces';
-import type { WorkspaceOwnerKey } from '../../../shared/model/workspaces';
+import type { BindingPlan, WorkspaceOwnerKey } from '../../../shared/model/workspaces';
 import { OpFailure } from '../call';
 import { safe } from './cleanup';
 import type { Removal, TreeState, WorkspaceCleanup } from './cleanup';
+import { ProvisionError } from './provision';
+import type { Base, Provisioner } from './provision';
 import { ACTIVE_STATES } from './store';
 import type { AgentBinding, RepositoryRecord, WorkspaceStore, WorktreeRecord } from './store';
 
@@ -19,7 +21,15 @@ import type { AgentBinding, RepositoryRecord, WorkspaceStore, WorktreeRecord } f
  *
  * - An agent with no workspace yet that joins a component with one is bound to it at once (a new
  *   member joins a group's tree), at a generation of its own. One whose component has none yet gets
- *   one on demand, by provisioning: no Git runs in a commit.
+ *   one on demand, by provisioning, from the project's HEAD (an independent add) or forked from
+ *   the tree a member works in when it is made (a split: `forkSource`).
+ * - A component whose fork source only the commit knows, none of whose members works elsewhere (a
+ *   spawn outside a shared group, copying an agent with a tree; members moved out of a tree still
+ *   being made), gets its tree in the commit: its base read in the preflight (the source's
+ *   committed HEAD, never its uncommitted files), then, in the write, the workspace `creating`
+ *   with its job's intent and `forked_from`, its members bound to it (`make`); it is made once
+ *   the write is on disk (`made`: as a start's tree is, its setup offered), or as the next core
+ *   starts. No Git runs in a commit's write.
  * - An agent whose tree would change while its tree is materialized (made, and maybe worked in) is
  *   not moved: its change waits (`plan`: the owner it is to move to, at a desired generation past
  *   its active one), new starts and sends wait for it, and its session keeps its old tree, claim
@@ -41,6 +51,12 @@ import type { AgentBinding, RepositoryRecord, WorkspaceStore, WorktreeRecord } f
 /** A change of who works where, as a commit makes it. */
 export type Step =
   | { kind: 'bind'; agent: string; workspace: string }
+  /**
+   * A tree made for `owner` in this commit, forked from the workspace `from` (its committed HEAD),
+   * `agents` bound to it: a component whose fork source the commit alone knows (a spawn's copy, a
+   * member moved out of a tree still being made) and none of whose members works elsewhere.
+   */
+  | { kind: 'make'; owner: WorkspaceOwnerKey; from: string; agents: readonly string[] }
   | { kind: 'plan'; agent: string; owner: WorkspaceOwnerKey }
   | { kind: 'clear'; agent: string }
   | { kind: 'unbind'; agent: string }
@@ -62,8 +78,26 @@ export interface Losses {
   trees?: readonly TreeState[];
 }
 
+/** A tree's fork, as a commit's preflight read it: the workspace it forks, and the base read there. */
+export interface Fork {
+  from: string;
+  base: Base;
+}
+
+/** The forks a commit makes, by the owner each new tree is for. */
+export type Forks = ReadonlyMap<WorkspaceOwnerKey, Fork>;
+
+/** What a commit's preflight found: what it keeps and holds, and the bases of the trees it forks. */
+export interface Preflight extends Losses {
+  /** Read by the workspace Git runner before the write, recorded within it (`within`). */
+  forks?: Forks;
+}
+
 /** What was decided of each tree a commit leaves with no agent, by workspace: removed, as said. */
 export type Removals = ReadonlyMap<string, Removal>;
+
+/** The create jobs a commit's write recorded, by id: run once it is on disk (`made`). */
+export type Made = readonly string[];
 
 /**
  * Of the trees a change leaves with no agent, those safe to remove without asking (clean, merged,
@@ -91,12 +125,25 @@ export interface PlannedCommit {
   after: CanvasDocument;
   /** New agents copied from another (spawnAgent's), new → source. */
   copies?: ReadonlyMap<string, string> | undefined;
+  /** Within its write: the forks its preflight read (Preflight's). */
+  forks?: Forks | undefined;
 }
 
 export interface WorkspacePlannerDeps {
   workspaces: WorkspaceStore;
   /** Why new work for an agent waits now, if it does: a restore of its tree (the mutation gate). */
   holding?: (canvas: CanvasId, agent: string) => Promise<string | undefined>;
+  /**
+   * Provisioning (provision.ts): a fork's base read before the write, its intent recorded within
+   * it, and its job run once it is on disk. None: every new tree is made on demand, from the
+   * project's HEAD.
+   */
+  provisioner?: Pick<Provisioner, 'base' | 'intend' | 'run'>;
+  /**
+   * Makes a tree a commit recorded, once it is on disk: the resolver's provisioning (its job run,
+   * then its setup offered, as a start's is). None: its job is run alone.
+   */
+  make?: (tree: WorktreeRecord) => Promise<unknown>;
   /**
    * A tree's cleanup (B9a C7): what it holds, its removal marked within a commit's write, and run
    * once that is on disk. None: trees are only ever retained.
@@ -106,6 +153,7 @@ export interface WorkspacePlannerDeps {
 
 const RESTORING =
   'A workspace this change would change is being restored just now: try again once that is done.';
+const CHANGED = 'The workspaces this change makes changed while it was checked: try again.';
 
 export class WorkspacePlanner {
   readonly #deps: WorkspacePlannerDeps;
@@ -116,23 +164,28 @@ export class WorkspacePlanner {
 
   /**
    * The loss preflight, before a commit's point of no return: its plan over the records as they
-   * are, refused (OpFailure, changing nothing) while a tree it changes is being restored; what it
-   * keeps and holds.
+   * are, refused (OpFailure, changing nothing) while a tree it changes is being restored, or while
+   * the committed HEAD a tree it makes forks can't be read; what it keeps and holds, and the base
+   * of each tree it forks (read by the workspace Git runner here, never in the write).
    */
-  async preflight(commit: PlannedCommit): Promise<Losses> {
+  async preflight(commit: PlannedCommit): Promise<Preflight> {
     const plan = this.plan(commit);
     const affected = new Set([
       ...plan.losses.removed,
       ...plan.losses.pending,
-      ...plan.steps.flatMap((step) => ('agent' in step ? [step.agent] : [])),
+      ...plan.steps.flatMap((step) =>
+        'agent' in step ? [step.agent] : step.kind === 'make' ? step.agents : [],
+      ),
     ]);
     for (const agent of affected) {
       if ((await this.#deps.holding?.(commit.canvas, agent)) !== undefined) {
         throw new OpFailure('unavailable', RESTORING);
       }
     }
+    const forks = await this.#forks(commit.canvas, plan.steps);
+    const found: Preflight = forks === undefined ? plan.losses : { ...plan.losses, forks };
     const { cleanup } = this.#deps;
-    if (cleanup === undefined || plan.losses.retained.length === 0) return plan.losses;
+    if (cleanup === undefined || plan.losses.retained.length === 0) return found;
     // One still being made is kept, never asked about: nothing ran there, and its job may go on.
     const trees = await Promise.all(
       plan.losses.retained.flatMap((id) => {
@@ -140,18 +193,47 @@ export class WorkspacePlanner {
         return tree === undefined || tree.state === 'creating' ? [] : [cleanup.assess(tree)];
       }),
     );
-    return { ...plan.losses, trees };
+    return { ...found, trees };
+  }
+
+  /** The base of each tree the steps fork, as Git says now: none if they make none. */
+  async #forks(canvas: CanvasId, steps: readonly Step[]): Promise<Forks | undefined> {
+    const { provisioner, workspaces } = this.#deps;
+    const makes = steps.filter((step) => step.kind === 'make');
+    if (provisioner === undefined || makes.length === 0) return undefined;
+    const repository = repositoryOf(workspaces, canvas);
+    if (repository === undefined) return undefined;
+    const forks = new Map<WorkspaceOwnerKey, Fork>();
+    for (const { owner, from } of makes) {
+      const source = workspaces.worktree(from);
+      if (source === undefined) throw new OpFailure('conflict', CHANGED);
+      try {
+        forks.set(owner, { from, base: await provisioner.base(repository, source) });
+      } catch (error) {
+        if (error instanceof ProvisionError) throw new OpFailure('unavailable', error.message);
+        throw error;
+      }
+    }
+    return forks;
   }
 
   /**
    * Within a commit's write, after its rows: its plan, made again over the records there, applied;
    * a tree it leaves with no agent removed if `removals` says so (marked `removing`, its job
-   * recorded: `removed` runs it once the write is on disk), else retained.
+   * recorded: `removed` runs it once the write is on disk), else retained; a tree it forks
+   * recorded `creating` at the base its preflight read (`commit.forks`), with its job's intent,
+   * its members bound to it. What it returns, `made` runs once the write is on disk.
    */
-  within(commit: PlannedCommit, removals?: Removals): void {
+  within(commit: PlannedCommit, removals?: Removals): Made {
     const { steps } = this.plan(commit);
     const workspaces = this.#deps.workspaces;
+    const made: string[] = [];
     for (const step of steps) {
+      if (step.kind === 'make') {
+        const job = this.#make(commit, step);
+        if (job !== undefined) made.push(job);
+        continue;
+      }
       if (step.kind === 'retain') {
         const removal = removals?.get(step.workspace);
         if (removal !== undefined && this.#deps.cleanup !== undefined) {
@@ -180,6 +262,47 @@ export class WorkspacePlanner {
           break;
       }
     }
+    return made;
+  }
+
+  /**
+   * Within a write: the tree a `make` step forks, recorded with its job (Provisioner's `intend`:
+   * no Git, no file), its members bound to it. Fails the write if the preflight read no base for
+   * it (the plan changed since). Without provisioning, its members are left to get theirs on
+   * demand.
+   */
+  #make(commit: PlannedCommit, step: Extract<Step, { kind: 'make' }>): string | undefined {
+    const { provisioner, workspaces } = this.#deps;
+    if (provisioner === undefined) {
+      for (const agent of step.agents) workspaces.unbind(commit.canvas, agent);
+      return undefined;
+    }
+    const fork = commit.forks?.get(step.owner);
+    const repository = repositoryOf(workspaces, commit.canvas);
+    if (fork?.from !== step.from || repository === undefined) throw new Error(CHANGED);
+    const { worktree, job } = provisioner.intend(workspaces, {
+      canvas: commit.canvas,
+      repository,
+      owner: step.owner,
+      base: fork.base,
+      forkedFrom: fork.from,
+    });
+    for (const agent of step.agents) workspaces.bind(commit.canvas, agent, worktree.id);
+    return job?.id;
+  }
+
+  /** A commit's new trees, once it is on disk: each one made (in the background). */
+  made(jobs: Made | undefined): void {
+    const { provisioner, make, workspaces } = this.#deps;
+    if (provisioner === undefined) return;
+    for (const id of jobs ?? []) {
+      const job = workspaces.job(id);
+      const tree = job === undefined ? undefined : workspaces.worktree(job.workspace);
+      const making = make !== undefined && tree !== undefined ? make(tree) : provisioner.run(id);
+      void making.catch((error: unknown) => {
+        console.error('Could not make a workspace:', error);
+      });
+    }
   }
 
   /** A commit's removals, once it is on disk: each tree's removal run (in the background). */
@@ -200,13 +323,9 @@ export class WorkspacePlanner {
     const trees = workspaces.worktreesOf(commit.canvas);
     const bindings = workspaces.bindingsOf(commit.canvas);
     if (trees.length === 0 && bindings.length === 0) return NOTHING;
-    const repository =
-      link?.repository === null || link === undefined
-        ? undefined
-        : workspaces.repository(link.repository);
     return workspacePlan({
       ...commit,
-      repository,
+      repository: repositoryOf(workspaces, commit.canvas),
       generation: link?.generation ?? 0,
       trees,
       bindings,
@@ -273,25 +392,7 @@ export function workspacePlan({
   const targets = new Set<string>();
   const owners: Step[] = [];
   if (repository !== undefined) {
-    const plan = bindingPlan({
-      before,
-      after,
-      repository: { id: repository.id, generation, ref: null, revision: '' },
-      bindings: bindings.map(({ agent, workspace, generation: at }) => ({
-        agent,
-        workspace,
-        generation: at,
-      })),
-      workspaces: trees.map((tree) => ({
-        id: tree.id,
-        canvas: tree.canvas,
-        repository: tree.repository,
-        owner: tree.owner,
-        revision: null,
-        active: ACTIVE_STATES.includes(tree.state),
-      })),
-      ...(copies === undefined ? {} : { copies }),
-    });
+    const plan = plannedOf({ before, after, copies, repository, generation, trees, bindings });
     for (const { owner, target, bindings: members } of plan.components) {
       const into = target.kind === 'reuse' ? byId.get(target.workspace) : undefined;
       if (into !== undefined) {
@@ -300,10 +401,19 @@ export function workspacePlan({
           owners.push({ kind: 'owner', workspace: into.id, owner: owner.key });
         }
       }
+      // A new tree forked from a workspace (B9a Design §3: a spawn outside a shared group forks
+      // its source's committed HEAD; a split branches from the former group's commit).
+      const fork =
+        target.kind === 'create' && target.source.kind === 'workspace'
+          ? target.source.workspace
+          : undefined;
+      const making: string[] = [];
+      let waits = false;
       for (const { agent, previous } of members) {
         const kept = bound.get(agent);
         if (previous === null) {
           if (into !== undefined) moves.push({ kind: 'bind', agent, workspace: into.id });
+          else if (fork !== undefined) making.push(agent);
           continue;
         }
         if (previous.workspace === into?.id) {
@@ -314,17 +424,27 @@ export function workspacePlan({
         const from = byId.get(previous.workspace);
         if (from?.state === 'creating') {
           // Nothing ran where it was being made: it moves at once.
-          moves.push(
-            into === undefined
-              ? { kind: 'unbind', agent }
-              : { kind: 'bind', agent, workspace: into.id },
-          );
+          if (into !== undefined) moves.push({ kind: 'bind', agent, workspace: into.id });
+          else if (fork !== undefined) making.push(agent);
+          else moves.push({ kind: 'unbind', agent });
           continue;
         }
         // Materialized: its move waits for you, its session kept in its old tree meanwhile.
+        waits = true;
         pending.push(agent);
         if (kept?.desired?.owner !== owner.key)
           moves.push({ kind: 'plan', agent, owner: owner.key });
+      }
+      if (fork !== undefined && making.length > 0) {
+        if (!waits) {
+          // Its source is known to this commit alone (a spawn's copy, a tree still being made
+          // that its members leave): the fork is recorded in its write, its members bound to it.
+          moves.push({ kind: 'make', owner: owner.key, from: fork, agents: making });
+        } else {
+          // A member works elsewhere still: its tree is made on demand (a start, or your Switch),
+          // forked from where that member works then (`forkSource`).
+          for (const agent of making) if (bound.has(agent)) moves.push({ kind: 'unbind', agent });
+        }
       }
     }
   }
@@ -333,6 +453,7 @@ export function workspacePlan({
   for (const step of moves) {
     if (step.kind === 'unbind') where.delete(step.agent);
     else if (step.kind === 'bind') where.set(step.agent, step.workspace);
+    else if (step.kind === 'make') for (const agent of step.agents) where.delete(agent);
   }
   const used = new Set(where.values());
   const nodes = new Set(after.nodes.map((node) => node.id));
@@ -356,6 +477,78 @@ export function workspacePlan({
     ],
     losses: { retained, pending, removed },
   };
+}
+
+/**
+ * The workspace a new tree for `owner` forks, as the canvas's plan says now (pure, over its records
+ * and document): the tree one of its members works in, if it moves there from one; none if it
+ * starts from the project's HEAD, or has a tree already. What provisioning on demand (a start, a
+ * Switch's destination) forks, so a split made when it switches branches from the former group's
+ * commit then.
+ */
+export function forkSource(
+  workspaces: WorkspaceStore,
+  canvas: CanvasId,
+  document: CanvasDocument,
+  owner: WorkspaceOwnerKey,
+): WorktreeRecord | undefined {
+  const repository = repositoryOf(workspaces, canvas);
+  if (repository === undefined) return undefined;
+  const component = plannedOf({
+    before: document,
+    after: document,
+    repository,
+    generation: workspaces.canvasRepository(canvas)?.generation ?? 0,
+    trees: workspaces.worktreesOf(canvas),
+    bindings: workspaces.bindingsOf(canvas),
+  }).components.find((one) => one.owner.key === owner);
+  const source = component?.target.kind === 'create' ? component.target.source : undefined;
+  return source?.kind === 'workspace' ? workspaces.worktree(source.workspace) : undefined;
+}
+
+/** The repository the canvas's project is, as its records say: none if it isn't one, or none is known. */
+function repositoryOf(workspaces: WorkspaceStore, canvas: CanvasId): RepositoryRecord | undefined {
+  const id = workspaces.canvasRepository(canvas)?.repository ?? null;
+  return id === null ? undefined : workspaces.repository(id);
+}
+
+/** shared/model/workspaces.ts' binding plan, over the canvas's records. */
+function plannedOf({
+  before,
+  after,
+  copies,
+  repository,
+  generation,
+  trees,
+  bindings,
+}: {
+  before: CanvasDocument;
+  after: CanvasDocument;
+  copies?: ReadonlyMap<string, string> | undefined;
+  repository: RepositoryRecord;
+  generation: number;
+  trees: readonly WorktreeRecord[];
+  bindings: readonly AgentBinding[];
+}): BindingPlan {
+  return bindingPlan({
+    before,
+    after,
+    repository: { id: repository.id, generation, ref: null, revision: '' },
+    bindings: bindings.map(({ agent, workspace, generation: at }) => ({
+      agent,
+      workspace,
+      generation: at,
+    })),
+    workspaces: trees.map((tree) => ({
+      id: tree.id,
+      canvas: tree.canvas,
+      repository: tree.repository,
+      owner: tree.owner,
+      revision: null,
+      active: ACTIVE_STATES.includes(tree.state),
+    })),
+    ...(copies === undefined ? {} : { copies }),
+  });
 }
 
 /** The node an owner key names (its root: a lone agent, or a group's outermost node). */

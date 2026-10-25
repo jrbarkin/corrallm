@@ -25,6 +25,8 @@ const runSource: RunSource = {
 
 /** Connected agents' sessions run in the core process (src/main/sessions/). */
 const sessionBackend: SessionBackend = {
+  availability: (agent) => fromMain(window.api.sessionAvailability(agent)),
+  onAvailability: (listener) => window.api.onSessionAvailability(listener),
   start: (agentId, options) => fromMain(window.api.startSession(agentId, options)),
   installed: () => api.catalogInstalled(),
   send: (agentId, message) => fromMain(window.api.sendToSession(agentId, message)),
@@ -38,7 +40,8 @@ const sessionBackend: SessionBackend = {
   close: (agentId) => fromMain(window.api.closeSession(agentId)),
   fresh: (agentId, adapter) => fromMain(window.api.freshSession(agentId, adapter)),
   files: findProjectFiles,
-  options: (adapter) => fromMain(window.api.settingsOptions(adapter)),
+  options: (adapter, agent) =>
+    fromMain(window.api.settingsOptions(adapter, ...(agent === undefined ? [] : [agent]))),
   sessions: (agentId) => fromMain(window.api.listSessions(agentId)),
   resume: (agentId, sessionId) => fromMain(window.api.resumeSession(agentId, sessionId)),
   previewRewind: (agentId, messageId) => fromMain(window.api.previewRewind(agentId, messageId)),

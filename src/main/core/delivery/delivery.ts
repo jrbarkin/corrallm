@@ -1,3 +1,4 @@
+import type { SessionAvailability } from '../../../shared/session';
 import { randomUUID } from 'node:crypto';
 
 import { MAX_WAITING } from '../../../shared/api/limits';
@@ -65,7 +66,8 @@ export interface DeliveryDeps {
    * in) asks before it acts, as its CLI's settings say in the canvas's project folder: undefined
    * where that can't be told. Read once a session (#default).
    */
-  defaultAsks: (adapter: AdapterId) => Promise<boolean | undefined>;
+  availability?: (agent: string) => Promise<SessionAvailability>;
+  defaultAsks: (adapter: AdapterId, agent?: string) => Promise<boolean | undefined>;
 }
 
 /**
@@ -96,6 +98,7 @@ interface Unstartable {
 /** What holds a message to an agent, if anything does. */
 type Hold =
   | { kind: 'busy' }
+  | { kind: 'workspace'; sentence: string }
   | { kind: 'paused'; holding: PauseCause[] }
   | ({ kind: 'stuck' } & Unstartable)
   | { kind: 'unasking'; why: UnaskingWhy }
@@ -163,6 +166,54 @@ const PERMISSION_STARTUP_MS = 30_000;
 
 export class Delivery {
   readonly #deps: DeliveryDeps;
+  readonly #directories = new Map<string, SessionAvailability>();
+  readonly #checkingDirectories = new Map<string, object>();
+
+  availabilityChanged(): void {
+    this.#directories.clear();
+    this.#checkingDirectories.clear();
+    for (const agent of this.#defaults.keys())
+      if (this.#deps.engine.sessions.of(agent).running === undefined) this.#defaults.delete(agent);
+    this.schedule();
+  }
+
+  #directoryHold(agent: string): Hold | undefined {
+    const read = this.#deps.availability;
+    if (read === undefined) return undefined;
+    const result = this.#directories.get(agent);
+    if (result !== undefined)
+      return result.ready
+        ? undefined
+        : {
+            kind: 'workspace',
+            sentence: result.sentence,
+          };
+    if (!this.#checkingDirectories.has(agent)) {
+      const token = {};
+      this.#checkingDirectories.set(agent, token);
+      void read(agent).then(
+        (next) => {
+          if (this.#closed || this.#checkingDirectories.get(agent) !== token) return;
+          this.#checkingDirectories.delete(agent);
+          this.#directories.set(agent, next);
+          this.schedule();
+        },
+        (error: unknown) => {
+          if (this.#closed || this.#checkingDirectories.get(agent) !== token) return;
+          this.#checkingDirectories.delete(agent);
+          this.#directories.set(agent, {
+            ready: false,
+            sentence:
+              error instanceof Error
+                ? error.message
+                : 'Its working directory could not be checked.',
+          });
+          this.schedule();
+        },
+      );
+    }
+    return { kind: 'busy' };
+  }
   /** What takes each message being delivered back from its agent's session, by the message's id. */
   readonly #sent = new Map<string, () => void>();
   /** The agents a message is being journaled for, before it is sent: nothing else starts meanwhile. */
@@ -566,9 +617,12 @@ export class Delivery {
       if (!waits || this.#writing.has(node.id)) continue;
       // Yours go past the run's holds, into its session's queue, unless that won't start; what
       // holds a party's message holds every party's behind it.
+      const directory = this.#directoryHold(node.id);
       const holds = {
-        yours: this.#stuckHold(node),
-        theirs: waits.some((message) => !this.#yours(message)) ? this.#holdOf(node) : undefined,
+        yours: directory ?? this.#stuckHold(node),
+        theirs:
+          directory ??
+          (waits.some((message) => !this.#yours(message)) ? this.#holdOf(node) : undefined),
       };
       let next: Message | undefined;
       for (const message of waits) {
@@ -583,6 +637,13 @@ export class Delivery {
             holdKey('paused', node.id, causes, message.from),
             message,
             `${this.#name(node.id)} is paused by ${pausesText(this.#deps.nodes(), node.id, hold.holding)}, so your message waits until it is released: ${RELEASES}`,
+          );
+        }
+        if (hold.kind === 'workspace') {
+          this.#tell(
+            holdKey('workspace', node.id, hold.sentence, message.from),
+            message,
+            `${this.#name(node.id)} waits for its workspace, so your message stays queued: ${threadTitle(hold.sentence, REASON)}`,
           );
         }
         if (hold.kind === 'stuck') {
@@ -618,6 +679,7 @@ export class Delivery {
       }
       if (next === undefined || this.#unrecordable) continue;
       if (!this.#yours(next)) this.#warnUsage(node);
+      this.#directories.delete(node.id);
       this.#deliver(node, next);
     }
     this.#arm(alarm);
@@ -761,7 +823,7 @@ export class Delivery {
     const reading: Default = { connection, at: this.#deps.now(), asks: 'reading', ran: false };
     this.#defaults.set(agent, reading);
     void this.#deps
-      .defaultAsks(this.#deps.engine.catalog.adapterOf(connection))
+      .defaultAsks(this.#deps.engine.catalog.adapterOf(connection), agent)
       .catch(() => undefined)
       .then((asks) => {
         if (this.#defaults.get(agent) !== reading) return;
@@ -850,6 +912,7 @@ export class Delivery {
     const { engine } = this.#deps;
     if (engine.run.holding({ agent: node.id }).length === 0) this.#forget('paused', node.id);
     if (engine.sessions.of(node.id).running !== undefined) this.#forget('stuck', node.id);
+    if (this.#directories.get(node.id)?.ready === true) this.#forget('workspace', node.id);
     if (this.#asking(node, false) === 'asks') this.#forget('unasking', node.id);
     if (this.#limited(node) === undefined) this.#forget('limited', node.id);
   }
@@ -1238,7 +1301,7 @@ export class Delivery {
 }
 
 /** The kinds of hold a sender is told of, by the agent they hold. */
-type HoldKind = 'paused' | 'stuck' | 'unasking' | 'usage' | 'limited';
+type HoldKind = 'workspace' | 'paused' | 'stuck' | 'unasking' | 'usage' | 'limited';
 
 /**
  * Whom the kill that took back `message` killed, its recipient or its sender, and who killed it, as

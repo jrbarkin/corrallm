@@ -1,3 +1,4 @@
+import type { SessionAvailability } from '../../session';
 import type { AdapterId, ConnectionId } from '../../adapter';
 import { isSessionMode } from '../../session';
 import type {
@@ -29,6 +30,8 @@ import type { Entry, Refusal, Session } from '../../model/session';
  * rejects with an Error saying why, in words fit to show.
  */
 export interface SessionBackend {
+  availability?(agentId: string): Promise<SessionAvailability>;
+  onAvailability?(listener: () => void): () => void;
   start(agentId: string, options: SessionOptions): Promise<null>;
   /** Which CLIs the user has (main finds them as its connections would run them). */
   installed(): Promise<InstalledClis>;
@@ -43,9 +46,9 @@ export interface SessionBackend {
   /** Ends the agent's live session and forgets only this CLI's remembered conversation. */
   fresh(agentId: string, adapter: AdapterId): Promise<null>;
   /** The project folder's files and folders that match `query`, for an @-mention. */
-  files(query: string): Promise<string[]>;
+  files(query: string, agentId?: string): Promise<string[]>;
   /** What an agent of `adapter` can be set to run with, and the user's own defaults (session:options). */
-  options(adapter: AdapterId): Promise<SettingsOptions>;
+  options(adapter: AdapterId, agentId?: string): Promise<SettingsOptions>;
   /** The conversations Claude Code kept for the project folder (/resume), the agent's marked. */
   sessions(agentId: string): Promise<PastSession[]>;
   /** Makes one of them the agent's own: its session ends, and resumes it when it starts again. */
@@ -256,6 +259,16 @@ export class ConnectedDriver implements SessionDriver {
 
   stopTask(taskId: string): void {
     this.#tell((agentId) => this.#backend.stopTask(agentId, taskId));
+  }
+
+  /**
+   * A connection switch keeps submissions still awaiting startup. Detach them before closing,
+   * so a late startup cannot send them through the old connection or cancel their callbacks.
+   */
+  takeUnsent(): string[] {
+    const ids = [...this.#turns].flatMap(([id, turn]) => (turn.sent ? [] : [id]));
+    for (const id of ids) this.#turns.delete(id);
+    return ids;
   }
 
   close(): void {

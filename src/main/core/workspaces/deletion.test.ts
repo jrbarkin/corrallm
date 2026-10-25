@@ -40,7 +40,7 @@ const YOU = CALLERS.you;
 let made: TestWorkspaces;
 let core: Core | undefined;
 let cleanup: WorkspaceCleanup | undefined;
-/** Who else may be writing in a tree, as a session the resolver binds there would (X11b). */
+/** Who else may be writing in a tree, as the composed resolver binds its sessions there. */
 let writing: ((tree: WorktreeRecord) => readonly string[]) | undefined;
 
 beforeEach(async () => {
@@ -77,7 +77,7 @@ function canvasText(): string {
 
 /**
  * Each agent's worktree made and bound to it, then the core started over the profile, with its
- * cleanup composed (as X11b will): `file` false makes the canvas a draft, its document in rows.
+ * cleanup composed through the test override: `file` false makes the canvas a draft, its document in rows.
  */
 async function start({
   file = true,
@@ -132,7 +132,7 @@ async function start({
       preparedOps: prepared,
       sessions: {
         connectors: { 'claude-code.terminal': terminal },
-        environment: () => Promise.resolve({}),
+        environment: () => Promise.resolve(made.env),
       },
       cleanup: (deps) => {
         cleanup = new WorkspaceCleanup({

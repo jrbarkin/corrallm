@@ -1,6 +1,7 @@
 import type { PauseTarget } from '../../../shared/engine/run/runner';
 import { groupMembers, isGroup } from '../../../shared/model/queries';
 import { OpFailure } from '../call';
+import { RunControl } from '../run-control';
 import { partyIdOf } from '../caller';
 import type { OpenCanvas } from '../engines';
 import { runSeen } from './views';
@@ -9,8 +10,9 @@ import { agentOf, openCanvas, reachFor } from './open';
 import type { Implementations, OpServices } from '.';
 
 /**
- * The run (Core Server §4 F): pausing, killing and releasing an agent or a group, whether or not a
- * run is going. Each pause and kill is stamped with the party that set it: a token releases only
+ * The run (Core Server §4 F): its whole-run controls, Run (and Run again), Stop, Resume and Go on
+ * now, the core's services over the canvas's runtime (core/run-control.ts, with R9's and R3's
+ * refusals); and pausing, killing and releasing an agent or a group, whether or not a run is going. Each pause and kill is stamped with the party that set it: a token releases only
  * its own (Core Server rule R9, checked in core.call), you any; a release says what holds its
  * target still (another party's pause, or one on a group it is in). Each takes effect at once, and
  * returns once it is on disk: the canvas's run committed to the database, and for a kill, what it
@@ -21,8 +23,23 @@ export function runOps({
   engines,
   isLead,
   runError,
-}: OpServices): Pick<Implementations, 'run.get' | 'run.pause' | 'run.kill' | 'run.unpause'> {
+}: OpServices): Pick<
+  Implementations,
+  | 'run.get'
+  | 'run.start'
+  | 'run.stop'
+  | 'run.resume'
+  | 'run.goOn'
+  | 'run.pause'
+  | 'run.kill'
+  | 'run.unpause'
+> {
+  const control = new RunControl(engines);
   return {
+    'run.start': (args, ctx) => control.start(args, ctx),
+    'run.stop': (args, ctx) => control.stop(args, ctx),
+    'run.resume': (args, ctx) => control.resume(args, ctx),
+    'run.goOn': (args, ctx) => control.goOn(args, ctx),
     'run.get': ({ canvas }, ctx) => {
       const open = openCanvas(engines, canvas);
       return RunViewSchema.parse(

@@ -155,7 +155,8 @@ export function runReplies({ engines, sessions, locale }: RunRepliesDeps): Reply
             }
           : { choice: picked(answer) ?? '' };
       ctx.noReturn();
-      run.decide(id.agent, id.item, given);
+      // Stamped with who decided: a token never starts afresh a run another party decided in (R9).
+      run.decide(id.agent, id.item, given, ctx.by);
       const after = run.snapshot().agents[id.agent];
       if (
         after?.status === 'asking' &&
