@@ -116,7 +116,10 @@ interface Stuck {
   retrying: boolean;
 }
 
-/** What taking a message back did, rather than what its recorded delivery state implied. */
+/**
+ * What taking a message back did, rather than what its recorded delivery state implied: whether
+ * its CLI had it, and so whether its turn is (or was) interrupted.
+ */
 interface Withdrawal {
   reached: boolean;
   interrupted: boolean;
@@ -132,8 +135,8 @@ interface TakingBack {
   by: PartyId;
   why: TakeBackWhy;
   reached: boolean;
-  ended: Promise<Withdrawal>;
-  finish: (result: Withdrawal) => void;
+  /** What it did, once its turn has ended (or it came off its session's queue). */
+  ended?: Withdrawal;
 }
 
 /** What an agent with no connection this build runs is told. */
@@ -422,7 +425,8 @@ export class Delivery {
   /**
    * Takes back a message for `by`: one still waiting is withdrawn at once; one being delivered is
    * taken off its session's queue, or its turn interrupted, and is withdrawn once that ends.
-   * Resolves once its withdrawal is on disk, so a restart never delivers it. Throws, saying why, a
+   * Returns once the take-back is requested, never waiting for a native turn to end. Any immediate
+   * withdrawal is flushed before returning, so a restart never delivers it. Throws, saying why, a
    * message that can't be taken back, and 'unavailable' one taken back whose withdrawal couldn't
    * be written (withdrawn here all the same, it may not survive a restart).
    */
@@ -458,7 +462,7 @@ export class Delivery {
         'Another party’s message can be taken back only while it waits; interrupt its turn instead.',
       );
     }
-    return this.#saved(await this.#takeBack(message, by, 'withdrawn'));
+    return this.#saved(this.#takeBack(message, by, 'withdrawn'));
   }
 
   /** What a withdrawal did, once it is on disk; 'unavailable' if it can't be written. */
@@ -474,12 +478,11 @@ export class Delivery {
   /**
    * Agents were killed (by `by`, at once, as a group's are): every message to or from them still
    * waiting is withdrawn, and every one being delivered is taken back, its turn interrupted, its
-   * recipient told with its next message should it have reached it, as of a withdrawal. Resolves
-   * once each is withdrawn (one being delivered, once its turn has ended).
+   * recipient told with its next message should it have reached it, as of a withdrawal: one
+   * being delivered is withdrawn once its turn has ended, which this never waits for.
    */
-  async kill(agents: readonly string[], by: PartyId): Promise<void> {
+  kill(agents: readonly string[], by: PartyId): void {
     const killed = new Set(agents.map(agentParty));
-    const withdrawing: Promise<Withdrawal>[] = [];
     for (const message of this.#deps.store.active()) {
       // The run's own sends are the run's to take back (its kill holds and withdraws them).
       if (message.kind !== 'text' || sentByRun(message)) continue;
@@ -490,10 +493,9 @@ export class Delivery {
           : undefined;
       if (why === undefined) continue;
       if (message.state === 'pending') this.#withdrawn(message, by);
-      else if (this.#inFlight(message)) withdrawing.push(this.#takeBack(message, by, why));
+      else if (this.#inFlight(message)) this.#takeBack(message, by, why);
     }
     this.schedule();
-    await Promise.all(withdrawing);
   }
 
   /**
@@ -1081,23 +1083,25 @@ export class Delivery {
     this.schedule();
   }
 
-  /** Takes back a message being delivered for `by`: withdrawn once its turn has ended. */
-  #takeBack(message: Message, by: PartyId, why: TakeBackWhy): Promise<Withdrawal> {
+  /**
+   * Takes back a message being delivered for `by`: withdrawn at once off its session's queue, else
+   * once its interrupted turn has ended. What it did as it is asked for: off the queue, what that
+   * did; else whether its CLI has it, and so whether its turn is being interrupted. Never waits for
+   * the turn's end, so no op waits in its scope on a CLI that ignores the interrupt.
+   */
+  #takeBack(message: Message, by: PartyId, why: TakeBackWhy): Withdrawal {
     const existing = this.#withdrawing.get(message.id);
-    if (existing) return existing.ended;
+    if (existing) return asked(existing.reached || this.#reached(message));
     const takeBack = this.#sent.get(message.id);
     if (!takeBack) {
       // Still being journaled: it is never sent.
       this.#withdrawn(message, by);
-      return Promise.resolve({ reached: false, interrupted: false });
+      return { reached: false, interrupted: false };
     }
-    let finish!: TakingBack['finish'];
-    const ended = new Promise<Withdrawal>((resolve) => {
-      finish = resolve;
-    });
-    this.#withdrawing.set(message.id, { by, why, reached: this.#reached(message), ended, finish });
+    const taking: TakingBack = { by, why, reached: this.#reached(message) };
+    this.#withdrawing.set(message.id, taking);
     takeBack();
-    return ended;
+    return taking.ended ?? asked(taking.reached);
   }
 
   /** Whether the CLI has the message: delivering also covers journaling and the session queue. */
@@ -1122,7 +1126,7 @@ export class Delivery {
     const result = { reached, interrupted: reached && interrupted };
     const note = reached ? this.#note(message, taking, result.interrupted) : undefined;
     this.#withdrawn(message, taking.by, note);
-    taking.finish(result);
+    taking.ended = result;
   }
 
   /**
@@ -1356,6 +1360,14 @@ function unaskingText(name: string, why: UnaskingWhy): string {
  */
 function holdKey(kind: HoldKind, agent: string, ...rest: string[]): string {
   return [kind, encodeURIComponent(agent), ...rest].join(':');
+}
+
+/**
+ * What taking back a message being delivered does as it is asked for, before its turn ends: if its
+ * CLI has it, its turn is being interrupted.
+ */
+function asked(reached: boolean): Withdrawal {
+  return { reached, interrupted: reached };
 }
 
 /** Why a message couldn't be sent or taken back: a code, as an operation's failure carries it. */
