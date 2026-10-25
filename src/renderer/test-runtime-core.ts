@@ -29,8 +29,12 @@ export function runtimeWorld(history = 0) {
     status: 'working',
     entries,
   });
+  // Holds keyed by agent and by group (B11 §16.3b), never top-level arrays: `other` held by you,
+  // and `agent`'s group by a token.
   const run = runView({
     running: true,
+    individualPauses: [{ id: other, by: 'you' }],
+    groupPauses: [{ id: agent, by: 'outside:lead' }],
     agents: {
       [agent]: {
         status: 'running',
@@ -40,7 +44,7 @@ export function runtimeWorld(history = 0) {
           work: [{ id: 'attempt', messageId: id, startedAt: 1, status: 'running' }],
         },
       },
-      [other]: { status: 'waiting', outcomes: {} },
+      [other]: { status: 'waiting', paused: true, outcomes: {} },
     },
   });
   const message = messageView(

@@ -84,6 +84,13 @@ describe('unserved B11 topic contracts', () => {
     expect(
       snapshotFrameFits({ ...chunk, entries: [...chunk.entries, { key: 'small', value: 'y' }] }),
     ).toBe(false);
+    // An entry within a frame by itself, but past it with its chunk's envelope: alone, it fits.
+    const near = { ...chunk, entries: [{ key: 'near', value: 'x'.repeat(MAX_TOPIC_FRAME - 50) }] };
+    expect(new TextEncoder().encode(JSON.stringify(near)).length).toBeGreaterThan(MAX_TOPIC_FRAME);
+    expect(snapshotFrameFits(near)).toBe(true);
+    expect(
+      snapshotFrameFits({ ...near, entries: [...near.entries, { key: 'small', value: 'y' }] }),
+    ).toBe(false);
   });
   it('requires a nonnegative safe integer chunk index, even for an oversized entry', () => {
     const chunk = {

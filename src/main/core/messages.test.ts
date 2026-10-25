@@ -361,7 +361,19 @@ describe('stalled message turns', () => {
   it.each(['silence', 'network'] as const)(
     'on %s, warns in the session, wakes wait once, offers Interrupt, and never interrupts by itself',
     async (trigger) => {
-      let interfaces: ReturnType<NonNullable<CoreConfig['watchdogNetwork']>> = {};
+      const en0 = (address: string) => ({
+        en0: [
+          {
+            family: 'IPv4' as const,
+            address,
+            netmask: '255.255.255.0',
+            internal: false,
+            mac: '',
+            cidr: `${address}/24`,
+          },
+        ],
+      });
+      let interfaces: ReturnType<NonNullable<CoreConfig['watchdogNetwork']>> = en0('192.0.2.1');
       watchdogNetwork = () => interfaces;
       let now = Date.now();
       let tick: (() => void) | undefined;
@@ -414,18 +426,7 @@ describe('stalled message turns', () => {
       if (trigger === 'network') {
         now += 15_000;
         tick?.(); // Baseline.
-        interfaces = {
-          en0: [
-            {
-              family: 'IPv4',
-              address: '192.0.2.1',
-              netmask: '255.255.255.0',
-              internal: false,
-              mac: '',
-              cidr: '192.0.2.1/24',
-            },
-          ],
-        };
+        interfaces = en0('198.51.100.1'); // Another network: the old address is gone.
         now += 15_000;
         tick?.(); // Change detected.
       }
@@ -869,7 +870,11 @@ describe('delivery', () => {
       turnEnd.resolve(undefined);
       await Promise.all([withdrawing, killing, sending]);
     }
-    expect(await withdrawing).toEqual({ reached: true, interrupted: true, revs: {} });
+    expect(await withdrawing).toEqual({
+      reached: true,
+      interrupted: true,
+      revs: expect.any(Object) as Record<string, number>,
+    });
   });
 
   it('holds a party’s message while its agent runs in a mode that never asks, telling its sender and you', async () => {
@@ -1058,7 +1063,7 @@ describe('delivery', () => {
         },
         YOU,
       ),
-    ).toEqual({ ok: true, value: { revs: {} } });
+    ).toEqual({ ok: true, value: { revs: expect.any(Object) as Record<string, number> } });
     await vi.waitFor(async () => {
       const reply = (await inbox(BUILDER)).find((message) => message.replyTo === id);
       expect(reply?.state).toBe('replied');
@@ -1214,26 +1219,33 @@ async function needsOf(): Promise<NeedsItem[]> {
 
 describe('a mode that never asks', () => {
   it.each(['codex', 'claude-code'] as const)(
-    'delivers a party message to %s Terminal from its startup hook, without a typed prompt',
+    'delivers a party message to %s Terminal before its first permission hook, without a typed prompt',
     async (adapter) => {
-      await terminalStartup(adapter, 'default');
+      await terminalStartup(adapter);
       const id = await send('shell', 'Work from another party');
       await vi.waitFor(() => {
         expect(startupSends).toHaveBeenCalledOnce();
       });
       expect(startupSends.mock.calls[0]?.[0].text).toBe(`${FRAME(id)}Work from another party`);
       expect((await find(id))?.delivery).toBeDefined();
+      expect(await notices()).toEqual([]);
+      expect((await needsOf()).filter(({ id }) => id.startsWith('unasking/'))).toEqual([]);
     },
   );
 
   it.each(['codex', 'claude-code'] as const)(
-    'holds the first party message when %s Terminal’s startup hook reports bypass',
+    'holds a party message once %s Terminal reports bypass in a native hook',
     async (adapter) => {
-      await terminalStartup(adapter, 'bypassPermissions');
+      await terminalStartup(adapter);
+      const engine = core?.engines.canvas(CANVAS)?.engine;
+      await engine?.sessions.ready('shell');
+      await core?.engines.emit(CANVAS, 'shell', `${adapter}.terminal`, {
+        type: 'mode',
+        mode: adapter === 'codex' ? 'full-access' : 'bypassPermissions',
+      });
       const id = await send('shell', 'Must wait');
-      await vi.waitFor(() => {
-        const session = core?.engines.canvas(CANVAS)?.engine.sessions.of('shell');
-        expect(session?.mode).toBe(adapter === 'codex' ? 'full-access' : 'bypassPermissions');
+      await vi.waitFor(async () => {
+        expect((await notices()).some(({ replyTo }) => replyTo === id)).toBe(true);
       });
       expect(startupSends).not.toHaveBeenCalled();
       expect((await find(id))?.state).toBe('pending');
@@ -1241,10 +1253,7 @@ describe('a mode that never asks', () => {
   );
 
   let startupSends: ReturnType<typeof vi.fn<(message: UserMessage) => void>>;
-  async function terminalStartup(
-    adapter: 'codex' | 'claude-code',
-    permissionMode: string,
-  ): Promise<void> {
+  async function terminalStartup(adapter: 'codex' | 'claude-code'): Promise<void> {
     await keepCanvas(
       [{ id: 'shell', label: 'Shell', adapter, connection: `${adapter}.terminal` }],
       [],
@@ -1269,8 +1278,7 @@ describe('a mode that never asks', () => {
     const connector: Connector<SessionMode> =
       adapter === 'claude-code'
         ? new TerminalConnector({
-            spawn: (file, args, spec) =>
-              Promise.resolve(new FakeClaude(file, args, spec, { sessionStart: permissionMode })),
+            spawn: (file, args, spec) => Promise.resolve(new FakeClaude(file, args, spec, {})),
             findClaude: () => Promise.resolve('/fake/claude'),
             flags: () => Promise.resolve(new Set()),
             home: profile,
@@ -1278,8 +1286,7 @@ describe('a mode that never asks', () => {
             timing,
           })
         : new CodexTerminalConnector({
-            spawn: (_file, args, spec) =>
-              Promise.resolve(new Replay('prompts', args, spec, () => false, permissionMode)),
+            spawn: (_file, args, spec) => Promise.resolve(new Replay('prompts', args, spec)),
             findCodex: () => Promise.resolve('/fake/codex'),
             version: () => Promise.resolve('0.160.1'),
             truster: new HookTruster({ start: () => Promise.reject(new Error('not here')) }),
@@ -1304,6 +1311,50 @@ describe('a mode that never asks', () => {
     };
     await start(adapter === 'codex' ? { terminal: observed } : { claude: observed });
   }
+
+  it('silently waits for a Terminal permission report, then warns only after its startup bound', async () => {
+    await keepCanvas();
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+    codexDefault(true);
+    terminal = new FakeConnector({ adapter: 'codex', mode: null });
+    const engine = await (await start()).engines.open(CANVAS);
+    await engine.sessions.ready('shell');
+    const raised: string[] = [];
+    const stop = core?.watch({ need: (_canvas, item) => raised.push(item.id) });
+    try {
+      const id = await send('shell', 'Wait for the first hook');
+      expect((await find(id))?.state).toBe('pending');
+      expect(await notices()).toEqual([]);
+      expect(await needsOf()).toEqual([]);
+      expect(raised).toEqual([]);
+      await vi.advanceTimersByTimeAsync(29_999);
+      expect(await notices()).toEqual([]);
+      expect(await needsOf()).toEqual([]);
+      await vi.advanceTimersByTimeAsync(2);
+      expect((await notices()).map(({ replyTo }) => replyTo)).toEqual([id]);
+      expect((await needsOf()).map(({ id }) => id)).toEqual(['unasking/shell']);
+      expect(sent(terminal)).toEqual([]);
+    } finally {
+      stop?.();
+    }
+  });
+
+  it('releases the silent startup hold when a Terminal hook reports that it asks', async () => {
+    await keepCanvas();
+    codexDefault(true);
+    terminal = new FakeConnector({ adapter: 'codex', mode: null });
+    const engine = await (await start()).engines.open(CANVAS);
+    await engine.sessions.ready('shell');
+    const id = await send('shell', 'A late permission hook');
+    expect(await notices()).toEqual([]);
+    expect(await needsOf()).toEqual([]);
+    await core?.engines.emit(CANVAS, 'shell', 'codex.terminal', { type: 'mode', mode: 'auto' });
+    await vi.waitFor(() => {
+      expect(sent(terminal)).toEqual([`${FRAME(id)}A late permission hook`]);
+    });
+    expect(await notices()).toEqual([]);
+    expect((await needsOf()).filter(({ id }) => id.startsWith('unasking/'))).toEqual([]);
+  });
 
   const DEFAULT_WAITS =
     'Builder’s CLI defaults to a mode that never asks before it acts, so your message waits until Builder runs in one that asks, which only the user can set.';
@@ -1532,7 +1583,7 @@ describe('a mode that never asks', () => {
     expect((await needsOf()).map(({ id }) => id)).toEqual(['unasking/builder']);
   });
 
-  it('holds a party’s message when the running session cannot report its permissions', async () => {
+  it('holds a party’s message immediately when a running Terminal has hooks off and no permissions report', async () => {
     await keepCanvas();
     // Shell's terminal has not reported its permissions; its earlier default cannot vouch for it.
     const codex = codexDefault(false);
@@ -1543,12 +1594,16 @@ describe('a mode that never asks', () => {
       expect((await find(started, YOU))?.state).toBe('replied');
     });
     expect(engine.sessions.of('shell').running).toBeDefined();
+    await core?.engines.emit(CANVAS, 'shell', 'codex.terminal', {
+      type: 'unheard',
+      text: 'Hooks are disabled.',
+    });
     const first = await send('shell', 'First');
     await vi.waitFor(async () => {
       expect((await notices()).map(({ replyTo, body }) => [replyTo, body])).toEqual([
         [
           first,
-          'corrallm can’t tell whether Shell’s running session asks before it acts, so your message waits until it reports that it asks: only the user can switch its mode or restart it.',
+          'corrallm can’t tell whether Shell’s running session asks before it acts, so your message waits until it reports that it asks: check its terminal and switch it to a mode that asks, or enable its hooks if they are off.',
         ],
       ]);
     });
@@ -1556,10 +1611,11 @@ describe('a mode that never asks', () => {
       expect.objectContaining({
         title:
           'corrallm can’t tell whether Shell’s running session asks, so messages from other parties wait',
-        detail: 'Switch it to a mode that asks, or set one in its settings and restart it.',
+        detail:
+          'Check its terminal and switch it to a mode that asks, or enable its hooks if they are off.',
       }),
     ]);
-    expect(codex.reads()).toBe(0);
+    expect(codex.reads()).toBe(1);
   });
 
   it('delivers to a session that never says its mode when it is set to start in one that asks', async () => {
@@ -1799,7 +1855,7 @@ async function withdrawReceived(to = 'builder', caller: Caller = OUTSIDE): Promi
   expect(await ok('withdraw', { id }, caller)).toEqual({
     reached: true,
     interrupted: true,
-    revs: {},
+    revs: expect.any(Object) as Record<string, number>,
   });
   expect((await find(id, caller))?.state).toBe('withdrawn');
   return id;
@@ -1821,7 +1877,7 @@ async function startAtTrust() {
   const runs: FakeClaude[] = [];
   const connector = new TerminalConnector({
     spawn: (file, args, spec) => {
-      const run = new FakeClaude(file, args, spec, { trust: true, sessionStart: 'default' });
+      const run = new FakeClaude(file, args, spec, { trust: true });
       runs.push(run);
       return Promise.resolve(run);
     },
@@ -1862,7 +1918,7 @@ describe('telling an agent of a withdrawal after receipt', () => {
     expect(await ok('withdraw', { id }, YOU)).toEqual({
       reached: false,
       interrupted: false,
-      revs: {},
+      revs: expect.any(Object) as Record<string, number>,
     });
     const cli = terminal.runs[0];
     if (!cli) throw new Error('No terminal');
@@ -2043,7 +2099,11 @@ describe('telling an agent of a withdrawal after receipt', () => {
     await start();
     await ok('run.pause', { target: { agent: 'builder' } }, YOU);
     const id = await send('builder', 'Never sent');
-    expect(await ok('withdraw', { id })).toEqual({ reached: false, interrupted: false, revs: {} });
+    expect(await ok('withdraw', { id })).toEqual({
+      reached: false,
+      interrupted: false,
+      revs: expect.any(Object) as Record<string, number>,
+    });
     await ok('run.unpause', { target: { agent: 'builder' } }, YOU);
     const next = await send('builder', 'New work', OTHER);
     await vi.waitFor(async () => {
@@ -2067,7 +2127,7 @@ describe('telling an agent of a withdrawal after receipt', () => {
     expect(await ok('withdraw', { id: queued }, YOU)).toEqual({
       reached: false,
       interrupted: false,
-      revs: {},
+      revs: expect.any(Object) as Record<string, number>,
     });
     await ok('session.interrupt', { agent: 'builder' }, YOU);
     await vi.waitFor(async () => {
@@ -2176,7 +2236,11 @@ describe('telling an agent of a withdrawal after receipt', () => {
     await vi.waitFor(async () => {
       expect((await find(next, YOU))?.state).toBe('delivering');
     });
-    expect(await ok('withdraw', { id })).toEqual({ reached: true, interrupted: true, revs: {} });
+    expect(await ok('withdraw', { id })).toEqual({
+      reached: true,
+      interrupted: true,
+      revs: expect.any(Object) as Record<string, number>,
+    });
     await vi.waitFor(async () => {
       expect((await find(next, YOU))?.state).toBe('replied');
     });
@@ -3461,7 +3525,7 @@ describe('pauses', () => {
     await ok('run.pause', { target: { agent: 'builder' } });
     expect(await ok('run.unpause', { target: { agent: 'builder' } })).toEqual({
       held: [{ by: 'you', on: 'builder' }],
-      revs: {},
+      revs: expect.any(Object) as Record<string, number>,
     });
     const id = await send('builder', 'Still paused?');
     await new Promise((resolve) => setTimeout(resolve, 50));
@@ -3469,7 +3533,7 @@ describe('pauses', () => {
     // Yours released too, it runs again.
     expect(await ok('run.unpause', { target: { agent: 'builder' } }, YOU)).toEqual({
       held: [],
-      revs: {},
+      revs: expect.any(Object) as Record<string, number>,
     });
     await vi.waitFor(async () => {
       expect((await find(id))?.state).toBe('replied');
@@ -3494,7 +3558,7 @@ describe('pauses', () => {
     // You release only Builder's own pauses; its group's still holds it.
     expect(await ok('run.unpause', { target: { agent: 'builder' } }, YOU)).toEqual({
       held: [{ by: 'you', on: 'team' }],
-      revs: {},
+      revs: expect.any(Object) as Record<string, number>,
     });
   });
 
@@ -3521,7 +3585,10 @@ describe('pauses', () => {
           'Builder is held by your pause on its group "Team": release it with run.unpause on that group. It is also paused by "other": only the party that set a pause, or the user, can release it.',
       },
     });
-    expect(await ok('run.unpause', { target: { group: 'team' } })).toEqual({ held: [], revs: {} });
+    expect(await ok('run.unpause', { target: { group: 'team' } })).toEqual({
+      held: [],
+      revs: expect.any(Object) as Record<string, number>,
+    });
   });
 
   it.each([
@@ -3589,7 +3656,7 @@ describe('pauses', () => {
     ).toMatchObject({ ok: false, error: { code: 'refused' } });
     expect(await ok('run.unpause', { target: { agent: 'builder' } }, OTHER)).toEqual({
       held: [],
-      revs: {},
+      revs: expect.any(Object) as Record<string, number>,
     });
   });
 
@@ -3599,7 +3666,7 @@ describe('pauses', () => {
     await ok('run.kill', { target: { agent: 'builder' } });
     expect(await ok('run.unpause', { target: { agent: 'builder' } })).toEqual({
       held: [],
-      revs: {},
+      revs: expect.any(Object) as Record<string, number>,
     });
     const id = await send('builder', 'Back again');
     await vi.waitFor(async () => {
@@ -4040,11 +4107,19 @@ describe('reads', () => {
     });
     expect(await started.call('withdraw', { id }, both)).toEqual({
       ok: true,
-      value: { reached: false, interrupted: false, revs: {} },
+      value: {
+        reached: false,
+        interrupted: false,
+        revs: expect.any(Object) as Record<string, number>,
+      },
     });
     const next = await send('builder', 'Say hello over MCP', both);
     expect(await callTool(started, both, 'withdraw', { id: next })).toMatchObject({
-      structuredContent: { reached: false, interrupted: false, revs: {} },
+      structuredContent: {
+        reached: false,
+        interrupted: false,
+        revs: expect.any(Object) as Record<string, number>,
+      },
     });
     expect(await find(id)).toMatchObject({ state: 'withdrawn' });
     expect(await find(next)).toMatchObject({ state: 'withdrawn' });

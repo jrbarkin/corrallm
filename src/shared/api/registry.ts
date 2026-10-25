@@ -9,11 +9,11 @@ import { batchOps } from './ops/batch';
 import { canvasOps } from './ops/canvas';
 import { catalogOps } from './ops/catalog';
 import { filesOps } from './ops/files';
-import { conversationOps } from './ops/conversation';
+import { b11ConversationOps, conversationOps } from './ops/conversation';
 import { linkOps } from './ops/link';
 import { projectOps } from './ops/project';
-import { runOps } from './ops/run';
-import { sessionOps } from './ops/session';
+import { b11RunOps, runOps } from './ops/run';
+import { b11SessionOps, sessionOps } from './ops/session';
 import { settingsOps } from './ops/settings';
 import { terminalOps } from './ops/terminal';
 import { templatesOps } from './ops/templates';
@@ -41,8 +41,20 @@ export const OPS = {
   ...queueOps,
   ...conversationOps,
   ...sessionOps,
+  'session.open': b11SessionOps['session.open'],
+  'session.setMode': b11SessionOps['session.setMode'],
+  'session.setModel': b11SessionOps['session.setModel'],
+  'session.setEffort': b11SessionOps['session.setEffort'],
+  'session.stopTask': b11SessionOps['session.stopTask'],
+  'session.restart': b11SessionOps['session.restart'],
+  'session.newConversation': b11SessionOps['session.newConversation'],
+  'session.rewindPreview': b11SessionOps['session.rewindPreview'],
+  'session.rewind': b11SessionOps['session.rewind'],
+  'session.continueIn': b11SessionOps['session.continueIn'],
+  reply: b11ConversationOps.reply,
   ...settingsOps,
   ...runOps,
+  'run.get': b11RunOps['run.get'],
   ...usageOps,
   ...linkOps,
   ...windowOps,

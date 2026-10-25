@@ -90,11 +90,16 @@ const REGISTRIES: [
 
 describe.each(REGISTRIES)('T3a on %s', (_label, fixtures, world, start) => {
   let setup: Setup;
-  let server: ApiServer;
+  let server: ApiServer | undefined;
   const clients = new Map<Party, Client>();
 
   beforeAll(async () => {
     setup = await start();
+  });
+
+  // Dispatch parity does not need a listening socket. Open HTTP only for its own cases.
+  async function http(): Promise<void> {
+    if (server !== undefined) return;
     server = await startApiServer({
       core: setup.core,
       clientOf: (token) => {
@@ -113,11 +118,11 @@ describe.each(REGISTRIES)('T3a on %s', (_label, fixtures, world, start) => {
       await client.listTools();
       clients.set(party, client);
     }
-  });
+  }
 
   afterAll(async () => {
     for (const client of clients.values()) await client.close();
-    await server.close();
+    await server?.close();
     await setup.close();
   });
 
@@ -137,6 +142,7 @@ describe.each(REGISTRIES)('T3a on %s', (_label, fixtures, world, start) => {
   it.each(Object.entries(fixtures))(
     'answers %s over HTTP as directly, for every caller a token can be',
     async (name, fixture) => {
+      await http();
       // MCP carries arguments as an object, or none.
       const sendable = transportCases(setup.core, name, fixture, world, [...clients.keys()]).filter(
         ({ args }) =>

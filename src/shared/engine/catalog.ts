@@ -44,6 +44,8 @@ export interface EngineCatalog {
   usageBackendOf(agent: Runs): UsageBackendId | undefined;
   /** How a connection is named ("Terminal"): nothing, for one the catalog lacks. */
   connectionLabel(connection: ConnectionId): string | undefined;
+  /** Whether this connection runs its CLI's own terminal. */
+  isTerminal(connection: ConnectionId): boolean;
   /**
    * How a connection is named in full, with its adapter's name ("<adapter> · Terminal"): nothing,
    * for one the catalog lacks.
@@ -89,6 +91,7 @@ export function engineCatalog(catalog: Catalog, defaultAdapter: AdapterId): Engi
     actionsOf: ({ adapter = defaultAdapter }) => adapterIn(catalog, adapter)?.actions ?? [],
     usageBackendOf: (agent) => connection(connectionOf(agent))?.connection.usage ?? undefined,
     connectionLabel: (id) => connection(id)?.connection.label,
+    isTerminal: (id) => connection(id)?.connection.view === 'terminal',
     connectionName: (id) => {
       const found = connection(id);
       return found && `${found.adapter.name} · ${found.connection.label}`;

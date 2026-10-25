@@ -183,6 +183,7 @@ export interface Session {
   /**
    * Whether what a connected session runs with asks before it acts, as it said where its mode
    * doesn't (null: settings of the user's own that are none of its modes); absent where it didn't.
+   * A Terminal's initial value is its trusted pre-launch default until its hooks report a mode.
    */
   asks?: boolean;
   /** The model picked for it; null for its agent's default. */

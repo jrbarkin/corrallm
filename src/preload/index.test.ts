@@ -111,6 +111,32 @@ async function exposed(): Promise<AppApi> {
   return api as AppApi;
 }
 
+describe('the drafts a window composes, flushed before a quit', () => {
+  it('answers the core’s drafts.flush over its port once the page’s listener settles', async () => {
+    const api = await exposed();
+    postPort(answerInfo);
+    // With no listener yet (the page still loading), it answers at once: nothing is composed.
+    expect(await remote.request('drafts.flush')).toEqual({ ok: true, value: null });
+    const flushing = Promise.withResolvers<undefined>();
+    const listener = vi.fn(() => flushing.promise);
+    const stop = api.draftsOnFlush(listener);
+    let answered = false;
+    const asked = remote.request('drafts.flush').then((answer) => {
+      answered = true;
+      return answer;
+    });
+    await vi.waitFor(() => {
+      expect(listener).toHaveBeenCalledOnce();
+    });
+    expect(answered).toBe(false);
+    flushing.resolve(undefined);
+    expect(await asked).toEqual({ ok: true, value: null });
+    stop();
+    expect(await remote.request('drafts.flush')).toEqual({ ok: true, value: null });
+    expect(listener).toHaveBeenCalledOnce();
+  });
+});
+
 describe('topic events', () => {
   it('passes batches whole without Electron objects and remembers the core epoch for a late listener', async () => {
     await import('./index');
@@ -180,6 +206,7 @@ describe('the window’s port to the core', () => {
         'terminalOnEvent',
         'topicsOnChange',
         'topicsOnEpoch',
+        'draftsOnFlush',
       ].sort(),
     );
     expect(Object.values(api).every((value) => typeof value === 'function')).toBe(true);

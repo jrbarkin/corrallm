@@ -4,7 +4,13 @@ import type { OpResult } from '../shared/api/errors';
 import { GUI_OPS } from '../shared/api/surface';
 import type { GuiOp } from '../shared/api/surface';
 import { topicKey } from '../shared/api/topics';
-import type { Change, TopicKey, TopicSnapshot, TopicStates } from '../shared/api/topics';
+import type {
+  Change,
+  TopicKey,
+  RuntimeTopicKey,
+  TopicSnapshot,
+  TopicStates,
+} from '../shared/api/topics';
 import { guiFunction } from '../shared/gui-link';
 import type { GuiApi, GuiBridge } from '../shared/gui-link';
 import { fromBridge } from './api/bridge';
@@ -24,8 +30,8 @@ type FedChange = Change extends infer C
 /** A renderer's core: calls are recorded; tests decide the results and feed its pushed state. */
 export function fakeCore() {
   const operations: RecordedOp[] = [];
-  const subscriptions = new Set<TopicKey>();
-  const snapshots = new Map<TopicKey, TopicSnapshot>();
+  const subscriptions = new Set<TopicKey | RuntimeTopicKey>();
+  const snapshots = new Map<TopicKey | RuntimeTopicKey, TopicSnapshot>();
   const replies = new Map<
     GuiOp,
     OpResult<unknown> | ((args: unknown) => Promise<OpResult<unknown>>)

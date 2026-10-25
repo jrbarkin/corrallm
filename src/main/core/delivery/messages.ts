@@ -200,6 +200,8 @@ export class MessageStore {
   #bytes = 0;
   /** What hears each message added. */
   readonly #listeners = new Set<(message: Message) => void>();
+  /** What hears each message kept, changed or no longer kept (its id): the topics' source. */
+  readonly #watchers = new Set<(id: string) => void>();
   /**
    * The messages changed (or deleted) whose rows aren't on disk as they are yet, each with the
    * number of its last change: a write marks a row on disk only if it has not changed since.
@@ -321,10 +323,12 @@ export class MessageStore {
       message,
       reveal: () => {
         this.#prune();
+        this.#changedId(message.id);
         for (const listener of this.#listeners) listener(message);
       },
       undo: () => {
         this.#delete(message.id);
+        this.#changedId(message.id);
       },
     };
   }
@@ -334,6 +338,18 @@ export class MessageStore {
     this.#listeners.add(listener);
     return () => {
       this.#listeners.delete(listener);
+    };
+  }
+
+  /**
+   * Hears, by its id, each message kept from now on, each change to one, and each one no longer
+   * kept (pruned): what a canvas's `messages:<c>` topic publishes (B11 §5). A message staged within
+   * a write is heard once revealed.
+   */
+  watch(watcher: (id: string) => void): () => void {
+    this.#watchers.add(watcher);
+    return () => {
+      this.#watchers.delete(watcher);
     };
   }
 
@@ -351,6 +367,19 @@ export class MessageStore {
   /** A durable notice already told this, even if its message's turn has ended since. */
   hasTold(key: string): boolean {
     return [...this.#kept.values()].some(({ told }) => told === key);
+  }
+
+  /** The message kept with the told key `key`, if one is (what a request admitted once). */
+  toldAs(key: string): Message | undefined {
+    for (const { message, told } of this.#kept.values()) if (told === key) return message;
+    return undefined;
+  }
+
+  /** The messages kept with a told key starting `prefix`, in the store's order. */
+  toldStarting(prefix: string): Message[] {
+    return [...this.#kept.values()].flatMap(({ message, told }) =>
+      told?.startsWith(prefix) === true ? [message] : [],
+    );
   }
 
   /** How a message kept came to be. */
@@ -564,6 +593,7 @@ export class MessageStore {
     if (this.#unjournaled === undefined) this.#changed.set(message.id, ++this.#changes);
     else this.#lost = true;
     this.#prune();
+    this.#changedId(message.id);
     if (this.#scheduled || this.#unjournaled !== undefined) return;
     this.#scheduled = true;
     queueMicrotask(() => {
@@ -605,6 +635,11 @@ export class MessageStore {
   #drop(id: string): void {
     this.#delete(id);
     if (this.#unjournaled === undefined) this.#changed.set(id, ++this.#changes);
+    this.#changedId(id);
+  }
+
+  #changedId(id: string): void {
+    for (const watcher of this.#watchers) watcher(id);
   }
 }
 

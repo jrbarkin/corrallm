@@ -336,7 +336,8 @@
           }
         }
       ],
-      "registerMcp": "claude mcp add --transport http {server} {url} --header 'Authorization: Bearer ${{var}}'"
+      "registerMcp": "claude mcp add --transport http {server} {url} --header 'Authorization: Bearer ${{var}}'",
+      "registerMcpHelper": "claude mcp add-json {server} '{\"type\":\"http\",\"url\":\"{url}\",\"headersHelper\":\"{helper}\"}'"
     },
     {
       "id": "codex",

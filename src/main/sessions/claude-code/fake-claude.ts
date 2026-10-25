@@ -18,8 +18,6 @@ const PROBES = '\x1b]11;?\x07\x1b[c\x1b[>0q\x1b[?u\x1b]7501;?\x07\x1b[c';
 const RULE = '─'.repeat(40);
 
 export interface FakeClaudeOptions {
-  /** Emulates SessionStart, in this permission mode, before any prompt is typed. */
-  sessionStart?: string;
   /** Test graceful native exit after this many Ctrl+C keys. */
   exitOnCtrlC?: number;
   /** Whether it reports its status (Claude Code 2.1.295 and later do). */
@@ -79,7 +77,7 @@ export class FakeClaude implements Pty {
     this.args = args;
     this.options = options;
     this.#options = fake;
-    this.#mode = fake.sessionStart ?? this.#mode;
+    this.#mode = this.arg('--permission-mode') ?? this.#mode;
     this.#trusting = fake.trust ?? false;
     setTimeout(() => {
       this.#boot();
@@ -187,7 +185,7 @@ export class FakeClaude implements Pty {
       body: JSON.stringify({
         session_id: this.sessionId,
         cwd: this.options.cwd,
-        permission_mode: this.#mode,
+        ...(name === 'SessionStart' ? {} : { permission_mode: this.#mode }),
         hook_event_name: name,
         ...fields,
       }),
@@ -263,6 +261,7 @@ export class FakeClaude implements Pty {
   }
 
   #boot(): void {
+    if (this.exited) return;
     const resume = this.arg('--resume');
     if (resume !== undefined && !(this.#options.transcripts ?? []).includes(resume)) {
       this.print(`No conversation found with session ID: ${resume}\r\n`);
@@ -282,8 +281,11 @@ export class FakeClaude implements Pty {
   }
 
   #ready(state: 'idle'): void {
-    if (this.#options.sessionStart !== undefined)
-      void this.hook('SessionStart', { source: 'startup' });
+    void this.hook('SessionStart', {
+      source: 'startup',
+      model: 'fake-model',
+      transcript_path: `${this.options.cwd}/fake-transcript.jsonl`,
+    }).catch(() => undefined);
     this.report(`state=${state}`);
     this.#state = state;
     this.#busyUntil = Date.now() + (this.#options.busy ?? 0);

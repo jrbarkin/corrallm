@@ -10,19 +10,18 @@ import {
 } from '../../../shared/session';
 import { CLAUDE_EFFORTS } from './efforts';
 import type { PermissionMode, TerminalAsk } from '../../../shared/session';
-import type { UsageWindows } from '../../../shared/usage';
 import { claudeFailure } from './claude-errors';
 import { isUuid } from '../id';
 import { askedQuestions } from './sdk/prompts';
 import { proposedDetail, property, text as textOf, toolSummary } from './sdk/tools';
 import type { Places } from './sdk/tools';
 import { preview } from '../transcript';
-import type { Launch, TerminalCli, TerminalSignal } from '../terminal/cli';
+import type { Launch, StatusLineReading, TerminalCli, TerminalSignal } from '../terminal/cli';
 import { hookSettings } from './hooks';
 import type { HookEvent, HookRegistration } from '../terminal/hooks';
 import { hooksOff, hooksOffWarning, managedSettingsFolder } from './hooks-off';
 import type { Screen } from '../terminal/screen';
-import { statusLineSettings, statusLineUsage } from './statusline';
+import { statusLineProgress, statusLineSettings, statusLineUsage } from './statusline';
 import { keystrokes, typeable } from './typing';
 
 /*
@@ -105,6 +104,8 @@ export class ClaudeCode implements TerminalCli<PermissionMode> {
   readonly #managed: string;
   /** Why corrallm can't hear it, once its settings were read (they turn its hooks off). */
   #unheard: string | undefined;
+  /** A malformed native id is warned about once, while its hooks are still heard. */
+  readonly #invalidIds = new Set<unknown>();
 
   constructor({
     cwd,
@@ -184,11 +185,13 @@ export class ClaudeCode implements TerminalCli<PermissionMode> {
     const signals: TerminalSignal<PermissionMode>[] = [];
     const id = text('session_id');
     if (isUuid(id)) signals.push({ kind: 'session', id });
-    else if (event.session_id !== undefined)
+    else if (event.session_id !== undefined && !this.#invalidIds.has(event.session_id)) {
+      this.#invalidIds.add(event.session_id);
       signals.push({
         kind: 'notice',
         text: 'Claude Code reported an invalid conversation id; it will not be resumed.',
       });
+    }
     const mode = modeOf(text('permission_mode'));
     if (mode !== undefined) signals.push({ kind: 'mode', mode });
     switch (text('hook_event_name')) {
@@ -315,8 +318,8 @@ export class ClaudeCode implements TerminalCli<PermissionMode> {
     return typeable(text).trim();
   }
 
-  statusLine(input: HookEvent): UsageWindows | undefined {
-    return statusLineUsage(input, Date.now());
+  statusLine(input: HookEvent): StatusLineReading {
+    return { usage: statusLineUsage(input, Date.now()), progress: statusLineProgress(input) };
   }
 }
 

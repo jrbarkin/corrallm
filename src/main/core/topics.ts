@@ -1,25 +1,56 @@
 import { randomUUID } from 'node:crypto';
 
+import type { OpResult } from '../../shared/api/errors';
 import { SURFACE } from '../../shared/api/surface';
 import type { OpName, Surface, TopicKind } from '../../shared/api/surface';
-import { canvasOfTopic, topicKey, topicRequest } from '../../shared/api/topics';
-import type { Change, TopicKey, TopicName, TopicSnapshot } from '../../shared/api/topics';
+import {
+  canvasOfTopic,
+  isRuntimeTopic,
+  RuntimeTopic,
+  topicKey,
+  topicRequest,
+} from '../../shared/api/topics';
+import type {
+  Change,
+  RuntimeSnapshotFrame,
+  RuntimeTopicKey,
+  RuntimeTopicRequest,
+  TopicKey,
+  TopicName,
+  TopicSnapshot,
+  TopicUpdate,
+} from '../../shared/api/topics';
 import type { CanvasId } from '../../shared/canvas';
+import type { PartyId } from '../../shared/model/messages';
 import type { EntityKey } from '../../shared/model/rows';
 import type { Entities, Entity } from '../../shared/model/state';
-import type { OpContext, Dispatcher } from './call';
+import { projectData } from '../../shared/model/views';
+import type { OpContext, Dispatcher, Publication, ReceiptTopic } from './call';
 import { OpFailure } from './call';
 import { callerKey } from './caller';
 import type { Caller } from './caller';
 import type { CanvasChange } from './canvas/states';
 import type { WindowId } from './host';
+import {
+  argsOf,
+  bytesOf,
+  divide,
+  emptyBody,
+  kindOf,
+  partsOf,
+  TOPIC_BUDGET,
+  viewDiff,
+} from './runtime-topics';
+import type { RuntimeBody, RuntimeSource, RuntimeState } from './runtime-topics';
 
 /*
- * The topics (Core Server §5.1–5.2, B9 Design §7): a subscriber gets the very state its read
- * operation gives it, through that operation's dispatcher and audience, and the changes after it,
- * batched per subscriber every 16 ms. A window subscribes through `topics.subscribe`, as you; any
- * other caller only through `follow` (no transport serves it: tokens get no topics, D5), which T3c
- * reads what a token's subscription would carry with.
+ * The topics (Core Server §5.1–5.2, B9 Design §7, B11 §5 and §16): the common publisher. A
+ * subscriber gets the very state its read gives it, through the dispatcher and audience of the op
+ * that `reads` the topic, and the changes after it, batched per subscriber every 16 ms, each batch
+ * within a topic frame (MAX_TOPIC_FRAME, less room for the port's envelope; one change too big
+ * alone goes alone). A window subscribes through `topics.subscribe`, as you; any other caller only
+ * through `follow` (no transport serves it: tokens get no topics, D5), which T3c reads what a
+ * token's subscription would carry with.
  *
  * `usage`, `settings`, `canvases` and a canvas's `needs:<c>` are replaced whole: when their source
  * says it changed, they are read again through their op, once for each caller who sees them alike
@@ -27,18 +58,61 @@ import type { WindowId } from './host';
  * `canvas:<c>` is keyed: each change is the commit's diff (canvas/states.ts), at the commit's
  * revision, never a re-read, which goes out as it is to whoever sees the whole canvas, and as what
  * it changed of what each other subscriber sees (canvas/view.ts) to them, so a topic is never a
- * second way to reach anything. Revisions are per topic (a canvas's is its document's); sequence
- * numbers are a canvas's for its topics, and the global ones share theirs. A new core has a new
- * epoch; no subscription outlives its subscriber.
+ * second way to reach anything.
+ *
+ * A canvas's runtime topics (`run:<c>`, `sessions:<c>`, `session:<c>:<agent>`, `messages:<c>`:
+ * runtime-topics.ts) are keyed too. Each has one canonical state, yours, and its revision moves at
+ * each change of it as it is taken from its source, whether or not anyone subscribes: you are sent
+ * that change; whoever sees less (a token's copy) reads its own copy again through the topic's
+ * projection and is sent what changed of it, at the same revision (empty, if nothing did), so no
+ * copy skips one. A change too big for a frame goes as several, at consecutive revisions. A snapshot
+ * that fits a frame is answered whole; one that doesn't is a transfer (B11 §16.3a): its `begin`,
+ * with the topic's bounded summary and the number of chunks, answers the subscription (a summary
+ * too big for its frame refuses it, before anything is sent), and its indexed chunks, the entries
+ * in order, then its `end` with the revision, follow on the subscriber's port before any change.
+ *
+ * A write's receipts (call.ts' `published`): once the op is done, what changed of each topic it
+ * names is published, and its revision (yours, for a replaced one) is in the call's `revs`, if it
+ * moved since the op began. Revisions are per topic (a canvas's is its document's); sequence numbers
+ * are a canvas's for its topics, and the global ones share theirs. Every subscription, snapshot and
+ * publication takes its turn in one queue, so no change falls between a snapshot and its
+ * subscription. A new core has a new epoch, its revisions new; no subscription outlives its
+ * subscriber.
  */
 
 /** Who subscribes: a window, or a follower in the core. */
 type SubscriberId = WindowId | symbol;
 
+/** Any topic's key: a global one's, a canvas's, or a canvas's runtime one's. */
+export type AnyTopic = TopicKey | RuntimeTopicKey;
+
+/** What every runtime change says first. */
+interface Head {
+  topic: RuntimeTopicKey;
+  epoch: string;
+  rev: number;
+  seq: number;
+  by: PartyId | 'cli';
+  at: number;
+}
+
+/** A runtime topic's snapshot, when it fits one frame. */
+export interface RuntimeSnapshot {
+  epoch: string;
+  rev: number;
+  state: RuntimeState;
+}
+
+/** What a subscription answers: the topic's state now, or the `begin` of its transfer. */
+export type Subscribed = TopicSnapshot | RuntimeSnapshot | RuntimeSnapshotFrame;
+
 interface Subscription {
   caller: Caller;
   /** For a keyed topic seen in part: the entities it was last told of. */
   seen?: Entities;
+  /** For a runtime topic seen in part (a token's): its copy, as its projection last read it. */
+  view?: RuntimeState;
+  access?: { world: object | undefined; lead: boolean };
 }
 
 export interface TopicsDeps {
@@ -49,6 +123,29 @@ export interface TopicsDeps {
    * at its revision, and whether it sees them all.
    */
   view?: (canvas: CanvasId, caller: Caller) => { rev: number; entities: Entities; all: boolean };
+  /**
+   * The runtime topics' source (runtime-topics.ts), and how a caller reads one through its
+   * projection (core.call's `project`): its audience and reach, the one authorization path.
+   */
+  runtime?: {
+    source: Pick<
+      RuntimeSource,
+      | 'listen'
+      | 'pending'
+      | 'touched'
+      | 'take'
+      | 'taken'
+      | 'state'
+      | 'isPending'
+      | 'available'
+      | 'access'
+    >;
+    project: (
+      topic: RuntimeTopicKey,
+      caller: Caller,
+      signal?: AbortSignal,
+    ) => Promise<OpResult<unknown>>;
+  };
 }
 
 /** The op a topic is read through, by its kind. */
@@ -65,16 +162,19 @@ function groupOf(caller: Caller): string {
   return caller.kind === 'human' ? 'you' : callerKey(caller);
 }
 
-export class Topics {
+const SUMMARY_TOO_LARGE =
+  'This topic’s summary is too large to send in one frame, so it can’t be subscribed to.';
+
+export class Topics implements Publication {
   readonly epoch = randomUUID();
   readonly #deps: TopicsDeps;
   /** Each replaced topic's state as last read, by topic and by who sees it alike. */
   readonly #states = new Map<TopicKey, Map<string, TopicSnapshot>>();
   /** Each replaced topic's revision, by who sees it alike. */
   readonly #revs = new Map<TopicKey, Map<string, number>>();
-  readonly #subscriptions = new Map<SubscriberId, Map<TopicKey, Subscription>>();
-  readonly #listeners = new Map<SubscriberId, (changes: Change[]) => void>();
-  readonly #pending = new Map<SubscriberId, Change[]>();
+  readonly #subscriptions = new Map<SubscriberId, Map<AnyTopic, Subscription>>();
+  readonly #listeners = new Map<SubscriberId, (updates: TopicUpdate[]) => void>();
+  readonly #pending = new Map<SubscriberId, TopicUpdate[]>();
   /** The replaced topics whose re-read is asked for and hasn't begun. */
   readonly #dirty = new Set<TopicKey>();
   #timer: ReturnType<typeof setTimeout> | undefined;
@@ -83,17 +183,34 @@ export class Topics {
   #seq = 0;
   readonly #seqs = new Map<CanvasId, number>();
   #closed = false;
+  /** Each runtime topic's revision: its canonical state's, moved at each change taken. */
+  readonly #runtimeRevs = new Map<RuntimeTopicKey, number>();
+  /** How far publication had gone as each topic's revision last moved (yours, for a replaced one). */
+  readonly #allocated = new Map<string, number>();
+  #publication = 0;
+  /** The canvases whose runtime topics' publication is queued and hasn't begun. */
+  readonly #scheduled = new Set<CanvasId>();
+  /** Who made what a runtime topic has waiting to publish, as the op that made it says. */
+  readonly #attributed = new Map<string, PartyId>();
+  readonly #stopRuntime: (() => void) | undefined;
 
   constructor(deps: TopicsDeps) {
     this.#deps = deps;
+    this.#stopRuntime = deps.runtime?.source.listen((canvas) => {
+      this.#schedule(canvas);
+    });
   }
 
   /** Subscribes a window to a topic, as you (the op's caller): its state now, and its revision. */
   subscribe(
     window: WindowId,
-    request: { topic: TopicName; canvas?: string | undefined },
+    request: {
+      topic: TopicName | RuntimeTopicRequest['topic'];
+      canvas?: string | undefined;
+      agent?: string | undefined;
+    },
     ctx: OpContext,
-  ): Promise<TopicSnapshot> {
+  ): Promise<Subscribed> {
     if (ctx.caller.kind !== 'human') {
       return Promise.reject(new OpFailure('human-only', 'Only the user may subscribe to topics.'));
     }
@@ -102,7 +219,11 @@ export class Topics {
 
   unsubscribe(
     window: WindowId,
-    request: { topic: TopicName; canvas?: string | undefined },
+    request: {
+      topic: TopicName | RuntimeTopicRequest['topic'];
+      canvas?: string | undefined;
+      agent?: string | undefined;
+    },
   ): Promise<void> {
     const topic = this.#keyOf(request);
     return this.#serialize(() => {
@@ -111,17 +232,29 @@ export class Topics {
   }
 
   /**
-   * What a subscription of `caller` to `topic` carries: its state now, then its changes, to
-   * `listener`, batched as a window's. No transport serves it to a token (D5); T3c reads what a
-   * token's would carry with it. Rejects as reading the topic's op as `caller` would.
+   * What a subscription of `caller` to `topic` carries: its state now (or its transfer's `begin`),
+   * then its changes, to `listener`, batched as a window's. No transport serves it to a token (D5);
+   * T3c reads what a token's would carry with it. Rejects as reading the topic as `caller` would.
    */
-  async follow(
+  follow(
     caller: Caller,
     topic: TopicKey,
-    listener: (changes: Change[]) => void,
-  ): Promise<{ snapshot: TopicSnapshot; stop: () => void }> {
+    listener: (changes: (Change | RuntimeSnapshotFrame)[]) => void,
+  ): Promise<{ snapshot: TopicSnapshot | RuntimeSnapshotFrame; stop: () => void }>;
+  follow(
+    caller: Caller,
+    topic: RuntimeTopicKey,
+    listener: (updates: TopicUpdate[]) => void,
+  ): Promise<{ snapshot: RuntimeSnapshot | RuntimeSnapshotFrame; stop: () => void }>;
+  async follow(
+    caller: Caller,
+    topic: AnyTopic,
+    listener:
+      ((changes: (Change | RuntimeSnapshotFrame)[]) => void) | ((updates: TopicUpdate[]) => void),
+  ): Promise<{ snapshot: Subscribed; stop: () => void }> {
     const id = Symbol('follower');
-    const stop = this.listen(id, listener);
+    // A B9 topic's follower hears only its own changes.
+    const stop = this.listen(id, listener as (updates: TopicUpdate[]) => void);
     try {
       return { snapshot: await this.#subscribe(id, topic, caller), stop };
     } catch (error) {
@@ -182,23 +315,29 @@ export class Topics {
         at: Date.now(),
       };
       if (subscription.seen === undefined) {
-        this.#enqueue(id, {
+        const update: Change = {
           ...head,
           set: change.set,
           ...(change.remove === undefined ? {} : { remove: change.remove }),
-        });
+        };
+        this.#legacyUpdate(id, update, this.#deps.view?.(canvas, subscription.caller).entities);
+
         continue;
       }
       const view = this.#deps.view?.(canvas, subscription.caller);
       if (!view) continue;
       const { set, remove } = diff(subscription.seen, view.entities);
       subscription.seen = view.entities;
-      this.#enqueue(id, { ...head, set, ...(remove.length === 0 ? {} : { remove }) });
+      this.#legacyUpdate(
+        id,
+        { ...head, set, ...(remove.length === 0 ? {} : { remove }) },
+        view.entities,
+      );
     }
   }
 
   /** The one trusted port of a window hears only its subscriptions. */
-  listen(id: SubscriberId, listener: (changes: Change[]) => void): () => void {
+  listen(id: SubscriberId, listener: (updates: TopicUpdate[]) => void): () => void {
     this.#listeners.set(id, listener);
     return () => {
       if (this.#listeners.get(id) !== listener) return;
@@ -208,17 +347,79 @@ export class Topics {
     };
   }
 
+  /**
+   * A runtime topic as `caller` may see it now, read through its projection (its audience and
+   * reach): what T3c compares each copy with.
+   */
+  read(topic: RuntimeTopicKey, caller: Caller): Promise<OpResult<unknown>> {
+    const runtime = this.#deps.runtime;
+    if (!runtime)
+      return Promise.resolve({
+        ok: false,
+        error: { code: 'unavailable', sentence: 'This core publishes no runtime topics.' },
+      });
+    return runtime.project(topic, caller);
+  }
+
+  /** Where publication is now: a write's receipts name what moved after it (call.ts). */
+  mark(): number {
+    return this.#publication;
+  }
+
+  /** An op made what `topic` has waiting to publish: its change is said to be by `by`. */
+  attribute(topic: ReceiptTopic, by: PartyId): void {
+    if (this.#deps.runtime?.source.isPending(topic) === true) this.#attributed.set(topic, by);
+  }
+
+  /**
+   * Each of `topics`' revision once what it has waiting is published (yours, for a replaced one),
+   * for those whose revision moved after `since`: a write's receipts.
+   */
+  receipts(
+    topics: readonly ReceiptTopic[],
+    since: number,
+  ): Promise<Readonly<Record<string, number>>> {
+    return this.#serialize(async () => {
+      const canvases = new Set(
+        topics.flatMap((topic) => (isRuntimeTopic(topic) ? [canvasOfTopic(topic)] : [])),
+      );
+      for (const canvas of canvases) if (canvas !== undefined) await this.#publishRuntime(canvas);
+      return Object.fromEntries(
+        topics.flatMap((topic) =>
+          (this.#allocated.get(topic) ?? 0) > since ? [[topic, this.#revOf(topic)]] : [],
+        ),
+      );
+    });
+  }
+
   close(): void {
     this.#closed = true;
+    this.#stopRuntime?.();
     clearTimeout(this.#timer);
     this.#listeners.clear();
     this.#subscriptions.clear();
     this.#pending.clear();
+    this.#scheduled.clear();
   }
 
-  #keyOf(request: { topic: TopicName; canvas?: string | undefined }): TopicKey {
+  #keyOf(request: {
+    topic: TopicName | RuntimeTopicRequest['topic'];
+    canvas?: string | undefined;
+    agent?: string | undefined;
+  }): AnyTopic {
     try {
-      return topicKey(request);
+      if (isRuntimeTopic(`${request.topic}:`))
+        return topicKey(
+          RuntimeTopic.parse({
+            topic: request.topic,
+            canvas: request.canvas,
+            ...(request.agent !== undefined ? { agent: request.agent } : {}),
+          }),
+        );
+      return topicKey({
+        topic: request.topic as TopicName,
+        ...(request.canvas !== undefined ? { canvas: request.canvas } : {}),
+      });
     } catch {
       throw new OpFailure('invalid', 'Name the canvas whose topic it is.');
     }
@@ -226,10 +427,11 @@ export class Topics {
 
   #subscribe(
     id: SubscriberId,
-    topic: TopicKey,
+    topic: AnyTopic,
     caller: Caller,
     signal?: AbortSignal,
-  ): Promise<TopicSnapshot> {
+  ): Promise<Subscribed> {
+    if (isRuntimeTopic(topic)) return this.#subscribeRuntime(id, topic, caller, signal);
     return this.#serialize(async () => {
       const canvas = canvasOfTopic(topic);
       const keyed = topic.startsWith('canvas:') && canvas !== undefined;
@@ -241,29 +443,376 @@ export class Topics {
       signal?.throwIfAborted();
       if (this.#closed) throw new OpFailure('unavailable', 'corrallm’s core is closing.');
       let topics = this.#subscriptions.get(id);
-      if (!topics) this.#subscriptions.set(id, (topics = new Map<TopicKey, Subscription>()));
+      if (!topics) this.#subscriptions.set(id, (topics = new Map<AnyTopic, Subscription>()));
       if (keyed) {
         const view = this.#deps.view?.(canvas, caller);
         if (!view) throw new OpFailure('unavailable', 'This core keeps no canvas’s document.');
         // At once, so that what is committed next is said to it.
         topics.set(topic, view.all ? { caller } : { caller, seen: view.entities });
-        return { epoch: this.epoch, rev: view.rev, state: view.entities };
+        const { first, rest } = this.#framesOf(topic, view.rev, view.entities);
+        for (const frame of rest) this.#enqueue(id, frame);
+        return first;
       }
       const group = groupOf(caller);
       // A subscribe can observe a change before its source's notification reaches the queue.
       this.#replace(topic, group, state as TopicSnapshot['state'], 'corrallm');
       topics.set(topic, { caller });
-      return (
-        this.#states.get(topic)?.get(group) ?? {
-          epoch: this.epoch,
-          rev: this.#revs.get(topic)?.get(group) ?? 0,
-          state: state as TopicSnapshot['state'],
-        }
-      );
+      const snapshot = this.#states.get(topic)?.get(group) ?? {
+        epoch: this.epoch,
+        rev: this.#revs.get(topic)?.get(group) ?? 0,
+        state: state as TopicSnapshot['state'],
+      };
+      const { first, rest } = this.#framesOf(topic, snapshot.rev, snapshot.state);
+      for (const frame of rest) this.#enqueue(id, frame);
+      return first;
     });
   }
 
-  #forget(id: SubscriberId, topic: TopicKey): void {
+  /**
+   * Subscribes to a runtime topic, in the queue's turn: read through its projection as `caller`
+   * (refused as that read is), what changed before it published to those subscribed already, then
+   * its state at its revision now: yours as the publisher last took it, a token's its projection
+   * read again (whatever of it is newer, its next change says again). Answers it whole if it fits
+   * a frame, else the `begin` of its transfer, whose chunks and `end` its port carries next.
+   */
+  #subscribeRuntime(
+    id: SubscriberId,
+    topic: RuntimeTopicKey,
+    caller: Caller,
+    signal?: AbortSignal,
+  ): Promise<Subscribed> {
+    return this.#serialize(async () => {
+      const runtime = this.#deps.runtime;
+      if (!runtime) throw new OpFailure('unavailable', 'This core publishes no runtime topics.');
+      const allowed = await runtime.project(topic, caller, signal);
+      if (!allowed.ok) throw new OpFailure(allowed.error.code, allowed.error.sentence);
+      await this.#publishRuntime(argsOf(topic).canvas);
+      let view: RuntimeState | undefined;
+      if (caller.kind !== 'human') {
+        const read = await runtime.project(topic, caller, signal);
+        if (!read.ok) throw new OpFailure(read.error.code, read.error.sentence);
+        view = projectData(read.value as RuntimeState);
+      }
+      signal?.throwIfAborted();
+      if (this.#closed) throw new OpFailure('unavailable', 'corrallm’s core is closing.');
+      let state: RuntimeState;
+      try {
+        state = view ?? runtime.source.state(topic);
+      } catch (error) {
+        throw new OpFailure('unavailable', error instanceof Error ? error.message : String(error));
+      }
+      const { first, rest } = this.#framesOf(topic, this.#runtimeRevs.get(topic) ?? 0, state);
+      let topics = this.#subscriptions.get(id);
+      if (!topics) this.#subscriptions.set(id, (topics = new Map<AnyTopic, Subscription>()));
+      topics.set(
+        topic,
+        view === undefined
+          ? { caller }
+          : { caller, view, access: runtime.source.access(topic, caller) },
+      );
+      for (const frame of rest) this.#enqueue(id, frame);
+      return first;
+    });
+  }
+
+  /**
+   * A runtime topic's snapshot at `rev`: whole, if it fits a frame; else its transfer, a `begin`
+   * with its summary (refused, before any frame, if that alone doesn't fit), its chunks of entries
+   * in order, each within a frame (an entry too big alone goes alone), and its `end`.
+   */
+  #framesOf(
+    topic: AnyTopic,
+    rev: number,
+    state: RuntimeState | TopicSnapshot['state'],
+    transfer = false,
+  ): { first: Subscribed; rest: RuntimeSnapshotFrame[] } {
+    const whole = { epoch: this.epoch, rev, state } as TopicSnapshot | RuntimeSnapshot;
+    if (!transfer && bytesOf(whole) <= TOPIC_BUDGET) return { first: whole, rest: [] };
+    const { summary, entries } = partsOf(topic, state);
+    const base = { topic, epoch: this.epoch, snapshot: randomUUID() };
+    const largest = { ...base, kind: 'begin' as const, summary, count: Number.MAX_SAFE_INTEGER };
+    if (bytesOf(largest) > TOPIC_BUDGET) throw new OpFailure('unavailable', SUMMARY_TOO_LARGE);
+    const chunks: Extract<RuntimeSnapshotFrame, { kind: 'chunk' }>[] = [];
+    const empty = bytesOf({ ...base, kind: 'chunk', index: Number.MAX_SAFE_INTEGER, entries: [] });
+    let piece: { key: string; value: unknown }[] = [];
+    let bytes = empty;
+    for (const entry of entries) {
+      const size = bytesOf(entry) + 1;
+      if (piece.length > 0 && bytes + size > TOPIC_BUDGET) {
+        chunks.push({ ...base, kind: 'chunk', index: chunks.length, entries: piece });
+        piece = [];
+        bytes = empty;
+      }
+      piece.push(entry);
+      bytes += size;
+    }
+    if (piece.length > 0)
+      chunks.push({ ...base, kind: 'chunk', index: chunks.length, entries: piece });
+    // Only an entry no frame holds with its envelope may pass one, alone in its chunk (B11 §16.3).
+    for (const chunk of chunks)
+      if (bytesOf(chunk) > TOPIC_BUDGET && chunk.entries.length > 1)
+        throw new Error('A snapshot chunk of several entries passed its frame.');
+    return {
+      first: { ...base, kind: 'begin', summary, count: chunks.length },
+      rest: [...chunks, { ...base, kind: 'end', rev }],
+    };
+  }
+
+  /** Soon publishes what a canvas's runtime topics have waiting, in the queue's turn. */
+  #schedule(canvas: CanvasId): void {
+    if (this.#closed || this.#scheduled.has(canvas)) return;
+    this.#scheduled.add(canvas);
+    void this.#serialize(async () => {
+      this.#scheduled.delete(canvas);
+      await this.#publishRuntime(canvas);
+    }).catch((error: unknown) => {
+      console.error('Could not publish a canvas’s runtime topics:', error);
+    });
+  }
+
+  /**
+   * Publishes what a canvas's runtime topics have waiting, within the queue's turn: each topic's
+   * canonical change taken from its source (its baseline moves on at once); each copy that sees
+   * less read again through its projection (one no longer allowed it is ended); then each topic's
+   * revisions allocated, as many as its biggest change needs frames, and each subscriber sent its
+   * own change at each, or an empty one.
+   */
+  async #publishRuntime(canvas: CanvasId): Promise<void> {
+    const runtime = this.#deps.runtime;
+    if (!runtime || this.#stopped()) return;
+    const { source } = runtime;
+    const pending = source.pending(canvas);
+    const touched = source.touched(canvas);
+    if (pending.length === 0 && !touched) return;
+    const canonical = new Map<RuntimeTopicKey, { bodies: RuntimeBody[]; by: PartyId | 'cli' }>();
+    for (const topic of pending) {
+      const taken = source.take(topic);
+      if (!taken) continue;
+      canonical.set(topic, {
+        bodies: divide(topic, taken.body, this.#headBytes(topic)),
+        by: this.#attributedBy(topic) ?? taken.by,
+      });
+    }
+    source.taken(canvas);
+    for (const kind of ['run', 'sessions', 'messages'])
+      this.#attributed.delete(`${kind}:${canvas}`);
+    const partial: {
+      id: SubscriberId;
+      topic: RuntimeTopicKey;
+      bodies: RuntimeBody[];
+      snapshot: boolean;
+    }[] = [];
+    for (const [id, topics] of [...this.#subscriptions]) {
+      for (const [topic, subscription] of [...topics]) {
+        if (!isRuntimeTopic(topic) || canvasOfTopic(topic) !== canvas) continue;
+        if (!source.available(topic)) {
+          this.#forget(id, topic);
+          continue;
+        }
+        if (subscription.view === undefined) continue;
+        const access = source.access(topic, subscription.caller);
+        if (sameAccess(subscription.access, access) && !canonical.has(topic)) continue;
+        const snapshot = !sameAccess(subscription.access, access);
+        const read = await runtime.project(topic, subscription.caller);
+        if (this.#stopped()) return;
+        if (this.#subscriptions.get(id)?.get(topic) !== subscription) continue;
+        if (!read.ok) {
+          // It no longer reaches what it subscribed to: its subscription ends.
+          this.#forget(id, topic);
+          continue;
+        }
+        const next = projectData(read.value as RuntimeState, subscription.view);
+        const body = viewDiff(topic, subscription.view, next);
+        subscription.view = next;
+        subscription.access = access;
+        if (snapshot && !body) {
+          try {
+            const { first, rest } = this.#framesOf(
+              topic,
+              this.#runtimeRevs.get(topic) ?? 0,
+              next,
+              true,
+            );
+            this.#transfer(id, topic, [first as RuntimeSnapshotFrame, ...rest], false);
+          } catch {
+            this.#forget(id, topic);
+          }
+        }
+        partial.push({
+          snapshot,
+          id,
+          topic,
+          bodies: body
+            ? !snapshot && appendsOnly(topic, canonical.get(topic)?.bodies)
+              ? (canonical.get(topic)?.bodies ?? [])
+              : divide(topic, body, this.#headBytes(topic))
+            : [],
+        });
+      }
+    }
+    const changed = new Set([
+      ...canonical.keys(),
+      ...partial.flatMap(({ topic, bodies }) => (bodies.length > 0 ? [topic] : [])),
+    ]);
+    for (const topic of changed) {
+      const mine = canonical.get(topic);
+      const theirs = partial.filter((one) => one.topic === topic);
+      const oversize = (bodies: readonly RuntimeBody[]) =>
+        bodies.some((body) => this.#headBytes(topic) + bytesOf(body) > TOPIC_BUDGET);
+      const mineSnapshot = oversize(mine?.bodies ?? []);
+      const theirsSnapshot = new Set(
+        theirs.filter(({ bodies, snapshot }) => snapshot || oversize(bodies)).map(({ id }) => id),
+      );
+      const count = Math.max(
+        mine?.bodies.length ?? 0,
+        ...theirs.map(({ bodies }) => bodies.length),
+      );
+      for (let index = 0; index < count; index++) {
+        const rev = this.#allocate(topic);
+        // One sequence number for the change, taken once someone is sent it.
+        let head: Head | undefined;
+        const headOf = (): Head =>
+          (head ??= {
+            topic,
+            epoch: this.epoch,
+            rev,
+            seq: this.#nextCanvasSeq(canvas),
+            by: mine?.by ?? 'corrallm',
+            at: Date.now(),
+          });
+        for (const [id, topics] of this.#subscriptions) {
+          const subscription = topics.get(topic);
+          if (!subscription || subscription.view !== undefined) continue;
+          this.#runtimeUpdate(
+            id,
+            topic,
+            headOf(),
+            mine?.bodies[index] ?? emptyBody(topic),
+            () => source.state(topic),
+            mineSnapshot,
+            index === count - 1,
+            true,
+          );
+        }
+        for (const { id, bodies, snapshot } of theirs) {
+          const subscription = this.#subscriptions.get(id)?.get(topic);
+          const view = subscription?.view;
+          if (view === undefined) continue;
+          this.#runtimeUpdate(
+            id,
+            topic,
+            headOf(),
+            bodies[index] ?? emptyBody(topic),
+            () => view,
+            theirsSnapshot.has(id),
+            index === count - 1,
+            // What waits for a copy whose authority changed was read under the old.
+            !snapshot,
+          );
+        }
+      }
+    }
+  }
+
+  /**
+   * Oversized entries and authoritative orders use the same atomic transfer as subscribe.
+   * `keep`: whether what waits to be sent of the topic is still the subscriber's to see.
+   */
+  #runtimeUpdate(
+    id: SubscriberId,
+    topic: RuntimeTopicKey,
+    head: Head,
+    body: RuntimeBody,
+    state: () => RuntimeState,
+    snapshot: boolean,
+    last: boolean,
+    keep: boolean,
+  ): void {
+    if (!snapshot) {
+      this.#enqueue(id, { ...head, ...body } as TopicUpdate);
+      return;
+    }
+    if (!last) {
+      this.#enqueue(id, { ...head, ...emptyBody(topic) } as TopicUpdate);
+      return;
+    }
+    try {
+      const { first, rest } = this.#framesOf(topic, head.rev, state(), true);
+      this.#transfer(id, topic, [first as RuntimeSnapshotFrame, ...rest], keep);
+    } catch {
+      // A refused projection must not leak data or its reason through a subscriber's copy.
+      this.#forget(id, topic);
+    }
+  }
+
+  /**
+   * Replaces what waits to be sent `id` of `topic` with a transfer of it, `frames`, none of what it
+   * replaces ever sent, but for the rest of a transfer whose `begin` it was sent already (its
+   * subscription's answer, or an earlier batch): that ends first, as its copy expects, the new one
+   * after it. A copy whose authority changed (`keep` false) can't be sent that rest, read under the
+   * old, nor be left mid-transfer: its subscription ends.
+   */
+  #transfer(
+    id: SubscriberId,
+    topic: AnyTopic,
+    frames: readonly RuntimeSnapshotFrame[],
+    keep: boolean,
+  ): void {
+    const pending = this.#pending.get(id) ?? [];
+    const begun = new Set(begunIn(pending, topic));
+    const sent = (update: TopicUpdate) =>
+      update.topic === topic && 'kind' in update && !begun.has(update.snapshot);
+    if (!keep && pending.some(sent)) {
+      this.#forget(id, topic);
+      return;
+    }
+    this.#pending.set(
+      id,
+      pending.filter((update) => update.topic !== topic || sent(update)),
+    );
+    for (const frame of frames) this.#enqueue(id, frame);
+  }
+
+  /** Whether it has closed (read anew after an await). */
+  #stopped(): boolean {
+    return this.#closed;
+  }
+
+  /** The most bytes a change's head takes, for its body to fit a frame beside it. */
+  #headBytes(topic: RuntimeTopicKey): number {
+    return bytesOf({
+      topic,
+      epoch: this.epoch,
+      rev: Number.MAX_SAFE_INTEGER,
+      seq: Number.MAX_SAFE_INTEGER,
+      by: 'x'.repeat(320),
+      at: Number.MAX_SAFE_INTEGER,
+    });
+  }
+
+  /** Who the op that made what a runtime topic has waiting said made it, if one did. */
+  #attributedBy(topic: RuntimeTopicKey): PartyId | undefined {
+    const canvas = canvasOfTopic(topic);
+    const kind = kindOf(topic);
+    return this.#attributed.get(`${kind === 'session' ? 'sessions' : kind}:${canvas ?? ''}`);
+  }
+
+  /** A runtime topic's next revision, at the next step of publication. */
+  #allocate(topic: RuntimeTopicKey): number {
+    const rev = (this.#runtimeRevs.get(topic) ?? 0) + 1;
+    this.#runtimeRevs.set(topic, rev);
+    this.#allocated.set(topic, ++this.#publication);
+    return rev;
+  }
+
+  /** A topic's revision now: a runtime one's, or yours of a replaced one. */
+  #revOf(topic: ReceiptTopic): number {
+    return isRuntimeTopic(topic)
+      ? (this.#runtimeRevs.get(topic) ?? 0)
+      : (this.#revs.get(topic)?.get('you') ?? 0);
+  }
+
+  #forget(id: SubscriberId, topic: AnyTopic): void {
     this.#subscriptions.get(id)?.delete(topic);
     const pending = this.#pending.get(id);
     if (pending)
@@ -305,7 +854,25 @@ export class Topics {
     } as Change;
     for (const [id, topics] of this.#subscriptions) {
       const one = topics.get(topic);
-      if (one && groupOf(one.caller) === group) this.#enqueue(id, change);
+      if (one && groupOf(one.caller) === group) this.#legacyUpdate(id, change, state);
+    }
+  }
+
+  /** Existing topics use the identical transfer when their snapshot or a live change is large. */
+  #legacyUpdate(id: SubscriberId, change: Change, state: TopicSnapshot['state'] | undefined): void {
+    if (bytesOf(change) <= TOPIC_BUDGET) {
+      this.#enqueue(id, change);
+      return;
+    }
+    if (state === undefined) {
+      this.#forget(id, change.topic);
+      return;
+    }
+    try {
+      const { first, rest } = this.#framesOf(change.topic, change.rev, state, true);
+      this.#transfer(id, change.topic, [first as RuntimeSnapshotFrame, ...rest], true);
+    } catch {
+      this.#forget(id, change.topic);
     }
   }
 
@@ -315,31 +882,100 @@ export class Topics {
     if (!revs) this.#revs.set(topic, (revs = new Map<string, number>()));
     const rev = (revs.get(group) ?? 0) + 1;
     revs.set(group, rev);
+    if (group === 'you') this.#allocated.set(topic, ++this.#publication);
     return rev;
   }
 
   /** The next sequence number: the canvas's, for a canvas's topic; the global one's otherwise. */
   #nextSeq(topic: TopicKey): number {
     const canvas = canvasOfTopic(topic);
-    if (canvas === undefined) return ++this.#seq;
+    return canvas === undefined ? ++this.#seq : this.#nextCanvasSeq(canvas);
+  }
+
+  #nextCanvasSeq(canvas: CanvasId): number {
     const seq = (this.#seqs.get(canvas) ?? 0) + 1;
     this.#seqs.set(canvas, seq);
     return seq;
   }
 
-  #enqueue(id: SubscriberId, change: Change): void {
-    this.#pending.set(id, [...(this.#pending.get(id) ?? []), change]);
+  #enqueue(id: SubscriberId, update: TopicUpdate): void {
+    let pending = this.#pending.get(id);
+    if (!pending) this.#pending.set(id, (pending = []));
+    pending.push(update);
     this.#timer ??= setTimeout(() => {
-      this.#flush();
+      void this.#serialize(() => this.#flush()).catch((error: unknown) => {
+        console.error('Could not flush topic changes:', error);
+      });
     }, 16);
   }
 
-  #flush(): void {
+  /** Sends each subscriber what waits for it, in order, in batches that each fit a frame. */
+  async #flush(): Promise<void> {
     this.#timer = undefined;
     const pending = [...this.#pending];
     this.#pending.clear();
-    for (const [id, changes] of pending) {
-      if (changes.length > 0) this.#listeners.get(id)?.(changes);
+    for (const [id, queued] of pending) {
+      let updates = queued;
+      const listener = this.#listeners.get(id);
+      if (!listener || updates.length === 0) continue;
+      const runtime = this.#deps.runtime;
+      // Nothing can interleave between the final synchronous stamp check and sending the batch.
+      // If reach changed during the batching delay, replace all older frames with a fresh copy.
+      if (runtime) {
+        for (;;) {
+          let refreshed = false;
+          for (const topic of new Set(updates.map((update) => update.topic))) {
+            if (!isRuntimeTopic(topic)) continue;
+            const subscription = this.#subscriptions.get(id)?.get(topic);
+            if (!subscription) {
+              updates = updates.filter((update) => update.topic !== topic);
+              continue;
+            }
+            if (subscription.view === undefined) {
+              if (!runtime.source.available(topic)) {
+                this.#forget(id, topic);
+                updates = updates.filter((update) => update.topic !== topic);
+              }
+              continue;
+            }
+            const access = runtime.source.access(topic, subscription.caller);
+            if (sameAccess(subscription.access, access)) continue;
+            refreshed = true;
+            const read = await runtime.project(topic, subscription.caller);
+            // The rest of a transfer begun in an earlier batch was read under the old authority:
+            // never sent, it leaves the copy mid-transfer, so its subscription ends.
+            const begun = new Set(begunIn(updates, topic));
+            const midway = updates.some(
+              (update) => update.topic === topic && 'kind' in update && !begun.has(update.snapshot),
+            );
+            updates = updates.filter((update) => update.topic !== topic);
+            this.#pending.set(
+              id,
+              (this.#pending.get(id) ?? []).filter((update) => update.topic !== topic),
+            );
+            if (!read.ok || midway) {
+              this.#forget(id, topic);
+              continue;
+            }
+            subscription.view = projectData(read.value as RuntimeState, subscription.view);
+            subscription.access = access;
+            try {
+              const { first, rest } = this.#framesOf(
+                topic,
+                this.#runtimeRevs.get(topic) ?? 0,
+                subscription.view,
+                true,
+              );
+              updates.push(first as RuntimeSnapshotFrame, ...rest);
+            } catch {
+              this.#forget(id, topic);
+            }
+          }
+          if (!refreshed) break;
+        }
+      }
+      if (this.#closed || this.#listeners.get(id) !== listener) continue;
+      for (const batch of batches(updates)) listener(batch);
     }
   }
 
@@ -348,6 +984,28 @@ export class Topics {
     this.#queue = result.catch(() => undefined);
     return result;
   }
+}
+
+/**
+ * `updates` in order, as batches whose JSON each fits a frame beside its envelope: one too big
+ * alone (a chunk of one big entry) goes alone.
+ */
+function batches(updates: readonly TopicUpdate[]): TopicUpdate[][] {
+  const out: TopicUpdate[][] = [];
+  let batch: TopicUpdate[] = [];
+  let bytes = 2;
+  for (const update of updates) {
+    const size = bytesOf(update) + 1;
+    if (batch.length > 0 && bytes + size > TOPIC_BUDGET) {
+      out.push(batch);
+      batch = [];
+      bytes = 2;
+    }
+    batch.push(update);
+    bytes += size;
+  }
+  if (batch.length > 0) out.push(batch);
+  return out;
 }
 
 /** What changed from the entities `before` to `after`: what to set, and what to remove. */
@@ -361,4 +1019,28 @@ function diff(
     if (was !== entity && JSON.stringify(was) !== JSON.stringify(entity)) set[key] = entity;
   }
   return { set, remove: Object.keys(before).filter((key) => !Object.hasOwn(after, key)) };
+}
+
+function sameAccess(
+  previous: Subscription['access'],
+  next: NonNullable<Subscription['access']>,
+): boolean {
+  return previous?.world === next.world && previous?.lead === next.lead;
+}
+
+/** The transfers of `topic` whose `begin` is among `updates`, by their snapshot ids. */
+function begunIn(updates: readonly TopicUpdate[], topic: AnyTopic): string[] {
+  return updates.flatMap((update) =>
+    update.topic === topic && 'kind' in update && update.kind === 'begin' ? [update.snapshot] : [],
+  );
+}
+
+/** Appends contain no caller-specific fields once the session's unchanged reach is authorized. */
+function appendsOnly(topic: RuntimeTopicKey, bodies: readonly RuntimeBody[] | undefined): boolean {
+  return (
+    topic.startsWith('session:') &&
+    bodies?.every(
+      (body) => 'entries' in body && !body.summary && !body.entries.upsert && !body.entries.order,
+    ) === true
+  );
 }

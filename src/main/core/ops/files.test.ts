@@ -5,7 +5,11 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { OpResult } from '../../../shared/api/errors';
-import { MAX_CREATED_CANVASES, MAX_MESSAGE_BYTES } from '../../../shared/api/limits';
+import {
+  MAX_CREATED_AGENTS,
+  MAX_CREATED_CANVASES,
+  MAX_MESSAGE_BYTES,
+} from '../../../shared/api/limits';
 import type { OpName } from '../../../shared/api/surface';
 import type { CanvasId } from '../../../shared/canvas';
 import type { CanvasDocument } from '../../../shared/model/canvas';
@@ -217,6 +221,30 @@ describe('canvas.create', () => {
       { ...renewed, canvases: [...renewed.canvases, ...made] },
     );
     expect((await listed())[String(made[1])]).toMatchObject({ open: false });
+  });
+
+  it('bounds the template drafts a token makes and closes: R11 counts their agents for good', async () => {
+    cap = MAX_CREATED_AGENTS;
+    let reach = TOKEN;
+    let refused: OpResult<unknown> | undefined;
+    for (let i = 0; i <= MAX_CREATED_CANVASES; i++) {
+      const result = await call('canvas.create', { template: TEMPLATE }, reach);
+      if (!result.ok) {
+        refused = result;
+        break;
+      }
+      const { canvas } = result.value as { canvas: CanvasId };
+      reach = { ...reach, canvases: [...reach.canvases, canvas] };
+      expect(await applied('canvas.close', { canvas }, reach)).toEqual({ revs: {} });
+    }
+    expect(refused).toMatchObject({ ok: false, error: { code: 'refused' } });
+    const kept = readOnDisk(profile, (disk) =>
+      disk
+        .prepare('SELECT count(*) AS n FROM document WHERE created_by = ?')
+        .get('outside:orchestrator'),
+    );
+    expect(Number(kept?.n)).toBeLessThan(MAX_CREATED_CANVASES);
+    expect(Number(kept?.n)).toBeLessThanOrEqual(MAX_CREATED_AGENTS);
   });
 
   it('makes an empty canvas, open, shown in your window, kept once it holds something', async () => {
@@ -545,6 +573,15 @@ describe('R4: what a token may not discard comes to you as a proposal', () => {
     expect(await proposals(OTHER)).toEqual([]);
   });
 
+  it('reuses one proposal for a token’s repeated close that leaves discard out', async () => {
+    answers.open.push(files.other);
+    await applied('canvas.open', {});
+    const first = await applied('canvas.close', { canvas: OTHER }, TOKEN);
+    const again = await applied('canvas.close', { canvas: OTHER }, TOKEN);
+    expect(again.proposed).toBe(first.proposed);
+    expect(await proposals(OTHER)).toEqual([expect.objectContaining({ id: first.proposed })]);
+  });
+
   it('proposes a token’s discard of edits not saved; Allow discards them, unless the canvas changed since', async () => {
     await edit(OTHER, 'solo', 'Edited');
     const { proposed } = await applied('canvas.close', { canvas: OTHER, discard: true }, TOKEN);
@@ -613,13 +650,65 @@ describe('R4: what a token may not discard comes to you as a proposal', () => {
       ),
     ).toMatchObject({ ok: false, error: { code: 'refused' } });
     expect(await proposals(OTHER)).toHaveLength(1);
-    // Allowed: made as yours, the canvas it replaces discarded and closed.
+    // Allowed: made as the token's own, the canvas it replaces discarded and closed.
     await applied('reply', { canvas: OTHER, to: proposed, answer: { choice: 'allow' } });
     const after = await listed();
     const made = Object.keys(after).filter((id) => !before.includes(id));
     expect(made).toHaveLength(1);
     expect(after[OTHER]).toMatchObject({ open: false });
     expect(labelsOf(await documentOf(OTHER))).toEqual(['Solo']);
+  });
+
+  it.each([
+    ['from a template', { template: TEMPLATE }],
+    ['empty', {}],
+  ])(
+    'keeps a token’s replace, allowed, as the token’s own canvas, %s: in its reach',
+    async (_, made) => {
+      const token = await core.tokens.create({
+        name: 'orchestrator',
+        canvases: [OTHER],
+        access: 'write',
+      });
+      const client = core.clientOf(token);
+      if (client === undefined) throw new Error('The token isn’t kept.');
+      answers.open.push(files.other);
+      await applied('canvas.open', {});
+      const { proposed } = await applied(
+        'canvas.create',
+        { ...made, replace: { canvas: OTHER } },
+        client,
+      );
+      const before = Object.keys(await listed());
+      expect(
+        await applied('reply', { canvas: OTHER, to: proposed, answer: { choice: 'allow' } }),
+      ).toMatchObject({ outcome: 'allowed' });
+      const canvas = Object.keys(await listed()).find((id) => !before.includes(id));
+      if (canvas === undefined) throw new Error('Allow made no canvas.');
+      expect(createdBy(canvas)).toBe('outside:orchestrator');
+      const after = core.clientOf(token);
+      if (after === undefined) throw new Error('The token isn’t kept.');
+      expect(after.canvases).toContain(canvas);
+      expect(Object.keys(await listed(after))).toContain(canvas);
+      await applied('canvas.get', { canvas }, after);
+    },
+  );
+
+  it('refuses, on Allow, a token’s replace past its cap of open canvases it created', async () => {
+    let reach = TOKEN;
+    for (let i = 0; i < MAX_CREATED_CANVASES; i++) {
+      const { canvas } = (await applied('canvas.create', {}, reach)) as { canvas: CanvasId };
+      reach = { ...reach, canvases: [...reach.canvases, canvas] };
+    }
+    answers.open.push(files.other);
+    await applied('canvas.open', {});
+    const { proposed } = await applied('canvas.create', { replace: { canvas: OTHER } }, reach);
+    const before = Object.keys(await listed());
+    expect(
+      await applied('reply', { canvas: OTHER, to: proposed, answer: { choice: 'allow' } }),
+    ).toMatchObject({ outcome: 'stale' });
+    expect(Object.keys(await listed())).toEqual(before);
+    expect((await listed())[OTHER]).toMatchObject({ open: true, shownIn: [1] });
   });
 
   it('proposes a token’s save that would remove agents its file has; Allow saves, unless the file changed since', async () => {

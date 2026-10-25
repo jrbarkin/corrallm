@@ -56,6 +56,11 @@ export interface LifecycleDeps {
   engines: Pick<Engines, 'closeCanvas'>;
   /** The Open and Save dialogs, and which canvas a file opened is. */
   files: Pick<CanvasFiles, 'open' | 'saveAs'>;
+  /**
+   * The workspaces as a canvas's project folder changes (B9a Design §3): its old trees kept, their
+   * agents unbound, its project generation moved on, before its sessions end.
+   */
+  workspaces?: { projectChosen(canvas: CanvasId): Promise<void> };
 }
 
 const NO_FILE_YET =
@@ -205,12 +210,16 @@ export class Lifecycle {
    * cancelled, keeping the folder it had.
    */
   async chooseProject(window: WindowId, canvas: CanvasId): Promise<ProjectFolder | null> {
-    const { projects, sessions } = this.#deps;
+    const { projects, sessions, workspaces } = this.#deps;
     await projects.restore(canvas);
     // Compare the picked roots to decide whether a project change ends existing sessions.
     const before = this.#deps.directories.projectRoot(canvas);
     const chosen = await projects.choose(window, canvas);
-    if (chosen !== null && chosen.path !== before) await sessions.projectChanged(canvas);
+    if (chosen !== null && chosen.path !== before) {
+      // Its old workspaces kept first (cancel changed nothing: chosen is null then).
+      await workspaces?.projectChosen(canvas);
+      await sessions.projectChanged(canvas);
+    }
     return chosen;
   }
 

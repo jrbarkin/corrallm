@@ -14,6 +14,8 @@
     "api.canvas.saveAs",
     "api.canvas.close",
     "api.project.choose",
+    "api.project.setSetupCommand",
+    "api.project.clearSetupApproval",
     "api.canvas.list",
     "api.canvas.get",
     "api.canvas.rename",
@@ -38,6 +40,23 @@
     "api.queue.move",
     "api.queue.update",
     "api.reply",
+    "api.session.open",
+    "api.session.setMode",
+    "api.session.setModel",
+    "api.session.setEffort",
+    "api.session.stopTask",
+    "api.session.restart",
+    "api.session.newConversation",
+    "api.session.rewindPreview",
+    "api.session.rewind",
+    "api.session.continueIn",
+    "api.session.get",
+    "api.session.transcript",
+    "api.session.interrupt",
+    "api.run.get",
+    "api.run.pause",
+    "api.run.kill",
+    "api.run.unpause",
     "api.usage.get",
     "api.usage.setRule",
     "api.usage.simulate",
@@ -82,11 +101,20 @@
       "queue_remove",
       "queue_update",
       "reply",
+      "run_get",
       "run_kill",
       "run_pause",
       "run_unpause",
       "session_get",
       "session_interrupt",
+      "session_newConversation",
+      "session_open",
+      "session_restart",
+      "session_rewind",
+      "session_rewindPreview",
+      "session_setEffort",
+      "session_setModel",
+      "session_stopTask",
       "session_transcript",
       "settings_get",
       "status",
@@ -117,7 +145,9 @@
       "messages",
       "needs",
       "project_files",
+      "run_get",
       "session_get",
+      "session_rewindPreview",
       "session_transcript",
       "settings_get",
       "status",
@@ -159,11 +189,20 @@
       "queue_remove",
       "queue_update",
       "reply",
+      "run_get",
       "run_kill",
       "run_pause",
       "run_unpause",
       "session_get",
       "session_interrupt",
+      "session_newConversation",
+      "session_open",
+      "session_restart",
+      "session_rewind",
+      "session_rewindPreview",
+      "session_setEffort",
+      "session_setModel",
+      "session_stopTask",
       "session_transcript",
       "settings_get",
       "status",
@@ -174,10 +213,10 @@
     ]
   },
   "counts": {
-    "lead": 40,
+    "lead": 49,
     "worker": 11,
-    "outside-read": 16,
-    "outside-write": 45
+    "outside-read": 18,
+    "outside-write": 54
   },
   "unhosted": {
     "agents": "B11",
@@ -185,18 +224,16 @@
     "needs": "B11",
     "messages": "B11",
     "message": "B11",
-    "withdraw": "B11",
-    "session.get": "B11",
-    "session.transcript": "B11",
-    "session.interrupt": "B11",
-    "run.pause": "B11",
-    "run.kill": "B11",
-    "run.unpause": "B11"
+    "withdraw": "B11"
   },
   "deviations": {
     "canvas.open": "trust-gate",
     "canvas.saveAs": "trust-gate",
     "project.choose": "trust-gate",
+    "project.setSetupCommand": "trust-gate",
+    "project.clearSetupApproval": "permissions",
+    "session.setMode": "permissions",
+    "session.continueIn": "permissions",
     "agent.setType": "permissions",
     "agent.setConnection": "permissions",
     "topics.subscribe": "transport",
@@ -216,11 +253,11 @@
   },
   "schemas": {
     "topics.subscribe": {
-      "input": "10579f0d8cce3ace",
-      "output": "46b6cfcf7645af6b"
+      "input": "d52e3a96a8f206c0",
+      "output": "3bbf784547f7a6e5"
     },
     "topics.unsubscribe": {
-      "input": "10579f0d8cce3ace",
+      "input": "d52e3a96a8f206c0",
       "output": "647bbd6cc7b4f077"
     },
     "app.info": {
@@ -229,7 +266,7 @@
     },
     "catalog.get": {
       "input": "e5fa5cc18e054cdd",
-      "output": "a617933cd2efbe50"
+      "output": "e7ebb1fe5a12719e"
     },
     "catalog.installed": {
       "input": "e5fa5cc18e054cdd",
@@ -243,9 +280,17 @@
       "input": "c42bffd7c0a78bc0",
       "output": "48481aeb891f3b2d"
     },
+    "project.setSetupCommand": {
+      "input": "ccdee9f3032b4780",
+      "output": "cc83953dac5fd349"
+    },
+    "project.clearSetupApproval": {
+      "input": "f676d264f07b5166",
+      "output": "2129f9125212db6f"
+    },
     "canvas.create": {
       "input": "3394f69e468a0469",
-      "output": "e07c6cab9ac294a5"
+      "output": "6837192ee223cf50"
     },
     "canvas.open": {
       "input": "8ed9ce92c68e70c8",
@@ -253,7 +298,7 @@
     },
     "canvas.save": {
       "input": "f676d264f07b5166",
-      "output": "f21dcb9384665c5e"
+      "output": "dc2cdf0a6f25f4a5"
     },
     "canvas.saveAs": {
       "input": "f676d264f07b5166",
@@ -261,7 +306,7 @@
     },
     "canvas.close": {
       "input": "1a908234579fefb6",
-      "output": "f56df0cf0fad9a55"
+      "output": "c7d3b8a6259feb00"
     },
     "project.choose": {
       "input": "f676d264f07b5166",
@@ -297,7 +342,7 @@
     },
     "canvas.delete": {
       "input": "13089a4ee94a5b15",
-      "output": "eacc78e6efdb407f"
+      "output": "4e5ad502b4237e86"
     },
     "canvas.link": {
       "input": "621da187728c140f",
@@ -325,7 +370,7 @@
     },
     "canvas.batch": {
       "input": "1257d2b1e10134be",
-      "output": "916825fb55789244"
+      "output": "d8db8b91eea3da57"
     },
     "agent.setType": {
       "input": "ae31f270ae564f34",
@@ -365,11 +410,11 @@
     },
     "status": {
       "input": "41356bc15da6df1b",
-      "output": "02d9acf9230d7a3c"
+      "output": "cb91151f949f1731"
     },
     "needs": {
       "input": "41356bc15da6df1b",
-      "output": "ef833124be616bd3"
+      "output": "90b6a28175b9f458"
     },
     "messages": {
       "input": "aa02e84f7d3e9a8e",
@@ -384,8 +429,8 @@
       "output": "e407d62a0d627a4d"
     },
     "reply": {
-      "input": "88b277a918f436bd",
-      "output": "632503dbfed7727c"
+      "input": "64eb7ca52232e2a9",
+      "output": "c9c1b028c0775abd"
     },
     "withdraw": {
       "input": "c0fce69c0611e40f",
@@ -393,7 +438,7 @@
     },
     "session.get": {
       "input": "c804536f3eb2a39b",
-      "output": "db44714473c31405"
+      "output": "684cb14ca6712f1c"
     },
     "session.transcript": {
       "input": "b0a50f8eb22508f9",
@@ -403,9 +448,49 @@
       "input": "dafe7f6753754290",
       "output": "647bbd6cc7b4f077"
     },
+    "session.open": {
+      "input": "dafe7f6753754290",
+      "output": "647bbd6cc7b4f077"
+    },
+    "session.setMode": {
+      "input": "3e87a9900d3ff773",
+      "output": "647bbd6cc7b4f077"
+    },
+    "session.setModel": {
+      "input": "32081c3885954099",
+      "output": "647bbd6cc7b4f077"
+    },
+    "session.setEffort": {
+      "input": "e2518f07521e530d",
+      "output": "647bbd6cc7b4f077"
+    },
+    "session.stopTask": {
+      "input": "6fdbdc18990489d6",
+      "output": "647bbd6cc7b4f077"
+    },
+    "session.restart": {
+      "input": "dafe7f6753754290",
+      "output": "647bbd6cc7b4f077"
+    },
+    "session.newConversation": {
+      "input": "dafe7f6753754290",
+      "output": "647bbd6cc7b4f077"
+    },
+    "session.rewindPreview": {
+      "input": "e38a4d613cdfe417",
+      "output": "9382131a42e254b9"
+    },
+    "session.rewind": {
+      "input": "948321df0cdae09f",
+      "output": "6b0655527549cf1a"
+    },
+    "session.continueIn": {
+      "input": "44576fef1b12e7f1",
+      "output": "54f0f0b7a5ed4bb6"
+    },
     "settings.get": {
       "input": "e5fa5cc18e054cdd",
-      "output": "ca640021dc5b5fbe"
+      "output": "a1f28cb1576ced66"
     },
     "run.pause": {
       "input": "a85fe9cb1eb6d55a",
@@ -418,6 +503,10 @@
     "run.unpause": {
       "input": "a85fe9cb1eb6d55a",
       "output": "c8f56788bf9f4dd8"
+    },
+    "run.get": {
+      "input": "41356bc15da6df1b",
+      "output": "83e7c04b48aa417d"
     },
     "usage.get": {
       "input": "e5fa5cc18e054cdd",

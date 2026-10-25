@@ -84,6 +84,13 @@ export interface AdapterDescriptor {
    * place of the server's name, its URL and the variable holding its token; none where it can't.
    */
   registerMcp?: string;
+  /**
+   * Its command to register an outside HTTP MCP server whose headers a command prints each time it
+   * connects, so a token renewed in the file that command reads needs no restart: `{server}` and
+   * `{url}` as for `registerMcp`, and `{helper}` in place of that command, as a JSON string's
+   * contents (holding no single quote). None where its CLI has no such helper.
+   */
+  registerMcpHelper?: string;
 }
 
 export interface ModeDescriptor {

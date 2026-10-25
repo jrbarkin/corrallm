@@ -83,6 +83,25 @@ describe('Claude Code session ids', () => {
       expect(signals).toContainEqual({ kind: 'prompt', text: 'hello' });
     }
   });
+
+  it('warns once per invalid native session id while still hearing every hook', () => {
+    const claude = new ClaudeCode({ cwd: '/work/app', home: '/Users/me', env: {} });
+    for (const id of ['bad-id', 'another-bad-id']) {
+      const first = claude.hook({
+        hook_event_name: 'UserPromptSubmit',
+        session_id: id,
+        prompt: 'hello',
+      });
+      expect(first.filter((signal) => signal.kind === 'notice')).toHaveLength(1);
+      const later = claude.hook({
+        hook_event_name: 'UserPromptSubmit',
+        session_id: id,
+        prompt: 'again',
+      });
+      expect(later.filter((signal) => signal.kind === 'notice')).toEqual([]);
+      expect(later).toContainEqual({ kind: 'prompt', text: 'again' });
+    }
+  });
 });
 
 describe('a turn Claude Code could not finish', () => {
