@@ -197,7 +197,7 @@ export function replyOps({
       const resend = 'choice' in answer && answer.choice === 'resend';
       try {
         if (resend) await engines.resendAfter(canvas, agent, turn.messages, turn.connection);
-        if (!(await sessions.interruptIf(canvas, agent, turn.current)))
+        if (!(await sessions.interruptIf(canvas, agent, turn.current, resend)))
           await engines.cancelResend(canvas, agent, turn.connection);
       } catch (error) {
         await engines.cancelResend(canvas, agent, turn.connection);

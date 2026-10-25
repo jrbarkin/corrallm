@@ -805,14 +805,16 @@ export class Engines {
   /**
    * Every session send carries untold withdrawals from its message store. The app's run stays
    * in the renderer until B11: reading its notes or resending its manual submissions never
-   * composes or journals another run. Its retry decision goes back to the owning engine.
+   * composes or journals another run. Its retry decision goes back to the owning engine. False if
+   * it never went: a command its withdrawal note's turn went before, stopped first (`stopped`).
    */
   async sending(
     canvas: CanvasId,
     agentId: string,
     message: UserMessage,
     send: (message: UserMessage) => Promise<void>,
-  ): Promise<void> {
+    stopped?: () => boolean,
+  ): Promise<boolean> {
     if (this.#closed) throw new Error('The canvas closed before its message could be sent.');
     const key = `${canvas}\u0000${agentId}`;
     if (message.origin === 'queue') this.#ownerResends.delete(key);
@@ -820,7 +822,7 @@ export class Engines {
     inputs.set(message.id, message);
     this.#inputs.set(key, inputs);
     const { notes } = await this.#mailOf(canvas);
-    await notes.send(agentId, message, send);
+    return notes.send(agentId, message, send, stopped);
   }
 
   /**
