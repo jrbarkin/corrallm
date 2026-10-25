@@ -37,7 +37,7 @@ import type { TrustedPath } from '../host';
 import type { Staged } from '../delivery/messages';
 import type { Database } from '../store/store';
 import { safeRemovals } from '../workspaces/planner';
-import type { Losses, Removals, WorkspacePlanner } from '../workspaces/planner';
+import type { Forks, Losses, Made, Removals, WorkspacePlanner } from '../workspaces/planner';
 import { changeSetOf } from './change';
 import type { ChangeSet } from './change';
 import { summarize } from './reviews';
@@ -127,10 +127,11 @@ export interface DocumentsDeps {
   /**
    * The workspaces' side of every commit, whatever made it (an op's change, a file's Apply, a
    * discard's revert: B9a Design §3, workspaces/planner.ts): its loss preflight before the commit's
-   * point of no return, which may refuse it, and who works where within the commit's write. Without
-   * it, none (a document's tests).
+   * point of no return, which may refuse it and reads the bases of the trees it forks, and who
+   * works where within the commit's write (those trees' intents too). Without it, none (a
+   * document's tests).
    */
-  workspaces?: Pick<WorkspacePlanner, 'preflight' | 'within' | 'removed'>;
+  workspaces?: Pick<WorkspacePlanner, 'preflight' | 'within' | 'removed' | 'made'>;
   now?: () => number;
 }
 
@@ -387,6 +388,7 @@ export class Documents {
           hashes: { saved: this.#text(next).hash, file: review.hash },
           within: () => staged(reviews.settleWithin(review, 'applied', by)),
           removals,
+          forks: losses?.forks,
         },
       );
       this.#deps.workspaces?.removed(removals);
@@ -576,6 +578,7 @@ export class Documents {
         hashes,
         ...(reviews === undefined ? {} : { within: () => staged(reviews.supersedeWithin(canvas)) }),
         removals,
+        forks: losses?.forks,
       });
       this.#deps.workspaces?.removed(removals);
       return rev;
@@ -683,6 +686,7 @@ export class Documents {
           ...(copies === undefined ? {} : { copies }),
           ...(change.within === undefined ? {} : { within: () => change.within?.() }),
           ...(removals === undefined ? {} : { removals }),
+          forks: losses?.forks,
         });
         this.#deps.workspaces?.removed(removals);
         return { result, committed: { rev, change: set } };
@@ -1007,8 +1011,9 @@ export class Documents {
    * from it; with `creator`, the party that created the agents it makes (none: they are read from
    * a file), whose count `creating` holds until their rows do; with `within`, what else its write
    * holds (told once it is on disk, after those who hear commits); the workspaces' records of it,
-   * whatever made it (`copies`: the new agents copied from another). Throws CommitFailed, leaving
-   * `live` as it was (and undoing what `within` staged), if the write failed.
+   * whatever made it (`copies`: the new agents copied from another; `forks`: the bases its
+   * preflight read for the trees it forks, whose jobs run once it is on disk). Throws CommitFailed,
+   * leaving `live` as it was (and undoing what `within` staged), if the write failed.
    */
   async #commit(
     live: Live,
@@ -1022,6 +1027,7 @@ export class Documents {
       copies,
       within,
       removals,
+      forks,
     }: {
       hashes?: { saved: string; file: string };
       creator?: PartyId;
@@ -1030,6 +1036,8 @@ export class Documents {
       within?: () => Staged | undefined;
       /** What is decided of the trees it leaves with no agent (B9a C7): removed, as said. */
       removals?: Removals;
+      /** The bases of the trees it forks, as its preflight read them (B9a Design §3). */
+      forks?: Forks | undefined;
     } = {},
   ): Promise<number> {
     if (changed.length === 0 && hashes === undefined) return live.rev;
@@ -1037,6 +1045,7 @@ export class Documents {
     const at = this.#now();
     const creators = creatorsAfter(live, rows, changed, creator);
     let staged: Staged | undefined;
+    let made: Made | undefined;
     try {
       await this.#deps.store.write(() => {
         this.#write(live, { rows, changed, renumbered, rev, at, revision, creators });
@@ -1050,8 +1059,8 @@ export class Documents {
             .run(hashes.saved, hashes.file, next.id);
         }
         // Who works where, in the same write (B9a Design §3): on disk with the document, or neither.
-        this.#deps.workspaces?.within(
-          { canvas: next.id, before: live.document, after: next, copies },
+        made = this.#deps.workspaces?.within(
+          { canvas: next.id, before: live.document, after: next, copies, forks },
           removals,
         );
         // Last, so that nothing after it fails the write once it has staged what it holds.
@@ -1090,6 +1099,8 @@ export class Documents {
       }
     }
     staged?.reveal();
+    // The trees it forks, made now that their intents are on disk (in the background).
+    this.#deps.workspaces?.made(made);
     return rev;
   }
 

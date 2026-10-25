@@ -118,13 +118,16 @@ async function remember(
   id: string,
   adapter: AdapterId = 'claude-code',
 ): Promise<void> {
+  const directory = directories.get(`${canvas}\u0000${agent}`);
+  const workspace =
+    directory?.state === 'ready' ? (directory.workspace ?? PROJECT_WORKSPACE) : PROJECT_WORKSPACE;
   await memory.update(canvas, (remembered) => ({
     ...remembered,
     conversations: {
-      [PROJECT_WORKSPACE]: {
-        ...conversationsIn(remembered, PROJECT_WORKSPACE),
+      [workspace]: {
+        ...conversationsIn(remembered, workspace),
         [adapter]: {
-          ...conversationsIn(remembered, PROJECT_WORKSPACE)[adapter],
+          ...conversationsIn(remembered, workspace)[adapter],
           [agent]: { id },
         },
       },
