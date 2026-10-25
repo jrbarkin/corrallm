@@ -252,6 +252,12 @@ export class SessionStore {
       this.#connections.set(id, connection);
       const driving = this.#drivers.get(id);
       if (driving && driving.connection !== connection) {
+        if (driving.driver instanceof ConnectedDriver) {
+          for (const message of driving.driver.takeUnsent().reverse()) {
+            this.#dispatch(id, { type: 'refuse', id: message });
+            if (this.#turns.get(id) === message) this.#turns.delete(id);
+          }
+        }
         this.#letGo(id);
         this.#idle(id);
       }

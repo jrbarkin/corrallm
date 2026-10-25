@@ -261,6 +261,16 @@ export class ConnectedDriver implements SessionDriver {
     this.#tell((agentId) => this.#backend.stopTask(agentId, taskId));
   }
 
+  /**
+   * A connection switch keeps submissions still awaiting startup. Detach them before closing,
+   * so a late startup cannot send them through the old connection or cancel their callbacks.
+   */
+  takeUnsent(): string[] {
+    const ids = [...this.#turns].flatMap(([id, turn]) => (turn.sent ? [] : [id]));
+    for (const id of ids) this.#turns.delete(id);
+    return ids;
+  }
+
   close(): void {
     this.#closed = true;
     this.#stopAsking();
