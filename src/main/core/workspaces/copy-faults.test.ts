@@ -99,9 +99,11 @@ describe.skipIf(process.platform === 'win32')('copy failure cleanup', () => {
     const t = (w = await testWorkspaces({
       '.gitignore': '.env\n',
       '.worktreeinclude': '.env\n',
-      '.ENV': 'SECRET=1\n',
     }));
     // The captured base tracks the other spelling. The picked checkout has untracked it.
+    // `.ENV` is written after the first commit: committed with it, a case-sensitive filesystem
+    // (Linux) doesn't ignore it by `.gitignore`'s `.env`, so there would be nothing to commit.
+    fs.writeFileSync(path.join(t.app, '.ENV'), 'SECRET=1\n');
     git(t.app, t.env, 'add', '-f', '.ENV');
     commit(t.app, t.env, 'track the other spelling');
     git(t.app, t.env, 'rm', '--cached', '.ENV');
