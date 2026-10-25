@@ -16,11 +16,6 @@ function stubApi(api: Partial<AppApi>) {
   const canvas = newCanvasId();
   const usage: Partial<AppApi> = {
     windowGet: vi.fn<AppApi['windowGet']>().mockResolvedValue({ ok: true, value: { canvas } }),
-    getRun: vi
-      .fn<AppApi['getRun']>()
-      .mockResolvedValue({ id: canvas, token: 'test', checkpoint: null }),
-    saveRun: vi.fn<AppApi['saveRun']>().mockResolvedValue(null),
-    runReady: vi.fn<AppApi['runReady']>().mockResolvedValue(null),
     catalogInstalled: vi.fn<AppApi['catalogInstalled']>().mockResolvedValue({
       ok: true,
       value: {},
@@ -29,7 +24,6 @@ function stubApi(api: Partial<AppApi>) {
       ok: true,
       value: { items: [] },
     }),
-    onRunStopping: vi.fn<AppApi['onRunStopping']>(() => () => undefined),
     topicsSubscribe: vi.fn<AppApi['topicsSubscribe']>().mockResolvedValue({
       ok: true,
       value: { epoch: 'one', rev: 0, state: { readings: [], rules: {} }, revs: {} },
@@ -117,31 +111,42 @@ describe('App', () => {
     expect(topicsOnChange).toHaveBeenCalled();
   });
 
-  it('learns the canvas id from window.get when it restores run progress', async () => {
+  it('binds all five view topics to the canvas window.get names, never restoring or saving a run', async () => {
     const c = newCanvasId();
-    const windowGet = vi
-      .fn<AppApi['windowGet']>()
-      .mockResolvedValue({ ok: true, value: { canvas: c } });
-    const saveRun = vi.fn<AppApi['saveRun']>().mockResolvedValue(null);
+    const subscribe = vi.fn<AppApi['topicsSubscribe']>((args) =>
+      Promise.resolve({
+        ok: true,
+        value: {
+          epoch: 'one',
+          rev: 0,
+          revs: {},
+          state:
+            args.topic === 'run'
+              ? { running: false, agents: {}, groups: {}, notices: [] }
+              : args.topic === 'sessions'
+                ? { agents: {} }
+                : args.topic === 'messages'
+                  ? { items: {}, order: [], next: '' }
+                  : args.topic === 'needs'
+                    ? { items: [] }
+                    : { readings: [], rules: {} },
+        },
+      } as Awaited<ReturnType<AppApi['topicsSubscribe']>>),
+    );
     stubApi({
+      windowGet: vi.fn().mockResolvedValue({ ok: true, value: { canvas: c } }),
+      topicsSubscribe: subscribe,
       appInfo: vi
-        .fn<AppApi['appInfo']>()
+        .fn()
         .mockResolvedValue({ ok: true, value: { name: 'corrallm', version: '0.1.0' } }),
-      windowGet,
-      getRun: vi
-        .fn<AppApi['getRun']>()
-        .mockResolvedValue({ id: c, token: 'test', checkpoint: null }),
-      saveRun,
     });
     render(<App />);
     await waitFor(() => {
-      expect(windowGet).toHaveBeenCalled();
+      for (const topic of ['run', 'needs', 'sessions', 'messages'])
+        expect(subscribe).toHaveBeenCalledWith({ topic, canvas: c });
     });
-    await waitFor(() => {
-      expect(saveRun).toHaveBeenCalledWith('test', expect.any(Object));
-      // A token and a checkpoint, never a document beside them.
-      for (const call of saveRun.mock.calls) expect(call).toHaveLength(2);
-    });
+    expect(window.api).not.toHaveProperty('getRun');
+    expect(window.api).not.toHaveProperty('saveRun');
   });
 
   it('says so when the core can’t say', async () => {

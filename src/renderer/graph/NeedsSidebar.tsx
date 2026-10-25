@@ -1,5 +1,4 @@
 import { useState } from 'react';
-import type { ComponentProps } from 'react';
 
 import type { CanvasId } from '../../shared/canvas';
 import type { GuiApi } from '../../shared/gui-link';
@@ -7,9 +6,9 @@ import type { ResultOf } from '../../shared/api/registry';
 import { useTopic } from '../api/topics';
 import type { TopicMirror } from '../api/topics';
 import { ipcErrorMessage } from '../ipc-error';
-import { QuestionsSidebar } from './Questions';
-import type { Need } from '../../shared/engine/needs';
-import { promptQuestions } from '../../shared/model/session';
+import { AskCard, QuestionCard } from './Questions';
+import type { CanvasNode } from '../../shared/model/canvas';
+import type { ArgsOf } from '../../shared/api/registry';
 import { agentName } from '../../shared/model/queries';
 import { FloatPopover } from './FloatPopover';
 
@@ -29,26 +28,18 @@ export function NeedsSidebar({
   canvas,
   mirror,
   onReply,
-  ...questions
-}: Omit<ComponentProps<typeof QuestionsSidebar>, 'extra'> & {
+  nodes,
+  onOpen,
+}: {
   canvas: CanvasId;
   mirror: TopicMirror;
-  onReply: (to: string, choice: string) => Promise<Reply>;
+  nodes: readonly CanvasNode[];
+  onOpen: (agent: string) => void;
+  onReply: (to: string, answer: ArgsOf<'reply'>['answer']) => Promise<Reply>;
 }) {
   const state = useTopic(`needs:${canvas}`, mirror);
   const [settlements, setSettlements] = useState<ReadonlyMap<string, Settlement>>(new Map());
-  const current = new Map(
-    (state?.items ?? [])
-      .filter(
-        (item) =>
-          item.kind === 'file' ||
-          item.kind === 'proposal' ||
-          item.kind === 'worktree' ||
-          item.id.startsWith('stalled/') ||
-          item.id.startsWith('unsaved/'),
-      )
-      .map((item) => [item.id, item]),
-  );
+  const current = new Map((state?.items ?? []).map((item) => [item.id, item]));
   // Pending replies and successful outcomes survive topic removal. A failed reply belongs only
   // to the live item, so a vanished prompt cannot leave a button or badge that can never work.
   // An id can be raised again once it has left (stalled/<agent> is, for each silent turn): that
@@ -60,7 +51,12 @@ export function NeedsSidebar({
     // A setup keeps the same id while it runs, fails and is retried. Its reply settles one
     // choice, not the live card: the next state must still offer Stop or Retry.
     const setupMoved =
-      live && !settlement.pending && !!settlement.outcome && settlement.item.kind === 'worktree';
+      live &&
+      !settlement.pending &&
+      !!settlement.outcome &&
+      (settlement.item.kind === 'worktree' ||
+        ((settlement.item.kind === 'prompt' || settlement.item.kind === 'hold') &&
+          current.get(id) !== settlement.item));
     if (
       setupMoved ||
       (live ? settlement.left && !settlement.pending : !settlement.pending && !settlement.outcome)
@@ -75,7 +71,7 @@ export function NeedsSidebar({
   if (changed) setSettlements(kept);
   for (const [id, settlement] of kept)
     if (settlement.pending || settlement.outcome) current.set(id, settlement.item);
-  const answer = async (item: CoreNeed, choice: string) => {
+  const answer = async (item: CoreNeed, value: ArgsOf<'reply'>['answer']) => {
     const update = (value: Settlement) => {
       setSettlements((previous) => {
         const left = value.pending ? undefined : previous.get(item.id)?.left;
@@ -84,15 +80,15 @@ export function NeedsSidebar({
     };
     update({ item, pending: true });
     try {
-      const result = await onReply(item.id, choice);
+      const result = await onReply(item.id, value);
       update({ item, pending: false, outcome: result.outcome ?? 'answered' });
     } catch (error) {
       update({ item, pending: false, error: ipcErrorMessage(error) });
     }
   };
-  const count =
-    needCardsCount(questions.needs) +
-    [...current.keys()].filter((id) => !kept.get(id)?.outcome).length;
+  const count = [...current.values()]
+    .filter((item) => !kept.get(item.id)?.outcome)
+    .reduce((count, item) => count + (item.questions?.length ?? 1), 0);
   const bell = (
     <>
       <svg viewBox="0 0 16 16" aria-hidden="true">
@@ -106,7 +102,7 @@ export function NeedsSidebar({
       {count > 0 && <span className="float-needs-count">{count}</span>}
     </>
   );
-  if (needCardsCount(questions.needs) === 0 && current.size === 0)
+  if (current.size === 0)
     return (
       <button type="button" aria-label="Needs you" title="Nothing needs you" disabled>
         {bell}
@@ -115,87 +111,128 @@ export function NeedsSidebar({
   return (
     <FloatPopover label="Needs you" button={bell} className="needs-popover">
       {(close) => (
-        <QuestionsSidebar
-          {...questions}
-          onOpen={(id) => {
-            close();
-            questions.onOpen(id);
-          }}
-          extra={{
-            count: [...current.keys()].filter((id) => !kept.get(id)?.outcome).length,
-            cards: [...current.values()].map((item) => {
-              const settlement = kept.get(item.id);
-              return (
-                <article key={item.id} className="graph-question" aria-label={item.title}>
-                  <span className="graph-question-header">
-                    {item.kind === 'file'
-                      ? 'File review'
-                      : item.kind === 'worktree'
-                        ? 'Worktree setup'
-                        : item.id.startsWith('stalled/')
-                          ? `Silent session: ${item.agent === undefined ? 'agent' : agentName(questions.input.nodes, item.agent)}`
-                          : item.id.startsWith('unsaved/')
-                            ? 'Run progress'
-                            : 'Proposal'}
-                  </span>
-                  <p className="graph-question-text">{item.title}</p>
-                  {item.detail && <p className="graph-question-detail">{item.detail}</p>}
-                  {settlement?.outcome ? (
-                    <p role="status">
-                      {settlement.outcome.charAt(0).toUpperCase() + settlement.outcome.slice(1)}.
-                    </p>
-                  ) : (
-                    <div className="graph-question-options">
-                      {item.choices.map((choice, i) => (
-                        <button
-                          key={choice.value}
-                          type="button"
-                          data-primary={i === 0 ? '' : undefined}
-                          disabled={settlement?.pending}
-                          title={choice.description}
-                          onClick={() => {
-                            void answer(item, choice.value);
-                          }}
-                        >
-                          {choice.label}
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                  {settlement?.error && <p role="alert">{settlement.error}</p>}
-                  {settlement?.outcome && (
-                    <button
-                      type="button"
-                      aria-label={`Dismiss ${item.title}`}
-                      onClick={() => {
-                        setSettlements((previous) => {
-                          const next = new Map(previous);
-                          next.delete(item.id);
-                          return next;
-                        });
+        <aside className="graph-questions" aria-label="Needs you">
+          <h2>
+            Needs you <span className="graph-questions-count">{count}</span>
+          </h2>
+          {[...current.values()].map((item) => {
+            const settlement = kept.get(item.id);
+            return (
+              <article key={item.id} className="graph-question" aria-label={item.title}>
+                <span className="graph-question-header">
+                  {item.kind === 'file'
+                    ? 'File review'
+                    : item.kind === 'worktree'
+                      ? 'Worktree setup'
+                      : item.id.startsWith('stalled/')
+                        ? `Silent session: ${item.agent === undefined ? 'agent' : agentName(nodes, item.agent)}`
+                        : item.id.startsWith('unsaved/')
+                          ? 'Run progress'
+                          : 'Proposal'}
+                </span>
+                {item.agent && (
+                  <button
+                    type="button"
+                    className="graph-question-agent"
+                    aria-label={`Open ${agentName(nodes, item.agent)}`}
+                    onClick={() => {
+                      close();
+                      if (item.agent) onOpen(item.agent);
+                    }}
+                  >
+                    {agentName(nodes, item.agent)}
+                  </button>
+                )}
+                {!item.questions?.length && <p className="graph-question-text">{item.title}</p>}
+                {item.detail && <p className="graph-question-detail">{item.detail}</p>}
+                {settlement?.outcome ? (
+                  <p role="status">
+                    {settlement.outcome.charAt(0).toUpperCase() + settlement.outcome.slice(1)}.
+                  </p>
+                ) : item.answerIn === 'terminal' ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (item.agent) {
+                        close();
+                        onOpen(item.agent);
+                      }
+                    }}
+                  >
+                    Open terminal
+                  </button>
+                ) : item.questions?.length ? (
+                  item.questions.map((question) => (
+                    <QuestionCard
+                      key={question.id}
+                      question={{
+                        ...question,
+                        options: question.options.map((option) => ({
+                          label: option.label,
+                          ...(option.description === undefined
+                            ? {}
+                            : { description: option.description }),
+                        })),
                       }}
-                    >
-                      Dismiss
-                    </button>
-                  )}
-                </article>
-              );
-            }),
-          }}
-        />
+                      onAnswer={(text) => {
+                        void answer(item, { answers: { [question.id]: text } });
+                      }}
+                    />
+                  ))
+                ) : item.kind === 'prompt' && item.id.startsWith('prompt/') ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (item.agent) {
+                        close();
+                        onOpen(item.agent);
+                      }
+                    }}
+                  >
+                    Open session
+                  </button>
+                ) : (
+                  <AskCard
+                    text=""
+                    choices={item.choices.map((choice, index) => ({
+                      key: choice.value,
+                      label: choice.label,
+                      ...(choice.description === undefined ? {} : { detail: choice.description }),
+                      primary: index === 0,
+                    }))}
+                    reply={
+                      item.text ? { label: item.text.placeholder, button: 'Reply' } : undefined
+                    }
+                    answered={settlement?.pending ? 'Sending…' : undefined}
+                    onChoose={(choice) => {
+                      void answer(item, { choice });
+                    }}
+                    onReply={(text) => {
+                      void answer(item, { text });
+                    }}
+                  />
+                )}
+                {settlement?.error && <p role="alert">{settlement.error}</p>}
+                {settlement?.outcome && (
+                  <button
+                    type="button"
+                    aria-label={`Dismiss ${item.title}`}
+                    onClick={() => {
+                      setSettlements((previous) => {
+                        const next = new Map(previous);
+                        next.delete(item.id);
+                        return next;
+                      });
+                    }}
+                  >
+                    Dismiss
+                  </button>
+                )}
+              </article>
+            );
+          })}
+        </aside>
       )}
     </FloatPopover>
   );
-}
-
-/** The number of visible question cards, also used by the Needs float's badge. */
-function needCardsCount(needs: readonly Need[]): number {
-  return needs.reduce((count, need) => {
-    if (need.kind === 'prompt' && need.prompt.kind === 'question')
-      return (
-        count +
-        promptQuestions(need.prompt).filter(({ question }) => question.answer === undefined).length
-      );
-    return count + (need.kind === 'hold' || need.kind === 'prompt' || need.kind === 'ask' ? 1 : 0);
-  }, 0);
 }

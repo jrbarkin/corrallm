@@ -1,8 +1,6 @@
-import { adapterIn, connectionIn, isStartMode } from '../../shared/adapter';
+import { adapterIn } from '../../shared/adapter';
 import type { AdapterId, Catalog } from '../../shared/adapter';
 import type { IpcArgs } from '../../shared/ipc';
-import { parseRole } from '../../shared/role';
-import { MAX_NODE_ID } from '../../shared/model/canvas';
 import {
   CODEX_MODES,
   ELICITATION_ACTIONS,
@@ -19,7 +17,6 @@ import {
   MODEL_PATTERN,
   PERMISSION_MODES,
   PLAN_MODES,
-  REWIND_RESTORES,
 } from '../../shared/session';
 import { MAX_IMAGE_BYTES, MAX_IMAGE_TOTAL, MAX_IMAGES } from '../../shared/api/limits';
 import type {
@@ -28,7 +25,6 @@ import type {
   PlanAnswer,
   SessionAnswer,
   SessionMode,
-  SessionOptions,
   UserMessage,
 } from '../../shared/session';
 import { isNativeId } from './id';

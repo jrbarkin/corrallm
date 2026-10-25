@@ -5,7 +5,6 @@ import type { CanvasNode } from '../../shared/model/canvas';
 import { newCanvasId } from '../../shared/canvas';
 import { fakeCore, expectOneOp } from '../test-api';
 import { events } from '../test-render';
-import { runCatalog } from './agents';
 import { NeedsSidebar } from './NeedsSidebar';
 import css from './GraphEditor.css?raw';
 const cores: ReturnType<typeof fakeCore>[] = [];
@@ -130,18 +129,9 @@ async function setup(items: NeedsItem[], nodes: CanvasNode[] = []) {
     <NeedsSidebar
       canvas={canvas}
       mirror={core.topics}
-      needs={[]}
-      input={{
-        canvas,
-        nodes,
-        run: { running: false, agents: {} },
-        sessions: {},
-        catalog: runCatalog(),
-      }}
-      onDecide={() => undefined}
-      onAnswer={() => undefined}
+      nodes={nodes}
       onOpen={() => undefined}
-      onReply={(to, choice) => core.api.reply({ canvas, to, answer: { choice } })}
+      onReply={(to, answer) => core.api.reply({ canvas, to, answer })}
     />,
   );
   if (items.length > 0) {

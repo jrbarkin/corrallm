@@ -248,7 +248,9 @@ describe('session:* handlers', () => {
     expect(services.own.resumed).toHaveBeenCalledExactlyOnceWith('a');
     // A change its CLI refused tells the core's session nothing.
     services.sessions.answer.mockRejectedValueOnce(new Error('No such prompt'));
-    await expect(invoke('session:answer', ['a', 'p2', permission])).rejects.toThrow('No such prompt');
+    await expect(invoke('session:answer', ['a', 'p2', permission])).rejects.toThrow(
+      'No such prompt',
+    );
     expect(services.own.answered).toHaveBeenCalledOnce();
   });
 
@@ -483,4 +485,3 @@ describe('session:* handlers', () => {
     expect(services.windows.canvasOf).not.toHaveBeenCalled();
   });
 });
-

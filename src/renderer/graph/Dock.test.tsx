@@ -176,7 +176,7 @@ it('toggles the canvas queues and switches agents through the taskbar without do
         canvas={canvas.document.id}
         client={canvas.core.api}
         mirror={canvas.core.topics}
-        sessionBackend={sessions.backend}
+        sessionQueries={sessions.backend}
       />,
     );
     const dock = within(screen.getByRole('navigation', { name: 'Canvas agents' }));
@@ -220,7 +220,7 @@ it('glows for a need from either the core topic or the renderer session, until b
         canvas={canvas.document.id}
         client={canvas.core.api}
         mirror={canvas.core.topics}
-        sessionBackend={sessions.backend}
+        sessionQueries={sessions.backend}
       />,
     );
     const writer = screen.getByRole('button', { name: /^Writer,/ });

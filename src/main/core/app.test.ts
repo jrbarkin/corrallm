@@ -1,5 +1,4 @@
 import type { OpResult } from '../../shared/api/errors';
-import type { RunCheckpoint } from '../../shared/run';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -134,7 +133,11 @@ async function agentOn(window: WindowLink, connection: string): Promise<string> 
   const { id } = await call(window, 'canvas.addAgent', {
     canvas,
     at: { x: 0, y: 0 },
-    adapter: connection.split('.')[0] as string,
+    adapter:
+      connection.split('.')[0] ??
+      (() => {
+        throw new Error('No adapter');
+      })(),
     connection,
   });
   return id as string;
@@ -801,5 +804,4 @@ describe('the canvas’s document, which the core keeps', () => {
     const draft = await created(window);
     expect(await shownIn(window)).toBe(draft);
   });
-
 });

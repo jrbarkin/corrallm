@@ -8,15 +8,12 @@ import { canvasIdOf, newCanvasId } from '../../shared/canvas';
 import type { CanvasId } from '../../shared/canvas';
 import type { ProjectFolder } from '../../shared/ipc';
 import type { QueueItem } from '../../shared/model/queue';
-import type { RunCheckpoint } from '../../shared/run';
 import type { UsageState } from '../../shared/usage';
 import { catalog } from '../catalog';
 import { api } from '../api/client';
 import { useDraft } from '../useDraft';
 import { EXAMPLES } from '../../shared/examples';
 import { templateInfo } from '../../shared/templates';
-import { readRun } from '../../shared/engine/run/checkpoint';
-import type { RunSource } from '../run/persistence';
 import { automaticBackend, fakeBackend } from '../../shared/engine/test-backend';
 import type { UsageSource } from '../usage/store';
 import { fromFile, toFile } from '../../shared/model/file';
@@ -194,46 +191,24 @@ describe('GraphEditor', () => {
     },
   );
 
-  it('waits for draft operations before acknowledging the quit freeze', async () => {
-    const saving = Promise.withResolvers<undefined>();
-    let stopping: ((request: string) => void) | undefined;
-    const source = {
-      get: vi
-        .fn<RunSource['get']>()
-        .mockResolvedValue({ id: newCanvasId(), token: 'current', checkpoint: null }),
-      save: vi.fn<RunSource['save']>().mockResolvedValue(0),
-      ready: vi.fn<RunSource['ready']>().mockResolvedValue(null),
-      onStopping: (listener: (request: string) => void) => {
-        stopping = listener;
-        return () => {
-          stopping = undefined;
-        };
-      },
-    };
-    const fake = automaticBackend();
-    await renderReady(<GraphEditor runSource={source} sessionBackend={fake.backend} />);
-    await waitFor(() => {
-      expect(source.save).toHaveBeenCalled();
+  it('leaves run ownership in the core when the view unloads', async () => {
+    const held = core();
+    const fake = fakeBackend();
+    const { unmount } = await renderReady(
+      <GraphEditor
+        initialGraph={{ nodes: [agentNode('a', 0, 0)], edges: [] }}
+        onCanvas={held.onCanvas}
+        sessionBackend={fake.backend}
+      />,
+    );
+    const before = held.canvas.engine.run.snapshot();
+    act(() => {
+      window.dispatchEvent(new Event('beforeunload'));
     });
-    render(<DraftGate save={() => saving.promise} />);
-    fireEvent.change(screen.getByRole('textbox', { name: 'Pending draft' }), {
-      target: { value: 'New words' },
-    });
-    try {
-      await act(async () => {
-        stopping?.('quit');
-        await Promise.resolve();
-      });
-      expect(source.ready).not.toHaveBeenCalled();
-    } finally {
-      await act(async () => {
-        saving.resolve(undefined);
-        await Promise.resolve();
-      });
-    }
-    await waitFor(() => {
-      expect(source.ready).toHaveBeenCalledExactlyOnceWith('quit', null);
-    });
+    expect(held.canvas.engine.run.snapshot()).toBe(before);
+    expect(fake.backend.interrupt).not.toHaveBeenCalled();
+    unmount();
+    expect(fake.backend.close).not.toHaveBeenCalled();
   });
 
   it('commits the agent name before the composer sends without blur', async () => {
@@ -357,97 +332,27 @@ describe('GraphEditor', () => {
     },
   );
 
-  it('restores, saves and sends under StrictMode, and answers shutdown from the shown canvas once', async () => {
-    const saved: Graph = {
-      nodes: [
-        agentNode('a', 0, 0, {
-          data: {
-            label: 'Restored',
-            connection: 'claude-code.sdk',
-            queue: [
-              { id: 'done', message: 'Already finished' },
-              { id: 'planned', message: 'Continue saved work' },
-            ],
-          },
-        }),
-      ],
-      edges: [],
-    };
-    const id = newCanvasId();
-    const checkpoint: RunCheckpoint = {
-      version: 2,
-      state: JSON.stringify({
-        version: 2,
-        run: {
-          running: false,
-          agents: { a: { status: 'waiting', current: 'planned', outcomes: { done: 'succeeded' } } },
-        },
-        replies: [],
-        held: [],
-        arrived: [],
-        ended: [],
-        past: [],
-        due: [],
-        usageDecided: [],
-        warned: [],
-      }),
-      messages: '{"version":1,"agents":[]}',
-      updatedAt: 1,
-    };
-    const stopping = new Set<(request: string) => void>();
-    const source = {
-      get: vi.fn<RunSource['get']>().mockResolvedValue({
-        id,
-        token: 'saved',
-        checkpoint,
-      }),
-      save: vi.fn<RunSource['save']>().mockResolvedValue(0),
-      ready: vi.fn<RunSource['ready']>().mockResolvedValue(null),
-      onStopping: (listener: (request: string) => void) => {
-        stopping.add(listener);
-        return () => {
-          stopping.delete(listener);
-        };
-      },
-    };
-    const sessions = fakeBackend();
-    const { container, unmount } = await renderReady(
+  it('StrictMode shows the core’s restored run and Resume is one operation', async () => {
+    const held = core();
+    await renderReady(
       <StrictMode>
-        <GraphEditor initialGraph={saved} runSource={source} sessionBackend={sessions.backend} />
+        <GraphEditor
+          initialGraph={{ nodes: [agentNode('a', 0, 0)], edges: [] }}
+          onCanvas={held.onCanvas}
+        />
       </StrictMode>,
     );
-    const card = await screen.findByLabelText('Restored, Claude · SDK');
-    expect(source.get).toHaveBeenCalledOnce();
-    expect(sessions.backend.send).not.toHaveBeenCalled();
-    await events.click(card);
-    await events.keyDown(document.body, { key: 'F2' });
-    await events.change(labelInput(), { target: { value: 'Shown' } });
-    await events.keyDown(labelInput(), { key: 'Enter' });
-    await screen.findByLabelText('Shown, Claude · SDK');
-    await events.click(button('Show all queues'));
-    const queues = within(screen.getByRole('dialog', { name: 'All queues' }));
-    await events.click(queues.getByRole('button', { name: 'Resume' }));
-    await waitFor(() => {
-      expect(sessions.backend.send).toHaveBeenCalledOnce();
-    });
-    expect(sessions.backend.send.mock.calls[0]?.[1].text).toBe('Continue saved work');
     act(() => {
-      for (const listener of stopping) listener('quit');
+      held.canvas.core.change({
+        topic: `run:${held.canvas.document.id}`,
+        rev: 50,
+        top: { running: false, paused: true },
+        agents: { set: {} },
+        groups: { set: {} },
+      });
     });
-    await waitFor(() => {
-      expect(source.ready).toHaveBeenCalledExactlyOnceWith('quit', null);
-    });
-    const [, stopped] = source.save.mock.calls.at(-1) ?? [];
-    // A token and a checkpoint, never a document beside them.
-    for (const call of source.save.mock.calls) expect(call).toHaveLength(2);
-    expect(stopped && readRun(stopped.state).run).toMatchObject({
-      running: false,
-      paused: true,
-      agents: { a: { outcomes: { done: 'succeeded' }, current: 'planned' } },
-    });
-    expect(container.textContent).not.toContain('The run storage is not available.');
-    unmount();
-    expect(stopping.size).toBe(0);
+    await events.click(button('Resume'));
+    expectOneOp(held.canvas.core, 'run.resume', { canvas: held.canvas.document.id });
   });
 
   it('hears usage changes and applies their rules after StrictMode cleanup', async () => {
@@ -2393,113 +2298,18 @@ describe('GraphEditor', () => {
       });
     });
 
-    it.each(['unreadable journal', 'invalid queue state', 'invalid submitted messages'])(
-      'recovers from %s with New while keeping native work unavailable',
-      async (failure) => {
-        const held = core();
-        let replaced = false;
-        const [before, draft] = [newCanvasId(), newCanvasId()];
-        const source = {
-          get: vi.fn(() => {
-            if (!replaced && failure === 'unreadable journal')
-              return Promise.reject(new Error('Unreadable journal'));
-            return Promise.resolve({
-              id: replaced ? draft : before,
-              token: replaced ? 'new-draft' : 'old',
-              checkpoint: replaced
-                ? null
-                : {
-                    version: 2 as const,
-                    state:
-                      failure === 'invalid queue state'
-                        ? '{}'
-                        : JSON.stringify({
-                            version: 2,
-                            run: { running: false, agents: {} },
-                            replies: [],
-                            held: [],
-                            arrived: [],
-                            ended: [],
-                            past: [],
-                            due: [],
-                            usageDecided: [],
-                            warned: [],
-                          }),
-                    messages:
-                      failure === 'invalid submitted messages' ? '{}' : '{"version":1,"agents":[]}',
-                    updatedAt: 1,
-                  },
-            });
-          }),
-          save: vi.fn().mockResolvedValue(null),
-          ready: vi.fn().mockResolvedValue(null),
-          onStopping: () => () => undefined,
-        };
-        const sessions = fakeBackend();
-        const { container } = await renderReady(
-          <GraphEditor
-            initialGraph={coder}
-            files
-            onCanvas={(made) => {
-              held.onCanvas(made);
-              made.core.reply('canvas.create', (args) => {
-                replaced = true;
-                return made.create(args);
-              });
-            }}
-            runSource={source}
-            sessionBackend={sessions.backend}
-          />,
-        );
-        expect((await screen.findByRole('alert')).textContent).toContain('Could not');
-        expect(container.querySelector('.react-flow__node')).toBeNull();
-        expect(sessions.backend.start).not.toHaveBeenCalled();
-        await events.click(button('New'));
-        await waitFor(() => {
-          expect(container.querySelector('.react-flow')).not.toBeNull();
-        });
-        expectOneOp(held.canvas.core, 'canvas.create', {});
-        await waitFor(() => {
-          expect(source.save).toHaveBeenCalled();
-        });
-        expect(source.save.mock.calls.every(([token]) => token === 'new-draft')).toBe(true);
-      },
-    );
-
-    it('saves run checkpoints without sending a document, a restored canvas’s or a draft’s', async () => {
-      const id = newCanvasId();
-      const runSource = {
-        get: vi.fn(() => Promise.resolve({ id, token: 'restored', checkpoint: null })),
-        save: vi.fn<RunSource['save']>().mockResolvedValue(0),
-        ready: vi.fn().mockResolvedValue(null),
-        onStopping: () => () => undefined,
-      };
-      await renderReady(<GraphEditor files runSource={runSource} />);
-      await waitFor(() => {
-        expect(runSource.save).toHaveBeenCalled();
-      });
-      // A token and a checkpoint, never a document beside them.
-      for (const call of runSource.save.mock.calls) expect(call).toHaveLength(2);
-      expect(runSource.save).toHaveBeenCalledWith('restored', expect.any(Object));
-    });
-
     it('keeps the canvas, saving it under its own token, when the core refuses a file', async () => {
       const id = newCanvasId();
       const held = core();
-      const runSource = {
-        get: vi.fn(() =>
-          Promise.resolve({
-            id,
-            token: 'kept',
-            checkpoint: null,
-          }),
-        ),
-        save: vi.fn().mockResolvedValue(null),
-        ready: vi.fn().mockResolvedValue(null),
-        onStopping: () => () => undefined,
-      };
       const { container } = await renderReady(
-        <GraphEditor initialGraph={coder} files onCanvas={held.onCanvas} runSource={runSource} />,
+        <GraphEditor
+          initialGraph={coder}
+          files
+          onCanvas={(made) => {
+            made.open({ ...made.document, id });
+            held.onCanvas(made);
+          }}
+        />,
       );
       held.canvas.files.open = new Error('notes.corral: This is not a corrallm canvas');
       await waitFor(() => {
@@ -2516,7 +2326,6 @@ describe('GraphEditor', () => {
         expect(held.canvas.files.saved).toHaveLength(1);
       });
       expect(canvasIdOf(held.canvas.files.saved[0] ?? '')).toBe(id);
-      expect(runSource.save.mock.calls.every(([token]) => token === 'kept')).toBe(true);
     });
 
     it('says why a file cannot be opened, and keeps the canvas', async () => {

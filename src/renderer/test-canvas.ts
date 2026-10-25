@@ -1,5 +1,5 @@
-import type { TopicKey } from '../shared/api/topics';
-import type { MirrorTopicKey, MirrorStates } from './api/topic-wire';
+import { canvasRuntime } from './test-canvas-runtime';
+import type { SessionBackend } from '../shared/engine/transcript/receive';
 import type { CanvasId } from '../shared/canvas';
 import { newCanvasId } from '../shared/canvas';
 import { OPS } from '../shared/api/registry';
@@ -29,8 +29,9 @@ interface Project {
 export type FakeCanvas = ReturnType<typeof fakeCanvas>;
 
 /** An in-memory canvas core for editor gesture tests: real schemas and pure builds, pushed rows. */
-export function fakeCanvas(initial: CanvasDocument) {
+export function fakeCanvas(initial: CanvasDocument, backend?: SessionBackend) {
   const core = fakeCore();
+  let runtime: ReturnType<typeof canvasRuntime> | undefined;
   let document = initial;
   let rev = 1;
   let saved = toFile(initial);
@@ -41,11 +42,11 @@ export function fakeCanvas(initial: CanvasDocument) {
     edited: false,
     project: null as Project | null,
   };
-  const source = core.topics.snapshot.bind(core.topics);
-  const revision = core.topics.revision.bind(core.topics);
-  core.topics.snapshot = <K extends MirrorTopicKey>(topic: K) =>
-    source(topic) ?? (core.state(topic as TopicKey)?.state as MirrorStates[K] | undefined);
-  core.topics.revision = (topic) => revision(topic) ?? core.state(topic as TopicKey)?.rev;
+  const dispose = core.dispose.bind(core);
+  core.dispose = () => {
+    runtime?.dispose();
+    dispose();
+  };
   const context = { newId: () => crypto.randomUUID(), defaultAdapter: DEFAULT_AGENT };
   const keep = (next: CanvasDocument) => {
     const prior = document;
@@ -53,6 +54,7 @@ export function fakeCanvas(initial: CanvasDocument) {
     const changed = diffRows(rows, next, prior);
     rows = changed.rows;
     document = next;
+    runtime?.update(next);
     rev++;
     const set: Record<string, Entity> = Object.fromEntries(
       [...changed.changed, ...changed.renumbered]
@@ -80,10 +82,15 @@ export function fakeCanvas(initial: CanvasDocument) {
     if (prior) core.change({ topic: `canvas:${next.id}`, rev, replace: entities });
     else core.snapshot(`canvas:${next.id}`, entities, rev);
     core.respond('window.get', { canvas: next.id });
+    if (!core.state(`run:${next.id}`))
+      core.snapshot(`run:${next.id}`, { running: false, agents: {}, groups: {}, notices: [] });
+    if (!core.state(`sessions:${next.id}`)) core.snapshot(`sessions:${next.id}`, { agents: {} });
+    if (!core.state(`messages:${next.id}`))
+      core.snapshot(`messages:${next.id}`, { items: {}, order: [], next: '' });
     if (!core.state(`needs:${next.id}`)) core.snapshot(`needs:${next.id}`, { items: [] });
+    runtime = canvasRuntime(core, next, backend);
   };
   open(initial);
-  core.snapshot(`needs:${initial.id}`, { items: [] });
   core.snapshot('canvases', { items: [] });
   /** The canvas's meta changed (its name, folder, whether edited), as the core says it. */
   function view(next: Partial<typeof meta>) {
@@ -396,6 +403,10 @@ export function fakeCanvas(initial: CanvasDocument) {
     });
   return {
     core,
+    get engine() {
+      if (!runtime) throw new Error('No test runtime');
+      return runtime.engine;
+    },
     create,
     open,
     get document() {

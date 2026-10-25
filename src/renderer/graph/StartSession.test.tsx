@@ -32,7 +32,7 @@ afterEach(() => {
 function setup() {
   const canvas = fakeCanvas({ id: newCanvasId(), arrange: false, nodes: [], links: [] });
   const sessions = fakeBackend();
-  sessions.backend.installed.mockResolvedValue({ 'claude-code': true, codex: false });
+  canvas.core.respond('catalog.installed', { 'claude-code': true, codex: false });
   disposals.push(() => {
     canvas.core.dispose();
   });
@@ -41,7 +41,7 @@ function setup() {
       canvas={canvas.document.id}
       client={canvas.core.api}
       mirror={canvas.core.topics}
-      sessionBackend={sessions.backend}
+      sessionQueries={sessions.backend}
       files
     />,
   );
