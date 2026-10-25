@@ -164,7 +164,7 @@ describe.skipIf(process.platform === 'win32')('GitRunner', () => {
         .sort(),
     ).toEqual(['GIT_ALLOW_PROTOCOL', 'GIT_NO_LAZY_FETCH', 'GIT_TERMINAL_PROMPT']);
     expect(seen).toMatchObject({
-      GIT_ALLOW_PROTOCOL: 'none',
+      GIT_ALLOW_PROTOCOL: '',
       GIT_NO_LAZY_FETCH: '1',
       GIT_TERMINAL_PROMPT: '0',
       LC_ALL: 'C',
@@ -175,7 +175,7 @@ describe.skipIf(process.platform === 'win32')('GitRunner', () => {
       PATH: 'p',
       GIT_TERMINAL_PROMPT: '0',
       GIT_NO_LAZY_FETCH: '1',
-      GIT_ALLOW_PROTOCOL: 'none',
+      GIT_ALLOW_PROTOCOL: '',
       LC_ALL: 'C',
     });
   });

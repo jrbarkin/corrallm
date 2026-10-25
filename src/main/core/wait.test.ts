@@ -1,3 +1,4 @@
+import { legacyDirectories } from './workspaces/test-directories';
 import { createHash } from 'node:crypto';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -88,6 +89,7 @@ async function start(open: CanvasId[] = [M1], store?: StoreDeps): Promise<Core> 
       app: { name: 'corrallm', version: '1.0.0' },
       check: true,
       distribution: 'local',
+      directoryResolver: legacyDirectories,
       locale: 'en-GB',
       sessions: {
         connectors: { 'codex.app-server': connector, 'codex.terminal': connector },

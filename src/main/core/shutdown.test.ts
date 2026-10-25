@@ -14,6 +14,7 @@ import { createCore } from './core';
 import type { Core } from './core';
 import { journaledRun, keepCanvases, refuseWrites } from './store/test-store';
 import { CALLERS, NO_DESKTOP } from './test-registry';
+import { legacyDirectories } from './workspaces/test-directories';
 
 /*
  * The core's shutdown barrier (B11 Design §8 "Quit is not window close", §16.5), as quit and
@@ -86,6 +87,7 @@ async function start(codex: Connector<SessionMode> = connector()): Promise<Core>
       app: { name: 'corrallm', version: '9.8.7' },
       check: true,
       distribution: 'local',
+      directoryResolver: legacyDirectories,
       sessions: {
         connectors: { 'codex.app-server': codex },
         environment: () => Promise.resolve({}),

@@ -103,7 +103,7 @@ export function QueuesView({
   onOpenAgent: (agentId: string) => void;
   onAgentContextMenu?: ((event: ReactMouseEvent, agentId: string) => void) | undefined;
   onOpenSettings?: ((id: string) => void) | undefined;
-  settingsOptions?: ((cli: AdapterId) => Promise<SettingsOptions>) | undefined;
+  settingsOptions?: ((cli: AdapterId, agent?: string) => Promise<SettingsOptions>) | undefined;
   onClose: () => void;
 }) {
   const layout = useMemo(() => lanesOf(nodes), [nodes]);
@@ -466,7 +466,7 @@ function LaneCells({
   picking: Picking | undefined;
   onOpenAgent: (agentId: string) => void;
   onOpenSettings?: ((id: string) => void) | undefined;
-  settingsOptions?: ((cli: AdapterId) => Promise<SettingsOptions>) | undefined;
+  settingsOptions?: ((cli: AdapterId, agent?: string) => Promise<SettingsOptions>) | undefined;
 }) {
   const { agent: node } = lane;
   const id = node.id;
@@ -567,7 +567,7 @@ function LaneCells({
         {onOpenSettings && settingsOptions && (
           <AgentSettingsSummary
             node={node}
-            options={settingsOptions}
+            options={(adapter) => settingsOptions(adapter, id)}
             onOpen={() => {
               onOpenSettings(id);
             }}

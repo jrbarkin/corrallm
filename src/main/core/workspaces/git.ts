@@ -1,7 +1,7 @@
 import { accessSync, constants, lstatSync, mkdirSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
 
-import { SAFE_GIT_OPTIONS, safeGitDiffArgs } from '../../git';
+import { SAFE_GIT_ENV, SAFE_GIT_OPTIONS, safeGitDiffArgs } from '../../git';
 import { execFile } from '../../sessions/process';
 
 /*
@@ -21,8 +21,8 @@ import { execFile } from '../../sessions/process';
  *   signature program, or submodule's own programs.
  * - The environment is the agents' (their PATH and home), with every GIT_ variable removed, so
  *   none redirects a call (GIT_DIR, GIT_WORK_TREE, GIT_INDEX_FILE...) or configures it
- *   (GIT_CONFIG_PARAMETERS, GIT_CONFIG_COUNT...), then no prompt, no lazy fetch, no transport
- *   whatever the repository allows (GIT_ALLOW_PROTOCOL), and C messages.
+ *   (GIT_CONFIG_PARAMETERS, GIT_CONFIG_COUNT...), then no prompt, SAFE_GIT_ENV (no lazy fetch, no
+ *   transport whatever the repository allows: GIT_ALLOW_PROTOCOL), and C messages.
  * - Each call is bounded in time and output, and runs as a child the core owns (core/children.ts,
  *   through sessions/process.ts): recorded before it runs, its whole process group ended if it
  *   takes too long or says too much, and refused once the core is closing.
@@ -113,11 +113,11 @@ export interface ConfigInspection {
 }
 
 /**
- * The agents' environment without any of Git's own variables, then the runner's. GIT_ALLOW_PROTOCOL
- * is the only transport policy Git puts above every configuration: a repository's
- * `protocol.<name>.allow` outranks `protocol.allow=never`, and `ext::` would then run a command (a
- * partial clone's lazy fetch reaches it on a Git that doesn't know GIT_NO_LAZY_FETCH). Its list
- * names no transport Git has.
+ * The agents' environment without any of Git's own variables, then the runner's, SAFE_GIT_ENV's
+ * among them. Its GIT_ALLOW_PROTOCOL is the only transport policy Git puts above every
+ * configuration: a repository's `protocol.<name>.allow` outranks `protocol.allow=never`, and
+ * `ext::` would then run a command (a partial clone's lazy fetch reaches it on a Git that doesn't
+ * know GIT_NO_LAZY_FETCH). Its empty allowlist admits no transport, including external remote helpers.
  */
 export function gitEnvironment(
   env: Readonly<Record<string, string | undefined>>,
@@ -128,8 +128,7 @@ export function gitEnvironment(
   return {
     ...Object.fromEntries(kept),
     GIT_TERMINAL_PROMPT: '0',
-    GIT_NO_LAZY_FETCH: '1',
-    GIT_ALLOW_PROTOCOL: 'none',
+    ...SAFE_GIT_ENV,
     LC_ALL: 'C',
   };
 }

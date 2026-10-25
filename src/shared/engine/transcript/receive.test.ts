@@ -937,6 +937,45 @@ describe('a connected session that would not start', () => {
   );
 
   it.each(connections)(
+    'delivers the kept $connection message after opening $switchTo with asynchronous directory readiness',
+    async ({ connection, switchTo, adapter: agent, reason }) => {
+      const fake = fakeBackend();
+      const store = new SessionStore(engine, {
+        ...fake.backend,
+        availability: () => Promise.resolve({ ready: true }),
+      });
+      store.sync([{ id: 'a', connection }]);
+      fake.backend.start.mockImplementation((_agent, options) => {
+        if (options.connection !== connection) return Promise.resolve(null);
+        fake.emit('a', connection, {
+          type: 'notice',
+          id: crypto.randomUUID(),
+          level: 'error',
+          text: reason,
+          switchTo,
+        });
+        return Promise.reject(new Error(reason));
+      });
+      store.open('a');
+      await settle();
+      store.send('a', agent, 'Fix the login bug');
+      await settle();
+      expect(store.of('a').queued.map(({ text }) => text)).toEqual(['Fix the login bug']);
+      expect(fake.backend.send).not.toHaveBeenCalled();
+      store.sync([{ id: 'a', connection: switchTo }]);
+      store.open('a');
+      await settle();
+      expect(fake.backend.start).toHaveBeenLastCalledWith(
+        'a',
+        expect.objectContaining({ connection: switchTo }),
+      );
+      expect(fake.backend.send).toHaveBeenCalledOnce();
+      expect(store.of('a').queued).toEqual([]);
+      store.reset();
+    },
+  );
+
+  it.each(connections)(
     'sends what $connection kept once the agent runs in $switchTo, and whoever sent it hears the turn end',
     async ({ connection, switchTo, adapter: agent, reason }) => {
       const { store, backend, emit } = refused(connection, switchTo, reason);
@@ -969,6 +1008,56 @@ describe('a connected session that would not start', () => {
       });
     },
   );
+
+  it('keeps an unsent refused submission through a switch while its startup retry is pending', async () => {
+    const fake = fakeBackend();
+    const store = new SessionStore(engine, {
+      ...fake.backend,
+      availability: () => Promise.resolve({ ready: true }),
+    });
+    store.sync([{ id: 'a', connection: 'claude-code.sdk' }]);
+    const retry = Promise.withResolvers<null>();
+    fake.backend.start
+      .mockImplementationOnce(() => {
+        fake.emit('a', 'claude-code.sdk', {
+          type: 'notice',
+          id: 'refusal',
+          level: 'error',
+          text: why,
+          switchTo: 'claude-code.terminal',
+        });
+        return Promise.reject(new Error(why));
+      })
+      .mockImplementationOnce(() => retry.promise);
+    store.open('a');
+    await settle();
+    const done = vi.fn();
+    const images = [{ mediaType: 'image/png' as const, data: 'iVBORw0KGgo=' }];
+    store.send('a', 'claude-code', 'Fix the login bug', done, images);
+    const id = store.of('a').queued[0]?.id;
+    await settle();
+    expect(fake.backend.start).toHaveBeenCalledTimes(2);
+    expect(fake.backend.send).not.toHaveBeenCalled();
+
+    store.sync([{ id: 'a', connection: 'claude-code.terminal' }]);
+    store.open('a');
+    await settle();
+    expect(fake.backend.send).toHaveBeenCalledExactlyOnceWith('a', {
+      id,
+      text: 'Fix the login bug',
+      images,
+    });
+    expect(done).not.toHaveBeenCalled();
+    retry.resolve(null);
+    await settle();
+    expect(fake.backend.send).toHaveBeenCalledOnce();
+    fake.emit('a', 'claude-code.terminal', end([id ?? '']));
+    expect(done).toHaveBeenCalledExactlyOnceWith(false, '', {
+      status: 'completed',
+      reason: 'completed',
+    });
+    store.reset();
+  });
 
   it('takes a kept message back off the queue', async () => {
     const { store } = refused();
@@ -1050,4 +1139,39 @@ describe('a connected session rewound', () => {
       },
     ]);
   });
+});
+
+it('keeps a workspace-held submission queued and resumes once availability changes, without failing a turn', async () => {
+  const fake = fakeBackend();
+  let ready = false;
+  let changed: (() => void) | undefined;
+  const store = new SessionStore(engine, {
+    ...fake.backend,
+    availability: () =>
+      Promise.resolve(
+        ready ? { ready: true } : { ready: false, sentence: 'Run or skip setup first.' },
+      ),
+    onAvailability: (listener) => {
+      changed = listener;
+      return () => {
+        changed = undefined;
+      };
+    },
+  });
+  store.sync([{ id: 'a', connection: 'claude-code.sdk' }]);
+  const done = vi.fn();
+  store.send('a', 'claude-code', 'hello', done);
+  await settle();
+  expect(fake.backend.start).not.toHaveBeenCalled();
+  expect(store.of('a').queued.map((one) => one.text)).toEqual(['hello']);
+  expect(done).not.toHaveBeenCalled();
+  expect(store.of('a').entries).toContainEqual(
+    expect.objectContaining({ kind: 'notice', text: 'Run or skip setup first.' }),
+  );
+  ready = true;
+  changed?.();
+  await settle();
+  expect(fake.backend.start).toHaveBeenCalledOnce();
+  expect(fake.backend.send).toHaveBeenCalledOnce();
+  store.reset();
 });

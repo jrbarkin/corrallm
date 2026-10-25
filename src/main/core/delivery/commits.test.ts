@@ -9,6 +9,7 @@ import type { SessionMode } from '../../../shared/session';
 import type { Connector, SessionHost } from '../../sessions/connector';
 import { FakeConnector } from '../../sessions/fake';
 import type { Caller, OutsideCaller } from '../caller';
+import { legacyDirectories } from '../workspaces/test-directories';
 import { createCore } from '../core';
 import type { Core } from '../core';
 import { MessageStore } from './messages';
@@ -89,6 +90,7 @@ async function reopen(connector: Connector<SessionMode>, store?: StoreDeps): Pro
       distribution: 'local',
       watchFolder: () => ({ close: () => undefined }),
       ...(store === undefined ? {} : { store }),
+      directoryResolver: legacyDirectories,
       sessions: {
         connectors: { 'codex.app-server': connector },
         environment: () => Promise.resolve({}),
