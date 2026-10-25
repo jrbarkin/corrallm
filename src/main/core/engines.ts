@@ -24,6 +24,7 @@ import { installedClis } from '../sessions/installed';
 import type { SessionManager } from '../sessions/manager';
 import type { UsageReadings } from '../usage';
 import type { Documents } from './canvas/documents';
+import { recoverDecisions } from './decisions';
 import { Delivery } from './delivery/delivery';
 import { capBody, MessageStore, sentByRun } from './delivery/messages';
 import type { MessageTable } from './delivery/messages';
@@ -146,6 +147,11 @@ export interface OpenCanvas {
    * in restored.
    */
   warnings: readonly string[];
+  /**
+   * The generation of an agent's running session (the session manager's), which its prompts'
+   * Needs ids carry: none while none runs.
+   */
+  sessionGeneration?: (agent: string) => number | undefined;
 }
 
 /** How a canvas opens. */
@@ -164,6 +170,8 @@ export interface Watcher {
   needs?(canvas: CanvasId): void;
   /** A canvas opened. */
   opened?(canvas: CanvasId): void;
+  /** A canvas it ran closed (canvas.close, or the core closing): it runs no more here. */
+  closed?(canvas: CanvasId): void;
 }
 
 /** A run's attempt an Interrupt and resend reserved: its task link, and the id its turn names. */
@@ -211,6 +219,8 @@ export class Engines {
   readonly #watchers = new Set<Watcher>();
   readonly #events = new Map<string, Promise<SessionEvent>>();
   #closed = false;
+  /** Whether the core's shutdown barrier holds every canvas it runs (`freeze`). */
+  #frozen = false;
   /** The window-owned runs whose retry decisions wait on a backend's hold, by canvas and agent. */
   readonly #ownerResends = new Map<
     string,
@@ -846,8 +856,51 @@ export class Engines {
     try {
       await this.#stop(running);
     } finally {
-      await this.#deps.sessions.closeCanvas(canvas);
+      try {
+        await this.#deps.sessions.closeCanvas(canvas);
+      } finally {
+        for (const watcher of this.#watchers) watcher.closed?.(canvas);
+      }
     }
+  }
+
+  /**
+   * The core's shutdown barrier (B11 Design §16.5), prepared: on every canvas it runs, and every
+   * one it opens meanwhile, no run task and no delivery starts until `thaw`; turns going on go on,
+   * their ends kept, and their sessions stay usable. A message a session already queued behind its
+   * turn was handed to it before, and is its own.
+   */
+  freeze(): void {
+    this.#frozen = true;
+    for (const running of this.#canvases.values()) {
+      running.engine.run.freeze();
+      running.delivery.freeze();
+    }
+  }
+
+  /** The barrier lifted (a quit cancelled): every canvas goes on from where it is. */
+  thaw(): void {
+    if (!this.#frozen) return;
+    this.#frozen = false;
+    for (const running of this.#canvases.values()) {
+      running.engine.run.thaw();
+      running.delivery.thaw();
+    }
+  }
+
+  /**
+   * Whether a canvas it runs has work going on, which closing would cut off: its run running, or
+   * an agent's turn (what keeps the app open as its last window closes: B11 Design §8).
+   */
+  active(): boolean {
+    return [...this.#canvases.values()].some(
+      (running) =>
+        running.state === 'executing' &&
+        (running.engine.run.snapshot().running ||
+          Object.values(running.engine.sessions.snapshot()).some(
+            (session) => session.status !== 'idle',
+          )),
+    );
   }
 
   /** Fallible saving before the app commits to closing: sessions and topics remain usable. */
@@ -875,6 +928,7 @@ export class Engines {
     await Promise.allSettled(this.#closing.values());
     const running = await Promise.allSettled(this.#running.values());
     this.#running.clear();
+    const closing = [...this.#canvases.keys()];
     this.#canvases.clear();
     const stopped = await Promise.allSettled(
       running.flatMap((opened) =>
@@ -885,6 +939,7 @@ export class Engines {
     await this.#deps.sessions.closeEverything();
     await Promise.all(this.#events.values());
     await Promise.all(mail.map(({ messages }) => messages.durable()));
+    for (const canvas of closing) for (const watcher of this.#watchers) watcher.closed?.(canvas);
     const failed = stopped.flatMap((result): unknown[] =>
       result.status === 'rejected' ? [result.reason] : [],
     );
@@ -958,6 +1013,7 @@ export class Engines {
       looking: false,
     } as Running;
     running.reads = new ReadPositions(await journal.reads(canvas));
+    running.sessionGeneration = (agent) => this.#deps.sessions.generationOf(canvas, agent);
     running.journal = () => this.#write(running);
     // What its messages write, they write with its run, if that changed since it was last on disk.
     messages.writeWith(() => this.#runWithin(running, false));
@@ -1013,6 +1069,11 @@ export class Engines {
       ...(this.#deps.locale === undefined ? {} : { locale: this.#deps.locale }),
     });
     running.delivery = delivery;
+    // One opened while the shutdown barrier holds is held by it too.
+    if (this.#frozen) {
+      engine.run.freeze();
+      delivery.freeze();
+    }
     const changed = () => {
       running.changes += 1;
       running.timer ??= setTimeout(() => {
@@ -1060,6 +1121,12 @@ export class Engines {
       mail = (async () => {
         const messages = new MessageStore(canvas, this.#deps.messages, () => Date.now());
         await messages.load();
+        // A decision a crash cut off as it was being made is unresolved, never made again.
+        if (recoverDecisions(messages)) {
+          await messages.durable().catch((error: unknown) => {
+            console.error('Could not settle the answers corrallm stopped making:', error);
+          });
+        }
         return {
           messages,
           notes: new WithdrawalNotes(messages, this.#deps.engineCatalog.shellPrefixes),
@@ -1274,6 +1341,7 @@ export function needsInput(open: OpenCanvas, locale: string | undefined): NeedsI
     stuck: delivery.stuck(),
     unasking: delivery.unasking(),
     limited: delivery.limited(),
+    ...(open.sessionGeneration === undefined ? {} : { sessionGenerations: open.sessionGeneration }),
     ...(locale === undefined ? {} : { locale }),
   };
 }

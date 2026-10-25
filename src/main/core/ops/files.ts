@@ -26,8 +26,9 @@ import type { Implementations, OpServices } from '.';
  * over the core's Lifecycle (canvas/lifecycle.ts). canvas.open, canvas.saveAs and project.choose
  * are yours alone (D1, trust-gate): a path comes only from a dialog you complete, on the window you
  * called from. canvas.create and canvas.open called by you show the canvas in your window, in the
- * same op. A canvas a token makes is its party's (document.created_by), which its reach reads: it
- * has no folder until you pick one in the app, so nothing runs on it, but it is open and editable.
+ * same op. A canvas a token makes, itself or by your Allow of its proposal, is its party's
+ * (document.created_by), which its reach reads and its cap of open canvases counts: it has no
+ * folder until you pick one in the app, so nothing runs on it, but it is open and editable.
  * Its template's text the token's values filled in is marked as the token's (R34's `by`), and its
  * agents are checked as any token's new agents are (R11), at commit.
  *
@@ -73,9 +74,11 @@ export function filesOps({
           replace.canvas as string as CanvasId,
           replace.discard === true && ctx.caller.kind === 'human',
         );
-      if (ctx.caller.kind !== 'human') {
+      // Whose canvas it is: on Allow, its proposer's, as the token's own create's is.
+      const creator = ctx.proposedBy ?? ctx.by;
+      if (creator !== 'you') {
         // canvas.create has the app lane: concurrent calls cannot claim the same free slot.
-        const owned = new Set(documents.createdBy(ctx.by));
+        const owned = new Set(documents.createdBy(creator));
         const open = (await states.list()).filter((item) => item.open && owned.has(item.canvas));
         const replacesOwn = open.some(
           (item) => item.canvas === (replace?.canvas as string | undefined),
@@ -95,15 +98,15 @@ export function filesOps({
           : templateDocument(
               canvas,
               { template, ...defined({ values, agents, connections }) },
-              ctx.proposedBy ?? ctx.by,
+              creator,
               { catalog, defaultAdapter },
             );
-      documents.create(canvas, ctx.by);
+      documents.create(canvas, creator);
       try {
         if (document !== undefined) {
           // A change like any other: a token's new agents checked as R11 checks them.
           await ctx.commit(canvas, () => ({ next: document, result: undefined }));
-        } else if (ctx.caller.kind !== 'human') {
+        } else if (creator !== 'you') {
           // Its creator kept now, though it holds nothing: what the token's reach reads.
           await documents.keep(canvas);
         }

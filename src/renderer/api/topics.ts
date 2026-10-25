@@ -48,7 +48,7 @@ interface Mirrored {
     count: number;
     nextIndex: number;
     entries: Map<string, unknown>;
-    early: RuntimeChange[];
+    early: (Change | RuntimeChange)[];
   };
   timer?: ReturnType<typeof setTimeout>;
   recovering?: boolean;
@@ -83,7 +83,6 @@ export class TopicMirror {
   #stops: (() => void)[] | undefined;
 
   constructor(source: TopicSource | MirrorSource) {
-    // C8 will widen GuiApi when it registers these topics. No production runtime subscription yet.
     this.#source = source;
   }
 
@@ -227,8 +226,7 @@ export class TopicMirror {
           for (const change of buffered) {
             // A gap-triggering delta or an early event may predate the subscribe answer.
             // End's revision decides whether it is already represented by the snapshot.
-            if (entry.assembly && !('kind' in change))
-              entry.assembly.early.push(change as RuntimeChange);
+            if (entry.assembly && !('kind' in change)) entry.assembly.early.push(change);
             else this.#change(change);
           }
         } catch (error) {
@@ -245,15 +243,15 @@ export class TopicMirror {
   }
 
   #install(entry: Mirrored, state: MirrorSnapshot['state'], rev: number, whole = false): void {
+    if (!Number.isSafeInteger(rev) || rev < 0 || (entry.rev !== undefined && rev < entry.rev))
+      throw new Error('A topic revision must be a nonnegative integer.');
+    if (
+      whole &&
+      new TextEncoder().encode(JSON.stringify({ epoch: this.#epoch, rev, state })).length >
+        MAX_TOPIC_FRAME
+    )
+      throw new Error('An oversized snapshot must be chunked.');
     if (runtimeTopic(entry.topic)) {
-      if (!Number.isSafeInteger(rev) || rev < 0 || (entry.rev !== undefined && rev < entry.rev))
-        throw new Error('A topic revision must be a nonnegative integer.');
-      if (
-        whole &&
-        new TextEncoder().encode(JSON.stringify({ epoch: this.#epoch, rev, state })).length >
-          MAX_TOPIC_FRAME
-      )
-        throw new Error('An oversized runtime snapshot must be chunked.');
       checkRuntimeState(entry.topic, state as RuntimeTopicStates[typeof entry.topic]);
       entry.state = projectData(
         state as RuntimeTopicStates[typeof entry.topic],
@@ -276,6 +274,20 @@ export class TopicMirror {
     }
     try {
       if ('kind' in change) {
+        if (change.kind === 'begin' && !entry.assembly) {
+          if (!snapshotFrameFits(change))
+            throw new Error('A replacement summary exceeded its bound.');
+          entry.assembly = {
+            id: change.snapshot,
+            summary: change.summary,
+            count: change.count,
+            nextIndex: 0,
+            entries: new Map(),
+            early: [],
+          };
+          this.#deadline(entry);
+          return;
+        }
         this.#frame(entry, change);
         return;
       }
@@ -329,7 +341,6 @@ export class TopicMirror {
   #frame(entry: Mirrored, frame: RuntimeSnapshotFrame): void {
     const assembly = entry.assembly;
     if (
-      !runtimeTopic(entry.topic) ||
       !assembly ||
       frame.kind === 'begin' ||
       frame.snapshot !== assembly.id ||

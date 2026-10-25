@@ -16,12 +16,18 @@ import { itemKey, linkKey, nodeKey } from '../../shared/model/rows';
 import type { SessionMode } from '../../shared/session';
 import { MAX_FILE_QUERY_LENGTH, MAX_ROLE_LENGTH } from '../../shared/session';
 import type { Connector } from '../sessions/connector';
+import { CATALOG } from '../sessions/adapters';
 import { FakeConnector } from '../sessions/fake';
 import type { OutsideCaller } from './caller';
 import { createCore } from './core';
 import type { Core } from './core';
 import { cursorOf } from './delivery/messages';
 import { keepCanvases, keepMessages } from './store/test-store';
+import { GitRunner } from './workspaces/git';
+import { Provisioner } from './workspaces/provision';
+import { WorkspaceSetups } from './workspaces/setup';
+import { WorkspaceStore } from './workspaces/store';
+import { git, gitEnvironment } from './workspaces/test-git';
 import { CALLERS, CANVAS, isLead, NO_DESKTOP, OTHER_CANVAS } from './test-registry';
 import type { OpFixture, OutOfReach } from './test-registry';
 
@@ -94,7 +100,68 @@ const SENDERS = {
   orchestrator: 'outside:orchestrator',
 } as const;
 
+/** A capable connection chosen through the catalog, never another CLI name in platform code. */
+const CONTROL =
+  CATALOG.adapters
+    .flatMap((adapter) => adapter.connections.map((connection) => ({ adapter, connection })))
+    .find(
+      ({ connection }) =>
+        connection.panels.rewind?.restores.includes('code') && connection.live.stopTask,
+    ) ??
+  (() => {
+    throw new Error('The fixture needs a connection with code rewind and background tasks');
+  })();
+const CONTROL_AGENT = 'session-control';
+const CONTROL_MESSAGE = '1b2c3d4e-5f60-4718-8a9b-0c1d2e3f4a80';
+const CONTROL_TASKS = ['you', 'lead', 'outside-write'].map(
+  (party) => `fixture-background-${party}`,
+);
+const controlRequest = (n: number) =>
+  `2c3d4e5f-6071-4829-9bac-1d2e3f4a${String(n).padStart(4, '0')}`;
+const CONTROL_MODE = CONTROL.connection.startModes[0];
+if (!CONTROL_MODE) throw new Error('The fixture needs an asking start mode');
+function controlConnector(): Connector<SessionMode> {
+  const fake = new FakeConnector({ adapter: CONTROL.adapter.id });
+  return {
+    start: async (spec, host) => {
+      const live = await fake.start(spec, host);
+      let tasks = CONTROL_TASKS.map((id) => ({
+        id,
+        description: 'Fixture task',
+        kind: 'command' as const,
+      }));
+      live.stopTask = (id) => {
+        tasks = tasks.filter((task) => task.id !== id);
+        host.emit({ type: 'tasks', tasks });
+        return Promise.resolve();
+      };
+      live.rewindFiles = () => Promise.resolve({ possible: true, files: [], added: 0, removed: 0 });
+      host.emit({
+        type: 'history',
+        events: [
+          { type: 'user', id: CONTROL_MESSAGE, text: 'Fixture work' },
+          { type: 'text', id: `${CONTROL_MESSAGE}/reply`, text: 'Done' },
+          {
+            type: 'end',
+            messages: [CONTROL_MESSAGE],
+            seconds: 1,
+            result: { status: 'completed', reason: 'completed' },
+          },
+        ],
+      });
+      host.emit({ type: 'tasks', tasks });
+      return live;
+    },
+  };
+}
+
 const NODES = [
+  {
+    id: CONTROL_AGENT,
+    adapter: CONTROL.adapter.id,
+    connection: CONTROL.connection.id,
+    parent: 'lead',
+  },
   { id: 'lead', connection: 'codex.app-server' },
   { id: 'helper', connection: 'codex.app-server', parent: 'lead' },
   { id: 'deputy', connection: 'codex.app-server', parent: 'lead' },
@@ -131,6 +198,7 @@ const HELPER_QUEUE = [
     message: 'Remove me',
   })),
   ...['remove', 'move', 'update', 'batch'].map((what) => ({
+    fresh: ['revs'],
     id: `ok-${what}`,
     approve: `The ${what}`,
   })),
@@ -178,6 +246,22 @@ export async function startWorld(): Promise<{
   const profile = await mkdtemp(path.join(tmpdir(), 'corrallm-world-'));
   const project = path.join(profile, 'project');
   await mkdir(project);
+  // A repository with one commit and no files, so its worktrees' setup command can be kept for it.
+  const env = gitEnvironment(path.join(profile, 'home'));
+  git(project, env, 'init', '-q', '-b', 'main');
+  git(
+    project,
+    env,
+    '-c',
+    'user.name=Test',
+    '-c',
+    'user.email=test@example.invalid',
+    'commit',
+    '-q',
+    '--allow-empty',
+    '-m',
+    'first',
+  );
   const file = path.join(profile, 'world.corral');
   await writeFile(
     file,
@@ -280,13 +364,35 @@ export async function startWorld(): Promise<{
         connectors: {
           'codex.app-server': new FakeConnector({ adapter: 'codex' }),
           'codex.terminal': REFUSING,
+          [CONTROL.connection.id]: controlConnector(),
         },
         environment: () => Promise.resolve({}),
+      },
+      // The worktrees' setup, as B9a X11b is to compose it: nothing provisions a worktree here.
+      setups: ({ store, processes, directories, profile: at, changed }) => {
+        const workspaces = new WorkspaceStore({ store });
+        const runner = new GitRunner({
+          environment: () => Promise.resolve(env),
+          processes,
+          hooks: path.join(at, 'workspaces', 'hooks'),
+        });
+        return new WorkspaceSetups({
+          workspaces,
+          provisioner: new Provisioner({ workspaces, git: runner, profile: WORLD_PROFILE }),
+          git: runner,
+          directories,
+          processes,
+          environment: () => Promise.resolve(env),
+          folder: path.join(at, 'workspaces', 'setup'),
+          profile: at,
+          changed,
+        });
       },
     },
     NO_DESKTOP,
   );
   await core.engines.open(CANVAS);
+  await core.engines.canvas(CANVAS)?.engine.sessions.ready(CONTROL_AGENT);
   const paused = await core.call(
     'run.pause',
     { canvas: CANVAS, target: { agent: 'lead' } },
@@ -373,6 +479,12 @@ const SHOW_REQUEST = '3c3d4e5f-6071-4829-9bac-1d2e3f4a5b02';
 
 /** A request id for each fixture of a canvas's lifetime that writes. */
 const lifetime = (n: number) => `3d4e5f60-7182-4a3b-8cad-2e3f4a5b6c${String(n).padStart(2, '0')}`;
+
+/** The world's profile id, which its worktrees' branches and folders would be named by. */
+const WORLD_PROFILE = '4e5f6071-8293-4a4b-9cbd-3f4a5b6c7d8e';
+/** A request id for each fixture of the worktrees' setup that writes. */
+const setupRequest = (n: number) =>
+  `4e5f6071-8293-4a4b-9cbd-3f4a5b6c7d${String(n).padStart(2, '0')}`;
 
 /** A target the lead's team holds (its helper, and its own group), and every outside token reaches. */
 const TARGETS = [
@@ -1022,6 +1134,7 @@ export const REAL_FIXTURES: Readonly<Record<OpName, OpFixture>> = {
     },
   },
   withdraw: {
+    fresh: ['revs'],
     valid: [],
     by: {
       you: [
@@ -1048,7 +1161,7 @@ export const REAL_FIXTURES: Readonly<Record<OpName, OpFixture>> = {
         },
       ],
     },
-    fresh: ['id', 'revs'],
+    fresh: ['revs', 'id', 'revs'],
     invalid: [
       { to: 'nope', answer: { choice: 'allow' } },
       { to: PROPOSED.allowed, answer: {} },
@@ -1063,6 +1176,108 @@ export const REAL_FIXTURES: Readonly<Record<OpName, OpFixture>> = {
         request: request(88),
       },
     },
+  },
+  'session.open': {
+    fresh: ['revs'],
+    valid: [{ canvas: CANVAS, agent: CONTROL_AGENT, request: controlRequest(300) }],
+    invalid: [{ canvas: CANVAS }],
+  },
+  'session.setMode': {
+    fresh: ['revs'],
+    valid: [
+      { canvas: CANVAS, agent: CONTROL_AGENT, mode: CONTROL_MODE, request: controlRequest(301) },
+    ],
+    invalid: [{ canvas: CANVAS, agent: CONTROL_AGENT, mode: '' }],
+  },
+  'session.setModel': {
+    fresh: ['revs'],
+    valid: [{ canvas: CANVAS, agent: 'helper', model: 'default', request: controlRequest(302) }],
+    invalid: [{ canvas: CANVAS, agent: 'helper', model: '--help' }],
+  },
+  'session.setEffort': {
+    fresh: ['revs'],
+    valid: [{ canvas: CANVAS, agent: 'helper', effort: null, request: controlRequest(303) }],
+    invalid: [{ canvas: CANVAS, agent: 'helper', effort: '--help' }],
+  },
+  'session.stopTask': {
+    fresh: ['revs'],
+    by: {
+      lead: [
+        {
+          canvas: CANVAS,
+          agent: CONTROL_AGENT,
+          task: CONTROL_TASKS[1],
+          request: controlRequest(304),
+        },
+      ],
+      'outside-write': [
+        {
+          canvas: CANVAS,
+          agent: CONTROL_AGENT,
+          task: CONTROL_TASKS[2],
+          request: controlRequest(304),
+        },
+      ],
+    },
+    valid: [
+      {
+        canvas: CANVAS,
+        agent: CONTROL_AGENT,
+        task: CONTROL_TASKS[0],
+        request: controlRequest(304),
+      },
+    ],
+    invalid: [{ canvas: CANVAS, agent: CONTROL_AGENT, task: '--help' }],
+  },
+  'session.restart': {
+    fresh: ['revs'],
+    valid: [{ canvas: CANVAS, agent: 'helper', request: controlRequest(305) }],
+    invalid: [{ canvas: CANVAS }],
+  },
+  'session.newConversation': {
+    fresh: ['revs'],
+    valid: [{ canvas: CANVAS, agent: 'helper', request: controlRequest(306) }],
+    invalid: [{ canvas: CANVAS }],
+  },
+  'session.continueIn': {
+    fresh: ['revs'],
+    valid: [
+      {
+        canvas: CANVAS,
+        agent: CONTROL_AGENT,
+        connection: CONTROL.connection.id,
+        request: controlRequest(307),
+      },
+    ],
+    invalid: [{ canvas: CANVAS, agent: CONTROL_AGENT, connection: '' }],
+  },
+  'session.rewindPreview': {
+    valid: [{ canvas: CANVAS, agent: CONTROL_AGENT, message: CONTROL_MESSAGE }],
+    invalid: [{ canvas: CANVAS, agent: CONTROL_AGENT, message: '--help' }],
+  },
+  'session.rewind': {
+    valid: [
+      {
+        canvas: CANVAS,
+        agent: CONTROL_AGENT,
+        message: CONTROL_MESSAGE,
+        restore: 'code',
+        request: controlRequest(308),
+      },
+    ],
+    invalid: [
+      { canvas: CANVAS, agent: CONTROL_AGENT, message: CONTROL_MESSAGE, restore: 'everything' },
+    ],
+    meetsRule: {
+      'restore-code': {
+        canvas: CANVAS,
+        agent: CONTROL_AGENT,
+        message: CONTROL_MESSAGE,
+        restore: 'code',
+        request: controlRequest(309),
+      },
+    },
+    fresh: ['proposed', 'revs'],
   },
   'session.get': {
     valid: [{ canvas: CANVAS, agent: 'peer' }],
@@ -1083,7 +1298,9 @@ export const REAL_FIXTURES: Readonly<Record<OpName, OpFixture>> = {
     valid: [{ canvas: CANVAS, agent: 'helper', request: request(30) }],
     invalid: [{ canvas: CANVAS }, { canvas: CANVAS, agent: 'helper', extra: true }],
   },
+  'run.get': { valid: [{ canvas: CANVAS }], invalid: [{ canvas: 'invalid' }] },
   'run.pause': {
+    fresh: ['revs'],
     valid: TARGETS.map((args, i) => ({ ...args, request: request(40 + i) })),
     invalid: [
       { canvas: CANVAS, target: {} },
@@ -1091,10 +1308,12 @@ export const REAL_FIXTURES: Readonly<Record<OpName, OpFixture>> = {
     ],
   },
   'run.kill': {
+    fresh: ['revs'],
     valid: TARGETS.map((args, i) => ({ ...args, request: request(50 + i) })),
     invalid: [{ canvas: CANVAS, target: { agent: 'helper', group: 'lead' } }],
   },
   'run.unpause': {
+    fresh: ['revs'],
     // The group first: once its pauses are released, none holds the helper but its own, so every
     // party's release of it says nothing holds it still.
     valid: TARGETS.toReversed().map((args, i) => ({ ...args, request: request(60 + i) })),
@@ -1110,6 +1329,10 @@ export const REAL_FIXTURES: Readonly<Record<OpName, OpFixture>> = {
       { topic: 'canvas', canvas: CANVAS, request: request(72) },
       // The canvas filled in: yours, the only one open.
       { topic: 'needs', request: request(73) },
+      { topic: 'run', canvas: CANVAS, request: controlRequest(310) },
+      { topic: 'sessions', canvas: CANVAS, request: controlRequest(311) },
+      { topic: 'session', canvas: CANVAS, agent: CONTROL_AGENT, request: controlRequest(312) },
+      { topic: 'messages', canvas: CANVAS, request: controlRequest(313) },
     ],
     invalid: [
       {},
@@ -1126,6 +1349,10 @@ export const REAL_FIXTURES: Readonly<Record<OpName, OpFixture>> = {
       { topic: 'canvases', request: request(79) },
       { topic: 'canvas', canvas: CANVAS, request: request(74) },
       { topic: 'needs', canvas: CANVAS, request: request(82) },
+      { topic: 'run', canvas: CANVAS, request: controlRequest(320) },
+      { topic: 'sessions', canvas: CANVAS, request: controlRequest(321) },
+      { topic: 'session', canvas: CANVAS, agent: CONTROL_AGENT, request: controlRequest(322) },
+      { topic: 'messages', canvas: CANVAS, request: controlRequest(323) },
     ],
     invalid: [{}, { topic: 'missing' }, { topic: 'needs', canvas: 'nope' }],
   },
@@ -1278,6 +1505,32 @@ export const REAL_FIXTURES: Readonly<Record<OpName, OpFixture>> = {
     valid: [{ canvas: CANVAS }],
     invalid: [{ canvas: 'nope' }, { canvas: CANVAS, path: '/tmp' }],
   },
+  'project.clearSetupApproval': {
+    // Yours alone: nothing was allowed always for the world's repository, so nothing is cleared.
+    valid: [],
+    by: { you: [{ canvas: CANVAS, request: setupRequest(3) }] },
+    invalid: [{ canvas: 'nope' }, { canvas: CANVAS, command: 'make setup' }],
+  },
+  'project.setSetupCommand': {
+    // Yours alone: you set the world repository's setup command, then go back to the detected one.
+    valid: [],
+    by: {
+      you: [
+        { canvas: CANVAS, command: 'make setup', request: setupRequest(1) },
+        { canvas: CANVAS, command: null, request: setupRequest(2) },
+      ],
+    },
+    invalid: [
+      { canvas: CANVAS },
+      { canvas: CANVAS, command: '' },
+      { canvas: CANVAS, command: 'make\nsetup' },
+      { canvas: CANVAS, command: 'make \u202esetup' },
+      { canvas: CANVAS, command: 'x'.repeat(4097) },
+      { canvas: CANVAS, command: 'make setup', shell: 'bash' },
+      { canvas: CANVAS, command: 'make setup', folder: '/tmp' },
+      { canvas: 'nope', command: 'make setup' },
+    ],
+  },
   wait: {
     valid: [{ timeoutSeconds: 0, after: START }, { timeoutSeconds: 0 }],
     by: {
@@ -1353,6 +1606,8 @@ export const REAL_OUT_OF_REACH: OutOfReach = {
         : undefined,
   MessageId: (caller) =>
     MESSAGES_OUT_OF_REACH[caller.kind === 'outside' ? caller.name : caller.agent],
+  EntryId: () => ['1b2c3d4e-5f60-4718-8a9b-0c1d2e3f4aff'],
+  TaskId: () => ['missing-task'],
   // A Needs item that isn't there.
   NeedId: () => ['proposal/1b2c3d4e-5f60-4718-8a9b-0c1d2e3f4aff'],
 };

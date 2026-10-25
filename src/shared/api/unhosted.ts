@@ -13,10 +13,4 @@ export const UNHOSTED = {
   messages: 'B11',
   message: 'B11',
   withdraw: 'B11',
-  'session.get': 'B11',
-  'session.transcript': 'B11',
-  'session.interrupt': 'B11',
-  'run.pause': 'B11',
-  'run.kill': 'B11',
-  'run.unpause': 'B11',
 } as const satisfies Partial<Record<OpName, 'B8' | 'B11'>>;

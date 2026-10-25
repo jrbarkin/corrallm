@@ -184,3 +184,55 @@ describe('a window’s port', () => {
     expect(core.call).not.toHaveBeenCalled();
   });
 });
+
+/*
+ * Before a quit's shutdown barrier (B11 Design §16.5), main asks each window, over its own port, to
+ * finish the drafts it is composing: a fixed request of the window's link, `drafts.flush`, with no
+ * run data, bounded per window. One that doesn't answer is reported (the failed-save dialog); one
+ * with no port, or whose port goes as it is asked (it crashed), is skipped.
+ */
+describe('a window’s drafts, flushed before quitting', () => {
+  it('asks each window over its own port, answered once its drafts are', async () => {
+    const served = new WindowPorts(fakeCore());
+    const flushed: number[] = [];
+    const later = Promise.withResolvers<null>();
+    for (const window of [7, 8]) {
+      const { close } = openWindow(served, window, () => {
+        flushed.push(window);
+        return window === 8 ? later.promise : null;
+      });
+      closing.push(close);
+    }
+    const asking = served.flushDrafts([7, 8, 7]);
+    let done = false;
+    void asking.then(() => {
+      done = true;
+    });
+    await vi.waitFor(() => {
+      expect(flushed.sort()).toEqual([7, 8]);
+    });
+    expect(done).toBe(false);
+    later.resolve(null);
+    expect(await asking).toEqual([]);
+  });
+
+  it('reports a window that doesn’t answer in time, or answers with an error', async () => {
+    const served = new WindowPorts(fakeCore());
+    closing.push(openWindow(served, 7, () => new Promise<null>(() => undefined)).close);
+    closing.push(
+      openWindow(served, 8, () => Promise.reject(new Error('The field could not save'))).close,
+    );
+    closing.push(openWindow(served, 9).close);
+    expect(await served.flushDrafts([7, 8, 9], 50)).toEqual([7, 8]);
+  });
+
+  it('skips a window with no port, and one whose port goes as it is asked', async () => {
+    const served = new WindowPorts(fakeCore());
+    const crashing = Promise.withResolvers<null>();
+    const window = openWindow(served, 7, () => crashing.promise);
+    const asking = served.flushDrafts([7, 12], 5000);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    window.close();
+    expect(await asking).toEqual([]);
+  });
+});

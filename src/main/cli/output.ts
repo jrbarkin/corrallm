@@ -1,3 +1,15 @@
+/**
+ * A line as the terminal is given it: each control character (C0, DEL, C1) shown as its escape
+ * (`\x1b`), so no name, title or path it quotes can move the cursor, erase what was said, ring,
+ * or set the clipboard.
+ */
+export function shown(line: string): string {
+  return line.replace(
+    /\p{Cc}/gu,
+    (character) => `\\x${character.charCodeAt(0).toString(16).padStart(2, '0')}`,
+  );
+}
+
 /** A command's output stream, and whether its destination is a terminal. */
 export interface Output {
   isTTY?: boolean;

@@ -46,6 +46,9 @@ export interface EngineIO {
   locale?: string;
 }
 
+/** How often a held retry (Interrupt and resend) is checked again while something holds it. */
+export const RETRY_CHECK_MS = 250;
+
 /** What a checkpoint keeps of an engine: its run, and its sessions' manual messages. */
 export interface EngineCheckpoint {
   state: string;
@@ -347,7 +350,7 @@ export class Engine {
         this.#cancelRetry = this.#io.later(() => {
           this.#cancelRetry = undefined;
           this.#checkRetries();
-        }, 250);
+        }, RETRY_CHECK_MS);
     });
   }
 

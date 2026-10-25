@@ -10,25 +10,54 @@ import type { CheckResult } from './selftest';
  * parentPort beside the link, in a message of its own (WindowMessage), its port transferred.
  */
 
+/** Why the core's shutdown barrier is prepared: the app quits, or restarts to install an update. */
+export type ShutdownReason = 'quit' | 'update';
+
+/** What preparing the shutdown barrier says: done, or what it couldn't write (the barrier held). */
+export type ShutdownPrepared = { ok: true } | { failed: true; sentence: string };
+
+/** How a draft flush went: the windows that didn't answer in time, or answered with an error. */
+export interface DraftsFlushed {
+  unanswered: WindowId[];
+}
+
 /** What the core process answers and sends. */
 export interface CoreSide {
   requests: {
     /**
      * Takes the profile (core.lock) and composes the app's core on it: windows' ports are served
-     * once it has.
+     * once it has, and its outside endpoint (MCP on 127.0.0.1, api.json) is started.
      */
     init: { args: [config: CoreInit]; result: CoreInitAnswer };
-    /** Which windows have a canvas to freeze/save before closing. */
+    /** Which windows have a canvas to freeze/save before closing (until B11 X12's cutover). */
     shown: { args: [windows: WindowId[]]; result: WindowId[] };
     /** A link chosen in main's native UI, dispatched as link.open at a connected window. */
     openLink: { args: [window: WindowId, url: string]; result: null };
-    /** Finishes fallible writes before closing is approved, leaving the core usable on failure. */
+    /**
+     * Asks each window, over its own port, to finish the drafts it is composing (`drafts.flush`),
+     * at most DRAFTS_MS each: those that didn't. A window with no port (crashed, gone, still
+     * loading) is skipped.
+     */
+    flushDrafts: { args: [windows: WindowId[]]; result: DraftsFlushed };
+    /**
+     * Finishes fallible writes before a window's close is approved, leaving the core usable on
+     * failure (until B11 X12: a window then owns its canvas's run).
+     */
     flush: { args: []; result: null };
     /**
-     * Stops the core and writes out everything it owns before the app quits, then lets the profile
-     * go.
+     * Prepares the shutdown barrier (B11 Design §16.5): no new dispatch, no write admitted, every
+     * journal and store forced; sessions stay usable. Idempotent until cancelled.
      */
-    close: { args: []; result: null };
+    prepareShutdown: { args: [reason: ShutdownReason]; result: ShutdownPrepared };
+    /** Lifts the barrier (Keep corrallm open): everything goes on as before. */
+    cancelShutdown: { args: []; result: null };
+    /**
+     * Commits: the endpoint closed (requests going on ended, api.json removed), then every session
+     * ended, children and the database closed, then the profile let go. Idempotent.
+     */
+    commitShutdown: { args: []; result: null };
+    /** Whether a canvas the core runs has work going on: a run running, or a turn. */
+    active: { args: []; result: boolean };
     /** Runs the native self-test's checks (`packaged`: whether the app is) and reports them. */
     selftest: { args: [options: { packaged: boolean }]; result: SelfTestReport };
   };

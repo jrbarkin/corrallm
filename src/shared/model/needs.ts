@@ -18,9 +18,11 @@ import type { PartyId } from './messages';
  * questions, a plan, an MCP server's request), what a Terminal agent's CLI asks in its terminal,
  * or the core's warning of a stalled turn (Interrupt, only by you).
  * proposal: a token's delete or discard. file: a canvas file changed on disk, which you apply or
- * keep corrallm's canvas over. message: a message to you (a later phase).
+ * keep corrallm's canvas over. worktree: a workspace's setup (B9a), which only you run, skip or
+ * stop; it names no agent, so no token's view of Needs holds it. message: a message to you (a
+ * later phase).
  */
-export const NEED_KINDS = ['hold', 'prompt', 'message', 'proposal', 'file'] as const;
+export const NEED_KINDS = ['hold', 'prompt', 'message', 'proposal', 'file', 'worktree'] as const;
 export type NeedKind = (typeof NEED_KINDS)[number];
 
 /** A question a prompt asks: its answers by label, and whether several or one of its own may be given. */

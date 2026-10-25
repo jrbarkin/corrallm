@@ -314,14 +314,25 @@ describe('main’s files', () => {
     expect(loadedBy('src/main/index.ts').filter((file) => stores.includes(file))).toEqual([]);
   });
 
-  it('mint trusted paths only from the host’s dialog answers in the core and the stores reading back what they wrote', () => {
+  it('mint trusted paths only from the host’s dialog answers in the core, the stores reading back what they wrote, and verified workspace checkouts', () => {
     const minting = mainFiles().filter((file) => read(file).includes('mintTrustedPath('));
     expect(minting.sort()).toEqual([
       'src/main/core/host.ts',
       'src/main/core/host/app.ts',
+      // A workspace's checkout, minted only once it is verified, at every use, as the one the
+      // core made of the picked repository in the folder it owns there (B9a Design §2).
+      'src/main/core/workspaces/checkout.ts',
       'src/main/memory.ts',
       'src/main/run-journal.ts',
     ]);
     expect(minting.filter((file) => file.startsWith('src/main/cli/'))).toEqual([]);
+    // There, only `verifiedCheckout` mints, after `checkCheckout`.
+    const checkout = read('src/main/core/workspaces/checkout.ts');
+    expect(checkout.match(/mintTrustedPath\(/g)).toHaveLength(1);
+    expect(
+      /export async function verifiedCheckout[\s\S]*checkCheckout\([\s\S]*if \(!checked\.ok\) return checked;[\s\S]*mintTrustedPath\(checked\.checkout\.path\)/.test(
+        checkout,
+      ),
+    ).toBe(true);
   });
 });

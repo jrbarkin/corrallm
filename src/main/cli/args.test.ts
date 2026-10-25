@@ -98,6 +98,98 @@ describe('parseCommand', () => {
     expect(() => parseCommand(['wait', '--for', 'not-an-id'])).toThrow(/--for/);
   });
 
+  it('reads token new, renew and revoke: named orchestrator, for an hour, read-write, unless told otherwise', () => {
+    expect(parseCommand(['token', 'new', '--canvas', 'm1.corral'])).toEqual({
+      command: 'token',
+      action: 'new',
+      name: 'orchestrator',
+      hours: 1,
+      access: 'write',
+      canvases: ['m1.corral'],
+    });
+    expect(
+      parseCommand([
+        'token',
+        'new',
+        '--canvas',
+        'm1.corral',
+        '--canvas',
+        'worker.corral',
+        '--name',
+        'watcher',
+        '--hours',
+        '12',
+        '--read-only',
+        '--into',
+        '/home/me/My Tokens/corrallm',
+        '--profile',
+        '/p',
+      ]),
+    ).toEqual({
+      command: 'token',
+      action: 'new',
+      name: 'watcher',
+      hours: 12,
+      access: 'read',
+      canvases: ['m1.corral', 'worker.corral'],
+      into: '/home/me/My Tokens/corrallm',
+      profile: '/p',
+    });
+    expect(parseCommand(['token', 'renew'])).toEqual({
+      command: 'token',
+      action: 'renew',
+      name: 'orchestrator',
+      hours: 1,
+    });
+    expect(parseCommand(['token', 'renew', '--name', 'w', '--hours', '3', '--into', 't'])).toEqual({
+      command: 'token',
+      action: 'renew',
+      name: 'w',
+      hours: 3,
+      into: 't',
+    });
+    expect(parseCommand(['token', 'revoke', '--name', 'w', '--profile', '/p'])).toEqual({
+      command: 'token',
+      action: 'revoke',
+      name: 'w',
+      profile: '/p',
+    });
+    expect(parseCommand(['token', 'header', '--from', '/home/me/t'])).toEqual({
+      command: 'token',
+      action: 'header',
+      from: '/home/me/t',
+    });
+  });
+
+  it('refuses what token doesn’t take: never a token, nor an --into a command can’t name', () => {
+    const refused = (args: string[], why: RegExp) => {
+      expect(() => parseCommand(args)).toThrow(UsageError);
+      expect(() => parseCommand(args)).toThrow(why);
+    };
+    refused(['token'], /new, renew or revoke/);
+    refused(['token', 'mint'], /mint/);
+    refused(['token', 'new'], /--canvas/);
+    refused(['token', 'new', '--canvas', 'a.corral', '--token', 'x'], /--token/);
+    // A renewal reaches what the token did: another reach is a new token.
+    refused(['token', 'renew', '--canvas', 'a.corral'], /renew keeps/);
+    refused(['token', 'renew', '--read-only'], /renew keeps/);
+    refused(['token', 'revoke', '--hours', '2'], /--hours/);
+    refused(['token', 'revoke', '--into', 'f'], /--into/);
+    for (const hours of ['0', '13', '1.5', 'two']) {
+      refused(['token', 'new', '--canvas', 'a.corral', '--hours', hours], /1 to 12/);
+      refused(['token', 'renew', '--hours', hours], /1 to 12/);
+    }
+    for (const name of ['two words', '-x', '9lives', 'x'.repeat(33)]) {
+      refused(['token', 'renew', '--name', name], /--name/);
+    }
+    // Its path goes in the command that reads the token from it.
+    for (const into of ["it's", 'a"b', 'a\\b', '$HOME/t', '`t`', 'a\nb', '']) {
+      refused(['token', 'new', '--canvas', 'a.corral', '--into', into], /--into/);
+    }
+    refused(['token', 'header'], /--from/);
+    refused(['token', 'new', '--canvas', 'a.corral', 'extra'], /extra/);
+  });
+
   it('refuses a command it doesn’t have', () => {
     expect(() => parseCommand([])).toThrow(UsageError);
     expect(() => parseCommand(['run'])).toThrow(/run/);

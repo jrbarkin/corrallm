@@ -976,6 +976,7 @@ input.graph-label {
 /* What an ask comes after: "After “Write the spec…”". */
 .graph-question-detail {
   margin: -2px 0 0;
+  white-space: pre-wrap;
   font-size: 12px;
   opacity: 0.6;
 }

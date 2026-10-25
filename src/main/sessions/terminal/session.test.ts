@@ -180,26 +180,26 @@ describe('a Terminal session', () => {
     expect(command).not.toContain(token);
   });
 
-  it('reports native permissions from its command SessionStart hook before any prompt is typed', async () => {
-    fake.sessionStart = 'default';
-    await start();
-    await until(() => {
-      expect(last('mode')).toMatchObject({ mode: 'manual' });
-    });
-    expect(claude().prompts).toEqual([]);
-    const settings = JSON.parse(readFileSync(claude().arg('--settings') ?? '', 'utf8')) as {
-      hooks: { SessionStart?: { hooks: { type: string; command: string }[] }[] };
-    };
-    expect(settings.hooks.SessionStart?.[0]?.hooks[0]).toMatchObject({ type: 'command' });
-    await until(() => {
-      expect(claude().answers).toContainEqual({ hook: 'SessionStart', answer: '{}' });
-    });
-  });
+  it.each([true, false])(
+    'carries its pre-launch permission baseline when SessionStart has no permission_mode (asks: %s)',
+    async (asks) => {
+      await start({ startupAsks: asks });
+      expect(last('started')).toMatchObject({ mode: null, asks });
+      expect(last('mode')).toBeUndefined();
+      expect(claude().prompts).toEqual([]);
+      const settings = JSON.parse(readFileSync(claude().arg('--settings') ?? '', 'utf8')) as {
+        hooks: { SessionStart?: { hooks: { type: string; command: string }[] }[] };
+      };
+      expect(settings.hooks.SessionStart?.[0]?.hooks[0]).toMatchObject({ type: 'command' });
+      await until(() => {
+        expect(claude().answers).toContainEqual({ hook: 'SessionStart', answer: '{}' });
+      });
+    },
+  );
 
   it.each([{ httpHookAllowedEnvVars: ['OTHER'] }, { httpHookAllowedEnvVars: [] }])(
     'registers its file-backed hooks without an unheard warning under %j',
     async (settings) => {
-      fake.sessionStart = 'default';
       const home = path.join(dir, 'home');
       await mkdir(path.join(home, '.claude'), { recursive: true });
       await writeFile(path.join(home, '.claude', 'settings.json'), JSON.stringify(settings));
@@ -213,8 +213,9 @@ describe('a Terminal session', () => {
         /^Bearer [0-9a-f]{48}$/,
       );
       await until(() => {
-        expect(last('mode')).toMatchObject({ mode: 'manual' });
+        expect(claude().answers).toContainEqual({ hook: 'SessionStart', answer: '{}' });
       });
+      expect(last('mode')).toBeUndefined();
       expect(last('unheard')).toBeUndefined();
     },
   );
@@ -222,7 +223,6 @@ describe('a Terminal session', () => {
   it.each([{ disableAllHooks: true }, { allowedHttpHookUrls: ['https://example.test/*'] }])(
     'does not bypass hook restrictions with the command startup post (%j)',
     async (settings) => {
-      fake.sessionStart = 'default';
       const home = path.join(dir, 'home');
       await mkdir(path.join(home, '.claude'), { recursive: true });
       await writeFile(path.join(home, '.claude', 'settings.json'), JSON.stringify(settings));
@@ -369,6 +369,17 @@ describe('a Terminal session', () => {
     const printed = activity;
     await claude().hook('Notification', { message: 'Progress' });
     expect(activity).toBeGreaterThan(printed);
+  });
+
+  it('tells the user once that Claude Code reported an invalid conversation id, however many hooks carry it', async () => {
+    await start();
+    for (const prompt of ['first', 'second', 'third']) {
+      await claude().hook('Notification', { session_id: 'not-a-uuid', message: prompt });
+    }
+    await claude().hook('Stop', { session_id: 'not-a-uuid' });
+    expect(
+      seen().filter((one) => one.startsWith('notice:') && one.includes('invalid conversation id')),
+    ).toHaveLength(1);
   });
 
   it.skipIf(process.platform === 'win32')(

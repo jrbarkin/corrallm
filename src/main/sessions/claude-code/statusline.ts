@@ -77,6 +77,34 @@ export function statusLineUsage(
 }
 
 /**
+ * The fields of Claude Code's status line input that only its work moves (as 2.1.310 gives them):
+ * its session's cost, API time and lines changed, and its last response's tokens.
+ */
+const PROGRESS = [
+  ['cost', 'total_cost_usd'],
+  ['cost', 'total_api_duration_ms'],
+  ['cost', 'total_lines_added'],
+  ['cost', 'total_lines_removed'],
+  ['context_window', 'total_input_tokens'],
+  ['context_window', 'total_output_tokens'],
+] as const;
+
+/**
+ * What Claude Code's status line input says of its work so far (`PROGRESS`), as text to compare,
+ * or undefined if it says nothing of it. Claude Code also runs its status line on a timer (the
+ * user's refreshInterval, a limit's reset, its prompt cache expiring), when only its clock
+ * (`cost.total_duration_ms`), its limits or the like changed: those are left out.
+ */
+export function statusLineProgress(input: Readonly<Record<string, unknown>>): string | undefined {
+  const values = PROGRESS.map(([group, key]) => {
+    const fields = input[group];
+    const value = isRecord(fields) ? fields[key] : undefined;
+    return typeof value === 'number' && Number.isFinite(value) ? value : null;
+  });
+  return values.some((value) => value !== null) ? JSON.stringify(values) : undefined;
+}
+
+/**
  * The user's own status line, found as Claude Code finds it: in the project folder's local
  * settings (.claude/settings.local.json), then its shared ones (.claude/settings.json), then the
  * user's (settings.json in CLAUDE_CONFIG_DIR, or ~/.claude). A file that cannot be read, or a

@@ -381,3 +381,112 @@ describe('TokenStore', () => {
     expect((await store()).clientOf(token)?.name).toBe('orchestrator');
   });
 });
+
+/*
+ * `corrallm token renew|revoke` (Build Plan B30) against the store the owner of the profile keeps:
+ * a renewal is a new value for the live token of a name, with its canvases and access; a revoke
+ * removes it. Either takes effect at once, is forced to disk first, and ends a call still going.
+ */
+describe('TokenStore: renewing and revoking by name', () => {
+  it('renews the live token of a name: a new value, the same canvases and access, for the hours asked', async () => {
+    const tokens = await store();
+    const old = await tokens.create({
+      name: 'orchestrator',
+      canvases: [M1, WORKER],
+      access: 'read',
+      hours: 12,
+    });
+    const oldId = tokens.clientOf(old)?.token ?? '';
+    const heard: string[] = [];
+    tokens.onRevoke((id) => heard.push(id));
+    now += HOUR;
+    // Its last use, written down as it was looked up, is on disk first.
+    await tokens.flush();
+    disk.length = 0;
+    const renewed = await tokens.renew('orchestrator', 2);
+    disk.push('returned');
+    expect(renewed).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(renewed).not.toBe(old);
+    // Forced to disk before it returns: no power loss brings the old one back.
+    expect(disk[0]).toMatch(/^fsync tokens\.json\..+\.partial$/);
+    expect(disk).toContain('rename to tokens.json');
+    expect(disk.at(-1)).toBe('returned');
+    expect(tokens.clientOf(old)).toBeUndefined();
+    expect(tokens.revoked(oldId)).toBe(true);
+    expect(heard).toEqual([oldId]);
+    expect(tokens.clientOf(renewed ?? '')).toMatchObject({
+      name: 'orchestrator',
+      access: 'read',
+      canvases: [M1, WORKER],
+    });
+    expect(tokens.grant('orchestrator')).toEqual({
+      name: 'orchestrator',
+      canvases: [M1, WORKER],
+      access: 'read',
+      expires: now + 2 * HOUR,
+    });
+    // By default for as long as a new token lasts: an hour.
+    const again = await tokens.renew('orchestrator');
+    expect(tokens.grant('orchestrator')?.expires).toBe(now + HOUR);
+    expect(tokens.clientOf(renewed ?? '')).toBeUndefined();
+    expect(tokens.clientOf(again ?? '')?.name).toBe('orchestrator');
+    const kept = await readFile(file, 'utf8');
+    for (const value of [old, renewed, again]) expect(kept).not.toContain(value);
+  });
+
+  it('renews no token of a name that has none live: never made, expired or revoked', async () => {
+    const tokens = await store();
+    expect(await tokens.renew('nobody')).toBeUndefined();
+    await tokens.create({ name: 'late', canvases: [M1], access: 'write' });
+    now += HOUR;
+    expect(await tokens.renew('late')).toBeUndefined();
+    await tokens.create({ name: 'gone', canvases: [M1], access: 'write' });
+    expect(await tokens.revoke('gone')).toBe(true);
+    expect(await tokens.renew('gone')).toBeUndefined();
+    await tokens.create({ name: 'live', canvases: [M1], access: 'write' });
+    await expect(tokens.renew('live', 13)).rejects.toThrow(/1 to 12 hours/);
+  });
+
+  it('revokes the live token of a name at once, forced to disk, ending a call it has going', async () => {
+    const tokens = await store();
+    const token = await tokens.create({ name: 'orchestrator', canvases: [M1], access: 'write' });
+    const other = await tokens.create({ name: 'other', canvases: [M1], access: 'write' });
+    const id = tokens.clientOf(token)?.token ?? '';
+    const heard: string[] = [];
+    tokens.onRevoke((revoked) => heard.push(revoked));
+    await tokens.flush();
+    disk.length = 0;
+    expect(await tokens.revoke('orchestrator')).toBe(true);
+    disk.push('returned');
+    expect(disk[0]).toMatch(/^fsync tokens\.json\..+\.partial$/);
+    expect(disk.at(-1)).toBe('returned');
+    expect(heard).toEqual([id]);
+    expect(tokens.revoked(id)).toBe(true);
+    expect(tokens.clientOf(token)).toBeUndefined();
+    expect(tokens.grant('orchestrator')).toBeUndefined();
+    expect(tokens.clientOf(other)?.name).toBe('other');
+    // Gone across a restart too, and a second revoke finds nothing.
+    expect((await store()).clientOf(token)).toBeUndefined();
+    expect(await tokens.revoke('orchestrator')).toBe(false);
+    expect(await tokens.revoke('nobody')).toBe(false);
+  });
+
+  it('knows a token it made that no longer works: replaced, revoked or expired, never a stranger', async () => {
+    const tokens = await store();
+    const replaced = await tokens.create({ name: 'a', canvases: [M1], access: 'write' });
+    const renewed = await tokens.renew('a', 12);
+    const revoked = await tokens.create({ name: 'b', canvases: [M1], access: 'write' });
+    await tokens.revoke('b');
+    const expiring = await tokens.create({ name: 'c', canvases: [M1], access: 'write' });
+    expect(tokens.stale(replaced)).toBe(true);
+    expect(tokens.stale(revoked)).toBe(true);
+    expect(tokens.stale(expiring)).toBe(false);
+    expect(tokens.stale(renewed ?? '')).toBe(false);
+    expect(tokens.stale('never-made')).toBe(false);
+    now += HOUR;
+    expect(tokens.stale(expiring)).toBe(true);
+    // Pruned as the store is written again, it is still known for what it was.
+    await tokens.create({ name: 'd', canvases: [M1], access: 'write' });
+    expect(tokens.stale(expiring)).toBe(true);
+  });
+});
