@@ -195,7 +195,7 @@ describe('windows’ ports to the core', () => {
             });
           },
         },
-        {},
+        { 'drafts.flush': () => null },
       );
     });
     new CorePorts(core, ORIGIN).connect(native);

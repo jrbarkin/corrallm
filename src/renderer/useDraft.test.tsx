@@ -2,7 +2,7 @@ import { act, fireEvent, render, screen } from '@testing-library/react';
 import { useLayoutEffect, useState } from 'react';
 import { afterEach, expect, it, vi } from 'vitest';
 
-import { draftCall, flushDrafts, useDraft } from './useDraft';
+import { answerDraftFlushes, draftCall, flushDrafts, useDraft } from './useDraft';
 import { fakeCore, expectOneOp } from './test-api';
 
 function Field({
@@ -238,6 +238,33 @@ it.each(['pending', 'already started'] as const)(
     core.dispose();
   },
 );
+
+it('answers the core’s drafts.flush once what is typed is committed and its operation answered', async () => {
+  let asked: (() => Promise<void>) | undefined;
+  const stop = vi.fn();
+  const stopAnswering = answerDraftFlushes({
+    draftsOnFlush: (listener) => {
+      asked = listener;
+      return stop;
+    },
+  });
+  const saving = Promise.withResolvers<undefined>();
+  const commit = vi.fn(() => saving.promise);
+  render(<Field commit={commit} />);
+  type('Typed as quit came');
+  const answered = vi.fn();
+  const flushing = asked?.().then(answered);
+  expect(commit).toHaveBeenCalledExactlyOnceWith('Typed as quit came');
+  await Promise.resolve();
+  expect(answered).not.toHaveBeenCalled();
+  saving.resolve(undefined);
+  await flushing;
+  expect(answered).toHaveBeenCalledOnce();
+  // With nothing being typed, it answers at once.
+  await expect(asked?.()).resolves.toBeUndefined();
+  stopAnswering();
+  expect(stop).toHaveBeenCalledOnce();
+});
 
 it('lets a draft send its own operation while the following operation waits for its topic revision', async () => {
   const core = fakeCore();

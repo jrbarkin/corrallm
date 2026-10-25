@@ -22,6 +22,8 @@ const NOT_ANSWERING = 'corrallm’s core isn’t answering yet.';
 export interface CoreConnection {
   onTopic(listener: (changes: Change[]) => void): () => void;
   onEpoch(listener: (epoch: string) => void): () => void;
+  /** Hears the core's `drafts.flush`: answered once every listener's promise settles. */
+  onDraftsFlush(listener: () => Promise<void>): () => void;
   /** Calls a GUI operation as you: its whole result, with transport failures unavailable. */
   call(op: string, args: unknown): Promise<OpResult<unknown>>;
   channel<C extends CoreChannel>(name: C, args: IpcArgs<C>): Promise<IpcResult<C>>;
@@ -41,6 +43,7 @@ function linkOver(
   receive: (name: GuiEvent, args: GuiEventArgs<GuiEvent>) => void,
   topic: (changes: Change[]) => void,
   epoch: (epoch: string) => void,
+  flush: () => Promise<null>,
 ): Linked {
   let end: ((why: string) => void) | undefined;
   const link = new CoreLink<GuiSide, CoreGuiSide>(
@@ -60,7 +63,7 @@ function linkOver(
         port.start();
       },
     },
-    {},
+    { 'drafts.flush': flush },
   );
   link.on('event', receive);
   link.on('topic', topic);
@@ -81,6 +84,12 @@ export function connectCore(): CoreConnection {
   let epoch: string | undefined;
   const epochs = new Set<(epoch: string) => void>();
   const topics = new Set<(changes: Change[]) => void>();
+  const flushes = new Set<() => Promise<void>>();
+  // What the page composes is finished before main's quit (B11 Design §16.5): view state only.
+  const flush = async (): Promise<null> => {
+    await Promise.all([...flushes].map((listener) => listener()));
+    return null;
+  };
   const listeners = new Map<GuiEvent, Set<(...args: unknown[]) => void>>();
   const receive = (name: GuiEvent, args: GuiEventArgs<GuiEvent>) => {
     for (const listener of listeners.get(name) ?? []) listener(...args);
@@ -106,6 +115,7 @@ export function connectCore(): CoreConnection {
         epoch = nextEpoch;
         for (const listener of epochs) listener(nextEpoch);
       },
+      flush,
     );
     linked = next;
     refused = undefined;
@@ -151,6 +161,12 @@ export function connectCore(): CoreConnection {
       if (epoch !== undefined) listener(epoch);
       return () => {
         epochs.delete(listener);
+      };
+    },
+    onDraftsFlush: (listener) => {
+      flushes.add(listener);
+      return () => {
+        flushes.delete(listener);
       };
     },
     channel: async (name, args) => {

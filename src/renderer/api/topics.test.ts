@@ -8,7 +8,11 @@ import { TopicMirror } from './topics';
 import type { TopicSource } from './topics';
 
 const empty = { readings: [], rules: {} };
-const settings = { defaultAdapter: 'codex', consents: {} };
+const settings = {
+  defaultAdapter: 'codex',
+  consents: {},
+  api: { state: 'stopped', port: null },
+} as const;
 function source(connected = true) {
   let change: ((changes: Change[]) => void) | undefined;
   let epoch: ((epoch: string) => void) | undefined;

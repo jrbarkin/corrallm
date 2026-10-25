@@ -1,13 +1,15 @@
 import { createHash } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { existsSync } from 'node:fs';
-import { lstat, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { createServer, request } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { MessageChannel } from 'node:worker_threads';
 import type { MessagePort } from 'node:worker_threads';
 
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { CoreGuiSide, GuiSide } from '../../shared/gui-link';
 import { CoreLink } from '../../shared/link';
@@ -24,6 +26,12 @@ let initialized = false;
 const closing: MessagePort[] = [];
 const originalParent = Object.getOwnPropertyDescriptor(process, 'parentPort');
 
+// The core and its MCP server, transformed once before the first test's clock starts: under a
+// loaded machine, that alone can take most of a test's five seconds.
+beforeAll(async () => {
+  await Promise.all([import('./core'), import('./endpoint')]);
+}, 60_000);
+
 beforeEach(async () => {
   vi.resetModules();
   vi.stubGlobal('MAIN_WINDOW_VITE_DEV_SERVER_URL', 'http://localhost:5173');
@@ -31,13 +39,37 @@ beforeEach(async () => {
   initialized = false;
 });
 afterEach(async () => {
-  if (initialized) await main.request('close');
+  if (initialized) await main.request('commitShutdown');
   for (const port of closing.splice(0)) port.close();
   if (originalParent) Object.defineProperty(process, 'parentPort', originalParent);
   else Reflect.deleteProperty(process, 'parentPort');
   vi.unstubAllGlobals();
   await rm(profile, { recursive: true, force: true });
 });
+
+/** A tools/list POST to `url` with `headers` (JSON, its own Host): its status. */
+function mcp(url: string, headers: Record<string, string> = {}): Promise<{ status: number }> {
+  return new Promise((resolve, reject) => {
+    const sent = request(
+      url,
+      {
+        method: 'POST',
+        agent: false,
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json, text/event-stream',
+          ...headers,
+        },
+      },
+      (response) => {
+        response.resume();
+        resolve({ status: response.statusCode ?? 0 });
+      },
+    );
+    sent.on('error', reject);
+    sent.end(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }));
+  });
+}
 
 /** Electron's port shape over a real MessageChannel; no Electron process is needed here. */
 class MainPort extends EventEmitter {
@@ -112,7 +144,7 @@ async function start() {
             port2.on('message', listener);
           },
         },
-        {},
+        { 'drafts.flush': () => null },
       );
     },
   };
@@ -199,7 +231,7 @@ describe('the profile’s lock, held by the core process', () => {
       pid: process.pid,
     });
 
-    expect(await main.request('close')).toEqual({ ok: true, value: null });
+    expect(await main.request('commitShutdown')).toEqual({ ok: true, value: null });
     initialized = false;
     expect(existsSync(path.join(profile, 'core.lock'))).toBe(false);
   });
@@ -223,6 +255,128 @@ describe('the profile’s lock, held by the core process', () => {
     // Once serve lets the profile go, the app's core may come up after all.
     await rm(path.join(profile, 'core.lock'));
     expect(await entry.init()).toEqual({ ok: true, value: null });
+  });
+});
+
+/*
+ * The app's outside endpoint (B11 Design §9, §16.6): the core process always serves MCP once
+ * composed, beside its dispatcher, on the port the profile keeps, with every check serve makes,
+ * and publishes api.json naming itself; a port taken is a status, and the app runs on.
+ */
+describe('the app’s outside endpoint', () => {
+  async function listening(): Promise<{ url: string; port: number; pid: number }> {
+    return JSON.parse(await readFile(path.join(profile, 'api.json'), 'utf8')) as {
+      url: string;
+      port: number;
+      pid: number;
+    };
+  }
+
+  it('is served once composed, on 127.0.0.1 at a port kept, api.json 0600 naming the core’s process, gone once the core closes', async () => {
+    const entry = await start();
+    expect(await entry.init()).toEqual({ ok: true, value: null });
+    const api = await listening();
+    expect(api).toMatchObject({
+      pid: process.pid,
+      url: `http://127.0.0.1:${String(api.port)}/mcp`,
+    });
+    expect((await stat(path.join(profile, 'api.json'))).mode & 0o777).toBe(0o600);
+    const settings = JSON.parse(await readFile(path.join(profile, 'settings.json'), 'utf8')) as {
+      api?: { port?: number };
+    };
+    expect(settings.api?.port).toBe(api.port);
+    // Every check of serve's: no token (none is made), a foreign Host, any Origin.
+    expect(await mcp(api.url)).toEqual({ status: 401 });
+    expect(await mcp(api.url, { Authorization: 'Bearer made-up' })).toEqual({ status: 401 });
+    expect(await mcp(api.url, { Host: `evil.example:${String(api.port)}` })).toEqual({
+      status: 403,
+    });
+    expect(await mcp(api.url, { Origin: 'https://evil.example' })).toEqual({ status: 403 });
+    // A window reads where it listens, quietly.
+    const window = entry.window(7);
+    expect(await window.request('call', 'settings.get', {})).toMatchObject({
+      ok: true,
+      value: { ok: true, value: { api: { state: 'listening', port: api.port, url: api.url } } },
+    });
+
+    expect(await main.request('commitShutdown')).toEqual({ ok: true, value: null });
+    initialized = false;
+    expect(existsSync(path.join(profile, 'api.json'))).toBe(false);
+    await expect(mcp(api.url)).rejects.toThrow();
+  });
+
+  it('says a kept port that is taken as a status, never a dialog or another port, and runs on', async () => {
+    const squatter = createServer();
+    await new Promise<void>((resolve) => squatter.listen(0, '127.0.0.1', resolve));
+    const { port } = squatter.address() as AddressInfo;
+    try {
+      await writeFile(
+        path.join(profile, 'settings.json'),
+        JSON.stringify({ version: 2, consents: {}, api: { port } }),
+      );
+      const said = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      const entry = await start();
+      expect(await entry.init()).toEqual({ ok: true, value: null });
+      expect(existsSync(path.join(profile, 'api.json'))).toBe(false);
+      const sentence = `Port ${String(port)} is taken by another program, so corrallm’s MCP server isn’t listening: stop that program, then quit corrallm and open it again.`;
+      expect(said).toHaveBeenCalledWith(`corrallm: ${sentence}`);
+      const window = entry.window(7);
+      expect(await window.request('call', 'settings.get', {})).toMatchObject({
+        ok: true,
+        value: { ok: true, value: { api: { state: 'unavailable', port, sentence } } },
+      });
+      // Local work goes on.
+      expect(await window.request('call', 'canvas.create', {})).toMatchObject({
+        ok: true,
+        value: { ok: true },
+      });
+    } finally {
+      await new Promise((resolve) => squatter.close(resolve));
+    }
+  });
+
+  it('keeps the endpoint through a cancelled quit, and closes it once the quit is committed', async () => {
+    const entry = await start();
+    expect(await entry.init()).toEqual({ ok: true, value: null });
+    const api = await listening();
+    const window = entry.window(7);
+    expect(await main.request('prepareShutdown', 'quit')).toEqual({
+      ok: true,
+      value: { ok: true },
+    });
+    // Prepared, a write is refused, saying why; a read is answered.
+    expect(await window.request('call', 'canvas.create', {})).toMatchObject({
+      ok: true,
+      value: {
+        ok: false,
+        error: {
+          code: 'unavailable',
+          sentence: 'corrallm is quitting: try again once it is open again.',
+        },
+      },
+    });
+    expect(await window.request('call', 'app.info', {})).toMatchObject({
+      ok: true,
+      value: { ok: true },
+    });
+    // Keep corrallm open: the endpoint and api.json stay, and writes are admitted again.
+    expect(await main.request('cancelShutdown')).toEqual({ ok: true, value: null });
+    expect(await listening()).toEqual(api);
+    expect(await mcp(api.url)).toEqual({ status: 401 });
+    expect(await window.request('call', 'canvas.create', {})).toMatchObject({
+      ok: true,
+      value: { ok: true },
+    });
+    expect(await main.request('active')).toEqual({ ok: true, value: false });
+
+    expect(await main.request('prepareShutdown', 'quit')).toEqual({
+      ok: true,
+      value: { ok: true },
+    });
+    expect(await main.request('commitShutdown')).toEqual({ ok: true, value: null });
+    initialized = false;
+    expect(existsSync(path.join(profile, 'api.json'))).toBe(false);
+    expect(existsSync(path.join(profile, 'core.lock'))).toBe(false);
   });
 });
 
@@ -277,24 +431,59 @@ describe.skipIf(process.platform === 'win32')('the token socket the core process
       access: 'write',
       canvases: [file],
     });
-    // The app serves no MCP yet (B11): it names no URL.
+    // It names where the app's MCP server listens, and the token works there at once.
+    const { url } = JSON.parse(await readFile(path.join(profile, 'api.json'), 'utf8')) as {
+      url: string;
+    };
     expect(answer).toMatchObject({
       ok: true,
       owner: 'app',
       op: 'new',
-      url: null,
+      url,
       canvases: [{ id: CANVAS, file }],
     });
     const token = answer?.ok === true && answer.op !== 'revoke' ? answer.token : '';
+    expect(await mcp(url, { Authorization: `Bearer ${token}` })).toMatchObject({ status: 200 });
     const kept = await readFile(path.join(profile, 'tokens.json'), 'utf8');
     expect(kept).toContain(createHash('sha256').update(token).digest('hex'));
     expect(kept).not.toContain(token);
     expect(JSON.stringify(said)).not.toContain(token);
     vi.restoreAllMocks();
 
-    expect(await main.request('close')).toEqual({ ok: true, value: null });
+    expect(await main.request('commitShutdown')).toEqual({ ok: true, value: null });
     initialized = false;
     expect(existsSync(at)).toBe(false);
+  });
+
+  it('says why no URL is named while the app’s MCP server can’t listen', async () => {
+    const squatter = createServer();
+    await new Promise<void>((resolve) => squatter.listen(0, '127.0.0.1', resolve));
+    const { port } = squatter.address() as AddressInfo;
+    try {
+      await writeFile(
+        path.join(profile, 'settings.json'),
+        JSON.stringify({ version: 2, consents: {}, api: { port } }),
+      );
+      vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      const entry = await start();
+      expect(await entry.init()).toEqual({ ok: true, value: null });
+      const answer = await askTokenOwner(profile, {
+        version: 1,
+        op: 'new',
+        name: 'bot',
+        hours: 1,
+        access: 'read',
+        canvases: [file],
+      });
+      expect(answer).toMatchObject({
+        ok: true,
+        owner: 'app',
+        url: null,
+        unserved: `Port ${String(port)} is taken by another program, so corrallm’s MCP server isn’t listening: stop that program, then quit corrallm and open it again.`,
+      });
+    } finally {
+      await new Promise((resolve) => squatter.close(resolve));
+    }
   });
 
   it('answers the shipped command on a terminal: corrallm token new against the app’s core', async () => {

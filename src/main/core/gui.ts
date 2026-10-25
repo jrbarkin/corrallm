@@ -30,8 +30,13 @@ export interface WindowPort extends LinkPort {
   close(): void;
 }
 
+/** How long a window has to finish its drafts as the app quits (`flushDrafts`). */
+export const DRAFTS_MS = 5000;
+
 interface Served {
   readonly port: WindowPort;
+  /** The window's link: what it answers (its drafts flushed), once served. */
+  link?: CoreLink<CoreGuiSide, GuiSide>;
   /** Aborts the window's calls still going. */
   readonly calls: AbortController;
   /** Ends the window's link, once it has started: what it still answers goes nowhere. */
@@ -102,6 +107,7 @@ export class WindowPorts {
       },
       this.#options,
     );
+    served.link = link;
     const stopEvents = this.#core.channels?.listen(window, (name, args) => {
       link.emit('event', name, args);
     });
@@ -115,6 +121,36 @@ export class WindowPorts {
       stopTopics?.();
     };
     if (this.#core.topics) link.emit('epoch', this.#core.topics.epoch);
+  }
+
+  /**
+   * Asks each of `windows`, over its own port, to finish the drafts it is composing (B11 Design
+   * §16.5), each at most `timeout`: the windows that didn't answer in time, or answered with an
+   * error. A window with no port here (crashed, closed, still loading), or whose port goes as it
+   * is asked, is skipped: its drafts, if it had any, are gone with it.
+   */
+  async flushDrafts(windows: readonly WindowId[], timeout = DRAFTS_MS): Promise<WindowId[]> {
+    const unanswered = await Promise.all(
+      [...new Set(windows)].map(async (window) => {
+        const link = this.#windows.get(window)?.link;
+        if (!link) return [];
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const answered = await Promise.race([
+          link.request('drafts.flush').then(
+            (answer) => (answer.ok ? 'flushed' : 'failed'),
+            () => 'gone' as const,
+          ),
+          new Promise<'late'>((resolve) => {
+            timer = setTimeout(() => {
+              resolve('late');
+            }, timeout);
+          }),
+        ]);
+        clearTimeout(timer);
+        return answered === 'failed' || answered === 'late' ? [window] : [];
+      }),
+    );
+    return unanswered.flat();
   }
 
   /** The window closed, crashed or reloaded: its port closes, and its calls going are cancelled. */

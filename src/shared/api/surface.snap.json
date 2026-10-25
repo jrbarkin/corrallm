@@ -221,7 +221,7 @@
   "schemas": {
     "topics.subscribe": {
       "input": "10579f0d8cce3ace",
-      "output": "ef23925375cab1ae"
+      "output": "8731952976cdf0d6"
     },
     "topics.unsubscribe": {
       "input": "10579f0d8cce3ace",
@@ -417,7 +417,7 @@
     },
     "settings.get": {
       "input": "e5fa5cc18e054cdd",
-      "output": "ca640021dc5b5fbe"
+      "output": "a1f28cb1576ced66"
     },
     "run.pause": {
       "input": "a85fe9cb1eb6d55a",

@@ -5,7 +5,7 @@ import { TOKEN_REPLACED, TOO_MANY_WAITS } from '../../shared/api/errors';
 import type { OpError } from '../../shared/api/errors';
 import { appProfile } from '../core/host/node';
 import { loopbackUrl } from '../url-policy';
-import { readApiFile } from './api-file';
+import { readApiFile } from '../core/api-file';
 import type { WaitCommand } from './args';
 import { readTokenFile } from './token-file';
 
