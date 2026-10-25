@@ -1,6 +1,7 @@
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { setImmediate } from 'node:timers/promises';
 
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 
@@ -11,7 +12,8 @@ import type { Caller, OutsideCaller } from '../caller';
 import { createCore } from '../core';
 import type { Core } from '../core';
 import { MessageStore } from './messages';
-import { Store } from '../store/store';
+import { Store, SYSTEM_DEPS } from '../store/store';
+import type { StoreDeps } from '../store/store';
 import { journaledRun, keepCanvases, readOnDisk, refuseWrites } from '../store/test-store';
 import { CALLERS, CANVAS, NO_DESKTOP } from '../test-registry';
 
@@ -45,7 +47,11 @@ afterEach(async () => {
  * Starts the core over a profile keeping a canvas of Builder, on Codex's App Server: `connector`;
  * with `queue`, what Builder's queue holds.
  */
-async function start(connector: Connector<SessionMode>, queue?: unknown[]): Promise<Core> {
+async function start(
+  connector: Connector<SessionMode>,
+  queue?: unknown[],
+  store?: StoreDeps,
+): Promise<Core> {
   const project = path.join(profile, 'project');
   await mkdir(project);
   const file = path.join(profile, 'canvas.corral');
@@ -70,12 +76,19 @@ async function start(connector: Connector<SessionMode>, queue?: unknown[]): Prom
     }),
   );
   await keepCanvases(profile, { [CANVAS]: { file, project } });
+  return reopen(connector, store);
+}
+
+/** Opens the profile as kept, without seeding or replacing any of its records. */
+async function reopen(connector: Connector<SessionMode>, store?: StoreDeps): Promise<Core> {
   core = await createCore(
     {
       profile,
       app: { name: 'corrallm', version: '9.8.7' },
       check: true,
       distribution: 'local',
+      watchFolder: () => ({ close: () => undefined }),
+      ...(store === undefined ? {} : { store }),
       sessions: {
         connectors: { 'codex.app-server': connector },
         environment: () => Promise.resolve({}),
@@ -105,7 +118,7 @@ async function ok<T = Record<string, unknown>>(
  * delivering one, on its way to disk), not the run's.
  */
 async function holdCommits(only?: 'messages'): Promise<() => void> {
-  await new Promise((resolve) => setTimeout(resolve, 20));
+  await core?.flush();
   const held = Promise.withResolvers<undefined>();
   if (only === 'messages') {
     const { value: durable } = Object.getOwnPropertyDescriptor(
@@ -308,7 +321,8 @@ it('returns from a withdrawal of a waiting message only once it is on disk', asy
     await vi.waitFor(() => {
       expect(open?.messages.get(id)?.state).toBe('withdrawn');
     });
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    // Drain the operation's publication work while its database commit remains gated.
+    await setImmediate();
     expect(settled).toBe(false);
   } finally {
     release();
@@ -347,6 +361,64 @@ it('says a withdrawal may not survive a restart when it can’t be written', asy
   await open?.messages.durable();
   expect(onDisk(id)?.state).toBe('withdrawn');
 });
+
+it.each([false, true])(
+  'waits for a withdrawal’s WAL flush, surviving a restart only on success (failed flush: %s)',
+  async (fail) => {
+    const entered = Promise.withResolvers<undefined>();
+    const release = Promise.withResolvers<undefined>();
+    let withdrawing: string | undefined;
+    const { engines } = await start(new FakeConnector({ adapter: 'codex' }), undefined, {
+      ...SYSTEM_DEPS,
+      flush: async (fd) => {
+        if (withdrawing !== undefined && onDisk(withdrawing)?.state === 'withdrawn') {
+          entered.resolve(undefined);
+          await release.promise;
+        }
+        await SYSTEM_DEPS.flush(fd);
+      },
+    });
+    await ok('run.pause', { target: { agent: 'builder' } }, CALLERS.you);
+    const { id } = await ok<{ id: string }>('message', { to: 'builder', body: 'Deploy to prod' });
+    await core?.flush();
+    withdrawing = id;
+    let settled = false;
+    const result = core?.call('withdraw', { canvas: CANVAS, id }, OUTSIDE).then((value) => {
+      settled = true;
+      return value;
+    });
+    try {
+      await entered.promise;
+      // COMMIT is visible to another connection, but its WAL has not reached the drive.
+      expect(onDisk(id)?.state).toBe('withdrawn');
+      await setImmediate();
+      expect(settled).toBe(false);
+    } finally {
+      withdrawing = undefined;
+      if (fail) release.reject(new Error('ENOSPC: flushing the WAL'));
+      else release.resolve(undefined);
+    }
+    const answer = await result;
+    expect(engines.canvas(CANVAS)?.messages.get(id)?.state).toBe('withdrawn');
+    if (fail) {
+      expect(answer).toMatchObject({ ok: false, error: { code: 'unavailable' } });
+      if (answer?.ok === false) {
+        expect(answer.error.sentence).toMatch(/withdrawal.*may not survive a restart/);
+      }
+      // The injected fault failed the store closed; closing it may reject with that same fault.
+      await core?.close().catch(() => undefined);
+    } else {
+      expect(answer).toMatchObject({ ok: true, value: { reached: false, interrupted: false } });
+      await core?.close();
+    }
+    core = undefined;
+    const restarted = await reopen(new FakeConnector({ adapter: 'codex' }));
+    expect(restarted.engines.canvas(CANVAS)?.messages.get(id)?.state).toBe(
+      fail ? 'pending' : 'withdrawn',
+    );
+    expect(onDisk(id)?.state).toBe(fail ? 'pending' : 'withdrawn');
+  },
+);
 
 it('commits a turn’s reply with what its end changed in the run, or neither', async () => {
   // Builder's turns go on until the test ends them.
@@ -470,7 +542,7 @@ it('delivers the next message once one taken back while it was journaled is with
     await vi.waitFor(() => {
       expect(messages?.get(first.id)?.state).toBe('withdrawn');
     });
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await setImmediate();
     // Never sent, it is said to be withdrawn only once that is on disk.
     expect(settled).toBe(false);
   } finally {
