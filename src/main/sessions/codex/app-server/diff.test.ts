@@ -87,6 +87,21 @@ describe('/diff', () => {
     }
   });
 
+  it.skipIf(process.platform === 'win32')(
+    'runs git with lazy fetch off, whatever the agents’ environment says',
+    async () => {
+      const dir = await mkdtemp(path.join(tmpdir(), 'corrallm-git-'));
+      try {
+        const git = runGit({ PATH: process.env.PATH ?? '', GIT_NO_LAZY_FETCH: '0' });
+        await expect(
+          git(['-c', 'alias.lazy=!printenv GIT_NO_LAZY_FETCH', 'lazy'], dir),
+        ).resolves.toEqual({ code: 0, stdout: '1\n' });
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    },
+  );
+
   it('says when the folder is not in a git repository', async () => {
     const git: RunGit = () => Promise.resolve({ code: 128, stdout: '' });
     await expect(gitDiff(git, '/work/app')).resolves.toBeUndefined();
