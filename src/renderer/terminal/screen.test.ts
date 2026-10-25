@@ -1,4 +1,5 @@
 import { within } from '@testing-library/react';
+import type * as WebLinks from '@xterm/addon-web-links';
 import type * as Webgl from '@xterm/addon-webgl';
 import type { Terminal } from '@xterm/xterm';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
@@ -44,6 +45,22 @@ vi.mock('@xterm/addon-webgl', async (importOriginal) => {
     };
   }
   return { WebglAddon };
+});
+
+/** What the terminal's URL links addon was given to open a link the user clicks with. */
+const webLinks = vi.hoisted(() => ({
+  open: undefined as ((event: MouseEvent, uri: string) => void) | undefined,
+}));
+
+vi.mock('@xterm/addon-web-links', async (importOriginal) => {
+  const real = await importOriginal<typeof WebLinks>();
+  class WebLinksAddon extends real.WebLinksAddon {
+    constructor(...args: ConstructorParameters<typeof real.WebLinksAddon>) {
+      super(...args);
+      webLinks.open = args[0];
+    }
+  }
+  return { WebLinksAddon };
 });
 
 /** The GPU loses the context: as xterm.js's events do, a listener's error goes no further. */
@@ -121,6 +138,31 @@ it('says the terminal needs WebGL2, and what to try, where the page cannot make 
   screen.focus();
   expect(element.querySelector('.xterm')).toBeNull();
 });
+
+it.each([
+  ['macOS', 'Macintosh; Intel Mac OS X 10_15_7', { metaKey: true }, { ctrlKey: true }],
+  ['Linux', 'X11; Linux aarch64', { ctrlKey: true }, { metaKey: true }],
+  ['Windows', 'Windows NT 10.0; Win64; x64', { ctrlKey: true }, { metaKey: true }],
+])(
+  'on %s, opens a link clicked with its modifier, as a terminal there does: not plainly, nor with the other',
+  (_os, platform, opens, other) => {
+    const agent = vi
+      .spyOn(navigator, 'userAgent', 'get')
+      .mockReturnValue(
+        `Mozilla/5.0 (${platform}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0 Safari/537.36`,
+      );
+    const { screen } = make();
+    const opened: string[] = [];
+    screen.onLink((url) => opened.push(url));
+    const open = webLinks.open;
+    if (!open) throw new Error('no URL links');
+    open(new MouseEvent('mouseup'), 'https://docs.example.com/plain');
+    open(new MouseEvent('mouseup', other), 'https://docs.example.com/other');
+    open(new MouseEvent('mouseup', opens), 'https://docs.example.com/hooks');
+    expect(opened).toEqual(['https://docs.example.com/hooks']);
+    agent.mockRestore();
+  },
+);
 
 it('says so too when the GPU loses its context and no new WebGL2 context can be made', () => {
   const { element, screen } = make();
