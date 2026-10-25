@@ -72,14 +72,12 @@ beforeEach(async () => {
     });
     w.bind(canvas, agent, tree.id);
   });
-  checkout = vi
-    .fn()
-    .mockResolvedValue({
-      state: 'ready',
-      cwd: mintTrustedPath(tree.path),
-      worktree: tree,
-      branch: tree.branchRef,
-    });
+  checkout = vi.fn().mockResolvedValue({
+    state: 'ready',
+    cwd: mintTrustedPath(tree.path),
+    worktree: tree,
+    branch: tree.branchRef,
+  });
   deps = {
     projects: {
       of: () => root,
@@ -90,22 +88,21 @@ beforeEach(async () => {
     },
     workspaces,
     provisioner: {
-      repository: vi
-        .fn()
-        .mockResolvedValue({
-          kind: 'repository',
-          record: repository,
-          found: {
-            pickedRoot: '/picked',
-            realRoot: '/picked',
-            gitDir: '/picked/.git',
-            commonDir: '/picked/.git',
-            identity: 'repository',
-            head: { ref: 'refs/heads/main', oid: 'a'.repeat(40) },
-            drivers: [],
-          },
-        }),
+      repository: vi.fn().mockResolvedValue({
+        kind: 'repository',
+        record: repository,
+        found: {
+          pickedRoot: '/picked',
+          realRoot: '/picked',
+          gitDir: '/picked/.git',
+          commonDir: '/picked/.git',
+          identity: 'repository',
+          head: { ref: 'refs/heads/main', oid: 'a'.repeat(40) },
+          drivers: [],
+        },
+      }),
       provision: vi.fn().mockResolvedValue(tree),
+      run: vi.fn().mockResolvedValue(tree),
       checkout,
       reconcile: vi.fn().mockResolvedValue(undefined),
     },
@@ -164,6 +161,32 @@ it('rejects a verification that crossed a desired generation change', async () =
     branch: tree.branchRef,
   });
   expect(await reading).toMatchObject({ state: 'held', reason: 'pending-change' });
+});
+it('runs the open job of a bound tree still being made, holding its starts meanwhile', async () => {
+  const job = '33333333-3333-4333-8333-333333333333';
+  await workspaces.write((w) => {
+    w.recordJob({
+      id: job,
+      workspace: tree.id,
+      kind: 'create',
+      phase: 'recorded',
+      generation: tree.generation,
+      payload: {},
+    });
+  });
+  checkout.mockResolvedValue({ state: 'held', reason: 'creating', worktree: tree });
+  vi.mocked(deps.provisioner.run).mockRejectedValue(new Error('Too many workspaces.'));
+  const heard = vi.fn();
+  directories.onAvailability(canvas, heard);
+  expect(await directories.workingDirectory(canvas, agent)).toMatchObject({
+    state: 'held',
+    reason: 'creating',
+  });
+  expect(deps.provisioner.run).toHaveBeenCalledWith(job);
+  // A run refused says nothing: no listener asks again at once, round and round.
+  await Promise.resolve();
+  expect(heard).not.toHaveBeenCalled();
+  expect(deps.provisioner.provision).not.toHaveBeenCalled();
 });
 it('offers setup and never hands an unready checkout to a CLI', async () => {
   checkout.mockResolvedValue({

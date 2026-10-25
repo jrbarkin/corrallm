@@ -1,14 +1,14 @@
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { createCore } from './core';
 import type { Core, CoreConfig } from './core';
 import { FakeConnector } from '../sessions/fake';
-import { keepCanvases } from './store/test-store';
+import { keepCanvases, readOnDisk } from './store/test-store';
 import { CALLERS, CANVAS, NO_DESKTOP } from './test-registry';
 import { WorkspaceGit } from './workspaces/runtime-git';
-import { gitEnvironment, makeRepository, scratch } from './workspaces/test-git';
+import { commit, git, gitEnvironment, makeRepository, scratch } from './workspaces/test-git';
 
 let root: string;
 let remove: () => void;
@@ -16,10 +16,11 @@ let core: Core;
 let fake: FakeConnector;
 let project: string;
 let config: CoreConfig;
+let env: Record<string, string>;
 beforeEach(async () => {
   ({ root, remove } = scratch('corrallm-workspaces-composed-'));
   project = path.join(root, 'project');
-  const env = gitEnvironment(path.join(root, 'home'));
+  env = gitEnvironment(path.join(root, 'home'));
   makeRepository(project, env, { 'base.txt': 'base\n' });
   const profile = path.join(root, 'profile');
   mkdirSync(profile);
@@ -220,18 +221,25 @@ it('proposes deleting an agent whose composed workspace holds work', async () =>
   const needs = await core.call('needs', { canvas: CANVAS }, CALLERS.you);
   expect(needs).toMatchObject({
     ok: true,
-    value: { items: expect.arrayContaining([expect.objectContaining({ kind: 'proposal' })]) },
+    value: {
+      items: expect.arrayContaining([expect.objectContaining({ kind: 'proposal' })]) as unknown,
+    },
   });
   const canvas = await core.call('canvas.get', { canvas: CANVAS }, CALLERS.you);
   expect(canvas).toMatchObject({
     ok: true,
-    value: { nodes: expect.arrayContaining([expect.objectContaining({ id: 'a' })]) },
+    value: { nodes: expect.arrayContaining([expect.objectContaining({ id: 'a' })]) as unknown },
   });
 }, 30000);
 
 it('recovers the same intent and binding after provisioning stops between Git phases', async () => {
+  // The original, called below with the spied instance as its `this`.
+  // eslint-disable-next-line @typescript-eslint/unbound-method
   const run = WorkspaceGit.prototype.run;
-  const stop = vi.spyOn(WorkspaceGit.prototype, 'run').mockImplementation(function (this: WorkspaceGit, call) {
+  const stop = vi.spyOn(WorkspaceGit.prototype, 'run').mockImplementation(function (
+    this: WorkspaceGit,
+    call,
+  ) {
     if (call.args[0] === 'read-tree')
       return Promise.reject(new Error('Simulated crash before population'));
     return run.call(this, call);
@@ -252,4 +260,53 @@ it('recovers the same intent and binding after provisioning stops between Git ph
     await core.call('session.open', { canvas: CANVAS, agent: 'a' }, CALLERS.you),
   ).toMatchObject({ ok: true });
   expect(fake.started).toHaveLength(1);
+}, 30000);
+
+it('forks a spawned agent’s worktree from its source’s committed HEAD, through a batch', async () => {
+  await skip('a');
+  await core.call('session.open', { canvas: CANVAS, agent: 'a' }, CALLERS.you);
+  const cwd = fake.started[0]?.cwd;
+  if (!cwd) throw new Error('No checkout');
+  writeFileSync(path.join(cwd, 'committed.txt'), 'kept\n');
+  git(cwd, env, 'add', '--', 'committed.txt');
+  commit(cwd, env, 'work');
+  const head = git(cwd, env, 'rev-parse', 'HEAD').trim();
+  writeFileSync(path.join(cwd, 'uncommitted.txt'), 'not forked\n');
+  const batch = await core.call(
+    'canvas.batch',
+    { canvas: CANVAS, ops: [{ op: 'canvas.spawnAgent', args: { from: 'a', relation: 'peer' } }] },
+    CALLERS.you,
+  );
+  if (!batch.ok) throw new Error(batch.error.sentence);
+  const [spawned] = (batch.value as { results: readonly unknown[] }).results;
+  const id = (spawned as { id?: string } | undefined)?.id;
+  if (id === undefined) throw new Error('No spawned agent');
+  // In the batch's one commit: the spawned agent bound to a tree of its own, forked from a's.
+  const rows = readOnDisk(path.join(root, 'profile'), (disk) =>
+    disk
+      .prepare(
+        `SELECT b.agent_id, w.base_oid, w.forked_from, s.workspace_id AS source
+           FROM agent_worktree b JOIN worktree w ON w.id = b.workspace_id
+           JOIN agent_worktree s ON s.canvas_id = b.canvas_id AND s.agent_id = 'a'
+          WHERE b.canvas_id = ? AND b.agent_id = ?`,
+      )
+      .all(CANVAS, id),
+  );
+  expect(rows).toEqual([
+    {
+      agent_id: id,
+      base_oid: head,
+      forked_from: rows[0]?.source,
+      source: expect.any(String) as unknown,
+    },
+  ]);
+  await skip(id);
+  expect(await core.call('session.open', { canvas: CANVAS, agent: id }, CALLERS.you)).toMatchObject(
+    { ok: true },
+  );
+  const forked = fake.started.at(-1)?.cwd;
+  if (!forked) throw new Error('No forked checkout');
+  expect(forked).not.toBe(cwd);
+  expect(readFileSync(path.join(forked, 'committed.txt'), 'utf8')).toBe('kept\n');
+  expect(existsSync(path.join(forked, 'uncommitted.txt'))).toBe(false);
 }, 30000);

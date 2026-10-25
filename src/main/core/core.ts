@@ -355,11 +355,15 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
   const cleanup =
     config.cleanup?.(cleanupDeps) ??
     new WorkspaceCleanup({ ...cleanupDeps, git: workspaceGit, queue: workspaceQueue });
-  // Who works where at every document commit, sharing the resolver's repository and bindings.
+  // Who works where at every document commit, sharing the resolver's repository and bindings; a
+  // tree a commit forks (a spawn's) recorded in its write, from the base its preflight read, then
+  // made as a start's is (its setup offered).
   const planner = new WorkspacePlanner({
     workspaces: workspaceStore,
     holding: (canvas, agent) => gate.holding(canvas, agent),
     cleanup,
+    provisioner,
+    make: (tree) => workspaceDirectories.provision(tree.canvas, tree.owner),
   });
   const documents: Documents = new Documents({
     store,

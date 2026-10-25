@@ -7,6 +7,7 @@ import { workspaceOwner } from '../../../shared/model/workspaces';
 import type { WorkspaceOwnerKey } from '../../../shared/model/workspaces';
 import type { ProjectFolders } from '../../project';
 import type { TrustedPath } from '../host';
+import { forkSource } from './planner';
 import type { Provisioner, RepositoryFound } from './provision';
 import type { DirectoryResolver, WorkingDirectory } from './resolver';
 import type { SetupService } from './setup';
@@ -16,7 +17,7 @@ import type { WorkspaceStore, WorktreeRecord } from './store';
 export interface WorkspaceDirectoriesDeps {
   projects: Pick<ProjectFolders, 'of' | 'onAvailability'>;
   workspaces: WorkspaceStore;
-  provisioner: Pick<Provisioner, 'repository' | 'provision' | 'checkout' | 'reconcile'>;
+  provisioner: Pick<Provisioner, 'repository' | 'provision' | 'checkout' | 'reconcile' | 'run'>;
   setups: Pick<SetupService, 'prepare' | 'reconcile'>;
   document: (canvas: CanvasId) => Promise<CanvasDocument>;
   changed?: (canvas: CanvasId) => void;
@@ -95,7 +96,7 @@ export class WorkspaceDirectories implements DirectoryResolver {
             sentence: 'The project folder changed while it was being read: try again.',
           };
         if (result.kind === 'refused') return result;
-      const link = this.#deps.workspaces.canvasRepository(canvas);
+        const link = this.#deps.workspaces.canvasRepository(canvas);
         const repository = result.kind === 'repository' ? result.record.id : null;
         if (link?.repository != null && link.repository !== repository)
           return {
@@ -170,6 +171,13 @@ export class WorkspaceDirectories implements DirectoryResolver {
         'pending-change',
         'Its workspace binding changed while it was being checked: try again.',
       );
+    // Bound to a tree still being made (a commit's fork, recorded with its members' bindings): its
+    // open job is run, or joined, here too, should nothing run it yet (the queue was full). Its
+    // end says the canvas changed; a refusal says nothing, so no listener loops on it.
+    if (checked.state === 'held' && checked.reason === 'creating') {
+      const job = this.#deps.workspaces.openJob(checked.worktree.id, 'create');
+      if (job !== undefined) void this.#deps.provisioner.run(job.id).catch(() => undefined);
+    }
     if (checked.state === 'held')
       return held(
         checked.reason === 'missing'
@@ -236,10 +244,19 @@ export class WorkspaceDirectories implements DirectoryResolver {
         throw new Error(
           found.kind === 'refused' ? found.sentence : 'The project folder is not a repository.',
         );
+      // A new tree forks what its plan says (B9a Design §3): where a member moving to it works
+      // now (a split, at your Switch), else the project's HEAD (an independent add).
+      const from = forkSource(
+        this.#deps.workspaces,
+        canvas,
+        await this.#deps.document(canvas),
+        owner,
+      );
       const tree = await this.#deps.provisioner.provision({
         canvas,
         repository: found.record,
         owner,
+        ...(from === undefined ? {} : { from }),
         within: (w, tree) => {
           if (this.projectRoot(canvas) !== root || this.#isClosed())
             throw new Error('The project changed before its workspace intent was recorded.');
