@@ -1,3 +1,4 @@
+import { MessageId } from '../../shared/api/ids';
 import type { Children } from './children';
 import type { GuiEvent, GuiEventArgs } from '../../shared/gui-link';
 import type { CanvasId } from '../../shared/canvas';
@@ -46,6 +47,8 @@ export interface ChannelServices {
    * stays its one owner until B11 X13 moves the agent window onto the session topic and operations.
    */
   engines: Pick<Engines, 'canvas'>;
+  /** C11's existing write barrier also applies to X13's transitional manual-message bridge. */
+  admitManual?: () => void;
   sessions: Pick<
     SessionManager,
     | 'send'
@@ -81,10 +84,48 @@ function createHandlers(services: ChannelServices): HandlerTable {
    */
   const own = (canvas: CanvasId) => services.engines.canvas(canvas)?.engine.sessions;
   return {
+    'session:record': {
+      parseArgs: parseSendArgs,
+      handler: async ({ window }, agent, message) => {
+        services.admitManual?.();
+        const runtime = services.engines.canvas(await of(window));
+        services.admitManual?.();
+        if (!runtime?.document.nodes.some((node) => node.type === 'agent' && node.id === agent))
+          throw new Error('That agent is no longer on this canvas.');
+        runtime.engine.sessions.recordSubmission(agent, message.text, message.images);
+        await runtime.journal();
+        return null;
+      },
+    },
     'session:send': {
       parseArgs: parseSendArgs,
       handler: async ({ window }, agentId, message) => {
-        await sessions.send(await of(window), agentId, message);
+        services.admitManual?.();
+        const runtime = services.engines.canvas(await of(window));
+        services.admitManual?.();
+        if (!runtime?.document.nodes.some((node) => node.type === 'agent' && node.id === agentId))
+          throw new Error('That agent is no longer on this canvas.');
+        const kept = await runtime.delivery.send('you', agentId, message.text, undefined, {
+          images: message.images,
+          told: `manual-channel:${message.id}`,
+        });
+        return { id: kept.id };
+      },
+    },
+    'session:unqueue': {
+      parseArgs: (args) => {
+        if (args.length !== 2) throw new TypeError('Expected an agent and message id');
+        const [agent] = parseAgentArgs(args.slice(0, 1));
+        return [agent, MessageId.parse(args[1])];
+      },
+      handler: async ({ window }, agent, id) => {
+        services.admitManual?.();
+        const runtime = services.engines.canvas(await of(window));
+        services.admitManual?.();
+        const message = runtime?.messages.get(id);
+        if (message?.to !== `agent:${agent}` || message.from !== 'you' || !runtime)
+          throw new Error('That manual message is no longer queued for this agent.');
+        await runtime.delivery.withdraw(id, 'you');
         return null;
       },
     },

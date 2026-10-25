@@ -333,9 +333,11 @@ describe('the app’s core and window channels', () => {
       const canvas = await created(window);
       await chooseProject(window);
       const a = await agentOn(window, connection);
-      const heard = events(window);
       await opened(window, a);
       await channel(window, 'session:send', a, { id: 'm', text: 'Hello' });
+      await vi.waitFor(() => {
+        expect(core.engines.canvas(canvas)?.engine.sessions.of(a).status).toBe('working');
+      });
       // The window only views it: the core runs the canvas it shows (B11 Design §8).
       expect(core.engines.opened()).toEqual([canvas]);
       for (let i = 0; i < 79; i++) {
@@ -368,22 +370,17 @@ describe('the app’s core and window channels', () => {
       now += 15_000;
       tick?.();
       await vi.waitFor(() => {
-        expect(heard).toContainEqual([
-          'session:event',
-          [
-            a,
-            connection,
-            expect.objectContaining({
-              type: 'notice',
-              level: 'warning',
-              text: expect.stringContaining(
-                trigger === 'network'
-                  ? '2 minutes after the network changed'
-                  : '2 minutes after waking',
-              ) as unknown,
-            }),
-          ],
-        ]);
+        expect(core.engines.canvas(canvas)?.engine.sessions.of(a).entries).toContainEqual(
+          expect.objectContaining({
+            kind: 'notice',
+            level: 'warning',
+            text: expect.stringContaining(
+              trigger === 'network'
+                ? '2 minutes after the network changed'
+                : '2 minutes after waking',
+            ) as unknown,
+          }),
+        );
       });
       expect(await core.call('needs', { canvas }, CALLERS.you)).toMatchObject({
         ok: true,
@@ -804,4 +801,59 @@ describe('the canvas’s document, which the core keeps', () => {
     const draft = await created(window);
     expect(await shownIn(window)).toBe(draft);
   });
+});
+
+it('keeps transitional manual sends in the core mailbox, and refuses them at the shutdown barrier', async () => {
+  const { core, connect, served } = await app();
+  const window = connect(7);
+  const canvas = await created(window);
+  const agent = await agentOn(window, 'codex.app-server');
+  // Accepted and durable in the core, never a window-owned submission queue.
+  const images = [{ mediaType: 'image/png' as const, data: 'AQ==' }];
+  const kept = await channel(window, 'session:send', agent, {
+    id: crypto.randomUUID(),
+    text: 'Keep my input',
+    images,
+  });
+  const messages = await core.engines.messagesOf(canvas);
+  expect(messages.get(kept.id)).toMatchObject({
+    from: 'you',
+    to: `agent:${agent}`,
+    body: 'Keep my input',
+  });
+  expect(
+    readOnDisk(profile, (disk) =>
+      disk.prepare('SELECT id FROM message WHERE canvas_id = ? AND id = ?').get(canvas, kept.id),
+    ),
+  ).toEqual({ id: kept.id });
+  await core.prepareShutdown('quit');
+  await expect(
+    channel(window, 'session:send', agent, { id: crypto.randomUUID(), text: 'Too late' }),
+  ).rejects.toThrow('quitting');
+  await expect(channel(window, 'session:unqueue', agent, kept.id)).rejects.toThrow('quitting');
+  core.cancelShutdown();
+  await channel(window, 'session:record', agent, { id: crypto.randomUUID(), text: '/mcp' });
+  expect(messages.all().some((message) => message.body === '/mcp')).toBe(true);
+  served.gone(7, true);
+  expect(core.engines.canvas(canvas)?.state).toBe('executing');
+});
+it('records a view-handled session command durably without dispatching it', async () => {
+  const { core, connect } = await app();
+  const window = connect(7);
+  const canvas = await created(window);
+  const agent = await agentOn(window, 'codex.app-server');
+  await channel(window, 'session:record', agent, { id: crypto.randomUUID(), text: '/mcp' });
+  const recorded = (await core.engines.messagesOf(canvas))
+    .all()
+    .find((message) => message.body === '/mcp');
+  if (!recorded) throw new Error('No command record');
+  expect(recorded).toMatchObject({ from: 'you', to: `agent:${agent}`, state: 'replied' });
+  expect(
+    readOnDisk(profile, (disk) =>
+      disk
+        .prepare('SELECT id FROM message WHERE canvas_id = ? AND id = ?')
+        .get(canvas, recorded.id),
+    ),
+  ).toEqual({ id: recorded.id });
+  expect(core.engines.canvas(canvas)?.engine.sessions.of(agent).status).toBe('idle');
 });

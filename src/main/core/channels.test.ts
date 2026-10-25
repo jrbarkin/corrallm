@@ -12,9 +12,16 @@ const CANVAS = newCanvasId();
 
 /** What the handlers act on, faked: every call is recorded. */
 function fakeServices() {
+  const delivery = {
+    send: vi.fn().mockResolvedValue({ id: 'kept' }),
+    withdraw: vi.fn().mockResolvedValue({ reached: false, interrupted: false }),
+  };
+  const messages = { get: vi.fn() };
   const own = { answered: vi.fn(), applied: vi.fn(), resumed: vi.fn() };
   return {
     catalog: CATALOG,
+    delivery,
+    messages,
     windows: {
       canvasOf: vi.fn<ChannelServices['windows']['canvasOf']>().mockResolvedValue(CANVAS),
       showing: vi.fn<ChannelServices['windows']['showing']>().mockReturnValue([7]),
@@ -24,7 +31,14 @@ function fakeServices() {
     own,
     engines: {
       canvas: vi.fn((canvas: string) =>
-        canvas === CANVAS ? ({ engine: { sessions: own } } as never) : undefined,
+        canvas === CANVAS
+          ? ({
+              engine: { sessions: own },
+              document: { nodes: [{ id: 'a', type: 'agent' }] },
+              delivery,
+              messages,
+            } as never)
+          : undefined,
       ),
     },
     sessions: {
@@ -119,7 +133,7 @@ describe('the sender’s canvas', () => {
     const sender = 7;
     const shown = Promise.withResolvers<typeof CANVAS>();
     services.windows.canvasOf.mockReturnValue(shown.promise);
-    const called = services.sessions[action];
+    const called = action === 'send' ? services.delivery.send : services.sessions[action];
     const result = Promise.resolve(invoke(channel, [...args], sender)).then(
       (value: unknown) => ({ value }),
       (error: unknown) => ({ error }),
@@ -127,9 +141,10 @@ describe('the sender’s canvas', () => {
     expect(services.windows.canvasOf).toHaveBeenCalledWith(sender);
     expect(called).not.toHaveBeenCalled();
     shown.resolve(CANVAS);
-    expect(await result).toEqual({ value: null });
+    expect(await result).toEqual({ value: action === 'send' ? { id: 'kept' } : null });
     expect(called).toHaveBeenCalledOnce();
-    expect(called.mock.calls[0]).toContain(CANVAS);
+    if (action === 'send') expect(services.engines.canvas).toHaveBeenCalledWith(CANVAS);
+    else expect(called.mock.calls[0]).toContain(CANVAS);
   });
 });
 
@@ -150,14 +165,16 @@ describe('session:* handlers', () => {
   it('pass checked arguments on, for the renderer that sent them', async () => {
     const sender = 7;
     await invoke('session:send', ['a', { id: 'm1', text: 'Hi' }], sender);
-    expect(services.sessions.send).toHaveBeenCalledWith(CANVAS, 'a', { id: 'm1', text: 'Hi' });
+    expect(services.delivery.send).toHaveBeenCalledWith('you', 'a', 'Hi', undefined, {
+      images: undefined,
+      told: 'manual-channel:m1',
+    });
     // A pasted image may be all a message is.
     const image = { mediaType: 'image/png', data: 'iVBORw0KGgo=' };
     await invoke('session:send', ['a', { id: 'm2', text: '', images: [image] }], sender);
-    expect(services.sessions.send).toHaveBeenLastCalledWith(CANVAS, 'a', {
-      id: 'm2',
-      text: '',
+    expect(services.delivery.send).toHaveBeenLastCalledWith('you', 'a', '', undefined, {
       images: [image],
+      told: 'manual-channel:m2',
     });
     // As many images as fit in a message's limit together, each as large as one may be.
     const largest = {
@@ -169,10 +186,9 @@ describe('session:* handlers', () => {
       () => largest,
     );
     await invoke('session:send', ['a', { id: 'm3', text: 'Four', images }], sender);
-    expect(services.sessions.send).toHaveBeenLastCalledWith(CANVAS, 'a', {
-      id: 'm3',
-      text: 'Four',
+    expect(services.delivery.send).toHaveBeenLastCalledWith('you', 'a', 'Four', undefined, {
       images,
+      told: 'manual-channel:m3',
     });
     await invoke('session:answer', ['a', 'p1', { kind: 'question', answers: ['Yes'] }], sender);
     expect(services.sessions.answer).toHaveBeenCalledWith(CANVAS, 'a', 'p1', {
@@ -484,4 +500,34 @@ describe('session:* handlers', () => {
     expect(Object.values(services.sessions).every((fn) => fn.mock.calls.length === 0)).toBe(true);
     expect(services.windows.canvasOf).not.toHaveBeenCalled();
   });
+});
+
+it('takes back only a manual message to the named agent on the sender window canvas', async () => {
+  const id = crypto.randomUUID();
+  services.messages.get.mockReturnValue({ id, from: 'you', to: 'agent:a' });
+  expect(await invoke('session:unqueue', ['a', id])).toBeNull();
+  expect(services.delivery.withdraw).toHaveBeenCalledExactlyOnceWith(id, 'you');
+  for (const message of [
+    { id, from: 'you', to: 'agent:b' },
+    { id, from: 'outside:bot', to: 'agent:a' },
+    undefined,
+  ]) {
+    services.messages.get.mockReturnValue(message);
+    await expect(invoke('session:unqueue', ['a', id])).rejects.toThrow(/manual message/);
+  }
+  expect(services.delivery.withdraw).toHaveBeenCalledOnce();
+  expect(() => invoke('session:unqueue', ['a', 'not-a-message'])).toThrow();
+});
+
+it('validates a view-handled command before recording anything', async () => {
+  for (const args of [
+    [],
+    ['a'],
+    ['a', { id: 'm', text: 'x', cwd: '/' }],
+    ['a', { id: 'm', text: 'x'.repeat(MAX_MESSAGE_LENGTH + 1) }],
+  ]) {
+    await expect(Promise.resolve().then(() => invoke('session:record', args))).rejects.toThrow();
+  }
+  expect(services.engines.canvas).not.toHaveBeenCalled();
+  expect(services.delivery.send).not.toHaveBeenCalled();
 });

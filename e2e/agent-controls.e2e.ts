@@ -8,6 +8,7 @@ import { expect, test } from '@playwright/test';
 import type { ElectronApplication, Locator, Page } from '@playwright/test';
 
 import { launchApp } from './launch';
+import { crashCore } from './core-crash';
 
 // The real app, IPC and native connectors, using only protocol-speaking fake CLIs. Independent
 // prompt/process logs distinguish holding a queue from interrupting or closing its conversation.
@@ -278,7 +279,7 @@ test('Kill interrupts the native turn while retaining its live console for a man
   );
 });
 
-test('a canvas pause chosen before Run survives reload and global Resume until that agent is resumed', async () => {
+test('a canvas pause chosen before Run survives a core crash and global Resume until that agent is resumed', async () => {
   await launch('claude-code.sdk');
   const held = 'control held before start';
   const parallel = 'control other completes';
@@ -301,7 +302,7 @@ test('a canvas pause chosen before Run survives reload and global Resume until t
   await expect(heading(queues).getByText('Paused', { exact: true })).toBeVisible();
   expect(await sdkPrompts()).toEqual([parallel]);
 
-  await page.reload();
+  await crashCore(app);
   await expect(page.locator('.react-flow__node-agent')).toHaveCount(2);
   await page.getByRole('button', { name: 'Show all queues' }).click();
   queues = page.getByRole('dialog', { name: 'All queues', exact: true });

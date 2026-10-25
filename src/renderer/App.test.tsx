@@ -57,7 +57,54 @@ function stubApi(api: Partial<AppApi>) {
             ok: true,
             value: { epoch: 'one', rev: 0, revs: {}, state: { items: [] } },
           })
-        : subscribe(args);
+        : !api.topicsSubscribe && args.topic === 'run'
+          ? Promise.resolve({
+              ok: true,
+              value: {
+                epoch: 'one',
+                rev: 0,
+                revs: {},
+                state: { running: false, agents: {}, groups: {}, notices: [] },
+              },
+            })
+          : !api.topicsSubscribe && args.topic === 'sessions'
+            ? Promise.resolve({
+                ok: true,
+                value: { epoch: 'one', rev: 0, revs: {}, state: { agents: {} } },
+              })
+            : !api.topicsSubscribe && args.topic === 'messages'
+              ? Promise.resolve({
+                  ok: true,
+                  value: {
+                    epoch: 'one',
+                    rev: 0,
+                    revs: {},
+                    state: { items: {}, order: [], next: '' },
+                  },
+                })
+              : !api.topicsSubscribe && args.topic === 'needs'
+                ? Promise.resolve({
+                    ok: true,
+                    value: { epoch: 'one', rev: 0, revs: {}, state: { items: [] } },
+                  })
+                : subscribe(args).then((answer) => {
+                    if (
+                      !answer.ok ||
+                      !('state' in answer.value) ||
+                      !('readings' in answer.value.state) ||
+                      args.topic === 'usage'
+                    )
+                      return answer;
+                    const state =
+                      args.topic === 'run'
+                        ? { running: false, agents: {}, groups: {}, notices: [] }
+                        : args.topic === 'sessions'
+                          ? { agents: {} }
+                          : args.topic === 'messages'
+                            ? { items: {}, order: [], next: '' }
+                            : { items: [] };
+                    return { ...answer, value: { ...answer.value, state } } as typeof answer;
+                  });
   Object.defineProperty(window, 'api', {
     value: { ...usage, ...api, topicsSubscribe },
     configurable: true,

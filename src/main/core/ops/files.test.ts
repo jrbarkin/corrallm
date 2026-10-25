@@ -17,7 +17,6 @@ import type { NeedsItem } from '../../../shared/model/needs';
 import type { QueueItem } from '../../../shared/model/queue';
 import { FakeConnector } from '../../sessions/fake';
 import { SessionManager } from '../../sessions/manager';
-import type { RunContext } from '../../../shared/run';
 import type { Caller, OutsideCaller } from '../caller';
 import { createCore } from '../core';
 import type { Core } from '../core';
@@ -419,16 +418,17 @@ describe('canvas.create', () => {
 });
 
 describe('canvas.open', () => {
-  it('keeps sessions and the run token when Open picks the canvas already shown', async () => {
+  it('keeps the runtime and sessions when Open picks the canvas already shown', async () => {
     await applied('window.show', { canvas: OTHER });
-    const before = (await core.channels.call(1, 'run:get', [])) as RunContext;
+    const before = core.engines.canvas(OTHER);
+    expect(before).toBeDefined();
     const close = vi.spyOn(SessionManager.prototype, 'closeCanvas');
     try {
       answers.open.push(files.other);
       expect(await applied('canvas.open', {})).toMatchObject({ canvas: OTHER });
       expect(close).not.toHaveBeenCalled();
-      expect(await core.channels.call(1, 'run:get', [])).toMatchObject({ token: before.token });
-      await expect(core.channels.call(1, 'run:save', [before.token, null])).resolves.toBeNull();
+      expect(core.engines.canvas(OTHER)).toBe(before);
+      await expect(core.flush()).resolves.toBeUndefined();
     } finally {
       close.mockRestore();
     }

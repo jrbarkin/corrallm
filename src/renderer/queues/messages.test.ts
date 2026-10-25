@@ -43,3 +43,35 @@ it('projects mailbox rows without changing or dispatching the authored queue', (
   expect(messageQueues(nodes, state)[0]).toBe(view[0]);
   expect(messageQueues(nodes, { items: {}, order: [], next: '' })[0]).toBe(nodes[0]);
 });
+
+it('reads a cancelled submission’s result from its durable reply, without rewriting the original', async () => {
+  const { submissionOf } = await import('./messages');
+  const original: MessageView = {
+    id: crypto.randomUUID(),
+    canvas: newCanvasId(),
+    from: 'you',
+    to: 'agent:a',
+    kind: 'text',
+    body: 'Original',
+    at: 1,
+    state: 'replied',
+    origin: 'manual',
+  };
+  const reply: MessageView = {
+    ...original,
+    id: crypto.randomUUID(),
+    from: 'agent:a',
+    to: 'you',
+    body: 'Stopped',
+    replyTo: original.id,
+    state: 'delivered',
+    turn: { status: 'cancelled', reason: 'interrupted' },
+  };
+  expect(submissionOf(original, [original, reply])).toMatchObject({
+    id: original.id,
+    status: 'cancelled',
+    reply: 'Stopped',
+    result: reply.turn,
+  });
+  expect(original.turn).toBeUndefined();
+});

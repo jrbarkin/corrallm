@@ -161,7 +161,10 @@ export class Lifecycle {
     const { id, copy } = opened;
     // Opening the file already shown changes neither its native sessions nor its run generation.
     if (this.#deps.windows.shownIn(window) === id) return id;
-    await this.#deps.journal.opened(id, copy);
+    // Showing an already executing canvas in another window must not replace its journal token.
+    // A newly adopted copy still needs its one warning recorded.
+    if (copy) await this.#deps.journal.opened(id, copy);
+    else await this.#deps.journal.open(id);
     await this.#deps.windows.show(window, id);
     await this.#deps.projects.restore(id);
     return id;

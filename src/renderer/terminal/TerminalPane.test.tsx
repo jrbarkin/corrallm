@@ -331,10 +331,10 @@ describe('a Terminal agent', () => {
     expect(sidebar.getByRole('heading', { level: 2 }).textContent).toBe('Needs you 4');
     const cards = sidebar.getAllByRole('group', { name: 'a asks, in its terminal' });
     expect(cards.map((card) => card.textContent)).toEqual([
-      'aBashgit initDo you want to proceed?Answer it in the terminal.Open terminal',
-      'aColorPick a colorRedWarmBlueCoolAnswer it in the terminal.Open terminal',
-      'aPlanReady to code? Here is the plan:Set upRun git init.Answer it in the terminal.Open terminal',
-      'aanswer: Which region?Answer it in the terminal.Open terminal',
+      'Session promptaApprove Bash: git init?Answer it in the terminal.Open terminal',
+      'Session promptaPick a colorColorPick a colorRedWarmBlueCoolAnswer it in the terminal.Open terminal',
+      'Session promptaApprove its plan?## Set up\nRun `git init`.Answer it in the terminal.Open terminal',
+      'Session promptaanswer: Which region?Answer it in the terminal.Open terminal',
     ]);
     // Never answered here: nothing to type in, no answers to pick.
     expect(sidebar.queryByRole('textbox')).toBeNull();
@@ -372,7 +372,7 @@ describe('a Terminal agent', () => {
     const sidebar = within(screen.getByRole('complementary', { name: 'Needs you' }));
     const asked = sidebar.getByRole('group', { name: 'a asks, in its terminal' });
     expect(asked.textContent).toBe(
-      'aClaude Code asks whether you trust this folder before it works in it.Trust this folder in the terminal.Open terminal',
+      'Session promptaTrust the project folder?Answer it in the terminal.Open terminal',
     );
     await events.click(within(asked).getByRole('button', { name: 'Open terminal' }));
     await settle();
@@ -422,9 +422,9 @@ describe('a Terminal agent', () => {
     const sidebar = within(screen.getByRole('complementary', { name: 'Needs you' }));
     const cards = sidebar.getAllByRole('group', { name: 'a asks, in its terminal' });
     expect(cards.map((card) => card.textContent)).toEqual([
-      'aEditnotes.txt- hello\n+ hello world\nDo you want to make this edit to notes.txt?' +
+      'Session promptaApprove Edit: notes.txt?- hello\n+ hello world\n' +
         'Answer it in the terminal.Open terminal',
-      'aBashgit add -A …git add -A\ngit commit -m "Greet"Do you want to proceed?' +
+      'Session promptaApprove Bash: git add -A …?git add -A\ngit commit -m "Greet"' +
         'Answer it in the terminal.Open terminal',
     ]);
     const [edit] = cards;

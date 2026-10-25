@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
 import type { RunSnapshot } from '../../shared/model/views';
 
-/** Global run controls stay renderer-owned until B11. */
+/** Global run controls send commands to the core-owned run. */
 export function RunFloat({
   run,
   working,

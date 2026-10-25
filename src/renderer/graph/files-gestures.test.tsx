@@ -45,6 +45,11 @@ function setup(saved = true) {
       canvas={canvas.document.id}
       client={canvas.core.api}
       mirror={canvas.core.topics}
+      sessionQueries={{
+        ...canvas.queries,
+        manual: canvas.manual,
+        presentation: canvas.presentation,
+      }}
       files
     />,
   );
@@ -59,8 +64,10 @@ const click = async (name: string) => {
   await events.click(await screen.findByRole('button', { name }));
 };
 /** Opens the agent view of the canvas's one agent. */
-const openWriter = async () => {
-  await events.doubleClick(screen.getByText('Writer'));
+const openWriter = async (canvas: ReturnType<typeof fakeCanvas>) => {
+  await events.doubleClick(await screen.findByText('Writer'));
+  expectOneOp(canvas.core, 'session.open', { canvas: canvas.document.id, agent: 'a' });
+  canvas.core.operations.length = 0;
 };
 const writer = (canvas: ReturnType<typeof fakeCanvas>) =>
   canvas.document.nodes.find((node): node is AgentNode => node.id === 'a' && node.type === 'agent');
@@ -163,7 +170,7 @@ it('a cancelled Open keeps the canvas and its selection', async () => {
 
 it('a role draft commits as one agent.setRole and a refusal stays at the field', async () => {
   const canvas = setup();
-  await openWriter();
+  await openWriter(canvas);
   await click('Agent settings: Writer');
   const role = await screen.findByRole('textbox', { name: 'Role' });
   canvas.core.reply('agent.setRole', {
@@ -185,11 +192,11 @@ it('a role draft commits as one agent.setRole and a refusal stays at the field',
 });
 
 it.each([
-  ['Claude · Agent SDK', 'agent.setConnection', { connection: 'claude-code.sdk' }],
+  ['Claude · Agent SDK', 'session.continueIn', { connection: 'claude-code.sdk' }],
   ['Codex · App Server', 'agent.setType', { adapter: 'codex', connection: 'codex.app-server' }],
 ] as const)('the agent chip chooses %s with one %s', async (choice, op, args) => {
   const canvas = setup();
-  await openWriter();
+  await openWriter(canvas);
   await click('Agent: Claude · Terminal');
   await events.click(await screen.findByRole('option', { name: new RegExp(`^${choice}`) }));
   await waitFor(() => {
@@ -200,7 +207,7 @@ it.each([
 
 it('the settings sheet’s chip changes the agent’s CLI with one agent.setType', async () => {
   const canvas = setup();
-  await openWriter();
+  await openWriter(canvas);
   await click('Agent settings: Writer');
   const sheet = await screen.findByRole('dialog', { name: 'Agent settings: Writer' });
   await events.click(within(sheet).getByRole('button', { name: 'Agent: Claude · Terminal' }));
@@ -218,7 +225,7 @@ it('the settings sheet’s chip changes the agent’s CLI with one agent.setType
 
 it('a settings-sheet choice commits one agent.setSettings', async () => {
   const canvas = setup();
-  await openWriter();
+  await openWriter(canvas);
   await click('Agent settings: Writer');
   const sheet = await screen.findByRole('dialog', { name: 'Agent settings: Writer' });
   await events.click(within(sheet).getByRole('button', { name: /^Mode:/ }));
@@ -252,6 +259,11 @@ it.each(['cancelled', 'refused'] as const)(
         canvas={canvas.document.id}
         client={canvas.core.api}
         mirror={canvas.core.topics}
+        sessionQueries={{
+          ...canvas.queries,
+          manual: canvas.manual,
+          presentation: canvas.presentation,
+        }}
         files
       />,
     );

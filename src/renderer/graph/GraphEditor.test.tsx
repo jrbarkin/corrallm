@@ -337,21 +337,39 @@ describe('GraphEditor', () => {
     await renderReady(
       <StrictMode>
         <GraphEditor
-          initialGraph={{ nodes: [agentNode('a', 0, 0)], edges: [] }}
+          initialGraph={{
+            nodes: [
+              agentNode('a', 0, 0, {
+                data: { label: 'a', queue: [{ id: 'work', approve: 'work' }] },
+              }),
+            ],
+            edges: [],
+          }}
           onCanvas={held.onCanvas}
         />
       </StrictMode>,
     );
     act(() => {
-      held.canvas.core.change({
-        topic: `run:${held.canvas.document.id}`,
-        rev: 50,
-        top: { running: false, paused: true },
-        agents: { set: {} },
-        groups: { set: {} },
-      });
+      held.canvas.engine.run.restore(
+        JSON.stringify({
+          version: 2,
+          run: {
+            running: false,
+            paused: true,
+            agents: { a: { status: 'asking', current: 'work', outcomes: {} } },
+          },
+          replies: [],
+          held: [],
+          arrived: [],
+          ended: [],
+          past: [],
+          due: [],
+          usageDecided: [],
+          warned: [],
+        }),
+      );
     });
-    await events.click(button('Resume'));
+    await events.click(await screen.findByRole('button', { name: 'Resume' }));
     expectOneOp(held.canvas.core, 'run.resume', { canvas: held.canvas.document.id });
   });
 
@@ -422,7 +440,9 @@ describe('GraphEditor', () => {
     expect(queues.getByRole('button', { name: 'Wait for the reset' })).toBeTruthy();
     expect(sessions.backend.send).not.toHaveBeenCalled();
     unmount();
-    expect(changed.size).toBe(0);
+    await waitFor(() => {
+      expect(changed.size).toBe(0);
+    });
   });
 
   it('keeps legacy unsupported work unsent and offers a real connection without fabricating completion', async () => {

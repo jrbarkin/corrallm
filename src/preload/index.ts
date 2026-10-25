@@ -38,6 +38,9 @@ const api: AppApi = {
   topicsOnEpoch: (listener) => core.onEpoch(listener),
   draftsOnFlush: (listener) => core.onDraftsFlush(listener),
   sendToSession: (agentId, message) => invoke(API_CHANNELS.sendToSession, agentId, message),
+  recordSessionCommand: (agentId, message) =>
+    invoke(API_CHANNELS.recordSessionCommand, agentId, message),
+  unqueueSession: (agentId, id) => invoke(API_CHANNELS.unqueueSession, agentId, id),
   answerSession: (agentId, promptId, answer) =>
     invoke(API_CHANNELS.answerSession, agentId, promptId, answer),
   interruptSession: (agentId) => invoke(API_CHANNELS.interruptSession, agentId),

@@ -37,7 +37,8 @@ async function switchingView(needs: NeedsItem[] = []) {
     },
   ];
   const next = document('After');
-  const canvas = fakeCanvas(first);
+  const fake = automaticBackend();
+  const canvas = fakeCanvas(first, fake.backend);
   stops.push(() => {
     canvas.core.dispose();
   });
@@ -57,14 +58,13 @@ async function switchingView(needs: NeedsItem[] = []) {
   canvas.core.snapshot(`needs:${first.id}`, {
     items: needs.map((item) => ({ ...item, canvas: first.id })),
   });
-  const fake = automaticBackend();
   const view = render(
     <GraphEditor
       canvas={first.id}
       client={canvas.core.api}
       mirror={canvas.core.topics}
       files
-      sessionQueries={fake.backend}
+      sessionQueries={{ ...fake.backend, manual: canvas.manual, presentation: canvas.presentation }}
     />,
   );
   await waitFor(() => {
@@ -84,11 +84,12 @@ const proposal: NeedsItem = {
   answerIn: 'api',
 };
 
-it('keeps live sessions, stores and the token when Open returns the shown canvas', async () => {
+it('keeps live sessions and the core runtime when Open returns the shown canvas', async () => {
   const { canvas, first, fake, container } = await switchingView();
   const node = container.querySelector('.react-flow__node[data-id="Before"]');
   if (!node) throw new Error('No Before node');
   await events.doubleClick(node);
+  canvas.core.operations.length = 0;
   const composer = await screen.findByRole('textbox', { name: 'Message Before' });
   await events.change(composer, { target: { value: 'Keep this manual work' } });
   await events.keyDown(composer, { key: 'Enter' });
@@ -105,6 +106,7 @@ it('keeps live sessions, stores and the token when Open returns the shown canvas
   expect(fake.backend.close).not.toHaveBeenCalled();
   expect(canvas.document.id).toBe(first.id);
   await events.doubleClick(node);
+  canvas.core.operations.length = 0;
   expect(screen.getAllByText('Keep this manual work').length).toBeGreaterThan(0);
   expect(canvas.engine.sessions.of('Before').submissions?.at(-1)?.text).toBe(
     'Keep this manual work',
@@ -116,6 +118,7 @@ it('closes All queues opened from an agent when the window switches to another c
   const node = container.querySelector('.react-flow__node[data-id="Before"]');
   if (!node) throw new Error('No Before node');
   await events.doubleClick(node);
+  canvas.core.operations.length = 0;
   await screen.findByRole('dialog', { name: 'Before' });
   await events.click(screen.getByRole('button', { name: 'Show all queues' }));
   expect(screen.getByRole('dialog', { name: 'All queues' })).toBeTruthy();
@@ -207,6 +210,7 @@ it.each([
       const node = container.querySelector('.react-flow__node[data-id="Before"]');
       if (!node) throw new Error('No Before node');
       await events.doubleClick(node);
+      canvas.core.operations.length = 0;
       const composer = await screen.findByRole('textbox', { name: 'Message Before' });
       await events.change(composer, { target: { value: 'Independent manual work' } });
       await events.keyDown(composer, { key: 'Enter' });
@@ -226,7 +230,8 @@ it.each(['show', 'close', 'allow'] as const)(
   async (action) => {
     const first = document('Before'),
       next = document('After');
-    const canvas = fakeCanvas(first);
+    const fake = automaticBackend();
+    const canvas = fakeCanvas(first, fake.backend);
     stops.push(() => {
       canvas.core.dispose();
     });

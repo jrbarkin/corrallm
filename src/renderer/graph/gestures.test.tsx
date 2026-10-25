@@ -114,6 +114,11 @@ async function setup({
       canvas={doc.id}
       client={canvas.core.api}
       mirror={canvas.core.topics}
+      sessionQueries={{
+        ...canvas.queries,
+        manual: canvas.manual,
+        presentation: canvas.presentation,
+      }}
       initialSelection={{ nodes: new Set(selected), edges: new Set() }}
       files={files}
     />,
@@ -174,6 +179,13 @@ it('adds with one operation and uses the id from the core', async () => {
       expect(node.measured?.height).toBeGreaterThan(0);
     }
 });
+async function openAgent(view: Awaited<ReturnType<typeof setup>>) {
+  fireEvent.doubleClick(view.node('a'));
+  await act(() => Promise.resolve());
+  expectOneOp(view.core, 'session.open', { canvas: view.canvas, agent: 'a' });
+  view.core.operations.length = 0;
+}
+
 it('renames with one operation', async () => {
   const view = await setup({ selected: ['a'] });
   fireEvent.keyDown(document.body, { key: 'F2' });
@@ -291,7 +303,7 @@ it.each(['delete', 'ungroup'] as const)(
 
 it.each(['peer', 'linked'] as const)('spawns a %s with one operation', async (relation) => {
   const view = await setup();
-  fireEvent.doubleClick(view.node('a'));
+  await openAgent(view);
   const dialog = within(await screen.findByRole('dialog', { name: 'a' }));
   if (relation === 'peer') fireEvent.click(dialog.getByRole('button', { name: 'New agent' }));
   else {
@@ -375,7 +387,7 @@ it('keeps Arrange when opening an agent from Needs, without a document operation
   fireEvent.click(await screen.findByRole('button', { name: 'Open a' }));
   expect(await screen.findByRole('dialog', { name: 'a' })).toBeTruthy();
   expect(view.document.arrange).toBe(true);
-  expect(view.core.operations).toEqual([]);
+  expect(view.core.operations.map(({ op }) => op)).toEqual(['run.start', 'session.open']);
 });
 it('keeps an untouched rendered node object when another queue changes', async () => {
   const view = await setup();
@@ -558,7 +570,16 @@ it('keeps nested group cards inside the new frame through a reparenting operatio
     canvas.core.dispose();
   });
   const view = await renderReady(
-    <GraphEditor canvas={doc.id} client={canvas.core.api} mirror={canvas.core.topics} />,
+    <GraphEditor
+      canvas={doc.id}
+      client={canvas.core.api}
+      mirror={canvas.core.topics}
+      sessionQueries={{
+        ...canvas.queries,
+        manual: canvas.manual,
+        presentation: canvas.presentation,
+      }}
+    />,
   );
   const flow = view.container.querySelector<HTMLElement>('.react-flow');
   if (!flow) throw new Error('No flow');
@@ -719,7 +740,7 @@ it('saves the core’s live document with one operation after a concurrent edit'
 
 it('adds a queue step with one op and renders its core id', async () => {
   const view = await setup();
-  fireEvent.doubleClick(view.node('a'));
+  await openAgent(view);
   fireEvent.click(button('Add to queue'));
   fireEvent.click(screen.getByRole('option', { name: /^Read / }));
   fireEvent.click(screen.getByRole('option', { name: 'This agent' }));
@@ -738,14 +759,14 @@ it('adds a queue step with one op and renders its core id', async () => {
 });
 it('removes a queue row with one op', async () => {
   const view = await setup({ queue: [{ id: 'work', action: 'Read' }] });
-  fireEvent.doubleClick(view.node('a'));
+  await openAgent(view);
   fireEvent.click(button('Remove Read'));
   await called(view.core);
   expectOneOp(view.core, 'queue.remove', { canvas: view.canvas, agent: 'a', item: 'work' });
 });
 it('commits a queue message draft with one op', async () => {
   const view = await setup({ queue: [{ id: 'work', message: 'Before' }] });
-  fireEvent.doubleClick(view.node('a'));
+  await openAgent(view);
   const field = screen.getByRole('textbox', { name: 'Message to the agent' });
   fireEvent.focus(field);
   fireEvent.change(field, { target: { value: 'After' } });
@@ -774,7 +795,7 @@ it.each(['message', 'instruction'] as const)(
       ok: false,
       error: { code: 'refused', sentence: 'Held by the run.' },
     });
-    fireEvent.doubleClick(view.node('a'));
+    await openAgent(view);
     const field = screen.getByRole<HTMLTextAreaElement>('textbox', {
       name: kind === 'message' ? 'Message to the agent' : 'What Read is to do',
     });
@@ -808,7 +829,7 @@ it.each(['agent', 'All queues'] as const)('sends one queue.move at drop from %s'
       { id: 'third', action: 'Edit' },
     ],
   });
-  if (where === 'agent') fireEvent.doubleClick(view.node('a'));
+  if (where === 'agent') await openAgent(view);
   else fireEvent.click(button('Show all queues'));
   const boxes = vi
     .spyOn(HTMLElement.prototype, 'getBoundingClientRect')
@@ -851,7 +872,7 @@ it('drops by the previewed neighbour when another writer inserts a row during th
       { id: 'third', action: 'Edit' },
     ],
   });
-  fireEvent.doubleClick(view.node('a'));
+  await openAgent(view);
   vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (
     this: HTMLElement,
   ) {

@@ -11,6 +11,27 @@ import type { CanvasNode } from '../../shared/model/canvas';
 import type { ArgsOf } from '../../shared/api/registry';
 import { agentName } from '../../shared/model/queries';
 import { FloatPopover } from './FloatPopover';
+import { ToolDetailView } from '../agent/ToolDetail';
+
+/** The Needs DTO keeps a diff's visible lines, without native tool execution metadata. */
+function NeedDetail({ text }: { text: string }) {
+  const lines = text.split('\n');
+  if (lines.every((line) => /^[-+ ] /.test(line)))
+    return (
+      <ToolDetailView
+        detail={{
+          kind: 'diff',
+          added: lines.filter((line) => line.startsWith('+')).length,
+          removed: lines.filter((line) => line.startsWith('-')).length,
+          lines: lines.map((line) => ({
+            kind: line.startsWith('+') ? 'add' : line.startsWith('-') ? 'remove' : 'same',
+            text: line.slice(2),
+          })),
+        }}
+      />
+    );
+  return <p className="graph-question-detail">{text}</p>;
+}
 
 type CoreNeed = ResultOf<'needs'>['items'][number];
 type Reply = Awaited<ReturnType<GuiApi['reply']>>;
@@ -23,7 +44,7 @@ interface Settlement {
   left?: boolean;
 }
 
-/** Core proposals and file reviews beside the renderer run's holds and session questions. */
+/** Core run holds, session prompts, proposals and file reviews, all from needs:<c>. */
 export function NeedsSidebar({
   canvas,
   mirror,
@@ -81,7 +102,13 @@ export function NeedsSidebar({
     update({ item, pending: true });
     try {
       const result = await onReply(item.id, value);
-      update({ item, pending: false, outcome: result.outcome ?? 'answered' });
+      if (item.id.startsWith('prompt/') || item.id.startsWith('hold/'))
+        setSettlements((previous) => {
+          const next = new Map(previous);
+          next.delete(item.id);
+          return next;
+        });
+      else update({ item, pending: false, outcome: result.outcome ?? 'answered' });
     } catch (error) {
       update({ item, pending: false, error: ipcErrorMessage(error) });
     }
@@ -118,7 +145,16 @@ export function NeedsSidebar({
           {[...current.values()].map((item) => {
             const settlement = kept.get(item.id);
             return (
-              <article key={item.id} className="graph-question" aria-label={item.title}>
+              <article
+                key={item.id}
+                className="graph-question"
+                role={item.kind === 'prompt' ? 'group' : undefined}
+                aria-label={
+                  item.kind === 'prompt' && item.agent
+                    ? `${agentName(nodes, item.agent)} asks${item.answerIn === 'terminal' ? ', in its terminal' : ''}`
+                    : item.title
+                }
+              >
                 <span className="graph-question-header">
                   {item.kind === 'file'
                     ? 'File review'
@@ -128,7 +164,11 @@ export function NeedsSidebar({
                         ? `Silent session: ${item.agent === undefined ? 'agent' : agentName(nodes, item.agent)}`
                         : item.id.startsWith('unsaved/')
                           ? 'Run progress'
-                          : 'Proposal'}
+                          : item.kind === 'hold'
+                            ? 'Run'
+                            : item.kind === 'prompt'
+                              ? 'Session prompt'
+                              : 'Proposal'}
                 </span>
                 {item.agent && (
                   <button
@@ -143,24 +183,45 @@ export function NeedsSidebar({
                     {agentName(nodes, item.agent)}
                   </button>
                 )}
-                {!item.questions?.length && <p className="graph-question-text">{item.title}</p>}
-                {item.detail && <p className="graph-question-detail">{item.detail}</p>}
+                {(!item.questions?.length || item.answerIn === 'terminal') && (
+                  <p className="graph-question-text">{item.title}</p>
+                )}
+                {item.detail && <NeedDetail text={item.detail} />}
                 {settlement?.outcome ? (
                   <p role="status">
                     {settlement.outcome.charAt(0).toUpperCase() + settlement.outcome.slice(1)}.
                   </p>
                 ) : item.answerIn === 'terminal' ? (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (item.agent) {
-                        close();
-                        onOpen(item.agent);
-                      }
-                    }}
-                  >
-                    Open terminal
-                  </button>
+                  <>
+                    {item.questions?.map((question) => (
+                      <div key={question.id} className="graph-question-asked">
+                        {question.header && (
+                          <span className="graph-question-header">{question.header}</span>
+                        )}
+                        <p>{question.text}</p>
+                        <ul aria-label="Its answers">
+                          {question.options.map((option) => (
+                            <li key={option.label}>
+                              <span>{option.label}</span>
+                              {option.description && <span>{option.description}</span>}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    ))}
+                    <p>Answer it in the terminal.</p>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (item.agent) {
+                          close();
+                          onOpen(item.agent);
+                        }
+                      }}
+                    >
+                      Open terminal
+                    </button>
+                  </>
                 ) : item.questions?.length ? (
                   item.questions.map((question) => (
                     <QuestionCard
@@ -180,17 +241,20 @@ export function NeedsSidebar({
                     />
                   ))
                 ) : item.kind === 'prompt' && item.id.startsWith('prompt/') ? (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (item.agent) {
-                        close();
-                        onOpen(item.agent);
-                      }
-                    }}
-                  >
-                    Open session
-                  </button>
+                  <>
+                    <p>Answer it in its session.</p>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (item.agent) {
+                          close();
+                          onOpen(item.agent);
+                        }
+                      }}
+                    >
+                      Open session
+                    </button>
+                  </>
                 ) : (
                   <AskCard
                     text=""
@@ -201,7 +265,16 @@ export function NeedsSidebar({
                       primary: index === 0,
                     }))}
                     reply={
-                      item.text ? { label: item.text.placeholder, button: 'Reply' } : undefined
+                      item.text
+                        ? {
+                            label: item.text.placeholder,
+                            button:
+                              item.kind === 'hold' &&
+                              item.choices.some((choice) => choice.value === 'approve')
+                                ? 'Ask for changes'
+                                : 'Reply',
+                          }
+                        : undefined
                     }
                     answered={settlement?.pending ? 'Sending…' : undefined}
                     onChoose={(choice) => {

@@ -1,7 +1,8 @@
 import type { CanvasId } from '../../shared/canvas';
 import type { RuntimeTopicStates } from '../../shared/api/topics';
 import type { CanvasNode } from '../../shared/model/canvas';
-import type { QueueItem, QueueMessage } from '../../shared/model/queue';
+import type { QueueItem, QueueMessage, SubmittedMessage } from '../../shared/model/queue';
+import type { MessageView } from '../../shared/model/views';
 import { queueRows } from '../../shared/model/views';
 
 type Messages = RuntimeTopicStates[`messages:${CanvasId}`];
@@ -32,31 +33,42 @@ export function messageQueues(
       }
       const message = row.message;
       const text = message.display?.text ?? message.body;
-      const status =
-        message.state === 'pending'
-          ? 'queued'
-          : message.state === 'delivered' || message.state === 'delivering'
-            ? 'running'
-            : message.state === 'withdrawn' || message.turn?.status === 'cancelled'
-              ? 'cancelled'
-              : message.turn?.status === 'failed' || message.state === 'unresolved'
-                ? 'failed'
-                : 'completed';
       return {
         id: message.id,
         message: text,
-        submission: {
-          id: message.id,
-          text,
-          status,
-          ...(message.turn === undefined ? {} : { result: message.turn }),
-          ...(message.state === 'unresolved' ? { unresolved: true } : {}),
-          ...(message.display?.after === undefined ? {} : { after: message.display.after }),
-        },
+        submission: submissionOf(message, Object.values(messages.items)),
       } satisfies QueueMessage;
     });
     const projected = { ...node, data: { ...node.data, queue } };
     cached.set(node, { messages, node: projected });
     return projected;
   });
+}
+
+/** Legacy queue widgets consume read-only message records, not an executable second queue. */
+export function submissionOf(message: MessageView, all: readonly MessageView[]): SubmittedMessage {
+  const text = message.display?.text ?? message.body;
+  const response = all.find((one) => one.replyTo === message.id && one.kind === 'text');
+  const turn = message.turn ?? response?.turn;
+  const status =
+    message.state === 'pending'
+      ? 'queued'
+      : message.state === 'delivered' || message.state === 'delivering'
+        ? 'running'
+        : message.state === 'withdrawn' || turn?.status === 'cancelled'
+          ? 'cancelled'
+          : turn?.status === 'failed' || message.state === 'unresolved'
+            ? 'failed'
+            : 'completed';
+  const reply = response?.body;
+  return {
+    id: message.id,
+    text,
+    status,
+    ...(reply === undefined ? {} : { reply }),
+    ...(turn ? { result: turn } : {}),
+    ...(message.state === 'unresolved' ? { unresolved: true } : {}),
+    ...(message.display?.after ? { after: message.display.after } : {}),
+    ...(message.display?.task ? { task: { ...message.display.task } } : {}),
+  };
 }

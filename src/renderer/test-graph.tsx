@@ -8,6 +8,8 @@ import type { SessionBackend } from '../shared/engine/transcript/receive';
 import { fakeCanvas } from './test-canvas';
 import type { FakeCanvas } from './test-canvas';
 
+const mounted = new WeakSet<FakeCanvas>();
+
 type Props = Omit<
   ComponentProps<typeof Editor>,
   'canvas' | 'client' | 'mirror' | 'initialSelection'
@@ -25,12 +27,16 @@ export function GraphEditor({
   initialGraph = EMPTY_GRAPH,
   files = false,
   sessionBackend,
+  usageSource,
   onCanvas,
   ...props
 }: Props) {
   const [canvas] = useState(() => {
-    const made = fakeCanvas(documentOf(initialGraph, newCanvasId()), sessionBackend);
-    onCanvas?.(made);
+    const made = fakeCanvas(documentOf(initialGraph, newCanvasId()), sessionBackend, usageSource);
+    // React rehearses state initializers too. An unused fixture must release its subscriptions.
+    queueMicrotask(() => {
+      if (!mounted.has(made)) made.core.dispose();
+    });
     return made;
   });
   const [selection] = useState(() => ({
@@ -42,17 +48,24 @@ export function GraphEditor({
     timer: undefined as ReturnType<typeof setTimeout> | undefined,
   }));
   useEffect(() => {
+    mounted.add(canvas);
+    onCanvas?.(canvas);
     clearTimeout(disposal.timer);
     return () => {
       disposal.timer = setTimeout(() => {
         canvas.core.dispose();
       });
     };
-  }, [canvas, disposal]);
+  }, [canvas, disposal, onCanvas]);
   return (
     <Editor
       {...props}
-      {...(sessionBackend === undefined ? {} : { sessionQueries: sessionBackend })}
+      sessionQueries={{
+        ...canvas.queries,
+        manual: canvas.manual,
+        presentation: canvas.presentation,
+      }}
+      usageSource={canvas.usageSource}
       files={files}
       canvas={canvas.document.id}
       client={canvas.core.api}

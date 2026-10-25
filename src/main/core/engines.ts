@@ -971,7 +971,9 @@ export class Engines {
         // One whose document the core keeps opens from it, its file reviewed (B9 Design §5).
         if (!rows) throw error;
       }
-      if (holds !== undefined && holds !== canvas) throw new Error(ANOTHER);
+      // A file opened as a copy still contains the original's id until its first save. Its
+      // adopted rows are authoritative for the window; serve retains its stricter admission.
+      if (holds !== undefined && holds !== canvas && (strict || !rows)) throw new Error(ANOTHER);
       kept = true;
     }
     if (strict && !kept) throw new Error(NO_FILE);

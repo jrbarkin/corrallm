@@ -369,6 +369,14 @@ describe('preload', () => {
       text: '',
       images: [image],
     });
+    await api.recordSessionCommand('a', { id: 'local', text: '/mcp' });
+    expect(channel).toHaveBeenLastCalledWith('session:record', 'a', { id: 'local', text: '/mcp' });
+    await api.unqueueSession('a', '11111111-1111-4111-8111-111111111111');
+    expect(channel).toHaveBeenLastCalledWith(
+      'session:unqueue',
+      'a',
+      '11111111-1111-4111-8111-111111111111',
+    );
     await api.answerSession('a', 'p', { kind: 'permission', answer: 'deny' });
     expect(channel).toHaveBeenLastCalledWith('session:answer', 'a', 'p', {
       kind: 'permission',

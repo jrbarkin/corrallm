@@ -8,6 +8,7 @@ import { expect, test } from '@playwright/test';
 import type { ElectronApplication, Locator, Page } from '@playwright/test';
 
 import { launchApp } from './launch';
+import { crashCore } from './core-crash';
 
 // The real renderer, IPC and Agent SDK, against a protocol-speaking CLI fake. Its prompt log
 // proves a held task does not resend work or release dependent queues before the user decides.
@@ -36,6 +37,7 @@ test.beforeEach(async () => {
       ANTHROPIC_API_KEY: 'sk-ant-fake',
       CLAUDE_CONFIG_DIR: path.join(dir, 'config'),
       FAKE_CLAUDE_PROMPTS: log,
+      FAKE_CLAUDE_TURN_GATES: JSON.stringify({ 'continuity-first': path.join(dir, 'continue') }),
     },
   }));
   page = await app.firstWindow();
@@ -257,7 +259,7 @@ test('Stop preserves a cancelled attempt, and accepting cancellation skips an If
   ]);
 });
 
-test('keeps an unclear condition held across reload until the user decides it', async () => {
+test('keeps an unclear condition held across a core crash until the user decides it', async () => {
   let queues = await openCanvas([
     {
       id: 'check',
@@ -270,7 +272,7 @@ test('keeps an unclear condition held across reload until the user decides it', 
   await expect(row(queues, 'builder', 'check')).toHaveAttribute('data-problem', 'uncertain');
   expect(await prompts()).toHaveLength(1);
 
-  await page.reload();
+  await crashCore(app);
   await page.getByRole('button', { name: 'Show all queues' }).click();
   queues = page.getByRole('dialog', { name: 'All queues', exact: true });
   await expect(queues.getByRole('status')).toHaveText('Paused');
@@ -286,3 +288,50 @@ test('keeps an unclear condition held across reload until the user decides it', 
     'recovery-condition-followup',
   ]);
 });
+
+for (const leaving of ['reload', 'close'] as const) {
+  test(`a window ${leaving} leaves its turn and the next task running in the core`, async () => {
+    let queues = await openCanvas([
+      { id: 'first', message: 'continuity-first' },
+      { id: 'next', message: 'continuity-next' },
+    ]);
+    await queues.getByRole('button', { name: 'Run', exact: true }).click();
+    await expect(row(queues, 'builder', 'first')).toHaveAttribute('data-run', 'running');
+    await expect
+      .poll(async () =>
+        readFile(path.join(dir, 'continue.waiting'), 'utf8').then(
+          () => true,
+          () => false,
+        ),
+      )
+      .toBe(true);
+    if (leaving === 'reload') await page.reload();
+    else {
+      const closed = page.waitForEvent('close');
+      await app.evaluate(({ BrowserWindow }) => {
+        BrowserWindow.getAllWindows()[0]?.close();
+      });
+      await closed;
+    }
+    // Release by an observed backend event, not a race against a fixed-duration turn.
+    await writeFile(path.join(dir, 'continue'), 'go');
+    await expect
+      .poll(async () => (await prompts()).map(({ text }) => text))
+      .toEqual(['continuity-first', 'continuity-next']);
+    if (leaving === 'close') {
+      const reopened = app.waitForEvent('window');
+      await app.evaluate(({ app }) => {
+        app.emit('second-instance', {}, [], process.cwd());
+      });
+      page = await reopened;
+      page.on('pageerror', (error) => problems.push(error.message));
+      await page.waitForLoadState('load');
+    }
+    await page.getByRole('button', { name: 'Show all queues' }).click();
+    queues = page.getByRole('dialog', { name: 'All queues', exact: true });
+    await expect(row(queues, 'builder', 'first')).toHaveAttribute('data-run', 'succeeded');
+    await expect(row(queues, 'builder', 'next')).toHaveAttribute('data-run', 'succeeded');
+    await expect(queues.getByRole('status')).toHaveText('All done');
+    expect(new Set((await prompts()).map(({ sessionId }) => sessionId)).size).toBe(1);
+  });
+}

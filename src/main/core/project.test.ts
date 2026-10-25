@@ -50,6 +50,8 @@ afterEach(async () => {
 describe('project.files', () => {
   it('searches the canvas’s project folder, and returns none without one, without opening a run', async () => {
     const find = vi.spyOn(ProjectFiles.prototype, 'find');
+    const runtime = core.engines.canvas(canvas);
+    const open = vi.spyOn(core.engines, 'open');
     expect(await core.call('project.files', { canvas, query: 'ipc' }, caller)).toEqual({
       ok: true,
       value: { items: [] },
@@ -61,7 +63,9 @@ describe('project.files', () => {
       value: { items: ['src/main/ipc.ts'] },
     });
     expect(find).toHaveBeenCalledWith(folder, 'ipc', MAX_FILE_MATCHES);
-    expect(core.engines.opened()).toEqual([]);
+    expect(open).not.toHaveBeenCalled();
+    expect(core.engines.opened()).toEqual([canvas]);
+    expect(core.engines.canvas(canvas)).toBe(runtime);
   });
 
   it('returns folders and the best matches, bounded by MAX_FILE_MATCHES', async () => {

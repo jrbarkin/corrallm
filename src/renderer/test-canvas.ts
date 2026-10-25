@@ -1,4 +1,8 @@
+import type { Session } from '../shared/model/session';
+import type { UserMessage } from '../shared/session';
+import type { Presentation } from './run/sessions';
 import { canvasRuntime } from './test-canvas-runtime';
+import { NO_BACKEND } from '../shared/engine/transcript/receive';
 import type { SessionBackend } from '../shared/engine/transcript/receive';
 import type { CanvasId } from '../shared/canvas';
 import { newCanvasId } from '../shared/canvas';
@@ -15,10 +19,13 @@ import type { QueueChange, QueueEntry } from '../shared/model/queue';
 import { arrange } from '../shared/model/layout';
 import { insert } from '../shared/model/insert';
 import { fillTemplate, withAgents, withConnections } from '../shared/model/templates';
-import { exampleOf } from '../shared/examples';
+import { exampleOf, EXAMPLES } from '../shared/examples';
+import { templateInfo } from '../shared/templates';
 import { catalog } from './catalog';
 import { DEFAULT_AGENT } from './graph/agents';
 import { fakeCore } from './test-api';
+import { UsageStore } from './usage/store';
+import type { UsageSource } from './usage/store';
 
 /** A canvas's project folder, as the core says it. */
 interface Project {
@@ -29,9 +36,23 @@ interface Project {
 export type FakeCanvas = ReturnType<typeof fakeCanvas>;
 
 /** An in-memory canvas core for editor gesture tests: real schemas and pure builds, pushed rows. */
-export function fakeCanvas(initial: CanvasDocument, backend?: SessionBackend) {
+export function fakeCanvas(
+  initial: CanvasDocument,
+  backend?: SessionBackend,
+  usageSource?: UsageSource,
+) {
   const core = fakeCore();
+  const usage = new UsageStore(usageSource);
+  core.reply('catalog.installed', async () => ({
+    ok: true,
+    value: await (backend ?? NO_BACKEND).installed(),
+  }));
+  core.respond('templates.list', {
+    items: EXAMPLES.map((example) => templateInfo(example, catalog(), DEFAULT_AGENT)),
+  });
   let runtime: ReturnType<typeof canvasRuntime> | undefined;
+  const runtimes = new Map<CanvasId, ReturnType<typeof canvasRuntime>>();
+  const presentations = new WeakMap<Session, Presentation>();
   let document = initial;
   let rev = 1;
   let saved = toFile(initial);
@@ -44,7 +65,8 @@ export function fakeCanvas(initial: CanvasDocument, backend?: SessionBackend) {
   };
   const dispose = core.dispose.bind(core);
   core.dispose = () => {
-    runtime?.dispose();
+    usage.dispose();
+    for (const one of runtimes.values()) one.dispose();
     dispose();
   };
   const context = { newId: () => crypto.randomUUID(), defaultAdapter: DEFAULT_AGENT };
@@ -88,7 +110,14 @@ export function fakeCanvas(initial: CanvasDocument, backend?: SessionBackend) {
     if (!core.state(`messages:${next.id}`))
       core.snapshot(`messages:${next.id}`, { items: {}, order: [], next: '' });
     if (!core.state(`needs:${next.id}`)) core.snapshot(`needs:${next.id}`, { items: [] });
-    runtime = canvasRuntime(core, next, backend);
+    runtime = runtimes.get(next.id);
+    if (runtime) {
+      runtime.activate();
+      runtime.update(next);
+    } else {
+      runtime = canvasRuntime(core, next, backend, keep, usage.snapshot);
+      runtimes.set(next.id, runtime);
+    }
   };
   open(initial);
   core.snapshot('canvases', { items: [] });
@@ -403,6 +432,63 @@ export function fakeCanvas(initial: CanvasDocument, backend?: SessionBackend) {
     });
   return {
     core,
+    usageSource: {
+      topics: {
+        snapshot: usage.snapshot,
+        subscribe: (_topic, listener) => usage.subscribe(listener),
+      },
+      setRule: (backend, rule) => {
+        usage.setRule(backend, rule);
+        return Promise.resolve();
+      },
+      simulate: (backend, windows) => {
+        usage.simulate(backend, windows);
+        return Promise.resolve();
+      },
+    } satisfies UsageSource,
+    queries: {
+      ...(backend ?? NO_BACKEND),
+      resume: (agent: string, conversation: string) => {
+        if (!runtime) throw new Error('No canvas runtime');
+        return runtime.resume(agent, conversation);
+      },
+    },
+    presentation: {
+      snapshot: (agent: string) => {
+        const session = runtime?.engine.sessions.of(agent);
+        if (!session) return undefined;
+        let presentation = presentations.get(session);
+        if (!presentation) {
+          presentation = {
+            ...(session.suggestion === undefined ? {} : { suggestion: session.suggestion }),
+            ...(session.asking === undefined ? {} : { asking: session.asking }),
+            images: new Map(
+              (session.submissions ?? []).flatMap((message) =>
+                message.images ? [[message.id, message.images]] : [],
+              ),
+            ),
+          };
+          presentations.set(session, presentation);
+        }
+        return presentation;
+      },
+      subscribe: (listener: () => void) =>
+        runtime?.engine.sessions.subscribe(listener) ?? (() => undefined),
+    },
+    manual: {
+      record: (agent: string, message: UserMessage) => {
+        if (!runtime) throw new Error('No canvas runtime');
+        return runtime.manual.record(agent, message);
+      },
+      send: (agent: string, message: UserMessage) => {
+        if (!runtime) throw new Error('No test runtime');
+        return runtime.manual.send(agent, message);
+      },
+      unqueue: (agent: string, id: string) => {
+        if (!runtime) throw new Error('No test runtime');
+        return runtime.manual.unqueue(agent, id);
+      },
+    },
     get engine() {
       if (!runtime) throw new Error('No test runtime');
       return runtime.engine;

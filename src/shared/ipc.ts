@@ -32,7 +32,11 @@ export interface IpcContract {
    */
   'core:connect': { args: []; result: null };
   /** Sends a message to an agent's running session: a turn starts, or the CLI queues it. */
-  'session:send': { args: [agentId: string, message: UserMessage]; result: null };
+  'session:send': { args: [agentId: string, message: UserMessage]; result: { id: string } };
+  /** X13 transitional: a command the session view handled, recorded without a CLI turn. */
+  'session:record': { args: [agentId: string, message: UserMessage]; result: null };
+  /** X13 transitional: withdraws one manual message from this window's canvas. */
+  'session:unqueue': { args: [agentId: string, id: string]; result: null };
   /** Answers a prompt (permission, question, plan) an agent's session is waiting on. */
   'session:answer': {
     args: [agentId: string, promptId: string, answer: SessionAnswer];
@@ -114,6 +118,8 @@ export type IpcEventArgs<E extends IpcEvent> = IpcEvents[E];
  */
 export interface InvokeApi {
   sendToSession(...args: IpcArgs<'session:send'>): Promise<IpcResult<'session:send'>>;
+  recordSessionCommand(...args: IpcArgs<'session:record'>): Promise<IpcResult<'session:record'>>;
+  unqueueSession(...args: IpcArgs<'session:unqueue'>): Promise<IpcResult<'session:unqueue'>>;
   answerSession(...args: IpcArgs<'session:answer'>): Promise<IpcResult<'session:answer'>>;
   interruptSession(...args: IpcArgs<'session:interrupt'>): Promise<IpcResult<'session:interrupt'>>;
   setSessionMode(...args: IpcArgs<'session:mode'>): Promise<IpcResult<'session:mode'>>;
@@ -141,6 +147,8 @@ export interface AppApi extends InvokeApi, EventApi, GuiBridge, GuiDraftsApi {}
 /** Which channel each `InvokeApi` method invokes. */
 export const API_CHANNELS = {
   sendToSession: 'session:send',
+  recordSessionCommand: 'session:record',
+  unqueueSession: 'session:unqueue',
   answerSession: 'session:answer',
   interruptSession: 'session:interrupt',
   setSessionMode: 'session:mode',

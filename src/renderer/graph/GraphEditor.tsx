@@ -109,7 +109,7 @@ type Command = Exclude<KeyAction, 'rename'>;
 
 /**
  * The editor, with a file bar backed by core operations and (given
- * `sessionBackend`, and `terminalBackend` for their terminals) agents connected to the real CLI
+ * `sessionQueries`, and `terminalBackend` for their terminals) agents connected to the real CLI
  * through the main process, and (given `usageSource`) the usage readings and rules main keeps.
  */
 export function GraphEditor({
@@ -314,7 +314,7 @@ function Editor({
   useEffect(() => {
     if (!gallery && !showStart) return;
     let open = true;
-    api.catalogInstalled().then(
+    sessionQueries.installed().then(
       (found) => {
         if (open) setInstalled(found);
       },
@@ -323,7 +323,7 @@ function Editor({
     return () => {
       open = false;
     };
-  }, [gallery, showStart, api]);
+  }, [gallery, showStart, sessionQueries]);
   /** Every agent's queue, side by side, if shown: opened from the canvas, or from an agent. */
   const [queues, setQueues] = useState<{ from?: string }>();
   /** The canvas's saved automatic layout setting (nodes cannot be dragged while it is on). */
@@ -346,13 +346,14 @@ function Editor({
   /** The agent shown in the agent view, if any. */
   const front = openedIds[0];
   /** How it runs: its session starts when its view opens, and again when that changes. */
-  const frontNode = graph.nodes.find((n) => n.id === front);
-  const frontConnection = frontNode ? connectionOf(frontNode.data) : undefined;
-  useEffect(() => {
-    if (ready && front !== undefined && frontConnection !== undefined)
-      act(api.sessionOpen({ canvas: canvasId, agent: front }));
-  }, [front, frontConnection, api, canvasId, ready, act]);
-  const frontSession = useDisplayedSession(canvasId, front, mirror, summaries, messages);
+  const frontSession = useDisplayedSession(
+    canvasId,
+    front,
+    mirror,
+    summaries,
+    messages,
+    sessionQueries,
+  );
   const frontControls = useMemo(
     () =>
       front === undefined
@@ -1131,6 +1132,7 @@ function Editor({
               setEditing(node.id);
             } else {
               setEditing(undefined);
+              act(api.sessionOpen({ canvas: canvasId, agent: node.id }));
               setOpened({ ids: [node.id] });
             }
           }}
@@ -1268,6 +1270,7 @@ function Editor({
                 onOpen={(agentId) => {
                   setStartChoice({ canvas: canvasId, open: false });
                   selectOne(agentId);
+                  act(api.sessionOpen({ canvas: canvasId, agent: agentId }));
                   setOpened({ ids: [agentId] });
                 }}
               />
@@ -1311,6 +1314,7 @@ function Editor({
                 setStartChoice({ canvas: canvasId, open: false });
                 setQueues(undefined);
                 selectOne(id);
+                act(api.sessionOpen({ canvas: canvasId, agent: id }));
                 setOpened(({ ids }) => ({ ids: [id, ...ids.filter((other) => other !== id)] }));
               }).catch((error: unknown) => {
                 setProblem(ipcErrorMessage(error));
@@ -1350,6 +1354,7 @@ function Editor({
               );
             }}
             onSwitch={(id, from) => {
+              act(api.sessionOpen({ canvas: canvasId, agent: id }));
               selectOne(id);
               setOpened(({ ids }) => ({
                 ids: [id, ...ids.filter((other) => other !== id)],
@@ -1363,7 +1368,13 @@ function Editor({
             project={project}
             terminal={terminalBackend}
             onAgent={(agent, connection) => {
-              perform(changeAgent(openedNode.id, agent, connection));
+              // The foreground session's connection chooser is a single composite. The settings
+              // sheet still changes only the document; X13 takes over these session controls.
+              perform(
+                agent === (openedNode.data.adapter ?? DEFAULT_AGENT)
+                  ? api.sessionContinueIn({ canvas: canvasId, agent: openedNode.id, connection })
+                  : changeAgent(openedNode.id, agent, connection),
+              );
             }}
             onOpenSettings={() => {
               setSettingsAgent(openedNode.id);
@@ -1428,6 +1439,7 @@ function Editor({
             onOpenAgent={(id) => {
               setQueues(undefined);
               selectOne(id);
+              act(api.sessionOpen({ canvas: canvasId, agent: id }));
               setOpened({ ids: [id] });
             }}
             onClose={closeQueues}

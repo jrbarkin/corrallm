@@ -22,7 +22,7 @@ import { canvasStateOf } from '../../shared/model/state';
 import type { Settings } from '../settings';
 import { createCore } from './core';
 import type { Core } from './core';
-import { WindowPorts } from './gui';
+import { asHuman, WindowPorts } from './gui';
 import { CALLERS, CANVAS, NO_DESKTOP } from './test-registry';
 import { openWindow } from './test-window';
 import { REAL_FIXTURES, startWorld } from './test-world';
@@ -220,8 +220,9 @@ describe('T3c: usage and settings topics', () => {
   it('serves a canvas the app shows: its entities from each commit, and nothing waiting in the core', async () => {
     const served = new WindowPorts(core);
     const window = connect(served, 7);
-    const run = await core.channels.call(7, 'run:get', []);
-    const { id: canvas } = run as { id: CanvasId };
+    const shown = await core.call('window.get', {}, asHuman(7));
+    if (!shown.ok) throw new Error(shown.error.sentence);
+    const canvas = shown.value.canvas as CanvasId;
     const subscribe = async (request: TopicRequest) => {
       const answer = await window.link.request('call', 'topics.subscribe', request);
       if (!answer.ok || !answer.value.ok) throw new Error(JSON.stringify(answer));
@@ -254,8 +255,7 @@ describe('T3c: usage and settings topics', () => {
       },
     });
     // A run journaled beside it commits nothing of the canvas: no change of its own.
-    const { token } = run as { token: string };
-    await core.channels.call(7, 'run:save', [token, null]);
+    await core.engines.canvas(canvas)?.journal();
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(window.changes.filter(({ topic }) => topic === `canvas:${canvas}`)).toHaveLength(1);
   });

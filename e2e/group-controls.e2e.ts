@@ -8,6 +8,7 @@ import { expect, test } from '@playwright/test';
 import type { ElectronApplication, Page } from '@playwright/test';
 
 import { launchApp } from './launch';
+import { crashCore } from './core-crash';
 
 // Group ownership through the real renderer, IPC and Agent SDK, against a fake CLI only.
 // Its independent prompt log proves that nested/individual holds do not leak or replay work.
@@ -255,7 +256,7 @@ test('pauses nested active members until they finish, preserves an individual ho
   );
 });
 
-test('preserves stacked group and individual holds across reload and global Resume, releasing only each owner’s work', async () => {
+test('preserves stacked group and individual holds across a core crash and global Resume, releasing only each owner’s work', async () => {
   const outer = 'stack outer';
   const inner = 'stack inner';
   const manual = 'stack manual';
@@ -276,7 +277,7 @@ test('preserves stacked group and individual holds across reload and global Resu
   await expect(row('outside', 'only')).toHaveAttribute('data-run', 'succeeded');
   expect(await sentTexts()).toEqual([outside]);
 
-  await page.reload();
+  await crashCore(app);
   await expect(page.locator('.react-flow__node-frame')).toHaveCount(2);
   await showQueues();
   await expect(queues().getByRole('status')).toHaveText('Paused');

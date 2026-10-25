@@ -4,7 +4,7 @@
 
 ## `src/renderer/run/`
 
-persistence.ts saves the engine's checkpoint to the core and restores it (run:save journals only the checkpoint, under the canvas's token: its run in the journal's envelope, its manual submissions your messages; run:get returns a RunRestore: the canvas's id, its token, its checkpoint and the core's notices), and runs a canvas switch around its one op (`switch`; see Run recovery and persistence); run.css marks where the run is on a queue's rows, wherever they are shown.
+The core owns the run and journals it; the renderer’s run directory holds read-only display adapters, one-operation commands and run.css’s queue marks. There is no window run checkpoint, run token, run:get/run:save channel or RunPersistence. A canvas switch flushes drafts, sends one file/window operation and binds the returned canvas’s complete topic snapshots; it never freezes, saves or resets execution. A cancelled switch keeps the run exactly as it was.
 
 - Per-agent controls live in the right-click menu on canvas cards, All queues headings and session headers (also Context Menu / Shift+F10). `RunStore.pauseAgent` finishes current work then holds dispatch; `killAgent` cancels owned/received work immediately, holds the queue and leaves its native console open. `resumeAgent` releases only that hold. `AgentRun.paused` persists in the checkpoint, separately from whole-run pause; it is runtime state, never part of a saved `.corral` workflow. `RunIO.hold` keeps SessionStore's queued sends held too, while a fresh manual prompt can still intervene. Release drains in a microtask so same-stack canvas resets cannot send stale work.
 

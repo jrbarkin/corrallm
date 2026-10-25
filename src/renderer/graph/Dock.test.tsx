@@ -168,15 +168,22 @@ it('moves the same keyed icons into the taskbar and back, without replaying on s
 });
 
 it('toggles the canvas queues and switches agents through the taskbar without document operations', async () => {
-  const canvas = fakeCanvas({ id: newCanvasId(), arrange: false, nodes, links: [] });
   const sessions = fakeBackend();
+  const canvas = fakeCanvas(
+    { id: newCanvasId(), arrange: false, nodes, links: [] },
+    sessions.backend,
+  );
   try {
     await renderReady(
       <GraphEditor
         canvas={canvas.document.id}
         client={canvas.core.api}
         mirror={canvas.core.topics}
-        sessionQueries={sessions.backend}
+        sessionQueries={{
+          ...sessions.backend,
+          manual: canvas.manual,
+          presentation: canvas.presentation,
+        }}
       />,
     );
     const dock = within(screen.getByRole('navigation', { name: 'Canvas agents' }));
@@ -197,7 +204,7 @@ it('toggles the canvas queues and switches agents through the taskbar without do
     await events.click(dock.getByRole('button', { name: 'Show all queues' }));
     expect(screen.queryByRole('dialog', { name: 'All queues' })).toBeNull();
     expect(screen.getByRole('dialog', { name: 'Reviewer' })).toBeTruthy();
-    expect(canvas.core.operations).toEqual([]);
+    expect(canvas.core.operations.every(({ op }) => op === 'session.open')).toBe(true);
     await events.click(
       within(screen.getByRole('dialog', { name: 'Reviewer' })).getByRole('button', {
         name: 'Back to the canvas',
@@ -211,16 +218,23 @@ it('toggles the canvas queues and switches agents through the taskbar without do
   }
 });
 
-it('glows for a need from either the core topic or the renderer session, until both clear', async () => {
-  const canvas = fakeCanvas({ id: newCanvasId(), arrange: false, nodes, links: [] });
+it('glows for a core run or native-session need until the topic clears', async () => {
   const sessions = fakeBackend();
+  const canvas = fakeCanvas(
+    { id: newCanvasId(), arrange: false, nodes, links: [] },
+    sessions.backend,
+  );
   try {
     await renderReady(
       <GraphEditor
         canvas={canvas.document.id}
         client={canvas.core.api}
         mirror={canvas.core.topics}
-        sessionQueries={sessions.backend}
+        sessionQueries={{
+          ...sessions.backend,
+          manual: canvas.manual,
+          presentation: canvas.presentation,
+        }}
       />,
     );
     const writer = screen.getByRole('button', { name: /^Writer,/ });
@@ -231,7 +245,7 @@ it('glows for a need from either the core topic or the renderer session, until b
     act(() => {
       canvas.core.change({
         topic: `needs:${canvas.document.id}`,
-        rev: 1,
+        rev: (canvas.core.state(`needs:${canvas.document.id}`)?.rev ?? 0) + 1,
         replace: {
           items: [
             {
@@ -258,7 +272,6 @@ it('glows for a need from either the core topic or the renderer session, until b
         type: 'asking',
         asks: [{ id: 'trust', kind: 'trust' }],
       });
-      canvas.core.change({ topic: `needs:${canvas.document.id}`, rev: 2, replace: { items: [] } });
     });
     expect(writer.hasAttribute('data-needs')).toBe(true);
     expect(card.getAttribute('data-status')).toBe('Needs you');
@@ -270,7 +283,7 @@ it('glows for a need from either the core topic or the renderer session, until b
     expect(writer.hasAttribute('data-needs')).toBe(false);
     expect(card.getAttribute('data-status')).toBe('Idle');
     expect(node.classList.contains('asking')).toBe(false);
-    expect(canvas.core.operations).toEqual([]);
+    expect(canvas.core.operations.every(({ op }) => op === 'session.open')).toBe(true);
   } finally {
     canvas.core.dispose();
   }
