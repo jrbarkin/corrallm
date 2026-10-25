@@ -72,8 +72,10 @@ function manager(
     'claude-code': { list: listKept, before, fork },
   },
   options?: SessionManagerDeps['options'],
+  sending?: SessionManagerDeps['sending'],
 ) {
   return new SessionManager({
+    ...(sending === undefined ? {} : { sending }),
     catalog: CATALOG,
     connectors: { 'claude-code.sdk': fake, 'claude-code.terminal': terminal, ...connectors },
     environment: () => environment(),
@@ -701,6 +703,71 @@ describe('SessionManager', () => {
     expect(live.close).toHaveBeenCalled();
     await expect(sessions.send(canvas, 'a', { id: 'n', text: 'Again' })).rejects.toThrow(
       /not running/,
+    );
+  });
+
+  it('never sends what an interrupt stopped on its way to the CLI, ending its turn taken back', async () => {
+    const live = {
+      send: vi.fn<LiveSession['send']>().mockResolvedValue(undefined),
+      answer: () => Promise.resolve(),
+      interrupt: vi.fn<LiveSession['interrupt']>().mockResolvedValue(undefined),
+      setMode: () => Promise.resolve(),
+      setModel: () => Promise.resolve(),
+      close: () => Promise.resolve(),
+    };
+    // As a withdrawal note's own turn holds the command it goes before (core/delivery/withdrawals.ts).
+    const gates: (() => void)[] = [];
+    const sending: NonNullable<SessionManagerDeps['sending']> = async (
+      _canvas,
+      _agent,
+      message,
+      send,
+      stopped,
+    ) => {
+      await new Promise<void>((resolve) => gates.push(resolve));
+      if (stopped()) return false;
+      await send(message);
+      return true;
+    };
+    const sessions = manager(
+      { 'claude-code.sdk': { start: () => Promise.resolve(live) } },
+      undefined,
+      undefined,
+      sending,
+    );
+    const canvas = shownCanvas();
+    await sessions.start(canvas, 'a', OPTIONS);
+    const ends = () =>
+      (heard.get(canvas) ?? []).flatMap(([, , event]) => (event.type === 'end' ? [event] : []));
+    const sent = async (id: string, interrupt?: () => Promise<unknown>) => {
+      const sending = sessions.send(canvas, 'a', { id, text: '/review' });
+      await vi.waitFor(() => {
+        expect(gates).toHaveLength(Number(id));
+      });
+      await interrupt?.();
+      gates.at(-1)?.();
+      await sending;
+    };
+    // An interrupt before a send stops none of it, nor one whose turn was no longer current, nor a
+    // stalled turn's interrupted to be resent: what it held goes as that turn ends.
+    await sessions.interrupt(canvas, 'a');
+    await sent('1');
+    await sent('2', () => sessions.interruptIf(canvas, 'a', () => false));
+    await sent('3', () => sessions.interruptIf(canvas, 'a', () => true, true));
+    expect(live.send.mock.calls).toEqual(['1', '2', '3'].map((id) => [{ id, text: '/review' }]));
+    expect(ends()).toEqual([]);
+    // One while it is on its way, a Stop's or a stalled turn's: never sent, its turn ended.
+    await sent('4', () => sessions.interrupt(canvas, 'a'));
+    await sent('5', () => sessions.interruptIf(canvas, 'a', () => true));
+    expect(live.send).toHaveBeenCalledTimes(3);
+    expect(live.interrupt).toHaveBeenCalledTimes(4);
+    expect(ends()).toEqual(
+      ['4', '5'].map((id) => ({
+        type: 'end',
+        messages: [id],
+        seconds: expect.any(Number) as number,
+        result: { status: 'cancelled', reason: 'taken-back' },
+      })),
     );
   });
 

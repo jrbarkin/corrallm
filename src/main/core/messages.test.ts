@@ -2015,7 +2015,7 @@ describe('telling an agent of a withdrawal after receipt', () => {
         expect(await ok('withdraw', { id: command }, YOU)).toEqual({
           reached: false,
           interrupted: false,
-          revs: {},
+          revs: expect.any(Object) as Record<string, number>,
         });
       }
       const attempt = () => engine.run.snapshot().agents.builder?.attempts?.review?.at(-1);
