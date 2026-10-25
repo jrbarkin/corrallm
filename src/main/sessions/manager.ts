@@ -55,6 +55,9 @@ const NO_TASKS = 'This agent’s background tasks are stopped in its terminal.';
 const NO_OPTIONS = 'corrallm can’t read that agent’s settings.';
 /** How long a session may take to close before the manager stops waiting for it. */
 const CLOSE_MS = 5000;
+/** How long a silent turn's interrupt waits for its CLI's answer before it counts as unanswered. */
+export const STALLED_INTERRUPT_MS = 30_000;
+const UNANSWERED = 'The CLI did not answer the interrupt.';
 
 export interface SessionManagerDeps {
   /** What every adapter declares (adapters.ts): the adapter each connection runs, and its modes. */
@@ -376,12 +379,34 @@ export class SessionManager {
     await (await this.#session(canvas, agentId)).interrupt();
   }
 
-  /** A stalled turn may end while its reply waits: never stop the next turn instead. */
-  async interruptIf(canvas: CanvasId, agentId: string, current: () => boolean): Promise<boolean> {
+  /**
+   * Interrupts a silent turn unless it ended while its reply waited (`current`): never the next
+   * turn instead. Resolves once the interrupt is sent (undefined: none was), never waiting for its
+   * CLI's answer, which may never come: `answered` resolves once the CLI takes it, and rejects if
+   * the CLI refuses it or hasn't answered it within STALLED_INTERRUPT_MS.
+   */
+  async interruptIf(
+    canvas: CanvasId,
+    agentId: string,
+    current: () => boolean,
+  ): Promise<{ answered: Promise<void> } | undefined> {
     const session = await this.#session(canvas, agentId);
-    if (!current()) return false;
-    await session.interrupt();
-    return true;
+    if (!current()) return undefined;
+    const answer = session.interrupt();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const answered = Promise.race([
+      answer,
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => {
+          reject(new Error(UNANSWERED));
+        }, STALLED_INTERRUPT_MS);
+        // A CLI that never answers keeps nothing running.
+        timer.unref();
+      }),
+    ]).finally(() => {
+      clearTimeout(timer);
+    });
+    return { answered };
   }
 
   /** Switches the agent's session's mode (one of its adapter's). */

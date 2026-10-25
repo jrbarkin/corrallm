@@ -165,10 +165,10 @@ export function conversationOps(
         return failed(error);
       }
     },
-    withdraw: async ({ canvas, id }, ctx) => {
+    withdraw: ({ canvas, id }, ctx) => {
       const open = openCanvas(engines, canvas);
       try {
-        return await open.delivery.withdraw(id, partyIdOf(ctx.caller));
+        return open.delivery.withdraw(id, partyIdOf(ctx.caller));
       } catch (error) {
         return failed(error);
       }
