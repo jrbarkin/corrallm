@@ -408,6 +408,26 @@ export const SURFACE = {
     rules: ['sticky'],
     self: 'allowed',
   },
+  // The whole run (Core Server §4 F): canvas-wide, so no lead gets them. Run again takes back what
+  // the run has in flight. R9: a token resumes, or starts afresh, only what no other party stopped,
+  // decided in or holds for you to decide.
+  'run.start': {
+    access: W,
+    kind: 'command',
+    scope: 'canvas',
+    rules: ['sticky'],
+    destructive: true,
+  },
+  'run.stop': { access: W, kind: 'command', scope: 'canvas', preempt: true, destructive: true },
+  'run.resume': { access: W, kind: 'command', scope: 'canvas', rules: ['sticky'] },
+  // Go on now: a usage rule's hold is yours to end (R3).
+  'run.goOn': {
+    access: L,
+    kind: 'command',
+    scope: 'agent',
+    rules: ['human-choice'],
+    self: 'allowed',
+  },
   'usage.get': { access: A, kind: 'read', scope: 'none', reads: 'usage' },
   'usage.setRule': { access: Y, kind: 'command', scope: 'app' },
   'usage.simulate': { access: Y, kind: 'command', scope: 'app' },
