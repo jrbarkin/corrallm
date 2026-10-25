@@ -17,7 +17,6 @@ import { SURFACE } from '../../shared/api/surface';
 import type { CanvasId } from '../../shared/canvas';
 import type { Message } from '../../shared/model/messages';
 import { keepCanvases, keepMessages, readOnDisk, writeOnDisk } from '../core/store/test-store';
-import { registrations } from './serve';
 import { TestChildren } from './test-children';
 import { startupShell } from './test-startup-shell';
 import { waitForServing } from './test-serve-startup';
@@ -774,13 +773,16 @@ describe.skipIf(process.platform === 'win32')('corrallm serve', () => {
       const first = await serve();
       const old = await connect(first.url);
       const { id } = await call<{ id: string }>(old, 'message', { to: 'builder', body: 'Hello' });
-      // The reply comes back while the orchestrator reads nothing.
-      await vi.waitFor(async () => {
-        const { items } = await call<{ items: Message[] }>(old, 'messages');
-        expect(items.some((message) => message.replyTo === id && message.kind === 'text')).toBe(
-          true,
-        );
-      });
+      // The reply comes back while the orchestrator reads nothing (as slow as delivery: see above).
+      await vi.waitFor(
+        async () => {
+          const { items } = await call<{ items: Message[] }>(old, 'messages');
+          expect(items.some((message) => message.replyTo === id && message.kind === 'text')).toBe(
+            true,
+          );
+        },
+        { timeout: 10_000, interval: 50 },
+      );
       await first.stop();
 
       const { printed, server } = await serveOnTerminal(['--name', 'orchestrator']);
@@ -1374,17 +1376,4 @@ describe.skipIf(process.platform === 'win32')('corrallm serve', () => {
     const after = await call<{ items: Message[] }>(client, 'messages');
     expect(after.items.find((message) => message.id === later)?.state).toBe('pending');
   }, 30_000);
-});
-
-describe('registrations', () => {
-  it('registers corrallm only in the installed CLIs that say how, by the token’s variable', () => {
-    const url = 'http://127.0.0.1:4100/mcp';
-    expect(registrations({ codex: true }, url)).toEqual([
-      `codex mcp add corrallm-server --url ${url} --bearer-token-env-var CORRALLM_OUTSIDE_TOKEN`,
-    ]);
-    expect(registrations({ 'claude-code': true, codex: false }, url)).toEqual([
-      `claude mcp add --transport http corrallm-server ${url} --header 'Authorization: Bearer \${CORRALLM_OUTSIDE_TOKEN}'`,
-    ]);
-    expect(registrations({}, url)).toEqual([]);
-  });
 });

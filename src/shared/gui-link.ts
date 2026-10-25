@@ -5,7 +5,15 @@ import type { OPS, ResultOf } from './api/registry';
 import type { GuiOp } from './api/surface';
 import type { CoreEvent, IpcEventArgs } from './ipc';
 import type { TerminalEvent } from './terminal';
-import type { Change, TopicRequest, TopicSnapshot } from './api/topics';
+import type {
+  TopicUpdate,
+  TopicRequest,
+  TopicSnapshot,
+  RuntimeTopicRequest,
+  RuntimeSnapshotFrame,
+  RuntimeTopicStates,
+  RuntimeTopicKey,
+} from './api/topics';
 
 /*
  * A window's link to the core (B8 Design §3, §4): CoreLink over the MessagePort main hands each
@@ -48,16 +56,29 @@ export interface CoreGuiSide {
     /** The core's topic epoch, announced on each new port before topic changes. */
     epoch: [epoch: string];
     /** Changes in order, batched per window every 16 ms. */
-    topic: [changes: Change[]];
+    topic: [changes: TopicUpdate[]];
     /** The terminal stream and remaining hand-written events, with no Electron event objects. */
     event: [name: GuiEvent, args: GuiEventArgs<GuiEvent>];
   };
 }
 
-/** What a window answers and tells the core: nothing yet. */
+/** What a window answers and tells the core. */
 export interface GuiSide {
-  requests: Record<string, never>;
+  requests: {
+    /**
+     * Finishes the drafts it is composing (B11 Design §16.5: before a quit's shutdown barrier),
+     * answering once each one's operation has been answered. View state only: no run, pause or
+     * checkpoint crosses.
+     */
+    'drafts.flush': { args: []; result: null };
+  };
   events: Record<string, never>;
+}
+
+/** The window's answer to `drafts.flush`, as its page gives it: one listener, set once. */
+export interface GuiDraftsApi {
+  /** Hears each `drafts.flush`: the flush is answered once what it returns settles. */
+  draftsOnFlush(listener: () => Promise<void>): () => void;
 }
 
 /** The name of a GUI operation's function on `window.api`: its name camel-cased (app.info → appInfo). */
@@ -74,7 +95,7 @@ export function guiFunction<N extends string>(op: N): GuiFunction<N> {
 type InputOf<N extends GuiOp> = N extends 'terminal.drop'
   ? Omit<z.input<(typeof OPS)[N]['input']>, 'paths'> & { files: readonly File[] }
   : N extends 'topics.subscribe' | 'topics.unsubscribe'
-    ? TopicRequest
+    ? TopicRequest | RuntimeTopicRequest
     : z.input<(typeof OPS)[N]['input']>;
 
 /** The arguments of `T` that may not be left out (an index signature's never are). */
@@ -93,12 +114,17 @@ type GuiCalls = {
 };
 
 type GuiResult<N extends GuiOp> = N extends 'topics.subscribe'
-  ? TopicSnapshot & Pick<ResultOf<N>, 'revs'>
+  ? (
+      | TopicSnapshot
+      | { epoch: string; rev: number; state: RuntimeTopicStates[RuntimeTopicKey] }
+      | Extract<RuntimeSnapshotFrame, { kind: 'begin' }>
+    ) &
+      Pick<ResultOf<N>, 'revs'>
   : ResultOf<N>;
 
 /** A view's event listener, over the same port as its operations. */
 export interface GuiEventApi {
-  topicsOnChange(listener: (changes: Change[]) => void): () => void;
+  topicsOnChange(listener: (changes: TopicUpdate[]) => void): () => void;
   topicsOnEpoch(listener: (epoch: string) => void): () => void;
   terminalOnEvent(listener: (...args: GuiEventArgs<'terminal'>) => void): () => void;
 }

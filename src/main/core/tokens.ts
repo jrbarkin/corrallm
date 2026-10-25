@@ -10,8 +10,9 @@ import type { OutsideCaller } from './caller';
 /*
  * Outside tokens (decisions 8 and 20b; API Spec §8.5, Core Server §6.7): what an orchestrator
  * outside corrallm calls its MCP server with. Only a person makes one (`corrallm serve
- * --new-token`, and from B22 the app's settings page), and sees it once, as it is made: no
- * operation makes or widens one. A token is 256 random bits; the store keeps only its SHA-256 hash,
+ * --new-token`, `corrallm token new|renew`, and from B22 the app's settings page), and sees it
+ * once, as it is made, or has it written to a file it names: no operation makes, renews or widens
+ * one. A token is 256 random bits; the store keeps only its SHA-256 hash,
  * with its name (its party is `outside:<name>`), the canvases it reaches by their stable ids,
  * whether it may write, when it expires (an hour by default, 12 at most) and when it was last used,
  * in a file only the user may read:
@@ -20,7 +21,11 @@ import type { OutsideCaller } from './caller';
  *       "access", "expires", "lastUsed"? } } }
  *
  * A token made with the name of another replaces it at once: the party is the name's, so its
- * messages, its `wait` read position and the holds it set carry over. Its `id`, a random UUID,
+ * messages, its `wait` read position and the holds it set carry over. A renewal is such a token,
+ * reaching what the live one of its name reached, as it could; a revoke removes the live one. A
+ * token it made that no longer works (replaced, revoked or expired) it knows as stale, by its hash,
+ * while it runs and for a while after it would have expired, so its next call can be told why. Its
+ * `id`, a random UUID,
  * names it among the store's tokens without its hash or its value: a caller's limits and repeated
  * requests are kept by it, and a call still going ends on it once its token is replaced or
  * expires. An entry that isn't one it writes reads as no token, and is dropped as the store is
@@ -52,8 +57,22 @@ interface Kept {
   lastUsed?: number;
 }
 
+/** What a person made a token for, as the store keeps it: its name, reach and expiry. */
+export interface KeptGrant {
+  name: string;
+  canvases: CanvasId[];
+  access: 'read' | 'write';
+  /** When it expires, in epoch ms. */
+  expires: number;
+}
+
+/** A token's value, as the store makes them: 32 random bytes, in base64url. */
+export const TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/;
+
 const VERSION = 2;
 const HOUR = 60 * 60 * 1000;
+/** How long past its expiry a token no longer kept is still known as stale. */
+const STALE_MS = MAX_TOKEN_HOURS * HOUR;
 /** How often, at most, a token's last use is written down as it is used. */
 const LAST_USE_MS = 60 * 1000;
 const HASH = /^[0-9a-f]{64}$/;
@@ -70,8 +89,10 @@ export class TokenStore {
   readonly #fields = new WeakMap<Kept, Record<string, unknown>>();
   /** When each token's last use was last written down, by id: at most once a LAST_USE_MS. */
   readonly #written = new Map<string, number>();
-  /** The tokens it knew that were replaced, or expired and dropped, by id. */
+  /** The tokens it knew that were replaced, revoked, or expired and dropped, by id. */
   readonly #revoked = new Set<string>();
+  /** The same, by hash, each with when it would have expired: dropped STALE_MS after that. */
+  readonly #gone = new Map<string, number>();
   readonly #listeners = new Set<(id: string) => void>();
   #writing: Promise<void> = Promise.resolve();
 
@@ -123,6 +144,55 @@ export class TokenStore {
     });
     await this.#write(true);
     return token;
+  }
+
+  /**
+   * Renews the live token named `name`: a new value, returned once, reaching the canvases it
+   * reached, as it could, for `hours` from now. It replaces that token at once, written down as
+   * `create` writes a new one. Undefined, changing nothing, if no live token has that name (never
+   * made, expired or revoked). Rejects hours that aren't 1 to MAX_TOKEN_HOURS.
+   */
+  async renew(name: string, hours = DEFAULT_TOKEN_HOURS): Promise<string | undefined> {
+    const live = this.grant(name);
+    if (live === undefined) return undefined;
+    return this.create({ name, canvases: live.canvases, access: live.access, hours });
+  }
+
+  /**
+   * Revokes the live token named `name` at once, forced to disk before it resolves, ending any call
+   * it has going: false, changing nothing, if no live token has that name.
+   */
+  async revoke(name: string): Promise<boolean> {
+    if (this.grant(name) === undefined) return false;
+    for (const [hash, kept] of this.#tokens) {
+      if (kept.name === name) this.#revoke(hash);
+    }
+    this.#prune();
+    await this.#write(true);
+    return true;
+  }
+
+  /** What the live token named `name` was made for: undefined if none is (or it expired). */
+  grant(name: string): KeptGrant | undefined {
+    const now = this.#now();
+    const kept = [...this.#tokens.values()].find(
+      (token) => token.name === name && now < token.expires,
+    );
+    return kept === undefined
+      ? undefined
+      : { name, canvases: [...kept.canvases], access: kept.access, expires: kept.expires };
+  }
+
+  /**
+   * Whether `token` is one this store made that no longer works: replaced, revoked or expired. A
+   * value it never made is never stale.
+   */
+  stale(token: string): boolean {
+    const hash = sha256(token);
+    const kept = this.#tokens.get(hash);
+    if (kept !== undefined) return this.#now() >= kept.expires;
+    const expires = this.#gone.get(hash);
+    return expires !== undefined && this.#now() < expires + STALE_MS;
   }
 
   /** The outside orchestrator a token names, if it is one this store keeps that hasn't expired. */
@@ -180,17 +250,22 @@ export class TokenStore {
     if (!kept) return;
     this.#tokens.delete(hash);
     this.#revoked.add(kept.id);
+    this.#gone.set(hash, kept.expires);
     for (const listener of this.#listeners) listener(kept.id);
   }
 
-  /** Drops the tokens that have expired. */
+  /** Drops the tokens that have expired, and forgets those gone long enough ago. */
   #prune(): void {
     const now = this.#now();
     for (const [hash, kept] of this.#tokens) {
       if (now >= kept.expires) {
         this.#tokens.delete(hash);
         this.#revoked.add(kept.id);
+        this.#gone.set(hash, kept.expires);
       }
+    }
+    for (const [hash, expires] of this.#gone) {
+      if (now >= expires + STALE_MS) this.#gone.delete(hash);
     }
   }
 

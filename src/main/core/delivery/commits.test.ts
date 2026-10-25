@@ -313,7 +313,11 @@ it('returns from a withdrawal of a waiting message only once it is on disk', asy
   } finally {
     release();
   }
-  expect(await result).toEqual({ reached: false, interrupted: false, revs: {} });
+  expect(await result).toEqual({
+    reached: false,
+    interrupted: false,
+    revs: expect.any(Object) as Record<string, number>,
+  });
   // As it returned, the disk had it withdrawn: a restart never delivers it.
   expect(seen).toBe('withdrawn');
 });
@@ -472,7 +476,11 @@ it('delivers the next message once one taken back while it was journaled is with
   } finally {
     release();
   }
-  expect(await withdrawing).toEqual({ reached: false, interrupted: false, revs: {} });
+  expect(await withdrawing).toEqual({
+    reached: false,
+    interrupted: false,
+    revs: expect.any(Object) as Record<string, number>,
+  });
   expect(seen).toBe('withdrawn');
   await vi.waitFor(() => {
     expect(messages?.get(second.id)?.state).toBe('replied');

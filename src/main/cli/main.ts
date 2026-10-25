@@ -7,6 +7,7 @@ import { dumpCommand } from './dump';
 import { USAGE_ERROR } from './node';
 import { writtenOut } from './output';
 import { serveCommand } from './serve';
+import { tokenCommand } from './token';
 import { waitCommand } from './wait';
 
 /*
@@ -129,6 +130,32 @@ async function run(command: Command): Promise<number> {
           process.stdout.write(`${line}\n`);
         },
       });
+    case 'token':
+      // Its terminal gone as it says what it made: the token store already has it.
+      process.stderr.on('error', () => undefined);
+      return tokenCommand(command, {
+        env: process.env,
+        cwd: process.cwd(),
+        stderr: process.stderr,
+        // Opened only by `token header`, the one that prints there.
+        stdout: {
+          write: (text) => process.stdout.write(text),
+        },
+      });
+  }
+}
+
+/** Where a command printed, so that exiting waits for those streams alone. */
+function printedBy(command: Command): Printed {
+  switch (command.command) {
+    case 'dump':
+      return [...dumpPrinted];
+    case 'serve':
+      return ['stderr'];
+    case 'token':
+      return command.action === 'header' ? BOTH : ['stderr'];
+    case 'wait':
+      return ['stdout'];
   }
 }
 
@@ -153,20 +180,15 @@ if (process.env.CORRALLM_NATIVE_SELFTEST === '1') {
     exit(USAGE_ERROR, process.argv[2] === 'wait' ? BOTH : ['stderr']);
   }
   if (command) {
-    const serving = command.command === 'serve';
+    const printed = (): Printed => printedBy(command);
     run(command).then(
       (code) => {
-        exit(
-          code,
-          command.command === 'dump' ? [...dumpPrinted] : serving ? ['stderr'] : ['stdout'],
-        );
+        exit(code, printed());
       },
       (error: unknown) => {
         console.error(`corrallm ${command.command}:`, error);
-        exit(
-          4,
-          command.command === 'dump' ? [...dumpPrinted, 'stderr'] : serving ? ['stderr'] : BOTH,
-        );
+        const said = printed();
+        exit(4, said.includes('stderr') ? said : [...said, 'stderr']);
       },
     );
   }

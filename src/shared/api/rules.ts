@@ -46,6 +46,11 @@ export const RULES = {
     sentence:
       'Only you delete an agent or discard work: a token’s call comes to you as a proposal, which you allow or refuse.',
   },
+  'restore-code': {
+    kind: 'argument',
+    sentence:
+      'Only you restore an agent’s files to how they were: a token’s code rewind comes to you as a proposal, applied only if nothing it would restore changed since.',
+  },
   // R6: its declared half is each op's `self`, checked in core.call.
   self: {
     kind: 'change',

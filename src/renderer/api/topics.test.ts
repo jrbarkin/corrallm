@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import type { Change, TopicKey, TopicSnapshot } from '../../shared/api/topics';
+import type { Change, TopicKey, RuntimeTopicKey, TopicSnapshot } from '../../shared/api/topics';
 import type { CanvasId } from '../../shared/canvas';
 import { topicKey } from '../../shared/api/topics';
 import type { MetaEntity, NodeEntity } from '../../shared/model/state';
@@ -8,11 +8,18 @@ import { TopicMirror } from './topics';
 import type { TopicSource } from './topics';
 
 const empty = { readings: [], rules: {} };
-const settings = { defaultAdapter: 'codex', consents: {} };
+const settings = {
+  defaultAdapter: 'codex',
+  consents: {},
+  api: { state: 'stopped', port: null },
+} as const;
 function source(connected = true) {
   let change: ((changes: Change[]) => void) | undefined;
   let epoch: ((epoch: string) => void) | undefined;
-  const pending: { topic: TopicKey; resolve: (snapshot: TopicSnapshot) => void }[] = [];
+  const pending: {
+    topic: TopicKey | RuntimeTopicKey;
+    resolve: (snapshot: TopicSnapshot) => void;
+  }[] = [];
   const api: TopicSource = {
     topicsSubscribe: vi.fn<TopicSource['topicsSubscribe']>(
       (request) =>

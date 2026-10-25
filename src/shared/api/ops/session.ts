@@ -179,7 +179,7 @@ export const sessionOps = {
     summary:
       'An agent’s session as it is now: whether it works, waits for the user or is idle, what ' +
       'is queued and asked, the model, mode and effort it runs, what it runs in the background, ' +
-      'what it has used, and what it replied last.',
+      'what it has used, and up to 4 KiB of its last reply (replyCut says more is in the transcript).',
     input: z.strictObject({ canvas, agent: AgentId }),
     output: SessionSummarySchema,
   }),
@@ -228,7 +228,7 @@ const PastSession = z.strictObject({
   current: z.boolean(),
 });
 
-/** Prepared B11 schemas; no live transport/audience is widened until X9 registration. */
+/** B11 schemas: C6 lifecycle/settings/rewind operations are registered; conversation/options and MCP controls await their services. */
 export const b11SessionOps = {
   'session.open': define(
     { kind: 'command' },

@@ -24,7 +24,8 @@ export type Brand =
   | 'ConversationId'
   | 'EntryId'
   | 'TaskId'
-  | 'TokenId';
+  | 'TokenId'
+  | 'WorktreeId';
 
 /** Each id schema's brand, at run time. */
 export const ID_BRANDS = z.registry<{ brand: Brand }>();
@@ -38,18 +39,25 @@ export function brandedId<B extends Brand, S extends z.ZodString | z.ZodStringFo
 }
 
 /**
- * A Needs item (API Spec §5.9), by its id on its canvas: what it is, then its agent's id (escaped)
- * and what of the agent's it is (src/shared/engine/needs.ts), or a proposal's or a file review's
- * own id. A proposal returns one.
+ * A Needs item (API Spec §5.9), by its id on its canvas: what it is, then its agent's id (escaped),
+ * a hold's or a prompt's generation and what of the agent's it is (src/shared/engine/needs.ts), or a
+ * proposal's, a file review's, a setup card's or a workspace change's own id. A proposal returns one.
  */
 export const NeedId = brandedId(
   'NeedId',
   z
     .string()
     .max(MAX_NEED_ID)
-    .regex(/^(?:hold|start|unasking|limited|prompt|proposal|file|stalled)\/[\s\S]+$/),
+    .regex(/^(?:hold|start|unasking|limited|prompt|proposal|file|stalled|setup|rebind)\/[\s\S]+$/),
 );
 export type NeedId = z.infer<typeof NeedId>;
+
+/**
+ * A workspace of a canvas (B9a), by its record's id: resolved only among the records that canvas
+ * owns, never a raw lookup; no token reaches one until a design grants it.
+ */
+export const WorktreeId = brandedId('WorktreeId', z.uuid());
+export type WorktreeId = z.infer<typeof WorktreeId>;
 
 /** A canvas, by its stable id (src/shared/canvas.ts). */
 export const CanvasId = brandedId('CanvasId', z.uuid());

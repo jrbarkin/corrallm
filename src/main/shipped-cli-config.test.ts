@@ -180,15 +180,14 @@ it('makes the Linux command symlink target the launcher while the desktop still 
   }
 });
 
-it('requires the linked audio library and process inspection tools even with optional dependencies disabled', async () => {
+it('requires the linked audio library even with optional dependencies disabled, and no process tools', async () => {
   await import('../../forge.config.mjs');
   const options = fakes.constructor.mock.calls.map(
     ([one]) => one as { options?: { depends?: string[]; requires?: string[] } },
   );
-  expect(options.some((one) => one.options?.depends?.includes('libasound2t64 | libasound2'))).toBe(
-    true,
-  );
-  expect(options.some((one) => one.options?.requires?.includes('alsa-lib'))).toBe(true);
-  expect(options.some((one) => one.options?.depends?.includes('procps'))).toBe(true);
-  expect(options.some((one) => one.options?.requires?.includes('procps-ng'))).toBe(true);
+  // Linux process identity reads /proc (process-identity.ts); only macOS runs ps.
+  expect(options.flatMap((one) => one.options?.depends ?? [])).toEqual([
+    'libasound2t64 | libasound2',
+  ]);
+  expect(options.flatMap((one) => one.options?.requires ?? [])).toEqual(['alsa-lib']);
 });

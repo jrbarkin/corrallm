@@ -1,6 +1,7 @@
 import { dismissStart, canvasAction } from './canvas-actions';
 import { randomUUID } from 'node:crypto';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -13,7 +14,8 @@ import { launchApp } from './launch';
  * A crashed core restarts (Core Server §7.5), with the built app: the core process is killed
  * from outside, as a crash would end it; main forks a new one (at most 3 times in 60 s,
  * host/supervise.ts), the window reconnects to it, and the canvas is still there, its run paused
- * with the task it was running uncertain. A core that keeps stopping is given up on, saying so
+ * with the task it was running uncertain; the new core serves MCP on the port the old one did, and
+ * api.json names it (B11 Design §9). A core that keeps stopping is given up on, saying so
  * (the hidden e2e app on stderr, without its dialog), and the app exits. Sessions run main's fake
  * connector (CORRALLM_FAKE_SESSIONS), never Claude.
  */
@@ -124,6 +126,15 @@ const task = () =>
     .getByRole('dialog', { name: 'All queues', exact: true })
     .locator(`[data-at='${JSON.stringify(['builder', 'task'])}']`);
 
+/** Where the profile's MCP server listens, as its api.json says (B11 Design §9). */
+async function discovery(): Promise<{ url: string; port: number; pid: number }> {
+  return JSON.parse(await readFile(path.join(profile, 'api.json'), 'utf8')) as {
+    url: string;
+    port: number;
+    pid: number;
+  };
+}
+
 test('a killed core restarts: the window reconnects, and the canvas is still there, its run paused', async () => {
   await runCanvas();
   const first = await theCore();
@@ -131,9 +142,18 @@ test('a killed core restarts: the window reconnects, and the canvas is still the
     owner: 'app',
     pid: first,
   });
+  // The app's MCP server runs in its core, which api.json names, never main.
+  const served = await discovery();
+  expect(served).toMatchObject({ pid: first, url: `http://127.0.0.1:${String(served.port)}/mcp` });
+  expect((await stat(path.join(profile, 'api.json'))).mode & 0o777).toBe(0o600);
 
   process.kill(first, 'SIGKILL');
   const second = await theCore(first);
+  // The new core listens on the same port, and api.json names it.
+  await expect
+    .poll(async () => (await discovery().catch(() => undefined))?.pid, { timeout: 20_000 })
+    .toBe(second);
+  expect((await discovery()).port).toBe(served.port);
 
   // The window reconnects to the new core (its page reloads, restoring its canvas from it): an
   // operation answers through its new port.
@@ -160,6 +180,21 @@ test('a killed core restarts: the window reconnects, and the canvas is still the
     owner: 'app',
     pid: second,
   });
+});
+
+test('the app serves MCP from its core on loopback, refusing what has no token, and quitting removes api.json', async () => {
+  const api = await discovery();
+  const response = await fetch(api.url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream' },
+    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }),
+  });
+  expect(response.status).toBe(401);
+  const closing = closeApp;
+  closeApp = undefined;
+  await closing?.();
+  expect(existsSync(path.join(profile, 'api.json'))).toBe(false);
+  await expect(fetch(api.url, { method: 'POST' })).rejects.toThrow();
 });
 
 test('a core that keeps stopping is given up on, saying so, and the app exits', async () => {

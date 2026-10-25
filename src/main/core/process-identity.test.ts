@@ -8,7 +8,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MockInstance } from 'vitest';
 
-import { readApiFile, writeApiFile } from '../cli/api-file';
+import { readApiFile, writeApiFile } from './api-file';
 import { Children } from './children';
 import { lockProfile, processStart, ProfileLocked, stillRuns } from './lock';
 import { inspectProcess, isProcessStart } from './process-identity';

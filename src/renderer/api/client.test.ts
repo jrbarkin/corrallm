@@ -21,7 +21,12 @@ describe('the GUI client', () => {
   it('resolves a write only after every returned topic revision has reached its mirror', async () => {
     const core = fakeCore();
     core.snapshot('usage', { readings: [], rules: {} }, 0);
-    core.snapshot('settings', { defaultAdapter: 'codex', consents: {} }, 0);
+    const settings = {
+      defaultAdapter: 'codex',
+      consents: {},
+      api: { state: 'stopped', port: null },
+    } as const;
+    core.snapshot('settings', settings, 0);
     core.respond('usage.setRule', { revs: { usage: 1, settings: 2 } });
     const resolved = vi.fn();
     const called = core.api.usageSetRule({ backend: 'codex', rule: null }).then(resolved);
@@ -32,10 +37,10 @@ describe('the GUI client', () => {
     core.change({ topic: 'usage', rev: 1, replace: { readings: [], rules: {} } });
     await Promise.resolve();
     expect(resolved).not.toHaveBeenCalled();
-    core.change({ topic: 'settings', rev: 2, replace: { defaultAdapter: 'codex', consents: {} } });
+    core.change({ topic: 'settings', rev: 2, replace: settings });
     await called;
     expect(resolved).toHaveBeenCalledOnce();
-    expect(core.topics.snapshot('settings')).toEqual({ defaultAdapter: 'codex', consents: {} });
+    expect(core.topics.snapshot('settings')).toEqual(settings);
     core.dispose();
   });
 

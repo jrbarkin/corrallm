@@ -9,6 +9,7 @@ import type { Engine } from '../../../shared/engine/engine';
 import type { PauseCause } from '../../../shared/engine/run/runner';
 import type { AgentNode, CanvasNode } from '../../../shared/model/canvas';
 import { agentOf, agentParty, outsideOf } from '../../../shared/model/messages';
+import type { Session } from '../../../shared/model/session';
 import type { Message, PartyId } from '../../../shared/model/messages';
 import { threadTitle } from '../../../shared/model/session';
 import { holdText, resetTime } from '../../../shared/model/words';
@@ -70,7 +71,7 @@ export interface DeliveryDeps {
 /**
  * Whether an agent's session asks before it acts on what it is sent, now or as it would start:
  * 'asks', or why a party's text would act unchecked (UnaskingWhy), or 'reading' while its CLI's
- * default is read.
+ * default is read or an unreported Terminal is within its startup grace.
  */
 type Asking = 'asks' | 'reading' | UnaskingWhy;
 
@@ -160,6 +161,8 @@ const TITLE = 120;
 const REASON = 1000;
 /** How long after a delivering record couldn't be committed delivery tries again. */
 const RECORD_RETRY = 1000;
+/** A Terminal with hooks enabled may still be starting; do not raise a false permission hold. */
+const PERMISSION_STARTUP_MS = 30_000;
 
 export class Delivery {
   readonly #deps: DeliveryDeps;
@@ -180,6 +183,13 @@ export class Delivery {
    * or with the next message sent it RETRY_AFTER or more after a read that held its messages).
    */
   readonly #defaults = new Map<string, Default>();
+  readonly #permissionWaits = new Map<
+    string,
+    {
+      running: NonNullable<Session['running']>;
+      until: number;
+    }
+  >();
   /** What wakes delivery when a usage window resets. */
   #alarm: { at: number; cancel: () => void } | undefined;
   /**
@@ -192,6 +202,8 @@ export class Delivery {
   /** Whether it delivers yet: not until it starts, though messages may be sent before. */
   #started = false;
   #closed = false;
+  /** Whether the core's shutdown barrier holds it: nothing starts being delivered meanwhile. */
+  #frozen = false;
   readonly #stop: (() => void)[];
 
   constructor(deps: DeliveryDeps) {
@@ -252,6 +264,21 @@ export class Delivery {
     await this.#deps.store.durable();
   }
 
+  /**
+   * The core's shutdown barrier (B11 Design §16.5): no message starts being delivered until `thaw`,
+   * though messages may be sent meanwhile; one being delivered goes on, and its reply comes back.
+   */
+  freeze(): void {
+    this.#frozen = true;
+  }
+
+  /** The barrier lifted (a quit cancelled): what waited goes once it can. */
+  thaw(): void {
+    if (!this.#frozen) return;
+    this.#frozen = false;
+    this.schedule();
+  }
+
   images(id: string, images: UserMessage['images']): void {
     if (images?.length) this.#images.set(id, images);
   }
@@ -276,9 +303,17 @@ export class Delivery {
    * can be, and otherwise held, its sender told why. A message sent RETRY_AFTER or more after the
    * agent's session refused to start tries it again. Resolves with it, as kept; rejects, the message
    * unresolved and never sent, if its record can't reach the disk. Throws, saying why, a message
-   * from a party (anyone but you) that has MAX_WAITING waiting for that agent already.
+   * from a party (anyone but you) that has MAX_WAITING waiting for that agent already. `images`:
+   * pasted with it, live-only (a restart that loses them leaves it unresolved, never sent without
+   * them); `told`: the key it is kept with, by which what admitted it once finds it again.
    */
-  async send(from: PartyId, to: string, body: string, replyTo?: string): Promise<Message> {
+  async send(
+    from: PartyId,
+    to: string,
+    body: string,
+    replyTo?: string,
+    { images, told }: { images?: UserMessage['images']; told?: string } = {},
+  ): Promise<Message> {
     const { store } = this.#deps;
     if (
       from !== 'you' &&
@@ -290,16 +325,23 @@ export class Delivery {
         `${this.#name(to)} already has ${String(MAX_WAITING)} of your messages waiting; send another once one of them goes.`,
       );
     }
-    const message = store.add({
-      from,
-      to: agentParty(to),
-      kind: 'text',
-      // Yours is yours as you sent it; anyone else's a party's.
-      origin: from === 'you' ? 'manual' : 'party',
-      body,
-      state: 'pending',
-      ...(replyTo === undefined ? {} : { replyTo }),
-    });
+    const pasted = images?.length ?? 0;
+    const message = store.add(
+      {
+        from,
+        to: agentParty(to),
+        kind: 'text',
+        // Yours is yours as you sent it; anyone else's a party's.
+        origin: from === 'you' ? 'manual' : 'party',
+        // Its images are live-only: once a restart lost them, it is never sent without them.
+        ...(pasted > 0 ? { display: { images: pasted, requiresImages: true } } : {}),
+        body,
+        state: 'pending',
+        ...(replyTo === undefined ? {} : { replyTo }),
+      },
+      told,
+    );
+    this.images(message.id, images);
     this.#recording.add(message.id);
     try {
       await store.durable();
@@ -472,7 +514,7 @@ export class Delivery {
    * withdrawn first.
    */
   #pump(): void {
-    if (!this.#started || this.#closed) return;
+    if (!this.#started || this.#closed || this.#frozen) return;
     const { engine, store } = this.#deps;
     this.#withdrawGone();
     let messages = store.active();
@@ -528,6 +570,9 @@ export class Delivery {
     for (const node of this.#deps.nodes()) {
       if (node.type !== 'agent') continue;
       this.#forgetReleased(node);
+      const permission = this.#permissionWaits.get(node.id);
+      if (permission !== undefined && permission.until > this.#deps.now())
+        alarm = Math.min(alarm ?? permission.until, permission.until);
       const limited = this.#limited(node);
       if (limited !== undefined) alarm = Math.min(alarm ?? limited.until, limited.until);
       const waits = waiting.get(node.id);
@@ -650,7 +695,7 @@ export class Delivery {
     const stuck = this.#stuckHold(node);
     if (stuck !== undefined) return stuck;
     const asking = this.#asking(node);
-    // Its CLI's default being read, it waits, as for a turn.
+    // A default read or unreported Terminal startup waits silently, as for a turn.
     if (asking === 'reading') return { kind: 'busy' };
     if (asking !== 'asks') return { kind: 'unasking', why: asking };
     // The run's own message on its way to it goes first, as one in its session's queue would.
@@ -676,8 +721,9 @@ export class Delivery {
    * Whether agent `node`'s session asks before it acts on what it is sent, now or as it would
    * start: one that never asks acts on whatever it is sent, so a party's text would act unchecked,
    * as would one corrallm can't tell asks. A session that runs says so by its mode (one its adapter
-   * says never asks), or, on settings that are none of its modes, by whether they ask; one that
-   * says neither is unknown until it reports permissions, even if a startup mode was requested.
+   * says never asks), or, on settings that are none of its modes, by whether they ask. Terminals
+   * carry their trusted pre-launch default until a native hook reports; one that still says
+   * neither gets a bounded silent startup hold while hooks are on, then an unknown hold.
    * One yet to start starts in
    * its saved start mode, where its connection starts in it (each asks), else its CLI's default.
    * That default is read once a session (#default; not now unless `read`: 'reading').
@@ -689,10 +735,20 @@ export class Delivery {
     if (connection === 'unavailable') return 'asks';
     const session = sessions.of(node.id);
     if (session.running !== undefined) {
+      if (session.mode !== null || session.asks !== undefined)
+        this.#permissionWaits.delete(node.id);
       if (session.mode !== null) {
         return catalog.neverAsks(connection, session.mode) ? 'mode' : 'asks';
       }
       if (session.asks !== undefined) return session.asks ? 'asks' : 'mode';
+      if (catalog.isTerminal(connection) && session.unheard === undefined) {
+        let waiting = this.#permissionWaits.get(node.id);
+        if (waiting?.running !== session.running) {
+          waiting = { running: session.running, until: this.#deps.now() + PERMISSION_STARTUP_MS };
+          this.#permissionWaits.set(node.id, waiting);
+        }
+        if (this.#deps.now() < waiting.until) return 'reading';
+      }
       return 'unknown-running';
     } else {
       const mode = node.data.settings?.[catalog.adapterOf(connection)]?.mode;
@@ -736,6 +792,10 @@ export class Delivery {
     const agents = new Set(
       this.#deps.nodes().flatMap((node) => (node.type === 'agent' ? [node.id] : [])),
     );
+    for (const [agent, waiting] of this.#permissionWaits) {
+      if (!agents.has(agent) || this.#deps.engine.sessions.of(agent).running !== waiting.running)
+        this.#permissionWaits.delete(agent);
+    }
     for (const [agent, known] of this.#defaults) {
       if (!agents.has(agent)) {
         this.#defaults.delete(agent);
@@ -1162,7 +1222,7 @@ export class Delivery {
     );
   }
 
-  /** Wakes delivery when the first usage window it waits on resets. */
+  /** Wakes delivery for the next usage reset or Terminal permission startup deadline. */
   #arm(at: number | undefined): void {
     if (this.#alarm?.at === at) return;
     this.#alarm?.cancel();
@@ -1222,7 +1282,7 @@ function unaskingText(name: string, why: UnaskingWhy): string {
     case 'unknown':
       return `corrallm can’t tell whether ${name}’s CLI defaults to a mode that asks before it acts, so your message waits until ${name} runs in one that asks, which only the user can set.`;
     case 'unknown-running':
-      return `corrallm can’t tell whether ${name}’s running session asks before it acts, so your message waits until it reports that it asks: only the user can switch its mode or restart it.`;
+      return `corrallm can’t tell whether ${name}’s running session asks before it acts, so your message waits until it reports that it asks: check its terminal and switch it to a mode that asks, or enable its hooks if they are off.`;
   }
 }
 

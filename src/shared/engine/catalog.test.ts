@@ -82,6 +82,10 @@ describe('engineCatalog', () => {
     expect(engine.connectionName('codex.terminal')).toBe('Codex · Terminal');
     expect(engine.connectionName('claude-code.sdk')).toBe('Claude Code · Agent SDK');
     expect(engine.connectionName('unavailable')).toBeUndefined();
+    expect(engine.isTerminal('codex.terminal')).toBe(true);
+    expect(engine.isTerminal('claude-code.terminal')).toBe(true);
+    expect(engine.isTerminal('codex.app-server')).toBe(false);
+    expect(engine.isTerminal('unavailable')).toBe(false);
   });
 
   it('gives the text each connection runs as a shell command when a message starts with it', () => {

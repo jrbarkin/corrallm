@@ -1,4 +1,5 @@
 import type { AdapterId, Catalog } from '../../../shared/adapter';
+import type { ApiStatus } from '../../../shared/api/ops/settings';
 import type { ArgsOf, ProducedOf } from '../../../shared/api/registry';
 import type { OpName } from '../../../shared/api/surface';
 import type { CanvasId } from '../../../shared/canvas';
@@ -9,6 +10,8 @@ import type { LinkOpener } from '../../links';
 import type { FileRevealer } from '../../reveal';
 import type { ProjectFiles } from '../../files';
 import type { ProjectRootResolver } from '../workspaces/resolver';
+import type { SetupService } from '../workspaces/setup';
+import type { ReplyHandler } from '../replies';
 import type { SessionManager } from '../../sessions/manager';
 import type { Windows } from '../windows';
 import type { Topics } from '../topics';
@@ -37,6 +40,9 @@ import { linkOps } from './link';
 import { projectOps } from './project';
 import { runOps } from './run';
 import { sessionOps } from './session';
+import { sessionControlOps } from './session-control';
+import { withPublication } from './publication';
+import type { SessionControl } from '../session-control';
 import { settingsOps } from './settings';
 import { terminalOps } from './terminal';
 import { templatesOps } from './templates';
@@ -57,6 +63,7 @@ export type Implementations = {
 
 /** What the operations act on: the services the core composes (createCore). */
 export interface OpServices {
+  control: SessionControl;
   topics: Pick<Topics, 'subscribe' | 'unsubscribe'>;
   /** Which app this is, as app.info says. */
   app: { name: string; version: string };
@@ -64,7 +71,9 @@ export interface OpServices {
   catalog: Catalog;
   /** The adapter agents run when none is chosen. */
   defaultAdapter: AdapterId;
-  settings: Pick<Settings, 'get'>;
+  settings: Pick<Settings, 'get' | 'apiPort'>;
+  /** Whether corrallm's MCP server listens now, and where, as its owner says (core/endpoint.ts). */
+  api: () => ApiStatus;
   /** The agents’ environment, read from the login shell when first needed. */
   environment: () => Promise<Readonly<Record<string, string>>>;
   usage: Pick<UsageReadings, 'state' | 'setRule' | 'simulate'>;
@@ -84,6 +93,7 @@ export interface OpServices {
     | 'interruptIf'
   >;
   stalled: Pick<StalledTurns, 'items' | 'take'>;
+  runError?: (canvas: CanvasId) => string | undefined;
   runProblems?: (canvas: CanvasId) => readonly NeedsItem[];
   /** The canvases the core runs. */
   engines: Engines;
@@ -113,10 +123,26 @@ export interface OpServices {
   host: HostServices;
   /** The outside tokens: whether one was replaced or expires, as a call it made still goes on. */
   tokens: Pick<TokenStore, 'revoked' | 'onRevoke' | 'expiresOf'>;
+  /**
+   * The worktrees' setup (workspaces/setup.ts): its cards, their answers and the setup command you
+   * set. None until B9a X11b composes the workspaces: then no card is raised, and setting a command
+   * is unavailable.
+   */
+  setups?: SetupService;
+  /**
+   * The reply router's handlers for what a canvas's runtime asks (its run's holds, its sessions'
+   * prompts: run-replies.ts) and a workspace's change (workspaces/rebind.ts), B11 C7's: composed
+   * with the registered typed `reply`. None: those are answered in corrallm's window.
+   */
+  replies?: readonly ReplyHandler[];
+  /** The reply router's handlers of the workspaces' cards (a workspace change's Switch: B9a C7). */
+  workspaceReplies?: readonly ReplyHandler[];
+  /** The workspaces' cards waiting on a canvas (its workspace changes): yours alone, on no agent. */
+  workspaceItems?: (canvas: CanvasId) => readonly NeedsItem[];
 }
 
 export function implementations(services: OpServices): Implementations {
-  return {
+  return withPublication({
     ...topicsOps(services),
     ...appOps(services),
     ...catalogOps(services),
@@ -132,6 +158,7 @@ export function implementations(services: OpServices): Implementations {
     ...conversationOps(services),
     ...replyOps(services),
     ...sessionOps(services),
+    ...sessionControlOps(services.control),
     ...settingsOps(services),
     ...runOps(services),
     ...usageOps(services),
@@ -139,5 +166,5 @@ export function implementations(services: OpServices): Implementations {
     ...linkOps(services),
     ...windowOps(services),
     ...terminalOps(services),
-  };
+  });
 }

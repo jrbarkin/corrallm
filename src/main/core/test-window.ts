@@ -37,15 +37,19 @@ export function coreEnd(port: MessagePort): WindowPort {
   };
 }
 
-/** Serves a new port as `window`'s: the window's end of it, and a function that closes it. */
+/**
+ * Serves a new port as `window`'s: the window's end of it, and a function that closes it. Its
+ * drafts flush at once, unless `flush` says how.
+ */
 export function openWindow(
   served: WindowPorts,
   window: WindowId,
+  flush: () => Promise<null> | null = () => null,
 ): { link: CoreLink<GuiSide, CoreGuiSide>; close: () => void } {
   const { port1, port2 } = new MessageChannel();
   served.open(window, coreEnd(port1));
   return {
-    link: new CoreLink<GuiSide, CoreGuiSide>(linkPortOf(port2), {}),
+    link: new CoreLink<GuiSide, CoreGuiSide>(linkPortOf(port2), { 'drafts.flush': flush }),
     close: () => {
       port2.close();
     },

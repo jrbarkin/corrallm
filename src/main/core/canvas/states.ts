@@ -79,6 +79,11 @@ export interface CanvasStatesDeps {
   shownIn: (canvas: CanvasId) => number[];
   /** The canvases the core runs. */
   running: () => readonly CanvasId[];
+  /**
+   * Whether the run of a canvas the core runs is running now, from its live runtime (B11 §5); none
+   * for a canvas it doesn't run (a window's, or one closed), whose run is as the journal last kept.
+   */
+  live?: (canvas: CanvasId) => boolean | undefined;
   now?: () => number;
 }
 
@@ -194,7 +199,7 @@ export class CanvasStates {
         canvas,
         name: file === undefined ? null : path.basename(file),
         edited: rows.has(canvas) ? await this.#edited(canvas) : false,
-        running: runs.get(canvas) ?? false,
+        running: this.#deps.live?.(canvas) ?? runs.get(canvas) ?? false,
         open: open.has(canvas) || shown.length > 0,
         project: project === undefined ? null : projectOf(project),
         shownIn: shown,
@@ -383,8 +388,9 @@ export class CanvasStates {
   }
 
   /**
-   * Whether each canvas's run is running, as last journaled: its saved run state's (B9 Design §7,
-   * until B11), read again after every journal notification.
+   * Whether each canvas's run is running, as last journaled: its saved run state's (B9 Design §7),
+   * read again after every journal notification. A canvas the core runs says its live run's instead
+   * (`live`).
    */
   #running(): Map<CanvasId, boolean> {
     const { store } = this.#deps;

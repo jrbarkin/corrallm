@@ -168,6 +168,10 @@ export const claudeCode: Adapter = {
     ],
     registerMcp:
       "claude mcp add --transport http {server} {url} --header 'Authorization: Bearer ${{var}}'",
+    // Claude Code runs an HTTP server's headersHelper in a shell at every connect, and again after
+    // a 401, reading its JSON object of headers (checked with 2.1.310).
+    registerMcpHelper:
+      'claude mcp add-json {server} \'{"type":"http","url":"{url}","headersHelper":"{helper}"}\'',
   },
   inheritedEnv: [
     'CLAUDECODE',

@@ -26,7 +26,7 @@ export interface MirrorSnapshot {
   state: TopicSnapshot['state'] | RuntimeTopicStates[RuntimeTopicKey];
 }
 export type MirrorUpdate = Change | RuntimeChange | RuntimeSnapshotFrame;
-/** Additive receiver seam for C8; the registered GUI subscription remains B9-only until then. */
+/** The receiver seam for whole snapshots and bounded transfers of window topics. */
 export interface MirrorSource {
   topicsSubscribe(
     request: TopicRequest | RuntimeTopicRequest,
@@ -127,7 +127,10 @@ export function runtimePatch(
     const agents = patch.agents
       ? keyed(old.agents, patch.agents.set, patch.agents.remove)
       : old.agents;
-    return agents === next.agents ? next : { ...next, agents };
+    const groups = patch.groups
+      ? keyed(old.groups, patch.groups.set, patch.groups.remove)
+      : old.groups;
+    return agents === next.agents && groups === next.groups ? next : { ...next, agents, groups };
   }
   if (request.topic === 'sessions') {
     const old = previous as RuntimeTopicStates[`sessions:${CanvasId}`];
@@ -197,23 +200,53 @@ export function runtimePatch(
 
 /** Chunk order is the only order on the wire; no partial snapshot escapes this builder. */
 export function assembledState(
-  topic: RuntimeTopicKey,
+  topic: MirrorTopicKey,
   summary: unknown,
   pairs: readonly (readonly [string, unknown])[],
-): RuntimeTopicStates[RuntimeTopicKey] {
-  const request = topicRequest(topic);
+): MirrorSnapshot['state'] {
   const values = Object.fromEntries(pairs);
+  if (!runtimeTopic(topic)) {
+    if (topic.startsWith('canvas:')) return values as TopicStates[TopicKey];
+    if (topic === 'canvases' || topic.startsWith('needs:'))
+      return { items: pairs.map(([, value]) => value) } as TopicStates[TopicKey];
+    if (topic === 'usage')
+      return {
+        readings: pairs.filter(([key]) => key.startsWith('reading/')).map(([, value]) => value),
+        rules: Object.fromEntries(
+          pairs
+            .filter(([key]) => key.startsWith('rule/'))
+            .map(([key, value]) => [decodeURIComponent(key.slice(5)), value]),
+        ),
+      } as TopicStates['usage'];
+    return {
+      ...(summary as { defaultAdapter: string }),
+      consents: values,
+    } as TopicStates['settings'];
+  }
+  const request = topicRequest(topic);
   if (request.topic === 'session')
     return {
       summary: summary as SessionView['summary'],
       entries: values as Record<string, EntryView>,
       order: pairs.map(([key]) => key),
     };
-  if (request.topic === 'run')
+  if (request.topic === 'run') {
+    const agents: [string, unknown][] = [];
+    const groups: [string, unknown][] = [];
+    for (const [key, value] of pairs) {
+      const kind = key.slice(0, key.indexOf('/'));
+      const encoded = key.slice(kind.length + 1);
+      const id = decodeURIComponent(encoded);
+      if (encodeURIComponent(id) !== encoded || (kind !== 'agent' && kind !== 'group'))
+        throw new Error('A run entry names a canonical agent or group key.');
+      (kind === 'agent' ? agents : groups).push([id, value]);
+    }
     return {
-      ...(summary as Omit<RuntimeTopicStates[`run:${CanvasId}`], 'agents'>),
-      agents: values as RuntimeTopicStates[`run:${CanvasId}`]['agents'],
+      ...(summary as Omit<RuntimeTopicStates[`run:${CanvasId}`], 'agents' | 'groups'>),
+      agents: Object.fromEntries(agents) as RuntimeTopicStates[`run:${CanvasId}`]['agents'],
+      groups: Object.fromEntries(groups) as RuntimeTopicStates[`run:${CanvasId}`]['groups'],
     };
+  }
   if (request.topic === 'sessions')
     return { agents: values as RuntimeTopicStates[`sessions:${CanvasId}`]['agents'] };
   return {
@@ -223,7 +256,7 @@ export function assembledState(
   };
 }
 
-/** Validate references needed to apply future deltas; payload field validation belongs to C8. */
+/** Validate references needed to apply future deltas; the core's projections check payloads. */
 export function checkRuntimeState(
   topic: RuntimeTopicKey,
   state: RuntimeTopicStates[RuntimeTopicKey],

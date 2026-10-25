@@ -282,6 +282,11 @@ interface PauseCauses {
 export class RunStore {
   #run: Run = IDLE;
   #nodes: readonly CanvasNode[] = [];
+  /**
+   * Whether its host's shutdown barrier holds it (`freeze`): no task starts and nothing it sends
+   * goes. Never in its checkpoint: a barrier is its host's, for as long as that process runs.
+   */
+  #frozen = false;
   readonly #catalog: EngineCatalog;
   readonly #io: RunIO;
   readonly #listeners = new Set<() => void>();
@@ -466,6 +471,24 @@ export class RunStore {
   #halt(): void {
     const paused = resumable(this.#run.agents, this.#pauseCauses());
     this.#set({ ...this.#run, running: false, ...(paused ? { paused } : {}) });
+  }
+
+  /**
+   * Its host's shutdown barrier (B11 Design §16.5: a quit or an update's restart prepared): no task
+   * starts and nothing the run sends goes until `thaw`, but a turn going on goes on, and how it
+   * ends is kept, as a pause keeps it. A quit committed meanwhile pauses it, holding only the turns
+   * that were going as uncertain.
+   */
+  freeze(): void {
+    this.#frozen = true;
+  }
+
+  /** The barrier lifted (a quit cancelled): what it held goes, and the run goes on from there. */
+  thaw(): void {
+    if (!this.#frozen) return;
+    this.#frozen = false;
+    this.#releasePending();
+    if (this.#run.running) this.#settle(true);
   }
 
   resume(): void {
@@ -1011,8 +1034,8 @@ export class RunStore {
   /** Moves every agent not busy with a task on as far as it can go, until none can. */
   #settle(changed: boolean): void {
     // Native console work can finish during a pause; retain its evidence without dispatching
-    // queued work or releasing waits until the user resumes the run.
-    if (!this.#run.running && this.#run.paused) {
+    // queued work or releasing waits until the user resumes the run (or the barrier is lifted).
+    if ((!this.#run.running && this.#run.paused) || this.#frozen) {
       if (changed) this.#set({ ...this.#run });
       return;
     }
@@ -1890,7 +1913,7 @@ export class RunStore {
       mailbox?.settle(id, end);
     };
     const dispatch = () => {
-      if (sent.over || !ready || started) return;
+      if (sent.over || !ready || started || this.#frozen) return;
       if (
         origin !== 'user' &&
         (this.#run.agents[to.id]?.paused || (holder && this.#run.agents[holder.agent]?.paused))

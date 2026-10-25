@@ -170,6 +170,11 @@ export const SURFACE = {
     destructive: true,
   },
   'project.choose': { access: Y, kind: 'command', scope: 'canvas', drains: 'canvas' },
+  // What a new worktree of the picked repository runs to set itself up (B9a Design §14 item 2):
+  // yours alone, as the pick is (D1, trust-gate), never a token's, a file's or the repository's.
+  'project.setSetupCommand': { access: Y, kind: 'command', scope: 'canvas' },
+  // What runs by itself in a new worktree is yours to stop allowing (D9, permissions).
+  'project.clearSetupApproval': { access: Y, kind: 'command', scope: 'canvas' },
   // A token lists only its own canvases; a lead's canvas holds only what it reaches (§3.4).
   'canvas.list': { access: R, kind: 'read', scope: 'none', reads: 'canvases', varies: ['items'] },
   'canvas.get': {
@@ -327,8 +332,35 @@ export const SURFACE = {
     self: 'refused',
   },
   withdraw: { access: M, kind: 'command', scope: 'canvas', preempt: true, destructive: true },
-  // Answers a Needs item its caller may answer: in B9, a proposal (yours alone, R3).
+  // Answers a Needs item its caller may answer: in B9, a proposal (yours alone, R3); in B9a, a
+  // worktree's setup card, yours alone too.
   reply: { access: M, kind: 'command', scope: 'canvas', rules: ['human-choice'] },
+  'session.open': { access: L, kind: 'command', scope: 'agent', self: 'allowed' },
+  // D9: the mode an agent runs in is yours alone.
+  'session.setMode': { access: Y, kind: 'command', scope: 'agent' },
+  'session.setModel': { access: L, kind: 'command', scope: 'agent', self: 'refused' },
+  'session.setEffort': { access: L, kind: 'command', scope: 'agent', self: 'refused' },
+  'session.stopTask': {
+    access: L,
+    kind: 'command',
+    scope: 'agent',
+    self: 'allowed',
+    destructive: true,
+  },
+  'session.restart': { access: L, kind: 'command', scope: 'agent', self: 'refused' },
+  'session.newConversation': { access: L, kind: 'command', scope: 'agent', self: 'refused' },
+  'session.rewindPreview': { access: R, kind: 'read', scope: 'none', self: 'allowed' },
+  // R5: a token's code restore comes to you as a proposal; R6 refuses an agent's own first.
+  'session.rewind': {
+    access: L,
+    kind: 'command',
+    scope: 'agent',
+    rules: ['restore-code'],
+    self: 'refused',
+    destructive: true,
+  },
+  // §16.1: Continue in Terminal, yours alone (how an agent runs is yours).
+  'session.continueIn': { access: Y, kind: 'command', scope: 'agent' },
   'session.get': {
     access: A,
     kind: 'read',
@@ -352,6 +384,13 @@ export const SURFACE = {
     preempt: true,
     destructive: true,
     self: 'refused',
+  },
+  'run.get': {
+    access: R,
+    kind: 'read',
+    scope: 'none',
+    reads: 'run',
+    varies: ['agents', 'groups', 'saveError'],
   },
   'run.pause': { access: L, kind: 'command', scope: 'agent', self: 'allowed' },
   'run.kill': {
