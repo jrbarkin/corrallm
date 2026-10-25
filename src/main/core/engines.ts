@@ -18,7 +18,7 @@ import type { SessionEvent, TaskMessage, UserMessage } from '../../shared/sessio
 import { usedUpUntil } from '../../shared/usage';
 import type { ProjectFiles } from '../files';
 import type { ProjectFolders } from '../project';
-import type { ProjectRootResolver } from './workspaces/resolver';
+import type { DirectoryResolver } from './workspaces/resolver';
 import type { RunJournal } from '../run-journal';
 import { installedClis } from '../sessions/installed';
 import type { SessionManager } from '../sessions/manager';
@@ -98,7 +98,7 @@ export interface EnginesDeps {
   engineCatalog: EngineCatalog;
   sessions: SessionManager;
   projects: Pick<ProjectFolders, 'restore'>;
-  directories: ProjectRootResolver;
+  directories: DirectoryResolver;
   journal: RunJournal;
   /** Each canvas's document, its file checked as it opens. */
   documents: Pick<Documents, 'review' | 'live' | 'loaded' | 'hasRows'>;
@@ -1047,6 +1047,7 @@ export class Engines {
     engine.update(document.nodes);
     if (context.checkpoint) engine.restore(context.checkpoint);
     const delivery = new Delivery({
+      availability: (agent) => this.#deps.sessions.availability(canvas, agent),
       canvas,
       engine,
       store: messages,
@@ -1062,9 +1063,9 @@ export class Engines {
       changed: () => {
         this.#look(running);
       },
-      defaultAsks: (adapter) =>
+      defaultAsks: (adapter, agent) =>
         this.#deps.processes
-          .run(() => this.#deps.sessions.settingsOptions(canvas, adapter))
+          .run(() => this.#deps.sessions.settingsOptions(canvas, adapter, agent))
           .then(({ defaults }) => defaults.asks),
       ...(this.#deps.locale === undefined ? {} : { locale: this.#deps.locale }),
     });
@@ -1095,6 +1096,10 @@ export class Engines {
       engine.sessions.subscribe(look),
       // A message to an agent that can't start, or runs in a mode that never asks, waits for you.
       messages.subscribe(look),
+      this.#deps.sessions.onAvailability(canvas, () => {
+        delivery.availabilityChanged();
+        look();
+      }),
       // Usage rules are checked again with each reading.
       this.#deps.usage.subscribe(() => {
         engine.run.usageChanged();
@@ -1243,6 +1248,8 @@ export class Engines {
     const run = <T>(call: () => T): T => this.#deps.processes.run(call);
     const done = (call: () => Promise<unknown>) => run(() => call().then(() => null));
     return {
+      availability: (agent) => sessions.availability(canvas, agent),
+      onAvailability: (listener) => sessions.onAvailability(canvas, listener),
       start: (agentId, options) =>
         done(async () => {
           await sessions.start(canvas, agentId, options);
@@ -1262,12 +1269,15 @@ export class Engines {
       stopTask: (agentId, taskId) => done(() => sessions.stopTask(canvas, agentId, taskId)),
       close: (agentId) => done(() => sessions.close(canvas, agentId)),
       fresh: (agentId, adapter) => done(() => sessions.fresh(canvas, agentId, adapter)),
-      files: async (query) => {
-        // The canvas-wide file picker searches its project root, as project.files does.
-        const folder = directories.projectRoot(canvas);
+      files: async (query, agent) => {
+        let folder = directories.projectRoot(canvas);
+        if (agent !== undefined) {
+          const directory = await directories.workingDirectory(canvas, agent as never);
+          folder = directory.state === 'ready' ? directory.cwd : undefined;
+        }
         return folder === undefined ? [] : run(() => files.find(folder, query, MAX_FILE_MATCHES));
       },
-      options: (adapter) => run(() => sessions.settingsOptions(canvas, adapter)),
+      options: (adapter, agent) => run(() => sessions.settingsOptions(canvas, adapter, agent)),
       // The runtime's own lists, apart from any window's (B11 Design §7).
       sessions: (agentId) => run(() => sessions.listSessions(canvas, agentId, RUNTIME_CALLER)),
       resume: (agentId, sessionId) =>

@@ -66,6 +66,18 @@ const WAITS = 'Its files are being restored: its new work waits until that is do
 
 export class WorkspaceGate {
   readonly #deps: WorkspaceGateDeps;
+  readonly #listeners = new Set<() => void>();
+
+  subscribe(listener: () => void): () => void {
+    this.#listeners.add(listener);
+    return () => {
+      this.#listeners.delete(listener);
+    };
+  }
+
+  #changed(): void {
+    for (const listener of this.#listeners) listener();
+  }
   /** The mutations going on, by tree (whichever canvas's agents work there). */
   readonly #going = new Map<TreeKey, Mutation>();
 
@@ -97,6 +109,7 @@ export class WorkspaceGate {
     const ended = Promise.withResolvers<undefined>();
     // Held at once, before the members are read: whatever comes for them meanwhile waits.
     this.#going.set(tree, { canvas, tree, agent, done: ended.promise });
+    this.#changed();
     try {
       const everyone = await this.#everyone(tree);
       const others = everyone.filter((one) => one.canvas !== canvas || one.agent !== agent);
@@ -117,6 +130,7 @@ export class WorkspaceGate {
     } finally {
       this.#going.delete(tree);
       ended.resolve(undefined);
+      this.#changed();
     }
   }
 
@@ -138,6 +152,7 @@ export class WorkspaceGate {
     // Held at once, before the members are read: whatever comes for them meanwhile waits.
     for (const tree of keys)
       this.#going.set(tree, { canvas, tree, agent: '', done: ended.promise });
+    this.#changed();
     try {
       const seen = new Set<string>();
       const everyone = (await Promise.all(keys.map((tree) => this.#everyone(tree))))
@@ -165,6 +180,7 @@ export class WorkspaceGate {
     } finally {
       for (const key of keys) this.#going.delete(key);
       ended.resolve(undefined);
+      this.#changed();
     }
   }
 

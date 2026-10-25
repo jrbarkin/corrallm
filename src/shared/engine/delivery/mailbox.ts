@@ -129,6 +129,56 @@ export class SessionStore {
     { connection: ConnectionId; agent: AdapterId; text: string }
   >();
   #unsubscribe: (() => void) | undefined;
+  #unavailable: (() => void) | undefined;
+  readonly #checking = new Map<string, object>();
+  readonly #directoryWords = new Map<string, string>();
+  readonly #wantOpen = new Set<string>();
+
+  #listenAvailability(): void {
+    this.#unavailable ??= this.#backend.onAvailability?.(() => {
+      this.#checking.clear();
+      this.forgetOptions();
+      for (const agent of this.#wantOpen) this.open(agent);
+      for (const agent of this.#connections.keys()) this.#idle(agent);
+    });
+  }
+
+  #available(agent: string, resume: () => void): boolean {
+    if (this.#backend.availability === undefined) return true;
+    this.#listenAvailability();
+    if (this.#checking.has(agent)) return false;
+    const token = {};
+    this.#checking.set(agent, token);
+    const connection = this.#connection(agent);
+    void this.#backend.availability(agent).then(
+      (result) => {
+        if (this.#checking.get(agent) !== token) return;
+        this.#checking.delete(agent);
+        if (this.#connection(agent) !== connection) {
+          this.#idle(agent);
+          return;
+        }
+        if (result.ready) {
+          this.#directoryWords.delete(agent);
+          resume();
+        } else if (this.#directoryWords.get(agent) !== result.sentence) {
+          this.#directoryWords.set(agent, result.sentence);
+          this.notice(agent, 'info', result.sentence);
+        }
+      },
+      (error: unknown) => {
+        if (this.#checking.get(agent) !== token) return;
+        this.#checking.delete(agent);
+        const text =
+          error instanceof Error ? error.message : 'Its working directory could not be checked.';
+        if (this.#directoryWords.get(agent) !== text) {
+          this.#directoryWords.set(agent, text);
+          this.notice(agent, 'warning', text);
+        }
+      },
+    );
+    return false;
+  }
 
   constructor(
     catalog: EngineCatalog,
@@ -202,6 +252,12 @@ export class SessionStore {
       this.#connections.set(id, connection);
       const driving = this.#drivers.get(id);
       if (driving && driving.connection !== connection) {
+        if (driving.driver instanceof ConnectedDriver) {
+          for (const message of driving.driver.takeUnsent().reverse()) {
+            this.#dispatch(id, { type: 'refuse', id: message });
+            if (this.#turns.get(id) === message) this.#turns.delete(id);
+          }
+        }
         this.#letGo(id);
         this.#idle(id);
       }
@@ -216,7 +272,13 @@ export class SessionStore {
   /** Makes sure the agent's session runs, as when its view opens. */
   open(agentId: string): void {
     if (this.#freshening.has(agentId)) return;
-    this.#driver(agentId).open();
+    if (this.#backend.availability !== undefined) {
+      this.#wantOpen.add(agentId);
+      this.#available(agentId, () => {
+        if (!this.#wantOpen.delete(agentId)) return;
+        this.#driver(agentId).open();
+      });
+    } else this.#driver(agentId).open();
   }
 
   /** Starts without sending: delivery must inspect the native permissions before its first send. */
@@ -245,6 +307,8 @@ export class SessionStore {
    */
   async restart(agentId: string): Promise<void> {
     if (!this.#drivers.has(agentId)) return;
+    const availability = await this.#backend.availability?.(agentId);
+    if (availability?.ready === false) throw new Error(availability.sentence);
     await this.#backend.close(agentId).catch(() => null);
     this.#letGo(agentId);
     this.#driver(agentId).open();
@@ -294,7 +358,9 @@ export class SessionStore {
    * What an agent of `adapter` can be set to run with, and the user's own defaults: asked of main
    * once, then kept (until `forgetOptions`, or a failure, which is asked again next time).
    */
-  settingsOptions(adapter: AdapterId): Promise<SettingsOptions> {
+  settingsOptions(adapter: AdapterId, agentId?: string): Promise<SettingsOptions> {
+    // Contextual reads must re-verify the workspace on each use, including after a Switch.
+    if (agentId !== undefined) return this.#backend.options(adapter, agentId);
     let options = this.#options.get(adapter);
     if (!options) {
       options = this.#backend.options(adapter);
@@ -348,6 +414,7 @@ export class SessionStore {
     const session = this.of(agentId);
     const held = this.#heldQueues.has(agentId);
     if (
+      this.#backend.availability === undefined &&
       !this.#freshening.has(agentId) &&
       session.status === 'idle' &&
       (held ? origin !== 'queue' : session.queued.length === 0)
@@ -415,8 +482,8 @@ export class SessionStore {
   }
 
   /** The files and folders of the canvas's project folder that match `query`, for an @-mention. */
-  findFiles(query: string): Promise<string[]> {
-    return this.#backend.files(query);
+  findFiles(query: string, agentId?: string): Promise<string[]> {
+    return this.#backend.files(query, ...(agentId === undefined ? [] : [agentId]));
   }
 
   /** The conversations Claude Code kept for the project folder, for /resume. */
@@ -608,6 +675,11 @@ export class SessionStore {
 
   /** Forgets every session, as for another canvas: turns going on end, connected ones close. */
   reset(): void {
+    this.#checking.clear();
+    this.#directoryWords.clear();
+    this.#wantOpen.clear();
+    this.#unavailable?.();
+    this.#unavailable = undefined;
     this.#freshening.clear();
     for (const id of [...this.#drivers.keys()]) this.#letGo(id);
     const result: TurnResult = { status: 'cancelled', reason: 'connection-closed' };
@@ -721,7 +793,7 @@ export class SessionStore {
   }
 
   /** The session is idle: its next queued message, if any, starts. */
-  #idle(agentId: string): void {
+  #idle(agentId: string, admitted = false): void {
     if (this.#freshening.has(agentId)) return;
     const session = this.of(agentId);
     // While the run holds the agent, what the user typed still goes; only the run's own waits,
@@ -731,6 +803,13 @@ export class SessionStore {
       ? session.queued.find(({ id }) => !this.#queueMessages.has(id) && aside?.has(id) !== true)
       : session.queued[0];
     if (!next || session.status !== 'idle') return;
+    if (
+      !admitted &&
+      !this.#available(agentId, () => {
+        this.#idle(agentId, true);
+      })
+    )
+      return;
     this.#dispatch(agentId, { type: 'unqueue', id: next.id });
     this.#start(agentId, { text: next.text, images: next.images }, next.id);
   }
@@ -825,6 +904,9 @@ export class SessionStore {
 
   /** The agent is gone: its session ends, and whoever waits on its queued messages hears. */
   #forget(agentId: string): void {
+    this.#checking.delete(agentId);
+    this.#wantOpen.delete(agentId);
+    this.#directoryWords.delete(agentId);
     this.#freshening.delete(agentId);
     this.#letGo(agentId);
     this.#roles.delete(agentId);

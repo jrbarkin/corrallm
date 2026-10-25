@@ -1,3 +1,4 @@
+import { legacyDirectories } from './workspaces/test-directories';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -36,7 +37,7 @@ const YOU = CALLERS.you;
 /** Another canvas, on the same project folder. */
 const OTHER = '3f1a2b3c-4d5e-4f60-8a1b-2c3d4e5f6a7b' as CanvasId;
 
-/** Three Claude Code agents on the Agent SDK, sharing the project folder (no workspaces yet). */
+/** Three Claude Code agents on the Agent SDK, sharing the faked project directory. */
 function canvasText(): string {
   const agent = (id: string, label: string, x: number) => ({
     id,
@@ -130,6 +131,7 @@ async function start(
       app: { name: 'corrallm', version: '9.8.7' },
       check: true,
       distribution: 'local',
+      directoryResolver: legacyDirectories,
       // The builder leads (B24's leads, as tests say them): it may call what a lead may.
       leads: (_canvas, agent) => agent === 'a',
       sessions: {

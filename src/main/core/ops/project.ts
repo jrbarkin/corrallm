@@ -1,3 +1,4 @@
+import { nodeKey } from '../../../shared/model/rows';
 import type { CanvasId } from '../../../shared/canvas';
 import { MAX_FILE_MATCHES } from '../../../shared/session';
 import { OpFailure } from '../call';
@@ -13,18 +14,16 @@ import type { Implementations, OpServices } from '.';
 export function projectOps({
   directories,
   files,
+  states,
   setups,
 }: OpServices): Pick<
   Implementations,
   'project.files' | 'project.setSetupCommand' | 'project.clearSetupApproval'
 > {
-  /** The worktrees' setup service, or why there is none: worktrees aren't composed yet. */
+  /** The composed setup service; isolated operation fixtures may omit it. */
   const service = () => {
     if (setups === undefined) {
-      throw new OpFailure(
-        'unavailable',
-        'Agents don’t get worktrees of their own in this build yet, so there is no setup to set.',
-      );
+      throw new OpFailure('unavailable', 'The workspace setup service is unavailable.');
     }
     return setups;
   };
@@ -33,10 +32,17 @@ export function projectOps({
     throw error;
   };
   return {
-    'project.files': async ({ canvas, query }) => {
+    'project.files': async ({ canvas, agent, query }) => {
       // This canvas-wide picker names no agent, so it searches the picked project root.
-      const folder =
+      let folder =
         canvas === undefined ? undefined : directories.projectRoot(canvas as unknown as CanvasId);
+      if (canvas !== undefined && agent !== undefined) {
+        const entity = (await states.read(canvas as unknown as CanvasId)).entities[nodeKey(agent)];
+        if (entity === undefined || !('kind' in entity) || entity.kind !== 'agent')
+          throw new OpFailure('not-found', `There is no agent ${agent}.`);
+        const directory = await directories.workingDirectory(canvas as unknown as CanvasId, agent);
+        folder = directory.state === 'ready' ? directory.cwd : undefined;
+      }
       return {
         items: folder === undefined ? [] : await files.find(folder, query, MAX_FILE_MATCHES),
       };

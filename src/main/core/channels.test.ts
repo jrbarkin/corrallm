@@ -29,6 +29,9 @@ function fakeServices() {
     },
     shutdown: { ready: vi.fn<ChannelServices['shutdown']['ready']>() },
     sessions: {
+      availability: vi
+        .fn<ChannelServices['sessions']['availability']>()
+        .mockResolvedValue({ ready: true }),
       start: vi.fn<ChannelServices['sessions']['start']>().mockResolvedValue(undefined),
       send: vi.fn<ChannelServices['sessions']['send']>().mockResolvedValue(undefined),
       answer: vi.fn<ChannelServices['sessions']['answer']>().mockResolvedValue(undefined),
@@ -629,7 +632,7 @@ describe('session:* handlers', () => {
     ['session:options', 'no adapter', [], /an adapter/],
     ['session:options', 'an adapter corrallm does not run', ['gemini'], /adapter/],
     ['session:options', 'an old adapter id', ['claude'], /adapter/],
-    ['session:options', 'a folder as well', ['claude-code', '/etc'], /an adapter/],
+    ['session:options', 'a folder as well', ['claude-code', 'a', '/etc'], /an adapter/],
     ['session:effort', 'no effort', ['a'], /an agent and a reasoning effort/],
     ['session:effort', 'an effort that is not a word', ['a', 'high; rm -rf'], /reasoning effort/],
     ['session:effort', 'an effort that is not text', ['a', 3], /reasoning effort/],
