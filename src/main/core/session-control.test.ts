@@ -16,7 +16,7 @@ import { keepCanvases } from './store/test-store';
 import { CALLERS, NO_DESKTOP } from './test-registry';
 
 /*
- * B11 C6's session services through core.call (registered early: CoreConfig.preparedOps): live and
+ * B11 C6's session services through core.call (registered normally): live and
  * saved settings, Continue in Terminal, restart and a new conversation, and rewind, with R5's
  * proposal and its stale guard, and the workspace mutation gate protecting every agent of a tree.
  */
@@ -130,7 +130,6 @@ async function start(
       app: { name: 'corrallm', version: '9.8.7' },
       check: true,
       distribution: 'local',
-      preparedOps: true,
       // The builder leads (B24's leads, as tests say them): it may call what a lead may.
       leads: (_canvas, agent) => agent === 'a',
       sessions: {
@@ -521,7 +520,13 @@ describe('live and saved settings', () => {
           data: { settings?: Record<string, { mode?: string }> };
         }
       ).data.settings?.['claude-code']?.mode;
-    await ok(core, 'session.setMode', { agent: 'a', mode: 'plan' });
+    const changed = await ok(core, 'session.setMode', { agent: 'a', mode: 'plan' });
+    expect(changed).toMatchObject({
+      revs: {
+        [`canvas:${CANVAS}`]: expect.any(Number) as number,
+        [`sessions:${CANVAS}`]: expect.any(Number) as number,
+      },
+    });
     expect(open?.engine.sessions.of('a').mode).toBe('plan');
     expect(saved()).toBe('plan');
     await ok(core, 'session.setMode', { agent: 'a', mode: 'bypassPermissions' });

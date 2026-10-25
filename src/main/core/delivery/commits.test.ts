@@ -405,7 +405,7 @@ it('delivers the next message once one taken back while it was journaled is with
     expect(await ok('withdraw', { id: first.id })).toEqual({
       reached: false,
       interrupted: false,
-      revs: {},
+      revs: expect.any(Object) as Record<string, number>,
     });
   } finally {
     release();

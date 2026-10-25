@@ -77,7 +77,7 @@ export type ArgumentChecks = {
 export function ruleChecks(
   engines: Engines,
   needOf: (canvas: CanvasId, id: string) => NeedsItem | undefined = () => undefined,
-): Omit<ArgumentChecks, 'discard'> {
+): Omit<ArgumentChecks, 'discard' | 'restore-code'> {
   /** The open canvas a call names, if it is open. */
   const openOf = (canvas: string | undefined) =>
     canvas === undefined ? undefined : engines.canvas(canvas as CanvasId);

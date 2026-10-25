@@ -102,10 +102,10 @@ export function withEnvelope<S extends Envelope, I extends Input, O extends z.Zo
   if (surface.kind === 'read') return def as Enveloped<S, I, O>;
   if (!(def.output instanceof z.ZodObject)) throw new Error('A write’s result is an object.');
   const proposes = surface.rules?.some((rule) => PROPOSING_RULES.includes(rule)) ?? false;
-  const written = def.output.extend(REVS);
+  const written = def.output.safeExtend(REVS);
   return {
     summary: def.summary,
-    input: def.input.extend(surface.kind === 'doc' ? { ...REQUEST, ...EXPECT } : REQUEST),
+    input: def.input.safeExtend(surface.kind === 'doc' ? { ...REQUEST, ...EXPECT } : REQUEST),
     output: proposes ? z.union([written, Proposed]) : written,
   } as Enveloped<S, I, O>;
 }

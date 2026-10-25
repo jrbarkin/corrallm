@@ -39,6 +39,9 @@ import { linkOps } from './link';
 import { projectOps } from './project';
 import { runOps } from './run';
 import { sessionOps } from './session';
+import { sessionControlOps } from './session-control';
+import { withPublication } from './publication';
+import type { SessionControl } from '../session-control';
 import { settingsOps } from './settings';
 import { terminalOps } from './terminal';
 import { templatesOps } from './templates';
@@ -59,6 +62,7 @@ export type Implementations = {
 
 /** What the operations act on: the services the core composes (createCore). */
 export interface OpServices {
+  control: SessionControl;
   topics: Pick<Topics, 'subscribe' | 'unsubscribe'>;
   /** Which app this is, as app.info says. */
   app: { name: string; version: string };
@@ -86,6 +90,7 @@ export interface OpServices {
     | 'interruptIf'
   >;
   stalled: Pick<StalledTurns, 'items' | 'take'>;
+  runError?: (canvas: CanvasId) => string | undefined;
   runProblems?: (canvas: CanvasId) => readonly NeedsItem[];
   /** The canvases the core runs. */
   engines: Engines;
@@ -124,8 +129,7 @@ export interface OpServices {
   /**
    * The reply router's handlers for what a canvas's runtime asks (its run's holds, its sessions'
    * prompts: run-replies.ts) and a workspace's change (workspaces/rebind.ts), B11 C7's: composed
-   * with the prepared typed `reply` until X9 registers it. None: those are answered in corrallm's
-   * window.
+   * with the registered typed `reply`. None: those are answered in corrallm's window.
    */
   replies?: readonly ReplyHandler[];
   /** The reply router's handlers of the workspaces' cards (a workspace change's Switch: B9a C7). */
@@ -135,7 +139,7 @@ export interface OpServices {
 }
 
 export function implementations(services: OpServices): Implementations {
-  return {
+  return withPublication({
     ...topicsOps(services),
     ...appOps(services),
     ...catalogOps(services),
@@ -151,6 +155,7 @@ export function implementations(services: OpServices): Implementations {
     ...conversationOps(services),
     ...replyOps(services),
     ...sessionOps(services),
+    ...sessionControlOps(services.control),
     ...settingsOps(services),
     ...runOps(services),
     ...usageOps(services),
@@ -158,5 +163,5 @@ export function implementations(services: OpServices): Implementations {
     ...linkOps(services),
     ...windowOps(services),
     ...terminalOps(services),
-  };
+  });
 }

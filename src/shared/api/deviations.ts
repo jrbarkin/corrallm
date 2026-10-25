@@ -30,6 +30,8 @@ export const DEVIATIONS: Partial<Record<OpName, Reason>> = {
   'project.choose': 'trust-gate',
   'project.setSetupCommand': 'trust-gate',
   'project.clearSetupApproval': 'permissions',
+  'session.setMode': 'permissions',
+  'session.continueIn': 'permissions',
   'agent.setType': 'permissions',
   'agent.setConnection': 'permissions',
   'topics.subscribe': 'transport',

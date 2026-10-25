@@ -394,7 +394,7 @@ export class Proposals {
  * argument half: canvas.close, canvas.create, canvas.save).
  */
 export function isDocOp(op: string): boolean {
-  // A prepared op (B11 C6's, until X9 registers it) is a command: a code restore's.
+  // A prepared worktree removal is a command too.
   if (Object.hasOwn(PREPARED_SURFACE, op)) return false;
   return !Object.hasOwn(SURFACE, op) || SURFACE[op as keyof typeof SURFACE].kind === 'doc';
 }

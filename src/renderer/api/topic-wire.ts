@@ -26,7 +26,7 @@ export interface MirrorSnapshot {
   state: TopicSnapshot['state'] | RuntimeTopicStates[RuntimeTopicKey];
 }
 export type MirrorUpdate = Change | RuntimeChange | RuntimeSnapshotFrame;
-/** Additive receiver seam for the runtime topics; the GUI subscription stays B9-only until X9. */
+/** The receiver seam for whole snapshots and bounded transfers of window topics. */
 export interface MirrorSource {
   topicsSubscribe(
     request: TopicRequest | RuntimeTopicRequest,
@@ -200,12 +200,30 @@ export function runtimePatch(
 
 /** Chunk order is the only order on the wire; no partial snapshot escapes this builder. */
 export function assembledState(
-  topic: RuntimeTopicKey,
+  topic: MirrorTopicKey,
   summary: unknown,
   pairs: readonly (readonly [string, unknown])[],
-): RuntimeTopicStates[RuntimeTopicKey] {
-  const request = topicRequest(topic);
+): MirrorSnapshot['state'] {
   const values = Object.fromEntries(pairs);
+  if (!runtimeTopic(topic)) {
+    if (topic.startsWith('canvas:')) return values as TopicStates[TopicKey];
+    if (topic === 'canvases' || topic.startsWith('needs:'))
+      return { items: pairs.map(([, value]) => value) } as TopicStates[TopicKey];
+    if (topic === 'usage')
+      return {
+        readings: pairs.filter(([key]) => key.startsWith('reading/')).map(([, value]) => value),
+        rules: Object.fromEntries(
+          pairs
+            .filter(([key]) => key.startsWith('rule/'))
+            .map(([key, value]) => [decodeURIComponent(key.slice(5)), value]),
+        ),
+      } as TopicStates['usage'];
+    return {
+      ...(summary as { defaultAdapter: string }),
+      consents: values,
+    } as TopicStates['settings'];
+  }
+  const request = topicRequest(topic);
   if (request.topic === 'session')
     return {
       summary: summary as SessionView['summary'],

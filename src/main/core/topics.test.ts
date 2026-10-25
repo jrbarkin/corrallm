@@ -8,7 +8,13 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { OPS, opsFor } from '../../shared/api/registry';
 import { GUI_OPS, PARTIES, SURFACE } from '../../shared/api/surface';
 import type { OpName, Party } from '../../shared/api/surface';
-import type { Change, TopicKey, TopicRequest, TopicSnapshot } from '../../shared/api/topics';
+import type {
+  Change,
+  TopicUpdate,
+  TopicKey,
+  TopicRequest,
+  TopicSnapshot,
+} from '../../shared/api/topics';
 import { topicKey } from '../../shared/api/topics';
 import type { CanvasId } from '../../shared/canvas';
 import type { Entities } from '../../shared/model/state';
@@ -21,6 +27,16 @@ import { CALLERS, CANVAS, NO_DESKTOP } from './test-registry';
 import { openWindow } from './test-window';
 import { REAL_FIXTURES, startWorld } from './test-world';
 import { validFor } from './test-registry';
+
+function legacy(batch: readonly TopicUpdate[]): Change[] {
+  if (
+    batch.some(
+      (update) => 'kind' in update || /^(run|sessions|session|messages):/.test(update.topic),
+    )
+  )
+    throw new Error('This fixture subscribes only to small document topics.');
+  return batch as Change[];
+}
 
 let profile: string;
 let core: Core;
@@ -52,7 +68,7 @@ describe('T3c: usage and settings topics', () => {
     closing.push(window.close);
     const changes: Change[] = [];
     const epochs: string[] = [];
-    window.link.on('topic', (batch) => changes.push(...batch));
+    window.link.on('topic', (batch) => changes.push(...legacy(batch)));
     window.link.on('epoch', (epoch) => epochs.push(epoch));
     return { ...window, changes, epochs };
   }
@@ -156,7 +172,7 @@ describe('T3c: usage and settings topics', () => {
   it('batches global topic changes for a window in order every 16 ms', async () => {
     const window = connect(new WindowPorts(core), 7);
     const batches: Change[][] = [];
-    window.link.on('topic', (batch) => batches.push(batch));
+    window.link.on('topic', (batch) => batches.push(legacy(batch)));
     await window.link.request('call', 'topics.subscribe', { topic: 'usage' });
     await window.link.request('call', 'topics.subscribe', { topic: 'settings' });
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
@@ -331,8 +347,8 @@ describe('T3c: the canvas, canvases and needs topics', () => {
     const yours = new Map<TopicKey, Copy>();
     copies.set('you', yours);
     window.link.on('topic', (batch) => {
-      sent.push(...batch.filter(({ topic }) => topic !== 'canvases'));
-      for (const copy of yours.values()) copy.apply(batch);
+      sent.push(...legacy(batch).filter(({ topic }) => topic !== 'canvases'));
+      for (const copy of yours.values()) copy.apply(legacy(batch));
     });
     for (const request of TOPICS) {
       const answer = await window.link.request('call', 'topics.subscribe', request);
@@ -350,8 +366,9 @@ describe('T3c: the canvas, canvases and needs topics', () => {
         // Its changes, once it has its snapshot (none comes before: nothing changes meanwhile).
         const box: { copy?: Copy } = {};
         const { snapshot, stop } = await world.core.topics.follow(CALLERS[party], topic, (batch) =>
-          box.copy?.apply(batch),
+          box.copy?.apply(legacy(batch)),
         );
+        if ('kind' in snapshot) throw new Error('This fixture fits one frame.');
         box.copy = new Copy(topic, snapshot);
         theirs.set(topic, box.copy);
         stops.push(stop);

@@ -5,11 +5,13 @@ import { RunViewSchema, SessionSummarySchema } from '../../shared/api/ops/b11-da
 import { Cursor, Message } from '../../shared/api/ops/conversation';
 import { TranscriptEntry } from '../../shared/api/ops/session';
 import { MAX_TOPIC_FRAME } from '../../shared/api/limits';
-import { R, SURFACE } from '../../shared/api/surface';
+import { SURFACE } from '../../shared/api/surface';
 import type { OpName, Party, Reach, Surface } from '../../shared/api/surface';
 import type {
   RunTopChange,
   RuntimeTopicKey,
+  TopicKey,
+  TopicSnapshot,
   RuntimeTopicRequest,
   RuntimeTopicStates,
 } from '../../shared/api/topics';
@@ -59,7 +61,7 @@ import { agentsReached } from './reach';
  *
  * Each topic is read through a projection (call.ts' `project`), under the surface of the op that
  * `reads` it: session.get's for `sessions:<c>`, session.transcript's for a session, `messages`' for
- * the messages, and run.get's for the run (RUN_GET until B11 X9 registers run.get). Its selectors
+ * the messages, and run.get's for the run. Its selectors
  * are the ops' own (ops/views.ts), which the ops page and the projections read whole, so that a
  * topic is never a second way to see anything.
  *
@@ -102,25 +104,12 @@ export interface MessagesBody {
 }
 export type RuntimeBody = RunBody | SessionsBody | SessionBody | MessagesBody;
 
-/**
- * run.get's surface as B11 §6 freezes it (R, read, none, reads run, varies), which the run's
- * projection reads under until B11 X9 registers run.get; then SURFACE's reader of 'run' is used.
- */
-export const RUN_GET = {
-  access: R,
-  kind: 'read',
-  scope: 'none',
-  reads: 'run',
-  varies: ['agents', 'groups', 'saveError'],
-} as const satisfies Surface;
-
-/** The op each runtime topic is read under: SURFACE's reader of it, or run.get's until X9. */
+/** The registered reader of each runtime topic, including run.get. */
 export function readerOf(kind: RuntimeKind): { name: string; surface: Surface } {
   const found = (Object.entries(SURFACE) as [OpName, Surface][]).find(
     ([, surface]) => surface.reads === kind,
   );
   if (found) return { name: found[0], surface: found[1] };
-  if (kind === 'run') return { name: 'run.get', surface: RUN_GET };
   throw new Error(`No op reads the ${kind} topic.`);
 }
 
@@ -1062,9 +1051,50 @@ export const TOPIC_BUDGET = MAX_TOPIC_FRAME - 4096;
 
 /** A state's bounded summary and its keyed entries in order, as a chunked snapshot sends them. */
 export function partsOf(
-  topic: RuntimeTopicKey,
-  state: RuntimeState,
+  topic: RuntimeTopicKey | TopicKey,
+  state: RuntimeState | TopicSnapshot['state'],
 ): { summary: unknown; entries: { key: string; value: unknown }[] } {
+  if (!isRuntimeTopic(topic)) {
+    if (topic.startsWith('canvas:'))
+      return {
+        summary: {},
+        entries: Object.entries(state as Record<string, unknown>).map(([key, value]) => ({
+          key,
+          value,
+        })),
+      };
+    if (topic === 'canvases' || topic.startsWith('needs:')) {
+      const items = (state as { items: readonly { canvas?: string; id?: string }[] }).items;
+      return {
+        summary: {},
+        entries: items.map((value, index) => ({
+          key: value.canvas ?? value.id ?? String(index),
+          value,
+        })),
+      };
+    }
+    if (topic === 'usage') {
+      const value = state as { readings: readonly unknown[]; rules: Record<string, unknown> };
+      return {
+        summary: {},
+        entries: [
+          ...value.readings.map((reading, index) => ({
+            key: `reading/${String(index)}`,
+            value: reading,
+          })),
+          ...Object.entries(value.rules).map(([key, rule]) => ({
+            key: `rule/${encodeURIComponent(key)}`,
+            value: rule,
+          })),
+        ],
+      };
+    }
+    const value = state as { defaultAdapter: string; consents: Record<string, unknown> };
+    return {
+      summary: { defaultAdapter: value.defaultAdapter },
+      entries: Object.entries(value.consents).map(([key, one]) => ({ key, value: one })),
+    };
+  }
   switch (kindOf(topic)) {
     case 'run': {
       const { agents, groups, ...summary } = state as RunView;

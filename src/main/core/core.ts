@@ -67,7 +67,8 @@ import { Engines, needsInput } from './engines';
 import type { Watcher } from './engines';
 import type { HostServices, WindowId } from './host';
 import { implementations } from './ops';
-import { PREPARED_OPS, preparedOps, preparedRules } from './ops/prepared';
+import { PREPARED_OPS, preparedOps } from './ops/prepared';
+import { sessionRules } from './ops/session-control';
 import { PREPARED_SURFACE } from '../../shared/api/prepared';
 import type { AgentId } from '../../shared/api/ids';
 import { SessionControl } from './session-control';
@@ -146,8 +147,7 @@ export interface CoreConfig {
   /** Fake connectors and options for an unpackaged app's tests, admitted by its host. */
   fakeSessions?: boolean;
   /**
-   * For the core's tests alone: B11 C6's prepared operations (shared/api/prepared.ts) registered
-   * beside the live ones, until X9 registers them. No host sets it.
+   * For the core's tests alone: B9a's worktree.remove, until X12 registers it. No host sets it.
    */
   preparedOps?: boolean;
   /**
@@ -847,7 +847,7 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     });
   }
   // B11 C6's session services: live and saved settings, Continue in Terminal, restart, new
-  // conversation and rewind, with R5's proposal (registered by X9; tests: preparedOps).
+  // conversation and rewind, with R5's proposal, through the live registry.
   const control = new SessionControl({
     engines,
     sessions,
@@ -871,7 +871,7 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
       ops: prepared ? { ...OPS, ...PREPARED_OPS } : OPS,
       implementations: {
         ...(prepared
-          ? preparedOps(control, {
+          ? preparedOps({
               ...(cleanup === undefined ? {} : { cleanup }),
               proposals,
               nameOf: ownerName,
@@ -879,6 +879,7 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
             })
           : {}),
         ...implementations({
+          control,
           topics,
           app: config.app,
           catalog: CATALOG,
@@ -891,6 +892,7 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
           windows,
           sessions,
           stalled,
+          runError: (canvas) => journal.problem(canvas),
           runProblems: (canvas) => journal.items(canvas),
           environment,
           usage,
@@ -908,21 +910,15 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
           ...(setups === undefined ? {} : { setups }),
           workspaceReplies: [changes.handler()],
           workspaceItems: (canvas) => changes.items(canvas),
-          // B11 C7: the reply router answers what the runtime asks once its typed reply is
-          // registered (X9; the core's tests register it early).
-          ...(prepared
-            ? {
-                replies: runReplies({
-                  engines,
-                  sessions,
-                  ...(config.locale === undefined ? {} : { locale: config.locale }),
-                }),
-              }
-            : {}),
+          replies: runReplies({
+            engines,
+            sessions,
+            ...(config.locale === undefined ? {} : { locale: config.locale }),
+          }),
         }),
       },
       rules: {
-        ...(prepared ? preparedRules(control) : {}),
+        ...sessionRules(control),
         ...ruleChecks(engines, needOf),
         discard: discardChecks({
           lifecycle,

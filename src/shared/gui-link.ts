@@ -5,7 +5,15 @@ import type { OPS, ResultOf } from './api/registry';
 import type { GuiOp } from './api/surface';
 import type { CoreEvent, IpcEventArgs } from './ipc';
 import type { TerminalEvent } from './terminal';
-import type { Change, TopicRequest, TopicSnapshot } from './api/topics';
+import type {
+  TopicUpdate,
+  TopicRequest,
+  TopicSnapshot,
+  RuntimeTopicRequest,
+  RuntimeSnapshotFrame,
+  RuntimeTopicStates,
+  RuntimeTopicKey,
+} from './api/topics';
 
 /*
  * A window's link to the core (B8 Design §3, §4): CoreLink over the MessagePort main hands each
@@ -48,7 +56,7 @@ export interface CoreGuiSide {
     /** The core's topic epoch, announced on each new port before topic changes. */
     epoch: [epoch: string];
     /** Changes in order, batched per window every 16 ms. */
-    topic: [changes: Change[]];
+    topic: [changes: TopicUpdate[]];
     /** The terminal stream and remaining hand-written events, with no Electron event objects. */
     event: [name: GuiEvent, args: GuiEventArgs<GuiEvent>];
   };
@@ -74,7 +82,7 @@ export function guiFunction<N extends string>(op: N): GuiFunction<N> {
 type InputOf<N extends GuiOp> = N extends 'terminal.drop'
   ? Omit<z.input<(typeof OPS)[N]['input']>, 'paths'> & { files: readonly File[] }
   : N extends 'topics.subscribe' | 'topics.unsubscribe'
-    ? TopicRequest
+    ? TopicRequest | RuntimeTopicRequest
     : z.input<(typeof OPS)[N]['input']>;
 
 /** The arguments of `T` that may not be left out (an index signature's never are). */
@@ -93,12 +101,17 @@ type GuiCalls = {
 };
 
 type GuiResult<N extends GuiOp> = N extends 'topics.subscribe'
-  ? TopicSnapshot & Pick<ResultOf<N>, 'revs'>
+  ? (
+      | TopicSnapshot
+      | { epoch: string; rev: number; state: RuntimeTopicStates[RuntimeTopicKey] }
+      | Extract<RuntimeSnapshotFrame, { kind: 'begin' }>
+    ) &
+      Pick<ResultOf<N>, 'revs'>
   : ResultOf<N>;
 
 /** A view's event listener, over the same port as its operations. */
 export interface GuiEventApi {
-  topicsOnChange(listener: (changes: Change[]) => void): () => void;
+  topicsOnChange(listener: (changes: TopicUpdate[]) => void): () => void;
   topicsOnEpoch(listener: (epoch: string) => void): () => void;
   terminalOnEvent(listener: (...args: GuiEventArgs<'terminal'>) => void): () => void;
 }
