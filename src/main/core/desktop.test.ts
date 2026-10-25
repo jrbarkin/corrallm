@@ -1,3 +1,4 @@
+import { legacyDirectories } from './workspaces/test-directories';
 import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -44,6 +45,7 @@ beforeEach(async () => {
       app: { name: 'corrallm', version: '1.0.0' },
       check: true,
       distribution: 'local',
+      directoryResolver: legacyDirectories,
       sessions: { connectors: {}, environment: () => Promise.resolve({}) },
     },
     host,

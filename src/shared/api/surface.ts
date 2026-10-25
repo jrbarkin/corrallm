@@ -139,7 +139,7 @@ export const SURFACE = {
   'catalog.installed': { access: R, kind: 'read', scope: 'none' },
   'templates.list': { access: R, kind: 'read', scope: 'none' },
   'settings.get': { access: R, kind: 'read', scope: 'none', reads: 'settings' },
-  'project.files': { access: R, kind: 'read', scope: 'none' },
+  'project.files': { access: R, kind: 'read', scope: 'none', self: 'allowed' },
   // A canvas's lifetime and where it is kept (B9 Design §1, §8). A path comes only from a dialog
   // you complete (D1: canvas.open, canvas.saveAs, project.choose). A token's call that would
   // discard work, or close a canvas a window shows, comes to you as a proposal (R4's argument

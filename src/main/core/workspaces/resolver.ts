@@ -28,14 +28,14 @@ export interface WorkingDirectoryResolver {
   onAvailability(canvas: CanvasId, listener: () => void): () => void;
 }
 
-/** Canvas-wide searches, options and reveal name no agent: they use the picked project root. */
+/** Base reads without an agent, host admission and root comparison use the picked project. */
 export interface ProjectRootResolver {
   projectRoot(canvas: CanvasId): TrustedPath | undefined;
 }
 
 export type DirectoryResolver = WorkingDirectoryResolver & ProjectRootResolver;
 
-/** Until provisioning is composed, every agent runs in the picked folder itself. */
+/** A non-repository (and isolated tests) shares the picked folder. */
 export class ProjectDirectories implements DirectoryResolver {
   readonly #projects: Pick<ProjectFolders, 'of' | 'onAvailability'>;
 

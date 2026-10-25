@@ -196,6 +196,8 @@ export class Provisioner {
     owner: WorkspaceOwnerKey;
     base?: Base;
     forkedFrom?: string | null;
+    /** Composition records the owner's initial bindings in the intent's write, before Git. */
+    within?: (workspaces: WorkspaceStore, tree: WorktreeRecord) => void;
   }): Promise<WorktreeRecord> {
     const key = `${request.canvas}\0${request.repository.id}\0${request.owner}`;
     const going = this.#provisions.get(key);
@@ -211,12 +213,20 @@ export class Provisioner {
       request.repository.id,
       request.owner,
     );
-    if (active !== undefined) return this.#resume(active);
+    if (active !== undefined) {
+      if (request.within !== undefined)
+        await this.#workspaces.write((w) => {
+          request.within?.(w, active);
+        });
+      return this.#resume(active);
+    }
     if (this.#queue.full) throw busy();
     const base = request.base ?? (await this.#base(request.repository));
-    const { worktree, job, created } = await this.#workspaces.write((w) =>
-      this.intend(w, { ...request, base }),
-    );
+    const { worktree, job, created } = await this.#workspaces.write((w) => {
+      const intended = this.intend(w, { ...request, base });
+      request.within?.(w, intended.worktree);
+      return intended;
+    });
     if (created) this.#changed(worktree.canvas);
     return job === undefined ? worktree : this.run(job.id);
   }

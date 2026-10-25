@@ -1,3 +1,4 @@
+import { legacyDirectories } from './workspaces/test-directories';
 import type { CanvasId } from '../../shared/canvas';
 import type * as ChildProcess from 'node:child_process';
 import { EventEmitter } from 'node:events';
@@ -43,6 +44,7 @@ it('starts a usable core even when a stale CLI cannot be signalled', async () =>
       app: { name: 'corrallm', version: '1' },
       check: true,
       distribution: 'local',
+      directoryResolver: legacyDirectories,
       fakeSessions: true,
       children: {
         platform: 'linux',
@@ -99,6 +101,7 @@ it('ends a helper still running as it closes, and starts none once closing', asy
       app: { name: 'corrallm', version: '1' },
       check: true,
       distribution: 'local',
+      directoryResolver: legacyDirectories,
       fakeSessions: true,
       children: {
         platform: 'linux',
@@ -167,6 +170,7 @@ it.each(['operation', 'channel', 'engine'] as const)(
         app: { name: 'corrallm', version: '1' },
         check: true,
         distribution: 'local',
+        directoryResolver: legacyDirectories,
         fakeSessions: true,
         children: {
           platform: 'linux',

@@ -49,6 +49,7 @@ export interface ChannelServices {
   shutdown: { ready: HostServices['runReady'] };
   sessions: Pick<
     SessionManager,
+    | 'availability'
     | 'start'
     | 'send'
     | 'answer'
@@ -238,9 +239,18 @@ function createHandlers({
       handler: async ({ window }, agentId, messageId, restore) =>
         sessions.rewind(await of(window), agentId, messageId, restore),
     },
+    'session:availability': {
+      parseArgs: parseAgentArgs,
+      handler: async ({ window }, agent) => sessions.availability(await of(window), agent),
+    },
     'session:options': {
       parseArgs: (args) => parseOptionsArgs(args, catalog),
-      handler: async ({ window }, adapter) => sessions.settingsOptions(await of(window), adapter),
+      handler: async ({ window }, adapter, agent) =>
+        sessions.settingsOptions(
+          await of(window),
+          adapter,
+          ...(agent === undefined ? [] : [agent]),
+        ),
     },
     'session:mcp': {
       parseArgs: parseAgentArgs,

@@ -1,3 +1,4 @@
+import { legacyDirectories } from './workspaces/test-directories';
 import { existsSync } from 'node:fs';
 import { chmod, copyFile, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -59,6 +60,7 @@ async function start(sessions?: CoreConfig['sessions']): Promise<Core> {
       app: { name: 'corrallm', version: '9.8.7' },
       check: true,
       distribution: 'local',
+      directoryResolver: legacyDirectories,
       ...(sessions === undefined ? {} : { sessions }),
     },
     NO_DESKTOP,

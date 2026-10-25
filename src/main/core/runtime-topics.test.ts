@@ -1,3 +1,4 @@
+import { legacyDirectories } from './workspaces/test-directories';
 import { randomUUID } from 'node:crypto';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -124,6 +125,7 @@ async function start(
       app: { name: 'corrallm', version: '1.0.0' },
       check: true,
       distribution: 'local',
+      directoryResolver: legacyDirectories,
       leads,
       sessions: {
         connectors: { 'codex.app-server': connector },

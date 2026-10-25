@@ -15,6 +15,7 @@ import type { Core } from './core';
 import { keepCanvases, readOnDisk } from './store/test-store';
 import { CALLERS, CANVAS, NO_DESKTOP } from './test-registry';
 import { GitRunner } from './workspaces/git';
+import { profileId } from './workspaces/profile';
 import { Provisioner } from './workspaces/provision';
 import { WorkspaceSetups, setupNeedId } from './workspaces/setup';
 import { WorkspaceStore } from './workspaces/store';
@@ -88,7 +89,7 @@ beforeEach(async () => {
       limitsClock: () => (clock += 1000),
       sessions: {
         connectors: { 'codex.app-server': new FakeConnector({ adapter: 'codex' }) },
-        environment: () => Promise.resolve({}),
+        environment: () => Promise.resolve(env),
       },
       setups: ({ store, processes, directories, profile: at, changed }) => {
         const workspaces = new WorkspaceStore({ store });
@@ -97,7 +98,7 @@ beforeEach(async () => {
           processes,
           hooks: path.join(at, 'workspaces', 'hooks'),
         });
-        const provisioner = new Provisioner({ workspaces, git, profile: PROFILE_ID });
+        const provisioner = new Provisioner({ workspaces, git, profile: profileId(at) });
         const setups = new WorkspaceSetups({
           workspaces,
           provisioner,

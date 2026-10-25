@@ -1,3 +1,4 @@
+import { legacyDirectories } from './workspaces/test-directories';
 import { createHash } from 'node:crypto';
 import * as fs from 'node:fs/promises';
 import { toFile } from '../../shared/model/file';
@@ -97,6 +98,7 @@ async function start(watch: 'fs' | 'none' = 'none'): Promise<Core> {
       app: { name: 'corrallm', version: '1.0.0' },
       check: true,
       distribution: 'local',
+      directoryResolver: legacyDirectories,
       limitsClock: (() => {
         let now = 0;
         return () => (now += 1000);

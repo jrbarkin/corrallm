@@ -132,7 +132,7 @@ async function start({
       preparedOps: prepared,
       sessions: {
         connectors: { 'claude-code.terminal': terminal },
-        environment: () => Promise.resolve({}),
+        environment: () => Promise.resolve(made.env),
       },
       cleanup: (deps) => {
         cleanup = new WorkspaceCleanup({

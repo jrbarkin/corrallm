@@ -1051,3 +1051,38 @@ describe('a connected session rewound', () => {
     ]);
   });
 });
+
+it('keeps a workspace-held submission queued and resumes once availability changes, without failing a turn', async () => {
+  const fake = fakeBackend();
+  let ready = false;
+  let changed: (() => void) | undefined;
+  const store = new SessionStore(engine, {
+    ...fake.backend,
+    availability: () =>
+      Promise.resolve(
+        ready ? { ready: true } : { ready: false, sentence: 'Run or skip setup first.' },
+      ),
+    onAvailability: (listener) => {
+      changed = listener;
+      return () => {
+        changed = undefined;
+      };
+    },
+  });
+  store.sync([{ id: 'a', connection: 'claude-code.sdk' }]);
+  const done = vi.fn();
+  store.send('a', 'claude-code', 'hello', done);
+  await settle();
+  expect(fake.backend.start).not.toHaveBeenCalled();
+  expect(store.of('a').queued.map((one) => one.text)).toEqual(['hello']);
+  expect(done).not.toHaveBeenCalled();
+  expect(store.of('a').entries).toContainEqual(
+    expect.objectContaining({ kind: 'notice', text: 'Run or skip setup first.' }),
+  );
+  ready = true;
+  changed?.();
+  await settle();
+  expect(fake.backend.start).toHaveBeenCalledOnce();
+  expect(fake.backend.send).toHaveBeenCalledOnce();
+  store.reset();
+});

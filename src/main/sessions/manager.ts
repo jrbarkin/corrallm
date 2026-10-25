@@ -122,6 +122,7 @@ export interface SessionManagerDeps {
    * too); `holding` says so without waiting.
    */
   gate?: {
+    onAvailability?(listener: () => void): () => void;
     pass(canvas: CanvasId, agentId: string, own?: boolean): Promise<void>;
     holding(canvas: CanvasId, agentId: string): Promise<string | undefined>;
   };
@@ -292,6 +293,12 @@ export class SessionManager {
    * Whether new work may be dispatched to the agent now (B9a Design §3): for what dispatches it to
    * hold rather than fail, since `send` refuses what this says is held.
    */
+  onAvailability(canvas: CanvasId, listener: () => void): () => void {
+    const directory = this.#deps.directories.onAvailability(canvas, listener);
+    const mutation = this.#deps.gate?.onAvailability?.(listener);
+    return () => { directory(); mutation?.(); };
+  }
+
   async availability(canvas: CanvasId, agentId: string): Promise<Availability> {
     const directory = await this.#deps.directories.workingDirectory(canvas, agentId as AgentId);
     if (directory.state === 'held') {
@@ -413,11 +420,20 @@ export class SessionManager {
    * user's own defaults, as read in the canvas's project folder (else the home folder, for the
    * user's own settings alone): without a session, or a prompt.
    */
-  async settingsOptions(canvas: CanvasId, adapter: AdapterId): Promise<SettingsOptions> {
+  async settingsOptions(
+    canvas: CanvasId,
+    adapter: AdapterId,
+    agentId?: string,
+  ): Promise<SettingsOptions> {
     const read = this.#deps.options?.[adapter];
     if (!read) throw new Error(NO_OPTIONS);
     const env = await this.#deps.environment();
-    // Options name an adapter, not an agent: read project-wide defaults, then the user's home.
+    if (agentId !== undefined) {
+      const directory = await this.#deps.directories.workingDirectory(canvas, agentId as AgentId);
+      if (directory.state === 'held') throw new Error(directory.sentence);
+      return read({ cwd: directory.cwd, env });
+    }
+    // A chooser without an agent reads base/user defaults; those are not a native permission report.
     return read({ cwd: this.#deps.directories.projectRoot(canvas) ?? env.HOME ?? homedir(), env });
   }
 
@@ -473,9 +489,10 @@ export class SessionManager {
         const reserved = this.#claims.reserve(adapter, forked, this.#reservation(canvas, agentId));
         if (!reserved.ok) throw new Error(this.#inUse(canvas, reserved.holder));
       }
+      const namespace = await this.#workspaceOf(canvas, agentId);
       await this.close(canvas, agentId);
-      if (forked === null) await this.#forget(canvas, adapter, agentId);
-      else await this.#remember(canvas, adapter, agentId, forked);
+      if (forked === null) await this.#forget(canvas, adapter, agentId, namespace);
+      else await this.#remember(canvas, adapter, agentId, forked, undefined, namespace);
     }
     return { ...(files === undefined ? {} : { files }), conversation };
   }
@@ -569,7 +586,7 @@ export class SessionManager {
     const reserved = this.#claims.reserve(adapter, sessionId, this.#reservation(canvas, agentId));
     if (!reserved.ok) throw new Error(this.#inUse(canvas, reserved.holder));
     await this.close(canvas, agentId);
-    await this.#remember(canvas, adapter, agentId, sessionId);
+    await this.#remember(canvas, adapter, agentId, sessionId, undefined, directory.workspace ?? PROJECT_WORKSPACE);
   }
 
   /** Stops a task the agent's session runs in the background (the session checks it does). */
@@ -658,8 +675,10 @@ export class SessionManager {
   async fresh(canvas: CanvasId, agentId: string, adapter: AdapterId): Promise<void> {
     // A session already closing still owns its conversation until it has.
     await this.#settled(canvas);
+    const directory = await this.#deps.directories.workingDirectory(canvas, agentId as AgentId);
+    if (directory.state === 'held') throw new Error(directory.sentence);
     await this.close(canvas, agentId);
-    await this.#forget(canvas, adapter, agentId);
+    await this.#forget(canvas, adapter, agentId, directory.workspace ?? PROJECT_WORKSPACE);
     // What it was to resume is forgotten: no conversation of that adapter is reserved for it.
     this.#claims.unreserve(canvas, { agent: agentId, adapter });
     // A failed durable clear must not be reported as a successful fresh conversation.
@@ -782,7 +801,14 @@ export class SessionManager {
           }
           // One conversation at a time: the one it ran before (until /clear) is no longer its.
           this.#claims.release(owner, { adapter, id: sessionId });
-          void this.#remember(canvas, adapter, agentId, sessionId, fingerprint);
+          void this.#remember(
+            canvas,
+            adapter,
+            agentId,
+            sessionId,
+            fingerprint,
+            directory.workspace ?? PROJECT_WORKSPACE,
+          );
         },
       };
       if (holder !== undefined && live()) {
@@ -913,11 +939,15 @@ export class SessionManager {
   }
 
   /**
-   * The workspace whose conversations an agent's CLI resumes: the one it runs in. Every agent runs
-   * in the canvas's project folder itself for now.
+   * The active workspace, pinned to the running session while a desired rebind waits.
+   * A non-repository uses the legacy project namespace.
    */
-  #workspaceOf(): string {
-    return PROJECT_WORKSPACE;
+  async #workspaceOf(canvas: CanvasId, agentId: string): Promise<string> {
+    const running = this.#agents.get(canvas)?.get(agentId)?.binding;
+    if (running !== undefined) return running.workspace ?? PROJECT_WORKSPACE;
+    const directory = await this.#deps.directories.workingDirectory(canvas, agentId as AgentId);
+    if (directory.state === 'held') throw new Error(directory.sentence);
+    return directory.workspace ?? PROJECT_WORKSPACE;
   }
 
   /** The agent's conversation in `adapter`, as remembered with the canvas: what it resumes. */
@@ -927,14 +957,14 @@ export class SessionManager {
     agentId: string,
   ): Promise<Conversation | undefined> {
     const remembered = await this.#deps.memory.get(canvas);
-    const byAdapter = conversationsIn(remembered, this.#workspaceOf());
+    const byAdapter = conversationsIn(remembered, await this.#workspaceOf(canvas, agentId));
     const conversations = (Object.hasOwn(byAdapter, adapter) ? byAdapter[adapter] : {}) ?? {};
     return Object.hasOwn(conversations, agentId) ? conversations[agentId] : undefined;
   }
 
   /** Forgets the agent's conversation in `adapter`: it starts afresh next time. */
-  async #forget(canvas: CanvasId, adapter: AdapterId, agentId: string): Promise<void> {
-    const workspace = this.#workspaceOf();
+  async #forget(canvas: CanvasId, adapter: AdapterId, agentId: string, namespace?: string): Promise<void> {
+    const workspace = namespace ?? (await this.#workspaceOf(canvas, agentId));
     await this.#deps.memory.update(canvas, (remembered) => {
       const byAdapter = conversationsIn(remembered, workspace);
       const kept = Object.entries(byAdapter[adapter] ?? {}).filter(([agent]) => agent !== agentId);
@@ -955,13 +985,14 @@ export class SessionManager {
     agentId: string,
     sessionId: string,
     fingerprint?: string,
+    namespace?: string,
   ): Promise<void> {
     requireConversationId(adapter, sessionId);
     const conversation: Conversation = {
       id: sessionId,
       ...(fingerprint === undefined ? {} : { role: fingerprint }),
     };
-    const workspace = this.#workspaceOf();
+    const workspace = namespace ?? (await this.#workspaceOf(canvas, agentId));
     await this.#deps.memory.update(canvas, (remembered) => {
       const byAdapter = conversationsIn(remembered, workspace);
       return withConversationsIn(remembered, workspace, {
