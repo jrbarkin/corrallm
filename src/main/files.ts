@@ -3,7 +3,7 @@ import { readdir } from 'node:fs/promises';
 import path from 'node:path';
 import { setImmediate } from 'node:timers/promises';
 
-import { SAFE_GIT_OPTIONS } from './git';
+import { SAFE_GIT_ENV, SAFE_GIT_OPTIONS } from './git';
 
 /*
  * The files of a project folder, for the composer's @-mentions (as Claude Code completes
@@ -228,7 +228,8 @@ function gitFiles(folder: string, env: Readonly<Record<string, string>>): Promis
       [...SAFE_GIT_OPTIONS, 'ls-files', '--cached', '--others', '--exclude-standard', '-z'],
       {
         cwd: folder,
-        env,
+        // Expanding a sparse index can fetch a promised tree even though no blob is read.
+        env: { ...env, ...SAFE_GIT_ENV },
         stdio: ['ignore', 'pipe', 'ignore'],
         windowsHide: true,
       },
