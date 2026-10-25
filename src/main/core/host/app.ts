@@ -24,8 +24,6 @@ export function appHost(link: Pick<CoreLink<CoreSide, HostSide>, 'request'>): Ho
     askOpenLink: (window, host, url) => answered(link.request('askOpenLink', window, host, url)),
     openExternal: (url) => answered(link.request('openExternal', url)),
     showFile: (file) => answered(link.request('showFile', file)),
-    runReady: (window, request, error) =>
-      answered(link.request('runReady', window, request, error)),
   };
 }
 

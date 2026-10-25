@@ -738,7 +738,7 @@ describe('RunJournal', () => {
     });
   });
 
-  it('says what the store said as it opened with the first canvas restored, once', async () => {
+  it('says what the store said as it opened with each canvas restored, once each', async () => {
     const said = [
       'The core’s database was damaged (it isn’t corrallm’s), and was moved to /p/core.rejected.db.',
       'It starts empty.',
@@ -746,10 +746,12 @@ describe('RunJournal', () => {
     const runs = journal(store, said);
     const canvas = await runs.last();
     expect((await runs.get(canvas)).warning).toBe(said.join(' '));
+    expect((await runs.get(canvas)).warning).toBe(said.join(' '));
+    // The core runs every canvas open as it starts: whichever a window shows says it too.
     const [other] = await named('team.corral');
     await runs.opened(other, 'team.corral is a copy of a canvas saved as other.corral.');
     expect((await runs.get(other)).warning).toBe(
-      'team.corral is a copy of a canvas saved as other.corral.',
+      `${said.join(' ')} team.corral is a copy of a canvas saved as other.corral.`,
     );
   });
 

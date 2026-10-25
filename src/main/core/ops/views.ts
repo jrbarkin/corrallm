@@ -3,7 +3,13 @@ import type { Message } from '../../../shared/model/messages';
 import { isOpen, turnReply } from '../../../shared/model/session';
 import type { Entry } from '../../../shared/model/session';
 import { messageView, runView, summaryReply } from '../../../shared/model/views';
-import type { EntryView, MessageView, RunView, SessionView } from '../../../shared/model/views';
+import type {
+  EntryView,
+  MessageView,
+  RunNotice,
+  RunView,
+  SessionView,
+} from '../../../shared/model/views';
 import type { Caller } from '../caller';
 import { partyIdOf } from '../caller';
 import { cursorOf } from '../delivery/messages';
@@ -147,9 +153,22 @@ export function messagesViewOf(
 }
 
 /**
+ * What opening a canvas found to say (its run discarded, its file gone, the database restored), as
+ * its run's notices: yours alone, as a window shows them (B11 X12), never a token's (a database's
+ * notice names the profile's paths).
+ */
+export function openedNotices(open: Pick<OpenCanvas, 'warnings'>): RunNotice[] {
+  return open.warnings.map((text, index) => ({
+    id: `opened/${String(index)}`,
+    level: 'warning',
+    text,
+  }));
+}
+
+/**
  * The run as `caller` sees it, as far as `reach` (`lead`: whether it is a lead now): yours whole,
- * with why its checkpoint couldn't be kept (`saveError`); a token's, the agents it reaches, and
- * the holds on them and on groups it reaches whole.
+ * with why its checkpoint couldn't be kept (`saveError`) and what opening it found to say; a
+ * token's, the agents it reaches, and the holds on them and on groups it reaches whole.
  */
 export function runSeen(
   open: OpenCanvas,
@@ -160,7 +179,10 @@ export function runSeen(
 ): RunView {
   const run = open.engine.run.snapshot();
   if (caller.kind === 'human')
-    return runView(run, undefined, saveError === undefined ? {} : { saveError });
+    return runView(run, undefined, {
+      notices: openedNotices(open),
+      ...(saveError === undefined ? {} : { saveError }),
+    });
   const agents = new Set(agentsReached(open.document, caller, reach, lead));
   return runView({
     running: run.running,

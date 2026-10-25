@@ -39,67 +39,14 @@ import { isNativeId } from './id';
  * throws. Nothing the renderer sent is passed on as it came.
  */
 
-export function parseStartArgs(args: unknown[], catalog: Catalog): IpcArgs<'session:start'> {
-  const [agentId, options] = expect(args, 2, 'an agent and how to start its session');
-  const { connection, model, mode, effort, role } = record(options, 'the session options', [
-    'connection',
-    'model',
-    'mode',
-    'effort',
-    'role',
-  ]);
-  const authoredRole = parseRole(role);
-  const connected = connectionIn(catalog, typeof connection === 'string' ? connection : '');
-  if (!connected) {
-    const all = catalog.adapters.flatMap((adapter) => adapter.connections.map((one) => one.id));
-    throw new TypeError(`Expected a connection: ${all.join(', ')}`);
-  }
-  const { adapter, connection: started } = connected;
-  const parsed: SessionOptions = {
-    connection: started.id,
-    model: model === null ? null : parseModel(model),
-    // One its connection starts in (each asks), or null for the user's own.
-    mode: mode === null ? null : parseStartMode(mode, catalog, adapter.id, started.id),
-    ...(effort === undefined ? {} : { effort: parseEffort(effort) }),
-    ...(authoredRole === undefined ? {} : { role: authoredRole }),
-  };
-  return [parseId(agentId, 'agent'), parsed];
-}
-
-/** A mode `connection` (one of `adapter`'s) starts its sessions in: never one that never asks. */
-function parseStartMode(
-  value: unknown,
-  catalog: Catalog,
-  adapter: AdapterId,
-  connection: string,
-): SessionMode {
-  const mode = parseMode(value);
-  if (!isStartMode(catalog, adapter, connection, mode)) {
-    throw new TypeError(`Expected a mode ${connection} sessions start in`);
-  }
-  return mode;
-}
-
+/**
+ * session:send: a message the agent window's composer sends its agent's session. A window runs no
+ * queue (B11 Design §8: every canvas's run is the core's), so no message of a window's is the run's
+ * work: none carries a queue origin or a task.
+ */
 export function parseSendArgs(args: unknown[]): IpcArgs<'session:send'> {
   const [agentId, message] = expect(args, 2, 'an agent and a message');
-  const { id, text, images, origin, task } = record(message, 'the message', [
-    'id',
-    'text',
-    'images',
-    'origin',
-    'task',
-  ]);
-  if (origin !== undefined && origin !== 'queue') throw new TypeError('Expected a queue origin');
-  let taskMessage;
-  if (task !== undefined) {
-    if (origin !== 'queue') throw new TypeError('Expected a queue origin for the task');
-    const fields = record(task, 'the task', ['agent', 'item', 'attempt']);
-    taskMessage = {
-      agent: parseId(fields.agent, 'agent', MAX_NODE_ID),
-      item: parseId(fields.item, 'item', MAX_NODE_ID),
-      attempt: parseId(fields.attempt, 'attempt'),
-    };
-  }
+  const { id, text, images } = record(message, 'the message', ['id', 'text', 'images']);
   const pasted = images === undefined ? [] : parseImages(images);
   // A message may be only an image.
   if (typeof text !== 'string' || (text.trim() === '' && pasted.length === 0)) {
@@ -109,8 +56,6 @@ export function parseSendArgs(args: unknown[]): IpcArgs<'session:send'> {
   const parsed: UserMessage = {
     id: parseId(id, 'message'),
     text,
-    ...(origin === undefined ? {} : { origin }),
-    ...(taskMessage === undefined ? {} : { task: taskMessage }),
     ...(pasted.length === 0 ? {} : { images: pasted }),
   };
   return [parseId(agentId, 'agent'), parsed];
@@ -154,16 +99,10 @@ export function parseOptionsArgs(args: unknown[], catalog: Catalog): IpcArgs<'se
   return [parseAdapter(adapter, catalog)];
 }
 
-/** For channels that take only the agent: session:interrupt and session:close. */
+/** For channels that take only the agent: session:interrupt, session:list and session:mcp. */
 export function parseAgentArgs(args: unknown[]): [agentId: string] {
   const [agentId] = expect(args, 1, 'an agent');
   return [parseId(agentId, 'agent')];
-}
-
-/** session:fresh: which adapter's remembered conversation the agent should replace. */
-export function parseFreshArgs(args: unknown[], catalog: Catalog): IpcArgs<'session:fresh'> {
-  const [agentId, adapter] = expect(args, 2, 'an agent and an adapter');
-  return [parseId(agentId, 'agent'), parseAdapter(adapter, catalog)];
 }
 
 /** One of the adapters the catalog lists. */
@@ -182,22 +121,6 @@ export function parseResumeArgs(args: unknown[]): IpcArgs<'session:resume'> {
     throw new TypeError("Expected the conversation's id");
   }
   return [parseId(agentId, 'agent'), sessionId];
-}
-
-/** session:rewind-preview: an agent, and one of its messages. */
-export function parseRewindPreviewArgs(args: unknown[]): IpcArgs<'session:rewind-preview'> {
-  const [agentId, messageId] = expect(args, 2, 'an agent and a message');
-  return [parseId(agentId, 'agent'), parseId(messageId, 'message')];
-}
-
-/** session:rewind: an agent, one of its messages, and what to restore to before it. */
-export function parseRewindArgs(args: unknown[]): IpcArgs<'session:rewind'> {
-  const [agentId, messageId, restore] = expect(args, 3, 'an agent, a message and what to restore');
-  return [
-    parseId(agentId, 'agent'),
-    parseId(messageId, 'message'),
-    oneOf(restore, REWIND_RESTORES, 'thing to restore'),
-  ];
 }
 
 /** session:mcp-change: an agent, one of its MCP servers by name, and what to do to it. */

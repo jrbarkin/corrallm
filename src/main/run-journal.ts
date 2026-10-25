@@ -20,6 +20,8 @@ import type { CanvasMemory } from './memory';
 interface Entry {
   token: string;
   warning?: string;
+  /** Whether what the store said as it opened is in its warning yet. */
+  said?: boolean;
 }
 /**
  * Where each party has read to in a canvas's message store, by party: the place of the last message
@@ -75,7 +77,7 @@ export class RunJournal {
   readonly #deps: JournalDeps;
   readonly #entries = new Map<CanvasId, Entry>();
   readonly #problems = new Map<CanvasId, string | undefined>();
-  /** What opening the database found to say, until the first run restored says it. */
+  /** What opening the database found to say, with each canvas's run restored. */
   #said: string | undefined;
   /** Every write asked for so far, written or failed. */
   #writing: Promise<unknown> = Promise.resolve();
@@ -132,9 +134,11 @@ export class RunJournal {
          WHERE c.id = ?`,
       )
       .get(canvas);
-    if (this.#said !== undefined) {
+    // Said with every canvas restored, once each: the core runs every canvas open as it starts (B11
+    // Design §2), so the first restored need not be the one a window shows.
+    if (this.#said !== undefined && entry.said !== true) {
       entry.warning = [this.#said, entry.warning].filter(Boolean).join(' ');
-      this.#said = undefined;
+      entry.said = true;
     }
     let checkpoint: RunCheckpoint | null = null;
     const saveError = typeof row?.save_error === 'string' ? row.save_error : undefined;

@@ -207,8 +207,10 @@ export interface Core extends Dispatcher {
   engines: Engines;
   /** The app's hand-written channels, over these same services. */
   channels: Channels;
-  shown(windows: WindowId[]): WindowId[];
-  /** Finishes fallible writes after the renderer froze, keeping the core usable if saving fails. */
+  /**
+   * Finishes fallible writes (every journal and store forced), keeping the core usable if saving
+   * fails: what preparing the shutdown barrier does beside freezing dispatch.
+   */
   flush(): Promise<void>;
   /** The outside tokens, kept in the profile's tokens.json. */
   tokens: TokenStore;
@@ -593,9 +595,9 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
       await projects.restore(canvas);
       return canvas;
     },
-    // A canvas the core runs runs on whatever window shows it, or none (decision 5); the app's,
-    // whose run is its window's until B11's cutover, ends its sessions as the window leaves it.
-    left: (canvas) => engines.left(canvas),
+    // Every canvas a window shows runs in the core, on whatever window shows it, or none (B11
+    // Design §8, decision 5): a window only views it.
+    shown: (canvas) => engines.view(canvas),
   });
   const files = new ProjectFiles({ environment });
   const links = new LinkOpener({
@@ -617,8 +619,9 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     processes: children,
     catalog: CATALOG,
     windows,
-    runs: journal,
-    shutdown: { ready: (window, request, error) => host.runReady(window, request, error) },
+    get engines() {
+      return engines;
+    },
     sessions,
   });
   const isLead = config.leads ?? (() => false);
@@ -1100,7 +1103,6 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     engines,
     topics,
     channels,
-    shown: (asked) => asked.filter((window) => windows.has(window)),
     flush,
     prepareShutdown: (reason) => {
       if (committed) return Promise.resolve({ ok: true });

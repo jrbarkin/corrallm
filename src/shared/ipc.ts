@@ -1,17 +1,12 @@
 import type { AdapterId, ConnectionId } from './adapter';
 import type { GuiBridge, GuiDraftsApi } from './gui-link';
-import type { RunCheckpoint, RunRestore } from './run';
 import type {
-  FilesRewind,
   McpChange,
   McpServer,
   PastSession,
-  RewindRestore,
-  RewindResult,
   SessionAnswer,
   SessionEvent,
   SessionMode,
-  SessionOptions,
   SettingsOptions,
   UserMessage,
 } from './session';
@@ -22,9 +17,11 @@ import type {
  * exposes its fixed function on window.api over the window's port. The checked handshake,
  * core:connect, stays in main and is never exposed to the page.
  *
- * The core sends session events over the port; terminals and topics use gui-link.ts. Main still asks the renderer
- * to freeze/save with run:stopping. The preload strips transport details from each event and
- * returns a function that stops listening.
+ * The core sends session events over the port; terminals and topics use gui-link.ts. The preload
+ * strips transport details from each event and returns a function that stops listening. These are
+ * what the agent window still asks of an agent's session until B11 X13 moves it onto the session
+ * topic and operations (the core's runtime, which runs every canvas a window shows, hears what
+ * they change); a canvas's run is the core's alone, through operations and topics.
  *
  * Keep this module free of Node, Electron and DOM imports: it is compiled into every process.
  */
@@ -34,28 +31,6 @@ export interface IpcContract {
    * window's port to the core, which main posts back as 'core:port' (src/shared/gui-link.ts).
    */
   'core:connect': { args: []; result: null };
-  /**
-   * The run of the canvas the window shows, as the journal keeps it: its id, its generation's
-   * token, its checkpoint and what to say of it. Starts no agent. Its document is the core's,
-   * read through the `canvas:<id>` topic.
-   */
-  'run:get': { args: []; result: RunRestore };
-  /**
-   * Journals run metadata only. Document edits are operations; the token rejects writes from
-   * an earlier canvas generation.
-   */
-  'run:save': {
-    args: [token: string, checkpoint: RunCheckpoint | null];
-    result: null;
-  };
-  /** Renderer froze dispatch and finished persisting before the requested shutdown. */
-  'run:ready': { args: [requestId: string, error: string | null]; result: null };
-  /**
-   * Starts an agent's connected session (or resumes it, if the canvas's file remembers one), in
-   * the canvas's project folder. Resolves once it runs; rejects without a project folder, or if
-   * it could not start. Starting it again with the same connection does nothing.
-   */
-  'session:start': { args: [agentId: string, options: SessionOptions]; result: null };
   /** Sends a message to an agent's running session: a turn starts, or the CLI queues it. */
   'session:send': { args: [agentId: string, message: UserMessage]; result: null };
   /** Answers a prompt (permission, question, plan) an agent's session is waiting on. */
@@ -80,10 +55,6 @@ export interface IpcContract {
    * 'tasks' event gave. Rejects for a task it does not run in the background.
    */
   'session:stopTask': { args: [agentId: string, taskId: string]; result: null };
-  /** Ends an agent's session (it can be resumed later). Resolves once its process has exited. */
-  'session:close': { args: [agentId: string]; result: null };
-  /** Forgets only this adapter's remembered conversation, keeping its native history. */
-  'session:fresh': { args: [agentId: string, adapter: AdapterId]; result: null };
   /**
    * The conversations Claude Code kept for the canvas's project folder, most recent first, as
    * /resume lists them, saying which is the agent's own. Rejects without a project folder.
@@ -94,20 +65,6 @@ export interface IpcContract {
    * own: its session ends, and resumes that one when it starts again. Rejects any other id.
    */
   'session:resume': { args: [agentId: string, sessionId: string]; result: null };
-  /**
-   * What rewinding an agent's session to before one of its messages would restore in its files
-   * (a dry run of Claude Code's file checkpoints; Agent SDK sessions).
-   */
-  'session:rewind-preview': { args: [agentId: string, messageId: string]; result: FilesRewind };
-  /**
-   * Rewinds an agent's session to before one of its messages: its files, its conversation (a
-   * copy of it up to that point becomes the agent's own, and its session ends to resume it), or
-   * both. Rejects, changing nothing, if that cannot be done.
-   */
-  'session:rewind': {
-    args: [agentId: string, messageId: string, restore: RewindRestore];
-    result: RewindResult;
-  };
   /**
    * What an agent of an adapter can be set to run with (its models, with their efforts) and the
    * user's own defaults, read in the canvas's project folder without a session or a prompt.
@@ -124,8 +81,6 @@ export interface IpcContract {
 
 /** Events the core and main send the renderer: each one's name, and what it carries. */
 export interface IpcEvents {
-  /** Freeze queue dispatch, persist, then acknowledge with run:ready. */
-  'run:stopping': [requestId: string];
   /** What an agent's connected session did. Only the renderer that started it hears. */
   'session:event': [agentId: string, connection: ConnectionId, event: SessionEvent];
 }
@@ -147,8 +102,8 @@ export const MAX_CANVAS_BYTES = 10 * 1024 * 1024;
 export type IpcChannel = keyof IpcContract;
 /** Hand-written channels served on a window’s port, after the checked handshake. */
 export type CoreChannel = Exclude<IpcChannel, 'core:connect'>;
-/** Events from the core; main still asks the renderer to freeze/save. */
-export type CoreEvent = Exclude<IpcEvent, 'run:stopping'>;
+/** Events from the core. */
+export type CoreEvent = IpcEvent;
 export type IpcArgs<C extends IpcChannel> = IpcContract[C]['args'];
 export type IpcResult<C extends IpcChannel> = IpcContract[C]['result'];
 export type IpcEvent = keyof IpcEvents;
@@ -158,10 +113,6 @@ export type IpcEventArgs<E extends IpcEvent> = IpcEvents[E];
  * A method per remaining contract channel, with its arguments.
  */
 export interface InvokeApi {
-  getRun(): Promise<IpcResult<'run:get'>>;
-  saveRun(...args: IpcArgs<'run:save'>): Promise<IpcResult<'run:save'>>;
-  runReady(...args: IpcArgs<'run:ready'>): Promise<IpcResult<'run:ready'>>;
-  startSession(...args: IpcArgs<'session:start'>): Promise<IpcResult<'session:start'>>;
   sendToSession(...args: IpcArgs<'session:send'>): Promise<IpcResult<'session:send'>>;
   answerSession(...args: IpcArgs<'session:answer'>): Promise<IpcResult<'session:answer'>>;
   interruptSession(...args: IpcArgs<'session:interrupt'>): Promise<IpcResult<'session:interrupt'>>;
@@ -169,14 +120,8 @@ export interface InvokeApi {
   setSessionModel(...args: IpcArgs<'session:model'>): Promise<IpcResult<'session:model'>>;
   setSessionEffort(...args: IpcArgs<'session:effort'>): Promise<IpcResult<'session:effort'>>;
   stopSessionTask(...args: IpcArgs<'session:stopTask'>): Promise<IpcResult<'session:stopTask'>>;
-  closeSession(...args: IpcArgs<'session:close'>): Promise<IpcResult<'session:close'>>;
-  freshSession(...args: IpcArgs<'session:fresh'>): Promise<IpcResult<'session:fresh'>>;
   listSessions(...args: IpcArgs<'session:list'>): Promise<IpcResult<'session:list'>>;
   resumeSession(...args: IpcArgs<'session:resume'>): Promise<IpcResult<'session:resume'>>;
-  previewRewind(
-    ...args: IpcArgs<'session:rewind-preview'>
-  ): Promise<IpcResult<'session:rewind-preview'>>;
-  rewindSession(...args: IpcArgs<'session:rewind'>): Promise<IpcResult<'session:rewind'>>;
   settingsOptions(...args: IpcArgs<'session:options'>): Promise<IpcResult<'session:options'>>;
   mcpServers(...args: IpcArgs<'session:mcp'>): Promise<IpcResult<'session:mcp'>>;
   changeMcpServer(...args: IpcArgs<'session:mcp-change'>): Promise<IpcResult<'session:mcp-change'>>;
@@ -184,7 +129,6 @@ export interface InvokeApi {
 
 /** A function per event: it listens for the event, and returns a function that stops listening. */
 export interface EventApi {
-  onRunStopping(listener: (...args: IpcEventArgs<'run:stopping'>) => void): () => void;
   onSessionEvent(listener: (...args: IpcEventArgs<'session:event'>) => void): () => void;
 }
 
@@ -196,10 +140,6 @@ export interface AppApi extends InvokeApi, EventApi, GuiBridge, GuiDraftsApi {}
 
 /** Which channel each `InvokeApi` method invokes. */
 export const API_CHANNELS = {
-  getRun: 'run:get',
-  saveRun: 'run:save',
-  runReady: 'run:ready',
-  startSession: 'session:start',
   sendToSession: 'session:send',
   answerSession: 'session:answer',
   interruptSession: 'session:interrupt',
@@ -207,12 +147,8 @@ export const API_CHANNELS = {
   setSessionModel: 'session:model',
   setSessionEffort: 'session:effort',
   stopSessionTask: 'session:stopTask',
-  closeSession: 'session:close',
-  freshSession: 'session:fresh',
   listSessions: 'session:list',
   resumeSession: 'session:resume',
-  previewRewind: 'session:rewind-preview',
-  rewindSession: 'session:rewind',
   settingsOptions: 'session:options',
   mcpServers: 'session:mcp',
   changeMcpServer: 'session:mcp-change',
@@ -220,7 +156,6 @@ export const API_CHANNELS = {
 
 /** Which event each `EventApi` function listens for. */
 export const API_EVENTS = {
-  onRunStopping: 'run:stopping',
   onSessionEvent: 'session:event',
 } as const satisfies Record<keyof EventApi, IpcEvent>;
 

@@ -9,7 +9,6 @@ import type { CoreGuiSide, GuiSide } from '../../shared/gui-link';
 import { CoreLink } from '../../shared/link';
 import { WindowPorts } from '../core/gui';
 import { coreEnd } from '../core/test-window';
-import { RunShutdown } from '../run-shutdown';
 import { installNavigationGuards } from '../security';
 
 /*
@@ -144,28 +143,17 @@ describe('windows’ ports to the core', () => {
     expect(core.windowGone).not.toHaveBeenCalled();
   });
 
-  it('keeps the port after a blocked navigation so run:ready reaches main before the core stops', async () => {
+  it('keeps the port after a blocked navigation so a quit’s drafts.flush still reaches the window', async () => {
     const contents = new FakeContents();
     const native = contents as unknown as WebContents;
     installNavigationGuards(ORIGIN);
     appOn.mock.calls.find(([name]) => name === 'web-contents-created')?.[1]({}, contents);
     const order: string[] = [];
-    let renderer: CoreLink<GuiSide, CoreGuiSide>;
-    const failed: unknown[] = [];
-    const shutdown = new RunShutdown((_window, request) => {
-      order.push('run:stopping');
-      void renderer.request('channel', 'run:ready', [request, null]).catch((error: unknown) => {
-        failed.push(error);
-      });
-    });
     const served = new WindowPorts({
       call: () => Promise.resolve({ ok: true, value: {} }),
       channels: {
-        call: (window, name, args) => {
-          if (window !== 7 || name !== 'run:ready') throw new Error('unexpected acknowledgement');
-          order.push('run:ready');
-          shutdown.ready(native, args[0] as string, args[1] as null);
-          return null;
+        call: () => {
+          throw new Error('unexpected channel');
         },
         gone: () => undefined,
         listen: () => () => undefined,
@@ -183,7 +171,7 @@ describe('windows’ ports to the core', () => {
     };
     contents.postMessage.mockImplementation((_name, _data, [port]) => {
       const end = port as MessagePort;
-      renderer = new CoreLink<GuiSide, CoreGuiSide>(
+      new CoreLink<GuiSide, CoreGuiSide>(
         {
           post: (message) => {
             end.postMessage(message);
@@ -195,7 +183,12 @@ describe('windows’ ports to the core', () => {
             });
           },
         },
-        { 'drafts.flush': () => null },
+        {
+          'drafts.flush': () => {
+            order.push('drafts.flush');
+            return null;
+          },
+        },
       );
     });
     new CorePorts(core, ORIGIN).connect(native);
@@ -208,12 +201,11 @@ describe('windows’ ports to the core', () => {
     expect(navigation.preventDefault).toHaveBeenCalledOnce();
     await new Promise((resolve) => setImmediate(resolve));
 
-    await shutdown.stop(native);
-    // Main flushes/closes the core only after its freeze/save acknowledgement.
+    // The quit's drafts are asked over the same port, answered before the core is closed.
+    expect(await served.flushDrafts([7])).toEqual([]);
     order.push('core:close');
     served.gone(7, true);
-    expect(order).toEqual(['run:stopping', 'run:ready', 'core:close']);
-    expect(failed).toEqual([]);
+    expect(order).toEqual(['drafts.flush', 'core:close']);
   });
 
   it('follows each window once, however often it asks', () => {
