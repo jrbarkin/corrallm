@@ -1905,6 +1905,40 @@ describe('telling an agent of a withdrawal after receipt', () => {
     terminal = new FakeConnector({ adapter: 'codex', pause: 100 });
   });
 
+  /** Keep the original and then its separate note running until their real interrupts. */
+  function heldNoteConnector() {
+    let waiting: Promise<void> | undefined;
+    let release: (() => void) | undefined;
+    let sent = 0;
+    const fake = new FakeConnector({
+      adapter: 'codex',
+      step: () => waiting ?? Promise.resolve(),
+    });
+    const start = fake.start.bind(fake);
+    vi.spyOn(fake, 'start').mockImplementation(async (spec, host) => {
+      const session = await start(spec, host);
+      const send = session.send.bind(session);
+      const interrupt = session.interrupt.bind(session);
+      session.send = (message) => {
+        if (++sent === 1 || message.from?.party === 'corrallm') {
+          const gate = Promise.withResolvers<undefined>();
+          waiting = gate.promise;
+          release = () => {
+            gate.resolve(undefined);
+          };
+        } else waiting = undefined;
+        return send(message);
+      };
+      session.interrupt = () => {
+        const stopped = interrupt();
+        release?.();
+        return stopped;
+      };
+      return session;
+    });
+    return fake;
+  }
+
   it('withdraws a Terminal message waiting at folder trust without a false receipt or note', async () => {
     const terminal = await startAtTrust();
     await terminal.start();
@@ -1999,6 +2033,7 @@ describe('telling an agent of a withdrawal after receipt', () => {
   ] as const)(
     'never sends a %s slash command after %s during its withdrawal note’s own turn',
     async (origin, stop) => {
+      appServer = heldNoteConnector();
       await keepCanvas([{ ...BUILDER_AGENT, queue: [{ id: 'review', action: '/review' }] }], []);
       const engine = await (await start()).engines.open(CANVAS);
       const id = await withdrawReceived();
@@ -2043,6 +2078,7 @@ describe('telling an agent of a withdrawal after receipt', () => {
   );
 
   it('never sends a shell command after a Stop during its withdrawal note’s own turn', async () => {
+    terminal = heldNoteConnector();
     await keepCanvas();
     await start();
     const id = await withdrawReceived('shell');
