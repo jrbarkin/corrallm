@@ -229,7 +229,9 @@ test('the queues’ Run sends its message to the Codex thread, and hears its tur
   await view.getByRole('button', { name: 'All queues' }).click();
   const queues = page.getByRole('dialog', { name: 'All queues' });
   await queues.getByRole('button', { name: 'Run' }).click();
-  await expect(queues.getByRole('status')).toHaveText('All done');
+  // The turn is the fake app server's (a Node process, its handshake): about 0.1 s here, but on a
+  // loaded machine it has taken 4 s and 9 s, past Playwright's default five seconds.
+  await expect(queues.getByRole('status')).toHaveText('All done', { timeout: 15_000 });
   await queues.getByRole('button', { name: 'Open Shop' }).click();
   await expect(
     view.getByRole('log', { name: 'Transcript' }).getByText('You said: Write the docs'),

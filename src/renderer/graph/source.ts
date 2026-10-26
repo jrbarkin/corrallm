@@ -9,7 +9,19 @@ export class CanvasSource {
   readonly #flow = new CanvasFlow();
   readonly #listeners = new Set<() => void>();
   #canvas: CanvasId;
+  #last: Flow | undefined;
   #stop: (() => void) | undefined;
+  #topics() {
+    const c = this.#canvas;
+    return [`canvas:${c}`, `run:${c}`, `needs:${c}`, `sessions:${c}`, `messages:${c}`] as const;
+  }
+  failure = (): string | undefined =>
+    this.#topics()
+      .map((topic) => this.#mirror.failure(topic))
+      .find((error) => error !== undefined);
+  available = (): boolean =>
+    this.failure() === undefined &&
+    this.#topics().every((topic) => this.#mirror.revision(topic) !== undefined);
   constructor(canvas: CanvasId, mirror: TopicMirror) {
     this.#canvas = canvas;
     this.#mirror = mirror;
@@ -23,9 +35,9 @@ export class CanvasSource {
   read = (): Flow | undefined => {
     const rows = this.#mirror.snapshot(this.topic),
       rev = this.#mirror.revision(this.topic);
-    return rows === undefined || rev === undefined
-      ? undefined
-      : this.#flow.read(this.#canvas, rev, rows);
+    if (rows !== undefined && rev !== undefined)
+      this.#last = this.#flow.read(this.#canvas, rev, rows);
+    return this.#last;
   };
   required(): Flow {
     const flow = this.read();
@@ -48,17 +60,27 @@ export class CanvasSource {
     this.#stop?.();
     this.#stop = undefined;
     this.#canvas = canvas;
+    this.#last = undefined;
     this.#listen();
     this.#tell();
   }
   ready(): Promise<void> {
-    return this.#mirror.whenAt(this.topic, 0);
+    return Promise.all(this.#topics().map((topic) => this.#mirror.whenAt(topic, 0))).then(
+      () => undefined,
+    );
   }
   #listen(): void {
     if (this.#listeners.size > 0)
-      this.#stop ??= this.#mirror.subscribe(this.topic, () => {
-        this.#tell();
-      });
+      this.#stop ??= (() => {
+        const stops = this.#topics().map((topic) =>
+          this.#mirror.subscribe(topic, () => {
+            this.#tell();
+          }),
+        );
+        return () => {
+          for (const stop of stops) stop();
+        };
+      })();
   }
   #tell(): void {
     for (const listener of this.#listeners) listener();

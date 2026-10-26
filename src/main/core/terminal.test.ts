@@ -17,6 +17,8 @@ import type { Connector, TerminalScreen } from '../sessions/connector';
 import { quotePath } from '../sessions/terminal/drop';
 import { createCore } from './core';
 import type { Core } from './core';
+import { keepCanvases, openedLast } from './store/test-store';
+import { newCanvasId } from '../../shared/canvas';
 import { WindowPorts } from './gui';
 import { mintTrustedPath } from './host';
 import { CALLERS, NO_DESKTOP } from './test-registry';
@@ -24,8 +26,8 @@ import { openWindow } from './test-window';
 
 const YOU = { ...CALLERS.you, window: 7 };
 const EIGHT = { ...CALLERS.you, window: 8 };
-const OPTIONS = { connection: 'codex.terminal', model: null, mode: null };
 let profile: string;
+const agent = 'a';
 let core: Core;
 let screen: ReturnType<typeof terminal>;
 const closing: (() => void)[] = [];
@@ -74,6 +76,29 @@ beforeEach(async () => {
   profile = await mkdtemp(path.join(tmpdir(), 'corrallm-terminal-'));
   const folder = path.join(profile, 'project');
   await mkdir(folder);
+  const canvas = newCanvasId();
+  const file = path.join(profile, 'terminal.corral');
+  await writeFile(
+    file,
+    JSON.stringify({
+      format: 'corrallm',
+      version: 2,
+      id: canvas,
+      nodes: [
+        {
+          id: agent,
+          kind: 'agent',
+          label: 'Terminal',
+          adapter: 'codex',
+          connection: 'codex.terminal',
+          position: { x: 0, y: 0 },
+        },
+      ],
+      links: [],
+    }),
+  );
+  await keepCanvases(profile, { [canvas]: { file, project: folder } });
+  await openedLast(profile, canvas);
   screen = terminal();
   core = await createCore(
     {
@@ -100,20 +125,24 @@ afterEach(async () => {
   await rm(profile, { recursive: true, force: true });
 });
 
-const start = () => core.channels.call(7, 'session:start', ['a', OPTIONS]);
+const start = async () => {
+  const shown = await core.call('window.get', {}, YOU);
+  if (!shown.ok) throw new Error(shown.error.sentence);
+  const canvas = shown.value.canvas;
+  const answer = await core.call('session.open', { canvas, agent }, YOU);
+  if (!answer.ok) throw new Error(answer.error.sentence);
+};
 const ok = { ok: true, value: { revs: {} } };
 
 describe('terminal operations', () => {
   it('passes keystrokes, including control characters, and sizes to the calling window’s terminal', async () => {
     await start();
-    expect(await core.call('terminal.input', { agent: 'a', data: '\x1b[Z\x03' }, YOU)).toEqual(ok);
-    expect(await core.call('terminal.resize', { agent: 'a', cols: 120, rows: 40 }, YOU)).toEqual(
-      ok,
-    );
+    expect(await core.call('terminal.input', { agent, data: '\x1b[Z\x03' }, YOU)).toEqual(ok);
+    expect(await core.call('terminal.resize', { agent, cols: 120, rows: 40 }, YOU)).toEqual(ok);
     expect(screen.input).toHaveBeenCalledExactlyOnceWith('\x1b[Z\x03');
     expect(screen.resize).toHaveBeenCalledExactlyOnceWith(120, 40);
     await core.call('canvas.create', {}, EIGHT);
-    expect(await core.call('terminal.input', { agent: 'a', data: 'other' }, EIGHT)).toEqual(ok);
+    expect(await core.call('terminal.input', { agent, data: 'other' }, EIGHT)).toEqual(ok);
     expect(screen.input).toHaveBeenCalledOnce();
   });
 
@@ -127,7 +156,7 @@ describe('terminal operations', () => {
     const other = vi.fn();
     seven.link.on('event', heard);
     eight.link.on('event', other);
-    expect(await core.call('terminal.attach', { agent: 'a' }, YOU)).toEqual(ok);
+    expect(await core.call('terminal.attach', { agent }, YOU)).toEqual(ok);
     await start();
     await vi.waitFor(() => {
       expect(heard).toHaveBeenCalledWith('terminal', [
@@ -146,7 +175,7 @@ describe('terminal operations', () => {
       ['terminal', ['a', { type: 'exit', code: 0 }]],
     ]);
     expect(other).not.toHaveBeenCalled();
-    expect(await core.call('terminal.detach', { agent: 'a' }, YOU)).toEqual(ok);
+    expect(await core.call('terminal.detach', { agent }, YOU)).toEqual(ok);
     screen.emit({ type: 'output', data: 'after detach' });
     await seven.link.request('call', 'app.info', {});
     expect(heard).toHaveBeenCalledTimes(3);
@@ -157,11 +186,9 @@ describe('terminal operations', () => {
     const file = path.join(profile, "Screen Shot's.png");
     await writeFile(file, 'png');
     const missing = path.join(profile, 'missing.png');
-    expect(await core.call('terminal.drop', { agent: 'a', paths: [file, missing] }, YOU)).toEqual(
-      ok,
-    );
+    expect(await core.call('terminal.drop', { agent, paths: [file, missing] }, YOU)).toEqual(ok);
     expect(screen.paste).toHaveBeenCalledExactlyOnceWith(`${quotePath(file)} `);
-    expect(await core.call('terminal.drop', { agent: 'a', paths: [missing] }, YOU)).toEqual(ok);
+    expect(await core.call('terminal.drop', { agent, paths: [missing] }, YOU)).toEqual(ok);
     expect(await core.call('terminal.drop', { agent: 'b', paths: [file] }, YOU)).toEqual(ok);
     expect(screen.paste).toHaveBeenCalledOnce();
   });
@@ -169,33 +196,33 @@ describe('terminal operations', () => {
   it.each([
     ['terminal.attach', {}],
     ['terminal.attach', { agent: {} }],
-    ['terminal.detach', { agent: 'a', extra: true }],
-    ['terminal.input', { agent: 'a', data: '' }],
-    ['terminal.input', { agent: 'a', data: [13] }],
-    ['terminal.input', { agent: 'a', data: 'x'.repeat(MAX_TERMINAL_INPUT + 1) }],
-    ['terminal.resize', { agent: 'a' }],
-    ['terminal.resize', { agent: 'a', cols: 80.5, rows: 24 }],
-    ['terminal.resize', { agent: 'a', cols: 80, rows: 0 }],
-    ['terminal.resize', { agent: 'a', cols: MAX_TERMINAL_COLS + 1, rows: 24 }],
-    ['terminal.resize', { agent: 'a', cols: 80, rows: MAX_TERMINAL_ROWS + 1 }],
-    ['terminal.resize', { agent: 'a', cols: '80', rows: 24 }],
-    ['terminal.drop', { agent: 'a', paths: [] }],
-    ['terminal.drop', { agent: 'a', paths: '/Users/me/a.png' }],
+    ['terminal.detach', { agent, extra: true }],
+    ['terminal.input', { agent, data: '' }],
+    ['terminal.input', { agent, data: [13] }],
+    ['terminal.input', { agent, data: 'x'.repeat(MAX_TERMINAL_INPUT + 1) }],
+    ['terminal.resize', { agent }],
+    ['terminal.resize', { agent, cols: 80.5, rows: 24 }],
+    ['terminal.resize', { agent, cols: 80, rows: 0 }],
+    ['terminal.resize', { agent, cols: MAX_TERMINAL_COLS + 1, rows: 24 }],
+    ['terminal.resize', { agent, cols: 80, rows: MAX_TERMINAL_ROWS + 1 }],
+    ['terminal.resize', { agent, cols: '80', rows: 24 }],
+    ['terminal.drop', { agent, paths: [] }],
+    ['terminal.drop', { agent, paths: '/Users/me/a.png' }],
     [
       'terminal.drop',
       {
-        agent: 'a',
+        agent,
         paths: Array.from({ length: MAX_DROPPED_FILES + 1 }, (_, i) => `/f${String(i)}`),
       },
     ],
-    ['terminal.drop', { agent: 'a', paths: ['shot.png'] }],
-    ['terminal.drop', { agent: 'a', paths: ['/a\n/b.png'] }],
-    ['terminal.drop', { agent: 'a', paths: ['/a\x00/b.png'] }],
-    ['terminal.drop', { agent: 'a', paths: ['/a\x7f/b.png'] }],
-    ['terminal.drop', { agent: 'a', paths: [42] }],
-    ['terminal.drop', { agent: 'a', paths: [`/${'x'.repeat(MAX_DROPPED_PATH)}`] }],
-    ['terminal.input', { agent: 'a', data: 'keys', window: 8 }],
-    ['terminal.attach', { agent: 'a', canvas: crypto.randomUUID() }],
+    ['terminal.drop', { agent, paths: ['shot.png'] }],
+    ['terminal.drop', { agent, paths: ['/a\n/b.png'] }],
+    ['terminal.drop', { agent, paths: ['/a\x00/b.png'] }],
+    ['terminal.drop', { agent, paths: ['/a\x7f/b.png'] }],
+    ['terminal.drop', { agent, paths: [42] }],
+    ['terminal.drop', { agent, paths: [`/${'x'.repeat(MAX_DROPPED_PATH)}`] }],
+    ['terminal.input', { agent, data: 'keys', window: 8 }],
+    ['terminal.attach', { agent, canvas: crypto.randomUUID() }],
   ])('refuses invalid %s arguments before affecting a terminal', async (op, args) => {
     await start();
     expect(await core.call(op as never, args, YOU)).toMatchObject({

@@ -37,6 +37,7 @@ import { openCanvas } from './ops/open';
 import {
   messagesViewOf,
   messageViewOf,
+  openedNotices,
   runSeen,
   sessionSummary,
   sessionViewOf,
@@ -593,11 +594,10 @@ export class RuntimeSource {
 
   #runView(open: OpenCanvas, previous: RunView | undefined): RunView {
     const saveError = this.#deps.problem(open.document.id);
-    return runView(
-      open.engine.run.snapshot(),
-      previous,
-      saveError === undefined ? {} : { saveError },
-    );
+    return runView(open.engine.run.snapshot(), previous, {
+      notices: openedNotices(open),
+      ...(saveError === undefined ? {} : { saveError }),
+    });
   }
 
   #takeRun(source: CanvasSource, open: OpenCanvas): RunBody | undefined {

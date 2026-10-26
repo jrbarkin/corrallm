@@ -1,16 +1,13 @@
 import { expect } from 'vitest';
 
+import type { MirrorStates, MirrorSnapshot, MirrorTopicKey } from './api/topic-wire';
+import { runtimePatch, runtimeTopic } from './api/topic-wire';
+import type { RuntimeChange } from '../shared/api/topics';
 import type { OpResult } from '../shared/api/errors';
 import { GUI_OPS } from '../shared/api/surface';
 import type { GuiOp } from '../shared/api/surface';
 import { topicKey } from '../shared/api/topics';
-import type {
-  Change,
-  TopicKey,
-  RuntimeTopicKey,
-  TopicSnapshot,
-  TopicStates,
-} from '../shared/api/topics';
+import type { Change, TopicKey, RuntimeTopicKey } from '../shared/api/topics';
 import { guiFunction } from '../shared/gui-link';
 import type { GuiApi, GuiBridge } from '../shared/gui-link';
 import { fromBridge } from './api/bridge';
@@ -21,8 +18,8 @@ export interface RecordedOp {
   op: GuiOp;
   args: unknown;
 }
-type FedChange = Change extends infer C
-  ? C extends Change
+type FedChange = Change | RuntimeChange extends infer C
+  ? C extends Change | RuntimeChange
     ? Omit<C, 'epoch' | 'seq' | 'at' | 'by'>
     : never
   : never;
@@ -31,7 +28,7 @@ type FedChange = Change extends infer C
 export function fakeCore() {
   const operations: RecordedOp[] = [];
   const subscriptions = new Set<TopicKey | RuntimeTopicKey>();
-  const snapshots = new Map<TopicKey | RuntimeTopicKey, TopicSnapshot>();
+  const snapshots = new Map<MirrorTopicKey, MirrorSnapshot>();
   const replies = new Map<
     GuiOp,
     OpResult<unknown> | ((args: unknown) => Promise<OpResult<unknown>>)
@@ -99,15 +96,24 @@ export function fakeCore() {
     ): void {
       replies.set(op, reply);
     },
-    state<K extends TopicKey>(topic: K): (TopicSnapshot & { state: TopicStates[K] }) | undefined {
-      return snapshots.get(topic) as (TopicSnapshot & { state: TopicStates[K] }) | undefined;
+    state<K extends MirrorTopicKey>(
+      topic: K,
+    ): (MirrorSnapshot & { state: MirrorStates[K] }) | undefined {
+      return snapshots.get(topic) as (MirrorSnapshot & { state: MirrorStates[K] }) | undefined;
     },
-    snapshot<K extends TopicKey>(topic: K, state: TopicStates[K], rev = 0): void {
+    snapshot<K extends MirrorTopicKey>(topic: K, state: MirrorStates[K], rev = 0): void {
       snapshots.set(topic, { epoch, rev, state });
     },
     change(fed: FedChange): void {
+      const previous = snapshots.get(fed.topic);
+      if (!('replace' in fed) && runtimeTopic(fed.topic) && !previous)
+        throw new Error('No runtime fixture snapshot');
       const state =
-        'replace' in fed ? fed.replace : { ...snapshots.get(fed.topic)?.state, ...fed.set };
+        'replace' in fed
+          ? fed.replace
+          : runtimeTopic(fed.topic)
+            ? runtimePatch(previous?.state as never, fed as RuntimeChange)
+            : { ...snapshots.get(fed.topic)?.state, ...('set' in fed ? fed.set : {}) };
       if ('remove' in fed) for (const key of fed.remove ?? []) Reflect.deleteProperty(state, key);
       snapshots.set(fed.topic, { epoch, rev: fed.rev, state });
       if (!subscriptions.has(fed.topic)) return;

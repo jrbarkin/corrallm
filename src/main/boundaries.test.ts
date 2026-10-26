@@ -278,7 +278,6 @@ describe('main’s files', () => {
       'src/main/security.ts',
       'src/main/app-protocol.ts',
       'src/main/ipc.ts',
-      'src/main/run-shutdown.ts',
       'src/main/native-selftest.ts',
     ];
     expect(

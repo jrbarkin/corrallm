@@ -1623,14 +1623,15 @@ describe('an Agent SDK agent continued in Terminal', () => {
     const before = operations().length;
     await events.click(offer.getByRole('button', { name: 'Continue in Terminal' }));
     await settle();
-    // One operation, and (until B11, B9 Design §8) the renderer's sendOnceIn for the command.
+    // One composite switches, opens and sends in the core.
     expect(operations().slice(before)).toEqual([
       {
-        op: 'agent.setConnection',
+        op: 'session.continueIn',
         args: {
           canvas: expect.any(String) as unknown,
           agent: 'a',
           connection: 'claude-code.terminal',
+          then: { text: '/permissions' },
         },
       },
     ]);

@@ -30,9 +30,13 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 function setup() {
-  const canvas = fakeCanvas({ id: newCanvasId(), arrange: false, nodes: [], links: [] });
   const sessions = fakeBackend();
+  const canvas = fakeCanvas(
+    { id: newCanvasId(), arrange: false, nodes: [], links: [] },
+    sessions.backend,
+  );
   sessions.backend.installed.mockResolvedValue({ 'claude-code': true, codex: false });
+  canvas.core.respond('catalog.installed', { 'claude-code': true, codex: false });
   disposals.push(() => {
     canvas.core.dispose();
   });
@@ -41,7 +45,11 @@ function setup() {
       canvas={canvas.document.id}
       client={canvas.core.api}
       mirror={canvas.core.topics}
-      sessionBackend={sessions.backend}
+      sessionQueries={{
+        ...sessions.backend,
+        manual: canvas.manual,
+        presentation: canvas.presentation,
+      }}
       files
     />,
   );
@@ -67,9 +75,9 @@ it('opens a window on an empty canvas, offering the folder, installed agents, co
   await events.click(screen.getByRole('button', { name: 'Start a session' }));
   expect(await screen.findByRole('dialog', { name: 'Start a session' })).toBeTruthy();
 });
-it('starts on the chosen connection in one addAgent and grows from the Start window', async () => {
+it('adds the chosen connection with one addAgent and no extra session.open operation and grows from the Start window', async () => {
   const morph = vi.spyOn(motion, 'morph').mockReturnValue(undefined);
-  const { canvas, sessions } = setup();
+  const { canvas } = setup();
   const view = await start();
   const dialog = screen.getByRole('dialog', { name: 'Start a session' });
   const from = new DOMRect(100, 80, 780, 420);
@@ -85,10 +93,7 @@ it('starts on the chosen connection in one addAgent and grows from the Start win
   });
   expect(await screen.findByRole('dialog', { name: 'Agent 1' })).toBeTruthy();
   expect(screen.queryByRole('dialog', { name: 'Start a session' })).toBeNull();
-  expect(sessions.backend.start).toHaveBeenCalledWith(
-    expect.any(String),
-    expect.objectContaining({ connection: 'claude-code.sdk' }),
-  );
+  // A live core opens the session as part of the window's transcript subscription lease.
   expect(morph).toHaveBeenCalledWith(expect.any(HTMLElement), from, 'open', {
     duration: 440,
     fade: true,

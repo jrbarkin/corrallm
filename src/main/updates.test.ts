@@ -132,7 +132,7 @@ describe('packaged app updates', () => {
     });
     expect(deps.requestQuit).toHaveBeenCalledOnce();
     expect(updater.quitAndInstall).not.toHaveBeenCalled();
-    expect(updates.finishQuit()).toBe(true); // Main calls this only after RunShutdown + flush + close.
+    expect(updates.finishQuit()).toBe(true); // Main calls this only after the core shutdown barrier + flush + close.
     expect(updater.quitAndInstall).toHaveBeenCalledOnce();
     updates.finishQuit();
     expect(updater.quitAndInstall).toHaveBeenCalledOnce();

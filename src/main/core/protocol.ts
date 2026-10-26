@@ -26,11 +26,10 @@ export interface CoreSide {
   requests: {
     /**
      * Takes the profile (core.lock) and composes the app's core on it: windows' ports are served
-     * once it has, and its outside endpoint (MCP on 127.0.0.1, api.json) is started.
+     * once it has, its outside endpoint (MCP on 127.0.0.1, api.json) is started, and every canvas
+     * open is initialized, run by the core whether or not a window shows it (B11 Design §2, §8).
      */
     init: { args: [config: CoreInit]; result: CoreInitAnswer };
-    /** Which windows have a canvas to freeze/save before closing (until B11 X12's cutover). */
-    shown: { args: [windows: WindowId[]]; result: WindowId[] };
     /** A link chosen in main's native UI, dispatched as link.open at a connected window. */
     openLink: { args: [window: WindowId, url: string]; result: null };
     /**
@@ -39,11 +38,6 @@ export interface CoreSide {
      * loading) is skipped.
      */
     flushDrafts: { args: [windows: WindowId[]]; result: DraftsFlushed };
-    /**
-     * Finishes fallible writes before a window's close is approved, leaving the core usable on
-     * failure (until B11 X12: a window then owns its canvas's run).
-     */
-    flush: { args: []; result: null };
     /**
      * Prepares the shutdown barrier (B11 Design §16.5): no new dispatch, no write admitted, every
      * journal and store forced; sessions stay usable. Idempotent until cancelled.

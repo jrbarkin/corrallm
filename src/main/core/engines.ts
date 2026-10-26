@@ -419,15 +419,6 @@ export class Engines {
     });
   }
 
-  /**
-   * A window left the canvas (closed, crashed, reloaded, or showed another): its sessions end,
-   * unless the core runs it, which a window only views (decision 5). Until B11's cutover a window
-   * owns its canvas's run, so this ends its sessions.
-   */
-  left(canvas: CanvasId): Promise<void> {
-    return this.#running.has(canvas) ? Promise.resolve() : this.#deps.sessions.closeCanvas(canvas);
-  }
-
   /** Once the events an agent's session emitted so far are taken (each is in turn: `emit`). */
   async #settledEvents(key: string): Promise<void> {
     await this.#events.get(key)?.catch(() => undefined);
@@ -472,6 +463,16 @@ export class Engines {
    */
   async load(canvas: CanvasId): Promise<Engine> {
     return (await this.#allocate(canvas, false)).engine;
+  }
+
+  /**
+   * Runs the canvas a window is to show (B11 Design §8): allocated passively if it isn't yet, as
+   * `load` does, then executing, its delivery started once what was cut off is settled on disk. A
+   * window only views it: none going (closed, reloaded, crashed, or showing another canvas) stops
+   * it. Rejects, saying why, as `load` does.
+   */
+  async view(canvas: CanvasId): Promise<void> {
+    await this.#execute(await this.#allocate(canvas, false));
   }
 
   /**
@@ -972,7 +973,9 @@ export class Engines {
         // One whose document the core keeps opens from it, its file reviewed (B9 Design §5).
         if (!rows) throw error;
       }
-      if (holds !== undefined && holds !== canvas) throw new Error(ANOTHER);
+      // A file opened as a copy still contains the original's id until its first save. Its
+      // adopted rows are authoritative for the window; serve retains its stricter admission.
+      if (holds !== undefined && holds !== canvas && (strict || !rows)) throw new Error(ANOTHER);
       kept = true;
     }
     if (strict && !kept) throw new Error(NO_FILE);
@@ -1116,7 +1119,7 @@ export class Engines {
     };
     this.#canvases.set(canvas, running);
     // Open until it is closed (B9 Design §2).
-    await journal.open(canvas);
+    await journal.open(canvas, false);
     this.#look(running);
     for (const watcher of this.#watchers) watcher.opened?.(canvas);
     return running;

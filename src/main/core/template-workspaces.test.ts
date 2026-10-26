@@ -130,24 +130,14 @@ async function open(name: string) {
   return { project, base, env, specs, cwd, write, read };
 }
 
-it('starts a window session without a core-owned run, raising setup only through the app’s directory/start seam', async () => {
+it('opens a window’s session on the canvas the core runs once its tree is ready, raising setup only through the directory seam', async () => {
   const { active, doc, codex } = await prepare('TDD relay', false);
+  // A window showing a canvas makes the core run it (B11 Design §8), but nothing is provisioned
+  // until a session or its availability is asked for.
   expect(await active.call('window.show', { canvas: doc.id }, CALLERS.you)).toMatchObject({
     ok: true,
   });
-  expect(active.engines.opened()).toEqual([]);
-  // The app still uses App.tsx's fixed window session channels until the renderer cutover.
-  // Registered session.open needs a core runtime; neither form starts provisioning here.
-  expect(await active.call('session.open', { agent: 'tester' }, CALLERS.you)).toMatchObject({
-    ok: false,
-    error: { code: 'unavailable', sentence: 'No canvas is open in corrallm.' },
-  });
-  expect(
-    await active.call('session.open', { canvas: doc.id, agent: 'tester' }, CALLERS.you),
-  ).toMatchObject({
-    ok: false,
-    error: { code: 'unavailable', sentence: 'That canvas isn’t open in corrallm.' },
-  });
+  expect(active.engines.opened()).toEqual([doc.id]);
   expect(await active.call('needs', { canvas: doc.id }, CALLERS.you)).toMatchObject({
     ok: true,
     value: { items: [] },
@@ -179,10 +169,9 @@ it('starts a window session without a core-owned run, raising setup only through
   expect(await active.channels.call(window, 'session:availability', ['tester'])).toMatchObject({
     ready: true,
   });
-  await active.channels.call(window, 'session:start', [
-    'tester',
-    { connection: 'codex.app-server', model: null, mode: null },
-  ]);
+  expect(await active.call('session.open', { agent: 'tester' }, CALLERS.you)).toMatchObject({
+    ok: true,
+  });
   expect(codex.started).toHaveLength(1);
   expect(codex.started[0]?.cwd).toContain('/.corral/worktrees/');
   expect(
@@ -192,7 +181,7 @@ it('starts a window session without a core-owned run, raising setup only through
       CALLERS.you,
     ),
   ).toMatchObject({ ok: true, value: { items: ['README.md'] } });
-  expect(active.engines.opened()).toEqual([]);
+  expect(active.engines.opened()).toEqual([doc.id]);
 }, 60000);
 
 const handoffs: Record<string, { write: [string, string][]; reader: string }> = {

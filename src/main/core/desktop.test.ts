@@ -6,9 +6,10 @@ import { pathToFileURL } from 'node:url';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import type { CanvasId } from '../../shared/canvas';
 import { MAX_LINK_LENGTH } from '../../shared/ipc';
 import { toFile } from '../../shared/model/file';
-import type { RunContext } from '../../shared/run';
+import { journaledRun } from './store/test-store';
 import { createCore } from './core';
 import type { Core } from './core';
 import { mintTrustedPath } from './host';
@@ -144,7 +145,7 @@ describe('link.reveal', () => {
   });
 
   it('uses the window’s canvas, including after another window chooses a different folder', async () => {
-    await core.channels.call(7, 'run:get', []);
+    await core.call('window.get', {}, SEVEN);
     await created(EIGHT);
     host.pickFolder.mockResolvedValue(mintTrustedPath(project));
     await chooseProject(SEVEN);
@@ -183,64 +184,63 @@ describe.each(['link.open', 'link.reveal'] as const)('%s arguments', (op) => {
 });
 
 describe('window.get', () => {
-  it('never lets a run save undo a core operation: it carries the run alone, never a document', async () => {
-    const context = (await core.channels.call(7, 'run:get', [])) as RunContext;
-    const first = await core.call('canvas.get', { canvas: context.id }, SEVEN);
-    if (!first.ok) throw new Error(first.error.sentence);
-    // What a renderer had before the core's commit, which run:save once sent beside its run.
-    const stale = toFile({ id: context.id, arrange: false, nodes: [], links: [] });
+  it('never accepts a renderer checkpoint or document after a core operation', async () => {
+    const shown = await core.call('window.get', {}, SEVEN);
+    if (!shown.ok) throw new Error(shown.error.sentence);
+    const canvas = shown.value.canvas as CanvasId;
+    const stale = toFile({ id: canvas, arrange: false, nodes: [], links: [] });
     const added = await core.call(
       'canvas.addAgent',
-      { canvas: context.id, adapter: 'codex', at: { x: 0, y: 0 } },
+      { canvas, adapter: 'codex', at: { x: 0, y: 0 } },
       SEVEN,
     );
     if (!added.ok || 'proposed' in added.value) throw new Error('Agent not added');
-    const after = await core.call('canvas.get', { canvas: context.id }, SEVEN);
-    if (!after.ok) throw new Error(after.error.sentence);
-    // A document beside the run is refused before anything is journaled or committed.
-    await expect(
-      Promise.resolve().then(() =>
-        core.channels.call(7, 'run:save', [context.token, null, stale, first.value.rev]),
-      ),
-    ).rejects.toThrow('Expected a canvas token and a run checkpoint');
-    await expect(core.channels.call(7, 'run:save', [context.token, null])).resolves.toBeNull();
-    expect(await core.call('canvas.get', { canvas: context.id }, SEVEN)).toMatchObject({
-      ok: true,
-      value: {
-        rev: after.value.rev,
-        nodes: [
-          expect.objectContaining({
-            id: added.value.id,
-            data: expect.objectContaining({ adapter: 'codex' }) as unknown,
-          }),
-        ],
-      },
-    });
+    const after = await core.call('canvas.get', { canvas }, SEVEN);
+    for (const args of [
+      [canvas, null],
+      [canvas, null, stale, 0],
+    ])
+      expect(() => core.channels.call(7, 'run:save', args)).toThrow('no channel');
+    expect(await core.call('canvas.get', { canvas }, SEVEN)).toEqual(after);
   });
-  it('lists the current running state when two journal saves have the same timestamp', async () => {
-    const context = (await core.channels.call(7, 'run:get', [])) as RunContext;
-    for (const running of [true, false, true]) {
-      await core.channels.call(7, 'run:save', [
-        context.token,
-        {
-          version: 2,
-          state: JSON.stringify({ version: 2, run: { running } }),
-          messages: '{"version":1,"agents":[]}',
-          updatedAt: 1234,
-        },
-      ]);
-      const listed = await core.call('canvas.list', {}, SEVEN);
-      expect(listed.ok).toBe(true);
-      if (!listed.ok) throw new Error(listed.error.sentence);
-      expect(listed.value.items.find((item) => item.canvas === context.id)?.running).toBe(running);
+  it('lists the live running state even when the journal clock does not move', async () => {
+    const shown = await core.call('window.get', {}, SEVEN);
+    if (!shown.ok) throw new Error(shown.error.sentence);
+    const canvas = shown.value.canvas as CanvasId;
+    const added = await core.call(
+      'canvas.addAgent',
+      { canvas, adapter: 'codex', at: { x: 0, y: 0 } },
+      SEVEN,
+    );
+    if (!added.ok || 'proposed' in added.value) throw new Error('No agent');
+    await core.call(
+      'queue.add',
+      { canvas, agent: added.value.id, entry: { message: 'Wait here' } },
+      SEVEN,
+    );
+    const runtime = core.engines.canvas(canvas);
+    if (!runtime) throw new Error('No runtime');
+    vi.spyOn(Date, 'now').mockReturnValue(1234);
+    try {
+      for (const running of [true, false, true]) {
+        if (running) runtime.engine.run.start();
+        else runtime.engine.run.stop();
+        await core.flush();
+        expect(journaledRun(profile, canvas)?.updatedAt).toBe(1234);
+        const listed = await core.call('canvas.list', {}, SEVEN);
+        if (!listed.ok) throw new Error(listed.error.sentence);
+        expect(listed.value.items.find((item) => item.canvas === canvas)?.running).toBe(running);
+      }
+    } finally {
+      vi.restoreAllMocks();
     }
   });
   it('returns the calling window’s canvas, restoring it on its first call', async () => {
     const first = await core.call('window.get', {}, SEVEN);
-    const context = await core.channels.call(7, 'run:get', []);
+    const context = await core.call('window.get', {}, SEVEN);
     if (!first.ok) throw new Error(first.error.sentence);
-    expect(context).toMatchObject({ id: first.value.canvas });
-    await core.channels.call(8, 'run:get', []);
+    expect(context).toMatchObject({ ok: true, value: { canvas: first.value.canvas } });
+    await core.call('window.get', {}, EIGHT);
     const next = await created(SEVEN);
     expect(await core.call('window.get', undefined, SEVEN)).toEqual({
       ok: true,
@@ -278,7 +278,10 @@ describe('window.show', () => {
       ok: true,
       value: { canvas: first.value.canvas },
     });
-    expect(await core.channels.call(7, 'run:get', [])).toMatchObject({ id: first.value.canvas });
+    expect(await core.call('window.get', {}, SEVEN)).toMatchObject({
+      ok: true,
+      value: { canvas: first.value.canvas },
+    });
     expect(await core.call('canvas.get', { canvas: first.value.canvas }, SEVEN)).toMatchObject({
       ok: true,
       value: { project: { path: project } },

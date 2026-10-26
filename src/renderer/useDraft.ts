@@ -20,6 +20,17 @@ export function draftCall<T>(call: () => Promise<T>): Promise<T> {
   return promise;
 }
 
+/** A fixed transitional view write must settle before drafts.flush acknowledges window close. */
+export function viewWrite<T>(call: () => Promise<T>): Promise<T> {
+  const promise = draftCall(call);
+  saving.add(promise);
+  const settled = () => {
+    saving.delete(promise);
+  };
+  void promise.then(settled, settled);
+  return promise;
+}
+
 /**
  * Waits for every draft attempt; refusals belong to their fields. An action runs only afterward,
  * synchronously when no write is in flight (as flushSync applies local graph edits).

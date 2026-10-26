@@ -1,7 +1,5 @@
 import { ipcMain } from 'electron';
-import type { WebContents } from 'electron';
 
-import type { IpcEventArgs } from '../shared/ipc';
 import type { CorePorts } from './host/ports';
 import { isTrustedSender } from './security';
 
@@ -15,13 +13,4 @@ export function registerIpcHandlers(trustedOrigin: string, core: Pick<CorePorts,
     core.connect(event.sender);
     return null;
   });
-}
-
-/** Main still asks the renderer to freeze and save before closing its window. */
-export function sendEvent(
-  contents: WebContents,
-  event: 'run:stopping',
-  ...args: IpcEventArgs<'run:stopping'>
-): void {
-  if (!contents.isDestroyed()) contents.send(event, ...args);
 }

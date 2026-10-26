@@ -499,6 +499,16 @@ export class SessionStore {
    */
   async resume(agentId: string, sessionId: string): Promise<void> {
     await this.#backend.resume(agentId, sessionId);
+    this.resumed(agentId);
+  }
+
+  /**
+   * Main made another conversation the agent's own, ending its session (`resume`, or a window's
+   * /resume the core's runtime hears of: B11 X12, until X13 moves the agent window onto the
+   * session's operations): its driver goes, the transcript empties, and the session starts again
+   * resuming it, its history filling the transcript.
+   */
+  resumed(agentId: string): void {
     this.#letGo(agentId);
     this.#dispatch(agentId, { type: 'clear' });
     this.#driver(agentId).open();

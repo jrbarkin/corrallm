@@ -221,6 +221,21 @@ describe('RunJournal', () => {
     expect(await journal().last()).toBe(other);
   });
 
+  it('restoring and journaling background canvases preserves the last canvas used by a window', async () => {
+    const [background] = await named('background.corral');
+    const [shown] = await named('shown.corral');
+    const runs = journal();
+    await runs.opened(background);
+    await runs.opened(shown);
+    await runs.open(background, false);
+    const token = (await runs.get(background)).token;
+    const messages = await messagesOf(background);
+    await store.write(() => {
+      runs.keep(background, token, null, messages);
+    });
+    expect(await runs.last()).toBe(shown);
+  });
+
   it('keeps each canvas open until it is closed, across restarts, the one opened last restored', async () => {
     const [team] = await named('team.corral');
     const [other] = await named('other.corral');
@@ -738,7 +753,7 @@ describe('RunJournal', () => {
     });
   });
 
-  it('says what the store said as it opened with the first canvas restored, once', async () => {
+  it('says what the store said as it opened with each canvas restored, once each', async () => {
     const said = [
       'The core’s database was damaged (it isn’t corrallm’s), and was moved to /p/core.rejected.db.',
       'It starts empty.',
@@ -746,10 +761,12 @@ describe('RunJournal', () => {
     const runs = journal(store, said);
     const canvas = await runs.last();
     expect((await runs.get(canvas)).warning).toBe(said.join(' '));
+    expect((await runs.get(canvas)).warning).toBe(said.join(' '));
+    // The core runs every canvas open as it starts: whichever a window shows says it too.
     const [other] = await named('team.corral');
     await runs.opened(other, 'team.corral is a copy of a canvas saved as other.corral.');
     expect((await runs.get(other)).warning).toBe(
-      'team.corral is a copy of a canvas saved as other.corral.',
+      `${said.join(' ')} team.corral is a copy of a canvas saved as other.corral.`,
     );
   });
 

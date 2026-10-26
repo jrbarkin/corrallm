@@ -36,6 +36,7 @@ interface Mirrored {
   topic: MirrorTopicKey;
   state?: MirrorSnapshot['state'];
   rev?: number;
+  error?: string;
   listeners: Set<() => void>;
   waiters: Set<{ rev: number; resolve: () => void; reject: (error: unknown) => void }>;
   live: boolean;
@@ -93,6 +94,10 @@ export class TopicMirror {
   /** The revision of the topic's snapshot: none before its first. */
   revision(topic: MirrorTopicKey): number | undefined {
     return this.#topics.get(topic)?.rev;
+  }
+
+  failure(topic: MirrorTopicKey): string | undefined {
+    return this.#topics.get(topic)?.error;
   }
 
   subscribe(topic: MirrorTopicKey, listener: () => void): () => void {
@@ -185,6 +190,8 @@ export class TopicMirror {
               }),
             );
           delete entry.rev;
+          delete entry.error;
+          if (restarted) this.#tell(entry);
           this.#read(entry, true);
         }
       }),
@@ -236,10 +243,13 @@ export class TopicMirror {
       (error: unknown) => {
         if (!entry.live || entry.generation !== generation) return;
         entry.pending = false;
-        this.#reject(entry, error);
         // A closing core refuses a subscribe as unavailable. That is shutdown or a reopen, not a
-        // fault, and the entry stays live: the next epoch subscribes it afresh.
-        if (error instanceof ApiError && error.code === 'unavailable') return;
+        // fault: nothing is shown, and the entry stays live, for the next epoch to subscribe afresh.
+        const closing = error instanceof ApiError && error.code === 'unavailable';
+        if (!closing) entry.error = ipcErrorMessage(error);
+        this.#reject(entry, error);
+        if (closing) return;
+        this.#tell(entry);
         console.error('Could not subscribe to a topic:', ipcErrorMessage(error));
       },
     );
@@ -265,6 +275,7 @@ export class TopicMirror {
         entry.topic.startsWith('canvas:') ? share(entry.state, state) : state
       ) as MirrorSnapshot['state'];
     entry.rev = rev;
+    delete entry.error;
     this.#tell(entry);
   }
 

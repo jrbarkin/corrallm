@@ -8,6 +8,7 @@ import { expect, test } from '@playwright/test';
 import type { ElectronApplication, Locator, Page } from '@playwright/test';
 
 import { launchApp } from './launch';
+import { crashCoreAndReload } from './core-crash';
 
 // The real app, IPC and native connectors, using only protocol-speaking fake CLIs. Independent
 // prompt/process logs distinguish holding a queue from interrupting or closing its conversation.
@@ -184,7 +185,8 @@ test('Pause finishes the current turn while independent work continues and a dep
     },
   ]);
   await queues.getByRole('button', { name: 'Run', exact: true }).click();
-  await expect.poll(sdkPrompts).toContain(first);
+  // Native startup (a Node process and its handshake) can outlast Playwright's default five seconds.
+  await expect.poll(sdkPrompts, { timeout: 15_000 }).toContain(first);
   await expect.poll(() => readFile(`${release}.waiting`, 'utf8').catch(() => '')).toBe('waiting');
   await expect(row(queues, 'builder', 'first')).toHaveAttribute('data-run', 'running');
   await control(queues, 'Pause');
@@ -278,7 +280,7 @@ test('Kill interrupts the native turn while retaining its live console for a man
   );
 });
 
-test('a canvas pause chosen before Run survives reload and global Resume until that agent is resumed', async () => {
+test('a canvas pause chosen before Run survives a core crash and global Resume until that agent is resumed', async () => {
   await launch('claude-code.sdk');
   const held = 'control held before start';
   const parallel = 'control other completes';
@@ -301,7 +303,7 @@ test('a canvas pause chosen before Run survives reload and global Resume until t
   await expect(heading(queues).getByText('Paused', { exact: true })).toBeVisible();
   expect(await sdkPrompts()).toEqual([parallel]);
 
-  await page.reload();
+  await crashCoreAndReload(app, page);
   await expect(page.locator('.react-flow__node-agent')).toHaveCount(2);
   await page.getByRole('button', { name: 'Show all queues' }).click();
   queues = page.getByRole('dialog', { name: 'All queues', exact: true });

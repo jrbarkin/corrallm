@@ -30,6 +30,7 @@ import { UsageReader } from '../sessions/codex/terminal/usage';
 import type { AgentCaller, Caller, OutsideCaller } from './caller';
 import { Documents } from './canvas/documents';
 import { commitDocument } from './canvas/test-documents';
+import { asHuman } from './gui';
 import { createCore } from './core';
 import type { Core, CoreConfig } from './core';
 import { isActive } from './delivery/messages';
@@ -2483,16 +2484,20 @@ describe('telling an agent of a withdrawal after receipt', () => {
     appServer = new FakeConnector({ adapter: 'codex' });
     const started = await start({}, false);
     expect(started.engines.opened()).toEqual([]);
-    expect(await started.channels.call(7, 'run:get', [])).toMatchObject({ id: CANVAS });
-    await started.channels.call(7, 'session:start', [
-      'builder',
-      { connection: 'codex.app-server', model: null, mode: null },
-    ]);
+    expect(await started.call('window.get', {}, asHuman(7))).toMatchObject({
+      ok: true,
+      value: { canvas: CANVAS },
+    });
+    expect(
+      await started.call('session.open', { canvas: CANVAS, agent: 'builder' }, asHuman(7)),
+    ).toMatchObject({ ok: true });
     await started.channels.call(7, 'session:send', [
       'builder',
       { id: crypto.randomUUID(), text: 'Typed in the app' },
     ]);
-    expect(sent(appServer)[0]).toContain(withdrawalNote(id));
+    await vi.waitFor(() => {
+      expect(sent(appServer)[0]).toContain(withdrawalNote(id));
+    });
   });
 
   it('rides a direct session send too, rather than waiting for another message operation', async () => {
@@ -2859,11 +2864,10 @@ describe('exhausted usage', () => {
       await mkdir(path.join(profile, 'usage.json'));
     }
     if (manual) {
-      await started.channels.call(7, 'run:get', []);
-      await started.channels.call(7, 'session:start', [
-        'builder',
-        { connection: 'codex.app-server', model: null, mode: null },
-      ]);
+      await started.call('window.get', {}, asHuman(7));
+      expect(
+        await started.call('session.open', { canvas: CANVAS, agent: 'builder' }, asHuman(7)),
+      ).toMatchObject({ ok: true });
       await started.channels.call(7, 'session:send', [
         'builder',
         { id: crypto.randomUUID(), text: 'Typed in the app' },
@@ -2871,8 +2875,7 @@ describe('exhausted usage', () => {
       await vi.waitFor(() => {
         expect(first).toBe(false);
       });
-      expect(started.engines.opened()).toEqual([]);
-      await started.engines.open(CANVAS);
+      expect(started.engines.opened()).toContain(CANVAS);
       return;
     }
     const id = await send('builder', 'Use the last of the window');

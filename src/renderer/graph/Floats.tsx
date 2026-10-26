@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
-import type { Run } from '../../shared/engine/run/runner';
+import type { RunSnapshot } from '../../shared/model/views';
 
-/** Global run controls stay renderer-owned until B11. */
+/** Global run controls send commands to the core-owned run. */
 export function RunFloat({
   run,
   working,
@@ -9,17 +9,15 @@ export function RunFloat({
   gauges,
   queuesOpen = false,
   onRun,
-  onPause,
   onStop,
   onResume,
 }: {
-  run: Run;
+  run: RunSnapshot;
   working: number;
   needs: ReactNode;
   gauges: ReactNode;
   queuesOpen?: boolean;
   onRun: () => void;
-  onPause: () => void;
   onStop: () => void;
   onResume: () => void;
 }) {
@@ -33,9 +31,9 @@ export function RunFloat({
           {run.running && (
             <button
               type="button"
-              aria-label="Pause"
-              title="Pause the run; in-flight work is held for inspection"
-              onClick={onPause}
+              aria-label="Stop"
+              title="Stop every queue where it is"
+              onClick={onStop}
             >
               Ⅱ
             </button>
@@ -50,7 +48,7 @@ export function RunFloat({
               ▶
             </button>
           )}
-          {(run.running || run.paused) && (
+          {run.paused && (
             <button
               type="button"
               aria-label="Stop"
