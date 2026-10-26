@@ -40,6 +40,8 @@ Terminal link e2e uses `e2e/terminal-link.ts`: re-read the screen’s geometry a
 
 - Command-shipping unit tests use an injected download, fixture tarballs and fake native runtime files: they check all four targets, cached and downloaded checksum failures, only the required files staged outside ASAR, Forge hooks and signing, Linux command/desktop targets, and symlinked launchers with an empty PATH. They never load a native addon. The packaged app's native self-test additionally runs the actual shipped launcher with an empty PATH, including its pty round trip; `scripts/check-macos.sh` and `scripts/check-linux.sh` exercise the signed or ad hoc packaged resources rather than a checkout's Node or node_modules.
 
+- Electron-cache unit tests also intercept `createRequire`'s executable lookup: Vitest's module mocks do not intercept that require. They read the installed package's version but return a stand-in executable, so a fresh Electron patch never downloads or loads the real binary in a unit test.
+
 - `src/main/shipped-command.test.ts` runs the launcher against the test's Node with a tiny stand-in bundle and hostile preload/module-search settings, checking they never reach the runtime. The packaged self-test also supplies a failing preload rather than clearing `NODE_OPTIONS` itself; neither test can hide a launcher that forgets to sanitize it.
 
 - Dump tests keep the owner's maintenance timers under test control, with real WAL flushes: an idle checkpoint legitimately rewrites the database and WAL, so a read-only dump's byte-hash assertion must compare a quiet owner. Usage-reset delivery tests control Date and timers, checking the hold just before reset and delivery after it; setup and fsync time never consume their usage window.

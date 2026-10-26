@@ -8,7 +8,6 @@ import path from 'node:path';
 
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
-import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -266,7 +265,7 @@ describe.skipIf(process.platform === 'win32')('corrallm serve', () => {
     await client.connect(
       new StreamableHTTPClientTransport(new URL(url), {
         requestInit: { headers: { Authorization: `Bearer ${token}` } },
-      }) as Transport,
+      }),
     );
     clients.push(client);
     return client;
