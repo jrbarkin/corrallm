@@ -37,6 +37,26 @@ function fakes(pointer: (options: { state: string; timeout: number }) => Promise
   return { page, view, keys, click, move, waitFor };
 }
 
+it('discovers a link rendered after xterm cached an empty row under the pointer', async () => {
+  // Linkifier._handleHover reuses provider replies while the pointer stays on the same row.
+  // The CLI's reply can arrive after that row was queried, with no new mouse event from a user.
+  let hoveredRow = 3;
+  let linked = false;
+  const timeout = Object.assign(new Error('Link not discovered'), { name: 'TimeoutError' });
+  const { page, view, move, click } = fakes(() =>
+    linked ? Promise.resolve() : Promise.reject(timeout),
+  );
+  move.mockImplementation((_x: number, y: number) => {
+    const row = Math.floor((y - 20) / 20);
+    if (row !== hoveredRow) {
+      hoveredRow = row;
+      linked = row === 3;
+    }
+  });
+  await clickTerminalLink(page, view, { cols: 80, rows: 20 }, 12, 3);
+  expect(click).toHaveBeenCalledExactlyOnceWith(135, 90);
+});
+
 it.each([
   ['darwin', 'Meta'],
   ['linux', 'Control'],

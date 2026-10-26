@@ -19,6 +19,7 @@ const gpu = vi.hoisted(() => {
     webgl2: true,
     /** What the WebGL addons loaded hear when the GPU loses their context. */
     lost: [] as (() => void)[],
+    terminal: undefined as Terminal | undefined,
   };
   // From the start: xterm.js asks for a 2D context as it loads (none, here).
   vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockImplementation(((kind: string) =>
@@ -32,6 +33,7 @@ vi.mock('@xterm/addon-webgl', async (importOriginal) => {
   const real = await importOriginal<typeof Webgl>();
   class WebglAddon extends real.WebglAddon {
     override activate(terminal: Terminal): void {
+      gpu.terminal = terminal;
       // Where WebGL2 works, a renderer jsdom can run: none (xterm.js keeps its own).
       if (!gpu.webgl2) super.activate(terminal);
     }
@@ -79,6 +81,7 @@ const shown: Screen[] = [];
 beforeEach(() => {
   gpu.webgl2 = true;
   gpu.lost = [];
+  gpu.terminal = undefined;
   // xterm.js follows the device pixel ratio with a media query, which jsdom does not evaluate.
   vi.stubGlobal(
     'matchMedia',
@@ -159,7 +162,14 @@ it.each([
     open(new MouseEvent('mouseup'), 'https://docs.example.com/plain');
     open(new MouseEvent('mouseup', other), 'https://docs.example.com/other');
     open(new MouseEvent('mouseup', opens), 'https://docs.example.com/hooks');
-    expect(opened).toEqual(['https://docs.example.com/hooks']);
+    const activate = gpu.terminal?.options.linkHandler?.activate;
+    if (!activate) throw new Error('no OSC 8 link handler');
+    const range = { start: { x: 1, y: 1 }, end: { x: 9, y: 1 } };
+    const file = 'file:///project/notes.txt';
+    activate(new MouseEvent('mouseup'), file, range);
+    activate(new MouseEvent('mouseup', other), file, range);
+    activate(new MouseEvent('mouseup', opens), file, range);
+    expect(opened).toEqual(['https://docs.example.com/hooks', file]);
     agent.mockRestore();
   },
 );

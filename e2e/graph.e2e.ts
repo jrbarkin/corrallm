@@ -118,14 +118,6 @@ test.beforeEach(async () => {
   // Reload so that errors during page load (e.g. CSP violations) are collected too.
   await page.waitForLoadState('load');
   await page.reload();
-  // PROBE-ONLY (remove): a wide font, as on Linux.
-  if (process.env.PROBE_FONT) {
-    await page.evaluate((font) => {
-      const sheet = new CSSStyleSheet();
-      sheet.replaceSync(`* { font-family: ${font} !important; }`);
-      document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet];
-    }, process.env.PROBE_FONT);
-  }
   await dismissStart(page);
   await expect(pane()).toBeVisible();
   await page.getByRole('button', { name: 'Choose a project folder' }).click();
@@ -1068,26 +1060,14 @@ test('edits a queue in its lane by dragging, and animates the task each queue is
   const wait = before.findIndex((label) => label.startsWith('Builder: Wait for'));
   expect(tests).toBeGreaterThan(wait);
 
-  // The test run, dragged by its handle above the wait in its lane. The lanes scroll: with wider
-  // fonts (Linux's DejaVu Sans) the handle can sit below the window, where a press misses it. It
-  // is brought to the lanes' middle, clear of their edges (where macOS shows its overlay
-  // scrollbars just after a scroll, which take the press).
+  // Bring the handle into the scrollable lanes before measuring it: this template need not fit
+  // the viewport. Check that the press starts its drag before testing the final persisted order.
   const grip = view.getByRole('button', { name: 'Move exec_command', exact: true });
   await grip.evaluate((handle) => {
     handle.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'instant' });
   });
   const from = await center(grip);
   const to = await box(view.getByRole('group', { name: /^Builder: Wait for/ }));
-  // PROBE-ONLY (remove)
-  console.log(
-    'PROBE',
-    JSON.stringify(from),
-    JSON.stringify(to),
-    await page.evaluate(({ x, y }) => {
-      const els = document.elementsFromPoint(x, y).slice(0, 2);
-      return els.map((el) => `${el.tagName}.${String(el.className)}`).join(' | ');
-    }, from),
-  );
   await page.mouse.move(from.x, from.y);
   await page.mouse.down();
   await expect(view.locator('.queues-cell.dragging')).toHaveAttribute('aria-label', run);
