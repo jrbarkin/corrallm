@@ -8,7 +8,7 @@ import { expect, test } from '@playwright/test';
 import type { ElectronApplication, Locator, Page } from '@playwright/test';
 
 import { launchApp } from './launch';
-import { crashCore } from './core-crash';
+import { crashCoreAndReload } from './core-crash';
 
 // The real renderer, IPC and Agent SDK, against a protocol-speaking CLI fake. Its prompt log
 // proves a held task does not resend work or release dependent queues before the user decides.
@@ -272,8 +272,8 @@ test('keeps an unclear condition held across a core crash until the user decides
   await expect(row(queues, 'builder', 'check')).toHaveAttribute('data-problem', 'uncertain');
   expect(await prompts()).toHaveLength(1);
 
-  await crashCore(app);
-  // All queues stays open while the window binds the replacement core (§8).
+  await crashCoreAndReload(app, page);
+  await page.getByRole('button', { name: 'Show all queues' }).click();
   queues = page.getByRole('dialog', { name: 'All queues', exact: true });
   await expect(queues.getByRole('status')).toHaveText('Paused');
   await queues.getByRole('button', { name: 'Resume', exact: true }).click();

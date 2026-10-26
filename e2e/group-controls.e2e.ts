@@ -8,7 +8,7 @@ import { expect, test } from '@playwright/test';
 import type { ElectronApplication, Page } from '@playwright/test';
 
 import { launchApp } from './launch';
-import { crashCore } from './core-crash';
+import { crashCoreAndReload } from './core-crash';
 
 // Group ownership through the real renderer, IPC and Agent SDK, against a fake CLI only.
 // Its independent prompt log proves that nested/individual holds do not leak or replay work.
@@ -277,9 +277,9 @@ test('preserves stacked group and individual holds across a core crash and globa
   await expect(row('outside', 'only')).toHaveAttribute('data-run', 'succeeded');
   expect(await sentTexts()).toEqual([outside]);
 
-  await crashCore(app);
+  await crashCoreAndReload(app, page);
   await expect(page.locator('.react-flow__node-frame')).toHaveCount(2);
-  // The new epoch preserves All queues (§8); toggling it would close it.
+  await showQueues();
   await expect(queues().getByRole('status')).toHaveText('Paused');
   await queues().getByRole('button', { name: 'Resume', exact: true }).click();
   for (const id of ['alpha', 'beta', 'manual']) {
