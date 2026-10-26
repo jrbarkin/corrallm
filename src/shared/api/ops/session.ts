@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-import { ELICITATION_ACTIONS } from '../../session';
+import { ELICITATION_ACTIONS, MAX_CONVERSATIONS, MAX_CONVERSATION_LABEL } from '../../session';
 import { define } from '../define';
 import type { OpDef } from '../define';
 import { AgentId, OpCanvas } from '../ids';
@@ -242,10 +242,10 @@ const McpServers = z
   .max(MAX_MCP_SERVERS);
 const PastSession = z.strictObject({
   id: ConversationId,
-  title: z.string(),
+  title: z.string().max(MAX_CONVERSATION_LABEL),
   modified: z.number(),
   bytes: z.number().optional(),
-  branch: z.string().optional(),
+  branch: z.string().max(MAX_CONVERSATION_LABEL).optional(),
   current: z.boolean(),
 });
 
@@ -312,7 +312,7 @@ export const b11SessionOps = {
     {
       summary: 'Lists this adapter’s conversations in this agent’s verified workspace.',
       input: AgentInput,
-      output: z.strictObject({ items: z.array(PastSession) }),
+      output: z.strictObject({ items: z.array(PastSession).max(MAX_CONVERSATIONS) }),
     },
   ),
   'session.resumeConversation': define(
@@ -350,7 +350,7 @@ export const b11SessionOps = {
     },
   ),
   'session.changeMcpServer': define(
-    { kind: 'command' },
+    { kind: 'command', rules: ['corral-mcp'] },
     {
       summary:
         'Reconnects, enables or disables one MCP server the agent’s session reports, saying so ' +

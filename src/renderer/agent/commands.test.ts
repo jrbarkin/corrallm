@@ -59,7 +59,11 @@ describe('viewCommand', () => {
 
 describe('completedCommands', () => {
   it('completes the session’s commands, then those that run in Terminal, saying so', () => {
-    const all = completedCommands(OFFERED);
+    const all = completedCommands(
+      OFFERED,
+      { resume: true, mcp: { changes: [] }, rewind: { restores: [] } },
+      true,
+    );
     expect(all.slice(0, OFFERED.length)).toEqual(OFFERED);
     const permissions = all.find((c) => c.name === 'permissions');
     expect(permissions?.description).toMatch(/^In Terminal · /);

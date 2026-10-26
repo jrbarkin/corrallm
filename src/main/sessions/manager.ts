@@ -2,6 +2,8 @@ import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 
 import { adapterIn, connectionIn } from '../../shared/adapter';
+import { MAX_PAGE_BYTES } from '../../shared/api/limits';
+import { MAX_CONVERSATIONS, MAX_CONVERSATION_LABEL } from '../../shared/session';
 import type { AdapterId, Catalog, ConnectionId } from '../../shared/adapter';
 import type { CanvasId } from '../../shared/canvas';
 import type { AgentId, NeedId } from '../../shared/api/ids';
@@ -47,12 +49,14 @@ const LISTED_MS = 10 * 60 * 1000;
 /** The most callers' lists kept for an agent: a new one replaces the oldest. */
 const LISTINGS = 8;
 /** The most conversations one list shows (and so admits): the most recent. */
-const LISTED = 100;
+const LISTED = MAX_CONVERSATIONS;
 /** The longest title a listed conversation shows, in UTF-16 units. */
-const TITLE = 200;
+const TITLE = MAX_CONVERSATION_LABEL;
 
 /** A title cut to TITLE with an ellipsis, never between a character's two halves. */
 function titled(title: string): string {
+  title = title.replace(/[\r\n\u2028\u2029]+/g, ' ');
+  if (title.length <= TITLE) return title;
   const end = TITLE - 1;
   const code = title.charCodeAt(end - 1);
   return `${title.slice(0, code >= 0xd800 && code <= 0xdbff ? end - 1 : end)}…`;
@@ -235,6 +239,8 @@ export class SessionManager {
    * canvas, agent and caller: the only ones that caller may open in it, at most LISTINGS callers'.
    */
   readonly #listed = new Map<CanvasId, Map<string, Map<string, Listing>>>();
+  /** Successful native claims recorded by this core, independent of the live lock's lifetime. */
+  readonly #started = new Map<CanvasId, Map<string, Set<string>>>();
   readonly #claims: ConversationClaims;
   /**
    * The sessions whose close has begun but not finished, by canvas and agent, however long after
@@ -651,9 +657,16 @@ export class SessionManager {
    * is the agent's own (the one it runs, or would resume). They are the only ones `caller` (a
    * window, the canvas's runtime: whoever asks, never a token's choice of directory) may then open
    * in it (`resumeSession`), while the directory's binding is the one they were listed in, for
-   * LISTED_MS; its newer list replaces this one, and at most LISTINGS callers' are kept.
+   * LISTED_MS; its newer list replaces this one, and at most LISTINGS callers' are kept. For a
+   * token (`ownedOnly`), only successful native starts recorded for this agent and checkout in
+   * this core are listed; neither a GUI listing nor merely choosing an id records a start.
    */
-  async listSessions(canvas: CanvasId, agentId: string, caller: string): Promise<PastSession[]> {
+  async listSessions(
+    canvas: CanvasId,
+    agentId: string,
+    caller: string,
+    ownedOnly = false,
+  ): Promise<PastSession[]> {
     const directory = await this.#deps.directories.workingDirectory(canvas, agentId as AgentId);
     if (directory.state === 'held') throw new Error(directory.sentence);
     const folder = directory.cwd;
@@ -668,9 +681,25 @@ export class SessionManager {
       );
     }
     // Bounded: the most recent, each titled in a line, and only those shown are admitted.
-    const listed = valid
-      .slice(0, LISTED)
-      .map((kept) => (kept.title.length > TITLE ? { ...kept, title: titled(kept.title) } : kept));
+    const started = this.#started.get(canvas)?.get(startedKey(adapter, agentId, directory));
+    const admitted = ownedOnly ? valid.filter((one) => started?.has(one.id)) : valid;
+    const listed: PastSession[] = [];
+    const own = (await this.#conversation(canvas, adapter, agentId))?.id;
+    // Leave room for the operation's response envelope; admit precisely the bounded prefix shown.
+    let bytes = 256;
+    for (const kept of admitted.slice(0, LISTED)) {
+      const item: PastSession = {
+        id: kept.id,
+        title: titled(kept.title),
+        modified: kept.modified,
+        ...(kept.bytes === undefined ? {} : { bytes: kept.bytes }),
+        ...(kept.branch === undefined ? {} : { branch: titled(kept.branch) }),
+        current: kept.id === own,
+      };
+      bytes += Buffer.byteLength(JSON.stringify(item)) + 1;
+      if (bytes > MAX_PAGE_BYTES) break;
+      listed.push(item);
+    }
     const agents = this.#listed.get(canvas) ?? new Map<string, Map<string, Listing>>();
     this.#listed.set(canvas, agents);
     const callers = agents.get(agentId) ?? new Map<string, Listing>();
@@ -686,8 +715,7 @@ export class SessionManager {
       if (callers.size <= LISTINGS) break;
       callers.delete(oldest);
     }
-    const own = (await this.#conversation(canvas, adapter, agentId))?.id;
-    return listed.map((kept) => ({ ...kept, current: kept.id === own }));
+    return listed;
   }
 
   /**
@@ -856,6 +884,7 @@ export class SessionManager {
    */
   async projectChanged(canvas: CanvasId): Promise<void> {
     await this.#endAll(canvas, true);
+    this.#started.delete(canvas);
     this.#claims.unreserve(canvas);
     this.#listed.delete(canvas);
     await this.#deps.memory.update(canvas, (remembered) =>
@@ -956,6 +985,12 @@ export class SessionManager {
             this.#conflict(canvas, agentId, agent, claimed.holder);
             return;
           }
+          const starts = this.#started.get(canvas) ?? new Map<string, Set<string>>();
+          this.#started.set(canvas, starts);
+          const key = startedKey(adapter, agentId, directory);
+          const ids = starts.get(key) ?? new Set<string>();
+          starts.set(key, ids);
+          ids.add(sessionId);
           // One conversation at a time: the one it ran before (until /clear) is no longer its.
           this.#claims.release(owner, { adapter, id: sessionId });
           void this.#remember(
@@ -1312,4 +1347,13 @@ function sameBinding(
     directory.workspace === binding.workspace &&
     directory.cwd === binding.cwd
   );
+}
+
+/** Native claim history is scoped to the agent and checkout, never merely a shared folder. */
+function startedKey(
+  adapter: AdapterId,
+  agent: string,
+  directory: { cwd: string; workspace: unknown },
+): string {
+  return JSON.stringify([adapter, agent, directory.cwd, directory.workspace]);
 }

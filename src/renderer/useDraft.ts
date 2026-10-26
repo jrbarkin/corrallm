@@ -72,7 +72,7 @@ export function viewSend<T>(call: () => Promise<T>): Promise<T> {
 export function answerDraftFlushes(api: Pick<GuiDraftsApi, 'draftsOnFlush'>): () => void {
   return api.draftsOnFlush(() =>
     flushDrafts().then(async () => {
-      await Promise.allSettled([...sends]);
+      while (sends.size > 0) await Promise.allSettled([...sends]);
     }),
   );
 }

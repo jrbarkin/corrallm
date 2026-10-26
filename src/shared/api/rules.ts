@@ -34,6 +34,11 @@ export const RULES = {
     sentence:
       'Only you send an agent more than 16 KB of text, or images: a message from an agent or an outside caller is at most 16 KB of text.',
   },
+  'corral-mcp': {
+    kind: 'argument',
+    sentence:
+      'Only you change corrallm’s own MCP server entry: a token may never disconnect an agent from corrallm.',
+  },
   // R2: on agent.setSettings's arguments, and on every change.
   'mode-permits': {
     kind: 'argument+change',

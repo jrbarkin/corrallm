@@ -39,6 +39,7 @@ export type Scope = 'app' | 'canvas' | 'agent' | 'none';
 export type Rule =
   | 'shell-text'
   | 'human-text'
+  | 'corral-mcp'
   | 'mode-permits'
   | 'human-choice'
   | 'discard'
@@ -391,7 +392,13 @@ export const SURFACE = {
   'session.continueIn': { access: Y, kind: 'command', scope: 'agent' },
   // B11 §7: listed to the caller alone, which alone may then resume what it was listed; no agent
   // lists conversations (O) or resumes one (W).
-  'session.conversations': { access: O, kind: 'read', scope: 'none', self: 'allowed' },
+  'session.conversations': {
+    access: O,
+    kind: 'read',
+    scope: 'none',
+    self: 'allowed',
+    varies: ['items'],
+  },
   'session.resumeConversation': { access: W, kind: 'command', scope: 'agent', self: 'refused' },
   // What an adapter's agents can be set to, read in an agent's workspace now (B11 §6).
   'session.options': { access: R, kind: 'read', scope: 'none', self: 'allowed' },
@@ -400,7 +407,13 @@ export const SURFACE = {
   // A command your agent view answered itself (its panels), recorded as your message: a view's.
   'session.viewCommand': { access: Y, kind: 'command', scope: 'agent' },
   'session.mcpServers': { access: R, kind: 'read', scope: 'none', self: 'allowed' },
-  'session.changeMcpServer': { access: L, kind: 'command', scope: 'agent', self: 'refused' },
+  'session.changeMcpServer': {
+    access: L,
+    kind: 'command',
+    scope: 'agent',
+    self: 'refused',
+    rules: ['corral-mcp'],
+  },
   // Your composer's suggestion and your Needs' detail of a terminal's asks are yours alone.
   'session.get': {
     access: A,

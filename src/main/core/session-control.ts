@@ -4,6 +4,7 @@ import type { z } from 'zod';
 
 import { adapterIn, connectionIn, isStartMode } from '../../shared/adapter';
 import type { AdapterId, Catalog, ConnectionId } from '../../shared/adapter';
+import { MAX_PAGE_BYTES } from '../../shared/api/limits';
 import { ConversationId } from '../../shared/api/ids';
 import type { NeedId } from '../../shared/api/ids';
 import type { CanvasId } from '../../shared/canvas';
@@ -362,7 +363,12 @@ export class SessionControl {
       );
     }
     const listed = await this.#effect(() =>
-      this.#deps.sessions.listSessions(open.document.id, agent, callerKey(ctx.caller)),
+      this.#deps.sessions.listSessions(
+        open.document.id,
+        agent,
+        callerKey(ctx.caller),
+        ctx.caller.kind !== 'human',
+      ),
     );
     // R42 at this boundary too: an id that isn't the platform's shape is never shown.
     return {
@@ -429,9 +435,16 @@ export class SessionControl {
       throw new OpFailure('invalid', `corrallm has no adapter ${adapter}.`);
     }
     if (agent !== undefined) this.#agentOf(open, agent);
-    return this.#effect(() =>
+    const options = await this.#effect(() =>
       this.#deps.sessions.settingsOptions(open.document.id, adapter, agent),
     );
+    if (Buffer.byteLength(JSON.stringify(options)) > MAX_PAGE_BYTES - 256) {
+      throw new OpFailure(
+        'unavailable',
+        'That agent’s settings options are too large to show here.',
+      );
+    }
+    return options;
   }
 
   /**

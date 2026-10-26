@@ -274,9 +274,12 @@ export interface SlashCommand {
   argumentHint: string;
 }
 
-/**
- * A native conversation the adapter kept for the project folder, which its agent can resume.
- */
+/** The most conversations returned and admitted by a single listing. */
+export const MAX_CONVERSATIONS = 100;
+/** The longest displayed title or branch label, in UTF-16 units. */
+export const MAX_CONVERSATION_LABEL = 200;
+
+/** A native conversation the adapter kept for the project folder, which its agent can resume. */
 export interface PastSession {
   /** Its session id: main opens it only if main listed it for this folder. */
   id: string;
@@ -616,3 +619,8 @@ export const EFFORT_PATTERN = /^[a-z][a-z0-9_-]{0,39}$/;
 
 /** New dispatch waits while its core-owned working directory is unavailable. No path crosses the view boundary. */
 export type SessionAvailability = { ready: true } | { ready: false; sentence: string };
+
+/** The outside client's fixed registration of corrallm's MCP server. */
+export const CORRALLM_MCP_SERVER = 'corrallm-server';
+/** Its agent-side entry (reserved for agent-token injection) is protected too. */
+export const CORRALLM_AGENT_MCP_SERVER = 'corrallm';

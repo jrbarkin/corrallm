@@ -191,6 +191,7 @@ function controlConnector(): Connector<SessionMode> {
   return {
     start: async (spec, host) => {
       const live = await fake.start(spec, host);
+      if (spec.agentId === RESUMER) host.remember(WORLD_KEPT[0].id);
       // The resumer's sessions run nothing in the background, so its folder's restores go on.
       if (spec.agentId !== CONTROL_AGENT) return live;
       let tasks = CONTROL_TASKS.map((id) => ({
@@ -204,9 +205,12 @@ function controlConnector(): Connector<SessionMode> {
         return Promise.resolve();
       };
       live.rewindFiles = () => Promise.resolve({ possible: true, files: [], added: 0, removed: 0 });
-      // One MCP server, which a change leaves as it is.
+      // A regular MCP server and corrallm’s protected entry, unchanged by a fake’s change.
       live.mcpServers = () =>
-        Promise.resolve([{ name: CONTROL_SERVER, status: 'connected' as const, tools: 1 }]);
+        Promise.resolve([
+          { name: CONTROL_SERVER, status: 'connected' as const, tools: 1 },
+          { name: 'corrallm-server', status: 'connected' as const },
+        ]);
       live.changeMcpServer = () => Promise.resolve();
       host.emit({
         type: 'history',
@@ -594,6 +598,8 @@ export async function startWorld(): Promise<{
     CALLERS.you,
   );
   if (!tried.ok) throw new Error(tried.error.sentence);
+  const resumer = await core.call('session.open', { canvas: CANVAS, agent: RESUMER }, CALLERS.you);
+  if (!resumer.ok) throw new Error(resumer.error.sentence);
   // The resumer's conversations, listed to each caller that resumes one of them (B11 §7): a list
   // admits only its own caller.
   for (const party of ['you', 'outside-write'] as const) {
@@ -1589,6 +1595,15 @@ export const REAL_FIXTURES: Readonly<Record<OpName, OpFixture>> = {
         request: controlRequest(353),
       },
     ],
+    meetsRule: {
+      'corral-mcp': {
+        canvas: CANVAS,
+        agent: CONTROL_AGENT,
+        server: 'corrallm-server',
+        change: 'disable',
+        request: controlRequest(355),
+      },
+    },
     invalid: [
       { canvas: CANVAS, agent: CONTROL_AGENT, server: CONTROL_SERVER, change: 'delete' },
       { canvas: CANVAS, agent: CONTROL_AGENT, server: '', change: 'reconnect' },
@@ -2010,7 +2025,7 @@ export const REAL_OUT_OF_REACH: OutOfReach = {
   EntryId: () => ['1b2c3d4e-5f60-4718-8a9b-0c1d2e3f4aff'],
   TaskId: () => ['missing-task'],
   // A conversation no list showed the caller, kept or not (B11 §7).
-  ConversationId: () => ['0c1d2e3f-4a5b-4c6d-8e7f-9a0b1c2d3eff'],
+  ConversationId: () => ['0c1d2e3f-4a5b-4c6d-8e7f-9a0b1c2d3eff', WORLD_KEPT[1].id],
   // A Needs item that isn't there.
   NeedId: () => ['proposal/1b2c3d4e-5f60-4718-8a9b-0c1d2e3f4aff'],
 };

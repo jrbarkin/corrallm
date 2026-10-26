@@ -42,7 +42,7 @@ const YOU = CALLERS.you;
 const OTHER = '3f1a2b3c-4d5e-4f60-8a1b-2c3d4e5f6a7b' as CanvasId;
 
 /** Three Claude Code agents on the Agent SDK, sharing the faked project directory. */
-function canvasText(): string {
+function canvasText(team = false): string {
   const agent = (id: string, label: string, x: number) => ({
     id,
     kind: 'agent',
@@ -55,7 +55,11 @@ function canvasText(): string {
     format: 'corrallm',
     version: 2,
     id: CANVAS,
-    nodes: [agent('a', 'Builder', 0), agent('b', 'Reviewer', 300), agent('c', 'Tester', 600)],
+    nodes: [
+      agent('a', 'Builder', 0),
+      { ...agent('b', 'Reviewer', 300), ...(team ? { parent: 'a' } : {}) },
+      agent('c', 'Tester', 600),
+    ],
     links: [],
   });
 }
@@ -73,6 +77,7 @@ let restore: PromiseWithResolvers<undefined> | undefined;
 let kept: KeptConversation[];
 /** Each MCP server change asked of an agent's session. */
 let mcpChanges: { agent: string; name: string; change: McpChange }[];
+let extraServers: McpServer[];
 /** What each agent's session last told the core through: to emit what its CLI says. */
 const hosts = new Map<string, SessionHost>();
 
@@ -86,6 +91,7 @@ beforeEach(async () => {
   restore = undefined;
   kept = [];
   mcpChanges = [];
+  extraServers = [];
   hosts.clear();
 });
 
@@ -109,6 +115,7 @@ function restoring(fake: FakeConnector): Connector<SessionMode> {
       let servers: McpServer[] = [
         { name: 'github', status: 'connected', scope: 'user', tools: 2 },
         { name: 'sentry', status: 'failed', scope: 'project', error: 'Connection refused' },
+        ...extraServers,
       ];
       session.mcpServers = () => Promise.resolve(servers.map((one) => ({ ...one })));
       session.changeMcpServer = (name, change) => {
@@ -137,10 +144,10 @@ function restoring(fake: FakeConnector): Connector<SessionMode> {
 
 async function start(
   conversations: Record<string, { id: string }> = {},
-  { other = false }: { other?: boolean } = {},
+  { other = false, team = false }: { other?: boolean; team?: boolean } = {},
 ): Promise<{ core: Core; sdk: FakeConnector; terminal: FakeConnector }> {
   const file = path.join(profile, 'team.corral');
-  await writeFile(file, canvasText());
+  await writeFile(file, canvasText(team));
   // With `other`: a canvas of its own whose agent x (Writer) works in the same project folder.
   const second = path.join(profile, 'other.corral');
   if (other) {
@@ -701,14 +708,24 @@ describe('conversations, resume and options', () => {
       ),
     ).toMatchObject({ code: 'not-found' });
     expect(sdk.started).toHaveLength(1);
-    // Once listed it, it may.
-    await ok(core, 'session.conversations', { agent: 'a' }, ORCHESTRATOR);
-    await ok(core, 'session.resumeConversation', { agent: 'a', conversation: NEWER }, ORCHESTRATOR);
-    expect(sdk.started.at(-1)?.resume).toBe(NEWER);
+    // A token's list contains only this agent's recorded starts, not the person's other work.
+    expect(await ok(core, 'session.conversations', { agent: 'a' }, ORCHESTRATOR)).toEqual({
+      items: [{ id: KEPT, title: 'The builder’s own', modified: 1, current: true }],
+    });
+    expect(
+      await fails(
+        core,
+        'session.resumeConversation',
+        { agent: 'a', conversation: NEWER },
+        ORCHESTRATOR,
+      ),
+    ).toMatchObject({ code: 'not-found' });
+    await ok(core, 'session.resumeConversation', { agent: 'a', conversation: KEPT }, ORCHESTRATOR);
+    expect(sdk.started.at(-1)?.resume).toBe(KEPT);
     expect(core.engines.canvas(CANVAS)?.engine.sessions.of('a').status).toBe('idle');
     // Yours too, from your own list; a conversation never listed isn't one to resume.
-    await ok(core, 'session.resumeConversation', { agent: 'a', conversation: KEPT });
-    expect(sdk.started.at(-1)?.resume).toBe(KEPT);
+    await ok(core, 'session.resumeConversation', { agent: 'a', conversation: NEWER });
+    expect(sdk.started.at(-1)?.resume).toBe(NEWER);
     expect(
       await fails(core, 'session.resumeConversation', {
         agent: 'a',
@@ -719,6 +736,54 @@ describe('conversations, resume and options', () => {
     expect(await fails(core, 'session.conversations', { agent: 'b' }, AGENT_A)).toMatchObject({
       code: 'forbidden',
     });
+  });
+
+  it('does not treat a remembered id or the GUI’s list as a recorded native start', async () => {
+    kept = [{ id: KEPT, title: 'Remembered', modified: 1 }];
+    const { core, sdk } = await start({ a: { id: KEPT } });
+    expect(await ok(core, 'session.conversations', { agent: 'a' })).toEqual({
+      items: [{ ...kept[0], current: true }],
+    });
+    expect(await ok(core, 'session.conversations', { agent: 'a' }, ORCHESTRATOR)).toEqual({
+      items: [],
+    });
+    expect(
+      await fails(
+        core,
+        'session.resumeConversation',
+        { agent: 'a', conversation: KEPT },
+        ORCHESTRATOR,
+      ),
+    ).toMatchObject({ code: 'not-found' });
+    expect(sdk.started).toEqual([]);
+    await ok(core, 'session.open', { agent: 'a' });
+    expect(await ok(core, 'session.conversations', { agent: 'a' }, ORCHESTRATOR)).toEqual({
+      items: [{ ...kept[0], current: true }],
+    });
+  });
+
+  it('keeps a token’s earlier started conversations after Fresh, without admitting another agent’s', async () => {
+    const { core, sdk } = await start({ a: { id: KEPT } });
+    await ok(core, 'session.open', { agent: 'a' });
+    await ok(core, 'session.newConversation', { agent: 'a' });
+    const newer = sdk.ids.at(-1);
+    if (!newer || newer === KEPT) throw new Error('Fresh did not start a new conversation');
+    await ok(core, 'session.open', { agent: 'b' });
+    const other = sdk.ids.at(-1);
+    if (!other) throw new Error('No other conversation');
+    kept = [
+      { id: newer, title: 'New', modified: 3 },
+      { id: other, title: 'Other agent', modified: 2 },
+      { id: KEPT, title: 'Earlier', modified: 1 },
+    ];
+    expect(await ok(core, 'session.conversations', { agent: 'a' }, ORCHESTRATOR)).toEqual({
+      items: [
+        { id: newer, title: 'New', modified: 3, current: true },
+        { id: KEPT, title: 'Earlier', modified: 1, current: false },
+      ],
+    });
+    await ok(core, 'session.resumeConversation', { agent: 'a', conversation: KEPT }, ORCHESTRATOR);
+    expect(sdk.started.at(-1)?.resume).toBe(KEPT);
   });
 
   it('refuses a resume while a turn goes on, or of a conversation another agent holds, closing nothing', async () => {
@@ -805,6 +870,35 @@ describe('MCP servers (/mcp)', () => {
     );
     expect(transcriptText(core, 'b')).toContain('"orchestrator" disabled the MCP server "github".');
   });
+
+  it.each(['reconnect', 'disable', 'enable'] as const)(
+    'keeps corrallm’s own MCP entry yours alone: %s',
+    async (change) => {
+      extraServers = [
+        { name: 'corrallm-server', status: 'connected' },
+        { name: 'corrallm', status: 'connected' },
+      ];
+      const { core } = await start({}, { team: true });
+      await ok(core, 'session.open', { agent: 'b' });
+      for (const server of ['corrallm-server', 'corrallm'])
+        for (const caller of [
+          ORCHESTRATOR,
+          { kind: 'agent', canvas: CANVAS, agent: 'a', session: 'lead-session' },
+        ] as const) {
+          const error = await fails(
+            core,
+            'session.changeMcpServer',
+            { agent: 'b', server, change },
+            caller,
+          );
+          expect(error).toMatchObject({ code: 'refused' });
+          expect(error.sentence).toContain('corrallm');
+        }
+      expect(mcpChanges).toEqual([]);
+      await ok(core, 'session.changeMcpServer', { agent: 'b', server: 'corrallm-server', change });
+      expect(mcpChanges).toEqual([{ agent: 'b', name: 'corrallm-server', change }]);
+    },
+  );
 
   it('acts only on a server the session reports, on a connection that shows them, never on its own', async () => {
     const { core } = await start();

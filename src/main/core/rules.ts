@@ -14,6 +14,7 @@ import type { QueueItem } from '../../shared/model/queue';
 import { entityOf, itemKey, nodeKey } from '../../shared/model/rows';
 import type { EntityKey, ItemRow, LinkRow, NodeRow } from '../../shared/model/rows';
 import { andList } from '../../shared/model/words';
+import { CORRALLM_MCP_SERVER, CORRALLM_AGENT_MCP_SERVER } from '../../shared/session';
 import type { AgentSettings } from '../../shared/session';
 import type { RuleOutcome } from './call';
 import type { ChangeSet } from './canvas/change';
@@ -144,6 +145,12 @@ export function ruleChecks(
       message: ({ body, images }) =>
         new TextEncoder().encode(body).length > MAX_MESSAGE_BYTES || (images?.length ?? 0) > 0
           ? { refuse: RULES['human-text'].sentence }
+          : undefined,
+    },
+    'corral-mcp': {
+      'session.changeMcpServer': ({ server }) =>
+        server === CORRALLM_MCP_SERVER || server === CORRALLM_AGENT_MCP_SERVER
+          ? { refuse: RULES['corral-mcp'].sentence }
           : undefined,
     },
     // R2's argument half: a mode other than the one saved for that adapter, or none while one is.

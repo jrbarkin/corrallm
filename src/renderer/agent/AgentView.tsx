@@ -15,7 +15,8 @@ import type {
   RewindResult,
   SettingsOptions,
 } from '../../shared/session';
-import { adapterOf, isTerminal } from '../catalog';
+import { adapterOf, isTerminal, catalog } from '../catalog';
+import { connectionIn } from '../../shared/adapter';
 import { actionsOf, adapterCli, DEFAULT_AGENT } from '../graph/agents';
 import type { AgentConnection } from '../graph/agents';
 import { editsOf } from '../graph/edits';
@@ -313,8 +314,9 @@ export function AgentView({
   const working = session.status !== 'idle';
   /** The user's messages it can rewind to (since the last /clear), oldest first. */
   const points = rewindPoints(session.entries);
-  /** Whether it can be rewound now: an idle Agent SDK agent, with a message of the user's. */
-  const rewindable = connection === 'claude-code.sdk' && !working && points.length > 0;
+  /** Whether its connection offers rewind now: idle, with a message of the user's. */
+  const panels = connectionIn(catalog(), connection)?.connection.panels ?? {};
+  const rewindable = panels.rewind !== undefined && !working && points.length > 0;
   const { stop } = controls;
   const composer = useRef<HTMLTextAreaElement>(null);
   const body = useRef<HTMLDivElement>(null);
@@ -343,10 +345,13 @@ export function AgentView({
     setOpened(undefined);
     composer.current?.focus();
   };
-  const chooseStep = useCallback((choice: StepChoice) => {
-    setPeer(choice.agent);
-    setChoosing(choice);
-  }, []);
+  const chooseStep = useCallback(
+    (choice: StepChoice) => {
+      setPeer(choice.agent);
+      setChoosing(choice);
+    },
+    [setPeer, setChoosing],
+  );
   // Escape steps back: from a panel above the composer (/mcp, /resume, Terminal offered), from
   // picking, from the queue beside, from the agent's work, then the view.
   useEffect(() => {
@@ -412,16 +417,15 @@ export function AgentView({
   /** Its card, on top of the stack while it minimizes into the rail. */
   const itself: StackedAgent = { id: node.id, name, agent, status: session.status };
   /** The slash commands its composer completes: an Agent SDK agent's include Terminal's. */
-  const commands =
-    connection === 'claude-code.sdk' ? completedCommands(session.commands) : session.commands;
+  const commands = completedCommands(session.commands, panels, connection === 'claude-code.sdk');
   /**
    * What the composer sends: a command only Claude Code's terminal runs (one of its screens, or a
    * shell command for its bash mode) is offered there instead; while the run asks (`ask.reply`),
    * the answer, unless it is a command the session runs.
    */
   const send = (text: string, images?: MessageImage[]) => {
-    const answered = connection === 'claude-code.sdk' ? viewCommand(text) : undefined;
-    if (answered !== undefined) {
+    const answered = viewCommand(text);
+    if (answered !== undefined && Object.hasOwn(panels, answered)) {
       controls.recordCommand?.(text);
       setRewindTo(undefined);
       setOpened(answered);
