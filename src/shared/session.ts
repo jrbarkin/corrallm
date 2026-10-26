@@ -576,20 +576,18 @@ export type SessionEvent =
    */
   | { type: 'closed'; error?: string };
 
-/** The longest id the renderer may give an agent, a message or a prompt. */
-export const MAX_ID_LENGTH = 200;
-/** The longest message the renderer may send, in characters. */
-export const MAX_MESSAGE_LENGTH = 200_000;
-/** The longest answer to a question or a plan. */
-export const MAX_ANSWER_LENGTH = 20_000;
+export {
+  MAX_ID_LENGTH,
+  MAX_MESSAGE_LENGTH,
+  MAX_ANSWER_LENGTH,
+  MAX_FORM_FIELDS,
+} from './api/limits';
 /** The longest text searched for when completing a file mention. */
 export const MAX_FILE_QUERY_LENGTH = 500;
 /** At most this many files are offered for a file mention. */
 export const MAX_FILE_MATCHES = 50;
 /** At most this many questions in one prompt. */
 export const MAX_QUESTIONS = 4;
-/** At most this many fields in an MCP server's form, and choices in one of them. */
-export const MAX_FORM_FIELDS = 50;
 /** The longest name of an MCP server the renderer may give. */
 export const MAX_MCP_NAME_LENGTH = 200;
 /** The most MCP servers /mcp shows (a session's first, as it reports them). */

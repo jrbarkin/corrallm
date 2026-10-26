@@ -27,6 +27,22 @@ function declared(session: object) {
 }
 
 describe("Claude Code's adapter", () => {
+  it('declares the four prompt kinds per connection, with signals still unproven', () => {
+    expect(connection('claude-code.terminal')).toMatchObject({
+      prompts: { approval: 'seen', question: 'seen', plan: 'seen', form: 'none' },
+      signals: false,
+    });
+    expect(connection('claude-code.sdk')).toMatchObject({
+      prompts: {
+        approval: 'answerable',
+        question: 'answerable',
+        plan: 'answerable',
+        form: 'answerable',
+      },
+      signals: false,
+    });
+  });
+
   it('is claude-code, with Terminal first and the Agent SDK second', () => {
     expect(descriptor.id).toBe('claude-code');
     expect(descriptor.connections.map((one) => one.id)).toEqual([
