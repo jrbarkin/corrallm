@@ -353,7 +353,7 @@ export class Provisioner {
         return w.transition(tree.id, { from: 'creating', to: 'setup' });
       });
     } catch (error) {
-      const code = failureCode(error);
+      const code = failureCode(metadataCause(error, repository, tree));
       // The core stopping, or its store failing: the job stays open, finished at the next start.
       if (code === undefined) throw error;
       ended = await this.#workspaces.write((w) => {
@@ -843,6 +843,24 @@ function folderAt(at: string): 'none' | 'empty' | 'full' | 'other' {
   }
   if (found.isSymbolicLink() || !found.isDirectory()) return 'other';
   return readdirSync(at).length === 0 ? 'empty' : 'full';
+}
+
+/**
+ * A failed Git write, named for its cause when Git's metadata is unsafe now: Git can fail on a
+ * link before the core's check after the write runs, and the link is the cause, not Git.
+ */
+function metadataCause(
+  error: unknown,
+  repository: RepositoryRecord,
+  tree: WorktreeRecord,
+): unknown {
+  if (!(error instanceof GitError)) return error;
+  try {
+    verifyGitMetadata(repository.commonDir, { branch: tree.branchRef });
+  } catch (found) {
+    if (found instanceof GitMetadataError) return found;
+  }
+  return error;
 }
 
 /** The code a failure is recorded with; none for one the job can't name. */

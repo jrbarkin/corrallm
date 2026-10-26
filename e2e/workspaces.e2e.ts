@@ -37,10 +37,18 @@ async function openWorkspaceApp(
     `#!/bin/sh\nexec "${process.execPath}" "${path.join(import.meta.dirname, 'fake-claude.mjs')}" "$@"\n`,
   );
   await chmod(cli, 0o755);
+  // The login shell the core reads the agents' environment from (`-ilc`): Debian's /bin/sh (dash)
+  // refuses `-l`, so Git was not found there. Runs the command in /bin/sh without the login flag.
+  const shell = path.join(dir, 'login-shell');
+  await writeFile(
+    shell,
+    '#!/bin/sh\nif [ "$1" = "-ilc" ]; then shift; exec /bin/sh -c "$1"; fi\nexec /bin/sh "$@"\n',
+  );
+  await chmod(shell, 0o755);
   const { app, close } = await launchApp({
     env: {
       ...env,
-      SHELL: '/bin/sh',
+      SHELL: shell,
       CORRALLM_AGENT_PATHS: JSON.stringify({ 'claude-code': cli }),
       CLAUDE_CONFIG_DIR: config,
     },

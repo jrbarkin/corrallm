@@ -16,6 +16,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { fingerprint, safe, WorkspaceCleanup } from './cleanup';
+import { GitError } from './git';
 import type { Removal } from './cleanup';
 import type { WorktreeRecord } from './store';
 import { commit, git, makeRepository, ran, sentinelProgram } from './test-git';
@@ -467,6 +468,28 @@ describe('removing a tree', { timeout: 60_000 }, () => {
       expect(branchAt(tree.branchRef)).toBe(made.base);
     },
   );
+
+  it('names a link in Git’s metadata as the cause when a removal’s Git write fails', async () => {
+    const service = cleanup();
+    const tree = await kept();
+    await decide(service, tree, { branch: true, force: false, approved: null, tip: made.base });
+    const outside = path.join(made.root, 'outside');
+    mkdirSync(outside);
+    const run = made.git.run.bind(made.git);
+    vi.spyOn(made.git, 'run').mockImplementation((call) => {
+      if (call.args[0] === 'worktree' && call.args[1] === 'remove') {
+        rmSync(path.join(made.app, '.git', 'worktrees'), { recursive: true, force: true });
+        symlinkSync(outside, path.join(made.app, '.git', 'worktrees'));
+        return Promise.reject(new GitError('failed', 'Git failed on the link.', 128));
+      }
+      return run(call);
+    });
+    expect(await service.remove(tree.id)).toBe('failed');
+    expect(made.workspaces.worktree(tree.id)).toMatchObject({
+      state: 'removing',
+      errorCode: 'cleanup-git-metadata-symlinked',
+    });
+  });
 
   it('keeps an unread missing checkout’s record and branch despite an older Discard', async () => {
     const service = cleanup();

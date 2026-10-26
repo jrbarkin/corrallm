@@ -10,6 +10,9 @@ import {
   utimesSync,
   writeFileSync,
 } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -18,7 +21,7 @@ import type { CanvasId } from '../../../shared/canvas';
 import { CanvasMemory } from '../../memory';
 import type { Store } from '../store/store';
 import { openTestStore } from '../store/test-store';
-import { GitRunner } from './git';
+import { GitError, GitRunner } from './git';
 import type { GitCall, GitOutput, GitRunnerDeps } from './git';
 import { EXCLUDED, ensureOwnedRoot } from './owned';
 import { CREATE_PHASES, ProvisionError, Provisioner } from './provision';
@@ -44,6 +47,17 @@ import {
  * Git actually has, never made twice; and a checkout lost or changed noticed before its path is
  * trusted. Real Git in throwaway repositories, a real store in a throwaway profile.
  */
+
+/** Whether the Git these tests run can make a reftable repository (Git 2.45 and later can). */
+function gitMakesReftable(): boolean {
+  const probe = mkdtempSync(path.join(tmpdir(), 'reftable-probe-'));
+  try {
+    return spawnSync('git', ['init', '-q', '--ref-format=reftable', probe]).status === 0;
+  } finally {
+    rmSync(probe, { recursive: true, force: true });
+  }
+}
+const REFTABLE = gitMakesReftable();
 
 const CANVAS = '11111111-1111-4111-8111-111111111111' as CanvasId;
 const PROFILE = '0b6f5c1e-2a3d-4e5f-8a9b-0c1d2e3f4a5b';
@@ -699,7 +713,7 @@ describe.skipIf(process.platform === 'win32')('Provisioner', () => {
      * a link anywhere along it (a folder moved elsewhere and linked back, or one put in place of
      * a folder Git would make) refuses the creation before anything is written, here or there.
      */
-    it.each([
+    for (const at of [
       'worktrees',
       'refs',
       'refs/heads',
@@ -708,39 +722,45 @@ describe.skipIf(process.platform === 'win32')('Provisioner', () => {
       'logs/refs/heads/corrallm',
       'reftable',
       'packed-refs',
-    ])('writes nothing through a symlinked %s of the common Git directory', async (at) => {
-      if (at === 'reftable') {
-        // A repository keeping its refs in reftable: new tables are written in that folder.
-        rmSync(app, { recursive: true });
-        mkdirSync(app);
-        git(app, env, 'init', '-q', '-b', 'main', '--ref-format=reftable');
-        writeFileSync(path.join(app, 'README.md'), 'hello\n');
-        git(app, env, 'add', '-A');
-        commit(app, env, 'first');
-      }
-      const outside = path.join(root, 'outside');
-      const moved = path.join(outside, 'moved');
-      mkdirSync(outside);
-      const linked = path.join(app, '.git', at);
-      if (at === 'packed-refs') {
-        git(app, env, 'pack-refs', '--all');
-        renameSync(linked, moved);
-      } else if (existsSync(linked)) renameSync(linked, moved);
-      else mkdirSync(moved);
-      symlinkSync(moved, linked);
-      const before = snapshot(outside);
-      const p = provisioner();
-      const repository = await repositoryOf(p);
-      const tree = await p.provision({ canvas: CANVAS, repository, owner: OWNER });
-      expect(snapshot(outside)).toEqual(before);
-      expect(tree).toMatchObject({ state: 'error', errorCode: 'git-metadata-symlinked' });
-      expect(existsSync(path.join(app, '.corral'))).toBe(false);
-      expect(readFileSync(path.join(app, '.git', 'info', 'exclude'), 'utf8')).not.toContain(
-        EXCLUDED,
+    ]) {
+      const skipped = at === 'reftable' && !REFTABLE;
+      (skipped ? it.skip : it)(
+        `writes nothing through a symlinked ${at} of the common Git directory${skipped ? ' (skipped: this Git cannot make a reftable repository, which needs Git 2.45)' : ''}`,
+        async () => {
+          if (at === 'reftable') {
+            // A repository keeping its refs in reftable: new tables are written in that folder.
+            rmSync(app, { recursive: true });
+            mkdirSync(app);
+            git(app, env, 'init', '-q', '-b', 'main', '--ref-format=reftable');
+            writeFileSync(path.join(app, 'README.md'), 'hello\n');
+            git(app, env, 'add', '-A');
+            commit(app, env, 'first');
+          }
+          const outside = path.join(root, 'outside');
+          const moved = path.join(outside, 'moved');
+          mkdirSync(outside);
+          const linked = path.join(app, '.git', at);
+          if (at === 'packed-refs') {
+            git(app, env, 'pack-refs', '--all');
+            renameSync(linked, moved);
+          } else if (existsSync(linked)) renameSync(linked, moved);
+          else mkdirSync(moved);
+          symlinkSync(moved, linked);
+          const before = snapshot(outside);
+          const p = provisioner();
+          const repository = await repositoryOf(p);
+          const tree = await p.provision({ canvas: CANVAS, repository, owner: OWNER });
+          expect(snapshot(outside)).toEqual(before);
+          expect(tree).toMatchObject({ state: 'error', errorCode: 'git-metadata-symlinked' });
+          expect(existsSync(path.join(app, '.corral'))).toBe(false);
+          expect(readFileSync(path.join(app, '.git', 'info', 'exclude'), 'utf8')).not.toContain(
+            EXCLUDED,
+          );
+          expect(branches()).toEqual([]);
+          expect(registered()).toEqual([app]);
+        },
       );
-      expect(branches()).toEqual([]);
-      expect(registered()).toEqual([app]);
-    });
+    }
 
     it('writes nothing to the repository’s configuration, though it asks for relative worktree paths', async () => {
       git(app, env, 'config', 'worktree.useRelativePaths', 'true');
@@ -794,6 +814,26 @@ describe.skipIf(process.platform === 'win32')('Provisioner', () => {
       const tree = await p.provision({ canvas: CANVAS, repository, owner: OWNER });
       expect(tree).toMatchObject({ state: 'error', errorCode: 'git-metadata-symlinked' });
       expect(await p.checkout(tree.id)).toMatchObject({ state: 'held', reason: 'error' });
+    });
+
+    it('names a link in Git’s metadata as the cause when a Git write fails on it', async () => {
+      const outside = path.join(root, 'outside');
+      mkdirSync(outside);
+      /** Git failing on a link put in place of `worktrees`, as it does on some platforms. */
+      class Failing extends GitRunner {
+        override run(call: GitCall): Promise<GitOutput> {
+          if (call.args[0] === 'worktree' && call.args[1] === 'add') {
+            symlinkSync(outside, path.join(app, '.git', 'worktrees'));
+            return Promise.reject(new GitError('failed', 'Git failed on the link.', 128));
+          }
+          return super.run(call);
+        }
+      }
+      const p = provisioner({ git: new Failing(runnerDeps()) });
+      const repository = await repositoryOf(p);
+      const tree = await p.provision({ canvas: CANVAS, repository, owner: OWNER });
+      expect(tree).toMatchObject({ state: 'error', errorCode: 'git-metadata-symlinked' });
+      expect(readdirSync(outside)).toEqual([]);
     });
 
     it('never takes over a folder or branch at the workspace’s place that it didn’t make', async () => {

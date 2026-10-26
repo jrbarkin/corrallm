@@ -355,6 +355,16 @@ export class WorkspaceCleanup {
         if (error instanceof GitMetadataError) {
           return this.#failed(workspace, `cleanup-git-metadata-${error.code}`);
         }
+        // Git failing on a link in its metadata: the link is the cause.
+        if (error instanceof GitError) {
+          try {
+            verifyGitMetadata(repository.commonDir, { branch: tree.branchRef });
+          } catch (found) {
+            if (found instanceof GitMetadataError) {
+              return this.#failed(workspace, `cleanup-git-metadata-${found.code}`);
+            }
+          }
+        }
         await this.#failed(workspace, 'cleanup-failed');
         console.error('Could not remove a workspace:', error);
         return 'failed' as const;
