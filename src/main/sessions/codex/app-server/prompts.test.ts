@@ -26,7 +26,9 @@ function prompts() {
   );
   /** The prompt shown last. */
   const shown = () => {
-    const prompt = events.filter((e) => e.type === 'permission' || e.type === 'question').at(-1);
+    const prompt = events
+      .filter((e) => e.type === 'permission' || e.type === 'question' || e.type === 'elicitation')
+      .at(-1);
     if (!prompt) throw new Error('nothing was asked');
     return prompt;
   };
@@ -56,6 +58,8 @@ const permission = (answer: 'once' | 'always' | 'deny'): SessionAnswer => ({
   answer,
 });
 
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+
 describe('Codex’s approvals, as prompts', () => {
   it('asks to run a command as Codex words it, offering to keep the rule it proposes', async () => {
     const { answered, shown, events } = prompts();
@@ -64,7 +68,7 @@ describe('Codex’s approvals, as prompts', () => {
     ).resolves.toEqual({ decision: 'accept' });
     expect(shown()).toEqual({
       type: 'permission',
-      id: 'exec-8cdeae68-704e-4aec-bb77-68eac8816190:prompt',
+      id: expect.stringMatching(UUID) as string,
       tool: 'exec_command',
       summary: "printf 'hi' > hello.txt",
       always: "Yes, and don't ask again for commands that start with `printf 'hi' > hello.txt`",
@@ -138,7 +142,7 @@ describe('Codex’s approvals, as prompts', () => {
     ).resolves.toEqual({ decision: 'acceptForSession' });
     expect(shown()).toEqual({
       type: 'permission',
-      id: 'call_1:prompt',
+      id: expect.stringMatching(UUID) as string,
       tool: 'apply_patch',
       summary: 'hello.txt',
       always: "Yes, and don't ask again for these files",
@@ -210,7 +214,7 @@ describe('Codex’s approvals, as prompts', () => {
     ).resolves.toEqual({ answers: { db: { answers: ['SQLite'] }, name: { answers: ['shop'] } } });
     expect(shown()).toEqual({
       type: 'question',
-      id: 'call_q:prompt',
+      id: expect.stringMatching(UUID) as string,
       questions: [
         {
           header: 'Database',
@@ -262,21 +266,65 @@ describe('Codex’s approvals, as prompts', () => {
     });
   });
 
+  it.each(['accept', 'decline', 'cancel'] as const)(
+    'keeps a URL elicitation in its url field and returns the user’s %s action',
+    async (action) => {
+      const { answered, shown } = prompts();
+      const url = 'https://signin.example.test/connect?token=only-for-the-person';
+      await expect(
+        answered(
+          'mcpServer/elicitation/request',
+          { serverName: 'tracker', mode: 'url', message: 'Connect the tracker', url },
+          { kind: 'elicitation', action },
+        ),
+      ).resolves.toEqual({ action, content: null, _meta: null });
+      expect(shown()).toEqual({
+        type: 'elicitation',
+        id: expect.stringMatching(UUID) as string,
+        server: 'tracker',
+        message: 'Connect the tracker',
+        url,
+      });
+    },
+  );
+
+  it('cancels a URL elicitation when Codex resolves its request and refuses a later answer', async () => {
+    const { asking, shown, events } = prompts();
+    const response = asking.request(
+      'mcpServer/elicitation/request',
+      {
+        serverName: 'tracker',
+        mode: 'url',
+        message: 'Connect the tracker',
+        url: 'https://signin.example.test/connect',
+      },
+      7,
+    );
+    const { id } = shown();
+    asking.resolved(7);
+    await expect(response).resolves.toEqual({ action: 'cancel', content: null, _meta: null });
+    expect(events).toContainEqual({ type: 'withdrawn', id });
+    expect(() => {
+      asking.answer(id, { kind: 'elicitation', action: 'accept' });
+    }).toThrow(/no longer asked/);
+  });
+
   it('withdraws a prompt Codex stops waiting for, and answers it anyway', async () => {
-    const { asking, events, settled } = prompts();
+    const { asking, events, settled, shown } = prompts();
     const reply = asking.request('item/commandExecution/requestApproval', recordedApproval(), 7);
     await vi.waitFor(() => {
       expect(asking.waiting).toBe(true);
     });
+    const { id } = shown();
     asking.resolved(7);
     await expect(reply).resolves.toEqual({ decision: 'cancel' });
     expect(events).toContainEqual({
       type: 'withdrawn',
-      id: 'exec-8cdeae68-704e-4aec-bb77-68eac8816190:prompt',
+      id,
     });
     expect(settled).toHaveBeenCalled();
     expect(() => {
-      asking.answer('exec-8cdeae68-704e-4aec-bb77-68eac8816190:prompt', permission('once'));
+      asking.answer(id, permission('once'));
     }).toThrow(/no longer asked/);
   });
 
