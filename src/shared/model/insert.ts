@@ -1,33 +1,37 @@
-import { autosize, bounds, size, PADDING, nextGroupColor, topInset } from './geometry';
+import { autosize, bounds, size, PADDING, topInset } from './geometry';
 import type { Sizing } from './geometry';
 import type { CanvasDocument, CanvasNode } from './canvas';
 import { fitDocument } from './structure';
-import type { Built, Created } from './structure';
+import type { Built } from './structure';
 import { isApproval, isDelay, isIf, isRepeat, isRepeatEnds, isWait } from './queue';
 import type { QueueItem } from './queue';
 
-/** Space between what is on the canvas and a group inserted beside it. */
+/** Space between what is on the canvas and the template inserted beside it. */
 const GAP = 120;
 
+export interface Inserted {
+  roots: string[];
+  select?: string[];
+}
+
 /**
- * A canvas with another (`part`, such as a template) added as one new group (`group`, labelled
- * `name`, or "name 2" and so on if a group has that name), to the right of everything already
- * there (or beside its children when `parent` is named), with a selection hint for the group.
- * The group and the part's agents get new ids (`newId`), and what pointed at
+ * Adds the template's own top-level nodes, in order, to the right of existing content (or beside
+ * a named parent's children). No wrapper changes its workspace grouping. Every node gets a new
+ * id (`newId`), and what pointed at
  * them (links, work aimed at an agent, waits, inside if-thens and repeats too, and the repeats
- * others go round with) follows; they keep their layout inside the group.
+ * others go round with) follows. Roots retain their relative layout and become children of
+ * `parent` only when given; the result selects all inserted roots.
  */
 export function insert(
   graph: CanvasDocument,
   part: CanvasDocument,
-  { name, parent }: { name: string; parent?: string },
+  { parent }: { parent?: string },
   context: { newId: () => string; sizing?: Sizing<CanvasNode> },
-): Built<Created> {
+): Built<Inserted> {
   const original = context.sizing ? graph.nodes : autosize(graph.nodes);
   const source = autosize(part.nodes);
   const parentNode = parent === undefined ? undefined : original.find((node) => node.id === parent);
-  if (parent !== undefined && !parentNode) return { next: graph, result: {} };
-  const group = context.newId();
+  if (parent !== undefined && !parentNode) return { next: graph, result: { roots: [] } };
   const ids = new Map(source.map((n) => [n.id, context.newId()]));
   const rename = (id: string) => ids.get(id) ?? id;
   const retarget = <T extends QueueItem>(item: T): T => {
@@ -67,17 +71,7 @@ export function insert(
       : place(bounds(onCanvas, (node) => context.sizing?.size(node) ?? size(node)));
   const partTop = source.filter((n) => n.parentId === undefined);
   const origin = partTop.length === 0 ? { x1: 0, y1: 0 } : bounds(partTop);
-  const taken = new Set(graph.nodes.filter((n) => n.type === 'frame').map((n) => n.data.label));
-  let label = name;
-  for (let i = 2; taken.has(label); i++) label = `${name} ${String(i)}`;
-
-  const frame: CanvasNode = {
-    id: group,
-    type: 'frame',
-    position: at,
-    data: { label, color: nextGroupColor(graph.nodes) },
-    ...(parent === undefined ? {} : { parentId: parent }),
-  };
+  const roots = partTop.map((node) => rename(node.id));
   const members = source.map((n): CanvasNode => {
     const top = n.parentId === undefined;
     const queue = n.type === 'agent' && n.data.queue ? n.data.queue.map(retarget) : undefined;
@@ -88,11 +82,15 @@ export function insert(
     return {
       ...n,
       id: rename(n.id),
-      parentId: top ? group : rename(n.parentId ?? ''),
+      ...(top
+        ? parent === undefined
+          ? {}
+          : { parentId: parent }
+        : { parentId: rename(n.parentId ?? '') }),
       position: top
         ? {
-            x: n.position.x - origin.x1 + PADDING,
-            y: n.position.y - origin.y1 + topInset('frame'),
+            x: n.position.x - origin.x1 + at.x,
+            y: n.position.y - origin.y1 + at.y,
           }
         : n.position,
       data,
@@ -100,7 +98,7 @@ export function insert(
   });
   return fitDocument(
     graph,
-    [...original, frame, ...members],
+    [...original, ...members],
     [
       ...graph.links,
       ...part.links.map((link) => ({
@@ -109,12 +107,12 @@ export function insert(
         target: rename(link.target),
       })),
     ],
-    { id: group, select: [group] },
+    { roots, select: roots },
     context,
   );
 }
 
-/** Where a group inserted beside a canvas's contents (`box`, their bounds) goes. */
+/** Where a template inserted beside existing content (`box`, its bounds) goes. */
 function place(box: { x2: number; y1: number }) {
   return { x: box.x2 + GAP, y: box.y1 };
 }

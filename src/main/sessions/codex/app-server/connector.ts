@@ -19,6 +19,7 @@ import { folderTrust } from '../terminal/hooks';
 import { readSkills, slashCommands } from './commands';
 import { runGit } from './diff';
 import type { RunGit } from './diff';
+import { launchInstructions } from '../../instructions';
 import { appendRole, readDeveloperInstructions } from './instructions';
 import { Prompts } from './prompts';
 import { modeSettings } from './protocol';
@@ -96,6 +97,7 @@ export class AppServerConnector implements Connector<CodexMode> {
   }
 
   async start(spec: SessionSpec<CodexMode>, host: SessionHost): Promise<LiveSession<CodexMode>> {
+    const instructions = launchInstructions(spec);
     if (spec.resume !== null) requireConversationId('codex', spec.resume, isUuid);
     const codex = await this.#findCodex(spec.env);
     const realCwd = await realpath(spec.cwd).catch(() => spec.cwd);
@@ -174,10 +176,10 @@ export class AppServerConnector implements Connector<CodexMode> {
       // Read native instructions for a current role, or restore them after a role was removed.
       // Codex 0.162.1 can retain old model-visible context:
       // https://github.com/openai/codex/issues/19045 (role edits need an explicit new conversation).
-      // A thread with no role change keeps Codex's exact defaults.
+      // With no supplied instructions or role change, keep native defaults untouched.
       const developerInstructions =
-        spec.role !== undefined || (spec.resume !== null && spec.roleChanged === true)
-          ? appendRole(await readDeveloperInstructions(server, spec.cwd), spec.role)
+        instructions !== undefined || (spec.resume !== null && spec.roleChanged === true)
+          ? appendRole(await readDeveloperInstructions(server, spec.cwd), instructions)
           : undefined;
       const begin = (mode: CodexMode | null, model: string | null) => {
         const settings = mode === null ? undefined : modeSettings(mode);

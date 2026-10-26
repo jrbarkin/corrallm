@@ -211,6 +211,30 @@ describe('SdkConnector', () => {
       await session.close();
     }
   });
+  it.each([undefined, 'Review changes'])(
+    'appends supplied core workspace context with role %s, without a user turn',
+    async (role) => {
+      const { sdk, host, query } = connector();
+      const spec = {
+        ...SPEC,
+        ...(role === undefined ? {} : { role }),
+        workspaceContext: 'Branch: refs/heads/corrallm/profile/tree',
+      };
+      const session = await sdk.start(spec, host);
+      try {
+        expect(query().options.systemPrompt).toEqual({
+          type: 'preset',
+          preset: 'claude_code',
+          append: `${role === undefined ? '' : `${role}\n\n`}[corrallm workspace context]\nBranch: refs/heads/corrallm/profile/tree`,
+        });
+        expect(query().sent).toEqual([]);
+        expect(spec.role).toBe(role);
+      } finally {
+        await session.close();
+      }
+    },
+  );
+
   it('appends changed roles to the native preset on exact-ID resume, with snapshotting off and no synthetic turn', async () => {
     const { sdk, host, query } = connector();
     const resume = '0b3a7d52-6a0c-4f39-9c4e-2f8f0c1d9e11';

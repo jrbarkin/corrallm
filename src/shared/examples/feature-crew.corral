@@ -4,13 +4,24 @@
   "id": "86ff6160-58b4-4ba2-b956-33bf61bacc3a",
   "nodes": [
     {
+      "id": "workspace",
+      "kind": "group",
+      "label": "Feature crew",
+      "position": {
+        "x": -20,
+        "y": -52
+      },
+      "color": 0
+    },
+    {
       "id": "researcher",
       "kind": "agent",
       "label": "Researcher",
       "position": {
-        "x": 0,
-        "y": 120
+        "x": 20,
+        "y": 172
       },
+      "parent": "workspace",
       "adapter": "claude-code",
       "queue": [
         {
@@ -29,9 +40,10 @@
       "kind": "agent",
       "label": "Builder",
       "position": {
-        "x": 360,
-        "y": 0
+        "x": 380,
+        "y": 52
       },
+      "parent": "workspace",
       "adapter": "codex",
       "queue": [
         {
@@ -75,9 +87,10 @@
       "kind": "agent",
       "label": "Reviewer",
       "position": {
-        "x": 720,
-        "y": 0
+        "x": 740,
+        "y": 52
       },
+      "parent": "workspace",
       "adapter": "claude-code",
       "queue": [
         {
@@ -113,9 +126,10 @@
       "kind": "agent",
       "label": "Docs",
       "position": {
-        "x": 720,
-        "y": 240
+        "x": 740,
+        "y": 292
       },
+      "parent": "workspace",
       "adapter": "claude-code",
       "queue": [
         {

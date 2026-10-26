@@ -4,13 +4,24 @@
   "id": "fb9ce84a-7237-4271-b494-933cb4d5f274",
   "nodes": [
     {
+      "id": "workspace",
+      "kind": "group",
+      "label": "Spec and implementation",
+      "position": {
+        "x": -20,
+        "y": -52
+      },
+      "color": 0
+    },
+    {
       "id": "planner",
       "kind": "agent",
       "label": "Planner",
       "position": {
-        "x": 0,
-        "y": 0
+        "x": 20,
+        "y": 52
       },
+      "parent": "workspace",
       "queue": [
         {
           "id": "spec",
@@ -31,9 +42,10 @@
       "kind": "agent",
       "label": "Builder",
       "position": {
-        "x": 0,
-        "y": 220
+        "x": 20,
+        "y": 272
       },
+      "parent": "workspace",
       "queue": [
         {
           "id": "planned",
@@ -82,9 +94,10 @@
       "kind": "agent",
       "label": "Reviewer",
       "position": {
-        "x": 0,
-        "y": 440
+        "x": 20,
+        "y": 492
       },
+      "parent": "workspace",
       "queue": [
         {
           "id": "built",

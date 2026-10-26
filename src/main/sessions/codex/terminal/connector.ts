@@ -11,6 +11,7 @@ import { spawnPty } from '../../terminal/pty';
 import type { SpawnPty } from '../../terminal/pty';
 import { TerminalSession, TIMING } from '../../terminal/session';
 import type { TerminalTiming } from '../../terminal/session';
+import { launchInstructions } from '../../instructions';
 import { appendRole } from '../app-server/instructions';
 import { checkVersion, codexVersion } from '../codex';
 import { nativeDeveloperInstructions } from './instructions';
@@ -126,6 +127,7 @@ export class CodexTerminalConnector implements Connector<CodexMode> {
   }
 
   async start(spec: SessionSpec<CodexMode>, host: SessionHost): Promise<LiveSession<CodexMode>> {
+    const instructions = launchInstructions(spec);
     const codex = await this.#findCodex(spec.env);
     const version = await this.#version(codex, spec.env);
     const old = checkVersion(version);
@@ -135,8 +137,8 @@ export class CodexTerminalConnector implements Connector<CodexMode> {
     // Native resume can retain old model-visible role context in Codex 0.162.1:
     // https://github.com/openai/codex/issues/19045 (role edits need a new conversation).
     const developerInstructions =
-      spec.role !== undefined || (spec.resume !== null && spec.roleChanged === true)
-        ? appendRole(await this.#readInstructions({ codex, cwd, env: spec.env }), spec.role)
+      instructions !== undefined || (spec.resume !== null && spec.roleChanged === true)
+        ? appendRole(await this.#readInstructions({ codex, cwd, env: spec.env }), instructions)
         : undefined;
     const usage = this.#usage;
     const session = new TerminalSession<CodexMode>({ ...spec, cwd }, host, {

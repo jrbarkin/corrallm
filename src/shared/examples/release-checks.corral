@@ -4,13 +4,24 @@
   "id": "2f1ad1f9-7978-4f49-b7ae-39291affdcf9",
   "nodes": [
     {
+      "id": "workspace",
+      "kind": "group",
+      "label": "Release checks",
+      "position": {
+        "x": -20,
+        "y": -52
+      },
+      "color": 0
+    },
+    {
       "id": "releaser",
       "kind": "agent",
       "label": "Releaser",
       "position": {
-        "x": 0,
-        "y": 0
+        "x": 20,
+        "y": 52
       },
+      "parent": "workspace",
       "adapter": "claude-code",
       "queue": [
         {
@@ -60,9 +71,10 @@
       "kind": "agent",
       "label": "Fixer",
       "position": {
-        "x": 360,
-        "y": 160
+        "x": 380,
+        "y": 212
       },
+      "parent": "workspace",
       "adapter": "codex"
     }
   ],

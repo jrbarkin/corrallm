@@ -16,6 +16,7 @@ import type { LiveSession, SessionHost, SessionSpec, TerminalScreen } from '../c
 import { isNativeId } from '../id';
 import type { TerminalCli, TerminalSignal } from './cli';
 import type { FirstRunTurn } from './first-run';
+import { launchInstructions } from '../instructions';
 import { HOOK_HEADER, HOOK_TOKEN } from './hooks';
 import type { HookEvent, HookRegistration, HookServer } from './hooks';
 import type { Pty, SpawnPty } from './pty';
@@ -444,6 +445,7 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
   /** Runs the CLI in a new pseudo-terminal, on a fresh screen (shown to the view, if any). */
   async #start(): Promise<void> {
     const { model, mode, cwd } = this.#spec;
+    const instructions = launchInstructions(this.#spec);
     const args = this.#cli.args({
       dir: this.#settingsDir ?? '',
       id: this.#id,
@@ -451,7 +453,7 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
       model,
       mode,
       cwd,
-      ...(this.#spec.role === undefined ? {} : { role: this.#spec.role }),
+      ...(instructions === undefined ? {} : { role: instructions }),
     });
     const pty = await this.#deps.spawn(this.#deps.executable, args, {
       cwd: this.#spec.cwd,

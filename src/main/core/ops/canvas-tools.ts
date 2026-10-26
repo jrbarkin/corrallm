@@ -42,22 +42,19 @@ export function canvasToolsOps({
       ready(canvas);
       return ctx.commit(canvas, (doc) => {
         // The one fill, canvas.create's too: the text a party other than you filled in is its.
-        const { name, document: part } = filledTemplate(
+        const { document: part } = filledTemplate(
           { template, values, agents, connections },
           ctx.proposedBy ?? ctx.by,
           context,
         );
-        if (part.nodes.length + 1 > MAX_OP_NODES)
+        if (part.nodes.length > MAX_OP_NODES)
           throw new OpFailure('invalid', 'That template has too many nodes.');
         const into = parent ?? agentOf(ctx.proposedBy ?? ctx.by);
         if (into !== undefined && !doc.nodes.some((node) => node.id === into))
           throw new OpFailure('not-found', `There is no node ${into}.`);
-        const built = insert(
-          doc,
-          part,
-          { name, ...(into === undefined ? {} : { parent: into }) },
-          { newId: randomUUID },
-        );
+        const built = insert(doc, part, into === undefined ? {} : { parent: into }, {
+          newId: randomUUID,
+        });
         const previous = new Set(doc.nodes.map((node) => node.id));
         const added = built.next.nodes.filter(
           (node) => node.type === 'agent' && !previous.has(node.id),
@@ -65,7 +62,7 @@ export function canvasToolsOps({
         return {
           next: built.next.arrange ? arrange(built.next) : built.next,
           result: {
-            group: NodeId.parse(built.result.id),
+            roots: built.result.roots.map((id) => NodeId.parse(id)),
             agents: added.map((node) => AgentId.parse(node.id)),
           },
         };

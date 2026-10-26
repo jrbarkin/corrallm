@@ -21,7 +21,7 @@ export const EXAMPLES: readonly Example[] = [
   {
     name: 'TDD relay',
     description:
-      'Codex writes the tests and checks they fail first; Claude works and runs them until they pass, asking you after three rounds; Codex refactors, with the tests run at every hand-off. After claudex.',
+      'Codex writes the tests and checks they fail first; Claude works and runs them until they pass, asking you after three rounds; Codex refactors, with the tests run at every hand-off. All three roles share one relay worktree. After claudex.',
     text: tddRelay,
     fields: [
       {
@@ -36,7 +36,7 @@ export const EXAMPLES: readonly Example[] = [
   {
     name: 'Head to head',
     description:
-      'Claude and Codex build the same thing in their own worktrees, round after round; a judge scores them blind and gives each feedback, ends early when one is clearly better, and merges the winner. After claudex-compete.',
+      'Claude and Codex commit competing versions in separate managed worktrees; a judge reads their generated refs, commits feedback in its own tree, and reports the winner for review. Two rounds at most, ending early on a clear winner. Requires core workspace context; never merges automatically. After claudex-compete.',
     text: headToHead,
     fields: [
       {
@@ -50,7 +50,7 @@ export const EXAMPLES: readonly Example[] = [
   {
     name: 'Spec first',
     description:
-      "A planner writes the spec before any code, and the plan once you approve the spec; a builder writes the plan's tests, checks they fail, then makes them pass; a reviewer checks the result against the spec. Any agents: pick one for each role, or leave it to the default.",
+      "A planner writes the spec before any code, and the plan once you approve the spec; a builder writes the plan's tests, checks they fail, then makes them pass; a reviewer checks the result against the spec. All three share a Spec and implementation worktree. Any agents: pick one for each role, or leave it to the default.",
     text: specFirst,
     fields: [
       {
@@ -63,7 +63,7 @@ export const EXAMPLES: readonly Example[] = [
   {
     name: 'Review panel',
     description:
-      'One agent builds; three review the change at once, for bugs, security and tests; a lead decides what must be fixed first.',
+      'One agent builds; three review the change at once, for bugs, security and tests; a lead decides what must be fixed first. They share one worktree and distinct .review files.',
     text: reviewPanel,
     fields: [
       {
@@ -76,36 +76,37 @@ export const EXAMPLES: readonly Example[] = [
   {
     name: 'Feature crew',
     description:
-      'Research feeds the build and its docs; review waits for the build, and the docs for the review.',
+      'Research feeds the build and its docs; review waits for the build, and the docs for the review, all in one shared worktree.',
     text: featureCrew,
   },
   {
     name: 'Independent cross-check',
     description:
-      "A builder takes the task while a checker researches it on its own, then checks the builder's work.",
+      "A builder takes the task while a checker researches it on its own, then checks the builder's work. Separate conversations inspect the same worktree.",
     text: crossCheck,
   },
   {
     name: 'Review loop',
     description:
-      'A coder implements the issue and a reviewer reviews it, round after round, until the reviewer approves; after three rounds, it asks you.',
+      'A coder implements the issue and a reviewer reviews it, round after round, until the reviewer approves; after three rounds, it asks you. Both roles share the uncommitted changes in one worktree.',
     text: reviewLoop,
   },
   {
     name: 'Team lead',
     description:
-      'Once you approve the plan, the planner briefs the head of a team, who shares the work out.',
+      'Once you approve the plan, the planner briefs the head of a team, who shares the work out. Planner and the existing Lead team share one worktree without changing who leads.',
     text: teamLead,
   },
   {
     name: 'Fan-out research',
-    description: 'One agent asks a group of researchers a question each; they report to a writer.',
+    description:
+      'Lead asks three researchers distinct questions; their separate NOTES files and Writer’s report share one Research and report worktree.',
     text: fanOut,
   },
   {
     name: 'Release checks',
     description:
-      'Run the tests, then call in a fixer if they fail, or review and tag the release if they pass.',
+      'Run the tests, then call in a fixer if they fail, or review and tag the release if they pass. Releaser and Fixer share the same worktree, so checks see the fixes.',
     text: releaseChecks,
   },
 ];
