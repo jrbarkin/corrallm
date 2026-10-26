@@ -4,7 +4,7 @@
  */
 
 /** The oldest Node the CLI runs on: package.json's engines. */
-export const NEEDED_NODE = '24.22.0';
+export const NEEDED_NODE = '24.22.1';
 
 /**
  * What a command line that can never work exits with (sysexits' EX_USAGE): one run by a Node too
