@@ -155,15 +155,11 @@ if (args.includes('read-tree') && existsSync(${JSON.stringify(arm)})) {
       const before = (await nativeLog(item.location ?? '')).filter(
         (event) => event.event === 'ready',
       ).length;
-      await page.evaluate(
-        (agent) =>
-          window.api.startSession(agent, {
-            connection: 'claude-code.terminal',
-            model: null,
-            mode: null,
-          }),
-        agent,
+      const opened = await page.evaluate(
+        ({ canvas, agent }) => window.api.sessionOpen({ canvas, agent }),
+        { canvas, agent },
       );
+      expect(opened, JSON.stringify(opened)).toMatchObject({ ok: true });
       await expect
         .poll(
           async () =>
