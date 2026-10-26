@@ -183,25 +183,38 @@ test('Switch keeps the old tree and Remove on a closed canvas uses its core conf
   const world = await openWorkspaceApp();
   const { page, canvas } = world;
   try {
-    const panel = await world.startAgent();
-    await panel
-      .locator('header')
-      .getByRole('button', { name: 'Review setup', exact: true })
-      .click();
-    await page.getByRole('article').getByRole('button', { name: 'Skip', exact: true }).click();
-    await page.getByRole('button', { name: 'Needs you', exact: true }).click();
-    await panel.getByRole('button', { name: 'Back to the canvas', exact: true }).click();
-    const old = (await world.list()).items[0];
-    if (!old?.location) throw new Error('No allocated checkout');
-    await writeFile(path.join(old.location, 'KEEP-MY-WORK.txt'), 'uncommitted work\n');
+    // A lone agent gathered into a new frame keeps its tree (only its owner changes), so a
+    // workspace change needs two agents that each work in a tree of their own.
+    for (const name of ['Agent 1', 'Agent 2']) {
+      const panel = await world.startAgent(name);
+      await panel
+        .locator('header')
+        .getByRole('button', { name: 'Review setup', exact: true })
+        .click();
+      await page.getByRole('article').getByRole('button', { name: 'Skip', exact: true }).click();
+      await page.getByRole('button', { name: 'Needs you', exact: true }).click();
+      await panel.getByRole('button', { name: 'Back to the canvas', exact: true }).click();
+    }
+    const trees = (await world.list()).items;
+    expect(trees).toHaveLength(2);
+    for (const tree of trees) {
+      if (!tree.location) throw new Error('No allocated checkout');
+      await writeFile(path.join(tree.location, 'KEEP-MY-WORK.txt'), 'uncommitted work\n');
+    }
     // Fixture structural edit: the UI below exercises the resulting Switch and retention.
     await page.evaluate(
-      async ({ canvas, agent }) => {
-        const result = await window.api.canvasGroup({ canvas, nodes: [agent], kind: 'frame' });
+      async ({ canvas, agents }) => {
+        const result = await window.api.canvasGroup({ canvas, nodes: agents, kind: 'frame' });
         if (!result.ok) throw new Error(result.error.sentence);
       },
-      { canvas, agent: old.agent },
+      { canvas, agents: trees.map((tree) => tree.agent) },
     );
+    // The first member's tree is the group's; the other's move waits for your Switch.
+    await expect
+      .poll(async () => (await world.list()).items.filter((i) => i.state === 'pending-change'))
+      .toHaveLength(1);
+    const old = (await world.list()).items.find((item) => item.state === 'pending-change');
+    if (!old?.branch) throw new Error('No pending change');
     await page
       .locator('.graph-card')
       .getByRole('button', { name: 'Review workspace change', exact: true })
@@ -211,12 +224,17 @@ test('Switch keeps the old tree and Remove on a closed canvas uses its core conf
     await change
       .getByRole('button', { name: 'Switch, keeping the previous worktrees', exact: true })
       .click();
-    // The new group's setup is still a real choice, not run as a side effect of Switch.
-    await expect(page.getByRole('article', { name: /Set up .*worktree/ })).toBeVisible();
-    await page
-      .getByRole('article', { name: /Set up .*worktree/ })
-      .getByRole('button', { name: 'Skip', exact: true })
-      .click();
+    // Switch moves it into the group's existing tree, whose setup was already answered; Switch
+    // runs nothing and offers nothing more.
+    await expect
+      .poll(async () => (await world.list()).items.filter((i) => i.state === 'pending-change'))
+      .toHaveLength(0);
+    const after = (await world.list()).items;
+    expect(new Set(after.map((item) => item.workspace)).size).toBe(1);
+    expect(after.map((item) => [item.setup?.state, item.need])).toEqual([
+      ['skipped', undefined],
+      ['skipped', undefined],
+    ]);
     await canvasAction(page, 'New');
     await page.evaluate(async (canvas) => {
       const result = await window.api.canvasClose({ canvas });
@@ -224,12 +242,12 @@ test('Switch keeps the old tree and Remove on a closed canvas uses its core conf
     }, canvas);
     await canvasAction(page, 'Canvases');
     const kept = page.getByRole('region', { name: 'Kept worktrees of Untitled', exact: true });
-    await expect(kept).toContainText(old.branch ?? '');
+    await expect(kept).toContainText(old.branch);
     await kept.getByRole('button', { name: /Remove .* worktree/ }).click();
     const confirm = kept.getByRole('article', { name: /Remove .*It holds work/ });
     await expect(confirm).toBeVisible();
     await confirm.getByRole('button', { name: 'Cancel', exact: true }).click();
-    await expect(kept).toContainText(old.branch ?? '');
+    await expect(kept).toContainText(old.branch);
     await kept.getByRole('button', { name: /Remove .* worktree/ }).click();
     await kept
       .getByRole('article')
