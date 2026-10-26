@@ -749,12 +749,14 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
         all: seesAll(caller, reach),
       };
     },
-    // B9a's worktrees: yours kept at every change, a window watching or not (§7's Wire state).
+    // B9a §7: worktrees and Needs kept at every change, a window watching or not.
     canonical: {
-      of: (topic) => topic.startsWith('worktrees:'),
+      of: (topic) => topic.startsWith('worktrees:') || topic.startsWith('needs:'),
+      initial: (topic) => (topic.startsWith('needs:') ? { items: [] } : undefined),
       read: async (topic) => {
         const canvas = canvasOfTopic(topic);
         if (canvas === undefined || !states.keeps(canvas)) return undefined;
+        if (topic.startsWith('needs:')) return { items: waitingFor(canvas) };
         return worktreeListing(canvas, { kind: 'you' });
       },
     },
@@ -776,8 +778,10 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     },
   });
   // Each commit to a canvas's document: its agents, how they run, who reaches what.
-  documents.subscribe(({ canvas }) => {
+  documents.subscribe(({ canvas, by }) => {
     workspaceDirectories.changed(canvas);
+    topics.changed(`needs:${canvas}`, by);
+    engines.needsChanged(canvas);
     runtime.documentChanged(canvas);
   });
   memory.subscribe((canvas) => {
@@ -865,6 +869,8 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
       projectChosen: async (canvas) => {
         await planner.projectChosen(canvas, undefined);
         workspaceDirectories.invalidate(canvas);
+        topics.changed(`needs:${canvas}`, 'you');
+        engines.needsChanged(canvas);
         if (config.directoryResolver === undefined) await workspaceDirectories.discover(canvas);
       },
     },

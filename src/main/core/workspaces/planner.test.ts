@@ -399,46 +399,63 @@ describe('the workspace-safety contract on every plan (B9a §7)', () => {
     ).toBe(undefined);
   });
 
-  it('fails closed: a plan that would move one is refused before the commit, changing nothing', async () => {
-    await twoTrees();
-    /** A planner whose plan, wrongly, moves `a` into b's tree. */
-    class Wrong extends WorkspacePlanner {
-      override plan(commit: Parameters<WorkspacePlanner['plan']>[0]) {
-        const plan = super.plan(commit);
-        return {
-          ...plan,
-          steps: [...plan.steps, { kind: 'bind' as const, agent: 'a', workspace: B }],
-        };
+  it.each(['preflight', 'write'] as const)(
+    'fails closed at %s when a plan would move one, changing nothing',
+    async (at) => {
+      await twoTrees();
+      /** A planner whose plan, wrongly, moves `a` into b's tree. */
+      class Wrong extends WorkspacePlanner {
+        #calls = 0;
+        override plan(commit: Parameters<WorkspacePlanner['plan']>[0]) {
+          const plan = super.plan(commit);
+          // In the write case the preflight was safe: its backstop must check the plan anew.
+          if (++this.#calls === 1 && at === 'write') return plan;
+          return {
+            ...plan,
+            steps: [...plan.steps, { kind: 'bind' as const, agent: 'a', workspace: B }],
+          };
+        }
       }
-    }
-    const wrong = new Documents({
-      store,
-      memory,
-      catalog: CATALOG,
-      defaultAdapter: DEFAULT_ADAPTER,
-      workspaces: new Wrong({ workspaces }),
-    });
-    await wrong.load(CANVAS);
-    const rev = wrong.live(CANVAS).rev;
-    const a = binding('a');
-    const changed = wrong.change(CANVAS, {
-      revision: { op: 'canvas.rename', by: 'you' },
-      build: (document) => ({
-        next: {
-          ...document,
-          nodes: document.nodes.map((node) =>
-            node.id === 'a' ? { ...node, data: { ...node.data, label: 'Renamed' } } : node,
-          ),
-        },
-        result: undefined,
-      }),
-      check: () => undefined,
-      committing: () => undefined,
-    });
-    await expect(changed).rejects.toMatchObject({ code: 'refused', message: /worktree/ });
-    expect(wrong.live(CANVAS).rev).toBe(rev);
-    expect(binding('a')).toEqual(a);
-  });
+      const wrong = new Documents({
+        store,
+        memory,
+        catalog: CATALOG,
+        defaultAdapter: DEFAULT_ADAPTER,
+        workspaces: new Wrong({ workspaces }),
+      });
+      await wrong.load(CANVAS);
+      const before = wrong.live(CANVAS).document;
+      const rev = wrong.live(CANVAS).rev;
+      const a = binding('a');
+      const changed = wrong.change(CANVAS, {
+        revision: { op: 'canvas.rename', by: 'you' },
+        build: (document) => ({
+          next: {
+            ...document,
+            nodes: document.nodes.map((node) =>
+              node.id === 'a' ? { ...node, data: { ...node.data, label: 'Renamed' } } : node,
+            ),
+          },
+          result: undefined,
+        }),
+        check: () => undefined,
+        committing: () => undefined,
+      });
+      await expect(changed).rejects.toMatchObject({
+        ...(at === 'preflight' ? { code: 'refused' } : { name: 'CommitFailed' }),
+        message: /worktree/,
+      });
+      expect(wrong.live(CANVAS).rev).toBe(rev);
+      expect(binding('a')).toEqual(a);
+      const reloaded = new Documents({
+        store,
+        memory,
+        catalog: CATALOG,
+        defaultAdapter: DEFAULT_ADAPTER,
+      });
+      expect((await reloaded.load(CANVAS)).document).toEqual(before);
+    },
+  );
 });
 
 describe('a project change', () => {

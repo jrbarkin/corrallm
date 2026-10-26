@@ -12,6 +12,29 @@ afterEach(() => {
   topics?.close();
 });
 
+it('keeps an empty canonical Needs baseline at zero, then receipts changes without a subscriber', async () => {
+  const topic = `needs:${CANVAS}` as const;
+  let state: { items: unknown[] } = { items: [] };
+  topics = new Topics({
+    read: () => Promise.resolve({ ok: true, value: state }),
+    canonical: {
+      of: (key) => key === topic,
+      initial: () => ({ items: [] }),
+      read: () => Promise.resolve(state as never),
+    },
+  });
+  const since = topics.mark();
+  topics.changed(topic, 'corrallm');
+  expect(await topics.receipts([topic], since)).toEqual({});
+  state = { items: [{ id: 'a-workspace-card' }] };
+  topics.changed(topic, 'you');
+  expect(await topics.receipts([topic], since)).toEqual({ [topic]: 1 });
+  const after = topics.mark();
+  state = { items: [] };
+  topics.changed(topic, 'you');
+  expect(await topics.receipts([topic], after)).toEqual({ [topic]: 2 });
+});
+
 it('does not receipt the first read of an unchanged canonical source as a write’s change', async () => {
   const topic = `worktrees:${CANVAS}` as const;
   const state = { items: [], kept: [] };

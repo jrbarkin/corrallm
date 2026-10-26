@@ -55,7 +55,7 @@ import type { RuntimeBody, RuntimeSource, RuntimeState } from './runtime-topics'
  * `usage`, `settings`, `canvases` and a canvas's `needs:<c>` are replaced whole: when their source
  * says it changed, they are read again through their op, once for each caller who sees them alike
  * (you, in every window, as one), and a change goes out only if what was read differs. A canvas's
- * `worktrees:<c>` (B9a §7) is replaced whole too, and canonical (`canonical`): yours is read again
+ * `worktrees:<c>` (B9a §7) is replaced whole too, and both it and Needs are canonical (`canonical`): yours is read again
  * from its source at each change whether or not a window subscribes, so its revision moves at the
  * change itself, and a write naming it reads it again before its receipts. A canvas's
  * `canvas:<c>` is keyed: each change is the commit's diff (canvas/states.ts), at the commit's
@@ -128,11 +128,13 @@ export interface TopicsDeps {
   view?: (canvas: CanvasId, caller: Caller) => { rev: number; entities: Entities; all: boolean };
   /**
    * The replaced topics whose revision is yours to keep whether or not anyone subscribes (B9a §7:
-   * `worktrees:<c>`), and how yours is read: straight from its source (its op's selector, as you
+   * `worktrees:<c>` and `needs:<c>`), and how yours is read: straight from its source (its op's selector, as you
    * see it), never only when a window happens to watch. undefined: its canvas is no longer kept.
    */
   canonical?: {
     of(topic: TopicKey): boolean;
+    /** A known empty baseline (Needs), before any source change; otherwise first state is new. */
+    initial?(topic: TopicKey): TopicSnapshot['state'] | undefined;
     read(topic: TopicKey): Promise<TopicSnapshot['state'] | undefined>;
   };
   /**
@@ -889,16 +891,28 @@ export class Topics implements Publication {
   ): void {
     let states = this.#states.get(topic);
     if (!states) this.#states.set(topic, (states = new Map<string, TopicSnapshot>()));
-    const previous = states.get(group);
+    let previous = states.get(group);
+    const known = previous !== undefined;
+    if (!known && group === 'you' && this.#deps.canonical?.of(topic) === true) {
+      const initial = this.#deps.canonical.initial?.(topic);
+      if (initial !== undefined) {
+        previous = {
+          epoch: this.epoch,
+          rev: this.#revs.get(topic)?.get(group) ?? 0,
+          state: initial,
+        };
+        states.set(group, previous);
+      }
+    }
     if (previous && JSON.stringify(previous.state) === JSON.stringify(state)) return;
-    // Yours of a canonical topic moves at its first state too: a change no one watched is one.
+    // Without a supplied baseline, its first canonical state counts too, watched or not.
     const first = group === 'you' && this.#deps.canonical?.of(topic) === true;
-    // A first snapshot still has revision 1. Only an actual source notification makes that
+    // Without a supplied baseline, a first snapshot has revision 1. A source notification makes that
     // initial state a write's effect: subscribing or refreshing an unknown baseline proves no
     // change. Once known, a refresh can detect a changed state even without its notification.
     const rev =
       previous || first
-        ? this.#bump(topic, group, previous !== undefined || sourceChanged)
+        ? this.#bump(topic, group, known || sourceChanged)
         : (this.#revs.get(topic)?.get(group) ?? 0);
     states.set(group, { epoch: this.epoch, rev, state });
     if (!previous) return;

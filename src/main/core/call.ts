@@ -540,11 +540,13 @@ export function createDispatcher(registry: Registry, options: DispatchOptions = 
         if ('proposed' in done) throw new ProposedInstead(done.proposed);
         if (done.rev !== undefined) {
           turn.revs[`canvas:${canvas}`] = done.rev;
-          // Who works where is written with the document (B9a §7): its worktrees' receipt too,
-          // if they moved.
-          const worktrees: ReceiptTopic = `worktrees:${canvas as CanvasId}`;
-          turn.published.add(worktrees);
-          publication?.attribute(worktrees, by);
+          // Who works where, and its pending workspace cards, follow every document commit
+          // (B9a §7), including a batch. Receipt only the topics that actually moved.
+          for (const kind of ['worktrees', 'needs'] as const) {
+            const topic: ReceiptTopic = `${kind}:${canvas as CanvasId}`;
+            turn.published.add(topic);
+            publication?.attribute(topic, by);
+          }
         }
         return done.result;
       },
