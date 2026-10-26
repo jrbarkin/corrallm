@@ -56,6 +56,10 @@ for (const terminal of [false, true]) {
       await expect(kept).toContainText('Open');
       await expect(kept.getByText('Running', { exact: true })).toHaveCount(0);
       await kept.getByRole('button', { name: 'Show continuity.corral', exact: true }).click();
+      // The canvas menu, and the Canvases list in it, stay open over the dock until dismissed.
+      const menu = world.page.getByRole('button', { name: 'Canvas menu', exact: true });
+      if ((await menu.getAttribute('aria-expanded')) === 'true') await menu.click();
+      await expect(list).toBeHidden();
       await world.showQueues();
       for (const id of ['first', 'check', 'branch', 'next']) {
         await expect(world.row(id)).toHaveAttribute('data-run', 'succeeded');
