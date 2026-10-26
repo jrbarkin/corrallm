@@ -230,7 +230,7 @@ it('a settings-sheet choice commits one agent.setSettings', async () => {
       canvas: canvas.document.id,
       agent: 'a',
       adapter: 'claude-code',
-      settings: { model: null, effort: null, mode: 'plan' },
+      settings: { mode: 'plan' },
     });
   });
   expect(writer(canvas)?.data.settings?.['claude-code']?.mode).toBe('plan');

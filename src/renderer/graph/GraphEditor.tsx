@@ -37,6 +37,7 @@ import type { AgentData, CanvasDocument } from '../../shared/model/canvas';
 import type { InstalledClis } from '../../shared/session';
 import { NO_USAGE } from '../../shared/usage';
 import { AgentView } from '../agent/AgentView';
+import { settingsChange } from '../agent/settings-change';
 import { AgentSettingsPanel } from '../agent/AgentSettings';
 import { catalog, continuesIn } from '../catalog';
 import { ipcErrorMessage } from '../ipc-error';
@@ -1607,16 +1608,17 @@ function Editor({
               perform(changeAgent(settingsNode.id, agent, connection));
             }}
             onSettings={(adapter, settings) => {
+              const settingsChanged = settingsChange(
+                settingsNode.data.settings?.[adapter],
+                settings,
+              );
+              if (Object.keys(settingsChanged).length === 0) return;
               perform(
                 api.agentSetSettings({
                   canvas: canvasId,
                   agent: settingsNode.id,
                   adapter,
-                  settings: {
-                    model: settings.model ?? null,
-                    effort: settings.effort ?? null,
-                    mode: settings.mode ?? null,
-                  },
+                  settings: settingsChanged,
                 }),
               );
             }}
