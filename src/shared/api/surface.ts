@@ -38,6 +38,8 @@ export type Scope = 'app' | 'canvas' | 'agent' | 'none';
  */
 export type Rule =
   | 'shell-text'
+  | 'human-text'
+  | 'corral-mcp'
   | 'mode-permits'
   | 'human-choice'
   | 'discard'
@@ -350,11 +352,12 @@ export const SURFACE = {
     reads: 'messages',
     varies: ['items', 'next'],
   },
+  // Your composer's message too (B11 §3, §16.6): text past 16 KiB, and images, are yours alone.
   message: {
     access: M,
     kind: 'command',
     scope: 'agent',
-    rules: ['shell-text'],
+    rules: ['shell-text', 'human-text'],
     self: 'refused',
   },
   withdraw: { access: M, kind: 'command', scope: 'canvas', preempt: true, destructive: true },
@@ -387,12 +390,38 @@ export const SURFACE = {
   },
   // §16.1: Continue in Terminal, yours alone (how an agent runs is yours).
   'session.continueIn': { access: Y, kind: 'command', scope: 'agent' },
+  // B11 §7: listed to the caller alone, which alone may then resume what it was listed; no agent
+  // lists conversations (O) or resumes one (W).
+  'session.conversations': {
+    access: O,
+    kind: 'read',
+    scope: 'none',
+    self: 'allowed',
+    varies: ['items'],
+  },
+  'session.resumeConversation': { access: W, kind: 'command', scope: 'agent', self: 'refused' },
+  // What an adapter's agents can be set to, read in an agent's workspace now (B11 §6).
+  'session.options': { access: R, kind: 'read', scope: 'none', self: 'allowed' },
+  // /mcp (B11 §6): only a server its session reports, never a command or a URL; an agent never
+  // changes its own.
+  // A command your agent view answered itself (its panels), recorded as your message: a view's.
+  'session.viewCommand': { access: Y, kind: 'command', scope: 'agent' },
+  'session.mcpServers': { access: R, kind: 'read', scope: 'none', self: 'allowed' },
+  'session.changeMcpServer': {
+    access: L,
+    kind: 'command',
+    scope: 'agent',
+    self: 'refused',
+    rules: ['corral-mcp'],
+  },
+  // Your composer's suggestion and your Needs' detail of a terminal's asks are yours alone.
   'session.get': {
     access: A,
     kind: 'read',
     scope: 'none',
     reads: 'sessions',
     self: 'allowed',
+    varies: ['suggestion', 'asking'],
   },
   'session.transcript': {
     access: { ...R, worker: 'own' },

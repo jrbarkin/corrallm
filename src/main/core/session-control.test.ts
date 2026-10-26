@@ -5,9 +5,13 @@ import path from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { MAX_MESSAGE_BYTES } from '../../shared/api/limits';
+import { RULES } from '../../shared/api/rules';
 import type { CanvasId } from '../../shared/canvas';
-import type { FilesRewind, SessionMode } from '../../shared/session';
-import type { Connector, LiveSession } from '../sessions/connector';
+import type { FilesRewind, McpChange, McpServer, SessionMode } from '../../shared/session';
+import { MAX_MESSAGE_LENGTH } from '../../shared/session';
+import type { KeptConversation } from '../sessions/adapter';
+import type { Connector, LiveSession, SessionHost } from '../sessions/connector';
 import { FakeConnector } from '../sessions/fake';
 import { SessionManager } from '../sessions/manager';
 import type { OutsideCaller } from './caller';
@@ -38,7 +42,7 @@ const YOU = CALLERS.you;
 const OTHER = '3f1a2b3c-4d5e-4f60-8a1b-2c3d4e5f6a7b' as CanvasId;
 
 /** Three Claude Code agents on the Agent SDK, sharing the faked project directory. */
-function canvasText(): string {
+function canvasText(team = false): string {
   const agent = (id: string, label: string, x: number) => ({
     id,
     kind: 'agent',
@@ -51,7 +55,11 @@ function canvasText(): string {
     format: 'corrallm',
     version: 2,
     id: CANVAS,
-    nodes: [agent('a', 'Builder', 0), agent('b', 'Reviewer', 300), agent('c', 'Tester', 600)],
+    nodes: [
+      agent('a', 'Builder', 0),
+      { ...agent('b', 'Reviewer', 300), ...(team ? { parent: 'a' } : {}) },
+      agent('c', 'Tester', 600),
+    ],
     links: [],
   });
 }
@@ -65,6 +73,13 @@ let holding: PromiseWithResolvers<undefined> | undefined;
 let rewinds: { agent: string; message: string; dryRun: boolean }[];
 /** Whether a file restore (not a dry run) is held where it is, until released. */
 let restore: PromiseWithResolvers<undefined> | undefined;
+/** The conversations Claude Code keeps for the project folder, as its reader lists them. */
+let kept: KeptConversation[];
+/** Each MCP server change asked of an agent's session. */
+let mcpChanges: { agent: string; name: string; change: McpChange }[];
+let extraServers: McpServer[];
+/** What each agent's session last told the core through: to emit what its CLI says. */
+const hosts = new Map<string, SessionHost>();
 
 beforeEach(async () => {
   profile = await mkdtemp(path.join(tmpdir(), 'corrallm-control-'));
@@ -74,6 +89,10 @@ beforeEach(async () => {
   holding = undefined;
   rewinds = [];
   restore = undefined;
+  kept = [];
+  mcpChanges = [];
+  extraServers = [];
+  hosts.clear();
 });
 
 afterEach(async () => {
@@ -84,11 +103,32 @@ afterEach(async () => {
   await rm(profile, { recursive: true, force: true });
 });
 
-/** A connector of fakes whose sessions restore files (the Agent SDK's), each restore recorded. */
+/**
+ * A connector of fakes whose sessions restore files (the Agent SDK's), each restore recorded, and
+ * have two MCP servers, sentry failing until it is reconnected, each change recorded.
+ */
 function restoring(fake: FakeConnector): Connector<SessionMode> {
   return {
     start: async (spec, host) => {
       const session: LiveSession<SessionMode> = await fake.start(spec, host);
+      hosts.set(spec.agentId, host);
+      let servers: McpServer[] = [
+        { name: 'github', status: 'connected', scope: 'user', tools: 2 },
+        { name: 'sentry', status: 'failed', scope: 'project', error: 'Connection refused' },
+        ...extraServers,
+      ];
+      session.mcpServers = () => Promise.resolve(servers.map((one) => ({ ...one })));
+      session.changeMcpServer = (name, change) => {
+        mcpChanges.push({ agent: spec.agentId, name, change });
+        servers = servers.map((one) =>
+          one.name !== name
+            ? one
+            : change === 'disable'
+              ? { name, status: 'disabled' }
+              : { name, status: 'connected', scope: one.scope ?? 'project', tools: 2 },
+        );
+        return Promise.resolve();
+      };
       session.rewindFiles = async (message, dryRun): Promise<FilesRewind> => {
         rewinds.push({ agent: spec.agentId, message, dryRun });
         if (!dryRun) {
@@ -104,10 +144,10 @@ function restoring(fake: FakeConnector): Connector<SessionMode> {
 
 async function start(
   conversations: Record<string, { id: string }> = {},
-  { other = false }: { other?: boolean } = {},
+  { other = false, team = false }: { other?: boolean; team?: boolean } = {},
 ): Promise<{ core: Core; sdk: FakeConnector; terminal: FakeConnector }> {
   const file = path.join(profile, 'team.corral');
-  await writeFile(file, canvasText());
+  await writeFile(file, canvasText(team));
   // With `other`: a canvas of its own whose agent x (Writer) works in the same project folder.
   const second = path.join(profile, 'other.corral');
   if (other) {
@@ -137,6 +177,8 @@ async function start(
       sessions: {
         connectors: { 'claude-code.sdk': restoring(sdk), 'claude-code.terminal': terminal },
         environment: () => Promise.resolve({}),
+        // Never the user's own: what the test says Claude Code keeps for the folder.
+        conversations: { 'claude-code': { list: () => Promise.resolve(kept) } },
       },
       watchFolder: () => ({ close: () => undefined }),
     },
@@ -377,6 +419,22 @@ describe('reach', () => {
 });
 
 describe('Continue in Terminal', () => {
+  it('delivers the exact human composer-bound input once through core.call', async () => {
+    const { core, terminal } = await start();
+    const text = `  !${'é'.repeat(MAX_MESSAGE_LENGTH - 6)}\n  `;
+    expect(text).toHaveLength(MAX_MESSAGE_LENGTH);
+    const result = (await ok(core, 'session.continueIn', {
+      agent: 'a',
+      connection: 'claude-code.terminal',
+      then: { text },
+    })) as { id: string };
+    await vi.waitFor(() => {
+      expect(terminal.sessions.flatMap(({ sent }) => sent)).toHaveLength(1);
+    });
+    expect(terminal.sessions[0]?.sent[0]?.text).toBe(text);
+    expect(core.engines.canvas(CANVAS)?.messages.get(result.id)?.body).toBe(text);
+  });
+
   it('switches the connection first, then sends the typed input once, to the new session, however often its request repeats', async () => {
     const { core, sdk, terminal } = await start();
     await ok(core, 'session.open', { agent: 'a' });
@@ -558,5 +616,389 @@ describe('live and saved settings', () => {
     failing.mockRestore();
     await ok(core, 'session.setModel', { agent: 'a', model: 'fast' });
     expect(core.engines.canvas(CANVAS)?.engine.sessions.of('a').model).toBe('fast');
+  });
+});
+
+describe('your messages (R22, B11 §16.6)', () => {
+  /** One small PNG, base64: what a pasted screenshot is to the API. */
+  const IMAGE = { mediaType: 'image/png' as const, data: 'iVBORw0KGgo=' };
+
+  it('admits your long message with its images as yours, once, and keeps it a Message row', async () => {
+    const { core, sdk } = await start();
+    await ok(core, 'session.open', { agent: 'a' });
+    // Longer than a token's 16 KiB, within your composer's 200,000 characters.
+    const body = `${'x'.repeat(MAX_MESSAGE_BYTES)} and more`;
+    const { id } = (await ok(core, 'message', { to: 'a', body, images: [IMAGE] })) as {
+      id: string;
+    };
+    const open = core.engines.canvas(CANVAS);
+    expect(open?.messages.get(id)).toMatchObject({ from: 'you', to: 'agent:a', body });
+    expect(open?.messages.originOf(id)).toBe('manual');
+    await vi.waitFor(() => {
+      expect(sdk.sessions[0]?.sent).toEqual([
+        expect.objectContaining({ text: body, images: [IMAGE] }),
+      ]);
+    });
+    // Only text or images make a message.
+    expect(await fails(core, 'message', { to: 'a', body: ' ' })).toMatchObject({
+      code: 'invalid',
+    });
+    expect(
+      await fails(core, 'message', { to: 'a', body: 'x'.repeat(MAX_MESSAGE_LENGTH + 1) }),
+    ).toMatchObject({ code: 'invalid' });
+  });
+
+  it('refuses a token’s message over 16 KiB, or with images (human-text), sending nothing', async () => {
+    const { core, sdk } = await start();
+    await ok(core, 'session.open', { agent: 'a' });
+    const long = await fails(
+      core,
+      'message',
+      { to: 'a', body: 'x'.repeat(MAX_MESSAGE_BYTES + 1) },
+      ORCHESTRATOR,
+    );
+    expect(long).toEqual({ code: 'refused', sentence: RULES['human-text'].sentence });
+    const pasted = await fails(
+      core,
+      'message',
+      { to: 'a', body: 'Look', images: [IMAGE] },
+      ORCHESTRATOR,
+    );
+    expect(pasted).toEqual({ code: 'refused', sentence: RULES['human-text'].sentence });
+    expect(sdk.sessions[0]?.sent ?? []).toEqual([]);
+    // Its own 16 KiB is a party's message as it was.
+    await ok(core, 'message', { to: 'a', body: 'x'.repeat(MAX_MESSAGE_BYTES) }, ORCHESTRATOR);
+  });
+
+  it('refuses images its recipient’s connection takes none of, before anything is kept', async () => {
+    const { core } = await start();
+    await ok(core, 'session.continueIn', { agent: 'b', connection: 'claude-code.terminal' });
+    const before = core.engines.canvas(CANVAS)?.messages.all().length;
+    const refused = await fails(core, 'message', { to: 'b', body: 'Look', images: [IMAGE] });
+    expect(refused.code).toBe('refused');
+    expect(refused.sentence).toMatch(/Reviewer.*takes no images/);
+    expect(core.engines.canvas(CANVAS)?.messages.all().length).toBe(before);
+  });
+});
+
+describe('conversations, resume and options', () => {
+  const NEWER = '6e2f8d4b-0c3a-4f7e-9b2d-4a5f6e7d8c9b';
+  const AGENT_A = { kind: 'agent', canvas: CANVAS, agent: 'a', session: 'a-session' } as const;
+
+  it('lists the agent’s conversations in its workspace, and resumes one only for a caller it was listed to', async () => {
+    kept = [
+      { id: NEWER, title: 'Newer work', modified: 2 },
+      { id: KEPT, title: 'The builder’s own', modified: 1 },
+    ];
+    const { core, sdk } = await start({ a: { id: KEPT } });
+    await ok(core, 'session.open', { agent: 'a' });
+    expect(await ok(core, 'session.conversations', { agent: 'a' })).toEqual({
+      items: [
+        { id: NEWER, title: 'Newer work', modified: 2, current: false },
+        { id: KEPT, title: 'The builder’s own', modified: 1, current: true },
+      ],
+    });
+    // Listed to you: a token that wasn't listed it reaches none of it.
+    expect(
+      await fails(
+        core,
+        'session.resumeConversation',
+        { agent: 'a', conversation: NEWER },
+        ORCHESTRATOR,
+      ),
+    ).toMatchObject({ code: 'not-found' });
+    expect(sdk.started).toHaveLength(1);
+    // A token's list contains only this agent's recorded starts, not the person's other work.
+    expect(await ok(core, 'session.conversations', { agent: 'a' }, ORCHESTRATOR)).toEqual({
+      items: [{ id: KEPT, title: 'The builder’s own', modified: 1, current: true }],
+    });
+    expect(
+      await fails(
+        core,
+        'session.resumeConversation',
+        { agent: 'a', conversation: NEWER },
+        ORCHESTRATOR,
+      ),
+    ).toMatchObject({ code: 'not-found' });
+    await ok(core, 'session.resumeConversation', { agent: 'a', conversation: KEPT }, ORCHESTRATOR);
+    expect(sdk.started.at(-1)?.resume).toBe(KEPT);
+    expect(core.engines.canvas(CANVAS)?.engine.sessions.of('a').status).toBe('idle');
+    // Yours too, from your own list; a conversation never listed isn't one to resume.
+    await ok(core, 'session.resumeConversation', { agent: 'a', conversation: NEWER });
+    expect(sdk.started.at(-1)?.resume).toBe(NEWER);
+    expect(
+      await fails(core, 'session.resumeConversation', {
+        agent: 'a',
+        conversation: '7f3a9e5c-1d4b-4a8f-8c3e-5b6a7f8e9d0c',
+      }),
+    ).toMatchObject({ code: 'not-found' });
+    // No agent gets the list (O), nor resumes (W).
+    expect(await fails(core, 'session.conversations', { agent: 'b' }, AGENT_A)).toMatchObject({
+      code: 'forbidden',
+    });
+  });
+
+  it('does not treat a remembered id or the GUI’s list as a recorded native start', async () => {
+    kept = [{ id: KEPT, title: 'Remembered', modified: 1 }];
+    const { core, sdk } = await start({ a: { id: KEPT } });
+    expect(await ok(core, 'session.conversations', { agent: 'a' })).toEqual({
+      items: [{ ...kept[0], current: true }],
+    });
+    expect(await ok(core, 'session.conversations', { agent: 'a' }, ORCHESTRATOR)).toEqual({
+      items: [],
+    });
+    expect(
+      await fails(
+        core,
+        'session.resumeConversation',
+        { agent: 'a', conversation: KEPT },
+        ORCHESTRATOR,
+      ),
+    ).toMatchObject({ code: 'not-found' });
+    expect(sdk.started).toEqual([]);
+    await ok(core, 'session.open', { agent: 'a' });
+    expect(await ok(core, 'session.conversations', { agent: 'a' }, ORCHESTRATOR)).toEqual({
+      items: [{ ...kept[0], current: true }],
+    });
+  });
+
+  it('keeps a token’s earlier started conversations after Fresh, without admitting another agent’s', async () => {
+    const { core, sdk } = await start({ a: { id: KEPT } });
+    await ok(core, 'session.open', { agent: 'a' });
+    await ok(core, 'session.newConversation', { agent: 'a' });
+    const newer = sdk.ids.at(-1);
+    if (!newer || newer === KEPT) throw new Error('Fresh did not start a new conversation');
+    await ok(core, 'session.open', { agent: 'b' });
+    const other = sdk.ids.at(-1);
+    if (!other) throw new Error('No other conversation');
+    kept = [
+      { id: newer, title: 'New', modified: 3 },
+      { id: other, title: 'Other agent', modified: 2 },
+      { id: KEPT, title: 'Earlier', modified: 1 },
+    ];
+    expect(await ok(core, 'session.conversations', { agent: 'a' }, ORCHESTRATOR)).toEqual({
+      items: [
+        { id: newer, title: 'New', modified: 3, current: true },
+        { id: KEPT, title: 'Earlier', modified: 1, current: false },
+      ],
+    });
+    await ok(core, 'session.resumeConversation', { agent: 'a', conversation: KEPT }, ORCHESTRATOR);
+    expect(sdk.started.at(-1)?.resume).toBe(KEPT);
+  });
+
+  it('refuses a resume while a turn goes on, or of a conversation another agent holds, closing nothing', async () => {
+    kept = [{ id: NEWER, title: 'The reviewer’s', modified: 2 }];
+    const { core, sdk } = await start({ b: { id: NEWER } });
+    await ok(core, 'session.open', { agent: 'b' });
+    await ok(core, 'session.open', { agent: 'a' });
+    await ok(core, 'session.conversations', { agent: 'a' });
+    const started = sdk.started.length;
+    const held = await fails(core, 'session.resumeConversation', {
+      agent: 'a',
+      conversation: NEWER,
+    });
+    expect(held).toEqual({
+      code: 'conflict',
+      sentence: 'That conversation is open in "Reviewer": two agents never share one conversation.',
+    });
+    holding = Promise.withResolvers();
+    await ok(core, 'message', { to: 'a', body: 'Work' });
+    await vi.waitFor(() => {
+      expect(core.engines.canvas(CANVAS)?.engine.sessions.of('a').status).toBe('working');
+    });
+    const busy = await fails(core, 'session.resumeConversation', {
+      agent: 'a',
+      conversation: NEWER,
+    });
+    expect(busy).toMatchObject({ code: 'refused' });
+    expect(busy.sentence).toMatch(/Builder has a turn going on/);
+    expect(sdk.started).toHaveLength(started);
+  });
+
+  it('reads an adapter’s options in the agent’s workspace, or the project’s', async () => {
+    const { core } = await start();
+    const options = (await ok(core, 'session.options', { adapter: 'claude-code' })) as {
+      models: unknown[];
+      defaults: object;
+    };
+    expect(options).toEqual({
+      models: expect.any(Array) as unknown,
+      defaults: expect.any(Object) as unknown,
+    });
+    expect(await ok(core, 'session.options', { agent: 'a', adapter: 'claude-code' })).toEqual(
+      options,
+    );
+    expect(await fails(core, 'session.options', { adapter: 'nope' })).toMatchObject({
+      code: 'invalid',
+    });
+  });
+});
+
+describe('MCP servers (/mcp)', () => {
+  const transcriptText = (core: Core, agent: string) =>
+    (core.engines.canvas(CANVAS)?.engine.sessions.of(agent).entries ?? []).flatMap((entry) =>
+      entry.kind === 'notice' ? [entry.text] : [],
+    );
+
+  it('lists a session’s servers, and changes one it reports, answering with them all as they are then', async () => {
+    const { core } = await start();
+    await ok(core, 'session.open', { agent: 'b' });
+    expect(await ok(core, 'session.mcpServers', { agent: 'b' })).toEqual({
+      items: [
+        { name: 'github', status: 'connected', scope: 'user', tools: 2 },
+        { name: 'sentry', status: 'failed', scope: 'project', error: 'Connection refused' },
+      ],
+    });
+    // One operation: the change, and the servers as they are once it is made.
+    const changed = (await ok(core, 'session.changeMcpServer', {
+      agent: 'b',
+      server: 'sentry',
+      change: 'reconnect',
+    })) as { items: unknown[] };
+    expect(changed.items).toEqual([
+      { name: 'github', status: 'connected', scope: 'user', tools: 2 },
+      { name: 'sentry', status: 'connected', scope: 'project', tools: 2 },
+    ]);
+    expect(mcpChanges).toEqual([{ agent: 'b', name: 'sentry', change: 'reconnect' }]);
+    expect(transcriptText(core, 'b')).toContain('Reconnected the MCP server "sentry".');
+    // A token's is said as its.
+    await ok(
+      core,
+      'session.changeMcpServer',
+      { agent: 'b', server: 'github', change: 'disable' },
+      ORCHESTRATOR,
+    );
+    expect(transcriptText(core, 'b')).toContain('"orchestrator" disabled the MCP server "github".');
+  });
+
+  it.each(['reconnect', 'disable', 'enable'] as const)(
+    'keeps corrallm’s own MCP entry yours alone: %s',
+    async (change) => {
+      extraServers = [
+        { name: 'corrallm-server', status: 'connected' },
+        { name: 'corrallm', status: 'connected' },
+      ];
+      const { core } = await start({}, { team: true });
+      await ok(core, 'session.open', { agent: 'b' });
+      for (const server of ['corrallm-server', 'corrallm'])
+        for (const caller of [
+          ORCHESTRATOR,
+          { kind: 'agent', canvas: CANVAS, agent: 'a', session: 'lead-session' },
+        ] as const) {
+          const error = await fails(
+            core,
+            'session.changeMcpServer',
+            { agent: 'b', server, change },
+            caller,
+          );
+          expect(error).toMatchObject({ code: 'refused' });
+          expect(error.sentence).toContain('corrallm');
+        }
+      expect(mcpChanges).toEqual([]);
+      await ok(core, 'session.changeMcpServer', { agent: 'b', server: 'corrallm-server', change });
+      expect(mcpChanges).toEqual([{ agent: 'b', name: 'corrallm-server', change }]);
+    },
+  );
+
+  it('acts only on a server the session reports, on a connection that shows them, never on its own', async () => {
+    const { core } = await start();
+    await ok(core, 'session.open', { agent: 'a' });
+    expect(
+      await fails(core, 'session.changeMcpServer', {
+        agent: 'a',
+        server: 'nowhere',
+        change: 'enable',
+      }),
+    ).toMatchObject({ code: 'not-found' });
+    // An agent never changes its own (R6).
+    expect(
+      await fails(
+        core,
+        'session.changeMcpServer',
+        { agent: 'a', server: 'sentry', change: 'disable' },
+        { kind: 'agent', canvas: CANVAS, agent: 'a', session: 'a-session' },
+      ),
+    ).toMatchObject({ code: 'refused' });
+    // A Terminal's are its terminal's own /mcp.
+    await ok(core, 'session.continueIn', { agent: 'c', connection: 'claude-code.terminal' });
+    expect(await fails(core, 'session.mcpServers', { agent: 'c' })).toMatchObject({
+      code: 'refused',
+    });
+    expect(mcpChanges).toEqual([]);
+  });
+});
+
+describe('commands the agent view answers itself', () => {
+  it('records your /mcp as your message, settled at once and never sent to the CLI', async () => {
+    const { core, sdk } = await start();
+    await ok(core, 'session.open', { agent: 'a' });
+    const { id } = (await ok(core, 'session.viewCommand', { agent: 'a', text: '/mcp' })) as {
+      id: string;
+    };
+    const open = core.engines.canvas(CANVAS);
+    expect(open?.messages.get(id)).toMatchObject({
+      from: 'you',
+      to: 'agent:a',
+      kind: 'text',
+      body: '/mcp',
+      state: 'replied',
+      turn: { status: 'completed', reason: 'completed' },
+    });
+    expect(open?.messages.originOf(id)).toBe('manual');
+    expect(sdk.sessions[0]?.sent).toEqual([]);
+    expect(open?.engine.sessions.of('a').status).toBe('idle');
+  });
+
+  it('records only a command its connection’s view answers, and only yours', async () => {
+    const { core } = await start();
+    for (const text of ['/hello', 'mcp', '/mcp/x'])
+      expect(await fails(core, 'session.viewCommand', { agent: 'a', text })).toMatchObject({
+        code: 'invalid',
+      });
+    // A Terminal answers its own /mcp in its terminal.
+    await ok(core, 'session.continueIn', { agent: 'b', connection: 'claude-code.terminal' });
+    expect(await fails(core, 'session.viewCommand', { agent: 'b', text: '/mcp' })).toMatchObject({
+      code: 'invalid',
+    });
+    expect(
+      await fails(core, 'session.viewCommand', { agent: 'a', text: '/mcp' }, ORCHESTRATOR),
+    ).toMatchObject({ code: 'human-only' });
+  });
+});
+
+describe('what your session view shows beside its state', () => {
+  const ask = {
+    kind: 'permission' as const,
+    id: 'perm-1',
+    tool: 'Bash',
+    summary: 'npm test',
+  };
+
+  it('gives you the CLI’s suggestion and its terminal’s asks in the summary, and a token neither', async () => {
+    const { core } = await start();
+    await ok(core, 'session.open', { agent: 'a' });
+    hosts.get('a')?.emit({ type: 'suggestion', text: 'Run the tests' });
+    hosts.get('a')?.emit({ type: 'asking', asks: [ask] });
+    await vi.waitFor(async () => {
+      expect(await ok(core, 'session.get', { agent: 'a' })).toMatchObject({
+        suggestion: 'Run the tests',
+        asking: [ask],
+        prompts: 1,
+      });
+    });
+    const theirs = await ok(core, 'session.get', { agent: 'a' }, ORCHESTRATOR);
+    expect(theirs).toMatchObject({ prompts: 1 });
+    expect(theirs).not.toHaveProperty('suggestion');
+    expect(theirs).not.toHaveProperty('asking');
+    // So do the topics a window reads, read as each would follow them.
+    for (const topic of [`sessions:${CANVAS}`, `session:${CANVAS}:a`] as const) {
+      const yours = await core.topics.read(topic, YOU);
+      const token = await core.topics.read(topic, ORCHESTRATOR);
+      expect(JSON.stringify(yours)).toContain('Run the tests');
+      expect(JSON.stringify(yours)).toContain('perm-1');
+      expect(token.ok).toBe(true);
+      expect(JSON.stringify(token)).not.toContain('Run the tests');
+      expect(JSON.stringify(token)).not.toContain('perm-1');
+    }
   });
 });

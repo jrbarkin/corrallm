@@ -82,12 +82,14 @@ describe('a window’s port', () => {
     expect(GUI_OPS).toContain('app.info');
     // Not yours (an outside token's long poll), and yours but not hosted yet (B11).
     expect(GUI_OPS).not.toContain('wait');
-    expect(GUI_OPS).not.toContain('message');
+    expect(GUI_OPS).not.toContain('messages');
+    // Your composer's message is hosted (B11 §16.6).
+    expect(GUI_OPS).toContain('message');
   });
 
   it.each([
     ['an operation that isn’t yours', 'wait'],
-    ['an operation the app doesn’t host yet', 'message'],
+    ['an operation the app doesn’t host yet', 'messages'],
     ['no operation at all', 'nonsense'],
     ['a name that isn’t text', 42],
   ])('refuses %s before it is dispatched', async (_label, op) => {

@@ -423,6 +423,31 @@ export class Delivery {
   }
 
   /**
+   * Keeps a command your agent view answered itself in a panel (/resume, /mcp, /rewind) as your
+   * message to agent `to`, settled at once (its turn completed) and never delivered: no CLI turn.
+   * Resolves once it is on disk; rejects, the message unresolved, if it can't reach it.
+   */
+  async record(to: string, body: string): Promise<Message> {
+    const { store } = this.#deps;
+    const message = store.add({
+      from: 'you',
+      to: agentParty(to),
+      kind: 'text',
+      origin: 'manual',
+      body,
+      state: 'replied',
+      turn: { status: 'completed', reason: 'completed' },
+    });
+    try {
+      await store.durable();
+    } catch (error) {
+      store.update(message.id, { state: 'unresolved', turn: unrecorded(error) });
+      throw error;
+    }
+    return store.get(message.id) ?? message;
+  }
+
+  /**
    * Takes back a message for `by`: one still waiting is withdrawn at once; one being delivered is
    * taken off its session's queue, or its turn interrupted, and is withdrawn once that ends.
    * Returns once the take-back is requested, never waiting for a native turn to end. Any immediate

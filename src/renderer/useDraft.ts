@@ -20,17 +20,6 @@ export function draftCall<T>(call: () => Promise<T>): Promise<T> {
   return promise;
 }
 
-/** A fixed transitional view write must settle before drafts.flush acknowledges window close. */
-export function viewWrite<T>(call: () => Promise<T>): Promise<T> {
-  const promise = draftCall(call);
-  saving.add(promise);
-  const settled = () => {
-    saving.delete(promise);
-  };
-  void promise.then(settled, settled);
-  return promise;
-}
-
 /**
  * Waits for every draft attempt; refusals belong to their fields. An action runs only afterward,
  * synchronously when no write is in flight (as flushSync applies local graph edits).
@@ -56,13 +45,36 @@ export function flushDrafts(after?: () => unknown): Promise<void> {
   }
 }
 
+/** Your messages on their way to the core: a window's close waits for each to be answered. */
+const sends = new Set<Promise<unknown>>();
+
+/**
+ * Sends one of your messages (an operation): the window's `drafts.flush` waits until the core has
+ * answered it, so closing the window right after Send never loses it. An operation's own draft
+ * flush never waits for it, so two sends never wait on each other.
+ */
+export function viewSend<T>(call: () => Promise<T>): Promise<T> {
+  const promise = draftCall(call);
+  sends.add(promise);
+  const settled = () => {
+    sends.delete(promise);
+  };
+  void promise.then(settled, settled);
+  return promise;
+}
+
 /**
  * Answers the core's `drafts.flush` (main asks it before quitting, B11 Design §16.5) with
- * `flushDrafts`: what is being typed is committed, each field's operation answered, before the
- * window says it is done. A field's refusal stays the field's. Returns what stops answering.
+ * `flushDrafts`: what is being typed is committed, each field's operation answered, and each
+ * message sent answered, before the window says it is done. A field's refusal stays the field's.
+ * Returns what stops answering.
  */
 export function answerDraftFlushes(api: Pick<GuiDraftsApi, 'draftsOnFlush'>): () => void {
-  return api.draftsOnFlush(() => flushDrafts());
+  return api.draftsOnFlush(() =>
+    flushDrafts().then(async () => {
+      while (sends.size > 0) await Promise.allSettled([...sends]);
+    }),
+  );
 }
 
 /** Pointer actions, drags and keyboard shortcuts flush before their handlers run, portals too. */

@@ -59,13 +59,7 @@ async function switchingView(needs: NeedsItem[] = []) {
     items: needs.map((item) => ({ ...item, canvas: first.id })),
   });
   const view = render(
-    <GraphEditor
-      canvas={first.id}
-      client={canvas.core.api}
-      mirror={canvas.core.topics}
-      files
-      sessionQueries={{ ...fake.backend, manual: canvas.manual, presentation: canvas.presentation }}
-    />,
+    <GraphEditor canvas={first.id} client={canvas.core.api} mirror={canvas.core.topics} files />,
   );
   await waitFor(() => {
     expect(view.container.querySelector('.graph-editor')?.hasAttribute('inert')).toBe(false);
@@ -96,6 +90,13 @@ it('keeps live sessions and the core runtime when Open returns the shown canvas'
   await waitFor(() => {
     expect(fake.backend.send).toHaveBeenCalledOnce();
   });
+  // Your message is one operation, as the core admits it.
+  expectOneOp(canvas.core, 'message', {
+    canvas: first.id,
+    to: 'Before',
+    body: 'Keep this manual work',
+  });
+  canvas.core.operations.length = 0;
   await events.click(screen.getByRole('button', { name: 'Back to the canvas' }));
   canvas.core.respond('canvas.open', { canvas: first.id, revs: {} });
   await events.keyDown(window.document.body, { key: 'o', ctrlKey: true });
@@ -279,17 +280,7 @@ it.each(['show', 'close', 'allow'] as const)(
       });
     });
     const view = render(
-      <GraphEditor
-        canvas={first.id}
-        client={canvas.core.api}
-        mirror={canvas.core.topics}
-        files
-        sessionQueries={{
-          ...canvas.queries,
-          manual: canvas.manual,
-          presentation: canvas.presentation,
-        }}
-      />,
+      <GraphEditor canvas={first.id} client={canvas.core.api} mirror={canvas.core.topics} files />,
     );
     await waitFor(() => {
       expect(view.container.querySelector('.graph-editor')?.hasAttribute('inert')).toBe(false);

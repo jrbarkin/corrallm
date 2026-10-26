@@ -11,6 +11,4 @@ export const UNHOSTED = {
   status: 'B11',
   needs: 'B11',
   messages: 'B11',
-  message: 'B11',
-  withdraw: 'B11',
 } as const satisfies Partial<Record<OpName, 'B8' | 'B11'>>;

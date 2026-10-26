@@ -2,7 +2,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 
 import { api } from './api/client';
 import { topics } from './api/topics';
-import { fakeCore, expectOneOp } from './test-api';
+import { fakeCore, expectOneOp, expectOneRead } from './test-api';
 
 afterEach(() => {
   topics.dispose();
@@ -30,14 +30,25 @@ it('feeds the real renderer client and mirror when installed, restoring the prev
 
 it('fails a one-operation assertion for an extra intent or different arguments', async () => {
   const core = fakeCore();
-  await core.api.appInfo();
-  expectOneOp(core, 'app.info', undefined);
-  expect(() => {
-    expectOneOp(core, 'app.info', {});
-  }).toThrow();
   await core.api.linkOpen({ url: 'https://example.com' });
+  expectOneOp(core, 'link.open', { url: 'https://example.com' });
   expect(() => {
-    expectOneOp(core, 'app.info', undefined);
+    expectOneOp(core, 'link.open', {});
+  }).toThrow();
+  await core.api.linkReveal({ url: 'file:///tmp/x' });
+  expect(() => {
+    expectOneOp(core, 'link.open', { url: 'https://example.com' });
+  }).toThrow();
+  core.dispose();
+});
+
+it('keeps what a view reads apart from a gesture’s intents', async () => {
+  const core = fakeCore();
+  await core.api.appInfo();
+  expect(core.operations).toEqual([]);
+  expectOneRead(core, 'app.info', undefined);
+  expect(() => {
+    expectOneRead(core, 'app.info', {});
   }).toThrow();
   core.dispose();
 });

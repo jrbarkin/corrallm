@@ -1,5 +1,4 @@
 import type { UsageState } from '../shared/usage';
-import type { UserMessage } from '../shared/session';
 import type { CanvasDocument } from '../shared/model/canvas';
 import type { SessionBackend } from '../shared/engine/transcript/receive';
 import { NO_BACKEND } from '../shared/engine/transcript/receive';
@@ -194,6 +193,7 @@ export function canvasRuntime(
   publish();
   const result = (value: object = {}) =>
     Promise.resolve({ ok: true as const, value: { ...value, revs: {} } });
+  const read = (value: object) => Promise.resolve({ ok: true as const, value });
   function register() {
     core.reply('run.start', () => {
       engine.run.start();
@@ -292,9 +292,64 @@ export function canvasRuntime(
         );
       return result();
     });
+    // Your message, as the core's delivery admits it: its id the core's, its images live-only.
+    core.reply('message', (raw) => {
+      const { to, body, images } = OPS.message.input.parse(raw);
+      const node = nodes.find((node) => node.id === to && node.type === 'agent');
+      const id = crypto.randomUUID();
+      engine.sessions.send(
+        to,
+        (node?.type === 'agent' ? node.data.adapter : undefined) ?? engine.catalog.defaultAdapter,
+        body,
+        undefined,
+        images,
+        undefined,
+        'user',
+        undefined,
+        { id },
+      );
+      return result({ id });
+    });
+    core.reply('session.conversations', async (raw) => {
+      const { agent } = OPS['session.conversations'].input.parse(raw);
+      return read({ items: await backend.sessions(agent) });
+    });
+    core.reply('session.resumeConversation', async (raw) => {
+      const { agent, conversation } = OPS['session.resumeConversation'].input.parse(raw);
+      await engine.sessions.resume(agent, conversation);
+      return result();
+    });
+    core.reply('session.options', async (raw) => {
+      const { adapter, agent } = OPS['session.options'].input.parse(raw);
+      return read(await backend.options(adapter, agent));
+    });
+    core.reply('session.viewCommand', (raw) => {
+      const { agent, text } = OPS['session.viewCommand'].input.parse(raw);
+      engine.sessions.recordSubmission(agent, text);
+      return result({ id: crypto.randomUUID() });
+    });
+    core.reply('session.mcpServers', async (raw) => {
+      const { agent } = OPS['session.mcpServers'].input.parse(raw);
+      return read({ items: await backend.mcp(agent) });
+    });
+    core.reply('session.changeMcpServer', async (raw) => {
+      const { agent, server, change } = OPS['session.changeMcpServer'].input.parse(raw);
+      return result({ items: await backend.changeMcp(agent, server, change) });
+    });
     core.reply('session.interrupt', (raw) => {
       engine.sessions.stop(OPS['session.interrupt'].input.parse(raw).agent);
       return result();
+    });
+    core.reply('withdraw', (raw) => {
+      const { id } = OPS.withdraw.input.parse(raw);
+      const native = [...messageIds].find(([, kept]) => kept === id)?.[0] ?? id;
+      for (const node of nodes)
+        if (
+          node.type === 'agent' &&
+          engine.sessions.of(node.id).queued.some((one) => one.id === native)
+        )
+          engine.sessions.unqueue(node.id, native);
+      return result({ reached: false, interrupted: false });
     });
     core.reply('reply', async (raw) => {
       const { to, answer } = OPS.reply.input.parse(raw);
@@ -345,42 +400,21 @@ export function canvasRuntime(
     });
   }
   register();
+  const stopViews = core.observeTopics((topic) => {
+    for (const node of nodes)
+      if (node.type === 'agent' && topic === `session:${canvas}:${encodeURIComponent(node.id)}`)
+        engine.sessions.open(node.id);
+  });
   return {
     activate: register,
     engine,
-    resume: (agent: string, conversation: string) =>
-      engine.sessions.resume(agent, conversation).then(() => null),
-    manual: {
-      record(agent: string, message: UserMessage): Promise<null> {
-        engine.sessions.recordSubmission(agent, message.text, message.images);
-        return Promise.resolve(null);
-      },
-      send(agent: string, message: UserMessage): Promise<null> {
-        const node = nodes.find((node) => node.id === agent && node.type === 'agent');
-        engine.sessions.send(
-          agent,
-          (node?.type === 'agent' ? node.data.adapter : undefined) ?? engine.catalog.defaultAdapter,
-          message.text,
-          undefined,
-          message.images,
-          undefined,
-          'user',
-          undefined,
-          { id: message.id },
-        );
-        return Promise.resolve(null);
-      },
-      unqueue(agent: string, id: string): Promise<null> {
-        engine.sessions.unqueue(agent, id);
-        return Promise.resolve(null);
-      },
-    },
     update(next: CanvasDocument) {
       nodes = next.nodes;
       engine.update(nodes);
       publish();
     },
     dispose() {
+      stopViews();
       for (const stop of stops) stop();
       engine.reset();
     },

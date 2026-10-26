@@ -11,6 +11,7 @@ import type { FakeCanvas } from '../test-canvas';
 import type { Graph, GraphNode } from '../graph/flow';
 import { OpenLinkContext } from '../open-link';
 import { fakeBackend } from '../../shared/engine/test-backend';
+import { expectOneOp } from '../test-api';
 
 // jsdom cannot draw xterm.js: a fake terminal stands in, for an agent switched to Terminal.
 vi.mock('../terminal/screen', async () => {
@@ -91,6 +92,7 @@ async function open(
     });
   };
   const operations = () => held.canvas?.core.operations ?? [];
+  if (!held.canvas) throw new Error('No fake canvas');
   return {
     ...fake,
     container,
@@ -102,6 +104,7 @@ async function open(
     emit,
     openLink,
     operations,
+    canvas: held.canvas,
   };
 }
 
@@ -340,6 +343,30 @@ describe('a Codex agent’s reasoning effort', () => {
 });
 
 describe('a connected agent', () => {
+  it('sends one composite per live setting and interrupt gesture, keeping permission confirmation in the page', async () => {
+    const { canvas, view, emit, composer } = await open({ connection: 'claude-code.sdk' });
+    emit({ type: 'started', model: 'opus', mode: 'manual', models: MODELS });
+    const scope = { canvas: canvas.document.id, agent: 'a' };
+    canvas.core.operations.length = 0;
+    await events.click(view.getByRole('button', { name: 'Model: Opus' }));
+    await events.click(view.getByRole('menuitemradio', { name: /^Haiku/ }));
+    await settle();
+    expectOneOp(canvas.core, 'session.setModel', { ...scope, model: 'haiku' });
+    canvas.core.operations.length = 0;
+    await events.click(view.getByRole('button', { name: 'Mode: Manual' }));
+    await events.click(view.getByRole('menuitemradio', { name: /^Bypass permissions/ }));
+    expect(canvas.core.operations).toEqual([]);
+    await events.click(view.getByRole('button', { name: 'Bypass permissions' }));
+    await settle();
+    expectOneOp(canvas.core, 'session.setMode', { ...scope, mode: 'bypassPermissions' });
+    canvas.core.operations.length = 0;
+    emit({ type: 'status', status: 'working' });
+    await events.keyDown(composer, { key: 'Escape' });
+    await settle();
+    expectOneOp(canvas.core, 'session.interrupt', scope);
+    expect(view.getByRole('textbox', { name: 'Message a' })).toBeTruthy();
+  });
+
   it('is connected from its agent chip: shown on its card, its chip and its lane in All queues', async () => {
     const { backend, card, view } = await open();
     expect(backend.start).toHaveBeenCalledWith('a', {
@@ -1603,6 +1630,26 @@ describe('a connected agent', () => {
 });
 
 describe('an Agent SDK agent continued in Terminal', () => {
+  it('continues the exact pending input and its images in one operation', async () => {
+    const { backend, composer, view, operations } = await open({ connection: 'claude-code.sdk' });
+    const file = new File(['image'], 'diagram.png', { type: 'image/png' });
+    await events.drop(composer, { dataTransfer: { files: [file] } });
+    const input = '  !printf "hello"\n  ';
+    await events.change(composer, { target: { value: input } });
+    await events.keyDown(composer, { key: 'Enter' });
+    await settle();
+    const before = operations().length;
+    await events.click(view.getByRole('button', { name: 'Continue in Terminal' }));
+    await settle();
+    expectOneOp({ operations: operations().slice(before) }, 'session.continueIn', {
+      canvas: expect.any(String) as unknown,
+      agent: 'a',
+      connection: 'claude-code.terminal',
+      then: { text: input, images: [{ mediaType: 'image/png', data: 'aW1hZ2U=' }] },
+    });
+    expect(backend.send).toHaveBeenCalledOnce();
+  });
+
   it('offers Terminal for a command only Claude Code’s terminal runs, and runs it there', async () => {
     const { backend, composer, view, emit, card, operations } = await open({
       connection: 'claude-code.sdk',

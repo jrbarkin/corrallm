@@ -126,8 +126,10 @@ it('holds starts for setup, then runs two ungrouped agents in distinct verified 
   expect(await core.call('window.show', { canvas: CANVAS }, CALLERS.you)).toMatchObject({
     ok: true,
   });
-  await core.channels.call(1, 'session:list', ['a']);
-  await core.channels.call(1, 'session:list', ['b']);
+  // The core's own listing (its adapter's catalog lists none for a window), in each one's tree.
+  const sessions = core.engines.canvas(CANVAS)?.engine.sessions;
+  await sessions?.pastSessions('a');
+  await sessions?.pastSessions('b');
   expect(listConversations.mock.calls.map(([cwd]) => cwd)).toEqual([a.cwd, b.cwd]);
   writeFileSync(path.join(a.cwd, 'only-a.txt'), 'a');
   writeFileSync(path.join(b.cwd, 'only-b.txt'), 'b');
@@ -499,7 +501,9 @@ it('refuses Switch while a shown native turn is going, without closing its sessi
   const native = fake.sessions.at(-1);
   if (!native) throw new Error('No window session');
   const close = vi.spyOn(native, 'close');
-  await core.channels.call(1, 'session:send', ['b', { id: 'native-message', text: '/question' }]);
+  expect(
+    await core.call('message', { canvas: CANVAS, to: 'b', body: '/question' }, CALLERS.you),
+  ).toMatchObject({ ok: true });
   await vi.waitFor(() => {
     expect(native.sent).toContainEqual(expect.objectContaining({ text: '/question' }));
   });

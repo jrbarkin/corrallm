@@ -45,11 +45,6 @@ function setup(saved = true) {
       canvas={canvas.document.id}
       client={canvas.core.api}
       mirror={canvas.core.topics}
-      sessionQueries={{
-        ...canvas.queries,
-        manual: canvas.manual,
-        presentation: canvas.presentation,
-      }}
       files
     />,
   );
@@ -66,7 +61,7 @@ const click = async (name: string) => {
 /** Opens the agent view of the canvas's one agent. */
 const openWriter = async (canvas: ReturnType<typeof fakeCanvas>) => {
   await events.doubleClick(await screen.findByText('Writer'));
-  expectOneOp(canvas.core, 'session.open', { canvas: canvas.document.id, agent: 'a' });
+  expect(canvas.core.operations).toEqual([]);
   canvas.core.operations.length = 0;
 };
 const writer = (canvas: ReturnType<typeof fakeCanvas>) =>
@@ -235,7 +230,7 @@ it('a settings-sheet choice commits one agent.setSettings', async () => {
       canvas: canvas.document.id,
       agent: 'a',
       adapter: 'claude-code',
-      settings: { model: null, effort: null, mode: 'plan' },
+      settings: { mode: 'plan' },
     });
   });
   expect(writer(canvas)?.data.settings?.['claude-code']?.mode).toBe('plan');
@@ -259,11 +254,6 @@ it.each(['cancelled', 'refused'] as const)(
         canvas={canvas.document.id}
         client={canvas.core.api}
         mirror={canvas.core.topics}
-        sessionQueries={{
-          ...canvas.queries,
-          manual: canvas.manual,
-          presentation: canvas.presentation,
-        }}
         files
       />,
     );

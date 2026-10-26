@@ -1285,6 +1285,29 @@ describe('SessionManager and kept conversations', () => {
     await sessions.close(canvas, 'a');
   });
 
+  it('shows a bounded list, each title a line, and admits only what it showed, to its own caller', async () => {
+    const sessions = manager();
+    const canvas = shownCanvas();
+    const ids = Array.from(
+      { length: 101 },
+      (_, i) => `0c1d2e3f-4a5b-4c6d-8e7f-${String(i).padStart(12, '0')}`,
+    );
+    listKept.mockResolvedValue(
+      ids.map((id, i) => ({ id, title: `${'t'.repeat(198)}😀 more`, modified: 1000 - i })),
+    );
+    const listed = await sessions.listSessions(canvas, 'a', CALLER);
+    expect(listed).toHaveLength(100);
+    // Cut before the emoji's two halves, never between them.
+    expect(listed[0]?.title).toBe(`${'t'.repeat(198)}…`);
+    expect(sessions.listedTo(canvas, 'a', CALLER, ids[99] ?? '')).toBe(true);
+    expect(sessions.listedTo(canvas, 'a', CALLER, ids[100] ?? '')).toBe(false);
+    expect(sessions.listedTo(canvas, 'a', 'window:another', ids[0] ?? '')).toBe(false);
+    expect(sessions.listedTo(canvas, 'b', CALLER, ids[0] ?? '')).toBe(false);
+    await expect(sessions.resumeSession(canvas, 'a', ids[100] ?? '', CALLER)).rejects.toThrow(
+      /not one/,
+    );
+  });
+
   it('does not reuse a list from another adapter, agent or a switched agent', async () => {
     const sessions = manager();
     const canvas = shownCanvas();

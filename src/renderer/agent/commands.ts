@@ -1,3 +1,4 @@
+import type { ConnectionDescriptor } from '../../shared/adapter';
 import type { SlashCommand } from '../../shared/session';
 
 /*
@@ -99,22 +100,27 @@ export function terminalCommand(
 }
 
 /**
- * What an Agent SDK agent's composer completes: its session's commands, the view's own, then those
- * that run in Terminal (worded so), unless the session offers one of that name.
+ * Completes the session's commands and its declared view panels. When requested, also offers
+ * the Terminal-only commands below, unless the session offers one of that name.
  */
-export function completedCommands(offered: readonly SlashCommand[] | undefined): SlashCommand[] {
-  const views = new Set<string>(VIEW_COMMANDS.map((c) => c.name));
+export function completedCommands(
+  offered: readonly SlashCommand[] | undefined,
+  panels: ConnectionDescriptor['panels'],
+  terminal = false,
+): SlashCommand[] {
+  const shown = VIEW_COMMANDS.filter((c) => Object.hasOwn(panels, c.name));
+  const views = new Set<string>(shown.map((c) => c.name));
   const own = (offered ?? []).filter((c) => !views.has(c.name));
   const names = new Set(own.map((c) => c.name));
   return [
     ...own,
-    ...VIEW_COMMANDS,
-    ...TERMINAL_COMMANDS.filter((c) => !names.has(c.name)).map(
-      ({ name, description, argumentHint }) => ({
+    ...shown,
+    ...(terminal ? TERMINAL_COMMANDS : [])
+      .filter((c) => !names.has(c.name))
+      .map(({ name, description, argumentHint }) => ({
         name,
         description: `In Terminal · ${description}`,
         argumentHint,
-      }),
-    ),
+      })),
   ];
 }

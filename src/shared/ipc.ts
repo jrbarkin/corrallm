@@ -1,16 +1,7 @@
 import type { SessionAvailability } from './session';
-import type { AdapterId, ConnectionId } from './adapter';
+import type { ConnectionId } from './adapter';
 import type { GuiBridge, GuiDraftsApi } from './gui-link';
-import type {
-  McpChange,
-  McpServer,
-  PastSession,
-  SessionAnswer,
-  SessionEvent,
-  SessionMode,
-  SettingsOptions,
-  UserMessage,
-} from './session';
+import type { SessionAnswer, SessionEvent, SessionMode } from './session';
 
 /**
  * The hand-written channels between the renderer and the core. Each one's name, argument tuple
@@ -19,10 +10,10 @@ import type {
  * core:connect, stays in main and is never exposed to the page.
  *
  * The core sends session events over the port; terminals and topics use gui-link.ts. The preload
- * strips transport details from each event and returns a function that stops listening. These are
- * what the agent window still asks of an agent's session until B11 X13 moves it onto the session
- * topic and operations (the core's runtime, which runs every canvas a window shows, hears what
- * they change); a canvas's run is the core's alone, through operations and topics.
+ * strips transport details from each event and returns a function that stops listening. The agent
+ * window uses none of these any more (B11 X13: its sessions are the core's, through the session
+ * topics and operations); B11 X14 deletes what remains, with the window retry bridge that still
+ * emits `session:event`.
  *
  * Keep this module free of Node, Electron and DOM imports: it is compiled into every process.
  */
@@ -32,12 +23,6 @@ export interface IpcContract {
    * window's port to the core, which main posts back as 'core:port' (src/shared/gui-link.ts).
    */
   'core:connect': { args: []; result: null };
-  /** Sends a message to an agent's running session: a turn starts, or the CLI queues it. */
-  'session:send': { args: [agentId: string, message: UserMessage]; result: { id: string } };
-  /** X13 transitional: a command the session view handled, recorded without a CLI turn. */
-  'session:record': { args: [agentId: string, message: UserMessage]; result: null };
-  /** X13 transitional: withdraws one manual message from this window's canvas. */
-  'session:unqueue': { args: [agentId: string, id: string]; result: null };
   /** Answers a prompt (permission, question, plan) an agent's session is waiting on. */
   'session:answer': {
     args: [agentId: string, promptId: string, answer: SessionAnswer];
@@ -60,29 +45,8 @@ export interface IpcContract {
    * 'tasks' event gave. Rejects for a task it does not run in the background.
    */
   'session:stopTask': { args: [agentId: string, taskId: string]; result: null };
-  /**
-   * The conversations Claude Code kept for the canvas's project folder, most recent first, as
-   * /resume lists them, saying which is the agent's own. Rejects without a project folder.
-   */
-  'session:list': { args: [agentId: string]; result: PastSession[] };
-  /**
-   * Makes a conversation the core listed (session:list) for the canvas's project folder the agent's
-   * own: its session ends, and resumes that one when it starts again. Rejects any other id.
-   */
-  'session:resume': { args: [agentId: string, sessionId: string]; result: null };
-  /**
-   * What an agent of an adapter can be set to run with (its models, with their efforts) and the
-   * user's own defaults, read in the canvas's project folder without a session or a prompt.
-   */
+  /** Whether new work for an agent waits on its workspace: ready, or why not. */
   'session:availability': { args: [agent: string]; result: SessionAvailability };
-  'session:options': { args: [adapter: AdapterId, agent?: string]; result: SettingsOptions };
-  /** The MCP servers an agent's running session has, and how each is (/mcp; Agent SDK sessions). */
-  'session:mcp': { args: [agentId: string]; result: McpServer[] };
-  /** Reconnects, enables or disables one of them; resolves with them all as they are then. */
-  'session:mcp-change': {
-    args: [agentId: string, server: string, change: McpChange];
-    result: McpServer[];
-  };
 }
 
 /** Events the core and main send the renderer: each one's name, and what it carries. */
@@ -120,23 +84,15 @@ export type IpcEventArgs<E extends IpcEvent> = IpcEvents[E];
  * A method per remaining contract channel, with its arguments.
  */
 export interface InvokeApi {
-  sendToSession(...args: IpcArgs<'session:send'>): Promise<IpcResult<'session:send'>>;
-  recordSessionCommand(...args: IpcArgs<'session:record'>): Promise<IpcResult<'session:record'>>;
-  unqueueSession(...args: IpcArgs<'session:unqueue'>): Promise<IpcResult<'session:unqueue'>>;
   answerSession(...args: IpcArgs<'session:answer'>): Promise<IpcResult<'session:answer'>>;
   interruptSession(...args: IpcArgs<'session:interrupt'>): Promise<IpcResult<'session:interrupt'>>;
   setSessionMode(...args: IpcArgs<'session:mode'>): Promise<IpcResult<'session:mode'>>;
   setSessionModel(...args: IpcArgs<'session:model'>): Promise<IpcResult<'session:model'>>;
   setSessionEffort(...args: IpcArgs<'session:effort'>): Promise<IpcResult<'session:effort'>>;
   stopSessionTask(...args: IpcArgs<'session:stopTask'>): Promise<IpcResult<'session:stopTask'>>;
-  listSessions(...args: IpcArgs<'session:list'>): Promise<IpcResult<'session:list'>>;
-  resumeSession(...args: IpcArgs<'session:resume'>): Promise<IpcResult<'session:resume'>>;
   sessionAvailability(
     ...args: IpcArgs<'session:availability'>
   ): Promise<IpcResult<'session:availability'>>;
-  settingsOptions(...args: IpcArgs<'session:options'>): Promise<IpcResult<'session:options'>>;
-  mcpServers(...args: IpcArgs<'session:mcp'>): Promise<IpcResult<'session:mcp'>>;
-  changeMcpServer(...args: IpcArgs<'session:mcp-change'>): Promise<IpcResult<'session:mcp-change'>>;
 }
 
 /** A function per event: it listens for the event, and returns a function that stops listening. */
@@ -153,21 +109,13 @@ export interface AppApi extends InvokeApi, EventApi, GuiBridge, GuiDraftsApi {}
 
 /** Which channel each `InvokeApi` method invokes. */
 export const API_CHANNELS = {
-  sendToSession: 'session:send',
-  recordSessionCommand: 'session:record',
-  unqueueSession: 'session:unqueue',
   answerSession: 'session:answer',
   interruptSession: 'session:interrupt',
   setSessionMode: 'session:mode',
   setSessionModel: 'session:model',
   setSessionEffort: 'session:effort',
   stopSessionTask: 'session:stopTask',
-  listSessions: 'session:list',
-  resumeSession: 'session:resume',
   sessionAvailability: 'session:availability',
-  settingsOptions: 'session:options',
-  mcpServers: 'session:mcp',
-  changeMcpServer: 'session:mcp-change',
 } as const satisfies Record<keyof InvokeApi, IpcChannel>;
 
 /** Which event each `EventApi` function listens for. */

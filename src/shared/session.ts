@@ -274,9 +274,12 @@ export interface SlashCommand {
   argumentHint: string;
 }
 
-/**
- * A native conversation the adapter kept for the project folder, which its agent can resume.
- */
+/** The most conversations returned and admitted by a single listing. */
+export const MAX_CONVERSATIONS = 100;
+/** The longest displayed title or branch label, in UTF-16 units. */
+export const MAX_CONVERSATION_LABEL = 200;
+
+/** A native conversation the adapter kept for the project folder, which its agent can resume. */
 export interface PastSession {
   /** Its session id: main opens it only if main listed it for this folder. */
   id: string;
@@ -602,6 +605,10 @@ export const MAX_QUESTIONS = 4;
 export const MAX_FORM_FIELDS = 50;
 /** The longest name of an MCP server the renderer may give. */
 export const MAX_MCP_NAME_LENGTH = 200;
+/** The most MCP servers /mcp shows (a session's first, as it reports them). */
+export const MAX_MCP_SERVERS = 100;
+/** The longest reason an MCP server failed that /mcp shows, in characters. */
+export const MAX_MCP_ERROR_LENGTH = 1000;
 /**
  * What a model's value may look like: an alias ('opus'), an id, or a provider's id or ARN; never
  * with a dash first, which a command line would take for a flag.
@@ -612,3 +619,8 @@ export const EFFORT_PATTERN = /^[a-z][a-z0-9_-]{0,39}$/;
 
 /** New dispatch waits while its core-owned working directory is unavailable. No path crosses the view boundary. */
 export type SessionAvailability = { ready: true } | { ready: false; sentence: string };
+
+/** The outside client's fixed registration of corrallm's MCP server. */
+export const CORRALLM_MCP_SERVER = 'corrallm-server';
+/** Its agent-side entry (reserved for agent-token injection) is protected too. */
+export const CORRALLM_AGENT_MCP_SERVER = 'corrallm';

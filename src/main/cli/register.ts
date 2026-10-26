@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { CORRALLM_MCP_SERVER } from '../../shared/session';
 
 import { CATALOG } from '../sessions/adapters';
 import { nameableFile } from './args';
@@ -15,7 +16,7 @@ import { TOKEN_VARIABLE } from './wait';
  */
 
 /** The name orchestrators register corrallm's MCP server under: never the agents' `corrallm`. */
-export const SERVER_NAME = 'corrallm-server';
+export const SERVER_NAME = CORRALLM_MCP_SERVER;
 
 /**
  * The command that prints a token's Authorization header from `file`, for a client to run in a

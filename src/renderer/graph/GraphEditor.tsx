@@ -37,6 +37,7 @@ import type { AgentData, CanvasDocument } from '../../shared/model/canvas';
 import type { InstalledClis } from '../../shared/session';
 import { NO_USAGE } from '../../shared/usage';
 import { AgentView } from '../agent/AgentView';
+import { settingsChange } from '../agent/settings-change';
 import { AgentSettingsPanel } from '../agent/AgentSettings';
 import { catalog, continuesIn } from '../catalog';
 import { ipcErrorMessage } from '../ipc-error';
@@ -50,11 +51,8 @@ import {
   useDisplayedSession,
   sessionDisplay,
   sessionCommands,
-  nativeQueries,
-  nativePresentation,
-  openViewedSession,
+  sessionOptions,
 } from '../run/sessions';
-import type { SessionQueries } from '../run/sessions';
 import { runCommands } from '../run/commands';
 import type { RunNotice, RunView, RunSnapshot } from '../../shared/model/views';
 import { NEW_SESSION } from '../../shared/model/session';
@@ -113,9 +111,9 @@ const MULTI_SELECT_KEYS = ['Meta', 'Control', 'Shift'];
 type Command = Exclude<KeyAction, 'rename'>;
 
 /**
- * The editor, with a file bar backed by core operations and (given
- * `sessionQueries`, and `terminalBackend` for their terminals) agents connected to the real CLI
- * through the main process, and (given `usageSource`) the usage readings and rules main keeps.
+ * The editor, with a file bar backed by core operations, agents whose sessions the core runs (their
+ * topics and operations, and given `terminalBackend` their terminals), and (given `usageSource`)
+ * the usage readings and rules main keeps.
  */
 export function GraphEditor({
   canvas,
@@ -124,7 +122,6 @@ export function GraphEditor({
   initialSelection = EMPTY_SELECTION,
   files = true,
   terminalBackend = NO_TERMINAL,
-  sessionQueries = nativeQueries,
   usageSource,
 }: {
   canvas?: CanvasId;
@@ -133,7 +130,6 @@ export function GraphEditor({
   initialSelection?: Selection;
   files?: boolean;
   terminalBackend?: TerminalBackend;
-  sessionQueries?: SessionQueries;
   usageSource?: UsageSource;
 }) {
   const [shown, setShown] = useState<CanvasId>();
@@ -169,7 +165,6 @@ export function GraphEditor({
         initialSelection={initialSelection}
         files={files}
         terminalBackend={terminalBackend}
-        sessionQueries={sessionQueries}
         usageSource={usageSource}
       />
     </ReactFlowProvider>
@@ -183,7 +178,6 @@ function Editor({
   initialSelection,
   files,
   terminalBackend,
-  sessionQueries,
   usageSource,
 }: {
   canvas: CanvasId;
@@ -192,7 +186,6 @@ function Editor({
   initialSelection: Selection;
   files: boolean;
   terminalBackend: TerminalBackend;
-  sessionQueries: SessionQueries;
   usageSource: UsageSource | undefined;
 }) {
   const [binding] = useState(() => new CanvasSource(canvas, mirror));
@@ -269,12 +262,6 @@ function Editor({
     },
     [report],
   );
-  const openSession = useCallback(
-    (agent: string) => {
-      openViewedSession(api, canvasId, agent, report);
-    },
-    [api, canvasId, report],
-  );
   const model = canonical?.document ?? empty;
   const graph: Graph = useMemo(() => canonical?.graph ?? { nodes: [], edges: [] }, [canonical]);
   const name = canonical?.meta.name ?? undefined;
@@ -322,7 +309,7 @@ function Editor({
   useEffect(() => {
     if (!gallery && !showStart) return;
     let open = true;
-    sessionQueries.installed().then(
+    api.catalogInstalled().then(
       (found) => {
         if (open) setInstalled(found);
       },
@@ -331,7 +318,7 @@ function Editor({
     return () => {
       open = false;
     };
-  }, [gallery, showStart, sessionQueries]);
+  }, [gallery, showStart, api]);
   /** Every agent's queue, side by side, if shown: opened from the canvas, or from an agent. */
   const [queues, setQueues] = useState<{ from?: string }>();
   /** The canvas's saved automatic layout setting (nodes cannot be dragged while it is on). */
@@ -354,18 +341,7 @@ function Editor({
   /** The agent shown in the agent view, if any. */
   const front = openedIds[0];
   /** How it runs: its session starts when its view opens, and again when that changes. */
-  const presentation = useMemo(
-    () => sessionQueries.presentation ?? nativePresentation(canvasId),
-    [sessionQueries, canvasId],
-  );
-  const frontSession = useDisplayedSession(
-    canvasId,
-    front,
-    mirror,
-    summaries,
-    messages,
-    sessionQueries,
-  );
+  const frontSession = useDisplayedSession(canvasId, front, mirror, summaries, messages);
   /** Pure display reconciliation with the foreground's authoritative native receipts. */
   const displayNodes = useMemo(
     () =>
@@ -397,11 +373,8 @@ function Editor({
     [layout, run, sessions, engineCatalog],
   );
   const frontControls = useMemo(
-    () =>
-      front === undefined
-        ? undefined
-        : sessionCommands(api, canvasId, front, mirror, report, sessionQueries),
-    [api, canvasId, front, mirror, report, sessionQueries],
+    () => (front === undefined ? undefined : sessionCommands(api, canvasId, front, mirror, report)),
+    [api, canvasId, front, mirror, report],
   );
   /** The work between two agents opened in a panel, if any. */
   const [work, setWork] = useState<{ from: string; to: string }>();
@@ -1180,7 +1153,6 @@ function Editor({
               setEditing(node.id);
             } else {
               setEditing(undefined);
-              openSession(node.id);
               setOpened({ ids: [node.id] });
             }
           }}
@@ -1318,13 +1290,11 @@ function Editor({
                 canvas={canvasId}
                 mirror={mirror}
                 request={requestedNeed}
-                presentation={presentation}
                 onReply={commands.reply}
                 nodes={model.nodes}
                 onOpen={(agentId) => {
                   setStartChoice({ canvas: canvasId, open: false });
                   selectOne(agentId);
-                  openSession(agentId);
                   setOpened({ ids: [agentId] });
                 }}
               />
@@ -1368,7 +1338,6 @@ function Editor({
                 setStartChoice({ canvas: canvasId, open: false });
                 setQueues(undefined);
                 selectOne(id);
-                openSession(id);
                 setOpened(({ ids }) => ({ ids: [id, ...ids.filter((other) => other !== id)] }));
               }).catch((error: unknown) => {
                 setProblem(ipcErrorMessage(error));
@@ -1408,7 +1377,6 @@ function Editor({
               );
             }}
             onSwitch={(id, from) => {
-              openSession(id);
               selectOne(id);
               setOpened(({ ids }) => ({
                 ids: [id, ...ids.filter((other) => other !== id)],
@@ -1433,7 +1401,7 @@ function Editor({
             onOpenSettings={() => {
               setSettingsAgent(openedNode.id);
             }}
-            onContinueInTerminal={(command) => {
+            onContinueInTerminal={(command, images) => {
               const connection = continuesIn(connectionOf(openedNode.data));
               if (connection !== undefined)
                 act(
@@ -1441,7 +1409,9 @@ function Editor({
                     canvas: canvasId,
                     agent: openedNode.id,
                     connection,
-                    ...(command === undefined ? {} : { then: { text: command } }),
+                    ...(command === undefined
+                      ? {}
+                      : { then: { text: command, ...(images?.length ? { images } : {}) } }),
                   }),
                 );
             }}
@@ -1487,13 +1457,12 @@ function Editor({
             }}
             onAgentContextMenu={showAgentMenu}
             onOpenSettings={setSettingsAgent}
-            settingsOptions={(adapter, agent) => sessionQueries.options(adapter, agent)}
+            settingsOptions={(adapter, agent) => sessionOptions(api, canvasId, adapter, agent)}
             {...(queues.from === undefined ? {} : { focus: queues.from })}
             backLabel={queues.from === undefined ? 'Canvas' : nameOf(queues.from)}
             onOpenAgent={(id) => {
               setQueues(undefined);
               selectOne(id);
-              openSession(id);
               setOpened({ ids: [id] });
             }}
             onClose={closeQueues}
@@ -1626,7 +1595,7 @@ function Editor({
             inert={restoring}
             node={settingsNode}
             session={sessions[settingsNode.id] ?? NEW_SESSION}
-            options={(adapter) => sessionQueries.options(adapter, settingsNode.id)}
+            options={(adapter) => sessionOptions(api, canvasId, adapter, settingsNode.id)}
             onRename={(name) => {
               perform(api.canvasRename({ canvas: canvasId, node: settingsNode.id, label: name }));
             }}
@@ -1639,16 +1608,17 @@ function Editor({
               perform(changeAgent(settingsNode.id, agent, connection));
             }}
             onSettings={(adapter, settings) => {
+              const settingsChanged = settingsChange(
+                settingsNode.data.settings?.[adapter],
+                settings,
+              );
+              if (Object.keys(settingsChanged).length === 0) return;
               perform(
                 api.agentSetSettings({
                   canvas: canvasId,
                   agent: settingsNode.id,
                   adapter,
-                  settings: {
-                    model: settings.model ?? null,
-                    effort: settings.effort ?? null,
-                    mode: settings.mode ?? null,
-                  },
+                  settings: settingsChanged,
                 }),
               );
             }}

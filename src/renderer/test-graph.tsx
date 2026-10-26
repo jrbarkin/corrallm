@@ -60,11 +60,6 @@ export function GraphEditor({
   return (
     <Editor
       {...props}
-      sessionQueries={{
-        ...canvas.queries,
-        manual: canvas.manual,
-        presentation: canvas.presentation,
-      }}
       usageSource={canvas.usageSource}
       files={files}
       canvas={canvas.document.id}

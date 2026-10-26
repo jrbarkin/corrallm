@@ -249,10 +249,13 @@ describe('the core runs each canvas’s engine', () => {
     expect(
       await app.call('session.open', { canvas: CANVAS, agent: 'worker' }, asHuman(7)),
     ).toMatchObject({ ok: true });
-    await app.channels.call(7, 'session:send', [
-      'worker',
-      { id: crypto.randomUUID(), text: 'Hello from the app' },
-    ]);
+    expect(
+      await app.call(
+        'message',
+        { canvas: CANVAS, to: 'worker', body: 'Hello from the app' },
+        asHuman(7),
+      ),
+    ).toMatchObject({ ok: true });
     expect(app.engines.opened()).toContain(CANVAS);
     const checkpoint = owner?.checkpoint();
     if (!checkpoint) throw new Error('Nothing was restored.');
@@ -438,10 +441,13 @@ describe('the core runs each canvas’s engine', () => {
     expect(
       await started.call('session.open', { canvas: CANVAS, agent: 'worker' }, asHuman(7)),
     ).toMatchObject({ ok: true });
-    await started.channels.call(7, 'session:send', [
-      'worker',
-      { id: crypto.randomUUID(), text: 'After Keep corrallm open' },
-    ]);
+    expect(
+      await started.call(
+        'message',
+        { canvas: CANVAS, to: 'worker', body: 'After Keep corrallm open' },
+        asHuman(7),
+      ),
+    ).toMatchObject({ ok: true });
     await vi.waitFor(() => {
       expect(codex.sessions.flatMap(({ sent }) => sent).at(-1)?.text).toBe(
         'After Keep corrallm open',

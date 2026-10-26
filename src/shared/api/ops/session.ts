@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-import { ELICITATION_ACTIONS } from '../../session';
+import { ELICITATION_ACTIONS, MAX_CONVERSATIONS, MAX_CONVERSATION_LABEL } from '../../session';
 import { define } from '../define';
 import type { OpDef } from '../define';
 import { AgentId, OpCanvas } from '../ids';
@@ -11,12 +11,20 @@ import { ConversationId, EntryId, TaskId } from '../ids';
 import {
   CatalogId,
   Effort as EffortValue,
+  ManualBody,
   ManualText,
   Model,
   ModelChoice,
   SessionSummarySchema,
 } from './b11-data';
-import { MCP_CHANGES, MCP_STATUSES, REWIND_RESTORES, MAX_MCP_NAME_LENGTH } from '../../session';
+import {
+  MCP_CHANGES,
+  MCP_STATUSES,
+  REWIND_RESTORES,
+  MAX_MCP_ERROR_LENGTH,
+  MAX_MCP_NAME_LENGTH,
+  MAX_MCP_SERVERS,
+} from '../../session';
 
 /** Sessions (Core Server §4 G): an agent's session as it is, its transcript, and interrupting it. */
 
@@ -219,16 +227,29 @@ const FilesRewind = z.strictObject({
   removed: z.number(),
 });
 const ServerName = z.string().min(1).max(MAX_MCP_NAME_LENGTH);
+/** An MCP server a session reports, as /mcp shows it: bounded by the core (MAX_MCP_SERVERS). */
+const McpServers = z
+  .array(
+    z.strictObject({
+      name: ServerName,
+      status: z.enum(MCP_STATUSES),
+      scope: z.string().max(MAX_MCP_NAME_LENGTH).optional(),
+      server: z.string().max(MAX_MCP_NAME_LENGTH).optional(),
+      tools: z.number().optional(),
+      error: z.string().max(MAX_MCP_ERROR_LENGTH).optional(),
+    }),
+  )
+  .max(MAX_MCP_SERVERS);
 const PastSession = z.strictObject({
   id: ConversationId,
-  title: z.string(),
+  title: z.string().max(MAX_CONVERSATION_LABEL),
   modified: z.number(),
   bytes: z.number().optional(),
-  branch: z.string().optional(),
+  branch: z.string().max(MAX_CONVERSATION_LABEL).optional(),
   current: z.boolean(),
 });
 
-/** B11 schemas: C6 lifecycle/settings/rewind operations are registered; conversation/options and MCP controls await their services. */
+/** B11's session operations, each registered in OPS (registry.ts) over SessionControl. */
 export const b11SessionOps = {
   'session.open': define(
     { kind: 'command' },
@@ -291,7 +312,7 @@ export const b11SessionOps = {
     {
       summary: 'Lists this adapter’s conversations in this agent’s verified workspace.',
       input: AgentInput,
-      output: z.strictObject({ items: z.array(PastSession) }),
+      output: z.strictObject({ items: z.array(PastSession).max(MAX_CONVERSATIONS) }),
     },
   ),
   'session.resumeConversation': define(
@@ -321,28 +342,21 @@ export const b11SessionOps = {
   'session.mcpServers': define(
     { kind: 'read' },
     {
-      summary: 'Lists the session’s MCP servers.',
+      summary:
+        'Lists the MCP servers an agent’s running session has, and how each is (/mcp): on a ' +
+        'connection whose view shows them.',
       input: AgentInput,
-      output: z.strictObject({
-        items: z.array(
-          z.strictObject({
-            name: ServerName,
-            status: z.enum(MCP_STATUSES),
-            scope: z.string().optional(),
-            server: z.string().optional(),
-            tools: z.number().optional(),
-            error: z.string().optional(),
-          }),
-        ),
-      }),
+      output: z.strictObject({ items: McpServers }),
     },
   ),
   'session.changeMcpServer': define(
-    { kind: 'command' },
+    { kind: 'command', rules: ['corral-mcp'] },
     {
-      summary: 'Changes one MCP server the session reports.',
+      summary:
+        'Reconnects, enables or disables one MCP server the agent’s session reports, saying so ' +
+        'in its transcript. Returns its servers as they are then.',
       input: AgentInput.extend({ server: ServerName, change: z.enum(MCP_CHANGES) }),
-      output: z.strictObject({}),
+      output: z.strictObject({ items: McpServers }),
     },
   ),
   'session.options': define(
@@ -359,6 +373,16 @@ export const b11SessionOps = {
           asks: z.boolean().optional(),
         }),
       }),
+    },
+  ),
+  'session.viewCommand': define(
+    { kind: 'command' },
+    {
+      summary:
+        'Records a command the agent view answers itself in a panel (its connection’s panels: ' +
+        '/resume, /mcp, /rewind) as the user’s message, settled at once and never sent to its CLI.',
+      input: AgentInput.extend({ text: ManualBody.min(1) }),
+      output: z.strictObject({ id: z.uuid() }),
     },
   ),
   'session.continueIn': define(

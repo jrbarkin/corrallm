@@ -10,7 +10,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { canvasIdOf, newCanvasId } from '../../shared/canvas';
 import type { CanvasId } from '../../shared/canvas';
 import type { CoreGuiSide, GuiSide, GuiEvent, GuiEventArgs } from '../../shared/gui-link';
-import type { CoreChannel, IpcArgs, IpcResult } from '../../shared/ipc';
 import type { CoreLink } from '../../shared/link';
 import { toFile } from '../../shared/model/file';
 import type { TerminalEvent } from '../../shared/terminal';
@@ -93,16 +92,6 @@ async function app(
     return window.link;
   };
   return { core, host, served, connect };
-}
-
-async function channel<C extends CoreChannel>(
-  window: WindowLink,
-  name: C,
-  ...args: IpcArgs<C>
-): Promise<IpcResult<C>> {
-  const answer = await window.request('channel', name, args);
-  if (!answer.ok) throw new Error(answer.error.message);
-  return answer.value as IpcResult<C>;
 }
 
 /** Calls `op` over `window`'s port, as its renderer does: its result, or throws its sentence. */
@@ -202,34 +191,61 @@ describe('working-directory routing', () => {
     expect(resolve).toHaveBeenCalledWith(canvas, agent);
   });
 
+  /** An agent whose adapter lists its conversations, one kept for the folder. */
+  const KEPT = '0199a3f0-1234-7000-8000-123456789abc';
+  async function listing() {
+    const { connect } = await app({
+      connectors: { 'claude-code.sdk': new FakeConnector() },
+      environment: () => Promise.resolve({ HOME: profile }),
+      conversations: {
+        'claude-code': { list: () => Promise.resolve([{ id: KEPT, title: 'Kept', modified: 1 }]) },
+      },
+    });
+    const window = connect(7);
+    const canvas = await created(window);
+    await chooseProject(window);
+    const { id } = await call(window, 'canvas.addAgent', {
+      canvas,
+      at: { x: 0, y: 0 },
+      adapter: 'claude-code',
+      connection: 'claude-code.sdk',
+    });
+    return { window, canvas, agent: id as string };
+  }
+
   it('asks the resolver before listing conversations', async () => {
-    const { window, canvas, agent } = await setup();
+    const { window, canvas, agent } = await listing();
     const resolve = vi.spyOn(ProjectDirectories.prototype, 'workingDirectory').mockResolvedValue({
       state: 'held',
       reason: 'no-project',
       sentence: 'Pick a folder first.',
     });
-    await expect(channel(window, 'session:list', agent)).rejects.toThrow('Pick a folder first.');
+    await expect(call(window, 'session.conversations', { canvas, agent })).rejects.toThrow(
+      'Pick a folder first.',
+    );
     expect(resolve).toHaveBeenCalledWith(canvas, agent);
   });
 
   it('checks the resolved directory before accepting a listed conversation', async () => {
-    const { window, canvas, agent } = await setup();
+    const { window, canvas, agent } = await listing();
+    expect(await call(window, 'session.conversations', { canvas, agent })).toMatchObject({
+      items: [{ id: KEPT, current: false }],
+    });
     const resolve = vi.spyOn(ProjectDirectories.prototype, 'workingDirectory').mockResolvedValue({
       state: 'held',
       reason: 'no-project',
       sentence: 'Pick a folder first.',
     });
     await expect(
-      channel(window, 'session:resume', agent, '0199a3f0-1234-7000-8000-123456789abc'),
-    ).rejects.toThrow(/not one of/);
+      call(window, 'session.resumeConversation', { canvas, agent, conversation: KEPT }),
+    ).rejects.toThrow('Pick a folder first.');
     expect(resolve).toHaveBeenCalledWith(canvas, agent);
   });
 
   it('gets canvas-wide options from the root accessor, keeping the no-project home fallback', async () => {
     const { window, canvas, options } = await setup();
     const root = vi.spyOn(ProjectDirectories.prototype, 'projectRoot').mockReturnValue(undefined);
-    await channel(window, 'session:options', 'codex');
+    await call(window, 'session.options', { canvas, adapter: 'codex' });
     expect(root).toHaveBeenCalledWith(canvas);
     expect(options).toHaveBeenCalledWith({ cwd: profile, env: { HOME: profile } });
   });
@@ -337,7 +353,7 @@ describe('the app’s core and window channels', () => {
       await chooseProject(window);
       const a = await agentOn(window, connection);
       await opened(window, a);
-      await channel(window, 'session:send', a, { id: 'm', text: 'Hello' });
+      await call(window, 'message', { canvas, to: a, body: 'Hello' });
       await vi.waitFor(() => {
         expect(core.engines.canvas(canvas)?.engine.sessions.of(a).status).toBe('working');
       });
@@ -436,8 +452,8 @@ describe('the app’s core and window channels', () => {
     expect(own).not.toBe(other);
     await chooseProject(seven);
     expect(host.pickFolder).toHaveBeenCalledWith(7, undefined);
-    const options = await channel(seven, 'session:options', 'codex');
-    expect(options.models[0]?.value).toBe('default');
+    const options = await call(seven, 'session.options', { canvas: own, adapter: 'codex' });
+    expect((options.models as { value: string }[])[0]?.value).toBe('default');
     const agent = await agentOn(seven, 'codex.app-server');
     const a = events(seven);
     const b = events(eight);
@@ -533,12 +549,12 @@ describe('the app’s core and window channels', () => {
       environment: () => Promise.resolve({}),
     });
     const seven = connect(7);
-    await created(seven);
+    const canvas = await created(seven);
     await chooseProject(seven);
     const agent = await agentOn(seven, 'claude-code.terminal');
     const heard = events(seven);
     await opened(seven, agent);
-    await channel(seven, 'session:send', agent, { id: crypto.randomUUID(), text: 'Hello' });
+    await call(seven, 'message', { canvas, to: agent, body: 'Hello' });
     await vi.waitFor(() => {
       expect(heard).toContainEqual([
         'session:event',
@@ -806,58 +822,69 @@ describe('the canvas’s document, which the core keeps', () => {
   });
 });
 
-it('keeps transitional manual sends in the core mailbox, and refuses them at the shutdown barrier', async () => {
+it('keeps your messages in the core mailbox, and refuses them at the shutdown barrier', async () => {
   const { core, connect, served } = await app();
   const window = connect(7);
   const canvas = await created(window);
   const agent = await agentOn(window, 'codex.app-server');
   // Accepted and durable in the core, never a window-owned submission queue.
   const images = [{ mediaType: 'image/png' as const, data: 'AQ==' }];
-  const kept = await channel(window, 'session:send', agent, {
-    id: crypto.randomUUID(),
-    text: 'Keep my input',
+  const kept = await call(window, 'message', {
+    canvas,
+    to: agent,
+    body: 'Keep my input',
     images,
   });
+  const id = kept.id as string;
   const messages = await core.engines.messagesOf(canvas);
-  expect(messages.get(kept.id)).toMatchObject({
+  expect(messages.get(id)).toMatchObject({
     from: 'you',
     to: `agent:${agent}`,
     body: 'Keep my input',
   });
+  expect(messages.originOf(id)).toBe('manual');
   expect(
     readOnDisk(profile, (disk) =>
-      disk.prepare('SELECT id FROM message WHERE canvas_id = ? AND id = ?').get(canvas, kept.id),
+      disk.prepare('SELECT id FROM message WHERE canvas_id = ? AND id = ?').get(canvas, id),
     ),
-  ).toEqual({ id: kept.id });
+  ).toEqual({ id });
   await core.prepareShutdown('quit');
-  await expect(
-    channel(window, 'session:send', agent, { id: crypto.randomUUID(), text: 'Too late' }),
-  ).rejects.toThrow('quitting');
-  await expect(channel(window, 'session:unqueue', agent, kept.id)).rejects.toThrow('quitting');
+  await expect(call(window, 'message', { canvas, to: agent, body: 'Too late' })).rejects.toThrow(
+    'quitting',
+  );
+  await expect(call(window, 'withdraw', { canvas, id })).rejects.toThrow('quitting');
   core.cancelShutdown();
-  await channel(window, 'session:record', agent, { id: crypto.randomUUID(), text: '/mcp' });
-  expect(messages.all().some((message) => message.body === '/mcp')).toBe(true);
   served.gone(7, true);
   expect(core.engines.canvas(canvas)?.state).toBe('executing');
 });
-it('records a view-handled session command durably without dispatching it', async () => {
-  const { core, connect } = await app();
+it('records a view-handled session command durably without dispatching it, and not while quitting', async () => {
+  const { core, connect } = await app({
+    connectors: { 'claude-code.sdk': new FakeConnector() },
+    environment: () => Promise.resolve({}),
+  });
   const window = connect(7);
   const canvas = await created(window);
-  const agent = await agentOn(window, 'codex.app-server');
-  await channel(window, 'session:record', agent, { id: crypto.randomUUID(), text: '/mcp' });
-  const recorded = (await core.engines.messagesOf(canvas))
-    .all()
-    .find((message) => message.body === '/mcp');
-  if (!recorded) throw new Error('No command record');
-  expect(recorded).toMatchObject({ from: 'you', to: `agent:${agent}`, state: 'replied' });
+  const agent = await agentOn(window, 'claude-code.sdk');
+  await core.prepareShutdown('quit');
+  await expect(
+    call(window, 'session.viewCommand', { canvas, agent, text: '/mcp' }),
+  ).rejects.toThrow('quitting');
+  core.cancelShutdown();
+  const { id } = await call(window, 'session.viewCommand', { canvas, agent, text: '/mcp' });
+  const recorded = (await core.engines.messagesOf(canvas)).get(id as string);
+  expect(recorded).toMatchObject({
+    from: 'you',
+    to: `agent:${agent}`,
+    body: '/mcp',
+    state: 'replied',
+  });
   expect(
     readOnDisk(profile, (disk) =>
       disk
         .prepare('SELECT id FROM message WHERE canvas_id = ? AND id = ?')
-        .get(canvas, recorded.id),
+        .get(canvas, id as string),
     ),
-  ).toEqual({ id: recorded.id });
+  ).toEqual({ id });
   expect(core.engines.canvas(canvas)?.engine.sessions.of(agent).status).toBe('idle');
 });
 

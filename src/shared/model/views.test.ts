@@ -5,7 +5,9 @@ import { newCanvasId } from '../canvas';
 import { NEW_SESSION } from './session';
 import type { Entry } from './session';
 import type { Run } from './run';
-import { messageView, queueRows, runView, sessionView } from './views';
+import { SessionSummarySchema } from '../api/ops/b11-data';
+import { MAX_ASKING_BYTES, MAX_SUGGESTION_BYTES } from '../api/limits';
+import { askingView, messageView, queueRows, runView, sessionView, summaryFor } from './views';
 import { agentStatus, queueControlText, taskState } from './run-display';
 
 const agent = AgentId.parse('a');
@@ -170,6 +172,76 @@ describe('read-only runtime projections', () => {
       reply: 'reply',
       queued: 0,
     });
+  });
+
+  it('carries the CLI’s suggestion and its terminal’s asks in the summary, bounded, for you alone', () => {
+    const ask = {
+      kind: 'permission' as const,
+      id: 'p1',
+      tool: 'Bash',
+      summary: 'npm test',
+      detail: { kind: 'output' as const, text: 'npm test' },
+    };
+    const view = sessionView(agent, 'test.connection', {
+      ...NEW_SESSION,
+      suggestion: 'Run the tests',
+      asking: [ask],
+    });
+    expect(view.summary).toMatchObject({ suggestion: 'Run the tests', asking: [ask] });
+    expect(SessionSummarySchema.parse(view.summary)).toEqual(view.summary);
+    expect(summaryFor(view.summary, false)).not.toHaveProperty('suggestion');
+    expect(summaryFor(view.summary, false)).not.toHaveProperty('asking');
+    expect(summaryFor(view.summary, true)).toBe(view.summary);
+    // A suggestion too long for the composer to offer whole is offered not at all, never cut.
+    const long = sessionView(agent, 'test.connection', {
+      ...NEW_SESSION,
+      suggestion: 'x'.repeat(MAX_SUGGESTION_BYTES + 1),
+    });
+    expect(long.summary).not.toHaveProperty('suggestion');
+  });
+
+  it('keeps the newest terminal asks within their byte budget, cutting what is too long and saying so', () => {
+    const huge = (i: number) => ({
+      kind: 'plan' as const,
+      id: `plan-${String(i)}`,
+      plan: '\u0001'.repeat(MAX_ASKING_BYTES),
+    });
+    const asks = [
+      ...Array.from({ length: 20 }, (_, i) => huge(i)),
+      {
+        kind: 'question' as const,
+        id: 'q',
+        questions: Array.from({ length: 10 }, () => ({
+          header: 'h'.repeat(1000),
+          text: '€'.repeat(20_000),
+          options: Array.from({ length: 50 }, () => ({ label: 'l', description: 'd' })),
+          multiple: false,
+        })),
+      },
+      {
+        kind: 'permission' as const,
+        id: 'p',
+        tool: 'Edit',
+        summary: 'notes.txt',
+        detail: {
+          kind: 'diff' as const,
+          added: 5000,
+          removed: 0,
+          lines: Array.from({ length: 5000 }, () => ({ kind: 'add' as const, text: 'x' })),
+        },
+      },
+      { kind: 'other' as const, id: 'x'.repeat(5000), text: 'An id no Need could name' },
+    ];
+    const shown = askingView(asks);
+    expect(new TextEncoder().encode(JSON.stringify(shown)).length).toBeLessThanOrEqual(
+      MAX_ASKING_BYTES,
+    );
+    // The newest first kept; an ask no Need could name is left out.
+    expect(shown?.at(-1)).toMatchObject({ id: 'p', cut: true });
+    expect(shown?.some((one) => one.id.length > 256)).toBe(false);
+    expect(shown?.find((one) => one.id === 'q')).toMatchObject({ cut: true });
+    expect(SessionSummarySchema.shape.asking.parse(shown)).toEqual(shown);
+    expect(askingView([])).toBeUndefined();
   });
 
   it('never puts message rows into authored queue items and does not guess origin from sender', () => {

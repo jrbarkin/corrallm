@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { MAX_LABEL, MAX_MESSAGE_BYTES, MAX_PAGE_BYTES, MAX_WAITING } from '../../shared/api/limits';
 import { OPS } from '../../shared/api/registry';
+import { RULES } from '../../shared/api/rules';
 import type { Message } from '../../shared/model/messages';
 import type { Entry } from '../../shared/model/session';
 import { withoutChoices } from '../../shared/engine/needs';
@@ -743,13 +744,17 @@ describe('delivery', () => {
   it('refuses a body over 16 KB, counted in bytes', async () => {
     await keepCanvas();
     await start();
+    // A token's: past 16 KiB is your composer's alone (human-text), refused rather than cut.
     expect(
       await core?.call(
         'message',
         { canvas: CANVAS, to: 'builder', body: 'é'.repeat(MAX_MESSAGE_BYTES / 2 + 1) },
         OUTSIDE,
       ),
-    ).toMatchObject({ ok: false, error: { code: 'invalid' } });
+    ).toMatchObject({
+      ok: false,
+      error: { code: 'refused', sentence: RULES['human-text'].sentence },
+    });
     // The most a message holds goes; its echoed reply, longer, comes back cut to it, and marked,
     // never in the middle of a character (each "é" is two bytes, and the cut falls inside one).
     for (const body of ['x'.repeat(MAX_MESSAGE_BYTES), 'é'.repeat(MAX_MESSAGE_BYTES / 2)]) {
@@ -2491,10 +2496,13 @@ describe('telling an agent of a withdrawal after receipt', () => {
     expect(
       await started.call('session.open', { canvas: CANVAS, agent: 'builder' }, asHuman(7)),
     ).toMatchObject({ ok: true });
-    await started.channels.call(7, 'session:send', [
-      'builder',
-      { id: crypto.randomUUID(), text: 'Typed in the app' },
-    ]);
+    expect(
+      await started.call(
+        'message',
+        { canvas: CANVAS, to: 'builder', body: 'Typed in the app' },
+        asHuman(7),
+      ),
+    ).toMatchObject({ ok: true });
     await vi.waitFor(() => {
       expect(sent(appServer)[0]).toContain(withdrawalNote(id));
     });
@@ -2868,10 +2876,13 @@ describe('exhausted usage', () => {
       expect(
         await started.call('session.open', { canvas: CANVAS, agent: 'builder' }, asHuman(7)),
       ).toMatchObject({ ok: true });
-      await started.channels.call(7, 'session:send', [
-        'builder',
-        { id: crypto.randomUUID(), text: 'Typed in the app' },
-      ]);
+      expect(
+        await started.call(
+          'message',
+          { canvas: CANVAS, to: 'builder', body: 'Typed in the app' },
+          asHuman(7),
+        ),
+      ).toMatchObject({ ok: true });
       await vi.waitFor(() => {
         expect(first).toBe(false);
       });

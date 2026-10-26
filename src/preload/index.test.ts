@@ -360,23 +360,6 @@ describe('preload', () => {
     const api = await exposed();
     postPort(answerInfo);
     channel.mockResolvedValue(null);
-    await api.sendToSession('a', { id: 'm', text: 'Hi' });
-    expect(channel).toHaveBeenLastCalledWith('session:send', 'a', { id: 'm', text: 'Hi' });
-    const image = { mediaType: 'image/png', data: 'iVBORw0KGgo=' } as const;
-    await api.sendToSession('a', { id: 'm2', text: '', images: [image] });
-    expect(channel).toHaveBeenLastCalledWith('session:send', 'a', {
-      id: 'm2',
-      text: '',
-      images: [image],
-    });
-    await api.recordSessionCommand('a', { id: 'local', text: '/mcp' });
-    expect(channel).toHaveBeenLastCalledWith('session:record', 'a', { id: 'local', text: '/mcp' });
-    await api.unqueueSession('a', '11111111-1111-4111-8111-111111111111');
-    expect(channel).toHaveBeenLastCalledWith(
-      'session:unqueue',
-      'a',
-      '11111111-1111-4111-8111-111111111111',
-    );
     await api.answerSession('a', 'p', { kind: 'permission', answer: 'deny' });
     expect(channel).toHaveBeenLastCalledWith('session:answer', 'a', 'p', {
       kind: 'permission',
@@ -392,24 +375,8 @@ describe('preload', () => {
     expect(channel).toHaveBeenLastCalledWith('session:effort', 'a', 'high');
     await api.stopSessionTask('a', 'b1');
     expect(channel).toHaveBeenLastCalledWith('session:stopTask', 'a', 'b1');
-    await api.listSessions('a');
-    expect(channel).toHaveBeenLastCalledWith('session:list', 'a');
-    await api.mcpServers('a');
-    expect(channel).toHaveBeenLastCalledWith('session:mcp', 'a');
-    await api.settingsOptions('claude-code');
-    expect(channel).toHaveBeenLastCalledWith('session:options', 'claude-code');
-    await api.settingsOptions('codex', 'a');
-    expect(channel).toHaveBeenLastCalledWith('session:options', 'codex', 'a');
     await api.sessionAvailability('a');
     expect(channel).toHaveBeenLastCalledWith('session:availability', 'a');
-    await api.changeMcpServer('a', 'github', 'disable');
-    expect(channel).toHaveBeenLastCalledWith('session:mcp-change', 'a', 'github', 'disable');
-    await api.resumeSession('a', '0b3a7d52-6a0c-4f39-9c4e-2f8f0c1d9e11');
-    expect(channel).toHaveBeenLastCalledWith(
-      'session:resume',
-      'a',
-      '0b3a7d52-6a0c-4f39-9c4e-2f8f0c1d9e11',
-    );
   });
 
   it('passes session events on without Electron’s event object, until told to stop', async () => {
@@ -579,6 +546,15 @@ describe('a window’s run, the core’s alone (B11 Design §8)', () => {
       'freshSession',
       'previewRewind',
       'rewindSession',
+      // The agent window's sends, panels and options are operations since B11 X13.
+      'sendToSession',
+      'recordSessionCommand',
+      'unqueueSession',
+      'listSessions',
+      'resumeSession',
+      'settingsOptions',
+      'mcpServers',
+      'changeMcpServer',
     ])
       expect(api).not.toHaveProperty(name);
     expect(on.mock.calls.map(([name]) => name)).not.toContain('run:stopping');
@@ -588,18 +564,18 @@ describe('a window’s run, the core’s alone (B11 Design §8)', () => {
 describe('channels waiting for the core', () => {
   it('queues a channel until the port comes, and preserves a handler’s error message', async () => {
     const api = await exposed();
-    const pending = api.listSessions('a');
-    channel.mockRejectedValue(new Error('The conversations could not be read.'));
+    const pending = api.sessionAvailability('a');
+    channel.mockRejectedValue(new Error('The workspace could not be read.'));
     postPort(answerInfo);
-    await expect(pending).rejects.toThrow('The conversations could not be read.');
-    expect(channel).toHaveBeenCalledExactlyOnceWith('session:list', 'a');
+    await expect(pending).rejects.toThrow('The workspace could not be read.');
+    expect(channel).toHaveBeenCalledExactlyOnceWith('session:availability', 'a');
     expect(invoke).toHaveBeenCalledExactlyOnceWith('core:connect');
   });
 
   it('expires a queued channel after 10 seconds without replaying it on a late port', async () => {
     const api = await exposed();
     vi.useFakeTimers();
-    const failed = expect(api.listSessions('a')).rejects.toThrow(
+    const failed = expect(api.sessionAvailability('a')).rejects.toThrow(
       'corrallm’s core isn’t answering yet.',
     );
     await vi.advanceTimersByTimeAsync(10_000);

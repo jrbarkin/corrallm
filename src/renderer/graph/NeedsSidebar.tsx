@@ -1,5 +1,7 @@
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
-import type { SessionPresentation } from '../run/sessions';
+import { useEffect, useRef, useState } from 'react';
+import { useSessionSummaries } from '../api/runtime';
+import type { SessionSummary } from '../../shared/model/views';
+import type { TerminalAsk } from '../../shared/session';
 import { TerminalAskCard } from './Questions';
 import { DEFAULT_AGENT } from './agents';
 
@@ -54,11 +56,9 @@ export function NeedsSidebar({
   onReply,
   nodes,
   onOpen,
-  presentation,
   request,
 }: {
   canvas: CanvasId;
-  presentation?: SessionPresentation;
   mirror: TopicMirror;
   nodes: readonly CanvasNode[];
   onOpen: (agent: string) => void;
@@ -66,19 +66,12 @@ export function NeedsSidebar({
   /** A card to open and focus (the dock's Review for a workspace change), even if dismissed. */
   request?: { id: string } | undefined;
 }) {
-  const observed = useMemo(() => {
-    let revision = 0;
-    return {
-      read: () => revision,
-      subscribe: (listener: () => void) =>
-        presentation?.subscribe(() => {
-          revision++;
-          listener();
-        }) ?? (() => undefined),
-    };
-  }, [presentation]);
-  useSyncExternalStore(observed.subscribe, observed.read);
   const state = useTopic(`needs:${canvas}`, mirror);
+  /** What each agent's terminal asks, in its words: its summary's, yours alone and bounded. */
+  const summaries: Readonly<Record<string, SessionSummary>> | undefined = useSessionSummaries(
+    canvas,
+    mirror,
+  );
   const target = useRef<HTMLElement>(null);
   const focused = useRef<typeof request>(undefined);
   useEffect(() => {
@@ -186,14 +179,15 @@ export function NeedsSidebar({
               : undefined;
             const ask =
               item.answerIn === 'terminal' && item.agent
-                ? presentation?.snapshot(item.agent)?.asking?.find((ask) => ask.id === prompt)
+                ? summaries?.[item.agent]?.asking?.find((ask) => ask.id === prompt)
                 : undefined;
             const node = nodes.find((node) => node.id === item.agent && node.type === 'agent');
             if (ask && node?.type === 'agent')
               return (
                 <TerminalAskCard
                   key={item.id}
-                  ask={ask}
+                  // Shown, never changed: the summary's immutable ask, as the card reads it.
+                  ask={ask as TerminalAsk}
                   agent={{
                     name: agentName(nodes, node.id),
                     type: node.data.adapter ?? DEFAULT_AGENT,

@@ -209,8 +209,8 @@ export function Composer({
     edit(text, text.length);
   };
 
-  const submit = (text = draft.trim()) => {
-    if (text === '' && images.length === 0) return;
+  const submit = (text = draft) => {
+    if (text.trim() === '' && images.length === 0) return;
     const attachments = images.map(({ mediaType, data }) => ({ mediaType, data }));
     void flushDrafts(() => {
       controls.send(text, attachments);

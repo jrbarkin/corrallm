@@ -1,30 +1,40 @@
 import { homedir } from 'node:os';
 
+import type { z } from 'zod';
+
 import { adapterIn, connectionIn, isStartMode } from '../../shared/adapter';
 import type { AdapterId, Catalog, ConnectionId } from '../../shared/adapter';
+import { MAX_PAGE_BYTES } from '../../shared/api/limits';
+import { ConversationId } from '../../shared/api/ids';
 import type { NeedId } from '../../shared/api/ids';
 import type { CanvasId } from '../../shared/canvas';
 import * as agentEdits from '../../shared/model/agent-ops';
 import type { AgentNode } from '../../shared/model/canvas';
 import { threadTitle } from '../../shared/model/session';
 import { andList } from '../../shared/model/words';
+import { MAX_MCP_ERROR_LENGTH, MAX_MCP_NAME_LENGTH, MAX_MCP_SERVERS } from '../../shared/session';
 import type {
   AgentSettingsChange,
   FilesRewind,
+  McpChange,
+  McpServer,
   MessageImage,
+  PastSession,
   RewindRestore,
   RewindResult,
   SessionMode,
+  SettingsOptions,
 } from '../../shared/session';
+import { ConversationRefusal } from '../sessions/manager';
 import type { SessionManager } from '../sessions/manager';
 import { OpFailure, ProposedInstead } from './call';
 import type { OpContext, RuleOutcome } from './call';
-import { partyIdOf } from './caller';
+import { callerKey, partyIdOf } from './caller';
 import type { TokenCaller } from './caller';
 import type { Proposals } from './canvas/proposals';
 import { DeliveryError } from './delivery/delivery';
 import type { Engines, OpenCanvas } from './engines';
-import { nameOf, partyText } from './parties';
+import { nameOf, partyText, quotedName } from './parties';
 import { guardedFiles, RewindGuardSchema, sameGuard } from './rewind-guard';
 import type { RewindGuard } from './rewind-guard';
 import type { WorkspaceGate } from './workspaces/gate';
@@ -50,6 +60,11 @@ import { requireAgent } from './ops/agent-document';
  *   mutation gate, protecting every agent working in that tree, and, on a proposal's Allow, only if
  *   R5's guard reads the same again (else a conflict: settled stale).
  * - R5: a token's code rewind applies nothing: it comes to you as a proposal carrying its guard.
+ * - Conversations (§7): listed to their caller alone (callerKey), resumed only from that list, in
+ *   its binding, idle, never one another agent holds; options read in the agent's workspace now.
+ * - /mcp: only a server its session reports, on a connection whose catalog panels show them; a
+ *   change answers with every server as it is then, and says so in the transcript.
+ * - A command the agent view answers in a panel is recorded as your message, never sent.
  */
 
 /** How long a rewind proposal's words quote the message it goes back to. */
@@ -71,6 +86,12 @@ export interface SessionControlDeps {
     | 'previewRewind'
     | 'conversationOf'
     | 'availability'
+    | 'listSessions'
+    | 'listedTo'
+    | 'resumeSession'
+    | 'settingsOptions'
+    | 'mcpServers'
+    | 'changeMcpServer'
   >;
   gate: Pick<WorkspaceGate, 'mutate'>;
   proposals: Pick<Proposals, 'raise'>;
@@ -324,6 +345,195 @@ export class SessionControl {
     return {};
   }
 
+  /**
+   * session.conversations (B11 Design §7): its adapter's conversations in its workspace now, most
+   * recent first, which one is its own; listed to this caller alone (its window, session or token,
+   * never its party), and only those it may then resume, in that binding, for a while.
+   */
+  async conversations(
+    { canvas, agent }: { canvas?: string | undefined; agent: string },
+    ctx: OpContext,
+  ): Promise<{ items: (PastSession & { id: z.infer<typeof ConversationId> })[] }> {
+    const { open, adapter } = this.#target(canvas, agent);
+    const descriptor = adapterIn(this.#deps.catalog, adapter);
+    if (descriptor?.list !== true) {
+      throw new OpFailure(
+        'refused',
+        `${descriptor?.name ?? adapter} keeps no conversations corrallm can list.`,
+      );
+    }
+    const listed = await this.#effect(() =>
+      this.#deps.sessions.listSessions(
+        open.document.id,
+        agent,
+        callerKey(ctx.caller),
+        ctx.caller.kind !== 'human',
+      ),
+    );
+    // R42 at this boundary too: an id that isn't the platform's shape is never shown.
+    return {
+      items: listed.flatMap((one) => {
+        const id = ConversationId.safeParse(one.id);
+        return id.success ? [{ ...one, id: id.data }] : [];
+      }),
+    };
+  }
+
+  /**
+   * session.resumeConversation (B11 Design §7): an idle session with nothing waiting to go closes
+   * and starts again on a conversation listed to this caller, in the binding it was listed in, that
+   * no other agent's session holds (refused before anything closes), reserved for it meanwhile.
+   */
+  async resumeConversation(
+    {
+      canvas,
+      agent,
+      conversation,
+    }: { canvas?: string | undefined; agent: string; conversation: string },
+    ctx: OpContext,
+  ): Promise<object> {
+    const target = this.#target(canvas, agent);
+    const { open, name } = target;
+    const caller = callerKey(ctx.caller);
+    if (!this.#deps.sessions.listedTo(open.document.id, agent, caller, conversation)) {
+      throw new OpFailure(
+        'not-found',
+        `That isn’t one of ${name}’s conversations listed to you: list them again.`,
+      );
+    }
+    await this.#launchable(target, 'resume a conversation');
+    // Idle as it closes: nothing awaited between this check and its effect.
+    this.#idle(target, 'resume a conversation');
+    ctx.noReturn();
+    try {
+      await this.#deps.sessions.resumeSession(open.document.id, agent, conversation, caller);
+    } catch (error) {
+      if (error instanceof ConversationRefusal) throw new OpFailure(error.code, error.message);
+      throw new OpFailure('unavailable', reasonOf(error));
+    }
+    open.engine.sessions.resumed(agent);
+    await this.#opened(target, 'It took that conversation, but couldn’t start again');
+    return {};
+  }
+
+  /**
+   * session.options: what an agent of `adapter` can be set to run with, and the user's own
+   * defaults, read in that agent's workspace now (its binding checked again), or the canvas's
+   * project folder without one: never a cached canvas-wide answer.
+   */
+  async options({
+    canvas,
+    agent,
+    adapter,
+  }: {
+    canvas?: string | undefined;
+    agent?: string | undefined;
+    adapter: string;
+  }): Promise<SettingsOptions> {
+    const open = this.#openCanvas(canvas);
+    if (adapterIn(this.#deps.catalog, adapter) === undefined) {
+      throw new OpFailure('invalid', `corrallm has no adapter ${adapter}.`);
+    }
+    if (agent !== undefined) this.#agentOf(open, agent);
+    const options = await this.#effect(() =>
+      this.#deps.sessions.settingsOptions(open.document.id, adapter, agent),
+    );
+    if (Buffer.byteLength(JSON.stringify(options)) > MAX_PAGE_BYTES - 256) {
+      throw new OpFailure(
+        'unavailable',
+        'That agent’s settings options are too large to show here.',
+      );
+    }
+    return options;
+  }
+
+  /**
+   * session.viewCommand (yours alone, a view's): a command its agent view answered itself in a
+   * panel (one its connection's catalog `panels` names) kept as your message, settled at once and
+   * never sent to its CLI. What the panel then shows it reads, or does, by operations of its own.
+   */
+  async viewCommand({
+    canvas,
+    agent,
+    text,
+  }: {
+    canvas?: string | undefined;
+    agent: string;
+    text: string;
+  }): Promise<{ id: string }> {
+    const { open, connection, name } = this.#target(canvas, agent);
+    const command = /^\s*\/([^\s/]+)(?:\s[\s\S]*)?$/.exec(text)?.[1];
+    const panels = connectionIn(this.#deps.catalog, connection)?.connection.panels ?? {};
+    if (command === undefined || !Object.hasOwn(panels, command)) {
+      throw new OpFailure(
+        'invalid',
+        `${name}’s view answers no ${command === undefined ? 'such command' : `/${command}`} itself.`,
+      );
+    }
+    try {
+      return { id: (await open.delivery.record(agent, text)).id };
+    } catch (error) {
+      throw new OpFailure('unavailable', reasonOf(error));
+    }
+  }
+
+  /** session.mcpServers (/mcp): the servers its running session reports now, bounded. */
+  async mcpServers({
+    canvas,
+    agent,
+  }: {
+    canvas?: string | undefined;
+    agent: string;
+  }): Promise<{ items: McpServer[] }> {
+    const target = this.#target(canvas, agent);
+    this.#mcpPanel(target);
+    return { items: await this.#servers(target) };
+  }
+
+  /**
+   * session.changeMcpServer (/mcp): reconnects, enables or disables one server its session reports
+   * now (never a command, a URL or a server it doesn't), on a connection that offers that change;
+   * says so in its transcript, and answers with its servers as they are then, so /mcp shows them
+   * without a second operation.
+   */
+  async changeMcpServer(
+    {
+      canvas,
+      agent,
+      server,
+      change,
+    }: { canvas?: string | undefined; agent: string; server: string; change: McpChange },
+    ctx: OpContext,
+  ): Promise<{ items: McpServer[] }> {
+    const target = this.#target(canvas, agent);
+    const { open, name } = target;
+    if (!this.#mcpPanel(target).changes.includes(change)) {
+      throw new OpFailure('refused', `${name}’s MCP servers can’t be ${MCP_DONE[change]} here.`);
+    }
+    if (!(await this.#servers(target)).some((one) => one.name === server)) {
+      throw new OpFailure(
+        'not-found',
+        `${name}’s session has no MCP server ${quotedName(server)}.`,
+      );
+    }
+    ctx.noReturn();
+    const items = bounded(
+      await this.#effect(() =>
+        this.#deps.sessions.changeMcpServer(open.document.id, agent, server, change),
+      ),
+    );
+    const by = partyIdOf(ctx.caller);
+    const what = `${MCP_DONE[change]} the MCP server ${quotedName(server)}.`;
+    open.engine.sessions.notice(
+      agent,
+      'info',
+      by === 'you'
+        ? `${what.charAt(0).toUpperCase()}${what.slice(1)}`
+        : `${partyText(open.document.nodes, by)} ${what}`,
+    );
+    return { items };
+  }
+
   /** session.rewindPreview: what restoring its files to before `message` would change. */
   async rewindPreview({
     canvas,
@@ -441,6 +651,22 @@ export class SessionControl {
       guard,
     });
     return { propose: id };
+  }
+
+  /** Its connection's /mcp panel, as the catalog declares it: refused where it has none. */
+  #mcpPanel({ connection, name }: Target): { changes: readonly McpChange[] } {
+    const panel = connectionIn(this.#deps.catalog, connection)?.connection.panels.mcp;
+    if (panel === undefined) {
+      throw new OpFailure('refused', `${name}’s MCP servers are managed in its terminal (/mcp).`);
+    }
+    return panel;
+  }
+
+  /** The MCP servers its running session reports now, as /mcp shows them: bounded. */
+  async #servers({ open, node }: Target): Promise<McpServer[]> {
+    return bounded(
+      await this.#effect(() => this.#deps.sessions.mcpServers(open.document.id, node.id)),
+    );
   }
 
   /** The open canvas `canvas` names: unavailable if it isn't open (the core doesn't run it). */
@@ -575,6 +801,33 @@ export class SessionControl {
       files,
     };
   }
+}
+
+/** What an MCP change did, as a notice says it. */
+const MCP_DONE: Readonly<Record<McpChange, string>> = {
+  reconnect: 'reconnected',
+  enable: 'enabled',
+  disable: 'disabled',
+};
+
+/**
+ * Servers as /mcp shows them, whatever a session reported: the first MAX_MCP_SERVERS of those a
+ * change can name (a longer name is left out), each text cut to its bound.
+ */
+function bounded(servers: readonly McpServer[]): McpServer[] {
+  const cut = (text: string, most: number) =>
+    text.length > most ? `${text.slice(0, most - 1)}…` : text;
+  return servers
+    .filter(({ name }) => name.length > 0 && name.length <= MAX_MCP_NAME_LENGTH)
+    .slice(0, MAX_MCP_SERVERS)
+    .map(({ name, status, scope, server, tools, error }) => ({
+      name,
+      status,
+      ...(scope === undefined ? {} : { scope: cut(scope, MAX_MCP_NAME_LENGTH) }),
+      ...(server === undefined ? {} : { server: cut(server, MAX_MCP_NAME_LENGTH) }),
+      ...(tools === undefined ? {} : { tools }),
+      ...(error === undefined ? {} : { error: cut(error, MAX_MCP_ERROR_LENGTH) }),
+    }));
 }
 
 function reasonOf(error: unknown): string {

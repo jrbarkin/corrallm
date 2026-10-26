@@ -7,6 +7,7 @@ import {
   TURN_REASONS,
   MODEL_PATTERN,
   EFFORT_PATTERN,
+  MAX_MESSAGE_LENGTH,
 } from '../../session';
 import { PARTY_PATTERN } from '../../model/messages';
 import { USAGE_WINDOWS } from '../../usage';
@@ -18,6 +19,8 @@ import {
   MAX_LABEL,
   MAX_SESSION_REPLY_BYTES,
   MAX_MESSAGE_BYTES,
+  MAX_SUGGESTION_BYTES,
+  MAX_TERMINAL_ASKS,
 } from '../limits';
 
 /** Shared schema vocabulary for prepared B11 definitions; no entry here registers an operation. */
@@ -56,7 +59,16 @@ export const Images = z
   )
   // Base64 needs no JSON escaping. Allow padding and media/object keys for each bounded image.
   .meta({ maxBytes: 4 * Math.ceil(MAX_IMAGE_TOTAL / 3) + MAX_IMAGES * 100 });
-export const ManualText = z.strictObject({ text: Body, images: Images.optional() });
+/**
+ * Text your composer sends: at most its 200,000 characters (MAX_MESSAGE_LENGTH, B11 §16.6). What
+ * anyone else sends is held to MAX_MESSAGE_BYTES by its op's `human-text` rule, never by cutting.
+ */
+export const ManualBody = z.string().max(MAX_MESSAGE_LENGTH);
+/** Human-only Continue uses the composer's character bound (B11 §16.6). */
+export const ManualText = z.strictObject({
+  text: ManualBody.min(1),
+  images: Images.optional(),
+});
 const Party = z.string().regex(PARTY_PATTERN);
 const Outcome = z.enum(['succeeded', 'failed', 'cancelled', 'skipped', 'timedOut', 'stopped']);
 const Problem = z.strictObject({
@@ -140,6 +152,43 @@ export const ModelChoice = z.strictObject({
   efforts: z.array(EffortChoice).optional(),
   defaultEffort: z.string().optional(),
 });
+const AskDetail = z.union([
+  z.strictObject({
+    kind: z.literal('diff'),
+    added: z.number(),
+    removed: z.number(),
+    lines: z.array(z.strictObject({ kind: z.enum(['add', 'remove', 'same']), text: z.string() })),
+  }),
+  z.strictObject({ kind: z.literal('output'), text: z.string() }),
+]);
+const askCut = z.literal(true).optional();
+/** What a terminal asks, as a summary carries it (shared/model/views.ts' askingView). */
+export const AskViewSchema = z.discriminatedUnion('kind', [
+  z.strictObject({
+    kind: z.literal('permission'),
+    id: z.string(),
+    tool: z.string(),
+    summary: z.string(),
+    detail: AskDetail.optional(),
+    cut: askCut,
+  }),
+  z.strictObject({
+    kind: z.literal('question'),
+    id: z.string(),
+    questions: z.array(
+      z.strictObject({
+        header: z.string(),
+        text: z.string(),
+        options: z.array(z.strictObject({ label: z.string(), description: z.string() })),
+        multiple: z.boolean(),
+      }),
+    ),
+    cut: askCut,
+  }),
+  z.strictObject({ kind: z.literal('plan'), id: z.string(), plan: z.string(), cut: askCut }),
+  z.strictObject({ kind: z.literal('trust'), id: z.string(), cut: askCut }),
+  z.strictObject({ kind: z.literal('other'), id: z.string(), text: z.string(), cut: askCut }),
+]);
 export const SessionSummarySchema = z.strictObject({
   agent: z.string(),
   connection: z.string(),
@@ -205,4 +254,15 @@ export const SessionSummarySchema = z.strictObject({
     )
     .nullable(),
   replyCut: z.literal(true).optional(),
+  // Yours alone (session.get's `varies`): your composer's suggestion and your Needs' detail.
+  suggestion: z
+    .string()
+    .min(1)
+    .max(MAX_SUGGESTION_BYTES)
+    .refine(
+      (text) => new TextEncoder().encode(text).length <= MAX_SUGGESTION_BYTES,
+      'A suggestion is at most 2 KiB of UTF-8',
+    )
+    .optional(),
+  asking: z.array(AskViewSchema).min(1).max(MAX_TERMINAL_ASKS).optional(),
 });

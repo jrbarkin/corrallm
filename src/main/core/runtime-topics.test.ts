@@ -6,7 +6,7 @@ import path from 'node:path';
 
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
-import { MAX_TOPIC_FRAME } from '../../shared/api/limits';
+import { MAX_ASKING_BYTES, MAX_SUGGESTION_BYTES, MAX_TOPIC_FRAME } from '../../shared/api/limits';
 import { SURFACE } from '../../shared/api/surface';
 import type { Party } from '../../shared/api/surface';
 import { RuntimeTopic, snapshotFrameFits, topicKey } from '../../shared/api/topics';
@@ -17,7 +17,7 @@ import type {
   TopicUpdate,
 } from '../../shared/api/topics';
 import type { Message } from '../../shared/model/messages';
-import { runView } from '../../shared/model/views';
+import { askingView, runView } from '../../shared/model/views';
 import type { EntryView, MessageView, RunView, SessionSummary } from '../../shared/model/views';
 import type { SessionEvent, SessionMode } from '../../shared/session';
 import type { Connector, SessionHost, SessionSpec } from '../sessions/connector';
@@ -1237,6 +1237,15 @@ describe('runtime topics: long histories', () => {
       running: { model: 'default', effort: 'high', mode: 'auto', role: 'r'.repeat(2000) },
       reply: 'r'.repeat(4096),
       replyCut: true,
+      // Yours alone, and bounded: the longest suggestion, the most asks their budget keeps.
+      suggestion: 's'.repeat(MAX_SUGGESTION_BYTES),
+      asking: askingView(
+        Array.from({ length: 20 }, (_, i) => ({
+          kind: 'plan' as const,
+          id: `plan-${String(i)}`,
+          plan: '\u0001'.repeat(MAX_ASKING_BYTES),
+        })),
+      ),
     } as unknown as SessionSummary;
     const session = sessionOf('worker');
     expect(

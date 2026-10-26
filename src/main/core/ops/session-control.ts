@@ -15,7 +15,13 @@ type SessionName =
   | 'session.newConversation'
   | 'session.rewindPreview'
   | 'session.rewind'
-  | 'session.continueIn';
+  | 'session.continueIn'
+  | 'session.conversations'
+  | 'session.resumeConversation'
+  | 'session.options'
+  | 'session.mcpServers'
+  | 'session.changeMcpServer'
+  | 'session.viewCommand';
 type ArgsOf<N extends SessionName> = z.infer<(typeof b11SessionOps)[N]['input']>;
 
 /** The registered session operations delegate every refusal and effect to the core service. */
@@ -31,6 +37,12 @@ export function sessionControlOps(control: SessionControl): Pick<Implementations
     'session.rewindPreview': (args) => control.rewindPreview(args),
     'session.rewind': (args, ctx) => control.rewind(args, ctx),
     'session.continueIn': (args, ctx) => control.continueIn(args, ctx),
+    'session.conversations': (args, ctx) => control.conversations(args, ctx),
+    'session.resumeConversation': (args, ctx) => control.resumeConversation(args, ctx),
+    'session.options': (args) => control.options(args),
+    'session.mcpServers': (args) => control.mcpServers(args),
+    'session.changeMcpServer': (args, ctx) => control.changeMcpServer(args, ctx),
+    'session.viewCommand': (args) => control.viewCommand(args),
   };
 }
 /** R5's argument check, `restore-code` on session.rewind: a token's code restore proposes. */

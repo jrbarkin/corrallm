@@ -37,10 +37,6 @@ const api: AppApi = {
   topicsOnChange: (listener) => core.onTopic(listener),
   topicsOnEpoch: (listener) => core.onEpoch(listener),
   draftsOnFlush: (listener) => core.onDraftsFlush(listener),
-  sendToSession: (agentId, message) => invoke(API_CHANNELS.sendToSession, agentId, message),
-  recordSessionCommand: (agentId, message) =>
-    invoke(API_CHANNELS.recordSessionCommand, agentId, message),
-  unqueueSession: (agentId, id) => invoke(API_CHANNELS.unqueueSession, agentId, id),
   answerSession: (agentId, promptId, answer) =>
     invoke(API_CHANNELS.answerSession, agentId, promptId, answer),
   interruptSession: (agentId) => invoke(API_CHANNELS.interruptSession, agentId),
@@ -48,14 +44,7 @@ const api: AppApi = {
   setSessionModel: (agentId, model) => invoke(API_CHANNELS.setSessionModel, agentId, model),
   setSessionEffort: (agentId, effort) => invoke(API_CHANNELS.setSessionEffort, agentId, effort),
   stopSessionTask: (agentId, taskId) => invoke(API_CHANNELS.stopSessionTask, agentId, taskId),
-  listSessions: (agentId) => invoke(API_CHANNELS.listSessions, agentId),
-  resumeSession: (agentId, sessionId) => invoke(API_CHANNELS.resumeSession, agentId, sessionId),
   sessionAvailability: (agent) => invoke(API_CHANNELS.sessionAvailability, agent),
-  settingsOptions: (cli, agent) =>
-    invoke(API_CHANNELS.settingsOptions, cli, ...(agent === undefined ? [] : [agent])),
-  mcpServers: (agentId) => invoke(API_CHANNELS.mcpServers, agentId),
-  changeMcpServer: (agentId, server, change) =>
-    invoke(API_CHANNELS.changeMcpServer, agentId, server, change),
   // The paths of the files dropped, as the files say (a file the page made has none): the page
   // never names a path, and the core checks these again.
   terminalDrop: ({ agent, files, request }) => {

@@ -21,7 +21,7 @@ import type { SessionAction } from '../../shared/engine/transcript/reduce';
 import type { Entry, Session } from '../../shared/model/session';
 import { MESSAGE_ORIGINS } from '../../shared/model/messages';
 import type { PartyId } from '../../shared/model/messages';
-import { projectData, runView } from '../../shared/model/views';
+import { projectData, runView, summaryFor } from '../../shared/model/views';
 import type {
   EntryView,
   MessageView,
@@ -281,7 +281,12 @@ export class RuntimeSource {
           lead(canvas, ctx),
         );
         return {
-          agents: Object.fromEntries(agents.map((agent) => [agent, sessionSummary(open, agent)])),
+          agents: Object.fromEntries(
+            agents.map((agent) => [
+              agent,
+              sessionSummary(open, agent, ctx.caller.kind === 'human'),
+            ]),
+          ),
         };
       }),
       session: projection('session', SessionArgs, ({ canvas, agent }, ctx) => {
@@ -817,17 +822,18 @@ function appended(
 function sessionState(base: SessionBase, yours: boolean): SessionView {
   if (!base.summary) throw new Error('That session has no summary.');
   const key = yours ? 'view' : 'redacted';
+  // What is yours alone of the summary (summaryFor) leaves a redacted copy's.
+  const summary = summaryFor(base.summary, yours);
   let view = base[key];
   if (!view)
     view = projectData({
-      summary: base.summary,
+      summary,
       entries: Object.fromEntries(
         base.entries.map((entry) => [entry.id, transcriptEntry(entry, yours)]),
       ),
       order: base.order,
     });
-  else if (view.summary !== base.summary)
-    view = projectData({ ...view, summary: base.summary }, view);
+  else if (view.summary !== summary) view = projectData({ ...view, summary }, view);
   base[key] = view;
   return view;
 }

@@ -1,6 +1,3 @@
-import type { Session } from '../shared/model/session';
-import type { UserMessage } from '../shared/session';
-import type { Presentation } from './run/sessions';
 import { canvasRuntime } from './test-canvas-runtime';
 import { NO_BACKEND } from '../shared/engine/transcript/receive';
 import type { SessionBackend } from '../shared/engine/transcript/receive';
@@ -47,12 +44,15 @@ export function fakeCanvas(
     ok: true,
     value: await (backend ?? NO_BACKEND).installed(),
   }));
+  core.reply('project.files', async (raw) => {
+    const { query, agent } = OPS['project.files'].input.parse(raw);
+    return { ok: true, value: { items: await (backend ?? NO_BACKEND).files(query, agent) } };
+  });
   core.respond('templates.list', {
     items: EXAMPLES.map((example) => templateInfo(example, catalog(), DEFAULT_AGENT)),
   });
   let runtime: ReturnType<typeof canvasRuntime> | undefined;
   const runtimes = new Map<CanvasId, ReturnType<typeof canvasRuntime>>();
-  const presentations = new WeakMap<Session, Presentation>();
   let document = initial;
   let rev = 1;
   let saved = toFile(initial);
@@ -452,49 +452,6 @@ export function fakeCanvas(
         return Promise.resolve();
       },
     } satisfies UsageSource,
-    queries: {
-      ...(backend ?? NO_BACKEND),
-      resume: (agent: string, conversation: string) => {
-        if (!runtime) throw new Error('No canvas runtime');
-        return runtime.resume(agent, conversation);
-      },
-    },
-    presentation: {
-      snapshot: (agent: string) => {
-        const session = runtime?.engine.sessions.of(agent);
-        if (!session) return undefined;
-        let presentation = presentations.get(session);
-        if (!presentation) {
-          presentation = {
-            ...(session.suggestion === undefined ? {} : { suggestion: session.suggestion }),
-            ...(session.asking === undefined ? {} : { asking: session.asking }),
-            images: new Map(
-              (session.submissions ?? []).flatMap((message) =>
-                message.images ? [[message.id, message.images]] : [],
-              ),
-            ),
-          };
-          presentations.set(session, presentation);
-        }
-        return presentation;
-      },
-      subscribe: (listener: () => void) =>
-        runtime?.engine.sessions.subscribe(listener) ?? (() => undefined),
-    },
-    manual: {
-      record: (agent: string, message: UserMessage) => {
-        if (!runtime) throw new Error('No canvas runtime');
-        return runtime.manual.record(agent, message);
-      },
-      send: (agent: string, message: UserMessage) => {
-        if (!runtime) throw new Error('No test runtime');
-        return runtime.manual.send(agent, message);
-      },
-      unqueue: (agent: string, id: string) => {
-        if (!runtime) throw new Error('No test runtime');
-        return runtime.manual.unqueue(agent, id);
-      },
-    },
     get engine() {
       if (!runtime) throw new Error('No test runtime');
       return runtime.engine;

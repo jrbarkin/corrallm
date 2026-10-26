@@ -10,7 +10,6 @@ import { FakeConnector } from '../sessions/fake';
 import type { Connector } from '../sessions/connector';
 import type { SessionMode } from '../../shared/session';
 import { gitEnvironment } from './workspaces/test-git';
-import type { CoreChannel, IpcArgs, IpcResult } from '../../shared/ipc';
 import { asHuman } from './gui';
 
 let core: Core | undefined;
@@ -142,10 +141,6 @@ it('delivers the window’s refused manual message after Switch to Terminal on a
   expect(await core.call('window.show', { canvas: CANVAS }, asHuman(window))).toMatchObject({
     ok: true,
   });
-  const channel = async <C extends CoreChannel>(
-    name: C,
-    ...args: IpcArgs<C>
-  ): Promise<IpcResult<C>> => (await core.channels.call(window, name, args)) as IpcResult<C>;
   await core.call('session.open', { canvas: CANVAS, agent: 'a' }, asHuman(window));
   const open = core.engines.canvas(CANVAS);
   if (!open) throw new Error('No runtime');
@@ -154,10 +149,13 @@ it('delivers the window’s refused manual message after Switch to Terminal on a
       expect.objectContaining({ kind: 'notice', switchTo: 'claude-code.terminal' }),
     );
   });
-  const sent = await channel('session:send', 'a', {
-    id: crypto.randomUUID(),
-    text: 'Fix the login bug',
-  });
+  const message = await core.call(
+    'message',
+    { canvas: CANVAS, to: 'a', body: 'Fix the login bug' },
+    asHuman(window),
+  );
+  if (!message.ok) throw new Error(message.error.sentence);
+  const sent = message.value;
   await vi.waitFor(() => {
     // Core delivery has journaled its attempt, but startup has not handed it to the CLI.
     expect(open.messages.get(sent.id)?.state).toBe('delivering');
