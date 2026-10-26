@@ -1063,6 +1063,20 @@ export function partsOf(
           value,
         })),
       };
+    if (topic.startsWith('worktrees:')) {
+      // B9a's who works where: each agent's item, then each tree kept, in order.
+      const value = state as { items: readonly { agent: string }[]; kept: readonly unknown[] };
+      return {
+        summary: {},
+        entries: [
+          ...value.items.map((item) => ({
+            key: `item/${encodeURIComponent(item.agent)}`,
+            value: item,
+          })),
+          ...value.kept.map((tree, index) => ({ key: `kept/${String(index)}`, value: tree })),
+        ],
+      };
+    }
     if (topic === 'canvases' || topic.startsWith('needs:')) {
       const items = (state as { items: readonly { canvas?: string; id?: string }[] }).items;
       return {

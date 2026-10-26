@@ -108,7 +108,11 @@ async function edit(name: string, args: object): Promise<Record<string, unknown>
   return result.value as Record<string, unknown>;
 }
 function committed(name: string, result: Record<string, unknown>, keys: string[]) {
-  expect(result.revs).toEqual({ [KEY]: 2 });
+  // Its document's revision, and its worktrees' if who works where moved with it (B9a §7).
+  expect(result.revs).toMatchObject({ [KEY]: 2 });
+  expect(Object.keys(result.revs as object).filter((key) => key !== KEY)).toEqual(
+    Object.keys(result.revs as object).filter((key) => key.startsWith('worktrees:')),
+  );
   expect(
     rows()
       .map((row) => row.entity)
@@ -220,7 +224,7 @@ describe('canvas structure commits through core.call', () => {
       const change = rows().slice(before);
       expect(change.length).toBeGreaterThan(0);
       expect(new Set(change.map(({ rev }) => rev)).size).toBe(1);
-      expect(result.revs).toEqual({ [KEY]: change[0]?.rev });
+      expect(result.revs).toMatchObject({ [KEY]: change[0]?.rev });
       const read = await core.call('canvas.get', { canvas: CANVAS }, CALLERS.you);
       expect(read.ok).toBe(true);
       if (!read.ok) throw new Error(read.error.sentence);

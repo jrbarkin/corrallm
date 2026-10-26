@@ -265,7 +265,7 @@ describe('canvas.create', () => {
       agents: { planner: 'claude-code', builder: 'codex' },
       connections: { builder: 'codex.app-server' },
     })) as { canvas: CanvasId; revs: Record<string, number> };
-    expect(revs).toEqual({ [`canvas:${canvas}`]: 1 });
+    expect(revs).toMatchObject({ [`canvas:${canvas}`]: 1 });
     const document = await documentOf(canvas);
     const byId = Object.fromEntries(document.nodes.map((node) => [node.id, node.data]));
     expect(byId.planner).toMatchObject({

@@ -1,7 +1,7 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AgentId } from '../../../shared/api/ids';
 import { newCanvasId } from '../../../shared/canvas';
 import type { CanvasDocument } from '../../../shared/model/canvas';
@@ -105,6 +105,7 @@ beforeEach(async () => {
       run: vi.fn().mockResolvedValue(tree),
       checkout,
       reconcile: vi.fn().mockResolvedValue(undefined),
+      startRetry: vi.fn(),
     },
     setups: {
       prepare: vi.fn().mockResolvedValue(undefined),
@@ -285,4 +286,151 @@ it('waits for a resumed creating job before closing the directory service', asyn
     running.resolve(tree);
     await closing;
   }
+});
+
+/*
+ * worktree.retry's service (B9a X12, C): an agent's worktree tried again as it was recorded,
+ * through Provisioner's retry and setup's offer, never forced, never deleted, never its setup run
+ * past your card; answered once the retry is recorded, its Git work going on after.
+ */
+describe('retry', () => {
+  /** The bound tree moved to `state` (error and missing say why). */
+  async function at(state: 'setup' | 'ready' | 'error' | 'missing'): Promise<void> {
+    await workspaces.write((w) => {
+      if (state === 'error' || state === 'missing') {
+        w.transition(tree.id, { from: 'creating', to: state, errorCode: 'git-failed' });
+        return;
+      }
+      w.transition(tree.id, { from: 'creating', to: 'setup' });
+      if (state === 'ready') w.transition(tree.id, { from: 'setup', to: 'ready' });
+    });
+  }
+  function retrying() {
+    const done = Promise.withResolvers<WorktreeRecord>();
+    const startRetry = vi.fn((workspace: string) =>
+      Promise.resolve({ tree: workspaces.worktree(workspace) ?? tree, done: done.promise }),
+    );
+    deps.provisioner.startRetry = startRetry;
+    return { startRetry, done };
+  }
+
+  it.each(['error', 'missing'] as const)(
+    'retries a bound tree in %s through Provisioner, answering before its Git work is done',
+    async (state) => {
+      await at(state);
+      const { startRetry, done } = retrying();
+      await directories.retry(canvas, agent);
+      expect(startRetry).toHaveBeenCalledExactlyOnceWith(tree.id);
+      expect(deps.provisioner.provision).not.toHaveBeenCalled();
+      // Made again, it is offered its setup (its card, yours), as a start's would be.
+      expect(deps.setups.prepare).not.toHaveBeenCalled();
+      done.resolve({ ...tree, state: 'setup' });
+      await vi.waitFor(() => {
+        expect(deps.setups.prepare).toHaveBeenCalledExactlyOnceWith(tree.id);
+      });
+    },
+  );
+
+  it('waits for a retry going on before closing, and offers no setup once closing', async () => {
+    await at('error');
+    const { done } = retrying();
+    await directories.retry(canvas, agent);
+    let closed = false;
+    const closing = directories.close().then(() => {
+      closed = true;
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(closed).toBe(false);
+    done.resolve({ ...tree, state: 'setup' });
+    await closing;
+    expect(deps.setups.prepare).not.toHaveBeenCalled();
+  });
+
+  it('offers a tree in setup its card again, never running its setup, and leaves a ready one', async () => {
+    const { startRetry } = retrying();
+    await at('setup');
+    await directories.retry(canvas, agent);
+    expect(deps.setups.prepare).toHaveBeenCalledExactlyOnceWith(tree.id);
+    expect(startRetry).not.toHaveBeenCalled();
+    await workspaces.write((w) => w.transition(tree.id, { from: 'setup', to: 'ready' }));
+    await directories.retry(canvas, agent);
+    expect(startRetry).not.toHaveBeenCalled();
+    expect(deps.setups.prepare).toHaveBeenCalledOnce();
+  });
+
+  it('recovers a pending change’s old tree, but never switches it', async () => {
+    await at('missing');
+    await workspaces.write((w) => {
+      w.plan(canvas, agent, 'group/g');
+    });
+    const before = workspaces.binding(canvas, agent);
+    const { startRetry, done } = retrying();
+    await directories.retry(canvas, agent);
+    expect(startRetry).toHaveBeenCalledExactlyOnceWith(tree.id);
+    done.resolve(tree);
+    expect(workspaces.binding(canvas, agent)).toEqual(before);
+  });
+
+  it('tries an agent with no tree again as a start would: its failure forgotten, its project found again', async () => {
+    await workspaces.write((w) => {
+      w.unbind(canvas, agent);
+      w.retain(tree.id);
+    });
+    vi.mocked(deps.provisioner.provision).mockRejectedValue(new Error('Too many workspaces.'));
+    expect(await directories.workingDirectory(canvas, agent)).toMatchObject({ reason: 'creating' });
+    await vi.waitFor(() => {
+      expect(directories.provisioning(canvas, 'agent/a')).toMatchObject({
+        making: false,
+        error: 'Too many workspaces.',
+        project: { kind: 'repository' },
+      });
+    });
+    expect(await directories.workingDirectory(canvas, agent)).toMatchObject({ reason: 'error' });
+    const making = Promise.withResolvers<WorktreeRecord>();
+    vi.mocked(deps.provisioner.provision).mockReturnValue(making.promise);
+    await directories.retry(canvas, agent);
+    expect(deps.provisioner.repository).toHaveBeenCalledTimes(2);
+    expect(directories.provisioning(canvas, 'agent/a')).toEqual({
+      making: true,
+      project: { kind: 'repository' },
+    });
+    making.resolve(tree);
+  });
+
+  it('makes nothing for a folder that isn’t a repository, nor without a project, nor once closing', async () => {
+    await workspaces.write((w) => {
+      w.unbind(canvas, agent);
+      w.retain(tree.id);
+      w.bindCanvas(canvas, null);
+    });
+    vi.mocked(deps.provisioner.repository).mockResolvedValue({ kind: 'not-git' });
+    await directories.retry(canvas, agent);
+    expect(directories.provisioning(canvas, 'agent/a')).toEqual({
+      making: false,
+      project: { kind: 'not-git' },
+    });
+    root = undefined;
+    await directories.retry(canvas, agent);
+    expect(deps.provisioner.provision).not.toHaveBeenCalled();
+    directories.stop();
+    await expect(directories.retry(canvas, agent)).rejects.toThrow(/closing/);
+  });
+
+  it('says what discovery found, and a refusal’s sentence', async () => {
+    await workspaces.write((w) => {
+      w.unbind(canvas, agent);
+      w.retain(tree.id);
+    });
+    vi.mocked(deps.provisioner.repository).mockResolvedValue({
+      kind: 'refused',
+      reason: 'subdirectory',
+      sentence: 'Choose its top level.',
+    });
+    expect(directories.provisioning(canvas, 'agent/a')).toEqual({ making: false });
+    await directories.workingDirectory(canvas, agent);
+    expect(directories.provisioning(canvas, 'agent/a')).toEqual({
+      making: false,
+      project: { kind: 'refused', sentence: 'Choose its top level.' },
+    });
+  });
 });

@@ -98,7 +98,7 @@ describe('canvas.batch', () => {
       revs: Record<string, number>;
     };
     expect(revision()).toBe(before + 1);
-    expect(revs).toEqual({ [`canvas:${CANVAS}`]: revision() });
+    expect(revs).toMatchObject({ [`canvas:${CANVAS}`]: revision() });
     expect(node(results[0].id)?.data).toMatchObject({ adapter: 'codex', role: 'Tests' });
     const b = node('b');
     expect(b?.type === 'agent' && findItem(b.data.queue ?? [], results[1].id)?.item).toEqual({

@@ -585,6 +585,54 @@ describe.skipIf(process.platform === 'win32')('Provisioner', () => {
     });
   });
 
+  it('records a retry before running it: started, it answers once its new attempt is on disk', async () => {
+    /** A runner holding every `worktree add` until it is let go. */
+    class Held extends GitRunner {
+      readonly go = Promise.withResolvers<undefined>();
+      override async run(call: GitCall): Promise<GitOutput> {
+        if (call.args[0] === 'worktree' && call.args[1] === 'add') await this.go.promise;
+        return super.run(call);
+      }
+    }
+    const runner = new Held(runnerDeps());
+    const p = provisioner({ git: runner });
+    const repository = await repositoryOf(p);
+    const { worktree, job } = await workspaces.write((w) =>
+      p.intend(w, {
+        canvas: CANVAS,
+        repository,
+        owner: OWNER,
+        base: { checkout: app, ref: 'refs/heads/main', oid: base },
+      }),
+    );
+    // Its branch is somewhere else: making it fails, touching nothing.
+    writeFileSync(path.join(app, 'more.txt'), 'more\n');
+    git(app, env, 'add', 'more.txt');
+    commit(app, env, 'more');
+    git(app, env, 'update-ref', worktree.branchRef, git(app, env, 'rev-parse', 'HEAD').trim());
+    expect(await p.run(job?.id ?? '')).toMatchObject({ state: 'error', errorCode: 'branch-moved' });
+    git(app, env, 'update-ref', '-d', worktree.branchRef);
+    const changed = vi.fn();
+    const q = provisioner({ git: runner, changed });
+    const [first, second] = await Promise.all([
+      q.startRetry(worktree.id),
+      q.startRetry(worktree.id),
+    ]);
+    // Recorded, not yet made: a new attempt of the same intent, its Git work held meanwhile.
+    expect(first.tree).toMatchObject({ id: worktree.id, state: 'creating' });
+    expect(workspaces.worktree(worktree.id)?.state).toBe('creating');
+    expect(workspaces.openJobs()).toHaveLength(1);
+    expect(changed).toHaveBeenCalledWith(CANVAS);
+    expect(second.done).toBe(first.done);
+    expect(existsSync(worktree.path)).toBe(false);
+    runner.go.resolve(undefined);
+    expect(await first.done).toMatchObject({ id: worktree.id, state: 'setup' });
+    // Nothing to retry in one ready for setup: as it is, at once.
+    const again = await q.startRetry(worktree.id);
+    expect(again.tree.state).toBe('setup');
+    expect(await again.done).toMatchObject({ state: 'setup' });
+  });
+
   it('refuses work past the queue’s bound before recording any', async () => {
     const p = provisioner({ queue: new ProvisioningQueue({ capacity: 0 }) });
     const repository = await repositoryOf(p);

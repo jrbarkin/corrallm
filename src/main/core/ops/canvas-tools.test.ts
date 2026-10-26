@@ -100,7 +100,7 @@ describe('canvas.insertTemplate', () => {
       },
       CALLERS['outside-write'],
     )) as { group: string; agents: string[]; revs: Record<string, number> };
-    expect(made.revs).toEqual({ [`canvas:${CANVAS}`]: before + 1 });
+    expect(made.revs).toMatchObject({ [`canvas:${CANVAS}`]: before + 1 });
     expect(revision()).toBe(before + 1);
     const group = doc().nodes.find((n) => n.id === made.group);
     expect(group).toMatchObject({ type: 'frame', data: { label: 'Spec first' } });
@@ -260,7 +260,7 @@ describe('canvas.setArrange', () => {
         },
       ],
     })) as { results: [object, { group: string }]; revs: Record<string, number> };
-    expect(result.revs).toEqual({ [`canvas:${CANVAS}`]: before + 1 });
+    expect(result.revs).toMatchObject({ [`canvas:${CANVAS}`]: before + 1 });
     expect(doc().arrange).toBe(true);
     expect(doc().nodes.some((n) => n.id === result.results[1].group)).toBe(true);
   }, 1000);

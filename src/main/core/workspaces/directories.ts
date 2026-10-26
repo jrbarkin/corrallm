@@ -9,6 +9,7 @@ import type { ProjectFolders } from '../../project';
 import type { TrustedPath } from '../host';
 import { forkSource } from './planner';
 import type { Provisioner, RepositoryFound } from './provision';
+import type { Provisioning } from './list';
 import type { DirectoryResolver, WorkingDirectory } from './resolver';
 import type { SetupService } from './setup';
 import { setupNeedId } from './setup';
@@ -17,7 +18,10 @@ import type { WorkspaceStore, WorktreeRecord } from './store';
 export interface WorkspaceDirectoriesDeps {
   projects: Pick<ProjectFolders, 'of' | 'onAvailability'>;
   workspaces: WorkspaceStore;
-  provisioner: Pick<Provisioner, 'repository' | 'provision' | 'checkout' | 'reconcile' | 'run'>;
+  provisioner: Pick<
+    Provisioner,
+    'repository' | 'provision' | 'checkout' | 'reconcile' | 'run' | 'startRetry'
+  >;
   setups: Pick<SetupService, 'prepare' | 'reconcile'>;
   document: (canvas: CanvasId) => Promise<CanvasDocument>;
   changed?: (canvas: CanvasId) => void;
@@ -35,6 +39,8 @@ export class WorkspaceDirectories implements DirectoryResolver {
   readonly #watching = new Map<CanvasId, () => void>();
   readonly #making = new Map<string, Promise<WorktreeRecord>>();
   readonly #errors = new Map<string, string>();
+  /** What discovery last found of each canvas's picked folder, once it settled (worktree.list's). */
+  readonly #found = new Map<CanvasId, NonNullable<Provisioning['project']>>();
   /** Resumed commit-intent jobs are shared by Provisioner, but must settle before the DB closes. */
   readonly #running = new Set<Promise<WorktreeRecord>>();
   #closed = false;
@@ -71,8 +77,78 @@ export class WorkspaceDirectories implements DirectoryResolver {
 
   invalidate(canvas: CanvasId): void {
     this.#repositories.delete(canvas);
+    this.#found.delete(canvas);
     this.#errors.clear();
     this.changed(canvas);
+  }
+
+  /**
+   * What the resolver knows, in memory, of an owner with no tree yet and of the canvas's picked
+   * folder, without doing anything (worktree.list's: a list never allocates): its provisioning
+   * going on, why it failed, and what discovery found.
+   */
+  provisioning(canvas: CanvasId, owner: WorkspaceOwnerKey): Provisioning {
+    const key = `${canvas}\0${owner}`;
+    const error = this.#errors.get(key);
+    const project = this.#found.get(canvas);
+    return {
+      making: this.#making.has(key),
+      ...(error === undefined ? {} : { error }),
+      ...(project === undefined ? {} : { project }),
+    };
+  }
+
+  /**
+   * Tries an agent's worktree again (worktree.retry, yours alone): its bound tree's recorded
+   * creation or recovery (Provisioner's `startRetry`: never forced, never over a checkout or branch
+   * it didn't make, never deleting one), then, ready for setup, its setup offered (its card: what
+   * runs is still yours to allow, unless you allowed it always); a tree being set up is offered its
+   * card again if it has none, never run. An agent with no tree yet has what kept it from being made
+   * forgotten (a refused discovery, a failed provisioning) and its project found again, then is
+   * made one as its next start would be. A change waiting for your Switch is never switched; its
+   * old tree may be recovered. Resolves once that is recorded or started; making a checkout goes
+   * on after, and its end says the canvas changed.
+   */
+  async retry(canvas: CanvasId, agent: AgentId): Promise<void> {
+    if (this.#closed) throw new Error('corrallm is closing: nothing is retried.');
+    const root = this.projectRoot(canvas);
+    if (root === undefined) return;
+    const binding = this.#deps.workspaces.binding(canvas, agent);
+    if (binding !== undefined) {
+      const tree = this.#deps.workspaces.worktree(binding.workspace);
+      if (tree?.state === 'setup') {
+        await this.#deps.setups.prepare?.(tree.id);
+        return;
+      }
+      if (tree?.state !== 'creating' && tree?.state !== 'error' && tree?.state !== 'missing')
+        return;
+      const { done } = await this.#deps.provisioner.startRetry(tree.id);
+      const prepared = done.then(async (now) => {
+        if (now.state === 'setup' && !this.#closed) await this.#deps.setups.prepare?.(now.id);
+        return now;
+      });
+      this.#running.add(prepared);
+      const settled = () => {
+        this.#running.delete(prepared);
+      };
+      void prepared.then(settled, (error: unknown) => {
+        settled();
+        console.warn('A worktree couldn’t be made again:', error);
+      });
+      return;
+    }
+    const owner = workspaceOwner(await this.#deps.document(canvas), agent).key;
+    this.#errors.delete(`${canvas}\0${owner}`);
+    if (!this.#making.has(`${canvas}\0${owner}`)) {
+      this.#repositories.delete(canvas);
+      this.#found.delete(canvas);
+    }
+    const found = await this.#repository(canvas, root);
+    if (found.kind !== 'repository' || this.projectRoot(canvas) !== root || this.#isClosed()) {
+      this.#deps.changed?.(canvas);
+      return;
+    }
+    void this.provision(canvas, owner).catch(() => undefined);
   }
 
   #watch(canvas: CanvasId): void {
@@ -111,6 +187,19 @@ export class WorkspaceDirectories implements DirectoryResolver {
             if (this.projectRoot(canvas) === root && !this.#isClosed())
               w.bindCanvas(canvas, repository);
           });
+        return result;
+      })
+      .then((result) => {
+        // What it found, for the list (once it is still the canvas's discovery): it changed.
+        if (this.#repositories.get(canvas)?.found === found && this.projectRoot(canvas) === root) {
+          this.#found.set(
+            canvas,
+            result.kind === 'refused'
+              ? { kind: 'refused', sentence: result.sentence }
+              : { kind: result.kind },
+          );
+          this.#deps.changed?.(canvas);
+        }
         return result;
       });
     this.#repositories.set(canvas, { root, found });
@@ -314,6 +403,8 @@ export class WorkspaceDirectories implements DirectoryResolver {
         this.changed(canvas);
       });
     this.#making.set(key, made);
+    // Its tree is being made (worktree.list says so); its end says the canvas changed again.
+    this.#deps.changed?.(canvas);
     return made;
   }
 

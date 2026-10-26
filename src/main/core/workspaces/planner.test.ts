@@ -20,7 +20,7 @@ import type { Connection } from '../store/sqlite';
 import type { Store } from '../store/store';
 import { keepCanvases, onDisk, openTestStore } from '../store/test-store';
 import { CALLERS, NO_DESKTOP } from '../test-registry';
-import { WorkspacePlanner } from './planner';
+import { unsafeStep, WorkspacePlanner } from './planner';
 import { WorkspaceStore } from './store';
 import type { NewRepository, NewWorktree, WorktreeRecord, WorktreeState } from './store';
 import type { TreeState } from './cleanup';
@@ -348,6 +348,96 @@ describe('trees left with no agent (B9a C7)', () => {
     expect(workspaces.worktree(A)?.state).toBe('removing');
     expect(workspaces.worktree(B)?.state).toBe('retained');
     expect(removed).toEqual([A]);
+  });
+});
+
+describe('the workspace-safety contract on every plan (B9a §7)', () => {
+  /** A tree's record, in `state`, as the store keeps it. */
+  const record = (id: string, owner: string, at: WorktreeState): WorktreeRecord => ({
+    ...tree(id, owner),
+    state: at,
+    generation: 1,
+    createdAt: 1,
+    errorCode: null,
+  });
+  const TREES = [record(A, 'agent/a', 'ready'), record(B, 'agent/b', 'creating')];
+  const BINDINGS = [
+    { canvas: CANVAS, agent: 'a', workspace: A, generation: 2, desired: null },
+    { canvas: CANVAS, agent: 'b', workspace: B, generation: 3, desired: null },
+  ];
+
+  it('lets no step move an agent working in a tree to another, nor drop it from one', () => {
+    for (const steps of [
+      [{ kind: 'bind', agent: 'a', workspace: B }],
+      [{ kind: 'unbind', agent: 'a' }],
+      [{ kind: 'make', owner: 'group/f', from: A, agents: ['a'] }],
+    ] as const)
+      expect(unsafeStep(steps, TREES, BINDINGS, LONE), JSON.stringify(steps)).toBe('a');
+  });
+
+  it('lets its move wait, a tree be kept or change owner, an agent go, and one whose tree is still being made move', () => {
+    expect(
+      unsafeStep(
+        [
+          { kind: 'plan', agent: 'a', owner: 'group/f' },
+          { kind: 'clear', agent: 'a' },
+          { kind: 'retain', workspace: A },
+          { kind: 'owner', workspace: A, owner: 'group/f' },
+          { kind: 'bind', agent: 'a', workspace: A },
+          { kind: 'bind', agent: 'b', workspace: A },
+          { kind: 'make', owner: 'group/g', from: A, agents: ['b', 'c'] },
+          { kind: 'bind', agent: 'c', workspace: A },
+        ],
+        TREES,
+        BINDINGS,
+        LONE,
+      ),
+    ).toBeUndefined();
+    // Removed from the document: its binding goes, its tree kept (retained), never its work.
+    expect(
+      unsafeStep([{ kind: 'unbind', agent: 'a' }], TREES, BINDINGS, canvasOf(agent('b'))),
+    ).toBe(undefined);
+  });
+
+  it('fails closed: a plan that would move one is refused before the commit, changing nothing', async () => {
+    await twoTrees();
+    /** A planner whose plan, wrongly, moves `a` into b's tree. */
+    class Wrong extends WorkspacePlanner {
+      override plan(commit: Parameters<WorkspacePlanner['plan']>[0]) {
+        const plan = super.plan(commit);
+        return {
+          ...plan,
+          steps: [...plan.steps, { kind: 'bind' as const, agent: 'a', workspace: B }],
+        };
+      }
+    }
+    const wrong = new Documents({
+      store,
+      memory,
+      catalog: CATALOG,
+      defaultAdapter: DEFAULT_ADAPTER,
+      workspaces: new Wrong({ workspaces }),
+    });
+    await wrong.load(CANVAS);
+    const rev = wrong.live(CANVAS).rev;
+    const a = binding('a');
+    const changed = wrong.change(CANVAS, {
+      revision: { op: 'canvas.rename', by: 'you' },
+      build: (document) => ({
+        next: {
+          ...document,
+          nodes: document.nodes.map((node) =>
+            node.id === 'a' ? { ...node, data: { ...node.data, label: 'Renamed' } } : node,
+          ),
+        },
+        result: undefined,
+      }),
+      check: () => undefined,
+      committing: () => undefined,
+    });
+    await expect(changed).rejects.toMatchObject({ code: 'refused', message: /worktree/ });
+    expect(wrong.live(CANVAS).rev).toBe(rev);
+    expect(binding('a')).toEqual(a);
   });
 });
 

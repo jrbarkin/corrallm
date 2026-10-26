@@ -1,5 +1,7 @@
+import { RULES } from '../../../shared/api/rules';
 import type { CanvasId } from '../../../shared/canvas';
 import type { CanvasDocument } from '../../../shared/model/canvas';
+import { nameOf } from '../parties';
 import { bindingPlan } from '../../../shared/model/workspaces';
 import type { BindingPlan, WorkspaceOwnerKey } from '../../../shared/model/workspaces';
 import { OpFailure } from '../call';
@@ -170,6 +172,8 @@ export class WorkspacePlanner {
    */
   async preflight(commit: PlannedCommit): Promise<Preflight> {
     const plan = this.plan(commit);
+    const moved = this.#unsafe(commit, plan.steps);
+    if (moved !== undefined) throw new OpFailure('refused', moved);
     const affected = new Set([
       ...plan.losses.removed,
       ...plan.losses.pending,
@@ -226,6 +230,9 @@ export class WorkspacePlanner {
    */
   within(commit: PlannedCommit, removals?: Removals): Made {
     const { steps } = this.plan(commit);
+    // The contract again, over the records as the write finds them: failing it fails the write.
+    const moved = this.#unsafe(commit, steps);
+    if (moved !== undefined) throw new Error(moved);
     const workspaces = this.#deps.workspaces;
     const made: string[] = [];
     for (const step of steps) {
@@ -316,6 +323,22 @@ export class WorkspacePlanner {
     }
   }
 
+  /**
+   * Why the plan breaks the workspace-safety contract (`unsafeStep`), as a refusal says it; none if
+   * it keeps it.
+   */
+  #unsafe(commit: PlannedCommit, steps: readonly Step[]): string | undefined {
+    const { workspaces } = this.#deps;
+    const agent = unsafeStep(
+      steps,
+      workspaces.worktreesOf(commit.canvas),
+      workspaces.bindingsOf(commit.canvas),
+      commit.after,
+    );
+    if (agent === undefined) return undefined;
+    return `${RULES['workspace-safety'].sentence} This change would move ${nameOf(commit.before.nodes, agent)} out of the worktree it works in.`;
+  }
+
   /** The commit's plan, over the canvas's records as they are now. */
   plan(commit: PlannedCommit): WorkspacePlan {
     const workspaces = this.#deps.workspaces;
@@ -361,6 +384,53 @@ export class WorkspacePlanner {
 }
 
 const NOTHING: WorkspacePlan = { steps: [], losses: { retained: [], pending: [], removed: [] } };
+
+/**
+ * The workspace-safety contract on a plan (B9a §7; RULES' `workspace-safety`), whatever built the
+ * change it is of (an op, a batch, a file's Apply, a revert) and whoever made it: the agent a step
+ * would move out of the tree it works in, if one would. An agent bound to a tree past `creating`
+ * (one it may have worked in) is never bound to another, made a new one, nor unbound while it stays
+ * on the canvas: its move waits for your Switch (a `plan` step) instead, its session keeping its
+ * tree meanwhile. Keeping a tree (`retain`) or naming its owner anew keeps its work; what is
+ * removed of a tree no agent works in is decided apart (the committer's confirmation, or as safe).
+ * No step runs, approves or changes a setup: a plan has none.
+ */
+export function unsafeStep(
+  steps: readonly Step[],
+  trees: readonly WorktreeRecord[],
+  bindings: readonly AgentBinding[],
+  after: CanvasDocument,
+): string | undefined {
+  const byId = new Map(trees.map((tree) => [tree.id, tree]));
+  const bound = new Map(bindings.map(({ agent, workspace }) => [agent, workspace]));
+  const present = new Set(after.nodes.flatMap((node) => (node.type === 'agent' ? [node.id] : [])));
+  /** The tree an agent works in now: none, or one still being made, where nothing ran. */
+  const working = (agent: string): string | undefined => {
+    const workspace = bound.get(agent);
+    if (workspace === undefined) return undefined;
+    return byId.get(workspace)?.state === 'creating' ? undefined : workspace;
+  };
+  for (const step of steps) {
+    switch (step.kind) {
+      case 'bind': {
+        const at = working(step.agent);
+        if (at !== undefined && at !== step.workspace) return step.agent;
+        break;
+      }
+      case 'unbind':
+        if (present.has(step.agent) && working(step.agent) !== undefined) return step.agent;
+        break;
+      case 'make': {
+        const moved = step.agents.find((agent) => working(agent) !== undefined);
+        if (moved !== undefined) return moved;
+        break;
+      }
+      default:
+        break;
+    }
+  }
+  return undefined;
+}
 
 /**
  * What a commit changes of who works where (pure): steps in the order they apply (unbinding,
