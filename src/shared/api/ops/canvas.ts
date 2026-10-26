@@ -115,11 +115,13 @@ export const canvasOps = {
   }),
   'canvas.insertTemplate': define('canvas.insertTemplate', {
     summary:
-      'Inserts a shipped template as a new group, returning its group and agent ids. ' +
+      'Inserts a shipped template’s own top-level nodes without a wrapper, returning roots in ' +
+      'template order and its agent ids. Every inserted node gets a fresh id. ' +
       'Name a template from templates.list; values fill its fields, agents chooses adapters by ' +
       'template role id (null: the default adapter), and connections chooses their connections. ' +
       'Missing connections use each adapter’s first. Filled queue text records its author. ' +
-      'A lead inserts inside its own agent unless parent names another node in its team.',
+      'The roots go under parent when given; a lead inserts inside its own agent unless parent ' +
+      'names another node in its team.',
     input: z.strictObject({
       canvas: OpCanvas,
       template: z.uuid(),
@@ -128,7 +130,10 @@ export const canvasOps = {
       connections: Connections.default({}),
       parent: NodeId.optional(),
     }),
-    output: z.strictObject({ group: NodeId, agents: z.array(AgentId).max(MAX_OP_NODES) }),
+    output: z.strictObject({
+      roots: z.array(NodeId).max(MAX_OP_NODES),
+      agents: z.array(AgentId).max(MAX_OP_NODES),
+    }),
   }),
   'canvas.setArrange': define('canvas.setArrange', {
     summary: 'Turns automatic canvas layout on or off. Turning it on lays out the canvas once now.',

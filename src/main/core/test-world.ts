@@ -691,7 +691,7 @@ export const REAL_FIXTURES: Readonly<Record<OpName, OpFixture>> = {
         request: INSERT_REQUEST,
       },
     ],
-    fresh: ['group', 'agents', 'revs'],
+    fresh: ['roots', 'agents', 'revs'],
     invalid: [
       { template: 'missing' },
       { template: TEMPLATE, values: { feature: 1 } },

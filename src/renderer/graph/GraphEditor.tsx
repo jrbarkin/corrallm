@@ -700,11 +700,11 @@ function Editor({
     // React Flow holds the new nodes by now (its effects run first); it fits once they are measured.
     if (loads > 0) void fitView({ padding: 0.2, maxZoom: 1 });
   }, [loads, fitView]);
-  /** The group a template was last inserted as: the view moves to show it. */
-  const [inserted, setInserted] = useState<string>();
+  /** The template's inserted roots: the view moves to show them together. */
+  const [inserted, setInserted] = useState<readonly string[]>();
   useEffect(() => {
     if (inserted !== undefined)
-      void fitView({ nodes: [{ id: inserted }], padding: 0.3, maxZoom: 1 });
+      void fitView({ nodes: inserted.map((id) => ({ id })), padding: 0.3, maxZoom: 1 });
   }, [inserted, fitView]);
 
   /** Reset the view and run, subscribe to the switched canvas and fit its first snapshot. */
@@ -720,7 +720,7 @@ function Editor({
 
       setEditing(undefined);
       setOpened({ ids: [] });
-      // All queues and the inserted group name the old canvas's agents and groups.
+      // All queues and inserted roots name the old canvas's agents and groups.
       setQueues(undefined);
       setInserted(undefined);
       setSettingsAgent(undefined);
@@ -1741,9 +1741,10 @@ function Editor({
                   connections: choices.connections,
                 }),
                 (result) => {
-                  if ('group' in result) {
-                    selectOne(result.group);
-                    setInserted(result.group);
+                  if ('roots' in result) {
+                    setSelection({ nodes: new Set(result.roots), edges: new Set() });
+                    store.setState({ nodesSelectionActive: false });
+                    setInserted(result.roots);
                   }
                 },
               );

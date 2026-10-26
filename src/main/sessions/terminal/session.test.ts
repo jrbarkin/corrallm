@@ -327,6 +327,45 @@ describe('a Terminal session', () => {
     },
   );
 
+  it.each([undefined, 'Branch: refs/heads/corrallm/profile/tree'])(
+    'restarts with new settings and the exact native id, preserving context %s without replaying a turn',
+    async (workspaceContext) => {
+      const context = workspaceContext === undefined ? {} : { workspaceContext };
+      const using = connector();
+      const first = await start(
+        { model: 'haiku', effort: 'low', mode: 'plan', ...context },
+        { using },
+      );
+      const id = claude().arg('--session-id');
+      if (id === undefined) throw new Error('No native session ID');
+      expect(claude().arg('--model')).toBe('haiku');
+      expect(claude().arg('--permission-mode')).toBe('plan');
+      await first.send({ id: 'hello', text: 'hello' });
+      await until(() => {
+        expect(remembered).toContain(id);
+        expect(last('end')).toBeDefined();
+      });
+      await first.close();
+      fake.transcripts = [id];
+      await start(
+        { resume: id, roleChanged: false, model: null, effort: 'low', mode: null, ...context },
+        { using },
+      );
+      expect(runs).toHaveLength(2);
+      expect(claude().args).toContain(`--resume=${id}`);
+      expect(claude().arg('--effort')).toBe('low');
+      expect(claude().args).not.toContain('--model');
+      expect(claude().args).not.toContain('--permission-mode');
+      expect(claude().args).not.toContain('--system-prompt-snapshot=off');
+      expect(claude().arg('--append-system-prompt')).toBe(
+        workspaceContext === undefined
+          ? undefined
+          : `[corrallm workspace context]\n${workspaceContext}`,
+      );
+      expect(claude().prompts).toEqual([]);
+    },
+  );
+
   it('carries the captured role through native startup and exact-ID resume without sending a prompt', async () => {
     const role = 'Review changes\nKeep project conventions';
     const first = await start({ role });

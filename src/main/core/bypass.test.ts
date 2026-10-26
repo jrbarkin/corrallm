@@ -1593,7 +1593,7 @@ describe('proposal defaults and bounds', () => {
         value: { outcome: 'allowed' },
       });
       const group = doc().nodes.find(
-        (one) => one.type === 'frame' && one.data.label === 'Spec first',
+        (one) => one.type === 'frame' && one.data.label === 'Spec and implementation',
       );
       expect(group).toBeDefined();
       if (field === 'parent') expect(group?.parentId).toBe('lead');

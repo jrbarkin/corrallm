@@ -25,7 +25,7 @@ afterEach(async () => {
   remove?.();
 });
 
-async function open(name: string) {
+async function prepare(name: string, owned = true) {
   const fixture = EXAMPLES.find((example) => example.name === name);
   if (!fixture) throw new Error(name);
   const { root, remove: clean } = scratch('corrallm-template-workspaces-');
@@ -82,7 +82,12 @@ async function open(name: string) {
     NO_DESKTOP,
   );
   const active = core;
-  await active.engines.open(doc.id);
+  if (owned) await active.engines.open(doc.id);
+  return { active, doc, claude, codex, project, env, base };
+}
+
+async function open(name: string) {
+  const { active, doc, claude, codex, project, env, base } = await prepare(name);
   const specs = new Map<string, SessionSpec<SessionMode>>();
   for (const node of doc.nodes.filter((node) => node.type === 'agent')) {
     let result = await active.call('session.open', { canvas: doc.id, agent: node.id }, CALLERS.you);
@@ -124,6 +129,71 @@ async function open(name: string) {
   const read = (agent: string, file: string) => readFileSync(path.join(cwd(agent), file), 'utf8');
   return { project, base, env, specs, cwd, write, read };
 }
+
+it('starts a window session without a core-owned run, raising setup only through the app’s directory/start seam', async () => {
+  const { active, doc, codex } = await prepare('TDD relay', false);
+  expect(await active.call('window.show', { canvas: doc.id }, CALLERS.you)).toMatchObject({
+    ok: true,
+  });
+  expect(active.engines.opened()).toEqual([]);
+  // The app still uses App.tsx's fixed window session channels until the renderer cutover.
+  // Registered session.open needs a core runtime; neither form starts provisioning here.
+  expect(await active.call('session.open', { agent: 'tester' }, CALLERS.you)).toMatchObject({
+    ok: false,
+    error: { code: 'unavailable', sentence: 'No canvas is open in corrallm.' },
+  });
+  expect(
+    await active.call('session.open', { canvas: doc.id, agent: 'tester' }, CALLERS.you),
+  ).toMatchObject({
+    ok: false,
+    error: { code: 'unavailable', sentence: 'That canvas isn’t open in corrallm.' },
+  });
+  expect(await active.call('needs', { canvas: doc.id }, CALLERS.you)).toMatchObject({
+    ok: true,
+    value: { items: [] },
+  });
+  expect(codex.started).toEqual([]);
+  const caller = CALLERS.you;
+  if (caller.kind !== 'human' || caller.window === 'host') throw new Error('No test window');
+  const window = caller.window;
+  expect(await active.channels.call(window, 'session:availability', ['tester'])).toMatchObject({
+    ready: false,
+    reason: 'creating',
+  });
+  let setup: string | undefined;
+  await vi.waitFor(
+    async () => {
+      const needs = await active.call('needs', { canvas: doc.id }, CALLERS.you);
+      if (needs.ok) setup = needs.value.items.find(({ id }) => id.startsWith('setup/'))?.id;
+      expect(setup).toBeDefined();
+    },
+    { timeout: 15000 },
+  );
+  expect(
+    await active.call(
+      'reply',
+      { canvas: doc.id, to: setup, answer: { choice: 'skip' } },
+      CALLERS.you,
+    ),
+  ).toMatchObject({ ok: true });
+  expect(await active.channels.call(window, 'session:availability', ['tester'])).toMatchObject({
+    ready: true,
+  });
+  await active.channels.call(window, 'session:start', [
+    'tester',
+    { connection: 'codex.app-server', model: null, mode: null },
+  ]);
+  expect(codex.started).toHaveLength(1);
+  expect(codex.started[0]?.cwd).toContain('/.corral/worktrees/');
+  expect(
+    await active.call(
+      'project.files',
+      { canvas: doc.id, agent: 'tester', query: 'README' },
+      CALLERS.you,
+    ),
+  ).toMatchObject({ ok: true, value: { items: ['README.md'] } });
+  expect(active.engines.opened()).toEqual([]);
+}, 60000);
 
 const handoffs: Record<string, { write: [string, string][]; reader: string }> = {
   'Spec first': {

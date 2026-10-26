@@ -75,8 +75,14 @@ for (const [name, artifact] of cases) {
       if (name !== 'Head to head')
         expect(doc.nodes.find((node) => node.id === owners[0]?.node)?.type).toBe('frame');
       for (const agent of doc.nodes.filter((node) => node.type === 'agent')) {
-        const opened = await page.evaluate((agent) => window.api.sessionOpen({ agent }), agent.id);
-        if (!opened.ok) {
+        // Use the app's current SessionBackend seam (App.tsx), not session.open, whose C6
+        // service requires a core-owned run. A shown window alone owns no such runtime yet.
+        const availability = await page.evaluate(
+          (id) => window.api.sessionAvailability(id),
+          agent.id,
+        );
+        if (!availability.ready) {
+          expect(availability.sentence, JSON.stringify(availability)).toMatch(/worktree|setup/i);
           await expect(page.getByRole('button', { name: 'Needs you', exact: true })).toBeEnabled({
             timeout: 15000,
           });
@@ -86,10 +92,19 @@ for (const [name, artifact] of cases) {
             .getByRole('button', { name: 'Skip', exact: true });
           await skip.click();
           await expect(skip).toHaveCount(0);
-          expect(
-            await page.evaluate((agent) => window.api.sessionOpen({ agent }), agent.id),
-          ).toMatchObject({ ok: true });
         }
+        const connection = agent.data.connection;
+        if (connection === undefined) throw new Error(`No selected connection for ${agent.id}`);
+        await page.evaluate(
+          ({ agent, connection, role }) =>
+            window.api.startSession(agent, {
+              connection,
+              model: null,
+              mode: null,
+              ...(role === undefined ? {} : { role }),
+            }),
+          { agent: agent.id, connection, role: agent.data.role },
+        );
       }
       const trees = readOnDisk(profile, (db) =>
         db
@@ -114,8 +129,8 @@ for (const [name, artifact] of cases) {
             'uncommitted handoff\n',
           );
           const files = await page.evaluate(
-            ({ agent, query }) => window.api.projectFiles({ agent, query }),
-            { agent: tree.agent, query: path.basename(artifact) },
+            ({ canvas, agent, query }) => window.api.projectFiles({ canvas, agent, query }),
+            { canvas: doc.id, agent: tree.agent, query: path.basename(artifact) },
           );
           expect(files).toMatchObject({ ok: true });
           if (files.ok) expect(files.value.items).toContain(artifact);

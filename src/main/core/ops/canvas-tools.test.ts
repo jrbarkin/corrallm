@@ -5,6 +5,8 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { CanvasDocument, AgentNode } from '../../../shared/model/canvas';
 import type { OpName } from '../../../shared/api/surface';
 import { MAX_MESSAGE_BYTES } from '../../../shared/api/limits';
+import { EXAMPLES } from '../../../shared/examples';
+import { workspaceOwners } from '../../../shared/model/workspaces';
 import { fromFile, toFile } from '../../../shared/model/file';
 import { arrange } from '../../../shared/model/layout';
 import { CATALOG, DEFAULT_ADAPTER } from '../../sessions/adapters';
@@ -88,7 +90,7 @@ async function spec() {
 }
 
 describe('canvas.insertTemplate', () => {
-  it('inserts one group and its agents at one revision, filling, translating and retargeting', async () => {
+  it('inserts the template’s own roots and agents at one revision, filling, translating and retargeting', async () => {
     const template = await spec();
     const before = revision();
     const made = (await applied(
@@ -99,17 +101,20 @@ describe('canvas.insertTemplate', () => {
         agents: { builder: 'codex' },
       },
       CALLERS['outside-write'],
-    )) as { group: string; agents: string[]; revs: Record<string, number> };
+    )) as { roots: string[]; agents: string[]; revs: Record<string, number> };
+    expect(made.roots).toHaveLength(1);
+    expect(doc().nodes).toHaveLength(initial().nodes.length + 4);
+    expect(made).not.toHaveProperty('group');
     expect(made.revs).toEqual({ [`canvas:${CANVAS}`]: before + 1 });
     expect(revision()).toBe(before + 1);
-    const group = doc().nodes.find((n) => n.id === made.group);
-    expect(group).toMatchObject({ type: 'frame', data: { label: 'Spec first' } });
+    const group = doc().nodes.find((n) => n.id === made.roots[0]);
+    expect(group).toMatchObject({ type: 'frame', data: { label: 'Spec and implementation' } });
     const agents = doc().nodes.filter(
       (n): n is AgentNode => made.agents.includes(n.id) && n.type === 'agent',
     );
     expect(agents).toHaveLength(template.agents.length);
     for (const node of agents) {
-      expect(node.parentId).toBe(made.group);
+      expect(node.parentId).toBe(made.roots[0]);
       expect(node.id).toMatch(/^[a-f0-9-]{36}$/);
       expect(node.data.connection).toBe(
         CATALOG.adapters.find((a) => a.id === (node.data.adapter ?? DEFAULT_ADAPTER))
@@ -133,7 +138,7 @@ describe('canvas.insertTemplate', () => {
     );
     expect(rows).toEqual(
       expect.arrayContaining([
-        { entity: `node/${made.group}` },
+        { entity: `node/${String(made.roots[0])}` },
         { entity: `node/${String(planner?.id)}` },
       ]),
     );
@@ -144,14 +149,14 @@ describe('canvas.insertTemplate', () => {
       'canvas.insertTemplate',
       { template: template.id, values: { feature: 'Build it' } },
       CALLERS.lead,
-    )) as { group: string };
-    expect(doc().nodes.find((n) => n.id === lead.group)?.parentId).toBe('lead');
+    )) as { roots: string[] };
+    expect(doc().nodes.find((n) => n.id === lead.roots[0])?.parentId).toBe('lead');
     const yours = (await applied('canvas.insertTemplate', {
       template: template.id,
       values: { feature: 'Your work' },
-      parent: lead.group,
-    })) as { group: string; agents: string[] };
-    expect(doc().nodes.find((n) => n.id === yours.group)?.parentId).toBe(lead.group);
+      parent: lead.roots[0],
+    })) as { roots: string[]; agents: string[] };
+    expect(doc().nodes.find((n) => n.id === yours.roots[0])?.parentId).toBe(lead.roots[0]);
     const planner = doc().nodes.find(
       (n) => yours.agents.includes(n.id) && n.data.label === 'Planner',
     );
@@ -165,20 +170,47 @@ describe('canvas.insertTemplate', () => {
       request: '2f1ad1f9-7978-4f49-b7ae-39291affdcf9',
     };
     const first = (await applied('canvas.insertTemplate', args)) as {
-      group: string;
+      roots: string[];
       agents: string[];
     };
     const before = revision();
     expect(await applied('canvas.insertTemplate', args)).toEqual(first);
     expect(revision()).toBe(before);
     const second = (await applied('canvas.insertTemplate', { ...args, request: undefined })) as {
-      group: string;
+      roots: string[];
       agents: string[];
     };
-    expect(second.group).not.toBe(first.group);
+    expect(second.roots[0]).not.toBe(first.roots[0]);
     expect(second.agents.some((id) => first.agents.includes(id))).toBe(false);
-    expect(doc().nodes.find((n) => n.id === second.group)?.data.label).toBe('Spec first 2');
+    expect(doc().nodes.find((n) => n.id === second.roots[0])?.data.label).toBe(
+      'Spec and implementation',
+    );
   });
+  it.each([undefined, 'lead'])(
+    'keeps Head to head’s three ordered roots separate unless parent is %s',
+    async (parent) => {
+      const template = EXAMPLES.find(({ name }) => name === 'Head to head');
+      if (!template) throw new Error('No template');
+      const before = new Set(doc().nodes.map(({ id }) => id));
+      const made = (await applied('canvas.insertTemplate', {
+        template: fromFile(template.text, CATALOG, DEFAULT_ADAPTER).id,
+        ...(parent === undefined ? {} : { parent }),
+      })) as { roots: string[]; agents: string[] };
+      const added = doc().nodes.filter(({ id }) => !before.has(id));
+      expect(added).toHaveLength(3);
+      expect(added.map(({ data }) => data.label)).toEqual(['Claude', 'Codex', 'Judge']);
+      expect(made.roots).toEqual(added.map(({ id }) => id));
+      expect(made.agents).toEqual(made.roots);
+      expect(added.map(({ parentId }) => parentId)).toEqual([parent, parent, parent]);
+      if (parent === undefined) expect(workspaceOwners({ ...doc(), nodes: added })).toHaveLength(3);
+      if (parent !== undefined) {
+        const owner = workspaceOwners(doc()).find(({ agents }) =>
+          agents.includes(made.agents[0] ?? ''),
+        );
+        expect(owner).toMatchObject({ key: 'group/lead', agents: ['lead', ...made.agents] });
+      }
+    },
+  );
   it('refuses unknown template choices and overlong expanded text without a revision', async () => {
     const template = await spec();
     const before = revision();
@@ -259,10 +291,10 @@ describe('canvas.setArrange', () => {
           args: { template: template.id, values: { feature: 'Batch work' } },
         },
       ],
-    })) as { results: [object, { group: string }]; revs: Record<string, number> };
+    })) as { results: [object, { roots: string[] }]; revs: Record<string, number> };
     expect(result.revs).toEqual({ [`canvas:${CANVAS}`]: before + 1 });
     expect(doc().arrange).toBe(true);
-    expect(doc().nodes.some((n) => n.id === result.results[1].group)).toBe(true);
+    expect(doc().nodes.some((n) => n.id === result.results[1].roots[0])).toBe(true);
   }, 1000);
   it('lays out when enabled as one commit and changes nothing when repeated', async () => {
     const before = doc();

@@ -352,12 +352,16 @@ export function fakeCanvas(initial: CanvasDocument) {
             args.connections,
             { catalog: catalog(), defaultAdapter: DEFAULT_AGENT },
           );
-          const made = insert(document, part, { name: template.name }, context);
-          const group = made.result.id;
+          const made = insert(
+            document,
+            part,
+            args.parent === undefined ? {} : { parent: args.parent },
+            context,
+          );
           built = {
             next: made.next,
             result: {
-              group,
+              roots: made.result.roots,
               agents: made.next.nodes
                 .filter(
                   (node) =>
