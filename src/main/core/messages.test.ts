@@ -2496,10 +2496,13 @@ describe('telling an agent of a withdrawal after receipt', () => {
     expect(
       await started.call('session.open', { canvas: CANVAS, agent: 'builder' }, asHuman(7)),
     ).toMatchObject({ ok: true });
-    await started.channels.call(7, 'session:send', [
-      'builder',
-      { id: crypto.randomUUID(), text: 'Typed in the app' },
-    ]);
+    expect(
+      await started.call(
+        'message',
+        { canvas: CANVAS, to: 'builder', body: 'Typed in the app' },
+        asHuman(7),
+      ),
+    ).toMatchObject({ ok: true });
     await vi.waitFor(() => {
       expect(sent(appServer)[0]).toContain(withdrawalNote(id));
     });
@@ -2873,10 +2876,13 @@ describe('exhausted usage', () => {
       expect(
         await started.call('session.open', { canvas: CANVAS, agent: 'builder' }, asHuman(7)),
       ).toMatchObject({ ok: true });
-      await started.channels.call(7, 'session:send', [
-        'builder',
-        { id: crypto.randomUUID(), text: 'Typed in the app' },
-      ]);
+      expect(
+        await started.call(
+          'message',
+          { canvas: CANVAS, to: 'builder', body: 'Typed in the app' },
+          asHuman(7),
+        ),
+      ).toMatchObject({ ok: true });
       await vi.waitFor(() => {
         expect(first).toBe(false);
       });

@@ -722,16 +722,11 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
   const canvasFiles = new CanvasFiles({ host, memory, documents });
   const channels = new Channels({
     processes: children,
-    catalog: CATALOG,
     windows,
     get engines() {
       return engines;
     },
     sessions,
-    admitManual: () => {
-      const refused = stopping('message');
-      if (refused && !refused.ok) throw new Error(refused.error.sentence);
-    },
   });
   const isLead = config.leads ?? (() => false);
   // What the core says of each canvas it keeps: its `canvas:<c>` topic, from each commit, and the

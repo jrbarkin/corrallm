@@ -1,33 +1,17 @@
-import { adapterIn } from '../../shared/adapter';
-import type { AdapterId, Catalog } from '../../shared/adapter';
 import type { IpcArgs } from '../../shared/ipc';
 import {
   CODEX_MODES,
   ELICITATION_ACTIONS,
   EFFORT_PATTERN,
-  IMAGE_TYPES,
-  imageBytes,
   MAX_ANSWER_LENGTH,
   MAX_ID_LENGTH,
   MAX_FORM_FIELDS,
-  MAX_MCP_NAME_LENGTH,
-  MAX_MESSAGE_LENGTH,
   MAX_QUESTIONS,
-  MCP_CHANGES,
   MODEL_PATTERN,
   PERMISSION_MODES,
   PLAN_MODES,
 } from '../../shared/session';
-import { MAX_IMAGE_BYTES, MAX_IMAGE_TOTAL, MAX_IMAGES } from '../../shared/api/limits';
-import type {
-  FormValue,
-  MessageImage,
-  PlanAnswer,
-  SessionAnswer,
-  SessionMode,
-  UserMessage,
-} from '../../shared/session';
-import { isNativeId } from './id';
+import type { FormValue, PlanAnswer, SessionAnswer, SessionMode } from '../../shared/session';
 
 /*
  * Parsers for the session:* channels' arguments, which come from an untrusted renderer: each
@@ -35,104 +19,15 @@ import { isNativeId } from './id';
  * throws. Nothing the renderer sent is passed on as it came.
  */
 
-/**
- * session:send: a message the agent window's composer sends its agent's session. A window runs no
- * queue (B11 Design §8: every canvas's run is the core's), so no message of a window's is the run's
- * work: none carries a queue origin or a task.
- */
-export function parseSendArgs(args: unknown[]): IpcArgs<'session:send'> {
-  const [agentId, message] = expect(args, 2, 'an agent and a message');
-  const { id, text, images } = record(message, 'the message', ['id', 'text', 'images']);
-  const pasted = images === undefined ? [] : parseImages(images);
-  // A message may be only an image.
-  if (typeof text !== 'string' || (text.trim() === '' && pasted.length === 0)) {
-    throw new TypeError('Expected the message to have text');
-  }
-  if (text.length > MAX_MESSAGE_LENGTH) throw new RangeError('The message is too long');
-  const parsed: UserMessage = {
-    id: parseId(id, 'message'),
-    text,
-    ...(pasted.length === 0 ? {} : { images: pasted }),
-  };
-  return [parseId(agentId, 'agent'), parsed];
-}
-
-/** The longest base64 an image of the largest size takes. */
-const MAX_IMAGE_BASE64 = Math.ceil(MAX_IMAGE_BYTES / 3) * 4;
-const BASE64 = /^[A-Za-z0-9+/]+={0,2}$/;
-
-/** Images pasted into a message: a few, of the kinds Claude reads, base64-encoded, not too large. */
-function parseImages(value: unknown): MessageImage[] {
-  if (!Array.isArray(value) || value.length > MAX_IMAGES) {
-    throw new TypeError(`Expected at most ${String(MAX_IMAGES)} images`);
-  }
-  const images = value.map((image): MessageImage => {
-    const { mediaType, data } = record(image, 'an image', ['mediaType', 'data']);
-    if (
-      typeof data !== 'string' ||
-      data.length === 0 ||
-      data.length % 4 !== 0 ||
-      !BASE64.test(data)
-    ) {
-      throw new TypeError('Expected an image, base64-encoded');
-    }
-    if (data.length > MAX_IMAGE_BASE64) throw new RangeError('The image is too large');
-    return { mediaType: oneOf(mediaType, IMAGE_TYPES, 'kind of image'), data };
-  });
-  const bytes = images.reduce((sum, { data }) => sum + imageBytes(data), 0);
-  if (bytes > MAX_IMAGE_TOTAL) throw new RangeError('The images are too large together');
-  return images;
-}
-
 export function parseAnswerArgs(args: unknown[]): IpcArgs<'session:answer'> {
   const [agentId, promptId, answer] = expect(args, 3, 'an agent, a prompt and an answer');
   return [parseId(agentId, 'agent'), parseId(promptId, 'prompt'), parseAnswer(answer)];
 }
 
-/** session:options: one of the adapters the catalog lists. */
-export function parseOptionsArgs(args: unknown[], catalog: Catalog): IpcArgs<'session:options'> {
-  if (args.length < 1 || args.length > 2)
-    throw new TypeError('Expected an adapter and optionally an agent.');
-  const adapter = parseAdapter(args[0], catalog);
-  return args.length === 1 ? [adapter] : [adapter, parseId(args[1], 'agent')];
-}
-
-/** For channels that take only the agent: session:interrupt, session:list and session:mcp. */
+/** For channels that take only the agent: session:interrupt and session:availability. */
 export function parseAgentArgs(args: unknown[]): [agentId: string] {
   const [agentId] = expect(args, 1, 'an agent');
   return [parseId(agentId, 'agent')];
-}
-
-/** One of the adapters the catalog lists. */
-function parseAdapter(value: unknown, catalog: Catalog): AdapterId {
-  const found = adapterIn(catalog, typeof value === 'string' ? value : '');
-  if (!found) {
-    throw new TypeError(`Expected an adapter: ${catalog.adapters.map((a) => a.id).join(', ')}`);
-  }
-  return found.id;
-}
-
-/** session:resume: an agent, and the id of a conversation (main opens it only if it listed it). */
-export function parseResumeArgs(args: unknown[]): IpcArgs<'session:resume'> {
-  const [agentId, sessionId] = expect(args, 2, 'an agent and a conversation');
-  if (!isNativeId(sessionId)) {
-    throw new TypeError("Expected the conversation's id");
-  }
-  return [parseId(agentId, 'agent'), sessionId];
-}
-
-/** session:mcp-change: an agent, one of its MCP servers by name, and what to do to it. */
-export function parseMcpChangeArgs(args: unknown[]): IpcArgs<'session:mcp-change'> {
-  const [agentId, server, change] = expect(args, 3, 'an agent, an MCP server and a change');
-  if (
-    typeof server !== 'string' ||
-    server === '' ||
-    server.length > MAX_MCP_NAME_LENGTH ||
-    /\p{Cc}/u.test(server)
-  ) {
-    throw new TypeError('Expected the MCP server’s name');
-  }
-  return [parseId(agentId, 'agent'), server, oneOf(change, MCP_CHANGES, 'change to an MCP server')];
 }
 
 export function parseModeArgs(args: unknown[]): IpcArgs<'session:mode'> {

@@ -610,10 +610,13 @@ async function windowTurn(images?: UserMessage['images']): Promise<void> {
   expect(await core.call('session.open', { canvas: CANVAS, agent: 'a' }, asHuman(7))).toMatchObject(
     { ok: true },
   );
-  await core.channels.call(7, 'session:send', [
-    'a',
-    { id: crypto.randomUUID(), text: 'From a window', ...(images ? { images } : {}) },
-  ]);
+  expect(
+    await core.call(
+      'message',
+      { canvas: CANVAS, to: 'a', body: 'From a window', ...(images ? { images } : {}) },
+      asHuman(7),
+    ),
+  ).toMatchObject({ ok: true });
   await vi.waitFor(() => {
     expect(sent).toHaveLength(1);
   });

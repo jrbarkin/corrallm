@@ -16,7 +16,7 @@ No Node, Electron or DOM imports here.
 
 ## Adding an IPC channel
 
-A window's call is an operation (see The registry). A hand-written channel is only for the session panels that X13 has not rewired yet (`session:*`). Runs are core-owned; there is no run read/save/ready channel. To add one:
+A window's call is an operation (see The registry). No new hand-written channel is added: since B11 X13 the agent window calls none (its sends, panels and options are operations), and B11 X14 deletes the `session:*` channels that remain (answer, interrupt, mode, model, effort, stopTask and availability, with the `session:event` and `session:availability` events). Runs are core-owned; there is no run read/save/ready channel. The recipe, for what X14 removes:
 
 1. Declare it in `IpcContract` in `src/shared/ipc.ts`: `'domain:action': { args: [path: string]; result: Thing }`. Add the matching method to `InvokeApi` (part of `AppApi`) and its channel to `API_CHANNELS`.
 2. Add an entry to `createHandlers` in `src/main/core/channels.ts`: `'domain:action': { parseArgs, handler }`. `parseArgs` receives `unknown[]` from an untrusted renderer and must validate every argument (type, length, allowed values) or throw. Use `noArgs` for channels without arguments.
@@ -32,6 +32,4 @@ The window's link answers the core one fixed request, `drafts.flush` (`GuiSide` 
 
 `session:interrupt` takes only the agent; the parser rejects extra arguments. The core resolves the canvas from the calling window as for other session channels. Every interrupt uses the same connection behavior; neither a process id nor a thread id comes from the renderer.
 
-`session:send`, `session:record` and `session:unqueue` are fixed transitional calls for AgentView until X13. Send validates a bounded UserMessage but admits it only as you, from the port’s shown canvas, into the core’s durable Delivery mailbox; caller-supplied origin/from/task never confer identity or run ownership. Its result is the core message id. Record keeps a view-handled command as a completed message without dispatch. Unqueue validates a message id and checks that it is your message to that agent. Each obeys the core shutdown write barrier. No window message/withdraw audience or image-capable operation schema is registered by this bridge. The native session query channels remain for X13.
-
-`session:availability` reads one agent's readiness using the calling window's canvas. It takes only a bounded agent id and returns readiness and a sentence, never a directory. The canvas-scoped `session:availability` event reports readiness changes; `onSessionAvailability` returns its listener's remover. `session:options` additionally accepts an optional bounded agent id for a contextual read. These remain fixed preload functions, not generic channels.
+`session:availability` reads one agent's readiness using the calling window's canvas. It takes only a bounded agent id and returns readiness and a sentence, never a directory. The canvas-scoped `session:availability` event reports readiness changes; `onSessionAvailability` returns its listener's remover. These remain fixed preload functions, not generic channels, until X14.

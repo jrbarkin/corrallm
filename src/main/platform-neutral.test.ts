@@ -31,7 +31,7 @@ const NAMES = /claude|codex|anthropic|openai|chatgpt|(['"])(?:sdk|app-server)\1/
 const ALLOWED: Readonly<Record<string, number>> = {
   'src/main/files.ts': 1,
   'src/main/native-selftest.ts': 1,
-  'src/main/sessions/args.ts': 4,
+  'src/main/sessions/args.ts': 3,
   'src/main/sessions/connector.ts': 8,
   'src/main/sessions/fake.ts': 12,
   'src/renderer/agent/AgentChip.tsx': 2,
@@ -71,7 +71,7 @@ const ALLOWED: Readonly<Record<string, number>> = {
   'src/shared/engine/transcript/driver.ts': 1,
   'src/shared/engine/transcript/receive.ts': 5,
   'src/shared/engine/transcript/unavailable.ts': 2,
-  'src/shared/ipc.ts': 3,
+  'src/shared/ipc.ts': 2,
   'src/shared/model/session.ts': 7,
   'src/shared/model/words.ts': 5,
   'src/shared/session.ts': 5,

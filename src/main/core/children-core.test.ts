@@ -93,6 +93,12 @@ it('ends a helper still running as it closes, and starts none once closing', asy
     running.delete(group);
     (group === 42 ? shell : cli).emit('exit', null, 'SIGTERM');
   });
+  const canvas = '4b1f6c2e-8d3a-4e5f-9a0b-7c6d5e4f3a2b' as CanvasId;
+  const project = path.join(profile, 'project');
+  const file = path.join(profile, 'canvas.corral');
+  await mkdir(project);
+  await copyFile(path.join(import.meta.dirname, 'test-worker.corral'), file);
+  await keepCanvases(profile, { [canvas]: { file, project } });
   const answered = Promise.withResolvers<undefined>();
   const asked = Promise.withResolvers<undefined>();
   core = await createCore(
@@ -125,10 +131,11 @@ it('ends a helper still running as it closes, and starts none once closing', asy
     },
     NO_DESKTOP,
   );
-  const reading = Promise.resolve(core.channels.call(7, 'session:options', ['codex']));
+  await core.engines.open(canvas);
+  const reading = core.call('session.options', { canvas, adapter: 'codex' }, CALLERS.you);
   await asked.promise;
-  const file = path.join(profile, 'sessions', 'pids.json');
-  expect(JSON.parse(await readFile(file, 'utf8'))).toEqual({
+  const pids = path.join(profile, 'sessions', 'pids.json');
+  expect(JSON.parse(await readFile(pids, 'utf8'))).toEqual({
     version: 1,
     children: [{ pid: 42, started: 1000 }],
   });
@@ -136,15 +143,16 @@ it('ends a helper still running as it closes, and starts none once closing', asy
   core = undefined;
   await closing;
   expect(signal).toHaveBeenCalledExactlyOnceWith(42, 'SIGTERM');
-  expect(JSON.parse(await readFile(file, 'utf8'))).toEqual({ version: 1, children: [] });
+  expect(JSON.parse(await readFile(pids, 'utf8'))).toEqual({ version: 1, children: [] });
   answered.resolve(undefined);
   await reading.catch(() => undefined);
   expect(spawned).toHaveBeenCalledTimes(1);
   expect(cli.kill).not.toHaveBeenCalled();
-  expect(JSON.parse(await readFile(file, 'utf8'))).toEqual({ version: 1, children: [] });
+  expect(JSON.parse(await readFile(pids, 'utf8'))).toEqual({ version: 1, children: [] });
 });
 
-it.each(['operation', 'channel', 'engine'] as const)(
+// No window channel reads a service that starts a process since B11 X13 (its options are an op).
+it.each(['operation', 'engine'] as const)(
   'owns processes started by a core %s’s asynchronous services',
   async (from) => {
     const child = Object.assign(new EventEmitter(), { pid: 42, kill: vi.fn() });
@@ -193,7 +201,6 @@ it.each(['operation', 'channel', 'engine'] as const)(
       NO_DESKTOP,
     );
     if (from === 'operation') await core.call('catalog.installed', {}, CALLERS.you);
-    else if (from === 'channel') await core.channels.call(7, 'session:options', ['codex']);
     else await (await core.engines.open(canvas)).sessions.settingsOptions('codex');
     const file = path.join(profile, 'sessions', 'pids.json');
     expect(JSON.parse(await readFile(file, 'utf8'))).toEqual({
