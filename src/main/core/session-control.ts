@@ -59,6 +59,11 @@ import { requireAgent } from './ops/agent-document';
  *   mutation gate, protecting every agent working in that tree, and, on a proposal's Allow, only if
  *   R5's guard reads the same again (else a conflict: settled stale).
  * - R5: a token's code rewind applies nothing: it comes to you as a proposal carrying its guard.
+ * - Conversations (§7): listed to their caller alone (callerKey), resumed only from that list, in
+ *   its binding, idle, never one another agent holds; options read in the agent's workspace now.
+ * - /mcp: only a server its session reports, on a connection whose catalog panels show them; a
+ *   change answers with every server as it is then, and says so in the transcript.
+ * - A command the agent view answers in a panel is recorded as your message, never sent.
  */
 
 /** How long a rewind proposal's words quote the message it goes back to. */
