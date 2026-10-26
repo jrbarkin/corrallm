@@ -1,6 +1,6 @@
 import { events, renderReady } from '../test-render';
 import { afterEach, expect, it, vi } from 'vitest';
-import { screen, within } from '@testing-library/react';
+import { act, screen, within } from '@testing-library/react';
 
 import { CARD_SIZE } from '../../shared/model/geometry';
 import { GraphEditor } from '../test-graph';
@@ -29,45 +29,62 @@ it('shows topic workspace attention beside Idle, glows the dock, and opens the e
       }}
       onCanvas={(canvas) => {
         core = canvas;
-        canvas.core.snapshot(`worktrees:${canvas.document.id}`, {
-          items: [
-            {
-              agent: 'a',
-              mode: 'own',
-              workspace: '11111111-1111-4111-8111-111111111111',
-              generation: 1,
-              branch: 'corral/Builder',
-              base: null,
-              state: 'setup',
-              need,
-              setup: {
-                state: 'pending',
-                command: 'pnpm install',
-                source: 'detected',
-                exitCode: null,
-              },
-            },
-          ],
-          kept: [],
-        });
-        canvas.core.snapshot(`needs:${canvas.document.id}`, {
-          items: [
-            {
-              id: need,
-              canvas: canvas.document.id,
-              kind: 'worktree',
-              for: 'you',
-              by: ['you'],
-              answerIn: 'api',
-              title: 'Set up Builder’s worktree?',
-              detail: 'Runs: pnpm install',
-              choices: [{ value: 'skip', label: 'Skip' }],
-            },
-          ],
-        });
       }}
     />,
   );
+  const canvas = core;
+  if (!canvas) throw new Error('No canvas');
+  const fake = canvas.core;
+  const worktrees = `worktrees:${canvas.document.id}` as const;
+  const needs = `needs:${canvas.document.id}` as const;
+  // The editor has subscribed by the time onCanvas runs, so the core says the workspace and its
+  // card as it would, rather than the test replacing a snapshot the mirror already holds.
+  act(() => {
+    fake.change({
+      topic: worktrees,
+      rev: (fake.state(worktrees)?.rev ?? 0) + 1,
+      replace: {
+        items: [
+          {
+            agent: 'a',
+            mode: 'own',
+            workspace: '11111111-1111-4111-8111-111111111111',
+            generation: 1,
+            branch: 'corral/Builder',
+            base: null,
+            state: 'setup',
+            need,
+            setup: {
+              state: 'pending',
+              command: 'pnpm install',
+              source: 'detected',
+              exitCode: null,
+            },
+          },
+        ],
+        kept: [],
+      },
+    });
+    fake.change({
+      topic: needs,
+      rev: (fake.state(needs)?.rev ?? 0) + 1,
+      replace: {
+        items: [
+          {
+            id: need,
+            canvas: canvas.document.id,
+            kind: 'worktree',
+            for: 'you',
+            by: ['you'],
+            answerIn: 'api',
+            title: 'Set up Builder’s worktree?',
+            detail: 'Runs: pnpm install',
+            choices: [{ value: 'skip', label: 'Skip' }],
+          },
+        ],
+      },
+    });
+  });
   const card = container.querySelector<HTMLElement>('.graph-card');
   if (!card || !core) throw new Error('No card or canvas');
   expect(within(card).getByText('corral/Builder')).toBeTruthy();
