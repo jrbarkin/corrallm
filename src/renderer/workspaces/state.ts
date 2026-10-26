@@ -27,8 +27,8 @@ export function workspaceSharing(item: Workspace, nodes: readonly CanvasNode[]):
   if (item.mode === 'shared-folder') return 'Shared project folder';
   if (item.mode === 'own' || item.group === item.agent) return 'Own worktree';
   const label = nodes.find((node) => node.id === item.group)?.data.label;
-  const group = label ? label : (item.group ?? 'group');
-  return `Shares ${group}’s worktree`;
+  if (label !== undefined && label.length > 0) return `Shares ${label}’s worktree`;
+  return `Shares ${item.group ?? 'group'}’s worktree`;
 }
 
 export function workspaceAttention(item: Workspace | undefined): boolean {

@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { expect, test } from '@playwright/test';
 import { gitEnvironment, makeRepository } from '../src/main/core/workspaces/test-git';
-import { canvasAction, dismissStart } from './canvas-actions';
+import { canvasAction, dismissStart, openNeeds } from './canvas-actions';
 import { launchApp } from './launch';
 
 // All CLIs and setup commands here are fixture programs. Real app, Git, provisioning, topics,
@@ -37,58 +37,69 @@ async function openWorkspaceApp(
       CLAUDE_CONFIG_DIR: config,
     },
   });
-  const page = await app.firstWindow();
-  await page.waitForLoadState('load');
-  await app.evaluate(({ dialog }, project) => {
-    Object.assign(dialog, {
-      showOpenDialog: () => Promise.resolve({ canceled: false, filePaths: [project] }),
+  try {
+    const page = await app.firstWindow();
+    await page.waitForLoadState('load');
+    await app.evaluate(({ dialog }, project) => {
+      Object.assign(dialog, {
+        showOpenDialog: () => Promise.resolve({ canceled: false, filePaths: [project] }),
+      });
+    }, project);
+    const start = page.getByRole('dialog', { name: 'Start a session', exact: true });
+    await expect(start).toBeVisible();
+    await expect(
+      start.getByText('Agents get their own worktrees; groups share one.'),
+    ).toBeVisible();
+    await start.getByRole('button', { name: 'Choose a project folder', exact: true }).click();
+    await expect(
+      start.getByRole('button', { name: 'Project folder: project', exact: true }),
+    ).toBeVisible();
+    const canvas = await page.evaluate(async () => {
+      const result = await window.api.windowGet({});
+      if (!result.ok) throw new Error(result.error.sentence);
+      return result.value.canvas;
     });
-  }, project);
-  const start = page.getByRole('dialog', { name: 'Start a session', exact: true });
-  await expect(start).toBeVisible();
-  await expect(start.getByText('Agents get their own worktrees; groups share one.')).toBeVisible();
-  await start.getByRole('button', { name: 'Choose a project folder', exact: true }).click();
-  const canvas = await page.evaluate(async () => {
-    const result = await window.api.windowGet({});
-    if (!result.ok) throw new Error(result.error.sentence);
-    return result.value.canvas;
-  });
-  if (command !== null)
-    await page.evaluate(
-      async ({ canvas, command }) => {
-        const result = await window.api.projectSetSetupCommand({ canvas, command });
-        if (!result.ok) throw new Error(result.error.sentence);
+    if (command !== null)
+      await page.evaluate(
+        async ({ canvas, command }) => {
+          const result = await window.api.projectSetSetupCommand({ canvas, command });
+          if (!result.ok) throw new Error(result.error.sentence);
+        },
+        { canvas, command },
+      );
+    return {
+      app,
+      page,
+      canvas,
+      project,
+      dir,
+      start,
+      async list() {
+        // Test-fixture inspection only. The product's presentation reads the pushed topic.
+        return page.evaluate(async (canvas) => {
+          const result = await window.api.worktreeList({ canvas });
+          if (!result.ok) throw new Error(result.error.sentence);
+          return result.value;
+        }, canvas);
       },
-      { canvas, command },
-    );
-  return {
-    app,
-    page,
-    canvas,
-    project,
-    dir,
-    start,
-    async list() {
-      // Test-fixture inspection only. The product's presentation reads the pushed topic.
-      return page.evaluate(async (canvas) => {
-        const result = await window.api.worktreeList({ canvas });
-        if (!result.ok) throw new Error(result.error.sentence);
-        return result.value;
-      }, canvas);
-    },
-    async startAgent(name = 'Agent 1') {
-      if (!(await start.isVisible()))
-        await page.getByRole('button', { name: 'Start a session', exact: true }).click();
-      await start.getByRole('button', { name: 'Start Claude Code', exact: true }).click();
-      const panel = page.getByRole('dialog', { name, exact: true });
-      await expect(panel).toBeVisible();
-      return panel;
-    },
-    async dispose() {
-      await close();
-      await rm(dir, { recursive: true, force: true });
-    },
-  };
+      async startAgent(name = 'Agent 1') {
+        if (!(await start.isVisible()))
+          await page.getByRole('button', { name: 'Start a session', exact: true }).click();
+        await start.getByRole('button', { name: 'Start Claude Code', exact: true }).click();
+        const panel = page.getByRole('dialog', { name, exact: true });
+        await expect(panel).toBeVisible();
+        return panel;
+      },
+      async dispose() {
+        await close();
+        await rm(dir, { recursive: true, force: true });
+      },
+    };
+  } catch (error) {
+    await close();
+    await rm(dir, { recursive: true, force: true });
+    throw error;
+  }
 }
 
 test('setup is visible on the fixed card, header and dock; Run finishes without a modal', async () => {
@@ -320,3 +331,41 @@ test('a shared group has one setup card, two workspace marks and two dock glows'
     await world.dispose();
   }
 });
+
+for (const discard of [false, true]) {
+  test(`deleting the last agent offers the core’s ${discard ? 'Discard' : 'Keep'} choice for its work`, async () => {
+    const world = await openWorkspaceApp();
+    const { page } = world;
+    try {
+      const panel = await world.startAgent();
+      await panel
+        .locator('header')
+        .getByRole('button', { name: 'Review setup', exact: true })
+        .click();
+      await page.getByRole('article').getByRole('button', { name: 'Skip', exact: true }).click();
+      await page.getByRole('button', { name: 'Needs you', exact: true }).click();
+      await panel.getByRole('button', { name: 'Back to the canvas', exact: true }).click();
+      const tree = (await world.list()).items[0];
+      if (!tree?.location || !tree.branch) throw new Error('No allocated worktree');
+      await writeFile(path.join(tree.location, 'MY-WORK.txt'), 'keep or explicitly discard this\n');
+      await page.locator('.react-flow__node-agent').click();
+      await page.keyboard.press('Delete');
+      await openNeeds(page);
+      const keep = 'Delete, keep its work';
+      const remove = 'Delete, and discard its worktree and branch';
+      const decision = page
+        .getByRole('article')
+        .filter({ has: page.getByRole('button', { name: keep, exact: true }) });
+      await expect(decision.getByRole('button', { name: remove, exact: true })).toBeVisible();
+      await decision.getByRole('button', { name: discard ? remove : keep, exact: true }).click();
+      await expect(page.locator('.react-flow__node-agent')).toHaveCount(0);
+      await dismissStart(page);
+      await canvasAction(page, 'Canvases');
+      const kept = page.getByRole('region', { name: 'Kept worktrees of Untitled', exact: true });
+      if (discard) await expect(kept).toHaveCount(0, { timeout: 15000 });
+      else await expect(kept).toContainText(tree.branch);
+    } finally {
+      await world.dispose();
+    }
+  });
+}
