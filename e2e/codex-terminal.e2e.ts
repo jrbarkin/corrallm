@@ -170,6 +170,20 @@ async function typeIn(terminal: Locator, ...keys: string[]) {
 
 const status = (view: Locator) => view.locator('.agent-terminal-status');
 const submissions = (view: Locator) => view.locator('.graph-queue-message[data-submission]');
+/**
+ * Waits until corrallm has the `nth` message typed in the terminal (its row, from Codex's
+ * UserPromptSubmit hook, which also tells it the session) and that turn is over (its Stop hook).
+ * The fake logs a prompt before any hook runs, and the status reads Idle until the turn is heard
+ * to begin, so neither says the turn is over: a second prompt sent meanwhile is dropped by a fake
+ * that is still working, and quitting meanwhile loses the session id. Hooks run through login
+ * shells, so on a loaded machine this takes seconds, not Playwright's default five.
+ */
+async function turnOver(view: Locator, nth = 0) {
+  await expect(submissions(view).nth(nth)).toHaveAttribute('data-run', 'completed', {
+    timeout: 15_000,
+  });
+  await expect(status(view)).toHaveText('Idle');
+}
 
 test('runs Codex itself in a terminal in the project folder, and follows its turns', async () => {
   await chooseProject();
@@ -254,12 +268,12 @@ test('the fake preserves text and bracketed paste coalesced with terminal report
   await type(reports + manual);
   await type('\r');
   await expect.poll(prompts).toEqual([manual]);
-  await expect(status(view)).toHaveText('Idle');
+  await turnOver(view);
   const pasted = 'Keep both lines\nand their text';
   await type(reports + '\x1b[200~' + pasted + '\x1b[201~');
   await type('\r');
   await expect.poll(prompts).toEqual([manual, pasted]);
-  await expect(status(view)).toHaveText('Idle');
+  await turnOver(view, 1);
 });
 
 test('the queues’ Run pastes its message into Codex, and hears its turn end', async () => {
@@ -270,7 +284,7 @@ test('the queues’ Run pastes its message into Codex, and hears its turn end', 
   const { view, terminal } = await openShop();
   await typeIn(terminal, manual, 'Enter');
   await expect.poll(prompts).toEqual([manual]);
-  await expect(status(view)).toHaveText('Idle');
+  await turnOver(view);
   await expect(submissions(view)).toHaveCount(1);
   const submissionId = (await submissions(view).first().getAttribute('data-submission')) ?? '';
   expect(submissionId).not.toBe('');
@@ -279,15 +293,15 @@ test('the queues’ Run pastes its message into Codex, and hears its turn end', 
   await expect(submissions(queues)).toHaveCount(1);
   await expect(submissions(queues).first()).toContainText(manual);
   await queues.getByRole('button', { name: 'Run' }).click();
-  await expect(queues.getByRole('status')).toHaveText('All done');
+  await expect(queues.getByRole('status')).toHaveText('All done', { timeout: 15_000 });
   // Pasted in: one prompt, its line break kept.
   expect(await prompts()).toEqual([manual, automated]);
   await expect(submissions(queues)).toHaveCount(1);
   await expect(submissions(queues).first()).toHaveAttribute('data-submission', submissionId);
   // Running the authored queue again repeats its message, never the earlier manual submission.
   await queues.getByRole('button', { name: 'Run' }).click();
-  await expect.poll(prompts).toEqual([manual, automated, automated]);
-  await expect(queues.getByRole('status')).toHaveText('All done');
+  await expect.poll(prompts, { timeout: 15_000 }).toEqual([manual, automated, automated]);
+  await expect(queues.getByRole('status')).toHaveText('All done', { timeout: 15_000 });
   await expect(submissions(queues)).toHaveCount(1);
   await expect(submissions(queues).first()).toHaveAttribute('data-submission', submissionId);
 });
@@ -379,7 +393,8 @@ test('resumes the agent’s Codex session after the app restarts', async () => {
   const { terminal } = await openShop();
   await typeIn(terminal, 'remember this', 'Enter');
   await expect.poll(prompts).toEqual(['remember this']);
-  await expect(status(page.getByRole('dialog', { name: 'Shop' }))).toHaveText('Idle');
+  // Its hook tells corrallm the session: quitting before that loses what to resume.
+  await turnOver(page.getByRole('dialog', { name: 'Shop' }));
   await page.getByRole('button', { name: 'Back to the canvas' }).click();
   await page.keyboard.press('ControlOrMeta+s');
   await expect(page.getByText('team.corral')).toBeVisible();
