@@ -5,7 +5,9 @@ import {
   readdirSync,
   renameSync,
   rmSync,
+  statSync,
   symlinkSync,
+  utimesSync,
   writeFileSync,
 } from 'node:fs';
 import path from 'node:path';
@@ -151,6 +153,34 @@ function branches(): string[] {
     .filter(Boolean);
 }
 
+/** Everything in a checkout but its `.git`: each folder, and each file with what it holds. */
+function contents(at: string): Record<string, string> {
+  const found: Record<string, string> = {};
+  const walk = (folder: string, prefix: string) => {
+    for (const name of readdirSync(folder).sort()) {
+      if (prefix === '' && name === '.git') continue;
+      const file = path.join(folder, name);
+      const relative = `${prefix}${name}`;
+      if (statSync(file).isDirectory()) {
+        found[`${relative}/`] = '';
+        walk(file, `${relative}/`);
+      } else found[relative] = readFileSync(file, 'utf8');
+    }
+  };
+  walk(at, '');
+  return found;
+}
+
+/** Every path below `at`, with what each file holds: what a write through a link would change. */
+function snapshot(at: string): Record<string, string> {
+  const found: Record<string, string> = {};
+  for (const name of readdirSync(at, { recursive: true, encoding: 'utf8' }).sort()) {
+    const file = path.join(at, name);
+    found[name] = statSync(file).isDirectory() ? '/' : readFileSync(file, 'utf8');
+  }
+  return found;
+}
+
 /** A workspace made as it should be: its branch at the base, registered, populated and clean. */
 function expectMade(tree: WorktreeRecord): void {
   expect(tree.state).toBe('setup');
@@ -264,7 +294,7 @@ describe.skipIf(process.platform === 'win32')('Provisioner', () => {
     expectMade(kept(tree.id));
   });
 
-  describe('restart', () => {
+  describe('restart', { timeout: 60_000 }, () => {
     const at =
       (command: string, sub?: string) =>
       (call: GitCall): boolean =>
@@ -306,17 +336,13 @@ describe.skipIf(process.platform === 'win32')('Provisioner', () => {
         ],
       },
       {
-        name: 'part way through populating it',
+        name: 'once it is populated, before that is recorded (nothing changed there since)',
         when: at('read-tree'),
         after: true,
         phase: 'registered',
-        damage: (tree) => {
-          rmSync(path.join(tree.path, 'README.md'));
-          writeFileSync(path.join(tree.path, 'src', 'main.ts'), 'exp');
-        },
         redone: [
           { command: ['worktree', 'add'], times: 0 },
-          { command: ['read-tree'], times: 1 },
+          { command: ['read-tree'], times: 0 },
         ],
       },
       {
@@ -331,6 +357,143 @@ describe.skipIf(process.platform === 'win32')('Provisioner', () => {
         ],
       },
     ];
+
+    /*
+     * A population the core didn't mark may have been changed while it was stopped: by you, by
+     * anything running as you. It is adopted only when it is exactly what Git wrote, else held for
+     * you, its files as they are: never populated again over them, by a restart or your retry.
+     */
+    const changes: {
+      name: string;
+      before?: () => void;
+      change: (tree: WorktreeRecord, registration: string) => void;
+    }[] = [
+      {
+        name: 'a tracked file edited',
+        change: (tree) => {
+          writeFileSync(path.join(tree.path, 'README.md'), 'work added after the crash\n');
+        },
+      },
+      {
+        name: 'a file added',
+        change: (tree) => {
+          writeFileSync(path.join(tree.path, 'notes.txt'), 'work added after the crash\n');
+        },
+      },
+      {
+        name: 'a file ignored by the repository added',
+        before: () => {
+          writeFileSync(path.join(app, '.gitignore'), '*.log\n');
+          git(app, env, 'add', '.gitignore');
+          commit(app, env, 'ignore logs');
+        },
+        change: (tree) => {
+          writeFileSync(path.join(tree.path, 'kept.log'), 'work added after the crash\n');
+        },
+      },
+      {
+        name: 'a file removed',
+        change: (tree) => {
+          rmSync(path.join(tree.path, 'README.md'));
+        },
+      },
+      {
+        name: 'a same-length edit, its time set back, where the repository trusts neither ctime nor full stat',
+        before: () => {
+          git(app, env, 'config', 'core.trustctime', 'false');
+          git(app, env, 'config', 'core.checkStat', 'minimal');
+        },
+        change: (tree) => {
+          const file = path.join(tree.path, 'README.md');
+          const { atime, mtime } = statSync(file);
+          writeFileSync(file, 'HELLO\n');
+          utimesSync(file, atime, mtime);
+        },
+      },
+      {
+        name: 'a submodule’s folder filled in',
+        before: () => {
+          const sub = makeRepository(path.join(root, 'sub'), env, { 'lib.txt': 'lib\n' });
+          git(app, env, 'update-index', '--add', '--cacheinfo', `160000,${sub},vendor/sub`);
+          commit(app, env, 'a submodule');
+        },
+        change: (tree) => {
+          writeFileSync(path.join(tree.path, 'vendor', 'sub', 'work.txt'), 'work\n');
+        },
+      },
+      {
+        name: 'its files written part way, before Git wrote its index',
+        change: (tree, registration) => {
+          rmSync(path.join(registration, 'index'));
+          rmSync(path.join(tree.path, 'README.md'));
+          writeFileSync(path.join(tree.path, 'src', 'main.ts'), 'exp');
+        },
+      },
+      {
+        name: 'its index still being written',
+        change: (_tree, registration) => {
+          writeFileSync(path.join(registration, 'index.lock'), '');
+        },
+      },
+    ];
+
+    it.each(changes)(
+      'holds for you a population it didn’t mark that may have changed since, never populating over it: $name',
+      async ({ before, change }) => {
+        before?.();
+        const dying = new Crashing(at('read-tree'), true);
+        const first = provisioner({ git: dying });
+        const repository = await repositoryOf(first);
+        void first.provision({ canvas: CANVAS, repository, owner: OWNER });
+        await dying.crashed.promise;
+        const [open] = workspaces.openJobs();
+        expect(open?.phase).toBe('registered');
+        const tree = kept(open?.workspace ?? '');
+        change(tree, path.join(app, '.git', 'worktrees', tree.id));
+        const held = contents(tree.path);
+
+        const git2 = new Recording(runnerDeps());
+        const restarted = provisioner({ git: git2 });
+        await restarted.reconcile();
+        expect(contents(tree.path)).toEqual(held);
+        expect(kept(tree.id)).toMatchObject({
+          state: 'error',
+          errorCode: 'interrupted-population',
+        });
+        expect(await restarted.checkout(tree.id)).toMatchObject({ state: 'held', reason: 'error' });
+        // Your retry looks again, and holds it again.
+        expect(await restarted.retry(tree.id)).toMatchObject({
+          state: 'error',
+          errorCode: 'interrupted-population',
+        });
+        expect(contents(tree.path)).toEqual(held);
+        expect(git2.count('read-tree')).toBe(0);
+        expect(workspaces.openJobs()).toEqual([]);
+      },
+    );
+
+    it('populates a checkout found registered but never written, refusing to write over a file put there', async () => {
+      // Registered, then the core stopped before population: nothing written there yet.
+      const dying = new Crashing(at('read-tree'), false);
+      const first = provisioner({ git: dying });
+      const repository = await repositoryOf(first);
+      void first.provision({ canvas: CANVAS, repository, owner: OWNER });
+      await dying.crashed.promise;
+      const tree = kept(workspaces.openJobs()[0]?.workspace ?? '');
+      expect(readdirSync(tree.path)).toEqual(['.git']);
+      // A file put there as Git starts writing: Git is told not to write over it.
+      class Racing extends GitRunner {
+        override run(call: GitCall): Promise<GitOutput> {
+          if (call.args[0] === 'read-tree') {
+            writeFileSync(path.join(tree.path, 'README.md'), 'put there meanwhile\n');
+          }
+          return super.run(call);
+        }
+      }
+      await provisioner({ git: new Racing(runnerDeps()) }).reconcile();
+      expect(readFileSync(path.join(tree.path, 'README.md'), 'utf8')).toBe('put there meanwhile\n');
+      expect(kept(tree.id)).toMatchObject({ state: 'error', errorCode: 'git-failed' });
+    });
 
     it.each(cases)(
       'finishes a workspace the core stopped making $name, from what Git has',
@@ -529,6 +692,108 @@ describe.skipIf(process.platform === 'win32')('Provisioner', () => {
       expect(readdirSync(outside)).toEqual([]);
       expect(branches()).toEqual([]);
       expect(registered()).toEqual([app]);
+    });
+
+    /*
+     * Git's metadata a new branch and worktree are written through, in the common Git directory:
+     * a link anywhere along it (a folder moved elsewhere and linked back, or one put in place of
+     * a folder Git would make) refuses the creation before anything is written, here or there.
+     */
+    it.each([
+      'worktrees',
+      'refs',
+      'refs/heads',
+      'refs/heads/corrallm',
+      'logs',
+      'logs/refs/heads/corrallm',
+      'reftable',
+      'packed-refs',
+    ])('writes nothing through a symlinked %s of the common Git directory', async (at) => {
+      if (at === 'reftable') {
+        // A repository keeping its refs in reftable: new tables are written in that folder.
+        rmSync(app, { recursive: true });
+        mkdirSync(app);
+        git(app, env, 'init', '-q', '-b', 'main', '--ref-format=reftable');
+        writeFileSync(path.join(app, 'README.md'), 'hello\n');
+        git(app, env, 'add', '-A');
+        commit(app, env, 'first');
+      }
+      const outside = path.join(root, 'outside');
+      const moved = path.join(outside, 'moved');
+      mkdirSync(outside);
+      const linked = path.join(app, '.git', at);
+      if (at === 'packed-refs') {
+        git(app, env, 'pack-refs', '--all');
+        renameSync(linked, moved);
+      } else if (existsSync(linked)) renameSync(linked, moved);
+      else mkdirSync(moved);
+      symlinkSync(moved, linked);
+      const before = snapshot(outside);
+      const p = provisioner();
+      const repository = await repositoryOf(p);
+      const tree = await p.provision({ canvas: CANVAS, repository, owner: OWNER });
+      expect(snapshot(outside)).toEqual(before);
+      expect(tree).toMatchObject({ state: 'error', errorCode: 'git-metadata-symlinked' });
+      expect(existsSync(path.join(app, '.corral'))).toBe(false);
+      expect(readFileSync(path.join(app, '.git', 'info', 'exclude'), 'utf8')).not.toContain(
+        EXCLUDED,
+      );
+      expect(branches()).toEqual([]);
+      expect(registered()).toEqual([app]);
+    });
+
+    it('writes nothing to the repository’s configuration, though it asks for relative worktree paths', async () => {
+      git(app, env, 'config', 'worktree.useRelativePaths', 'true');
+      const config = readFileSync(path.join(app, '.git', 'config'), 'utf8');
+      const p = provisioner();
+      const repository = await repositoryOf(p);
+      const tree = await p.provision({ canvas: CANVAS, repository, owner: OWNER });
+      expect(tree.state).toBe('setup');
+      expect(readFileSync(path.join(app, '.git', 'config'), 'utf8')).toBe(config);
+      expect(readFileSync(path.join(tree.path, '.git'), 'utf8')).toBe(
+        `gitdir: ${path.join(app, '.git', 'worktrees', tree.id)}\n`,
+      );
+    });
+
+    it('writes no reflog through a link put at its branch’s reflog', async () => {
+      const p = provisioner();
+      const repository = await repositoryOf(p);
+      const { job, worktree } = await workspaces.write((w) =>
+        p.intend(w, {
+          canvas: CANVAS,
+          repository,
+          owner: OWNER,
+          base: { checkout: app, ref: 'refs/heads/main', oid: base },
+        }),
+      );
+      const outside = path.join(root, 'outside.log');
+      writeFileSync(outside, 'someone’s\n');
+      const reflog = path.join(app, '.git', 'logs', worktree.branchRef);
+      mkdirSync(path.dirname(reflog), { recursive: true });
+      symlinkSync(outside, reflog);
+      const ended = await p.run(job?.id ?? '');
+      expect(readFileSync(outside, 'utf8')).toBe('someone’s\n');
+      expect(ended).toMatchObject({ state: 'error', errorCode: 'git-metadata-symlinked' });
+      expect(branches()).toEqual([]);
+    });
+
+    it('fails a creation whose metadata turned into a link as Git wrote it: it never reaches setup', async () => {
+      const outside = path.join(root, 'outside');
+      mkdirSync(outside);
+      /** A link put in place of `worktrees` just as Git is to register the checkout. */
+      class Racing extends GitRunner {
+        override run(call: GitCall): Promise<GitOutput> {
+          if (call.args[0] === 'worktree' && call.args[1] === 'add') {
+            symlinkSync(outside, path.join(app, '.git', 'worktrees'));
+          }
+          return super.run(call);
+        }
+      }
+      const p = provisioner({ git: new Racing(runnerDeps()) });
+      const repository = await repositoryOf(p);
+      const tree = await p.provision({ canvas: CANVAS, repository, owner: OWNER });
+      expect(tree).toMatchObject({ state: 'error', errorCode: 'git-metadata-symlinked' });
+      expect(await p.checkout(tree.id)).toMatchObject({ state: 'held', reason: 'error' });
     });
 
     it('never takes over a folder or branch at the workspace’s place that it didn’t make', async () => {
