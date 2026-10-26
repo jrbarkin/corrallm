@@ -11,6 +11,7 @@ import type { NeedsItem } from '../../shared/model/needs';
 import type { SessionAnswer, SessionMode } from '../../shared/session';
 import type { Connector, LiveSession } from '../sessions/connector';
 import { FakeConnector } from '../sessions/fake';
+import { Prompts as CodexPrompts } from '../sessions/codex/app-server/prompts';
 import type { AgentCaller, Caller, OutsideCaller } from './caller';
 import { createCore } from './core';
 import type { Core } from './core';
@@ -217,6 +218,52 @@ function reasking(taken: { session: number; given: SessionAnswer }[]): Connector
         return Promise.resolve();
       };
       return session;
+    },
+  };
+}
+
+/** A fake session driven by the App Server's native request handler. */
+function codexAsking() {
+  const fake = new FakeConnector({ adapter: 'codex', mode: 'auto' });
+  let prompts: CodexPrompts | undefined;
+  const connector: Connector<SessionMode> = {
+    start: async (spec, host) => {
+      const session: LiveSession<SessionMode> = await fake.start(spec, host);
+      const close = session.close.bind(session);
+      const asking = new CodexPrompts(
+        {
+          emit: (event) => {
+            host.emit(event);
+          },
+          settled: () => {
+            host.emit({ type: 'status', status: 'working' });
+          },
+          patch: () => undefined,
+        },
+        { cwd: spec.cwd, home: profile },
+      );
+      prompts = asking;
+      session.send = (message) => {
+        host.emit({ type: 'user', id: message.id, text: message.text });
+        host.emit({ type: 'status', status: 'working' });
+        return Promise.resolve();
+      };
+      session.answer = (id, answer) => {
+        asking.answer(id, answer);
+        return Promise.resolve();
+      };
+      session.close = async () => {
+        asking.withdrawAll();
+        await close();
+      };
+      return session;
+    },
+  };
+  return {
+    connector,
+    asking: () => {
+      if (prompts === undefined) throw new Error('The session has not started');
+      return prompts;
     },
   };
 }
@@ -445,6 +492,71 @@ describe('a run’s hold', () => {
 });
 
 describe('a session’s prompt', () => {
+  it('withholds a Codex sign-in URL from reached tokens in Needs and the transcript, while you can read and answer it', async () => {
+    const native = codexAsking();
+    const { core } = await start({ 'codex.app-server': native.connector });
+    await ok(core, 'message', { to: 'w', body: 'Connect the tracker' });
+    const url = 'https://signin.example.test/codex-link?token=private-signin-secret';
+    const asking = await vi.waitFor(() => native.asking());
+    const response = asking.request(
+      'mcpServer/elicitation/request',
+      { serverName: 'tracker', mode: 'url', message: 'Sign in to the tracker', url },
+      7,
+    );
+    const prompt = await waitingFor(core, isPrompt('w'));
+    for (const access of ['read', 'write'] as const) {
+      const token = { ...ORCHESTRATOR, access };
+      const needs = await needsOf(core, token);
+      const transcript = await ok(core, 'session.transcript', { agent: 'w' }, token);
+      expect(needs).toContainEqual(expect.objectContaining({ id: prompt.id }));
+      for (const part of [url, 'signin.example.test', 'codex-link', 'private-signin-secret']) {
+        expect.soft(JSON.stringify(needs)).not.toContain(part);
+        expect.soft(JSON.stringify(transcript)).not.toContain(part);
+      }
+    }
+    expect(prompt.form).toEqual({ url });
+    const humanTranscript = (await ok(core, 'session.transcript', { agent: 'w' })) as {
+      entries: unknown[];
+    };
+    expect(humanTranscript.entries).toContainEqual(
+      expect.objectContaining({ kind: 'elicitation', server: 'tracker', url }),
+    );
+    expect(
+      await call(core, 'reply', { to: prompt.id, answer: { form: { action: 'accept' } } }),
+    ).toMatchObject({ ok: true, value: { outcome: 'answered' } });
+    await expect(response).resolves.toEqual({ action: 'accept', content: null, _meta: null });
+  });
+
+  it('refuses a late reply to the first of two sequential Codex approvals on one item without answering the second', async () => {
+    const native = codexAsking();
+    const { core } = await start({ 'codex.app-server': native.connector });
+    await ok(core, 'message', { to: 'w', body: 'Run the checks' });
+    const asking = await vi.waitFor(() => native.asking());
+    const params = {
+      itemId: 'one-item',
+      command: 'pnpm test',
+      availableDecisions: ['accept', 'cancel'],
+    };
+    const firstResponse = asking.request('item/commandExecution/requestApproval', params, 7);
+    const first = await waitingFor(core, isPrompt('w'));
+    await ok(core, 'reply', { to: first.id, answer: { permission: 'once' } });
+    await expect(firstResponse).resolves.toEqual({ decision: 'accept' });
+
+    const secondResponse = asking.request('item/commandExecution/requestApproval', params, '7');
+    const second = await waitingFor(core, isPrompt('w'));
+    asking.resolved(7);
+    expect(
+      await call(core, 'reply', { to: first.id, answer: { permission: 'once' } }),
+    ).toMatchObject({ ok: false, error: { code: 'conflict' } });
+    expect(second.id).not.toBe(first.id);
+    expect(asking.waiting).toBe(true);
+    expect(await needsOf(core)).toContainEqual(expect.objectContaining({ id: second.id }));
+
+    await ok(core, 'reply', { to: second.id, answer: { permission: 'deny' } });
+    await expect(secondResponse).resolves.toEqual({ decision: 'cancel' });
+    expect(asking.waiting).toBe(false);
+  });
+
   it('is answered through its CLI first: one it refused still waits; never by a token or itself', async () => {
     const { core } = await start();
     await ok(core, 'message', { to: 'b', body: 'Run the tests' });
