@@ -1,8 +1,5 @@
 import { EventEmitter } from 'node:events';
 
-import type { WebContents } from 'electron';
-import type { AppApi } from '../shared/ipc';
-import type { RunShutdown } from './run-shutdown';
 import { AppUpdates } from './updates';
 import type { UpdateEvents } from './updates';
 import type { AppUpdateActions } from './host/updates';
@@ -42,15 +39,6 @@ const {
   installGuards: vi.fn(),
 }));
 
-const { rendererOn, exposeApi, rendererChannel } = vi.hoisted(() => ({
-  rendererOn: vi.fn<(name: string, receive: (event: unknown, request: string) => void) => void>(),
-  exposeApi: vi.fn<(name: string, api: AppApi) => void>(),
-  rendererChannel: vi.fn<(name: string, args: unknown[]) => Promise<null>>(),
-}));
-vi.mock('../preload/core', () => ({
-  connectCore: () => ({ channel: rendererChannel }),
-}));
-
 // The core and windows are faked: boot and closing never start sessions or write user data.
 vi.mock('electron', () => ({
   app,
@@ -60,9 +48,6 @@ vi.mock('electron', () => ({
   session: { defaultSession: {} },
   shell: {},
   ipcMain: { handle: vi.fn() },
-  ipcRenderer: { on: rendererOn, removeListener: vi.fn() },
-  contextBridge: { exposeInMainWorld: exposeApi },
-  webUtils: {},
 }));
 vi.mock('electron-squirrel-startup', () => ({ default: false }));
 vi.mock('./app-protocol', () => ({
@@ -95,7 +80,7 @@ const { request, createWindow, makeHost, forkCore, cores, reconnect } = vi.hoist
   return {
     request,
     createWindow: vi.fn(() => Promise.resolve()),
-    makeHost: vi.fn<(_shutdown: Pick<RunShutdown, 'ready'>) => unknown>(() => ({})),
+    makeHost: vi.fn<() => unknown>(() => ({})),
     cores,
     forkCore: vi.fn(() => {
       const exited = Promise.withResolvers<number>();
@@ -124,20 +109,18 @@ vi.mock('./host/services', () => ({ hostServices: makeHost }));
 vi.mock('./window', () => ({ createMainWindow: createWindow }));
 
 /**
- * What the core answers main unless a test says otherwise: `shown` the windows given, every
- * window's drafts flushed, the shutdown barrier prepared, no work going on, else null.
+ * What the core answers main unless a test says otherwise: every window's drafts flushed, the
+ * shutdown barrier prepared, no work going on, else null.
  */
-function answered(name: string, shown: number[] = []): Promise<{ ok: true; value: unknown }> {
+function answered(name: string): Promise<{ ok: true; value: unknown }> {
   const value =
-    name === 'shown'
-      ? shown
-      : name === 'flushDrafts'
-        ? { unanswered: [] }
-        : name === 'prepareShutdown'
-          ? { ok: true }
-          : name === 'active'
-            ? false
-            : null;
+    name === 'flushDrafts'
+      ? { unanswered: [] }
+      : name === 'prepareShutdown'
+        ? { ok: true }
+        : name === 'active'
+          ? false
+          : null;
   return Promise.resolve({ ok: true, value });
 }
 
@@ -190,7 +173,7 @@ describe('an update restart', () => {
           ? flushed.promise
           : name === 'commitShutdown'
             ? closed.promise
-            : answered(name, [7]),
+            : answered(name),
       );
       let events: UpdateEvents | undefined;
       const install = vi.fn();
@@ -235,23 +218,14 @@ describe('an update restart', () => {
       });
       if (alreadySaving) app.quit();
       events?.downloaded('1.3.0');
-      await vi.waitFor(() => {
-        expect(contents.send).toHaveBeenCalledOnce();
-      });
-      expect(app.quit).toHaveBeenCalledOnce(); // Never a second request that forces Closing to abandon.
-      expect(install).not.toHaveBeenCalled();
-      // Each window's drafts first, then (until X12) its run.
-      expect(request.mock.calls.map(([name]) => name)).toEqual(['init', 'flushDrafts', 'shown']);
-      expect(request).toHaveBeenCalledWith('flushDrafts', [7]);
-      makeHost.mock.calls[0]?.[0].ready(
-        contents as unknown as WebContents,
-        contents.send.mock.calls[0]?.[1] as string,
-        null,
-      );
+      // Each window's drafts first; then, its canvas's run being the core's (B11 Design §8),
       // Restart to update prepares the same barrier as a quit, saying why.
       await vi.waitFor(() => {
         expect(request).toHaveBeenCalledWith('prepareShutdown', 'update');
       });
+      expect(app.quit).toHaveBeenCalledOnce(); // Never a second request that forces Closing to abandon.
+      expect(request).toHaveBeenCalledWith('flushDrafts', [7]);
+      expect(contents.send).not.toHaveBeenCalled();
       expect(install).not.toHaveBeenCalled();
       flushed.resolve({ ok: true, value: { ok: true } });
       await vi.waitFor(() => {
@@ -265,7 +239,6 @@ describe('an update restart', () => {
       expect(request.mock.calls.map(([name]) => name)).toEqual([
         'init',
         'flushDrafts',
-        'shown',
         'prepareShutdown',
         'commitShutdown',
       ]);
@@ -273,7 +246,7 @@ describe('an update restart', () => {
     },
   );
 
-  it.each(['renderer', 'core'])(
+  it.each(['drafts', 'core'])(
     'never installs when %s saving fails and Keep corrallm open is chosen',
     async (where) => {
       app.whenReady.mockResolvedValueOnce();
@@ -284,7 +257,9 @@ describe('an update restart', () => {
       request.mockImplementation((name) =>
         name === 'prepareShutdown'
           ? Promise.resolve({ ok: true, value: { failed: true, sentence: 'Disk full' } })
-          : answered(name, [7]),
+          : name === 'flushDrafts' && where === 'drafts'
+            ? Promise.resolve({ ok: true, value: { unanswered: [7] } })
+            : answered(name),
       );
       let restart: (() => void) | undefined;
       const finishQuit = vi.fn(() => true);
@@ -305,16 +280,9 @@ describe('an update restart', () => {
       });
       restart?.();
       await vi.waitFor(() => {
-        expect(contents.send).toHaveBeenCalledOnce();
-      });
-      makeHost.mock.calls[0]?.[0].ready(
-        contents as unknown as WebContents,
-        contents.send.mock.calls[0]?.[1] as string,
-        where === 'renderer' ? 'Disk full' : null,
-      );
-      await vi.waitFor(() => {
         expect(cancelRestart).toHaveBeenCalledOnce();
       });
+      expect(contents.send).not.toHaveBeenCalled();
       expect(showMessageBox).toHaveBeenCalledOnce();
       expect(finishQuit).not.toHaveBeenCalled();
       // Keep corrallm open lifts the core's barrier: the endpoint and every turn go on.
@@ -322,9 +290,9 @@ describe('an update restart', () => {
         expect(request).toHaveBeenCalledWith('cancelShutdown');
       });
       expect(request.mock.calls.map(([name]) => name)).toEqual(
-        where === 'renderer'
-          ? ['init', 'flushDrafts', 'shown', 'cancelShutdown']
-          : ['init', 'flushDrafts', 'shown', 'prepareShutdown', 'cancelShutdown'],
+        where === 'drafts'
+          ? ['init', 'flushDrafts', 'cancelShutdown']
+          : ['init', 'flushDrafts', 'prepareShutdown', 'cancelShutdown'],
       );
       expect(request).not.toHaveBeenCalledWith('commitShutdown');
     },
@@ -344,7 +312,7 @@ describe('the drafts each window composes', () => {
       request.mockImplementation((name) =>
         name === 'flushDrafts'
           ? Promise.resolve({ ok: true, value: { unanswered: [7] } })
-          : answered(name, [7]),
+          : answered(name),
       );
       await import('./index');
       await vi.waitFor(() => {
@@ -608,58 +576,40 @@ describe('quit races', () => {
     return callback;
   }
 
-  it('quits cleanly when app.quit arrives after window.get but before the renderer owns its run', async () => {
+  it('quits cleanly when app.quit arrives before the window has loaded its editor', async () => {
     app.whenReady.mockResolvedValueOnce();
     vi.stubEnv('CORRALLM_HIDE_WINDOW', '1');
     vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const window = new EventEmitter();
-    const contents = {
-      id: 7,
-      isDestroyed: () => false,
-      isCrashed: () => false,
-      send: vi.fn((name: string, request: string) => {
-        rendererOn.mock.calls.find(([event]) => event === name)?.[1]({}, request);
-      }),
-    };
+    const contents = { id: 7, isDestroyed: () => false, isCrashed: () => false, send: vi.fn() };
     Object.assign(window, { webContents: contents, close: vi.fn() });
     getAllWindows.mockReturnValue([window]);
     const loading = Promise.withResolvers<undefined>();
     const closed = Promise.withResolvers<{ ok: true; value: null }>();
+    const drafts = Promise.withResolvers<{ ok: true; value: { unanswered: number[] } }>();
     createWindow.mockReturnValueOnce(loading.promise);
     request.mockImplementation((name) =>
-      name === 'commitShutdown' ? closed.promise : answered(name, [7]),
+      name === 'commitShutdown'
+        ? closed.promise
+        : name === 'flushDrafts'
+          ? drafts.promise
+          : answered(name),
     );
-    await import('../preload/index');
     await import('./index');
     await vi.waitFor(() => {
       expect(createWindow).toHaveBeenCalledOnce();
     });
     vi.useFakeTimers();
-    // Playwright ElectronApplication.close evaluates app.quit(), without waiting for React.
+    // Playwright ElectronApplication.close evaluates app.quit(), without waiting for React. The
+    // window's drafts come first (its preload answers at once with none); its run is the core's.
     beforeQuit()({ preventDefault: vi.fn() });
-    await vi.advanceTimersByTimeAsync(0);
-    expect(contents.send).toHaveBeenCalledOnce();
-    // React mounts the editor only after window.get has returned. Its run owner registers
-    // here; the shutdown request must not have disappeared in that gap.
-    const api = exposeApi.mock.calls[0]?.[1];
-    if (!api) throw new Error('The preload did not expose its API.');
-    rendererChannel.mockImplementation((name, args) => {
-      expect(name).toBe('run:ready');
-      makeHost.mock.calls[0]?.[0].ready(
-        contents as unknown as WebContents,
-        args[0] as string,
-        null,
-      );
-      return Promise.resolve(null);
-    });
-    const saving = Promise.withResolvers<undefined>();
-    api.onRunStopping((id) => {
-      void saving.promise.then(() => api.runReady(id, null));
-    });
     await vi.advanceTimersByTimeAsync(100);
+    expect(request).toHaveBeenCalledWith('flushDrafts', [7]);
     expect(request).not.toHaveBeenCalledWith('prepareShutdown', 'quit');
-    saving.resolve(undefined);
+    drafts.resolve({ ok: true, value: { unanswered: [] } });
     await vi.advanceTimersByTimeAsync(0);
+    expect(request).toHaveBeenCalledWith('prepareShutdown', 'quit');
+    expect(contents.send).not.toHaveBeenCalled();
     expect(app.quit).not.toHaveBeenCalled();
     closed.resolve({ ok: true, value: null });
     loading.resolve(undefined);
@@ -722,11 +672,11 @@ describe('quit races', () => {
       const contents = { id: 7, isDestroyed: () => false, isCrashed: () => false, send: vi.fn() };
       const window = Object.assign(new EventEmitter(), { webContents: contents, close: vi.fn() });
       getAllWindows.mockReturnValue([window]);
-      const windowSave = Promise.withResolvers<{ ok: true; value: null }>();
+      const windowSave = Promise.withResolvers<{ ok: true; value: { unanswered: number[] } }>();
       const closed = Promise.withResolvers<{ ok: true; value: null }>();
       let flushes = 0;
       request.mockImplementation((name) => {
-        if (name === 'flush' && ++flushes === 1) return windowSave.promise;
+        if (name === 'flushDrafts' && ++flushes === 1) return windowSave.promise;
         if (name === 'commitShutdown') return closed.promise;
         return answered(name);
       });
@@ -747,7 +697,7 @@ describe('quit races', () => {
       await vi.advanceTimersByTimeAsync(0);
       expect(request).toHaveBeenCalledWith('commitShutdown');
       if (outcome === 'rejects') windowSave.reject(new Error('The core is closing.'));
-      else windowSave.resolve({ ok: true, value: null });
+      else windowSave.resolve({ ok: true, value: { unanswered: [] } });
       await vi.advanceTimersByTimeAsync(0);
       expect(window.close).not.toHaveBeenCalled();
       expect(app.exit).not.toHaveBeenCalled();
@@ -932,7 +882,11 @@ describe('a hidden app that cannot save before closing', () => {
       };
       const window = Object.assign(new EventEmitter(), { webContents: contents, close: vi.fn() });
       getAllWindows.mockReturnValue([window]);
-      request.mockImplementation((name) => answered(name, [7]));
+      request.mockImplementation((name) =>
+        name === 'flushDrafts'
+          ? Promise.resolve({ ok: true, value: { unanswered: [7] } })
+          : answered(name),
+      );
       const stderr = vi.spyOn(console, 'error').mockImplementation(() => undefined);
       await import('./index');
       await vi.waitFor(() => {
@@ -954,11 +908,11 @@ describe('a hidden app that cannot save before closing', () => {
       }
       await vi.advanceTimersByTimeAsync(3000);
 
-      expect(contents.send).toHaveBeenCalledWith('run:stopping', expect.any(String));
+      expect(contents.send).not.toHaveBeenCalled();
       expect(showMessageBox).not.toHaveBeenCalled();
       expect(stderr).toHaveBeenCalledWith(
         'Could not save before closing:',
-        'The window did not finish saving its run before closing',
+        'A window did not finish saving what was being typed in it before closing',
       );
       expect(app.exit).toHaveBeenCalledExactlyOnceWith(1);
       expect(preventDefault).toHaveBeenCalledOnce();
@@ -966,11 +920,12 @@ describe('a hidden app that cannot save before closing', () => {
   );
 });
 
-it('keeps the core up until the window has finished saving and main receives run:ready', async () => {
+it('keeps the core up until each window has finished its drafts, then prepares and commits its barrier', async () => {
   app.whenReady.mockResolvedValueOnce();
   const contents = { id: 7, isDestroyed: () => false, isCrashed: () => false, send: vi.fn() };
   getAllWindows.mockReturnValue([{ webContents: contents }]);
-  request.mockImplementation((name) => answered(name, [7]));
+  const drafts = Promise.withResolvers<{ ok: true; value: { unanswered: number[] } }>();
+  request.mockImplementation((name) => (name === 'flushDrafts' ? drafts.promise : answered(name)));
   await import('./index');
   await vi.waitFor(() => {
     expect(createWindow).toHaveBeenCalledOnce();
@@ -980,27 +935,22 @@ it('keeps the core up until the window has finished saving and main receives run
   ) => void;
   beforeQuit({ preventDefault: vi.fn() });
   await vi.waitFor(() => {
-    expect(contents.send).toHaveBeenCalledOnce();
+    expect(request).toHaveBeenCalledWith('flushDrafts', [7]);
   });
-  expect(request.mock.calls.map(([name]) => name)).toEqual(['init', 'flushDrafts', 'shown']);
+  expect(request.mock.calls.map(([name]) => name)).toEqual(['init', 'flushDrafts']);
   expect(app.quit).not.toHaveBeenCalled();
-  const shutdown = makeHost.mock.calls[0]?.[0];
-  if (!shutdown) throw new Error('no shutdown service');
-  shutdown.ready(
-    contents as unknown as WebContents,
-    contents.send.mock.calls[0]?.[1] as string,
-    null,
-  );
+  drafts.resolve({ ok: true, value: { unanswered: [] } });
   await vi.waitFor(() => {
     expect(app.quit).toHaveBeenCalledOnce();
   });
   expect(request.mock.calls.map(([name]) => name)).toEqual([
     'init',
     'flushDrafts',
-    'shown',
     'prepareShutdown',
     'commitShutdown',
   ]);
+  // Nothing is asked of the window but its drafts: its canvas's run is the core's (B11 §8).
+  expect(contents.send).not.toHaveBeenCalled();
 });
 
 describe('the profile held by corrallm serve', () => {

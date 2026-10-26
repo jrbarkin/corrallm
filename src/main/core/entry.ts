@@ -135,6 +135,18 @@ const link = new CoreLink<CoreSide, HostSide>(
       }
       ready.resolve(core);
       windows.resolve(new WindowPorts(core, { check }));
+      // Every canvas open runs in the core from now on, restored paused, whether or not a window
+      // shows it (B11 Design §2, §8): `active` and the shutdown barrier cover the app's runs. In the
+      // background: a window's canvas is run as it asks for it, sharing the same allocation.
+      void core.engines.initialize().then(
+        (initialized) => {
+          for (const one of initialized)
+            if ('error' in one) console.error(`corrallm: ${one.canvas} can’t run: ${one.error}`);
+        },
+        (error: unknown) => {
+          console.error(`corrallm: its canvases couldn’t be opened: ${reasonOf(error)}`);
+        },
+      );
       // Its outside endpoint, always (B11 Design §16.6): one that can't listen is said, quietly.
       const outside = new Endpoint({
         profile: config.profile,
@@ -176,7 +188,6 @@ const link = new CoreLink<CoreSide, HostSide>(
       }
       return null;
     },
-    shown: async (asked) => (await ready.promise).shown(asked),
     openLink: async (window, url) => {
       await (await windows.promise).openLink(window, url);
       return null;
@@ -184,10 +195,6 @@ const link = new CoreLink<CoreSide, HostSide>(
     flushDrafts: async (asked) => ({
       unanswered: await (await windows.promise).flushDrafts(asked),
     }),
-    flush: async () => {
-      await (await ready.promise).flush();
-      return null;
-    },
     prepareShutdown: async (reason) => (await ready.promise).prepareShutdown(reason),
     cancelShutdown: async () => {
       (await ready.promise).cancelShutdown();

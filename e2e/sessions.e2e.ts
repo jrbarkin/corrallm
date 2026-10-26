@@ -134,6 +134,8 @@ test('runs a connected agent in the project folder, answering its prompts throug
   await expect(view.getByRole('button', { name: 'Model: Fast' })).toBeVisible();
   await expect(view.getByRole('button', { name: 'Mode: Plan' })).toBeVisible();
 
+  const notesBeforeSwitch = await view.getByRole('note').allTextContents();
+
   // The folder is remembered with the canvas's file: a new canvas has none, and it comes back.
   await page.keyboard.press('Escape');
   await expect(view).toHaveCount(0);
@@ -146,10 +148,12 @@ test('runs a connected agent in the project folder, answering its prompts throug
   const agent = page.locator('.react-flow__node');
   await expect(agent).toHaveAttribute('aria-label', 'Agent 1, Claude · SDK');
 
-  // Its session too: opened again, the agent resumes the one it had, with the model and mode
-  // it was given.
+  // Switching only changes the view (§8): its session and transcript stayed live in the core.
   await agent.dblclick();
-  await expect(view.getByRole('note')).toHaveText(/^Resumed [0-9a-f-]{36}$/);
+  await expect(
+    view.getByRole('log', { name: 'Transcript' }).getByText('You said: Hello'),
+  ).toBeVisible();
+  await expect(view.getByRole('note')).toHaveText(notesBeforeSwitch);
   await expect(view.getByRole('button', { name: 'Model: Fast' })).toBeVisible();
   await expect(view.getByRole('button', { name: 'Mode: Plan' })).toBeVisible();
 });

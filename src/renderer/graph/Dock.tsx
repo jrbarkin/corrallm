@@ -2,7 +2,7 @@ import { useLayoutEffect, useMemo, useRef } from 'react';
 import type { ReactNode } from 'react';
 import type { CanvasNode, AgentNode } from '../../shared/model/canvas';
 import type { Session } from '../../shared/model/session';
-import type { Run } from '../../shared/engine/run/runner';
+import type { RunSnapshot } from '../../shared/model/views';
 import { agentStatus } from '../../shared/model/run-display';
 import { AdapterLogo } from '../AdapterLogo';
 import { useWorkspaces, workspaceAttention, workspaceState } from '../workspaces/state';
@@ -24,7 +24,7 @@ export function Dock({
 }: {
   nodes: readonly CanvasNode[];
   sessions: Readonly<Record<string, Session>>;
-  run: Run;
+  run: RunSnapshot;
   needs: ReadonlySet<string>;
   current?: string | undefined;
   queues: boolean;

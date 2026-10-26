@@ -850,6 +850,33 @@ describe.skipIf(process.platform === 'win32')('Provisioner', () => {
     });
   });
 
+  it('calls a checkout that vanishes while Git is checking it missing, never changed', async () => {
+    /** A runner whose checkout is moved away just as Git is asked about it (a check overlapping the loss). */
+    class Vanishing extends GitRunner {
+      aside: string | undefined;
+      override run(call: GitCall): Promise<GitOutput> {
+        if (this.aside !== undefined && call.args[0] === 'rev-parse') {
+          renameSync(call.cwd, this.aside);
+          this.aside = undefined;
+        }
+        return super.run(call);
+      }
+    }
+    const runner = new Vanishing(runnerDeps());
+    const p = provisioner({ git: runner });
+    const repository = await repositoryOf(p);
+    const tree = await p.provision({ canvas: CANVAS, repository, owner: OWNER });
+    runner.aside = path.join(root, 'vanished');
+    expect(await p.checkout(tree.id)).toMatchObject({ state: 'held', reason: 'missing' });
+    expect(workspaces.worktree(tree.id)).toMatchObject({
+      state: 'missing',
+      errorCode: 'checkout-missing',
+    });
+    // Put back, a retry finds it as it was.
+    renameSync(path.join(root, 'vanished'), tree.path);
+    expect((await p.retry(tree.id)).state).toBe('setup');
+  });
+
   it('records a retry before running it: started, it answers once its new attempt is on disk', async () => {
     /** A runner holding every `worktree add` until it is let go. */
     class Held extends GitRunner {

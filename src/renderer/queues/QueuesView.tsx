@@ -24,7 +24,7 @@ import { useSortable } from '../graph/sortable';
 import { heldAsks } from '../../shared/engine/run/asks';
 import type { HeldAsk } from '../../shared/engine/run/asks';
 import type { EngineCatalog } from '../../shared/engine/catalog';
-import type { Run } from '../../shared/engine/run/runner';
+import type { RunSnapshot } from '../../shared/model/views';
 import { queueControlText } from '../../shared/engine/run/controls';
 import { lanesOf } from './lanes';
 import type { Lane, Lanes, Link } from './lanes';
@@ -89,7 +89,7 @@ export function QueuesView({
 }: {
   nodes: readonly CanvasNode[];
   sessions: Readonly<Record<string, Session>>;
-  run: Run;
+  run: RunSnapshot;
   edits: QueueEdits;
   /** The usage gauges, in the header (UsageGauge.tsx). */
   gauges?: ReactNode;
@@ -451,7 +451,7 @@ function LaneCells({
   name: (id: string) => string;
   /** Its session's status. */
   status: Session['status'];
-  run: Run;
+  run: RunSnapshot;
   onAgentContextMenu?: ((event: ReactMouseEvent, agentId: string) => void) | undefined;
   /** The run waits on the user: to decide at its hold, to answer its agent, or to switch one. */
   needsYou: Needs | undefined;
@@ -713,7 +713,7 @@ function ends(link: Link): string[] {
 }
 
 /** The waits a run is held at, by their links to what is not yet done: their ribbons flow. */
-function flowingWaits({ links }: Lanes, run: Run): Set<string> {
+function flowingWaits({ links }: Lanes, run: RunSnapshot): Set<string> {
   if (!run.running) return new Set();
   return new Set(
     links.flatMap((link) => {

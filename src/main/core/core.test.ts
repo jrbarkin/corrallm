@@ -8,7 +8,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { PARTIES } from '../../shared/api/surface';
 import { newCanvasId } from '../../shared/canvas';
-import type { RunContext } from '../../shared/run';
 import { EXAMPLES } from '../../shared/examples';
 import { isIf, isRepeat } from '../../shared/model/queue';
 import type { QueueItem } from '../../shared/model/queue';
@@ -383,19 +382,14 @@ describe('createCore', () => {
 });
 
 describe('the core’s database', () => {
-  const CHECKPOINT = {
-    version: 2,
-    state: '{"paused":true}',
-    messages: '{"version":1,"agents":[]}',
-    updatedAt: 1,
-  } as const;
-
   it('opens the profile’s database, and closes it last, after all it journaled', async () => {
     const started = await start({ connectors: {}, environment: () => Promise.resolve({}) });
     // A window's canvas, a draft, its run journaled.
-    const run = (await started.channels.call(7, 'run:get', [])) as RunContext;
-    await started.channels.call(7, 'run:save', [run.token, CHECKPOINT]);
-    expect(journaledRun(profile, run.id)).toEqual(CHECKPOINT);
+    const shown = await started.call('window.get', {}, asHuman(7));
+    if (!shown.ok) throw new Error(shown.error.sentence);
+    const canvas = shown.value.canvas;
+    await started.flush();
+    expect(journaledRun(profile, canvas)).toBeDefined();
     await started.close();
     core = undefined;
     // Closed: its log checkpointed into it and gone, and a snapshot taken of what it kept.
@@ -404,7 +398,7 @@ describe('the core’s database', () => {
     if (snapshot === undefined) throw new Error('No snapshot was taken as it closed.');
     const copy = connect(snapshot, { readOnly: true });
     try {
-      expect(copy.prepare('SELECT canvas_id FROM run').all()).toEqual([{ canvas_id: run.id }]);
+      expect(copy.prepare('SELECT canvas_id FROM run').all()).toEqual([{ canvas_id: canvas }]);
     } finally {
       copy.close();
     }
@@ -423,7 +417,10 @@ describe('the core’s database', () => {
     const why = /made by a newer corrallm, which this one can’t read/;
     expect(logged).toHaveBeenCalledWith(expect.stringMatching(why));
     expect(await started.call('app.info', {}, CALLERS.you)).toMatchObject({ ok: true });
-    await expect(started.channels.call(7, 'run:get', [])).rejects.toThrow(why);
+    expect(await started.call('window.get', {}, asHuman(7))).toMatchObject({
+      ok: false,
+      error: { sentence: expect.stringMatching(why) as unknown },
+    });
     expect(await started.call('canvas.create', {}, asHuman(7))).toMatchObject({
       ok: false,
       error: { sentence: expect.stringMatching(why) as unknown },

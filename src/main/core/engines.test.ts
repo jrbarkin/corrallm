@@ -9,7 +9,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CanvasId } from '../../shared/canvas';
 import type { SessionMode } from '../../shared/session';
 import { MAX_RUN_BYTES } from '../../shared/run';
-import type { RunContext } from '../../shared/run';
 import type { Connector } from '../sessions/connector';
 import { FakeConnector } from '../sessions/fake';
 import { Settings } from '../settings';
@@ -218,11 +217,11 @@ describe('the core runs each canvas’s engine', () => {
     expect(
       items.value.items.some((item) => item.title.includes('too large') && item.for === 'you'),
     ).toBe(true);
-    expect(((await started.channels.call(7, 'run:get', [])) as RunContext).saveError).toMatch(
-      /too large/,
-    );
+    const view = await started.call('run.get', { canvas: CANVAS }, asHuman(7));
+    if (!view.ok) throw new Error(view.error.sentence);
+    expect(view.value.saveError).toMatch(/too large/);
   });
-  it('keeps the renderer’s checkpoint and edits when a manual send reads the canvas’s messages', async () => {
+  it('keeps one core runtime and document edits when a window sends a manual message', async () => {
     await keepCanvas();
     await (await start(new FakeConnector({ adapter: 'codex' }))).engines.open(CANVAS);
     await core?.close();
@@ -242,19 +241,21 @@ describe('the core runs each canvas’s engine', () => {
     ]);
 
     const app = await start(new FakeConnector({ adapter: 'codex' }));
-    const context = (await app.channels.call(7, 'run:get', [])) as RunContext;
-    await app.channels.call(7, 'session:start', [
-      'worker',
-      { connection: 'codex.app-server', model: null, mode: null },
-    ]);
+    expect(await app.call('window.get', {}, asHuman(7))).toMatchObject({
+      ok: true,
+      value: { canvas: CANVAS },
+    });
+    const owner = app.engines.canvas(CANVAS)?.engine;
+    expect(
+      await app.call('session.open', { canvas: CANVAS, agent: 'worker' }, asHuman(7)),
+    ).toMatchObject({ ok: true });
     await app.channels.call(7, 'session:send', [
       'worker',
       { id: crypto.randomUUID(), text: 'Hello from the app' },
     ]);
-    expect(app.engines.opened()).toEqual([]);
-    const checkpoint = context.checkpoint;
+    expect(app.engines.opened()).toContain(CANVAS);
+    const checkpoint = owner?.checkpoint();
     if (!checkpoint) throw new Error('Nothing was restored.');
-    const edited = { ...checkpoint, updatedAt: Date.now() };
     const loaded = await app.call('canvas.get', { canvas: CANVAS }, asHuman(7));
     if (!loaded.ok) throw new Error(loaded.error.sentence);
     const renamed = await app.call(
@@ -263,10 +264,11 @@ describe('the core runs each canvas’s engine', () => {
       asHuman(7),
     );
     if (!renamed.ok) throw new Error(renamed.error.sentence);
-    await app.channels.call(7, 'run:save', [context.token, edited]);
+    expect(app.engines.canvas(CANVAS)?.engine).toBe(owner);
+    await app.flush();
     await app.close();
     core = undefined;
-    expect(journaledRun(profile, CANVAS)).toEqual(edited);
+    expect(journaledRun(profile, CANVAS)).toBeDefined();
     expect(
       readOnDisk(profile, (disk) =>
         disk.prepare("SELECT label FROM node WHERE canvas_id = ? AND id = 'worker'").get(CANVAS),
@@ -424,7 +426,7 @@ describe('the core runs each canvas’s engine', () => {
         outcomes: { hello: 'succeeded' },
       });
     });
-    await started.channels.call(7, 'run:get', []);
+    await started.call('window.get', {}, asHuman(7));
     const allow = refuseWrites(profile, 'run', 'The disk is full');
     const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     try {
@@ -433,17 +435,18 @@ describe('the core runs each canvas’s engine', () => {
       allow();
     }
     errors.mockRestore();
-    await started.channels.call(7, 'session:start', [
-      'worker',
-      { connection: 'codex.app-server', model: null, mode: null },
-    ]);
+    expect(
+      await started.call('session.open', { canvas: CANVAS, agent: 'worker' }, asHuman(7)),
+    ).toMatchObject({ ok: true });
     await started.channels.call(7, 'session:send', [
       'worker',
       { id: crypto.randomUUID(), text: 'After Keep corrallm open' },
     ]);
-    expect(codex.sessions.flatMap(({ sent }) => sent).at(-1)?.text).toBe(
-      'After Keep corrallm open',
-    );
+    await vi.waitFor(() => {
+      expect(codex.sessions.flatMap(({ sent }) => sent).at(-1)?.text).toBe(
+        'After Keep corrallm open',
+      );
+    });
     expect(await started.call('app.info', {}, CALLERS.you)).toMatchObject({
       ok: true,
     });

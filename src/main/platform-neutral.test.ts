@@ -71,7 +71,7 @@ const ALLOWED: Readonly<Record<string, number>> = {
   'src/shared/engine/transcript/driver.ts': 1,
   'src/shared/engine/transcript/receive.ts': 5,
   'src/shared/engine/transcript/unavailable.ts': 2,
-  'src/shared/ipc.ts': 4,
+  'src/shared/ipc.ts': 3,
   'src/shared/model/session.ts': 7,
   'src/shared/model/words.ts': 5,
   'src/shared/session.ts': 5,

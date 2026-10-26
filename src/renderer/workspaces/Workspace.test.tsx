@@ -77,6 +77,32 @@ it('projects branch, sharing, location and setup hold, with direct navigation an
   expect(core.subscriptions.has(`worktrees:${canvas}`)).toBe(true);
 });
 
+it('does not call a worktree failed while its setup card is still being prepared', async () => {
+  // The core lists a tree in setup before it has offered the card (it copies local files and
+  // detects the command first): no need, no setup record yet. That is not a failure.
+  const { core } = await setup({ ...item, need: undefined, setup: undefined });
+  const mark = document.querySelector('.workspace-badge');
+  expect(mark?.textContent).not.toContain('Failed');
+  expect(mark?.querySelector('button')).toBeNull();
+  act(() => {
+    core.change({ topic: `worktrees:${canvas}`, rev: 1, replace: { items: [item], kept: [] } });
+  });
+  expect(document.querySelector('.workspace-badge')?.textContent).toContain('Setup');
+  act(() => {
+    core.change({
+      topic: `worktrees:${canvas}`,
+      rev: 2,
+      replace: {
+        items: [
+          { ...item, state: 'error', need: undefined, setup: undefined, error: 'git-timeout' },
+        ],
+        kept: [],
+      },
+    });
+  });
+  expect(document.querySelector('.workspace-badge')?.textContent).toContain('Failed');
+});
+
 it('replaces pushed workspace state and retries a missing workspace with exactly one op', async () => {
   const { core } = await setup();
   act(() => {

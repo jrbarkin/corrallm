@@ -11,6 +11,7 @@ export const events = new Proxy(fireEvent, {
     if (typeof value !== 'function') return value;
     const method = value as (...args: unknown[]) => boolean;
     return async (...args: unknown[]) => {
+      await act(() => Promise.resolve());
       await act(() => Promise.resolve(method(...args)));
     };
   },

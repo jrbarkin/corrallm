@@ -10,22 +10,15 @@ import { FakeConnector } from '../sessions/fake';
 import type { Connector } from '../sessions/connector';
 import type { SessionMode } from '../../shared/session';
 import { gitEnvironment } from './workspaces/test-git';
-import { SessionStore } from '../../shared/engine/delivery/mailbox';
-import { TEST_ENGINE } from '../../shared/engine/test-engine';
-import { NO_BACKEND } from '../../shared/engine/transcript/receive';
-import type { GuiEventArgs } from '../../shared/gui-link';
 import type { CoreChannel, IpcArgs, IpcResult } from '../../shared/ipc';
 import { asHuman } from './gui';
 
 let core: Core | undefined;
 let root: string | undefined;
-let store: SessionStore | undefined;
 let releaseStartup: (() => void) | undefined;
 afterEach(async () => {
   releaseStartup?.();
   releaseStartup = undefined;
-  store?.reset();
-  store = undefined;
   await core?.close();
   core = undefined;
   if (root !== undefined) await rm(root, { recursive: true, force: true });
@@ -143,7 +136,7 @@ it('delivers a refused message once after Continue in Terminal on a non-reposito
   expect(terminal.started).toHaveLength(1);
 });
 
-it('delivers the window-owned refused message after Switch to Terminal on a non-repository project', async () => {
+it('delivers the window’s refused manual message after Switch to Terminal on a non-repository project', async () => {
   const { core, terminal, start, retry } = await setup(true);
   const window = 1;
   expect(await core.call('window.show', { canvas: CANVAS }, asHuman(window))).toMatchObject({
@@ -153,52 +146,40 @@ it('delivers the window-owned refused message after Switch to Terminal on a non-
     name: C,
     ...args: IpcArgs<C>
   ): Promise<IpcResult<C>> => (await core.channels.call(window, name, args)) as IpcResult<C>;
-  const sessions = new SessionStore(TEST_ENGINE, {
-    ...NO_BACKEND,
-    availability: (agent) => channel('session:availability', agent),
-    onAvailability: (listener) =>
-      core.channels.listen(window, (name) => {
-        if (name === 'session:availability') listener();
-      }),
-    start: (agent, options) => channel('session:start', agent, options),
-    send: (agent, message) => channel('session:send', agent, message),
-    close: (agent) => channel('session:close', agent),
-    onEvent: (listener) =>
-      core.channels.listen(window, (name, args) => {
-        if (name === 'session:event') listener(...(args as GuiEventArgs<'session:event'>));
-      }),
-  });
-  store = sessions;
-  sessions.sync([{ id: 'a', connection: 'claude-code.sdk' }]);
-  sessions.open('a');
+  await core.call('session.open', { canvas: CANVAS, agent: 'a' }, asHuman(window));
+  const open = core.engines.canvas(CANVAS);
+  if (!open) throw new Error('No runtime');
   await vi.waitFor(() => {
-    expect(sessions.of('a').entries).toContainEqual(
+    expect(open.engine.sessions.of('a').entries).toContainEqual(
       expect.objectContaining({ kind: 'notice', switchTo: 'claude-code.terminal' }),
     );
   });
-  sessions.send('a', 'claude-code', 'Fix the login bug');
-  await vi.waitFor(() => {
-    expect(sessions.of('a').queued.map(({ text }) => text)).toEqual(['Fix the login bug']);
+  const sent = await channel('session:send', 'a', {
+    id: crypto.randomUUID(),
+    text: 'Fix the login bug',
   });
   await vi.waitFor(() => {
+    // Core delivery has journaled its attempt, but startup has not handed it to the CLI.
+    expect(open.messages.get(sent.id)?.state).toBe('delivering');
     expect(start).toHaveBeenCalledTimes(2);
   });
   expect(terminal.started).toHaveLength(0);
-  expect(
-    await core.call(
-      'agent.setConnection',
-      { canvas: CANVAS, agent: 'a', connection: 'claude-code.terminal' },
-      asHuman(window),
-    ),
-  ).toMatchObject({ ok: true });
-  sessions.sync([{ id: 'a', connection: 'claude-code.terminal' }]);
-  sessions.open('a');
+  const switching = core.call(
+    'session.continueIn',
+    { canvas: CANVAS, agent: 'a', connection: 'claude-code.terminal' },
+    asHuman(window),
+  );
+  await vi.waitFor(() => {
+    const agent = open.document.nodes.find((node) => node.id === 'a');
+    expect(agent?.type === 'agent' && agent.data.connection).toBe('claude-code.terminal');
+  });
   retry.reject(new Error('This login cannot run here.'));
+  expect(await switching).toMatchObject({ ok: true });
   await vi.waitFor(() => {
     expect(terminal.sessions.flatMap((session) => session.sent.map(({ text }) => text))).toEqual([
       'Fix the login bug',
     ]);
-    expect(sessions.of('a').submissions?.[0]?.status).toBe('completed');
+    expect(open.messages.get(sent.id)?.state).toBe('replied');
   });
   expect(terminal.started).toHaveLength(1);
 });

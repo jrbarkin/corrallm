@@ -1,7 +1,5 @@
-import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { automaticBackend } from '../../shared/engine/test-backend';
-import type { RunCheckpoint, RunRestore } from '../../shared/run';
 import { newCanvasId } from '../../shared/canvas';
 import { EXAMPLES } from '../../shared/examples';
 import { templateInfo } from '../../shared/templates';
@@ -9,7 +7,6 @@ import { api } from '../api/client';
 import { catalog } from '../catalog';
 import { DEFAULT_AGENT } from './agents';
 import type { AgentNode } from '../../shared/model/canvas';
-import type { RunSource } from '../run/persistence';
 import { fakeCanvas } from '../test-canvas';
 import { expectOneOp } from '../test-api';
 import { events } from '../test-render';
@@ -48,6 +45,11 @@ function setup(saved = true) {
       canvas={canvas.document.id}
       client={canvas.core.api}
       mirror={canvas.core.topics}
+      sessionQueries={{
+        ...canvas.queries,
+        manual: canvas.manual,
+        presentation: canvas.presentation,
+      }}
       files
     />,
   );
@@ -62,8 +64,10 @@ const click = async (name: string) => {
   await events.click(await screen.findByRole('button', { name }));
 };
 /** Opens the agent view of the canvas's one agent. */
-const openWriter = async () => {
-  await events.doubleClick(screen.getByText('Writer'));
+const openWriter = async (canvas: ReturnType<typeof fakeCanvas>) => {
+  await events.doubleClick(await screen.findByText('Writer'));
+  expectOneOp(canvas.core, 'session.open', { canvas: canvas.document.id, agent: 'a' });
+  canvas.core.operations.length = 0;
 };
 const writer = (canvas: ReturnType<typeof fakeCanvas>) =>
   canvas.document.nodes.find((node): node is AgentNode => node.id === 'a' && node.type === 'agent');
@@ -166,7 +170,7 @@ it('a cancelled Open keeps the canvas and its selection', async () => {
 
 it('a role draft commits as one agent.setRole and a refusal stays at the field', async () => {
   const canvas = setup();
-  await openWriter();
+  await openWriter(canvas);
   await click('Agent settings: Writer');
   const role = await screen.findByRole('textbox', { name: 'Role' });
   canvas.core.reply('agent.setRole', {
@@ -188,11 +192,11 @@ it('a role draft commits as one agent.setRole and a refusal stays at the field',
 });
 
 it.each([
-  ['Claude · Agent SDK', 'agent.setConnection', { connection: 'claude-code.sdk' }],
+  ['Claude · Agent SDK', 'session.continueIn', { connection: 'claude-code.sdk' }],
   ['Codex · App Server', 'agent.setType', { adapter: 'codex', connection: 'codex.app-server' }],
 ] as const)('the agent chip chooses %s with one %s', async (choice, op, args) => {
   const canvas = setup();
-  await openWriter();
+  await openWriter(canvas);
   await click('Agent: Claude · Terminal');
   await events.click(await screen.findByRole('option', { name: new RegExp(`^${choice}`) }));
   await waitFor(() => {
@@ -203,7 +207,7 @@ it.each([
 
 it('the settings sheet’s chip changes the agent’s CLI with one agent.setType', async () => {
   const canvas = setup();
-  await openWriter();
+  await openWriter(canvas);
   await click('Agent settings: Writer');
   const sheet = await screen.findByRole('dialog', { name: 'Agent settings: Writer' });
   await events.click(within(sheet).getByRole('button', { name: 'Agent: Claude · Terminal' }));
@@ -221,7 +225,7 @@ it('the settings sheet’s chip changes the agent’s CLI with one agent.setType
 
 it('a settings-sheet choice commits one agent.setSettings', async () => {
   const canvas = setup();
-  await openWriter();
+  await openWriter(canvas);
   await click('Agent settings: Writer');
   const sheet = await screen.findByRole('dialog', { name: 'Agent settings: Writer' });
   await events.click(within(sheet).getByRole('button', { name: /^Mode:/ }));
@@ -237,303 +241,39 @@ it('a settings-sheet choice commits one agent.setSettings', async () => {
   expect(writer(canvas)?.data.settings?.['claude-code']?.mode).toBe('plan');
 });
 
-it('keeps an Open shortcut pressed during initial restore, saving the run before opening and keeping the switch inert', async () => {
-  const canvas = fakeCanvas({ id: newCanvasId(), arrange: false, nodes: [], links: [] });
-  cleanups.push(() => {
-    canvas.core.dispose();
-  });
-  const restore = Promise.withResolvers<RunRestore>();
-  const opened = Promise.withResolvers<{
-    ok: true;
-    value: { canvas: null; revs: Record<string, never> };
-  }>();
-  const save = vi.fn<RunSource['save']>(() => Promise.resolve(null));
-  canvas.core.reply('canvas.open', () => {
-    expect(save).toHaveBeenCalled();
-    return opened.promise;
-  });
-  const view = render(
-    <GraphEditor
-      canvas={canvas.document.id}
-      client={canvas.core.api}
-      mirror={canvas.core.topics}
-      files
-      runSource={{
-        get: () => restore.promise,
-        save,
-        ready: () => Promise.resolve(null),
-        onStopping: () => () => undefined,
-      }}
-    />,
-  );
-  await events.keyDown(document.body, { key: 'o', ctrlKey: true });
-  expect(canvas.core.operations).toEqual([]);
-  await act(() => {
-    restore.resolve({ id: canvas.document.id, token: 'run', checkpoint: null });
-    return Promise.resolve();
-  });
-  try {
-    await waitFor(() => {
-      expectOneOp(canvas.core, 'canvas.open', {});
-    });
-    expect(view.container.querySelector('.graph-editor')?.hasAttribute('inert')).toBe(true);
-  } finally {
-    await act(() => {
-      opened.resolve({ ok: true, value: { canvas: null, revs: {} } });
-      return Promise.resolve();
-    });
-  }
-  await waitFor(() => {
-    expect(view.container.querySelector('.graph-editor')?.hasAttribute('inert')).toBe(false);
-  });
-});
-
-it('waits for the initial canvas mirror before reading run progress', async () => {
-  const canvas = fakeCanvas({ id: newCanvasId(), arrange: false, nodes: [], links: [] });
-  cleanups.push(() => {
-    canvas.core.dispose();
-  });
-  const mirrored = Promise.withResolvers<undefined>();
-  vi.spyOn(canvas.core.topics, 'whenAt').mockReturnValue(mirrored.promise);
-  const get = vi.fn<RunSource['get']>(() =>
-    Promise.resolve({
-      id: canvas.document.id,
-      token: 'run',
-      checkpoint: null,
-      notices: ['Restored from a snapshot.'],
-    }),
-  );
-  render(
-    <GraphEditor
-      canvas={canvas.document.id}
-      client={canvas.core.api}
-      mirror={canvas.core.topics}
-      runSource={{
-        get,
-        save: () => Promise.resolve(null),
-        ready: () => Promise.resolve(null),
-        onStopping: () => () => undefined,
-      }}
-    />,
-  );
-  await act(() => Promise.resolve());
-  expect(get).not.toHaveBeenCalled();
-  await act(() => {
-    mirrored.resolve(undefined);
-    return Promise.resolve();
-  });
-  await waitFor(() => {
-    expect(get).toHaveBeenCalledOnce();
-  });
-  expect(await screen.findByText('Restored from a snapshot.')).toBeTruthy();
-});
-
-it('keeps a failed restore’s recovery after a cancelled Open, until New switches canvases', async () => {
-  const canvas = fakeCanvas({ id: newCanvasId(), arrange: false, nodes: [], links: [] });
-  cleanups.push(() => {
-    canvas.core.dispose();
-  });
-  // The canvas shown can't be restored; the one a switch shows can.
-  let restored = 0;
-  render(
-    <GraphEditor
-      canvas={canvas.document.id}
-      client={canvas.core.api}
-      mirror={canvas.core.topics}
-      files
-      runSource={{
-        get: () =>
-          restored++ === 0
-            ? Promise.reject(new Error('Unreadable journal'))
-            : Promise.resolve({ id: canvas.document.id, token: 'new', checkpoint: null }),
-        save: () => Promise.resolve(null),
-        ready: () => Promise.resolve(null),
-        onStopping: () => () => undefined,
-      }}
-    />,
-  );
-  expect(await screen.findByRole('toolbar', { name: 'Canvas recovery' })).toBeTruthy();
-  // The Open dialog cancelled: still the canvas that could not be restored.
-  await click('Open…');
-  await waitFor(() => {
-    expectOneOp(canvas.core, 'canvas.open', {});
-  });
-  expect(screen.getByRole('toolbar', { name: 'Canvas recovery' })).toBeTruthy();
-  await click('New');
-  await waitFor(() => {
-    expect(screen.queryByRole('toolbar', { name: 'Canvas recovery' })).toBeNull();
-  });
-});
-
-it('blocks input through a switch’s late restore, then preserves the next manual message', async () => {
-  const canvas = fakeCanvas({ id: newCanvasId(), arrange: false, nodes: [], links: [] });
-  cleanups.push(() => {
-    canvas.core.dispose();
-  });
-  const initial = canvas.document.id,
-    next = newCanvasId();
-  const sessions = automaticBackend();
-  const held = Promise.withResolvers<RunRestore>();
-  const save = vi.fn<RunSource['save']>(() => Promise.resolve(null));
-  let reads = 0;
-  canvas.core.reply('canvas.open', () => {
-    canvas.open({
-      id: next,
-      arrange: false,
-      nodes: [
-        {
-          id: 'b',
-          type: 'agent',
-          position: { x: 0, y: 0 },
-          data: { label: 'Fresh', adapter: 'claude-code', connection: 'claude-code.sdk' },
-        },
-      ],
-      links: [],
-    });
-    return Promise.resolve({ ok: true, value: { canvas: next, revs: {} } });
-  });
-  const view = render(
-    <GraphEditor
-      canvas={initial}
-      client={canvas.core.api}
-      mirror={canvas.core.topics}
-      sessionBackend={sessions.backend}
-      runSource={{
-        get: () =>
-          ++reads === 1
-            ? Promise.resolve({ id: initial, token: 'old', checkpoint: null })
-            : held.promise,
-        save,
-        ready: () => Promise.resolve(null),
-        onStopping: () => () => undefined,
-      }}
-    />,
-  );
-  await waitFor(() => {
-    expect(save).toHaveBeenCalled();
-  });
-  await click('Open…');
-  await waitFor(() => {
-    expect(reads).toBe(2);
-  });
-  try {
-    const root = view.container.querySelector('.graph-editor');
-    expect(root?.hasAttribute('inert')).toBe(true);
-    expect(root?.getAttribute('aria-busy')).toBe('true');
-    await events.doubleClick(await screen.findByText('Fresh'));
-    await events.keyDown(document.body, { key: 'n', ctrlKey: true });
-    await events.keyDown(document.body, { key: 's', ctrlKey: true });
-    expect(screen.queryByRole('dialog', { name: 'Fresh' })).toBeNull();
-    expect(sessions.backend.start).not.toHaveBeenCalled();
-    expectOneOp(canvas.core, 'canvas.open', {});
-  } finally {
-    await act(() => {
-      held.resolve({ id: next, token: 'new', checkpoint: null });
-      return Promise.resolve();
-    });
-  }
-  await waitFor(() => {
-    expect(view.container.querySelector('.graph-editor')?.hasAttribute('inert')).toBe(false);
-  });
-  await events.doubleClick(await screen.findByText('Fresh'));
-  const input = await screen.findByRole('textbox', { name: 'Message Fresh' });
-  await events.change(input, { target: { value: 'Sent after the switch' } });
-  await events.keyDown(input, { key: 'Enter' });
-  await waitFor(() => {
-    expect(sessions.backend.send).toHaveBeenCalledOnce();
-  });
-  await waitFor(() => {
-    expect(save).toHaveBeenLastCalledWith(
-      'new',
-      expect.objectContaining({
-        messages: expect.stringContaining('Sent after the switch') as unknown,
-      }),
-    );
-  });
-  expect(sessions.backend.close).not.toHaveBeenCalledWith('b');
-});
-
 it.each(['cancelled', 'refused'] as const)(
-  'a %s Open leaves a running queue and its turn unchanged',
+  'a %s Open leaves the core run unchanged',
   async (outcome) => {
-    const canvas = fakeCanvas({
-      id: newCanvasId(),
-      arrange: false,
-      nodes: [
-        {
-          id: 'a',
-          type: 'agent',
-          position: { x: 0, y: 0 },
-          data: {
-            label: 'A',
-            connection: 'claude-code.sdk',
-            queue: [{ id: 'work', message: 'Keep working' }],
-          },
-        },
-      ],
-      links: [],
-    });
+    const canvas = fakeCanvas({ id: newCanvasId(), arrange: false, nodes: [], links: [] });
     cleanups.push(() => {
       canvas.core.dispose();
     });
-    const id = canvas.document.id;
-    const sessions = automaticBackend();
-    // Keep this native turn open explicitly; the regression must not depend on a one-second timer.
-    sessions.backend.send.mockImplementation((agent, message) => {
-      sessions.emit(
-        agent,
-        'claude-code.sdk',
-        { type: 'user', id: message.id, text: message.text },
-        { type: 'status', status: 'working' },
-      );
-      return Promise.resolve(null);
-    });
-    const save = vi.fn<(_token: string, checkpoint: RunCheckpoint | null) => Promise<null>>(() =>
-      Promise.resolve(null),
-    );
+    const before = canvas.engine.run.snapshot();
     if (outcome === 'refused')
       canvas.core.reply('canvas.open', {
         ok: false,
         error: { code: 'invalid', sentence: 'Not a canvas' },
       });
-    render(
+    const view = render(
       <GraphEditor
-        canvas={id}
+        canvas={canvas.document.id}
         client={canvas.core.api}
         mirror={canvas.core.topics}
-        sessionBackend={sessions.backend}
-        runSource={{
-          get: () => Promise.resolve({ id, token: 'same', checkpoint: null }),
-          save,
-          ready: () => Promise.resolve(null),
-          onStopping: () => () => undefined,
+        sessionQueries={{
+          ...canvas.queries,
+          manual: canvas.manual,
+          presentation: canvas.presentation,
         }}
+        files
       />,
     );
     await waitFor(() => {
-      expect(save).toHaveBeenCalled();
+      expect(view.container.querySelector('.graph-editor')?.hasAttribute('inert')).toBe(false);
     });
-    await click('Show all queues');
-    const queues = within(screen.getByRole('dialog', { name: 'All queues' }));
-    await events.click(queues.getByRole('button', { name: 'Run' }));
-    await waitFor(() => {
-      expect(sessions.backend.send).toHaveBeenCalledOnce();
-    });
-    const before = JSON.parse(save.mock.calls.at(-1)?.[1]?.state ?? '{}') as unknown;
-    await events.click(queues.getByRole('button', { name: 'Back' }));
     await click('Open…');
-    await waitFor(() => {
-      expectOneOp(canvas.core, 'canvas.open', {});
-    });
+    expectOneOp(canvas.core, 'canvas.open', {});
     if (outcome === 'refused')
-      expect(await screen.findByRole('alert')).toHaveProperty(
-        'textContent',
-        expect.stringContaining('Not a canvas'),
-      );
-    expect(sessions.backend.interrupt).not.toHaveBeenCalled();
-    expect(sessions.backend.close).not.toHaveBeenCalled();
-    const after = JSON.parse(save.mock.calls.at(-1)?.[1]?.state ?? '{}') as unknown;
-    expect(after).toEqual(before);
-    expect(canvas.document.id).toBe(id);
+      expect((await screen.findByRole('alert')).textContent).toContain('Not a canvas');
+    expect(canvas.engine.run.snapshot()).toBe(before);
   },
 );

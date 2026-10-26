@@ -11,6 +11,7 @@ interface GroupControls {
 
 /** Runtime controls shared by agent cards, groups, queue headings and session headers. */
 export function AgentContextMenu({
+  inert = false,
   name,
   at,
   paused,
@@ -24,6 +25,7 @@ export function AgentContextMenu({
   onSettings,
   onClose,
 }: {
+  inert?: boolean;
   name: string;
   at: { x: number; y: number };
   paused: boolean;
@@ -65,6 +67,7 @@ export function AgentContextMenu({
   return createPortal(
     <div
       ref={menu}
+      inert={inert}
       className="agent-context-menu"
       role="menu"
       aria-label={`${name} controls`}

@@ -75,8 +75,8 @@ for (const [name, artifact] of cases) {
       if (name !== 'Head to head')
         expect(doc.nodes.find((node) => node.id === owners[0]?.node)?.type).toBe('frame');
       for (const agent of doc.nodes.filter((node) => node.type === 'agent')) {
-        // Use the app's current SessionBackend seam (App.tsx), not session.open, whose C6
-        // service requires a core-owned run. A shown window alone owns no such runtime yet.
+        // The core owns the run and the session: an agent's window opens it with session.open,
+        // from the document's own settings, as viewing it does.
         const availability = await page.evaluate(
           (id) => window.api.sessionAvailability(id),
           agent.id,
@@ -93,18 +93,11 @@ for (const [name, artifact] of cases) {
           await skip.click();
           await expect(skip).toHaveCount(0);
         }
-        const connection = agent.data.connection;
-        if (connection === undefined) throw new Error(`No selected connection for ${agent.id}`);
-        await page.evaluate(
-          ({ agent, connection, role }) =>
-            window.api.startSession(agent, {
-              connection,
-              model: null,
-              mode: null,
-              ...(role === undefined ? {} : { role }),
-            }),
-          { agent: agent.id, connection, role: agent.data.role },
+        const opened = await page.evaluate(
+          ({ canvas, agent }) => window.api.sessionOpen({ canvas, agent }),
+          { canvas: doc.id, agent: agent.id },
         );
+        expect(opened, JSON.stringify(opened)).toMatchObject({ ok: true });
       }
       const trees = readOnDisk(profile, (db) =>
         db

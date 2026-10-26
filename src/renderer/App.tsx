@@ -1,57 +1,12 @@
 import { useEffect, useState } from 'react';
 
-import type { SessionBackend } from '../shared/engine/transcript/receive';
 import { api } from './api/client';
-import { findProjectFiles } from './agent/completion';
 import { GraphEditor } from './graph/GraphEditor';
-import { fromMain } from './ipc-error';
 import { OpenLinkContext, openLinkWith } from './open-link';
 import type { OpenLink } from './open-link';
 import type { TerminalBackend } from './terminal/backend';
 import { topics } from './api/topics';
 import type { UsageSource } from './usage/store';
-import type { RunSource } from './run/persistence';
-
-/**
- * The window's run, journaled by the core: read once the editor's mirror holds the canvas shown
- * (B9 Design §9), and saved without the document, which is the core's.
- */
-const runSource: RunSource = {
-  get: () => window.api.getRun(),
-  save: (token, checkpoint) => window.api.saveRun(token, checkpoint),
-  ready: (request, error) => window.api.runReady(request, error),
-  onStopping: (listener) => window.api.onRunStopping(listener),
-};
-
-/** Connected agents' sessions run in the core process (src/main/sessions/). */
-const sessionBackend: SessionBackend = {
-  availability: (agent) => fromMain(window.api.sessionAvailability(agent)),
-  onAvailability: (listener) => window.api.onSessionAvailability(listener),
-  start: (agentId, options) => fromMain(window.api.startSession(agentId, options)),
-  installed: () => api.catalogInstalled(),
-  send: (agentId, message) => fromMain(window.api.sendToSession(agentId, message)),
-  answer: (agentId, promptId, answer) =>
-    fromMain(window.api.answerSession(agentId, promptId, answer)),
-  interrupt: (agentId) => fromMain(window.api.interruptSession(agentId)),
-  setMode: (agentId, mode) => fromMain(window.api.setSessionMode(agentId, mode)),
-  setModel: (agentId, model) => fromMain(window.api.setSessionModel(agentId, model)),
-  setEffort: (agentId, effort) => fromMain(window.api.setSessionEffort(agentId, effort)),
-  stopTask: (agentId, taskId) => fromMain(window.api.stopSessionTask(agentId, taskId)),
-  close: (agentId) => fromMain(window.api.closeSession(agentId)),
-  fresh: (agentId, adapter) => fromMain(window.api.freshSession(agentId, adapter)),
-  files: findProjectFiles,
-  options: (adapter, agent) =>
-    fromMain(window.api.settingsOptions(adapter, ...(agent === undefined ? [] : [agent]))),
-  sessions: (agentId) => fromMain(window.api.listSessions(agentId)),
-  resume: (agentId, sessionId) => fromMain(window.api.resumeSession(agentId, sessionId)),
-  previewRewind: (agentId, messageId) => fromMain(window.api.previewRewind(agentId, messageId)),
-  rewind: (agentId, messageId, restore) =>
-    fromMain(window.api.rewindSession(agentId, messageId, restore)),
-  mcp: (agentId) => fromMain(window.api.mcpServers(agentId)),
-  changeMcp: (agentId, server, change) =>
-    fromMain(window.api.changeMcpServer(agentId, server, change)),
-  onEvent: (listener) => window.api.onSessionEvent(listener),
-};
 
 /** Terminal agents' terminals run in the core process (src/main/sessions/terminal/). */
 const done = (call: Promise<unknown>) => call.then(() => null);
@@ -117,12 +72,7 @@ export function App() {
         </p>
       </header>
       <OpenLinkContext.Provider value={openLink}>
-        <GraphEditor
-          sessionBackend={sessionBackend}
-          terminalBackend={terminalBackend}
-          usageSource={usageSource}
-          runSource={runSource}
-        />
+        <GraphEditor terminalBackend={terminalBackend} usageSource={usageSource} />
       </OpenLinkContext.Provider>
     </main>
   );

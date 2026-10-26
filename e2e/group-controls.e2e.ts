@@ -8,6 +8,7 @@ import { expect, test } from '@playwright/test';
 import type { ElectronApplication, Page } from '@playwright/test';
 
 import { launchApp } from './launch';
+import { crashCoreAndReload } from './core-crash';
 
 // Group ownership through the real renderer, IPC and Agent SDK, against a fake CLI only.
 // Its independent prompt log proves that nested/individual holds do not leak or replay work.
@@ -249,6 +250,9 @@ test('pauses nested active members until they finish, preserves an individual ho
     ),
   ]);
   await agentControl('manual', 'Manual', 'Pause');
+  // A hold is an operation to the core, which the menu does not wait for: Run clicked before it
+  // lands starts the held queue.
+  await expect(heading('manual').getByText('Paused', { exact: true })).toBeVisible();
   await queues().getByRole('button', { name: 'Run', exact: true }).click();
   await expect.poll(sentTexts, { timeout: 15_000 }).toEqual(expect.arrayContaining([alpha, beta]));
   await held('alpha', 'beta');
@@ -285,7 +289,7 @@ test('pauses nested active members until they finish, preserves an individual ho
   );
 });
 
-test('preserves stacked group and individual holds across reload and global Resume, releasing only each owner’s work', async () => {
+test('preserves stacked group and individual holds across a core crash and global Resume, releasing only each owner’s work', async () => {
   const outer = 'stack outer';
   const inner = 'stack inner';
   const manual = 'stack manual';
@@ -302,11 +306,15 @@ test('preserves stacked group and individual holds across reload and global Resu
   await frameControl('inner', 'Inner', 'Pause');
   await frameControl('outer', 'Outer', 'Pause');
   await showQueues();
+  // Each hold is an operation to the core: Run must find all three, not start the one still landing.
+  for (const id of ['alpha', 'beta', 'manual']) {
+    await expect(heading(id).getByText('Paused', { exact: true })).toBeVisible();
+  }
   await queues().getByRole('button', { name: 'Run', exact: true }).click();
   await expect(row('outside', 'only')).toHaveAttribute('data-run', 'succeeded');
   expect(await sentTexts()).toEqual([outside]);
 
-  await page.reload();
+  await crashCoreAndReload(app, page);
   await expect(page.locator('.react-flow__node-frame')).toHaveCount(2);
   await showQueues();
   await expect(queues().getByRole('status')).toHaveText('Paused');

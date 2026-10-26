@@ -1,26 +1,22 @@
+import { MessageId } from '../../shared/api/ids';
 import type { Children } from './children';
 import type { GuiEvent, GuiEventArgs } from '../../shared/gui-link';
 import type { CanvasId } from '../../shared/canvas';
 import type { Catalog } from '../../shared/adapter';
 import type { CoreChannel, IpcArgs, IpcResult } from '../../shared/ipc';
-import { parseRunCheckpoint } from '../../shared/run';
-import type { RunJournal } from '../run-journal';
+import type { Engines } from './engines';
 import type { Windows } from './windows';
-import type { HostServices, WindowId } from './host';
+import type { WindowId } from './host';
 import {
   parseAgentArgs,
   parseAnswerArgs,
   parseEffortArgs,
-  parseFreshArgs,
   parseMcpChangeArgs,
   parseModeArgs,
   parseModelArgs,
   parseOptionsArgs,
   parseResumeArgs,
-  parseRewindArgs,
-  parseRewindPreviewArgs,
   parseSendArgs,
-  parseStartArgs,
   parseStopTaskArgs,
 } from '../sessions/args';
 import type { SessionManager } from '../sessions/manager';
@@ -37,20 +33,25 @@ export type ChannelHandler<C extends CoreChannel> = (
 ) => IpcResult<C> | Promise<IpcResult<C>>;
 
 /**
- * What the handlers act on: the catalog, which canvas each window shows, runs and sessions.
- * A handler looks up the window's canvas before calling its service.
+ * What the handlers act on: the catalog, which canvas each window shows, the canvases the core runs
+ * and their sessions. A handler looks up the window's canvas before calling its service.
  */
 export interface ChannelServices {
   processes?: Pick<Children, 'run'>;
   /** What every adapter declares (sessions/adapters.ts): what the channels' arguments name. */
   catalog: Catalog;
   windows: Pick<Windows, 'canvasOf' | 'showing' | 'gone'>;
-  runs: Pick<RunJournal, 'get' | 'check' | 'save'>;
-  shutdown: { ready: HostServices['runReady'] };
+  /**
+   * The canvases the core runs, every one a window shows (B11 Design §8): what a window's session
+   * channel changes of a session there, the core's own session hears too, so the core's runtime
+   * stays its one owner until B11 X13 moves the agent window onto the session topic and operations.
+   */
+  engines: Pick<Engines, 'canvas'>;
+  /** C11's existing write barrier also applies to X13's transitional manual-message bridge. */
+  admitManual?: () => void;
   sessions: Pick<
     SessionManager,
     | 'availability'
-    | 'start'
     | 'send'
     | 'answer'
     | 'interrupt'
@@ -58,22 +59,12 @@ export interface ChannelServices {
     | 'setModel'
     | 'setEffort'
     | 'stopTask'
-    | 'close'
-    | 'fresh'
     | 'listSessions'
     | 'resumeSession'
     | 'mcpServers'
     | 'changeMcpServer'
     | 'settingsOptions'
-    | 'previewRewind'
-    | 'rewind'
   >;
-}
-
-/** `ArgsParser` for channels that take no arguments. */
-export function noArgs(args: unknown[]): [] {
-  if (args.length !== 0) throw new TypeError('Expected no arguments');
-  return [];
 }
 
 /**
@@ -84,81 +75,68 @@ type HandlerTable = {
   [C in CoreChannel]: { parseArgs: ArgsParser<C>; handler: ChannelHandler<C> };
 };
 
-function createHandlers({
-  catalog,
-  windows,
-  runs,
-  shutdown,
-  sessions,
-}: ChannelServices): HandlerTable {
+function createHandlers(services: ChannelServices): HandlerTable {
+  const { catalog, windows, sessions } = services;
   /** The canvas the sender's window shows: what every canvas's channel acts on. */
   const of = (window: WindowId) => windows.canvasOf(window);
+  /**
+   * The core's own sessions of a canvas it runs: they hear what a window's channel changed. Read
+   * as each is handled (the engines are composed after the channels).
+   */
+  const own = (canvas: CanvasId) => services.engines.canvas(canvas)?.engine.sessions;
   return {
-    'run:get': {
-      parseArgs: noArgs,
-      handler: async ({ window }) => {
-        const canvas = await of(window);
-        const { id, token, checkpoint, warning, saveError } = await runs.get(canvas);
-        return {
-          id,
-          token,
-          checkpoint,
-          ...(saveError === undefined ? {} : { saveError }),
-          notices: [warning, saveError].filter((one) => one !== undefined),
-        };
-      },
-    },
-    'run:save': {
-      parseArgs: (args) => {
-        const [token, checkpoint] = args;
-        if (args.length !== 2 || typeof token !== 'string' || token.length > 100) {
-          throw new TypeError('Expected a canvas token and a run checkpoint');
-        }
-        return [token, checkpoint === null ? null : parseRunCheckpoint(checkpoint, true)];
-      },
-      handler: async ({ window }, token, checkpoint) => {
-        const canvas = await of(window);
-        runs.check(canvas, token);
-        await runs.save(canvas, token, checkpoint);
-        return null;
-      },
-    },
-    'run:ready': {
-      parseArgs: (args) => {
-        const [id, error] = args;
-        if (
-          args.length !== 2 ||
-          typeof id !== 'string' ||
-          id.length > 100 ||
-          !(error === null || (typeof error === 'string' && error.length <= 4096))
-        ) {
-          throw new TypeError('Expected a shutdown request and error (or null)');
-        }
-        return [id, error];
-      },
-      handler: async ({ window }, id, error) => {
-        await shutdown.ready(window, id, error);
-        return null;
-      },
-    },
-    'session:start': {
-      parseArgs: (args) => parseStartArgs(args, catalog),
-      handler: async ({ window }, agentId, options) => {
-        await sessions.start(await of(window), agentId, options);
+    'session:record': {
+      parseArgs: parseSendArgs,
+      handler: async ({ window }, agent, message) => {
+        services.admitManual?.();
+        const runtime = services.engines.canvas(await of(window));
+        services.admitManual?.();
+        if (!runtime?.document.nodes.some((node) => node.type === 'agent' && node.id === agent))
+          throw new Error('That agent is no longer on this canvas.');
+        runtime.engine.sessions.recordSubmission(agent, message.text, message.images);
+        await runtime.journal();
         return null;
       },
     },
     'session:send': {
       parseArgs: parseSendArgs,
       handler: async ({ window }, agentId, message) => {
-        await sessions.send(await of(window), agentId, message);
+        services.admitManual?.();
+        const runtime = services.engines.canvas(await of(window));
+        services.admitManual?.();
+        if (!runtime?.document.nodes.some((node) => node.type === 'agent' && node.id === agentId))
+          throw new Error('That agent is no longer on this canvas.');
+        const kept = await runtime.delivery.send('you', agentId, message.text, undefined, {
+          images: message.images,
+          told: `manual-channel:${message.id}`,
+        });
+        return { id: kept.id };
+      },
+    },
+    'session:unqueue': {
+      parseArgs: (args) => {
+        if (args.length !== 2) throw new TypeError('Expected an agent and message id');
+        const [agent] = parseAgentArgs(args.slice(0, 1));
+        return [agent, MessageId.parse(args[1])];
+      },
+      handler: async ({ window }, agent, id) => {
+        services.admitManual?.();
+        const runtime = services.engines.canvas(await of(window));
+        services.admitManual?.();
+        const message = runtime?.messages.get(id);
+        if (message?.to !== `agent:${agent}` || message.from !== 'you' || !runtime)
+          throw new Error('That manual message is no longer queued for this agent.');
+        await runtime.delivery.withdraw(id, 'you');
         return null;
       },
     },
     'session:answer': {
       parseArgs: parseAnswerArgs,
       handler: async ({ window }, agentId, promptId, answer) => {
-        await sessions.answer(await of(window), agentId, promptId, answer);
+        const canvas = await of(window);
+        await sessions.answer(canvas, agentId, promptId, answer);
+        // Its CLI took it: the core's session shows it answered too, so it no longer waits in Needs.
+        own(canvas)?.answered(agentId, promptId, answer);
         return null;
       },
     },
@@ -172,21 +150,27 @@ function createHandlers({
     'session:mode': {
       parseArgs: parseModeArgs,
       handler: async ({ window }, agentId, mode) => {
-        await sessions.setMode(await of(window), agentId, mode);
+        const canvas = await of(window);
+        await sessions.setMode(canvas, agentId, mode);
+        own(canvas)?.applied(agentId, { mode });
         return null;
       },
     },
     'session:model': {
       parseArgs: parseModelArgs,
       handler: async ({ window }, agentId, model) => {
-        await sessions.setModel(await of(window), agentId, model);
+        const canvas = await of(window);
+        await sessions.setModel(canvas, agentId, model);
+        own(canvas)?.applied(agentId, { model });
         return null;
       },
     },
     'session:effort': {
       parseArgs: parseEffortArgs,
       handler: async ({ window }, agentId, effort) => {
-        await sessions.setEffort(await of(window), agentId, effort);
+        const canvas = await of(window);
+        await sessions.setEffort(canvas, agentId, effort);
+        own(canvas)?.applied(agentId, { effort });
         return null;
       },
     },
@@ -194,20 +178,6 @@ function createHandlers({
       parseArgs: parseStopTaskArgs,
       handler: async ({ window }, agentId, taskId) => {
         await sessions.stopTask(await of(window), agentId, taskId);
-        return null;
-      },
-    },
-    'session:close': {
-      parseArgs: parseAgentArgs,
-      handler: async ({ window }, agentId) => {
-        await sessions.close(await of(window), agentId);
-        return null;
-      },
-    },
-    'session:fresh': {
-      parseArgs: (args) => parseFreshArgs(args, catalog),
-      handler: async ({ window }, agentId, adapter) => {
-        await sessions.fresh(await of(window), agentId, adapter);
         return null;
       },
     },
@@ -220,24 +190,12 @@ function createHandlers({
     'session:resume': {
       parseArgs: parseResumeArgs,
       handler: async ({ window }, agentId, sessionId) => {
-        await sessions.resumeSession(
-          await of(window),
-          agentId,
-          sessionId,
-          `window:${String(window)}`,
-        );
+        const canvas = await of(window);
+        await sessions.resumeSession(canvas, agentId, sessionId, `window:${String(window)}`);
+        // Its session ended, to resume that conversation: the core's starts again, resuming it.
+        own(canvas)?.resumed(agentId);
         return null;
       },
-    },
-    'session:rewind-preview': {
-      parseArgs: parseRewindPreviewArgs,
-      handler: async ({ window }, agentId, messageId) =>
-        sessions.previewRewind(await of(window), agentId, messageId),
-    },
-    'session:rewind': {
-      parseArgs: parseRewindArgs,
-      handler: async ({ window }, agentId, messageId, restore) =>
-        sessions.rewind(await of(window), agentId, messageId, restore),
     },
     'session:availability': {
       parseArgs: parseAgentArgs,

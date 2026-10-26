@@ -99,10 +99,9 @@ it('zoom and Arrange share a float; each click has one intent', async () => {
     expect(action).toHaveBeenCalledOnce();
   }
 });
-it('the run float keeps Run, Pause, Stop and Resume alongside Needs and usage, with queues in the dock', async () => {
+it('the run float keeps Run, Stop and Resume alongside Needs and usage, with queues in the dock', async () => {
   const actions = {
     onRun: vi.fn(),
-    onPause: vi.fn(),
     onStop: vi.fn(),
     onResume: vi.fn(),
   };
@@ -116,9 +115,7 @@ it('the run float keeps Run, Pause, Stop and Resume alongside Needs and usage, w
   await events.click(screen.getByRole('button', { name: 'Run' }));
   expect(actions.onRun).toHaveBeenCalledOnce();
   view.rerender(<RunFloat {...props} run={{ running: true, agents: {} }} />);
-  await events.click(screen.getByRole('button', { name: 'Pause' }));
   await events.click(screen.getByRole('button', { name: 'Stop' }));
-  expect(actions.onPause).toHaveBeenCalledOnce();
   expect(actions.onStop).toHaveBeenCalledOnce();
   view.rerender(<RunFloat {...props} run={{ running: false, paused: true, agents: {} }} />);
   await events.click(screen.getByRole('button', { name: 'Resume' }));

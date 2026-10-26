@@ -360,9 +360,6 @@ describe('preload', () => {
     const api = await exposed();
     postPort(answerInfo);
     channel.mockResolvedValue(null);
-    const options = { connection: 'claude-code.sdk', model: null, mode: 'manual' } as const;
-    await api.startSession('a', options);
-    expect(channel).toHaveBeenLastCalledWith('session:start', 'a', options);
     await api.sendToSession('a', { id: 'm', text: 'Hi' });
     expect(channel).toHaveBeenLastCalledWith('session:send', 'a', { id: 'm', text: 'Hi' });
     const image = { mediaType: 'image/png', data: 'iVBORw0KGgo=' } as const;
@@ -372,6 +369,14 @@ describe('preload', () => {
       text: '',
       images: [image],
     });
+    await api.recordSessionCommand('a', { id: 'local', text: '/mcp' });
+    expect(channel).toHaveBeenLastCalledWith('session:record', 'a', { id: 'local', text: '/mcp' });
+    await api.unqueueSession('a', '11111111-1111-4111-8111-111111111111');
+    expect(channel).toHaveBeenLastCalledWith(
+      'session:unqueue',
+      'a',
+      '11111111-1111-4111-8111-111111111111',
+    );
     await api.answerSession('a', 'p', { kind: 'permission', answer: 'deny' });
     expect(channel).toHaveBeenLastCalledWith('session:answer', 'a', 'p', {
       kind: 'permission',
@@ -387,20 +392,16 @@ describe('preload', () => {
     expect(channel).toHaveBeenLastCalledWith('session:effort', 'a', 'high');
     await api.stopSessionTask('a', 'b1');
     expect(channel).toHaveBeenLastCalledWith('session:stopTask', 'a', 'b1');
-    await api.closeSession('a');
-    expect(channel).toHaveBeenLastCalledWith('session:close', 'a');
-    await api.freshSession('a', 'codex');
-    expect(channel).toHaveBeenLastCalledWith('session:fresh', 'a', 'codex');
     await api.listSessions('a');
     expect(channel).toHaveBeenLastCalledWith('session:list', 'a');
-    await api.previewRewind('a', 'm');
-    expect(channel).toHaveBeenLastCalledWith('session:rewind-preview', 'a', 'm');
-    await api.rewindSession('a', 'm', 'both');
-    expect(channel).toHaveBeenLastCalledWith('session:rewind', 'a', 'm', 'both');
     await api.mcpServers('a');
     expect(channel).toHaveBeenLastCalledWith('session:mcp', 'a');
     await api.settingsOptions('claude-code');
     expect(channel).toHaveBeenLastCalledWith('session:options', 'claude-code');
+    await api.settingsOptions('codex', 'a');
+    expect(channel).toHaveBeenLastCalledWith('session:options', 'codex', 'a');
+    await api.sessionAvailability('a');
+    expect(channel).toHaveBeenLastCalledWith('session:availability', 'a');
     await api.changeMcpServer('a', 'github', 'disable');
     expect(channel).toHaveBeenLastCalledWith('session:mcp-change', 'a', 'github', 'disable');
     await api.resumeSession('a', '0b3a7d52-6a0c-4f39-9c4e-2f8f0c1d9e11');
@@ -426,7 +427,7 @@ describe('preload', () => {
 
     stop();
     remote.emit('event', 'session:event', ['a', 'claude-code.sdk', event]);
-    await api.getRun();
+    await api.interruptSession('a');
     expect(heard).toHaveBeenCalledOnce();
   });
 
@@ -521,7 +522,7 @@ describe('preload', () => {
 
     stop();
     remote.emit('event', 'terminal', ['a', { type: 'output', data: 'hi' }]);
-    await api.getRun();
+    await api.interruptSession('a');
     expect(heard).toHaveBeenCalledOnce();
   });
 
@@ -565,81 +566,42 @@ describe('preload', () => {
   });
 });
 
-describe('run persistence preload', () => {
-  it('keeps an early shutdown request until the renderer installs its run owner', async () => {
+describe('a window’s run, the core’s alone (B11 Design §8)', () => {
+  it('exposes no run channel, no shutdown event and no channel that starts or ends a session', async () => {
     const api = await exposed();
-    const receive = on.mock.calls.find(([channel]) => channel === 'run:stopping')?.[1];
-    // window.get can already have restored a canvas while React has not mounted its editor.
-    receive?.({}, 'early-quit');
-    const stop = vi.fn();
-    api.onRunStopping(stop);
-    expect(stop).toHaveBeenCalledExactlyOnceWith('early-quit');
-  });
-
-  it('keeps shutdown requests across a run owner cleanup without replaying a handled one', async () => {
-    const api = await exposed();
-    const first = vi.fn();
-    const unsubscribe = api.onRunStopping(first);
-    const receive = (request: string) => {
-      for (const [name, listener] of on.mock.calls) {
-        if (
-          name === 'run:stopping' &&
-          !removeListener.mock.calls.some(
-            ([removed, handler]) => removed === name && handler === listener,
-          )
-        )
-          listener({}, request);
-      }
-    };
-    receive('handled');
-    unsubscribe();
-    receive('between-owners');
-    const next = vi.fn();
-    api.onRunStopping(next);
-    expect(first).toHaveBeenCalledExactlyOnceWith('handled');
-    expect(next).toHaveBeenCalledExactlyOnceWith('between-owners');
-    const later = vi.fn();
-    api.onRunStopping(later);
-    expect(later).not.toHaveBeenCalled();
-  });
-
-  it('exposes only typed get/save/ready calls and strips the stopping event object', async () => {
-    const api = await exposed();
-    postPort(answerInfo);
-    const checkpoint = { version: 2, state: '{}', messages: '[]', updatedAt: 1 } as const;
-    await api.getRun();
-    expect(channel).toHaveBeenLastCalledWith('run:get');
-    await api.saveRun('token', checkpoint);
-    expect(channel).toHaveBeenLastCalledWith('run:save', 'token', checkpoint);
-    await api.runReady('request', null);
-    expect(channel).toHaveBeenLastCalledWith('run:ready', 'request', null);
-    const listener = vi.fn();
-    const stop = api.onRunStopping(listener);
-    const call = on.mock.calls.find(([channel]) => channel === 'run:stopping');
-    call?.[1]({}, 'request');
-    expect(listener).toHaveBeenCalledWith('request');
-    stop();
-    call?.[1]({}, 'after-cleanup');
-    expect(listener).toHaveBeenCalledExactlyOnceWith('request');
-    expect(removeListener).not.toHaveBeenCalledWith('run:stopping', call?.[1]);
+    for (const name of [
+      'getRun',
+      'saveRun',
+      'runReady',
+      'onRunStopping',
+      'startSession',
+      'closeSession',
+      'freshSession',
+      'previewRewind',
+      'rewindSession',
+    ])
+      expect(api).not.toHaveProperty(name);
+    expect(on.mock.calls.map(([name]) => name)).not.toContain('run:stopping');
   });
 });
 
 describe('channels waiting for the core', () => {
   it('queues a channel until the port comes, and preserves a handler’s error message', async () => {
     const api = await exposed();
-    const pending = api.getRun();
-    channel.mockRejectedValue(new Error('The run could not be read.'));
+    const pending = api.listSessions('a');
+    channel.mockRejectedValue(new Error('The conversations could not be read.'));
     postPort(answerInfo);
-    await expect(pending).rejects.toThrow('The run could not be read.');
-    expect(channel).toHaveBeenCalledExactlyOnceWith('run:get');
+    await expect(pending).rejects.toThrow('The conversations could not be read.');
+    expect(channel).toHaveBeenCalledExactlyOnceWith('session:list', 'a');
     expect(invoke).toHaveBeenCalledExactlyOnceWith('core:connect');
   });
 
   it('expires a queued channel after 10 seconds without replaying it on a late port', async () => {
     const api = await exposed();
     vi.useFakeTimers();
-    const failed = expect(api.getRun()).rejects.toThrow('corrallm’s core isn’t answering yet.');
+    const failed = expect(api.listSessions('a')).rejects.toThrow(
+      'corrallm’s core isn’t answering yet.',
+    );
     await vi.advanceTimersByTimeAsync(10_000);
     await failed;
     postPort(answerInfo);

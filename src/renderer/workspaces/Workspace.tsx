@@ -129,10 +129,20 @@ export function WorkspaceBadge({ agent, card = false }: { agent: string; card?: 
         </button>
       )}
       {!item.need && workspaceAttention(item) && (
-        <span aria-label={state}>{item.state === 'missing' ? 'Missing' : 'Failed'}</span>
+        <span aria-label={state}>{attentionWord(item)}</span>
       )}
     </span>
   );
+}
+
+/**
+ * The one word for an attention state with no card to open. A tree in setup has none until the
+ * core has copied its local files and detected the command to offer: that wait is not a failure.
+ */
+function attentionWord(item: Workspace): string {
+  if (item.state === 'missing') return 'Missing';
+  if (item.state === 'setup') return 'Preparing';
+  return 'Failed';
 }
 
 /** Why a session cannot start yet, with navigation to the actual core-owned decision. */

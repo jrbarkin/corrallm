@@ -100,11 +100,14 @@ export function editsOf(edits: QueueEdits, owner: string) {
   };
 }
 
-/** Queue writes share the generated client's draft/revision barriers; run controls stay local. */
+/** Queue writes share the generated client's draft/revision barriers; run controls delegate to their operations. */
 export function operationEdits(
   api: GuiApi,
   canvas: CanvasId,
-  run: Pick<QueueEdits, 'goOn' | 'decide'>,
+  run: {
+    goOn: (agent: string, item: string) => unknown;
+    decide: (agent: string, item: string, answer: Answer) => unknown;
+  },
   failed: (error: unknown) => void,
 ): QueueEdits {
   const send = async <T>(promise: Promise<T>): Promise<T | undefined> => {
@@ -148,10 +151,10 @@ export function operationEdits(
     setApproval: (agent, item, approve) => update(agent, item, { kind: 'approve', approve }),
     setRepeat: (agent, item, change) => update(agent, item, { kind: 'repeat', ...change }),
     goOn: (agent, item) => {
-      run.goOn(agent, item);
+      void send(Promise.resolve(run.goOn(agent, item)));
     },
     decide: (agent, item, answer) => {
-      run.decide(agent, item, answer);
+      void send(Promise.resolve(run.decide(agent, item, answer)));
     },
   };
 }

@@ -1,7 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { newCanvasId } from '../../shared/canvas';
-import { MAX_CANVAS_BYTES } from '../../shared/ipc';
 import { MAX_IMAGE_BYTES, MAX_IMAGE_TOTAL, MAX_IMAGES } from '../../shared/api/limits';
 import { MAX_ANSWER_LENGTH, MAX_ID_LENGTH, MAX_MESSAGE_LENGTH } from '../../shared/session';
 import { Channels } from './channels';
@@ -13,26 +12,39 @@ const CANVAS = newCanvasId();
 
 /** What the handlers act on, faked: every call is recorded. */
 function fakeServices() {
+  const delivery = {
+    send: vi.fn().mockResolvedValue({ id: 'kept' }),
+    withdraw: vi.fn().mockResolvedValue({ reached: false, interrupted: false }),
+  };
+  const messages = { get: vi.fn() };
+  const own = { answered: vi.fn(), applied: vi.fn(), resumed: vi.fn() };
   return {
     catalog: CATALOG,
+    delivery,
+    messages,
     windows: {
       canvasOf: vi.fn<ChannelServices['windows']['canvasOf']>().mockResolvedValue(CANVAS),
       showing: vi.fn<ChannelServices['windows']['showing']>().mockReturnValue([7]),
       gone: vi.fn<ChannelServices['windows']['gone']>().mockResolvedValue(undefined),
     },
-    runs: {
-      get: vi
-        .fn<ChannelServices['runs']['get']>()
-        .mockResolvedValue({ id: CANVAS, token: 'canvas-token', checkpoint: null }),
-      check: vi.fn<ChannelServices['runs']['check']>(),
-      save: vi.fn<ChannelServices['runs']['save']>().mockResolvedValue(undefined),
+    /** The core's own sessions of the canvas it runs, which hear what a channel changed. */
+    own,
+    engines: {
+      canvas: vi.fn((canvas: string) =>
+        canvas === CANVAS
+          ? ({
+              engine: { sessions: own },
+              document: { nodes: [{ id: 'a', type: 'agent' }] },
+              delivery,
+              messages,
+            } as never)
+          : undefined,
+      ),
     },
-    shutdown: { ready: vi.fn<ChannelServices['shutdown']['ready']>() },
     sessions: {
       availability: vi
         .fn<ChannelServices['sessions']['availability']>()
         .mockResolvedValue({ ready: true }),
-      start: vi.fn<ChannelServices['sessions']['start']>().mockResolvedValue(undefined),
       send: vi.fn<ChannelServices['sessions']['send']>().mockResolvedValue(undefined),
       answer: vi.fn<ChannelServices['sessions']['answer']>().mockResolvedValue(undefined),
       interrupt: vi.fn<ChannelServices['sessions']['interrupt']>().mockResolvedValue(undefined),
@@ -40,19 +52,11 @@ function fakeServices() {
       setModel: vi.fn<ChannelServices['sessions']['setModel']>().mockResolvedValue(undefined),
       setEffort: vi.fn<ChannelServices['sessions']['setEffort']>().mockResolvedValue(undefined),
       stopTask: vi.fn<ChannelServices['sessions']['stopTask']>().mockResolvedValue(undefined),
-      close: vi.fn<ChannelServices['sessions']['close']>().mockResolvedValue(undefined),
-      fresh: vi.fn<ChannelServices['sessions']['fresh']>().mockResolvedValue(undefined),
       listSessions: vi.fn<ChannelServices['sessions']['listSessions']>().mockResolvedValue([]),
       resumeSession: vi
         .fn<ChannelServices['sessions']['resumeSession']>()
         .mockResolvedValue(undefined),
       mcpServers: vi.fn<ChannelServices['sessions']['mcpServers']>().mockResolvedValue([]),
-      previewRewind: vi
-        .fn<ChannelServices['sessions']['previewRewind']>()
-        .mockResolvedValue({ possible: true, files: [], added: 0, removed: 0 }),
-      rewind: vi
-        .fn<ChannelServices['sessions']['rewind']>()
-        .mockResolvedValue({ conversation: false }),
       changeMcpServer: vi
         .fn<ChannelServices['sessions']['changeMcpServer']>()
         .mockResolvedValue([]),
@@ -102,31 +106,37 @@ describe('the channel surface', () => {
     'toString',
     '__proto__',
     'unknown',
+    // A canvas's run is the core's (B11 Design §8): no window reads, saves or freezes one, and no
+    // window starts, ends or replaces a session but through the session's operations.
+    'run:get',
+    'run:save',
+    'run:ready',
+    'session:start',
+    'session:close',
+    'session:fresh',
+    'session:rewind-preview',
+    'session:rewind',
   ])('refuses %s', (name) => {
     expect(() => invoke(name, [])).toThrow(/no channel/);
     expect(services.windows.canvasOf).not.toHaveBeenCalled();
   });
 
   it('refuses arguments that are not a tuple before running a parser or handler', () => {
-    expect(() => channels.call(7, 'run:get', null as never)).toThrow(/arguments/);
+    expect(() => channels.call(7, 'session:interrupt', null as never)).toThrow(/arguments/);
     expect(services.windows.canvasOf).not.toHaveBeenCalled();
-    expect(services.runs.get).not.toHaveBeenCalled();
+    expect(services.sessions.interrupt).not.toHaveBeenCalled();
   });
 });
 
 describe('the sender’s canvas', () => {
   it.each([
-    {
-      channel: 'session:start',
-      args: ['a', { connection: 'claude-code.terminal', model: null, mode: null }],
-      action: 'start',
-    },
-    { channel: 'session:close', args: ['a'], action: 'close' },
+    { channel: 'session:send', args: ['a', { id: 'm', text: 'Hi' }], action: 'send' },
+    { channel: 'session:interrupt', args: ['a'], action: 'interrupt' },
   ] as const)('$channel acts on it once its window has it', async ({ channel, args, action }) => {
     const sender = 7;
     const shown = Promise.withResolvers<typeof CANVAS>();
     services.windows.canvasOf.mockReturnValue(shown.promise);
-    const called = services.sessions[action];
+    const called = action === 'send' ? services.delivery.send : services.sessions[action];
     const result = Promise.resolve(invoke(channel, [...args], sender)).then(
       (value: unknown) => ({ value }),
       (error: unknown) => ({ error }),
@@ -134,40 +144,10 @@ describe('the sender’s canvas', () => {
     expect(services.windows.canvasOf).toHaveBeenCalledWith(sender);
     expect(called).not.toHaveBeenCalled();
     shown.resolve(CANVAS);
-    expect(await result).toEqual({ value: null });
+    expect(await result).toEqual({ value: action === 'send' ? { id: 'kept' } : null });
     expect(called).toHaveBeenCalledOnce();
-    expect(called.mock.calls[0]).toContain(CANVAS);
-  });
-
-  it('restores run identity and notices, and journals only the checkpoint', async () => {
-    services.runs.get.mockResolvedValue({
-      id: CANVAS,
-      token: 'canvas-token',
-      checkpoint: null,
-      warning: 'Restored from a snapshot.',
-    });
-    await expect(invoke('run:get', [])).resolves.toEqual({
-      id: CANVAS,
-      token: 'canvas-token',
-      checkpoint: null,
-      notices: ['Restored from a snapshot.'],
-    });
-    const checkpoint = {
-      version: 2,
-      state: '{}',
-      messages: '{"version":1,"agents":[]}',
-      updatedAt: 1,
-    };
-    await invoke('run:save', ['canvas-token', checkpoint]);
-    expect(services.runs.save).toHaveBeenCalledWith(CANVAS, 'canvas-token', checkpoint);
-  });
-
-  it('journals nothing for an earlier canvas’s token', async () => {
-    services.runs.check.mockImplementation(() => {
-      throw new Error('This run belongs to an earlier canvas');
-    });
-    await expect(invoke('run:save', ['stale', null])).rejects.toThrow('earlier canvas');
-    expect(services.runs.save).not.toHaveBeenCalled();
+    if (action === 'send') expect(services.engines.canvas).toHaveBeenCalledWith(CANVAS);
+    else expect(called.mock.calls[0]).toContain(CANVAS);
   });
 });
 
@@ -187,34 +167,17 @@ describe('session:* handlers', () => {
   });
   it('pass checked arguments on, for the renderer that sent them', async () => {
     const sender = 7;
-    const options = { connection: 'claude-code.sdk', model: 'opus', mode: 'plan' };
-    await invoke('session:start', ['a', options], sender);
-    const [canvas, agentId, given] = services.sessions.start.mock.calls[0] ?? [];
-    expect([canvas, agentId, given]).toEqual([CANVAS, 'a', options]);
-    // Built afresh: nothing the renderer sent is passed on as it came.
-    expect(given).not.toBe(options);
-    // No model or mode chosen: main's to decide (what the agent last chose, or the user's own).
-    const unchosen = { connection: 'claude-code.terminal', model: null, mode: null };
-    await invoke('session:start', ['b', unchosen], sender);
-    expect(services.sessions.start).toHaveBeenLastCalledWith(CANVAS, 'b', unchosen);
-
     await invoke('session:send', ['a', { id: 'm1', text: 'Hi' }], sender);
-    expect(services.sessions.send).toHaveBeenCalledWith(CANVAS, 'a', { id: 'm1', text: 'Hi' });
-    const taskMessage = {
-      id: 'q1',
-      text: 'Work',
-      origin: 'queue',
-      task: { agent: 'a', item: 'i'.repeat(256), attempt: 'try1' },
-    };
-    await invoke('session:send', ['a', taskMessage], sender);
-    expect(services.sessions.send).toHaveBeenLastCalledWith(CANVAS, 'a', taskMessage);
+    expect(services.delivery.send).toHaveBeenCalledWith('you', 'a', 'Hi', undefined, {
+      images: undefined,
+      told: 'manual-channel:m1',
+    });
     // A pasted image may be all a message is.
     const image = { mediaType: 'image/png', data: 'iVBORw0KGgo=' };
     await invoke('session:send', ['a', { id: 'm2', text: '', images: [image] }], sender);
-    expect(services.sessions.send).toHaveBeenLastCalledWith(CANVAS, 'a', {
-      id: 'm2',
-      text: '',
+    expect(services.delivery.send).toHaveBeenLastCalledWith('you', 'a', '', undefined, {
       images: [image],
+      told: 'manual-channel:m2',
     });
     // As many images as fit in a message's limit together, each as large as one may be.
     const largest = {
@@ -226,10 +189,9 @@ describe('session:* handlers', () => {
       () => largest,
     );
     await invoke('session:send', ['a', { id: 'm3', text: 'Four', images }], sender);
-    expect(services.sessions.send).toHaveBeenLastCalledWith(CANVAS, 'a', {
-      id: 'm3',
-      text: 'Four',
+    expect(services.delivery.send).toHaveBeenLastCalledWith('you', 'a', 'Four', undefined, {
       images,
+      told: 'manual-channel:m3',
     });
     await invoke('session:answer', ['a', 'p1', { kind: 'question', answers: ['Yes'] }], sender);
     expect(services.sessions.answer).toHaveBeenCalledWith(CANVAS, 'a', 'p1', {
@@ -255,12 +217,6 @@ describe('session:* handlers', () => {
     const denied = { kind: 'permission', answer: 'deny', feedback: 'Use pnpm' };
     await invoke('session:answer', ['a', 'p3', denied], sender);
     expect(services.sessions.answer).toHaveBeenLastCalledWith(CANVAS, 'a', 'p3', denied);
-    await invoke('session:close', ['a'], sender);
-    expect(services.sessions.close).toHaveBeenCalledWith(CANVAS, 'a');
-    await invoke('session:fresh', ['a', 'codex'], sender);
-    expect(services.sessions.fresh).toHaveBeenCalledWith(CANVAS, 'a', 'codex');
-    await invoke('session:fresh', ['a', 'claude-code'], sender);
-    expect(services.sessions.fresh).toHaveBeenLastCalledWith(CANVAS, 'a', 'claude-code');
     const form = { kind: 'elicitation', action: 'accept', values: { repo: 'acme/shop', n: 2 } };
     await invoke('session:answer', ['a', 'e1', form], sender);
     expect(services.sessions.answer).toHaveBeenLastCalledWith(CANVAS, 'a', 'e1', form);
@@ -269,10 +225,6 @@ describe('session:* handlers', () => {
       kind: 'elicitation',
       action: 'decline',
     });
-    await invoke('session:rewind-preview', ['a', 'm1'], sender);
-    expect(services.sessions.previewRewind).toHaveBeenCalledWith(CANVAS, 'a', 'm1');
-    await invoke('session:rewind', ['a', 'm1', 'conversation'], sender);
-    expect(services.sessions.rewind).toHaveBeenCalledWith(CANVAS, 'a', 'm1', 'conversation');
     await invoke('session:mcp', ['a'], sender);
     expect(services.sessions.mcpServers).toHaveBeenCalledWith(CANVAS, 'a');
     await invoke('session:mcp-change', ['a', 'github', 'reconnect'], sender);
@@ -290,6 +242,10 @@ describe('session:* handlers', () => {
     expect(services.sessions.settingsOptions).toHaveBeenCalledWith(CANVAS, 'codex');
     await invoke('session:options', ['claude-code'], sender);
     expect(services.sessions.settingsOptions).toHaveBeenLastCalledWith(CANVAS, 'claude-code');
+    await invoke('session:options', ['codex', 'a'], sender);
+    expect(services.sessions.settingsOptions).toHaveBeenLastCalledWith(CANVAS, 'codex', 'a');
+    expect(await invoke('session:availability', ['a'], sender)).toEqual({ ready: true });
+    expect(services.sessions.availability).toHaveBeenCalledExactlyOnceWith(CANVAS, 'a');
     // Which conversations it may open is main's to say (it listed them): the id goes on.
     await invoke('session:resume', ['a', '0b3a7d52-6a0c-4f39-9c4e-2f8f0c1d9e11'], sender);
     expect(services.sessions.resumeSession).toHaveBeenCalledWith(
@@ -300,117 +256,46 @@ describe('session:* handlers', () => {
     );
   });
 
-  it('start Codex sessions in the modes each connection starts in, and switch to any', async () => {
-    const sender = 7;
-    const options = { connection: 'codex.app-server', model: 'gpt-6-luna', mode: 'plan' };
-    await invoke('session:start', ['a', options], sender);
-    expect(services.sessions.start).toHaveBeenCalledWith(CANVAS, 'a', options);
-    const terminal = { ...options, connection: 'codex.terminal', mode: 'read-only' };
-    await invoke('session:start', ['b', terminal], sender);
-    expect(services.sessions.start).toHaveBeenLastCalledWith(CANVAS, 'b', terminal);
-    // A mode that never asks is the session's, once the user confirms it: never a start's.
-    await invoke('session:mode', ['a', 'full-access'], sender);
-    expect(services.sessions.setMode).toHaveBeenCalledWith(CANVAS, 'a', 'full-access');
+  it('tells the core’s own session what a window’s channel changed of it, once its CLI took it', async () => {
+    const permission = { kind: 'permission', answer: 'once' } as const;
+    await invoke('session:answer', ['a', 'p1', permission]);
+    expect(services.own.answered).toHaveBeenCalledExactlyOnceWith('a', 'p1', permission);
+    await invoke('session:mode', ['a', 'plan']);
+    expect(services.own.applied).toHaveBeenLastCalledWith('a', { mode: 'plan' });
+    await invoke('session:model', ['a', 'opus']);
+    expect(services.own.applied).toHaveBeenLastCalledWith('a', { model: 'opus' });
+    await invoke('session:effort', ['a', null]);
+    expect(services.own.applied).toHaveBeenLastCalledWith('a', { effort: null });
+    const conversation = '0b3a7d52-6a0c-4f39-9c4e-2f8f0c1d9e11';
+    await invoke('session:resume', ['a', conversation]);
+    expect(services.own.resumed).toHaveBeenCalledExactlyOnceWith('a');
+    // A change its CLI refused tells the core's session nothing.
+    services.sessions.answer.mockRejectedValueOnce(new Error('No such prompt'));
+    await expect(invoke('session:answer', ['a', 'p2', permission])).rejects.toThrow(
+      'No such prompt',
+    );
+    expect(services.own.answered).toHaveBeenCalledOnce();
   });
 
-  it('start sessions at a reasoning effort, and switch it (or back to the model’s default)', async () => {
-    const sender = 7;
-    const options = {
-      connection: 'codex.app-server',
-      model: 'gpt-6-luna',
-      mode: 'auto',
-      effort: 'xhigh',
-    };
-    await invoke('session:start', ['a', options], sender);
-    expect(services.sessions.start).toHaveBeenCalledWith(CANVAS, 'a', options);
-    await invoke('session:effort', ['a', 'low'], sender);
-    expect(services.sessions.setEffort).toHaveBeenCalledWith(CANVAS, 'a', 'low');
-    await invoke('session:effort', ['a', null], sender);
-    expect(services.sessions.setEffort).toHaveBeenLastCalledWith(CANVAS, 'a', null);
-  });
-
-  const start = { connection: 'claude-code.terminal', model: null, mode: 'manual' };
   it.each([
-    ['session:start', 'no options', ['a'], /Expected an agent and how to start/],
-    ['session:start', 'an agent id that is not text', [7, start], /agent's id/],
-    ['session:start', 'an empty agent id', ['', start], /agent's id/],
-    ['session:start', 'a very long agent id', ['a'.repeat(MAX_ID_LENGTH + 1), start], /agent's id/],
-    [
-      'session:start',
-      'an unknown connection',
-      ['a', { ...start, connection: 'ssh' }],
-      /connection/,
-    ],
-    // Connections are named by their final ids only.
-    [
-      'session:start',
-      'an old connection id',
-      ['a', { ...start, connection: 'terminal' }],
-      /connection/,
-    ],
-    ['session:start', 'an unknown mode', ['a', { ...start, mode: 'yolo' }], /mode/],
-    [
-      'session:start',
-      'a mode of another adapter',
-      ['a', { ...start, connection: 'codex.app-server', mode: 'acceptEdits' }],
-      /mode codex\.app-server sessions start in/,
-    ],
-    ['session:start', 'a Codex mode for Claude', ['a', { ...start, mode: 'read-only' }], /mode/],
-    [
-      'session:start',
-      'a mode that never asks',
-      ['a', { ...start, mode: 'bypassPermissions' }],
-      /mode claude-code\.terminal sessions start in/,
-    ],
-    [
-      'session:start',
-      'Full access',
-      ['a', { ...start, connection: 'codex.app-server', mode: 'full-access' }],
-      /mode codex\.app-server sessions start in/,
-    ],
-    [
-      'session:start',
-      'a mode its connection does not start in',
-      ['a', { ...start, connection: 'codex.terminal', mode: 'plan' }],
-      /mode codex\.terminal sessions start in/,
-    ],
-    ['session:start', 'a model with spaces', ['a', { ...start, model: 'rm -rf /' }], /model/],
-    // A command line would take it for a flag.
-    [
-      'session:start',
-      'a model that reads as a flag',
-      ['a', { ...start, model: '--dangerously-skip-permissions' }],
-      /model/,
-    ],
-    ['session:start', 'a path to resume', ['a', { ...start, resume: '/etc/passwd' }], /options/],
     ['session:send', 'a message without text', ['a', { id: 'm' }], /text/],
     ['session:send', 'a blank message', ['a', { id: 'm', text: '  ' }], /text/],
     ['session:send', 'a message without an id', ['a', { text: 'Hi' }], /message's id/],
+    // A window runs no queue: no message of its is the run's work (B11 Design §8).
     [
       'session:send',
-      'task metadata on a manual send',
+      'a task of the run',
       ['a', { id: 'm', text: 'Work', task: { agent: 'a', item: 'i', attempt: 't' } }],
-      /queue origin/,
+      /message/,
     ],
     [
       'session:send',
-      'an incomplete task reference',
-      ['a', { id: 'm', text: 'Work', origin: 'queue', task: { agent: 'a', item: 'i' } }],
-      /attempt/,
-    ],
-    [
-      'session:send',
-      'unbounded task metadata',
+      'a queue origin',
       [
         'a',
-        {
-          id: 'm',
-          text: 'Work',
-          origin: 'queue',
-          task: { agent: 'a'.repeat(10000), item: 'i', attempt: 't' },
-        },
+        { id: 'm', text: 'Work', origin: 'queue', task: { agent: 'a', item: 'i', attempt: 't' } },
       ],
-      /agent/,
+      /message/,
     ],
     [
       'session:send',
@@ -533,21 +418,6 @@ describe('session:* handlers', () => {
     ],
     ['session:interrupt', 'no agent', [], /an agent/],
     ['session:interrupt', 'an extra argument', ['a', 'b'], /an agent/],
-    ['session:close', 'an extra argument', ['a', 'b'], /an agent/],
-    ['session:fresh', 'no agent', [], /an agent and an adapter/],
-    ['session:fresh', 'no adapter', ['a'], /an agent and an adapter/],
-    ['session:fresh', 'an empty agent id', ['', 'codex'], /agent's id/],
-    ['session:fresh', 'a non-text agent id', [12, 'codex'], /agent's id/],
-    [
-      'session:fresh',
-      'an oversized agent id',
-      ['a'.repeat(MAX_ID_LENGTH + 1), 'codex'],
-      /agent's id/,
-    ],
-    ['session:fresh', 'an unknown adapter', ['a', 'other'], /adapter/],
-    ['session:fresh', 'an old adapter id', ['a', 'claude'], /adapter/],
-    ['session:fresh', 'a non-text adapter', ['a', {}], /adapter/],
-    ['session:fresh', 'an extra argument', ['a', 'codex', 'extra'], /an agent and an adapter/],
     ['session:mode', 'an unknown mode', ['a', 'default'], /mode/],
     ['session:model', 'a model that is not text', ['a', 42], /model/],
     ['session:list', 'no agent', [], /an agent/],
@@ -578,10 +448,6 @@ describe('session:* handlers', () => {
       /form’s values/,
     ],
     ['session:mcp', 'no agent', [], /an agent/],
-    ['session:rewind-preview', 'no message', ['a'], /an agent and a message/],
-    ['session:rewind-preview', 'an empty message id', ['a', ''], /message's id/],
-    ['session:rewind', 'nothing to restore', ['a', 'm1'], /what to restore/],
-    ['session:rewind', 'something else to restore', ['a', 'm1', 'everything'], /thing to restore/],
     ['session:mcp-change', 'an unknown change', ['a', 'github', 'delete'], /change to an MCP/],
     ['session:mcp-change', 'no server', ['a', '', 'reconnect'], /MCP server’s name/],
     [
@@ -636,12 +502,6 @@ describe('session:* handlers', () => {
     ['session:effort', 'no effort', ['a'], /an agent and a reasoning effort/],
     ['session:effort', 'an effort that is not a word', ['a', 'high; rm -rf'], /reasoning effort/],
     ['session:effort', 'an effort that is not text', ['a', 3], /reasoning effort/],
-    [
-      'session:start',
-      'an effort that is not a word',
-      ['a', { connection: 'codex.app-server', model: null, mode: 'auto', effort: '--yolo' }],
-      /reasoning effort/,
-    ],
   ])('%s rejects %s', (channel, _label, args, message) => {
     expect(() => invoke(channel, args)).toThrow(message);
     expect(Object.values(services.sessions).every((fn) => fn.mock.calls.length === 0)).toBe(true);
@@ -649,38 +509,32 @@ describe('session:* handlers', () => {
   });
 });
 
-describe('run journal channels', () => {
-  const checkpoint = {
-    version: 2,
-    state: '{}',
-    messages: '{"version":1,"agents":[]}',
-    updatedAt: 1,
-  };
-  it('uses the sender’s canvas and generation token, never a renderer-supplied path', async () => {
-    const sender = 7;
-    await expect(invoke('run:get', [], sender)).resolves.toMatchObject({ token: 'canvas-token' });
-    await invoke('run:save', ['canvas-token', checkpoint], sender);
-    expect(services.runs.save).toHaveBeenCalledWith(CANVAS, 'canvas-token', checkpoint);
-    // The shutdown handshake is the window's.
-    await invoke('run:ready', ['request', null], sender);
-    expect(services.shutdown.ready).toHaveBeenCalledWith(sender, 'request', null);
-  });
-  it.each([
-    ['run:get', ['/a/path']],
-    ['run:save', []],
-    ['run:save', ['t']],
-    ['run:save', ['t', { ...checkpoint, file: '/a/path' }, '{}']],
-    ['run:save', ['t', { ...checkpoint, state: 'broken' }, '{}']],
-    ['run:save', ['t', { ...checkpoint, workflow: '{}' }, '{}']],
-    ['run:save', ['t', checkpoint, 7]],
-    ['run:save', ['t', checkpoint, 'x'.repeat(MAX_CANVAS_BYTES + 1)]],
-    ['run:ready', ['request']],
-  ])('rejects invalid %s arguments', (channel, args) => {
-    expect(() => invoke(channel, args as unknown[])).toThrow();
-    expect(services.runs.save).not.toHaveBeenCalled();
-  });
-  it('surfaces a journal write error to the renderer', async () => {
-    services.runs.save.mockRejectedValue(new Error('Disk full'));
-    await expect(invoke('run:save', ['canvas-token', checkpoint])).rejects.toThrow('Disk full');
-  });
+it('takes back only a manual message to the named agent on the sender window canvas', async () => {
+  const id = crypto.randomUUID();
+  services.messages.get.mockReturnValue({ id, from: 'you', to: 'agent:a' });
+  expect(await invoke('session:unqueue', ['a', id])).toBeNull();
+  expect(services.delivery.withdraw).toHaveBeenCalledExactlyOnceWith(id, 'you');
+  for (const message of [
+    { id, from: 'you', to: 'agent:b' },
+    { id, from: 'outside:bot', to: 'agent:a' },
+    undefined,
+  ]) {
+    services.messages.get.mockReturnValue(message);
+    await expect(invoke('session:unqueue', ['a', id])).rejects.toThrow(/manual message/);
+  }
+  expect(services.delivery.withdraw).toHaveBeenCalledOnce();
+  expect(() => invoke('session:unqueue', ['a', 'not-a-message'])).toThrow();
+});
+
+it('validates a view-handled command before recording anything', async () => {
+  for (const args of [
+    [],
+    ['a'],
+    ['a', { id: 'm', text: 'x', cwd: '/' }],
+    ['a', { id: 'm', text: 'x'.repeat(MAX_MESSAGE_LENGTH + 1) }],
+  ]) {
+    await expect(Promise.resolve().then(() => invoke('session:record', args))).rejects.toThrow();
+  }
+  expect(services.engines.canvas).not.toHaveBeenCalled();
+  expect(services.delivery.send).not.toHaveBeenCalled();
 });

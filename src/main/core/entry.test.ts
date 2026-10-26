@@ -16,7 +16,8 @@ import { CoreLink } from '../../shared/link';
 import type * as CoreModule from './core';
 import { TestChildren } from '../cli/test-children';
 import type { CoreSide, HostSide } from './protocol';
-import { keepCanvases } from './store/test-store';
+import { newCanvasId } from '../../shared/canvas';
+import { keepCanvases, openedLast } from './store/test-store';
 import { NO_DESKTOP } from './test-registry';
 import { askTokenOwner } from './token-socket';
 
@@ -182,19 +183,37 @@ describe('the core process’s init', () => {
     });
   });
 
-  it('composes once, reports windows with canvases and flushes on main’s request', async () => {
+  it('composes once, running every canvas open as it starts, with or without a window', async () => {
+    // A canvas open as the app last ran, which no window shows yet.
+    const kept = newCanvasId();
+    await openedLast(profile, kept);
     const entry = await start();
     expect(await entry.init()).toEqual({ ok: true, value: null });
     const window = entry.window(7);
-    await window.request('call', 'canvas.create', {});
-    expect(await main.request('shown', [7, 8])).toEqual({ ok: true, value: [7] });
-    expect(await main.request('flush')).toEqual({ ok: true, value: null });
+    // Run by the core as it came up (B11 Design §2, §8): its run reads, restored paused.
+    await vi.waitFor(async () => {
+      expect(await window.request('call', 'run.get', { canvas: kept })).toMatchObject({
+        ok: true,
+        value: { ok: true, value: { running: false } },
+      });
+    });
+    const { canvas } = (
+      (await window.request('call', 'canvas.create', {})) as {
+        value: { value: { canvas: string } };
+      }
+    ).value.value;
     expect(await entry.init()).toEqual({
       ok: false,
       error: { message: 'corrallm’s core is up already.' },
     });
+    // A window closing only views what it showed: the canvas runs on, nothing at work in it.
     main.emit('windowGone', 7, true);
-    expect(await main.request('shown', [7])).toEqual({ ok: true, value: [] });
+    const other = entry.window(8);
+    expect(await other.request('call', 'run.get', { canvas })).toMatchObject({
+      ok: true,
+      value: { ok: true, value: { running: false } },
+    });
+    expect(await main.request('active')).toEqual({ ok: true, value: false });
   });
 });
 

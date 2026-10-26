@@ -4,7 +4,6 @@ import { newCanvasId } from '../../shared/canvas';
 import type { CanvasDocument } from '../../shared/model/canvas';
 import type { NeedsItem } from '../../shared/model/needs';
 import { automaticBackend } from '../../shared/engine/test-backend';
-import type { RunSource } from '../run/persistence';
 import { fakeCanvas } from '../test-canvas';
 import { expectOneOp } from '../test-api';
 import { events } from '../test-render';
@@ -38,7 +37,8 @@ async function switchingView(needs: NeedsItem[] = []) {
     },
   ];
   const next = document('After');
-  const canvas = fakeCanvas(first);
+  const fake = automaticBackend();
+  const canvas = fakeCanvas(first, fake.backend);
   stops.push(() => {
     canvas.core.dispose();
   });
@@ -58,29 +58,19 @@ async function switchingView(needs: NeedsItem[] = []) {
   canvas.core.snapshot(`needs:${first.id}`, {
     items: needs.map((item) => ({ ...item, canvas: first.id })),
   });
-  const source = {
-    get: vi.fn<RunSource['get']>(() =>
-      Promise.resolve({ id: canvas.document.id, token: canvas.document.id, checkpoint: null }),
-    ),
-    save: vi.fn<RunSource['save']>().mockResolvedValue(null),
-    ready: () => Promise.resolve(null),
-    onStopping: () => () => undefined,
-  };
-  const fake = automaticBackend();
   const view = render(
     <GraphEditor
       canvas={first.id}
       client={canvas.core.api}
       mirror={canvas.core.topics}
       files
-      runSource={source}
-      sessionBackend={fake.backend}
+      sessionQueries={{ ...fake.backend, manual: canvas.manual, presentation: canvas.presentation }}
     />,
   );
   await waitFor(() => {
-    expect(source.save).toHaveBeenCalled();
+    expect(view.container.querySelector('.graph-editor')?.hasAttribute('inert')).toBe(false);
   });
-  return { ...view, first, next, canvas, source, fake };
+  return { ...view, first, next, canvas, fake };
 }
 
 const proposal: NeedsItem = {
@@ -94,11 +84,12 @@ const proposal: NeedsItem = {
   answerIn: 'api',
 };
 
-it('keeps live sessions, stores and the token when Open returns the shown canvas', async () => {
-  const { canvas, first, source, fake, container } = await switchingView();
+it('keeps live sessions and the core runtime when Open returns the shown canvas', async () => {
+  const { canvas, first, fake, container } = await switchingView();
   const node = container.querySelector('.react-flow__node[data-id="Before"]');
   if (!node) throw new Error('No Before node');
   await events.doubleClick(node);
+  canvas.core.operations.length = 0;
   const composer = await screen.findByRole('textbox', { name: 'Message Before' });
   await events.change(composer, { target: { value: 'Keep this manual work' } });
   await events.keyDown(composer, { key: 'Enter' });
@@ -113,11 +104,13 @@ it('keeps live sessions, stores and the token when Open returns the shown canvas
     expect(container.querySelector('.graph-editor')?.getAttribute('aria-busy')).toBe('false');
   });
   expect(fake.backend.close).not.toHaveBeenCalled();
-  expect(source.get).toHaveBeenCalledOnce();
+  expect(canvas.document.id).toBe(first.id);
   await events.doubleClick(node);
+  canvas.core.operations.length = 0;
   expect(screen.getAllByText('Keep this manual work').length).toBeGreaterThan(0);
-  expect(source.save.mock.lastCall?.[0]).toBe(first.id);
-  expect(source.save.mock.lastCall?.[1]?.messages).toContain('Keep this manual work');
+  expect(canvas.engine.sessions.of('Before').submissions?.at(-1)?.text).toBe(
+    'Keep this manual work',
+  );
 });
 
 it('closes All queues opened from an agent when the window switches to another canvas', async () => {
@@ -125,6 +118,7 @@ it('closes All queues opened from an agent when the window switches to another c
   const node = container.querySelector('.react-flow__node[data-id="Before"]');
   if (!node) throw new Error('No Before node');
   await events.doubleClick(node);
+  canvas.core.operations.length = 0;
   await screen.findByRole('dialog', { name: 'Before' });
   await events.click(screen.getByRole('button', { name: 'Show all queues' }));
   expect(screen.getByRole('dialog', { name: 'All queues' })).toBeTruthy();
@@ -146,10 +140,14 @@ it('closes All queues opened from an agent when the window switches to another c
 it.each(['show', 'close', 'allow'] as const)(
   'shows recovery when the %s switch cannot read the replacement run',
   async (action) => {
-    const { canvas, first, next, source } = await switchingView(
-      action === 'allow' ? [proposal] : [],
+    const { canvas, first, next } = await switchingView(action === 'allow' ? [proposal] : []);
+    vi.spyOn(canvas.core.topics, 'failure').mockImplementation((topic) =>
+      topic === `run:${next.id}` ? 'The replacement run cannot be read' : undefined,
     );
-    source.get.mockRejectedValueOnce(new Error('The replacement run cannot be read'));
+    const revision = canvas.core.topics.revision.bind(canvas.core.topics);
+    vi.spyOn(canvas.core.topics, 'revision').mockImplementation((topic) =>
+      topic === `run:${next.id}` ? undefined : revision(topic),
+    );
     const op = action === 'show' ? 'window.show' : action === 'close' ? 'canvas.close' : 'reply';
     canvas.core.reply(op, () => {
       canvas.open(next);
@@ -212,6 +210,7 @@ it.each([
       const node = container.querySelector('.react-flow__node[data-id="Before"]');
       if (!node) throw new Error('No Before node');
       await events.doubleClick(node);
+      canvas.core.operations.length = 0;
       const composer = await screen.findByRole('textbox', { name: 'Message Before' });
       await events.change(composer, { target: { value: 'Independent manual work' } });
       await events.keyDown(composer, { key: 'Enter' });
@@ -227,11 +226,12 @@ it.each([
   },
 );
 it.each(['show', 'close', 'allow'] as const)(
-  '%s is one operation, saving the old run and restoring the replacement after its mirror',
+  '%s is one operation, binding all replacement snapshots without saving or resetting a run',
   async (action) => {
     const first = document('Before'),
       next = document('After');
-    const canvas = fakeCanvas(first);
+    const fake = automaticBackend();
+    const canvas = fakeCanvas(first, fake.backend);
     stops.push(() => {
       canvas.core.dispose();
     });
@@ -278,34 +278,21 @@ it.each(['show', 'close', 'allow'] as const)(
         },
       });
     });
-    const get = vi.fn<RunSource['get']>(() => {
-      order.push(`get:${canvas.document.id}`);
-      return Promise.resolve({
-        id: canvas.document.id,
-        token: canvas.document.id,
-        checkpoint: null,
-      });
-    });
-    const save = vi.fn<RunSource['save']>((token) => {
-      order.push(`save:${token}`);
-      return Promise.resolve(null);
-    });
-    render(
+    const view = render(
       <GraphEditor
         canvas={first.id}
         client={canvas.core.api}
         mirror={canvas.core.topics}
         files
-        runSource={{
-          get,
-          save,
-          ready: () => Promise.resolve(null),
-          onStopping: () => () => undefined,
+        sessionQueries={{
+          ...canvas.queries,
+          manual: canvas.manual,
+          presentation: canvas.presentation,
         }}
       />,
     );
     await waitFor(() => {
-      expect(save).toHaveBeenCalled();
+      expect(view.container.querySelector('.graph-editor')?.hasAttribute('inert')).toBe(false);
     });
     order.length = 0;
     if (action === 'allow') {
@@ -325,7 +312,7 @@ it.each(['show', 'close', 'allow'] as const)(
     });
     expect(await screen.findByText('After')).toBeTruthy();
     await waitFor(() => {
-      expect(get).toHaveBeenCalledTimes(2);
+      expect(view.container.querySelector('.graph-editor')?.hasAttribute('inert')).toBe(false);
     });
     expectOneOp(
       canvas.core,
@@ -336,8 +323,9 @@ it.each(['show', 'close', 'allow'] as const)(
           ? { canvas: first.id }
           : { canvas: first.id, to: proposal, answer: { choice: 'allow' } },
     );
-    expect(order.indexOf(`save:${first.id}`)).toBeLessThan(order.indexOf('op'));
-    expect(order.indexOf('op')).toBeLessThan(order.indexOf(`get:${next.id}`));
+    expect(order).toEqual(['op']);
+    for (const topic of ['canvas', 'run', 'needs', 'sessions', 'messages'])
+      expect(canvas.core.subscriptions.has(`${topic}:${next.id}` as never)).toBe(true);
     if (action === 'close') expect(screen.queryByText(/stays open/)).toBeNull();
     if (action === 'allow')
       expect((await screen.findByRole('status')).textContent).toContain('allowed');
