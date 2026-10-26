@@ -34,7 +34,9 @@ it('uses the foreground session topic summary with its entries, even before the 
     }),
   );
   try {
-    await waitFor(() => expect(hook.result.current.entries).toHaveLength(1));
+    await waitFor(() => {
+      expect(hook.result.current.entries).toHaveLength(1);
+    });
     expect(hook.result.current).toMatchObject({ status: 'working', model: 'native-model' });
     act(() => {
       core.change({
@@ -59,22 +61,51 @@ it('keeps each native control one operation, including lifecycle composites', as
   const controls = sessionCommands(core.api, canvas, 'a', core.topics, failed);
   try {
     for (const [op, args, gesture] of [
-      ['session.interrupt', {}, () => controls.stop()],
-      ['session.setMode', { mode: 'plan' }, () => controls.setMode('plan')],
-      ['session.setModel', { model: 'opus' }, () => controls.setModel('opus')],
+      [
+        'session.interrupt',
+        {},
+        () => {
+          controls.stop();
+        },
+      ],
+      [
+        'session.setMode',
+        { mode: 'plan' },
+        () => {
+          controls.setMode('plan');
+        },
+      ],
+      [
+        'session.setModel',
+        { model: 'opus' },
+        () => {
+          controls.setModel('opus');
+        },
+      ],
       ['session.setEffort', { effort: null }, () => controls.setEffort?.(null)],
       ['session.stopTask', { task: 'task-1' }, () => controls.stopTask?.('task-1')],
-      ['session.restart', {}, () => controls.restart()],
+      [
+        'session.restart',
+        {},
+        () => {
+          controls.restart();
+        },
+      ],
     ] as const) {
       core.operations.length = 0;
       gesture();
-      await waitFor(() => expectOneOp(core, op, { canvas, agent: 'a', ...args }));
+      await waitFor(() => {
+        expectOneOp(core, op, { canvas, agent: 'a', ...args });
+      });
     }
     core.operations.length = 0;
     core.respond('session.rewind', { conversation: true });
     await controls.rewind('native-message', 'conversation');
     expectOneOp(core, 'session.rewind', {
-      canvas, agent: 'a', message: 'native-message', restore: 'conversation',
+      canvas,
+      agent: 'a',
+      message: 'native-message',
+      restore: 'conversation',
     });
     expect(failed).not.toHaveBeenCalled();
   } finally {
@@ -129,6 +160,23 @@ it('keeps manual sends on the transitional fixed channel, including images, with
   expect(core.operations).toEqual([]);
   expect(failed).not.toHaveBeenCalled();
   core.dispose();
+});
+
+it('takes back a queued message through one caller-checked withdraw operation', async () => {
+  vi.stubGlobal('window', {
+    api: { unqueueSession: vi.fn().mockResolvedValue({ ok: true, value: null }) },
+  });
+  const core = fakeCore();
+  const canvas = newCanvasId();
+  const id = crypto.randomUUID();
+  try {
+    sessionCommands(core.api, canvas, 'a', core.topics, vi.fn()).unqueue(id);
+    await vi.waitFor(() => {
+      expectOneOp(core, 'withdraw', { canvas, id });
+    });
+  } finally {
+    core.dispose();
+  }
 });
 
 it('records a view-handled command through the fixed bridge without sending a CLI turn', async () => {

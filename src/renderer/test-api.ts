@@ -91,7 +91,9 @@ export function fakeCore() {
     subscriptions,
     observeTopics(observe: (topic: MirrorTopicKey) => void): () => void {
       observers.add(observe);
-      return () => { observers.delete(observe); };
+      return () => {
+        observers.delete(observe);
+      };
     },
     respond(op: GuiOp, value: unknown): void {
       replies.set(op, { ok: true, value });

@@ -7,6 +7,7 @@ import {
   TURN_REASONS,
   MODEL_PATTERN,
   EFFORT_PATTERN,
+  MAX_MESSAGE_LENGTH,
 } from '../../session';
 import { PARTY_PATTERN } from '../../model/messages';
 import { USAGE_WINDOWS } from '../../usage';
@@ -56,7 +57,11 @@ export const Images = z
   )
   // Base64 needs no JSON escaping. Allow padding and media/object keys for each bounded image.
   .meta({ maxBytes: 4 * Math.ceil(MAX_IMAGE_TOTAL / 3) + MAX_IMAGES * 100 });
-export const ManualText = z.strictObject({ text: Body, images: Images.optional() });
+/** Human-only Continue uses the composer's character bound (B11 §16.6). */
+export const ManualText = z.strictObject({
+  text: z.string().min(1).max(MAX_MESSAGE_LENGTH),
+  images: Images.optional(),
+});
 const Party = z.string().regex(PARTY_PATTERN);
 const Outcome = z.enum(['succeeded', 'failed', 'cancelled', 'skipped', 'timedOut', 'stopped']);
 const Problem = z.strictObject({

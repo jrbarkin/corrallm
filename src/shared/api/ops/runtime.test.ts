@@ -18,7 +18,7 @@ import { MAX_NODE_ID } from '../../model/canvas';
 import { NEW_SESSION } from '../../model/session';
 import { runView, sessionView } from '../../model/views';
 import { AgentId } from '../ids';
-import { MAX_FORM_FIELDS, MAX_QUESTIONS } from '../../session';
+import { MAX_FORM_FIELDS, MAX_QUESTIONS, MAX_MESSAGE_LENGTH } from '../../session';
 import { b11RunOps } from './run';
 import { b11SessionOps } from './session';
 import { b11ConversationOps, ReplyAnswer } from './conversation';
@@ -160,8 +160,12 @@ describe('prepared operation schemas, not registrations', () => {
     const input = b11SessionOps['session.continueIn'].input;
     const args = { canvas, agent, connection: 'adapter.terminal', then: { text: '!echo hi' } };
     expect(input.safeParse(args).success).toBe(true);
+    // Continue is human-only: §16.6 keeps the composer's character limit, not party bytes.
     expect(
-      input.safeParse({ ...args, then: { text: 'é'.repeat(MAX_MESSAGE_BYTES) } }).success,
+      input.safeParse({ ...args, then: { text: 'é'.repeat(MAX_MESSAGE_LENGTH) } }).success,
+    ).toBe(true);
+    expect(
+      input.safeParse({ ...args, then: { text: 'x'.repeat(MAX_MESSAGE_LENGTH + 1) } }).success,
     ).toBe(false);
     expect(input.safeParse({ ...args, then: { text: 'hi', origin: 'manual' } }).success).toBe(
       false,

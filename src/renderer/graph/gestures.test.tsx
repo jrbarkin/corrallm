@@ -999,14 +999,25 @@ it('keeps a native startup refusal in the session instead of covering the window
   const view = await setup({ files: true, selected: [] });
   fireEvent.doubleClick(view.node('a'));
   expect(await screen.findByRole('dialog', { name: 'a' })).toBeTruthy();
-  await act(async () => {
+  act(() => {
     view.core.change({
       topic: `session:${view.canvas}:a`,
       rev: (view.core.state(`session:${view.canvas}:a`)?.rev ?? 0) + 1,
-      entries: { upsert: [{ id: 'refused-start', kind: 'notice', level: 'error', text: 'The CLI is not installed.' }] },
+      entries: {
+        upsert: [
+          {
+            id: 'refused-start',
+            kind: 'notice',
+            level: 'error',
+            text: 'The CLI is not installed.',
+          },
+        ],
+      },
     });
   });
-  expect(within(screen.getByRole('dialog', { name: 'a' })).getByText('The CLI is not installed.')).toBeTruthy();
+  expect(
+    within(screen.getByRole('dialog', { name: 'a' })).getByText('The CLI is not installed.'),
+  ).toBeTruthy();
   expect(view.container.querySelector('.canvas-float-position > [role="alert"]')).toBeNull();
   expect(view.core.operations).toEqual([]);
 });

@@ -204,7 +204,7 @@ it('toggles the canvas queues and switches agents through the taskbar without do
     await events.click(dock.getByRole('button', { name: 'Show all queues' }));
     expect(screen.queryByRole('dialog', { name: 'All queues' })).toBeNull();
     expect(screen.getByRole('dialog', { name: 'Reviewer' })).toBeTruthy();
-    expect(canvas.core.operations.every(({ op }) => op === 'session.open')).toBe(true);
+    expect(canvas.core.operations).toEqual([]);
     await events.click(
       within(screen.getByRole('dialog', { name: 'Reviewer' })).getByRole('button', {
         name: 'Back to the canvas',
@@ -283,7 +283,7 @@ it('glows for a core run or native-session need until the topic clears', async (
     expect(writer.hasAttribute('data-needs')).toBe(false);
     expect(card.getAttribute('data-status')).toBe('Idle');
     expect(node.classList.contains('asking')).toBe(false);
-    expect(canvas.core.operations.every(({ op }) => op === 'session.open')).toBe(true);
+    expect(canvas.core.operations).toEqual([]);
   } finally {
     canvas.core.dispose();
   }

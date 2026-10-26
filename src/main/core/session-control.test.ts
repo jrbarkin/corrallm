@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { CanvasId } from '../../shared/canvas';
 import type { FilesRewind, SessionMode } from '../../shared/session';
+import { MAX_MESSAGE_LENGTH } from '../../shared/session';
 import type { Connector, LiveSession } from '../sessions/connector';
 import { FakeConnector } from '../sessions/fake';
 import { SessionManager } from '../sessions/manager';
@@ -377,6 +378,22 @@ describe('reach', () => {
 });
 
 describe('Continue in Terminal', () => {
+  it('delivers the exact human composer-bound input once through core.call', async () => {
+    const { core, terminal } = await start();
+    const text = `  !${'é'.repeat(MAX_MESSAGE_LENGTH - 6)}\n  `;
+    expect(text).toHaveLength(MAX_MESSAGE_LENGTH);
+    const result = (await ok(core, 'session.continueIn', {
+      agent: 'a',
+      connection: 'claude-code.terminal',
+      then: { text },
+    })) as { id: string };
+    await vi.waitFor(() => {
+      expect(terminal.sessions.flatMap(({ sent }) => sent)).toHaveLength(1);
+    });
+    expect(terminal.sessions[0]?.sent[0]?.text).toBe(text);
+    expect(core.engines.canvas(CANVAS)?.messages.get(result.id)?.body).toBe(text);
+  });
+
   it('switches the connection first, then sends the typed input once, to the new session, however often its request repeats', async () => {
     const { core, sdk, terminal } = await start();
     await ok(core, 'session.open', { agent: 'a' });

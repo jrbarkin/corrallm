@@ -492,10 +492,6 @@ export function fakeCanvas(
         if (!runtime) throw new Error('No test runtime');
         return runtime.manual.send(agent, message);
       },
-      unqueue: (agent: string, id: string) => {
-        if (!runtime) throw new Error('No test runtime');
-        return runtime.manual.unqueue(agent, id);
-      },
     },
     get engine() {
       if (!runtime) throw new Error('No test runtime');

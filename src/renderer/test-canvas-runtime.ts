@@ -296,6 +296,17 @@ export function canvasRuntime(
       engine.sessions.stop(OPS['session.interrupt'].input.parse(raw).agent);
       return result();
     });
+    core.reply('withdraw', (raw) => {
+      const { id } = OPS.withdraw.input.parse(raw);
+      const native = [...messageIds].find(([, kept]) => kept === id)?.[0] ?? id;
+      for (const node of nodes)
+        if (
+          node.type === 'agent' &&
+          engine.sessions.of(node.id).queued.some((one) => one.id === native)
+        )
+          engine.sessions.unqueue(node.id, native);
+      return result({ reached: false, interrupted: false });
+    });
     core.reply('reply', async (raw) => {
       const { to, answer } = OPS.reply.input.parse(raw);
       const input = {
@@ -373,10 +384,6 @@ export function canvasRuntime(
           undefined,
           { id: message.id },
         );
-        return Promise.resolve(null);
-      },
-      unqueue(agent: string, id: string): Promise<null> {
-        engine.sessions.unqueue(agent, id);
         return Promise.resolve(null);
       },
     },

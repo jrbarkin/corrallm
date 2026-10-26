@@ -1,4 +1,14 @@
-import type { MessageImage, UserMessage, FilesRewind, RewindResult, SettingsOptions, PastSession, McpServer, McpChange } from '../../shared/session';
+import type {
+  MessageImage,
+  UserMessage,
+  FilesRewind,
+  RewindResult,
+  SettingsOptions,
+  PastSession,
+  McpServer,
+  McpChange,
+  InstalledClis,
+} from '../../shared/session';
 import type { MirrorStates } from '../api/topic-wire';
 import { useCallback, useMemo, useSyncExternalStore } from 'react';
 import type { CanvasId } from '../../shared/canvas';
@@ -15,22 +25,21 @@ import type { SessionControls } from '../agent/AgentView';
 import { viewWrite } from '../useDraft';
 import { ApiError } from '../api/client';
 
-/** Read queries still on the transitional channels; X13 replaces these session panels. */
+/** Pending C operation contracts; see renderer.md's remaining X13 dependencies. */
 export interface ManualSubmissions {
   send(agent: string, message: UserMessage): Promise<unknown>;
   record(agent: string, message: UserMessage): Promise<null>;
-  unqueue(agent: string, id: string): Promise<null>;
 }
 
-/** X13 removes this fixed-channel bridge; execution and queue ownership stay in the core. */
+/** Kept until C supplies human message/record contracts; never owns execution. */
 const nativeManual: ManualSubmissions = {
   send: (agent, message) => viewWrite(() => fromMain(window.api.sendToSession(agent, message))),
   record: (agent, message) =>
     viewWrite(() => fromMain(window.api.recordSessionCommand(agent, message))),
-  unqueue: (agent, id) => viewWrite(() => fromMain(window.api.unqueueSession(agent, id))),
 };
 
 export interface SessionQueries {
+  installed(): Promise<InstalledClis>;
   options(adapter: AdapterId, agent?: string): Promise<SettingsOptions>;
   sessions(agent: string): Promise<PastSession[]>;
   resume(agent: string, conversation: string): Promise<unknown>;
@@ -49,7 +58,7 @@ export interface SessionPresentation {
   snapshot(agent: string): Presentation | undefined;
   subscribe(listener: () => void): () => void;
 }
-/** X13 removes this view-only supplement for fields absent from the frozen summary DTO. */
+/** Awaiting C's bounded topic projection for these fields absent from the frozen DTO. */
 const presentations = new Map<CanvasId, Map<string, Presentation>>();
 const presentationListeners = new Set<() => void>();
 const publishPresentation = () => {
@@ -81,6 +90,7 @@ export function nativePresentation(canvas: CanvasId): SessionPresentation {
   };
 }
 export const nativeQueries: SessionQueries = {
+  installed: () => import('../api/client').then(({ api }) => api.catalogInstalled()),
   options: (adapter, agent) =>
     fromMain(window.api.settingsOptions(adapter, ...(agent === undefined ? [] : [agent]))),
   sessions: (agent) => fromMain(window.api.listSessions(agent)),
@@ -247,7 +257,7 @@ export function sessionCommands(
       act(api.sessionInterrupt({ canvas, agent }));
     },
     unqueue: (id) => {
-      act((queries.manual ?? nativeManual).unqueue(agent, id));
+      act(api.withdraw({ canvas, id }));
     },
     setMode: (mode) => {
       act(api.sessionSetMode({ canvas, agent, mode }));

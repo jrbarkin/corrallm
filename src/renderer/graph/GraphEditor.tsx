@@ -313,7 +313,7 @@ function Editor({
   useEffect(() => {
     if (!gallery && !showStart) return;
     let open = true;
-    api.catalogInstalled().then(
+    sessionQueries.installed().then(
       (found) => {
         if (open) setInstalled(found);
       },
@@ -322,7 +322,7 @@ function Editor({
     return () => {
       open = false;
     };
-  }, [gallery, showStart, api]);
+  }, [gallery, showStart, sessionQueries]);
   /** Every agent's queue, side by side, if shown: opened from the canvas, or from an agent. */
   const [queues, setQueues] = useState<{ from?: string }>();
   /** The canvas's saved automatic layout setting (nodes cannot be dragged while it is on). */
@@ -1416,7 +1416,9 @@ function Editor({
                     canvas: canvasId,
                     agent: openedNode.id,
                     connection,
-                    ...(command === undefined ? {} : { then: { text: command, ...(images?.length ? { images } : {}) } }),
+                    ...(command === undefined
+                      ? {}
+                      : { then: { text: command, ...(images?.length ? { images } : {}) } }),
                   }),
                 );
             }}

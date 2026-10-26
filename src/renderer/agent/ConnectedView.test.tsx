@@ -1642,10 +1642,10 @@ describe('an Agent SDK agent continued in Terminal', () => {
     await events.click(view.getByRole('button', { name: 'Continue in Terminal' }));
     await settle();
     expectOneOp({ operations: operations().slice(before) }, 'session.continueIn', {
-          canvas: expect.any(String) as unknown,
-          agent: 'a',
-          connection: 'claude-code.terminal',
-          then: { text: input, images: [{ mediaType: 'image/png', data: 'aW1hZ2U=' }] },
+      canvas: expect.any(String) as unknown,
+      agent: 'a',
+      connection: 'claude-code.terminal',
+      then: { text: input, images: [{ mediaType: 'image/png', data: 'aW1hZ2U=' }] },
     });
     expect(backend.send).toHaveBeenCalledOnce();
   });
