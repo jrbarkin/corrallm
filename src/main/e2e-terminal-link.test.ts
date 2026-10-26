@@ -14,7 +14,9 @@ function fakes(pointer: (options: { state: string; timeout: number }) => Promise
   const keys: string[] = [];
   const click = vi.fn<() => Promise<void>>(() => Promise.resolve());
   const move = vi.fn();
+  const evaluate = vi.fn<() => Promise<void>>(() => Promise.resolve());
   const page = {
+    evaluate,
     mouse: { move, click },
     keyboard: {
       down: (key: string) => keys.push(`down ${key}`),
@@ -22,7 +24,7 @@ function fakes(pointer: (options: { state: string; timeout: number }) => Promise
     },
   } as unknown as Page;
   const screen = {
-    boundingBox: () => Promise.resolve({ x: 10, y: 20, width: 800, height: 400 }),
+    boundingBox: vi.fn(() => Promise.resolve({ x: 10, y: 20, width: 800, height: 400 })),
   };
   const waitFor = vi.fn(pointer);
   const view = {
@@ -34,7 +36,7 @@ function fakes(pointer: (options: { state: string; timeout: number }) => Promise
       );
     },
   } as unknown as Locator;
-  return { page, view, keys, click, move, waitFor };
+  return { page, view, keys, click, move, waitFor, evaluate, screen };
 }
 
 it('discovers a link rendered after xterm cached an empty row under the pointer', async () => {
@@ -125,4 +127,30 @@ it('neither clicks nor holds a modifier where xterm shows no link in time, for t
     'closed',
   );
   expect(click).not.toHaveBeenCalled();
+});
+
+it('measures the screen only once the view has finished growing out of its card', async () => {
+  // The view opens with a 380 ms animation that starts with the page's first frame, which software
+  // rendering can delay: until it ends, the screen's box is the card's, and so is every cell.
+  const grown = Promise.withResolvers<undefined>();
+  const { page, view, move, evaluate, screen } = fakes(() => Promise.resolve());
+  let settled = false;
+  evaluate.mockImplementation(async () => {
+    await grown.promise;
+    settled = true;
+  });
+  screen.boundingBox.mockImplementation(() =>
+    Promise.resolve(
+      settled
+        ? { x: 10, y: 20, width: 800, height: 400 }
+        : { x: 500, y: 300, width: 100, height: 50 },
+    ),
+  );
+  const clicking = clickTerminalLink(page, view, { cols: 80, rows: 20 }, 12, 3);
+  await Promise.resolve();
+  expect(screen.boundingBox).not.toHaveBeenCalled();
+  expect(move).not.toHaveBeenCalled();
+  grown.resolve(undefined);
+  await clicking;
+  expect(move.mock.calls[1]).toEqual([135, 90, { steps: 2 }]);
 });

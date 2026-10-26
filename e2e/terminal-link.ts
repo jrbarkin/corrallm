@@ -19,6 +19,17 @@ export async function clickTerminalLink(
   col: number,
   row: number,
 ): Promise<boolean> {
+  // The agent view grows out of its card (a 380 ms animation that only starts with the page's
+  // first frame, and software rendering can take longer than that to draw one): a box measured
+  // before it ends is the card's, and every cell worked out from it is somewhere else.
+  await page.evaluate(() =>
+    Promise.all(
+      document
+        .getAnimations()
+        .filter((animation) => animation.effect?.getComputedTiming().iterations !== Infinity)
+        .map((animation) => animation.finished),
+    ),
+  );
   // Re-read the actual screen each time: the window may have finished growing since the CLI
   // reported its size. The test's fake places its reply at known cells, not fixed pixel offsets.
   const screen = await view.locator('.xterm-screen').boundingBox();
