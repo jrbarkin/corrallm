@@ -1060,11 +1060,17 @@ test('edits a queue in its lane by dragging, and animates the task each queue is
   const wait = before.findIndex((label) => label.startsWith('Builder: Wait for'));
   expect(tests).toBeGreaterThan(wait);
 
-  // The test run, dragged by its handle above the wait in its lane.
-  const from = await center(view.getByRole('button', { name: 'Move exec_command', exact: true }));
+  // Bring the handle into the scrollable lanes before measuring it: this template need not fit
+  // the viewport. Check that the press starts its drag before testing the final persisted order.
+  const grip = view.getByRole('button', { name: 'Move exec_command', exact: true });
+  await grip.evaluate((handle) => {
+    handle.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'instant' });
+  });
+  const from = await center(grip);
   const to = await box(view.getByRole('group', { name: /^Builder: Wait for/ }));
   await page.mouse.move(from.x, from.y);
   await page.mouse.down();
+  await expect(view.locator('.queues-cell.dragging')).toHaveAttribute('aria-label', run);
   await page.mouse.move(from.x, to.y + 4, { steps: 12 });
   await page.mouse.up();
   const expected = before.filter((label) => label !== run);

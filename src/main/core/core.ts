@@ -74,9 +74,7 @@ import type { Watcher } from './engines';
 import type { HostServices, WindowId } from './host';
 import type { ShutdownPrepared, ShutdownReason } from './protocol';
 import { implementations } from './ops';
-import { PREPARED_OPS, preparedOps } from './ops/prepared';
 import { sessionRules } from './ops/session-control';
-import { PREPARED_SURFACE } from '../../shared/api/prepared';
 import type { AgentId } from '../../shared/api/ids';
 import { SessionControl } from './session-control';
 import { runReplies } from './run-replies';
@@ -155,10 +153,6 @@ export interface CoreConfig {
   watchFolder?: WatchFolder;
   /** Fake connectors and options for an unpackaged app's tests, admitted by its host. */
   fakeSessions?: boolean;
-  /**
-   * For the core's tests alone: B9a's worktree.remove, until X12 registers it. No host sets it.
-   */
-  preparedOps?: boolean;
   /**
    * For tests: what runs agents' sessions instead of each connection's own connector
    * (sessions/fake.ts), the environment they run in instead of the login shell's, what reads a
@@ -981,7 +975,6 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     catalog: CATALOG,
     defaultAdapter: DEFAULT_ADAPTER,
   });
-  const prepared = config.preparedOps === true;
   // Every change rule a token's commit is checked against (B9 Design §4).
   const changeRules = changeChecks({
     catalog: CATALOG,
@@ -992,18 +985,11 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
   });
   const dispatcher = createDispatcher(
     {
-      surface: prepared ? { ...SURFACE, ...PREPARED_SURFACE } : SURFACE,
-      ops: prepared ? { ...OPS, ...PREPARED_OPS } : OPS,
+      surface: SURFACE,
+      ops: OPS,
       implementations: {
-        ...(prepared
-          ? preparedOps({
-              cleanup,
-              proposals,
-              nameOf: ownerName,
-              workspaces: workspaceStore,
-            })
-          : {}),
         ...implementations({
+          worktrees: { cleanup, proposals, nameOf: ownerName, workspaces: workspaceStore },
           control,
           topics,
           app: config.app,

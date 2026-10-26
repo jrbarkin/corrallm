@@ -23,7 +23,7 @@ import type { OutsideCaller } from './caller';
 import { createCore } from './core';
 import type { Core } from './core';
 import { cursorOf } from './delivery/messages';
-import { keepCanvases, keepMessages } from './store/test-store';
+import { keepCanvases, keepMessages, openTestStore } from './store/test-store';
 import { GitRunner } from './workspaces/git';
 import { Provisioner } from './workspaces/provision';
 import { WorkspaceSetups } from './workspaces/setup';
@@ -75,6 +75,9 @@ export const SEEDED = {
 
 /** The notice corrallm sent the read-only token's party (`watcher`) before the core started. */
 export const NOTICE = '1b2c3d4e-5f60-4718-8a9b-0c1d2e3f4a54';
+
+/** A retained tree whose checkout is gone: removal must ask, never assume it safe. */
+export const KEPT_WORKTREE = '1b2c3d4e-5f60-4718-8a9b-0c1d2e3f4a55';
 
 /**
  * The proposals waiting for you as the generated tests begin: the outside write token's deletes of
@@ -372,6 +375,37 @@ export async function startWorld(): Promise<{
     filed[id] = { file: at };
   }
   await keepCanvases(profile, { ...filed, [CANVAS]: { file, project } });
+  const store = await openTestStore(profile);
+  try {
+    const workspaces = new WorkspaceStore({ store });
+    const root = path.join(profile, 'kept-project');
+    await workspaces.write((w) => {
+      w.addRepository({
+        id: KEPT_WORKTREE,
+        pickedRoot: root,
+        realRoot: root,
+        commonDir: path.join(root, '.git'),
+        identity: 'kept repository',
+        rootKind: 'project',
+        ownedRoot: path.join(root, '.corral/worktrees/profile'),
+      });
+      w.createWorktree({
+        id: KEPT_WORKTREE,
+        canvas: CANVAS,
+        repository: KEPT_WORKTREE,
+        owner: 'agent/former',
+        path: path.join(root, '.corral/worktrees/profile', KEPT_WORKTREE),
+        branchRef: `refs/heads/corrallm/profile/${KEPT_WORKTREE}`,
+        baseCheckout: root,
+        baseRef: 'refs/heads/main',
+        baseOid: 'a'.repeat(40),
+        forkedFrom: null,
+      });
+      w.retain(KEPT_WORKTREE);
+    });
+  } finally {
+    await store.close();
+  }
   await keepMessages(profile, CANVAS, [
     ...Object.entries(SEEDED).map(([party, id]) => ({
       message: {
@@ -597,6 +631,24 @@ export const REAL_FIXTURES: Readonly<Record<OpName, OpFixture>> = {
       { canvas: CANVAS, query: 'ipc', folder: '/etc' },
       { canvas: 'nope', query: '' },
     ],
+  },
+  'worktree.remove': {
+    // No checkout can be assessed here: C7 raises a discard proposal instead of removing it.
+    fresh: ['proposed', 'revs'],
+    proposesForYou: ['discard'],
+    valid: [{ canvas: CANVAS, worktree: KEPT_WORKTREE, request: controlRequest(390) }],
+    invalid: [
+      {},
+      { canvas: CANVAS },
+      { canvas: 'nope', worktree: KEPT_WORKTREE },
+      { canvas: CANVAS, worktree: '/a/checkout' },
+      { canvas: CANVAS, worktree: 'x'.repeat(4096) },
+      { canvas: CANVAS, worktree: KEPT_WORKTREE, force: true },
+      { canvas: CANVAS, worktree: KEPT_WORKTREE, path: '/a/checkout' },
+    ],
+    meetsRule: {
+      discard: { canvas: CANVAS, worktree: KEPT_WORKTREE, request: controlRequest(391) },
+    },
   },
   'canvas.list': {
     valid: [{}, undefined],
@@ -1713,6 +1765,8 @@ const MESSAGES_OUT_OF_REACH: Readonly<Record<string, readonly string[]>> = {
 /** What each token party doesn't reach on the canvas. */
 export const REAL_OUT_OF_REACH: OutOfReach = {
   CanvasId: () => [OTHER_CANVAS],
+  // Worktree removal is human-only; no token has a grant to any workspace record.
+  WorktreeId: () => ['1b2c3d4e-5f60-4718-8a9b-0c1d2e3f4aff'],
   AgentId: (caller, reach) =>
     caller.kind === 'outside' ? [] : AGENTS_OUT_OF_REACH[caller.agent]?.[reach],
   // A node is reached as an agent is.

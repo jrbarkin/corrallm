@@ -72,6 +72,7 @@ const ID_KEYS = new Set([
   'group',
   'parent',
   'target',
+  'worktree',
 ]);
 /** The brands that name an agent, which an op open to a token must say whether it may aim at itself. */
 const AGENT_BRANDS: readonly Brand[] = ['AgentId', 'NodeId', 'GroupId'];

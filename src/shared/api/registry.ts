@@ -11,7 +11,7 @@ import { catalogOps } from './ops/catalog';
 import { filesOps } from './ops/files';
 import { b11ConversationOps, conversationOps } from './ops/conversation';
 import { linkOps } from './ops/link';
-import { projectOps } from './ops/project';
+import { b9aWorktreeOps, projectOps } from './ops/project';
 import { b11RunOps, runOps } from './ops/run';
 import { b11SessionOps, sessionOps } from './ops/session';
 import { settingsOps } from './ops/settings';
@@ -34,6 +34,7 @@ export const OPS = {
   ...catalogOps,
   ...templatesOps,
   ...projectOps,
+  ...b9aWorktreeOps,
   ...filesOps,
   ...canvasOps,
   ...batchOps,

@@ -18,8 +18,8 @@ import { readOnDisk, keepCanvases } from './store/test-store';
 import { CALLERS, NO_DESKTOP } from './test-registry';
 
 /*
- * B11 C7's reply router, through core.call (the typed reply registered early:
- * CoreConfig.preparedOps): a run's holds and its sessions' prompts, yours alone until B24 (R3),
+ * B11 C7's reply router, through core.call: a run's holds and its sessions' prompts,
+ * yours alone until B24 (R3),
  * never an agent's own (R6), never a pause's release (R9), each answered once at the generation
  * its id names, and recorded with who decided, across a restart; a secret never written, and never
  * shown a token.

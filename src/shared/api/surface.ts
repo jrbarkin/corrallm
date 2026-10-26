@@ -175,6 +175,14 @@ export const SURFACE = {
   'project.setSetupCommand': { access: Y, kind: 'command', scope: 'canvas' },
   // What runs by itself in a new worktree is yours to stop allowing (D9, permissions).
   'project.clearSetupApproval': { access: Y, kind: 'command', scope: 'canvas' },
+  // C7's retained trees only: no active binding is removed or drained by this command.
+  'worktree.remove': {
+    access: Y,
+    kind: 'command',
+    scope: 'canvas',
+    rules: ['discard'],
+    destructive: true,
+  },
   // A token lists only its own canvases; a lead's canvas holds only what it reaches (§3.4).
   'canvas.list': { access: R, kind: 'read', scope: 'none', reads: 'canvases', varies: ['items'] },
   'canvas.get': {

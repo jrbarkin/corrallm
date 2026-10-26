@@ -91,6 +91,38 @@ function setup(nodes: CanvasNode[], extra: Partial<RunIO> = {}) {
 }
 
 describe('group scheduler controls', () => {
+  it.each(['before', 'after'] as const)(
+    'shows Pausing only while nested turns remain active when they finish %s Pause',
+    (finish) => {
+      let now = 0;
+      const nodes = [
+        frame('outer'),
+        frame('inner', 'outer'),
+        agent('a', 'inner', [{ id: 'one', message: 'a:one' }]),
+        agent('b', 'outer', [{ id: 'one', message: 'b:one' }]),
+      ];
+      const { store, reply, sent } = setup(nodes, { now: () => now });
+      store.start();
+      // A slow UI does not reserve a turn: completion can win before the click is delivered.
+      now = 60_000;
+      if (finish === 'before') {
+        reply('a');
+        reply('b');
+      }
+      store.pauseGroup('outer');
+      expect(groupControlText(nodes, store.snapshot(), 'outer')).toBe(
+        finish === 'before' ? 'Paused' : 'Pausing',
+      );
+      expect(sent.every(({ withdrawn }) => !withdrawn)).toBe(true);
+      if (finish === 'after') {
+        reply('a');
+        reply('b');
+      }
+      expect(groupControlText(nodes, store.snapshot(), 'outer')).toBe('Paused');
+      expect(store.snapshot().groupPauses).toEqual([{ id: 'outer', by: 'you' }]);
+    },
+  );
+
   it.each(['moved-out', 'deleted'] as const)(
     'releases a ready checkpointed send when its group is %s',
     async (change) => {
