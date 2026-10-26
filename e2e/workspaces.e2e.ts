@@ -1,4 +1,4 @@
-import { chmod, mkdir, mkdtemp, rename, rm, writeFile } from 'node:fs/promises';
+import { appendFile, chmod, mkdir, mkdtemp, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { expect, test } from '@playwright/test';
@@ -20,8 +20,16 @@ async function openWorkspaceApp(
   const project = path.join(dir, 'project');
   const config = path.join(dir, 'claude-config');
   const env = gitEnvironment(path.join(dir, 'home'));
-  if (git) makeRepository(project, env);
-  else await mkdir(project);
+  if (git) {
+    makeRepository(project, env);
+    // The fake CLI logs its own exit into the tree it ran in (`.fake-claude/`). Like any agent's
+    // bookkeeping that a repository ignores, that is not work: were it listed, ending the session
+    // would change the tree after you answered, and the core rightly keeps a tree that changed
+    // since the question rather than discard what it did not show you.
+    await appendFile(path.join(project, '.git', 'info', 'exclude'), '.fake-claude/\n');
+  } else {
+    await mkdir(project);
+  }
   await mkdir(config);
   const cli = path.join(dir, 'claude');
   await writeFile(
