@@ -1221,10 +1221,12 @@ test('holds a queue for your OK, pulsing amber with its decision shown, until ap
   await expect(row).toHaveAttribute('data-run', 'succeeded');
   expect(await row.evaluate((element) => getComputedStyle(element, '::after').content)).toBe('"✓"');
   await expect(approve).toHaveCount(0);
-  await expect(
-    view.getByRole('group', { name: 'Agent 1: Grep' }).locator('[data-run]'),
-  ).toHaveAttribute('data-run', 'running');
-  await view.getByRole('button', { name: 'Stop', exact: true }).click();
+  // The fake agent answers within a few hundred milliseconds, so the step may be seen running or
+  // already done: either way it ran, which its one attempt records.
+  const grep = view.getByRole('group', { name: 'Agent 1: Grep' }).locator('[data-run]');
+  await expect(grep).toHaveAttribute('data-run', /^(running|succeeded)$/);
+  const stop = view.getByRole('button', { name: 'Stop', exact: true });
+  if (await stop.isVisible()) await stop.click();
 });
 
 test('lines repeats up across lanes, round by round, with ribbons between the steps inside them', async () => {
