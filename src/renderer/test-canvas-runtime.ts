@@ -1,5 +1,4 @@
 import type { UsageState } from '../shared/usage';
-import type { UserMessage } from '../shared/session';
 import type { CanvasDocument } from '../shared/model/canvas';
 import type { SessionBackend } from '../shared/engine/transcript/receive';
 import { NO_BACKEND } from '../shared/engine/transcript/receive';
@@ -324,6 +323,11 @@ export function canvasRuntime(
       const { adapter, agent } = OPS['session.options'].input.parse(raw);
       return read(await backend.options(adapter, agent));
     });
+    core.reply('session.viewCommand', (raw) => {
+      const { agent, text } = OPS['session.viewCommand'].input.parse(raw);
+      engine.sessions.recordSubmission(agent, text);
+      return result({ id: crypto.randomUUID() });
+    });
     core.reply('session.mcpServers', async (raw) => {
       const { agent } = OPS['session.mcpServers'].input.parse(raw);
       return read({ items: await backend.mcp(agent) });
@@ -404,12 +408,6 @@ export function canvasRuntime(
   return {
     activate: register,
     engine,
-    manual: {
-      record(agent: string, message: UserMessage): Promise<null> {
-        engine.sessions.recordSubmission(agent, message.text, message.images);
-        return Promise.resolve(null);
-      },
-    },
     update(next: CanvasDocument) {
       nodes = next.nodes;
       engine.update(nodes);

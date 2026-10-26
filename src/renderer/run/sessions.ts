@@ -1,6 +1,5 @@
 import type {
   MessageImage,
-  UserMessage,
   FilesRewind,
   RewindResult,
   SettingsOptions,
@@ -20,22 +19,10 @@ import type { EntryView, MessageView, SessionSummary, SessionView } from '../../
 import { submissionOf } from '../queues/messages';
 import { orderedEntries } from '../api/runtime';
 import type { TopicMirror } from '../api/topics';
-import { fromMain } from '../ipc-error';
 import type { AdapterId } from '../../shared/adapter';
 import type { SessionControls } from '../agent/AgentView';
-import { viewSend, viewWrite } from '../useDraft';
+import { viewSend } from '../useDraft';
 import { ApiError } from '../api/client';
-
-/** Pending C operation contracts; see renderer.md's remaining X13 dependencies. */
-export interface ManualSubmissions {
-  record(agent: string, message: UserMessage): Promise<null>;
-}
-
-/** Kept until C supplies the view-command record contract; never owns execution. */
-const nativeManual: ManualSubmissions = {
-  record: (agent, message) =>
-    viewWrite(() => fromMain(window.api.recordSessionCommand(agent, message))),
-};
 
 /**
  * The most bytes of pasted images this window keeps to preview what it sent: the newest first,
@@ -74,7 +61,6 @@ function subscribePreviews(listener: () => void): () => void {
 
 export interface SessionQueries {
   installed(): Promise<InstalledClis>;
-  manual?: ManualSubmissions;
   presentation?: SessionPresentation;
 }
 
@@ -259,7 +245,6 @@ export function sessionCommands(
   agent: string,
   mirror: TopicMirror,
   failed: (error: unknown) => void,
-  queries: SessionQueries = nativeQueries,
 ): SessionControls {
   const act = (call: Promise<unknown>) => {
     void call.catch(failed);
@@ -277,14 +262,9 @@ export function sessionCommands(
     return need;
   };
   return {
-    recordSubmission: (text, images) => {
-      act(
-        (queries.manual ?? nativeManual).record(agent, {
-          id: crypto.randomUUID(),
-          text,
-          ...(images ? { images } : {}),
-        }),
-      );
+    // A command the view answers itself (its panel opens beside it): recorded, never sent.
+    recordCommand: (text) => {
+      act(viewSend(() => api.sessionViewCommand({ canvas, agent, text })));
     },
     open: () => {
       openViewedSession(api, canvas, agent, failed);

@@ -64,7 +64,7 @@ async function switchingView(needs: NeedsItem[] = []) {
       client={canvas.core.api}
       mirror={canvas.core.topics}
       files
-      sessionQueries={{ ...fake.backend, manual: canvas.manual, presentation: canvas.presentation }}
+      sessionQueries={{ ...fake.backend, presentation: canvas.presentation }}
     />,
   );
   await waitFor(() => {
@@ -293,7 +293,6 @@ it.each(['show', 'close', 'allow'] as const)(
         files
         sessionQueries={{
           ...canvas.queries,
-          manual: canvas.manual,
           presentation: canvas.presentation,
         }}
       />,

@@ -80,7 +80,9 @@ The registered controls use session.setMode/setModel/setEffort, session.interrup
 
 The composer's Send is one `message` operation, your message whole (up to 200,000 characters, with its live images: B11 §16.6). Its pasted images' previews are this window's view state (`run/sessions.ts`' `keepPreview`, the newest within `MAX_PREVIEW_BYTES`), kept by the message id the core minted: no topic carries image bytes, so another window or a reload shows how many there were. The window's `drafts.flush` waits for a send still on its way (`viewSend` in `useDraft.ts`), though an operation's own draft flush never does, so two sends never wait on each other.
 
-**Remaining C contracts for X13.** The fixed record bridge still keeps view-command recording working and registers pending writes with the view-only draft flush. Locally handled slash-command recording has no operation/composite contract yet; recording plus a panel read must not become two operations for one gesture. The existing fixed record query remains until that contract exists. The presentation supplement remains for image previews, suggestions and Terminal asking metadata absent from the frozen DTO; removing it needs C's authorized projection and bounded topic contract. It owns no execution. No replacement audience, permission or lifecycle policy is introduced in the renderer.
+A view command typed in the composer (/resume, /mcp, /rewind) is one `session.viewCommand` operation, recorded as your message and never sent (`recordCommand`, through `viewSend`); its panel opens beside it and reads what it shows by its own read, which is no gesture.
+
+**Remaining C contracts for X13.** The presentation supplement remains for image previews, suggestions and Terminal asking metadata absent from the frozen DTO; removing it needs C's authorized projection and bounded topic contract. It owns no execution. No replacement audience, permission or lifecycle policy is introduced in the renderer.
 
 ## `src/renderer/queues/`
 

@@ -389,11 +389,8 @@ function Editor({
     [layout, run, sessions, engineCatalog],
   );
   const frontControls = useMemo(
-    () =>
-      front === undefined
-        ? undefined
-        : sessionCommands(api, canvasId, front, mirror, report, sessionQueries),
-    [api, canvasId, front, mirror, report, sessionQueries],
+    () => (front === undefined ? undefined : sessionCommands(api, canvasId, front, mirror, report)),
+    [api, canvasId, front, mirror, report],
   );
   /** The work between two agents opened in a panel, if any. */
   const [work, setWork] = useState<{ from: string; to: string }>();

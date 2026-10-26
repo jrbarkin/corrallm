@@ -55,6 +55,7 @@ export const OPS = {
   'session.conversations': b11SessionOps['session.conversations'],
   'session.resumeConversation': b11SessionOps['session.resumeConversation'],
   'session.options': b11SessionOps['session.options'],
+  'session.viewCommand': b11SessionOps['session.viewCommand'],
   'session.mcpServers': b11SessionOps['session.mcpServers'],
   'session.changeMcpServer': b11SessionOps['session.changeMcpServer'],
   reply: b11ConversationOps.reply,

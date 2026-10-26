@@ -58,6 +58,7 @@
     "api.session.conversations",
     "api.session.resumeConversation",
     "api.session.options",
+    "api.session.viewCommand",
     "api.session.mcpServers",
     "api.session.changeMcpServer",
     "api.session.get",
@@ -268,6 +269,7 @@
     "project.clearSetupApproval": "permissions",
     "session.setMode": "permissions",
     "session.continueIn": "permissions",
+    "session.viewCommand": "view",
     "agent.setType": "permissions",
     "agent.setConnection": "permissions",
     "topics.subscribe": "transport",
@@ -545,6 +547,10 @@
     "session.options": {
       "input": "c972f670696f8d9f",
       "output": "7fc73496d7c11db5"
+    },
+    "session.viewCommand": {
+      "input": "6dc6316420f38292",
+      "output": "49e43c944945473f"
     },
     "session.mcpServers": {
       "input": "c804536f3eb2a39b",

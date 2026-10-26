@@ -429,6 +429,36 @@ export class SessionControl {
     );
   }
 
+  /**
+   * session.viewCommand (yours alone, a view's): a command its agent view answered itself in a
+   * panel (one its connection's catalog `panels` names) kept as your message, settled at once and
+   * never sent to its CLI. What the panel then shows it reads, or does, by operations of its own.
+   */
+  async viewCommand({
+    canvas,
+    agent,
+    text,
+  }: {
+    canvas?: string | undefined;
+    agent: string;
+    text: string;
+  }): Promise<{ id: string }> {
+    const { open, connection, name } = this.#target(canvas, agent);
+    const command = /^\s*\/([^\s/]+)(?:\s[\s\S]*)?$/.exec(text)?.[1];
+    const panels = connectionIn(this.#deps.catalog, connection)?.connection.panels ?? {};
+    if (command === undefined || !Object.hasOwn(panels, command)) {
+      throw new OpFailure(
+        'invalid',
+        `${name}’s view answers no ${command === undefined ? 'such command' : `/${command}`} itself.`,
+      );
+    }
+    try {
+      return { id: (await open.delivery.record(agent, text)).id };
+    } catch (error) {
+      throw new OpFailure('unavailable', reasonOf(error));
+    }
+  }
+
   /** session.mcpServers (/mcp): the servers its running session reports now, bounded. */
   async mcpServers({
     canvas,

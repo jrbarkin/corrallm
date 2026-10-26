@@ -47,7 +47,6 @@ function setup(saved = true) {
       mirror={canvas.core.topics}
       sessionQueries={{
         ...canvas.queries,
-        manual: canvas.manual,
         presentation: canvas.presentation,
       }}
       files
@@ -261,7 +260,6 @@ it.each(['cancelled', 'refused'] as const)(
         mirror={canvas.core.topics}
         sessionQueries={{
           ...canvas.queries,
-          manual: canvas.manual,
           presentation: canvas.presentation,
         }}
         files

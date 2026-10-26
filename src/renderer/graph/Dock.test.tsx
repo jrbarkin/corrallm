@@ -181,7 +181,6 @@ it('toggles the canvas queues and switches agents through the taskbar without do
         mirror={canvas.core.topics}
         sessionQueries={{
           ...sessions.backend,
-          manual: canvas.manual,
           presentation: canvas.presentation,
         }}
       />,
@@ -232,7 +231,6 @@ it('glows for a core run or native-session need until the topic clears', async (
         mirror={canvas.core.topics}
         sessionQueries={{
           ...sessions.backend,
-          manual: canvas.manual,
           presentation: canvas.presentation,
         }}
       />,

@@ -397,6 +397,8 @@ export const SURFACE = {
   'session.options': { access: R, kind: 'read', scope: 'none', self: 'allowed' },
   // /mcp (B11 §6): only a server its session reports, never a command or a URL; an agent never
   // changes its own.
+  // A command your agent view answered itself (its panels), recorded as your message: a view's.
+  'session.viewCommand': { access: Y, kind: 'command', scope: 'agent' },
   'session.mcpServers': { access: R, kind: 'read', scope: 'none', self: 'allowed' },
   'session.changeMcpServer': { access: L, kind: 'command', scope: 'agent', self: 'refused' },
   'session.get': {

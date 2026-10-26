@@ -11,6 +11,7 @@ import { ConversationId, EntryId, TaskId } from '../ids';
 import {
   CatalogId,
   Effort as EffortValue,
+  ManualBody,
   ManualText,
   Model,
   ModelChoice,
@@ -248,7 +249,7 @@ const PastSession = z.strictObject({
   current: z.boolean(),
 });
 
-/** B11 schemas: C6 lifecycle/settings/rewind operations are registered; conversation/options and MCP controls await their services. */
+/** B11's session operations, each registered in OPS (registry.ts) over SessionControl. */
 export const b11SessionOps = {
   'session.open': define(
     { kind: 'command' },
@@ -372,6 +373,16 @@ export const b11SessionOps = {
           asks: z.boolean().optional(),
         }),
       }),
+    },
+  ),
+  'session.viewCommand': define(
+    { kind: 'command' },
+    {
+      summary:
+        'Records a command the agent view answers itself in a panel (its connection’s panels: ' +
+        '/resume, /mcp, /rewind) as the user’s message, settled at once and never sent to its CLI.',
+      input: AgentInput.extend({ text: ManualBody.min(1) }),
+      output: z.strictObject({ id: z.uuid() }),
     },
   ),
   'session.continueIn': define(

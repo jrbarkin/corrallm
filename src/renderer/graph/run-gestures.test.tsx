@@ -44,7 +44,6 @@ async function setup() {
       mirror={canvas.core.topics}
       sessionQueries={{
         ...canvas.queries,
-        manual: canvas.manual,
         presentation: canvas.presentation,
       }}
     />,

@@ -117,7 +117,6 @@ async function setup({
       mirror={canvas.core.topics}
       sessionQueries={{
         ...canvas.queries,
-        manual: canvas.manual,
         presentation: canvas.presentation,
       }}
       initialSelection={{ nodes: new Set(selected), edges: new Set() }}
@@ -657,7 +656,6 @@ it('keeps nested group cards inside the new frame through a reparenting operatio
       mirror={canvas.core.topics}
       sessionQueries={{
         ...canvas.queries,
-        manual: canvas.manual,
         presentation: canvas.presentation,
       }}
     />,

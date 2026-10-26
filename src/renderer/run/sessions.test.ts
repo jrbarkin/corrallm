@@ -268,19 +268,20 @@ it('takes back a queued message through one caller-checked withdraw operation', 
   }
 });
 
-it('records a view-handled command through the fixed bridge without sending a CLI turn', async () => {
-  const recordSessionCommand = vi.fn().mockResolvedValue(null);
-  vi.stubGlobal('window', { api: { recordSessionCommand } });
+it('records a view-handled command with one operation, never a message to its CLI', async () => {
   const core = fakeCore();
+  const canvas = newCanvasId();
   const failed = vi.fn();
-  sessionCommands(core.api, newCanvasId(), 'a', core.topics, failed).recordSubmission?.('/mcp');
-  await Promise.resolve();
-  expect(recordSessionCommand).toHaveBeenCalledExactlyOnceWith('a', {
-    id: expect.any(String) as unknown,
-    text: '/mcp',
-  });
-  expect(core.operations).toEqual([]);
-  core.dispose();
+  core.respond('session.viewCommand', { id: crypto.randomUUID(), revs: {} });
+  try {
+    sessionCommands(core.api, canvas, 'a', core.topics, failed).recordCommand?.('/mcp');
+    await waitFor(() => {
+      expectOneOp(core, 'session.viewCommand', { canvas, agent: 'a', text: '/mcp' });
+    });
+    expect(failed).not.toHaveBeenCalled();
+  } finally {
+    core.dispose();
+  }
 });
 
 it('answers each native prompt through exactly one typed reply', async () => {

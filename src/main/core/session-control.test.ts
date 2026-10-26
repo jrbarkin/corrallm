@@ -829,3 +829,41 @@ describe('MCP servers (/mcp)', () => {
     expect(mcpChanges).toEqual([]);
   });
 });
+
+describe('commands the agent view answers itself', () => {
+  it('records your /mcp as your message, settled at once and never sent to the CLI', async () => {
+    const { core, sdk } = await start();
+    await ok(core, 'session.open', { agent: 'a' });
+    const { id } = (await ok(core, 'session.viewCommand', { agent: 'a', text: '/mcp' })) as {
+      id: string;
+    };
+    const open = core.engines.canvas(CANVAS);
+    expect(open?.messages.get(id)).toMatchObject({
+      from: 'you',
+      to: 'agent:a',
+      kind: 'text',
+      body: '/mcp',
+      state: 'replied',
+      turn: { status: 'completed', reason: 'completed' },
+    });
+    expect(open?.messages.originOf(id)).toBe('manual');
+    expect(sdk.sessions[0]?.sent).toEqual([]);
+    expect(open?.engine.sessions.of('a').status).toBe('idle');
+  });
+
+  it('records only a command its connection’s view answers, and only yours', async () => {
+    const { core } = await start();
+    for (const text of ['/hello', 'mcp', '/mcp/x'])
+      expect(await fails(core, 'session.viewCommand', { agent: 'a', text })).toMatchObject({
+        code: 'invalid',
+      });
+    // A Terminal answers its own /mcp in its terminal.
+    await ok(core, 'session.continueIn', { agent: 'b', connection: 'claude-code.terminal' });
+    expect(await fails(core, 'session.viewCommand', { agent: 'b', text: '/mcp' })).toMatchObject({
+      code: 'invalid',
+    });
+    expect(
+      await fails(core, 'session.viewCommand', { agent: 'a', text: '/mcp' }, ORCHESTRATOR),
+    ).toMatchObject({ code: 'human-only' });
+  });
+});

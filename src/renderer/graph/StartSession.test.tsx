@@ -47,7 +47,6 @@ function setup() {
       mirror={canvas.core.topics}
       sessionQueries={{
         ...sessions.backend,
-        manual: canvas.manual,
         presentation: canvas.presentation,
       }}
       files

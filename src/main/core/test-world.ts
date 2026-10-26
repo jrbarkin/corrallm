@@ -1564,6 +1564,16 @@ export const REAL_FIXTURES: Readonly<Record<OpName, OpFixture>> = {
       { canvas: CANVAS, adapter: CONTROL.adapter.id, extra: true },
     ],
   },
+  // Your /mcp, typed in its composer: recorded, never sent (yours alone, a view's).
+  'session.viewCommand': {
+    fresh: ['revs', 'id'],
+    valid: [{ canvas: CANVAS, agent: CONTROL_AGENT, text: '/mcp', request: controlRequest(354) }],
+    invalid: [
+      { canvas: CANVAS, agent: CONTROL_AGENT, text: '' },
+      { canvas: CANVAS, agent: CONTROL_AGENT, text: '/not-a-panel' },
+      { canvas: CANVAS, agent: 'helper', text: '/mcp' },
+    ],
+  },
   'session.mcpServers': {
     valid: [{ canvas: CANVAS, agent: CONTROL_AGENT }],
     invalid: [{ canvas: CANVAS }, { canvas: CANVAS, agent: CONTROL_AGENT, server: 'x' }],

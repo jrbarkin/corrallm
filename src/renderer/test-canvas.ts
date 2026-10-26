@@ -1,5 +1,4 @@
 import type { Session } from '../shared/model/session';
-import type { UserMessage } from '../shared/session';
 import type { Presentation } from './run/sessions';
 import { canvasRuntime } from './test-canvas-runtime';
 import { NO_BACKEND } from '../shared/engine/transcript/receive';
@@ -476,12 +475,6 @@ export function fakeCanvas(
       },
       subscribe: (listener: () => void) =>
         runtime?.engine.sessions.subscribe(listener) ?? (() => undefined),
-    },
-    manual: {
-      record: (agent: string, message: UserMessage) => {
-        if (!runtime) throw new Error('No canvas runtime');
-        return runtime.manual.record(agent, message);
-      },
     },
     get engine() {
       if (!runtime) throw new Error('No test runtime');

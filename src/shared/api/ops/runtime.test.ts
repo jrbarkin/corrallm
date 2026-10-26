@@ -49,6 +49,7 @@ const valid = {
   'session.changeMcpServer': { canvas, agent, server: 'reported-server', change: 'disable' },
   'session.options': { canvas, agent, adapter: 'adapter' },
   'session.continueIn': { canvas, agent, connection: 'adapter.terminal', then: { text: 'hello' } },
+  'session.viewCommand': { canvas, agent, text: '/mcp' },
   reply: { canvas, to: 'hold/a/ok', answer: { choice: 'approve' } },
 } satisfies Record<keyof typeof prepared, Record<string, unknown>>;
 
@@ -102,6 +103,7 @@ describe('prepared operation schemas, not registrations', () => {
 
   it('registers the C6 session services, the run reader and controls and typed reply, leaving other schemas prepared', () => {
     const live = new Set([
+      'session.viewCommand',
       'session.mcpServers',
       'session.changeMcpServer',
       'session.conversations',

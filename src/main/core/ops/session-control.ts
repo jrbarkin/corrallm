@@ -20,7 +20,8 @@ type SessionName =
   | 'session.resumeConversation'
   | 'session.options'
   | 'session.mcpServers'
-  | 'session.changeMcpServer';
+  | 'session.changeMcpServer'
+  | 'session.viewCommand';
 type ArgsOf<N extends SessionName> = z.infer<(typeof b11SessionOps)[N]['input']>;
 
 /** The registered session operations delegate every refusal and effect to the core service. */
@@ -41,6 +42,7 @@ export function sessionControlOps(control: SessionControl): Pick<Implementations
     'session.options': (args) => control.options(args),
     'session.mcpServers': (args) => control.mcpServers(args),
     'session.changeMcpServer': (args, ctx) => control.changeMcpServer(args, ctx),
+    'session.viewCommand': (args) => control.viewCommand(args),
   };
 }
 /** R5's argument check, `restore-code` on session.rewind: a token's code restore proposes. */

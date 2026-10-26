@@ -51,8 +51,8 @@ import './AgentView.css';
 
 /** What the view does to its agent's session (src/shared/engine/delivery/mailbox.ts). */
 export interface SessionControls extends ComposerControls {
-  /** Records a submitted command handled locally, without sending another turn. */
-  recordSubmission?: (text: string, images?: MessageImage[]) => void;
+  /** Records a command the view answers itself in a panel, without sending a turn. */
+  recordCommand?: (text: string) => void;
   /** Starts the session (again), as when the view opens: a connected one resumes. */
   open: () => void;
   /** `feedback`, with a no: what Claude should do instead. */
@@ -422,7 +422,7 @@ export function AgentView({
   const send = (text: string, images?: MessageImage[]) => {
     const answered = connection === 'claude-code.sdk' ? viewCommand(text) : undefined;
     if (answered !== undefined) {
-      controls.recordSubmission?.(text, images);
+      controls.recordCommand?.(text);
       setRewindTo(undefined);
       setOpened(answered);
       return;

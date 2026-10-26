@@ -62,7 +62,6 @@ export function GraphEditor({
       {...props}
       sessionQueries={{
         ...canvas.queries,
-        manual: canvas.manual,
         presentation: canvas.presentation,
       }}
       usageSource={canvas.usageSource}
