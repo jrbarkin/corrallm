@@ -488,10 +488,6 @@ export function fakeCanvas(
         if (!runtime) throw new Error('No canvas runtime');
         return runtime.manual.record(agent, message);
       },
-      send: (agent: string, message: UserMessage) => {
-        if (!runtime) throw new Error('No test runtime');
-        return runtime.manual.send(agent, message);
-      },
     },
     get engine() {
       if (!runtime) throw new Error('No test runtime');

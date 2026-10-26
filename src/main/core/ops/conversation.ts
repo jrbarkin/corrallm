@@ -1,4 +1,7 @@
+import { connectionIn } from '../../../shared/adapter';
 import { DEFAULT_PAGE } from '../../../shared/api/limits';
+import { imageBytes } from '../../../shared/session';
+import { nameOf } from '../parties';
 import type { AGENT_STATES } from '../../../shared/api/ops/conversation';
 import { needs, withoutChoices } from '../../../shared/engine/needs';
 import type { CanvasId } from '../../../shared/canvas';
@@ -153,14 +156,39 @@ export function conversationOps(
       const next = last === undefined ? (from ?? 0) : (open.messages.seqOf(last.id) ?? 0);
       return { items, next: cursorOf('messages', { [id]: next }) };
     },
-    message: async ({ canvas, to, body, replyTo }, ctx) => {
+    message: async ({ canvas, to, body, images, replyTo }, ctx) => {
       const open = openCanvas(engines, canvas);
-      agentOf(open, to);
+      const node = agentOf(open, to);
       if (replyTo !== undefined && !open.messages.get(replyTo)) {
         throw new OpFailure('not-found', `There is no message ${replyTo}.`);
       }
+      // Images only of the kinds, number and size its connection takes (yours alone: human-text).
+      const pasted = images ?? [];
+      if (pasted.length > 0) {
+        const connection = open.engine.catalog.connectionOf(node.data);
+        const takes = connectionIn(services.catalog, connection)?.connection.images ?? null;
+        const name = nameOf(open.document.nodes, to);
+        if (takes === null) throw new OpFailure('refused', `${name}’s connection takes no images.`);
+        if (pasted.length > takes.max) {
+          throw new OpFailure('refused', `${name} takes at most ${String(takes.max)} images.`);
+        }
+        if (
+          pasted.some(
+            ({ mediaType, data }) =>
+              !takes.types.includes(mediaType) || imageBytes(data) > takes.maxBytes,
+          )
+        ) {
+          throw new OpFailure('refused', `${name} takes none of those images, or not that large.`);
+        }
+      }
       try {
-        const sent = await open.delivery.send(partyIdOf(ctx.caller), to, body, replyTo);
+        const sent = await open.delivery.send(
+          partyIdOf(ctx.caller),
+          to,
+          body,
+          replyTo,
+          pasted.length > 0 ? { images: pasted } : {},
+        );
         return { id: sent.id };
       } catch (error) {
         return failed(error);

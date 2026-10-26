@@ -27,6 +27,13 @@ export const RULES = {
     sentence:
       'Only you may send an agent text its connection runs as a shell command (its shell prefix).',
   },
+  // B11 §16.6 (Q-B11-1): your composer keeps its 200,000 characters and its pasted images; what
+  // anyone else sends stays at most 16 KiB of text (MAX_MESSAGE_BYTES), refused, never cut.
+  'human-text': {
+    kind: 'argument',
+    sentence:
+      'Only you send an agent more than 16 KB of text, or images: a message from an agent or an outside caller is at most 16 KB of text.',
+  },
   // R2: on agent.setSettings's arguments, and on every change.
   'mode-permits': {
     kind: 'argument+change',

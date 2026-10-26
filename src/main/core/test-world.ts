@@ -15,7 +15,7 @@ import type { OpName, Reach, Rule } from '../../shared/api/surface';
 import type { CanvasId } from '../../shared/canvas';
 import { itemKey, linkKey, nodeKey } from '../../shared/model/rows';
 import type { SessionMode } from '../../shared/session';
-import { MAX_FILE_QUERY_LENGTH, MAX_ROLE_LENGTH } from '../../shared/session';
+import { MAX_FILE_QUERY_LENGTH, MAX_MESSAGE_LENGTH, MAX_ROLE_LENGTH } from '../../shared/session';
 import type { Connector } from '../sessions/connector';
 import { CATALOG } from '../sessions/adapters';
 import { FakeConnector } from '../sessions/fake';
@@ -1354,11 +1354,19 @@ export const REAL_FIXTURES: Readonly<Record<OpName, OpFixture>> = {
     fresh: ['id'],
     invalid: [
       { canvas: CANVAS, to: 'peer', body: '' },
-      { canvas: CANVAS, to: 'peer', body: 'x'.repeat(MAX_MESSAGE_BYTES + 1) },
+      { canvas: CANVAS, to: 'peer', body: ' \n' },
+      { canvas: CANVAS, to: 'peer', body: 'x'.repeat(MAX_MESSAGE_LENGTH + 1) },
       { canvas: CANVAS, to: 'peer' },
     ],
     meetsRule: {
       'shell-text': { canvas: CANVAS, to: 'shell', body: '!ls', request: request(2) },
+      // Past a token's 16 KiB: yours, as your composer's are (B11 §16.6).
+      'human-text': {
+        canvas: CANVAS,
+        to: 'peer',
+        body: 'x'.repeat(MAX_MESSAGE_BYTES + 1),
+        request: controlRequest(350),
+      },
     },
   },
   withdraw: {

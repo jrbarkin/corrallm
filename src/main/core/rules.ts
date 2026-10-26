@@ -1,7 +1,8 @@
 import { adapterIn } from '../../shared/adapter';
 import type { AdapterId, Catalog } from '../../shared/adapter';
+import { MAX_MESSAGE_BYTES } from '../../shared/api/limits';
 import type { ArgsOf } from '../../shared/api/registry';
-import type { RULES } from '../../shared/api/rules';
+import { RULES } from '../../shared/api/rules';
 import type { OpName, Party, Rule, SURFACE } from '../../shared/api/surface';
 import type { CanvasId } from '../../shared/canvas';
 import type { Run } from '../../shared/engine/run/runner';
@@ -136,6 +137,14 @@ export function ruleChecks(
           refuse: `It starts with "${prefix}", which ${catalog.connectionName(connection) ?? 'its connection'} runs as a shell command without asking: only the user may send that.`,
         };
       },
+    },
+    // B11 §16.6: past 16 KiB of text, or with images, a message is your composer's alone; a
+    // token's is refused, never cut or stripped.
+    'human-text': {
+      message: ({ body, images }) =>
+        new TextEncoder().encode(body).length > MAX_MESSAGE_BYTES || (images?.length ?? 0) > 0
+          ? { refuse: RULES['human-text'].sentence }
+          : undefined,
     },
     // R2's argument half: a mode other than the one saved for that adapter, or none while one is.
     // Leaving it out, or passing the saved one, keeps it.

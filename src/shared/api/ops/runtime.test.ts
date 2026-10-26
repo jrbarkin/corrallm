@@ -49,7 +49,6 @@ const valid = {
   'session.changeMcpServer': { canvas, agent, server: 'reported-server', change: 'disable' },
   'session.options': { canvas, agent, adapter: 'adapter' },
   'session.continueIn': { canvas, agent, connection: 'adapter.terminal', then: { text: 'hello' } },
-  message: { canvas, to: agent, body: 'hello' },
   reply: { canvas, to: 'hold/a/ok', answer: { choice: 'approve' } },
 } satisfies Record<keyof typeof prepared, Record<string, unknown>>;
 
@@ -193,6 +192,22 @@ describe('prepared operation schemas, not registrations', () => {
         },
       }).success,
     ).toBe(false);
+  });
+
+  it('takes your composer’s message: up to its 200,000 characters, images, or images alone', () => {
+    const input = OPS.message.input;
+    const image = { mediaType: 'image/png', data: 'AAAA' };
+    expect(
+      input.safeParse({ canvas, to: agent, body: 'x'.repeat(MAX_MESSAGE_LENGTH) }).success,
+    ).toBe(true);
+    expect(input.safeParse({ canvas, to: agent, body: '', images: [image] }).success).toBe(true);
+    for (const body of ['', ' \n', 'x'.repeat(MAX_MESSAGE_LENGTH + 1)])
+      expect(input.safeParse({ canvas, to: agent, body }).success).toBe(false);
+    expect(
+      input.safeParse({ canvas, to: agent, body: 'hi', images: [image], origin: 'manual' }).success,
+    ).toBe(false);
+    // Past a token's 16 KiB is yours alone: its op's rule says so, not its schema.
+    expect(SURFACE.message.rules).toContain('human-text');
   });
 
   it('checks the aggregate image budget and the image encoding', () => {

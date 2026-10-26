@@ -5,6 +5,8 @@ import path from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { MAX_MESSAGE_BYTES } from '../../shared/api/limits';
+import { RULES } from '../../shared/api/rules';
 import type { CanvasId } from '../../shared/canvas';
 import type { FilesRewind, SessionMode } from '../../shared/session';
 import { MAX_MESSAGE_LENGTH } from '../../shared/session';
@@ -575,5 +577,67 @@ describe('live and saved settings', () => {
     failing.mockRestore();
     await ok(core, 'session.setModel', { agent: 'a', model: 'fast' });
     expect(core.engines.canvas(CANVAS)?.engine.sessions.of('a').model).toBe('fast');
+  });
+});
+
+describe('your messages (R22, B11 §16.6)', () => {
+  /** One small PNG, base64: what a pasted screenshot is to the API. */
+  const IMAGE = { mediaType: 'image/png' as const, data: 'iVBORw0KGgo=' };
+
+  it('admits your long message with its images as yours, once, and keeps it a Message row', async () => {
+    const { core, sdk } = await start();
+    await ok(core, 'session.open', { agent: 'a' });
+    // Longer than a token's 16 KiB, within your composer's 200,000 characters.
+    const body = `${'x'.repeat(MAX_MESSAGE_BYTES)} and more`;
+    const { id } = (await ok(core, 'message', { to: 'a', body, images: [IMAGE] })) as {
+      id: string;
+    };
+    const open = core.engines.canvas(CANVAS);
+    expect(open?.messages.get(id)).toMatchObject({ from: 'you', to: 'agent:a', body });
+    expect(open?.messages.originOf(id)).toBe('manual');
+    await vi.waitFor(() => {
+      expect(sdk.sessions[0]?.sent).toEqual([
+        expect.objectContaining({ text: body, images: [IMAGE] }),
+      ]);
+    });
+    // Only text or images make a message.
+    expect(await fails(core, 'message', { to: 'a', body: ' ' })).toMatchObject({
+      code: 'invalid',
+    });
+    expect(
+      await fails(core, 'message', { to: 'a', body: 'x'.repeat(MAX_MESSAGE_LENGTH + 1) }),
+    ).toMatchObject({ code: 'invalid' });
+  });
+
+  it('refuses a token’s message over 16 KiB, or with images (human-text), sending nothing', async () => {
+    const { core, sdk } = await start();
+    await ok(core, 'session.open', { agent: 'a' });
+    const long = await fails(
+      core,
+      'message',
+      { to: 'a', body: 'x'.repeat(MAX_MESSAGE_BYTES + 1) },
+      ORCHESTRATOR,
+    );
+    expect(long).toEqual({ code: 'refused', sentence: RULES['human-text'].sentence });
+    const pasted = await fails(
+      core,
+      'message',
+      { to: 'a', body: 'Look', images: [IMAGE] },
+      ORCHESTRATOR,
+    );
+    expect(pasted).toEqual({ code: 'refused', sentence: RULES['human-text'].sentence });
+    expect(sdk.sessions[0]?.sent ?? []).toEqual([]);
+    // Its own 16 KiB is a party's message as it was.
+    await ok(core, 'message', { to: 'a', body: 'x'.repeat(MAX_MESSAGE_BYTES) }, ORCHESTRATOR);
+  });
+
+  it('refuses images its recipient’s connection takes none of, before anything is kept', async () => {
+    const { core } = await start();
+    await ok(core, 'session.continueIn', { agent: 'b', connection: 'claude-code.terminal' });
+    const before = core.engines.canvas(CANVAS)?.messages.all().length;
+    const refused = await fails(core, 'message', { to: 'b', body: 'Look', images: [IMAGE] });
+    expect(refused.code).toBe('refused');
+    expect(refused.sentence).toMatch(/Reviewer.*takes no images/);
+    expect(core.engines.canvas(CANVAS)?.messages.all().length).toBe(before);
   });
 });

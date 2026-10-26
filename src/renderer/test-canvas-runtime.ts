@@ -292,6 +292,24 @@ export function canvasRuntime(
         );
       return result();
     });
+    // Your message, as the core's delivery admits it: its id the core's, its images live-only.
+    core.reply('message', (raw) => {
+      const { to, body, images } = OPS.message.input.parse(raw);
+      const node = nodes.find((node) => node.id === to && node.type === 'agent');
+      const id = crypto.randomUUID();
+      engine.sessions.send(
+        to,
+        (node?.type === 'agent' ? node.data.adapter : undefined) ?? engine.catalog.defaultAdapter,
+        body,
+        undefined,
+        images,
+        undefined,
+        'user',
+        undefined,
+        { id },
+      );
+      return result({ id });
+    });
     core.reply('session.interrupt', (raw) => {
       engine.sessions.stop(OPS['session.interrupt'].input.parse(raw).agent);
       return result();
@@ -369,21 +387,6 @@ export function canvasRuntime(
     manual: {
       record(agent: string, message: UserMessage): Promise<null> {
         engine.sessions.recordSubmission(agent, message.text, message.images);
-        return Promise.resolve(null);
-      },
-      send(agent: string, message: UserMessage): Promise<null> {
-        const node = nodes.find((node) => node.id === agent && node.type === 'agent');
-        engine.sessions.send(
-          agent,
-          (node?.type === 'agent' ? node.data.adapter : undefined) ?? engine.catalog.defaultAdapter,
-          message.text,
-          undefined,
-          message.images,
-          undefined,
-          'user',
-          undefined,
-          { id: message.id },
-        );
         return Promise.resolve(null);
       },
     },

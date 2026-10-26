@@ -6,9 +6,9 @@ import { TURN_REASONS } from '../../session';
 import { define } from '../define';
 import type { OpDef } from '../define';
 import { AgentId, MessageId, NeedId, OpCanvas } from '../ids';
-import { MAX_MESSAGE_BYTES, MAX_PAGE, MAX_WAIT_SECONDS } from '../limits';
+import { MAX_PAGE, MAX_WAIT_SECONDS } from '../limits';
 import type { OpName } from '../surface';
-import { Body as B11Body, Images } from './b11-data';
+import { Body as B11Body, Images, ManualBody } from './b11-data';
 import {
   MAX_ANSWER_LENGTH,
   MAX_FORM_FIELDS,
@@ -99,15 +99,6 @@ export const AGENT_STATES = ['waiting', 'working', 'paused', 'limited', 'idle'] 
 
 const canvas = OpCanvas;
 
-/** At most MAX_MESSAGE_BYTES of UTF-8. */
-const Body = z
-  .string()
-  .min(1)
-  .max(MAX_MESSAGE_BYTES)
-  .refine((body) => new TextEncoder().encode(body).length <= MAX_MESSAGE_BYTES, {
-    message: `Too long: a message is at most ${String(MAX_MESSAGE_BYTES / 1024)} KB.`,
-  });
-
 export const conversationOps = {
   agents: define('agents', {
     summary:
@@ -173,8 +164,20 @@ export const conversationOps = {
     summary:
       'Sends an agent a message, delivered as soon as it is idle and nothing holds it, with a ' +
       'first line saying who it is from. Its reply comes back to you as a message. Returns at ' +
-      'once, with the message’s id.',
-    input: z.strictObject({ canvas, to: AgentId, body: Body, replyTo: MessageId.optional() }),
+      'once, with the message’s id. Yours is at most 16 KB of text: only the user’s own ' +
+      'messages are longer, or carry images.',
+    input: z
+      .strictObject({
+        canvas,
+        to: AgentId,
+        body: ManualBody,
+        images: Images.optional(),
+        replyTo: MessageId.optional(),
+      })
+      .refine(
+        ({ body, images }) => body.trim() !== '' || (images?.length ?? 0) > 0,
+        'A message has text, or images',
+      ),
     output: z.strictObject({ id: z.uuid() }),
   }),
   wait: define('wait', {
@@ -307,23 +310,8 @@ export const ReplyAnswer = z
   )
   .meta({ maxBytes: MAX_REPLY_ANSWER_BYTES });
 
-/** R22 images and typed replies prepared separately; registered operations retain today’s shapes. */
+/** B11's typed reply (registered as `reply`). */
 export const b11ConversationOps = {
-  message: define(
-    { kind: 'command' },
-    {
-      summary:
-        'Records and sends a message with optional live images; provenance comes from the caller.',
-      input: z.strictObject({
-        canvas,
-        to: AgentId,
-        body: B11Body,
-        images: Images.optional(),
-        replyTo: MessageId.optional(),
-      }),
-      output: z.strictObject({ id: z.uuid() }),
-    },
-  ),
   reply: define(
     { kind: 'command' },
     {

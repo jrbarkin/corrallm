@@ -57,9 +57,14 @@ export const Images = z
   )
   // Base64 needs no JSON escaping. Allow padding and media/object keys for each bounded image.
   .meta({ maxBytes: 4 * Math.ceil(MAX_IMAGE_TOTAL / 3) + MAX_IMAGES * 100 });
+/**
+ * Text your composer sends: at most its 200,000 characters (MAX_MESSAGE_LENGTH, B11 §16.6). What
+ * anyone else sends is held to MAX_MESSAGE_BYTES by its op's `human-text` rule, never by cutting.
+ */
+export const ManualBody = z.string().max(MAX_MESSAGE_LENGTH);
 /** Human-only Continue uses the composer's character bound (B11 §16.6). */
 export const ManualText = z.strictObject({
-  text: z.string().min(1).max(MAX_MESSAGE_LENGTH),
+  text: ManualBody.min(1),
   images: Images.optional(),
 });
 const Party = z.string().regex(PARTY_PATTERN);

@@ -38,6 +38,7 @@ export type Scope = 'app' | 'canvas' | 'agent' | 'none';
  */
 export type Rule =
   | 'shell-text'
+  | 'human-text'
   | 'mode-permits'
   | 'human-choice'
   | 'discard'
@@ -350,11 +351,12 @@ export const SURFACE = {
     reads: 'messages',
     varies: ['items', 'next'],
   },
+  // Your composer's message too (B11 §3, §16.6): text past 16 KiB, and images, are yours alone.
   message: {
     access: M,
     kind: 'command',
     scope: 'agent',
-    rules: ['shell-text'],
+    rules: ['shell-text', 'human-text'],
     self: 'refused',
   },
   withdraw: { access: M, kind: 'command', scope: 'canvas', preempt: true, destructive: true },

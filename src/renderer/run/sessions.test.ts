@@ -1,7 +1,16 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { newCanvasId } from '../../shared/canvas';
 import { fakeCore } from '../test-api';
-import { nativeQueries, sessionCommands, sessionDisplay } from './sessions';
+import {
+  imagePreviews,
+  keepPreview,
+  MAX_PREVIEW_BYTES,
+  nativeQueries,
+  sessionCommands,
+  sessionDisplay,
+} from './sessions';
+import { MAX_IMAGE_BYTES } from '../../shared/api/limits';
+import { imageBytes } from '../../shared/session';
 import { NEW_SESSION } from '../../shared/model/session';
 import { sessionView } from '../../shared/model/views';
 import type { MessageView } from '../../shared/model/views';
@@ -143,23 +152,58 @@ it('completes files with one project.files read bound to the displayed canvas an
   }
 });
 
-it('keeps manual sends on the transitional fixed channel, including images, without a window message op', async () => {
-  const sendToSession = vi.fn().mockResolvedValue(null);
-  vi.stubGlobal('window', { api: { sendToSession } });
+it('sends your message, its images too, as one message operation, and previews them in this window only', async () => {
   const core = fakeCore();
+  const canvas = newCanvasId();
   const failed = vi.fn();
-  const controls = sessionCommands(core.api, newCanvasId(), 'a', core.topics, failed);
+  const id = crypto.randomUUID();
+  core.respond('message', { id });
+  const controls = sessionCommands(core.api, canvas, 'a', core.topics, failed);
   const images = [{ mediaType: 'image/png' as const, data: 'iVBORw0KGgo=' }];
-  controls.send('Fix it', images);
-  await Promise.resolve();
-  expect(sendToSession).toHaveBeenCalledExactlyOnceWith('a', {
-    id: expect.any(String) as unknown,
-    text: 'Fix it',
-    images,
-  });
-  expect(core.operations).toEqual([]);
-  expect(failed).not.toHaveBeenCalled();
-  core.dispose();
+  try {
+    controls.send('Fix it', images);
+    await waitFor(() => {
+      expect(imagePreviews().get(id)).toEqual(images);
+    });
+    expectOneOp(core, 'message', { canvas, to: 'a', body: 'Fix it', images });
+    // The transcript's entry shows them; the topic only ever counts them.
+    const view = sessionView(AgentId.parse('a'), connection, {
+      ...NEW_SESSION,
+      entries: [{ kind: 'user', id: 'native-1', text: 'Fix it', images: [...images] }],
+    });
+    const message: MessageView = {
+      id,
+      canvas,
+      from: 'you',
+      to: 'agent:a',
+      kind: 'text',
+      body: 'Fix it',
+      state: 'delivered',
+      delivery: { at: 1, as: 'native-1', attempt: 1 },
+      at: 1,
+      origin: 'manual',
+    };
+    expect(view.entries['native-1']).toMatchObject({ images: 1 });
+    expect(
+      sessionDisplay(view.summary, view, [message], { images: imagePreviews() }).entries[0],
+    ).toMatchObject({ images });
+    expect(failed).not.toHaveBeenCalled();
+  } finally {
+    core.dispose();
+  }
+});
+
+it('keeps only the newest pasted images’ previews, within its byte budget', () => {
+  const big = 'A'.repeat(4 * Math.floor(MAX_IMAGE_BYTES / 3));
+  const ids = Array.from({ length: Math.ceil(MAX_PREVIEW_BYTES / MAX_IMAGE_BYTES) + 2 }, () =>
+    crypto.randomUUID(),
+  );
+  for (const id of ids) keepPreview(id, [{ mediaType: 'image/png', data: big }]);
+  const kept = imagePreviews();
+  expect(kept.has(ids.at(-1) ?? '')).toBe(true);
+  expect(kept.has(ids[0] ?? '')).toBe(false);
+  const bytes = [...kept.values()].flat().reduce((sum, { data }) => sum + imageBytes(data), 0);
+  expect(bytes).toBeLessThanOrEqual(MAX_PREVIEW_BYTES);
 });
 
 it('takes back a queued message through one caller-checked withdraw operation', async () => {
@@ -258,22 +302,38 @@ it('answers each native prompt through exactly one typed reply', async () => {
 });
 
 it('a view-only draft flush also awaits an admitted manual send before the window closes', async () => {
-  const { flushDrafts } = await import('../useDraft');
-  const pending = Promise.withResolvers<null>();
-  vi.stubGlobal('window', { api: { sendToSession: vi.fn(() => pending.promise) } });
+  const { answerDraftFlushes, flushDrafts } = await import('../useDraft');
+  const pending = Promise.withResolvers<undefined>();
   const core = fakeCore();
-  sessionCommands(core.api, newCanvasId(), 'a', core.topics, vi.fn()).send('Keep it');
-  let done = false;
-  const flushing = flushDrafts().then(() => {
-    done = true;
+  core.reply('message', async () => {
+    await pending.promise;
+    return { ok: true, value: { id: crypto.randomUUID(), revs: {} } };
   });
-  await Promise.resolve();
-  await Promise.resolve();
-  expect(done).toBe(false);
-  pending.resolve(null);
-  await flushing;
-  expect(done).toBe(true);
-  core.dispose();
+  let flush: (() => Promise<void>) | undefined;
+  const stop = answerDraftFlushes({
+    draftsOnFlush: (answer) => {
+      flush = answer;
+      return () => undefined;
+    },
+  });
+  try {
+    sessionCommands(core.api, newCanvasId(), 'a', core.topics, vi.fn()).send('Keep it');
+    // An operation's own draft flush never waits for it: a second send would not wait on it.
+    await flushDrafts();
+    let done = false;
+    const flushing = flush?.().then(() => {
+      done = true;
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(done).toBe(false);
+    pending.resolve(undefined);
+    await flushing;
+    expect(done).toBe(true);
+  } finally {
+    stop();
+    core.dispose();
+  }
 });
 
 it('keeps a handed-off manual message queued until the native user receipt arrives', () => {

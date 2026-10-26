@@ -42,6 +42,7 @@
     "api.queue.remove",
     "api.queue.move",
     "api.queue.update",
+    "api.message",
     "api.withdraw",
     "api.reply",
     "api.session.open",
@@ -239,8 +240,7 @@
     "agents": "B11",
     "status": "B11",
     "needs": "B11",
-    "messages": "B11",
-    "message": "B11"
+    "messages": "B11"
   },
   "deviations": {
     "canvas.open": "trust-gate",
@@ -451,7 +451,7 @@
       "output": "d81adc9f7c01aa07"
     },
     "message": {
-      "input": "2fcad0392e13265b",
+      "input": "cccd0ef6b7530971",
       "output": "49e43c944945473f"
     },
     "wait": {

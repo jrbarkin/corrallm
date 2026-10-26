@@ -96,6 +96,13 @@ it('keeps live sessions and the core runtime when Open returns the shown canvas'
   await waitFor(() => {
     expect(fake.backend.send).toHaveBeenCalledOnce();
   });
+  // Your message is one operation, as the core admits it.
+  expectOneOp(canvas.core, 'message', {
+    canvas: first.id,
+    to: 'Before',
+    body: 'Keep this manual work',
+  });
+  canvas.core.operations.length = 0;
   await events.click(screen.getByRole('button', { name: 'Back to the canvas' }));
   canvas.core.respond('canvas.open', { canvas: first.id, revs: {} });
   await events.keyDown(window.document.body, { key: 'o', ctrlKey: true });

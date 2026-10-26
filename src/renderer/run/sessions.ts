@@ -9,6 +9,8 @@ import type {
   McpChange,
   InstalledClis,
 } from '../../shared/session';
+import { imageBytes } from '../../shared/session';
+import { MAX_IMAGE_TOTAL } from '../../shared/api/limits';
 import type { MirrorStates } from '../api/topic-wire';
 import { useCallback, useMemo, useSyncExternalStore } from 'react';
 import type { CanvasId } from '../../shared/canvas';
@@ -22,21 +24,54 @@ import type { TopicMirror } from '../api/topics';
 import { fromMain } from '../ipc-error';
 import type { AdapterId } from '../../shared/adapter';
 import type { SessionControls } from '../agent/AgentView';
-import { viewWrite } from '../useDraft';
+import { viewSend, viewWrite } from '../useDraft';
 import { ApiError } from '../api/client';
 
 /** Pending C operation contracts; see renderer.md's remaining X13 dependencies. */
 export interface ManualSubmissions {
-  send(agent: string, message: UserMessage): Promise<unknown>;
   record(agent: string, message: UserMessage): Promise<null>;
 }
 
-/** Kept until C supplies human message/record contracts; never owns execution. */
+/** Kept until C supplies the view-command record contract; never owns execution. */
 const nativeManual: ManualSubmissions = {
-  send: (agent, message) => viewWrite(() => fromMain(window.api.sendToSession(agent, message))),
   record: (agent, message) =>
     viewWrite(() => fromMain(window.api.recordSessionCommand(agent, message))),
 };
+
+/**
+ * The most bytes of pasted images this window keeps to preview what it sent: the newest first,
+ * by the message the core minted for them. View state only: no topic carries image bytes (B11 §5),
+ * so another window, a reload or a restart shows how many there were, not what.
+ */
+export const MAX_PREVIEW_BYTES = 2 * MAX_IMAGE_TOTAL;
+let previews: ReadonlyMap<string, readonly MessageImage[]> = new Map();
+const previewListeners = new Set<() => void>();
+/** Keeps the images sent with message `id` to preview, dropping the oldest past the budget. */
+export function keepPreview(id: string, images: readonly MessageImage[]): void {
+  const next = new Map(previews);
+  next.delete(id);
+  next.set(id, images);
+  const size = (kept: readonly MessageImage[]) =>
+    kept.reduce((sum, { data }) => sum + imageBytes(data), 0);
+  let bytes = [...next.values()].reduce((sum, kept) => sum + size(kept), 0);
+  for (const [oldest, kept] of next) {
+    if (bytes <= MAX_PREVIEW_BYTES) break;
+    next.delete(oldest);
+    bytes -= size(kept);
+  }
+  previews = next;
+  for (const listener of previewListeners) listener();
+}
+/** The previews this window keeps, by message: an immutable snapshot. */
+export function imagePreviews(): ReadonlyMap<string, readonly MessageImage[]> {
+  return previews;
+}
+function subscribePreviews(listener: () => void): () => void {
+  previewListeners.add(listener);
+  return () => {
+    previewListeners.delete(listener);
+  };
+}
 
 export interface SessionQueries {
   installed(): Promise<InstalledClis>;
@@ -52,7 +87,7 @@ export interface SessionQueries {
 export interface Presentation {
   suggestion?: string;
   asking?: Session['asking'];
-  images?: ReadonlyMap<string, MessageImage[]>;
+  images?: ReadonlyMap<string, readonly MessageImage[]>;
 }
 export interface SessionPresentation {
   snapshot(agent: string): Presentation | undefined;
@@ -155,7 +190,7 @@ export function sessionDisplay(
         (message) => message.delivery?.as === entry.id || message.id === entry.id,
       );
       const images = presentation?.images?.get(message?.id ?? entry.id);
-      return images ? { ...entry, images } : entry;
+      return images ? { ...entry, images: [...images] } : entry;
     }),
     submissions: messages
       .filter(
@@ -234,23 +269,15 @@ export function sessionCommands(
     open: () => {
       openViewedSession(api, canvas, agent, failed);
     },
+    // Your message, whole (B11 §16.6): its id is the core's, which its previews are kept by.
     send: (text, images) => {
+      const pasted = images?.length ? images : undefined;
       act(
-        (queries.manual ?? nativeManual)
-          .send(agent, { id: crypto.randomUUID(), text, ...(images ? { images } : {}) })
-          .then((result) => {
-            if (
-              images &&
-              result &&
-              typeof result === 'object' &&
-              'id' in result &&
-              typeof result.id === 'string'
-            ) {
-              const pasted = new Map(presentations.get(canvas)?.get(agent)?.images);
-              pasted.set(result.id, images);
-              updatePresentation(canvas, agent, { images: pasted });
-            }
-          }),
+        viewSend(() =>
+          api.message({ canvas, to: agent, body: text, ...(pasted ? { images: pasted } : {}) }),
+        ).then(({ id }) => {
+          if (pasted) keepPreview(id, pasted);
+        }),
       );
     },
     stop: () => {
@@ -347,6 +374,7 @@ export function useDisplayedSession(
       [agent, presentation],
     ),
   );
+  const pasted = useSyncExternalStore(subscribePreviews, imagePreviews);
   const topic =
     agent === undefined ? undefined : (`session:${canvas}:${encodeURIComponent(agent)}` as const);
   const view = useSyncExternalStore(
@@ -362,8 +390,8 @@ export function useDisplayedSession(
         view?.summary ?? (agent === undefined ? undefined : summaries?.[agent]),
         view,
         agent === undefined ? [] : Object.values(messages?.items ?? {}),
-        extras,
+        { ...extras, images: extras?.images ? new Map([...extras.images, ...pasted]) : pasted },
       ),
-    [agent, summaries, view, messages, extras],
+    [agent, summaries, view, messages, extras, pasted],
   );
 }
