@@ -12,7 +12,8 @@ import type { CheckoutFault } from './checkout';
 import { discoverRepository, realOrNone, recordRepository, registrations } from './discovery';
 import type { Discovery, DiscoveryRefusal, FoundRepository, Registration } from './discovery';
 import { GitError } from './git';
-import type { GitRunner } from './git';
+import type { GitCall, GitRunner } from './git';
+import { GitMetadataError, verifyGitMetadata } from './metadata';
 import { OwnedRootError, PROFILE_ID, ensureOwnedRoot, excludeOwnedRoot } from './owned';
 import { ProvisioningQueue, QueueFull } from './queue';
 import { WorkspaceStoreError } from './store';
@@ -387,6 +388,15 @@ export class Provisioner {
     if (path.dirname(tree.path) !== repository.ownedRoot || path.basename(tree.path) !== tree.id) {
       throw new Failed('checkout-changed', 'Its path isn’t its folder of the owned root.');
     }
+    // Git's metadata its branch and registration are written through (metadata.ts): checked
+    // before anything at all is written, then again at each of Git's writes, before and after it.
+    const metadata = (registration?: string) => {
+      verifyGitMetadata(repository.commonDir, {
+        branch: tree.branchRef,
+        ...(registration === undefined ? {} : { registration }),
+      });
+    };
+    metadata();
     // Its owned root made or verified, and kept out of the checkout, before anything is written.
     ensureOwnedRoot(repository);
     excludeOwnedRoot(repository.commonDir);
@@ -404,6 +414,7 @@ export class Provisioner {
         const at = await this.#branchAt(repository, tree.branchRef, found.drivers);
         if (at === undefined) {
           // Made only if it doesn't exist (the empty old value): never forced over another.
+          metadata();
           await git.run({
             cwd: repository.realRoot,
             drivers: found.drivers,
@@ -417,11 +428,13 @@ export class Provisioner {
               '',
             ],
           });
+          metadata();
         } else if (at !== oid) {
           throw new Failed('branch-moved', `${tree.branchRef} is at another commit already.`);
         }
         job = await this.#reach(job, 'branch');
         ensureOwnedRoot(repository);
+        metadata();
         await git.run({
           cwd: repository.realRoot,
           drivers: found.drivers,
@@ -436,6 +449,7 @@ export class Provisioner {
             tree.branchRef.slice('refs/heads/'.length),
           ],
         });
+        metadata();
       } else if (registration.branch !== tree.branchRef) {
         throw new Failed('checkout-changed', 'Its registration is on another branch.');
       } else if (registration.locked !== null) {
@@ -447,6 +461,7 @@ export class Provisioner {
 
     // Before its files are written: Git's configuration as it reads it there (conditional
     // includes on its branch and folder included) neutralized, and the checkout the one registered.
+    metadata();
     const local = await git.inspect(tree.path);
     if (local.refusals.length > 0) throw new Failed('config', local.refusals.join(' '));
     const before = await checkCheckout(git, repository, tree);
@@ -462,6 +477,7 @@ export class Provisioner {
       if (onlyGitIn(tree.path)) {
         // Nothing written there yet: its files read from the base commit's tree. A merge, not a
         // reset, so Git refuses to write over any file it finds there (one put there meanwhile).
+        metadata(path.basename(before.checkout.gitDir));
         await git.run({
           cwd: tree.path,
           drivers,
@@ -480,6 +496,7 @@ export class Provisioner {
     }
     const after = await checkCheckout(git, repository, tree);
     if (!after.ok) throw new Failed(after.fault, after.detail);
+    metadata(path.basename(after.checkout.gitDir));
   }
 
   /**
@@ -499,19 +516,12 @@ export class Provisioner {
     if (lstatOrNone(path.join(gitDir, 'index.lock')) !== undefined) return false;
     if (lstatOrNone(path.join(gitDir, 'index'))?.isFile() !== true) return false;
     const git = this.#git;
-    const read = (args: readonly string[], maxBytes?: number) =>
-      git.run({
-        cwd: at,
-        drivers,
-        timeoutMs: POPULATE_TIMEOUT_MS,
-        answers: [1],
-        ...(maxBytes === undefined ? {} : { maxBytes }),
-        args,
-      });
+    const read = (args: readonly string[], more: Partial<GitCall> = {}) =>
+      git.run({ cwd: at, drivers, timeoutMs: POPULATE_TIMEOUT_MS, answers: [1], ...more, args });
     try {
       const cached = await read(['diff-index', '--cached', '--quiet', '--end-of-options', oid]);
       if (cached.code !== 0) return false;
-      const listed = await read(['ls-files', '-z', '--stage', '-v'], MAX_INDEX_BYTES);
+      const listed = await read(['ls-files', '-z', '--stage', '-v'], { maxBytes: MAX_INDEX_BYTES });
       if (listed.code !== 0) return false;
       const gitlinks: string[] = [];
       for (const field of listed.stdout.split('\0')) {
@@ -520,17 +530,9 @@ export class Provisioner {
         if (entry?.[1] !== 'H') return false;
         if (entry[2] === '160000' && entry[3] !== undefined) gitlinks.push(entry[3]);
       }
-      const files = await read([
-        '-c',
-        'core.checkStat=default',
-        '-c',
-        'core.trustctime=true',
-        '-c',
-        'core.ignoreStat=false',
-        'diff-files',
-        '--quiet',
-        '--ignore-submodules=all',
-      ]);
+      const files = await read(['diff-files', '--quiet', '--ignore-submodules=all'], {
+        config: ['core.checkStat=default', 'core.trustctime=true', 'core.ignoreStat=false'],
+      });
       if (files.code !== 0) return false;
       const others = await read(['ls-files', '-z', '--others', '--directory']);
       if (others.code !== 0 || others.stdout !== '') return false;
@@ -846,6 +848,7 @@ function folderAt(at: string): 'none' | 'empty' | 'full' | 'other' {
 function failureCode(error: unknown): string | undefined {
   if (error instanceof Failed) return error.code;
   if (error instanceof OwnedRootError) return `owned-root-${error.code}`;
+  if (error instanceof GitMetadataError) return `git-metadata-${error.code}`;
   if (error instanceof GitError) {
     switch (error.fault) {
       case 'refused':

@@ -3,7 +3,10 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
+  readdirSync,
+  renameSync,
   rmSync,
+  statSync,
   symlinkSync,
   writeFileSync,
 } from 'node:fs';
@@ -65,6 +68,16 @@ async function decide(service: WorkspaceCleanup, tree: WorktreeRecord, removal: 
   await made.workspaces.write((w) => {
     service.intend(w, tree.id, removal);
   });
+}
+
+/** Every path below `at`, with what each file holds: what a write through a link would change. */
+function snapshot(at: string): Record<string, string> {
+  const found: Record<string, string> = {};
+  for (const name of readdirSync(at, { recursive: true, encoding: 'utf8' }).sort()) {
+    const file = path.join(at, name);
+    found[name] = statSync(file).isDirectory() ? '/' : readFileSync(file, 'utf8');
+  }
+  return found;
 }
 
 function branchAt(ref: string): string | undefined {
@@ -275,6 +288,37 @@ describe('removing a tree', { timeout: 60_000 }, () => {
     });
     expect(existsSync(path.join(made.app, 'README.md'))).toBe(true);
   });
+
+  /*
+   * What removal writes in the common Git directory (the registration it deletes, the branch's
+   * loose ref, reflog and packed-refs) is never reached through a link: a removal finding one
+   * removes nothing, here or there, and stays removing, saying why.
+   */
+  it.each(['worktrees', 'refs/heads/corrallm', 'logs/refs/heads/corrallm', 'packed-refs'])(
+    'removes nothing through a symlinked %s of the common Git directory',
+    async (at) => {
+      const service = cleanup();
+      const tree = await kept();
+      await decide(service, tree, { branch: true, force: false, approved: null, tip: made.base });
+      if (at === 'packed-refs') git(made.app, made.env, 'pack-refs', '--all');
+      const outside = path.join(made.root, 'outside');
+      mkdirSync(outside);
+      const moved = path.join(outside, 'moved');
+      const linked = path.join(made.app, '.git', at);
+      renameSync(linked, moved);
+      symlinkSync(moved, linked);
+      const before = snapshot(outside);
+      const ended = await service.remove(tree.id);
+      expect(snapshot(outside)).toEqual(before);
+      expect(ended).toBe('failed');
+      expect(made.workspaces.worktree(tree.id)).toMatchObject({
+        state: 'removing',
+        errorCode: 'cleanup-git-metadata-symlinked',
+      });
+      expect(existsSync(path.join(tree.path, 'README.md'))).toBe(true);
+      expect(branchAt(tree.branchRef)).toBe(made.base);
+    },
+  );
 
   it('forgets a tree whose checkout is gone once you approved it, its branch with it', async () => {
     const service = cleanup();

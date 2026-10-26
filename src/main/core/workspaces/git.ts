@@ -14,8 +14,9 @@ import { execFile } from '../../sessions/process';
  *   fsmonitor, no implicit bare repository), an empty hooks folder of the core's own as
  *   core.hooksPath (no repository hook, wherever its configuration puts them), no recursion into
  *   submodules, no transport at all (no fetch, so no lazy fetch of a partial clone and no ssh or
- *   credential helper), and no automatic gc or maintenance (which could prune, or detach from the
- *   core's process group). Each filter driver configured where a call runs (`inspect`) has its
+ *   credential helper), no automatic gc or maintenance (which could prune, or detach from the
+ *   core's process group), and worktrees registered by absolute paths (so `worktree add` never
+ *   writes the repository's configuration to record relative ones). Each filter driver configured where a call runs (`inspect`) has its
  *   clean, smudge and process commands blanked and its required flag cleared: no filter runs, Git
  *   LFS's included. Patches (`patch`) also take safeGitDiffArgs: no external diff, textconv,
  *   signature program, or submodule's own programs.
@@ -92,6 +93,8 @@ export interface GitCall {
   args: readonly string[];
   /** The filter drivers configured where it runs (`inspect`): each one's programs disabled. */
   drivers?: readonly string[];
+  /** Configuration for this call alone (`name=value` each); the fixed options still win over it. */
+  config?: readonly string[];
   timeoutMs?: number;
   maxBytes?: number;
   /** Exit codes that answer rather than fail (Git's 1 for "there is none"). */
@@ -157,6 +160,8 @@ export class GitRunner {
     this.#checkHooks();
     await this.#version(git, env);
     const args = [
+      // The call's own first: Git takes the last of each, so the fixed options win.
+      ...(call.config ?? []).flatMap((entry) => ['-c', entry]),
       ...SAFE_GIT_OPTIONS,
       '-c',
       `core.hooksPath=${this.#deps.hooks}`,
@@ -168,6 +173,8 @@ export class GitRunner {
       'gc.auto=0',
       '-c',
       'maintenance.auto=false',
+      '-c',
+      'worktree.useRelativePaths=false',
       ...drivers.flatMap((driver) => [
         '-c',
         `filter.${driver}.clean=`,

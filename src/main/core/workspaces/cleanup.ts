@@ -8,6 +8,7 @@ import { checkCheckout } from './checkout';
 import { registrations } from './discovery';
 import { GitError } from './git';
 import type { GitRunner } from './git';
+import { GitMetadataError, verifyGitMetadata } from './metadata';
 import { ProvisioningQueue } from './queue';
 import { WorkspaceStoreError } from './store';
 import type { Json, JobRecord, WorkspaceStore, WorktreeRecord } from './store';
@@ -310,6 +311,9 @@ export class WorkspaceCleanup {
     const removing = this.#queue
       .run(repository.commonDir, () => this.#remove(workspace))
       .catch(async (error: unknown) => {
+        if (error instanceof GitMetadataError) {
+          return this.#failed(workspace, `cleanup-git-metadata-${error.code}`);
+        }
         await this.#failed(workspace, 'cleanup-failed');
         console.error('Could not remove a workspace:', error);
         return 'failed' as const;
@@ -406,6 +410,16 @@ export class WorkspaceCleanup {
     if (tree.state !== 'removing') return 'failed';
     const repository = workspaces.repository(tree.repository);
     if (repository === undefined) return this.#failed(workspace, 'cleanup-repository');
+    // Git's metadata its removal writes through (metadata.ts: the registration it deletes, the
+    // branch's ref, reflog and packed-refs), checked before anything is written and again at each
+    // of Git's writes: a link anywhere along it removes nothing (GitMetadataError, in `remove`).
+    const metadata = (registration?: string) => {
+      verifyGitMetadata(repository.commonDir, {
+        branch: tree.branchRef,
+        ...(registration === undefined ? {} : { registration }),
+      });
+    };
+    metadata();
     const job = workspaces.openJob(workspace, 'remove');
     const removal = removalOf(job);
     // Its writers stop first (a removed agent's session closing), for a bounded while.
@@ -434,6 +448,7 @@ export class WorkspaceCleanup {
     if (base.refusals.length > 0) return this.#failed(workspace, 'cleanup-config');
     const checked = await checkCheckout(git, repository, tree);
     if (checked.ok) {
+      metadata(path.basename(checked.checkout.gitDir));
       await git.run({
         cwd: repository.realRoot,
         drivers: base.drivers,
@@ -457,6 +472,7 @@ export class WorkspaceCleanup {
     ) {
       // Only at the commit it was decided at: a branch someone moved since is kept, and so is one
       // a checkout is on (the picked one, say), which would be left on no branch.
+      metadata();
       await git.run({
         cwd: repository.realRoot,
         drivers: base.drivers,
