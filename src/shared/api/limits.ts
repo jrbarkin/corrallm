@@ -83,6 +83,38 @@ export const MAX_EXPECT = 100;
 /** How many lines of a prompt's detail are shown, then how many more there are. */
 export const MAX_DETAIL_LINES = 12;
 
+/** Shared text/id bounds, also used by the prepared prompt protocol. */
+export const MAX_ID_LENGTH = 200;
+export const MAX_MESSAGE_LENGTH = 200_000;
+export const MAX_ANSWER_LENGTH = 20_000;
+/** Flat-form fields and options per field. */
+export const MAX_FORM_FIELDS = 50;
+
+/** B13: a whole normalized prompt, including its JSON structure and UTF-8 content. */
+export const MAX_PROMPT_BYTES = 256 * 1024;
+export const MAX_PROMPT_CHOICES = 16;
+export const MAX_PROMPT_QUESTIONS = 16;
+export const MAX_PROMPT_OPTIONS = 16;
+export const MAX_PROMPT_CHOICE_LENGTH = 64;
+export const MAX_PROMPT_LABEL_LENGTH = 500;
+/** Title, summary, reason and descriptions; oversized content must be cut and marked upstream. */
+export const MAX_PROMPT_TEXT_LENGTH = 4000;
+export const MAX_PROMPT_COMMAND_BYTES = 64 * 1024;
+export const MAX_PROMPT_PATHS = 200;
+export const MAX_PROMPT_PATH_LENGTH = 4096;
+export const MAX_PROMPT_RULES = 32;
+export const MAX_PROMPT_RULE_LENGTH = 1000;
+/** All admitted diffs in one prompt, together. */
+export const MAX_PROMPT_DIFF_BYTES = 128 * 1024;
+export const MAX_PROMPT_INPUT_BYTES = 64 * 1024;
+export const MAX_PROMPT_INPUT_DEPTH = 16;
+export const MAX_PROMPT_EXTENSION_BYTES = 16 * 1024;
+export const MAX_PROMPT_EXTENSION_DEPTH = 8;
+/** Admission budgets, enforced by the future core prompt owner, never by the renderer. */
+export const MAX_SESSION_PROMPTS = 32;
+export const MAX_CANVAS_PROMPTS = 256;
+export const MAX_CORE_PROMPT_BYTES = 16 * 1024 * 1024;
+
 /**
  * How many live agents one party may have created (decision 13, Build Plan Q12), counted per
  * creating party (`agent:<id>` or `outside:<name>`), never per token: a lead's includes its team's.

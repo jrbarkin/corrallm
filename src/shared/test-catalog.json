@@ -185,6 +185,13 @@
           "short": "Terminal",
           "description": "Claude Code itself, in a terminal in its view: works with your Claude login",
           "view": "terminal",
+          "prompts": {
+            "approval": "seen",
+            "question": "seen",
+            "plan": "seen",
+            "form": "none"
+          },
+          "signals": false,
           "startModes": [
             "manual",
             "acceptEdits",
@@ -209,6 +216,13 @@
           "short": "SDK",
           "description": "Claude Code through the Agent SDK, in corrallm’s transcript: needs an API key or a cloud provider",
           "view": "transcript",
+          "prompts": {
+            "approval": "answerable",
+            "question": "answerable",
+            "plan": "answerable",
+            "form": "answerable"
+          },
+          "signals": false,
           "startModes": [
             "manual",
             "acceptEdits",
@@ -467,6 +481,13 @@
           "short": "Terminal",
           "description": "Codex itself, in a terminal in its view",
           "view": "terminal",
+          "prompts": {
+            "approval": "seen",
+            "question": "none",
+            "plan": "none",
+            "form": "none"
+          },
+          "signals": false,
           "startModes": [
             "read-only"
           ],
@@ -488,6 +509,13 @@
           "short": "App Server",
           "description": "Codex through its app server, in corrallm’s transcript",
           "view": "transcript",
+          "prompts": {
+            "approval": "answerable",
+            "question": "answerable",
+            "plan": "answerable",
+            "form": "answerable"
+          },
+          "signals": false,
           "startModes": [
             "read-only",
             "auto",

@@ -31,6 +31,22 @@ function declared(session: object) {
 }
 
 describe("Codex's adapter", () => {
+  it('declares App Server prompts answerable and Terminal approvals seen, without authority signals', () => {
+    expect(connection('codex.terminal')).toMatchObject({
+      prompts: { approval: 'seen', question: 'none', plan: 'none', form: 'none' },
+      signals: false,
+    });
+    expect(connection('codex.app-server')).toMatchObject({
+      prompts: {
+        approval: 'answerable',
+        question: 'answerable',
+        plan: 'answerable',
+        form: 'answerable',
+      },
+      signals: false,
+    });
+  });
+
   it('is codex, with Terminal first and App Server second', () => {
     expect(descriptor.id).toBe('codex');
     expect(descriptor.connections.map((one) => one.id)).toEqual([
