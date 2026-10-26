@@ -47,6 +47,10 @@ export function fakeCanvas(
     ok: true,
     value: await (backend ?? NO_BACKEND).installed(),
   }));
+  core.reply('project.files', async (raw) => {
+    const { query, agent } = OPS['project.files'].input.parse(raw);
+    return { ok: true, value: { items: await (backend ?? NO_BACKEND).files(query, agent) } };
+  });
   core.respond('templates.list', {
     items: EXAMPLES.map((example) => templateInfo(example, catalog(), DEFAULT_AGENT)),
   });

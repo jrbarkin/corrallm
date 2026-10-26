@@ -13,9 +13,6 @@ import { useDisplayedSession } from './sessions';
 import { expectOneOp } from '../test-api';
 const connection = catalog().adapters[0]?.connections[0]?.id;
 if (!connection) throw new Error('The fixture needs a connection.');
-import { findProjectFiles } from '../agent/completion';
-
-vi.mock('../agent/completion', () => ({ findProjectFiles: vi.fn().mockResolvedValue([]) }));
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -44,6 +41,7 @@ it('uses the foreground session topic summary with its entries, even before the 
         topic: `session:${canvas}:a`,
         rev: 1,
         summary: { ...view.summary, status: 'idle', model: 'changed-model' },
+        entries: {},
       });
     });
     expect(hook.result.current).toMatchObject({ status: 'idle', model: 'changed-model' });
@@ -84,7 +82,7 @@ it('keeps each native control one operation, including lifecycle composites', as
   }
 });
 
-it('keeps the foreground agent context through the transitional options and file queries', async () => {
+it('keeps the foreground agent context through the pending options query', async () => {
   const options = { models: [], defaults: { model: null, effort: null, mode: null } };
   const settingsOptions = vi.fn().mockResolvedValue({ ok: true, value: options });
   vi.stubGlobal('window', { api: { settingsOptions } });
@@ -92,12 +90,23 @@ it('keeps the foreground agent context through the transitional options and file
   try {
     const controls = sessionCommands(core.api, newCanvasId(), 'member', core.topics, vi.fn());
     await controls.settingsOptions('codex');
-    await controls.findFiles?.('src/');
     expect(settingsOptions).toHaveBeenCalledExactlyOnceWith('codex', 'member');
-    expect(findProjectFiles).toHaveBeenCalledExactlyOnceWith('src/', 'member');
     settingsOptions.mockClear();
     await nativeQueries.options('codex');
     expect(settingsOptions).toHaveBeenCalledExactlyOnceWith('codex');
+  } finally {
+    core.dispose();
+  }
+});
+
+it('completes files with one project.files read bound to the displayed canvas and agent', async () => {
+  const core = fakeCore();
+  const canvas = newCanvasId();
+  core.respond('project.files', { items: ['src/index.ts'] });
+  try {
+    const controls = sessionCommands(core.api, canvas, 'member', core.topics, vi.fn());
+    expect(await controls.findFiles?.('src/')).toEqual(['src/index.ts']);
+    expectOneOp(core, 'project.files', { canvas, agent: 'member', query: 'src/' });
   } finally {
     core.dispose();
   }

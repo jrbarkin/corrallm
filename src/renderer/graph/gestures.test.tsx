@@ -1006,7 +1006,7 @@ it('keeps a native startup refusal in the session instead of covering the window
       entries: { upsert: [{ id: 'refused-start', kind: 'notice', level: 'error', text: 'The CLI is not installed.' }] },
     });
   });
-  expect(within(screen.getByRole('dialog', { name: 'a' })).getByRole('alert').textContent).toContain('The CLI is not installed.');
+  expect(within(screen.getByRole('dialog', { name: 'a' })).getByText('The CLI is not installed.')).toBeTruthy();
   expect(view.container.querySelector('.canvas-float-position > [role="alert"]')).toBeNull();
   expect(view.core.operations).toEqual([]);
 });

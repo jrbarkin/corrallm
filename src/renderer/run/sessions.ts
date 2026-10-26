@@ -1,4 +1,4 @@
-import type { MessageImage, UserMessage, FilesRewind, RewindResult, SettingsOptions, PastSession, McpServer, McpChange, InstalledClis } from '../../shared/session';
+import type { MessageImage, UserMessage, FilesRewind, RewindResult, SettingsOptions, PastSession, McpServer, McpChange } from '../../shared/session';
 import type { MirrorStates } from '../api/topic-wire';
 import { useCallback, useMemo, useSyncExternalStore } from 'react';
 import type { CanvasId } from '../../shared/canvas';
@@ -32,12 +32,10 @@ const nativeManual: ManualSubmissions = {
 
 export interface SessionQueries {
   options(adapter: AdapterId, agent?: string): Promise<SettingsOptions>;
-  files(query: string, agent?: string): Promise<string[]>;
   sessions(agent: string): Promise<PastSession[]>;
   resume(agent: string, conversation: string): Promise<unknown>;
   mcp(agent: string): Promise<McpServer[]>;
   changeMcp(agent: string, server: string, change: McpChange): Promise<McpServer[]>;
-  installed(): Promise<InstalledClis>;
   manual?: ManualSubmissions;
   presentation?: SessionPresentation;
 }
@@ -83,11 +81,8 @@ export function nativePresentation(canvas: CanvasId): SessionPresentation {
   };
 }
 export const nativeQueries: SessionQueries = {
-  installed: () => import('../api/client').then(({ api }) => api.catalogInstalled()),
   options: (adapter, agent) =>
     fromMain(window.api.settingsOptions(adapter, ...(agent === undefined ? [] : [agent]))),
-  files: (query, agent) =>
-    import('../agent/completion').then(({ findProjectFiles }) => findProjectFiles(query, agent)),
   sessions: (agent) => fromMain(window.api.listSessions(agent)),
   resume: (agent, conversation) => fromMain(window.api.resumeSession(agent, conversation)),
   mcp: (agent) => fromMain(window.api.mcpServers(agent)),
@@ -270,7 +265,7 @@ export function sessionCommands(
       act(api.sessionRestart({ canvas, agent }));
     },
     settingsOptions: (adapter: AdapterId) => queries.options(adapter, agent),
-    findFiles: (query) => queries.files(query, agent),
+    findFiles: (query) => api.projectFiles({ canvas, agent, query }).then(({ items }) => items),
     pastSessions: () => queries.sessions(agent),
     resume: (conversation) => queries.resume(agent, conversation).then(() => undefined),
     previewRewind: (message) =>
