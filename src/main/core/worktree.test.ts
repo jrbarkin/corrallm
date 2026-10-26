@@ -1,20 +1,24 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 
+import type { AgentId } from '../../shared/api/ids';
 import { CanvasMemory } from '../memory';
 import { CATALOG, DEFAULT_ADAPTER } from '../sessions/adapters';
 import { Documents } from './canvas/documents';
 import { createCore } from './core';
 import type { Core } from './core';
+import { mintTrustedPath } from './host';
+import type { Change, RuntimeSnapshotFrame } from '../../shared/api/topics';
 import { keepCanvases, openTestStore } from './store/test-store';
 import { CALLERS, CANVAS, NO_DESKTOP, OTHER_CANVAS } from './test-registry';
 import { WorkspaceCleanup } from './workspaces/cleanup';
 import type { TreeState } from './workspaces/cleanup';
 import { GitRunner } from './workspaces/git';
 import { WorkspaceStore } from './workspaces/store';
+import { legacyDirectories } from './workspaces/test-directories';
 
 // Real core.call and C7's removeKept; only Git assessment/removal are replaced. These records
 // have no checkouts, so no process, Git operation or native CLI runs in these registry tests.
@@ -100,6 +104,7 @@ beforeEach(async () => {
       app: { name: 'corrallm', version: '1.0.0' },
       check: true,
       distribution: 'local',
+      directoryResolver: legacyDirectories,
       sessions: { connectors: {}, environment: () => Promise.resolve({}) },
       cleanup: (deps) => {
         workspaces = deps.workspaces;
@@ -123,6 +128,143 @@ afterEach(async () => {
   await core.close();
   vi.restoreAllMocks();
   await rm(profile, { recursive: true, force: true });
+});
+
+it.each([true, false])(
+  'publishes and receipts a workspace change card with a subscriber: %s, and no core runtime',
+  async (watching) => {
+    expect(await core.call('canvas.get', { canvas: CANVAS }, CALLERS.you)).toMatchObject({
+      ok: true,
+    });
+    const agents: AgentId[] = [];
+    for (let x = 0; x < 2; x++) {
+      const added = await core.call(
+        'canvas.addAgent',
+        { canvas: CANVAS, at: { x: x * 400, y: 0 }, adapter: 'codex' },
+        CALLERS.you,
+      );
+      if (!added.ok) throw new Error(added.error.sentence);
+      agents.push(added.value.id);
+    }
+    await workspaces.write((w) => {
+      w.bindCanvas(CANVAS, TREE);
+      for (const [i, agent] of agents.entries()) {
+        const id = i === 0 ? ABSENT : REQUEST;
+        const source = w.worktree(ACTIVE);
+        if (source === undefined) throw new Error('No source tree.');
+        w.createWorktree({
+          ...source,
+          id,
+          owner: `agent/${encodeURIComponent(agent)}`,
+          path: path.join(path.dirname(source.path), id),
+          branchRef: `refs/heads/corrallm/profile/${id}`,
+        });
+        w.transition(id, { from: 'creating', to: 'setup' });
+        w.transition(id, { from: 'setup', to: 'ready' });
+        w.bind(CANVAS, agent, id);
+      }
+    });
+    const updates: (Change | RuntimeSnapshotFrame)[] = [];
+    const followed = watching
+      ? await core.topics.follow(CALLERS.you, `needs:${CANVAS}`, (changes) =>
+          updates.push(...changes),
+        )
+      : undefined;
+    try {
+      if (followed) expect(followed.snapshot).toMatchObject({ state: { items: [] } });
+      const grouped = await core.call(
+        'canvas.group',
+        { canvas: CANVAS, nodes: agents, kind: 'frame' },
+        CALLERS.you,
+      );
+      expect(grouped).toMatchObject({ ok: true });
+      const read = await core.call('needs', { canvas: CANVAS }, CALLERS.you);
+      expect(read).toMatchObject({
+        ok: true,
+        value: { items: [expect.objectContaining({ kind: 'worktree' })] },
+      });
+      if (watching)
+        await vi.waitFor(() => {
+          expect(updates).toContainEqual(
+            expect.objectContaining({ replace: read.ok ? read.value : undefined }),
+          );
+        });
+      if (!grouped.ok) throw new Error(grouped.error.sentence);
+      expect(grouped.value.revs[`needs:${CANVAS}`]).toBeGreaterThan(0);
+      const snapshot = await core.call(
+        'topics.subscribe',
+        { canvas: CANVAS, topic: 'needs' },
+        CALLERS.you,
+      );
+      expect(snapshot).toMatchObject({
+        ok: true,
+        value: {
+          state: read.ok ? read.value : undefined,
+          rev: grouped.value.revs[`needs:${CANVAS}`],
+        },
+      });
+      expect(core.engines.opened()).toEqual([]);
+    } finally {
+      followed?.stop();
+    }
+  },
+);
+
+it('receipts the setup card removed by a project change', async () => {
+  expect(await core.call('canvas.get', { canvas: CANVAS }, CALLERS.you)).toMatchObject({
+    ok: true,
+  });
+  const added = await core.call(
+    'canvas.addAgent',
+    { canvas: CANVAS, at: { x: 0, y: 0 }, adapter: 'codex' },
+    CALLERS.you,
+  );
+  if (!added.ok) throw new Error(added.error.sentence);
+  await workspaces.write((w) => {
+    w.bindCanvas(CANVAS, TREE);
+    const source = w.worktree(ACTIVE);
+    if (source === undefined) throw new Error('No source tree.');
+    w.createWorktree({
+      ...source,
+      id: ABSENT,
+      owner: `agent/${encodeURIComponent(added.value.id)}`,
+      path: path.join(path.dirname(source.path), ABSENT),
+      branchRef: `refs/heads/corrallm/profile/${ABSENT}`,
+    });
+    w.bind(CANVAS, added.value.id, ABSENT);
+    w.transition(ABSENT, { from: 'creating', to: 'setup' });
+    w.offerSetup(ABSENT, {
+      command: null,
+      source: 'none',
+      specHash: 'a'.repeat(64),
+      copyManifestHash: 'b'.repeat(64),
+    });
+  });
+  const initial = await core.call(
+    'topics.subscribe',
+    { canvas: CANVAS, topic: 'needs' },
+    CALLERS.you,
+  );
+  expect(initial).toMatchObject({
+    ok: true,
+    value: { state: { items: [expect.objectContaining({ kind: 'worktree' })] } },
+  });
+  const next = path.join(profile, 'next');
+  await mkdir(next);
+  vi.spyOn(NO_DESKTOP, 'pickFolder').mockResolvedValueOnce(mintTrustedPath(next));
+  const chosen = await core.call('project.choose', { canvas: CANVAS }, CALLERS.you);
+  const after = await core.call(
+    'topics.subscribe',
+    { canvas: CANVAS, topic: 'needs' },
+    CALLERS.you,
+  );
+  expect(after).toMatchObject({ ok: true, value: { state: { items: [] } } });
+  expect(chosen).toMatchObject({
+    ok: true,
+    value: {
+      revs: { [`needs:${CANVAS}`]: after.ok && 'rev' in after.value ? after.value.rev : undefined },
+    },
+  });
 });
 
 it('removes a safe kept tree through the live registry, once per request', async () => {

@@ -105,7 +105,7 @@ describe('canvas.insertTemplate', () => {
     expect(made.roots).toHaveLength(1);
     expect(doc().nodes).toHaveLength(initial().nodes.length + 4);
     expect(made).not.toHaveProperty('group');
-    expect(made.revs).toEqual({ [`canvas:${CANVAS}`]: before + 1 });
+    expect(made.revs).toMatchObject({ [`canvas:${CANVAS}`]: before + 1 });
     expect(revision()).toBe(before + 1);
     const group = doc().nodes.find((n) => n.id === made.roots[0]);
     expect(group).toMatchObject({ type: 'frame', data: { label: 'Spec and implementation' } });
@@ -292,7 +292,7 @@ describe('canvas.setArrange', () => {
         },
       ],
     })) as { results: [object, { roots: string[] }]; revs: Record<string, number> };
-    expect(result.revs).toEqual({ [`canvas:${CANVAS}`]: before + 1 });
+    expect(result.revs).toMatchObject({ [`canvas:${CANVAS}`]: before + 1 });
     expect(doc().arrange).toBe(true);
     expect(doc().nodes.some((n) => n.id === result.results[1].roots[0])).toBe(true);
   }, 1000);

@@ -33,6 +33,10 @@ import type { Removals } from '../workspaces/planner';
  * becomes a proposal, and only for an op that declares a proposing rule, whose result may be one
  * (`proposes`); for any other op it is refused. A proposal applies nothing: it is raised for you
  * (`propose`: canvas/proposals.ts) with the change, and the call's result is its id.
+ *
+ * Workspace-safety (B9a §7) is checked on every commit, yours too, after a token's rules: a change
+ * leaving a worktree that holds work with no agent is yours to confirm (`workspaceSafety`), and its
+ * plan's moves were checked before (the planner's preflight: no agent moved out of its tree).
  */
 
 /**
@@ -155,35 +159,31 @@ export function committer({ documents, rules, committed, propose }: CommitterDep
               live,
             );
           }
-          // What becomes of the trees it leaves with no agent (B9a C7): yours to confirm where
-          // one holds work, whoever made the change; removed with their last agent where safe.
           const trees = losses?.trees ?? [];
-          const { removals, asks } = decided(trees, call.cleanup);
           const revisions = () =>
             Object.fromEntries(Object.keys(live.rows).map((key) => [key, live.revs.get(key) ?? 0]));
-          if (caller.kind === 'human') {
-            if (asks.length === 0) return removals;
-            if (call.proposes !== true || propose === undefined) {
-              throw new OpFailure(
-                'refused',
-                `${CONFIRM}, and ${call.op} can’t ask: delete with canvas.delete or canvas.batch, which can.`,
-              );
-            }
-            throw new Proposing(change, CONFIRM, revisions(), trees);
-          }
-          // Every refusal first: a proposal is only ever of what no rule refuses.
+          // A token's every rule first: a refusal wins, and a proposal is only ever of what no
+          // rule refuses. You are checked by none of them.
           let proposal: string | undefined;
-          for (const rule of Object.values(rules)) {
-            const outcome = rule(change, { caller, party: call.party });
-            if (outcome && 'refuse' in outcome) throw new OpFailure('refused', outcome.refuse);
-            proposal ??= outcome?.propose;
+          if (caller.kind !== 'human') {
+            for (const rule of Object.values(rules)) {
+              const outcome = rule(change, { caller, party: call.party });
+              if (outcome && 'refuse' in outcome) throw new OpFailure('refused', outcome.refuse);
+              proposal ??= outcome?.propose;
+            }
           }
-          if (proposal === undefined && asks.length > 0) proposal = CONFIRM;
-          if (proposal === undefined) return removals;
+          // Workspace-safety, whoever made the change (B9a §7, C7): what becomes of the trees it
+          // leaves with no agent, yours to confirm where one holds work; removed with their last
+          // agent where safe.
+          const safety = workspaceSafety(trees, call.cleanup);
+          proposal ??= safety.propose;
+          if (proposal === undefined) return safety.removals;
           if (call.proposes !== true || propose === undefined) {
             throw new OpFailure(
               'refused',
-              `${proposal}, and ${call.op} can’t come to them as a proposal: ask with canvas.delete or canvas.batch, which can.`,
+              caller.kind === 'human'
+                ? `${proposal}, and ${call.op} can’t ask: delete with canvas.delete or canvas.batch, which can.`
+                : `${proposal}, and ${call.op} can’t come to them as a proposal: ask with canvas.delete or canvas.batch, which can.`,
             );
           }
           throw new Proposing(change, proposal, revisions(), trees);
@@ -202,6 +202,23 @@ export function committer({ documents, rules, committed, propose }: CommitterDep
     committed?.(canvas, changed.committed.change);
     return { result: changed.result, rev: changed.committed.rev };
   };
+}
+
+/**
+ * The workspace-safety rule on a commit (RULES' `workspace-safety`, B9a §7), whoever made it: what
+ * is decided of the trees it leaves with no agent. As you decided (`decision`, on a confirmation's
+ * Allow, bound to what each held when you were asked: a conflict if any holds anything else now);
+ * else those safe (clean, merged, no one writing there) removed, and, if any holds work or can't
+ * be read, the change is yours to confirm (`propose`), yours too. Its other half, that no change
+ * moves an agent out of the tree it works in, is the planner's (workspaces/planner.ts'
+ * `unsafeStep`), on every commit's plan.
+ */
+export function workspaceSafety(
+  trees: readonly TreeState[],
+  decision: CleanupDecision | undefined,
+): { removals: Removals; propose?: string } {
+  const { removals, asks } = decided(trees, decision);
+  return asks.length === 0 ? { removals } : { removals, propose: CONFIRM };
 }
 
 /**

@@ -46,9 +46,11 @@ type ChangeRuleOf = {
 
 /**
  * Each rule checked on a token's change: its check, run at every commit of a token's. The compiler
- * refuses a RULES row checked on changes without one.
+ * refuses a RULES row checked on changes without one, but workspace-safety's, which is checked on
+ * everyone's (canvas/commit.ts' `workspaceSafety` and workspaces/planner.ts' `unsafeStep`).
  */
-export type ChangeChecks = Partial<Record<Rule, ChangeRule>> & Record<ChangeRuleOf, ChangeRule>;
+export type ChangeChecks = Partial<Record<Exclude<Rule, 'workspace-safety'>, ChangeRule>> &
+  Record<Exclude<ChangeRuleOf, 'workspace-safety'>, ChangeRule>;
 
 /** The rules op `N` carries. */
 type RulesOf<N extends OpName> = (typeof SURFACE)[N] extends {

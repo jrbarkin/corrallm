@@ -173,10 +173,14 @@ export type Implementation = (args: never, ctx: OpContext) => unknown;
 
 /**
  * The topics a write's receipt may name besides a document's (`canvas:<c>`, which its commit
- * reaches): a canvas's run, sessions, messages and Needs (B11 §5, B9a §7).
+ * reaches): a canvas's run, sessions, messages, Needs and worktrees (B11 §5, B9a §7).
  */
 export type ReceiptTopic =
-  `run:${CanvasId}` | `sessions:${CanvasId}` | `messages:${CanvasId}` | `needs:${CanvasId}`;
+  | `run:${CanvasId}`
+  | `sessions:${CanvasId}`
+  | `messages:${CanvasId}`
+  | `needs:${CanvasId}`
+  | `worktrees:${CanvasId}`;
 
 /**
  * What publishes topics, as core.call asks it for an op's receipts: a mark of where publication is
@@ -534,7 +538,16 @@ export function createDispatcher(registry: Registry, options: DispatchOptions = 
           },
         );
         if ('proposed' in done) throw new ProposedInstead(done.proposed);
-        if (done.rev !== undefined) turn.revs[`canvas:${canvas}`] = done.rev;
+        if (done.rev !== undefined) {
+          turn.revs[`canvas:${canvas}`] = done.rev;
+          // Who works where, and its pending workspace cards, follow every document commit
+          // (B9a §7), including a batch. Receipt only the topics that actually moved.
+          for (const kind of ['worktrees', 'needs'] as const) {
+            const topic: ReceiptTopic = `${kind}:${canvas as CanvasId}`;
+            turn.published.add(topic);
+            publication?.attribute(topic, by);
+          }
+        }
         return done.result;
       },
       reached: (canvas, rev) => {

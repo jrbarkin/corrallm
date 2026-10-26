@@ -32,9 +32,12 @@ export function withPublication(ops: Implementations): Implementations {
         // core.call has filled and checked canvas reach before invoking the implementation. A
         // proposal or file review may belong to a canvas with no runtime open yet.
         const canvas = args.canvas as CanvasId | undefined;
-        if (canvas !== undefined)
+        if (canvas !== undefined) {
           for (const kind of ['run', 'sessions', 'messages', 'needs'] as const)
             ctx.published(`${kind}:${canvas}`);
+          // A reply may answer a worktree's setup or a workspace change (B9a §7).
+          if (name === 'reply') ctx.published(`worktrees:${canvas}`);
+        }
         return effect(args as never, ctx);
       },
     });

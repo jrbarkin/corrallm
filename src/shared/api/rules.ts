@@ -4,11 +4,13 @@ import type { Rule } from './surface';
 /*
  * The rules that narrow what a token may do (Core Server §3.6), one row per rule key an operation
  * carries: each lands with the first operation it guards. A rule applies to the same operation on
- * both surfaces; you are never refused by one. Argument rules are checked in core.call before the
+ * both surfaces; you are never refused by one but workspace-safety (below). Argument rules are checked in core.call before the
  * op runs, change rules on the change itself at commit, whatever op made it: an op carries a change
  * rule where a call of its alone can meet it, and every commit of a token's is checked against
  * every change rule. A met rule refuses a token, except R4 and R5 (`discard`, `restore-code`),
- * which make its call a proposal for you.
+ * which make its call a proposal for you, and `workspace-safety`, which makes anyone's change a
+ * proposal for you, yours too (and is checked on every commit, not only a token's): an op that
+ * can't come to you as a proposal is refused it rather than apply it, yours too.
  */
 
 export interface RuleRow {
@@ -91,6 +93,15 @@ export const RULES = {
   managers: {
     kind: 'change',
     sentence: 'Only you change who manages an agent that exists: the agent it is nested in.',
+  },
+  // B9a §7: whatever op builds a change (a single op, a batch, a file's Apply, a revert), whoever
+  // makes it, no tree holding work is left with no agent unless you confirm it (a proposal for
+  // you, yours too; a file's Apply or a revert keeps it instead), no agent working in a tree is
+  // moved to another but by your Switch, and no change of the document runs or approves a setup.
+  'workspace-safety': {
+    kind: 'change',
+    sentence:
+      'Only you decide what becomes of a worktree’s work: a change leaving a worktree that holds work with no agent waits for you to confirm it, an agent working in one moves to another only when you switch it, and no change runs or approves a setup.',
   },
   // R9: a token's run.unpause, run.resume and run.start never undo another party's pause, stop
   // or decision.

@@ -209,6 +209,11 @@ export function assembledState(
     if (topic.startsWith('canvas:')) return values as TopicStates[TopicKey];
     if (topic === 'canvases' || topic.startsWith('needs:'))
       return { items: pairs.map(([, value]) => value) } as TopicStates[TopicKey];
+    if (topic.startsWith('worktrees:'))
+      return {
+        items: pairs.filter(([key]) => key.startsWith('item/')).map(([, value]) => value),
+        kept: pairs.filter(([key]) => key.startsWith('kept/')).map(([, value]) => value),
+      } as TopicStates[TopicKey];
     if (topic === 'usage')
       return {
         readings: pairs.filter(([key]) => key.startsWith('reading/')).map(([, value]) => value),

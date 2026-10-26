@@ -132,7 +132,10 @@ export class Provisioner {
   /** What is in flight, so that concurrent asks share it: by owner, job and workspace. */
   readonly #provisions = new Map<string, Promise<WorktreeRecord>>();
   readonly #runs = new Map<string, Promise<WorktreeRecord>>();
-  readonly #retries = new Map<string, Promise<WorktreeRecord>>();
+  readonly #retries = new Map<
+    string,
+    Promise<{ tree: WorktreeRecord; done: Promise<WorktreeRecord> }>
+  >();
 
   constructor(deps: ProvisionerDeps) {
     if (!PROFILE_ID.test(deps.profile)) throw new TypeError('That isn’t a profile’s id.');
@@ -568,22 +571,44 @@ export class Provisioner {
    * it was made. Never makes a checkout over one that is gone for good: that stays missing.
    */
   retry(workspace: string): Promise<WorktreeRecord> {
-    const going = this.#retries.get(workspace);
-    if (going !== undefined) return going;
-    const retried = this.#retry(workspace).finally(() => this.#retries.delete(workspace));
-    this.#retries.set(workspace, retried);
-    return retried;
+    return this.startRetry(workspace).then(({ done }) => done);
   }
 
-  async #retry(workspace: string): Promise<WorktreeRecord> {
+  /**
+   * Starts `retry` (worktree.retry's, which answers without waiting for a checkout to be made):
+   * resolves once the retry is recorded (a new attempt of a creation on disk, `creating`; one lost
+   * and found again back where it was), with the workspace then (`tree`) and what the retry ends
+   * with (`done`, which runs on: making a checkout again takes its repository's turn in the queue).
+   * Asked again while it goes on, it is the same retry. Rejects as `retry` would before anything is
+   * recorded (busy, not-found).
+   */
+  startRetry(workspace: string): Promise<{ tree: WorktreeRecord; done: Promise<WorktreeRecord> }> {
+    const going = this.#retries.get(workspace);
+    if (going !== undefined) return going;
+    const started = this.#retry(workspace);
+    this.#retries.set(workspace, started);
+    const forget = () => {
+      if (this.#retries.get(workspace) === started) this.#retries.delete(workspace);
+    };
+    // Forgotten as it ends, before anyone it was handed to hears so: asked again then, it is anew.
+    started.then(({ done }) => {
+      done.then(forget, forget);
+    }, forget);
+    return started;
+  }
+
+  async #retry(
+    workspace: string,
+  ): Promise<{ tree: WorktreeRecord; done: Promise<WorktreeRecord> }> {
     const tree = this.#workspaces.worktree(workspace);
     const repository =
       tree === undefined ? undefined : this.#workspaces.repository(tree.repository);
     if (tree === undefined || repository === undefined) {
       throw new ProvisionError('not-found', `There is no workspace ${workspace}.`);
     }
-    if (tree.state === 'creating') return this.#resume(tree);
-    if (tree.state !== 'error' && tree.state !== 'missing') return tree;
+    const as = (now: WorktreeRecord) => ({ tree: now, done: Promise.resolve(now) });
+    if (tree.state === 'creating') return { tree, done: this.#resume(tree) };
+    if (tree.state !== 'error' && tree.state !== 'missing') return as(tree);
     const creates = this.#workspaces.jobsOf(workspace).filter((job) => job.kind === 'create');
     if (!creates.some((job) => job.outcome === 'done')) {
       if (this.#queue.full) throw busy();
@@ -594,10 +619,11 @@ export class Provisioner {
         return w.recordJob(createJob(now, repository, creates.length + 1));
       });
       this.#changed(tree.canvas);
-      return job === undefined ? (this.#workspaces.worktree(workspace) ?? tree) : this.run(job.id);
+      const now = this.#workspaces.worktree(workspace) ?? tree;
+      return job === undefined ? as(now) : { tree: now, done: this.run(job.id) };
     }
     const checked = await checkCheckout(this.#git, repository, tree);
-    if (!checked.ok) return tree;
+    if (!checked.ok) return as(tree);
     const setup = this.#workspaces.setup(workspace);
     const to = setup?.state === 'done' || setup?.state === 'skipped' ? 'ready' : 'setup';
     const back = await this.#workspaces.write((w) => {
@@ -605,7 +631,7 @@ export class Provisioner {
       return w.advance(workspace);
     });
     this.#changed(tree.canvas);
-    return back;
+    return as(back);
   }
 }
 

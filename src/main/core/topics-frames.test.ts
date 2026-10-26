@@ -12,6 +12,84 @@ afterEach(() => {
   topics?.close();
 });
 
+it('keeps an empty canonical Needs baseline at zero, then receipts changes without a subscriber', async () => {
+  const topic = `needs:${CANVAS}` as const;
+  let state: { items: unknown[] } = { items: [] };
+  topics = new Topics({
+    read: () => Promise.resolve({ ok: true, value: state }),
+    canonical: {
+      of: (key) => key === topic,
+      initial: () => ({ items: [] }),
+      read: () => Promise.resolve(state as never),
+    },
+  });
+  const since = topics.mark();
+  topics.changed(topic, 'corrallm');
+  expect(await topics.receipts([topic], since)).toEqual({});
+  state = { items: [{ id: 'a-workspace-card' }] };
+  topics.changed(topic, 'you');
+  expect(await topics.receipts([topic], since)).toEqual({ [topic]: 1 });
+  const after = topics.mark();
+  state = { items: [] };
+  topics.changed(topic, 'you');
+  expect(await topics.receipts([topic], after)).toEqual({ [topic]: 2 });
+});
+
+it('does not receipt the first read of an unchanged canonical source as a write’s change', async () => {
+  const topic = `worktrees:${CANVAS}` as const;
+  const state = { items: [], kept: [] };
+  topics = new Topics({
+    read: () => Promise.resolve({ ok: true, value: state }),
+    canonical: { of: (key) => key === topic, read: () => Promise.resolve(state) },
+  });
+  const since = topics.mark();
+  expect(await topics.receipts([topic], since)).toEqual({});
+  expect(await topics.receipts([topic], since)).toEqual({});
+  expect(
+    await topics.subscribe(1, { topic: 'worktrees', canvas: CANVAS }, {
+      caller: CALLERS.you,
+      signal: new AbortController().signal,
+    } as OpContext),
+  ).toMatchObject({ state, rev: 1 });
+});
+
+it('moves your worktrees revision at each change, a window watching or not, and receipts it', async () => {
+  const topic = `worktrees:${CANVAS}` as const;
+  let state = { items: [{ agent: 'a', state: 'creating' }], kept: [] as unknown[] };
+  const read = vi.fn(() => Promise.resolve({ ok: true as const, value: state }));
+  topics = new Topics({
+    read,
+    canonical: {
+      of: (key) => key.startsWith('worktrees:'),
+      read: () => Promise.resolve(state as never),
+    },
+  });
+  // No one subscribes: its revision moves with its source all the same, never on a no-op.
+  let since = topics.mark();
+  topics.changed(topic, 'corrallm');
+  expect(await topics.receipts([topic], since)).toEqual({ [topic]: 1 });
+  since = topics.mark();
+  expect(await topics.receipts([topic], since)).toEqual({});
+  state = { items: [{ agent: 'a', state: 'ready' }], kept: [] };
+  // A write naming it reads it again before its receipts: what it changed, not what a window saw.
+  expect(await topics.receipts([topic], since)).toEqual({ [topic]: 2 });
+  expect(read).not.toHaveBeenCalled();
+  // A window subscribing then is answered at that revision, then hears the next change.
+  const batches: TopicUpdate[][] = [];
+  topics.listen(1, (batch) => batches.push(batch));
+  expect(
+    await topics.subscribe(1, { topic: 'worktrees', canvas: CANVAS }, {
+      caller: CALLERS.you,
+      signal: new AbortController().signal,
+    } as OpContext),
+  ).toMatchObject({ rev: 2, state });
+  state = { items: [], kept: [] };
+  topics.changed(topic, 'you');
+  await vi.waitFor(() => {
+    expect(batches.flat()).toEqual([expect.objectContaining({ topic, rev: 3, replace: state })]);
+  });
+});
+
 it('bounds a large canvas subscription and live replacement using indexed transfers', async () => {
   let rev = 1;
   let entities: Entities = Object.fromEntries(

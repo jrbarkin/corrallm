@@ -173,6 +173,68 @@ const createdBy = (canvas: string) =>
   readOnDisk(profile, (disk) =>
     disk.prepare('SELECT created_by FROM document WHERE canvas_id = ?').get(canvas),
   )?.created_by;
+
+it('lists a kept canvas’s remembered project without opening it or making a worktree', async () => {
+  expect(core.engines.opened()).toEqual([TEAM]);
+  expect(await applied('worktree.list', { canvas: OTHER })).toEqual({
+    items: [
+      {
+        agent: 'solo',
+        mode: 'own',
+        workspace: null,
+        generation: 0,
+        branch: null,
+        base: null,
+        state: 'unmade',
+      },
+    ],
+    kept: [],
+  });
+  expect(core.engines.opened()).toEqual([TEAM]);
+  expect(readOnDisk(profile, (disk) => disk.prepare('SELECT id FROM worktree').all())).toEqual([]);
+});
+
+it.each(['canvas.close', 'canvas.create', 'canvas.open'] as const)(
+  'receipts the worktrees changed by %s discarding its old document',
+  async (op) => {
+    const { id } = await applied('canvas.addAgent', {
+      canvas: TEAM,
+      at: { x: 800, y: 0 },
+      adapter: 'codex',
+    });
+    const initial = await applied('topics.subscribe', { topic: 'worktrees', canvas: TEAM });
+    if (op === 'canvas.open') answers.open.push(files.other);
+    const result = await applied(
+      op,
+      op === 'canvas.close'
+        ? { canvas: TEAM, discard: true }
+        : { replace: { canvas: TEAM, discard: true } },
+    );
+    const updated = await applied('topics.subscribe', { topic: 'worktrees', canvas: TEAM });
+    expect(updated.rev).toBeGreaterThan(initial.rev as number);
+    expect(result.revs).toMatchObject({ [`worktrees:${TEAM}`]: updated.rev });
+    expect(await applied('worktree.list', { canvas: TEAM })).toMatchObject({
+      items: [
+        expect.objectContaining({ agent: 'lead' }),
+        expect.objectContaining({ agent: 'worker' }),
+      ],
+    });
+    expect(JSON.stringify(updated.state)).not.toContain(id);
+  },
+);
+
+it('receipts a project change at the worktrees revision its snapshot reaches, and no change on Cancel', async () => {
+  const initial = await applied('topics.subscribe', { topic: 'worktrees', canvas: TEAM });
+  const project = path.join(profile, 'next-project');
+  await mkdir(project);
+  answers.folder.push(project);
+  const changed = await applied('project.choose', { canvas: TEAM });
+  const updated = await applied('topics.subscribe', { topic: 'worktrees', canvas: TEAM });
+  expect(updated.rev).toBeGreaterThan(initial.rev as number);
+  expect(changed.revs).toMatchObject({ [`worktrees:${TEAM}`]: updated.rev });
+  expect(updated.state).toEqual(await applied('worktree.list', { canvas: TEAM }));
+  expect(await applied('project.choose', { canvas: TEAM })).toEqual({ project: null, revs: {} });
+});
 const labelsOf = (document: CanvasDocument) => document.nodes.map((node) => node.data.label);
 /** The nodes a canvas file's text holds. */
 const nodesIn = (text: string) => (JSON.parse(text) as { nodes: unknown[] }).nodes;
@@ -265,7 +327,7 @@ describe('canvas.create', () => {
       agents: { planner: 'claude-code', builder: 'codex' },
       connections: { builder: 'codex.app-server' },
     })) as { canvas: CanvasId; revs: Record<string, number> };
-    expect(revs).toEqual({ [`canvas:${canvas}`]: 1 });
+    expect(revs).toMatchObject({ [`canvas:${canvas}`]: 1 });
     const document = await documentOf(canvas);
     const byId = Object.fromEntries(document.nodes.map((node) => [node.id, node.data]));
     expect(byId.planner).toMatchObject({
@@ -761,7 +823,7 @@ describe('project.choose', () => {
     answers.folder.push(folder);
     expect(await applied('project.choose', { canvas: OTHER })).toEqual({
       project: { name: 'elsewhere', path: folder },
-      revs: {},
+      revs: { [`worktrees:${OTHER}`]: expect.any(Number) as number },
     });
     expect((await listed())[OTHER]).toMatchObject({ project: { name: 'elsewhere', path: folder } });
   });
