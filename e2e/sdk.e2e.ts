@@ -90,10 +90,12 @@ test('reconnects to a viewed session and its pending prompt without reopening or
   await page.locator('.react-flow__pane').dblclick({ position: { x: 400, y: 300 } });
   let view = await openSdkAgent('Agent 1');
   await expect(view.getByRole('button', { name: /^Model: / })).toBeVisible();
-  const text = '/question Keep this exact turn';
+  // The protocol fake asks before running a command in its default (Manual) mode: a pending
+  // native prompt this turn waits on.
+  const text = 'please run it';
   await view.getByRole('textbox', { name: 'Message Agent 1' }).fill(text);
   await view.getByRole('textbox', { name: 'Message Agent 1' }).press('Enter');
-  await expect(view.getByRole('group', { name: 'Questions for you' })).toBeVisible();
+  await expect(view.getByRole('group', { name: 'Bash command: echo hello' })).toBeVisible();
   const composer = view.getByRole('textbox', { name: 'Message Agent 1' });
   await composer.fill('This queued draft must not reach the CLI');
   await composer.press('Enter');
@@ -113,9 +115,9 @@ test('reconnects to a viewed session and its pending prompt without reopening or
   const transcript = view.getByRole('log', { name: 'Transcript' });
   await expect(transcript.locator('.agent-user')).toHaveCount(1);
   await expect(transcript.getByText(text, { exact: true })).toBeVisible();
-  const prompt = transcript.getByRole('group', { name: 'Questions for you' });
+  const prompt = transcript.getByRole('group', { name: 'Bash command: echo hello' });
   await prompt.getByRole('button', { name: 'Yes', exact: true }).click();
-  await expect(transcript.getByText('Answer received: Yes')).toBeVisible();
+  await expect(transcript.getByRole('button', { name: 'Bash echo hello' })).toBeVisible();
   await expect(transcript.getByText(/^Worked for \d+s$/)).toHaveCount(1);
   expect(await readFile(path.join(dir, 'starts.jsonl'), 'utf8')).toBe(starts);
   expect(await readFile(path.join(dir, 'prompts.jsonl'), 'utf8')).toBe(prompts);
