@@ -1,41 +1,30 @@
 import { describe, expect, it } from 'vitest';
 
+import { EXAMPLES } from '../examples';
+import { TEST_CATALOG } from '../engine/test-engine';
+import type { CanvasId } from '../canvas';
+import type { AgentData, AgentNode, CanvasDocument, CanvasNode } from './canvas';
+import { fromFile } from './file';
 import { absolutePosition, CARD_SIZE, autosize } from './geometry';
-import type { AgentData, AgentNode, CanvasDocument } from './canvas';
 import { insert } from './insert';
 import type { QueueItem, QueueRepeat, Until } from './queue';
-import type { CanvasId } from '../canvas';
+import { workspaceOwners } from './workspaces';
+
 const ID = '7d0c2b9e-4f1a-4c3d-9e8b-2a1f0e6d5c4b' as CanvasId;
 type Graph = Pick<CanvasDocument, 'nodes' | 'links'>;
 const document = (graph: Graph): CanvasDocument => ({ id: ID, arrange: false, ...graph });
-const insertGraph = (
-  graph: Graph,
-  part: Graph,
-  options: { group: string; name: string; newId: () => string },
-) => {
-  let first = true;
-  return insert(
-    document(graph),
-    document(part),
-    { name: options.name },
-    {
-      newId: () => {
-        const id = first ? options.group : options.newId();
-        first = false;
-        return id;
-      },
-    },
-  ).next;
-};
-
 const agent = (id: string, x: number, y: number, data: Partial<AgentData> = {}): AgentNode => ({
   id,
   type: 'agent',
   position: { x, y },
   data: { label: id, ...data },
 });
-
-/** A two-agent part: x hands y a message, and y waits for it, then loops waiting and handing back. */
+const frame = (id: string, label = id): CanvasNode => ({
+  id,
+  type: 'frame',
+  position: { x: 10, y: 20 },
+  data: { label, color: 2 },
+});
 const loop = (inner: QueueItem[], until: Until = { kind: 'succeeded' }): QueueItem => ({
   id: 'loop',
   repeat: inner as QueueRepeat['repeat'],
@@ -43,7 +32,7 @@ const loop = (inner: QueueItem[], until: Until = { kind: 'succeeded' }): QueueIt
   rounds: 2,
   otherwise: 'goOn',
 });
-const part: Graph = {
+const part = document({
   nodes: [
     agent('x', 100, 50, {
       queue: [
@@ -62,108 +51,144 @@ const part: Graph = {
     }),
   ],
   links: [{ source: 'x', target: 'y' }],
-};
-
+});
 const ids = () => {
   let n = 0;
-  return () => `new-${String((n += 1))}`;
+  return () => 'new-' + String(++n);
 };
 
-describe('insertGraph', () => {
-  it('adds a canvas as one new group, right of what is there, its agents and links renamed', () => {
-    const canvas: Graph = { nodes: [agent('a', 0, 0, { queue: [] })], links: [] };
-    const { nodes, links } = insertGraph(canvas, part, {
-      group: 'g',
-      name: 'TDD relay',
-      newId: ids(),
-    });
-    const byLabel = (label: string) => nodes.find((n) => n.data.label === label);
-    const group = nodes.find((n) => n.id === 'g');
-    expect(group).toMatchObject({ type: 'frame', data: { label: 'TDD relay' } });
-    // Right of the agent already there, its own agents inside it, laid out as in the part.
-    expect(group?.position.x).toBeGreaterThan(CARD_SIZE.width);
-    const [x, y] = [byLabel('x'), byLabel('y')];
-    if (x?.type !== 'agent' || y?.type !== 'agent') throw new Error('the part is missing');
-    expect([x.id, y.id, x.parentId, y.parentId]).toEqual(['new-1', 'new-2', 'g', 'g']);
-    const byId = new Map(nodes.map((n) => [n.id, n]));
-    expect(absolutePosition(y, byId).y - absolutePosition(x, byId).y).toBe(200);
-    // What pointed at x and y points at their new selves.
+describe('template roots', () => {
+  it('inserts the own roots beside existing content and retargets work without a wrapper', () => {
+    const changed = insert(
+      document({ nodes: [agent('a', 0, 0)], links: [] }),
+      part,
+      {},
+      { newId: ids() },
+    );
+    expect(changed.result).toEqual({ roots: ['new-1', 'new-2'], select: ['new-1', 'new-2'] });
+    const [existing, x, y] = changed.next.nodes;
+    expect(changed.next.nodes).toHaveLength(3);
+    expect(existing?.id).toBe('a');
+    if (x?.type !== 'agent' || y?.type !== 'agent') throw new Error('No inserted agents');
+    expect([x.id, y.id, x.parentId, y.parentId]).toEqual(['new-1', 'new-2', undefined, undefined]);
+    expect(x.position.x).toBeGreaterThan(CARD_SIZE.width);
+    expect(y.position.y - x.position.y).toBe(200);
     expect(x.data.queue).toEqual([
       { id: 'hand', message: 'Over to you', target: 'new-2' },
-      // The repeat it goes round with.
       loop([], { kind: 'repeatEnds', agent: 'new-2', item: 'loop' }),
     ]);
     expect(y.data.queue).toEqual([
       { id: 'w', waitFor: [{ agent: 'new-1', item: 'hand' }] },
-      // Inside a repeat too.
       loop([
         { id: 'again', waitFor: [{ agent: 'new-1' }] },
         { id: 'back', message: 'Back to you', target: 'new-1' },
       ]),
     ]);
-    expect(links.map((e) => [e.source, e.target])).toEqual([['new-1', 'new-2']]);
+    expect(changed.next.links).toEqual([{ source: 'new-1', target: 'new-2' }]);
   });
 
-  it('names the group apart from one already named so, and starts an empty canvas at its corner', () => {
-    const once = insertGraph({ nodes: [], links: [] }, part, {
-      group: 'g1',
-      name: 'TDD relay',
-      newId: ids(),
+  it('keeps the template frames and labels on repeated insertion, minting every node exactly once', () => {
+    const source = document({
+      nodes: [frame('team', 'Team'), { ...agent('x', 20, 52), parentId: 'team' }],
+      links: [],
     });
-    expect(once.nodes.find((n) => n.id === 'g1')?.position).toEqual({ x: 0, y: 0 });
-    const twice = insertGraph(once, part, { group: 'g2', name: 'TDD relay', newId: ids() });
-    expect(twice.nodes.find((n) => n.id === 'g2')?.data.label).toBe('TDD relay 2');
+    const newId = ids();
+    const once = insert(document({ nodes: [], links: [] }), source, {}, { newId });
+    const twice = insert(once.next, source, {}, { newId });
+    expect(once.result).toEqual({ roots: ['new-1'], select: ['new-1'] });
+    expect(twice.result).toEqual({ roots: ['new-3'], select: ['new-3'] });
+    expect(
+      twice.next.nodes.map(({ id, type, data, parentId }) => ({
+        id,
+        type,
+        label: data.label,
+        parentId,
+      })),
+    ).toEqual([
+      { id: 'new-1', type: 'frame', label: 'Team', parentId: undefined },
+      { id: 'new-2', type: 'agent', label: 'x', parentId: 'new-1' },
+      { id: 'new-3', type: 'frame', label: 'Team', parentId: undefined },
+      { id: 'new-4', type: 'agent', label: 'x', parentId: 'new-3' },
+    ]);
+    expect(twice.next.nodes[2]?.position.x).toBeGreaterThan(
+      once.next.nodes[0]?.position.x ?? Infinity,
+    );
   });
+
+  it.each(EXAMPLES)(
+    'preserves $name workspace owners and root order, nesting roots only when a parent is given',
+    (example) => {
+      const source = fromFile(example.text, TEST_CATALOG, 'claude-code');
+      const parent = frame('parent');
+      for (const into of [undefined, parent.id]) {
+        const changed = insert(
+          document({ nodes: [parent], links: [] }),
+          source,
+          into === undefined ? {} : { parent: into },
+          { newId: ids() },
+        );
+        const added = changed.next.nodes.filter(({ id }) => id !== parent.id);
+        expect(added).toHaveLength(source.nodes.length);
+        const renamed = new Map(source.nodes.map((node, i) => [node.id, added[i]?.id]));
+        const roots = source.nodes
+          .filter(({ parentId }) => parentId === undefined)
+          .map(({ id }) => renamed.get(id));
+        expect(changed.result).toEqual({ roots, select: roots });
+        for (const [i, node] of source.nodes.entries()) {
+          expect(added[i]).toMatchObject({ type: node.type, data: { label: node.data.label } });
+          expect(added[i]?.parentId).toBe(
+            node.parentId === undefined ? into : renamed.get(node.parentId),
+          );
+        }
+        if (into === undefined) {
+          expect(
+            workspaceOwners(document({ nodes: added, links: [] })).map(({ agents }) => agents),
+          ).toEqual(
+            workspaceOwners(source).map(({ agents }) => agents.map((id) => renamed.get(id))),
+          );
+        } else expect(workspaceOwners(changed.next)).toHaveLength(1);
+      }
+    },
+  );
 });
 
-it('inserts into a named parent, grows its ancestors, and returns a selection hint', () => {
-  const base = insertGraph({ nodes: [], links: [] }, part, {
-    group: 'outer',
-    name: 'Outer',
-    newId: ids(),
+it('grows a named parent without moving its existing children in canvas coordinates', () => {
+  const base = document({
+    nodes: [frame('outer'), { ...agent('old', 20, 52), parentId: 'outer' }],
+    links: [],
   });
-  let n = 0;
-  const changed = insert(
-    base,
-    document(part),
-    { name: 'Nested', parent: 'outer' },
-    { newId: () => `nested-${String(++n)}` },
-  );
-  expect(changed.result).toEqual({ id: 'nested-1', select: ['nested-1'] });
-  expect(changed.next.nodes.find((node) => node.id === 'nested-1')?.parentId).toBe('outer');
+  const changed = insert(base, part, { parent: 'outer' }, { newId: ids() });
   const before = new Map(base.nodes.map((node) => [node.id, node]));
   const after = new Map(changed.next.nodes.map((node) => [node.id, node]));
-  for (const node of base.nodes.filter((node) => node.type === 'agent')) {
-    expect(absolutePosition(after.get(node.id) ?? node, after)).toEqual(
-      absolutePosition(node, before),
-    );
-  }
+  const old = base.nodes[1];
+  if (!old) throw new Error('No old child');
+  expect(absolutePosition(after.get(old.id) ?? old, after)).toEqual(absolutePosition(old, before));
+  expect(
+    changed.next.nodes.filter((node) => node.id.startsWith('new-')).map(({ parentId }) => parentId),
+  ).toEqual(['outer', 'outer']);
   expect(autosize(changed.next.nodes).map((node) => node.position)).toEqual(
     changed.next.nodes.map((node) => node.position),
   );
 });
 
-it('keeps existing entities and unmodified imported queue items identical, minting nothing for an absent parent', () => {
-  const existing = agent('a', 0, 0, { queue: [] });
+it('keeps existing objects and unchanged queue items, minting nothing for an absent parent', () => {
+  const existing = agent('a', 0, 0);
   const unchanged = { id: 'm', message: 'No references' };
   const base = document({ nodes: [existing], links: [] });
-  const part = document({ nodes: [agent('x', 0, 0, { queue: [unchanged] })], links: [] });
-  let count = 0;
-  const next = insert(base, part, { name: 'New' }, { newId: () => `id-${String(++count)}` }).next;
+  const source = document({ nodes: [agent('x', 0, 0, { queue: [unchanged] })], links: [] });
+  const next = insert(base, source, {}, { newId: ids() }).next;
   expect(next.nodes[0]).toBe(existing);
-  expect(next.links).toEqual([]);
-  const imported = next.nodes.find((node) => node.id === 'id-2');
-  expect(imported?.data).toBe(part.nodes[0]?.data);
+  expect(next.nodes[1]?.data).toBe(source.nodes[0]?.data);
   expect(
     insert(
       base,
-      part,
-      { name: 'No', parent: 'missing' },
+      source,
+      { parent: 'missing' },
       {
         newId: () => {
           throw new Error('must not mint');
         },
       },
-    ).next,
-  ).toBe(base);
+    ),
+  ).toEqual({ next: base, result: { roots: [] } });
 });

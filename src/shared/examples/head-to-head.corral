@@ -15,15 +15,14 @@
       "queue": [
         {
           "id": "worktree",
-          "action": "EnterWorktree",
-          "instruction": "Work in a new worktree of your own, named compete-claude, from here on."
+          "message": "Use your corrallm-managed workspace for your role. Keep its current generated branch and checkout. Read the core-supplied workspace context for your captured base and the generated refs of the other roles. If that context or Judge’s ref is missing, ask for it and stop; never invent refs, search sibling directories, or create a native worktree."
         },
         {
           "id": "rounds",
           "repeat": [
             {
               "id": "build",
-              "message": "You're competing with another agent to build the best version of this, on a branch named compete/claude: commit when you're done. If the judge has left notes in .compete/feedback-claude.md in the main checkout (`git worktree list` shows where it is), improve your version from them.\n\n{{task}}"
+              "message": "Build the best version of the task below for your role, in your corrallm-managed worktree on your own generated branch. The core workspace context supplies the refs; never use a hard-coded branch name. For round 1 there is no prior feedback. For round 2, read Judge’s committed feedback with `git show <judge-ref>:.compete/feedback-claude.md`; its Round must match your completed round in .compete/result.md. The wait only orders turns and does not deliver Judge’s reply. If the ref, feedback commit or expected round is missing, report what is missing and ask before proceeding; do not read another checkout or substitute a reply. Improve your version from that committed feedback.\n\nBefore ending each round, write .compete/result.md with `Round: N` and a summary, and commit it together with your completed implementation on your own branch. Never merge the other contestant or Judge. Report the resulting commit id.\n\n{{task}}"
             },
             {
               "id": "scored",
@@ -57,14 +56,14 @@
       "queue": [
         {
           "id": "worktree",
-          "action": "/worktree"
+          "message": "Use your corrallm-managed workspace for your role. Keep its current generated branch and checkout. Read the core-supplied workspace context for your captured base and the generated refs of the other roles. If that context or Judge’s ref is missing, ask for it and stop; never invent refs, search sibling directories, or create a native worktree."
         },
         {
           "id": "rounds",
           "repeat": [
             {
               "id": "build",
-              "message": "You're competing with another agent to build the best version of this, on a branch named compete/codex: commit when you're done. If the judge has left notes in .compete/feedback-codex.md in the main checkout (`git worktree list` shows where it is), improve your version from them.\n\n{{task}}"
+              "message": "Build the best version of the task below for your role, in your corrallm-managed worktree on your own generated branch. The core workspace context supplies the refs; never use a hard-coded branch name. For round 1 there is no prior feedback. For round 2, read Judge’s committed feedback with `git show <judge-ref>:.compete/feedback-codex.md`; its Round must match your completed round in .compete/result.md. The wait only orders turns and does not deliver Judge’s reply. If the ref, feedback commit or expected round is missing, report what is missing and ask before proceeding; do not read another checkout or substitute a reply. Improve your version from that committed feedback.\n\nBefore ending each round, write .compete/result.md with `Round: N` and a summary, and commit it together with your completed implementation on your own branch. Never merge the other contestant or Judge. Report the resulting commit id.\n\n{{task}}"
             },
             {
               "id": "scored",
@@ -114,7 +113,7 @@
             },
             {
               "id": "judge",
-              "message": "Two agents just built this, on the branches compete/claude and compete/codex:\n\n{{task}}\n\nJudge them blind: call them Version A and Version B in a random order (`echo $((RANDOM % 2))`), and don't look at which is which until you've scored. Score each from 0 to 100 for how well it does what was asked, its design, and its code. Then write what each should improve to .compete/feedback-claude.md and .compete/feedback-codex.md. If one version is clearly better, say WINNER on a line of its own."
+              "message": "Judge the committed results of both contestant roles for this task:\n\n{{task}}\n\nUse only their generated refs and captured base from the core workspace context, with read-only Git from your own managed tree. Determine the next round from your last committed .compete/judged-round.md (none means round 1). Read `git show <contestant-ref>:.compete/result.md` at each supplied contestant ref; both must record this round, and both refs must contain the completed implementation commits beyond the captured base. If a ref, commit or current-round result is missing, report what is missing and ask; do not score stale work, guess a sibling directory, or use an uncommitted file.\n\nJudge them blind: call them Version A and Version B in a random order, and do not look at which is which until you have scored. Score each from 0 to 100 for how well it does what was asked, its design and its code. Write distinct .compete/feedback-claude.md and .compete/feedback-codex.md in your own tree; each begins `Round: N`, identifies the reviewed contestant commit and says what to improve. Write .compete/judged-round.md with this round and the scores. Commit all three files on your own generated branch before ending your turn or emitting a verdict. Contestants read that feedback commit through the shared Git object database, never by reading your checkout or the main checkout. If one version is clearly better, say WINNER on a line of its own."
             }
           ],
           "until": {
@@ -127,7 +126,7 @@
         },
         {
           "id": "merge",
-          "message": "Merge the winner's branch (without a clear winner, the one with the higher total over the rounds), and say why it won."
+          "message": "Report the winning role, ref and reason for review, using the committed scores across the rounds if there is no clear winner. Include the reviewed commit id and Judge’s feedback commit. Do not merge or modify the picked checkout; the user’s later merge is the integration step."
         }
       ]
     }

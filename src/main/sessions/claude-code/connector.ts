@@ -1,6 +1,7 @@
 import { realpath } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 
+import { launchInstructions } from '../instructions';
 import type { UsageBackendId } from '../../../shared/adapter';
 import type { UsageWindows } from '../../../shared/usage';
 import { CLAUDE_USAGE } from './adapter';
@@ -93,10 +94,11 @@ export class TerminalConnector implements Connector {
   }
 
   async start(spec: SessionSpec, host: SessionHost): Promise<LiveSession> {
+    const instructions = launchInstructions(spec);
     const claude = await this.#findClaude(spec.env);
     // Older CLIs predate prompt snapshots; never give them a flag they cannot parse.
     const roleChanged = spec.resume !== null && spec.roleChanged === true;
-    const needsPromptOptions = spec.role !== undefined || roleChanged;
+    const needsPromptOptions = instructions !== undefined || roleChanged;
     const flags =
       needsPromptOptions || spec.effort != null
         ? await this.#flags(claude, spec.env)
@@ -104,7 +106,7 @@ export class TerminalConnector implements Connector {
     if (needsPromptOptions && flags.size === 0) {
       throw new Error('Could not read Claude Code options; retry or update Claude Code.');
     }
-    if (spec.role !== undefined && !flags.has('--append-system-prompt')) {
+    if (instructions !== undefined && !flags.has('--append-system-prompt')) {
       throw new Error('Update Claude Code to use an agent role.');
     }
     const effort = spec.effort != null && flags.has('--effort') ? spec.effort : null;

@@ -51,10 +51,18 @@ export async function launchApp({
     );
     const executablePath = agentElectronExecutable();
     // Docker has Mesa llvmpipe rather than a passed-through GPU. These switches belong only
-    // to this unpackaged test launch, never main's defaults or the packaged-app checks.
+    // to this unpackaged test launch, never main's defaults or the packaged-app checks. The
+    // hidden window gets a frame only once a second here (rAF and every input event wait for
+    // one: a mouse move took 1 s, a drag of 40 moves a minute) unless the frame rate limit is off.
     const graphics =
       platform() === 'linux' && env.CORRALLM_E2E_GL === 'mesa'
-        ? ['--use-gl=angle', '--use-angle=gl', '--ignore-gpu-blocklist', '--ozone-platform=x11']
+        ? [
+            '--use-gl=angle',
+            '--use-angle=gl',
+            '--ignore-gpu-blocklist',
+            '--ozone-platform=x11',
+            '--disable-frame-rate-limit',
+          ]
         : [];
     app = await electron.launch({
       // Playwright otherwise prepends --no-sandbox on Linux. Test the app's real sandbox,

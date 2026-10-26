@@ -56,7 +56,7 @@ The gallery's form also chooses how each agent runs (withConnections): by defaul
 
 A template's tool steps say what they are to do (`instruction`, which may hold blanks too), as does Codex's /review: a test keeps it so.
 
-It opens as a new canvas or is inserted into this one as a group through api.canvasInsertTemplate (model/insert.ts in the core, which fills fields and mints every id); New calls api.canvasCreate with the template and choices, making the template the canvas itself, retaining its node ids, with no enclosing group and no project folder inherited.
+It opens as a new canvas or is inserted with its own top-level roots through api.canvasInsertTemplate (model/insert.ts in the core, which fills fields, mints every node id and remaps references, adding no wrapper). The gallery selects and fits all returned roots after that one operation; New calls api.canvasCreate with the template and choices, making the template the canvas itself, retaining its node ids, with no enclosing group and no project folder inherited.
 
 It leaves the previous canvas open, keeping its unsaved work and folder; creating another template therefore needs no discard confirmation.
 

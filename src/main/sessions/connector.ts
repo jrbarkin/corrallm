@@ -52,6 +52,8 @@ export interface SessionSpec<M extends SessionMode = PermissionMode> {
   effort?: string | null;
   /** Standing instructions captured at launch, appended to native defaults without a user turn. */
   role?: string;
+  /** C-owned authorized workspace context, separate from saved role; no producer is composed yet. */
+  workspaceContext?: string;
   /** The id of the session to resume (it was given to `remember`), or null to start a new one. */
   resume: string | null;
   /** Whether the resumed conversation's role changed; an unknown previous role counts as changed. */

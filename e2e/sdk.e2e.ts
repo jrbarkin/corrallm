@@ -256,7 +256,9 @@ test('shows an agent’s MCP servers with /mcp, and a form one of them asks for'
   await page.getByRole('button', { name: 'Choose a project folder' }).click();
   await page.locator('.react-flow__pane').dblclick({ position: { x: 400, y: 300 } });
   const view = await openSdkAgent('Agent 1');
-  await expect(view.getByRole('button', { name: /^Model: / })).toBeVisible();
+  // The session started: the CLI's models are offered (before that the button says "Default model"),
+  // and /mcp asks a session that is running.
+  await expect(view.getByRole('button', { name: 'Model: Default (recommended)' })).toBeVisible();
   const composer = view.getByRole('textbox', { name: 'Message Agent 1' });
 
   // /mcp: the fake's two servers, one failed until it is reconnected.

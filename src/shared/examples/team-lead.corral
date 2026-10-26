@@ -4,13 +4,24 @@
   "id": "8150e630-f601-4abe-afae-e93bbf6aa197",
   "nodes": [
     {
+      "id": "workspace",
+      "kind": "group",
+      "label": "Team lead",
+      "position": {
+        "x": -20,
+        "y": -52
+      },
+      "color": 0
+    },
+    {
       "id": "planner",
       "kind": "agent",
       "label": "Planner",
       "position": {
-        "x": 210,
-        "y": 0
+        "x": 230,
+        "y": 52
       },
+      "parent": "workspace",
       "adapter": "claude-code",
       "queue": [
         {
@@ -33,9 +44,10 @@
       "kind": "agent",
       "label": "Lead",
       "position": {
-        "x": 0,
-        "y": 120.5
+        "x": 20,
+        "y": 172.5
       },
+      "parent": "workspace",
       "adapter": "claude-code",
       "color": 1,
       "queue": [

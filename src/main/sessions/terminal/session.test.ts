@@ -235,6 +235,21 @@ describe('a Terminal session', () => {
     },
   );
 
+  it.each([undefined, 'Review changes'])(
+    'appends supplied core workspace context with role %s without typing a prompt',
+    async (role) => {
+      const session = await start({
+        ...(role === undefined ? {} : { role }),
+        workspaceContext: 'Branch: generated-ref',
+      });
+      expect(claude().args).toContain(
+        `--append-system-prompt=${role === undefined ? '' : `${role}\n\n`}[corrallm workspace context]\nBranch: generated-ref`,
+      );
+      expect(claude().prompts).toEqual([]);
+      await session.close();
+    },
+  );
+
   it('does not pass a modern snapshot flag to an older CLI on role launch or resume', async () => {
     help = '  --model <model>  Model\n  --append-system-prompt <prompt>  Append instructions';
     const id = '0b3a7d52-6a0c-4f39-9c4e-2f8f0c1d9e11';
@@ -309,6 +324,45 @@ describe('a Terminal session', () => {
       if (settings.role !== undefined) {
         expect(claude().args).toContain(`--append-system-prompt=${settings.role}`);
       }
+    },
+  );
+
+  it.each([undefined, 'Branch: refs/heads/corrallm/profile/tree'])(
+    'restarts with new settings and the exact native id, preserving context %s without replaying a turn',
+    async (workspaceContext) => {
+      const context = workspaceContext === undefined ? {} : { workspaceContext };
+      const using = connector();
+      const first = await start(
+        { model: 'haiku', effort: 'low', mode: 'plan', ...context },
+        { using },
+      );
+      const id = claude().arg('--session-id');
+      if (id === undefined) throw new Error('No native session ID');
+      expect(claude().arg('--model')).toBe('haiku');
+      expect(claude().arg('--permission-mode')).toBe('plan');
+      await first.send({ id: 'hello', text: 'hello' });
+      await until(() => {
+        expect(remembered).toContain(id);
+        expect(last('end')).toBeDefined();
+      });
+      await first.close();
+      fake.transcripts = [id];
+      await start(
+        { resume: id, roleChanged: false, model: null, effort: 'low', mode: null, ...context },
+        { using },
+      );
+      expect(runs).toHaveLength(2);
+      expect(claude().args).toContain(`--resume=${id}`);
+      expect(claude().arg('--effort')).toBe('low');
+      expect(claude().args).not.toContain('--model');
+      expect(claude().args).not.toContain('--permission-mode');
+      expect(claude().args).not.toContain('--system-prompt-snapshot=off');
+      expect(claude().arg('--append-system-prompt')).toBe(
+        workspaceContext === undefined
+          ? undefined
+          : `[corrallm workspace context]\n${workspaceContext}`,
+      );
+      expect(claude().prompts).toEqual([]);
     },
   );
 
