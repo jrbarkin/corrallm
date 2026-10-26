@@ -31,6 +31,7 @@ const OTHER = '0b8c6f1e-2d3a-4b5c-8d9e-0f1a2b3c4d5f' as CanvasId;
 let profile: string;
 let database: Store;
 let table: MessageTable;
+let sequenceWork: Promise<void> | undefined;
 
 beforeEach(async () => {
   profile = await mkdtemp(path.join(tmpdir(), 'corrallm-messages-'));
@@ -39,14 +40,32 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  // Vitest aborts a timed-out test, but does not await its callback. The seeded loops check
+  // that signal after every I/O boundary; drain them before another fixture owns these names.
+  await sequenceWork?.catch(() => undefined);
+  sequenceWork = undefined;
   await database.close();
   await rm(profile, { recursive: true, force: true });
 });
 
+function sequence(run: () => Promise<void>): Promise<void> {
+  sequenceWork = run();
+  return sequenceWork;
+}
+
 /** Closes the database and opens it again, as the core does when it starts again. */
-async function restart(deps?: StoreDeps): Promise<void> {
-  await database.close();
-  database = await openTestStore(profile, deps);
+async function restart(deps?: StoreDeps, signal?: AbortSignal): Promise<void> {
+  signal?.throwIfAborted();
+  const previous = database;
+  const folder = profile;
+  await previous.close();
+  signal?.throwIfAborted();
+  const opened = await openTestStore(folder, deps);
+  if (signal?.aborted) {
+    await opened.close();
+    signal.throwIfAborted();
+  }
+  database = opened;
   table = new MessageTable(database, new CanvasMemory(database));
 }
 
@@ -411,204 +430,215 @@ describe('the message store', () => {
 });
 
 describe('incremental pruning', () => {
-  it.each([0x54b, 0x55b])(
-    'keeps exactly the scan algorithm’s set through seeded changes, restarts, restores and staged rollbacks (seed %i)',
-    { timeout: 30_000 },
-    async (initialSeed) => {
-      // Exercise real SQLite closes/reopens, restores and pruning, without making an unrelated
-      // backup at every randomized restart. Snapshot publication has its own store tests.
-      const snapshots = vi.spyOn(Store.prototype, 'snapshot').mockResolvedValue('unused');
-      onTestFinished(() => {
-        snapshots.mockRestore();
-      });
-      let seed = initialSeed;
-      const random = () => {
-        seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
-        return seed / 0x100000000;
-      };
-      const pick = <T>(values: readonly T[]): T =>
-        values[Math.floor(random() * values.length)] as T;
-      const parties = [
-        'you',
-        'corrallm',
-        'agent:a',
-        'agent:b',
-        'outside:one',
-        'outside:two',
-      ] as const;
-      let messages = await store();
-      let expected = new Map<string, PruneRecord>();
-      const dropped = { quota: 0, bytes: 0 };
-      const prune = () => {
-        const next = scanPrune(expected);
-        dropped.quota += next.quota;
-        dropped.bytes += next.bytes;
-      };
-      const check = () => {
-        expect(messages.all().map(({ id }) => id)).toEqual([...expected.keys()]);
-        expect(messages.active()).toEqual(messages.all().filter(isActive));
-      };
-      const keepAdded = (message: Message, told?: string) => {
-        expected.set(message.id, {
-          seq: table.last(),
-          message,
-          ...(told === undefined ? {} : { told }),
-        });
-        prune();
-        check();
-      };
-      // Enough settled traffic to cross both quotas, including the double count for self-sends.
-      for (let i = 0; i < 240; i++) {
-        const from = i % 3 === 0 ? 'you' : 'outside:one';
-        const message = messages.add(draft(from, i % 2 === 0 ? from : 'outside:two', 'replied'));
-        keepAdded(message);
-      }
-      const seen = new Set<number>();
-      for (let step = 0; step < 400; step++) {
-        const ids = [...expected.keys()];
-        const roll = Math.floor(random() * 10);
-        seen.add(roll);
-        if (roll < 3 || ids.length === 0) {
-          const from = pick(parties);
-          const told = random() < 0.2 ? `told:${String(step)}` : undefined;
-          const message = messages.add(
-            {
-              ...draft(
-                from,
-                random() < 0.2 ? from : pick(parties),
-                pick(MESSAGE_STATES),
-                random() < 0.15 ? '😀'.repeat(32_000) : 'Hello',
-              ),
-              kind: pick(MESSAGE_KINDS),
-            },
-            told,
-          );
-          keepAdded(message, told);
-        } else if (roll < 6) {
-          const id = pick(ids);
-          const old = expected.get(id);
-          if (!old) throw new Error('The reference lost its message');
-          const withdrawal = random() < 0.2 ? 'Withdrawn after receipt' : undefined;
-          const message = messages.update(
-            id,
-            {
-              state: pick(MESSAGE_STATES),
-              from: pick(parties),
-              to: pick(parties),
-              kind: pick(MESSAGE_KINDS),
-              body: random() < 0.2 ? '界'.repeat(50_000) : 'Changed',
-            },
-            withdrawal,
-          );
-          if (!message) throw new Error('The store lost its message');
-          expected.set(id, {
-            ...old,
-            message,
-            ...(withdrawal === undefined ? {} : { withdrawal: { text: withdrawal } }),
+  for (const initialSeed of [0x54b, 0x55b]) {
+    it(
+      `keeps exactly the scan algorithm’s set through seeded changes, restarts, restores and staged rollbacks (seed ${String(initialSeed)})`,
+      { timeout: 30_000 },
+      ({ signal }) =>
+        sequence(async () => {
+          // Exercise real SQLite closes/reopens, restores and pruning, without making an unrelated
+          // backup at every randomized restart. Snapshot publication has its own store tests.
+          const snapshots = vi.spyOn(Store.prototype, 'snapshot').mockResolvedValue('unused');
+          onTestFinished(() => {
+            snapshots.mockRestore();
           });
-          prune();
-        } else if (roll === 6) {
-          for (const id of [pick(ids), pick(ids)]) {
-            messages.toldWithdrawals([id]);
-            const old = expected.get(id);
-            if (old?.withdrawal && !old.withdrawal.told) {
-              expected.set(id, { ...old, withdrawal: { ...old.withdrawal, told: true } });
-              prune();
-            }
+          let seed = initialSeed;
+          const random = () => {
+            seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+            return seed / 0x100000000;
+          };
+          const pick = <T>(values: readonly T[]): T =>
+            values[Math.floor(random() * values.length)] as T;
+          const parties = [
+            'you',
+            'corrallm',
+            'agent:a',
+            'agent:b',
+            'outside:one',
+            'outside:two',
+          ] as const;
+          let messages = await store();
+          let expected = new Map<string, PruneRecord>();
+          const dropped = { quota: 0, bytes: 0 };
+          const prune = () => {
+            const next = scanPrune(expected);
+            dropped.quota += next.quota;
+            dropped.bytes += next.bytes;
+          };
+          const check = () => {
+            expect(messages.all().map(({ id }) => id)).toEqual([...expected.keys()]);
+            expect(messages.active()).toEqual(messages.all().filter(isActive));
+          };
+          const keepAdded = (message: Message, told?: string) => {
+            expected.set(message.id, {
+              seq: table.last(),
+              message,
+              ...(told === undefined ? {} : { told }),
+            });
+            prune();
+            check();
+          };
+          // Enough settled traffic to cross both quotas, including the double count for self-sends.
+          for (let i = 0; i < 240; i++) {
+            const from = i % 3 === 0 ? 'you' : 'outside:one';
+            const message = messages.add(
+              draft(from, i % 2 === 0 ? from : 'outside:two', 'replied'),
+            );
+            keepAdded(message);
           }
-        } else if (roll === 7) {
-          const fails = random() < 0.5;
-          const staged: ReturnType<MessageStore['stageWithin']>[] = [];
-          const writing = database.write(() => {
-            for (let i = 0; i < 3; i++) {
-              const one = messages.stageWithin(
-                draft(pick(parties), pick(parties), pick(MESSAGE_STATES)),
+          const seen = new Set<number>();
+          for (let step = 0; step < 400; step++) {
+            signal.throwIfAborted();
+            const ids = [...expected.keys()];
+            const roll = Math.floor(random() * 10);
+            seen.add(roll);
+            if (roll < 3 || ids.length === 0) {
+              const from = pick(parties);
+              const told = random() < 0.2 ? `told:${String(step)}` : undefined;
+              const message = messages.add(
+                {
+                  ...draft(
+                    from,
+                    random() < 0.2 ? from : pick(parties),
+                    pick(MESSAGE_STATES),
+                    random() < 0.15 ? '😀'.repeat(32_000) : 'Hello',
+                  ),
+                  kind: pick(MESSAGE_KINDS),
+                },
+                told,
               );
-              staged.push(one);
-              expected.set(one.message.id, { seq: table.last(), message: one.message });
-              check();
-            }
-            if (fails) throw new Error('The staged settlement failed');
-          });
-          if (fails) await expect(writing).rejects.toThrow('The staged settlement failed');
-          else await writing;
-          for (const one of staged.toReversed()) {
-            if (fails) {
-              one.undo();
-              expected.delete(one.message.id);
-            } else {
-              one.reveal();
+              keepAdded(message, told);
+            } else if (roll < 6) {
+              const id = pick(ids);
+              const old = expected.get(id);
+              if (!old) throw new Error('The reference lost its message');
+              const withdrawal = random() < 0.2 ? 'Withdrawn after receipt' : undefined;
+              const message = messages.update(
+                id,
+                {
+                  state: pick(MESSAGE_STATES),
+                  from: pick(parties),
+                  to: pick(parties),
+                  kind: pick(MESSAGE_KINDS),
+                  body: random() < 0.2 ? '界'.repeat(50_000) : 'Changed',
+                },
+                withdrawal,
+              );
+              if (!message) throw new Error('The store lost its message');
+              expected.set(id, {
+                ...old,
+                message,
+                ...(withdrawal === undefined ? {} : { withdrawal: { text: withdrawal } }),
+              });
               prune();
+            } else if (roll === 6) {
+              for (const id of [pick(ids), pick(ids)]) {
+                messages.toldWithdrawals([id]);
+                const old = expected.get(id);
+                if (old?.withdrawal && !old.withdrawal.told) {
+                  expected.set(id, { ...old, withdrawal: { ...old.withdrawal, told: true } });
+                  prune();
+                }
+              }
+            } else if (roll === 7) {
+              const fails = random() < 0.5;
+              const staged: ReturnType<MessageStore['stageWithin']>[] = [];
+              const writing = database.write(() => {
+                for (let i = 0; i < 3; i++) {
+                  const one = messages.stageWithin(
+                    draft(pick(parties), pick(parties), pick(MESSAGE_STATES)),
+                  );
+                  staged.push(one);
+                  expected.set(one.message.id, { seq: table.last(), message: one.message });
+                  check();
+                }
+                if (fails) throw new Error('The staged settlement failed');
+              });
+              if (fails) await expect(writing).rejects.toThrow('The staged settlement failed');
+              else await writing;
+              signal.throwIfAborted();
+              for (const one of staged.toReversed()) {
+                if (fails) {
+                  one.undo();
+                  expected.delete(one.message.id);
+                } else {
+                  one.reveal();
+                  prune();
+                }
+                check();
+              }
+            } else {
+              await messages.durable();
+              signal.throwIfAborted();
+              if (roll === 9) {
+                await database.close();
+                signal.throwIfAborted();
+                const writer = connect(path.join(profile, STORE_FILE));
+                try {
+                  writer.exec('BEGIN');
+                  settleRestored(writer, 1000);
+                  writer.exec('COMMIT');
+                } finally {
+                  writer.close();
+                }
+              }
+              await restart(undefined, signal);
+              // The unpruned SQL input, not the optimized load's output. Restores change pending rows
+              // and add notices; rows also retain the original, immutable sender/recipient/kind.
+              const parsed = (value: unknown): unknown => {
+                if (typeof value !== 'string') throw new Error('The SQL JSON column was not text');
+                const object: unknown = JSON.parse(value);
+                return object;
+              };
+              expected = new Map(
+                table.rows(CANVAS).map((row) => {
+                  const message: Message = {
+                    id: row.id as string,
+                    canvas: CANVAS,
+                    from: row.from_party as Message['from'],
+                    to: row.to_party as Message['to'],
+                    kind: row.kind as Message['kind'],
+                    body: row.body as string,
+                    state: row.state as Message['state'],
+                    at: row.sent_at as number,
+                    ...(row.reply_to === null ? {} : { replyTo: row.reply_to as string }),
+                    ...(row.turn === null
+                      ? {}
+                      : { turn: parsed(row.turn) as NonNullable<Message['turn']> }),
+                    ...(row.delivery === null
+                      ? {}
+                      : { delivery: parsed(row.delivery) as NonNullable<Message['delivery']> }),
+                    ...(row.by_party === null ? {} : { by: row.by_party as Message['from'] }),
+                  };
+                  const record: PruneRecord = {
+                    seq: row.seq as number,
+                    message,
+                    ...(row.told === null ? {} : { told: row.told as string }),
+                    ...(row.withdrawal === null
+                      ? {}
+                      : {
+                          withdrawal: parsed(row.withdrawal) as NonNullable<
+                            PruneRecord['withdrawal']
+                          >,
+                        }),
+                  };
+                  return [message.id, record];
+                }),
+              );
+              prune();
+              messages = await store();
             }
             check();
           }
-        } else {
+          expect(seen.size).toBe(10);
+          expect(dropped.quota).toBeGreaterThan(0);
+          expect(dropped.bytes).toBeGreaterThan(0);
+          expect(snapshots.mock.calls.length).toBeGreaterThan(40);
           await messages.durable();
-          if (roll === 9) {
-            await database.close();
-            const writer = connect(path.join(profile, STORE_FILE));
-            try {
-              writer.exec('BEGIN');
-              settleRestored(writer, 1000);
-              writer.exec('COMMIT');
-            } finally {
-              writer.close();
-            }
-          }
-          await restart();
-          // The unpruned SQL input, not the optimized load's output. Restores change pending rows
-          // and add notices; rows also retain the original, immutable sender/recipient/kind.
-          const parsed = (value: unknown): unknown => {
-            if (typeof value !== 'string') throw new Error('The SQL JSON column was not text');
-            const object: unknown = JSON.parse(value);
-            return object;
-          };
-          expected = new Map(
-            table.rows(CANVAS).map((row) => {
-              const message: Message = {
-                id: row.id as string,
-                canvas: CANVAS,
-                from: row.from_party as Message['from'],
-                to: row.to_party as Message['to'],
-                kind: row.kind as Message['kind'],
-                body: row.body as string,
-                state: row.state as Message['state'],
-                at: row.sent_at as number,
-                ...(row.reply_to === null ? {} : { replyTo: row.reply_to as string }),
-                ...(row.turn === null
-                  ? {}
-                  : { turn: parsed(row.turn) as NonNullable<Message['turn']> }),
-                ...(row.delivery === null
-                  ? {}
-                  : { delivery: parsed(row.delivery) as NonNullable<Message['delivery']> }),
-                ...(row.by_party === null ? {} : { by: row.by_party as Message['from'] }),
-              };
-              const record: PruneRecord = {
-                seq: row.seq as number,
-                message,
-                ...(row.told === null ? {} : { told: row.told as string }),
-                ...(row.withdrawal === null
-                  ? {}
-                  : {
-                      withdrawal: parsed(row.withdrawal) as NonNullable<PruneRecord['withdrawal']>,
-                    }),
-              };
-              return [message.id, record];
-            }),
-          );
-          prune();
-          messages = await store();
-        }
-        check();
-      }
-      expect(seen.size).toBe(10);
-      expect(dropped.quota).toBeGreaterThan(0);
-      expect(dropped.bytes).toBeGreaterThan(0);
-      expect(snapshots.mock.calls.length).toBeGreaterThan(40);
-      await messages.durable();
-      expect(rows().map(({ id }) => id)).toEqual([...expected.keys()]);
-    },
-  );
+          expect(rows().map(({ id }) => id)).toEqual([...expected.keys()]);
+        }),
+    );
+  }
 });
 
 describe('what delivery acts on', () => {
@@ -646,88 +676,104 @@ describe('what delivery acts on', () => {
   it(
     'agrees with what it keeps through any sequence of changes, restarts and restores',
     { timeout: 30_000 },
-    async () => {
-      // A fixed seed: the same sequence every run.
-      let seed = 0x5eed;
-      const random = () => {
-        seed = (seed + 0x6d2b79f5) | 0;
-        let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
-        t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-      };
-      const pick = <T>(list: readonly T[]): T => list[Math.floor(random() * list.length)] as T;
-      const parties = [
-        'you',
-        'corrallm',
-        'agent:builder',
-        'agent:checker',
-        'outside:orchestrator',
-        'outside:other',
-      ] as const;
-      const agents = ['agent:builder', 'agent:checker'] as const;
-      const states = [...MESSAGE_STATES, 'pending', 'pending', 'delivering', 'delivered'] as const;
-      let messages = await store();
-      for (let step = 0; step < 600; step++) {
-        const ids = messages.all().map(({ id }) => id);
-        const roll = random();
-        if (roll < 0.34 || ids.length === 0) {
-          // Sent: mostly to an agent, waiting.
-          messages.add({
-            ...draft(pick(parties), random() < 0.8 ? pick(agents) : pick(parties), pick(states)),
-            kind: random() < 0.8 ? 'text' : pick(MESSAGE_KINDS),
-          });
-        } else if (roll < 0.72) {
-          // Delivered, ended, withdrawn (with a note), cut off, or back to waiting.
-          messages.update(
-            pick(ids),
-            { state: pick(states) },
-            random() < 0.1 ? 'Withdrawn after it reached you.' : undefined,
-          );
-        } else if (roll < 0.77) {
-          messages.toldWithdrawals([pick(ids), pick(ids)]);
-        } else if (roll < 0.87) {
-          // Settled traffic enough to prune the oldest settled.
-          for (let i = 0; i < 40; i++) {
-            messages.add(draft(pick(agents), 'outside:orchestrator', 'delivered'));
+    ({ signal }) =>
+      sequence(async () => {
+        const snapshots = vi.spyOn(Store.prototype, 'snapshot').mockResolvedValue('unused');
+        onTestFinished(() => {
+          snapshots.mockRestore();
+        });
+        // A fixed seed: the same sequence every run.
+        let seed = 0x5eed;
+        const random = () => {
+          seed = (seed + 0x6d2b79f5) | 0;
+          let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+          t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+          return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+        };
+        const pick = <T>(list: readonly T[]): T => list[Math.floor(random() * list.length)] as T;
+        const parties = [
+          'you',
+          'corrallm',
+          'agent:builder',
+          'agent:checker',
+          'outside:orchestrator',
+          'outside:other',
+        ] as const;
+        const agents = ['agent:builder', 'agent:checker'] as const;
+        const states = [
+          ...MESSAGE_STATES,
+          'pending',
+          'pending',
+          'delivering',
+          'delivered',
+        ] as const;
+        let messages = await store();
+        for (let step = 0; step < 600; step++) {
+          signal.throwIfAborted();
+          const ids = messages.all().map(({ id }) => id);
+          const roll = random();
+          if (roll < 0.34 || ids.length === 0) {
+            // Sent: mostly to an agent, waiting.
+            messages.add({
+              ...draft(pick(parties), random() < 0.8 ? pick(agents) : pick(parties), pick(states)),
+              kind: random() < 0.8 ? 'text' : pick(MESSAGE_KINDS),
+            });
+          } else if (roll < 0.72) {
+            // Delivered, ended, withdrawn (with a note), cut off, or back to waiting.
+            messages.update(
+              pick(ids),
+              { state: pick(states) },
+              random() < 0.1 ? 'Withdrawn after it reached you.' : undefined,
+            );
+          } else if (roll < 0.77) {
+            messages.toldWithdrawals([pick(ids), pick(ids)]);
+          } else if (roll < 0.87) {
+            // Settled traffic enough to prune the oldest settled.
+            for (let i = 0; i < 40; i++) {
+              messages.add(draft(pick(agents), 'outside:orchestrator', 'delivered'));
+            }
+          } else if (roll < 0.95) {
+            // Staged within another write: revealed once it committed, or undone as it failed.
+            const fails = random() < 0.5;
+            let staged: ReturnType<MessageStore['stageWithin']> | undefined;
+            await database
+              .write(() => {
+                staged = messages.stageWithin(draft(pick(parties), pick(agents), pick(states)));
+                if (fails) throw new Error('The settlement failed');
+              })
+              .catch(() => undefined);
+            signal.throwIfAborted();
+            if (fails) staged?.undo();
+            else staged?.reveal();
+          } else if (roll < 0.98) {
+            // A restart: read back from its rows.
+            await messages.durable();
+            signal.throwIfAborted();
+            await restart(undefined, signal);
+            messages = await store();
+          } else {
+            // A restore from a snapshot, which settles what waited there.
+            await messages.durable();
+            signal.throwIfAborted();
+            await database.close();
+            signal.throwIfAborted();
+            const writer = connect(path.join(profile, STORE_FILE));
+            try {
+              writer.exec('BEGIN');
+              settleRestored(writer, 1000);
+              writer.exec('COMMIT');
+            } finally {
+              writer.close();
+            }
+            await restart(undefined, signal);
+            messages = await store();
           }
-        } else if (roll < 0.95) {
-          // Staged within another write: revealed once it committed, or undone as it failed.
-          const fails = random() < 0.5;
-          let staged: ReturnType<MessageStore['stageWithin']> | undefined;
-          await database
-            .write(() => {
-              staged = messages.stageWithin(draft(pick(parties), pick(agents), pick(states)));
-              if (fails) throw new Error('The settlement failed');
-            })
-            .catch(() => undefined);
-          if (fails) staged?.undo();
-          else staged?.reveal();
-        } else if (roll < 0.98) {
-          // A restart: read back from its rows.
-          await messages.durable();
-          await restart();
-          messages = await store();
-        } else {
-          // A restore from a snapshot, which settles what waited there.
-          await messages.durable();
-          await database.close();
-          const writer = connect(path.join(profile, STORE_FILE));
-          try {
-            writer.exec('BEGIN');
-            settleRestored(writer, 1000);
-            writer.exec('COMMIT');
-          } finally {
-            writer.close();
-          }
-          await restart();
-          messages = await store();
+          expectIndexed(messages);
         }
-        expectIndexed(messages);
-      }
-      // It went through each kind of change, and kept enough to prune.
-      expect(messages.all().length).toBeGreaterThan(STORE_SETTLED_PER_PARTY);
-      expect(messages.active().length).toBeGreaterThan(0);
-    },
+        // It went through each kind of change, and kept enough to prune.
+        expect(messages.all().length).toBeGreaterThan(STORE_SETTLED_PER_PARTY);
+        expect(messages.active().length).toBeGreaterThan(0);
+      }),
   );
 });
 
