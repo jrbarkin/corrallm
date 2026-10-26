@@ -1,5 +1,6 @@
 import {
   chmodSync,
+  lstatSync,
   mkdirSync,
   readFileSync,
   readdirSync,
@@ -8,9 +9,10 @@ import {
   symlinkSync,
   writeFileSync,
 } from 'node:fs';
+import type * as Fs from 'node:fs';
 import path from 'node:path';
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   EXCLUDED,
@@ -21,6 +23,12 @@ import {
   verifyOwnedRoot,
 } from './owned';
 import { scratch } from './test-git';
+
+vi.mock('node:fs', async (importOriginal) => {
+  const fs = await importOriginal<typeof Fs>();
+  return { ...fs, lstatSync: vi.fn(fs.lstatSync) };
+});
+const realFs = await vi.importActual<typeof Fs>('node:fs');
 
 /*
  * The folder a repository's workspaces' checkouts go in (B9a Design §2, Location): made by the
@@ -43,6 +51,7 @@ beforeEach(() => {
   realRoot = checkout('app');
 });
 afterEach(() => {
+  vi.mocked(lstatSync).mockImplementation(realFs.lstatSync);
   remove();
 });
 
@@ -188,6 +197,86 @@ describe.skipIf(process.platform === 'win32')('the owned root', () => {
         verifyOwnedRoot(repository(OTHER_REPOSITORY));
       }),
     ).toBe('unowned');
+  });
+
+  it('refuses a replacement even when the filesystem reuses the owned root’s inode', () => {
+    const owned = repository();
+    ensureOwnedRoot(owned);
+    const previous = realFs.lstatSync(owned.ownedRoot, { bigint: true });
+    rmSync(owned.ownedRoot, { recursive: true });
+    mkdirSync(owned.ownedRoot, { mode: 0o700 });
+    writeFileSync(path.join(owned.ownedRoot, 'work.txt'), 'someone’s\n');
+    // Linux may do this naturally. Pin that identity reuse on every filesystem, independently
+    // of its allocator or timestamp granularity: a new creation with the same device/inode.
+    vi.mocked(lstatSync).mockImplementation((...args) => {
+      const found = realFs.lstatSync(...args);
+      return args[0] === owned.ownedRoot && typeof found?.ino === 'bigint'
+        ? Object.assign(found, {
+            dev: previous.dev,
+            ino: previous.ino,
+            birthtimeNs: previous.birthtimeNs + 1n,
+          })
+        : found;
+    });
+    expect(
+      code(() => {
+        verifyOwnedRoot(owned);
+      }),
+    ).toBe('unowned');
+    expect(
+      code(() => {
+        ensureOwnedRoot(owned);
+      }),
+    ).toBe('unowned');
+    expect(readdirSync(owned.ownedRoot)).toEqual(['work.txt']);
+  });
+
+  it('refuses ownership without a creation time, rather than trusting a reusable inode alone', () => {
+    const owned = repository();
+    ensureOwnedRoot(owned);
+    vi.mocked(lstatSync).mockImplementation((...args) => {
+      const found = realFs.lstatSync(...args);
+      return args[0] === owned.ownedRoot && typeof found?.ino === 'bigint'
+        ? Object.assign(found, { birthtimeNs: 0n })
+        : found;
+    });
+    expect(
+      code(() => {
+        verifyOwnedRoot(owned);
+      }),
+    ).toBe('unowned');
+    expect(
+      code(() => {
+        ensureOwnedRoot(owned);
+      }),
+    ).toBe('unowned');
+  });
+
+  it('refuses a nonempty root whose older marker proves only its inode', () => {
+    const owned = repository();
+    ensureOwnedRoot(owned);
+    const marker = path.join(realRoot, '.git', 'corrallm', markers()[0] ?? '');
+    writeFileSync(
+      marker,
+      `${JSON.stringify({
+        corrallm: 'owned-root',
+        repository: REPOSITORY,
+        root: owned.ownedRoot,
+        inode: realFs.lstatSync(owned.ownedRoot, { bigint: true }).ino.toString(),
+      })}\n`,
+    );
+    writeFileSync(path.join(owned.ownedRoot, 'work.txt'), 'kept\n');
+    expect(
+      code(() => {
+        verifyOwnedRoot(owned);
+      }),
+    ).toBe('unowned');
+    expect(
+      code(() => {
+        ensureOwnedRoot(owned);
+      }),
+    ).toBe('unowned');
+    expect(readFileSync(path.join(owned.ownedRoot, 'work.txt'), 'utf8')).toBe('kept\n');
   });
 
   it('refuses one others may write in', () => {

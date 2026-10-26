@@ -266,49 +266,59 @@ describe('wait', () => {
   });
 
   it('is the party’s: a token renewed by name mid-turn revokes the old at once, and the new one gets the reply', async () => {
-    // A turn far longer than it takes the old token's wait to end.
-    connector = new FakeConnector({ adapter: 'codex', pause: 1000 });
-    await keep();
-    await start();
-    const old = await token();
-    const { id } = await call<{ id: string }>(
-      'message',
-      { canvas: M1, to: 'builder', body: 'Take your time' },
-      old.caller,
-    );
-    // The old token waits for the reply meanwhile.
-    let settled = false;
-    const oldWait = current()
-      .call('wait', { timeoutSeconds: 30 }, old.caller)
-      .finally(() => {
-        settled = true;
+    const turn = Promise.withResolvers<undefined>();
+    connector = new FakeConnector({ adapter: 'codex', step: () => turn.promise });
+    try {
+      await keep();
+      await start();
+      const old = await token();
+      const { id } = await call<{ id: string }>(
+        'message',
+        { canvas: M1, to: 'builder', body: 'Take your time' },
+        old.caller,
+      );
+      // The old token waits for the reply meanwhile.
+      let settled = false;
+      const oldWait = current()
+        .call('wait', { timeoutSeconds: 30 }, old.caller)
+        .finally(() => {
+          settled = true;
+        });
+      await vi.waitFor(() => {
+        expect(connector.sessions[0]?.sent).toHaveLength(1);
       });
-    await vi.waitFor(() => {
-      expect(connector.sessions[0]?.sent).toHaveLength(1);
-    });
 
-    const renewed = await token();
-    expect(current().tokens.clientOf(old.token)).toBeUndefined();
-    // Its wait ends at once, refused, returning nothing and moving nothing, while the turn goes on.
-    await vi.waitFor(
-      () => {
-        expect(settled).toBe(true);
-      },
-      { timeout: 500 },
-    );
-    const { items } = await call<{ items: Message[] }>('messages', { canvas: M1 }, renewed.caller);
-    expect(items.filter((message) => message.replyTo === id)).toEqual([]);
-    const ended = await oldWait;
-    expect(ended.ok).toBe(false);
-    if (!ended.ok) {
-      expect(ended.error.code).toBe('refused');
-      expect(ended.error.sentence).toMatch(/replaced, revoked or expired/);
+      const renewed = await token();
+      expect(current().tokens.clientOf(old.token)).toBeUndefined();
+      // Its wait ends at once, refused, returning nothing and moving nothing, while the turn goes on.
+      await vi.waitFor(
+        () => {
+          expect(settled).toBe(true);
+        },
+        { timeout: 500 },
+      );
+      const { items } = await call<{ items: Message[] }>(
+        'messages',
+        { canvas: M1 },
+        renewed.caller,
+      );
+      expect(items.filter((message) => message.replyTo === id)).toEqual([]);
+      const ended = await oldWait;
+      expect(ended.ok).toBe(false);
+      if (!ended.ok) {
+        expect(ended.error.code).toBe('refused');
+        expect(ended.error.sentence).toMatch(/replaced, revoked or expired/);
+      }
+
+      // The old wait ended while the native turn was still held, regardless of startup time.
+      turn.resolve(undefined);
+      const waited = await call<Waited>('wait', { timeoutSeconds: 30 }, renewed.caller);
+      expect(
+        waited.messages.map(({ replyTo, kind, turn }) => [replyTo, kind, turn?.status]),
+      ).toEqual([[id, 'text', 'completed']]);
+    } finally {
+      turn.resolve(undefined);
     }
-
-    const waited = await call<Waited>('wait', { timeoutSeconds: 30 }, renewed.caller);
-    expect(waited.messages.map(({ replyTo, kind, turn }) => [replyTo, kind, turn?.status])).toEqual(
-      [[id, 'text', 'completed']],
-    );
   });
 
   it('ends refused as its token expires, though nothing came', async () => {

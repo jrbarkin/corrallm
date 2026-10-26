@@ -24,9 +24,9 @@ import path from 'node:path';
  * commit), the user's, and the last one private and marked as the repository's by the core, which
  * made it. The marker is kept in the repository's common Git directory, never in the checkout,
  * where a `git clean -fdx` would take it (Git spares the checkouts themselves): it names the
- * repository record, the root's path and the root folder's inode, so a folder put in its place
- * isn't taken for it. One already there that the core didn't mark is refused, never adopted, unless
- * it is empty. Nothing is written in it before it is verified. This is checkout isolation, not a
+ * repository record, the root's path, device, inode and creation time, so a reused inode doesn't
+ * make a replacement pass as the folder it marked. One already there that the core didn't mark
+ * is refused, never adopted, unless it is empty. Nothing is written in it before it is verified. This is checkout isolation, not a
  * sandbox: a process running as the user may still change it, so it is verified at every use.
  */
 
@@ -122,6 +122,11 @@ function walk({ id, realRoot, commonDir, ownedRoot }: OwnedRepository, make: boo
   if (process.platform !== 'win32' && (Number(found.mode) & 0o077) !== 0) {
     throw new OwnedRootError('unowned', `${ownedRoot} isn’t private.`);
   }
+  // An inode alone can identify a different directory after deletion/recreation (notably on
+  // Linux). Never fall back to it when the filesystem cannot report the creation generation.
+  if (found.birthtimeNs <= 0n) {
+    throw new OwnedRootError('unowned', `${ownedRoot} has no verifiable creation time.`);
+  }
   const markers = path.join(commonDir, MARKERS);
   const marker = path.join(
     markers,
@@ -131,7 +136,9 @@ function walk({ id, realRoot, commonDir, ownedRoot }: OwnedRepository, make: boo
     corrallm: 'owned-root',
     repository: id,
     root: ownedRoot,
+    device: found.dev.toString(),
     inode: found.ino.toString(),
+    birthtimeNs: found.birthtimeNs.toString(),
   })}\n`;
   const kept = markerText(markers, marker);
   if (kept === expected) return;
