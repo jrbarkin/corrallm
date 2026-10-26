@@ -1,4 +1,5 @@
 {
+  // Core engine and its test helpers live under src/main/core/engine, included below.
   // Main process + preload script (bundled by Vite into CommonJS for Electron's Node runtime).
   "extends": "./tsconfig.base.json",
   "compilerOptions": {

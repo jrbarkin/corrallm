@@ -6,7 +6,7 @@ import { windowText } from '../../shared/model/words';
 /*
  * Usage readings and rules as the renderer shows them (src/shared/usage.ts): which backends a
  * canvas's agents spend, and how readings and rules read. How a hold reads, and the backend one
- * agent spends, are the engine's (src/shared/model/words.ts, src/shared/engine/catalog.ts).
+ * agent spends, are the engine's (src/shared/model/words.ts, src/shared/model/catalog.ts).
  */
 
 /**

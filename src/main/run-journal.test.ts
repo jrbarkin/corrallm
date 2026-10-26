@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { newCanvasId } from '../shared/canvas';
 import type { CanvasId } from '../shared/canvas';
-import { decodeSubmissions } from '../shared/engine/delivery/submission-state';
+import { decodeSubmissions } from './core/engine/delivery/submission-state';
 import type { MessageStore } from './core/delivery/messages';
 import { MAX_RUN_BYTES } from '../shared/run';
 import type { RunCheckpoint } from '../shared/run';

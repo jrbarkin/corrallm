@@ -1,4 +1,4 @@
-import type { Answer } from '../../shared/engine/run/runner';
+import type { Answer } from '../../shared/model/run';
 import type { CanvasId } from '../../shared/canvas';
 import type { GuiApi } from '../../shared/gui-link';
 import type {

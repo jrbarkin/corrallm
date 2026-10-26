@@ -7,7 +7,7 @@ import { pathToFileURL } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { CanvasId } from '../../shared/canvas';
-import { MAX_LINK_LENGTH } from '../../shared/ipc';
+import { MAX_LINK_LENGTH } from '../../shared/api/limits';
 import { toFile } from '../../shared/model/file';
 import { journaledRun } from './store/test-store';
 import { createCore } from './core';
@@ -200,7 +200,10 @@ describe('window.get', () => {
       [canvas, null],
       [canvas, null, stale, 0],
     ])
-      expect(() => core.channels.call(7, 'run:save', args)).toThrow('no channel');
+      expect(await core.call('window.get', { checkpoint: args }, SEVEN)).toMatchObject({
+        ok: false,
+        error: { code: 'invalid' },
+      });
     expect(await core.call('canvas.get', { canvas }, SEVEN)).toEqual(after);
   });
   it('lists the live running state even when the journal clock does not move', async () => {

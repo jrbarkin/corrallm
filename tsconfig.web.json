@@ -1,4 +1,5 @@
 {
+  // Shared includes only model/view contracts; core engine helpers are outside this project.
   // Renderer (React, DOM). No Node types: the renderer is sandboxed and has no Node access.
   "extends": "./tsconfig.base.json",
   "compilerOptions": {

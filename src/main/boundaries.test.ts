@@ -6,7 +6,7 @@ import tseslint from 'typescript-eslint';
 import { describe, expect, it } from 'vitest';
 
 /*
- * The boundaries kept in src/main, and around shared code (the model and the engine): what ESLint
+ * The boundaries kept in src/main, and around shared model code and the core engine: what ESLint
  * lets each file import (eslint.config.ts), checked on fixtures, as the config resolved for each
  * path says; and, scanned, which files import Electron, which mint trusted paths, and what shared
  * code imports.
@@ -202,17 +202,11 @@ describe('ESLint’s boundaries in main', () => {
 describe('ESLint’s boundary around shared code', () => {
   const SHARED_ERROR = 'Shared code never imports the renderer or React Flow';
 
-  it('keeps the model and the engine, and their tests, from the renderer and React Flow', async () => {
+  it('keeps the model and its tests from the renderer and React Flow', async () => {
     for (const [file, from] of [
-      ['src/shared/engine/run/runner.ts', '@xyflow/react'],
-      ['src/shared/engine/run/runner.ts', '../../../renderer/graph/agents'],
-      ['src/shared/engine/run/asks.ts', '../../../renderer/catalog'],
-      ['src/shared/engine/delivery/mailbox.ts', '../../../renderer/agent/AgentView'],
-      ['src/shared/engine/transcript/receive.ts', '../../../renderer/ipc-error'],
       ['src/shared/model/words.ts', '../../renderer/graph/graph'],
       ['src/shared/model/file.ts', '@xyflow/system'],
-      ['src/shared/engine/run/runner.test.ts', '../../../renderer/graph/examples'],
-      ['src/shared/engine/test-engine.ts', '../../renderer/test-setup'],
+      ['src/shared/model/valid.test.ts', '../../renderer/test-setup'],
     ] as const) {
       const errors = await importErrors(file, `import type { A } from '${from}';\n`);
       expect(
@@ -222,32 +216,54 @@ describe('ESLint’s boundary around shared code', () => {
     }
   });
 
-  it('lets the engine read the model, the catalog it is given and the shared types', async () => {
+  it('lets the core engine read the model, the catalog it is given and the shared types', async () => {
     expect(
       await importErrors(
-        'src/shared/engine/run/runner.ts',
-        "import type { AgentNode } from '../../model/canvas';\n" +
-          "import type { EngineCatalog } from '../catalog';\n" +
-          "import { agentName } from '../../model/queries';\n" +
-          "import type { AgentAction } from '../../adapter';\n",
+        'src/main/core/engine/run/runner.ts',
+        "import type { AgentNode } from '../../../../shared/model/canvas';\n" +
+          "import type { EngineCatalog } from '../../../../shared/model/catalog';\n" +
+          "import { agentName } from '../../../../shared/model/queries';\n" +
+          "import type { AgentAction } from '../../../../shared/adapter';\n",
       ),
     ).toEqual([]);
   });
 
-  it('lets the renderer use the engine, React Flow, its own tables and the catalog it loaded', async () => {
+  it('lets the renderer use shared view queries, React Flow, its own tables and the catalog it loaded', async () => {
     expect(
       await importErrors(
         'src/renderer/graph/edits.ts',
         "import type { Node } from '@xyflow/react';\nimport { actionsOf } from './agents';\n" +
           "import { catalog } from '../catalog';\n" +
-          "import { Engine } from '../../shared/engine/engine';\n",
+          "import { heldAsks } from '../../shared/model/run-words';\n",
       ),
     ).toEqual([]);
   });
 
+  it('keeps engine execution and helpers out of the renderer and shared model', async () => {
+    for (const file of ['src/renderer/graph/edits.ts', 'src/shared/model/run-words.ts']) {
+      const errors = await importErrors(
+        file,
+        "import { Engine } from '../../main/core/engine/engine';\n",
+      );
+      expect(errors.filter((e) => e.includes('must not import main'))).toHaveLength(1);
+    }
+    for (const file of [
+      'src/main/core/engine/run/runner.ts',
+      'src/main/core/engine/test-backend.ts',
+      'src/main/core/engine/run/runner.test.ts',
+    ]) {
+      for (const from of ['../../../../renderer/catalog', '@xyflow/react']) {
+        const errors = await importErrors(file, `import type { A } from '${from}';\n`);
+        expect(
+          errors.filter((e) => e.includes('Core code never imports the renderer')),
+        ).toHaveLength(1);
+      }
+    }
+  });
+
   it('imports nothing of the renderer or React Flow anywhere in shared code', () => {
     const files = filesIn('src/shared');
-    expect(files).toContain('src/shared/engine/run/runner.ts');
+    expect(files).toContain('src/shared/model/run-words.ts');
     for (const file of files) {
       expect(
         importsOf(file).filter((from) => {

@@ -2,7 +2,7 @@
 
 [AGENTS.md](../../AGENTS.md) is the canonical instructions file. Read the area's doc before changing it; behaviour and documentation change together.
 
-Main owns native windows and dialogs. The Electron-free core owns profile stores, canvas documents, delivery and sessions; `corrallm serve` hosts the same core under Node. The preload gives each trusted window fixed typed calls over its own port. The renderer mirrors topics and sends gestures as operations. The shared model and engine run on either side of that boundary.
+Main owns native windows and dialogs. The Electron-free core owns profile stores, canvas documents, delivery and sessions; `corrallm serve` hosts the same core under Node. The preload gives each trusted window fixed typed calls over its own port. The renderer mirrors topics and sends gestures as operations. The engine runs only in the core; shared model types and pure view queries cross that boundary.
 
 | Area                                                | Document                            |
 | --------------------------------------------------- | ----------------------------------- |
@@ -21,7 +21,7 @@ Main owns native windows and dialogs. The Electron-free core owns profile stores
 | Readings, gauges and spending rules                 | [Usage](usage.md)                   |
 | Canvas, agent, queue, terminal and search views     | [Renderer](renderer.md)             |
 | Queue execution, session stores and needs           | [Engine](engine.md)                 |
-| Shared contracts, preload and transitional channels | [IPC](ipc.md)                       |
+| Shared contracts, preload and window ports          | [IPC](ipc.md)                       |
 | Trust, identity, URLs, CSP and permissions          | [Security](security.md)             |
 | Native dependencies and self-tests                  | [Native modules](native-modules.md) |
 | Commands, configuration, builds and pins            | [Toolchain](toolchain.md)           |

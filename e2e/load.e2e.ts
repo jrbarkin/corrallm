@@ -23,8 +23,7 @@ import { keepCanvases } from '../src/main/core/store/test-store';
  * anew, on a thread of its own (and at least every 30 s under load: the burst outlasts that). On a
  * quiet drive: while another program writes heavily to it, a commit's own writes into the log,
  * which run on the loop, can stall it past 100 ms (store.ts).
- * Until B11 the app's core process serves none of `message`, `wait` or `run.pause` (UNHOSTED; nor
- * MCP), so the core runs here as `corrallm serve` runs it, under plain Node (the CLI bundle the
+ * The core runs here as `corrallm serve` runs it, under plain Node (the CLI bundle the
  * global setup builds), its loop measured from inside (loop-delay.mjs), while outside orchestrators
  * (MCP clients in this test's process) send its agents messages, wait for their replies, and pause
  * and release an agent; and, part way through, another sends 200 doc ops (Core Server §7.4, B9

@@ -5,14 +5,13 @@ import path from 'node:path';
 
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 
-import type { ConnectionId } from '../../shared/adapter';
 import { MAX_MESSAGE_BYTES } from '../../shared/api/limits';
-import { decodeSubmissions } from '../../shared/engine/delivery/submission-state';
-import { RETRY_CHECK_MS } from '../../shared/engine/engine';
-import { holdGeneration } from '../../shared/engine/needs';
+import { decodeSubmissions } from './engine/delivery/submission-state';
+import { RETRY_CHECK_MS } from './engine/engine';
+import { holdGeneration } from '../../shared/model/needs-selectors';
 import type { Message } from '../../shared/model/messages';
 import type { RunCheckpoint } from '../../shared/run';
-import type { SessionEvent, SessionMode, UserMessage } from '../../shared/session';
+import type { SessionMode, UserMessage } from '../../shared/session';
 import type { Connector, SessionHost } from '../sessions/connector';
 import { SessionManager, STALLED_INTERRUPT_MS } from '../sessions/manager';
 import { createCore } from './core';
@@ -259,6 +258,13 @@ async function heldResend(origin: 'party' | 'manual' | 'run', why: string): Prom
 it('offers the user Interrupt and resend, and refuses a token', async () => {
   await send();
   await stall();
+  const snapshot = await core.topics.read(`session:${CANVAS}:a`, CALLERS.you);
+  expect(snapshot).toMatchObject({ ok: true });
+  if (!snapshot.ok) throw new Error('No session topic');
+  const state = snapshot.value as { entries: Record<string, unknown> };
+  expect(Object.values(state.entries)).toContainEqual(
+    expect.objectContaining({ kind: 'notice', level: 'warning' }),
+  );
   expect(await core.call('needs', { canvas: CANVAS }, CALLERS.you)).toMatchObject({
     ok: true,
     value: {
@@ -465,12 +471,8 @@ it('retries a run task as its own new attempt, whose reply advances the queue', 
 
 it('reserves a run’s retry once, in the core alone: no retry-task event reaches its engine or a window', async () => {
   const engine = await core.engines.open(CANVAS);
-  // The window shows the canvas the core runs: it hears the canvas's session events.
+  // The window views the canvas the core runs through topics.
   await core.call('window.get', {}, asHuman(7));
-  const events: SessionEvent[] = [];
-  const off = core.channels.listen(7, (name, args) => {
-    if (name === 'session:event') events.push((args as [string, ConnectionId, SessionEvent])[2]);
-  });
   const retried = vi.spyOn(core.engines, 'retryAttempt');
   try {
     engine.run.start();
@@ -497,9 +499,9 @@ it('reserves a run’s retry once, in the core alone: no retry-task event reache
     await new Promise((resolve) => setTimeout(resolve, 30));
     expect(sent).toHaveLength(2);
     expect(engine.run.snapshot().agents.a?.attempts?.task).toHaveLength(2);
-    expect(events.filter((event) => event.type === 'retry-task')).toEqual([]);
+    expect(core).not.toHaveProperty('channels');
   } finally {
-    off();
+    retried.mockRestore();
   }
 });
 
@@ -676,7 +678,7 @@ it('keeps a session going when its window leaves after manual resend', async () 
   await cancelWindowTurn();
   const close = vi.spyOn(SessionManager.prototype, 'closeCanvas');
   const owner = core.engines.canvas(CANVAS);
-  core.channels.gone(7, true);
+  core.windowGone(7, true);
   await core.flush();
   expect(close).not.toHaveBeenCalled();
   expect(core.engines.canvas(CANVAS)).toBe(owner);
@@ -693,7 +695,7 @@ it('keeps a core queue retry going after its window leaves', async () => {
     expect(sent).toHaveLength(1);
   });
   await stall();
-  core.channels.gone(7, true);
+  core.windowGone(7, true);
   await cancelWindowTurn();
   expect(core.engines.canvas(CANVAS)).toBe(owner);
   end('completed');

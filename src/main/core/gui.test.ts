@@ -1,3 +1,5 @@
+import { TerminalEvents } from './terminal-events';
+import { CANVAS, OTHER_CANVAS } from './test-registry';
 import { MessageChannel } from 'node:worker_threads';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -78,18 +80,17 @@ describe('a window’s port', () => {
     expect(callers.map((caller) => partyOf(caller))).toEqual(['you', 'you']);
   });
 
-  it('serves only GUI_OPS: the operations you may call that the app hosts', () => {
+  it('serves only GUI_OPS: every operation whose audience includes you', () => {
     expect(GUI_OPS).toContain('app.info');
-    // Not yours (an outside token's long poll), and yours but not hosted yet (B11).
+    // Not yours: an outside token's long poll.
     expect(GUI_OPS).not.toContain('wait');
-    expect(GUI_OPS).not.toContain('messages');
+    for (const name of ['agents', 'status', 'needs', 'messages']) expect(GUI_OPS).toContain(name);
     // Your composer's message is hosted (B11 §16.6).
     expect(GUI_OPS).toContain('message');
   });
 
   it.each([
     ['an operation that isn’t yours', 'wait'],
-    ['an operation the app doesn’t host yet', 'messages'],
     ['no operation at all', 'nonsense'],
     ['a name that isn’t text', 42],
   ])('refuses %s before it is dispatched', async (_label, op) => {
@@ -111,20 +112,59 @@ describe('a window’s port', () => {
     expect(core.call).not.toHaveBeenCalled();
   });
 
-  it('serves a hand-written channel for the window its port belongs to', async () => {
-    const channels = {
-      call: vi.fn(() => null),
-      listen: vi.fn(() => () => undefined),
-      gone: vi.fn(),
-    };
-    const core = { ...fakeCore(), channels };
-    const window = connect(new WindowPorts(core), 7);
-
-    await expect(window.request('channel', 'session:close', ['a'])).resolves.toEqual({
-      ok: true,
-      value: null,
+  it('keeps the fixed terminal stream scoped to the shown canvas across port replacement', async () => {
+    const showing = new Map([
+      [7, CANVAS],
+      [8, OTHER_CANVAS],
+    ]);
+    const terminals = new TerminalEvents({
+      showing: (canvas) => [...showing].filter(([, id]) => id === canvas).map(([window]) => window),
     });
-    expect(channels.call).toHaveBeenCalledWith(7, 'session:close', ['a']);
+    const served = new WindowPorts({ ...fakeCore(), terminals });
+    const first = connect(served, 7),
+      other = connect(served, 8);
+    const heard = vi.fn(),
+      elsewhere = vi.fn();
+    first.on('event', heard);
+    other.on('event', elsewhere);
+    terminals.emit(CANVAS, 'a', { type: 'output', data: 'first' });
+    await vi.waitFor(() => {
+      expect(heard).toHaveBeenCalledExactlyOnceWith('terminal', [
+        'a',
+        { type: 'output', data: 'first' },
+      ]);
+    });
+    expect(elsewhere).not.toHaveBeenCalled();
+    const next = connect(served, 7),
+      fresh = vi.fn();
+    next.on('event', fresh);
+    terminals.emit(CANVAS, 'a', { type: 'output', data: 'after reload' });
+    await vi.waitFor(() => {
+      expect(fresh).toHaveBeenCalledExactlyOnceWith('terminal', [
+        'a',
+        { type: 'output', data: 'after reload' },
+      ]);
+    });
+    expect(heard).toHaveBeenCalledOnce();
+    showing.set(8, CANVAS);
+    served.gone(7);
+    terminals.emit(CANVAS, 'a', { type: 'exit', code: 0 });
+    await vi.waitFor(() => {
+      expect(elsewhere).toHaveBeenCalledExactlyOnceWith('terminal', [
+        'a',
+        { type: 'exit', code: 0 },
+      ]);
+    });
+    expect(fresh).toHaveBeenCalledOnce();
+  });
+
+  it('has no hand-written request dispatcher left on a window’s port', async () => {
+    const core = fakeCore();
+    const window = connect(new WindowPorts(core), 7);
+    expect(await window.request('channel' as 'call', 'session:close', ['a'])).toEqual({
+      ok: false,
+      error: { message: 'No handler for “channel”.' },
+    });
     expect(core.call).not.toHaveBeenCalled();
   });
 

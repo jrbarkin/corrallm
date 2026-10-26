@@ -68,7 +68,7 @@ export function taskState(
 import type { CanvasNode } from './canvas';
 import { findItem, isBlank } from './queue';
 import { taskLabel } from './words';
-import type { EngineCatalog } from '../engine/catalog';
+import type { EngineCatalog } from './catalog';
 import type { SessionSummary } from './views';
 
 /** The most immediate work first: a live session, then its queue's state. Shared by dock and card. */

@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { MAX_MESSAGE_BYTES, STORE_SETTLED_PER_PARTY } from '../../../shared/api/limits';
 import type { CanvasId } from '../../../shared/canvas';
-import { decodeSubmissions } from '../../../shared/engine/delivery/submission-state';
+import { decodeSubmissions } from '../engine/delivery/submission-state';
 import type { SubmittedMessage } from '../../../shared/model/queue';
 import { CanvasMemory } from '../../memory';
 import type { Store } from '../store/store';

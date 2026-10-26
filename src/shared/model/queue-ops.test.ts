@@ -14,7 +14,7 @@ import type {
 } from './queue';
 import { add, move, remove, update } from './queue-ops';
 import { fromFile, toFile } from './file';
-import { TEST_CATALOG } from '../engine/test-engine';
+import { TEST_CATALOG } from '../test-model';
 
 const ID = '7d0c2b9e-4f1a-4c3d-9e8b-2a1f0e6d5c4b' as CanvasId;
 function doc(queue: QueueItem[]): CanvasDocument {

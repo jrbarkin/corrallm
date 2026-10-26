@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
-import { MAX_LINK_LENGTH } from '../../shared/ipc';
+import { MAX_LINK_LENGTH } from '../../shared/api/limits';
 import {
   MAX_BATCH_OPS,
   MAX_CREATED_AGENTS,

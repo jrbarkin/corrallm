@@ -26,6 +26,8 @@ Run `pnpm audit` for the complete locked tree, including bundled JavaScript in d
 
 Appdmg 0.6.6 still requires vulnerable image-size 0.x. Its scoped override selects 2.0.4, paired with `patches/appdmg@0.6.6.patch` adapting its background-dimension callback to `imageSizeFromFile`'s Promise API. Remove both once appdmg adopts a fixed image-size itself. `src/main/dmg-background.test.ts` exercises that installed reader with a valid background and a malformed ICNS, isolating the parser in a bounded worker and mocking every native packaging dependency. No dependency lifecycle approval or release-age exclusion was added.
 
+Local dependency content stores (`.pnpm-store/`) are generated caches and are ignored alongside node_modules. Scratch work stays under node_modules/.cache/probes.
+
 ## Commands
 
 Requires Node 24.22.1 (`.nvmrc`) and pnpm 12.11.2 (`packageManager`).

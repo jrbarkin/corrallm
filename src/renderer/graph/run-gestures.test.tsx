@@ -82,6 +82,9 @@ it.each(['a', 'g'] as const)(
 it('answering the current run hold is one typed reply', async () => {
   const { canvas } = await setup();
   await events.click(screen.getByRole('button', { name: 'Run' }));
+  act(() => {
+    canvas.run({ running: true, agents: { a: { current: 'ok', status: 'asking', outcomes: {} } } });
+  });
   const need = canvas.core
     .state(`needs:${canvas.document.id}`)
     ?.state.items.find((item) => item.id.startsWith('hold/'));

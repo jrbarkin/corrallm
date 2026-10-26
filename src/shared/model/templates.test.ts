@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { MADE_UP } from '../test-made-up';
 import { adapterIn } from '../adapter';
-import { TEST_CATALOG } from '../engine/test-engine';
+import { TEST_CATALOG } from '../test-model';
 import type { CanvasDocument, AgentNode } from './canvas';
 import {
   fillTemplate,

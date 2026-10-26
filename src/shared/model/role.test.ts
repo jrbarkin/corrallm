@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { MAX_ROLE_LENGTH } from '../session';
 import type { CanvasId } from '../canvas';
 import type { AgentNode, CanvasDocument } from './canvas';
-import { TEST_CATALOG } from '../engine/test-engine';
+import { TEST_CATALOG } from '../test-model';
 import { fromFile, toFile } from './file';
 import { setConnection, setRole, setType } from './agent-ops';
 import { insert } from './insert';

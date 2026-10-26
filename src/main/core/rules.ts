@@ -5,7 +5,7 @@ import type { ArgsOf } from '../../shared/api/registry';
 import { RULES } from '../../shared/api/rules';
 import type { OpName, Party, Rule, SURFACE } from '../../shared/api/surface';
 import type { CanvasId } from '../../shared/canvas';
-import type { Run } from '../../shared/engine/run/runner';
+import type { Run } from './engine/run/runner';
 import type { PartyId } from '../../shared/model/messages';
 import type { AgentNode, CanvasDocument } from '../../shared/model/canvas';
 import type { NeedsItem } from '../../shared/model/needs';

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { EXAMPLES } from '../examples';
-import { TEST_CATALOG } from '../engine/test-engine';
+import { TEST_CATALOG } from '../test-model';
 import type { QueueItem } from './queue';
 import { fromFile } from './file';
 import { workspaceOwners } from './workspaces';

@@ -11,7 +11,7 @@ import {
   translateActions,
   equivalentAction,
 } from './agent-ops';
-import { TEST_CATALOG } from '../engine/test-engine';
+import { TEST_CATALOG } from '../test-model';
 import { MADE_UP } from '../test-made-up';
 
 const context = { catalog: TEST_CATALOG, defaultAdapter: 'claude-code' };

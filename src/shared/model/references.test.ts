@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { CanvasId } from '../canvas';
-import { TEST_CATALOG } from '../engine/test-engine';
+import { TEST_CATALOG } from '../test-model';
 import type { AgentNode, CanvasDocument } from './canvas';
 import { fromFile, toFile } from './file';
 import type { QueueItem, QueueRepeat, RepeatedItem } from './queue';

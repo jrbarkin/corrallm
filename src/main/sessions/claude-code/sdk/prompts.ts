@@ -24,7 +24,7 @@ import { displayPath, property, proposedDetail, text, toolSummary } from './tool
  * (allow once, always, or deny, as the CLI offers them; denied with what to do instead, Claude goes
  * on with that), the questions of AskUserQuestion, and
  * plan mode's plan to approve (ExitPlanMode). Each becomes a prompt event; the renderer's answer
- * (session:answer) becomes the CLI's permission result. A prompt the CLI stops waiting for (the
+ * (the core reply operation) becomes the CLI's permission result. A prompt the CLI stops waiting for (the
  * turn was interrupted) is withdrawn. MCP servers' requests (elicitations, through onElicitation)
  * are prompts too: a form to fill in (checked against the form before it goes back), or a link
  * to open.

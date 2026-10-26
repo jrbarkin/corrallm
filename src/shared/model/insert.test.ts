@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { EXAMPLES } from '../examples';
-import { TEST_CATALOG } from '../engine/test-engine';
+import { TEST_CATALOG } from '../test-model';
 import type { CanvasId } from '../canvas';
 import type { AgentData, AgentNode, CanvasDocument, CanvasNode } from './canvas';
 import { fromFile } from './file';

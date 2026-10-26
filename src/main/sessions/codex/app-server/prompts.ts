@@ -19,7 +19,7 @@ import { commandLine, unwrapShell } from './translate';
  * What Codex asks the user, through its app server's requests: to run a command (or reach a host
  * on the network), to apply a patch, for more permissions, its questions (request_user_input), and
  * an MCP server's elicitations. Each becomes a prompt event; the renderer's answer
- * (session:answer) becomes the request's result, as Codex's own TUI answers it
+ * (the core reply operation) becomes the request's result, as Codex's own TUI answers it
  * (codex-rs/tui/src/bottom_pane/approval_overlay.rs, rust-v0.160.1): Yes is `accept`; "always" is
  * the decision it offers to keep (for this session, or an exec policy rule for commands that start
  * alike); No is `cancel` ("No, and tell Codex what to do differently"), which stops the turn as

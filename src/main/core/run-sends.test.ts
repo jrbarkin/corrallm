@@ -454,7 +454,7 @@ describe('the run’s own sends', () => {
       task: { agent: 'lead', item: 'handoff', attempt: first?.id },
     });
     // The worker's turn is interrupted and resent: its owner's attempt is what is retried.
-    await core.engines.resendAfter(CANVAS, 'worker', [id], 'codex.app-server');
+    await core.engines.resendAfter(CANVAS, 'worker', [id]);
     end([id], 'cancelled');
     await vi.waitFor(() => {
       expect(sent).toHaveLength(2);

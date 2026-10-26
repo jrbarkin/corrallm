@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { newCanvasId } from '../../shared/canvas';
-import type { AppApi } from '../../shared/ipc';
+import type { AppApi } from '../../shared/gui-link';
 import { complete, completing, findProjectFiles, isCommand, matchCommands } from './completion';
 
 afterEach(() => {

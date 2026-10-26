@@ -4,7 +4,6 @@ import type { OpResult } from '../shared/api/errors';
 import type { TopicUpdate } from '../shared/api/topics';
 import { CORE_PORT } from '../shared/gui-link';
 import type { CoreGuiSide, GuiSide, GuiEvent, GuiEventArgs } from '../shared/gui-link';
-import type { CoreChannel, IpcArgs, IpcResult, IpcChannel } from '../shared/ipc';
 import { CoreLink } from '../shared/link';
 
 /*
@@ -26,7 +25,6 @@ export interface CoreConnection {
   onDraftsFlush(listener: () => Promise<void>): () => void;
   /** Calls a GUI operation as you: its whole result, with transport failures unavailable. */
   call(op: string, args: unknown): Promise<OpResult<unknown>>;
-  channel<C extends CoreChannel>(name: C, args: IpcArgs<C>): Promise<IpcResult<C>>;
   listen<E extends GuiEvent>(name: E, listener: (...args: GuiEventArgs<E>) => void): () => void;
 }
 
@@ -121,7 +119,7 @@ export function connectCore(): CoreConnection {
     refused = undefined;
     for (const pending of waiting) pending.resolve(next);
   });
-  ipcRenderer.invoke('core:connect' satisfies IpcChannel).catch((error: unknown) => {
+  ipcRenderer.invoke('core:connect').catch((error: unknown) => {
     refused = error instanceof Error ? error : new Error(String(error));
     for (const pending of waiting) pending.reject(refused);
   });
@@ -168,11 +166,6 @@ export function connectCore(): CoreConnection {
       return () => {
         flushes.delete(listener);
       };
-    },
-    channel: async (name, args) => {
-      const answer = await (await ready()).link.request('channel', name, args);
-      if (!answer.ok) throw new Error(answer.error.message);
-      return answer.value as IpcResult<typeof name>;
     },
     listen: (name, listener) => {
       let listening = listeners.get(name);

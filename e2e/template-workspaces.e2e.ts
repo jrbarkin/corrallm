@@ -75,14 +75,16 @@ for (const [name, artifact] of cases) {
       if (name !== 'Head to head')
         expect(doc.nodes.find((node) => node.id === owners[0]?.node)?.type).toBe('frame');
       for (const agent of doc.nodes.filter((node) => node.type === 'agent')) {
-        // The core owns the run and the session: an agent's window opens it with session.open,
-        // from the document's own settings, as viewing it does.
+        // The fixture requests launch with session.open, using the document's own settings.
+        // The agent window's viewing lease uses the same core startup path.
         const availability = await page.evaluate(
-          (id) => window.api.sessionAvailability(id),
-          agent.id,
+          ({ canvas, agent }) => window.api.sessionOpen({ canvas, agent }),
+          { canvas: doc.id, agent: agent.id },
         );
-        if (!availability.ready) {
-          expect(availability.sentence, JSON.stringify(availability)).toMatch(/worktree|setup/i);
+        if (!availability.ok) {
+          expect(availability.error.sentence, JSON.stringify(availability)).toMatch(
+            /worktree|setup/i,
+          );
           await expect(page.getByRole('button', { name: 'Needs you', exact: true })).toBeEnabled({
             timeout: 15000,
           });

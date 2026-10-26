@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { newCanvasId } from '../shared/canvas';
 import type { CanvasId } from '../shared/canvas';
-import { MAX_CANVAS_BYTES } from '../shared/ipc';
+import { MAX_CANVAS_BYTES } from '../shared/canvas';
 import { toFile } from '../shared/model/file';
 import { CanvasFiles } from './canvas';
 import { Documents } from './core/canvas/documents';

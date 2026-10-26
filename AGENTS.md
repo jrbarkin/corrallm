@@ -10,28 +10,28 @@ These are the canonical instructions for every agent. Before changing an area, r
 
 Start with [the overview](docs/architecture/overview.md). Paths include their tests.
 
-| Code area                                                                       | Read                                                                                       |
-| ------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
-| `src/main/core/`, main services and `src/main/host/`                            | [Core](docs/architecture/core.md)                                                          |
-| `src/main/core/store/`                                                          | [Store](docs/architecture/store.md)                                                        |
-| `src/main/core/workspaces/`, `src/main/git.ts`                                  | [Workspaces](docs/architecture/workspaces.md), [Security](docs/architecture/security.md)   |
-| `src/shared/api/`, core operations/dispatch/rules/topics, `src/main/api/`       | [Registry](docs/architecture/registry.md)                                                  |
-| `src/main/core/delivery/`                                                       | [Messages](docs/architecture/messages.md)                                                  |
-| `src/main/cli/`                                                                 | [Headless](docs/architecture/headless.md)                                                  |
-| `src/main/core/canvas/`, `src/shared/model/`, canvas memory, projects and files | [Canvas](docs/architecture/canvas.md), [Core](docs/architecture/core.md)                   |
-| `src/main/run-journal.ts`, `src/renderer/run/`, restore and switching           | [Run recovery](docs/architecture/run-recovery.md)                                          |
-| Adapter descriptors and catalog consumers                                       | [Catalog](docs/architecture/catalog.md)                                                    |
-| `src/main/sessions/`, agent settings                                            | [Sessions](docs/architecture/sessions.md)                                                  |
-| `src/main/sessions/claude-code/`                                                | [Claude Code](docs/architecture/claude-code.md), [Sessions](docs/architecture/sessions.md) |
-| `src/main/sessions/codex/`                                                      | [Codex](docs/architecture/codex.md), [Sessions](docs/architecture/sessions.md)             |
-| Usage in main, renderer and shared                                              | [Usage](docs/architecture/usage.md)                                                        |
-| `src/renderer/` (graph, agent, queues, terminal, search)                        | [Renderer](docs/architecture/renderer.md)                                                  |
-| `src/shared/engine/`                                                            | [Engine](docs/architecture/engine.md)                                                      |
-| `src/preload/`, `src/shared/ipc.ts`, `src/main/ipc.ts`, core channels and links | [IPC](docs/architecture/ipc.md), [Security](docs/architecture/security.md)                 |
-| Security, CSP, URLs, trust, tokens, paths and permissions                       | [Security](docs/architecture/security.md)                                                  |
-| Native dependencies, packaging and self-tests                                   | [Native modules](docs/architecture/native-modules.md)                                      |
-| Configs, dependencies, `build/`, `scripts/`                                     | [Toolchain](docs/architecture/toolchain.md)                                                |
-| Test infrastructure, fakes, fixtures and `e2e/`                                 | [Testing](docs/architecture/testing.md), plus the area's doc                               |
+| Code area                                                                            | Read                                                                                       |
+| ------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------ |
+| `src/main/core/`, main services and `src/main/host/`                                 | [Core](docs/architecture/core.md)                                                          |
+| `src/main/core/store/`                                                               | [Store](docs/architecture/store.md)                                                        |
+| `src/main/core/workspaces/`, `src/main/git.ts`                                       | [Workspaces](docs/architecture/workspaces.md), [Security](docs/architecture/security.md)   |
+| `src/shared/api/`, core operations/dispatch/rules/topics, `src/main/api/`            | [Registry](docs/architecture/registry.md)                                                  |
+| `src/main/core/delivery/`                                                            | [Messages](docs/architecture/messages.md)                                                  |
+| `src/main/cli/`                                                                      | [Headless](docs/architecture/headless.md)                                                  |
+| `src/main/core/canvas/`, `src/shared/model/`, canvas memory, projects and files      | [Canvas](docs/architecture/canvas.md), [Core](docs/architecture/core.md)                   |
+| `src/main/run-journal.ts`, `src/renderer/run/`, restore and switching                | [Run recovery](docs/architecture/run-recovery.md)                                          |
+| Adapter descriptors and catalog consumers                                            | [Catalog](docs/architecture/catalog.md)                                                    |
+| `src/main/sessions/`, agent settings                                                 | [Sessions](docs/architecture/sessions.md)                                                  |
+| `src/main/sessions/claude-code/`                                                     | [Claude Code](docs/architecture/claude-code.md), [Sessions](docs/architecture/sessions.md) |
+| `src/main/sessions/codex/`                                                           | [Codex](docs/architecture/codex.md), [Sessions](docs/architecture/sessions.md)             |
+| Usage in main, renderer and shared                                                   | [Usage](docs/architecture/usage.md)                                                        |
+| `src/renderer/` (graph, agent, queues, terminal, search)                             | [Renderer](docs/architecture/renderer.md)                                                  |
+| `src/main/core/engine/`                                                              | [Engine](docs/architecture/engine.md)                                                      |
+| `src/preload/`, `src/shared/gui-link.ts`, `src/main/ipc.ts`, core channels and links | [IPC](docs/architecture/ipc.md), [Security](docs/architecture/security.md)                 |
+| Security, CSP, URLs, trust, tokens, paths and permissions                            | [Security](docs/architecture/security.md)                                                  |
+| Native dependencies, packaging and self-tests                                        | [Native modules](docs/architecture/native-modules.md)                                      |
+| Configs, dependencies, `build/`, `scripts/`                                          | [Toolchain](docs/architecture/toolchain.md)                                                |
+| Test infrastructure, fakes, fixtures and `e2e/`                                      | [Testing](docs/architecture/testing.md), plus the area's doc                               |
 
 ## Commands and done gate
 
@@ -58,9 +58,9 @@ See [toolchain](docs/architecture/toolchain.md) for executable overrides, build 
 
 - Test-driven by default. For a bug, first write a test that reproduces it and fails, then fix it, then confirm the test passes. For new behaviour, write the tests with (or before) the code.
 - Assert behaviour callers rely on, not incidental details. Prefer unit tests; e2e is for real app interactions, CSP and packaging.
-- Tests never run the real CLIs. `e2e/launch.ts` defaults `CORRALLM_AGENT_PATHS` to `{}`; override only with a JSON map of fakes. Session/core tests use `src/main/sessions/fake.ts`; engine/renderer tests use `src/shared/engine/test-backend.ts`. Connector tests drive fake CLIs against sanitized recorded fixtures. Adapter docs describe their fakes and recordings; keep config/state in throwaway folders, never the user's profile.
+- Tests never run the real CLIs. `e2e/launch.ts` defaults `CORRALLM_AGENT_PATHS` to `{}`; override only with a JSON map of fakes. Session/core tests use `src/main/sessions/fake.ts`; engine tests use `src/main/core/engine/test-backend.ts`; renderer tests use fake core/topic fixtures from `src/renderer/test-api.ts`. Connector tests drive fake CLIs against sanitized recorded fixtures. Adapter docs describe their fakes and recordings; keep config/state in throwaway folders, never the user's profile.
 - `src/shared/test-catalog.json` is never edited by hand. After descriptor changes regenerate it with `pnpm exec vitest run --project main -u src/main/sessions/adapters.test.ts`. Test catalog consumers with `src/shared/test-made-up.ts` too; shared tests never import the renderer.
-- Every test file that makes a run uses `liveRun` and `afterEach(expectRestorable)` from `src/shared/engine/run/test-restore.ts`. A run's checkpoint must restore whatever it holds.
+- Every test file that makes a run uses `liveRun` and `afterEach(expectRestorable)` from `src/main/core/engine/run/test-restore.ts`. A run's checkpoint must restore whatever it holds.
 - jsdom cannot draw xterm.js. Mock `src/renderer/terminal/screen.ts` with `fakeScreens` from `src/renderer/terminal/test-screen.ts` (also `fakeTerminals` for main's terminals).
 - Unit tests must never import native modules or the real `electron` module: `vi.mock('electron', ...)` (importing it downloads the Electron binary).
 - Gesture tests use `expectOneOp` from `src/renderer/test-api.ts`; never substitute renderer-local document edits for operations.
@@ -103,8 +103,8 @@ Read [security mechanisms](docs/architecture/security.md) before touching these 
 
 These are checklists; read the linked recipe before implementing.
 
-- **Operation:** [registry recipe](docs/architecture/registry.md). Add audience/kind/scope/rules/self/drains to SURFACE; define strict bounded branded input and object output; implement through core services (`ctx.commit` for documents); add deviation/UNHOSTED if needed, RULES/checks, REAL_FIXTURES and reach fixtures for every ID kind. Add the gesture or NO_GESTURE reason. Run `pnpm api:surface`, inspect its diff, and keep surface/transport/reach/gesture tests green.
-- **IPC channel:** [IPC recipe](docs/architecture/ipc.md). Prefer an operation. Transitional channels declare IpcContract, InvokeApi and API_CHANNELS, validate unknown arguments in core handlers, expose one fixed preload method, then add core/preload tests and UI stubs. Events declare IpcEvents/EventApi/API_EVENTS and a removable listener; send only to the canvas's windows.
+- **Operation:** [registry recipe](docs/architecture/registry.md). Add audience/kind/scope/rules/self/drains to SURFACE; define strict bounded branded input and object output; implement through core services (`ctx.commit` for documents); add a deviation if needed, RULES/checks, REAL_FIXTURES and reach fixtures for every ID kind. Add the gesture or NO_GESTURE reason. Run `pnpm api:surface`, inspect its diff, and keep surface/transport/reach/gesture tests green.
+- **Window protocol:** [IPC recipe](docs/architecture/ipc.md). Calls are registered operations with fixed generated preload methods. Runtime state uses topics. Keep core:connect, terminal screen events, draft flush and host lifecycle protocols typed; expose no generic channel function. Test the core port and preload contracts.
 - **Connection:** [sessions recipe](docs/architecture/sessions.md). Implement a Connector in its adapter using the registry-supplied executable, declare its descriptor and register it by connection ID; pin capabilities in the adapter contract and drive a fake CLI in tests. Extend shared session types, the engine receiver and tests only if the protocol grows. Keep argv, native-ID validation and other CLI-specific rules inside the adapter.
 
 The docs guard (`src/main/docs.test.ts`) checks concrete backticked repository paths, this file's 20,000-byte ceiling and the exact CLAUDE import. Update references when files move.

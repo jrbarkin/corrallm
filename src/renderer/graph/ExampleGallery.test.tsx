@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 
-import type { AppApi } from '../../shared/ipc';
+import type { AppApi } from '../../shared/gui-link';
 import { ExampleGallery } from './ExampleGallery';
 
 afterEach(() => {

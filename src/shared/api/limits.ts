@@ -139,3 +139,6 @@ export const MAX_TERMINAL_ASKS = 8;
  * to its bounds first (marked `cut`), so the summary fits its begin frame (B11 §16.3a).
  */
 export const MAX_ASKING_BYTES = 256 * 1024;
+
+/** The longest link the renderer may ask to open, in characters. */
+export const MAX_LINK_LENGTH = 4096;

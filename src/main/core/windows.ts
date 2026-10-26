@@ -12,7 +12,7 @@ export interface WindowsDeps {
 }
 
 /**
- * Which canvas each window shows. The core keeps it; channel handlers look the canvas up here before
+ * Which canvas each window shows. The core keeps it; operations resolve their window canvas here before
  * they call a service, which knows canvases by their ids and nothing of windows. A window only views
  * a canvas the core runs (B11 Design §8): one that reloads, crashes or closes, or shows another
  * canvas, ends nothing of the canvas it showed, which runs on in the core. A window that reloads or
@@ -97,7 +97,7 @@ export class Windows {
     return this.#shown.has(window);
   }
 
-  /** The windows showing `canvas`: those that hear its sessions. */
+  /** The windows showing `canvas`: those that receive its terminal screens. */
   showing(canvas: CanvasId): WindowId[] {
     return [...this.#shown].flatMap(([window, shown]) => (shown === canvas ? [window] : []));
   }

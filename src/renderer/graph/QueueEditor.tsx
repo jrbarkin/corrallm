@@ -5,10 +5,10 @@ import { USAGE_WINDOWS } from '../../shared/usage';
 import type { AdapterId, UsageBackendId } from '../../shared/adapter';
 import type { UsageWindow } from '../../shared/usage';
 import { threadTitle } from '../../shared/model/session';
-import { answersOf, usageAnswers } from '../../shared/engine/run/asks';
-import type { Answers } from '../../shared/engine/run/asks';
-import type { EngineCatalog } from '../../shared/engine/catalog';
-import type { Answer, TaskAttempt, TaskProblem } from '../../shared/engine/run/runner';
+import { answersOf, usageAnswers } from '../../shared/model/run-words';
+import type { Answers } from '../../shared/model/run-words';
+import type { EngineCatalog } from '../../shared/model/catalog';
+import type { Answer, TaskAttempt, TaskProblem } from '../../shared/model/run';
 import { SearchPicker } from '../search/SearchPicker';
 import { useDraft } from '../useDraft';
 import {
@@ -1516,7 +1516,7 @@ function ApprovalRow({
 }
 
 /**
- * How to answer at an item the run holds its queue at for the user (src/shared/engine/run/asks.ts answersOf): the
+ * How to answer at an item the run holds its queue at for the user (src/shared/model/run-words.ts answersOf): the
  * primary choice, filled; an answer in the user's own words, in a multi-line prompt (Enter sends,
  * Shift+Enter starts a new line, Esc cancels); then the other choices. Shown on the row whenever
  * the run waits for the user, never hidden. A plain div, so All queues' groups stay as they are.

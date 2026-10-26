@@ -56,13 +56,13 @@ import {
 import { runCommands } from '../run/commands';
 import type { RunNotice, RunView, RunSnapshot } from '../../shared/model/views';
 import { NEW_SESSION } from '../../shared/model/session';
-import { heldAsks } from '../../shared/engine/run/asks';
+import { heldAsks } from '../../shared/model/run-words';
 import {
   groupControlText,
   groupPaused,
   individualPaused,
   queueControlText,
-} from '../../shared/engine/run/controls';
+} from '../../shared/model/run-display';
 import { UsageStore } from '../usage/store';
 import type { UsageSource } from '../usage/store';
 import { UsageGauges } from '../usage/UsageGauge';

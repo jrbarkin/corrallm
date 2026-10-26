@@ -1,6 +1,6 @@
 import type { CanvasId } from '../../shared/canvas';
-import { holdGeneration, needs } from '../../shared/engine/needs';
-import type { Answer as RunAnswer } from '../../shared/engine/run/runner';
+import { holdGeneration, needs } from '../../shared/model/needs-selectors';
+import type { Answer as RunAnswer } from './engine/run/runner';
 import type { PartyId } from '../../shared/model/messages';
 import type { NeedsItem } from '../../shared/model/needs';
 import { isOpen } from '../../shared/model/session';

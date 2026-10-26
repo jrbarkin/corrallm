@@ -943,7 +943,7 @@ function journal3(state: unknown, canvas = CANVAS, updatedAt = 5000): void {
     .run(canvas, typeof state === 'string' ? state : JSON.stringify(state), updatedAt);
 }
 
-/** A saved run as the engine of schema 3 kept one (src/shared/engine/run/checkpoint.ts). */
+/** A saved run as the engine of schema 3 kept one (src/main/core/engine/run/checkpoint.ts). */
 const SAVED_RUN = {
   version: 2,
   run: { running: false, paused: true, agents: { a: { status: 'done', outcomes: {} } } },

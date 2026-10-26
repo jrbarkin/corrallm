@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-import { MAX_LINK_LENGTH } from '../../ipc';
+import { MAX_LINK_LENGTH } from '../limits';
 import { define } from '../define';
 import type { OpDef } from '../define';
 import type { OpName } from '../surface';

@@ -4,7 +4,7 @@ import { newCanvasId } from '../shared/canvas';
 import { GraphEditor as Editor } from './graph/GraphEditor';
 import { documentOf, EMPTY_GRAPH } from './test-graph-data';
 import type { Graph } from './graph/flow';
-import type { SessionBackend } from '../shared/engine/transcript/receive';
+import type { SessionReplies } from './test-sessions';
 import { fakeCanvas } from './test-canvas';
 import type { FakeCanvas } from './test-canvas';
 
@@ -15,7 +15,7 @@ type Props = Omit<
   'canvas' | 'client' | 'mirror' | 'initialSelection'
 > & {
   initialGraph?: Graph;
-  sessionBackend?: SessionBackend;
+  sessionReplies?: SessionReplies;
   /** Hears the fake core the editor runs on: its operations, and its file and folder answers. */
   onCanvas?: (canvas: FakeCanvas) => void;
 };
@@ -26,13 +26,13 @@ type Props = Omit<
 export function GraphEditor({
   initialGraph = EMPTY_GRAPH,
   files = false,
-  sessionBackend,
+  sessionReplies,
   usageSource,
   onCanvas,
   ...props
 }: Props) {
   const [canvas] = useState(() => {
-    const made = fakeCanvas(documentOf(initialGraph, newCanvasId()), sessionBackend, usageSource);
+    const made = fakeCanvas(documentOf(initialGraph, newCanvasId()), sessionReplies, usageSource);
     // React rehearses state initializers too. An unused fixture must release its subscriptions.
     queueMicrotask(() => {
       if (!mounted.has(made)) made.core.dispose();

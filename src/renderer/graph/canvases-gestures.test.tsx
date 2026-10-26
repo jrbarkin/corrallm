@@ -3,7 +3,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { newCanvasId } from '../../shared/canvas';
 import type { CanvasDocument } from '../../shared/model/canvas';
 import type { NeedsItem } from '../../shared/model/needs';
-import { automaticBackend } from '../../shared/engine/test-backend';
+import { automaticSessions } from '../test-sessions';
 import { fakeCanvas } from '../test-canvas';
 import { expectOneOp } from '../test-api';
 import { events } from '../test-render';
@@ -37,8 +37,8 @@ async function switchingView(needs: NeedsItem[] = []) {
     },
   ];
   const next = document('After');
-  const fake = automaticBackend();
-  const canvas = fakeCanvas(first, fake.backend);
+  const fake = automaticSessions();
+  const canvas = fakeCanvas(first, fake.replies);
   stops.push(() => {
     canvas.core.dispose();
   });
@@ -88,7 +88,7 @@ it('keeps live sessions and the core runtime when Open returns the shown canvas'
   await events.change(composer, { target: { value: 'Keep this manual work' } });
   await events.keyDown(composer, { key: 'Enter' });
   await waitFor(() => {
-    expect(fake.backend.send).toHaveBeenCalledOnce();
+    expect(fake.replies.send).toHaveBeenCalledOnce();
   });
   // Your message is one operation, as the core admits it.
   expectOneOp(canvas.core, 'message', {
@@ -104,14 +104,15 @@ it('keeps live sessions and the core runtime when Open returns the shown canvas'
     expectOneOp(canvas.core, 'canvas.open', {});
     expect(container.querySelector('.graph-editor')?.getAttribute('aria-busy')).toBe('false');
   });
-  expect(fake.backend.close).not.toHaveBeenCalled();
+  expect(fake.replies.close).not.toHaveBeenCalled();
   expect(canvas.document.id).toBe(first.id);
   await events.doubleClick(node);
   canvas.core.operations.length = 0;
   expect(screen.getAllByText('Keep this manual work').length).toBeGreaterThan(0);
-  expect(canvas.engine.sessions.of('Before').submissions?.at(-1)?.text).toBe(
-    'Keep this manual work',
-  );
+  expect(
+    Object.values(canvas.core.state(`messages:${canvas.document.id}`)?.state.items ?? {}).at(-1)
+      ?.body,
+  ).toBe('Keep this manual work');
 });
 
 it('closes All queues opened from an agent when the window switches to another canvas', async () => {
@@ -216,7 +217,7 @@ it.each([
       await events.change(composer, { target: { value: 'Independent manual work' } });
       await events.keyDown(composer, { key: 'Enter' });
       await waitFor(() => {
-        expect(fake.backend.send).toHaveBeenCalledOnce();
+        expect(fake.replies.send).toHaveBeenCalledOnce();
       });
     } finally {
       await act(() => {
@@ -231,8 +232,8 @@ it.each(['show', 'close', 'allow'] as const)(
   async (action) => {
     const first = document('Before'),
       next = document('After');
-    const fake = automaticBackend();
-    const canvas = fakeCanvas(first, fake.backend);
+    const fake = automaticSessions();
+    const canvas = fakeCanvas(first, fake.replies);
     stops.push(() => {
       canvas.core.dispose();
     });

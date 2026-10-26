@@ -2,10 +2,10 @@ import { expect, it } from 'vitest';
 
 import type { CanvasId } from '../../shared/canvas';
 import type { AgentNode } from '../../shared/model/canvas';
-import { SessionStore } from '../../shared/engine/delivery/mailbox';
-import { needsOf } from '../../shared/engine/needs';
-import { fakeBackend } from '../../shared/engine/test-backend';
-import { TEST_ENGINE } from '../../shared/engine/test-engine';
+import { SessionStore } from './engine/delivery/mailbox';
+import { needsOf } from '../../shared/model/needs-selectors';
+import { fakeBackend } from './engine/test-backend';
+import { TEST_ENGINE } from './engine/test-engine';
 
 // Opt-in measurement, never a timing assertion: CORRALLM_BENCH=1 pnpm exec vitest run ...
 it.skipIf(process.env.CORRALLM_BENCH !== '1')(

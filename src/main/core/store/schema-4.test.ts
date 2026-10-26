@@ -6,7 +6,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { CanvasId } from '../../../shared/canvas';
-import { decodeSubmissions } from '../../../shared/engine/delivery/submission-state';
+import { decodeSubmissions } from '../engine/delivery/submission-state';
 import { CanvasMemory, conversationsIn, PROJECT_WORKSPACE } from '../../memory';
 import { RunJournal } from '../../run-journal';
 import { CATALOG, DEFAULT_ADAPTER } from '../../sessions/adapters';

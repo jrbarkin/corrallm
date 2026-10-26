@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import type { AgentNode } from '../../shared/model/canvas';
 import type { QueueItem } from '../../shared/model/queue';
 import { runCatalog } from '../graph/agents';
-import type { AgentRun } from '../../shared/engine/run/runner';
+import type { AgentRun } from '../../shared/model/run';
 import { lanesOf } from './lanes';
 import { queueMarks } from '../../shared/model/queue-marks';
 

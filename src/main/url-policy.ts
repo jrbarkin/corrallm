@@ -3,7 +3,7 @@
  * can be unit-tested in plain Node.
  */
 
-import { MAX_LINK_LENGTH } from '../shared/ipc';
+import { MAX_LINK_LENGTH } from '../shared/api/limits';
 
 /** Hosts that links in the app may open in the user's default browser. Extend deliberately. */
 export const EXTERNAL_URL_ALLOWLIST: ReadonlySet<string> = new Set(['github.com']);

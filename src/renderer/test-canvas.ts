@@ -1,6 +1,9 @@
+import type { Run } from '../shared/model/run';
+import type { Session } from '../shared/model/session';
+import type { MessageView } from '../shared/model/views';
 import { canvasRuntime } from './test-canvas-runtime';
-import { NO_BACKEND } from '../shared/engine/transcript/receive';
-import type { SessionBackend } from '../shared/engine/transcript/receive';
+import { fakeSessions } from './test-sessions';
+import type { SessionReplies } from './test-sessions';
 import type { CanvasId } from '../shared/canvas';
 import { newCanvasId } from '../shared/canvas';
 import { OPS } from '../shared/api/registry';
@@ -35,18 +38,19 @@ export type FakeCanvas = ReturnType<typeof fakeCanvas>;
 /** An in-memory canvas core for editor gesture tests: real schemas and pure builds, pushed rows. */
 export function fakeCanvas(
   initial: CanvasDocument,
-  backend?: SessionBackend,
+  replies?: SessionReplies,
   usageSource?: UsageSource,
 ) {
   const core = fakeCore();
+  const fallback = fakeSessions().replies;
   const usage = new UsageStore(usageSource);
   core.reply('catalog.installed', async () => ({
     ok: true,
-    value: await (backend ?? NO_BACKEND).installed(),
+    value: await (replies ?? fallback).installed(),
   }));
   core.reply('project.files', async (raw) => {
     const { query, agent } = OPS['project.files'].input.parse(raw);
-    return { ok: true, value: { items: await (backend ?? NO_BACKEND).files(query, agent) } };
+    return { ok: true, value: { items: await (replies ?? fallback).files(query, agent) } };
   });
   core.respond('templates.list', {
     items: EXAMPLES.map((example) => templateInfo(example, catalog(), DEFAULT_AGENT)),
@@ -117,7 +121,7 @@ export function fakeCanvas(
       runtime.activate();
       runtime.update(next);
     } else {
-      runtime = canvasRuntime(core, next, backend, keep, usage.snapshot);
+      runtime = canvasRuntime(core, next, replies, keep);
       runtimes.set(next.id, runtime);
     }
   };
@@ -452,10 +456,9 @@ export function fakeCanvas(
         return Promise.resolve();
       },
     } satisfies UsageSource,
-    get engine() {
-      if (!runtime) throw new Error('No test runtime');
-      return runtime.engine;
-    },
+    run: (next?: Run) => runtime?.run(next),
+    session: (agent: string, session?: Session) => runtime?.session(agent, session),
+    messages: (items: readonly MessageView[]) => runtime?.messages(items),
     create,
     open,
     get document() {

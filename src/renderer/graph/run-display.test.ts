@@ -1,7 +1,7 @@
 import { expect, it } from 'vitest';
 import { NEW_SESSION } from '../../shared/model/session';
 import type { CanvasNode } from '../../shared/model/canvas';
-import type { Run } from '../../shared/engine/run/runner';
+import type { Run } from '../../shared/model/run';
 import { runCatalog } from './agents';
 import { agentCard, agentStatus } from '../../shared/model/run-display';
 

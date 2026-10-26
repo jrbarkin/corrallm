@@ -3,7 +3,7 @@ import { DEFAULT_PAGE } from '../../../shared/api/limits';
 import { imageBytes } from '../../../shared/session';
 import { nameOf } from '../parties';
 import type { AGENT_STATES } from '../../../shared/api/ops/conversation';
-import { needs, withoutChoices } from '../../../shared/engine/needs';
+import { needs, withoutChoices } from '../../../shared/model/needs-selectors';
 import type { CanvasId } from '../../../shared/canvas';
 import type { NeedsItem } from '../../../shared/model/needs';
 import { agentName, areLinked, teamOf } from '../../../shared/model/queries';

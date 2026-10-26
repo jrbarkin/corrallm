@@ -3,7 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import type { CanvasId } from '../shared/canvas';
-import { MAX_LINK_LENGTH } from '../shared/ipc';
+import { MAX_LINK_LENGTH } from '../shared/api/limits';
 
 /*
  * file:// links the user Cmd-clicks in a terminal (a CLI prints the files it names as OSC 8

@@ -5,7 +5,7 @@ import { holdText, itemLabel, okWhat, resetTime, taskLabel, untilText } from './
 import { checkedBy, findItem, isApproval, isRepeat, isWait } from './queue';
 import type { QueueItem } from './queue';
 import type { UsageHold } from '../usage';
-import type { EngineCatalog } from '../engine/catalog';
+import type { EngineCatalog } from './catalog';
 import type { TaskProblem } from './run';
 import type { RunSnapshot } from './views';
 

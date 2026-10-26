@@ -1,4 +1,4 @@
-import type { PauseTarget } from '../../../shared/engine/run/runner';
+import type { PauseTarget } from '../engine/run/runner';
 import { groupMembers, isGroup } from '../../../shared/model/queries';
 import { OpFailure } from '../call';
 import { RunControl } from '../run-control';

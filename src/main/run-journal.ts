@@ -4,7 +4,7 @@ import path from 'node:path';
 
 import { isCanvasId, newCanvasId } from '../shared/canvas';
 import type { CanvasId } from '../shared/canvas';
-import { MAX_CANVAS_BYTES } from '../shared/ipc';
+import { MAX_CANVAS_BYTES } from '../shared/canvas';
 import type { PartyId } from '../shared/model/messages';
 import type { NeedsItem } from '../shared/model/needs';
 import { MAX_RUN_BYTES, parseRunCheckpoint } from '../shared/run';

@@ -348,7 +348,7 @@ test('a shared group has one setup card, two workspace marks and two dock glows'
       }
       const grouped = await window.api.canvasGroup({ canvas, nodes: ids, kind: 'frame' });
       if (!grouped.ok) throw new Error(grouped.error.sentence);
-      for (const id of ids) await window.api.sessionAvailability(id);
+      for (const id of ids) await window.api.sessionOpen({ agent: id });
     }, canvas);
     await expect(
       page.locator('.graph-card .workspace-badge[data-workspace-attention]'),
