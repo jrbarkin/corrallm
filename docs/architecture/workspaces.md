@@ -4,6 +4,14 @@
 
 B9a gives independent work independent checkouts: each canvas's outermost group, or lone agent, works in a Git worktree of its own of the repository picked as the canvas's project folder. The records are schema 3's (see [Store](store.md)); this page is the Git and filesystem side, in `src/main/core/workspaces/`. Q32 is answered yes (Claude Code trusts a worktree inside a trusted folder), so new checkouts live inside the picked checkout.
 
+## Prepared branch review contracts
+
+B9b's pure helpers are in `src/shared/model/branch-review.ts` and `src/shared/model/branch-patch.ts`, with wire schemas in `src/shared/api/branch.ts`. They run no Git, read no files and grant no authority. Neither branch operation is registered yet.
+
+The review cursor is canonical unpadded base64url of a strict version-1 object containing the tip, nullable uncommitted digest and inventory position (0–20,000). Decoding refuses malformed or noncanonical encodings; continuation compares only those observations, returning conflict on change. The manifest sorts valid UTF-8 path bytes without normalization, prefixes the tip with the versioned domain, and records mode, blob OID and NUL-terminated path for each entry. Deletions use mode 000000 and a zero OID of the repository's length. SHA-256 uses Web Crypto over those canonical bytes. Duplicate, lossy, unsupported or oversized entries are refused. Inventory completeness, blob computation, the 1 GiB hashing bound and checkpoint eligibility remain the core service's responsibility.
+
+Pages include at most 200 entries (50 by default) and 60 KiB of serialized JSON, including metadata and continuation. A cut patch ends at a complete line and UTF-8 boundary; its file is still consumed by the continuation. Metadata that cannot fit even with an empty patch fails rather than returning a nonadvancing page. The service supplies committed entries first, then uncommitted entries in path-byte order, each inventory capped at 10,000. Untracked patches render already-read bytes, using at most 1 MiB and detecting binary data by a NUL in the first 8,000 bytes; the core remains responsible for opening safely and checking file type and links. Lossy displayed names stay within 4,096 UTF-8 bytes and must never be used as Git inputs. Refusal path lists quote at most five names, shorten each quoted name to 256 UTF-8 bytes, and count the rest; a reason of at most 512 bytes keeps the sentence within 2 KiB.
+
 ## The Git runner
 
 `src/main/core/workspaces/git.ts` is the one runner every workspace Git call goes through (`GitRunner`); no other file of the folder starts a process (`git.test.ts` scans it). B9b's diffs and merges are to reuse it.
