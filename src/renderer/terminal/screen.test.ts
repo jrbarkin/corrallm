@@ -162,13 +162,13 @@ it.each([
     open(new MouseEvent('mouseup'), 'https://docs.example.com/plain');
     open(new MouseEvent('mouseup', other), 'https://docs.example.com/other');
     open(new MouseEvent('mouseup', opens), 'https://docs.example.com/hooks');
-    const activate = gpu.terminal?.options.linkHandler?.activate;
-    if (!activate) throw new Error('no OSC 8 link handler');
+    const handler = gpu.terminal?.options.linkHandler;
+    if (!handler) throw new Error('no OSC 8 link handler');
     const range = { start: { x: 1, y: 1 }, end: { x: 9, y: 1 } };
     const file = 'file:///project/notes.txt';
-    activate(new MouseEvent('mouseup'), file, range);
-    activate(new MouseEvent('mouseup', other), file, range);
-    activate(new MouseEvent('mouseup', opens), file, range);
+    handler.activate(new MouseEvent('mouseup'), file, range);
+    handler.activate(new MouseEvent('mouseup', other), file, range);
+    handler.activate(new MouseEvent('mouseup', opens), file, range);
     expect(opened).toEqual(['https://docs.example.com/hooks', file]);
     agent.mockRestore();
   },
