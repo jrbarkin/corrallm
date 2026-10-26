@@ -18,7 +18,7 @@ import type { CanvasId } from '../../../shared/canvas';
 import { CanvasMemory } from '../../memory';
 import type { Store } from '../store/store';
 import { openTestStore } from '../store/test-store';
-import { GitRunner } from './git';
+import { GitError, GitRunner } from './git';
 import type { GitCall, GitOutput, GitRunnerDeps } from './git';
 import { EXCLUDED, ensureOwnedRoot } from './owned';
 import { CREATE_PHASES, ProvisionError, Provisioner } from './provision';
@@ -794,6 +794,26 @@ describe.skipIf(process.platform === 'win32')('Provisioner', () => {
       const tree = await p.provision({ canvas: CANVAS, repository, owner: OWNER });
       expect(tree).toMatchObject({ state: 'error', errorCode: 'git-metadata-symlinked' });
       expect(await p.checkout(tree.id)).toMatchObject({ state: 'held', reason: 'error' });
+    });
+
+    it('names a link in Git’s metadata as the cause when a Git write fails on it', async () => {
+      const outside = path.join(root, 'outside');
+      mkdirSync(outside);
+      /** Git failing on a link put in place of `worktrees`, as it does on some platforms. */
+      class Failing extends GitRunner {
+        override run(call: GitCall): Promise<GitOutput> {
+          if (call.args[0] === 'worktree' && call.args[1] === 'add') {
+            symlinkSync(outside, path.join(app, '.git', 'worktrees'));
+            return Promise.reject(new GitError('failed', 'Git failed on the link.', 128));
+          }
+          return super.run(call);
+        }
+      }
+      const p = provisioner({ git: new Failing(runnerDeps()) });
+      const repository = await repositoryOf(p);
+      const tree = await p.provision({ canvas: CANVAS, repository, owner: OWNER });
+      expect(tree).toMatchObject({ state: 'error', errorCode: 'git-metadata-symlinked' });
+      expect(readdirSync(outside)).toEqual([]);
     });
 
     it('never takes over a folder or branch at the workspace’s place that it didn’t make', async () => {
