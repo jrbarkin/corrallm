@@ -2,7 +2,7 @@ import type { Reach } from '../../../shared/api/surface';
 import type { Message } from '../../../shared/model/messages';
 import { isOpen, turnReply } from '../../../shared/model/session';
 import type { Entry } from '../../../shared/model/session';
-import { messageView, runView, summaryReply } from '../../../shared/model/views';
+import { messageView, presentationOf, runView, summaryReply } from '../../../shared/model/views';
 import type {
   EntryView,
   MessageView,
@@ -33,8 +33,11 @@ export function promptsOf({ engine }: OpenCanvas, id: string): number {
   return session.entries.filter(isOpen).length + (session.asking?.length ?? 0);
 }
 
-/** Agent `agent`'s session as session.get gives it: not-found if there is no such agent. */
-export function sessionSummary(open: OpenCanvas, agent: string) {
+/**
+ * Agent `agent`'s session as session.get gives it, `yours` (you, and the core's own canonical
+ * topic) or anyone else's (summaryFor): not-found if there is no such agent.
+ */
+export function sessionSummary(open: OpenCanvas, agent: string, yours = true) {
   const node = agentOf(open, agent);
   const { engine } = open;
   const session = engine.sessions.of(agent);
@@ -57,6 +60,7 @@ export function sessionSummary(open: OpenCanvas, agent: string) {
     ...(session.running === undefined ? {} : { running: session.running }),
     ...(session.usage === undefined ? {} : { usage: session.usage }),
     ...summaryReply(lastTurn === undefined ? null : turnReply(session, lastTurn.id) || null),
+    ...(yours ? presentationOf(session) : {}),
   };
 }
 
@@ -98,7 +102,7 @@ export function transcriptOf(
 
 /** Agent `agent`'s session topic's state as `caller` sees it: its summary and whole transcript. */
 export function sessionViewOf(open: OpenCanvas, agent: string, caller: Caller): SessionView {
-  const summary = sessionSummary(open, agent);
+  const summary = sessionSummary(open, agent, caller.kind === 'human');
   const { shown } = transcriptOf(open, agent, caller);
   return {
     summary,

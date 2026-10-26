@@ -127,3 +127,15 @@ export const MAX_TEMPLATE_AGENTS = 256;
 
 /** Maximum UTF-8 reply text carried in a session summary, never its transcript. */
 export const MAX_SESSION_REPLY_BYTES = 4096;
+/**
+ * The longest suggestion (what a CLI predicts you send next) a summary carries, in UTF-8: one
+ * longer is left out, never cut, so the composer never offers what wasn't suggested.
+ */
+export const MAX_SUGGESTION_BYTES = 2048;
+/** The most of what a terminal asks (its newest) a summary carries. */
+export const MAX_TERMINAL_ASKS = 8;
+/**
+ * The most JSON a summary's terminal asks take together, in UTF-8: the newest that fit, each cut
+ * to its bounds first (marked `cut`), so the summary fits its begin frame (B11 §16.3a).
+ */
+export const MAX_ASKING_BYTES = 256 * 1024;

@@ -50,11 +50,8 @@ import {
   useDisplayedSession,
   sessionDisplay,
   sessionCommands,
-  nativeQueries,
-  nativePresentation,
   sessionOptions,
 } from '../run/sessions';
-import type { SessionQueries } from '../run/sessions';
 import { runCommands } from '../run/commands';
 import type { RunNotice, RunView, RunSnapshot } from '../../shared/model/views';
 import { NEW_SESSION } from '../../shared/model/session';
@@ -112,9 +109,9 @@ const MULTI_SELECT_KEYS = ['Meta', 'Control', 'Shift'];
 type Command = Exclude<KeyAction, 'rename'>;
 
 /**
- * The editor, with a file bar backed by core operations and (given
- * `sessionQueries`, and `terminalBackend` for their terminals) agents connected to the real CLI
- * through the main process, and (given `usageSource`) the usage readings and rules main keeps.
+ * The editor, with a file bar backed by core operations, agents whose sessions the core runs (their
+ * topics and operations, and given `terminalBackend` their terminals), and (given `usageSource`)
+ * the usage readings and rules main keeps.
  */
 export function GraphEditor({
   canvas,
@@ -123,7 +120,6 @@ export function GraphEditor({
   initialSelection = EMPTY_SELECTION,
   files = true,
   terminalBackend = NO_TERMINAL,
-  sessionQueries = nativeQueries,
   usageSource,
 }: {
   canvas?: CanvasId;
@@ -132,7 +128,6 @@ export function GraphEditor({
   initialSelection?: Selection;
   files?: boolean;
   terminalBackend?: TerminalBackend;
-  sessionQueries?: SessionQueries;
   usageSource?: UsageSource;
 }) {
   const [shown, setShown] = useState<CanvasId>();
@@ -168,7 +163,6 @@ export function GraphEditor({
         initialSelection={initialSelection}
         files={files}
         terminalBackend={terminalBackend}
-        sessionQueries={sessionQueries}
         usageSource={usageSource}
       />
     </ReactFlowProvider>
@@ -182,7 +176,6 @@ function Editor({
   initialSelection,
   files,
   terminalBackend,
-  sessionQueries,
   usageSource,
 }: {
   canvas: CanvasId;
@@ -191,7 +184,6 @@ function Editor({
   initialSelection: Selection;
   files: boolean;
   terminalBackend: TerminalBackend;
-  sessionQueries: SessionQueries;
   usageSource: UsageSource | undefined;
 }) {
   const [binding] = useState(() => new CanvasSource(canvas, mirror));
@@ -314,7 +306,7 @@ function Editor({
   useEffect(() => {
     if (!gallery && !showStart) return;
     let open = true;
-    sessionQueries.installed().then(
+    api.catalogInstalled().then(
       (found) => {
         if (open) setInstalled(found);
       },
@@ -323,7 +315,7 @@ function Editor({
     return () => {
       open = false;
     };
-  }, [gallery, showStart, sessionQueries]);
+  }, [gallery, showStart, api]);
   /** Every agent's queue, side by side, if shown: opened from the canvas, or from an agent. */
   const [queues, setQueues] = useState<{ from?: string }>();
   /** The canvas's saved automatic layout setting (nodes cannot be dragged while it is on). */
@@ -346,18 +338,7 @@ function Editor({
   /** The agent shown in the agent view, if any. */
   const front = openedIds[0];
   /** How it runs: its session starts when its view opens, and again when that changes. */
-  const presentation = useMemo(
-    () => sessionQueries.presentation ?? nativePresentation(canvasId),
-    [sessionQueries, canvasId],
-  );
-  const frontSession = useDisplayedSession(
-    canvasId,
-    front,
-    mirror,
-    summaries,
-    messages,
-    sessionQueries,
-  );
+  const frontSession = useDisplayedSession(canvasId, front, mirror, summaries, messages);
   /** Pure display reconciliation with the foreground's authoritative native receipts. */
   const displayNodes = useMemo(
     () =>
@@ -1294,7 +1275,6 @@ function Editor({
                 key={canvasId}
                 canvas={canvasId}
                 mirror={mirror}
-                presentation={presentation}
                 onReply={commands.reply}
                 nodes={model.nodes}
                 onOpen={(agentId) => {

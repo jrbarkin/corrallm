@@ -12,7 +12,8 @@ export function sessionOps({
   engines,
 }: OpServices): Pick<Implementations, 'session.get' | 'session.transcript' | 'session.interrupt'> {
   return {
-    'session.get': ({ canvas, agent }) => sessionSummary(openCanvas(engines, canvas), agent),
+    'session.get': ({ canvas, agent }, { caller }) =>
+      sessionSummary(openCanvas(engines, canvas), agent, caller.kind === 'human'),
     'session.transcript': ({ canvas, agent, after, limit = DEFAULT_PAGE }, { caller }) => {
       const open = openCanvas(engines, canvas);
       // The transcript as the caller sees it, whole (as its topic gives it), then paged.

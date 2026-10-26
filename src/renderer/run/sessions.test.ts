@@ -5,7 +5,6 @@ import {
   imagePreviews,
   keepPreview,
   MAX_PREVIEW_BYTES,
-  nativeQueries,
   sessionCommands,
   sessionDisplay,
 } from './sessions';
@@ -35,12 +34,8 @@ it('uses the foreground session topic summary with its entries, even before the 
     entries: [{ kind: 'text', id: 'reply', text: 'Streaming' }],
   });
   core.snapshot(`session:${canvas}:a`, view);
-  const presentation = { snapshot: () => undefined, subscribe: () => () => undefined };
   const hook = renderHook(() =>
-    useDisplayedSession(canvas, 'a', core.topics, undefined, undefined, {
-      ...nativeQueries,
-      presentation,
-    }),
+    useDisplayedSession(canvas, 'a', core.topics, undefined, undefined),
   );
   try {
     await waitFor(() => {
@@ -56,6 +51,32 @@ it('uses the foreground session topic summary with its entries, even before the 
       });
     });
     expect(hook.result.current).toMatchObject({ status: 'idle', model: 'changed-model' });
+    expect(core.operations).toEqual([]);
+  } finally {
+    hook.unmount();
+    core.dispose();
+  }
+});
+
+it('shows the CLI’s suggestion and its terminal’s asks from the session topic’s summary', async () => {
+  const core = fakeCore();
+  const canvas = newCanvasId();
+  const ask = { kind: 'trust' as const, id: 'trust-1' };
+  core.snapshot(
+    `session:${canvas}:a`,
+    sessionView(AgentId.parse('a'), connection, {
+      ...NEW_SESSION,
+      suggestion: 'Run the tests',
+      asking: [ask],
+    }),
+  );
+  const hook = renderHook(() =>
+    useDisplayedSession(canvas, 'a', core.topics, undefined, undefined),
+  );
+  try {
+    await waitFor(() => {
+      expect(hook.result.current).toMatchObject({ suggestion: 'Run the tests', asking: [ask] });
+    });
     expect(core.operations).toEqual([]);
   } finally {
     hook.unmount();

@@ -1,5 +1,3 @@
-import type { Session } from '../shared/model/session';
-import type { Presentation } from './run/sessions';
 import { canvasRuntime } from './test-canvas-runtime';
 import { NO_BACKEND } from '../shared/engine/transcript/receive';
 import type { SessionBackend } from '../shared/engine/transcript/receive';
@@ -55,7 +53,6 @@ export function fakeCanvas(
   });
   let runtime: ReturnType<typeof canvasRuntime> | undefined;
   const runtimes = new Map<CanvasId, ReturnType<typeof canvasRuntime>>();
-  const presentations = new WeakMap<Session, Presentation>();
   let document = initial;
   let rev = 1;
   let saved = toFile(initial);
@@ -453,29 +450,6 @@ export function fakeCanvas(
         return Promise.resolve();
       },
     } satisfies UsageSource,
-    queries: { ...(backend ?? NO_BACKEND) },
-    presentation: {
-      snapshot: (agent: string) => {
-        const session = runtime?.engine.sessions.of(agent);
-        if (!session) return undefined;
-        let presentation = presentations.get(session);
-        if (!presentation) {
-          presentation = {
-            ...(session.suggestion === undefined ? {} : { suggestion: session.suggestion }),
-            ...(session.asking === undefined ? {} : { asking: session.asking }),
-            images: new Map(
-              (session.submissions ?? []).flatMap((message) =>
-                message.images ? [[message.id, message.images]] : [],
-              ),
-            ),
-          };
-          presentations.set(session, presentation);
-        }
-        return presentation;
-      },
-      subscribe: (listener: () => void) =>
-        runtime?.engine.sessions.subscribe(listener) ?? (() => undefined),
-    },
     get engine() {
       if (!runtime) throw new Error('No test runtime');
       return runtime.engine;

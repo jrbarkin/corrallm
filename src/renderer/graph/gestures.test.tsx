@@ -115,10 +115,6 @@ async function setup({
       canvas={doc.id}
       client={canvas.core.api}
       mirror={canvas.core.topics}
-      sessionQueries={{
-        ...canvas.queries,
-        presentation: canvas.presentation,
-      }}
       initialSelection={{ nodes: new Set(selected), edges: new Set() }}
       files={files}
     />,
@@ -650,15 +646,7 @@ it('keeps nested group cards inside the new frame through a reparenting operatio
     canvas.core.dispose();
   });
   const view = await renderReady(
-    <GraphEditor
-      canvas={doc.id}
-      client={canvas.core.api}
-      mirror={canvas.core.topics}
-      sessionQueries={{
-        ...canvas.queries,
-        presentation: canvas.presentation,
-      }}
-    />,
+    <GraphEditor canvas={doc.id} client={canvas.core.api} mirror={canvas.core.topics} />,
   );
   const flow = view.container.querySelector<HTMLElement>('.react-flow');
   if (!flow) throw new Error('No flow');

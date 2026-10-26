@@ -5,7 +5,6 @@ import type {
   SettingsOptions,
   PastSession,
   McpServer,
-  InstalledClis,
 } from '../../shared/session';
 import { imageBytes } from '../../shared/session';
 import { MAX_IMAGE_TOTAL } from '../../shared/api/limits';
@@ -59,54 +58,13 @@ function subscribePreviews(listener: () => void): () => void {
   };
 }
 
-export interface SessionQueries {
-  installed(): Promise<InstalledClis>;
-  presentation?: SessionPresentation;
-}
-
+/**
+ * What a session view shows beyond its topic: the previews of images this window sent (the
+ * summary itself carries the CLI's suggestion and its terminal's asks, yours alone and bounded).
+ */
 export interface Presentation {
-  suggestion?: string;
-  asking?: Session['asking'];
   images?: ReadonlyMap<string, readonly MessageImage[]>;
 }
-export interface SessionPresentation {
-  snapshot(agent: string): Presentation | undefined;
-  subscribe(listener: () => void): () => void;
-}
-/** Awaiting C's bounded topic projection for these fields absent from the frozen DTO. */
-const presentations = new Map<CanvasId, Map<string, Presentation>>();
-const presentationListeners = new Set<() => void>();
-const publishPresentation = () => {
-  for (const listener of presentationListeners) listener();
-};
-const updatePresentation = (canvas: CanvasId, agent: string, change: Presentation) => {
-  let byAgent = presentations.get(canvas);
-  if (!byAgent) presentations.set(canvas, (byAgent = new Map<string, Presentation>()));
-  byAgent.set(agent, { ...byAgent.get(agent), ...change });
-  publishPresentation();
-};
-export function nativePresentation(canvas: CanvasId): SessionPresentation {
-  return {
-    snapshot: (agent) => presentations.get(canvas)?.get(agent),
-    subscribe: (listener) => {
-      presentationListeners.add(listener);
-      const stop = window.api.onSessionEvent((agent, _connection, event) => {
-        if (event.type === 'suggestion')
-          updatePresentation(canvas, agent, { suggestion: event.text });
-        if (event.type === 'asking') updatePresentation(canvas, agent, { asking: event.asks });
-        if (event.type === 'user' || event.type === 'closed' || event.type === 'cleared')
-          updatePresentation(canvas, agent, { suggestion: '', asking: [] });
-      });
-      return () => {
-        stop();
-        presentationListeners.delete(listener);
-      };
-    },
-  };
-}
-export const nativeQueries: SessionQueries = {
-  installed: () => import('../api/client').then(({ api }) => api.catalogInstalled()),
-};
 
 type Mutable<T> = T extends object ? { -readonly [K in keyof T]: Mutable<T[K]> } : T;
 function copy<T>(value: T): Mutable<T> {
@@ -156,8 +114,6 @@ export function sessionDisplay(
     ...(running === undefined ? {} : { running }),
     ...(usage === undefined ? {} : { usage }),
     ...(modes === undefined ? {} : { modes }),
-    ...(presentation?.suggestion ? { suggestion: presentation.suggestion } : {}),
-    ...(presentation?.asking?.length ? { asking: presentation.asking } : {}),
     entries: shown.map((entry) => {
       if (entry.kind !== 'user') return entry;
       const message = messages.find(
@@ -370,22 +326,7 @@ export function useDisplayedSession(
   mirror: TopicMirror,
   summaries: Readonly<Record<string, SessionSummary>> | undefined,
   messages: MirrorStates[`messages:${CanvasId}`] | undefined,
-  queries: SessionQueries = nativeQueries,
 ): Session {
-  const presentation = useMemo(
-    () => queries.presentation ?? nativePresentation(canvas),
-    [queries, canvas],
-  );
-  const extras = useSyncExternalStore(
-    useCallback(
-      (listener) => (agent === undefined ? () => undefined : presentation.subscribe(listener)),
-      [agent, presentation],
-    ),
-    useCallback(
-      () => (agent === undefined ? undefined : presentation.snapshot(agent)),
-      [agent, presentation],
-    ),
-  );
   const pasted = useSyncExternalStore(subscribePreviews, imagePreviews);
   const topic =
     agent === undefined ? undefined : (`session:${canvas}:${encodeURIComponent(agent)}` as const);
@@ -402,8 +343,8 @@ export function useDisplayedSession(
         view?.summary ?? (agent === undefined ? undefined : summaries?.[agent]),
         view,
         agent === undefined ? [] : Object.values(messages?.items ?? {}),
-        { ...extras, images: extras?.images ? new Map([...extras.images, ...pasted]) : pasted },
+        { images: pasted },
       ),
-    [agent, summaries, view, messages, extras, pasted],
+    [agent, summaries, view, messages, pasted],
   );
 }

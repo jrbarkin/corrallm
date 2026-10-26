@@ -45,10 +45,6 @@ function setup() {
       canvas={canvas.document.id}
       client={canvas.core.api}
       mirror={canvas.core.topics}
-      sessionQueries={{
-        ...sessions.backend,
-        presentation: canvas.presentation,
-      }}
       files
     />,
   );

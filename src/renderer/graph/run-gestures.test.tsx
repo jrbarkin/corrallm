@@ -38,15 +38,7 @@ async function setup() {
     canvas.core.dispose();
   });
   const view = await renderReady(
-    <GraphEditor
-      canvas={doc.id}
-      client={canvas.core.api}
-      mirror={canvas.core.topics}
-      sessionQueries={{
-        ...canvas.queries,
-        presentation: canvas.presentation,
-      }}
-    />,
+    <GraphEditor canvas={doc.id} client={canvas.core.api} mirror={canvas.core.topics} />,
   );
   return { ...view, canvas };
 }

@@ -45,10 +45,6 @@ function setup(saved = true) {
       canvas={canvas.document.id}
       client={canvas.core.api}
       mirror={canvas.core.topics}
-      sessionQueries={{
-        ...canvas.queries,
-        presentation: canvas.presentation,
-      }}
       files
     />,
   );
@@ -258,10 +254,6 @@ it.each(['cancelled', 'refused'] as const)(
         canvas={canvas.document.id}
         client={canvas.core.api}
         mirror={canvas.core.topics}
-        sessionQueries={{
-          ...canvas.queries,
-          presentation: canvas.presentation,
-        }}
         files
       />,
     );

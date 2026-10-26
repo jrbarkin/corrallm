@@ -401,12 +401,14 @@ export const SURFACE = {
   'session.viewCommand': { access: Y, kind: 'command', scope: 'agent' },
   'session.mcpServers': { access: R, kind: 'read', scope: 'none', self: 'allowed' },
   'session.changeMcpServer': { access: L, kind: 'command', scope: 'agent', self: 'refused' },
+  // Your composer's suggestion and your Needs' detail of a terminal's asks are yours alone.
   'session.get': {
     access: A,
     kind: 'read',
     scope: 'none',
     reads: 'sessions',
     self: 'allowed',
+    varies: ['suggestion', 'asking'],
   },
   'session.transcript': {
     access: { ...R, worker: 'own' },

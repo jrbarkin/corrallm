@@ -290,7 +290,7 @@
   "schemas": {
     "topics.subscribe": {
       "input": "8c5be84f0a1a163a",
-      "output": "b44154d67e03b452"
+      "output": "731b7205ff8daf98"
     },
     "topics.unsubscribe": {
       "input": "8c5be84f0a1a163a",
@@ -486,7 +486,7 @@
     },
     "session.get": {
       "input": "c804536f3eb2a39b",
-      "output": "684cb14ca6712f1c"
+      "output": "37cedf4dc54001b8"
     },
     "session.transcript": {
       "input": "b0a50f8eb22508f9",

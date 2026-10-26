@@ -3,6 +3,9 @@ import { afterEach, expect, it, vi } from 'vitest';
 import type { NeedsItem } from '../../shared/model/needs';
 import type { CanvasNode } from '../../shared/model/canvas';
 import { newCanvasId } from '../../shared/canvas';
+import { AgentId } from '../../shared/api/ids';
+import { NEW_SESSION } from '../../shared/model/session';
+import { sessionView } from '../../shared/model/views';
 import { fakeCore, expectOneOp } from '../test-api';
 import { events } from '../test-render';
 import { NeedsSidebar } from './NeedsSidebar';
@@ -309,13 +312,18 @@ it.each(['permission', 'trust'] as const)(
     const core = fakeCore();
     cores.push(core);
     core.snapshot(`needs:${canvas}`, { items: [item] });
+    // Its wording comes with the agent's summary, yours alone (B11 C: bounded asks).
+    const summary = sessionView(AgentId.parse('a'), 'claude-code.terminal', {
+      ...NEW_SESSION,
+      asking: [ask],
+    }).summary;
+    core.snapshot(`sessions:${canvas}`, { agents: { [AgentId.parse('a')]: summary } });
     const opened = vi.fn();
     render(
       <NeedsSidebar
         canvas={canvas}
         mirror={core.topics}
         nodes={[{ id: 'a', type: 'agent', position: { x: 0, y: 0 }, data: { label: 'A' } }]}
-        presentation={{ snapshot: () => ({ asking: [ask] }), subscribe: () => () => undefined }}
         onOpen={opened}
         onReply={() => Promise.resolve({ revs: {} })}
       />,
