@@ -78,8 +78,8 @@ for (const [name, artifact] of cases) {
         // The fixture requests launch with session.open, using the document's own settings.
         // The agent window's viewing lease uses the same core startup path.
         const availability = await page.evaluate(
-          (id) => window.api.sessionOpen({ agent: id }),
-          agent.id,
+          ({ canvas, agent }) => window.api.sessionOpen({ canvas, agent }),
+          { canvas: doc.id, agent: agent.id },
         );
         if (!availability.ok) {
           expect(availability.error.sentence, JSON.stringify(availability)).toMatch(
