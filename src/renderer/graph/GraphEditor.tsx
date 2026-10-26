@@ -56,7 +56,7 @@ import {
 } from '../run/sessions';
 import type { SessionQueries } from '../run/sessions';
 import { runCommands } from '../run/commands';
-import type { RunView, RunSnapshot } from '../../shared/model/views';
+import type { RunNotice, RunView, RunSnapshot } from '../../shared/model/views';
 import { NEW_SESSION } from '../../shared/model/session';
 import { heldAsks } from '../../shared/engine/run/asks';
 import {
@@ -100,6 +100,8 @@ import { operationEdits } from './edits';
 import './GraphEditor.css';
 
 const EMPTY_RUN: RunView = { running: false, agents: {}, groups: {}, notices: [] };
+/** What a view dismisses a core notice by: its canvas, its place in the run's list and its words. */
+const noticeKey = (canvas: CanvasId, one: RunNotice) => `${canvas}/${one.id}/${one.text}`;
 
 const nodeTypes = { agent: AgentNodeView, frame: GroupNodeView } satisfies NodeTypes;
 const edgeTypes = { default: LinkView, work: WorkEdgeView } satisfies EdgeTypes;
@@ -202,6 +204,12 @@ function Editor({
     [canvasId],
   );
   const [notice, setNotice] = useState<readonly string[]>();
+  /**
+   * The core's opening notices (a restored or emptied database, a missing file) this view has
+   * dismissed (`noticeKey`). The core keeps them in the run; dismissing only stops this view
+   * showing them, so it sends nothing.
+   */
+  const [dismissed, setDismissed] = useState<ReadonlySet<string>>(new Set());
   /** Why the last open or save failed. */
   const [problem, setProblem] = useState<string>();
   /** Fit each new binding once, including startup; reconnect preserves the same viewport. */
@@ -230,6 +238,13 @@ function Editor({
   const switching = useRef(false);
   const run: RunSnapshot & Pick<RunView, 'groups' | 'notices' | 'saveError'> =
     useRunView(canvasId, mirror) ?? EMPTY_RUN;
+  /** What the core said on opening this canvas that this view has not dismissed. */
+  const opening = run.notices.filter((one) => !dismissed.has(noticeKey(canvasId, one)));
+  /** What the file float says: why the last open or save failed, and what opening said. */
+  const said = [
+    ...(problem === undefined ? [] : [problem]),
+    ...opening.map((one) => one.text),
+  ].join(' ');
   const summaries = useSessionSummaries(canvasId, mirror);
   const sessions = useMemo(
     () =>
@@ -986,15 +1001,6 @@ function Editor({
           setAgentMenu({ id, x: box.left + 16, y: box.bottom });
         }}
       >
-        {run.notices.map((notice) => (
-          <p
-            key={notice.id}
-            role={notice.level === 'info' ? 'status' : 'alert'}
-            className="graph-panel"
-          >
-            {notice.text}
-          </p>
-        ))}
         {run.saveError && (
           <p role="alert" className="graph-panel">
             {run.saveError}
@@ -1018,9 +1024,9 @@ function Editor({
             </button>
           </div>
         )}
-        {!files && problem && (
+        {!files && said !== '' && (
           <p role="alert" className="graph-panel">
-            {problem}
+            {said}
           </p>
         )}
         <ReactFlow
@@ -1242,7 +1248,7 @@ function Editor({
               {...(showStart
                 ? {}
                 : { project: { folder: project, onChoose: commands.chooseProject } })}
-              problem={problem}
+              problem={said === '' ? undefined : said}
               onNew={() => {
                 commands.new();
               }}
@@ -1269,6 +1275,9 @@ function Editor({
               }}
               onDismiss={() => {
                 setProblem(undefined);
+                setDismissed(
+                  (was) => new Set([...was, ...opening.map((one) => noticeKey(canvasId, one))]),
+                );
               }}
             />
           )}

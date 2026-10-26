@@ -586,6 +586,31 @@ it('announces a restored database warning as an alert', async () => {
   );
 });
 
+it('lets the user dismiss a restored database warning, as a view alone, for good', async () => {
+  const view = await setup({ files: true, selected: [] });
+  const warn = (text: string) => {
+    act(() => {
+      view.core.change({
+        topic: `run:${view.canvas}`,
+        rev: (view.core.state(`run:${view.canvas}`)?.rev ?? 0) + 1,
+        top: { notices: [{ id: 'opened/0', level: 'warning', text }] },
+      });
+    });
+  };
+  warn('The core’s database was damaged. It starts empty.');
+  const alert = await screen.findByRole('alert');
+  const sent = view.core.operations.length;
+  fireEvent.click(within(alert).getByRole('button', { name: 'Dismiss' }));
+  await waitFor(() => {
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+  // The core's notice stays what it is; the window only stops showing it, never sending an operation.
+  expect(view.core.operations).toHaveLength(sent);
+  warn('The core’s database was damaged. It starts empty.');
+  await act(() => Promise.resolve());
+  expect(screen.queryByRole('alert')).toBeNull();
+});
+
 it('does not leave a viewport fit queued for the first node of an empty restored canvas', async () => {
   const view = await setup({ empty: true, selected: [] });
   await act(() => Promise.resolve());
