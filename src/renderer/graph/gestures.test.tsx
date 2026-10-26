@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import type { ComponentProps } from 'react';
 import { afterEach, expect, it, vi } from 'vitest';
 import type * as XYFlow from '@xyflow/react';
@@ -16,6 +16,7 @@ import { workspaceOwners } from '../../shared/model/workspaces';
 import { move } from '../../shared/model/structure';
 import { OPS } from '../../shared/api/registry';
 import { fakeCanvas } from '../test-canvas';
+import { renderReady } from '../test-render';
 import { expectOneOp } from '../test-api';
 import { GraphEditor } from './GraphEditor';
 
@@ -60,7 +61,7 @@ afterEach(() => {
   seen.fits = [];
   seen.nodeLists = [];
 });
-function setup({
+async function setup({
   arrange = false,
   group = false,
   linked = false,
@@ -68,7 +69,6 @@ function setup({
   approval = false,
   files = false,
   empty = false,
-  restored = false,
   project = false,
   queue = [] as QueueItem[],
 } = {}) {
@@ -110,22 +110,17 @@ function setup({
   });
   const save = vi.fn(() => Promise.resolve({ ok: true as const, value: { name: null, revs: {} } }));
   canvas.core.reply('canvas.saveAs', save);
-  const view = render(
+  const view = await renderReady(
     <GraphEditor
       canvas={doc.id}
       client={canvas.core.api}
       mirror={canvas.core.topics}
+      sessionQueries={{
+        ...canvas.queries,
+        manual: canvas.manual,
+        presentation: canvas.presentation,
+      }}
       initialSelection={{ nodes: new Set(selected), edges: new Set() }}
-      {...(restored
-        ? {
-            runSource: {
-              get: () => Promise.resolve({ id: doc.id, token: 'test', checkpoint: null }),
-              save: () => Promise.resolve(null),
-              ready: () => Promise.resolve(null),
-              onStopping: () => () => undefined,
-            },
-          }
-        : {})}
       files={files}
     />,
   );
@@ -164,7 +159,7 @@ async function called(core: ReturnType<typeof fakeCanvas>['core']) {
 }
 
 it('adds with one operation and uses the id from the core', async () => {
-  const view = setup({ selected: [] });
+  const view = await setup({ selected: [] });
   const pane = view.container.querySelector('.react-flow__pane');
   if (!pane) throw new Error('No pane');
   fireEvent.doubleClick(pane, { clientX: 100, clientY: 200 });
@@ -185,8 +180,15 @@ it('adds with one operation and uses the id from the core', async () => {
       expect(node.measured?.height).toBeGreaterThan(0);
     }
 });
+async function openAgent(view: Awaited<ReturnType<typeof setup>>) {
+  fireEvent.doubleClick(view.node('a'));
+  await act(() => Promise.resolve());
+  expectOneOp(view.core, 'session.open', { canvas: view.canvas, agent: 'a' });
+  view.core.operations.length = 0;
+}
+
 it('renames with one operation', async () => {
-  const view = setup({ selected: ['a'] });
+  const view = await setup({ selected: ['a'] });
   fireEvent.keyDown(document.body, { key: 'F2' });
   const label = await screen.findByRole('textbox', { name: 'Label' });
   fireEvent.change(label, { target: { value: 'Renamed' } });
@@ -199,7 +201,7 @@ it.each([
   ['groupUnderParent', false, true, 'agent'],
   ['ungroup', true, false, undefined],
 ] as const)('sends one %s operation', async (command, shiftKey, altKey, kind) => {
-  const view = setup({
+  const view = await setup({
     group: command === 'ungroup',
     selected: command === 'ungroup' ? ['F'] : ['a', 'b'],
   });
@@ -210,7 +212,7 @@ it.each([
   else expectOneOp(view.core, 'canvas.ungroup', { canvas: view.canvas, nodes: ['F'] });
 });
 it('deletes with one operation and shows cleared queue references', async () => {
-  const view = setup({ selected: ['a'] });
+  const view = await setup({ selected: ['a'] });
   view.core.respond('canvas.delete', { cleared: ['b’s wait no longer waits for a.'], revs: {} });
   fireEvent.keyDown(document.body, { key: 'Delete' });
   await called(view.core);
@@ -220,13 +222,13 @@ it('deletes with one operation and shows cleared queue references', async () => 
   );
 });
 it('adds a parent with one operation', async () => {
-  const view = setup({ group: true, selected: [] });
+  const view = await setup({ group: true, selected: [] });
   fireEvent.click(button('Add a parent agent'));
   await called(view.core);
   expectOneOp(view.core, 'canvas.addParent', { canvas: view.canvas, frame: 'F' });
 });
 it('links with one operation', async () => {
-  const view = setup();
+  const view = await setup();
   act(() => {
     seen.props?.onConnect?.({
       source: 'a',
@@ -245,7 +247,7 @@ it('links with one operation', async () => {
   });
 });
 it('unlinks with one operation', async () => {
-  const view = setup({ linked: true });
+  const view = await setup({ linked: true });
   act(() => {
     seen.props?.onEdgesChange?.([{ id: 'a->b', type: 'select', selected: true }]);
   });
@@ -254,7 +256,7 @@ it('unlinks with one operation', async () => {
   expectOneOp(view.core, 'canvas.unlink', { canvas: view.canvas, a: 'a', b: 'b' });
 });
 it('sends no move during a drag and one move at drop', async () => {
-  const view = setup({ selected: ['a'] });
+  const view = await setup({ selected: ['a'] });
   act(() => {
     seen.props?.onNodesChange?.([
       { id: 'a', type: 'position', position: { x: 700, y: 800 }, dragging: true },
@@ -274,7 +276,7 @@ it('sends no move during a drag and one move at drop', async () => {
   });
 });
 it('toggles Arrange with one operation', async () => {
-  const view = setup();
+  const view = await setup();
   fireEvent.click(button('Arrange automatically'));
   await called(view.core);
   expectOneOp(view.core, 'canvas.setArrange', { canvas: view.canvas, on: true });
@@ -282,7 +284,7 @@ it('toggles Arrange with one operation', async () => {
 it.each(['delete', 'ungroup'] as const)(
   'keeps Arrange through %s without editing selection into the document',
   async (what) => {
-    const view = setup({
+    const view = await setup({
       arrange: true,
       group: what === 'ungroup',
       selected: what === 'ungroup' ? ['F'] : ['a'],
@@ -301,8 +303,8 @@ it.each(['delete', 'ungroup'] as const)(
 );
 
 it.each(['peer', 'linked'] as const)('spawns a %s with one operation', async (relation) => {
-  const view = setup();
-  fireEvent.doubleClick(view.node('a'));
+  const view = await setup();
+  await openAgent(view);
   const dialog = within(await screen.findByRole('dialog', { name: 'a' }));
   if (relation === 'peer') fireEvent.click(dialog.getByRole('button', { name: 'New agent' }));
   else {
@@ -319,7 +321,7 @@ it.each(['TDD relay', 'Head to head'])(
     if (!example) throw new Error('No template');
     const template = templateInfo(example, catalog(), 'claude-code');
     vi.spyOn(api, 'templatesList').mockResolvedValue({ items: [template] });
-    const view = setup({ files: true });
+    const view = await setup({ files: true });
     const previous = new Set(view.document.nodes.map(({ id }) => id));
     const source = fromFile(example.text, catalog(), 'claude-code');
     fireEvent.click(button('Templates…'));
@@ -373,7 +375,7 @@ it.each(['TDD relay', 'Head to head'])(
   },
 );
 it('keeps Arrange when deleting an unselected agent from its controls', async () => {
-  const view = setup({ arrange: true, selected: ['b'] });
+  const view = await setup({ arrange: true, selected: ['b'] });
   fireEvent.mouseEnter(
     view.node('a').querySelector('.adapter-logo') ??
       view.node('a').firstElementChild ??
@@ -390,7 +392,7 @@ it('keeps Arrange when deleting an unselected agent from its controls', async ()
   expect(view.core.operations[0]).toMatchObject({ op: 'canvas.delete', args: { nodes: ['a'] } });
 });
 it('keeps Arrange when opening an agent from Needs, without a document operation', async () => {
-  const view = setup({ arrange: true, approval: true, selected: ['b'] });
+  const view = await setup({ arrange: true, approval: true, selected: ['b'] });
   fireEvent.click(button('Show all queues'));
   fireEvent.click(button('Run'));
   await act(async () => {
@@ -401,10 +403,10 @@ it('keeps Arrange when opening an agent from Needs, without a document operation
   fireEvent.click(await screen.findByRole('button', { name: 'Open a' }));
   expect(await screen.findByRole('dialog', { name: 'a' })).toBeTruthy();
   expect(view.document.arrange).toBe(true);
-  expect(view.core.operations).toEqual([]);
+  expect(view.core.operations.map(({ op }) => op)).toEqual(['run.start', 'session.open']);
 });
 it('keeps an untouched rendered node object when another queue changes', async () => {
-  const view = setup();
+  const view = await setup();
   const before = seen.props?.nodes?.find((node) => node.id === 'b');
   await act(async () => {
     await view.edit(
@@ -431,7 +433,7 @@ it('keeps an untouched rendered node object when another queue changes', async (
 });
 
 it('keeps a dropped child where it was dropped while the mirror holds the move that refits its group', async () => {
-  const view = setup({ group: true, selected: ['a'] });
+  const view = await setup({ group: true, selected: ['a'] });
   // The core's commit reaches the mirror before the move resolves (its topic batch, or a reply
   // that waits for its write), and the overlay is cleared only once the move resolves.
   const held = Promise.withResolvers<undefined>();
@@ -494,7 +496,7 @@ it('keeps a dropped child where it was dropped while the mirror holds the move t
     expect(shown(nodes)).toEqual({ a: dropped, b: { x: 240, y: 52 }, frame: { x: -120, y: -112 } });
 });
 it('removes a rejected drag overlay so the view returns to the mirror', async () => {
-  const view = setup({ selected: ['a'] });
+  const view = await setup({ selected: ['a'] });
   view.core.reply('canvas.move', {
     ok: false,
     error: { code: 'refused', sentence: 'The move was refused.' },
@@ -513,7 +515,7 @@ it('removes a rejected drag overlay so the view returns to the mirror', async ()
   expect(seen.props?.nodes?.find((node) => node.id === 'a')?.position).toEqual({ x: 20, y: 52 });
 });
 it('writes one move for a keyboard position change, without waiting for a drag stop', async () => {
-  const view = setup({ selected: ['a'] });
+  const view = await setup({ selected: ['a'] });
   act(() => {
     seen.props?.onNodesChange?.([{ id: 'a', type: 'position', position: { x: 25, y: 52 } }]);
   });
@@ -525,7 +527,7 @@ it('writes one move for a keyboard position change, without waiting for a drag s
 });
 
 it('waits for a label operation and its mirror before saving from the file button', async () => {
-  const view = setup({ files: true, selected: ['a'] });
+  const view = await setup({ files: true, selected: ['a'] });
   const held = Promise.withResolvers<undefined>();
   view.core.reply('canvas.rename', async () => {
     await held.promise;
@@ -560,8 +562,73 @@ it('waits for a label operation and its mirror before saving from the file butto
   expect(view.document.nodes[0]?.data.label).toBe('After');
 });
 
+it('fits a nonempty initial canvas once, and preserves its viewport and queues across a new epoch', async () => {
+  const view = await setup({ selected: [] });
+  await waitFor(() => {
+    expect(seen.fits).toHaveLength(1);
+  });
+  fireEvent.click(screen.getByRole('button', { name: 'Show all queues' }));
+  expect(await screen.findByRole('dialog', { name: 'All queues' })).toBeTruthy();
+  await act(() => {
+    view.core.epoch('replacement');
+    return Promise.resolve();
+  });
+  await waitFor(() => {
+    expect(view.container.querySelector('.graph-editor[inert]')).toBeNull();
+  });
+  expect(screen.getByRole('dialog', { name: 'All queues' })).toBeTruthy();
+  expect(seen.fits).toHaveLength(1);
+});
+
+it('announces a restored database warning as an alert', async () => {
+  const view = await setup({ selected: [] });
+  act(() => {
+    view.core.change({
+      topic: `run:${view.canvas}`,
+      rev: (view.core.state(`run:${view.canvas}`)?.rev ?? 0) + 1,
+      top: {
+        notices: [
+          {
+            id: 'opened/0',
+            level: 'warning',
+            text: 'The core’s database was damaged. It starts empty.',
+          },
+        ],
+      },
+    });
+  });
+  expect((await screen.findByRole('alert')).textContent).toContain(
+    'The core’s database was damaged.',
+  );
+});
+
+it('lets the user dismiss a restored database warning, as a view alone, for good', async () => {
+  const view = await setup({ files: true, selected: [] });
+  const warn = (text: string) => {
+    act(() => {
+      view.core.change({
+        topic: `run:${view.canvas}`,
+        rev: (view.core.state(`run:${view.canvas}`)?.rev ?? 0) + 1,
+        top: { notices: [{ id: 'opened/0', level: 'warning', text }] },
+      });
+    });
+  };
+  warn('The core’s database was damaged. It starts empty.');
+  const alert = await screen.findByRole('alert');
+  const sent = view.core.operations.length;
+  fireEvent.click(within(alert).getByRole('button', { name: 'Dismiss' }));
+  await waitFor(() => {
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+  // The core's notice stays what it is; the window only stops showing it, never sending an operation.
+  expect(view.core.operations).toHaveLength(sent);
+  warn('The core’s database was damaged. It starts empty.');
+  await act(() => Promise.resolve());
+  expect(screen.queryByRole('alert')).toBeNull();
+});
+
 it('does not leave a viewport fit queued for the first node of an empty restored canvas', async () => {
-  const view = setup({ empty: true, selected: [], restored: true });
+  const view = await setup({ empty: true, selected: [] });
   await act(() => Promise.resolve());
   expect(seen.fits).toEqual([]);
   const pane = view.container.querySelector('.react-flow__pane');
@@ -583,8 +650,17 @@ it('keeps nested group cards inside the new frame through a reparenting operatio
   cleanups.push(() => {
     canvas.core.dispose();
   });
-  const view = render(
-    <GraphEditor canvas={doc.id} client={canvas.core.api} mirror={canvas.core.topics} />,
+  const view = await renderReady(
+    <GraphEditor
+      canvas={doc.id}
+      client={canvas.core.api}
+      mirror={canvas.core.topics}
+      sessionQueries={{
+        ...canvas.queries,
+        manual: canvas.manual,
+        presentation: canvas.presentation,
+      }}
+    />,
   );
   const flow = view.container.querySelector<HTMLElement>('.react-flow');
   if (!flow) throw new Error('No flow');
@@ -687,7 +763,7 @@ it('creates a template as the new canvas, retaining its node ids and choosing a 
   if (!example) throw new Error('No template');
   const template = templateInfo(example, catalog(), 'claude-code');
   vi.spyOn(api, 'templatesList').mockResolvedValue({ items: [template] });
-  const view = setup({ files: true, project: true });
+  const view = await setup({ files: true, project: true });
   expect(button('Project folder: Old project')).toBeDefined();
   fireEvent.click(button('Templates…'));
   const gallery = within(await screen.findByRole('dialog', { name: 'Templates' }));
@@ -726,7 +802,7 @@ it('creates a template as the new canvas, retaining its node ids and choosing a 
 });
 
 it('saves the core’s live document with one operation after a concurrent edit', async () => {
-  const view = setup({ files: true });
+  const view = await setup({ files: true });
   view.save.mockImplementationOnce(async () => {
     await view.edit(
       toFile({
@@ -748,8 +824,8 @@ it('saves the core’s live document with one operation after a concurrent edit'
 });
 
 it('adds a queue step with one op and renders its core id', async () => {
-  const view = setup();
-  fireEvent.doubleClick(view.node('a'));
+  const view = await setup();
+  await openAgent(view);
   fireEvent.click(button('Add to queue'));
   fireEvent.click(screen.getByRole('option', { name: /^Read / }));
   fireEvent.click(screen.getByRole('option', { name: 'This agent' }));
@@ -767,15 +843,15 @@ it('adds a queue step with one op and renders its core id', async () => {
   );
 });
 it('removes a queue row with one op', async () => {
-  const view = setup({ queue: [{ id: 'work', action: 'Read' }] });
-  fireEvent.doubleClick(view.node('a'));
+  const view = await setup({ queue: [{ id: 'work', action: 'Read' }] });
+  await openAgent(view);
   fireEvent.click(button('Remove Read'));
   await called(view.core);
   expectOneOp(view.core, 'queue.remove', { canvas: view.canvas, agent: 'a', item: 'work' });
 });
 it('commits a queue message draft with one op', async () => {
-  const view = setup({ queue: [{ id: 'work', message: 'Before' }] });
-  fireEvent.doubleClick(view.node('a'));
+  const view = await setup({ queue: [{ id: 'work', message: 'Before' }] });
+  await openAgent(view);
   const field = screen.getByRole('textbox', { name: 'Message to the agent' });
   fireEvent.focus(field);
   fireEvent.change(field, { target: { value: 'After' } });
@@ -799,12 +875,12 @@ it.each(['message', 'instruction'] as const)(
       kind === 'message'
         ? { id: 'work', message: 'Before' }
         : { id: 'work', action: 'Read', instruction: 'Before' };
-    const view = setup({ queue: [entry] });
+    const view = await setup({ queue: [entry] });
     view.core.reply('queue.update', {
       ok: false,
       error: { code: 'refused', sentence: 'Held by the run.' },
     });
-    fireEvent.doubleClick(view.node('a'));
+    await openAgent(view);
     const field = screen.getByRole<HTMLTextAreaElement>('textbox', {
       name: kind === 'message' ? 'Message to the agent' : 'What Read is to do',
     });
@@ -831,14 +907,14 @@ it.each(['message', 'instruction'] as const)(
   },
 );
 it.each(['agent', 'All queues'] as const)('sends one queue.move at drop from %s', async (where) => {
-  const view = setup({
+  const view = await setup({
     queue: [
       { id: 'first', action: 'Read' },
       { id: 'second', action: 'Bash' },
       { id: 'third', action: 'Edit' },
     ],
   });
-  if (where === 'agent') fireEvent.doubleClick(view.node('a'));
+  if (where === 'agent') await openAgent(view);
   else fireEvent.click(button('Show all queues'));
   const boxes = vi
     .spyOn(HTMLElement.prototype, 'getBoundingClientRect')
@@ -874,14 +950,14 @@ it.each(['agent', 'All queues'] as const)('sends one queue.move at drop from %s'
 });
 
 it('drops by the previewed neighbour when another writer inserts a row during the drag', async () => {
-  const view = setup({
+  const view = await setup({
     queue: [
       { id: 'first', action: 'Read' },
       { id: 'second', action: 'Bash' },
       { id: 'third', action: 'Edit' },
     ],
   });
-  fireEvent.doubleClick(view.node('a'));
+  await openAgent(view);
   vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (
     this: HTMLElement,
   ) {
@@ -917,4 +993,19 @@ it('drops by the previewed neighbour when another writer inserts a row during th
     item: 'first',
     before: 'third',
   });
+});
+
+it('keeps a native startup refusal in the session instead of covering the window controls with it', async () => {
+  const view = await setup({ files: true, selected: [] });
+  view.core.reply('session.open', {
+    ok: false,
+    error: { code: 'unavailable', sentence: 'The CLI is not installed.' },
+  });
+  fireEvent.doubleClick(view.node('a'));
+  expect(await screen.findByRole('dialog', { name: 'a' })).toBeTruthy();
+  await act(async () => {
+    await Promise.resolve();
+  });
+  expect(view.container.querySelector('.canvas-float-position > [role="alert"]')).toBeNull();
+  expectOneOp(view.core, 'session.open', { canvas: view.canvas, agent: 'a' });
 });

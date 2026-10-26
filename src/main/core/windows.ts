@@ -4,15 +4,19 @@ import type { WindowId } from './host';
 export interface WindowsDeps {
   /** The canvas a window shows when it first asks: the one the profile had open last. */
   restore: () => Promise<CanvasId>;
-  /** A window left the canvas (closed, crashed, reloaded, or showed another): its sessions end. */
-  left: (canvas: CanvasId) => Promise<void>;
+  /**
+   * A window is to show `canvas`: the core runs it (B11 Design §8), before the window sees it, so
+   * its runtime topics are there when the window subscribes. Rejects, saying why, if it can't.
+   */
+  shown: (canvas: CanvasId) => Promise<void>;
 }
 
 /**
  * Which canvas each window shows. The core keeps it; channel handlers look the canvas up here before
- * they call a service, which knows canvases by their ids and nothing of windows. A window that
- * reloads keeps its canvas: its sessions end, and the page restores it once they have. One that
- * crashes or closes, or shows another canvas, leaves its canvas, and its sessions end.
+ * they call a service, which knows canvases by their ids and nothing of windows. A window only views
+ * a canvas the core runs (B11 Design §8): one that reloads, crashes or closes, or shows another
+ * canvas, ends nothing of the canvas it showed, which runs on in the core. A window that reloads or
+ * crashes keeps its canvas for the page that reconnects; one that closes is forgotten.
  */
 export class Windows {
   readonly #deps: WindowsDeps;
@@ -20,8 +24,6 @@ export class Windows {
   readonly #canvases = new Map<WindowId, Promise<CanvasId>>();
   /** The canvas each window shows, once it has one. */
   readonly #shown = new Map<WindowId, CanvasId>();
-  /** A reloading window's canvas's sessions, closing: its page restores it once they have. */
-  readonly #reloading = new Map<WindowId, Promise<void>>();
   /** What hears which canvas a window shows change. */
   readonly #listeners = new Set<() => void>();
 
@@ -30,16 +32,20 @@ export class Windows {
   }
 
   /**
-   * The canvas the window shows, once a reload's sessions have closed: for a window that shows none
-   * yet, the one the profile had open last (restored once, however many ask). Rejects if that
-   * can't be restored, which the next asking tries again.
+   * The canvas the window shows: for a window that shows none yet, the one the profile had open
+   * last (restored once, however many ask), run by the core first. Rejects if that can't be
+   * restored, which the next asking tries again. One the core can't run is shown all the same: its
+   * runtime topics then say it isn't open, and the window offers New and Open.
    */
   async canvasOf(window: WindowId): Promise<CanvasId> {
-    const leaving = this.#reloading.get(window);
-    if (leaving) await leaving;
     let canvas = this.#canvases.get(window);
     if (canvas === undefined) {
-      const restoring = this.#deps.restore();
+      const restoring = this.#deps.restore().then(async (id) => {
+        await this.#deps.shown(id).catch((error: unknown) => {
+          console.error('The core could not run the canvas a window restored:', error);
+        });
+        return id;
+      });
       canvas = restoring;
       this.#canvases.set(window, restoring);
       restoring.then(
@@ -56,14 +62,16 @@ export class Windows {
     return canvas;
   }
 
-  /** The window shows `canvas` now (it opened or began it): the canvas before leaves it. */
+  /**
+   * The window shows `canvas` now (it opened or began it), once the core runs it: rejects, the
+   * window showing what it showed, if the core can't. The canvas before runs on in the core.
+   */
   async show(window: WindowId, canvas: CanvasId): Promise<void> {
-    const before = this.#shown.get(window);
-    if (before === canvas) return;
+    if (this.#shown.get(window) === canvas) return;
+    await this.#deps.shown(canvas);
     this.#canvases.set(window, Promise.resolve(canvas));
     this.#shown.set(window, canvas);
     this.#tell();
-    if (before !== undefined) await this.#deps.left(before);
   }
 
   /** Hears which canvas a window shows change. Returns what stops it hearing that. */
@@ -95,26 +103,15 @@ export class Windows {
   }
 
   /**
-   * The page is gone: close its sessions before the next page restores. Keep the canvas on a
-   * reload or crash; forget it only when main says the window itself closed.
+   * The page is gone: its canvas runs on in the core, whatever went. Keep the canvas on a reload or
+   * crash, for the page that reconnects; forget it only when main says the window itself closed.
    */
-  async gone(window: WindowId, closed = false): Promise<void> {
-    const canvas = this.#shown.get(window);
-    let leaving = this.#reloading.get(window);
-    if (canvas !== undefined && leaving === undefined) {
-      leaving = this.#deps.left(canvas);
-      this.#reloading.set(window, leaving);
-      void leaving
-        .finally(() => {
-          if (this.#reloading.get(window) === leaving) this.#reloading.delete(window);
-        })
-        .catch(() => undefined);
-    }
+  gone(window: WindowId, closed = false): Promise<void> {
     if (closed) {
       this.#canvases.delete(window);
       if (this.#shown.delete(window)) this.#tell();
     }
-    await leaving;
+    return Promise.resolve();
   }
 
   #tell(): void {

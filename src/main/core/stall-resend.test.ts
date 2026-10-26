@@ -8,16 +8,15 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import type { ConnectionId } from '../../shared/adapter';
 import { MAX_MESSAGE_BYTES } from '../../shared/api/limits';
 import { decodeSubmissions } from '../../shared/engine/delivery/submission-state';
-import { Engine, RETRY_CHECK_MS } from '../../shared/engine/engine';
+import { RETRY_CHECK_MS } from '../../shared/engine/engine';
 import { holdGeneration } from '../../shared/engine/needs';
-import { fakeBackend } from '../../shared/engine/test-backend';
-import { TEST_ENGINE } from '../../shared/engine/test-engine';
 import type { Message } from '../../shared/model/messages';
-import type { RunCheckpoint, RunRestore } from '../../shared/run';
+import type { RunCheckpoint } from '../../shared/run';
 import type { SessionEvent, SessionMode, UserMessage } from '../../shared/session';
 import type { Connector, SessionHost } from '../sessions/connector';
 import { SessionManager, STALLED_INTERRUPT_MS } from '../sessions/manager';
 import { createCore } from './core';
+import { asHuman } from './gui';
 import type { Core, CoreConfig } from './core';
 import { STALL_MS, WATCH_EVERY_MS } from './stalled';
 import { journaledRun, keepCanvases } from './store/test-store';
@@ -152,7 +151,7 @@ async function call(
  */
 function expectJournaled(saved: RunCheckpoint): void {
   const journaled = journaledRun(profile, CANVAS);
-  expect(journaled).toMatchObject({ version: 2, state: saved.state, updatedAt: saved.updatedAt });
+  expect(journaled).toMatchObject({ version: 2, state: saved.state });
   expect(decodeSubmissions(journaled?.messages ?? '')).toEqual(decodeSubmissions(saved.messages));
 }
 function required<T>(value: T | undefined): T {
@@ -467,7 +466,7 @@ it('retries a run task as its own new attempt, whose reply advances the queue', 
 it('reserves a run’s retry once, in the core alone: no retry-task event reaches its engine or a window', async () => {
   const engine = await core.engines.open(CANVAS);
   // The window shows the canvas the core runs: it hears the canvas's session events.
-  await core.channels.call(7, 'run:get', []);
+  await core.call('window.get', {}, asHuman(7));
   const events: SessionEvent[] = [];
   const off = core.channels.listen(7, (name, args) => {
     if (name === 'session:event') events.push((args as [string, ConnectionId, SessionEvent])[2]);
@@ -605,164 +604,99 @@ it('a run retry stays held on a pause, then uses Retry when unpaused', async () 
   });
 });
 
-async function windowTurn(queue = false): Promise<void> {
-  await core.engines.closeCanvas(CANVAS);
-  await core.channels.call(7, 'session:start', [
-    'a',
-    { connection: 'codex.app-server', mode: null, model: null },
-  ]);
+async function windowTurn(images?: UserMessage['images']): Promise<void> {
+  const shown = await core.call('window.get', {}, asHuman(7));
+  expect(shown).toMatchObject({ ok: true, value: { canvas: CANVAS } });
+  expect(await core.call('session.open', { canvas: CANVAS, agent: 'a' }, asHuman(7))).toMatchObject(
+    { ok: true },
+  );
   await core.channels.call(7, 'session:send', [
     'a',
-    {
-      id: 'native-entry',
-      text: 'From a window',
-      ...(queue ? { origin: 'queue', task: { agent: 'a', item: 'task', attempt: 'attempt' } } : {}),
-    },
+    { id: crypto.randomUUID(), text: 'From a window', ...(images ? { images } : {}) },
   ]);
   await vi.waitFor(() => {
     expect(sent).toHaveLength(1);
   });
   await stall();
 }
-
 async function cancelWindowTurn(): Promise<void> {
-  const ended = new Promise<void>((resolve) => {
-    const off = core.channels.listen(7, (name, args) => {
-      if (name === 'session:event' && args[2]?.type === 'end') {
-        off();
-        resolve();
-      }
-    });
-  });
   expect(await choose()).toMatchObject({ ok: true });
   end();
-  await ended;
-  // The cancelled-end continuation was queued before the window received the end.
-  // Observe its call to open even if opening itself is still awaiting disk I/O.
-  await new Promise<void>((resolve) => setImmediate(resolve));
+  await vi.waitFor(() => {
+    expect(sent).toHaveLength(2);
+  });
   await core.flush();
 }
-
-it('never opens a second run to resend a window-owned manual message', async () => {
+it('keeps the same core runtime when a window manual message is resent', async () => {
   await windowTurn();
-  const open = vi.spyOn(core.engines, 'open');
+  const owner = core.engines.canvas(CANVAS);
   await cancelWindowTurn();
-  expect(open).not.toHaveBeenCalled();
-  expect(core.engines.opened()).toEqual([]);
+  expect(core.engines.canvas(CANVAS)).toBe(owner);
+  expect(core.engines.opened()).toEqual([CANVAS]);
 });
-
-it('hands the manual resend back to the window’s engine, including its images and submission link', async () => {
-  const current = required(core.engines.canvas(CANVAS));
-  const nodes = current.document.nodes;
-  const checkpoint = current.engine.checkpoint();
-  await core.engines.closeCanvas(CANVAS);
-  const open = vi.spyOn(core.engines, 'open');
-  const fake = fakeBackend();
-  fake.backend.start.mockImplementation(async (agent, options) => {
-    await core.channels.call(7, 'session:start', [agent, options]);
-    return null;
-  });
-  fake.backend.send.mockImplementation(async (agent, message) => {
-    await core.channels.call(7, 'session:send', [agent, message]);
-    return null;
-  });
-  const off = core.channels.listen(7, (name, args) => {
-    if (name === 'session:event') {
-      const [agent, connection, event] = args as [string, ConnectionId, SessionEvent];
-      fake.emit(agent, connection, event);
-    }
-  });
-  const owner = new Engine({
-    catalog: TEST_ENGINE,
-    backend: fake.backend,
-    now: Date.now,
-    later: (run, ms) => {
-      const timer = setTimeout(run, ms);
-      return () => {
-        clearTimeout(timer);
-      };
-    },
-    connect: () => undefined,
-  });
-  try {
-    owner.update(nodes);
-    owner.restore(checkpoint);
-    const images = [{ mediaType: 'image/png' as const, data: 'AQ==' }];
-    owner.sessions.send('a', 'codex', 'From its owner', undefined, images);
-    await vi.waitFor(() => {
-      expect(sent).toHaveLength(1);
-    });
-    const original = required(sent[0]);
-    await stall();
-    await cancelWindowTurn();
-    await vi.waitFor(() => {
-      expect(sent).toHaveLength(2);
-    });
-    expect(sent[1]).toMatchObject({ text: original.text, images });
-    expect(owner.sessions.of('a').submissions).toMatchObject([
-      { id: original.id, status: 'cancelled' },
-      { id: sent[1]?.id, status: 'running', retryOf: original.id },
-    ]);
-    expect(open).not.toHaveBeenCalled();
-    expect(core.engines.opened()).toEqual([]);
-    const context = (await core.channels.call(7, 'run:get', [])) as RunRestore;
-    const saved = { version: 2 as const, ...owner.checkpoint(), updatedAt: Date.now() };
-    await core.channels.call(7, 'run:save', [context.token, saved]);
-    await core.flush();
-    await core.close();
-    expectJournaled(saved);
-  } finally {
-    off();
-    owner.reset();
-  }
-});
-
-it('keeps the renderer’s checkpoint after manual resend, flush and close', async () => {
-  await windowTurn();
+it('resends a window manual message with its images and link in the core mailbox', async () => {
+  const images = [{ mediaType: 'image/png' as const, data: 'AQ==' }];
+  await windowTurn(images);
+  const original = required(sent[0]);
   await cancelWindowTurn();
-  const restored = (await core.channels.call(7, 'run:get', [])) as RunRestore;
-  const checkpoint = {
-    ...required(restored.checkpoint ?? undefined),
-    messages: JSON.stringify({
-      version: 1,
-      agents: [
-        {
-          id: 'a',
-          submissions: [
-            {
-              id: 'later-message',
-              text: 'Later work finished in the window',
-              status: 'completed',
-              result: { status: 'completed', reason: 'completed' },
-            },
-          ],
-        },
-      ],
+  expect(sent[1]).toMatchObject({ text: original.text, images });
+  const messages = await texts();
+  expect(messages[0]).toMatchObject({ state: 'replied' });
+  expect((await core.engines.messagesOf(CANVAS)).all()).toContainEqual(
+    expect.objectContaining({
+      replyTo: messages[0]?.id,
+      turn: expect.objectContaining({ status: 'cancelled' }) as unknown,
     }),
-    updatedAt: Date.now(),
-  };
-  await core.channels.call(7, 'run:save', [restored.token, checkpoint]);
-  await core.flush();
-  await core.close();
-  expectJournaled(checkpoint);
+  );
+  expect(messages[1]).toMatchObject({ resendOf: messages[0]?.id });
+  expect(core.engines.canvas(CANVAS)?.engine.sessions.of('a').submissions).toMatchObject([
+    { id: messages[0]?.delivery?.as, status: 'cancelled' },
+    { id: messages[1]?.delivery?.as, status: 'running' },
+  ]);
 });
-
-it('still closes window-owned sessions when the window leaves after manual resend', async () => {
+it('keeps the core checkpoint and later manual work after resend, flush and close', async () => {
+  await windowTurn();
+  await cancelWindowTurn();
+  end('completed');
+  await vi.waitFor(() => {
+    expect(core.engines.canvas(CANVAS)?.engine.sessions.of('a').submissions?.at(-1)?.status).toBe(
+      'completed',
+    );
+  });
+  await core.flush();
+  const saved = required(journaledRun(profile, CANVAS));
+  await core.close();
+  expectJournaled(saved);
+});
+it('keeps a session going when its window leaves after manual resend', async () => {
   await windowTurn();
   await cancelWindowTurn();
   const close = vi.spyOn(SessionManager.prototype, 'closeCanvas');
+  const owner = core.engines.canvas(CANVAS);
   core.channels.gone(7, true);
+  await core.flush();
+  expect(close).not.toHaveBeenCalled();
+  expect(core.engines.canvas(CANVAS)).toBe(owner);
+  end('completed');
   await vi.waitFor(() => {
-    expect(close).toHaveBeenCalledWith(CANVAS);
+    expect(owner?.engine.sessions.of('a').submissions?.at(-1)?.status).toBe('completed');
   });
 });
-
-it('leaves a window-owned queue retry with its owner instead of opening a second run', async () => {
-  await windowTurn(true);
-  const open = vi.spyOn(core.engines, 'open');
+it('keeps a core queue retry going after its window leaves', async () => {
+  await core.call('window.get', {}, asHuman(7));
+  const owner = required(core.engines.canvas(CANVAS));
+  owner.engine.run.start();
+  await vi.waitFor(() => {
+    expect(sent).toHaveLength(1);
+  });
+  await stall();
+  core.channels.gone(7, true);
   await cancelWindowTurn();
-  expect(open).not.toHaveBeenCalled();
-  expect(core.engines.opened()).toEqual([]);
+  expect(core.engines.canvas(CANVAS)).toBe(owner);
+  end('completed');
+  await vi.waitFor(() => {
+    expect(owner.engine.run.snapshot().agents.a?.outcomes).toEqual({ task: 'succeeded' });
+  });
 });
 
 it('resends an agent party’s message back to that party under its new id', async () => {

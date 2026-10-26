@@ -3,11 +3,10 @@ import type { MessageBoxOptions } from 'electron';
 
 import type { Handlers } from '../../shared/link';
 import type { HostSide } from '../core/protocol';
-import type { RunShutdown } from '../run-shutdown';
 import { folderDialog, openCanvasDialog, saveCanvasDialog } from './dialogs';
 
 /** What main answers of the desktop, with dialogs parented to the window the core names. */
-export function hostServices(shutdown?: Pick<RunShutdown, 'ready'>): Handlers<HostSide> {
+export function hostServices(): Handlers<HostSide> {
   return {
     pickCanvasToOpen: openCanvasDialog,
     pickCanvasToSave: saveCanvasDialog,
@@ -36,13 +35,6 @@ export function hostServices(shutdown?: Pick<RunShutdown, 'ready'>): Handlers<Ho
     },
     showFile: (file) => {
       shell.showItemInFolder(file);
-      return null;
-    },
-    runReady: (window, request, error) => {
-      const contents = webContents.fromId(window);
-      if (!contents) throw new Error('The window closed before its run was saved.');
-      if (!shutdown) throw new Error('No run shutdown was requested.');
-      shutdown.ready(contents, request, error);
       return null;
     },
   };

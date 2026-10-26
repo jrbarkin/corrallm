@@ -422,10 +422,10 @@ describe('a Terminal agent', () => {
     const sidebar = within(screen.getByRole('complementary', { name: 'Needs you' }));
     const cards = sidebar.getAllByRole('group', { name: 'a asks, in its terminal' });
     expect(cards.map((card) => card.textContent)).toEqual([
-      'aEditnotes.txt- hello\n+ hello world\nDo you want to make this edit to notes.txt?' +
-        'Answer it in the terminal.Open terminal',
-      'aBashgit add -A …git add -A\ngit commit -m "Greet"Do you want to proceed?' +
-        'Answer it in the terminal.Open terminal',
+      'aEditnotes.txt- hello\n+ hello world\n' +
+        'Do you want to make this edit to notes.txt?Answer it in the terminal.Open terminal',
+      'aBashgit add -A …git add -A\ngit commit -m "Greet"' +
+        'Do you want to proceed?Answer it in the terminal.Open terminal',
     ]);
     const [edit] = cards;
     const removed = edit?.querySelector('[data-line="remove"]');

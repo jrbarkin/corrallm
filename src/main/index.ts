@@ -15,9 +15,8 @@ import { CorePorts } from './host/ports';
 import { hostServices } from './host/services';
 import { CoreSupervisor } from './host/supervisor';
 import { startAppUpdates } from './host/updates';
-import { registerIpcHandlers, sendEvent } from './ipc';
+import { registerIpcHandlers } from './ipc';
 import { runNativeSelfTest } from './native-selftest';
-import { RunShutdown } from './run-shutdown';
 import { hardenSession, installNavigationGuards } from './security';
 import { originKey } from './url-policy';
 import { createMainWindow } from './window';
@@ -110,10 +109,7 @@ function main(): void {
         );
       };
 
-      const shutdown = new RunShutdown((contents, requestId) => {
-        sendEvent(contents, 'run:stopping', requestId);
-      });
-      const host = hostServices(shutdown);
+      const host = hostServices();
       const init: CoreInit = {
         app: { name: app.getName(), version: app.getVersion() },
         profile: app.getPath('userData'),
@@ -203,19 +199,6 @@ function main(): void {
           );
         }
       };
-      // Until B11 X12, a window showing a canvas runs it: it freezes and saves its run
-      // (RunShutdown's run:stopping and run:ready) before CLIs close or the stores are flushed.
-      const saveRuns = async (closing: BrowserWindow[]) => {
-        const shown = await ask(
-          'shown',
-          closing.map((window) => window.webContents.id),
-        );
-        await Promise.all(
-          closing.flatMap((window) =>
-            shown.includes(window.webContents.id) ? [shutdown.stop(window.webContents)] : [],
-          ),
-        );
-      };
       // An approved quit waits for the complete core teardown. Only a second quit, while
       // saving or the core's close is stuck, bounds that wait, as the user's explicit escape.
       let finishing: Promise<void> | undefined;
@@ -262,7 +245,11 @@ function main(): void {
           const options: MessageBoxOptions = {
             type: 'warning',
             message: 'The run could not be saved',
-            detail: `${why}\n\n${verb} anyway? What wasn't saved is lost, and the agents' sessions end.`,
+            // A window only views its canvas: closing it ends no session (B11 Design §8).
+            detail:
+              verb === 'Quit'
+                ? `${why}\n\nQuit anyway? What wasn't saved is lost, and the agents' sessions end.`
+                : `${why}\n\nClose anyway? What wasn't saved is lost; the agents go on working.`,
             buttons: ['Keep corrallm open', `${verb} anyway`],
             defaultId: 0,
             cancelId: 0,
@@ -280,12 +267,10 @@ function main(): void {
           return response === 1;
         };
       const quit = new Closing({
-        // The drafts each window composes, then (until X12) each window's run, then the core's
-        // barrier: no new dispatch or write, everything forced to disk, sessions still usable.
+        // The drafts each window composes, then the core's barrier: no new dispatch or write,
+        // everything forced to disk, sessions still usable. Every run is the core's (B11 §8).
         save: async () => {
-          const windows = BrowserWindow.getAllWindows();
-          await flushDrafts(windows);
-          await saveRuns(windows);
+          await flushDrafts(BrowserWindow.getAllWindows());
           const prepared = await ask(
             'prepareShutdown',
             updates?.restarting === true ? 'update' : 'quit',
@@ -361,13 +346,10 @@ function main(): void {
         );
       };
       app.on('browser-window-created', (_event, window) => {
-        // macOS window close does not quit the app, but must save/freeze the run all the same.
+        // A window closing only finishes the drafts it composes: its canvas runs on in the core,
+        // which a window only views (B11 Design §8). macOS stays up as ever.
         const close = new Closing({
-          save: async () => {
-            await flushDrafts([window]);
-            await saveRuns([window]);
-            await ask('flush');
-          },
+          save: () => flushDrafts([window]),
           abandon: () => Promise.resolve(),
           ask: (why) =>
             // A window's earlier save can settle after the app has taken over shutdown. Its

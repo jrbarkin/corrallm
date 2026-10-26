@@ -452,7 +452,7 @@ it('says the old split worktree is missing; Switch refuses without a project-HEA
   expect(destinations).toEqual([]);
 }, 30000);
 
-/** Materialized agents, with their run still owned by the app window until B11's cutover. */
+/** Materialized agents, with their core-owned run shown by an app window. */
 async function windowAgents() {
   await skip('a');
   await skip('b');
@@ -462,11 +462,10 @@ async function windowAgents() {
     ok: true,
   });
   for (const agent of ['a', 'b'])
-    await core.channels.call(1, 'session:start', [
-      agent,
-      { connection: 'codex.app-server', mode: null, model: null },
-    ]);
-  expect(core.engines.canvas(CANVAS)).toBeUndefined();
+    expect(await core.call('session.open', { canvas: CANVAS, agent }, CALLERS.you)).toMatchObject({
+      ok: true,
+    });
+  expect(core.engines.canvas(CANVAS)).toBeDefined();
 }
 async function groupWindowAgents() {
   const grouped = await core.call(
@@ -486,7 +485,7 @@ async function groupWindowAgents() {
   if (!row || typeof row.owner !== 'string') throw new Error('No pending group');
   return `rebind/${encodeURIComponent(row.owner)}/${String(row.generation)}`;
 }
-it('publishes the Switch card while its canvas run is still owned by the window', async () => {
+it('publishes the Switch card for the core-owned run shown in a window', async () => {
   await windowAgents();
   const to = await groupWindowAgents();
   const needs = await core.call('needs', { canvas: CANVAS }, CALLERS.you);
@@ -495,12 +494,15 @@ it('publishes the Switch card while its canvas run is still owned by the window'
     value: { items: expect.arrayContaining([expect.objectContaining({ id: to })]) as unknown },
   });
 }, 30000);
-it('refuses Switch while a window-owned native turn is going, without closing its session', async () => {
+it('refuses Switch while a shown native turn is going, without closing its session', async () => {
   await windowAgents();
   const native = fake.sessions.at(-1);
   if (!native) throw new Error('No window session');
   const close = vi.spyOn(native, 'close');
   await core.channels.call(1, 'session:send', ['b', { id: 'native-message', text: '/question' }]);
+  await vi.waitFor(() => {
+    expect(native.sent).toContainEqual(expect.objectContaining({ text: '/question' }));
+  });
   const to = await groupWindowAgents();
   expect(await answerSplit(to)).toMatchObject({
     ok: false,
@@ -560,14 +562,17 @@ it('runs the composed setup only after its human approval, before admitting the 
   expect(fake.started[0]?.cwd).toBe(cwd);
 }, 30000);
 
-it('keeps an uncertain window-session close in the Switch drain until it actually ends', async () => {
+it('keeps an uncertain shown-session close in the Switch drain until it actually ends', async () => {
   await windowAgents();
   const native = fake.sessions.at(-1);
   if (!native) throw new Error('No window session');
   const ending = Promise.withResolvers<undefined>();
   const close = vi.spyOn(native, 'close').mockReturnValue(ending.promise);
   const to = await groupWindowAgents();
-  const pending = Promise.resolve(core.channels.call(1, 'session:close', ['b']));
+  // Simulate a genuine core-owned session close whose native process has not ended yet.
+  const open = core.engines.canvas(CANVAS);
+  if (!open) throw new Error('No core runtime');
+  const pending = open.engine.sessions.close('b');
   try {
     await vi.waitFor(() => {
       expect(close).toHaveBeenCalledOnce();

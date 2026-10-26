@@ -8,6 +8,7 @@ import { expect, test } from '@playwright/test';
 import type { ElectronApplication, Locator, Page } from '@playwright/test';
 
 import { launchApp } from './launch';
+import { crashCore } from './core-crash';
 
 /*
  * Durable runs through the real app, a real PTY and the fake Claude CLI. The visible queue is
@@ -158,7 +159,7 @@ async function openResumed(run: number, id: string) {
   expect(args).not.toContain('--continue');
 }
 
-async function restored(named: boolean) {
+async function restored(named: boolean, paused = true) {
   await expect(page.locator('.react-flow__node')).toHaveCount(1);
   await expect(page.locator('.react-flow__node')).toHaveAttribute(
     'aria-label',
@@ -167,12 +168,14 @@ async function restored(named: boolean) {
   await expect(page.getByRole('button', { name: 'Project folder: shop' })).toBeVisible();
   await expect(page.getByText('team.corral', { exact: true })).toHaveCount(named ? 1 : 0);
   await page.getByRole('button', { name: 'Show all queues' }).click();
-  await expect(queues().locator('.queues-run-status')).toHaveText('Paused');
-  await expect(queues().getByRole('button', { name: 'Resume', exact: true })).toBeVisible();
+  if (paused) {
+    await expect(queues().locator('.queues-run-status')).toHaveText('Paused');
+    await expect(queues().getByRole('button', { name: 'Resume', exact: true })).toBeVisible();
+  }
 }
 
 for (const named of [false, true]) {
-  test(`restores a ${named ? 'named' : 'draft'} run paused after reload and quit, without replaying its prompts`, async () => {
+  test(`restores a ${named ? 'named' : 'draft'} run across reload and paused after quit, without replaying its prompts`, async () => {
     const first = 'Finish this once';
     const manual = 'A direct native follow-up';
     await createRun(first, named);
@@ -182,13 +185,15 @@ for (const named of [false, true]) {
     await nativeMessage(manual);
     await expect.poll(prompts).toEqual([first, manual]);
 
-    // Reload restores both the workflow outcome and the user's separate manual Message row.
+    // Reload binds the live core: neither the workflow nor its native session restarts.
     await page.reload();
-    await restored(named);
+    await restored(named, false);
     await expect(task(first)).toHaveAttribute('data-run', 'succeeded');
     await expect(submitted(queues(), manual)).toHaveAttribute('data-run', 'completed');
     expect(await starts()).toHaveLength(1);
-    await openResumed(2, id);
+    await queues().getByRole('button', { name: 'Open Agent 1' }).click();
+    await expect(view().locator('.agent-terminal')).toHaveAttribute('data-state', 'live');
+    expect(await starts()).toHaveLength(1);
     await nativeMessage('After reload');
     await expect.poll(prompts).toEqual([first, manual, 'After reload']);
 
@@ -208,8 +213,8 @@ for (const named of [false, true]) {
       '',
     );
     await expect(submitted(queues(), 'slow manual follow-up')).toContainText('Unresolved');
-    expect(await starts()).toHaveLength(2);
-    await openResumed(3, id);
+    expect(await starts()).toHaveLength(1);
+    await openResumed(2, id);
     await nativeMessage('After reopen');
     await expect
       .poll(prompts)
@@ -217,14 +222,14 @@ for (const named of [false, true]) {
   });
 }
 
-test('restores an interrupted attempt as uncertain and never resends it on Resume', async () => {
+test('a core crash restores an interrupted attempt as uncertain and never resends it on Resume', async () => {
   const message = 'slow persistent task';
   await createRun(message, true);
   await expect(task(message)).toHaveAttribute('data-run', 'running');
   await expect.poll(prompts).toEqual([message]);
   const id = await originalSession();
 
-  await page.reload();
+  await crashCore(app);
   await restored(true);
   await expect(task(message)).toHaveAttribute('data-problem', 'uncertain');
   await expect(task(message).locator('.graph-queue-problem')).toContainText(

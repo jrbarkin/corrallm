@@ -50,6 +50,4 @@ export interface HostServices {
   openExternal(url: string): Promise<null>;
   /** Shows a project file the core checked in the file manager, never opening it. */
   showFile(file: string): Promise<null>;
-  /** The renderer finished the freeze/save main requested before closing its window. */
-  runReady(window: WindowId, request: string, error: string | null): Promise<null>;
 }

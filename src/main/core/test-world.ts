@@ -1712,8 +1712,9 @@ export const REAL_FIXTURES: Readonly<Record<OpName, OpFixture>> = {
   },
   'canvas.saveAs': {
     // The dialog is cancelled: nothing is saved.
-    valid: [{ canvas: CANVAS }, {}],
-    invalid: [{ canvas: 'nope' }, { canvas: CANVAS, file: '/etc/passwd' }],
+    valid: [{ canvas: CANVAS }],
+    // Several core-owned runtimes are open in this world: the canvas cannot be inferred.
+    invalid: [{}, { canvas: 'nope' }, { canvas: CANVAS, file: '/etc/passwd' }],
   },
   'canvas.close': {
     valid: [],
