@@ -237,6 +237,9 @@ export class TopicMirror {
         if (!entry.live || entry.generation !== generation) return;
         entry.pending = false;
         this.#reject(entry, error);
+        // A closing core refuses a subscribe as unavailable. That is shutdown or a reopen, not a
+        // fault, and the entry stays live: the next epoch subscribes it afresh.
+        if (error instanceof ApiError && error.code === 'unavailable') return;
         console.error('Could not subscribe to a topic:', ipcErrorMessage(error));
       },
     );
