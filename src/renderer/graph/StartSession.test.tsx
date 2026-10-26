@@ -60,6 +60,7 @@ it('opens a window on an empty canvas, offering the folder, installed agents, co
   setup();
   const view = await start();
   expect(view.getByRole('button', { name: 'Choose a project folder' })).toBeTruthy();
+  expect(view.getByText('Agents get their own worktrees; groups share one.')).toBeTruthy();
   expect(
     (await view.findByRole<HTMLButtonElement>('button', { name: 'Start Claude Code' })).disabled,
   ).toBe(false);

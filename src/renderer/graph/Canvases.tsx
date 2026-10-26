@@ -4,6 +4,8 @@ import type { CanvasId } from '../../shared/canvas';
 import { useTopic } from '../api/topics';
 import type { TopicMirror } from '../api/topics';
 import { ipcErrorMessage } from '../ipc-error';
+import type { GuiApi } from '../../shared/gui-link';
+import { KeptWorktrees } from '../workspaces/KeptWorktrees';
 
 /** The core's kept canvases, most recent first. Independent of the canvas menu that hosts it. */
 export function Canvases({
@@ -11,11 +13,13 @@ export function Canvases({
   mirror,
   onShow,
   onClose,
+  client,
 }: {
   canvas: CanvasId;
   mirror: TopicMirror;
   onShow: (canvas: CanvasId) => Promise<void>;
   onClose: (canvas: CanvasId, discard: boolean) => Promise<void>;
+  client?: GuiApi;
 }) {
   const state = useTopic('canvases', mirror);
   const [open, setOpen] = useState(false);
@@ -135,6 +139,7 @@ export function Canvases({
                         </button>
                       )}
                     </div>
+                    <KeptWorktrees canvas={id} name={name} mirror={mirror} client={client} />
                   </li>
                 );
               })}

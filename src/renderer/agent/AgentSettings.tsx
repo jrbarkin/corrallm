@@ -15,6 +15,7 @@ import { AgentChip } from './AgentChip';
 import { SettingsMenu } from './Settings';
 import type { Session } from '../../shared/model/session';
 import './AgentSettings.css';
+import { WorkspaceDetails } from '../workspaces/Workspace';
 
 type Options = (adapter: AdapterId) => Promise<SettingsOptions>;
 
@@ -203,6 +204,7 @@ export function AgentSettingsPanel({
           />
         </div>
         <p className="agent-settings-help">{connectionInfo(connection).description}.</p>
+        <WorkspaceDetails agent={node.id} />
         <label className="agent-settings-field">
           Role
           <textarea

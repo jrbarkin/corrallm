@@ -8,13 +8,21 @@ export function FloatPopover({
   button,
   children,
   className = '',
+  request,
 }: {
   label: string;
   button: ReactNode;
   children: (close: () => void) => ReactNode;
   className?: string;
+  /** Local navigation to a decision inside the popover, even after it was dismissed. */
+  request?: object | undefined;
 }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(request !== undefined);
+  const [seenRequest, setSeenRequest] = useState(request);
+  if (request !== seenRequest) {
+    setSeenRequest(request);
+    if (request) setOpen(true);
+  }
   const root = useRef<HTMLDivElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
   const id = useId();

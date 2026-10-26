@@ -110,6 +110,8 @@ export function fakeCanvas(
     if (!core.state(`messages:${next.id}`))
       core.snapshot(`messages:${next.id}`, { items: {}, order: [], next: '' });
     if (!core.state(`needs:${next.id}`)) core.snapshot(`needs:${next.id}`, { items: [] });
+    if (!core.state(`worktrees:${next.id}`))
+      core.snapshot(`worktrees:${next.id}`, { items: [], kept: [] });
     runtime = runtimes.get(next.id);
     if (runtime) {
       runtime.activate();
