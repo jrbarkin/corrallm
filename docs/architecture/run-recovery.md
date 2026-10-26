@@ -4,6 +4,8 @@
 
 ## `src/renderer/run/`
 
+`e2e/core-continuity.e2e.ts` holds a native SDK or Terminal turn across reload and renderer death, then checks that its reply satisfies the following condition and the next task completes, with one native start and no repeated prompt. `e2e/window-closed.e2e.ts` closes the only window mid-turn, reads the live runtime through MCP, lets the run finish without a window, exchanges an outside message and reply, then reopens the same canvas through Canvases. Both distinguish the live core's identity from the new owner used by the existing core-crash and quit/relaunch recovery tests.
+
 The core owns the run and journals it; the renderer’s run directory holds read-only display adapters, one-operation commands and run.css’s queue marks. There is no window run checkpoint, run token, run:get/run:save channel or RunPersistence. A canvas switch flushes drafts, sends one file/window operation and binds the returned canvas’s complete topic snapshots; it never freezes, saves or resets execution. A cancelled switch keeps the run exactly as it was.
 
 - Per-agent controls live in the right-click menu on canvas cards, All queues headings and session headers (also Context Menu / Shift+F10). `RunStore.pauseAgent` finishes current work then holds dispatch; `killAgent` cancels owned/received work immediately, holds the queue and leaves its native console open. `resumeAgent` releases only that hold. `AgentRun.paused` persists in the checkpoint, separately from whole-run pause; it is runtime state, never part of a saved `.corral` workflow. `RunIO.hold` keeps SessionStore's queued sends held too, while a fresh manual prompt can still intervene. Release drains in a microtask so same-stack canvas resets cannot send stale work.

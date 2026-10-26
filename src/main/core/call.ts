@@ -101,7 +101,7 @@ export interface OpContext {
   readonly proposedBy?: PartyId;
   /** Aborts when a preempting op supersedes it, or its caller gives up: then it unwinds. */
   readonly signal: AbortSignal;
-  /** Marks a direct document write irreversible, checking cancellation first, as commit does. */
+  /** Marks a native effect irreversible, checking current authority and cancellation first. */
   noReturn(): void;
   /** Defers a command's final cleanup until its successful proposal settlement. */
   readonly after?: (cleanup: () => Promise<void>) => void;
@@ -488,6 +488,7 @@ export function createDispatcher(registry: Registry, options: DispatchOptions = 
       expect?: Readonly<Record<string, number>>;
     };
     const proposes = surface.rules?.some((rule) => PROPOSING_RULES.includes(rule)) === true;
+    let irreversible = false;
     const ctx: OpContext = {
       caller,
       get party() {
@@ -497,7 +498,9 @@ export function createDispatcher(registry: Registry, options: DispatchOptions = 
       ...(options.proposedBy === undefined ? {} : { proposedBy: options.proposedBy }),
       signal: turn.signal,
       noReturn: () => {
+        if (!irreversible) checkReach(name, surface, def, args, caller);
         turn.noReturn();
+        irreversible = true;
       },
       ...(options.after === undefined ? {} : { after: options.after }),
       ...(options.guard === undefined ? {} : { guard: options.guard }),
@@ -709,6 +712,7 @@ export function createDispatcher(registry: Registry, options: DispatchOptions = 
         typeof request === 'string'
           ? await requests.remembered(callerKey(caller), `${name}|${request}|${keyOf(args)}`, run)
           : (await run()).result;
+      if (surface.kind === 'read') checkReach(name, surface, def, args, caller);
       // Current rows are disclosed only while the caller still reaches them, even in a cached
       // refusal. Successful deletes keep their first result after their targets have gone.
       if (!result.ok && result.error.current !== undefined)

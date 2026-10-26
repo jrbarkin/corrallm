@@ -240,6 +240,15 @@ async function submit() {
     return;
   }
   if (prompt.startsWith('slow')) return;
+  // The continuity specs release a native turn only after observing a lost/replaced view.
+  const gate = JSON.parse(process.env.FAKE_CLAUDE_TURN_GATES ?? '{}')[prompt];
+  if (typeof gate === 'string') {
+    writeFileSync(`${gate}.waiting`, 'waiting');
+    while (state === 'working' && !existsSync(gate)) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    if (state !== 'working') return;
+  }
   setTimeout(() => void finish(), 300);
 }
 
