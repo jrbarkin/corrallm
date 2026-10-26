@@ -12,6 +12,24 @@ afterEach(() => {
   topics?.close();
 });
 
+it('does not receipt the first read of an unchanged canonical source as a write’s change', async () => {
+  const topic = `worktrees:${CANVAS}` as const;
+  const state = { items: [], kept: [] };
+  topics = new Topics({
+    read: () => Promise.resolve({ ok: true, value: state }),
+    canonical: { of: (key) => key === topic, read: () => Promise.resolve(state) },
+  });
+  const since = topics.mark();
+  expect(await topics.receipts([topic], since)).toEqual({});
+  expect(await topics.receipts([topic], since)).toEqual({});
+  expect(
+    await topics.subscribe(1, { topic: 'worktrees', canvas: CANVAS }, {
+      caller: CALLERS.you,
+      signal: new AbortController().signal,
+    } as OpContext),
+  ).toMatchObject({ state, rev: 1 });
+});
+
 it('moves your worktrees revision at each change, a window watching or not, and receipts it', async () => {
   const topic = `worktrees:${CANVAS}` as const;
   let state = { items: [{ agent: 'a', state: 'creating' }], kept: [] as unknown[] };

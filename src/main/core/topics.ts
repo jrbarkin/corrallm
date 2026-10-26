@@ -291,7 +291,7 @@ export class Topics implements Publication {
   }
 
   /** Within the queue's turn: a replaced topic read again for whoever sees it, as `changed` says. */
-  async #reread(topic: TopicKey, by: Change['by']): Promise<void> {
+  async #reread(topic: TopicKey, by: Change['by'], sourceChanged = true): Promise<void> {
     const canonical = this.#deps.canonical?.of(topic) === true;
     const callers = new Map<string, Caller>();
     for (const topics of this.#subscriptions.values()) {
@@ -309,7 +309,8 @@ export class Topics implements Publication {
     if (canonical) {
       try {
         const state = await this.#deps.canonical?.read(topic);
-        if (state !== undefined && !this.#closed) this.#replace(topic, 'you', state, by);
+        if (state !== undefined && !this.#closed)
+          this.#replace(topic, 'you', state, by, sourceChanged);
       } catch (error) {
         console.error('Could not read a changed topic:', error);
       }
@@ -426,7 +427,7 @@ export class Topics implements Publication {
         if (isRuntimeTopic(topic) || this.#deps.canonical?.of(topic) !== true) continue;
         const by = this.#attributed.get(topic) ?? 'corrallm';
         this.#attributed.delete(topic);
-        await this.#reread(topic, by);
+        await this.#reread(topic, by, false);
       }
       return Object.fromEntries(
         topics.flatMap((topic) =>
@@ -499,7 +500,7 @@ export class Topics implements Publication {
       }
       const group = groupOf(caller);
       // A subscribe can observe a change before its source's notification reaches the queue.
-      this.#replace(topic, group, state as TopicSnapshot['state'], 'corrallm');
+      this.#replace(topic, group, state as TopicSnapshot['state'], 'corrallm', false);
       topics.set(topic, { caller });
       const snapshot = this.#states.get(topic)?.get(group) ?? {
         epoch: this.epoch,
@@ -879,15 +880,26 @@ export class Topics implements Publication {
     return result.value;
   }
 
-  #replace(topic: TopicKey, group: string, state: TopicSnapshot['state'], by: Change['by']): void {
+  #replace(
+    topic: TopicKey,
+    group: string,
+    state: TopicSnapshot['state'],
+    by: Change['by'],
+    sourceChanged = true,
+  ): void {
     let states = this.#states.get(topic);
     if (!states) this.#states.set(topic, (states = new Map<string, TopicSnapshot>()));
     const previous = states.get(group);
     if (previous && JSON.stringify(previous.state) === JSON.stringify(state)) return;
     // Yours of a canonical topic moves at its first state too: a change no one watched is one.
     const first = group === 'you' && this.#deps.canonical?.of(topic) === true;
+    // A first snapshot still has revision 1. Only an actual source notification makes that
+    // initial state a write's effect: subscribing or refreshing an unknown baseline proves no
+    // change. Once known, a refresh can detect a changed state even without its notification.
     const rev =
-      previous || first ? this.#bump(topic, group) : (this.#revs.get(topic)?.get(group) ?? 0);
+      previous || first
+        ? this.#bump(topic, group, previous !== undefined || sourceChanged)
+        : (this.#revs.get(topic)?.get(group) ?? 0);
     states.set(group, { epoch: this.epoch, rev, state });
     if (!previous) return;
     const change = {
@@ -924,12 +936,12 @@ export class Topics implements Publication {
   }
 
   /** A replaced topic's next revision for those who see it alike. */
-  #bump(topic: TopicKey, group: string): number {
+  #bump(topic: TopicKey, group: string, changed = true): number {
     let revs = this.#revs.get(topic);
     if (!revs) this.#revs.set(topic, (revs = new Map<string, number>()));
     const rev = (revs.get(group) ?? 0) + 1;
     revs.set(group, rev);
-    if (group === 'you') this.#allocated.set(topic, ++this.#publication);
+    if (group === 'you' && changed) this.#allocated.set(topic, ++this.#publication);
     return rev;
   }
 

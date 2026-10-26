@@ -465,10 +465,16 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     if (document === undefined && !states.keeps(canvas))
       throw new OpFailure('not-found', `There is no canvas ${canvas}.`);
     const now = document ?? (await documents.load(canvas)).document;
+    // A kept canvas need not have been shown or opened in this core, so ProjectFolders may
+    // not have restored its pick. Read the remembered choice, without discovery or verification;
+    // it is a listing's fact, never a working directory handed to a session.
+    const picked =
+      projects.of(canvas) ??
+      (viewer.kind === 'you' ? (await memory.get(canvas)).project : undefined);
     return listWorktrees(
       {
         workspaces: workspaceStore,
-        projectRoot: (id) => projects.of(id),
+        projectRoot: (id) => projects.of(id) ?? (id === canvas ? picked : undefined),
         provisioning: (id, owner) => workspaceDirectories.provisioning(id, owner),
         kept: (id) => cleanup.kept(id),
       },
