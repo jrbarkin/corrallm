@@ -338,3 +338,75 @@ it('raises C7’s discard proposal for work, leaves it on refusal, and binds app
   ).toMatchObject({ ok: true, value: { outcome: 'stale' } });
   expect(remove).not.toHaveBeenCalled();
 });
+
+it('offers only Keep for an unread kept tree and refuses a Discard reply', async () => {
+  state = { ...state, unknown: 'its submodule is checked out' };
+  const proposed = await core.call(
+    'worktree.remove',
+    { canvas: CANVAS, worktree: TREE },
+    CALLERS.you,
+  );
+  if (!proposed.ok || !('proposed' in proposed.value)) throw new Error('Expected a proposal');
+  const to = proposed.value.proposed;
+  const needs = await core.call('needs', { canvas: CANVAS }, CALLERS.you);
+  if (!needs.ok) throw new Error(needs.error.sentence);
+  const question = needs.value.items.find(({ id }) => id === to);
+  expect(question?.detail).toContain('whether it changed since you were asked');
+  expect(question?.choices.map(({ value, label }) => ({ value, label }))).toEqual([
+    { value: 'refuse', label: 'Keep it' },
+  ]);
+  expect(
+    await core.call('reply', { canvas: CANVAS, to, answer: { choice: 'discard' } }, CALLERS.you),
+  ).toMatchObject({ ok: false, error: { code: 'invalid' } });
+  expect(
+    await core.call('reply', { canvas: CANVAS, to, answer: { choice: 'refuse' } }, CALLERS.you),
+  ).toMatchObject({ ok: true, value: { outcome: 'refused' } });
+  expect(workspaces.worktree(TREE)?.state).toBe('retained');
+  expect(remove).not.toHaveBeenCalled();
+});
+
+it('does not apply an earlier Discard when its kept tree becomes unreadable', async () => {
+  state = { ...state, changed: 1, paths: ['notes.md'] };
+  const proposed = await core.call(
+    'worktree.remove',
+    { canvas: CANVAS, worktree: TREE },
+    CALLERS.you,
+  );
+  if (!proposed.ok || !('proposed' in proposed.value)) throw new Error('Expected a proposal');
+  state = { ...state, unknown: 'unreadable' };
+  expect(
+    await core.call(
+      'reply',
+      {
+        canvas: CANVAS,
+        to: proposed.value.proposed,
+        answer: { choice: 'discard' },
+      },
+      CALLERS.you,
+    ),
+  ).toMatchObject({ ok: true, value: { outcome: 'stale' } });
+  expect(workspaces.worktree(TREE)?.state).toBe('retained');
+  expect(remove).not.toHaveBeenCalled();
+});
+
+it('applies Discard for a whole unchanged kept tree through reply', async () => {
+  state = { ...state, changed: 1, paths: ['notes.md'] };
+  const proposed = await core.call(
+    'worktree.remove',
+    { canvas: CANVAS, worktree: TREE },
+    CALLERS.you,
+  );
+  if (!proposed.ok || !('proposed' in proposed.value)) throw new Error('Expected a proposal');
+  expect(
+    await core.call(
+      'reply',
+      {
+        canvas: CANVAS,
+        to: proposed.value.proposed,
+        answer: { choice: 'discard' },
+      },
+      CALLERS.you,
+    ),
+  ).toMatchObject({ ok: true, value: { outcome: 'allowed' } });
+  expect(remove).toHaveBeenCalledExactlyOnceWith(TREE);
+});

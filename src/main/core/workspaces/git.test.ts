@@ -89,8 +89,14 @@ describe.skipIf(process.platform === 'win32')('GitRunner', () => {
       cwd: root,
       args: ['status'],
       drivers: ['lfs', 'odd.name'],
+      // A call's own configuration comes first: the fixed options after it win.
+      config: ['core.trustctime=true', 'core.hooksPath=/elsewhere'],
     });
     expect(stdout.split('\0').slice(0, -1)).toEqual([
+      '-c',
+      'core.trustctime=true',
+      '-c',
+      'core.hooksPath=/elsewhere',
       ...SAFE_GIT_OPTIONS,
       '-c',
       `core.hooksPath=${hooks}`,
@@ -102,6 +108,8 @@ describe.skipIf(process.platform === 'win32')('GitRunner', () => {
       'gc.auto=0',
       '-c',
       'maintenance.auto=false',
+      '-c',
+      'worktree.useRelativePaths=false',
       ...['lfs', 'odd.name'].flatMap((driver) => [
         '-c',
         `filter.${driver}.clean=`,

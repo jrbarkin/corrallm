@@ -3,8 +3,12 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
+  readdirSync,
+  renameSync,
   rmSync,
+  statSync,
   symlinkSync,
+  utimesSync,
   writeFileSync,
 } from 'node:fs';
 import path from 'node:path';
@@ -14,7 +18,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fingerprint, safe, WorkspaceCleanup } from './cleanup';
 import type { Removal } from './cleanup';
 import type { WorktreeRecord } from './store';
-import { commit, git } from './test-git';
+import { commit, git, makeRepository, ran, sentinelProgram } from './test-git';
 import { CANVAS, testWorkspaces } from './test-workspace';
 import type { TestWorkspaces } from './test-workspace';
 
@@ -67,6 +71,16 @@ async function decide(service: WorkspaceCleanup, tree: WorktreeRecord, removal: 
   });
 }
 
+/** Every path below `at`, with what each file holds: what a write through a link would change. */
+function snapshot(at: string): Record<string, string> {
+  const found: Record<string, string> = {};
+  for (const name of readdirSync(at, { recursive: true, encoding: 'utf8' }).sort()) {
+    const file = path.join(at, name);
+    found[name] = statSync(file).isDirectory() ? '/' : readFileSync(file, 'utf8');
+  }
+  return found;
+}
+
 function branchAt(ref: string): string | undefined {
   try {
     return git(made.app, made.env, 'rev-parse', '--verify', '--quiet', ref).trim();
@@ -114,6 +128,152 @@ describe('what a tree holds', { timeout: 60_000 }, () => {
     expect(gone.unknown).toMatch(/gone/);
     expect(gone.tip).toBe(made.base);
     expect(safe(gone)).toBe(false);
+  });
+
+  /*
+   * A submodule is read by Git only through a git run in it, under its own configuration, whose
+   * filters nothing here reaches: assessing a tree reads none, and runs none of its programs. One
+   * checked out may hold work: never safe, and its files, as the file system has them, are in what
+   * an approval is bound to.
+   */
+  describe('with a submodule', () => {
+    const files = { '.gitattributes': '*.txt filter=evil\n', 'data.txt': 'base\n' };
+    let sentinel: string;
+
+    /** The picked checkout's HEAD with a submodule at `sub`, and a tree of it, kept. */
+    async function withSubmodule(): Promise<WorktreeRecord> {
+      const oid = makeRepository(path.join(made.app, 'sub'), made.env, files);
+      git(made.app, made.env, 'update-index', '--add', '--cacheinfo', `160000,${oid},sub`);
+      commit(made.app, made.env, 'gitlink');
+      sentinel = path.join(made.root, 'ran');
+      return kept();
+    }
+
+    /** The submodule checked out in the tree, its clean filter a program that records it ran. */
+    function checkOut(tree: WorktreeRecord): string {
+      const checkout = path.join(tree.path, 'sub');
+      makeRepository(checkout, made.env, files);
+      git(checkout, made.env, 'config', 'filter.evil.clean', sentinelProgram(made.root, sentinel));
+      return checkout;
+    }
+
+    it('runs none of a checked-out submodule’s programs, and is never safe with one', async () => {
+      const tree = await withSubmodule();
+      const checkout = checkOut(tree);
+      // The same length, so only the file's content tells Git it changed.
+      writeFileSync(path.join(checkout, 'data.txt'), 'evil\n');
+      const state = await cleanup().assess(tree);
+      expect(ran(sentinel)).toEqual([]);
+      expect(state.unknown).toMatch(/submodule.*sub/);
+      expect(safe(state)).toBe(false);
+      // Removing it as safe keeps it.
+      const service = cleanup();
+      await decide(service, tree, { branch: true, force: false, approved: null, tip: state.tip });
+      expect(await service.remove(tree.id)).toBe('retained');
+      expect(ran(sentinel)).toEqual([]);
+      expect(readFileSync(path.join(checkout, 'data.txt'), 'utf8')).toBe('evil\n');
+    });
+
+    it('is safe with a submodule not checked out', async () => {
+      const tree = await withSubmodule();
+      const state = await cleanup().assess(tree);
+      expect(state).toMatchObject({ changed: 0, untracked: 0, merged: true });
+      expect(state.unknown).toBeUndefined();
+      expect(safe(state)).toBe(true);
+    });
+
+    it('keeps a checked-out submodule even on an approved Discard', async () => {
+      const tree = await withSubmodule();
+      const checkout = checkOut(tree);
+      const service = cleanup();
+      const state = await service.assess(tree);
+      await expect(
+        service.removeKept(CANVAS, tree.id, {
+          choice: 'discard',
+          fingerprints: { [tree.id]: fingerprint(state) },
+        }),
+      ).rejects.toMatchObject({ code: 'refused' });
+      // A removal recorded under an older policy is checked again before Git removes anything.
+      await decide(service, tree, {
+        branch: true,
+        force: true,
+        approved: fingerprint(state),
+        tip: state.tip,
+      });
+      expect(await service.remove(tree.id)).toBe('retained');
+      expect(made.workspaces.worktree(tree.id)?.state).toBe('retained');
+      expect(readFileSync(path.join(checkout, 'data.txt'), 'utf8')).toBe('base\n');
+      expect(ran(sentinel)).toEqual([]);
+    });
+
+    it('counts a submodule’s commit staged in the tree as a change', async () => {
+      const tree = await withSubmodule();
+      const other = makeRepository(path.join(made.root, 'other'), made.env, { 'b.txt': 'b\n' });
+      git(tree.path, made.env, 'update-index', '--cacheinfo', `160000,${other},sub`);
+      const state = await cleanup().assess(tree);
+      expect(state).toMatchObject({ changed: 1, paths: ['sub'] });
+      expect(safe(state)).toBe(false);
+    });
+
+    it('binds an approval to the submodule’s files: one changed since settles it stale', async () => {
+      const tree = await withSubmodule();
+      const checkout = checkOut(tree);
+      const service = cleanup();
+      const asked = await service.assess(tree);
+      expect(fingerprint(await service.assess(tree))).toBe(fingerprint(asked));
+      writeFileSync(path.join(checkout, 'data.txt'), 'evil\n');
+      const changed = await service.assess(tree);
+      expect(fingerprint(changed)).not.toBe(fingerprint(asked));
+      expect(ran(sentinel)).toEqual([]);
+      // Committed there too (the test's own git, its filter taken off meanwhile): its own Git
+      // directory is read as files, never by its git.
+      const program = git(checkout, made.env, 'config', 'filter.evil.clean').trim();
+      git(checkout, made.env, 'config', '--unset', 'filter.evil.clean');
+      git(checkout, made.env, 'add', '-A');
+      commit(checkout, made.env, 'work in the submodule');
+      git(checkout, made.env, 'config', 'filter.evil.clean', program);
+      expect(fingerprint(await service.assess(tree))).not.toBe(fingerprint(changed));
+      expect(ran(sentinel)).toEqual([]);
+    });
+
+    it('reads the Git directory a submodule’s .git file names, as files', async () => {
+      const tree = await withSubmodule();
+      const checkout = checkOut(tree);
+      // Its Git directory kept elsewhere, as an absorbed submodule's is.
+      const own = path.join(made.root, 'sub.git');
+      renameSync(path.join(checkout, '.git'), own);
+      writeFileSync(path.join(checkout, '.git'), `gitdir: ${own}\n`);
+      git(own, made.env, 'config', 'core.worktree', checkout);
+      const service = cleanup();
+      const asked = await service.assess(tree);
+      git(checkout, made.env, 'tag', 'work');
+      expect(fingerprint(await service.assess(tree))).not.toBe(fingerprint(asked));
+      expect(ran(sentinel)).toEqual([]);
+    });
+  });
+
+  it('runs none of the filters its own configuration gives its checkout while removing it', async () => {
+    // A driver configured only on the workspace's branch, which the picked checkout isn't on.
+    const sentinel = path.join(made.root, 'ran');
+    const late = path.join(made.root, 'late.config');
+    writeFileSync(
+      late,
+      `[filter "late"]\n\tclean = '${sentinelProgram(made.root, sentinel)}' clean\n`,
+    );
+    git(made.app, made.env, 'config', 'includeIf.onbranch:corrallm/**.path', late);
+    writeFileSync(path.join(made.app, '.gitattributes'), '*.md filter=late\n');
+    git(made.app, made.env, 'add', '.gitattributes');
+    commit(made.app, made.env, 'attributes');
+    const tree = await kept();
+    // Its file's time ahead of Git's index: Git reads it again (through its clean filter) each time.
+    const later = new Date(Date.now() + 3_600_000);
+    utimesSync(path.join(tree.path, 'README.md'), later, later);
+    const service = cleanup();
+    const state = await service.assess(tree);
+    expect(safe(state)).toBe(true);
+    await decide(service, tree, { branch: true, force: false, approved: null, tip: state.tip });
+    expect(await service.remove(tree.id)).toBe('removed');
+    expect(ran(sentinel)).toEqual([]);
   });
 });
 
@@ -265,27 +425,59 @@ describe('removing a tree', { timeout: 60_000 }, () => {
     symlinkSync(made.app, tree.path);
     expect(await service.remove(tree.id)).toBe('retained');
     expect(existsSync(path.join(made.app, 'README.md'))).toBe(true);
-    // Approved as it is now, still: it isn't the checkout, so nothing there is removed.
+    // Even an approval of the unread state cannot remove it.
     const now = fingerprint(await service.assess(made.workspaces.worktree(tree.id) ?? tree));
     await decide(service, tree, { branch: true, force: true, approved: now, tip: made.base });
-    expect(await service.remove(tree.id)).toBe('failed');
+    expect(await service.remove(tree.id)).toBe('retained');
     expect(made.workspaces.worktree(tree.id)).toMatchObject({
-      state: 'removing',
-      errorCode: 'cleanup-checkout-changed',
+      state: 'retained',
+      errorCode: null,
     });
+    expect(branchAt(tree.branchRef)).toBe(made.base);
     expect(existsSync(path.join(made.app, 'README.md'))).toBe(true);
   });
 
-  it('forgets a tree whose checkout is gone once you approved it, its branch with it', async () => {
+  /*
+   * What removal writes in the common Git directory (the registration it deletes, the branch's
+   * loose ref, reflog and packed-refs) is never reached through a link: a removal finding one
+   * removes nothing, here or there, and stays removing, saying why.
+   */
+  it.each(['worktrees', 'refs/heads/corrallm', 'logs/refs/heads/corrallm', 'packed-refs'])(
+    'removes nothing through a symlinked %s of the common Git directory',
+    async (at) => {
+      const service = cleanup();
+      const tree = await kept();
+      await decide(service, tree, { branch: true, force: false, approved: null, tip: made.base });
+      if (at === 'packed-refs') git(made.app, made.env, 'pack-refs', '--all');
+      const outside = path.join(made.root, 'outside');
+      mkdirSync(outside);
+      const moved = path.join(outside, 'moved');
+      const linked = path.join(made.app, '.git', at);
+      renameSync(linked, moved);
+      symlinkSync(moved, linked);
+      const before = snapshot(outside);
+      const ended = await service.remove(tree.id);
+      expect(snapshot(outside)).toEqual(before);
+      expect(ended).toBe('failed');
+      expect(made.workspaces.worktree(tree.id)).toMatchObject({
+        state: 'removing',
+        errorCode: 'cleanup-git-metadata-symlinked',
+      });
+      expect(existsSync(path.join(tree.path, 'README.md'))).toBe(true);
+      expect(branchAt(tree.branchRef)).toBe(made.base);
+    },
+  );
+
+  it('keeps an unread missing checkout’s record and branch despite an older Discard', async () => {
     const service = cleanup();
     const tree = await kept();
     mkdirSync(path.join(made.root, 'elsewhere'));
     rmSync(tree.path, { recursive: true, force: true });
     const approved = fingerprint(await service.assess(tree));
     await decide(service, tree, { branch: true, force: true, approved, tip: made.base });
-    expect(await service.remove(tree.id)).toBe('removed');
-    expect(made.workspaces.worktree(tree.id)).toBeUndefined();
-    expect(branchAt(tree.branchRef)).toBeUndefined();
+    expect(await service.remove(tree.id)).toBe('retained');
+    expect(made.workspaces.worktree(tree.id)?.state).toBe('retained');
+    expect(branchAt(tree.branchRef)).toBe(made.base);
   });
 });
 

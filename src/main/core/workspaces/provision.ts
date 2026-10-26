@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { randomUUID } from 'node:crypto';
 import { lstatSync, readdirSync } from 'node:fs';
+import type { Stats } from 'node:fs';
 import path from 'node:path';
 
 import type { CanvasId } from '../../../shared/canvas';
@@ -11,7 +12,8 @@ import type { CheckoutFault } from './checkout';
 import { discoverRepository, realOrNone, recordRepository, registrations } from './discovery';
 import type { Discovery, DiscoveryRefusal, FoundRepository, Registration } from './discovery';
 import { GitError } from './git';
-import type { GitRunner } from './git';
+import type { GitCall, GitRunner } from './git';
+import { GitMetadataError, verifyGitMetadata } from './metadata';
 import { OwnedRootError, PROFILE_ID, ensureOwnedRoot, excludeOwnedRoot } from './owned';
 import { ProvisioningQueue, QueueFull } from './queue';
 import { WorkspaceStoreError } from './store';
@@ -29,18 +31,21 @@ import type { JobRecord, Json, RepositoryRecord, WorkspaceStore, WorktreeRecord 
  * 2. Then, outside SQL, in the repository's lane of the bounded queue (`run`), the job's phases,
  *    each marked on disk once done: `branch` (its ref made at the base commit, only if it didn't
  *    exist: never forced over one), `registered` (a worktree added without a checkout), and
- *    `populated` (its files read from the base commit's tree). Before each, what Git and the file
+ *    `populated` (its files read from the base commit's tree, into a checkout holding nothing but
+ *    its `.git`, by a merge Git won't write over a file with). Before each, what Git and the file
  *    system actually have is read again, so a phase done but not recorded is adopted, never done
- *    twice, and nothing is made over a folder or branch the core didn't make.
+ *    twice, and nothing is made over a folder or branch the core didn't make. A population done but
+ *    not recorded may have been changed while the core was stopped: it is adopted only if it is
+ *    exactly what Git wrote (`#untouched`), else held for you (`interrupted-population`).
  * 3. Verified as every later use verifies it (checkout.ts), the workspace moves to `setup`: copying
  *    local files and running its setup are setup's (C9, C10), and its agents wait until then.
  *
  * A failure the job can name ends it `failed` and the workspace in `error`, saying why; one it
  * can't (the core closing, its store failing) leaves the job open for the next start. On restart
  * (`reconcile`, after child recovery), every open job is run again from what is on disk, and every
- * checkout in use is checked: one gone is `missing`, one changed `error`. Population is redone only
- * while a workspace is still being made, before any agent could have run in it. Nothing here ever
- * resets, removes or prunes a checkout or branch: that is cleanup's (C7).
+ * checkout in use is checked: one gone is `missing`, one changed `error`. Nothing here ever
+ * populates a checkout again over what is there, nor resets, removes or prunes a checkout or
+ * branch: that is cleanup's (C7).
  */
 
 /** A create job's phases, in order, each marked once it is done. */
@@ -50,6 +55,8 @@ export type CreatePhase = (typeof CREATE_PHASES)[number];
 /** How long adding a worktree may take, and populating one. */
 const ADD_TIMEOUT_MS = 60_000;
 const POPULATE_TIMEOUT_MS = 10 * 60_000;
+/** How much of a checkout's index is read when proving a population untouched. */
+const MAX_INDEX_BYTES = 64 * 1024 * 1024;
 
 /** Why a workspace wasn't provisioned, before anything was recorded or run for it. */
 export type ProvisionErrorCode =
@@ -381,6 +388,15 @@ export class Provisioner {
     if (path.dirname(tree.path) !== repository.ownedRoot || path.basename(tree.path) !== tree.id) {
       throw new Failed('checkout-changed', 'Its path isn’t its folder of the owned root.');
     }
+    // Git's metadata its branch and registration are written through (metadata.ts): checked
+    // before anything at all is written, then again at each of Git's writes, before and after it.
+    const metadata = (registration?: string) => {
+      verifyGitMetadata(repository.commonDir, {
+        branch: tree.branchRef,
+        ...(registration === undefined ? {} : { registration }),
+      });
+    };
+    metadata();
     // Its owned root made or verified, and kept out of the checkout, before anything is written.
     ensureOwnedRoot(repository);
     excludeOwnedRoot(repository.commonDir);
@@ -398,11 +414,13 @@ export class Provisioner {
         const at = await this.#branchAt(repository, tree.branchRef, found.drivers);
         if (at === undefined) {
           // Made only if it doesn't exist (the empty old value): never forced over another.
+          metadata();
           await git.run({
             cwd: repository.realRoot,
             drivers: found.drivers,
             args: [
               'update-ref',
+              '--no-deref',
               '-m',
               `corrallm: workspace ${tree.id}`,
               '--end-of-options',
@@ -411,11 +429,13 @@ export class Provisioner {
               '',
             ],
           });
+          metadata();
         } else if (at !== oid) {
           throw new Failed('branch-moved', `${tree.branchRef} is at another commit already.`);
         }
         job = await this.#reach(job, 'branch');
         ensureOwnedRoot(repository);
+        metadata();
         await git.run({
           cwd: repository.realRoot,
           drivers: found.drivers,
@@ -430,6 +450,7 @@ export class Provisioner {
             tree.branchRef.slice('refs/heads/'.length),
           ],
         });
+        metadata();
       } else if (registration.branch !== tree.branchRef) {
         throw new Failed('checkout-changed', 'Its registration is on another branch.');
       } else if (registration.locked !== null) {
@@ -441,6 +462,7 @@ export class Provisioner {
 
     // Before its files are written: Git's configuration as it reads it there (conditional
     // includes on its branch and folder included) neutralized, and the checkout the one registered.
+    metadata();
     const local = await git.inspect(tree.path);
     if (local.refusals.length > 0) throw new Failed('config', local.refusals.join(' '));
     const before = await checkCheckout(git, repository, tree);
@@ -452,17 +474,76 @@ export class Provisioner {
       if (before.checkout.head !== oid) {
         throw new Failed('branch-moved', `${tree.branchRef} moved before it was checked out.`);
       }
-      // From the base commit's tree, overwriting only what an interrupted population left.
-      await git.run({
-        cwd: tree.path,
-        drivers: [...new Set([...found.drivers, ...local.drivers])],
-        timeoutMs: POPULATE_TIMEOUT_MS,
-        args: ['read-tree', '--reset', '-u', '--no-recurse-submodules', oid],
-      });
+      const drivers = [...new Set([...found.drivers, ...local.drivers])];
+      if (onlyGitIn(tree.path)) {
+        // Nothing written there yet: its files read from the base commit's tree. A merge, not a
+        // reset, so Git refuses to write over any file it finds there (one put there meanwhile).
+        metadata(path.basename(before.checkout.gitDir));
+        await git.run({
+          cwd: tree.path,
+          drivers,
+          timeoutMs: POPULATE_TIMEOUT_MS,
+          args: ['read-tree', '-m', '-u', '--no-recurse-submodules', oid],
+        });
+      } else if (!(await this.#untouched(tree.path, before.checkout.gitDir, oid, drivers))) {
+        // A population ran, but the core stopped before marking it: anyone may have worked there
+        // since. Never populated again over it; held, its files as they are, for you.
+        throw new Failed(
+          'interrupted-population',
+          'Its files were being written when corrallm stopped, and may have changed since: they are kept as they are.',
+        );
+      }
       await this.#reach(job, 'populated');
     }
     const after = await checkCheckout(git, repository, tree);
     if (!after.ok) throw new Failed(after.fault, after.detail);
+    metadata(path.basename(after.checkout.gitDir));
+  }
+
+  /**
+   * Whether a checkout a population wrote (its mark lost to a crash) is exactly what it wrote, as
+   * Git and the file system say now, writing nothing: Git's index whole (no lock beside it) and the
+   * base commit's tree, no entry of it marked to be skipped or assumed unchanged, every file as the
+   * index has it (compared by content wherever its stat differs, whatever the repository says of
+   * ctime and stat), nothing else there (ignored files included), and each submodule's folder
+   * empty, as population leaves it. What can't be read proves nothing.
+   */
+  async #untouched(
+    at: string,
+    gitDir: string,
+    oid: string,
+    drivers: readonly string[],
+  ): Promise<boolean> {
+    if (lstatOrNone(path.join(gitDir, 'index.lock')) !== undefined) return false;
+    if (lstatOrNone(path.join(gitDir, 'index'))?.isFile() !== true) return false;
+    const git = this.#git;
+    const read = (args: readonly string[], more: Partial<GitCall> = {}) =>
+      git.run({ cwd: at, drivers, timeoutMs: POPULATE_TIMEOUT_MS, answers: [1], ...more, args });
+    try {
+      const cached = await read(['diff-index', '--cached', '--quiet', '--end-of-options', oid]);
+      if (cached.code !== 0) return false;
+      const listed = await read(['ls-files', '-z', '--stage', '-v'], { maxBytes: MAX_INDEX_BYTES });
+      if (listed.code !== 0) return false;
+      const gitlinks: string[] = [];
+      for (const field of listed.stdout.split('\0')) {
+        if (field === '') continue;
+        const entry = /^(\S) (\d{6}) [0-9a-f]+ \d\t(.+)$/s.exec(field);
+        if (entry?.[1] !== 'H') return false;
+        if (entry[2] === '160000' && entry[3] !== undefined) gitlinks.push(entry[3]);
+      }
+      const files = await read(['diff-files', '--quiet', '--ignore-submodules=all'], {
+        config: ['core.checkStat=default', 'core.trustctime=true', 'core.ignoreStat=false'],
+      });
+      if (files.code !== 0) return false;
+      const others = await read(['ls-files', '-z', '--others', '--directory']);
+      if (others.code !== 0 || others.stdout !== '') return false;
+      return gitlinks.every((name) => emptyFolderAt(at, name));
+    } catch (error) {
+      if (error instanceof GitError && (error.fault === 'failed' || error.fault === 'output')) {
+        return false;
+      }
+      throw error;
+    }
   }
 
   async #registration(
@@ -714,6 +795,43 @@ function phase(job: JobRecord | CreatePhase): number {
   return index;
 }
 
+function lstatOrNone(at: string): Stats | undefined {
+  try {
+    return lstatSync(at);
+  } catch {
+    return undefined;
+  }
+}
+
+/** Whether a registered checkout holds nothing but its `.git`: nothing populated there yet. */
+function onlyGitIn(at: string): boolean {
+  try {
+    const names = readdirSync(at);
+    return names.length === 1 && names[0] === '.git';
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Whether `name` (a path Git gave, below `at`) is an empty real folder, every folder above it real
+ * too: never followed through a link.
+ */
+function emptyFolderAt(at: string, name: string): boolean {
+  let folder = at;
+  for (const part of name.split('/')) {
+    if (part === '' || part === '.' || part === '..') return false;
+    folder = path.join(folder, part);
+    const found = lstatOrNone(folder);
+    if (found === undefined || found.isSymbolicLink() || !found.isDirectory()) return false;
+  }
+  try {
+    return readdirSync(folder).length === 0;
+  } catch {
+    return false;
+  }
+}
+
 /** What is at a workspace's checkout path before it is registered. */
 function folderAt(at: string): 'none' | 'empty' | 'full' | 'other' {
   let found;
@@ -731,6 +849,7 @@ function folderAt(at: string): 'none' | 'empty' | 'full' | 'other' {
 function failureCode(error: unknown): string | undefined {
   if (error instanceof Failed) return error.code;
   if (error instanceof OwnedRootError) return `owned-root-${error.code}`;
+  if (error instanceof GitMetadataError) return `git-metadata-${error.code}`;
   if (error instanceof GitError) {
     switch (error.fault) {
       case 'refused':

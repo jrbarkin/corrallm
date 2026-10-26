@@ -1,13 +1,16 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { lstat } from 'node:fs/promises';
+import { lstatSync, readdirSync } from 'node:fs';
+import type { BigIntStats } from 'node:fs';
+import { lstat, readdir } from 'node:fs/promises';
 import path from 'node:path';
 
 import type { CanvasId } from '../../../shared/canvas';
 import { OpFailure } from '../call';
 import { checkCheckout } from './checkout';
-import { registrations } from './discovery';
+import { gitdirOf, registrations } from './discovery';
 import { GitError } from './git';
 import type { GitRunner } from './git';
+import { GitMetadataError, verifyGitMetadata } from './metadata';
 import { ProvisioningQueue } from './queue';
 import { WorkspaceStoreError } from './store';
 import type { Json, JobRecord, WorkspaceStore, WorktreeRecord } from './store';
@@ -21,12 +24,15 @@ import type { Json, JobRecord, WorkspaceStore, WorktreeRecord } from './store';
  *   changed or untracked there (and the first of their paths, to name them), whether its HEAD and
  *   tip are both reachable from the picked checkout's HEAD now (merged; its base commit alone isn't
  *   proof), and which agents may still be writing there (a turn, a setup, a close that didn't
- *   finish). What Git couldn't read is unknown: never taken for safe. Its fingerprint changes
- *   whenever any of it does (a changed file written again too: each file its status names is
- *   read as the file system has it): what an approval is bound to.
+ *   finish). What couldn't be read whole is unknown: never safe or discarded. A whole tree's
+ *   fingerprint changes whenever any of it does (a changed file written again too: each file its status names is
+ *   read as the file system has it): what an approval is bound to. No repository program runs
+ *   for it: a submodule is read by its commit only (whether one is dirty only a git run in it,
+ *   under its own configuration, could say), and one checked out there may hold work, so the tree
+ *   is unknown, its files read as the file system has them.
  * - **Safe** is clean, merged and with no writer: such a tree is removed with its last agent,
  *   without asking. Anything else asks you first (the deletion's confirmation, R4's proposal), and
- *   keeps the tree unless you chose to discard it.
+ *   keeps the tree unless you chose to discard it and it can still be read whole.
  * - **Removing** (`intend`, within the write that settles the decision, whatever made it: a
  *   delete's commit, an Allow, a kept tree's Remove): the workspace `removing`, with a `remove` job
  *   saying what was decided (its branch deleted too, the fingerprint you approved). Then, outside
@@ -48,6 +54,10 @@ import type { Json, JobRecord, WorkspaceStore, WorktreeRecord } from './store';
 
 /** The most paths a tree's state names; how many there are is counted whatever. */
 const NAMED_PATHS = 20;
+/** How much of a tree's index is read, to find its submodules. */
+const MAX_INDEX_BYTES = 64 * 1024 * 1024;
+/** The most entries read of folders a status names whole and submodules checked out, in all. */
+const WALKED_ENTRIES = 20_000;
 /** How long removal waits for a tree's writers to stop (a session's bounded close), then leaves it. */
 const SETTLE_MS = 10_000;
 const SETTLE_POLL_MS = 100;
@@ -78,10 +88,19 @@ export interface TreeState {
   status: string;
 }
 
+/** Why a tree that cannot be checked for staleness is kept, even on Discard. */
+export const KEEP_UNREAD_WORKTREE =
+  'corrallm can’t tell whether it changed since you were asked, so it keeps it; remove it yourself if you mean to.';
+
+/** Whether assessment read enough to bind a Discard to what the tree holds. */
+export function canDiscard(state: TreeState): boolean {
+  return state.unknown === undefined;
+}
+
 /** Whether a tree is safe to remove without asking: clean, merged, and no one writing there. */
 export function safe(state: TreeState): boolean {
   return (
-    state.unknown === undefined &&
+    canDiscard(state) &&
     state.changed === 0 &&
     state.untracked === 0 &&
     state.merged &&
@@ -229,7 +248,9 @@ export class WorkspaceCleanup {
       const local = await git.inspect(tree.path);
       if (local.refusals.length > 0) return unknown(local.refusals.join(' '));
       const drivers = [...new Set([...base.drivers, ...local.drivers])];
-      const { stdout } = await git.run({
+      // A submodule by its commit only: whether one is dirty Git asks a git run in it, under the
+      // submodule's own configuration, whose programs nothing here reaches. None is asked.
+      const { stdout, stderr } = await git.run({
         cwd: tree.path,
         drivers,
         args: [
@@ -237,11 +258,21 @@ export class WorkspaceCleanup {
           '--porcelain=v1',
           '-z',
           '--untracked-files=all',
-          '--ignore-submodules=none',
+          '--ignore-submodules=dirty',
         ],
       });
+      if (stderr.trim() !== '') return unknown('Git couldn’t read its files without warnings');
       const entries = statusEntries(stdout);
-      const files = await filesOf(tree.path, entries);
+      // Each submodule checked out there (its folder not empty) may hold work no status says: the
+      // tree is never safe with one, and its files are read as the file system has them.
+      const index = await git.run({
+        cwd: tree.path,
+        drivers,
+        maxBytes: MAX_INDEX_BYTES,
+        args: ['ls-files', '-z', '--stage'],
+      });
+      const submodules = checkedOut(tree.path, gitlinksOf(index.stdout));
+      const files = await filesOf(tree.path, entries, submodules);
       const head = await this.#commit(tree.path, drivers, 'HEAD');
       const baseHead = await this.#commit(repository.realRoot, base.drivers, 'HEAD');
       const reachable = async (oid: string | null) =>
@@ -255,6 +286,16 @@ export class WorkspaceCleanup {
               args: ['merge-base', '--is-ancestor', '--end-of-options', oid, baseHead],
             })
           ).code === 0);
+      const unread = [
+        ...(submodules.length === 0 ? [] : [submoduleWords(submodules)]),
+        ...(files.whole
+          ? []
+          : [
+              files.unreadable
+                ? 'some of its files can’t be read safely'
+                : 'more of its files than corrallm reads',
+            ]),
+      ];
       return {
         workspace: tree.id,
         head,
@@ -265,7 +306,8 @@ export class WorkspaceCleanup {
         merged: head !== null && (await reachable(head)) && (await reachable(tip)),
         writers,
         setup,
-        status: createHash('sha256').update(stdout).update('\0').update(files).digest('hex'),
+        ...(unread.length === 0 ? {} : { unknown: unread.join('; ') }),
+        status: createHash('sha256').update(stdout).update('\0').update(files.text).digest('hex'),
       };
     } catch (error) {
       if (!(error instanceof GitError)) throw error;
@@ -310,6 +352,9 @@ export class WorkspaceCleanup {
     const removing = this.#queue
       .run(repository.commonDir, () => this.#remove(workspace))
       .catch(async (error: unknown) => {
+        if (error instanceof GitMetadataError) {
+          return this.#failed(workspace, `cleanup-git-metadata-${error.code}`);
+        }
         await this.#failed(workspace, 'cleanup-failed');
         console.error('Could not remove a workspace:', error);
         return 'failed' as const;
@@ -346,6 +391,7 @@ export class WorkspaceCleanup {
     const state = await this.assess(tree);
     let removal: Removal;
     if (decision !== undefined) {
+      if (!canDiscard(state)) throw new OpFailure('refused', KEEP_UNREAD_WORKTREE);
       if (
         decision.choice !== 'discard' ||
         decision.fingerprints[workspace] !== fingerprint(state)
@@ -406,6 +452,16 @@ export class WorkspaceCleanup {
     if (tree.state !== 'removing') return 'failed';
     const repository = workspaces.repository(tree.repository);
     if (repository === undefined) return this.#failed(workspace, 'cleanup-repository');
+    // Git's metadata its removal writes through (metadata.ts: the registration it deletes, the
+    // branch's ref, reflog and packed-refs), checked before anything is written and again at each
+    // of Git's writes: a link anywhere along it removes nothing (GitMetadataError, in `remove`).
+    const metadata = (registration?: string) => {
+      verifyGitMetadata(repository.commonDir, {
+        branch: tree.branchRef,
+        ...(registration === undefined ? {} : { registration }),
+      });
+    };
+    metadata();
     const job = workspaces.openJob(workspace, 'remove');
     const removal = removalOf(job);
     // Its writers stop first (a removed agent's session closing), for a bounded while.
@@ -421,7 +477,8 @@ export class WorkspaceCleanup {
     }
     // Still what was decided: never work added since.
     const decided =
-      removal.approved === null ? safe(state) : heldFingerprint(state) === removal.approved;
+      canDiscard(state) &&
+      (removal.approved === null ? safe(state) : heldFingerprint(state) === removal.approved);
     if (!decided) {
       await workspaces.write((w) => {
         w.transition(workspace, { from: 'removing', to: 'retained' });
@@ -434,9 +491,15 @@ export class WorkspaceCleanup {
     if (base.refusals.length > 0) return this.#failed(workspace, 'cleanup-config');
     const checked = await checkCheckout(git, repository, tree);
     if (checked.ok) {
+      // Git checks a tree is clean (a git status run there) before removing it: every filter its
+      // own configuration gives it there (a conditional include on its branch or folder) is
+      // disabled too. A submodule checked out there makes Git refuse it, running nothing.
+      const local = await git.inspect(checked.checkout.path);
+      if (local.refusals.length > 0) return this.#failed(workspace, 'cleanup-config');
+      metadata(path.basename(checked.checkout.gitDir));
       await git.run({
         cwd: repository.realRoot,
-        drivers: base.drivers,
+        drivers: [...new Set([...base.drivers, ...local.drivers])],
         args: [
           'worktree',
           'remove',
@@ -445,6 +508,7 @@ export class WorkspaceCleanup {
           checked.checkout.path,
         ],
       });
+      metadata();
     } else if (checked.fault !== 'checkout-missing') {
       // Not the checkout made, or not readable: nothing there is removed.
       return this.#failed(workspace, `cleanup-${checked.fault}`);
@@ -457,12 +521,14 @@ export class WorkspaceCleanup {
     ) {
       // Only at the commit it was decided at: a branch someone moved since is kept, and so is one
       // a checkout is on (the picked one, say), which would be left on no branch.
+      metadata();
       await git.run({
         cwd: repository.realRoot,
         drivers: base.drivers,
         answers: [1],
-        args: ['update-ref', '-d', '--end-of-options', tree.branchRef, state.tip],
+        args: ['update-ref', '--no-deref', '-d', '--end-of-options', tree.branchRef, state.tip],
       });
+      metadata();
     }
     await this.#deps.forgetSetup?.(workspace);
     await workspaces.write((w) => {
@@ -544,27 +610,142 @@ function removalOf(job: JobRecord | undefined): Removal {
 /**
  * Each file a status names, as the file system has it now, never followed through a link: its
  * inode, size, mode and modification and change times (a write moves its change time, which nothing
- * sets back), or that it isn't there. Serialized, in the status's order.
+ * sets back), or that it isn't there. A folder Git names as one (a repository nested in the tree,
+ * which status names whole) and each submodule checked out are read entry by entry, a submodule's
+ * own Git directory too (where its `.git` file names it), up to WALKED_ENTRIES in all: `whole` is
+ * false past that. Serialized, in the status's order.
  */
-async function filesOf(root: string, entries: readonly { path: string }[]): Promise<string> {
+async function filesOf(
+  root: string,
+  entries: readonly { path: string }[],
+  submodules: readonly string[],
+): Promise<{ text: string; whole: boolean; unreadable: boolean }> {
+  const budget = { left: WALKED_ENTRIES, unreadable: false };
   const files = await Promise.all(
     entries.map(async ({ path: name }) => {
-      try {
-        const stat = await lstat(path.join(root, name), { bigint: true });
-        return [
-          name,
-          String(stat.ino),
-          String(stat.size),
-          String(stat.mode),
-          String(stat.mtimeNs),
-          String(stat.ctimeNs),
-        ];
-      } catch {
-        return [name, null];
-      }
+      const stat = await lstat(path.join(root, name), { bigint: true }).catch((error: unknown) => {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') budget.unreadable = true;
+        return undefined;
+      });
+      return stat === undefined ? [name, null] : [name, ...fields(stat)];
     }),
   );
-  return JSON.stringify(files);
+  const walked: string[][] = [];
+  const folders = [
+    ...entries.filter(({ path: name }) => name.endsWith('/')).map(({ path: name }) => name),
+    ...submodules,
+  ];
+  for (const name of folders) {
+    const folder = path.join(root, name);
+    const own = gitdirOf(path.join(folder, '.git'));
+    for (const at of own === undefined ? [folder] : [folder, own]) {
+      if (!(await walk(at, budget, walked))) {
+        return {
+          text: JSON.stringify([files, walked]),
+          whole: false,
+          unreadable: budget.unreadable,
+        };
+      }
+    }
+  }
+  // A tree with no such folder is serialized as its files alone.
+  return {
+    text: JSON.stringify(walked.length === 0 ? files : [files, walked]),
+    whole: !budget.unreadable,
+    unreadable: budget.unreadable,
+  };
+}
+
+/** What of a file a write changes: its inode, size, mode, and modification and change times. */
+function fields(stat: BigIntStats): string[] {
+  return [stat.ino, stat.size, stat.mode, stat.mtimeNs, stat.ctimeNs].map(String);
+}
+
+/**
+ * Every entry below `folder`, in order, as the file system has it, never following a link, while
+ * `budget` lasts: false once it is spent.
+ */
+async function walk(
+  folder: string,
+  budget: { left: number; unreadable: boolean },
+  into: string[][],
+): Promise<boolean> {
+  let names: string[];
+  try {
+    names = (await readdir(folder)).sort();
+  } catch {
+    into.push([folder]);
+    budget.unreadable = true;
+    return false;
+  }
+  for (const name of names) {
+    if (budget.left <= 0) return false;
+    budget.left -= 1;
+    const at = path.join(folder, name);
+    const stat = await lstat(at, { bigint: true }).catch(() => undefined);
+    into.push(stat === undefined ? [at] : [at, ...fields(stat)]);
+    if (stat === undefined) {
+      budget.unreadable = true;
+      return false;
+    }
+    if (stat.isDirectory() && !(await walk(at, budget, into))) return false;
+  }
+  return true;
+}
+
+/** The gitlinks (submodules' commits) an index listing (`ls-files -z --stage`) names. */
+function gitlinksOf(stdout: string): string[] {
+  const found = new Set<string>();
+  for (const field of stdout.split('\0')) {
+    const entry = /^160000 [0-9a-f]+ \d\t(.+)$/s.exec(field);
+    if (entry?.[1] !== undefined) found.add(entry[1]);
+  }
+  return [...found];
+}
+
+/**
+ * The submodules checked out in a tree: each gitlink whose folder isn't empty (or isn't a real
+ * folder, with real folders above it): what is there may be work.
+ */
+function checkedOut(root: string, gitlinks: readonly string[]): string[] {
+  return gitlinks.filter((name) => {
+    let at = root;
+    const parts = name.split('/');
+    for (const [index, part] of parts.entries()) {
+      if (part === '' || part === '.' || part === '..') return true;
+      at = path.join(at, part);
+      let found;
+      try {
+        found = lstatSync(at);
+      } catch (error) {
+        // Not there at all: nothing is checked out.
+        return (error as NodeJS.ErrnoException).code !== 'ENOENT';
+      }
+      if (found.isSymbolicLink() || !found.isDirectory()) return true;
+      if (index === parts.length - 1) {
+        try {
+          return readdirSync(at).length > 0;
+        } catch {
+          return true;
+        }
+      }
+    }
+    return true;
+  });
+}
+
+/** Why a tree with submodules checked out can't be read whole, in words. */
+function submoduleWords(submodules: readonly string[]): string {
+  const named = submodules.slice(0, NAMED_PATHS);
+  const more = submodules.length - named.length;
+  const list = [...named, ...(more > 0 ? [`${String(more)} more`] : [])];
+  const names =
+    list.length === 1
+      ? (list[0] ?? '')
+      : `${list.slice(0, -1).join(', ')} and ${list.at(-1) ?? ''}`;
+  return submodules.length === 1
+    ? `its submodule ${names} is checked out, and corrallm doesn’t read a submodule`
+    : `its submodules ${names} are checked out, and corrallm doesn’t read a submodule`;
 }
 
 /** The entries of `git status --porcelain=v1 -z`: each path, and whether it is untracked. */

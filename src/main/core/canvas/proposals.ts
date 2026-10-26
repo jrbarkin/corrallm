@@ -17,7 +17,7 @@ import { RewindGuardSchema } from '../rewind-guard';
 import type { RewindGuard } from '../rewind-guard';
 import type { Database } from '../store/store';
 import type { ChangeSet } from './change';
-import { fingerprint, safe } from '../workspaces/cleanup';
+import { canDiscard, fingerprint, KEEP_UNREAD_WORKTREE, safe } from '../workspaces/cleanup';
 import type { CleanupDecision, TreeState } from '../workspaces/cleanup';
 
 /*
@@ -403,7 +403,17 @@ export function isDocOp(op: string): boolean {
  */
 export function itemOf(proposal: Proposal): NeedsItem {
   const { lost } = proposal;
-  const asks = proposal.cleanup?.trees.some((tree) => !safe(tree)) === true;
+  const trees = proposal.cleanup?.trees ?? [];
+  const asks = trees.some((tree) => !safe(tree));
+  const whole = trees.every(canDiscard);
+  let detail = lost.detail;
+  if (!whole) {
+    // Questions kept across an upgrade use the current policy without losing their other words.
+    detail = detail?.replaceAll('it is kept unless you discard it.', KEEP_UNREAD_WORKTREE);
+    if (detail?.includes(KEEP_UNREAD_WORKTREE) !== true) {
+      detail = [detail, treeWords([], trees)].filter((words) => words !== undefined).join(' ');
+    }
+  }
   // A kept tree's removal: discard what it holds, or don't.
   const removes = proposal.op === 'worktree.remove';
   return {
@@ -414,17 +424,19 @@ export function itemOf(proposal: Proposal): NeedsItem {
     for: 'you',
     by: ['you'],
     title: lost.title,
-    ...(lost.detail === undefined ? {} : { detail: lost.detail }),
+    ...(detail === undefined ? {} : { detail }),
     choices: removes
-      ? [
-          {
-            value: 'discard',
-            label: 'Remove it and its branch',
-            description: 'Remove the worktree and its branch, with the work in them.',
-            humanOnly: YOURS,
-          },
-          { value: 'refuse', label: 'Cancel', humanOnly: YOURS },
-        ]
+      ? !whole
+        ? [{ value: 'refuse', label: 'Keep it', humanOnly: YOURS }]
+        : [
+            {
+              value: 'discard',
+              label: 'Remove it and its branch',
+              description: 'Remove the worktree and its branch, with the work in them.',
+              humanOnly: YOURS,
+            },
+            { value: 'refuse', label: 'Cancel', humanOnly: YOURS },
+          ]
       : asks
         ? [
             {
@@ -434,12 +446,17 @@ export function itemOf(proposal: Proposal): NeedsItem {
                 'Delete it; its worktree and branch are kept, in Kept worktrees, unless they changed since.',
               humanOnly: YOURS,
             },
-            {
-              value: 'discard',
-              label: 'Delete, and discard its worktree and branch',
-              description: 'Delete it and remove its worktree and branch, with the work in them.',
-              humanOnly: YOURS,
-            },
+            ...(whole
+              ? [
+                  {
+                    value: 'discard',
+                    label: 'Delete, and discard its worktree and branch',
+                    description:
+                      'Delete it and remove its worktree and branch, with the work in them.',
+                    humanOnly: YOURS,
+                  },
+                ]
+              : []),
             { value: 'refuse', label: 'Cancel', humanOnly: YOURS },
           ]
         : [
@@ -537,7 +554,7 @@ function treeWords(nodes: readonly CanvasNode[], trees: readonly TreeState[]): s
   return unsafe
     .map((tree) => {
       if (tree.unknown !== undefined) {
-        return `corrallm can’t tell what its worktree holds (${tree.unknown}): it is kept unless you discard it.`;
+        return `corrallm can’t tell what its worktree holds (${tree.unknown}). ${KEEP_UNREAD_WORKTREE}`;
       }
       const parts = [
         ...(tree.changed > 0 ? [files(tree.changed, 'changed')] : []),

@@ -13,7 +13,13 @@ import type { Staged } from '../delivery/messages';
 import { changeSetOf } from './change';
 import type { ChangeSet } from './change';
 import type { Built, Documents, LiveDocument } from './documents';
-import { fingerprint, heldFingerprint, safe } from '../workspaces/cleanup';
+import {
+  canDiscard,
+  fingerprint,
+  heldFingerprint,
+  KEEP_UNREAD_WORKTREE,
+  safe,
+} from '../workspaces/cleanup';
 import type { CleanupDecision, Removal, TreeState } from '../workspaces/cleanup';
 import { safeRemovals } from '../workspaces/planner';
 import type { Removals } from '../workspaces/planner';
@@ -235,6 +241,9 @@ function decided(
       removals: safeRemovals({ retained: [], pending: [], removed: [], trees }),
       asks: trees.filter((tree) => !safe(tree)),
     };
+  }
+  if (decision.choice === 'discard' && !trees.every(canDiscard)) {
+    throw new OpFailure('refused', KEEP_UNREAD_WORKTREE);
   }
   for (const tree of trees) {
     if (decision.fingerprints[tree.workspace] !== fingerprint(tree)) {
