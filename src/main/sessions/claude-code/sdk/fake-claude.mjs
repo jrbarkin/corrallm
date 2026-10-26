@@ -42,6 +42,7 @@
 //
 // The connector's tests and the e2e tests point corrallm at it (CORRALLM_AGENT_PATHS): a path
 // ending in .mjs, so the SDK runs it with `node`.
+import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import {
   appendFileSync,
@@ -181,6 +182,37 @@ function keep(type, uuid, message) {
   appendFileSync(transcript, `${JSON.stringify(entry)}\n`);
   leaf = uuid;
 }
+// Kill audit only: commands are real children, owned by the fake native CLI, not corrallm.
+const commandLog = process.env.FAKE_CLAUDE_PROCESS_LOG;
+const commands = new Set();
+const logCommand = (record) => {
+  if (commandLog) appendFileSync(commandLog, `${JSON.stringify(record)}\n`);
+};
+async function command() {
+  const child = spawn(
+    process.execPath,
+    [
+      '-e',
+      "process.on('SIGTERM',()=>setTimeout(()=>process.exit(0),100)); console.log('ready'); setInterval(()=>{},1000)",
+    ],
+    { stdio: ['ignore', 'pipe', 'ignore'] },
+  );
+  const exited = new Promise((resolve) => child.once('exit', resolve));
+  commands.add(child);
+  child.once('exit', () => commands.delete(child));
+  await new Promise((resolve) => child.stdout.once('data', resolve));
+  logCommand({ type: 'process', pid: child.pid });
+  return {
+    stop: async () => {
+      child.kill();
+      await exited;
+    },
+  };
+}
+process.on('exit', () => {
+  for (const child of commands) child.kill('SIGKILL');
+});
+
 /** The turn going on, if any: whether it was interrupted. */
 let turn;
 /** The files it may change: notes.txt in the project folder. */
@@ -544,13 +576,19 @@ async function askQuestion(id) {
 async function play(message) {
   const uuid = message.uuid;
   const content = message.message.content;
-  const text =
+  let text =
     typeof content === 'string'
       ? content
       : content
           .filter((b) => b.type === 'text')
           .map((b) => b.text)
           .join('\n');
+  if (commandLog)
+    text = text.includes('slow command')
+      ? 'slow command'
+      : text.includes('background command')
+        ? 'background command'
+        : 'next';
   const images = typeof content === 'string' ? 0 : content.filter((b) => b.type === 'image').length;
   if (process.env.FAKE_CLAUDE_PROMPTS) {
     appendFileSync(
@@ -560,6 +598,13 @@ async function play(message) {
   }
   const current = { interrupted: false };
   turn = current;
+  if (commandLog) {
+    logCommand({ type: 'turn', live: [...commands].map((child) => child.pid) });
+    if (text.includes('command')) {
+      const owned = await command();
+      if (!text.startsWith('background')) current.command = owned;
+    }
+  }
   const started = Date.now();
   keep('user', uuid, message.message);
   if (process.env.CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING) {
@@ -807,7 +852,7 @@ async function play(message) {
       tool_use_result: { stdout: '42 passed', stderr: '', interrupted: false, isImage: false },
     });
   }
-  if (!current.interrupted && !recovery && text.includes('background'))
+  if (!commandLog && !current.interrupted && !recovery && text.includes('background'))
     await startInBackground(current, id);
   if (!current.interrupted && !recovery && text.includes('ask')) await askQuestion(id);
   if (!current.interrupted && !recovery && text.includes('edit')) {
@@ -879,6 +924,7 @@ async function play(message) {
     origin: { kind: 'human' },
     ...stamp,
   };
+  if (current.interrupted) await current.command?.stop();
   if (turn === current) turn = undefined;
   if (current.interrupted) {
     say({

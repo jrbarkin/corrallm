@@ -39,6 +39,7 @@ export function createClient(source: GuiApi, mirror: Pick<TopicMirror, 'whenAt'>
         ];
       }),
     ),
+    windowOnShow: (listener) => source.windowOnShow(listener),
     terminalOnEvent: (listener) => source.terminalOnEvent(listener),
     topicsOnChange: (listener) => source.topicsOnChange(listener),
     topicsOnEpoch: (listener) => source.topicsOnEpoch(listener),

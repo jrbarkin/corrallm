@@ -35,6 +35,7 @@ export function fromBridge(get: () => GuiBridge): GuiApi {
         ];
       }),
     ),
+    windowOnShow: (listener) => get().windowOnShow(listener),
     terminalOnEvent: (listener) => get().terminalOnEvent(listener),
     topicsOnChange: (listener) => get().topicsOnChange(listener),
     topicsOnEpoch: (listener) => get().topicsOnEpoch(listener),

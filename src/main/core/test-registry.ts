@@ -429,6 +429,9 @@ export const TEST_OUT_OF_REACH: OutOfReach = {
 
 /** A host with no desktop: every dialog is cancelled. */
 export const NO_DESKTOP: HostServices = {
+  presence: () => undefined,
+  notify: () => Promise.resolve('unsupported'),
+  unnotify: () => undefined,
   pickCanvasToOpen: () => Promise.resolve(null),
   pickCanvasToSave: () => Promise.resolve(null),
   pickFolder: () => Promise.resolve(null),

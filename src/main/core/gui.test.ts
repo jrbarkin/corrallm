@@ -278,3 +278,25 @@ describe('a window’s drafts, flushed before quitting', () => {
     expect(await asking).toEqual([]);
   });
 });
+
+it('sends a show destination only to the named window, and never dispatches a gesture itself', async () => {
+  const core = fakeCore();
+  const served = new WindowPorts(core);
+  const seven = connect(served, 7);
+  const eight = connect(served, 8);
+  const shown = vi.fn();
+  const other = vi.fn();
+  seven.on('show', shown);
+  eight.on('show', other);
+  const target = { canvas: CANVAS, need: 'prompt/a/1/p' };
+  served.show(7, target);
+  await vi.waitFor(() => {
+    expect(shown).toHaveBeenCalledExactlyOnceWith(target);
+  });
+  expect(other).not.toHaveBeenCalled();
+  expect(core.call).not.toHaveBeenCalled();
+  served.gone(7);
+  served.show(7, target);
+  served.show(99, target);
+  expect(shown).toHaveBeenCalledOnce();
+});

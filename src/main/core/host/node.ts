@@ -19,6 +19,9 @@ const NO_DIALOG =
 const refuse = () => Promise.reject(new OpFailure('human-only', NO_DIALOG));
 
 export const NODE_HOST: HostServices = {
+  presence: () => undefined,
+  notify: () => Promise.resolve('unsupported'),
+  unnotify: () => undefined,
   pickCanvasToOpen: refuse,
   pickCanvasToSave: refuse,
   pickFolder: refuse,

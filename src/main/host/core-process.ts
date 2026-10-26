@@ -5,6 +5,7 @@ import type { MessagePortMain, UtilityProcess } from 'electron';
 
 import { CoreLink } from '../../shared/link';
 import type { Handlers, LinkPort } from '../../shared/link';
+import { Presence } from '../core/presence';
 import type { WindowId } from '../core/host';
 import type { CoreSide, HostSide, WindowMessage } from '../core/protocol';
 
@@ -26,13 +27,15 @@ export interface CoreProcessOptions {
   /** Whether the link checks that every value it posts is plain data. */
   check: boolean;
   /** What main answers the core of the desktop: its HostServices (host/services.ts). */
-  host: Handlers<HostSide>;
+  host: (core: CoreProcess) => Handlers<HostSide>;
 }
 
 export interface CoreProcess {
   readonly link: CoreLink<HostSide, CoreSide>;
   /** Resolves with the process's exit code once it has exited. */
   readonly exited: Promise<number>;
+  /** Latest bounded snapshot from this process, absent until C3's initial publication. */
+  readonly presence: Presence | undefined;
   /** Hands the core its end of `window`'s port (the window has the other end). */
   connect(window: WindowId, port: MessagePortMain): void;
   /** Tells the core that `window` closed, crashed or reloaded: its port is done. */
@@ -41,6 +44,8 @@ export interface CoreProcess {
   windowFocused(window: WindowId): void;
   /** Tells the core the machine woke from sleep. */
   resumed(): void;
+  /** Reports whether any window is focused. */
+  focus(focused: boolean): void;
   kill(): void;
 }
 
@@ -58,10 +63,20 @@ export function forkCore({ entry, output, check, host }: CoreProcessOptions): Co
   const exited = new Promise<number>((resolve) => {
     child.once('exit', resolve);
   });
-  const link = new CoreLink<HostSide, CoreSide>(processPort(child, exited), host, { check });
-  return {
+  const handlers = {} as Handlers<HostSide>;
+  const link = new CoreLink<HostSide, CoreSide>(processPort(child, exited), handlers, { check });
+  let presence: Presence | undefined;
+  link.on('presence', (snapshot) => {
+    const parsed = Presence.safeParse(snapshot);
+    if (parsed.success && (presence === undefined || parsed.data.revision > presence.revision))
+      presence = parsed.data;
+  });
+  const core: CoreProcess = {
     link,
     exited,
+    get presence() {
+      return presence;
+    },
     connect: (window, port) => {
       child.postMessage({ kind: 'window', window } satisfies WindowMessage, [port]);
     },
@@ -75,10 +90,15 @@ export function forkCore({ entry, output, check, host }: CoreProcessOptions): Co
     resumed: () => {
       link.emit('resumed');
     },
+    focus: (focused) => {
+      link.emit('focus', focused);
+    },
     kill: () => {
       child.kill();
     },
   };
+  Object.assign(handlers, host(core));
+  return core;
 }
 
 /** Main's handle on the core process, as a link's port: it is gone once the process exits. */

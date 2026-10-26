@@ -1,5 +1,8 @@
-import type { z } from 'zod';
+import { z } from 'zod';
 
+import { isCanvasId } from './canvas';
+import type { CanvasId } from './canvas';
+import { MAX_NEED_ID } from './api/limits';
 import type { OpResult } from './api/errors';
 import type { OPS, ResultOf } from './api/registry';
 import type { GuiOp } from './api/surface';
@@ -35,6 +38,13 @@ export type GuiEventArgs<E extends GuiEvent> = E extends 'terminal'
   ? [agentId: string, event: TerminalEvent]
   : never;
 
+/** A private notification destination: the page still switches through its normal operation. */
+export const WindowShow = z.strictObject({
+  canvas: z.custom<CanvasId>(isCanvasId),
+  need: z.string().min(1).max(MAX_NEED_ID).optional(),
+});
+export type WindowShow = z.infer<typeof WindowShow>;
+
 /** What the core answers a window, over its port. */
 export interface CoreGuiSide {
   requests: {
@@ -47,6 +57,8 @@ export interface CoreGuiSide {
   events: {
     /** The core's topic epoch, announced on each new port before topic changes. */
     epoch: [epoch: string];
+    /** A notification click asks this view to show a canvas and optionally a Need. */
+    show: [target: WindowShow];
     /** Changes in order, batched per window every 16 ms. */
     topic: [changes: TopicUpdate[]];
     /** The fixed terminal screen stream, with no Electron event objects. */
@@ -116,6 +128,7 @@ type GuiResult<N extends GuiOp> = N extends 'topics.subscribe'
 
 /** A view's event listener, over the same port as its operations. */
 export interface GuiEventApi {
+  windowOnShow(listener: (target: WindowShow) => void): () => void;
   topicsOnChange(listener: (changes: TopicUpdate[]) => void): () => void;
   topicsOnEpoch(listener: (epoch: string) => void): () => void;
   terminalOnEvent(listener: (...args: GuiEventArgs<'terminal'>) => void): () => void;

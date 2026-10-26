@@ -76,7 +76,7 @@ async function checkCoreProcess(packaged: boolean): Promise<boolean> {
       else console.error(`[native-selftest] core printed: ${line}`);
     },
     check: MAIN_WINDOW_VITE_DEV_SERVER_URL !== undefined,
-    host: hostServices(),
+    host: (core) => hostServices(core, (source) => source === core),
   });
   try {
     const memory = await new Promise<string>((resolve, reject) => {

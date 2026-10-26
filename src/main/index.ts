@@ -109,7 +109,6 @@ function main(): void {
         );
       };
 
-      const host = hostServices();
       const init: CoreInit = {
         app: { name: app.getName(), version: app.getVersion() },
         profile: app.getPath('userData'),
@@ -120,7 +119,7 @@ function main(): void {
       // The core owns the profile and its sessions; main answers only what needs the desktop. It
       // takes the profile (core.lock) as it comes up: `corrallm serve` may hold this one, and
       // must not write its stores while the app does. A core that crashes is restarted.
-      const supervisor = new CoreSupervisor({
+      const supervisor: CoreSupervisor = new CoreSupervisor({
         fork: () =>
           forkCore({
             entry: path.join(__dirname, 'core.cjs'),
@@ -129,7 +128,7 @@ function main(): void {
               else console.error(`[core] ${line}`);
             },
             check: devServerUrl !== undefined,
-            host,
+            host: (core) => hostServices(core, (source) => supervisor.owns(source)),
           }),
         init: async (core) => {
           const up = await answered(core.link.request('init', init));
@@ -326,18 +325,19 @@ function main(): void {
       // way back to one closed while the core kept working, on every platform.
       app.on('second-instance', reopen);
       // Windows and Linux: the last window closing quits, unless the core has work going on
-      // (a run running, a turn): then it runs on, and opening corrallm again shows it.
+      // (or has not published presence yet): then it runs on, and opening corrallm again shows it.
       lastWindowClosed = () => {
         if (quit.busy || quit.approved) return;
-        void ask('active').then(
-          (active) => {
+        void supervisor.core.then(
+          (core) => {
+            if (!supervisor.owns(core)) return;
             if (BrowserWindow.getAllWindows().length > 0 || quit.busy || quit.approved) return;
-            if (!active) {
+            if (core.presence?.busy === false) {
               app.quit();
               return;
             }
             console.error(
-              'corrallm: its agents are still working, so it runs on with no window: open corrallm again to show it, and quit it there.',
+              'corrallm: it runs on with no window: open corrallm again to show it, and quit it there.',
             );
           },
           () => {

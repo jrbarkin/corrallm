@@ -1,4 +1,5 @@
 import type { Answer, CoreLink } from '../../../shared/link';
+import { NotificationRequest, NotificationResult, Presence } from '../presence';
 import { mintTrustedPath } from '../host';
 import type { HostServices, TrustedPath } from '../host';
 import type { CoreSide, HostSide } from '../protocol';
@@ -10,8 +11,20 @@ import type { CoreSide, HostSide } from '../protocol';
  * string, and is branded here, on the core's side of the port: one of TrustedPath's mint sites.
  */
 
-export function appHost(link: Pick<CoreLink<CoreSide, HostSide>, 'request'>): HostServices {
+export function appHost(
+  link: Pick<CoreLink<CoreSide, HostSide>, 'request' | 'emit'>,
+): HostServices {
   return {
+    presence: (snapshot) => {
+      link.emit('presence', Presence.parse(snapshot));
+    },
+    notify: async (notification) =>
+      NotificationResult.parse(
+        await answered(link.request('notify', NotificationRequest.parse(notification))),
+      ),
+    unnotify: (handle) => {
+      link.emit('unnotify', handle);
+    },
     pickCanvasToOpen: (window) => picked(link.request('pickCanvasToOpen', window)),
     pickCanvasToSave: (window, defaultPath) =>
       picked(link.request('pickCanvasToSave', window, defaultPath)),

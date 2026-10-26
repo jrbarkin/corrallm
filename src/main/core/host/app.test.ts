@@ -47,7 +47,7 @@ function dialogs(picked: string | null) {
     askOpenLink: () => Promise.resolve({ open: false, always: false }),
     openExternal: () => Promise.resolve(null),
     showFile: () => Promise.resolve(null),
-    runReady: () => Promise.resolve(null),
+    notify: () => Promise.resolve('unsupported' as const),
     pickCanvasToOpen: vi.fn<(window: number) => Promise<string | null>>(pick),
     pickCanvasToSave: vi.fn<(window: number, defaultPath: string) => Promise<string | null>>(pick),
     pickFolder: vi.fn<(window: number, current?: string) => Promise<string | null>>(pick),
@@ -82,4 +82,37 @@ describe('the core’s host in the app', () => {
 
     await expect(host.pickCanvasToOpen(7)).rejects.toThrow('The window is gone.');
   });
+});
+
+it('sends presence and withdrawals as events and asks only the bounded notification request', async () => {
+  const events: unknown[] = [];
+  const notify = vi.fn(() => Promise.resolve('shown' as const));
+  const { port1, port2 } = new MessageChannel();
+  ports.push(port1, port2);
+  const main = new CoreLink<HostSide, CoreSide>(portOf(port2), { ...dialogs(null), notify });
+  main.on('presence', (snapshot) => events.push(snapshot));
+  main.on('unnotify', (handle) => events.push(handle));
+  const link = new CoreLink<CoreSide, HostSide>(portOf(port1), {} as Handlers<CoreSide>);
+  const host = appHost(link);
+  const snapshot = {
+    revision: 0,
+    working: 0,
+    runs: 0,
+    jobs: 0,
+    needs: 0,
+    busy: false,
+    awake: false,
+  };
+  const notification = {
+    handle: 'ad9ee798-f2dc-40cf-a1e2-b0073ddfb316',
+    title: 'corrallm',
+    body: 'Needs you',
+  };
+  host.presence(snapshot);
+  host.unnotify(notification.handle);
+  await expect(host.notify(notification)).resolves.toBe('shown');
+  expect(events).toEqual([snapshot, notification.handle]);
+  expect(notify).toHaveBeenCalledExactlyOnceWith(notification);
+  await expect(host.notify({ ...notification, body: '🐴'.repeat(41) })).rejects.toThrow();
+  expect(notify).toHaveBeenCalledOnce();
 });

@@ -1,3 +1,4 @@
+import type { Presence, PauseAllResult, ShutdownOptions } from './presence';
 import type { HostServices, WindowId } from './host';
 import type { LockHolder } from './lock';
 import type { CheckResult } from './selftest';
@@ -10,11 +11,12 @@ import type { CheckResult } from './selftest';
  * parentPort beside the link, in a message of its own (WindowMessage), its port transferred.
  */
 
-/** Why the core's shutdown barrier is prepared: the app quits, or restarts to install an update. */
-export type ShutdownReason = 'quit' | 'update';
+/** Why the core's shutdown barrier is prepared: quit, update, or system shutdown/logout. */
+export type ShutdownReason = 'quit' | 'update' | 'system';
 
-/** What preparing the shutdown barrier says: done, or what it couldn't write (the barrier held). */
-export type ShutdownPrepared = { ok: true } | { failed: true; sentence: string };
+/** Prepared, failed with the barrier held, or busy under ifIdle with no barrier acquired. */
+export type ShutdownPrepared =
+  { ok: true } | { failed: true; sentence: string } | { busy: Presence };
 
 /** How a draft flush went: the windows that didn't answer in time, or answered with an error. */
 export interface DraftsFlushed {
@@ -42,7 +44,10 @@ export interface CoreSide {
      * Prepares the shutdown barrier (B11 Design §16.5): no new dispatch, no write admitted, every
      * journal and store forced; sessions stay usable. Idempotent until cancelled.
      */
-    prepareShutdown: { args: [reason: ShutdownReason]; result: ShutdownPrepared };
+    prepareShutdown: {
+      args: [reason: ShutdownReason, options?: ShutdownOptions];
+      result: ShutdownPrepared;
+    };
     /** Lifts the barrier (Keep corrallm open): everything goes on as before. */
     cancelShutdown: { args: []; result: null };
     /**
@@ -50,14 +55,19 @@ export interface CoreSide {
      * ended, children and the database closed, then the profile let go. Idempotent.
      */
     commitShutdown: { args: []; result: null };
-    /** Whether a canvas the core runs has work going on: a run running, or a turn. */
-    active: { args: []; result: boolean };
+    /** Native Pause all; the core makes the host caller, never a token. */
+    pauseAll: { args: []; result: PauseAllResult | { sentence: string } };
+    /** Resolves a notification handle privately and tells this window what to show. */
+    activate: { args: [window: WindowId, handle: string]; result: null };
     /** Runs the native self-test's checks (`packaged`: whether the app is) and reports them. */
     selftest: { args: [options: { packaged: boolean }]; result: SelfTestReport };
   };
   events: {
     /** The core is up and listening, using this much memory. */
     ready: [memory: string];
+    presence: [snapshot: Presence];
+    exiting: [why: 'signal'];
+    unnotify: [handle: string];
   };
 }
 
@@ -86,7 +96,7 @@ export interface CoreInit {
  */
 export interface HostSide {
   requests: {
-    [K in keyof HostServices]: {
+    [K in Exclude<keyof HostServices, 'presence' | 'unnotify'>]: {
       args: Parameters<HostServices[K]>;
       result: K extends 'pickCanvasToOpen' | 'pickCanvasToSave' | 'pickFolder'
         ? string | null
@@ -94,6 +104,8 @@ export interface HostSide {
     };
   };
   events: {
+    /** Whether any corrallm window is focused, separately from file-check focus. */
+    focus: [focused: boolean];
     /** The window closed, crashed or reloaded: its port to the core is done. */
     windowGone: [window: WindowId, closed?: boolean];
     /** The window gained focus: the canvas it shows has its file checked (B9 Design §5). */

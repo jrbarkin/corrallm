@@ -101,7 +101,13 @@ describe('the GUI client', () => {
 
   it('exposes only the GUI operations, one function per operation', () => {
     expect(Object.keys(api).sort()).toEqual(
-      [...GUI_OPS.map(guiFunction), 'terminalOnEvent', 'topicsOnChange', 'topicsOnEpoch'].sort(),
+      [
+        ...GUI_OPS.map(guiFunction),
+        'terminalOnEvent',
+        'topicsOnChange',
+        'topicsOnEpoch',
+        'windowOnShow',
+      ].sort(),
     );
     expect(Object.values(api).every((value) => typeof value === 'function')).toBe(true);
   });
@@ -157,4 +163,28 @@ describe('the GUI client', () => {
     stubApi({ appInfo: vi.fn<AppApi['appInfo']>().mockResolvedValue({ ok: false, error }) });
     await expect(api.appInfo()).rejects.toMatchObject(error);
   });
+});
+
+it('passes the fixed show listener through without flushing drafts or sending an operation', () => {
+  const stop = vi.fn();
+  const windowOnShow = vi.fn<AppApi['windowOnShow']>().mockReturnValue(stop);
+  stubApi({ windowOnShow });
+  const listener = vi.fn();
+  expect(api.windowOnShow(listener)).toBe(stop);
+  expect(windowOnShow).toHaveBeenCalledExactlyOnceWith(listener);
+});
+
+it('scripts a removable show event in the fake core without any read or gesture', () => {
+  const core = fakeCore();
+  const hear = vi.fn();
+  const stop = core.api.windowOnShow(hear);
+  const target = { canvas: '0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b' as CanvasId };
+  core.show(target);
+  expect(hear).toHaveBeenCalledExactlyOnceWith(target);
+  expect(core.operations).toEqual([]);
+  expect(core.reads).toEqual([]);
+  stop();
+  core.show(target);
+  expect(hear).toHaveBeenCalledOnce();
+  core.dispose();
 });
