@@ -420,6 +420,7 @@ export class Provisioner {
             drivers: found.drivers,
             args: [
               'update-ref',
+              '--no-deref',
               '-m',
               `corrallm: workspace ${tree.id}`,
               '--end-of-options',

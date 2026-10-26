@@ -291,8 +291,7 @@ test('independent edits stay off the base; native cwd and conversation survive r
       .toBe(2);
     const resumed =
       (await nativeLog(one.location)).filter((event) => event.event === 'start')[1]?.args ?? [];
-    expect(resumed).toContain('--resume');
-    expect(resumed[resumed.indexOf('--resume') + 1]).toBe(id);
+    expect(resumed).toContain(`--resume=${id}`);
     expect(await readFile(path.join(one.location, 'README.md'), 'utf8')).toBe('one\n');
     expect(existsSync(path.join(w.project, '.fake-claude'))).toBe(false);
   } finally {
@@ -393,7 +392,9 @@ for (const attack of ['core.worktree', 'symlinked .corral']) {
         .page()
         .evaluate((agent) => window.api.sessionAvailability(agent), agent);
       expect(result.ready).toBe(false);
-      expect((await w.list()).items.find((item) => item.agent === agent)?.state).toBe('error');
+      await expect
+        .poll(async () => (await w.list()).items.find((item) => item.agent === agent)?.state)
+        .toBe('error');
       expect(existsSync(path.join(outside, 'worktrees'))).toBe(false);
       expect(existsSync(path.join(w.project, '.fake-claude'))).toBe(false);
       const files = await w

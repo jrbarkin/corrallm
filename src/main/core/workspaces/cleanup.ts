@@ -490,6 +490,7 @@ export class WorkspaceCleanup {
           checked.checkout.path,
         ],
       });
+      metadata();
     } else if (checked.fault !== 'checkout-missing') {
       // Not the checkout made, or not readable: nothing there is removed.
       return this.#failed(workspace, `cleanup-${checked.fault}`);
@@ -507,8 +508,9 @@ export class WorkspaceCleanup {
         cwd: repository.realRoot,
         drivers: base.drivers,
         answers: [1],
-        args: ['update-ref', '-d', '--end-of-options', tree.branchRef, state.tip],
+        args: ['update-ref', '--no-deref', '-d', '--end-of-options', tree.branchRef, state.tip],
       });
+      metadata();
     }
     await this.#deps.forgetSetup?.(workspace);
     await workspaces.write((w) => {
