@@ -28,6 +28,7 @@ export const DEVIATIONS: Partial<Record<OpName, Reason>> = {
   'canvas.open': 'trust-gate',
   'canvas.saveAs': 'trust-gate',
   'project.choose': 'trust-gate',
+  'worktree.remove': 'trust-gate',
   'project.setSetupCommand': 'trust-gate',
   'project.clearSetupApproval': 'permissions',
   'session.setMode': 'permissions',
