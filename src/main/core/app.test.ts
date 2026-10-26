@@ -594,6 +594,101 @@ describe('the app’s core and window channels', () => {
     expect(core.engines.canvas(id)?.state).toBe('executing');
   });
 
+  it('with no window or subscribers, finishes the same turn, its output condition and the next task', async () => {
+    const gate = Promise.withResolvers<undefined>();
+    const entered = Promise.withResolvers<undefined>();
+    let held = true;
+    const fake = new FakeConnector({
+      adapter: 'codex',
+      step: () => {
+        entered.resolve(undefined);
+        return held ? gate.promise : Promise.resolve();
+      },
+    });
+    const id = newCanvasId();
+    const file = path.join(profile, 'continuity.corral');
+    await writeFile(
+      file,
+      JSON.stringify({
+        format: 'corrallm',
+        version: 2,
+        id,
+        nodes: [
+          {
+            id: 'worker',
+            kind: 'agent',
+            label: 'Worker',
+            position: { x: 0, y: 0 },
+            adapter: 'codex',
+            connection: 'codex.app-server',
+            queue: [
+              { id: 'first', message: 'continuity-first' },
+              {
+                id: 'check',
+                if: { kind: 'outputContains', text: 'You said: continuity-first' },
+                then: [{ id: 'branch', message: 'continuity-condition' }],
+              },
+              { id: 'next', message: 'continuity-next' },
+            ],
+          },
+        ],
+        links: [],
+      }),
+    );
+    const { core, connect, served } = await app({
+      connectors: { 'codex.app-server': fake },
+      environment: () => Promise.resolve({}),
+    });
+    const window = connect(7);
+    dialogs.open = file;
+    await call(window, 'canvas.open', {});
+    await chooseProject(window);
+    try {
+      await call(window, 'run.start', { canvas: id });
+      await entered.promise;
+      for (const topic of ['run', 'session', 'messages']) {
+        await call(window, 'topics.subscribe', {
+          topic,
+          canvas: id,
+          ...(topic === 'session' ? { agent: 'worker' } : {}),
+        });
+      }
+      const native = fake.sessions[0];
+      if (!native) throw new Error('No native session');
+      const close = vi.spyOn(native, 'close');
+      served.gone(7, true);
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(core.active()).toBe(true);
+      held = false;
+      gate.resolve(undefined);
+      await vi.waitFor(() => {
+        expect(core.engines.canvas(id)?.engine.run.snapshot().agents.worker).toMatchObject({
+          status: 'done',
+          outcomes: {
+            first: 'succeeded',
+            check: 'succeeded',
+            branch: 'succeeded',
+            next: 'succeeded',
+          },
+        });
+      });
+      expect(native.sent.map(({ text }) => text)).toEqual([
+        'continuity-first',
+        'continuity-condition',
+        'continuity-next',
+      ]);
+      expect(fake.started).toHaveLength(1);
+      expect(close).not.toHaveBeenCalled();
+      const reopened = connect(8);
+      expect(await shownIn(reopened)).toBe(id);
+      await call(reopened, 'topics.subscribe', { topic: 'session', canvas: id, agent: 'worker' });
+      expect(fake.started).toHaveLength(1);
+    } finally {
+      held = false;
+      gate.resolve(undefined);
+    }
+  });
+
   it('flushes the core’s journal, usage and conversation ids in the profile it owns', async () => {
     const { core, connect } = await app();
     const window = connect(7);
