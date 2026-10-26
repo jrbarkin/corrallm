@@ -5,6 +5,7 @@ import type { Session } from '../../shared/model/session';
 import type { Run } from '../../shared/engine/run/runner';
 import { agentStatus } from '../../shared/model/run-display';
 import { AdapterLogo } from '../AdapterLogo';
+import { useWorkspaces, workspaceAttention, workspaceState } from '../workspaces/state';
 import { slide } from '../agent/motion';
 import { agentLabel, connectionOf, DEFAULT_AGENT } from './agents';
 import './Dock.css';
@@ -32,6 +33,7 @@ export function Dock({
   onStart: () => void;
 }) {
   const root = useRef<HTMLElement>(null);
+  const workspaces = useWorkspaces();
   const horizontal = current !== undefined;
   const before = useRef<{ horizontal: boolean; boxes: Map<string, DOMRect> }>(undefined);
   const animations = useRef<Animation[]>([]);
@@ -99,7 +101,9 @@ export function Dock({
     const name = node.data.label || 'Unnamed agent';
     const adapter = node.data.adapter ?? DEFAULT_AGENT;
     const state = agentStatus(node.id, sessions, run, needs);
-    const label = `${name}, ${agentLabel(adapter, connectionOf(node.data))}: ${state}`;
+    const workspace = workspaces.find((item) => item.agent === node.id);
+    const attention = workspaceAttention(workspace);
+    const label = `${name}, ${agentLabel(adapter, connectionOf(node.data))}: ${state}${attention && workspace ? ` · ${workspaceState(workspace)}` : ''}`;
     return (
       <button
         key={node.id}
@@ -110,7 +114,7 @@ export function Dock({
         title={label}
         aria-current={current === node.id ? 'true' : undefined}
         data-status={state}
-        data-needs={needs.has(node.id) ? '' : undefined}
+        data-needs={needs.has(node.id) || attention ? '' : undefined}
         onClick={() => {
           onOpen(node.id);
         }}

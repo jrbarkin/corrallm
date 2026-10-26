@@ -136,6 +136,7 @@ export function StartSession({
             </button>
           </div>
           <section aria-label="Agents to start">
+            <p>Agents get their own worktrees; groups share one.</p>
             <h3>Your agents</h3>
             {installed === undefined && <p role="status">Looking for installed agents…</p>}
             {catalog().adapters.map((adapter) => {

@@ -81,6 +81,8 @@ export function fakeCanvas(initial: CanvasDocument) {
     else core.snapshot(`canvas:${next.id}`, entities, rev);
     core.respond('window.get', { canvas: next.id });
     if (!core.state(`needs:${next.id}`)) core.snapshot(`needs:${next.id}`, { items: [] });
+    if (!core.state(`worktrees:${next.id}`))
+      core.snapshot(`worktrees:${next.id}`, { items: [], kept: [] });
   };
   open(initial);
   core.snapshot(`needs:${initial.id}`, { items: [] });

@@ -117,6 +117,59 @@ async function open({
 const SCREEN = { type: 'screen', data: 'Claude Code\r\n❯ ', cols: 100, rows: 30 } as const;
 
 describe('a Terminal agent', () => {
+  it('explains setup instead of Starting and links straight to its live card', async () => {
+    const { container } = await renderReady(
+      <GraphEditor
+        initialGraph={{ nodes: [agent('a')], edges: [] }}
+        onCanvas={(made) => {
+          const need = 'setup/tree/1';
+          made.core.snapshot(`worktrees:${made.document.id}`, {
+            items: [
+              {
+                agent: 'a',
+                mode: 'own',
+                workspace: null,
+                generation: 1,
+                branch: 'corral/a',
+                base: null,
+                state: 'setup',
+                need,
+                setup: { state: 'pending', command: 'npm ci', source: 'detected', exitCode: null },
+              },
+            ],
+            kept: [],
+          });
+          made.core.snapshot(`needs:${made.document.id}`, {
+            items: [
+              {
+                id: need,
+                canvas: made.document.id,
+                kind: 'worktree',
+                for: 'you',
+                by: ['you'],
+                answerIn: 'api',
+                title: 'Set up a’s worktree?',
+                choices: [{ label: 'Skip', value: 'skip' }],
+              },
+            ],
+          });
+        }}
+      />,
+    );
+    const card = container.querySelector<HTMLElement>('.react-flow__node[data-id="a"]');
+    if (!card) throw new Error('No card');
+    await events.doubleClick(card);
+    const view = within(screen.getByRole('dialog', { name: 'a' }));
+    expect(view.queryByText('Starting Claude Code…')).toBeNull();
+    expect(view.getAllByText('Waiting for worktree setup').length).toBeGreaterThan(0);
+    expect(view.getByText('corral/a')).toBeTruthy();
+    const action = view
+      .getAllByRole('button', { name: 'Review setup' })
+      .find((button) => button.closest('header'));
+    if (!action) throw new Error('No setup action in header');
+    await events.click(action);
+    expect(await screen.findByRole('article', { name: 'Set up a’s worktree?' })).toBeTruthy();
+  });
   it.each(['finished', 'cancelled'] as const)(
     'keeps its terminal when Needs reopens it before Back’s animation has %s',
     async (outcome) => {

@@ -135,6 +135,14 @@ The manager, options, history and file picker consume this one resolver. Context
 
 `src/main/core/workspaces/profile.ts` (`profileId`): a UUID naming this profile's branches and its folder in each checkout, so two profiles' workspaces of one repository never meet. Kept in `<profile>/workspaces/profile-id` (0600), beside the database rather than in it, so a restored database keeps it; made once, and one that can't be read is refused, never replaced. The runner's empty hooks folder is meant to be `<profile>/workspaces/hooks`.
 
+## Window presentation
+
+The window reads workspace state exclusively from `worktrees:<c>` through the renderer topic mirror (`src/renderer/workspaces/Workspace.tsx`), including each member's active branch and shared owner. Cards keep their fixed geometry, headers repeat the branch, settings show Works in with location, sharing and setup, and Start explains that agents have their own worktrees while groups share one. Separate workspace attention lights the dock without replacing run status. Setup holds explain why a session waits and link directly to the core's card; setup success is a brief notice, not a modal or an inferred readiness transition.
+
+Needs still owns the exact command preview, bounded escaped output and generation-bound Run/Skip/Always/Stop/Retry/Switch choices. Each is one `reply`; the renderer adds no setup, switch or cleanup policy. A pending move displays the active tree plus the destination named by its Need and explains retention. Failed/missing workspaces have one `worktree.retry` gesture. Agent settings' Repository setup form sends `project.setSetupCommand` (a new command or null for detection) and `project.clearSetupApproval`, each once per gesture; the core keeps the command and clears/reoffers consent as described above.
+
+The Canvases list's Kept worktrees sections (`src/renderer/workspaces/KeptWorktrees.tsx`) show retained/removing trees of open and closed canvases, their former owner/canvas, branch, location and errors. Remove calls `worktree.remove` once; any confirmation is the core's proposal, answered with one `reply` in that same section or in Needs. Closing/reopening the list retains access to pending proposals. No window switch, local confirmation, optimistic tree removal or filesystem action accompanies the gesture. Failed cleanup can be retried; an in-progress removal stays disabled. `e2e/workspaces.e2e.ts` covers the real app's setup visibility, shared tree attention, switching and kept-worktree path back to retained work, along with retry and shared non-Git folders.
+
 ## Shipped template workspaces
 
 The gallery's ten templates declare their shared working state with frames; existing user canvases are not rewritten. `src/shared/model/templates-workspaces.test.ts` pins the original agents, queue-item ids, links and nested parenting, as well as each workspace owner.

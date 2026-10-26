@@ -10,6 +10,8 @@ import type { LinkState } from './link';
 import { createScreen } from './screen';
 import type { Screen, ScreenFactory } from './screen';
 import './TerminalPane.css';
+import { WorkspaceWait } from '../workspaces/Workspace';
+import { useWorkspace, workspaceAttention } from '../workspaces/state';
 
 /** What the bar under the terminal says the session is doing. */
 const STATUS: Record<Session['status'], string> = {
@@ -66,6 +68,7 @@ export function TerminalPane({
   screens?: ScreenFactory;
 }) {
   const host = useRef<HTMLDivElement>(null);
+  const workspace = useWorkspace(agentId);
   const [state, setState] = useState<LinkState>({ kind: 'waiting' });
   const openLink = useContext(OpenLinkContext);
   /** Where its links go, as they are when one is opened. */
@@ -162,7 +165,9 @@ export function TerminalPane({
         <div ref={host} className="agent-terminal-screen" aria-label={`${cli}’s terminal`} />
         {state.kind !== 'live' && (
           <div className="agent-terminal-overlay" role="status">
-            {state.kind === 'exited' ? (
+            {workspaceAttention(workspace) || workspace?.state === 'creating' ? (
+              <WorkspaceWait agent={agentId} />
+            ) : state.kind === 'exited' ? (
               <>
                 <p>
                   {cli} exited

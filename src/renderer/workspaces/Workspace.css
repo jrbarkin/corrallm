@@ -1,0 +1,115 @@
+.workspace-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  max-width: 240px;
+  font-size: 11px;
+  color: var(--float-muted, color-mix(in srgb, CanvasText 60%, transparent));
+}
+.workspace-badge > span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.workspace-badge small {
+  white-space: nowrap;
+}
+.workspace-badge button {
+  flex: none;
+  padding: 0 4px;
+  border-radius: 4px;
+  color: var(--graph-accent, #3a6fd8);
+  font: inherit;
+}
+.workspace-badge[data-workspace-attention] {
+  color: var(--graph-accent, #3a6fd8);
+}
+.workspace-badge-card {
+  position: absolute;
+  left: 90px;
+  right: 12px;
+  top: 32px;
+  height: 18px;
+  font-size: 10px;
+  justify-content: flex-end;
+}
+.graph-card:has(.workspace-badge-card) .graph-card-status {
+  max-width: 72px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.workspace-details {
+  padding: 12px 0;
+  border-block: 1px solid var(--float-line, color-mix(in srgb, CanvasText 20%, transparent));
+  font-size: 12px;
+}
+.workspace-details h3,
+.kept-worktrees h3 {
+  font-size: 12px;
+  margin: 0 0 8px;
+}
+.workspace-details p {
+  margin: 6px 0;
+}
+.workspace-location {
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+.workspace-wait {
+  padding: 8px 12px;
+  font-size: 12px;
+}
+.workspace-wait p {
+  margin: 0 0 6px;
+}
+.workspace-toast {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 40;
+  background: var(--float-bg, Canvas);
+  color: CanvasText;
+  border: 1px solid var(--float-line, color-mix(in srgb, CanvasText 20%, transparent));
+  border-radius: 8px;
+  padding: 10px 16px;
+  box-shadow: 0 4px 24px #0003;
+  pointer-events: none;
+}
+.workspace-setup-command {
+  margin-top: 12px;
+}
+.workspace-setup-command form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.workspace-setup-command label {
+  width: 100%;
+  display: grid;
+  gap: 4px;
+}
+.workspace-setup-command input {
+  width: 100%;
+  box-sizing: border-box;
+  font-family: monospace;
+}
+.kept-worktrees {
+  margin-top: 10px;
+  border-top: 1px solid var(--float-line, color-mix(in srgb, CanvasText 20%, transparent));
+  padding-top: 10px;
+}
+.kept-worktree {
+  display: grid;
+  gap: 6px;
+  padding-block: 8px;
+}
+.kept-worktree code {
+  overflow-wrap: anywhere;
+}
+.graph-question[data-requested] {
+  outline: 2px solid var(--graph-accent, #3a6fd8);
+  outline-offset: 3px;
+}

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { ComponentProps } from 'react';
 
 import type { CanvasId } from '../../shared/canvas';
@@ -29,13 +29,29 @@ export function NeedsSidebar({
   canvas,
   mirror,
   onReply,
+  request,
   ...questions
 }: Omit<ComponentProps<typeof QuestionsSidebar>, 'extra'> & {
   canvas: CanvasId;
   mirror: TopicMirror;
   onReply: (to: string, choice: string) => Promise<Reply>;
+  request?: { id: string } | undefined;
 }) {
   const state = useTopic(`needs:${canvas}`, mirror);
+  const target = useRef<HTMLElement>(null);
+  const focused = useRef<typeof request>(undefined);
+  useEffect(() => {
+    if (!request || focused.current === request) return;
+    const timer = setTimeout(() => {
+      if (target.current) {
+        target.current.focus();
+        focused.current = request;
+      }
+    }, 0);
+    return () => {
+      clearTimeout(timer);
+    };
+  }, [request, state]);
   const [settlements, setSettlements] = useState<ReadonlyMap<string, Settlement>>(new Map());
   const current = new Map(
     (state?.items ?? [])
@@ -113,7 +129,7 @@ export function NeedsSidebar({
       </button>
     );
   return (
-    <FloatPopover label="Needs you" button={bell} className="needs-popover">
+    <FloatPopover label="Needs you" button={bell} className="needs-popover" request={request}>
       {(close) => (
         <QuestionsSidebar
           {...questions}
@@ -126,12 +142,21 @@ export function NeedsSidebar({
             cards: [...current.values()].map((item) => {
               const settlement = kept.get(item.id);
               return (
-                <article key={item.id} className="graph-question" aria-label={item.title}>
+                <article
+                  key={item.id}
+                  className="graph-question"
+                  aria-label={item.title}
+                  tabIndex={-1}
+                  ref={request?.id === item.id ? target : undefined}
+                  data-requested={request?.id === item.id ? '' : undefined}
+                >
                   <span className="graph-question-header">
                     {item.kind === 'file'
                       ? 'File review'
                       : item.kind === 'worktree'
-                        ? 'Worktree setup'
+                        ? item.id.startsWith('rebind/')
+                          ? 'Workspace change'
+                          : 'Worktree setup'
                         : item.id.startsWith('stalled/')
                           ? `Silent session: ${item.agent === undefined ? 'agent' : agentName(questions.input.nodes, item.agent)}`
                           : item.id.startsWith('unsaved/')

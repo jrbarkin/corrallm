@@ -13,7 +13,7 @@ import {
 import type { Connection, Edge, EdgeTypes, NodeTypes } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
-import type { MouseEvent as ReactMouseEvent, SyntheticEvent } from 'react';
+import type { ComponentProps, MouseEvent as ReactMouseEvent, SyntheticEvent } from 'react';
 
 import { absolutePosition, groupColors } from '../../shared/model/geometry';
 import { nodeView } from './flow';
@@ -89,6 +89,7 @@ import { AgentContextMenu } from './AgentContextMenu';
 import type { WorkFlowEdge } from './nodes';
 import { NeedsSidebar } from './NeedsSidebar';
 import { Canvases } from './Canvases';
+import { WorkspaceProvider } from '../workspaces/Workspace';
 import { workEdges } from '../../shared/model/work';
 import { WorkDetail } from './WorkDetail';
 import { operationEdits } from './edits';
@@ -352,6 +353,7 @@ function Editor({
     return { input, needs: needsOf(input) };
   }, [canvasId, runNodes, run, sessions, engine]);
   const coreNeeds = useTopic(`needs:${canvasId}`, mirror);
+  const [requestedNeed, setRequestedNeed] = useState<{ id: string }>();
   const dockNeeds = useMemo(
     () =>
       new Set([
@@ -1052,6 +1054,7 @@ function Editor({
               <Canvases
                 canvas={canvasId}
                 mirror={mirror}
+                client={api}
                 onShow={commands.show}
                 onClose={commands.close}
               />
@@ -1097,7 +1100,17 @@ function Editor({
   };
 
   return (
-    <GraphActionsContext value={actions}>
+    <GraphContext
+      actions={actions}
+      canvas={canvasId}
+      mirror={mirror}
+      client={api}
+      nodes={model.nodes}
+      onNeed={(id) => {
+        setSettingsAgent(undefined);
+        setRequestedNeed({ id });
+      }}
+    >
       <div
         className="graph-editor"
         data-window-open={front !== undefined || queues !== undefined ? '' : undefined}
@@ -1360,6 +1373,7 @@ function Editor({
                 <Canvases
                   canvas={canvasId}
                   mirror={mirror}
+                  client={api}
                   onShow={commands.show}
                   onClose={commands.close}
                 />
@@ -1427,6 +1441,7 @@ function Editor({
                 key={canvasId}
                 canvas={canvasId}
                 mirror={mirror}
+                request={requestedNeed}
                 onReply={commands.reply}
                 needs={needed.needs}
                 input={needed.input}
@@ -1704,7 +1719,10 @@ function Editor({
               await flushDrafts();
               const box = wrapper.current?.getBoundingClientRect();
               const at = box
-                ? screenToFlowPosition({ x: box.left + box.width / 2, y: box.top + box.height / 2 })
+                ? screenToFlowPosition({
+                    x: box.left + box.width / 2,
+                    y: box.top + box.height / 2,
+                  })
                 : { x: 0, y: 0 };
               const result = await api.canvasAddAgent({
                 canvas: canvasId,
@@ -1893,6 +1911,18 @@ function Editor({
           />
         )}
       </div>
+    </GraphContext>
+  );
+}
+
+/** Keep the graph mounted across canvas switches; only per-canvas notification UI resets. */
+function GraphContext({
+  actions,
+  ...workspace
+}: ComponentProps<typeof WorkspaceProvider> & { actions: GraphActions }) {
+  return (
+    <GraphActionsContext value={actions}>
+      <WorkspaceProvider {...workspace} />
     </GraphActionsContext>
   );
 }

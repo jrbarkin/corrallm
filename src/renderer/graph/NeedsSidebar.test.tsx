@@ -44,6 +44,36 @@ const file: NeedsItem = {
   ],
 };
 
+it.each([
+  ['setup/tree/1', 'worktree', 'Run', 'run'],
+  ['setup/tree/1', 'worktree', 'Skip', 'skip'],
+  ['setup/tree/1', 'worktree', 'Always for this repository', 'always'],
+  ['setup/tree/1', 'worktree', 'Stop', 'stop'],
+  ['setup/tree/1', 'worktree', 'Run again', 'retry'],
+  ['rebind/group%2Fteam/2', 'worktree', 'Switch, keeping the previous worktrees', 'switch'],
+  ['proposal/cleanup', 'proposal', 'Delete, keep its work', 'allow'],
+  ['proposal/cleanup', 'proposal', 'Delete, and discard its worktree and branch', 'discard'],
+] as const)(
+  'answers workspace choice %s %s %s with exactly one reply',
+  async (id, kind, label, value) => {
+    const item: NeedsItem = {
+      ...proposal,
+      id,
+      kind,
+      title: 'Workspace decision',
+      detail: 'Current: corral/old\nDestination: Review team\nOutput: <script>untrusted</script>',
+      choices: [{ label, value }],
+    };
+    const core = await setup([item]);
+    const card = screen.getByRole('article', { name: item.title });
+    expect(card.querySelector('script')).toBeNull();
+    expect(card.textContent).toContain('<script>untrusted</script>');
+    if (id.startsWith('rebind/')) expect(within(card).getByText('Workspace change')).toBeTruthy();
+    await events.click(within(card).getByRole('button', { name: label }));
+    expectOneOp(core, 'reply', { canvas, to: id, answer: { choice: value } });
+  },
+);
+
 it('preserves the exact command’s spaces and the setup preview’s separate lines', async () => {
   const detail = `Runs: printf 'a  b'\nIn: /a project/checkout`;
   const rule = /\n\.graph-question-detail \{([^}]+)\}/.exec(css)?.[1] ?? '';
@@ -122,7 +152,7 @@ it('shows the core’s persistent oversized-run warning without offering an answ
   expect(within(card).getByText(problem.detail ?? '')).toBeTruthy();
   expect(within(card).queryAllByRole('button')).toHaveLength(0);
 });
-async function setup(items: NeedsItem[], nodes: CanvasNode[] = []) {
+async function setup(items: NeedsItem[], nodes: CanvasNode[] = [], request?: { id: string }) {
   const core = fakeCore();
   cores.push(core);
   core.snapshot(`needs:${canvas}`, { items });
@@ -130,6 +160,7 @@ async function setup(items: NeedsItem[], nodes: CanvasNode[] = []) {
     <NeedsSidebar
       canvas={canvas}
       mirror={core.topics}
+      request={request}
       needs={[]}
       input={{
         canvas,
@@ -144,7 +175,7 @@ async function setup(items: NeedsItem[], nodes: CanvasNode[] = []) {
       onReply={(to, choice) => core.api.reply({ canvas, to, answer: { choice } })}
     />,
   );
-  if (items.length > 0) {
+  if (items.length > 0 && !request) {
     await waitFor(() => {
       expect(screen.getByRole('button', { name: 'Needs you' })).not.toHaveProperty(
         'disabled',
@@ -155,6 +186,28 @@ async function setup(items: NeedsItem[], nodes: CanvasNode[] = []) {
   }
   return core;
 }
+
+it('opens a requested card arriving later and focuses it once without taking focus on output updates', async () => {
+  const core = await setup([], [], { id: file.id });
+  act(() => {
+    core.change({ topic: `needs:${canvas}`, rev: 1, replace: { items: [file] } });
+  });
+  const card = await screen.findByRole('article', { name: file.title });
+  await waitFor(() => {
+    expect(document.activeElement).toBe(card);
+  });
+  const keep = within(card).getByRole('button', { name: 'Keep' });
+  keep.focus();
+  act(() => {
+    core.change({
+      topic: `needs:${canvas}`,
+      rev: 2,
+      replace: { items: [{ ...file, detail: 'Updated preview' }] },
+    });
+  });
+  expect(document.activeElement).toBe(keep);
+  expect(core.operations).toEqual([]);
+});
 it.each([
   ['allow', 'Allow', 'allowed'],
   ['refuse', 'Refuse', 'refused'],
