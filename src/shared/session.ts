@@ -602,6 +602,10 @@ export const MAX_QUESTIONS = 4;
 export const MAX_FORM_FIELDS = 50;
 /** The longest name of an MCP server the renderer may give. */
 export const MAX_MCP_NAME_LENGTH = 200;
+/** The most MCP servers /mcp shows (a session's first, as it reports them). */
+export const MAX_MCP_SERVERS = 100;
+/** The longest reason an MCP server failed that /mcp shows, in characters. */
+export const MAX_MCP_ERROR_LENGTH = 1000;
 /**
  * What a model's value may look like: an alias ('opus'), an id, or a provider's id or ARN; never
  * with a dash first, which a command line would take for a flag.

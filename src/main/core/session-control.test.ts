@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MAX_MESSAGE_BYTES } from '../../shared/api/limits';
 import { RULES } from '../../shared/api/rules';
 import type { CanvasId } from '../../shared/canvas';
-import type { FilesRewind, SessionMode } from '../../shared/session';
+import type { FilesRewind, McpChange, McpServer, SessionMode } from '../../shared/session';
 import { MAX_MESSAGE_LENGTH } from '../../shared/session';
 import type { KeptConversation } from '../sessions/adapter';
 import type { Connector, LiveSession } from '../sessions/connector';
@@ -71,6 +71,8 @@ let rewinds: { agent: string; message: string; dryRun: boolean }[];
 let restore: PromiseWithResolvers<undefined> | undefined;
 /** The conversations Claude Code keeps for the project folder, as its reader lists them. */
 let kept: KeptConversation[];
+/** Each MCP server change asked of an agent's session. */
+let mcpChanges: { agent: string; name: string; change: McpChange }[];
 
 beforeEach(async () => {
   profile = await mkdtemp(path.join(tmpdir(), 'corrallm-control-'));
@@ -81,6 +83,7 @@ beforeEach(async () => {
   rewinds = [];
   restore = undefined;
   kept = [];
+  mcpChanges = [];
 });
 
 afterEach(async () => {
@@ -91,11 +94,30 @@ afterEach(async () => {
   await rm(profile, { recursive: true, force: true });
 });
 
-/** A connector of fakes whose sessions restore files (the Agent SDK's), each restore recorded. */
+/**
+ * A connector of fakes whose sessions restore files (the Agent SDK's), each restore recorded, and
+ * have two MCP servers, sentry failing until it is reconnected, each change recorded.
+ */
 function restoring(fake: FakeConnector): Connector<SessionMode> {
   return {
     start: async (spec, host) => {
       const session: LiveSession<SessionMode> = await fake.start(spec, host);
+      let servers: McpServer[] = [
+        { name: 'github', status: 'connected', scope: 'user', tools: 2 },
+        { name: 'sentry', status: 'failed', scope: 'project', error: 'Connection refused' },
+      ];
+      session.mcpServers = () => Promise.resolve(servers.map((one) => ({ ...one })));
+      session.changeMcpServer = (name, change) => {
+        mcpChanges.push({ agent: spec.agentId, name, change });
+        servers = servers.map((one) =>
+          one.name !== name
+            ? one
+            : change === 'disable'
+              ? { name, status: 'disabled' }
+              : { name, status: 'connected', scope: one.scope ?? 'project', tools: 2 },
+        );
+        return Promise.resolve();
+      };
       session.rewindFiles = async (message, dryRun): Promise<FilesRewind> => {
         rewinds.push({ agent: spec.agentId, message, dryRun });
         if (!dryRun) {
@@ -740,5 +762,70 @@ describe('conversations, resume and options', () => {
     expect(await fails(core, 'session.options', { adapter: 'nope' })).toMatchObject({
       code: 'invalid',
     });
+  });
+});
+
+describe('MCP servers (/mcp)', () => {
+  const transcriptText = (core: Core, agent: string) =>
+    (core.engines.canvas(CANVAS)?.engine.sessions.of(agent).entries ?? []).flatMap((entry) =>
+      entry.kind === 'notice' ? [entry.text] : [],
+    );
+
+  it('lists a session’s servers, and changes one it reports, answering with them all as they are then', async () => {
+    const { core } = await start();
+    await ok(core, 'session.open', { agent: 'b' });
+    expect(await ok(core, 'session.mcpServers', { agent: 'b' })).toEqual({
+      items: [
+        { name: 'github', status: 'connected', scope: 'user', tools: 2 },
+        { name: 'sentry', status: 'failed', scope: 'project', error: 'Connection refused' },
+      ],
+    });
+    // One operation: the change, and the servers as they are once it is made.
+    const changed = (await ok(core, 'session.changeMcpServer', {
+      agent: 'b',
+      server: 'sentry',
+      change: 'reconnect',
+    })) as { items: unknown[] };
+    expect(changed.items).toEqual([
+      { name: 'github', status: 'connected', scope: 'user', tools: 2 },
+      { name: 'sentry', status: 'connected', scope: 'project', tools: 2 },
+    ]);
+    expect(mcpChanges).toEqual([{ agent: 'b', name: 'sentry', change: 'reconnect' }]);
+    expect(transcriptText(core, 'b')).toContain('Reconnected the MCP server "sentry".');
+    // A token's is said as its.
+    await ok(
+      core,
+      'session.changeMcpServer',
+      { agent: 'b', server: 'github', change: 'disable' },
+      ORCHESTRATOR,
+    );
+    expect(transcriptText(core, 'b')).toContain('"orchestrator" disabled the MCP server "github".');
+  });
+
+  it('acts only on a server the session reports, on a connection that shows them, never on its own', async () => {
+    const { core } = await start();
+    await ok(core, 'session.open', { agent: 'a' });
+    expect(
+      await fails(core, 'session.changeMcpServer', {
+        agent: 'a',
+        server: 'nowhere',
+        change: 'enable',
+      }),
+    ).toMatchObject({ code: 'not-found' });
+    // An agent never changes its own (R6).
+    expect(
+      await fails(
+        core,
+        'session.changeMcpServer',
+        { agent: 'a', server: 'sentry', change: 'disable' },
+        { kind: 'agent', canvas: CANVAS, agent: 'a', session: 'a-session' },
+      ),
+    ).toMatchObject({ code: 'refused' });
+    // A Terminal's are its terminal's own /mcp.
+    await ok(core, 'session.continueIn', { agent: 'c', connection: 'claude-code.terminal' });
+    expect(await fails(core, 'session.mcpServers', { agent: 'c' })).toMatchObject({
+      code: 'refused',
+    });
+    expect(mcpChanges).toEqual([]);
   });
 });

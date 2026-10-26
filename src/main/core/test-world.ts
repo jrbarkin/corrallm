@@ -166,6 +166,8 @@ function silent(adapter: string): Connector<SessionMode> {
   };
 }
 const CONTROL_AGENT = 'session-control';
+/** The MCP server the capable connection's session reports. */
+const CONTROL_SERVER = 'fixture-server';
 /**
  * An agent of the capable connection whose conversations are resumed (B11 §7): its own, so no
  * other fixture's session closes under it.
@@ -202,6 +204,10 @@ function controlConnector(): Connector<SessionMode> {
         return Promise.resolve();
       };
       live.rewindFiles = () => Promise.resolve({ possible: true, files: [], added: 0, removed: 0 });
+      // One MCP server, which a change leaves as it is.
+      live.mcpServers = () =>
+        Promise.resolve([{ name: CONTROL_SERVER, status: 'connected' as const, tools: 1 }]);
+      live.changeMcpServer = () => Promise.resolve();
       host.emit({
         type: 'history',
         events: [
@@ -1556,6 +1562,27 @@ export const REAL_FIXTURES: Readonly<Record<OpName, OpFixture>> = {
       { canvas: CANVAS, adapter: '' },
       { canvas: CANVAS, adapter: 'not-an-adapter' },
       { canvas: CANVAS, adapter: CONTROL.adapter.id, extra: true },
+    ],
+  },
+  'session.mcpServers': {
+    valid: [{ canvas: CANVAS, agent: CONTROL_AGENT }],
+    invalid: [{ canvas: CANVAS }, { canvas: CANVAS, agent: CONTROL_AGENT, server: 'x' }],
+  },
+  'session.changeMcpServer': {
+    fresh: ['revs'],
+    valid: [
+      {
+        canvas: CANVAS,
+        agent: CONTROL_AGENT,
+        server: CONTROL_SERVER,
+        change: 'reconnect',
+        request: controlRequest(353),
+      },
+    ],
+    invalid: [
+      { canvas: CANVAS, agent: CONTROL_AGENT, server: CONTROL_SERVER, change: 'delete' },
+      { canvas: CANVAS, agent: CONTROL_AGENT, server: '', change: 'reconnect' },
+      { canvas: CANVAS, agent: CONTROL_AGENT, server: 'x'.repeat(201), change: 'reconnect' },
     ],
   },
   'session.rewindPreview': {

@@ -6,7 +6,6 @@ import type {
   SettingsOptions,
   PastSession,
   McpServer,
-  McpChange,
   InstalledClis,
 } from '../../shared/session';
 import { imageBytes } from '../../shared/session';
@@ -75,8 +74,6 @@ function subscribePreviews(listener: () => void): () => void {
 
 export interface SessionQueries {
   installed(): Promise<InstalledClis>;
-  mcp(agent: string): Promise<McpServer[]>;
-  changeMcp(agent: string, server: string, change: McpChange): Promise<McpServer[]>;
   manual?: ManualSubmissions;
   presentation?: SessionPresentation;
 }
@@ -123,8 +120,6 @@ export function nativePresentation(canvas: CanvasId): SessionPresentation {
 }
 export const nativeQueries: SessionQueries = {
   installed: () => import('../api/client').then(({ api }) => api.catalogInstalled()),
-  mcp: (agent) => fromMain(window.api.mcpServers(agent)),
-  changeMcp: (agent, server, change) => fromMain(window.api.changeMcpServer(agent, server, change)),
 };
 
 type Mutable<T> = T extends object ? { -readonly [K in keyof T]: Mutable<T[K]> } : T;
@@ -226,6 +221,23 @@ export function sessionOptions(
   return api
     .sessionOptions({ canvas, adapter, ...(agent === undefined ? {} : { agent }) })
     .then((options) => options as SettingsOptions);
+}
+
+/** A server as /mcp shows it, from an operation's bounded result. */
+function mcpServerOf({
+  scope,
+  server,
+  tools,
+  error,
+  ...one
+}: Awaited<ReturnType<GuiApi['sessionMcpServers']>>['items'][number]): McpServer {
+  return {
+    ...one,
+    ...(scope === undefined ? {} : { scope }),
+    ...(server === undefined ? {} : { server }),
+    ...(tools === undefined ? {} : { tools }),
+    ...(error === undefined ? {} : { error }),
+  };
 }
 
 /** The core's viewed-session lease publishes startup refusals in the session itself. */
@@ -335,10 +347,13 @@ export function sessionCommands(
         if ('proposed' in result) throw new Error('Rewind needs approval.');
         return copy(result) as RewindResult;
       }),
-    mcpServers: () => queries.mcp(agent),
-    changeMcpServer: async (server, change) => {
-      return queries.changeMcp(agent, server, change);
-    },
+    mcpServers: () =>
+      api.sessionMcpServers({ canvas, agent }).then(({ items }) => items.map(mcpServerOf)),
+    // One operation: the change, answered with every server as it is then (B11 §6).
+    changeMcpServer: (server, change) =>
+      api
+        .sessionChangeMcpServer({ canvas, agent, server, change })
+        .then(({ items }) => items.map(mcpServerOf)),
     answer: (id, permission, feedback) => {
       act(
         api.reply({

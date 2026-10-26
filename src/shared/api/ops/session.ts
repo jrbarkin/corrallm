@@ -16,7 +16,14 @@ import {
   ModelChoice,
   SessionSummarySchema,
 } from './b11-data';
-import { MCP_CHANGES, MCP_STATUSES, REWIND_RESTORES, MAX_MCP_NAME_LENGTH } from '../../session';
+import {
+  MCP_CHANGES,
+  MCP_STATUSES,
+  REWIND_RESTORES,
+  MAX_MCP_ERROR_LENGTH,
+  MAX_MCP_NAME_LENGTH,
+  MAX_MCP_SERVERS,
+} from '../../session';
 
 /** Sessions (Core Server §4 G): an agent's session as it is, its transcript, and interrupting it. */
 
@@ -219,6 +226,19 @@ const FilesRewind = z.strictObject({
   removed: z.number(),
 });
 const ServerName = z.string().min(1).max(MAX_MCP_NAME_LENGTH);
+/** An MCP server a session reports, as /mcp shows it: bounded by the core (MAX_MCP_SERVERS). */
+const McpServers = z
+  .array(
+    z.strictObject({
+      name: ServerName,
+      status: z.enum(MCP_STATUSES),
+      scope: z.string().max(MAX_MCP_NAME_LENGTH).optional(),
+      server: z.string().max(MAX_MCP_NAME_LENGTH).optional(),
+      tools: z.number().optional(),
+      error: z.string().max(MAX_MCP_ERROR_LENGTH).optional(),
+    }),
+  )
+  .max(MAX_MCP_SERVERS);
 const PastSession = z.strictObject({
   id: ConversationId,
   title: z.string(),
@@ -321,28 +341,21 @@ export const b11SessionOps = {
   'session.mcpServers': define(
     { kind: 'read' },
     {
-      summary: 'Lists the session’s MCP servers.',
+      summary:
+        'Lists the MCP servers an agent’s running session has, and how each is (/mcp): on a ' +
+        'connection whose view shows them.',
       input: AgentInput,
-      output: z.strictObject({
-        items: z.array(
-          z.strictObject({
-            name: ServerName,
-            status: z.enum(MCP_STATUSES),
-            scope: z.string().optional(),
-            server: z.string().optional(),
-            tools: z.number().optional(),
-            error: z.string().optional(),
-          }),
-        ),
-      }),
+      output: z.strictObject({ items: McpServers }),
     },
   ),
   'session.changeMcpServer': define(
     { kind: 'command' },
     {
-      summary: 'Changes one MCP server the session reports.',
+      summary:
+        'Reconnects, enables or disables one MCP server the agent’s session reports, saying so ' +
+        'in its transcript. Returns its servers as they are then.',
       input: AgentInput.extend({ server: ServerName, change: z.enum(MCP_CHANGES) }),
-      output: z.strictObject({}),
+      output: z.strictObject({ items: McpServers }),
     },
   ),
   'session.options': define(

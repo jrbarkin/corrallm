@@ -136,6 +136,29 @@ it('reads options in the displayed agent’s workspace through one session.optio
   }
 });
 
+it('lists MCP servers with one read, and changes one with one operation that answers them all', async () => {
+  const core = fakeCore();
+  const canvas = newCanvasId();
+  const failed = { name: 'sentry', status: 'failed' as const, error: 'Connection refused' };
+  const connected = { name: 'sentry', status: 'connected' as const, tools: 2 };
+  core.respond('session.mcpServers', { items: [failed] });
+  core.respond('session.changeMcpServer', { items: [connected], revs: {} });
+  try {
+    const controls = sessionCommands(core.api, canvas, 'member', core.topics, vi.fn());
+    expect(await controls.mcpServers()).toEqual([failed]);
+    expectOneRead(core, 'session.mcpServers', { canvas, agent: 'member' });
+    expect(await controls.changeMcpServer('sentry', 'reconnect')).toEqual([connected]);
+    expectOneOp(core, 'session.changeMcpServer', {
+      canvas,
+      agent: 'member',
+      server: 'sentry',
+      change: 'reconnect',
+    });
+  } finally {
+    core.dispose();
+  }
+});
+
 it('lists and resumes conversations as one operation each, for the displayed agent', async () => {
   const core = fakeCore();
   const canvas = newCanvasId();

@@ -17,6 +17,7 @@ export function withPublication(ops: Implementations): Implementations {
     'session.newConversation',
     'session.continueIn',
     'session.resumeConversation',
+    'session.changeMcpServer',
     'session.rewind',
     'session.interrupt',
     'run.start',

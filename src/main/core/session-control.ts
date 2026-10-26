@@ -11,9 +11,12 @@ import * as agentEdits from '../../shared/model/agent-ops';
 import type { AgentNode } from '../../shared/model/canvas';
 import { threadTitle } from '../../shared/model/session';
 import { andList } from '../../shared/model/words';
+import { MAX_MCP_ERROR_LENGTH, MAX_MCP_NAME_LENGTH, MAX_MCP_SERVERS } from '../../shared/session';
 import type {
   AgentSettingsChange,
   FilesRewind,
+  McpChange,
+  McpServer,
   MessageImage,
   PastSession,
   RewindRestore,
@@ -30,7 +33,7 @@ import type { TokenCaller } from './caller';
 import type { Proposals } from './canvas/proposals';
 import { DeliveryError } from './delivery/delivery';
 import type { Engines, OpenCanvas } from './engines';
-import { nameOf, partyText } from './parties';
+import { nameOf, partyText, quotedName } from './parties';
 import { guardedFiles, RewindGuardSchema, sameGuard } from './rewind-guard';
 import type { RewindGuard } from './rewind-guard';
 import type { WorkspaceGate } from './workspaces/gate';
@@ -81,6 +84,8 @@ export interface SessionControlDeps {
     | 'listedTo'
     | 'resumeSession'
     | 'settingsOptions'
+    | 'mcpServers'
+    | 'changeMcpServer'
   >;
   gate: Pick<WorkspaceGate, 'mutate'>;
   proposals: Pick<Proposals, 'raise'>;
@@ -424,6 +429,63 @@ export class SessionControl {
     );
   }
 
+  /** session.mcpServers (/mcp): the servers its running session reports now, bounded. */
+  async mcpServers({
+    canvas,
+    agent,
+  }: {
+    canvas?: string | undefined;
+    agent: string;
+  }): Promise<{ items: McpServer[] }> {
+    const target = this.#target(canvas, agent);
+    this.#mcpPanel(target);
+    return { items: await this.#servers(target) };
+  }
+
+  /**
+   * session.changeMcpServer (/mcp): reconnects, enables or disables one server its session reports
+   * now (never a command, a URL or a server it doesn't), on a connection that offers that change;
+   * says so in its transcript, and answers with its servers as they are then, so /mcp shows them
+   * without a second operation.
+   */
+  async changeMcpServer(
+    {
+      canvas,
+      agent,
+      server,
+      change,
+    }: { canvas?: string | undefined; agent: string; server: string; change: McpChange },
+    ctx: OpContext,
+  ): Promise<{ items: McpServer[] }> {
+    const target = this.#target(canvas, agent);
+    const { open, name } = target;
+    if (!this.#mcpPanel(target).changes.includes(change)) {
+      throw new OpFailure('refused', `${name}’s MCP servers can’t be ${MCP_DONE[change]} here.`);
+    }
+    if (!(await this.#servers(target)).some((one) => one.name === server)) {
+      throw new OpFailure(
+        'not-found',
+        `${name}’s session has no MCP server ${quotedName(server)}.`,
+      );
+    }
+    ctx.noReturn();
+    const items = bounded(
+      await this.#effect(() =>
+        this.#deps.sessions.changeMcpServer(open.document.id, agent, server, change),
+      ),
+    );
+    const by = partyIdOf(ctx.caller);
+    const what = `${MCP_DONE[change]} the MCP server ${quotedName(server)}.`;
+    open.engine.sessions.notice(
+      agent,
+      'info',
+      by === 'you'
+        ? `${what.charAt(0).toUpperCase()}${what.slice(1)}`
+        : `${partyText(open.document.nodes, by)} ${what}`,
+    );
+    return { items };
+  }
+
   /** session.rewindPreview: what restoring its files to before `message` would change. */
   async rewindPreview({
     canvas,
@@ -541,6 +603,22 @@ export class SessionControl {
       guard,
     });
     return { propose: id };
+  }
+
+  /** Its connection's /mcp panel, as the catalog declares it: refused where it has none. */
+  #mcpPanel({ connection, name }: Target): { changes: readonly McpChange[] } {
+    const panel = connectionIn(this.#deps.catalog, connection)?.connection.panels.mcp;
+    if (panel === undefined) {
+      throw new OpFailure('refused', `${name}’s MCP servers are managed in its terminal (/mcp).`);
+    }
+    return panel;
+  }
+
+  /** The MCP servers its running session reports now, as /mcp shows them: bounded. */
+  async #servers({ open, node }: Target): Promise<McpServer[]> {
+    return bounded(
+      await this.#effect(() => this.#deps.sessions.mcpServers(open.document.id, node.id)),
+    );
   }
 
   /** The open canvas `canvas` names: unavailable if it isn't open (the core doesn't run it). */
@@ -675,6 +753,33 @@ export class SessionControl {
       files,
     };
   }
+}
+
+/** What an MCP change did, as a notice says it. */
+const MCP_DONE: Readonly<Record<McpChange, string>> = {
+  reconnect: 'reconnected',
+  enable: 'enabled',
+  disable: 'disabled',
+};
+
+/**
+ * Servers as /mcp shows them, whatever a session reported: the first MAX_MCP_SERVERS of those a
+ * change can name (a longer name is left out), each text cut to its bound.
+ */
+function bounded(servers: readonly McpServer[]): McpServer[] {
+  const cut = (text: string, most: number) =>
+    text.length > most ? `${text.slice(0, most - 1)}…` : text;
+  return servers
+    .filter(({ name }) => name.length > 0 && name.length <= MAX_MCP_NAME_LENGTH)
+    .slice(0, MAX_MCP_SERVERS)
+    .map(({ name, status, scope, server, tools, error }) => ({
+      name,
+      status,
+      ...(scope === undefined ? {} : { scope: cut(scope, MAX_MCP_NAME_LENGTH) }),
+      ...(server === undefined ? {} : { server: cut(server, MAX_MCP_NAME_LENGTH) }),
+      ...(tools === undefined ? {} : { tools }),
+      ...(error === undefined ? {} : { error: cut(error, MAX_MCP_ERROR_LENGTH) }),
+    }));
 }
 
 function reasonOf(error: unknown): string {

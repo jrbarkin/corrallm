@@ -395,6 +395,10 @@ export const SURFACE = {
   'session.resumeConversation': { access: W, kind: 'command', scope: 'agent', self: 'refused' },
   // What an adapter's agents can be set to, read in an agent's workspace now (B11 §6).
   'session.options': { access: R, kind: 'read', scope: 'none', self: 'allowed' },
+  // /mcp (B11 §6): only a server its session reports, never a command or a URL; an agent never
+  // changes its own.
+  'session.mcpServers': { access: R, kind: 'read', scope: 'none', self: 'allowed' },
+  'session.changeMcpServer': { access: L, kind: 'command', scope: 'agent', self: 'refused' },
   'session.get': {
     access: A,
     kind: 'read',

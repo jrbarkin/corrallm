@@ -324,6 +324,14 @@ export function canvasRuntime(
       const { adapter, agent } = OPS['session.options'].input.parse(raw);
       return read(await backend.options(adapter, agent));
     });
+    core.reply('session.mcpServers', async (raw) => {
+      const { agent } = OPS['session.mcpServers'].input.parse(raw);
+      return read({ items: await backend.mcp(agent) });
+    });
+    core.reply('session.changeMcpServer', async (raw) => {
+      const { agent, server, change } = OPS['session.changeMcpServer'].input.parse(raw);
+      return result({ items: await backend.changeMcp(agent, server, change) });
+    });
     core.reply('session.interrupt', (raw) => {
       engine.sessions.stop(OPS['session.interrupt'].input.parse(raw).agent);
       return result();

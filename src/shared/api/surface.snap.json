@@ -58,6 +58,8 @@
     "api.session.conversations",
     "api.session.resumeConversation",
     "api.session.options",
+    "api.session.mcpServers",
+    "api.session.changeMcpServer",
     "api.session.get",
     "api.session.transcript",
     "api.session.interrupt",
@@ -118,8 +120,10 @@
       "run_kill",
       "run_pause",
       "run_unpause",
+      "session_changeMcpServer",
       "session_get",
       "session_interrupt",
+      "session_mcpServers",
       "session_newConversation",
       "session_open",
       "session_options",
@@ -164,6 +168,7 @@
       "run_get",
       "session_conversations",
       "session_get",
+      "session_mcpServers",
       "session_options",
       "session_rewindPreview",
       "session_transcript",
@@ -216,9 +221,11 @@
       "run_start",
       "run_stop",
       "run_unpause",
+      "session_changeMcpServer",
       "session_conversations",
       "session_get",
       "session_interrupt",
+      "session_mcpServers",
       "session_newConversation",
       "session_open",
       "session_options",
@@ -240,10 +247,10 @@
     ]
   },
   "counts": {
-    "lead": 52,
+    "lead": 54,
     "worker": 12,
-    "outside-read": 21,
-    "outside-write": 62
+    "outside-read": 22,
+    "outside-write": 64
   },
   "unhosted": {
     "agents": "B11",
@@ -538,6 +545,14 @@
     "session.options": {
       "input": "c972f670696f8d9f",
       "output": "7fc73496d7c11db5"
+    },
+    "session.mcpServers": {
+      "input": "c804536f3eb2a39b",
+      "output": "6a4ee09b788a195c"
+    },
+    "session.changeMcpServer": {
+      "input": "bc73906df40f4fb0",
+      "output": "95aeb65f2f5b10a3"
     },
     "settings.get": {
       "input": "e5fa5cc18e054cdd",
