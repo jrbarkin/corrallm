@@ -2,6 +2,8 @@
 
 [Architecture index](overview.md) · [Canonical instructions](../../AGENTS.md)
 
+The [B9a X15 review](../reviews/b9a-x15.md) records unresolved C findings against the workspace claims below: Git metadata symlink writes, submodule filter execution during cleanup assessment, and destructive replay after an unmarked population. Reproductions use real Git and remain failing pending C's security/recovery decisions. No production fix or wider authority is introduced by that review.
+
 ## `src/main/loopback.ts`
 
 What both local servers (MCP, hooks) check before the token: their own Host, no Origin (see Security rules).
