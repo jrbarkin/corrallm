@@ -118,16 +118,8 @@ export class Prompts {
     });
   }
 
-  /** A prompt's id: the item it asks about's, made unique. */
-  #id(itemId: string | undefined): string {
-    const base = itemId === undefined || itemId === '' ? randomUUID() : `${itemId}:prompt`;
-    let id = base;
-    for (let n = 2; this.#open.has(id); n += 1) id = `${base}:${String(n)}`;
-    return id;
-  }
-
   async #command(params: unknown, request: RequestId): Promise<{ decision: CommandDecision }> {
-    const id = this.#id(text(property(params, 'itemId')));
+    const id = randomUUID();
     const command = unwrapShell(text(property(params, 'command')) ?? '');
     const reason = text(property(params, 'reason'));
     const network = property(params, 'networkApprovalContext');
@@ -167,7 +159,7 @@ export class Prompts {
     request: RequestId,
   ): Promise<{ decision: FileChangeDecision }> {
     const itemId = text(property(params, 'itemId'));
-    const id = this.#id(itemId);
+    const id = randomUUID();
     const patch = itemId === undefined ? undefined : this.#host.patch(itemId);
     const reason = text(property(params, 'reason'));
     const root = text(property(params, 'grantRoot'));
@@ -194,7 +186,7 @@ export class Prompts {
   }
 
   async #permissions(params: unknown, request: RequestId): Promise<unknown> {
-    const id = this.#id(text(property(params, 'itemId')));
+    const id = randomUUID();
     const asked = property(params, 'permissions');
     const network = property(asked, 'network');
     const files = property(asked, 'fileSystem');
@@ -238,7 +230,7 @@ export class Prompts {
       multiple: false,
     }));
     if (questions.length === 0) return { answers: {} };
-    const id = this.#id(text(property(params, 'itemId')));
+    const id = randomUUID();
     const answer = await this.#ask(id, request, { type: 'question', id, questions });
     if (answer?.kind !== 'question') return { answers: {} };
     return {
@@ -259,7 +251,7 @@ export class Prompts {
     const server = text(property(params, 'serverName')) ?? 'An MCP server';
     const message = text(property(params, 'message')) ?? '';
     const mode = property(params, 'mode');
-    const id = this.#id(undefined);
+    const id = randomUUID();
     const respond = (action: 'accept' | 'decline' | 'cancel', content: unknown = null) => ({
       action,
       content,
@@ -268,23 +260,13 @@ export class Prompts {
     if (mode === 'url') {
       const url = text(property(params, 'url')) ?? '';
       const answer = await this.#ask(id, request, {
-        type: 'question',
+        type: 'elicitation',
         id,
-        questions: [
-          {
-            header: server,
-            text: `${message} ${url}`.trim(),
-            options: [
-              { label: 'Done', description: 'I opened the link and did what it asks' },
-              { label: 'Cancel', description: 'Cancel this request' },
-            ],
-            multiple: false,
-          },
-        ],
+        server,
+        message,
+        url,
       });
-      return respond(
-        answer?.kind === 'question' && answer.answers[0] === 'Done' ? 'accept' : 'cancel',
-      );
+      return respond(answer?.kind === 'elicitation' ? answer.action : 'cancel');
     }
     if (mode !== 'form' && mode !== 'openai/form' && mode !== 'openaiForm') {
       this.#host.emit(

@@ -1,4 +1,5 @@
 import type { McpChange, RewindRestore, SlashCommand } from './session';
+import type { PromptCapabilities } from './model/prompts';
 
 /*
  * The catalog: what every adapter declares about the agent it runs, as plain data. Main builds it
@@ -115,6 +116,10 @@ export interface ConnectionDescriptor {
   description: string;
   /** What its agent view shows: the agent's own terminal, or corrallm's transcript. */
   view: 'terminal' | 'transcript';
+  /** Support per prompt kind; an occurrence's answerIn says where it is answered now. */
+  prompts: PromptCapabilities;
+  /** Whether every ask-rule and safety-check reason is reported with prompt signals. */
+  signals: boolean;
   /**
    * The modes (each one that asks) an agent's saved setting may name for it, to start its
    * sessions in; none: always the user's own default.

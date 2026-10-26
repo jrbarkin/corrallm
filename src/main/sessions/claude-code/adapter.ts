@@ -107,6 +107,8 @@ export const claudeCode: Adapter = {
         short: 'Terminal',
         description: 'Claude Code itself, in a terminal in its view: works with your Claude login',
         view: 'terminal',
+        prompts: { approval: 'seen', question: 'seen', plan: 'seen', form: 'none' },
+        signals: false,
         startModes: START_MODES,
         live: { effort: false, stopTask: false },
         panels: {},
@@ -124,6 +126,13 @@ export const claudeCode: Adapter = {
         description:
           'Claude Code through the Agent SDK, in corrallm’s transcript: needs an API key or a cloud provider',
         view: 'transcript',
+        prompts: {
+          approval: 'answerable',
+          question: 'answerable',
+          plan: 'answerable',
+          form: 'answerable',
+        },
+        signals: false,
         startModes: START_MODES,
         live: { effort: true, stopTask: true },
         panels: {

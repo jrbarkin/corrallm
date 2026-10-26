@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { ID_PATTERN, JOBS } from '../../adapter';
 import type { Catalog } from '../../adapter';
 import { MCP_CHANGES, REWIND_RESTORES } from '../../session';
+import { PromptDescriptor } from '../../model/prompts';
 import { define } from '../define';
 import type { OpDef } from '../define';
 import type { OpName } from '../surface';
@@ -29,6 +30,7 @@ const Connection = z.strictObject({
   short: z.string(),
   description: z.string(),
   view: z.enum(['terminal', 'transcript']),
+  ...PromptDescriptor.shape,
   startModes: z.array(z.string()),
   live: z.strictObject({ effort: z.boolean(), stopTask: z.boolean() }),
   panels: z.strictObject({

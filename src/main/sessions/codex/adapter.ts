@@ -111,6 +111,8 @@ export const codex: Adapter = {
         short: 'Terminal',
         description: 'Codex itself, in a terminal in its view',
         view: 'terminal',
+        prompts: { approval: 'seen', question: 'none', plan: 'none', form: 'none' },
+        signals: false,
         // Its command line starts it in Read only (-s, -a); Default is the user's own config, and
         // Plan is chosen in its terminal.
         startModes: ['read-only'],
@@ -129,6 +131,13 @@ export const codex: Adapter = {
         short: 'App Server',
         description: 'Codex through its app server, in corrallm’s transcript',
         view: 'transcript',
+        prompts: {
+          approval: 'answerable',
+          question: 'answerable',
+          plan: 'answerable',
+          form: 'answerable',
+        },
+        signals: false,
         startModes: ['read-only', 'auto', 'plan'],
         live: { effort: true, stopTask: false },
         panels: {},
