@@ -18,12 +18,11 @@ for (const terminal of [false, true]) {
             BrowserWindow.getAllWindows()[0]?.webContents.forcefullyCrashRenderer();
           });
           await crashed;
-          // Recover only the view. A renderer death must not restart the utility core.
-          const reloaded = world.page.waitForEvent('load');
-          await world.app.evaluate(({ BrowserWindow }) => {
-            BrowserWindow.getAllWindows()[0]?.webContents.reload();
-          });
-          await reloaded;
+          // Playwright keeps a crashed page dead even when its window reloads, so the view is
+          // recovered as a user does: the dead window closed, a new one opened. A renderer death
+          // must not restart the utility core, whose run goes on beneath either.
+          await world.closeWindow();
+          await world.reopen();
         }
         await world.showQueues();
         await expect(world.row('first')).toHaveAttribute('data-run', 'running');
