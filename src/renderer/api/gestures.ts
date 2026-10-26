@@ -2,6 +2,7 @@ import type { GuiOp } from '../../shared/api/surface';
 
 /** GUI operations deliberately lacking a renderer gesture; T6 requires a reason for each. */
 export const NO_GESTURE = {
+  'worktree.remove': 'B9a X14 supplies the kept-worktrees Remove gesture.',
   'session.interrupt': 'B11 X13 rewires the session Stop control.',
   'run.pause': 'B11 X12 rewires the run pause controls.',
   'run.kill': 'B11 X12 rewires Kill.',

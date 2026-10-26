@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 
-import { AgentId, CanvasId, idsIn, ItemId } from '../../shared/api/ids';
+import { AgentId, CanvasId, idsIn, ItemId, WorktreeId } from '../../shared/api/ids';
 import type { CanvasId as Canvas } from '../../shared/canvas';
 import type { CanvasDocument } from '../../shared/model/canvas';
 import type { AgentCaller, OutsideCaller } from './caller';
@@ -113,6 +113,16 @@ describe('outOfReach', () => {
 });
 
 describe('the core’s resolvers', () => {
+  it('grants no token reach to a worktree, even on its own canvas', () => {
+    const worktree = '22222222-2222-4222-8222-222222222222';
+    const input = z.strictObject({ canvas: CanvasId, worktree: WorktreeId });
+    const refs = idsIn(input, input.parse({ canvas: CANVAS, worktree }));
+    for (const caller of [LEAD, ORCHESTRATOR])
+      expect(outOfReach(refs, caller, 'canvas', core)).toBe(
+        `There is no worktree ${worktree} (at worktree).`,
+      );
+  });
+
   it('resolve a node as what it is: an agent as itself, a frame as every agent of it', () => {
     // The lead's team holds the helper and what the crew holds, not the worker outside it.
     expect(leadReaches('NodeId', 'helper')).toBe(true);

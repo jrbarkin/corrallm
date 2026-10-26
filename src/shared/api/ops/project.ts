@@ -53,20 +53,17 @@ export const projectOps = {
 } satisfies Partial<Record<OpName, OpDef>>;
 
 /**
- * B9a C7's worktree op, prepared (X12 registers it with worktree.list and its topic): a kept tree
- * removed, safely, or its confirmation raised for you.
+ * B9a C7's kept tree removed, safely, or its confirmation raised for you. List and retry await
+ * C's authorized selector and agent-level retry service; no raw store view is a public selector.
  */
 export const b9aWorktreeOps = {
-  'worktree.remove': define(
-    { kind: 'command', rules: ['discard'] },
-    {
-      summary:
-        'Removes a worktree the canvas keeps (its agents gone), with its branch: at once if it is ' +
-        'clean, merged and no one writes there, else once the user confirms discarding what it ' +
-        'holds. Only the user removes one. Returns whether it was removed, or kept because it ' +
-        'changed since.',
-      input: z.strictObject({ canvas: OpCanvas, worktree: WorktreeId }),
-      output: z.strictObject({ removed: z.boolean(), retained: z.boolean().optional() }),
-    },
-  ),
+  'worktree.remove': define('worktree.remove', {
+    summary:
+      'Removes a worktree the canvas keeps (its agents gone), with its branch: at once if it is ' +
+      'clean, merged and no one writes there, else once the user confirms discarding what it ' +
+      'holds. Only the user removes one. Returns whether it was removed, or kept because it ' +
+      'changed since.',
+    input: z.strictObject({ canvas: OpCanvas, worktree: WorktreeId }),
+    output: z.strictObject({ removed: z.boolean(), retained: z.boolean().optional() }),
+  }),
 };

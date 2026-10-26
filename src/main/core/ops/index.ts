@@ -38,6 +38,8 @@ import { filesOps } from './files';
 import { conversationOps } from './conversation';
 import { linkOps } from './link';
 import { projectOps } from './project';
+import { worktreeOps } from './worktree';
+import type { WorktreeServices } from './worktree';
 import { runOps } from './run';
 import { sessionOps } from './session';
 import { sessionControlOps } from './session-control';
@@ -128,6 +130,8 @@ export interface OpServices {
    * set. Composed by createCore; isolated implementation tests may omit it.
    */
   setups?: SetupService;
+  /** C7's kept-worktree removal. Isolated implementation tests may omit it. */
+  worktrees?: WorktreeServices;
   /**
    * The reply router's handlers for what a canvas's runtime asks (its run's holds, its sessions'
    * prompts: run-replies.ts) and a workspace's change (workspaces/rebind.ts), B11 C7's: composed
@@ -147,6 +151,7 @@ export function implementations(services: OpServices): Implementations {
     ...catalogOps(services),
     ...templatesOps(services),
     ...projectOps(services),
+    ...worktreeOps(services),
     ...filesOps(services),
     ...canvasesOps(services),
     ...canvasOps(services),

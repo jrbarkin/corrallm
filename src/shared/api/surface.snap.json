@@ -16,6 +16,7 @@
     "api.project.choose",
     "api.project.setSetupCommand",
     "api.project.clearSetupApproval",
+    "api.worktree.remove",
     "api.canvas.list",
     "api.canvas.get",
     "api.canvas.rename",
@@ -239,6 +240,7 @@
     "canvas.open": "trust-gate",
     "canvas.saveAs": "trust-gate",
     "project.choose": "trust-gate",
+    "worktree.remove": "trust-gate",
     "project.setSetupCommand": "trust-gate",
     "project.clearSetupApproval": "permissions",
     "session.setMode": "permissions",
@@ -296,6 +298,10 @@
     "project.clearSetupApproval": {
       "input": "f676d264f07b5166",
       "output": "2129f9125212db6f"
+    },
+    "worktree.remove": {
+      "input": "6c53b4b2cbe1d85f",
+      "output": "d2717814b126a90e"
     },
     "canvas.create": {
       "input": "3394f69e468a0469",

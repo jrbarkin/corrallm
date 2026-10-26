@@ -3,7 +3,6 @@ import { isDeepStrictEqual } from 'node:util';
 
 import type { NeedId } from '../../../shared/api/ids';
 import { MAX_OPEN_PROPOSALS } from '../../../shared/api/limits';
-import { PREPARED_SURFACE } from '../../../shared/api/prepared';
 import { SURFACE } from '../../../shared/api/surface';
 import type { CanvasId } from '../../../shared/canvas';
 import type { CanvasNode } from '../../../shared/model/canvas';
@@ -394,8 +393,6 @@ export class Proposals {
  * argument half: canvas.close, canvas.create, canvas.save).
  */
 export function isDocOp(op: string): boolean {
-  // A prepared worktree removal is a command too.
-  if (Object.hasOwn(PREPARED_SURFACE, op)) return false;
   return !Object.hasOwn(SURFACE, op) || SURFACE[op as keyof typeof SURFACE].kind === 'doc';
 }
 
