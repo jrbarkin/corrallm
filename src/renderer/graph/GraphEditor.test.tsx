@@ -1,3 +1,4 @@
+import { NEW_SESSION } from '../../shared/model/session';
 import { renderReady, events } from '../test-render';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { StrictMode } from 'react';
@@ -6,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MAX_LABEL } from '../../shared/api/limits';
 import { canvasIdOf, newCanvasId } from '../../shared/canvas';
 import type { CanvasId } from '../../shared/canvas';
-import type { ProjectFolder } from '../../shared/ipc';
+import type { ProjectFolder } from '../../shared/canvas';
 import type { QueueItem } from '../../shared/model/queue';
 import type { UsageState } from '../../shared/usage';
 import { catalog } from '../catalog';
@@ -14,7 +15,7 @@ import { api } from '../api/client';
 import { useDraft } from '../useDraft';
 import { EXAMPLES } from '../../shared/examples';
 import { templateInfo } from '../../shared/templates';
-import { automaticBackend, fakeBackend } from '../../shared/engine/test-backend';
+import { automaticSessions, fakeSessions } from '../test-sessions';
 import type { UsageSource } from '../usage/store';
 import { fromFile, toFile } from '../../shared/model/file';
 import { GraphEditor } from '../test-graph';
@@ -73,11 +74,11 @@ const calls = (canvas: FakeCanvas, op: GuiOp) =>
   canvas.core.operations.filter((call) => call.op === op);
 
 async function setup(initialGraph?: Graph, files = false) {
-  const fake = automaticBackend();
+  const fake = automaticSessions();
   const held = core();
   const { container } = await renderReady(
     <GraphEditor
-      sessionBackend={fake.backend}
+      sessionReplies={fake.replies}
       {...(initialGraph ? { initialGraph } : {})}
       files={files}
       onCanvas={held.onCanvas}
@@ -176,7 +177,7 @@ describe('GraphEditor', () => {
         });
         expect(save).toHaveBeenCalledOnce();
         expect(canvas.files.saved).toEqual([]);
-        expect(fake.backend.send).not.toHaveBeenCalled();
+        expect(fake.replies.send).not.toHaveBeenCalled();
       } finally {
         await act(async () => {
           saving.resolve(undefined);
@@ -186,29 +187,31 @@ describe('GraphEditor', () => {
       await waitFor(() => {
         if (gesture === 'save' || gesture === 'shortcut')
           expect(canvas.files.saved).toHaveLength(1);
-        else expect(fake.backend.send).toHaveBeenCalledOnce();
+        else if (gesture === 'run')
+          expect(canvas.core.operations.some(({ op }) => op === 'run.start')).toBe(true);
+        else expect(fake.replies.send).toHaveBeenCalledOnce();
       });
     },
   );
 
   it('leaves run ownership in the core when the view unloads', async () => {
     const held = core();
-    const fake = fakeBackend();
+    const fake = fakeSessions();
     const { unmount } = await renderReady(
       <GraphEditor
         initialGraph={{ nodes: [agentNode('a', 0, 0)], edges: [] }}
         onCanvas={held.onCanvas}
-        sessionBackend={fake.backend}
+        sessionReplies={fake.replies}
       />,
     );
-    const before = held.canvas.engine.run.snapshot();
+    const before = held.canvas.run();
     act(() => {
       window.dispatchEvent(new Event('beforeunload'));
     });
-    expect(held.canvas.engine.run.snapshot()).toBe(before);
-    expect(fake.backend.interrupt).not.toHaveBeenCalled();
+    expect(held.canvas.run()).toBe(before);
+    expect(fake.replies.interrupt).not.toHaveBeenCalled();
     unmount();
-    expect(fake.backend.close).not.toHaveBeenCalled();
+    expect(fake.replies.close).not.toHaveBeenCalled();
   });
 
   it('commits the agent name before the composer sends without blur', async () => {
@@ -221,7 +224,7 @@ describe('GraphEditor', () => {
     const name = view.getByRole('textbox', { name: 'Name' });
     await events.change(name, { target: { value: 'Drafted name' } });
     expect(screen.getByRole('dialog', { name: 'a' })).toBeTruthy();
-    fake.backend.send.mockImplementationOnce(() => {
+    fake.replies.send.mockImplementationOnce(() => {
       expect(screen.getByRole('dialog', { name: 'Drafted name' })).toBeTruthy();
       return Promise.resolve(null);
     });
@@ -229,7 +232,7 @@ describe('GraphEditor', () => {
     await events.change(composer, { target: { value: 'Hello' } });
     await events.keyDown(composer, { key: 'Enter' });
     await waitFor(() => {
-      expect(fake.backend.send).toHaveBeenCalledOnce();
+      expect(fake.replies.send).toHaveBeenCalledOnce();
     });
     expect(node('a').querySelector('.graph-label')?.textContent).toContain('Drafted name');
   });
@@ -251,7 +254,7 @@ describe('GraphEditor', () => {
   });
 
   it('runs a pending message draft before the idle commit or blur', async () => {
-    const { fake } = await setup({
+    const { canvas } = await setup({
       nodes: [
         agentNode('a', 0, 0, {
           data: {
@@ -270,10 +273,15 @@ describe('GraphEditor', () => {
     await events.change(input, { target: { value: 'Run this draft' } });
     // A synthetic click deliberately skips blur: Run itself must flush the draft.
     await events.click(queues.getByRole('button', { name: 'Run' }));
-    await waitFor(() => {
-      expect(fake.backend.send).toHaveBeenCalledOnce();
+    expect(canvas.core.operations.at(-1)).toEqual({
+      op: 'run.start',
+      args: { canvas: canvas.document.id },
     });
-    expect(fake.backend.send.mock.calls[0]?.[1].text).toBe('Run this draft');
+    const agent = canvas.document.nodes.find((n) => n.id === 'a');
+    expect(agent?.type === 'agent' && agent.data.queue?.[0]).toEqual({
+      id: 'work',
+      message: 'Run this draft',
+    });
   });
 
   it.each([
@@ -302,7 +310,7 @@ describe('GraphEditor', () => {
         },
         true,
       );
-      fake.backend.options.mockResolvedValue({
+      fake.replies.options.mockResolvedValue({
         models: [{ value: 'opus', label: 'Opus', efforts: [{ value: 'low', label: 'Low' }] }],
         defaults: { model: 'opus', effort: 'low', mode: 'manual' },
       });
@@ -350,24 +358,11 @@ describe('GraphEditor', () => {
       </StrictMode>,
     );
     act(() => {
-      held.canvas.engine.run.restore(
-        JSON.stringify({
-          version: 2,
-          run: {
-            running: false,
-            paused: true,
-            agents: { a: { status: 'asking', current: 'work', outcomes: {} } },
-          },
-          replies: [],
-          held: [],
-          arrived: [],
-          ended: [],
-          past: [],
-          due: [],
-          usageDecided: [],
-          warned: [],
-        }),
-      );
+      held.canvas.run({
+        running: false,
+        paused: true,
+        agents: { a: { status: 'asking', current: 'work', outcomes: {} } },
+      });
     });
     await events.click(await screen.findByRole('button', { name: 'Resume' }));
     expectOneOp(held.canvas.core, 'run.resume', { canvas: held.canvas.document.id });
@@ -393,7 +388,8 @@ describe('GraphEditor', () => {
       setRule: vi.fn<UsageSource['setRule']>().mockResolvedValue({}),
       simulate: vi.fn<UsageSource['simulate']>().mockResolvedValue({}),
     };
-    const sessions = fakeBackend();
+    const sessions = fakeSessions();
+    const held = core();
     const { unmount } = await renderReady(
       <StrictMode>
         <GraphEditor
@@ -410,8 +406,9 @@ describe('GraphEditor', () => {
             ],
             edges: [],
           }}
-          sessionBackend={sessions.backend}
+          sessionReplies={sessions.replies}
           usageSource={usageSource}
+          onCanvas={held.onCanvas}
         />
       </StrictMode>,
     );
@@ -437,8 +434,27 @@ describe('GraphEditor', () => {
     await events.click(button('Show all queues'));
     const queues = within(screen.getByRole('dialog', { name: 'All queues' }));
     await events.click(queues.getByRole('button', { name: 'Run' }));
+    act(() => {
+      held.canvas.run({
+        running: true,
+        agents: {
+          a: {
+            current: 'work',
+            status: 'asking',
+            outcomes: {},
+            usage: {
+              backend: 'codex',
+              window: 'fiveHour',
+              percent: 80,
+              used: 95,
+              resetsAt: Date.now() + 60000,
+            },
+          },
+        },
+      });
+    });
     expect(queues.getByRole('button', { name: 'Wait for the reset' })).toBeTruthy();
-    expect(sessions.backend.send).not.toHaveBeenCalled();
+    expect(sessions.replies.send).not.toHaveBeenCalled();
     unmount();
     await waitFor(() => {
       expect(changed.size).toBe(0);
@@ -447,7 +463,7 @@ describe('GraphEditor', () => {
 
   it('keeps legacy unsupported work unsent and offers a real connection without fabricating completion', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
-    const { fake } = await setup({
+    const { fake, canvas } = await setup({
       nodes: [
         agentNode('legacy', 0, 0, {
           data: {
@@ -462,6 +478,23 @@ describe('GraphEditor', () => {
     await events.click(button('Show all queues'));
     const queues = within(screen.getByRole('dialog', { name: 'All queues' }));
     await events.click(queues.getByRole('button', { name: 'Run' }));
+    act(() => {
+      canvas.run({
+        running: true,
+        agents: {
+          legacy: {
+            current: 'work',
+            status: 'asking',
+            outcomes: {},
+            refused: {
+              agent: 'legacy',
+              connection: 'unavailable',
+              text: 'This agent has no connection; choose Claude or Codex in Agent settings.',
+            },
+          },
+        },
+      });
+    });
     await act(async () => {
       await vi.advanceTimersByTimeAsync(60_000);
     });
@@ -472,8 +505,8 @@ describe('GraphEditor', () => {
     ).toBeTruthy();
     expect(within(row).queryByText(/attempt/)).toBeNull();
     expect(within(row).queryByText('Running')).toBeNull();
-    expect(fake.backend.start).not.toHaveBeenCalled();
-    expect(fake.backend.send).not.toHaveBeenCalled();
+    expect(fake.replies.start).not.toHaveBeenCalled();
+    expect(fake.replies.send).not.toHaveBeenCalled();
     await events.click(queues.getByRole('button', { name: 'Open Legacy' }));
     const view = within(screen.getByRole('dialog', { name: 'Legacy' }));
     expect(view.getByText(/qwen has no connector yet/)).toBeTruthy();
@@ -600,7 +633,7 @@ describe('GraphEditor', () => {
   });
 
   it('shows manual turns in every queue view without saving or running them again', async () => {
-    const sessions = fakeBackend();
+    const sessions = fakeSessions();
     const initial: Graph = {
       nodes: [
         agentNode('a', 0, 0, {
@@ -619,7 +652,7 @@ describe('GraphEditor', () => {
         initialGraph={initial}
         files
         onCanvas={held.onCanvas}
-        sessionBackend={sessions.backend}
+        sessionReplies={sessions.replies}
       />,
     );
     const card = container.querySelector('.react-flow__node[data-id="a"]');
@@ -630,7 +663,7 @@ describe('GraphEditor', () => {
     await events.change(composer, { target: { value: 'Inspect the failure' } });
     await events.keyDown(composer, { key: 'Enter' });
     await waitFor(() => {
-      expect(sessions.backend.send).toHaveBeenCalledTimes(1);
+      expect(sessions.replies.send).toHaveBeenCalledTimes(1);
     });
     const message = sessions.sent();
     const side = within(view.getByRole('complementary', { name: 'Questions and queue' }));
@@ -661,13 +694,14 @@ describe('GraphEditor', () => {
     expect(manual.querySelector('[data-submission]')?.getAttribute('data-run')).toBe('completed');
     expect(within(manual).queryByRole('button')).toBeNull();
     await events.click(queues.getByRole('button', { name: 'Run' }));
-    await waitFor(() => {
-      expect(sessions.backend.send).toHaveBeenCalledTimes(2);
+    expect(held.canvas.core.operations.filter(({ op }) => op === 'run.start')).toHaveLength(1);
+    expect(sessions.replies.send).toHaveBeenCalledTimes(1);
+    act(() => {
+      held.canvas.run({
+        running: true,
+        agents: { a: { current: 'planned', status: 'running', outcomes: {} } },
+      });
     });
-    expect(sessions.backend.send.mock.calls.map(([, sent]) => sent.text)).toEqual([
-      'Inspect the failure',
-      'Do planned work',
-    ]);
     expect(
       screen.getByRole('dialog', { name: 'All queues' }).querySelectorAll('[data-submission]'),
     ).toHaveLength(1);
@@ -683,13 +717,13 @@ describe('GraphEditor', () => {
   });
 
   it('records an SDK command handled locally as a completed submitted message', async () => {
-    const sessions = fakeBackend();
+    const sessions = fakeSessions();
     const initial: Graph = {
       nodes: [agentNode('a', 0, 0, { data: { label: 'a', connection: 'claude-code.sdk' } })],
       edges: [],
     };
     const { container } = await renderReady(
-      <GraphEditor initialGraph={initial} sessionBackend={sessions.backend} />,
+      <GraphEditor initialGraph={initial} sessionReplies={sessions.replies} />,
     );
     const card = container.querySelector('.react-flow__node[data-id="a"]');
     if (!card) throw new Error('no agent');
@@ -703,9 +737,9 @@ describe('GraphEditor', () => {
       'completed',
     );
     await waitFor(() => {
-      expect(sessions.backend.mcp).toHaveBeenCalled();
+      expect(sessions.replies.mcp).toHaveBeenCalled();
     });
-    expect(sessions.backend.send).not.toHaveBeenCalled();
+    expect(sessions.replies.send).not.toHaveBeenCalled();
   });
 
   it('adds a node on double-click on the empty canvas', async () => {
@@ -1317,7 +1351,7 @@ describe('GraphEditor', () => {
       { id: 'ok', approve },
       { id: 'next', action: 'Grep' },
     ];
-    const { node } = await setup({
+    const { node, canvas } = await setup({
       nodes: [
         agentNode('a', 0, 0, { data: { label: 'Planner', queue: queue('the spec in SPEC.md') } }),
         agentNode('b', 0, 100, { data: { label: 'Builder', queue: queue('') } }),
@@ -1331,6 +1365,14 @@ describe('GraphEditor', () => {
     await events.click(screen.getByRole('button', { name: 'Run' }));
     await act(async () => {
       await vi.advanceTimersByTimeAsync(4000);
+    });
+    const agents = {
+      a: { current: 'ok', status: 'asking' as const, outcomes: { spec: 'succeeded' as const } },
+      b: { current: 'ok', status: 'asking' as const, outcomes: { spec: 'succeeded' as const } },
+      c: { current: 'ok', status: 'asking' as const, outcomes: { spec: 'succeeded' as const } },
+    };
+    act(() => {
+      canvas.run({ running: true, agents });
     });
     await events.click(screen.getByRole('button', { name: 'Back' }));
     expect(['a', 'b', 'c'].map((id) => node(id).classList.contains('asking'))).toEqual([
@@ -1355,7 +1397,36 @@ describe('GraphEditor', () => {
 
     // Approve, Stop here and Ask for changes act on the run; each card then leaves.
     await events.click(card('Planner').getByRole('button', { name: 'Approve' }));
+    act(() => {
+      canvas.run({
+        running: true,
+        agents: {
+          ...agents,
+          a: {
+            current: 'next',
+            status: 'running',
+            outcomes: { spec: 'succeeded', ok: 'succeeded' },
+          },
+        },
+      });
+    });
     await events.click(card('Builder').getByRole('button', { name: 'Stop here' }));
+    const after = {
+      ...agents,
+      a: {
+        current: 'next',
+        status: 'running' as const,
+        outcomes: { spec: 'succeeded' as const, ok: 'succeeded' as const },
+      },
+      b: {
+        current: 'ok',
+        status: 'stopped' as const,
+        outcomes: { spec: 'succeeded' as const, ok: 'stopped' as const },
+      },
+    };
+    act(() => {
+      canvas.run({ running: true, agents: after });
+    });
     const reply = card('Tester').getByRole('textbox', { name: 'What should change?' });
     await events.change(reply, { target: { value: 'Test the empty state' } });
     await events.pointerDown(document.body);
@@ -1363,6 +1434,21 @@ describe('GraphEditor', () => {
     await events.click(screen.getByRole('button', { name: 'Needs you' }));
     expect(reply).toHaveProperty('value', 'Test the empty state');
     await events.click(card('Tester').getByRole('button', { name: 'Ask for changes' }));
+    act(() => {
+      canvas.run({
+        running: true,
+        agents: {
+          ...after,
+          c: {
+            current: 'ok',
+            status: 'running',
+            outcomes: { spec: 'succeeded' },
+            changes: { ok: ['Test the empty state'] },
+          },
+        },
+      });
+      canvas.session('c', { ...NEW_SESSION, status: 'working' });
+    });
     expect(sidebar()).toBeNull();
     expect(['a', 'b', 'c'].map((id) => node(id).classList.contains('asking'))).toEqual([
       false,
@@ -1382,7 +1468,7 @@ describe('GraphEditor', () => {
   });
 
   it('shows a usage gauge per backend, with its rule and Simulate usage…, and holds the run by it', async () => {
-    const { node } = await setup({
+    const { node, canvas } = await setup({
       nodes: [
         agentNode('a', 0, 0, {
           data: {
@@ -1442,6 +1528,25 @@ describe('GraphEditor', () => {
     // All queues shows the gauges too.
     expect(queues.getByRole('button', { name: /^Claude usage:/ })).toBeTruthy();
     await events.click(queues.getByRole('button', { name: 'Run' }));
+    act(() => {
+      canvas.run({
+        running: true,
+        agents: {
+          a: {
+            current: 'one',
+            status: 'asking',
+            outcomes: {},
+            usage: {
+              backend: 'claude-code',
+              window: 'fiveHour',
+              percent: 90,
+              used: 95,
+              resetsAt: Date.now() + 60000,
+            },
+          },
+        },
+      });
+    });
     const row = queues.getByRole('group', { name: 'Builder: Edit' });
     expect(row.querySelector('[data-run]')?.getAttribute('data-run')).toBe('asking');
     expect(
@@ -1459,6 +1564,12 @@ describe('GraphEditor', () => {
       sidebar.getByText('Claude has used 95% of its 5-hour window (over 90%). Go on?'),
     ).toBeTruthy();
     await events.click(sidebar.getByRole('button', { name: 'Go on' }));
+    act(() => {
+      canvas.run({
+        running: true,
+        agents: { a: { current: 'one', status: 'running', outcomes: {} } },
+      });
+    });
     expect(screen.queryByRole('complementary', { name: 'Needs you' })).toBeNull();
     expect(node('a').classList.contains('asking')).toBe(false);
   });
@@ -2251,10 +2362,10 @@ describe('GraphEditor', () => {
     });
 
     it('runs a template’s agents through native connections even before their CLI is installed', async () => {
-      const sessions = fakeBackend();
-      sessions.backend.installed.mockResolvedValue({ 'claude-code': true, codex: false });
+      const sessions = fakeSessions();
+      sessions.replies.installed.mockResolvedValue({ 'claude-code': true, codex: false });
       const { container } = await renderReady(
-        <GraphEditor files sessionBackend={sessions.backend} />,
+        <GraphEditor files sessionReplies={sessions.replies} />,
       );
       await events.click(button('Start from a template…'));
       const gallery = within(screen.getByRole('dialog', { name: 'Templates' }));
@@ -2303,16 +2414,16 @@ describe('GraphEditor', () => {
       await act(async () => {
         await new Promise((resolve) => setTimeout(resolve, 0));
       });
-      expect(sessions.backend.start).not.toHaveBeenCalled();
+      expect(sessions.replies.start).not.toHaveBeenCalled();
       const implementer = [...container.querySelectorAll('.react-flow__node-agent')].find(
         (node) => node.querySelector('.graph-label')?.textContent === 'Implementer',
       );
       if (!implementer) throw new Error('no Implementer');
       await events.doubleClick(implementer);
       await waitFor(() => {
-        expect(sessions.backend.start).toHaveBeenCalledTimes(1);
+        expect(sessions.replies.start).toHaveBeenCalledTimes(1);
       });
-      expect(sessions.backend.start).toHaveBeenCalledWith(implementer.getAttribute('data-id'), {
+      expect(sessions.replies.start).toHaveBeenCalledWith(implementer.getAttribute('data-id'), {
         connection: 'claude-code.terminal',
         model: null,
         mode: null,

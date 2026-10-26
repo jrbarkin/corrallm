@@ -1,8 +1,10 @@
+import type { FakeCanvas } from '../test-canvas';
+import { NEW_SESSION } from '../../shared/model/session';
 import { renderReady, events } from '../test-render';
 import { act, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { automaticBackend } from '../../shared/engine/test-backend';
+import { automaticSessions } from '../test-sessions';
 
 import { GraphEditor } from '../test-graph';
 import type { Graph, GraphNode } from '../graph/flow';
@@ -37,9 +39,16 @@ const graph: Graph = {
 };
 
 async function setup(initial: Graph = graph) {
-  const fake = automaticBackend();
+  const fake = automaticSessions();
+  let canvas: FakeCanvas | undefined;
   const { container } = await renderReady(
-    <GraphEditor initialGraph={initial} sessionBackend={fake.backend} />,
+    <GraphEditor
+      initialGraph={initial}
+      sessionReplies={fake.replies}
+      onCanvas={(made) => {
+        canvas = made;
+      }}
+    />,
   );
   const card = (id: string) => {
     const element = container.querySelector<HTMLElement>(`.react-flow__node[data-id="${id}"]`);
@@ -47,7 +56,8 @@ async function setup(initial: Graph = graph) {
     return element;
   };
   const queues = () => screen.getByRole('dialog', { name: 'All queues' });
-  return { card, queues, fake };
+  if (!canvas) throw new Error('No fixture');
+  return { card, queues, fake, canvas };
 }
 
 afterEach(() => {
@@ -167,12 +177,21 @@ describe('the queues view', () => {
   });
 
   it('runs the queues, marking the task each agent is on, until stopped', async () => {
-    const { queues } = await setup();
+    const { queues, canvas } = await setup();
     await events.click(screen.getByRole('button', { name: 'Show all queues' }));
     const view = within(queues());
     const run = (name: string) =>
       view.getByRole('group', { name }).querySelector('[data-run]')?.getAttribute('data-run');
     await events.click(view.getByRole('button', { name: 'Run' }));
+    act(() => {
+      canvas.run({
+        running: true,
+        agents: {
+          a: { current: 'research', status: 'running', outcomes: {} },
+          b: { current: 'build', status: 'running', outcomes: {} },
+        },
+      });
+    });
     // a does its Workflow; b builds, and waits for a's Workflow after.
     expect(run('a: Workflow')).toBe('running');
     expect(run('b: Edit')).toBe('running');
@@ -191,7 +210,7 @@ describe('the queues view', () => {
   });
 
   it('shows when the run needs the user: an agent asks permission, and the lane opens it', async () => {
-    const { queues, fake } = await setup({
+    const { queues, fake, canvas } = await setup({
       nodes: [agent('a', 0, [{ id: 'fix', message: 'Fix the flaky test' }])],
       edges: [],
     });
@@ -199,6 +218,12 @@ describe('the queues view', () => {
     const view = within(queues());
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     await events.click(view.getByRole('button', { name: 'Run' }));
+    act(() => {
+      canvas.run({
+        running: true,
+        agents: { a: { current: 'fix', status: 'running', outcomes: {} } },
+      });
+    });
     await act(async () => {
       await Promise.resolve();
     });
@@ -218,7 +243,7 @@ describe('the queues view', () => {
   });
 
   it('shows how a step expected to fail went from explicit native verdicts', async () => {
-    const { queues, fake } = await setup({
+    const { queues, fake, canvas } = await setup({
       nodes: [
         agent('a', 0, [
           { id: 'red', action: 'Bash', instruction: 'Run the new tests.', expect: 'fails' },
@@ -235,23 +260,33 @@ describe('the queues view', () => {
       within(task()).getByRole('button', { name: /is expected to do: fail$/ }).textContent,
     ).toBe('expect: fails');
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
-    fake.backend.send.mockResolvedValue(null);
+    fake.replies.send.mockResolvedValue(null);
     const end = async (verdict: string) => {
       await act(async () => {
         await Promise.resolve();
       });
       act(() => {
-        fake.emit(
-          'a',
-          'claude-code.sdk',
-          { type: 'text', id: crypto.randomUUID(), text: verdict },
-          {
-            type: 'end',
-            messages: [fake.sent()],
-            seconds: 1,
-            result: { status: 'completed', reason: 'completed' },
+        canvas.run({
+          running: verdict !== 'FAILED',
+          agents: {
+            a: {
+              status: verdict === 'FAILED' ? 'done' : 'asking',
+              current: 'red',
+              outcomes: { red: verdict === 'FAILED' ? 'succeeded' : 'failed' },
+              asExpected: { red: verdict === 'FAILED' },
+              ...(verdict === 'FAILED'
+                ? {}
+                : {
+                    problem: {
+                      kind: 'failed',
+                      agent: 'a',
+                      reason: 'verdict',
+                      text: 'The step passed but was expected to fail.',
+                    },
+                  }),
+            },
           },
-        );
+        });
       });
     };
     await events.click(view.getByRole('button', { name: 'Run' }));
@@ -267,7 +302,7 @@ describe('the queues view', () => {
   });
 
   it('counts down a delay the run holds a lane at, and goes on from it when told', async () => {
-    const { queues } = await setup({
+    const { queues, canvas } = await setup({
       nodes: [
         agent('a', 0, [
           { id: 'pause', delay: { seconds: 60 } },
@@ -282,6 +317,14 @@ describe('the queues view', () => {
       toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'],
     });
     await events.click(view.getByRole('button', { name: 'Run' }));
+    act(() => {
+      canvas.run({
+        running: true,
+        agents: {
+          a: { current: 'pause', status: 'waiting', until: Date.now() + 60000, outcomes: {} },
+        },
+      });
+    });
     const pause = view.getByRole('group', { name: 'a: Wait 1 minute' });
     const run = (name: string) =>
       view.getByRole('group', { name }).querySelector('[data-run]')?.getAttribute('data-run');
@@ -295,6 +338,12 @@ describe('the queues view', () => {
     expect(view.getByRole('status').textContent).toBe('0 working · 1 waiting');
 
     await events.click(within(pause).getByRole('button', { name: 'Go on now: Wait 1 minute' }));
+    act(() => {
+      canvas.run({
+        running: true,
+        agents: { a: { current: 'next', status: 'running', outcomes: { pause: 'succeeded' } } },
+      });
+    });
     expect(run('a: Wait 1 minute')).toBe('succeeded');
     expect(run('a: Read')).toBe('running');
     expect(within(pause).queryByRole('timer')).toBeNull();
@@ -302,7 +351,7 @@ describe('the queues view', () => {
   });
 
   it('goes on without what a wait waits for once its time limit passes, its ribbon dashed', async () => {
-    const { queues, fake } = await setup({
+    const { queues, fake, canvas } = await setup({
       nodes: [
         agent('a', 0, [{ id: 'slow', message: 'Take your time' }]),
         agent('b', 100, [
@@ -313,7 +362,7 @@ describe('the queues view', () => {
       edges: [],
     });
     // Explicitly keep the native turn open beyond the wait's deadline.
-    fake.backend.send.mockImplementationOnce(() => Promise.resolve(null));
+    fake.replies.send.mockImplementationOnce(() => Promise.resolve(null));
     await events.click(screen.getByRole('button', { name: 'Show all queues' }));
     const view = within(queues());
     const name = 'b: Wait for a, at most 2 seconds';
@@ -324,12 +373,31 @@ describe('the queues view', () => {
       toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'],
     });
     await events.click(view.getByRole('button', { name: 'Run' }));
+    act(() => {
+      canvas.run({
+        running: true,
+        agents: {
+          a: { current: 'slow', status: 'running', outcomes: {} },
+          b: { current: 'w', status: 'waiting', until: Date.now() + 2000, outcomes: {} },
+        },
+      });
+    });
     expect(run(name)).toBe('waiting');
     expect(within(view.getByRole('group', { name })).getByRole('timer').textContent).toBe(
       '0:02 left',
     );
     act(() => {
       vi.advanceTimersByTime(2000);
+    });
+
+    act(() => {
+      canvas.run({
+        running: true,
+        agents: {
+          a: { current: 'slow', status: 'running', outcomes: {} },
+          b: { current: 'next', status: 'running', outcomes: { w: 'timedOut' } },
+        },
+      });
     });
     expect(run(name)).toBe('timedOut');
     expect(run('a: Message “Take your time”')).toBe('running');
@@ -356,7 +424,7 @@ describe('the queues view', () => {
 
     /** Runs `asking` in All queues until a holds for your OK. */
     async function held() {
-      const { queues } = await setup(asking);
+      const { queues, canvas } = await setup(asking);
       await events.click(screen.getByRole('button', { name: 'Show all queues' }));
       const view = within(queues());
       vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
@@ -364,16 +432,25 @@ describe('the queues view', () => {
       await act(async () => {
         await vi.advanceTimersByTimeAsync(4000);
       });
+      act(() => {
+        canvas.run({
+          running: true,
+          agents: {
+            a: { status: 'asking', current: 'ok', outcomes: { spec: 'succeeded' } },
+            b: { status: 'waiting', current: 'w', outcomes: {} },
+          },
+        });
+      });
       const row = (name: string) => {
         const found = view.getByRole('group', { name }).querySelector<HTMLElement>('[data-at]');
         if (!found) throw new Error(`no row for ${name}`);
         return found;
       };
-      return { queues, view, row, ok: within(view.getByRole('group', { name: OK })) };
+      return { queues, view, row, canvas, ok: within(view.getByRole('group', { name: OK })) };
     }
 
     it('holds for your OK, which the lane head finds, and goes on once you approve', async () => {
-      const { queues, view, row, ok } = await held();
+      const { queues, view, row, ok, canvas } = await held();
       expect(row(OK).dataset.run).toBe('asking');
       expect(row(OK).dataset.mark).toBe('ok');
       expect(row('b: Wait for a: Your OK on the spec in SPEC.md').dataset.run).toBe('waiting');
@@ -392,6 +469,19 @@ describe('the queues view', () => {
       expect(screen.getByRole('dialog', { name: 'All queues' })).toBeTruthy();
 
       await events.click(approve);
+      act(() => {
+        canvas.run({
+          running: true,
+          agents: {
+            a: {
+              current: 'plan',
+              status: 'running',
+              outcomes: { spec: 'succeeded', ok: 'succeeded' },
+            },
+            b: { current: 'build', status: 'running', outcomes: { w: 'succeeded' } },
+          },
+        });
+      });
       expect(row(OK).dataset.run).toBe('succeeded');
       expect(ok.queryByRole('button', { name: 'Approve' })).toBeNull();
       expect(row('a: Edit').dataset.run).toBe('running');
@@ -400,11 +490,32 @@ describe('the queues view', () => {
     });
 
     it('asks the agent for changes in your words, at the OK', async () => {
-      const { view, row, ok } = await held();
+      const { view, row, ok, canvas } = await held();
       await events.click(ok.getByRole('button', { name: 'Ask for changes…' }));
       const note = ok.getByRole('textbox', { name: 'What should change?' });
       await events.change(note, { target: { value: 'Cover the empty state too' } });
       await events.keyDown(note, { key: 'Enter' });
+      act(() => {
+        canvas.run({
+          running: true,
+          agents: {
+            a: {
+              current: 'ok',
+              status: 'running',
+              outcomes: { spec: 'succeeded' },
+              changes: { ok: ['Cover the empty state too'] },
+            },
+            b: { current: 'w', status: 'waiting', outcomes: {} },
+          },
+        });
+      });
+      act(() => {
+        canvas.session('a', {
+          ...NEW_SESSION,
+          status: 'working',
+          entries: [{ kind: 'user', id: 'correction', text: 'Cover the empty state too' }],
+        });
+      });
       // The agent works on them, at the OK.
       expect(row(OK).dataset.run).toBe('running');
       expect(row(OK).querySelector('.graph-queue-ok-asked')?.textContent).toBe(
@@ -421,10 +532,19 @@ describe('the queues view', () => {
     });
 
     it('stops the queue at the OK, and the wait for it', async () => {
-      const { queues, view, row, ok } = await held();
+      const { queues, view, row, ok, canvas } = await held();
       const stop = ok.getByRole('button', { name: 'Stop here' });
       expect(stop.title).toBe('Stop this queue here, and whatever waits on it');
       await events.click(stop);
+      act(() => {
+        canvas.run({
+          running: false,
+          agents: {
+            a: { current: 'ok', status: 'stopped', outcomes: { spec: 'succeeded', ok: 'stopped' } },
+            b: { current: 'w', status: 'stopped', outcomes: { w: 'stopped' } },
+          },
+        });
+      });
       expect(row(OK).dataset.run).toBe('stopped');
       expect(row('b: Wait for a: Your OK on the spec in SPEC.md').dataset.run).toBe('stopped');
       expect(row('a: Edit').dataset.run).toBeUndefined();
@@ -437,7 +557,7 @@ describe('the queues view', () => {
 
   it('shows a repeat as one card, its round in a pill, and asks once it is out of rounds', async () => {
     // The native fixture explicitly succeeds and never emits APPROVED.
-    const { queues } = await setup({
+    const { queues, canvas } = await setup({
       nodes: [
         agent('a', 0, [
           {
@@ -466,6 +586,19 @@ describe('the queues view', () => {
     };
     const step = () => card().querySelector<HTMLElement>('[data-at="[\\"a\\",\\"build\\"]"]');
     await events.click(view.getByRole('button', { name: 'Run' }));
+    act(() => {
+      canvas.run({
+        running: true,
+        agents: {
+          a: {
+            current: 'build',
+            status: 'running',
+            outcomes: {},
+            rounds: { loop: { round: 1, more: 0 } },
+          },
+        },
+      });
+    });
     expect(card().dataset.round).toBe('Round 1 of 1');
     expect(step()?.dataset.run).toBe('running');
     await act(async () => {
@@ -473,6 +606,19 @@ describe('the queues view', () => {
     });
 
     // Out of rounds: it asks, as an OK does.
+    act(() => {
+      canvas.run({
+        running: true,
+        agents: {
+          a: {
+            current: 'loop',
+            status: 'asking',
+            outcomes: { build: 'succeeded' },
+            rounds: { loop: { round: 1, more: 0 } },
+          },
+        },
+      });
+    });
     expect(card().dataset.run).toBe('asking');
     expect(view.getByRole('status').textContent).toBe('0 working · 0 waiting · 1 needs you');
     const pill = view.getByRole('button', { name: 'Decide for a' });
@@ -489,8 +635,34 @@ describe('the queues view', () => {
       sidebar.getByText('1 round done, and still not: the output contains “APPROVED”.'),
     ).toBeTruthy();
     await events.click(sidebar.getByRole('button', { name: 'One more round' }));
+    act(() => {
+      canvas.run({
+        running: true,
+        agents: {
+          a: {
+            current: 'build',
+            status: 'running',
+            outcomes: {},
+            rounds: { loop: { round: 2, more: 1 } },
+          },
+        },
+      });
+    });
     expect(screen.queryByRole('complementary', { name: 'Needs you' })).toBeNull();
     await events.click(screen.getByRole('button', { name: 'Show all queues' }));
+    act(() => {
+      canvas.run({
+        running: true,
+        agents: {
+          a: {
+            current: 'build',
+            status: 'running',
+            outcomes: {},
+            rounds: { loop: { round: 2, more: 1 } },
+          },
+        },
+      });
+    });
     expect(card().dataset.round).toBe('Round 2 of 2');
     expect(step()?.dataset.run).toBe('running');
     expect(card().dataset.run).toBeUndefined();

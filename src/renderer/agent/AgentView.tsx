@@ -3,7 +3,7 @@ import { flushSync } from 'react-dom';
 import { useLabel } from '../useDraft';
 
 import type { AdapterId } from '../../shared/adapter';
-import type { ProjectFolder } from '../../shared/ipc';
+import type { ProjectFolder } from '../../shared/canvas';
 import type {
   ElicitationAction,
   FormValue,
@@ -26,7 +26,7 @@ import { chooseTarget, findItem, isApproval, isWait } from '../../shared/model/q
 import type { WaitTarget } from '../../shared/model/queue';
 import { QueueAddMenu, QueueEditor } from '../graph/QueueEditor';
 import type { RowMarks, StepChoice } from '../graph/QueueEditor';
-import type { HeldAsk } from '../../shared/engine/run/asks';
+import type { HeldAsk } from '../../shared/model/run-words';
 import type { TerminalBackend } from '../terminal/backend';
 import { TerminalPane } from '../terminal/TerminalPane';
 import { bashCommand, completedCommands, terminalCommand, viewCommand } from './commands';
@@ -51,7 +51,7 @@ import type { Answer, MessageImage, PlanAnswer, Session } from '../../shared/mod
 import { Transcript } from './Transcript';
 import './AgentView.css';
 
-/** What the view does to its agent's session (src/shared/engine/delivery/mailbox.ts). */
+/** What the view does to its agent's session (src/main/core/engine/delivery/mailbox.ts). */
 export interface SessionControls extends ComposerControls {
   /** Records a command the view answers itself in a panel, without sending a turn. */
   recordCommand?: (text: string) => void;
@@ -101,7 +101,7 @@ export interface SessionControls extends ComposerControls {
  * model, effort and mode its CLI starts with (a structured session's composer sets them too). A
  * session connected through a
  * structured interface (Claude's Agent SDK, Codex's app server)
- * shows in the same transcript and composer, fed by the main process (src/shared/engine/transcript/receive.ts); one in a
+ * shows in the same transcript and composer, fed by the main process (src/main/core/engine/transcript/receive.ts); one in a
  * Terminal shows the CLI's own terminal instead (TerminalPane.tsx), where the user works with
  * Claude Code or Codex as in any terminal.
  *
@@ -187,7 +187,7 @@ export function AgentView({
   edits: QueueEdits;
   /** How each agent's tasks are marked: links, and where the queues' run is (src/shared/model/queue-marks.ts). */
   marks: (agent: string, item: string | null) => RowMarks;
-  /** What the queues' run holds this agent for the user to decide, if anything (src/shared/engine/run/asks.ts). */
+  /** What the queues' run holds this agent for the user to decide, if anything (src/shared/model/run-words.ts). */
   ask?: HeldAsk | undefined;
   /** Shows every agent's queue, side by side (QueuesView.tsx). */
   onShowQueues: () => void;

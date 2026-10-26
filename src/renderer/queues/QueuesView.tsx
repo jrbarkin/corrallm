@@ -21,11 +21,11 @@ import type { WaitTarget } from '../../shared/model/queue';
 import { PickTask, QueueAddMenu, QueueEnd, QueueRow } from '../graph/QueueEditor';
 import type { Picking, RowMarks, StepChoice } from '../graph/QueueEditor';
 import { useSortable } from '../graph/sortable';
-import { heldAsks } from '../../shared/engine/run/asks';
-import type { HeldAsk } from '../../shared/engine/run/asks';
-import type { EngineCatalog } from '../../shared/engine/catalog';
+import { heldAsks } from '../../shared/model/run-words';
+import type { HeldAsk } from '../../shared/model/run-words';
+import type { EngineCatalog } from '../../shared/model/catalog';
 import type { RunSnapshot } from '../../shared/model/views';
-import { queueControlText } from '../../shared/engine/run/controls';
+import { queueControlText } from '../../shared/model/run-display';
 import { lanesOf } from './lanes';
 import type { Lane, Lanes, Link } from './lanes';
 import { queueMarks, taskKey as at } from '../../shared/model/queue-marks';
@@ -58,13 +58,13 @@ interface Choosing {
  *
  * Each lane is its agent's queue, the same queue as everywhere (QueueEditor.tsx's rows, edited
  * in place): a wait's step is picked by clicking it in its agent's lane. Run plays every queue
- * (src/shared/engine/run/runner.ts): the task each agent is on pulses, a wait or a delay it is held at breathes
+ * (src/main/core/engine/run/runner.ts): the task each agent is on pulses, a wait or a delay it is held at breathes
  * (counting down to its time, with Go on now on hover), and what it has done is ticked. A wait
  * with a time limit has dashed edges: it may go on without what it waits for, so a loop of waits
  * that holds one is not stuck. At an OK the run waits for the user: the row pulses amber with how
  * to decide, and its lane's head says it needs you, taking you there. A queue stopped at an OK
  * stops whatever waits on it. Where a session would not start, the lane's head says why, and
- * offers to switch the agent (src/shared/engine/run/asks.ts). A repeat is one card in its lane, over the rows of what it holds,
+ * offers to switch the agent (src/shared/model/run-words.ts). A repeat is one card in its lane, over the rows of what it holds,
  * each in its row: its round shows in a pill, and once out of rounds it asks, as an OK does.
  *
  * Opened from the canvas, or from an agent (`focus`, whose lane is brought into view). Escape, Back

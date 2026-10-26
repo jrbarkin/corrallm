@@ -1,3 +1,13 @@
+import type { FakeCanvas } from '../test-canvas';
+import type { Run } from '../../shared/model/run';
+import { NEW_SESSION } from '../../shared/model/session';
+let canvas: FakeCanvas | undefined;
+const showRun = (run: Run) => {
+  act(() => {
+    if (!canvas) throw new Error('No fixture');
+    canvas.run(run);
+  });
+};
 import { renderReady, events } from '../test-render';
 import { act, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -7,13 +17,13 @@ import { useState } from 'react';
 import type { ComponentProps } from 'react';
 
 import { GraphEditor as NativeGraphEditor } from '../test-graph';
-import { automaticBackend } from '../../shared/engine/test-backend';
+import { automaticSessions } from '../test-sessions';
 import type { Graph, GraphNode } from '../graph/flow';
 import type { QueueItem, QueueRepeat } from '../../shared/model/queue';
 
 /** Native session events from a test backend; production never fabricates replies. */
 function GraphEditor(props: ComponentProps<typeof NativeGraphEditor>) {
-  const [backend] = useState(() => automaticBackend().backend);
+  const [backend] = useState(() => automaticSessions().replies);
   const initialGraph = props.initialGraph && {
     ...props.initialGraph,
     nodes: props.initialGraph.nodes.map((node) =>
@@ -35,8 +45,12 @@ function GraphEditor(props: ComponentProps<typeof NativeGraphEditor>) {
   return (
     <NativeGraphEditor
       {...props}
+      onCanvas={(made) => {
+        canvas = made;
+        props.onCanvas?.(made);
+      }}
       {...(initialGraph ? { initialGraph } : {})}
-      sessionBackend={backend}
+      sessionReplies={backend}
     />
   );
 }
@@ -172,6 +186,21 @@ describe('the agent view', () => {
     await events.change(composer, { target: { value: '' } });
     await events.keyDown(composer, { key: 'Escape' });
     expect(transcript.getByText(/^Interrupted/)).toBeTruthy();
+    act(() => {
+      if (!canvas) throw new Error('No fixture');
+      const items = Object.values(
+        canvas.core.state(`messages:${canvas.document.id}`)?.state.items ?? {},
+      );
+      canvas.messages(items.map((m) => (m.body === 'Second' ? { ...m, state: 'delivered' } : m)));
+      canvas.session('a', {
+        ...(canvas.session('a') ?? NEW_SESSION),
+        status: 'working',
+        entries: [
+          ...(canvas.session('a')?.entries ?? []),
+          { kind: 'user', id: 'second-delivery', text: 'Second' },
+        ],
+      });
+    });
     expect(transcript.getByText('Second')).toBeTruthy();
     expect(view.queryByRole('list', { name: 'Queued messages' })).toBeNull();
   });
@@ -279,6 +308,7 @@ describe('the agent view', () => {
     const composer = session.getByRole<HTMLTextAreaElement>('textbox', { name: 'Message a' });
     const bar = () => session.queryByRole('group', { name: 'Needs you' });
 
+    showRun({ running: true, agents: { a: { current: 'ok', status: 'asking', outcomes: {} } } });
     expect(row()?.dataset.run).toBe('asking');
     const asks = within(bar() ?? document.body);
     expect(
@@ -292,19 +322,52 @@ describe('the agent view', () => {
     // What is sent from the composer is the changes asked for: the agent works on them.
     await events.change(composer, { target: { value: 'Cover the empty state too' } });
     await events.keyDown(composer, { key: 'Enter' });
+    showRun({
+      running: true,
+      agents: {
+        a: {
+          current: 'ok',
+          status: 'running',
+          outcomes: {},
+          changes: { ok: ['Cover the empty state too'] },
+        },
+      },
+    });
+    act(() => {
+      canvas?.session('a', {
+        ...NEW_SESSION,
+        status: 'working',
+        entries: [{ kind: 'user', id: 'changes', text: 'Cover the empty state too' }],
+      });
+    });
     expect(row()?.dataset.run).toBe('running');
     expect(bar()).toBeNull();
     expect(composer.placeholder).toBe('Queue a message for a…');
     const transcript = within(view.getByRole('log', { name: 'Transcript' }));
     expect(transcript.getByText('Cover the empty state too')).toBeTruthy();
 
-    // Once its turn ends (here, interrupted), it asks again.
+    // The core publishes the new hold after the interrupted correction.
     await events.keyDown(composer, { key: 'Escape' });
+    showRun({
+      running: true,
+      agents: {
+        a: {
+          current: 'ok',
+          status: 'asking',
+          outcomes: {},
+          changes: { ok: ['Cover the empty state too'] },
+        },
+      },
+    });
     expect(row()?.dataset.run).toBe('asking');
     expect(row()?.querySelector('.graph-queue-ok-asked')?.textContent).toBe(
       'You asked: “Cover the empty state too”',
     );
     await events.click(within(bar() ?? document.body).getByRole('button', { name: 'Approve' }));
+    showRun({
+      running: true,
+      agents: { a: { current: 'next', status: 'running', outcomes: { ok: 'succeeded' } } },
+    });
     expect(row()?.dataset.run).toBe('succeeded');
     expect(bar()).toBeNull();
     expect(
@@ -356,6 +419,17 @@ describe('the agent view', () => {
     const composer = session.getByRole<HTMLTextAreaElement>('textbox', { name: 'Message a' });
     const bar = () => within(session.getByRole('group', { name: 'Needs you' }));
 
+    showRun({
+      running: true,
+      agents: {
+        a: {
+          current: 'loop',
+          status: 'asking',
+          outcomes: { note: 'skipped' },
+          rounds: { loop: { round: 1, more: 0 } },
+        },
+      },
+    });
     expect(card()?.dataset.run).toBe('asking');
     expect(
       bar().getByText(
@@ -373,12 +447,40 @@ describe('the agent view', () => {
     await events.change(composer, { target: { value: 'Try a smaller fix' } });
     await events.keyDown(composer, { key: 'Enter' });
     const transcript = within(view.getByRole('log', { name: 'Transcript' }));
+    act(() => {
+      canvas?.session('a', {
+        ...NEW_SESSION,
+        entries: [{ kind: 'user', id: 'retry-note', text: 'Try a smaller fix' }],
+      });
+    });
+    showRun({
+      running: true,
+      agents: {
+        a: {
+          current: 'loop',
+          status: 'asking',
+          outcomes: { note: 'skipped' },
+          rounds: { loop: { round: 2, more: 1 } },
+        },
+      },
+    });
     expect(transcript.getByText('Try a smaller fix')).toBeTruthy();
     play(10);
     expect(card()?.dataset.round).toBe('Round 2 of 2');
     expect(bar().getByText(/^2 rounds done/)).toBeTruthy();
 
     await events.click(bar().getByRole('button', { name: 'Go on' }));
+    showRun({
+      running: true,
+      agents: {
+        a: {
+          current: 'next',
+          status: 'running',
+          outcomes: { loop: 'failed' },
+          rounds: { loop: { round: 2, more: 1 } },
+        },
+      },
+    });
     expect(card()?.dataset.run).toBe('failed');
     expect(card()?.dataset.round).toBe('2 rounds');
     expect(session.queryByRole('group', { name: 'Needs you' })).toBeNull();

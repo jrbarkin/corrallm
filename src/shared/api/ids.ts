@@ -40,7 +40,7 @@ export function brandedId<B extends Brand, S extends z.ZodString | z.ZodStringFo
 
 /**
  * A Needs item (API Spec §5.9), by its id on its canvas: what it is, then its agent's id (escaped),
- * a hold's or a prompt's generation and what of the agent's it is (src/shared/engine/needs.ts), or a
+ * a hold's or a prompt's generation and what of the agent's it is (src/shared/model/needs-selectors.ts), or a
  * proposal's, a file review's, a setup card's or a workspace change's own id. A proposal returns one.
  */
 export const NeedId = brandedId(

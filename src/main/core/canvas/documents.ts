@@ -4,7 +4,7 @@ import path from 'node:path';
 
 import type { AdapterId, Catalog } from '../../../shared/adapter';
 import type { CanvasId } from '../../../shared/canvas';
-import { MAX_CANVAS_BYTES } from '../../../shared/ipc';
+import { MAX_CANVAS_BYTES } from '../../../shared/canvas';
 import type { CanvasDocument } from '../../../shared/model/canvas';
 import { fromFile, toFile } from '../../../shared/model/file';
 import type { PartyId } from '../../../shared/model/messages';

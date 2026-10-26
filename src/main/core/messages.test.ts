@@ -10,7 +10,7 @@ import { OPS } from '../../shared/api/registry';
 import { RULES } from '../../shared/api/rules';
 import type { Message } from '../../shared/model/messages';
 import type { Entry } from '../../shared/model/session';
-import { withoutChoices } from '../../shared/engine/needs';
+import { withoutChoices } from '../../shared/model/needs-selectors';
 import type { NeedsItem } from '../../shared/model/needs';
 import type { CanvasId } from '../../shared/canvas';
 import type { AdapterId } from '../../shared/adapter';

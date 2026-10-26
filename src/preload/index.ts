@@ -8,19 +8,8 @@ import { contextBridge, webUtils } from 'electron';
 import { GUI_OPS } from '../shared/api/surface';
 import { guiFunction } from '../shared/gui-link';
 import type { GuiBridge } from '../shared/gui-link';
-import {
-  API_CHANNELS,
-  API_EVENTS,
-  type AppApi,
-  type IpcArgs,
-  type CoreChannel,
-  type IpcResult,
-} from '../shared/ipc';
+import type { AppApi } from '../shared/gui-link';
 import { connectCore } from './core';
-
-function invoke<C extends CoreChannel>(channel: C, ...args: IpcArgs<C>): Promise<IpcResult<C>> {
-  return core.channel(channel, args);
-}
 
 const core = connectCore();
 
@@ -37,14 +26,6 @@ const api: AppApi = {
   topicsOnChange: (listener) => core.onTopic(listener),
   topicsOnEpoch: (listener) => core.onEpoch(listener),
   draftsOnFlush: (listener) => core.onDraftsFlush(listener),
-  answerSession: (agentId, promptId, answer) =>
-    invoke(API_CHANNELS.answerSession, agentId, promptId, answer),
-  interruptSession: (agentId) => invoke(API_CHANNELS.interruptSession, agentId),
-  setSessionMode: (agentId, mode) => invoke(API_CHANNELS.setSessionMode, agentId, mode),
-  setSessionModel: (agentId, model) => invoke(API_CHANNELS.setSessionModel, agentId, model),
-  setSessionEffort: (agentId, effort) => invoke(API_CHANNELS.setSessionEffort, agentId, effort),
-  stopSessionTask: (agentId, taskId) => invoke(API_CHANNELS.stopSessionTask, agentId, taskId),
-  sessionAvailability: (agent) => invoke(API_CHANNELS.sessionAvailability, agent),
   // The paths of the files dropped, as the files say (a file the page made has none): the page
   // never names a path, and the core checks these again.
   terminalDrop: ({ agent, files, request }) => {
@@ -59,8 +40,6 @@ const api: AppApi = {
           ...(request === undefined ? {} : { request }),
         }) as ReturnType<GuiBridge['terminalDrop']>);
   },
-  onSessionEvent: (listener) => core.listen(API_EVENTS.onSessionEvent, listener),
-  onSessionAvailability: (listener) => core.listen(API_EVENTS.onSessionAvailability, listener),
   terminalOnEvent: (listener) => core.listen('terminal', listener),
 };
 

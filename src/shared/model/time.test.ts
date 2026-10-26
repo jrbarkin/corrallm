@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { deadline, parseTime, sameTime, TIME_PRESETS } from './time';
 import { leftText, limitText, timeText } from './words';
-import { TEST_ENGINE } from '../engine/test-engine';
+import { TEST_ENGINE } from '../test-model';
 
 /** What names a usage backend: the catalog main declares, as the run reads it. */
 const engine = TEST_ENGINE;

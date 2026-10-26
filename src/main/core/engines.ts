@@ -2,12 +2,12 @@ import type { Children } from './children';
 import type { ConnectionId } from '../../shared/adapter';
 import { canvasIdOf } from '../../shared/canvas';
 import type { CanvasId } from '../../shared/canvas';
-import type { EngineCatalog } from '../../shared/engine/catalog';
-import { Engine } from '../../shared/engine/engine';
-import { needs } from '../../shared/engine/needs';
-import type { NeedsInput } from '../../shared/engine/needs';
-import type { RunMailbox } from '../../shared/engine/run/runner';
-import type { SessionBackend } from '../../shared/engine/transcript/receive';
+import type { EngineCatalog } from '../../shared/model/catalog';
+import { Engine } from './engine/engine';
+import { needs } from '../../shared/model/needs-selectors';
+import type { NeedsInput } from '../../shared/model/needs-selectors';
+import type { RunMailbox } from './engine/run/runner';
+import type { SessionBackend } from './engine/transcript/receive';
 import type { CanvasDocument } from '../../shared/model/canvas';
 import type { Message, MessageDisplay, PartyId } from '../../shared/model/messages';
 import { agentParty } from '../../shared/model/messages';
@@ -33,7 +33,7 @@ import { ReadPositions } from './delivery/reads';
 import type { Database } from './store/store';
 
 /*
- * The canvases the core runs, each with its engine (src/shared/engine/engine.ts): the run and the
+ * The canvases the core runs, each with its engine (src/main/core/engine/engine.ts): the run and the
  * sessions it sends to, the sessions run by the core's own SessionManager, in the same process; and
  * its messages (delivery/messages.ts), which parties send its agents (delivery/delivery.ts). A
  * canvas opens by its id, from what the profile keeps of it: its file and its project folder, which
@@ -75,24 +75,7 @@ const NOT_KEPT = 'corrallm keeps no such canvas.';
 /** Whom the session manager lists conversations for when a canvas's own runtime asks. */
 const RUNTIME_CALLER = 'runtime';
 
-/**
- * The app's runs a window still owns until B11's cutover (X12, X13; X14 deletes this seam with task
- * 62's retry-task event): what the core tells such a run, and only such a run. A run the core runs
- * hears nothing of it: it retries its attempts itself (Engines.retryAttempt).
- */
-export interface WindowRuns {
-  /** An interrupted turn's retry decision for a window-owned run, for its windows alone. */
-  retry: (
-    canvas: CanvasId,
-    agent: string,
-    connection: ConnectionId,
-    event: Extract<SessionEvent, { type: 'retry-task' }>,
-  ) => void;
-}
-
 export interface EnginesDeps {
-  /** The windows that own their canvases' runs until the cutover: none under serve. */
-  windowRuns?: WindowRuns;
   processes: Pick<Children, 'run'>;
   /** What the engines read of the catalog. */
   engineCatalog: EngineCatalog;
@@ -217,16 +200,10 @@ export class Engines {
   readonly #canvases = new Map<CanvasId, Running>();
   readonly #mail = new Map<CanvasId, Promise<{ messages: MessageStore; notes: WithdrawalNotes }>>();
   readonly #watchers = new Set<Watcher>();
-  readonly #events = new Map<string, Promise<SessionEvent>>();
+  readonly #events = new Map<string, Promise<void>>();
   #closed = false;
   /** Whether the core's shutdown barrier holds every canvas it runs (`freeze`). */
   #frozen = false;
-  /** The window-owned runs whose retry decisions wait on a backend's hold, by canvas and agent. */
-  readonly #ownerResends = new Map<
-    string,
-    { canvas: CanvasId; agent: string; connection: ConnectionId }
-  >();
-  readonly #unwatchResends: () => void;
   readonly #reports = new Map<string, Map<string, SessionEvent>>();
   readonly #inputs = new Map<string, Map<string, UserMessage>>();
   /**
@@ -241,16 +218,6 @@ export class Engines {
 
   constructor(deps: EnginesDeps) {
     this.#deps = deps;
-    this.#unwatchResends = deps.usage.subscribe(() => {
-      for (const { canvas, agent, connection } of this.#ownerResends.values()) {
-        deps.windowRuns?.retry(
-          canvas,
-          agent,
-          connection,
-          this.#retryEvent(connection, { update: true }),
-        );
-      }
-    });
   }
 
   /** A canvas the core has open, if it has. */
@@ -335,23 +302,15 @@ export class Engines {
     this.#inputs.delete(key);
     this.#resends.delete(key);
     this.#reports.delete(key);
-    this.#ownerResends.delete(key);
   }
 
   /**
    * Reserves one explicit Interrupt and resend of an agent's native turn (its ids), before its
    * interrupt, never acting before its cancelled end arrives. On a canvas the core runs: the run's
    * attempts in that turn (read from their durable messages) are retried on that end
-   * (retryAttempt), and the parties' and your messages in it sent again (#resend). A window that
-   * owns its canvas's run until B11's cutover is handed the decision instead (WindowRuns); no
-   * second engine is opened for it.
+   * (retryAttempt), and the parties' and your messages in it sent again (#resend).
    */
-  async resendAfter(
-    canvas: CanvasId,
-    agent: string,
-    ids: readonly string[],
-    connection: ConnectionId,
-  ): Promise<void> {
+  resendAfter(canvas: CanvasId, agent: string, ids: readonly string[]): Promise<void> {
     const key = `${canvas}\u0000${agent}`;
     const inputs = [...(this.#inputs.get(key)?.values() ?? [])].filter((one) =>
       ids.includes(one.id),
@@ -368,34 +327,15 @@ export class Engines {
           : [],
       );
       this.#resends.set(key, { ids, inputs, attempts });
-      return;
     }
-    const tasks = inputs.flatMap((input) => (input.task === undefined ? [] : [input.task]));
-    const messages = inputs.filter(
-      (input) => input.origin === undefined && input.from === undefined,
-    );
-    if (tasks.length || messages.length) this.#ownerResends.set(key, { canvas, agent, connection });
-    await this.#settledEvents(key);
-    this.#deps.windowRuns?.retry(canvas, agent, connection, {
-      ...this.#retryEvent(connection),
-      tasks,
-      messages,
-    });
+    return Promise.resolve();
   }
 
   /** The interrupt a reservation was made for was refused: nothing is retried or sent again. */
-  async cancelResend(canvas: CanvasId, agent: string, connection: ConnectionId): Promise<void> {
+  cancelResend(canvas: CanvasId, agent: string): Promise<void> {
     const key = `${canvas}\u0000${agent}`;
     this.#resends.delete(key);
-    if (this.#running.has(canvas)) return;
-    this.#ownerResends.delete(key);
-    await this.#settledEvents(key);
-    this.#deps.windowRuns?.retry(
-      canvas,
-      agent,
-      connection,
-      this.#retryEvent(connection, { cancel: true }),
-    );
+    return Promise.resolve();
   }
 
   /**
@@ -417,22 +357,6 @@ export class Engines {
       const backend = node?.type === 'agent' ? engine.catalog.usageBackendOf(node.data) : undefined;
       return backend === undefined ? 0 : (this.#deps.usage.exhausted(backend, Date.now()) ?? 0);
     });
-  }
-
-  /** Once the events an agent's session emitted so far are taken (each is in turn: `emit`). */
-  async #settledEvents(key: string): Promise<void> {
-    await this.#events.get(key)?.catch(() => undefined);
-  }
-
-  #retryEvent(
-    connection: ConnectionId,
-    flags: { cancel?: true; update?: true } = {},
-  ): Extract<SessionEvent, { type: 'retry-task' }> {
-    const catalog = this.#deps.engineCatalog;
-    const backend = catalog.usageBackendOf({ adapter: catalog.adapterOf(connection), connection });
-    const until =
-      backend === undefined ? undefined : this.#deps.usage.exhausted(backend, Date.now());
-    return { type: 'retry-task', ...flags, ...(until === undefined ? {} : { until }) };
   }
 
   /** The canvases the core has open, in the order they opened. */
@@ -583,16 +507,15 @@ export class Engines {
   }
 
   /**
-   * What a session of one of the canvas's agents did (SessionManager's `emit`): resolves with the
-   * event as the core took it, for its windows (a turn's end that hit a usage limit saying when it
-   * lifts, where its connection couldn't: `#ended`).
+   * What a session of one of the canvas's agents did (SessionManager's `emit`): resolves once
+   * the core has reduced it and taken its durable effects. Runtime topics publish the view.
    */
   emit(
     canvas: CanvasId,
     agentId: string,
     connection: ConnectionId,
     event: SessionEvent,
-  ): Promise<SessionEvent> {
+  ): Promise<void> {
     const key = `${canvas}\u0000${agentId}`;
     const previous = this.#events.get(key) ?? Promise.resolve();
     const emitted = previous.then(() => this.#emit(canvas, agentId, connection, event));
@@ -609,7 +532,7 @@ export class Engines {
     agentId: string,
     connection: ConnectionId,
     given: SessionEvent,
-  ): Promise<SessionEvent> {
+  ): Promise<void> {
     const key = `${canvas}\u0000${agentId}`;
     if (given.type === 'started' || given.type === 'mode' || given.type === 'asking') {
       const reports = this.#reports.get(key) ?? new Map<string, SessionEvent>();
@@ -645,7 +568,6 @@ export class Engines {
     for (const listener of running?.listeners ?? []) listener(agentId, connection, event);
     if (event.type === 'end') {
       this.#resends.delete(key);
-      if (event.result.status !== 'cancelled') this.#ownerResends.delete(key);
       for (const id of event.messages) this.#inputs.get(key)?.delete(id);
       // Its run holds each cancelled now: retried once nothing holds its agent.
       for (const { task } of retrying) this.retryAttempt(canvas, task);
@@ -658,12 +580,10 @@ export class Engines {
         });
       }
     } else if (event.type === 'closed' || event.type === 'cleared') {
-      this.#ownerResends.delete(key);
       this.#resends.delete(key);
       this.#inputs.delete(key);
       this.#reports.delete(key);
     }
-    return event;
   }
 
   async #resend(
@@ -672,13 +592,6 @@ export class Engines {
     request: { ids: readonly string[]; inputs: UserMessage[] },
     ended: readonly string[],
   ): Promise<void> {
-    // Queue attempts belong to the engine that sent them (possibly in a window until B11).
-    // Its Retry reservation handles them; do not restore a second run merely to copy no mail.
-    if (
-      request.inputs.length === request.ids.length &&
-      request.inputs.every((input) => input.task !== undefined)
-    )
-      return;
     const stopped = () => this.#closed;
     if (stopped()) return;
     const open = await this.#running.get(canvas);
@@ -716,10 +629,16 @@ export class Engines {
         body: store.displayOf(m.id)?.text ?? m.body,
         images: request.inputs.find((input) => input.id === m.delivery?.as)?.images,
       }));
+    const runIds = new Set(
+      store
+        .all()
+        .filter(sentByRun)
+        .flatMap((m) => (m.delivery === undefined ? [] : [m.delivery.as])),
+    );
     for (const input of request.inputs) {
       if (
         partyIds.has(input.id) ||
-        input.origin !== undefined ||
+        runIds.has(input.id) ||
         input.from !== undefined ||
         !ended.includes(input.id)
       )
@@ -817,7 +736,6 @@ export class Engines {
   ): Promise<boolean> {
     if (this.#closed) throw new Error('The canvas closed before its message could be sent.');
     const key = `${canvas}\u0000${agentId}`;
-    if (message.origin === 'queue') this.#ownerResends.delete(key);
     const inputs = this.#inputs.get(key) ?? new Map<string, UserMessage>();
     inputs.set(message.id, message);
     this.#inputs.set(key, inputs);
@@ -924,8 +842,6 @@ export class Engines {
   async close(): Promise<void> {
     await Promise.all(this.#events.values());
     this.#closed = true;
-    this.#unwatchResends();
-    this.#ownerResends.clear();
     const mail = await Promise.all(this.#mail.values());
     for (const { notes } of mail) notes.close();
     await Promise.allSettled(this.#closing.values());

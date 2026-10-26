@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import type { ProjectFolder } from '../../shared/ipc';
+import type { ProjectFolder } from '../../shared/canvas';
 import { SHORTCUTS } from './keys';
 import { FloatPopover } from './FloatPopover';
 

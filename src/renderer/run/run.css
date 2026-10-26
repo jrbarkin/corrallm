@@ -1,5 +1,5 @@
 /*
- * Where the queues' run is (src/shared/engine/run/runner.ts), on a queue's rows (QueueEditor.tsx)
+ * Where the queues' run is (src/main/core/engine/run/runner.ts), on a queue's rows (QueueEditor.tsx)
  * wherever they are shown: the task an agent is on pulses, with a sheen passing over it; a wait or
  * a delay it is held at breathes, grey; a task that needs the user (an OK the run holds for their
  * decision, or a task whose agent asks permission) pulses amber, as an agent with a question does

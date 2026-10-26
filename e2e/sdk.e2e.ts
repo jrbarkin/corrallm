@@ -405,7 +405,7 @@ test('stops work in the background, answers with the keyboard, and sets the effo
   const composer = view.getByRole('textbox', { name: 'Message Agent 1' });
   const transcript = view.getByRole('log', { name: 'Transcript' });
 
-  // The effort goes to the session (session:effort): the CLI takes it.
+  // The effort goes to the session (session.setEffort): the CLI takes it.
   await view.getByRole('button', { name: 'Effort: Default' }).click();
   await view.getByRole('menuitemradio', { name: /^High/ }).click();
   await expect(view.getByRole('button', { name: 'Effort: High' })).toBeVisible();
@@ -420,7 +420,7 @@ test('stops work in the background, answers with the keyboard, and sets the effo
   await expect(tasks.getByText('npm run dev')).toBeVisible();
   await expect(transcript.getByText(/^Worked for \d+s$/)).toBeVisible();
 
-  // Stopped from its line (session:stopTask): its line says so, and the list is gone.
+  // Stopped from its line (session.stopTask): its line says so, and the list is gone.
   const line = transcript.locator('.agent-tool', {
     has: page.getByRole('button', { name: 'Bash npm run dev' }),
   });

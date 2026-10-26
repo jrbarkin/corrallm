@@ -13,7 +13,6 @@ import { RULES } from './rules';
 import type { RuleRow } from './rules';
 import { GUI_OPS, PARTIES, SURFACE } from './surface';
 import type { Party, Rule, Surface } from './surface';
-import { UNHOSTED } from './unhosted';
 
 /*
  * The tests that make 1:1 the default (Core Server §3.7). T1: the surface's rules, checked on the
@@ -26,7 +25,6 @@ interface Registry {
   surface: Readonly<Record<string, Surface>>;
   ops: Readonly<Record<string, OpDef>>;
   deviations: Readonly<Partial<Record<string, string>>>;
-  unhosted: Readonly<Partial<Record<string, string>>>;
   rules: Readonly<Partial<Record<Rule, RuleRow>>>;
 }
 
@@ -34,13 +32,15 @@ const REAL: Registry = {
   surface: SURFACE,
   ops: OPS,
   deviations: DEVIATIONS,
-  unhosted: UNHOSTED,
   rules: RULES,
 };
 
-it('leaves only B11 operations unhosted after B8', () => {
-  expect(Object.values(UNHOSTED)).not.toContain('B8');
-  expect(GUI_OPS).toEqual(expect.arrayContaining(['catalog.get', 'catalog.installed']));
+it('hosts every operation whose audience includes you', () => {
+  expect(GUI_OPS).toEqual(
+    Object.entries(SURFACE)
+      .filter(([, surface]) => 'you' in surface.access)
+      .map(([name]) => name),
+  );
 });
 
 const NAME = /^[a-z]+(\.[a-zA-Z]+)?$/;
@@ -239,11 +239,10 @@ function problems(registry: Registry): string[] {
       continue;
     }
     const parties = Object.keys(surface.access) as Party[];
-    const unhosted = name in registry.unhosted;
-    const gui = parties.includes('you') && !unhosted;
+    const gui = parties.includes('you');
     const mcp = parties.some((party) => party !== 'you');
     const deviation = registry.deviations[name];
-    if (gui !== mcp && !(mcp && unhosted)) {
+    if (gui !== mcp) {
       if (deviation === undefined) found.push(`${name}: on one surface only, with no deviation`);
       else if (!(deviation in REASONS)) found.push(`${name}: deviates for no listed reason`);
     } else if (deviation !== undefined) {
@@ -290,15 +289,6 @@ function problems(registry: Registry): string[] {
       found.push(`${name}: its inputSchema isn't exactly its input's JSON Schema`);
     }
   }
-  for (const [name, phase] of Object.entries(registry.unhosted)) {
-    const surface = registry.surface[name];
-    if (!surface) found.push(`${name}: unhosted, but no such op`);
-    else if (!('you' in surface.access)) found.push(`${name}: unhosted, but not for the GUI`);
-    else if (!Object.keys(surface.access).some((party) => party !== 'you')) {
-      found.push(`${name}: unhosted, and on no surface meanwhile`);
-    }
-    if (phase !== 'B8' && phase !== 'B11') found.push(`${name}: unhosted until ${String(phase)}`);
-  }
   for (const name of Object.keys(registry.deviations)) {
     if (!(name in registry.surface)) found.push(`${name}: a deviation, but no such op`);
   }
@@ -337,7 +327,6 @@ describe('T1: the surface’s rules', () => {
     surface: Object.fromEntries(Object.entries(ops).map(([name, [surface]]) => [name, surface])),
     ops: Object.fromEntries(Object.entries(ops).map(([name, [, def]]) => [name, def])),
     deviations: {},
-    unhosted: {},
     rules: {},
     ...more,
   });
@@ -378,27 +367,6 @@ describe('T1: the surface’s rules', () => {
         { deviations: { 'test.both': 'view' } },
       ),
       'test.both: listed as a deviation, but it no longer deviates',
-    ],
-    [
-      'an unhosted op not for the GUI',
-      registry(
-        { 'test.tokens': op({ access: tokens, kind: 'read', scope: 'none' }) },
-        { unhosted: { 'test.tokens': 'B8' } },
-      ),
-      'test.tokens: unhosted, but not for the GUI',
-    ],
-    [
-      'an unhosted op that is yours alone, on no surface meanwhile',
-      registry(
-        { 'test.yours': op({ access: yours, kind: 'read', scope: 'none' }) },
-        { unhosted: { 'test.yours': 'B11' } },
-      ),
-      'test.yours: unhosted, and on no surface meanwhile',
-    ],
-    [
-      'an unhosted op that isn’t registered',
-      registry({}, { unhosted: { 'test.gone': 'B8' } }),
-      'test.gone: unhosted, but no such op',
     ],
     [
       'a rule with no row',
@@ -613,29 +581,26 @@ describe('T1: the surface’s rules', () => {
     expect(problems(wrong)).toContain(problem);
   });
 
-  it('accepts an op on MCP alone while it is unhosted, and bounded, branded ids', () => {
+  it('accepts matching surfaces and bounded, branded ids', () => {
     expect(
       problems(
-        registry(
-          {
-            'test.agent': op(
-              { access: both, kind: 'command', scope: 'agent', self: 'refused' },
-              z.strictObject({
-                agent: Agent,
-                to: z.union([Agent, z.literal('manager')]),
-                words: z.array(z.string().max(5)).max(3),
-              }),
-            ),
-            // A doc op's envelope, the entities it expects, is bounded.
-            'test.doc': op(
-              { access: both, kind: 'doc', scope: 'canvas', self: 'allowed' },
-              z.strictObject({ agent: Agent }),
-            ),
-            // An op in the app's scope may drain the canvas it replaces.
-            'test.create': op({ access: both, kind: 'command', scope: 'app', drains: 'canvas' }),
-          },
-          { unhosted: { 'test.agent': 'B11', 'test.doc': 'B11', 'test.create': 'B11' } },
-        ),
+        registry({
+          'test.agent': op(
+            { access: both, kind: 'command', scope: 'agent', self: 'refused' },
+            z.strictObject({
+              agent: Agent,
+              to: z.union([Agent, z.literal('manager')]),
+              words: z.array(z.string().max(5)).max(3),
+            }),
+          ),
+          // A doc op's envelope, the entities it expects, is bounded.
+          'test.doc': op(
+            { access: both, kind: 'doc', scope: 'canvas', self: 'allowed' },
+            z.strictObject({ agent: Agent }),
+          ),
+          // An op in the app's scope may drain the canvas it replaces.
+          'test.create': op({ access: both, kind: 'command', scope: 'app', drains: 'canvas' }),
+        }),
       ),
     ).toEqual([]);
   });
@@ -746,7 +711,6 @@ function snapshot(): string {
       counts: Object.fromEntries(
         Object.entries(tools).map(([party, names]) => [party, names.length]),
       ),
-      unhosted: UNHOSTED,
       deviations: DEVIATIONS,
       schemas: Object.fromEntries(
         Object.entries(OPS).map(([name, def]) => [

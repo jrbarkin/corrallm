@@ -9,7 +9,7 @@ import type {
   SaveDialogOptions,
 } from 'electron';
 
-import { CANVAS_EXTENSION } from '../../shared/ipc';
+import { CANVAS_EXTENSION } from '../../shared/canvas';
 import type { WindowId } from '../core/host';
 import type { HostSide } from '../core/protocol';
 import type { Handlers } from '../../shared/link';

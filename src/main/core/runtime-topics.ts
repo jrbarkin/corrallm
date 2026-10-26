@@ -17,7 +17,7 @@ import type {
 } from '../../shared/api/topics';
 import { isRuntimeTopic, topicRequest } from '../../shared/api/topics';
 import type { CanvasId } from '../../shared/canvas';
-import type { SessionAction } from '../../shared/engine/transcript/reduce';
+import type { SessionAction } from './engine/transcript/reduce';
 import type { Entry, Session } from '../../shared/model/session';
 import { MESSAGE_ORIGINS } from '../../shared/model/messages';
 import type { PartyId } from '../../shared/model/messages';

@@ -459,12 +459,14 @@ describe('the app’s core and window channels', () => {
     const b = events(eight);
 
     await opened(seven, agent);
-    await vi.waitFor(() => {
-      expect(a).toContainEqual([
-        'session:event',
-        [agent, 'codex.app-server', expect.objectContaining({ type: 'started' })],
-      ]);
+    await vi.waitFor(async () => {
+      expect(await call(seven, 'session.get', { canvas: own, agent })).toMatchObject({
+        agent,
+        connection: 'codex.app-server',
+        status: 'idle',
+      });
     });
+    expect(a).toEqual([]);
     await call(eight, 'usage.get', {});
     expect(b).toEqual([]);
   });
@@ -552,21 +554,16 @@ describe('the app’s core and window channels', () => {
     const canvas = await created(seven);
     await chooseProject(seven);
     const agent = await agentOn(seven, 'claude-code.terminal');
-    const heard = events(seven);
     await opened(seven, agent);
     await call(seven, 'message', { canvas, to: agent, body: 'Hello' });
-    await vi.waitFor(() => {
-      expect(heard).toContainEqual([
-        'session:event',
-        [
-          agent,
-          'claude-code.terminal',
-          expect.objectContaining({
-            type: 'end',
-            result: { status: 'failed', reason: 'usage-limit', message: 'Limit', resetsAt },
-          }),
-        ],
-      ]);
+    await vi.waitFor(async () => {
+      const transcript = await call(seven, 'session.transcript', { canvas, agent });
+      expect(transcript.entries).toContainEqual(
+        expect.objectContaining({
+          kind: 'end',
+          result: { status: 'failed', reason: 'usage-limit', message: 'Limit', resetsAt },
+        }),
+      );
     });
   });
 
@@ -624,17 +621,17 @@ describe('the app’s core and window channels', () => {
   it('refuses a page-supplied window or malformed channel arguments before asking the host', async () => {
     const { connect } = await app();
     const window = connect(7);
-    expect(await window.request('channel', 'session:interrupt', ['a', 8])).toEqual({
+    expect(await window.request('channel' as 'call', 'session:interrupt', ['a', 8])).toEqual({
       ok: false,
-      error: { message: expect.stringMatching(/^Expected/) as unknown },
+      error: { message: 'No handler for “channel”.' },
     });
-    expect(await window.request('channel', 'session:interrupt', null as never)).toEqual({
+    expect(await window.request('channel' as 'call', 'session:interrupt', null)).toEqual({
       ok: false,
-      error: { message: 'Expected channel arguments' },
+      error: { message: 'No handler for “channel”.' },
     });
-    expect(await window.request('channel', 'core:connect', [])).toEqual({
+    expect(await window.request('channel' as 'call', 'core:connect', [])).toEqual({
       ok: false,
-      error: { message: 'corrallm’s window has no channel named core:connect.' },
+      error: { message: 'No handler for “channel”.' },
     });
   });
 
@@ -644,9 +641,9 @@ describe('the app’s core and window channels', () => {
       const { core, connect } = await app();
       const window = connect(7);
       const id = await created(window);
-      expect(await window.request('channel', name, [])).toEqual({
+      expect(await window.request('channel' as 'call', name, [])).toEqual({
         ok: false,
-        error: { message: `corrallm’s window has no channel named ${name}.` },
+        error: { message: 'No handler for “channel”.' },
       });
       expect(core.engines.canvas(id)?.state).toBe('executing');
     },

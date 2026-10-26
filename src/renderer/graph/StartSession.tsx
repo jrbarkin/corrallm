@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { AdapterId, ConnectionId } from '../../shared/adapter';
 import type { CanvasId } from '../../shared/canvas';
-import type { ProjectFolder } from '../../shared/ipc';
+import type { ProjectFolder } from '../../shared/canvas';
 import type { InstalledClis } from '../../shared/session';
 import type { TemplateInfo } from '../../shared/templates';
 import { api } from '../api/client';

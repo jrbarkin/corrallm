@@ -8,10 +8,8 @@ import type { Change } from '../shared/api/topics';
 import { GUI_OPS } from '../shared/api/surface';
 import { guiFunction } from '../shared/gui-link';
 import type { CoreGuiSide, GuiSide } from '../shared/gui-link';
-import { API_CHANNELS, API_EVENTS } from '../shared/ipc';
-import type { AppApi } from '../shared/ipc';
+import type { AppApi } from '../shared/gui-link';
 import { CoreLink } from '../shared/link';
-import type { SessionEvent } from '../shared/session';
 
 type Listener = (event: unknown, ...args: unknown[]) => void;
 const { exposeInMainWorld, invoke, on, removeListener, getPathForFile } = vi.hoisted(() => ({
@@ -77,7 +75,6 @@ function postPort(
         heard.push([op, args]);
         return answer(op, args);
       },
-      channel: (name, args) => channel(name, ...args),
     },
   );
   listenerOn('core:port')({ ports: [port1], sender: 'the ipcRenderer' }, { epoch: 1 });
@@ -184,7 +181,6 @@ describe('the window’s port to the core', () => {
     const api = await exposed();
     for (const name of ['getUsage', 'setUsageRule', 'simulateUsage']) {
       expect(api).not.toHaveProperty(name);
-      expect(API_CHANNELS).not.toHaveProperty(name);
     }
     expect(api).toHaveProperty('usageGet');
     expect(api).toHaveProperty('usageSetRule');
@@ -200,8 +196,6 @@ describe('the window’s port to the core', () => {
     // port, ipcRenderer, a function that takes a channel or an operation, or an event object.
     expect(Object.keys(api).sort()).toEqual(
       [
-        ...Object.keys(API_CHANNELS),
-        ...Object.keys(API_EVENTS),
         ...GUI_OPS.map((op) => guiFunction(op)),
         'terminalOnEvent',
         'topicsOnChange',
@@ -356,48 +350,6 @@ describe('preload', () => {
     expect(invoke.mock.calls.map(([name]) => name)).toEqual(['core:connect']);
   });
 
-  it('calls the session channels with their arguments', async () => {
-    const api = await exposed();
-    postPort(answerInfo);
-    channel.mockResolvedValue(null);
-    await api.answerSession('a', 'p', { kind: 'permission', answer: 'deny' });
-    expect(channel).toHaveBeenLastCalledWith('session:answer', 'a', 'p', {
-      kind: 'permission',
-      answer: 'deny',
-    });
-    await api.interruptSession('a');
-    expect(channel).toHaveBeenLastCalledWith('session:interrupt', 'a');
-    await api.setSessionMode('a', 'plan');
-    expect(channel).toHaveBeenLastCalledWith('session:mode', 'a', 'plan');
-    await api.setSessionModel('a', 'opus');
-    expect(channel).toHaveBeenLastCalledWith('session:model', 'a', 'opus');
-    await api.setSessionEffort('a', 'high');
-    expect(channel).toHaveBeenLastCalledWith('session:effort', 'a', 'high');
-    await api.stopSessionTask('a', 'b1');
-    expect(channel).toHaveBeenLastCalledWith('session:stopTask', 'a', 'b1');
-    await api.sessionAvailability('a');
-    expect(channel).toHaveBeenLastCalledWith('session:availability', 'a');
-  });
-
-  it('passes session events on without Electron’s event object, until told to stop', async () => {
-    const api = await exposed();
-    postPort(answerInfo);
-    const heard = vi.fn<Parameters<AppApi['onSessionEvent']>[0]>();
-    const stop = api.onSessionEvent(heard);
-
-    const event: SessionEvent = { type: 'status', status: 'working' };
-    remote.emit('event', 'session:event', ['a', 'claude-code.sdk', event]);
-    await vi.waitFor(() => {
-      expect(heard).toHaveBeenCalledOnce();
-    });
-    expect(heard).toHaveBeenCalledWith('a', 'claude-code.sdk', event);
-
-    stop();
-    remote.emit('event', 'session:event', ['a', 'claude-code.sdk', event]);
-    await api.interruptSession('a');
-    expect(heard).toHaveBeenCalledOnce();
-  });
-
   it('calls the generated terminal operations over the port, passing their whole results', async () => {
     const api = await exposed();
     const heard = postPort(answerInfo);
@@ -489,7 +441,7 @@ describe('preload', () => {
 
     stop();
     remote.emit('event', 'terminal', ['a', { type: 'output', data: 'hi' }]);
-    await api.interruptSession('a');
+    await api.appInfo();
     expect(heard).toHaveBeenCalledOnce();
   });
 
@@ -562,29 +514,6 @@ describe('a window’s run, the core’s alone (B11 Design §8)', () => {
 });
 
 describe('channels waiting for the core', () => {
-  it('queues a channel until the port comes, and preserves a handler’s error message', async () => {
-    const api = await exposed();
-    const pending = api.sessionAvailability('a');
-    channel.mockRejectedValue(new Error('The workspace could not be read.'));
-    postPort(answerInfo);
-    await expect(pending).rejects.toThrow('The workspace could not be read.');
-    expect(channel).toHaveBeenCalledExactlyOnceWith('session:availability', 'a');
-    expect(invoke).toHaveBeenCalledExactlyOnceWith('core:connect');
-  });
-
-  it('expires a queued channel after 10 seconds without replaying it on a late port', async () => {
-    const api = await exposed();
-    vi.useFakeTimers();
-    const failed = expect(api.sessionAvailability('a')).rejects.toThrow(
-      'corrallm’s core isn’t answering yet.',
-    );
-    await vi.advanceTimersByTimeAsync(10_000);
-    await failed;
-    postPort(answerInfo);
-    await api.appInfo();
-    expect(channel).not.toHaveBeenCalled();
-  });
-
   it('keeps event subscriptions across replacement ports', async () => {
     const api = await exposed();
     const heard = vi.fn();
@@ -622,4 +551,20 @@ describe('channels waiting for the core', () => {
     });
     stop();
   });
+});
+
+it('exposes no transitional session channel or event method after the cutover', async () => {
+  const api = await exposed();
+  for (const name of [
+    'answerSession',
+    'interruptSession',
+    'setSessionMode',
+    'setSessionModel',
+    'setSessionEffort',
+    'stopSessionTask',
+    'sessionAvailability',
+    'onSessionEvent',
+    'onSessionAvailability',
+  ])
+    expect(api).not.toHaveProperty(name);
 });

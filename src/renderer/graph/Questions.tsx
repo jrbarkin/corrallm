@@ -7,12 +7,12 @@ import { Markdown } from '../agent/Markdown';
 import type { NeedsItem } from '../../shared/model/needs';
 import { promptQuestions } from '../../shared/model/session';
 import type { CardQuestion } from '../../shared/model/session';
-import { needsItem } from '../../shared/engine/needs';
-import type { Need, NeedsInput } from '../../shared/engine/needs';
+import { needsItem } from '../../shared/model/needs-selectors';
+import type { Need, NeedsInput } from '../../shared/model/needs-selectors';
 import { ToolDetailView } from '../agent/ToolDetail';
 import { permissionQuestion } from '../agent/tools';
-import type { AskChoice } from '../../shared/engine/run/asks';
-import type { Answer } from '../../shared/engine/run/runner';
+import type { AskChoice } from '../../shared/model/run-words';
+import type { Answer } from '../../shared/model/run';
 import { adapterCli, DEFAULT_AGENT } from './agents';
 
 /** Who asks, labelled on a card: a button that opens that agent. */
@@ -27,7 +27,7 @@ interface Asker {
  * its text and what it comes after (`detail`), a button for each of its choices (the primary one
  * filled; what a choice means, if it says, under it), and a box for an answer in their words
  * (`reply`: Enter, or its button). Once answered (`answered`), that instead. The one card for an
- * agent's own questions (QuestionCard) and for what the queues' run asks (src/shared/engine/run/asks.ts).
+ * agent's own questions (QuestionCard) and for what the queues' run asks (src/shared/model/run-words.ts).
  *
  * With `onSubmit`, several choices may be picked: they toggle, and the reply's button (or Enter in
  * its box) submits them, with what was typed.
@@ -336,7 +336,7 @@ export function SessionAskCard({ need, agent }: { need: NeedsItem; agent: Asker 
 
 /**
  * A floating list of what needs the user, labelled by agent, as the engine derives it
- * (src/shared/engine/needs.ts): first what the queues' run holds for them (such as an OK), then
+ * (src/shared/model/needs-selectors.ts): first what the queues' run holds for them (such as an OK), then
  * what agents' sessions ask (their questions, answered here; the rest in the agent's view), then
  * what Terminal agents' CLIs ask in their terminals (shown, answered there).
  */

@@ -14,7 +14,7 @@ import type { Connection } from './sqlite';
  *
  * Frozen, as every migration is once shipped: it reads what schema 3 kept as the code of schema 3
  * (main at 767a382) read it, its own copy of those checks and limits (src/shared/run.ts'
- * parseRunCheckpoint, src/shared/engine/delivery/submission-state.ts' decodeSubmissions), so that
+ * parseRunCheckpoint, src/main/core/engine/delivery/submission-state.ts' decodeSubmissions), so that
  * it never changes as they do. A run it can't read so is left as it was: the journal, reading only
  * its own envelope, discards it as it next restores the canvas, saying so, as it discarded a run
  * it couldn't read before. Submissions kept no time of their own: theirs is when the run holding

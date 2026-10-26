@@ -137,11 +137,13 @@ if (args.includes('read-tree') && existsSync(${JSON.stringify(arm)})) {
         return result.value.id;
       }, canvas);
     const allocate = async (agent: string) => {
+      const existing = (await list()).items.find((item) => item.agent === agent);
+      if (existing?.state === 'ready') return existing;
       const availability = await page.evaluate(
-        (agent) => window.api.sessionAvailability(agent),
+        (agent) => window.api.sessionOpen({ agent: agent }),
         agent,
       );
-      if (!availability.ready) {
+      if (!availability.ok) {
         await openNeeds(page);
         await page.getByRole('article').getByRole('button', { name: 'Skip', exact: true }).click();
         await page.getByRole('button', { name: 'Needs you', exact: true }).click();
@@ -386,8 +388,8 @@ for (const attack of ['core.worktree', 'symlinked .corral']) {
       const agent = await w.add();
       const result = await w
         .page()
-        .evaluate((agent) => window.api.sessionAvailability(agent), agent);
-      expect(result.ready).toBe(false);
+        .evaluate((agent) => window.api.sessionOpen({ agent: agent }), agent);
+      expect(result.ok).toBe(false);
       await expect
         .poll(async () => (await w.list()).items.find((item) => item.agent === agent)?.state)
         .toBe('error');
@@ -412,7 +414,7 @@ test('a core crash after Git population and before its mark reconciles to the sa
     const agent = await w.add();
     const waiting = w
       .page()
-      .evaluate((agent) => window.api.sessionAvailability(agent), agent)
+      .evaluate((agent) => window.api.sessionOpen({ agent: agent }), agent)
       .then(
         () => undefined,
         () => undefined,

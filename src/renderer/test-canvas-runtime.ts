@@ -1,146 +1,91 @@
-import type { UsageState } from '../shared/usage';
 import type { CanvasDocument } from '../shared/model/canvas';
-import type { SessionBackend } from '../shared/engine/transcript/receive';
-import { NO_BACKEND } from '../shared/engine/transcript/receive';
-import { Engine } from '../shared/engine/engine';
-import { needs, needsOf, needsItem } from '../shared/engine/needs';
+import type { Session, Entry, Prompt } from '../shared/model/session';
+import { isOpen, NEW_SESSION } from '../shared/model/session';
+import type { Run } from '../shared/model/run';
+import type { MessageImage, SessionMode, SessionAnswer, SessionOptions } from '../shared/session';
+import { isSessionMode } from '../shared/session';
+import type { ConnectionId } from '../shared/adapter';
+import { OPS } from '../shared/api/registry';
 import { AgentId, MessageId } from '../shared/api/ids';
+import { runView, sessionView } from '../shared/model/views';
+import type { MessageView } from '../shared/model/views';
+import { needs, needsOf, needsItem } from '../shared/model/needs-selectors';
 import * as AgentOps from '../shared/model/agent-ops';
 import { catalog } from './catalog';
-import { isStartMode } from '../shared/adapter';
-import { isSessionMode } from '../shared/session';
-import { OPS } from '../shared/api/registry';
-import type { MessageView } from '../shared/model/views';
-import { runView, sessionView } from '../shared/model/views';
 import { runCatalog } from './graph/agents';
 import type { fakeCore } from './test-api';
+import { fakeSessions } from './test-sessions';
+import type { SessionReplies } from './test-sessions';
 
-/** Execution lives on the fixture's core side, never inside GraphEditor. */
+/** Scripted operation/topic fixture. It runs no queue, driver, retry loop or checkpoint. */
 export function canvasRuntime(
   core: ReturnType<typeof fakeCore>,
   document: CanvasDocument,
-  backend: SessionBackend = NO_BACKEND,
+  replies: SessionReplies = fakeSessions().replies,
   commit: (next: CanvasDocument) => void = () => undefined,
-  usage?: () => UsageState,
 ) {
-  const engine = new Engine({
-    catalog: runCatalog(),
-    backend,
-    ...(usage ? { usage } : {}),
-    now: () => Date.now(),
-    later: (run, ms) => {
-      const timer = setTimeout(run, ms);
-      return () => {
-        clearTimeout(timer);
-      };
-    },
-    connect: (agent, connection) => {
-      commit(
-        AgentOps.setConnection(
-          { ...document, nodes },
-          { agent, connection },
-          { catalog: catalog(), defaultAdapter: engine.catalog.defaultAdapter },
-        ).next,
-      );
-      engine.sessions.open(agent);
-    },
-  });
-  const messageIds = new Map<string, string>();
-  const messageId = (native: string) => {
-    if (MessageId.safeParse(native).success) return native;
-    let kept = messageIds.get(native);
-    if (!kept) {
-      kept = crypto.randomUUID();
-      messageIds.set(native, kept);
-    }
-    return kept;
-  };
   let nodes = document.nodes;
   const canvas = document.id;
-  const publish = () => {
-    const run = runView(engine.run.snapshot());
-    const sessions = engine.sessions.snapshot();
-    const views = Object.fromEntries(
-      nodes
-        .filter((node) => node.type === 'agent')
-        .map((node) => {
-          const id = node.id,
-            session = engine.sessions.of(id);
-          return [
-            id,
-            sessionView(
-              AgentId.parse(id),
-              engine.catalog.connectionOf(
-                nodes.filter((node) => node.type === 'agent').find((node) => node.id === id)
-                  ?.data ?? {},
-              ),
-              session,
-            ),
-          ];
-        }),
-    );
-    const input = { canvas, nodes, run: engine.run.snapshot(), sessions, catalog: engine.catalog };
-    const items = needs(input);
-    const messages: MessageView[] = Object.entries(sessions).flatMap(([agent, session]) => [
-      ...(session.submissions ?? []).map((message): MessageView => ({
-        id: messageId(message.id),
-        delivery: { as: message.id, at: 1, attempt: 1 },
-        canvas,
-        from: 'you',
-        to: `agent:${agent}`,
-        kind: 'text',
-        body: message.text,
-        at: 1,
-        origin: 'manual',
-        state:
-          message.status === 'queued'
-            ? 'pending'
-            : message.status === 'running'
-              ? 'delivered'
-              : 'replied',
-        ...(message.result ? { turn: message.result } : {}),
-        ...(message.after ? { display: { after: message.after } } : {}),
-      })),
-      ...session.queued
-        .filter((queued) => !session.submissions?.some((one) => one.id === queued.id))
-        .map((queued): MessageView => ({
-          id: messageId(queued.id),
-          canvas,
-          from: 'you',
-          to: `agent:${agent}`,
-          kind: 'text',
-          body: queued.text,
-          at: 1,
-          origin: 'run',
-          state: 'pending',
-        })),
-    ]);
-    const oldRun = core.state(`run:${canvas}`);
-    const oldSessions = core.state(`sessions:${canvas}`);
-    const oldMessages = core.state(`messages:${canvas}`);
-    const agents = Object.fromEntries(
-      Object.entries(views).map(([id, view]) => [id, view.summary]),
-    );
-    const messagesById = Object.fromEntries(messages.map((message) => [message.id, message]));
-    if (!oldRun) core.snapshot(`run:${canvas}`, run);
+  const lookups = runCatalog();
+  let run: Run = { running: false, agents: {} };
+  const sessions: Record<string, Session> = {};
+  const messages = new Map<string, MessageView>();
+  const opened = new Map<string, ConnectionId>();
+  const refused = new Set<string>();
+  const result = (value: object = {}) => ({ ok: true as const, value: { ...value, revs: {} } });
+  const of = (id: string): Session => sessions[id] ?? { ...NEW_SESSION, entries: [], queued: [] };
+  const connectionOf = (id: string) => {
+    const node = nodes.find((n) => n.id === id);
+    return lookups.connectionOf(node?.type === 'agent' ? node.data : {});
+  };
+  const input = () => ({ canvas, nodes, run, sessions, catalog: lookups });
+  function publish() {
+    const projected = { ...run, agents: { ...run.agents } };
+    if (run.individualPauses !== undefined || run.groupPauses !== undefined)
+      for (const node of nodes)
+        if (node.type === 'agent') {
+          const parents: string[] = [];
+          let parent = node.parentId;
+          while (parent) {
+            parents.push(parent);
+            parent = nodes.find((n) => n.id === parent)?.parentId;
+          }
+          const paused =
+            (run.individualPauses ?? []).some((p) => p.id === node.id) ||
+            (run.groupPauses ?? []).some((p) => parents.includes(p.id));
+          projected.agents[node.id] = {
+            ...(projected.agents[node.id] ?? { status: 'waiting', outcomes: {} }),
+            paused,
+          };
+        }
+    const view = runView(projected);
+    const old = core.state(`run:${canvas}`);
+    if (!old) core.snapshot(`run:${canvas}`, view);
     else
       core.change({
         topic: `run:${canvas}`,
-        rev: oldRun.rev + 1,
-        top: { running: run.running, paused: run.paused ?? null, notices: [...run.notices] },
+        rev: old.rev + 1,
+        top: { running: view.running, paused: view.paused ?? null, notices: [...view.notices] },
         agents: {
-          set: run.agents,
-          remove: Object.keys(oldRun.state.agents)
-            .filter((id) => !Object.hasOwn(run.agents, id))
+          set: view.agents,
+          remove: Object.keys(old.state.agents)
+            .filter((id) => !Object.hasOwn(view.agents, id))
             .map((id) => AgentId.parse(id)),
         },
         groups: {
-          set: run.groups,
-          remove: Object.keys(oldRun.state.groups)
-            .filter((id) => !Object.hasOwn(run.groups, id))
+          set: view.groups,
+          remove: Object.keys(old.state.groups)
+            .filter((id) => !Object.hasOwn(view.groups, id))
             .map((id) => AgentId.parse(id)),
         },
       });
+    const views = Object.fromEntries(
+      nodes
+        .filter((n) => n.type === 'agent')
+        .map((n) => [n.id, sessionView(AgentId.parse(n.id), connectionOf(n.id), of(n.id))]),
+    );
+    const agents = Object.fromEntries(Object.entries(views).map(([id, v]) => [id, v.summary]));
+    const oldSessions = core.state(`sessions:${canvas}`);
     if (!oldSessions) core.snapshot(`sessions:${canvas}`, { agents });
     else
       core.change({
@@ -153,270 +98,511 @@ export function canvasRuntime(
             .map((id) => AgentId.parse(id)),
         },
       });
+    for (const [id, v] of Object.entries(views)) {
+      const topic = `session:${canvas}:${encodeURIComponent(id)}` as const;
+      const before = core.state(topic);
+      if (!before) core.snapshot(topic, v);
+      else
+        core.change({
+          topic,
+          rev: before.rev + 1,
+          summary: v.summary,
+          entries: { upsert: Object.values(v.entries), order: v.order },
+        });
+    }
+    const items = Object.fromEntries(messages);
+    const oldMessages = core.state(`messages:${canvas}`);
     if (!oldMessages)
       core.snapshot(`messages:${canvas}`, {
-        items: messagesById,
-        order: messages.map(({ id }) => MessageId.parse(id)),
+        items,
+        order: [...messages.keys()].map((id) => MessageId.parse(id)),
         next: '',
       });
     else
       core.change({
         topic: `messages:${canvas}`,
         rev: oldMessages.rev + 1,
-        set: messagesById,
+        set: items,
         remove: Object.keys(oldMessages.state.items)
-          .filter((id) => !Object.hasOwn(messagesById, id))
+          .filter((id) => !messages.has(id))
           .map((id) => MessageId.parse(id)),
-        order: messages.map(({ id }) => MessageId.parse(id)),
+        order: [...messages.keys()].map((id) => MessageId.parse(id)),
         next: '',
       });
-    for (const [id, view] of Object.entries(views)) {
-      const topic = `session:${canvas}:${encodeURIComponent(id)}` as const;
-      const old = core.state(topic);
-      if (!old) core.snapshot(topic, view);
-      else
-        core.change({
-          topic,
-          rev: old.rev + 1,
-          summary: view.summary,
-          entries: { upsert: Object.values(view.entries), order: view.order },
-        });
-    }
     core.change({
       topic: `needs:${canvas}`,
       rev: (core.state(`needs:${canvas}`)?.rev ?? 0) + 1,
-      replace: { items },
+      replace: { items: needs(input()) },
     });
-  };
-  const stops = [engine.run.subscribe(publish), engine.sessions.subscribe(publish)];
-  engine.update(nodes);
-  publish();
-  const result = (value: object = {}) =>
-    Promise.resolve({ ok: true as const, value: { ...value, revs: {} } });
-  const read = (value: object) => Promise.resolve({ ok: true as const, value });
+  }
+  function setSession(agent: string, session: Session) {
+    sessions[agent] = session;
+    publish();
+  }
+  function put(agent: string, entry: Entry) {
+    const session = of(agent);
+    const at = session.entries.findIndex((e) => e.id === entry.id);
+    const entries = [...session.entries];
+    if (at < 0) entries.push(entry);
+    else entries[at] = entry;
+    setSession(agent, {
+      ...session,
+      entries,
+      prompts: entries.filter((e): e is Prompt => isOpen(e)),
+    });
+  }
+  const stopEvents = replies.onEvent((agent, connection, event) => {
+    if (connection !== connectionOf(agent)) return;
+    const current = of(agent);
+    switch (event.type) {
+      case 'started':
+        setSession(agent, { ...current, ...event, status: 'idle' });
+        break;
+      case 'status':
+        setSession(agent, { ...current, status: event.status });
+        break;
+      case 'mode':
+        setSession(agent, { ...current, mode: event.mode });
+        break;
+      case 'model':
+        setSession(agent, { ...current, model: event.model });
+        break;
+      case 'effort':
+        setSession(agent, { ...current, effort: event.effort });
+        break;
+      case 'usage':
+        setSession(agent, { ...current, usage: event.usage });
+        break;
+      case 'commands':
+        setSession(agent, { ...current, commands: event.commands });
+        break;
+      case 'tasks':
+        setSession(agent, { ...current, tasks: event.tasks });
+        break;
+      case 'suggestion':
+        setSession(agent, { ...current, suggestion: event.text });
+        break;
+      case 'asking':
+        setSession(agent, { ...current, asking: event.asks });
+        break;
+      case 'unheard':
+        setSession(agent, { ...current, unheard: event.text });
+        put(agent, { kind: 'notice', id: crypto.randomUUID(), level: 'warning', text: event.text });
+        break;
+      case 'text':
+      case 'thinking': {
+        const previous = current.entries.find((e) => e.id === event.id);
+        put(agent, {
+          ...event,
+          kind: event.type,
+          text:
+            (previous && (previous.kind === 'text' || previous.kind === 'thinking')
+              ? previous.text
+              : '') + event.text,
+          ...(event.type === 'thinking' ? { seconds: 1 } : {}),
+        } as Entry);
+        break;
+      }
+      case 'user': {
+        if (![...messages.values()].some((m) => m.delivery?.as === event.id)) {
+          const id = crypto.randomUUID();
+          messages.set(id, {
+            id,
+            canvas,
+            from: 'you',
+            to: `agent:${agent}`,
+            kind: 'text',
+            body: event.text,
+            at: Date.now(),
+            origin: 'manual',
+            state: 'delivered',
+            delivery: { as: event.id, at: Date.now(), attempt: 1 },
+          });
+        }
+        put(agent, {
+          ...event,
+          kind: 'user',
+          reached: true,
+          conversation: lookups.adapterOf(connection),
+        });
+        break;
+      }
+      case 'tool':
+      case 'todos':
+      case 'permission':
+      case 'question':
+      case 'plan':
+      case 'elicitation':
+      case 'notice':
+        put(agent, { ...event, kind: event.type } as Entry);
+        break;
+      case 'withdrawn':
+        setSession(agent, {
+          ...current,
+          entries: current.entries.map((e) => (e.id === event.id ? { ...e, withdrawn: true } : e)),
+        });
+        break;
+      case 'cleared':
+        setSession(agent, {
+          ...current,
+          entries: [...current.entries, { kind: 'cleared', id: event.id }],
+          queued: [],
+        });
+        break;
+      case 'end': {
+        for (const [id, message] of messages)
+          if (event.messages.includes(message.delivery?.as ?? id))
+            messages.set(id, { ...message, state: 'replied', turn: event.result });
+        put(agent, {
+          kind: 'end',
+          id: `${event.messages.at(-1) ?? 'native'}:end`,
+          seconds: event.seconds,
+          interrupted: event.result.status === 'cancelled',
+          ...(event.result.status === 'failed' ? { failed: true } : {}),
+          result: event.result,
+        });
+        setSession(agent, { ...of(agent), status: 'idle' });
+        break;
+      }
+      case 'closed': {
+        opened.delete(agent);
+        refused.delete(agent);
+        const rest = { ...current };
+        delete rest.running;
+        setSession(agent, { ...rest, status: 'idle' });
+        break;
+      }
+      case 'history':
+        for (const item of event.events) {
+          if (item.type === 'end')
+            put(agent, {
+              kind: 'end',
+              id: `${item.messages.at(-1) ?? 'native'}:end`,
+              seconds: item.seconds,
+              interrupted: item.result.status === 'cancelled',
+              ...(item.result.status === 'failed' ? { failed: true } : {}),
+              result: item.result,
+            });
+          else if (item.type === 'user')
+            put(agent, {
+              ...item,
+              kind: 'user',
+              reached: true,
+              conversation: lookups.adapterOf(connection),
+            });
+          else if ('id' in item) {
+            const { type, ...entry } = item;
+            put(agent, { ...entry, kind: type } as Entry);
+          }
+        }
+        break;
+    }
+  });
+  async function open(agent: string, again = false) {
+    const connection = connectionOf(agent);
+    if (!again && opened.get(agent) === connection) return !refused.has(agent);
+    const node = nodes.find((n) => n.id === agent);
+    const settings =
+      node?.type === 'agent' ? (node.data.settings?.[lookups.adapterOf(connection)] ?? {}) : {};
+    const options: SessionOptions = {
+      connection,
+      model: settings.model ?? null,
+      mode: settings.mode && isSessionMode(settings.mode) ? settings.mode : null,
+      ...(settings.effort ? { effort: settings.effort } : {}),
+      ...(node?.type === 'agent' && node.data.role ? { role: node.data.role } : {}),
+    };
+    opened.set(agent, connection);
+    setSession(agent, {
+      ...of(agent),
+      running: {
+        ...(options.model ? { model: options.model } : {}),
+        ...(options.mode ? { mode: options.mode } : {}),
+        ...(options.effort ? { effort: options.effort } : {}),
+        ...(options.role ? { role: options.role } : {}),
+      },
+    });
+    try {
+      await replies.start(agent, options);
+      refused.delete(agent);
+      return true;
+    } catch (error) {
+      refused.add(agent);
+      const text = error instanceof Error ? error.message : String(error);
+      if (!of(agent).entries.some((e) => e.kind === 'notice' && e.text === text))
+        put(agent, { kind: 'notice', id: crypto.randomUUID(), level: 'error', text });
+      return false;
+    }
+  }
+  async function send(agent: string, text: string, images?: MessageImage[], record = false) {
+    const id = crypto.randomUUID();
+    const busy = of(agent).status !== 'idle';
+    messages.set(id, {
+      id,
+      canvas,
+      from: 'you',
+      to: `agent:${agent}`,
+      kind: 'text',
+      body: text,
+      at: Date.now(),
+      origin: 'manual',
+      state: record ? 'replied' : 'pending',
+      ...(record ? {} : { delivery: { as: id, at: Date.now(), attempt: 1 } }),
+    });
+    publish();
+    if (record) return result({ id });
+    if (!(await open(agent)) || busy) return result({ id });
+    const message = messages.get(id);
+    if (message) messages.set(id, { ...message, state: 'delivered' });
+    const rest = { ...of(agent) };
+    delete rest.suggestion;
+    setSession(agent, { ...rest, status: 'working' });
+    put(agent, { kind: 'user', id, text, ...(images ? { images } : {}) });
+    await replies.send(agent, { id, text, ...(images ? { images } : {}) });
+    return result({ id });
+  }
   function register() {
-    core.reply('run.start', () => {
-      engine.run.start();
-      return result();
-    });
-    core.reply('run.stop', () => {
-      engine.run.stop();
-      return result();
-    });
-    core.reply('run.resume', () => {
-      engine.run.resume();
-      return result();
-    });
-    core.reply('run.goOn', (raw) => {
-      const { agent, item } = OPS['run.goOn'].input.parse(raw);
-      engine.run.goOn(agent, item);
-      return result();
-    });
+    for (const op of ['run.start', 'run.stop', 'run.resume'] as const)
+      core.reply(op, () => {
+        const rest = { ...run };
+        delete rest.paused;
+        run = {
+          ...rest,
+          running: op !== 'run.stop',
+          ...(op === 'run.stop' ? { paused: true } : {}),
+        };
+        publish();
+        return Promise.resolve(result());
+      });
     for (const op of ['run.pause', 'run.kill', 'run.unpause'] as const)
       core.reply(op, (raw) => {
         const { target } = OPS[op].input.parse(raw);
-        const method = op === 'run.pause' ? 'pause' : op === 'run.kill' ? 'kill' : 'resume';
-        if ('agent' in target) engine.run[`${method}Agent`](target.agent);
-        else engine.run[`${method}Group`](target.group);
-        return result(op === 'run.unpause' ? { held: [] } : {});
+        const id = 'agent' in target ? target.agent : target.group;
+        const field = 'agent' in target ? 'individualPauses' : 'groupPauses';
+        run = {
+          ...run,
+          [field]:
+            op === 'run.unpause'
+              ? (run[field] ?? []).filter((p) => p.id !== id)
+              : [...(run[field] ?? []), { id, by: 'you' }],
+        };
+        publish();
+        return Promise.resolve(result(op === 'run.unpause' ? { held: [] } : {}));
       });
     core.reply('session.open', async (raw) => {
       const { agent } = OPS['session.open'].input.parse(raw);
-      engine.sessions.open(agent);
+      await open(agent, refused.has(agent));
       return result();
+    });
+    core.reply('message', async (raw) => {
+      const args = OPS.message.input.parse(raw);
+      return send(args.to, args.body, args.images);
+    });
+    core.reply('session.viewCommand', async (raw) => {
+      const args = OPS['session.viewCommand'].input.parse(raw);
+      return send(args.agent, args.text, undefined, true);
+    });
+    core.reply('withdraw', (raw) => {
+      messages.delete(OPS.withdraw.input.parse(raw).id);
+      publish();
+      return Promise.resolve(result({ reached: false, interrupted: false }));
     });
     for (const op of ['session.setMode', 'session.setModel', 'session.setEffort'] as const)
       core.reply(op, async (raw) => {
         const args = OPS[op].input.parse(raw);
-        if ('mode' in args && isSessionMode(args.mode))
-          engine.sessions.setMode(args.agent, args.mode);
-        if ('model' in args) engine.sessions.setModel(args.agent, args.model);
-        if ('effort' in args) engine.sessions.setEffort(args.agent, args.effort);
-        const node = nodes.find((node) => node.type === 'agent' && node.id === args.agent);
-        const data = node?.type === 'agent' ? node.data : {};
-        const connection = engine.catalog.connectionOf(data);
-        const adapter = engine.catalog.adapterOf(connection);
+        const agent = args.agent;
+        if ('mode' in args) await replies.setMode(agent, args.mode as SessionMode);
+        if ('model' in args) await replies.setModel(agent, args.model);
+        if ('effort' in args) await replies.setEffort(agent, args.effort);
         const change =
           'mode' in args
-            ? {
-                mode:
-                  isSessionMode(args.mode) && isStartMode(catalog(), adapter, connection, args.mode)
-                    ? args.mode
-                    : null,
-              }
+            ? { mode: args.mode }
             : 'model' in args
               ? { model: args.model }
               : { effort: args.effort };
+        setSession(agent, { ...of(agent), ...change } as Session);
         commit(
-          AgentOps.setSettings({ ...document, nodes }, { agent: args.agent, adapter, change }).next,
+          AgentOps.setSettings(
+            { ...document, nodes },
+            { agent, adapter: lookups.adapterOf(connectionOf(agent)), change },
+          ).next,
         );
         return result();
       });
-    core.reply('session.restart', async (raw) => {
-      await engine.sessions.restart(OPS['session.restart'].input.parse(raw).agent);
-      return result();
-    });
-    core.reply('session.newConversation', async (raw) => {
-      await engine.sessions.fresh(OPS['session.newConversation'].input.parse(raw).agent);
+    core.reply('session.interrupt', async (raw) => {
+      await replies.interrupt(OPS['session.interrupt'].input.parse(raw).agent);
       return result();
     });
     core.reply('session.stopTask', async (raw) => {
       const { agent, task } = OPS['session.stopTask'].input.parse(raw);
-      engine.sessions.stopTask(agent, task);
-      return result();
-    });
-    core.reply('session.rewindPreview', async (raw) => {
-      const { agent, message } = OPS['session.rewindPreview'].input.parse(raw);
-      return result(await engine.sessions.previewRewind(agent, message));
-    });
-    core.reply('session.rewind', async (raw) => {
-      const { agent, message, restore } = OPS['session.rewind'].input.parse(raw);
-      return result(await engine.sessions.rewind(agent, message, restore));
-    });
-    core.reply('session.continueIn', async (raw) => {
-      const { agent, connection, then } = OPS['session.continueIn'].input.parse(raw);
-      commit({
-        ...document,
-        nodes: nodes.map((node) =>
-          node.id === agent ? { ...node, data: { ...node.data, connection } } : node,
-        ),
-      });
-      engine.sessions.open(agent);
-      if (then)
-        engine.sessions.send(
-          agent,
-          engine.catalog.adapterOf(connection),
-          then.text,
-          undefined,
-          then.images,
-        );
-      return result();
-    });
-    // Your message, as the core's delivery admits it: its id the core's, its images live-only.
-    core.reply('message', (raw) => {
-      const { to, body, images } = OPS.message.input.parse(raw);
-      const node = nodes.find((node) => node.id === to && node.type === 'agent');
-      const id = crypto.randomUUID();
-      engine.sessions.send(
-        to,
-        (node?.type === 'agent' ? node.data.adapter : undefined) ?? engine.catalog.defaultAdapter,
-        body,
-        undefined,
-        images,
-        undefined,
-        'user',
-        undefined,
-        { id },
-      );
-      return result({ id });
-    });
-    core.reply('session.conversations', async (raw) => {
-      const { agent } = OPS['session.conversations'].input.parse(raw);
-      return read({ items: await backend.sessions(agent) });
-    });
-    core.reply('session.resumeConversation', async (raw) => {
-      const { agent, conversation } = OPS['session.resumeConversation'].input.parse(raw);
-      await engine.sessions.resume(agent, conversation);
+      await replies.stopTask(agent, task);
       return result();
     });
     core.reply('session.options', async (raw) => {
       const { adapter, agent } = OPS['session.options'].input.parse(raw);
-      return read(await backend.options(adapter, agent));
+      return { ok: true, value: await replies.options(adapter, agent) };
     });
-    core.reply('session.viewCommand', (raw) => {
-      const { agent, text } = OPS['session.viewCommand'].input.parse(raw);
-      engine.sessions.recordSubmission(agent, text);
-      return result({ id: crypto.randomUUID() });
-    });
-    core.reply('session.mcpServers', async (raw) => {
-      const { agent } = OPS['session.mcpServers'].input.parse(raw);
-      return read({ items: await backend.mcp(agent) });
-    });
+    core.reply('session.conversations', async (raw) => ({
+      ok: true,
+      value: { items: await replies.sessions(OPS['session.conversations'].input.parse(raw).agent) },
+    }));
+    core.reply('session.mcpServers', async (raw) => ({
+      ok: true,
+      value: { items: await replies.mcp(OPS['session.mcpServers'].input.parse(raw).agent) },
+    }));
     core.reply('session.changeMcpServer', async (raw) => {
       const { agent, server, change } = OPS['session.changeMcpServer'].input.parse(raw);
-      return result({ items: await backend.changeMcp(agent, server, change) });
+      return result({ items: await replies.changeMcp(agent, server, change) });
     });
-    core.reply('session.interrupt', (raw) => {
-      engine.sessions.stop(OPS['session.interrupt'].input.parse(raw).agent);
+    core.reply('session.rewindPreview', async (raw) => {
+      const { agent, message } = OPS['session.rewindPreview'].input.parse(raw);
+      return { ok: true, value: await replies.previewRewind(agent, message) };
+    });
+    core.reply('session.rewind', async (raw) => {
+      const { agent, message, restore } = OPS['session.rewind'].input.parse(raw);
+      const changed = await replies.rewind(agent, message, restore);
+      if (changed.conversation) {
+        setSession(agent, { ...NEW_SESSION, entries: [], queued: [] });
+        await open(agent, true);
+      }
+      return result(changed);
+    });
+    core.reply('session.resumeConversation', async (raw) => {
+      const { agent, conversation } = OPS['session.resumeConversation'].input.parse(raw);
+      await replies.resume(agent, conversation);
+      setSession(agent, { ...NEW_SESSION, entries: [], queued: [] });
+      await open(agent, true);
       return result();
     });
-    core.reply('withdraw', (raw) => {
-      const { id } = OPS.withdraw.input.parse(raw);
-      const native = [...messageIds].find(([, kept]) => kept === id)?.[0] ?? id;
-      for (const node of nodes)
-        if (
-          node.type === 'agent' &&
-          engine.sessions.of(node.id).queued.some((one) => one.id === native)
-        )
-          engine.sessions.unqueue(node.id, native);
-      return result({ reached: false, interrupted: false });
+    for (const op of ['session.restart', 'session.newConversation'] as const)
+      core.reply(op, async (raw) => {
+        const { agent } = OPS[op].input.parse(raw);
+        if (op === 'session.newConversation') {
+          await replies.fresh(agent, lookups.adapterOf(connectionOf(agent)));
+          setSession(agent, { ...NEW_SESSION, entries: [], queued: [] });
+        } else await replies.close(agent);
+        await open(agent, true);
+        return result();
+      });
+    core.reply('session.continueIn', async (raw) => {
+      const { agent, connection, then } = OPS['session.continueIn'].input.parse(raw);
+      await replies.close(agent);
+      commit(
+        AgentOps.setConnection(
+          { ...document, nodes },
+          { agent, connection },
+          { catalog: catalog(), defaultAdapter: lookups.defaultAdapter },
+        ).next,
+      );
+      await open(agent, true);
+      return then ? send(agent, then.text, then.images) : result();
     });
     core.reply('reply', async (raw) => {
       const { to, answer } = OPS.reply.input.parse(raw);
-      const input = {
-        canvas,
-        nodes,
-        run: engine.run.snapshot(),
-        sessions: engine.sessions.snapshot(),
-        catalog: engine.catalog,
-      };
-      const need = needsOf(input).find((need) => needsItem(need, input).id === to);
+      const need = needsOf(input()).find((n) => needsItem(n, input()).id === to);
       if (!need)
         return {
           ok: false,
           error: { code: 'not-found', sentence: 'That question is no longer current.' },
         };
-      if (need.kind === 'hold')
-        engine.run.decide(
-          need.agent.id,
-          need.ask.item.id,
-          'text' in answer && answer.text !== undefined
-            ? { reply: answer.text, ...(answer.images ? { images: answer.images } : {}) }
-            : 'choice' in answer
-              ? { choice: answer.choice }
-              : { choice: '' },
-        );
-      else if (need.kind === 'prompt') {
-        const { id } = need.prompt;
-        const agent = need.agent.id;
-        if ('permission' in answer)
-          engine.sessions.answer(agent, id, answer.permission, answer.feedback);
-        if ('answers' in answer)
-          for (const [question, text] of Object.entries(answer.answers)) {
-            const index =
-              needsItem(need, input).questions?.findIndex((one) => one.id === question) ?? 0;
-            engine.sessions.answerQuestion(
-              agent,
-              id,
-              index,
-              Array.isArray(text) ? text.join(', ') : text,
-            );
-          }
-        if ('plan' in answer) engine.sessions.answerPlan(agent, id, answer.plan);
-        if ('form' in answer)
-          engine.sessions.answerElicitation(agent, id, answer.form.action, answer.form.values);
+      if (need.kind === 'prompt') {
+        const agent = need.agent.id,
+          prompt = need.prompt;
+        if ('answers' in answer && prompt.kind === 'question') {
+          const fields = needsItem(need, input()).questions ?? [];
+          const questions = prompt.questions.map((q, i) => {
+            const key = fields[i]?.id;
+            const value = key === undefined ? undefined : answer.answers[key];
+            return value === undefined
+              ? q
+              : { ...q, answer: Array.isArray(value) ? value.join(', ') : value };
+          });
+          put(agent, { ...prompt, questions });
+          if (questions.every((q) => q.answer !== undefined))
+            await replies.answer(agent, prompt.id, {
+              kind: 'question',
+              answers: questions.map((q) => q.answer ?? ''),
+            });
+          return result({ outcome: 'answered' });
+        }
+        const native: SessionAnswer =
+          'permission' in answer
+            ? {
+                kind: 'permission',
+                answer: answer.permission,
+                ...(answer.feedback ? { feedback: answer.feedback } : {}),
+              }
+            : 'answers' in answer
+              ? {
+                  kind: 'question',
+                  answers: Object.values(answer.answers).map((a) =>
+                    Array.isArray(a) ? a.join(', ') : a,
+                  ),
+                }
+              : 'plan' in answer
+                ? { kind: 'plan', answer: answer.plan }
+                : 'form' in answer
+                  ? {
+                      kind: 'elicitation',
+                      action: answer.form.action,
+                      ...(answer.form.values ? { values: answer.form.values } : {}),
+                    }
+                  : { kind: 'permission', answer: 'deny' };
+        await replies.answer(agent, prompt.id, native);
+        put(agent, {
+          ...prompt,
+          ...('permission' in answer
+            ? {
+                answer: answer.permission,
+                ...(answer.feedback ? { feedback: answer.feedback } : {}),
+              }
+            : 'plan' in answer
+              ? { answer: answer.plan }
+              : 'answers' in answer && prompt.kind === 'question'
+                ? {
+                    questions: prompt.questions.map((q, i) => ({
+                      ...q,
+                      answer: Object.values(answer.answers)[i],
+                    })),
+                  }
+                : { answer: 'form' in answer ? answer.form.action : undefined }),
+        } as Entry);
+        setSession(agent, { ...of(agent), status: 'working' });
       }
       return result({ outcome: 'answered' });
     });
   }
   register();
+  publish();
   const stopViews = core.observeTopics((topic) => {
     for (const node of nodes)
       if (node.type === 'agent' && topic === `session:${canvas}:${encodeURIComponent(node.id)}`)
-        engine.sessions.open(node.id);
+        void open(node.id);
   });
   return {
     activate: register,
-    engine,
+    messages(next: readonly MessageView[]) {
+      messages.clear();
+      for (const item of next) messages.set(item.id, item);
+      publish();
+    },
+    run(next?: Run) {
+      if (next) {
+        run = next;
+        publish();
+      }
+      return run;
+    },
+    session(agent: string, next?: Session) {
+      if (next) setSession(agent, next);
+      return of(agent);
+    },
     update(next: CanvasDocument) {
       nodes = next.nodes;
-      engine.update(nodes);
       publish();
     },
     dispose() {
       stopViews();
-      for (const stop of stops) stop();
-      engine.reset();
+      stopEvents();
     },
   };
 }

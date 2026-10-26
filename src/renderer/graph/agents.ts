@@ -1,7 +1,7 @@
 import type { AdapterId, ConnectionId } from '../../shared/adapter';
 import { catalog } from '../catalog';
-import { engineCatalog } from '../../shared/engine/catalog';
-import type { EngineCatalog } from '../../shared/engine/catalog';
+import { engineCatalog } from '../../shared/model/catalog';
+import type { EngineCatalog } from '../../shared/model/catalog';
 
 /*
  * The renderer's own tables of what each adapter offers (main declares it in the catalog, which
@@ -29,7 +29,7 @@ export const DEFAULT_AGENT: AdapterId = 'claude-code';
 
 /**
  * What the run, and the sessions it sends to, read of each agent's adapter
- * (src/shared/engine/catalog.ts): the catalog main declares, a node naming no adapter running
+ * (src/shared/model/catalog.ts): the catalog main declares, a node naming no adapter running
  * DEFAULT_AGENT.
  */
 export function runCatalog(): EngineCatalog {

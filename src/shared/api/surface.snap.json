@@ -42,6 +42,10 @@
     "api.queue.remove",
     "api.queue.move",
     "api.queue.update",
+    "api.agents",
+    "api.status",
+    "api.needs",
+    "api.messages",
     "api.message",
     "api.withdraw",
     "api.reply",
@@ -252,12 +256,6 @@
     "worker": 12,
     "outside-read": 22,
     "outside-write": 64
-  },
-  "unhosted": {
-    "agents": "B11",
-    "status": "B11",
-    "needs": "B11",
-    "messages": "B11"
   },
   "deviations": {
     "canvas.open": "trust-gate",

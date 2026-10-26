@@ -200,7 +200,7 @@ export function replyOps({
       /** The interrupt failed: nothing is resent, and the prompt is yours to answer again. */
       const failed = async () => {
         try {
-          await engines.cancelResend(canvas, agent, turn.connection);
+          await engines.cancelResend(canvas, agent);
         } catch (error) {
           console.error('Could not cancel a silent turn’s resend:', error);
         } finally {
@@ -209,7 +209,7 @@ export function replyOps({
       };
       let sent: { answered: Promise<void> } | undefined;
       try {
-        if (resend) await engines.resendAfter(canvas, agent, turn.messages, turn.connection);
+        if (resend) await engines.resendAfter(canvas, agent, turn.messages);
         sent = await sessions.interruptIf(canvas, agent, turn.current, resend);
       } catch (error) {
         await failed();
@@ -217,7 +217,7 @@ export function replyOps({
       }
       if (sent === undefined) {
         // The turn ended while this waited: there is nothing to interrupt, or to resend.
-        await engines.cancelResend(canvas, agent, turn.connection);
+        await engines.cancelResend(canvas, agent);
       } else {
         // Its CLI's answer is awaited apart from this call, which holds its canvas's scope.
         void sent.answered.catch(async (error: unknown) => {

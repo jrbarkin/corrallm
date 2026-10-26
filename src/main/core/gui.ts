@@ -4,7 +4,7 @@ import type { CoreGuiSide, GuiSide } from '../../shared/gui-link';
 import { CoreLink } from '../../shared/link';
 import type { LinkOptions, LinkPort } from '../../shared/link';
 import type { Dispatcher } from './call';
-import type { Channels } from './channels';
+import type { TerminalEvents } from './terminal-events';
 import type { HumanCaller } from './caller';
 import type { WindowId } from './host';
 import type { Topics } from './topics';
@@ -43,9 +43,10 @@ interface Served {
   stop?: (() => void) | undefined;
 }
 
-/** A dispatcher, and the app’s hand-written channels when it hosts windows. */
+/** A dispatcher, with fixed terminal, topic and window-lifecycle protocols. */
 type GuiCore = Pick<Dispatcher, 'call'> & {
-  channels?: Pick<Channels, 'call' | 'listen' | 'gone'>;
+  terminals?: Pick<TerminalEvents, 'listen'>;
+  windowGone?: (window: WindowId, closed?: boolean) => void;
   topics?: Pick<Topics, 'epoch' | 'listen'>;
 };
 
@@ -98,16 +99,11 @@ export class WindowPorts {
                   sentence: `corrallm’s window has no operation named ${op}.`,
                 },
               },
-        channel: (name, args) => {
-          if (!this.#core.channels)
-            throw new Error(`corrallm’s window has no channel named ${name}.`);
-          return this.#core.channels.call(window, name, args);
-        },
       },
       this.#options,
     );
     served.link = link;
-    const stopEvents = this.#core.channels?.listen(window, (name, args) => {
+    const stopEvents = this.#core.terminals?.listen(window, (name, args) => {
       link.emit('event', name, args);
     });
     const stopTopics = this.#core.topics?.listen(window, (changes) => {
@@ -154,7 +150,7 @@ export class WindowPorts {
   gone(window: WindowId, closed = false): void {
     const served = this.#windows.get(window);
     if (!served) {
-      if (closed) this.#core.channels?.gone(window, true);
+      if (closed) this.#core.windowGone?.(window, true);
       return;
     }
     this.#forget(window, served, closed);
@@ -167,7 +163,7 @@ export class WindowPorts {
     this.#windows.delete(window);
     served.calls.abort();
     served.stop?.();
-    this.#core.channels?.gone(window, closed);
+    this.#core.windowGone?.(window, closed);
   }
 }
 

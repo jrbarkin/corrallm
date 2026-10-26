@@ -2,7 +2,7 @@ import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { newCanvasId } from '../shared/canvas';
-import type { AppApi } from '../shared/ipc';
+import type { AppApi } from '../shared/gui-link';
 import { App } from './App';
 import { topics } from './api/topics';
 
@@ -15,7 +15,6 @@ vi.mock('./terminal/screen', async () => {
 function stubApi(api: Partial<AppApi>) {
   const canvas = newCanvasId();
   const usage: Partial<AppApi> = {
-    onSessionEvent: vi.fn<AppApi['onSessionEvent']>(() => () => undefined),
     windowGet: vi.fn<AppApi['windowGet']>().mockResolvedValue({ ok: true, value: { canvas } }),
     catalogInstalled: vi.fn<AppApi['catalogInstalled']>().mockResolvedValue({
       ok: true,

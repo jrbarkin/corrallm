@@ -42,14 +42,8 @@ const host = (regex: string) => ({
   message: 'The core never imports the host (src/main/host/): it asks it through HostServices.',
 });
 
-/**
- * What shared code may not import: the renderer (its views, the tables it keeps of what each adapter
- * offers, the catalog it loaded) and React Flow. The model and the engine (src/shared/model/,
- * src/shared/engine/) run wherever they are hosted, the renderer or the core, and are given what
- * they need there: their sessions' backend and the catalog (src/shared/engine/catalog.ts).
- */
-const SHARED_MESSAGE =
-  'Shared code never imports the renderer or React Flow: the model and the engine run in the core too, given their backend and the catalog by whoever runs them (src/shared/engine/catalog.ts).';
+/** Shared model and view helpers never depend on the renderer or React Flow. */
+const SHARED_MESSAGE = 'Shared code never imports the renderer or React Flow.';
 const RENDERER = { group: ['**/renderer/**', '@xyflow/*'], message: SHARED_MESSAGE };
 
 export default defineConfig(
@@ -112,7 +106,7 @@ export default defineConfig(
             {
               group: ['electron', 'electron/*'],
               message:
-                'Renderer and shared code must not import Electron. Go through window.api and src/shared/ipc.ts.',
+                'Renderer and shared code must not import Electron. Go through the generated window.api operations and topics.',
             },
             {
               group: ['**/main/**', '**/preload/**'],
@@ -173,7 +167,16 @@ export default defineConfig(
     rules: {
       '@typescript-eslint/no-restricted-imports': [
         'error',
-        { patterns: [ELECTRON, host('^(?:\\.\\./)+host/')] },
+        {
+          patterns: [
+            ELECTRON,
+            host('^(?:\\.\\./)+host/'),
+            {
+              group: ['**/renderer/**', '@xyflow/*'],
+              message: 'Core code never imports the renderer or React Flow.',
+            },
+          ],
+        },
       ],
     },
   },

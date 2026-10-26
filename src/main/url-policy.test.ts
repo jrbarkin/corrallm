@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { MAX_LINK_LENGTH } from '../shared/ipc';
+import { MAX_LINK_LENGTH } from '../shared/api/limits';
 import { allowedExternalUrl, linkTarget, loopbackUrl, originKey } from './url-policy';
 
 describe('originKey', () => {

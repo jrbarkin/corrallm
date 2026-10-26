@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { OpResult } from '../../shared/api/errors';
 import type { OpName } from '../../shared/api/surface';
 import type { CanvasId } from '../../shared/canvas';
-import type { Run } from '../../shared/engine/run/runner';
+import type { Run } from './engine/run/runner';
 import type { QueueItem } from '../../shared/model/queue';
 import type { SessionMode, UserMessage } from '../../shared/session';
 import type { Connector, SessionHost } from '../sessions/connector';

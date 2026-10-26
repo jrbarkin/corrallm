@@ -1,4 +1,4 @@
-import type { PauseCause } from '../../shared/engine/run/runner';
+import type { PauseCause } from './engine/run/runner';
 import type { NodeLike } from '../../shared/model/canvas';
 import { agentOf, outsideOf } from '../../shared/model/messages';
 import type { PartyId } from '../../shared/model/messages';

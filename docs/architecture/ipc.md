@@ -6,30 +6,18 @@
 
 Preload script (sandboxed; may import only 'electron' and src/shared).
 
-Exposes window.api: a function per remaining session-panel channel and onSessionEvent, and one per GUI operation (GUI_OPS, camel-cased: app.info → appInfo, canvas.create → canvasCreate), each a call over the window's port to the core, which core.ts asks main for as it loads (core:connect) and keeps in a CoreLink.
+Exposes window.api: one function per GUI operation (GUI_OPS, camel-cased: app.info → appInfo, canvas.create → canvasCreate), each a call over the window's port to the core, which core.ts asks main for as it loads (core:connect) and keeps in a CoreLink.
 
 ## `src/shared/`
 
-Types shared by all processes, including the IPC contract (ipc.ts), the catalog (adapter.ts: what every adapter declares, ID_PATTERN, JOBS, and lookups over it), the connected-session protocol (session.ts; also JsonSchema, the type of the registry's JSON Schemas), what a terminal view is shown (terminal.ts), usage readings and rules (usage.ts: their types and checks) and a canvas's id (canvas.ts: CanvasId, and canvasIdOf, the .corral format and version check main and model/file.ts share), and CoreLink (link.ts: typed requests, answers as values, a result or an error, and events over a port, which checks that only plain data crosses; main, the core process and the preload speak it), and a window's link to the core over it (gui-link.ts: CoreGuiSide, what the core answers a window, `call` and, until the hand-written channels move, `channel`; 'core:port'; GuiApi, window.api's function per GUI operation).
+Types shared by all processes, including the catalog (adapter.ts: what every adapter declares, ID_PATTERN, JOBS, and lookups over it), the connected-session protocol (session.ts; also JsonSchema, the type of the registry's JSON Schemas), what a terminal view is shown (terminal.ts), usage readings and rules (usage.ts: their types and checks) and a canvas's id (canvas.ts: CanvasId, ProjectFolder, and canvasIdOf, the .corral format and version check main and model/file.ts share), and CoreLink (link.ts: typed requests, answers as values, a result or an error, and events over a port, which checks that only plain data crosses; main, the core process and the preload speak it), and a window's link to the core over it (gui-link.ts: CoreGuiSide, what the core answers a window, `call`; 'core:port'; GuiApi, window.api's function per GUI operation).
 
 No Node, Electron or DOM imports here.
 
-## Adding an IPC channel
+## Calls and streams
 
-A window's call is an operation (see The registry). No new hand-written channel is added: since B11 X13 the agent window calls none (its sends, panels and options are operations), and B11 X14 deletes the `session:*` channels that remain (answer, interrupt, mode, model, effort, stopTask and availability, with the `session:event` and `session:availability` events). Runs are core-owned; there is no run read/save/ready channel. The recipe, for what X14 removes:
+Every window call is a registered operation, generated from GUI_OPS and validated through core.call. The window port has no generic channel handler. Session sends, answers, settings and panels use operations; runtime state arrives through topics. The sole Electron IPC handler is core:connect, with an empty argument list and a trusted top-level sender frame.
 
-1. Declare it in `IpcContract` in `src/shared/ipc.ts`: `'domain:action': { args: [path: string]; result: Thing }`. Add the matching method to `InvokeApi` (part of `AppApi`) and its channel to `API_CHANNELS`.
-2. Add an entry to `createHandlers` in `src/main/core/channels.ts`: `'domain:action': { parseArgs, handler }`. `parseArgs` receives `unknown[]` from an untrusted renderer and must validate every argument (type, length, allowed values) or throw. Use `noArgs` for channels without arguments.
-3. Expose it in `src/preload/index.ts`: `action: (path) => invoke(API_CHANNELS.action, path)`.
-4. Call it from the renderer as `window.api.action(...)`.
-5. Extend `src/main/core/channels.test.ts` (argument validation and window identity) and `src/preload/index.test.ts`. If the UI uses it, stub it in `src/renderer/App.test.tsx` via `stubApi`.
-
-The compiler enforces that main, preload and renderer agree on argument and result types, and that no contract channel is missing a core handler or an `AppApi` method. Usage has no hand-written channel: reads and edits use the generated `usage.get`, `usage.setRule` and `usage.simulate` operations through core.call, and the renderer follows the usage topic.
-
-Core-to-renderer events: declare the event in `IpcEvents` in `src/shared/ipc.ts` (`'domain:event': [agentId: string, thing: Thing]`), add a function to `EventApi` and its event to `API_EVENTS` (the compiler checks none is missing), expose it in the preload with `core.listen` (returning a function that stops listening), and send it with `Channels.emit` over the window's port to the canvas's windows only. Topic state uses the port's `topic(change)` contract.
+The fixed terminal screen stream stays separate from runtime topics: `src/main/core/terminal-events.ts` sends only terminal events to windows showing that canvas, and preload exposes terminalOnEvent with a removable listener. Terminal attach, detach, write, resize and drops remain typed operations. CoreGuiSide has call, not a channel request. Tests in `src/main/core/gui.test.ts` and `src/preload/index.test.ts` pin that removed requests and methods cannot be used.
 
 The window's link answers the core one fixed request, `drafts.flush` (`GuiSide` in `src/shared/gui-link.ts`, B11 Design §16.5): before a quit's shutdown barrier, main asks the core (`flushDrafts`), which asks each window over its own port, at most 5 s each. The preload answers it once every listener the page set with `draftsOnFlush` (one fixed function, taking only a listener) has settled, at once with none; the renderer sets `useDraft.ts`'s `answerDraftFlushes` from `main.tsx`, so what is being typed is committed, each field's operation answered, first. It carries no run, pause, checkpoint or token, and is no generic channel. Runs are saved by the core’s shutdown barrier, not by a window acknowledgement.
-
-`session:interrupt` takes only the agent; the parser rejects extra arguments. The core resolves the canvas from the calling window as for other session channels. Every interrupt uses the same connection behavior; neither a process id nor a thread id comes from the renderer.
-
-`session:availability` reads one agent's readiness using the calling window's canvas. It takes only a bounded agent id and returns readiness and a sentence, never a directory. The canvas-scoped `session:availability` event reports readiness changes; `onSessionAvailability` returns its listener's remover. These remain fixed preload functions, not generic channels, until X14.

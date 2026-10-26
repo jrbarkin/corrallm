@@ -14,12 +14,12 @@ import { canvasOfTopic, topicRequest } from '../../shared/api/topics';
 import type { ResultOf } from '../../shared/api/registry';
 import { SURFACE } from '../../shared/api/surface';
 import type { OpName, Party, Reach } from '../../shared/api/surface';
-import { engineCatalog } from '../../shared/engine/catalog';
-import { needs } from '../../shared/engine/needs';
+import { engineCatalog } from '../../shared/model/catalog';
+import { needs } from '../../shared/model/needs-selectors';
 import type { NeedsItem } from '../../shared/model/needs';
 import { agentName } from '../../shared/model/queries';
 import { nodeKey } from '../../shared/model/rows';
-import { MAX_CANVAS_BYTES } from '../../shared/ipc';
+import { MAX_CANVAS_BYTES } from '../../shared/canvas';
 import type { SessionMode } from '../../shared/session';
 import { CanvasFiles } from '../canvas';
 import { LinkOpener } from '../links';
@@ -63,7 +63,7 @@ import { CanvasStates } from './canvas/states';
 import { FileWatch } from './canvas/watch';
 import type { WatchFolder } from './canvas/watch';
 import { seesAll, viewOf } from './canvas/view';
-import { Channels } from './channels';
+import { TerminalEvents } from './terminal-events';
 import { Windows } from './windows';
 import { createDispatcher, OpFailure } from './call';
 import type { Dispatcher } from './call';
@@ -210,8 +210,9 @@ export interface Core extends Dispatcher {
   ): Promise<OpResult<ResultOf<N>>>;
   /** The canvases it runs, each with its engine. */
   engines: Engines;
-  /** The app's hand-written channels, over these same services. */
-  channels: Channels;
+  /** Only the canvas-scoped terminal screen stream; runtime state is published through topics. */
+  terminals: TerminalEvents;
+  windowGone(window: WindowId, closed?: boolean): void;
   /**
    * Finishes fallible writes (every journal and store forced), keeping the core usable if saving
    * fails: what preparing the shutdown barrier does beside freezing dispatch.
@@ -451,7 +452,6 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     document: async (canvas) => (await documents.load(canvas)).document,
     documentNow: (canvas) => documents.loaded(canvas)?.document,
     changed: (canvas) => {
-      channels.emit(canvas, 'session:availability');
       topics.changed(`worktrees:${canvas}`, 'corrallm');
     },
   });
@@ -601,17 +601,12 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
       engines.sending(canvas, agentId, message, send, stopped),
     emit: (canvas, agentId, connection, event) => {
       stalled.event(canvas, agentId, connection, event);
-      void engines.emit(canvas, agentId, connection, event).then(
-        (taken) => {
-          channels.emit(canvas, 'session:event', agentId, connection, taken);
-        },
-        (error: unknown) => {
-          console.error('Could not deliver a session event:', error);
-        },
-      );
+      void engines.emit(canvas, agentId, connection, event).catch((error: unknown) => {
+        console.error('Could not deliver a session event:', error);
+      });
     },
     terminal: (canvas, agentId, event) => {
-      channels.emit(canvas, 'terminal', agentId, event);
+      terminals.emit(canvas, agentId, event);
     },
     activity: (canvas, agent) => {
       stalled.activity(canvas, agent);
@@ -700,9 +695,6 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     // Design §8, decision 5): a window only views it.
     shown: (canvas) => engines.view(canvas),
   });
-  const unwatchGate = gate.subscribe(() => {
-    for (const canvas of windows.canvases()) channels.emit(canvas, 'session:availability');
-  });
   const files = new ProjectFiles({ environment });
   const links = new LinkOpener({
     file: path.join(profile, 'links.json'),
@@ -720,14 +712,7 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     },
   });
   const canvasFiles = new CanvasFiles({ host, memory, documents });
-  const channels = new Channels({
-    processes: children,
-    windows,
-    get engines() {
-      return engines;
-    },
-    sessions,
-  });
+  const terminals = new TerminalEvents(windows);
   const isLead = config.leads ?? (() => false);
   // What the core says of each canvas it keeps: its `canvas:<c>` topic, from each commit, and the
   // list of them, which changes as canvas memory, the journal and the windows do.
@@ -890,12 +875,6 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     },
   });
   const engines: Engines = new Engines({
-    // The windows that own their canvases' runs until B11's cutover hear their retry decisions.
-    windowRuns: {
-      retry: (canvas, agent, connection, event) => {
-        channels.emit(canvas, 'session:event', agent, connection, event);
-      },
-    },
     processes: children,
     engineCatalog: engineCatalog(CATALOG, DEFAULT_ADAPTER),
     sessions,
@@ -930,16 +909,12 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     warning: (canvas, agent, connection, messages, text) => {
       // This is our own notice, not CLI activity. Never feed it back into the watchdog.
       const warning = Promise.all([
-        engines
-          .emit(canvas, agent, connection, {
-            type: 'notice',
-            id: crypto.randomUUID(),
-            level: 'warning',
-            text,
-          })
-          .then((event) => {
-            channels.emit(canvas, 'session:event', agent, connection, event);
-          }),
+        engines.emit(canvas, agent, connection, {
+          type: 'notice',
+          id: crypto.randomUUID(),
+          level: 'warning',
+          text,
+        }),
         engines.stalled(canvas, agent, messages, text),
       ])
         .then(() => undefined)
@@ -1240,7 +1215,6 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
   const close = async () => {
     closing = true;
     sessionViews.close();
-    unwatchGate();
     workspaceDirectories.stop();
     workspaceGit.stop();
     projects.close();
@@ -1296,7 +1270,12 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     },
     engines,
     topics,
-    channels,
+    terminals,
+    windowGone: (window, closed = false) => {
+      void windows.gone(window, closed).catch((error: unknown) => {
+        console.error('Could not detach the canvas’s window:', error);
+      });
+    },
     flush,
     prepareShutdown: (reason) => {
       if (committed) return Promise.resolve({ ok: true });

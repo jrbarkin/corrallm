@@ -3,7 +3,7 @@ import path from 'node:path';
 
 import { canvasIdOf, newCanvasId } from '../shared/canvas';
 import type { CanvasId } from '../shared/canvas';
-import { CANVAS_EXTENSION, MAX_CANVAS_BYTES } from '../shared/ipc';
+import { CANVAS_EXTENSION, MAX_CANVAS_BYTES } from '../shared/canvas';
 import type { HostServices, TrustedPath, WindowId } from './core/host';
 import type { Documents } from './core/canvas/documents';
 import type { CanvasMemory } from './memory';

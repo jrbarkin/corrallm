@@ -3,7 +3,6 @@ import type { z } from 'zod';
 import type { OpResult } from './api/errors';
 import type { OPS, ResultOf } from './api/registry';
 import type { GuiOp } from './api/surface';
-import type { CoreEvent, IpcEventArgs } from './ipc';
 import type { TerminalEvent } from './terminal';
 import type {
   TopicUpdate,
@@ -30,13 +29,11 @@ export interface CorePort {
   epoch: number;
 }
 
-/** Events on the window's port: the remaining channels, and its terminal stream. */
-export type GuiEvent = CoreEvent | 'terminal';
+/** The fixed terminal screen stream; all session state travels through topics. */
+export type GuiEvent = 'terminal';
 export type GuiEventArgs<E extends GuiEvent> = E extends 'terminal'
   ? [agentId: string, event: TerminalEvent]
-  : E extends CoreEvent
-    ? IpcEventArgs<E>
-    : never;
+  : never;
 
 /** What the core answers a window, over its port. */
 export interface CoreGuiSide {
@@ -46,18 +43,13 @@ export interface CoreGuiSide {
      * failed. Any other is refused before it is dispatched.
      */
     call: { args: [op: string, args: unknown]; result: OpResult<unknown> };
-    /**
-     * A hand-written channel (src/shared/ipc.ts) the registry doesn't replace yet, by its name and
-     * arguments, parsed and handled by the core for this window’s canvas.
-     */
-    channel: { args: [name: string, args: unknown[]]; result: unknown };
   };
   events: {
     /** The core's topic epoch, announced on each new port before topic changes. */
     epoch: [epoch: string];
     /** Changes in order, batched per window every 16 ms. */
     topic: [changes: TopicUpdate[]];
-    /** The terminal stream and remaining hand-written events, with no Electron event objects. */
+    /** The fixed terminal screen stream, with no Electron event objects. */
     event: [name: GuiEvent, args: GuiEventArgs<GuiEvent>];
   };
 }
@@ -137,3 +129,6 @@ export type GuiBridge = {
     ...args: Parameters<GuiCalls[K]>
   ) => Promise<OpResult<Awaited<ReturnType<GuiCalls[K]>>>>;
 } & GuiEventApi;
+
+/** The complete fixed API exposed by the sandboxed preload. */
+export type AppApi = GuiBridge & GuiDraftsApi;

@@ -151,13 +151,6 @@ describe('windows’ ports to the core', () => {
     const order: string[] = [];
     const served = new WindowPorts({
       call: () => Promise.resolve({ ok: true, value: {} }),
-      channels: {
-        call: () => {
-          throw new Error('unexpected channel');
-        },
-        gone: () => undefined,
-        listen: () => () => undefined,
-      },
     });
     const core = {
       epoch: 1,

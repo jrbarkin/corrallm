@@ -2,7 +2,7 @@ import { stat } from 'node:fs/promises';
 import path from 'node:path';
 
 import type { CanvasId } from '../shared/canvas';
-import type { ProjectFolder } from '../shared/ipc';
+import type { ProjectFolder } from '../shared/canvas';
 import type { HostServices, TrustedPath, WindowId } from './core/host';
 import type { CanvasMemory } from './memory';
 

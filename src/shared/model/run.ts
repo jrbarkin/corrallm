@@ -1,3 +1,4 @@
+import type { MessageImage } from '../session';
 import type { ConnectionId } from '../adapter';
 import type { UsageHold } from '../usage';
 import type { PartyId } from './messages';
@@ -127,3 +128,6 @@ export interface Run {
   running: boolean;
   agents: Readonly<Record<string, AgentRun>>;
 }
+
+/** An answer to a run hold, carried by a single reply operation. */
+export type Answer = { choice: string } | { reply: string; images?: readonly MessageImage[] };

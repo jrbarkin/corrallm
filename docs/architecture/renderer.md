@@ -4,7 +4,7 @@
 
 ## `src/renderer/`
 
-React UI. index.html is the Vite root; global.d.ts types window.api; open-link.ts api/bridge.ts unwraps GUI results, preserving errors' code and sentence across contextBridge; api/client.ts awaits drafts before every GUI op and its returned topic revisions before resolving a write. api/topics.ts mirrors immutable topic state for useSyncExternalStore, re-subscribing on a new core epoch or a revision gap; test-api.ts supplies a fake core and expectOneOp for gesture tests. open-link.ts is where clicked links go (the core’s link.open, or link.reveal for a file:// link; provided by App.tsx). catalog.ts holds the catalog the core gives (catalog.get), which boot.ts loads before the app mounts (main.tsx), so the renderer's views read it at once (catalog(), and its lookups: an adapter's connection, its view, what it continues in; never the engine, which is given its own: src/shared/engine/catalog.ts).
+React UI. index.html is the Vite root; global.d.ts types window.api; open-link.ts api/bridge.ts unwraps GUI results, preserving errors' code and sentence across contextBridge; api/client.ts awaits drafts before every GUI op and its returned topic revisions before resolving a write. api/topics.ts mirrors immutable topic state for useSyncExternalStore, re-subscribing on a new core epoch or a revision gap; test-api.ts supplies a fake core and expectOneOp for gesture tests. open-link.ts is where clicked links go (the core’s link.open, or link.reveal for a file:// link; provided by App.tsx). catalog.ts holds the catalog the core gives (catalog.get), which boot.ts loads before the app mounts (main.tsx), so the renderer's views read it at once (catalog(), and its lookups: an adapter's connection, its view, what it continues in; never the engine, which is given its own: src/shared/model/catalog.ts).
 
 ## Runtime topic views
 
@@ -86,7 +86,7 @@ The view answers the commands its connection declares in the catalog's `panels` 
 
 An MCP server's request shows in the transcript (Elicitation.tsx: a form, or a link to open through main).
 
-It shows session topics through run/sessions.ts’s read-only display projection, whose widget model is src/shared/model/session.ts. Execution, queues, history reduction, retries and checkpointing remain in the core. No production renderer imports SessionBackend. Opening, switching or showing an agent from Needs observes its transcript topic; that subscription is the core-owned viewing lease and sends no extra session.open operation. A spawn/add stays one operation. Try again explicitly calls session.open. File completion calls project.files once with the displayed canvas and agent, rather than querying the window's possibly changed canvas first.
+It shows session topics through run/sessions.ts’s read-only display projection, whose widget model is src/shared/model/session.ts. Execution, queues, history reduction, retries and checkpointing remain in the core. No renderer code or test imports SessionBackend or the core engine. Renderer fixtures script operation results and topic state; they execute no queues, retries or checkpoints. Opening, switching or showing an agent from Needs observes its transcript topic; that subscription is the core-owned viewing lease and sends no extra session.open operation. A spawn/add stays one operation. Try again explicitly calls session.open. File completion calls project.files once with the displayed canvas and agent, rather than querying the window's possibly changed canvas first.
 
 The registered controls use session.setMode/setModel/setEffort, session.interrupt/stopTask/restart/newConversation, session.rewindPreview/rewind, session.continueIn, withdraw and typed reply. Each command gesture sends one operation; confirmation of a mode that never asks remains in the page. Continue retains the exact pending text and live images; whitespace is tested for emptiness, not stripped from typed input. It never separately opens or sends after switching. The terminal screen still uses terminal.attach/detach and its existing byte stream; topic updates do not recreate its DOM or end its pty.
 
@@ -94,7 +94,7 @@ The composer's Send is one `message` operation, your message whole (up to 200,00
 
 A view command typed in the composer (/resume, /mcp, /rewind) is one `session.viewCommand` operation, recorded as your message and never sent (`recordCommand`, through `viewSend`); its panel opens beside it and reads what it shows by its own read, which is no gesture. Panel interception, completion and rewind availability follow the catalog, for every connection that declares them.
 
-The composer's suggestion and the terminal's asks come with the session summary (yours alone, bounded: see [Sessions](sessions.md)); Needs reads a Terminal ask's wording from the shown canvas's `sessions:<c>` summaries. No production renderer calls a session channel or imports SessionBackend; no audience, permission or lifecycle policy is decided in the renderer.
+The composer's suggestion and the terminal's asks come with the session summary (yours alone, bounded: see [Sessions](sessions.md)); Needs reads a Terminal ask's wording from the shown canvas's `sessions:<c>` summaries. No renderer calls a session channel or imports SessionBackend; no audience, permission or lifecycle policy is decided in the renderer.
 
 ## `src/renderer/queues/`
 

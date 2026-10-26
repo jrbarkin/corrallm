@@ -243,7 +243,7 @@ it.each(['cancelled', 'refused'] as const)(
     cleanups.push(() => {
       canvas.core.dispose();
     });
-    const before = canvas.engine.run.snapshot();
+    const before = canvas.run();
     if (outcome === 'refused')
       canvas.core.reply('canvas.open', {
         ok: false,
@@ -264,6 +264,6 @@ it.each(['cancelled', 'refused'] as const)(
     expectOneOp(canvas.core, 'canvas.open', {});
     if (outcome === 'refused')
       expect((await screen.findByRole('alert')).textContent).toContain('Not a canvas');
-    expect(canvas.engine.run.snapshot()).toBe(before);
+    expect(canvas.run()).toBe(before);
   },
 );

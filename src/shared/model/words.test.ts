@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { MADE_UP } from '../test-made-up';
-import { engineCatalog } from '../engine/catalog';
+import { engineCatalog } from './catalog';
 import type { AgentNode } from './canvas';
 import {
   describe as describeItem,
@@ -17,7 +17,7 @@ import {
   warningText,
 } from './words';
 import type { QueueItem, QueueRepeat } from './queue';
-import { TEST_ENGINE } from '../engine/test-engine';
+import { TEST_ENGINE } from '../test-model';
 
 /** What names a usage backend: the catalog main declares, as the run reads it. */
 const engine = TEST_ENGINE;

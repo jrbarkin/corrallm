@@ -1,3 +1,5 @@
+import { NEW_SESSION } from '../../shared/model/session';
+import { expectOneOp } from '../test-api';
 import { renderReady, events } from '../test-render';
 import { act, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -10,7 +12,7 @@ import { GraphEditor } from '../test-graph';
 import type { FakeCanvas } from '../test-canvas';
 import type { Graph, GraphNode } from '../graph/flow';
 import { OpenLinkContext } from '../open-link';
-import { fakeBackend } from '../../shared/engine/test-backend';
+import { fakeSessions } from '../test-sessions';
 import { fakeScreens, fakeTerminals, keyboardLayout, macKeyboard } from './test-screen';
 import { graphOf } from '../test-graph-data';
 import { DEFAULT_AGENT } from '../graph/agents';
@@ -21,10 +23,6 @@ vi.mock('./screen', async () => {
   const { fakeScreens: screens } = await import('./test-screen');
   return { createScreen: screens.create };
 });
-
-/** What the run asks at the end of a tool's step: how it went (src/shared/engine/run/turns.ts). */
-const VERDICT =
-  ' End your reply with SUCCEEDED or FAILED on a line of its own: whether the step succeeded (a command: whether it exited with status 0; tests: whether they all passed), even if you expected it to fail.';
 
 const agent = (id: string, data: Partial<GraphNode['data']> = {}): GraphNode => ({
   id,
@@ -61,10 +59,10 @@ async function open({
 } = {}) {
   /** The fake core the editor runs on: what it saved, as each .corral file's text. */
   let core: FakeCanvas | undefined;
-  const sessions = fakeBackend();
-  if (start) sessions.backend.start.mockImplementation(start);
-  if (options instanceof Error) sessions.backend.options.mockRejectedValue(options);
-  else if (options) sessions.backend.options.mockResolvedValue(options);
+  const sessions = fakeSessions();
+  if (start) sessions.replies.start.mockImplementation(start);
+  if (options instanceof Error) sessions.replies.options.mockRejectedValue(options);
+  else if (options) sessions.replies.options.mockResolvedValue(options);
   const terminals = fakeTerminals();
   const graph: Graph = {
     nodes: [agent('a', { ...data, ...(queue ? { queue } : {}) })],
@@ -79,7 +77,7 @@ async function open({
         onCanvas={(made) => {
           core = made;
         }}
-        sessionBackend={sessions.backend}
+        sessionReplies={sessions.replies}
         terminalBackend={terminals.backend}
       />
     </OpenLinkContext.Provider>,
@@ -92,7 +90,9 @@ async function open({
   await events.doubleClick(card());
   await settle();
   const view = within(screen.getByRole('dialog', { name: 'a' }));
+  if (!core) throw new Error('No fixture');
   return {
+    canvas: core,
     sessions,
     terminals,
     saved: () => core?.files.saved ?? [],
@@ -266,7 +266,7 @@ describe('a Terminal agent', () => {
         expect(morph.mock.calls.filter((call) => call[2] === 'open')).toHaveLength(3);
         expect(terminals.backend.attach).toHaveBeenCalledOnce();
         expect(terminals.backend.detach).not.toHaveBeenCalled();
-        expect(sessions.backend.start).toHaveBeenCalledOnce();
+        expect(sessions.replies.start).toHaveBeenCalledOnce();
       } finally {
         morph.mockRestore();
         animate.mockRestore();
@@ -308,7 +308,7 @@ describe('a Terminal agent', () => {
     expect(view.queryByRole('textbox', { name: 'Message a' })).toBeNull();
     expect(view.getByText('Starting Claude Code…')).toBeTruthy();
     // Its session starts as its view opens, and the view shows its terminal.
-    expect(sessions.backend.start).toHaveBeenCalledWith('a', {
+    expect(sessions.replies.start).toHaveBeenCalledWith('a', {
       connection: 'claude-code.terminal',
       model: null,
       mode: null,
@@ -370,7 +370,7 @@ describe('a Terminal agent', () => {
     expect(rows[0]?.dataset.run).toBe('completed');
     expect(rows[0]?.querySelector('button, input, textarea')).toBeNull();
     expect(view.queryByRole('group', { name: /^Current chat/ })).toBeNull();
-    expect(sessions.backend.send).not.toHaveBeenCalled();
+    expect(sessions.replies.send).not.toHaveBeenCalled();
   });
 
   it('lists what Claude Code asks in its terminal in the Needs you sidebar, to answer there', async () => {
@@ -517,7 +517,7 @@ describe('a Terminal agent', () => {
     });
     expect(view.getByText('Starting Codex CLI…')).toBeTruthy();
     // Nothing set: the user's own defaults (Codex's Default mode, which leaves their own config).
-    expect(sessions.backend.start).toHaveBeenCalledWith('a', {
+    expect(sessions.replies.start).toHaveBeenCalledWith('a', {
       connection: 'codex.terminal',
       model: null,
       mode: null,
@@ -568,7 +568,7 @@ describe('a Terminal agent', () => {
     fail = false;
     await events.click(view.getByRole('button', { name: 'Try again' }));
     await settle();
-    expect(sessions.backend.start).toHaveBeenCalledTimes(2);
+    expect(sessions.replies.start).toHaveBeenCalledTimes(2);
   });
 
   it('says when Claude Code exited, and starts it again, resuming its session', async () => {
@@ -582,7 +582,7 @@ describe('a Terminal agent', () => {
     expect(view.getByText('Claude Code exited.')).toBeTruthy();
     await events.click(view.getByRole('button', { name: 'Start it again' }));
     await settle();
-    expect(sessions.backend.start).toHaveBeenCalledTimes(2);
+    expect(sessions.replies.start).toHaveBeenCalledTimes(2);
     // Its new run's screen replaces the last.
     show({ ...SCREEN, data: 'Resumed' });
     act(() => {
@@ -641,7 +641,7 @@ describe('a Terminal agent', () => {
   });
 
   it('types the queue’s messages in once Claude Code is done; queued ones wait in its bar', async () => {
-    const { view, session, sessions } = await open({
+    const { view, session, sessions, canvas } = await open({
       queue: [{ id: 'q1', message: 'Write the docs' }],
     });
     // The user is at work in the terminal when the queues' run sends the message: it waits.
@@ -652,11 +652,31 @@ describe('a Terminal agent', () => {
     await events.click(view.getByRole('button', { name: 'All queues' }));
     const queues = within(screen.getByRole('dialog', { name: 'All queues' }));
     await events.click(queues.getByRole('button', { name: 'Run' }));
+    act(() => {
+      canvas.run({
+        running: true,
+        agents: { a: { current: 'q1', status: 'running', outcomes: {} } },
+      });
+    });
+    const pending = {
+      id: crypto.randomUUID(),
+      canvas: canvas.document.id,
+      from: 'corrallm' as const,
+      to: 'agent:a' as const,
+      kind: 'text' as const,
+      origin: 'run' as const,
+      body: 'Write the docs',
+      at: 1,
+      state: 'pending' as const,
+    };
+    act(() => {
+      canvas.messages([pending]);
+    });
     await events.click(queues.getByRole('button', { name: 'Open a' }));
     await settle();
     const queued = within(view.getByRole('list', { name: 'Queued messages' }));
     expect(queued.getByText('Write the docs')).toBeTruthy();
-    expect(sessions.backend.send).not.toHaveBeenCalled();
+    expect(sessions.replies.send).not.toHaveBeenCalled();
 
     // The user's turn ends: the message goes to Claude Code (main types it in).
     session({
@@ -666,17 +686,15 @@ describe('a Terminal agent', () => {
       result: { status: 'completed', reason: 'completed' },
     });
     await settle();
-    expect(sessions.backend.send).toHaveBeenCalledWith('a', {
-      id: expect.any(String) as unknown,
-      text: 'Write the docs',
-      origin: 'queue',
-      task: { agent: 'a', item: 'q1', attempt: expect.any(String) as string },
+    act(() => {
+      canvas.messages([{ ...pending, state: 'delivered' }]);
     });
+    expect(sessions.replies.send).not.toHaveBeenCalled();
     expect(view.queryByRole('list', { name: 'Queued messages' })).toBeNull();
   });
 
   it('runs its queue’s steps and conditions in Claude Code, saying in its bar when an answer was unclear', async () => {
-    const { view, session, sessions } = await open({
+    const { view, canvas } = await open({
       queue: [
         { id: 'tests', action: 'Bash' },
         {
@@ -692,50 +710,59 @@ describe('a Terminal agent', () => {
     await events.click(queues.getByRole('button', { name: 'Run' }));
     await events.click(queues.getByRole('button', { name: 'Open a' }));
     await settle();
-    /** Main types the last message in, and Claude Code answers it (its Stop hook's last reply). */
-    const answer = async (item: string, text: string, reply: string) => {
-      const sent = sessions.sent();
-      expect(sessions.backend.send).toHaveBeenLastCalledWith('a', {
-        id: sent,
-        text,
-        origin: 'queue',
-        task: { agent: 'a', item, attempt: expect.any(String) as string },
-      });
-      session(
-        { type: 'user', id: sent, text },
-        { type: 'status', status: 'working' },
-        { type: 'text', id: `${sent}/reply`, text: reply },
-        {
-          type: 'end',
-          messages: [sent],
-          seconds: 4,
-          result: { status: 'completed', reason: 'completed' },
+
+    act(() => {
+      canvas.run({
+        running: true,
+        agents: {
+          a: {
+            current: 'flaky',
+            status: 'asking',
+            outcomes: { tests: 'succeeded', tag: 'succeeded', green: 'succeeded' },
+            problem: {
+              kind: 'uncertain',
+              conditionKey: 'flaky',
+              agent: 'a',
+              reason: 'uncertain',
+              text: 'The answer did not clearly say yes or no.',
+            },
+          },
         },
-      );
-      await settle();
-    };
-    await answer(
-      'tests',
-      'Use the Bash tool for this step (run shell commands).' + VERDICT,
-      'Ran them: 0 failed.\nSUCCEEDED',
-    );
-    await answer('tag', 'Tag it', 'Tagged v1.2.');
-    await answer(
-      'flaky',
-      'corrallm asks: is this true now? “a test is flaky” Start your answer with yes or no.',
-      'Hard to say.',
-    );
+      });
+    });
     const terminalSession = within(view.getByRole('region', { name: 'Session' }));
     const needs = within(terminalSession.getByRole('group', { name: 'Needs you' }));
     expect(needs.getByText(/The answer did not clearly say yes or no/)).toBeTruthy();
-    expect(sessions.backend.send).toHaveBeenCalledTimes(3);
+    const need = canvas.core.state(`needs:${canvas.document.id}`)?.state.items[0];
+    if (!need) throw new Error('No need');
+    canvas.core.operations.length = 0;
     await events.click(needs.getByRole('button', { name: 'Condition does not hold' }));
+    expectOneOp(canvas.core, 'reply', {
+      canvas: canvas.document.id,
+      to: need.id,
+      answer: { choice: 'no' },
+    });
+    act(() => {
+      canvas.run({
+        running: true,
+        agents: {
+          a: {
+            status: 'done',
+            outcomes: {
+              tests: 'succeeded',
+              tag: 'succeeded',
+              green: 'succeeded',
+              flaky: 'skipped',
+            },
+          },
+        },
+      });
+    });
     expect(terminalSession.queryByRole('group', { name: 'Needs you' })).toBeNull();
-    expect(sessions.backend.send).toHaveBeenCalledTimes(3);
   });
 
   it('warns in its bar when its settings keep corrallm from hearing Claude Code, as the run does', async () => {
-    const { view, session, sessions } = await open({
+    const { view, session, canvas } = await open({
       queue: [
         { id: 'tests', action: 'Bash' },
         {
@@ -760,27 +787,28 @@ describe('a Terminal agent', () => {
     await events.click(queues.getByRole('button', { name: 'Run' }));
     await events.click(queues.getByRole('button', { name: 'Open a' }));
     await settle();
-    // Its turn ends (Claude Code's screen says so), with no reply heard.
-    const sent = sessions.sent();
-    session(
-      { type: 'user', id: sent, text: 'Use the Bash tool for this step (run shell commands).' },
-      { type: 'status', status: 'working' },
-      {
-        type: 'end',
-        messages: [sent],
-        seconds: 4,
-        result: { status: 'completed', reason: 'completed' },
-      },
-    );
-    await settle();
+    act(() => {
+      canvas.session('a', {
+        ...NEW_SESSION,
+        entries: [
+          {
+            kind: 'notice',
+            id: 'unheard-run',
+            level: 'warning',
+            text: 'corrallm can’t read this agent’s replies (its hooks are off). Steps wait in Needs you for a verdict; output checks and conditions in your words wait for your judgment.',
+          },
+        ],
+        unheard:
+          'corrallm can’t read this agent’s replies (its hooks are off). Steps wait in Needs you for a verdict; output checks and conditions in your words wait for your judgment.',
+      });
+    });
     expect(terminalSession.getByRole('note').textContent).toMatch(
       /^corrallm can’t read this agent’s replies \(its hooks are off\)/,
     );
-    expect(sessions.backend.send).toHaveBeenCalledTimes(1);
   });
 
   it('asks for your OK in the bar under its terminal: Approve, Stop here, or changes typed in', async () => {
-    const { view, session, sessions } = await open({
+    const { view, canvas } = await open({
       queue: [
         { id: 'ok', approve: 'the spec in SPEC.md' },
         { id: 'next', action: 'Read' },
@@ -789,6 +817,12 @@ describe('a Terminal agent', () => {
     await events.click(view.getByRole('button', { name: 'All queues' }));
     const queues = within(screen.getByRole('dialog', { name: 'All queues' }));
     await events.click(queues.getByRole('button', { name: 'Run' }));
+    act(() => {
+      canvas.run({
+        running: true,
+        agents: { a: { current: 'ok', status: 'asking', outcomes: {} } },
+      });
+    });
     await events.click(queues.getByRole('button', { name: 'Open a' }));
     await settle();
     const side = within(view.getByRole('complementary', { name: 'Questions and queue' }));
@@ -813,36 +847,68 @@ describe('a Terminal agent', () => {
     expect(ask.disabled).toBe(true);
 
     // The changes go to Claude Code as a message: main types them into the terminal.
+    const need = canvas.core.state(`needs:${canvas.document.id}`)?.state.items[0];
+    if (!need) throw new Error('No need');
+    canvas.core.operations.length = 0;
     await events.change(changes, { target: { value: 'Cover the empty state too' } });
     await events.click(ask);
     await settle();
-    expect(sessions.backend.send).toHaveBeenCalledWith('a', {
-      id: expect.any(String) as unknown,
-      text: 'Cover the empty state too',
+    expectOneOp(canvas.core, 'reply', {
+      canvas: canvas.document.id,
+      to: need.id,
+      answer: { text: 'Cover the empty state too' },
+    });
+    act(() => {
+      canvas.run({
+        running: true,
+        agents: {
+          a: {
+            current: 'ok',
+            status: 'running',
+            outcomes: {},
+            changes: { ok: ['Cover the empty state too'] },
+          },
+        },
+      });
     });
     expect(row()?.dataset.run).toBe('running');
     expect(bar()).toBeNull();
 
-    // Once that turn ends, it asks again.
-    const sent = sessions.sent();
-    session(
-      { type: 'user', id: sent, text: 'Cover the empty state too' },
-      { type: 'status', status: 'working' },
-      {
-        type: 'end',
-        messages: [sent],
-        seconds: 5,
-        result: { status: 'completed', reason: 'completed' },
-      },
-    );
+    act(() => {
+      canvas.run({
+        running: true,
+        agents: {
+          a: {
+            current: 'ok',
+            status: 'asking',
+            outcomes: {},
+            changes: { ok: ['Cover the empty state too'] },
+          },
+        },
+      });
+    });
     expect(row()?.dataset.run).toBe('asking');
+    const again = canvas.core.state(`needs:${canvas.document.id}`)?.state.items[0];
+    if (!again) throw new Error('No approval');
+    canvas.core.operations.length = 0;
     await events.click(asks().getByRole('button', { name: 'Approve' }));
+    expectOneOp(canvas.core, 'reply', {
+      canvas: canvas.document.id,
+      to: again.id,
+      answer: { choice: 'approve' },
+    });
+    act(() => {
+      canvas.run({
+        running: true,
+        agents: { a: { current: 'next', status: 'running', outcomes: { ok: 'succeeded' } } },
+      });
+    });
     expect(row()?.dataset.run).toBe('succeeded');
     expect(bar()).toBeNull();
   });
 
   it('asks in its bar when a repeat is out of rounds, where what to try next is typed in', async () => {
-    const { view, sessions } = await open({
+    const { view, canvas } = await open({
       queue: [
         {
           id: 'loop',
@@ -857,6 +923,19 @@ describe('a Terminal agent', () => {
     await events.click(view.getByRole('button', { name: 'All queues' }));
     const queues = within(screen.getByRole('dialog', { name: 'All queues' }));
     await events.click(queues.getByRole('button', { name: 'Run' }));
+    act(() => {
+      canvas.run({
+        running: true,
+        agents: {
+          a: {
+            current: 'loop',
+            status: 'asking',
+            outcomes: { note: 'skipped' },
+            rounds: { loop: { round: 1, more: 0 } },
+          },
+        },
+      });
+    });
     await events.click(queues.getByRole('button', { name: 'Open a' }));
     await settle();
     const asks = within(view.getByRole('group', { name: 'Needs you' }));
@@ -866,13 +945,17 @@ describe('a Terminal agent', () => {
       'Go on',
       'Try this',
     ]);
+    const need = canvas.core.state(`needs:${canvas.document.id}`)?.state.items[0];
+    if (!need) throw new Error('No need');
+    canvas.core.operations.length = 0;
     const next = asks.getByRole('textbox', { name: 'What should it try next?' });
     await events.change(next, { target: { value: 'Try a smaller fix' } });
     await events.keyDown(next, { key: 'Enter' });
     await settle();
-    expect(sessions.backend.send).toHaveBeenCalledWith('a', {
-      id: expect.any(String) as unknown,
-      text: 'Try a smaller fix',
+    expectOneOp(canvas.core, 'reply', {
+      canvas: canvas.document.id,
+      to: need.id,
+      answer: { text: 'Try a smaller fix' },
     });
   });
 
@@ -957,12 +1040,12 @@ describe('a Terminal agent’s settings', () => {
       data: { connection: 'claude-code.terminal', settings: { 'claude-code': { model: 'haiku' } } },
       options: CLAUDE,
     });
-    expect(sessions.backend.start).toHaveBeenCalledWith('a', {
+    expect(sessions.replies.start).toHaveBeenCalledWith('a', {
       connection: 'claude-code.terminal',
       model: 'haiku',
       mode: null,
     });
-    expect(sessions.backend.options).toHaveBeenCalledWith('claude-code', 'a');
+    expect(sessions.replies.options).toHaveBeenCalledWith('claude-code', 'a');
     // What it starts with, the user's own where nothing is chosen.
     const button = () => view.getByRole('button', { name: 'Agent settings: a' });
     expect(button().textContent).toContain('Claude · Terminal · Haiku · Auto');
@@ -1006,11 +1089,11 @@ describe('a Terminal agent’s settings', () => {
     });
 
     // Its session runs as it started: restarted, it starts with these, resuming its conversation.
-    expect(sessions.backend.start).toHaveBeenCalledOnce();
+    expect(sessions.replies.start).toHaveBeenCalledOnce();
     await events.click(panel.getByRole('button', { name: 'Restart with these' }));
     await settle();
-    expect(sessions.backend.close).toHaveBeenCalledWith('a');
-    expect(sessions.backend.start).toHaveBeenLastCalledWith('a', {
+    expect(sessions.replies.close).toHaveBeenCalledWith('a');
+    expect(sessions.replies.start).toHaveBeenLastCalledWith('a', {
       connection: 'claude-code.terminal',
       model: null,
       mode: 'plan',
@@ -1054,7 +1137,7 @@ describe('a Terminal agent’s settings', () => {
         defaults: { model: 'gpt-6.1-sol', effort: null, mode: 'auto' },
       },
     });
-    expect(sessions.backend.options).toHaveBeenCalledWith('codex', 'a');
+    expect(sessions.replies.options).toHaveBeenCalledWith('codex', 'a');
     const button = view.getByRole('button', { name: 'Agent settings: a' });
     // Codex's Default needs no more saying; the model's own effort, its config setting none.
     expect(button.textContent).toContain('Codex · Terminal · GPT-6.1-Sol · Low · Default');
@@ -1076,7 +1159,7 @@ describe('a Terminal agent’s settings', () => {
         "Error invoking remote method 'session:options': Error: Codex could not list its models",
       ),
     });
-    expect(sessions.backend.start).toHaveBeenCalledWith('a', {
+    expect(sessions.replies.start).toHaveBeenCalledWith('a', {
       connection: 'claude-code.terminal',
       model: 'haiku',
       mode: 'plan',

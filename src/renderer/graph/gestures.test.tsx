@@ -122,6 +122,7 @@ async function setup({
   return {
     ...view,
     save,
+    run: canvas.run,
     core: canvas.core,
     edit: (text: string, rev: number) => canvas.edit(text, rev),
     get document() {
@@ -390,6 +391,9 @@ it('keeps Arrange when opening an agent from Needs, without a document operation
   const view = await setup({ arrange: true, approval: true, selected: ['b'] });
   fireEvent.click(button('Show all queues'));
   fireEvent.click(button('Run'));
+  act(() => {
+    view.run({ running: true, agents: { a: { current: 'ok', status: 'asking', outcomes: {} } } });
+  });
   await act(async () => {
     await Promise.resolve();
   });

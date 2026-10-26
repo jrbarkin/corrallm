@@ -1,5 +1,5 @@
 import { MAX_MESSAGE_BYTES } from '../../../shared/api/limits';
-import { decodeSubmissions, encodeRecords } from '../../../shared/engine/delivery/submission-state';
+import { decodeSubmissions, encodeRecords } from '../engine/delivery/submission-state';
 import { agentOf, agentParty } from '../../../shared/model/messages';
 import type { Message, MessageDisplay } from '../../../shared/model/messages';
 import type { SubmittedMessage } from '../../../shared/model/queue';

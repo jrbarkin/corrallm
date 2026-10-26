@@ -7,8 +7,8 @@ import type { QueueItem, QueueMessage, SubmittedMessage } from '../../shared/mod
 import { QueuesView } from '../queues/QueuesView';
 import { lanesOf } from '../queues/lanes';
 import { queueMarks } from '../../shared/model/queue-marks';
-import type { Run } from '../../shared/engine/run/runner';
-import { needsOf } from '../../shared/engine/needs';
+import type { Run } from '../../shared/model/run';
+import { needsOf } from '../../shared/model/needs-selectors';
 import { QuestionsSidebar } from './Questions';
 import { actionsOf, runCatalog } from './agents';
 import { editsOf } from './edits';

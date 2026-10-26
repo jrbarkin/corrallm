@@ -1,6 +1,6 @@
 import { isApproval, isMessage, isRepeat, isRepeatEnds, isWait } from './queue';
 import type { QueueItem, QueueRepeat } from './queue';
-import type { EngineCatalog } from '../engine/catalog';
+import type { EngineCatalog } from './catalog';
 import { taskState } from './run-display';
 import type { RunSnapshot } from './views';
 import { holdText } from './words';
@@ -109,7 +109,7 @@ export function queueMarks(
       'data-run': state === 'running' && asking.has(lane) ? 'asking' : state,
       'data-expected': expected === undefined ? undefined : expected ? 'met' : 'unmet',
       'data-until': until === undefined ? undefined : String(until),
-      // A session that would not start is decided where it says why (src/shared/engine/run/asks.ts), not on the row.
+      // A session that would not start is decided where it says why (src/shared/model/run-words.ts), not on the row.
       'data-decide': held && at.status === 'asking' && !at.refused ? '' : undefined,
       'data-problem': problem?.kind,
       'data-problem-text': problem?.text,

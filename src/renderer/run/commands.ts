@@ -1,6 +1,6 @@
 import type { CanvasId } from '../../shared/canvas';
 import type { GuiApi } from '../../shared/gui-link';
-import type { Answer } from '../../shared/engine/run/runner';
+import type { Answer } from '../../shared/model/run';
 import type { TopicMirror } from '../api/topics';
 
 /** Commands target the current view binding; execution and decisions belong only to the core. */

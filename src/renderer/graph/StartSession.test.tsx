@@ -6,7 +6,7 @@ import { EXAMPLES } from '../../shared/examples';
 import { templateInfo } from '../../shared/templates';
 import { catalog } from '../catalog';
 import { fakeCanvas } from '../test-canvas';
-import { fakeBackend } from '../../shared/engine/test-backend';
+import { fakeSessions } from '../test-sessions';
 import { expectOneOp } from '../test-api';
 import { events } from '../test-render';
 import { GraphEditor } from './GraphEditor';
@@ -30,12 +30,12 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 function setup() {
-  const sessions = fakeBackend();
+  const sessions = fakeSessions();
   const canvas = fakeCanvas(
     { id: newCanvasId(), arrange: false, nodes: [], links: [] },
-    sessions.backend,
+    sessions.replies,
   );
-  sessions.backend.installed.mockResolvedValue({ 'claude-code': true, codex: false });
+  sessions.replies.installed.mockResolvedValue({ 'claude-code': true, codex: false });
   canvas.core.respond('catalog.installed', { 'claude-code': true, codex: false });
   disposals.push(() => {
     canvas.core.dispose();

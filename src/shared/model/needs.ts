@@ -6,7 +6,7 @@ import type { PartyId } from './messages';
  * What waits for someone (API Spec §5.9): one shape for a hold the run has for you, a prompt an
  * agent's session shows, a token's proposal and a canvas file changed on disk (the core's: B9), and,
  * in a later phase, a message to you. The engine words holds and prompts once
- * (src/shared/engine/needs.ts), in the host's locale, and the core its proposals and file reviews
+ * (src/shared/model/needs-selectors.ts), in the host's locale, and the core its proposals and file reviews
  * (core/canvas/proposals.ts, reviews.ts), so the GUI and every party read the same sentences.
  *
  * Keep this module free of Node, Electron and DOM imports: it is compiled into every process.

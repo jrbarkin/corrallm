@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { GUI_OPS } from '../../shared/api/surface';
 import type { CanvasId } from '../../shared/canvas';
 import { guiFunction } from '../../shared/gui-link';
-import type { AppApi } from '../../shared/ipc';
+import type { AppApi } from '../../shared/gui-link';
 import { canvasStateOf } from '../../shared/model/state';
 import type { Entities, MetaEntity, NodeEntity } from '../../shared/model/state';
 import { api, ApiError } from './client';

@@ -9,7 +9,7 @@ import { Dock } from './Dock';
 import * as motion from '../agent/motion';
 import { fakeCanvas } from '../test-canvas';
 import { newCanvasId } from '../../shared/canvas';
-import { fakeBackend } from '../../shared/engine/test-backend';
+import { fakeSessions } from '../test-sessions';
 import { GraphEditor } from './GraphEditor';
 import { renderReady } from '../test-render';
 
@@ -168,10 +168,10 @@ it('moves the same keyed icons into the taskbar and back, without replaying on s
 });
 
 it('toggles the canvas queues and switches agents through the taskbar without document operations', async () => {
-  const sessions = fakeBackend();
+  const sessions = fakeSessions();
   const canvas = fakeCanvas(
     { id: newCanvasId(), arrange: false, nodes, links: [] },
-    sessions.backend,
+    sessions.replies,
   );
   try {
     await renderReady(
@@ -214,10 +214,10 @@ it('toggles the canvas queues and switches agents through the taskbar without do
 });
 
 it('glows for a core run or native-session need until the topic clears', async () => {
-  const sessions = fakeBackend();
+  const sessions = fakeSessions();
   const canvas = fakeCanvas(
     { id: newCanvasId(), arrange: false, nodes, links: [] },
-    sessions.backend,
+    sessions.replies,
   );
   try {
     await renderReady(

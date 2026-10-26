@@ -17,8 +17,8 @@ interface Authored {
  * A step: an action, named as its agent names it, done to the node `target` (an id), or without
  * one to the node whose queue it is in. `instruction`: what it is to do, in the user's words (what
  * to run, what to read); a connected agent is told it with the step (a slash command takes it as
- * its arguments: src/shared/engine/run/turns.ts). `expect`: 'fails' for a step meant to fail (tests
- * written to fail first: red before green), which the run turns round (src/shared/engine/run/runner.ts):
+ * its arguments: src/main/core/engine/run/turns.ts). `expect`: 'fails' for a step meant to fail (tests
+ * written to fail first: red before green), which the run turns round (src/main/core/engine/run/runner.ts):
  * failing is its success, passing its failure, so what reads how it went (an If, a repeat, a
  * wait) reads whether it went as expected. What the agent is asked does not change.
  */
@@ -63,7 +63,7 @@ export interface SubmittedMessage {
 /**
  * What an if-then checks before it runs its steps: one of `CONDITIONS`, (`freeText`) a condition
  * in the user's own words, for the agent to judge (a connected agent is asked, yes or no, in its
- * session: src/shared/engine/run/turns.ts), or (`usageAbove`) whether a backend's usage is over a share (1 to 99) of
+ * session: src/main/core/engine/run/turns.ts), or (`usageAbove`) whether a backend's usage is over a share (1 to 99) of
  * a window, by its latest reading when the run reaches it (src/shared/usage.ts). The output it looks
  * in is what the agent replied in the checked task; `wholeLine` requires that text on a line of
  * its own, rather than anywhere in the reply.

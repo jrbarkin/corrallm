@@ -21,7 +21,7 @@ import type {
   SessionUsage,
 } from '../../shared/model/session';
 
-/** What the composer does to its agent's session (src/shared/engine/delivery/mailbox.ts). */
+/** What the composer does to its agent's session (src/main/core/engine/delivery/mailbox.ts). */
 export interface ComposerControls {
   /** Sends a message, with the images pasted into it. */
   send: (text: string, images?: MessageImage[]) => void;

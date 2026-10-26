@@ -43,7 +43,7 @@ export type {
  * An agent's session, as its view shows it: a transcript of turns (the user's message, then what
  * the agent does: thinking, text, tool calls, prompts for the user, a to-do list, notices), whether
  * it is working, messages queued while it works, and the tools the user always allows. A driver
- * plays native turns onto it (src/shared/engine/transcript/); unsupported connections keep work unsent.
+ * plays native turns onto it (src/main/core/engine/transcript/); unsupported connections keep work unsent.
  */
 
 /**

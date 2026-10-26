@@ -3,8 +3,8 @@ import { readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 
 import type { CanvasId } from '../../../shared/canvas';
-import { MAX_CANVAS_BYTES } from '../../../shared/ipc';
-import type { ProjectFolder } from '../../../shared/ipc';
+import { MAX_CANVAS_BYTES } from '../../../shared/canvas';
+import type { ProjectFolder } from '../../../shared/canvas';
 import type { CanvasNode } from '../../../shared/model/canvas';
 import { toFile } from '../../../shared/model/file';
 import type { PartyId } from '../../../shared/model/messages';

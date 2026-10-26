@@ -143,13 +143,9 @@ it('opens a window’s session on the canvas the core runs once its tree is read
     value: { items: [] },
   });
   expect(codex.started).toEqual([]);
-  const caller = CALLERS.you;
-  if (caller.kind !== 'human' || caller.window === 'host') throw new Error('No test window');
-  const window = caller.window;
-  expect(await active.channels.call(window, 'session:availability', ['tester'])).toMatchObject({
-    ready: false,
-    reason: 'creating',
-  });
+  expect(
+    await active.call('session.open', { canvas: doc.id, agent: 'tester' }, CALLERS.you),
+  ).toMatchObject({ ok: false });
   let setup: string | undefined;
   await vi.waitFor(
     async () => {
@@ -166,9 +162,6 @@ it('opens a window’s session on the canvas the core runs once its tree is read
       CALLERS.you,
     ),
   ).toMatchObject({ ok: true });
-  expect(await active.channels.call(window, 'session:availability', ['tester'])).toMatchObject({
-    ready: true,
-  });
   expect(await active.call('session.open', { agent: 'tester' }, CALLERS.you)).toMatchObject({
     ok: true,
   });

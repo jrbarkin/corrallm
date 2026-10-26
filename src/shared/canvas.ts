@@ -58,3 +58,11 @@ export function canvasIdOf(text: string): CanvasId {
   }
   return canvasHeader(file);
 }
+
+/** A chosen project folder, for display; never accepted back from the page. */
+export interface ProjectFolder {
+  name: string;
+  path: string;
+}
+export const CANVAS_EXTENSION = 'corral';
+export const MAX_CANVAS_BYTES = 10 * 1024 * 1024;
