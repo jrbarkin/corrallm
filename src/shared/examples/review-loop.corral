@@ -4,13 +4,24 @@
   "id": "e8e28d07-3606-4062-8c23-a1706ced9e00",
   "nodes": [
     {
+      "id": "workspace",
+      "kind": "group",
+      "label": "Review loop",
+      "position": {
+        "x": -20,
+        "y": -52
+      },
+      "color": 0
+    },
+    {
       "id": "coder",
       "kind": "agent",
       "label": "Coder",
       "position": {
-        "x": 0,
-        "y": 0
+        "x": 20,
+        "y": 52
       },
+      "parent": "workspace",
       "adapter": "claude-code",
       "queue": [
         {
@@ -45,9 +56,10 @@
       "kind": "agent",
       "label": "Reviewer",
       "position": {
-        "x": 360,
-        "y": 160
+        "x": 380,
+        "y": 212
       },
+      "parent": "workspace",
       "adapter": "codex",
       "queue": [
         {

@@ -11,6 +11,7 @@ import type { ModelInfo, Options, SDKUserMessage } from '@anthropic-ai/claude-ag
 
 import { PERMISSION_MODES } from '../../../../shared/session';
 import type { ModelChoice, SessionEvent } from '../../../../shared/session';
+import { launchInstructions } from '../../instructions';
 import { spawn } from '../../process';
 import { CLAUDE_TERMINAL } from '../adapter';
 import type { Connector, LiveSession, SessionHost, SessionSpec } from '../../connector';
@@ -149,6 +150,7 @@ export class SdkConnector implements Connector {
     claude: string,
     resume: string | null,
   ): Promise<SdkSession> {
+    const instructions = launchInstructions(spec);
     const realCwd = await realpath(spec.cwd).catch(() => spec.cwd);
     const places = {
       cwd: spec.cwd,
@@ -197,7 +199,7 @@ export class SdkConnector implements Connector {
       systemPrompt: {
         type: 'preset',
         preset: 'claude_code',
-        ...(spec.role === undefined ? {} : { append: spec.role }),
+        ...(instructions === undefined ? {} : { append: instructions }),
         // Rebuild only when an edited or removed role replaces an earlier snapshot.
         ...(resume !== null && spec.roleChanged === true ? { snapshot: false } : {}),
       },

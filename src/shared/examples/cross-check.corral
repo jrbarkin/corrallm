@@ -4,13 +4,24 @@
   "id": "025199e6-fc9c-44da-8b21-4627eafeba7c",
   "nodes": [
     {
+      "id": "workspace",
+      "kind": "group",
+      "label": "Independent cross-check",
+      "position": {
+        "x": -20,
+        "y": -52
+      },
+      "color": 0
+    },
+    {
       "id": "builder",
       "kind": "agent",
       "label": "Builder",
       "position": {
-        "x": 0,
-        "y": 0
+        "x": 20,
+        "y": 52
       },
+      "parent": "workspace",
       "adapter": "claude-code",
       "queue": [
         {
@@ -24,9 +35,10 @@
       "kind": "agent",
       "label": "Checker",
       "position": {
-        "x": 360,
-        "y": 160
+        "x": 380,
+        "y": 212
       },
+      "parent": "workspace",
       "adapter": "claude-code",
       "queue": [
         {

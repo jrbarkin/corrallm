@@ -147,6 +147,22 @@ describe('Codex in a terminal, as the real one ran', () => {
     });
   });
 
+  it.each([undefined, 'Review changes'])(
+    'appends supplied core workspace context with role %s without typing a prompt',
+    async (role) => {
+      const readInstructions = vi.fn(() => Promise.resolve('Native project guidance'));
+      const session = await start(
+        ['prompts'],
+        { ...(role === undefined ? {} : { role }), workspaceContext: 'Branch: generated-ref' },
+        { readInstructions },
+      );
+      const text = `Native project guidance\n\n${role === undefined ? '' : `${role}\n\n`}[corrallm workspace context]\nBranch: generated-ref`;
+      expect(runs.at(-1)?.args).toContain(`developer_instructions=${JSON.stringify(text)}`);
+      expect(runs.at(-1)?.written).toEqual([]);
+      await session.close();
+    },
+  );
+
   it('resumes without a role without reading native instructions, even if the read would fail', async () => {
     const readInstructions = vi.fn(() => Promise.reject(new Error('Could not read config')));
     await start(['resume'], { resume: RECORDED_SESSION, roleChanged: false }, { readInstructions });

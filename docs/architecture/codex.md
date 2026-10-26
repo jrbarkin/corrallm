@@ -51,3 +51,7 @@ The SessionStart command hook can report `permission_mode`, through the same nat
 Command hooks inherit only `CORRALLM_HOOK_HEADER`, the path of their Authorization header file in the session's own folder. The token is absent from the CLI and hook children's environments and arguments. Closing the session removes the file. The command's hash still scopes trust to these session hooks; the e2e TUI fake checks the same hash and executes the same file-backed command.
 
 Codex Terminal's invalid-conversation-id warning is emitted once per reported invalid id in that session. Later hooks with that id still report prompts, permissions and turn state; their warning, like other hook notices, waits behind any earlier turn's delayed end.
+
+## Prepared workspace context
+
+Both connections accept the separate, C-owned `SessionSpec.workspaceContext` consumer described in [Sessions](sessions.md#prepared-workspace-context-adapter-seam). They read effective native developer_instructions and append the role/context through the existing native instruction mechanism, never through turn/start or terminal input. Native folder trust, policies and user-message provenance are unchanged. No production producer is composed: C must supply an authorized projection and a context/conversation invalidation contract before enabling it. Appending new context alone does not solve the retained-instruction limitation on exact-ID resume.

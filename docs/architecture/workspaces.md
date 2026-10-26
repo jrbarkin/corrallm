@@ -132,3 +132,32 @@ The manager, options, history and file picker consume this one resolver. Context
 ## The profile id
 
 `src/main/core/workspaces/profile.ts` (`profileId`): a UUID naming this profile's branches and its folder in each checkout, so two profiles' workspaces of one repository never meet. Kept in `<profile>/workspaces/profile-id` (0600), beside the database rather than in it, so a restored database keeps it; made once, and one that can't be read is refused, never replaced. The runner's empty hooks folder is meant to be `<profile>/workspaces/hooks`.
+
+## Shipped template workspaces
+
+The gallery's ten templates declare their shared working state with frames; existing user canvases are not rewritten. `src/shared/model/templates-workspaces.test.ts` pins the original agents, queue-item ids, links and nested parenting, as well as each workspace owner.
+
+| Template                | Workspace grouping and file handoff                                                                                                             |
+| ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| Spec first              | “Spec and implementation” contains Planner, Builder and Reviewer; SPEC.md, PLAN.md, tests and implementation share one tree.                    |
+| Feature crew            | “Feature crew” contains Researcher, Builder, Reviewer and Docs; NOTES.md, changes and reviews stay together.                                    |
+| Team lead               | An outer frame contains Planner and the existing Lead subtree; Planner remains outside Lead's management.                                       |
+| Fan-out research        | “Research and report” contains Lead, the existing Research frame and Writer; the three researchers keep distinct NOTES-1.md through NOTES-3.md. |
+| TDD relay               | Tester, Implementer and Refactorer share the actual uncommitted tests and code.                                                                 |
+| Review panel            | Builder, the three reviewers and Lead share the diff and distinct .review files.                                                                |
+| Review loop             | Coder and Reviewer share the working changes, with the existing verdict/repeat flow.                                                            |
+| Independent cross-check | Builder and Checker keep separate conversations over the same files.                                                                            |
+| Release checks          | Releaser reruns checks against Fixer's working changes in their shared tree.                                                                    |
+| Head to head            | Each contestant is ungrouped and Judge has its own tree: three independent branches.                                                            |
+
+No shipped template asks its CLI to allocate another native worktree. The adapters' native action catalogs remain available for other canvases.
+
+Head to head uses the generated refs from core context. Each contestant commits its implementation and `.compete/result.md`, headed `Round: N`, on its own branch. Judge reads those committed results/changes with read-only Git, then commits `.compete/feedback-claude.md`, `.compete/feedback-codex.md` and `.compete/judged-round.md` on its own branch before returning. The next contestant round reads the relevant feedback with `git show <judge-ref>:<feedback-file>`. Wait steps provide ordering only; no reply-after-wait or sibling directory copy delivers the files. A missing/stale round or missing context asks for help and stops rather than guessing. The two-round limit and whole-line WINNER condition remain. The last prompt reports the winning role, ref and reason for review; user integration belongs to B9b.
+
+### Prepared workspace-context consumer; C gaps
+
+`SessionSpec.workspaceContext` and `src/main/sessions/instructions.ts` provide only the bounded adapter consumer: at most 8 KiB of already-authorized, escaped context, appended separately from the saved role through native startup instructions. They do not mint paths, choose reach, change permissions, prefix user messages or change authorship.
+
+No producer is composed in SessionManager. C still needs to supply an authorized startup selector for the captured base, shared members and reached agents' generated refs, including readiness and redaction rules. The existing directory resolver supplies the verified cwd, workspace, active generation and own branch; raw workspace records are not an authorized cross-agent selector. C must also define context freshness and its conversation binding when that projection changes, including native resume/snapshot handling. Existing directory-generation admission remains in force; it does not stand in for context invalidation, especially on a native conversation that retains earlier instructions. Until those contracts exist, Head to head's generated refs are unavailable in a normal launch and its prompts explicitly stop for missing context. No operation, topic or substitute permission policy is registered here.
+
+`src/main/core/template-workspaces.test.ts` allocates all ten templates through the composed core services with fake native sessions and real Git. It checks actual uncommitted handoffs in the nine shared trees, two rounds of committed cross-branch results/feedback, and an untouched base checkout. Test-owned Git facts are not exposed as a replacement context selector. `e2e/template-workspaces.e2e.ts` checks the same grouping/allocation and file visibility through the built app, using fixture writes in its recorded checkouts.

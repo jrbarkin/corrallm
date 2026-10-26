@@ -235,6 +235,21 @@ describe('a Terminal session', () => {
     },
   );
 
+  it.each([undefined, 'Review changes'])(
+    'appends supplied core workspace context with role %s without typing a prompt',
+    async (role) => {
+      const session = await start({
+        ...(role === undefined ? {} : { role }),
+        workspaceContext: 'Branch: generated-ref',
+      });
+      expect(claude().args).toContain(
+        `--append-system-prompt=${role === undefined ? '' : `${role}\n\n`}[corrallm workspace context]\nBranch: generated-ref`,
+      );
+      expect(claude().prompts).toEqual([]);
+      await session.close();
+    },
+  );
+
   it('does not pass a modern snapshot flag to an older CLI on role launch or resume', async () => {
     help = '  --model <model>  Model\n  --append-system-prompt <prompt>  Append instructions';
     const id = '0b3a7d52-6a0c-4f39-9c4e-2f8f0c1d9e11';
