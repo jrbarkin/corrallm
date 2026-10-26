@@ -259,6 +259,7 @@ export const CALLERS: Readonly<Record<Party, Caller>> = {
     token: 'read-token',
     name: 'watcher',
     access: 'read',
+    merge: false,
     canvases: [CANVAS],
   } satisfies OutsideCaller,
   'outside-write': {
@@ -266,6 +267,7 @@ export const CALLERS: Readonly<Record<Party, Caller>> = {
     token: 'write-token',
     name: 'orchestrator',
     access: 'write',
+    merge: true,
     canvases: [CANVAS],
   } satisfies OutsideCaller,
 };

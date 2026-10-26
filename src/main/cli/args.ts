@@ -3,6 +3,7 @@ import { parseArgs } from 'node:util';
 import { z } from 'zod';
 
 import { ID_PATTERN } from '../../shared/adapter';
+import type { TokenAccess } from '../core/tokens';
 import {
   DEFAULT_TOKEN_HOURS,
   MAX_TOKEN_CANVASES,
@@ -24,10 +25,10 @@ const HOURS = `<1-${String(MAX_TOKEN_HOURS)}>`;
 
 export const USAGE = `Usage:
   corrallm serve --canvas <file> [--canvas <file>…] [--profile <dir>] [--port <n>]
-                 [--new-token [--name <name>] [--hours ${HOURS}] [--read-only]]
+                 [--new-token [--name <name>] [--hours ${HOURS}] [--read-only | --no-merge]]
   corrallm wait [--for <message id>] [--after <cursor>] [--timeout <seconds>]
   corrallm token new --canvas <file> [--canvas <file>…] [--name <name>] [--hours ${HOURS}]
-                 [--read-only] [--into <file>] [--profile <dir>]
+                 [--read-only | --no-merge] [--into <file>] [--profile <dir>]
   corrallm token renew [--name <name>] [--hours ${HOURS}] [--into <file>] [--profile <dir>]
   corrallm token revoke [--name <name>] [--profile <dir>]
   corrallm token header --from <file>    (an MCP client's headers helper)
@@ -48,7 +49,7 @@ export interface ServeCommand {
   canvases: string[];
   profile?: string;
   port?: number;
-  newToken?: { name: string; hours: number; access: 'read' | 'write' };
+  newToken?: { name: string; hours: number; access: TokenAccess };
 }
 
 /** `corrallm wait`: what for, from where, and for how long, in seconds. */
@@ -77,7 +78,7 @@ export type TokenCommand =
       action: 'new';
       name: string;
       hours: number;
-      access: 'read' | 'write';
+      access: TokenAccess;
       canvases: string[];
       into?: string;
       profile?: string;
@@ -127,6 +128,7 @@ function parseToken(argv: string[]): TokenCommand {
         name: { type: 'string' },
         hours: { type: 'string' },
         'read-only': { type: 'boolean' },
+        'no-merge': { type: 'boolean' },
         into: { type: 'string' },
         profile: { type: 'string' },
       });
@@ -144,7 +146,7 @@ function parseToken(argv: string[]): TokenCommand {
         action,
         name: tokenName(values.name),
         hours: tokenHours(values.hours),
-        access: values['read-only'] === true ? 'read' : 'write',
+        access: tokenAccess(values['read-only'], values['no-merge']),
         canvases,
         ...intoOf(values.into),
         ...profileOf(values.profile),
@@ -158,8 +160,13 @@ function parseToken(argv: string[]): TokenCommand {
         profile: { type: 'string' },
         canvas: { type: 'string', multiple: true },
         'read-only': { type: 'boolean' },
+        'no-merge': { type: 'boolean' },
       });
-      if (values.canvas !== undefined || values['read-only'] !== undefined) {
+      if (
+        values.canvas !== undefined ||
+        values['read-only'] !== undefined ||
+        values['no-merge'] !== undefined
+      ) {
         throw new UsageError(
           'renew keeps the token’s canvases and access: for others, make a new token with corrallm token new, which replaces it too.',
         );
@@ -207,6 +214,20 @@ function tokenName(given: string | undefined): string {
   return name;
 }
 
+/**
+ * What a token may do, as given: read-write by default, read-only with --read-only, read-write
+ * merging no agent's branch with --no-merge (B9b §9 C1, Q30); both is UsageError.
+ */
+function tokenAccess(readOnly: boolean | undefined, noMerge: boolean | undefined): TokenAccess {
+  if (readOnly === true && noMerge === true) {
+    throw new UsageError(
+      '--no-merge goes without --read-only: a read-only token can’t merge already.',
+    );
+  }
+  if (readOnly === true) return 'read';
+  return noMerge === true ? 'write-no-merge' : 'write';
+}
+
 /** How long a token lasts, as given (DEFAULT_TOKEN_HOURS by default), or UsageError. */
 function tokenHours(given: string | undefined): number {
   const hours = given === undefined ? DEFAULT_TOKEN_HOURS : whole(given);
@@ -245,6 +266,7 @@ function parseServe(argv: string[]): ServeCommand {
     name: { type: 'string' },
     hours: { type: 'string' },
     'read-only': { type: 'boolean' },
+    'no-merge': { type: 'boolean' },
   });
   const canvases = values.canvas ?? [];
   if (canvases.length === 0) {
@@ -254,7 +276,7 @@ function parseServe(argv: string[]): ServeCommand {
   if (values.port !== undefined && (port === undefined || port > 65535)) {
     throw new UsageError(`--port is a port, 0 to 65535 (0: any free one), not “${values.port}”.`);
   }
-  const tokenOnly = (['name', 'hours', 'read-only'] as const).filter(
+  const tokenOnly = (['name', 'hours', 'read-only', 'no-merge'] as const).filter(
     (option) => values[option] !== undefined,
   );
   if (values['new-token'] !== true && tokenOnly.length > 0) {
@@ -265,7 +287,7 @@ function parseServe(argv: string[]): ServeCommand {
     newToken = {
       name: tokenName(values.name),
       hours: tokenHours(values.hours),
-      access: values['read-only'] === true ? 'read' : 'write',
+      access: tokenAccess(values['read-only'], values['no-merge']),
     };
   }
   return {

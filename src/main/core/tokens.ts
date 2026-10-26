@@ -14,8 +14,9 @@ import type { OutsideCaller } from './caller';
  * once, as it is made, or has it written to a file it names: no operation makes, renews or widens
  * one. A token is 256 random bits; the store keeps only its SHA-256 hash,
  * with its name (its party is `outside:<name>`), the canvases it reaches by their stable ids,
- * whether it may write, when it expires (an hour by default, 12 at most) and when it was last used,
- * in a file only the user may read:
+ * whether it may write (`read`, `write`, or `write-no-merge`: a writer that merges no agent's branch,
+ * B9b §9 C1), when it expires (an hour by default, 12 at most) and when it was last used, in a file
+ * only the user may read:
  *
  *   { "version": 2, "tokens": { "<SHA-256 of the token, in hex>": { "id", "name", "canvases",
  *       "access", "expires", "lastUsed"? } } }
@@ -29,18 +30,41 @@ import type { OutsideCaller } from './caller';
  * names it among the store's tokens without its hash or its value: a caller's limits and repeated
  * requests are kept by it, and a call still going ends on it once its token is replaced or
  * expires. An entry that isn't one it writes reads as no token, and is dropped as the store is
- * written again; what it holds that this corrallm doesn't know (a newer one's fields, of the file
+ * written again: an access it doesn't know among them, so a corrallm from before `write-no-merge`
+ * drops such a token rather than take it for a writer that may merge, and a renewal, which makes
+ * the new token with the access the live one has, keeps the restriction; what it holds that this corrallm doesn't know (a newer one's fields, of the file
  * and of each token it reads) is written back as it was. A file of another version, or one that
  * isn't JSON, reads as none and is set aside (readWhole). One that can't be read is never read as
  * none, nor written over: the store refuses to load, so the core doesn't start without it.
  */
+
+/**
+ * What a token may do: read; read and write; or read and write but merge no agent's branch (made
+ * with `--no-merge`: B9b §9 C1, Q30). Kept as one value, never a field beside `write`, which a
+ * corrallm that doesn't know it would keep without reading, and so widen the token.
+ */
+export type TokenAccess = 'read' | 'write' | 'write-no-merge';
+
+const ACCESSES: readonly TokenAccess[] = ['read', 'write', 'write-no-merge'];
+
+/** How a person is told what a token may do. */
+export function accessText(access: TokenAccess): string {
+  switch (access) {
+    case 'read':
+      return 'read-only';
+    case 'write':
+      return 'read-write';
+    case 'write-no-merge':
+      return 'read-write, no merge';
+  }
+}
 
 /** What a person makes a token for. */
 export interface TokenGrant {
   /** Its party's name: an id (ID_PATTERN). */
   name: string;
   canvases: readonly CanvasId[];
-  access: 'read' | 'write';
+  access: TokenAccess;
   /** How long it lasts, in hours: DEFAULT_TOKEN_HOURS unless given, MAX_TOKEN_HOURS at most. */
   hours?: number;
 }
@@ -50,7 +74,7 @@ interface Kept {
   id: string;
   name: string;
   canvases: CanvasId[];
-  access: 'read' | 'write';
+  access: TokenAccess;
   /** When it expires, in epoch ms. */
   expires: number;
   /** When it was last used, in epoch ms. */
@@ -61,7 +85,7 @@ interface Kept {
 export interface KeptGrant {
   name: string;
   canvases: CanvasId[];
-  access: 'read' | 'write';
+  access: TokenAccess;
   /** When it expires, in epoch ms. */
   expires: number;
 }
@@ -130,6 +154,7 @@ export class TokenStore {
     if (!Number.isInteger(hours) || hours < 1 || hours > MAX_TOKEN_HOURS) {
       throw new RangeError(`A token lasts 1 to ${String(MAX_TOKEN_HOURS)} hours.`);
     }
+    if (!ACCESSES.includes(access)) throw new RangeError(`A token can’t be made ${access}.`);
     const token = randomBytes(32).toString('base64url');
     for (const [hash, kept] of this.#tokens) {
       if (kept.name === name) this.#revoke(hash);
@@ -212,7 +237,9 @@ export class TokenStore {
       kind: 'outside',
       token: kept.id,
       name: kept.name,
-      access: kept.access,
+      // A --no-merge token is a writer, its party outside-write, that merging is withheld from.
+      access: kept.access === 'read' ? 'read' : 'write',
+      merge: kept.access === 'write',
       canvases: [...kept.canvases],
     };
   }
@@ -323,7 +350,7 @@ function readToken(value: unknown): Kept | undefined {
     !Array.isArray(canvases) ||
     canvases.length === 0 ||
     !canvases.every(isCanvasId) ||
-    (access !== 'read' && access !== 'write') ||
+    !ACCESSES.includes(access as TokenAccess) ||
     !Number.isSafeInteger(expires) ||
     (lastUsed !== undefined && !Number.isSafeInteger(lastUsed))
   ) {
@@ -333,7 +360,7 @@ function readToken(value: unknown): Kept | undefined {
     id,
     name,
     canvases,
-    access,
+    access: access as TokenAccess,
     expires: expires as number,
     ...(lastUsed === undefined ? {} : { lastUsed: lastUsed as number }),
   };

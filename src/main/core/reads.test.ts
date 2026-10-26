@@ -23,6 +23,7 @@ const OTHER: OutsideCaller = {
   token: 'other-token',
   name: 'other',
   access: 'write',
+  merge: true,
   canvases: [CANVAS],
 };
 const OUTSIDERS = [

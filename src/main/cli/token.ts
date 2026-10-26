@@ -7,6 +7,7 @@ import { appProfile } from '../core/host/node';
 import { ProfileLocked } from '../core/lock';
 import type { LockHolder } from '../core/lock';
 import { askTokenOwner } from '../core/token-socket';
+import { accessText } from '../core/tokens';
 import type { TokenAnswer, TokenOwner, TokenRequest } from '../core/token-socket';
 import { agentEnvironment, loginShellEnvironment } from '../sessions/environment';
 import { installedClis } from '../sessions/installed';
@@ -237,7 +238,7 @@ function madeText(
     .join(', ');
   const until = new Date(answer.expires).toTimeString().slice(0, 5);
   const lines = [
-    `corrallm token: ${answer.op === 'renew' ? 'a renewed' : 'a new'} token for "${answer.name}" (${answer.access === 'write' ? 'read-write' : 'read-only'}, for ${String(hours)} hour${hours === 1 ? '' : 's'}, until ${until}), reaching ${reach}, made by ${BY[answer.owner]}. It replaces any earlier token named "${answer.name}" at once: that one’s next call is refused.`,
+    `corrallm token: ${answer.op === 'renew' ? 'a renewed' : 'a new'} token for "${answer.name}" (${accessText(answer.access)}, for ${String(hours)} hour${hours === 1 ? '' : 's'}, until ${until}), reaching ${reach}, made by ${BY[answer.owner]}. It replaces any earlier token named "${answer.name}" at once: that one’s next call is refused.`,
     '',
     ...(into === undefined
       ? ['It is shown only now; corrallm keeps only its hash:', '', `  ${answer.token}`, '']

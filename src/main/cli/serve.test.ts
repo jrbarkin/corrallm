@@ -737,6 +737,25 @@ describe.skipIf(process.platform === 'win32')('corrallm serve', () => {
   );
 
   it.skipIf(process.platform !== 'darwin' && process.platform !== 'linux')(
+    'makes a --no-merge token on a terminal: read-write with no merge, kept as such',
+    async () => {
+      const { printed, server } = await serveOnTerminal(['--name', 'builder-bot', '--no-merge']);
+      const token = /^ {2}([A-Za-z0-9_-]{43})$/m.exec(printed())?.[1];
+      expect(printed()).toContain(
+        'a new token for "builder-bot" (read-write, no merge, for 1 hour)',
+      );
+      const kept = await readFile(path.join(profile, 'tokens.json'), 'utf8');
+      expect(
+        (JSON.parse(kept) as { tokens: Record<string, unknown> }).tokens[sha256(token ?? '')],
+      ).toMatchObject({ name: 'builder-bot', access: 'write-no-merge' });
+      // It is a writer's token, but for merging.
+      const client = await connect(server.url, token);
+      expect((await call<{ agents: unknown[] }>(client, 'agents')).agents).toHaveLength(2);
+    },
+    30_000,
+  );
+
+  it.skipIf(process.platform !== 'darwin' && process.platform !== 'linux')(
     'exits once its terminal is gone, having let the profile go',
     async () => {
       const { server } = await serveOnTerminal([]);

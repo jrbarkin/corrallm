@@ -78,6 +78,7 @@ const outside: OutsideCaller = {
   token: 'token',
   name: 'orchestrator',
   access: 'write',
+  merge: true,
   canvases: [canvas],
 };
 

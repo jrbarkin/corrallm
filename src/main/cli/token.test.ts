@@ -415,6 +415,21 @@ describe.skipIf(process.platform !== 'darwin' && process.platform !== 'linux')(
       expect(await agents(await connect(server.url, value))).toHaveLength(1);
     }, 60_000);
 
+    it('makes a --no-merge token, said as read-write with no merge, and renews it as one', async () => {
+      const { token: value, printed } = await newToken(['--no-merge']);
+      expect(printed).toContain('a new token for "bot" (read-write, no merge, for 1 hour');
+      expect((await kept()).tokens[sha256(value)]).toMatchObject({ access: 'write-no-merge' });
+      const renewal = await token(['renew', '--name', 'bot']);
+      expect(renewal.code, renewal.printed).toBe(0);
+      made.push(TOKEN_LINE.exec(renewal.printed)?.[1] ?? '');
+      expect(renewal.printed).toContain(
+        'a renewed token for "bot" (read-write, no merge, for 1 hour',
+      );
+      expect(Object.values((await kept()).tokens)).toEqual([
+        expect.objectContaining({ name: 'bot', access: 'write-no-merge' }),
+      ]);
+    }, 60_000);
+
     it('refuses a canvas corrallm doesn’t keep in that file, making nothing', async () => {
       const server = await serve();
       const copy = path.join(dir, 'copy.corral');

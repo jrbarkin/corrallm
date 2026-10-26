@@ -33,6 +33,7 @@ const ORCHESTRATOR: OutsideCaller = {
   token: 'write-token',
   name: 'orchestrator',
   access: 'write',
+  merge: true,
   canvases: [CANVAS],
 };
 const YOU = CALLERS.you;
