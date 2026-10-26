@@ -129,7 +129,9 @@ export function execFile(
     timer = setTimeout(() => {
       stop(Object.assign(new Error(`${command} timed out.`), { killed: true }));
     }, timeout);
-  const collect = (into: Buffer[]) => {
+  // Each stream keeps its first maxBuffer bytes; past them the child's group is ended, saying
+  // which stream it was (as Node's own execFile says it), with what each kept.
+  const collect = (into: Buffer[], stream: 'stdout' | 'stderr') => {
     let size = 0;
     return (chunk: Buffer) => {
       if (finished) return;
@@ -138,16 +140,17 @@ export function execFile(
       if (room > 0) into.push(chunk.subarray(0, room));
       if (size > maxBuffer && failed === null) {
         stop(
-          Object.assign(new Error(`${command} output exceeded maxBuffer.`), {
+          Object.assign(new Error(`${command}: ${stream} maxBuffer length exceeded.`), {
             code: 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER',
             killed: true,
+            stream,
           }),
         );
       }
     };
   };
-  child.stdout.on('data', collect(output));
-  child.stderr.on('data', collect(errors));
+  child.stdout.on('data', collect(output, 'stdout'));
+  child.stderr.on('data', collect(errors, 'stderr'));
   child.once('error', finish);
   child.once('close', (code, signal) => {
     if (failed === null && (code !== 0 || signal !== null)) {

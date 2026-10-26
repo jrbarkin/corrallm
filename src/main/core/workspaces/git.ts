@@ -3,6 +3,7 @@ import path from 'node:path';
 
 import { SAFE_GIT_ENV, SAFE_GIT_OPTIONS, safeGitDiffArgs } from '../../git';
 import { execFile } from '../../sessions/process';
+import type { TemporaryIndex } from './merge-index';
 
 /*
  * The one runner every Git call of the workspaces goes through (B9a Design §2, Git execution
@@ -27,14 +28,44 @@ import { execFile } from '../../sessions/process';
  * - Each call is bounded in time and output, and runs as a child the core owns (core/children.ts,
  *   through sessions/process.ts): recorded before it runs, its whole process group ended if it
  *   takes too long or says too much, and refused once the core is closing.
+ * - B9b's merges add a profile (B9b Design §9 C7, C9): replace refs ignored, so an object id means
+ *   the object itself; renormalization off (it runs filters inside a merge); every custom merge
+ *   driver configured where the call runs blanked by name, so none runs and a path that needs one
+ *   fails closed; Git 2.39 or later; and longer bounds. The install (`install`) is a fast-forward
+ *   to a prepared commit with fixed flags that beat any the repository sets, and a commit
+ *   (`commitTree`) is never signed and never opens an editor. A diff's pages read through
+ *   `capped`, which ends a git at its byte cap and answers what it read, cut. A checkpoint's
+ *   temporary index (`index`) is only ever one the merge service made (merge-index.ts).
  *
  * What this protects is the core running a repository's programs itself. A worktree is checkout
  * isolation, not a sandbox: agents run their own commands in it, and a process already running as
  * the user can change a repository's configuration whenever it likes.
  */
 
+/** A version of Git: its major and minor numbers. */
+export type GitVersion = readonly [number, number];
+
 /** The oldest Git it runs: `worktree list --porcelain -z` (2.36) reads paths of any shape. */
-export const MIN_GIT_VERSION: readonly [number, number] = [2, 36];
+export const MIN_GIT_VERSION: GitVersion = [2, 36];
+
+/**
+ * The oldest Git it merges with (B9b Design §9.1): `merge-tree --write-tree` came in 2.38, and
+ * 2.39 (Debian bookworm's) is the oldest the merge is tested on. Every call of the merge profile
+ * needs it; worktrees and Review changes still run from MIN_GIT_VERSION.
+ */
+export const MERGE_GIT_VERSION: GitVersion = [2, 39];
+
+/** How long computing a merge, or preparing its commits, may take: a timeout refuses it. */
+export const MERGE_TIMEOUT_MS = 5 * 60 * 1000;
+/** How long the install may take (the merge service holds a job a timeout or crash ends there). */
+export const INSTALL_TIMEOUT_MS = 30 * 60 * 1000;
+
+/** An object's id, as Git names it in a SHA-1 or a SHA-256 repository. */
+const OID = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
+/** The longest message a merge's commit takes, in UTF-8 bytes. */
+const MAX_MESSAGE_BYTES = 64 * 1024;
+/** The longest name or email of a commit's author or committer, in UTF-8 bytes. */
+const MAX_IDENTITY_BYTES = 256;
 
 /** How long a call may take, and how much it may print, unless it says otherwise. */
 const DEFAULT_TIMEOUT_MS = 15_000;
@@ -99,6 +130,42 @@ export interface GitCall {
   maxBytes?: number;
   /** Exit codes that answer rather than fail (Git's 1 for "there is none"). */
   answers?: readonly number[];
+  /**
+   * The oldest Git the call needs, when newer than MIN_GIT_VERSION: an older one refuses it
+   * (`git-unsupported`) before anything runs.
+   */
+  needs?: GitVersion;
+  /**
+   * Replace refs ignored (`git --no-replace-objects`): an object id names the object itself,
+   * whatever `refs/replace/` says, so what Review changes reads is what merges. The merge profile
+   * implies it.
+   */
+  noReplaceObjects?: boolean;
+  /** B9b's merge profile, on every call that computes, prepares or installs a merge. */
+  merge?: MergeProfile;
+  /**
+   * The index Git reads and writes (GIT_INDEX_FILE): only a temporary index the merge service
+   * made for its job (merge-index.ts), never the environment's or a caller's path.
+   */
+  index?: TemporaryIndex;
+}
+
+/**
+ * What a call computing, preparing or installing a merge adds (B9b Design §9 C7, C9): replace refs
+ * ignored; renormalization off, since it runs clean and smudge filters inside a merge; and each
+ * custom merge driver configured where it runs blanked (`merge.<name>.driver=`), so none runs and a
+ * path that needs one fails closed, a conflict or Git stopping, never merged some other way. Its
+ * calls need MERGE_GIT_VERSION and are bounded by MERGE_TIMEOUT_MS unless they say otherwise.
+ */
+export interface MergeProfile {
+  /** Every custom merge driver configured where the call runs (`inspect`'s `mergeDrivers`). */
+  drivers: readonly string[];
+}
+
+/** Who a commit is by: a name and an email, as `-c author.*` and `-c committer.*` give them. */
+export interface GitIdentity {
+  name: string;
+  email: string;
 }
 
 export interface GitOutput {
@@ -107,10 +174,26 @@ export interface GitOutput {
   stderr: string;
 }
 
+/**
+ * What a capped read answers: what Git printed, whole (`cut` false, with its exit code), or its
+ * first bytes up to the cap, ending at a whole character (`cut` true: Git was ended, so no code).
+ */
+export interface CappedOutput {
+  code: number | null;
+  stdout: string;
+  stderr: string;
+  cut: boolean;
+}
+
 /** What a repository's configuration is, where a call runs. */
 export interface ConfigInspection {
   /** Every filter driver configured there, includes and conditional includes as they apply. */
   drivers: string[];
+  /**
+   * Every custom merge driver configured there (`merge.<name>.driver`), likewise: a merge's calls
+   * blank each, and refuse one `-c` can't name.
+   */
+  mergeDrivers: string[];
   /** What can't be neutralized there (none: everything can). */
   refusals: string[];
 }
@@ -140,25 +223,170 @@ export class GitRunner {
   readonly #deps: GitRunnerDeps;
   readonly #platform: NodeJS.Platform;
   /** Each executable's version, asked once. */
-  readonly #versions = new Map<string, Promise<void>>();
+  readonly #versions = new Map<string, Promise<AskedVersion>>();
 
   constructor(deps: GitRunnerDeps) {
     this.#deps = deps;
     this.#platform = deps.platform ?? process.platform;
   }
 
-  /** Runs `git <fixed options> <drivers disabled> <args>` in `cwd`. */
+  /** Runs `git <fixed options> <drivers disabled> <merge profile> <args>` in `cwd`. */
   async run(call: GitCall): Promise<GitOutput> {
+    const { git, args, env } = await this.#prepare(call);
+    return this.#exec(git, args, env, { ...call, timeoutMs: timeoutOf(call) });
+  }
+
+  /**
+   * Runs a call as `run` does, reading what it prints up to `cap` bytes: past them, its process
+   * group is ended and it answers what it read, cut at a whole character (B9b §9 C2's pages, which
+   * cut further at a line). Never a larger buffer read whole and then cut, and never a git that
+   * failed, timed out or said too much on stderr read as a short page: those fail as `run`'s do.
+   */
+  async capped(call: GitCall & { cap: number }): Promise<CappedOutput> {
+    const { cap, ...rest } = call;
+    if (!Number.isSafeInteger(cap) || cap < 1) throw new TypeError(`${String(cap)} isn’t a cap.`);
+    const { git, args, env } = await this.#prepare(rest);
+    return this.#exec(git, args, env, { ...rest, timeoutMs: timeoutOf(rest), maxBytes: cap }, cap);
+  }
+
+  /**
+   * Installs the prepared merge commit `commit` (an object id) in the checkout at `cwd` (B9b
+   * Design §9 C8): a fast-forward, `merge --ff-only --no-overwrite-ignore`, which computes no
+   * merge, refuses a file in the way, an ignored one too, and writes nothing then but ORIG_HEAD;
+   * with flags that beat any the repository sets (`branch.<name>.mergeOptions`, `merge.*`): no
+   * signature verified, no autostash, no diffstat, no squash, no editor. Under the merge profile,
+   * bounded by INSTALL_TIMEOUT_MS.
+   */
+  async install(call: {
+    cwd: string;
+    commit: string;
+    drivers?: readonly string[];
+    merge: MergeProfile;
+    timeoutMs?: number;
+  }): Promise<GitOutput> {
+    if (!OID.test(call.commit)) throw new TypeError(`${call.commit} isn’t a commit’s object id.`);
+    return this.run({
+      cwd: call.cwd,
+      ...(call.drivers === undefined ? {} : { drivers: call.drivers }),
+      merge: call.merge,
+      timeoutMs: call.timeoutMs ?? INSTALL_TIMEOUT_MS,
+      args: [
+        'merge',
+        '--ff-only',
+        '--no-overwrite-ignore',
+        '--no-verify-signatures',
+        '--no-autostash',
+        '--no-stat',
+        '--no-squash',
+        '--no-edit',
+        '-q',
+        call.commit,
+      ],
+    });
+  }
+
+  /**
+   * Makes a commit of `tree` on `parents` (object ids, one or two) with `message`, by `author`
+   * and `committer` as given, under the merge profile (B9b Design §9 C6, C9e): never signed
+   * (`commit.gpgSign=false`, `--no-gpg-sign`), never an editor (`-m`), and plumbing, so no
+   * commit hook. Its id, checked to be one.
+   */
+  async commitTree(call: {
+    cwd: string;
+    tree: string;
+    parents: readonly string[];
+    message: string;
+    author: GitIdentity;
+    committer: GitIdentity;
+    drivers?: readonly string[];
+    merge: MergeProfile;
+    timeoutMs?: number;
+  }): Promise<string> {
+    const { tree, parents, message, author, committer } = call;
+    if (!OID.test(tree)) throw new TypeError(`${tree} isn’t a tree’s object id.`);
+    if (parents.length < 1 || parents.length > 2 || !parents.every((one) => OID.test(one))) {
+      throw new TypeError('A merge’s commit has one or two parents, by their object ids.');
+    }
+    if (
+      message === '' ||
+      message.includes('\0') ||
+      Buffer.byteLength(message) > MAX_MESSAGE_BYTES
+    ) {
+      throw new TypeError('A commit’s message is some text, with no NUL, of at most 64 KiB.');
+    }
+    for (const who of [author, committer]) {
+      for (const part of [who.name, who.email]) {
+        if (
+          part === '' ||
+          Buffer.byteLength(part) > MAX_IDENTITY_BYTES ||
+          /[<>\p{Cc}]/u.test(part)
+        ) {
+          throw new TypeError(`${JSON.stringify(part)} can’t be a commit’s name or email.`);
+        }
+      }
+    }
+    const { stdout } = await this.run({
+      cwd: call.cwd,
+      ...(call.drivers === undefined ? {} : { drivers: call.drivers }),
+      ...(call.timeoutMs === undefined ? {} : { timeoutMs: call.timeoutMs }),
+      merge: call.merge,
+      config: [
+        `author.name=${author.name}`,
+        `author.email=${author.email}`,
+        `committer.name=${committer.name}`,
+        `committer.email=${committer.email}`,
+      ],
+      args: [
+        '-c',
+        'commit.gpgSign=false',
+        'commit-tree',
+        '--no-gpg-sign',
+        ...parents.flatMap((parent) => ['-p', parent]),
+        '-m',
+        message,
+        tree,
+      ],
+    });
+    const oid = stdout.trim();
+    if (!OID.test(oid)) {
+      throw new GitError('failed', 'git commit-tree answered what isn’t an object id.');
+    }
+    return oid;
+  }
+
+  /**
+   * A call's git, arguments and environment, once everything it needs is checked: the drivers
+   * named, its Git found and new enough, the hooks folder empty, its index one of the merge
+   * service's.
+   */
+  async #prepare(
+    call: GitCall,
+  ): Promise<{ git: string; args: string[]; env: Record<string, string> }> {
     const drivers = [...new Set(call.drivers ?? [])].sort();
     const unnamed = drivers.find((driver) => driver.includes('='));
     if (unnamed !== undefined) {
       throw new GitError('config', `Git can’t be told to disable the filter driver ${unnamed}.`);
     }
+    const mergeDrivers = [...new Set(call.merge?.drivers ?? [])].sort();
+    const unnamedMerge = mergeDrivers.find((driver) => driver.includes('='));
+    if (unnamedMerge !== undefined) {
+      throw new GitError(
+        'config',
+        `Git can’t be told to disable the merge driver ${unnamedMerge}: merging is refused.`,
+      );
+    }
     const env = gitEnvironment(await this.#deps.environment());
+    if (call.index !== undefined) {
+      if (!path.isAbsolute(call.index)) throw new TypeError(`${call.index} isn’t absolute.`);
+      env.GIT_INDEX_FILE = call.index;
+    }
     const git = this.#deps.executable ?? findGit(env, this.#platform);
     if (git === undefined) throw new GitError('git-missing', 'Git isn’t installed.');
     this.#checkHooks();
-    await this.#version(git, env);
+    const version = await this.#version(git, env);
+    floor(version, MIN_GIT_VERSION, 'Worktrees need');
+    if (call.merge !== undefined) floor(version, MERGE_GIT_VERSION, 'Merging needs');
+    if (call.needs !== undefined) floor(version, call.needs, 'This needs');
     const args = [
       // The call's own first: Git takes the last of each, so the fixed options win.
       ...(call.config ?? []).flatMap((entry) => ['-c', entry]),
@@ -185,9 +413,19 @@ export class GitRunner {
         '-c',
         `filter.${driver}.required=false`,
       ]),
+      ...(call.merge === undefined
+        ? []
+        : [
+            '-c',
+            'merge.renormalize=false',
+            ...mergeDrivers.flatMap((driver) => ['-c', `merge.${driver}.driver=`]),
+          ]),
+      ...(call.merge !== undefined || call.noReplaceObjects === true
+        ? ['--no-replace-objects']
+        : []),
       ...call.args,
     ];
-    return this.#exec(git, args, env, call);
+    return { git, args, env };
   }
 
   /**
@@ -204,8 +442,12 @@ export class GitRunner {
     });
     const names = stdout.split('\0').filter((name) => name !== '');
     const drivers = new Set<string>();
+    const mergeDrivers = new Set<string>();
     const refusals = new Set<string>();
     for (const name of names) {
+      // Kept even when -c can't name it (`=`): a merge's call refuses it, nothing else needs to.
+      const merging = /^merge\.(.*)\.driver$/s.exec(name)?.[1];
+      if (merging !== undefined) mergeDrivers.add(merging);
       const driver = /^filter\.(.*)\.(?:clean|smudge|process|required)$/s.exec(name)?.[1];
       if (driver !== undefined) {
         if (driver.includes('=')) {
@@ -219,7 +461,11 @@ export class GitRunner {
         refusals.add(`Hooks are configured (${name}): core.hooksPath doesn’t disable them.`);
       }
     }
-    return { drivers: [...drivers].sort(), refusals: [...refusals].sort() };
+    return {
+      drivers: [...drivers].sort(),
+      mergeDrivers: [...mergeDrivers].sort(),
+      refusals: [...refusals].sort(),
+    };
   }
 
   /**
@@ -242,20 +488,17 @@ export class GitRunner {
     return this.run({ ...rest, drivers, args: [...safe, ...args] });
   }
 
-  async #version(git: string, env: Record<string, string>): Promise<void> {
+  /** The version of `git`, asked once: what it says, and its numbers (0.0 for none it says). */
+  #version(git: string, env: Record<string, string>): Promise<AskedVersion> {
     let asked = this.#versions.get(git);
     if (asked === undefined) {
       // Asked in the hooks folder: an empty folder of the core's, in no repository.
       asked = this.#exec(git, ['--version'], env, { cwd: this.#deps.hooks }).then(({ stdout }) => {
         const found = /^git version (\d+)\.(\d+)/.exec(stdout.trim());
-        const [major, minor] = MIN_GIT_VERSION;
-        const [has, hasMinor] = found ? [Number(found[1]), Number(found[2])] : [0, 0];
-        if (has < major || (has === major && hasMinor < minor)) {
-          throw new GitError(
-            'git-unsupported',
-            `Worktrees need Git ${String(major)}.${String(minor)} or later; this is ${stdout.trim() || 'unknown'}.`,
-          );
-        }
+        return {
+          text: stdout.trim() || 'unknown',
+          version: found ? [Number(found[1]), Number(found[2])] : [0, 0],
+        };
       });
       this.#versions.set(git, asked);
       // A git that couldn't be asked is asked again next time.
@@ -292,8 +535,24 @@ export class GitRunner {
     args: readonly string[],
     env: Record<string, string>,
     call: Pick<GitCall, 'cwd' | 'timeoutMs' | 'maxBytes' | 'answers'>,
-  ): Promise<GitOutput> {
+  ): Promise<GitOutput>;
+  #exec(
+    git: string,
+    args: readonly string[],
+    env: Record<string, string>,
+    call: Pick<GitCall, 'cwd' | 'timeoutMs' | 'maxBytes' | 'answers'>,
+    cap: number,
+  ): Promise<CappedOutput>;
+  #exec(
+    git: string,
+    args: readonly string[],
+    env: Record<string, string>,
+    call: Pick<GitCall, 'cwd' | 'timeoutMs' | 'maxBytes' | 'answers'>,
+    cap?: number,
+  ): Promise<GitOutput | CappedOutput> {
     const answers = call.answers ?? [];
+    const read = (code: number, stdout: string, stderr: string) =>
+      cap === undefined ? { code, stdout, stderr } : { code, stdout, stderr, cut: false };
     return new Promise((resolve, reject) => {
       const start = () =>
         execFile(
@@ -308,14 +567,18 @@ export class GitRunner {
           },
           (error, stdout, stderr) => {
             if (error === null) {
-              resolve({ code: 0, stdout, stderr });
+              resolve(read(0, stdout, stderr));
               return;
             }
             const code = (error as { code?: unknown }).code;
             if (code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER') {
-              reject(new GitError('output', `git ${args.at(-1) ?? ''} printed too much.`));
+              if (cap !== undefined && overflowed(error) === 'stdout') {
+                resolve({ code: null, stdout: cutAt(stdout, cap), stderr, cut: true });
+              } else {
+                reject(new GitError('output', `git ${args.at(-1) ?? ''} printed too much.`));
+              }
             } else if (typeof code === 'number' && answers.includes(code)) {
-              resolve({ code, stdout, stderr });
+              resolve(read(code, stdout, stderr));
             } else if (typeof code === 'number') {
               reject(new GitError('failed', `git exited with ${String(code)}.`, code, stderr));
             } else if ((error as { killed?: unknown }).killed === true) {
@@ -335,6 +598,49 @@ export class GitRunner {
       }
     });
   }
+}
+
+/** A version of Git as it says it, and its numbers. */
+interface AskedVersion {
+  text: string;
+  version: GitVersion;
+}
+
+/** Throws `git-unsupported`, saying what `needing` does, unless `asked` is `least` or later. */
+function floor(asked: AskedVersion, least: GitVersion, needing: string): void {
+  const [major, minor] = least;
+  const [has, hasMinor] = asked.version;
+  if (has < major || (has === major && hasMinor < minor)) {
+    throw new GitError(
+      'git-unsupported',
+      `${needing} Git ${String(major)}.${String(minor)} or later; this is ${asked.text}.`,
+    );
+  }
+}
+
+/** A call's bound in time: its own, else the merge profile's, else the default. */
+function timeoutOf(call: GitCall): number {
+  return call.timeoutMs ?? (call.merge === undefined ? DEFAULT_TIMEOUT_MS : MERGE_TIMEOUT_MS);
+}
+
+/** Which of a git's streams went past its bound: as the owned helper says it, or Node's execFile. */
+function overflowed(error: Error): 'stdout' | 'stderr' {
+  const stream = (error as { stream?: unknown }).stream;
+  if (stream === 'stdout' || stream === 'stderr') return stream;
+  return /\bstdout\b/.test(error.message) ? 'stdout' : 'stderr';
+}
+
+/**
+ * `text` within `cap` bytes of UTF-8, ending at a whole character: a character the cap cut into
+ * (or decoded as a replacement for its cut bytes) is left out with what follows.
+ */
+function cutAt(text: string, cap: number): string {
+  const bytes = Buffer.from(text, 'utf8');
+  let end = Math.min(cap, bytes.length);
+  // A continuation byte past the end means the character before it straddles the cut.
+  while (end > 0 && end < bytes.length && ((bytes[end] ?? 0) & 0xc0) === 0x80) end--;
+  const kept = bytes.subarray(0, end).toString('utf8');
+  return kept.endsWith('\uFFFD') ? kept.slice(0, -1) : kept;
 }
 
 /** git in the PATH's absolute folders only: a relative entry (".") could find a repository's. */
