@@ -40,16 +40,23 @@ test('the window and outside MCP share document, messages and session, respectin
     const outsideFile = JSON.parse(await readFile(world.file, 'utf8')) as unknown;
 
     // Equivalent edits have identical canonical files apart from their deliberate authorship.
+    // Yours is the unmarked author (a queue item says who wrote it only when it was not you), so
+    // the person's edit clears the outside author the item carried.
+    const authored = async () => {
+      const current = await item();
+      return { message: current?.message, by: current?.by };
+    };
     await text.fill('parity-intermediate');
     await text.blur();
-    await expect.poll(item).toMatchObject({ message: 'parity-intermediate', by: 'you' });
+    await expect.poll(authored).toEqual({ message: 'parity-intermediate', by: undefined });
     await text.fill('parity-shared-text');
     await text.blur();
-    await expect.poll(item).toMatchObject({ message: 'parity-shared-text', by: 'you' });
+    await expect.poll(authored).toEqual({ message: 'parity-shared-text', by: undefined });
     await page.keyboard.press('ControlOrMeta+s');
+    // Authorship is the one deliberate difference: the outside file names its author, yours none.
     const canonical = (value: unknown): unknown =>
       JSON.parse(
-        JSON.stringify(value, (key, value: unknown) => (key === 'by' ? '<author>' : value)),
+        JSON.stringify(value, (key, value: unknown) => (key === 'by' ? undefined : value)),
       );
     await expect
       .poll(async () => canonical(JSON.parse(await readFile(world.file, 'utf8'))))
@@ -114,7 +121,11 @@ test('the window and outside MCP share document, messages and session, respectin
     expect(await world.sessions()).toHaveLength(1);
 
     // Approve is a human gesture; the token couldn't erase the gate to get here.
-    await view.getByRole('button', { name: 'Approve', exact: true }).click();
+    // The window shows the open OK twice (in its queue, and as the Needs you card); either answers.
+    await view
+      .getByRole('group', { name: 'Needs you' })
+      .getByRole('button', { name: 'Approve', exact: true })
+      .click();
     await view.getByRole('button', { name: 'All queues', exact: true }).click();
     await expect(world.queues().getByRole('status')).toHaveText('All done');
     // R7 protects even a completed OK. Only the person removes it before a token may propose
