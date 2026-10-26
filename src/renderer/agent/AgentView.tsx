@@ -42,6 +42,7 @@ import { Rail } from './Rail';
 import { ResumePicker } from './ResumePicker';
 import { Rewind } from './Rewind';
 import { AgentChip } from './AgentChip';
+import { WorkspaceBadge, WorkspaceWait } from '../workspaces/Workspace';
 import { AgentSettingsSummary } from './AgentSettings';
 import type { Relation, StackedAgent } from './Rail';
 import type { ComposerControls } from './Composer';
@@ -502,6 +503,7 @@ export function AgentView({
               >
                 All queues
               </button>
+              <WorkspaceBadge agent={node.id} />
               <AgentSettingsSummary
                 node={node}
                 options={controls.settingsOptions}
@@ -516,6 +518,7 @@ export function AgentView({
                 }}
               />
             </header>
+            <WorkspaceWait agent={node.id} />
             <div ref={body} className="agent-body">
               <aside className="agent-side" data-column="own" aria-label="Questions and queue">
                 <h2 className="agent-side-title">Queue</h2>

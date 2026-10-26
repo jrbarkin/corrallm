@@ -117,6 +117,85 @@ async function open({
 const SCREEN = { type: 'screen', data: 'Claude Code\r\n❯ ', cols: 100, rows: 30 } as const;
 
 describe('a Terminal agent', () => {
+  it('explains setup instead of Starting and links straight to its live card', async () => {
+    let made: FakeCanvas | undefined;
+    const need = 'setup/tree/1';
+    const { container } = await renderReady(
+      <GraphEditor
+        initialGraph={{ nodes: [agent('a')], edges: [] }}
+        onCanvas={(canvas) => {
+          made = canvas;
+        }}
+      />,
+    );
+    const canvas = made;
+    if (!canvas) throw new Error('No canvas');
+    const fake = canvas.core;
+    const worktrees = `worktrees:${canvas.document.id}` as const;
+    const needs = `needs:${canvas.document.id}` as const;
+    // The editor has subscribed by the time onCanvas runs, so the core says the workspace and its
+    // card as it would, rather than the test replacing a snapshot the mirror already holds.
+    act(() => {
+      fake.change({
+        topic: worktrees,
+        rev: (fake.state(worktrees)?.rev ?? 0) + 1,
+        replace: {
+          items: [
+            {
+              agent: 'a',
+              mode: 'own',
+              workspace: null,
+              generation: 1,
+              branch: 'corral/a',
+              base: null,
+              state: 'setup',
+              need,
+              setup: { state: 'pending', command: 'npm ci', source: 'detected', exitCode: null },
+            },
+          ],
+          kept: [],
+        },
+      });
+    });
+    const sayNeeds = () => {
+      act(() => {
+        fake.change({
+          topic: needs,
+          rev: (fake.state(needs)?.rev ?? 0) + 1,
+          replace: {
+            items: [
+              {
+                id: need,
+                canvas: canvas.document.id,
+                kind: 'worktree',
+                for: 'you',
+                by: ['you'],
+                answerIn: 'api',
+                title: 'Set up a’s worktree?',
+                choices: [{ label: 'Skip', value: 'skip' }],
+              },
+            ],
+          },
+        });
+      });
+    };
+    sayNeeds();
+    const card = container.querySelector<HTMLElement>('.react-flow__node[data-id="a"]');
+    if (!card) throw new Error('No card');
+    await events.doubleClick(card);
+    const view = within(screen.getByRole('dialog', { name: 'a' }));
+    expect(view.queryByText('Starting Claude Code…')).toBeNull();
+    expect(view.getAllByText('Waiting for worktree setup').length).toBeGreaterThan(0);
+    expect(view.getByText('corral/a')).toBeTruthy();
+    const action = view
+      .getAllByRole('button', { name: 'Review setup' })
+      .find((button) => button.closest('header'));
+    if (!action) throw new Error('No setup action in header');
+    // Opening the window made the fake runtime derive its needs afresh; the core says its card again.
+    sayNeeds();
+    await events.click(action);
+    expect(await screen.findByRole('article', { name: 'Set up a’s worktree?' })).toBeTruthy();
+  });
   it.each(['finished', 'cancelled'] as const)(
     'keeps its terminal when Needs reopens it before Back’s animation has %s',
     async (outcome) => {

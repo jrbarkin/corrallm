@@ -33,6 +33,7 @@ function setup() {
     <Canvases
       canvas={current}
       mirror={core.topics}
+      client={core.api}
       onShow={async (canvas) => {
         await core.api.windowShow({ canvas });
       }}
@@ -43,6 +44,51 @@ function setup() {
   );
   return core;
 }
+
+it('keeps closed-canvas work and its pending confirmation reachable after reopening the list', async () => {
+  const core = setup();
+  const worktree = '11111111-1111-4111-8111-111111111111';
+  core.snapshot(`worktrees:${current}`, { items: [], kept: [] });
+  core.snapshot(`needs:${current}`, { items: [] });
+  core.snapshot(`worktrees:${other}`, {
+    items: [],
+    kept: [
+      {
+        workspace: worktree,
+        owner: 'agent/old',
+        name: 'Former agent',
+        branch: 'corral/old',
+        base: { ref: 'main', oid: '123' },
+        location: '/project/kept',
+        state: 'retained',
+        error: null,
+        createdAt: 1,
+      },
+    ],
+  });
+  core.snapshot(`needs:${other}`, {
+    items: [
+      {
+        id: 'proposal/kept',
+        canvas: other,
+        kind: 'proposal',
+        for: 'you',
+        by: ['you'],
+        answerIn: 'api',
+        title: 'Remove a kept worktree? It holds work.',
+        choices: [{ label: 'Cancel', value: 'refuse' }],
+      },
+    ],
+  });
+  await events.click(screen.getByRole('button', { name: 'Canvases' }));
+  const kept = await screen.findByRole('region', { name: 'Kept worktrees of Untitled' });
+  expect(within(kept).getByText('Former agent')).toBeTruthy();
+  expect(within(kept).getByText('corral/old')).toBeTruthy();
+  await events.click(screen.getByRole('button', { name: 'Close Canvases list' }));
+  await events.click(screen.getByRole('button', { name: 'Canvases' }));
+  await events.click(await screen.findByRole('button', { name: 'Cancel' }));
+  expectOneOp(core, 'reply', { canvas: other, to: 'proposal/kept', answer: { choice: 'refuse' } });
+});
 it('reads the pushed list in core order with its states and project, and follows changes', async () => {
   const core = setup();
   await events.click(screen.getByRole('button', { name: 'Canvases' }));

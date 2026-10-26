@@ -1,4 +1,4 @@
-import { lstatSync } from 'node:fs';
+import { existsSync, lstatSync } from 'node:fs';
 import path from 'node:path';
 
 import { mintTrustedPath } from '../host';
@@ -108,6 +108,18 @@ export async function checkCheckout(
       : fail('checkout-changed', `${at} can’t be read.`);
   }
   if (realOrNone(at) !== at) return fail('checkout-changed', 'Its folder isn’t its real path.');
+  const checked = await checkRegistration(git, repository, at);
+  // A folder lost while Git was asked about it makes Git fail in ways that look like a change
+  // (or an unknown): whatever it said, one gone now is gone, not another checkout.
+  return !checked.ok && !existsSync(at) ? fail('checkout-missing', `${at} is gone.`) : checked;
+}
+
+/** The checkout at `at`, a real folder of the owned root, as `.git` and Git itself say now. */
+async function checkRegistration(
+  git: GitRunner,
+  repository: RepositoryRecord,
+  at: string,
+): Promise<Check> {
   const gitDir = gitdirOf(path.join(at, '.git'));
   const registered = gitDir === undefined ? undefined : realOrNone(gitDir);
   if (registered === undefined || !agrees(at, registered, repository.commonDir)) {

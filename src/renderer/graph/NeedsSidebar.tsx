@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useSessionSummaries } from '../api/runtime';
 import type { SessionSummary } from '../../shared/model/views';
 import type { TerminalAsk } from '../../shared/session';
@@ -56,12 +56,15 @@ export function NeedsSidebar({
   onReply,
   nodes,
   onOpen,
+  request,
 }: {
   canvas: CanvasId;
   mirror: TopicMirror;
   nodes: readonly CanvasNode[];
   onOpen: (agent: string) => void;
   onReply: (to: string, answer: ArgsOf<'reply'>['answer']) => Promise<Reply>;
+  /** A card to open and focus (the dock's Review for a workspace change), even if dismissed. */
+  request?: { id: string } | undefined;
 }) {
   const state = useTopic(`needs:${canvas}`, mirror);
   /** What each agent's terminal asks, in its words: its summary's, yours alone and bounded. */
@@ -69,6 +72,20 @@ export function NeedsSidebar({
     canvas,
     mirror,
   );
+  const target = useRef<HTMLElement>(null);
+  const focused = useRef<typeof request>(undefined);
+  useEffect(() => {
+    if (!request || focused.current === request) return;
+    const timer = setTimeout(() => {
+      if (target.current) {
+        target.current.focus();
+        focused.current = request;
+      }
+    }, 0);
+    return () => {
+      clearTimeout(timer);
+    };
+  }, [request, state]);
   const [settlements, setSettlements] = useState<ReadonlyMap<string, Settlement>>(new Map());
   const current = new Map((state?.items ?? []).map((item) => [item.id, item]));
   // Pending replies and successful outcomes survive topic removal. A failed reply belongs only
@@ -146,7 +163,7 @@ export function NeedsSidebar({
       </button>
     );
   return (
-    <FloatPopover label="Needs you" button={bell} className="needs-popover">
+    <FloatPopover label="Needs you" button={bell} className="needs-popover" request={request}>
       {(close) => (
         <aside className="graph-questions" aria-label="Needs you">
           <h2>
@@ -185,6 +202,9 @@ export function NeedsSidebar({
               <article
                 key={item.id}
                 className="graph-question"
+                tabIndex={-1}
+                ref={request?.id === item.id ? target : undefined}
+                data-requested={request?.id === item.id ? '' : undefined}
                 role={item.kind === 'prompt' ? 'group' : undefined}
                 aria-label={
                   item.kind === 'prompt' && item.agent
@@ -196,7 +216,9 @@ export function NeedsSidebar({
                   {item.kind === 'file'
                     ? 'File review'
                     : item.kind === 'worktree'
-                      ? 'Worktree setup'
+                      ? item.id.startsWith('rebind/')
+                        ? 'Workspace change'
+                        : 'Worktree setup'
                       : item.id.startsWith('stalled/')
                         ? `Silent session: ${item.agent === undefined ? 'agent' : agentName(nodes, item.agent)}`
                         : item.id.startsWith('unsaved/')

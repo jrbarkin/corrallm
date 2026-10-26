@@ -12,6 +12,7 @@ import { startTransition, useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 
 import { AdapterLogo } from '../AdapterLogo';
+import { WorkspaceBadge } from '../workspaces/Workspace';
 import { useLabel } from '../useDraft';
 import { useGraphActions } from './actions';
 import { pointOnBezier } from './curve';
@@ -51,6 +52,7 @@ export function AgentNodeView({ id, data, parentId }: NodeProps<GraphNode>) {
       <div className="graph-card-status" title={card.line}>
         {card.line}
       </div>
+      <WorkspaceBadge agent={id} card />
       <div
         className="graph-card-progress"
         role="progressbar"
