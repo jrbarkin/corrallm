@@ -92,7 +92,7 @@ The terminal draws only with xterm.js's WebGL renderer: the production CSP block
 
 What its Claude Code asks in it is listed in the canvas's Needs you sidebar (Questions.tsx's TerminalAskCard: shown, never answered; Open terminal; a permission with what its prompt shows, in short: the command in full, an edit's diff, the start of a new file), and its card glows while it asks anything; its folder trust dialog, asked as it starts (turn or not), makes the bar say "Trust this folder in the terminal".
 
-A file:// link Cmd-clicked in it is shown in the file manager if it is in the project folder (link.reveal).
+A file:// link Cmd-clicked on macOS or Ctrl-clicked on Linux/Windows is shown in the file manager if it is in the project folder (link.reveal). The same modifier gates HTTP links. Screen tests cover the text-link addon and OSC 8 handler; actual pointer discovery remains an e2e check.
 
 ## `src/renderer/search/`
 
