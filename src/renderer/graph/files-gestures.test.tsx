@@ -66,7 +66,7 @@ const click = async (name: string) => {
 /** Opens the agent view of the canvas's one agent. */
 const openWriter = async (canvas: ReturnType<typeof fakeCanvas>) => {
   await events.doubleClick(await screen.findByText('Writer'));
-  expectOneOp(canvas.core, 'session.open', { canvas: canvas.document.id, agent: 'a' });
+  expect(canvas.core.operations).toEqual([]);
   canvas.core.operations.length = 0;
 };
 const writer = (canvas: ReturnType<typeof fakeCanvas>) =>

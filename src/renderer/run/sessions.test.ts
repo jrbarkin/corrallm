@@ -8,6 +8,9 @@ import type { MessageView } from '../../shared/model/views';
 import { AgentId } from '../../shared/api/ids';
 import { catalog } from '../catalog';
 import { ApiError } from '../api/client';
+import { act, renderHook, waitFor } from '@testing-library/react';
+import { useDisplayedSession } from './sessions';
+import { expectOneOp } from '../test-api';
 const connection = catalog().adapters[0]?.connections[0]?.id;
 if (!connection) throw new Error('The fixture needs a connection.');
 import { findProjectFiles } from '../agent/completion';
@@ -15,6 +18,71 @@ import { findProjectFiles } from '../agent/completion';
 vi.mock('../agent/completion', () => ({ findProjectFiles: vi.fn().mockResolvedValue([]) }));
 
 afterEach(() => vi.unstubAllGlobals());
+
+it('uses the foreground session topic summary with its entries, even before the canvas summary arrives', async () => {
+  const core = fakeCore();
+  const canvas = newCanvasId();
+  const view = sessionView(AgentId.parse('a'), connection, {
+    ...NEW_SESSION,
+    status: 'working',
+    model: 'native-model',
+    entries: [{ kind: 'text', id: 'reply', text: 'Streaming' }],
+  });
+  core.snapshot(`session:${canvas}:a`, view);
+  const presentation = { snapshot: () => undefined, subscribe: () => () => undefined };
+  const hook = renderHook(() =>
+    useDisplayedSession(canvas, 'a', core.topics, undefined, undefined, {
+      ...nativeQueries,
+      presentation,
+    }),
+  );
+  try {
+    await waitFor(() => expect(hook.result.current.entries).toHaveLength(1));
+    expect(hook.result.current).toMatchObject({ status: 'working', model: 'native-model' });
+    act(() => {
+      core.change({
+        topic: `session:${canvas}:a`,
+        rev: 1,
+        summary: { ...view.summary, status: 'idle', model: 'changed-model' },
+      });
+    });
+    expect(hook.result.current).toMatchObject({ status: 'idle', model: 'changed-model' });
+    expect(core.operations).toEqual([]);
+  } finally {
+    hook.unmount();
+    core.dispose();
+  }
+});
+
+it('keeps each native control one operation, including lifecycle composites', async () => {
+  const core = fakeCore();
+  const canvas = newCanvasId();
+  const failed = vi.fn();
+  const controls = sessionCommands(core.api, canvas, 'a', core.topics, failed);
+  try {
+    for (const [op, args, gesture] of [
+      ['session.interrupt', {}, () => controls.stop()],
+      ['session.setMode', { mode: 'plan' }, () => controls.setMode('plan')],
+      ['session.setModel', { model: 'opus' }, () => controls.setModel('opus')],
+      ['session.setEffort', { effort: null }, () => controls.setEffort?.(null)],
+      ['session.stopTask', { task: 'task-1' }, () => controls.stopTask?.('task-1')],
+      ['session.restart', {}, () => controls.restart()],
+    ] as const) {
+      core.operations.length = 0;
+      gesture();
+      await waitFor(() => expectOneOp(core, op, { canvas, agent: 'a', ...args }));
+    }
+    core.operations.length = 0;
+    core.respond('session.rewind', { conversation: true });
+    await controls.rewind('native-message', 'conversation');
+    expectOneOp(core, 'session.rewind', {
+      canvas, agent: 'a', message: 'native-message', restore: 'conversation',
+    });
+    expect(failed).not.toHaveBeenCalled();
+  } finally {
+    core.dispose();
+  }
+});
 
 it('keeps the foreground agent context through the transitional options and file queries', async () => {
   const options = { models: [], defaults: { model: null, effort: null, mode: null } };

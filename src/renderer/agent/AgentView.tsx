@@ -180,7 +180,7 @@ export function AgentView({
   /** Opens its Agent settings sheet (AgentSettings.tsx). */
   onOpenSettings: () => void;
   /** Switches it to Terminal, which resumes its conversation, and runs `command` there if given. */
-  onContinueInTerminal: (command?: string) => void;
+  onContinueInTerminal: (command?: string, images?: MessageImage[]) => void;
   /** What changes its queue, and the queue shown beside it. */
   edits: QueueEdits;
   /** How each agent's tasks are marked: links, and where the queues' run is (src/shared/model/queue-marks.ts). */
@@ -323,7 +323,7 @@ export function AgentView({
   /** The wait target whose step is being picked in that queue. */
   const [choosing, setChoosing] = useState<StepChoice>();
   /** A command typed that only Claude Code's terminal runs, while Terminal is offered for it. */
-  const [offer, setOffer] = useState<string>();
+  const [offer, setOffer] = useState<{ text: string; images?: MessageImage[] }>();
   /** The view's own command whose panel is open above the composer (/resume). */
   const [opened, setOpened] = useState<ViewCommand>();
   /** The message picked to rewind to, while /rewind's panel is open (none: it asks which). */
@@ -431,7 +431,7 @@ export function AgentView({
       connection === 'claude-code.sdk' &&
       (terminalCommand(text, session.commands) || bashCommand(text) !== undefined)
     ) {
-      setOffer(text.trim());
+      setOffer({ text, ...(images?.length ? { images } : {}) });
       return;
     }
     if (ask?.reply && !(connection !== 'unavailable' && isCommand(text, session.commands))) {
@@ -681,10 +681,10 @@ export function AgentView({
                         )}
                         {offer !== undefined && (
                           <TerminalOffer
-                            command={offer}
+                            command={offer.text.trim()}
                             onContinue={() => {
                               setOffer(undefined);
-                              onContinueInTerminal(offer);
+                              onContinueInTerminal(offer.text, offer.images);
                             }}
                             onCancel={() => {
                               setOffer(undefined);

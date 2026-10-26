@@ -29,6 +29,7 @@ export function fakeCore() {
   const operations: RecordedOp[] = [];
   const subscriptions = new Set<TopicKey | RuntimeTopicKey>();
   const snapshots = new Map<MirrorTopicKey, MirrorSnapshot>();
+  const observers = new Set<(topic: MirrorTopicKey) => void>();
   const replies = new Map<
     GuiOp,
     OpResult<unknown> | ((args: unknown) => Promise<OpResult<unknown>>)
@@ -50,6 +51,7 @@ export function fakeCore() {
               return { ok: true, value: {} };
             }
             subscriptions.add(topic);
+            for (const observe of observers) observe(topic);
             const snapshot = snapshots.get(topic);
             return snapshot
               ? { ok: true, value: snapshot }
@@ -87,6 +89,10 @@ export function fakeCore() {
     topics,
     operations,
     subscriptions,
+    observeTopics(observe: (topic: MirrorTopicKey) => void): () => void {
+      observers.add(observe);
+      return () => { observers.delete(observe); };
+    },
     respond(op: GuiOp, value: unknown): void {
       replies.set(op, { ok: true, value });
     },

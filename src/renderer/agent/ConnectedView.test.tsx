@@ -1603,6 +1603,31 @@ describe('a connected agent', () => {
 });
 
 describe('an Agent SDK agent continued in Terminal', () => {
+  it('continues the exact pending input and its images in one operation', async () => {
+    const { backend, composer, view, operations } = await open({ connection: 'claude-code.sdk' });
+    const file = new File(['image'], 'diagram.png', { type: 'image/png' });
+    await events.drop(composer, { dataTransfer: { files: [file] } });
+    const input = '  !printf "hello"\n  ';
+    await events.change(composer, { target: { value: input } });
+    await events.keyDown(composer, { key: 'Enter' });
+    await settle();
+    const before = operations().length;
+    await events.click(view.getByRole('button', { name: 'Continue in Terminal' }));
+    await settle();
+    expect(operations().slice(before)).toEqual([
+      {
+        op: 'session.continueIn',
+        args: {
+          canvas: expect.any(String) as unknown,
+          agent: 'a',
+          connection: 'claude-code.terminal',
+          then: { text: input, images: [{ mediaType: 'image/png', data: 'aW1hZ2U=' }] },
+        },
+      },
+    ]);
+    expect(backend.send).toHaveBeenCalledOnce();
+  });
+
   it('offers Terminal for a command only Claude Code’s terminal runs, and runs it there', async () => {
     const { backend, composer, view, emit, card, operations } = await open({
       connection: 'claude-code.sdk',

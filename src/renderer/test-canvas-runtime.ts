@@ -345,6 +345,11 @@ export function canvasRuntime(
     });
   }
   register();
+  const stopViews = core.observeTopics((topic) => {
+    for (const node of nodes)
+      if (node.type === 'agent' && topic === `session:${canvas}:${encodeURIComponent(node.id)}`)
+        engine.sessions.open(node.id);
+  });
   return {
     activate: register,
     engine,
@@ -381,6 +386,7 @@ export function canvasRuntime(
       publish();
     },
     dispose() {
+      stopViews();
       for (const stop of stops) stop();
       engine.reset();
     },

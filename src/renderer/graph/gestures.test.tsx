@@ -183,7 +183,7 @@ it('adds with one operation and uses the id from the core', async () => {
 async function openAgent(view: Awaited<ReturnType<typeof setup>>) {
   fireEvent.doubleClick(view.node('a'));
   await act(() => Promise.resolve());
-  expectOneOp(view.core, 'session.open', { canvas: view.canvas, agent: 'a' });
+  expect(view.core.operations).toEqual([]);
   view.core.operations.length = 0;
 }
 
@@ -403,7 +403,7 @@ it('keeps Arrange when opening an agent from Needs, without a document operation
   fireEvent.click(await screen.findByRole('button', { name: 'Open a' }));
   expect(await screen.findByRole('dialog', { name: 'a' })).toBeTruthy();
   expect(view.document.arrange).toBe(true);
-  expect(view.core.operations.map(({ op }) => op)).toEqual(['run.start', 'session.open']);
+  expect(view.core.operations.map(({ op }) => op)).toEqual(['run.start']);
 });
 it('keeps an untouched rendered node object when another queue changes', async () => {
   const view = await setup();
@@ -997,15 +997,16 @@ it('drops by the previewed neighbour when another writer inserts a row during th
 
 it('keeps a native startup refusal in the session instead of covering the window controls with it', async () => {
   const view = await setup({ files: true, selected: [] });
-  view.core.reply('session.open', {
-    ok: false,
-    error: { code: 'unavailable', sentence: 'The CLI is not installed.' },
-  });
   fireEvent.doubleClick(view.node('a'));
   expect(await screen.findByRole('dialog', { name: 'a' })).toBeTruthy();
   await act(async () => {
-    await Promise.resolve();
+    view.core.change({
+      topic: `session:${view.canvas}:a`,
+      rev: (view.core.state(`session:${view.canvas}:a`)?.rev ?? 0) + 1,
+      entries: { upsert: [{ id: 'refused-start', kind: 'notice', level: 'error', text: 'The CLI is not installed.' }] },
+    });
   });
+  expect(within(screen.getByRole('dialog', { name: 'a' })).getByRole('alert').textContent).toContain('The CLI is not installed.');
   expect(view.container.querySelector('.canvas-float-position > [role="alert"]')).toBeNull();
-  expectOneOp(view.core, 'session.open', { canvas: view.canvas, agent: 'a' });
+  expect(view.core.operations).toEqual([]);
 });

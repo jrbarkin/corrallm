@@ -52,7 +52,6 @@ import {
   sessionCommands,
   nativeQueries,
   nativePresentation,
-  openViewedSession,
 } from '../run/sessions';
 import type { SessionQueries } from '../run/sessions';
 import { runCommands } from '../run/commands';
@@ -267,12 +266,6 @@ function Editor({
       void action.catch(report);
     },
     [report],
-  );
-  const openSession = useCallback(
-    (agent: string) => {
-      openViewedSession(api, canvasId, agent, report);
-    },
-    [api, canvasId, report],
   );
   const model = canonical?.document ?? empty;
   const graph: Graph = useMemo(() => canonical?.graph ?? { nodes: [], edges: [] }, [canonical]);
@@ -1168,7 +1161,6 @@ function Editor({
               setEditing(node.id);
             } else {
               setEditing(undefined);
-              openSession(node.id);
               setOpened({ ids: [node.id] });
             }
           }}
@@ -1310,7 +1302,6 @@ function Editor({
                 onOpen={(agentId) => {
                   setStartChoice({ canvas: canvasId, open: false });
                   selectOne(agentId);
-                  openSession(agentId);
                   setOpened({ ids: [agentId] });
                 }}
               />
@@ -1354,7 +1345,6 @@ function Editor({
                 setStartChoice({ canvas: canvasId, open: false });
                 setQueues(undefined);
                 selectOne(id);
-                openSession(id);
                 setOpened(({ ids }) => ({ ids: [id, ...ids.filter((other) => other !== id)] }));
               }).catch((error: unknown) => {
                 setProblem(ipcErrorMessage(error));
@@ -1394,7 +1384,6 @@ function Editor({
               );
             }}
             onSwitch={(id, from) => {
-              openSession(id);
               selectOne(id);
               setOpened(({ ids }) => ({
                 ids: [id, ...ids.filter((other) => other !== id)],
@@ -1419,7 +1408,7 @@ function Editor({
             onOpenSettings={() => {
               setSettingsAgent(openedNode.id);
             }}
-            onContinueInTerminal={(command) => {
+            onContinueInTerminal={(command, images) => {
               const connection = continuesIn(connectionOf(openedNode.data));
               if (connection !== undefined)
                 act(
@@ -1427,7 +1416,7 @@ function Editor({
                     canvas: canvasId,
                     agent: openedNode.id,
                     connection,
-                    ...(command === undefined ? {} : { then: { text: command } }),
+                    ...(command === undefined ? {} : { then: { text: command, ...(images?.length ? { images } : {}) } }),
                   }),
                 );
             }}
@@ -1479,7 +1468,6 @@ function Editor({
             onOpenAgent={(id) => {
               setQueues(undefined);
               selectOne(id);
-              openSession(id);
               setOpened({ ids: [id] });
             }}
             onClose={closeQueues}

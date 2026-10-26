@@ -1,5 +1,4 @@
-import type { SessionBackend } from '../../shared/engine/transcript/receive';
-import type { MessageImage, UserMessage, FilesRewind, RewindResult } from '../../shared/session';
+import type { MessageImage, UserMessage, FilesRewind, RewindResult, SettingsOptions, PastSession, McpServer, McpChange, InstalledClis } from '../../shared/session';
 import type { MirrorStates } from '../api/topic-wire';
 import { useCallback, useMemo, useSyncExternalStore } from 'react';
 import type { CanvasId } from '../../shared/canvas';
@@ -31,10 +30,17 @@ const nativeManual: ManualSubmissions = {
   unqueue: (agent, id) => viewWrite(() => fromMain(window.api.unqueueSession(agent, id))),
 };
 
-export type SessionQueries = Pick<
-  SessionBackend,
-  'options' | 'files' | 'sessions' | 'resume' | 'mcp' | 'changeMcp' | 'installed'
-> & { manual?: ManualSubmissions; presentation?: SessionPresentation };
+export interface SessionQueries {
+  options(adapter: AdapterId, agent?: string): Promise<SettingsOptions>;
+  files(query: string, agent?: string): Promise<string[]>;
+  sessions(agent: string): Promise<PastSession[]>;
+  resume(agent: string, conversation: string): Promise<unknown>;
+  mcp(agent: string): Promise<McpServer[]>;
+  changeMcp(agent: string, server: string, change: McpChange): Promise<McpServer[]>;
+  installed(): Promise<InstalledClis>;
+  manual?: ManualSubmissions;
+  presentation?: SessionPresentation;
+}
 
 export interface Presentation {
   suggestion?: string;
@@ -348,7 +354,7 @@ export function useDisplayedSession(
   return useMemo(
     () =>
       sessionDisplay(
-        agent === undefined ? undefined : summaries?.[agent],
+        view?.summary ?? (agent === undefined ? undefined : summaries?.[agent]),
         view,
         agent === undefined ? [] : Object.values(messages?.items ?? {}),
         extras,
