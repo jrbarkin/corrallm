@@ -348,7 +348,10 @@ test('a shared group has one setup card, two workspace marks and two dock glows'
     await expect(page.locator('.dock-agent[data-needs]')).toHaveCount(2);
     const marks = page.locator('.graph-card .workspace-badge');
     await expect(marks.first()).toHaveAttribute('title', /Shares Group 1’s worktree/);
-    expect(await marks.first().innerText()).toBe(await marks.last().innerText());
+    // Both marks share one worktree: once its setup card is offered each holds its Review setup
+    // button, and they read alike (until then both are still preparing, never failed).
+    await expect(marks.getByRole('button', { name: 'Review setup', exact: true })).toHaveCount(2);
+    await expect.poll(async () => marks.first().innerText()).toBe(await marks.last().innerText());
     await marks.first().getByRole('button', { name: 'Review setup', exact: true }).click();
     await expect(page.getByRole('article', { name: /Set up .*worktree/ })).toHaveCount(1);
     await page.getByRole('article').getByRole('button', { name: 'Skip', exact: true }).click();
