@@ -6,8 +6,6 @@ B9a gives independent work independent checkouts: each canvas's outermost group,
 
 ## The Git runner
 
-The [X15 adversarial review](../reviews/b9a-x15.md) has unresolved C findings: symlinked Git metadata can receive writes outside the checked root, cleanup assessment can run an initialized submodule's filter, and replay of an unmarked population can overwrite later edits. The review contains failing real-Git probes and the required C decisions; these guarantees are not release-verified until those findings are resolved.
-
 `src/main/core/workspaces/git.ts` is the one runner every workspace Git call goes through (`GitRunner`); no other file of the folder starts a process (`git.test.ts` scans it). B9b's diffs and merges are to reuse it.
 
 - No shell. Git is run by absolute path, found only in the PATH's absolute folders: a relative entry such as `.` could otherwise find a `git` a repository planted in the folder it runs in. Arguments are the core's own, refs and OIDs of core shapes, paths after `--end-of-options`.
