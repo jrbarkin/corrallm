@@ -24,15 +24,15 @@ import type { Json, JobRecord, WorkspaceStore, WorktreeRecord } from './store';
  *   changed or untracked there (and the first of their paths, to name them), whether its HEAD and
  *   tip are both reachable from the picked checkout's HEAD now (merged; its base commit alone isn't
  *   proof), and which agents may still be writing there (a turn, a setup, a close that didn't
- *   finish). What Git couldn't read is unknown: never taken for safe. Its fingerprint changes
- *   whenever any of it does (a changed file written again too: each file its status names is
+ *   finish). What couldn't be read whole is unknown: never safe or discarded. A whole tree's
+ *   fingerprint changes whenever any of it does (a changed file written again too: each file its status names is
  *   read as the file system has it): what an approval is bound to. No repository program runs
  *   for it: a submodule is read by its commit only (whether one is dirty only a git run in it,
  *   under its own configuration, could say), and one checked out there may hold work, so the tree
  *   is unknown, its files read as the file system has them.
  * - **Safe** is clean, merged and with no writer: such a tree is removed with its last agent,
  *   without asking. Anything else asks you first (the deletion's confirmation, R4's proposal), and
- *   keeps the tree unless you chose to discard it.
+ *   keeps the tree unless you chose to discard it and it can still be read whole.
  * - **Removing** (`intend`, within the write that settles the decision, whatever made it: a
  *   delete's commit, an Allow, a kept tree's Remove): the workspace `removing`, with a `remove` job
  *   saying what was decided (its branch deleted too, the fingerprint you approved). Then, outside
@@ -88,10 +88,19 @@ export interface TreeState {
   status: string;
 }
 
+/** Why a tree that cannot be checked for staleness is kept, even on Discard. */
+export const KEEP_UNREAD_WORKTREE =
+  'corrallm can’t tell whether it changed since you were asked, so it keeps it; remove it yourself if you mean to.';
+
+/** Whether assessment read enough to bind a Discard to what the tree holds. */
+export function canDiscard(state: TreeState): boolean {
+  return state.unknown === undefined;
+}
+
 /** Whether a tree is safe to remove without asking: clean, merged, and no one writing there. */
 export function safe(state: TreeState): boolean {
   return (
-    state.unknown === undefined &&
+    canDiscard(state) &&
     state.changed === 0 &&
     state.untracked === 0 &&
     state.merged &&
@@ -241,7 +250,7 @@ export class WorkspaceCleanup {
       const drivers = [...new Set([...base.drivers, ...local.drivers])];
       // A submodule by its commit only: whether one is dirty Git asks a git run in it, under the
       // submodule's own configuration, whose programs nothing here reaches. None is asked.
-      const { stdout } = await git.run({
+      const { stdout, stderr } = await git.run({
         cwd: tree.path,
         drivers,
         args: [
@@ -252,6 +261,7 @@ export class WorkspaceCleanup {
           '--ignore-submodules=dirty',
         ],
       });
+      if (stderr.trim() !== '') return unknown('Git couldn’t read its files without warnings');
       const entries = statusEntries(stdout);
       // Each submodule checked out there (its folder not empty) may hold work no status says: the
       // tree is never safe with one, and its files are read as the file system has them.
@@ -278,7 +288,13 @@ export class WorkspaceCleanup {
           ).code === 0);
       const unread = [
         ...(submodules.length === 0 ? [] : [submoduleWords(submodules)]),
-        ...(files.whole ? [] : ['more of its files than corrallm reads']),
+        ...(files.whole
+          ? []
+          : [
+              files.unreadable
+                ? 'some of its files can’t be read safely'
+                : 'more of its files than corrallm reads',
+            ]),
       ];
       return {
         workspace: tree.id,
@@ -375,6 +391,7 @@ export class WorkspaceCleanup {
     const state = await this.assess(tree);
     let removal: Removal;
     if (decision !== undefined) {
+      if (!canDiscard(state)) throw new OpFailure('refused', KEEP_UNREAD_WORKTREE);
       if (
         decision.choice !== 'discard' ||
         decision.fingerprints[workspace] !== fingerprint(state)
@@ -460,7 +477,8 @@ export class WorkspaceCleanup {
     }
     // Still what was decided: never work added since.
     const decided =
-      removal.approved === null ? safe(state) : heldFingerprint(state) === removal.approved;
+      canDiscard(state) &&
+      (removal.approved === null ? safe(state) : heldFingerprint(state) === removal.approved);
     if (!decided) {
       await workspaces.write((w) => {
         w.transition(workspace, { from: 'removing', to: 'retained' });
@@ -601,14 +619,17 @@ async function filesOf(
   root: string,
   entries: readonly { path: string }[],
   submodules: readonly string[],
-): Promise<{ text: string; whole: boolean }> {
+): Promise<{ text: string; whole: boolean; unreadable: boolean }> {
+  const budget = { left: WALKED_ENTRIES, unreadable: false };
   const files = await Promise.all(
     entries.map(async ({ path: name }) => {
-      const stat = await lstat(path.join(root, name), { bigint: true }).catch(() => undefined);
+      const stat = await lstat(path.join(root, name), { bigint: true }).catch((error: unknown) => {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') budget.unreadable = true;
+        return undefined;
+      });
       return stat === undefined ? [name, null] : [name, ...fields(stat)];
     }),
   );
-  const budget = { left: WALKED_ENTRIES };
   const walked: string[][] = [];
   const folders = [
     ...entries.filter(({ path: name }) => name.endsWith('/')).map(({ path: name }) => name),
@@ -619,12 +640,20 @@ async function filesOf(
     const own = gitdirOf(path.join(folder, '.git'));
     for (const at of own === undefined ? [folder] : [folder, own]) {
       if (!(await walk(at, budget, walked))) {
-        return { text: JSON.stringify([files, walked]), whole: false };
+        return {
+          text: JSON.stringify([files, walked]),
+          whole: false,
+          unreadable: budget.unreadable,
+        };
       }
     }
   }
   // A tree with no such folder is serialized as its files alone.
-  return { text: JSON.stringify(walked.length === 0 ? files : [files, walked]), whole: true };
+  return {
+    text: JSON.stringify(walked.length === 0 ? files : [files, walked]),
+    whole: !budget.unreadable,
+    unreadable: budget.unreadable,
+  };
 }
 
 /** What of a file a write changes: its inode, size, mode, and modification and change times. */
@@ -636,13 +665,18 @@ function fields(stat: BigIntStats): string[] {
  * Every entry below `folder`, in order, as the file system has it, never following a link, while
  * `budget` lasts: false once it is spent.
  */
-async function walk(folder: string, budget: { left: number }, into: string[][]): Promise<boolean> {
+async function walk(
+  folder: string,
+  budget: { left: number; unreadable: boolean },
+  into: string[][],
+): Promise<boolean> {
   let names: string[];
   try {
     names = (await readdir(folder)).sort();
   } catch {
     into.push([folder]);
-    return true;
+    budget.unreadable = true;
+    return false;
   }
   for (const name of names) {
     if (budget.left <= 0) return false;
@@ -650,7 +684,11 @@ async function walk(folder: string, budget: { left: number }, into: string[][]):
     const at = path.join(folder, name);
     const stat = await lstat(at, { bigint: true }).catch(() => undefined);
     into.push(stat === undefined ? [at] : [at, ...fields(stat)]);
-    if (stat?.isDirectory() === true && !(await walk(at, budget, into))) return false;
+    if (stat === undefined) {
+      budget.unreadable = true;
+      return false;
+    }
+    if (stat.isDirectory() && !(await walk(at, budget, into))) return false;
   }
   return true;
 }

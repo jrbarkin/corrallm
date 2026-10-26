@@ -182,6 +182,30 @@ describe('what a tree holds', { timeout: 60_000 }, () => {
       expect(safe(state)).toBe(true);
     });
 
+    it('keeps a checked-out submodule even on an approved Discard', async () => {
+      const tree = await withSubmodule();
+      const checkout = checkOut(tree);
+      const service = cleanup();
+      const state = await service.assess(tree);
+      await expect(
+        service.removeKept(CANVAS, tree.id, {
+          choice: 'discard',
+          fingerprints: { [tree.id]: fingerprint(state) },
+        }),
+      ).rejects.toMatchObject({ code: 'refused' });
+      // A removal recorded under an older policy is checked again before Git removes anything.
+      await decide(service, tree, {
+        branch: true,
+        force: true,
+        approved: fingerprint(state),
+        tip: state.tip,
+      });
+      expect(await service.remove(tree.id)).toBe('retained');
+      expect(made.workspaces.worktree(tree.id)?.state).toBe('retained');
+      expect(readFileSync(path.join(checkout, 'data.txt'), 'utf8')).toBe('base\n');
+      expect(ran(sentinel)).toEqual([]);
+    });
+
     it('counts a submodule’s commit staged in the tree as a change', async () => {
       const tree = await withSubmodule();
       const other = makeRepository(path.join(made.root, 'other'), made.env, { 'b.txt': 'b\n' });
@@ -401,14 +425,15 @@ describe('removing a tree', { timeout: 60_000 }, () => {
     symlinkSync(made.app, tree.path);
     expect(await service.remove(tree.id)).toBe('retained');
     expect(existsSync(path.join(made.app, 'README.md'))).toBe(true);
-    // Approved as it is now, still: it isn't the checkout, so nothing there is removed.
+    // Even an approval of the unread state cannot remove it.
     const now = fingerprint(await service.assess(made.workspaces.worktree(tree.id) ?? tree));
     await decide(service, tree, { branch: true, force: true, approved: now, tip: made.base });
-    expect(await service.remove(tree.id)).toBe('failed');
+    expect(await service.remove(tree.id)).toBe('retained');
     expect(made.workspaces.worktree(tree.id)).toMatchObject({
-      state: 'removing',
-      errorCode: 'cleanup-checkout-changed',
+      state: 'retained',
+      errorCode: null,
     });
+    expect(branchAt(tree.branchRef)).toBe(made.base);
     expect(existsSync(path.join(made.app, 'README.md'))).toBe(true);
   });
 
@@ -443,16 +468,16 @@ describe('removing a tree', { timeout: 60_000 }, () => {
     },
   );
 
-  it('forgets a tree whose checkout is gone once you approved it, its branch with it', async () => {
+  it('keeps an unread missing checkout’s record and branch despite an older Discard', async () => {
     const service = cleanup();
     const tree = await kept();
     mkdirSync(path.join(made.root, 'elsewhere'));
     rmSync(tree.path, { recursive: true, force: true });
     const approved = fingerprint(await service.assess(tree));
     await decide(service, tree, { branch: true, force: true, approved, tip: made.base });
-    expect(await service.remove(tree.id)).toBe('removed');
-    expect(made.workspaces.worktree(tree.id)).toBeUndefined();
-    expect(branchAt(tree.branchRef)).toBeUndefined();
+    expect(await service.remove(tree.id)).toBe('retained');
+    expect(made.workspaces.worktree(tree.id)?.state).toBe('retained');
+    expect(branchAt(tree.branchRef)).toBe(made.base);
   });
 });
 
