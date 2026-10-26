@@ -46,6 +46,17 @@ const STILL_CLOSING =
 const LISTED_MS = 10 * 60 * 1000;
 /** The most callers' lists kept for an agent: a new one replaces the oldest. */
 const LISTINGS = 8;
+/** The most conversations one list shows (and so admits): the most recent. */
+const LISTED = 100;
+/** The longest title a listed conversation shows, in UTF-16 units. */
+const TITLE = 200;
+
+/** A title cut to TITLE with an ellipsis, never between a character's two halves. */
+function titled(title: string): string {
+  const end = TITLE - 1;
+  const code = title.charCodeAt(end - 1);
+  return `${title.slice(0, code >= 0xd800 && code <= 0xdbff ? end - 1 : end)}…`;
+}
 const NO_MCP = 'This agent’s MCP servers are managed in its terminal: run /mcp in its terminal.';
 const NO_REWIND =
   'This connection cannot rewind here. In its terminal, press Esc twice if the CLI offers it.';
@@ -58,6 +69,21 @@ const CLOSE_MS = 5000;
 /** How long a silent turn's interrupt waits for its CLI's answer before it counts as unanswered. */
 export const STALLED_INTERRUPT_MS = 30_000;
 const UNANSWERED = 'The CLI did not answer the interrupt.';
+
+/**
+ * Why a conversation can't be resumed in an agent, before anything closed: one not listed to the
+ * caller (`not-found`: its list, in that binding, within LISTED_MS), or one another agent's session
+ * holds (`conflict`).
+ */
+export class ConversationRefusal extends Error {
+  readonly code: 'not-found' | 'conflict';
+
+  constructor(code: 'not-found' | 'conflict', message: string) {
+    super(message);
+    this.name = 'ConversationRefusal';
+    this.code = code;
+  }
+}
 
 export interface SessionManagerDeps {
   /** What every adapter declares (adapters.ts): the adapter each connection runs, and its modes. */
@@ -635,12 +661,16 @@ export class SessionManager {
     const found =
       (await this.#deps.conversations?.[adapter]?.list(folder, await this.#deps.environment())) ??
       [];
-    const listed = found.filter((kept) => isConversationId(adapter, kept.id));
-    if (listed.length !== found.length) {
+    const valid = found.filter((kept) => isConversationId(adapter, kept.id));
+    if (valid.length !== found.length) {
       console.warn(
-        `Skipped ${String(found.length - listed.length)} invalid ${adapter} conversation ids from the resume list.`,
+        `Skipped ${String(found.length - valid.length)} invalid ${adapter} conversation ids from the resume list.`,
       );
     }
+    // Bounded: the most recent, each titled in a line, and only those shown are admitted.
+    const listed = valid
+      .slice(0, LISTED)
+      .map((kept) => (kept.title.length > TITLE ? { ...kept, title: titled(kept.title) } : kept));
     const agents = this.#listed.get(canvas) ?? new Map<string, Map<string, Listing>>();
     this.#listed.set(canvas, agents);
     const callers = agents.get(agentId) ?? new Map<string, Listing>();
@@ -658,6 +688,16 @@ export class SessionManager {
     }
     const own = (await this.#conversation(canvas, adapter, agentId))?.id;
     return listed.map((kept) => ({ ...kept, current: kept.id === own }));
+  }
+
+  /**
+   * Whether conversation `id` is among those `caller`'s last list for the agent named, within
+   * LISTED_MS: what a token reaches of conversations (B11 Design §7). Its binding, adapter and claim
+   * are checked again as it is resumed (`resumeSession`).
+   */
+  listedTo(canvas: CanvasId, agentId: string, caller: string, id: string): boolean {
+    const listed = this.#listed.get(canvas)?.get(agentId)?.get(caller);
+    return listed !== undefined && this.#now() - listed.at <= LISTED_MS && listed.ids.has(id);
   }
 
   /**
@@ -683,11 +723,13 @@ export class SessionManager {
       this.#now() - listed.at > LISTED_MS ||
       !listed.ids.has(sessionId)
     ) {
-      throw new Error(NOT_LISTED);
+      throw new ConversationRefusal('not-found', NOT_LISTED);
     }
     // Checked and reserved at once, before this agent's session is closed.
     const reserved = this.#claims.reserve(adapter, sessionId, this.#reservation(canvas, agentId));
-    if (!reserved.ok) throw new Error(this.#inUse(canvas, reserved.holder));
+    if (!reserved.ok) {
+      throw new ConversationRefusal('conflict', this.#inUse(canvas, reserved.holder));
+    }
     await this.close(canvas, agentId);
     await this.#remember(
       canvas,

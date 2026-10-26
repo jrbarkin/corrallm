@@ -75,9 +75,6 @@ function subscribePreviews(listener: () => void): () => void {
 
 export interface SessionQueries {
   installed(): Promise<InstalledClis>;
-  options(adapter: AdapterId, agent?: string): Promise<SettingsOptions>;
-  sessions(agent: string): Promise<PastSession[]>;
-  resume(agent: string, conversation: string): Promise<unknown>;
   mcp(agent: string): Promise<McpServer[]>;
   changeMcp(agent: string, server: string, change: McpChange): Promise<McpServer[]>;
   manual?: ManualSubmissions;
@@ -126,10 +123,6 @@ export function nativePresentation(canvas: CanvasId): SessionPresentation {
 }
 export const nativeQueries: SessionQueries = {
   installed: () => import('../api/client').then(({ api }) => api.catalogInstalled()),
-  options: (adapter, agent) =>
-    fromMain(window.api.settingsOptions(adapter, ...(agent === undefined ? [] : [agent]))),
-  sessions: (agent) => fromMain(window.api.listSessions(agent)),
-  resume: (agent, conversation) => fromMain(window.api.resumeSession(agent, conversation)),
   mcp: (agent) => fromMain(window.api.mcpServers(agent)),
   changeMcp: (agent, server, change) => fromMain(window.api.changeMcpServer(agent, server, change)),
 };
@@ -220,6 +213,21 @@ export function sessionDisplay(
   };
 }
 
+/**
+ * What an agent of `adapter` can be set to run with, and the user's own defaults: one
+ * session.options read, in `agent`'s workspace now when given, else the canvas's project folder.
+ */
+export function sessionOptions(
+  api: GuiApi,
+  canvas: CanvasId,
+  adapter: AdapterId,
+  agent?: string,
+): Promise<SettingsOptions> {
+  return api
+    .sessionOptions({ canvas, adapter, ...(agent === undefined ? {} : { agent }) })
+    .then((options) => options as SettingsOptions);
+}
+
 /** The core's viewed-session lease publishes startup refusals in the session itself. */
 export function openViewedSession(
   api: GuiApi,
@@ -301,10 +309,19 @@ export function sessionCommands(
     restart: () => {
       act(api.sessionRestart({ canvas, agent }));
     },
-    settingsOptions: (adapter: AdapterId) => queries.options(adapter, agent),
+    settingsOptions: (adapter: AdapterId) => sessionOptions(api, canvas, adapter, agent),
     findFiles: (query) => api.projectFiles({ canvas, agent, query }).then(({ items }) => items),
-    pastSessions: () => queries.sessions(agent),
-    resume: (conversation) => queries.resume(agent, conversation).then(() => undefined),
+    // Listed to this window alone: only it may then resume what it was listed (B11 §7).
+    pastSessions: () =>
+      api.sessionConversations({ canvas, agent }).then(({ items }) =>
+        items.map(({ bytes, branch, ...one }): PastSession => ({
+          ...one,
+          ...(bytes === undefined ? {} : { bytes }),
+          ...(branch === undefined ? {} : { branch }),
+        })),
+      ),
+    resume: (conversation) =>
+      api.sessionResumeConversation({ canvas, agent, conversation }).then(() => undefined),
     previewRewind: (message) =>
       api.sessionRewindPreview({ canvas, agent, message }).then(
         (result) =>

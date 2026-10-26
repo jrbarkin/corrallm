@@ -102,6 +102,9 @@ describe('prepared operation schemas, not registrations', () => {
 
   it('registers the C6 session services, the run reader and controls and typed reply, leaving other schemas prepared', () => {
     const live = new Set([
+      'session.conversations',
+      'session.resumeConversation',
+      'session.options',
       'run.get',
       'run.start',
       'run.stop',

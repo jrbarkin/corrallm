@@ -166,6 +166,16 @@ function silent(adapter: string): Connector<SessionMode> {
   };
 }
 const CONTROL_AGENT = 'session-control';
+/**
+ * An agent of the capable connection whose conversations are resumed (B11 §7): its own, so no
+ * other fixture's session closes under it.
+ */
+const RESUMER = 'resumer';
+/** The conversations the capable connection's adapter keeps for the world's folder. */
+const WORLD_KEPT = [
+  { id: '0c1d2e3f-4a5b-4c6d-8e7f-9a0b1c2d3e01', title: 'Earlier work', modified: 2 },
+  { id: '0c1d2e3f-4a5b-4c6d-8e7f-9a0b1c2d3e02', title: 'Older work', modified: 1 },
+] as const;
 const CONTROL_MESSAGE = '1b2c3d4e-5f60-4718-8a9b-0c1d2e3f4a80';
 const CONTROL_TASKS = ['you', 'lead', 'outside-write'].map(
   (party) => `fixture-background-${party}`,
@@ -179,6 +189,8 @@ function controlConnector(): Connector<SessionMode> {
   return {
     start: async (spec, host) => {
       const live = await fake.start(spec, host);
+      // The resumer's sessions run nothing in the background, so its folder's restores go on.
+      if (spec.agentId !== CONTROL_AGENT) return live;
       let tasks = CONTROL_TASKS.map((id) => ({
         id,
         description: 'Fixture task',
@@ -216,6 +228,7 @@ const NODES = [
     connection: CONTROL.connection.id,
     parent: 'lead',
   },
+  { id: RESUMER, adapter: CONTROL.adapter.id, connection: CONTROL.connection.id, parent: 'lead' },
   { id: 'lead', connection: 'codex.app-server' },
   { id: 'helper', connection: 'codex.app-server', parent: 'lead' },
   { id: 'deputy', connection: 'codex.app-server', parent: 'lead' },
@@ -508,6 +521,12 @@ export async function startWorld(): Promise<{
           [SPENDING.connection.id]: silent(SPENDING.adapter.id),
         },
         environment: () => Promise.resolve({}),
+        // Never the user's own conversations: the world's, for its folder.
+        conversations: {
+          [CONTROL.adapter.id]: {
+            list: () => Promise.resolve(WORLD_KEPT.map((one) => ({ ...one }))),
+          },
+        },
       },
       // Isolated setup fixtures: directory resolution is faked, and nothing allocates a tree here.
       setups: ({ store, processes, directories, profile: at, changed }) => {
@@ -569,6 +588,16 @@ export async function startWorld(): Promise<{
     CALLERS.you,
   );
   if (!tried.ok) throw new Error(tried.error.sentence);
+  // The resumer's conversations, listed to each caller that resumes one of them (B11 §7): a list
+  // admits only its own caller.
+  for (const party of ['you', 'outside-write'] as const) {
+    const listed = await core.call(
+      'session.conversations',
+      { canvas: CANVAS, agent: RESUMER },
+      CALLERS[party],
+    );
+    if (!listed.ok) throw new Error(listed.error.sentence);
+  }
   for (const [doomed, id] of [
     ['condemned-a', PROPOSED.refused],
     ['condemned-b', PROPOSED.allowed],
@@ -1487,6 +1516,48 @@ export const REAL_FIXTURES: Readonly<Record<OpName, OpFixture>> = {
     ],
     invalid: [{ canvas: CANVAS, agent: CONTROL_AGENT, connection: '' }],
   },
+  'session.conversations': {
+    valid: [{ canvas: CANVAS, agent: RESUMER }],
+    invalid: [{ canvas: CANVAS }, { canvas: CANVAS, agent: RESUMER, after: 'x' }],
+  },
+  // Each resumes one listed to it as the world began; no other caller's list admits it.
+  'session.resumeConversation': {
+    fresh: ['revs'],
+    valid: [],
+    by: {
+      you: [
+        {
+          canvas: CANVAS,
+          agent: RESUMER,
+          conversation: WORLD_KEPT[1].id,
+          request: controlRequest(351),
+        },
+      ],
+      'outside-write': [
+        {
+          canvas: CANVAS,
+          agent: RESUMER,
+          conversation: WORLD_KEPT[0].id,
+          request: controlRequest(352),
+        },
+      ],
+    },
+    invalid: [
+      { canvas: CANVAS, agent: RESUMER, conversation: '--resume' },
+      { canvas: CANVAS, agent: RESUMER },
+    ],
+  },
+  'session.options': {
+    valid: [
+      { canvas: CANVAS, adapter: CONTROL.adapter.id },
+      { canvas: CANVAS, agent: CONTROL_AGENT, adapter: CONTROL.adapter.id },
+    ],
+    invalid: [
+      { canvas: CANVAS, adapter: '' },
+      { canvas: CANVAS, adapter: 'not-an-adapter' },
+      { canvas: CANVAS, adapter: CONTROL.adapter.id, extra: true },
+    ],
+  },
   'session.rewindPreview': {
     valid: [{ canvas: CANVAS, agent: CONTROL_AGENT, message: CONTROL_MESSAGE }],
     invalid: [{ canvas: CANVAS, agent: CONTROL_AGENT, message: '--help' }],
@@ -1901,6 +1972,8 @@ export const REAL_OUT_OF_REACH: OutOfReach = {
     MESSAGES_OUT_OF_REACH[caller.kind === 'outside' ? caller.name : caller.agent],
   EntryId: () => ['1b2c3d4e-5f60-4718-8a9b-0c1d2e3f4aff'],
   TaskId: () => ['missing-task'],
+  // A conversation no list showed the caller, kept or not (B11 §7).
+  ConversationId: () => ['0c1d2e3f-4a5b-4c6d-8e7f-9a0b1c2d3eff'],
   // A Needs item that isn't there.
   NeedId: () => ['proposal/1b2c3d4e-5f60-4718-8a9b-0c1d2e3f4aff'],
 };

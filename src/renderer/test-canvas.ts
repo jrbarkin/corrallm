@@ -454,13 +454,7 @@ export function fakeCanvas(
         return Promise.resolve();
       },
     } satisfies UsageSource,
-    queries: {
-      ...(backend ?? NO_BACKEND),
-      resume: (agent: string, conversation: string) => {
-        if (!runtime) throw new Error('No canvas runtime');
-        return runtime.resume(agent, conversation);
-      },
-    },
+    queries: { ...(backend ?? NO_BACKEND) },
     presentation: {
       snapshot: (agent: string) => {
         const session = runtime?.engine.sessions.of(agent);

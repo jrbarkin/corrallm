@@ -7,7 +7,7 @@ import type { NeedsItem } from '../../shared/model/needs';
 import { areLinked, groupMembers, isGroup, managerOf, teamOf } from '../../shared/model/queries';
 import { findItem } from '../../shared/model/queue';
 import { itemKey, linkKey, nodeKey } from '../../shared/model/rows';
-import { canvasesOf, partyIdOf } from './caller';
+import { callerKey, canvasesOf, partyIdOf } from './caller';
 import type { Caller, TokenCaller } from './caller';
 import type { Engines } from './engines';
 
@@ -237,6 +237,7 @@ export function resolvers(
   isLead: (canvas: CanvasId, agent: string) => boolean,
   needOf: (canvas: CanvasId, id: string, reach?: readonly string[]) => NeedsItem | undefined = () =>
     undefined,
+  listedTo: (canvas: CanvasId, agent: string, caller: string, id: string) => boolean = () => false,
 ): Readonly<Partial<Record<Brand, Resolver>>> {
   const lead = (caller: TokenCaller, canvas: CanvasId) =>
     caller.kind === 'agent' && isLead(canvas, caller.agent);
@@ -304,6 +305,13 @@ export function resolvers(
       const open = sessionOf(canvas, agent, caller, reach);
       return open?.tasks?.some((task) => task.id === id) === true;
     },
+    // A native conversation of the agent named beside it, on an agent it reaches: only one its own
+    // last list of that agent's conversations showed it (B11 Design §7), never another caller's.
+    ConversationId: (id, caller, reach, { canvas, agent }) =>
+      canvas !== undefined &&
+      agent !== undefined &&
+      sessionOf(canvas, agent, caller, reach) !== undefined &&
+      listedTo(canvas as CanvasId, agent, callerKey(caller), id),
     // A token sees your items on the agents it reaches (Core Server §5.1), and only those.
     NeedId: (id, caller, reach, { canvas }) => {
       if (canvas === undefined || !canvasesOf(caller).includes(canvas as CanvasId)) return false;

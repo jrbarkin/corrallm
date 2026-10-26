@@ -1,7 +1,10 @@
 import { homedir } from 'node:os';
 
+import type { z } from 'zod';
+
 import { adapterIn, connectionIn, isStartMode } from '../../shared/adapter';
 import type { AdapterId, Catalog, ConnectionId } from '../../shared/adapter';
+import { ConversationId } from '../../shared/api/ids';
 import type { NeedId } from '../../shared/api/ids';
 import type { CanvasId } from '../../shared/canvas';
 import * as agentEdits from '../../shared/model/agent-ops';
@@ -12,14 +15,17 @@ import type {
   AgentSettingsChange,
   FilesRewind,
   MessageImage,
+  PastSession,
   RewindRestore,
   RewindResult,
   SessionMode,
+  SettingsOptions,
 } from '../../shared/session';
+import { ConversationRefusal } from '../sessions/manager';
 import type { SessionManager } from '../sessions/manager';
 import { OpFailure, ProposedInstead } from './call';
 import type { OpContext, RuleOutcome } from './call';
-import { partyIdOf } from './caller';
+import { callerKey, partyIdOf } from './caller';
 import type { TokenCaller } from './caller';
 import type { Proposals } from './canvas/proposals';
 import { DeliveryError } from './delivery/delivery';
@@ -71,6 +77,10 @@ export interface SessionControlDeps {
     | 'previewRewind'
     | 'conversationOf'
     | 'availability'
+    | 'listSessions'
+    | 'listedTo'
+    | 'resumeSession'
+    | 'settingsOptions'
   >;
   gate: Pick<WorkspaceGate, 'mutate'>;
   proposals: Pick<Proposals, 'raise'>;
@@ -322,6 +332,96 @@ export class SessionControl {
     await this.#effect(() => target.open.engine.sessions.fresh(agent));
     await this.#opened(target, 'Its conversation was forgotten, but it couldn’t start again');
     return {};
+  }
+
+  /**
+   * session.conversations (B11 Design §7): its adapter's conversations in its workspace now, most
+   * recent first, which one is its own; listed to this caller alone (its window, session or token,
+   * never its party), and only those it may then resume, in that binding, for a while.
+   */
+  async conversations(
+    { canvas, agent }: { canvas?: string | undefined; agent: string },
+    ctx: OpContext,
+  ): Promise<{ items: (PastSession & { id: z.infer<typeof ConversationId> })[] }> {
+    const { open, adapter } = this.#target(canvas, agent);
+    const descriptor = adapterIn(this.#deps.catalog, adapter);
+    if (descriptor?.list !== true) {
+      throw new OpFailure(
+        'refused',
+        `${descriptor?.name ?? adapter} keeps no conversations corrallm can list.`,
+      );
+    }
+    const listed = await this.#effect(() =>
+      this.#deps.sessions.listSessions(open.document.id, agent, callerKey(ctx.caller)),
+    );
+    // R42 at this boundary too: an id that isn't the platform's shape is never shown.
+    return {
+      items: listed.flatMap((one) => {
+        const id = ConversationId.safeParse(one.id);
+        return id.success ? [{ ...one, id: id.data }] : [];
+      }),
+    };
+  }
+
+  /**
+   * session.resumeConversation (B11 Design §7): an idle session with nothing waiting to go closes
+   * and starts again on a conversation listed to this caller, in the binding it was listed in, that
+   * no other agent's session holds (refused before anything closes), reserved for it meanwhile.
+   */
+  async resumeConversation(
+    {
+      canvas,
+      agent,
+      conversation,
+    }: { canvas?: string | undefined; agent: string; conversation: string },
+    ctx: OpContext,
+  ): Promise<object> {
+    const target = this.#target(canvas, agent);
+    const { open, name } = target;
+    const caller = callerKey(ctx.caller);
+    if (!this.#deps.sessions.listedTo(open.document.id, agent, caller, conversation)) {
+      throw new OpFailure(
+        'not-found',
+        `That isn’t one of ${name}’s conversations listed to you: list them again.`,
+      );
+    }
+    await this.#launchable(target, 'resume a conversation');
+    // Idle as it closes: nothing awaited between this check and its effect.
+    this.#idle(target, 'resume a conversation');
+    ctx.noReturn();
+    try {
+      await this.#deps.sessions.resumeSession(open.document.id, agent, conversation, caller);
+    } catch (error) {
+      if (error instanceof ConversationRefusal) throw new OpFailure(error.code, error.message);
+      throw new OpFailure('unavailable', reasonOf(error));
+    }
+    open.engine.sessions.resumed(agent);
+    await this.#opened(target, 'It took that conversation, but couldn’t start again');
+    return {};
+  }
+
+  /**
+   * session.options: what an agent of `adapter` can be set to run with, and the user's own
+   * defaults, read in that agent's workspace now (its binding checked again), or the canvas's
+   * project folder without one: never a cached canvas-wide answer.
+   */
+  async options({
+    canvas,
+    agent,
+    adapter,
+  }: {
+    canvas?: string | undefined;
+    agent?: string | undefined;
+    adapter: string;
+  }): Promise<SettingsOptions> {
+    const open = this.#openCanvas(canvas);
+    if (adapterIn(this.#deps.catalog, adapter) === undefined) {
+      throw new OpFailure('invalid', `corrallm has no adapter ${adapter}.`);
+    }
+    if (agent !== undefined) this.#agentOf(open, agent);
+    return this.#effect(() =>
+      this.#deps.sessions.settingsOptions(open.document.id, adapter, agent),
+    );
   }
 
   /** session.rewindPreview: what restoring its files to before `message` would change. */

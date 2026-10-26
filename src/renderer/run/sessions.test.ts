@@ -19,7 +19,7 @@ import { catalog } from '../catalog';
 import { ApiError } from '../api/client';
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { useDisplayedSession } from './sessions';
-import { expectOneOp } from '../test-api';
+import { expectOneOp, expectOneRead } from '../test-api';
 const connection = catalog().adapters[0]?.connections[0]?.id;
 if (!connection) throw new Error('The fixture needs a connection.');
 
@@ -122,18 +122,40 @@ it('keeps each native control one operation, including lifecycle composites', as
   }
 });
 
-it('keeps the foreground agent context through the pending options query', async () => {
+it('reads options in the displayed agent’s workspace through one session.options read', async () => {
   const options = { models: [], defaults: { model: null, effort: null, mode: null } };
-  const settingsOptions = vi.fn().mockResolvedValue({ ok: true, value: options });
-  vi.stubGlobal('window', { api: { settingsOptions } });
   const core = fakeCore();
+  const canvas = newCanvasId();
+  core.respond('session.options', options);
   try {
-    const controls = sessionCommands(core.api, newCanvasId(), 'member', core.topics, vi.fn());
-    await controls.settingsOptions('codex');
-    expect(settingsOptions).toHaveBeenCalledExactlyOnceWith('codex', 'member');
-    settingsOptions.mockClear();
-    await nativeQueries.options('codex');
-    expect(settingsOptions).toHaveBeenCalledExactlyOnceWith('codex');
+    const controls = sessionCommands(core.api, canvas, 'member', core.topics, vi.fn());
+    expect(await controls.settingsOptions('codex')).toEqual(options);
+    expectOneRead(core, 'session.options', { canvas, agent: 'member', adapter: 'codex' });
+  } finally {
+    core.dispose();
+  }
+});
+
+it('lists and resumes conversations as one operation each, for the displayed agent', async () => {
+  const core = fakeCore();
+  const canvas = newCanvasId();
+  const item = {
+    id: '6e2f8d4b-0c3a-4f7e-9b2d-4a5f6e7d8c9b',
+    title: 'Earlier work',
+    modified: 1,
+    current: false,
+  };
+  core.respond('session.conversations', { items: [item] });
+  try {
+    const controls = sessionCommands(core.api, canvas, 'member', core.topics, vi.fn());
+    expect(await controls.pastSessions()).toEqual([item]);
+    expectOneRead(core, 'session.conversations', { canvas, agent: 'member' });
+    await controls.resume(item.id);
+    expectOneOp(core, 'session.resumeConversation', {
+      canvas,
+      agent: 'member',
+      conversation: item.id,
+    });
   } finally {
     core.dispose();
   }
@@ -146,7 +168,7 @@ it('completes files with one project.files read bound to the displayed canvas an
   try {
     const controls = sessionCommands(core.api, canvas, 'member', core.topics, vi.fn());
     expect(await controls.findFiles?.('src/')).toEqual(['src/index.ts']);
-    expectOneOp(core, 'project.files', { canvas, agent: 'member', query: 'src/' });
+    expectOneRead(core, 'project.files', { canvas, agent: 'member', query: 'src/' });
   } finally {
     core.dispose();
   }

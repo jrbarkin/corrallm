@@ -389,6 +389,12 @@ export const SURFACE = {
   },
   // §16.1: Continue in Terminal, yours alone (how an agent runs is yours).
   'session.continueIn': { access: Y, kind: 'command', scope: 'agent' },
+  // B11 §7: listed to the caller alone, which alone may then resume what it was listed; no agent
+  // lists conversations (O) or resumes one (W).
+  'session.conversations': { access: O, kind: 'read', scope: 'none', self: 'allowed' },
+  'session.resumeConversation': { access: W, kind: 'command', scope: 'agent', self: 'refused' },
+  // What an adapter's agents can be set to, read in an agent's workspace now (B11 §6).
+  'session.options': { access: R, kind: 'read', scope: 'none', self: 'allowed' },
   'session.get': {
     access: A,
     kind: 'read',

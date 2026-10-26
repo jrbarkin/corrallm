@@ -52,6 +52,7 @@ import {
   sessionCommands,
   nativeQueries,
   nativePresentation,
+  sessionOptions,
 } from '../run/sessions';
 import type { SessionQueries } from '../run/sessions';
 import { runCommands } from '../run/commands';
@@ -1464,7 +1465,7 @@ function Editor({
             }}
             onAgentContextMenu={showAgentMenu}
             onOpenSettings={setSettingsAgent}
-            settingsOptions={(adapter, agent) => sessionQueries.options(adapter, agent)}
+            settingsOptions={(adapter, agent) => sessionOptions(api, canvasId, adapter, agent)}
             {...(queues.from === undefined ? {} : { focus: queues.from })}
             backLabel={queues.from === undefined ? 'Canvas' : nameOf(queues.from)}
             onOpenAgent={(id) => {
@@ -1599,7 +1600,7 @@ function Editor({
             inert={restoring}
             node={settingsNode}
             session={sessions[settingsNode.id] ?? NEW_SESSION}
-            options={(adapter) => sessionQueries.options(adapter, settingsNode.id)}
+            options={(adapter) => sessionOptions(api, canvasId, adapter, settingsNode.id)}
             onRename={(name) => {
               perform(api.canvasRename({ canvas: canvasId, node: settingsNode.id, label: name }));
             }}

@@ -45,7 +45,7 @@ import { WorkspaceChanges } from './workspaces/rebind';
 import type { WorktreeRecord } from './workspaces/store';
 import { RunJournal } from '../run-journal';
 import { ADAPTERS, CATALOG, DEFAULT_ADAPTER, isConversationId } from '../sessions/adapters';
-import type { OptionsReader } from '../sessions/adapter';
+import type { Conversations, OptionsReader } from '../sessions/adapter';
 import type { Connector } from '../sessions/connector';
 import { createConnectors, createConversations, createOptions } from '../sessions/connectors';
 import { locate, parseAgentPaths } from '../sessions/locate';
@@ -169,6 +169,8 @@ export interface CoreConfig {
     environment: () => Promise<Readonly<Record<string, string>>>;
     readUsage?: Readonly<Partial<Record<UsageBackendId, UsageRead>>>;
     options?: Readonly<Partial<Record<AdapterId, OptionsReader>>>;
+    /** What lists (and forks) each adapter's kept conversations, instead of its CLI's own files. */
+    conversations?: Readonly<Partial<Record<AdapterId, Conversations>>>;
   };
   /**
    * For tests, overriding the composed service: the worktrees' setup service, made over the
@@ -560,7 +562,7 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     backends: CATALOG.usageBackends.map((backend) => backend.id),
     readerOf,
   });
-  const conversations = createConversations();
+  const conversations = { ...createConversations(), ...config.sessions?.conversations };
   const sessions = new SessionManager({
     catalog: CATALOG,
     connectors:
@@ -1175,7 +1177,9 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     {
       check: config.check,
       isLead,
-      resolvers: resolvers(engines, isLead, needOf),
+      resolvers: resolvers(engines, isLead, needOf, (canvas, agent, caller, id) =>
+        sessions.listedTo(canvas, agent, caller, id),
+      ),
       commit: committer({
         documents,
         rules: changeRules,

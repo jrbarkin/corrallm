@@ -10,6 +10,7 @@ import { RULES } from '../../shared/api/rules';
 import type { CanvasId } from '../../shared/canvas';
 import type { FilesRewind, SessionMode } from '../../shared/session';
 import { MAX_MESSAGE_LENGTH } from '../../shared/session';
+import type { KeptConversation } from '../sessions/adapter';
 import type { Connector, LiveSession } from '../sessions/connector';
 import { FakeConnector } from '../sessions/fake';
 import { SessionManager } from '../sessions/manager';
@@ -68,6 +69,8 @@ let holding: PromiseWithResolvers<undefined> | undefined;
 let rewinds: { agent: string; message: string; dryRun: boolean }[];
 /** Whether a file restore (not a dry run) is held where it is, until released. */
 let restore: PromiseWithResolvers<undefined> | undefined;
+/** The conversations Claude Code keeps for the project folder, as its reader lists them. */
+let kept: KeptConversation[];
 
 beforeEach(async () => {
   profile = await mkdtemp(path.join(tmpdir(), 'corrallm-control-'));
@@ -77,6 +80,7 @@ beforeEach(async () => {
   holding = undefined;
   rewinds = [];
   restore = undefined;
+  kept = [];
 });
 
 afterEach(async () => {
@@ -140,6 +144,8 @@ async function start(
       sessions: {
         connectors: { 'claude-code.sdk': restoring(sdk), 'claude-code.terminal': terminal },
         environment: () => Promise.resolve({}),
+        // Never the user's own: what the test says Claude Code keeps for the folder.
+        conversations: { 'claude-code': { list: () => Promise.resolve(kept) } },
       },
       watchFolder: () => ({ close: () => undefined }),
     },
@@ -639,5 +645,100 @@ describe('your messages (R22, B11 §16.6)', () => {
     expect(refused.code).toBe('refused');
     expect(refused.sentence).toMatch(/Reviewer.*takes no images/);
     expect(core.engines.canvas(CANVAS)?.messages.all().length).toBe(before);
+  });
+});
+
+describe('conversations, resume and options', () => {
+  const NEWER = '6e2f8d4b-0c3a-4f7e-9b2d-4a5f6e7d8c9b';
+  const AGENT_A = { kind: 'agent', canvas: CANVAS, agent: 'a', session: 'a-session' } as const;
+
+  it('lists the agent’s conversations in its workspace, and resumes one only for a caller it was listed to', async () => {
+    kept = [
+      { id: NEWER, title: 'Newer work', modified: 2 },
+      { id: KEPT, title: 'The builder’s own', modified: 1 },
+    ];
+    const { core, sdk } = await start({ a: { id: KEPT } });
+    await ok(core, 'session.open', { agent: 'a' });
+    expect(await ok(core, 'session.conversations', { agent: 'a' })).toEqual({
+      items: [
+        { id: NEWER, title: 'Newer work', modified: 2, current: false },
+        { id: KEPT, title: 'The builder’s own', modified: 1, current: true },
+      ],
+    });
+    // Listed to you: a token that wasn't listed it reaches none of it.
+    expect(
+      await fails(
+        core,
+        'session.resumeConversation',
+        { agent: 'a', conversation: NEWER },
+        ORCHESTRATOR,
+      ),
+    ).toMatchObject({ code: 'not-found' });
+    expect(sdk.started).toHaveLength(1);
+    // Once listed it, it may.
+    await ok(core, 'session.conversations', { agent: 'a' }, ORCHESTRATOR);
+    await ok(core, 'session.resumeConversation', { agent: 'a', conversation: NEWER }, ORCHESTRATOR);
+    expect(sdk.started.at(-1)?.resume).toBe(NEWER);
+    expect(core.engines.canvas(CANVAS)?.engine.sessions.of('a').status).toBe('idle');
+    // Yours too, from your own list; a conversation never listed isn't one to resume.
+    await ok(core, 'session.resumeConversation', { agent: 'a', conversation: KEPT });
+    expect(sdk.started.at(-1)?.resume).toBe(KEPT);
+    expect(
+      await fails(core, 'session.resumeConversation', {
+        agent: 'a',
+        conversation: '7f3a9e5c-1d4b-4a8f-8c3e-5b6a7f8e9d0c',
+      }),
+    ).toMatchObject({ code: 'not-found' });
+    // No agent gets the list (O), nor resumes (W).
+    expect(await fails(core, 'session.conversations', { agent: 'b' }, AGENT_A)).toMatchObject({
+      code: 'forbidden',
+    });
+  });
+
+  it('refuses a resume while a turn goes on, or of a conversation another agent holds, closing nothing', async () => {
+    kept = [{ id: NEWER, title: 'The reviewer’s', modified: 2 }];
+    const { core, sdk } = await start({ b: { id: NEWER } });
+    await ok(core, 'session.open', { agent: 'b' });
+    await ok(core, 'session.open', { agent: 'a' });
+    await ok(core, 'session.conversations', { agent: 'a' });
+    const started = sdk.started.length;
+    const held = await fails(core, 'session.resumeConversation', {
+      agent: 'a',
+      conversation: NEWER,
+    });
+    expect(held).toEqual({
+      code: 'conflict',
+      sentence: 'That conversation is open in "Reviewer": two agents never share one conversation.',
+    });
+    holding = Promise.withResolvers();
+    await ok(core, 'message', { to: 'a', body: 'Work' });
+    await vi.waitFor(() => {
+      expect(core.engines.canvas(CANVAS)?.engine.sessions.of('a').status).toBe('working');
+    });
+    const busy = await fails(core, 'session.resumeConversation', {
+      agent: 'a',
+      conversation: NEWER,
+    });
+    expect(busy).toMatchObject({ code: 'refused' });
+    expect(busy.sentence).toMatch(/Builder has a turn going on/);
+    expect(sdk.started).toHaveLength(started);
+  });
+
+  it('reads an adapter’s options in the agent’s workspace, or the project’s', async () => {
+    const { core } = await start();
+    const options = (await ok(core, 'session.options', { adapter: 'claude-code' })) as {
+      models: unknown[];
+      defaults: object;
+    };
+    expect(options).toEqual({
+      models: expect.any(Array) as unknown,
+      defaults: expect.any(Object) as unknown,
+    });
+    expect(await ok(core, 'session.options', { agent: 'a', adapter: 'claude-code' })).toEqual(
+      options,
+    );
+    expect(await fails(core, 'session.options', { adapter: 'nope' })).toMatchObject({
+      code: 'invalid',
+    });
   });
 });

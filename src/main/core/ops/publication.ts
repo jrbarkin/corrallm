@@ -16,6 +16,7 @@ export function withPublication(ops: Implementations): Implementations {
     'session.restart',
     'session.newConversation',
     'session.continueIn',
+    'session.resumeConversation',
     'session.rewind',
     'session.interrupt',
     'run.start',

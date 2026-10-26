@@ -4,7 +4,7 @@ import type { MirrorStates, MirrorSnapshot, MirrorTopicKey } from './api/topic-w
 import { runtimePatch, runtimeTopic } from './api/topic-wire';
 import type { RuntimeChange } from '../shared/api/topics';
 import type { OpResult } from '../shared/api/errors';
-import { GUI_OPS } from '../shared/api/surface';
+import { GUI_OPS, SURFACE } from '../shared/api/surface';
 import type { GuiOp } from '../shared/api/surface';
 import { topicKey } from '../shared/api/topics';
 import type { Change, TopicKey, RuntimeTopicKey } from '../shared/api/topics';
@@ -24,9 +24,14 @@ type FedChange = Change | RuntimeChange extends infer C
     : never
   : never;
 
-/** A renderer's core: calls are recorded; tests decide the results and feed its pushed state. */
+/**
+ * A renderer's core: calls are recorded, a gesture's intents (`operations`: every write) apart from
+ * what a view reads as it shows something (`reads`: a settings menu's options, a panel's list), which
+ * is no gesture; tests decide the results and feed its pushed state.
+ */
 export function fakeCore() {
   const operations: RecordedOp[] = [];
+  const reads: RecordedOp[] = [];
   const subscriptions = new Set<TopicKey | RuntimeTopicKey>();
   const snapshots = new Map<MirrorTopicKey, MirrorSnapshot>();
   const observers = new Set<(topic: MirrorTopicKey) => void>();
@@ -60,7 +65,7 @@ export function fakeCore() {
                   error: { code: 'not-found', sentence: `No test snapshot for ${topic}.` },
                 };
           }
-          operations.push({ op, args });
+          (SURFACE[op].kind === 'read' ? reads : operations).push({ op, args });
           const reply = replies.get(op) ?? { ok: true, value: {} };
           return typeof reply === 'function' ? reply(args) : reply;
         },
@@ -88,6 +93,7 @@ export function fakeCore() {
     api,
     topics,
     operations,
+    reads,
     subscriptions,
     observeTopics(observe: (topic: MirrorTopicKey) => void): () => void {
       observers.add(observe);
@@ -161,4 +167,13 @@ export function expectOneOp(
   args: unknown,
 ): void {
   expect(core.operations).toEqual([{ op, args }]);
+}
+
+/** A view's read (a panel's list, a menu's options) is one read, with its explicit arguments. */
+export function expectOneRead(
+  core: Pick<ReturnType<typeof fakeCore>, 'reads'>,
+  op: GuiOp,
+  args: unknown,
+): void {
+  expect(core.reads).toEqual([{ op, args }]);
 }
