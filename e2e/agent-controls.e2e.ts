@@ -185,7 +185,8 @@ test('Pause finishes the current turn while independent work continues and a dep
     },
   ]);
   await queues.getByRole('button', { name: 'Run', exact: true }).click();
-  await expect.poll(sdkPrompts).toContain(first);
+  // Native startup (a Node process and its handshake) can outlast Playwright's default five seconds.
+  await expect.poll(sdkPrompts, { timeout: 15_000 }).toContain(first);
   await expect.poll(() => readFile(`${release}.waiting`, 'utf8').catch(() => '')).toBe('waiting');
   await expect(row(queues, 'builder', 'first')).toHaveAttribute('data-run', 'running');
   await control(queues, 'Pause');

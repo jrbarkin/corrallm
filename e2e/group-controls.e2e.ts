@@ -223,6 +223,9 @@ test('pauses nested active members until they finish, preserves an individual ho
     ),
   ]);
   await agentControl('manual', 'Manual', 'Pause');
+  // A hold is an operation to the core, which the menu does not wait for: Run clicked before it
+  // lands starts the held queue.
+  await expect(heading('manual').getByText('Paused', { exact: true })).toBeVisible();
   await queues().getByRole('button', { name: 'Run', exact: true }).click();
   await expect.poll(sentTexts, { timeout: 15_000 }).toEqual(expect.arrayContaining([alpha, beta]));
   await expect(row('alpha', 'first')).toHaveAttribute('data-run', 'running');
@@ -273,6 +276,10 @@ test('preserves stacked group and individual holds across a core crash and globa
   await frameControl('inner', 'Inner', 'Pause');
   await frameControl('outer', 'Outer', 'Pause');
   await showQueues();
+  // Each hold is an operation to the core: Run must find all three, not start the one still landing.
+  for (const id of ['alpha', 'beta', 'manual']) {
+    await expect(heading(id).getByText('Paused', { exact: true })).toBeVisible();
+  }
   await queues().getByRole('button', { name: 'Run', exact: true }).click();
   await expect(row('outside', 'only')).toHaveAttribute('data-run', 'succeeded');
   expect(await sentTexts()).toEqual([outside]);
