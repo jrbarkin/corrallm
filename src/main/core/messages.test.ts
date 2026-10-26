@@ -3022,7 +3022,10 @@ describe('exhausted usage', () => {
 
   it('records a manual turn’s limit before any API operation has opened its canvas', async () => {
     await exhausted({ manual: true });
-    expect(await state('builder')).toBe('limited');
+    // The failed end reaches the engine after the fake emitted it: the limit is recorded then.
+    await vi.waitFor(async () => {
+      expect(await state('builder')).toBe('limited');
+    });
     const id = await send('builder', 'Wait for room');
     expect((await find(id))?.state).toBe('pending');
   });
