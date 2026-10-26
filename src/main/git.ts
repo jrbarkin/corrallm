@@ -1,4 +1,7 @@
-/** Baseline settings for read-only Git. Patch-producing commands also need safeGitDiffArgs. */
+/**
+ * Baseline arguments for read-only Git. Every call also overlays SAFE_GIT_ENV on its environment;
+ * patch-producing commands additionally need safeGitDiffArgs.
+ */
 export const SAFE_GIT_OPTIONS = [
   '-c',
   'core.quotepath=false',
@@ -7,6 +10,18 @@ export const SAFE_GIT_OPTIONS = [
   '-c',
   'safe.bareRepository=explicit',
 ];
+
+/**
+ * Over a read-only git's environment: a partial clone fetches no blob or tree it lacks, since the
+ * fetch would run whatever its remote names (an `ext::` command its configuration allows, its
+ * upload-pack, ssh). Git before 2.45.1 (and its 2.39.4+ backports) ignores GIT_NO_LAZY_FETCH, so
+ * GIT_ALLOW_PROTOCOL, the one transport policy above every configuration, is an empty allowlist.
+ * A word such as "none" would instead allow an external helper named git-remote-none.
+ */
+export const SAFE_GIT_ENV: Readonly<Record<string, string>> = {
+  GIT_NO_LAZY_FETCH: '1',
+  GIT_ALLOW_PROTOCOL: '',
+};
 
 /**
  * Command arguments after SAFE_GIT_OPTIONS, for patches that must not run repository programs.

@@ -1,3 +1,4 @@
+import { legacyDirectories } from './workspaces/test-directories';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -15,7 +16,7 @@ import type { Message } from '../../shared/model/messages';
 import type { RunCheckpoint, RunRestore } from '../../shared/run';
 import type { SessionEvent, SessionMode, UserMessage } from '../../shared/session';
 import type { Connector, SessionHost } from '../sessions/connector';
-import { SessionManager } from '../sessions/manager';
+import { SessionManager, STALLED_INTERRUPT_MS } from '../sessions/manager';
 import { createCore } from './core';
 import type { Core, CoreConfig } from './core';
 import { STALL_MS, WATCH_EVERY_MS } from './stalled';
@@ -111,6 +112,7 @@ beforeEach(async () => {
     app: { name: 'corrallm', version: '1.0.0' },
     check: true,
     distribution: 'local',
+    directoryResolver: legacyDirectories,
     watchdog: {
       now: () => now,
       later: (run) => {
@@ -138,7 +140,7 @@ afterEach(async () => {
 });
 
 async function call(
-  name: 'reply' | 'message' | 'run.pause' | 'run.unpause' | 'withdraw',
+  name: 'reply' | 'message' | 'run.pause' | 'run.unpause' | 'withdraw' | 'canvas.move',
   args: object,
   caller = CALLERS.you,
 ) {
@@ -189,6 +191,20 @@ const needIds = async () => {
   if (!needs.ok) throw new Error('No needs');
   return (needs.value as { items: { id: string }[] }).items.map(({ id }) => id);
 };
+
+/** `promise`, and whether it has settled yet (`done`), however it settles. */
+function settles<T>(promise: Promise<T>): { promise: Promise<T>; done: boolean } {
+  const watched = { promise, done: false };
+  promise.then(
+    () => {
+      watched.done = true;
+    },
+    () => {
+      watched.done = true;
+    },
+  );
+  return watched;
+}
 
 /**
  * From here the test moves setTimeout: whatever a held resend's checks would do on a later re-check
@@ -802,11 +818,58 @@ it('keeps the new pending id, link, sender notice and holds across a restart', a
   ).toHaveLength(1);
 });
 
-it('a refused interrupt leaves the Need answerable and no retry armed', async () => {
+it('frees its canvas once an Interrupt is sent, though the CLI never answers it', async () => {
+  await send();
+  await stall();
+  // The CLI's answer to turn/interrupt never comes while the test runs.
+  const answer = Promise.withResolvers<undefined>();
+  interrupt.mockReturnValueOnce(answer.promise);
+  try {
+    const replying = settles(call('reply', { to: 'stalled/a', answer: { choice: 'interrupt' } }));
+    const moving = settles(
+      call('canvas.move', { moves: [{ node: 'a', position: { x: 40, y: 80 } }] }),
+    );
+    await vi.waitFor(() => {
+      expect({ replying: replying.done, moving: moving.done }).toEqual({
+        replying: true,
+        moving: true,
+      });
+    });
+    expect(await replying.promise).toMatchObject({ ok: true });
+    expect(await moving.promise).toMatchObject({ ok: true });
+    expect(interrupt).toHaveBeenCalledOnce();
+  } finally {
+    answer.resolve(undefined);
+  }
+});
+
+it('gives the Need back when the CLI hasn’t answered its Interrupt in time, with no resend armed', async () => {
+  await send();
+  await stall();
+  interrupt.mockReturnValueOnce(new Promise<void>(() => undefined));
+  controlTimers();
+  expect(await choose()).toMatchObject({ ok: true });
+  expect(await needIds()).not.toContain('stalled/a');
+  await vi.advanceTimersByTimeAsync(STALLED_INTERRUPT_MS);
+  await vi.waitFor(async () => {
+    expect(await needIds()).toContain('stalled/a');
+  });
+  // Its turn ends after all: what the unanswered interrupt reserved is never resent.
+  end();
+  await settled();
+  expect(sent).toHaveLength(1);
+  expect(await texts()).toHaveLength(1);
+});
+
+it('a refused interrupt gives the Need back, answerable, with no retry armed', async () => {
   await send();
   await stall();
   interrupt.mockRejectedValueOnce(new Error('interrupt failed'));
-  expect(await choose()).toMatchObject({ ok: false });
+  // The reply returns once the interrupt is sent; the CLI's refusal gives the Need back.
+  expect(await choose()).toMatchObject({ ok: true });
+  await vi.waitFor(async () => {
+    expect(await needIds()).toContain('stalled/a');
+  });
   expect(await choose()).toMatchObject({ ok: true });
   expect(interrupt).toHaveBeenCalledTimes(2);
   end();

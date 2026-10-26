@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 
 import type { Core } from '../../../core/core';
+import { legacyDirectories } from '../../../core/workspaces/test-directories';
 import { createCore } from '../../../core/core';
 import { keepCanvases } from '../../../core/store/test-store';
 import { CALLERS, CANVAS, NO_DESKTOP } from '../../../core/test-registry';
@@ -50,6 +51,7 @@ beforeEach(async () => {
       app: { name: 'corrallm', version: 'test' },
       check: true,
       distribution: 'local',
+      directoryResolver: legacyDirectories,
       sessions: {
         environment: () => Promise.resolve({}),
         connectors: {

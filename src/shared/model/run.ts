@@ -109,6 +109,18 @@ export interface Run {
   /** Paused progress can resume; starting again is a separate deliberate action. */
   paused?: boolean;
   /**
+   * While it is paused, the party that stopped it: whoever stopped it first, unless you stopped it
+   * since (yours over any other's), or corrallm, for a run a close or a restart paused. A token
+   * resumes, or starts afresh, only a run its own party or corrallm stopped (Core Server rule R9).
+   */
+  pausedBy?: PartyId;
+  /**
+   * The parties that decided something this run held for them (answered a hold, or ended one with
+   * Go on now), each once, first first: a token never starts afresh a run another party decided
+   * in (R9). Starting afresh forgets them, with the rest of the run.
+   */
+  decided?: readonly PartyId[];
+  /**
    * Whether queues are running: an agent is doing a task, or held (by the run, or for the user).
    * Stopped queues keep no run going.
    */

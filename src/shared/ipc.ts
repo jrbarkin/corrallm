@@ -1,3 +1,4 @@
+import type { SessionAvailability } from './session';
 import type { AdapterId, ConnectionId } from './adapter';
 import type { GuiBridge, GuiDraftsApi } from './gui-link';
 import type { RunCheckpoint, RunRestore } from './run';
@@ -112,7 +113,8 @@ export interface IpcContract {
    * What an agent of an adapter can be set to run with (its models, with their efforts) and the
    * user's own defaults, read in the canvas's project folder without a session or a prompt.
    */
-  'session:options': { args: [adapter: AdapterId]; result: SettingsOptions };
+  'session:availability': { args: [agent: string]; result: SessionAvailability };
+  'session:options': { args: [adapter: AdapterId, agent?: string]; result: SettingsOptions };
   /** The MCP servers an agent's running session has, and how each is (/mcp; Agent SDK sessions). */
   'session:mcp': { args: [agentId: string]; result: McpServer[] };
   /** Reconnects, enables or disables one of them; resolves with them all as they are then. */
@@ -127,6 +129,7 @@ export interface IpcEvents {
   /** Freeze queue dispatch, persist, then acknowledge with run:ready. */
   'run:stopping': [requestId: string];
   /** What an agent's connected session did. Only the renderer that started it hears. */
+  'session:availability': [];
   'session:event': [agentId: string, connection: ConnectionId, event: SessionEvent];
 }
 
@@ -177,6 +180,9 @@ export interface InvokeApi {
     ...args: IpcArgs<'session:rewind-preview'>
   ): Promise<IpcResult<'session:rewind-preview'>>;
   rewindSession(...args: IpcArgs<'session:rewind'>): Promise<IpcResult<'session:rewind'>>;
+  sessionAvailability(
+    ...args: IpcArgs<'session:availability'>
+  ): Promise<IpcResult<'session:availability'>>;
   settingsOptions(...args: IpcArgs<'session:options'>): Promise<IpcResult<'session:options'>>;
   mcpServers(...args: IpcArgs<'session:mcp'>): Promise<IpcResult<'session:mcp'>>;
   changeMcpServer(...args: IpcArgs<'session:mcp-change'>): Promise<IpcResult<'session:mcp-change'>>;
@@ -184,6 +190,7 @@ export interface InvokeApi {
 
 /** A function per event: it listens for the event, and returns a function that stops listening. */
 export interface EventApi {
+  onSessionAvailability(listener: () => void): () => void;
   onRunStopping(listener: (...args: IpcEventArgs<'run:stopping'>) => void): () => void;
   onSessionEvent(listener: (...args: IpcEventArgs<'session:event'>) => void): () => void;
 }
@@ -213,6 +220,7 @@ export const API_CHANNELS = {
   resumeSession: 'session:resume',
   previewRewind: 'session:rewind-preview',
   rewindSession: 'session:rewind',
+  sessionAvailability: 'session:availability',
   settingsOptions: 'session:options',
   mcpServers: 'session:mcp',
   changeMcpServer: 'session:mcp-change',
@@ -222,6 +230,7 @@ export const API_CHANNELS = {
 export const API_EVENTS = {
   onRunStopping: 'run:stopping',
   onSessionEvent: 'session:event',
+  onSessionAvailability: 'session:availability',
 } as const satisfies Record<keyof EventApi, IpcEvent>;
 
 type AssertNever<T extends never> = T;

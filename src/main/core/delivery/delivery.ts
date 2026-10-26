@@ -1,3 +1,4 @@
+import type { SessionAvailability } from '../../../shared/session';
 import { randomUUID } from 'node:crypto';
 
 import { MAX_WAITING } from '../../../shared/api/limits';
@@ -65,7 +66,8 @@ export interface DeliveryDeps {
    * in) asks before it acts, as its CLI's settings say in the canvas's project folder: undefined
    * where that can't be told. Read once a session (#default).
    */
-  defaultAsks: (adapter: AdapterId) => Promise<boolean | undefined>;
+  availability?: (agent: string) => Promise<SessionAvailability>;
+  defaultAsks: (adapter: AdapterId, agent?: string) => Promise<boolean | undefined>;
 }
 
 /**
@@ -96,6 +98,7 @@ interface Unstartable {
 /** What holds a message to an agent, if anything does. */
 type Hold =
   | { kind: 'busy' }
+  | { kind: 'workspace'; sentence: string }
   | { kind: 'paused'; holding: PauseCause[] }
   | ({ kind: 'stuck' } & Unstartable)
   | { kind: 'unasking'; why: UnaskingWhy }
@@ -113,7 +116,10 @@ interface Stuck {
   retrying: boolean;
 }
 
-/** What taking a message back did, rather than what its recorded delivery state implied. */
+/**
+ * What taking a message back did, rather than what its recorded delivery state implied: whether
+ * its CLI had it, and so whether its turn is (or was) interrupted.
+ */
 interface Withdrawal {
   reached: boolean;
   interrupted: boolean;
@@ -129,8 +135,8 @@ interface TakingBack {
   by: PartyId;
   why: TakeBackWhy;
   reached: boolean;
-  ended: Promise<Withdrawal>;
-  finish: (result: Withdrawal) => void;
+  /** What it did, once its turn has ended (or it came off its session's queue). */
+  ended?: Withdrawal;
 }
 
 /** What an agent with no connection this build runs is told. */
@@ -146,6 +152,9 @@ const RETRIES =
 const CUT_OFF: TurnResult = { status: 'cancelled', reason: 'connection-closed' };
 /** What a message taken back is said to have been. */
 const TAKEN_BACK: TurnResult = { status: 'cancelled', reason: 'taken-back' };
+/** What a withdrawal whose record can't reach the disk says. */
+const WITHDRAWAL_UNSAVED =
+  'The message is taken back now, but its withdrawal could not be saved and may not survive a restart.';
 /**
  * The most characters of a prompt's title, or an agent's name, a notice quotes, on one line and
  * cut at a word: a capped title, never a whole command (API Spec §5.8).
@@ -163,6 +172,54 @@ const PERMISSION_STARTUP_MS = 30_000;
 
 export class Delivery {
   readonly #deps: DeliveryDeps;
+  readonly #directories = new Map<string, SessionAvailability>();
+  readonly #checkingDirectories = new Map<string, object>();
+
+  availabilityChanged(): void {
+    this.#directories.clear();
+    this.#checkingDirectories.clear();
+    for (const agent of this.#defaults.keys())
+      if (this.#deps.engine.sessions.of(agent).running === undefined) this.#defaults.delete(agent);
+    this.schedule();
+  }
+
+  #directoryHold(agent: string): Hold | undefined {
+    const read = this.#deps.availability;
+    if (read === undefined) return undefined;
+    const result = this.#directories.get(agent);
+    if (result !== undefined)
+      return result.ready
+        ? undefined
+        : {
+            kind: 'workspace',
+            sentence: result.sentence,
+          };
+    if (!this.#checkingDirectories.has(agent)) {
+      const token = {};
+      this.#checkingDirectories.set(agent, token);
+      void read(agent).then(
+        (next) => {
+          if (this.#closed || this.#checkingDirectories.get(agent) !== token) return;
+          this.#checkingDirectories.delete(agent);
+          this.#directories.set(agent, next);
+          this.schedule();
+        },
+        (error: unknown) => {
+          if (this.#closed || this.#checkingDirectories.get(agent) !== token) return;
+          this.#checkingDirectories.delete(agent);
+          this.#directories.set(agent, {
+            ready: false,
+            sentence:
+              error instanceof Error
+                ? error.message
+                : 'Its working directory could not be checked.',
+          });
+          this.schedule();
+        },
+      );
+    }
+    return { kind: 'busy' };
+  }
   /** What takes each message being delivered back from its agent's session, by the message's id. */
   readonly #sent = new Map<string, () => void>();
   /** The agents a message is being journaled for, before it is sent: nothing else starts meanwhile. */
@@ -368,7 +425,10 @@ export class Delivery {
   /**
    * Takes back a message for `by`: one still waiting is withdrawn at once; one being delivered is
    * taken off its session's queue, or its turn interrupted, and is withdrawn once that ends.
-   * Throws, saying why, a message that can't be.
+   * Returns once the take-back is requested, never waiting for a native turn to end. Any immediate
+   * withdrawal is flushed before returning, so a restart never delivers it. Throws, saying why, a
+   * message that can't be taken back, and 'unavailable' one taken back whose withdrawal couldn't
+   * be written (withdrawn here all the same, it may not survive a restart).
    */
   async withdraw(id: string, by: PartyId): Promise<Withdrawal> {
     const message = this.#deps.store.get(id);
@@ -385,7 +445,7 @@ export class Delivery {
     if (message.state === 'pending') {
       this.#withdrawn(message, by);
       this.schedule();
-      return { reached: false, interrupted: false };
+      return this.#saved({ reached: false, interrupted: false });
     }
     if (message.kind !== 'text') {
       throw new DeliveryError(
@@ -402,20 +462,27 @@ export class Delivery {
         'Another party’s message can be taken back only while it waits; interrupt its turn instead.',
       );
     }
-    const result = await this.#takeBack(message, by, 'withdrawn');
-    if (result.reached) await this.#deps.store.durable();
+    return this.#saved(this.#takeBack(message, by, 'withdrawn'));
+  }
+
+  /** What a withdrawal did, once it is on disk; 'unavailable' if it can't be written. */
+  async #saved(result: Withdrawal): Promise<Withdrawal> {
+    try {
+      await this.#deps.store.durable();
+    } catch {
+      throw new DeliveryError('unavailable', WITHDRAWAL_UNSAVED);
+    }
     return result;
   }
 
   /**
    * Agents were killed (by `by`, at once, as a group's are): every message to or from them still
    * waiting is withdrawn, and every one being delivered is taken back, its turn interrupted, its
-   * recipient told with its next message should it have reached it, as of a withdrawal. Resolves
-   * once each is withdrawn (one being delivered, once its turn has ended).
+   * recipient told with its next message should it have reached it, as of a withdrawal: one
+   * being delivered is withdrawn once its turn has ended, which this never waits for.
    */
-  async kill(agents: readonly string[], by: PartyId): Promise<void> {
+  kill(agents: readonly string[], by: PartyId): void {
     const killed = new Set(agents.map(agentParty));
-    const withdrawing: Promise<Withdrawal>[] = [];
     for (const message of this.#deps.store.active()) {
       // The run's own sends are the run's to take back (its kill holds and withdraws them).
       if (message.kind !== 'text' || sentByRun(message)) continue;
@@ -426,10 +493,9 @@ export class Delivery {
           : undefined;
       if (why === undefined) continue;
       if (message.state === 'pending') this.#withdrawn(message, by);
-      else if (this.#inFlight(message)) withdrawing.push(this.#takeBack(message, by, why));
+      else if (this.#inFlight(message)) this.#takeBack(message, by, why);
     }
     this.schedule();
-    await Promise.all(withdrawing);
   }
 
   /**
@@ -566,9 +632,12 @@ export class Delivery {
       if (!waits || this.#writing.has(node.id)) continue;
       // Yours go past the run's holds, into its session's queue, unless that won't start; what
       // holds a party's message holds every party's behind it.
+      const directory = this.#directoryHold(node.id);
       const holds = {
-        yours: this.#stuckHold(node),
-        theirs: waits.some((message) => !this.#yours(message)) ? this.#holdOf(node) : undefined,
+        yours: directory ?? this.#stuckHold(node),
+        theirs:
+          directory ??
+          (waits.some((message) => !this.#yours(message)) ? this.#holdOf(node) : undefined),
       };
       let next: Message | undefined;
       for (const message of waits) {
@@ -583,6 +652,13 @@ export class Delivery {
             holdKey('paused', node.id, causes, message.from),
             message,
             `${this.#name(node.id)} is paused by ${pausesText(this.#deps.nodes(), node.id, hold.holding)}, so your message waits until it is released: ${RELEASES}`,
+          );
+        }
+        if (hold.kind === 'workspace') {
+          this.#tell(
+            holdKey('workspace', node.id, hold.sentence, message.from),
+            message,
+            `${this.#name(node.id)} waits for its workspace, so your message stays queued: ${threadTitle(hold.sentence, REASON)}`,
           );
         }
         if (hold.kind === 'stuck') {
@@ -618,6 +694,7 @@ export class Delivery {
       }
       if (next === undefined || this.#unrecordable) continue;
       if (!this.#yours(next)) this.#warnUsage(node);
+      this.#directories.delete(node.id);
       this.#deliver(node, next);
     }
     this.#arm(alarm);
@@ -761,7 +838,7 @@ export class Delivery {
     const reading: Default = { connection, at: this.#deps.now(), asks: 'reading', ran: false };
     this.#defaults.set(agent, reading);
     void this.#deps
-      .defaultAsks(this.#deps.engine.catalog.adapterOf(connection))
+      .defaultAsks(this.#deps.engine.catalog.adapterOf(connection), agent)
       .catch(() => undefined)
       .then((asks) => {
         if (this.#defaults.get(agent) !== reading) return;
@@ -850,6 +927,7 @@ export class Delivery {
     const { engine } = this.#deps;
     if (engine.run.holding({ agent: node.id }).length === 0) this.#forget('paused', node.id);
     if (engine.sessions.of(node.id).running !== undefined) this.#forget('stuck', node.id);
+    if (this.#directories.get(node.id)?.ready === true) this.#forget('workspace', node.id);
     if (this.#asking(node, false) === 'asks') this.#forget('unasking', node.id);
     if (this.#limited(node) === undefined) this.#forget('limited', node.id);
   }
@@ -1005,23 +1083,25 @@ export class Delivery {
     this.schedule();
   }
 
-  /** Takes back a message being delivered for `by`: withdrawn once its turn has ended. */
-  #takeBack(message: Message, by: PartyId, why: TakeBackWhy): Promise<Withdrawal> {
+  /**
+   * Takes back a message being delivered for `by`: withdrawn at once off its session's queue, else
+   * once its interrupted turn has ended. What it did as it is asked for: off the queue, what that
+   * did; else whether its CLI has it, and so whether its turn is being interrupted. Never waits for
+   * the turn's end, so no op waits in its scope on a CLI that ignores the interrupt.
+   */
+  #takeBack(message: Message, by: PartyId, why: TakeBackWhy): Withdrawal {
     const existing = this.#withdrawing.get(message.id);
-    if (existing) return existing.ended;
+    if (existing) return asked(existing.reached || this.#reached(message));
     const takeBack = this.#sent.get(message.id);
     if (!takeBack) {
       // Still being journaled: it is never sent.
       this.#withdrawn(message, by);
-      return Promise.resolve({ reached: false, interrupted: false });
+      return { reached: false, interrupted: false };
     }
-    let finish!: TakingBack['finish'];
-    const ended = new Promise<Withdrawal>((resolve) => {
-      finish = resolve;
-    });
-    this.#withdrawing.set(message.id, { by, why, reached: this.#reached(message), ended, finish });
+    const taking: TakingBack = { by, why, reached: this.#reached(message) };
+    this.#withdrawing.set(message.id, taking);
     takeBack();
-    return ended;
+    return taking.ended ?? asked(taking.reached);
   }
 
   /** Whether the CLI has the message: delivering also covers journaling and the session queue. */
@@ -1046,7 +1126,7 @@ export class Delivery {
     const result = { reached, interrupted: reached && interrupted };
     const note = reached ? this.#note(message, taking, result.interrupted) : undefined;
     this.#withdrawn(message, taking.by, note);
-    taking.finish(result);
+    taking.ended = result;
   }
 
   /**
@@ -1238,7 +1318,7 @@ export class Delivery {
 }
 
 /** The kinds of hold a sender is told of, by the agent they hold. */
-type HoldKind = 'paused' | 'stuck' | 'unasking' | 'usage' | 'limited';
+type HoldKind = 'workspace' | 'paused' | 'stuck' | 'unasking' | 'usage' | 'limited';
 
 /**
  * Whom the kill that took back `message` killed, its recipient or its sender, and who killed it, as
@@ -1282,9 +1362,17 @@ function holdKey(kind: HoldKind, agent: string, ...rest: string[]): string {
   return [kind, encodeURIComponent(agent), ...rest].join(':');
 }
 
+/**
+ * What taking back a message being delivered does as it is asked for, before its turn ends: if its
+ * CLI has it, its turn is being interrupted.
+ */
+function asked(reached: boolean): Withdrawal {
+  return { reached, interrupted: reached };
+}
+
 /** Why a message couldn't be sent or taken back: a code, as an operation's failure carries it. */
 export class DeliveryError extends Error {
-  readonly code: 'not-found' | 'refused' | 'conflict';
+  readonly code: 'not-found' | 'refused' | 'conflict' | 'unavailable';
 
   constructor(code: DeliveryError['code'], sentence: string) {
     super(sentence);

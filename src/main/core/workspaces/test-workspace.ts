@@ -1,4 +1,4 @@
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 
 import type { CanvasId } from '../../../shared/canvas';
@@ -54,6 +54,8 @@ export async function testWorkspaces(
   const base = makeRepository(app, env, files);
   const profile = path.join(root, 'profile');
   mkdirSync(profile);
+  mkdirSync(path.join(profile, 'workspaces'));
+  writeFileSync(path.join(profile, 'workspaces', 'profile-id'), `${PROFILE_ID}\n`, { mode: 0o600 });
   const store = await openTestStore(profile);
   const memory = new CanvasMemory(store);
   await store.write(() => {

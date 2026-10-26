@@ -44,8 +44,8 @@ const TOKEN_PARTIES = PARTIES.filter((party) => party !== 'you');
 
 interface Setup {
   core: Dispatcher;
-  /** Readies it for a call meeting `rule`: what undoes that. */
-  meeting?(rule: Rule): () => void;
+  /** Readies it for a call of op `op` meeting `rule`: what undoes that. */
+  meeting?(rule: Rule, op: string): () => void;
   close(): Promise<void>;
 }
 
@@ -266,7 +266,7 @@ describe.each(REGISTRIES)('T3b on %s', (_label, fixtures, world, start) => {
           (p) => inAudience(name, p) && (rule !== 'self' || CALLERS[p].kind === 'agent'),
         );
         // What the world must be for a call to meet it (R11: a party at its cap), only meanwhile.
-        const met = setup.meeting?.(rule as Rule);
+        const met = setup.meeting?.(rule as Rule, name);
         try {
           for (const party of meeting) {
             const theirs = await setup.core.call(name, args, CALLERS[party]);

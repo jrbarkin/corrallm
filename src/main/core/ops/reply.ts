@@ -33,7 +33,9 @@ import type { Implementations, OpServices } from '.';
  *   superseded by one of what is there now (none if that is as the core has it), changing nothing.
  *   Keep settles it; the canvas's next save writes it over the file.
  * - A silent turn's stalled/<agent> prompt offers Interrupt or Interrupt and resend, for you alone;
- *   it never stops a turn on its own.
+ *   it never stops a turn on its own. Either returns once the interrupt is sent, never waiting in
+ *   its canvas's scope for the CLI's answer, which may never come: one the CLI refuses, or hasn't
+ *   given within the manager's STALLED_INTERRUPT_MS, arms no resend and gives the prompt back.
  * - A worktree's setup card (workspaces/setup.ts, B9a): yours alone, answered only at the
  *   generation it names, so a card raised anew (its command changed) is stale; Run and Always return
  *   once your approval is on disk and the command is scheduled, not when it is done.
@@ -195,14 +197,33 @@ export function replyOps({
       if (!turn) throw notFound(item.id);
       ctx.noReturn();
       const resend = 'choice' in answer && answer.choice === 'resend';
+      /** The interrupt failed: nothing is resent, and the prompt is yours to answer again. */
+      const failed = async () => {
+        try {
+          await engines.cancelResend(canvas, agent, turn.connection);
+        } catch (error) {
+          console.error('Could not cancel a silent turn’s resend:', error);
+        } finally {
+          turn.release();
+        }
+      };
+      let sent: { answered: Promise<void> } | undefined;
       try {
         if (resend) await engines.resendAfter(canvas, agent, turn.messages, turn.connection);
-        if (!(await sessions.interruptIf(canvas, agent, turn.current)))
-          await engines.cancelResend(canvas, agent, turn.connection);
+        sent = await sessions.interruptIf(canvas, agent, turn.current, resend);
       } catch (error) {
-        await engines.cancelResend(canvas, agent, turn.connection);
-        turn.release();
+        await failed();
         throw error;
+      }
+      if (sent === undefined) {
+        // The turn ended while this waited: there is nothing to interrupt, or to resend.
+        await engines.cancelResend(canvas, agent, turn.connection);
+      } else {
+        // Its CLI's answer is awaited apart from this call, which holds its canvas's scope.
+        void sent.answered.catch(async (error: unknown) => {
+          console.error('Could not interrupt a silent turn:', error);
+          await failed();
+        });
       }
       return {};
     },

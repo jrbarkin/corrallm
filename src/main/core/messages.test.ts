@@ -1,3 +1,4 @@
+import { legacyDirectories } from './workspaces/test-directories';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -233,6 +234,7 @@ async function start(
       app: { name: 'corrallm', version: '9.8.7' },
       check: true,
       distribution: 'local',
+      directoryResolver: legacyDirectories,
       locale: 'en-GB',
       ...(watchdog === undefined ? {} : { watchdog }),
       ...(watchdogNetwork === undefined ? {} : { watchdogNetwork }),
@@ -822,59 +824,87 @@ describe('delivery', () => {
     });
   });
 
-  it('lets another party kill and message other agents while a withdrawal awaits its native turn end', async () => {
-    await keepCanvas();
-    const interrupted = Promise.withResolvers<undefined>();
-    const turnEnd = Promise.withResolvers<undefined>();
-    const slow = new FakeConnector({ adapter: 'codex', step: () => turnEnd.promise });
-    await start({
-      appServer: {
-        start: async (spec, host) => {
-          const live = await (spec.agentId === 'builder' ? slow : appServer).start(spec, host);
-          if (spec.agentId === 'builder') {
-            const interrupt = live.interrupt.bind(live);
-            vi.spyOn(live, 'interrupt').mockImplementation(() => {
-              interrupted.resolve(undefined);
-              return interrupt();
-            });
-          }
-          return live;
-        },
-      },
-    });
-    const id = await receive();
-    let withdrawn = false;
-    const withdrawing = ok('withdraw', { id }).then((result) => {
-      withdrawn = true;
-      return result;
-    });
-    await interrupted.promise;
-    let killed = false;
-    let sent: string | undefined;
-    const killing = ok('run.kill', { target: { agent: 'checker' } }, OTHER).then(() => {
-      killed = true;
-    });
-    const sending = send('helper', 'Independent work', OTHER).then((id) => {
-      sent = id;
-    });
+  it('keeps the canvas’s lanes free while two withdrawals take back a turn whose CLI ignores the interrupt', async () => {
+    const { interrupted, turnEnd } = await startStuck();
+    const hung = await receive();
+    const queued = await send('builder', 'Then this', OTHER);
     try {
+      const first = settles(ok('withdraw', { id: hung }));
+      await interrupted.promise;
+      const second = settles(ok('withdraw', { id: queued }, OTHER));
+      const killing = settles(ok('run.kill', { target: { agent: 'builder' } }, OTHER));
+      const sending = settles(send('helper', 'Independent work', OTHER));
+      const adding = settles(
+        ok('queue.add', { agent: 'helper', entry: { message: 'Later work' } }, YOU),
+      );
+      // Each returns while Builder's turn goes on: none waits on its native end.
       await vi.waitFor(() => {
-        expect(killed).toBe(true);
-        expect(sent).toBeDefined();
+        expect(doneOf({ first, second, killing, sending, adding })).toEqual({
+          first: true,
+          second: true,
+          killing: true,
+          sending: true,
+          adding: true,
+        });
       });
+      expect(await first.promise).toEqual({
+        reached: true,
+        interrupted: true,
+        revs: expect.any(Object) as Record<string, number>,
+      });
+      expect(await second.promise).toEqual({
+        reached: false,
+        interrupted: false,
+        revs: expect.any(Object) as Record<string, number>,
+      });
+      expect(await adding.promise).toEqual({
+        id: expect.any(String) as string,
+        revs: expect.any(Object) as Record<string, number>,
+      });
+      const independent = await sending.promise;
       await vi.waitFor(async () => {
-        expect(sent && (await find(sent, OTHER))?.state).toBe('replied');
+        expect((await find(independent, OTHER))?.state).toBe('replied');
       });
-      expect(withdrawn).toBe(false);
+      expect((await find(queued, OTHER))?.state).toBe('withdrawn');
+      // The hung message is withdrawn, with its note, once its turn ends.
+      expect((await find(hung))?.state).toBe('delivered');
     } finally {
       turnEnd.resolve(undefined);
-      await Promise.all([withdrawing, killing, sending]);
     }
-    expect(await withdrawing).toEqual({
-      reached: true,
-      interrupted: true,
-      revs: expect.any(Object) as Record<string, number>,
+    await vi.waitFor(async () => {
+      expect(await find(hung)).toMatchObject({ state: 'withdrawn', by: 'outside:orchestrator' });
     });
+    expect(core?.engines.canvas(CANVAS)?.messages.withdrawals('agent:builder')).toEqual([
+      { id: hung, text: withdrawalNote(hung) },
+    ]);
+  });
+
+  it('runs a kill of the stuck agent though a canvas close comes behind a withdrawal of its hung turn', async () => {
+    const { live, interrupted, turnEnd } = await startStuck();
+    const hung = await receive();
+    try {
+      const withdrawing = settles(ok('withdraw', { id: hung }));
+      await interrupted.promise;
+      const closing = settles(live.call('canvas.close', { canvas: CANVAS, discard: true }, YOU));
+      const killing = settles(
+        live.call('run.kill', { canvas: CANVAS, target: { agent: 'builder' } }, OTHER),
+      );
+      await vi.waitFor(() => {
+        expect(doneOf({ withdrawing, closing, killing })).toEqual({
+          withdrawing: true,
+          closing: true,
+          killing: true,
+        });
+      });
+      expect(await closing.promise).toMatchObject({ ok: true });
+      // The close came first, so the kill finds the canvas closed rather than waiting forever.
+      expect(await killing.promise).toMatchObject({
+        ok: false,
+        error: { code: 'unavailable' },
+      });
+    } finally {
+      turnEnd.resolve(undefined);
+    }
   });
 
   it('holds a party’s message while its agent runs in a mode that never asks, telling its sender and you', async () => {
@@ -1849,6 +1879,65 @@ async function receive(to = 'builder', caller: Caller = OUTSIDE): Promise<string
   return id;
 }
 
+/**
+ * Starts the core (`live`) with Builder's CLI ignoring every interrupt: its turn ends only once the
+ * test resolves `turnEnd`; `interrupted` resolves once its session is first asked to interrupt.
+ */
+async function startStuck() {
+  await keepCanvas();
+  const interrupted = Promise.withResolvers<undefined>();
+  const turnEnd = Promise.withResolvers<undefined>();
+  const stuck = new FakeConnector({ adapter: 'codex', step: () => turnEnd.promise });
+  const live = await start({
+    appServer: {
+      start: async (spec, host) => {
+        const session = await (spec.agentId === 'builder' ? stuck : appServer).start(spec, host);
+        if (spec.agentId === 'builder') {
+          const interrupt = session.interrupt.bind(session);
+          vi.spyOn(session, 'interrupt').mockImplementation(() => {
+            interrupted.resolve(undefined);
+            return interrupt();
+          });
+        }
+        return session;
+      },
+    },
+  });
+  return { live, interrupted, turnEnd };
+}
+
+/** `promise`, and whether it has settled yet (`done`), however it settles. */
+function settles<T>(promise: Promise<T>): { promise: Promise<T>; done: boolean } {
+  const watched = { promise, done: false };
+  promise.then(
+    () => {
+      watched.done = true;
+    },
+    () => {
+      watched.done = true;
+    },
+  );
+  return watched;
+}
+
+/** Whether each of `calls` has settled, by name. */
+function doneOf(calls: Record<string, { done: boolean }>): Record<string, boolean> {
+  return Object.fromEntries(Object.entries(calls).map(([name, { done }]) => [name, done]));
+}
+
+/**
+ * `id`, a message `caller` may read, as it is once withdrawn and that is on disk: a take-back of one
+ * being delivered returns before its interrupted turn ends, and the message is withdrawn, with its
+ * note, as that turn ends.
+ */
+async function endsWithdrawn(id: string, caller: Caller = OUTSIDE): Promise<Message | undefined> {
+  await vi.waitFor(async () => {
+    expect((await find(id, caller))?.state).toBe('withdrawn');
+  });
+  await core?.engines.canvas(CANVAS)?.messages.durable();
+  return find(id, caller);
+}
+
 /** A received turn withdrawn before its fake session finishes. */
 async function withdrawReceived(to = 'builder', caller: Caller = OUTSIDE): Promise<string> {
   const id = await receive(to, caller);
@@ -1857,7 +1946,7 @@ async function withdrawReceived(to = 'builder', caller: Caller = OUTSIDE): Promi
     interrupted: true,
     revs: expect.any(Object) as Record<string, number>,
   });
-  expect((await find(id, caller))?.state).toBe('withdrawn');
+  await endsWithdrawn(id, caller);
   return id;
 }
 
@@ -1904,6 +1993,40 @@ describe('telling an agent of a withdrawal after receipt', () => {
     appServer = new FakeConnector({ adapter: 'codex', pause: 100 });
     terminal = new FakeConnector({ adapter: 'codex', pause: 100 });
   });
+
+  /** Keep the original and then its separate note running until their real interrupts. */
+  function heldNoteConnector() {
+    let waiting: Promise<void> | undefined;
+    let release: (() => void) | undefined;
+    let sent = 0;
+    const fake = new FakeConnector({
+      adapter: 'codex',
+      step: () => waiting ?? Promise.resolve(),
+    });
+    const start = fake.start.bind(fake);
+    vi.spyOn(fake, 'start').mockImplementation(async (spec, host) => {
+      const session = await start(spec, host);
+      const send = session.send.bind(session);
+      const interrupt = session.interrupt.bind(session);
+      session.send = (message) => {
+        if (++sent === 1 || message.from?.party === 'corrallm') {
+          const gate = Promise.withResolvers<undefined>();
+          waiting = gate.promise;
+          release = () => {
+            gate.resolve(undefined);
+          };
+        } else waiting = undefined;
+        return send(message);
+      };
+      session.interrupt = () => {
+        const stopped = interrupt();
+        release?.();
+        return stopped;
+      };
+      return session;
+    });
+    return fake;
+  }
 
   it('withdraws a Terminal message waiting at folder trust without a false receipt or note', async () => {
     const terminal = await startAtTrust();
@@ -1990,6 +2113,87 @@ describe('telling an agent of a withdrawal after receipt', () => {
       expect(appServer.sessions[0]?.sent[2]?.from).toBeUndefined();
     },
   );
+
+  it.each([
+    ['manual', 'a Stop'],
+    ['manual', 'its take-back'],
+    ['queue', 'a Stop'],
+    ['queue', 'a Kill'],
+  ] as const)(
+    'never sends a %s slash command after %s during its withdrawal note’s own turn',
+    async (origin, stop) => {
+      appServer = heldNoteConnector();
+      await keepCanvas([{ ...BUILDER_AGENT, queue: [{ id: 'review', action: '/review' }] }], []);
+      const engine = await (await start()).engines.open(CANVAS);
+      const id = await withdrawReceived();
+      const note = `[corrallm] ${withdrawalNote(id)}`;
+      const command = origin === 'manual' ? await send('builder', '/review', YOU) : undefined;
+      if (origin === 'queue') engine.run.start();
+      await vi.waitFor(() => {
+        expect(sent(appServer).slice(1)).toEqual([note]);
+      });
+      // The note's turn runs: the CLI's current turn is the note's, not the command's.
+      if (stop === 'a Stop') await ok('session.interrupt', { agent: 'builder' }, YOU);
+      else if (stop === 'a Kill') await ok('run.kill', { target: { agent: 'builder' } }, YOU);
+      else if (command !== undefined) {
+        expect(await ok('withdraw', { id: command }, YOU)).toEqual({
+          reached: false,
+          interrupted: false,
+          revs: expect.any(Object) as Record<string, number>,
+        });
+      }
+      const attempt = () => engine.run.snapshot().agents.builder?.attempts?.review?.at(-1);
+      const reply = async () =>
+        (await inbox(YOU)).find(({ replyTo, kind }) => replyTo === command && kind === 'text');
+      await vi.waitFor(
+        async () => {
+          if (origin === 'queue') expect(attempt()?.status).not.toBe('running');
+          else if (stop === 'a Stop') expect(await reply()).toBeDefined();
+          expect(engine.sessions.of('builder').status).toBe('idle');
+        },
+        { timeout: 3000 },
+      );
+      // Its turn ended taken back, and the CLI was never sent it.
+      expect(sent(appServer).slice(1)).toEqual([note]);
+      if (origin === 'queue') expect(attempt()?.status).toBe('cancelled');
+      else if (stop === 'a Stop') {
+        expect((await reply())?.turn).toEqual({ status: 'cancelled', reason: 'taken-back' });
+      } else if (command !== undefined) {
+        expect((await find(command, YOU))?.state).toBe('withdrawn');
+      }
+      // The note was told: the next message carries none.
+      expect(core?.engines.canvas(CANVAS)?.messages.withdrawals('agent:builder')).toEqual([]);
+    },
+  );
+
+  it('never sends a shell command after a Stop during its withdrawal note’s own turn', async () => {
+    terminal = heldNoteConnector();
+    await keepCanvas();
+    await start();
+    const id = await withdrawReceived('shell');
+    const note = `[corrallm] ${withdrawalNote(id)}`;
+    const command = await send('shell', '!echo hello', YOU);
+    await vi.waitFor(() => {
+      expect(sent(terminal).slice(1)).toEqual([note]);
+    });
+    await ok('session.interrupt', { agent: 'shell' }, YOU);
+    const reply = async () =>
+      (await inbox(YOU)).find(({ replyTo, kind }) => replyTo === command && kind === 'text');
+    await vi.waitFor(
+      async () => {
+        expect(await reply()).toBeDefined();
+      },
+      { timeout: 3000 },
+    );
+    expect(sent(terminal).slice(1)).toEqual([note]);
+    expect((await reply())?.turn).toEqual({ status: 'cancelled', reason: 'taken-back' });
+    // What the user sends next goes as usual.
+    const next = await send('shell', 'After the stop', YOU);
+    await vi.waitFor(async () => {
+      expect((await find(next, YOU))?.state).toBe('replied');
+    });
+    expect(sent(terminal).slice(1)).toEqual([note, 'After the stop']);
+  });
 
   it.each(['builder', 'shell'])(
     'shows the exact withdrawal-bearing messages sent to %s, in order, live and after resuming',
@@ -2388,7 +2592,7 @@ describe('telling an agent of a kill after receipt', () => {
     await start();
     const id = await receive('builder');
     await ok('run.kill', { target: { agent: 'builder' } }, YOU);
-    expect(await find(id)).toMatchObject({ state: 'withdrawn', by: 'you' });
+    expect(await endsWithdrawn(id)).toMatchObject({ state: 'withdrawn', by: 'you' });
     // Killed, it is held: yours still go, and carry the note in their own frame.
     expect(await next('builder', YOU)).toBe(
       `[corrallm] ${killNote(id, 'you were killed by the user')}\n\nNew work`,
@@ -2407,7 +2611,7 @@ describe('telling an agent of a kill after receipt', () => {
       await start();
       const id = await receive('helper', BUILDER);
       await ok('run.kill', { target: { agent: killed } });
-      expect(await find(id, BUILDER)).toMatchObject({
+      expect(await endsWithdrawn(id, BUILDER)).toMatchObject({
         state: 'withdrawn',
         by: 'outside:orchestrator',
       });
@@ -2426,6 +2630,8 @@ describe('telling an agent of a kill after receipt', () => {
       receive('helper', BUILDER),
     ]);
     await ok('run.kill', { target: { group: 'team' } });
+    await endsWithdrawn(toBuilder);
+    await endsWithdrawn(toHelper, BUILDER);
     await ok('run.unpause', { target: { group: 'team' } });
     // Its recipient killed too, Helper hears of that, not of its sender's kill.
     expect(await next('builder')).toContain(
@@ -2504,6 +2710,7 @@ describe('telling an agent of a kill after receipt', () => {
       await start();
       const id = await receive(to, from);
       await ok('run.kill', { target: { agent: killed } }, killer);
+      await endsWithdrawn(id, from);
       await ok('run.unpause', { target: { agent: killed } }, YOU);
       expect(await next(to)).toContain(killNote(id, how, sender));
     },
@@ -2530,6 +2737,7 @@ describe('telling an agent of a kill after receipt', () => {
     await start();
     const id = await receive('builder');
     await ok('run.kill', { target: { agent: 'builder' } }, YOU);
+    await endsWithdrawn(id);
     const note = killNote(id, 'you were killed by the user');
     expect(
       readOnDisk(profile, (disk) =>
@@ -3222,6 +3430,16 @@ describe('usage', () => {
     });
   });
 
+  /**
+   * A clock that only the test moves, so startup, fsync and scheduler delays (a loaded machine's
+   * seconds) never consume a usage window of a second or two. Returns when the window resets.
+   */
+  function frozenWindow(ms: number): number {
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+    vi.setSystemTime(Date.UTC(2026, 9, 21, 12));
+    return Date.now() + ms;
+  }
+
   /** A run whose Builder is held by its usage rule (`action`) before its queue's message. */
   async function heldOnUsage(action: string, resetsAt: number) {
     await overRule(action, resetsAt);
@@ -3271,10 +3489,10 @@ describe('usage', () => {
   it.each(['ask', 'waitForReset'])(
     'holds a party’s message while the run holds its agent on usage (%s) until the window resets, but never yours',
     async (action) => {
-      const resetsAt = Date.now() + 1500;
+      const resetsAt = frozenWindow(1500);
       const engine = await heldOnUsage(action, resetsAt);
       const id = await send('builder', 'Say hello');
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      await vi.advanceTimersByTimeAsync(50);
       expect((await find(id))?.state).toBe('pending');
       expect(await notices()).toEqual([
         expect.objectContaining({ replyTo: id, body: expect.stringMatching(WAITS) as string }),
@@ -3287,6 +3505,7 @@ describe('usage', () => {
       expect((await find(id))?.state).toBe('pending');
       expect(sent(appServer)).toEqual(['From you']);
 
+      await vi.advanceTimersByTimeAsync(resetsAt - Date.now());
       await vi.waitFor(
         async () => {
           expect((await find(id))?.state).toBe('replied');
@@ -3323,13 +3542,14 @@ describe('usage', () => {
   );
 
   it('holds a party’s message no longer than the window of a usage hold a stopped run left', async () => {
-    const resetsAt = Date.now() + 1500;
+    const resetsAt = frozenWindow(1500);
     const engine = await heldOnUsage('waitForReset', resetsAt);
     engine.run.stop();
     expect(engine.run.snapshot().agents.builder?.usage).toMatchObject({ resetsAt });
     const id = await send('builder', 'Say hello');
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    await vi.advanceTimersByTimeAsync(50);
     expect((await find(id))?.state).toBe('pending');
+    await vi.advanceTimersByTimeAsync(resetsAt - Date.now());
     await vi.waitFor(
       async () => {
         expect((await find(id))?.state).toBe('replied');

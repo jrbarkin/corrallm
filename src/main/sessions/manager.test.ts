@@ -19,7 +19,7 @@ import type { Connector, LiveSession, SessionHost, SessionSpec } from './connect
 import { unavailable } from './connector';
 import { FakeConnector } from './fake';
 import { CATALOG } from './adapters';
-import { SessionManager } from './manager';
+import { SessionManager, STALLED_INTERRUPT_MS } from './manager';
 import type { SessionManagerDeps } from './manager';
 import type { Conversations } from './adapter';
 import { quotePath } from './terminal/drop';
@@ -44,6 +44,7 @@ let fake: FakeConnector;
 let terminal: FakeConnector;
 /** Each canvas's project folder, as project.ts would know it. */
 let projects: Map<CanvasId, string>;
+let workspaces: Map<string, WorkingDirectory>;
 /** What each canvas's windows heard: agent, connection and event. */
 let heard: Map<CanvasId, [string, ConnectionId, SessionEvent][]>;
 /** What each canvas's terminal views heard: agent and event. */
@@ -57,13 +58,22 @@ let before: Mock<Kept['before']>;
 let fork: Mock<Kept['fork']>;
 
 function directories() {
-  return new ProjectDirectories({
+  const legacy = new ProjectDirectories({
     of: (canvas) => {
       const folder = projects.get(canvas);
       return folder === undefined ? undefined : mintTrustedPath(folder);
     },
     onAvailability: () => () => undefined,
   });
+  return {
+    projectRoot: (canvas: CanvasId) => legacy.projectRoot(canvas),
+    onAvailability: (canvas: CanvasId, listener: () => void) =>
+      legacy.onAvailability(canvas, listener),
+    workingDirectory: (canvas: CanvasId, agent: string) =>
+      Promise.resolve(workspaces.get(agent)).then(
+        (found) => found ?? legacy.workingDirectory(canvas, agent as never),
+      ),
+  };
 }
 
 function manager(
@@ -72,8 +82,10 @@ function manager(
     'claude-code': { list: listKept, before, fork },
   },
   options?: SessionManagerDeps['options'],
+  sending?: SessionManagerDeps['sending'],
 ) {
   return new SessionManager({
+    ...(sending === undefined ? {} : { sending }),
     catalog: CATALOG,
     connectors: { 'claude-code.sdk': fake, 'claude-code.terminal': terminal, ...connectors },
     environment: () => environment(),
@@ -124,6 +136,7 @@ beforeEach(async () => {
   fake = new FakeConnector();
   terminal = new FakeConnector();
   projects = new Map();
+  workspaces = new Map();
   adapters = new Map();
   heard = new Map();
   shown = new Map();
@@ -701,6 +714,71 @@ describe('SessionManager', () => {
     expect(live.close).toHaveBeenCalled();
     await expect(sessions.send(canvas, 'a', { id: 'n', text: 'Again' })).rejects.toThrow(
       /not running/,
+    );
+  });
+
+  it('never sends what an interrupt stopped on its way to the CLI, ending its turn taken back', async () => {
+    const live = {
+      send: vi.fn<LiveSession['send']>().mockResolvedValue(undefined),
+      answer: () => Promise.resolve(),
+      interrupt: vi.fn<LiveSession['interrupt']>().mockResolvedValue(undefined),
+      setMode: () => Promise.resolve(),
+      setModel: () => Promise.resolve(),
+      close: () => Promise.resolve(),
+    };
+    // As a withdrawal note's own turn holds the command it goes before (core/delivery/withdrawals.ts).
+    const gates: (() => void)[] = [];
+    const sending: NonNullable<SessionManagerDeps['sending']> = async (
+      _canvas,
+      _agent,
+      message,
+      send,
+      stopped,
+    ) => {
+      await new Promise<void>((resolve) => gates.push(resolve));
+      if (stopped()) return false;
+      await send(message);
+      return true;
+    };
+    const sessions = manager(
+      { 'claude-code.sdk': { start: () => Promise.resolve(live) } },
+      undefined,
+      undefined,
+      sending,
+    );
+    const canvas = shownCanvas();
+    await sessions.start(canvas, 'a', OPTIONS);
+    const ends = () =>
+      (heard.get(canvas) ?? []).flatMap(([, , event]) => (event.type === 'end' ? [event] : []));
+    const sent = async (id: string, interrupt?: () => Promise<unknown>) => {
+      const sending = sessions.send(canvas, 'a', { id, text: '/review' });
+      await vi.waitFor(() => {
+        expect(gates).toHaveLength(Number(id));
+      });
+      await interrupt?.();
+      gates.at(-1)?.();
+      await sending;
+    };
+    // An interrupt before a send stops none of it, nor one whose turn was no longer current, nor a
+    // stalled turn's interrupted to be resent: what it held goes as that turn ends.
+    await sessions.interrupt(canvas, 'a');
+    await sent('1');
+    await sent('2', () => sessions.interruptIf(canvas, 'a', () => false));
+    await sent('3', () => sessions.interruptIf(canvas, 'a', () => true, true));
+    expect(live.send.mock.calls).toEqual(['1', '2', '3'].map((id) => [{ id, text: '/review' }]));
+    expect(ends()).toEqual([]);
+    // One while it is on its way, a Stop's or a stalled turn's: never sent, its turn ended.
+    await sent('4', () => sessions.interrupt(canvas, 'a'));
+    await sent('5', () => sessions.interruptIf(canvas, 'a', () => true));
+    expect(live.send).toHaveBeenCalledTimes(3);
+    expect(live.interrupt).toHaveBeenCalledTimes(4);
+    expect(ends()).toEqual(
+      ['4', '5'].map((id) => ({
+        type: 'end',
+        messages: [id],
+        seconds: expect.any(Number) as number,
+        result: { status: 'cancelled', reason: 'taken-back' },
+      })),
     );
   });
 
@@ -1390,3 +1468,138 @@ describe('SessionManager rewinding a session', () => {
     await expect(sessions.rewind(canvas, 'a', 'u1', 'conversation')).rejects.toThrow(/Esc twice/);
   });
 });
+
+it('keeps native conversations in the active workspace, including late reports during a pending move', async () => {
+  const canvas = shownCanvas();
+  const tree = '11111111-1111-4111-8111-111111111111';
+  workspaces.set('a', {
+    state: 'ready',
+    cwd: mintTrustedPath('/work/tree-a'),
+    workspace: tree,
+    generation: 1,
+    branch: 'corrallm/a',
+  });
+  let host: SessionHost | undefined;
+  const sessions = manager({
+    'claude-code.sdk': {
+      start: (spec, one) => {
+        host = one;
+        return fake.start(spec, one);
+      },
+    },
+  });
+  try {
+    await sessions.start(canvas, 'a', OPTIONS);
+    await memory.flush();
+    expect(conversationsIn(await memory.get(canvas), tree)['claude-code']?.a?.id).toBe(fake.ids[0]);
+    expect(
+      conversationsIn(await memory.get(canvas), PROJECT_WORKSPACE)['claude-code']?.a,
+    ).toBeUndefined();
+    workspaces.set('a', { state: 'held', reason: 'pending-change', sentence: 'Switch first.' });
+    host?.remember(KEPT_TWO);
+    await memory.flush();
+    expect(conversationsIn(await memory.get(canvas), tree)['claude-code']?.a?.id).toBe(KEPT_TWO);
+    expect(sessions.running(canvas, 'a')).toBe(true);
+  } finally {
+    await sessions.closeEverything();
+  }
+});
+
+it('reads agent options in its verified workspace and refuses a held agent', async () => {
+  const canvas = shownCanvas();
+  const read = vi
+    .fn()
+    .mockResolvedValue({ models: [], defaults: { model: null, mode: null, effort: null } });
+  const sessions = manager({}, undefined, { 'claude-code': read });
+  workspaces.set('a', {
+    state: 'ready',
+    cwd: mintTrustedPath('/work/tree-a'),
+    workspace: '11111111-1111-4111-8111-111111111111',
+    generation: 1,
+    branch: 'corrallm/a',
+  });
+  await sessions.settingsOptions(canvas, 'claude-code', 'a');
+  expect(read).toHaveBeenCalledWith({ cwd: '/work/tree-a', env: { PATH: '/usr/bin' } });
+  workspaces.set('a', { state: 'held', reason: 'setup', sentence: 'Skip or run setup first.' });
+  await expect(sessions.settingsOptions(canvas, 'claude-code', 'a')).rejects.toThrow(
+    'Skip or run setup first.',
+  );
+});
+
+it('lists conversations from the agent’s verified workspace and never lists while held', async () => {
+  const canvas = shownCanvas();
+  workspaces.set('a', {
+    state: 'ready',
+    cwd: mintTrustedPath('/work/tree-a'),
+    workspace: '11111111-1111-4111-8111-111111111111',
+    generation: 1,
+    branch: 'corrallm/a',
+  });
+  const sessions = manager();
+  await sessions.listSessions(canvas, 'a', CALLER);
+  expect(listKept).toHaveBeenCalledExactlyOnceWith('/work/tree-a', { PATH: '/usr/bin' });
+  workspaces.set('a', { state: 'held', reason: 'pending-change', sentence: 'Switch first.' });
+  await expect(sessions.listSessions(canvas, 'a', CALLER)).rejects.toThrow('Switch first.');
+  expect(listKept).toHaveBeenCalledTimes(1);
+});
+
+it.each(['ended', 'deadline'] as const)(
+  'admits a stalled interrupt while session launch waits, without interrupting it after %s',
+  async (why) => {
+    const launched = Promise.withResolvers<LiveSession>();
+    const starting = Promise.withResolvers<undefined>();
+    const interrupted = vi.fn<LiveSession['interrupt']>().mockResolvedValue(undefined);
+    const live: LiveSession = {
+      send: vi.fn().mockResolvedValue(undefined),
+      interrupt: interrupted,
+      answer: vi.fn().mockResolvedValue(undefined),
+      close: vi.fn().mockResolvedValue(undefined),
+      setMode: vi.fn().mockResolvedValue(undefined),
+      setModel: vi.fn().mockResolvedValue(undefined),
+    };
+    const sessions = manager({
+      [OPTIONS.connection]: {
+        start: () => {
+          starting.resolve(undefined);
+          return launched.promise;
+        },
+      },
+    });
+    const canvas = shownCanvas();
+    let current = true;
+    const opening = sessions.start(canvas, 'a', OPTIONS);
+    await starting.promise;
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    let admitted: Awaited<ReturnType<SessionManager['interruptIf']>>;
+    const requesting = sessions
+      .interruptIf(canvas, 'a', () => current)
+      .then((value) => {
+        admitted = value;
+        return value;
+      });
+    try {
+      await vi.waitFor(() => {
+        expect(admitted).toMatchObject({ answered: expect.any(Promise) as Promise<void> });
+      });
+      const requested = await requesting;
+      if (!requested) throw new Error('The live turn should admit an interrupt.');
+      if (why === 'deadline') {
+        const failed = expect(requested.answered).rejects.toThrow('did not answer');
+        await vi.advanceTimersByTimeAsync(STALLED_INTERRUPT_MS);
+        await failed;
+      } else current = false;
+      launched.resolve(live);
+      await opening;
+      if (why === 'ended') await requested.answered;
+      expect(interrupted).not.toHaveBeenCalled();
+    } finally {
+      current = false;
+      launched.resolve(live);
+      await opening;
+      const requested = await requesting;
+      await requested?.answered.catch(() => undefined);
+      await sessions.closeEverything();
+      vi.useRealTimers();
+    }
+  },
+);

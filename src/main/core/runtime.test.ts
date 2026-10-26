@@ -1,3 +1,4 @@
+import { legacyDirectories } from './workspaces/test-directories';
 import { copyFile, mkdir, mkdtemp, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -67,6 +68,7 @@ async function start(codex: Connector<SessionMode>, at = profile): Promise<Core>
       app: { name: 'corrallm', version: '9.8.7' },
       check: true,
       distribution: 'local',
+      directoryResolver: legacyDirectories,
       sessions: {
         connectors: { 'codex.app-server': codex },
         environment: () => Promise.resolve({}),

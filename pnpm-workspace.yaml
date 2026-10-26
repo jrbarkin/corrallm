@@ -10,6 +10,11 @@ engineStrict: true
 # (pnpm's built-in default silently falls back and writes minimumReleaseAgeExclude entries).
 minimumReleaseAge: 1440
 
+# appdmg 0.6.6 pins the vulnerable image-size 0.x API. Pair its override with the callback-to-
+# Promise patch below; drop both when appdmg upgrades to a fixed image-size itself (GHSA-w3rx-r6r6-pgpr).
+overrides:
+  'appdmg@0.6.6>image-size': 2.0.4
+
 # Dependency lifecycle scripts are blocked unless listed here (strictDepBuilds is on by default).
 allowBuilds:
   electron-winstaller: true # maker-squirrel: install script selects the 7z binary
@@ -21,3 +26,6 @@ allowBuilds:
 # SDK at the user's own `claude` instead (src/main/sessions/claude-code/claude.ts), so they are never needed.
 ignoredOptionalDependencies:
   - '@anthropic-ai/claude-agent-sdk-*'
+
+patchedDependencies:
+  appdmg@0.6.6: patches/appdmg@0.6.6.patch

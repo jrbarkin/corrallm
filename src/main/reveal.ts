@@ -17,6 +17,8 @@ import { MAX_LINK_LENGTH } from '../shared/ipc';
 export interface FileRevealerDeps {
   /** The project folder of a canvas, if one was chosen (project.ts). */
   folderOf: (canvas: CanvasId) => string | undefined;
+  /** Additional core-owned workspace containment, after resolving the URL and base root. */
+  allow?: (canvas: CanvasId, file: string) => Promise<boolean>;
   /** Shows a file or folder in the OS file manager, selected (shell.showItemInFolder). */
   show: (file: string) => void | Promise<void>;
 }
@@ -33,7 +35,11 @@ export class FileRevealer {
     const folder = this.#deps.folderOf(canvas);
     if (folder === undefined) return false;
     const file = await revealTarget(raw, folder);
-    if (file === null) return false;
+    if (
+      file === null ||
+      (this.#deps.allow !== undefined && !(await this.#deps.allow(canvas, file)))
+    )
+      return false;
     await this.#deps.show(file);
     return true;
   }

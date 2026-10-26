@@ -1,3 +1,4 @@
+import { legacyDirectories } from './workspaces/test-directories';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -48,6 +49,13 @@ import type { OpFixture, OutOfReach } from './test-registry';
  * proposals waiting for you as the tests begin (PROPOSED, the outside write token's deletes of
  * `condemned-a` and `condemned-b`, which the worker is linked to).
  * While a call meets R11 (`meeting`), every token's party is at its cap.
+ *
+ * The run's controls act on the canvas's run, never started before them (their fixtures come
+ * last): three nappers in the lead's team (`sleeper-you`, `sleeper-lead`, `sleeper-outside`), each
+ * a delay of an hour for one party to end with Go on now, and `spender`, on a backend no other agent
+ * spends, whose usage rule (set as the core starts) holds its task for the window's reset, which
+ * only you go on past (R3). Their sessions are sent nothing, or play no turn. A token's start meets
+ * R9 once you stopped the run (`meeting`, for run.start and run.resume).
  *
  * Beside it, the profile keeps canvases a canvas's lifetime acts on (FILED), none of them open:
  * `closing`, which you close; `replaced`, which your canvas.create replaces; `discard-close` and
@@ -111,6 +119,31 @@ const CONTROL =
   (() => {
     throw new Error('The fixture needs a connection with code rewind and background tasks');
   })();
+/** A connection spending another usage backend than Codex's app server, for a usage rule's hold. */
+const CODEX_USAGE = CATALOG.adapters
+  .flatMap((adapter) => adapter.connections)
+  .find((connection) => connection.id === 'codex.app-server')?.usage;
+const SPENDING =
+  CATALOG.adapters
+    .flatMap((adapter) => adapter.connections.map((connection) => ({ adapter, connection })))
+    .find(({ connection }) => connection.usage !== null && connection.usage !== CODEX_USAGE) ??
+  (() => {
+    throw new Error('The fixture needs a connection spending another usage backend');
+  })();
+const SPENDING_BACKEND = SPENDING.connection.usage ?? '';
+/** A delay none of the generated tests waits out: an hour. */
+const NAP = { id: 'nap', delay: { seconds: 3600 } };
+/** Sessions that start, and play no turn of what they are sent. */
+function silent(adapter: string): Connector<SessionMode> {
+  const fake = new FakeConnector({ adapter });
+  return {
+    start: async (spec, host) => {
+      const session = await fake.start(spec, host);
+      session.send = () => Promise.resolve();
+      return session;
+    },
+  };
+}
 const CONTROL_AGENT = 'session-control';
 const CONTROL_MESSAGE = '1b2c3d4e-5f60-4718-8a9b-0c1d2e3f4a80';
 const CONTROL_TASKS = ['you', 'lead', 'outside-write'].map(
@@ -182,6 +215,18 @@ const NODES = [
   })),
   // What you unlink from the helper (canvas.unlink).
   { id: 'unlink-you', connection: 'codex.app-server', parent: 'lead' },
+  // The run's controls: a napper for each party's Go on now, and what a usage rule holds.
+  ...['you', 'lead', 'outside'].map((party) => ({
+    id: `sleeper-${party}`,
+    connection: 'codex.app-server',
+    parent: 'lead',
+  })),
+  {
+    id: 'spender',
+    adapter: SPENDING.adapter.id,
+    connection: SPENDING.connection.id,
+    parent: 'lead',
+  },
 ];
 const HELPER_QUEUE = [
   { id: 'text', message: 'Original' },
@@ -236,11 +281,12 @@ export async function startWorld(): Promise<{
   /** The profile folder it keeps its stores in. */
   profile: string;
   /**
-   * Readies the world for a call meeting `rule`, before it is made: what undoes that, after. R11's
-   * cap is then none, so that a call meets it whatever its party created before; R4's canvases
-   * (FILED) are the outside write token's too.
+   * Readies the world for a call of op `op` meeting `rule`, before it is made: what undoes that,
+   * after. R11's cap is then none, so that a call meets it whatever its party created before; R4's
+   * canvases (FILED) are the outside write token's too; and for R9 on run.start and run.resume, you
+   * stopped the run (your own call, after, starts or resumes it again).
    */
-  meeting(rule: Rule): () => void;
+  meeting(rule: Rule, op?: string): () => void;
   close(): Promise<void>;
 }> {
   const profile = await mkdtemp(path.join(tmpdir(), 'corrallm-world-'));
@@ -282,7 +328,11 @@ export async function startWorld(): Promise<{
               ? { queue: [{ id: 'stranger-item', message: 'Private' }] }
               : id === 'gate'
                 ? { queue: [{ id: 'gate-ok', approve: 'Check' }] }
-                : {}),
+                : id.startsWith('sleeper-')
+                  ? { queue: [NAP] }
+                  : id === 'spender'
+                    ? { queue: [{ id: 'spend', message: 'Spend' }] }
+                    : {}),
           ...(connection === undefined ? {} : { connection }),
           ...(parent === undefined ? {} : { parent }),
         })),
@@ -355,6 +405,7 @@ export async function startWorld(): Promise<{
       app: { name: 'corrallm', version: '1.0.0' },
       check: true,
       distribution: 'local',
+      directoryResolver: legacyDirectories,
       leads: isLead,
       // Each call a second after the last: no token's writes are limited here.
       limitsClock: () => (clock += 1000),
@@ -365,10 +416,11 @@ export async function startWorld(): Promise<{
           'codex.app-server': new FakeConnector({ adapter: 'codex' }),
           'codex.terminal': REFUSING,
           [CONTROL.connection.id]: controlConnector(),
+          [SPENDING.connection.id]: silent(SPENDING.adapter.id),
         },
         environment: () => Promise.resolve({}),
       },
-      // The worktrees' setup, as B9a X11b is to compose it: nothing provisions a worktree here.
+      // Isolated setup fixtures: directory resolution is faked, and nothing allocates a tree here.
       setups: ({ store, processes, directories, profile: at, changed }) => {
         const workspaces = new WorkspaceStore({ store });
         const runner = new GitRunner({
@@ -393,6 +445,27 @@ export async function startWorld(): Promise<{
   );
   await core.engines.open(CANVAS);
   await core.engines.canvas(CANVAS)?.engine.sessions.ready(CONTROL_AGENT);
+  // The spender's backend is over its usage rule's share for a day: once the run starts, its task
+  // waits for the window's reset, which only you go on past (R3 on run.goOn).
+  for (const [name, args] of [
+    [
+      'usage.setRule',
+      {
+        backend: SPENDING_BACKEND,
+        rule: { window: 'fiveHour', percent: 50, action: 'waitForReset' },
+      },
+    ],
+    [
+      'usage.simulate',
+      {
+        backend: SPENDING_BACKEND,
+        windows: { fiveHour: { usedPercent: 90, resetsAt: Date.now() + 24 * 3_600_000 } },
+      },
+    ],
+  ] as const) {
+    const set = await core.call(name, args, CALLERS.you);
+    if (!set.ok) throw new Error(set.error.sentence);
+  }
   const paused = await core.call(
     'run.pause',
     { canvas: CANVAS, target: { agent: 'lead' } },
@@ -449,7 +522,12 @@ export async function startWorld(): Promise<{
   return {
     core,
     profile,
-    meeting: (rule) => {
+    meeting: (rule, op) => {
+      if (rule === 'sticky' && (op === 'run.start' || op === 'run.resume')) {
+        // Yours: a token neither resumes it nor starts it afresh.
+        core.engines.canvas(CANVAS)?.engine.run.stop();
+        return () => undefined;
+      }
       if (rule === 'discard') {
         const granted = (CALLERS['outside-write'] as OutsideCaller).canvases as CanvasId[];
         const before = granted.length;
@@ -508,6 +586,7 @@ export const REAL_FIXTURES: Readonly<Record<OpName, OpFixture>> = {
   'project.files': {
     valid: [
       { canvas: CANVAS, query: 'ipc' },
+      { canvas: CANVAS, agent: 'helper', query: 'ipc' },
       { query: '' },
       { query: 'x'.repeat(MAX_FILE_QUERY_LENGTH) },
     ],
@@ -1552,6 +1631,60 @@ export const REAL_FIXTURES: Readonly<Record<OpName, OpFixture>> = {
       { timeoutSeconds: 0, for: 'nope' },
       { timeoutSeconds: 0, canvas: CANVAS },
     ],
+  },
+  // The run's controls, last: nothing before them starts the canvas's run. A token starts it
+  // first, on a run no one began; yours starts it afresh (Run again); once you stopped it (the
+  // world's `meeting`), a token's start is refused. Then resume (of a run going, which changes
+  // nothing; of yours, after you stopped it), each party's Go on now of its napper, the
+  // spender's usage hold (yours alone), and Stop.
+  'run.start': {
+    fresh: ['revs'],
+    valid: [{ canvas: CANVAS, request: controlRequest(330) }],
+    by: { 'outside-write': [{ canvas: CANVAS, request: controlRequest(331) }] },
+    invalid: [{ canvas: 'nope' }, { canvas: CANVAS, from: 'top' }],
+    meetsRule: { sticky: { canvas: CANVAS, request: controlRequest(332) } },
+  },
+  'run.resume': {
+    fresh: ['revs'],
+    valid: [{ canvas: CANVAS, request: controlRequest(333) }],
+    by: { 'outside-write': [{ canvas: CANVAS, request: controlRequest(334) }] },
+    invalid: [{ canvas: 'nope' }, { canvas: CANVAS, restart: true }],
+    meetsRule: { sticky: { canvas: CANVAS, request: controlRequest(335) } },
+  },
+  'run.goOn': {
+    fresh: ['revs'],
+    valid: [],
+    by: Object.fromEntries(
+      (['you', 'lead', 'outside-write'] as const).map((party, i) => [
+        party,
+        [
+          {
+            canvas: CANVAS,
+            agent: `sleeper-${party === 'outside-write' ? 'outside' : party}`,
+            item: 'nap',
+            request: controlRequest(336 + i),
+          },
+        ],
+      ]),
+    ),
+    invalid: [
+      { canvas: CANVAS, agent: 'sleeper-you' },
+      { canvas: CANVAS, agent: 'sleeper-you', item: 'nap', until: -1 },
+      { canvas: CANVAS, agent: 'sleeper-you', item: 'nap', until: 'soon' },
+    ],
+    meetsRule: {
+      'human-choice': {
+        canvas: CANVAS,
+        agent: 'spender',
+        item: 'spend',
+        request: controlRequest(339),
+      },
+    },
+  },
+  'run.stop': {
+    fresh: ['revs'],
+    valid: [{ canvas: CANVAS, request: controlRequest(340) }],
+    invalid: [{ canvas: 'nope' }, { canvas: CANVAS, agent: 'helper' }],
   },
 };
 
