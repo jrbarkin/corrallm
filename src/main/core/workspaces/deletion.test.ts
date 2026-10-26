@@ -16,7 +16,7 @@ import { CALLERS, NO_DESKTOP } from '../test-registry';
 import { WorkspaceCleanup } from './cleanup';
 import { GitRunner } from './git';
 import type { WorktreeRecord } from './store';
-import { git } from './test-git';
+import { commit, git, makeRepository, ran, sentinelProgram } from './test-git';
 import { CANVAS, testWorkspaces } from './test-workspace';
 import type { TestWorkspaces } from './test-workspace';
 
@@ -311,6 +311,25 @@ describe('deleting the last agent of a worktree', { timeout: 60_000 }, () => {
     ).toMatchObject({ outcome: 'allowed' });
     expect(stateOf(trees.a.id)).toBe('retained');
     expect(git(trees.a.path, made.env, 'status', '--porcelain')).toContain('README.md');
+  });
+
+  it('runs none of a submodule’s programs when a token’s delete asks what the worktree holds', async () => {
+    const files = { '.gitattributes': '*.txt filter=evil\n', 'data.txt': 'base\n' };
+    const oid = makeRepository(path.join(made.app, 'sub'), made.env, files);
+    git(made.app, made.env, 'update-index', '--add', '--cacheinfo', `160000,${oid},sub`);
+    commit(made.app, made.env, 'gitlink');
+    const { core: on, trees } = await start();
+    const checkout = path.join(trees.a.path, 'sub');
+    makeRepository(checkout, made.env, files);
+    const sentinel = path.join(made.root, 'ran');
+    git(checkout, made.env, 'config', 'filter.evil.clean', sentinelProgram(made.root, sentinel));
+    writeFileSync(path.join(checkout, 'data.txt'), 'evil\n');
+    const asked = (await ok(on, 'canvas.delete', { nodes: ['a'] }, ORCHESTRATOR)) as {
+      proposed: string;
+    };
+    expect(ran(sentinel)).toEqual([]);
+    expect((await needOf(on, asked.proposed))?.detail).toMatch(/submodule.*sub/);
+    expect(stateOf(trees.a.id)).toBe(trees.a.state);
   });
 });
 
