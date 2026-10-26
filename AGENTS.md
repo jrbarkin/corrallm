@@ -35,7 +35,7 @@ Start with [the overview](docs/architecture/overview.md). Paths include their te
 
 ## Commands and done gate
 
-Requires Node 24.21.0 (`.nvmrc`) and pnpm 12.11.2 (`packageManager`).
+Requires Node 24.22.1 (`.nvmrc`) and pnpm 12.11.2 (`packageManager`).
 
 | Command                                      | Purpose                                                  |
 | -------------------------------------------- | -------------------------------------------------------- |

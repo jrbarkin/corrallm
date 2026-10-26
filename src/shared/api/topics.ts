@@ -15,21 +15,27 @@ import type { MessageId } from './ids';
  * The state the core pushes a window (Core Server §5.1–5.2, B9 Design §7). Each topic is read
  * through the op whose surface declares it (`reads`), as the subscriber, so its audience and reach
  * are the one authorization path; then its changes follow. `usage`, `settings`, `canvases` and a
- * canvas's `needs:<c>` are replaced whole; a canvas's `canvas:<c>` is keyed, by entity: each change
+ * canvas's `needs:<c>` and `worktrees:<c>` are replaced whole; a canvas's `canvas:<c>` is keyed, by entity: each change
  * sets the rows a commit wrote and removes those it removed, so a window keeps its own copy of the
  * document's rows and builds the canvas from it with canvasStateOf (model/state.ts).
  */
 
 /** The topics a window subscribes to, by name: the global ones, and a canvas's. */
-export const TOPICS = ['usage', 'settings', 'canvases', 'canvas', 'needs'] as const;
+export const TOPICS = ['usage', 'settings', 'canvases', 'canvas', 'needs', 'worktrees'] as const;
 export type TopicName = (typeof TOPICS)[number];
 /** The topics that are a canvas's: one each per canvas. */
-export const CANVAS_TOPICS = ['canvas', 'needs'] as const;
+export const CANVAS_TOPICS = ['canvas', 'needs', 'worktrees'] as const;
 
 export type TopicKey =
-  'usage' | 'settings' | 'canvases' | `canvas:${CanvasId}` | `needs:${CanvasId}`;
+  | 'usage'
+  | 'settings'
+  | 'canvases'
+  | `canvas:${CanvasId}`
+  | `needs:${CanvasId}`
+  | `worktrees:${CanvasId}`;
 export type TopicRequest =
-  { topic: 'usage' | 'settings' | 'canvases' } | { topic: 'canvas' | 'needs'; canvas: CanvasId };
+  | { topic: 'usage' | 'settings' | 'canvases' }
+  | { topic: 'canvas' | 'needs' | 'worktrees'; canvas: CanvasId };
 
 export interface TopicStates {
   usage: UsageState;
@@ -37,6 +43,8 @@ export interface TopicStates {
   canvases: ResultOf<'canvas.list'>;
   [topic: `canvas:${CanvasId}`]: Entities;
   [topic: `needs:${CanvasId}`]: ResultOf<'needs'>;
+  /** B9a's who works where, yours (worktree.list), replaced whole: §7's Wire state. */
+  [topic: `worktrees:${CanvasId}`]: ResultOf<'worktree.list'>;
 }
 export interface TopicSnapshot<K extends TopicKey = TopicKey> {
   epoch: string;

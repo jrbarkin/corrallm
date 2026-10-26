@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 
 import type { JsonSchema } from '../session';
-import { withEnvelope } from './define';
+import { PROPOSING_RULES, withEnvelope } from './define';
 import type { OpDef } from './define';
 import { DEVIATIONS, REASONS } from './deviations';
 import { brandedId, brandsIn, children, defOf, ID_BRANDS, NeedId } from './ids';
@@ -72,6 +72,7 @@ const ID_KEYS = new Set([
   'group',
   'parent',
   'target',
+  'worktree',
 ]);
 /** The brands that name an agent, which an op open to a token must say whether it may aim at itself. */
 const AGENT_BRANDS: readonly Brand[] = ['AgentId', 'NodeId', 'GroupId'];
@@ -254,10 +255,7 @@ function problems(registry: Registry): string[] {
       found.push(`${name}: names an agent, open to a token, and declares no self`);
     }
     const rules = surface.rules ?? [];
-    if (
-      rules.some((rule) => rule === 'discard' || rule === 'restore-code') &&
-      !surface.destructive
-    ) {
+    if (rules.some((rule) => PROPOSING_RULES.includes(rule)) && !surface.destructive) {
       found.push(`${name}: may become a proposal, and declares no destructive`);
     }
     for (const field of unbrandedIds(def.input))

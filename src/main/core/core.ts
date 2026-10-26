@@ -10,7 +10,7 @@ import type { OpResult } from '../../shared/api/errors';
 import type { ApiStatus } from '../../shared/api/ops/settings';
 import { MAX_CREATED_AGENTS } from '../../shared/api/limits';
 import { OPS } from '../../shared/api/registry';
-import { topicRequest } from '../../shared/api/topics';
+import { canvasOfTopic, topicRequest } from '../../shared/api/topics';
 import type { ResultOf } from '../../shared/api/registry';
 import { SURFACE } from '../../shared/api/surface';
 import type { OpName, Party, Reach } from '../../shared/api/surface';
@@ -65,8 +65,11 @@ import type { WatchFolder } from './canvas/watch';
 import { seesAll, viewOf } from './canvas/view';
 import { Channels } from './channels';
 import { Windows } from './windows';
-import { createDispatcher } from './call';
+import { createDispatcher, OpFailure } from './call';
 import type { Dispatcher } from './call';
+import { listWorktrees } from './workspaces/list';
+import type { Viewer, WorktreeListing } from './workspaces/list';
+import type { CanvasDocument } from '../../shared/model/canvas';
 import type { Caller, OutsideCaller } from './caller';
 import { MessageTable } from './delivery/messages';
 import { Engines, needsInput } from './engines';
@@ -74,9 +77,7 @@ import type { Watcher } from './engines';
 import type { HostServices, WindowId } from './host';
 import type { ShutdownPrepared, ShutdownReason } from './protocol';
 import { implementations } from './ops';
-import { PREPARED_OPS, preparedOps } from './ops/prepared';
 import { sessionRules } from './ops/session-control';
-import { PREPARED_SURFACE } from '../../shared/api/prepared';
 import type { AgentId } from '../../shared/api/ids';
 import { SessionControl } from './session-control';
 import { SessionViews } from './session-views';
@@ -156,10 +157,6 @@ export interface CoreConfig {
   watchFolder?: WatchFolder;
   /** Fake connectors and options for an unpackaged app's tests, admitted by its host. */
   fakeSessions?: boolean;
-  /**
-   * For the core's tests alone: B9a's worktree.remove, until X12 registers it. No host sets it.
-   */
-  preparedOps?: boolean;
   /**
    * For tests: what runs agents' sessions instead of each connection's own connector
    * (sessions/fake.ts), the environment they run in instead of the login shell's, what reads a
@@ -398,6 +395,7 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     nameOf: (canvas: CanvasId, owner: string) => ownerName(canvas, owner),
     changed: (canvas: CanvasId) => {
       topics.changed(`needs:${canvas}`, 'corrallm');
+      topics.changed(`worktrees:${canvas}`, 'corrallm');
       engines.needsChanged(canvas);
     },
   };
@@ -452,9 +450,43 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     documentNow: (canvas) => documents.loaded(canvas)?.document,
     changed: (canvas) => {
       channels.emit(canvas, 'session:availability');
+      topics.changed(`worktrees:${canvas}`, 'corrallm');
     },
   });
   const directories = config.directoryResolver?.(projects) ?? workspaceDirectories;
+  /**
+   * Who works where on a canvas (B9a §7: worktree.list and `worktrees:<c>`), as `viewer` sees it,
+   * of its document now (or `document`, a token's open canvas's), from the records the resolver
+   * and cleanup keep: nothing is made, asked of Git or verified to say it.
+   */
+  const worktreeListing = async (
+    canvas: CanvasId,
+    viewer: Viewer,
+    agent?: string,
+    document?: CanvasDocument,
+  ): Promise<WorktreeListing> => {
+    if (document === undefined && !states.keeps(canvas))
+      throw new OpFailure('not-found', `There is no canvas ${canvas}.`);
+    const now = document ?? (await documents.load(canvas)).document;
+    // A kept canvas need not have been shown or opened in this core, so ProjectFolders may
+    // not have restored its pick. Read the remembered choice, without discovery or verification;
+    // it is a listing's fact, never a working directory handed to a session.
+    const picked =
+      projects.of(canvas) ??
+      (viewer.kind === 'you' ? (await memory.get(canvas)).project : undefined);
+    return listWorktrees(
+      {
+        workspaces: workspaceStore,
+        projectRoot: (id) => projects.of(id) ?? (id === canvas ? picked : undefined),
+        provisioning: (id, owner) => workspaceDirectories.provisioning(id, owner),
+        kept: (id) => cleanup.kept(id),
+      },
+      canvas,
+      now,
+      viewer,
+      agent,
+    );
+  };
   // The worktrees' setup (B9a C9, C10): its cards in Needs, yours alone, and their answers.
   const setupDeps = {
     store,
@@ -725,6 +757,17 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
         all: seesAll(caller, reach),
       };
     },
+    // B9a §7: worktrees and Needs kept at every change, a window watching or not.
+    canonical: {
+      of: (topic) => topic.startsWith('worktrees:') || topic.startsWith('needs:'),
+      initial: (topic) => (topic.startsWith('needs:') ? { items: [] } : undefined),
+      read: async (topic) => {
+        const canvas = canvasOfTopic(topic);
+        if (canvas === undefined || !states.keeps(canvas)) return undefined;
+        if (topic.startsWith('needs:')) return { items: waitingFor(canvas) };
+        return worktreeListing(canvas, { kind: 'you' });
+      },
+    },
     runtime: {
       source: runtime,
       viewSession: (window, canvas, agent) => sessionViews.acquire(window, canvas, agent),
@@ -744,8 +787,10 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     },
   });
   // Each commit to a canvas's document: its agents, how they run, who reaches what.
-  documents.subscribe(({ canvas }) => {
+  documents.subscribe(({ canvas, by }) => {
     workspaceDirectories.changed(canvas);
+    topics.changed(`needs:${canvas}`, by);
+    engines.needsChanged(canvas);
     runtime.documentChanged(canvas);
   });
   memory.subscribe((canvas) => {
@@ -841,6 +886,8 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
       projectChosen: async (canvas) => {
         await planner.projectChosen(canvas, undefined);
         workspaceDirectories.invalidate(canvas);
+        topics.changed(`needs:${canvas}`, 'you');
+        engines.needsChanged(canvas);
         if (config.directoryResolver === undefined) await workspaceDirectories.discover(canvas);
       },
     },
@@ -1046,7 +1093,6 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
       };
     },
   });
-  const prepared = config.preparedOps === true;
   // Every change rule a token's commit is checked against (B9 Design §4).
   const changeRules = changeChecks({
     catalog: CATALOG,
@@ -1057,18 +1103,20 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
   });
   const dispatcher = createDispatcher(
     {
-      surface: prepared ? { ...SURFACE, ...PREPARED_SURFACE } : SURFACE,
-      ops: prepared ? { ...OPS, ...PREPARED_OPS } : OPS,
+      surface: SURFACE,
+      ops: OPS,
       implementations: {
-        ...(prepared
-          ? preparedOps({
-              cleanup,
-              proposals,
-              nameOf: ownerName,
-              workspaces: workspaceStore,
-            })
-          : {}),
         ...implementations({
+          worktrees: {
+            cleanup,
+            proposals,
+            nameOf: ownerName,
+            workspaces: workspaceStore,
+            list: worktreeListing,
+            retry: (canvas, agent) => workspaceDirectories.retry(canvas, agent),
+            document: async (canvas) =>
+              states.keeps(canvas) ? (await documents.load(canvas)).document : undefined,
+          },
           control,
           topics,
           app: config.app,

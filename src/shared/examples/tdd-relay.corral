@@ -4,13 +4,24 @@
   "id": "619067df-7b8c-4d38-adea-d5064f06f091",
   "nodes": [
     {
+      "id": "workspace",
+      "kind": "group",
+      "label": "TDD relay",
+      "position": {
+        "x": -20,
+        "y": -52
+      },
+      "color": 0
+    },
+    {
       "id": "tester",
       "kind": "agent",
       "label": "Tester",
       "position": {
-        "x": 0,
-        "y": 0
+        "x": 20,
+        "y": 52
       },
+      "parent": "workspace",
       "adapter": "codex",
       "queue": [
         {
@@ -42,9 +53,10 @@
       "kind": "agent",
       "label": "Implementer",
       "position": {
-        "x": 0,
-        "y": 220
+        "x": 20,
+        "y": 272
       },
+      "parent": "workspace",
       "adapter": "claude-code",
       "queue": [
         {
@@ -82,9 +94,10 @@
       "kind": "agent",
       "label": "Refactorer",
       "position": {
-        "x": 0,
-        "y": 440
+        "x": 20,
+        "y": 492
       },
+      "parent": "workspace",
       "adapter": "codex",
       "queue": [
         {

@@ -28,8 +28,11 @@ export interface OpDef<I extends z.ZodType = z.ZodType, O extends z.ZodType = z.
 /** An op's arguments: always one object, refusing keys it doesn't name. */
 export type Input = z.ZodObject<z.core.$ZodShape, z.core.$strict>;
 
-/** The rules that make a token's call a proposal for you instead of applying it: R4 and R5. */
-export const PROPOSING_RULES: readonly Rule[] = ['discard', 'restore-code'];
+/**
+ * The rules that make a call a proposal for you instead of applying it: R4 and R5, a token's; and
+ * B9a's workspace-safety, anyone's (a worktree's work left with no agent is yours to confirm).
+ */
+export const PROPOSING_RULES: readonly Rule[] = ['discard', 'restore-code', 'workspace-safety'];
 
 /** What an op returns when a token's call became a proposal for you (Core Server §6.9). */
 export const Proposed = z.strictObject({ proposed: NeedId });

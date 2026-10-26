@@ -78,11 +78,11 @@ See [Headless](docs/architecture/headless.md) for every command and option.
 
 ## Build from source
 
-| Tool    | Version                              | Notes                                                    |
-| ------- | ------------------------------------ | -------------------------------------------------------- |
-| Node.js | 24.21.0 (LTS, pinned in `.nvmrc`)    | Matches the Node version bundled in Electron 44          |
-| pnpm    | 12.11.2 (pinned in `packageManager`) | pnpm switches itself to the pinned version automatically |
-| Git     | 2.32+                                | Required by the pre-commit hooks                         |
+| Tool    | Version                              | Notes                                                       |
+| ------- | ------------------------------------ | ----------------------------------------------------------- |
+| Node.js | 24.22.1 (LTS, pinned in `.nvmrc`)    | One patch ahead of Electron 44's Node (24.22.0), on purpose |
+| pnpm    | 12.11.2 (pinned in `packageManager`) | pnpm switches itself to the pinned version automatically    |
+| Git     | 2.32+                                | Required by the pre-commit hooks                            |
 
 ```sh
 git clone https://github.com/jrbarkin/corrallm.git
@@ -93,7 +93,7 @@ pnpm package      # or build the app for this OS into out/
 pnpm build:cli    # build the corrallm command into dist-cli/
 ```
 
-**Node.** Use a version manager that reads `.nvmrc`: [fnm](https://github.com/Schniz/fnm) (`fnm install`, with `eval "$(fnm env --use-on-cd)"` in your shell's startup file), nvm, or nvm-windows 2.x. With nvm-windows 1.x or Volta, install 24.21.0 explicitly.
+**Node.** Use a version manager that reads `.nvmrc`: [fnm](https://github.com/Schniz/fnm) (`fnm install`, with `eval "$(fnm env --use-on-cd)"` in your shell's startup file), nvm, or nvm-windows 2.x. With nvm-windows 1.x or Volta, install 24.22.0 explicitly.
 
 **pnpm.** Install it as a standalone executable (`curl -fsSL https://get.pnpm.io/install.sh | sh -` on macOS and Linux, `npx get-pnpm` on Windows), not through Corepack, which Node 25 removed.
 
@@ -135,7 +135,7 @@ Signing and notarization turn on only when their environment variables are set: 
 ### Troubleshooting
 
 - **`ERR_PNPM_IGNORED_BUILDS` during install:** a dependency wants to run a build script that hasn't been approved. Review it, then add it to `allowBuilds` in `pnpm-workspace.yaml`.
-- **Engine or version errors:** check that `node --version` prints v24.21.0 or a later 24.x (run `fnm use` in the repo root).
+- **Engine or version errors:** check that `node --version` prints v24.22.1 or a later 24.x (run `fnm use` in the repo root).
 - **A package is "too new":** pnpm refuses versions published less than a day ago (`minimumReleaseAge`). Wait a day rather than adding exclusions.
 - **Forge complains about pnpm's node linker:** `nodeLinker: hoisted` must stay in `pnpm-workspace.yaml`. pnpm 11+ ignores this setting in `.npmrc`.
 - **Electron fails to start on Ubuntu 24.04+ with a sandbox error:** AppArmor blocks the unprivileged user namespaces Chromium's sandbox uses. Allow them with `sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0`. Don't disable the sandbox.

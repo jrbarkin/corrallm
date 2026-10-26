@@ -54,7 +54,7 @@ const ALLOWED: Readonly<Record<string, number>> = {
   'src/shared/examples/cross-check.corral': 2,
   'src/shared/examples/fan-out.corral': 4,
   'src/shared/examples/feature-crew.corral': 4,
-  'src/shared/examples/head-to-head.corral': 18,
+  'src/shared/examples/head-to-head.corral': 13,
   'src/shared/examples/release-checks.corral': 2,
   'src/shared/examples/review-loop.corral': 2,
   'src/shared/examples/review-panel.corral': 4,

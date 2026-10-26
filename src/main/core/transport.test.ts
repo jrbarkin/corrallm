@@ -1,6 +1,5 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
-import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
@@ -113,7 +112,7 @@ describe.each(REGISTRIES)('T3a on %s', (_label, fixtures, world, start) => {
       await client.connect(
         new StreamableHTTPClientTransport(new URL(server.url), {
           requestInit: { headers: { Authorization: `Bearer ${token}` } },
-        }) as Transport,
+        }),
       );
       await client.listTools();
       clients.set(party, client);

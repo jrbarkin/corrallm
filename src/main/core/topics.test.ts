@@ -26,7 +26,8 @@ import type { Core } from './core';
 import { asHuman, WindowPorts } from './gui';
 import { CALLERS, CANVAS, NO_DESKTOP } from './test-registry';
 import { openWindow } from './test-window';
-import { REAL_FIXTURES, startWorld } from './test-world';
+import { REAL_FIXTURES, startWorld, WORKER_WORKTREE } from './test-world';
+import type { WorktreeListing } from './workspaces/list';
 import { validFor } from './test-registry';
 
 function legacy(batch: readonly TopicUpdate[]): Change[] {
@@ -348,12 +349,14 @@ describe('T3c: the canvas, canvases and needs topics', () => {
   const TOPICS: TopicRequest[] = [
     { topic: 'canvas', canvas: CANVAS },
     { topic: 'needs', canvas: CANVAS },
+    { topic: 'worktrees', canvas: CANVAS },
     { topic: 'canvases' },
   ];
   /** The read each topic is: its op and its arguments. */
   const READS: Readonly<Record<string, [OpName, unknown]>> = {
     canvas: ['canvas.get', { canvas: CANVAS }],
     needs: ['needs', { canvas: CANVAS }],
+    worktrees: ['worktree.list', { canvas: CANVAS }],
     canvases: ['canvas.list', {}],
   };
 
@@ -455,6 +458,45 @@ describe('T3c: the canvas, canvases and needs topics', () => {
     expect(allowed).toMatchObject({ ok: true, value: { outcome: 'allowed' } });
     await expectCopiesRead();
     expect(yours().map((item) => item.id)).not.toContain(id);
+  });
+
+  it('keeps every party’s worktrees copy its read as a tree its agent leaves is kept, and says its revision', async () => {
+    const yours = () => copies.get('you')?.get(`worktrees:${CANVAS}`)?.state as WorktreeListing;
+    const theirs = () =>
+      copies.get('outside-write')?.get(`worktrees:${CANVAS}`)?.state as WorktreeListing;
+    expect(yours().items.map(({ agent }) => agent)).toContain('kept-work-batch');
+    // The worker sees itself in its group's tree, never its apprentice, nor what is yours.
+    const workers = copies.get('worker')?.get(`worktrees:${CANVAS}`)?.state as WorktreeListing;
+    expect(workers.items.map(({ agent }) => agent)).not.toContain('apprentice');
+    expect(workers.items.find(({ agent }) => agent === 'worker')).toMatchObject({
+      workspace: WORKER_WORKTREE,
+      mode: 'group',
+      group: 'worker',
+    });
+    for (const item of workers.items) expect(item).not.toHaveProperty('location');
+    const asked = await world.core.call(
+      'canvas.delete',
+      { canvas: CANVAS, nodes: ['kept-work-batch'] },
+      CALLERS.you,
+    );
+    if (!asked.ok || !('proposed' in asked.value)) throw new Error(JSON.stringify(asked));
+    const kept = await world.core.call(
+      'reply',
+      { canvas: CANVAS, to: asked.value.proposed, answer: { choice: 'allow' } },
+      CALLERS.you,
+    );
+    expect(kept).toMatchObject({ ok: true, value: { outcome: 'allowed' } });
+    // The reply's receipt names the revision your topic reached, which your copy then has.
+    const rev = kept.ok ? kept.value.revs[`worktrees:${CANVAS}`] : 0;
+    expect(rev).toBeGreaterThan(0);
+    await expectCopiesRead();
+    await vi.waitFor(() => {
+      expect(copies.get('you')?.get(`worktrees:${CANVAS}`)?.rev).toBe(rev);
+    });
+    expect(yours().items.map(({ agent }) => agent)).not.toContain('kept-work-batch');
+    expect(yours().kept.map(({ owner }) => owner)).toContain('agent/kept-work-batch');
+    expect(theirs().items.map(({ agent }) => agent)).not.toContain('kept-work-batch');
+    expect(theirs().kept).toEqual([]);
   });
 
   it('sends a canvas’s changes as what each commit changed, in order of its sequence', () => {

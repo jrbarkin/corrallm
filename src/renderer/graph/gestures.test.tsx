@@ -10,8 +10,9 @@ import { catalog } from '../catalog';
 import { newCanvasId } from '../../shared/canvas';
 import type { QueueItem } from '../../shared/model/queue';
 import type { CanvasDocument } from '../../shared/model/canvas';
-import { toFile } from '../../shared/model/file';
+import { fromFile, toFile } from '../../shared/model/file';
 import { absolutePosition } from '../../shared/model/geometry';
+import { workspaceOwners } from '../../shared/model/workspaces';
 import { move } from '../../shared/model/structure';
 import { OPS } from '../../shared/api/registry';
 import { fakeCanvas } from '../test-canvas';
@@ -313,51 +314,66 @@ it.each(['peer', 'linked'] as const)('spawns a %s with one operation', async (re
   await called(view.core);
   expectOneOp(view.core, 'canvas.spawnAgent', { canvas: view.canvas, from: 'a', relation });
 });
-it('inserts the chosen shipped template with one operation and core-minted ids', async () => {
-  const example = EXAMPLES[0];
-  if (!example) throw new Error('No template');
-  const template = templateInfo(example, catalog(), 'claude-code');
-  vi.spyOn(api, 'templatesList').mockResolvedValue({ items: [template] });
-  const view = await setup({ files: true });
-  fireEvent.click(button('Templates…'));
-  const gallery = within(await screen.findByRole('dialog', { name: 'Templates' }));
-  fireEvent.click(await gallery.findByRole('button', { name: new RegExp(`^${example.name}`) }));
-  const agents = Object.fromEntries(
-    template.agents.map((role) => [
-      role.id,
-      gallery.getByRole<HTMLSelectElement>('combobox', { name: `${role.name}'s agent` }).value ||
-        null,
-    ]),
-  );
-  const connections = Object.fromEntries(
-    template.agents.map((role) => [
-      role.id,
-      document.querySelector<HTMLSelectElement>(`#template-connection-${role.id}`)?.value,
-    ]),
-  );
-  // The form's labelled connection selectors are the explicit choices sent to the core.
-  for (const role of template.agents) {
-    const select = gallery.getByRole<HTMLSelectElement>('combobox', {
-      name: `How ${role.name} runs`,
+it.each(['TDD relay', 'Head to head'])(
+  'inserts %s with one operation, preserving its roots with core-minted ids',
+  async (name) => {
+    const example = EXAMPLES.find((example) => example.name === name);
+    if (!example) throw new Error('No template');
+    const template = templateInfo(example, catalog(), 'claude-code');
+    vi.spyOn(api, 'templatesList').mockResolvedValue({ items: [template] });
+    const view = await setup({ files: true });
+    const previous = new Set(view.document.nodes.map(({ id }) => id));
+    const source = fromFile(example.text, catalog(), 'claude-code');
+    fireEvent.click(button('Templates…'));
+    const gallery = within(await screen.findByRole('dialog', { name: 'Templates' }));
+    fireEvent.click(await gallery.findByRole('button', { name: new RegExp(`^${example.name}`) }));
+    const agents = Object.fromEntries(
+      template.agents.map((role) => [
+        role.id,
+        gallery.getByRole<HTMLSelectElement>('combobox', { name: `${role.name}'s agent` }).value ||
+          null,
+      ]),
+    );
+    const connections = Object.fromEntries(
+      template.agents.map((role) => [
+        role.id,
+        document.querySelector<HTMLSelectElement>(`#template-connection-${role.id}`)?.value,
+      ]),
+    );
+    // The form's labelled connection selectors are the explicit choices sent to the core.
+    for (const role of template.agents) {
+      const select = gallery.getByRole<HTMLSelectElement>('combobox', {
+        name: `How ${role.name} runs`,
+      });
+      connections[role.id] = select.value;
+    }
+    fireEvent.click(gallery.getByRole('button', { name: 'Insert into this canvas' }));
+    await called(view.core);
+    expectOneOp(view.core, 'canvas.insertTemplate', {
+      canvas: view.canvas,
+      template: template.id,
+      values: Object.fromEntries(template.fields.map((field) => [field.key, field.example])),
+      agents,
+      connections,
     });
-    connections[role.id] = select.value;
-  }
-  fireEvent.click(gallery.getByRole('button', { name: 'Insert into this canvas' }));
-  await called(view.core);
-  expectOneOp(view.core, 'canvas.insertTemplate', {
-    canvas: view.canvas,
-    template: template.id,
-    values: Object.fromEntries(template.fields.map((field) => [field.key, field.example])),
-    agents,
-    connections,
-  });
-  await waitFor(() => {
-    expect(view.document.nodes.length).toBe(3 + template.agents.length);
-  });
-  expect(
-    view.document.nodes.some((node) => template.agents.some((role) => role.id === node.id)),
-  ).toBe(false);
-});
+    await waitFor(() => {
+      expect(view.document.nodes.length).toBe(previous.size + source.nodes.length);
+    });
+    const added = view.document.nodes.filter(({ id }) => !previous.has(id));
+    const roots = added.filter(({ parentId }) => parentId === undefined).map(({ id }) => id);
+    expect(added.map(({ data, type }) => ({ label: data.label, type }))).toEqual(
+      source.nodes.map(({ data, type }) => ({ label: data.label, type })),
+    );
+    expect(added.some((node) => source.nodes.some(({ id }) => id === node.id))).toBe(false);
+    expect(workspaceOwners({ ...view.document, nodes: added })).toHaveLength(
+      name === 'Head to head' ? 3 : 1,
+    );
+    await waitFor(() => {
+      expect(seen.props?.nodes?.filter((node) => node.selected).map(({ id }) => id)).toEqual(roots);
+      expect(seen.fits.at(-1)).toMatchObject({ nodes: roots.map((id) => ({ id })) });
+    });
+  },
+);
 it('keeps Arrange when deleting an unselected agent from its controls', async () => {
   const view = await setup({ arrange: true, selected: ['b'] });
   fireEvent.mouseEnter(
@@ -774,10 +790,14 @@ it('creates a template as the new canvas, retaining its node ids and choosing a 
   await waitFor(() => {
     expect(view.document.id).not.toBe(view.canvas);
   });
-  expect(view.document.nodes.every((node) => node.type === 'agent')).toBe(true);
-  expect(view.document.nodes.map((node) => node.id)).toEqual(
-    template.agents.map((agent) => agent.id),
-  );
+  const source = fromFile(example.text, catalog(), 'claude-code');
+  const shape = (node: CanvasDocument['nodes'][number]) => ({
+    id: node.id,
+    type: node.type,
+    parent: node.parentId,
+  });
+  expect(view.document.nodes.map(shape)).toEqual(source.nodes.map(shape));
+  expect(view.document.nodes.filter((node) => node.type === 'frame')).toHaveLength(1);
   expect(button('Choose a project folder')).toBeDefined();
 });
 

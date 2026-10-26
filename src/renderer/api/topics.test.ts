@@ -4,6 +4,7 @@ import type { Change, TopicKey, RuntimeTopicKey, TopicSnapshot } from '../../sha
 import type { CanvasId } from '../../shared/canvas';
 import { topicKey } from '../../shared/api/topics';
 import type { MetaEntity, NodeEntity } from '../../shared/model/state';
+import { ApiError } from './bridge';
 import { TopicMirror } from './topics';
 import type { TopicSource } from './topics';
 
@@ -194,6 +195,44 @@ describe('the topic mirror', () => {
     const log = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     await expect(failed.whenAt('usage', 1)).rejects.toBe(error);
     failed.dispose();
+    log.mockRestore();
+  });
+
+  it('treats a subscribe refused as unavailable (the core closing) as expected, and resubscribes on the next epoch', async () => {
+    const remote = source();
+    const log = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const closing = new ApiError({ code: 'unavailable', sentence: 'corrallm’s core is closing.' });
+    remote.api.topicsSubscribe = vi
+      .fn()
+      .mockRejectedValueOnce(closing)
+      .mockResolvedValue({ epoch: 'two', rev: 0, revs: {}, state: empty });
+    const mirror = new TopicMirror(remote.api);
+    const waiting = mirror.whenAt('usage', 1);
+    const rejected = expect(waiting).rejects.toBe(closing);
+    mirror.subscribe('usage', vi.fn());
+    await rejected;
+    expect(log).not.toHaveBeenCalled();
+    expect(remote.api.topicsSubscribe).toHaveBeenCalledTimes(1);
+    remote.epoch('two');
+    await vi.waitFor(() => {
+      expect(remote.api.topicsSubscribe).toHaveBeenCalledTimes(2);
+      expect(mirror.snapshot('usage')).toBe(empty);
+    });
+    expect(log).not.toHaveBeenCalled();
+    mirror.dispose();
+    log.mockRestore();
+  });
+
+  it('still logs a subscribe refused for any other reason', async () => {
+    const remote = source();
+    const log = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    remote.api.topicsSubscribe = vi
+      .fn()
+      .mockRejectedValue(new ApiError({ code: 'not-found', sentence: 'No such canvas.' }));
+    const mirror = new TopicMirror(remote.api);
+    await expect(mirror.whenAt('usage', 1)).rejects.toMatchObject({ code: 'not-found' });
+    expect(log).toHaveBeenCalledWith('Could not subscribe to a topic:', 'No such canvas.');
+    mirror.dispose();
     log.mockRestore();
   });
 

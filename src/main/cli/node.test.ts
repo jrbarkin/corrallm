@@ -36,7 +36,16 @@ const execFileAsync = promisify(execFile);
 
 describe('nodeRefusal', () => {
   it('refuses a Node older than the one corrallm needs, naming both', () => {
-    for (const found of ['22.18.0', '24.20.9', '24.9.0', '23.99.99', '20.0.0', 'unknown']) {
+    for (const found of [
+      '22.18.0',
+      '24.20.9',
+      '24.21.9',
+      '24.22.0',
+      '24.9.0',
+      '23.99.99',
+      '20.0.0',
+      'unknown',
+    ]) {
       expect(nodeRefusal(found)).toBe(
         `corrallm needs Node ${NEEDED_NODE} or later, and this is Node ${found}.`,
       );
@@ -44,7 +53,7 @@ describe('nodeRefusal', () => {
   });
 
   it('runs on the Node it needs, or a later one', () => {
-    for (const found of [NEEDED_NODE, '24.21.1', '24.22.0', '25.0.0', '26.1.0-nightly20261019']) {
+    for (const found of [NEEDED_NODE, '24.22.2', '24.23.0', '25.0.0', '26.1.0-nightly20261019']) {
       expect(nodeRefusal(found)).toBeUndefined();
     }
   });

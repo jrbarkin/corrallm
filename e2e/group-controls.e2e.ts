@@ -31,6 +31,28 @@ let closeApp: (() => Promise<void>) | undefined;
 let page: Page;
 let problems: string[];
 
+/**
+ * Turns the fake holds until the test releases them, or an interrupt ends them
+ * (FAKE_CLAUDE_TURN_GATES), by prompt: a fixed-length "slow" stream ends on its own clock, so on a
+ * loaded machine a group Pause or Kill could meet those turns already finished.
+ */
+const HELD = {
+  alpha: 'nested alpha first',
+  beta: 'nested beta first',
+  parent: 'group parent first',
+  child: 'group child first',
+  outsider: 'group outsider',
+} as const;
+const release = (name: keyof typeof HELD) => path.join(dir, `release-${name}`);
+/** Waits until the fake holds each named turn. */
+async function held(...names: (keyof typeof HELD)[]) {
+  for (const name of names) {
+    await expect
+      .poll(() => readFile(`${release(name)}.waiting`, 'utf8').catch(() => ''))
+      .toBe('waiting');
+  }
+}
+
 test.beforeEach(async () => {
   dir = await mkdtemp(path.join(tmpdir(), 'corrallm-group-controls-'));
   await Promise.all([
@@ -49,6 +71,11 @@ test.beforeEach(async () => {
       CLAUDE_CONFIG_DIR: path.join(dir, 'config'),
       ANTHROPIC_API_KEY: 'sk-ant-fake',
       FAKE_CLAUDE_PROMPTS: path.join(dir, 'prompts.jsonl'),
+      FAKE_CLAUDE_TURN_GATES: JSON.stringify(
+        Object.fromEntries(
+          Object.entries(HELD).map(([name, text]) => [text, release(name as keyof typeof HELD)]),
+        ),
+      ),
     },
   }));
   page = await app.firstWindow();
@@ -180,8 +207,8 @@ async function corrected(id: string, name: string, text: string) {
 }
 
 test('pauses nested active members until they finish, preserves an individual hold, and releases a dependent only after group Resume', async () => {
-  const alpha = 'slow nested alpha';
-  const beta = 'slow nested beta';
+  const alpha = HELD.alpha;
+  const beta = HELD.beta;
   const alphaNext = 'nested alpha after';
   const betaNext = 'nested beta after';
   const manual = 'nested manual';
@@ -228,12 +255,15 @@ test('pauses nested active members until they finish, preserves an individual ho
   await expect(heading('manual').getByText('Paused', { exact: true })).toBeVisible();
   await queues().getByRole('button', { name: 'Run', exact: true }).click();
   await expect.poll(sentTexts, { timeout: 15_000 }).toEqual(expect.arrayContaining([alpha, beta]));
+  await held('alpha', 'beta');
   await expect(row('alpha', 'first')).toHaveAttribute('data-run', 'running');
   await expect(row('beta', 'first')).toHaveAttribute('data-run', 'running');
   await frameControl('outer', 'Outer', 'Pause');
   await expect(frame('outer').getByText('Pausing', { exact: true })).toBeVisible();
   await showQueues();
   await expect(row('outside', 'only')).toHaveAttribute('data-run', 'succeeded');
+  // Their turns end only after Pause was seen and independent work finished.
+  await Promise.all([writeFile(release('alpha'), 'go'), writeFile(release('beta'), 'go')]);
   await expect(row('alpha', 'first')).toHaveAttribute('data-run', 'succeeded', { timeout: 10_000 });
   await expect(row('beta', 'first')).toHaveAttribute('data-run', 'succeeded', { timeout: 10_000 });
   for (const id of ['alpha', 'beta', 'manual']) {
@@ -310,9 +340,9 @@ test('preserves stacked group and individual holds across a core crash and globa
 });
 
 test('Kill group includes the parent agent and nested child, keeping their consoles available and outsider work running', async () => {
-  const parent = 'slow group parent';
-  const child = 'slow group child';
-  const outside = 'slow group outsider';
+  const parent = HELD.parent;
+  const child = HELD.child;
+  const outside = HELD.outsider;
   const parentNext = 'group parent after';
   const childNext = 'group child after';
   const parentCorrection = 'group parent correction';
@@ -346,6 +376,7 @@ test('Kill group includes the parent agent and nested child, keeping their conso
   await expect
     .poll(sentTexts, { timeout: 15_000 })
     .toEqual(expect.arrayContaining([parent, child, outside]));
+  await held('parent', 'child', 'outsider');
   await expect(row('outside', 'only')).toHaveAttribute('data-run', 'running');
   await agentControl('lead', 'Lead', 'Kill', true);
   for (const id of ['lead', 'child']) {
@@ -353,6 +384,8 @@ test('Kill group includes the parent agent and nested child, keeping their conso
     await expect(heading(id).getByText('Paused', { exact: true })).toBeVisible();
   }
   await expect(row('outside', 'only')).toHaveAttribute('data-run', 'running');
+  // The outsider's turn ends only once the Kill was seen to leave it running.
+  await writeFile(release('outsider'), 'go');
   await corrected('lead', 'Lead', parentCorrection);
   await corrected('child', 'Child', childCorrection);
   expect((await sentTexts()).sort()).toEqual(

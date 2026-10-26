@@ -1,0 +1,233 @@
+{
+  "fb9ce84a-7237-4271-b494-933cb4d5f274": {
+    "nodes": [
+      {
+        "id": "planner",
+        "kind": "agent",
+        "items": ["spec", "spec-ok", "plan"]
+      },
+      {
+        "id": "builder",
+        "kind": "agent",
+        "items": ["planned", "write-tests", "red", "red-check", "make-red", "build", "tests"]
+      },
+      {
+        "id": "reviewer",
+        "kind": "agent",
+        "items": ["built", "review", "verify", "gaps", "send-back"]
+      }
+    ],
+    "links": []
+  },
+  "86ff6160-58b4-4ba2-b956-33bf61bacc3a": {
+    "nodes": [
+      {
+        "id": "researcher",
+        "kind": "agent",
+        "items": ["research", "notes"]
+      },
+      {
+        "id": "builder",
+        "kind": "agent",
+        "items": ["scaffold", "read-notes", "tune", "tests", "failing", "fix"]
+      },
+      {
+        "id": "reviewer",
+        "kind": "agent",
+        "items": ["built", "review", "problems", "send-back"]
+      },
+      {
+        "id": "docs",
+        "kind": "agent",
+        "items": ["read-notes", "draft", "reviewed", "final"]
+      }
+    ],
+    "links": []
+  },
+  "8150e630-f601-4abe-afae-e93bbf6aa197": {
+    "nodes": [
+      {
+        "id": "planner",
+        "kind": "agent",
+        "items": ["plan", "approved", "brief"]
+      },
+      {
+        "id": "lead",
+        "kind": "agent",
+        "items": ["go", "split", "ui", "api", "e2e", "check"]
+      },
+      {
+        "id": "frontend",
+        "kind": "agent",
+        "parent": "lead",
+        "items": []
+      },
+      {
+        "id": "backend",
+        "kind": "agent",
+        "parent": "lead",
+        "items": []
+      },
+      {
+        "id": "tester",
+        "kind": "agent",
+        "parent": "lead",
+        "items": []
+      }
+    ],
+    "links": []
+  },
+  "e8e28d07-3606-4062-8c23-a1706ced9e00": {
+    "nodes": [
+      {
+        "id": "coder",
+        "kind": "agent",
+        "items": ["work", "implement", "reviewed"]
+      },
+      {
+        "id": "reviewer",
+        "kind": "agent",
+        "items": ["reviewing", "ready", "review"]
+      }
+    ],
+    "links": []
+  },
+  "619067df-7b8c-4d38-adea-d5064f06f091": {
+    "nodes": [
+      {
+        "id": "tester",
+        "kind": "agent",
+        "items": ["write-tests", "red", "red-check", "make-red"]
+      },
+      {
+        "id": "implementer",
+        "kind": "agent",
+        "items": ["tests-ready", "green-loop", "implement", "green"]
+      },
+      {
+        "id": "refactorer",
+        "kind": "agent",
+        "items": ["implemented", "refactor", "still-green", "broke", "hand-back"]
+      }
+    ],
+    "links": []
+  },
+  "229ea1db-f6d9-41d3-8b72-f6725798f7bf": {
+    "nodes": [
+      {
+        "id": "lead",
+        "kind": "agent",
+        "items": ["q1", "q2", "q3"]
+      },
+      {
+        "id": "research",
+        "kind": "group",
+        "items": []
+      },
+      {
+        "id": "r1",
+        "kind": "agent",
+        "parent": "research",
+        "items": ["question", "search", "report"]
+      },
+      {
+        "id": "r2",
+        "kind": "agent",
+        "parent": "research",
+        "items": ["question", "search", "report"]
+      },
+      {
+        "id": "r3",
+        "kind": "agent",
+        "parent": "research",
+        "items": ["question", "search", "report"]
+      },
+      {
+        "id": "writer",
+        "kind": "agent",
+        "items": ["reports", "write"]
+      }
+    ],
+    "links": []
+  },
+  "025199e6-fc9c-44da-8b21-4627eafeba7c": {
+    "nodes": [
+      {
+        "id": "builder",
+        "kind": "agent",
+        "items": ["task"]
+      },
+      {
+        "id": "checker",
+        "kind": "agent",
+        "items": ["brief", "research", "done", "check", "disagree", "report"]
+      }
+    ],
+    "links": []
+  },
+  "3054f47c-1451-4c68-8afb-d3b38cae4ff2": {
+    "nodes": [
+      {
+        "id": "builder",
+        "kind": "agent",
+        "items": ["build", "tests"]
+      },
+      {
+        "id": "code",
+        "kind": "agent",
+        "items": ["built", "review", "write-up"]
+      },
+      {
+        "id": "security",
+        "kind": "agent",
+        "items": ["built", "review", "write-up"]
+      },
+      {
+        "id": "tests-review",
+        "kind": "agent",
+        "items": ["built", "review"]
+      },
+      {
+        "id": "lead",
+        "kind": "agent",
+        "items": ["reviewed", "decide", "must-fix", "send-back"]
+      }
+    ],
+    "links": []
+  },
+  "2f1ad1f9-7978-4f49-b7ae-39291affdcf9": {
+    "nodes": [
+      {
+        "id": "releaser",
+        "kind": "agent",
+        "items": ["brief", "tests", "red", "fix", "green", "audit", "tag"]
+      },
+      {
+        "id": "fixer",
+        "kind": "agent",
+        "items": []
+      }
+    ],
+    "links": []
+  },
+  "6160af62-718e-4ae2-bb27-1a2ec6743130": {
+    "nodes": [
+      {
+        "id": "claude",
+        "kind": "agent",
+        "items": ["worktree", "rounds", "build", "scored"]
+      },
+      {
+        "id": "codex",
+        "kind": "agent",
+        "items": ["worktree", "rounds", "build", "scored"]
+      },
+      {
+        "id": "judge",
+        "kind": "agent",
+        "items": ["judging", "built", "judge", "merge"]
+      }
+    ],
+    "links": []
+  }
+}

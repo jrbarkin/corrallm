@@ -23,7 +23,7 @@ import type { OutsideCaller } from './caller';
 import { createCore } from './core';
 import type { Core } from './core';
 import { cursorOf } from './delivery/messages';
-import { keepCanvases, keepMessages } from './store/test-store';
+import { keepCanvases, keepMessages, openTestStore } from './store/test-store';
 import { GitRunner } from './workspaces/git';
 import { Provisioner } from './workspaces/provision';
 import { WorkspaceSetups } from './workspaces/setup';
@@ -50,6 +50,13 @@ import type { OpFixture, OutOfReach } from './test-registry';
  * `condemned-a` and `condemned-b`, which the worker is linked to).
  * While a call meets R11 (`meeting`), every token's party is at its cap.
  *
+ * Its workspace records (B9a; nothing provisions here, the directory resolver is the legacy one),
+ * each tree made once and its checkout gone since (lost): the worker and its apprentice share
+ * their group's tree (WORKER_WORKTREE), which the worker lists without the apprentice;
+ * `kept-work` and `kept-work-batch`, in the lead's team, each work alone in a tree of its own, so
+ * deleting either asks you (workspace-safety: what it holds can't be read); and a retained tree
+ * (KEPT_WORKTREE), whose removal asks you too.
+ *
  * The run's controls act on the canvas's run, never started before them (their fixtures come
  * last): three nappers in the lead's team (`sleeper-you`, `sleeper-lead`, `sleeper-outside`), each
  * a delay of an hour for one party to end with Go on now, and `spender`, on a backend no other agent
@@ -75,6 +82,20 @@ export const SEEDED = {
 
 /** The notice corrallm sent the read-only token's party (`watcher`) before the core started. */
 export const NOTICE = '1b2c3d4e-5f60-4718-8a9b-0c1d2e3f4a54';
+
+/** A retained tree whose checkout is gone: removal must ask, never assume it safe. */
+export const KEPT_WORKTREE = '1b2c3d4e-5f60-4718-8a9b-0c1d2e3f4a55';
+
+/**
+ * The worker's group's tree, which the worker and its apprentice share (a member the worker
+ * doesn't reach), ready; and a tree each of `kept-work` and `kept-work-batch` work in alone, whose
+ * checkouts are gone, so deleting either asks you what becomes of it (workspace-safety).
+ */
+export const WORKER_WORKTREE = '1b2c3d4e-5f60-4718-8a9b-0c1d2e3f4a56';
+const KEPT_WORK = {
+  'kept-work': '1b2c3d4e-5f60-4718-8a9b-0c1d2e3f4a57',
+  'kept-work-batch': '1b2c3d4e-5f60-4718-8a9b-0c1d2e3f4a58',
+} as const;
 
 /**
  * The proposals waiting for you as the generated tests begin: the outside write token's deletes of
@@ -215,6 +236,8 @@ const NODES = [
   })),
   // What you unlink from the helper (canvas.unlink).
   { id: 'unlink-you', connection: 'codex.app-server', parent: 'lead' },
+  // Each the last agent of a tree holding work: deleting it asks you (workspace-safety).
+  ...Object.keys(KEPT_WORK).map((id) => ({ id, connection: 'codex.app-server', parent: 'lead' })),
   // The run's controls: a napper for each party's Go on now, and what a usage rule holds.
   ...['you', 'lead', 'outside'].map((party) => ({
     id: `sleeper-${party}`,
@@ -372,6 +395,72 @@ export async function startWorld(): Promise<{
     filed[id] = { file: at };
   }
   await keepCanvases(profile, { ...filed, [CANVAS]: { file, project } });
+  const store = await openTestStore(profile);
+  try {
+    const workspaces = new WorkspaceStore({ store });
+    const root = path.join(profile, 'kept-project');
+    await workspaces.write((w) => {
+      w.addRepository({
+        id: KEPT_WORKTREE,
+        pickedRoot: root,
+        realRoot: root,
+        commonDir: path.join(root, '.git'),
+        identity: 'kept repository',
+        rootKind: 'project',
+        ownedRoot: path.join(root, '.corral/worktrees/profile'),
+      });
+      const make = (id: string, owner: `${'agent' | 'group'}/${string}`) =>
+        w.createWorktree({
+          id,
+          canvas: CANVAS,
+          repository: KEPT_WORKTREE,
+          owner,
+          path: path.join(root, '.corral/worktrees/profile', id),
+          branchRef: `refs/heads/corrallm/profile/${id}`,
+          baseCheckout: root,
+          baseRef: 'refs/heads/main',
+          baseOid: 'a'.repeat(40),
+          forkedFrom: null,
+        });
+      make(KEPT_WORKTREE, 'agent/former');
+      w.retain(KEPT_WORKTREE);
+      // In use and bound (the canvas's link is left alone: nothing provisions here): each made
+      // once, its checkout gone since, so lost as the core's own check would leave it, and a
+      // retry finds nothing to make again (deterministic: no Git work goes on in the background).
+      const inUse: [string, `${'agent' | 'group'}/${string}`, readonly string[], string][] = [
+        [
+          WORKER_WORKTREE,
+          'group/worker',
+          ['worker', 'apprentice'],
+          `${KEPT_WORKTREE.slice(0, -2)}60`,
+        ],
+        ...Object.entries(KEPT_WORK).map(
+          ([agent, id], i): [string, `agent/${string}`, string[], string] => [
+            id,
+            `agent/${agent}`,
+            [agent],
+            `${KEPT_WORKTREE.slice(0, -2)}6${String(i + 1)}`,
+          ],
+        ),
+      ];
+      for (const [id, owner, agents, job] of inUse) {
+        const tree = make(id, owner);
+        w.recordJob({
+          id: job,
+          workspace: id,
+          kind: 'create',
+          phase: 'populated',
+          generation: tree.generation,
+          payload: {},
+        });
+        w.finishJob(job, 'done');
+        w.transition(id, { from: 'creating', to: 'missing', errorCode: 'checkout-missing' });
+        for (const agent of agents) w.bind(CANVAS, agent, id);
+      }
+    });
+  } finally {
+    await store.close();
+  }
   await keepMessages(profile, CANVAS, [
     ...Object.entries(SEEDED).map(([party, id]) => ({
       message: {
@@ -598,6 +687,53 @@ export const REAL_FIXTURES: Readonly<Record<OpName, OpFixture>> = {
       { canvas: 'nope', query: '' },
     ],
   },
+  // Every party's, as far as it reaches: the worker sees itself in its group's tree, never its
+  // apprentice (whom it doesn't reach), nor what is yours alone.
+  'worktree.list': {
+    valid: [{ canvas: CANVAS }, { canvas: CANVAS, agent: 'peer' }],
+    invalid: [
+      { canvas: CANVAS, agent: '' },
+      { canvas: CANVAS, worktree: WORKER_WORKTREE },
+      { canvas: CANVAS, path: '/a/checkout' },
+      { canvas: 'nope' },
+      'text',
+    ],
+  },
+  // The worker's tree was made, then lost: tried again, it is still gone (missing), as it says.
+  'worktree.retry': {
+    fresh: ['revs'],
+    valid: [{ canvas: CANVAS, agent: 'worker', request: controlRequest(392) }],
+    invalid: [
+      { canvas: CANVAS },
+      { canvas: CANVAS, agent: '' },
+      { canvas: CANVAS, agent: 'worker', force: true },
+      { canvas: CANVAS, agent: 'worker', worktree: WORKER_WORKTREE },
+      { canvas: CANVAS, agent: 'worker', path: '/a/checkout' },
+      { canvas: 'nope', agent: 'worker' },
+    ],
+  },
+  'worktree.remove': {
+    // No checkout can be assessed here: C7 raises a discard proposal instead of removing it.
+    fresh: ['proposed', 'revs'],
+    proposesForYou: ['workspace-safety'],
+    valid: [{ canvas: CANVAS, worktree: KEPT_WORKTREE, request: controlRequest(390) }],
+    invalid: [
+      {},
+      { canvas: CANVAS },
+      { canvas: 'nope', worktree: KEPT_WORKTREE },
+      { canvas: CANVAS, worktree: '/a/checkout' },
+      { canvas: CANVAS, worktree: 'x'.repeat(4096) },
+      { canvas: CANVAS, worktree: KEPT_WORKTREE, force: true },
+      { canvas: CANVAS, worktree: KEPT_WORKTREE, path: '/a/checkout' },
+    ],
+    meetsRule: {
+      'workspace-safety': {
+        canvas: CANVAS,
+        worktree: KEPT_WORKTREE,
+        request: controlRequest(391),
+      },
+    },
+  },
   'canvas.list': {
     valid: [{}, undefined],
     invalid: [{ canvas: CANVAS }, { extra: true }, 'text', null],
@@ -639,7 +775,7 @@ export const REAL_FIXTURES: Readonly<Record<OpName, OpFixture>> = {
         request: INSERT_REQUEST,
       },
     ],
-    fresh: ['group', 'agents', 'revs'],
+    fresh: ['roots', 'agents', 'revs'],
     invalid: [
       { template: 'missing' },
       { template: TEMPLATE, values: { feature: 1 } },
@@ -782,7 +918,10 @@ export const REAL_FIXTURES: Readonly<Record<OpName, OpFixture>> = {
       links: { canvas: CANVAS, links: [{ a: 'deputy', b: 'helper' }], request: request(3) },
       // A leaf of the lead's team, nothing in its queue: a token's delete of it is proposed.
       discard: { canvas: CANVAS, nodes: ['doomed'], request: request(34) },
+      // The last agent of a tree holding work: anyone's delete of it asks you, yours too.
+      'workspace-safety': { canvas: CANVAS, nodes: ['kept-work'], request: controlRequest(393) },
     },
+    proposesForYou: ['workspace-safety'],
   },
   'canvas.group': {
     valid: [
@@ -1166,7 +1305,17 @@ export const REAL_FIXTURES: Readonly<Record<OpName, OpFixture>> = {
         ops: [{ op: 'canvas.group', args: { nodes: ['member'], kind: 'agent' } }],
         request: request(86),
       },
+      // The last agent of a tree holding work, deleted beside a rename: the whole batch asks you.
+      'workspace-safety': {
+        canvas: CANVAS,
+        ops: [
+          { op: 'canvas.rename', args: { node: 'helper', label: 'Assistant' } },
+          { op: 'canvas.delete', args: { nodes: ['kept-work-batch'] } },
+        ],
+        request: controlRequest(394),
+      },
     },
+    proposesForYou: ['workspace-safety'],
   },
   agents: {
     valid: [{ canvas: CANVAS }, {}],
@@ -1714,6 +1863,8 @@ const MESSAGES_OUT_OF_REACH: Readonly<Record<string, readonly string[]>> = {
 /** What each token party doesn't reach on the canvas. */
 export const REAL_OUT_OF_REACH: OutOfReach = {
   CanvasId: () => [OTHER_CANVAS],
+  // Worktree removal is human-only; no token has a grant to any workspace record.
+  WorktreeId: () => ['1b2c3d4e-5f60-4718-8a9b-0c1d2e3f4aff'],
   AgentId: (caller, reach) =>
     caller.kind === 'outside' ? [] : AGENTS_OUT_OF_REACH[caller.agent]?.[reach],
   // A node is reached as an agent is.

@@ -119,7 +119,7 @@ describe('authored roles in model documents and files', () => {
     const inserted = insert(
       { ...before, nodes: [] },
       imported,
-      { name: 'Release' },
+      {},
       { newId: () => `imported-${String(++count)}` },
     ).next;
     const agent = inserted.nodes.find((node) => node.type === 'agent');

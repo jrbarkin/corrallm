@@ -119,6 +119,8 @@ export function filesOps({
         // only after closing the old canvas has succeeded.
         await lifecycle.made(canvas, undefined);
         if (replace !== undefined) {
+          if (replace.discard === true && ctx.caller.kind === 'human')
+            workspaceReceipts(ctx, replace.canvas as string as CanvasId);
           await lifecycle.close(replace.canvas as string as CanvasId, {
             discard: replace.discard === true && ctx.caller.kind === 'human',
             by: ctx.by,
@@ -137,6 +139,7 @@ export function filesOps({
       if (replace !== undefined) lifecycle.kept(replace.canvas as string as CanvasId);
       const canvas = await lifecycle.open(windowOf(ctx));
       if (canvas !== null && replace !== undefined && (replace.canvas as string) !== canvas) {
+        if (replace.discard === true) workspaceReceipts(ctx, replace.canvas as string as CanvasId);
         await lifecycle.close(replace.canvas as string as CanvasId, {
           discard: replace.discard === true,
           by: ctx.by,
@@ -160,6 +163,7 @@ export function filesOps({
       const window = windowIn(ctx);
       const before = window === undefined ? undefined : windows.shownIn(window);
       // A token's discard of edits not saved came to you as a proposal: it discards nothing.
+      if (args.discard === true && ctx.caller.kind === 'human') workspaceReceipts(ctx, canvas);
       await lifecycle.close(canvas, {
         discard: args.discard === true && ctx.caller.kind === 'human',
         by: ctx.by,
@@ -171,9 +175,16 @@ export function filesOps({
     'project.choose': async (args, ctx) => {
       const canvas = canvasOf(args.canvas);
       lifecycle.kept(canvas);
+      workspaceReceipts(ctx, canvas);
       return { project: await lifecycle.chooseProject(windowOf(ctx), canvas) };
     },
   };
+}
+
+/** A project change or discard can change both bindings and the workspace cards waiting on them. */
+function workspaceReceipts(ctx: OpContext, canvas: CanvasId): void {
+  ctx.published(`worktrees:${canvas}`);
+  ctx.published(`needs:${canvas}`);
 }
 
 /** What R4's argument half reads and raises, and what a token's new canvas is checked against. */

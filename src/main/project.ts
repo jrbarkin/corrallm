@@ -82,9 +82,11 @@ export class ProjectFolders {
 
   /** As a canvas is shown: the folder remembered with it, if it is still there. */
   async restore(canvas: CanvasId): Promise<ProjectFolder | undefined> {
-    this.#set(canvas, undefined);
     const { project } = await this.#deps.memory.get(canvas);
-    if (project === undefined || !(await isFolder(project))) return undefined;
+    if (project === undefined || !(await isFolder(project))) {
+      this.#set(canvas, undefined);
+      return undefined;
+    }
     this.#set(canvas, project);
     return describe(project);
   }

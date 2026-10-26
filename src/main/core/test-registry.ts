@@ -285,6 +285,8 @@ export interface OpFixture {
   by?: Readonly<Partial<Record<Party, readonly unknown[]>>>;
   invalid: readonly unknown[];
   meetsRule?: Partial<Record<Rule, unknown>>;
+  /** C-owned confirmations that ask the human too (a retained tree holding work, for example). */
+  proposesForYou?: readonly Rule[];
   /** The result's fields each call mints anew (a message's id): alike between parties by kind only. */
   fresh?: readonly string[];
 }

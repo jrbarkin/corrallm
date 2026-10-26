@@ -16,7 +16,7 @@ import {
 } from './agents';
 import type { AgentConnection } from './agents';
 
-/** How a template is used: as a new canvas, or inserted into this one as a group. */
+/** How a template is used: as a new canvas, or inserted into this one with its own roots. */
 export type TemplateUse = 'new' | 'insert';
 
 /**
@@ -41,7 +41,7 @@ type Chosen = Omit<TemplateChoices, 'connections'> & {
  * type, which the user may change or leave to the default agent, and how it runs: in a Terminal
  * by default, with missing CLIs shown explicitly, unless the user
  * picks another way its type runs. Then it opens as a new canvas, or (`canInsert`, when the canvas
- * has something on it) is inserted into this one as a group. Escape steps back from that, then
+ * has something on it) is inserted into this one with its own roots. Escape steps back from that, then
  * closes the gallery, as do the close button and a click outside.
  */
 export function ExampleGallery({

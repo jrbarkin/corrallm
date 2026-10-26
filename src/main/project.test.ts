@@ -104,4 +104,21 @@ describe('project folders', () => {
     await expect(later.restore(canvas)).resolves.toBeUndefined();
     expect(later.of(canvas)).toBeUndefined();
   });
+
+  it('does not invalidate a restored pick until it actually differs, and announces a lost one', async () => {
+    const app = path.join(dir, 'app');
+    await mkdir(app);
+    const canvas = newCanvasId();
+    pick(app);
+    await projects.choose(WINDOW, canvas);
+    const changed = vi.fn();
+    projects.onAvailability(canvas, changed);
+    await projects.restore(canvas);
+    expect(changed).not.toHaveBeenCalled();
+    expect(projects.of(canvas)).toBe(app);
+    await rm(app, { recursive: true });
+    await projects.restore(canvas);
+    expect(changed).toHaveBeenCalledOnce();
+    expect(projects.of(canvas)).toBeUndefined();
+  });
 });

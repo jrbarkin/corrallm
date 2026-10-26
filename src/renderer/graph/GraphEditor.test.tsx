@@ -2197,6 +2197,7 @@ describe('GraphEditor', () => {
       expect(screen.queryByRole('dialog')).toBeNull();
       await waitFor(() => {
         expect(nodes().map((n) => n.querySelector('.graph-label')?.textContent)).toEqual([
+          'TDD relay',
           'Tester',
           'Implementer',
           'Refactorer',
@@ -2219,7 +2220,7 @@ describe('GraphEditor', () => {
       );
     });
 
-    it('inserts a template into the canvas as a group, each agent of the type chosen', async () => {
+    it('inserts a template’s own frame, each agent of the type chosen', async () => {
       const { nodes, container } = await setup(coder, true);
       await events.click(button('Templates…'));
       const gallery = within(screen.getByRole('dialog', { name: 'Templates' }));

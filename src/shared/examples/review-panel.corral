@@ -4,13 +4,24 @@
   "id": "3054f47c-1451-4c68-8afb-d3b38cae4ff2",
   "nodes": [
     {
+      "id": "workspace",
+      "kind": "group",
+      "label": "Review panel",
+      "position": {
+        "x": -20,
+        "y": -52
+      },
+      "color": 0
+    },
+    {
       "id": "builder",
       "kind": "agent",
       "label": "Builder",
       "position": {
-        "x": 360,
-        "y": 0
+        "x": 380,
+        "y": 52
       },
+      "parent": "workspace",
       "adapter": "claude-code",
       "queue": [
         {
@@ -29,9 +40,10 @@
       "kind": "agent",
       "label": "Code reviewer",
       "position": {
-        "x": 0,
-        "y": 240
+        "x": 20,
+        "y": 292
       },
+      "parent": "workspace",
       "adapter": "codex",
       "queue": [
         {
@@ -58,9 +70,10 @@
       "kind": "agent",
       "label": "Security reviewer",
       "position": {
-        "x": 360,
-        "y": 240
+        "x": 380,
+        "y": 292
       },
+      "parent": "workspace",
       "adapter": "claude-code",
       "queue": [
         {
@@ -86,9 +99,10 @@
       "kind": "agent",
       "label": "Test reviewer",
       "position": {
-        "x": 720,
-        "y": 240
+        "x": 740,
+        "y": 292
       },
+      "parent": "workspace",
       "queue": [
         {
           "id": "built",
@@ -109,9 +123,10 @@
       "kind": "agent",
       "label": "Lead",
       "position": {
-        "x": 360,
-        "y": 480
+        "x": 380,
+        "y": 532
       },
+      "parent": "workspace",
       "adapter": "claude-code",
       "queue": [
         {

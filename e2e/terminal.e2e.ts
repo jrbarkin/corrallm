@@ -600,8 +600,8 @@ test('shows a file Claude Code names, Cmd-clicked, in the file manager if it is 
   await page.waitForTimeout(300);
   expect(new Set(await shown())).toEqual(new Set([realpathSync(path.join(folder, 'notes.txt'))]));
   const before = (await shown()).length;
-  // outside.txt, beside it: inert.
-  for (let i = 0; i < 3; i++) await cmdClick(31);
+  // outside.txt, beside it: inert, though Cmd-clicked three times (each once xterm shows its link).
+  for (let i = 0; i < 3; i++) await expect.poll(() => cmdClick(31)).toBe(true);
   await page.waitForTimeout(300);
   expect(await shown()).toHaveLength(before);
 });

@@ -4,13 +4,24 @@
   "id": "229ea1db-f6d9-41d3-8b72-f6725798f7bf",
   "nodes": [
     {
+      "id": "workspace",
+      "kind": "group",
+      "label": "Research and report",
+      "position": {
+        "x": -20,
+        "y": -52
+      },
+      "color": 0
+    },
+    {
       "id": "lead",
       "kind": "agent",
       "label": "Lead",
       "position": {
-        "x": 210,
-        "y": 0
+        "x": 230,
+        "y": 52
       },
+      "parent": "workspace",
       "adapter": "claude-code",
       "queue": [
         {
@@ -35,9 +46,10 @@
       "kind": "group",
       "label": "Research",
       "position": {
-        "x": 0,
-        "y": 120
+        "x": 20,
+        "y": 172
       },
+      "parent": "workspace",
       "color": 3
     },
     {
@@ -140,9 +152,10 @@
       "kind": "agent",
       "label": "Writer",
       "position": {
-        "x": 210,
-        "y": 320
+        "x": 230,
+        "y": 372
       },
+      "parent": "workspace",
       "adapter": "claude-code",
       "queue": [
         {

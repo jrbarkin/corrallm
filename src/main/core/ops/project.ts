@@ -47,8 +47,11 @@ export function projectOps({
         items: folder === undefined ? [] : await files.find(folder, query, MAX_FILE_MATCHES),
       };
     },
-    'project.setSetupCommand': async ({ canvas, command }) => {
+    'project.setSetupCommand': async ({ canvas, command }, ctx) => {
       if (canvas === undefined) throw new OpFailure('invalid', 'Name the canvas it is for.');
+      // What its worktrees waiting for setup would run is offered anew: their cards and list.
+      ctx.published(`needs:${canvas as unknown as CanvasId}`);
+      ctx.published(`worktrees:${canvas as unknown as CanvasId}`);
       return service()
         .setCommand(canvas as unknown as CanvasId, command)
         .catch(failure);

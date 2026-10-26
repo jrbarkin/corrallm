@@ -49,6 +49,7 @@ it('selects Mesa through ANGLE only for the opted-in Linux test launch', async (
     '--use-angle=gl',
     '--ignore-gpu-blocklist',
     '--ozone-platform=x11',
+    '--disable-frame-rate-limit',
     '.',
     '--user-data-dir=/test-profile-not-created',
     '--test',

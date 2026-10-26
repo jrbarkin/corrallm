@@ -16,6 +16,9 @@
     "api.project.choose",
     "api.project.setSetupCommand",
     "api.project.clearSetupApproval",
+    "api.worktree.remove",
+    "api.worktree.list",
+    "api.worktree.retry",
     "api.canvas.list",
     "api.canvas.get",
     "api.canvas.rename",
@@ -125,7 +128,8 @@
       "status",
       "templates_list",
       "usage_get",
-      "withdraw"
+      "withdraw",
+      "worktree_list"
     ],
     "worker": [
       "agents",
@@ -138,7 +142,8 @@
       "session_get",
       "session_transcript",
       "usage_get",
-      "withdraw"
+      "withdraw",
+      "worktree_list"
     ],
     "outside-read": [
       "agents",
@@ -158,7 +163,8 @@
       "status",
       "templates_list",
       "usage_get",
-      "wait"
+      "wait",
+      "worktree_list"
     ],
     "outside-write": [
       "agent_setRole",
@@ -218,14 +224,15 @@
       "templates_list",
       "usage_get",
       "wait",
-      "withdraw"
+      "withdraw",
+      "worktree_list"
     ]
   },
   "counts": {
-    "lead": 50,
-    "worker": 11,
-    "outside-read": 18,
-    "outside-write": 58
+    "lead": 51,
+    "worker": 12,
+    "outside-read": 19,
+    "outside-write": 59
   },
   "unhosted": {
     "agents": "B11",
@@ -239,6 +246,8 @@
     "canvas.open": "trust-gate",
     "canvas.saveAs": "trust-gate",
     "project.choose": "trust-gate",
+    "worktree.remove": "trust-gate",
+    "worktree.retry": "trust-gate",
     "project.setSetupCommand": "trust-gate",
     "project.clearSetupApproval": "permissions",
     "session.setMode": "permissions",
@@ -262,11 +271,11 @@
   },
   "schemas": {
     "topics.subscribe": {
-      "input": "d52e3a96a8f206c0",
-      "output": "3bbf784547f7a6e5"
+      "input": "8c5be84f0a1a163a",
+      "output": "b44154d67e03b452"
     },
     "topics.unsubscribe": {
-      "input": "d52e3a96a8f206c0",
+      "input": "8c5be84f0a1a163a",
       "output": "647bbd6cc7b4f077"
     },
     "app.info": {
@@ -296,6 +305,18 @@
     "project.clearSetupApproval": {
       "input": "f676d264f07b5166",
       "output": "2129f9125212db6f"
+    },
+    "worktree.list": {
+      "input": "72e6f4bc2806201b",
+      "output": "e4de311f541963b7"
+    },
+    "worktree.retry": {
+      "input": "dafe7f6753754290",
+      "output": "0601fe336b316cee"
+    },
+    "worktree.remove": {
+      "input": "6c53b4b2cbe1d85f",
+      "output": "d2717814b126a90e"
     },
     "canvas.create": {
       "input": "3394f69e468a0469",
@@ -335,7 +356,7 @@
     },
     "canvas.insertTemplate": {
       "input": "0425c47e9c4bb128",
-      "output": "97f24d47c6400a47"
+      "output": "4a0c7634da83e629"
     },
     "canvas.setArrange": {
       "input": "bec4dc305819fe45",

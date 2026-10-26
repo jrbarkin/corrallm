@@ -195,6 +195,10 @@ describe.each(REGISTRIES)('T3b on %s', (_label, fixtures, world, start) => {
       for (const rule of surfaceOf(name).rules ?? []) {
         expect(fixture.meetsRule?.[rule], `${name}: ${rule}`).toBeDefined();
       }
+      for (const rule of fixture.proposesForYou ?? []) {
+        expect(PROPOSING_RULES, `${name}: ${rule}`).toContain(rule);
+        expect(surfaceOf(name).rules, `${name}: ${rule}`).toContain(rule);
+      }
     }
   });
 
@@ -285,7 +289,11 @@ describe.each(REGISTRIES)('T3b on %s', (_label, fixtures, world, start) => {
           met?.();
         }
         const yours = await setup.core.call(name, args, CALLERS.you);
-        expect(yours.ok && !('proposed' in (yours.value as object)), rule).toBe(true);
+        expect(yours.ok, `${rule}: ${JSON.stringify(yours)}`).toBe(true);
+        if (yours.ok)
+          expect('proposed' in (yours.value as object), rule).toBe(
+            fixture.proposesForYou?.includes(rule as Rule) === true,
+          );
       }
     });
 

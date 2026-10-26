@@ -3,6 +3,39 @@ import { expect, it, vi } from 'vitest';
 
 import { SortableList } from './SortableList';
 
+it.each([[44], [128, 116, 104, 92, 80, 68, 56, 44]])(
+  'moves the test task directly above its wait, with pointer positions %j',
+  (...positions) => {
+    const move = vi.fn();
+    const { container } = render(
+      <SortableList
+        items={['message', 'wait', 'tune', 'tests', 'if'].map((id) => ({ id }))}
+        className="test-list"
+        onMove={move}
+        renderItem={(item, handle) => <button {...handle}>{item.id}</button>}
+      />,
+    );
+    const rows = () => [...container.querySelectorAll('li')];
+    const order = () => rows().map((row) => row.dataset.item);
+    const boxes = vi
+      .spyOn(HTMLElement.prototype, 'getBoundingClientRect')
+      .mockImplementation(function (this: HTMLElement) {
+        const top = rows().indexOf(this as HTMLLIElement) * 40;
+        return { top, bottom: top + 40, height: 40 } as DOMRect;
+      });
+    try {
+      fireEvent.pointerDown(screen.getByRole('button', { name: 'tests' }), { button: 0 });
+      for (const clientY of positions) fireEvent.pointerMove(window, { clientY });
+      expect(order()).toEqual(['message', 'tests', 'wait', 'tune', 'if']);
+      expect(move).not.toHaveBeenCalled();
+      fireEvent.pointerUp(window);
+      expect(move).toHaveBeenCalledExactlyOnceWith('tests', 'wait');
+    } finally {
+      boxes.mockRestore();
+    }
+  },
+);
+
 it.each(['drop', 'cancel'] as const)(
   'keeps a drag local until %s, sending at most one move',
   (end) => {

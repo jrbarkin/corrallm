@@ -34,7 +34,7 @@ export type Scope = 'app' | 'canvas' | 'agent' | 'none';
 
 /**
  * The rules that narrow what a token may do (Core Server §3.6: R1 to R13, by key; and B9 Design
- * §4's R14, `managers`).
+ * §4's R14, `managers`), and B9a's `workspace-safety`, which asks you too.
  */
 export type Rule =
   | 'shell-text'
@@ -50,7 +50,8 @@ export type Rule =
   | 'new-agent'
   | 'role'
   | 'links'
-  | 'managers';
+  | 'managers'
+  | 'workspace-safety';
 
 /** 'read' changes nothing (MCP's readOnlyHint); 'doc' is a pure document edit; 'command' the rest. */
 export type Kind = 'read' | 'doc' | 'command';
@@ -67,7 +68,8 @@ export type TopicKind =
   | 'sessions'
   | 'session'
   | 'messages'
-  | 'activity';
+  | 'activity'
+  | 'worktrees';
 
 export interface Surface {
   /** The op's audience, checked on every call: the GUI's if `you` is in it, MCP's for the rest. */
@@ -175,6 +177,28 @@ export const SURFACE = {
   'project.setSetupCommand': { access: Y, kind: 'command', scope: 'canvas' },
   // What runs by itself in a new worktree is yours to stop allowing (D9, permissions).
   'project.clearSetupApproval': { access: Y, kind: 'command', scope: 'canvas' },
+  // C7's retained trees only: no active binding is removed or drained by this command. A tree
+  // holding work asks you first (workspace-safety, yours too).
+  'worktree.remove': {
+    access: Y,
+    kind: 'command',
+    scope: 'canvas',
+    rules: ['workspace-safety'],
+    destructive: true,
+  },
+  // Who works where (B9a §7): each caller the agents it reaches, without what is yours alone (a
+  // checkout's location, its setup, the cards and the kept trees). The GUI reads `worktrees:<c>`.
+  'worktree.list': {
+    access: A,
+    kind: 'read',
+    scope: 'none',
+    reads: 'worktrees',
+    self: 'allowed',
+    varies: ['items', 'kept'],
+  },
+  // An agent's worktree tried again as it was recorded: never forced, never deleted, its setup
+  // still asking you on its card. Yours alone, as the folder it works in is (D1, trust-gate).
+  'worktree.retry': { access: Y, kind: 'command', scope: 'canvas' },
   // A token lists only its own canvases; a lead's canvas holds only what it reaches (§3.4).
   'canvas.list': { access: R, kind: 'read', scope: 'none', reads: 'canvases', varies: ['items'] },
   'canvas.get': {
@@ -201,12 +225,13 @@ export const SURFACE = {
     rules: ['new-agent'],
     self: 'allowed',
   },
-  // A token's delete of an agent comes to you as a proposal (R4), unless another rule refuses it.
+  // A token's delete of an agent comes to you as a proposal (R4), unless another rule refuses it;
+  // anyone's that leaves a worktree holding work with no agent asks you first (workspace-safety).
   'canvas.delete': {
     access: L,
     kind: 'doc',
     scope: 'canvas',
-    rules: ['human-gate', 'links', 'discard'],
+    rules: ['human-gate', 'links', 'discard', 'workspace-safety'],
     self: 'refused',
     drains: 'agents',
     destructive: true,
@@ -252,6 +277,7 @@ export const SURFACE = {
       'role',
       'links',
       'managers',
+      'workspace-safety',
     ],
     self: 'allowed',
     drains: 'agents',

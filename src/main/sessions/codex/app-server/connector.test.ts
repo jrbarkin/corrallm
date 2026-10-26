@@ -245,6 +245,22 @@ describe('the App Server connection', () => {
     expect(await reported('danger-full-access', 'never')).toEqual(['full-access', undefined]);
   });
 
+  it.each([undefined, 'Review changes'])(
+    'appends supplied core workspace context with role %s through thread startup, never a user turn',
+    async (role) => {
+      await start(
+        { ...(role === undefined ? {} : { role }), workspaceContext: 'Branch: generated-ref' },
+        { FAKE_CODEX_DEVELOPER_INSTRUCTIONS: 'Native project guidance' },
+      );
+      expect(await requests('thread/start')).toMatchObject([
+        {
+          developerInstructions: `Native project guidance\n\n${role === undefined ? '' : `${role}\n\n`}[corrallm workspace context]\nBranch: generated-ref`,
+        },
+      ]);
+      expect(await requests('turn/start')).toEqual([]);
+    },
+  );
+
   it('resumes without a role without reading native instructions, even if the read would fail', async () => {
     const env = {
       FAKE_CODEX_STATE: path.join(dir, 'threads.json'),
