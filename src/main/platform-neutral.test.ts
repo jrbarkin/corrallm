@@ -36,7 +36,7 @@ const ALLOWED: Readonly<Record<string, number>> = {
   'src/main/sessions/fake.ts': 12,
   'src/renderer/agent/AgentChip.tsx': 2,
   'src/renderer/agent/AgentView.css': 1,
-  'src/renderer/agent/AgentView.tsx': 27,
+  'src/renderer/agent/AgentView.tsx': 25,
   'src/renderer/agent/Composer.tsx': 8,
   'src/renderer/agent/McpPanel.tsx': 3,
   'src/renderer/agent/ResumePicker.tsx': 1,

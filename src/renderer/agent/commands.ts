@@ -101,7 +101,7 @@ export function terminalCommand(
 
 /**
  * Completes the session's commands and its declared view panels. When requested, also offers
- * Claude Code's Terminal-only commands, unless the session offers one of that name.
+ * the Terminal-only commands below, unless the session offers one of that name.
  */
 export function completedCommands(
   offered: readonly SlashCommand[] | undefined,
