@@ -1043,6 +1043,17 @@ export class SessionManager {
         if (agent.live !== undefined) decline(agent.live);
         else void agent.session.then(decline, () => undefined);
       },
+      dismiss: (key) => {
+        const dismiss = (session: LiveSession<SessionMode>) => {
+          try {
+            session.prompts?.dismiss?.(key);
+          } catch (error) {
+            console.error(`Could not dismiss ${agentId}'s prompt:`, error);
+          }
+        };
+        if (agent.live !== undefined) dismiss(agent.live);
+        else void agent.session.then(dismiss, () => undefined);
+      },
     };
     const origin = (): PromptOrigin => ({
       canvas,

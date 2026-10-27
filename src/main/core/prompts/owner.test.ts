@@ -84,6 +84,7 @@ let owner: PromptOwner;
 interface Handle extends PromptAnswers {
   answered: [string, PromptAnswer][];
   declined: [string, string][];
+  dismissed: string[];
   /** What answering does: by default takes it; a test may make it refuse, or end it first. */
   onAnswer?: (key: string) => void;
 }
@@ -92,12 +93,16 @@ function handle(): Handle {
   const made: Handle = {
     answered: [],
     declined: [],
+    dismissed: [],
     answer: (key, answer) => {
       made.onAnswer?.(key);
       made.answered.push([key, answer]);
     },
     decline: (key, why) => {
       made.declined.push([key, why]);
+    },
+    dismiss: (key) => {
+      made.dismissed.push(key);
     },
   };
   return made;
@@ -603,6 +608,146 @@ describe('prompts its session also shows as the events B13 replaces (until X10)'
     expect(await answer(need, { choice: 'yes' })).toMatchObject({ outcome: 'answered' });
     expect(answers.answered).toEqual([[KEY, { kind: 'choice', value: 'yes' }]]);
     expect(owner.keyed(CANVAS, 'b', 7, KEY)).toBeUndefined();
+  });
+});
+
+describe('Not waiting (B13 C7)', () => {
+  /** What a terminal's CLI waits on, raised from its report alone: in its words, nothing more. */
+  const waiting = {
+    kind: 'approval',
+    title: 'Claude Code is waiting for you.',
+    answerIn: 'terminal',
+    choices: [],
+  };
+  const waitingQuestion = {
+    kind: 'question',
+    title: 'answer: Which region?',
+    answerIn: 'terminal',
+    questions: [],
+  };
+  const screenWait = {
+    ...waiting,
+    title: 'Codex needs you: see its terminal.',
+    detail: { kind: 'output', text: '  Would you like to run the following command?\n› 1. Yes' },
+  };
+  /** What a hook described, the trust screen, and what is answered through corrallm. */
+  const described = {
+    kind: 'approval',
+    title: 'Claude wants to use Bash',
+    subject: { type: 'tool', tool: 'Bash', input: { command: 'ls' } },
+    answerIn: 'terminal',
+    choices: [],
+  };
+  const trust = {
+    kind: 'approval',
+    title: 'Claude Code asks whether you trust the project folder.',
+    subject: { type: 'trust' },
+    answerIn: 'terminal',
+    choices: [],
+  };
+  const plan = {
+    kind: 'plan',
+    title: 'Approve Claude’s plan?',
+    plan: '## Plan',
+    answerIn: 'terminal',
+    choices: [],
+  };
+  const NOT_WAITING = {
+    value: 'not-waiting',
+    label: 'Not waiting',
+    humanOnly: expect.any(String) as string,
+  };
+
+  it('is offered, yours alone, only on a terminal wait raised from an undescribed report', () => {
+    const one = handle();
+    for (const wait of [waiting, waitingQuestion, screenWait]) {
+      const item = raise(origin(7, one), wait, crypto.randomUUID());
+      expect(item?.choices, wait.title).toEqual([NOT_WAITING]);
+    }
+    const oversized = { ...waiting, title: 'y'.repeat(5000) };
+    for (const wait of [described, trust, plan, { ...question, answerIn: 'terminal' }, approval]) {
+      const item = raise(origin(7, one), wait, crypto.randomUUID());
+      expect(
+        item?.choices.map(({ value }) => value),
+        wait.title,
+      ).not.toContain('not-waiting');
+    }
+    // Nor on the core's own stand-in for an observation it can't show whole: a hook may have
+    // described it.
+    const standIn = raise(origin(7, one), oversized, crypto.randomUUID());
+    expect(standIn?.choices).toEqual([]);
+  });
+
+  it('settles a wait dismissed by you: no record, the session told to stop raising it, a later reply told so', async () => {
+    const one = handle();
+    raise(origin(7, one), waiting);
+    const id = only();
+    expect(owner.fits(CANVAS, id, { choice: 'not-waiting' })).toBeUndefined();
+    const noReturn = vi.fn();
+    expect(await answer(id, { choice: 'not-waiting' }, context({ noReturn }))).toEqual({
+      outcome: 'dismissed',
+    });
+    expect(noReturn).toHaveBeenCalled();
+    expect(one.dismissed).toEqual([KEY]);
+    expect(one.answered).toEqual([]);
+    expect(one.declined).toEqual([]);
+    expect(messages.all()).toEqual([]);
+    expect(owner.items(CANVAS)).toEqual([]);
+    expect(owner.current(CANVAS, id)).toBeUndefined();
+    // Settled: a later reply is told so; a late end of its key ends nothing.
+    owner.ended(origin(7, one), { type: 'prompt-ended', key: KEY, reason: 'answered-natively' });
+    expect(await answer(id, { choice: 'not-waiting' })).toMatchObject({
+      code: 'conflict',
+      sentence: expect.stringMatching(/isn’t waiting/) as string,
+    });
+    expect(one.dismissed).toEqual([KEY]);
+    // A question in its report's words, and one with its screen's last rows, likewise.
+    raise(origin(7, one), waitingQuestion, KEY2);
+    expect(await answer(only(), { choice: 'not-waiting' })).toEqual({ outcome: 'dismissed' });
+    expect(one.dismissed).toEqual([KEY, KEY2]);
+  });
+
+  it('is refused to any other party, with words, or where it isn’t offered, invoking nothing', async () => {
+    const one = handle();
+    raise(origin(7, one), waiting);
+    const id = only();
+    const token = context({
+      by: 'outside:orchestrator',
+      caller: {
+        kind: 'outside',
+        token: 't',
+        name: 'orchestrator',
+        access: 'write',
+        merge: true,
+        canvases: [CANVAS],
+      },
+    });
+    expect(await answer(id, { choice: 'not-waiting' }, token)).toMatchObject({
+      code: 'refused',
+    });
+    for (const given of [
+      { choice: 'not-waiting', feedback: 'it isn’t' },
+      { choice: 'not-waiting', text: 'it isn’t' },
+      { choice: 'yes' },
+    ]) {
+      expect.soft(owner.fits(CANVAS, id, given), JSON.stringify(given)).toEqual(expect.any(String));
+      expect
+        .soft(await answer(id, given), JSON.stringify(given))
+        .toMatchObject({ code: 'invalid' });
+    }
+    for (const [wait, key] of [
+      [described, KEY2],
+      [trust, crypto.randomUUID()],
+      [approval, crypto.randomUUID()],
+    ] as const) {
+      raise(origin(7, one), wait, key);
+      const other = owner.items(CANVAS).at(-1)?.id ?? '';
+      expect(owner.fits(CANVAS, other, { choice: 'not-waiting' })).toEqual(expect.any(String));
+      expect(await answer(other, { choice: 'not-waiting' })).toMatchObject({ code: 'invalid' });
+    }
+    expect(one.dismissed).toEqual([]);
+    expect(one.answered).toEqual([]);
+    expect(owner.items(CANVAS)).toHaveLength(4);
   });
 });
 

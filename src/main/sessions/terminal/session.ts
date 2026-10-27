@@ -2,6 +2,8 @@ import { randomUUID } from 'node:crypto';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
+import { MAX_DETAIL_LINES, MAX_PROMPT_TEXT_LENGTH } from '../../../shared/api/limits';
+import type { AdapterPrompt } from '../../../shared/model/prompts';
 import type {
   PermissionMode,
   SessionMode,
@@ -12,7 +14,13 @@ import type {
 } from '../../../shared/session';
 import type { TerminalEvent } from '../../../shared/terminal';
 import type { UsageWindows } from '../../../shared/usage';
-import type { LiveSession, SessionHost, SessionSpec, TerminalScreen } from '../connector';
+import type {
+  LiveSession,
+  PromptAnswers,
+  SessionHost,
+  SessionSpec,
+  TerminalScreen,
+} from '../connector';
 import { isNativeId } from '../id';
 import type { TerminalCli, TerminalSignal } from './cli';
 import type { FirstRunTurn } from './first-run';
@@ -43,12 +51,22 @@ import { ENTER } from './typing';
  * the API). Where they didn't, a CLI that reads its account's usage apart from its terminal has it
  * read before the turn ends: a limit used up then failed it, until its reset.
  *
- * What the CLI asks the user in its terminal is listed outside it ('asking'), never answered: its
- * hooks may tell what it is about to ask (what a permission prompt is for, its questions and a
- * plan to approve, just before it shows them); its reports say when it waits on
- * the user (and, in a word, for what), and when it goes on (the user answered, in the terminal).
- * Its folder trust dialog, before it runs in a new folder, is read from its
- * screen, turn or not: nothing else tells it.
+ * What the CLI asks the user in its terminal is raised to the core's prompt owner (B13 C6), and
+ * listed as the event B13 replaces ('asking', until X11), never answered: its hooks may tell what
+ * it is about to ask (what a permission prompt is for, its questions and a plan to approve, just
+ * before it shows them: in the hook's words); its reports say when it waits on the user (and, in a
+ * word, for what: in the report's words, where no hook told), and when it goes on (the user
+ * answered, in the terminal). Its folder trust dialog, before it runs in a new folder, is read
+ * from its screen, turn or not: nothing else tells it.
+ *
+ * Each observation is raised once, under a key minted for it, while it lasts (a redraw or a repeated
+ * report is no event); a better description of the same wait ends it (withdrawn) and raises the
+ * new one. Its wait clearing as the CLI goes on with the turn ends it answered there
+ * (`answered-natively`: corrallm never says what was chosen); the turn ending, the CLI exiting or
+ * the session closing withdraws it, since an answer that ends the turn can't be told from Esc. A
+ * wait you said isn't one (B13 C7's Not waiting: only one its report alone describes) is not raised
+ * again until a distinct wait: a new report, the CLI going on and waiting again, a hook's
+ * description. That changes nothing in the CLI, nor what it lists or whether a message can be typed.
  *
  * A CLI that may ask whether to trust the folder starts in its turn (first-run.ts): while another
  * session's CLI in the folder has yet to get past its first-run dialogs, this one waits to start
@@ -139,6 +157,37 @@ interface Turn {
   status: 'working' | 'waiting' | undefined;
 }
 
+/**
+ * What the CLI waits on the user for, as one observation (B13 C6): `wait`, what keeps it waiting
+ * (the same across redraws and better descriptions of it); `described`, whether a hook (or its
+ * trust screen) says what it is, rather than its report alone; `ask`, as the event B13 replaces
+ * lists it; `prompt`, as the core's prompt owner takes it (none while its screen is still read).
+ */
+interface Observation {
+  wait: string;
+  described: boolean;
+  ask: TerminalAsk;
+  prompt: AdapterPrompt | undefined;
+}
+
+/** What a hook told the CLI is about to ask, as both lists take it, and when. */
+interface Told {
+  ask: TerminalAsk;
+  prompt: AdapterPrompt;
+  at: number;
+}
+
+/**
+ * What keeps it waiting by one status record: its report, since when, the wait's id, and what its
+ * screen shows of it (undefined while it is read; null: nothing).
+ */
+interface Block {
+  report: ProgramStatus;
+  since: number;
+  id: string;
+  detail: string | null | undefined;
+}
+
 /** What a view is shown: events wait until it has the screen to start from. */
 interface Link {
   view: (event: TerminalEvent) => void;
@@ -215,18 +264,25 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
   #unconfirmed: string[] = [];
 
   /** What its hooks said the CLI asks the user since it last went on, and when. */
-  #asks: { ask: TerminalAsk; at: number }[] = [];
-  /** What keeps the CLI waiting on the user, by status record ('' for its own): since when. */
-  readonly #blocks = new Map<string, { report: ProgramStatus; since: number; id: string }>();
+  #asks: Told[] = [];
+  /** What keeps the CLI waiting on the user, by status record ('' for its own). */
+  readonly #blocks = new Map<string, Block>();
   /** What its last notification that it needs the user said (until it goes on). */
   #notified: { id: string; text: string } | undefined;
   /** The asks last listed (JSON): only a change is sent. */
   #listed = '[]';
+  /**
+   * What it raised to the core's prompt owner and has yet to end, by key: the wait each is of, the
+   * observation as raised (JSON, to tell an unchanged one), and whether a hook described it.
+   */
+  readonly #raised = new Map<string, { wait: string; seen: string; described: boolean }>();
+  /** The waits you said aren't (B13 C7's Not waiting), not raised again while they last. */
+  readonly #dismissed = new Set<string>();
   /** The folder trust dialog its CLI shows now, as it is listed; undefined while none shows. */
   #trust: TerminalAsk | undefined;
   /**
-   * Whether its CLI got past its first-run dialogs (it reported its state, a hook posted, or its
-   * prompt showed): it no longer asks whether to trust the folder.
+   * Whether its CLI got past its first-run dialogs (it reported a state but that it is going, a
+   * hook posted, or its prompt showed): it no longer asks whether to trust the folder.
    */
   #passed = false;
   /** Whether it waits for its turn to start its CLI (another session in the folder is first). */
@@ -257,6 +313,21 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
     },
   };
 
+  /**
+   * What the core asks of what it raised (B13 C6): nothing is answered here, nor declined (it
+   * answers nothing, so the core never declines it); a wait you said isn't one is not raised again
+   * until a distinct wait.
+   */
+  readonly prompts: PromptAnswers = {
+    answer: () => {
+      throw new Error(this.#cli.words.answer);
+    },
+    decline: () => undefined,
+    dismiss: (key) => {
+      this.#dismiss(key);
+    },
+  };
+
   constructor(spec: SessionSpec<M>, host: SessionHost, deps: TerminalSessionDeps<M>) {
     this.#spec = spec;
     this.#host = host;
@@ -273,6 +344,11 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
 
   /** Starts its CLI: resolves once it runs. */
   async launch(): Promise<void> {
+    // Transitional (B13 C6, until X10; X11 removes it): what it raises is listed as `asking` too,
+    // whose Needs items stand for it; their answers belong to its terminal.
+    this.#host.bridge?.(() => {
+      throw new Error(this.#cli.words.answer);
+    });
     try {
       this.#registration = await this.#deps.hooks.register(
         (event) => {
@@ -358,6 +434,11 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
   async close(): Promise<void> {
     this.#finishEnd();
     this.#closing = true;
+    // Nothing waits on the user any more.
+    for (const key of this.#raised.keys()) {
+      this.#host.emit({ type: 'prompt-ended', key, reason: 'withdrawn' });
+    }
+    this.#raised.clear();
     if (this.#typing) this.#typing.stopped = true;
     this.#clearTimers();
     const pty = this.#pty;
@@ -652,7 +733,8 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
       this.#reports.set(record, value);
       this.#host.activity?.();
     }
-    this.#pass();
+    // Any report but that it is going ("No, exit" at its trust dialog) says it is past them.
+    if (report.state !== 'clear' || report.id !== undefined) this.#pass();
     this.#block(report);
     if (report.id !== undefined || report.state === 'clear') return;
     this.#reporting = true;
@@ -974,7 +1056,7 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
         this.#emit({ type: 'model', model: signal.model });
         return;
       case 'ask':
-        this.#told(signal.ask);
+        this.#told(signal.ask, signal.prompt);
         return;
       case 'needs':
         this.#notified = { id: randomUUID(), text: signal.text };
@@ -1008,24 +1090,27 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
     this.#deps.firstRun?.passed();
     if (this.#trust) {
       this.#trust = undefined;
-      this.#list();
+      // Past its trust dialog, it goes on: answered there.
+      this.#list('answered-natively');
     }
   }
 
   // ---- What it asks the user, in its terminal.
 
   /** A hook told what the CLI is about to ask (once, though two hooks may tell it). */
-  #told(ask: TerminalAsk): void {
+  #told(ask: TerminalAsk, prompt: AdapterPrompt): void {
     const same = (other: TerminalAsk) =>
       JSON.stringify({ ...other, id: '' }) === JSON.stringify({ ...ask, id: '' });
     if (this.#asks.some((told) => same(told.ask))) return;
-    this.#asks = [...this.#asks, { ask, at: Date.now() }].slice(-MAX_ASKS);
+    this.#asks = [...this.#asks, { ask, prompt, at: Date.now() }].slice(-MAX_ASKS);
     this.#list();
   }
 
   /**
-   * Follows what keeps the CLI (or a task of it) waiting on the user, from its reports.
-   * Once a wait ends, what it asked was answered (in the terminal).
+   * Follows what keeps the CLI (or a task of it) waiting on the user, from its reports: one wait
+   * while a record's report says the same, another once it says another. Once a wait ends as the
+   * CLI goes on working, what it asked was answered (in the terminal); once it ends otherwise, its
+   * turn ended, which an answer ending it can't be told from.
    */
   #block(report: ProgramStatus): void {
     const record = report.id ?? '';
@@ -1035,16 +1120,57 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
     }
     if (report.state === 'blocked') {
       const known = this.#blocks.get(record);
-      this.#blocks.set(record, {
-        report,
-        since: known?.since ?? Date.now(),
-        id: known?.id ?? randomUUID(),
-      });
-    } else if (this.#blocks.delete(record)) {
+      if (
+        known !== undefined &&
+        known.report.kind === report.kind &&
+        known.report.msg === report.msg
+      ) {
+        this.#blocks.set(record, { ...known, report });
+      } else {
+        const id = randomUUID();
+        this.#blocks.set(record, {
+          report,
+          since: known?.since ?? Date.now(),
+          id,
+          detail: this.#cli.waitDetail === undefined ? null : undefined,
+        });
+        if (this.#cli.waitDetail !== undefined) this.#readDetail(record, id);
+      }
+      this.#list();
+      return;
+    }
+    if (this.#blocks.delete(record)) {
       this.#asks = [];
       this.#notified = undefined;
     }
-    this.#list();
+    this.#list(report.state === 'working' ? 'answered-natively' : 'withdrawn');
+  }
+
+  /**
+   * Reads, once its screen has settled, what it shows of a wait only its report describes (its
+   * TerminalCli's `waitDetail`), once: its dialog may not be drawn as the report comes.
+   */
+  #readDetail(record: string, id: string): void {
+    this.#later(() => {
+      void this.#screen.settled().then(() => {
+        const block = this.#blocks.get(record);
+        if (block?.id !== id || this.#gone()) return;
+        const rows = this.#cli.waitDetail?.(this.#screen);
+        block.detail =
+          rows === undefined || rows.trim() === ''
+            ? null
+            : rows.split('\n').slice(-MAX_DETAIL_LINES).join('\n');
+        this.#list();
+      });
+    }, this.#deps.timing.settle);
+  }
+
+  /** A wait you said isn't one (B13 C7): not raised again while it lasts; a described one stays. */
+  #dismiss(key: string): void {
+    const raised = this.#raised.get(key);
+    if (raised === undefined || raised.described) return;
+    this.#raised.delete(key);
+    this.#dismissed.add(raised.wait);
   }
 
   /** Nothing is asked any more: the CLI is going. */
@@ -1059,36 +1185,102 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
   /**
    * What the CLI asks the user now. While it waits on them: what its hooks told just before (or,
    * if they told nothing, what it waits for in its report's words, or its notification's, or its
-   * CLI's). It may tell without waiting: what a notification says it needs. Without reports,
-   * what its hooks told, until the turn ends.
+   * CLI's, with what its screen shows of it where its TerminalCli reads that). It may tell without
+   * waiting: what a notification says it needs. Without reports, what its hooks told, until the
+   * turn ends.
    */
-  #asking(): TerminalAsk[] {
+  #observed(): Observation[] {
     if (this.#exited) return [];
     // Its folder trust dialog comes before anything else.
-    if (this.#trust) return [this.#trust];
-    const notified: TerminalAsk[] = this.#notified ? [{ kind: 'other', ...this.#notified }] : [];
+    if (this.#trust) {
+      return [
+        {
+          wait: `trust:${this.#trust.id}`,
+          described: true,
+          ask: this.#trust,
+          prompt: {
+            kind: 'approval',
+            title: `${this.#cli.name} asks whether you trust the project folder.`,
+            subject: { type: 'trust' },
+            answerIn: 'terminal',
+            choices: [],
+          },
+        },
+      ];
+    }
+    const notified: Observation[] = this.#notified
+      ? [
+          {
+            wait: `notified:${this.#notified.id}`,
+            described: false,
+            ask: { kind: 'other', ...this.#notified },
+            prompt: waitingFor('approval', this.#notified.text, null),
+          },
+        ]
+      : [];
+    const told = (asks: readonly Told[]): Observation[] =>
+      asks.map(({ ask, prompt }) => ({ wait: `told:${ask.id}`, described: true, ask, prompt }));
     if (!this.#reporting && this.#blocks.size === 0) {
-      return this.#asks.length > 0 ? this.#asks.map(({ ask }) => ask) : notified;
+      return this.#asks.length > 0 ? told(this.#asks) : notified;
     }
     const blocks = [...this.#blocks.values()];
     if (blocks.length === 0) return notified;
     const since = Math.min(...blocks.map((block) => block.since)) - ASK_WINDOW;
-    const told = this.#asks.filter(({ at }) => at >= since).map(({ ask }) => ask);
-    if (told.length > 0) return told;
-    return blocks.map(({ report, id }) => ({
-      kind: 'other',
-      id,
-      text: report.msg ?? this.#notified?.text ?? this.#cli.words.waiting[report.kind ?? 'none'],
-    }));
+    const recent = this.#asks.filter(({ at }) => at >= since);
+    if (recent.length > 0) return told(recent);
+    return blocks.map(({ report, id, detail }) => {
+      const text =
+        report.msg ?? this.#notified?.text ?? this.#cli.words.waiting[report.kind ?? 'none'];
+      return {
+        wait: `block:${id}`,
+        described: false,
+        ask: { kind: 'other', id, text },
+        prompt:
+          detail === undefined
+            ? undefined
+            : waitingFor(report.kind === 'question' ? 'question' : 'approval', text, detail),
+      };
+    });
   }
 
-  /** Lists what the CLI asks now, if that changed. */
-  #list(): void {
-    const asks = this.#asking();
+  /**
+   * Lists what the CLI asks now, if that changed, and raises and ends it for the core's prompt
+   * owner: `why` an observation no longer there (its wait gone, not described anew) ended.
+   */
+  #list(why: 'withdrawn' | 'answered-natively' = 'withdrawn'): void {
+    const observed = this.#observed();
+    const asks = observed.map(({ ask }) => ask);
     const listed = JSON.stringify(asks);
-    if (listed === this.#listed) return;
-    this.#listed = listed;
-    this.#emit({ type: 'asking', asks });
+    if (listed !== this.#listed) {
+      this.#listed = listed;
+      this.#emit({ type: 'asking', asks });
+    }
+    // Closing withdrew what it raised: nothing is raised after.
+    if (this.#closing) return;
+    const waits = new Set(observed.map(({ wait }) => wait));
+    // A wait said not to be one is forgotten once gone: a later one is distinct.
+    for (const wait of this.#dismissed) if (!waits.has(wait)) this.#dismissed.delete(wait);
+    const shown = new Map<string, { wait: string; described: boolean; prompt: AdapterPrompt }>();
+    for (const { wait, described, prompt } of observed) {
+      if (prompt === undefined || (!described && this.#dismissed.has(wait))) continue;
+      shown.set(JSON.stringify([wait, prompt]), { wait, described, prompt });
+    }
+    for (const [key, raised] of this.#raised) {
+      // Unchanged: no event.
+      if (shown.delete(raised.seen)) continue;
+      this.#raised.delete(key);
+      this.#host.emit({
+        type: 'prompt-ended',
+        key,
+        // Described anew, it was withdrawn for its better description.
+        reason: why === 'answered-natively' && !waits.has(raised.wait) ? why : 'withdrawn',
+      });
+    }
+    for (const [seen, { wait, described, prompt }] of shown) {
+      const key = randomUUID();
+      this.#raised.set(key, { wait, seen, described });
+      this.#host.emit({ type: 'prompt', key, prompt });
+    }
   }
 
   // ---- Usage.
@@ -1163,6 +1355,29 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
     }
     this.#screen.dispose();
   }
+}
+
+/**
+ * A wait nothing but its CLI's report (or notification) describes, as the core's prompt: titled in
+ * its words, answered in its terminal, with what its screen shows of it where read.
+ */
+function waitingFor(
+  kind: 'approval' | 'question',
+  text: string,
+  detail: string | null,
+): AdapterPrompt {
+  const cut = text.length > MAX_PROMPT_TEXT_LENGTH;
+  // Never between a character's two halves.
+  const end = text.charCodeAt(MAX_PROMPT_TEXT_LENGTH - 2);
+  const kept =
+    end >= 0xd800 && end <= 0xdbff ? MAX_PROMPT_TEXT_LENGTH - 2 : MAX_PROMPT_TEXT_LENGTH - 1;
+  const shown = {
+    title: cut ? `${text.slice(0, kept)}…` : text,
+    answerIn: 'terminal' as const,
+    ...(detail === null ? {} : { detail: { kind: 'output' as const, text: detail } }),
+    ...(cut ? { cut: true as const } : {}),
+  };
+  return kind === 'question' ? { kind, ...shown, questions: [] } : { kind, ...shown, choices: [] };
 }
 
 /** Text with each run of whitespace (line breaks, the prompt's wrapping) as one space. */

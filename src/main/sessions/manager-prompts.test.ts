@@ -99,6 +99,7 @@ interface Raising extends LiveSession<SessionMode> {
   host: SessionHost;
   answered: [string, PromptAnswer][];
   declined: [string, string][];
+  dismissed: string[];
 }
 
 /**
@@ -119,8 +120,17 @@ function raising(starting?: (host: SessionHost) => Promise<void> | void) {
         decline: (key, why) => {
           session.declined.push([key, why]);
         },
+        dismiss: (key) => {
+          session.dismissed.push(key);
+        },
       };
-      Object.assign(session, { host, answered: [], declined: [], prompts: answers });
+      Object.assign(session, {
+        host,
+        answered: [],
+        declined: [],
+        dismissed: [],
+        prompts: answers,
+      });
       sessions.push(session);
       return session;
     },
@@ -212,6 +222,45 @@ describe('prompts a session raises', () => {
     second?.answers.answer(KEY, { kind: 'choice', value: 'no' });
     expect(at(1, sessions).answered).toEqual([[KEY, { kind: 'choice', value: 'no' }]]);
     expect(first?.generation).not.toBe(second?.generation);
+    await sessionManager.closeCanvas(canvas);
+  });
+
+  it('are dismissed (B13 C7’s Not waiting) on the session that raised them, never a later one, once it runs', async () => {
+    let open: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      open = resolve;
+    });
+    let gated = true;
+    const { connector, sessions } = raising(async (host) => {
+      if (!gated) return;
+      // A terminal's wait observed as it starts, before its start resolves.
+      host.emit({
+        type: 'prompt',
+        key: KEY,
+        prompt: { kind: 'approval', title: 'Waiting', answerIn: 'terminal', choices: [] },
+      });
+      await gate;
+    });
+    const sessionManager = manager({ 'claude-code.terminal': connector });
+    const canvas = newCanvasId();
+    const starting = sessionManager.start(canvas, 'b', TERMINAL);
+    await vi.waitFor(() => {
+      expect(raised).toHaveLength(1);
+    });
+    const [first] = raised[0] ?? [];
+    // Told once the session runs, never thrown back while it starts.
+    first?.answers.dismiss?.(KEY);
+    open();
+    await starting;
+    await vi.waitFor(() => {
+      expect(at(0, sessions).dismissed).toEqual([KEY]);
+    });
+    // The agent's session starts again: the first's dismissal never reaches the second.
+    gated = false;
+    await sessionManager.close(canvas, 'b');
+    await sessionManager.start(canvas, 'b', TERMINAL);
+    first?.answers.dismiss?.(KEY);
+    expect(at(1, sessions).dismissed).toEqual([]);
     await sessionManager.closeCanvas(canvas);
   });
 

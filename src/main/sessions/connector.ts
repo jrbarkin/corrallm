@@ -125,6 +125,13 @@ export interface PromptAnswers {
    * pending as the session closes gets the same nonapproval from the session itself.
    */
   decline(key: string, why: string): void;
+  /**
+   * B13 C7's Not waiting, for a session whose terminal the prompt is answered in: you settled a
+   * wait it raised from its CLI's report alone (no hook described it) as not waiting, so it stops
+   * raising that observation until a distinct wait (a new report, its title leaving and coming
+   * back, a hook's description). Tells its CLI nothing and changes nothing in it; never throws.
+   */
+  dismiss?(key: string): void;
 }
 
 /** A session that runs. The manager calls these with arguments it has validated. */

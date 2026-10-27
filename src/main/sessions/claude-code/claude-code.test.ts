@@ -2,6 +2,7 @@ import path from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
+import type { AdapterPrompt } from '../../../shared/model/prompts';
 import type { TerminalAsk } from '../../../shared/session';
 import { ClaudeCode } from './claude-code';
 
@@ -178,5 +179,129 @@ describe('a permission Claude Code asks for in its terminal', () => {
       ...Array.from({ length: 12 }, (_, i) => `line ${String(i + 1)}`),
       '… (18 more lines)',
     ]);
+  });
+});
+
+/** What Claude Code waits on in its terminal, as the core's prompt, as hook `event` tells it. */
+function raisedBy(
+  event: 'PermissionRequest' | 'PreToolUse',
+  tool: string,
+  input: unknown,
+): AdapterPrompt | undefined {
+  const claude = new ClaudeCode({ cwd: '/work/app', home: '/Users/me', env: {} });
+  const signals = claude.hook({
+    hook_event_name: event,
+    session_id: SESSION,
+    tool_name: tool,
+    tool_input: input,
+    tool_use_id: 'toolu_1',
+  });
+  const ask = signals.find((signal) => signal.kind === 'ask');
+  return ask?.kind === 'ask' ? ask.prompt : undefined;
+}
+
+describe('what Claude Code asks in its terminal, as the core’s prompt (B13 C6)', () => {
+  it('raises a permission with its hook’s tool and input, answered in its terminal, with no choice of corrallm’s', () => {
+    const edit = {
+      file_path: '/work/app/notes.txt',
+      old_string: 'hello',
+      new_string: 'hello world',
+    };
+    expect(raisedBy('PermissionRequest', 'Edit', edit)).toEqual({
+      kind: 'approval',
+      title: 'Claude wants to use Edit',
+      summary: 'notes.txt',
+      subject: { type: 'tool', tool: 'Edit', input: edit },
+      detail: {
+        kind: 'diff',
+        added: 1,
+        removed: 1,
+        lines: [
+          { kind: 'remove', text: 'hello' },
+          { kind: 'add', text: 'hello world' },
+        ],
+      },
+      answerIn: 'terminal',
+      choices: [],
+    });
+    // What it would do, in twelve lines at most, marked cut: the terminal shows it all.
+    const content = Array.from({ length: 30 }, (_, i) => `line ${String(i + 1)}`).join('\n');
+    const write = raisedBy('PermissionRequest', 'Write', {
+      file_path: '/work/app/src/long.ts',
+      content,
+    });
+    expect(write).toMatchObject({ cut: true, subject: { input: { content } } });
+    expect(
+      write?.kind === 'approval' && write.detail?.kind === 'diff' && write.detail.lines,
+    ).toEqual([
+      ...Array.from({ length: 11 }, (_, i) => ({ kind: 'add', text: `line ${String(i + 1)}` })),
+      { kind: 'same', text: '… (19 more lines)' },
+    ]);
+    // An input past its bound, a command's too, is a marked preview: nothing it asks is declined.
+    const huge = 'x'.repeat(70_000);
+    for (const [tool, input] of [
+      ['Write', { file_path: '/work/app/big.txt', content: huge }],
+      ['Bash', { command: `echo ${huge}` }],
+    ] as const) {
+      const prompt = raisedBy('PermissionRequest', tool, input);
+      expect(prompt, tool).toMatchObject({ kind: 'approval', cut: true, answerIn: 'terminal' });
+      const subject = prompt?.kind === 'approval' ? prompt.subject : undefined;
+      expect(subject?.type === 'tool' && typeof subject.input).toBe('string');
+      expect(JSON.stringify(prompt).length).toBeLessThan(20_000);
+    }
+  });
+
+  it('raises AskUserQuestion’s questions by ids of corrallm’s, and ExitPlanMode’s plan; what it can’t read describes nothing', () => {
+    const questions = {
+      questions: [
+        {
+          question: 'Pick a color',
+          header: 'Color',
+          options: [{ label: 'Red', description: 'Warm' }, { label: 'Blue' }],
+          multiSelect: false,
+        },
+        {
+          question: 'Which sizes?',
+          header: 'Size',
+          options: [{ label: 'S' }, { label: 'M' }],
+          multiSelect: true,
+        },
+      ],
+    };
+    for (const event of ['PreToolUse', 'PermissionRequest'] as const) {
+      expect(raisedBy(event, 'AskUserQuestion', questions), event).toEqual({
+        kind: 'question',
+        title: 'Claude asks 2 questions',
+        answerIn: 'terminal',
+        questions: [
+          {
+            id: 'q1',
+            header: 'Color',
+            text: 'Pick a color',
+            options: [{ label: 'Red', description: 'Warm' }, { label: 'Blue' }],
+            multiple: false,
+            other: true,
+          },
+          {
+            id: 'q2',
+            header: 'Size',
+            text: 'Which sizes?',
+            options: [{ label: 'S' }, { label: 'M' }],
+            multiple: true,
+            other: true,
+          },
+        ],
+      });
+    }
+    expect(raisedBy('PreToolUse', 'ExitPlanMode', { plan: '## Plan\nShip it.' })).toEqual({
+      kind: 'plan',
+      title: 'Approve Claude’s plan?',
+      plan: '## Plan\nShip it.',
+      answerIn: 'terminal',
+      choices: [],
+    });
+    // Nothing it can read: its report's words say what it waits for instead.
+    expect(raisedBy('PreToolUse', 'AskUserQuestion', { questions: 'Pick one' })).toBeUndefined();
+    expect(raisedBy('PreToolUse', 'ExitPlanMode', { plan: '   ' })).toBeUndefined();
   });
 });

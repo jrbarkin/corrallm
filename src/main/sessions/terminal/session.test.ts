@@ -6,11 +6,12 @@ import path from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import type { AdapterPrompt, PromptEnded, PromptEvent } from '../../../shared/model/prompts';
 import type { SessionEvent } from '../../../shared/session';
 import type { TerminalEvent } from '../../../shared/terminal';
 import type { UsageBackendId } from '../../../shared/adapter';
 import type { UsageWindows } from '../../../shared/usage';
-import type { LiveSession, SessionSpec } from '../connector';
+import type { Bridge, LiveSession, SessionSpec } from '../connector';
 import { helpFlags } from '../claude-code/claude';
 import { TerminalConnector } from '../claude-code/connector';
 import { FakeClaude } from '../claude-code/fake-claude';
@@ -37,6 +38,10 @@ let dir: string;
 let runs: FakeClaude[];
 let fake: FakeClaudeOptions;
 let events: SessionEvent[];
+/** What its sessions raised and ended for the core's prompt owner (B13 C6), in order. */
+let prompts: (PromptEvent | PromptEnded)[];
+/** The bridges they installed (B13 C4's mirror, until X10), and when, among what they raised. */
+let bridges: { translate: Bridge; before: number }[];
 let remembered: string[];
 let sessions: LiveSession[];
 let readings: [UsageBackendId, UsageWindows][];
@@ -53,6 +58,8 @@ beforeEach(async () => {
   runs = [];
   fake = {};
   events = [];
+  prompts = [];
+  bridges = [];
   remembered = [];
   sessions = [];
   readings = [];
@@ -105,15 +112,57 @@ async function start(
   const session = await using.start(
     { ...SPEC, ...spec },
     {
-      emit: (event: SessionEvent) => sink.push(event),
+      emit: (event) => {
+        if (event.type === 'prompt' || event.type === 'prompt-ended') prompts.push(event);
+        else sink.push(event);
+      },
       remember: (id) => remembered.push(id),
       activity: () => {
         activity++;
+      },
+      bridge: (translate) => {
+        bridges.push({ translate, before: prompts.length });
       },
     },
   );
   sessions.push(session);
   return session;
+}
+
+/** What its sessions raised and have yet to end, by key, in the order raised. */
+function open(): Map<string, AdapterPrompt> {
+  const live = new Map<string, AdapterPrompt>();
+  for (const event of prompts) {
+    if (event.type === 'prompt') live.set(event.key, event.prompt);
+    else live.delete(event.key);
+  }
+  return live;
+}
+
+/** Every prompt raised, in order. */
+const raised = () =>
+  prompts
+    .filter((event): event is PromptEvent => event.type === 'prompt')
+    .map(({ prompt }) => prompt);
+
+/** How each that ended ended, by the order raised (its prompt's title and the reason). */
+const endings = () =>
+  prompts
+    .filter((event): event is PromptEnded => event.type === 'prompt-ended')
+    .map(({ key, reason }) => {
+      const prompt = prompts.find(
+        (event): event is PromptEvent => event.type === 'prompt' && event.key === key,
+      )?.prompt;
+      return `${prompt?.title ?? '?'}:${reason}`;
+    });
+
+/** The one prompt open now, which a test expects. */
+function onlyOpen(): [string, AdapterPrompt] {
+  const live = [...open()];
+  expect(live).toHaveLength(1);
+  const [one] = live;
+  if (one === undefined) throw new Error('nothing open');
+  return one;
 }
 
 /** The run of the fake CLI going on. */
@@ -1018,6 +1067,10 @@ describe('a Terminal session', () => {
     });
     await new Promise((resolve) => setTimeout(resolve, 30));
     expect(runs).toHaveLength(2);
+    // Its CLI saying it is going was no sign the folder is trusted: a later one waits its turn.
+    await start({ agentId: 'd' }, { using, sink: [] });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(runs).toHaveLength(2);
   });
 
   it('says why a turn failed, once, and ends it failed', async () => {
@@ -1161,5 +1214,324 @@ describe('a Terminal session', () => {
     // Closed on purpose: nothing to tell.
     expect(seen()).not.toContain('closed');
     await expect(session.send({ id: 'm', text: 'Hi' })).rejects.toThrow(/not running/);
+  });
+});
+
+describe('what Claude Code waits on in its terminal, raised to the core’s prompt owner (B13 C6)', () => {
+  const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+  const pause = (ms = 40) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  it('raises a permission its hook described, answered in its terminal, once; ended so as its turn goes on', async () => {
+    const session = await start();
+    await session.send({ id: 'm1', text: 'ask to run the tests' });
+    await until(() => {
+      expect(open().size).toBe(1);
+    });
+    const [key, prompt] = onlyOpen();
+    expect(key).toMatch(UUID);
+    expect(prompt).toEqual({
+      kind: 'approval',
+      title: 'Claude wants to use Bash',
+      summary: 'echo hello',
+      subject: {
+        type: 'tool',
+        tool: 'Bash',
+        input: { command: 'echo hello', description: 'Say hello' },
+      },
+      answerIn: 'terminal',
+      choices: [],
+    });
+    // Reports and redraws repeat while it waits: nothing more is raised.
+    claude().report(`state=blocked:kind=permission:msg=${btoa('approve Bash: echo hello')}`);
+    await pause();
+    expect(raised()).toHaveLength(1);
+    // Answered in the terminal, and the turn goes on.
+    session.terminal?.input('1');
+    await until(() => {
+      expect(last('end')).toBeDefined();
+    });
+    expect(prompts.at(-1)).toEqual({ type: 'prompt-ended', key, reason: 'answered-natively' });
+    expect(raised()).toHaveLength(1);
+    // No hook was answered with a decision, and nothing was typed for it.
+    expect(claude().answers.every(({ answer }) => answer === '{}')).toBe(true);
+    expect(claude().written.filter((keys) => keys === '1')).toEqual(['1']);
+  });
+
+  it('raises its questions and its plan as their tools’ hooks tell them, once; Esc ends a plan withdrawn', async () => {
+    const session = await start();
+    await session.send({ id: 'm1', text: 'question first' });
+    await until(() => {
+      expect(open().size).toBe(1);
+    });
+    expect(onlyOpen()[1]).toEqual({
+      kind: 'question',
+      title: 'Pick a color',
+      answerIn: 'terminal',
+      questions: [
+        {
+          id: 'q1',
+          header: 'Color',
+          text: 'Pick a color',
+          options: [
+            { label: 'Red', description: 'Warm' },
+            { label: 'Blue', description: 'Cool' },
+          ],
+          multiple: false,
+          other: true,
+        },
+      ],
+    });
+    session.terminal?.input('1');
+    await until(() => {
+      expect(events.filter((event) => event.type === 'end')).toHaveLength(1);
+    });
+    await session.send({ id: 'm2', text: 'plan it' });
+    await until(() => {
+      expect(open().size).toBe(1);
+    });
+    expect(onlyOpen()[1]).toEqual({
+      kind: 'plan',
+      title: 'Approve Claude’s plan?',
+      plan: '## Plan\nRun `git init`.\n',
+      answerIn: 'terminal',
+      choices: [],
+    });
+    // Esc: the turn ends, which an answer ending it can't be told from.
+    session.terminal?.input('\x1b');
+    await until(() => {
+      expect(open().size).toBe(0);
+    });
+    expect(endings()).toEqual([
+      'Pick a color:answered-natively',
+      'Approve Claude’s plan?:withdrawn',
+    ]);
+    expect(raised()).toHaveLength(2);
+  });
+
+  it('raises an undescribed wait in its report’s words, a notification’s, or its own; a hook’s later description replaces it', async () => {
+    const session = await start();
+    await session.send({ id: 'm1', text: 'slow work' });
+    await until(() => {
+      expect(claude().prompts).toEqual(['slow work']);
+    });
+    claude().report(`state=blocked:kind=question:msg=${btoa('answer: Which region?')}`);
+    await until(() => {
+      expect(open().size).toBe(1);
+    });
+    expect(onlyOpen()[1]).toEqual({
+      kind: 'question',
+      title: 'answer: Which region?',
+      answerIn: 'terminal',
+      questions: [],
+    });
+    claude().report('state=working');
+    await until(() => {
+      expect(open().size).toBe(0);
+    });
+    // A permission it was about to ask long ago (another hook answered it) is not its words.
+    await claude().hook('PermissionRequest', {
+      tool_name: 'Write',
+      tool_input: { file_path: '/work/app/a.txt' },
+    });
+    const now = Date.now();
+    vi.spyOn(Date, 'now').mockReturnValue(now + 6000);
+    claude().report('state=blocked:kind=permission');
+    await until(() => {
+      expect(open().size).toBe(1);
+    });
+    expect(onlyOpen()[1]).toEqual({
+      kind: 'approval',
+      title: 'Claude Code asks for your permission.',
+      answerIn: 'terminal',
+      choices: [],
+    });
+    // Its hook tells it, late: the better description replaces the guess.
+    await claude().hook('PermissionRequest', {
+      tool_name: 'Bash',
+      tool_input: { command: 'npm test' },
+    });
+    await until(() => {
+      expect(onlyOpen()[1]).toMatchObject({
+        title: 'Claude wants to use Bash',
+        summary: 'npm test',
+      });
+    });
+    vi.restoreAllMocks();
+    // Interrupted: the turn ends, whatever was asked.
+    await session.interrupt();
+    await until(() => {
+      expect(last('end')).toBeDefined();
+    });
+    expect(endings()).toEqual([
+      'answer: Which region?:answered-natively',
+      'Claude Code asks for your permission.:withdrawn',
+      'Claude wants to use Bash:withdrawn',
+    ]);
+
+    // An MCP server's question: only its notification says what, as Claude Code goes on to wait.
+    await session.send({ id: 'm2', text: 'elicit a region' });
+    await until(() => {
+      expect(open().size).toBe(1);
+      expect(onlyOpen()[1]).toMatchObject({ kind: 'question' });
+    });
+    expect(onlyOpen()[1]).toEqual({
+      kind: 'question',
+      title: 'shop-db needs your input',
+      answerIn: 'terminal',
+      questions: [],
+    });
+    // Claude Code exits: nothing waits any more.
+    claude().exit(1);
+    await until(() => {
+      expect(open().size).toBe(0);
+    });
+    expect(endings().at(-1)).toBe('shop-db needs your input:withdrawn');
+  });
+
+  it('raises the folder trust screen as yours to answer there; trusted, it ends answered there; exiting, withdrawn', async () => {
+    fake.trust = true;
+    await start();
+    await until(() => {
+      expect(open().size).toBe(1);
+    });
+    const [key, prompt] = onlyOpen();
+    expect(prompt).toEqual({
+      kind: 'approval',
+      title: 'Claude Code asks whether you trust the project folder.',
+      subject: { type: 'trust' },
+      answerIn: 'terminal',
+      choices: [],
+    });
+    claude().write('\r');
+    await until(() => {
+      expect(prompts.at(-1)).toEqual({ type: 'prompt-ended', key, reason: 'answered-natively' });
+    });
+    expect(raised()).toHaveLength(1);
+
+    // "No, exit": the CLI goes, and so does what it asked.
+    prompts = [];
+    await start();
+    await until(() => {
+      expect(open().size).toBe(1);
+    });
+    claude().exit(0);
+    await until(() => {
+      expect(open().size).toBe(0);
+    });
+    expect(prompts.at(-1)).toMatchObject({ type: 'prompt-ended', reason: 'withdrawn' });
+  });
+
+  it('withdraws what waits as the session closes', async () => {
+    const session = await start();
+    await session.send({ id: 'm1', text: 'ask to run the tests' });
+    await until(() => {
+      expect(open().size).toBe(1);
+    });
+    const [key] = onlyOpen();
+    await session.close();
+    expect(prompts.at(-1)).toEqual({ type: 'prompt-ended', key, reason: 'withdrawn' });
+  });
+
+  it('withdraws what its hooks told as its turn ends, without status reports', async () => {
+    fake.reports = false;
+    const session = await start();
+    const shown: TerminalEvent[] = [];
+    const hide = session.terminal?.show((event) => shown.push(event));
+    await session.send({ id: 'm1', text: 'ask to run the tests' });
+    await until(() => {
+      expect(open().size).toBe(1);
+    });
+    expect(onlyOpen()[1]).toMatchObject({ kind: 'approval', summary: 'echo hello' });
+    await until(() => {
+      expect(
+        shown.some(
+          (event) => event.type !== 'exit' && event.data.includes('Do you want to proceed?'),
+        ),
+      ).toBe(true);
+    });
+    session.terminal?.input('1');
+    await until(() => {
+      expect(last('end')).toBeDefined();
+    });
+    // Nothing said it was answered: only that the turn ended.
+    expect(endings()).toEqual(['Claude wants to use Bash:withdrawn']);
+    hide?.();
+  });
+
+  it('stops raising a wait the core settled as not waiting until a distinct one, changing nothing in the CLI', async () => {
+    const session = await start();
+    await session.send({ id: 'm1', text: 'slow work' });
+    await until(() => {
+      expect(claude().prompts).toEqual(['slow work']);
+    });
+    const blocked = `state=blocked:kind=question:msg=${btoa('answer: Which region?')}`;
+    claude().report(blocked);
+    await until(() => {
+      expect(open().size).toBe(1);
+    });
+    const [key] = onlyOpen();
+    const written = claude().written.length;
+    session.prompts?.dismiss?.(key);
+    // Its CLI is told nothing, and it still waits: the session's own readiness still holds sends,
+    // and what it lists for delivery and the watchdog stays.
+    expect(claude().written).toHaveLength(written);
+    claude().report(blocked);
+    await claude().hook('Notification', {
+      notification_type: 'elicitation_dialog',
+      message: 'shop-db needs your input',
+    });
+    await pause();
+    expect(raised()).toHaveLength(1);
+    expect(prompts.at(-1)).toMatchObject({ type: 'prompt' });
+    expect(last('asking')?.asks).toHaveLength(1);
+    expect(last('status')).toEqual({ type: 'status', status: 'waiting' });
+    await session.send({ id: 'm2', text: 'From the queue' });
+    await pause();
+    expect(claude().prompts).toEqual(['slow work']);
+
+    // A distinct wait: it goes on, then waits again.
+    claude().report('state=working');
+    claude().report(blocked);
+    await until(() => {
+      expect(raised()).toHaveLength(2);
+    });
+    // What the core settled stays settled: the session never ends it.
+    const fresh = [...open()].filter(([one]) => one !== key);
+    expect(fresh).toHaveLength(1);
+    const again = fresh[0]?.[0] ?? '';
+    // Dismissed again, then described by a hook: described, it is raised.
+    session.prompts?.dismiss?.(again);
+    await claude().hook('PermissionRequest', {
+      tool_name: 'Bash',
+      tool_input: { command: 'npm test' },
+    });
+    await until(() => {
+      expect(raised()).toHaveLength(3);
+    });
+    expect([...open()].filter(([one]) => one !== key && one !== again)).toEqual([
+      [expect.any(String), expect.objectContaining({ title: 'Claude wants to use Bash' })],
+    ]);
+    // Neither dismissed one was ended by the session: the core settled them.
+    expect(prompts.filter((event) => event.type === 'prompt-ended')).toEqual([]);
+  });
+
+  it('shows each as the events B13 replaces too, whose answers belong to its terminal, and answers none itself', async () => {
+    const session = await start();
+    // Installed before anything is raised.
+    expect(bridges).toHaveLength(1);
+    expect(bridges[0]?.before).toBe(0);
+    expect(() => bridges[0]?.translate('any', { kind: 'permission', answer: 'once' })).toThrow(
+      /terminal/,
+    );
+    await session.send({ id: 'm1', text: 'ask to run the tests' });
+    await until(() => {
+      expect(open().size).toBe(1);
+    });
+    const [key] = onlyOpen();
+    expect(() => session.prompts?.answer(key, { kind: 'choice', value: 'allow' })).toThrow(
+      /terminal/,
+    );
+    expect(last('asking')?.asks).toEqual([expect.objectContaining({ kind: 'permission' })]);
+    expect(claude().written.filter((keys) => keys === '1')).toEqual([]);
   });
 });

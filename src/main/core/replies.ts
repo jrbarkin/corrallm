@@ -52,7 +52,9 @@ export interface ReplyResult {
     | 'skipped'
     | 'stopped'
     | 'completed'
-    | 'retained';
+    | 'retained'
+    /** A terminal's wait you said isn't one (B13 C7's Not waiting): nothing is recorded. */
+    | 'dismissed';
   raised?: string;
 }
 

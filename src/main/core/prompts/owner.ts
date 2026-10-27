@@ -67,6 +67,12 @@ import { classify } from './classify';
  * - Answering never starts or resumes a session: it holds no way to.
  * - Who decided is recorded in the core's words from kind, subject type, hint and the agent's name
  *   (decisions.ts), never a title, label, command, path, plan, feedback, answer or value.
+ * - Not waiting (B13 §9.2 C7): a terminal's wait raised from its CLI's report alone (no subject,
+ *   choice, question or plan: no hook described it, nor is it the core's stand-in for one it
+ *   couldn't show) offers the core's own choice, yours alone. Replied to, it is settled dismissed
+ *   by you, at once and with no record, and its session is told to stop raising that observation
+ *   until a distinct wait (`PromptAnswers.dismiss`); its CLI is told nothing. Nothing else in a
+ *   terminal is answered here.
  *
  * Its Needs items (`items`) are yours, with their choices; a token's copy drops them (Needs'
  * `withoutChoices`), and a form's title is the core's, never the server's words, which may hold
@@ -116,7 +122,9 @@ type State =
   /** Being handed to its session: an end now is kept, and wins only if the session refuses. */
   | { at: 'handing'; by: PartyId; ended?: EndReason }
   | { at: 'ended'; reason: EndReason }
-  | { at: 'answered'; by: PartyId };
+  | { at: 'answered'; by: PartyId }
+  /** A terminal's wait said not to be one (B13 C7's Not waiting). */
+  | { at: 'dismissed'; by: PartyId };
 
 interface Occurrence {
   readonly canvas: CanvasId;
@@ -134,6 +142,8 @@ interface Occurrence {
    * B13 replaces too, whose Needs item stands for it (answered through `keyed`), so it isn't listed.
    */
   readonly mirrored: boolean;
+  /** The core's own stand-in for a terminal observation it couldn't show whole. */
+  readonly standIn: boolean;
   readonly bytes: number;
   state: State;
 }
@@ -141,7 +151,7 @@ interface Occurrence {
 /** How a prompt no longer live ended, kept to say so to a later reply. */
 interface Ended {
   agent: string;
-  reason: EndReason | 'answered';
+  reason: EndReason | 'answered' | 'dismissed';
   by?: PartyId;
 }
 
@@ -166,6 +176,14 @@ type Declined = keyof typeof DECLINED;
 
 /** The core's line in a prompt's reason when its adapter left out a choice it couldn't word. */
 const OMITTED = 'corrallm left out a choice its CLI offers, which it can’t show completely.';
+
+/** B13 C7's Not waiting: the core's own choice on a terminal's wait raised from its report alone. */
+const NOT_WAITING = 'not-waiting';
+const NOT_WAITING_CHOICE: NeedChoice = {
+  value: NOT_WAITING,
+  label: 'Not waiting',
+  humanOnly: 'Only you can tell, from its terminal, that its CLI isn’t waiting for you.',
+};
 
 /** What a decision's record calls a subject, by its type. */
 const SUBJECTS: Readonly<Record<string, string>> = {
@@ -212,13 +230,18 @@ export class PromptOwner implements PromptSink {
     if (terminal && key !== undefined && z.uuid().safeParse(key).success) {
       // Corrallm answers nothing in a terminal: what it can't show whole still waits, as the core
       // words it, for you to look at the terminal.
-      this.#admit(at, key, {
-        kind: 'approval',
-        title: `${this.#name(at.canvas, at.agent)}’s CLI waits for you in its terminal: look there to see what it asks.`,
-        answerIn: 'terminal',
-        choices: [],
-        cut: true,
-      });
+      this.#admit(
+        at,
+        key,
+        {
+          kind: 'approval',
+          title: `${this.#name(at.canvas, at.agent)}’s CLI waits for you in its terminal: look there to see what it asks.`,
+          answerIn: 'terminal',
+          choices: [],
+          cut: true,
+        },
+        true,
+      );
       return;
     }
     if (key !== undefined) {
@@ -307,6 +330,12 @@ export class PromptOwner implements PromptSink {
         `${to} is settled already: ${partyText(nodes, ended.by ?? 'you')} answered it.`,
       );
     }
+    if (ended.reason === 'dismissed') {
+      return new OpFailure(
+        'conflict',
+        `${to} is settled already: ${partyText(nodes, ended.by ?? 'you')} said ${nameOf(nodes, ended.agent)}’s CLI isn’t waiting.`,
+      );
+    }
     return new OpFailure('conflict', endedSentence(to, ended.reason, nameOf(nodes, ended.agent)));
   }
 
@@ -315,6 +344,7 @@ export class PromptOwner implements PromptSink {
     const occurrence = this.#resolve(canvas, to);
     if (occurrence === undefined) return `${to} isn’t open any more.`;
     try {
+      if (notWaiting(occurrence, answer)) return undefined;
       this.#check(occurrence, answer);
       return undefined;
     } catch (error) {
@@ -337,6 +367,8 @@ export class PromptOwner implements PromptSink {
         `Only the user may answer ${to}: ${needOf(occurrence, open.nodes).title}`,
       );
     }
+    // Not waiting, before a terminal's answers are refused: settled at once, nothing recorded.
+    if (notWaiting(occurrence, given)) return this.#dismiss(occurrence, ctx);
     const answer = this.#check(occurrence, given);
     const state = stateOf(occurrence);
     if (state.at !== 'open') {
@@ -417,9 +449,32 @@ export class PromptOwner implements PromptSink {
     return { id: record.id, outcome: 'answered' };
   }
 
+  /**
+   * Settles a terminal's wait raised from its report alone as not waiting (B13 C7), by `ctx`'s
+   * caller (you: checked before), at once, recording nothing; its session stops raising it.
+   */
+  #dismiss(occurrence: Occurrence, ctx: OpContext): ReplyResult {
+    const state = stateOf(occurrence);
+    if (state.at !== 'open') {
+      throw new OpFailure('conflict', `${occurrence.need} is being answered now.`);
+    }
+    ctx.noReturn();
+    occurrence.state = { at: 'dismissed', by: ctx.by };
+    this.#forget(occurrence, { agent: occurrence.agent, reason: 'dismissed', by: ctx.by });
+    try {
+      occurrence.answers.dismiss?.(occurrence.key);
+    } catch (error) {
+      console.error('A session couldn’t stop raising a wait said not to be one:', error);
+    }
+    return { outcome: 'dismissed' };
+  }
+
   /** The answer `given` as the prompt takes it, or an `invalid` failure saying what it takes. */
   #check(occurrence: Occurrence, given: unknown): PromptAnswer {
     const { prompt, need } = occurrence;
+    if (undescribed(occurrence) && picks(given, NOT_WAITING)) {
+      throw new OpFailure('invalid', `${need}: Not waiting takes no words.`);
+    }
     if (prompt.answerIn === 'terminal') {
       throw new OpFailure('invalid', `${need} is asked in its agent’s terminal: answer it there.`);
     }
@@ -438,7 +493,7 @@ export class PromptOwner implements PromptSink {
     }
   }
 
-  #admit(at: PromptOrigin, key: string, prompt: AdapterPrompt): void {
+  #admit(at: PromptOrigin, key: string, prompt: AdapterPrompt, standIn = false): void {
     const terminal = prompt.answerIn === 'terminal';
     const duplicate = this.#keys.get(keyOf(at, key));
     if (duplicate !== undefined) {
@@ -482,6 +537,7 @@ export class PromptOwner implements PromptSink {
       prompt: built,
       answers: at.answers,
       mirrored: at.mirrored === true,
+      standIn,
       bytes,
       state: { at: 'open' },
     };
@@ -666,9 +722,45 @@ function cutText(text: string, length: number): string {
   return text.slice(0, code >= 0xd800 && code <= 0xdbff ? length - 1 : length);
 }
 
+/**
+ * Whether an occurrence is a terminal's wait raised from its CLI's report alone (B13 C7): no
+ * subject, choice, question or plan (no hook described it, and it isn't the trust screen), and not
+ * the core's stand-in for an observation it couldn't show (which a hook may have described).
+ */
+function undescribed({ prompt, standIn }: Occurrence): boolean {
+  if (standIn || prompt.answerIn !== 'terminal') return false;
+  switch (prompt.kind) {
+    case 'approval':
+      return prompt.subject === undefined && prompt.choices.length === 0;
+    case 'question':
+      return prompt.questions.length === 0;
+    case 'plan':
+    case 'form':
+      return false;
+  }
+}
+
+/** Whether `given` picks the choice `value`, whatever else it holds. */
+function picks(given: unknown, value: string): boolean {
+  return (
+    given !== null && typeof given === 'object' && (given as { choice?: unknown }).choice === value
+  );
+}
+
+/** Whether `given` is Not waiting, as the occurrence takes it: that choice alone, where offered. */
+function notWaiting(occurrence: Occurrence, given: unknown): boolean {
+  return (
+    undescribed(occurrence) &&
+    picks(given, NOT_WAITING) &&
+    Object.keys(given as object).length === 1
+  );
+}
+
 /** An occurrence's Needs item, yours: generic fields only, the router's and Needs'. */
 function needOf(occurrence: Occurrence, nodes: readonly NodeLike[]): NeedsItem {
   const { prompt } = occurrence;
+  // The core's own choice, where it is offered.
+  const own = undescribed(occurrence) ? [NOT_WAITING_CHOICE] : [];
   const base = {
     id: occurrence.need,
     canvas: occurrence.canvas,
@@ -693,7 +785,12 @@ function needOf(occurrence: Occurrence, nodes: readonly NodeLike[]): NeedsItem {
         });
   switch (prompt.kind) {
     case 'approval':
-      return { ...base, title: prompt.title, ...detailOf(prompt.detail), choices: choices() };
+      return {
+        ...base,
+        title: prompt.title,
+        ...detailOf(prompt.detail),
+        choices: [...choices(), ...own],
+      };
     case 'plan':
       return { ...base, title: prompt.title, ...previewLines(prompt.plan), choices: choices() };
     case 'question':
@@ -701,7 +798,7 @@ function needOf(occurrence: Occurrence, nodes: readonly NodeLike[]): NeedsItem {
         ...base,
         title: prompt.title,
         ...detailOf(prompt.detail),
-        choices: [],
+        choices: own,
         questions: prompt.questions.map(
           ({ id, header, text, options, multiple, other }): NeedQuestion => ({
             id,

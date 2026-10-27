@@ -6,10 +6,10 @@ import type { FirstRunTurn } from '../terminal/first-run';
  * dialog, whose default is "No, exit"), in every process that starts before the user answers: so
  * several agents started at once in a new folder (as the queues' Run starts them) would each ask.
  * Instead one session starts first; the others wait until it is past its first-run dialogs (its
- * CLI reported its state, a hook posted, or its prompt showed: the folder is trusted), then all
- * start, and ask nothing. If it ends before that (the user picked "No, exit", or its agent went),
- * the next one waiting starts, and asks in its turn. Once one has got past, every later session in
- * the folder starts at once.
+ * CLI reported a state but that it is going, a hook posted, or its prompt showed: the folder is
+ * trusted), then all start, and ask nothing. If it ends before that (the user picked "No, exit",
+ * or its agent went), the next one waiting starts, and asks in its turn. Once one has got past,
+ * every later session in the folder starts at once.
  */
 
 interface Waiting {

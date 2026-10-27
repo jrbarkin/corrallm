@@ -299,6 +299,35 @@ describe('a prompt the core owns', () => {
     expect(await prompts(core)).toHaveLength(1);
   });
 
+  it('offers Not waiting on a terminal’s wait raised from its report alone, yours: never a token’s', async () => {
+    const waiting = {
+      kind: 'approval',
+      title: 'Claude Code is waiting for you.',
+      answerIn: 'terminal',
+      choices: [],
+    };
+    const native = raising([waiting]);
+    const core = await start(native.connector);
+    await ok(core, 'message', { to: 'b', body: 'Go on' });
+    const [asked] = await prompts(core);
+    expect(asked).toMatchObject({
+      title: 'Claude Code is waiting for you.',
+      answerIn: 'terminal',
+      choices: [
+        { value: 'not-waiting', label: 'Not waiting', humanOnly: expect.any(String) as string },
+      ],
+    });
+    const [seen] = await needsOf(core, ORCHESTRATOR);
+    expect(seen?.choices).toEqual([]);
+    for (const caller of [ORCHESTRATOR, REVIEWER]) {
+      expect(
+        await call(core, 'reply', { to: asked?.id, answer: { choice: 'not-waiting' } }, caller),
+      ).toMatchObject({ ok: false, error: { code: 'refused' } });
+    }
+    expect(await prompts(core)).toHaveLength(1);
+    expect(await records(core)).toEqual([]);
+  });
+
   it('is never answered once its session has ended, and answering starts no session', async () => {
     const native = raising([approval]);
     const started = vi.spyOn(native.connector, 'start');
