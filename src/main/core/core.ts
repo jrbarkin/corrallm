@@ -97,6 +97,7 @@ import { UsageProbe } from './usage-probe';
 import type { UsageRead } from './usage-probe';
 import { Children } from './children';
 import { StalledTurns } from './stalled';
+import { PromptOwner } from './prompts/owner';
 import type { WatchdogClock, WatchdogNetwork } from './stalled';
 import type { ChildSystem } from './children';
 import { openStore, STORE_FILE } from './store/open';
@@ -564,7 +565,36 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     readerOf,
   });
   const conversations = { ...createConversations(), ...config.sessions?.conversations };
-  const sessions = new SessionManager({
+  // The core's prompt owner (B13 C3): what each canvas's sessions raise, in its live index, and
+  // the one answer each takes, on the session that raised it.
+  const prompts: PromptOwner = new PromptOwner({
+    catalog: CATALOG,
+    canvas: (canvas) => {
+      const open = engines.canvas(canvas);
+      return open === undefined
+        ? undefined
+        : { messages: open.messages, nodes: open.document.nodes };
+    },
+    generationOf: (canvas, agent) => sessions.generationOf(canvas, agent),
+    changed: (canvas) => {
+      topics.changed(`needs:${canvas}`, 'corrallm');
+      engines.needsChanged(canvas);
+    },
+    // The core's own words in the agent's transcript, never CLI activity for the watchdog.
+    notice: (canvas, agent, connection, text) => {
+      engines
+        .emit(canvas, agent, connection, {
+          type: 'notice',
+          id: crypto.randomUUID(),
+          level: 'warning',
+          text,
+        })
+        .catch((error: unknown) => {
+          console.error('Could not tell why a prompt was declined:', error);
+        });
+    },
+  });
+  const sessions: SessionManager = new SessionManager({
     catalog: CATALOG,
     connectors:
       config.sessions?.connectors ??
@@ -616,6 +646,7 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
       stalled.ended(canvas, agent);
       engines.ended(canvas, agent);
     },
+    prompts,
     // A restore of a tree holds new work for the other agents working in it until it is done.
     gate: {
       onAvailability: (listener) => gate.subscribe(listener),
@@ -826,6 +857,7 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     const open = engines.canvas(canvas);
     return [
       ...(open ? needs(needsInput(open, config.locale)) : []),
+      ...prompts.items(canvas),
       ...proposals.items(canvas, reach),
       ...reviews.items(canvas),
       ...stalled.items(canvas),
@@ -890,6 +922,7 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     environment,
     ...(config.locale === undefined ? {} : { locale: config.locale }),
     needs: (canvas) => [
+      ...prompts.items(canvas),
       ...proposals.items(canvas),
       ...reviews.items(canvas),
       ...stalled.items(canvas),
@@ -1122,9 +1155,11 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
           setups,
           workspaceReplies: [changes.handler()],
           workspaceItems: (canvas) => changes.items(canvas),
+          prompts,
           replies: runReplies({
             engines,
             sessions,
+            prompts,
             ...(config.locale === undefined ? {} : { locale: config.locale }),
           }),
         }),

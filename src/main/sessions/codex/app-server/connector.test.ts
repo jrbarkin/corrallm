@@ -111,7 +111,7 @@ async function start(
       ...spec,
     },
     {
-      emit: (event) => events.push(event),
+      emit: (event: SessionEvent) => events.push(event),
       remember: (id) => remembered.push(id),
       activity,
     },
@@ -343,7 +343,7 @@ describe('the App Server connection', () => {
             mode: 'auto',
             resume: null,
           },
-          { emit: (event) => events.push(event), remember },
+          { emit: (event: SessionEvent) => events.push(event), remember },
         ),
       ).rejects.toThrow(why);
       expect(events).toEqual([

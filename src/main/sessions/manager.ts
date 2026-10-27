@@ -31,7 +31,7 @@ import {
   roleFingerprint,
   withConversationsIn,
 } from '../memory';
-import type { Connector, LiveSession, SessionHost } from './connector';
+import type { Connector, LiveSession, PromptAnswers, SessionHost } from './connector';
 import type { Conversations } from './adapter';
 import { ConversationClaims } from './claims';
 import type { ClaimOwner } from './claims';
@@ -68,6 +68,8 @@ const NOTHING_TO_REWIND = 'This conversation has nothing to rewind yet.';
 const NO_EFFORT = 'This agent’s effort is set in its terminal.';
 const NO_TASKS = 'This agent’s background tasks are stopped in its terminal.';
 const NO_OPTIONS = 'corrallm can’t read that agent’s settings.';
+const STARTING = 'This agent’s session is still starting: answer once it runs.';
+const UNHEARD = 'corrallm declined this request: nothing in corrallm hears what this session asks.';
 /** How long a session may take to close before the manager stops waiting for it. */
 const CLOSE_MS = 5000;
 /** How long a silent turn's interrupt waits for its CLI's answer before it counts as unanswered. */
@@ -87,6 +89,42 @@ export class ConversationRefusal extends Error {
     this.name = 'ConversationRefusal';
     this.code = code;
   }
+}
+
+/**
+ * Where the prompts sessions raise go (the core's prompt owner, core/prompts/owner.ts: B13 C3), each
+ * with the generation that raised it, whose session alone ever answers it.
+ */
+export interface PromptSink {
+  /** A session raised a prompt: `event` as its adapter gave it, which the sink checks. */
+  raised(at: PromptOrigin, event: unknown): void;
+  /** A session ended a prompt it raised (withdrawn, or answered in its terminal): `event` as given. */
+  ended(at: PromptOrigin, event: unknown): void;
+  /**
+   * A generation ended, whatever ended it (closed, replaced, stopped by itself, never started): its
+   * prompts end with it. Said once its close begins, and again if it stops by itself.
+   */
+  gone(canvas: CanvasId, agent: string, generation: number): void;
+}
+
+/** The generation a prompt event came from, as it was when the event came. */
+export interface PromptOrigin {
+  canvas: CanvasId;
+  agent: string;
+  connection: ConnectionId;
+  generation: number;
+  /** Whether it is the agent's session still, and heard: one replaced, closed or unheard isn't. */
+  live: boolean;
+  /**
+   * The mode the generation reported in its first `started`, captured once (null: none it knows);
+   * undefined until it reported one.
+   */
+  startMode: SessionMode | null | undefined;
+  /**
+   * Its session's answers, bound to this generation as the event came: never looked up again by
+   * canvas and agent, which a restart would give the replacement's.
+   */
+  answers: PromptAnswers;
 }
 
 export interface SessionManagerDeps {
@@ -142,6 +180,11 @@ export interface SessionManagerDeps {
   activity?: (canvas: CanvasId, agentId: string) => void;
   /** Intentional closes need not emit a session event, but end any turn's watchdog. */
   ended?: (canvas: CanvasId, agentId: string) => void;
+  /**
+   * The core's prompt owner, which hears every prompt a session raises or ends, and every
+   * generation's end. None: whatever a session raises is declined at once.
+   */
+  prompts?: PromptSink;
   /** Sends a terminal event to the view showing the canvas's agent's terminal. */
   terminal?: (canvas: CanvasId, agentId: string, event: TerminalEvent) => void;
   /** The live claims on native conversations (claims.ts): the core's one, else the manager's own. */
@@ -204,6 +247,10 @@ interface Agent {
   tasks?: number;
   /** Resolves with the session once it runs; rejects if it could not start. */
   session: Promise<LiveSession<SessionMode>>;
+  /** The session, once its start resolved: what the prompts it raised are answered on. */
+  live?: LiveSession<SessionMode>;
+  /** The mode it reported in its first `started`, captured once (B13 C4's effective start mode). */
+  started?: { mode: SessionMode | null };
 }
 
 /**
@@ -315,6 +362,8 @@ export class SessionManager {
         agents.delete(agentId);
         this.#deps.ended?.(canvas, agentId);
       }
+      // What it raised as it started ends with it.
+      this.#deps.prompts?.gone(canvas, agentId, agent.generation);
       throw error;
     }
     // A view waiting to show the agent's terminal shows this session's.
@@ -941,6 +990,35 @@ export class SessionManager {
     // A session replaced (by another connection, or after it closed), or installed for a binding
     // no longer active, is no longer heard.
     const live = () => current() && agent.unheard !== true;
+    // How the core answers what this generation raises: on this generation's own session, never
+    // one looked up again by canvas and agent (a restart's replacement), and none before it runs.
+    const answers: PromptAnswers = {
+      answer: (key, answer) => {
+        const prompts = agent.live?.prompts;
+        if (prompts === undefined) throw new Error(STARTING);
+        prompts.answer(key, answer);
+      },
+      decline: (key, why) => {
+        const decline = (session: LiveSession<SessionMode>) => {
+          try {
+            session.prompts?.decline(key, why);
+          } catch (error) {
+            console.error(`Could not decline ${agentId}'s prompt:`, error);
+          }
+        };
+        if (agent.live !== undefined) decline(agent.live);
+        else void agent.session.then(decline, () => undefined);
+      },
+    };
+    const origin = (): PromptOrigin => ({
+      canvas,
+      agent: agentId,
+      connection,
+      generation: agent.generation,
+      live: live(),
+      startMode: agent.started?.mode,
+      answers,
+    });
     try {
       const fingerprint = roleFingerprint(role);
       const roleChanged = remembered?.role !== fingerprint;
@@ -964,7 +1042,20 @@ export class SessionManager {
           if (live()) this.#deps.activity?.(canvas, agentId);
         },
         emit: (event) => {
+          // Prompts go to the core's prompt owner, with this generation, never to a window.
+          if (event.type === 'prompt') {
+            // With no owner to hear it, a request is declined (a terminal's observation, never).
+            if (this.#deps.prompts !== undefined) this.#deps.prompts.raised(origin(), event);
+            else if (event.prompt.answerIn !== 'terminal') answers.decline(event.key, UNHEARD);
+            if (live()) this.#deps.activity?.(canvas, agentId);
+            return;
+          }
+          if (event.type === 'prompt-ended') {
+            this.#deps.prompts?.ended(origin(), event);
+            return;
+          }
           if (!live()) return;
+          if (event.type === 'started') agent.started ??= { mode: event.mode };
           if (event.type === 'user' || event.type === 'status') agent.working = true;
           if (event.type === 'started' || event.type === 'end' || event.type === 'cleared')
             agent.working = false;
@@ -972,8 +1063,9 @@ export class SessionManager {
           if (event.type === 'cleared') agent.tasks = 0;
           if (event.type === 'closed') {
             this.#agents.get(canvas)?.delete(agentId);
-            // It stopped by itself: what it ran is no longer its.
+            // It stopped by itself: what it ran is no longer its, nor what it asked.
             this.#claims.release(owner);
+            this.#deps.prompts?.gone(canvas, agentId, agent.generation);
           }
           this.#deps.emit(canvas, agentId, connection, event);
         },
@@ -1026,6 +1118,7 @@ export class SessionManager {
         },
         host,
       );
+      agent.live = session;
       // Installed only for the binding it launched in (B9a Design §3): a late start for one no
       // longer active, or while a rebind waits, is closed and unheard.
       const now = await this.#deps.directories.workingDirectory(canvas, agentId as AgentId);
@@ -1262,6 +1355,9 @@ export class SessionManager {
       agents.delete(agentId);
       this.#deps.ended?.(canvas, agentId);
     }
+    // Its prompts end as its close begins: the session answers each still pending with its
+    // nonapproval as it closes, and none is answered meanwhile.
+    this.#deps.prompts?.gone(canvas, agentId, agent.generation);
     if (tell) this.#deps.emit(canvas, agentId, agent.connection, { type: 'closed' });
     let session: LiveSession<SessionMode>;
     try {
