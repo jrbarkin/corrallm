@@ -18,14 +18,14 @@ import type {
   McpChange,
   McpServer,
   PermissionMode,
-  PlanMode,
   SessionAnswer,
   SessionEvent,
   SlashCommand,
   UserMessage,
   TurnResult,
 } from '../../../../shared/session';
-import type { LiveSession, SessionHost } from '../../connector';
+import type { PromptAnswer } from '../../../../shared/model/prompts';
+import type { LiveSession, PromptAnswers, SessionHost } from '../../connector';
 import type { Inbox } from './inbox';
 import { mcpServer } from './mcp';
 import { displayPath } from './tools';
@@ -44,8 +44,6 @@ import type { Translator } from './translate';
 
 const CLAUDE_EFFORT_LEVELS = Object.keys(CLAUDE_EFFORTS) as EffortLevel[];
 
-/** How long after a plan is approved the CLI may take to leave plan mode, before the mode is set. */
-const PLAN_EXIT_MS = 1500;
 /** How long the session's last error output is kept, to say why it stopped. */
 const STDERR_CHARS = 4000;
 
@@ -112,8 +110,6 @@ export class SdkSession implements LiveSession {
   #interrupting = false;
   #closing = false;
   #sessionId: string | undefined;
-  /** The mode a plan just approved is to be carried out in, once the CLI has left plan mode. */
-  #afterPlan: { mode: PermissionMode; timer: ReturnType<typeof setTimeout> } | undefined;
   readonly #pump: Promise<void>;
 
   constructor({
@@ -192,13 +188,24 @@ export class SdkSession implements LiveSession {
     return undefined;
   }
 
-  answer(promptId: string, answer: SessionAnswer): Promise<void> {
-    try {
-      this.#prompts.answer(promptId, answer);
-      return Promise.resolve();
-    } catch (error) {
-      return Promise.reject(error instanceof Error ? error : new Error(String(error)));
-    }
+  /** What it asks is answered only through the core's prompt owner (`prompts`), never so. */
+  answer(): Promise<void> {
+    return Promise.reject(
+      new Error('Claude Code’s requests are answered only through corrallm’s prompts.'),
+    );
+  }
+
+  /** How the core answers and declines what it raised (B13 C4): the owner's accepted answers only. */
+  get prompts(): PromptAnswers {
+    return this.#prompts.answers;
+  }
+
+  /**
+   * Transitional (B13 C4, until X10; X11 removes it): the key of what an event B13 replaces shows,
+   * and the answer given to it as its prompt takes it, for the core's owner to answer.
+   */
+  bridge(promptId: string, answer: SessionAnswer): { key: string; answer: PromptAnswer } {
+    return this.#prompts.bridge(promptId, answer);
   }
 
   async interrupt(): Promise<void> {
@@ -284,22 +291,10 @@ export class SdkSession implements LiveSession {
 
   async close(): Promise<void> {
     this.#closing = true;
-    if (this.#afterPlan) clearTimeout(this.#afterPlan.timer);
     this.#prompts.withdrawAll();
     this.#inbox.end();
     this.#query.close();
     await this.#pump;
-  }
-
-  /** A plan was approved: once the CLI leaves plan mode, the session goes on in `mode`. */
-  planApproved(mode: PlanMode): void {
-    const wanted: PermissionMode = mode;
-    if (this.#afterPlan) clearTimeout(this.#afterPlan.timer);
-    // In case the CLI never says it left plan mode.
-    const timer = setTimeout(() => {
-      this.#leavePlan(undefined);
-    }, PLAN_EXIT_MS);
-    this.#afterPlan = { mode: wanted, timer };
   }
 
   /** The slash commands it offers, as the composer completes them. */
@@ -331,7 +326,6 @@ export class SdkSession implements LiveSession {
     } finally {
       this.#closing = true;
       this.#prompts.withdrawAll();
-      if (this.#afterPlan) clearTimeout(this.#afterPlan.timer);
     }
   }
 
@@ -354,34 +348,7 @@ export class SdkSession implements LiveSession {
         this.#mode = event.mode;
       this.#host.emit(event);
     }
-    if (
-      this.#afterPlan &&
-      message.type === 'system' &&
-      message.subtype === 'status' &&
-      message.permissionMode !== undefined &&
-      message.permissionMode !== 'plan'
-    ) {
-      this.#leavePlan(message.permissionMode);
-    }
     if (message.type === 'result') this.#result(message);
-  }
-
-  /** The CLI left plan mode (for `reported`): the session goes on in the mode the plan was approved in. */
-  #leavePlan(reported: string | undefined): void {
-    const after = this.#afterPlan;
-    if (!after) return;
-    clearTimeout(after.timer);
-    this.#afterPlan = undefined;
-    const mode = sdkMode(after.mode);
-    if (reported === mode) return;
-    this.#query.setPermissionMode(mode).catch((error: unknown) => {
-      this.#host.emit({
-        type: 'notice',
-        id: randomUUID(),
-        level: 'warning',
-        text: `Could not switch to ${after.mode} mode: ${stopped(error, this.#stderr)}`,
-      });
-    });
   }
 
   /** A turn ended: the messages it answered (the CLI names them) end with it. */

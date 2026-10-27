@@ -305,3 +305,45 @@ describe('prompts a session raises', () => {
     await sessionManager.closeCanvas(canvas);
   });
 });
+
+describe('prompts a session also shows as the events B13 replaces (B13 C4, until X10)', () => {
+  it('are raised marked so, and an old event’s answer is translated by the session that raised it', async () => {
+    const { connector, sessions } = raising();
+    const sessionManager = manager({ 'claude-code.sdk': connector });
+    const canvas = newCanvasId();
+    await sessionManager.start(canvas, 'b', SDK);
+    const session = at(0, sessions);
+    // Without a twin, nothing is translated and nothing is marked.
+    session.host.emit({ type: 'prompt', key: KEY, prompt: PROMPT as never });
+    expect(raised[0]?.[0]).not.toHaveProperty('mirrored');
+    expect(
+      sessionManager.bridge(canvas, 'b', 'old', { kind: 'permission', answer: 'once' }),
+    ).toBeUndefined();
+
+    const bridge = vi.fn((id: string) => {
+      if (id !== 'old') throw new Error('That request is no longer asked.');
+      return { key: KEY, answer: { kind: 'choice' as const, value: 'yes' } };
+    });
+    Object.assign(session, { bridge });
+    session.host.emit({ type: 'prompt', key: crypto.randomUUID(), prompt: PROMPT as never });
+    expect(raised[1]?.[0]).toMatchObject({ mirrored: true });
+    expect(
+      sessionManager.bridge(canvas, 'b', 'old', { kind: 'permission', answer: 'once' }),
+    ).toEqual({
+      generation: sessionManager.generationOf(canvas, 'b'),
+      key: KEY,
+      answer: { kind: 'choice', value: 'yes' },
+    });
+    expect(() =>
+      sessionManager.bridge(canvas, 'b', 'gone', { kind: 'permission', answer: 'once' }),
+    ).toThrow(/no longer asked/);
+    // Translating answers nothing: only the owner, by the key, does.
+    expect(session.answered).toEqual([]);
+    // No session runs: nothing is translated, and none is started.
+    expect(
+      sessionManager.bridge(canvas, 'c', 'old', { kind: 'permission', answer: 'once' }),
+    ).toBeUndefined();
+    expect(sessions).toHaveLength(1);
+    await sessionManager.closeCanvas(canvas);
+  });
+});
