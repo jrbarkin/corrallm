@@ -329,6 +329,17 @@ describe('main’s files', () => {
     expect(loadedBy('src/main/index.ts').filter((file) => stores.includes(file))).toEqual([]);
   });
 
+  it('make a temporary index only in the merge service’s private folder, and point Git at no other', () => {
+    // B9b §9 C6: GIT_INDEX_FILE is set only to a path made there, never from a caller's string.
+    const minting = mainFiles().filter((file) => /\bas TemporaryIndex\b/.test(read(file)));
+    expect(minting).toEqual(['src/main/core/workspaces/merge-index.ts']);
+    const index = read('src/main/core/workspaces/merge-index.ts');
+    expect(index.match(/\bas TemporaryIndex\b/g)).toHaveLength(1);
+    expect(mainFiles().filter((file) => /GIT_INDEX_FILE\s*[:=]/.test(read(file)))).toEqual([
+      'src/main/core/workspaces/git.ts',
+    ]);
+  });
+
   it('mint trusted paths only from the host’s dialog answers in the core, the stores reading back what they wrote, and verified workspace checkouts', () => {
     const minting = mainFiles().filter((file) => read(file).includes('mintTrustedPath('));
     expect(minting.sort()).toEqual([

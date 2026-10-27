@@ -58,6 +58,7 @@ const ELSEWHERE: OutsideCaller = {
   token: 'elsewhere-token',
   name: 'elsewhere',
   access: 'read',
+  merge: false,
   canvases: [OTHER_CANVAS],
 };
 const PARTIES: Readonly<Record<Party, Caller>> = {

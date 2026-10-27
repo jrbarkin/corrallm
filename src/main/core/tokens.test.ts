@@ -114,6 +114,72 @@ describe('TokenStore', () => {
     expect(tokens.clientOf('')).toBeUndefined();
   });
 
+  it('makes a token that writes but can’t merge (--no-merge): kept as its own access, an outside writer that may not merge', async () => {
+    const tokens = await store();
+    const token = await tokens.create({
+      name: 'builder',
+      canvases: [M1],
+      access: 'write-no-merge',
+    });
+    const write = await tokens.create({ name: 'orchestrator', canvases: [M1], access: 'write' });
+    const read = await tokens.create({ name: 'watcher', canvases: [M1], access: 'read' });
+    // Its party is a writer's (outside-write); only merging is withheld.
+    expect(tokens.clientOf(token)).toMatchObject({ access: 'write', merge: false });
+    expect(tokens.clientOf(write)).toMatchObject({ access: 'write', merge: true });
+    expect(tokens.clientOf(read)).toMatchObject({ access: 'read', merge: false });
+    expect(tokens.grant('builder')?.access).toBe('write-no-merge');
+    // The restriction is the access itself, never a field beside 'write' an older corrallm would
+    // keep without reading, and so widen.
+    await tokens.flush();
+    const kept = JSON.parse(await readFile(file, 'utf8')) as {
+      tokens: Record<string, Record<string, unknown>>;
+    };
+    expect(kept.tokens[sha256(token)]).toEqual({
+      id: expect.any(String) as unknown,
+      name: 'builder',
+      canvases: [M1],
+      access: 'write-no-merge',
+      expires: now + HOUR,
+      lastUsed: now,
+    });
+    // Across a restart, as it was made.
+    expect((await store()).clientOf(token)).toMatchObject({
+      name: 'builder',
+      access: 'write',
+      merge: false,
+    });
+  });
+
+  it('reads an access it doesn’t know as no token, never a writer, and drops it: as an older corrallm reads write-no-merge', async () => {
+    // A corrallm from before --no-merge knows only read and write: write-no-merge is to it what
+    // an access from after this one (here write-no-push) is to this one.
+    const entry = (access: string) => ({
+      id: 'a',
+      name: 'builder',
+      canvases: [M1],
+      access,
+      expires: now + HOUR,
+    });
+    await writeFile(
+      file,
+      JSON.stringify({
+        version: 2,
+        tokens: { [sha256('x')]: entry('write-no-push'), [sha256('y')]: entry('write') },
+      }),
+    );
+    const tokens = await store();
+    expect(tokens.clientOf('x')).toBeUndefined();
+    expect(tokens.grant('builder')?.access).toBe('write');
+    expect(tokens.stale('x')).toBe(false);
+    // Dropped as the store is written again: a person makes a new one.
+    await tokens.create({ name: 'other', canvases: [M1], access: 'read' });
+    const written = JSON.parse(await readFile(file, 'utf8')) as {
+      tokens: Record<string, unknown>;
+    };
+    expect(written.tokens[sha256('x')]).toBeUndefined();
+    expect(written.tokens[sha256('y')]).toMatchObject({ access: 'write' });
+  });
+
   it('keeps tokens across restarts, until they expire: an hour by default, at most 12', async () => {
     const first = await store();
     const hour = await first.create({ name: 'quick', canvases: [M1], access: 'write' });
@@ -342,6 +408,7 @@ describe('TokenStore', () => {
       token: 'a',
       name: 'ok',
       access: 'write',
+      merge: true,
       canvases: [M1],
     });
   });
@@ -432,6 +499,20 @@ describe('TokenStore: renewing and revoking by name', () => {
     expect(tokens.clientOf(again ?? '')?.name).toBe('orchestrator');
     const kept = await readFile(file, 'utf8');
     for (const value of [old, renewed, again]) expect(kept).not.toContain(value);
+  });
+
+  it('renews a token made with --no-merge as one: it still can’t merge', async () => {
+    const tokens = await store();
+    await tokens.create({ name: 'builder', canvases: [M1], access: 'write-no-merge' });
+    const renewed = await tokens.renew('builder', 3);
+    expect(tokens.grant('builder')).toEqual({
+      name: 'builder',
+      canvases: [M1],
+      access: 'write-no-merge',
+      expires: now + 3 * HOUR,
+    });
+    expect(tokens.clientOf(renewed ?? '')).toMatchObject({ access: 'write', merge: false });
+    expect((await store()).grant('builder')?.access).toBe('write-no-merge');
   });
 
   it('renews no token of a name that has none live: never made, expired or revoked', async () => {

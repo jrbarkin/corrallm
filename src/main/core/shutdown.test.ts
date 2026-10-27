@@ -31,6 +31,7 @@ const OUTSIDE: OutsideCaller = {
   token: 'write-token',
   name: 'orchestrator',
   access: 'write',
+  merge: true,
   canvases: [CANVAS],
 };
 const QUITTING = 'corrallm is quitting: try again once it is open again.';

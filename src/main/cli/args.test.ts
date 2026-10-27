@@ -58,6 +58,10 @@ describe('parseCommand', () => {
         '--read-only',
       ]),
     ).toMatchObject({ newToken: { name: 'watcher', hours: 12, access: 'read' } });
+    // Q30: read-write, but merging no agent's branch.
+    expect(
+      parseCommand(['serve', '--canvas', 'm1.corral', '--new-token', '--no-merge']),
+    ).toMatchObject({ newToken: { name: 'orchestrator', hours: 1, access: 'write-no-merge' } });
   });
 
   it('refuses what serve doesn’t take, saying why', () => {
@@ -71,6 +75,11 @@ describe('parseCommand', () => {
     refused(['serve', '--canvas', 'm1.corral', '--name', 'x'], /--new-token/);
     refused(['serve', '--canvas', 'm1.corral', '--hours', '2'], /--new-token/);
     refused(['serve', '--canvas', 'm1.corral', '--read-only'], /--new-token/);
+    refused(['serve', '--canvas', 'm1.corral', '--no-merge'], /--new-token/);
+    refused(
+      ['serve', '--canvas', 'm1.corral', '--new-token', '--read-only', '--no-merge'],
+      /a read-only token can’t merge already/,
+    );
     for (const hours of ['0', '13', '1.5', 'two']) {
       refused(['serve', '--canvas', 'm1.corral', '--new-token', '--hours', hours], /1 to 12/);
     }
@@ -135,6 +144,14 @@ describe('parseCommand', () => {
       into: '/home/me/My Tokens/corrallm',
       profile: '/p',
     });
+    expect(parseCommand(['token', 'new', '--canvas', 'm1.corral', '--no-merge'])).toEqual({
+      command: 'token',
+      action: 'new',
+      name: 'orchestrator',
+      hours: 1,
+      access: 'write-no-merge',
+      canvases: ['m1.corral'],
+    });
     expect(parseCommand(['token', 'renew'])).toEqual({
       command: 'token',
       action: 'renew',
@@ -173,6 +190,12 @@ describe('parseCommand', () => {
     // A renewal reaches what the token did: another reach is a new token.
     refused(['token', 'renew', '--canvas', 'a.corral'], /renew keeps/);
     refused(['token', 'renew', '--read-only'], /renew keeps/);
+    refused(['token', 'renew', '--no-merge'], /renew keeps/);
+    refused(
+      ['token', 'new', '--canvas', 'a.corral', '--read-only', '--no-merge'],
+      /a read-only token can’t merge already/,
+    );
+    refused(['token', 'revoke', '--no-merge'], /--no-merge/);
     refused(['token', 'revoke', '--hours', '2'], /--hours/);
     refused(['token', 'revoke', '--into', 'f'], /--into/);
     for (const hours of ['0', '13', '1.5', 'two']) {

@@ -267,6 +267,20 @@ describe.skipIf(process.platform === 'win32')('the token socket', () => {
     expect(asked).toBe(0);
   });
 
+  it('carries a token made with --no-merge both ways, as its own access', async () => {
+    const asked: TokenRequest[] = [];
+    await serve((request) => {
+      asked.push(request);
+      return Promise.resolve({ ...made(request), access: 'write-no-merge' });
+    });
+    const request: TokenRequest = { ...NEW, access: 'write-no-merge' };
+    expect(await askTokenOwner(profile, request)).toEqual({
+      ...made(request),
+      access: 'write-no-merge',
+    });
+    expect(asked).toEqual([request]);
+  });
+
   it('answers a refusal its owner gives, and the sentence of what failed', async () => {
     await serve((request) =>
       request.op === 'revoke'

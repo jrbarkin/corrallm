@@ -138,6 +138,7 @@ describe('the core runs each canvas’s engine', () => {
           token: 'write-token',
           name: 'orchestrator',
           access: 'write',
+          merge: true,
           canvases: [CANVAS],
         },
       );
