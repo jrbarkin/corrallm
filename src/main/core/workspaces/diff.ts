@@ -27,7 +27,7 @@ import { GitError, MERGE_TIMEOUT_MS } from './git';
 import type { CappedOutput, GitCall, GitRunner } from './git';
 import { sharing } from './list';
 import type { Viewer, WorktreeListing } from './list';
-import { statusEntries } from './merge-checks';
+import { statusEntries, WORKTREE_READ_CONFIG } from './merge-checks';
 import { findDestination, gitRefusal, selectSource } from './merge-select';
 import type { DestinationSeen, MergeRefusal } from './merge-select';
 import type { WorkspaceStore } from './store';
@@ -193,11 +193,12 @@ async function readPage(
   const source = selected.value;
   const { workspace, tip } = source;
   const base = workspace.baseOid;
-  const call: Pick<GitCall, 'cwd' | 'drivers' | 'noReplaceObjects' | 'timeoutMs'> = {
+  const call: Pick<GitCall, 'cwd' | 'drivers' | 'noReplaceObjects' | 'timeoutMs' | 'config'> = {
     cwd: source.cwd,
     drivers: source.drivers,
     noReplaceObjects: true,
     timeoutMs: MERGE_TIMEOUT_MS,
+    config: WORKTREE_READ_CONFIG,
   };
   try {
     const kept = await git.run({
@@ -312,7 +313,7 @@ async function readPage(
 /** The committed entries from `base` to `tip`: at most 10,000 listed, every one counted. */
 async function listCommitted(
   git: GitRunner,
-  call: Pick<GitCall, 'cwd' | 'drivers' | 'noReplaceObjects' | 'timeoutMs'>,
+  call: Pick<GitCall, 'cwd' | 'drivers' | 'noReplaceObjects' | 'timeoutMs' | 'config'>,
   { base, tip }: { base: string; tip: string },
 ): Promise<{ entries: Entry[]; total: number; complete: boolean } | undefined> {
   const read = await git.patch({
@@ -379,7 +380,7 @@ async function listCommitted(
 /** An entry with its patch, as its page shows it. */
 async function withPatch(
   git: GitRunner,
-  call: Pick<GitCall, 'cwd' | 'drivers' | 'noReplaceObjects' | 'timeoutMs'>,
+  call: Pick<GitCall, 'cwd' | 'drivers' | 'noReplaceObjects' | 'timeoutMs' | 'config'>,
   { file, read }: Entry,
   { base, tip, cwd }: { base: string; tip: string; cwd: string },
 ): Promise<BranchFile> {
@@ -477,7 +478,7 @@ function readUntracked(
  */
 async function worktreeState(
   git: GitRunner,
-  call: Pick<GitCall, 'cwd' | 'drivers' | 'noReplaceObjects' | 'timeoutMs'>,
+  call: Pick<GitCall, 'cwd' | 'drivers' | 'noReplaceObjects' | 'timeoutMs' | 'config'>,
 ): Promise<string> {
   const head = await git.run({
     ...call,
