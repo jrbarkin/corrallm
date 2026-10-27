@@ -560,10 +560,25 @@ export const MIGRATIONS: readonly Migration[] = [
       CREATE INDEX merge_job_by_workspace ON merge_job (workspace_id, created_at);
     `,
   },
+  {
+    // B13's (B13 Design §9.2 C9): what a record of a native prompt's decision decided, typed and
+    // value-free, beside its words. A column only, so it keeps the oldest schema that may read the
+    // database as the migration before it left it: that corrallm still reads and writes its own
+    // columns (each by name), leaving this one as it is. Number 6 is B11a's, which lands first.
+    version: 7,
+    minReader: 5,
+    sql: `
+      -- A settled record's decision, for a prompt the core owned: its Needs item, the prompt's id,
+      -- kind and subject's type, and what was chosen (a choice's value and hint, how many questions
+      -- were answered, a form's action), never a label, a title, a command, a path, a plan, words
+      -- or a value given. None for every other message.
+      ALTER TABLE message ADD COLUMN settled TEXT CHECK (settled IS NULL OR json_valid(settled));
+    `,
+  },
 ];
 
-/** The schema this code makes and reads. */
-export const SCHEMA = MIGRATIONS.length;
+/** The schema this code makes and reads: the last migration's. */
+export const SCHEMA = MIGRATIONS.at(-1)?.version ?? 0;
 
 /**
  * The tables whose rows are numbered with places never given again (AUTOINCREMENT), which cursors

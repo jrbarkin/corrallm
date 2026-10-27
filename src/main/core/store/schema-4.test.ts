@@ -36,7 +36,7 @@ import { madeAtSchema, openTestStore, readOnDisk, refuseWrites } from './test-st
 /** No timers: nothing checkpoints or takes a snapshot while a test compares the database. */
 const QUIET: StoreDeps = { ...SYSTEM_DEPS, later: () => () => undefined };
 /** The schema a profile is migrated to as it opens, and the oldest that may open it then. */
-const LATEST = { version: SCHEMA, minReader: SCHEMA };
+const LATEST = { version: SCHEMA, minReader: MIGRATIONS.at(-1)?.minReader };
 
 type Row = Record<string, unknown>;
 interface Fixture {
@@ -176,7 +176,10 @@ const legacy = (canvas: CanvasId) => {
 const submissionsOf = (canvas: CanvasId) =>
   decodeSubmissions(JSON.stringify(legacy(canvas).messages));
 
-/** The message rows the fixture has, as migration 4 classifies each by what made it. */
+/**
+ * The message rows the fixture has, as migration 4 classifies each by what made it (and migration
+ * 6 leaves them: no settled decision).
+ */
 function classified(): Row[] {
   return (FIXTURE.tables.message ?? []).map((row) => {
     const replyTo = row.reply_to as string | null;
@@ -190,6 +193,7 @@ function classified(): Row[] {
       reply_to: resend ? null : replyTo,
       resend_of: resend ? replyTo : null,
       told: resend ? null : row.told,
+      settled: null,
     };
   });
 }

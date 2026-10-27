@@ -94,7 +94,14 @@ export async function dump(file: string, print: (line: string) => Promise<void>)
       await print(
         JSON.stringify({
           type: 'message',
-          data: jsonColumns(message, ['display', 'task', 'turn', 'delivery', 'withdrawal']),
+          data: jsonColumns(message, [
+            'display',
+            'task',
+            'turn',
+            'delivery',
+            'withdrawal',
+            'settled',
+          ]),
         }),
       );
     }

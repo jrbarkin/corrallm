@@ -303,13 +303,13 @@ describe('the schema', () => {
     });
   });
 
-  it('numbers migrations one by one, never lowering the oldest schema that may read them', () => {
+  it('numbers migrations in order, never lowering the oldest schema that may read them', () => {
     MIGRATIONS.forEach((migration, i) => {
-      expect(migration.version).toBe(i + 1);
+      expect(migration.version).toBeGreaterThan(MIGRATIONS[i - 1]?.version ?? 0);
       expect(migration.minReader).toBeLessThanOrEqual(migration.version);
       expect(migration.minReader).toBeGreaterThanOrEqual(MIGRATIONS[i - 1]?.minReader ?? 1);
     });
-    expect(SCHEMA).toBe(MIGRATIONS.length);
+    expect(SCHEMA).toBe(MIGRATIONS.at(-1)?.version);
   });
 
   it('keeps nothing of a migration that fails, nor its version, but the ones before it', () => {
@@ -1136,7 +1136,7 @@ describe('migration 4', () => {
     });
     journal3(broken, BROKEN);
 
-    migrate(connection);
+    migrate(connection, MIGRATIONS.slice(0, 4));
 
     expect(stateOf()).toEqual({ format: 3, run: SAVED_RUN });
     expect(stateOf(OTHER)).toEqual({ format: 3, run: SAVED_RUN, saveError: 'Too large' });
@@ -1499,12 +1499,61 @@ describe('migration 5', () => {
     const rowsOf = (table: string) => connection.prepare(`SELECT * FROM ${table}`).all();
     const before = Object.fromEntries(kept.map((table) => [table, rowsOf(table)]));
 
-    migrate(connection);
+    migrate(connection, MIGRATIONS.slice(0, 5));
 
     expect(schemaOf(connection)).toBe(5);
     expect(minReaderOf(connection)).toBe(5);
     expect(Object.fromEntries(kept.map((table) => [table, rowsOf(table)]))).toEqual(before);
     expect(count('merge_job')).toBe(0);
     addMergeJob(MERGE_JOB);
+  });
+});
+
+/** A native prompt's decision, value-free, as the owner records it (B13 §9.2 C9). */
+const SETTLED = JSON.stringify({
+  v: 1,
+  need: 'prompt/a/1/0f1e2d3c-4b5a-4968-8776-655443322110',
+  prompt: { id: '0f1e2d3c-4b5a-4968-8776-655443322110', kind: 'approval', subject: 'command' },
+  outcome: { type: 'choice', value: 'yes', hint: 'allow_once' },
+});
+
+describe('schema 7: a message’s settled decision', () => {
+  beforeEach(() => {
+    migrate(connection);
+    connection.exec('PRAGMA foreign_keys = ON');
+    addCanvas();
+  });
+
+  it('keeps a record’s settled decision as valid JSON, or none', () => {
+    const seq = addMessage('record');
+    const settle = connection.prepare('UPDATE message SET settled = ? WHERE seq = ?');
+    settle.run(SETTLED, seq);
+    expect(connection.prepare('SELECT settled FROM message WHERE seq = ?').get(seq)).toEqual({
+      settled: SETTLED,
+    });
+    settle.run(null, seq);
+    expect(() => settle.run('not JSON', seq)).toThrow(/CHECK constraint failed/);
+  });
+});
+
+describe('migration 7', () => {
+  it('adds a settled decision to every message of the schema before it, keeping every row, and the oldest schema that may read them', () => {
+    const before7 = MIGRATIONS.filter(({ version }) => version < 7);
+    migrate(connection, before7);
+    connection.exec('PRAGMA foreign_keys = ON');
+    addCanvas();
+    addMessage('kept');
+    const before = connection.prepare('SELECT * FROM message').all();
+    const reader = minReaderOf(connection);
+
+    migrate(connection);
+
+    expect(schemaOf(connection)).toBe(7);
+    // A column only: a corrallm of the schema before still reads and writes its own columns.
+    expect(reader).toBe(before7.at(-1)?.minReader);
+    expect(minReaderOf(connection)).toBe(reader);
+    expect(connection.prepare('SELECT * FROM message').all()).toEqual(
+      before.map((row) => ({ ...row, settled: null })),
+    );
   });
 });
