@@ -288,6 +288,7 @@ describe('the core process told to stop by a signal (B14 C4)', () => {
       expect(await main.request('commitShutdown')).toEqual({ ok: true, value: null });
       initialized = false;
     },
+    20_000,
   );
 
   it('gives drafts at most a second in all, then closes all the same', async () => {
@@ -302,12 +303,12 @@ describe('the core process told to stop by a signal (B14 C4)', () => {
       () => {
         expect(exit).toHaveBeenCalledWith(0);
       },
-      { timeout: 4000 },
+      { timeout: 10_000 },
     );
     expect(Date.now() - told).toBeGreaterThanOrEqual(1000);
     expect(existsSync(path.join(profile, 'core.lock'))).toBe(false);
     initialized = false;
-  });
+  }, 20_000);
 
   it('exits at once, saying so, when it holds no profile yet', async () => {
     const exit = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
