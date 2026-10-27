@@ -57,7 +57,7 @@ export type Fallback = z.infer<typeof FallbackSchema>;
 
 /** The endpoint an agent's document names, without resolving native defaults or starting it. */
 export function endpointOf(
-  agent: AgentData,
+  agent: Pick<AgentData, 'adapter' | 'connection' | 'settings'>,
   catalog: Catalog,
   defaultAdapter: string,
 ): FallbackStep | undefined {
@@ -81,11 +81,7 @@ export function parseFallback(value: unknown, catalog: Catalog, own?: FallbackSt
   const to = input.to.map((step): FallbackStep => {
     const adapter = adapterIn(catalog, step.adapter);
     const connection = step.connection ?? adapter?.connections[0]?.id;
-    if (
-      adapter === undefined ||
-      connection === undefined ||
-      !adapter.connections.some((one) => one.id === connection)
-    )
+    if (connection === undefined || !adapter?.connections.some((one) => one.id === connection))
       throw new TypeError('A fallback step must name an available adapter and its connection');
     return { ...step, connection };
   });
@@ -100,8 +96,7 @@ export function parseFallback(value: unknown, catalog: Catalog, own?: FallbackSt
 
 export function sameStep(a: FallbackStep, b: FallbackStep | undefined): boolean {
   return (
-    b !== undefined &&
-    a.adapter === b.adapter &&
+    a.adapter === b?.adapter &&
     a.connection === b.connection &&
     a.model === b.model &&
     a.effort === b.effort
@@ -201,24 +196,29 @@ export interface FallbackHeld {
 }
 export interface FallbackPassed {
   step: FallbackStep;
-  why: 'unavailable' | FallbackHeld['why'];
+  why: 'already-on' | 'unavailable' | FallbackHeld['why'];
   resetsAt?: number | null;
 }
 export type FallbackNext =
   { step: FallbackStep; passed: FallbackPassed[] } | { none: FallbackPassed[] };
 
-/** Only the suffix after on.step, then on.from once. Admission and returns are C's decisions. */
+/** The caller resolves the current adapter/connection. Only the suffix, then on.from once. */
 export function next(
-  agent: Pick<AgentData, 'fallback'>,
+  agent: Pick<AgentData, 'fallback' | 'settings'> & Pick<FallbackStep, 'adapter' | 'connection'>,
   catalog: Catalog,
   held: ReadonlyMap<UsageBackendId, FallbackHeld>,
 ): FallbackNext {
   if (agent.fallback === undefined) return { none: [] };
   const fallback = FallbackSchema.parse(agent.fallback);
+  const current = endpointOf(agent, catalog, agent.adapter);
   const candidates = fallback.to.slice(fallback.on === undefined ? 0 : fallback.on.step + 1);
   if (fallback.on !== undefined) candidates.push(fallback.on.from);
   const passed: FallbackPassed[] = [];
   for (const step of candidates) {
+    if (sameStep(step, current)) {
+      passed.push({ step, why: 'already-on' });
+      continue;
+    }
     const connection = adapterIn(catalog, step.adapter)?.connections.find(
       (one) => one.id === step.connection,
     );
@@ -244,7 +244,11 @@ export function resolveAction(
 ): { action: string } | { unknown: true } {
   const target = adapterIn(catalog, adapter);
   if (target?.actions.some((one) => one.name === action)) return { action };
-  const jobs = new Set(catalog.adapters.flatMap((one) => one.actions.filter((declared) => declared.name === action).map((declared) => declared.job)));
+  const jobs = new Set(
+    catalog.adapters.flatMap((one) =>
+      one.actions.filter((declared) => declared.name === action).map((declared) => declared.job),
+    ),
+  );
   if (jobs.size !== 1 || jobs.has(undefined)) return { unknown: true };
   const [job] = jobs;
   const equivalent = target?.actions.find((one) => one.job === job);

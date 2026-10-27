@@ -98,7 +98,9 @@ describe('fallback contracts', () => {
 describe('handoff settings and reported tokens', () => {
   it.each([{}, { off: true }, { at: 10 }, { at: 95, file: 'notes/My handoff.md' }])(
     'keeps bounded settings %j',
-    (value) => expect(HandoffSettingsSchema.parse(value)).toEqual(value),
+    (value) => {
+      expect(HandoffSettingsSchema.parse(value)).toEqual(value);
+    },
   );
 
   it.each([
@@ -135,8 +137,8 @@ describe('handoff settings and reported tokens', () => {
 
 describe('the bounded forward walk', () => {
   it('starts at the first next step, never inventing a chain or spending a backend with none', () => {
-    expect(next({}, catalog, new Map())).toEqual({ none: [] });
-    expect(next({ fallback: { to: [free] } }, catalog, new Map())).toEqual({
+    expect(next(own, catalog, new Map())).toEqual({ none: [] });
+    expect(next({ ...own, fallback: { to: [free] } }, catalog, new Map())).toEqual({
       step: free,
       passed: [],
     });
@@ -150,7 +152,7 @@ describe('the bounded forward walk', () => {
       on: { step: 0, from: own, why: 'usage-limit', at: 1 },
     };
     const held = new Map([['quill', { why: 'usage-limit' as const, resetsAt: 2000 }]]);
-    expect(next({ fallback }, catalog, held)).toEqual({
+    expect(next({ ...free, fallback }, catalog, held)).toEqual({
       step: own,
       passed: [
         { step: missing, why: 'unavailable' },
@@ -158,7 +160,7 @@ describe('the bounded forward walk', () => {
       ],
     });
     held.set('zed', { why: 'usage-limit', resetsAt: 3000 });
-    expect(next({ fallback }, catalog, held)).toEqual({
+    expect(next({ ...free, fallback }, catalog, held)).toEqual({
       none: [
         { step: missing, why: 'unavailable' },
         { step: paid, why: 'usage-limit', resetsAt: 2000 },
@@ -169,15 +171,46 @@ describe('the bounded forward walk', () => {
 
   it('takes only the suffix after the current step and skips a supplied real rule hold', () => {
     const held = new Map([['zed', { why: 'rule' as const, resetsAt: null }]]);
-    expect(next({ fallback: switched }, catalog, held)).toEqual({
+    expect(next({ ...free, fallback: switched }, catalog, held)).toEqual({
       none: [
         { step: alternative, why: 'rule', resetsAt: null },
         { step: own, why: 'rule', resetsAt: null },
       ],
     });
     expect(
-      next({ fallback: { ...switched, on: { ...position, step: 1 } } }, catalog, new Map()),
+      next(
+        {
+          ...own,
+          settings: { zed: { model: 'other', effort: 'low' } },
+          fallback: { ...switched, on: { ...position, step: 1 } },
+        },
+        catalog,
+        new Map(),
+      ),
     ).toEqual({ step: own, passed: [] });
+  });
+
+  it('passes a step matching the edited current endpoint, comparing model and effort too', () => {
+    const fallback = { to: [own, alternative] };
+    expect(next({ ...own, fallback }, catalog, new Map())).toEqual({
+      step: alternative,
+      passed: [{ step: own, why: 'already-on' }],
+    });
+    expect(
+      next(
+        { ...own, settings: { zed: { model: 'other', effort: 'low' } }, fallback: switched },
+        catalog,
+        new Map(),
+      ),
+    ).toEqual({
+      step: own,
+      passed: [{ step: alternative, why: 'already-on' }],
+    });
+    expect(
+      next({ ...own, fallback: { ...switched, on: { ...position, step: 1 } } }, catalog, new Map()),
+    ).toEqual({
+      none: [{ step: own, why: 'already-on' }],
+    });
   });
 });
 
@@ -200,7 +233,13 @@ describe('action resolution for a send (no document rewrite)', () => {
       ],
     };
     expect(resolveAction('shell', 'quill', ambiguous)).toEqual({ unknown: true });
-    const unnamed = { ...catalog, adapters: [...catalog.adapters, { ...other, id: 'other', actions: [{ name: 'shell', description: '' }] }] };
+    const unnamed = {
+      ...catalog,
+      adapters: [
+        ...catalog.adapters,
+        { ...other, id: 'other', actions: [{ name: 'shell', description: '' }] },
+      ],
+    };
     expect(resolveAction('shell', 'quill', unnamed)).toEqual({ unknown: true });
   });
 });

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { canvasIdOf } from '../../shared/canvas';
+import { CANVAS_VERSION, canvasIdOf } from '../../shared/canvas';
 import { catalog } from '../catalog';
 import { actionsOf, connectionsOf, DEFAULT_AGENT } from './agents';
 import { EXAMPLES } from '../../shared/examples';
@@ -23,8 +23,10 @@ describe.each(EXAMPLES)('the $name example', (example) => {
   const graph = graphOf(fromFile(example.text, catalog(), DEFAULT_AGENT));
   const agents = new Map(graph.nodes.filter((n) => n.type === 'agent').map((n) => [n.id, n]));
 
-  it('is a canvas, written just as corrallm writes one', () => {
-    expect(toFile(documentOf(graph, canvasIdOf(example.text)))).toBe(example.text);
+  it('reads a version-2 canvas and writes it canonically at the current version', () => {
+    expect(toFile(documentOf(graph, canvasIdOf(example.text)))).toBe(
+      example.text.replace('"version": 2', `"version": ${String(CANVAS_VERSION)}`),
+    );
   });
 
   it('pins roles only to agent types with a connection', () => {

@@ -1458,7 +1458,9 @@ export class RunStore {
     const decided = this.#usageDecided.get(JSON.stringify([backend, rule.window]));
     const choice = decided && now < decided.until ? decided.choice : undefined;
     if (choice === 'goOn') return undefined;
-    return { hold, action: choice === 'wait' ? 'waitForReset' : rule.action };
+    // Until C2 registers switching, a saved fallback rule uses the existing ask path.
+    const action = rule.action === 'fallback' ? 'ask' : rule.action;
+    return { hold, action: choice === 'wait' ? 'waitForReset' : action };
   }
 
   /**

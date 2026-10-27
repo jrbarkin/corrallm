@@ -33,6 +33,27 @@ const doc = (): CanvasDocument => ({
 const data = (document: CanvasDocument) => (document.nodes[0] as AgentNode).data;
 
 describe('agent setup operations', () => {
+  it('keeps the chain when a later type, connection, model or effort edit matches a step', () => {
+    const before = doc();
+    data(before).adapter = 'other';
+    const ctx = { catalog: MADE_UP, defaultAdapter: 'zed' };
+    const fallback = { to: [{ adapter: 'zed', connection: 'zed.acp' }] };
+    data(before).fallback = fallback;
+    const typed = setType(before, { agent: 'a', adapter: 'zed' }, ctx).next;
+    expect(data(typed).fallback).toBe(fallback);
+    data(typed).connection = 'zed.free';
+    const connected = setConnection(typed, { agent: 'a', connection: 'zed.acp' }, ctx).next;
+    expect(data(connected).fallback).toBe(fallback);
+    for (const change of [{ model: 'chosen' }, { effort: 'low' }]) {
+      const step = { adapter: 'zed', connection: 'zed.acp', ...change };
+      data(connected).fallback = { to: [step] };
+      const edited = setSettings(connected, { agent: 'a', adapter: 'zed', change }).next;
+      expect(data(edited).fallback).toBe(data(connected).fallback);
+      expect(data(edited).settings?.zed).toMatchObject(change);
+    }
+    expect(() => setFallback(connected, { agent: 'a', fallback }, ctx)).toThrow(/distinct/);
+  });
+
   it('clears only fallback.on for your type and connection choices, even the existing choice', () => {
     const before = doc();
     data(before).adapter = 'zed';
