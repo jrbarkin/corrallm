@@ -76,8 +76,11 @@ import { Engines, needsInput } from './engines';
 import type { Watcher } from './engines';
 import type { HostServices, WindowId } from './host';
 import type { ShutdownPrepared, ShutdownReason } from './protocol';
-import type { Presence, ShutdownOptions } from './presence';
+import type { NotificationResult, Presence, ShutdownOptions } from './presence';
 import { countPresence, PresencePublisher } from './presence-publisher';
+import { Notifier } from './notifier';
+import type { NotifierTiming } from './notifier';
+import type { WindowShow } from '../../shared/gui-link';
 import { implementations } from './ops';
 import { sessionRules } from './ops/session-control';
 import type { AgentId } from '../../shared/api/ids';
@@ -159,6 +162,8 @@ export interface CoreConfig {
   watchFolder?: WatchFolder;
   /** Fake connectors and options for an unpackaged app's tests, admitted by its host. */
   fakeSessions?: boolean;
+  /** For tests: the notifier's burst window and rate (B14 C7), shortened. */
+  notifier?: Partial<NotifierTiming>;
   /**
    * For tests: what runs agents' sessions instead of each connection's own connector
    * (sessions/fake.ts), the environment they run in instead of the login shell's, what reads a
@@ -298,6 +303,18 @@ export interface Core extends Dispatcher {
    * last snapshot sent. `busy` is whether closing would cut work off: a turn, a running run, a job.
    */
   presence(): Presence;
+  /**
+   * Whether any corrallm window is focused, as main says (B14 C7): while one is, nothing is
+   * notified, and nothing dropped then is replayed on blur. None focused until main says.
+   */
+  focus(focused: boolean): void;
+  /**
+   * Where a notification's click leads (B14 C10): the canvas and Need its opaque handle maps to,
+   * while the core runs that canvas; none (a generic Open) for any other handle.
+   */
+  activation(handle: string): WindowShow | undefined;
+  /** How the last notification went (B14 C9), without values: none if none was attempted. */
+  notificationStatus(): NotificationResult | undefined;
 }
 
 /** The calls the shutdown barrier admits besides reads: what changes nothing the core keeps. */
@@ -458,6 +475,8 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     },
   });
   const settings = new Settings(path.join(profile, 'settings.json'));
+  /** Whether OS notifications are on (B14 C11), as the settings say now: read again as they change. */
+  let notifying = await settings.notificationsEnabled();
   /** Whether the profile's MCP server listens, as its owner last said (`served`). */
   let api: ApiStatus = { state: 'stopped', port: null };
   // What the canvases the core runs publish beside their documents (B11 §5): their run, sessions
@@ -829,6 +848,10 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
   });
   settings.subscribe(() => {
     topics.changed('settings', 'you');
+    void settings.notificationsEnabled().then((on) => {
+      notifying = on;
+      notifier.preferenceChanged();
+    });
   });
   // The proposals waiting for you (R4): their proposers' records go to each canvas's messages,
   // and what waits on a canvas is read again as one is raised or settled.
@@ -960,6 +983,26 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
       });
     },
   });
+  /**
+   * The OS notifications (B14 C7, C8, C10): from what newly waits for you and the runs that end on
+   * the canvases the core runs, worded from fixed sentences with names alone, through main.
+   */
+  const notifier = new Notifier({
+    needs: (canvas) => waitingFor(canvas),
+    run: (canvas) => engines.canvas(canvas)?.engine.run,
+    runs: (canvas) => engines.canvas(canvas) !== undefined,
+    agentName: (canvas, agent) => agentName(engines.canvas(canvas)?.document.nodes ?? [], agent),
+    canvasName: (canvas) => {
+      const file = memory.fileOf(canvas);
+      return file === undefined ? null : path.basename(file);
+    },
+    enabled: () => notifying,
+    notify: (request) => host.notify(request),
+    unnotify: (handle) => {
+      host.unnotify(handle);
+    },
+    ...(config.notifier === undefined ? {} : { timing: config.notifier }),
+  });
   // Whether the run of each canvas the core runs is running, as canvas.list says it from the live
   // run (B11 §5), not the journal's coalesced write: the list is read again as that changes.
   const live = new Map<CanvasId, { running: boolean; stop?: () => void }>();
@@ -968,8 +1011,10 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
   engines.watch({
     needs: (canvas) => {
       topics.changed(`needs:${canvas}`, 'corrallm');
+      notifier.needsChanged(canvas);
     },
     opened: (canvas) => {
+      notifier.opened(canvas);
       presenceChanged();
       follow();
       const run = engines.canvas(canvas)?.engine.run;
@@ -987,6 +1032,7 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
       states.listChanged();
     },
     closed: (canvas) => {
+      notifier.closed(canvas);
       presenceChanged();
       live.get(canvas)?.stop?.();
       live.delete(canvas);
@@ -1252,6 +1298,7 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
   const close = async () => {
     closing = true;
     presence.close();
+    notifier.close();
     sessionViews.close();
     workspaceDirectories.stop();
     workspaceGit.stop();
@@ -1343,6 +1390,11 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     commitShutdown: commit,
     close: commit,
     presence: () => presence.now(),
+    focus: (focused) => {
+      notifier.focus(focused);
+    },
+    activation: (handle) => notifier.activation(handle),
+    notificationStatus: () => notifier.status(),
     tokens,
     clientOf: (token) => {
       const caller = tokens.clientOf(token);
