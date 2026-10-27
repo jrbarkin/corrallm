@@ -1,5 +1,6 @@
 import type { AdapterId, ConnectionId } from '../../../../shared/adapter';
 import type { SubmittedMessage } from '../../../../shared/model/queue';
+import type { RunRefusal as Refusal } from '../../../../shared/model/run';
 import { parseRole } from '../../../../shared/role';
 import type {
   AgentSettings,
@@ -17,8 +18,8 @@ import type {
   TaskMessage,
   TurnResult,
 } from '../../../../shared/session';
-import { shellRefusal } from '../../../../shared/model/catalog';
-import type { EngineCatalog } from '../../../../shared/model/catalog';
+import { adapterRefusal, shellRefusal } from '../../../../shared/model/catalog';
+import type { EngineCatalog, ResolvedStep } from '../../../../shared/model/catalog';
 import { ConnectedDriver, NO_BACKEND } from '../transcript/receive';
 import type { SessionBackend } from '../transcript/receive';
 import type { DriverIO, SessionDriver } from '../transcript/driver';
@@ -39,7 +40,6 @@ import type {
   Mode,
   PlanAnswer,
   Prompt,
-  Refusal,
   Session,
 } from '../../../../shared/model/session';
 import type { SessionAction } from '../transcript/reduce';
@@ -100,6 +100,8 @@ export class SessionStore {
   >();
   /** Who to tell when a message's session would not start (it stays queued), by its id. */
   readonly #onRefused = new Map<string, (refusal: Refusal) => void>();
+  /** A step may wait here, but can only start on the adapter its action was resolved for. */
+  readonly #resolvedSteps = new Map<string, ResolvedStep>();
   /** The message whose turn each agent's session is on, by agent id. */
   readonly #turns = new Map<string, string>();
   /** Runtime holds stop automatic queue draining, while allowing fresh manual intervention. */
@@ -403,11 +405,18 @@ export class SessionStore {
     onRefused?: (refusal: Refusal) => void,
     origin: 'user' | 'queue' | 'run' = 'user',
     displayText?: string,
-    as: { id?: string; from?: MessageSender; task?: TaskMessage; retryOf?: string } = {},
+    as: {
+      id?: string;
+      from?: MessageSender;
+      task?: TaskMessage;
+      retryOf?: string;
+      resolvedStep?: ResolvedStep;
+    } = {},
   ): () => void {
     const { id = crypto.randomUUID(), from } = as;
     if (as.task) this.#tasks.set(id, as.task);
     if (as.retryOf) this.#retryOf.set(id, as.retryOf);
+    if (as.resolvedStep) this.#resolvedSteps.set(id, as.resolvedStep);
     this.#types.set(agentId, agent);
     if (origin === 'queue') this.#queueMessages.add(id);
     else if (origin === 'run') this.#runMessages.add(id);
@@ -701,6 +710,7 @@ export class SessionStore {
     for (const onDone of this.#onDone.values()) onDone(true, '', result);
     this.#onDone.clear();
     this.#onRefused.clear();
+    this.#resolvedSteps.clear();
     this.#turns.clear();
     this.#heldQueues.clear();
     this.#stopping.clear();
@@ -733,6 +743,22 @@ export class SessionStore {
     id: string,
   ): void {
     const connection = this.#connection(agentId);
+    const resolvedStep = this.#resolvedSteps.get(id);
+    const changedAdapter =
+      resolvedStep === undefined
+        ? undefined
+        : adapterRefusal(this.#catalog, resolvedStep, connection);
+    if (changedAdapter !== undefined) {
+      // Keep it queued until its runner takes it back into an unsent refusal. No driver starts.
+      this.#dispatch(agentId, { type: 'queue', id, text, ...(images?.length ? { images } : {}) });
+      queueMicrotask(() => {
+        if (this.of(agentId).queued.some((one) => one.id === id))
+          this.#onRefused.get(id)?.({ kind: 'unknown-action', text: changedAdapter });
+        // Its owner withdrew it into Needs; other queues' text can still reach this recipient.
+        if (!this.of(agentId).queued.some((one) => one.id === id)) this.#idle(agentId);
+      });
+      return;
+    }
     const refusal = this.#queueMessages.has(id)
       ? shellRefusal(this.#catalog, connection, text)
       : undefined;
@@ -776,6 +802,7 @@ export class SessionStore {
     const onDone = this.#onDone.get(id);
     this.#onDone.delete(id);
     this.#onRefused.delete(id);
+    this.#resolvedSteps.delete(id);
     this.#displayTexts.delete(id);
     this.#senders.delete(id);
     this.#tasks.delete(id);
