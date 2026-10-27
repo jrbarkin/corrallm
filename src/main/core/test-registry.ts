@@ -259,6 +259,7 @@ export const CALLERS: Readonly<Record<Party, Caller>> = {
     token: 'read-token',
     name: 'watcher',
     access: 'read',
+    merge: false,
     canvases: [CANVAS],
   } satisfies OutsideCaller,
   'outside-write': {
@@ -266,6 +267,7 @@ export const CALLERS: Readonly<Record<Party, Caller>> = {
     token: 'write-token',
     name: 'orchestrator',
     access: 'write',
+    merge: true,
     canvases: [CANVAS],
   } satisfies OutsideCaller,
 };
@@ -429,6 +431,9 @@ export const TEST_OUT_OF_REACH: OutOfReach = {
 
 /** A host with no desktop: every dialog is cancelled. */
 export const NO_DESKTOP: HostServices = {
+  presence: () => undefined,
+  notify: () => Promise.resolve('unsupported'),
+  unnotify: () => undefined,
   pickCanvasToOpen: () => Promise.resolve(null),
   pickCanvasToSave: () => Promise.resolve(null),
   pickFolder: () => Promise.resolve(null),

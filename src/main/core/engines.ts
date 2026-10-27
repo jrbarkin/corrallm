@@ -857,9 +857,10 @@ export class Engines {
     await this.#deps.journal.flush();
     await this.#deps.sessions.closeEverything();
     await Promise.all(this.#events.values());
-    await Promise.all(mail.map(({ messages }) => messages.durable()));
+    // A message not on disk yet is written with its run: it fails as the run's journal did.
+    const messages = await Promise.allSettled(mail.map(({ messages }) => messages.durable()));
     for (const canvas of closing) for (const watcher of this.#watchers) watcher.closed?.(canvas);
-    const failed = stopped.flatMap((result): unknown[] =>
+    const failed = [...stopped, ...messages].flatMap((result): unknown[] =>
       result.status === 'rejected' ? [result.reason] : [],
     );
     if (failed.length > 0) throw new AggregateError(failed, JOURNAL_FAILED);

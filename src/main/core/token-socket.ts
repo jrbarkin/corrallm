@@ -51,7 +51,11 @@ const WINDOWS =
 
 const Name = z.string().regex(ID_PATTERN);
 const Hours = z.number().int().min(1).max(MAX_TOKEN_HOURS);
-const Access = z.enum(['read', 'write']);
+/**
+ * What a token may do (tokens.ts' TokenAccess): an owner from before `write-no-merge` refuses a
+ * request for one, as a request of another version, rather than make a writer that may merge.
+ */
+const Access = z.enum(['read', 'write', 'write-no-merge']);
 /** A canvas file, as the client resolved it: absolute, with no NUL. */
 const CanvasFile = z
   .string()

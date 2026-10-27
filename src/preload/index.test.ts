@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { OpResult } from '../shared/api/errors';
 import type { Change } from '../shared/api/topics';
 import { GUI_OPS } from '../shared/api/surface';
-import { guiFunction } from '../shared/gui-link';
+import { guiFunction, WindowShow } from '../shared/gui-link';
 import type { CoreGuiSide, GuiSide } from '../shared/gui-link';
 import type { AppApi } from '../shared/gui-link';
 import { CoreLink } from '../shared/link';
@@ -201,6 +201,7 @@ describe('the window’s port to the core', () => {
         'topicsOnChange',
         'topicsOnEpoch',
         'draftsOnFlush',
+        'windowOnShow',
       ].sort(),
     );
     expect(Object.values(api).every((value) => typeof value === 'function')).toBe(true);
@@ -567,4 +568,32 @@ it('exposes no transitional session channel or event method after the cutover', 
     'onSessionAvailability',
   ])
     expect(api).not.toHaveProperty(name);
+});
+
+it('hears show through one fixed removable listener, without replaying a replaced port', async () => {
+  const api = await exposed();
+  postPort(answerInfo);
+  const first = remote;
+  const heard = vi.fn();
+  const stop = api.windowOnShow(heard);
+  const target = WindowShow.parse({
+    canvas: 'ad9ee798-f2dc-40cf-a1e2-b0073ddfb316',
+    need: 'prompt/a/1/p',
+  });
+  remote.emit('show', target);
+  await vi.waitFor(() => {
+    expect(heard).toHaveBeenCalledExactlyOnceWith(target);
+  });
+  postPort(answerInfo);
+  first.emit('show', target);
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  expect(heard).toHaveBeenCalledOnce();
+  remote.emit('show', { canvas: target.canvas });
+  await vi.waitFor(() => {
+    expect(heard).toHaveBeenCalledTimes(2);
+  });
+  stop();
+  remote.emit('show', target);
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  expect(heard).toHaveBeenCalledTimes(2);
 });

@@ -309,6 +309,7 @@ const ADMITTED_WHILE_STOPPING: ReadonlySet<string> = new Set([
 
 /** Why the barrier refuses a write. */
 const STOPPING: Readonly<Record<ShutdownReason, string>> = {
+  system: 'corrallm is closing because the computer is shutting down or logging out.',
   quit: 'corrallm is quitting: try again once it is open again.',
   update: 'corrallm is restarting to update: try again once it is open again.',
 };

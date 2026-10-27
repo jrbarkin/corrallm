@@ -434,6 +434,7 @@ describe.skipIf(process.platform === 'win32')('GitRunner', () => {
       const git2 = runner();
       expect(await git2.inspect(here)).toEqual({
         drivers: ['Other.Name', 'lfs'],
+        mergeDrivers: [],
         refusals: [],
       });
       git(here, env, 'checkout', '-q', '-b', 'feature/x');

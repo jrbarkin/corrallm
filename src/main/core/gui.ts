@@ -1,5 +1,6 @@
 import { GUI_OPS } from '../../shared/api/surface';
 import type { GuiOp } from '../../shared/api/surface';
+import { WindowShow } from '../../shared/gui-link';
 import type { CoreGuiSide, GuiSide } from '../../shared/gui-link';
 import { CoreLink } from '../../shared/link';
 import type { LinkOptions, LinkPort } from '../../shared/link';
@@ -67,6 +68,11 @@ export class WindowPorts {
       throw new Error('The app window closed before opening the link.');
     const answer = await this.#core.call('link.open', { url }, asHuman(window));
     if (!answer.ok) throw new Error(answer.error.sentence);
+  }
+
+  /** Sends a privately resolved destination to one attached view; performs no operation. */
+  show(window: WindowId, target: WindowShow): void {
+    this.#windows.get(window)?.link?.emit('show', WindowShow.parse(target));
   }
 
   /** Serves `port` as `window`'s, in place of the one it had (its page reloaded). */

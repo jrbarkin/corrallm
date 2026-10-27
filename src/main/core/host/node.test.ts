@@ -10,6 +10,25 @@ import { appProfile, NODE_HOST } from './node';
  */
 
 describe('NODE_HOST', () => {
+  it('ignores native presence and notification withdrawal, and reports notifications unsupported', async () => {
+    NODE_HOST.presence({
+      revision: 0,
+      working: 0,
+      runs: 0,
+      jobs: 0,
+      needs: 0,
+      busy: false,
+      awake: false,
+    });
+    NODE_HOST.unnotify('ad9ee798-f2dc-40cf-a1e2-b0073ddfb316');
+    await expect(
+      NODE_HOST.notify({
+        handle: 'ad9ee798-f2dc-40cf-a1e2-b0073ddfb316',
+        title: 'corrallm',
+        body: 'Needs you',
+      }),
+    ).resolves.toBe('unsupported');
+  });
   it('has no dialogs: whatever needs one is yours, in the app', async () => {
     for (const ask of [
       () => NODE_HOST.pickCanvasToOpen(1),

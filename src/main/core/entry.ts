@@ -136,7 +136,7 @@ const link = new CoreLink<CoreSide, HostSide>(
       ready.resolve(core);
       windows.resolve(new WindowPorts(core, { check }));
       // Every canvas open runs in the core from now on, restored paused, whether or not a window
-      // shows it (B11 Design §2, §8): `active` and the shutdown barrier cover the app's runs. In the
+      // shows it (B11 Design §2, §8): active and the shutdown barrier cover the app's runs. In the
       // background: a window's canvas is run as it asks for it, sharing the same allocation.
       void core.engines.initialize().then(
         (initialized) => {
@@ -195,7 +195,10 @@ const link = new CoreLink<CoreSide, HostSide>(
     flushDrafts: async (asked) => ({
       unanswered: await (await windows.promise).flushDrafts(asked),
     }),
-    prepareShutdown: async (reason) => (await ready.promise).prepareShutdown(reason),
+    prepareShutdown: async (reason, options) => {
+      if (options !== undefined) throw new Error('Idle shutdown reservation is not available yet.');
+      return (await ready.promise).prepareShutdown(reason);
+    },
     cancelShutdown: async () => {
       (await ready.promise).cancelShutdown();
       return null;
@@ -213,6 +216,11 @@ const link = new CoreLink<CoreSide, HostSide>(
       return null;
     },
     active: async () => (await ready.promise).active(),
+    // C3 and C5 supply these services; an unwired host gesture must fail without side effects.
+    pauseAll: () => {
+      throw new Error('Pause all is not available yet.');
+    },
+    activate: () => null,
     selftest: async ({ packaged }) => ({
       checks: await runChecks(selfTestChecks({ packaged })),
       memory: memoryText(),

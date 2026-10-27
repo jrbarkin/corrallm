@@ -34,13 +34,16 @@ export interface AgentCaller {
 
 /**
  * An orchestrator outside corrallm, by the token a person made: its name (its party is
- * `outside:<name>`), what it may do, and the canvases it reaches, by their stable ids.
+ * `outside:<name>`), what it may do, and the canvases it reaches, by their stable ids. `merge` is
+ * whether it may merge an agent's branch (B9b §9 C1, Q30): a read-write token made with
+ * `--no-merge` is a writer (`outside-write`) that may not; a read-only one never may.
  */
 export interface OutsideCaller {
   readonly kind: 'outside';
   readonly token: string;
   readonly name: string;
   readonly access: 'read' | 'write';
+  readonly merge: boolean;
   readonly canvases: readonly CanvasId[];
 }
 

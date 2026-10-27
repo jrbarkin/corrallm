@@ -1,9 +1,13 @@
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import {
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
+  readlinkSync,
   realpathSync,
   rmSync,
   writeFileSync,
@@ -104,4 +108,112 @@ export function fakeGit(dir: string, script: string): string {
     { mode: 0o755 },
   );
   return file;
+}
+
+/** Every hook Git knows, by name: a repository's own, in whichever folder it keeps them. */
+export const HOOKS = [
+  'applypatch-msg',
+  'pre-applypatch',
+  'post-applypatch',
+  'pre-commit',
+  'pre-merge-commit',
+  'prepare-commit-msg',
+  'commit-msg',
+  'post-commit',
+  'pre-rebase',
+  'post-checkout',
+  'post-merge',
+  'pre-push',
+  'pre-receive',
+  'update',
+  'proc-receive',
+  'post-receive',
+  'post-update',
+  'reference-transaction',
+  'push-to-checkout',
+  'pre-auto-gc',
+  'post-rewrite',
+  'sendemail-validate',
+  'fsmonitor-watchman',
+  'p4-changelist',
+  'p4-prepare-changelist',
+  'p4-post-changelist',
+  'p4-pre-submit',
+  'post-index-change',
+];
+
+/** Puts in `dir` a hook of every name Git knows, each running `program` with its name. */
+export function hooksInto(dir: string, program: string): void {
+  mkdirSync(dir, { recursive: true });
+  for (const hook of HOOKS) {
+    writeFileSync(path.join(dir, hook), `#!/bin/sh\n'${program}' hook ${hook} "$@"\nexit 0\n`, {
+      mode: 0o755,
+    });
+  }
+}
+
+/**
+ * Every path under `at` (links never followed), each as what it is: a folder, a link by its
+ * target, or a file by its inode and its content's hash, so a file written again shows even with
+ * the same content. Paths `skip` names are left out, with what is below them.
+ */
+export function listing(
+  at: string,
+  skip: (relative: string) => boolean = () => false,
+): Record<string, string> {
+  const found: Record<string, string> = {};
+  const walk = (relative: string) => {
+    for (const name of readdirSync(path.join(at, relative)).sort()) {
+      const inner = relative === '' ? name : path.join(relative, name);
+      if (skip(inner)) continue;
+      const full = path.join(at, inner);
+      const stats = lstatSync(full);
+      if (stats.isSymbolicLink()) found[inner] = `-> ${readlinkSync(full)}`;
+      else if (stats.isDirectory()) {
+        found[inner] = '/';
+        walk(inner);
+      } else {
+        const hash = createHash('sha256').update(readFileSync(full)).digest('hex');
+        found[inner] = `${String(stats.ino)} ${hash}`;
+      }
+    }
+  };
+  walk('');
+  return found;
+}
+
+/** The paths two listings differ at: added, removed, or changed. */
+export function differing(before: Record<string, string>, after: Record<string, string>): string[] {
+  const paths = new Set([...Object.keys(before), ...Object.keys(after)]);
+  return [...paths].filter((at) => before[at] !== after[at]).sort();
+}
+
+/**
+ * Whether the Git these tests run supports what `args` ask of its `init` (a ref or object format,
+ * say), probed by asking it: a feature an older Git lacks is skipped by what it can do, never by
+ * its version's number.
+ */
+export function gitInits(...args: string[]): boolean {
+  const probe = mkdtempSync(path.join(tmpdir(), 'corrallm-git-probe-'));
+  try {
+    const env = { PATH: process.env.PATH ?? '', HOME: probe, GIT_CONFIG_NOSYSTEM: '1' };
+    const made = spawnSync('git', ['init', '-q', ...args, path.join(probe, 'r')], {
+      stdio: 'ignore',
+      env,
+    });
+    return made.status === 0;
+  } finally {
+    rmSync(probe, { recursive: true, force: true });
+  }
+}
+
+/** Whether the system's temporary folder tells names apart by case only (Linux) or not (macOS). */
+export function caseInsensitive(): boolean {
+  const probe = mkdtempSync(path.join(tmpdir(), 'corrallm-case-probe-'));
+  try {
+    writeFileSync(path.join(probe, 'Case'), '');
+    return existsSync(path.join(probe, 'case'));
+  } finally {
+    rmSync(probe, { recursive: true, force: true });
+  }
 }

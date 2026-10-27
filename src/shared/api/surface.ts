@@ -31,7 +31,8 @@ export type Scope = 'app' | 'canvas' | 'agent' | 'none';
 
 /**
  * The rules that narrow what a token may do (Core Server §3.6: R1 to R13, by key; and B9 Design
- * §4's R14, `managers`), and B9a's `workspace-safety`, which asks you too.
+ * §4's R14, `managers`), B9a's `workspace-safety`, which asks you too, and B9b's `merge-permits`
+ * (Q30: a token made with --no-merge merges no agent's branch).
  */
 export type Rule =
   | 'shell-text'
@@ -50,7 +51,8 @@ export type Rule =
   | 'role'
   | 'links'
   | 'managers'
-  | 'workspace-safety';
+  | 'workspace-safety'
+  | 'merge-permits';
 
 /** 'read' changes nothing (MCP's readOnlyHint); 'doc' is a pure document edit; 'command' the rest. */
 export type Kind = 'read' | 'doc' | 'command';

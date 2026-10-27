@@ -51,8 +51,11 @@ afterEach(async () => {
   await rm(dir, { recursive: true, force: true });
 });
 
-function newToken(canvases = [file]): TokenRequest {
-  return { version: 1, op: 'new', name: 'bot', hours: 2, access: 'read', canvases };
+function newToken(
+  canvases = [file],
+  access: Extract<TokenRequest, { op: 'new' }>['access'] = 'read',
+): TokenRequest {
+  return { version: 1, op: 'new', name: 'bot', hours: 2, access, canvases };
 }
 
 async function start(): Promise<Core> {
@@ -107,6 +110,20 @@ describe('a token request the core that owns the profile answers', () => {
     expect(existsSync(path.join(profile, 'tokens.json'))).toBe(false);
   });
 
+  it('makes and renews a token that writes but can’t merge (--no-merge), keeping that access', async () => {
+    const owner = await start();
+    const host = { owner: 'serve', url: null } as const;
+    const made = await owner.tokenRequest(newToken([file], 'write-no-merge'), host);
+    expect(made).toMatchObject({ ok: true, op: 'new', access: 'write-no-merge' });
+    expect(owner.clientOf(tokenOf(made))).toMatchObject({ access: 'write', merge: false });
+    const renewal = await owner.tokenRequest(
+      { version: 1, op: 'renew', name: 'bot', hours: 3 },
+      host,
+    );
+    expect(renewal).toMatchObject({ ok: true, op: 'renew', access: 'write-no-merge' });
+    expect(owner.clientOf(tokenOf(renewal))).toMatchObject({ access: 'write', merge: false });
+  });
+
   it('renews and revokes a token by name at once, the old value refused from then on', async () => {
     const owner = await start();
     const host = { owner: 'app', url: null } as const;
@@ -159,6 +176,20 @@ describe('a token request with no owner', () => {
     // The owner that starts next serves it.
     const owner = await start();
     expect(owner.clientOf(token)?.name).toBe('bot');
+  });
+
+  it('makes and renews a --no-merge token as one, which the owner that starts next serves as one', async () => {
+    const made = await answerUnowned(profile, newToken([file], 'write-no-merge'));
+    expect(made).toMatchObject({ ok: true, owner: 'none', access: 'write-no-merge' });
+    const renewal = await answerUnowned(profile, {
+      version: 1,
+      op: 'renew',
+      name: 'bot',
+      hours: 2,
+    });
+    expect(renewal).toMatchObject({ ok: true, op: 'renew', access: 'write-no-merge' });
+    const owner = await start();
+    expect(owner.clientOf(tokenOf(renewal))).toMatchObject({ access: 'write', merge: false });
   });
 
   it('names the URL the profile’s server keeps, where serve will listen', async () => {

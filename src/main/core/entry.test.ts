@@ -213,6 +213,7 @@ describe('the core process’s init', () => {
       ok: true,
       value: { ok: true, value: { running: false } },
     });
+    // X1 keeps today's last-window decision until C3 publishes presence.
     expect(await main.request('active')).toEqual({ ok: true, value: false });
   });
 });
@@ -393,7 +394,6 @@ describe('the app’s outside endpoint', () => {
       ok: true,
       value: { ok: true },
     });
-    expect(await main.request('active')).toEqual({ ok: true, value: false });
 
     expect(await main.request('prepareShutdown', 'quit')).toEqual({
       ok: true,

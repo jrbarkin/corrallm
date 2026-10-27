@@ -16,6 +16,7 @@ import type { ProfileLock } from '../core/lock';
 import { partyName } from '../core/parties';
 import { serveTokenSocket } from '../core/token-socket';
 import type { TokenAnswer, TokenRequest, TokenSocket } from '../core/token-socket';
+import { accessText } from '../core/tokens';
 import { agentEnvironment, loginShellEnvironment } from '../sessions/environment';
 import { installedClis } from '../sessions/installed';
 import type { ServeCommand } from './args';
@@ -285,7 +286,7 @@ function tokenLine(
   const reach = answer.canvases
     .map(({ id, file }) => names.get(id) ?? (file === undefined ? id : path.basename(file)))
     .join(', ');
-  return `corrallm serve: corrallm token ${answer.op === 'renew' ? 'renewed' : 'made'} a token for "${answer.name}" (${answer.access === 'write' ? 'read-write' : 'read-only'}, for ${String(hours)} hour${hours === 1 ? '' : 's'}), reaching ${reach}; any earlier one of its name is refused from now on.`;
+  return `corrallm serve: corrallm token ${answer.op === 'renew' ? 'renewed' : 'made'} a token for "${answer.name}" (${accessText(answer.access)}, for ${String(hours)} hour${hours === 1 ? '' : 's'}), reaching ${reach}; any earlier one of its name is refused from now on.`;
 }
 
 /**
@@ -302,7 +303,7 @@ function tokenText(
 ): string[] {
   const commands = registrations(installed, url).byVariable;
   return [
-    `corrallm serve: a new token for "${name}" (${access === 'write' ? 'read-write' : 'read-only'}, for ${String(hours)} hour${hours === 1 ? '' : 's'}), reaching ${served}. It replaces any earlier token named "${name}". It is shown only now; corrallm keeps only its hash:`,
+    `corrallm serve: a new token for "${name}" (${accessText(access)}, for ${String(hours)} hour${hours === 1 ? '' : 's'}), reaching ${served}. It replaces any earlier token named "${name}". It is shown only now; corrallm keeps only its hash:`,
     '',
     `  ${token}`,
     '',

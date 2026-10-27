@@ -109,7 +109,6 @@ function main(): void {
         );
       };
 
-      const host = hostServices();
       const init: CoreInit = {
         app: { name: app.getName(), version: app.getVersion() },
         profile: app.getPath('userData'),
@@ -120,7 +119,7 @@ function main(): void {
       // The core owns the profile and its sessions; main answers only what needs the desktop. It
       // takes the profile (core.lock) as it comes up: `corrallm serve` may hold this one, and
       // must not write its stores while the app does. A core that crashes is restarted.
-      const supervisor = new CoreSupervisor({
+      const supervisor: CoreSupervisor = new CoreSupervisor({
         fork: () =>
           forkCore({
             entry: path.join(__dirname, 'core.cjs'),
@@ -129,7 +128,7 @@ function main(): void {
               else console.error(`[core] ${line}`);
             },
             check: devServerUrl !== undefined,
-            host,
+            host: (core) => hostServices(core, (source) => supervisor.owns(source)),
           }),
         init: async (core) => {
           const up = await answered(core.link.request('init', init));
@@ -327,6 +326,7 @@ function main(): void {
       app.on('second-instance', reopen);
       // Windows and Linux: the last window closing quits, unless the core has work going on
       // (a run running, a turn): then it runs on, and opening corrallm again shows it.
+      // X1 retains this check until C3 supplies presence and C4 replaces the quit path.
       lastWindowClosed = () => {
         if (quit.busy || quit.approved) return;
         void ask('active').then(

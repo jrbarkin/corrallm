@@ -26,6 +26,11 @@ interface Registry {
   ops: Readonly<Record<string, OpDef>>;
   deviations: Readonly<Partial<Record<string, string>>>;
   rules: Readonly<Partial<Record<Rule, RuleRow>>>;
+  /**
+   * A RULES row whose op isn't registered yet, by that op: no op carries it until then, and once
+   * the op is registered the row must be carried and the wait dropped.
+   */
+  awaiting?: Readonly<Partial<Record<Rule, string>>>;
 }
 
 const REAL: Registry = {
@@ -33,6 +38,8 @@ const REAL: Registry = {
   ops: OPS,
   deviations: DEVIATIONS,
   rules: RULES,
+  // B9b §9 C1: Q30's rule and its core.call check land before branch.merge, which X2 registers.
+  awaiting: { 'merge-permits': 'branch.merge' },
 };
 
 it('hosts every operation whose audience includes you', () => {
@@ -295,7 +302,19 @@ function problems(registry: Registry): string[] {
   const used = new Set(names.flatMap((name) => registry.surface[name]?.rules ?? []));
   for (const rule of used) if (!(rule in registry.rules)) found.push(`${rule}: no RULES row`);
   for (const rule of Object.keys(registry.rules)) {
-    if (!used.has(rule as Rule)) found.push(`${rule}: a RULES row no op carries`);
+    const awaited = registry.awaiting?.[rule as Rule];
+    if (awaited !== undefined && awaited in registry.surface) {
+      found.push(
+        `${rule}: awaits ${awaited}, which is registered: carry it there, and drop the wait`,
+      );
+    } else if (awaited !== undefined && used.has(rule as Rule)) {
+      found.push(`${rule}: awaits ${awaited}, but an op carries it already`);
+    } else if (awaited === undefined && !used.has(rule as Rule)) {
+      found.push(`${rule}: a RULES row no op carries`);
+    }
+  }
+  for (const [rule, awaited] of Object.entries(registry.awaiting ?? {})) {
+    if (!(rule in registry.rules)) found.push(`${rule}: awaits ${awaited}, with no RULES row`);
   }
   return found;
 }
@@ -379,6 +398,35 @@ describe('T1: the surface’s rules', () => {
       'a row no op carries',
       registry({}, { rules: { sticky: { kind: 'argument', sentence: 'Only yours.' } } }),
       'sticky: a RULES row no op carries',
+    ],
+    [
+      'a row awaiting an op that is registered',
+      registry(
+        { 'test.merge': op({ access: tokens, kind: 'command', scope: 'none' }) },
+        {
+          rules: { 'merge-permits': { kind: 'argument', sentence: 'Not this token.' } },
+          awaiting: { 'merge-permits': 'test.merge' },
+        },
+      ),
+      'merge-permits: awaits test.merge, which is registered: carry it there, and drop the wait',
+    ],
+    [
+      'a row awaiting an op that another op carries',
+      registry(
+        {
+          'test.other': op({
+            access: tokens,
+            kind: 'command',
+            scope: 'none',
+            rules: ['merge-permits'],
+          }),
+        },
+        {
+          rules: { 'merge-permits': { kind: 'argument', sentence: 'Not this token.' } },
+          awaiting: { 'merge-permits': 'test.merge' },
+        },
+      ),
+      'merge-permits: awaits test.merge, but an op carries it already',
     ],
     [
       'an op naming an agent, open to a token, without self',

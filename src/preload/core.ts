@@ -2,7 +2,7 @@ import { ipcRenderer } from 'electron';
 
 import type { OpResult } from '../shared/api/errors';
 import type { TopicUpdate } from '../shared/api/topics';
-import { CORE_PORT } from '../shared/gui-link';
+import { CORE_PORT, WindowShow } from '../shared/gui-link';
 import type { CoreGuiSide, GuiSide, GuiEvent, GuiEventArgs } from '../shared/gui-link';
 import { CoreLink } from '../shared/link';
 
@@ -19,6 +19,7 @@ const WAIT_MS = 10_000;
 const NOT_ANSWERING = 'corrallm’s core isn’t answering yet.';
 
 export interface CoreConnection {
+  onShow(listener: (target: WindowShow) => void): () => void;
   onTopic(listener: (changes: TopicUpdate[]) => void): () => void;
   onEpoch(listener: (epoch: string) => void): () => void;
   /** Hears the core's `drafts.flush`: answered once every listener's promise settles. */
@@ -42,6 +43,7 @@ function linkOver(
   topic: (changes: TopicUpdate[]) => void,
   epoch: (epoch: string) => void,
   flush: () => Promise<null>,
+  show: (target: WindowShow) => void,
 ): Linked {
   let end: ((why: string) => void) | undefined;
   const link = new CoreLink<GuiSide, CoreGuiSide>(
@@ -66,6 +68,7 @@ function linkOver(
   link.on('event', receive);
   link.on('topic', topic);
   link.on('epoch', epoch);
+  link.on('show', show);
   return {
     link,
     close: (why) => {
@@ -81,6 +84,7 @@ export function connectCore(): CoreConnection {
   let refused: Error | undefined;
   let epoch: string | undefined;
   const epochs = new Set<(epoch: string) => void>();
+  const shows = new Set<(target: WindowShow) => void>();
   const topics = new Set<(changes: TopicUpdate[]) => void>();
   const flushes = new Set<() => Promise<void>>();
   // What the page composes is finished before main's quit (B11 Design §16.5): view state only.
@@ -114,6 +118,11 @@ export function connectCore(): CoreConnection {
         for (const listener of epochs) listener(nextEpoch);
       },
       flush,
+      (target) => {
+        if (linked !== next) return;
+        const parsed = WindowShow.safeParse(target);
+        if (parsed.success) for (const listener of shows) listener(parsed.data);
+      },
     );
     linked = next;
     refused = undefined;
@@ -148,6 +157,12 @@ export function connectCore(): CoreConnection {
   };
 
   return {
+    onShow: (listener) => {
+      shows.add(listener);
+      return () => {
+        shows.delete(listener);
+      };
+    },
     onTopic: (listener) => {
       topics.add(listener);
       return () => {

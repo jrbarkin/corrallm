@@ -115,6 +115,12 @@ export const RULES = {
     sentence:
       'Only you decide what becomes of a worktree’s work: a change leaving a worktree that holds work with no agent waits for you to confirm it, an agent working in one moves to another only when you switch it, and no change runs or approves a setup.',
   },
+  // B9b §9 C1 (Q30): a token made with --no-merge is a writer that merges no agent's branch. Its
+  // check reads only who calls, in core.call, on every op that carries it (branch.merge).
+  'merge-permits': {
+    kind: 'argument',
+    sentence: 'This token was made with --no-merge: it can’t merge an agent’s branch.',
+  },
   // R9: a token's run.unpause, run.resume and run.start never undo another party's pause, stop
   // or decision.
   sticky: {

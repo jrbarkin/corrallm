@@ -1,3 +1,5 @@
+import type { NotificationRequest, NotificationResult, Presence } from './presence';
+
 /*
  * What the core asks of the app that hosts it: whatever needs the desktop. The core never imports
  * Electron (ESLint's app/boundaries-core), so its dialogs come through `HostServices`: in the app,
@@ -32,6 +34,12 @@ export interface LinkAnswer {
 }
 
 export interface HostServices {
+  /** Replaces the native presence snapshot; no-op without a desktop. */
+  presence(snapshot: Presence): void;
+  /** Asks the native host to show one bounded notification. */
+  notify(notification: NotificationRequest): Promise<NotificationResult>;
+  /** Withdraws a native notification by its opaque handle. */
+  unnotify(handle: string): void;
   /** The Open dialog for a canvas file: the file picked, or null if cancelled. */
   pickCanvasToOpen(window: WindowId): Promise<TrustedPath | null>;
   /**

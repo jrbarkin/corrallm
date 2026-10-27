@@ -28,11 +28,13 @@ function fakeCore(): FakeCore {
   return {
     link: {} as CoreProcess['link'],
     exited: exited.promise,
+    presence: undefined,
     exit: exited.resolve,
     connect: vi.fn<CoreProcess['connect']>(),
     windowGone: vi.fn<CoreProcess['windowGone']>(),
     windowFocused: vi.fn<CoreProcess['windowFocused']>(),
     resumed: vi.fn<CoreProcess['resumed']>(),
+    focus: vi.fn<CoreProcess['focus']>(),
     kill: vi.fn<CoreProcess['kill']>(),
   };
 }
@@ -276,4 +278,17 @@ describe('an exit that is no crash', () => {
     expect(await supervisor.core).toBe(core(1));
     expect(options.restarted).not.toHaveBeenCalled();
   });
+});
+
+it('owns the initializing process, drops an exited one and never grants a replaced one host authority', async () => {
+  const gate = Promise.withResolvers<undefined>();
+  const { supervisor, core } = setup(() => gate.promise);
+  const starting = supervisor.start();
+  expect(supervisor.owns(core(0))).toBe(true);
+  gate.resolve(undefined);
+  await starting;
+  core(0).exit(1);
+  await settle();
+  expect(supervisor.owns(core(0))).toBe(false);
+  expect(supervisor.owns(core(1))).toBe(true);
 });

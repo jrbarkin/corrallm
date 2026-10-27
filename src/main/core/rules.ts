@@ -3,7 +3,8 @@ import type { AdapterId, Catalog } from '../../shared/adapter';
 import { MAX_MESSAGE_BYTES } from '../../shared/api/limits';
 import type { ArgsOf } from '../../shared/api/registry';
 import { RULES } from '../../shared/api/rules';
-import type { OpName, Party, Rule, SURFACE } from '../../shared/api/surface';
+import { SURFACE } from '../../shared/api/surface';
+import type { OpName, Party, Rule, Surface } from '../../shared/api/surface';
 import type { CanvasId } from '../../shared/canvas';
 import type { Run } from './engine/run/runner';
 import type { PartyId } from '../../shared/model/messages';
@@ -75,6 +76,41 @@ export type ArgumentChecks = {
 };
 
 /**
+ * Q30 (B9b §9 C1): only a token made to merge merges an agent's branch. A token made with
+ * --no-merge is a writer that may not, a read-only one never may, and no agent may (none is in
+ * branch.merge's audience in B9b: whether a lead merges its team's branches is B24's to decide,
+ * here too). It reads only who calls, never the call's arguments.
+ */
+export function mergePermits(caller: TokenCaller): RuleOutcome {
+  if (caller.kind === 'outside') {
+    return caller.merge ? undefined : { refuse: RULES['merge-permits'].sentence };
+  }
+  return { refuse: 'An agent can’t merge a branch: only the user, or a token made to.' };
+}
+
+/** A rule's check that reads only who calls, whatever the op's arguments. */
+type CallerCheck = (
+  args: unknown,
+  call: { caller: TokenCaller; party: Party },
+) => RuleOutcome | Promise<RuleOutcome>;
+
+/**
+ * `check` on every op of `surface` (the registry's) that carries `rule`: for a rule that reads
+ * only who calls, so that an op is guarded from the moment it carries it.
+ */
+export function onEveryCarrier<R extends ArgumentRule>(
+  rule: R,
+  check: CallerCheck,
+  surface: Readonly<Record<string, Surface>> = SURFACE,
+): ArgumentChecks[R] {
+  return Object.fromEntries(
+    Object.entries(surface)
+      .filter(([, op]) => op.rules?.includes(rule) === true)
+      .map(([name]) => [name, check]),
+  ) as ArgumentChecks[R];
+}
+
+/**
  * The rules checked on a token's arguments, over the canvases the core runs (`engines`) and what
  * waits for an answer on each, as you see it (`needOf`: an item by its id). R4's (`discard`), on a
  * canvas's lifetime, are its ops' own (ops/files.ts).
@@ -87,6 +123,8 @@ export function ruleChecks(
   const openOf = (canvas: string | undefined) =>
     canvas === undefined ? undefined : engines.canvas(canvas as CanvasId);
   return {
+    // Q30: the same check on every op that carries the rule (branch.merge, once registered).
+    'merge-permits': onEveryCarrier('merge-permits', (_args, { caller }) => mergePermits(caller)),
     // R3: the caller must be one the item names to answer it now (its `by`), and may pick no
     // choice only you may (`humanOnly`). An item that isn't there is the op's to say.
     'human-choice': {
