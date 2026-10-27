@@ -1,10 +1,16 @@
 import { z } from 'zod';
 
+import {
+  MAX_PAUSE_SENTENCE_BYTES,
+  MAX_PAUSE_UNSAVED,
+  MAX_PRESENCE_COUNT,
+} from '../../shared/api/limits';
+
+export { MAX_PAUSE_UNSAVED, MAX_PRESENCE_COUNT };
+
 /** Private host protocol bounds (B14 §9); no operation or token reads these snapshots. */
-export const MAX_PRESENCE_COUNT = 9999;
 export const MAX_NOTIFICATION_TITLE_BYTES = 32;
 export const MAX_NOTIFICATION_BODY_BYTES = 160;
-export const MAX_PAUSE_UNSAVED = 64;
 const count = z.int().min(0).max(MAX_PRESENCE_COUNT);
 const bytes = (max: number) =>
   z
@@ -44,7 +50,7 @@ export const PauseAllResult = z.strictObject({
   agents: count,
   canvases: count,
   unsaved: z
-    .array(z.strictObject({ canvas: z.uuid(), sentence: bytes(4096) }))
+    .array(z.strictObject({ canvas: z.uuid(), sentence: bytes(MAX_PAUSE_SENTENCE_BYTES) }))
     .max(MAX_PAUSE_UNSAVED),
 });
 export type PauseAllResult = z.infer<typeof PauseAllResult>;

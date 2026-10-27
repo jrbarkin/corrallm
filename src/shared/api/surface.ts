@@ -103,6 +103,12 @@ export interface Surface {
   readonly varies?: readonly string[];
   /** The topic the GUI reads this state from, instead of calling the op. */
   readonly reads?: TopicKind;
+  /**
+   * Main's native UI alone calls it (the Dock, the menu-bar item, the tray), as you
+   * (`asHuman('host')`, core/gui.ts): no window's port serves it and no token is in its audience
+   * (the native-menu deviation).
+   */
+  readonly host?: true;
 }
 
 /*
@@ -447,6 +453,8 @@ export const SURFACE = {
     varies: ['agents', 'groups', 'saveError'],
   },
   'run.pause': { access: L, kind: 'command', scope: 'agent', self: 'allowed' },
+  // Pause all (B14 C3): every agent of every canvas the core runs, from main's native menus alone.
+  'run.pauseAll': { access: Y, kind: 'command', scope: 'none', host: true },
   'run.kill': {
     access: L,
     kind: 'command',
@@ -502,13 +510,22 @@ export type OpName = keyof typeof SURFACE;
 /** Every operation, by name. */
 export const OP_NAMES = Object.keys(SURFACE) as OpName[];
 
-/** The operations a window may call: those whose audience includes you. */
+/**
+ * The operations a window may call: those whose audience includes you, but those main's native UI
+ * alone calls (`host`).
+ */
 export type GuiOp = {
-  [N in OpName]: 'you' extends keyof (typeof SURFACE)[N]['access'] ? N : never;
+  [N in OpName]: (typeof SURFACE)[N] extends { host: true }
+    ? never
+    : 'you' extends keyof (typeof SURFACE)[N]['access']
+      ? N
+      : never;
 }[OpName];
 
 /**
  * Every operation a window may call, by name: what its port serves (core/gui.ts) and the preload
  * exposes, one function each. Any other is refused before it is dispatched.
  */
-export const GUI_OPS = OP_NAMES.filter((name): name is GuiOp => 'you' in SURFACE[name].access);
+export const GUI_OPS = OP_NAMES.filter(
+  (name): name is GuiOp => 'you' in SURFACE[name].access && !('host' in SURFACE[name]),
+);

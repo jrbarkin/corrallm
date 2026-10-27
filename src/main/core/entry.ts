@@ -221,10 +221,9 @@ const link = new CoreLink<CoreSide, HostSide>(
       await close(await ready.promise);
       return null;
     },
-    // C3 and C5 supply these services; an unwired host gesture must fail without side effects.
-    pauseAll: () => {
-      throw new Error('Pause all is not available yet.');
-    },
+    // Pause all from main's native menus: run.pauseAll, as you at main's own UI (core/gui.ts).
+    pauseAll: async () => (await windows.promise).pauseAll(),
+    // C5 supplies notification handles: until then, no handle is known, so nothing is sent.
     activate: () => null,
     selftest: async ({ packaged }) => ({
       checks: await runChecks(selfTestChecks({ packaged })),

@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { define } from '../define';
 import type { OpDef } from '../define';
 import { PARTY_PATTERN } from '../../model/messages';
+import { MAX_PAUSE_SENTENCE_BYTES, MAX_PAUSE_UNSAVED, MAX_PRESENCE_COUNT } from '../limits';
 import { AgentId, GroupId, ItemId, OpCanvas } from '../ids';
 import { RunViewSchema } from './b11-data';
 import type { OpName } from '../surface';
@@ -24,6 +25,29 @@ export const runOps = {
       'is sent to it, messages from parties included, until it is unpaused.',
     input: z.strictObject({ canvas, target: Target }),
     output: z.strictObject({}),
+  }),
+  'run.pauseAll': define('run.pauseAll', {
+    summary:
+      'Pauses every agent of every canvas corrallm runs, run or no run: what each is doing ' +
+      'finishes, then nothing more is sent to it, messages from parties included, until it is ' +
+      'unpaused. One already paused stays as it is. From the app’s native menus only.',
+    input: z.strictObject({}),
+    output: z.strictObject({
+      agents: z.int().min(0).max(MAX_PRESENCE_COUNT),
+      canvases: z.int().min(0).max(MAX_PRESENCE_COUNT),
+      unsaved: z
+        .array(
+          z.strictObject({
+            canvas: z.uuid(),
+            sentence: z.string().max(MAX_PAUSE_SENTENCE_BYTES),
+          }),
+        )
+        .max(MAX_PAUSE_UNSAVED)
+        .meta({
+          description:
+            'The canvases whose pauses couldn’t be saved: they hold now, but may not survive a restart.',
+        }),
+    }),
   }),
   'run.kill': define('run.kill', {
     summary:

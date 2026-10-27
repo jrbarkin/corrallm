@@ -324,6 +324,26 @@ describe('the core process told to stop by a signal (B14 C4)', () => {
   });
 });
 
+describe('Pause all, asked by main’s native menus (B14 C3)', () => {
+  it('pauses as you at main’s own UI, answering what it paused', async () => {
+    const entry = await start();
+    expect(await entry.init()).toEqual({ ok: true, value: null });
+    expect(await main.request('pauseAll')).toEqual({
+      ok: true,
+      value: { agents: 0, canvases: 0, unsaved: [] },
+    });
+    // Under the barrier, its refusal's sentence.
+    expect(await main.request('prepareShutdown', 'quit')).toEqual({
+      ok: true,
+      value: { ok: true },
+    });
+    expect(await main.request('pauseAll')).toEqual({
+      ok: true,
+      value: { sentence: 'corrallm is quitting: try again once it is open again.' },
+    });
+  });
+});
+
 describe('a window gaining focus', () => {
   it('has the core check the file of the canvas it shows', async () => {
     const focused: number[] = [];

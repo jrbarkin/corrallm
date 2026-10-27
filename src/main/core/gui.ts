@@ -8,6 +8,7 @@ import type { Dispatcher } from './call';
 import type { TerminalEvents } from './terminal-events';
 import type { HumanCaller } from './caller';
 import type { WindowId } from './host';
+import { PauseAllResult } from './presence';
 import type { Topics } from './topics';
 
 /*
@@ -73,6 +74,19 @@ export class WindowPorts {
       throw new Error('The app window closed before opening the link.');
     const answer = await this.#core.call('link.open', { url }, asHuman(window));
     if (!answer.ok) throw new Error(answer.error.sentence);
+  }
+
+  /**
+   * Pause all, chosen in main's native menus (B14 C3: the Dock, the menu-bar item, the tray): the
+   * registered run.pauseAll as you at main's own UI ('host'), through core.call like any call, the
+   * only place that caller is made. What it paused, or why it was refused (its sentence).
+   */
+  async pauseAll(): Promise<PauseAllResult | { sentence: string }> {
+    const answer = await this.#core.call('run.pauseAll', {}, asHuman('host'));
+    if (!answer.ok) return { sentence: answer.error.sentence };
+    // Its receipts (`revs`) are a window's, and main has none.
+    const { agents, canvases, unsaved } = answer.value as PauseAllResult;
+    return PauseAllResult.parse({ agents, canvases, unsaved });
   }
 
   /** The windows it serves now, each with its port. */
