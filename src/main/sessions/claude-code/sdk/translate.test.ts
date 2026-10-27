@@ -105,14 +105,14 @@ describe('Translator, on what the real Claude Code did', () => {
     expect(usage.at(0)?.usage).toEqual({
       costUsd: 0.006818879999999999,
       // The last reply's input, cache and output tokens.
-      context: null,
+      context: { used: 2 + 316 + 39709 + 8, window: 1_000_000, compactAt: 967_000 },
       contextTokens: 2 + 316 + 39709 + 8,
       contextWindow: 1_000_000,
     });
     // Compacting leaves less in context.
     expect(usage.at(-1)?.usage).toMatchObject({
       costUsd: 0.007957245,
-      context: null,
+      context: { used: 9021, window: 1_000_000, compactAt: 967_000 },
       contextTokens: 9021,
     });
   });
