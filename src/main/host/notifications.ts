@@ -63,6 +63,8 @@ export class NativeNotifications {
   notify(request: NotificationRequest): Promise<NotificationResult> {
     if (this.#deps.hidden || this.#closed || !this.#deps.current() || this.#deps.focused())
       return Promise.resolve('suppressed');
+    // Until the first cue nothing has asked the OS: not "unsupported", which says the OS cannot.
+    if (!this.#prepared) return Promise.resolve('suppressed');
     if (!this.#supported) return Promise.resolve('unsupported');
     const parsed = NotificationRequest.safeParse(request);
     if (!parsed.success) return Promise.resolve('failed');

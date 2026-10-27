@@ -169,6 +169,8 @@ export interface CoreConfig {
   notifications?: boolean;
   /** For tests: the notifier's burst window and rate (B14 C7), shortened. */
   notifier?: Partial<NotifierTiming>;
+  /** For tests: the period between presence snapshots (B14 C5), lengthened. */
+  presenceEveryMs?: number;
   /**
    * For tests: what runs agents' sessions instead of each connection's own connector
    * (sessions/fake.ts), the environment they run in instead of the login shell's, what reads a
@@ -369,6 +371,7 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     send: (snapshot) => {
       host.presence(snapshot);
     },
+    ...(config.presenceEveryMs === undefined ? {} : { everyMs: config.presenceEveryMs }),
   });
   const presenceChanged = () => {
     presence.changed();
@@ -1010,7 +1013,12 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
             return file === undefined ? null : path.basename(file);
           },
           enabled: () => notifying,
-          notify: (request) => host.notify(request),
+          // Both go over the host link in order: main hears what it counts (the snapshot that
+          // prepares its presenter) before the notification it is for.
+          notify: (request) => {
+            presence.now();
+            return host.notify(request);
+          },
           unnotify: (handle) => {
             host.unnotify(handle);
           },

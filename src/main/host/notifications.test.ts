@@ -142,6 +142,17 @@ describe('native notifications', () => {
     unsupported.notifications.close();
   });
 
+  it('suppresses, not unsupported, what comes before it is prepared: nothing yet says the OS cannot', async () => {
+    const w = world();
+    expect(await w.notifications.notify(REQUEST)).toBe('suppressed');
+    w.notifications.prepare(0, true);
+    w.notifications.prepare(1, false);
+    expect(await w.notifications.notify(REQUEST)).toBe('suppressed');
+    expect(w.backend.supported).not.toHaveBeenCalled();
+    expect(w.backend.made).toEqual([]);
+    w.notifications.close();
+  });
+
   it('returns native failure without retrying, bounds a missing delivery event, and closes everything on core exit', async () => {
     vi.useFakeTimers();
     const w = world();

@@ -1498,7 +1498,7 @@ describe('native notifications, asked of the OS only when the core says to (B14 
     presentation().presence({ ...BUSY, revision: 3, notify: false });
     presentation().presence({ ...IDLE, revision: 4, notify: true, needs: 3 });
     expect(FakeNotification.asked).toBe(0);
-    await expect(presentation().notify(NOTICE)).resolves.toBe('unsupported');
+    await expect(presentation().notify(NOTICE)).resolves.toBe('suppressed');
   });
 
   it('asks once, at the first snapshot with an agent working while notifications are on', async () => {
@@ -1526,7 +1526,7 @@ describe('native notifications, asked of the OS only when the core says to (B14 
     await vi.waitFor(() => {
       expect(makeHost).toHaveBeenCalledTimes(2);
     });
-    await expect(presentation(1).notify(NOTICE)).resolves.toBe('unsupported');
+    await expect(presentation(1).notify(NOTICE)).resolves.toBe('suppressed');
     presentation(1).presence({ ...BUSY, revision: 0 });
     expect(FakeNotification.asked).toBe(1);
     const shown = presentation(1).notify(NOTICE);

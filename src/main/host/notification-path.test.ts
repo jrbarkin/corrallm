@@ -102,7 +102,7 @@ function release(): void {
 }
 
 /** The core, hosted by main's real services: its presence, notify and unnotify as `forkCore` binds them. */
-async function start(settings?: object): Promise<Core> {
+async function start(settings?: object, presenceEveryMs?: number): Promise<Core> {
   if (settings !== undefined)
     await writeFile(path.join(profile, 'settings.json'), JSON.stringify(settings));
   const listeners = new Map<string, ((value: unknown) => void)[]>();
@@ -137,6 +137,7 @@ async function start(settings?: object): Promise<Core> {
       distribution: 'local',
       directoryResolver: legacyDirectories,
       notifier: { coalesceMs: 50 },
+      ...(presenceEveryMs === undefined ? {} : { presenceEveryMs }),
       sessions: {
         connectors: {
           'codex.app-server': new FakeConnector({
@@ -226,6 +227,31 @@ describe('the core’s notifications through main’s native adapter', { timeout
       expect(shows).toEqual([{ canvas: CANVAS, need: waitingForYou.id }]);
     });
     expect(FakeNotification.asked).toBe(1);
+  });
+
+  it('shows a Need raised in the same moment as the first work, though no periodic snapshot has gone', async () => {
+    // The periodic snapshot is far off: main is prepared only by the flush before the notification.
+    const started = await start(undefined, 60_000);
+    await started.engines.open(CANVAS);
+    expect(FakeNotification.asked).toBe(0);
+    const asked = await started.call(
+      'message',
+      { canvas: CANVAS, to: 'worker', body: '/question Go on?' },
+      CALLERS.you,
+    );
+    expect(asked.ok).toBe(true);
+    await eventually(() => {
+      expect(FakeNotification.made).toHaveLength(1);
+    });
+    expect(FakeNotification.asked).toBe(1);
+    expect(FakeNotification.made[0]).toMatchObject({
+      title: 'corrallm',
+      body: 'Worker is asking you something',
+    });
+    FakeNotification.made[0]?.appear();
+    await eventually(() => {
+      expect(started.notificationStatus()).toBe('shown');
+    });
   });
 
   it('closes the OS notification once its Need is answered', async () => {

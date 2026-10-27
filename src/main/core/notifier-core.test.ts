@@ -26,6 +26,8 @@ let profile: string;
 let core: Core | undefined;
 let shown: NotificationRequest[];
 let closed: string[];
+/** What the core told main, in order: its presence snapshots and its notifications. */
+let told: string[];
 
 beforeEach(async () => {
   profile = await mkdtemp(path.join(tmpdir(), 'corrallm-notifier-'));
@@ -67,6 +69,7 @@ beforeEach(async () => {
   await keepCanvases(profile, { [CANVAS]: { file, project } });
   shown = [];
   closed = [];
+  told = [];
 });
 
 afterEach(async () => {
@@ -75,7 +78,7 @@ afterEach(async () => {
   await rm(profile, { recursive: true, force: true });
 });
 
-async function start(notifications?: false): Promise<Core> {
+async function start(notifications?: false, presenceEveryMs?: number): Promise<Core> {
   core = await createCore(
     {
       ...(notifications === undefined ? {} : { notifications }),
@@ -85,6 +88,7 @@ async function start(notifications?: false): Promise<Core> {
       distribution: 'local',
       directoryResolver: legacyDirectories,
       notifier: { coalesceMs: 50 },
+      ...(presenceEveryMs === undefined ? {} : { presenceEveryMs }),
       sessions: {
         connectors: { 'codex.app-server': new FakeConnector({ adapter: 'codex' }) },
         environment: () => Promise.resolve({}),
@@ -92,7 +96,11 @@ async function start(notifications?: false): Promise<Core> {
     },
     {
       ...NO_DESKTOP,
+      presence: (snapshot) => {
+        told.push(`presence working ${String(snapshot.working)}`);
+      },
       notify: (request) => {
+        told.push('notify');
         shown.push(request);
         return Promise.resolve('shown');
       },
@@ -128,6 +136,26 @@ async function untilTheOk(started: Core): Promise<NeedsItem> {
 }
 
 describe('the core’s notifications', { timeout: 30_000 }, () => {
+  it('sends main the presence that prepares its presenter before the notification it is for', async () => {
+    // Its periodic snapshot is far off: only a flush as the notification goes can beat it.
+    const started = await start(undefined, 60_000);
+    await started.engines.open(CANVAS);
+    // An agent asks you in the same moment it starts working: main has heard nothing of it yet.
+    const asked = await started.call(
+      'message',
+      { canvas: CANVAS, to: 'worker', body: '/question Go on?' },
+      CALLERS.you,
+    );
+    expect(asked.ok).toBe(true);
+    await eventually(() => {
+      expect(shown).toHaveLength(1);
+    });
+    expect(told.slice(told.indexOf('notify') - 1, told.indexOf('notify') + 1)).toEqual([
+      'presence working 1',
+      'notify',
+    ]);
+  });
+
   it('notifies a new Need with no window focused, in fixed words, and closes it once answered', async () => {
     const started = await start();
     await started.engines.open(CANVAS);

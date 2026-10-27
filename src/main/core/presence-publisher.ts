@@ -95,6 +95,8 @@ export interface PresencePublisherDeps {
   count: () => PresenceCounts;
   /** Sends a snapshot to main (HostServices.presence). */
   send: (snapshot: Presence) => void;
+  /** For tests: the period between snapshots, instead of PRESENCE_EVERY_MS. */
+  everyMs?: number;
 }
 
 /** One core process's presence: its snapshots, each whole, revised as what it counts changes. */
@@ -124,7 +126,7 @@ export class PresencePublisher {
     this.#timer = setTimeout(() => {
       this.#timer = undefined;
       this.now();
-    }, PRESENCE_EVERY_MS);
+    }, this.#deps.everyMs ?? PRESENCE_EVERY_MS);
   }
 
   /** The snapshot now, counted at once: sent first if it changed (the period's change with it). */
