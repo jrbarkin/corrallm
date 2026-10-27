@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { FallbackInputSchema, HandoffInputSchema } from '../model/fallback';
 import { AgentId, OpCanvas } from './ids';
 
-/** Prepared B11a inputs only; no operation, authority rule or runtime service is registered. */
+/** B11a inputs: agent.setFallback's (registered, C2) and agent.setHandoff's (C3's, unregistered). */
 export const SetFallbackInput = z.strictObject({
   canvas: OpCanvas,
   agent: AgentId,
