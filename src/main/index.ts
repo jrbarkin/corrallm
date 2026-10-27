@@ -15,7 +15,7 @@ import { hostServices } from './host/services';
 import { CoreSupervisor } from './host/supervisor';
 import { startAppUpdates } from './host/updates';
 import { electronNotifications, electronPresence } from './host/electron-presence';
-import { NativeNotifications } from './host/notifications';
+import { NativeNotifications, nativePresentation } from './host/notifications';
 import { PresencePresentation } from './host/presence';
 import { registerIpcHandlers } from './ipc';
 import { runNativeSelfTest } from './native-selftest';
@@ -158,15 +158,11 @@ function main(): void {
               // C9's trusted cue is the core's own presence (§9.w): the first snapshot with an agent
               // working while the core's notifications are on. The OS is asked then, and (the backend
               // checking once per process) never again for a replacement core.
-              return hostServices(forked, (source) => supervisor.owns(source), {
-                presence: (snapshot) => {
-                  native.prepare(snapshot.working, snapshot.notify);
-                },
-                notify: (request) => native.notify(request),
-                unnotify: (handle) => {
-                  native.unnotify(handle);
-                },
-              });
+              return hostServices(
+                forked,
+                (source) => supervisor.owns(source),
+                nativePresentation(native),
+              );
             },
           });
           core.link.on('presence', () => {

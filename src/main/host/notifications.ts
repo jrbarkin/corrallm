@@ -1,3 +1,4 @@
+import type { HostServices } from '../core/host';
 import { NotificationRequest } from '../core/presence';
 import type { NotificationResult } from '../core/presence';
 
@@ -138,4 +139,23 @@ export class NativeNotifications {
       }
     }
   }
+}
+
+/**
+ * What main hands the core's host services of the native notifications (B14 §9.4): the presence
+ * snapshot's `working` and `notify` as C9's authorization cue, and the core's notify and unnotify.
+ * The one place the three are joined, so main's wiring and its tests are the same.
+ */
+export function nativePresentation(
+  native: NativeNotifications,
+): Pick<HostServices, 'presence' | 'notify' | 'unnotify'> {
+  return {
+    presence: (snapshot) => {
+      native.prepare(snapshot.working, snapshot.notify);
+    },
+    notify: (request) => native.notify(request),
+    unnotify: (handle) => {
+      native.unnotify(handle);
+    },
+  };
 }
