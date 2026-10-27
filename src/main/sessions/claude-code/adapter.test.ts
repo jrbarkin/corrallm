@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
+import { signalsOf } from './sdk/raise';
+import type { ToolOptions } from './sdk/raise';
+import { recorded } from './sdk/recorded';
+import type { Fixture } from './sdk/recorded';
 import { SdkSession } from './sdk/session';
 import { TerminalSession } from '../terminal/session';
 import { claudeCode } from './adapter';
@@ -27,7 +31,7 @@ function declared(session: object) {
 }
 
 describe("Claude Code's adapter", () => {
-  it('declares the four prompt kinds per connection, with signals still unproven', () => {
+  it('declares the four prompt kinds per connection, and signals only where recordings prove them', () => {
     expect(connection('claude-code.terminal')).toMatchObject({
       prompts: { approval: 'seen', question: 'seen', plan: 'seen', form: 'none' },
       signals: false,
@@ -39,8 +43,17 @@ describe("Claude Code's adapter", () => {
         plan: 'answerable',
         form: 'answerable',
       },
-      signals: false,
+      signals: true,
     });
+    // The Agent SDK's promise (B13 Design §9.2 C4): the real CLI's ask rule and safety check,
+    // recorded, each carry what its signals read. A Terminal's hooks carry neither.
+    const first = (fixture: Fixture) => {
+      const found = recorded(fixture).find((item) => item.kind === 'canUseTool');
+      if (found?.kind !== 'canUseTool') throw new Error(`nothing asked in ${fixture}`);
+      return signalsOf(found.data.tool, found.data.opts as unknown as ToolOptions);
+    };
+    expect(first('ask-rule')).toEqual({ askRule: true });
+    expect(first('safety-check')).toEqual({ safetyCheck: true });
   });
 
   it('is claude-code, with Terminal first and the Agent SDK second', () => {

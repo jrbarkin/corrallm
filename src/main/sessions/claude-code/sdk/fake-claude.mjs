@@ -11,6 +11,14 @@
 // the SDK asked for them); "a form" has its MCP server github ask for a form first (an
 // elicitation), and replies with what it got. It has two MCP servers, github (connected) and
 // sentry (failed until reconnected), which /mcp's requests list and change.
+// It also asks as the real CLI did in fixtures/ (B13 C4): "secret" reads secret.txt, which an ask
+// rule asks about in any mode (decision_reason_type rule); "safety" writes into .claude/commands,
+// which a safety check asks about in any mode (safetyCheck); "touch" runs `touch made.txt`,
+// offering a rule, the folder and Accept edits together; "a link" calls its tracker server's
+// sign_in tool (an MCP server's, asked as the server's policy says) and that server asks for a
+// link to be opened (an elicitation, mode url); "a plan" asks to approve a plan (ExitPlanMode).
+// An answer that keeps a session mode (setMode, as "always" or a plan's approval does) switches
+// to it, saying so, as the CLI does.
 // Recovery fixtures opt in with "recovery-failed", "recovery-missing" or "recovery-corrected":
 // explicit FAILED, no verdict or explicit SUCCEEDED. FAKE_CLAUDE_PROMPTS logs received prompts
 // as JSON lines, only when a test gives it a file of its own.
@@ -322,15 +330,45 @@ function request(body) {
   return new Promise((resolve) => asked.set(requestId, resolve));
 }
 
-/** Asks the SDK whether a tool may run; resolves with its answer. */
-function canUseTool(name, input, toolUseId, suggestions) {
-  return request({
+/**
+ * Asks the SDK whether a tool may run (with `more` of the request's fields, as the CLI gives them);
+ * resolves with its answer, once a session mode it keeps is the one it runs in.
+ */
+async function canUseTool(name, input, toolUseId, suggestions, more = {}) {
+  const answer = await request({
     subtype: 'can_use_tool',
     tool_name: name,
     display_name: name,
     input,
     tool_use_id: toolUseId,
     permission_suggestions: suggestions,
+    ...more,
+  });
+  const kept = (answer.updatedPermissions ?? []).find(
+    (update) => update.type === 'setMode' && update.destination === 'session',
+  );
+  if (answer.behavior === 'allow' && kept !== undefined) {
+    mode = kept.mode;
+    say({
+      type: 'system',
+      subtype: 'status',
+      status: null,
+      permissionMode: mode,
+      uuid: randomUUID(),
+    });
+  }
+  return answer;
+}
+
+/** Its tracker server asks the user to open a link (an elicitation, mode url). */
+function elicitLink() {
+  return request({
+    subtype: 'elicitation',
+    mcp_server_name: 'tracker',
+    message: 'Sign in to the tracker to continue.',
+    mode: 'url',
+    url: 'https://tracker.example.com/sign-in?state=abc123',
+    elicitation_id: randomUUID(),
   });
 }
 
@@ -356,7 +394,7 @@ function elicit() {
  * A tool call in turn `current` of message `id`: shown, asked about first in the default (Manual)
  * and plan modes, then its result (`said` to the model, `result` structured), or its denial.
  */
-async function useTool(current, id, name, input, { said, result, suggestions, act }) {
+async function useTool(current, id, name, input, { said, result, suggestions, act, asks, more }) {
   const toolUseId = `toolu_${randomUUID().replace(/-/g, '')}`;
   say({
     type: 'assistant',
@@ -378,8 +416,8 @@ async function useTool(current, id, name, input, { said, result, suggestions, ac
     uuid: randomUUID(),
   });
   const answer =
-    mode === 'default' || mode === 'plan'
-      ? await canUseTool(name, input, toolUseId, suggestions)
+    asks === true || mode === 'default' || mode === 'plan'
+      ? await canUseTool(name, input, toolUseId, suggestions, more)
       : { behavior: 'allow' };
   const allowed = answer.behavior === 'allow';
   if (allowed) act?.();
@@ -595,6 +633,105 @@ async function askQuestion(id) {
   });
 }
 
+/** Calls its tracker server's sign_in tool, as the CLI asks about it; that server asks for a link. */
+async function signIn(current, id) {
+  const toolUseId = `toolu_${randomUUID().replace(/-/g, '')}`;
+  say({
+    type: 'assistant',
+    message: {
+      id,
+      type: 'message',
+      role: 'assistant',
+      model,
+      content: [{ type: 'tool_use', id: toolUseId, name: 'mcp__tracker__sign_in', input: {} }],
+      stop_reason: null,
+      usage: { input_tokens: 2, output_tokens: 30 },
+    },
+    parent_tool_use_id: null,
+    uuid: randomUUID(),
+  });
+  const answer = await canUseTool(
+    'mcp__tracker__sign_in',
+    {},
+    toolUseId,
+    [
+      {
+        type: 'addRules',
+        rules: [{ toolName: 'mcp__tracker__sign_in' }],
+        behavior: 'allow',
+        destination: 'localSettings',
+      },
+    ],
+    {
+      display_name: 'Sign In',
+      mcp_server: { name: 'tracker', source: 'dynamic' },
+      server_policy_ask_only: true,
+    },
+  );
+  const got = answer.behavior === 'allow' && !current.interrupted ? await elicitLink() : undefined;
+  say({
+    type: 'user',
+    message: {
+      role: 'user',
+      content: [
+        {
+          tool_use_id: toolUseId,
+          type: 'tool_result',
+          content: got ? [{ type: 'text', text: `got: ${JSON.stringify(got)}` }] : answer.message,
+          ...(got ? {} : { is_error: true }),
+        },
+      ],
+    },
+    parent_tool_use_id: null,
+    uuid: randomUUID(),
+  });
+  return got ?? { action: 'denied' };
+}
+
+/** Asks to approve a plan (ExitPlanMode); says how it was answered. */
+async function exitPlan(current, id) {
+  const toolUseId = `toolu_${randomUUID().replace(/-/g, '')}`;
+  const input = { plan: '1. Write a.txt containing hi.\n2. Read it back.\n' };
+  say({
+    type: 'assistant',
+    message: {
+      id,
+      type: 'message',
+      role: 'assistant',
+      model,
+      content: [{ type: 'tool_use', id: toolUseId, name: 'ExitPlanMode', input }],
+      stop_reason: null,
+      usage: { input_tokens: 2, output_tokens: 30 },
+    },
+    parent_tool_use_id: null,
+    uuid: randomUUID(),
+  });
+  const answer = await canUseTool('ExitPlanMode', input, toolUseId, undefined, {
+    requires_user_interaction: true,
+  });
+  const allowed = answer.behavior === 'allow';
+  say({
+    type: 'user',
+    message: {
+      role: 'user',
+      content: [
+        {
+          tool_use_id: toolUseId,
+          type: 'tool_result',
+          content: allowed
+            ? 'User has approved your plan. You can now start coding.'
+            : answer.message,
+          ...(allowed ? {} : { is_error: true }),
+        },
+      ],
+    },
+    parent_tool_use_id: null,
+    uuid: randomUUID(),
+  });
+  if (current.interrupted) return undefined;
+  return allowed ? `Approved: carrying it out in ${mode}.` : `Not approved: ${answer.message}`;
+}
+
 async function play(message) {
   const uuid = message.uuid;
   const content = message.message.content;
@@ -715,6 +852,10 @@ async function play(message) {
   }
 
   const got = !current.interrupted && text.includes('a form') ? await elicit() : undefined;
+  const linked =
+    !current.interrupted && text.includes('a link') ? await signIn(current, id) : undefined;
+  const planned =
+    !current.interrupted && text.includes('a plan') ? await exitPlan(current, id) : undefined;
   const recovery = text.includes('recovery-corrected')
     ? 'The original task is complete.\nSUCCEEDED'
     : text.includes('recovery-failed')
@@ -724,19 +865,23 @@ async function play(message) {
         : undefined;
   const reply = got
     ? [`github got: ${got.action}`, got.content ? ` ${JSON.stringify(got.content)}` : '']
-    : text.includes('markdown')
-      ? [
-          '### What I found\n\n',
-          'The **queue** runs in `runner.ts`:\n\n',
-          '1. Each agent takes its next task\n2. Waits hold until their target is done\n\n',
-          '```ts\nstore.send(agentId, agent, text, onDone);\n```\n\n',
-          '| File | Lines |\n|---|--:|\n| runner.ts | 240 |\n| lanes.ts | 180 |\n\n',
-          'See [the queue docs](https://docs.example.com/queues).',
-        ]
-      : [
-          `You said: ${text}`,
-          images > 0 ? ` (with ${images} image${images === 1 ? '' : 's'})` : '',
-        ];
+    : linked
+      ? [`tracker got: ${linked.action}`]
+      : planned
+        ? [planned]
+        : text.includes('markdown')
+          ? [
+              '### What I found\n\n',
+              'The **queue** runs in `runner.ts`:\n\n',
+              '1. Each agent takes its next task\n2. Waits hold until their target is done\n\n',
+              '```ts\nstore.send(agentId, agent, text, onDone);\n```\n\n',
+              '| File | Lines |\n|---|--:|\n| runner.ts | 240 |\n| lanes.ts | 180 |\n\n',
+              'See [the queue docs](https://docs.example.com/queues).',
+            ]
+          : [
+              `You said: ${text}`,
+              images > 0 ? ` (with ${images} image${images === 1 ? '' : 's'})` : '',
+            ];
   const pieces = text.includes('slow')
     ? Array.from({ length: 40 }, (_, i) => `${i} `)
     : recovery
@@ -804,6 +949,71 @@ async function play(message) {
             destination: 'localSettings',
           },
         ],
+      },
+    );
+  }
+  if (!current.interrupted && !recovery && text.includes('secret')) {
+    await useTool(
+      current,
+      id,
+      'Read',
+      { file_path: `${process.cwd()}/secret.txt` },
+      {
+        said: '1\tthe secret is 42',
+        result: { type: 'text', file: { filePath: `${process.cwd()}/secret.txt` } },
+        suggestions: undefined,
+        asks: true,
+        more: {
+          decision_reason_type: 'rule',
+          server_policy_ask_only: false,
+          description: 'secret.txt',
+        },
+      },
+    );
+  }
+  if (!current.interrupted && !recovery && text.includes('safety')) {
+    const file = `${process.cwd()}/.claude/commands/hello.md`;
+    await useTool(
+      current,
+      id,
+      'Write',
+      { file_path: file, content: 'hi' },
+      {
+        said: `File created successfully at: ${file}`,
+        result: { type: 'create', filePath: file, content: 'hi' },
+        suggestions: [],
+        asks: true,
+        more: {
+          decision_reason: `Claude requested permissions to write to ${file}, but you haven't granted it yet.`,
+          decision_reason_type: 'safetyCheck',
+          description: '.claude/commands/hello.md',
+        },
+      },
+    );
+  }
+  if (!current.interrupted && !recovery && text.includes('touch')) {
+    await useTool(
+      current,
+      id,
+      'Bash',
+      { command: 'touch made.txt', description: 'Create empty file made.txt' },
+      {
+        said: '(Bash completed with no output)',
+        result: { stdout: '', stderr: '', interrupted: false, isImage: false },
+        suggestions: [
+          {
+            type: 'addRules',
+            rules: [{ toolName: 'Bash', ruleContent: 'touch made.txt' }],
+            behavior: 'allow',
+            destination: 'localSettings',
+          },
+          { type: 'addDirectories', directories: [process.cwd()], destination: 'session' },
+          { type: 'setMode', mode: 'acceptEdits', destination: 'session' },
+        ],
+        more: {
+          blocked_path: `${process.cwd()}/made.txt`,
+          description: 'Create empty file made.txt',
+        },
       },
     );
   }

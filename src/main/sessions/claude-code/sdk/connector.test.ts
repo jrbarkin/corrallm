@@ -17,8 +17,8 @@ import path from 'node:path';
 
 import { describe, expect, it, vi } from 'vitest';
 
-import type { SessionEvent } from '../../../../shared/session';
-import type { SessionHost, SessionSpec } from '../../connector';
+import type { PromptEvent } from '../../../../shared/model/prompts';
+import type { HostEvent, SessionHost, SessionSpec } from '../../connector';
 import { SdkConnector } from './connector';
 import { SUBSCRIPTION_LOGIN } from './login';
 import type { AuthStatus } from './login';
@@ -145,6 +145,13 @@ it('refuses an unsafe id reported by the native session without remembering it',
 /** Lets the session read what the fake CLI said. */
 const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
 
+/** The last prompt raised to the core's owner. */
+function raisedOf(events: readonly HostEvent[]): PromptEvent {
+  const raised = events.findLast((event): event is PromptEvent => event.type === 'prompt');
+  if (raised === undefined) throw new Error('nothing raised');
+  return raised;
+}
+
 /** How the CLI says it is logged in, unless a test says otherwise: with an API key. */
 const API_KEY: AuthStatus = { loggedIn: true, authMethod: 'api_key', apiProvider: 'firstParty' };
 
@@ -158,10 +165,10 @@ function connector({
   login?: () => Promise<AuthStatus>;
 } = {}) {
   const queries: FakeQuery[] = [];
-  const events: SessionEvent[] = [];
+  const events: HostEvent[] = [];
   const remembered: string[] = [];
   const host: SessionHost = {
-    emit: (event: SessionEvent) => events.push(event),
+    emit: (event: HostEvent) => events.push(event),
     remember: (id) => remembered.push(id),
   };
   const getSessionMessages = vi.fn(() => Promise.resolve(history));
@@ -573,7 +580,7 @@ describe('SdkConnector', () => {
     expect(sent?.uuid).toMatch(/^[0-9a-f-]{36}$/);
   });
 
-  it('asks the user before a tool runs, and tells the CLI their answer', async () => {
+  it('raises what the CLI asks to the core’s owner, and tells the CLI only the owner’s answer, by its key', async () => {
     const { sdk, host, query, events } = connector();
     const session = await sdk.start(SPEC, host);
     const asked = query().canUseTool(
@@ -593,21 +600,31 @@ describe('SdkConnector', () => {
         ],
       },
     );
+    const raised = raisedOf(events);
+    expect(raised.prompt).toMatchObject({
+      kind: 'approval',
+      subject: { type: 'tool', tool: 'Bash', input: { command: 'npm test' } },
+    });
+    // Shown as before, until the renderer reads the owner's prompts (X10).
     expect(events.slice(-2)).toEqual([
       {
         type: 'permission',
-        id: 'toolu_1:prompt',
+        id: expect.stringMatching(/^prompt:[0-9a-f-]{36}$/) as unknown,
         tool: 'Bash',
         summary: 'npm test',
         always: "Yes, and don't ask again for `npm test` commands in shop",
       },
       { type: 'status', status: 'waiting' },
     ]);
-    await session.answer('toolu_1:prompt', { kind: 'permission', answer: 'once' });
-    expect(await asked).toMatchObject({ behavior: 'allow', updatedInput: { command: 'npm test' } });
+    // The old way answers nothing.
     await expect(
       session.answer('toolu_1:prompt', { kind: 'permission', answer: 'once' }),
-    ).rejects.toThrow(/no longer asked/);
+    ).rejects.toThrow(/only through/);
+    session.prompts?.answer(raised.key, { kind: 'choice', value: 'allow' });
+    expect(await asked).toMatchObject({ behavior: 'allow', updatedInput: { command: 'npm test' } });
+    expect(() => session.prompts?.answer(raised.key, { kind: 'choice', value: 'allow' })).toThrow(
+      /no longer asked/,
+    );
   });
 
   it('gives a prompt an id of its own, apart from its tool call’s entry', async () => {
@@ -880,10 +897,8 @@ describe('SdkConnector', () => {
       },
       { signal: new AbortController().signal, requestId: 'r' },
     );
-    const asked = events.find((event) => event.type === 'elicitation');
-    if (asked?.type !== 'elicitation') throw new Error('nothing asked');
-    await session.answer(asked.id, {
-      kind: 'elicitation',
+    session.prompts?.answer(raisedOf(events).key, {
+      kind: 'form',
       action: 'accept',
       values: { repo: 'acme/shop' },
     });
@@ -933,16 +948,16 @@ describe('SdkConnector', () => {
   });
 
   it('denies a tool with what to do instead: Claude goes on with it, as in Claude Code', async () => {
-    const { sdk, host, query } = connector();
+    const { sdk, host, query, events } = connector();
     const session = await sdk.start(SPEC, host);
     const asked = query().canUseTool(
       'Bash',
       { command: 'npm test' },
       { signal: new AbortController().signal, toolUseID: 'toolu_2', requestId: 'r2' },
     );
-    await session.answer('toolu_2:prompt', {
-      kind: 'permission',
-      answer: 'deny',
+    session.prompts?.answer(raisedOf(events).key, {
+      kind: 'choice',
+      value: 'deny-feedback',
       feedback: 'Use pnpm here',
     });
     const result = await asked;
@@ -954,30 +969,44 @@ describe('SdkConnector', () => {
     });
   });
 
-  it('carries out an approved plan in the mode chosen, once the CLI has left plan mode', async () => {
-    const { sdk, host, query } = connector();
+  it('carries out an approved plan in the mode chosen, telling the CLI the mode with its approval', async () => {
+    const { sdk, host, query, events } = connector();
     const session = await sdk.start({ ...SPEC, mode: 'plan' }, host);
     const approved = query().canUseTool(
       'ExitPlanMode',
       { plan: '1. Do it' },
       { signal: new AbortController().signal, toolUseID: 'toolu_plan', requestId: 'r' },
     );
-    await session.answer('toolu_plan:prompt', {
-      kind: 'plan',
-      answer: { approve: true, mode: 'acceptEdits' },
+    session.prompts?.answer(raisedOf(events).key, { kind: 'choice', value: 'acceptEdits' });
+    // As recorded (plan-into-mode): the CLI goes into the mode with the approval, at once.
+    expect(await approved).toEqual({
+      behavior: 'allow',
+      updatedInput: { plan: '1. Do it' },
+      updatedPermissions: [{ type: 'setMode', mode: 'acceptEdits', destination: 'session' }],
     });
-    await approved;
-    expect(query().setPermissionMode).not.toHaveBeenCalled();
-    // As recorded: the CLI goes back to the mode before plan mode...
     query().say({
       type: 'system',
       subtype: 'status',
       status: null,
-      permissionMode: 'default',
+      permissionMode: 'acceptEdits',
     } as unknown as SDKMessage);
     await settle();
-    // ...and the session goes on in the one chosen.
-    expect(query().setPermissionMode).toHaveBeenCalledWith('acceptEdits');
+    expect(query().setPermissionMode).not.toHaveBeenCalled();
+    expect(events.at(-1)).toEqual({ type: 'mode', mode: 'acceptEdits' });
+  });
+
+  it('answers what still waits with its nonapproval as it closes, ending each', async () => {
+    const { sdk, host, query, events } = connector();
+    const session = await sdk.start(SPEC, host);
+    const asked = query().canUseTool(
+      'Bash',
+      { command: 'npm test' },
+      { signal: new AbortController().signal, toolUseID: 'toolu_3', requestId: 'r3' },
+    );
+    const { key } = raisedOf(events);
+    await session.close();
+    expect(await asked).toEqual({ behavior: 'deny', message: 'The user did not answer.' });
+    expect(events).toContainEqual({ type: 'prompt-ended', key, reason: 'withdrawn' });
   });
 
   it('resumes the agent’s session, showing what it did before', async () => {

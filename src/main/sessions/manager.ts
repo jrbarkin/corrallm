@@ -31,6 +31,7 @@ import {
   roleFingerprint,
   withConversationsIn,
 } from '../memory';
+import type { PromptAnswer } from '../../shared/model/prompts';
 import type { Connector, LiveSession, PromptAnswers, SessionHost } from './connector';
 import type { Conversations } from './adapter';
 import { ConversationClaims } from './claims';
@@ -125,6 +126,12 @@ export interface PromptOrigin {
    * canvas and agent, which a restart would give the replacement's.
    */
   answers: PromptAnswers;
+  /**
+   * Transitional (B13 C4, until X10; X11 removes it): whether its session shows each prompt it
+   * raises as one of the events B13 replaces too (`LiveSession.bridge`), whose Needs item and
+   * card then stand for it, answered through the owner.
+   */
+  mirrored?: boolean;
 }
 
 export interface SessionManagerDeps {
@@ -525,6 +532,26 @@ export class SessionManager {
     answer: SessionAnswer,
   ): Promise<void> {
     await (await this.#session(canvas, agentId)).answer(promptId, answer);
+  }
+
+  /**
+   * Transitional (B13 C4, until X10; X11 removes it): for an agent whose running session shows
+   * each prompt it raised as one of the events B13 replaces too (`LiveSession.bridge`), the
+   * generation and key of the prompt the old event `promptId` shows, and `answer` as it takes it,
+   * for the core's prompt owner to answer. Undefined where its session shows no such twin (it
+   * still answers the old events itself), or none runs. Throws, saying why, for one its session
+   * no longer asks or an answer it doesn't offer. Never starts a session.
+   */
+  bridge(
+    canvas: CanvasId,
+    agentId: string,
+    promptId: string,
+    answer: SessionAnswer,
+  ): { generation: number; key: string; answer: PromptAnswer } | undefined {
+    const agent = this.#agents.get(canvas)?.get(agentId);
+    const bridge = agent?.live?.bridge?.bind(agent.live);
+    if (agent === undefined || bridge === undefined) return undefined;
+    return { generation: agent.generation, ...bridge(promptId, answer) };
   }
 
   /**
@@ -1018,6 +1045,7 @@ export class SessionManager {
       live: live(),
       startMode: agent.started?.mode,
       answers,
+      ...(agent.live?.bridge === undefined ? {} : { mirrored: true }),
     });
     try {
       const fingerprint = roleFingerprint(role);

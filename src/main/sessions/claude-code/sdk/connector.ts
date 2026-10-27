@@ -14,7 +14,7 @@ import type { ModelChoice, SessionEvent } from '../../../../shared/session';
 import { launchInstructions } from '../../instructions';
 import { spawn } from '../../process';
 import { CLAUDE_TERMINAL } from '../adapter';
-import type { Connector, LiveSession, SessionHost, SessionSpec } from '../../connector';
+import type { Connector, HostEvent, LiveSession, SessionHost, SessionSpec } from '../../connector';
 import { effortChoice } from '../efforts';
 import { historyEvents } from './history';
 import { Inbox } from './inbox';
@@ -161,16 +161,14 @@ export class SdkConnector implements Connector {
     const stderr = new Stderr();
     const translator = new Translator({ places });
     // Events before the session runs wait, so that 'started' comes first.
-    const early: SessionEvent[] = [];
+    const early: HostEvent[] = [];
     const live: { session?: SdkSession } = {};
-    const emit = (event: SessionEvent) => {
+    const emit = (event: HostEvent) => {
       if (live.session) host.emit(event);
       else early.push(event);
     };
-    const prompts = new Prompts(
-      { emit, planApproved: (mode) => live.session?.planApproved(mode) },
-      places,
-    );
+    // What it asks goes to the core's prompt owner (B13 C4); a plan may go into any mode it offers.
+    const prompts = new Prompts({ emit }, places, PERMISSION_MODES);
     const model = spec.model === null || spec.model === 'default' ? undefined : spec.model;
     const options: Options = {
       pathToClaudeCodeExecutable: claude,

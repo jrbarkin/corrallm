@@ -5,7 +5,7 @@ import type { NeedChoice, NeedQuestion, NeedsItem } from './needs';
 import { agentName } from './queries';
 import { isOpen } from './session';
 import type { Prompt, Session } from './session';
-import { resetTime } from './words';
+import { mcpRequestTitle, resetTime } from './words';
 import type { AskedQuestion, TerminalAsk, ToolDetail } from '../session';
 import type { EngineCatalog } from './catalog';
 import { heldAsks } from './run-words';
@@ -348,10 +348,10 @@ function promptWords(prompt: Prompt): Worded {
         answerIn: 'api',
       };
     case 'elicitation':
+      // The core's words, for everyone: the server's own may hold its link (B13 C11).
       return {
         kind: 'prompt',
-        title: prompt.message,
-        detail: `Asked by its MCP server ${prompt.server}.`,
+        title: mcpRequestTitle(prompt.server, prompt.url !== undefined),
         ...(prompt.url === undefined ? {} : { form: { url: prompt.url } }),
         choices: [],
         answerIn: 'api',

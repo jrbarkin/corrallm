@@ -1,11 +1,11 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import type { SessionEvent } from '../../../../shared/session';
-import type { LiveSession, SessionHost } from '../../connector';
+import type { PromptEvent } from '../../../../shared/model/prompts';
+import type { HostEvent, LiveSession, SessionHost } from '../../connector';
 import { SdkConnector } from './connector';
 import { Conversations } from './conversations';
 import { SUBSCRIPTION_LOGIN } from './login';
@@ -50,12 +50,12 @@ const LOGINS =
 async function start(
   mode: 'manual' | 'acceptEdits' | null = 'manual',
   login: Record<string, string> = { ANTHROPIC_API_KEY: 'sk-ant-test' },
-  events: SessionEvent[] = [],
+  events: HostEvent[] = [],
   resume: string | null = null,
 ) {
   const remembered: string[] = [];
   const host: SessionHost = {
-    emit: (event: SessionEvent) => events.push(event),
+    emit: (event: HostEvent) => events.push(event),
     remember: (id) => remembered.push(id),
   };
   const env = {
@@ -82,13 +82,21 @@ async function start(
 const PEER = { party: 'outside:orchestrator', name: 'orchestrator' };
 
 /** Waits until `events` has one that `matches`. */
-async function waitFor(events: SessionEvent[], matches: (event: SessionEvent) => boolean) {
+async function waitFor(events: HostEvent[], matches: (event: HostEvent) => boolean) {
   for (let i = 0; i < 200; i += 1) {
     const found = events.find(matches);
     if (found) return found;
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
   throw new Error(`Never came; got: ${events.map((e) => e.type).join(', ')}`);
+}
+
+/** Waits for the `count`th prompt raised to the core's owner. */
+async function raised(events: HostEvent[], count = 1): Promise<PromptEvent> {
+  await waitFor(events, () => events.filter((e) => e.type === 'prompt').length >= count);
+  const found = events.filter((e): e is PromptEvent => e.type === 'prompt')[count - 1];
+  if (found === undefined) throw new Error('nothing raised');
+  return found;
 }
 
 describe('SdkConnector through the Agent SDK', () => {
@@ -144,7 +152,8 @@ describe('SdkConnector through the Agent SDK', () => {
       always: "Yes, and don't ask again for `echo` commands in " + path.basename(folder),
     });
     if (asked.type !== 'permission') throw new Error('no prompt');
-    await session.answer(asked.id, { kind: 'permission', answer: 'once' });
+    const { key } = await raised(events);
+    session.prompts?.answer(key, { kind: 'choice', value: 'allow' });
 
     const ended = await waitFor(events, (e) => e.type === 'end');
     expect(ended).toMatchObject({
@@ -331,14 +340,129 @@ describe('SdkConnector through the Agent SDK', () => {
         { name: 'draft', label: 'Draft', required: false, kind: 'boolean' },
       ],
     });
-    await session.answer(asked.id, {
-      kind: 'elicitation',
+    session.prompts?.answer((await raised(events)).key, {
+      kind: 'form',
       action: 'accept',
       values: { repo: 'acme/shop', draft: true },
     });
     await waitFor(events, (e) => e.type === 'end');
     const replied = events.flatMap((e) => (e.type === 'text' ? [e.text] : [])).join('');
     expect(replied).toBe('github got: accept {"repo":"acme/shop","draft":true}');
+  });
+
+  it('raises what the real CLI asked, as recorded: an ask rule and a safety check, in any mode', async () => {
+    const { session, events } = await start('acceptEdits');
+    await session.send({ id: '00000000-0000-4000-8000-0000000000a1', text: 'read the secret' });
+    const rule = await raised(events);
+    expect(rule.prompt).toMatchObject({
+      kind: 'approval',
+      subject: { type: 'tool', tool: 'Read' },
+      signals: { askRule: true },
+    });
+    session.prompts?.answer(rule.key, { kind: 'choice', value: 'allow' });
+    await waitFor(events, (e) => e.type === 'end');
+
+    await session.send({ id: '00000000-0000-4000-8000-0000000000a2', text: 'safety first' });
+    const safety = await raised(events, 2);
+    expect(safety.prompt).toMatchObject({
+      kind: 'approval',
+      subject: { type: 'tool', tool: 'Write' },
+      signals: { safetyCheck: true },
+      reason: expect.stringMatching(/but you haven't granted it yet\.$/) as unknown,
+    });
+    expect(
+      safety.prompt.kind === 'approval' && safety.prompt.choices.map(({ value }) => value),
+    ).toEqual(['allow', 'deny', 'deny-feedback']);
+    // No: the turn stops, as the CLI's No does.
+    session.prompts?.answer(safety.key, { kind: 'choice', value: 'deny' });
+    await waitFor(
+      events,
+      (e) => e.type === 'end' && e.messages.includes('00000000-0000-4000-8000-0000000000a2'),
+    );
+    expect(events.findLast((e) => e.type === 'end')).toMatchObject({
+      result: { status: 'cancelled' },
+    });
+  });
+
+  it('offers always as the CLI suggests it, all at once, and its session mode is kept', async () => {
+    const { session, events } = await start();
+    await session.send({ id: '00000000-0000-4000-8000-0000000000a3', text: 'touch it' });
+    const touch = await raised(events);
+    if (touch.prompt.kind !== 'approval') throw new Error('not an approval');
+    expect(touch.prompt.choices.find(({ value }) => value === 'always')).toMatchObject({
+      hint: 'allow_always',
+      effects: {
+        rules: [{ behavior: 'allow', rule: 'Bash(touch made.txt)', scope: 'project' }],
+        directories: [await realpath(folder)],
+        mode: 'acceptEdits',
+      },
+    });
+    session.prompts?.answer(touch.key, { kind: 'choice', value: 'always' });
+    await waitFor(events, (e) => e.type === 'end');
+    // The CLI kept the session mode it was given: it says so.
+    expect(events).toContainEqual({ type: 'mode', mode: 'acceptEdits' });
+  });
+
+  it('raises an MCP server’s tool call as its server’s, and the link it asks to open', async () => {
+    const { session, events } = await start();
+    await session.send({
+      id: '00000000-0000-4000-8000-0000000000a4',
+      text: 'sign in: open a link',
+    });
+    const call = await raised(events);
+    expect(call.prompt).toMatchObject({
+      kind: 'approval',
+      subject: { type: 'mcpTool', server: 'tracker', tool: 'mcp__tracker__sign_in' },
+      signals: { requiresUser: true },
+    });
+    session.prompts?.answer(call.key, { kind: 'choice', value: 'allow' });
+    const link = await raised(events, 2);
+    expect(link.prompt).toEqual({
+      kind: 'form',
+      title: 'MCP server “tracker” asks you to open a link on tracker.example.com',
+      server: 'tracker',
+      answerIn: 'api',
+      form: { url: 'https://tracker.example.com/sign-in?state=abc123' },
+    });
+    session.prompts?.answer(link.key, { kind: 'form', action: 'accept' });
+    await waitFor(events, (e) => e.type === 'end');
+    const replied = events.flatMap((e) => (e.type === 'text' ? [e.text] : [])).join('');
+    expect(replied).toBe('tracker got: accept');
+  });
+
+  it('approves a plan into the mode chosen, the CLI going into it with its approval', async () => {
+    const { session, events } = await start();
+    await session.setMode('plan');
+    await session.send({ id: '00000000-0000-4000-8000-0000000000a5', text: 'make a plan' });
+    const plan = await raised(events);
+    expect(plan.prompt).toMatchObject({
+      kind: 'plan',
+      plan: expect.stringMatching(/^1\. Write/) as unknown,
+    });
+    expect(plan.prompt).not.toHaveProperty('signals');
+    session.prompts?.answer(plan.key, { kind: 'choice', value: 'acceptEdits' });
+    await waitFor(events, (e) => e.type === 'end');
+    const replied = events.flatMap((e) => (e.type === 'text' ? [e.text] : [])).join('');
+    expect(replied).toBe('Approved: carrying it out in acceptEdits.');
+    expect(events.findLast((e) => e.type === 'mode')).toEqual({
+      type: 'mode',
+      mode: 'acceptEdits',
+    });
+  });
+
+  it('declines what the core declines without stopping the turn, and ends what waits as it closes', async () => {
+    const { session, events } = await start();
+    await session.send({ id: '00000000-0000-4000-8000-0000000000a6', text: 'touch it' });
+    const first = await raised(events);
+    session.prompts?.decline(first.key, 'corrallm declined this request: too many wait.');
+    await waitFor(events, (e) => e.type === 'end');
+    expect(events.findLast((e) => e.type === 'end')).toMatchObject({
+      result: { status: 'completed' },
+    });
+    await session.send({ id: '00000000-0000-4000-8000-0000000000a7', text: 'touch it again' });
+    const second = await raised(events, 2);
+    await session.close();
+    expect(events).toContainEqual({ type: 'prompt-ended', key: second.key, reason: 'withdrawn' });
   });
 
   it('restores files to before a message, and forks the conversation to before it', async () => {
@@ -386,7 +510,7 @@ describe('SdkConnector through the Agent SDK', () => {
   });
 
   it('does not start the session on a Claude subscription login, and says why', async () => {
-    const events: SessionEvent[] = [];
+    const events: HostEvent[] = [];
     await expect(start('manual', {}, events)).rejects.toThrow(SUBSCRIPTION_LOGIN);
     expect(session).toBeUndefined();
     expect(events).toMatchObject([

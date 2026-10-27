@@ -257,7 +257,8 @@ function kinds<C extends typeof Choice | typeof CoreChoice, S extends z.core.$Zo
       choices,
     }),
     z.strictObject({ ...common, kind: z.literal('question'), questions: Questions }),
-    z.strictObject({ ...common, kind: z.literal('form'), form: Form }),
+    // `server`: the MCP server that asks, by the name it is configured under (its words, untrusted).
+    z.strictObject({ ...common, kind: z.literal('form'), form: Form, server: Id.optional() }),
   ] as const;
 }
 

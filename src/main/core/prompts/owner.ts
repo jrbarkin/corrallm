@@ -15,6 +15,7 @@ import type { NodeLike } from '../../../shared/model/canvas';
 import type { PartyId } from '../../../shared/model/messages';
 import type { NeedChoice, NeedQuestion, NeedsItem } from '../../../shared/model/needs';
 import { detailOf, previewLines } from '../../../shared/model/needs-selectors';
+import { mcpRequestTitle } from '../../../shared/model/words';
 import { promptJsonBytes } from '../../../shared/model/prompt-data';
 import {
   checkPromptReply,
@@ -128,6 +129,11 @@ interface Occurrence {
   readonly prompt: Prompt;
   /** The raising generation's answers, captured as it was raised. */
   readonly answers: PromptAnswers;
+  /**
+   * Transitional (B13 C4, until X10; X11 removes it): its session shows it as one of the events
+   * B13 replaces too, whose Needs item stands for it (answered through `keyed`), so it isn't listed.
+   */
+  readonly mirrored: boolean;
   readonly bytes: number;
   state: State;
 }
@@ -249,10 +255,21 @@ export class PromptOwner implements PromptSink {
     const nodes = this.#deps.canvas(canvas)?.nodes;
     if (nodes === undefined) return [];
     return [...(this.#canvases.get(canvas)?.live.values() ?? [])]
-      .filter(({ agent }) =>
-        nodes.some((node) => node.id === agent && (node.type ?? 'agent') === 'agent'),
+      .filter(
+        ({ agent, mirrored }) =>
+          !mirrored &&
+          nodes.some((node) => node.id === agent && (node.type ?? 'agent') === 'agent'),
       )
       .map((occurrence) => needOf(occurrence, nodes));
+  }
+
+  /**
+   * Transitional (B13 C4, until X10; X11 removes it): the NeedId of the live prompt its session
+   * raised under `key` in `generation`, for the reply router to answer one of the events B13
+   * replaces through the owner. None if that prompt isn't live.
+   */
+  keyed(canvas: CanvasId, agent: string, generation: number, key: string): string | undefined {
+    return this.#keys.get(keyOf({ canvas, agent, generation }, key))?.need;
   }
 
   /** The live prompts on the canvas, as raised and classified: what C7's selector reads. */
@@ -464,6 +481,7 @@ export class PromptOwner implements PromptSink {
       need: needIdOf(at.agent, at.generation, built.id),
       prompt: built,
       answers: at.answers,
+      mirrored: at.mirrored === true,
       bytes,
       state: { at: 'open' },
     };
@@ -699,10 +717,14 @@ function needOf(occurrence: Occurrence, nodes: readonly NodeLike[]): NeedsItem {
         ),
       };
     case 'form':
-      // The server's own words may hold its link: the core's title, and no detail, for everyone.
+      // The server's own words may hold its link: the core's title, naming the server where its
+      // adapter says which (by the name it is configured under), and no detail, for everyone.
       return {
         ...base,
-        title: `${nameOf(nodes, occurrence.agent)}’s CLI asks you to ${'url' in prompt.form ? 'open a link' : 'fill in a form'}`,
+        title:
+          prompt.server === undefined
+            ? `${nameOf(nodes, occurrence.agent)}’s CLI asks you to ${'url' in prompt.form ? 'open a link' : 'fill in a form'}`
+            : mcpRequestTitle(prompt.server, 'url' in prompt.form),
         choices: [],
         form: prompt.form,
       };

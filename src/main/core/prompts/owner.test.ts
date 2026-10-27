@@ -455,6 +455,40 @@ describe('admission', () => {
       },
     ]);
   });
+
+  it('names the MCP server that asks for a form, where its adapter says which, never its words', () => {
+    const form = raise(origin(7, handle()), {
+      kind: 'form',
+      title: 'Sign in at https://example.test/private',
+      server: 'tracker',
+      answerIn: 'api',
+      form: { url: 'https://example.test/private' },
+    });
+    expect(form?.title).toBe('MCP server “tracker” asks you to open a link');
+  });
+});
+
+describe('prompts its session also shows as the events B13 replaces (until X10)', () => {
+  it('lists none in Needs, where the old event’s item stands for it, yet finds it by its key', async () => {
+    const answers = handle();
+    owner.raised(origin(7, answers, { mirrored: true }), {
+      type: 'prompt',
+      key: KEY,
+      prompt: approval,
+    });
+    expect(owner.items(CANVAS)).toEqual([]);
+    const need = owner.keyed(CANVAS, 'b', 7, KEY);
+    expect(need).toMatch(/^prompt\/b\/7\/[0-9a-f-]{36}$/);
+    // Not another generation's, nor another agent's, nor another key's.
+    expect(owner.keyed(CANVAS, 'b', 8, KEY)).toBeUndefined();
+    expect(owner.keyed(CANVAS, 'c', 7, KEY)).toBeUndefined();
+    expect(owner.keyed(CANVAS, 'b', 7, KEY2)).toBeUndefined();
+    // Answered through the owner as any other: by its NeedId, on the handle captured at raise.
+    if (need === undefined) throw new Error('not found');
+    expect(await answer(need, { choice: 'yes' })).toMatchObject({ outcome: 'answered' });
+    expect(answers.answered).toEqual([[KEY, { kind: 'choice', value: 'yes' }]]);
+    expect(owner.keyed(CANVAS, 'b', 7, KEY)).toBeUndefined();
+  });
 });
 
 describe('ends', () => {
