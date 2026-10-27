@@ -1,6 +1,6 @@
 import type { MessageImage, TaskMessage, TurnResult } from '../../../../shared/session';
 import { WINDOW_NAMES, windowNow } from '../../../../shared/usage';
-import type { ConnectionId, UsageBackendId } from '../../../../shared/adapter';
+import type { UsageBackendId } from '../../../../shared/adapter';
 import type { AgentNode, CanvasNode } from '../../../../shared/model/canvas';
 import type { PartyId } from '../../../../shared/model/messages';
 import type { UsageAction, UsageHold, UsageReading, UsageState } from '../../../../shared/usage';
@@ -171,8 +171,6 @@ export interface RunIO {
   ) => () => void;
   /** Tells the user something about the run, in an agent's session (a notice there). */
   tell: (agent: AgentNode, text: string) => void;
-  /** Runs an agent another way: the connection the user chose for it, as its session would not start. */
-  connect: (agent: AgentNode, connection: ConnectionId) => void;
   /** Runs `run` in `ms`; returns a function that cancels it. */
   later: (run: () => void, ms: number) => () => void;
   /** The time now (epoch ms): the only clock a run reads, for its delays and time limits. */
@@ -318,8 +316,9 @@ interface PauseCauses {
  * can name, the usage it spends) it reads in the catalog it is given (catalog.ts). Stop takes
  * back what the run sent that is still going (RunIO.send). A task whose session would not start
  * (an Agent SDK agent on a Claude subscription) neither fails nor goes on: its agent asks the user
- * to switch that agent to another connection (`decide`), and works again once it runs another way,
- * its session sending what it kept.
+ * to switch that agent to another connection (the reply router's Switch, session.continueIn, which
+ * changes the document; never the run), and works again once it runs another way, its session
+ * sending what it kept.
  */
 export class RunStore {
   #run: Run = IDLE;
@@ -818,10 +817,10 @@ export class RunStore {
    * neither, nothing is asked) to the agent's session, and once that turn ends, it asks again. At a
    * repeat out of rounds: `{ choice: 'more' }` runs one more round; `{ choice: 'goOn' }` ends it as
    * failed, and its queue goes on; `{ reply }` sends what to try next to the agent (not waited
-   * for), then runs one more round. Where its task's session would not start: `{ choice: 'switch' }`
-   * switches that session's agent to the connection it offered (RunIO.connect). Only while the
-   * run holds that agent at that item for the user, so a second click, a stale card or an answer
-   * after Stop does nothing. The party `by` (you, unless said) is recorded as having decided in
+   * for), then runs one more round. Where its task's session would not start, nothing here answers
+   * it: the agent runs another way once its connection changes (the reply router's Switch). Only
+   * while the run holds that agent at that item for the user, so a second click, a stale card or
+   * an answer after Stop does nothing. The party `by` (you, unless said) is recorded as having decided in
    * this run once its answer takes effect (Run.decided).
    */
   decide(agent: string, item: string, answer: Answer, by: PartyId = 'you'): void {
@@ -858,15 +857,7 @@ export class RunStore {
         this.#settle(true);
         return;
       }
-      const to = this.#agents().find((n) => n.id === refused.agent);
-      if (
-        to &&
-        refused.switchTo !== undefined &&
-        'choice' in answer &&
-        answer.choice === 'switch'
-      ) {
-        this.#io.connect(to, refused.switchTo);
-      }
+      // A session that won't start is answered by running its agent another way, never here.
       return;
     }
     const node = this.#agents().find((n) => n.id === agent);

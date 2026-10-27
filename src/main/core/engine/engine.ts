@@ -30,11 +30,6 @@ export interface EngineIO {
   now: () => number;
   /** Every usage backend's latest reading and its usage rule, read when the run needs them. */
   usage?: () => UsageState;
-  /**
-   * Runs an agent another way: the connection the user chose for it, as its session would not
-   * start. The canvas is the host's, which changes it, then gives the engine its nodes again.
-   */
-  connect: (agent: string, connection: ConnectionId) => void;
   /** Writes the engine's checkpoint out, before an automated message leaves for a session. */
   beforeSend?: () => Promise<void>;
   /**
@@ -129,9 +124,6 @@ export class Engine {
         ),
       tell: (agent, text) => {
         sessions.notice(agent.id, 'warning', text);
-      },
-      connect: (agent, connection) => {
-        io.connect(agent.id, connection);
       },
       later: io.later,
       now: io.now,

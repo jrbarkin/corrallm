@@ -44,7 +44,7 @@ const MINUTE = 60_000;
 describe('RunStore', () => {
   it('holds an unavailable agent before sending, keeping dependents unresolved', () => {
     const qwen = agent('a', [{ id: 'inspect', action: 'Read' }]);
-    const { store, sent, where, advance, connects } = setup(
+    const { store, sent, where, advance } = setup(
       [
         { ...qwen, data: { ...qwen.data, adapter: 'qwen' } },
         agent('b', [
@@ -64,7 +64,6 @@ describe('RunStore', () => {
     });
     store.decide('a', 'inspect', { choice: 'switch' });
     advance(60 * MINUTE);
-    expect(connects).toEqual([]);
     expect(sent).toHaveLength(0);
     expect(store.snapshot().agents.a?.outcomes).toEqual({});
     expect(store.snapshot().agents.b?.outcomes).toEqual({});
@@ -1760,7 +1759,7 @@ describe('RunStore', () => {
             connection,
           );
           const a = { ...node, data: { ...node.data, adapter: type } };
-          const { store, sent, where, connects, reply, edit } = setup([a], manual);
+          const { store, sent, where, reply, edit } = setup([a], manual);
           store.start();
           sent[0]?.refused?.({ text: reason, switchTo });
           expect(where()).toEqual({ a: 'asking tests' });
@@ -1771,13 +1770,12 @@ describe('RunStore', () => {
             text: reason,
             switchTo,
           });
-          // Only switching answers it.
+          // Only switching answers it, and the run switches nothing itself: the reply router's
+          // Switch changes its connection (session.continueIn).
           store.decide('a', 'tests', { choice: 'approve' });
           store.decide('a', 'tests', { reply: 'Go on' });
-          expect(where()).toEqual({ a: 'asking tests' });
-          expect(connects).toEqual([]);
           store.decide('a', 'tests', { choice: 'switch' });
-          expect(connects).toEqual([['a', switchTo]]);
+          expect(where()).toEqual({ a: 'asking tests' });
 
           // Its session sends the message it kept once the agent runs in Terminal: the run waits
           // for that turn to end, as for any other.
@@ -1790,28 +1788,30 @@ describe('RunStore', () => {
         },
       );
 
-      it('holds the agent that handed it the message, and switches the one that would not start', () => {
+      it('holds the agent that handed it the message, and goes on once the one that would not start runs another way', () => {
         const a = connected('a', []);
         const b = agent('b', [{ id: 'hand', message: 'Review it', target: 'a' }], 'Builder');
-        const { store, sent, where, connects } = setup([a, b], manual);
+        const { store, sent, where, edit } = setup([a, b], manual);
         store.start();
         sent[0]?.refused?.({ text: why, switchTo: 'claude-code.terminal' });
         expect(where()).toEqual({ a: 'done', b: 'asking hand' });
-        expect(store.snapshot().agents.b?.refused).toMatchObject({ agent: 'a' });
-        store.decide('b', 'hand', { choice: 'switch' });
-        expect(connects).toEqual([['a', 'claude-code.terminal']]);
+        // The Switch is for the agent that would not start.
+        expect(store.snapshot().agents.b?.refused).toMatchObject({
+          agent: 'a',
+          switchTo: 'claude-code.terminal',
+        });
+        edit([{ ...a, data: { ...a.data, connection: 'claude-code.terminal' } }, b]);
+        expect(where()).toEqual({ a: 'done', b: 'running hand' });
       });
 
       it('takes the message back on Stop, and hears no refusal from a run before', () => {
         const a = connected('a', [{ id: 'tests', action: 'Bash' }]);
-        const { store, sent, where, connects } = setup([a], manual);
+        const { store, sent, where } = setup([a], manual);
         store.start();
         const first = sent[0];
         first?.refused?.({ text: why, switchTo: 'claude-code.terminal' });
         store.stop();
         expect(first?.withdrawn).toBe(true);
-        store.decide('a', 'tests', { choice: 'switch' });
-        expect(connects).toEqual([]);
 
         store.start();
         first?.refused?.({ text: why, switchTo: 'claude-code.terminal' });

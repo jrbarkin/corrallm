@@ -69,7 +69,6 @@ const NO_FOLDER =
   'This canvas has no project folder: open it in corrallm and choose its folder there, so its agents can work.';
 const NO_FILE = 'This canvas isn’t saved: save it in corrallm first.';
 const ANOTHER = 'This canvas’s file holds another canvas now: open it in corrallm to run it.';
-const NO_SWITCH = 'Switch this agent to another connection in the corrallm app.';
 const JOURNAL_FAILED = 'Could not journal every canvas’s run as the core closed.';
 const NOT_KEPT = 'corrallm keeps no such canvas.';
 /** Whom the session manager lists conversations for when a canvas's own runtime asks. */
@@ -951,10 +950,6 @@ export class Engines {
       },
       now: () => Date.now(),
       usage: () => this.#deps.usage.state(),
-      // Only you switch how an agent runs, in the app (the run's refusal asks you there).
-      connect: (agent) => {
-        engine.sessions.notice(agent, 'warning', NO_SWITCH);
-      },
       beforeSend: async () => {
         await this.#write(running);
         // A committed refusal marker keeps parties' messages durable, but cannot authorize a

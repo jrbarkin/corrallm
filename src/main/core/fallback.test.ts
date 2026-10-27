@@ -169,7 +169,6 @@ async function world(initial?: CanvasDocument, checkpoint?: ReturnType<Engine['c
     },
     now: () => now,
     usage: () => state,
-    connect: () => undefined,
     admit: (agent, work) => service.admit(CANVAS, agent, work),
     limitNote: (agent) => service.limitNote(CANVAS, agent),
   });
@@ -358,7 +357,7 @@ describe('a run’s task that fails on its usage limit (§12.5)', () => {
     expect(at.engine.run.snapshot().agents.worker?.attempts?.hello).toHaveLength(1);
   });
 
-  it('says its chain didn’t act where you made its own endpoint one of its steps (C1a)', async () => {
+  it('says its chain didn’t act, and how to let it, where its own endpoint is one of its steps (C1a)', async () => {
     const at = await world(canvasOf(worker({ ...CLAUDE, fallback: { to: [CLAUDE, SDK] } })));
     at.engine.run.start();
     await settle();
@@ -367,7 +366,7 @@ describe('a run’s task that fails on its usage limit (§12.5)', () => {
     await quiet(at);
     expect(at.data()).toMatchObject(CLAUDE);
     expect(at.engine.run.snapshot().agents.worker?.problem?.text).toBe(
-      'Usage limit. Its fallback chain didn’t act: its own backend is one of the chain’s steps now; set the chain again.',
+      'Usage limit. Its fallback chain didn’t act: this agent’s backend, Claude Code · Terminal, is now one of its fallback steps. Removing that step from its chain lets the chain act again.',
     );
   });
 

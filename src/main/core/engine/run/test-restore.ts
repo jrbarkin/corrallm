@@ -51,7 +51,6 @@ export function expectRestorable(): void {
     const restored = new RunStore(catalog, {
       send: () => () => undefined,
       tell: () => undefined,
-      connect: () => undefined,
       later: () => () => undefined,
       now,
     });

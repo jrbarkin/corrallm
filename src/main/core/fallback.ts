@@ -314,7 +314,8 @@ export class FallbackService {
     if (chain === undefined) return { none: [] };
     const current = this.#endpoint(runtime, node.data);
     // C1a's edge: an agent whose own endpoint you made one of its steps, on none yet, keeps no
-    // place to come back to that the chain can hold (its steps and its own endpoint are distinct).
+    // place to come back to that the chain can hold (its steps and its own endpoint are distinct):
+    // the chain doesn't act until that step is removed from it.
     if (chain.on === undefined && chain.to.some((step) => sameStep(step, current)))
       return { none: [] };
     const walked = next(
@@ -771,7 +772,9 @@ export class FallbackService {
       current !== undefined &&
       chain?.to.some((step) => sameStep(step, current)) === true
     )
-      return 'Its fallback chain didn’t act: its own backend is one of the chain’s steps now; set the chain again.';
+      // agent.setFallback refuses a chain naming the agent's own endpoint: removing that step,
+      // not saving the chain again, is what lets it act.
+      return `Its fallback chain didn’t act: this agent’s backend, ${this.#endpointName(current)}, is now one of its fallback steps. Removing that step from its chain lets the chain act again.`;
     return passed.length === 0
       ? 'No backend in its fallback chain can take work now.'
       : `No backend in its fallback chain can take work now: ${this.#passedText(passed)}.`;

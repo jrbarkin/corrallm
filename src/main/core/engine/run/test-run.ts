@@ -1,4 +1,4 @@
-import type { ConnectionId, UsageBackendId } from '../../../../shared/adapter';
+import type { UsageBackendId } from '../../../../shared/adapter';
 import type { CanvasNode } from '../../../../shared/model/canvas';
 import { findItem } from '../../../../shared/model/queue';
 import type { MessageImage, TurnResult } from '../../../../shared/session';
@@ -46,8 +46,6 @@ export function setup(
     origin?: 'user';
   }[] = [];
   const told: [string, string][] = [];
-  /** The connections the run switched agents to, as the user chose. */
-  const connects: [string, ConnectionId][] = [];
   let usage: UsageState = { readings: [], rules: {} };
   const store = liveRun(engine, {
     send: (to, text, done, images, refused, origin) => {
@@ -97,9 +95,6 @@ export function setup(
     },
     tell: (to, text) => {
       told.push([to.id, text]);
-    },
-    connect: (to, connection) => {
-      connects.push([to.id, connection]);
     },
     later: (run, ms) => {
       const timer = { run, at: clock + ms };
@@ -155,7 +150,6 @@ export function setup(
     store,
     sent,
     told,
-    connects,
     tick,
     advance,
     reply,
