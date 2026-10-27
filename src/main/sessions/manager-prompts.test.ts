@@ -307,6 +307,13 @@ describe('prompts a session raises', () => {
 });
 
 describe('prompts a session also shows as the events B13 replaces (B13 C4, until X10)', () => {
+  /** How a session translates an answer to its old event `old` into its prompt's answer. */
+  const translating = () =>
+    vi.fn((id: string) => {
+      if (id !== 'old') throw new Error('That request is no longer asked.');
+      return { key: KEY, answer: { kind: 'choice' as const, value: 'yes' } };
+    });
+
   it('are raised marked so, and an old event’s answer is translated by the session that raised it', async () => {
     const { connector, sessions } = raising();
     const sessionManager = manager({ 'claude-code.sdk': connector });
@@ -320,11 +327,7 @@ describe('prompts a session also shows as the events B13 replaces (B13 C4, until
       sessionManager.bridge(canvas, 'b', 'old', { kind: 'permission', answer: 'once' }),
     ).toBeUndefined();
 
-    const bridge = vi.fn((id: string) => {
-      if (id !== 'old') throw new Error('That request is no longer asked.');
-      return { key: KEY, answer: { kind: 'choice' as const, value: 'yes' } };
-    });
-    Object.assign(session, { bridge });
+    session.host.bridge?.(translating());
     session.host.emit({ type: 'prompt', key: crypto.randomUUID(), prompt: PROMPT as never });
     expect(raised[1]?.[0]).toMatchObject({ mirrored: true });
     expect(
@@ -344,6 +347,43 @@ describe('prompts a session also shows as the events B13 replaces (B13 C4, until
       sessionManager.bridge(canvas, 'c', 'old', { kind: 'permission', answer: 'once' }),
     ).toBeUndefined();
     expect(sessions).toHaveLength(1);
+    await sessionManager.closeCanvas(canvas);
+  });
+
+  it('raised as the session starts are marked so from the first, translated, and refused until it runs', async () => {
+    let open: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      open = resolve;
+    });
+    const { connector, sessions } = raising(async (host) => {
+      // As its start begins: how its old events' answers translate, then a raise, before it runs.
+      host.bridge?.(translating());
+      host.emit({ type: 'prompt', key: KEY, prompt: PROMPT as never });
+      await gate;
+    });
+    const sessionManager = manager({ 'claude-code.sdk': connector });
+    const canvas = newCanvasId();
+    const starting = sessionManager.start(canvas, 'b', SDK);
+    await vi.waitFor(() => {
+      expect(raised).toHaveLength(1);
+    });
+    const [origin] = raised[0] ?? [];
+    expect(origin).toMatchObject({ live: true, mirrored: true });
+    expect(
+      sessionManager.bridge(canvas, 'b', 'old', { kind: 'permission', answer: 'once' }),
+    ).toEqual({
+      generation: origin?.generation,
+      key: KEY,
+      answer: { kind: 'choice', value: 'yes' },
+    });
+    // The owner's answer is refused while it starts (B13 C3), then reaches it once it runs.
+    expect(() => origin?.answers.answer(KEY, { kind: 'choice', value: 'yes' })).toThrow(
+      /still starting/,
+    );
+    open();
+    await starting;
+    origin?.answers.answer(KEY, { kind: 'choice', value: 'yes' });
+    expect(at(0, sessions).answered).toEqual([[KEY, { kind: 'choice', value: 'yes' }]]);
     await sessionManager.closeCanvas(canvas);
   });
 });

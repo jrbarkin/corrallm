@@ -256,10 +256,10 @@ function codexAsking() {
         await close();
       };
       // As the App Server's session: answered only through the core's owner, by key (B13 C5).
+      host.bridge?.((id, answer) => asking.bridge(id, answer));
       return Object.assign(session, {
         answer: () => Promise.reject(new Error('answered only through the owner')),
         prompts: asking.answers,
-        bridge: (id: string, answer: SessionAnswer) => asking.bridge(id, answer),
       });
     },
   };

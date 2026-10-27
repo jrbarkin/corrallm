@@ -10,7 +10,7 @@ import type { PromptEvent } from '../../../../shared/model/prompts';
 import type { CodexMode, SessionAnswer, SessionEvent } from '../../../../shared/session';
 import type { UsageBackendId } from '../../../../shared/adapter';
 import type { UsageWindows } from '../../../../shared/usage';
-import type { HostEvent, LiveSession, SessionSpec } from '../../connector';
+import type { Bridge, HostEvent, LiveSession, SessionSpec } from '../../connector';
 import { AppServerConnector } from './connector';
 import type { AppServerConnectorDeps } from './connector';
 import type { Fixture } from './recorded';
@@ -101,6 +101,7 @@ async function start(
   const events: HostEvent[] = [];
   const remembered: string[] = [];
   const activity = vi.fn();
+  let bridge: Bridge | undefined;
   const session = await connector(env, deps).start(
     {
       agentId: 'a',
@@ -115,6 +116,9 @@ async function start(
       emit: (event: HostEvent) => events.push(event),
       remember: (id) => remembered.push(id),
       activity,
+      bridge: (translate) => {
+        bridge = translate;
+      },
     },
   );
   sessions.push(session);
@@ -153,7 +157,7 @@ async function start(
    * answer (until X11): its session names the prompt's key, and the owner answers by that key.
    */
   const answer = (id: string, given: SessionAnswer) => {
-    const bridged = session.bridge?.(id, given);
+    const bridged = bridge?.(id, given);
     if (bridged === undefined) throw new Error('no bridge');
     session.prompts?.answer(bridged.key, bridged.answer);
   };

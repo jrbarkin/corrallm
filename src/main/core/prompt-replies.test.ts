@@ -336,6 +336,15 @@ describe('a prompt the core owns', () => {
           host.emit({ type: 'status', status: 'waiting' });
           return Promise.resolve();
         };
+        host.bridge?.((id, answer) => {
+          if (id !== 'toolu_1:prompt') throw new Error('That request is no longer asked.');
+          if (answer.kind !== 'permission' || answer.answer === 'always')
+            throw new Error('That prompt doesn’t offer "always".');
+          return {
+            key,
+            answer: { kind: 'choice', value: answer.answer === 'once' ? 'allow' : 'deny' },
+          };
+        });
         Object.assign(session, {
           answer: (...args: unknown[]) => {
             old.push(args);
@@ -346,14 +355,6 @@ describe('a prompt the core owns', () => {
               told.push([answered, answer]);
             },
             decline: () => undefined,
-          },
-          bridge: (id: string, answer: { kind: string; answer?: string }) => {
-            if (id !== 'toolu_1:prompt') throw new Error('That request is no longer asked.');
-            if (answer.answer === 'always') throw new Error('That prompt doesn’t offer "always".');
-            return {
-              key,
-              answer: { kind: 'choice', value: answer.answer === 'once' ? 'allow' : 'deny' },
-            };
           },
         });
         return session;

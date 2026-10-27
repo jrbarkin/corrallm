@@ -33,7 +33,9 @@
 // it appends each request it gets to, one JSON line each, and each answer to one of its requests,
 // as `answer:<method>`), FAKE_CODEX_CONFIG_FAIL (config/read
 // fails with that message), FAKE_CODEX_LINGER (how many ms it takes to exit once its input ends,
-// as one finishing what it runs: none by default), FAKE_CODEX_SANDBOX and FAKE_CODEX_APPROVAL
+// as one finishing what it runs: none by default), FAKE_CODEX_START_GATE (a release-file path: as a
+// thread starts, an MCP server asks for a form, and thread/start answers only once <path> exists;
+// it writes <path>.waiting first), FAKE_CODEX_SANDBOX and FAKE_CODEX_APPROVAL
 // (the sandbox and approvals a thread given none runs with, as the user's config.toml would set
 // them: read-only and on-request by default).
 import { randomUUID } from 'node:crypto';
@@ -827,6 +829,25 @@ async function handle({ method, id, params }) {
     }
     case 'thread/start': {
       const thread = load(randomUUID(), params);
+      const gate = process.env.FAKE_CODEX_START_GATE;
+      if (gate) {
+        // An MCP server asks for a form as the thread starts, before thread/start answers.
+        void ask('mcpServer/elicitation/request', {
+          threadId: thread.id,
+          turnId: null,
+          serverName: 'probe',
+          mode: 'form',
+          _meta: null,
+          message: 'Fill in your name.',
+          requestedSchema: {
+            type: 'object',
+            properties: { name: { type: 'string', title: 'Name', minLength: 1 } },
+            required: ['name'],
+          },
+        });
+        writeFileSync(`${gate}.waiting`, 'waiting');
+        while (!existsSync(gate)) await pause(20);
+      }
       reply(threadResult(thread));
       return notify('thread/started', {
         thread: threadObject(thread.id, thread.cwd, thread.model),
