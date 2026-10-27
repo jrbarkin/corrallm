@@ -51,6 +51,10 @@ export const ACTION_INFO: Readonly<Record<UsageAction, { label: string; detail: 
     label: 'Finish the task, then wait for the reset',
     detail: 'Let the task going on finish, then hold until the window resets',
   },
+  fallback: {
+    label: 'Carry on with the next backend',
+    detail: 'Use the next available backend before the next task',
+  },
 };
 
 /** A rule in words: "Over 80% of the 5-hour window: pause and ask me". */

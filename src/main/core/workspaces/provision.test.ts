@@ -486,6 +486,58 @@ describe.skipIf(process.platform === 'win32')('Provisioner', () => {
       },
     );
 
+    it.each(['.gitmodules', 'diff.ignoreSubmodules'] as const)(
+      'compares a populated index’s gitlinks with the captured base under %s',
+      async (setting) => {
+        const sub = path.join(root, 'sub');
+        const original = makeRepository(sub, env, { 'lib.txt': 'one\n' });
+        writeFileSync(path.join(sub, 'lib.txt'), 'two\n');
+        git(sub, env, 'add', 'lib.txt');
+        commit(sub, env, 'next');
+        const advanced = git(sub, env, 'rev-parse', 'HEAD').trim();
+        git(app, env, 'update-index', '--add', '--cacheinfo', `160000,${original},vendor/sub`);
+        writeFileSync(
+          path.join(app, '.gitmodules'),
+          `[submodule "sub"]\n\tpath = vendor/sub\n\turl = ../sub\n${setting === '.gitmodules' ? '\tignore = all\n' : ''}`,
+        );
+        git(app, env, 'add', '.gitmodules');
+        commit(app, env, 'record gitlink');
+        if (setting === 'diff.ignoreSubmodules') git(app, env, 'config', setting, 'all');
+
+        const dying = new Crashing(at('read-tree'), true);
+        const first = provisioner({ git: dying });
+        const repository = await repositoryOf(first);
+        void first.provision({ canvas: CANVAS, repository, owner: OWNER });
+        await dying.crashed.promise;
+        const [open] = workspaces.openJobs();
+        expect(open?.phase).toBe('registered');
+        const tree = kept(open?.workspace ?? '');
+        expect(git(tree.path, env, 'ls-files', '--stage', 'vendor/sub')).toContain(original);
+        git(tree.path, env, 'update-index', '--cacheinfo', `160000,${advanced},vendor/sub`);
+        const index = path.join(app, '.git', 'worktrees', tree.id, 'index');
+        const staged = readFileSync(index);
+        const populated = contents(tree.path);
+
+        const git2 = new Recording(runnerDeps());
+        const restarted = provisioner({ git: git2 });
+        await restarted.reconcile();
+        expect(kept(tree.id)).toMatchObject({
+          state: 'error',
+          errorCode: 'interrupted-population',
+        });
+        expect(await restarted.checkout(tree.id)).toMatchObject({ state: 'held', reason: 'error' });
+        expect(await restarted.retry(tree.id)).toMatchObject({
+          state: 'error',
+          errorCode: 'interrupted-population',
+        });
+        expect(readFileSync(index)).toEqual(staged);
+        expect(contents(tree.path)).toEqual(populated);
+        expect(git(tree.path, env, 'ls-files', '--stage', 'vendor/sub')).toContain(advanced);
+        expect(git2.count('read-tree')).toBe(0);
+        expect(workspaces.openJobs()).toEqual([]);
+      },
+    );
+
     it('populates a checkout found registered but never written, refusing to write over a file put there', async () => {
       // Registered, then the core stopped before population: nothing written there yet.
       const dying = new Crashing(at('read-tree'), false);

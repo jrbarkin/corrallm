@@ -1,6 +1,7 @@
 import * as Structure from '../../shared/model/structure';
 import { describe, expect, it } from 'vitest';
 
+import { CANVAS_VERSION } from '../../shared/canvas';
 import type { CanvasId } from '../../shared/canvas';
 import { catalog } from '../catalog';
 import {
@@ -136,7 +137,12 @@ describe('native agent defaults', () => {
       expect(graph.nodes[0]?.data.queue).toEqual([
         { id: 'work', message: 'Keep the authored work.' },
       ]);
-      expect(toFile(documentOf(graph, ID))).toBe(`${JSON.stringify(JSON.parse(file), null, 2)}\n`);
+      expect(toFile(documentOf(graph, ID))).toBe(
+        `${JSON.stringify(JSON.parse(file), null, 2)}\n`.replace(
+          '"version": 2',
+          `"version": ${String(CANVAS_VERSION)}`,
+        ),
+      );
     },
   );
 
@@ -178,7 +184,12 @@ describe('native agent defaults', () => {
       );
       expect(moved.nodes[0]?.data).toMatchObject({ adapter, queue: steps });
       expect(connectionOf(moved.nodes[0]?.data ?? {})).toBe('unavailable');
-      expect(toFile(documentOf(graph, ID))).toBe(`${JSON.stringify(JSON.parse(file), null, 2)}\n`);
+      expect(toFile(documentOf(graph, ID))).toBe(
+        `${JSON.stringify(JSON.parse(file), null, 2)}\n`.replace(
+          '"version": 2',
+          `"version": ${String(CANVAS_VERSION)}`,
+        ),
+      );
     },
   );
 

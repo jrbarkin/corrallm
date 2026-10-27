@@ -104,7 +104,7 @@ export class Engine {
       },
       ...(io.beforeSend ? { beforeSend: io.beforeSend } : {}),
       ...(io.mailbox ? { mailbox: io.mailbox } : {}),
-      send: (agent, text, done, images, refused, origin, displayText, task, id) =>
+      send: (agent, text, done, images, refused, origin, displayText, task, id, resolvedStep) =>
         sessions.send(
           agent.id,
           agent.data.adapter ?? io.catalog.defaultAdapter,
@@ -117,7 +117,11 @@ export class Engine {
           // What the user typed for the run (an OK's changes) is theirs, but the run's attempt.
           origin === 'user' ? 'run' : 'queue',
           displayText,
-          { ...(task === undefined ? {} : { task }), ...(id === undefined ? {} : { id }) },
+          {
+            ...(task === undefined ? {} : { task }),
+            ...(id === undefined ? {} : { id }),
+            ...(resolvedStep === undefined ? {} : { resolvedStep }),
+          },
         ),
       tell: (agent, text) => {
         sessions.notice(agent.id, 'warning', text);

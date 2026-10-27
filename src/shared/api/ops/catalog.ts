@@ -31,6 +31,7 @@ const Connection = z.strictObject({
   description: z.string(),
   view: z.enum(['terminal', 'transcript']),
   ...PromptDescriptor.shape,
+  context: z.boolean(),
   startModes: z.array(z.string()),
   live: z.strictObject({ effort: z.boolean(), stopTask: z.boolean() }),
   panels: z.strictObject({

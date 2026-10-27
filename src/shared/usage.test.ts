@@ -6,6 +6,15 @@ import type { UsageReading } from './usage';
 const NOW = Date.UTC(2026, 9, 12, 12, 0);
 const HOUR = 60 * 60 * 1000;
 
+it('parses the fallback rule action without admitting another action', () => {
+  expect(parseRule({ window: 'weekly', percent: 95, action: 'fallback' })).toEqual({
+    window: 'weekly',
+    percent: 95,
+    action: 'fallback',
+  });
+  expect(() => parseRule({ window: 'weekly', percent: 95, action: 'switchAnything' })).toThrow();
+});
+
 describe('parseWindows', () => {
   it('keeps each known window: the share used and when it resets', () => {
     expect(
