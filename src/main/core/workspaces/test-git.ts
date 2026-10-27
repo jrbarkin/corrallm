@@ -55,14 +55,15 @@ export function git(cwd: string, env: Record<string, string>, ...args: string[])
   });
 }
 
-/** A repository at `at` on main, its files committed once: its commit. */
+/** A repository at `at` on main (`init` adding to its `git init`), its files committed once: its commit. */
 export function makeRepository(
   at: string,
   env: Record<string, string>,
   files: Record<string, string> = { 'README.md': 'hello\n' },
+  init: readonly string[] = [],
 ): string {
   mkdirSync(at, { recursive: true });
-  git(at, env, 'init', '-q', '-b', 'main');
+  git(at, env, 'init', '-q', '-b', 'main', ...init);
   for (const [file, text] of Object.entries(files)) {
     mkdirSync(path.dirname(path.join(at, file)), { recursive: true });
     writeFileSync(path.join(at, file), text);

@@ -460,6 +460,22 @@ describe.skipIf(process.platform === 'win32')('WorkspaceSetups', () => {
     expect(readdirSync(logs).some((log) => log.startsWith(`${tree.id}.`))).toBe(false);
   });
 
+  it('names the local files it copied into a workspace (none: unknown), for a checkpoint never to commit them', async () => {
+    const h = await harness({ ...PNPM, 'README.md': 'hello\n' });
+    writeFileSync(path.join(h.t.app, '.env'), 'SECRET=1\n');
+    const tree = await offered(h);
+    expect(h.setups.copied(tree.id)).toEqual(['.env']);
+    const plain = await offered(h, 'agent/plain');
+    expect(h.setups.copied(plain.id)).toEqual(['.env']);
+    await h.setups.forget(tree.id);
+    expect(h.setups.copied(tree.id)).toBeUndefined();
+    // A record that can't be read is unknown, never none.
+    const record = path.join(h.t.profile, 'workspaces', 'setup', 'copies', `${plain.id}.json`);
+    writeFileSync(record, 'not a record');
+    const fresh = service(h.t, h.children);
+    expect(fresh.copied(plain.id)).toBeUndefined();
+  });
+
   it('holds a failure with its exit code and output; Retry runs it again', async () => {
     const h = await harness({ 'README.md': 'hello\n' });
     const tree = await offered(h);
