@@ -422,9 +422,20 @@ describe('a fault at every await of the switch (C4), and what a restart decides'
     at.engine.run.admissionChanged();
     await quiet(at);
     expect(at.data()).toMatchObject(CLAUDE);
+  });
+
+  it('checking its workspace: crashed while it was held, a restart switches it once ready', async () => {
+    const at = await world(canvasOf(worker()));
+    at.sessions.availability.mockResolvedValue({
+      ready: false,
+      reason: 'setup',
+      sentence: 'Its worktree waits for its setup.',
+    });
+    await limited(at);
+    expect(at.data()).toMatchObject(CODEX);
+    // What it held it for is in memory, never on disk: a new core decides again.
     const again = await restarted(at);
-    // Switched before the crash: its held... task went on already; no second switch.
-    expect(again.sessions.fresh).not.toHaveBeenCalled();
+    expect(again.data()).toMatchObject(CLAUDE);
   });
 
   it('checking its workspace: a check that fails abandons it, said, never tried again in a loop', async () => {
@@ -478,6 +489,31 @@ describe('a fault at every await of the switch (C4), and what a restart decides'
     await quiet(at);
     expect(at.data()).toMatchObject(CLAUDE);
     expect(at.sent().at(-1)).toEqual(['worker', 'claude-code.terminal', 'Say hello']);
+  });
+
+  it('closing its session: the engine’s close failing changes nothing; the core’s failing abandons it', async () => {
+    const at = await world(canvasOf(worker()));
+    at.fake.backend.close.mockRejectedValueOnce(new Error('Already gone'));
+    await limited(at);
+    // The engine's own close lets its driver go, whatever its backend said.
+    expect(at.data()).toMatchObject(CLAUDE);
+    at.service.close();
+    at.engine.reset();
+    const other = await world(canvasOf(worker()));
+    other.sessions.close.mockRejectedValueOnce(new Error('The process table is full'));
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      await limited(other);
+    } finally {
+      errors.mockRestore();
+    }
+    expect(other.sessions.fresh).not.toHaveBeenCalled();
+    expect(other.notices()).toContain(
+      'corrallm couldn’t switch it to Claude Code · Terminal: The process table is full',
+    );
+    // Nothing switched: a restart decides again.
+    const again = await restarted(other);
+    expect(again.data()).toMatchObject(CLAUDE);
   });
 
   it('forgetting its target’s conversation: a failure abandons it, said, its session closed', async () => {
