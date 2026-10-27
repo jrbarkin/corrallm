@@ -504,7 +504,10 @@ export class PromptOwner implements PromptSink {
       ...(classified.humanOnly === undefined ? {} : { humanOnly: classified.humanOnly }),
       ...(classified.choices === undefined ? {} : { choices: classified.choices }),
     });
-    return parsed.success ? parsed.data : undefined;
+    if (!parsed.success) return undefined;
+    const admitted = structuredClone(parsed.data);
+    freeze(admitted);
+    return admitted;
   }
 
   /**
@@ -596,6 +599,13 @@ export class PromptOwner implements PromptSink {
   #name(canvas: CanvasId, agent: string): string {
     return nameOf(this.#deps.canvas(canvas)?.nodes ?? [], agent);
   }
+}
+
+/** Own every admitted value, including JSON subjects, and keep every read immutable. */
+function freeze(value: unknown): void {
+  if (value === null || typeof value !== 'object' || Object.isFrozen(value)) return;
+  for (const child of Object.values(value)) freeze(child);
+  Object.freeze(value);
 }
 
 /** An occurrence's state as it is now, read afresh (it changes across awaits). */
