@@ -15,6 +15,7 @@ import type { NodeLike } from '../../../shared/model/canvas';
 import type { PartyId } from '../../../shared/model/messages';
 import type { NeedChoice, NeedQuestion, NeedsItem } from '../../../shared/model/needs';
 import { detailOf, previewLines } from '../../../shared/model/needs-selectors';
+import { mcpRequestTitle } from '../../../shared/model/words';
 import { promptJsonBytes } from '../../../shared/model/prompt-data';
 import {
   checkPromptReply,
@@ -720,7 +721,10 @@ function needOf(occurrence: Occurrence, nodes: readonly NodeLike[]): NeedsItem {
       // adapter says which (by the name it is configured under), and no detail, for everyone.
       return {
         ...base,
-        title: `${prompt.server === undefined ? `${nameOf(nodes, occurrence.agent)}’s CLI` : `MCP server “${prompt.server}”`} asks you to ${'url' in prompt.form ? 'open a link' : 'fill in a form'}`,
+        title:
+          prompt.server === undefined
+            ? `${nameOf(nodes, occurrence.agent)}’s CLI asks you to ${'url' in prompt.form ? 'open a link' : 'fill in a form'}`
+            : mcpRequestTitle(prompt.server, 'url' in prompt.form),
         choices: [],
         form: prompt.form,
       };

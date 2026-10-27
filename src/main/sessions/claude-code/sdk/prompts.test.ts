@@ -252,6 +252,14 @@ describe('Prompts: MCP servers’ requests', () => {
       type: 'prompt',
       prompt: { kind: 'form', form: { url: 'https://tracker.example.com/sign-in?state=abc123' } },
     });
+    // Shown in the core's words, naming the link's host, never the server's.
+    expect(events[1]).toEqual({
+      type: 'elicitation',
+      id: expect.stringMatching(/^elicitation:/) as unknown,
+      server: 'tracker',
+      message: 'MCP server “tracker” asks you to open a link on tracker.example.com',
+      url: 'https://tracker.example.com/sign-in?state=abc123',
+    });
     asking.answers.decline(
       key(),
       'corrallm declined this request: its link isn’t one corrallm opens.',
@@ -264,7 +272,7 @@ describe('Prompts: MCP servers’ requests', () => {
     expect(
       await elicit({
         serverName: 'github',
-        message: 'Which?',
+        message: 'Which? See github.example/x%3Ftoken%3Dsecret',
         mode: 'form',
         requestedSchema: { type: 'object', properties: { nested: { type: 'object' } } },
       }),
@@ -274,7 +282,7 @@ describe('Prompts: MCP servers’ requests', () => {
         type: 'notice',
         id: expect.any(String) as unknown,
         level: 'warning',
-        text: 'github asked for something corrallm can’t show, so it was declined: Which?',
+        text: 'MCP server “github” asked for a form corrallm can’t show, so it was declined.',
       },
     ]);
   });

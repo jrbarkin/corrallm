@@ -26,6 +26,7 @@ import type {
   PromptSignals,
   Question,
 } from '../../../../shared/model/prompts';
+import { mcpRequestTitle, mcpServerWords } from '../../../../shared/model/words';
 import type { FormField, PermissionMode, ToolDetail } from '../../../../shared/session';
 import { preview } from '../../transcript';
 import { displayPath, property, proposedDetail, text, toolSummary } from './tools';
@@ -578,13 +579,21 @@ export function elicitationPrompt(request: ElicitationRequest): Raised {
   if (request.mode === 'url') {
     const { url } = request;
     if (url === undefined || url === '')
-      return { declined: `${server} asked to open a link it didn’t give, so it was declined.` };
-    // The link only in the form: its words say "the link" where they quote it.
-    const words = message.split(url).join('the link').trim();
+      return {
+        declined: `${mcpServerWords(server)} asked to open a link it didn’t give, so it was declined.`,
+      };
+    // The link only in the form, and the server's words nowhere (they may hold the link, as it
+    // is or encoded): the core's, naming the link's host as its Open does (B13 C8, C11).
+    let host: string | undefined;
+    try {
+      host = new URL(url).host;
+    } catch {
+      host = undefined;
+    }
     return {
       prompt: {
         kind: 'form',
-        title: cuts.text(words === '' ? `${server} asks you to open a link` : words),
+        title: cuts.text(mcpRequestTitle(server, true, host === '' ? undefined : host)),
         server: cuts.text(server, MAX_ID_LENGTH),
         answerIn: 'api',
         form: { url },
@@ -594,14 +603,15 @@ export function elicitationPrompt(request: ElicitationRequest): Raised {
     };
   }
   const parsed = parseForm(request.requestedSchema);
+  // Declined naming its server, never quoting its words, which may hold a link.
   if (parsed === undefined)
     return {
-      declined: `${server} asked for something corrallm can’t show, so it was declined: ${message}`,
+      declined: `${mcpServerWords(server)} asked for a form corrallm can’t show, so it was declined.`,
     };
   return {
     prompt: {
       kind: 'form',
-      title: cuts.text(message.trim() === '' ? `${server} asks you to fill in a form` : message),
+      title: cuts.text(message.trim() === '' ? mcpRequestTitle(server, false) : message),
       server: cuts.text(server, MAX_ID_LENGTH),
       answerIn: 'api',
       form: { schema: parsed.schema },

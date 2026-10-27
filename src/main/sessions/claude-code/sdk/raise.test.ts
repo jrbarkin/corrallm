@@ -635,15 +635,16 @@ describe('MCP servers’ requests (elicitations)', () => {
     });
   });
 
-  it('asks to open the recorded link, the link only in the form, never in its words', () => {
+  it('asks to open the recorded link in the core’s words, naming its host, the link only in the form', () => {
     const { prompt, native } = prompted(elicit(link));
     expect(prompt).toEqual({
       kind: 'form',
-      title: 'Sign in to the tracker to continue.',
+      title: 'MCP server “tracker” asks you to open a link on tracker.example.com',
       server: 'tracker',
       answerIn: 'api',
       form: { url: 'https://tracker.example.com/sign-in?state=abc123' },
     });
+    expect(JSON.stringify(prompt)).not.toContain('Sign in to the tracker');
     expect(elicitationResult(native, { kind: 'form', action: 'accept' })).toEqual({
       action: 'accept',
     });
@@ -652,26 +653,28 @@ describe('MCP servers’ requests (elicitations)', () => {
         serverName: 'tracker',
         mode: 'url',
         url: 'https://tracker.example.com/x?token=s3cret',
-        message: 'Open https://tracker.example.com/x?token=s3cret to sign in',
+        message: 'Open tracker.example.com/x%3Ftoken%3Ds3cret to sign in',
       }),
     ).prompt;
-    expect(JSON.stringify({ ...quoting, form: undefined })).not.toMatch(/s3cret/);
-    expect(quoting.title).toBe('Open the link to sign in');
+    expect(JSON.stringify({ ...quoting, form: undefined })).not.toMatch(/s3cret|Open tracker/);
+    expect(quoting.title).toBe(
+      'MCP server “tracker” asks you to open a link on tracker.example.com',
+    );
   });
 
-  it('declines a form it can’t show, naming its server; and a link that isn’t one', () => {
+  it('declines a form it can’t show, naming its server, never quoting it; and a link that isn’t one', () => {
     expect(
       elicitationPrompt({
         serverName: 'github',
         mode: 'form',
-        message: 'Which?',
+        message: 'Which? See github.example/x%3Ftoken%3Dsecret',
         requestedSchema: { type: 'object', properties: { nested: { type: 'object' } } },
       }),
     ).toEqual({
-      declined: 'github asked for something corrallm can’t show, so it was declined: Which?',
+      declined: 'MCP server “github” asked for a form corrallm can’t show, so it was declined.',
     });
     expect(elicitationPrompt({ serverName: 'github', mode: 'url', message: 'Go' })).toEqual({
-      declined: expect.stringMatching(/^github asked/) as unknown,
+      declined: 'MCP server “github” asked to open a link it didn’t give, so it was declined.',
     });
     const { native } = prompted(elicit(form));
     expect(declined(native, 'no')).toEqual({ action: 'decline' });

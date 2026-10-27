@@ -419,7 +419,7 @@ describe('SdkConnector through the Agent SDK', () => {
     const link = await raised(events, 2);
     expect(link.prompt).toEqual({
       kind: 'form',
-      title: 'Sign in to the tracker to continue.',
+      title: 'MCP server “tracker” asks you to open a link on tracker.example.com',
       server: 'tracker',
       answerIn: 'api',
       form: { url: 'https://tracker.example.com/sign-in?state=abc123' },

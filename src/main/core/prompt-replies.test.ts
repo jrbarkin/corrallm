@@ -415,6 +415,78 @@ describe('a prompt the core owns', () => {
     expect(told).toHaveLength(1);
   });
 
+  it('shows a reached token an MCP server’s request only in the core’s words, while you see its form', async () => {
+    const fake = new FakeConnector({ mode: 'acceptEdits' });
+    const url = 'https://tracker.example.test/sign-in?state=link-private';
+    const connector: Connector<SessionMode> = {
+      start: async (spec, host) => {
+        const session: LiveSession<SessionMode> = await fake.start(spec, host);
+        session.send = (message) => {
+          host.emit({ type: 'user', id: message.id, text: message.text });
+          host.emit({
+            type: 'elicitation',
+            id: 'elicitation:link',
+            server: 'tracker',
+            message: 'Sign in at tracker.example.test/sign-in%3Fstate%3Dlink-private',
+            url,
+          });
+          host.emit({
+            type: 'elicitation',
+            id: 'elicitation:form',
+            server: 'tracker',
+            message: 'Paste the key from tracker.example.test/k%3Ftoken%3Dform-private',
+            fields: [{ name: 'key', label: 'Key', required: true, kind: 'text' }],
+          });
+          host.emit({ type: 'status', status: 'waiting' });
+          return Promise.resolve();
+        };
+        return session;
+      },
+    };
+    const words = ['link-private', 'form-private', 'Sign in at', 'Paste the key', 'example.test'];
+    const core = await start(connector);
+    await ok(core, 'message', { to: 'b', body: 'Connect the tracker' }, ORCHESTRATOR);
+    const [link, form] = await prompts(core, 2);
+    const titles = {
+      link: 'MCP server “tracker” asks you to open a link',
+      form: 'MCP server “tracker” asks you to fill in a form',
+    };
+    // Yours: titled in the core's words too, the link's form yours to open.
+    expect(link).toMatchObject({ title: titles.link, form: { url } });
+    expect(form).toMatchObject({ title: titles.form });
+    // A reached token's reads: Needs, the transcript and what it is told, in the core's words only.
+    const needs = await needsOf(core, ORCHESTRATOR);
+    expect(needs.map(({ title }) => title)).toEqual([titles.link, titles.form]);
+    const transcript = (await ok(core, 'session.transcript', { agent: 'b' }, ORCHESTRATOR)) as {
+      entries: { id: string; kind: string; message?: string }[];
+    };
+    const asked = transcript.entries.filter(({ kind }) => kind === 'elicitation');
+    expect(asked.map(({ message }) => message)).toEqual([titles.link, titles.form]);
+    for (const entry of asked) {
+      expect(entry).not.toHaveProperty('url');
+      expect(entry).not.toHaveProperty('fields');
+    }
+    let told: string[] = [];
+    await vi.waitFor(async () => {
+      told = ((await ok(core, 'messages', {}, ORCHESTRATOR)) as { items: Message[] }).items.map(
+        ({ body }) => body,
+      );
+      expect(told).toContainEqual(expect.stringContaining('is waiting for the user'));
+    });
+    for (const read of [needs, transcript, told]) {
+      for (const word of words) expect.soft(JSON.stringify(read)).not.toContain(word);
+    }
+    // Yours, the card: the form as its server words it, and the link to open.
+    const card = (await ok(core, 'session.transcript', { agent: 'b' })) as {
+      entries: { id: string; kind: string; message?: string; url?: string; fields?: unknown[] }[];
+    };
+    expect(card.entries.find(({ id }) => id === 'elicitation:form')).toMatchObject({
+      message: 'Paste the key from tracker.example.test/k%3Ftoken%3Dform-private',
+      fields: [{ name: 'key' }],
+    });
+    expect(card.entries.find(({ id }) => id === 'elicitation:link')).toMatchObject({ url });
+  });
+
   it('declines what it can’t show whole, its transcript saying why', async () => {
     const native = raising([{ ...approval, title: 'x'.repeat(5000) }]);
     const core = await start(native.connector);
