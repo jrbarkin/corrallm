@@ -7,15 +7,15 @@ const file = (fields: Record<string, unknown>) =>
   JSON.stringify({ format: 'corrallm', version: 2, id: ID, nodes: [], ...fields });
 
 describe('canvas identity', () => {
-  it('reads a version 2 canvas’s id', () => {
-    expect(canvasIdOf(file({}))).toBe(ID);
+  it.each([2, 3])('reads a version %i canvas’s id', (version) => {
+    expect(canvasIdOf(file({ version }))).toBe(ID);
   });
 
   it('refuses a version 1 canvas, a newer one, and one without a UUID id', () => {
     expect(() => canvasIdOf(file({ version: 1 }))).toThrow(
       'This canvas is from an older version of corrallm, which this one can’t open',
     );
-    expect(() => canvasIdOf(file({ version: 3 }))).toThrow(
+    expect(() => canvasIdOf(file({ version: 4 }))).toThrow(
       'This canvas was made by a newer version of corrallm',
     );
     expect(() => canvasIdOf(file({ version: '2' }))).toThrow('version must be a whole number');

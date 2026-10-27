@@ -1915,6 +1915,28 @@ describe('RunStore', () => {
   });
 
   describe('usage', () => {
+    it('evaluates a fallback rule as ask until the switching service exists, keeping Go on and Wait memory', () => {
+      const run = setup([
+        agent('a', [
+          { id: 'one', action: 'Edit' },
+          { id: 'two', action: 'Bash' },
+        ]),
+      ]);
+      run.rule({ window: 'fiveHour', percent: 80, action: 'fallback' });
+      run.reading(fiveHour(90));
+      expect(run.store.usageRule('a')?.action).toBe('ask');
+      run.store.start();
+      expect(run.where()).toEqual({ a: 'asking one' });
+      run.store.decide('a', 'one', { choice: 'wait' });
+      expect(run.store.usageRule('a')?.action).toBe('waitForReset');
+      expect(run.where()).toEqual({ a: 'waiting one' });
+      run.store.goOn('a', 'one');
+      expect(run.store.usageRule('a')).toBeUndefined();
+      expect(run.where()).toEqual({ a: 'running one' });
+      run.tick();
+      expect(run.where()).toEqual({ a: 'running two' });
+    });
+
     const HOUR = 60 * MINUTE;
     /** Claude's 5-hour window, `used` percent of it used, resetting in `left` ms. */
     const fiveHour = (used: number, resetsAt: number | null = 2 * HOUR) => ({

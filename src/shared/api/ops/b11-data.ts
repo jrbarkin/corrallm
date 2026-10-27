@@ -10,6 +10,7 @@ import {
   MAX_MESSAGE_LENGTH,
 } from '../../session';
 import { PARTY_PATTERN } from '../../model/messages';
+import { SessionContextSchema } from '../../model/fallback';
 import { USAGE_WINDOWS } from '../../usage';
 import { AgentId, ItemId, MessageId } from '../ids';
 import {
@@ -102,6 +103,7 @@ const AgentRun = z.strictObject({
       connection: CatalogId,
       text: z.string(),
       switchTo: CatalogId.optional(),
+      kind: z.literal('unknown-action').optional(),
     })
     .optional(),
   until: z.number().optional(),
@@ -232,6 +234,7 @@ export const SessionSummarySchema = z.strictObject({
   usage: z
     .strictObject({
       costUsd: z.number().nullable(),
+      context: SessionContextSchema.nullable(),
       contextTokens: z.number().nullable(),
       contextWindow: z.number().nullable(),
       limits: z

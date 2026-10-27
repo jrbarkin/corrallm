@@ -7,6 +7,8 @@ import type { AgentData, CanvasDocument } from './canvas';
 import { isIf, isRepeat } from './queue';
 import type { QueueItem } from './queue';
 import type { Built } from './structure';
+import { endpointOf, parseFallback, readFallback, sameFallback, sameStep } from './fallback';
+import type { FallbackInput } from './fallback';
 
 export interface AgentContext {
   catalog: Catalog;
@@ -80,8 +82,9 @@ export function setType(
   context: AgentContext,
 ): Built {
   return editAgent(doc, agent, (before) => {
-    if (before.adapter === adapter) return before;
-    const { connection, settings, ...data } = before;
+    const chosen = withoutPosition(before);
+    if (before.adapter === adapter) return chosen;
+    const { connection, settings, ...data } = chosen;
     const descriptor = adapterIn(context.catalog, adapter);
     const kept =
       connection !== undefined && descriptor?.connections.some((one) => one.id === connection);
@@ -116,14 +119,48 @@ export function setConnection(
 ): Built {
   return editAgent(doc, agent, (before) => {
     const adapter = before.adapter ?? context.defaultAdapter;
-    if (
-      before.connection === connection ||
-      !adapterIn(context.catalog, adapter)?.connections.some((one) => one.id === connection)
-    )
+    if (!adapterIn(context.catalog, adapter)?.connections.some((one) => one.id === connection))
       return before;
-    const { settings, ...data } = before;
+    const chosen = withoutPosition(before);
+    if (before.connection === connection) return chosen;
+    const { settings, ...data } = chosen;
     return { ...data, connection, ...fitted(settings, adapter, connection, context.catalog) };
   });
+}
+
+/** Your chain edit resolves connections now; only an existing corrallm position can be retained. */
+export function setFallback(
+  doc: CanvasDocument,
+  { agent, fallback }: { agent: string; fallback: FallbackInput | null },
+  context: AgentContext,
+): Built {
+  return editAgent(doc, agent, (before) => {
+    if (fallback === null) {
+      if (before.fallback === undefined) return before;
+      const data = { ...before };
+      delete data.fallback;
+      return data;
+    }
+    const current = endpointOf(before, context.catalog, context.defaultAdapter);
+    if (current === undefined)
+      throw new TypeError('Choose the agent’s endpoint before its fallback');
+    const parsed = parseFallback(fallback, context.catalog);
+    const on = before.fallback?.on;
+    const step = on === undefined ? -1 : parsed.to.findIndex((one) => sameStep(one, current));
+    const next = readFallback(
+      { ...parsed, ...(on !== undefined && step >= 0 ? { on: { ...on, step } } : {}) },
+      context.catalog,
+      current,
+    );
+    return sameFallback(before.fallback, next) ? before : { ...before, fallback: next };
+  });
+}
+
+function withoutPosition(data: AgentData): AgentData {
+  if (data.fallback?.on === undefined) return data;
+  const fallback = { ...data.fallback };
+  delete fallback.on;
+  return { ...data, fallback };
 }
 
 /** Merges one adapter's settings; omitted fields stay and null unsets a field. */

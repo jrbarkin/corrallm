@@ -34,8 +34,8 @@ import { deadline } from '../../../../shared/model/time';
 import { readRun } from './checkpoint';
 import type { SavedRun } from './checkpoint';
 import { warningText } from '../../../../shared/model/words';
-import { shellRefusal, startsWithShell } from '../../../../shared/model/catalog';
-import type { EngineCatalog } from '../../../../shared/model/catalog';
+import { adapterRefusal, shellRefusal, startsWithShell } from '../../../../shared/model/catalog';
+import type { EngineCatalog, ResolvedStep } from '../../../../shared/model/catalog';
 import {
   conditionQuestion,
   isCommand,
@@ -54,6 +54,7 @@ import type {
   PauseCause,
   PauseTarget,
   Run,
+  RunRefusal as Refusal,
 } from '../../../../shared/model/run';
 export type {
   Outcome,
@@ -64,6 +65,7 @@ export type {
   PauseCause,
   PauseTarget,
   Run,
+  RunRefusal as Refusal,
 } from '../../../../shared/model/run';
 
 /**
@@ -72,12 +74,6 @@ export type {
  */
 import type { Answer } from '../../../../shared/model/run';
 export type { Answer } from '../../../../shared/model/run';
-
-/** Why an agent's session would not start, as it said, and the connection that would. */
-export interface Refusal {
-  text: string;
-  switchTo?: ConnectionId;
-}
 
 /**
  * How a turn the run started in an agent's session ended: whether it failed (or was interrupted,
@@ -155,6 +151,8 @@ export interface RunIO {
     task?: TaskMessage,
     /** The id it is sent under: its message's, where the mailbox recorded it (RunIO.mailbox). */
     id?: string,
+    /** A step's adapter at resolution, checked again by the session before starting its turn. */
+    resolvedStep?: ResolvedStep,
   ) => () => void;
   /** Tells the user something about the run, in an agent's session (a notice there). */
   tell: (agent: AgentNode, text: string) => void;
@@ -537,6 +535,7 @@ export class RunStore {
     const next: Run = { ...this.#run, running: true, paused: false };
     delete next.pausedBy;
     this.#run = next;
+    this.#unrefuse();
     for (const pending of this.#sent.values()) pending.dispatch();
     this.#settle(true);
   }
@@ -827,6 +826,15 @@ export class RunStore {
     if (!this.#run.running || at?.paused || at?.status !== 'asking' || at.current !== item) return;
     if (at.refused) {
       const { refused } = at;
+      if (refused.kind === 'unknown-action') {
+        if (!('choice' in answer) || !['skip', 'stop'].includes(answer.choice)) return;
+        const cleared = { ...at };
+        delete cleared.refused;
+        this.#run = { ...this.#run, agents: { ...this.#run.agents, [agent]: cleared } };
+        this.#record(agent, item, answer.choice === 'skip' ? 'skipped' : 'stopped');
+        this.#settle(true);
+        return;
+      }
       const to = this.#agents().find((n) => n.id === refused.agent);
       if (
         to &&
@@ -1157,7 +1165,12 @@ export class RunStore {
       if (run.current && run.outcomes[run.current] !== undefined) delete next.current;
       return next;
     }
-    if (run.problem && run.current && findItem(node.data.queue ?? [], run.current)) return run;
+    if (
+      (run.problem || run.refused?.kind === 'unknown-action') &&
+      run.current &&
+      findItem(node.data.queue ?? [], run.current)
+    )
+      return run;
     const rounds: Record<string, Round> = { ...run.rounds };
     const next = this.#next(node, run.outcomes, rounds, agents, now);
     // How a step went against what was expected lasts as long as how it went (a new round clears it).
@@ -1478,7 +1491,9 @@ export class RunStore {
     const decided = this.#usageDecided.get(JSON.stringify([backend, rule.window]));
     const choice = decided && now < decided.until ? decided.choice : undefined;
     if (choice === 'goOn') return undefined;
-    return { hold, action: choice === 'wait' ? 'waitForReset' : rule.action };
+    // Until C2 registers switching, a saved fallback rule uses the existing ask path.
+    const action = rule.action === 'fallback' ? 'ask' : rule.action;
+    return { hold, action: choice === 'wait' ? 'waitForReset' : action };
   }
 
   /**
@@ -1769,18 +1784,38 @@ export class RunStore {
    */
   #begin(
     agent: string,
-    task: QueueStep | QueueMessage,
+    authored: QueueStep | QueueMessage,
     outcomes: Record<string, Outcome>,
     correction?: { note: string; images?: readonly MessageImage[] | undefined },
   ): AgentRun {
+    const node = this.#agents().find((n) => n.id === agent);
+    const previous = this.#run.agents[agent];
+    let task = authored;
+    if (node && !isMessage(task)) {
+      const resolved = this.#catalog.resolveAction(task.action, node.data);
+      if ('unknown' in resolved) {
+        const connection = this.#catalog.connectionOf(node.data);
+        return {
+          current: task.id,
+          status: 'asking',
+          outcomes,
+          refused: {
+            kind: 'unknown-action',
+            agent,
+            connection,
+            text: `Not sent: ${task.action} is not declared by ${this.#catalog.connectionName(connection) ?? connection} and has no equivalent action. Edit the step or change its backend to check it again.`,
+          },
+          ...(previous?.attempts ? { attempts: previous.attempts } : {}),
+        };
+      }
+      task = { ...task, action: resolved.action };
+    }
     const token = {};
     this.#busy.set(agent, token);
-    const previous = this.#run.agents[agent];
     const attempts = this.#attempts(previous, task.id, correction?.note);
     const ended = (turn: TurnEnd) => {
       this.#taskEnded(agent, task, token, turn);
     };
-    const node = this.#agents().find((n) => n.id === agent);
     const holder = { agent, token };
     if (!isMessage(task)) {
       if (node) {
@@ -1795,6 +1830,10 @@ export class RunStore {
         this.#send(node, text, {
           ended,
           holder,
+          resolvedStep: {
+            adapter: node.data.adapter ?? this.#catalog.defaultAdapter,
+            action: task.action,
+          },
           task: taskMessage(agent, task.id, attempts),
           ...(correction
             ? { origin: 'user', displayText: correction.note, images: correction.images }
@@ -1937,6 +1976,7 @@ export class RunStore {
       origin,
       displayText,
       task,
+      resolvedStep,
     }: {
       ended?: (turn: TurnEnd) => void;
       images?: readonly MessageImage[] | undefined;
@@ -1944,6 +1984,7 @@ export class RunStore {
       origin?: 'user';
       displayText?: string;
       task?: TaskMessage;
+      resolvedStep?: ResolvedStep;
     } = {},
   ): void {
     // Its turn may end at once (a session that cannot start): then there is nothing to take back.
@@ -1984,6 +2025,19 @@ export class RunStore {
       // against the connection its recipient runs now, and again by its session as it starts it
       // (which may be later, on another connection: mailbox.ts).
       const now = this.#agents().find((n) => n.id === to.id) ?? to;
+      const changedAdapter =
+        resolvedStep === undefined
+          ? undefined
+          : adapterRefusal(this.#catalog, resolvedStep, this.#catalog.connectionOf(now.data));
+      if (changedAdapter !== undefined) {
+        queueMicrotask(() => {
+          if (sent.over) return;
+          pending.withdraw();
+          this.#sent.delete(sent);
+          if (holder) this.#refused(holder, now, { kind: 'unknown-action', text: changedAdapter });
+        });
+        return;
+      }
       const refusal =
         origin === 'user'
           ? undefined
@@ -2013,12 +2067,17 @@ export class RunStore {
         images,
         holder &&
           ((refusal) => {
-            this.#refused(holder, to, refusal);
+            if (refusal.kind === 'unknown-action') {
+              pending.withdraw();
+              this.#sent.delete(sent);
+            }
+            this.#refused(holder, this.#agents().find((n) => n.id === to.id) ?? to, refusal);
           }),
         origin,
         displayText,
         task,
         id,
+        resolvedStep,
       );
       pending.withdraw = () => {
         if (sent.over) return;
@@ -2103,15 +2162,21 @@ export class RunStore {
   #refused(
     { agent, token }: { agent: string; token: object },
     to: AgentNode,
-    { text, switchTo }: Refusal,
+    { text, switchTo, kind }: Refusal,
   ): void {
-    const at = this.#run.agents[agent];
+    let at = this.#run.agents[agent];
     if (!this.#run.running || this.#busy.get(agent) !== token || !at) return;
+    if (kind === 'unknown-action') {
+      this.#busy.delete(agent);
+      if (at.current) this.#endAttempt(agent, at.current, 'cancelled', 'unknown-action', text);
+      at = this.#run.agents[agent] ?? at;
+    }
     const refused = {
       agent: to.id,
       connection: this.#catalog.connectionOf(to.data),
       text,
       ...(switchTo === undefined ? {} : { switchTo }),
+      ...(kind === undefined ? {} : { kind }),
     };
     this.#set({
       ...this.#run,
@@ -2130,7 +2195,12 @@ export class RunStore {
       const { refused } = at;
       if (!refused) continue;
       const to = this.#agents().find((n) => n.id === refused.agent);
-      if (to && this.#catalog.connectionOf(to.data) === refused.connection) continue;
+      if (
+        refused.kind !== 'unknown-action' &&
+        to &&
+        this.#catalog.connectionOf(to.data) === refused.connection
+      )
+        continue;
       const running: AgentRun = { ...at, status: 'running' };
       delete running.refused;
       agents[id] = running;

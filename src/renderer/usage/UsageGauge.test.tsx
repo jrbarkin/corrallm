@@ -21,6 +21,17 @@ function show(usage: UsageState) {
 }
 
 describe('UsageGauges', () => {
+  it('keeps the prepared fallback action out of the picker until its service is built', () => {
+    const { gauge } = show({ readings: [], rules: {} });
+    fireEvent.click(gauge);
+    fireEvent.click(screen.getByRole('button', { name: 'Add a rule…' }));
+    expect(screen.getAllByRole('option')).toHaveLength(3);
+    expect(screen.getByRole('option', { name: /^Warn me/ })).toBeTruthy();
+    expect(screen.getByRole('option', { name: /^Pause and ask me/ })).toBeTruthy();
+    expect(screen.getByRole('option', { name: /^Finish the task/ })).toBeTruthy();
+    expect(screen.queryByText('Carry on with the next backend')).toBeNull();
+  });
+
   it('says how old a stale reading is, on the gauge and in its panel', () => {
     const { gauge } = show({
       readings: [
