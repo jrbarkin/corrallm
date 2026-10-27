@@ -124,6 +124,21 @@ export interface RunMailbox {
   settle: (id: string, end: RunSendEnd) => void;
 }
 
+/**
+ * What admission says before automated work reaches an agent (B11a C3): it goes (or is held as it
+ * would have been); corrallm switches the agent's backend first, and the work waits; or a fallback
+ * rule that can't switch the agent asks, as `ask` does.
+ */
+export type Admission = 'go' | 'switching' | 'ask';
+
+/** What admission is asked about: a task about to go, or one held on its usage limit. */
+export interface AdmittedWork {
+  /** The fallback rule over its share on the recipient's backend, if one is. */
+  rule?: UsageHold;
+  /** A task held because its attempt failed on the recipient's usage limit (no return, C8). */
+  held?: true;
+}
+
 /** What a run needs from its surroundings. */
 export interface RunIO {
   /** Writes the current checkpoint out before an automated prompt leaves for a session. */
@@ -175,6 +190,14 @@ export interface RunIO {
   unheard?: (agent: AgentNode) => boolean;
   /** The locale the run tells times of day in (the host's): the runtime's own, when none. */
   locale?: string;
+  /**
+   * B11a C3: admission, the core's fallback service's, before a task's attempt goes to `agent`
+   * (its recipient), and for a task held on that recipient's usage limit as the run moves. None
+   * (unit harnesses): nothing switches, and a fallback rule asks.
+   */
+  admit?: (agent: string, work: AdmittedWork) => Admission;
+  /** B11a C3: what a task held on `agent`'s usage limit says of its fallback chain, if anything. */
+  limitNote?: (agent: string) => string | undefined;
 }
 
 /**
@@ -927,6 +950,45 @@ export class RunStore {
     if (this.#run.running) this.#settle(false);
   }
 
+  /** B11a C3: what admission says may have changed (a switch committed or abandoned). */
+  admissionChanged(): void {
+    if (this.#run.running) this.#settle(false);
+  }
+
+  /**
+   * B11a C5, corrallm's own decision (the core's fallback service alone calls it, once a switch of
+   * the task's recipient is committed; no op, reply or caller reaches it): a task held because its
+   * last attempt (`attempt`) failed on its recipient's usage limit goes again, as one new attempt
+   * (retryOf) to the same recipient on its new endpoint, at the same item, round and condition,
+   * through the gate. Nothing for a task not held so now, an agent paused, a run stopped or held by
+   * the barrier, or an attempt that carried your correction, which is yours to send again. Whether
+   * it went.
+   */
+  continueAfterSwitch(owner: string, item: string, attempt: string): boolean {
+    const at = this.#run.agents[owner];
+    const last = at?.attempts?.[item]?.at(-1);
+    if (
+      !this.#run.running ||
+      this.#frozen ||
+      at === undefined ||
+      at.paused === true ||
+      at.status !== 'asking' ||
+      at.current !== item ||
+      at.problem?.kind !== 'failed' ||
+      at.problem.reason !== 'usage-limit' ||
+      last?.id !== attempt ||
+      last.status !== 'failed' ||
+      last.message !== undefined ||
+      this.#busy.has(owner)
+    )
+      return false;
+    const cleared = { ...at };
+    delete cleared.problem;
+    this.#run = { ...this.#run, agents: { ...this.#run.agents, [owner]: cleared } };
+    this.#settle(true);
+    return true;
+  }
+
   /** A prompt typed in the held task's own console is an observed attempt, not another send. */
   observeSubmission(
     session: string,
@@ -1169,8 +1231,14 @@ export class RunStore {
       (run.problem || run.refused?.kind === 'unknown-action') &&
       run.current &&
       findItem(node.data.queue ?? [], run.current)
-    )
+    ) {
+      // B11a C3, C5: a task held because its attempt failed on its recipient's usage limit is
+      // admitted again as the run moves: corrallm may switch that recipient, then continue it.
+      const { problem } = run;
+      if (problem?.kind === 'failed' && problem.reason === 'usage-limit')
+        this.#io.admit?.(problem.agent, { held: true });
       return run;
+    }
     const rounds: Record<string, Round> = { ...run.rounds };
     const next = this.#next(node, run.outcomes, rounds, agents, now);
     // How a step went against what was expected lasts as long as how it went (a new round clears it).
@@ -1452,9 +1520,17 @@ export class RunStore {
           text: 'This agent has no connection; choose Claude or Codex in Agent settings.',
         },
       };
-    const rule = this.usageRule(agent, now);
-    if (!rule) return undefined;
-    const { hold, action } = rule;
+    // B11a C3: admission, before the attempt goes to its recipient. A fallback rule is read
+    // against the recipient's backend; warn, ask and wait keep the owner's, as built (F3).
+    const fallback = this.usageRule(destination, now);
+    const rule = fallback?.action === 'fallback' ? { rule: fallback.hold } : {};
+    const admitted = this.#io.admit?.(destination, rule) ?? ('rule' in rule ? 'ask' : 'go');
+    if (admitted === 'switching') return { current: task.id, status: 'waiting', outcomes };
+    if (admitted === 'ask' && 'rule' in rule)
+      return { current: task.id, status: 'asking', outcomes, usage: rule.rule };
+    const owned = this.usageRule(agent, now);
+    if (!owned || owned.action === 'fallback') return undefined;
+    const { hold, action } = owned;
     if (action === 'warn') {
       this.warnUsage(agent, hold, now);
       return undefined;
@@ -1477,9 +1553,24 @@ export class RunStore {
   ): { hold: UsageHold; action: UsageAction } | undefined {
     const node = this.#agents().find((n) => n.id === agent);
     const backend = node && this.#catalog.usageBackendOf(node.data);
-    const rule = backend && this.#io.usage?.().rules[backend];
-    if (!node || !backend || !rule) return undefined;
-    const window = windowNow(this.#readingOf(backend), rule.window, now);
+    const rule = backend === undefined ? undefined : this.backendRule(backend, now);
+    return rule && { hold: rule.hold, action: rule.action };
+  }
+
+  /**
+   * What a backend's usage rule calls for now, whichever agent spends it: its latest reading over
+   * the rule's share of its window (`simulated`, where that reading is), and what to do (the rule's
+   * action, `fallback` included, unless the user said to go on, or to wait, until that window
+   * resets). Undefined: nothing holds it.
+   */
+  backendRule(
+    backend: UsageBackendId,
+    now = this.#io.now(),
+  ): { hold: UsageHold; action: UsageAction; simulated?: true } | undefined {
+    const rule = this.#io.usage?.().rules[backend];
+    if (!rule) return undefined;
+    const reading = this.#readingOf(backend);
+    const window = windowNow(reading, rule.window, now);
     if (!window || window.usedPercent <= rule.percent) return undefined;
     const hold: UsageHold = {
       backend,
@@ -1491,9 +1582,11 @@ export class RunStore {
     const decided = this.#usageDecided.get(JSON.stringify([backend, rule.window]));
     const choice = decided && now < decided.until ? decided.choice : undefined;
     if (choice === 'goOn') return undefined;
-    // Until C2 registers switching, a saved fallback rule uses the existing ask path.
-    const action = rule.action === 'fallback' ? 'ask' : rule.action;
-    return { hold, action: choice === 'wait' ? 'waitForReset' : action };
+    return {
+      hold,
+      action: choice === 'wait' ? 'waitForReset' : rule.action,
+      ...(reading?.simulated === true ? { simulated: true } : {}),
+    };
   }
 
   /**
@@ -1908,10 +2001,13 @@ export class RunStore {
       };
     } else if (turn.failed || result?.status === 'failed') {
       outcome = 'failed';
+      // B11a C3: a usage limit says what the recipient's fallback chain did of it, if anything.
+      const note = result?.reason === 'usage-limit' ? this.#io.limitNote?.(destination) : undefined;
+      const text = result?.message ?? 'The agent could not finish this turn.';
       problem = {
         kind: 'failed',
         reason: result?.reason ?? 'error',
-        text: result?.message ?? 'The agent could not finish this turn.',
+        text: note === undefined ? text : `${text} ${note}`,
         agent: destination,
       };
     } else if (!isMessage(task)) {

@@ -7,7 +7,7 @@ import { SessionStore } from './delivery/mailbox';
 import { decodeSubmissions } from './delivery/submission-state';
 import { readRun } from './run/checkpoint';
 import { RunStore } from './run/runner';
-import type { RunMailbox } from './run/runner';
+import type { RunIO, RunMailbox } from './run/runner';
 import type { SessionBackend } from './transcript/receive';
 
 /*
@@ -44,6 +44,10 @@ export interface EngineIO {
   mailbox?: RunMailbox;
   /** The locale the run tells times of day in (the host's): the runtime's own, when none. */
   locale?: string;
+  /** B11a C3: admission before the run's tasks go (RunIO.admit): the core's fallback service. */
+  admit?: RunIO['admit'];
+  /** B11a C3: what a task held on a usage limit says of its recipient's chain (RunIO.limitNote). */
+  limitNote?: RunIO['limitNote'];
 }
 
 /** How often a held retry (Interrupt and resend) is checked again while something holds it. */
@@ -134,6 +138,8 @@ export class Engine {
       ...(io.usage ? { usage: io.usage } : {}),
       unheard: (agent) => sessions.of(agent.id).unheard !== undefined,
       ...(io.locale === undefined ? {} : { locale: io.locale }),
+      ...(io.admit === undefined ? {} : { admit: io.admit }),
+      ...(io.limitNote === undefined ? {} : { limitNote: io.limitNote }),
     });
     this.run.subscribe(() => {
       this.#checkRetries();
