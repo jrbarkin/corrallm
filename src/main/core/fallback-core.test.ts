@@ -221,6 +221,50 @@ describe('the fallback chain through the core', () => {
     ).toContain('Worker carries on with Claude Code · Terminal; your message wasn’t sent again.');
   });
 
+  it('shows the chain in the session summary, agents and status: where it is, and switching', async () => {
+    const codex = held('codex');
+    const claude = held('claude-code');
+    const core = await start(codex.connector, claude.connector);
+    const engine = await core.engines.open(CANVAS);
+    const views = async () =>
+      Promise.all(
+        (['session.get', 'agents', 'status'] as const).map(async (op) => {
+          const args =
+            op === 'session.get' ? { canvas: CANVAS, agent: 'worker' } : { canvas: CANVAS };
+          const result = await core.call(op, args, CALLERS.you);
+          if (!result.ok) throw new Error(result.error.sentence);
+          const value = result.value as { fallback?: unknown; agents?: { fallback: unknown }[] };
+          return value.agents === undefined ? value.fallback : value.agents[0]?.fallback;
+        }),
+      );
+    expect(await views()).toEqual(Array(3).fill({ step: null, steps: 1, back: 'stay' }));
+    engine.run.start();
+    await vi.waitFor(() => {
+      expect(codex.sent).toHaveLength(1);
+    });
+    // Your own message, typed as the task goes, is the turn its switch waits for.
+    await core.call('message', { canvas: CANVAS, to: 'worker', body: 'Mine' }, CALLERS.you);
+    codex.end(LIMIT(Date.now() + 60 * 60_000));
+    await vi.waitFor(() => {
+      expect(codex.sent).toHaveLength(2);
+    });
+    expect(await views()).toEqual(
+      Array(3).fill({ step: null, steps: 1, back: 'stay', switching: true }),
+    );
+    codex.end({ status: 'completed', reason: 'completed' });
+    await vi.waitFor(() => {
+      expect(claude.sent).toHaveLength(1);
+    });
+    expect(await views()).toEqual(
+      Array(3).fill({
+        step: 0,
+        steps: 1,
+        from: { adapter: 'codex', connection: 'codex.app-server' },
+        back: 'stay',
+      }),
+    );
+  });
+
   it('keeps the switch across a restart, and switches nothing again: the held task waits for you', async () => {
     const codex = held('codex');
     const claude = held('claude-code');

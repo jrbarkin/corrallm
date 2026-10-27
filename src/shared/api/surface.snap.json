@@ -291,7 +291,7 @@
   "schemas": {
     "topics.subscribe": {
       "input": "8c5be84f0a1a163a",
-      "output": "9c32edf1781ba70f"
+      "output": "8361326e10e887a7"
     },
     "topics.unsubscribe": {
       "input": "8c5be84f0a1a163a",
@@ -459,11 +459,11 @@
     },
     "agents": {
       "input": "41356bc15da6df1b",
-      "output": "48d08855f6623662"
+      "output": "6a04147aba846f89"
     },
     "status": {
       "input": "41356bc15da6df1b",
-      "output": "cb91151f949f1731"
+      "output": "527aa502cf3288c2"
     },
     "needs": {
       "input": "41356bc15da6df1b",
@@ -491,7 +491,7 @@
     },
     "session.get": {
       "input": "c804536f3eb2a39b",
-      "output": "606e09e2a5284c7e"
+      "output": "8f109ef4d692002d"
     },
     "session.transcript": {
       "input": "b0a50f8eb22508f9",

@@ -10,7 +10,7 @@ import {
   MAX_MESSAGE_LENGTH,
 } from '../../session';
 import { PARTY_PATTERN } from '../../model/messages';
-import { SessionContextSchema } from '../../model/fallback';
+import { FallbackViewSchema, SessionContextSchema } from '../../model/fallback';
 import { USAGE_WINDOWS } from '../../usage';
 import { AgentId, ItemId, MessageId } from '../ids';
 import {
@@ -194,6 +194,8 @@ export const AskViewSchema = z.discriminatedUnion('kind', [
 export const SessionSummarySchema = z.strictObject({
   agent: z.string(),
   connection: z.string(),
+  // B11a C11: where the agent is in the fallback chain you set, and whether corrallm switches it.
+  fallback: FallbackViewSchema.nullable(),
   status: z.enum(['idle', 'working', 'waiting']),
   paused: z.boolean(),
   queued: z.int(),
