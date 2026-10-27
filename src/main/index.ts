@@ -325,14 +325,25 @@ function main(): void {
       // way back to one closed while the core kept working, on every platform.
       app.on('second-instance', reopen);
       // Windows and Linux: the last window closing quits, unless the core has work going on
-      // (a run running, a turn): then it runs on, and opening corrallm again shows it.
-      // X1 retains this check until C3 supplies presence and C4 replaces the quit path.
+      // (a turn, a running run, a job): then it runs on, and opening corrallm again shows it. The
+      // core decides in one step, holding its barrier only if nothing is at work (B14 C2's
+      // ifIdle), so work starting meanwhile is never cut off unasked. C4 replaces this with the
+      // run-aware question.
       lastWindowClosed = () => {
         if (quit.busy || quit.approved) return;
-        void ask('active').then(
-          (active) => {
-            if (BrowserWindow.getAllWindows().length > 0 || quit.busy || quit.approved) return;
-            if (!active) {
+        void ask('prepareShutdown', 'quit', { ifIdle: true }).then(
+          (prepared) => {
+            const idle = !('busy' in prepared);
+            if (BrowserWindow.getAllWindows().length > 0 || quit.busy || quit.approved) {
+              // A window came back meanwhile: the barrier held for this close lifts.
+              if (idle && !quit.busy && !quit.approved) {
+                void ask('cancelShutdown').catch((error: unknown) => {
+                  console.error('Could not keep the core going:', error);
+                });
+              }
+              return;
+            }
+            if (idle) {
               app.quit();
               return;
             }

@@ -114,13 +114,7 @@ vi.mock('./window', () => ({ createMainWindow: createWindow }));
  */
 function answered(name: string): Promise<{ ok: true; value: unknown }> {
   const value =
-    name === 'flushDrafts'
-      ? { unanswered: [] }
-      : name === 'prepareShutdown'
-        ? { ok: true }
-        : name === 'active'
-          ? false
-          : null;
+    name === 'flushDrafts' ? { unanswered: [] } : name === 'prepareShutdown' ? { ok: true } : null;
   return Promise.resolve({ ok: true, value });
 }
 
@@ -393,14 +387,30 @@ describe('a window, again', () => {
       Object.defineProperty(process, 'platform', { value: platform, configurable: true });
       try {
         vi.spyOn(console, 'error').mockImplementation(() => undefined);
-        request.mockImplementation((name) =>
-          name === 'active' ? Promise.resolve({ ok: true, value: active }) : answered(name),
+        const busy = {
+          revision: 3,
+          working: 1,
+          runs: 0,
+          jobs: 0,
+          needs: 0,
+          busy: true,
+          awake: true,
+        };
+        // The core decides in one step whether anything is at work (B14 C2): it holds the barrier
+        // only if not, so no work started since main last heard is cut off unasked.
+        request.mockImplementation((name, ...args: unknown[]) =>
+          name === 'prepareShutdown' && args[1] !== undefined
+            ? Promise.resolve({ ok: true, value: active ? { busy } : { ok: true } })
+            : answered(name),
         );
         await started();
         on('window-all-closed')();
         await new Promise((resolve) => setTimeout(resolve, 0));
         expect(app.quit).toHaveBeenCalledTimes(quits ? 1 : 0);
-        if (platform === 'darwin') expect(request).not.toHaveBeenCalledWith('active');
+        const asked = request.mock.calls.filter(([name]) => name === 'prepareShutdown');
+        expect(asked).toEqual(
+          platform === 'darwin' ? [] : [['prepareShutdown', 'quit', { ifIdle: true }]],
+        );
         if (active) {
           expect(console.error).toHaveBeenCalledWith(
             'corrallm: its agents are still working, so it runs on with no window: open corrallm again to show it, and quit it there.',
@@ -411,6 +421,28 @@ describe('a window, again', () => {
       }
     },
   );
+
+  it('lifts the barrier an idle last close held, if a window came back before it quit', async () => {
+    const real = Object.getOwnPropertyDescriptor(process, 'platform');
+    Object.defineProperty(process, 'platform', { value: 'linux', configurable: true });
+    try {
+      const idle = Promise.withResolvers<{ ok: true; value: unknown }>();
+      request.mockImplementation((name, ...args: unknown[]) =>
+        name === 'prepareShutdown' && args[1] !== undefined ? idle.promise : answered(name),
+      );
+      await started();
+      on('window-all-closed')();
+      // corrallm opened again while the core answered.
+      getAllWindows.mockReturnValue([{}]);
+      idle.resolve({ ok: true, value: { ok: true } });
+      await vi.waitFor(() => {
+        expect(request).toHaveBeenCalledWith('cancelShutdown');
+      });
+      expect(app.quit).not.toHaveBeenCalled();
+    } finally {
+      if (real) Object.defineProperty(process, 'platform', real);
+    }
+  });
 });
 
 afterEach(() => {

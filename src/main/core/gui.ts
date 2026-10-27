@@ -32,6 +32,11 @@ export interface WindowPort extends LinkPort {
 
 /** How long a window has to finish its drafts as the app quits (`flushDrafts`). */
 export const DRAFTS_MS = 5000;
+/**
+ * How long the windows have, all together, as the system shuts down or logs out (B14 C4): drafts
+ * land before the barrier, leaving most of logind's five seconds for sessions to end.
+ */
+export const SYSTEM_DRAFTS_MS = 1000;
 
 interface Served {
   readonly port: WindowPort;
@@ -68,6 +73,11 @@ export class WindowPorts {
       throw new Error('The app window closed before opening the link.');
     const answer = await this.#core.call('link.open', { url }, asHuman(window));
     if (!answer.ok) throw new Error(answer.error.sentence);
+  }
+
+  /** The windows it serves now, each with its port. */
+  connected(): WindowId[] {
+    return [...this.#windows.keys()];
   }
 
   /** Sends a privately resolved destination to one attached view; performs no operation. */

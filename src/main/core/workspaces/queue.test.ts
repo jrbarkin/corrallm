@@ -21,6 +21,22 @@ function gate() {
 const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 describe('ProvisioningQueue', () => {
+  it('says each time its jobs waiting or running change, for the core’s presence', async () => {
+    const sizes: number[] = [];
+    const queue: ProvisioningQueue = new ProvisioningQueue({
+      changed: () => sizes.push(queue.size),
+    });
+    const first = gate();
+    const one = queue.run('/repo/.git', () => first.wait);
+    const two = queue.run('/other/.git', () => Promise.reject(new Error('no')));
+    expect(sizes).toEqual([1, 2]);
+    await two.catch(() => undefined);
+    expect(sizes).toEqual([1, 2, 1]);
+    first.open();
+    await one;
+    expect(sizes).toEqual([1, 2, 1, 0]);
+  });
+
   it('runs one repository’s work in turn, a failure not stopping what follows', async () => {
     const queue = new ProvisioningQueue();
     const order: string[] = [];

@@ -35,6 +35,9 @@ beforeAll(async () => {
 
 /** The process's exit listeners before each test: each entry loaded adds its own. */
 let exits: NodeJS.ExitListener[] = [];
+/** And its signal listeners: the core process handles its own (B14 C4). */
+const SIGNALS = ['SIGTERM', 'SIGHUP', 'SIGINT'] as const;
+let signals = new Map<NodeJS.Signals, NodeJS.SignalsListener[]>();
 
 beforeEach(async () => {
   vi.resetModules();
@@ -42,11 +45,17 @@ beforeEach(async () => {
   profile = await mkdtemp(path.join(tmpdir(), 'corrallm-core-entry-'));
   initialized = false;
   exits = process.listeners('exit');
+  signals = new Map(SIGNALS.map((signal) => [signal, process.listeners(signal)]));
 });
 afterEach(async () => {
   if (initialized) await main.request('commitShutdown');
   for (const listener of process.listeners('exit')) {
     if (!exits.includes(listener)) process.removeListener('exit', listener);
+  }
+  for (const signal of SIGNALS) {
+    for (const listener of process.listeners(signal)) {
+      if (!signals.get(signal)?.includes(listener)) process.removeListener(signal, listener);
+    }
   }
   for (const port of closing.splice(0)) port.close();
   if (originalParent) Object.defineProperty(process, 'parentPort', originalParent);
@@ -136,7 +145,7 @@ async function start() {
       if (answer.ok) initialized = true;
       return answer;
     },
-    window: (id: number) => {
+    window: (id: number, flush: () => unknown = () => null) => {
       const { port1, port2 } = new MessageChannel();
       closing.push(port1, port2);
       parent.emit('message', {
@@ -152,7 +161,12 @@ async function start() {
             port2.on('message', listener);
           },
         },
-        { 'drafts.flush': () => null },
+        {
+          'drafts.flush': async () => {
+            await flush();
+            return null;
+          },
+        },
       );
     },
   };
@@ -213,8 +227,100 @@ describe('the core process’s init', () => {
       ok: true,
       value: { ok: true, value: { running: false } },
     });
-    // X1 keeps today's last-window decision until C3 publishes presence.
-    expect(await main.request('active')).toEqual({ ok: true, value: false });
+    // Nothing at work: an idle quit holds the barrier at once (B14 C2), refusing writes.
+    expect(await main.request('prepareShutdown', 'quit', { ifIdle: true })).toEqual({
+      ok: true,
+      value: { ok: true },
+    });
+    expect(await other.request('call', 'canvas.create', {})).toMatchObject({
+      ok: true,
+      value: { ok: false, error: { code: 'unavailable' } },
+    });
+  });
+
+  it('tells main its presence, whole, before init answers', async () => {
+    const heard: unknown[] = [];
+    const entry = await start();
+    main.on('presence', (snapshot) => {
+      heard.push(snapshot);
+    });
+    expect(await entry.init()).toEqual({ ok: true, value: null });
+    expect(heard).toEqual([
+      { revision: 0, working: 0, runs: 0, jobs: 0, needs: 0, busy: false, awake: false },
+    ]);
+  });
+});
+
+describe('the core process told to stop by a signal (B14 C4)', () => {
+  it.each(SIGNALS)(
+    'on %s tells main it is exiting, lands the drafts, then closes in order and exits 0',
+    async (signal) => {
+      const exit = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+      const heard: unknown[] = [];
+      const entry = await start();
+      main.on('exiting', (why) => {
+        heard.push(why);
+      });
+      expect(await entry.init()).toEqual({ ok: true, value: null });
+      const apiJson = path.join(profile, 'api.json');
+      await vi.waitFor(() => {
+        expect(existsSync(apiJson)).toBe(true);
+      });
+      // What the window composes lands as a write while it is asked: before the barrier.
+      let landed: unknown;
+      const window = entry.window(7, async () => {
+        landed = await window.request('call', 'canvas.create', {});
+      });
+      await window.request('call', 'app.info', {});
+      process.emit(signal, signal);
+      // Again while it closes: nothing more (a second signal never kills it before it is done).
+      process.emit(signal, signal);
+      await vi.waitFor(() => {
+        expect(exit).toHaveBeenCalledWith(0);
+      });
+      expect(heard).toEqual(['signal']);
+      expect(landed).toMatchObject({ ok: true, value: { ok: true } });
+      // Closed in order: the endpoint gone, then the core, the profile let go.
+      expect(existsSync(apiJson)).toBe(false);
+      expect(existsSync(path.join(profile, 'core.lock'))).toBe(false);
+      expect(exit).toHaveBeenCalledOnce();
+      // Main's own commit, if it asks too, is the same close.
+      expect(await main.request('commitShutdown')).toEqual({ ok: true, value: null });
+      initialized = false;
+    },
+  );
+
+  it('gives drafts at most a second in all, then closes all the same', async () => {
+    const exit = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+    const entry = await start();
+    expect(await entry.init()).toEqual({ ok: true, value: null });
+    const window = entry.window(7, () => new Promise(() => undefined));
+    await window.request('call', 'app.info', {});
+    const told = Date.now();
+    process.emit('SIGTERM', 'SIGTERM');
+    await vi.waitFor(
+      () => {
+        expect(exit).toHaveBeenCalledWith(0);
+      },
+      { timeout: 4000 },
+    );
+    expect(Date.now() - told).toBeGreaterThanOrEqual(1000);
+    expect(existsSync(path.join(profile, 'core.lock'))).toBe(false);
+    initialized = false;
+  });
+
+  it('exits at once, saying so, when it holds no profile yet', async () => {
+    const exit = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+    const heard: unknown[] = [];
+    await start();
+    main.on('exiting', (why) => {
+      heard.push(why);
+    });
+    process.emit('SIGTERM', 'SIGTERM');
+    await vi.waitFor(() => {
+      expect(exit).toHaveBeenCalledWith(0);
+    });
+    expect(heard).toEqual(['signal']);
   });
 });
 

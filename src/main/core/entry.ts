@@ -4,7 +4,7 @@ import { createCore } from './core';
 import type { Core } from './core';
 import { Endpoint } from './endpoint';
 import { appHost } from './host/app';
-import { WindowPorts } from './gui';
+import { SYSTEM_DRAFTS_MS, WindowPorts } from './gui';
 import type { WindowPort } from './gui';
 import type { WindowId } from './host';
 import { lockProfile, ProfileLocked } from './lock';
@@ -35,6 +35,12 @@ import type { TokenSocket } from './token-socket';
  * update; committing closes the token socket and the endpoint (requests going on ended, api.json
  * removed) before the core closes. In the native self-test (CORRALLM_NATIVE_SELFTEST=1,
  * native-selftest.ts) main only asks it to run the checks, and it is never composed.
+ *
+ * Told to stop by a signal (SIGTERM, SIGHUP, SIGINT: a Linux logout signals main and the core at
+ * once, B14 C4), it closes itself as `corrallm serve` does, and as main's system path would: it
+ * tells main it is exiting (`exiting`), gives every window's drafts at most SYSTEM_DRAFTS_MS in all
+ * to land, prepares the barrier for `system` and commits it (the same close main's commit asks
+ * for), then exits 0. Told again meanwhile, it goes on closing. Main's own budget bounds the whole.
  */
 
 // Checking that only plain data crosses costs a walk of every value: only under `pnpm dev`.
@@ -97,6 +103,10 @@ if (!parent) {
 const windows = Promise.withResolvers<WindowPorts>();
 let composed = false;
 const ready = Promise.withResolvers<Core>();
+/** Init going on: the core it composed, or none (the profile held elsewhere, or it failed). */
+let composing: Promise<Core | undefined> = Promise.resolve(undefined);
+/** Its close, once begun: committing the barrier, by main's request or a signal; once. */
+let closing: Promise<void> | undefined;
 /** The profile, once init holds it: let go once the core closes, or as the process ends. */
 let held: ProfileLock | undefined;
 /** The profile's token socket, served while the core is up. */
@@ -123,6 +133,8 @@ const link = new CoreLink<CoreSide, HostSide>(
     init: async (config) => {
       if (composed) throw new Error('corrallm’s core is up already.');
       composed = true;
+      const up = Promise.withResolvers<Core | undefined>();
+      composing = up.promise;
       let core: Core;
       try {
         held = await lockProfile(config.profile, 'app');
@@ -130,9 +142,11 @@ const link = new CoreLink<CoreSide, HostSide>(
       } catch (error) {
         release();
         composed = false;
+        up.resolve(undefined);
         if (!(error instanceof ProfileLocked)) throw error;
         return { profileLocked: { holder: error.holder ?? null } };
       }
+      up.resolve(core);
       ready.resolve(core);
       windows.resolve(new WindowPorts(core, { check }));
       // Every canvas open runs in the core from now on, restored paused, whether or not a window
@@ -192,30 +206,21 @@ const link = new CoreLink<CoreSide, HostSide>(
       await (await windows.promise).openLink(window, url);
       return null;
     },
-    flushDrafts: async (asked) => ({
-      unanswered: await (await windows.promise).flushDrafts(asked),
+    flushDrafts: async (asked, reason) => ({
+      unanswered: await (
+        await windows.promise
+      ).flushDrafts(asked, reason === 'system' ? SYSTEM_DRAFTS_MS : undefined),
     }),
-    prepareShutdown: async (reason, options) => {
-      if (options !== undefined) throw new Error('Idle shutdown reservation is not available yet.');
-      return (await ready.promise).prepareShutdown(reason);
-    },
+    prepareShutdown: async (reason, options) =>
+      (await ready.promise).prepareShutdown(reason, options),
     cancelShutdown: async () => {
       (await ready.promise).cancelShutdown();
       return null;
     },
     commitShutdown: async () => {
-      try {
-        // No token is made as the core closes, and no request is answered: those going on end,
-        // a long wait included, and api.json goes, before any session does.
-        await tokenSocket?.close();
-        await endpoint?.close();
-        await (await ready.promise).commitShutdown();
-      } finally {
-        release();
-      }
+      await close(await ready.promise);
       return null;
     },
-    active: async () => (await ready.promise).active(),
     // C3 and C5 supply these services; an unwired host gesture must fail without side effects.
     pauseAll: () => {
       throw new Error('Pause all is not available yet.');
@@ -242,6 +247,57 @@ link.on('resumed', () => {
   });
 });
 link.emit('ready', memoryText());
+
+/**
+ * Commits the barrier, once, whoever asks (main, or a signal): no token is made as the core closes,
+ * and no request is answered (those going on end, a long wait included, and api.json goes) before
+ * any session does; then the core closes, and the profile is let go.
+ */
+function close(core: Core): Promise<void> {
+  closing ??= (async () => {
+    try {
+      await tokenSocket?.close();
+      await endpoint?.close();
+      await core.commitShutdown();
+    } finally {
+      release();
+    }
+  })();
+  return closing;
+}
+
+/** Closes the core told to stop by a signal, as main's system path does (B14 C4), then exits 0. */
+let stopping: Promise<void> | undefined;
+for (const signal of ['SIGTERM', 'SIGHUP', 'SIGINT'] as const) {
+  process.on(signal, () => {
+    stopping ??= stop();
+  });
+}
+
+async function stop(): Promise<void> {
+  link.emit('exiting', 'signal');
+  try {
+    const core = await composing;
+    if (core !== undefined) {
+      const served = await windows.promise;
+      // Drafts land before the barrier refuses their writes: at most a second, all together.
+      await served.flushDrafts(served.connected(), SYSTEM_DRAFTS_MS);
+      // No dialog on this path: a failure is said without values, and what is on disk stands.
+      const prepared = await core.prepareShutdown('system');
+      if ('failed' in prepared)
+        console.error('corrallm: not everything could be saved as it closed.');
+      await close(core);
+    }
+  } catch {
+    console.error('corrallm: its core couldn’t close cleanly; it ends what it left as it starts.');
+  } finally {
+    release();
+    // Answers to main's requests about this close go out before the process does.
+    setImmediate(() => {
+      process.exit(0);
+    });
+  }
+}
 
 function reasonOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
