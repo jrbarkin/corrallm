@@ -24,6 +24,7 @@ import type { CanvasStates } from '../canvas/states';
 import type { Engines } from '../engines';
 import type { HostServices } from '../host';
 import type { StalledTurns } from '../stalled';
+import type { PromptOwner } from '../prompts/owner';
 import type { TokenStore } from '../tokens';
 import { agentOps } from './agent';
 import { queueOps } from './queue';
@@ -95,6 +96,8 @@ export interface OpServices {
     | 'interruptIf'
   >;
   stalled: Pick<StalledTurns, 'items' | 'take'>;
+  /** The core's prompt owner (B13 C3): the prompts sessions raise, waiting in Needs. */
+  prompts?: Pick<PromptOwner, 'items'>;
   runError?: (canvas: CanvasId) => string | undefined;
   runProblems?: (canvas: CanvasId) => readonly NeedsItem[];
   /** The canvases the core runs. */

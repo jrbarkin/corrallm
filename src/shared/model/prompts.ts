@@ -261,8 +261,15 @@ function kinds<C extends typeof Choice | typeof CoreChoice, S extends z.core.$Zo
   ] as const;
 }
 
+/**
+ * `omitted`: the adapter left out a decision its CLI offers that it can't word completely (C4);
+ * the core says so in the prompt's reason, in its own words. Like `signals`, it never leaves the core.
+ */
 export const AdapterPrompt = z
-  .discriminatedUnion('kind', kinds(Choice, { signals: PromptSignals.optional() }))
+  .discriminatedUnion(
+    'kind',
+    kinds(Choice, { signals: PromptSignals.optional(), omitted: z.literal(true).optional() }),
+  )
   .superRefine(promptBounds);
 export type AdapterPrompt = z.infer<typeof AdapterPrompt>;
 export const PromptEvent = z.strictObject({
