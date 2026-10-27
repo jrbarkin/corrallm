@@ -289,7 +289,7 @@
   "schemas": {
     "topics.subscribe": {
       "input": "8c5be84f0a1a163a",
-      "output": "731b7205ff8daf98"
+      "output": "207a6ac47a6abfc7"
     },
     "topics.unsubscribe": {
       "input": "8c5be84f0a1a163a",
@@ -325,7 +325,7 @@
     },
     "worktree.list": {
       "input": "72e6f4bc2806201b",
-      "output": "e4de311f541963b7"
+      "output": "6a7ca9ffb726d6fc"
     },
     "worktree.retry": {
       "input": "dafe7f6753754290",

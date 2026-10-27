@@ -72,6 +72,7 @@ import { MergeService } from './workspaces/merge';
 import { temporaryIndexes } from './workspaces/merge-index';
 import { MergeJournal } from './workspaces/merge-journal';
 import { listWorktrees } from './workspaces/list';
+import { gitReads, MergeObserver } from './workspaces/observe';
 import type { Viewer, WorktreeListing } from './workspaces/list';
 import type { CanvasDocument } from '../../shared/model/canvas';
 import type { Caller, OutsideCaller } from './caller';
@@ -176,6 +177,8 @@ export interface CoreConfig {
   notifier?: Partial<NotifierTiming>;
   /** For tests: the period between presence snapshots (B14 C5), lengthened. */
   presenceEveryMs?: number;
+  /** For tests: the period between one repository's merge-state passes (B9b C12), shortened. */
+  observeEveryMs?: number;
   /**
    * For tests: what runs agents' sessions instead of each connection's own connector
    * (sessions/fake.ts), the environment they run in instead of the login shell's, what reads a
@@ -544,6 +547,11 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
         projectRoot: (id) => projects.of(id) ?? (id === canvas ? picked : undefined),
         provisioning: (id, owner) => workspaceDirectories.provisioning(id, owner),
         kept: (id) => cleanup.kept(id),
+        // B9b C12: the merge state as last observed, and each tree's merge going on or held.
+        merges: {
+          into: (id) => observer.into(id),
+          of: (_id, workspace) => ({ ...observer.of(workspace), ...merges.state(workspace) }),
+        },
       },
       canvas,
       now,
@@ -695,6 +703,8 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
       void engines.emit(canvas, agentId, connection, event).catch((error: unknown) => {
         console.error('Could not deliver a session event:', error);
       });
+      // B9b C12: a turn's end, or its session stopping, may have changed its tree.
+      if (event.type === 'end' || event.type === 'closed') observer.agent(canvas, agentId);
     },
     terminal: (canvas, agentId, event) => {
       terminals.emit(canvas, agentId, event);
@@ -705,6 +715,8 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     ended: (canvas, agent) => {
       stalled.ended(canvas, agent);
       engines.ended(canvas, agent);
+      // A close the session didn't say (an intentional one): its tree read once it has had time.
+      observer.agent(canvas, agent);
     },
     prompts,
     // A restore of a tree holds new work for the other agents working in it until it is done.
@@ -777,6 +789,18 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
       engines.needsChanged(canvas);
     },
   });
+  // B9b C12: each card's merge state, read only when asked (a merge settling, a review, a turn's
+  // end or a session's close, a window's focus), coalesced per repository, its changes moving the
+  // canonical worktrees revision. Listing and committing never ask Git.
+  const observer = new MergeObserver({
+    workspaces: workspaceStore,
+    projectRoot: (canvas) => projects.of(canvas),
+    reads: gitReads(workspaceGit),
+    changed: (canvas) => {
+      topics.changed(`worktrees:${canvas}`, 'corrallm');
+    },
+    ...(config.observeEveryMs === undefined ? {} : { everyMs: config.observeEveryMs }),
+  });
   // B9b C5: an agent's branch merged into your picked checkout's branch, in its repository's lane
   // of the one provisioning queue, a checkpoint draining the agent's tree through the one gate,
   // journaled in the profile's database (merge_job) and reconciled as the core starts.
@@ -800,6 +824,8 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     changed: (canvas) => {
       topics.changed(`worktrees:${canvas}`, 'corrallm');
     },
+    // Read again at once once a merge settles, so its answer's receipt carries it.
+    observe: (canvas, workspace) => observer.now(canvas, workspace),
   });
   const windows = new Windows({
     restore: async () => {
@@ -1256,8 +1282,8 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
             // B9b C4: an agent's branch for review. Its destination is found again from the
             // canvas's picked folder as ProjectFolders keeps it (none: shown as unread), never a
             // path minted here or read back from memory.
-            diff: (request) =>
-              readBranchDiff(
+            diff: async (request) => {
+              const page = await readBranchDiff(
                 {
                   git: workspaceGit,
                   workspaces: workspaceStore,
@@ -1268,7 +1294,11 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
                     nameOf(documents.loaded(canvas)?.document.nodes ?? [], agent),
                 },
                 request,
-              ),
+              );
+              // B9b C12: what was reviewed, its card's merge state read again soon.
+              if (page.ok) observer.workspace(page.value.workspace);
+              return page;
+            },
             // B9b C5: the merge service, for X2's `branch.merge`.
             merge: (request) => merges.merge(request),
           },
@@ -1407,6 +1437,8 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     // A merge past its point of no return finishes first, its install never killed to quit (B9b
     // Design §9 C8); one before it stops at its next step, changing nothing.
     await merges.close();
+    // Nothing more is observed: the merges that read it last have settled.
+    observer.close();
     closing = true;
     presence.close();
     notifier?.close();
@@ -1538,7 +1570,10 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     watch: (watcher) => engines.watch(watcher),
     focused: async (window) => {
       const canvas = windows.shownIn(window);
-      if (canvas !== undefined) await check(canvas);
+      if (canvas === undefined) return;
+      // B9b C12: you may have committed, merged or switched branches meanwhile.
+      observer.canvas(canvas);
+      await check(canvas);
     },
     resumed: () => {
       stalled.resume();

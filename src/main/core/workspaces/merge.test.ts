@@ -3,12 +3,14 @@ import path from 'node:path';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import type { CanvasId } from '../../../shared/canvas';
 import type { Caller } from '../caller';
+import { mintTrustedPath } from '../host';
 
 import { mergeCallerOf } from './merge';
 import type { MergeResult } from './merge';
 import { differing, gitInits, hooksInto, listing, ran, sentinelProgram } from './test-git';
-import { mergeWorld, pauseAt, put, YOU } from './test-merge';
+import { crashAt, mergeWorld, pauseAt, put, YOU } from './test-merge';
 import type { MergeWorld } from './test-merge';
 import { CANVAS } from './test-workspace';
 
@@ -661,6 +663,103 @@ describe.skipIf(process.platform === 'win32')('the shutdown barrier', () => {
     again.resume();
     expect(refusal(await leaving)).toMatchObject({ code: 'unavailable' });
     expect(w.g(w.app, 'rev-parse', 'main')).toBe(before);
+  });
+});
+
+describe.skipIf(process.platform === 'win32')('its card’s merge state (B9b C12)', () => {
+  it('is observed again before a merge answers, merged or already merged, its lane free meanwhile', async () => {
+    const refreshed = Promise.withResolvers<undefined>();
+    const observe = vi.fn<(canvas: CanvasId, workspace: string) => Promise<void>>(
+      () => refreshed.promise,
+    );
+    const w = await make({ deps: { observe } });
+    w.work(w.cwd, { 'agent.txt': 'agent\n' });
+    let answered = false;
+    const going = w.service.merge(w.request()).then((result) => {
+      answered = true;
+      return result;
+    });
+    await vi.waitFor(
+      () => {
+        expect(observe).toHaveBeenCalledWith(CANVAS, w.tree.id);
+      },
+      { timeout: 60_000 },
+    );
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(answered).toBe(false);
+    // The repository's lane isn't held for it: the next job there runs.
+    await w.queue.run(w.record.commonDir, () => Promise.resolve());
+    refreshed.resolve(undefined);
+    expect(merged(await going).outcome).toBe('merged');
+
+    observe.mockClear();
+    observe.mockResolvedValue(undefined);
+    expect(merged(await w.service.merge(w.request())).outcome).toBe('already-merged');
+    expect(observe).toHaveBeenCalledWith(CANVAS, w.tree.id);
+  });
+
+  it('is observed again after a refusal in the lane, never after one refused at admission', async () => {
+    const observe = vi.fn<(canvas: CanvasId, workspace: string) => Promise<void>>(() =>
+      Promise.resolve(),
+    );
+    const w = await make({ deps: { observe } });
+    w.work(w.cwd, { 'agent.txt': 'agent\n' });
+    const stale = w.request();
+    w.work(w.app, { 'main.txt': 'main\n' });
+    expect(refusal(await w.service.merge(stale)).code).toBe('conflict');
+    expect(observe).toHaveBeenCalledWith(CANVAS, w.tree.id);
+
+    observe.mockClear();
+    w.writing.set('builder', 'has a turn going on');
+    expect(refusal(await w.service.merge(w.request())).code).toBe('unavailable');
+    expect(observe).not.toHaveBeenCalled();
+  });
+
+  it('never holds a merge’s answer past its bound', async () => {
+    const w = await make({
+      deps: { observe: () => new Promise<void>(() => undefined), observeWithinMs: 50 },
+    });
+    w.work(w.cwd, { 'agent.txt': 'agent\n' });
+    expect(merged(await w.service.merge(w.request())).outcome).toBe('merged');
+  });
+
+  it('says a merge goes on from its admission to its answer, and nothing once it is refused', async () => {
+    const pause = pauseAt('admitted');
+    const changed = vi.fn<(canvas: CanvasId) => void>();
+    const w = await make({ deps: { fault: pause.fault, changed } });
+    w.work(w.cwd, { 'agent.txt': 'agent\n' });
+    const stale = w.request();
+    w.work(w.app, { 'main.txt': 'main\n' });
+    const going = w.service.merge(stale);
+    await pause.reached;
+    expect(changed).toHaveBeenCalledWith(CANVAS);
+    expect(w.service.state(w.tree.id)).toEqual({ job: 'merging' });
+    changed.mockClear();
+    pause.resume();
+    expect(refusal(await going).code).toBe('conflict');
+    // Published again as it ended: no card is left saying it merges.
+    expect(w.service.state(w.tree.id)).toBeUndefined();
+    expect(changed).toHaveBeenCalledWith(CANVAS);
+  });
+
+  it('says a merge a restart couldn’t check is held, for you to see why: never merging forever', async () => {
+    const crash = crashAt('recorded');
+    const w = await make({ deps: { fault: crash.fault } });
+    w.work(w.cwd, { 'agent.txt': 'agent\n' });
+    void w.service.merge(w.request());
+    await crash.reached;
+    const changed = vi.fn<(canvas: CanvasId) => void>();
+    const gone = mintTrustedPath(path.join(w.root, 'gone'));
+    const service = w.restart({ pickedRoot: () => Promise.resolve(gone), changed });
+    // Until the restart's reconciliation has looked, it is being finished.
+    expect(service.state(w.tree.id)).toEqual({ job: 'merging' });
+    await service.reconcile();
+    expect(w.journal.latest(w.tree.id)).toMatchObject({ outcome: null });
+    expect(service.state(w.tree.id)).toEqual({
+      job: 'held',
+      sentence: expect.stringMatching(/couldn’t check your checkout/) as unknown,
+    });
+    expect(changed).toHaveBeenCalledWith(CANVAS);
   });
 });
 

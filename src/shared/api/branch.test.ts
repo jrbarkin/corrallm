@@ -37,10 +37,12 @@ const diff = {
 };
 
 describe('prepared branch contracts', () => {
-  it('prepares contracts without registering either operation or changing the live listing', () => {
+  it('prepares contracts without registering either operation; the listing takes C6’s additive fields', () => {
     expect(OPS).not.toHaveProperty('branch.diff');
     expect(OPS).not.toHaveProperty('branch.merge');
-    expect(OPS['worktree.list'].output.safeParse({ items: [], kept: [] }).success).toBe(true);
+    expect(OPS['worktree.list'].output.safeParse({ items: [], kept: [], into: null }).success).toBe(
+      true,
+    );
     expect(BranchDiffInput.parse({ agent: 'builder' })).toEqual({ agent: 'builder', limit: 50 });
   });
 

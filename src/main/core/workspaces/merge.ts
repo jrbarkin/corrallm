@@ -197,11 +197,26 @@ export interface MergeServiceDeps {
   nameOf: (canvas: CanvasId, agent: string) => string | undefined;
   /** The profile's folder of merge jobs' temporary indexes (merge-index.ts' `temporaryIndexes`). */
   indexes: string;
-  /** A merge into a canvas started, settled or was held: its worktrees to publish again. */
+  /**
+   * A merge into a canvas was admitted, recorded, settled, held or ended, or a restart looked at
+   * one: its worktrees to publish again.
+   */
   changed?: (canvas: CanvasId) => void;
+  /**
+   * The merge state of the canvas's cards read again at once (B9b C12, observe.ts' `now`): your
+   * checkout and the agent's tree, after a merge that ran in its repository's lane, before it
+   * answers, so the answer's receipt carries what it settled. Never holds the lane, and never the
+   * answer past `observeWithinMs`.
+   */
+  observe?: (canvas: CanvasId, workspace: string) => Promise<void>;
+  /** Tests only: how long a merge's answer waits for its observation (OBSERVED_WITHIN_MS). */
+  observeWithinMs?: number;
   /** Tests only: called at each point of §9.3 a fault test stops at. */
   fault?: (at: MergePoint, job: string) => Promise<void>;
 }
+
+/** How long a merge's answer waits for its cards' merge state to be read again, at most. */
+export const OBSERVED_WITHIN_MS = 10_000;
 
 /** corrallm's own identity: a checkpoint's author and committer (§9 C6). */
 const CORRALLM: GitIdentity = { name: 'corrallm', email: 'noreply@corrallm.invalid' };
@@ -233,6 +248,14 @@ function mergeMessage(source: string, branch: string, requester: string): string
 /** What a held merge says, on its agent's card too: never "nothing changed". */
 function heldSentence(branch: string): string {
   return `A merge into ${shown(branch)} was interrupted; your checkout may be partly merged: check git status there.`;
+}
+
+/**
+ * What a merge left going on says on its agent's card once no one is finishing it (a restart
+ * couldn't read your checkout): it holds merges into the repository until it is checked.
+ */
+function uncheckedSentence(branch: string): string {
+  return `A merge into ${shown(branch)} was interrupted, and corrallm couldn’t check your checkout to finish it: merges into this repository wait until it can, as it next starts or before the next merge into it. Your checkout may be partly merged: check git status there.`;
 }
 
 /** A refusal as the operation's failure. */
@@ -278,6 +301,8 @@ export class MergeService {
   readonly #jobs = new Map<string, { workspace: string; done: Promise<unknown> }>();
   /** The merges past their point of no return: what closing waits for. */
   readonly #installing = new Set<Promise<unknown>>();
+  /** Merges left going on that a reconciliation is finishing now (or is about to), by job id. */
+  readonly #finishing = new Set<string>();
   #closing = false;
   #reconciling: Promise<void> | undefined;
 
@@ -320,13 +345,23 @@ export class MergeService {
     return this.#reconciling;
   }
 
-  /** What a workspace's merge is now, for its card: going on, or held (yours alone). */
+  /**
+   * What a workspace's merge is now, for its card (B9b C12): going on (admitted, waiting its turn,
+   * running, or left going on by a crash and being finished), or held (yours alone: the sentence).
+   * One left going on that no one is finishing (a restart couldn't read your checkout) is held
+   * too, saying so: it holds merges into its repository until it is checked.
+   */
   state(workspace: string): { job: 'merging' } | { job: 'held'; sentence: string } | undefined {
     if ([...this.#jobs.values()].some((one) => one.workspace === workspace)) {
       return { job: 'merging' };
     }
     const latest = this.#deps.journal.latest(workspace);
-    if (latest?.outcome === null) return { job: 'merging' };
+    if (latest?.outcome === null) {
+      if (this.#reconciling === undefined || this.#finishing.has(latest.id)) {
+        return { job: 'merging' };
+      }
+      return { job: 'held', sentence: uncheckedSentence(latest.intent.destination.branch) };
+    }
     if (latest?.outcome === 'held') {
       return {
         job: 'held',
@@ -405,13 +440,42 @@ export class MergeService {
       throw error;
     }
     this.#jobs.set(job.id, { workspace: workspace.id, done });
+    // Its agents' cards say it merges from now (waiting its turn too) until it answers.
+    this.#changed(canvas);
     try {
-      return await done;
+      const result = await done;
+      await this.#observed(canvas, workspace.id);
+      return result;
     } catch (error) {
       if (error instanceof QueueFull) throw busy();
+      // A refusal in the lane read your checkout: what the cards say of it, read again too.
+      await this.#observed(canvas, workspace.id);
       throw error;
     } finally {
       this.#jobs.delete(job.id);
+      this.#changed(canvas);
+    }
+  }
+
+  /**
+   * The canvas's merge state read again at once (B9b C12) after a merge ran in its lane, outside
+   * it: what the answer's receipt carries. Bounded, never failing the merge; none while closing.
+   */
+  async #observed(canvas: CanvasId, workspace: string): Promise<void> {
+    const { observe } = this.#deps;
+    if (observe === undefined || this.#closing) return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        observe(canvas, workspace).catch((error: unknown) => {
+          console.error('Could not read a merge’s cards again:', error);
+        }),
+        new Promise<void>((resolve) => {
+          timer = setTimeout(resolve, this.#deps.observeWithinMs ?? OBSERVED_WITHIN_MS);
+        }),
+      ]);
+    } finally {
+      clearTimeout(timer);
     }
   }
 
@@ -423,7 +487,13 @@ export class MergeService {
     const repository = this.#deps.workspaces.worktree(job.admitted.workspace)?.repository;
     const open = repository === undefined ? undefined : this.#deps.journal.openIn(repository);
     if (open !== undefined) {
-      await this.#reconcileJob(open).catch(() => undefined);
+      this.#finishing.add(open.id);
+      try {
+        await this.#reconcileJob(open).catch(() => undefined);
+      } finally {
+        this.#finishing.delete(open.id);
+        this.#changed(open.canvas);
+      }
       if (repository !== undefined && this.#deps.journal.openIn(repository) !== undefined) {
         throw new OpFailure(
           'unavailable',
@@ -1259,8 +1329,10 @@ export class MergeService {
     const { journal, gate, queue, workspaces } = this.#deps;
     this.#removeLeftovers();
     const jobs = [...journal.open(), ...journal.resetsPending()];
-    // Held at once, before anyone could start work in the agent's tree.
+    // Held at once, before anyone could start work in the agent's tree; each card says it is being
+    // finished until it is.
     const releases = jobs.map((job) => gate.hold([`workspace:${job.workspace}`], RECONCILING));
+    for (const job of jobs) this.#finishing.add(job.id);
     await Promise.all(
       jobs.map(async (job, at) => {
         try {
@@ -1271,6 +1343,9 @@ export class MergeService {
           console.error('Could not finish a merge a crash interrupted:', error);
         } finally {
           releases[at]?.();
+          this.#finishing.delete(job.id);
+          // Settled, or left going on (held until checked): its card says which.
+          this.#changed(job.canvas);
         }
       }),
     );
