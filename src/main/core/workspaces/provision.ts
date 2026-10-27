@@ -520,7 +520,14 @@ export class Provisioner {
     const read = (args: readonly string[], more: Partial<GitCall> = {}) =>
       git.run({ cwd: at, drivers, timeoutMs: POPULATE_TIMEOUT_MS, answers: [1], ...more, args });
     try {
-      const cached = await read(['diff-index', '--cached', '--quiet', '--end-of-options', oid]);
+      const cached = await read([
+        'diff-index',
+        '--cached',
+        '--quiet',
+        '--ignore-submodules=none',
+        '--end-of-options',
+        oid,
+      ]);
       if (cached.code !== 0) return false;
       const listed = await read(['ls-files', '-z', '--stage', '-v'], { maxBytes: MAX_INDEX_BYTES });
       if (listed.code !== 0) return false;
