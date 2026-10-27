@@ -134,6 +134,7 @@ const config = {
       path.join(projectDir, 'NOTICE'),
       path.join(projectDir, 'LICENSE'),
       agentSdkLicense,
+      path.join(projectDir, 'build/presence'),
     ],
     asar: {
       // Binaries must be real files on disk. JS stays packed (and integrity-checked).

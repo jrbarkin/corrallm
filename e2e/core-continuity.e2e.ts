@@ -21,7 +21,7 @@ for (const terminal of [false, true]) {
           // Playwright keeps a crashed page dead even when its window reloads, so the view is
           // recovered as a user does: the dead window closed, a new one opened. A renderer death
           // must not restart the utility core, whose run goes on beneath either.
-          await world.closeWindow();
+          await world.closeWindow({ destroy: true });
           await world.reopen();
         }
         await world.showQueues();

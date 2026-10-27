@@ -76,6 +76,11 @@ import { Engines, needsInput } from './engines';
 import type { Watcher } from './engines';
 import type { HostServices, WindowId } from './host';
 import type { ShutdownPrepared, ShutdownReason } from './protocol';
+import type { NotificationResult, Presence, ShutdownOptions } from './presence';
+import { countPresence, PresencePublisher } from './presence-publisher';
+import { Notifier } from './notifier';
+import type { NotifierTiming } from './notifier';
+import type { WindowShow } from '../../shared/gui-link';
 import { implementations } from './ops';
 import { sessionRules } from './ops/session-control';
 import type { AgentId } from '../../shared/api/ids';
@@ -158,6 +163,15 @@ export interface CoreConfig {
   watchFolder?: WatchFolder;
   /** Fake connectors and options for an unpackaged app's tests, admitted by its host. */
   fakeSessions?: boolean;
+  /**
+   * Whether its host shows OS notifications (B14 C7), and so whether the core works them out: the
+   * app's does (the default); `corrallm serve`'s has no desktop, so it says false.
+   */
+  notifications?: boolean;
+  /** For tests: the notifier's burst window and rate (B14 C7), shortened. */
+  notifier?: Partial<NotifierTiming>;
+  /** For tests: the period between presence snapshots (B14 C5), lengthened. */
+  presenceEveryMs?: number;
   /**
    * For tests: what runs agents' sessions instead of each connection's own connector
    * (sessions/fake.ts), the environment they run in instead of the login shell's, what reads a
@@ -269,14 +283,16 @@ export interface Core extends Dispatcher {
   /** The host woke from sleep: old turns get a short period of fresh silence before warning. */
   resumed(): void;
   /**
-   * The shutdown barrier (B11 Design §16.5), prepared for a quit or an update's restart: no new
-   * dispatch (no run task or delivery starts; turns going on go on, their sessions usable), no
-   * write admitted (a call that would change something is refused, unavailable, saying why; reads,
-   * topic subscriptions, links and terminals go on), and every journal and store forced to disk.
-   * Asked again, the same answer, until cancelled. What it couldn't write is said, the barrier
-   * still held, for the failed-save dialog.
+   * The shutdown barrier (B11 Design §16.5), prepared for a quit, an update's restart or the
+   * system's shutdown or logout: no new dispatch (no run task or delivery starts; turns going on go
+   * on, their sessions usable), no write admitted (a call that would change something is refused,
+   * unavailable, saying why; reads, topic subscriptions, links and terminals go on), and every
+   * journal and store forced to disk. Asked again, the same answer, until cancelled. What it
+   * couldn't write is said, the barrier still held, for the failed-save dialog. `ifIdle` (B14 C2):
+   * in the same synchronous step, if anything is at work (presence's `busy`, counted now), nothing
+   * is held and the answer is `{ busy }`, that presence, so main asks before quitting.
    */
-  prepareShutdown(reason: ShutdownReason): Promise<ShutdownPrepared>;
+  prepareShutdown(reason: ShutdownReason, options?: ShutdownOptions): Promise<ShutdownPrepared>;
   /**
    * The barrier lifted (Keep corrallm open): dispatch and writes go on as before, and nothing else
    * changes. Nothing once committed, or never prepared.
@@ -290,8 +306,23 @@ export interface Core extends Dispatcher {
    * be journaled. Once: asked again, the same.
    */
   close(): Promise<void>;
-  /** Whether a canvas it runs has work going on, which closing would cut off: a run or a turn. */
-  active(): boolean;
+  /**
+   * What main shows of it (B14 C5): counted now, and sent to main first if it changed since the
+   * last snapshot sent. `busy` is whether closing would cut work off: a turn, a running run, a job.
+   */
+  presence(): Presence;
+  /**
+   * Whether any corrallm window is focused, as main says (B14 C7): while one is, nothing is
+   * notified, and nothing dropped then is replayed on blur. None focused until main says.
+   */
+  focus(focused: boolean): void;
+  /**
+   * Where a notification's click leads (B14 C10): the canvas and Need its opaque handle maps to,
+   * while the core runs that canvas; none (a generic Open) for any other handle.
+   */
+  activation(handle: string): WindowShow | undefined;
+  /** How the last notification went (B14 C9), without values: none if none was attempted. */
+  notificationStatus(): NotificationResult | undefined;
 }
 
 /** The calls the shutdown barrier admits besides reads: what changes nothing the core keeps. */
@@ -324,6 +355,28 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
   if (opened.store === undefined) console.error(opened.said.join(' '));
   const store = opened.store ?? unopened(opened.said.join(' '));
   const children = new Children(profile, config.children);
+  /**
+   * What main shows of the core (B14 C5, C6), counted from every canvas it runs, what waits for you
+   * there and the jobs it owns: told as what it counts may have changed from the moment anything
+   * can, it counts nothing until it is started (its first snapshot sent before the app's init
+   * answers), once the core is composed.
+   */
+  const presence = new PresencePublisher({
+    count: () =>
+      countPresence({
+        canvases: () => engines.opened().flatMap((canvas) => engines.canvas(canvas) ?? []),
+        needs: (canvas) => waitingFor(canvas),
+        jobs: () => setups.jobs() + workspaceQueue.size,
+        notify: () => notifying,
+      }),
+    send: (snapshot) => {
+      host.presence(snapshot);
+    },
+    ...(config.presenceEveryMs === undefined ? {} : { everyMs: config.presenceEveryMs }),
+  });
+  const presenceChanged = () => {
+    presence.changed();
+  };
   await children.recover();
   const usage = new UsageReadings({
     file: path.join(profile, 'usage.json'),
@@ -349,7 +402,8 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     },
   });
   const workspaceStore = new WorkspaceStore({ store });
-  const workspaceQueue = new ProvisioningQueue();
+  // Worktrees being made or removed are jobs, to presence.
+  const workspaceQueue = new ProvisioningQueue({ changed: presenceChanged });
   const workspaceGit = new WorkspaceGit({
     environment: () => environment(),
     processes: children,
@@ -431,6 +485,8 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     },
   });
   const settings = new Settings(path.join(profile, 'settings.json'));
+  /** Whether OS notifications are on (B14 C11), as the settings say now: read again as they change. */
+  let notifying = await settings.notificationsEnabled();
   /** Whether the profile's MCP server listens, as its owner last said (`served`). */
   let api: ApiStatus = { state: 'stopped', port: null };
   // What the canvases the core runs publish beside their documents (B11 §5): their run, sessions
@@ -758,6 +814,10 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
   });
   const topics = new Topics({
     read: (name, args, caller, signal) => dispatcher.call(name, args, caller, signal),
+    // Presence is counted again as a canvas's Needs or worktrees change (B14 C5).
+    marked: (topic) => {
+      if (topic.startsWith('needs:') || topic.startsWith('worktrees:')) presenceChanged();
+    },
     // A canvas's entities as a subscriber sees them: as canvas.get gives them to it.
     view: (canvas, caller) => {
       const { rev, entities, document } = states.now(canvas);
@@ -828,6 +888,12 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
   });
   settings.subscribe(() => {
     topics.changed('settings', 'you');
+    void settings.notificationsEnabled().then((on) => {
+      notifying = on;
+      notifier?.preferenceChanged();
+      // Main asks the OS for authorization only while it is on: told whenever it changes.
+      presenceChanged();
+    });
   });
   // The proposals waiting for you (R4): their proposers' records go to each canvas's messages,
   // and what waits on a canvas is read again as one is raised or settled.
@@ -961,14 +1027,49 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
       });
     },
   });
+  /**
+   * The OS notifications (B14 C7, C8, C10): from what newly waits for you and the runs that end on
+   * the canvases the core runs, worded from fixed sentences with names alone, through main. None
+   * for a host with no desktop.
+   */
+  const notifier =
+    config.notifications === false
+      ? undefined
+      : new Notifier({
+          needs: (canvas) => waitingFor(canvas),
+          run: (canvas) => engines.canvas(canvas)?.engine.run,
+          runs: (canvas) => engines.canvas(canvas) !== undefined,
+          agentName: (canvas, agent) =>
+            agentName(engines.canvas(canvas)?.document.nodes ?? [], agent),
+          canvasName: (canvas) => {
+            const file = memory.fileOf(canvas);
+            return file === undefined ? null : path.basename(file);
+          },
+          enabled: () => notifying,
+          // Both go over the host link in order: main hears what it counts (the snapshot that
+          // prepares its presenter) before the notification it is for.
+          notify: (request) => {
+            presence.now();
+            return host.notify(request);
+          },
+          unnotify: (handle) => {
+            host.unnotify(handle);
+          },
+          ...(config.notifier === undefined ? {} : { timing: config.notifier }),
+        });
   // Whether the run of each canvas the core runs is running, as canvas.list says it from the live
   // run (B11 §5), not the journal's coalesced write: the list is read again as that changes.
   const live = new Map<CanvasId, { running: boolean; stop?: () => void }>();
+  // And as its runs, sessions and messages change, and as a canvas opens or closes.
+  runtime.listen(presenceChanged);
   engines.watch({
     needs: (canvas) => {
       topics.changed(`needs:${canvas}`, 'corrallm');
+      notifier?.needsChanged(canvas);
     },
     opened: (canvas) => {
+      notifier?.opened(canvas);
+      presenceChanged();
       follow();
       const run = engines.canvas(canvas)?.engine.run;
       if (run) {
@@ -985,6 +1086,8 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
       states.listChanged();
     },
     closed: (canvas) => {
+      notifier?.closed(canvas);
+      presenceChanged();
       live.get(canvas)?.stop?.();
       live.delete(canvas);
       states.listChanged();
@@ -1250,6 +1353,8 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
   };
   const close = async () => {
     closing = true;
+    presence.close();
+    notifier?.close();
     sessionViews.close();
     workspaceDirectories.stop();
     workspaceGit.stop();
@@ -1291,6 +1396,8 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     }
     return committed;
   };
+  // Composed: what main shows of it, its first snapshot sent now, so main never guesses.
+  presence.start();
   return {
     surface: dispatcher.surface,
     ops: dispatcher.ops,
@@ -1313,9 +1420,14 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
       });
     },
     flush,
-    prepareShutdown: (reason) => {
+    prepareShutdown: (reason, options) => {
       if (committed) return Promise.resolve({ ok: true });
       if (preparing === undefined) {
+        // Checked and held in one step, with nothing between: work can't start meanwhile.
+        if (options?.ifIdle === true) {
+          const now = presence.now();
+          if (now.busy) return Promise.resolve({ busy: now });
+        }
         hold(reason);
         preparing = flush().then(
           () => ({ ok: true }) as const,
@@ -1333,7 +1445,12 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     },
     commitShutdown: commit,
     close: commit,
-    active: () => engines.active(),
+    presence: () => presence.now(),
+    focus: (focused) => {
+      notifier?.focus(focused);
+    },
+    activation: (handle) => notifier?.activation(handle),
+    notificationStatus: () => notifier?.status(),
     tokens,
     clientOf: (token) => {
       const caller = tokens.clientOf(token);

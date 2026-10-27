@@ -116,6 +116,14 @@ export interface LiveSession<M extends SessionMode = PermissionMode> {
   answer(promptId: string, answer: SessionAnswer): Promise<void>;
   /** Answers and declines the prompts it raised (`prompt` events), where its connection raises them. */
   readonly prompts?: PromptAnswers;
+  /**
+   * Transitional (B13 C4, until X10 converts the renderer; X11 removes it), for a session that
+   * also shows each prompt it raises as one of the events B13 replaces: the key of the prompt the
+   * old event `promptId` shows, and `answer` as that prompt takes it, so the core answers it
+   * through its prompt owner. Answers nothing itself. Throws for one no longer asked, or an answer
+   * the prompt doesn't offer.
+   */
+  bridge?(promptId: string, answer: SessionAnswer): { key: string; answer: PromptAnswer };
   /** Interrupts the turn going on, if any: it ends with an 'end' that says so. */
   interrupt(): Promise<void>;
   setMode(mode: M): Promise<void>;

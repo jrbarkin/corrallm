@@ -23,13 +23,17 @@ export class ProvisioningQueue {
   readonly #waiting: (() => void)[] = [];
   #running = 0;
   #size = 0;
+  /** Hears each change of `size` (the core's presence counts these jobs: B14 C5). */
+  readonly #changed: (() => void) | undefined;
 
   constructor({
     concurrency = 2,
     capacity = 64,
-  }: { concurrency?: number; capacity?: number } = {}) {
+    changed,
+  }: { concurrency?: number; capacity?: number; changed?: () => void } = {}) {
     this.#concurrency = concurrency;
     this.#capacity = capacity;
+    this.#changed = changed;
   }
 
   /** Jobs waiting or running. */
@@ -46,11 +50,13 @@ export class ProvisioningQueue {
   run<T>(key: string, work: () => Promise<T>): Promise<T> {
     if (this.full) return Promise.reject(new QueueFull());
     this.#size += 1;
+    this.#changed?.();
     const before = this.#lanes.get(key) ?? Promise.resolve();
     // Counted until it settles, before its caller hears.
     const start = () =>
       this.#slot(work).finally(() => {
         this.#size -= 1;
+        this.#changed?.();
       });
     const done = before.then(start, start);
     const lane = done.catch(() => undefined);

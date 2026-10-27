@@ -374,23 +374,32 @@ describe('needs', () => {
           id: 'm1/elicitation',
           kind: 'elicitation',
           server: 'tracker',
-          message: 'Sign in to the tracker',
+          message: 'Sign in at tracker.example.com/oauth%3Fstate%3Dsecret',
           url: 'https://tracker.example.com/oauth?state=secret',
+        },
+        {
+          id: 'm1/form',
+          kind: 'elicitation',
+          server: 'tracker',
+          message: 'Paste the key tracker.example.com/key%3Ftoken%3Dsecret shows',
+          fields: [{ name: 'key', label: 'Key', required: true, kind: 'text' }],
         },
       ],
     };
-    const [item] = needs(input({ sessions: { b: signIn } }));
-    expect(item).toMatchObject({
-      title: 'Sign in to the tracker',
+    const [link, form] = needs(input({ sessions: { b: signIn } }));
+    // Titled in the core's words, never the server's, which may hold its link.
+    expect(link).toMatchObject({
+      title: 'MCP server “tracker” asks you to open a link',
       form: { url: 'https://tracker.example.com/oauth?state=secret' },
     });
-    if (!item) throw new Error('no item');
-    const theirs = withoutChoices(item);
-    expect(theirs).not.toHaveProperty('form');
-    expect(theirs).toMatchObject({
-      title: 'Sign in to the tracker',
-      detail: 'Asked by its MCP server tracker.',
-    });
+    expect(form).toMatchObject({ title: 'MCP server “tracker” asks you to fill in a form' });
+    if (!link || !form) throw new Error('no item');
+    for (const item of [link, form]) {
+      const theirs = withoutChoices(item);
+      expect(theirs).not.toHaveProperty('form');
+      expect(theirs.title).toBe(item.title);
+      expect(JSON.stringify(theirs)).not.toMatch(/secret|Sign in at|Paste the key|example\.com/);
+    }
   });
 
   it('gives a hold asked again, after changes, a retry or another run, another id (B11 §7)', () => {

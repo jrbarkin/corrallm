@@ -47,14 +47,24 @@ export class Command {
   }
 }
 
-/** Same real-core Kill and delivered-withdrawal audit, each adapter supplying its own native fake. */
+/**
+ * Same real-core Kill and delivered-withdrawal audit, each adapter supplying its own native fake:
+ * the `earlier` turn leaves a real process running, the `current` one starts one, and is killed or
+ * taken back; its process, and only its, is gone before the next turn starts. By default a
+ * foreground command; an adapter whose CLI runs tasks in the background names those turns too.
+ */
 export function auditKill(
   adapter: string,
   connection: string,
   connect: (folder: string, log: string) => Connector,
+  {
+    earlier: earlierTurn = 'background command',
+    current: currentTurn = 'slow command',
+    what = 'the turn’s real command',
+  }: { earlier?: string; current?: string; what?: string } = {},
 ) {
   it.each(['Kill', 'withdrawal'] as const)(
-    '%s ends the turn’s real command before the next delivery, preserving earlier background work',
+    `%s ends ${what} before the next delivery, preserving earlier background work`,
     async (action) => {
       const folder = await mkdtemp(path.join(tmpdir(), 'corrallm-kill-audit-'));
       const log = path.join(folder, 'commands.jsonl');
@@ -123,7 +133,7 @@ export function auditKill(
           vi.waitFor(() => {
             expect(core.engines.canvas(CANVAS)?.engine.sessions.of('a').status).toBe('idle');
           });
-        await send('background command');
+        await send(earlierTurn);
         await vi.waitFor(
           async () => {
             expect((await records()).filter((r) => r.type === 'turn')).toHaveLength(1);
@@ -131,7 +141,7 @@ export function auditKill(
           { timeout: 10000 },
         );
         await idle();
-        const id = await send('slow command');
+        const id = await send(currentTurn);
         await vi.waitFor(
           async () => {
             expect((await records()).filter((r) => r.type === 'process')).toHaveLength(2);

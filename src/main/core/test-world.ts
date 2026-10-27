@@ -1967,6 +1967,13 @@ export const REAL_FIXTURES: Readonly<Record<OpName, OpFixture>> = {
     valid: [{ canvas: CANVAS, request: controlRequest(340) }],
     invalid: [{ canvas: 'nope' }, { canvas: CANVAS, agent: 'helper' }],
   },
+  // Last: it pauses every agent of every canvas the world runs, as you (B14 C3). Main's native
+  // menus call it, never a window or a token.
+  'run.pauseAll': {
+    fresh: ['revs'],
+    valid: [{ request: controlRequest(360) }],
+    invalid: [{ canvas: CANVAS }, { agent: 'helper' }, 'all', null],
+  },
 };
 
 /** The agents each agent doesn't reach on the canvas, as far as an op lets it. */

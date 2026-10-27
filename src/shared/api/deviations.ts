@@ -20,6 +20,8 @@ export const REASONS = {
   permissions: 'Who leads, and what an agent runs as (its mode, connection and CLI), are yours.',
   'caller-bound':
     'It acts for the calling agent itself, which neither you nor an outside caller is.',
+  'native-menu':
+    'Main’s native menus call it as you (the Dock, the menu-bar item, the tray): no window or token does.',
 } as const;
 export type Reason = keyof typeof REASONS;
 
@@ -41,6 +43,7 @@ export const DEVIATIONS: Partial<Record<OpName, Reason>> = {
   'topics.unsubscribe': 'transport',
   'usage.setRule': 'spending-guard',
   'usage.simulate': 'spending-guard',
+  'run.pauseAll': 'native-menu',
   'link.open': 'os-action',
   'link.reveal': 'os-action',
   'window.get': 'view',

@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { Mock } from 'vitest';
 
 import { ProfileLocked } from '../core/lock';
+import type { Presence } from '../core/presence';
 import type { CoreProcess } from './core-process';
 import { CoreSupervisor } from './supervisor';
 import type { SupervisorOptions } from './supervisor';
@@ -14,6 +15,8 @@ import { RESTARTS, WINDOW_MS } from './supervise';
  */
 
 interface FakeCore extends CoreProcess {
+  /** What the fake process last said it does. */
+  presence: Presence | undefined;
   /** Ends the fake process with `code`, as a crash (or a clean exit) would. */
   exit(code: number): void;
   readonly connect: Mock<CoreProcess['connect']>;
@@ -52,6 +55,7 @@ function setup(init: (core: CoreProcess, nth: number) => Promise<void> = () => P
     restarting: vi.fn<(why: string) => void>(),
     restarted: vi.fn<(epoch: number) => void>(),
     gaveUp: vi.fn<(why: Error) => void>(),
+    closedItself: vi.fn<() => void>(),
     now: () => now,
   } satisfies SupervisorOptions;
   const supervisor = new CoreSupervisor(options);
@@ -248,6 +252,23 @@ describe('an exit that is no crash', () => {
     expect(options.restarting).not.toHaveBeenCalled();
   });
 
+  it('tells main when the core exits 0 unasked (it closed itself), and nothing once main stops it', async () => {
+    const { supervisor, options, core } = setup();
+    await supervisor.start();
+
+    core(0).exit(0);
+    await settle();
+    expect(options.closedItself).toHaveBeenCalledOnce();
+    expect(options.fork).toHaveBeenCalledOnce();
+
+    const stopped = setup();
+    await stopped.supervisor.start();
+    stopped.supervisor.stop();
+    stopped.core(0).exit(0);
+    await settle();
+    expect(stopped.options.closedItself).not.toHaveBeenCalled();
+  });
+
   it('restarts nothing once main stops it, as the app quits', async () => {
     const { supervisor, options, core } = setup();
     await supervisor.start();
@@ -278,6 +299,34 @@ describe('an exit that is no crash', () => {
     expect(await supervisor.core).toBe(core(1));
     expect(options.restarted).not.toHaveBeenCalled();
   });
+});
+
+it('says what the core up now last said it does, and nothing while a new one comes up', async () => {
+  const gate = Promise.withResolvers<undefined>();
+  const { supervisor, core } = setup((_core, nth) =>
+    nth === 0 ? Promise.resolve() : gate.promise,
+  );
+  await supervisor.start();
+  expect(supervisor.presence).toBeUndefined();
+  const idle = {
+    revision: 0,
+    working: 0,
+    runs: 0,
+    jobs: 0,
+    needs: 0,
+    busy: false,
+    awake: false,
+    notify: true,
+  };
+  core(0).presence = idle;
+  expect(supervisor.presence).toBe(idle);
+  core(0).exit(1);
+  await settle();
+  // The crashed core's counts are no longer what goes on: none until the new one says.
+  expect(supervisor.presence).toBeUndefined();
+  core(1).presence = { ...idle, revision: 0, working: 1, busy: true, awake: true };
+  expect(supervisor.presence).toBe(core(1).presence);
+  gate.resolve(undefined);
 });
 
 it('owns the initializing process, drops an exited one and never grants a replaced one host authority', async () => {

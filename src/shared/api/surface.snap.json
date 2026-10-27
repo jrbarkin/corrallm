@@ -274,6 +274,7 @@
     "topics.unsubscribe": "transport",
     "usage.setRule": "spending-guard",
     "usage.simulate": "spending-guard",
+    "run.pauseAll": "native-menu",
     "link.open": "os-action",
     "link.reveal": "os-action",
     "window.get": "view",
@@ -565,6 +566,10 @@
     "run.pause": {
       "input": "a85fe9cb1eb6d55a",
       "output": "647bbd6cc7b4f077"
+    },
+    "run.pauseAll": {
+      "input": "7e2dc340305459b4",
+      "output": "eb4fda57c3fcd982"
     },
     "run.kill": {
       "input": "a85fe9cb1eb6d55a",
