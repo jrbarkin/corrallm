@@ -19,6 +19,7 @@ describe('NODE_HOST', () => {
       needs: 0,
       busy: false,
       awake: false,
+      notify: true,
     });
     NODE_HOST.unnotify('ad9ee798-f2dc-40cf-a1e2-b0073ddfb316');
     await expect(

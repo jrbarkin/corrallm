@@ -4263,7 +4263,10 @@ describe('reads', () => {
     });
     for (const caller of [OUTSIDE, READER]) {
       const theirs = await shown(caller);
-      expect(theirs).toMatchObject({ server: 'tracker', message: 'Sign in to the tracker' });
+      expect(theirs).toMatchObject({
+        server: 'tracker',
+        message: 'MCP server “tracker” asks you to open a link',
+      });
       expect(theirs).not.toHaveProperty('url');
     }
   });

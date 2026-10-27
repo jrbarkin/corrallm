@@ -809,21 +809,6 @@ export class Engines {
     }
   }
 
-  /**
-   * Whether a canvas it runs has work going on, which closing would cut off: its run running, or
-   * an agent's turn (what keeps the app open as its last window closes: B11 Design §8).
-   */
-  active(): boolean {
-    return [...this.#canvases.values()].some(
-      (running) =>
-        running.state === 'executing' &&
-        (running.engine.run.snapshot().running ||
-          Object.values(running.engine.sessions.snapshot()).some(
-            (session) => session.status !== 'idle',
-          )),
-    );
-  }
-
   /** Fallible saving before the app commits to closing: sessions and topics remain usable. */
   async flush(): Promise<void> {
     await Promise.all(this.#events.values());

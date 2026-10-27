@@ -222,6 +222,26 @@ const UNHEARD =
 
 const IDLE: Run = { running: false, agents: {} };
 
+/**
+ * When the run next moves by itself, if it will: the soonest delay's or wait's time, or usage
+ * window's reset, of an agent no pause holds, while the run is running (what its alarm is set for,
+ * and what keeps the machine awake for it: B14 C6). None for a run stopped or waiting only for you.
+ */
+export function nextDue(run: Run): number | undefined {
+  if (!run.running) return undefined;
+  const due = Object.values(run.agents).flatMap((at) => {
+    if (at.paused) return [];
+    const when =
+      at.status === 'waiting'
+        ? at.until
+        : at.status === 'asking'
+          ? (at.usage?.resetsAt ?? undefined)
+          : undefined;
+    return when === undefined ? [] : [when];
+  });
+  return due.length === 0 ? undefined : Math.min(...due);
+}
+
 /** How a send the run took back ended, as its message records it. */
 const TAKEN_BACK: TurnResult = { status: 'cancelled', reason: 'taken-back' };
 
@@ -1725,20 +1745,7 @@ export class RunStore {
    * too, its window reset), and the alarm is set for what is next.
    */
   #arm(now: number): void {
-    const next = this.#run.running
-      ? Math.min(
-          ...Object.values(this.#run.agents).flatMap((run) => {
-            if (run.paused) return [];
-            const due =
-              run.status === 'waiting'
-                ? run.until
-                : run.status === 'asking'
-                  ? (run.usage?.resetsAt ?? undefined)
-                  : undefined;
-            return due === undefined ? [] : [due];
-          }),
-        )
-      : Infinity;
+    const next = nextDue(this.#run) ?? Infinity;
     if (this.#alarm?.at === next) return;
     this.#alarm?.cancel();
     this.#alarm = undefined;
