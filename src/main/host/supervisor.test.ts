@@ -308,7 +308,16 @@ it('says what the core up now last said it does, and nothing while a new one com
   );
   await supervisor.start();
   expect(supervisor.presence).toBeUndefined();
-  const idle = { revision: 0, working: 0, runs: 0, jobs: 0, needs: 0, busy: false, awake: false };
+  const idle = {
+    revision: 0,
+    working: 0,
+    runs: 0,
+    jobs: 0,
+    needs: 0,
+    busy: false,
+    awake: false,
+    notify: true,
+  };
   core(0).presence = idle;
   expect(supervisor.presence).toBe(idle);
   core(0).exit(1);

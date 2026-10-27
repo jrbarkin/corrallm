@@ -4,9 +4,15 @@ import { AppUpdates } from './updates';
 import type { UpdateEvents } from './updates';
 import type { AppUpdateActions } from './host/updates';
 import type { PresencePresentationDeps } from './host/presence';
+import type * as ElectronPresence from './host/electron-presence';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Mock } from 'vitest';
+
+// Electron's main-process Notification, faked (B14 X6): counts how often corrallm asked the OS.
+const { FakeNotification } = await vi.hoisted(async () => ({
+  FakeNotification: (await import('./host/test-notification')).FakeNotification,
+}));
 
 const {
   app,
@@ -52,6 +58,7 @@ vi.mock('electron', () => ({
   app,
   powerMonitor,
   BrowserWindow: { getAllWindows, getFocusedWindow },
+  Notification: FakeNotification,
   dialog: { showMessageBox, showErrorBox },
   session: { defaultSession: {} },
   shell: {},
@@ -96,7 +103,7 @@ const { request, createWindow, makeHost, forkCore, cores, reconnect, now } = vi.
     makeHost: vi.fn<() => unknown>(() => ({})),
     cores,
     now,
-    forkCore: vi.fn(() => {
+    forkCore: vi.fn((options?: { host?: (core: unknown) => unknown }) => {
       const exited = Promise.withResolvers<number>();
       const listeners = new Map<string, ((...args: unknown[]) => void)[]>();
       cores.push({
@@ -105,7 +112,7 @@ const { request, createWindow, makeHost, forkCore, cores, reconnect, now } = vi.
           for (const listener of listeners.get(name) ?? []) listener(...args);
         },
       });
-      return {
+      const core = {
         link: {
           request,
           on: (name: string, listener: (...args: unknown[]) => void) => {
@@ -124,6 +131,9 @@ const { request, createWindow, makeHost, forkCore, cores, reconnect, now } = vi.
         focus: vi.fn(),
         kill: vi.fn(),
       };
+      // The host services main binds to this process, as the real fork binds them.
+      options?.host?.(core);
+      return core;
     }),
     reconnect: vi.fn(),
   };
@@ -154,9 +164,10 @@ vi.mock('./host/presence', () => ({
     close = nativeUi.close;
   },
 }));
-vi.mock('./host/electron-presence', () => ({
+// The presentation is faked, but the notification backend is the real one over the faked Electron.
+vi.mock('./host/electron-presence', async (importActual) => ({
   electronPresence: () => ({}),
-  electronNotifications: () => ({ supported: () => false, create: vi.fn() }),
+  electronNotifications: (await importActual<typeof ElectronPresence>()).electronNotifications,
 }));
 
 /**
@@ -170,10 +181,28 @@ function answered(name: string): Promise<{ ok: true; value: unknown }> {
 }
 
 /** Nothing at work: what an idle core counts (B14 C5). */
-const IDLE = { revision: 1, working: 0, runs: 0, jobs: 0, needs: 0, busy: false, awake: false };
+const IDLE = {
+  revision: 1,
+  working: 0,
+  runs: 0,
+  jobs: 0,
+  needs: 0,
+  busy: false,
+  awake: false,
+  notify: true,
+};
 const originalResourcesPath = Object.getOwnPropertyDescriptor(process, 'resourcesPath');
 /** Two agents in a turn, on a canvas whose run is going. */
-const BUSY = { revision: 2, working: 2, runs: 1, jobs: 0, needs: 0, busy: true, awake: true };
+const BUSY = {
+  revision: 2,
+  working: 2,
+  runs: 1,
+  jobs: 0,
+  needs: 0,
+  busy: true,
+  awake: true,
+  notify: true,
+};
 
 /** A corrallm window, as main sees it: its events, and what main may do to it. */
 function fakeWindow(id: number) {
@@ -212,6 +241,7 @@ beforeEach(() => {
   Object.defineProperty(process, 'resourcesPath', { configurable: true, value: '/app/resources' });
   vi.resetModules();
   vi.clearAllMocks();
+  FakeNotification.reset();
   getAllWindows.mockReturnValue([]);
   getFocusedWindow.mockReturnValue(null);
   now.presence = IDLE;
@@ -1432,5 +1462,88 @@ it('sets the Linux desktop name to its shipped launcher', async () => {
       expect(startAppUpdates).toHaveBeenCalledOnce();
     });
     expect(app.setDesktopName).toHaveBeenCalledExactlyOnceWith('corrallm.desktop');
+  });
+});
+
+describe('native notifications, asked of the OS only when the core says to (B14 C9, §9.w)', () => {
+  interface Presentation {
+    presence(snapshot: unknown): void;
+    notify(request: unknown): Promise<string>;
+    unnotify(handle: string): void;
+  }
+  const NOTICE = {
+    handle: 'ad9ee798-f2dc-40cf-a1e2-b0073ddfb316',
+    title: 'corrallm',
+    body: 'Worker is asking you something',
+  };
+
+  async function booted(): Promise<void> {
+    app.whenReady.mockResolvedValueOnce();
+    await import('./index');
+    await vi.waitFor(() => {
+      expect(startAppUpdates).toHaveBeenCalledOnce();
+    });
+  }
+
+  /** What main gave the nth core's host services to hear presence and answer notify with. */
+  const presentation = (nth = 0): Presentation => {
+    const given = makeHost.mock.calls[nth] as unknown as [unknown, unknown, Presentation];
+    return given[2];
+  };
+
+  it('asks nothing of the OS at launch, for an idle core, or while notifications are off', async () => {
+    await booted();
+    expect(FakeNotification.asked).toBe(0);
+    presentation().presence(IDLE);
+    presentation().presence({ ...BUSY, revision: 3, notify: false });
+    presentation().presence({ ...IDLE, revision: 4, notify: true, needs: 3 });
+    expect(FakeNotification.asked).toBe(0);
+    await expect(presentation().notify(NOTICE)).resolves.toBe('unsupported');
+  });
+
+  it('asks once, at the first snapshot with an agent working while notifications are on', async () => {
+    await booted();
+    presentation().presence({ ...BUSY, notify: false });
+    expect(FakeNotification.asked).toBe(0);
+    presentation().presence({ ...BUSY, revision: 3 });
+    expect(FakeNotification.asked).toBe(1);
+    presentation().presence({ ...BUSY, revision: 4, working: 5 });
+    presentation().presence({ ...IDLE, revision: 5 });
+    presentation().presence({ ...BUSY, revision: 6, notify: false });
+    presentation().presence({ ...BUSY, revision: 7 });
+    expect(FakeNotification.asked).toBe(1);
+    const shown = presentation().notify(NOTICE);
+    FakeNotification.made[0]?.appear();
+    await expect(shown).resolves.toBe('shown');
+  });
+
+  it('does not ask the OS again for a replacement core, which can still show its own', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    await booted();
+    presentation(0).presence(BUSY);
+    expect(FakeNotification.asked).toBe(1);
+    cores[0]?.exit(9);
+    await vi.waitFor(() => {
+      expect(makeHost).toHaveBeenCalledTimes(2);
+    });
+    await expect(presentation(1).notify(NOTICE)).resolves.toBe('unsupported');
+    presentation(1).presence({ ...BUSY, revision: 0 });
+    expect(FakeNotification.asked).toBe(1);
+    const shown = presentation(1).notify(NOTICE);
+    FakeNotification.made[0]?.appear();
+    await expect(shown).resolves.toBe('shown');
+  });
+
+  it('ignores a replaced core’s snapshot, so it asks for nothing', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    await booted();
+    cores[0]?.exit(9);
+    await vi.waitFor(() => {
+      expect(makeHost).toHaveBeenCalledTimes(2);
+    });
+    // services.ts drops events from a replaced core before they reach this; if one did, `current`
+    // would still stop the old adapter from showing anything.
+    presentation(0).presence(BUSY);
+    await expect(presentation(0).notify(NOTICE)).resolves.toBe('suppressed');
   });
 });

@@ -103,6 +103,7 @@ const IDLE: Presence = {
   needs: 0,
   busy: false,
   awake: false,
+  notify: true,
 };
 const busy = (counts: Partial<Presence>): Presence => ({
   ...IDLE,
@@ -321,6 +322,7 @@ describe('the question', () => {
             },
           ],
           needs: () => [],
+          notify: () => true,
           jobs: () => 0,
         }),
       send: () => {

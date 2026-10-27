@@ -155,10 +155,13 @@ function main(): void {
                 native.close();
                 notifications.delete(native);
               });
-              // C5 owns eligibility/preference and must supply C9's enabled-working cue before
-              // native.prepare: presence alone deliberately carries no preference or authority.
+              // C9's trusted cue is the core's own presence (§9.w): the first snapshot with an agent
+              // working while the core's notifications are on. The OS is asked then, and (the backend
+              // checking once per process) never again for a replacement core.
               return hostServices(forked, (source) => supervisor.owns(source), {
-                presence: () => undefined,
+                presence: (snapshot) => {
+                  native.prepare(snapshot.working, snapshot.notify);
+                },
                 notify: (request) => native.notify(request),
                 unnotify: (handle) => {
                   native.unnotify(handle);

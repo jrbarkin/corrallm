@@ -364,6 +364,7 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
         canvases: () => engines.opened().flatMap((canvas) => engines.canvas(canvas) ?? []),
         needs: (canvas) => waitingFor(canvas),
         jobs: () => setups.jobs() + workspaceQueue.size,
+        notify: () => notifying,
       }),
     send: (snapshot) => {
       host.presence(snapshot);
@@ -856,6 +857,8 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     void settings.notificationsEnabled().then((on) => {
       notifying = on;
       notifier?.preferenceChanged();
+      // Main asks the OS for authorization only while it is on: told whenever it changes.
+      presenceChanged();
     });
   });
   // The proposals waiting for you (R4): their proposers' records go to each canvas's messages,

@@ -41,6 +41,8 @@ export interface PresenceSources {
   needs(canvas: CanvasId): readonly Pick<NeedsItem, 'id' | 'for'>[];
   /** The owned jobs beside deliveries: worktree setups, worktrees being made or removed. */
   jobs(): number;
+  /** Whether OS notifications are on, as the notifier reads the preference (absent means on). */
+  notify(): boolean;
 }
 
 /**
@@ -49,7 +51,8 @@ export interface PresenceSources {
  * the owned jobs, reported background tasks and each message handed to an idle session; `needs`,
  * the distinct items that wait for you on each canvas; and (C6) `awake`, while something goes on
  * without you: a turn not waiting for you, a setup/workspace/delivery job, or a running run's timer
- * for an agent no pause holds.
+ * for an agent no pause holds; and `notify`, whether notifications are on (the one fact here that
+ * isn't a count: main asks the OS for authorization only while it is true).
  */
 export function countPresence(sources: PresenceSources): PresenceCounts {
   let working = 0;
@@ -84,7 +87,7 @@ export function countPresence(sources: PresenceSources): PresenceCounts {
         .map(({ id }) => id),
     ).size;
   }
-  return { working, runs, jobs, needs, awake };
+  return { working, runs, jobs, needs, awake, notify: sources.notify() };
 }
 
 export interface PresencePublisherDeps {
@@ -167,6 +170,7 @@ function snapshotOf(revision: number, counts: PresenceCounts): Presence {
     needs: cap(counts.needs),
     busy: working + runs + jobs > 0,
     awake: counts.awake,
+    notify: counts.notify,
   };
 }
 

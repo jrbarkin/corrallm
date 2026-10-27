@@ -8,6 +8,7 @@ import type { CanvasId } from '../../shared/canvas';
 import { FakeConnector } from '../sessions/fake';
 import { createCore } from './core';
 import type { Core } from './core';
+import { Settings } from '../settings';
 import type { Presence } from './presence';
 import { keepCanvases } from './store/test-store';
 import { CALLERS, NO_DESKTOP } from './test-registry';
@@ -20,7 +21,7 @@ import { legacyDirectories } from './workspaces/test-directories';
  */
 
 const CANVAS = '7d0c1d2e-3f40-4a5b-8c6d-7e8f9a0b1c2d' as CanvasId;
-const IDLE = { working: 0, runs: 0, jobs: 0, needs: 0, busy: false, awake: false };
+const IDLE = { working: 0, runs: 0, jobs: 0, needs: 0, busy: false, awake: false, notify: true };
 
 let profile: string;
 let core: Core | undefined;
@@ -172,6 +173,51 @@ describe('the core’s presence', () => {
     expect(paused.ok).toBe(true);
     // The run goes on waiting for you alone: the machine may sleep.
     await heard({ ...IDLE, runs: 1, needs: 1, busy: true });
+  });
+});
+
+describe('whether notifications are on, as the notifier reads it', () => {
+  const settingsFile = () => path.join(profile, 'settings.json');
+
+  it('is on while the settings say nothing, or can’t be read', async () => {
+    await start();
+    expect(sent.at(-1)).toMatchObject({ notify: true });
+    await core?.close();
+    core = undefined;
+    sent = [];
+    await writeFile(settingsFile(), '{ not json');
+    await start();
+    expect(sent).toEqual([{ revision: 0, ...IDLE, notify: true }]);
+  });
+
+  it('is off from the first snapshot when the settings turn notifications off', async () => {
+    await writeFile(
+      settingsFile(),
+      JSON.stringify({ version: 2, consents: {}, notifications: { enabled: false } }),
+    );
+    await start();
+    expect(sent).toEqual([{ revision: 0, ...IDLE, notify: false }]);
+  });
+
+  it('is sent again, whole, when the preference changes, and not when settings change otherwise', async () => {
+    const started = await start();
+    expect(sent).toHaveLength(1);
+    await started.settings.keepApiPort(41234);
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    expect(sent).toHaveLength(1);
+    // Nothing can set it before B22a: the settings read, as the notifier reads them, says so.
+    const read = vi.spyOn(Settings.prototype, 'notificationsEnabled').mockResolvedValue(false);
+    try {
+      await started.settings.keepApiPort(41235);
+      await heard({ ...IDLE, notify: false });
+      expect(sent.at(-1)?.revision).toBe(1);
+      read.mockResolvedValue(true);
+      await started.settings.keepApiPort(41236);
+      await heard(IDLE);
+      expect(sent.at(-1)?.revision).toBe(2);
+    } finally {
+      read.mockRestore();
+    }
   });
 });
 

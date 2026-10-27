@@ -12,6 +12,7 @@ const IDLE: Presence = {
   needs: 0,
   busy: false,
   awake: false,
+  notify: true,
 };
 
 class FakeTray implements PresenceTray {

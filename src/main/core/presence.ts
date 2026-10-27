@@ -35,6 +35,8 @@ export const Presence = z
     needs: count,
     busy: z.boolean(),
     awake: z.boolean(),
+    /** The core's `notifications.enabled` as its notifier reads it (B14 §9.w): C9's trusted cue. */
+    notify: z.boolean(),
   })
   .refine((p) => p.busy === p.working + p.runs + p.jobs > 0);
 export type Presence = z.infer<typeof Presence>;

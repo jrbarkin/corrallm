@@ -14,7 +14,14 @@ import { countPresence, PRESENCE_EVERY_MS, PresencePublisher } from './presence-
  * most one per PRESENCE_EVERY_MS (trailing) when what it counts changed, each a revision more.
  */
 
-const IDLE: PresenceCounts = { working: 0, runs: 0, jobs: 0, needs: 0, awake: false };
+const IDLE: PresenceCounts = {
+  working: 0,
+  runs: 0,
+  jobs: 0,
+  needs: 0,
+  awake: false,
+  notify: true,
+};
 
 let counts: PresenceCounts;
 let sent: Presence[];
@@ -76,7 +83,14 @@ it('answers now with what it counts this moment, sending it at once if it change
 
 it('caps every count, so a snapshot always parses', () => {
   const presence = publisher();
-  counts = { working: 20_000, runs: 10_000, jobs: 12_345, needs: 99_999, awake: true };
+  counts = {
+    working: 20_000,
+    runs: 10_000,
+    jobs: 12_345,
+    needs: 99_999,
+    awake: true,
+    notify: true,
+  };
   presence.start();
   expect(sent).toEqual([
     {
@@ -87,6 +101,7 @@ it('caps every count, so a snapshot always parses', () => {
       needs: MAX_PRESENCE_COUNT,
       busy: true,
       awake: true,
+      notify: true,
     },
   ]);
 });
@@ -133,8 +148,9 @@ describe('what it counts', () => {
         canvases: () => [one, two],
         needs: (id) => items[id] ?? [],
         jobs: () => 2,
+        notify: () => true,
       }),
-    ).toEqual({ working: 2, runs: 1, jobs: 3, needs: 2, awake: true });
+    ).toEqual({ working: 2, runs: 1, jobs: 3, needs: 2, awake: true, notify: true });
   });
 
   it('keeps awake only for what goes on without you', () => {
@@ -149,7 +165,7 @@ describe('what it counts', () => {
       },
       sessions: { a: session('waiting') },
     });
-    const sources = { needs: () => [], jobs: () => 0 };
+    const sources = { needs: () => [], jobs: () => 0, notify: () => true };
     expect(countPresence({ ...sources, canvases: () => [waitingForYou] })).toMatchObject({
       awake: false,
     });
@@ -182,6 +198,7 @@ describe('what it counts', () => {
         canvases: () => [canvas('one', { sessions: { a: agent } })],
         needs: () => [],
         jobs: () => 0,
+        notify: () => true,
       };
       expect(countPresence(sources)).toEqual({
         working: status === 'idle' ? 0 : 1,
@@ -189,6 +206,7 @@ describe('what it counts', () => {
         jobs: 2,
         needs: 0,
         awake: status === 'working',
+        notify: true,
       });
       agent.tasks = [];
       expect(countPresence(sources)).toMatchObject({ jobs: 0, awake: status === 'working' });
@@ -219,4 +237,27 @@ it('sends nothing once closed, and a failing host never stops it counting', () =
   vi.advanceTimersByTime(PRESENCE_EVERY_MS);
   expect(sent).toHaveLength(1);
   errors.mockRestore();
+});
+
+describe('whether notifications are on', () => {
+  it('counts the preference its source reads, beside the other counts', () => {
+    for (const notify of [true, false]) {
+      expect(
+        countPresence({ canvases: () => [], needs: () => [], jobs: () => 0, notify: () => notify }),
+      ).toEqual({ ...IDLE, notify });
+    }
+  });
+
+  it('sends it again, whole, when only the preference changed', () => {
+    const presence = publisher();
+    presence.start();
+    expect(sent.at(-1)).toMatchObject({ revision: 0, notify: true });
+    counts = { ...IDLE, notify: false };
+    presence.changed();
+    vi.advanceTimersByTime(PRESENCE_EVERY_MS);
+    expect(sent.at(-1)).toEqual({ revision: 1, ...IDLE, notify: false, busy: false });
+    presence.changed();
+    vi.advanceTimersByTime(PRESENCE_EVERY_MS);
+    expect(sent).toHaveLength(2);
+  });
 });

@@ -246,7 +246,16 @@ describe('the core process’s init', () => {
     });
     expect(await entry.init()).toEqual({ ok: true, value: null });
     expect(heard).toEqual([
-      { revision: 0, working: 0, runs: 0, jobs: 0, needs: 0, busy: false, awake: false },
+      {
+        revision: 0,
+        working: 0,
+        runs: 0,
+        jobs: 0,
+        needs: 0,
+        busy: false,
+        awake: false,
+        notify: true,
+      },
     ]);
   });
 });
