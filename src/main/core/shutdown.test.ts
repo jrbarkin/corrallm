@@ -282,19 +282,19 @@ describe('the shutdown barrier', () => {
 describe('whether the core has work going on', () => {
   it('is a run running or a turn going on, on a canvas it runs', async () => {
     const started = await start();
-    expect(started.active()).toBe(false);
+    expect(started.presence().busy).toBe(false);
     held = true;
     const id = idOf(await send(started, 'Hello'));
     await vi.waitFor(async () => {
       expect((await message(started, id))?.state).toBe('delivered');
     });
-    expect(started.active()).toBe(true);
+    expect(started.presence().busy).toBe(true);
     release();
     await vi.waitFor(async () => {
       expect((await message(started, id))?.state).toBe('replied');
     });
     await vi.waitFor(() => {
-      expect(started.active()).toBe(false);
+      expect(started.presence().busy).toBe(false);
     });
   });
 });

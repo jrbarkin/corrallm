@@ -230,7 +230,16 @@ it('keeps bounded, increasing presence separately for each fork', () => {
   const { core: first, child: old } = start();
   const { core: next } = start();
   const child = forked[1];
-  const idle = { revision: 0, working: 0, runs: 0, jobs: 0, needs: 0, busy: false, awake: false };
+  const idle = {
+    revision: 0,
+    working: 0,
+    runs: 0,
+    jobs: 0,
+    needs: 0,
+    busy: false,
+    awake: false,
+    notify: true,
+  };
   expect(first.presence).toBeUndefined();
   expect(next.presence).toBeUndefined();
   old.emit('message', { kind: 'event', name: 'presence', args: [idle] });

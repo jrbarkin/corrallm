@@ -83,6 +83,27 @@ export async function launchApp({
     remove();
     throw error;
   }
+  try {
+    // While its agents work, corrallm asks before quitting, as a sheet on a window the hidden app
+    // never shows (B14 C2). It is answered Quit and pause, as close() means; a test that wants
+    // another answer replaces showMessageBox again. Every other message box stays the app's own.
+    await app.evaluate(({ dialog }) => {
+      const shown = dialog.showMessageBox.bind(dialog);
+      Object.assign(dialog, {
+        showMessageBox: (...args: unknown[]) => {
+          const options = args.at(-1) as { buttons?: string[] } | undefined;
+          const first = options?.buttons?.[0];
+          return first === 'Quit and pause' || first === 'Restart and pause'
+            ? Promise.resolve({ response: 0, checkboxChecked: false })
+            : (Reflect.apply(shown, dialog, args) as ReturnType<typeof shown>);
+        },
+      });
+    });
+  } catch (error) {
+    await app.close().catch(() => undefined);
+    remove();
+    throw error;
+  }
   // Keep bounded tails, not the environment (which can hold credentials). Startup failures
   // often become session notices rather than page errors; include the UI before teardown too.
   let output = '';

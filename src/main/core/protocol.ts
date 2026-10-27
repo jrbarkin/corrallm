@@ -36,13 +36,15 @@ export interface CoreSide {
     openLink: { args: [window: WindowId, url: string]; result: null };
     /**
      * Asks each window, over its own port, to finish the drafts it is composing (`drafts.flush`),
-     * at most DRAFTS_MS each: those that didn't. A window with no port (crashed, gone, still
-     * loading) is skipped.
+     * at most DRAFTS_MS each, all together; for `system`, at most SYSTEM_DRAFTS_MS in all (B14
+     * C4): those that didn't. A window with no port (crashed, gone, still loading) is skipped.
      */
-    flushDrafts: { args: [windows: WindowId[]]; result: DraftsFlushed };
+    flushDrafts: { args: [windows: WindowId[], reason?: ShutdownReason]; result: DraftsFlushed };
     /**
      * Prepares the shutdown barrier (B11 Design §16.5): no new dispatch, no write admitted, every
-     * journal and store forced; sessions stay usable. Idempotent until cancelled.
+     * journal and store forced; sessions stay usable. Idempotent until cancelled. `ifIdle` (B14
+     * C2): in one synchronous step, prepares only if nothing is at work, else holds nothing and
+     * answers `busy` with the presence counted then.
      */
     prepareShutdown: {
       args: [reason: ShutdownReason, options?: ShutdownOptions];
@@ -55,8 +57,6 @@ export interface CoreSide {
      * ended, children and the database closed, then the profile let go. Idempotent.
      */
     commitShutdown: { args: []; result: null };
-    /** Today's last-window check, retained until C3 supplies the presence producer. */
-    active: { args: []; result: boolean };
     /** Native Pause all; the core makes the host caller, never a token. */
     pauseAll: { args: []; result: PauseAllResult | { sentence: string } };
     /** Resolves a notification handle privately and tells this window what to show. */
@@ -67,7 +67,9 @@ export interface CoreSide {
   events: {
     /** The core is up and listening, using this much memory. */
     ready: [memory: string];
+    /** What it does now (B14 C5), whole: the first before `init` answers, then as it changes. */
     presence: [snapshot: Presence];
+    /** Told to stop by a signal, it is closing itself (B14 C4): drafts, barrier, commit, exit 0. */
     exiting: [why: 'signal'];
     unnotify: [handle: string];
   };

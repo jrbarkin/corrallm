@@ -653,6 +653,108 @@ describe('SdkConnector', () => {
     });
   });
 
+  describe('interrupting a turn ends the background tasks that turn started (Kill, B14)', () => {
+    /** The CLI's messages as a turn starts task `id` in the background, `listed` with it. */
+    const started = (id: string, listed: string[]) =>
+      [
+        {
+          type: 'system',
+          subtype: 'task_started',
+          task_id: id,
+          tool_use_id: `toolu_${id}`,
+          description: 'npm run dev',
+          task_type: 'local_bash',
+          is_backgrounded: true,
+        },
+        {
+          type: 'system',
+          subtype: 'background_tasks_changed',
+          tasks: listed.map((task) => ({
+            task_id: task,
+            task_type: 'local_bash',
+            description: 'npm run dev',
+          })),
+        },
+      ] as unknown as SDKMessage[];
+    const result = (uuid: string, aborted: boolean) =>
+      ({
+        type: 'result',
+        subtype: aborted ? 'error_during_execution' : 'success',
+        is_error: aborted,
+        result: '',
+        duration_ms: 1000,
+        total_cost_usd: 0,
+        modelUsage: {},
+        user_message_uuids: [uuid],
+        ...(aborted ? { terminal_reason: 'aborted_streaming' } : {}),
+      }) as unknown as SDKMessage;
+    const FIRST = '00000000-0000-4000-8000-0000000000b1';
+    const SECOND = '00000000-0000-4000-8000-0000000000b2';
+
+    it('stops only this turn’s, by id, before its end lets the next message go', async () => {
+      const { sdk, host, query, events } = connector();
+      const session = await sdk.start(SPEC, host);
+      // An earlier turn started b1 and finished: its server is earlier work, left running.
+      await session.send({ id: FIRST, text: 'Start the server' });
+      query().say(...started('b1', ['b1']), result(FIRST, false));
+      await settle();
+      await session.send({ id: SECOND, text: 'Start another, then work' });
+      query().say(...started('b2', ['b1', 'b2']));
+      await settle();
+      const stopping = Promise.withResolvers<undefined>();
+      query().stopTask.mockReturnValueOnce(stopping.promise);
+      await session.interrupt();
+      query().say(result(SECOND, true));
+      await settle();
+      expect(query().stopTask.mock.calls).toEqual([['b2']]);
+      // Its end waits for the stop, so nothing the next message starts runs beside it.
+      expect(events.filter((event) => event.type === 'end')).toHaveLength(1);
+      stopping.resolve(undefined);
+      await settle();
+      expect(events.at(-1)).toMatchObject({
+        type: 'end',
+        messages: [SECOND],
+        result: { status: 'cancelled' },
+      });
+    });
+
+    it('says a task it couldn’t stop may still run, and still ends the turn', async () => {
+      const { sdk, host, query, events } = connector();
+      const session = await sdk.start(SPEC, host);
+      await session.send({ id: SECOND, text: 'Start one, then work' });
+      query().say(...started('b2', ['b2']));
+      await settle();
+      query().stopTask.mockRejectedValueOnce(new Error('No such task'));
+      await session.interrupt();
+      query().say(result(SECOND, true));
+      await vi.waitFor(() => {
+        expect(events.at(-1)).toMatchObject({ type: 'end', messages: [SECOND] });
+      });
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          type: 'notice',
+          level: 'warning',
+          text: expect.stringContaining('npm run dev') as string,
+        }),
+      );
+    });
+
+    it('stops nothing a turn started that ended by itself, or that left the background', async () => {
+      const { sdk, host, query, events } = connector();
+      const session = await sdk.start(SPEC, host);
+      await session.send({ id: FIRST, text: 'Start the server' });
+      query().say(...started('b1', ['b1']), result(FIRST, false));
+      await settle();
+      // Interrupted with nothing of its own in the background: b1 is earlier work.
+      await session.send({ id: SECOND, text: 'Work' });
+      await session.interrupt();
+      query().say(result(SECOND, true));
+      await settle();
+      expect(query().stopTask).not.toHaveBeenCalled();
+      expect(events.at(-1)).toMatchObject({ type: 'end', messages: [SECOND] });
+    });
+  });
+
   it('ends a message the CLI had not started, when interrupting cancels it', async () => {
     const { sdk, host, query, events } = connector();
     const session = await sdk.start(SPEC, host);

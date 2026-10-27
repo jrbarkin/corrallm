@@ -182,7 +182,10 @@ function keep(type, uuid, message) {
   appendFileSync(transcript, `${JSON.stringify(entry)}\n`);
   leaf = uuid;
 }
-// Kill audit only: commands are real children, owned by the fake native CLI, not corrallm.
+// Kill audit only: commands are real children, owned by the fake native CLI, not corrallm. "slow
+// command" runs one in the foreground of a slow turn, "background command" one left running past
+// its turn; "background job" starts a background task whose command is a real child, and "slow
+// job" one in a slow turn: stop_task ends its child, and answers once it has exited.
 const commandLog = process.env.FAKE_CLAUDE_PROCESS_LOG;
 const commands = new Set();
 const logCommand = (record) => {
@@ -494,6 +497,25 @@ async function startInBackground(current, id) {
   });
 }
 
+/** Kill audit only: a task started in the background, its command a real child (`owned`). */
+async function startOwnedTask() {
+  const owned = await command();
+  const toolUseId = `toolu_${randomUUID().replace(/-/g, '')}`;
+  const taskId = `b${String(++tasks)}`;
+  background.set(taskId, { toolUseId, description: 'npm run dev', owned });
+  backgroundTasks();
+  say({
+    type: 'system',
+    subtype: 'task_started',
+    task_id: taskId,
+    tool_use_id: toolUseId,
+    description: 'npm run dev',
+    task_type: 'local_bash',
+    is_backgrounded: true,
+    uuid: randomUUID(),
+  });
+}
+
 /** Stops a task running in the background: it says so, and it leaves the set. */
 function stopInBackground(taskId) {
   const task = background.get(taskId);
@@ -584,11 +606,10 @@ async function play(message) {
           .map((b) => b.text)
           .join('\n');
   if (commandLog)
-    text = text.includes('slow command')
-      ? 'slow command'
-      : text.includes('background command')
-        ? 'background command'
-        : 'next';
+    text =
+      ['slow command', 'background command', 'slow job', 'background job'].find((one) =>
+        text.includes(one),
+      ) ?? 'next';
   const images = typeof content === 'string' ? 0 : content.filter((b) => b.type === 'image').length;
   if (process.env.FAKE_CLAUDE_PROMPTS) {
     appendFileSync(
@@ -603,7 +624,7 @@ async function play(message) {
     if (text.includes('command')) {
       const owned = await command();
       if (!text.startsWith('background')) current.command = owned;
-    }
+    } else if (text.includes('job')) await startOwnedTask();
   }
   const started = Date.now();
   keep('user', uuid, message.message);
@@ -1057,8 +1078,11 @@ input.on('line', (line) => {
       );
       respond(message.request_id, {});
     } else if (subtype === 'stop_task') {
-      respond(message.request_id, {});
-      stopInBackground(message.request.task_id);
+      const owned = background.get(message.request.task_id)?.owned;
+      void (owned?.stop() ?? Promise.resolve()).then(() => {
+        respond(message.request_id, {});
+        stopInBackground(message.request.task_id);
+      });
     } else if (subtype === 'set_model') {
       model = message.request.model ?? 'claude-opus-5-5';
       respond(message.request_id, {});

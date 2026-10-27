@@ -15,7 +15,13 @@ const launch = vi.hoisted(() =>
       args?: string[];
       env?: Record<string, string | undefined>;
     }) => Promise<unknown>
-  >(() => Promise.resolve({ process: () => ({ exitCode: 0 }), close: vi.fn() })),
+  >(() =>
+    Promise.resolve({
+      process: () => ({ exitCode: 0 }),
+      evaluate: vi.fn(() => Promise.resolve()),
+      close: vi.fn(),
+    }),
+  ),
 );
 vi.mock('@playwright/test', () => ({ _electron: { launch } }));
 vi.mock('../../e2e/agent-electron', () => ({ agentElectronExecutable: () => undefined }));
@@ -84,6 +90,7 @@ it('reports startup refusals and child stderr before closing a failed spec', asy
   const closed = vi.fn();
   launch.mockResolvedValueOnce({
     process: () => ({ exitCode: 0, stdout, stderr }),
+    evaluate: () => Promise.resolve(),
     windows: () => [page],
     close: closed,
   });
@@ -102,4 +109,40 @@ it('reports startup refusals and child stderr before closing a failed spec', asy
   } finally {
     said.mockRestore();
   }
+});
+
+it('answers only the quit question, Quit and pause, leaving every other message box to the app', async () => {
+  let patch: ((electron: { dialog: object }) => void) | undefined;
+  launch.mockResolvedValueOnce({
+    process: () => ({ exitCode: 0 }),
+    evaluate: (body: (electron: { dialog: object }) => void) => {
+      patch = body;
+      return Promise.resolve();
+    },
+    close: vi.fn(),
+  });
+  const { close } = await launchApp({ profile: '/test-profile-not-created' });
+  const own = vi.fn(() => Promise.resolve({ response: 1, checkboxChecked: true }));
+  const dialog: { showMessageBox: (...args: unknown[]) => Promise<unknown> } = {
+    showMessageBox: own,
+  };
+  patch?.({ dialog });
+  const window = {};
+  for (const buttons of [
+    ['Quit and pause', 'Keep running', 'Cancel'],
+    ['Restart and pause', 'Cancel'],
+  ]) {
+    await expect(dialog.showMessageBox(window, { buttons })).resolves.toEqual({
+      response: 0,
+      checkboxChecked: false,
+    });
+  }
+  expect(own).not.toHaveBeenCalled();
+  const link = { message: 'Open example.com in your browser?', buttons: ['Open', 'Cancel'] };
+  await expect(dialog.showMessageBox(window, link)).resolves.toEqual({
+    response: 1,
+    checkboxChecked: true,
+  });
+  expect(own).toHaveBeenCalledExactlyOnceWith(window, link);
+  await close();
 });

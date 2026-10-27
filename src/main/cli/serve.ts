@@ -115,7 +115,14 @@ export async function serveCommand(command: ServeCommand, io: ServeIO): Promise<
   /** Serves until told to stop: 0, or 1 if it can't start. */
   const serving = async (): Promise<number> => {
     const opened = await createCore(
-      { profile, app: io.app, check: false, distribution: CORRALLM_DISTRIBUTION },
+      // No desktop: no OS notification to work out (B14 C7).
+      {
+        profile,
+        app: io.app,
+        check: false,
+        distribution: CORRALLM_DISTRIBUTION,
+        notifications: false,
+      },
       NODE_HOST,
     );
     core = opened;

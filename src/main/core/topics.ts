@@ -142,6 +142,11 @@ export interface TopicsDeps {
    * The runtime topics' source (runtime-topics.ts), and how a caller reads one through its
    * projection (core.call's `project`): its audience and reach, the one authorization path.
    */
+  /**
+   * Hears each replaced topic its source says changed (`changed`), before its re-read: what counts
+   * the core's presence for main (B14 C5) without subscribing as a window.
+   */
+  marked?: (topic: TopicKey) => void;
   runtime?: {
     /** Only admitted GUI transcript subscriptions acquire a session view, never read followers. */
     viewSession?: (window: WindowId, canvas: CanvasId, agent: string) => () => void;
@@ -286,7 +291,9 @@ export class Topics implements Publication {
    * at the change itself.
    */
   changed(topic: TopicKey, by: Change['by']): void {
-    if (this.#closed || this.#dirty.has(topic)) return;
+    if (this.#closed) return;
+    this.#deps.marked?.(topic);
+    if (this.#dirty.has(topic)) return;
     this.#dirty.add(topic);
     void this.#serialize(async () => {
       this.#dirty.delete(topic);

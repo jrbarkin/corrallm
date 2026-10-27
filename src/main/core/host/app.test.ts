@@ -102,6 +102,7 @@ it('sends presence and withdrawals as events and asks only the bounded notificat
     needs: 0,
     busy: false,
     awake: false,
+    notify: true,
   };
   const notification = {
     handle: 'ad9ee798-f2dc-40cf-a1e2-b0073ddfb316',
