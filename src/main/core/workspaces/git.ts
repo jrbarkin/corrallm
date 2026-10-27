@@ -3,6 +3,7 @@ import path from 'node:path';
 
 import { SAFE_GIT_ENV, SAFE_GIT_OPTIONS, safeGitDiffArgs } from '../../git';
 import { execFile } from '../../sessions/process';
+import { verifyTemporaryIndex } from './merge-index';
 import type { TemporaryIndex } from './merge-index';
 
 /*
@@ -233,7 +234,12 @@ export class GitRunner {
   /** Runs `git <fixed options> <drivers disabled> <merge profile> <args>` in `cwd`. */
   async run(call: GitCall): Promise<GitOutput> {
     const { git, args, env } = await this.#prepare(call);
-    return this.#exec(git, args, env, { ...call, timeoutMs: timeoutOf(call) });
+    if (call.index !== undefined) verifyTemporaryIndex(call.index);
+    try {
+      return await this.#exec(git, args, env, { ...call, timeoutMs: timeoutOf(call) });
+    } finally {
+      if (call.index !== undefined) verifyTemporaryIndex(call.index);
+    }
   }
 
   /**
@@ -246,7 +252,18 @@ export class GitRunner {
     const { cap, ...rest } = call;
     if (!Number.isSafeInteger(cap) || cap < 1) throw new TypeError(`${String(cap)} isn’t a cap.`);
     const { git, args, env } = await this.#prepare(rest);
-    return this.#exec(git, args, env, { ...rest, timeoutMs: timeoutOf(rest), maxBytes: cap }, cap);
+    if (rest.index !== undefined) verifyTemporaryIndex(rest.index);
+    try {
+      return await this.#exec(
+        git,
+        args,
+        env,
+        { ...rest, timeoutMs: timeoutOf(rest), maxBytes: cap },
+        cap,
+      );
+    } finally {
+      if (rest.index !== undefined) verifyTemporaryIndex(rest.index);
+    }
   }
 
   /**
@@ -564,6 +581,7 @@ export class GitRunner {
             timeout: call.timeoutMs ?? DEFAULT_TIMEOUT_MS,
             maxBuffer: call.maxBytes ?? DEFAULT_MAX_BYTES,
             windowsHide: true,
+            ...(cap === undefined ? {} : { waitForStop: true }),
           },
           (error, stdout, stderr) => {
             if (error === null) {

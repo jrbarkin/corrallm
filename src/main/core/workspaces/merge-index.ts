@@ -34,15 +34,8 @@ export function temporaryIndexes(profile: string): string {
 export function makeTemporaryIndex(folder: string, job: string): TemporaryIndex {
   if (!JOB.test(job)) throw new TypeError(`${JOB_TEXT} not “${job}”.`);
   if (!path.isAbsolute(folder)) throw new TypeError(`${folder} isn’t an absolute path.`);
-  mkdirSync(folder, { recursive: true, mode: 0o700 });
-  const found = lstatSync(folder);
-  if (found.isSymbolicLink() || !found.isDirectory()) {
-    throw new Error(`${folder} isn’t a folder of its own: no temporary index is made there.`);
-  }
-  if (process.platform !== 'win32') {
-    if (found.uid !== process.getuid?.()) throw new Error(`${folder} isn’t the user’s.`);
-    if ((found.mode & 0o022) !== 0) throw new Error(`${folder} may be written by others.`);
-  }
+  folders(folder, true);
+  privateFolder(folder);
   const own = path.join(folder, job);
   // Not recursive: it fails if the job's folder is there, whatever it is.
   mkdirSync(own, { mode: 0o700 });
@@ -52,8 +45,69 @@ export function makeTemporaryIndex(folder: string, job: string): TemporaryIndex 
 /** Removes job `job`'s folder and its index, if they are there: as the job ends. */
 export function removeTemporaryIndex(folder: string, job: string): void {
   if (!JOB.test(job)) throw new TypeError(`${JOB_TEXT} not “${job}”.`);
-  rmSync(path.join(folder, job), { recursive: true, force: true });
+  if (!path.isAbsolute(folder)) throw new TypeError(`${folder} isn’t an absolute path.`);
+  if (!folders(folder, false)) return;
+  privateFolder(folder);
+  const own = path.join(folder, job);
+  if (!folders(own, false)) return;
+  privateFolder(own);
+  rmSync(own, { recursive: true, force: true });
 }
 
 const JOB_TEXT =
   'A merge job’s id is a letter or digit, then up to 63 letters, digits, dashes or underscores,';
+
+/** Checks the job's private directory and any index already written there at each use. */
+export function verifyTemporaryIndex(index: TemporaryIndex): void {
+  if (!path.isAbsolute(index) || path.basename(index) !== 'index') {
+    throw new TypeError(`${index} isn’t a temporary index’s path.`);
+  }
+  const own = path.dirname(index);
+  if (!JOB.test(path.basename(own)) || !folders(own, false)) {
+    throw new Error(`${own} isn’t a temporary index’s folder.`);
+  }
+  privateFolder(path.dirname(own));
+  privateFolder(own);
+  try {
+    const found = lstatSync(index);
+    if (found.isSymbolicLink() || !found.isFile()) {
+      throw new Error(`${index} isn’t a regular index of its own.`);
+    }
+    if (process.platform !== 'win32' && found.uid !== process.getuid?.()) {
+      throw new Error(`${index} isn’t the user’s.`);
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+  }
+}
+
+/** Walks real directory components before creating any missing ones. */
+function folders(folder: string, create: boolean): boolean {
+  const root = path.parse(folder).root;
+  let at = root;
+  for (const part of folder.slice(root.length).split(path.sep)) {
+    if (part === '') continue;
+    at = path.join(at, part);
+    let found;
+    try {
+      found = lstatSync(at);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      if (!create) return false;
+      mkdirSync(at, { mode: 0o700 });
+      found = lstatSync(at);
+    }
+    if (found.isSymbolicLink() || !found.isDirectory()) {
+      throw new Error(`${at} isn’t a folder of its own: no temporary index is used there.`);
+    }
+  }
+  return true;
+}
+
+function privateFolder(folder: string): void {
+  const found = lstatSync(folder);
+  if (process.platform !== 'win32') {
+    if (found.uid !== process.getuid?.()) throw new Error(`${folder} isn’t the user’s.`);
+    if ((found.mode & 0o022) !== 0) throw new Error(`${folder} may be written by others.`);
+  }
+}

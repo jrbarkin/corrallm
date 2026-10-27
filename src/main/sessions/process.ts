@@ -80,11 +80,16 @@ export function spawnOwned(
 export function execFile(
   command: string,
   args: readonly string[],
-  options: Omit<ExecFileOptions, 'encoding'> & { encoding?: BufferEncoding },
+  options: Omit<ExecFileOptions, 'encoding'> & {
+    encoding?: BufferEncoding;
+    /** A capped read answers only once the owned group has stopped. */
+    waitForStop?: boolean;
+  },
   callback: (error: ExecFileException | null, stdout: string, stderr: string) => void,
 ): ChildProcess {
   const processes = owner.getStore();
-  if (!processes) return execProcess(command, args, options, callback);
+  const { waitForStop = false, ...nativeOptions } = options;
+  if (!processes) return execProcess(command, args, nativeOptions, callback);
   processes.beforeSpawn();
   // Node's execFile does not forward detached to spawn. Collect its bounded UTF-8 result here.
   const {
@@ -93,7 +98,7 @@ export function execFile(
     encoding = 'utf8',
     killSignal = 'SIGTERM',
     ...spawnOptions
-  } = options;
+  } = nativeOptions;
   const child = spawnProcess(command, args, {
     ...spawnOptions,
     detached: process.platform !== 'win32',
@@ -105,6 +110,7 @@ export function execFile(
   const errors: Buffer[] = [];
   let failed: ExecFileException | null = null;
   let finished = false;
+  let stopping = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
   const finish = (error: ExecFileException | null) => {
     if (finished) return;
@@ -117,13 +123,35 @@ export function execFile(
     );
   };
   const stop = (error: ExecFileException) => {
-    if (finished) return;
+    if (finished || stopping) return;
+    stopping = true;
+    failed = error;
+    clearTimeout(timer);
     child.stdout.destroy();
     child.stderr.destroy();
-    void Promise.resolve(processes.stop(child, killSignal)).catch((error: unknown) => {
-      console.error('Could not stop a CLI helper:', error);
-    });
-    finish(error);
+    const cleanupFailed = (reason: unknown) => {
+      if (waitForStop) {
+        finish(
+          new Error(
+            `Could not stop a CLI helper: ${reason instanceof Error ? reason.message : String(reason)}`,
+          ),
+        );
+      } else console.error('Could not stop a CLI helper:', reason);
+    };
+    try {
+      const stopped = processes.stop(child, killSignal);
+      if (waitForStop)
+        void Promise.resolve(stopped).then(() => {
+          finish(error);
+        }, cleanupFailed);
+      else {
+        void Promise.resolve(stopped).catch(cleanupFailed);
+        finish(error);
+      }
+    } catch (reason) {
+      cleanupFailed(reason);
+      if (!waitForStop) finish(error);
+    }
   };
   if (timeout > 0)
     timer = setTimeout(() => {
@@ -134,7 +162,7 @@ export function execFile(
   const collect = (into: Buffer[], stream: 'stdout' | 'stderr') => {
     let size = 0;
     return (chunk: Buffer) => {
-      if (finished) return;
+      if (finished || stopping) return;
       const room = Math.max(0, maxBuffer - size);
       size += chunk.length;
       if (room > 0) into.push(chunk.subarray(0, room));
@@ -151,8 +179,11 @@ export function execFile(
   };
   child.stdout.on('data', collect(output, 'stdout'));
   child.stderr.on('data', collect(errors, 'stderr'));
-  child.once('error', finish);
+  child.once('error', (error) => {
+    if (!stopping) finish(error);
+  });
   child.once('close', (code, signal) => {
+    if (stopping) return;
     if (failed === null && (code !== 0 || signal !== null)) {
       failed = Object.assign(new Error(`${command} exited with ${String(code ?? signal)}.`), {
         ...(code === null ? {} : { code }),
