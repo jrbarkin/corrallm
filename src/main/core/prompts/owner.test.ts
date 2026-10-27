@@ -748,6 +748,7 @@ describe('answers', () => {
         token: 't',
         name: 'orchestrator',
         access: 'write',
+        merge: true,
         canvases: [CANVAS],
       },
     });
