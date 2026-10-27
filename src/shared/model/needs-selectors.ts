@@ -343,7 +343,7 @@ function promptWords(prompt: Prompt): Worded {
       return {
         kind: 'prompt',
         title: 'Approve its plan?',
-        ...lines(prompt.plan),
+        ...previewLines(prompt.plan),
         choices: [],
         answerIn: 'api',
       };
@@ -367,7 +367,7 @@ function askWords(ask: TerminalAsk): Pick<NeedsItem, 'kind' | 'title' | 'detail'
     case 'question':
       return { kind: 'prompt', ...questionWords(ask.questions) };
     case 'plan':
-      return { kind: 'prompt', title: 'Approve its plan?', ...lines(ask.plan) };
+      return { kind: 'prompt', title: 'Approve its plan?', ...previewLines(ask.plan) };
     case 'trust':
       return { kind: 'prompt', title: 'Trust the project folder?' };
     case 'other':
@@ -402,15 +402,15 @@ function questionWords(
 }
 
 /** What a tool call would do, in at most MAX_DETAIL_LINES lines: its diff, or its output. */
-function detailOf(detail: ToolDetail | undefined): Pick<NeedsItem, 'detail'> {
+export function detailOf(detail: ToolDetail | undefined): Pick<NeedsItem, 'detail'> {
   if (!detail) return {};
-  if (detail.kind === 'output') return lines(detail.text);
+  if (detail.kind === 'output') return previewLines(detail.text);
   const marks = { add: '+', remove: '-', same: ' ' } as const;
-  return lines(detail.lines.map(({ kind, text }) => `${marks[kind]} ${text}`).join('\n'));
+  return previewLines(detail.lines.map(({ kind, text }) => `${marks[kind]} ${text}`).join('\n'));
 }
 
 /** `text` in at most MAX_DETAIL_LINES lines, then how many more. */
-function lines(text: string): Pick<NeedsItem, 'detail'> {
+export function previewLines(text: string): Pick<NeedsItem, 'detail'> {
   const all = text.trimEnd().split('\n');
   if (all.length === 1 && all[0]?.trim() === '') return {};
   const more = all.length - MAX_DETAIL_LINES;

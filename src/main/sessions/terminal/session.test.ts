@@ -105,7 +105,7 @@ async function start(
   const session = await using.start(
     { ...SPEC, ...spec },
     {
-      emit: (event) => sink.push(event),
+      emit: (event: SessionEvent) => sink.push(event),
       remember: (id) => remembered.push(id),
       activity: () => {
         activity++;

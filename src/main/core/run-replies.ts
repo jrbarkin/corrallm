@@ -7,6 +7,7 @@ import { isOpen } from '../../shared/model/session';
 import type { Prompt } from '../../shared/model/session';
 import type { SessionAnswer } from '../../shared/session';
 import type { SessionManager } from '../sessions/manager';
+import type { PromptOwner } from './prompts/owner';
 import { OpFailure } from './call';
 import type { OpContext } from './call';
 import { decided, decidedOf, deciding, landed, withdrawnDecision } from './decisions';
@@ -32,11 +33,16 @@ import type { Answer, ReplyHandler, ReplyResult } from './replies';
  * - A refusal's Switch runs Continue in Terminal's own service (`session.continueIn`, through
  *   ctx.call as the same caller: yours alone, D9, whoever may answer the hold), with no input; the
  *   run then sends the held attempt itself, once, as its session starts on the other connection.
- * - A prompt's answer goes to its CLI first, awaited, recorded as being made before it is told, and
- *   told only if the session that asked it still runs (a later one asking by the same native id
- *   asks another prompt): the prompt is shown answered only once the CLI took it; one the CLI
- *   refused still waits, its record withdrawn. A crash in between leaves the record unresolved,
- *   never answered again.
+ * - A prompt a session raised through B13's protocol (`prompt` events) is the core's prompt owner's
+ *   (prompts/owner.ts): found by its PromptId in the canvas's live index, never by its id's text,
+ *   checked against the prompt as raised, reserved, recorded as being made, checked again, then
+ *   handed to the session that raised it (C3). The handler asks the owner first.
+ * - A prompt of the events B13 replaces (`permission`, `question`, `plan`, `elicitation`, until
+ *   their adapters convert: C4 to C6) goes to its CLI first, awaited, recorded as being made
+ *   before it is told, and told only if the session that asked it still runs (a later one asking
+ *   by the same native id asks another prompt): the prompt is shown answered only once the CLI
+ *   took it; one the CLI refused still waits, its record withdrawn. A crash in between leaves the
+ *   record unresolved, never answered again.
  * - No record holds what was answered: no words, values, answers or feedback (a secret is never
  *   written), only what kind of answer it was.
  */
@@ -44,6 +50,8 @@ import type { Answer, ReplyHandler, ReplyResult } from './replies';
 export interface RunRepliesDeps {
   engines: Pick<Engines, 'canvas'>;
   sessions: Pick<SessionManager, 'answer' | 'generationOf'>;
+  /** The core's prompt owner (B13 C3), whose prompts the prompt handler answers through it. */
+  prompts?: Pick<PromptOwner, 'owns' | 'current' | 'settled' | 'fits' | 'answer'>;
   /** The locale holds are worded in. */
   locale?: string;
 }
@@ -66,7 +74,12 @@ interface PromptId {
 const WITH_WORDS = new Set(['retry', 'more']);
 
 /** The handlers of run holds (and the holds that ask nothing), and of session prompts. */
-export function runReplies({ engines, sessions, locale }: RunRepliesDeps): ReplyHandler[] {
+export function runReplies({
+  engines,
+  sessions,
+  prompts: owner,
+  locale,
+}: RunRepliesDeps): ReplyHandler[] {
   /** What waits on a canvas the core runs, as derived now. */
   const items = (canvas: CanvasId): readonly NeedsItem[] => {
     const open = engines.canvas(canvas);
@@ -227,7 +240,8 @@ export function runReplies({ engines, sessions, locale }: RunRepliesDeps): Reply
     return { id: record.id, outcome: 'answered' };
   };
 
-  const prompts: ReplyHandler = {
+  /** The prompts of the events B13 replaces, answered as B11 C7 built them. */
+  const legacy: ReplyHandler = {
     prefixes: ['prompt'],
     current: (canvas, to) => items(canvas).find((item) => item.id === to),
     gone: (canvas, to) => {
@@ -332,6 +346,26 @@ export function runReplies({ engines, sessions, locale }: RunRepliesDeps): Reply
       }
       return { id: record.id, outcome: 'answered' };
     },
+  };
+
+  /**
+   * Every prompt: the owner's first (B13 C3), by its PromptId in the live index; else one of the
+   * events B13 replaces. One the owner raised and ended is the owner's to say how it ended, never
+   * answered as one of the old events.
+   */
+  const prompts: ReplyHandler = {
+    prefixes: ['prompt'],
+    current: (canvas, to) => owner?.current(canvas, to) ?? legacy.current(canvas, to),
+    gone: (canvas, to) => owner?.settled(canvas, to) ?? legacy.gone?.(canvas, to),
+    fits: (item, answer) =>
+      owner?.owns(item.canvas, item.id) === true
+        ? owner.fits(item.canvas, item.id, answer)
+        : legacy.fits?.(item, answer),
+    act: (canvas, item, answer, ctx) =>
+      owner !== undefined &&
+      (owner.owns(canvas, item.id) || promptEntry(engines, item) === undefined)
+        ? owner.answer(canvas, item.id, answer, ctx)
+        : legacy.act(canvas, item, answer, ctx),
   };
 
   return [holds, prompts];
