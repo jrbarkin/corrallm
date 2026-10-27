@@ -578,14 +578,17 @@ function protectedPath(at: string): boolean {
   return at === '.corral' || at === '.corral/worktrees' || at.startsWith('.corral/worktrees/');
 }
 
-/** Refused if the merge writes anything into corrallm's worktrees folder (§9 C4). */
+/**
+ * Refused if the merge writes anything into corrallm's worktrees folder (§9 C4), its names
+ * compared folded (case, Unicode normalization, the code points HFS+ ignores) whatever Git's
+ * `core.ignoreCase` says: a setting is no proof of what the filesystem does, and refusing such a
+ * name where the filesystem tells cases apart costs nothing.
+ */
 export function checkProtected(
-  destination: MergeDestination,
+  _destination: MergeDestination,
   incoming: readonly IncomingChange[],
 ): MergeRefusal | undefined {
-  const into = incoming.filter((change) =>
-    protectedPath(folded(change.path, destination.ignoreCase)),
-  );
+  const into = incoming.filter((change) => protectedPath(folded(change.path, true)));
   if (into.length === 0) return undefined;
   return refuse(
     'refused',

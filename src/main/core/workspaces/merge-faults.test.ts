@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, utimesSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -365,6 +365,27 @@ describe.skipIf(process.platform === 'win32')('a failure at each phase', () => {
     w.work(w.cwd, { 'more.txt': 'more\n' });
     expect(merged(await w.service.merge(w.request())).outcome).toBe('merged');
     expect(w.journal.job(held?.id ?? '')?.outcome).toBe('superseded');
+  });
+
+  it('an edit during the install, seen whatever the repository’s stat settings: held', async () => {
+    const pause = pauseAt('installed');
+    const w = await make({ deps: { fault: pause.fault } });
+    diverged(w);
+    const going = w.service.merge(w.request());
+    await pause.reached;
+    const file = path.join(w.app, 'README.md');
+    const old = new Date(Date.now() - 3_600_000);
+    utimesSync(file, old, old);
+    w.g(w.app, 'update-index', '--refresh');
+    w.g(w.app, 'config', 'core.trustctime', 'false');
+    w.g(w.app, 'config', 'core.checkStat', 'minimal');
+    // Past a timestamp's tick, an edit of the same size, its old modification time put back.
+    await new Promise((resolve) => setTimeout(resolve, 1100));
+    writeFileSync(file, 'HELLO\n');
+    utimesSync(file, old, old);
+    pause.resume();
+    expect(refusal(await going).sentence).toMatch(/may be partly merged/);
+    expect(w.journal.latest(w.tree.id)).toMatchObject({ outcome: 'held' });
   });
 
   it('an install that didn’t start from your commit (ORIG_HEAD says another): held', async () => {

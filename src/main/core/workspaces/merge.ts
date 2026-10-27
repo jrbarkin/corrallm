@@ -22,6 +22,7 @@ import {
   readOrigHead,
   restoreOrigHead,
   statusEntries,
+  WORKTREE_READ_CONFIG,
 } from './merge-checks';
 import type { OrigHead } from './merge-checks';
 import { makeTemporaryIndex, removeTemporaryIndex } from './merge-index';
@@ -1510,12 +1511,14 @@ function busy(): OpFailure {
 /** A read in your checkout: its filter drivers blanked, replace refs ignored, the merge's bound. */
 function reading(
   destination: MergeDestination,
-): Pick<GitCall, 'cwd' | 'drivers' | 'noReplaceObjects' | 'timeoutMs'> {
+): Pick<GitCall, 'cwd' | 'drivers' | 'noReplaceObjects' | 'timeoutMs' | 'config'> {
   return {
     cwd: destination.root,
     drivers: destination.drivers,
     noReplaceObjects: true,
     timeoutMs: MERGE_TIMEOUT_MS,
+    // Full stat checks and no order file, whatever the repository says (as C3's reads).
+    config: WORKTREE_READ_CONFIG,
   };
 }
 
