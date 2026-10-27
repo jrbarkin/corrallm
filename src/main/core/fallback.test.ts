@@ -347,6 +347,30 @@ describe('a run’s task that fails on its usage limit (§12.5)', () => {
     );
   });
 
+  it('switches before a task goes on a backend already held: its first attempt goes there', async () => {
+    const at = await world(canvasOf(worker()));
+    // Another agent's turn used Codex up: the hold is the account's.
+    at.exhaust('codex');
+    at.engine.run.start();
+    await quiet(at);
+    expect(at.data()).toMatchObject(CLAUDE);
+    expect(at.sent()).toEqual([['worker', 'claude-code.terminal', 'Say hello']]);
+    expect(at.engine.run.snapshot().agents.worker?.attempts?.hello).toHaveLength(1);
+  });
+
+  it('says its chain didn’t act where you made its own endpoint one of its steps (C1a)', async () => {
+    const at = await world(canvasOf(worker({ ...CLAUDE, fallback: { to: [CLAUDE, SDK] } })));
+    at.engine.run.start();
+    await settle();
+    at.exhaust('claude-code');
+    at.end(LIMIT, 'worker', 'claude-code.terminal');
+    await quiet(at);
+    expect(at.data()).toMatchObject(CLAUDE);
+    expect(at.engine.run.snapshot().agents.worker?.problem?.text).toBe(
+      'Usage limit. Its fallback chain didn’t act: its own backend is one of the chain’s steps now; set the chain again.',
+    );
+  });
+
   it('never switches an agent with no chain: its task is held for you, as today', async () => {
     const at = await world(canvasOf(worker({ unchained: true })));
     await limited(at);
