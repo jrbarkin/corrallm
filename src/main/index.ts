@@ -14,6 +14,9 @@ import { CorePorts } from './host/ports';
 import { hostServices } from './host/services';
 import { CoreSupervisor } from './host/supervisor';
 import { startAppUpdates } from './host/updates';
+import { electronNotifications, electronPresence } from './host/electron-presence';
+import { NativeNotifications } from './host/notifications';
+import { PresencePresentation } from './host/presence';
 import { registerIpcHandlers } from './ipc';
 import { runNativeSelfTest } from './native-selftest';
 import { hardenSession, installNavigationGuards } from './security';
@@ -67,6 +70,7 @@ function main(): void {
   const fakeSessions = !app.isPackaged && process.env.CORRALLM_FAKE_SESSIONS === '1';
   // On macOS, also no Dock icon or menu bar, from the start rather than once the app is ready.
   if (hidden && process.platform === 'darwin') app.setActivationPolicy('accessory');
+  if (process.platform === 'linux') app.setDesktopName('corrallm.desktop');
 
   const trustedOrigin =
     devServerUrl === undefined ? `${APP_SCHEME}://${rendererHost}` : originKey(devServerUrl);
@@ -83,6 +87,9 @@ function main(): void {
   let allClosed = () => {
     if (process.platform !== 'darwin') app.quit();
   };
+  let disposePresence = () => {
+    /* No native presentation is allocated before ready. */
+  };
 
   void app
     .whenReady()
@@ -92,6 +99,7 @@ function main(): void {
         console.error(`corrallm: ${detail}`);
         // The hidden e2e app shows nothing on screen, a dialog included.
         if (!hidden) dialog.showErrorBox(title, detail);
+        disposePresence();
         app.exit(1);
       };
       const refuseLocked = (error: ProfileLocked) => {
@@ -114,6 +122,9 @@ function main(): void {
         fakeSessions,
       };
       let updates: AppUpdates | undefined = undefined;
+      const notifications = new Set<NativeNotifications>();
+      // One native presenter per main process, even when the core is replaced.
+      const notificationBackend = electronNotifications(process.platform);
       // The core owns the profile and its sessions; main answers only what needs the desktop. It
       // takes the profile (core.lock) as it comes up: `corrallm serve` may hold this one, and
       // must not write its stores while the app does. A core that crashes is restarted; one that
@@ -128,7 +139,35 @@ function main(): void {
               else console.error(`[core] ${line}`);
             },
             check: devServerUrl !== undefined,
-            host: (forked) => hostServices(forked, (source) => supervisor.owns(source)),
+            host: (forked) => {
+              const native = new NativeNotifications({
+                hidden,
+                backend: notificationBackend,
+                focused: () => BrowserWindow.getFocusedWindow() !== null,
+                current: () => supervisor.owns(forked) && !quit.approved,
+                activate: (handle) => quit.activate(handle),
+                log: (message) => {
+                  console.error(message);
+                },
+              });
+              notifications.add(native);
+              void forked.exited.then(() => {
+                native.close();
+                notifications.delete(native);
+              });
+              // C5 owns eligibility/preference and must supply C9's enabled-working cue before
+              // native.prepare: presence alone deliberately carries no preference or authority.
+              return hostServices(forked, (source) => supervisor.owns(source), {
+                presence: () => undefined,
+                notify: (request) => native.notify(request),
+                unnotify: (handle) => {
+                  native.unnotify(handle);
+                },
+              });
+            },
+          });
+          core.link.on('presence', () => {
+            if (supervisor.owns(core)) nativePresence.update(supervisor.presence);
           });
           core.link.on('exiting', () => {
             if (supervisor.owns(core)) quit.request('system');
@@ -138,14 +177,17 @@ function main(): void {
         init: async (core) => {
           const up = await answered(core.link.request('init', init));
           if (up !== null) throw new ProfileLocked(up.profileLocked.holder ?? undefined);
+          core.focus(BrowserWindow.getFocusedWindow() !== null);
         },
         restarting: (why) => {
+          nativePresence.update(undefined);
           console.error(`corrallm: ${why}; starting it again.`);
         },
         restarted: () => {
           ports.reconnect();
         },
         gaveUp: (why) => {
+          nativePresence.update(undefined);
           if (why instanceof ProfileLocked) {
             refuseLocked(why);
             return;
@@ -156,6 +198,7 @@ function main(): void {
           );
         },
         closedItself: () => {
+          nativePresence.update(undefined);
           quit.request('system');
         },
       });
@@ -168,6 +211,10 @@ function main(): void {
         answered((await supervisor.core).link.request(name, ...args));
       // How corrallm ends, every way it may (B14 C2, C4), and how a window comes back (C10).
       const quit = new QuitCoordinator<BrowserWindow>({
+        changed: () => {
+          nativePresence.refresh();
+          if (quit.approved) for (const native of notifications) native.close();
+        },
         platform: process.platform,
         hidden,
         core: {
@@ -196,6 +243,7 @@ function main(): void {
           app.quit();
         },
         exit: (code) => {
+          disposePresence();
           app.exit(code);
         },
         updates: () => updates,
@@ -203,6 +251,38 @@ function main(): void {
           console.error(...args);
         },
       });
+      const nativePresence = new PresencePresentation({
+        platform: process.platform,
+        hidden,
+        backend: electronPresence(
+          process.platform,
+          app.isPackaged
+            ? path.join(process.resourcesPath, 'presence')
+            : path.join(app.getAppPath(), 'build/presence'),
+        ),
+        windowShown: () =>
+          BrowserWindow.getAllWindows().some(
+            (window) => window.isVisible() && !window.isMinimized(),
+          ),
+        quitting: () => quit,
+        actions: {
+          open: () => {
+            void quit.reopen();
+          },
+          quit: () => {
+            quit.request('user');
+          },
+          pauseAll: () => ask('pauseAll'),
+        },
+        log: (message) => {
+          console.error(message);
+        },
+      });
+      disposePresence = () => {
+        nativePresence.close();
+        for (const native of notifications) native.close();
+      };
+      nativePresence.update(undefined);
       try {
         await supervisor.start();
       } catch (error) {
@@ -211,6 +291,7 @@ function main(): void {
         return;
       }
       app.once('will-quit', () => {
+        disposePresence();
         updates?.stop();
         supervisor.stop();
       });
@@ -232,6 +313,12 @@ function main(): void {
       // disk (B9 Design §5): one made in another program while corrallm was in the background.
       app.on('browser-window-focus', (_event, window) => {
         supervisor.windowFocused(window.webContents.id);
+        supervisor.focus(BrowserWindow.getFocusedWindow() !== null);
+        nativePresence.refresh();
+      });
+      app.on('browser-window-blur', () => {
+        supervisor.focus(BrowserWindow.getFocusedWindow() !== null);
+        nativePresence.refresh();
       });
       powerMonitor.on('resume', () => {
         supervisor.resumed();
@@ -248,6 +335,17 @@ function main(): void {
         void quit.reopen();
       });
       app.on('browser-window-created', (_event, window) => {
+        const refresh = () => {
+          nativePresence.refresh();
+        };
+        window.on('show', refresh);
+        window.on('hide', refresh);
+        window.on('minimize', refresh);
+        window.on('restore', refresh);
+        window.on('closed', () => {
+          supervisor.focus(BrowserWindow.getFocusedWindow() !== null);
+          nativePresence.refresh();
+        });
         // A window closing only finishes the drafts it composes: its canvas runs on in the core,
         // which a window only views (B11 Design §8); on Linux and Windows the last one asks first.
         window.on('close', (event) => {
@@ -265,6 +363,7 @@ function main(): void {
       });
       // A window destroyed without its close leaves none: on Linux and Windows, the last.
       allClosed = () => {
+        nativePresence.refresh();
         quit.allClosed();
       };
 
@@ -301,6 +400,7 @@ function main(): void {
     })
     .catch((error: unknown) => {
       console.error('Failed to start:', error);
+      disposePresence();
       app.exit(1);
     });
 

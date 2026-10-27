@@ -3,6 +3,7 @@ import { EventEmitter } from 'node:events';
 import { AppUpdates } from './updates';
 import type { UpdateEvents } from './updates';
 import type { AppUpdateActions } from './host/updates';
+import type { PresencePresentationDeps } from './host/presence';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Mock } from 'vitest';
@@ -31,6 +32,8 @@ const {
     getName: vi.fn(() => 'corrallm'),
     getVersion: vi.fn(() => '1.2.3'),
     getLocale: vi.fn(() => 'en-US'),
+    getAppPath: vi.fn(() => '/app'),
+    setDesktopName: vi.fn(),
     commandLine: { hasSwitch: vi.fn<(name: string) => boolean>(() => false) },
   },
   powerMonitor: { on: vi.fn() },
@@ -118,6 +121,7 @@ const { request, createWindow, makeHost, forkCore, cores, reconnect, now } = vi.
         windowGone: vi.fn(),
         windowFocused: vi.fn(),
         resumed: vi.fn(),
+        focus: vi.fn(),
         kill: vi.fn(),
       };
     }),
@@ -134,6 +138,27 @@ vi.mock('./host/ports', () => ({
 vi.mock('./host/services', () => ({ hostServices: makeHost }));
 vi.mock('./window', () => ({ createMainWindow: createWindow }));
 
+const nativeUi = vi.hoisted(() => ({
+  update: vi.fn(),
+  refresh: vi.fn(),
+  close: vi.fn(),
+  options: undefined as PresencePresentationDeps | undefined,
+}));
+vi.mock('./host/presence', () => ({
+  PresencePresentation: class {
+    constructor(options: PresencePresentationDeps) {
+      nativeUi.options = options;
+    }
+    update = nativeUi.update;
+    refresh = nativeUi.refresh;
+    close = nativeUi.close;
+  },
+}));
+vi.mock('./host/electron-presence', () => ({
+  electronPresence: () => ({}),
+  electronNotifications: () => ({ supported: () => false, create: vi.fn() }),
+}));
+
 /**
  * What the core answers main unless a test says otherwise: every window's drafts flushed, the
  * shutdown barrier prepared, no work going on, else null.
@@ -146,6 +171,7 @@ function answered(name: string): Promise<{ ok: true; value: unknown }> {
 
 /** Nothing at work: what an idle core counts (B14 C5). */
 const IDLE = { revision: 1, working: 0, runs: 0, jobs: 0, needs: 0, busy: false, awake: false };
+const originalResourcesPath = Object.getOwnPropertyDescriptor(process, 'resourcesPath');
 /** Two agents in a turn, on a canvas whose run is going. */
 const BUSY = { revision: 2, working: 2, runs: 1, jobs: 0, needs: 0, busy: true, awake: true };
 
@@ -183,6 +209,7 @@ function handler(event: string, emitter: { on: Mock } = app): (...args: unknown[
 }
 
 beforeEach(() => {
+  Object.defineProperty(process, 'resourcesPath', { configurable: true, value: '/app/resources' });
   vi.resetModules();
   vi.clearAllMocks();
   getAllWindows.mockReturnValue([]);
@@ -512,6 +539,8 @@ describe('a window, again', () => {
 });
 
 afterEach(() => {
+  if (originalResourcesPath) Object.defineProperty(process, 'resourcesPath', originalResourcesPath);
+  else Reflect.deleteProperty(process, 'resourcesPath');
   vi.restoreAllMocks();
   vi.useRealTimers();
   vi.unstubAllGlobals();
@@ -1360,5 +1389,48 @@ describe('the quit question (B14 C2)', () => {
     });
     expect(showMessageBox).not.toHaveBeenCalled();
     expect(request).toHaveBeenCalledWith('prepareShutdown', 'system');
+  });
+});
+
+it('wires current-core presence, native actions and focus without a window subscription', async () => {
+  app.whenReady.mockResolvedValueOnce();
+  await import('./index');
+  await vi.waitFor(() => {
+    expect(startAppUpdates).toHaveBeenCalledOnce();
+  });
+  now.presence = BUSY;
+  cores[0]?.emit('presence', BUSY);
+  expect(nativeUi.update).toHaveBeenLastCalledWith(BUSY);
+  const options = nativeUi.options;
+  if (!options) throw new Error('no native presentation');
+  request.mockResolvedValueOnce({ ok: true, value: { agents: 2, canvases: 1, unsaved: [] } });
+  expect(await options.actions.pauseAll()).toEqual({ agents: 2, canvases: 1, unsaved: [] });
+  expect(request).toHaveBeenLastCalledWith('pauseAll');
+  handler('browser-window-blur')();
+  const core = forkCore.mock.results[0]?.value as
+    { focus: Mock<(focused: boolean) => void> } | undefined;
+  expect(core?.focus).toHaveBeenLastCalledWith(false);
+  getFocusedWindow.mockReturnValue({ webContents: { id: 7 } });
+  handler('browser-window-focus')({}, { webContents: { id: 7 } });
+  expect(core?.focus).toHaveBeenLastCalledWith(true);
+  nativeUi.update.mockClear();
+  cores[0]?.exit(1);
+  await vi.waitFor(() => {
+    expect(reconnect).toHaveBeenCalledOnce();
+  });
+  expect(nativeUi.update).toHaveBeenCalledWith(undefined);
+  now.presence = IDLE;
+  cores[0]?.emit('presence', BUSY);
+  expect(nativeUi.update).not.toHaveBeenLastCalledWith(BUSY);
+});
+
+it('sets the Linux desktop name to its shipped launcher', async () => {
+  await onPlatform('linux', async () => {
+    app.whenReady.mockResolvedValueOnce();
+    await import('./index');
+    await vi.waitFor(() => {
+      expect(startAppUpdates).toHaveBeenCalledOnce();
+    });
+    expect(app.setDesktopName).toHaveBeenCalledExactlyOnceWith('corrallm.desktop');
   });
 });

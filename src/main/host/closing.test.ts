@@ -1024,3 +1024,25 @@ describe('reopening', () => {
     expect(quitting.core.activate).not.toHaveBeenCalled();
   });
 });
+
+it('publishes quit presentation changes so native Pause all follows asking, saving and approval', async () => {
+  const w = world({ presence: WORKING });
+  const states: { asking: boolean; saving: boolean; approved: boolean }[] = [];
+  const quit = new QuitCoordinator<FakeWindow>({
+    ...w.deps,
+    changed: () => {
+      states.push({ asking: quit.asking, saving: quit.saving, approved: quit.approved });
+    },
+  });
+  quit.request('user');
+  await vi.waitFor(() => {
+    expect(w.asked).toHaveLength(1);
+  });
+  w.asked[0]?.answer(0);
+  await vi.waitFor(() => {
+    expect(w.deps.quit).toHaveBeenCalledOnce();
+  });
+  expect(states).toContainEqual({ asking: true, saving: false, approved: false });
+  expect(states.some((state) => state.saving && !state.approved)).toBe(true);
+  expect(states.some((state) => state.approved)).toBe(true);
+});
