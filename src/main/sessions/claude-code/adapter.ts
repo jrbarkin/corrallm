@@ -109,6 +109,7 @@ export const claudeCode: Adapter = {
         view: 'terminal',
         prompts: { approval: 'seen', question: 'seen', plan: 'seen', form: 'none' },
         signals: false,
+        context: false,
         startModes: START_MODES,
         live: { effort: false, stopTask: false },
         panels: {},
@@ -133,6 +134,7 @@ export const claudeCode: Adapter = {
           form: 'answerable',
         },
         signals: false,
+        context: false,
         startModes: START_MODES,
         live: { effort: true, stopTask: true },
         panels: {

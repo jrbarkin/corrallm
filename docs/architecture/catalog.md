@@ -18,3 +18,7 @@ Each connection declares `prompts`, one of `none`, `seen` or `answerable` for ea
 ## Workspace instructions and native worktree actions
 
 Workspace-managed gallery templates use the core's grouping rather than native worktree actions. Their tests reject EnterWorktree and /worktree in shipped queues; the adapters' action catalogs and their native capabilities are unchanged. The prepared `SessionSpec.workspaceContext` consumer uses each connector's existing standing-instruction mechanism alongside its separate saved role, with no new descriptor or renderer-side CLI table. The authorized context producer and context/conversation invalidation are still C gaps; see [Workspaces](workspaces.md#prepared-workspace-context-consumer-c-gaps).
+
+## Prepared context capability
+
+Each connection declares `context`, currently false for every production connection and the made-up catalog. It becomes true only when a sanitized recording proves its context reports. Session usage prepares a separate nullable token context (`used`, `window`, `compactAt`); all producers currently set it to null, preserving their existing context counters for display. No percentage or compaction point is inferred by the platform.

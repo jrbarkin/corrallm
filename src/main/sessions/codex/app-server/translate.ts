@@ -645,6 +645,7 @@ export class Translator {
       type: 'usage',
       usage: {
         costUsd: null,
+        context: null,
         contextTokens: this.#context,
         contextWindow: this.#window,
         ...(this.#limits === undefined ? {} : { limits: this.#limits }),

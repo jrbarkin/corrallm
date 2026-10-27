@@ -9,8 +9,8 @@ declare const canvasId: unique symbol;
 /** A canvas's stable identity: a UUID. */
 export type CanvasId = string & { readonly [canvasId]: true };
 
-/** The `.corral` format this version reads and writes; older and newer files are refused. */
-export const CANVAS_VERSION = 2;
+/** Writes version 3; reads version 2 and 3. Other versions are refused. */
+export const CANVAS_VERSION = 3;
 
 const FORMAT = 'corrallm';
 const NOT_A_CANVAS = 'This is not a corrallm canvas';
@@ -41,7 +41,7 @@ export function canvasHeader(file: unknown): CanvasId {
   if (version > CANVAS_VERSION) {
     throw new Error('This canvas was made by a newer version of corrallm');
   }
-  if (version < CANVAS_VERSION) {
+  if (version < 2) {
     throw new Error('This canvas is from an older version of corrallm, which this one can’t open');
   }
   if (!isCanvasId(id)) throw new Error('id must be the canvas’s id (a UUID)');

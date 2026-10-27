@@ -4,6 +4,8 @@ import { CANVAS_VERSION, canvasHeader } from '../canvas';
 import { parseRole } from '../role';
 import { EFFORT_PATTERN, MODEL_PATTERN } from '../session';
 import type { AgentSettings } from '../session';
+import { FallbackSchema, HandoffSettingsSchema, readFallback } from './fallback';
+import type { Fallback, HandoffSettings } from './fallback';
 import { USAGE_WINDOWS } from '../usage';
 import { MAX_LABEL, MAX_POSITION, MAX_NODE_ID } from './canvas';
 import type { CanvasDocument, CanvasNode, Link } from './canvas';
@@ -29,11 +31,11 @@ import type {
  * A canvas saved as a file (a `.corral`): JSON, versioned, holding only what the canvas means.
  * That is its id (a UUID: what main remembers of it is kept by it, src/shared/canvas.ts), its
  * agents and groups (where they are, what holds them, their queues) and the links between agents.
- * Selection and sizes (groups fit what they hold) are left out. A file of another version is
+ * Selection and sizes (groups fit what they hold) are left out. Version 2 is still read; version 3 is written, and other versions are
  * refused. The agents' adapters, connections and modes are read against the catalog
  * (src/shared/adapter.ts).
  *
- *   { "format": "corrallm", "version": 2, "id", "arrange"?: true,
+ *   { "format": "corrallm", "version": 3, "id", "arrange"?: true,
  *     "nodes": [{ "id", "kind": "agent" | "group", "label", "position": { "x", "y" },
  *                 "parent"?, "adapter"?, "connection"?, "settings"?, "role"?, "color"?, "queue"? }],
  *     "links": [{ "agents": [id, id], "dots"?: [from, to] }] }
@@ -82,6 +84,8 @@ interface FileNode {
   adapter?: AdapterId;
   connection?: ConnectionId;
   settings?: Partial<Record<AdapterId, AgentSettings>>;
+  fallback?: Fallback;
+  handoff?: HandoffSettings;
   role?: string;
   color?: number;
   queue?: QueueItem[];
@@ -171,6 +175,12 @@ function fileNodeOf(n: CanvasNode): FileNode {
     ...(agent?.adapter === undefined ? {} : { adapter: agent.adapter }),
     ...(agent?.connection === undefined ? {} : { connection: agent.connection }),
     ...(agent?.settings === undefined ? {} : { settings: inFileOrder(agent.settings) }),
+    ...(agent?.fallback === undefined
+      ? {}
+      : { fallback: inFileOrder(FallbackSchema.parse(agent.fallback)) }),
+    ...(agent?.handoff === undefined
+      ? {}
+      : { handoff: inFileOrder(HandoffSettingsSchema.parse(agent.handoff)) }),
     ...(role === undefined ? {} : { role }),
     ...(n.data.color === undefined ? {} : { color: n.data.color }),
     ...(agent?.queue === undefined || agent.queue.length === 0
@@ -286,6 +296,8 @@ function toCanvasNode({
   adapter,
   connection,
   settings,
+  fallback,
+  handoff,
   role,
   color,
   queue,
@@ -302,6 +314,8 @@ function toCanvasNode({
       ...(adapter === undefined ? {} : { adapter }),
       ...(connection === undefined ? {} : { connection }),
       ...(settings === undefined ? {} : { settings }),
+      ...(fallback === undefined ? {} : { fallback }),
+      ...(handoff === undefined ? {} : { handoff }),
       ...(role === undefined ? {} : { role }),
       ...(color === undefined ? {} : { color }),
       ...(queue === undefined ? {} : { queue }),
@@ -347,6 +361,20 @@ function readNode(
     if (kind === 'group') throw new TypeError(`${at}: a group has no role`);
     return readRole(v, at);
   });
+  const fallback = optional(node.fallback, `${where}.fallback`, (v, at) => {
+    if (kind === 'group') throw new TypeError(`${at}: a group has no fallback`);
+    try {
+      return readFallback(v, catalog);
+    } catch {
+      throw new TypeError(`${at}: invalid fallback`);
+    }
+  });
+  const handoff = optional(node.handoff, `${where}.handoff`, (v, at) => {
+    if (kind === 'group') throw new TypeError(`${at}: a group has no handoff`);
+    const parsed = HandoffSettingsSchema.safeParse(v);
+    if (!parsed.success) throw new TypeError(`${at}: invalid handoff`);
+    return parsed.data;
+  });
   const color = optional(node.color, `${where}.color`, (v, at) => {
     if (typeof v !== 'number' || !Number.isInteger(v) || v < 0 || v >= GROUP_COLORS) {
       throw new Error(`${at} must be a whole number from 0 to ${String(GROUP_COLORS - 1)}`);
@@ -371,6 +399,8 @@ function readNode(
     ...(adapter === undefined ? {} : { adapter }),
     ...(connection === undefined ? {} : { connection }),
     ...(settings === undefined ? {} : { settings }),
+    ...(fallback === undefined ? {} : { fallback }),
+    ...(handoff === undefined ? {} : { handoff }),
     ...(role === undefined ? {} : { role }),
     ...(color === undefined ? {} : { color }),
     ...(queue === undefined ? {} : { queue }),

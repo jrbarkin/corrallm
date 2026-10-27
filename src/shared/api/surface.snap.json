@@ -288,7 +288,7 @@
   "schemas": {
     "topics.subscribe": {
       "input": "8c5be84f0a1a163a",
-      "output": "731b7205ff8daf98"
+      "output": "8b60203ff23b2154"
     },
     "topics.unsubscribe": {
       "input": "8c5be84f0a1a163a",
@@ -300,7 +300,7 @@
     },
     "catalog.get": {
       "input": "e5fa5cc18e054cdd",
-      "output": "379e0693f7b151ec"
+      "output": "52b2fe4cd717e692"
     },
     "catalog.installed": {
       "input": "e5fa5cc18e054cdd",
@@ -484,7 +484,7 @@
     },
     "session.get": {
       "input": "c804536f3eb2a39b",
-      "output": "37cedf4dc54001b8"
+      "output": "606e09e2a5284c7e"
     },
     "session.transcript": {
       "input": "b0a50f8eb22508f9",
@@ -596,10 +596,10 @@
     },
     "usage.get": {
       "input": "e5fa5cc18e054cdd",
-      "output": "3586006a7a5073f0"
+      "output": "3152a14eed322952"
     },
     "usage.setRule": {
-      "input": "9019a4803080df29",
+      "input": "fb7e5b82a161f727",
       "output": "647bbd6cc7b4f077"
     },
     "usage.simulate": {

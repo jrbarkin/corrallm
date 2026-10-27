@@ -16,6 +16,22 @@ import type { ItemRow, LinkRow, NodeRow, Rows } from './rows';
 
 const ID = '3f1b0d6e-8c2a-4e7f-9b5d-1a2c3e4f5a6b' as CanvasId;
 
+it('keeps fallback and handoff fields through canonical document rows', () => {
+  const document: CanvasDocument = {
+    id: ID,
+    arrange: false,
+    links: [],
+    nodes: [{ id: 'a', type: 'agent', position: { x: 0, y: 0 }, data: {
+      label: 'A',
+      fallback: { to: [{ adapter: 'future', connection: 'future.api' }], back: 'return' },
+      handoff: { at: 95, file: 'handoff.md' },
+    } }],
+  };
+  const rows = toRows(document);
+  expect(fromRows(ID, rows)).toEqual(document);
+  expect(diffRows(rows, document).changed).toBe(false);
+});
+
 /** Every item a queue may hold, its if-thens and repeats holding what they may. */
 const everyItem: QueueItem[] = [
   { id: 'spec', message: 'Write the spec', target: 'worker/1' },

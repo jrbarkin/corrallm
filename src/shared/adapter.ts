@@ -120,6 +120,8 @@ export interface ConnectionDescriptor {
   prompts: PromptCapabilities;
   /** Whether every ask-rule and safety-check reason is reported with prompt signals. */
   signals: boolean;
+  /** Whether a recording proves token context reports on this connection's own basis. */
+  context: boolean;
   /**
    * The modes (each one that asks) an agent's saved setting may name for it, to start its
    * sessions in; none: always the user's own default.
