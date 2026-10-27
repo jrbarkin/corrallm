@@ -156,6 +156,8 @@ export interface SetupService {
   clearAlways(canvas: CanvasId): Promise<{ cleared: boolean }>;
   /** Whether a setup command runs (or waits to run) in the workspace now: a writer there. */
   running(workspace: string): boolean;
+  /** The local files copied into the workspace, by name (none: unknown): never committed by it. */
+  copied?(workspace: string): readonly string[] | undefined;
   /**
    * Its workspace removed (B9a C7's cleanup): what runs there is ended, and what its setup kept
    * beside the database (its log, its copy record) removed.
@@ -997,6 +999,14 @@ export class WorkspaceSetups implements SetupService {
 
   running(workspace: string): boolean {
     return this.#attempts.has(workspace);
+  }
+
+  /**
+   * The local files copied into the workspace, by name (its copy record): what a checkpoint never
+   * commits (B9b Design §9 C6). None if its record isn't there or can't be read: unknown.
+   */
+  copied(workspace: string): readonly string[] | undefined {
+    return this.#quietly(() => this.#copyRecord(workspace))?.files.map((file) => file.path);
   }
 
   async forget(workspace: string): Promise<void> {
