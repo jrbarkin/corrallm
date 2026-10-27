@@ -190,7 +190,7 @@ export function heldAsks(
         },
       ];
     if (item && at.refused) {
-      const { agent: to, text, switchTo } = at.refused;
+      const { agent: to, text, switchTo, kind } = at.refused;
       const name = agentName(nodes, to);
       const how = switchTo === undefined ? undefined : catalog.connectionLabel(switchTo);
       return [
@@ -198,17 +198,29 @@ export function heldAsks(
           agent,
           item,
           text,
-          detail: `${taskLabel(nodes, item, catalog, locale)} waits until ${name} can start`,
+          detail:
+            kind === 'unknown-action'
+              ? taskLabel(nodes, item, catalog, locale)
+              : `${taskLabel(nodes, item, catalog, locale)} waits until ${name} can start`,
           choices:
-            how === undefined
-              ? []
-              : [
+            kind === 'unknown-action'
+              ? [
+                  { key: 'skip', label: 'Skip' },
                   {
-                    key: 'switch',
-                    label: to === agent.id ? `Switch to ${how}` : `Switch ${name} to ${how}`,
-                    primary: true,
+                    key: 'stop',
+                    label: 'Stop here',
+                    title: 'Stop this queue here, and whatever waits on it',
                   },
-                ],
+                ]
+              : how === undefined
+                ? []
+                : [
+                    {
+                      key: 'switch',
+                      label: to === agent.id ? `Switch to ${how}` : `Switch ${name} to ${how}`,
+                      primary: true,
+                    },
+                  ],
           refusal: { agent: to, ...(switchTo === undefined ? {} : { switchTo }) },
         },
       ];

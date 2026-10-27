@@ -7,6 +7,7 @@ import type {
   ModeId,
   UsageBackendId,
 } from '../adapter';
+import { resolveAction } from './fallback';
 
 /*
  * What the engine (the run, and the sessions it sends to) reads of the catalog
@@ -37,6 +38,11 @@ export interface EngineCatalog {
   adapterOf(connection: ConnectionId): AdapterId;
   /** What an agent's steps can name, with what each does: none, for an adapter the catalog lacks. */
   actionsOf(agent: Pick<Runs, 'adapter'>): readonly AgentAction[];
+  /** Resolves a step for this send only, by its declared action or equivalent catalog job. */
+  resolveAction(
+    action: string,
+    agent: Pick<Runs, 'adapter'>,
+  ): { action: string } | { unknown: true };
   /**
    * The usage backend an agent spends, whose usage rule applies to it: its connection's (none where
    * no reading can see it, as on an API key).
@@ -89,6 +95,8 @@ export function engineCatalog(catalog: Catalog, defaultAdapter: AdapterId): Engi
     connectionOf,
     adapterOf: (id) => connection(id)?.adapter.id ?? 'unavailable',
     actionsOf: ({ adapter = defaultAdapter }) => adapterIn(catalog, adapter)?.actions ?? [],
+    resolveAction: (action, { adapter = defaultAdapter }) =>
+      resolveAction(action, adapter, catalog),
     usageBackendOf: (agent) => connection(connectionOf(agent))?.connection.usage ?? undefined,
     connectionLabel: (id) => connection(id)?.connection.label,
     isTerminal: (id) => connection(id)?.connection.view === 'terminal',
@@ -114,6 +122,22 @@ export function engineCatalog(catalog: Catalog, defaultAdapter: AdapterId): Engi
       connection(id)?.adapter.modes.some((one) => one.id === mode && !one.asks) ?? false,
     backendName: (id) => usageBackendIn(catalog, id)?.label ?? id,
   };
+}
+
+/** The action and adapter used to build a step's send, retained until native dispatch. */
+export interface ResolvedStep {
+  adapter: AdapterId;
+  action: string;
+}
+
+/** Why a step built for another adapter must be rebuilt before it can leave. */
+export function adapterRefusal(
+  catalog: EngineCatalog,
+  resolved: ResolvedStep,
+  connection: ConnectionId,
+): string | undefined {
+  if (catalog.adapterOf(connection) === resolved.adapter) return undefined;
+  return `Not sent: ${resolved.action} was built for ${resolved.adapter}, but this agent now runs ${catalog.connectionName(connection) ?? connection}. Edit the step or change its backend to check it again.`;
 }
 
 /** Whether `text` starts with `prefix`, the text a connection runs as a shell command, if any. */

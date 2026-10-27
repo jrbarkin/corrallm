@@ -102,6 +102,7 @@ function agent(v: unknown): v is AgentRun {
         string(x.agent) &&
         string(x.text) &&
         (x.connection === 'unavailable' || id(x.connection)) &&
+        optional(x, 'kind', (kind) => kind === 'unknown-action') &&
         optional(x, 'switchTo', id),
     ) &&
     optional(

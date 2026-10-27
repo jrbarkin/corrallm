@@ -263,6 +263,14 @@ describe('needs', () => {
     });
   });
 
+  it('gives an action refusal a different question from a session startup refusal', () => {
+    const refused = { agent: 'a', connection: 'claude-code.sdk', text: 'Waiting' };
+    const at = { current: 'task', status: 'asking' as const, outcomes: {}, refused };
+    expect(holdGeneration({ ...at, refused: { ...refused, kind: 'unknown-action' } })).not.toBe(
+      holdGeneration(at),
+    );
+  });
+
   it('lists only a question prompt’s questions still unanswered, and cuts a long detail short', () => {
     const output = Array.from({ length: 20 }, (_, i) => `line ${String(i + 1)}`).join('\n');
     const items = needs(

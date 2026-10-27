@@ -270,7 +270,12 @@ export function holdGeneration(at: AgentRun | undefined): string {
       : [at.problem.kind, at.problem.reason, at.problem.agent, at.problem.conditionKey ?? null],
     at.refused === undefined
       ? null
-      : [at.refused.agent, at.refused.connection, at.refused.switchTo ?? null],
+      : [
+          at.refused.agent,
+          at.refused.connection,
+          at.refused.switchTo ?? null,
+          ...(at.refused.kind === undefined ? [] : [at.refused.kind]),
+        ],
     at.usage === undefined ? null : [at.usage.backend, at.usage.window, at.usage.resetsAt],
     item === undefined ? null : [at.rounds?.[item]?.round ?? 0, at.rounds?.[item]?.more ?? 0],
     item === undefined ? 0 : (at.changes?.[item]?.length ?? 0),

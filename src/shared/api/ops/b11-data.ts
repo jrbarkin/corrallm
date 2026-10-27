@@ -103,6 +103,7 @@ const AgentRun = z.strictObject({
       connection: CatalogId,
       text: z.string(),
       switchTo: CatalogId.optional(),
+      kind: z.literal('unknown-action').optional(),
     })
     .optional(),
   until: z.number().optional(),
