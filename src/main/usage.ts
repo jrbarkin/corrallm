@@ -66,6 +66,8 @@ export class UsageReadings {
   } = { file: {}, readings: [], rules: {}, exhausted: {} };
   /** What each reading, rule and hard limit read from its file has that this one doesn't know. */
   readonly #fields = new WeakMap<object, Record<string, unknown>>();
+  /** The hard limits a write that held them put on disk (or read from it): never written itself. */
+  readonly #durable = new WeakSet<Exhausted>();
   readonly #listeners = new Set<(state: UsageState, by: 'cli' | 'you') => void>();
   /** When listeners last heard each backend's reading. */
   readonly #told = new Map<UsageBackendId, number>();
@@ -128,6 +130,7 @@ export class UsageReadings {
       const window = USAGE_WINDOWS.find((name) => name === limit.window);
       const kept = { resetsAt: limit.resetsAt, ...(window === undefined ? {} : { window }) };
       this.#exhausted.set(backend, kept);
+      this.#durable.add(kept);
       this.#fields.set(kept, unknownFields(limit, ['resetsAt', 'window']));
     }
   }
@@ -172,6 +175,18 @@ export class UsageReadings {
   exhausted(backend: UsageBackendId, now = this.#now()): number | undefined {
     const until = this.#exhausted.get(backend)?.resetsAt;
     return until !== undefined && until > now ? until : undefined;
+  }
+
+  /**
+   * Until when a backend is exhausted now, only where that hold is on disk (B11a C3: the one fact
+   * that switches an agent to its next backend): one a write couldn't keep holds, but says nothing
+   * here until a later write holding it is on disk.
+   */
+  durably(backend: UsageBackendId, now = this.#now()): number | undefined {
+    const limit = this.#exhausted.get(backend);
+    return limit !== undefined && this.#durable.has(limit)
+      ? this.exhausted(backend, now)
+      : undefined;
   }
 
   /**
@@ -293,7 +308,10 @@ export class UsageReadings {
       },
     };
     const text = `${JSON.stringify(file, null, 2)}\n`;
-    const write = this.#writing.then(() => writeWhole(this.#file, text, { durable: true }));
+    const write = this.#writing.then(async () => {
+      await writeWhole(this.#file, text, { durable: true });
+      for (const [, limit] of exhausted) this.#durable.add(limit);
+    });
     this.#writing = write.catch((error: unknown) => {
       if (!rejectOnFailure) console.error('Could not remember usage readings:', error);
     });

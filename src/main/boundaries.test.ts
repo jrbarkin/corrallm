@@ -314,6 +314,25 @@ describe('main’s files', () => {
     expect(loaders).toEqual(['src/main/core/entry.ts']);
   });
 
+  it('commit to a document only through an op’s commit, or as corrallm’s switch of a backend', () => {
+    // B11a C4: Documents.change has two callers, canvas/commit.ts (every op's ctx.commit) and the
+    // fallback service, whose switch no op or caller reaches; nor its continue of a held task.
+    const changers = mainFiles().filter((file) =>
+      /\bdocuments\??\.change\(|Pick<\s*Documents,[^>]*'change'/.test(read(file)),
+    );
+    expect(changers.sort()).toEqual([
+      'src/main/core/canvas/commit.ts',
+      'src/main/core/fallback.ts',
+    ]);
+    const continuers = mainFiles().filter((file) => read(file).includes('continueAfterSwitch('));
+    expect(continuers.sort()).toEqual([
+      'src/main/core/engine/run/runner.ts',
+      'src/main/core/fallback.ts',
+    ]);
+    const switchers = mainFiles().filter((file) => /\bnew FallbackService\(/.test(read(file)));
+    expect(switchers).toEqual(['src/main/core/core.ts']);
+  });
+
   it('compose the profile’s stores only in the core process', () => {
     const stores = [
       'src/main/memory.ts',

@@ -74,6 +74,7 @@ import type { CanvasDocument } from '../../shared/model/canvas';
 import type { Caller, OutsideCaller } from './caller';
 import { MessageTable } from './delivery/messages';
 import { Engines, needsInput } from './engines';
+import { FallbackService } from './fallback';
 import type { Watcher } from './engines';
 import type { HostServices, WindowId } from './host';
 import type { ShutdownPrepared, ShutdownReason } from './protocol';
@@ -997,6 +998,38 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
       ...setups.items(canvas),
       ...changes.items(canvas),
     ],
+    // B11a C2: admission before each canvas's automated work goes, by the fallback service below.
+    fallback: {
+      admit: (canvas, agent, work) => fallback.admit(canvas, agent, work),
+      limitNote: (canvas, agent) => fallback.limitNote(canvas, agent),
+      switching: (canvas, agent) => fallback.switching(canvas, agent),
+      availabilityChanged: (canvas) => {
+        fallback.availabilityChanged(canvas);
+      },
+    },
+  });
+  // B11a's fallback service (C2–C6, C8): switches an agent to the next backend of the chain you set
+  // when its usage runs out, or a usage rule says to, and back at the reset if the chain says so.
+  // It alone, beside canvas/commit.ts, commits to a document (Documents.change), as corrallm.
+  const fallback = new FallbackService({
+    catalog: CATALOG,
+    defaultAdapter: DEFAULT_ADAPTER,
+    canvas: (canvas) => {
+      const open = engines.canvas(canvas);
+      return open?.state === 'executing' ? open : undefined;
+    },
+    documents,
+    sessions,
+    usage,
+    changed: (canvas) => {
+      engines.changed(canvas);
+    },
+    stopping: () => closing || barrier !== undefined,
+    switchingChanged: (canvas, agent) => {
+      runtime.switchingChanged(canvas, agent);
+    },
+    now: () => Date.now(),
+    ...(config.locale === undefined ? {} : { locale: config.locale }),
   });
   const warnings = new Set<Promise<void>>();
   const stalled = new StalledTurns({
@@ -1370,6 +1403,7 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
   };
   const close = async () => {
     closing = true;
+    fallback.close();
     presence.close();
     notifier?.close();
     sessionViews.close();
