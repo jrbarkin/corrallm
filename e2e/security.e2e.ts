@@ -63,6 +63,9 @@ test('blocks renderer navigation, new windows and media permissions', async () =
       }
     });
     expect(media).toBe('NotAllowedError');
+    // OS notifications are main's alone (B14 C9): a page's Web Notifications stay denied.
+    expect(await page.evaluate(() => Notification.requestPermission())).toBe('denied');
+    expect(await page.evaluate(() => Notification.permission)).toBe('denied');
     expect(await page.evaluate(() => document.querySelector('h1')?.textContent)).toBe('corrallm');
     await navigation.dispose();
     await externalLinks.dispose();
