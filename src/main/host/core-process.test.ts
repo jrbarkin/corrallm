@@ -34,6 +34,8 @@ const { fork, forked } = vi.hoisted(() => {
 });
 vi.mock('electron', () => ({ utilityProcess: { fork } }));
 
+import type { CoreProcess } from './core-process';
+
 const { forkCore } = await import('./core-process');
 
 beforeEach(() => {
@@ -46,7 +48,7 @@ const host = {
   askOpenLink: () => Promise.resolve({ open: false, always: false }),
   openExternal: () => Promise.resolve(null),
   showFile: () => Promise.resolve(null),
-  runReady: () => Promise.resolve(null),
+  notify: () => Promise.resolve('unsupported' as const),
   pickCanvasToOpen: vi.fn(() => Promise.resolve(null)),
   pickCanvasToSave: vi.fn(() => Promise.resolve(null)),
   pickFolder: vi.fn((_window: number, current?: string) =>
@@ -60,7 +62,7 @@ function start() {
     entry: '/app/.vite/build/core.cjs',
     output: (line, stream) => output.push([stream, line]),
     check: true,
-    host,
+    host: () => host,
   });
   const child = forked[0];
   if (!child) throw new Error('nothing was forked');
@@ -181,4 +183,67 @@ describe('forking the core process', () => {
 
     expect(child.kill).toHaveBeenCalledOnce();
   });
+});
+
+it('binds each fork’s handlers to its own process and refuses a replaced core’s request', async () => {
+  let current: CoreProcess | undefined;
+  const bind = vi.fn((source: CoreProcess) => ({
+    ...host,
+    pickFolder: () => {
+      if (source !== current) throw new Error('This core has been replaced.');
+      return '/current';
+    },
+  }));
+  const first = forkCore({ entry: '/core', output: () => undefined, check: true, host: bind });
+  current = first;
+  const old = forked[0];
+  const second = forkCore({ entry: '/core', output: () => undefined, check: true, host: bind });
+  current = second;
+  old?.emit('message', { kind: 'request', id: 1, name: 'pickFolder', args: [7] });
+  forked[1]?.emit('message', { kind: 'request', id: 2, name: 'pickFolder', args: [7] });
+  await vi.waitFor(() => {
+    expect(old?.posted).toContainEqual({
+      kind: 'answer',
+      id: 1,
+      answer: { ok: false, error: { message: 'This core has been replaced.' } },
+    });
+    expect(forked[1]?.posted).toContainEqual({
+      kind: 'answer',
+      id: 2,
+      answer: { ok: true, value: '/current' },
+    });
+  });
+  expect(bind.mock.calls.map(([core]) => core)).toEqual([first, second]);
+});
+
+it('reports application focus separately from a window’s file-check focus', () => {
+  const { core, child } = start();
+  core.focus(false);
+  core.focus(true);
+  expect(child.posted).toEqual([
+    { kind: 'event', name: 'focus', args: [false] },
+    { kind: 'event', name: 'focus', args: [true] },
+  ]);
+});
+
+it('keeps bounded, increasing presence separately for each fork', () => {
+  const { core: first, child: old } = start();
+  const { core: next } = start();
+  const child = forked[1];
+  const idle = { revision: 0, working: 0, runs: 0, jobs: 0, needs: 0, busy: false, awake: false };
+  expect(first.presence).toBeUndefined();
+  expect(next.presence).toBeUndefined();
+  old.emit('message', { kind: 'event', name: 'presence', args: [idle] });
+  expect(first.presence).toEqual(idle);
+  expect(next.presence).toBeUndefined();
+  const busy = { ...idle, revision: 2, working: 1, busy: true, awake: true };
+  child?.emit('message', { kind: 'event', name: 'presence', args: [busy] });
+  child?.emit('message', { kind: 'event', name: 'presence', args: [idle] });
+  child?.emit('message', {
+    kind: 'event',
+    name: 'presence',
+    args: [{ ...busy, revision: 3, working: 10000 }],
+  });
+  old.emit('message', { kind: 'event', name: 'presence', args: [{ ...busy, revision: 99 }] });
+  expect(next.presence).toEqual(busy);
 });

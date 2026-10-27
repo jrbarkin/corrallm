@@ -19,10 +19,14 @@ const ops = Object.fromEntries(
     guiFunction(op),
     (args?: unknown) => core.call(op, args),
   ]),
-) as Omit<GuiBridge, 'terminalDrop' | 'terminalOnEvent' | 'topicsOnChange' | 'topicsOnEpoch'>;
+) as Omit<
+  GuiBridge,
+  'terminalDrop' | 'terminalOnEvent' | 'topicsOnChange' | 'topicsOnEpoch' | 'windowOnShow'
+>;
 
 const api: AppApi = {
   ...ops,
+  windowOnShow: (listener) => core.onShow(listener),
   topicsOnChange: (listener) => core.onTopic(listener),
   topicsOnEpoch: (listener) => core.onEpoch(listener),
   draftsOnFlush: (listener) => core.onDraftsFlush(listener),

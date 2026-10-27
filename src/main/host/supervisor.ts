@@ -38,6 +38,7 @@ export class CoreSupervisor {
   readonly #now: () => number;
   #supervision: Supervision = { restarts: [] };
   #epoch = 1;
+  #process: CoreProcess | undefined;
   /** The core up now, or the one coming up; rejected once main gives up. */
   #current = Promise.withResolvers<CoreProcess>();
   /** Whether main stopped it (the app quits): an exit then is no crash. */
@@ -58,6 +59,11 @@ export class CoreSupervisor {
   /** The core up now, or once a new one is up; rejects once main gives up on it. */
   get core(): Promise<CoreProcess> {
     return this.#current.promise;
+  }
+
+  /** Includes the initializing process; a replaced or exited process has no host authority. */
+  owns(core: CoreProcess): boolean {
+    return this.#process === core;
   }
 
   /** Forks the first core and asks it up: rejects, saying why, if it can't come up. */
@@ -114,9 +120,11 @@ export class CoreSupervisor {
   /** Forks a core and asks it up; one that can't come up is killed. */
   async #bringUp(): Promise<CoreProcess> {
     const core = this.#options.fork();
+    this.#process = core;
     try {
       await this.#options.init(core);
     } catch (error) {
+      if (this.#process === core) this.#process = undefined;
       core.kill();
       throw error;
     }
@@ -130,6 +138,7 @@ export class CoreSupervisor {
   }
 
   async #exited(code: number): Promise<void> {
+    this.#process = undefined;
     if (this.#stopping) return;
     let action = this.#decide(code);
     // A clean exit (the core was asked to stop) is no crash: nothing to restart.

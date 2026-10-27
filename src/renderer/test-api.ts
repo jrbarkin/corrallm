@@ -41,6 +41,7 @@ export function fakeCore() {
   >();
   const changes = new Set<Parameters<GuiApi['topicsOnChange']>[0]>();
   const epochs = new Set<Parameters<GuiApi['topicsOnEpoch']>[0]>();
+  const shows = new Set<Parameters<GuiApi['windowOnShow']>[0]>();
   let epoch = 'test-core';
   let seq = 0;
   let restore: (() => void) | undefined;
@@ -84,6 +85,12 @@ export function fakeCore() {
         epochs.delete(listener);
       };
     },
+    windowOnShow: (listener: Parameters<GuiApi['windowOnShow']>[0]) => {
+      shows.add(listener);
+      return () => {
+        shows.delete(listener);
+      };
+    },
     terminalOnEvent: () => () => undefined,
   } as unknown as GuiBridge;
   const source = fromBridge(() => raw);
@@ -91,6 +98,9 @@ export function fakeCore() {
   const api = createClient(source, topics);
   return {
     api,
+    show(target: Parameters<Parameters<GuiApi['windowOnShow']>[0]>[0]): void {
+      for (const listener of shows) listener(target);
+    },
     topics,
     operations,
     reads,
