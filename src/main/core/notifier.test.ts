@@ -173,7 +173,7 @@ describe('which events notify', () => {
     expect(sent).toEqual([]);
     run.set({ running: false, agents: agents('done', 'done') });
     await vi.advanceTimersByTimeAsync(SETTLED);
-    expect(bodies()).toEqual(['The run on Plan.corral finished']);
+    expect(bodies()).toEqual(['The run on Plan corral finished']);
 
     // A per-agent pause leaves the run going: nothing.
     run.set({ running: true, agents: agents('running', 'waiting') });
@@ -203,9 +203,9 @@ describe('which events notify', () => {
     run.set({ running: false, paused: true, agents: agents('waiting') });
     await vi.advanceTimersByTimeAsync(SETTLED);
     expect(bodies()).toEqual([
-      'The run on Plan.corral finished',
-      'The run on Plan.corral was stopped',
-      'The run on Plan.corral was stopped',
+      'The run on Plan corral finished',
+      'The run on Plan corral was stopped',
+      'The run on Plan corral was stopped',
     ]);
   });
 

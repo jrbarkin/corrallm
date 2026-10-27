@@ -37,16 +37,29 @@ function item(id: string, kind: NeedsItem['kind'], agent?: string): NeedsItem {
 }
 
 describe('a notification’s words', () => {
+  it.each(['www.evil.example', 'evil.example', 'foo.corral'])(
+    'replaces dots in %s with spaces, in agent and canvas names',
+    (name) => {
+      const plain = name.replaceAll('.', ' ');
+      expect(notificationText({ kind: 'prompt', agent: name }).body).toBe(
+        `${plain} is asking you something`,
+      );
+      expect(notificationText({ kind: 'file', canvas: name }).body).toBe(
+        `${plain} changed on disk`,
+      );
+    },
+  );
+
   it.each<[NotificationSubject, string]>([
     [{ kind: 'prompt', agent: 'Worker' }, 'Worker is asking you something'],
     [{ kind: 'hold', agent: 'Worker' }, 'Worker is waiting for you'],
     [{ kind: 'start', agent: 'Worker' }, 'Worker couldn’t start'],
     [{ kind: 'setup' }, 'A worktree’s setup is waiting for you'],
-    [{ kind: 'proposal', canvas: 'Plan.corral' }, 'A change on Plan.corral needs your answer'],
-    [{ kind: 'file', canvas: 'Plan.corral' }, 'Plan.corral changed on disk'],
-    [{ kind: 'canvas', canvas: 'Plan.corral' }, 'Plan.corral needs you'],
-    [{ kind: 'finished', canvas: 'Plan.corral' }, 'The run on Plan.corral finished'],
-    [{ kind: 'stopped', canvas: 'Plan.corral' }, 'The run on Plan.corral was stopped'],
+    [{ kind: 'proposal', canvas: 'Plan.corral' }, 'A change on Plan corral needs your answer'],
+    [{ kind: 'file', canvas: 'Plan.corral' }, 'Plan corral changed on disk'],
+    [{ kind: 'canvas', canvas: 'Plan.corral' }, 'Plan corral needs you'],
+    [{ kind: 'finished', canvas: 'Plan.corral' }, 'The run on Plan corral finished'],
+    [{ kind: 'stopped', canvas: 'Plan.corral' }, 'The run on Plan corral was stopped'],
     [{ kind: 'rollup', count: 3 }, '3 things need you'],
   ])('words %j as one fixed sentence, titled corrallm', (subject, body) => {
     expect(notificationText(subject)).toEqual({ title: 'corrallm', body });
@@ -127,8 +140,8 @@ describe('a Needs item’s subject', () => {
 });
 
 describe('a name, cleaned and capped', () => {
-  it('keeps letters, marks, digits, spaces and - _ . , ’ ( ) #, in NFC', () => {
-    expect(safeName("O'Brien (QA) #2, v1.0 - x_y", 'agent')).toBe("O'Brien (QA) #2, v1.0 - x_y");
+  it('keeps letters, marks, digits, spaces and - _ , ’ ( ) #, in NFC', () => {
+    expect(safeName("O'Brien (QA) #2, v1.0 - x_y", 'agent')).toBe("O'Brien (QA) #2, v1 0 - x_y");
     expect(safeName('Café', 'agent')).toBe('Café');
     expect(safeName('Ревьюер 東京 مراجع', 'agent')).toBe('Ревьюер 東京 مراجع');
   });
@@ -136,13 +149,13 @@ describe('a name, cleaned and capped', () => {
   it('turns markup into plain words: no < > & " = / : survive', () => {
     const name = safeName('<b>Boss</b><a href="https://x.example">go</a>&amp;', 'agent');
     expect(name).not.toMatch(/[<>&"=/:]/);
-    expect(name).toBe('b Boss b a href https x.examp…');
+    expect(name).toBe('b Boss b a href https x examp…');
     expect(bytes(name)).toBeLessThanOrEqual(MAX_NAME_BYTES);
   });
 
   it('takes a URL apart', () => {
     expect(safeName('https://evil.example/login?next=@me', 'canvas')).toBe(
-      'https evil.example login next me',
+      'https evil example login next me',
     );
     expect(safeName('javascript:alert(1)', 'canvas')).toBe('javascript alert(1)');
   });
@@ -154,7 +167,7 @@ describe('a name, cleaned and capped', () => {
   });
 
   it('removes bidi overrides, isolates and invisible characters', () => {
-    expect(safeName('‮gpj.exe‬', 'agent')).toBe('gpj.exe');
+    expect(safeName('‮gpj.exe‬', 'agent')).toBe('gpj exe');
     expect(safeName('⁦Admin⁩ ‏ok‎', 'agent')).toBe('Admin ok');
     expect(safeName('Ad​mi‍n﻿­', 'agent')).toBe('Ad mi n');
     expect(safeName('⁧‫‭؜', 'agent')).toBe('An agent');

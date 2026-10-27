@@ -79,7 +79,7 @@ type Pending =
 /** Events going out as one: those held by id, those only counted, and their canvases. */
 interface Batch {
   events: Pending[];
-  extra: number;
+  extra: Map<CanvasId, number>;
   canvases: Set<CanvasId>;
 }
 
@@ -93,6 +93,7 @@ interface Watched {
 
 /** A notification main may hold: where its click leads, and the Needs that withdraw it. */
 interface Shown {
+  canvases: Set<CanvasId>;
   canvas?: CanvasId;
   need?: string;
   /** Its Needs' keys still waiting: none to track (a run's end, a count) when undefined. */
@@ -113,11 +114,13 @@ export class Notifier {
   #slotTimer: ReturnType<typeof setTimeout> | undefined;
   /** Whether a corrallm window is focused, as main last said: none until it does. */
   #focused = false;
+  #enabled: boolean;
   #status: NotificationResult | undefined;
   #closed = false;
 
   constructor(deps: NotifierDeps) {
     this.#deps = deps;
+    this.#enabled = deps.enabled();
     this.#timing = {
       coalesceMs: deps.timing?.coalesceMs ?? NOTIFY_COALESCE_MS,
       perMinute: deps.timing?.perMinute ?? NOTIFY_PER_MINUTE,
@@ -145,9 +148,14 @@ export class Notifier {
   closed(canvas: CanvasId): void {
     if (this.#closed) return;
     this.#unwatch(canvas);
-    this.#prune((event) => event.canvas !== canvas);
+    this.#prune((event) => event.canvas !== canvas, canvas);
     for (const [handle, shown] of this.#shown) {
-      if (shown.canvas === canvas) this.#withdraw(handle);
+      shown.canvases.delete(canvas);
+      for (const key of shown.needs ?? []) {
+        if (key.startsWith(`${canvas}\u0000`)) shown.needs?.delete(key);
+      }
+      if (shown.canvas === canvas || shown.canvases.size === 0 || shown.needs?.size === 0)
+        this.#withdraw(handle);
     }
   }
 
@@ -193,7 +201,19 @@ export class Notifier {
 
   /** The preference may have changed: turned off, nothing waits to go, and every one is closed. */
   preferenceChanged(): void {
-    if (this.#closed || this.#deps.enabled()) return;
+    if (this.#closed) return;
+    const enabled = this.#deps.enabled();
+    if (enabled !== this.#enabled) {
+      // Finish delayed comparisons at the preference boundary without announcing what waited.
+      for (const [canvas, watched] of this.#canvases) {
+        if (watched.timer === undefined) continue;
+        clearTimeout(watched.timer);
+        watched.timer = undefined;
+        this.#compare(canvas, watched, false);
+      }
+    }
+    this.#enabled = enabled;
+    if (enabled) return;
     this.#drop();
     for (const handle of [...this.#shown.keys()]) this.#withdraw(handle);
   }
@@ -232,7 +252,7 @@ export class Notifier {
   }
 
   /** Compares what waits for you on a canvas with its last pass: settled, and newly eligible. */
-  #compare(canvas: CanvasId, watched: Watched): void {
+  #compare(canvas: CanvasId, watched: Watched, eligible = true): void {
     let items: readonly Pick<NeedsItem, 'id' | 'kind' | 'for' | 'agent'>[];
     try {
       items = this.#deps.needs(canvas).filter((item) => item.for === 'you');
@@ -246,6 +266,7 @@ export class Notifier {
     watched.seen = now;
     if (before === undefined) return;
     for (const id of before) if (!now.has(id)) this.#settled(canvas, id);
+    if (!eligible) return;
     const added = new Set<string>();
     for (const item of items) {
       if (before.has(item.id) || added.has(item.id)) continue;
@@ -280,7 +301,7 @@ export class Notifier {
   #eligible(event: Pending): void {
     if (this.#focused || !this.#deps.enabled()) return;
     if (this.#batch === undefined) {
-      this.#batch = { events: [], extra: 0, canvases: new Set() };
+      this.#batch = { events: [], extra: new Map(), canvases: new Set() };
       this.#batchTimer = setTimeout(() => {
         this.#batchTimer = undefined;
         const batch = this.#batch;
@@ -336,15 +357,17 @@ export class Notifier {
 
   #send(batch: Batch): void {
     if (this.#closed || this.#focused || !this.#deps.enabled()) return;
-    const total = batch.events.length + batch.extra;
+    const extra = extraCount(batch);
+    const total = batch.events.length + extra;
     if (total === 0) return;
     const [only] = batch.events;
     let subject: NotificationSubject;
     let shown: Shown;
+    const canvases = new Set(batch.canvases);
     if (total === 1 && only !== undefined) {
       if ('run' in only) {
         subject = { kind: only.run, canvas: this.#deps.canvasName(only.canvas) };
-        shown = { canvas: only.canvas };
+        shown = { canvas: only.canvas, canvases };
       } else {
         subject = subjectOf(
           {
@@ -358,6 +381,7 @@ export class Notifier {
           },
         );
         shown = {
+          canvases,
           canvas: only.canvas,
           need: only.need,
           needs: new Set([keyOf(only.canvas, only.need)]),
@@ -370,11 +394,10 @@ export class Notifier {
         'need' in event ? [keyOf(event.canvas, event.need)] : [],
       );
       shown = {
+        canvases,
         ...(batch.canvases.size === 1 && canvas !== undefined ? { canvas } : {}),
         // Withdrawn by its Needs only if it counted nothing else.
-        ...(batch.extra === 0 && needs.length === batch.events.length
-          ? { needs: new Set(needs) }
-          : {}),
+        ...(extra === 0 && needs.length === batch.events.length ? { needs: new Set(needs) } : {}),
       };
     }
     const handle = crypto.randomUUID();
@@ -417,11 +440,15 @@ export class Notifier {
   }
 
   /** Keeps only the pending events `keep` keeps; their canvases follow, unless some are uncounted. */
-  #prune(keep: (event: Pending) => boolean): void {
+  #prune(keep: (event: Pending) => boolean, closedCanvas?: CanvasId): void {
     for (const batch of [this.#batch, this.#waiting]) {
       if (batch === undefined) continue;
       batch.events = batch.events.filter(keep);
-      if (batch.extra === 0) batch.canvases = new Set(batch.events.map(({ canvas }) => canvas));
+      if (closedCanvas !== undefined) batch.extra.delete(closedCanvas);
+      batch.canvases = new Set([
+        ...batch.events.map(({ canvas }) => canvas),
+        ...batch.extra.keys(),
+      ]);
     }
   }
 
@@ -452,10 +479,19 @@ function keyOf(canvas: CanvasId, need: string): string {
 function add(batch: Batch, event: Pending): void {
   batch.canvases.add(event.canvas);
   if (batch.events.length < MAX_PENDING) batch.events.push(event);
-  else batch.extra += 1;
+  else batch.extra.set(event.canvas, (batch.extra.get(event.canvas) ?? 0) + 1);
 }
 
 function merge(into: Batch, from: Batch): void {
   for (const event of from.events) add(into, event);
-  into.extra += from.extra;
+  for (const [canvas, count] of from.extra) {
+    into.canvases.add(canvas);
+    into.extra.set(canvas, (into.extra.get(canvas) ?? 0) + count);
+  }
+}
+
+function extraCount(batch: Batch): number {
+  let count = 0;
+  for (const extra of batch.extra.values()) count += extra;
+  return count;
 }

@@ -137,7 +137,7 @@ describe('the core’s notifications', { timeout: 30_000 }, () => {
         {
           handle: expect.any(String) as string,
           title: 'corrallm',
-          body: 'Worker b https evil.example b is waiting for you',
+          body: 'Worker b https evil example b is waiting for you',
         },
       ]);
     });
@@ -161,8 +161,8 @@ describe('the core’s notifications', { timeout: 30_000 }, () => {
     await eventually(() => {
       expect(closed).toEqual([handle]);
       expect(shown.map(({ body }) => body)).toEqual([
-        'Worker b https evil.example b is waiting for you',
-        'The run on Launch plan.corral finished',
+        'Worker b https evil example b is waiting for you',
+        'The run on Launch plan corral finished',
       ]);
     });
     expect(started.activation(handle)).toBeUndefined();
@@ -213,7 +213,7 @@ describe('the core’s notifications', { timeout: 30_000 }, () => {
     expect(proposed).toMatchObject({ ok: true, value: { proposed: expect.any(String) as string } });
     await eventually(() => {
       expect(shown.map(({ body }) => body)).toEqual([
-        'A change on Launch plan.corral needs your answer',
+        'A change on Launch plan corral needs your answer',
       ]);
     });
     const old = shown[0]?.handle ?? '';

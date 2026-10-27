@@ -113,13 +113,13 @@ export function subjectOf(
   }
 }
 
-/** Anything a name may not hold: all but letters, marks, digits, the space and - _ . , ' ( ) #. */
-const UNSAFE = /[^\p{L}\p{M}\p{Nd} \-_.,'()#]/gu;
+/** Anything a name may not hold: all but letters, marks, digits, the space and - _ , ' ( ) #. */
+const UNSAFE = /[^\p{L}\p{M}\p{Nd} \-_,'()#]/gu;
 const graphemes = new Intl.Segmenter('und', { granularity: 'grapheme' });
 
 /**
  * A name as a notification may carry it (C8): NFC; anything but letters, marks, digits, spaces and
- * `- _ . , ' ( ) #` a space (so no markup, URL punctuation, control, bidi or invisible character
+ * `- _ , ' ( ) #` a space (so no markup, URL punctuation, control, bidi or invisible character
  * survives); runs of spaces one; trimmed; cut at a grapheme to at most MAX_NAME_BYTES with "…".
  * Empty, it is named by what it is: "An agent", "A canvas" (lowercase within a sentence).
  */
