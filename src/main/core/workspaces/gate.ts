@@ -4,8 +4,8 @@ import { OpFailure } from '../call';
 
 /*
  * The workspace mutation gate (B11 Design §7, B9a Design §3, §13's shared-tree seam): what changes
- * the files of a working tree under every agent working in it (a code rewind's restore; B9b's merge
- * and a rebind's Switch are to use it too) runs here, one at a time per tree. A tree is a workspace,
+ * the files of a working tree under every agent working in it (a code rewind's restore, a rebind's
+ * Switch, a merge's checkpoint) runs here, one at a time per tree. A tree is a workspace,
  * or the shared project folder (no workspace), named by its key. Each member of it (an agent whose
  * session runs there, or whose working directory is it, on any canvas the core runs: two canvases
  * may pick one folder) is protected, not only the agent named:
@@ -19,7 +19,10 @@ import { OpFailure } from '../call';
  *   launch of the agent whose own session makes the change goes past it (its composite reopens
  *   it, and awaits its session); a send to it waits like any other.
  *
- * It holds nothing across a person's decision: a proposal's Allow takes it only once answered.
+ * It holds nothing across a person's decision: a proposal's Allow takes it only once answered. For
+ * B9b's merges it also says who may be writing in trees, holding nothing (`writers`), whether any
+ * agent works in a tree (`occupied`), and holds a tree's new work from the moment it is asked
+ * (`hold`: a restart's reconciliation of a merge, before anyone could start work there).
  */
 
 /** A tree's key: `workspace:<id>`, or `folder:<path>` for the shared project folder. */
@@ -58,6 +61,23 @@ interface Mutation {
   tree: TreeKey;
   agent: string;
   done: Promise<void>;
+  /** Why its members' new work waits, in its own words (else a restore's). */
+  waits?: string;
+}
+
+/**
+ * What a drain says in words of its own (a merge's, B9b Design §9 C5): its refusal, given the
+ * clauses of who may be writing, and why its members' new work waits while it runs.
+ */
+export interface DrainWords {
+  refused: (writing: string) => string;
+  waits: string;
+}
+
+/** Who may be writing in trees now, and whether one is being changed (`busy`). */
+export interface Writers {
+  busy: boolean;
+  writing: string[];
 }
 
 const BUSY =
@@ -145,35 +165,32 @@ export class WorkspaceGate {
     canvas: CanvasId,
     trees: readonly TreeKey[],
     work: (members: readonly string[]) => Promise<T>,
+    words?: DrainWords,
   ): Promise<T> {
     const keys = [...new Set(trees)];
     if (keys.some((key) => this.#going.has(key))) throw new OpFailure('unavailable', BUSY);
     const ended = Promise.withResolvers<undefined>();
     // Held at once, before the members are read: whatever comes for them meanwhile waits.
-    for (const tree of keys)
-      this.#going.set(tree, { canvas, tree, agent: '', done: ended.promise });
+    for (const tree of keys) {
+      this.#going.set(tree, {
+        canvas,
+        tree,
+        agent: '',
+        done: ended.promise,
+        ...(words === undefined ? {} : { waits: words.waits }),
+      });
+    }
     this.#changed();
     try {
-      const seen = new Set<string>();
-      const everyone = (await Promise.all(keys.map((tree) => this.#everyone(tree))))
-        .flat()
-        .filter((one) => {
-          const key = JSON.stringify([one.canvas, one.agent]);
-          if (seen.has(key)) return false;
-          seen.add(key);
-          return true;
-        });
-      const clauses = everyone.flatMap((one) => {
-        const why = this.#deps.writing(one.canvas, one.agent);
-        if (why === undefined) return [];
-        const name = one.canvas === canvas ? this.#deps.nameOf(canvas, one.agent) : ELSEWHERE;
-        return [`${name} ${why}`];
-      });
-      const writing = [...new Set(clauses)];
+      const everyone = await this.#everyoneOf(keys);
+      const writing = this.#writing(canvas, everyone);
       if (writing.length > 0) {
+        const clauses = `${andList(writing)}: try again once ${writing.length === 1 ? 'it is' : 'they are'} idle`;
         throw new OpFailure(
           'unavailable',
-          `Switching changes where every agent of those worktrees works, and ${andList(writing)}: try again once ${writing.length === 1 ? 'it is' : 'they are'} idle.`,
+          words === undefined
+            ? `Switching changes where every agent of those worktrees works, and ${clauses}.`
+            : words.refused(andList(writing)),
         );
       }
       return await work(everyone.flatMap((one) => (one.canvas === canvas ? [one.agent] : [])));
@@ -182,6 +199,73 @@ export class WorkspaceGate {
       ended.resolve(undefined);
       this.#changed();
     }
+  }
+
+  /**
+   * Who may be writing in `trees` now (any member, on any canvas, named as a refusal on `canvas`
+   * names it), and whether one of them is being changed: holding nothing, so nothing waits on it.
+   * What a merge that writes nothing in a tree checks of it (B9b Design §9 C5).
+   */
+  async writers(canvas: CanvasId, trees: readonly TreeKey[]): Promise<Writers> {
+    const keys = [...new Set(trees)];
+    if (keys.some((key) => this.#going.has(key))) return { busy: true, writing: [] };
+    return { busy: false, writing: this.#writing(canvas, await this.#everyoneOf(keys)) };
+  }
+
+  /** Whether any agent, on any canvas the core runs, works in `tree`. */
+  async occupied(tree: TreeKey): Promise<boolean> {
+    return (await this.#everyone(tree)).length > 0;
+  }
+
+  /**
+   * Holds new work for the members of `trees` from now until what it returns is called (a
+   * restart's reconciliation of a merge, before anyone could start work there): it refuses
+   * nothing and waits for nothing, and another mutation of those trees meanwhile is refused as
+   * busy. `waits` says why their new work waits.
+   */
+  hold(trees: readonly TreeKey[], waits: string): () => void {
+    const keys = [...new Set(trees)].filter((key) => !this.#going.has(key));
+    const ended = Promise.withResolvers<undefined>();
+    const held = new Map<TreeKey, Mutation>();
+    for (const tree of keys) {
+      const mutation = { canvas: '' as CanvasId, tree, agent: '', done: ended.promise, waits };
+      held.set(tree, mutation);
+      this.#going.set(tree, mutation);
+    }
+    this.#changed();
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      // Only its own holds: one a later mutation of the tree set is that one's.
+      for (const [tree, mutation] of held) {
+        if (this.#going.get(tree) === mutation) this.#going.delete(tree);
+      }
+      ended.resolve(undefined);
+      this.#changed();
+    };
+  }
+
+  /** Every agent working in any of `keys`, once each. */
+  async #everyoneOf(keys: readonly TreeKey[]): Promise<Member[]> {
+    const seen = new Set<string>();
+    return (await Promise.all(keys.map((tree) => this.#everyone(tree)))).flat().filter((one) => {
+      const key = JSON.stringify([one.canvas, one.agent]);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  }
+
+  /** Why each of `everyone` may be writing, as a clause a refusal on `canvas` says. */
+  #writing(canvas: CanvasId, everyone: readonly Member[]): string[] {
+    const clauses = everyone.flatMap((one) => {
+      const why = this.#deps.writing(one.canvas, one.agent);
+      if (why === undefined) return [];
+      const name = one.canvas === canvas ? this.#deps.nameOf(canvas, one.agent) : ELSEWHERE;
+      return [`${name} ${why}`];
+    });
+    return [...new Set(clauses)];
   }
 
   /** The agents of the canvas working in `tree`: its members, in document order. */
@@ -214,7 +298,8 @@ export class WorkspaceGate {
 
   /** Why new work for `agent` waits now, if it does: another agent's mutation of its tree. */
   async holding(canvas: CanvasId, agent: string): Promise<string | undefined> {
-    return (await this.#holding(canvas, agent)) === undefined ? undefined : WAITS;
+    const mutation = await this.#holding(canvas, agent);
+    return mutation === undefined ? undefined : (mutation.waits ?? WAITS);
   }
 
   async #holding(canvas: CanvasId, agent: string, own = false): Promise<Mutation | undefined> {

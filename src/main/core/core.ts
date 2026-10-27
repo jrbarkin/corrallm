@@ -68,6 +68,9 @@ import { Windows } from './windows';
 import { createDispatcher, OpFailure } from './call';
 import type { Dispatcher } from './call';
 import { readBranchDiff } from './workspaces/diff';
+import { MergeService } from './workspaces/merge';
+import { temporaryIndexes } from './workspaces/merge-index';
+import { MergeJournal } from './workspaces/merge-journal';
 import { listWorktrees } from './workspaces/list';
 import type { Viewer, WorktreeListing } from './workspaces/list';
 import type { CanvasDocument } from '../../shared/model/canvas';
@@ -687,6 +690,30 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
       engines.needsChanged(canvas);
     },
   });
+  // B9b C5: an agent's branch merged into your picked checkout's branch, in its repository's lane
+  // of the one provisioning queue, a checkpoint draining the agent's tree through the one gate,
+  // journaled in the profile's database (merge_job) and reconciled as the core starts.
+  const merges = new MergeService({
+    git: workspaceGit,
+    workspaces: workspaceStore,
+    journal: new MergeJournal({ store }),
+    queue: workspaceQueue,
+    gate,
+    projectRoot: (canvas) => projects.of(canvas),
+    // A restart's reconciliation: the pick as restored, else as canvas memory keeps it.
+    pickedRoot: async (canvas) => projects.of(canvas) ?? (await memory.get(canvas)).project,
+    copied: (workspace) => setups.copied?.(workspace),
+    running: (canvas) => engines.canvas(canvas) !== undefined,
+    member: (canvas, agent) =>
+      documents
+        .loaded(canvas)
+        ?.document.nodes.some((node) => node.id === agent && node.type === 'agent') === true,
+    nameOf: (canvas, agent) => nameOf(documents.loaded(canvas)?.document.nodes ?? [], agent),
+    indexes: temporaryIndexes(profile),
+    changed: (canvas) => {
+      topics.changed(`worktrees:${canvas}`, 'corrallm');
+    },
+  });
   const windows = new Windows({
     restore: async () => {
       const canvas = await journal.last();
@@ -1106,6 +1133,8 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
                 },
                 request,
               ),
+            // B9b C5: the merge service, for X2's `branch.merge`.
+            merge: (request) => merges.merge(request),
           },
           control,
           topics,
@@ -1195,6 +1224,12 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
   // A setup that was running as the last core stopped is interrupted, after the process owner's
   // recovery ended what it left (above), and before any call could start one: never rerun by itself.
   if (opened.store !== undefined) await setups.recover();
+  // Merges a crash left going on, reconciled first (B9b Design §9 C8): queued in their
+  // repositories' lanes before anything else there, their agents' trees' new work held until each
+  // is done, and no merge admitted before. Never replayed: what your checkout shows decides.
+  void merges.reconcile().catch((error: unknown) => {
+    console.error('Could not finish the merges a crash interrupted:', error);
+  });
   void workspaceDirectories.reconcile().catch((error: unknown) => {
     if (!closing) console.error('Could not finish provisioning the workspaces:', error);
   });
@@ -1231,6 +1266,9 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     return { ok: false, error: { code: 'unavailable', sentence: STOPPING[barrier] } };
   };
   const close = async () => {
+    // A merge past its point of no return finishes first, its install never killed to quit (B9b
+    // Design §9 C8); one before it stops at its next step, changing nothing.
+    await merges.close();
     closing = true;
     sessionViews.close();
     workspaceDirectories.stop();
@@ -1260,6 +1298,8 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
         });
         await children.close();
         await workspaceDirectories.close();
+        // Every merge settled, or left on disk for the next start's reconciliation.
+        await merges.drained();
         await stores();
       } finally {
         await opened.store?.close();
