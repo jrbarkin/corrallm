@@ -44,6 +44,7 @@ it('validates native presentation payloads and ignores events from a replaced co
     needs: 0,
     busy: false,
     awake: false,
+    notify: true,
   };
   const notification = {
     handle: 'ad9ee798-f2dc-40cf-a1e2-b0073ddfb316',
@@ -65,4 +66,29 @@ it('validates native presentation payloads and ignores events from a replaced co
   expect(native.presence).toHaveBeenCalledOnce();
   expect(native.unnotify).toHaveBeenCalledOnce();
   expect(native.notify).toHaveBeenCalledOnce();
+});
+
+it('hands main only whole snapshots that say whether notifications are on', () => {
+  const events = new Map<string, (value: unknown) => void>();
+  const core = {
+    link: { on: (name: string, hear: (value: unknown) => void) => events.set(name, hear) },
+  } as unknown as CoreProcess;
+  const native = { presence: vi.fn(), unnotify: vi.fn(), notify: vi.fn() };
+  hostServices(core, () => true, native);
+  const whole = {
+    revision: 0,
+    working: 1,
+    runs: 0,
+    jobs: 0,
+    needs: 0,
+    busy: true,
+    awake: true,
+    notify: false,
+  };
+  const without = Object.fromEntries(Object.entries(whole).filter(([key]) => key !== 'notify'));
+  events.get('presence')?.(without);
+  events.get('presence')?.({ ...whole, notify: 'yes' });
+  expect(native.presence).not.toHaveBeenCalled();
+  events.get('presence')?.(whole);
+  expect(native.presence).toHaveBeenCalledExactlyOnceWith(whole);
 });

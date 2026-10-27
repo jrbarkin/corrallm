@@ -1,10 +1,23 @@
 import { z } from 'zod';
 
+import {
+  MAX_PAUSE_SENTENCE_BYTES,
+  MAX_PAUSE_UNSAVED,
+  MAX_PRESENCE_COUNT,
+} from '../../shared/api/limits';
+
+export { MAX_PAUSE_UNSAVED, MAX_PRESENCE_COUNT };
+
+/**
+ * How long the windows have, all together, as the system shuts down or logs out (B14 C4): drafts
+ * land before the barrier, leaving most of logind's five seconds for sessions to end. The core
+ * bounds its flush by it, and main its wait.
+ */
+export const SYSTEM_DRAFTS_MS = 1000;
+
 /** Private host protocol bounds (B14 §9); no operation or token reads these snapshots. */
-export const MAX_PRESENCE_COUNT = 9999;
 export const MAX_NOTIFICATION_TITLE_BYTES = 32;
 export const MAX_NOTIFICATION_BODY_BYTES = 160;
-export const MAX_PAUSE_UNSAVED = 64;
 const count = z.int().min(0).max(MAX_PRESENCE_COUNT);
 const bytes = (max: number) =>
   z
@@ -22,6 +35,8 @@ export const Presence = z
     needs: count,
     busy: z.boolean(),
     awake: z.boolean(),
+    /** The core's `notifications.enabled` as its notifier reads it (B14 §9.w): C9's trusted cue. */
+    notify: z.boolean(),
   })
   .refine((p) => p.busy === p.working + p.runs + p.jobs > 0);
 export type Presence = z.infer<typeof Presence>;
@@ -44,7 +59,7 @@ export const PauseAllResult = z.strictObject({
   agents: count,
   canvases: count,
   unsaved: z
-    .array(z.strictObject({ canvas: z.uuid(), sentence: bytes(4096) }))
+    .array(z.strictObject({ canvas: z.uuid(), sentence: bytes(MAX_PAUSE_SENTENCE_BYTES) }))
     .max(MAX_PAUSE_UNSAVED),
 });
 export type PauseAllResult = z.infer<typeof PauseAllResult>;

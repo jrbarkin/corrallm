@@ -6,6 +6,7 @@ import { partyIdOf } from '../caller';
 import type { OpenCanvas } from '../engines';
 import { runSeen } from './views';
 import { RunViewSchema } from '../../../shared/api/ops/b11-data';
+import { MAX_PAUSE_UNSAVED, MAX_PRESENCE_COUNT } from '../../../shared/api/limits';
 import { agentOf, openCanvas, reachFor } from './open';
 import type { Implementations, OpServices } from '.';
 
@@ -18,7 +19,9 @@ import type { Implementations, OpServices } from '.';
  * returns once it is on disk: the canvas's run committed to the database, and for a kill, what it
  * took back at once with it, in the same commit (one being delivered is withdrawn once its
  * interrupted turn ends, which the kill never waits for). One that can't be fails, saying it is in
- * place all the same but may not survive a restart.
+ * place all the same but may not survive a restart. Pause all (B14 C3), from main's native menus
+ * as you, pauses every agent of every canvas the core runs in one synchronous pass, then journals
+ * each canvas it paused one on, all together: one that can't be saved is said, undoing nothing.
  */
 export function runOps({
   engines,
@@ -32,6 +35,7 @@ export function runOps({
   | 'run.resume'
   | 'run.goOn'
   | 'run.pause'
+  | 'run.pauseAll'
   | 'run.kill'
   | 'run.unpause'
 > {
@@ -60,6 +64,47 @@ export function runOps({
       else open.engine.run.pauseGroup(groupOf(open, target), by);
       await saved(open.journal(), HOLD_UNSAVED);
       return {};
+    },
+    'run.pauseAll': async (_args, ctx) => {
+      const by = partyIdOf(ctx.caller);
+      // One pass with no await: every agent of every canvas the core runs (executing), at once,
+      // so no callback starts another one's work between pauses. One opened, added or run after
+      // it is not paused (a later Pause all is); one already paused by `by` is left as it is.
+      const paused: OpenCanvas[] = [];
+      let agents = 0;
+      for (const canvas of engines.opened()) {
+        const open = engines.canvas(canvas);
+        if (open?.state !== 'executing') continue;
+        const { run } = open.engine;
+        const already = new Set(
+          (run.snapshot().individualPauses ?? [])
+            .filter((cause) => cause.by === by)
+            .map(({ id }) => id),
+        );
+        let here = 0;
+        for (const node of open.document.nodes) {
+          if (node.type !== 'agent' || already.has(node.id)) continue;
+          run.pauseAgent(node.id, by);
+          here += 1;
+        }
+        if (here === 0) continue;
+        agents += here;
+        paused.push(open);
+        for (const kind of ['run', 'sessions', 'messages', 'needs'] as const)
+          ctx.published(`${kind}:${open.document.id}`);
+      }
+      // Then each canvas it paused one on, journaled together.
+      const saved = await Promise.allSettled(paused.map((open) => open.journal()));
+      const unsaved = paused.flatMap((open, i) =>
+        saved[i]?.status === 'rejected'
+          ? [{ canvas: open.document.id, sentence: HOLD_UNSAVED }]
+          : [],
+      );
+      return {
+        agents: Math.min(agents, MAX_PRESENCE_COUNT),
+        canvases: Math.min(paused.length, MAX_PRESENCE_COUNT),
+        unsaved: unsaved.slice(0, MAX_PAUSE_UNSAVED),
+      };
     },
     'run.kill': async ({ canvas, target }, { caller }) => {
       const open = openCanvas(engines, canvas);

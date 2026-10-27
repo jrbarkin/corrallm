@@ -315,6 +315,178 @@ describe('a prompt the core owns', () => {
     expect(native.sessions[0]?.answered).toEqual([]);
   });
 
+  it('is answered through the owner when its session also shows it as one of the events B13 replaces (until X10)', async () => {
+    const fake = new FakeConnector({ mode: 'acceptEdits' });
+    const key = crypto.randomUUID();
+    const told: [string, PromptAnswer][] = [];
+    const old: unknown[] = [];
+    const connector: Connector<SessionMode> = {
+      start: async (spec, host) => {
+        const session: LiveSession<SessionMode> = await fake.start(spec, host);
+        session.send = (message) => {
+          host.emit({ type: 'user', id: message.id, text: message.text });
+          host.emit({ type: 'prompt', key, prompt: tool as never });
+          host.emit({
+            type: 'permission',
+            id: 'toolu_1:prompt',
+            tool: 'Bash',
+            summary: 'touch made.txt',
+            always: null,
+          });
+          host.emit({ type: 'status', status: 'waiting' });
+          return Promise.resolve();
+        };
+        Object.assign(session, {
+          answer: (...args: unknown[]) => {
+            old.push(args);
+            return Promise.reject(new Error('answered only through the owner'));
+          },
+          prompts: {
+            answer: (answered: string, answer: PromptAnswer) => {
+              told.push([answered, answer]);
+            },
+            decline: () => undefined,
+          },
+          bridge: (id: string, answer: { kind: string; answer?: string }) => {
+            if (id !== 'toolu_1:prompt') throw new Error('That request is no longer asked.');
+            if (answer.answer === 'always') throw new Error('That prompt doesn’t offer "always".');
+            return {
+              key,
+              answer: { kind: 'choice', value: answer.answer === 'once' ? 'allow' : 'deny' },
+            };
+          },
+        });
+        return session;
+      },
+    };
+    const tool = {
+      kind: 'approval',
+      title: 'Claude wants to use Bash',
+      subject: { type: 'tool', tool: 'Bash', input: { command: 'touch made.txt' } },
+      answerIn: 'api',
+      choices: [
+        { value: 'allow', label: 'Yes', hint: 'allow_once', effects: {} },
+        { value: 'deny', label: 'No', hint: 'reject_once', effects: {}, endsTurn: true },
+      ],
+    };
+    const core = await start(connector);
+    await ok(core, 'message', { to: 'b', body: 'Touch it' });
+    // One item: the old event's, which the window's card answers, standing for the owner's.
+    const [asked] = await prompts(core);
+    expect(asked?.id).toMatch(/^prompt\/b\/\d+\/toolu_1:prompt$/);
+    expect(
+      await call(core, 'reply', { to: asked?.id, answer: { permission: 'always' } }),
+    ).toMatchObject({ ok: false, error: { code: 'invalid' } });
+    // No token answers it this way either.
+    expect(
+      await call(core, 'reply', { to: asked?.id, answer: { permission: 'once' } }, ORCHESTRATOR),
+    ).toMatchObject({ ok: false, error: { code: 'refused' } });
+    expect(told).toEqual([]);
+    const result = (await ok(core, 'reply', {
+      to: asked?.id,
+      answer: { permission: 'once' },
+    })) as { id: string; outcome: string };
+    expect(result.outcome).toBe('answered');
+    // Through the owner, by its key: never the old way.
+    expect(told).toEqual([[key, { kind: 'choice', value: 'allow' }]]);
+    expect(old).toEqual([]);
+    const [record] = await records(core);
+    expect(record).toMatchObject({
+      id: result.id,
+      by: 'you',
+      state: 'delivered',
+      body: 'You allowed Reviewer’s tool call once.',
+    });
+    expect(JSON.stringify(await records(core))).not.toContain('touch');
+    // The card shows it answered; a second answer is a conflict naming who settled it.
+    const transcript = (await ok(core, 'session.transcript', { agent: 'b' })) as {
+      entries: { id: string; kind: string; answer?: string }[];
+    };
+    expect(transcript.entries.find(({ id }) => id === 'toolu_1:prompt')).toMatchObject({
+      answer: 'once',
+    });
+    expect(await prompts(core, 0)).toEqual([]);
+    expect(
+      await call(core, 'reply', { to: asked?.id, answer: { permission: 'deny' } }),
+    ).toMatchObject({
+      ok: false,
+      error: { code: 'conflict', sentence: expect.stringMatching(/You allowed/) as string },
+    });
+    expect(told).toHaveLength(1);
+  });
+
+  it('shows a reached token an MCP server’s request only in the core’s words, while you see its form', async () => {
+    const fake = new FakeConnector({ mode: 'acceptEdits' });
+    const url = 'https://tracker.example.test/sign-in?state=link-private';
+    const connector: Connector<SessionMode> = {
+      start: async (spec, host) => {
+        const session: LiveSession<SessionMode> = await fake.start(spec, host);
+        session.send = (message) => {
+          host.emit({ type: 'user', id: message.id, text: message.text });
+          host.emit({
+            type: 'elicitation',
+            id: 'elicitation:link',
+            server: 'tracker',
+            message: 'Sign in at tracker.example.test/sign-in%3Fstate%3Dlink-private',
+            url,
+          });
+          host.emit({
+            type: 'elicitation',
+            id: 'elicitation:form',
+            server: 'tracker',
+            message: 'Paste the key from tracker.example.test/k%3Ftoken%3Dform-private',
+            fields: [{ name: 'key', label: 'Key', required: true, kind: 'text' }],
+          });
+          host.emit({ type: 'status', status: 'waiting' });
+          return Promise.resolve();
+        };
+        return session;
+      },
+    };
+    const words = ['link-private', 'form-private', 'Sign in at', 'Paste the key', 'example.test'];
+    const core = await start(connector);
+    await ok(core, 'message', { to: 'b', body: 'Connect the tracker' }, ORCHESTRATOR);
+    const [link, form] = await prompts(core, 2);
+    const titles = {
+      link: 'MCP server “tracker” asks you to open a link',
+      form: 'MCP server “tracker” asks you to fill in a form',
+    };
+    // Yours: titled in the core's words too, the link's form yours to open.
+    expect(link).toMatchObject({ title: titles.link, form: { url } });
+    expect(form).toMatchObject({ title: titles.form });
+    // A reached token's reads: Needs, the transcript and what it is told, in the core's words only.
+    const needs = await needsOf(core, ORCHESTRATOR);
+    expect(needs.map(({ title }) => title)).toEqual([titles.link, titles.form]);
+    const transcript = (await ok(core, 'session.transcript', { agent: 'b' }, ORCHESTRATOR)) as {
+      entries: { id: string; kind: string; message?: string }[];
+    };
+    const asked = transcript.entries.filter(({ kind }) => kind === 'elicitation');
+    expect(asked.map(({ message }) => message)).toEqual([titles.link, titles.form]);
+    for (const entry of asked) {
+      expect(entry).not.toHaveProperty('url');
+      expect(entry).not.toHaveProperty('fields');
+    }
+    let told: string[] = [];
+    await vi.waitFor(async () => {
+      told = ((await ok(core, 'messages', {}, ORCHESTRATOR)) as { items: Message[] }).items.map(
+        ({ body }) => body,
+      );
+      expect(told).toContainEqual(expect.stringContaining('is waiting for the user'));
+    });
+    for (const read of [needs, transcript, told]) {
+      for (const word of words) expect.soft(JSON.stringify(read)).not.toContain(word);
+    }
+    // Yours, the card: the form as its server words it, and the link to open.
+    const card = (await ok(core, 'session.transcript', { agent: 'b' })) as {
+      entries: { id: string; kind: string; message?: string; url?: string; fields?: unknown[] }[];
+    };
+    expect(card.entries.find(({ id }) => id === 'elicitation:form')).toMatchObject({
+      message: 'Paste the key from tracker.example.test/k%3Ftoken%3Dform-private',
+      fields: [{ name: 'key' }],
+    });
+    expect(card.entries.find(({ id }) => id === 'elicitation:link')).toMatchObject({ url });
+  });
+
   it('declines what it can’t show whole, its transcript saying why', async () => {
     const native = raising([{ ...approval, title: 'x'.repeat(5000) }]);
     const core = await start(native.connector);

@@ -87,10 +87,13 @@ describe('a window’s port', () => {
     for (const name of ['agents', 'status', 'needs', 'messages']) expect(GUI_OPS).toContain(name);
     // Your composer's message is hosted (B11 §16.6).
     expect(GUI_OPS).toContain('message');
+    // Yours, from main's native menus alone (B14 C3): no window's gesture.
+    expect(GUI_OPS).not.toContain('run.pauseAll');
   });
 
   it.each([
     ['an operation that isn’t yours', 'wait'],
+    ['an operation main’s native menus call, never a window', 'run.pauseAll'],
     ['no operation at all', 'nonsense'],
     ['a name that isn’t text', 42],
   ])('refuses %s before it is dispatched', async (_label, op) => {
@@ -233,6 +236,37 @@ describe('a window’s port', () => {
  * run data, bounded per window. One that doesn't answer is reported (the failed-save dialog); one
  * with no port, or whose port goes as it is asked (it crashed), is skipped.
  */
+describe('Pause all, from main’s native menus (B14 C3)', () => {
+  it('is run.pauseAll called as you at main’s own UI, never a window, its receipts left out', async () => {
+    const core = fakeCore();
+    core.call.mockResolvedValue({
+      ok: true,
+      value: { agents: 3, canvases: 2, unsaved: [], revs: { 'run:c': 4 } },
+    });
+    const served = new WindowPorts(core);
+    expect(await served.pauseAll()).toEqual({ agents: 3, canvases: 2, unsaved: [] });
+    expect(core.call).toHaveBeenCalledExactlyOnceWith(
+      'run.pauseAll',
+      {},
+      { kind: 'human', window: 'host' },
+    );
+  });
+
+  it('answers a refusal’s sentence, as main shows it', async () => {
+    const core = fakeCore();
+    core.call.mockResolvedValue({
+      ok: false,
+      error: {
+        code: 'unavailable',
+        sentence: 'corrallm is quitting: try again once it is open again.',
+      },
+    });
+    expect(await new WindowPorts(core).pauseAll()).toEqual({
+      sentence: 'corrallm is quitting: try again once it is open again.',
+    });
+  });
+});
+
 describe('a window’s drafts, flushed before quitting', () => {
   it('asks each window over its own port, answered once its drafts are', async () => {
     const served = new WindowPorts(fakeCore());

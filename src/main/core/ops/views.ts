@@ -1,6 +1,7 @@
 import type { Reach } from '../../../shared/api/surface';
 import type { Message } from '../../../shared/model/messages';
 import { isOpen, turnReply } from '../../../shared/model/session';
+import { mcpRequestTitle } from '../../../shared/model/words';
 import type { Entry } from '../../../shared/model/session';
 import { messageView, presentationOf, runView, summaryReply } from '../../../shared/model/views';
 import type {
@@ -66,14 +67,16 @@ export function sessionSummary(open: OpenCanvas, agent: string, yours = true) {
 
 /**
  * An entry as a transcript gives it: a message's pasted images only counted; and an MCP server's
- * link (often a sign-in) left out for anyone but you (`yours`), as Needs leaves out its form: a
- * link form is yours alone (Core Server R3).
+ * request, for anyone but you (`yours`), only in the core's words: never its link (often a
+ * sign-in), its form or its message, which may hold the link, as Needs leaves them out: a form is
+ * yours alone (Core Server R3, B13 C11).
  */
 export function transcriptEntry(entry: Entry, yours: boolean): EntryView {
   if (entry.kind !== 'user') {
-    if (entry.kind !== 'elicitation' || yours || entry.url === undefined) return entry;
-    const seen = { ...entry };
+    if (entry.kind !== 'elicitation' || yours) return entry;
+    const seen = { ...entry, message: mcpRequestTitle(entry.server, entry.url !== undefined) };
     delete seen.url;
+    delete seen.fields;
     return seen;
   }
   const { images, ...rest } = entry;

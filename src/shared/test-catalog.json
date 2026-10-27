@@ -222,7 +222,7 @@
             "plan": "answerable",
             "form": "answerable"
           },
-          "signals": false,
+          "signals": true,
           "startModes": [
             "manual",
             "acceptEdits",

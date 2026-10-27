@@ -8,7 +8,16 @@ import {
   PauseAllResult,
 } from './presence';
 
-const idle = { revision: 0, working: 0, runs: 0, jobs: 0, needs: 0, busy: false, awake: false };
+const idle = {
+  revision: 0,
+  working: 0,
+  runs: 0,
+  jobs: 0,
+  needs: 0,
+  busy: false,
+  awake: false,
+  notify: true,
+};
 const notice = {
   handle: 'ad9ee798-f2dc-40cf-a1e2-b0073ddfb316',
   title: 'corrallm',
@@ -75,4 +84,12 @@ it('admits only the idle reservation option and bounded pause acknowledgements',
     PauseAllResult.safeParse({ ...result, unsaved: Array(65).fill(result.unsaved[0]) }).success,
   ).toBe(false);
   expect(PauseAllResult.safeParse({ ...result, agents: -1 }).success).toBe(false);
+});
+
+it('carries whether notifications are on, as one boolean, in every whole snapshot', () => {
+  expect(Presence.parse({ ...idle, notify: false }).notify).toBe(false);
+  expect(Presence.parse(idle).notify).toBe(true);
+  for (const notify of [undefined, 1, 'true', null]) {
+    expect(Presence.safeParse({ ...idle, notify }).success).toBe(false);
+  }
 });

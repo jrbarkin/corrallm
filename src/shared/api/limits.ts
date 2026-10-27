@@ -57,6 +57,15 @@ export const MAX_TOPIC_FRAME = 1024 * 1024;
  */
 export const MAX_NEED_ID = 4096;
 
+/**
+ * The most a bounded count the host is told may be (B14 C5's presence, Pause all's counts): past it,
+ * it is capped there; main shows at most "99+".
+ */
+export const MAX_PRESENCE_COUNT = 9999;
+/** The most canvases Pause all says it couldn't save (B14 C3), and each one's sentence's bytes. */
+export const MAX_PAUSE_UNSAVED = 64;
+export const MAX_PAUSE_SENTENCE_BYTES = 4096;
+
 /** Typed reply content, leaving room for an escaped Need id and the operation's envelope. */
 export const MAX_REPLY_ANSWER_BYTES = MAX_REQUEST_BYTES - 6 * MAX_NEED_ID - 4096;
 

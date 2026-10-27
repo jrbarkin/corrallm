@@ -42,12 +42,13 @@ const REAL: Registry = {
   awaiting: { 'merge-permits': 'branch.merge' },
 };
 
-it('hosts every operation whose audience includes you', () => {
+it('hosts every operation whose audience includes you, but those main’s native UI alone calls', () => {
   expect(GUI_OPS).toEqual(
     Object.entries(SURFACE)
-      .filter(([, surface]) => 'you' in surface.access)
+      .filter(([, surface]) => 'you' in surface.access && !('host' in surface))
       .map(([name]) => name),
   );
+  expect(GUI_OPS).not.toContain('run.pauseAll');
 });
 
 const NAME = /^[a-z]+(\.[a-zA-Z]+)?$/;
@@ -249,7 +250,17 @@ function problems(registry: Registry): string[] {
     const gui = parties.includes('you');
     const mcp = parties.some((party) => party !== 'you');
     const deviation = registry.deviations[name];
-    if (gui !== mcp) {
+    if (surface.host === true) {
+      // Main's native UI alone calls it, as you: on neither generated surface.
+      if (deviation !== 'native-menu') {
+        found.push(`${name}: main’s native UI alone calls it, without the native-menu deviation`);
+      }
+      if (!gui || mcp) {
+        found.push(`${name}: main’s native UI alone calls it, but its audience isn’t you alone`);
+      }
+    } else if (deviation === 'native-menu') {
+      found.push(`${name}: the native-menu deviation, but a window calls it (no host)`);
+    } else if (gui !== mcp) {
       if (deviation === undefined) found.push(`${name}: on one surface only, with no deviation`);
       else if (!(deviation in REASONS)) found.push(`${name}: deviates for no listed reason`);
     } else if (deviation !== undefined) {
@@ -378,6 +389,27 @@ describe('T1: the surface’s rules', () => {
         { deviations: { 'test.yours': 'because' } },
       ),
       'test.yours: deviates for no listed reason',
+    ],
+    [
+      'an op main’s native UI calls, without the native-menu deviation',
+      registry({ 'test.menu': op({ access: yours, kind: 'command', scope: 'none', host: true }) }),
+      'test.menu: main’s native UI alone calls it, without the native-menu deviation',
+    ],
+    [
+      'an op main’s native UI calls, open to a token',
+      registry(
+        { 'test.menu': op({ access: both, kind: 'command', scope: 'none', host: true }) },
+        { deviations: { 'test.menu': 'native-menu' } },
+      ),
+      'test.menu: main’s native UI alone calls it, but its audience isn’t you alone',
+    ],
+    [
+      'the native-menu deviation on an op a window calls',
+      registry(
+        { 'test.yours': op({ access: yours, kind: 'command', scope: 'none' }) },
+        { deviations: { 'test.yours': 'native-menu' } },
+      ),
+      'test.yours: the native-menu deviation, but a window calls it (no host)',
     ],
     [
       'a deviation that no longer deviates',

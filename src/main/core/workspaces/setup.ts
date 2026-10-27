@@ -158,6 +158,8 @@ export interface SetupService {
   running(workspace: string): boolean;
   /** The local files copied into the workspace, by name (none: unknown): never committed by it. */
   copied?(workspace: string): readonly string[] | undefined;
+  /** How many setup commands run (or wait to run) now: jobs, to the core's presence (B14 C5). */
+  jobs(): number;
   /**
    * Its workspace removed (B9a C7's cleanup): what runs there is ended, and what its setup kept
    * beside the database (its log, its copy record) removed.
@@ -1007,6 +1009,10 @@ export class WorkspaceSetups implements SetupService {
    */
   copied(workspace: string): readonly string[] | undefined {
     return this.#quietly(() => this.#copyRecord(workspace))?.files.map((file) => file.path);
+  }
+
+  jobs(): number {
+    return this.#attempts.size;
   }
 
   async forget(workspace: string): Promise<void> {

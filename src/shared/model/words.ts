@@ -351,3 +351,17 @@ export function warningText(
     hold.resetsAt === null ? '' : ` It resets at ${resetTime(hold.resetsAt, now, locale)}.`;
   return `${holdText(hold, catalog)}.${reset}`;
 }
+
+/** An MCP server, as the core names it: by the name it is configured under (untrusted), quoted. */
+export function mcpServerWords(server: string): string {
+  return server.trim() === '' ? 'An MCP server' : `MCP server “${server}”`;
+}
+
+/**
+ * What an MCP server asks, in the core's words (B13 C11): never the server's own, which may hold
+ * its link. `host`, where given, names a link's host as its Open names it (C8): for you alone.
+ */
+export function mcpRequestTitle(server: string, link: boolean, host?: string): string {
+  const what = link ? `open a link${host === undefined ? '' : ` on ${host}`}` : 'fill in a form';
+  return `${mcpServerWords(server)} asks you to ${what}`;
+}
