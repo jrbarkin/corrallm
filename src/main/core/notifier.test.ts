@@ -505,3 +505,81 @@ describe('delivery status', () => {
     expect(closed).toEqual([]);
   });
 });
+
+describe('a count held without ids, bounded by what is live at delivery', () => {
+  /** More Needs than a burst holds by id (256): the last is only counted. */
+  const many = (n: number): Item[] => Array.from({ length: n }, (_, i) => prompt(`n${String(i)}`));
+  const canvasId = (i: number) =>
+    `00000000-0000-4000-8000-${String(i).padStart(12, '0')}` as CanvasId;
+
+  it('sends nothing when every Need raised, held by id or only counted, settled before delivery', async () => {
+    opened(A);
+    waits(A, many(257));
+    await vi.advanceTimersByTimeAsync(500);
+    waits(A, []);
+    await vi.advanceTimersByTimeAsync(SETTLED);
+    expect(sent).toEqual([]);
+  });
+
+  it('counts the only-counted Needs no higher than what is live beyond the live ones held by id', async () => {
+    opened(A);
+    waits(A, many(257));
+    await vi.advanceTimersByTimeAsync(500);
+    // 200 of those held by id settle; the counted one still waits: 56 held + 1 counted.
+    waits(A, many(257).slice(200));
+    await vi.advanceTimersByTimeAsync(SETTLED);
+    expect(bodies()).toEqual(['57 things need you']);
+  });
+
+  it('drops the counted Need that settled while every one held by id still waits', async () => {
+    opened(A);
+    waits(A, many(257));
+    await vi.advanceTimersByTimeAsync(500);
+    waits(A, many(256));
+    await vi.advanceTimersByTimeAsync(SETTLED);
+    expect(bodies()).toEqual(['256 things need you']);
+  });
+
+  it('bounds each canvas by its own live Needs', async () => {
+    opened(A);
+    opened(B);
+    waits(B, [prompt('q1')]);
+    waits(A, many(257));
+    await vi.advanceTimersByTimeAsync(500);
+    waits(A, []);
+    await vi.advanceTimersByTimeAsync(SETTLED);
+    expect(bodies()).toEqual(['Worker is asking you something']);
+    expect(notifier.activation(sent[0]?.handle ?? '')).toEqual({
+      canvas: B,
+      need: 'prompt/w/0/q1',
+    });
+  });
+
+  it('closes a shown notification carrying a count once its canvases have no Needs for you left', async () => {
+    opened(A);
+    waits(A, many(257));
+    await vi.advanceTimersByTimeAsync(SETTLED);
+    expect(bodies()).toEqual(['257 things need you']);
+    const [shown] = sent;
+    waits(A, many(257).slice(10));
+    await vi.advanceTimersByTimeAsync(SETTLED);
+    waits(A, many(257).slice(256));
+    await vi.advanceTimersByTimeAsync(SETTLED);
+    expect(closed).toEqual([]);
+    waits(A, []);
+    await vi.advanceTimersByTimeAsync(SETTLED);
+    expect(closed).toEqual([shown?.handle]);
+    expect(notifier.activation(shown?.handle ?? '')).toBeUndefined();
+  });
+
+  it('keeps run-end counts as held: they never go stale', async () => {
+    const ended: FakeRun[] = [];
+    for (let i = 0; i < 257; i++) {
+      ended.push(opened(canvasId(i), [], { running: true, agents: agents('running') }));
+    }
+    for (const run of ended) run.set({ running: false, agents: agents('done') });
+    await vi.advanceTimersByTimeAsync(SETTLED);
+    expect(bodies()).toEqual(['257 things need you']);
+    expect(closed).toEqual([]);
+  });
+});

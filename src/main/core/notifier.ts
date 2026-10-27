@@ -20,7 +20,8 @@ import type { NotificationRequest, NotificationResult } from './presence';
  * Events within NOTIFY_COALESCE_MS of a burst's first go out as one: one event in its own words
  * (notification-text.ts), several as "N things need you"; at most NOTIFY_PER_MINUTE a minute, then
  * one at the next slot for all that waited. Only ids and counts are held, never text: the words
- * are made as it goes, from the names then. Each notification gets a new UUID, mapped to where a
+ * are made as it goes, from the names then. Needs counted past the ids a burst holds are bounded
+ * as it goes by what is live then (per canvas, less its live items held by id). Each notification gets a new UUID, mapped to where a
  * click leads (`{ canvas, need? }`; none for a rollup across canvases: a generic Open), at most
  * MAX_NOTIFICATION_HANDLES (the oldest closed), forgotten (and closed) as its canvas closes, its
  * Need settles (a rollup's, every Need it counted), or notifications turn off. No persistence and
@@ -76,10 +77,16 @@ type Pending =
   | { canvas: CanvasId; need: string; kind: NeedsItem['kind']; agent?: string }
   | { canvas: CanvasId; run: 'finished' | 'stopped' };
 
+/** Events past the ones held by id, only counted: Needs (bounded at delivery) and run endings. */
+interface Counted {
+  needs: number;
+  runs: number;
+}
+
 /** Events going out as one: those held by id, those only counted, and their canvases. */
 interface Batch {
   events: Pending[];
-  extra: Map<CanvasId, number>;
+  extra: Map<CanvasId, Counted>;
   canvases: Set<CanvasId>;
 }
 
@@ -98,6 +105,11 @@ interface Shown {
   need?: string;
   /** Its Needs' keys still waiting: none to track (a run's end, a count) when undefined. */
   needs?: Set<string>;
+  /**
+   * The canvases whose Needs it counts without ids: closed once none of its canvases has a Need
+   * for you left (their ids were never held, so they can't be settled one by one).
+   */
+  counted?: Set<CanvasId>;
 }
 
 export class Notifier {
@@ -151,10 +163,15 @@ export class Notifier {
     this.#prune((event) => event.canvas !== canvas, canvas);
     for (const [handle, shown] of this.#shown) {
       shown.canvases.delete(canvas);
+      shown.counted?.delete(canvas);
       for (const key of shown.needs ?? []) {
         if (key.startsWith(`${canvas}\u0000`)) shown.needs?.delete(key);
       }
-      if (shown.canvas === canvas || shown.canvases.size === 0 || shown.needs?.size === 0)
+      if (
+        shown.canvas === canvas ||
+        shown.canvases.size === 0 ||
+        (shown.needs?.size === 0 && (shown.counted?.size ?? 0) === 0)
+      )
         this.#withdraw(handle);
     }
   }
@@ -266,6 +283,7 @@ export class Notifier {
     watched.seen = now;
     if (before === undefined) return;
     for (const id of before) if (!now.has(id)) this.#settled(canvas, id);
+    this.#withdrawCounted();
     if (!eligible) return;
     const added = new Set<string>();
     for (const item of items) {
@@ -294,7 +312,37 @@ export class Notifier {
     this.#prune((event) => !('need' in event && event.canvas === canvas && event.need === id));
     const key = keyOf(canvas, id);
     for (const [handle, shown] of this.#shown) {
-      if (shown.needs?.delete(key) === true && shown.needs.size === 0) this.#withdraw(handle);
+      if (
+        shown.needs?.delete(key) === true &&
+        shown.needs.size === 0 &&
+        shown.counted === undefined
+      )
+        this.#withdraw(handle);
+    }
+  }
+
+  /** Closes the notifications counting Needs without ids once their canvases have none left. */
+  #withdrawCounted(): void {
+    for (const [handle, shown] of this.#shown) {
+      if (shown.counted === undefined) continue;
+      if ([...shown.canvases].every((canvas) => this.#canvases.get(canvas)?.seen?.size === 0))
+        this.#withdraw(handle);
+    }
+  }
+
+  /** What waits for you on a canvas the core runs now, by id (the last seen if it can't be read). */
+  #live(canvas: CanvasId): ReadonlySet<string> {
+    if (!this.#deps.runs(canvas)) return new Set();
+    try {
+      return new Set(
+        this.#deps
+          .needs(canvas)
+          .filter((item) => item.for === 'you')
+          .map(({ id }) => id),
+      );
+    } catch {
+      console.error('corrallm couldn’t read what waits for you, for its notifications.');
+      return this.#canvases.get(canvas)?.seen ?? new Set();
     }
   }
 
@@ -357,13 +405,38 @@ export class Notifier {
 
   #send(batch: Batch): void {
     if (this.#closed || this.#focused || !this.#deps.enabled()) return;
-    const extra = extraCount(batch);
-    const total = batch.events.length + extra;
+    // Needs counted without ids can't be settled one by one: per canvas, at most the Needs for you
+    // it has now beyond the live ones held by id. Run endings never go stale, and stay as held.
+    const live = new Map<CanvasId, ReadonlySet<string>>();
+    const liveOf = (canvas: CanvasId) => {
+      let ids = live.get(canvas);
+      if (ids === undefined) live.set(canvas, (ids = this.#live(canvas)));
+      return ids;
+    };
+    const counted = new Map<CanvasId, number>();
+    let ended = 0;
+    const canvases = new Set(batch.events.map(({ canvas }) => canvas));
+    for (const [canvas, extra] of batch.extra) {
+      if (extra.runs > 0) {
+        ended += extra.runs;
+        canvases.add(canvas);
+      }
+      if (extra.needs === 0) continue;
+      const ids = liveOf(canvas);
+      const held = batch.events.filter(
+        (event) => event.canvas === canvas && 'need' in event && ids.has(event.need),
+      ).length;
+      const bound = Math.min(extra.needs, Math.max(0, ids.size - held));
+      if (bound === 0) continue;
+      counted.set(canvas, bound);
+      canvases.add(canvas);
+    }
+    let total = batch.events.length + ended;
+    for (const count of counted.values()) total += count;
     if (total === 0) return;
     const [only] = batch.events;
     let subject: NotificationSubject;
     let shown: Shown;
-    const canvases = new Set(batch.canvases);
     if (total === 1 && only !== undefined) {
       if ('run' in only) {
         subject = { kind: only.run, canvas: this.#deps.canvasName(only.canvas) };
@@ -389,15 +462,17 @@ export class Notifier {
       }
     } else {
       subject = { kind: 'rollup', count: total };
-      const [canvas] = batch.canvases;
+      const [canvas] = canvases;
       const needs = batch.events.flatMap((event) =>
         'need' in event ? [keyOf(event.canvas, event.need)] : [],
       );
+      // Withdrawn by its Needs only if it counted nothing else.
+      const onlyNeeds = ended === 0 && needs.length === batch.events.length;
       shown = {
         canvases,
-        ...(batch.canvases.size === 1 && canvas !== undefined ? { canvas } : {}),
-        // Withdrawn by its Needs only if it counted nothing else.
-        ...(extra === 0 && needs.length === batch.events.length ? { needs: new Set(needs) } : {}),
+        ...(canvases.size === 1 && canvas !== undefined ? { canvas } : {}),
+        ...(onlyNeeds ? { needs: new Set(needs) } : {}),
+        ...(onlyNeeds && counted.size > 0 ? { counted: new Set(counted.keys()) } : {}),
       };
     }
     const handle = crypto.randomUUID();
@@ -478,20 +553,23 @@ function keyOf(canvas: CanvasId, need: string): string {
 
 function add(batch: Batch, event: Pending): void {
   batch.canvases.add(event.canvas);
-  if (batch.events.length < MAX_PENDING) batch.events.push(event);
-  else batch.extra.set(event.canvas, (batch.extra.get(event.canvas) ?? 0) + 1);
+  if (batch.events.length < MAX_PENDING) {
+    batch.events.push(event);
+    return;
+  }
+  const extra = batch.extra.get(event.canvas) ?? { needs: 0, runs: 0 };
+  if ('need' in event) extra.needs += 1;
+  else extra.runs += 1;
+  batch.extra.set(event.canvas, extra);
 }
 
 function merge(into: Batch, from: Batch): void {
   for (const event of from.events) add(into, event);
   for (const [canvas, count] of from.extra) {
     into.canvases.add(canvas);
-    into.extra.set(canvas, (into.extra.get(canvas) ?? 0) + count);
+    const extra = into.extra.get(canvas) ?? { needs: 0, runs: 0 };
+    extra.needs += count.needs;
+    extra.runs += count.runs;
+    into.extra.set(canvas, extra);
   }
-}
-
-function extraCount(batch: Batch): number {
-  let count = 0;
-  for (const extra of batch.extra.values()) count += extra;
-  return count;
 }
