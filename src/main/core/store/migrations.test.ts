@@ -118,6 +118,7 @@ describe('the schema', () => {
       { name: 'document', strict: 1, wr: 1 },
       { name: 'file_review', strict: 1, wr: 0 },
       { name: 'link', strict: 1, wr: 1 },
+      { name: 'merge_job', strict: 1, wr: 0 },
       { name: 'message', strict: 1, wr: 0 },
       { name: 'meta', strict: 1, wr: 0 },
       { name: 'node', strict: 1, wr: 1 },
@@ -1029,7 +1030,7 @@ describe('migration 4', () => {
     keep3({ id: 'yours', state: 'pending' });
     const before = messagesOf();
 
-    migrate(connection);
+    migrate(connection, MIGRATIONS.slice(0, 4));
 
     expect(schemaOf(connection)).toBe(4);
     expect(minReaderOf(connection)).toBe(4);
@@ -1348,7 +1349,7 @@ describe('migration 4', () => {
       messages: { version: 1, agents: [] },
     });
     connection.exec('DROP TRIGGER refuse');
-    migrate(connection);
+    migrate(connection, MIGRATIONS.slice(0, 4));
     expect(schemaOf(connection)).toBe(4);
   });
 });
@@ -1378,5 +1379,132 @@ describe('schema 4: messages', () => {
     ] as const) {
       expect(() => add.run(id, CANVAS, origin, display, resendOf), id).toThrow(/constraint failed/);
     }
+  });
+});
+
+const MERGE_JOB = '5e3c1a0b-7d2f-4a61-9b8e-0c1d2e3f4a51';
+const OTHER_JOB = '5e3c1a0b-7d2f-4a61-9b8e-0c1d2e3f4a52';
+const REQUEST = '6f4d2b1c-8e3a-4b72-8c9f-1d2e3f4a5b61';
+const OTHER_REQUEST = '6f4d2b1c-8e3a-4b72-8c9f-1d2e3f4a5b62';
+
+/** Records a merge job of the canvas's repository (B9b §9 C8), as the merge service would. */
+function addMergeJob(
+  id: string,
+  {
+    canvas = CANVAS,
+    workspace = W1,
+    caller = 'you',
+    request = REQUEST,
+    intent = '{"version":1}',
+    phase = 'installing',
+    outcome = null,
+  }: {
+    canvas?: string;
+    workspace?: string;
+    caller?: string;
+    request?: string;
+    intent?: string;
+    phase?: string;
+    outcome?: string | null;
+  } = {},
+): void {
+  connection
+    .prepare(
+      `INSERT INTO merge_job (id, canvas_id, agent_id, workspace_id, repository_id, caller_key,
+         request_id, intent, intent_hash, phase, outcome, created_at, updated_at)
+       VALUES (?, ?, 'a', ?, ?, ?, ?, ?, ?, ?, ?, 1, 1)`,
+    )
+    .run(
+      id,
+      canvas,
+      workspace,
+      REPOSITORY,
+      caller,
+      request,
+      intent,
+      'c'.repeat(64),
+      phase,
+      outcome,
+    );
+}
+
+describe('schema 5: merge jobs', () => {
+  beforeEach(() => {
+    migrate(connection);
+    connection.exec('PRAGMA foreign_keys = ON');
+    addCanvas();
+    addRepository();
+  });
+
+  it('keeps one merge going on per repository, and any number settled', () => {
+    addMergeJob(MERGE_JOB);
+    expect(() => {
+      addMergeJob(OTHER_JOB, { request: OTHER_REQUEST });
+    }).toThrow(/UNIQUE constraint failed: merge_job\.repository_id/);
+    for (const outcome of ['merged', 'refused', 'interrupted', 'held', 'superseded']) {
+      connection.prepare('UPDATE merge_job SET outcome = ? WHERE id = ?').run(outcome, MERGE_JOB);
+    }
+    addMergeJob(OTHER_JOB, { request: OTHER_REQUEST });
+    expect(count('merge_job')).toBe(2);
+  });
+
+  it('answers a caller’s request once: another caller may use the same id', () => {
+    addMergeJob(MERGE_JOB, { outcome: 'merged' });
+    expect(() => {
+      addMergeJob(OTHER_JOB, { outcome: 'merged' });
+    }).toThrow(/UNIQUE constraint failed: merge_job\.caller_key, merge_job\.request_id/);
+    addMergeJob(OTHER_JOB, { caller: 'token:0f1e2d3c-4b5a-4968-8776-655443322110' });
+  });
+
+  it('keeps its intent valid JSON, and only its phases and outcomes', () => {
+    expect(() => {
+      addMergeJob(MERGE_JOB, { intent: 'not JSON' });
+    }).toThrow(/CHECK constraint failed/);
+    expect(() => {
+      addMergeJob(MERGE_JOB, { phase: 'merging' });
+    }).toThrow(/CHECK constraint failed/);
+    expect(() => {
+      addMergeJob(MERGE_JOB, { outcome: 'done' });
+    }).toThrow(/CHECK constraint failed/);
+    for (const phase of ['installing', 'installed', 'published', 'done']) {
+      connection.prepare('DELETE FROM merge_job').run();
+      addMergeJob(MERGE_JOB, { phase });
+    }
+  });
+
+  it('outlives its workspace’s cleanup, goes with its canvas, and keeps its repository', () => {
+    addWorktree(W1, 'agent/a');
+    addMergeJob(MERGE_JOB, { outcome: 'merged' });
+    connection.prepare('DELETE FROM worktree WHERE id = ?').run(W1);
+    expect(count('merge_job')).toBe(1);
+    expect(() => connection.prepare('DELETE FROM repository').run()).toThrow(
+      /FOREIGN KEY constraint failed/,
+    );
+    connection.prepare('DELETE FROM canvas WHERE id = ?').run(CANVAS);
+    expect(count('merge_job')).toBe(0);
+  });
+});
+
+describe('migration 5', () => {
+  it('adds merge jobs to a schema-4 database keeping every row, which a schema-4 corrallm may no longer open', () => {
+    migrate(connection, MIGRATIONS.slice(0, 4));
+    connection.exec('PRAGMA foreign_keys = ON');
+    addCanvas();
+    addMessage('kept');
+    addRepository();
+    addWorktree(W1, 'agent/a');
+    bind('a', W1);
+    addJob('j1', W1, 'create', 'done');
+    const kept = ['canvas', 'message', 'repository', 'worktree', 'agent_worktree', 'worktree_job'];
+    const rowsOf = (table: string) => connection.prepare(`SELECT * FROM ${table}`).all();
+    const before = Object.fromEntries(kept.map((table) => [table, rowsOf(table)]));
+
+    migrate(connection);
+
+    expect(schemaOf(connection)).toBe(5);
+    expect(minReaderOf(connection)).toBe(5);
+    expect(Object.fromEntries(kept.map((table) => [table, rowsOf(table)]))).toEqual(before);
+    expect(count('merge_job')).toBe(0);
+    addMergeJob(MERGE_JOB);
   });
 });
