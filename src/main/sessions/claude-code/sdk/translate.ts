@@ -177,6 +177,11 @@ export class Translator {
     return this.#background.some((task) => task.id === id);
   }
 
+  /** What task `id`, running in the background now, is, as the CLI described it. */
+  backgroundTask(id: string): BackgroundTask | undefined {
+    return this.#background.find((task) => task.id === id);
+  }
+
   /** The models the session offers, and the one it was started with. */
   setModels(models: readonly ModelInfo[], current: string | null): void {
     this.#models = models;

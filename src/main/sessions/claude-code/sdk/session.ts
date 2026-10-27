@@ -40,6 +40,11 @@ import type { Translator } from './translate';
  * long as the session does. Messages go in through the query's inbox, one per turn; what the CLI
  * says comes back through the translator as session events; prompts wait on the user. Each turn
  * ends with the CLI's result for the message that started it.
+ *
+ * The session declares a per-task stop (perTaskStopAffordance), so an interrupt spares what runs in
+ * the background. A turn interrupted (Kill, a withdrawal, Stop) still ends the background tasks it
+ * started itself (B14: Kill ends what the killed turn started): by id, with stopTask, each bounded,
+ * before its end lets the next message go. An earlier turn's tasks are left running.
  */
 
 const CLAUDE_EFFORT_LEVELS = Object.keys(CLAUDE_EFFORTS) as EffortLevel[];
@@ -48,6 +53,8 @@ const CLAUDE_EFFORT_LEVELS = Object.keys(CLAUDE_EFFORTS) as EffortLevel[];
 const PLAN_EXIT_MS = 1500;
 /** How long the session's last error output is kept, to say why it stopped. */
 const STDERR_CHARS = 4000;
+/** How long stopping each background task an interrupted turn started may take, before going on. */
+const STOP_TASK_MS = 2000;
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -108,6 +115,8 @@ export class SdkSession implements LiveSession {
   readonly #peers: PeerMessages | undefined;
   /** Messages sent whose turn has not ended: the CLI's uuid for each, and the renderer's id. */
   readonly #pending = new Map<string, string>();
+  /** The background tasks the turns going on started (task_started while one was pending). */
+  readonly #started = new Set<string>();
   #mode: PermissionMode | null;
   #interrupting = false;
   #closing = false;
@@ -349,6 +358,9 @@ export class SdkSession implements LiveSession {
     if (message.type === 'system' && message.subtype === 'commands_changed') {
       this.#host.emit({ type: 'commands', commands: SdkSession.commands(message.commands) });
     }
+    if (message.type === 'system' && message.subtype === 'task_started' && this.#pending.size > 0) {
+      this.#started.add(message.task_id);
+    }
     for (const event of this.#translator.translate(message)) {
       if (event.type === 'mode' && event.mode !== null && isPermissionMode(event.mode))
         this.#mode = event.mode;
@@ -399,10 +411,50 @@ export class SdkSession implements LiveSession {
     if (ours.length === 0 && this.#pending.size > 0) return;
     const interrupted =
       this.#interrupting || result.terminal_reason?.startsWith('aborted') === true;
-    this.#end(ours, {
+    const ending = {
       seconds: result.duration_ms / 1000,
       result: this.#translator.takeResult(result, interrupted),
+    };
+    // Interrupted: what it started in the background ends with it, before the next message goes.
+    const started = interrupted
+      ? [...this.#started].filter((id) => this.#translator.runsInBackground(id))
+      : [];
+    if (started.length === 0) {
+      this.#end(ours, ending);
+      return;
+    }
+    void this.#stopStarted(started).then(() => {
+      if (!this.#closing) this.#end(ours, ending);
     });
+  }
+
+  /** Stops each background task an interrupted turn started; one that won't is said, not waited for. */
+  async #stopStarted(ids: readonly string[]): Promise<void> {
+    await Promise.all(
+      ids.map(async (id) => {
+        const what = this.#translator.backgroundTask(id)?.description ?? 'a task';
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        try {
+          await Promise.race([
+            this.#query.stopTask(id),
+            new Promise((_, reject) => {
+              timer = setTimeout(() => {
+                reject(new Error('it did not answer'));
+              }, STOP_TASK_MS);
+            }),
+          ]);
+        } catch {
+          this.#host.emit({
+            type: 'notice',
+            id: randomUUID(),
+            level: 'warning',
+            text: `Could not stop ${what}, which the interrupted turn started in the background: it may still be running.`,
+          });
+        } finally {
+          clearTimeout(timer);
+        }
+      }),
+    );
   }
 
   #end(uuids: readonly string[], ending: { seconds: number; result: TurnResult }): void {
@@ -412,7 +464,11 @@ export class SdkSession implements LiveSession {
       this.#pending.delete(uuid);
       return id === undefined ? [] : [id];
     });
-    if (this.#pending.size === 0) this.#interrupting = false;
+    if (this.#pending.size === 0) {
+      this.#interrupting = false;
+      // What a turn that ended started in the background is earlier work from now on.
+      this.#started.clear();
+    }
     const event: SessionEvent = {
       type: 'end',
       messages,
