@@ -168,6 +168,75 @@ describe.skipIf(process.platform === 'win32')('a merge', () => {
     expect(w.g(w.app, 'rev-parse', 'main')).toBe(head);
   });
 
+  it('answers concurrent copies of one request with its first result, merging once', async () => {
+    const pause = pauseAt('prepared');
+    const w = await make({ deps: { fault: pause.fault } });
+    const tip = w.work(w.cwd, { 'agent.txt': 'agent\n' });
+    const before = w.work(w.app, { 'main.txt': 'main\n' });
+    const request = w.request();
+    const first = w.service.merge(request);
+    await pause.reached;
+    const second = w.service.merge(request);
+    pause.resume();
+
+    const [one, two] = await Promise.all([first, second]);
+
+    expect(merged(one)).toMatchObject({ outcome: 'merged' });
+    expect(two).toEqual(one);
+    const head = w.g(w.app, 'rev-parse', 'main');
+    expect(w.g(w.app, 'rev-list', '--parents', '-n1', head)).toBe(`${head} ${before} ${tip}`);
+    expect(w.journal.latest(w.tree.id)).toMatchObject({
+      outcome: 'merged',
+      requestId: request.request,
+    });
+  });
+
+  it.each(['preparation', 'install'] as const)(
+    'rechecks the caller after the last reads before %s writes',
+    async (stage) => {
+      let authorized = true;
+      let recorded = false;
+      const w = await make({
+        deps: {
+          fault: (point) => {
+            if (point === 'recorded') recorded = true;
+            return Promise.resolve();
+          },
+        },
+      });
+      w.work(w.cwd, { 'agent.txt': 'agent\n' });
+      const before = w.work(w.app, { 'main.txt': 'main\n' });
+      const contents = () => (stage === 'preparation' ? listing(w.app) : everything(w));
+      const was = contents();
+      const run = w.git.run.bind(w.git);
+      let writesAfter = 0;
+      const read = vi.spyOn(w.git, 'run').mockImplementation(async (call) => {
+        const result = await run(call);
+        if (
+          (stage === 'preparation' &&
+            call.args[0] === 'merge-base' &&
+            !call.args.includes('--is-ancestor')) ||
+          (stage === 'install' && recorded && call.args.includes('ORIG_HEAD'))
+        )
+          authorized = false;
+        if (call.args[0] === 'merge-tree' && !authorized) writesAfter++;
+        return result;
+      });
+      let answer;
+      try {
+        answer = await w.service.merge(w.request({ authorized: () => authorized }));
+      } finally {
+        read.mockRestore();
+      }
+
+      expect(authorized).toBe(false);
+      expect(refusal(answer).code).toBe('not-found');
+      expect(w.g(w.app, 'rev-parse', 'main')).toBe(before);
+      expect(writesAfter).toBe(0);
+      expect(differing(was, contents())).toEqual([]);
+    },
+  );
+
   it('merges into a linked picked checkout: its own index and HEAD, the main checkout untouched', async () => {
     // The canvas's project folder is a linked checkout of the repository, on feature.
     const w = await make({ linked: 'feature' });

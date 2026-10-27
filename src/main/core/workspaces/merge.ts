@@ -19,6 +19,7 @@ import {
   checkClean,
   checkIncoming,
   checkOrigHead,
+  hiddenEntries,
   readOrigHead,
   restoreOrigHead,
   statusEntries,
@@ -419,6 +420,10 @@ export class MergeService {
   async #lane(job: Job): Promise<MergeResult> {
     const { canvas } = job.request;
     this.#stopping(job);
+    // Another copy may have queued before the first one recorded its intent. The repository's
+    // lane has now finished that call: answer it before reading the pins the first merge moved.
+    const kept = this.#deps.journal.byRequest(job.request.caller.key, job.request.request);
+    if (kept !== undefined) return answered(kept, job.args, job.name);
     // One a restart couldn't reconcile is tried again before any other merge into its repository.
     const repository = this.#deps.workspaces.worktree(job.admitted.workspace)?.repository;
     const open = repository === undefined ? undefined : this.#deps.journal.openIn(repository);
@@ -497,7 +502,7 @@ export class MergeService {
     const checkpoint =
       digest === null ? null : await this.#checkpoint(job, source, destination.commonDir, digest);
     const merged = checkpoint ?? source.tip;
-    const tree = await this.#mergeTree(job, destination, merged);
+    const tree = await this.#mergeTree(job, source, destination, merged);
     const you = await identity(git, destination);
     const commit = await objects(destination.commonDir, () =>
       git.commitTree({
@@ -577,6 +582,7 @@ export class MergeService {
     try {
       await this.#lastCheck(job, source, destination, intent);
       // Closing or the caller gone, asked with nothing awaited before the install begins below.
+      this.#revalidate(job, source);
       this.#stopping(job);
     } catch (error) {
       const refused =
@@ -711,7 +717,12 @@ export class MergeService {
   }
 
   /** `merge-tree` of your branch's commit and `merged`, in your checkout (§9 C7): its tree. */
-  async #mergeTree(job: Job, destination: MergeDestination, merged: string): Promise<string> {
+  async #mergeTree(
+    job: Job,
+    source: MergeSource,
+    destination: MergeDestination,
+    merged: string,
+  ): Promise<string> {
     const { git } = this.#deps;
     const branch = job.request.source.ref;
     try {
@@ -726,6 +737,8 @@ export class MergeService {
           `${job.name}’s branch and ${shown(destination.branch)} share no history, so corrallm doesn’t merge them.`,
         );
       }
+      this.#revalidate(job, source);
+      this.#stopping(job);
       const result = await objects(destination.commonDir, () =>
         git.run({
           cwd: destination.root,
@@ -895,11 +908,7 @@ export class MergeService {
         const named = new Set(inTheWay(failed.stderr));
         const seen = await this.#observe(destination, intent, named).catch(() => undefined);
         if (seen?.kind === 'untouched') {
-          const restored = await restoreOrigHead(git, destination, {
-            recorded: intent.origHead,
-            wrote: before,
-          }).then(
-            () => true,
+          const restored = await this.#restoreOrigHead(destination, intent, seen.orig).catch(
             () => false,
           );
           if (restored) {
@@ -1116,6 +1125,26 @@ export class MergeService {
     }
   }
 
+  /** An untouched checkout needs either its recorded ORIG_HEAD already, or a successful restore. */
+  async #restoreOrigHead(
+    destination: MergeDestination,
+    intent: MergeIntent,
+    orig: OrigHead,
+  ): Promise<boolean> {
+    if (
+      (orig.kind === 'none' && intent.origHead === null) ||
+      (orig.kind === 'oid' && orig.oid === intent.origHead)
+    ) {
+      return true;
+    }
+    return (
+      (await restoreOrigHead(this.#deps.git, destination, {
+        recorded: intent.origHead,
+        wrote: intent.destination.oid,
+      })) === 'restored'
+    );
+  }
+
   /**
    * What your checkout shows of a merge (a restart's reconciliation, a refused install, the
    * postconditions), read writing nothing and taking no lock. `named`: untracked files Git named
@@ -1139,6 +1168,12 @@ export class MergeService {
     const at = await branchTip(git, destination.root, destination.drivers, destination.branch);
     const orig = await readOrigHead(git, destination);
     if (orig.kind === 'symbolic' || orig.kind === 'unreadable') return { kind: 'other' };
+    const index = await git.run({
+      ...reading(destination),
+      maxBytes: LISTING_BYTES,
+      args: ['ls-files', '-v', '-z'],
+    });
+    if (hiddenEntries(index.stdout).length > 0) return { kind: 'other' };
     const status = await git.run({
       ...reading(destination),
       maxBytes: LISTING_BYTES,
@@ -1164,8 +1199,12 @@ export class MergeService {
           oid,
         ])
       ).code === 0;
-    if (entries.length === 0 && at === m) return { kind: 'installed', orig };
-    if (at === before && entries.every((entry) => entry.kind === '?' && named.has(entry.path))) {
+    if (entries.length === 0 && at === m && (await indexIs(m))) return { kind: 'installed', orig };
+    if (
+      at === before &&
+      entries.every((entry) => entry.kind === '?' && named.has(entry.path)) &&
+      (await indexIs(before))
+    ) {
       return { kind: 'untouched', orig };
     }
     if (
@@ -1335,10 +1374,13 @@ export class MergeService {
         ? ({ kind: 'other' } as const)
         : await this.#observe(destination, intent);
     if (seen.kind === 'untouched') {
-      await restoreOrigHead(git, destination, {
-        recorded: intent.origHead,
-        wrote: intent.destination.oid,
-      });
+      if (!(await this.#restoreOrigHead(destination, intent, seen.orig))) {
+        await this.#settle(job, {
+          outcome: 'held',
+          sentence: heldSentence(intent.destination.branch),
+        });
+        return;
+      }
       const name = this.#deps.nameOf(job.canvas, job.agent) ?? job.agent;
       await this.#settle(job, {
         outcome: 'interrupted',
@@ -1373,6 +1415,13 @@ export class MergeService {
         });
       } finally {
         verifyMergeWrites(destination.commonDir, writes);
+      }
+      if ((await this.#observe(destination, intent)).kind !== 'installed') {
+        await this.#settle(job, {
+          outcome: 'held',
+          sentence: heldSentence(intent.destination.branch),
+        });
+        return;
       }
     }
     const installed =
