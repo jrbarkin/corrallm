@@ -4,6 +4,7 @@ import {
   readFileSync,
   readdirSync,
   symlinkSync,
+  utimesSync,
   writeFileSync,
 } from 'node:fs';
 import path from 'node:path';
@@ -523,6 +524,50 @@ describe.skipIf(process.platform === 'win32')('GitRunner', () => {
       await git2.patch({ cwd: here, command: 'log', args: ['-p', '-1'] });
       await git2.patch({ cwd: here, command: 'show', args: [] });
       expect(ran(sentinel)).toEqual([]);
+    });
+
+    it('takes its paths literally, takes no lock, and reads capped when asked (B9b §9 C2)', async () => {
+      const here = path.join(root, 'here');
+      makeRepository(here, env, { '*': 'star\n', a: 'aaa\n', 'b.txt': 'bbb\n' });
+      writeFileSync(path.join(here, '*'), 'star, changed\n');
+      writeFileSync(path.join(here, 'a'), 'aaa, changed\n');
+      // Stat-dirty, same bytes: a plain diff would refresh the index, rewriting it.
+      const old = new Date(Date.now() - 3_600_000);
+      utimesSync(path.join(here, 'b.txt'), old, old);
+      const index = path.join(here, '.git', 'index');
+      const before = readFileSync(index);
+      const git2 = runner();
+      const { drivers } = await git2.inspect(here);
+      const literal = await git2.patch({
+        cwd: here,
+        command: 'diff',
+        args: ['HEAD', '--', '*'],
+        drivers,
+      });
+      // `*` is the file of that name, not a glob over every other.
+      expect(literal.stdout).toMatch(/^\+star, changed$/m);
+      expect(literal.stdout).not.toMatch(/aaa/);
+      expect(readFileSync(index)).toEqual(before);
+      writeFileSync(path.join(here, 'a'), 'x\n'.repeat(50_000));
+      const capped = await git2.patch({
+        cwd: here,
+        command: 'diff',
+        args: ['HEAD', '--', 'a'],
+        drivers,
+        cap: 4_096,
+      });
+      expect(capped).toMatchObject({ cut: true, code: null });
+      expect(Buffer.byteLength(capped.stdout)).toBeLessThanOrEqual(4_096);
+      expect(capped.stdout).toMatch(/^diff --git a\/a b\/a\n/);
+      const whole = await git2.patch({
+        cwd: here,
+        command: 'diff',
+        args: ['HEAD', '--', '*'],
+        drivers,
+        cap: 4_096,
+      });
+      expect(whole).toMatchObject({ cut: false, code: 0, stdout: literal.stdout });
+      expect(readFileSync(index)).toEqual(before);
     });
 
     it('runs nothing a submodule’s own configuration names', async () => {

@@ -264,6 +264,45 @@ describe.skipIf(process.platform === 'win32')('MergeWrites', () => {
     }).toThrow(TypeError);
   });
 
+  it('covers ORIG_HEAD’s log, which the install appends to when there is one or every ref is logged', async () => {
+    const at = path.join(root, 'r');
+    mkdirSync(at);
+    git(at, env, 'init', '-q', '-b', 'main');
+    change(at, { 'a.txt': 'a\n' }, 'base');
+    const tree = path.join(root, 'picked');
+    git(at, env, 'worktree', 'add', '-q', '-b', 'dest', tree);
+    git(at, env, 'config', 'core.logAllRefUpdates', 'always');
+    const { m } = await prepared(tree, 'dest');
+    const commonDir = path.join(at, '.git');
+    const gitDir = git(tree, env, 'rev-parse', '--absolute-git-dir').trim();
+    const name = path.basename(gitDir);
+    const before = listing(commonDir, (relative) => relative === 'objects');
+    await runner.install({ cwd: tree, commit: m, merge: { drivers: [] } });
+    expect(
+      differing(
+        before,
+        listing(commonDir, (relative) => relative === 'objects'),
+      ),
+    ).toContain(`worktrees/${name}/logs/ORIG_HEAD`);
+    const writes: MergeWrites = { checkout: gitDir, branch: 'refs/heads/dest' };
+    expect(refusal(commonDir, writes)).toBeUndefined();
+    // Git appends to one that is there whatever logAllRefUpdates says: through a link, elsewhere.
+    const log = path.join(gitDir, 'logs', 'ORIG_HEAD');
+    const kept = `${log}.kept`;
+    renameSync(log, kept);
+    symlinkSync(kept, log);
+    expect(refusal(commonDir, writes)).toBe('symlinked');
+    rmSync(log);
+    renameSync(kept, log);
+    linkSync(log, path.join(root, 'other-name'));
+    expect(refusal(commonDir, writes)).toBe('linked');
+    // A main checkout's, likewise.
+    const main = path.join(commonDir, 'logs', 'ORIG_HEAD');
+    writeFileSync(path.join(root, 'outside'), '');
+    symlinkSync(path.join(root, 'outside'), main);
+    expect(refusal(commonDir, { checkout: commonDir })).toBe('symlinked');
+  });
+
   it('covers a checkpoint’s writes in the agent’s checkout: its branch, its logs, its index', async () => {
     const at = path.join(root, 'r');
     mkdirSync(at);

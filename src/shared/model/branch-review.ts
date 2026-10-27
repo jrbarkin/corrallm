@@ -3,17 +3,25 @@ import { z } from 'zod';
 import { BRANCH_LIMITS, BranchAfter, BranchDigest, BranchOid } from '../api/branch';
 import type { OpResult } from '../api/errors';
 
+/**
+ * The review's state: a SHA-256 the core computes over everything a page's entries are read from
+ * (the workspace, its base, its tip, and the worktree as Git and the file system had it), so a
+ * continuation is refused wherever the work changed, even where the uncommitted digest is null.
+ */
+export const BranchState = BranchDigest;
+
 const Cursor = z.strictObject({
   version: z.literal(1),
   tip: BranchOid,
   digest: BranchDigest.nullable(),
+  state: BranchState,
   position: z
     .int()
     .min(0)
     .max(2 * BRANCH_LIMITS.inventoryEntries),
 });
 export type BranchCursor = z.infer<typeof Cursor>;
-export type BranchReview = Pick<BranchCursor, 'tip' | 'digest'>;
+export type BranchReview = Pick<BranchCursor, 'tip' | 'digest' | 'state'>;
 
 /** Opaque compared values only: no cursor component is ever a Git argument or a reach id. */
 export function encodeBranchCursor(value: BranchCursor): string {
@@ -42,7 +50,11 @@ export function branchPosition(after: string | undefined, current: BranchReview)
   if (after === undefined) return { ok: true, value: 0 };
   const decoded = decodeBranchCursor(after);
   if (!decoded.ok) return decoded;
-  if (decoded.value.tip !== current.tip || decoded.value.digest !== current.digest)
+  if (
+    decoded.value.tip !== current.tip ||
+    decoded.value.digest !== current.digest ||
+    decoded.value.state !== current.state
+  )
     return {
       ok: false,
       error: { code: 'conflict', sentence: 'The work changed since you looked: review it again.' },

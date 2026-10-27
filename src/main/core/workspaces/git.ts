@@ -186,6 +186,12 @@ export interface CappedOutput {
   cut: boolean;
 }
 
+/** A patch's call: its command (diff, log or show) and that command's arguments. */
+export type PatchCall = Omit<GitCall, 'args'> & {
+  command: 'diff' | 'log' | 'show';
+  args: readonly string[];
+};
+
 /** What a repository's configuration is, where a call runs. */
 export interface ConfigInspection {
   /** Every filter driver configured there, includes and conditional includes as they apply. */
@@ -487,12 +493,14 @@ export class GitRunner {
 
   /**
    * A patch (diff, log or show), with safeGitDiffArgs: no external diff, textconv or filter
-   * driver (`drivers`, from `inspect`) runs.
+   * driver (`drivers`, from `inspect`) runs. Its paths are literal (`--literal-pathspecs`: a name
+   * is never a glob or pathspec magic), and it takes no optional lock (`--no-optional-locks`: a
+   * plain diff refreshes the checkout's index, rewriting it). With `cap`, read as `capped` reads.
    */
-  patch(
-    call: Omit<GitCall, 'args'> & { command: 'diff' | 'log' | 'show'; args: readonly string[] },
-  ): Promise<GitOutput> {
-    const { command, args, drivers = [], ...rest } = call;
+  patch(call: PatchCall): Promise<GitOutput>;
+  patch(call: PatchCall & { cap: number }): Promise<CappedOutput>;
+  patch(call: PatchCall & { cap?: number }): Promise<GitOutput | CappedOutput> {
+    const { command, args, drivers = [], cap, ...rest } = call;
     let safe: string[];
     try {
       safe = safeGitDiffArgs(
@@ -502,7 +510,12 @@ export class GitRunner {
     } catch (error) {
       return Promise.reject(new GitError('config', (error as Error).message));
     }
-    return this.run({ ...rest, drivers, args: [...safe, ...args] });
+    const read = {
+      ...rest,
+      drivers,
+      args: ['--literal-pathspecs', '--no-optional-locks', ...safe, ...args],
+    };
+    return cap === undefined ? this.run(read) : this.capped({ ...read, cap });
   }
 
   /** The version of `git`, asked once: what it says, and its numbers (0.0 for none it says). */

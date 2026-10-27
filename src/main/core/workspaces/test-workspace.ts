@@ -43,15 +43,19 @@ export interface TestWorkspaces {
   close(): Promise<void>;
 }
 
-/** A profile and a repository (its files committed once) for one test. */
+/**
+ * A profile and a repository (its files committed once, `init` adding to its `git init`: an object
+ * format, say) for one test.
+ */
 export async function testWorkspaces(
   files: Record<string, string> = { 'README.md': 'hello\n' },
   extra: Partial<GitRunnerDeps> = {},
+  init: readonly string[] = [],
 ): Promise<TestWorkspaces> {
   const { root, remove } = scratch();
   const env = gitEnvironment(path.join(root, 'home'));
   const app = path.join(root, 'app');
-  const base = makeRepository(app, env, files);
+  const base = makeRepository(app, env, files, init);
   const profile = path.join(root, 'profile');
   mkdirSync(profile);
   mkdirSync(path.join(profile, 'workspaces'));
