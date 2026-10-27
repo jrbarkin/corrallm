@@ -174,6 +174,7 @@ export class Notifier {
       )
         this.#withdraw(handle);
     }
+    this.#withdrawCounted();
   }
 
   /**
