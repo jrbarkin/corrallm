@@ -376,6 +376,94 @@ describe('a window gaining focus', () => {
   });
 });
 
+describe('notifications: main’s focus and a click’s handle (B14 C7, C10)', () => {
+  it('tells the core whether any window is focused, a boolean alone', async () => {
+    const heard: unknown[] = [];
+    vi.doMock('./core', async (original) => {
+      const real = await original<typeof CoreModule>();
+      return {
+        ...real,
+        createCore: async (...args: Parameters<typeof real.createCore>) => {
+          const core = await real.createCore(...args);
+          core.focus = (focused) => {
+            heard.push(focused);
+          };
+          return core;
+        },
+      };
+    });
+    try {
+      const entry = await start();
+      // Said before the core is up: heard, in order, once it is.
+      main.emit('focus', true);
+      expect(await entry.init()).toEqual({ ok: true, value: null });
+      main.emit('focus', false);
+      main.emit('focus', 'yes' as unknown as boolean);
+      main.emit('focus', true);
+      await vi.waitFor(() => {
+        expect(heard).toEqual([true, false, true]);
+      });
+    } finally {
+      vi.doUnmock('./core');
+    }
+  });
+
+  it('sends the clicked window one fixed show for a handle the core resolves, and nothing else', async () => {
+    const handle = crypto.randomUUID();
+    const target = { canvas: newCanvasId(), need: 'hold/worker/1/check' };
+    const asked: unknown[] = [];
+    vi.doMock('./core', async (original) => {
+      const real = await original<typeof CoreModule>();
+      return {
+        ...real,
+        createCore: async (...args: Parameters<typeof real.createCore>) => {
+          const core = await real.createCore(...args);
+          core.activation = (named) => {
+            asked.push(named);
+            return named === handle ? target : undefined;
+          };
+          return core;
+        },
+      };
+    });
+    try {
+      const entry = await start();
+      expect(await entry.init()).toEqual({ ok: true, value: null });
+      const shown: Record<number, unknown[]> = { 7: [], 8: [] };
+      const windows = [7, 8].map((id) => {
+        const window = entry.window(id);
+        window.on('show', (show) => {
+          shown[id]?.push(show);
+        });
+        return window;
+      });
+      for (const window of windows) await window.request('call', 'app.info', {});
+      const other = crypto.randomUUID();
+      expect(await main.request('activate', 7, other)).toEqual({ ok: true, value: null });
+      expect(await main.request('activate', 8, handle)).toEqual({ ok: true, value: null });
+      await vi.waitFor(() => {
+        expect(shown).toEqual({ 7: [], 8: [target] });
+      });
+      expect(asked).toEqual([other, handle]);
+    } finally {
+      vi.doUnmock('./core');
+    }
+  });
+
+  it('resolves nothing, and sends nothing, before the core is up or for a window it doesn’t serve', async () => {
+    const entry = await start();
+    expect(await main.request('activate', 7, crypto.randomUUID())).toEqual({
+      ok: true,
+      value: null,
+    });
+    expect(await entry.init()).toEqual({ ok: true, value: null });
+    expect(await main.request('activate', 9, crypto.randomUUID())).toEqual({
+      ok: true,
+      value: null,
+    });
+  });
+});
+
 describe('the profile’s lock, held by the core process', () => {
   it('init takes core.lock as the app’s, before composing, and close lets it go', async () => {
     const entry = await start();

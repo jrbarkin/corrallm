@@ -223,8 +223,17 @@ const link = new CoreLink<CoreSide, HostSide>(
     },
     // Pause all from main's native menus: run.pauseAll, as you at main's own UI (core/gui.ts).
     pauseAll: async () => (await windows.promise).pauseAll(),
-    // C5 supplies notification handles: until then, no handle is known, so nothing is sent.
-    activate: () => null,
+    // A notification's click (B14 C10): its opaque handle, resolved here alone to the canvas and
+    // Need it was about, while the core runs that canvas; that window is told, over its own port,
+    // what to show, and switches itself. Any other handle, or no core yet, sends nothing.
+    activate: async (window, handle) => {
+      const core = await composing;
+      if (core === undefined || !Number.isInteger(window) || typeof handle !== 'string')
+        return null;
+      const target = core.activation(handle);
+      if (target !== undefined) (await windows.promise).show(window, target);
+      return null;
+    },
     selftest: async ({ packaged }) => ({
       checks: await runChecks(selfTestChecks({ packaged })),
       memory: memoryText(),
@@ -239,6 +248,13 @@ link.on('windowGone', (window, closed) => {
 });
 link.on('windowFocused', (window) => {
   void ready.promise.then((core) => core.focused(window));
+});
+// Whether any corrallm window is focused (B14 C7): nothing is notified while one is.
+link.on('focus', (focused) => {
+  if (typeof focused !== 'boolean') return;
+  void ready.promise.then((core) => {
+    core.focus(focused);
+  });
 });
 link.on('resumed', () => {
   void ready.promise.then((core) => {
