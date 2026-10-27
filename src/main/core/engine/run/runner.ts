@@ -133,6 +133,8 @@ export type Admission = 'go' | 'switching' | 'ask';
 
 /** What admission is asked about: a task about to go, or one held on its usage limit. */
 export interface AdmittedWork {
+  /** Work owned by the run: stopping the run also abandons its pending switch. */
+  run?: true;
   /** The fallback rule over its share on the recipient's backend, if one is. */
   rule?: UsageHold;
   /** A task held because its attempt failed on the recipient's usage limit (no return, C8). */
@@ -1227,7 +1229,7 @@ export class RunStore {
       // admitted again as the run moves: corrallm may switch that recipient, then continue it.
       const { problem } = run;
       if (problem?.kind === 'failed' && problem.reason === 'usage-limit')
-        this.#io.admit?.(problem.agent, { held: true });
+        this.#io.admit?.(problem.agent, { run: true, held: true });
       return run;
     }
     const rounds: Record<string, Round> = { ...run.rounds };
@@ -1515,7 +1517,8 @@ export class RunStore {
     // against the recipient's backend; warn, ask and wait keep the owner's, as built (F3).
     const fallback = this.usageRule(destination, now);
     const rule = fallback?.action === 'fallback' ? { rule: fallback.hold } : {};
-    const admitted = this.#io.admit?.(destination, rule) ?? ('rule' in rule ? 'ask' : 'go');
+    const admitted =
+      this.#io.admit?.(destination, { ...rule, run: true }) ?? ('rule' in rule ? 'ask' : 'go');
     if (admitted === 'switching') return { current: task.id, status: 'waiting', outcomes };
     if (admitted === 'ask' && 'rule' in rule)
       return { current: task.id, status: 'asking', outcomes, usage: rule.rule };

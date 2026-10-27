@@ -108,6 +108,8 @@ interface Lane {
   /** This switch's id: what C3's carry names. */
   id: string;
   kind: 'switch' | 'return';
+  /** Run work stops with the run; party delivery has its own admission. */
+  run: boolean;
   why: 'usage-limit' | 'rule';
   /** The agent's entity revision as admission captured it: any change since abandons the switch. */
   rev: number;
@@ -214,6 +216,11 @@ export class FallbackService {
     if (connection === 'unavailable') return otherwise;
     const chain = node.data.fallback;
     const backend = engine.catalog.usageBackendOf(node.data);
+    const blocked = this.#blocked.get(key);
+    if (blocked !== undefined) {
+      if (blocked.rev === revOf(this.#deps.documents.loaded(canvas), agent)) return otherwise;
+      this.#blocked.delete(key);
+    }
     let why: 'usage-limit' | 'rule';
     if (backend !== undefined && this.#deps.usage.durably(backend, now) !== undefined) {
       why = 'usage-limit';
@@ -226,23 +233,18 @@ export class FallbackService {
       chain?.on !== undefined &&
       this.#returns(runtime, chain, now)
     ) {
-      return this.#start(canvas, runtime, node, 'return', chain.on.why, {
+      return this.#start(canvas, runtime, node, work, 'return', chain.on.why, {
         endpoint: chain.on.from,
         step: null,
       });
     } else return 'go';
     if (chain === undefined) return otherwise;
-    const blocked = this.#blocked.get(key);
-    if (blocked !== undefined) {
-      if (blocked.rev === revOf(this.#deps.documents.loaded(canvas), agent)) return otherwise;
-      this.#blocked.delete(key);
-    }
     const walk = this.#walk(runtime, node, now);
     if ('none' in walk) {
       if (why === 'rule') this.#tellNone(runtime, node, walk.none, work.rule);
       return otherwise;
     }
-    return this.#start(canvas, runtime, node, 'switch', why, walk.target, walk.passed);
+    return this.#start(canvas, runtime, node, work, 'switch', why, walk.target, walk.passed);
   }
 
   /**
@@ -404,6 +406,7 @@ export class FallbackService {
     canvas: CanvasId,
     runtime: FallbackRuntime,
     node: AgentNode,
+    work: AdmittedWork,
     kind: 'switch' | 'return',
     why: 'usage-limit' | 'rule',
     target: Target,
@@ -420,6 +423,7 @@ export class FallbackService {
       runtime,
       id: randomUUID(),
       kind,
+      run: work.run === true,
       why,
       rev: revOf(this.#deps.documents.loaded(canvas), node.id),
       from,
@@ -554,6 +558,8 @@ export class FallbackService {
       throw new Abandoned('The agent is gone');
     if (revOf(live, lane.agent) !== lane.rev)
       throw new Abandoned('The agent changed: admission decides again');
+    if (lane.run && !lane.runtime.engine.run.snapshot().running)
+      throw new Abandoned('The run is stopped');
     if (lane.runtime.engine.run.holding({ agent: lane.agent }).length > 0)
       throw new Abandoned('The agent is paused');
     const now = this.#deps.now();
@@ -590,11 +596,8 @@ export class FallbackService {
             { catalog: this.#deps.catalog, defaultAdapter: this.#deps.defaultAdapter },
           );
         },
-        check: (_change, live, losses) => {
-          if (this.#closed || this.#deps.stopping())
-            throw new Abandoned('corrallm is stopping: the switch is decided again as it starts');
-          if (revOf(live, agent) !== lane.rev)
-            throw new Abandoned('The agent changed: admission decides again');
+        check: (_change, _live, losses) => {
+          this.#check(lane);
           const safety = workspaceSafety(losses?.trees ?? [], undefined);
           if (safety.propose !== undefined) throw new Abandoned(safety.propose, true);
           return safety.removals;

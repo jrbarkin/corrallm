@@ -380,6 +380,78 @@ describe('a run’s task that fails on its usage limit (§12.5)', () => {
 });
 
 describe('a fault at every await of the switch (C4), and what a restart decides', () => {
+  it.each(['Pause', 'Kill', 'target exhaustion', 'Stop'] as const)(
+    'rechecks %s when a waiting document change reaches its commit check',
+    async (cause) => {
+      const at = await world(canvasOf(worker({ fallback: { to: [CLAUDE] } })));
+      const entered = Promise.withResolvers<undefined>();
+      const release = Promise.withResolvers<undefined>();
+      const change = at.documents.change.bind(at.documents);
+      const waiting = vi.spyOn(at.documents, 'change').mockImplementation(async (canvas, write) => {
+        if (write.revision.op === 'fallback.switch') {
+          entered.resolve(undefined);
+          await release.promise;
+        }
+        return change(canvas, write);
+      });
+      try {
+        await limited(at, false);
+        await entered.promise;
+        if (cause === 'Pause') at.engine.run.pauseAgent('worker');
+        else if (cause === 'Kill') at.engine.run.killAgent('worker');
+        else if (cause === 'Stop') at.engine.run.pause();
+        else at.exhaust('claude-code');
+        release.resolve(undefined);
+        await quiet(at);
+        expect(at.data()).toMatchObject(CODEX);
+        expect(at.revision()?.op).not.toBe('fallback.switch');
+        expect(at.sent()).toEqual([['worker', 'codex.app-server', 'Say hello']]);
+        expect(at.engine.run.snapshot().agents.worker?.attempts?.hello).toHaveLength(1);
+      } finally {
+        release.resolve(undefined);
+        at.service.close();
+        at.engine.reset();
+        waiting.mockRestore();
+      }
+    },
+  );
+
+  it('abandons run work when Stop arrives during its workspace check', async () => {
+    const at = await world(canvasOf(worker()));
+    const ready = Promise.withResolvers<{ ready: true }>();
+    at.sessions.availability.mockReturnValue(ready.promise);
+    try {
+      await limited(at, false);
+      await vi.waitFor(() => {
+        expect(at.sessions.availability).toHaveBeenCalled();
+      });
+      at.engine.run.pause();
+      ready.resolve({ ready: true });
+      await quiet(at);
+      expect(at.data()).toMatchObject(CODEX);
+      expect(at.sessions.fresh).not.toHaveBeenCalled();
+      expect(at.sent()).toHaveLength(1);
+      at.engine.run.resume();
+      await quiet(at);
+      expect(at.data()).toMatchObject(CLAUDE);
+      expect(at.sent()).toHaveLength(2);
+    } finally {
+      ready.resolve({ ready: true });
+      at.service.close();
+      at.engine.reset();
+    }
+  });
+
+  it('admits a party’s work while the run is stopped', async () => {
+    const at = await world(canvasOf(worker()));
+    at.exhaust('codex');
+    expect(at.engine.run.snapshot().running).toBe(false);
+    expect(at.service.admit(CANVAS, 'worker', {})).toBe('switching');
+    await quiet(at);
+    expect(at.data()).toMatchObject(CLAUDE);
+    expect(at.sent()).toEqual([]);
+  });
+
   /**
    * The worker's task held on its limit, the switch admitted but stopped where `fault` stops it;
    * then, from what is on disk (its document as its rows are, its run as journaled), a new
@@ -715,6 +787,41 @@ describe('switching back at the reset (C8)', () => {
     back: 'return' as const,
     on: { step: 0, from: CODEX, why: 'usage-limit' as const, at: NOW - HOUR },
   };
+
+  it('waits for an availability change before trying a blocked return again', async () => {
+    const at = await world(canvasOf(worker({ ...CLAUDE, fallback: ON })));
+    let checks = 0;
+    at.sessions.availability.mockImplementation(() => {
+      // Bound a regression without leaving an endless admission loop in the test runner.
+      if (++checks > 1) at.service.close();
+      return Promise.resolve({
+        ready: false,
+        reason: 'setup',
+        sentence: 'Its worktree waits for its setup.',
+      });
+    });
+    try {
+      at.engine.run.start();
+      await quiet(at);
+      at.engine.run.admissionChanged();
+      await quiet(at);
+      expect(at.sessions.availability).toHaveBeenCalledOnce();
+      expect(at.data()).toMatchObject(CLAUDE);
+      expect(at.sent()).toEqual([['worker', 'claude-code.terminal', 'Say hello']]);
+      at.sessions.availability.mockResolvedValue({ ready: true });
+      at.service.availabilityChanged(CANVAS);
+      at.end({ status: 'completed', reason: 'completed' }, 'worker', 'claude-code.terminal');
+      await quiet(at);
+      expect(at.data()).toMatchObject(CODEX);
+      expect(at.sent()).toEqual([
+        ['worker', 'claude-code.terminal', 'Say hello'],
+        ['worker', 'codex.app-server', 'Say it again'],
+      ]);
+    } finally {
+      at.service.close();
+      at.engine.reset();
+    }
+  });
 
   it('returns at the next task once its own backend can take work, as corrallm', async () => {
     const at = await world(canvasOf(worker({ ...CLAUDE, fallback: ON })));

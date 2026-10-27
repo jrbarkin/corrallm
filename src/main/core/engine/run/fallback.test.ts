@@ -52,7 +52,7 @@ describe('admission before a task’s attempt goes (B11a C3)', () => {
     run.store.start();
     expect(run.sent).toEqual([]);
     expect(run.where()).toEqual({ a: 'waiting one' });
-    expect(gate.asked()).toContainEqual(['a', {}]);
+    expect(gate.asked()).toContainEqual(['a', { run: true }]);
     // Asked again as the run moves, it says the same: nothing changes.
     run.store.admissionChanged();
     expect(run.sent).toEqual([]);
@@ -102,6 +102,7 @@ describe('the fallback rule (B11a C3)', () => {
       expect(gate.asked()).toContainEqual([
         'a',
         {
+          run: true,
           rule: {
             backend: 'claude-code',
             window: 'fiveHour',
@@ -155,7 +156,7 @@ describe('the fallback rule (B11a C3)', () => {
     run.rule(FALLBACK);
     run.reading(fiveHour(90));
     run.store.start();
-    expect(gate.asked()).toEqual([['b', {}]]);
+    expect(gate.asked()).toEqual([['b', { run: true }]]);
     expect(run.where()).toEqual({ a: 'running hand', b: 'done' });
   });
 
@@ -199,7 +200,7 @@ describe('a task held on its usage limit (B11a C3, C5)', () => {
       text: 'Usage limit. Its fallback chain didn’t act: corrallm can’t tell when this limit ends.',
       agent: 'a',
     });
-    expect(gate.asked()).toContainEqual(['a', { held: true }]);
+    expect(gate.asked()).toContainEqual(['a', { run: true, held: true }]);
     // Nothing is sent again by itself.
     expect(run.sent).toHaveLength(1);
   });
@@ -253,7 +254,7 @@ describe('a task held on its usage limit (B11a C3, C5)', () => {
     expect(failed).toMatchObject({ status: 'failed', reason: 'usage-limit' });
     gate.admit.mockClear();
     expect(run.store.continueAfterSwitch('a', 'check', String(failed?.id))).toBe(true);
-    expect(gate.asked()).toContainEqual(['a', {}]);
+    expect(gate.asked()).toContainEqual(['a', { run: true }]);
     expect(run.sent.map(({ text }) => text)).toEqual(['Try it', 'Check it', 'Check it']);
     const attempts = run.store.snapshot().agents.a?.attempts?.check ?? [];
     expect(attempts).toHaveLength(2);
