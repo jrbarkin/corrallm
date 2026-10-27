@@ -163,6 +163,36 @@ describe.skipIf(process.platform === 'win32')('a crash at each phase, and the re
     expect(w.g(w.app, 'rev-parse', 'main')).toBe(before);
   });
 
+  it('keeps a recorded ORIG_HEAD when the interrupted install never wrote it', async () => {
+    const crash = crashAt('installing');
+    const w = await make({ deps: { fault: crash.fault } });
+    const { tip, before } = diverged(w);
+    w.g(w.app, 'update-ref', '--no-deref', 'ORIG_HEAD', tip);
+    void w.service.merge(w.request());
+    await crash.reached;
+    const was = everything(w);
+
+    await restart(w);
+
+    expect(w.journal.latest(w.tree.id)).toMatchObject({ outcome: 'interrupted' });
+    expect(w.g(w.app, 'rev-parse', 'main')).toBe(before);
+    expect(w.g(w.app, 'rev-parse', 'ORIG_HEAD')).toBe(tip);
+    expect(differing(was, everything(w))).toEqual([]);
+  });
+
+  it('holds an otherwise untouched restart when ORIG_HEAD differs from both recorded commits', async () => {
+    const { w, tip, before } = await crashing('installing');
+    w.g(w.app, 'update-ref', '--no-deref', 'ORIG_HEAD', tip);
+    const was = everything(w);
+
+    await restart(w);
+
+    expect(w.journal.latest(w.tree.id)).toMatchObject({ outcome: 'held' });
+    expect(w.g(w.app, 'rev-parse', 'main')).toBe(before);
+    expect(w.g(w.app, 'rev-parse', 'ORIG_HEAD')).toBe(tip);
+    expect(differing(was, everything(w))).toEqual([]);
+  });
+
   it('step 7, Git having written your index and files but not your branch: the branch moved to the merge, merged', async () => {
     const { w, request, tip, before } = await crashing('installing');
     const m = w.journal.open()[0]?.intent.merge.commit ?? '';
@@ -181,6 +211,38 @@ describe.skipIf(process.platform === 'win32')('a crash at each phase, and the re
       into: { ref: 'refs/heads/main', before, after: m },
       mergeCommit: m,
     });
+  });
+
+  it('checks the destination again after finishing an interrupted branch update', async () => {
+    const { w, before } = await crashing('installing', { checkpoint: true });
+    const job = w.journal.open()[0];
+    const m = job?.intent.merge.commit ?? '';
+    w.g(w.app, 'update-ref', '--no-deref', 'ORIG_HEAD', before);
+    w.g(w.app, 'read-tree', '-m', '-u', before, m);
+    const run = w.git.run.bind(w.git);
+    let finished = false;
+    const read = vi.spyOn(w.git, 'run').mockImplementation(async (call) => {
+      const result = await run(call);
+      if (call.args.includes('corrallm: finish an interrupted merge')) {
+        finished = true;
+        put(w.app, 'README.md', 'changed while the branch update finished\n');
+      }
+      return result;
+    });
+    try {
+      await restart(w);
+    } finally {
+      read.mockRestore();
+    }
+
+    expect(finished).toBe(true);
+    expect(w.journal.latest(w.tree.id)).toMatchObject({ outcome: 'held' });
+    expect(w.g(w.app, 'rev-parse', 'main')).toBe(m);
+    expect(readFileSync(path.join(w.app, 'README.md'), 'utf8')).toBe(
+      'changed while the branch update finished\n',
+    );
+    expect(w.g(w.cwd, 'rev-parse', 'HEAD')).toBe(job?.intent.source.tip);
+    expect(w.g(w.cwd, 'ls-files', '--', 'draft.txt')).toBe('');
   });
 
   it('step 7, Git stopped part way with your index locked: held, nothing reset and no lock removed', async () => {
@@ -386,6 +448,61 @@ describe.skipIf(process.platform === 'win32')('a failure at each phase', () => {
     pause.resume();
     expect(refusal(await going).sentence).toMatch(/may be partly merged/);
     expect(w.journal.latest(w.tree.id)).toMatchObject({ outcome: 'held' });
+  });
+
+  it.each(['--assume-unchanged', '--skip-worktree'])(
+    'holds an installed merge when its destination index marks a file %s',
+    async (flag) => {
+      const pause = pauseAt('installed');
+      const w = await make({ deps: { fault: pause.fault } });
+      diverged(w);
+      const going = w.service.merge(w.request());
+      await pause.reached;
+      w.g(w.app, 'update-index', flag, 'README.md');
+      put(w.app, 'README.md', 'changed after install\n');
+      const was = everything(w);
+      pause.resume();
+
+      expect(refusal(await going).sentence).toMatch(/may be partly merged/);
+      expect(w.journal.latest(w.tree.id)).toMatchObject({ outcome: 'held' });
+      expect(differing(was, everything(w))).toEqual([]);
+      expect(readFileSync(path.join(w.app, 'README.md'), 'utf8')).toBe('changed after install\n');
+    },
+  );
+
+  it('holds a refused install when its ORIG_HEAD can no longer be restored', async () => {
+    const pause = pauseAt('installing');
+    const w = await make({ deps: { fault: pause.fault } });
+    const { before } = diverged(w);
+    const tip = w.work(w.cwd, { 'late.txt': 'agent\n' });
+    const install = w.git.install.bind(w.git);
+    let refused = false;
+    const refusalAt = vi.spyOn(w.git, 'install').mockImplementation(async (call) => {
+      try {
+        return await install(call);
+      } catch (error) {
+        refused = true;
+        w.g(w.app, 'update-ref', '--no-deref', 'ORIG_HEAD', tip);
+        throw error;
+      }
+    });
+    const going = w.service.merge(w.request());
+    await pause.reached;
+    put(w.app, 'late.txt', 'your file\n');
+    pause.resume();
+    let answer;
+    try {
+      answer = await going;
+    } finally {
+      refusalAt.mockRestore();
+    }
+
+    expect(refused).toBe(true);
+    expect(refusal(answer).sentence).toMatch(/may be partly merged/);
+    expect(w.journal.latest(w.tree.id)).toMatchObject({ outcome: 'held' });
+    expect(w.g(w.app, 'rev-parse', 'main')).toBe(before);
+    expect(w.g(w.app, 'rev-parse', 'ORIG_HEAD')).toBe(tip);
+    expect(readFileSync(path.join(w.app, 'late.txt'), 'utf8')).toBe('your file\n');
   });
 
   it('an install that didn’t start from your commit (ORIG_HEAD says another): held', async () => {
