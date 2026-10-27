@@ -609,7 +609,7 @@ describe('SdkConnector', () => {
     expect(events.slice(-2)).toEqual([
       {
         type: 'permission',
-        id: 'toolu_1:prompt',
+        id: expect.stringMatching(/^prompt:[0-9a-f-]{36}$/) as unknown,
         tool: 'Bash',
         summary: 'npm test',
         always: "Yes, and don't ask again for `npm test` commands in shop",

@@ -397,7 +397,7 @@ function ruleWording({
     const prefix = /^(.*?):?\*$/.exec(ruleContent)?.[1];
     return prefix === undefined ? `\`${ruleContent}\`` : `\`${prefix.trim()}\` commands`;
   }
-  const domain = /^domain:(.+)$/.exec(ruleContent)?.[1];
+  const domain = toolName === 'WebFetch' ? /^domain:(.+)$/.exec(ruleContent)?.[1] : undefined;
   if (domain !== undefined) return `fetches from ${domain}`;
   return `${toolName}(${ruleContent})`;
 }

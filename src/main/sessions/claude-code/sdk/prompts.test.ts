@@ -16,6 +16,12 @@ import type { Fixture, RecordedElicitation, RecordedRequest } from './recorded';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
+function shownId(events: readonly HostEvent[], type: 'permission' | 'question' | 'plan'): string {
+  const shown = events.findLast((event) => event.type === type);
+  if (shown === undefined || !('id' in shown)) throw new Error('not shown');
+  return shown.id;
+}
+
 function requests(fixture: Fixture): RecordedRequest[] {
   return recorded(fixture).flatMap((item) => (item.kind === 'canUseTool' ? [item.data] : []));
 }
@@ -72,7 +78,7 @@ describe('Prompts: each native request raised to the core under a fresh key', ()
       },
       {
         type: 'permission',
-        id: 'toolu_01BcsAQYMNM52sfGgGbPDfjx:prompt',
+        id: expect.stringMatching(/^prompt:[0-9a-f-]{36}$/) as unknown,
         tool: 'Write',
         summary: 'notes.txt',
         always: 'Yes, allow all edits during this session',
@@ -123,7 +129,7 @@ describe('Prompts: each native request raised to the core under a fresh key', ()
       message: 'corrallm declined this request: too many wait.',
     });
     expect(events.slice(-2)).toEqual([
-      { type: 'withdrawn', id: 'toolu_01FZuzydzUtCanydjC5wcg2G:prompt' },
+      { type: 'withdrawn', id: shownId(events, 'permission') },
       { type: 'status', status: 'working' },
     ]);
     // Declining one no longer asked does nothing, and never throws.
@@ -148,7 +154,7 @@ describe('Prompts: each native request raised to the core under a fresh key', ()
     expect(await told).toMatchObject({ behavior: 'deny' });
     expect(events.slice(-3)).toEqual([
       { type: 'prompt-ended', key: key(), reason: 'withdrawn' },
-      { type: 'withdrawn', id: 'toolu_01BcsAQYMNM52sfGgGbPDfjx:prompt' },
+      { type: 'withdrawn', id: shownId(events, 'permission') },
       { type: 'status', status: 'working' },
     ]);
     expect(() => {
@@ -290,13 +296,13 @@ describe('Prompts: MCP servers’ requests', () => {
 
 describe('Prompts: the events B13 replaces answered through the owner (until X10)', () => {
   it('translates an old card’s answer to the prompt’s own, answering nothing itself', async () => {
-    const { asking, ask, key } = prompts();
+    const { asking, ask, key, events } = prompts();
     let settled = false;
     const told = ask(first('suggestions-and-denials')).then((result) => {
       settled = true;
       return result;
     });
-    const id = 'toolu_01SGVroyU7WGzKnbgZoSqP31:prompt';
+    const id = shownId(events, 'permission');
     expect(asking.bridge(id, { kind: 'permission', answer: 'once' })).toEqual({
       key: key(),
       answer: { kind: 'choice', value: 'allow' },
@@ -320,10 +326,10 @@ describe('Prompts: the events B13 replaces answered through the owner (until X10
   });
 
   it('refuses to translate what the prompt doesn’t offer, or one no longer asked', () => {
-    const { asking, ask } = prompts();
+    const { asking, ask, events } = prompts();
     void ask(first('ask-rule'));
     expect(() =>
-      asking.bridge('toolu_01FZuzydzUtCanydjC5wcg2G:prompt', {
+      asking.bridge(shownId(events, 'permission'), {
         kind: 'permission',
         answer: 'always',
       }),
@@ -337,20 +343,20 @@ describe('Prompts: the events B13 replaces answered through the owner (until X10
     const { asking, ask, elicit, events } = prompts();
     void ask(first('question-and-plan', 'AskUserQuestion'));
     expect(
-      asking.bridge('toolu_01KfF8V1ijeyNsPd8vxDjdCn:prompt', {
+      asking.bridge(shownId(events, 'question'), {
         kind: 'question',
         answers: ['a.txt'],
       }).answer,
     ).toEqual({ kind: 'questions', answers: { q1: { picked: ['a.txt'] } } });
     expect(
-      asking.bridge('toolu_01KfF8V1ijeyNsPd8vxDjdCn:prompt', {
+      asking.bridge(shownId(events, 'question'), {
         kind: 'question',
         answers: ['c.txt, please'],
       }).answer,
     ).toEqual({ kind: 'questions', answers: { q1: { text: 'c.txt, please' } } });
 
     void ask(first('plan-into-mode'));
-    const plan = 'toolu_0139mcmghNr8iKzvYn3WmFEw:prompt';
+    const plan = shownId(events, 'plan');
     expect(
       asking.bridge(plan, { kind: 'plan', answer: { approve: true, mode: 'auto' } }).answer,
     ).toEqual({ kind: 'choice', value: 'auto' });

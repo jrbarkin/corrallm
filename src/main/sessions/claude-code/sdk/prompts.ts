@@ -19,7 +19,7 @@ import {
 } from './raise';
 import type { Native, Raised } from './raise';
 import type { Places } from './tools';
-import { displayPath, property, proposedDetail, text, toolSummary } from './tools';
+import { property, text } from './tools';
 
 export { DENIED, DENIED_WITH_FEEDBACK } from './raise';
 
@@ -39,7 +39,7 @@ export { DENIED, DENIED_WITH_FEEDBACK } from './raise';
  *   can't read) is declined here, never raised, and the user told.
  * - Until X10 converts the renderer, each raised request is shown as the events B13 replaces too
  *   (`permission`, `question`, `plan`, `elicitation`, `withdrawn` and the session's waiting
- *   status), by the ids they had (a tool call's `<toolUseID>:prompt`, `elicitation:<uuid>`): unless
+ *   status), each under its own fresh view id (`prompt:<uuid>`, `elicitation:<uuid>`): unless
  *   the owner declined it as it was raised. Their answers never reach the CLI from here: `bridge`
  *   translates one into the prompt's own answer and names its key, for the core to answer it
  *   through the owner (X11 removes this).
@@ -119,11 +119,11 @@ export class Prompts {
       places: this.#places,
       modes: this.#modes,
     });
-    const shown = `${options.toolUseID}:prompt`;
+    const shown = `prompt:${randomUUID()}`;
     return this.#raise(
       raised,
       options.signal,
-      (prompt) => shownTool(shown, tool, input, options, prompt, this.#places),
+      (prompt) => shownTool(shown, tool, options, prompt),
       UNANSWERED,
       (why) => ({ behavior: 'deny', message: why }),
     ) as Promise<PermissionResult>;
@@ -240,40 +240,42 @@ export class Prompts {
 function shownTool(
   id: string,
   tool: string,
-  input: Record<string, unknown>,
   options: Parameters<CanUseTool>[2],
   prompt: AdapterPrompt,
-  places: Places,
 ): SessionEvent & { id: string } {
   switch (prompt.kind) {
     case 'question':
       return {
         type: 'question',
         id,
-        questions: askedQuestions(property(input, 'questions')) ?? [],
+        questions: prompt.questions.map((question) => ({
+          header: question.header,
+          text: question.text,
+          options: question.options.map((option) => ({
+            label: option.label,
+            description: option.description ?? '',
+          })),
+          multiple: question.multiple,
+        })),
       };
     case 'plan':
       return { type: 'plan', id, plan: prompt.plan };
-    default: {
-      const detail = proposedDetail(tool, input);
+    case 'approval': {
+      const { detail } = prompt;
       const title =
-        options.title ??
-        (options.blockedPath === undefined
-          ? undefined
-          : `Claude wants to access ${displayPath(options.blockedPath, places)}`);
+        options.title === undefined && options.blockedPath === undefined ? undefined : prompt.title;
       return {
         type: 'permission',
         id,
         tool,
-        summary: toolSummary(tool, input, places),
-        always:
-          prompt.kind === 'approval'
-            ? (prompt.choices.find(({ value }) => value === 'always')?.label ?? null)
-            : null,
+        summary: prompt.summary ?? '',
+        always: prompt.choices.find(({ value }) => value === 'always')?.label ?? null,
         ...(detail === undefined ? {} : { detail }),
         ...(title === undefined ? {} : { title }),
       };
     }
+    case 'form':
+      throw new Error('Not a tool request.');
   }
 }
 
