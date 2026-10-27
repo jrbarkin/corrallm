@@ -47,6 +47,14 @@ const IGNORED_BYTES = 4 * 1024 * 1024;
 /** How many bytes of names one call takes, well within every platform's argument limit. */
 const NAMES_BYTES = 128 * 1024;
 
+/** Read worktree contents with full stat checks and a fixed, empty ordering input. */
+export const WORKTREE_READ_CONFIG = [
+  'core.checkStat=default',
+  'core.trustctime=true',
+  'core.ignoreStat=false',
+  'diff.orderFile=/dev/null',
+] as const;
+
 /** What a refusal adds after naming filtered or submodule files: the merge to run yourself. */
 function yourself(branch: string): string {
   return ` Merge it yourself in your checkout, where your repository’s programs run as they always do: git merge --no-ff ${shown(branch)}`;
@@ -55,12 +63,13 @@ function yourself(branch: string): string {
 /** A call in the destination: its filter drivers blanked, replace refs ignored. */
 function there(
   destination: MergeDestination,
-): Pick<GitCall, 'cwd' | 'drivers' | 'noReplaceObjects' | 'timeoutMs'> {
+): Pick<GitCall, 'cwd' | 'drivers' | 'noReplaceObjects' | 'timeoutMs' | 'config'> {
   return {
     cwd: destination.root,
     drivers: destination.drivers,
     noReplaceObjects: true,
     timeoutMs: MERGE_TIMEOUT_MS,
+    config: WORKTREE_READ_CONFIG,
   };
 }
 

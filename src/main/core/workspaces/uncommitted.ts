@@ -16,6 +16,7 @@ import {
   rawChanges,
   REPLACEMENT,
   statusEntries,
+  WORKTREE_READ_CONFIG,
 } from './merge-checks';
 import type { StatusEntry } from './merge-checks';
 import { gitRefusal, refuse } from './merge-select';
@@ -113,11 +114,12 @@ export async function inventoryUncommitted(
   }: { cwd: string; tip: string; drivers: readonly string[]; copied: readonly string[] | null },
 ): Promise<Selected<Uncommitted>> {
   if (!OID.test(tip)) throw new TypeError(`${tip} isn’t a commit’s object id.`);
-  const call: Pick<GitCall, 'cwd' | 'drivers' | 'noReplaceObjects' | 'timeoutMs'> = {
+  const call: Pick<GitCall, 'cwd' | 'drivers' | 'noReplaceObjects' | 'timeoutMs' | 'config'> = {
     cwd,
     drivers,
     noReplaceObjects: true,
     timeoutMs: MERGE_TIMEOUT_MS,
+    config: WORKTREE_READ_CONFIG,
   };
   const moved = refuse(
     'conflict',

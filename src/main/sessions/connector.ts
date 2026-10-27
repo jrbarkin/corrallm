@@ -8,6 +8,7 @@ import type {
   SessionMode,
   UserMessage,
 } from '../../shared/session';
+import type { PromptAnswer, PromptEnded, PromptEvent } from '../../shared/model/prompts';
 import type { TerminalEvent } from '../../shared/terminal';
 
 /*
@@ -60,6 +61,14 @@ export interface SessionSpec<M extends SessionMode = PermissionMode> {
   roleChanged?: boolean;
 }
 
+/**
+ * What a session reports: its session events, and the prompts it raises and ends (B13 C1), each by
+ * a key the adapter mints fresh for every native request or observation (`randomUUID()`) and maps
+ * privately to its native ids: never reused, never parsed, never put in argv or a path. The
+ * manager hands prompts to the core's prompt owner (core/prompts/owner.ts), never to a window.
+ */
+export type HostEvent = SessionEvent | PromptEvent | PromptEnded;
+
 /** Where a session reports to. */
 export interface SessionHost {
   /** CLI activity with no session event (a hook or untranslated progress, not cosmetic redraws). */
@@ -67,8 +76,10 @@ export interface SessionHost {
   /**
    * Tells the renderer what happened (see `SessionEvent` for the order events come in). Emit
    * 'started' once the session runs, and 'closed' if it stops by itself (its process exits).
+   * A prompt is raised (`prompt`) and ended (`prompt-ended`: withdrawn, or answered in the CLI's
+   * own terminal) by its key; an answer or a decline comes back through `LiveSession.prompts`.
    */
-  emit(event: SessionEvent): void;
+  emit(event: HostEvent): void;
   /**
    * Remembers the session's id (the CLI's), to resume it after a restart: when it starts, and
    * whenever it changes (as /clear starts a new one).
@@ -76,12 +87,35 @@ export interface SessionHost {
   remember(sessionId: string): void;
 }
 
+/**
+ * How the core answers the prompts a session raised (B13 C1, C3), always on the session that raised
+ * them, by their keys. Neither is ever called for a key the session didn't raise, or one it ended.
+ */
+export interface PromptAnswers {
+  /**
+   * Hands `answer` to the native request at once (its callback resolved, or its response queued):
+   * never that the tool ran, nor waiting for anything. Throws, changing nothing and leaving the
+   * prompt open, for a definitive refusal, saying why in a sentence. A transport failure after the
+   * handoff ends the session; nothing is sent again.
+   */
+  answer(key: string, answer: PromptAnswer): void;
+  /**
+   * Answers with the connection's nonapproval (never an approval, never leaving the native request
+   * waiting) and ends the prompt: the core admits no prompt it can't show whole, nor past its
+   * budgets. `why`, the core's sentence, may be told to the CLI. Never throws. Every request still
+   * pending as the session closes gets the same nonapproval from the session itself.
+   */
+  decline(key: string, why: string): void;
+}
+
 /** A session that runs. The manager calls these with arguments it has validated. */
 export interface LiveSession<M extends SessionMode = PermissionMode> {
   /** Sends a message: a turn starts (the manager sends one at a time, once the last has ended). */
   send(message: UserMessage): Promise<void>;
-  /** Answers a prompt it emitted, by the prompt's id. */
+  /** Answers a prompt it emitted, by the prompt's id (the events B13 replaces). */
   answer(promptId: string, answer: SessionAnswer): Promise<void>;
+  /** Answers and declines the prompts it raised (`prompt` events), where its connection raises them. */
+  readonly prompts?: PromptAnswers;
   /** Interrupts the turn going on, if any: it ends with an 'end' that says so. */
   interrupt(): Promise<void>;
   setMode(mode: M): Promise<void>;
