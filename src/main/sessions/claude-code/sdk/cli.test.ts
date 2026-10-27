@@ -55,7 +55,7 @@ async function start(
 ) {
   const remembered: string[] = [];
   const host: SessionHost = {
-    emit: (event) => events.push(event),
+    emit: (event: SessionEvent) => events.push(event),
     remember: (id) => remembered.push(id),
   };
   const env = {

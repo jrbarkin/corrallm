@@ -129,7 +129,7 @@ it.each(connections)('%s emits results for completed and interrupted turns', asy
       mode: id === 'codex.terminal' ? 'read-only' : null,
       resume: null,
     },
-    { emit: (event) => events.push(event), remember: () => undefined },
+    { emit: (event: SessionEvent) => events.push(event), remember: () => undefined },
   );
   sessions.push(session);
   const ends = () => events.filter((event) => event.type === 'end');
@@ -193,7 +193,7 @@ it.each(connections)('%s’s fake connector emits the same result contract', asy
   if (!connector) throw new Error(`No fake connector for ${id}`);
   const session = await connector.start(
     { agentId: 'a', cwd: folder, env: {}, model: null, mode: 'auto', resume: null },
-    { emit: (event) => events.push(event), remember: () => undefined },
+    { emit: (event: SessionEvent) => events.push(event), remember: () => undefined },
   );
   sessions.push(session);
   await session.send({ id: 'first', text: 'Hello' });

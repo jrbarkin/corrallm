@@ -91,7 +91,7 @@ async function start(
   });
   const session = await connector.start(
     { ...SPEC, ...spec },
-    { emit: (event) => events.push(event), remember: (id) => remembered.push(id) },
+    { emit: (event: SessionEvent) => events.push(event), remember: (id) => remembered.push(id) },
   );
   sessions.push(session);
   return session;

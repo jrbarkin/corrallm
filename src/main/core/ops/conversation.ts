@@ -41,6 +41,7 @@ export function conversationOps(
     const id = open.document.id;
     const items = [
       ...needs(needsInput(open, locale)),
+      ...(services.prompts?.items(id) ?? []),
       ...proposals.items(id, ctx.caller.kind === 'human' ? undefined : reach),
       ...reviews.items(id),
       ...stalled.items(id),
