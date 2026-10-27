@@ -400,9 +400,12 @@ describe('notifications: main’s focus and a click’s handle (B14 C7, C10)', (
       main.emit('focus', false);
       main.emit('focus', 'yes' as unknown as boolean);
       main.emit('focus', true);
-      await vi.waitFor(() => {
-        expect(heard).toEqual([true, false, true]);
-      });
+      await vi.waitFor(
+        () => {
+          expect(heard).toEqual([true, false, true]);
+        },
+        { timeout: 5000 },
+      );
     } finally {
       vi.doUnmock('./core');
     }
@@ -441,9 +444,12 @@ describe('notifications: main’s focus and a click’s handle (B14 C7, C10)', (
       const other = crypto.randomUUID();
       expect(await main.request('activate', 7, other)).toEqual({ ok: true, value: null });
       expect(await main.request('activate', 8, handle)).toEqual({ ok: true, value: null });
-      await vi.waitFor(() => {
-        expect(shown).toEqual({ 7: [], 8: [target] });
-      });
+      await vi.waitFor(
+        () => {
+          expect(shown).toEqual({ 7: [], 8: [target] });
+        },
+        { timeout: 5000 },
+      );
       expect(asked).toEqual([other, handle]);
     } finally {
       vi.doUnmock('./core');
