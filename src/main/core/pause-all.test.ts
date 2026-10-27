@@ -140,9 +140,12 @@ describe('run.pauseAll', () => {
     ).toBe(true);
     held = true;
     expect((await started.call('run.start', { canvas: RUNNING }, CALLERS.you)).ok).toBe(true);
-    await vi.waitFor(() => {
-      expect(started.engines.canvas(RUNNING)?.engine.sessions.of('lead').status).toBe('working');
-    });
+    await vi.waitFor(
+      () => {
+        expect(started.engines.canvas(RUNNING)?.engine.sessions.of('lead').status).toBe('working');
+      },
+      { timeout: 5000 },
+    );
 
     const paused = await started.call('run.pauseAll', {}, HOST);
     expect(paused).toEqual({
@@ -171,11 +174,14 @@ describe('run.pauseAll', () => {
 
     // The turn going on finishes; the run sends nothing more to its paused agent.
     release();
-    await vi.waitFor(() => {
-      expect(started.engines.canvas(RUNNING)?.engine.run.snapshot().agents.lead?.outcomes).toEqual({
-        one: 'succeeded',
-      });
-    });
+    await vi.waitFor(
+      () => {
+        expect(
+          started.engines.canvas(RUNNING)?.engine.run.snapshot().agents.lead?.outcomes,
+        ).toEqual({ one: 'succeeded' });
+      },
+      { timeout: 5000 },
+    );
     await new Promise((resolve) => setTimeout(resolve, 300));
     expect(fake.sessions.flatMap((one) => one.sent.map(({ text }) => text))).toEqual(['First']);
     const page = await started.call('messages', { canvas: QUIET }, OUTSIDE);

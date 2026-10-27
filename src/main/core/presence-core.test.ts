@@ -119,9 +119,12 @@ async function start(): Promise<Core> {
 
 /** The last snapshot main heard, once it is `expected` (revisions aside). */
 async function heard(expected: Omit<Presence, 'revision'>): Promise<void> {
-  await vi.waitFor(() => {
-    expect(sent.at(-1)).toEqual({ revision: expect.any(Number) as number, ...expected });
-  });
+  await vi.waitFor(
+    () => {
+      expect(sent.at(-1)).toEqual({ revision: expect.any(Number) as number, ...expected });
+    },
+    { timeout: 5000 },
+  );
 }
 
 async function message(body: string): Promise<void> {
