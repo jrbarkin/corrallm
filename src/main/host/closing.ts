@@ -46,6 +46,8 @@ import type { DraftsFlushed, ShutdownPrepared, ShutdownReason } from '../core/pr
  */
 
 export interface ClosingDeps {
+  /** Presentation follows state changes; it never decides how this close proceeds. */
+  changed?: () => void;
   /**
    * Saves the run while keeping the core usable: rejects saying why it could not; resolves false if
    * it decided not to close after all (nothing held), so it stays open.
@@ -95,11 +97,11 @@ export class Closing {
       case 'asking':
         return false;
       case 'open':
-        this.#state = 'saving';
+        this.#set('saving');
         this.#deps.save().then(
           (saved) => {
             if (saved !== false) void this.#close(Promise.resolve());
-            else if (this.#state === 'saving') this.#state = 'open';
+            else if (this.#state === 'saving') this.#set('open');
           },
           (error: unknown) => {
             void this.#failed(error);
@@ -111,20 +113,29 @@ export class Closing {
 
   async #failed(error: unknown): Promise<void> {
     if (this.#state !== 'saving') return;
-    this.#state = 'asking';
+    this.#set('asking');
     // While it asks, nothing else closes it (request() waits for the answer).
     const anyway = await this.#deps
       .ask(error instanceof Error ? error.message : String(error))
       .catch(() => false);
     if (anyway) await this.#close(this.#deps.abandon());
-    else this.#state = 'open';
+    else this.#set('open');
   }
 
   async #close(closed: Promise<void>): Promise<void> {
     if (this.#state === 'closing') return;
-    this.#state = 'closing';
+    this.#set('closing');
     await closed;
     this.#deps.done();
+  }
+
+  #set(state: 'open' | 'saving' | 'asking' | 'closing'): void {
+    this.#state = state;
+    try {
+      this.#deps.changed?.();
+    } catch {
+      console.error('Could not update native close presentation.');
+    }
   }
 }
 
@@ -174,6 +185,8 @@ export interface QuitUpdates {
 }
 
 export interface QuitDeps<W extends QuitWindow> {
+  /** The native menu re-reads approved/saving/asking; no polling or lifecycle effect. */
+  changed?: () => void;
   platform: NodeJS.Platform;
   /** The unpackaged e2e app: no window shown, and a failed save exits 1 rather than ask. */
   hidden: boolean;
@@ -248,6 +261,9 @@ export class QuitCoordinator<W extends QuitWindow> {
   constructor(deps: QuitDeps<W>) {
     this.#deps = deps;
     this.#quit = new Closing({
+      changed: () => {
+        this.#changed();
+      },
       save: () => this.#save(),
       abandon: (escape) => this.#abandon(escape),
       ask: (why) => this.#askAnyway(why, 'Quit'),
@@ -255,6 +271,14 @@ export class QuitCoordinator<W extends QuitWindow> {
         this.#done();
       },
     });
+  }
+
+  #changed(): void {
+    try {
+      this.#deps.changed?.();
+    } catch {
+      this.#deps.log('Could not update native quit presentation.');
+    }
   }
 
   /** Whether the system's shutdown or logout has taken over (read afresh after each await). */
@@ -461,6 +485,7 @@ export class QuitCoordinator<W extends QuitWindow> {
     if (this.approved) return;
     const question: Question<W> = { update: this.#reason === 'update', window: undefined };
     this.#question = question;
+    this.#changed();
     let answer: Answer = 'cancel';
     try {
       const window = await this.#sheet();
@@ -480,6 +505,7 @@ export class QuitCoordinator<W extends QuitWindow> {
       this.#deps.log('Could not ask before quitting:', error);
     } finally {
       this.#question = undefined;
+      this.#changed();
     }
     // Withdrawn: the system's shutdown goes on.
     if (this.#system) return;
@@ -583,6 +609,7 @@ export class QuitCoordinator<W extends QuitWindow> {
       // The system's shutdown took over meanwhile: it quits, and installs nothing.
       if (this.#system) return;
       this.#ready = true;
+      this.#changed();
       if (this.#failed) {
         this.#deps.exit(1);
         return;
@@ -653,6 +680,7 @@ export class QuitCoordinator<W extends QuitWindow> {
       this.#outOfTime();
     }, SYSTEM_BUDGET_MS);
     this.#system = this.#closeForSystem();
+    this.#changed();
   }
 
   async #closeForSystem(): Promise<void> {
@@ -744,6 +772,7 @@ export class QuitCoordinator<W extends QuitWindow> {
     this.#systemEnded = true;
     clearTimeout(this.#budget);
     this.#ready = true;
+    this.#changed();
     this.#deps.quit();
   }
 }

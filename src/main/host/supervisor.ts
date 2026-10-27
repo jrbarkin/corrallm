@@ -130,6 +130,11 @@ export class CoreSupervisor {
     );
   }
 
+  /** Presence/notification focus belongs to the process main runs now, including during init. */
+  focus(focused: boolean): void {
+    this.#process?.focus(focused);
+  }
+
   /** Forks a core and asks it up; one that can't come up is killed. */
   async #bringUp(): Promise<CoreProcess> {
     const core = this.#options.fork();
