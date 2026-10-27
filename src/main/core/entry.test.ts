@@ -213,18 +213,8 @@ describe('the core process’s init', () => {
       ok: true,
       value: { ok: true, value: { running: false } },
     });
-    // Presence is pushed by the core; the former polling request is no longer served.
-    const legacy = main as unknown as CoreLink<
-      HostSide,
-      {
-        requests: { active: { args: []; result: boolean } };
-        events: Record<string, never>;
-      }
-    >;
-    expect(await legacy.request('active')).toEqual({
-      ok: false,
-      error: { message: 'No handler for “active”.' },
-    });
+    // X1 keeps today's last-window decision until C3 publishes presence.
+    expect(await main.request('active')).toEqual({ ok: true, value: false });
   });
 });
 

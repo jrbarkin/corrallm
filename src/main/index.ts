@@ -325,19 +325,19 @@ function main(): void {
       // way back to one closed while the core kept working, on every platform.
       app.on('second-instance', reopen);
       // Windows and Linux: the last window closing quits, unless the core has work going on
-      // (or has not published presence yet): then it runs on, and opening corrallm again shows it.
+      // (a run running, a turn): then it runs on, and opening corrallm again shows it.
+      // X1 retains this check until C3 supplies presence and C4 replaces the quit path.
       lastWindowClosed = () => {
         if (quit.busy || quit.approved) return;
-        void supervisor.core.then(
-          (core) => {
-            if (!supervisor.owns(core)) return;
+        void ask('active').then(
+          (active) => {
             if (BrowserWindow.getAllWindows().length > 0 || quit.busy || quit.approved) return;
-            if (core.presence?.busy === false) {
+            if (!active) {
               app.quit();
               return;
             }
             console.error(
-              'corrallm: it runs on with no window: open corrallm again to show it, and quit it there.',
+              'corrallm: its agents are still working, so it runs on with no window: open corrallm again to show it, and quit it there.',
             );
           },
           () => {

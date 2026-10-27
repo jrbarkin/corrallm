@@ -55,6 +55,8 @@ export interface CoreSide {
      * ended, children and the database closed, then the profile let go. Idempotent.
      */
     commitShutdown: { args: []; result: null };
+    /** Today's last-window check, retained until C3 supplies the presence producer. */
+    active: { args: []; result: boolean };
     /** Native Pause all; the core makes the host caller, never a token. */
     pauseAll: { args: []; result: PauseAllResult | { sentence: string } };
     /** Resolves a notification handle privately and tells this window what to show. */
