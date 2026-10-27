@@ -38,8 +38,9 @@ import type { Selected } from './merge-select';
  * repository; a local file copied into the workspace (its copy record), or a copy record that
  * can't be read; a path a configured filter applies to; a name that isn't UTF-8; changes hidden
  * from status (skip-worktree, assume-unchanged, a sparse checkout); a file that isn't a regular
- * one or a link, or one under a link; more than 10,000 entries (counted, not listed) or more than
- * 1 GiB to hash; or anything Git couldn't read whole.
+ * one or a link, or one under a link; an untracked file with another name (a hard link, which
+ * Review changes doesn't read); more than 10,000 entries (counted, not listed) or more than 1 GiB
+ * to hash; or anything Git couldn't read whole.
  */
 
 /** An uncommitted path, as the review shows it and the digest takes it. */
@@ -220,6 +221,12 @@ export async function inventoryUncommitted(
           );
         }
       } else if (found.isFile()) {
+        if (file.status === 'untracked' && found.nlink !== 1) {
+          // Review changes reads an untracked file itself, only one with no other name (§9 C2):
+          // what it can't show, a checkpoint doesn't commit.
+          file.note = 'unreadable';
+          continue;
+        }
         if (file.status === 'untracked') {
           file.mode.new = fileMode && (found.mode & 0o100) !== 0 ? '100755' : '100644';
         } else if (file.mode.new !== '100644' && file.mode.new !== '100755') {
@@ -351,7 +358,7 @@ function entriesOf(entries: readonly StatusEntry[]): {
 }
 
 /** A path as the review shows it: lossy (and shortened) where it isn't UTF-8 or is too long. */
-function shownPath(at: string): Pick<UncommittedFile, 'path' | 'note'> {
+export function shownPath(at: string): Pick<UncommittedFile, 'path' | 'note'> {
   if (at.includes(REPLACEMENT))
     return { path: branchPath(Buffer.from(at)).path, note: 'lossy-name' };
   return branchPath(Buffer.from(at));

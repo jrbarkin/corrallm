@@ -12,7 +12,8 @@ import {
 const utf8 = (value: string) => new TextEncoder().encode(value);
 const tip = 'a'.repeat(40);
 const digest = 'b'.repeat(64);
-const cursor = { version: 1 as const, tip, digest, position: 51 };
+const state = 'e'.repeat(64);
+const cursor = { version: 1 as const, tip, digest, state, position: 51 };
 const entry = (path: string, mode = '100644', oid = 'b'.repeat(40)) => ({
   path: utf8(path),
   mode,
@@ -49,27 +50,31 @@ describe('stateless branch continuations', () => {
       encode({ ...cursor, tip: '--all' }),
       encode({ ...cursor, path: '/somewhere' }),
       encode({ ...cursor, digest: 'bad' }),
+      encode({ ...cursor, state: 'bad' }),
+      encode({ ...cursor, state: undefined }),
       encode(JSON.stringify(cursor)),
     ])
       expect(decodeBranchCursor(value)).toMatchObject({ ok: false, error: { code: 'invalid' } });
   });
 
   it('compares the supplied pins, returning conflict on change and invalid on malformed input', () => {
-    expect(branchPosition(undefined, { tip, digest })).toEqual({ ok: true, value: 0 });
-    expect(branchPosition(encodeBranchCursor(cursor), { tip, digest })).toEqual({
+    expect(branchPosition(undefined, { tip, digest, state })).toEqual({ ok: true, value: 0 });
+    expect(branchPosition(encodeBranchCursor(cursor), { tip, digest, state })).toEqual({
       ok: true,
       value: 51,
     });
     for (const current of [
-      { tip: 'c'.repeat(40), digest },
-      { tip, digest: null },
-      { tip, digest: 'd'.repeat(64) },
+      { tip: 'c'.repeat(40), digest, state },
+      { tip, digest: null, state },
+      { tip, digest: 'd'.repeat(64), state },
+      // The review's state: what the work was read as, whatever the tip and the digest say.
+      { tip, digest, state: 'f'.repeat(64) },
     ])
       expect(branchPosition(encodeBranchCursor(cursor), current)).toMatchObject({
         ok: false,
         error: { code: 'conflict' },
       });
-    expect(branchPosition('--all', { tip, digest })).toMatchObject({
+    expect(branchPosition('--all', { tip, digest, state })).toMatchObject({
       ok: false,
       error: { code: 'invalid' },
     });

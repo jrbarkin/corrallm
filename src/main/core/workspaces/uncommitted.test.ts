@@ -1,6 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import {
   chmodSync,
+  linkSync,
   mkdirSync,
   readFileSync,
   rmSync,
@@ -242,6 +243,21 @@ describe.skipIf(process.platform === 'win32')('the uncommitted inventory', () =>
     write('x.bin', 'filtered\n');
     expect(await inventory()).toMatchObject({ digest: null });
     expect(ran(sentinel)).toEqual([]);
+  });
+
+  it('offers no commit for an untracked file with another link, which Review changes doesn’t read', async () => {
+    write('new.txt', 'new\n');
+    expect((await inventory()).digest).not.toBeNull();
+    // A second name for a file outside the worktree: its bytes are never the core's to show.
+    writeFileSync(path.join(made.root, 'outside.txt'), 'elsewhere\n');
+    linkSync(path.join(made.root, 'outside.txt'), path.join(at, 'linked.txt'));
+    const found = await inventory();
+    expect(found.digest).toBeNull();
+    expect(found.files.find((file) => file.path === 'linked.txt')).toMatchObject({
+      status: 'untracked',
+      note: 'unreadable',
+      oid: null,
+    });
   });
 
   it('offers no commit while the agent’s index hides changes from status', async () => {

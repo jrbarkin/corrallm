@@ -2,7 +2,7 @@ import { BRANCH_LIMITS, BranchAfter, BranchDiffOutput, BranchLimit } from '../ap
 import type { BranchFile } from '../api/branch';
 import type { OpResult } from '../api/errors';
 import { MAX_PAGE_BYTES } from '../api/limits';
-import { branchPosition, encodeBranchCursor } from './branch-review';
+import { BranchState, branchPosition, encodeBranchCursor } from './branch-review';
 
 const encoder = new TextEncoder();
 const utf8 = (text: string) => encoder.encode(text).length;
@@ -111,6 +111,8 @@ export type BranchDiffHeader = Omit<BranchDiffOutput, 'files' | 'next'>;
 export interface BranchPageOptions {
   after?: string | undefined;
   limit?: number;
+  /** The review's state (`BranchState`), as the core read it for this page. */
+  state: string;
 }
 
 /**
@@ -121,7 +123,7 @@ export interface BranchPageOptions {
 export function branchDiffPage(
   header: BranchDiffHeader,
   inventory: readonly BranchFile[],
-  options: BranchPageOptions = {},
+  options: BranchPageOptions,
 ): OpResult<BranchDiffOutput> {
   const parsedLimit = BranchLimit.safeParse(options.limit);
   if (
@@ -129,7 +131,11 @@ export function branchDiffPage(
     (options.after !== undefined && !BranchAfter.safeParse(options.after).success)
   )
     return invalidPage();
-  const current = { tip: header.source.oid, digest: header.uncommitted.digest };
+  const current = {
+    tip: header.source.oid,
+    digest: header.uncommitted.digest,
+    state: BranchState.parse(options.state),
+  };
   const position = branchPosition(options.after, current);
   if (!position.ok) return position;
   if (position.value > inventory.length) return invalidPage();

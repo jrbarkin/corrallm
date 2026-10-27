@@ -67,6 +67,7 @@ import { TerminalEvents } from './terminal-events';
 import { Windows } from './windows';
 import { createDispatcher, OpFailure } from './call';
 import type { Dispatcher } from './call';
+import { readBranchDiff } from './workspaces/diff';
 import { listWorktrees } from './workspaces/list';
 import type { Viewer, WorktreeListing } from './workspaces/list';
 import type { CanvasDocument } from '../../shared/model/canvas';
@@ -1089,6 +1090,22 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
             retry: (canvas, agent) => workspaceDirectories.retry(canvas, agent),
             document: async (canvas) =>
               states.keeps(canvas) ? (await documents.load(canvas)).document : undefined,
+            // B9b C4: an agent's branch for review. Its destination is found again from the
+            // canvas's picked folder as ProjectFolders keeps it (none: shown as unread), never a
+            // path minted here or read back from memory.
+            diff: (request) =>
+              readBranchDiff(
+                {
+                  git: workspaceGit,
+                  workspaces: workspaceStore,
+                  projectRoot: (canvas) => projects.of(canvas),
+                  copied: (workspace) => setups.copied?.(workspace),
+                  list: worktreeListing,
+                  nameOf: (canvas, agent) =>
+                    nameOf(documents.loaded(canvas)?.document.nodes ?? [], agent),
+                },
+                request,
+              ),
           },
           control,
           topics,
