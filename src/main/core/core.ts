@@ -162,6 +162,11 @@ export interface CoreConfig {
   watchFolder?: WatchFolder;
   /** Fake connectors and options for an unpackaged app's tests, admitted by its host. */
   fakeSessions?: boolean;
+  /**
+   * Whether its host shows OS notifications (B14 C7), and so whether the core works them out: the
+   * app's does (the default); `corrallm serve`'s has no desktop, so it says false.
+   */
+  notifications?: boolean;
   /** For tests: the notifier's burst window and rate (B14 C7), shortened. */
   notifier?: Partial<NotifierTiming>;
   /**
@@ -850,7 +855,7 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     topics.changed('settings', 'you');
     void settings.notificationsEnabled().then((on) => {
       notifying = on;
-      notifier.preferenceChanged();
+      notifier?.preferenceChanged();
     });
   });
   // The proposals waiting for you (R4): their proposers' records go to each canvas's messages,
@@ -985,24 +990,29 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
   });
   /**
    * The OS notifications (B14 C7, C8, C10): from what newly waits for you and the runs that end on
-   * the canvases the core runs, worded from fixed sentences with names alone, through main.
+   * the canvases the core runs, worded from fixed sentences with names alone, through main. None
+   * for a host with no desktop.
    */
-  const notifier = new Notifier({
-    needs: (canvas) => waitingFor(canvas),
-    run: (canvas) => engines.canvas(canvas)?.engine.run,
-    runs: (canvas) => engines.canvas(canvas) !== undefined,
-    agentName: (canvas, agent) => agentName(engines.canvas(canvas)?.document.nodes ?? [], agent),
-    canvasName: (canvas) => {
-      const file = memory.fileOf(canvas);
-      return file === undefined ? null : path.basename(file);
-    },
-    enabled: () => notifying,
-    notify: (request) => host.notify(request),
-    unnotify: (handle) => {
-      host.unnotify(handle);
-    },
-    ...(config.notifier === undefined ? {} : { timing: config.notifier }),
-  });
+  const notifier =
+    config.notifications === false
+      ? undefined
+      : new Notifier({
+          needs: (canvas) => waitingFor(canvas),
+          run: (canvas) => engines.canvas(canvas)?.engine.run,
+          runs: (canvas) => engines.canvas(canvas) !== undefined,
+          agentName: (canvas, agent) =>
+            agentName(engines.canvas(canvas)?.document.nodes ?? [], agent),
+          canvasName: (canvas) => {
+            const file = memory.fileOf(canvas);
+            return file === undefined ? null : path.basename(file);
+          },
+          enabled: () => notifying,
+          notify: (request) => host.notify(request),
+          unnotify: (handle) => {
+            host.unnotify(handle);
+          },
+          ...(config.notifier === undefined ? {} : { timing: config.notifier }),
+        });
   // Whether the run of each canvas the core runs is running, as canvas.list says it from the live
   // run (B11 §5), not the journal's coalesced write: the list is read again as that changes.
   const live = new Map<CanvasId, { running: boolean; stop?: () => void }>();
@@ -1011,10 +1021,10 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
   engines.watch({
     needs: (canvas) => {
       topics.changed(`needs:${canvas}`, 'corrallm');
-      notifier.needsChanged(canvas);
+      notifier?.needsChanged(canvas);
     },
     opened: (canvas) => {
-      notifier.opened(canvas);
+      notifier?.opened(canvas);
       presenceChanged();
       follow();
       const run = engines.canvas(canvas)?.engine.run;
@@ -1032,7 +1042,7 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
       states.listChanged();
     },
     closed: (canvas) => {
-      notifier.closed(canvas);
+      notifier?.closed(canvas);
       presenceChanged();
       live.get(canvas)?.stop?.();
       live.delete(canvas);
@@ -1298,7 +1308,7 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
   const close = async () => {
     closing = true;
     presence.close();
-    notifier.close();
+    notifier?.close();
     sessionViews.close();
     workspaceDirectories.stop();
     workspaceGit.stop();
@@ -1391,10 +1401,10 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     close: commit,
     presence: () => presence.now(),
     focus: (focused) => {
-      notifier.focus(focused);
+      notifier?.focus(focused);
     },
-    activation: (handle) => notifier.activation(handle),
-    notificationStatus: () => notifier.status(),
+    activation: (handle) => notifier?.activation(handle),
+    notificationStatus: () => notifier?.status(),
     tokens,
     clientOf: (token) => {
       const caller = tokens.clientOf(token);

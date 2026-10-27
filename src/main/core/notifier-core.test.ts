@@ -75,9 +75,10 @@ afterEach(async () => {
   await rm(profile, { recursive: true, force: true });
 });
 
-async function start(): Promise<Core> {
+async function start(notifications?: false): Promise<Core> {
   core = await createCore(
     {
+      ...(notifications === undefined ? {} : { notifications }),
       profile,
       app: { name: 'corrallm', version: '9.8.7' },
       check: true,
@@ -227,6 +228,15 @@ describe('the core’s notifications', { timeout: 30_000 }, () => {
     expect(shown).toEqual([]);
     // A handle from the old core means nothing to this one.
     expect(second.activation(old)).toBeUndefined();
+  });
+
+  it('works none out for a host with no desktop (corrallm serve)', async () => {
+    const started = await start(false);
+    await started.engines.open(CANVAS);
+    await untilTheOk(started);
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    expect(shown).toEqual([]);
+    expect(started.notificationStatus()).toBeUndefined();
   });
 
   it('closes a canvas’s notifications as it closes, its click then a generic Open', async () => {
