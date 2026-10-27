@@ -221,6 +221,31 @@ test('runs a Codex agent as a Codex thread: turns, prompts, modes, models, comma
   await expect(transcript.getByText('No issues found in the current changes.')).toBeVisible();
 });
 
+test('asks before Codex calls an MCP tool, and keeps a form typed: answered through the core’s owner', async () => {
+  await canvasFile();
+  await chooseProject();
+  await page.locator('.react-flow__node').dblclick();
+  const view = page.getByRole('dialog', { name: 'Shop' });
+  const transcript = view.getByRole('log', { name: 'Transcript' });
+
+  // Codex's approval of an MCP tool call, kept for the session as its TUI keeps it.
+  await send(view, 'mcp');
+  const approval = transcript.getByRole('group', {
+    name: 'Allow the probe MCP server to run tool "save_note"?: a',
+  });
+  await approval.getByRole('button', { name: 'Allow for this session' }).click();
+  await expect(transcript.getByText('Saved, and allowed for this session.')).toBeVisible();
+  await expect(transcript.getByText(/^Always allowed: mcp__probe__save_note/)).toBeVisible();
+
+  // A form of six fields stays a form, its values typed.
+  await send(view, 'form');
+  const form = transcript.getByRole('form', { name: 'probe asks' });
+  await form.getByRole('textbox', { name: 'Name' }).fill('Ada');
+  await form.getByRole('textbox', { name: 'Email' }).fill('ada@example.com');
+  await form.getByRole('button', { name: 'Submit' }).click();
+  await expect(transcript.getByText('Hello, Ada.')).toBeVisible();
+});
+
 test('the queues’ Run sends its message to the Codex thread, and hears its turn end', async () => {
   await canvasFile([{ id: 'docs', message: 'Write the docs' }]);
   await chooseProject();

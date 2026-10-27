@@ -95,3 +95,41 @@ export function recordedResult(name: Fixture, method: string, nth = 0): unknown 
   if (!answer) throw new Error(`${name} has no answer to ${method}`);
   return answer.msg.result;
 }
+
+/** A request the app server made of its client, recorded: what it asked, and what it was told. */
+export interface RecordedAsk {
+  method: string;
+  id: string | number;
+  params: unknown;
+  /** The result its client answered with. */
+  result: unknown;
+  /** The notifications the app server sent before it asked, in order. */
+  before: { method: string; params: unknown }[];
+}
+
+/** The requests the app server made of its client, in order, each with its answer. */
+export function recordedAsks(name: Fixture): RecordedAsk[] {
+  const lines = recorded(name);
+  const asks: RecordedAsk[] = [];
+  const before: { method: string; params: unknown }[] = [];
+  for (const { dir, msg } of lines) {
+    if (dir !== 'in' || typeof msg.method !== 'string') continue;
+    const { id } = msg;
+    if (typeof id !== 'string' && typeof id !== 'number') {
+      before.push({ method: msg.method, params: msg.params });
+      continue;
+    }
+    const answer = lines.find(
+      (line) => line.dir === 'out' && line.msg.method === undefined && line.msg.id === id,
+    );
+    if (!answer) throw new Error(`${name} has no answer to ${msg.method} #${String(id)}`);
+    asks.push({
+      method: msg.method,
+      id,
+      params: msg.params,
+      result: answer.msg.result,
+      before: [...before],
+    });
+  }
+  return asks;
+}

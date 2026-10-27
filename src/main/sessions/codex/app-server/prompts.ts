@@ -1,476 +1,284 @@
 import { randomUUID } from 'node:crypto';
-import path from 'node:path';
 
-import { MAX_QUESTIONS } from '../../../../shared/session';
-import type {
-  AskedQuestion,
-  SessionAnswer,
-  SessionEvent,
-  ToolDetail,
-} from '../../../../shared/session';
-import { displayPath, firstLine, notice, output, property, text } from '../../transcript';
+import type { AdapterPrompt, PromptAnswer, QuestionAnswer } from '../../../../shared/model/prompts';
+import type { SessionAnswer } from '../../../../shared/session';
+import type { HostEvent, PromptAnswers } from '../../connector';
+import { notice } from '../../transcript';
 import type { Places } from '../../transcript';
 import { RPC_ERRORS, RpcFailure } from '../rpc';
 import type { RequestId } from '../rpc';
-import type { CommandDecision, FileChangeDecision } from './protocol';
-import { commandLine, unwrapShell } from './translate';
+import { nativeResult, nonapproval, raised as raise } from './raise';
+import type { Native, Raised } from './raise';
+import type { McpCall, Patch } from './translate';
 
 /*
- * What Codex asks the user, through its app server's requests: to run a command (or reach a host
- * on the network), to apply a patch, for more permissions, its questions (request_user_input), and
- * an MCP server's elicitations. Each becomes a prompt event; the renderer's answer
- * (the core reply operation) becomes the request's result, as Codex's own TUI answers it
- * (codex-rs/tui/src/bottom_pane/approval_overlay.rs, rust-v0.160.1): Yes is `accept`; "always" is
- * the decision it offers to keep (for this session, or an exec policy rule for commands that start
- * alike); No is `cancel` ("No, and tell Codex what to do differently"), which stops the turn as
- * Claude Code's No does. Codex keeps what "always" allowed itself: corrallm never answers for the
- * user. A request Codex stops waiting for (serverRequest/resolved) is withdrawn; every request is
- * answered, even then.
+ * What Codex asks through its app server's requests (B13 C5): to run a command or reach a host,
+ * to send input to a running command, to apply a patch, for more permissions, its questions
+ * (request_user_input), an MCP server's elicitations (an MCP tool call's approval among them), and
+ * the session's own asks (implementing a plan, consent to use the ChatGPT plan: session.ts). Each
+ * is raised to the core's prompt owner (a `prompt` event) under a key minted fresh for that
+ * request, never reused, and kept privately with its typed JSON-RPC id. raise.ts maps each to its
+ * prompt and its answer to what Codex is told.
+ *
+ * - Only the owner answers one (`answers.answer`, by its key: the request's response sent at once,
+ *   or a refusal that leaves it waiting) or declines it (`answers.decline`: Codex's nonapproval).
+ *   Nothing else answers Codex but its stopping waiting (serverRequest/resolved: the prompt ends,
+ *   withdrawn, and the request still gets its nonapproval) or the session closing (every request
+ *   still waiting gets its nonapproval, and ends). Every request is answered.
+ * - One corrallm can't pass on faithfully (questions it can't key, a form it can't show, an MCP
+ *   tool call's approval whose call it can't tell) is declined here, never raised, and the user
+ *   told.
+ * - Until X10 converts the renderer, each raised request is shown as the events B13 replaces too
+ *   (`permission`, `question`, `plan`, `elicitation`, `withdrawn` and the session's waiting
+ *   status), each under its own fresh view id: unless the owner declined it as it was raised. A
+ *   secret question isn't asked through them (they keep every answer): it is declined.
+ *   Their answers never reach Codex from here: `bridge` translates one into the prompt's own
+ *   answer and names its key, for the core to answer it through the owner (X11 removes this).
  */
 
-/** Where prompts go, and the session's say on what they show. */
+/** Where prompts go, and what the session knows that they show. */
 export interface PromptHost {
-  emit(event: SessionEvent): void;
-  /** A prompt no longer waits on the user, and none other does: the session works on. */
+  emit(event: HostEvent): void;
+  /** A request of Codex's no longer waits on the user, and none other does: the session works on. */
   settled(): void;
-  /** What a patch would do (from its item, which came first): its files and their diffs. */
-  patch(itemId: string): { summary: string; detail: ToolDetail | undefined } | undefined;
+  /** A file change's patch, from its item (which came first). */
+  patch(itemId: string): Patch | undefined;
+  /** An MCP tool call still running, by its item's id. */
+  mcpCall(itemId: string): McpCall | undefined;
+  /** Every MCP tool call still running. */
+  mcpCalls(): readonly McpCall[];
 }
 
-/** A prompt waiting for the user: its request's id, and how its answer reaches the request. */
-interface Waiting {
-  request: RequestId;
-  answered: (answer: SessionAnswer | undefined) => void;
+/** A request waiting for its answer. */
+interface Pending {
+  readonly key: string;
+  /** Codex's request, by its typed JSON-RPC id (`1` is not `"1"`); none for the session's own. */
+  readonly request: RequestId | undefined;
+  /** The id of the event B13 replaces that shows it. */
+  readonly shown: string;
+  readonly prompt: AdapterPrompt;
+  readonly native: Native;
+  /** Whether that event was shown (none if the owner declined it as it was raised). */
+  visible: boolean;
+  /** Answers it: Codex's response, or the session's own answer (undefined: it ended unanswered). */
+  readonly settle: (result: unknown) => void;
 }
 
-/** How a request is answered when the user does not (the turn ended, the session closed). */
-const NOT_ANSWERED = 'cancel';
+/** What the user is told of a secret question, declined until X10 (see `#raise`). */
+const SECRET = 'Codex asked a secret question, which corrallm can’t ask yet, so it was declined.';
+
+/** One of the session's own asks, raised: its key, and its answer as raise.ts gives it. */
+export interface Asked {
+  /** None if it was declined as it was raised. */
+  key: string | undefined;
+  /** Undefined if it ended unanswered (withdrawn, declined, or the session closed). */
+  answered: Promise<unknown>;
+}
 
 export class Prompts {
   readonly #host: PromptHost;
   readonly #places: Places;
-  readonly #open = new Map<string, Waiting>();
+  /** Every request waiting, by its key, in the order raised. */
+  readonly #pending = new Map<string, Pending>();
 
   constructor(host: PromptHost, places: Places) {
     this.#host = host;
     this.#places = places;
   }
 
-  /** Whether any prompt waits for the user. */
+  /** Whether any request waits for an answer. */
   get waiting(): boolean {
-    return this.#open.size > 0;
+    return this.#pending.size > 0;
   }
 
-  /** Answers a request the app server made: asks the user, if it is one corrallm asks. */
-  readonly request = async (method: string, params: unknown, id: RequestId): Promise<unknown> => {
-    switch (method) {
-      case 'item/commandExecution/requestApproval':
-        return this.#command(params, id);
-      case 'item/fileChange/requestApproval':
-        return this.#fileChange(params, id);
-      case 'item/permissions/requestApproval':
-        return this.#permissions(params, id);
-      case 'item/tool/requestUserInput':
-        return this.#questions(params, id);
-      case 'mcpServer/elicitation/request':
-        return this.#elicitation(params, id);
-      case 'currentTime/read':
-        return { currentTimeAt: Math.floor(Date.now() / 1000) };
-      default:
-        throw new RpcFailure(RPC_ERRORS.methodNotFound, `corrallm does not handle ${method}`);
-    }
+  /** How the core answers and declines what this session raised, by key. */
+  readonly answers: PromptAnswers = {
+    answer: (key, answer) => {
+      const pending = this.#pending.get(key);
+      if (pending === undefined) throw new Error('That request is no longer asked.');
+      // What Codex is told, checked first: one that doesn't fit throws, and it still waits.
+      const result = nativeResult(pending.native, answer);
+      this.#pending.delete(key);
+      pending.settle(result);
+      this.#settled(pending);
+    },
+    decline: (key) => {
+      const pending = this.#pending.get(key);
+      if (pending === undefined) return;
+      this.#pending.delete(key);
+      pending.settle(nonapproval(pending.native));
+      if (pending.visible) {
+        this.#host.emit({ type: 'withdrawn', id: pending.shown });
+        this.#settled(pending);
+      }
+    },
   };
 
-  /** Passes on the user's answer to prompt `id`; rejects if it no longer waits for one. */
-  answer(id: string, answer: SessionAnswer): void {
-    const waiting = this.#open.get(id);
-    if (!waiting) throw new Error('That question is no longer asked.');
-    this.#open.delete(id);
-    if (this.#open.size === 0) this.#host.settled();
-    waiting.answered(answer);
+  /** Answers a request the app server made: raised, if it is one corrallm asks the user. */
+  readonly request = (method: string, params: unknown, id: RequestId): Promise<unknown> => {
+    if (method === 'currentTime/read')
+      return Promise.resolve({ currentTimeAt: Math.floor(Date.now() / 1000) });
+    const asked = raise(method, params, {
+      places: this.#places,
+      patch: (itemId) => this.#host.patch(itemId),
+      mcpCall: (itemId) => this.#host.mcpCall(itemId),
+      mcpCalls: () => this.#host.mcpCalls(),
+    });
+    if (asked === undefined)
+      return Promise.reject(
+        new RpcFailure(RPC_ERRORS.methodNotFound, `corrallm does not handle ${method}`),
+      );
+    return this.#raise(asked, id).answered;
+  };
+
+  /** One of the session's own asks (raise.ts' implementPrompt, consentPrompt), raised. */
+  ask(asked: Raised): Asked {
+    return this.#raise(asked, undefined);
+  }
+
+  /**
+   * One of the session's own asks ends unanswered, by the session's word (its turn interrupted):
+   * withdrawn.
+   */
+  withdraw(key: string): void {
+    const pending = this.#pending.get(key);
+    if (pending === undefined) return;
+    this.#end(pending);
   }
 
   /** Codex stopped waiting for request `id` (answered elsewhere, or its turn ended): withdrawn. */
   resolved(id: RequestId): void {
-    for (const [promptId, waiting] of this.#open) {
-      if (waiting.request !== id) continue;
-      this.#open.delete(promptId);
-      this.#host.emit({ type: 'withdrawn', id: promptId });
-      if (this.#open.size === 0) this.#host.settled();
-      waiting.answered(undefined);
+    for (const pending of [...this.#pending.values()]) {
+      if (pending.request !== id) continue;
+      this.#end(pending);
+      this.#settled(pending);
     }
   }
 
-  /** Stops waiting for every prompt, as the session closes. */
+  /** As the session closes: every request still waiting gets its nonapproval, and ends. */
   withdrawAll(): void {
-    for (const [id, waiting] of [...this.#open]) {
-      this.#open.delete(id);
-      waiting.answered(undefined);
+    for (const [key, pending] of [...this.#pending]) {
+      this.#pending.delete(key);
+      pending.settle(nonapproval(pending.native));
+      this.#host.emit({ type: 'prompt-ended', key, reason: 'withdrawn' });
     }
-  }
-
-  /** Shows a prompt and waits for its answer: undefined if Codex stopped asking first. */
-  #ask(id: string, request: RequestId, prompt: SessionEvent): Promise<SessionAnswer | undefined> {
-    return new Promise((resolve) => {
-      this.#open.set(id, { request, answered: resolve });
-      this.#host.emit(prompt);
-      this.#host.emit({ type: 'status', status: 'waiting' });
-    });
-  }
-
-  async #command(params: unknown, request: RequestId): Promise<{ decision: CommandDecision }> {
-    const id = randomUUID();
-    const command = unwrapShell(text(property(params, 'command')) ?? '');
-    const reason = text(property(params, 'reason'));
-    const network = property(params, 'networkApprovalContext');
-    const host = text(property(network, 'host'));
-    const decisions = availableDecisions(params);
-    const always = alwaysDecision(decisions, host !== undefined);
-    const summary =
-      host === undefined
-        ? firstLine(command)
-        : `${text(property(network, 'protocol')) ?? 'https'}://${host}`;
-    const answer = await this.#ask(id, request, {
-      type: 'permission',
-      id,
-      tool: 'exec_command',
-      summary,
-      always: always?.wording ?? null,
-      ...(host === undefined && command.includes('\n') ? { detail: output(command) } : {}),
-      ...(host !== undefined
-        ? { title: `Codex wants to reach ${host}${reason === undefined ? '' : `: ${reason}`}` }
-        : reason === undefined
-          ? {}
-          : { title: reason }),
-    });
-    if (answer?.kind !== 'permission') return { decision: NOT_ANSWERED };
-    switch (answer.answer) {
-      case 'once':
-        return { decision: 'accept' };
-      case 'always':
-        return { decision: always?.decision ?? 'accept' };
-      case 'deny':
-        return { decision: denial(decisions) };
-    }
-  }
-
-  async #fileChange(
-    params: unknown,
-    request: RequestId,
-  ): Promise<{ decision: FileChangeDecision }> {
-    const itemId = text(property(params, 'itemId'));
-    const id = randomUUID();
-    const patch = itemId === undefined ? undefined : this.#host.patch(itemId);
-    const reason = text(property(params, 'reason'));
-    const root = text(property(params, 'grantRoot'));
-    const title =
-      reason ?? (root === undefined ? undefined : `Codex wants to write in ${this.#path(root)}`);
-    const answer = await this.#ask(id, request, {
-      type: 'permission',
-      id,
-      tool: 'apply_patch',
-      summary: patch?.summary ?? '',
-      always: "Yes, and don't ask again for these files",
-      ...(patch?.detail === undefined ? {} : { detail: patch.detail }),
-      ...(title === undefined ? {} : { title }),
-    });
-    if (answer?.kind !== 'permission') return { decision: NOT_ANSWERED };
-    return {
-      decision:
-        answer.answer === 'once'
-          ? 'accept'
-          : answer.answer === 'always'
-            ? 'acceptForSession'
-            : 'cancel',
-    };
-  }
-
-  async #permissions(params: unknown, request: RequestId): Promise<unknown> {
-    const id = randomUUID();
-    const asked = property(params, 'permissions');
-    const network = property(asked, 'network');
-    const files = property(asked, 'fileSystem');
-    const paths = (name: string) => {
-      const list = property(files, name);
-      return Array.isArray(list)
-        ? list.flatMap((file) => (typeof file === 'string' ? [this.#path(file)] : []))
-        : [];
-    };
-    const wanted = [
-      ...(property(network, 'enabled') === true ? ['network access'] : []),
-      ...(paths('write').length > 0 ? [`write ${paths('write').join(', ')}`] : []),
-      ...(paths('read').length > 0 ? [`read ${paths('read').join(', ')}`] : []),
-    ];
-    const reason = text(property(params, 'reason'));
-    const answer = await this.#ask(id, request, {
-      type: 'permission',
-      id,
-      tool: 'permissions',
-      summary: wanted.join('; '),
-      always: 'Yes, grant these permissions for this session',
-      title: `Codex wants more permissions${reason === undefined ? '' : `: ${reason}`}`,
-    });
-    const granted = {
-      ...(network === null || network === undefined ? {} : { network }),
-      ...(files === null || files === undefined ? {} : { fileSystem: files }),
-    };
-    if (answer?.kind !== 'permission' || answer.answer === 'deny') {
-      return { permissions: {}, scope: 'turn' };
-    }
-    return { permissions: granted, scope: answer.answer === 'always' ? 'session' : 'turn' };
-  }
-
-  async #questions(params: unknown, request: RequestId): Promise<unknown> {
-    const asked = property(params, 'questions');
-    const list = Array.isArray(asked) ? asked.slice(0, MAX_QUESTIONS) : [];
-    const questions = list.map((question): AskedQuestion => ({
-      header: text(property(question, 'header')) ?? '',
-      text: text(property(question, 'question')) ?? '',
-      options: optionsOf(property(question, 'options')),
-      multiple: false,
-    }));
-    if (questions.length === 0) return { answers: {} };
-    const id = randomUUID();
-    const answer = await this.#ask(id, request, { type: 'question', id, questions });
-    if (answer?.kind !== 'question') return { answers: {} };
-    return {
-      answers: Object.fromEntries(
-        list.map((question, i) => [
-          text(property(question, 'id')) ?? String(i),
-          { answers: [answer.answers[i] ?? ''] },
-        ]),
-      ),
-    };
   }
 
   /**
-   * An MCP server asks the user for something: a form (a question per field, up to the four
-   * corrallm asks at once), or to open a link and say when done. Others are declined.
+   * Transitional (B13 C5, until X10 converts the renderer; X11 removes it): the key of the request
+   * the event B13 replaces `id` shows, and `answer` as its prompt takes it, for the core to answer
+   * through its owner. Answers nothing itself. Throws for one no longer asked, or an answer its
+   * prompt doesn't take.
    */
-  async #elicitation(params: unknown, request: RequestId): Promise<unknown> {
-    const server = text(property(params, 'serverName')) ?? 'An MCP server';
-    const message = text(property(params, 'message')) ?? '';
-    const mode = property(params, 'mode');
-    const id = randomUUID();
-    const respond = (action: 'accept' | 'decline' | 'cancel', content: unknown = null) => ({
-      action,
-      content,
-      _meta: null,
+  bridge(id: string, answer: SessionAnswer): { key: string; answer: PromptAnswer } {
+    const pending = [...this.#pending.values()].findLast((one) => one.shown === id);
+    if (pending === undefined) throw new Error('That request is no longer asked.');
+    return { key: pending.key, answer: translated(pending.prompt, answer) };
+  }
+
+  /**
+   * Raises a request to the owner under a fresh key: declined at once (the user told) if corrallm
+   * can't pass it on faithfully. The owner may decline it as it is raised: then it is never shown.
+   */
+  #raise(asked: Raised, request: RequestId | undefined): Asked {
+    if ('declined' in asked) {
+      this.#host.emit(notice('warning', asked.declined));
+      return { key: undefined, answered: Promise.resolve(asked.result) };
+    }
+    const { prompt, native, shown } = asked;
+    // Until X10: the events B13 replaces keep and show each question's answer, so a secret one
+    // isn't asked through them.
+    if (prompt.kind === 'question' && prompt.questions.some(({ secret }) => secret === true)) {
+      this.#host.emit(notice('warning', SECRET));
+      return { key: undefined, answered: Promise.resolve(nonapproval(native)) };
+    }
+    const key = randomUUID();
+    const id = `${shown.type === 'elicitation' ? 'elicitation' : 'prompt'}:${randomUUID()}`;
+    let settle: (result: unknown) => void = () => undefined;
+    const answered = new Promise<unknown>((resolve) => {
+      settle = resolve;
     });
-    if (mode === 'url') {
-      const url = text(property(params, 'url')) ?? '';
-      const answer = await this.#ask(id, request, {
-        type: 'elicitation',
-        id,
-        server,
-        message,
-        url,
+    this.#pending.set(key, { key, request, shown: id, prompt, native, visible: false, settle });
+    this.#host.emit({ type: 'prompt', key, prompt });
+    const pending = this.#pending.get(key);
+    if (pending !== undefined) {
+      pending.visible = true;
+      this.#host.emit({ ...shown, id });
+      this.#host.emit({ type: 'status', status: 'waiting' });
+    }
+    return { key, answered };
+  }
+
+  /** It ends unanswered: Codex gets its nonapproval, the owner and the old card hear. */
+  #end(pending: Pending): void {
+    this.#pending.delete(pending.key);
+    pending.settle(nonapproval(pending.native));
+    this.#host.emit({ type: 'prompt-ended', key: pending.key, reason: 'withdrawn' });
+    if (pending.visible) this.#host.emit({ type: 'withdrawn', id: pending.shown });
+  }
+
+  /** A request of Codex's no longer waits: the session works again once none does. */
+  #settled(pending: Pending): void {
+    if (pending.request !== undefined && this.#pending.size === 0) this.#host.settled();
+  }
+}
+
+/** An answer given as the events B13 replaces take it, as the prompt takes it; throws if it can't be. */
+function translated(prompt: AdapterPrompt, answer: SessionAnswer): PromptAnswer {
+  switch (answer.kind) {
+    case 'permission': {
+      if (prompt.kind !== 'approval') break;
+      const { choices } = prompt;
+      // "always" is the decision the old card shows: Codex's first that keeps (raise.ts).
+      const picked =
+        answer.answer === 'once'
+          ? choices.find(({ hint }) => hint === 'allow_once')
+          : answer.answer === 'always'
+            ? choices.find(({ hint }) => hint === 'allow_always')
+            : (choices.find(({ value }) => value === 'cancel') ??
+              choices.find(({ value }) => value === 'decline') ??
+              choices.find(({ hint }) => hint === 'reject_once'));
+      if (picked === undefined) throw new Error(`That request doesn’t offer "${answer.answer}".`);
+      // Codex's decisions carry no words (as before: what to do instead is the next message).
+      return { kind: 'choice', value: picked.value };
+    }
+    case 'question': {
+      if (prompt.kind !== 'question') break;
+      if (answer.answers.length !== prompt.questions.length)
+        throw new Error('Answer every question it asks.');
+      const answers: Record<string, QuestionAnswer> = {};
+      prompt.questions.forEach((question, index) => {
+        const given = answer.answers[index] ?? '';
+        answers[question.id] = question.options.some(({ label }) => label === given)
+          ? { picked: [given] }
+          : { text: given };
       });
-      return respond(answer?.kind === 'elicitation' ? answer.action : 'cancel');
+      return { kind: 'questions', answers };
     }
-    if (mode !== 'form' && mode !== 'openai/form' && mode !== 'openaiForm') {
-      this.#host.emit(
-        notice('warning', `${server} asked for something corrallm can't show: it was declined.`),
-      );
-      return respond('decline');
-    }
-    const fields = formFields(property(params, 'requestedSchema'));
-    if (fields === undefined || fields.length > MAX_QUESTIONS) {
-      this.#host.emit(
-        notice(
-          'warning',
-          `${server} asked for more than corrallm can show at once: it was declined.`,
-        ),
-      );
-      return respond('decline');
-    }
-    const questions: AskedQuestion[] =
-      fields.length === 0
-        ? [
-            {
-              header: server,
-              text: message,
-              options: [
-                { label: 'Yes', description: 'Yes, provide the requested info' },
-                { label: 'No', description: 'No, but continue without it' },
-              ],
-              multiple: false,
-            },
-          ]
-        : fields.map((field, i) => ({
-            header: field.title,
-            text: i === 0 && message !== '' ? `${message} ${field.text}`.trim() : field.text,
-            options: field.options.map(({ label }) => ({ label, description: '' })),
-            multiple: field.multiple,
-          }));
-    const answer = await this.#ask(id, request, { type: 'question', id, questions });
-    if (answer?.kind !== 'question') return respond('cancel');
-    if (fields.length === 0) return respond(answer.answers[0] === 'Yes' ? 'accept' : 'decline', {});
-    return respond(
-      'accept',
-      Object.fromEntries(
-        fields.map((field, i) => [field.key, field.value(answer.answers[i] ?? '')]),
-      ),
-    );
-  }
-
-  #path(file: string): string {
-    return path.isAbsolute(file) ? displayPath(file, this.#places) : file;
-  }
-}
-
-/** The decisions a command's approval offers, as Codex lists them (or its usual ones). */
-function availableDecisions(params: unknown): unknown[] {
-  const listed = property(params, 'availableDecisions');
-  if (Array.isArray(listed) && listed.length > 0) return listed;
-  const prefix = property(params, 'proposedExecpolicyAmendment');
-  return [
-    'accept',
-    ...(Array.isArray(prefix)
-      ? [{ acceptWithExecpolicyAmendment: { execpolicy_amendment: prefix } }]
-      : ['acceptForSession']),
-    'cancel',
-  ];
-}
-
-/** What "always" is for a command, as Codex words it: the first decision it offers to keep. */
-function alwaysDecision(
-  decisions: readonly unknown[],
-  network: boolean,
-): { decision: CommandDecision; wording: string } | undefined {
-  for (const decision of decisions) {
-    if (decision === 'acceptForSession') {
+    case 'plan': {
+      if (prompt.kind !== 'plan') break;
+      if (answer.answer.approve) {
+        const { mode } = answer.answer;
+        if (mode !== 'auto')
+          throw new Error(
+            `That plan doesn’t offer ${mode}: Codex carries a plan out in its Default.`,
+          );
+        return { kind: 'choice', value: 'implement' };
+      }
+      const feedback = answer.answer.feedback.trim();
       return {
-        decision,
-        wording: network
-          ? 'Yes, and allow this host for this conversation'
-          : "Yes, and don't ask again for this command in this session",
+        kind: 'choice',
+        value: 'keep-planning',
+        ...(feedback === '' ? {} : { feedback }),
       };
     }
-    const prefix = property(
-      property(decision, 'acceptWithExecpolicyAmendment'),
-      'execpolicy_amendment',
-    );
-    if (Array.isArray(prefix) && prefix.every((part) => typeof part === 'string')) {
-      const line = commandLine(prefix);
-      if (line.includes('\n') || line.includes('\r')) continue;
+    case 'elicitation':
+      if (prompt.kind !== 'form') break;
       return {
-        decision: { acceptWithExecpolicyAmendment: { execpolicy_amendment: prefix } },
-        wording: `Yes, and don't ask again for commands that start with \`${line}\``,
+        kind: 'form',
+        action: answer.action,
+        ...(answer.values === undefined ? {} : { values: answer.values }),
       };
-    }
   }
-  return undefined;
-}
-
-/** How No is said: `cancel` (stop, and tell Codex what to do differently), else `decline`. */
-function denial(decisions: readonly unknown[]): CommandDecision {
-  return decisions.includes('cancel') || !decisions.includes('decline') ? 'cancel' : 'decline';
-}
-
-function optionsOf(value: unknown): AskedQuestion['options'] {
-  if (!Array.isArray(value)) return [];
-  return value.flatMap((option) => {
-    const label = text(property(option, 'label'));
-    return label === undefined
-      ? []
-      : [{ label, description: text(property(option, 'description')) ?? '' }];
-  });
-}
-
-/** A field of an MCP form, as a question asks it, and how its answer becomes its value. */
-interface FormField {
-  key: string;
-  title: string;
-  text: string;
-  options: { label: string; value: string }[];
-  multiple: boolean;
-  value: (answer: string) => unknown;
-}
-
-/** An elicitation form's fields (a flat object of strings, numbers, booleans and choices). */
-function formFields(schema: unknown): FormField[] | undefined {
-  const properties = property(schema, 'properties');
-  if (typeof properties !== 'object' || properties === null) return undefined;
-  const fields: FormField[] = [];
-  for (const [key, field] of Object.entries(properties)) {
-    const title = text(property(field, 'title')) ?? key;
-    const said = text(property(field, 'description')) ?? title;
-    const kind = property(field, 'type');
-    const choices = choicesOf(field) ?? choicesOf(property(field, 'items'));
-    if (kind === 'array') {
-      if (!choices) return undefined;
-      fields.push({
-        key,
-        title,
-        text: said,
-        options: choices,
-        multiple: true,
-        value: (answer) =>
-          answer
-            .split(', ')
-            .map((label) => choices.find((choice) => choice.label === label)?.value ?? label)
-            .filter((value) => value !== ''),
-      });
-    } else if (kind === 'boolean') {
-      fields.push({
-        key,
-        title,
-        text: said,
-        options: [
-          { label: 'Yes', value: 'true' },
-          { label: 'No', value: 'false' },
-        ],
-        multiple: false,
-        value: (answer) => /^(yes|y|true)$/i.test(answer.trim()),
-      });
-    } else if (kind === 'number' || kind === 'integer') {
-      fields.push({
-        key,
-        title,
-        text: said,
-        options: [],
-        multiple: false,
-        value: (answer) => {
-          const number = Number(answer);
-          return Number.isNaN(number) ? answer : number;
-        },
-      });
-    } else if (kind === 'string') {
-      fields.push({
-        key,
-        title,
-        text: said,
-        options: choices ?? [],
-        multiple: false,
-        value: (answer) => choices?.find((choice) => choice.label === answer)?.value ?? answer,
-      });
-    } else {
-      return undefined;
-    }
-  }
-  return fields;
-}
-
-/** A field's choices: an enum (with names, maybe), or titled constants. */
-function choicesOf(field: unknown): { label: string; value: string }[] | undefined {
-  const values = property(field, 'enum');
-  if (Array.isArray(values)) {
-    const names = property(field, 'enumNames');
-    return values.flatMap((value: unknown, i) => {
-      if (typeof value !== 'string') return [];
-      const name: unknown = Array.isArray(names) ? names[i] : undefined;
-      return [{ label: typeof name === 'string' ? name : value, value }];
-    });
-  }
-  const consts = property(field, 'oneOf') ?? property(field, 'anyOf');
-  if (Array.isArray(consts)) {
-    return consts.flatMap((option) => {
-      const value = text(property(option, 'const'));
-      return value === undefined
-        ? []
-        : [{ label: text(property(option, 'title')) ?? value, value }];
-    });
-  }
-  return undefined;
+  throw new Error('That answer isn’t one this request takes.');
 }

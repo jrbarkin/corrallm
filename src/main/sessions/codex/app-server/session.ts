@@ -1,5 +1,3 @@
-import { randomUUID } from 'node:crypto';
-
 import { UNASKING_MODES } from '../../../../shared/session';
 
 import type {
@@ -10,11 +8,12 @@ import type {
   UserMessage,
   TurnResult,
 } from '../../../../shared/session';
-import type { LiveSession, SessionHost } from '../../connector';
+import type { PromptAnswer } from '../../../../shared/model/prompts';
+import type { LiveSession, PromptAnswers, SessionHost } from '../../connector';
 import { notice, output, property, text, unifiedDiff } from '../../transcript';
 import type { Places } from '../../transcript';
 import { effortChoice } from '../efforts';
-import { PLAN_DECLINED, planPrompt } from '../login';
+import { PLAN_DECLINED } from '../login';
 import type { CodexLogin } from '../login';
 import type { Consent } from '../../adapter';
 import type { AppServer } from '../rpc';
@@ -24,6 +23,7 @@ import type { CommandName, Skill } from './commands';
 import { gitDiff } from './diff';
 import type { RunGit } from './diff';
 import type { Prompts } from './prompts';
+import { consentPrompt, implementPrompt } from './raise';
 import {
   imageInput,
   modeSettings,
@@ -45,7 +45,9 @@ import { historyEvents, OUTPUT_EVERY_MS } from './translate';
  * session events by the translator; what it asks waits on the user (prompts.ts). A turn ends with
  * turn/completed. A plan proposed in plan mode is asked about once its turn ends, as Codex's TUI
  * asks "Implement this plan?": approved, the same turn goes on in Default mode ("Implement the
- * plan."), so whoever sent the message hears its end once the plan is carried out.
+ * plan."), so whoever sent the message hears its end once the plan is carried out. That ask, and
+ * consent to use the user's ChatGPT plan, are raised to the core's prompt owner as Codex's own
+ * requests are (prompts.ts, raise.ts): only the owner's accepted answer goes on.
  *
  * Slash commands (commands.ts) run as Codex's TUI runs them: /review, /compact and /init are turns
  * of the thread; the others are answered here.
@@ -109,16 +111,13 @@ interface Turn {
   /** Only processes started by this native turn, never an earlier turn's write_stdin target. */
   processes: Set<string>;
   ending: boolean;
-  /** The plan prompt waiting for the user, between Codex's turns. */
+  /** The key of the plan prompt waiting for the user, between Codex's turns. */
   plan: string | undefined;
   /** /compact's turn: it ends once its compaction has. */
   compact: boolean;
-  /** The prompt asking to use the user's ChatGPT plan, while it waits: it ends with the answer. */
-  consent: { id: string; settle: (answer: PlanAnswer | undefined) => void } | undefined;
+  /** The key of the prompt asking to use the user's ChatGPT plan, while it waits. */
+  consent: string | undefined;
 }
-
-/** How the user answered whether a session may use their ChatGPT plan. */
-type PlanAnswer = Extract<SessionAnswer, { kind: 'permission' }>['answer'];
 
 /** How many of an MCP server's tools /mcp names. */
 const MCP_TOOLS_SHOWN = 8;
@@ -208,7 +207,6 @@ export class AppServerSession implements LiveSession<CodexMode> {
       if (this.#closing) return;
       this.#closing = true;
       this.#prompts.withdrawAll();
-      this.#withdrawConsent();
       const said = stderr
         .split('\n')
         .filter((line) => line.trim() !== '')
@@ -250,22 +248,24 @@ export class AppServerSession implements LiveSession<CodexMode> {
     return Promise.resolve();
   }
 
-  answer(promptId: string, answer: SessionAnswer): Promise<void> {
-    const turn = this.#turn;
-    if (turn?.plan === promptId && answer.kind === 'plan') {
-      this.#planAnswered(turn, answer.answer);
-      return Promise.resolve();
-    }
-    if (turn?.consent?.id === promptId && answer.kind === 'permission') {
-      turn.consent.settle(answer.answer);
-      return Promise.resolve();
-    }
-    try {
-      this.#prompts.answer(promptId, answer);
-      return Promise.resolve();
-    } catch (error) {
-      return Promise.reject(error instanceof Error ? error : new Error(String(error)));
-    }
+  /** What it asks is answered only through the core's prompt owner (`prompts`), never so. */
+  answer(): Promise<void> {
+    return Promise.reject(
+      new Error('Codex’s requests are answered only through corrallm’s prompts.'),
+    );
+  }
+
+  /** How the core answers and declines what it raised (B13 C5): the owner's accepted answers only. */
+  get prompts(): PromptAnswers {
+    return this.#prompts.answers;
+  }
+
+  /**
+   * Transitional (B13 C5, until X10; X11 removes it): the key of what an event B13 replaces shows,
+   * and the answer given to it as its prompt takes it, for the core's owner to answer.
+   */
+  bridge(promptId: string, answer: SessionAnswer): { key: string; answer: PromptAnswer } {
+    return this.#prompts.bridge(promptId, answer);
   }
 
   async interrupt(): Promise<void> {
@@ -273,7 +273,9 @@ export class AppServerSession implements LiveSession<CodexMode> {
     if (!turn) return;
     turn.interrupted = true;
     if (turn.plan !== undefined) {
-      this.#host.emit({ type: 'withdrawn', id: turn.plan });
+      const plan = turn.plan;
+      turn.plan = undefined;
+      this.#prompts.withdraw(plan);
       this.#end(turn, { status: 'cancelled', reason: 'interrupted' });
       return;
     }
@@ -317,7 +319,6 @@ export class AppServerSession implements LiveSession<CodexMode> {
     this.#closing = true;
     if (this.#flushing) clearTimeout(this.#flushing);
     this.#prompts.withdrawAll();
-    this.#withdrawConsent();
     await this.#server.close();
   }
 
@@ -450,12 +451,14 @@ export class AppServerSession implements LiveSession<CodexMode> {
 
   /**
    * Whether the turn may go on to use the user's ChatGPT plan: at once where it may be used (another
-   * login, or allowed for this session or for good), else once the user says so (planPrompt). False
-   * if the turn ended meanwhile (interrupted: nothing was sent); throws if they said no.
+   * login, or allowed for this session or for good), else once the user says so (consentPrompt,
+   * raised to the core's owner). False if the turn ended meanwhile (interrupted: nothing was sent);
+   * throws if they said no, or the core declined to ask.
    */
   async #mayUsePlan(turn: Turn): Promise<boolean> {
     const consent = this.#consent;
-    if (consent === undefined || this.#login.kind !== 'chatgpt') return true;
+    const login = this.#login;
+    if (consent === undefined || login.kind !== 'chatgpt') return true;
     const given = await consent.given().catch(() => false);
     if (this.#turn !== turn) return false;
     if (turn.stop) {
@@ -463,16 +466,14 @@ export class AppServerSession implements LiveSession<CodexMode> {
       return false;
     }
     if (!given) {
-      const id = `${turn.messages[0] ?? randomUUID()}:chatgpt-plan`;
-      const prompt = planPrompt(id, this.#login);
-      const answer = await new Promise<PlanAnswer | undefined>((settle) => {
-        turn.consent = { id, settle };
-        this.#host.emit(prompt);
-        this.#host.emit({ type: 'status', status: 'waiting' });
-      });
+      const asked = this.#prompts.ask(consentPrompt(login));
+      turn.consent = asked.key;
+      const answer = await asked.answered;
+      // Interrupted (the turn ended), or the session closing: nothing is sent.
+      if (this.#turn !== turn || turn.consent !== asked.key || this.#closing) return false;
       turn.consent = undefined;
-      if (answer === undefined || this.#turn !== turn) return false;
-      if (answer === 'deny') throw new Error(PLAN_DECLINED);
+      // Declined by the core, or No.
+      if (answer !== 'once' && answer !== 'always') throw new Error(PLAN_DECLINED);
       if (answer === 'always') {
         consent.give().catch((error: unknown) => {
           console.error('Could not keep that the ChatGPT plan may be used:', error);
@@ -484,12 +485,13 @@ export class AppServerSession implements LiveSession<CodexMode> {
     return true;
   }
 
-  /** The prompt asking to use the user's ChatGPT plan no longer waits (the turn or session ended). */
+  /** The prompt asking to use the user's ChatGPT plan no longer waits: the turn was interrupted. */
   #withdrawConsent(): void {
-    const consent = this.#turn?.consent;
-    if (!consent) return;
-    this.#host.emit({ type: 'withdrawn', id: consent.id });
-    consent.settle(undefined);
+    const turn = this.#turn;
+    const key = turn?.consent;
+    if (turn === undefined || key === undefined) return;
+    turn.consent = undefined;
+    this.#prompts.withdraw(key);
   }
 
   /** Codex's turn `codex` is the one `turn` waits for: interrupted at once if it was asked to stop. */
@@ -546,24 +548,36 @@ export class AppServerSession implements LiveSession<CodexMode> {
     ) {
       // Codex's TUI asks "Implement this plan?" now.
       turn.codex = undefined;
-      turn.plan = `${plan.id}:prompt`;
-      this.#host.emit({ type: 'plan', id: turn.plan, plan: plan.text });
-      this.#host.emit({ type: 'status', status: 'waiting' });
+      void this.#askPlan(turn, plan.text);
       return;
     }
     this.#end(turn, this.#translator.takeResult(codex, turn.interrupted && status !== 'completed'));
   }
 
-  /** The plan was approved (carried out in Default mode), or not (planning goes on, if told how). */
-  #planAnswered(turn: Turn, answer: Extract<SessionAnswer, { kind: 'plan' }>['answer']): void {
+  /**
+   * Asks to implement the plan Codex proposed (raise.ts' implementPrompt, through the core's owner),
+   * and goes on with the owner's answer: one that ends unanswered but not by an interrupt (the core
+   * declined it) carries nothing out.
+   */
+  async #askPlan(turn: Turn, plan: string): Promise<void> {
+    const asked = this.#prompts.ask(implementPrompt(plan));
+    turn.plan = asked.key;
+    const answer = (await asked.answered) as { approve: boolean; feedback?: string } | undefined;
+    // Interrupted meanwhile (it withdrew the prompt and ended the turn), or the session closing.
+    if (this.#turn !== turn || turn.plan !== asked.key || this.#closing) return;
     turn.plan = undefined;
+    this.#planAnswered(turn, answer ?? { approve: false });
+  }
+
+  /** The plan was approved (carried out in Default mode), or not (planning goes on, if told how). */
+  #planAnswered(turn: Turn, answer: { approve: boolean; feedback?: string }): void {
     let next: string;
     if (answer.approve) {
       this.#mode = 'auto';
       this.#host.emit({ type: 'mode', mode: 'auto' });
       next = IMPLEMENT_PLAN;
     } else {
-      next = answer.feedback.trim();
+      next = answer.feedback?.trim() ?? '';
       // "No, stay in Plan mode": the turn ends, the plan not carried out.
       if (next === '') {
         this.#end(turn, { status: 'completed', reason: 'completed' });

@@ -240,6 +240,8 @@ function codexAsking() {
             host.emit({ type: 'status', status: 'working' });
           },
           patch: () => undefined,
+          mcpCall: () => undefined,
+          mcpCalls: () => [],
         },
         { cwd: spec.cwd, home: profile },
       );
@@ -249,15 +251,16 @@ function codexAsking() {
         host.emit({ type: 'status', status: 'working' });
         return Promise.resolve();
       };
-      session.answer = (id, answer) => {
-        asking.answer(id, answer);
-        return Promise.resolve();
-      };
       session.close = async () => {
         asking.withdrawAll();
         await close();
       };
-      return session;
+      // As the App Server's session: answered only through the core's owner, by key (B13 C5).
+      return Object.assign(session, {
+        answer: () => Promise.reject(new Error('answered only through the owner')),
+        prompts: asking.answers,
+        bridge: (id: string, answer: SessionAnswer) => asking.bridge(id, answer),
+      });
     },
   };
   return {
@@ -536,6 +539,7 @@ describe('a session’s prompt', () => {
     const params = {
       itemId: 'one-item',
       command: 'pnpm test',
+      cwd: profile,
       availableDecisions: ['accept', 'cancel'],
     };
     const firstResponse = asking.request('item/commandExecution/requestApproval', params, 7);

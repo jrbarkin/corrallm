@@ -11,6 +11,12 @@
 //   (item/commandExecution/requestApproval, Yes, a rule for `npm test`, or No: cancel);
 // - "edit": patches hello.txt (a fileChange), asking first in a read-only sandbox;
 // - "ask": asks a question (item/tool/requestUserInput) and replies with the answer;
+// - "mcp": calls an MCP server's destructive tool, asking first through an elicitation marked
+//   codex_approval_kind mcp_tool_call, as Codex 0.162.1 does (fixtures/mcp-approvals.jsonl);
+// - "form", "link": an MCP server asks for a six-field form, or to open a link (the same);
+// - "stdin": runs `cat` outside the sandbox, asking first, then asks to write to it (kind
+//   writeStdin, its own approvalId on the command's item: fixtures/approvals.jsonl);
+// - "permissions": asks for network access (item/permissions/requestApproval);
 // - "slow": starts a sleeping Node child, left running after turn/interrupt;
 // - "background": starts the same child, but completes the turn while it still runs;
 // - "todo": keeps a plan (turn/plan/updated);
@@ -24,7 +30,8 @@
 // Its environment: FAKE_CODEX_LOGIN (chatgpt, apikey or none: what account/read says; apikey by
 // default), FAKE_CODEX_FAIL (it prints that on stderr and exits 1 at once), FAKE_CODEX_STATE (a
 // file it keeps its threads in, so that a later app server resumes them), FAKE_CODEX_LOG (a file
-// it appends each request it gets to, one JSON line each), FAKE_CODEX_CONFIG_FAIL (config/read
+// it appends each request it gets to, one JSON line each, and each answer to one of its requests,
+// as `answer:<method>`), FAKE_CODEX_CONFIG_FAIL (config/read
 // fails with that message), FAKE_CODEX_LINGER (how many ms it takes to exit once its input ends,
 // as one finishing what it runs: none by default), FAKE_CODEX_SANDBOX and FAKE_CODEX_APPROVAL
 // (the sandbox and approvals a thread given none runs with, as the user's config.toml would set
@@ -165,7 +172,18 @@ function ask(method, params) {
   const id = nextRequest;
   nextRequest += 1;
   send({ method, id, params });
-  return new Promise((resolve) => asked.set(id, (answer) => resolve({ id, answer })));
+  return new Promise((resolve) =>
+    asked.set(id, (answer) => {
+      if (answer !== undefined && process.env.FAKE_CODEX_LOG) {
+        const params = answer.result ?? { error: answer.error };
+        appendFileSync(
+          process.env.FAKE_CODEX_LOG,
+          `${JSON.stringify({ method: `answer:${method}`, params })}\n`,
+        );
+      }
+      resolve({ id, answer });
+    }),
+  );
 }
 
 function threadObject(id, cwd, model) {
@@ -463,6 +481,188 @@ async function turn(thread, turnId, input, { review, compact } = {}) {
     notify('serverRequest/resolved', { threadId, requestId: id });
     if (state.interrupted) return finish('interrupted');
     said = `You picked ${answer?.result?.answers?.color?.answers?.[0] ?? 'nothing'}.`;
+  }
+  /** An MCP server's tool call, as Codex reports it: asking first, as `asks` does. */
+  const mcpCall = async (tool, args, readOnly, asks) => {
+    const call = {
+      type: 'mcpToolCall',
+      id: `exec-${randomUUID()}`,
+      server: 'probe',
+      tool,
+      status: 'inProgress',
+      arguments: args,
+      appContext: null,
+      mcpAppUi: null,
+      pluginId: null,
+      readOnlyHint: readOnly,
+      result: null,
+      error: null,
+      durationMs: null,
+    };
+    notify('item/started', { item: call, ...where, startedAtMs: Date.now() });
+    const { id, answer } = await ask('mcpServer/elicitation/request', {
+      threadId,
+      turnId,
+      serverName: 'probe',
+      ...asks,
+    });
+    notify('serverRequest/resolved', { threadId, requestId: id });
+    const result = answer?.result;
+    const ok = result?.action === 'accept';
+    const done = {
+      ...call,
+      status: ok ? 'completed' : 'failed',
+      result: ok ? { content: [{ type: 'text', text: 'done' }], structuredContent: null } : null,
+      error: ok
+        ? null
+        : {
+            message:
+              result?.action === 'decline'
+                ? 'user rejected MCP tool call'
+                : 'user cancelled MCP tool call',
+          },
+      durationMs: 1,
+    };
+    notify('item/completed', { item: done, ...where, completedAtMs: Date.now() });
+    items.push(done);
+    return result;
+  };
+  if (wanted.startsWith('mcp')) {
+    const result = await mcpCall('save_note', { text: 'a' }, false, {
+      mode: 'form',
+      _meta: {
+        codex_approval_kind: 'mcp_tool_call',
+        persist: ['session', 'always'],
+        tool_title: 'Save note',
+        tool_description: 'Saves a short note.',
+        tool_params: { text: 'a' },
+        tool_params_display: [{ name: 'text', value: 'a', display_name: 'text' }],
+      },
+      message: 'Allow the probe MCP server to run tool "save_note"?',
+      requestedSchema: { type: 'object', properties: {} },
+    });
+    if (state.interrupted) return finish('interrupted');
+    const persist = result?._meta?.persist;
+    said =
+      result?.action !== 'accept'
+        ? 'Not saved.'
+        : persist === 'session'
+          ? 'Saved, and allowed for this session.'
+          : persist === 'always'
+            ? 'Saved, and allowed from now on.'
+            : 'Saved.';
+  }
+  if (wanted.startsWith('form')) {
+    const result = await mcpCall('profile_form', {}, true, {
+      mode: 'form',
+      _meta: null,
+      message: 'Fill in your profile.',
+      requestedSchema: {
+        type: 'object',
+        properties: {
+          age: { type: 'integer', title: 'Age', minimum: 0, maximum: 150 },
+          color: {
+            type: 'string',
+            title: 'Color',
+            enum: ['red', 'green', 'blue'],
+            enumNames: ['Red', 'Green', 'Blue'],
+          },
+          email: { type: 'string', title: 'Email', format: 'email' },
+          name: { type: 'string', title: 'Name', minLength: 1, maxLength: 40 },
+          subscribe: { type: 'boolean', title: 'Subscribe', default: false },
+          topics: {
+            type: 'array',
+            title: 'Topics',
+            items: { type: 'string', enum: ['news', 'tips'] },
+            minItems: 1,
+          },
+        },
+        required: ['name', 'email'],
+      },
+    });
+    if (state.interrupted) return finish('interrupted');
+    said = result?.action === 'accept' ? `Hello, ${String(result.content?.name)}.` : 'No form.';
+  }
+  if (wanted.startsWith('link')) {
+    const result = await mcpCall('sign_in', {}, true, {
+      mode: 'url',
+      _meta: null,
+      message: 'Sign in to continue.',
+      url: 'https://auth.example.com/sign-in?state=probe',
+      elicitationId: '5b8f7c1e-2f4a-4c1d-9e3b-7a6d5c4b3a21',
+    });
+    if (state.interrupted) return finish('interrupted');
+    said = result?.action === 'accept' ? 'Signed in.' : 'Not signed in.';
+  }
+  if (wanted.startsWith('stdin')) {
+    const command = {
+      type: 'commandExecution',
+      id: `exec-${randomUUID()}`,
+      command: '/bin/zsh -lc cat',
+      cwd: thread.cwd,
+      processId: null,
+      source: 'agent',
+      status: 'inProgress',
+      commandActions: [{ type: 'unknown', command: 'cat' }],
+      aggregatedOutput: null,
+      exitCode: null,
+      durationMs: null,
+    };
+    notify('item/started', { item: command, ...where, startedAtMs: Date.now() });
+    const run = await ask('item/commandExecution/requestApproval', {
+      kind: 'command',
+      ...where,
+      itemId: command.id,
+      startedAtMs: Date.now(),
+      environmentId: 'local',
+      reason: 'test',
+      command: command.command,
+      cwd: command.cwd,
+      commandActions: command.commandActions,
+      proposedExecpolicyAmendment: ['cat'],
+      availableDecisions: [
+        'accept',
+        { acceptWithExecpolicyAmendment: { execpolicy_amendment: ['cat'] } },
+        'cancel',
+      ],
+    });
+    notify('serverRequest/resolved', { threadId, requestId: run.id });
+    if (state.interrupted || run.answer?.result?.decision === 'cancel') {
+      return finish('interrupted');
+    }
+    const input = await ask('item/commandExecution/requestApproval', {
+      kind: 'writeStdin',
+      ...where,
+      itemId: command.id,
+      startedAtMs: Date.now(),
+      approvalId: `exec-${randomUUID()}`,
+      environmentId: 'local',
+      reason:
+        'Send input to an existing terminal. This terminal was launched outside the sandbox, bypassing any managed network proxy.',
+      command: "write_stdin --session-id 7627 'hi\n'",
+      cwd: command.cwd,
+      commandActions: [{ type: 'unknown', command: "write_stdin --session-id 7627 'hi\n'" }],
+      availableDecisions: ['accept', 'cancel'],
+    });
+    notify('serverRequest/resolved', { threadId, requestId: input.id });
+    if (state.interrupted || input.answer?.result?.decision !== 'accept') {
+      return finish('interrupted');
+    }
+    said = 'Wrote to cat.';
+  }
+  if (wanted.startsWith('permissions')) {
+    const { id, answer } = await ask('item/permissions/requestApproval', {
+      ...where,
+      itemId: `exec-${randomUUID()}`,
+      environmentId: 'local',
+      startedAtMs: Date.now(),
+      cwd: thread.cwd,
+      reason: 'to fetch a page',
+      permissions: { network: { enabled: true }, fileSystem: null },
+    });
+    notify('serverRequest/resolved', { threadId, requestId: id });
+    if (state.interrupted) return finish('interrupted');
+    said = answer?.result?.permissions?.network ? 'Granted.' : 'Not granted.';
   }
   if (wanted.startsWith('slow') || wanted.startsWith('background')) {
     const command = sleepingCommand(thread, turnId);

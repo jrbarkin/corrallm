@@ -128,6 +128,8 @@ export class AppServerConnector implements Connector<CodexMode> {
         },
         settled: () => live.session?.settled(),
         patch: (itemId) => translator.patch(itemId),
+        mcpCall: (itemId) => translator.mcpCall(itemId),
+        mcpCalls: () => translator.mcpCalls(),
       },
       places,
     );
