@@ -226,8 +226,13 @@ async function connect(source: Locator, target: Locator, from: Dot = 'bottom', t
     .click();
 }
 
-/** Drags a selection box 30px around the given nodes, starting on empty space. */
+/**
+ * Drags a selection box 30px around the given nodes, starting on empty space. The box's corner can
+ * lie where the dock's icons fly back to the rail (a closed window), which would take the press, so
+ * it waits for the flight to end first.
+ */
 async function marquee(...targets: Locator[]) {
+  await expect(page.locator('.canvas-dock[data-moving]')).toHaveCount(0);
   const boxes = await Promise.all(targets.map(box));
   const left = Math.min(...boxes.map((b) => b.x)) - 30;
   const top = Math.min(...boxes.map((b) => b.y)) - 30;
