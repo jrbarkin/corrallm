@@ -275,25 +275,30 @@ for (const signal of ['SIGTERM', 'SIGHUP', 'SIGINT'] as const) {
 
 async function stop(): Promise<void> {
   link.emit('exiting', 'signal');
+  let code = 0;
   try {
     const core = await composing;
     if (core !== undefined) {
-      const served = await windows.promise;
-      // Drafts land before the barrier refuses their writes: at most a second, all together.
-      await served.flushDrafts(served.connected(), SYSTEM_DRAFTS_MS);
-      // No dialog on this path: a failure is said without values, and what is on disk stands.
-      const prepared = await core.prepareShutdown('system');
-      if ('failed' in prepared)
-        console.error('corrallm: not everything could be saved as it closed.');
-      await close(core);
+      try {
+        const served = await windows.promise;
+        // Drafts land before the barrier refuses their writes: at most a second, all together.
+        await served.flushDrafts(served.connected(), SYSTEM_DRAFTS_MS);
+        // No dialog on this path: a failure is said without values, and what is on disk stands.
+        const prepared = await core.prepareShutdown('system');
+        if ('failed' in prepared)
+          console.error('corrallm: not everything could be saved as it closed.');
+      } finally {
+        await close(core);
+      }
     }
   } catch {
+    code = 1;
     console.error('corrallm: its core couldn’t close cleanly; it ends what it left as it starts.');
   } finally {
     release();
     // Answers to main's requests about this close go out before the process does.
     setImmediate(() => {
-      process.exit(0);
+      process.exit(code);
     });
   }
 }

@@ -444,10 +444,12 @@ export class QuitCoordinator<W extends QuitWindow> {
     const ifIdle = this.#ifIdle;
     this.#ifIdle = false;
     await this.#flush(this.#deps.windows());
+    if (this.#systemShutdown()) return false;
     const reason = this.#deps.updates()?.restarting === true ? 'update' : 'quit';
     const prepared = await (ifIdle
       ? this.#deps.core.prepare(reason, { ifIdle: true })
       : this.#deps.core.prepare(reason));
+    if (this.#systemShutdown()) return false;
     if ('busy' in prepared) {
       if (!this.approved) void this.#ask(prepared.busy);
       return false;
@@ -549,6 +551,7 @@ export class QuitCoordinator<W extends QuitWindow> {
       return false;
     }
     const parent = window ?? (await this.#sheet());
+    if (this.approved) return false;
     const response =
       parent === undefined
         ? 0
