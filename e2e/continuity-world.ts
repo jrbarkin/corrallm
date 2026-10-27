@@ -7,12 +7,14 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { expect, test } from '@playwright/test';
+import type { Page } from '@playwright/test';
 
 import { toolName } from '../src/shared/api/registry';
 import type { ResultOf } from '../src/shared/api/registry';
 import type { OpName } from '../src/shared/api/surface';
 import { canvasAction, dismissStart } from './canvas-actions';
 import { launchApp } from './launch';
+import { closeLastWindow, reopenWindow } from './last-window';
 
 export const CONTINUITY_QUEUE = [
   { id: 'first', message: 'continuity-first' },
@@ -100,6 +102,7 @@ export async function continuityWorld({
   try {
     let page = await app.firstWindow();
     const problems: string[] = [];
+    let successor: Page | undefined;
     const follow = () => page.on('pageerror', (error) => problems.push(error.message));
     follow();
     await page.waitForLoadState('load');
@@ -197,19 +200,15 @@ export async function continuityWorld({
         await expect.poll(sessions).toHaveLength(1);
       },
       release: () => writeFile(gate, 'go'),
-      async closeWindow() {
-        const closed = page.waitForEvent('close');
-        await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.close());
-        await closed;
-        expect(
-          await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length),
-        ).toBe(0);
+      /** Closes the window (a dead one is destroyed); on Linux and Windows it only minimizes. */
+      async closeWindow(options?: { destroy?: boolean }) {
+        successor = await closeLastWindow(app, page, options);
       },
       async reopen() {
-        const opened = app.waitForEvent('window');
-        await app.evaluate(({ app }) => app.emit('second-instance', {}, [], process.cwd()));
-        page = await opened;
-        follow();
+        const before = page;
+        page = await reopenWindow(app, page, successor);
+        successor = undefined;
+        if (page !== before) follow();
         await page.waitForLoadState('load');
         await dismissStart(page);
       },
