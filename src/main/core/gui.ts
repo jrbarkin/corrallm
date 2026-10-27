@@ -8,7 +8,7 @@ import type { Dispatcher } from './call';
 import type { TerminalEvents } from './terminal-events';
 import type { HumanCaller } from './caller';
 import type { WindowId } from './host';
-import { PauseAllResult } from './presence';
+import { PauseAllResult, SYSTEM_DRAFTS_MS } from './presence';
 import type { Topics } from './topics';
 
 /*
@@ -33,11 +33,7 @@ export interface WindowPort extends LinkPort {
 
 /** How long a window has to finish its drafts as the app quits (`flushDrafts`). */
 export const DRAFTS_MS = 5000;
-/**
- * How long the windows have, all together, as the system shuts down or logs out (B14 C4): drafts
- * land before the barrier, leaving most of logind's five seconds for sessions to end.
- */
-export const SYSTEM_DRAFTS_MS = 1000;
+export { SYSTEM_DRAFTS_MS };
 
 interface Served {
   readonly port: WindowPort;

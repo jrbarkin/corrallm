@@ -1,15 +1,14 @@
 import path from 'node:path';
 
 import { app, BrowserWindow, dialog, powerMonitor, session } from 'electron';
-import type { MessageBoxOptions } from 'electron';
 import squirrelStartup from 'electron-squirrel-startup';
 
 import type { Answer } from '../shared/link';
 import { APP_SCHEME, registerAppSchemePrivileges, serveAppScheme } from './app-protocol';
-import { Closing } from './closing';
 import { ProfileLocked } from './core/lock';
 import type { CoreInit, CoreSide } from './core/protocol';
 import { PROD_CSP } from './csp';
+import { QuitCoordinator } from './host/closing';
 import { forkCore } from './host/core-process';
 import { CorePorts } from './host/ports';
 import { hostServices } from './host/services';
@@ -38,9 +37,6 @@ const FORBIDDEN_SWITCHES = [
   'utility-cmd-prefix',
   'browser-subprocess-path',
 ] as const;
-
-/** How long an explicit second-quit escape waits for the core to close. */
-const ABANDON_MS = 5000;
 
 function main(): void {
   // Squirrel.Windows launches the app with --squirrel-* flags on install/update/uninstall.
@@ -82,9 +78,10 @@ function main(): void {
   installNavigationGuards(trustedOrigin);
 
   const openMainWindow = () => createMainWindow(rendererUrl, { devTools: !app.isPackaged, hidden });
-  // macOS stays up as ever; elsewhere, until the core is up, the last window closing quits.
-  let lastWindowClosed = () => {
-    app.quit();
+  // macOS stays up as ever; elsewhere, until the quit coordinator is there, the last window
+  // closing quits (Electron's own default, kept: no window exists before then).
+  let allClosed = () => {
+    if (process.platform !== 'darwin') app.quit();
   };
 
   void app
@@ -116,20 +113,28 @@ function main(): void {
         locale: app.getLocale(),
         fakeSessions,
       };
+      let updates: AppUpdates | undefined = undefined;
       // The core owns the profile and its sessions; main answers only what needs the desktop. It
       // takes the profile (core.lock) as it comes up: `corrallm serve` may hold this one, and
-      // must not write its stores while the app does. A core that crashes is restarted.
+      // must not write its stores while the app does. A core that crashes is restarted; one that
+      // closes itself (a signal: it says `exiting`, or exits 0 unasked) takes main through the
+      // system's path (B14 C4), so main never sits with no core.
       const supervisor: CoreSupervisor = new CoreSupervisor({
-        fork: () =>
-          forkCore({
+        fork: () => {
+          const core = forkCore({
             entry: path.join(__dirname, 'core.cjs'),
             output: (line, stream) => {
               if (stream === 'stdout') console.log(`[core] ${line}`);
               else console.error(`[core] ${line}`);
             },
             check: devServerUrl !== undefined,
-            host: (core) => hostServices(core, (source) => supervisor.owns(source)),
-          }),
+            host: (forked) => hostServices(forked, (source) => supervisor.owns(source)),
+          });
+          core.link.on('exiting', () => {
+            if (supervisor.owns(core)) quit.request('system');
+          });
+          return core;
+        },
         init: async (core) => {
           const up = await answered(core.link.request('init', init));
           if (up !== null) throw new ProfileLocked(up.profileLocked.holder ?? undefined);
@@ -150,8 +155,54 @@ function main(): void {
             `${why.message} Open corrallm again to go on from what was last saved.`,
           );
         },
+        closedItself: () => {
+          quit.request('system');
+        },
       });
       const ports = new CorePorts(supervisor, trustedOrigin);
+      /** Asks the core up now (waiting while a new one comes up), failing with its sentence. */
+      const ask = async <K extends keyof CoreSide['requests']>(
+        name: K,
+        ...args: CoreSide['requests'][K]['args']
+      ): Promise<CoreSide['requests'][K]['result']> =>
+        answered((await supervisor.core).link.request(name, ...args));
+      // How corrallm ends, every way it may (B14 C2, C4), and how a window comes back (C10).
+      const quit = new QuitCoordinator<BrowserWindow>({
+        platform: process.platform,
+        hidden,
+        core: {
+          presence: () => supervisor.presence,
+          flushDrafts: (windows, reason) =>
+            reason === undefined
+              ? ask('flushDrafts', windows)
+              : ask('flushDrafts', windows, reason),
+          prepare: (reason, options) =>
+            options === undefined
+              ? ask('prepareShutdown', reason)
+              : ask('prepareShutdown', reason, options),
+          cancel: () => ask('cancelShutdown'),
+          commit: () => ask('commitShutdown'),
+          activate: (window, handle) => ask('activate', window, handle),
+          exited: async () => (await supervisor.core).exited,
+          stop: () => {
+            supervisor.stop();
+          },
+        },
+        windows: () => BrowserWindow.getAllWindows(),
+        focused: () => BrowserWindow.getFocusedWindow(),
+        open: openMainWindow,
+        ask: async (window, options) => (await dialog.showMessageBox(window, options)).response,
+        quit: () => {
+          app.quit();
+        },
+        exit: (code) => {
+          app.exit(code);
+        },
+        updates: () => updates,
+        log: (...args) => {
+          console.error(...args);
+        },
+      });
       try {
         await supervisor.start();
       } catch (error) {
@@ -159,17 +210,10 @@ function main(): void {
         refuseLocked(error);
         return;
       }
-      let updates: AppUpdates | undefined = undefined;
       app.once('will-quit', () => {
         updates?.stop();
         supervisor.stop();
       });
-      /** Asks the core up now (waiting while a new one comes up), failing with its sentence. */
-      const ask = async <K extends keyof CoreSide['requests']>(
-        name: K,
-        ...args: CoreSide['requests'][K]['args']
-      ): Promise<CoreSide['requests'][K]['result']> =>
-        answered((await supervisor.core).link.request(name, ...args));
 
       hardenSession(session.defaultSession, trustedOrigin);
       if (devServerUrl === undefined) {
@@ -181,123 +225,8 @@ function main(): void {
       }
       registerIpcHandlers(trustedOrigin, ports);
 
-      /**
-       * Each window finishes the drafts it composes, over its own port, at most DRAFTS_MS each (a
-       * crashed one is skipped): rejects, for the failed-save dialog, if one didn't.
-       */
-      const flushDrafts = async (closing: BrowserWindow[]) => {
-        const { unanswered } = await ask(
-          'flushDrafts',
-          closing.map((window) => window.webContents.id),
-        );
-        if (unanswered.length > 0) {
-          throw new Error(
-            unanswered.length === 1
-              ? 'A window did not finish saving what was being typed in it before closing'
-              : `${String(unanswered.length)} windows did not finish saving what was being typed in them before closing`,
-          );
-        }
-      };
-      // An approved quit waits for the complete core teardown. Only a second quit, while
-      // saving or the core's close is stuck, bounds that wait, as the user's explicit escape.
-      let finishing: Promise<void> | undefined;
-      let quitFailed = false;
-      let readyToQuit = false;
-      const failQuit = (why: string, error: unknown) => {
-        const alreadyFailed = quitFailed;
-        quitFailed = true;
-        console.error(why, error);
-        if (readyToQuit && !alreadyFailed) app.exit(1);
-      };
-      const escaped = Promise.withResolvers<undefined>();
-      let escapeTimer: ReturnType<typeof setTimeout> | undefined;
-      const abandon = (escape?: true) => {
-        finishing ??= finish();
-        if (escape && !readyToQuit) {
-          escapeTimer ??= setTimeout(() => {
-            escaped.resolve(undefined);
-          }, ABANDON_MS);
-        }
-        return finishing;
-      };
-      const finish = async () => {
-        supervisor.stop();
-        // The shutdown barrier committed: the endpoint closes, then every session and the stores.
-        const closed = ask('commitShutdown').catch((error: unknown) => {
-          failQuit('Could not finish closing the core:', error);
-        });
-        try {
-          await Promise.race([closed, escaped.promise]);
-        } finally {
-          clearTimeout(escapeTimer);
-        }
-      };
-      const askAnyway =
-        (verb: 'Quit' | 'Close', window?: BrowserWindow) =>
-        async (why: string): Promise<boolean> => {
-          console.error('Could not save before closing:', why);
-          if (hidden) {
-            await abandon();
-            app.exit(1);
-            return false;
-          }
-          const options: MessageBoxOptions = {
-            type: 'warning',
-            message: 'The run could not be saved',
-            // A window only views its canvas: closing it ends no session (B11 Design §8).
-            detail:
-              verb === 'Quit'
-                ? `${why}\n\nQuit anyway? What wasn't saved is lost, and the agents' sessions end.`
-                : `${why}\n\nClose anyway? What wasn't saved is lost; the agents go on working.`,
-            buttons: ['Keep corrallm open', `${verb} anyway`],
-            defaultId: 0,
-            cancelId: 0,
-          };
-          const { response } = await (window
-            ? dialog.showMessageBox(window, options)
-            : dialog.showMessageBox(options));
-          if (verb === 'Quit' && response !== 1) {
-            updates?.cancelRestart();
-            // Keep corrallm open: the barrier lifts, and the endpoint and every turn go on.
-            await ask('cancelShutdown').catch((error: unknown) => {
-              console.error('Could not keep the core going:', error);
-            });
-          }
-          return response === 1;
-        };
-      const quit = new Closing({
-        // The drafts each window composes, then the core's barrier: no new dispatch or write,
-        // everything forced to disk, sessions still usable. Every run is the core's (B11 §8).
-        save: async () => {
-          await flushDrafts(BrowserWindow.getAllWindows());
-          const prepared = await ask(
-            'prepareShutdown',
-            updates?.restarting === true ? 'update' : 'quit',
-          );
-          if ('failed' in prepared) throw new Error(prepared.sentence);
-        },
-        abandon,
-        ask: askAnyway('Quit'),
-        done: () => {
-          void abandon().then(() => {
-            readyToQuit = true;
-            if (quitFailed) {
-              app.exit(1);
-              return;
-            }
-            // quitAndInstall closes windows before before-quit: call it only after saving and
-            // core shutdown have been approved here, never straight from the update dialog.
-            if (!updates?.finishQuit()) app.quit();
-          });
-        },
-      });
       app.on('before-quit', (event) => {
-        // Closing has approved the irreversible teardown, but a repeated native quit must
-        // still wait until done() has finished closing the core: it gives that close only the
-        // escape's last few seconds, as the way out of one that hangs.
-        const closing = quit.approved && !readyToQuit;
-        if (!quit.request() || !readyToQuit) event.preventDefault();
-        if (closing) void abandon(true);
+        quit.beforeQuit(event);
       });
       // A window gaining focus has the core check the file of the canvas it shows for a change on
       // disk (B9 Design §5): one made in another program while corrallm was in the background.
@@ -307,78 +236,37 @@ function main(): void {
       powerMonitor.on('resume', () => {
         supervisor.resumed();
       });
-      /** Shows a window again (B11 Design §8): the first open one, focused, else a new one. */
-      const reopen = () => {
-        if (quit.busy || quit.approved) return;
-        const [shown] = BrowserWindow.getAllWindows();
-        if (shown === undefined) {
-          void openMainWindow().catch((error: unknown) => {
-            console.error('Could not open corrallm’s window:', error);
-          });
-          return;
-        }
-        if (shown.isMinimized()) shown.restore();
-        if (!hidden) shown.show();
-        shown.focus();
-      };
+      // The system's shutdown, restart or power off, and on macOS its logout (B14 C4): corrallm
+      // saves and closes within its budget, asking nothing, then quits itself. Electron passes the
+      // event, which its typings leave out.
+      powerMonitor.on('shutdown', (event?: Electron.Event) => {
+        quit.shutdown(event);
+      });
       // Opening corrallm again while it runs (the single instance's lock) shows its window: the
       // way back to one closed while the core kept working, on every platform.
-      app.on('second-instance', reopen);
-      // Windows and Linux: the last window closing quits, unless the core has work going on
-      // (a turn, a running run, a job): then it runs on, and opening corrallm again shows it. The
-      // core decides in one step, holding its barrier only if nothing is at work (B14 C2's
-      // ifIdle), so work starting meanwhile is never cut off unasked. C4 replaces this with the
-      // run-aware question.
-      lastWindowClosed = () => {
-        if (quit.busy || quit.approved) return;
-        void ask('prepareShutdown', 'quit', { ifIdle: true }).then(
-          (prepared) => {
-            const idle = !('busy' in prepared);
-            if (BrowserWindow.getAllWindows().length > 0 || quit.busy || quit.approved) {
-              // A window came back meanwhile: the barrier held for this close lifts.
-              if (idle && !quit.busy && !quit.approved) {
-                void ask('cancelShutdown').catch((error: unknown) => {
-                  console.error('Could not keep the core going:', error);
-                });
-              }
-              return;
-            }
-            if (idle) {
-              app.quit();
-              return;
-            }
-            console.error(
-              'corrallm: its agents are still working, so it runs on with no window: open corrallm again to show it, and quit it there.',
-            );
-          },
-          () => {
-            app.quit();
-          },
-        );
-      };
+      app.on('second-instance', () => {
+        void quit.reopen();
+      });
       app.on('browser-window-created', (_event, window) => {
         // A window closing only finishes the drafts it composes: its canvas runs on in the core,
-        // which a window only views (B11 Design §8). macOS stays up as ever.
-        const close = new Closing({
-          save: () => flushDrafts([window]),
-          abandon: () => Promise.resolve(),
-          ask: (why) =>
-            // A window's earlier save can settle after the app has taken over shutdown. Its
-            // result cannot reopen a dialog or turn that approved quit into a save failure.
-            quit.approved ? Promise.resolve(false) : askAnyway('Close', window)(why),
-          done: () => {
-            if (!quit.approved) window.close();
-          },
-        });
+        // which a window only views (B11 Design §8); on Linux and Windows the last one asks first.
         window.on('close', (event) => {
-          if (quit.approved) {
-            if (!readyToQuit) event.preventDefault();
-            return;
-          }
-          // Quitting saves every window: a close meanwhile waits for it.
-          if (quit.busy || !close.request()) event.preventDefault();
+          quit.windowClosing(window, event);
         });
+        // Windows has no before-quit at logout (B14 C4, held for B29): its window hears it.
+        if (process.platform === 'win32') {
+          window.on('query-session-end', () => {
+            quit.request('system');
+          });
+          window.on('session-end', () => {
+            quit.request('system');
+          });
+        }
       });
+      // A window destroyed without its close leaves none: on Linux and Windows, the last.
+      allClosed = () => {
+        quit.allClosed();
+      };
 
       try {
         await openMainWindow();
@@ -389,15 +277,15 @@ function main(): void {
         if (!quit.approved) throw error;
         if (code !== 'ERR_ABORTED' && code !== 'ERR_FAILED') {
           // Preserve the error exit, but still let the approved core teardown finish first.
-          failQuit('Failed to start:', error);
+          quit.fail('Failed to start:', error);
         }
       }
       if (quit.approved) return;
 
       updates = startAppUpdates({
+        // Restart to update is a quit of its own: it joins one going on, never its escape.
         requestQuit: () => {
-          // A second quit while saving explicitly abandons it. An update instead joins it.
-          if (!quit.busy && !quit.approved) app.quit();
+          quit.request('update');
         },
         openRelease: async (url) => {
           const window = BrowserWindow.getAllWindows()[0];
@@ -406,9 +294,9 @@ function main(): void {
         },
       });
 
-      // macOS: re-create a window when the dock icon is clicked and none are open.
-      app.on('activate', () => {
-        if (BrowserWindow.getAllWindows().length === 0) void openMainWindow();
+      // macOS: the Dock icon clicked with no window shown shows one again (B14 C10).
+      app.on('activate', (_event, hasVisibleWindows) => {
+        if (!hasVisibleWindows) void quit.reopen();
       });
     })
     .catch((error: unknown) => {
@@ -417,7 +305,7 @@ function main(): void {
     });
 
   app.on('window-all-closed', () => {
-    if (process.platform !== 'darwin') lastWindowClosed();
+    allClosed();
   });
 }
 

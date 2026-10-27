@@ -2,6 +2,7 @@ import type { MessagePortMain } from 'electron';
 
 import type { WindowId } from '../core/host';
 import { ProfileLocked } from '../core/lock';
+import type { Presence } from '../core/presence';
 import type { CoreProcess } from './core-process';
 import { RESTARTS, supervise } from './supervise';
 import type { Supervision, SupervisionAction } from './supervise';
@@ -12,7 +13,9 @@ import type { Supervision, SupervisionAction } from './supervise';
  * and ask it up, as the next epoch (which every window's port names), or give up once it has
  * restarted RESTARTS times within WINDOW_MS. A new core that can't come up counts as another stop,
  * except one refused the profile (`corrallm serve` took it meanwhile), which gives up at once.
- * What asks the core goes to the one up now, and waits while a new one comes up.
+ * What asks the core goes to the one up now, and waits while a new one comes up. A core that exits
+ * 0 unasked closed itself (a signal, B14 C4): nothing restarts it, and main is told, to quit too
+ * rather than sit with no core.
  */
 
 export interface SupervisorOptions {
@@ -29,6 +32,8 @@ export interface SupervisorOptions {
   restarted: (epoch: number) => void;
   /** Main gives up on the core, saying why: it keeps stopping, or a new one can't hold the profile. */
   gaveUp: (why: Error) => void;
+  /** The core exited 0 without main stopping it: it closed itself (B14 C4). */
+  closedItself: () => void;
   /** The clock the policy reads (ms). */
   now?: () => number;
 }
@@ -59,6 +64,14 @@ export class CoreSupervisor {
   /** The core up now, or once a new one is up; rejects once main gives up on it. */
   get core(): Promise<CoreProcess> {
     return this.#current.promise;
+  }
+
+  /**
+   * What the core up now (or coming up) last said it does (B14 C5): none before it says, and none
+   * between a crash and the new core's first word.
+   */
+  get presence(): Presence | undefined {
+    return this.#process?.presence;
   }
 
   /** Includes the initializing process; a replaced or exited process has no host authority. */
@@ -141,8 +154,11 @@ export class CoreSupervisor {
     this.#process = undefined;
     if (this.#stopping) return;
     let action = this.#decide(code);
-    // A clean exit (the core was asked to stop) is no crash: nothing to restart.
-    if (action === 'none') return;
+    // A clean exit main didn't ask for: the core closed itself. No crash, nothing to restart.
+    if (action === 'none') {
+      this.#options.closedItself();
+      return;
+    }
     // What asks the core from now on waits for the next one, the next epoch.
     this.#current = Promise.withResolvers<CoreProcess>();
     this.#current.promise.catch(() => undefined);

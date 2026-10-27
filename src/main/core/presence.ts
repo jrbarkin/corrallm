@@ -8,6 +8,13 @@ import {
 
 export { MAX_PAUSE_UNSAVED, MAX_PRESENCE_COUNT };
 
+/**
+ * How long the windows have, all together, as the system shuts down or logs out (B14 C4): drafts
+ * land before the barrier, leaving most of logind's five seconds for sessions to end. The core
+ * bounds its flush by it, and main its wait.
+ */
+export const SYSTEM_DRAFTS_MS = 1000;
+
 /** Private host protocol bounds (B14 §9); no operation or token reads these snapshots. */
 export const MAX_NOTIFICATION_TITLE_BYTES = 32;
 export const MAX_NOTIFICATION_BODY_BYTES = 160;

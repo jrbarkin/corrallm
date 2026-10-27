@@ -5,6 +5,7 @@ import type { UpdateEvents } from './updates';
 import type { AppUpdateActions } from './host/updates';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { Mock } from 'vitest';
 
 const {
   app,
@@ -12,6 +13,7 @@ const {
   registerPrivileges,
   installGuards,
   getAllWindows,
+  getFocusedWindow,
   showMessageBox,
   showErrorBox,
 } = vi.hoisted(() => ({
@@ -33,7 +35,10 @@ const {
   },
   powerMonitor: { on: vi.fn() },
   getAllWindows: vi.fn<() => unknown[]>(() => []),
-  showMessageBox: vi.fn(() => new Promise<{ response: number }>(() => undefined)),
+  getFocusedWindow: vi.fn<() => unknown>(() => null),
+  showMessageBox: vi.fn<(...args: unknown[]) => Promise<{ response: number }>>(
+    () => new Promise(() => undefined),
+  ),
   showErrorBox: vi.fn(),
   registerPrivileges: vi.fn(),
   installGuards: vi.fn(),
@@ -43,7 +48,7 @@ const {
 vi.mock('electron', () => ({
   app,
   powerMonitor,
-  BrowserWindow: { getAllWindows },
+  BrowserWindow: { getAllWindows, getFocusedWindow },
   dialog: { showMessageBox, showErrorBox },
   session: { defaultSession: {} },
   shell: {},
@@ -71,22 +76,43 @@ const { startAppUpdates } = vi.hoisted(() => ({
   })),
 }));
 vi.mock('./host/updates', () => ({ startAppUpdates }));
-const { request, createWindow, makeHost, forkCore, cores, reconnect } = vi.hoisted(() => {
+const { request, createWindow, makeHost, forkCore, cores, reconnect, now } = vi.hoisted(() => {
   const request = vi.fn<
     (name: string, ...args: unknown[]) => Promise<{ ok: true; value: unknown }>
   >(() => Promise.resolve({ ok: true, value: null }));
-  /** Each core process forked: how to end it, as a crash would. */
-  const cores: { exit: (code: number) => void }[] = [];
+  /** Each core process forked: how to end it, as a crash would, and what it tells main. */
+  const cores: {
+    exit: (code: number) => void;
+    emit: (name: string, ...args: unknown[]) => void;
+  }[] = [];
+  /** What the core says it does now (B14 C5): idle, unless a test says otherwise. */
+  const now: { presence: unknown } = { presence: undefined };
   return {
     request,
-    createWindow: vi.fn(() => Promise.resolve()),
+    createWindow: vi.fn<() => Promise<unknown>>(() => Promise.resolve()),
     makeHost: vi.fn<() => unknown>(() => ({})),
     cores,
+    now,
     forkCore: vi.fn(() => {
       const exited = Promise.withResolvers<number>();
-      cores.push({ exit: exited.resolve });
+      const listeners = new Map<string, ((...args: unknown[]) => void)[]>();
+      cores.push({
+        exit: exited.resolve,
+        emit: (name, ...args) => {
+          for (const listener of listeners.get(name) ?? []) listener(...args);
+        },
+      });
       return {
-        link: { request },
+        link: {
+          request,
+          on: (name: string, listener: (...args: unknown[]) => void) => {
+            listeners.set(name, [...(listeners.get(name) ?? []), listener]);
+            return () => undefined;
+          },
+        },
+        get presence() {
+          return now.presence;
+        },
         exited: exited.promise,
         connect: vi.fn(),
         windowGone: vi.fn(),
@@ -118,10 +144,50 @@ function answered(name: string): Promise<{ ok: true; value: unknown }> {
   return Promise.resolve({ ok: true, value });
 }
 
+/** Nothing at work: what an idle core counts (B14 C5). */
+const IDLE = { revision: 1, working: 0, runs: 0, jobs: 0, needs: 0, busy: false, awake: false };
+/** Two agents in a turn, on a canvas whose run is going. */
+const BUSY = { revision: 2, working: 2, runs: 1, jobs: 0, needs: 0, busy: true, awake: true };
+
+/** A corrallm window, as main sees it: its events, and what main may do to it. */
+function fakeWindow(id: number) {
+  const contents = { id, isDestroyed: () => false, isCrashed: () => false, send: vi.fn() };
+  return Object.assign(new EventEmitter(), {
+    webContents: contents,
+    isMinimized: vi.fn(() => false),
+    restore: vi.fn(),
+    minimize: vi.fn(),
+    show: vi.fn(),
+    focus: vi.fn(),
+    close: vi.fn(),
+  });
+}
+
+/** Runs `body` as if on `platform`. */
+async function onPlatform(platform: NodeJS.Platform, body: () => Promise<void>): Promise<void> {
+  const real = Object.getOwnPropertyDescriptor(process, 'platform');
+  Object.defineProperty(process, 'platform', { value: platform, configurable: true });
+  try {
+    await body();
+  } finally {
+    if (real) Object.defineProperty(process, 'platform', real);
+  }
+}
+
+/** The handler main gave Electron for `event` (an app event unless `emitter` says otherwise). */
+function handler(event: string, emitter: { on: Mock } = app): (...args: unknown[]) => void {
+  const found = emitter.on.mock.calls.find(([name]) => name === event)?.[1] as
+    ((...args: unknown[]) => void) | undefined;
+  if (!found) throw new Error(`No handler for ${event}`);
+  return found;
+}
+
 beforeEach(() => {
   vi.resetModules();
   vi.clearAllMocks();
   getAllWindows.mockReturnValue([]);
+  getFocusedWindow.mockReturnValue(null);
+  now.presence = IDLE;
   cores.splice(0);
   request.mockReset();
   request.mockImplementation((name) => answered(name));
@@ -213,11 +279,14 @@ describe('an update restart', () => {
       if (alreadySaving) app.quit();
       events?.downloaded('1.3.0');
       // Each window's drafts first; then, its canvas's run being the core's (B11 Design §8),
-      // Restart to update prepares the same barrier as a quit, saying why.
+      // Restart to update prepares the same barrier as a quit, saying why: with nothing at work,
+      // only if the core still finds nothing at work (B14 C2).
       await vi.waitFor(() => {
-        expect(request).toHaveBeenCalledWith('prepareShutdown', 'update');
+        expect(request).toHaveBeenCalledWith('prepareShutdown', 'update', { ifIdle: true });
       });
-      expect(app.quit).toHaveBeenCalledOnce(); // Never a second request that forces Closing to abandon.
+      // It joins a quit already saving, never as a second request that forces Closing to abandon.
+      expect(app.quit).toHaveBeenCalledTimes(alreadySaving ? 1 : 0);
+      expect(request.mock.calls.filter(([name]) => name === 'prepareShutdown')).toHaveLength(1);
       expect(request).toHaveBeenCalledWith('flushDrafts', [7]);
       expect(contents.send).not.toHaveBeenCalled();
       expect(install).not.toHaveBeenCalled();
@@ -246,8 +315,10 @@ describe('an update restart', () => {
       app.whenReady.mockResolvedValueOnce();
       showMessageBox.mockResolvedValueOnce({ response: 0 });
       vi.spyOn(console, 'error').mockImplementation(() => undefined);
-      const contents = { id: 7, isDestroyed: () => false, isCrashed: () => false, send: vi.fn() };
-      getAllWindows.mockReturnValue([{ webContents: contents }]);
+      // The failed-save question is a sheet on this window (B14 C2).
+      const window = fakeWindow(7);
+      const contents = window.webContents;
+      getAllWindows.mockReturnValue([window]);
       request.mockImplementation((name) =>
         name === 'prepareShutdown'
           ? Promise.resolve({ ok: true, value: { failed: true, sentence: 'Disk full' } })
@@ -277,7 +348,7 @@ describe('an update restart', () => {
         expect(cancelRestart).toHaveBeenCalledOnce();
       });
       expect(contents.send).not.toHaveBeenCalled();
-      expect(showMessageBox).toHaveBeenCalledOnce();
+      expect(showMessageBox).toHaveBeenCalledExactlyOnceWith(window, expect.anything());
       expect(finishQuit).not.toHaveBeenCalled();
       // Keep corrallm open lifts the core's barrier: the endpoint and every turn go on.
       await vi.waitFor(() => {
@@ -300,8 +371,8 @@ describe('the drafts each window composes', () => {
       app.whenReady.mockResolvedValueOnce();
       showMessageBox.mockResolvedValueOnce({ response: 0 });
       vi.spyOn(console, 'error').mockImplementation(() => undefined);
-      const contents = { id: 7, isDestroyed: () => false, isCrashed: () => false, send: vi.fn() };
-      const window = Object.assign(new EventEmitter(), { webContents: contents, close: vi.fn() });
+      const window = fakeWindow(7);
+      const contents = window.webContents;
       getAllWindows.mockReturnValue([window]);
       request.mockImplementation((name) =>
         name === 'flushDrafts'
@@ -327,6 +398,8 @@ describe('the drafts each window composes', () => {
       await vi.waitFor(() => {
         expect(showMessageBox).toHaveBeenCalledOnce();
       });
+      // A sheet on the window either way (B14 C2), so the system can withdraw it.
+      expect(showMessageBox.mock.calls[0]?.[0]).toBe(window);
       expect(showMessageBox.mock.calls[0]).toContainEqual(
         expect.objectContaining({
           message: 'The run could not be saved',
@@ -375,73 +448,66 @@ describe('a window, again', () => {
     expect(createWindow).toHaveBeenCalledTimes(2);
   });
 
-  it.each([
-    { platform: 'linux', active: true, quits: false },
-    { platform: 'linux', active: false, quits: true },
-    { platform: 'win32', active: true, quits: false },
-    { platform: 'darwin', active: false, quits: false },
-  ])(
-    'on $platform, the last window closing with work going on: $active, quits: $quits',
-    async ({ platform, active, quits }) => {
-      const real = Object.getOwnPropertyDescriptor(process, 'platform');
-      Object.defineProperty(process, 'platform', { value: platform, configurable: true });
-      try {
-        vi.spyOn(console, 'error').mockImplementation(() => undefined);
-        const busy = {
-          revision: 3,
-          working: 1,
-          runs: 0,
-          jobs: 0,
-          needs: 0,
-          busy: true,
-          awake: true,
-        };
-        // The core decides in one step whether anything is at work (B14 C2): it holds the barrier
-        // only if not, so no work started since main last heard is cut off unasked.
-        request.mockImplementation((name, ...args: unknown[]) =>
-          name === 'prepareShutdown' && args[1] !== undefined
-            ? Promise.resolve({ ok: true, value: active ? { busy } : { ok: true } })
-            : answered(name),
-        );
+  it.each(['linux', 'win32'] as const)(
+    'on %s, every window gone without its close is the last: it quits when nothing is at work',
+    async (platform) => {
+      await onPlatform(platform, async () => {
         await started();
-        on('window-all-closed')();
-        await new Promise((resolve) => setTimeout(resolve, 0));
-        expect(app.quit).toHaveBeenCalledTimes(quits ? 1 : 0);
-        const asked = request.mock.calls.filter(([name]) => name === 'prepareShutdown');
-        expect(asked).toEqual(
-          platform === 'darwin' ? [] : [['prepareShutdown', 'quit', { ifIdle: true }]],
-        );
-        if (active) {
-          expect(console.error).toHaveBeenCalledWith(
-            'corrallm: its agents are still working, so it runs on with no window: open corrallm again to show it, and quit it there.',
-          );
-        }
-      } finally {
-        if (real) Object.defineProperty(process, 'platform', real);
-      }
+        handler('window-all-closed')();
+        await vi.waitFor(() => {
+          expect(app.quit).toHaveBeenCalledOnce();
+        });
+        expect(request.mock.calls.filter(([name]) => name === 'prepareShutdown')).toEqual([
+          ['prepareShutdown', 'quit', { ifIdle: true }],
+        ]);
+        expect(showMessageBox).not.toHaveBeenCalled();
+      });
     },
   );
 
-  it('lifts the barrier an idle last close held, if a window came back before it quit', async () => {
-    const real = Object.getOwnPropertyDescriptor(process, 'platform');
-    Object.defineProperty(process, 'platform', { value: 'linux', configurable: true });
-    try {
-      const idle = Promise.withResolvers<{ ok: true; value: unknown }>();
-      request.mockImplementation((name, ...args: unknown[]) =>
-        name === 'prepareShutdown' && args[1] !== undefined ? idle.promise : answered(name),
-      );
+  it('on macOS, every window gone quits nothing and asks nothing', async () => {
+    await onPlatform('darwin', async () => {
+      now.presence = BUSY;
       await started();
-      on('window-all-closed')();
-      // corrallm opened again while the core answered.
-      getAllWindows.mockReturnValue([{}]);
-      idle.resolve({ ok: true, value: { ok: true } });
-      await vi.waitFor(() => {
-        expect(request).toHaveBeenCalledWith('cancelShutdown');
-      });
+      handler('window-all-closed')();
+      await new Promise((resolve) => setTimeout(resolve, 0));
       expect(app.quit).not.toHaveBeenCalled();
-    } finally {
-      if (real) Object.defineProperty(process, 'platform', real);
-    }
+      expect(showMessageBox).not.toHaveBeenCalled();
+      expect(request.mock.calls.map(([name]) => name)).toEqual(['init']);
+    });
+  });
+
+  it('is shown when the Dock icon is clicked with no window shown, and only then', async () => {
+    await started();
+    await vi.waitFor(() => {
+      expect(startAppUpdates).toHaveBeenCalledOnce();
+    });
+    const window = fakeWindow(7);
+    getAllWindows.mockReturnValue([window]);
+    handler('activate')({}, true);
+    expect(window.focus).not.toHaveBeenCalled();
+    window.isMinimized.mockReturnValue(true);
+    handler('activate')({}, false);
+    expect(window.restore).toHaveBeenCalledOnce();
+    expect(window.focus).toHaveBeenCalledOnce();
+    getAllWindows.mockReturnValue([]);
+    handler('activate')({}, false);
+    expect(createWindow).toHaveBeenCalledTimes(2);
+  });
+
+  it('on Windows, takes a window’s session end through the system path (held for B29)', async () => {
+    await onPlatform('win32', async () => {
+      await started();
+      const window = fakeWindow(7);
+      getAllWindows.mockReturnValue([window]);
+      handler('browser-window-created')({}, window);
+      window.emit('session-end');
+      await vi.waitFor(() => {
+        expect(app.quit).toHaveBeenCalledOnce();
+      });
+      expect(request).toHaveBeenCalledWith('prepareShutdown', 'system');
+      expect(showMessageBox).not.toHaveBeenCalled();
+    });
   });
 });
 
@@ -463,6 +529,8 @@ describe('waiting for the approved core shutdown', () => {
     async ({ update, anyway }) => {
       app.whenReady.mockResolvedValueOnce();
       if (anyway) {
+        // Quit anyway, chosen on the failed-save question: a sheet on the window (B14 C2).
+        getAllWindows.mockReturnValue([fakeWindow(7)]);
         showMessageBox.mockResolvedValueOnce({ response: 1 });
         vi.spyOn(console, 'error').mockImplementation(() => undefined);
       }
@@ -539,7 +607,7 @@ describe('waiting for the approved core shutdown', () => {
     vi.useFakeTimers();
     beforeQuit({ preventDefault: vi.fn() });
     await vi.advanceTimersByTimeAsync(0);
-    expect(request).toHaveBeenCalledWith('prepareShutdown', 'quit');
+    expect(request).toHaveBeenCalledWith('prepareShutdown', 'quit', { ifIdle: true });
     beforeQuit({ preventDefault: vi.fn() });
     await vi.advanceTimersByTimeAsync(4999);
     expect(app.quit).not.toHaveBeenCalled();
@@ -555,6 +623,8 @@ describe('waiting for the approved core shutdown', () => {
     async (anyway) => {
       app.whenReady.mockResolvedValueOnce();
       if (anyway) {
+        // Quit anyway, chosen on the failed-save question: a sheet on the window (B14 C2).
+        getAllWindows.mockReturnValue([fakeWindow(7)]);
         showMessageBox.mockResolvedValueOnce({ response: 1 });
         vi.spyOn(console, 'error').mockImplementation(() => undefined);
       }
@@ -637,10 +707,14 @@ describe('quit races', () => {
     beforeQuit()({ preventDefault: vi.fn() });
     await vi.advanceTimersByTimeAsync(100);
     expect(request).toHaveBeenCalledWith('flushDrafts', [7]);
-    expect(request).not.toHaveBeenCalledWith('prepareShutdown', 'quit');
+    expect(request).not.toHaveBeenCalledWith(
+      'prepareShutdown',
+      expect.anything(),
+      expect.anything(),
+    );
     drafts.resolve({ ok: true, value: { unanswered: [] } });
     await vi.advanceTimersByTimeAsync(0);
-    expect(request).toHaveBeenCalledWith('prepareShutdown', 'quit');
+    expect(request).toHaveBeenCalledWith('prepareShutdown', 'quit', { ifIdle: true });
     expect(contents.send).not.toHaveBeenCalled();
     expect(app.quit).not.toHaveBeenCalled();
     closed.resolve({ ok: true, value: null });
@@ -1132,4 +1206,159 @@ it('reports a failed approved core teardown on stderr and exits nonzero, without
     expect.objectContaining({ message: 'The final journal write failed.' }),
   );
   expect(showMessageBox).not.toHaveBeenCalled();
+});
+
+describe('the quit question (B14 C2)', () => {
+  async function started(windows: unknown[]) {
+    app.whenReady.mockResolvedValueOnce();
+    getAllWindows.mockReturnValue(windows);
+    await import('./index');
+    await vi.waitFor(() => {
+      expect(startAppUpdates).toHaveBeenCalledOnce();
+    });
+  }
+  const shutdowns = () =>
+    request.mock.calls.filter(([name]) => name === 'prepareShutdown' || name === 'commitShutdown');
+
+  it('asks before a quit while agents work, as a sheet on a window, holding and committing nothing', async () => {
+    now.presence = BUSY;
+    const window = fakeWindow(7);
+    await started([window]);
+    const preventDefault = vi.fn();
+    handler('before-quit')({ preventDefault });
+    expect(preventDefault).toHaveBeenCalledOnce();
+    await vi.waitFor(() => {
+      expect(showMessageBox).toHaveBeenCalledOnce();
+    });
+    expect(showMessageBox).toHaveBeenCalledWith(
+      window,
+      expect.objectContaining({
+        message: '2 agents are working.',
+        buttons: ['Quit and pause', 'Keep running', 'Cancel'],
+        defaultId: 0,
+        cancelId: 2,
+        signal: expect.any(AbortSignal) as AbortSignal,
+      }),
+    );
+    expect(shutdowns()).toEqual([]);
+    expect(app.quit).not.toHaveBeenCalled();
+  });
+
+  it('asks before an update’s restart during a run, and installs nothing until answered', async () => {
+    now.presence = BUSY;
+    const window = fakeWindow(7);
+    let restart: (() => void) | undefined;
+    const finishQuit = vi.fn(() => true);
+    startAppUpdates.mockImplementationOnce((actions) => {
+      restart = actions.requestQuit;
+      return { finishQuit, cancelRestart: vi.fn(), stop: vi.fn() };
+    });
+    await started([window]);
+    app.quit.mockImplementation(() => {
+      handler('before-quit')({ preventDefault: vi.fn() });
+    });
+    restart?.();
+    await vi.waitFor(() => {
+      expect(showMessageBox).toHaveBeenCalledOnce();
+    });
+    expect(showMessageBox).toHaveBeenCalledWith(
+      window,
+      expect.objectContaining({ buttons: ['Restart and pause', 'Cancel'], cancelId: 1 }),
+    );
+    expect(shutdowns()).toEqual([]);
+    expect(finishQuit).not.toHaveBeenCalled();
+  });
+
+  it('asks about work that started after main last heard, rather than cut it off (the idle race)', async () => {
+    // Main's latest presence says idle; by the time the core is asked, a turn has started.
+    request.mockImplementation((name, ...args: unknown[]) =>
+      name === 'prepareShutdown' && args[1] !== undefined
+        ? Promise.resolve({ ok: true, value: { busy: BUSY } })
+        : answered(name),
+    );
+    const window = fakeWindow(7);
+    await started([window]);
+    handler('before-quit')({ preventDefault: vi.fn() });
+    await vi.waitFor(() => {
+      expect(showMessageBox).toHaveBeenCalledOnce();
+    });
+    expect(shutdowns()).toEqual([['prepareShutdown', 'quit', { ifIdle: true }]]);
+    expect(app.quit).not.toHaveBeenCalled();
+  });
+
+  it('on Linux, asks as the last window closes during a run, with the window still open', async () => {
+    await onPlatform('linux', async () => {
+      now.presence = BUSY;
+      const window = fakeWindow(7);
+      await started([window]);
+      handler('browser-window-created')({}, window);
+      showMessageBox.mockResolvedValueOnce({ response: 1 }); // Keep running
+      const preventDefault = vi.fn();
+      window.emit('close', { preventDefault });
+      expect(preventDefault).toHaveBeenCalledOnce();
+      await vi.waitFor(() => {
+        expect(window.minimize).toHaveBeenCalledOnce();
+      });
+      expect(showMessageBox).toHaveBeenCalledWith(
+        window,
+        expect.objectContaining({
+          detail: expect.stringContaining(
+            'Keep running minimizes corrallm; the agents go on.',
+          ) as string,
+        }),
+      );
+      expect(window.close).not.toHaveBeenCalled();
+      expect(app.quit).not.toHaveBeenCalled();
+      expect(shutdowns()).toEqual([]);
+    });
+  });
+
+  it('takes a core that closes itself (exiting) through the system path: no question, then quits', async () => {
+    now.presence = BUSY;
+    const window = fakeWindow(7);
+    await started([window]);
+    cores[0]?.emit('exiting', 'signal');
+    await vi.waitFor(() => {
+      expect(app.quit).toHaveBeenCalledOnce();
+    });
+    expect(showMessageBox).not.toHaveBeenCalled();
+    expect(request.mock.calls.map(([name, ...args]) => [name, ...args])).toEqual([
+      ['init', expect.anything()],
+      ['flushDrafts', [7], 'system'],
+      ['prepareShutdown', 'system'],
+      ['commitShutdown'],
+    ]);
+    expect(app.exit).not.toHaveBeenCalled();
+  });
+
+  it('quits through the system path when its core exits 0 unasked, rather than sit with no core', async () => {
+    const window = fakeWindow(7);
+    await started([window]);
+    request.mockImplementation((name) =>
+      name === 'init'
+        ? answered(name)
+        : Promise.reject(new Error('the core process exited with code 0')),
+    );
+    cores[0]?.exit(0);
+    await vi.waitFor(() => {
+      expect(app.quit).toHaveBeenCalledOnce();
+    });
+    expect(forkCore).toHaveBeenCalledOnce();
+    expect(app.exit).not.toHaveBeenCalled();
+    expect(showMessageBox).not.toHaveBeenCalled();
+  });
+
+  it('prevents the system’s shutdown or logout (powerMonitor) and quits itself, asking nothing', async () => {
+    now.presence = BUSY;
+    const window = fakeWindow(7);
+    await started([window]);
+    const preventDefault = vi.fn();
+    handler('shutdown', powerMonitor)({ preventDefault });
+    expect(preventDefault).toHaveBeenCalledOnce();
+    await vi.waitFor(() => {
+      expect(app.quit).toHaveBeenCalledOnce();
+    });
+    expect(showMessageBox).not.toHaveBeenCalled();
+    expect(request).toHaveBeenCalledWith('prepareShutdown', 'system');
+  });
 });
