@@ -31,6 +31,10 @@ function declared(session: object) {
 }
 
 describe("Claude Code's adapter", () => {
+  it('declares no proven context source until its context recording lands', () => {
+    for (const connection of descriptor.connections) expect(connection.context).toBe(false);
+  });
+
   it('declares the four prompt kinds per connection, and signals only where recordings prove them', () => {
     expect(connection('claude-code.terminal')).toMatchObject({
       prompts: { approval: 'seen', question: 'seen', plan: 'seen', form: 'none' },

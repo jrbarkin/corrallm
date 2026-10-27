@@ -186,7 +186,10 @@ describe('a connected session', () => {
       { type: 'tool', id: 'sub', tool: 'Read', summary: 'b.ts', status: 'done', parent: 'agent-1' },
       { type: 'todos', id: 'todo', items: [{ text: 'Fix it', status: 'active' }] },
       { type: 'todos', id: 'todo', items: [{ text: 'Fix it', status: 'done' }] },
-      { type: 'usage', usage: { costUsd: 0.02, contextTokens: 5000, contextWindow: 200_000 } },
+      {
+        type: 'usage',
+        usage: { costUsd: 0.02, context: null, contextTokens: 5000, contextWindow: 200_000 },
+      },
     );
     expect(done).not.toHaveBeenCalled();
     emit('a', 'claude-code.sdk', end([id]));
@@ -783,7 +786,7 @@ describe('a connected session opened on another conversation (/resume)', () => {
     emit('a', 'claude-code.sdk', { type: 'user', id: sent(), text: 'Old question' });
     emit('a', 'claude-code.sdk', {
       type: 'usage',
-      usage: { costUsd: 1, contextTokens: 10, contextWindow: 100 },
+      usage: { costUsd: 1, context: null, contextTokens: 10, contextWindow: 100 },
     });
 
     await store.resume('a', 'k1');

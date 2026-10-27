@@ -750,7 +750,12 @@ export class Translator {
   #usage(): SessionEvent {
     return {
       type: 'usage',
-      usage: { costUsd: this.#cost, contextTokens: this.#context, contextWindow: this.#window },
+      usage: {
+        costUsd: this.#cost,
+        context: null,
+        contextTokens: this.#context,
+        contextWindow: this.#window,
+      },
     };
   }
 

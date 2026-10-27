@@ -109,6 +109,7 @@ export const claudeCode: Adapter = {
         view: 'terminal',
         prompts: { approval: 'seen', question: 'seen', plan: 'seen', form: 'none' },
         signals: false,
+        context: false,
         startModes: START_MODES,
         live: { effort: false, stopTask: false },
         panels: {},
@@ -135,6 +136,7 @@ export const claudeCode: Adapter = {
         // Ask rules and safety checks are reported (sdk/raise.ts' signalsOf), as recorded with
         // Claude Code 2.1.311 (sdk/fixtures/ask-rule.jsonl, safety-check.jsonl): B13 C4.
         signals: true,
+        context: false,
         startModes: START_MODES,
         live: { effort: true, stopTask: true },
         panels: {

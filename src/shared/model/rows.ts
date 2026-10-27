@@ -3,6 +3,7 @@ import type { CanvasId } from '../canvas';
 import type { AgentSettings } from '../session';
 import { MAX_POSITION } from './canvas';
 import type { AgentData, CanvasDocument, CanvasNode, Link } from './canvas';
+import type { Fallback, HandoffSettings } from './fallback';
 import { inFileOrder } from './file';
 import { isApproval, isDelay, isIf, isRepeat, isWait } from './queue';
 import type { QueueItem, QueueRepeat, RepeatedItem } from './queue';
@@ -51,6 +52,8 @@ export interface NodeRow {
   adapter?: AdapterId;
   connection?: ConnectionId;
   settings?: Partial<Record<AdapterId, AgentSettings>>;
+  fallback?: Fallback;
+  handoff?: HandoffSettings;
   role?: string;
 }
 
@@ -215,6 +218,8 @@ export function fromRows(id: CanvasId, rows: Rows): CanvasDocument {
       ...(row.adapter === undefined ? {} : { adapter: row.adapter }),
       ...(row.connection === undefined ? {} : { connection: row.connection }),
       ...(row.settings === undefined ? {} : { settings: row.settings }),
+      ...(row.fallback === undefined ? {} : { fallback: row.fallback }),
+      ...(row.handoff === undefined ? {} : { handoff: row.handoff }),
       ...(row.role === undefined ? {} : { role: row.role }),
       ...color,
       ...(queue.length === 0 ? {} : { queue }),
@@ -480,12 +485,14 @@ function nodeRow(node: CanvasNode): Omit<NodeRow, 'place'> {
     ...(node.data.color === undefined ? {} : { color: node.data.color }),
   };
   if (node.type === 'frame') return row;
-  const { adapter, connection, settings, role } = node.data;
+  const { adapter, connection, settings, fallback, handoff, role } = node.data;
   return {
     ...row,
     ...(adapter === undefined ? {} : { adapter }),
     ...(connection === undefined ? {} : { connection }),
     ...(settings === undefined ? {} : { settings: inFileOrder(settings) }),
+    ...(fallback === undefined ? {} : { fallback: inFileOrder(fallback) }),
+    ...(handoff === undefined ? {} : { handoff: inFileOrder(handoff) }),
     ...(role === undefined ? {} : { role }),
   };
 }

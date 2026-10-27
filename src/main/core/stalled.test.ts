@@ -594,7 +594,7 @@ describe('silent turns', () => {
     await vi.advanceTimersByTimeAsync(STALL_MS - WATCH_EVERY_MS);
     watchdog.event(CANVAS, AGENT, 'codex.app-server', {
       type: 'usage',
-      usage: { costUsd: null, contextTokens: 1, contextWindow: 100 },
+      usage: { costUsd: null, context: null, contextTokens: 1, contextWindow: 100 },
     });
     await vi.advanceTimersByTimeAsync(WATCH_EVERY_MS);
     expect(warning).not.toHaveBeenCalled();

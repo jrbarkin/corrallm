@@ -420,6 +420,7 @@ describe('the App Server connection', () => {
       type: 'usage',
       usage: {
         costUsd: null,
+        context: null,
         contextTokens: null,
         contextWindow: null,
         // (The fake's windows reset hours and days from when it starts.)
@@ -1082,7 +1083,7 @@ describe('the App Server connection, replaying the real Codex', () => {
     expect(remembered).toEqual(['01a1348d-2ce8-78b1-9629-fd1c7f6a8e4b']);
     // How full the context is, and the plan's limits, as the turn went.
     expect(events.filter((e) => e.type === 'usage').at(-1)).toMatchObject({
-      usage: { contextTokens: 18_246, contextWindow: 258_400 },
+      usage: { context: null, contextTokens: 18_246, contextWindow: 258_400 },
     });
     await turn('/mcp', 'mcp');
     expect(texts(events).at(-1)).toMatch(/^\*\*MCP servers\*\*/);

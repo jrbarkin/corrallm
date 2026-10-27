@@ -2,6 +2,8 @@ import type { AdapterId, ConnectionId } from '../adapter';
 import type { CanvasId } from '../canvas';
 import type { AgentSettings } from '../session';
 import type { QueueItem } from './queue';
+import type { Fallback, HandoffSettings } from './fallback';
+export type { Fallback, FallbackStep, HandoffSettings } from './fallback';
 
 /*
  * A canvas as the model keeps it: its agents, the frames that group them and the links between
@@ -40,6 +42,8 @@ export interface AgentData {
   adapter?: AdapterId;
   connection?: ConnectionId;
   settings?: Partial<Record<AdapterId, AgentSettings>>;
+  fallback?: Fallback;
+  handoff?: HandoffSettings;
   role?: string;
   queue?: QueueItem[];
   color?: number;

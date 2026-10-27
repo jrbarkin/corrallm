@@ -56,7 +56,7 @@ const withQueue = (items: QueueItem[]): CanvasDocument => ({
 /** The file `canvas` saves as, parsed. */
 const saved = {
   format: 'corrallm',
-  version: 2,
+  version: 3,
   id: ID,
   nodes: [
     { id: 'G', kind: 'group', label: 'Team', position: { x: 0, y: 0 }, color: 2 },
@@ -75,6 +75,37 @@ const saved = {
 };
 
 describe('toFile', () => {
+  it('writes version 3, reads version 2 still, and keeps an unknown bounded fallback and handoff', () => {
+    const fallback = {
+      to: [{ adapter: 'future', connection: 'future.api', model: 'future-model' }],
+      back: 'return' as const,
+    };
+    const handoff = { at: 95, file: 'notes/handoff.md' };
+    const base = read(JSON.stringify({ ...saved, version: 2 }));
+    const node = base.nodes.find((one) => one.id === 'a');
+    if (node?.type !== 'agent') throw new Error('missing agent');
+    node.data.fallback = fallback;
+    node.data.handoff = handoff;
+    const text = toFile(base);
+    expect(JSON.parse(text)).toHaveProperty('version', 3);
+    const loaded = read(text);
+    expect(agentData(loaded, 'a')).toMatchObject({ fallback, handoff });
+    expect(toFile(loaded)).toBe(text);
+  });
+
+  it('refuses malformed fallback fields rather than dropping them from a file', () => {
+    for (const fields of [
+      { fallback: { to: [] } },
+      { fallback: { to: [{ adapter: 'future', connection: 'future.api', mode: 'auto' }] } },
+      { fallback: { to: [{ adapter: 'codex', connection: 'claude-code.terminal' }] } },
+      { handoff: { file: '../handoff.md' } },
+    ]) {
+      const file = structuredClone(saved);
+      Object.assign(file.nodes[1] ?? {}, fields);
+      expect(() => read(JSON.stringify(file))).toThrow(/fallback|handoff/);
+    }
+  });
+
   it('round-trips arrangement and writes it only when on', () => {
     const on = { ...canvas, arrange: true };
     expect(JSON.parse(toFile(on))).toHaveProperty('arrange', true);
@@ -422,7 +453,7 @@ describe('fromFile', () => {
   it('rejects what is not a canvas, canvases from another version, and one without an id', () => {
     expect(() => read('not json')).toThrow('This is not a corrallm canvas');
     expect(() => read('{"format": "other"}')).toThrow('This is not a corrallm canvas');
-    expect(() => read(JSON.stringify({ ...saved, version: 3 }))).toThrow(
+    expect(() => read(JSON.stringify({ ...saved, version: 4 }))).toThrow(
       'This canvas was made by a newer version of corrallm',
     );
     expect(() => read(JSON.stringify({ ...saved, version: 1 }))).toThrow(

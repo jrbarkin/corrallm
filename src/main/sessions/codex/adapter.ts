@@ -113,6 +113,7 @@ export const codex: Adapter = {
         view: 'terminal',
         prompts: { approval: 'seen', question: 'none', plan: 'none', form: 'none' },
         signals: false,
+        context: false,
         // Its command line starts it in Read only (-s, -a); Default is the user's own config, and
         // Plan is chosen in its terminal.
         startModes: ['read-only'],
@@ -138,6 +139,7 @@ export const codex: Adapter = {
           form: 'answerable',
         },
         signals: false,
+        context: false,
         startModes: ['read-only', 'auto', 'plan'],
         live: { effort: true, stopTask: false },
         panels: {},
