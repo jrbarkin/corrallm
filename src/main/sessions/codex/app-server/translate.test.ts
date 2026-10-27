@@ -104,6 +104,7 @@ describe('the App Server translator, on what Codex did', () => {
       type: 'usage',
       usage: {
         costUsd: null,
+        context: null,
         contextTokens: expect.any(Number) as number,
         contextWindow: 258_400,
         limits: [

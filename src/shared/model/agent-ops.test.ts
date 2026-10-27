@@ -10,6 +10,7 @@ import {
   setType,
   translateActions,
   equivalentAction,
+  setFallback,
 } from './agent-ops';
 import { TEST_CATALOG } from '../test-model';
 import { MADE_UP } from '../test-made-up';
@@ -32,6 +33,93 @@ const doc = (): CanvasDocument => ({
 const data = (document: CanvasDocument) => (document.nodes[0] as AgentNode).data;
 
 describe('agent setup operations', () => {
+  it('keeps the chain when a later type, connection, model or effort edit matches a step', () => {
+    const before = doc();
+    data(before).adapter = 'other';
+    const ctx = { catalog: MADE_UP, defaultAdapter: 'zed' };
+    const fallback = { to: [{ adapter: 'zed', connection: 'zed.acp' }] };
+    data(before).fallback = fallback;
+    const typed = setType(before, { agent: 'a', adapter: 'zed' }, ctx).next;
+    expect(data(typed).fallback).toBe(fallback);
+    data(typed).connection = 'zed.free';
+    const connected = setConnection(typed, { agent: 'a', connection: 'zed.acp' }, ctx).next;
+    expect(data(connected).fallback).toBe(fallback);
+    for (const change of [{ model: 'chosen' }, { effort: 'low' }]) {
+      const step = { adapter: 'zed', connection: 'zed.acp', ...change };
+      data(connected).fallback = { to: [step] };
+      const edited = setSettings(connected, { agent: 'a', adapter: 'zed', change }).next;
+      expect(data(edited).fallback).toBe(data(connected).fallback);
+      expect(data(edited).settings?.zed).toMatchObject(change);
+    }
+    expect(() => setFallback(connected, { agent: 'a', fallback }, ctx)).toThrow(/distinct/);
+  });
+
+  it('clears only fallback.on for your type and connection choices, even the existing choice', () => {
+    const before = doc();
+    data(before).adapter = 'zed';
+    data(before).connection = 'zed.acp';
+    data(before).fallback = {
+      to: [{ adapter: 'zed', connection: 'zed.acp' }],
+      on: { step: 0, from: { adapter: 'old', connection: 'old.api' }, why: 'rule', at: 1 },
+    };
+    const ctx = { catalog: MADE_UP, defaultAdapter: 'zed' };
+    for (const next of [
+      setType(before, { agent: 'a', adapter: 'zed' }, ctx).next,
+      setConnection(before, { agent: 'a', connection: 'zed.acp' }, ctx).next,
+      setConnection(before, { agent: 'a', connection: 'zed.free' }, ctx).next,
+    ])
+      expect(data(next).fallback).toEqual({ to: data(before).fallback?.to });
+    expect(
+      data(setConnection(before, { agent: 'a', connection: 'absent' }, ctx).next).fallback,
+    ).toBe(data(before).fallback);
+    expect(
+      data(setSettings(before, { agent: 'a', adapter: 'zed', change: { model: 'new' } }).next)
+        .fallback,
+    ).toBe(data(before).fallback);
+  });
+
+  it('resolves a new chain, retains and reanchors only an existing position, or removes it', () => {
+    const before = doc();
+    data(before).adapter = 'zed';
+    data(before).connection = 'zed.free';
+    const from = { adapter: 'zed', connection: 'zed.acp' };
+    const on = { step: 0, from, kept: { model: null }, why: 'rule' as const, at: 1 };
+    data(before).fallback = { to: [{ adapter: 'zed', connection: 'zed.free' }], on };
+    const ctx = { catalog: MADE_UP, defaultAdapter: 'zed' };
+    const fallback = {
+      to: [
+        { adapter: 'zed', model: 'other' },
+        { adapter: 'zed', connection: 'zed.free' },
+      ],
+    };
+    const changed = setFallback(before, { agent: 'a', fallback }, ctx).next;
+    expect(data(changed).fallback).toEqual({
+      to: [
+        { adapter: 'zed', connection: 'zed.acp', model: 'other' },
+        { adapter: 'zed', connection: 'zed.free' },
+      ],
+      on: { ...on, step: 1 },
+    });
+    expect(setFallback(changed, { agent: 'a', fallback }, ctx).next).toBe(changed);
+    expect(changed.nodes[1]).toBe(before.nodes[1]);
+    expect(
+      data(
+        setFallback(
+          before,
+          { agent: 'a', fallback: { to: [{ adapter: 'zed', model: 'other' }] } },
+          ctx,
+        ).next,
+      ).fallback,
+    ).not.toHaveProperty('on');
+    expect(data(setFallback(before, { agent: 'a', fallback: null }, ctx).next)).not.toHaveProperty(
+      'fallback',
+    );
+    expect(data(before).fallback?.on).toEqual(on);
+    expect(() =>
+      setFallback(before, { agent: 'a', fallback: { to: [{ adapter: 'missing' }] } }, ctx),
+    ).toThrow();
+  });
+
   it('translates by catalog jobs, including an adapter the renderer does not know', () => {
     const catalog = { ...TEST_CATALOG, adapters: [...TEST_CATALOG.adapters, ...MADE_UP.adapters] };
     const before = doc();

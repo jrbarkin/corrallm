@@ -353,7 +353,7 @@ function RuleEditor({
           label={
             rule ? 'When usage is over the share…' : 'When usage is over 80% of the 5-hour window…'
           }
-          options={USAGE_ACTIONS}
+          options={USAGE_ACTIONS.filter((action) => action !== 'fallback')}
           optionLabel={(action: UsageAction) => ACTION_INFO[action].label}
           optionDetail={(action: UsageAction) => ACTION_INFO[action].detail}
           optionKey={String}

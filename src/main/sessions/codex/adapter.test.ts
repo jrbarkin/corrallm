@@ -31,6 +31,10 @@ function declared(session: object) {
 }
 
 describe("Codex's adapter", () => {
+  it('declares no proven context source until its context recording lands', () => {
+    for (const connection of descriptor.connections) expect(connection.context).toBe(false);
+  });
+
   it('declares App Server prompts answerable and Terminal approvals seen, without authority signals', () => {
     expect(connection('codex.terminal')).toMatchObject({
       prompts: { approval: 'seen', question: 'none', plan: 'none', form: 'none' },

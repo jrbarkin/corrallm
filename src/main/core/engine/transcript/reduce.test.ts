@@ -89,7 +89,7 @@ describe('reduce, for connected sessions', () => {
     const models = [{ value: 'opus', label: 'Opus' }];
     const s = reduce(NEW_SESSION, { type: 'connected', models, model: 'opus', mode: 'plan' });
     expect(s).toMatchObject({ models, model: 'opus', mode: 'plan' });
-    const usage = { costUsd: 0.5, contextTokens: 1000, contextWindow: 200_000 };
+    const usage = { costUsd: 0.5, context: null, contextTokens: 1000, contextWindow: 200_000 };
     expect(reduce(s, { type: 'usage', usage }).usage).toEqual(usage);
   });
 
@@ -182,7 +182,7 @@ describe('reduce, for connected sessions', () => {
     s = reduce(s, { type: 'suggestion', text: 'Run the tests' });
     s = reduce(s, {
       type: 'usage',
-      usage: { costUsd: 0.5, contextTokens: 10, contextWindow: 100 },
+      usage: { costUsd: 0.5, context: null, contextTokens: 10, contextWindow: 100 },
     });
     const cleared = reduce(s, { type: 'clear' });
     expect(cleared).toMatchObject({ entries: [], status: 'idle', mode: 'plan', effort: 'high' });

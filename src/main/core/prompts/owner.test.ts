@@ -180,6 +180,15 @@ async function answer(to: string, given: unknown, ctx = context()) {
   }
 }
 
+/** A read may refuse edits or return a separate copy; neither changes the admitted prompt. */
+function editRead(edit: () => void): void {
+  try {
+    edit();
+  } catch {
+    // A read that refuses the edit still has to preserve every later read and answer.
+  }
+}
+
 const settledRecords = (): Message[] =>
   messages.all().filter((message) => message.kind === 'settled');
 
@@ -239,6 +248,112 @@ describe('admission', () => {
       '2b8d3a4c-5e6f-4a71-8c2d-3e4f5a6b7c8d',
     );
     expect(slashed?.id).toMatch(/^prompt\/a%2Fb\/3\//);
+  });
+
+  it.each(['tool', 'mcpTool', '_extension'])(
+    'admission keeps its own copy of a %s subject and its choices',
+    async (type) => {
+      const one = handle();
+      const input = { query: { terms: ['alpha'], limit: 2 } };
+      const subject =
+        type === 'tool'
+          ? { type, tool: 'search', input }
+          : type === 'mcpTool'
+            ? { type, server: 'catalog', tool: 'search', input }
+            : { type, input };
+      const choices = [{ ...yes }, { ...no }];
+      raise(origin(7, one), { ...approval, subject, choices });
+      const id = only();
+      const admitted = structuredClone(owner.prompts(CANVAS));
+      const published = structuredClone(owner.items(CANVAS));
+
+      input.query.terms.push('beta');
+      input.query.limit = 4;
+      const [choice] = choices;
+      if (choice === undefined) throw new Error('missing choice');
+      choice.value = 'later';
+      choice.label = 'Later';
+
+      expect(owner.prompts(CANVAS)).toEqual(admitted);
+      expect(owner.items(CANVAS)).toEqual(published);
+      expect(owner.current(CANVAS, id)).toEqual(published[0]);
+      expect(await answer(id, { choice: 'later' })).toMatchObject({ code: 'invalid' });
+      expect(one.answered).toEqual([]);
+      expect(await answer(id, { choice: 'yes' })).toMatchObject({ outcome: 'answered' });
+      expect(one.answered).toEqual([[KEY, { kind: 'choice', value: 'yes' }]]);
+    },
+  );
+
+  it('a prompt read preserves the admitted choices for later readers and answers', async () => {
+    const one = handle();
+    raise(origin(7, one), approval);
+    const id = only();
+    const admitted = structuredClone(owner.prompts(CANVAS));
+    const published = structuredClone(owner.items(CANVAS));
+    const [read] = owner.prompts(CANVAS);
+    if (read?.kind !== 'approval') throw new Error('missing approval');
+    const [choice] = read.choices;
+    if (choice === undefined) throw new Error('missing choice');
+    editRead(() => {
+      choice.value = 'later';
+      choice.label = 'Later';
+    });
+
+    expect(owner.prompts(CANVAS)).toEqual(admitted);
+    expect(owner.items(CANVAS)).toEqual(published);
+    expect(await answer(id, { choice: 'later' })).toMatchObject({ code: 'invalid' });
+    expect(one.answered).toEqual([]);
+    expect(await answer(id, { choice: 'yes' })).toMatchObject({ outcome: 'answered' });
+    expect(one.answered).toEqual([[KEY, { kind: 'choice', value: 'yes' }]]);
+  });
+
+  it('admission keeps its own copy of form fields across adapter edits and Needs reads', async () => {
+    const one = handle();
+    const schema = {
+      type: 'object',
+      properties: { name: { type: 'string', title: 'Name', minLength: 2 } },
+      required: ['name'],
+      additionalProperties: false,
+    };
+    raise(origin(7, one), {
+      kind: 'form',
+      title: 'Name',
+      answerIn: 'api',
+      form: { schema },
+    });
+    const id = only();
+    const admitted = structuredClone(owner.prompts(CANVAS));
+    const published = structuredClone(owner.items(CANVAS));
+    schema.properties.name.title = 'Optional name';
+    schema.properties.name.minLength = 0;
+    schema.required.length = 0;
+    expect(owner.prompts(CANVAS)).toEqual(admitted);
+    expect(owner.items(CANVAS)).toEqual(published);
+
+    const [read] = owner.items(CANVAS);
+    if (read?.form === undefined || !('schema' in read.form)) throw new Error('missing form');
+    const fields = read.form.schema as typeof schema;
+    editRead(() => {
+      fields.properties.name.minLength = 0;
+    });
+    editRead(() => {
+      fields.required.length = 0;
+    });
+    expect(owner.prompts(CANVAS)).toEqual(admitted);
+    expect(owner.items(CANVAS)).toEqual(published);
+    expect(owner.current(CANVAS, id)).toEqual(published[0]);
+    for (const values of [{}, { name: 'A' }]) {
+      expect(await answer(id, { form: { action: 'accept', values } })).toMatchObject({
+        code: 'invalid',
+      });
+      expect(one.answered).toEqual([]);
+    }
+    expect(await answer(id, { form: { action: 'accept', values: { name: 'Ada' } } })).toMatchObject(
+      { outcome: 'answered' },
+    );
+    expect(one.answered).toEqual([
+      [KEY, { kind: 'form', action: 'accept', values: { name: 'Ada' } }],
+    ]);
   });
 
   it('declines what it can’t admit whole, saying why, and admits nothing', () => {

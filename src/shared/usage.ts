@@ -48,7 +48,7 @@ export interface UsageReading {
  * warn the user; hold the run and ask them (Needs you); or let the task going on finish, then
  * wait for the window to reset. ("Carry on with the next backend" comes with the fallback chain.)
  */
-export const USAGE_ACTIONS = ['warn', 'ask', 'waitForReset'] as const;
+export const USAGE_ACTIONS = ['warn', 'ask', 'waitForReset', 'fallback'] as const;
 export type UsageAction = (typeof USAGE_ACTIONS)[number];
 
 /** When a backend's usage is over `percent` of `window`, the run does `action`. */

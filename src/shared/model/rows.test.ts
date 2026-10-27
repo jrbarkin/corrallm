@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import { CANVAS_VERSION } from '../canvas';
 import type { CanvasId } from '../canvas';
 import { TEST_CATALOG } from '../test-model';
 import { EXAMPLES } from '../examples';
@@ -15,6 +16,29 @@ import type { ItemRow, LinkRow, NodeRow, Rows } from './rows';
  */
 
 const ID = '3f1b0d6e-8c2a-4e7f-9b5d-1a2c3e4f5a6b' as CanvasId;
+
+it('keeps fallback and handoff fields through canonical document rows', () => {
+  const document: CanvasDocument = {
+    id: ID,
+    arrange: false,
+    links: [],
+    nodes: [
+      {
+        id: 'a',
+        type: 'agent',
+        position: { x: 0, y: 0 },
+        data: {
+          label: 'A',
+          fallback: { to: [{ adapter: 'future', connection: 'future.api' }], back: 'return' },
+          handoff: { at: 95, file: 'handoff.md' },
+        },
+      },
+    ],
+  };
+  const rows = toRows(document);
+  expect(fromRows(ID, rows)).toEqual(document);
+  expect(diffRows(rows, document).changed).toEqual([]);
+});
 
 /** Every item a queue may hold, its if-thens and repeats holding what they may. */
 const everyItem: QueueItem[] = [
@@ -254,7 +278,9 @@ describe('toRows and fromRows', () => {
       const document = fromFile(example.text, TEST_CATALOG, 'claude-code');
       const read = fromRows(document.id, toRows(document));
       expect(read, example.name).toEqual(document);
-      expect(toFile(read), example.name).toBe(example.text);
+      expect(toFile(read), example.name).toBe(
+        example.text.replace('"version": 2', `"version": ${String(CANVAS_VERSION)}`),
+      );
     }
   });
 

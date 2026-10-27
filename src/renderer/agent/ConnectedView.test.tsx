@@ -183,6 +183,7 @@ describe('a connected Codex agent', () => {
       type: 'usage',
       usage: {
         costUsd: null,
+        context: null,
         contextTokens: 10_000,
         contextWindow: 200_000,
         limits: [
@@ -733,7 +734,10 @@ describe('a connected agent', () => {
         level: 'error',
         text: 'You’ve hit your session limit · resets 3pm',
       },
-      { type: 'usage', usage: { costUsd: 0.0234, contextTokens: 6000, contextWindow: 200_000 } },
+      {
+        type: 'usage',
+        usage: { costUsd: 0.0234, context: null, contextTokens: 6000, contextWindow: 200_000 },
+      },
       { type: 'end', messages: [id], seconds: 4, result: { status: 'failed', reason: 'error' } },
     );
     expect(transcript.getByRole('alert').textContent).toBe(

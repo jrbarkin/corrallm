@@ -1,4 +1,5 @@
 import type { AdapterId, ConnectionId, ModeId } from './adapter';
+import type { SessionContext } from './model/fallback';
 
 /*
  * Connected sessions: an agent's session run by the core, in a terminal or through a structured
@@ -414,6 +415,8 @@ export type SessionAnswer =
 
 /** What a session has used: null where its CLI has not said. */
 export interface SessionUsage {
+  /** Whole tokens on this connection's reported basis; null until a proven source reports it. */
+  context: SessionContext | null;
   /** Its cost so far, in US dollars: an estimate when the user is on a subscription. */
   costUsd: number | null;
   /** Tokens in its context window now, and the window's size. */

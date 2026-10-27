@@ -296,6 +296,7 @@ class FakeSession implements LiveSession<SessionMode> {
       type: 'usage',
       usage: {
         costUsd: this.#turns / 100,
+        context: null,
         contextTokens: this.#turns * 1000,
         contextWindow: 200_000,
       },
