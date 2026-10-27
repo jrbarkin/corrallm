@@ -419,6 +419,34 @@ describe('the core runs each canvas’s engine', () => {
     for (const flush of flushes) expect(flush).toHaveBeenCalled();
   });
 
+  it('reports the journal failing, not the disk, when a message and the run were not on disk yet', async () => {
+    await keepCanvas();
+    const codex = new FakeConnector({ adapter: 'codex' });
+    const started = await start(codex);
+    const engine = await started.engines.open(CANVAS);
+    engine.run.start();
+    await vi.waitFor(() => {
+      expect(journaled().run.agents.worker).toMatchObject({
+        outcomes: { hello: 'succeeded' },
+      });
+    });
+    refuseWrites(profile, 'run', 'The disk is full');
+    // A message changes as the disk fails, so it is not on disk when the core closes.
+    const messages = started.engines.canvas(CANVAS)?.messages;
+    const first = messages?.all()[0];
+    if (!messages || !first) throw new Error('The canvas has no message.');
+    messages.update(first.id, {
+      state: 'replied',
+      turn: { status: 'cancelled', reason: 'interrupted' },
+    });
+
+    // The run changes too, so the write that would keep that message keeps the run with it.
+    engine.run.pause();
+
+    await expect(core?.close()).rejects.toThrow(/journal/);
+    core = undefined;
+  });
+
   it('keeps a usable core when preparing to close cannot save its run', async () => {
     await keepCanvas();
     const codex = new FakeConnector({ adapter: 'codex' });
