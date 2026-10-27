@@ -16,7 +16,7 @@ import { FileReviews } from '../canvas/reviews';
 import { MessageStore, MessageTable } from '../delivery/messages';
 import { WorkspaceStore } from '../workspaces/store';
 import * as migrations from './migrations';
-import { MIGRATIONS } from './migrations';
+import { MIGRATIONS, SCHEMA } from './migrations';
 import { openStore, STORE_FILE } from './open';
 import type { Connection } from './sqlite';
 import { SYSTEM_DEPS } from './store';
@@ -35,6 +35,8 @@ import { madeAtSchema, openTestStore, readOnDisk, refuseWrites } from './test-st
 
 /** No timers: nothing checkpoints or takes a snapshot while a test compares the database. */
 const QUIET: StoreDeps = { ...SYSTEM_DEPS, later: () => () => undefined };
+/** The schema a profile is migrated to as it opens, and the oldest that may open it then. */
+const LATEST = { version: SCHEMA, minReader: SCHEMA };
 
 type Row = Record<string, unknown>;
 interface Fixture {
@@ -253,10 +255,12 @@ describe('migration 4 on a profile', () => {
 
     const store = await openTestStore(profile, QUIET);
     try {
-      expect(schemaOn()).toEqual({ version: 4, minReader: 4 });
+      expect(schemaOn()).toEqual(LATEST);
       // What migration 4 changes nothing of, as it was.
       expect(kept(UNCHANGED)).toEqual(fixtureOf(UNCHANGED));
-      expect(kept(['meta']).meta).toEqual([{ ...FIXTURE.tables.meta?.[0], min_reader: 4 }]);
+      expect(kept(['meta']).meta).toEqual([
+        { ...FIXTURE.tables.meta?.[0], min_reader: LATEST.minReader },
+      ]);
       // Each message as it was, in its place, by what made it: two resends, linked by resend_of.
       const messages = kept(['message']).message ?? [];
       const before = classified();
@@ -392,7 +396,7 @@ describe('migration 4 on a profile', () => {
     release();
     const store = await openTestStore(profile, QUIET);
     try {
-      expect(schemaOn()).toEqual({ version: 4, minReader: 4 });
+      expect(schemaOn()).toEqual(LATEST);
       expect(kept(['message']).message?.slice(0, classified().length)).toEqual(classified());
     } finally {
       await store.close();
@@ -461,7 +465,7 @@ describe('migration 4 on a profile', () => {
     if (store === undefined) throw new Error(said.join(' '));
     try {
       expect(said[1]).toMatch(/^It was restored from its snapshot of /);
-      expect(schemaOn()).toEqual({ version: 4, minReader: 4 });
+      expect(schemaOn()).toEqual(LATEST);
       const read = await readThrough(store);
       expect(decodeSubmissions(read.runs[WINDOW]?.checkpoint?.messages ?? '')).toEqual(
         submissionsOf(WINDOW),
@@ -482,7 +486,7 @@ describe('migration 4 on a profile', () => {
     expect(schemaOn()).toEqual({ version: 2, minReader: 2 });
     const store = await openTestStore(profile, QUIET);
     try {
-      expect(schemaOn()).toEqual({ version: 4, minReader: 4 });
+      expect(schemaOn()).toEqual(LATEST);
       expect(kept(['message']).message?.slice(0, classified().length)).toEqual(classified());
       const read = await readThrough(store);
       expect(decodeSubmissions(read.runs[WINDOW]?.checkpoint?.messages ?? '')).toEqual(

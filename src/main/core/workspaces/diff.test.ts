@@ -7,6 +7,7 @@ import {
   readFileSync,
   rmSync,
   symlinkSync,
+  utimesSync,
   writeFileSync,
 } from 'node:fs';
 import path from 'node:path';
@@ -705,6 +706,45 @@ describe.skipIf(process.platform === 'win32' || !gitInits('--object-format=sha25
         'README.md',
       ]);
       expect(all[2]?.files[0]?.patch).toMatch(/^\+changed$/m);
+    });
+  },
+);
+
+describe.skipIf(process.platform === 'win32')(
+  'Review changes, whatever the worktree configures',
+  () => {
+    it('shows a content edit and its patch whatever the repository’s stat settings', async () => {
+      const tree = await bound();
+      const file = path.join(tree.path, 'a.txt');
+      const old = new Date(Date.now() - 3_600_000);
+      utimesSync(file, old, old);
+      g(tree.path, 'update-index', '--refresh');
+      g(tree.path, 'config', 'core.trustctime', 'false');
+      g(tree.path, 'config', 'core.checkStat', 'minimal');
+      // Past a timestamp's tick, an edit of the same size, its old modification time put back.
+      await new Promise((resolve) => setTimeout(resolve, 1100));
+      writeFileSync(file, 'z\n');
+      utimesSync(file, old, old);
+      const entry = byPath(value(await page()).files, 'uncommitted').get('a.txt');
+      expect(entry?.patch).toMatch(/^\+z$/m);
+    });
+
+    it('reads the same whatever diff.orderFile names: a missing file, or a FIFO it never opens', async () => {
+      const tree = await bound();
+      write(tree.path, 'a.txt', 'edited\n');
+      const before = value(await page());
+      g(tree.path, 'config', 'diff.orderFile', path.join(made.root, 'no-such-order-file'));
+      expect(value(await page())).toEqual(before);
+      const fifo = path.join(made.root, 'order.fifo');
+      execFileSync('mkfifo', [fifo]);
+      g(tree.path, 'config', 'diff.orderFile', fifo);
+      // A status that opened the FIFO would wait for a writer: bounded here, so it fails, not hangs.
+      class Bounded extends GitRunner {
+        override capped(call: GitCall & { cap: number }): Promise<CappedOutput> {
+          return super.capped({ ...call, timeoutMs: 5000 });
+        }
+      }
+      expect(value(await page({}, { git: new Bounded(made.runnerDeps) }))).toEqual(before);
     });
   },
 );
