@@ -29,7 +29,7 @@ export interface PresenceCanvas {
   readonly document: { readonly id: CanvasId };
   readonly engine: {
     readonly run: { snapshot(): Run };
-    readonly sessions: { snapshot(): Readonly<Record<string, Pick<Session, 'status'>>> };
+    readonly sessions: { snapshot(): Readonly<Record<string, Pick<Session, 'status' | 'tasks'>>> };
   };
   readonly messages: { active(): readonly Pick<Message, 'kind' | 'state' | 'to'>[] };
 }
@@ -46,9 +46,10 @@ export interface PresenceSources {
 /**
  * What presence counts now (C5): `working`, agents in a turn (a session working, or waiting for you
  * mid-turn); `runs`, canvases whose run is running (waits and per-agent pauses included); `jobs`,
- * the owned jobs and each message being handed to an idle session; `needs`, the distinct items that
- * wait for you on each canvas; and (C6) `awake`, while something goes on without you: a turn not
- * waiting for you, a job, or a running run's timer for an agent no pause holds.
+ * the owned jobs, reported background tasks and each message handed to an idle session; `needs`,
+ * the distinct items that wait for you on each canvas; and (C6) `awake`, while something goes on
+ * without you: a turn not waiting for you, a setup/workspace/delivery job, or a running run's timer
+ * for an agent no pause holds.
  */
 export function countPresence(sources: PresenceSources): PresenceCounts {
   let working = 0;
@@ -59,6 +60,8 @@ export function countPresence(sources: PresenceSources): PresenceCounts {
   for (const open of sources.canvases()) {
     const sessions = open.engine.sessions.snapshot();
     for (const session of Object.values(sessions)) {
+      // Background work would be cut off by quitting, but does not itself keep the app awake.
+      jobs += session.tasks?.length ?? 0;
       if (session.status === 'idle') continue;
       working += 1;
       if (session.status === 'working') awake = true;

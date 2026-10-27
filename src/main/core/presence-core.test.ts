@@ -176,6 +176,43 @@ describe('the core’s presence', () => {
 });
 
 describe('preparing the shutdown barrier only if nothing is at work (ifIdle)', () => {
+  it.each(['quit', 'update'] as const)(
+    'answers busy for %s with an idle session’s live background task, without keeping awake',
+    async (reason) => {
+      const started = await start();
+      await started.engines.open(CANVAS);
+      await message('Hello');
+      const sessions = started.engines.canvas(CANVAS)?.engine.sessions;
+      await vi.waitFor(() => {
+        expect(sessions?.of('worker').status).toBe('idle');
+        expect(sessions?.of('worker').entries.some((entry) => entry.kind === 'text')).toBe(true);
+      });
+      await heard(IDLE);
+      await started.engines.emit(CANVAS, 'worker', 'codex.app-server', {
+        type: 'tasks',
+        tasks: [{ id: 'server', description: 'Dev server', kind: 'command' }],
+      });
+      expect(sessions?.of('worker').status).toBe('idle');
+      // The idle check reads now, before the publisher’s trailing pass tells main.
+      expect(await started.prepareShutdown(reason, { ifIdle: true })).toEqual({
+        busy: {
+          revision: expect.any(Number) as number,
+          ...IDLE,
+          jobs: 1,
+          busy: true,
+        },
+      });
+      await heard({ ...IDLE, jobs: 1, busy: true });
+      // The connector’s whole live list says the task has ended; the push returns to idle too.
+      await started.engines.emit(CANVAS, 'worker', 'codex.app-server', {
+        type: 'tasks',
+        tasks: [],
+      });
+      await heard(IDLE);
+      expect(await started.prepareShutdown(reason, { ifIdle: true })).toEqual({ ok: true });
+    },
+  );
+
   it('holds the barrier when idle, as a plain prepare does', async () => {
     const started = await start();
     await started.engines.open(CANVAS);

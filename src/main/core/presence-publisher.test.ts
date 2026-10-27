@@ -167,6 +167,33 @@ describe('what it counts', () => {
       awake: false,
     });
   });
+
+  it.each(['idle', 'waiting', 'working'] as const)(
+    'counts reported background tasks as jobs without changing awake for a %s session',
+    (status) => {
+      const agent = {
+        ...session(status),
+        tasks: [
+          { id: 'server', description: 'Dev server', kind: 'command' as const },
+          { id: 'helper', description: 'Helper', kind: 'agent' as const },
+        ],
+      };
+      const sources = {
+        canvases: () => [canvas('one', { sessions: { a: agent } })],
+        needs: () => [],
+        jobs: () => 0,
+      };
+      expect(countPresence(sources)).toEqual({
+        working: status === 'idle' ? 0 : 1,
+        runs: 0,
+        jobs: 2,
+        needs: 0,
+        awake: status === 'working',
+      });
+      agent.tasks = [];
+      expect(countPresence(sources)).toMatchObject({ jobs: 0, awake: status === 'working' });
+    },
+  );
 });
 
 it('sends nothing once closed, and a failing host never stops it counting', () => {

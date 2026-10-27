@@ -2,6 +2,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Mock } from 'vitest';
 import type { MessageBoxOptions } from 'electron';
 
+import type { CanvasId } from '../../shared/canvas';
+import { countPresence, PresencePublisher } from '../core/presence-publisher';
 import type { Presence } from '../core/presence';
 import type { DraftsFlushed, ShutdownPrepared } from '../core/protocol';
 import { Closing, QuitCoordinator, SYSTEM_BUDGET_MS } from './closing';
@@ -297,6 +299,48 @@ describe('a quit with nothing at work', () => {
 });
 
 describe('the question', () => {
+  it('asks about an idle session’s background work even though it does not keep awake', async () => {
+    const presence = new PresencePublisher({
+      count: () =>
+        countPresence({
+          canvases: () => [
+            {
+              document: { id: 'canvas' as CanvasId },
+              engine: {
+                run: { snapshot: () => ({ running: false, agents: {} }) },
+                sessions: {
+                  snapshot: () => ({
+                    worker: {
+                      status: 'idle',
+                      tasks: [{ id: 'server', description: 'Dev server', kind: 'command' }],
+                    },
+                  }),
+                },
+              },
+              messages: { active: () => [] },
+            },
+          ],
+          needs: () => [],
+          jobs: () => 0,
+        }),
+      send: () => {
+        // The coordinator reads the core’s last snapshot directly in this world.
+      },
+    }).now();
+    const w = world({ presence });
+    w.beforeQuit();
+    await vi.waitFor(() => {
+      expect(w.asked).toHaveLength(1);
+    });
+    expect(presence).toMatchObject({ working: 0, runs: 0, jobs: 1, busy: true, awake: false });
+    expect(w.asked[0]?.options.message).toBe('corrallm is finishing some work for its agents.');
+    expect(w.core.prepare).not.toHaveBeenCalled();
+    expect(w.core.commit).not.toHaveBeenCalled();
+    w.asked[0]?.answer(2);
+    await settle();
+    expect(w.quit.asking).toBe(false);
+  });
+
   it.each([
     [busy({ working: 1 }), 'An agent is working.'],
     [busy({ working: 3, runs: 2 }), '3 agents are working.'],
