@@ -176,6 +176,66 @@ describe('Settings', () => {
     });
   });
 
+  it('reads whether OS notifications are on: absent, or not a boolean, is on (B14 C11)', async () => {
+    expect(await new Settings(file).notificationsEnabled()).toBe(true);
+    for (const [notifications, on] of [
+      [undefined, true],
+      [{ enabled: true }, true],
+      [{ enabled: false }, false],
+      [{ enabled: false, preview: 'names' }, false],
+      [{ enabled: 'false' }, true],
+      [{ enabled: 0 }, true],
+      [{}, true],
+      [[], true],
+      ['off', true],
+      [null, true],
+    ] as const) {
+      await writeFile(file, JSON.stringify({ version: 2, consents: {}, notifications }));
+      const settings = new Settings(file);
+      expect(await settings.notificationsEnabled(), JSON.stringify(notifications)).toBe(on);
+      const enabled = (notifications as { enabled?: unknown } | null | undefined)?.enabled;
+      expect((await settings.get()).notifications).toEqual(
+        typeof enabled === 'boolean' ? { enabled } : undefined,
+      );
+    }
+    // Another version's file is set aside, read as nothing chosen: on.
+    const said = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    await writeFile(file, JSON.stringify({ version: 3, notifications: { enabled: false } }));
+    expect(await new Settings(file).notificationsEnabled()).toBe(true);
+    said.mockRestore();
+  });
+
+  it.skipIf(!CAN_DENY)('reads notifications as on from a file it can’t read', async () => {
+    const kept = `${JSON.stringify({ version: 2, consents: {}, notifications: { enabled: false } })}\n`;
+    await writeFile(file, kept);
+    await chmod(file, 0);
+    const settings = new Settings(file);
+    expect(await settings.notificationsEnabled()).toBe(true);
+    await chmod(file, 0o600);
+    expect(await readFile(file, 'utf8')).toBe(kept);
+    // Read again once it can be.
+    expect(await settings.notificationsEnabled()).toBe(false);
+  });
+
+  it('writes the notifications field back as it was, with what a newer corrallm adds to it', async () => {
+    for (const notifications of [
+      { enabled: false },
+      { enabled: true, preview: 'names' },
+      { enabled: 'no', preview: 'names' },
+    ]) {
+      await writeFile(file, JSON.stringify({ version: 2, consents: {}, notifications }));
+      const settings = new Settings(file);
+      await settings.consent('codex', 'plan').give();
+      await settings.keepApiPort(47123);
+      expect(JSON.parse(await readFile(file, 'utf8'))).toEqual({
+        version: 2,
+        consents: { codex: { plan: true } },
+        api: { port: 47123 },
+        notifications,
+      });
+    }
+  });
+
   it('applies updates in order, and a failed write fails no one', async () => {
     const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const settings = new Settings(path.join(dir, 'missing', 'settings.json'));
