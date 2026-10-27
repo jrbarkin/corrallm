@@ -184,7 +184,7 @@ describe('silent turns', () => {
       { agentId: AGENT, cwd: dir, env: {}, model: null, mode: null, resume: null },
       {
         remember: () => undefined,
-        emit: (event) => {
+        emit: (event: SessionEvent) => {
           watchdog.event(CANVAS, AGENT, 'codex.terminal', event);
         },
         activity: () => {
@@ -279,7 +279,7 @@ describe('silent turns', () => {
       { agentId: AGENT, cwd: dir, env: {}, model: null, mode: null, resume: null },
       {
         remember: () => undefined,
-        emit: (event) => {
+        emit: (event: SessionEvent) => {
           watchdog.event(CANVAS, AGENT, 'claude-code.terminal', event);
         },
         activity: () => {

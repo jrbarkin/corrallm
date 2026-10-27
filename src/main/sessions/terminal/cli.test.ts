@@ -314,7 +314,10 @@ async function start(
   const cli = new TitledCli();
   const session = new TerminalSession<CodexMode>(
     { ...SPEC, ...spec },
-    { emit: (event) => events.push(event), remember: (sessionId) => remembered.push(sessionId) },
+    {
+      emit: (event: SessionEvent) => events.push(event),
+      remember: (sessionId) => remembered.push(sessionId),
+    },
     {
       executable: '/bin/titled',
       cli,
