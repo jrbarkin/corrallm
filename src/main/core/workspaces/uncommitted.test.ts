@@ -260,6 +260,32 @@ describe.skipIf(process.platform === 'win32')('the uncommitted inventory', () =>
     });
   });
 
+  it('offers no commit while a tracked file has another link, changed or not', async () => {
+    write('README.md', 'changed\n');
+    expect((await inventory()).digest).not.toBeNull();
+    // An unchanged tracked file with a second name elsewhere: no entry of its own, no digest.
+    linkSync(path.join(at, 's.txt'), path.join(made.root, 's-second-name.txt'));
+    const unchanged = await inventory();
+    expect(unchanged.digest).toBeNull();
+    expect(unchanged.files.map((file) => [file.path, file.note])).toEqual([
+      ['README.md', undefined],
+    ]);
+    rmSync(path.join(made.root, 's-second-name.txt'));
+    expect((await inventory()).digest).not.toBeNull();
+    // A changed one: listed, unreadable, unhashed.
+    linkSync(path.join(at, 'README.md'), path.join(made.root, 'readme-second-name.md'));
+    const changed = await inventory();
+    expect(changed.digest).toBeNull();
+    expect(changed.files).toEqual([
+      expect.objectContaining({
+        path: 'README.md',
+        status: 'modified',
+        note: 'unreadable',
+        oid: null,
+      }),
+    ]);
+  });
+
   it('offers no commit while the agent’s index hides changes from status', async () => {
     write('README.md', 'changed\n');
     expect((await inventory()).digest).not.toBeNull();

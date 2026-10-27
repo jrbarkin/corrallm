@@ -55,7 +55,9 @@ import { inventoryUncommitted, shownPath } from './uncommitted';
  * - **Uncommitted work** is C3's inventory (`inventoryUncommitted`), its digest the one a
  *   checkpoint is bound to. A tracked file's patch is Git's, from the tip to the file as it is;
  *   an untracked file is read by the core: under real folders only, opened without following a
- *   link, a regular file with one name, at most 1 MiB, binary by a NUL; a link by its text.
+ *   link, a regular file with one name, at most 1 MiB, binary by a NUL; a link by its text. A
+ *   file with another name, tracked or not, is shown unreadable with no patch (the inventory's
+ *   note), and then no commit is offered.
  * - **Paging retains nothing** (C2's revalidated continuation). Each page reads everything again;
  *   its cursor binds the tip, the digest and the review's state (a SHA-256 of the workspace, its
  *   base, its tip, and the worktree as Git's status and the file system have it, read before and

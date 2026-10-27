@@ -38,9 +38,9 @@ import type { Selected } from './merge-select';
  * repository; a local file copied into the workspace (its copy record), or a copy record that
  * can't be read; a path a configured filter applies to; a name that isn't UTF-8; changes hidden
  * from status (skip-worktree, assume-unchanged, a sparse checkout); a file that isn't a regular
- * one or a link, or one under a link; an untracked file with another name (a hard link, which
- * Review changes doesn't read); more than 10,000 entries (counted, not listed) or more than 1 GiB
- * to hash; or anything Git couldn't read whole.
+ * one or a link, or one under a link; a file with another name (a hard link, which Review changes
+ * doesn't show), untracked, or tracked whether changed or not; more than 10,000 entries (counted,
+ * not listed) or more than 1 GiB to hash; or anything Git couldn't read whole.
  */
 
 /** An uncommitted path, as the review shows it and the digest takes it. */
@@ -221,9 +221,9 @@ export async function inventoryUncommitted(
           );
         }
       } else if (found.isFile()) {
-        if (file.status === 'untracked' && found.nlink !== 1) {
-          // Review changes reads an untracked file itself, only one with no other name (§9 C2):
-          // what it can't show, a checkpoint doesn't commit.
+        if (found.nlink !== 1) {
+          // Review changes shows a file only with no other name (§9 C2), tracked or not: what it
+          // can't show, a checkpoint doesn't commit.
           file.note = 'unreadable';
           continue;
         }
@@ -258,6 +258,8 @@ export async function inventoryUncommitted(
     if (files.some((file) => copies.has(folded(file.path, true)))) return without('copied');
     if (why !== undefined) return without(why);
     if (files.some((file) => file.note === 'unreadable')) return without('unreadable');
+    // A tracked file with another name, changed or not, may change through it unseen.
+    if (trackedWithLinks(cwd, index.stdout, folders)) return without('unreadable');
     const present = files.filter((file) => file.status !== 'deleted').map((file) => file.path);
     if ((await filteredPaths(git, { cwd, drivers }, present)).length > 0) {
       return without('filtered');
@@ -386,6 +388,27 @@ function underFolders(root: string, relative: string, seen: Map<string, boolean>
     if (!real) return false;
   }
   return true;
+}
+
+/**
+ * Whether any file the index tracks (`ls-files -v -z`'s listing) is, in the worktree, a regular
+ * file with more than one link, by a stat that follows no link (under real folders only): or has a
+ * name that isn't UTF-8, whose file can't be found to say.
+ */
+function trackedWithLinks(root: string, listing: string, seen: Map<string, boolean>): boolean {
+  for (const entry of listing.split('\0')) {
+    if (entry.length < 3) continue;
+    const at = entry.slice(2);
+    if (at.includes(REPLACEMENT)) return true;
+    if (!underFolders(root, at, seen)) continue;
+    try {
+      const found = lstatSync(path.join(root, at));
+      if (found.isFile() && found.nlink !== 1) return true;
+    } catch {
+      // Not there (deleted): nothing to commit through another name.
+    }
+  }
+  return false;
 }
 
 /** The id of a blob holding `bytes`, as Git stores it in a repository of `format`. */

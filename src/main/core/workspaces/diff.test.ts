@@ -642,6 +642,30 @@ describe.skipIf(process.platform === 'win32')('Review changes', () => {
     });
   });
 
+  it('shows a changed tracked file with another link unreadable, without its patch, and offers no commit', async () => {
+    const tree = await bound();
+    const at = tree.path;
+    write(at, 'a.txt', 'a, edited\n');
+    write(at, 'b.txt', 'b, edited\n');
+    expect(value(await page()).uncommitted.digest).not.toBeNull();
+    linkSync(path.join(at, 'a.txt'), path.join(made.root, 'a-second-name.txt'));
+    const result = value(await page());
+    expect(result.uncommitted.digest).toBeNull();
+    const files = byPath(result.files, 'uncommitted');
+    expect(files.get('a.txt')).toMatchObject({ status: 'modified', note: 'unreadable' });
+    expect(files.get('a.txt')?.patch).toBeUndefined();
+    expect(files.get('b.txt')?.patch).toMatch(/^\+b, edited$/m);
+    // An unchanged one has no entry, and still no commit is offered.
+    rmSync(path.join(made.root, 'a-second-name.txt'));
+    linkSync(path.join(at, 'gone.txt'), path.join(made.root, 'gone-second-name.txt'));
+    const unchanged = value(await page());
+    expect(unchanged.uncommitted.digest).toBeNull();
+    expect(unchanged.files.map((file) => [file.path, file.note])).toEqual([
+      ['a.txt', undefined],
+      ['b.txt', undefined],
+    ]);
+  });
+
   it('marks what Git couldn’t read, never leaving it out', async () => {
     const tree = await bound();
     const at = tree.path;
