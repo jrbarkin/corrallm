@@ -444,7 +444,18 @@ describe.skipIf(process.platform === 'win32')('what a merge would write', () => 
     ]);
   });
 
-  it('refuses anything coming into corrallm’s worktrees folder, case-folded where the filesystem is', async () => {
+  it('refuses corrallm’s folder under another case whatever core.ignoreCase says', async () => {
+    g(made.app, 'config', 'core.ignorecase', 'false');
+    const into = await destination();
+    expect(into.ignoreCase).toBe(false);
+    const cased = work(side, { '.CORRAL/worktrees/x/injected.txt': 'x\n' });
+    expect(checkProtected(into, await incoming(into, cased))).toMatchObject({
+      code: 'refused',
+      reason: 'corral-worktrees',
+    });
+  });
+
+  it('refuses anything coming into corrallm’s worktrees folder, case-folded always', async () => {
     const into = await destination();
     const under = work(side, { '.corral/worktrees/x/y.txt': 'y\n' });
     expect(checkProtected(into, await incoming(into, under))).toMatchObject({
@@ -458,9 +469,10 @@ describe.skipIf(process.platform === 'win32')('what a merge would write', () => 
     });
     g(side, 'reset', '-q', '--hard', made.base);
     const cased = work(side, { '.CORRAL/Worktrees/x.txt': 'x\n' });
-    const casedRefusal = checkProtected(into, await incoming(into, cased));
-    if (into.ignoreCase) expect(casedRefusal).toMatchObject({ reason: 'corral-worktrees' });
-    else expect(casedRefusal).toBeUndefined();
+    // Folded on a filesystem that tells cases apart too: a refusal there costs nothing.
+    expect(checkProtected(into, await incoming(into, cased))).toMatchObject({
+      reason: 'corral-worktrees',
+    });
     g(side, 'reset', '-q', '--hard', made.base);
     // A code point HFS+ ignores in names makes no other name of it.
     const joiner = String.fromCodePoint(0x200c);
@@ -633,3 +645,29 @@ describe.skipIf(process.platform === 'win32')('ORIG_HEAD’s log', () => {
     expect(readFileSync(other, 'utf8')).toBe('');
   });
 });
+
+describe.skipIf(process.platform === 'win32')(
+  'your checkout as Git reads it, whatever it configures',
+  () => {
+    it('sees a content edit whatever the repository’s stat settings', async () => {
+      const file = path.join(made.app, 'README.md');
+      const old = new Date(Date.now() - 3_600_000);
+      utimesSync(file, old, old);
+      g(made.app, 'update-index', '--refresh');
+      g(made.app, 'config', 'core.trustctime', 'false');
+      g(made.app, 'config', 'core.checkStat', 'minimal');
+      // Past a timestamp's tick, an edit of the same size, its old modification time put back.
+      await new Promise((resolve) => setTimeout(resolve, 1100));
+      writeFileSync(file, 'EDIT!\n');
+      utimesSync(file, old, old);
+      expect(await checkClean(made.git, await destination())).toMatchObject({ reason: 'dirty' });
+    });
+
+    it('reads the same whatever diff.orderFile names', async () => {
+      g(made.app, 'config', 'diff.orderFile', path.join(made.root, 'no-such-order-file'));
+      expect(await checkClean(made.git, await destination())).toBeUndefined();
+      writeFileSync(path.join(made.app, 'README.md'), 'edited\n');
+      expect(await checkClean(made.git, await destination())).toMatchObject({ reason: 'dirty' });
+    });
+  },
+);

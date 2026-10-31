@@ -520,12 +520,53 @@ export const MIGRATIONS: readonly Migration[] = [
     convert: convertToSchema4,
   },
   {
-    // B11a's (B11a Design §12 C1, C2): an agent's fallback chain, with where the run is in it, and
-    // its handoff settings, kept with its row as the document has them. A corrallm of schema 4
-    // would read agents without their chain and change how they run with a stale place in it, so,
-    // as a file of version 3 is to it, it may no longer open the database.
+    // B9b's (B9b Design §9 C8): the merge journal. A merge of an agent's branch into your picked
+    // checkout's branch is recorded before it is installed, so that a restart finds what it did by
+    // what your checkout shows, never by running it again. A corrallm of schema 4 would neither
+    // reconcile an install a crash interrupted nor hold an agent's worktree until it is, so it
+    // may no longer open the database.
     version: 5,
     minReader: 5,
+    sql: `
+      -- A merge, recorded once its commits are prepared and before it is installed: its canvas,
+      -- agent and workspace (no reference: the row outlives the workspace's cleanup), its
+      -- repository, who asked (caller_key and request_id: a repeated request gets this one's
+      -- answer, after a restart too), what it pinned, prepared and recorded (intent, immutable:
+      -- the destination checkout, its branch and commit, the merge commit and tree, the agent's
+      -- branch, tip and checkpoint, ORIG_HEAD as it was, the requester) and its fingerprint, the
+      -- phase it reached, how it ended (none while it goes on) and why. At most one goes on per
+      -- repository.
+      CREATE TABLE merge_job (
+        id TEXT PRIMARY KEY NOT NULL,
+        canvas_id TEXT NOT NULL REFERENCES canvas (id) ON DELETE CASCADE,
+        agent_id TEXT NOT NULL,
+        workspace_id TEXT NOT NULL,
+        repository_id TEXT NOT NULL REFERENCES repository (id) ON DELETE RESTRICT,
+        caller_key TEXT NOT NULL,
+        request_id TEXT NOT NULL,
+        intent TEXT NOT NULL CHECK (json_valid(intent)),
+        intent_hash TEXT NOT NULL CHECK (length(intent_hash) = 64),
+        phase TEXT NOT NULL CHECK (phase IN ('installing', 'installed', 'published', 'done')),
+        outcome TEXT
+          CHECK (outcome IN ('merged', 'refused', 'interrupted', 'held', 'superseded')),
+        sentence TEXT,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        UNIQUE (caller_key, request_id)
+      ) STRICT;
+      CREATE UNIQUE INDEX merge_job_open ON merge_job (repository_id) WHERE outcome IS NULL;
+      CREATE INDEX merge_job_by_canvas ON merge_job (canvas_id, created_at);
+      CREATE INDEX merge_job_by_repository ON merge_job (repository_id, created_at);
+      CREATE INDEX merge_job_by_workspace ON merge_job (workspace_id, created_at);
+    `,
+  },
+  {
+    // B11a's (B11a Design §12 C1, C2): an agent's fallback chain, with where the run is in it, and
+    // its handoff settings, kept with its row as the document has them. A corrallm of schema 5
+    // would read agents without their chain and change how they run with a stale place in it, so,
+    // as a file of version 3 is to it, it may no longer open the database.
+    version: 6,
+    minReader: 6,
     sql: `
       -- The chain you set (fallback: its steps, whether it returns, and the step corrallm switched
       -- the agent to, with the endpoint it came from) and the handoff settings (handoff): JSON as

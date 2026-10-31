@@ -1,8 +1,8 @@
-import { execFileSync } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import { performance } from 'node:perf_hooks';
 
 import type { ChildSystem } from '../core/children';
+import { hasLiveGroupMembers } from '../core/process-groups';
 import { inspectProcess, isProcessStart, sameStart } from '../core/process-identity';
 import type { ProcessStart } from '../core/process-identity';
 
@@ -24,22 +24,7 @@ export const TEST_GROUP_SYSTEM: ChildSystem = {
       if ((error as NodeJS.ErrnoException).code === 'EPERM' && process.platform !== 'win32') {
         // A group probe can be denied even after its leader exited. Inspect every member,
         // not just the recorded leader: descendants may still run in that private group.
-        const table = execFileSync('ps', ['-A', '-o', 'pgid=', '-o', 'stat='], {
-          encoding: 'utf8',
-          env: { ...process.env, LC_ALL: 'C' },
-          stdio: ['ignore', 'pipe', 'pipe'],
-          timeout: 1000,
-        });
-        let live = false;
-        for (const line of table.split('\n')) {
-          if (!line.trim()) continue;
-          const fields = /^\s*(\d+)\s+(\S+)\s*$/.exec(line);
-          if (fields === null)
-            throw new Error('Could not read test process groups.', { cause: error });
-          // Zombies have already exited; they cannot write or respond to another signal.
-          if (Number(fields[1]) === pid && !fields[2]?.startsWith('Z')) live = true;
-        }
-        return live;
+        return hasLiveGroupMembers(pid);
       }
       throw error;
     }
@@ -47,6 +32,7 @@ export const TEST_GROUP_SYSTEM: ChildSystem = {
   signal: (pid, signal) => {
     process.kill(process.platform === 'win32' ? pid : -pid, signal);
   },
+  hasLiveMembers: hasLiveGroupMembers,
   wait: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   pause: (ms) => {
     Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);

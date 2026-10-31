@@ -10,6 +10,7 @@ import { agentsReached } from '../reach';
 import type { WorkspaceCleanup } from '../workspaces/cleanup';
 import type { BranchDiffRequest } from '../workspaces/diff';
 import type { Viewer, WorktreeListing } from '../workspaces/list';
+import type { MergeRequest, MergeResult } from '../workspaces/merge';
 import { ProvisionError } from '../workspaces/provision';
 import type { WorkspaceStore } from '../workspaces/store';
 import { openCanvas, reachFor } from './open';
@@ -42,6 +43,12 @@ export interface WorktreeServices {
    * `request.viewer` reaches (built as worktree.list builds its viewer). Its error is the op's.
    */
   diff?: (request: BranchDiffRequest) => Promise<OpResult<BranchDiffOutput>>;
+  /**
+   * B9b C5's merge service (workspaces/merge.ts' `MergeService.merge`), composed by createCore for
+   * `branch.merge` (X2): the agent's branch merged into your picked checkout's branch, answered
+   * once it settled. Its caller is `mergeCallerOf(ctx.caller)`; its error is the op's.
+   */
+  merge?: (request: MergeRequest) => Promise<OpResult<MergeResult>>;
 }
 
 const NONE = 'This corrallm keeps no worktrees yet.';
