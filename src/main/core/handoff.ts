@@ -107,6 +107,7 @@ interface Following {
 interface Attached {
   runtime: HandoffRuntime;
   agents: Map<string, Following>;
+  exports: Map<string, Promise<void>>;
   stop: () => void;
 }
 
@@ -135,6 +136,7 @@ export class HandoffService {
     const attached: Attached = {
       runtime,
       agents: new Map(),
+      exports: new Map(),
       stop: () => {
         for (const stop of stops) stop();
         if (this.#canvases.get(canvas) === attached) this.#canvases.delete(canvas);
@@ -223,7 +225,7 @@ export class HandoffService {
     following.failed = false;
     // Once delivery has recorded the reply in this same tick: their one write holds both.
     queueMicrotask(() => {
-      void this.#export(canvas, attached, agent, handoff);
+      this.#queueExport(canvas, attached, agent, handoff);
     });
   }
 
@@ -268,6 +270,7 @@ export class HandoffService {
     agent: string,
     text: string,
     kind: 'run' | 'party',
+    owner?: string,
   ): { text: string; carry: string; undo: () => void } | undefined {
     const runtime = this.#deps.canvas(canvas);
     const node = runtime === undefined ? undefined : agentIn(runtime.document, agent);
@@ -283,7 +286,9 @@ export class HandoffService {
     if (taken === undefined) return undefined;
     const framed = [
       this.#switchLine(runtime, node),
-      text,
+      kind === 'run' && owner !== undefined && owner !== agent
+        ? `[corrallm] This task is from agent ${quotedParty(runtime.document.nodes, agentParty(owner))} (another agent, not the user or corrallm):\n${text}`
+        : text,
       this.#handoffBlock(runtime, node, taken.handoff, taken.why),
     ].join('\n\n');
     return {
@@ -437,6 +442,21 @@ export class HandoffService {
     }
   }
 
+  /** One export at a time per agent: the next sees the proof of the copy the previous wrote. */
+  #queueExport(canvas: CanvasId, attached: Attached, agent: string, handoff: Handoff): void {
+    const before = attached.exports.get(agent) ?? Promise.resolve();
+    const next = before
+      .then(() => this.#export(canvas, attached, agent, handoff))
+      .catch(() => {
+        // A dependency failed outside the exporter's normal result: never log handoff contents.
+        console.error('Could not finish a handoff export.');
+      });
+    attached.exports.set(agent, next);
+    void next.then(() => {
+      if (attached.exports.get(agent) === next) attached.exports.delete(agent);
+    });
+  }
+
   /** Writes an accepted handoff's Markdown copy once its record is on disk, where a file is set. */
   async #export(
     canvas: CanvasId,
@@ -444,6 +464,7 @@ export class HandoffService {
     agent: string,
     handoff: Handoff,
   ): Promise<void> {
+    if (this.#canvases.get(canvas) !== attached) return;
     const { runtime } = attached;
     const exporter = this.#deps.exporter;
     if (exporter === undefined) return;
@@ -466,8 +487,15 @@ export class HandoffService {
       last: record.exported,
     });
     if (this.#canvases.get(canvas) !== attached) return;
-    // A newer handoff since has an export of its own to say.
-    if (runtime.handoffs.of(agent)?.handoff !== handoff) return;
+    // A newer handoff has an export of its own to say, but still needs ownership proof of the
+    // file this write actually installed before its queued export may replace it.
+    if (runtime.handoffs.of(agent)?.handoff !== handoff) {
+      if (result.ok) {
+        runtime.handoffs.copied(agent, { path, sha256: result.sha256 });
+        await runtime.handoffs.durable();
+      }
+      return;
+    }
     runtime.handoffs.exported(
       agent,
       result.ok ? { state: 'done', path, sha256: result.sha256 } : { state: result.why },

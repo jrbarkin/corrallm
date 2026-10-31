@@ -59,3 +59,5 @@ It shares open.ts' application-id, min-reader and integrity checks, refusing bef
 As with any SQLite WAL reader, it participates in -shm and may create an empty -wal/-shm on a closed database; it writes no database page or WAL frame.
 
 A slow output pipe pins its read view (the owner's writes still continue) and is awaited, never accumulated in memory.
+
+A successful export of a superseded handoff still updates the last-copy path and hash, retaining the newer handoff and leaving its export status alone. The per-agent export lane records that proof durably before attempting the newer copy.

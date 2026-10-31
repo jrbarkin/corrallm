@@ -247,6 +247,12 @@ export class HandoffStore {
     this.#set(agent, record);
   }
 
+  /** A superseded handoff finished writing: retain its copy's proof, not its export status. */
+  copied(agent: string, exported: HandoffExport): void {
+    const record = this.#kept.get(agent);
+    if (record !== undefined) this.#set(agent, { ...record, exported });
+  }
+
   /** As the canvas opens: the rows of agents no longer on it go, with the next write. */
   prune(agents: ReadonlySet<string>): void {
     for (const agent of [...this.#kept.keys(), ...this.#unread]) {

@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { connectionIn } from '../../shared/adapter';
 import type { CanvasId } from '../../shared/canvas';
 import type { SessionContext } from '../../shared/model/fallback';
-import type { SessionMode, TurnResult, UserMessage } from '../../shared/session';
+import type { SessionEvent, SessionMode, TurnResult, UserMessage } from '../../shared/session';
 import type { Connector, SessionHost } from '../sessions/connector';
 import { CATALOG } from '../sessions/adapters';
 import { FakeConnector } from '../sessions/fake';
@@ -18,6 +18,11 @@ import type { Core } from './core';
 import { keepCanvases, readOnDisk, writeOnDisk } from './store/test-store';
 import { CALLERS, NO_DESKTOP } from './test-registry';
 import { legacyDirectories } from './workspaces/test-directories';
+import { expectRestorable, liveRunOf } from './engine/run/test-restore';
+import { HandoffService } from './handoff';
+import { exportHandoff } from './handoff-file';
+import { mintTrustedPath } from './host';
+import type { Message } from '../../shared/model/messages';
 
 /*
  * B11a's handoff through the whole core (C7, C10): an agent whose reported context passes its ask
@@ -106,6 +111,7 @@ beforeEach(async () => {
   for (const connection of REPORTING) connection.context = true;
 });
 afterEach(async () => {
+  expectRestorable();
   for (const connection of REPORTING) connection.context = false;
   vi.restoreAllMocks();
   for (const core of cores.splice(0)) await core.close().catch(() => undefined);
@@ -172,6 +178,11 @@ function driven(
     connector,
     fake,
     sent,
+    emit: (event: SessionEvent, agent = 'worker') => {
+      const host = to.get(agent)?.host;
+      if (host === undefined) throw new Error('No session.');
+      host.emit(event);
+    },
     /** What `agent`'s sessions were sent. */
     sentTo: (agent: string) => to.get(agent)?.sent ?? [],
     reply,
@@ -900,14 +911,246 @@ describe('the Markdown copy', () => {
           'export',
           'state',
         ]);
-        expect(
-          engine.sessions
-            .of('worker')
-            .entries.flatMap((entry) => (entry.kind === 'notice' ? [entry.text] : [])),
-        ).toContainEqual(expect.stringMatching(said));
+        await vi.waitFor(() => {
+          expect(
+            engine.sessions
+              .of('worker')
+              .entries.flatMap((entry) => (entry.kind === 'notice' ? [entry.text] : [])),
+          ).toContainEqual(expect.stringMatching(said));
+        });
       } finally {
         await chmod(project, 0o755);
       }
     },
   );
+});
+
+it('keeps a handoff reply out of session summaries', async () => {
+  await keep();
+  const codex = driven('codex');
+  const core = await start(codex.connector, driven('claude-code').connector);
+  await core.engines.open(CANVAS);
+  await core.call('message', { canvas: CANVAS, to: 'worker', body: 'Work' }, CALLERS.you);
+  await vi.waitFor(() => {
+    expect(codex.sent).toHaveLength(1);
+  });
+  codex.reply('Ordinary work reply.', CROSSED);
+  await vi.waitFor(() => {
+    expect(codex.sent).toHaveLength(2);
+  });
+  const summaries = async () => {
+    for (const caller of [CALLERS.you, ORCHESTRATOR]) {
+      const read = await core.call('session.get', { canvas: CANVAS, agent: 'worker' }, caller);
+      expect(JSON.stringify(read)).not.toContain('private-handoff-summary-marker');
+      const topic = await core.topics.read(`sessions:${CANVAS}`, caller);
+      expect(JSON.stringify(topic)).not.toContain('private-handoff-summary-marker');
+      const session = await core.topics.read(`session:${CANVAS}:worker`, caller);
+      if (!session.ok) throw new Error(session.error.sentence);
+      expect(JSON.stringify((session.value as { summary: object }).summary)).not.toContain(
+        'private-handoff-summary-marker',
+      );
+    }
+  };
+  codex.emit({ type: 'text', id: 'handoff-stream', text: 'private-handoff-summary-marker' });
+  await summaries();
+  codex.reply('', CROSSED);
+  await vi.waitFor(() => {
+    expect(kept(core)?.handoff?.text).toBe('private-handoff-summary-marker');
+  });
+  await summaries();
+  // The accepted text stays private even once the bounded message store pruned its request.
+  const messages = await core.engines.messagesOf(CANVAS);
+  const pruned = vi.spyOn(messages, 'all').mockReturnValue([]);
+  try {
+    await summaries();
+  } finally {
+    pruned.mockRestore();
+  }
+  await core.call('message', { canvas: CANVAS, to: 'worker', body: 'More work' }, CALLERS.you);
+  await vi.waitFor(() => {
+    expect(codex.sent).toHaveLength(3);
+  });
+  codex.reply('Ordinary reply after the handoff.', UNDER);
+  await vi.waitFor(async () => {
+    expect(
+      await core.call('session.get', { canvas: CANVAS, agent: 'worker' }, CALLERS.you),
+    ).toMatchObject({
+      ok: true,
+      value: { reply: 'Ordinary reply after the handoff.' },
+    });
+  });
+});
+
+it.each([
+  'keeps the recipient’s handoff out of its queue owner’s message record',
+  'names the queue owner before its carried task',
+] as const)('%s', async (behavior) => {
+  const content = file(undefined, true);
+  const nodes = content.nodes.map((node) =>
+    node.id === 'worker'
+      ? { ...node, queue: [] }
+      : {
+          ...node,
+          adapter: 'claude-code',
+          connection: 'claude-code.terminal',
+          queue: [{ id: 'help', message: 'Helper task text', target: 'worker' }],
+        },
+  );
+  const canvasFile = path.join(profile, 'worker.corral');
+  await writeFile(canvasFile, JSON.stringify({ ...content, nodes }));
+  await keepCanvases(profile, { [CANVAS]: { file: canvasFile, project } });
+  const codex = driven('codex');
+  const claude = driven('claude-code');
+  const core = await start(codex.connector, claude.connector);
+  const engine = await core.engines.open(CANVAS);
+  liveRunOf(engine.run, engine.catalog, () => Date.now());
+  const open = core.engines.canvas(CANVAS);
+  if (open === undefined) throw new Error('No open canvas.');
+  engine.run.update(open.document.nodes);
+  await core.call('message', { canvas: CANVAS, to: 'worker', body: 'Work' }, CALLERS.you);
+  await vi.waitFor(() => {
+    expect(codex.sentTo('worker')).toHaveLength(1);
+  });
+  codex.reply('Done.', CROSSED);
+  await vi.waitFor(() => {
+    expect(codex.sentTo('worker')).toHaveLength(2);
+  });
+  codex.reply('private-recipient-handoff', CROSSED);
+  await vi.waitFor(() => {
+    expect(kept(core)?.handoff?.text).toBe('private-recipient-handoff');
+  });
+  await core.call('message', { canvas: CANVAS, to: 'worker', body: 'More' }, CALLERS.you);
+  await vi.waitFor(() => {
+    expect(codex.sentTo('worker')).toHaveLength(3);
+  });
+  codex.reply('', CROSSED, LIMIT());
+  await vi.waitFor(async () => {
+    expect(JSON.parse(await readFile(path.join(profile, 'usage.json'), 'utf8'))).toMatchObject({
+      exhausted: { codex: expect.any(Object) as object },
+    });
+  });
+  engine.run.start();
+  await vi.waitFor(
+    () => {
+      expect(claude.sentTo('worker')).toHaveLength(1);
+    },
+    { timeout: 10000 },
+  );
+  const caller = {
+    kind: 'agent',
+    canvas: CANVAS,
+    agent: 'helper',
+    session: 'helper-session',
+  } as const;
+  expect(
+    (await core.call('session.transcript', { canvas: CANVAS, agent: 'worker' }, caller)).ok,
+  ).toBe(false);
+  const read = await core.call('messages', { canvas: CANVAS }, caller);
+  if (behavior.startsWith('keeps'))
+    expect(JSON.stringify(read)).not.toContain('private-recipient-handoff');
+  else
+    expect(claude.sentTo('worker')[0]?.text).toMatch(
+      /from agent [^\n]*Helper[^\n]*\nHelper task text/,
+    );
+});
+
+it('serializes its own exports and keeps proof of the last copy while a newer handoff arrives', async () => {
+  await keep({ file: 'HANDOFF.md' });
+  for (const c of REPORTING) c.context = false;
+  const catalog = structuredClone(CATALOG);
+  const reporting = connectionIn(catalog, 'codex.app-server');
+  if (reporting === undefined) throw new Error('No reporting connection.');
+  reporting.connection.context = true;
+  const codex = driven('codex');
+  const core = await start(codex.connector, driven('claude-code').connector);
+  await core.engines.open(CANVAS);
+  const open = core.engines.canvas(CANVAS);
+  if (open === undefined) throw new Error('No open canvas.');
+  const requests: Message[] = [];
+  let writes = 0;
+  const entered = Promise.withResolvers<undefined>();
+  const release = Promise.withResolvers<undefined>();
+  const write = exportHandoff({
+    directory: () =>
+      Promise.resolve({
+        state: 'ready',
+        cwd: mintTrustedPath(project),
+        workspace: null,
+        generation: 0,
+        branch: null,
+      }),
+  });
+  const service = new HandoffService({
+    catalog,
+    canvas: () => open,
+    usage: { exhausted: () => undefined },
+    now: () => Date.now(),
+    exporter: async (request) => {
+      writes++;
+      const result = await write(request);
+      if (writes === 1) {
+        entered.resolve(undefined);
+        await release.promise;
+      }
+      return result;
+    },
+  });
+  const detach = service.attach(CANVAS, {
+    ...open,
+    delivery: {
+      schedule: () => undefined,
+      stuck: () => [],
+      ask: (_agent, body) => {
+        const message = open.messages.add({
+          from: 'corrallm',
+          to: 'agent:worker',
+          kind: 'text',
+          origin: 'party',
+          body,
+          state: 'delivered',
+        });
+        requests.push(message);
+        return message;
+      },
+    },
+  });
+  let turns = 0;
+  const turn = async (context: SessionContext) => {
+    turns++;
+    await core.call('message', { canvas: CANVAS, to: 'worker', body: 'Work' }, CALLERS.you);
+    await vi.waitFor(() => {
+      expect(codex.sent).toHaveLength(turns);
+    });
+    codex.reply('Done.', context);
+  };
+  const answer = (text: string) => {
+    const request = requests.at(-1);
+    if (request === undefined) throw new Error('No handoff request.');
+    service.replied(CANVAS, request, text, COMPLETED);
+    open.messages.update(request.id, { state: 'replied' });
+  };
+  try {
+    await turn(CROSSED);
+    await vi.waitFor(() => {
+      expect(requests).toHaveLength(1);
+    });
+    answer('First handoff.');
+    await entered.promise;
+    await turn(UNDER);
+    await turn(CROSSED);
+    await vi.waitFor(() => {
+      expect(requests).toHaveLength(2);
+    });
+    answer('Newer handoff.');
+    await new Promise((r) => setTimeout(r, 40));
+    release.resolve(undefined);
+    await vi.waitFor(() => {
+      expect(open.handoffs.of('worker')?.export).toBeDefined();
+    });
+    expect.soft(open.handoffs.of('worker')?.export).toBe('done');
+    expect.soft(await readFile(path.join(project, 'HANDOFF.md'), 'utf8')).toBe('Newer handoff.');
+  } finally {
+    release.resolve(undefined);
+    detach();
+  }
 });

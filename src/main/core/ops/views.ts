@@ -2,6 +2,7 @@ import type { Reach } from '../../../shared/api/surface';
 import { fallbackView } from '../../../shared/model/fallback';
 import type { FallbackView } from '../../../shared/model/fallback';
 import type { HandoffView } from '../../../shared/model/handoff';
+import { agentParty } from '../../../shared/model/messages';
 import type { Message } from '../../../shared/model/messages';
 import { isOpen, turnReply } from '../../../shared/model/session';
 import { mcpRequestTitle } from '../../../shared/model/words';
@@ -18,6 +19,7 @@ import type { Caller } from '../caller';
 import { partyIdOf } from '../caller';
 import { cursorOf } from '../delivery/messages';
 import type { MessageStore } from '../delivery/messages';
+import { HANDOFF_REQUEST } from '../delivery/delivery';
 import type { OpenCanvas } from '../engines';
 import { agentsReached, reachesGroup } from '../reach';
 import { agentOf } from './open';
@@ -63,6 +65,21 @@ export function sessionSummary(open: OpenCanvas, agent: string, yours = true) {
   const { engine } = open;
   const session = engine.sessions.of(agent);
   const lastTurn = session.entries.findLast((entry) => entry.kind === 'user');
+  const reply = lastTurn === undefined ? null : turnReply(session, lastTurn.id) || null;
+  // Maintenance replies belong in the transcript and session.handoff, never a summary, including
+  // while they stream. The accepted text remains withheld if its request record was pruned.
+  const handoffReply =
+    (lastTurn !== undefined &&
+      open.messages
+        .all()
+        .some(
+          (message) =>
+            message.from === 'corrallm' &&
+            message.to === agentParty(agent) &&
+            message.delivery?.as === lastTurn.id &&
+            open.messages.toldOf(message.id)?.startsWith(HANDOFF_REQUEST) === true,
+        )) ||
+    (reply !== null && reply.trim() === open.handoffs.of(agent)?.handoff?.text);
   return {
     agent,
     connection: engine.catalog.connectionOf(node.data),
@@ -82,7 +99,7 @@ export function sessionSummary(open: OpenCanvas, agent: string, yours = true) {
     ...(session.modes === undefined ? {} : { modes: [...session.modes] }),
     ...(session.running === undefined ? {} : { running: session.running }),
     ...(session.usage === undefined ? {} : { usage: session.usage }),
-    ...summaryReply(lastTurn === undefined ? null : turnReply(session, lastTurn.id) || null),
+    ...summaryReply(handoffReply ? null : reply),
     ...(yours ? presentationOf(session) : {}),
   };
 }

@@ -1074,7 +1074,7 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
       replied: (canvas, message, reply, result) => {
         handoff.replied(canvas, message, reply, result);
       },
-      carry: (canvas, agent, text, kind) => handoff.carry(canvas, agent, text, kind),
+      carry: (canvas, agent, text, kind, owner) => handoff.carry(canvas, agent, text, kind, owner),
       recover: (canvas) => {
         handoff.recover(canvas);
       },

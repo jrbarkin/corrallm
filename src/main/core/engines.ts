@@ -128,6 +128,7 @@ export interface EnginesDeps {
       agent: string,
       text: string,
       kind: 'run' | 'party',
+      owner?: string,
     ): { text: string; carry: string; undo: () => void } | undefined;
     /** As a canvas's delivery starts: what sends cut off unsent carried waits to be carried again. */
     recover(canvas: CanvasId): void;
@@ -1012,7 +1013,7 @@ export class Engines {
         messages,
         handoff === undefined
           ? undefined
-          : (agent, text) => handoff.carry(canvas, agent, text, 'run'),
+          : (agent, text, owner) => handoff.carry(canvas, agent, text, 'run', owner),
       ),
       ...(this.#deps.locale === undefined ? {} : { locale: this.#deps.locale }),
       // B11a C3: admission before each task's attempt goes.
@@ -1329,12 +1330,13 @@ function runMailbox(
   carry?: (
     to: string,
     text: string,
+    owner: string,
   ) => { text: string; carry: string; undo: () => void } | undefined,
 ): RunMailbox {
   const carried = new Map<string, () => void>();
   return {
     record: ({ to, owner, text: given, task, images, typed }) => {
-      const carrying = typed === undefined ? carry?.(to, given) : undefined;
+      const carrying = typed === undefined ? carry?.(to, given, owner) : undefined;
       const text = carrying?.text ?? given;
       const display: MessageDisplay = {
         ...(typed === undefined
@@ -1349,7 +1351,7 @@ function runMailbox(
           kind: 'text',
           origin: typed === undefined ? 'run' : 'manual',
           ...(Object.keys(display).length === 0 ? {} : { display }),
-          body: capBody(text, 'prompt'),
+          body: capBody(given, 'prompt'),
           task,
           state: 'delivering',
         },
