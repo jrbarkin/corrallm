@@ -1,4 +1,6 @@
 import { OpFailure, ProposedInstead } from '../call';
+import type { BranchDiffOutput } from '../../../shared/api/branch';
+import type { OpResult } from '../../../shared/api/errors';
 import type { AgentId } from '../../../shared/api/ids';
 import type { CanvasId } from '../../../shared/canvas';
 import type { CanvasDocument } from '../../../shared/model/canvas';
@@ -6,7 +8,9 @@ import type { Proposals } from '../canvas/proposals';
 import { keptWords } from '../canvas/proposals';
 import { agentsReached } from '../reach';
 import type { WorkspaceCleanup } from '../workspaces/cleanup';
+import type { BranchDiffRequest } from '../workspaces/diff';
 import type { Viewer, WorktreeListing } from '../workspaces/list';
+import type { MergeRequest, MergeResult } from '../workspaces/merge';
 import { ProvisionError } from '../workspaces/provision';
 import type { WorkspaceStore } from '../workspaces/store';
 import { openCanvas, reachFor } from './open';
@@ -33,6 +37,18 @@ export interface WorktreeServices {
   /** An agent's worktree tried again (workspaces/directories.ts' `retry`), and its document now. */
   retry?: (canvas: CanvasId, agent: AgentId) => Promise<void>;
   document?: (canvas: CanvasId) => Promise<CanvasDocument | undefined>;
+  /**
+   * B9b C4's diff service (workspaces/diff.ts' `readBranchDiff`), composed by createCore for
+   * `branch.diff` (X2): one page of an agent's branch for review, `shared` naming only the members
+   * `request.viewer` reaches (built as worktree.list builds its viewer). Its error is the op's.
+   */
+  diff?: (request: BranchDiffRequest) => Promise<OpResult<BranchDiffOutput>>;
+  /**
+   * B9b C5's merge service (workspaces/merge.ts' `MergeService.merge`), composed by createCore for
+   * `branch.merge` (X2): the agent's branch merged into your picked checkout's branch, answered
+   * once it settled. Its caller is `mergeCallerOf(ctx.caller)`; its error is the op's.
+   */
+  merge?: (request: MergeRequest) => Promise<OpResult<MergeResult>>;
 }
 
 const NONE = 'This corrallm keeps no worktrees yet.';

@@ -13,6 +13,12 @@ export interface AppSettings {
    * orchestrators registered it by survives restarts (API Spec §8.1).
    */
   api?: { port: number };
+  /**
+   * Whether corrallm shows OS notifications (B14 C11): absent, or not a boolean, means on. Read by
+   * the core at each event; B22a's setter writes it, yours alone. Never in the token-readable
+   * `settings.get`.
+   */
+  notifications?: { enabled: boolean };
 }
 
 /** A consent only the user gives: whether they gave it for good, and giving it. */
@@ -26,7 +32,8 @@ const VERSION = 2;
 /**
  * The user's settings for the app, kept between runs in a JSON file in the app's user data:
  *
- *   { "version": 2, "consents": { "<adapter>": { "<key>": true } }, "api"?: { "port" } }
+ *   { "version": 2, "consents": { "<adapter>": { "<key>": true } }, "api"?: { "port" },
+ *     "notifications"?: { "enabled" } }
  *
  * Updates are applied one at a time, in order, and written whole, with what it holds that this
  * corrallm doesn't know (a newer one's fields, of the file and of `api`) written back as it was. A
@@ -36,8 +43,12 @@ const VERSION = 2;
 export class Settings {
   readonly #file: string;
   #settings: Promise<AppSettings> | undefined;
-  /** What its file holds that this corrallm doesn't know: of the file, and of `api`. */
-  #unknown: { file: Record<string, unknown>; api: Record<string, unknown> } = { file: {}, api: {} };
+  /** What its file holds that this corrallm doesn't know: of the file, `api` and `notifications`. */
+  #unknown: {
+    file: Record<string, unknown>;
+    api: Record<string, unknown>;
+    notifications: Record<string, unknown>;
+  } = { file: {}, api: {}, notifications: {} };
   #writing: Promise<void> = Promise.resolve();
   readonly #listeners = new Set<() => void>();
 
@@ -83,6 +94,18 @@ export class Settings {
     return this.#update((settings) => ({ ...settings, api: { port } }));
   }
 
+  /**
+   * Whether OS notifications are on (B14 C11): unless the file says `enabled: false`, they are,
+   * whether the field is absent, not a boolean, or the file can't be read.
+   */
+  async notificationsEnabled(): Promise<boolean> {
+    try {
+      return (await this.get()).notifications?.enabled !== false;
+    } catch {
+      return true;
+    }
+  }
+
   /** Resolves once every update so far is written: before the app quits. */
   flush(): Promise<void> {
     return this.#writing;
@@ -92,7 +115,7 @@ export class Settings {
     const run = async () => {
       const next = change(await this.#load());
       this.#settings = Promise.resolve(next);
-      const { file, api } = this.#unknown;
+      const { file, api, notifications } = this.#unknown;
       const text = JSON.stringify(
         {
           version: VERSION,
@@ -101,6 +124,9 @@ export class Settings {
           ...(next.api === undefined && Object.keys(api).length === 0
             ? {}
             : { api: { ...api, ...next.api } }),
+          ...(next.notifications === undefined && Object.keys(notifications).length === 0
+            ? {}
+            : { notifications: { ...notifications, ...next.notifications } }),
         },
         null,
         2,
@@ -123,10 +149,16 @@ export class Settings {
     this.#settings ??= readWhole(this.#file, VERSION).then(
       (file) => {
         this.#unknown = {
-          file: unknownFields(file, ['version', 'consents', 'api']),
+          file: unknownFields(file, ['version', 'consents', 'api', 'notifications']),
           api: unknownFields(
             file?.api,
             isRecord(file?.api) && isPort(file.api.port) ? ['port'] : [],
+          ),
+          notifications: unknownFields(
+            file?.notifications,
+            isRecord(file?.notifications) && typeof file.notifications.enabled === 'boolean'
+              ? ['enabled']
+              : [],
           ),
         };
         return parse(file);
@@ -145,8 +177,10 @@ export class Settings {
 function parse(file: Record<string, unknown> | undefined): AppSettings {
   const consents = isRecord(file?.consents) ? file.consents : {};
   const port = isRecord(file?.api) ? file.api.port : undefined;
+  const enabled = isRecord(file?.notifications) ? file.notifications.enabled : undefined;
   return {
     ...(isPort(port) ? { api: { port } } : {}),
+    ...(typeof enabled === 'boolean' ? { notifications: { enabled } } : {}),
     consents: Object.fromEntries(
       Object.entries(consents).flatMap(([adapter, given]) => {
         if (!ID_PATTERN.test(adapter) || !isRecord(given)) return [];

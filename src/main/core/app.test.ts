@@ -658,7 +658,7 @@ describe('the app’s core and window channels', () => {
       const close = vi.spyOn(native, 'close');
       served.gone(7, true);
       await new Promise((resolve) => setImmediate(resolve));
-      expect(core.active()).toBe(true);
+      expect(core.presence().busy).toBe(true);
       held = false;
       gate.resolve(undefined);
       await vi.waitFor(() => {

@@ -223,7 +223,7 @@
             "plan": "answerable",
             "form": "answerable"
           },
-          "signals": false,
+          "signals": true,
           "context": false,
           "startModes": [
             "manual",

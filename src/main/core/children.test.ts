@@ -322,6 +322,83 @@ describe('the core’s CLI children', () => {
     expect(system.signal).toHaveBeenNthCalledWith(2, 42, 'SIGKILL');
   });
 
+  it.each(['signal', 'probe', 'signal with a positive kill(0)'] as const)(
+    'finishes a group containing only unreaped members after an EPERM %s',
+    async (at) => {
+      const warning = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      const child = new Child(42);
+      children.node(child);
+      const members = ['Z', 'Z+'];
+      const hasLiveMembers = vi.fn(() => members.some((state) => !state.startsWith('Z')));
+      Object.assign(system, { hasLiveMembers });
+      const denied = Object.assign(new Error('kill EPERM'), { code: 'EPERM' });
+      system.signal = vi.fn(() => {
+        if (at !== 'probe') throw denied;
+      });
+      system.alive = vi.fn(() => {
+        if (at === 'signal with a positive kill(0)') return true;
+        throw denied;
+      });
+
+      await expect(children.stop(child, 'SIGTERM')).resolves.toBeUndefined();
+      await children.close();
+
+      expect(hasLiveMembers).toHaveBeenCalledWith(42);
+      expect(system.wait).not.toHaveBeenCalled();
+      expect(system.signal).toHaveBeenCalledExactlyOnceWith(42, 'SIGTERM');
+      expect(warning).not.toHaveBeenCalled();
+      expect(await remembered()).toEqual({ version: 1, children: [] });
+    },
+  );
+
+  it.each(['signal', 'probe'] as const)(
+    'retains a group with a live member after an EPERM %s',
+    async (at) => {
+      const warning = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      const child = new Child(42);
+      children.node(child);
+      const members = ['Z', 'S+'];
+      Object.assign(system, {
+        hasLiveMembers: () => members.some((state) => !state.startsWith('Z')),
+      });
+      const denied = Object.assign(new Error('kill EPERM'), { code: 'EPERM' });
+      system.signal = vi.fn(() => {
+        if (at === 'signal') throw denied;
+      });
+      system.alive = vi.fn(() => {
+        throw denied;
+      });
+
+      await children.stop(child, 'SIGTERM');
+
+      expect(warning).toHaveBeenCalledExactlyOnceWith(expect.stringContaining('42'), denied);
+      expect(system.signal).toHaveBeenCalledExactlyOnceWith(42, 'SIGTERM');
+      expect(await remembered()).toEqual({ version: 1, children: [{ pid: 42, started: 1000 }] });
+    },
+  );
+
+  it('retains a denied group when its members cannot be inspected', async () => {
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const child = new Child(42);
+    children.node(child);
+    Object.assign(system, {
+      hasLiveMembers: () => {
+        throw new Error('Process table unavailable');
+      },
+    });
+    system.signal = () => {
+      throw Object.assign(new Error('kill EPERM'), { code: 'EPERM' });
+    };
+
+    await children.stop(child, 'SIGTERM');
+
+    expect(warning).toHaveBeenCalledExactlyOnceWith(
+      expect.stringContaining('42'),
+      expect.objectContaining({ message: 'Process table unavailable' }),
+    );
+    expect(await remembered()).toEqual({ version: 1, children: [{ pid: 42, started: 1000 }] });
+  });
+
   it('does not escalate against a reused pid after the grace', async () => {
     await stale();
     system.signal = vi.fn<ChildSystem['signal']>(() => {

@@ -35,6 +35,9 @@ beforeAll(async () => {
 
 /** The process's exit listeners before each test: each entry loaded adds its own. */
 let exits: NodeJS.ExitListener[] = [];
+/** And its signal listeners: the core process handles its own (B14 C4). */
+const SIGNALS = ['SIGTERM', 'SIGHUP', 'SIGINT'] as const;
+let signals = new Map<NodeJS.Signals, NodeJS.SignalsListener[]>();
 
 beforeEach(async () => {
   vi.resetModules();
@@ -42,11 +45,17 @@ beforeEach(async () => {
   profile = await mkdtemp(path.join(tmpdir(), 'corrallm-core-entry-'));
   initialized = false;
   exits = process.listeners('exit');
+  signals = new Map(SIGNALS.map((signal) => [signal, process.listeners(signal)]));
 });
 afterEach(async () => {
   if (initialized) await main.request('commitShutdown');
   for (const listener of process.listeners('exit')) {
     if (!exits.includes(listener)) process.removeListener('exit', listener);
+  }
+  for (const signal of SIGNALS) {
+    for (const listener of process.listeners(signal)) {
+      if (!signals.get(signal)?.includes(listener)) process.removeListener(signal, listener);
+    }
   }
   for (const port of closing.splice(0)) port.close();
   if (originalParent) Object.defineProperty(process, 'parentPort', originalParent);
@@ -136,7 +145,7 @@ async function start() {
       if (answer.ok) initialized = true;
       return answer;
     },
-    window: (id: number) => {
+    window: (id: number, flush: () => unknown = () => null) => {
       const { port1, port2 } = new MessageChannel();
       closing.push(port1, port2);
       parent.emit('message', {
@@ -152,7 +161,12 @@ async function start() {
             port2.on('message', listener);
           },
         },
-        { 'drafts.flush': () => null },
+        {
+          'drafts.flush': async () => {
+            await flush();
+            return null;
+          },
+        },
       );
     },
   };
@@ -213,8 +227,130 @@ describe('the core process’s init', () => {
       ok: true,
       value: { ok: true, value: { running: false } },
     });
-    // X1 keeps today's last-window decision until C3 publishes presence.
-    expect(await main.request('active')).toEqual({ ok: true, value: false });
+    // Nothing at work: an idle quit holds the barrier at once (B14 C2), refusing writes.
+    expect(await main.request('prepareShutdown', 'quit', { ifIdle: true })).toEqual({
+      ok: true,
+      value: { ok: true },
+    });
+    expect(await other.request('call', 'canvas.create', {})).toMatchObject({
+      ok: true,
+      value: { ok: false, error: { code: 'unavailable' } },
+    });
+  });
+
+  it('tells main its presence, whole, before init answers', async () => {
+    const heard: unknown[] = [];
+    const entry = await start();
+    main.on('presence', (snapshot) => {
+      heard.push(snapshot);
+    });
+    expect(await entry.init()).toEqual({ ok: true, value: null });
+    expect(heard).toEqual([
+      {
+        revision: 0,
+        working: 0,
+        runs: 0,
+        jobs: 0,
+        needs: 0,
+        busy: false,
+        awake: false,
+        notify: true,
+      },
+    ]);
+  });
+});
+
+describe('the core process told to stop by a signal (B14 C4)', () => {
+  it.each(SIGNALS)(
+    'on %s tells main it is exiting, lands the drafts, then closes in order and exits 0',
+    async (signal) => {
+      const exit = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+      const heard: unknown[] = [];
+      const entry = await start();
+      main.on('exiting', (why) => {
+        heard.push(why);
+      });
+      expect(await entry.init()).toEqual({ ok: true, value: null });
+      const apiJson = path.join(profile, 'api.json');
+      await vi.waitFor(() => {
+        expect(existsSync(apiJson)).toBe(true);
+      });
+      // What the window composes lands as a write while it is asked: before the barrier.
+      let landed: unknown;
+      const window = entry.window(7, async () => {
+        landed = await window.request('call', 'canvas.create', {});
+      });
+      await window.request('call', 'app.info', {});
+      process.emit(signal, signal);
+      // Again while it closes: nothing more (a second signal never kills it before it is done).
+      process.emit(signal, signal);
+      await vi.waitFor(() => {
+        expect(exit).toHaveBeenCalledWith(0);
+      });
+      expect(heard).toEqual(['signal']);
+      expect(landed).toMatchObject({ ok: true, value: { ok: true } });
+      // Closed in order: the endpoint gone, then the core, the profile let go.
+      expect(existsSync(apiJson)).toBe(false);
+      expect(existsSync(path.join(profile, 'core.lock'))).toBe(false);
+      expect(exit).toHaveBeenCalledOnce();
+      // Main's own commit, if it asks too, is the same close.
+      expect(await main.request('commitShutdown')).toEqual({ ok: true, value: null });
+      initialized = false;
+    },
+    20_000,
+  );
+
+  it('gives drafts at most a second in all, then closes all the same', async () => {
+    const exit = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+    const entry = await start();
+    expect(await entry.init()).toEqual({ ok: true, value: null });
+    const window = entry.window(7, () => new Promise(() => undefined));
+    await window.request('call', 'app.info', {});
+    const told = Date.now();
+    process.emit('SIGTERM', 'SIGTERM');
+    await vi.waitFor(
+      () => {
+        expect(exit).toHaveBeenCalledWith(0);
+      },
+      { timeout: 10_000 },
+    );
+    expect(Date.now() - told).toBeGreaterThanOrEqual(1000);
+    expect(existsSync(path.join(profile, 'core.lock'))).toBe(false);
+    initialized = false;
+  }, 20_000);
+
+  it('exits at once, saying so, when it holds no profile yet', async () => {
+    const exit = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+    const heard: unknown[] = [];
+    await start();
+    main.on('exiting', (why) => {
+      heard.push(why);
+    });
+    process.emit('SIGTERM', 'SIGTERM');
+    await vi.waitFor(() => {
+      expect(exit).toHaveBeenCalledWith(0);
+    });
+    expect(heard).toEqual(['signal']);
+  });
+});
+
+describe('Pause all, asked by main’s native menus (B14 C3)', () => {
+  it('pauses as you at main’s own UI, answering what it paused', async () => {
+    const entry = await start();
+    expect(await entry.init()).toEqual({ ok: true, value: null });
+    expect(await main.request('pauseAll')).toEqual({
+      ok: true,
+      value: { agents: 0, canvases: 0, unsaved: [] },
+    });
+    // Under the barrier, its refusal's sentence.
+    expect(await main.request('prepareShutdown', 'quit')).toEqual({
+      ok: true,
+      value: { ok: true },
+    });
+    expect(await main.request('pauseAll')).toEqual({
+      ok: true,
+      value: { sentence: 'corrallm is quitting: try again once it is open again.' },
+    });
   });
 });
 
@@ -246,6 +382,100 @@ describe('a window gaining focus', () => {
     } finally {
       vi.doUnmock('./core');
     }
+  });
+});
+
+describe('notifications: main’s focus and a click’s handle (B14 C7, C10)', () => {
+  it('tells the core whether any window is focused, a boolean alone', async () => {
+    const heard: unknown[] = [];
+    vi.doMock('./core', async (original) => {
+      const real = await original<typeof CoreModule>();
+      return {
+        ...real,
+        createCore: async (...args: Parameters<typeof real.createCore>) => {
+          const core = await real.createCore(...args);
+          core.focus = (focused) => {
+            heard.push(focused);
+          };
+          return core;
+        },
+      };
+    });
+    try {
+      const entry = await start();
+      // Said before the core is up: heard, in order, once it is.
+      main.emit('focus', true);
+      expect(await entry.init()).toEqual({ ok: true, value: null });
+      main.emit('focus', false);
+      main.emit('focus', 'yes' as unknown as boolean);
+      main.emit('focus', true);
+      await vi.waitFor(
+        () => {
+          expect(heard).toEqual([true, false, true]);
+        },
+        { timeout: 5000 },
+      );
+    } finally {
+      vi.doUnmock('./core');
+    }
+  });
+
+  it('sends the clicked window one fixed show for a handle the core resolves, and nothing else', async () => {
+    const handle = crypto.randomUUID();
+    const target = { canvas: newCanvasId(), need: 'hold/worker/1/check' };
+    const asked: unknown[] = [];
+    vi.doMock('./core', async (original) => {
+      const real = await original<typeof CoreModule>();
+      return {
+        ...real,
+        createCore: async (...args: Parameters<typeof real.createCore>) => {
+          const core = await real.createCore(...args);
+          core.activation = (named) => {
+            asked.push(named);
+            return named === handle ? target : undefined;
+          };
+          return core;
+        },
+      };
+    });
+    try {
+      const entry = await start();
+      expect(await entry.init()).toEqual({ ok: true, value: null });
+      const shown: Record<number, unknown[]> = { 7: [], 8: [] };
+      const windows = [7, 8].map((id) => {
+        const window = entry.window(id);
+        window.on('show', (show) => {
+          shown[id]?.push(show);
+        });
+        return window;
+      });
+      for (const window of windows) await window.request('call', 'app.info', {});
+      const other = crypto.randomUUID();
+      expect(await main.request('activate', 7, other)).toEqual({ ok: true, value: null });
+      expect(await main.request('activate', 8, handle)).toEqual({ ok: true, value: null });
+      await vi.waitFor(
+        () => {
+          expect(shown).toEqual({ 7: [], 8: [target] });
+        },
+        { timeout: 5000 },
+      );
+      expect(asked).toEqual([other, handle]);
+    } finally {
+      vi.doUnmock('./core');
+    }
+  });
+
+  it('resolves nothing, and sends nothing, before the core is up or for a window it doesn’t serve', async () => {
+    const entry = await start();
+    expect(await main.request('activate', 7, crypto.randomUUID())).toEqual({
+      ok: true,
+      value: null,
+    });
+    expect(await entry.init()).toEqual({ ok: true, value: null });
+    expect(await main.request('activate', 9, crypto.randomUUID())).toEqual({
+      ok: true,
+      value: null,
+    });
   });
 });
 

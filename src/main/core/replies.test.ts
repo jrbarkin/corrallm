@@ -666,10 +666,13 @@ describe('a session’s prompt', () => {
     const { core } = await start({ 'claude-code.sdk': eliciting(answers) });
     await ok(core, 'message', { to: 'b', body: 'Sign in' });
     const form = await waitingFor(core, isPrompt('b'));
-    expect(form).toMatchObject({ title: 'Sign in to the tracker' });
+    expect(form).toMatchObject({ title: 'MCP server “tracker” asks you to fill in a form' });
     // A token sees that the Reviewer waits for you, never the form, and can't answer it.
     const seen = (await needsOf(core, ORCHESTRATOR)).find(({ id }) => id === form.id);
-    expect(seen).toMatchObject({ title: 'Sign in to the tracker', choices: [] });
+    expect(seen).toMatchObject({
+      title: 'MCP server “tracker” asks you to fill in a form',
+      choices: [],
+    });
     expect(seen).not.toHaveProperty('form');
     const secret = 'hunter2-only-the-user-knows';
     expect(

@@ -168,3 +168,78 @@ describe('the workspace mutation gate', () => {
     );
   });
 });
+
+describe('the gate for a merge (B9b Design §9 C5)', () => {
+  const WORDS = {
+    refused: (writing: string) => `Committing its work, and ${writing}: try again.`,
+    waits: 'A merge commits its work: new work waits.',
+  };
+
+  it('drains a tree in the merge’s own words: refused while one writes, its new work held meanwhile', async () => {
+    const writing = new Map([['c', 'has a turn going on']]);
+    const gate = gateOf(writing);
+    await expect(gate.drain(CANVAS, [OWN], () => Promise.resolve(), WORDS)).rejects.toThrow(
+      'Committing its work, and C has a turn going on: try again.',
+    );
+    writing.clear();
+    const done = Promise.withResolvers<undefined>();
+    const draining = gate.drain(CANVAS, [OWN], () => done.promise, WORDS);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(await gate.holding(CANVAS, 'c')).toBe(WORDS.waits);
+    done.resolve(undefined);
+    await draining;
+    expect(await gate.holding(CANVAS, 'c')).toBeUndefined();
+  });
+
+  it('says who may be writing in trees, holding nothing, and that a tree being changed is busy', async () => {
+    const writing = new Map([
+      ['a', 'has a turn going on'],
+      ['b', 'runs background tasks'],
+    ]);
+    const gate = gateOf(writing);
+    expect(await gate.writers(CANVAS, [SHARED])).toEqual({
+      busy: false,
+      writing: ['A has a turn going on', 'B runs background tasks'],
+    });
+    expect(await gate.writers(CANVAS, [OWN])).toEqual({ busy: false, writing: [] });
+    expect(await gate.holding(CANVAS, 'a')).toBeUndefined();
+    const done = Promise.withResolvers<undefined>();
+    const draining = gate.drain(CANVAS, [OWN], () => done.promise, WORDS);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(await gate.writers(CANVAS, [OWN])).toEqual({ busy: true, writing: [] });
+    done.resolve(undefined);
+    await draining;
+  });
+
+  it('knows whether any agent, on any canvas, works in a tree', async () => {
+    const gate = gateOf();
+    expect(await gate.occupied(SHARED)).toBe(true);
+    expect(await gate.occupied(OWN)).toBe(true);
+    expect(await gate.occupied('folder:/work/elsewhere')).toBe(false);
+  });
+
+  it('holds a tree’s new work from the moment it is asked until released, refusing nothing and waiting for nothing', async () => {
+    // A restart's reconciliation: held before anyone could start work there.
+    const gate = gateOf(new Map([['c', 'has a turn going on']]));
+    const release = gate.hold([OWN], 'Its merge is being finished: new work waits.');
+    expect(await gate.holding(CANVAS, 'c')).toBe('Its merge is being finished: new work waits.');
+    let passed = false;
+    const passing = gate.pass(CANVAS, 'c').then(() => {
+      passed = true;
+    });
+    await expect(gate.drain(CANVAS, [OWN], () => Promise.resolve(), WORDS)).rejects.toThrow(
+      /another agent’s restore/,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(passed).toBe(false);
+    release();
+    await passing;
+    expect(passed).toBe(true);
+    expect(await gate.holding(CANVAS, 'c')).toBeUndefined();
+    // Released twice: nothing else is released.
+    const again = gate.hold([OWN], 'Held again.');
+    release();
+    expect(await gate.holding(CANVAS, 'c')).toBe('Held again.');
+    again();
+  });
+});

@@ -274,6 +274,7 @@
     "topics.unsubscribe": "transport",
     "usage.setRule": "spending-guard",
     "usage.simulate": "spending-guard",
+    "run.pauseAll": "native-menu",
     "link.open": "os-action",
     "link.reveal": "os-action",
     "window.get": "view",
@@ -288,7 +289,7 @@
   "schemas": {
     "topics.subscribe": {
       "input": "8c5be84f0a1a163a",
-      "output": "8b60203ff23b2154"
+      "output": "9c32edf1781ba70f"
     },
     "topics.unsubscribe": {
       "input": "8c5be84f0a1a163a",
@@ -566,6 +567,10 @@
       "input": "a85fe9cb1eb6d55a",
       "output": "647bbd6cc7b4f077"
     },
+    "run.pauseAll": {
+      "input": "7e2dc340305459b4",
+      "output": "eb4fda57c3fcd982"
+    },
     "run.kill": {
       "input": "a85fe9cb1eb6d55a",
       "output": "647bbd6cc7b4f077"
@@ -576,7 +581,7 @@
     },
     "run.get": {
       "input": "41356bc15da6df1b",
-      "output": "83e7c04b48aa417d"
+      "output": "c31737ed829aa7b0"
     },
     "run.start": {
       "input": "f676d264f07b5166",

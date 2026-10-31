@@ -15,6 +15,7 @@ import { decodeBranchCursor } from './branch-review';
 const utf8 = (value: string) => new TextEncoder().encode(value);
 const bytes = (value: unknown) => utf8(JSON.stringify(value)).length;
 const tip = 'a'.repeat(40);
+const state = 'e'.repeat(64);
 const header = {
   agent: AgentId.parse('builder'),
   workspace: WorktreeId.parse('22222222-2222-4222-8222-222222222222'),
@@ -101,47 +102,50 @@ describe('whole-result branch page budgeting', () => {
       file('c2'),
       BranchFile.parse({ section: 'uncommitted', path: 'u1', status: 'untracked' }),
     ];
-    const first = branchDiffPage(header, files, { limit: 2 });
+    const first = branchDiffPage(header, files, { limit: 2, state });
     expect(first.ok).toBe(true);
     if (!first.ok) return;
     expect(first.value.files.map(({ path }) => path)).toEqual(['c1', 'c2']);
     expect(decodeBranchCursor(first.value.next ?? '')).toMatchObject({
       ok: true,
-      value: { tip, digest: null, position: 2 },
+      value: { tip, digest: null, state, position: 2 },
     });
     const second = branchDiffPage(header, files, {
       after: first.value.next ?? undefined,
       limit: 2,
+      state,
     });
     expect(second).toMatchObject({ ok: true, value: { files: [files[2]], next: null } });
-    expect(branchDiffPage(header, [], {})).toMatchObject({
+    expect(branchDiffPage(header, [], { state })).toMatchObject({
       ok: true,
       value: { files: [], next: null },
     });
     const many = Array.from({ length: 201 }, (_, i) => file(String(i)));
-    const capped = branchDiffPage(header, many, { limit: 200 });
+    const capped = branchDiffPage(header, many, { limit: 200, state });
     expect(capped.ok && capped.value.files).toHaveLength(200);
-    const defaults = branchDiffPage(header, many);
+    const defaults = branchDiffPage(header, many, { state });
     expect(defaults.ok && defaults.value.files).toHaveLength(50);
   });
 
   it('counts JSON escaping and envelopes, cuts a patch to fit, and still advances past a cut file', () => {
     const files = [file('"\n'.repeat(1000), '\\"😀\n'.repeat(6000)), file('next', '+ok\n')];
-    const result = branchDiffPage(header, files, { limit: 1 });
+    const result = branchDiffPage(header, files, { limit: 1, state });
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(bytes(result.value)).toBeLessThanOrEqual(MAX_PAGE_BYTES);
     expect(BranchDiffOutput.safeParse(result.value).success).toBe(true);
     expect(result.value.files[0]?.cut).toBe(true);
     expect(result.value.files[0]?.patch?.endsWith('\n')).toBe(true);
-    expect(branchDiffPage(header, files, { after: result.value.next ?? undefined })).toMatchObject({
+    expect(
+      branchDiffPage(header, files, { after: result.value.next ?? undefined, state }),
+    ).toMatchObject({
       ok: true,
       value: { files: [files[1]], next: null },
     });
   });
 
   it('returns at least one nonempty inventory entry even when its first patch line cannot fit', () => {
-    const result = branchDiffPage(header, [file('huge', 'x'.repeat(MAX_PAGE_BYTES))]);
+    const result = branchDiffPage(header, [file('huge', 'x'.repeat(MAX_PAGE_BYTES))], { state });
     expect(result).toMatchObject({
       ok: true,
       value: { files: [{ path: 'huge', patch: '', cut: true }], next: null },
@@ -149,7 +153,9 @@ describe('whole-result branch page budgeting', () => {
   });
 
   it('removes an incomplete final line from an upstream-capped patch even when the page has room', () => {
-    const result = branchDiffPage(header, [{ ...file('capped', '+whole\n+part'), cut: true }]);
+    const result = branchDiffPage(header, [{ ...file('capped', '+whole\n+part'), cut: true }], {
+      state,
+    });
     expect(result).toMatchObject({
       ok: true,
       value: { files: [{ patch: '+whole\n', cut: true }] },
@@ -163,7 +169,7 @@ describe('whole-result branch page budgeting', () => {
     let after: string | undefined;
     const seen: string[] = [];
     while (seen.length < inventory.length) {
-      const result = branchDiffPage(header, inventory, { after, limit: 7 });
+      const result = branchDiffPage(header, inventory, { after, limit: 7, state });
       if (!result.ok) throw new Error(result.error.sentence);
       expect(bytes(result.value)).toBeLessThanOrEqual(MAX_PAGE_BYTES);
       expect(result.value.files.length).toBeGreaterThan(0);
@@ -180,7 +186,7 @@ describe('whole-result branch page budgeting', () => {
 
   it('ends before metadata that does not fit, and refuses an oversized header rather than loop on an empty page', () => {
     const files = Array.from({ length: 20 }, (_, i) => file(String(i) + '\n'.repeat(4000)));
-    const result = branchDiffPage(header, files, { limit: 200 });
+    const result = branchDiffPage(header, files, { limit: 200, state });
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.value.files.length).toBeGreaterThan(0);
@@ -189,28 +195,32 @@ describe('whole-result branch page budgeting', () => {
       expect(result.value.next).not.toBeNull();
     }
     const shared = Array.from({ length: 500 }, (_, i) => AgentId.parse(String(i).padEnd(256, 'x')));
-    expect(branchDiffPage({ ...header, shared }, [file('a')])).toMatchObject({
+    expect(branchDiffPage({ ...header, shared }, [file('a')], { state })).toMatchObject({
       ok: false,
       error: { code: 'unavailable' },
     });
   });
 
   it('refuses stale pins and malformed or impossible continuations before making a page', () => {
-    const first = branchDiffPage(header, [file('a'), file('b')], { limit: 1 });
+    const first = branchDiffPage(header, [file('a'), file('b')], { limit: 1, state });
     if (!first.ok) throw new Error('The fixture must have a first page.');
     const after = first.value.next ?? undefined;
     expect(
       branchDiffPage(
         { ...header, source: { ...header.source, oid: 'c'.repeat(40) } },
         [file('a'), file('b')],
-        { after },
+        { after, state },
       ),
     ).toMatchObject({ ok: false, error: { code: 'conflict' } });
-    expect(branchDiffPage(header, [], { after })).toMatchObject({
+    // The same tip and digest, read as another state of the work: never spliced onto this one.
+    expect(
+      branchDiffPage(header, [file('a'), file('b')], { after, state: 'f'.repeat(64) }),
+    ).toMatchObject({ ok: false, error: { code: 'conflict' } });
+    expect(branchDiffPage(header, [], { after, state })).toMatchObject({
       ok: false,
       error: { code: 'invalid' },
     });
-    expect(branchDiffPage(header, [file('a')], { after: '--all' })).toMatchObject({
+    expect(branchDiffPage(header, [file('a')], { after: '--all', state })).toMatchObject({
       ok: false,
       error: { code: 'invalid' },
     });

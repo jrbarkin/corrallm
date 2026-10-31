@@ -1,3 +1,5 @@
+import { execFileSync, spawn } from 'node:child_process';
+import type * as NodeChildProcess from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 
@@ -6,6 +8,12 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { TestChildren } from './test-children';
 import type { ChildSystem, TestChild } from './test-children';
 import type { TestLifetimeOwner } from './test-lifetime';
+
+vi.mock('node:child_process', async (importOriginal) => ({
+  ...(await importOriginal<typeof NodeChildProcess>()),
+  spawn: vi.fn(),
+  execFileSync: vi.fn(),
+}));
 
 function fixture(lifetime?: TestLifetimeOwner) {
   const child = Object.assign(new EventEmitter(), {
@@ -80,6 +88,9 @@ it('guards the Node process inside a terminal, independently of script and its p
 
 afterEach(() => {
   vi.useRealTimers();
+  vi.restoreAllMocks();
+  vi.mocked(spawn).mockReset();
+  vi.mocked(execFileSync).mockReset();
 });
 
 it.each(['fails', 'times out'])(
@@ -169,6 +180,119 @@ it('kills a surviving descendant group even after its leader exited', async () =
   await vi.advanceTimersByTimeAsync(5000);
   await closing;
   expect(system.signal).toHaveBeenCalledExactlyOnceWith(-42, 'SIGKILL');
+});
+
+it('finishes teardown when an EPERM group probe finds only unreaped members', async () => {
+  const { child, children, system } = fixture();
+  children.spawn('test-server', []);
+  child.emit('exit', 0, null);
+  child.emit('close', 0, null);
+  const hasLiveMembers = vi.fn(() => false);
+  Object.assign(system, { hasLiveMembers });
+  system.alive = (pid) => {
+    if (pid < 0) throw Object.assign(new Error('kill EPERM'), { code: 'EPERM' });
+    return false;
+  };
+
+  await expect(children.close()).resolves.toBeUndefined();
+
+  expect(hasLiveMembers).toHaveBeenCalledWith(42);
+  expect(system.signal).not.toHaveBeenCalled();
+});
+
+it('native test teardown recognizes an unreaped group after a denied probe', async () => {
+  const { child } = fixture();
+  const lifetime: TestLifetimeOwner = {
+    prepare: (_command, args, env) => ({ args, env }),
+    track: vi.fn(),
+    close: vi.fn(() => Promise.resolve()),
+  };
+  vi.mocked(spawn).mockReturnValue(child as unknown as ReturnType<typeof spawn>);
+  vi.spyOn(process, 'kill').mockImplementation((pid) => {
+    throw Object.assign(new Error('kill failed'), { code: pid < 0 ? 'EPERM' : 'ESRCH' });
+  });
+  vi.mocked(execFileSync).mockReturnValue(' 42 Z\n 42 Z+\n 84 S\n');
+  const children = new TestChildren(undefined, lifetime);
+  children.spawn('test-server', []);
+  child.emit('close', 0, null);
+
+  await expect(children.close()).resolves.toBeUndefined();
+
+  expect(execFileSync).toHaveBeenCalledWith(
+    'ps',
+    ['-A', '-o', 'pgid=', '-o', 'stat='],
+    expect.objectContaining({ timeout: 1000 }),
+  );
+  expect(lifetime.close).toHaveBeenCalledOnce();
+});
+
+it('finishes teardown when an EPERM group signal finds only unreaped members', async () => {
+  vi.useFakeTimers();
+  const { child, children, system, alive } = fixture();
+  children.spawn('test-server', []);
+  let unreaped = false;
+  Object.assign(system, { hasLiveMembers: () => !unreaped });
+  system.alive = (pid) => {
+    if (pid < 0 && unreaped) throw Object.assign(new Error('kill EPERM'), { code: 'EPERM' });
+    return alive.has(pid);
+  };
+  system.signal = vi.fn((pid) => {
+    if (pid === 42) {
+      alive.delete(42);
+      child.emit('exit', 0, null);
+      child.emit('close', 0, null);
+    } else {
+      unreaped = true;
+      throw Object.assign(new Error('kill EPERM'), { code: 'EPERM' });
+    }
+  });
+  const closing = children.close();
+  await Promise.all([expect(closing).resolves.toBeUndefined(), vi.advanceTimersByTimeAsync(5000)]);
+  expect(system.signal).toHaveBeenNthCalledWith(1, 42, 'SIGTERM');
+  expect(system.signal).toHaveBeenNthCalledWith(2, -42, 'SIGKILL');
+});
+
+it('keeps teardown failed when an EPERM group probe finds a live descendant', async () => {
+  const { child, children, system } = fixture();
+  children.spawn('test-server', []);
+  child.emit('exit', 0, null);
+  child.emit('close', 0, null);
+  Object.assign(system, { hasLiveMembers: () => true });
+  system.alive = (pid) => {
+    if (pid < 0) throw Object.assign(new Error('kill EPERM'), { code: 'EPERM' });
+    return false;
+  };
+
+  await expect(children.close()).rejects.toMatchObject({
+    message: expect.stringContaining('folders were kept') as unknown,
+    errors: [expect.objectContaining({ code: 'EPERM' })],
+  });
+});
+
+it('still waits for pipe closure when a group has only unreaped members', async () => {
+  vi.useFakeTimers();
+  const { child, children, system } = fixture();
+  children.spawn('test-server', []);
+  child.emit('exit', 0, null);
+  Object.assign(system, { hasLiveMembers: () => false });
+  system.alive = (pid) => {
+    if (pid < 0) throw Object.assign(new Error('kill EPERM'), { code: 'EPERM' });
+    return false;
+  };
+  let finished = false;
+  const closing = children.close().then(() => {
+    finished = true;
+  });
+  await Promise.all([
+    closing,
+    (async () => {
+      await vi.advanceTimersByTimeAsync(100);
+      expect(finished).toBe(false);
+      child.emit('close', 0, null);
+      await vi.advanceTimersByTimeAsync(25);
+    })(),
+  ]);
+  expect(finished).toBe(true);
 });
 
 it('still owns the terminal server after its script wrapper has exited', async () => {

@@ -133,7 +133,9 @@ export const claudeCode: Adapter = {
           plan: 'answerable',
           form: 'answerable',
         },
-        signals: false,
+        // Ask rules and safety checks are reported (sdk/raise.ts' signalsOf), as recorded with
+        // Claude Code 2.1.311 (sdk/fixtures/ask-rule.jsonl, safety-check.jsonl): B13 C4.
+        signals: true,
         context: false,
         startModes: START_MODES,
         live: { effort: true, stopTask: true },

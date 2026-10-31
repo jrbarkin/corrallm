@@ -35,7 +35,8 @@ import path from 'node:path';
  *   `core.bigFileThreshold`. Alternates are stores Git only reads, never written: not checked;
  * - the install writes, in the destination checkout's own Git directory (the common one for a main
  *   checkout, its registration's folder for a linked one), `index` (replaced whole), `logs/HEAD`
- *   (appended) and `ORIG_HEAD` (replaced whole), and its branch's loose ref and reflog in the common
+ *   (appended), `ORIG_HEAD` (replaced whole) and `logs/ORIG_HEAD` (appended whenever it is there,
+ *   or with core.logAllRefUpdates=always), and its branch's loose ref and reflog in the common
  *   directory; in a reftable repository, the tables in `reftable/` (the checkout's own, for a
  *   linked one) hold the refs, ORIG_HEAD and the logs instead;
  * - a checkpoint writes the generated branch's ref and log, and the agent's checkout's `logs/HEAD`
@@ -153,10 +154,12 @@ export function verifyMergeWrites(commonDir: string, writes: MergeWrites): void 
       folder(registrations, there);
       realFolder(own);
     }
-    // Its index and ORIG_HEAD, replaced whole by a rename; its HEAD's reflog, appended to.
+    // Its index and ORIG_HEAD, replaced whole by a rename; its HEAD's reflog, appended to, and
+    // ORIG_HEAD's, which Git appends to whenever there is one (or every ref is logged).
     along(own, ['index'], false);
     along(own, ['ORIG_HEAD'], false);
     along(own, ['logs', 'HEAD'], true);
+    along(own, ['logs', 'ORIG_HEAD'], true);
     const reftable = path.join(own, 'reftable');
     const tables = found(reftable);
     if (tables !== undefined) folder(reftable, tables);

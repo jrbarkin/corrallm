@@ -200,6 +200,45 @@ describe('Linux process identities', () => {
     );
   });
 
+  it.each(['signal', 'probe'] as const)(
+    'the native process owner accepts an unreaped macOS group after a denied %s',
+    async (at) => {
+      vi.stubGlobal('process', { ...process, platform: 'darwin' });
+      const original = vi.mocked(execFileSync).getMockImplementation();
+      vi.mocked(execFileSync).mockImplementation((_file, args) =>
+        Array.isArray(args) && args.includes('stat=')
+          ? ' 42 Z\n 42 Z+\n 84 S\n'
+          : `${new Date(os.epoch).toUTCString()} 42`,
+      );
+      const warning = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      kill.mockImplementation((_pid, signal) => {
+        if (at === 'probe' && signal === 'SIGTERM') return true;
+        throw Object.assign(new Error('kill EPERM'), { code: 'EPERM' });
+      });
+      const children = new Children(profile);
+      const child = Object.assign(new EventEmitter(), { pid: 42, kill: vi.fn() });
+      try {
+        children.node(child);
+        await children.stop(child, 'SIGTERM');
+
+        expect(warning).not.toHaveBeenCalled();
+        expect(
+          JSON.parse(await readFile(path.join(profile, 'sessions/pids.json'), 'utf8')),
+        ).toEqual({
+          version: 1,
+          children: [],
+        });
+        expect(execFileSync).toHaveBeenCalledWith(
+          'ps',
+          ['-A', '-o', 'pgid=', '-o', 'stat='],
+          expect.objectContaining({ timeout: 1000 }),
+        );
+      } finally {
+        if (original !== undefined) vi.mocked(execFileSync).mockImplementation(original);
+      }
+    },
+  );
+
   it.each([
     null,
     {},

@@ -43,6 +43,13 @@ export interface Round {
   more?: number;
 }
 
+/** A session that cannot start, or a step that cannot be sent on its current adapter. */
+export interface RunRefusal {
+  text: string;
+  switchTo?: ConnectionId;
+  kind?: 'unknown-action';
+}
+
 /** Where an agent's queue is, in a run. */
 export interface AgentRun {
   /** Finish any active task, then hold this queue until this agent is explicitly resumed. */
@@ -62,11 +69,14 @@ export interface AgentRun {
    */
   status: 'running' | 'waiting' | 'asking' | 'stopped' | 'done';
   /**
-   * While its task has no connection, or its session would not start: the destination, how it
-   * ran, why it could not, and a connection to try.
-   * An unavailable task stays unsent; otherwise its message waits in the session's queue.
+   * While its task has no connection, its action is unknown, or its session would not start:
+   * the destination, how it ran, why it could not, and a connection to try where one exists.
+   * Unavailable and unknown-action tasks stay unsent; startup refusals wait in the session queue.
    */
-  refused?: { agent: string; connection: ConnectionId; text: string; switchTo?: ConnectionId };
+  refused?: RunRefusal & {
+    agent: string;
+    connection: ConnectionId;
+  };
   /** While held at a delay, or at a wait with a time limit: when that time comes (epoch ms). */
   until?: number;
   /**

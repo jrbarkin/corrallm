@@ -5,6 +5,8 @@ import type { PartyId } from '../../shared/model/messages';
 import type { NeedsItem } from '../../shared/model/needs';
 import { isOpen } from '../../shared/model/session';
 import type { Prompt } from '../../shared/model/session';
+import type { PromptAnswer, PromptReplyAnswer } from '../../shared/model/prompts';
+import { MAX_CANVAS_PROMPTS } from '../../shared/api/limits';
 import type { SessionAnswer } from '../../shared/session';
 import type { SessionManager } from '../sessions/manager';
 import type { PromptOwner } from './prompts/owner';
@@ -37,8 +39,14 @@ import type { Answer, ReplyHandler, ReplyResult } from './replies';
  *   (prompts/owner.ts): found by its PromptId in the canvas's live index, never by its id's text,
  *   checked against the prompt as raised, reserved, recorded as being made, checked again, then
  *   handed to the session that raised it (C3). The handler asks the owner first.
- * - A prompt of the events B13 replaces (`permission`, `question`, `plan`, `elicitation`, until
- *   their adapters convert: C4 to C6) goes to its CLI first, awaited, recorded as being made
+ * - A prompt of the events B13 replaces whose session raised it to the owner too (an adapter
+ *   converted to B13's protocol whose consumers aren't yet: B13 C4, until X10 converts the
+ *   renderer; X11 removes this) is answered through the owner: its session translates the answer
+ *   and names the prompt's key (`SessionManager.bridge`), and the owner answers the prompt that
+ *   key names, as above; then the old event is shown answered. A later reply to it is told who
+ *   settled it.
+ * - Any other prompt of the events B13 replaces (`permission`, `question`, `plan`, `elicitation`,
+ *   until their adapters convert: C5, C6) goes to its CLI first, awaited, recorded as being made
  *   before it is told, and told only if the session that asked it still runs (a later one asking
  *   by the same native id asks another prompt): the prompt is shown answered only once the CLI
  *   took it; one the CLI refused still waits, its record withdrawn. A crash in between leaves the
@@ -49,9 +57,11 @@ import type { Answer, ReplyHandler, ReplyResult } from './replies';
 
 export interface RunRepliesDeps {
   engines: Pick<Engines, 'canvas'>;
-  sessions: Pick<SessionManager, 'answer' | 'generationOf'>;
+  sessions: Pick<SessionManager, 'answer' | 'generationOf'> &
+    Partial<Pick<SessionManager, 'bridge'>>;
   /** The core's prompt owner (B13 C3), whose prompts the prompt handler answers through it. */
-  prompts?: Pick<PromptOwner, 'owns' | 'current' | 'settled' | 'fits' | 'answer'>;
+  prompts?: Pick<PromptOwner, 'owns' | 'current' | 'settled' | 'fits' | 'answer'> &
+    Partial<Pick<PromptOwner, 'keyed'>>;
   /** The locale holds are worded in. */
   locale?: string;
 }
@@ -92,8 +102,16 @@ export function runReplies({
     }
     return open;
   };
+  /**
+   * The owner's NeedId each old event's item was answered through, by canvas, then by that item's
+   * id (the newest MAX_CANVAS_PROMPTS a canvas), so a later reply is told who settled it (B13 C4,
+   * until X11).
+   */
+  const bridged = new Map<CanvasId, Map<string, string>>();
   /** Settled already: a conflict naming who settled it, if a record of it is kept. */
   const settled = (canvas: CanvasId, to: string): OpFailure | undefined => {
+    const through = bridged.get(canvas)?.get(to);
+    if (through !== undefined && owner !== undefined) return owner.settled(canvas, through);
     const open = engines.canvas(canvas);
     const record = open === undefined ? undefined : decidedOf(open.messages, to);
     if (record === undefined) return undefined;
@@ -240,6 +258,40 @@ export function runReplies({
     return { id: record.id, outcome: 'answered' };
   };
 
+  /**
+   * Where an old event's prompt is answered through the owner (B13 C4, until X11): the NeedId of
+   * the owner's prompt its session raised for it, and `given` as that prompt takes it. None where
+   * its session shows no such twin (it answers the old events itself).
+   */
+  const throughOwner = (
+    canvas: CanvasId,
+    item: NeedsItem,
+    id: PromptId,
+    given: SessionAnswer,
+  ): { need: string; reply: PromptReplyAnswer } | undefined => {
+    if (owner?.keyed === undefined || sessions.bridge === undefined) return undefined;
+    let bridged: ReturnType<NonNullable<typeof sessions.bridge>>;
+    try {
+      bridged = sessions.bridge(canvas, id.agent, id.prompt, given);
+    } catch (error) {
+      throw new OpFailure(
+        'invalid',
+        `${item.id}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+    if (bridged === undefined) return undefined;
+    const name = nameOf(engines.canvas(canvas)?.document.nodes ?? [], id.agent);
+    if (String(bridged.generation) !== id.generation) {
+      throw new OpFailure(
+        'conflict',
+        `${name}’s session has started again since: answer what it asks now, not ${item.id}.`,
+      );
+    }
+    const need = owner.keyed(canvas, id.agent, bridged.generation, bridged.key);
+    if (need === undefined) throw new OpFailure('conflict', `${item.id} isn’t open any more.`);
+    return { need, reply: replyOf(bridged.answer) };
+  };
+
   /** The prompts of the events B13 replaces, answered as B11 C7 built them. */
   const legacy: ReplyHandler = {
     prefixes: ['prompt'],
@@ -297,6 +349,20 @@ export function runReplies({
       }
       const given = sessionAnswer(item, prompt, answer);
       const name = nameOf(open.document.nodes, id.agent);
+      // One its session raised to the owner too is answered through the owner (B13 C4, until X11).
+      const through = throughOwner(canvas, item, id, given);
+      if (through !== undefined && owner !== undefined) {
+        const result = await owner.answer(canvas, through.need, through.reply, ctx);
+        const answered = bridged.get(canvas) ?? new Map<string, string>();
+        bridged.set(canvas, answered);
+        answered.set(item.id, through.need);
+        for (const oldest of answered.keys()) {
+          if (answered.size <= MAX_CANVAS_PROMPTS) break;
+          answered.delete(oldest);
+        }
+        open.engine.sessions.answered(id.agent, prompt.id, given);
+        return result;
+      }
       // Recorded as being made, on disk, before the CLI is told anything.
       const record = deciding(open.messages, {
         need: item.id,
@@ -369,6 +435,26 @@ export function runReplies({
   };
 
   return [holds, prompts];
+}
+
+/** A session's answer as `reply` gives it to the owner, which checks it again. */
+function replyOf(answer: PromptAnswer): PromptReplyAnswer {
+  switch (answer.kind) {
+    case 'choice':
+      return {
+        choice: answer.value,
+        ...(answer.feedback === undefined ? {} : { feedback: answer.feedback }),
+      };
+    case 'questions':
+      return { answers: answer.answers };
+    case 'form':
+      return {
+        form: {
+          action: answer.action,
+          ...(answer.values === undefined ? {} : { values: answer.values }),
+        },
+      };
+  }
 }
 
 /** A hold's id read back (`hold/<agent>/<generation>/<item>`): none if it isn't one. */
