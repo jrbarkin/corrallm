@@ -750,6 +750,83 @@ describe('a carrying send cut off unsent', () => {
       expect(row()).toMatchObject({ carry: null });
     },
   );
+
+  it('carries the handoff again with the next party’s message after a crash between a party’s message’s delivering record and its send', async () => {
+    await keep();
+    const codex = driven('codex');
+    // Claude Code is handed the party's message but never gets it: a crash cuts it off unsent.
+    const silent = driven('claude-code', undefined, true);
+    let core = await start(codex.connector, silent.connector);
+    await core.engines.open(CANVAS);
+    await core.call('message', { canvas: CANVAS, to: 'worker', body: 'Review this' }, ORCHESTRATOR);
+    await vi.waitFor(() => {
+      expect(codex.sent).toHaveLength(1);
+    });
+    codex.reply('Reviewed.', CROSSED);
+    await vi.waitFor(() => {
+      expect(codex.sent).toHaveLength(2);
+    });
+    codex.reply('My handoff.', CROSSED);
+    await vi.waitFor(() => {
+      expect(kept(core)?.handoff?.text).toBe('My handoff.');
+    });
+    await core.call('message', { canvas: CANVAS, to: 'worker', body: 'Then this' }, ORCHESTRATOR);
+    await vi.waitFor(() => {
+      expect(codex.sent).toHaveLength(3);
+    });
+    codex.reply('', CROSSED, LIMIT());
+    const sent = await core.call(
+      'message',
+      { canvas: CANVAS, to: 'worker', body: 'And this' },
+      ORCHESTRATOR,
+    );
+    const id = sent.ok ? (sent.value as { id: string }).id : '';
+    // The worker switched to Claude Code, which is handed the message carrying the handoff.
+    await vi.waitFor(() => {
+      expect(silent.sent).toHaveLength(1);
+    });
+    expect(silent.sent[0]?.text).toMatch(
+      /\nAnd this\n\n[^\n]+\nhandoff [0-9a-f]{24} begins\nMy handoff\./,
+    );
+    // Its delivering record, on disk, says it carried one (never what), the carry cleared with it.
+    await vi.waitFor(() => {
+      expect(row()).toMatchObject({ text: 'My handoff.', carry: null });
+      expect(
+        readOnDisk(profile, (disk) =>
+          disk.prepare('SELECT state, told, body FROM message WHERE id = ?').get(id),
+        ),
+      ).toEqual({
+        state: 'delivering',
+        told: expect.stringMatching(/^carried:/) as unknown,
+        body: 'And this',
+      });
+    });
+    await core.close();
+    cores.splice(0);
+    // A crash leaves the record as it was written: being delivered, never sent.
+    writeOnDisk(profile, `UPDATE message SET state = 'delivering', turn = NULL WHERE id = '${id}'`);
+    const claude = driven('claude-code');
+    core = await start(driven('codex').connector, claude.connector);
+    await core.engines.open(CANVAS);
+    // Cut off, unresolved, never sent again: what it carried waits to be carried again.
+    await vi.waitFor(() => {
+      expect(row()).toMatchObject({ carry: expect.any(String) as unknown });
+    });
+    const messages = await core.engines.messagesOf(CANVAS);
+    expect(messages.get(id)?.state).toBe('unresolved');
+    expect(messages.toldOf(id)).toBeUndefined();
+    // The next automated send, the party's next message, carries it.
+    await core.call('message', { canvas: CANVAS, to: 'worker', body: 'Once more' }, ORCHESTRATOR);
+    await vi.waitFor(() => {
+      expect(claude.sent).toHaveLength(1);
+    });
+    expect(claude.sent[0]?.text).toMatch(
+      /^\[corrallm\] corrallm switched this agent to Claude Code · Terminal[^\n]*\n\n\[corrallm\] Message from "orchestrator" [^\n]+\nOnce more\n\n\[corrallm\] The handoff Codex · App Server \(default\) wrote at [^\n]+\nhandoff [0-9a-f]{24} begins\nMy handoff\.\nhandoff [0-9a-f]{24} ends$/,
+    );
+    await vi.waitFor(() => {
+      expect(row()).toMatchObject({ carry: null });
+    });
+  });
 });
 
 describe('the Markdown copy', () => {
