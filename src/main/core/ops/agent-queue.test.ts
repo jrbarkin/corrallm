@@ -168,6 +168,62 @@ describe('agent and queue commits through core.call', () => {
     expect(agent()).toMatchObject({ adapter: 'claude-code', connection: 'claude-code.sdk' });
     committed('agent.setType', result, [nodeKey('a'), itemKey('a', 's')]);
   });
+  it('sets your fallback chain, its connections resolved, in one revision; null removes it', async () => {
+    const result = await edit('agent.setFallback', {
+      agent: 'a',
+      fallback: {
+        to: [{ adapter: 'claude-code' }, { adapter: 'codex', connection: 'codex.terminal' }],
+        back: 'return',
+      },
+    });
+    expect(result.changed).toBe(true);
+    expect(agent().fallback).toEqual({
+      to: [
+        { adapter: 'claude-code', connection: 'claude-code.terminal' },
+        { adapter: 'codex', connection: 'codex.terminal' },
+      ],
+      back: 'return',
+    });
+    committed('agent.setFallback', result, [nodeKey('a')]);
+    // The same chain again changes nothing.
+    const again = await edit('agent.setFallback', {
+      agent: 'a',
+      fallback: {
+        to: [
+          { adapter: 'claude-code', connection: 'claude-code.terminal' },
+          { adapter: 'codex', connection: 'codex.terminal' },
+        ],
+        back: 'return',
+      },
+    });
+    expect(again).toMatchObject({ changed: false, revs: {} });
+    expect((await edit('agent.setFallback', { agent: 'a', fallback: null })).changed).toBe(true);
+    expect(agent().fallback).toBeUndefined();
+  });
+  it.each([
+    ['an adapter the catalog lacks', { to: [{ adapter: 'zed' }] }],
+    [
+      'a connection of another adapter',
+      { to: [{ adapter: 'codex', connection: 'claude-code.sdk' }] },
+    ],
+    // A's own endpoint: codex.app-server, its model and effort as its settings have them.
+    [
+      'the agent’s own endpoint',
+      {
+        to: [{ adapter: 'codex', connection: 'codex.app-server', model: 'default', effort: 'low' }],
+      },
+    ],
+    ['a step twice', { to: [{ adapter: 'claude-code' }, { adapter: 'claude-code' }] }],
+  ])('refuses a chain naming %s, changing nothing', async (_what, fallback) => {
+    const before = doc();
+    const result = await (core as Dispatcher).call(
+      'agent.setFallback',
+      { canvas: CANVAS, agent: 'a', fallback },
+      CALLERS.you,
+    );
+    expect(result).toMatchObject({ ok: false, error: { code: 'invalid' } });
+    expect(doc()).toBe(before);
+  });
   it('switches connection and drops only an incompatible saved mode', async () => {
     const result = await edit('agent.setConnection', { agent: 'a', connection: 'codex.terminal' });
     expect(agent()).toMatchObject({

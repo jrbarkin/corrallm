@@ -1,4 +1,6 @@
 import type { Reach } from '../../../shared/api/surface';
+import { fallbackView } from '../../../shared/model/fallback';
+import type { FallbackView } from '../../../shared/model/fallback';
 import type { Message } from '../../../shared/model/messages';
 import { isOpen, turnReply } from '../../../shared/model/session';
 import { mcpRequestTitle } from '../../../shared/model/words';
@@ -38,6 +40,14 @@ export function promptsOf({ engine }: OpenCanvas, id: string): number {
  * Agent `agent`'s session as session.get gives it, `yours` (you, and the core's own canonical
  * topic) or anyone else's (summaryFor): not-found if there is no such agent.
  */
+/**
+ * Where an agent is in the fallback chain you set, and whether corrallm switches it now (B11a
+ * C11): the session summary's, agents' and status's, alike for every caller who reaches it.
+ */
+export function fallbackOf(open: OpenCanvas, agent: string): FallbackView | null {
+  return fallbackView(agentOf(open, agent).data.fallback, open.switching?.(agent) === true);
+}
+
 export function sessionSummary(open: OpenCanvas, agent: string, yours = true) {
   const node = agentOf(open, agent);
   const { engine } = open;
@@ -46,6 +56,7 @@ export function sessionSummary(open: OpenCanvas, agent: string, yours = true) {
   return {
     agent,
     connection: engine.catalog.connectionOf(node.data),
+    fallback: fallbackOf(open, agent),
     status: session.status,
     paused: engine.run.snapshot().agents[agent]?.paused === true,
     queued: session.queued.length,

@@ -138,7 +138,6 @@ describe('engineCatalog', () => {
         return () => undefined;
       },
       tell: () => undefined,
-      connect: () => undefined,
       later: () => () => undefined,
       now: () => 0,
     });
@@ -203,7 +202,6 @@ describe('engineCatalog', () => {
       tell: (_, text) => {
         told.push(text);
       },
-      connect: () => undefined,
       later: (run) => {
         timers.push(run);
         return () => undefined;

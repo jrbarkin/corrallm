@@ -827,8 +827,9 @@ export class Documents {
     };
     for (const node of store
       .prepare(
-        `SELECT id, kind, parent_id, place, label, x, y, color, adapter, connection, settings, role,
-           created_by, rev, by_party FROM node WHERE canvas_id = ? ORDER BY place`,
+        `SELECT id, kind, parent_id, place, label, x, y, color, adapter, connection, settings,
+           fallback, handoff, role, created_by, rev, by_party FROM node WHERE canvas_id = ?
+           ORDER BY place`,
       )
       .all(canvas)) {
       const id = String(node.id);
@@ -845,6 +846,8 @@ export class Documents {
         adapter: node.adapter,
         connection: node.connection,
         settings: parsed(node.settings),
+        fallback: parsed(node.fallback),
+        handoff: parsed(node.handoff),
         role: node.role,
       }) as NodeRow;
       keep(nodeKey(id), row, node.rev, node.by_party);
@@ -1194,12 +1197,13 @@ export class Documents {
         store
           .prepare(
             `INSERT INTO node (canvas_id, id, kind, parent_id, place, label, x, y, color, adapter,
-               connection, settings, role, created_by, rev, by_party)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               connection, settings, fallback, handoff, role, created_by, rev, by_party)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT (canvas_id, id) DO UPDATE SET kind = excluded.kind,
                parent_id = excluded.parent_id, place = excluded.place, label = excluded.label,
                x = excluded.x, y = excluded.y, color = excluded.color, adapter = excluded.adapter,
                connection = excluded.connection, settings = excluded.settings,
+               fallback = excluded.fallback, handoff = excluded.handoff,
                role = excluded.role, created_by = excluded.created_by, rev = excluded.rev,
                by_party = excluded.by_party`,
           )
@@ -1216,6 +1220,8 @@ export class Documents {
             node.adapter ?? null,
             node.connection ?? null,
             node.settings === undefined ? null : JSON.stringify(node.settings),
+            node.fallback === undefined ? null : JSON.stringify(node.fallback),
+            node.handoff === undefined ? null : JSON.stringify(node.handoff),
             node.role ?? null,
             creators.get(node.id) ?? null,
             rev,

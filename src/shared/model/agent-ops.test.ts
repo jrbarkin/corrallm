@@ -11,6 +11,7 @@ import {
   translateActions,
   equivalentAction,
   setFallback,
+  fallbackMove,
 } from './agent-ops';
 import { TEST_CATALOG } from '../test-model';
 import { MADE_UP } from '../test-made-up';
@@ -424,5 +425,136 @@ describe('catalog independence and roles', () => {
     expect(setRole(changed, { agent: 'a', role: data(changed).role }).next).toBe(changed);
     expect(data(setRole(changed, { agent: 'a', role: ' \t ' }).next)).not.toHaveProperty('role');
     expect(() => setRole(before, { agent: 'a', role: 'bad\0role' })).toThrow(/role/i);
+  });
+});
+
+describe('fallbackMove: corrallm’s commit of a switch or a return (B11a C2)', () => {
+  /** A on Claude · Terminal at model opus, its chain Codex · Terminal at m2 high, then the SDK. */
+  const chained = (): CanvasDocument => {
+    const before = doc();
+    const a = before.nodes[0] as AgentNode;
+    return {
+      ...before,
+      nodes: [
+        {
+          ...a,
+          data: {
+            ...a.data,
+            adapter: 'claude-code',
+            connection: 'claude-code.terminal',
+            settings: {
+              'claude-code': { model: 'opus' },
+              codex: { model: 'm1', mode: 'read-only' },
+            },
+            fallback: {
+              to: [
+                { adapter: 'codex', connection: 'codex.terminal', model: 'm2', effort: 'high' },
+                { adapter: 'claude-code', connection: 'claude-code.sdk' },
+              ],
+              back: 'return',
+            },
+          },
+        },
+        ...before.nodes.slice(1),
+      ],
+    };
+  };
+  const OWN = { adapter: 'claude-code', connection: 'claude-code.terminal', model: 'opus' };
+
+  it('runs the step, writing its model and effort, keeping what they replace and where it came from', () => {
+    const before = chained();
+    const next = fallbackMove(
+      before,
+      { agent: 'a', step: 0, why: 'usage-limit', at: 5 },
+      context,
+    ).next;
+    expect(data(next)).toMatchObject({
+      adapter: 'codex',
+      connection: 'codex.terminal',
+      settings: {
+        'claude-code': { model: 'opus' },
+        codex: { model: 'm2', effort: 'high', mode: 'read-only' },
+      },
+      fallback: {
+        on: { step: 0, from: OWN, kept: { model: 'm1', effort: null }, why: 'usage-limit', at: 5 },
+      },
+    });
+    // The queue is never rewritten (C9), and nothing else of the agent's changes.
+    expect(data(next).queue).toBe(data(before).queue);
+    expect(data(next).fallback?.to).toEqual(data(before).fallback?.to);
+    expect(next.nodes[1]).toBe(before.nodes[1]);
+  });
+
+  it('leaving a step, puts back what it kept, only where corrallm’s value still is', () => {
+    const on = fallbackMove(chained(), { agent: 'a', step: 0, why: 'rule', at: 5 }, context).next;
+    // You changed its effort since: yours stays.
+    const edited = setSettings(on, {
+      agent: 'a',
+      adapter: 'codex',
+      change: { effort: 'low' },
+    }).next;
+    const next = fallbackMove(
+      edited,
+      { agent: 'a', step: 1, why: 'usage-limit', at: 9 },
+      context,
+    ).next;
+    expect(data(next)).toMatchObject({
+      adapter: 'claude-code',
+      connection: 'claude-code.sdk',
+      settings: { 'claude-code': { model: 'opus' }, codex: { model: 'm1', effort: 'low' } },
+      fallback: { on: { step: 1, from: OWN, why: 'usage-limit', at: 9 } },
+    });
+    // The SDK step names no model: it runs the agent's saved one, and keeps nothing.
+    expect(data(next).fallback?.on).not.toHaveProperty('kept');
+  });
+
+  it('returns to its own endpoint: what corrallm wrote put back, its place forgotten', () => {
+    const on = fallbackMove(chained(), { agent: 'a', step: 0, why: 'rule', at: 5 }, context).next;
+    const back = fallbackMove(on, { agent: 'a', step: null, why: 'rule', at: 7 }, context).next;
+    expect(data(back)).toMatchObject({
+      adapter: 'claude-code',
+      connection: 'claude-code.terminal',
+      settings: { 'claude-code': { model: 'opus' }, codex: { model: 'm1', mode: 'read-only' } },
+    });
+    expect(data(back).settings?.codex).not.toHaveProperty('effort');
+    expect(data(back).fallback).toEqual(data(chained()).fallback);
+    // Already on it: nothing changes.
+    expect(fallbackMove(back, { agent: 'a', step: null, why: 'rule', at: 8 }, context).next).toBe(
+      back,
+    );
+  });
+
+  it('switches between models of one CLI, putting the first back on return', () => {
+    const before = chained();
+    const a = before.nodes[0] as AgentNode;
+    const same: CanvasDocument = {
+      ...before,
+      nodes: [
+        {
+          ...a,
+          data: {
+            ...a.data,
+            fallback: {
+              to: [{ adapter: 'claude-code', connection: 'claude-code.terminal', model: 'sonnet' }],
+            },
+          },
+        },
+        ...before.nodes.slice(1),
+      ],
+    };
+    const on = fallbackMove(same, { agent: 'a', step: 0, why: 'usage-limit', at: 1 }, context).next;
+    expect(data(on).settings?.['claude-code']).toEqual({ model: 'sonnet' });
+    expect(data(on).fallback?.on).toMatchObject({ from: OWN, kept: { model: 'opus' } });
+    const back = fallbackMove(on, { agent: 'a', step: null, why: 'rule', at: 2 }, context).next;
+    expect(data(back).settings?.['claude-code']).toEqual({ model: 'opus' });
+  });
+
+  it('refuses an agent with no chain, or a step it doesn’t have', () => {
+    expect(() => fallbackMove(doc(), { agent: 'a', step: 0, why: 'rule', at: 1 }, context)).toThrow(
+      /chain/,
+    );
+    expect(() =>
+      fallbackMove(chained(), { agent: 'a', step: 2, why: 'rule', at: 1 }, context),
+    ).toThrow(/step/);
   });
 });

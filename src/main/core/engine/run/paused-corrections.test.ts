@@ -47,7 +47,6 @@ function setup(graph = nodes) {
       return () => undefined;
     },
     tell: () => undefined,
-    connect: () => undefined,
     later: () => () => undefined,
     now: () => 1234,
   });
