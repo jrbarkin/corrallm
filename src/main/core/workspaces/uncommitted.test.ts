@@ -374,3 +374,26 @@ describe.skipIf(process.platform === 'win32')('a tree’s digest', () => {
     expect(await treeDigest(made.git, { cwd: at, drivers: [] }, { tip, tree })).toBeNull();
   });
 });
+
+describe.skipIf(process.platform === 'win32')(
+  'the worktree as Git reads it, whatever it configures',
+  () => {
+    it('counts a content edit whatever the repository’s stat settings, as a checkpoint commits it', async () => {
+      const file = path.join(at, 'README.md');
+      const old = new Date(Date.now() - 3_600_000);
+      utimesSync(file, old, old);
+      g('update-index', '--refresh');
+      g('config', 'core.trustctime', 'false');
+      g('config', 'core.checkStat', 'minimal');
+      // Past a timestamp's tick, an edit of the same size, its old modification time put back.
+      await new Promise((resolve) => setTimeout(resolve, 1100));
+      writeFileSync(file, 'EDIT!\n');
+      utimesSync(file, old, old);
+      const review = await inventory();
+      expect(review.files.map((entry) => entry.path)).toEqual(['README.md']);
+      expect(review.digest).toBe(
+        await treeDigest(made.git, { cwd: at, drivers: [] }, { tip, tree: await checkpointTree() }),
+      );
+    });
+  },
+);

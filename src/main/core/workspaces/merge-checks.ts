@@ -156,6 +156,34 @@ function splitFields(text: string, count: number): { fields: string[]; rest: str
 }
 
 /**
+ * What another Git leaves in your checkout's Git directories while it works, if anything: an
+ * operation in progress, a lock on the index, or a lock on a ref the install updates (the install
+ * would stop between your files and its ref). Never removed: whoever holds them may still be at
+ * work. The clean check refuses each; a restart's reconciliation holds a merge that finds one.
+ */
+export function anotherGit(
+  destination: Pick<MergeDestination, 'gitDir' | 'commonDir' | 'branch'>,
+):
+  | { kind: 'in-progress'; what: string }
+  | { kind: 'index-lock' }
+  | { kind: 'ref-lock' }
+  | undefined {
+  for (const [name, what] of IN_PROGRESS) {
+    if (present(path.join(destination.gitDir, name))) return { kind: 'in-progress', what };
+  }
+  if (present(path.join(destination.gitDir, 'index.lock'))) return { kind: 'index-lock' };
+  const refLocks = [
+    path.join(destination.gitDir, 'HEAD.lock'),
+    path.join(destination.gitDir, 'ORIG_HEAD.lock'),
+    path.join(destination.gitDir, 'reftable', 'tables.list.lock'),
+    path.join(destination.commonDir, `${destination.branch}.lock`),
+    path.join(destination.commonDir, 'packed-refs.lock'),
+    path.join(destination.commonDir, 'reftable', 'tables.list.lock'),
+  ];
+  return refLocks.some(present) ? { kind: 'ref-lock' } : undefined;
+}
+
+/**
  * Your checkout clean, as §9 C4 has it, and in a layout merging supports (C11): or why not.
  * Writes nothing and takes no lock.
  */
@@ -165,33 +193,22 @@ export async function checkClean(
 ): Promise<MergeRefusal | undefined> {
   const refusedOrig = await checkOrigHead(git, destination);
   if (refusedOrig !== undefined) return refusedOrig;
-  for (const [name, what] of IN_PROGRESS) {
-    if (present(path.join(destination.gitDir, name))) {
-      return refuse(
-        'refused',
-        'in-progress',
-        `Your checkout has ${what} in progress: finish it or abort it there, then merge again.`,
-      );
-    }
+  const busy = anotherGit(destination);
+  if (busy?.kind === 'in-progress') {
+    return refuse(
+      'refused',
+      'in-progress',
+      `Your checkout has ${busy.what} in progress: finish it or abort it there, then merge again.`,
+    );
   }
-  if (present(path.join(destination.gitDir, 'index.lock'))) {
+  if (busy?.kind === 'index-lock') {
     return refuse(
       'unavailable',
       'index-lock',
       'Another Git is working in your checkout (its index is locked): merge again once it’s done.',
     );
   }
-  // The refs the install updates, locked by another Git: the install would stop between your
-  // files and its ref. Never removed: whoever holds them may still be at work.
-  const refLocks = [
-    path.join(destination.gitDir, 'HEAD.lock'),
-    path.join(destination.gitDir, 'ORIG_HEAD.lock'),
-    path.join(destination.gitDir, 'reftable', 'tables.list.lock'),
-    path.join(destination.commonDir, `${destination.branch}.lock`),
-    path.join(destination.commonDir, 'packed-refs.lock'),
-    path.join(destination.commonDir, 'reftable', 'tables.list.lock'),
-  ];
-  if (refLocks.some(present)) {
+  if (busy?.kind === 'ref-lock') {
     return refuse(
       'unavailable',
       'ref-lock',
@@ -561,14 +578,17 @@ function protectedPath(at: string): boolean {
   return at === '.corral' || at === '.corral/worktrees' || at.startsWith('.corral/worktrees/');
 }
 
-/** Refused if the merge writes anything into corrallm's worktrees folder (§9 C4). */
+/**
+ * Refused if the merge writes anything into corrallm's worktrees folder (§9 C4), its names
+ * compared folded (case, Unicode normalization, the code points HFS+ ignores) whatever Git's
+ * `core.ignoreCase` says: a setting is no proof of what the filesystem does, and refusing such a
+ * name where the filesystem tells cases apart costs nothing.
+ */
 export function checkProtected(
-  destination: MergeDestination,
+  _destination: MergeDestination,
   incoming: readonly IncomingChange[],
 ): MergeRefusal | undefined {
-  const into = incoming.filter((change) =>
-    protectedPath(folded(change.path, destination.ignoreCase)),
-  );
+  const into = incoming.filter((change) => protectedPath(folded(change.path, true)));
   if (into.length === 0) return undefined;
   return refuse(
     'refused',
