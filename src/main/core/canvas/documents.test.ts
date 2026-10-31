@@ -193,6 +193,40 @@ describe('a canvas’s document', () => {
     expect((await documents.load(canvas)).document).toEqual(document);
   });
 
+  it('keeps an agent’s fallback chain, its place in it and its handoff settings in its rows (B11a)', async () => {
+    const canvas = newCanvasId();
+    const document = canvasOf(canvas);
+    const chained: CanvasDocument = {
+      ...document,
+      nodes: document.nodes.map((node) =>
+        node.id === 'worker' && node.type === 'agent'
+          ? {
+              ...node,
+              data: {
+                ...node.data,
+                connection: 'codex.terminal',
+                fallback: {
+                  to: [{ adapter: 'claude-code', connection: 'claude-code.terminal', model: 'm' }],
+                  back: 'return',
+                  on: {
+                    step: 0,
+                    from: { adapter: 'codex', connection: 'codex.app-server' },
+                    kept: { model: null },
+                    why: 'usage-limit',
+                    at: 5,
+                  },
+                },
+                handoff: { at: 70, file: 'HANDOFF.md' },
+              },
+            }
+          : node,
+      ),
+    };
+    await made(canvas, chained);
+    await restart();
+    expect((await documents.load(canvas)).document).toEqual(chained);
+  });
+
   it('is read under the id it opens as: a copy’s own, not the one its file holds', async () => {
     const original = canvasOf(newCanvasId());
     const copy = newCanvasId();

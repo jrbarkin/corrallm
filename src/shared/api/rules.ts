@@ -79,15 +79,17 @@ export const RULES = {
     sentence:
       'Only you remove, move or change an OK or what the run holds for you, move work from behind an OK to before it, or delete an agent whose queue holds one.',
   },
-  // R8: the guard behind agent.setType and agent.setConnection being yours alone.
+  // R8: the guard behind agent.setType, agent.setConnection and agent.setFallback being yours
+  // alone, on whatever op's change (B11a C1: the chain, the run's place in it, the handoff settings).
   connection: {
     kind: 'change',
-    sentence: 'Only you change the adapter or the connection of an agent that exists.',
+    sentence:
+      'Only you change the adapter, the connection, the fallback chain or the handoff settings of an agent that exists.',
   },
   // R11: a party's cap counts the live agents it created, whichever token it called with.
   'new-agent': {
     kind: 'change',
-    sentence: `A token’s new agent runs on its adapter’s first connection with no startup mode, unless it copies the agent it was spawned from; and a token’s party keeps at most ${String(MAX_CREATED_AGENTS)} live agents it created.`,
+    sentence: `A token’s new agent runs on its adapter’s first connection with no startup mode, fallback chain or handoff settings, unless it copies the agent it was spawned from; and a token’s party keeps at most ${String(MAX_CREATED_AGENTS)} live agents it created.`,
   },
   // R12.
   role: {

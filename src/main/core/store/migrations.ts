@@ -560,6 +560,23 @@ export const MIGRATIONS: readonly Migration[] = [
       CREATE INDEX merge_job_by_workspace ON merge_job (workspace_id, created_at);
     `,
   },
+  {
+    // B11a's (B11a Design §12 C1, C2): an agent's fallback chain, with where the run is in it, and
+    // its handoff settings, kept with its row as the document has them. A corrallm of schema 5
+    // would read agents without their chain and change how they run with a stale place in it, so,
+    // as a file of version 3 is to it, it may no longer open the database.
+    version: 6,
+    minReader: 6,
+    sql: `
+      -- The chain you set (fallback: its steps, whether it returns, and the step corrallm switched
+      -- the agent to, with the endpoint it came from) and the handoff settings (handoff): JSON as
+      -- the document's own, only an agent's.
+      ALTER TABLE node ADD COLUMN fallback TEXT
+        CHECK (fallback IS NULL OR (kind = 'agent' AND json_valid(fallback)));
+      ALTER TABLE node ADD COLUMN handoff TEXT
+        CHECK (handoff IS NULL OR (kind = 'agent' AND json_valid(handoff)));
+    `,
+  },
 ];
 
 /** The schema this code makes and reads. */

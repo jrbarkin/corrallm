@@ -8,6 +8,8 @@ import {
   HandoffSettingsSchema,
   HANDOFF_RESERVE,
   askPoint,
+  FallbackViewSchema,
+  fallbackView,
   next,
   parseFallback,
   resolveAction,
@@ -241,5 +243,27 @@ describe('action resolution for a send (no document rewrite)', () => {
       ],
     };
     expect(resolveAction('shell', 'quill', unnamed)).toEqual({ unknown: true });
+  });
+});
+
+describe('the chain as views show it (C11)', () => {
+  it('says where the agent is in its chain, its own endpoint, whether it returns and switches', () => {
+    expect(fallbackView(undefined, false)).toBeNull();
+    expect(fallbackView({ to: [free] }, false)).toEqual({ step: null, steps: 1, back: 'stay' });
+    expect(fallbackView(switched, true)).toEqual({
+      step: 0,
+      steps: 2,
+      from: own,
+      back: 'return',
+      switching: true,
+    });
+    // Bounded: no text, native id or path; nothing it doesn't name.
+    expect(FallbackViewSchema.parse(fallbackView(switched, false))).toEqual({
+      step: 0,
+      steps: 2,
+      from: own,
+      back: 'return',
+    });
+    expect(() => FallbackViewSchema.parse({ step: 0, steps: 4, back: 'stay' })).toThrow();
   });
 });

@@ -73,7 +73,6 @@ function setup(nodes: CanvasNode[], extra: Partial<RunIO> = {}) {
       events.push(`hold:${id}:${String(held)}`);
     },
     tell: () => undefined,
-    connect: () => undefined,
     later: () => () => undefined,
     now: () => 1234,
     ...extra,
