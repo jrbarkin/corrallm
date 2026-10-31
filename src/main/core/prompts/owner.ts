@@ -25,13 +25,15 @@ import {
   PromptId,
   PromptReplyAnswer,
 } from '../../../shared/model/prompts';
-import type { AdapterPrompt, PromptAnswer, PromptSubject } from '../../../shared/model/prompts';
+import type { AdapterPrompt, PromptAnswer } from '../../../shared/model/prompts';
+import { subjectTypeOf } from '../../../shared/model/settled';
+import type { SettledDecision } from '../../../shared/model/settled';
 import type { PromptAnswers } from '../../sessions/connector';
 import type { PromptOrigin, PromptSink } from '../../sessions/manager';
 import { linkTarget } from '../../url-policy';
 import { OpFailure } from '../call';
 import type { OpContext } from '../call';
-import { decidedOf, deciding, landed, withdrawnDecision } from '../decisions';
+import { decidedOf, decisionWords, deciding, landed, withdrawnDecision } from '../decisions';
 import type { MessageStore } from '../delivery/messages';
 import { nameOf, partyText } from '../parties';
 import { notFound } from '../replies';
@@ -66,7 +68,10 @@ import { classify } from './classify';
  *   prompts are never persisted, so a core started again has none.
  * - Answering never starts or resumes a session: it holds no way to.
  * - Who decided is recorded in the core's words from kind, subject type, hint and the agent's name
- *   (decisions.ts), never a title, label, command, path, plan, feedback, answer or value.
+ *   (decisions.ts), never a title, label, command, path, plan, feedback, answer or value; and what
+ *   was decided beside them, typed (`settled`, B13 §9.2 C9: the prompt's Needs item, id, kind and
+ *   subject's type, a choice's value and hint, how many questions were answered, a form's action,
+ *   whether an answer was secret), never changed after, a crash's unresolved record included.
  * - Not waiting (B13 §9.2 C7): a terminal's wait raised from its CLI's report alone (no subject,
  *   choice, question or plan: no hook described it, nor is it the core's stand-in for one it
  *   couldn't show) offers the core's own choice, yours alone. Replied to, it is settled dismissed
@@ -183,18 +188,6 @@ const NOT_WAITING_CHOICE: NeedChoice = {
   value: NOT_WAITING,
   label: 'Not waiting',
   humanOnly: 'Only you can tell, from its terminal, that its CLI isn’t waiting for you.',
-};
-
-/** What a decision's record calls a subject, by its type. */
-const SUBJECTS: Readonly<Record<string, string>> = {
-  command: 'command',
-  fileChange: 'file change',
-  mcpTool: 'MCP tool call',
-  network: 'network access',
-  permissions: 'request for permissions',
-  tool: 'tool call',
-  trust: 'request to trust its folder',
-  consent: 'request for consent',
 };
 
 export class PromptOwner implements PromptSink {
@@ -381,10 +374,13 @@ export class PromptOwner implements PromptSink {
     // Reserved, with nothing awaited since it was checked: a second reply now is a conflict.
     occurrence.state = { at: 'answering', by: ctx.by };
     const name = nameOf(open.nodes, occurrence.agent);
+    const settled = settledOf(to, occurrence.prompt, answer);
+    const link = occurrence.prompt.kind === 'form' && 'url' in occurrence.prompt.form;
     const record = deciding(open.messages, {
       need: to,
       by: ctx.by,
-      words: `${who(open.nodes, ctx.by)} ${decisionWords(name, occurrence.prompt, answer)}.`,
+      words: `${who(open.nodes, ctx.by)} ${decisionWords(name, settled, link)}.`,
+      settled,
     });
     // Recorded as being made, on disk, before its session is told anything.
     try {
@@ -863,47 +859,38 @@ function who(nodes: readonly NodeLike[], by: PartyId): string {
 }
 
 /**
- * What an answer decided, in the core's words from the prompt's kind, its subject's type, the
- * choice's hint and the agent's name: never a title, label, command, path, plan, feedback or value.
+ * What an answer decided, typed and value-free (B13 §9.2 C9): the prompt's Needs item `need`, its
+ * id, kind and subject's type where the protocol names it, and what was chosen (a choice's value
+ * and hint, how many questions were answered, a form's action), with whether an answer was secret:
+ * never a title, label, command, path, plan, feedback, answer or value.
  */
-function decisionWords(name: string, prompt: Prompt, answer: PromptAnswer): string {
+function settledOf(need: string, prompt: Prompt, answer: PromptAnswer): SettledDecision {
+  const subject = prompt.kind === 'approval' ? subjectTypeOf(prompt.subject) : undefined;
+  const about = { id: prompt.id, kind: prompt.kind, ...(subject === undefined ? {} : { subject }) };
   switch (prompt.kind) {
     case 'approval':
     case 'plan': {
-      const chosen = answer.kind === 'choice' ? answer.value : undefined;
-      const hint = prompt.choices.find(({ value }) => value === chosen)?.hint;
-      if (prompt.kind === 'plan') {
-        return hint === 'allow_once' || hint === 'allow_always'
-          ? `approved ${name}’s plan`
-          : `asked ${name} to keep planning`;
-      }
-      const what = subjectWords(prompt.subject);
-      switch (hint) {
-        case 'allow_once':
-          return `allowed ${name}’s ${what} once`;
-        case 'allow_always':
-          return `allowed ${name}’s ${what} from now on`;
-        case 'reject_always':
-          return `refused ${name}’s ${what} from now on`;
-        default:
-          return `refused ${name}’s ${what}`;
-      }
+      const value = answer.kind === 'choice' ? answer.value : '';
+      // The answer was checked against the prompt's choices: the hint is the offered one's.
+      const hint = prompt.choices.find((choice) => choice.value === value)?.hint ?? 'reject_once';
+      return { v: 1, need, prompt: about, outcome: { type: 'choice', value, hint } };
     }
-    case 'question': {
-      const count = prompt.questions.length;
-      const secret = prompt.questions.some((question) => question.secret === true);
-      return `answered ${name}’s question${count === 1 ? '' : 's'}${secret ? ' (secret)' : ''}`;
-    }
-    case 'form': {
-      const action = answer.kind === 'form' ? answer.action : 'cancel';
-      const verb =
-        action === 'accept' ? 'accepted' : action === 'decline' ? 'declined' : 'cancelled';
-      return `${verb} ${name}’s ${'url' in prompt.form ? 'link' : 'form'}`;
-    }
+    case 'question':
+      return {
+        v: 1,
+        need,
+        prompt: about,
+        outcome: { type: 'answers', count: prompt.questions.length },
+        ...(prompt.questions.some((question) => question.secret === true)
+          ? { secret: true as const }
+          : {}),
+      };
+    case 'form':
+      return {
+        v: 1,
+        need,
+        prompt: about,
+        outcome: { type: 'form', action: answer.kind === 'form' ? answer.action : 'cancel' },
+      };
   }
-}
-
-function subjectWords(subject: PromptSubject | undefined): string {
-  if (subject === undefined) return 'request';
-  return Object.hasOwn(SUBJECTS, subject.type) ? (SUBJECTS[subject.type] ?? 'request') : 'request';
 }

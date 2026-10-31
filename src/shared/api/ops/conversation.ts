@@ -2,6 +2,7 @@ import { z } from 'zod';
 
 import { MESSAGE_KINDS, MESSAGE_STATES, PARTY_PATTERN } from '../../model/messages';
 import { NEED_KINDS } from '../../model/needs';
+import { SettledDecision } from '../../model/settled';
 import { TURN_REASONS } from '../../session';
 import { define } from '../define';
 import type { OpDef } from '../define';
@@ -51,6 +52,8 @@ export const Message = z.strictObject({
   state: z.enum(MESSAGE_STATES),
   delivery: z.strictObject({ at: z.number(), as: z.string(), attempt: z.int() }).optional(),
   by: Party.optional(),
+  /** A record of a native prompt's decision: what was decided, value-free. Yours alone. */
+  settled: SettledDecision.optional(),
   at: z.number(),
 });
 

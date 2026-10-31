@@ -613,21 +613,56 @@ describe('a session’s prompt', () => {
     expect(records).toEqual([
       expect.objectContaining({
         state: 'withdrawn',
-        body: 'Reviewer’s CLI didn’t take this answer, so it changed nothing: You allowed Reviewer’s Bash: echo hello, once.',
+        body: 'Reviewer’s CLI didn’t take this answer, so it changed nothing: You allowed Reviewer’s tool call once.',
       }),
       expect.objectContaining({
         id: answered.id,
         by: 'you',
         state: 'delivered',
-        body: 'You denied Reviewer’s Bash: echo hello.',
+        body: 'You refused Reviewer’s tool call.',
       }),
     ]);
+    // Never what it would run (B13 C9): no command, tool input or feedback in a record.
+    for (const value of ['echo hello', 'Bash', 'other script']) {
+      expect(JSON.stringify(records)).not.toContain(value);
+    }
     expect(
       await call(core, 'reply', { to: prompt.id, answer: { permission: 'once' } }),
     ).toMatchObject({
       ok: false,
-      error: { code: 'conflict', sentence: expect.stringMatching(/You denied/) as string },
+      error: { code: 'conflict', sentence: expect.stringMatching(/You refused/) as string },
     });
+  });
+
+  it('records a plan’s or questions’ answer in the core’s words, never the mode, the words or the answers given', async () => {
+    const { core } = await start();
+    await ok(core, 'message', { to: 'b', body: '/plan the cleanup' });
+    const plan = await waitingFor(core, isPrompt('b'));
+    await ok(core, 'reply', {
+      to: plan.id,
+      answer: { plan: { approve: false, feedback: 'Keep private-revise-words' } },
+    });
+    await ok(core, 'message', { to: 'b', body: '/plan it again' });
+    const again = await waitingFor(core, (item) => isPrompt('b')(item) && item.id !== plan.id);
+    await ok(core, 'reply', {
+      to: again.id,
+      answer: { plan: { approve: true, mode: 'acceptEdits' } },
+    });
+    await ok(core, 'message', { to: 'b', body: '/question' });
+    const asked = await waitingFor(
+      core,
+      (item) => isPrompt('b')(item) && ![plan.id, again.id].includes(item.id),
+    );
+    await ok(core, 'reply', { to: asked.id, answer: { answers: { '0': 'Yes' } } });
+    const records = (await yours(core)).filter((message) => message.kind === 'settled');
+    expect(records.map(({ body }) => body)).toEqual([
+      'You asked Reviewer to keep planning.',
+      'You approved Reviewer’s plan.',
+      'You answered Reviewer’s question.',
+    ]);
+    for (const value of ['private-revise-words', 'acceptEdits', 'Yes', 'Read the code']) {
+      expect(JSON.stringify(records)).not.toContain(value);
+    }
   });
 
   it('is never answered for a later session that asks again by the same native id', async () => {
@@ -702,7 +737,7 @@ describe('a session’s prompt', () => {
     await core.engines.canvas(CANVAS)?.journal();
     expect(everythingOnDisk()).not.toContain(secret);
     expect((await yours(core)).find((message) => message.kind === 'settled')?.body).toBe(
-      'You accepted the tracker MCP server’s request for Reviewer.',
+      'You accepted Reviewer’s form.',
     );
   });
 });

@@ -12,7 +12,14 @@ import type { SessionManager } from '../sessions/manager';
 import type { PromptOwner } from './prompts/owner';
 import { OpFailure } from './call';
 import type { OpContext } from './call';
-import { decided, decidedOf, deciding, landed, withdrawnDecision } from './decisions';
+import {
+  decided,
+  decidedOf,
+  decisionWords,
+  deciding,
+  landed,
+  withdrawnDecision,
+} from './decisions';
 import type { Engines, OpenCanvas } from './engines';
 import { needsInput } from './engines';
 import { nameOf, partyText, pausesText, RELEASES } from './parties';
@@ -52,7 +59,9 @@ import type { Answer, ReplyHandler, ReplyResult } from './replies';
  *   took it; one the CLI refused still waits, its record withdrawn. A crash in between leaves the
  *   record unresolved, never answered again.
  * - No record holds what was answered: no words, values, answers or feedback (a secret is never
- *   written), only what kind of answer it was.
+ *   written), only what kind of answer it was. A prompt's is worded as the owner words one
+ *   (decisions.ts' decisionWords: B13 §9.2 C9), from its kind, what was chosen and the agent's name,
+ *   never its tool's input, its plan's mode, its server or anything else the CLI said.
  */
 
 export interface RunRepliesDeps {
@@ -599,20 +608,47 @@ function chose(item: NeedsItem, answer: Answer): string {
   return `answered “${item.title}”: ${String(label)}`;
 }
 
-/** What a prompt's answer was, in words, never its values: "allowed Builder’s Bash: npm test once". */
+/**
+ * What a prompt's answer was, in the core's words (decisionWords, B13 §9.2 C9): a permission as a
+ * tool call allowed once or from now on, or refused; a plan approved or kept planning; questions
+ * answered; a form accepted, declined or cancelled. Never its tool's input, its mode, its server,
+ * the words or the values given.
+ */
 function answered(name: string, prompt: Prompt, given: SessionAnswer): string {
   switch (given.kind) {
     case 'permission':
-      return prompt.kind === 'permission'
-        ? `${given.answer === 'deny' ? 'denied' : 'allowed'} ${name}’s ${prompt.tool}${prompt.summary.trim() === '' ? '' : `: ${prompt.summary.trim()}`}${given.answer === 'always' ? ', always' : given.answer === 'once' ? ', once' : ''}`
-        : `answered ${name}’s prompt`;
+      return decisionWords(name, {
+        prompt: { kind: 'approval', subject: 'tool' },
+        outcome: {
+          type: 'choice',
+          value: given.answer,
+          hint:
+            given.answer === 'once'
+              ? 'allow_once'
+              : given.answer === 'always'
+                ? 'allow_always'
+                : 'reject_once',
+        },
+      });
     case 'question':
-      return `answered ${name}’s question${given.answers.length === 1 ? '' : 's'}`;
+      return decisionWords(name, {
+        prompt: { kind: 'question' },
+        outcome: { type: 'answers', count: Math.max(given.answers.length, 1) },
+      });
     case 'plan':
-      return given.answer.approve
-        ? `approved ${name}’s plan, to carry it out in ${given.answer.mode}`
-        : `asked ${name} to revise its plan`;
+      return decisionWords(name, {
+        prompt: { kind: 'plan' },
+        outcome: {
+          type: 'choice',
+          value: given.answer.approve ? 'approve' : 'revise',
+          hint: given.answer.approve ? 'allow_once' : 'reject_once',
+        },
+      });
     case 'elicitation':
-      return `${given.action === 'accept' ? 'accepted' : given.action === 'decline' ? 'declined' : 'cancelled'} ${prompt.kind === 'elicitation' ? `the ${prompt.server} MCP server’s request` : 'a request'} for ${name}`;
+      return decisionWords(
+        name,
+        { prompt: { kind: 'form' }, outcome: { type: 'form', action: given.action } },
+        prompt.kind === 'elicitation' && prompt.url !== undefined,
+      );
   }
 }

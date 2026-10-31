@@ -8,6 +8,7 @@ import { STORE_BYTES, STORE_SETTLED_PER_PARTY } from '../../../shared/api/limits
 import type { CanvasId } from '../../../shared/canvas';
 import { MESSAGE_KINDS, MESSAGE_STATES } from '../../../shared/model/messages';
 import type { Message } from '../../../shared/model/messages';
+import { SettledDecision } from '../../../shared/model/settled';
 import { CanvasMemory } from '../../memory';
 import { STORE_FILE } from '../store/open';
 import { settleRestored } from '../store/restored';
@@ -344,6 +345,72 @@ describe('the message store', () => {
     expect(again.resent(original.id)).toBe(true);
     expect(again.resent(resent.id)).toBe(false);
     expect(resent.replyTo).toBeUndefined();
+  });
+
+  it('keeps a record’s settled decision with it across a restart, never changing it after', async () => {
+    const messages = await store();
+    const settled = SettledDecision.parse({
+      v: 1,
+      need: 'prompt/builder/2/0f1e2d3c-4b5a-4968-8776-655443322110',
+      prompt: { id: '0f1e2d3c-4b5a-4968-8776-655443322110', kind: 'approval', subject: 'tool' },
+      outcome: { type: 'choice', value: 'allow', hint: 'allow_once' },
+    });
+    const record = messages.add({
+      from: 'corrallm',
+      to: 'you',
+      kind: 'settled',
+      origin: 'party',
+      body: 'You allowed Builder’s tool call once.',
+      state: 'delivering',
+      by: 'you',
+      settled,
+    });
+    await messages.durable();
+    messages.update(record.id, { state: 'delivered' });
+    await messages.durable();
+    await restart();
+    const again = await store();
+    expect(again.get(record.id)).toEqual({ ...record, state: 'delivered' });
+    expect(
+      readOnDisk(profile, (disk) =>
+        disk.prepare('SELECT settled FROM message WHERE id = ?').get(record.id),
+      ),
+    ).toEqual({ settled: JSON.stringify(settled) });
+  });
+
+  it('leaves a row whose settled decision it doesn’t read as it is', async () => {
+    const messages = await store();
+    const read = messages.add(draft('you', 'agent:builder'));
+    await messages.durable();
+    // A decision a newer corrallm might keep, and one that would hold a value.
+    for (const [id, settled] of [
+      ['newer', '{"v":2,"need":"prompt/b/1/x"}'] as const,
+      [
+        'valued',
+        JSON.stringify({
+          v: 1,
+          need: 'prompt/b/1/0f1e2d3c-4b5a-4968-8776-655443322110',
+          prompt: { id: '0f1e2d3c-4b5a-4968-8776-655443322110', kind: 'approval' },
+          outcome: { type: 'choice', value: 'allow', hint: 'allow_once', label: 'Run rm -rf' },
+        }),
+      ] as const,
+    ]) {
+      database.tx(() =>
+        database
+          .prepare(
+            `INSERT INTO message (id, canvas_id, from_party, to_party, kind, origin, body, state,
+               sent_at, settled)
+             VALUES (?, ?, 'corrallm', 'you', 'settled', 'party', 'Decided', 'delivered', 1, ?)`,
+          )
+          .run(id, CANVAS, settled),
+      );
+    }
+    await restart();
+    const again = await store();
+    expect(again.all().map(({ id }) => id)).toEqual([read.id]);
+    again.add(draft('outside:orchestrator', 'agent:builder'));
+    await again.durable();
+    expect(rows().map(({ id }) => id)).toEqual(expect.arrayContaining(['newer', 'valued']));
   });
 
   it('leaves a row whose display it doesn’t know as it is', async () => {

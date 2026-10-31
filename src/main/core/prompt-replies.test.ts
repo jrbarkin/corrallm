@@ -261,6 +261,40 @@ describe('a prompt the core owns', () => {
     expect(native.sessions[0]?.answered).toHaveLength(1);
   });
 
+  it('records what was decided, typed and value-free, read by you alone, across a restart too', async () => {
+    const native = raising([approval]);
+    const core = await start(native.connector);
+    await ok(core, 'message', { to: 'b', body: 'Clean up' }, ORCHESTRATOR);
+    const [asked] = await prompts(core);
+    const id = asked?.id ?? '';
+    await ok(core, 'reply', { to: id, answer: { choice: 'always' } });
+    const decided = {
+      v: 1,
+      need: id,
+      prompt: { id: id.split('/').at(-1), kind: 'approval', subject: 'command' },
+      outcome: { type: 'choice', value: 'always', hint: 'allow_always' },
+    };
+    expect(await records(core)).toEqual([
+      expect.objectContaining({
+        body: 'You allowed Reviewer’s command from now on.',
+        settled: decided,
+      }),
+    ]);
+    // A token reads no record of yours, and nothing of what was decided.
+    for (const read of [
+      await ok(core, 'messages', {}, ORCHESTRATOR),
+      await core.call('wait', { timeoutSeconds: 0 }, ORCHESTRATOR),
+    ]) {
+      expect(JSON.stringify(read)).not.toContain('allow_always');
+      expect(JSON.stringify(read)).not.toContain('settled');
+    }
+    await core.close();
+    const again = await start(raising([]).connector);
+    expect(await records(again)).toEqual([
+      expect.objectContaining({ state: 'delivered', settled: decided }),
+    ]);
+  });
+
   it('is never answered by a token, nor by its own agent, nor with what it doesn’t offer', async () => {
     const native = raising([approval]);
     const core = await start(native.connector);

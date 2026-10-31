@@ -1084,3 +1084,165 @@ describe('answers', () => {
     expect(one.answered).toHaveLength(1);
   });
 });
+
+describe('the record of a decision (B13 C9)', () => {
+  /** The PromptId a Needs id ends with. */
+  const promptOf = (need: string) => need.split('/').at(-1);
+  /** Every text a record holds, as one string: what must never hold a value. */
+  const recorded = () => JSON.stringify(settledRecords());
+
+  it('records what was decided, typed and value-free: the prompt’s kind, its subject’s type, the choice’s value and hint', async () => {
+    const one = handle();
+    raise(origin(7, one), {
+      ...approval,
+      choices: [
+        { ...yes, label: 'Yes, run private-label-text' },
+        no,
+        { ...tell, label: 'No, private-feedback-label' },
+      ],
+    });
+    const id = only();
+    await answer(id, { choice: 'tell', feedback: 'Use private-feedback-words' });
+    const [record] = settledRecords();
+    expect(record?.settled).toEqual({
+      v: 1,
+      need: id,
+      prompt: { id: promptOf(id), kind: 'approval', subject: 'command' },
+      outcome: { type: 'choice', value: 'tell', hint: 'reject_once' },
+    });
+    for (const value of [
+      'private-label-text',
+      'private-feedback-label',
+      'private-feedback-words',
+      'private-command-text',
+      '/work/app',
+      'Run rm',
+      'build folder',
+    ]) {
+      expect(recorded()).not.toContain(value);
+    }
+  });
+
+  it('records a plan’s choice, how many questions were answered, and a form’s action, never a value', async () => {
+    const one = handle();
+    raise(origin(7, one), {
+      kind: 'plan',
+      title: 'Approve the plan?',
+      plan: '1. private-plan-text',
+      answerIn: 'api',
+      choices: [{ ...yes, effects: { mode: 'auto' } }, no],
+    });
+    await answer(only(), { choice: 'yes' });
+    raise(
+      origin(7, one),
+      {
+        ...question,
+        questions: [
+          question.questions[0],
+          { ...question.questions[0], id: 'q2', text: 'Which size?' },
+        ],
+      },
+      KEY2,
+    );
+    await answer(only(), {
+      answers: { q1: { text: 'private-answer-text' }, q2: { picked: ['Blue'] } },
+    });
+    raise(
+      origin(7, one),
+      {
+        kind: 'form',
+        title: 'Your key, from private-form-message',
+        server: 'tracker',
+        answerIn: 'api',
+        form: {
+          schema: {
+            type: 'object',
+            properties: { key: { type: 'string', title: 'Key' } },
+            required: ['key'],
+            additionalProperties: false,
+          },
+        },
+      },
+      '3c9e4b5d-6f70-4a82-9d3e-4f5a6b7c8d9e',
+    );
+    await answer(only(), { form: { action: 'accept', values: { key: 'private-form-value' } } });
+    expect(settledRecords().map(({ settled }) => [settled?.prompt.kind, settled?.outcome])).toEqual(
+      [
+        ['plan', { type: 'choice', value: 'yes', hint: 'allow_once' }],
+        ['question', { type: 'answers', count: 2 }],
+        ['form', { type: 'form', action: 'accept' }],
+      ],
+    );
+    expect(settledRecords().map(({ body }) => body)).toEqual([
+      'You approved Reviewer’s plan.',
+      'You answered Reviewer’s questions.',
+      'You accepted Reviewer’s form.',
+    ]);
+    for (const value of [
+      'private-plan-text',
+      'private-answer-text',
+      'Blue',
+      'private-form-message',
+      'private-form-value',
+      'tracker',
+    ]) {
+      expect(recorded()).not.toContain(value);
+    }
+  });
+
+  it('marks a secret answer secret, saying only so', async () => {
+    const one = handle();
+    raise(origin(7, one), {
+      ...question,
+      questions: [{ ...question.questions[0], secret: true }],
+    });
+    await answer(only(), { answers: { q1: { text: 'private-secret-answer' } } });
+    const [record] = settledRecords();
+    expect(record?.settled).toMatchObject({ outcome: { type: 'answers', count: 1 }, secret: true });
+    expect(record?.body).toBe('You answered Reviewer’s question (secret).');
+    expect(recorded()).not.toContain('private-secret-answer');
+  });
+
+  it('records a subject’s type only where it is one of the protocol’s own, never an extension’s', async () => {
+    const one = handle();
+    raise(origin(7, one), {
+      ...approval,
+      subject: { type: '_private-extension-type', detail: 'private-extension-text' },
+    });
+    await answer(only(), { choice: 'yes' });
+    const [record] = settledRecords();
+    expect(record?.settled?.prompt).toEqual({ id: expect.any(String) as string, kind: 'approval' });
+    expect(record?.body).toBe('You allowed Reviewer’s request once.');
+    expect(recorded()).not.toContain('private-extension');
+  });
+
+  it('keeps what a crash cut off decided, typed, as the canvas loads again unresolved', async () => {
+    const one = handle();
+    raise(origin(7, one), approval);
+    const id = only();
+    const durable = messages.durable.bind(messages);
+    vi.spyOn(messages, 'durable')
+      .mockImplementationOnce(() => durable())
+      .mockImplementation(() => new Promise<void>(() => undefined));
+    void answer(id, { choice: 'no' });
+    await vi.waitFor(() => {
+      expect(one.answered).toHaveLength(1);
+    });
+    vi.restoreAllMocks();
+    await database.close();
+    database = await openTestStore(profile);
+    messages = await loadMessages();
+    recoverDecisions(messages);
+    expect(settledRecords()).toEqual([
+      expect.objectContaining({
+        state: 'unresolved',
+        settled: {
+          v: 1,
+          need: id,
+          prompt: { id: promptOf(id), kind: 'approval', subject: 'command' },
+          outcome: { type: 'choice', value: 'no', hint: 'reject_once' },
+        },
+      }),
+    ]);
+  });
+});
