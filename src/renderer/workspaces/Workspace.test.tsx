@@ -39,7 +39,7 @@ const item: ResultOf<'worktree.list'>['items'][number] = {
 async function setup(next = item) {
   const core = fakeCore();
   cores.push(core);
-  core.snapshot(`worktrees:${canvas}`, { items: [next], kept: [] });
+  core.snapshot(`worktrees:${canvas}`, { items: [next], kept: [], into: null });
   core.snapshot(`needs:${canvas}`, { items: [] });
   const onNeed = vi.fn();
   await renderReady(
@@ -85,7 +85,11 @@ it('does not call a worktree failed while its setup card is still being prepared
   expect(mark?.textContent).not.toContain('Failed');
   expect(mark?.querySelector('button')).toBeNull();
   act(() => {
-    core.change({ topic: `worktrees:${canvas}`, rev: 1, replace: { items: [item], kept: [] } });
+    core.change({
+      topic: `worktrees:${canvas}`,
+      rev: 1,
+      replace: { items: [item], kept: [], into: null },
+    });
   });
   expect(document.querySelector('.workspace-badge')?.textContent).toContain('Setup');
   act(() => {
@@ -97,6 +101,7 @@ it('does not call a worktree failed while its setup card is still being prepared
           { ...item, state: 'error', need: undefined, setup: undefined, error: 'git-timeout' },
         ],
         kept: [],
+        into: null,
       },
     });
   });
@@ -120,6 +125,7 @@ it('replaces pushed workspace state and retries a missing workspace with exactly
           },
         ],
         kept: [],
+        into: null,
       },
     });
   });
@@ -152,6 +158,7 @@ it('shows setup completion briefly once per shared tree, never on an already-rea
           },
         })),
         kept: [],
+        into: null,
       },
     });
   });
@@ -208,7 +215,11 @@ it('does not announce setup already complete when subscribing, or a skipped setu
   });
   expect(screen.queryByText('Worktree setup finished.')).toBeNull();
   act(() => {
-    core.change({ topic: `worktrees:${canvas}`, rev: 1, replace: { items: [item], kept: [] } });
+    core.change({
+      topic: `worktrees:${canvas}`,
+      rev: 1,
+      replace: { items: [item], kept: [], into: null },
+    });
   });
   act(() => {
     core.change({
@@ -227,6 +238,7 @@ it('does not announce setup already complete when subscribing, or a skipped setu
           },
         ],
         kept: [],
+        into: null,
       },
     });
   });
@@ -298,7 +310,7 @@ it.each(['retained', 'removing'] as const)(
       location: '/kept/tree',
       createdAt: 1,
     };
-    core.snapshot(`worktrees:${canvas}`, { items: [], kept: [kept] });
+    core.snapshot(`worktrees:${canvas}`, { items: [], kept: [kept], into: null });
     core.snapshot(`needs:${canvas}`, { items: [] });
     core.reply('worktree.remove', () => {
       core.change({

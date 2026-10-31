@@ -63,6 +63,7 @@ it('shows topic workspace attention beside Idle, glows the dock, and opens the e
           },
         ],
         kept: [],
+        into: null,
       },
     });
     fake.change({

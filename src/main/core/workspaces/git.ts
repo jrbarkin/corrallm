@@ -25,7 +25,7 @@ import type { TemporaryIndex } from './merge-index';
  * - The environment is the agents' (their PATH and home), with every GIT_ variable removed, so
  *   none redirects a call (GIT_DIR, GIT_WORK_TREE, GIT_INDEX_FILE...) or configures it
  *   (GIT_CONFIG_PARAMETERS, GIT_CONFIG_COUNT...), then no prompt, SAFE_GIT_ENV (no lazy fetch, no
- *   transport whatever the repository allows: GIT_ALLOW_PROTOCOL), and C messages.
+ *   transport whatever the repository allows: GIT_ALLOW_PROTOCOL), no graft file, and C messages.
  * - Each call is bounded in time and output, and runs as a child the core owns (core/children.ts,
  *   through sessions/process.ts): recorded before it runs, its whole process group ended if it
  *   takes too long or says too much, and refused once the core is closing.
@@ -221,6 +221,8 @@ export function gitEnvironment(
   return {
     ...Object.fromEntries(kept),
     GIT_TERMINAL_PROMPT: '0',
+    // An executable is a file: no graft file can exist below it, on any platform.
+    GIT_GRAFT_FILE: path.join(process.execPath, 'no-grafts'),
     ...SAFE_GIT_ENV,
     LC_ALL: 'C',
   };
