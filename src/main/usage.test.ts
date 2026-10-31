@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { UsageState } from '../shared/usage';
 import { UsageReadings } from './usage';
+import * as wholeFile from './whole-file';
 
 /** Whether a file's permissions can keep its owner from reading it: not on Windows, nor as root. */
 const CAN_DENY = process.platform !== 'win32' && process.getuid?.() !== 0;
@@ -67,6 +68,24 @@ describe('UsageReadings', () => {
     expect(atExit).toMatchObject({ exhausted: { codex: { resetsAt: START + HOUR } } });
     const restarted = await open();
     expect(restarted.exhausted('codex')).toBe(START + HOUR);
+  });
+
+  it('says a hold is on disk only once a write holding it is (B11a C3: only that switches)', async () => {
+    const write = vi.spyOn(wholeFile, 'writeWhole').mockRejectedValueOnce(new Error('disk full'));
+    await expect(readings.exhaust('codex', START + HOUR)).rejects.toThrow('disk full');
+    // It holds all the same, until the core stops; but nothing durable says so.
+    expect(readings.exhausted('codex')).toBe(START + HOUR);
+    expect(readings.durably('codex')).toBeUndefined();
+    write.mockRestore();
+    // The next write holding it, of any kind, puts it on disk.
+    readings.take('claude-code', fiveHour(10));
+    await readings.flush();
+    expect(readings.durably('codex')).toBe(START + HOUR);
+    expect(readings.durably('claude-code')).toBeUndefined();
+    // One read from its file was on disk; one that lifted holds nothing.
+    expect((await open()).durably('codex')).toBe(START + HOUR);
+    now = START + HOUR;
+    expect(readings.durably('codex')).toBeUndefined();
   });
 
   it('remembers a backend’s exhausted limit across restarts, independently of its rule', async () => {

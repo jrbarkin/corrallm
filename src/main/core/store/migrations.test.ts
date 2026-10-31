@@ -227,6 +227,16 @@ describe('the schema', () => {
     expect(() =>
       connection.prepare("UPDATE node SET settings = 'not JSON' WHERE id = 'a'").run(),
     ).toThrow(/CHECK constraint failed/);
+    // B11a: an agent's fallback chain and handoff settings, JSON, never a frame's.
+    for (const column of ['fallback', 'handoff']) {
+      expect(() =>
+        connection.prepare(`UPDATE node SET ${column} = '{}' WHERE id = 'team'`).run(),
+      ).toThrow(/CHECK constraint failed/);
+      expect(() =>
+        connection.prepare(`UPDATE node SET ${column} = 'not JSON' WHERE id = 'a'`).run(),
+      ).toThrow(/CHECK constraint failed/);
+      connection.prepare(`UPDATE node SET ${column} = '{}' WHERE id = 'a'`).run();
+    }
     addItem('a', 'i');
     expect(() =>
       connection.prepare("UPDATE queue_item SET body = 'not JSON' WHERE id = 'i'").run(),
@@ -1499,12 +1509,29 @@ describe('migration 5', () => {
     const rowsOf = (table: string) => connection.prepare(`SELECT * FROM ${table}`).all();
     const before = Object.fromEntries(kept.map((table) => [table, rowsOf(table)]));
 
-    migrate(connection);
+    migrate(connection, MIGRATIONS.slice(0, 5));
 
     expect(schemaOf(connection)).toBe(5);
     expect(minReaderOf(connection)).toBe(5);
     expect(Object.fromEntries(kept.map((table) => [table, rowsOf(table)]))).toEqual(before);
     expect(count('merge_job')).toBe(0);
     addMergeJob(MERGE_JOB);
+  });
+});
+
+describe('migration 6', () => {
+  it('gives agents their fallback chain and handoff settings, keeping every row, which a schema-5 corrallm may no longer open', () => {
+    migrate(connection, MIGRATIONS.slice(0, 5));
+    addCanvas();
+    addDocument();
+    addNode('team', 'frame');
+    addNode('a');
+    const before = connection.prepare('SELECT * FROM node ORDER BY id').all();
+    migrate(connection);
+    expect(schemaOf(connection)).toBe(6);
+    expect(minReaderOf(connection)).toBe(6);
+    expect(connection.prepare('SELECT * FROM node ORDER BY id').all()).toEqual(
+      before.map((row) => ({ ...row, fallback: null, handoff: null })),
+    );
   });
 });

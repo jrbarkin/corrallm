@@ -49,7 +49,6 @@ function setup(nodes: AgentNode[], overrides: Partial<RunIO> = {}) {
       return () => undefined;
     },
     tell: () => undefined,
-    connect: vi.fn(),
     later: () => () => undefined,
     now: () => 1,
     mailbox: { record, settle },

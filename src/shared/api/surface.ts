@@ -304,6 +304,13 @@ export const SURFACE = {
     rules: ['connection'],
     drains: 'agents',
   },
+  // B11a C1, C11: the chain is yours alone (D9), on R8's guard; changing it restarts nothing.
+  'agent.setFallback': {
+    access: Y,
+    kind: 'doc',
+    scope: 'canvas',
+    rules: ['connection'],
+  },
   'agent.setSettings': {
     access: L,
     kind: 'doc',

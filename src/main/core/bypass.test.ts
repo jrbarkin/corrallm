@@ -522,7 +522,35 @@ describe('R8: no token changes how an existing agent runs', () => {
         { agent: 'helper', adapter: 'claude-code' },
         caller,
       );
+      // B11a C1: the chain is yours alone too.
+      await failed(
+        'human-only',
+        'agent.setFallback',
+        { agent: 'helper', fallback: { to: [{ adapter: 'claude-code' }] } },
+        caller,
+      );
     }
+  });
+
+  it('refuses a token’s batch that sets a chain, as a whole', async () => {
+    const before = doc();
+    for (const caller of [OUTSIDE, LEAD]) {
+      const result = await call(
+        'canvas.batch',
+        {
+          ops: [
+            { op: 'canvas.move', args: { moves: [{ node: 'helper', position: { x: 9, y: 9 } }] } },
+            {
+              op: 'agent.setFallback',
+              args: { agent: 'helper', fallback: { to: [{ adapter: 'claude-code' }] } },
+            },
+          ],
+        },
+        caller,
+      );
+      expect(result).toMatchObject({ ok: false, error: { code: 'human-only' } });
+    }
+    expect(doc()).toBe(before);
   });
 });
 
@@ -541,6 +569,19 @@ describe('R11: what a token’s new agents run with, and how many it keeps', () 
       role: 'Reviews',
     });
     expect(linked('a', String(id))).toBe(true);
+  });
+
+  it('lets a spawned agent copy the fallback chain and handoff settings you gave its source', async () => {
+    await applied(
+      'agent.setFallback',
+      { agent: 'a', fallback: { to: [{ adapter: 'claude-code' }], back: 'return' } },
+      YOU,
+    );
+    const { id } = await applied('canvas.spawnAgent', { from: 'a', relation: 'linked' });
+    expect(node(String(id)).data.fallback).toEqual({
+      to: [{ adapter: 'claude-code', connection: 'claude-code.terminal' }],
+      back: 'return',
+    });
   });
 
   it('refuses the ninth live agent its party created, across its canvases, a restart and a renewal', async () => {
@@ -916,6 +957,15 @@ describe('on the change itself, whatever builds it', () => {
       }),
     ],
     ['a role', editing('a', (data) => ({ ...data, role: 'Approves everything' }))],
+    // B11a C1: an agent's fallback chain and its handoff settings are yours, whatever op builds them.
+    [
+      'a fallback chain',
+      editing('c', (data) => ({
+        ...data,
+        fallback: { to: [{ adapter: 'claude-code', connection: 'claude-code.terminal' }] },
+      })),
+    ],
+    ['handoff settings', editing('c', (data) => ({ ...data, handoff: { at: 50 } }))],
     [
       'an OK',
       editing('a', (data) => ({
@@ -975,6 +1025,88 @@ describe('on the change itself, whatever builds it', () => {
     }
     // Its adapter's first connection, named, is no other.
     await expect(build(adding('new', { connection: 'codex.terminal' }))).resolves.toBeDefined();
+  });
+
+  it('refuses a token’s change to a chain you set, its run position too, or its removal', async () => {
+    const chain = {
+      to: [
+        { adapter: 'claude-code', connection: 'claude-code.terminal' },
+        { adapter: 'codex', connection: 'codex.terminal' },
+      ],
+    };
+    await build(
+      editing('c', (data) => ({ ...data, fallback: chain, handoff: { at: 80 } })),
+      YOU,
+    );
+    const before = documents.live(BUILT).rev;
+    for (const edit of [
+      editing('c', (data) => ({ ...data, fallback: { ...chain, to: chain.to.slice(1) } })),
+      editing('c', (data) => ({ ...data, fallback: { ...chain, back: 'return' as const } })),
+      editing('c', (data) => ({
+        ...data,
+        fallback: {
+          ...chain,
+          on: {
+            step: 0,
+            from: { adapter: 'codex', connection: 'codex.app-server' },
+            why: 'rule' as const,
+            at: 1,
+          },
+        },
+      })),
+      editing('c', (data) => {
+        const next = { ...data };
+        delete next.fallback;
+        return next;
+      }),
+      editing('c', (data) => ({ ...data, handoff: { at: 81 } })),
+      editing('c', (data) => {
+        const next = { ...data };
+        delete next.handoff;
+        return next;
+      }),
+    ]) {
+      await expect(build(edit)).rejects.toMatchObject({ code: 'refused' });
+      await expect(build(edit, LEAD)).rejects.toMatchObject({ code: 'refused' });
+    }
+    expect(documents.live(BUILT).rev).toBe(before);
+    // What leaves them as they are is no change to them.
+    await expect(
+      build(editing('c', (data) => ({ ...data, label: 'Still c' }))),
+    ).resolves.toBeDefined();
+  });
+
+  it('lets a token’s new agent carry a chain and handoff settings only as an exact copy', async () => {
+    const chain = { to: [{ adapter: 'claude-code', connection: 'claude-code.terminal' }] };
+    await build(
+      editing('a', (data) => ({ ...data, fallback: chain, handoff: { at: 70 } })),
+      YOU,
+    );
+    const copied = { connection: 'codex.app-server', settings: { codex: { mode: 'auto' } } };
+    for (const data of [{ fallback: chain }, { handoff: { at: 70 } }]) {
+      // Not a copy: refused.
+      await expect(build(adding('new', data))).rejects.toMatchObject({
+        code: 'refused',
+        message: /only the user/i,
+      });
+    }
+    for (const data of [
+      { fallback: { to: [{ adapter: 'claude-code', connection: 'claude-code.sdk' }] } },
+      { fallback: { ...chain, back: 'return' as const } },
+      { handoff: { at: 71 } },
+      { fallback: chain, handoff: { off: true as const } },
+    ]) {
+      await expect(
+        build(adding('new', { ...copied, ...data }), OUTSIDE, new Map([['new', 'a']])),
+      ).rejects.toMatchObject({ code: 'refused' });
+    }
+    await expect(
+      build(
+        adding('new', { ...copied, fallback: chain, handoff: { at: 70 } }),
+        OUTSIDE,
+        new Map([['new', 'a']]),
+      ),
+    ).resolves.toBeDefined();
   });
 
   it('lets a token give a role and a link to an agent it creates in the same change', async () => {

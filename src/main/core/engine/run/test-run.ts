@@ -1,10 +1,10 @@
-import type { ConnectionId, UsageBackendId } from '../../../../shared/adapter';
+import type { UsageBackendId } from '../../../../shared/adapter';
 import type { CanvasNode } from '../../../../shared/model/canvas';
 import { findItem } from '../../../../shared/model/queue';
 import type { MessageImage, TurnResult } from '../../../../shared/session';
 import type { UsageRule, UsageState, UsageWindows } from '../../../../shared/usage';
 import { TEST_ENGINE } from '../test-engine';
-import type { Refusal, TurnEnd } from './runner';
+import type { Refusal, RunIO, TurnEnd } from './runner';
 import { liveRun } from './test-restore';
 
 /*
@@ -29,6 +29,8 @@ export function setup(
   initial: readonly CanvasNode[],
   results: typeof manual | (() => FixtureResult) = () => true,
   unheard: ReadonlySet<string> = new Set(),
+  /** What else the run is given: B11a's admission and its note on a usage limit, say. */
+  more: Pick<RunIO, 'admit' | 'limitNote'> = {},
 ) {
   let clock = 0;
   let timers: { run: () => void; at: number; native?: boolean }[] = [];
@@ -44,8 +46,6 @@ export function setup(
     origin?: 'user';
   }[] = [];
   const told: [string, string][] = [];
-  /** The connections the run switched agents to, as the user chose. */
-  const connects: [string, ConnectionId][] = [];
   let usage: UsageState = { readings: [], rules: {} };
   const store = liveRun(engine, {
     send: (to, text, done, images, refused, origin) => {
@@ -96,9 +96,6 @@ export function setup(
     tell: (to, text) => {
       told.push([to.id, text]);
     },
-    connect: (to, connection) => {
-      connects.push([to.id, connection]);
-    },
     later: (run, ms) => {
       const timer = { run, at: clock + ms };
       timers.push(timer);
@@ -110,6 +107,7 @@ export function setup(
     now: () => clock,
     usage: () => usage,
     unheard: (to) => unheard.has(to.id),
+    ...more,
   });
   store.update(initial);
   const tick = () => {
@@ -152,7 +150,6 @@ export function setup(
     store,
     sent,
     told,
-    connects,
     tick,
     advance,
     reply,

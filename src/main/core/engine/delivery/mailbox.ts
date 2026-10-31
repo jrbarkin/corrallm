@@ -113,6 +113,11 @@ export class SessionStore {
   readonly #setAside = new Map<string, ReadonlySet<string>>();
   /** A durable conversation replacement gates new sends until the new driver can start. */
   readonly #freshening = new Map<string, Promise<void>>();
+  /**
+   * The agents corrallm switches to another backend now (B11a C4), until each switch settles:
+   * nothing starts a turn or a session of theirs meanwhile.
+   */
+  readonly #switching = new Map<string, Promise<void>>();
   /** A pending interrupt belongs to this turn; duplicate stop callbacks must not send another. */
   readonly #stopping = new Set<string>();
   /** Automation already has a queue row; its prompt and native echoes must not create another. */
@@ -246,6 +251,7 @@ export class SessionStore {
       ...this.#drivers.keys(),
       ...this.#heldQueues,
       ...this.#freshening.keys(),
+      ...this.#switching.keys(),
     ]);
     for (const id of known) if (!wanted.has(id)) this.#forget(id);
     for (const id of this.#connections.keys()) if (!wanted.has(id)) this.#connections.delete(id);
@@ -275,9 +281,29 @@ export class SessionStore {
     }
   }
 
+  /**
+   * Holds whatever would start a turn, or a session, of the agent's until `until` settles: corrallm
+   * switches its backend meanwhile (B11a C4). What it is sent waits in its queue, and goes, in
+   * order, once the switch has settled, on the connection the agent runs then; a turn going on goes
+   * on. A switch abandoned (`until` rejecting) lets the same go where the agent still runs.
+   */
+  switching(agentId: string, until: Promise<unknown>): void {
+    const held: Promise<void> = until
+      .then(
+        () => undefined,
+        () => undefined,
+      )
+      .then(() => {
+        if (this.#switching.get(agentId) !== held) return;
+        this.#switching.delete(agentId);
+        this.#idle(agentId);
+      });
+    this.#switching.set(agentId, held);
+  }
+
   /** Makes sure the agent's session runs, as when its view opens. */
   open(agentId: string): void {
-    if (this.#freshening.has(agentId)) return;
+    if (this.#freshening.has(agentId) || this.#switching.has(agentId)) return;
     if (this.#backend.availability !== undefined) {
       this.#wantOpen.add(agentId);
       this.#available(agentId, () => {
@@ -289,6 +315,7 @@ export class SessionStore {
 
   /** Starts without sending: delivery must inspect the native permissions before its first send. */
   async ready(agentId: string): Promise<void> {
+    await this.#switching.get(agentId);
     await this.#freshening.get(agentId);
     await this.#driver(agentId).ready?.();
   }
@@ -312,6 +339,7 @@ export class SessionStore {
    * ends it first, and resumes its conversation as it starts it. A turn going on ends, interrupted.
    */
   async restart(agentId: string): Promise<void> {
+    await this.#switching.get(agentId);
     if (!this.#drivers.has(agentId)) return;
     const availability = await this.#backend.availability?.(agentId);
     if (availability?.ready === false) throw new Error(availability.sentence);
@@ -336,6 +364,9 @@ export class SessionStore {
    * observed manual rows remain available. Active turns are never interrupted by this action.
    */
   fresh(agentId: string): Promise<void> {
+    // A backend switch, itself a fresh conversation, settles first (B11a C6).
+    const switching = this.#switching.get(agentId);
+    if (switching) return switching.then(() => this.fresh(agentId));
     const existing = this.#freshening.get(agentId);
     if (existing) return existing;
     const connection = this.#connections.get(agentId);
@@ -429,6 +460,7 @@ export class SessionStore {
     if (
       this.#backend.availability === undefined &&
       !this.#freshening.has(agentId) &&
+      !this.#switching.has(agentId) &&
       session.status === 'idle' &&
       (held ? origin !== 'queue' : session.queued.length === 0)
     ) {
@@ -704,6 +736,7 @@ export class SessionStore {
     this.#unavailable?.();
     this.#unavailable = undefined;
     this.#freshening.clear();
+    this.#switching.clear();
     for (const id of [...this.#drivers.keys()]) this.#letGo(id);
     const result: TurnResult = { status: 'cancelled', reason: 'connection-closed' };
     for (const id of Object.keys(this.#sessions)) this.#settleSubmissions(id, result);
@@ -832,7 +865,7 @@ export class SessionStore {
 
   /** The session is idle: its next queued message, if any, starts. */
   #idle(agentId: string, admitted = false): void {
-    if (this.#freshening.has(agentId)) return;
+    if (this.#freshening.has(agentId) || this.#switching.has(agentId)) return;
     const session = this.of(agentId);
     // While the run holds the agent, what the user typed still goes; only the run's own waits,
     // and what a Stop set aside.
@@ -942,6 +975,7 @@ export class SessionStore {
     this.#wantOpen.delete(agentId);
     this.#directoryWords.delete(agentId);
     this.#freshening.delete(agentId);
+    this.#switching.delete(agentId);
     this.#letGo(agentId);
     this.#roles.delete(agentId);
     this.#heldQueues.delete(agentId);

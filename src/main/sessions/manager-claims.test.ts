@@ -515,6 +515,34 @@ describe('conversation claims', () => {
     await sessions.closeEverything();
   });
 
+  it('says when a close it stopped waiting for has really finished (B11a C4’s lane waits)', async () => {
+    const fake = new FakeConnector();
+    const closing = Promise.withResolvers<undefined>();
+    const slow: Connector<SessionMode> = {
+      start: async (spec, host) => {
+        const session = await fake.start(spec, host);
+        session.close = () => closing.promise;
+        return session;
+      },
+    };
+    const sessions = manager({ 'claude-code.sdk': slow });
+    const canvas = newCanvasId();
+    // Nothing closing: at once.
+    await sessions.closed(canvas, 'a');
+    await sessions.start(canvas, 'a', options());
+    await sessions.close(canvas, 'a');
+    expect(sessions.closing(canvas, 'a')).toBe(true);
+    let finished = false;
+    const waiting = sessions.closed(canvas, 'a').then(() => {
+      finished = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(finished).toBe(false);
+    closing.resolve(undefined);
+    await waiting;
+    expect(sessions.closing(canvas, 'a')).toBe(false);
+  });
+
   it('refuses a restart, closing nothing, while another agent’s session holds its conversation', async () => {
     const { connector, closed } = counted();
     const claims = new ConversationClaims();
