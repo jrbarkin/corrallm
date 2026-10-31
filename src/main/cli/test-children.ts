@@ -2,6 +2,8 @@ import { spawn } from 'node:child_process';
 import type { ChildProcessByStdio } from 'node:child_process';
 import type { Readable } from 'node:stream';
 
+import { groupIsGone, hasLiveGroupMembers } from '../core/process-groups';
+import type { LiveGroupMembers } from '../core/process-groups';
 import { TestLifetime } from './test-lifetime';
 import type { TestLifetimeOwner } from './test-lifetime';
 
@@ -11,6 +13,7 @@ export interface ChildSystem {
   spawn: (command: string, args: readonly string[], env: NodeJS.ProcessEnv) => TestChild;
   signal: (pid: number, signal: NodeJS.Signals) => void;
   alive: (pid: number) => boolean;
+  hasLiveMembers?: LiveGroupMembers;
   groups: boolean;
 }
 
@@ -33,6 +36,7 @@ const SYSTEM: ChildSystem = {
       throw error;
     }
   },
+  hasLiveMembers: hasLiveGroupMembers,
   groups: process.platform !== 'win32',
 };
 
@@ -153,7 +157,7 @@ export class TestChildren {
     if (!Number.isSafeInteger(pid) || pid <= 0) throw new Error('Invalid test child pid.');
     const kept = this.#kept(child);
     kept.target = pid;
-    if (this.#closing && this.#system.alive(pid)) this.#signal(pid, 'SIGTERM');
+    if (this.#closing && this.#alive(pid)) this.#signal(pid, 'SIGTERM');
   }
 
   stop(child: TestChild): Promise<number | null> {
@@ -230,7 +234,7 @@ export class TestChildren {
     return (
       kept.isClosed &&
       this.#pids(kept).every(
-        (pid) => !this.#system.alive(pid) && (!this.#system.groups || !this.#system.alive(-pid)),
+        (pid) => !this.#alive(pid) && (!this.#system.groups || !this.#alive(-pid)),
       )
     );
   }
@@ -239,7 +243,16 @@ export class TestChildren {
     try {
       this.#system.signal(pid, signal);
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error;
+      if (!groupIsGone(error, -pid, pid < 0 ? this.#system.hasLiveMembers : undefined)) throw error;
+    }
+  }
+
+  #alive(pid: number): boolean {
+    try {
+      return this.#system.alive(pid);
+    } catch (error) {
+      if (groupIsGone(error, -pid, pid < 0 ? this.#system.hasLiveMembers : undefined)) return false;
+      throw error;
     }
   }
 
@@ -255,12 +268,12 @@ export class TestChildren {
 
   async #stop(kept: Kept): Promise<number | null> {
     const pid = kept.target ?? kept.child.pid;
-    if (pid !== undefined && this.#system.alive(pid)) this.#signal(pid, 'SIGTERM');
+    if (pid !== undefined && this.#alive(pid)) this.#signal(pid, 'SIGTERM');
     if (!(await this.#wait(kept, 5000))) {
       for (const pid of this.#pids(kept)) {
-        if (this.#system.groups && this.#system.alive(-pid)) this.#signal(-pid, 'SIGKILL');
+        if (this.#system.groups && this.#alive(-pid)) this.#signal(-pid, 'SIGKILL');
         // Also covers a terminal server whose shell made a different group, and Windows.
-        if (this.#system.alive(pid)) this.#signal(pid, 'SIGKILL');
+        if (this.#alive(pid)) this.#signal(pid, 'SIGKILL');
       }
       if (!(await this.#wait(kept, 2000)))
         throw new Error(`Test child ${String(pid)} did not exit; its folder was kept.`);
