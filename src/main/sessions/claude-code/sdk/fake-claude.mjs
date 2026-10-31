@@ -1251,6 +1251,13 @@ input.on('line', (line) => {
         permissionMode: mode,
         uuid: randomUUID(),
       });
+    } else if (subtype === 'get_context_usage') {
+      respond(message.request_id, {
+        isAutoCompactEnabled: true,
+        ...(process.env.FAKE_CLAUDE_COMPACT_AT
+          ? { autoCompactThreshold: Number(process.env.FAKE_CLAUDE_COMPACT_AT) }
+          : {}),
+      });
     } else if (subtype === 'get_settings') {
       respond(message.request_id, {
         effective: projectSettings(),

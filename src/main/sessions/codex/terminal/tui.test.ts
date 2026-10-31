@@ -39,10 +39,13 @@ const overrides = (args: readonly string[]) =>
 
 describe('starting Codex', () => {
   it('reads title context only with a known window and preserves the final state', () => {
-    const known = new CodexTui({ trust: async (hooks) => computedTrust(hooks), contextWindow: 475_000 });
+    const known = new CodexTui({
+      trust: (hooks) => Promise.resolve(computedTrust(hooks)),
+      contextWindow: 475_000,
+    });
     expect(known.title('Context 94% used · ⠋ Working')).toEqual({ state: 'working' });
     expect(known.context()).toEqual({ used: 447_220, window: 475_000, compactAt: 450_000 });
-    const unknown = new CodexTui({ trust: async (hooks) => computedTrust(hooks) });
+    const unknown = new CodexTui({ trust: (hooks) => Promise.resolve(computedTrust(hooks)) });
     unknown.title('Context 94% used · Ready');
     expect(unknown.context()).toBeNull();
     known.hook({ hook_event_name: 'SessionStart', model: 'model-a' });

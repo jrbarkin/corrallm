@@ -205,18 +205,67 @@ function turn(fixture: Fixture, index: number): SDKMessage[] {
 }
 
 describe('SdkConnector', () => {
-  it.each([true, false])('reports the SDK compaction point before turn end (reported: %s)', async (reported) => {
-    const { sdk, host, query, events } = connector({ prepare: (query) => { query.contextUsage = reported ? { autoCompactThreshold: 900_000 } : {}; } });
-    const session = await sdk.start(SPEC, host);
-    try {
-      query().say(...turn('tools-and-compact', 0));
-      await vi.waitFor(() => { expect(events.some((one) => one.type === 'end')).toBe(true); });
-      const beforeEnd = events.slice(0, events.findIndex((one) => one.type === 'end'));
-      const usage = beforeEnd.filter((one) => one.type === 'usage').at(-1);
-      expect(usage).toMatchObject({ type: 'usage', usage: { context: { used: 40_035, window: 1_000_000, compactAt: reported ? 900_000 : 967_000 } } });
-      expect(query().getContextUsage).toHaveBeenCalledWith({ detail: 'summary' });
-    } finally { await session.close(); }
-  });
+  it.each([true, false])(
+    'reports the SDK compaction point before turn end (reported: %s)',
+    async (reported) => {
+      const { sdk, host, query, events } = connector({
+        prepare: (query) => {
+          query.contextUsage = reported ? { autoCompactThreshold: 900_000 } : {};
+        },
+      });
+      const session = await sdk.start(SPEC, host);
+      try {
+        query().say(...turn('tools-and-compact', 0));
+        await vi.waitFor(() => {
+          expect(events.some((one) => one.type === 'end')).toBe(true);
+        });
+        const beforeEnd = events.slice(
+          0,
+          events.findIndex((one) => one.type === 'end'),
+        );
+        const usage = beforeEnd.filter((one) => one.type === 'usage').at(-1);
+        expect(usage).toMatchObject({
+          type: 'usage',
+          usage: {
+            context: { used: 40_035, window: 1_000_000, compactAt: reported ? 900_000 : 967_000 },
+          },
+        });
+        expect(query().getContextUsage).toHaveBeenCalledWith({ detail: 'summary' });
+      } finally {
+        await session.close();
+      }
+    },
+  );
+  it.each(['refused', 'unanswered'])(
+    'ends the turn using the default compaction rule when the summary is %s',
+    async (kind) => {
+      const { sdk, host, query, events } = connector({
+        prepare: (query) => {
+          query.getContextUsage.mockImplementation(() =>
+            kind === 'refused'
+              ? Promise.reject(new Error('unavailable'))
+              : new Promise(() => undefined),
+          );
+        },
+      });
+      const session = await sdk.start(SPEC, host);
+      try {
+        query().say(...turn('tools-and-compact', 0));
+        await vi.waitFor(
+          () => {
+            expect(events.some((event) => event.type === 'end')).toBe(true);
+          },
+          { timeout: 4000 },
+        );
+        expect(events.filter((event) => event.type === 'usage').at(-1)).toMatchObject({
+          usage: { context: { used: 40_035, window: 1_000_000, compactAt: 967_000 } },
+        });
+      } finally {
+        await session.close();
+      }
+    },
+  );
+
   it('reports each incoming SDK message as activity', async () => {
     const { sdk, host, query } = connector();
     const activity = vi.fn();

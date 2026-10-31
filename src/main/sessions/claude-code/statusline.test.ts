@@ -22,13 +22,35 @@ const NOW = Date.UTC(2026, 9, 12, 12, 0);
 
 describe('status line context', () => {
   it('reads current request tokens, including caches and output, rather than session totals', () => {
-    expect(statusLineContext({ context_window: { context_window_size: 1_000_000, total_input_tokens: 900_000, used_percentage: 95,
-      current_usage: { input_tokens: 2, cache_creation_input_tokens: 3, cache_read_input_tokens: 4, output_tokens: 5 } } })).toEqual({ used: 14, window: 1_000_000, compactAt: 967_000 });
+    expect(
+      statusLineContext({
+        context_window: {
+          context_window_size: 1_000_000,
+          total_input_tokens: 900_000,
+          used_percentage: 95,
+          current_usage: {
+            input_tokens: 2,
+            cache_creation_input_tokens: 3,
+            cache_read_input_tokens: 4,
+            output_tokens: 5,
+          },
+        },
+      }),
+    ).toEqual({ used: 14, window: 1_000_000, compactAt: 967_000 });
   });
   it('uses the reported percentage only when no current request tokens are supplied', () => {
-    expect(statusLineContext({ context_window: { context_window_size: 1_000_000, used_percentage: 94.7 } })).toEqual({ used: 947_000, window: 1_000_000, compactAt: 967_000 });
+    expect(
+      statusLineContext({
+        context_window: { context_window_size: 1_000_000, used_percentage: 94.7 },
+      }),
+    ).toEqual({ used: 947_000, window: 1_000_000, compactAt: 967_000 });
   });
-  it.each([{}, { context_window_size: 0 }, { context_window_size: 200_000, used_percentage: 101 }, { context_window_size: 200_000, used_percentage: 8, current_usage: { input_tokens: -1 } }])('leaves absent or malformed context unknown (%j)', (context_window) => {
+  it.each([
+    {},
+    { context_window_size: 0 },
+    { context_window_size: 200_000, used_percentage: 101 },
+    { context_window_size: 200_000, used_percentage: 8, current_usage: { input_tokens: -1 } },
+  ])('leaves absent or malformed context unknown (%j)', (context_window) => {
     expect(statusLineContext({ context_window })).toBeNull();
   });
 });
@@ -347,7 +369,9 @@ describe.skipIf(process.platform === 'win32')('the status line corrallm gives Cl
     if (!statusLine) throw new Error('no status line');
     const input = { context_window: { context_window_size: 1_000_000, used_percentage: 94.7 } };
     await run(statusLine, JSON.stringify(input), cwd);
-    await vi.waitFor(() => { expect(server.posts).toHaveLength(1); });
+    await vi.waitFor(() => {
+      expect(server.posts).toHaveLength(1);
+    });
     expect(JSON.parse(server.posts[0]?.body ?? '')).toEqual(input);
   });
 

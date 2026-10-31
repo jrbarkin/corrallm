@@ -457,7 +457,11 @@ describe('a Terminal session', () => {
         expect(readings).toEqual([
           ['claude-code', { fiveHour: { usedPercent: 61, resetsAt: 1_791_810_000_000 } }],
         ]);
-        expect(last('usage')?.usage.context).toEqual({ used: 947_000, window: 1_000_000, compactAt: 967_000 });
+        expect(last('usage')?.usage.context).toEqual({
+          used: 947_000,
+          window: 1_000_000,
+          compactAt: 967_000,
+        });
       });
     },
   );

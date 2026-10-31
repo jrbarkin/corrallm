@@ -41,20 +41,41 @@ describe('the App Server translator, on what Codex did', () => {
   it('uses the reported window and last request, with a lower native compaction limit', () => {
     const { translator } = play([]);
     translator.setConfig({ config: { model_auto_compact_token_limit: 400_000 } });
-    const update = (used: number) => translator.notification('thread/tokenUsage/updated', about({ tokenUsage: {
-      total: { totalTokens: 900_000 }, last: { totalTokens: used }, modelContextWindow: 475_000,
-    } }));
-    expect(update(430_000)).toMatchObject([{ type: 'usage', usage: { context: { used: 430_000, window: 475_000, compactAt: 400_000 } } }]);
+    const update = (used: number) =>
+      translator.notification(
+        'thread/tokenUsage/updated',
+        about({
+          tokenUsage: {
+            total: { totalTokens: 900_000 },
+            last: { totalTokens: used },
+            modelContextWindow: 475_000,
+          },
+        }),
+      );
+    expect(update(430_000)).toMatchObject([
+      { type: 'usage', usage: { context: { used: 430_000, window: 475_000, compactAt: 400_000 } } },
+    ]);
     translator.setConfig({ config: { model_auto_compact_token_limit: 600_000 } });
-    expect(update(431_000)).toMatchObject([{ type: 'usage', usage: { context: { used: 431_000, window: 475_000, compactAt: 450_000 } } }]);
+    expect(update(431_000)).toMatchObject([
+      { type: 'usage', usage: { context: { used: 431_000, window: 475_000, compactAt: 450_000 } } },
+    ]);
   });
 
-  it.each([null, -1, 1.5, NaN, Infinity])('does not retain context after an invalid window %s', (window) => {
-    const { translator } = play([]);
-    const update = (modelContextWindow: unknown) => translator.notification('thread/tokenUsage/updated', about({ tokenUsage: { last: { totalTokens: 1 }, modelContextWindow } }));
-    expect(update(475_000)).toMatchObject([{ type: 'usage', usage: { context: { used: 1, window: 475_000, compactAt: 450_000 } } }]);
-    expect(update(window)).toMatchObject([{ type: 'usage', usage: { context: null } }]);
-  });
+  it.each([null, -1, 1.5, NaN, Infinity])(
+    'does not retain context after an invalid window %s',
+    (window) => {
+      const { translator } = play([]);
+      const update = (modelContextWindow: unknown) =>
+        translator.notification(
+          'thread/tokenUsage/updated',
+          about({ tokenUsage: { last: { totalTokens: 1 }, modelContextWindow } }),
+        );
+      expect(update(475_000)).toMatchObject([
+        { type: 'usage', usage: { context: { used: 1, window: 475_000, compactAt: 450_000 } } },
+      ]);
+      expect(update(window)).toMatchObject([{ type: 'usage', usage: { context: null } }]);
+    },
+  );
   it('reports a typed terminal failure while leaving individual command errors within the turn', () => {
     const { translator } = play([]);
     translator.notification(
