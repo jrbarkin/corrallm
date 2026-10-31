@@ -227,6 +227,16 @@ describe('the schema', () => {
     expect(() =>
       connection.prepare("UPDATE node SET settings = 'not JSON' WHERE id = 'a'").run(),
     ).toThrow(/CHECK constraint failed/);
+    // B11a: an agent's fallback chain and handoff settings, JSON, never a frame's.
+    for (const column of ['fallback', 'handoff']) {
+      expect(() =>
+        connection.prepare(`UPDATE node SET ${column} = '{}' WHERE id = 'team'`).run(),
+      ).toThrow(/CHECK constraint failed/);
+      expect(() =>
+        connection.prepare(`UPDATE node SET ${column} = 'not JSON' WHERE id = 'a'`).run(),
+      ).toThrow(/CHECK constraint failed/);
+      connection.prepare(`UPDATE node SET ${column} = '{}' WHERE id = 'a'`).run();
+    }
     addItem('a', 'i');
     expect(() =>
       connection.prepare("UPDATE queue_item SET body = 'not JSON' WHERE id = 'i'").run(),
@@ -303,13 +313,13 @@ describe('the schema', () => {
     });
   });
 
-  it('numbers migrations in order, never lowering the oldest schema that may read them', () => {
+  it('numbers migrations one by one, never lowering the oldest schema that may read them', () => {
     MIGRATIONS.forEach((migration, i) => {
-      expect(migration.version).toBeGreaterThan(MIGRATIONS[i - 1]?.version ?? 0);
+      expect(migration.version).toBe(i + 1);
       expect(migration.minReader).toBeLessThanOrEqual(migration.version);
       expect(migration.minReader).toBeGreaterThanOrEqual(MIGRATIONS[i - 1]?.minReader ?? 1);
     });
-    expect(SCHEMA).toBe(MIGRATIONS.at(-1)?.version);
+    expect(SCHEMA).toBe(MIGRATIONS.length);
   });
 
   it('keeps nothing of a migration that fails, nor its version, but the ones before it', () => {
@@ -1509,6 +1519,23 @@ describe('migration 5', () => {
   });
 });
 
+describe('migration 6', () => {
+  it('gives agents their fallback chain and handoff settings, keeping every row, which a schema-5 corrallm may no longer open', () => {
+    migrate(connection, MIGRATIONS.slice(0, 5));
+    addCanvas();
+    addDocument();
+    addNode('team', 'frame');
+    addNode('a');
+    const before = connection.prepare('SELECT * FROM node ORDER BY id').all();
+    migrate(connection, MIGRATIONS.slice(0, 6));
+    expect(schemaOf(connection)).toBe(6);
+    expect(minReaderOf(connection)).toBe(6);
+    expect(connection.prepare('SELECT * FROM node ORDER BY id').all()).toEqual(
+      before.map((row) => ({ ...row, fallback: null, handoff: null })),
+    );
+  });
+});
+
 /** A native prompt's decision, value-free, as the owner records it (B13 §9.2 C9). */
 const SETTLED = JSON.stringify({
   v: 1,
@@ -1537,21 +1564,18 @@ describe('schema 7: a message’s settled decision', () => {
 });
 
 describe('migration 7', () => {
-  it('adds a settled decision to every message of the schema before it, keeping every row, and the oldest schema that may read them', () => {
-    const before7 = MIGRATIONS.filter(({ version }) => version < 7);
-    migrate(connection, before7);
+  it('adds a settled decision to every message of a schema-6 database, keeping every row, which a schema-6 corrallm may still open', () => {
+    migrate(connection, MIGRATIONS.slice(0, 6));
     connection.exec('PRAGMA foreign_keys = ON');
     addCanvas();
     addMessage('kept');
     const before = connection.prepare('SELECT * FROM message').all();
-    const reader = minReaderOf(connection);
 
-    migrate(connection);
+    migrate(connection, MIGRATIONS.slice(0, 7));
 
     expect(schemaOf(connection)).toBe(7);
-    // A column only: a corrallm of the schema before still reads and writes its own columns.
-    expect(reader).toBe(before7.at(-1)?.minReader);
-    expect(minReaderOf(connection)).toBe(reader);
+    // A column only: a corrallm of schema 6 still reads and writes its own columns.
+    expect(minReaderOf(connection)).toBe(6);
     expect(connection.prepare('SELECT * FROM message').all()).toEqual(
       before.map((row) => ({ ...row, settled: null })),
     );

@@ -95,6 +95,18 @@ const fixtureOf = (tables: readonly string[]): Record<string, Row[]> =>
   Object.fromEntries(tables.map((table) => [table, FIXTURE.tables[table] ?? []]));
 
 /**
+ * The fixture's rows of `tables` as the latest schema keeps them, unchanged by migration 4: with
+ * the columns later migrations add, empty (migration 5's agents' fallback chain and handoff).
+ */
+const latestOf = (tables: readonly string[]): Record<string, Row[]> =>
+  Object.fromEntries(
+    Object.entries(fixtureOf(tables)).map(([table, rows]) => [
+      table,
+      table === 'node' ? rows.map((row) => ({ ...row, fallback: null, handoff: null })) : rows,
+    ]),
+  );
+
+/**
  * Makes the profile's database as a corrallm of `schema` made it, holding every row the fixture
  * has of the tables that schema has, each with the columns it has: as that corrallm kept them.
  */
@@ -261,7 +273,7 @@ describe('migration 4 on a profile', () => {
     try {
       expect(schemaOn()).toEqual(LATEST);
       // What migration 4 changes nothing of, as it was.
-      expect(kept(UNCHANGED)).toEqual(fixtureOf(UNCHANGED));
+      expect(kept(UNCHANGED)).toEqual(latestOf(UNCHANGED));
       expect(kept(['meta']).meta).toEqual([
         { ...FIXTURE.tables.meta?.[0], min_reader: LATEST.minReader },
       ]);

@@ -125,6 +125,35 @@ export function sameFallback(a: Fallback | undefined, b: Fallback | undefined): 
   );
 }
 
+/**
+ * The chain as views show it (C11): the step the agent runs (null: its own endpoint), how many
+ * steps it has, the endpoint it came from while on one, whether it returns at the reset, and
+ * whether corrallm switches it now. No text, native id or path.
+ */
+export const FallbackViewSchema = z.strictObject({
+  step: z.int().min(0).max(2).nullable(),
+  steps: z.int().min(1).max(3),
+  from: FallbackStepSchema.optional(),
+  back: z.enum(['stay', 'return']),
+  switching: z.literal(true).optional(),
+});
+export type FallbackView = z.infer<typeof FallbackViewSchema>;
+
+/** An agent's chain as views show it: none for an agent with no chain. */
+export function fallbackView(
+  fallback: Fallback | undefined,
+  switching: boolean,
+): FallbackView | null {
+  if (fallback === undefined) return null;
+  return {
+    step: fallback.on?.step ?? null,
+    steps: fallback.to.length,
+    ...(fallback.on === undefined ? {} : { from: fallback.on.from }),
+    back: fallback.back === 'return' ? 'return' : 'stay',
+    ...(switching ? { switching: true } : {}),
+  };
+}
+
 /** Shape only: actual parent, symlink, ownership and replacement checks belong to C's exporter. */
 export const HandoffFileSchema = z
   .string()

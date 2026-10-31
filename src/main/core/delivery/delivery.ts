@@ -8,7 +8,7 @@ import { needsItem, needsOf } from '../../../shared/model/needs-selectors';
 import type { NeedsInput, UnaskingWhy } from '../../../shared/model/needs-selectors';
 import { needFor } from '../../../shared/model/prompt-views';
 import type { Engine } from '../engine/engine';
-import type { PauseCause } from '../engine/run/runner';
+import type { Admission, AdmittedWork, PauseCause } from '../engine/run/runner';
 import type { AgentNode, CanvasNode } from '../../../shared/model/canvas';
 import { agentOf, agentParty, outsideOf } from '../../../shared/model/messages';
 import type { Session } from '../../../shared/model/session';
@@ -69,6 +69,12 @@ export interface DeliveryDeps {
    */
   availability?: (agent: string) => Promise<SessionAvailability>;
   defaultAsks: (adapter: AdapterId, agent?: string) => Promise<boolean | undefined>;
+  /**
+   * B11a C3: admission, the core's fallback service's, before a party's message is handed over:
+   * corrallm may switch the agent's backend first (the message waits). None: nothing switches,
+   * and a fallback rule holds as ask does.
+   */
+  admit?: (agent: string, work: AdmittedWork) => Admission;
 }
 
 /**
@@ -245,6 +251,8 @@ export class Delivery {
       until: number;
     }
   >();
+  /** What admission said of each agent as its hold was last looked at (#holdOf). */
+  readonly #admitted = new Map<string, Admission>();
   /** What wakes delivery when a usage window resets. */
   #alarm: { at: number; cancel: () => void } | undefined;
   /**
@@ -778,6 +786,10 @@ export class Delivery {
   /** What holds a message from a party (anyone but you) to agent `node` now, if anything. */
   #holdOf(node: AgentNode): Hold | undefined {
     const { engine } = this.#deps;
+    // B11a C3: admission first, never while the agent is paused (its pause holds the message): a
+    // switch of its backend holds what waits, which then goes to the new endpoint.
+    const admitted = this.#admit(node);
+    if (admitted === 'switching') return { kind: 'busy' };
     const limited = this.#limited(node);
     if (limited !== undefined) return limited;
     const holding = engine.run.holding({ agent: node.id });
@@ -898,14 +910,36 @@ export class Delivery {
   }
 
   /**
+   * What admission says before a party's message to agent `node` is handed over (B11a C3), with
+   * the fallback rule over its share on the agent's backend, if one is; as a fallback rule says
+   * where no switching service is composed, or while the agent is paused.
+   */
+  #admit(node: AgentNode): Admission {
+    const { engine } = this.#deps;
+    const rule = engine.run.usageRule(node.id, this.#deps.now());
+    const work: AdmittedWork = rule?.action === 'fallback' ? { rule: rule.hold } : {};
+    const admitted =
+      this.#deps.admit === undefined || engine.run.holding({ agent: node.id }).length > 0
+        ? work.rule === undefined
+          ? 'go'
+          : 'ask'
+        : this.#deps.admit(node.id, work);
+    this.#admitted.set(node.id, admitted);
+    return admitted;
+  }
+
+  /**
    * The usage rule that holds a party's message to agent `node` now, if one does: one over its
    * share that doesn't only warn, whose window's reset is known. Headless, nothing reads a
    * backend's usage again while its agents' messages wait (only a running session reads it), so a
-   * window whose reset isn't known would hold them for good: such a rule warns instead.
+   * window whose reset isn't known would hold them for good: such a rule warns instead. A
+   * fallback rule holds as ask does, unless admission let the message go (a simulated reading
+   * only previews a switch).
    */
   #holdingRule(node: AgentNode): { hold: UsageHold & { resetsAt: number } } | undefined {
     const rule = this.#deps.engine.run.usageRule(node.id, this.#deps.now());
     if (rule === undefined || rule.action === 'warn') return undefined;
+    if (rule.action === 'fallback' && this.#admitted.get(node.id) === 'go') return undefined;
     const { hold } = rule;
     return hold.resetsAt === null ? undefined : { hold: { ...hold, resetsAt: hold.resetsAt } };
   }
@@ -917,6 +951,8 @@ export class Delivery {
   #warnUsage(node: AgentNode): void {
     const { engine } = this.#deps;
     const rule = engine.run.usageRule(node.id, this.#deps.now());
+    // A fallback rule's simulated switch was said as a preview: no warning beside it.
+    if (rule?.action === 'fallback' && this.#admitted.get(node.id) === 'go') return;
     if (rule !== undefined && this.#holdingRule(node) === undefined) {
       engine.run.warnUsage(node.id, rule.hold, this.#deps.now());
     }

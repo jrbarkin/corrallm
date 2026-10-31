@@ -175,10 +175,7 @@ export function madeAtSchema(profile: string, schema: number): Connection {
       PRAGMA application_id = ${String(APPLICATION_ID)};
       PRAGMA journal_mode = WAL;
       PRAGMA foreign_keys = ON`);
-    migrate(
-      connection,
-      MIGRATIONS.filter(({ version }) => version <= schema),
-    );
+    migrate(connection, MIGRATIONS.slice(0, schema));
     return connection;
   } catch (error) {
     connection.close();

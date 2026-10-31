@@ -561,12 +561,29 @@ export const MIGRATIONS: readonly Migration[] = [
     `,
   },
   {
+    // B11a's (B11a Design §12 C1, C2): an agent's fallback chain, with where the run is in it, and
+    // its handoff settings, kept with its row as the document has them. A corrallm of schema 5
+    // would read agents without their chain and change how they run with a stale place in it, so,
+    // as a file of version 3 is to it, it may no longer open the database.
+    version: 6,
+    minReader: 6,
+    sql: `
+      -- The chain you set (fallback: its steps, whether it returns, and the step corrallm switched
+      -- the agent to, with the endpoint it came from) and the handoff settings (handoff): JSON as
+      -- the document's own, only an agent's.
+      ALTER TABLE node ADD COLUMN fallback TEXT
+        CHECK (fallback IS NULL OR (kind = 'agent' AND json_valid(fallback)));
+      ALTER TABLE node ADD COLUMN handoff TEXT
+        CHECK (handoff IS NULL OR (kind = 'agent' AND json_valid(handoff)));
+    `,
+  },
+  {
     // B13's (B13 Design §9.2 C9): what a record of a native prompt's decision decided, typed and
     // value-free, beside its words. A column only, so it keeps the oldest schema that may read the
-    // database as the migration before it left it: that corrallm still reads and writes its own
-    // columns (each by name), leaving this one as it is. Number 6 is B11a's, which lands first.
+    // database as migration 6 left it: a corrallm of schema 6 still reads and writes its own
+    // columns (each by name), leaving this one as it is.
     version: 7,
-    minReader: 5,
+    minReader: 6,
     sql: `
       -- A settled record's decision, for a prompt the core owned: its Needs item, the prompt's id,
       -- kind and subject's type, and what was chosen (a choice's value and hint, how many questions
@@ -577,8 +594,8 @@ export const MIGRATIONS: readonly Migration[] = [
   },
 ];
 
-/** The schema this code makes and reads: the last migration's. */
-export const SCHEMA = MIGRATIONS.at(-1)?.version ?? 0;
+/** The schema this code makes and reads. */
+export const SCHEMA = MIGRATIONS.length;
 
 /**
  * The tables whose rows are numbered with places never given again (AUTOINCREMENT), which cursors

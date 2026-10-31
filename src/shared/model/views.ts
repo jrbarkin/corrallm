@@ -7,6 +7,7 @@ import {
 import type { PartyId } from './messages';
 import type { AgentId } from '../api/ids';
 import type { ConnectionId } from '../adapter';
+import type { FallbackView } from './fallback';
 import { MAX_QUESTIONS } from '../session';
 import type { BackgroundTask, SlashCommand, TerminalAsk } from '../session';
 import type { Message, MessageDisplay, MessageOrigin } from './messages';
@@ -57,6 +58,8 @@ export type AskView = TerminalAsk & { readonly cut?: true };
 export interface SessionSummary {
   readonly agent: string;
   readonly connection: ConnectionId;
+  /** Where it is in the fallback chain you set, and whether corrallm switches it (B11a C11). */
+  readonly fallback: ReadonlyData<FallbackView> | null;
   readonly status: Session['status'];
   readonly paused: boolean;
   readonly queued: number;
@@ -178,11 +181,13 @@ export function sessionView(
   session: Session,
   paused = false,
   previous?: SessionView,
+  fallback: FallbackView | null = null,
 ): SessionView {
   const last = session.entries.findLast((entry) => entry.kind === 'user');
   const summary: SessionSummary = {
     agent,
     connection,
+    fallback,
     status: session.status,
     paused,
     queued: session.queued.length,

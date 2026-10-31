@@ -307,6 +307,8 @@ export class SessionManager {
    * the manager stopped waiting for them: a writer may still run there (`closing`).
    */
   readonly #unfinished = new Map<string, number>();
+  /** What waits for each agent's unfinished closes to finish (`closed`), by canvas and agent. */
+  readonly #whenClosed = new Map<string, (() => void)[]>();
   /** Each close not finished, with the workspace its session ran in (`writingIn`). */
   readonly #closes = new Set<{ canvas: CanvasId; agent: string; binding: Binding | undefined }>();
   /** The last generation given a session, or a reservation for an agent's next session. */
@@ -515,6 +517,18 @@ export class SessionManager {
    */
   closing(canvas: CanvasId, agentId: string): boolean {
     return (this.#unfinished.get(keyOf(canvas, agentId)) ?? 0) > 0;
+  }
+
+  /**
+   * Resolves once no close of the agent's sessions is unfinished (`closing`): at once if none is,
+   * else when its CLI has really ended, however long after the manager stopped waiting for it.
+   */
+  closed(canvas: CanvasId, agentId: string): Promise<void> {
+    if (!this.closing(canvas, agentId)) return Promise.resolve();
+    const key = keyOf(canvas, agentId);
+    return new Promise((resolve) => {
+      this.#whenClosed.set(key, [...(this.#whenClosed.get(key) ?? []), resolve]);
+    });
   }
 
   /**
@@ -1435,6 +1449,11 @@ export class SessionManager {
             if (left > 0) this.#unfinished.set(key, left);
             else this.#unfinished.delete(key);
             this.#closes.delete(close);
+            if (left <= 0) {
+              const waiting = this.#whenClosed.get(key) ?? [];
+              this.#whenClosed.delete(key);
+              for (const resolve of waiting) resolve();
+            }
           }),
         new Promise((resolve) => {
           timer = setTimeout(resolve, this.#deps.closeMs ?? CLOSE_MS);

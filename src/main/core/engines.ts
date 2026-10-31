@@ -6,7 +6,7 @@ import type { EngineCatalog } from '../../shared/model/catalog';
 import { Engine } from './engine/engine';
 import { needs } from '../../shared/model/needs-selectors';
 import type { NeedsInput } from '../../shared/model/needs-selectors';
-import type { RunMailbox } from './engine/run/runner';
+import type { Admission, AdmittedWork, RunMailbox } from './engine/run/runner';
 import type { SessionBackend } from './engine/transcript/receive';
 import type { CanvasDocument } from '../../shared/model/canvas';
 import type { Message, MessageDisplay, PartyId } from '../../shared/model/messages';
@@ -69,7 +69,6 @@ const NO_FOLDER =
   'This canvas has no project folder: open it in corrallm and choose its folder there, so its agents can work.';
 const NO_FILE = 'This canvas isn’t saved: save it in corrallm first.';
 const ANOTHER = 'This canvas’s file holds another canvas now: open it in corrallm to run it.';
-const NO_SWITCH = 'Switch this agent to another connection in the corrallm app.';
 const JOURNAL_FAILED = 'Could not journal every canvas’s run as the core closed.';
 const NOT_KEPT = 'corrallm keeps no such canvas.';
 /** Whom the session manager lists conversations for when a canvas's own runtime asks. */
@@ -99,6 +98,18 @@ export interface EnginesDeps {
   needs?: (canvas: CanvasId) => readonly NeedsItem[];
   /** How many prompts of an agent's the core's prompt owner holds (B13 C3), which its counts add. */
   prompted?: (canvas: CanvasId, agent: string) => number;
+  /**
+   * B11a's fallback service (core/fallback.ts), which each canvas's run and delivery ask before
+   * automated work goes (admission), and whose switching the canvas's views say. None: nothing
+   * switches, and a fallback rule asks.
+   */
+  fallback?: {
+    admit(canvas: CanvasId, agent: string, work: AdmittedWork): Admission;
+    limitNote(canvas: CanvasId, agent: string): string | undefined;
+    switching(canvas: CanvasId, agent: string): boolean;
+    /** A canvas's agents' availability changed: a switch a held workspace stopped may go. */
+    availabilityChanged(canvas: CanvasId): void;
+  };
 }
 
 /**
@@ -142,6 +153,8 @@ export interface OpenCanvas {
    * session shows itself: none where the core composes no owner.
    */
   ownedPrompts?: (agent: string) => number;
+  /** Whether corrallm switches an agent's backend now (B11a C4): what its views say. */
+  switching?: (agent: string) => boolean;
 }
 
 /** How a canvas opens. */
@@ -929,6 +942,8 @@ export class Engines {
     running.reads = new ReadPositions(await journal.reads(canvas));
     running.sessionGeneration = (agent) => this.#deps.sessions.generationOf(canvas, agent);
     running.ownedPrompts = (agent) => this.#deps.prompted?.(canvas, agent) ?? 0;
+    const { fallback } = this.#deps;
+    if (fallback !== undefined) running.switching = (agent) => fallback.switching(canvas, agent);
     running.journal = () => this.#write(running);
     // What its messages write, they write with its run, if that changed since it was last on disk.
     messages.writeWith(() => this.#runWithin(running, false));
@@ -943,10 +958,6 @@ export class Engines {
       },
       now: () => Date.now(),
       usage: () => this.#deps.usage.state(),
-      // Only you switch how an agent runs, in the app (the run's refusal asks you there).
-      connect: (agent) => {
-        engine.sessions.notice(agent, 'warning', NO_SWITCH);
-      },
       beforeSend: async () => {
         await this.#write(running);
         // A committed refusal marker keeps parties' messages durable, but cannot authorize a
@@ -957,6 +968,13 @@ export class Engines {
       // Each attempt the run sends is a message first, written with the run (B11 Design §3).
       mailbox: runMailbox(messages),
       ...(this.#deps.locale === undefined ? {} : { locale: this.#deps.locale }),
+      // B11a C3: admission before each task's attempt goes.
+      ...(fallback === undefined
+        ? {}
+        : {
+            admit: (agent, work) => fallback.admit(canvas, agent, work),
+            limitNote: (agent) => fallback.limitNote(canvas, agent),
+          }),
     });
     running.engine = engine;
     engine.update(document.nodes);
@@ -983,6 +1001,9 @@ export class Engines {
           .run(() => this.#deps.sessions.settingsOptions(canvas, adapter, agent))
           .then(({ defaults }) => defaults.asks),
       ...(this.#deps.locale === undefined ? {} : { locale: this.#deps.locale }),
+      ...(fallback === undefined
+        ? {}
+        : { admit: (agent, work) => fallback.admit(canvas, agent, work) }),
     });
     running.delivery = delivery;
     // One opened while the shutdown barrier holds is held by it too.
@@ -1012,6 +1033,7 @@ export class Engines {
       // A message to an agent that can't start, or runs in a mode that never asks, waits for you.
       messages.subscribe(look),
       this.#deps.sessions.onAvailability(canvas, () => {
+        fallback?.availabilityChanged(canvas);
         delivery.availabilityChanged();
         look();
       }),

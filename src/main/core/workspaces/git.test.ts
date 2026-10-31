@@ -158,6 +158,7 @@ describe.skipIf(process.platform === 'win32')('GitRunner', () => {
       GIT_EXEC_PATH: '/evil/libexec',
       GIT_EXTERNAL_DIFF: '/evil/diff',
       GIT_SSH_COMMAND: '/evil/ssh',
+      GIT_GRAFT_FILE: '/elsewhere/grafts',
       Git_Dir: '/elsewhere/.git',
     };
     const { stdout } = await runner({ executable: stand }).run({ cwd: root, args: ['status'] });
@@ -171,11 +172,12 @@ describe.skipIf(process.platform === 'win32')('GitRunner', () => {
       Object.keys(seen)
         .filter((key) => /^git_/i.test(key))
         .sort(),
-    ).toEqual(['GIT_ALLOW_PROTOCOL', 'GIT_NO_LAZY_FETCH', 'GIT_TERMINAL_PROMPT']);
+    ).toEqual(['GIT_ALLOW_PROTOCOL', 'GIT_GRAFT_FILE', 'GIT_NO_LAZY_FETCH', 'GIT_TERMINAL_PROMPT']);
     expect(seen).toMatchObject({
       GIT_ALLOW_PROTOCOL: '',
       GIT_NO_LAZY_FETCH: '1',
       GIT_TERMINAL_PROMPT: '0',
+      GIT_GRAFT_FILE: path.join(process.execPath, 'no-grafts'),
       LC_ALL: 'C',
       HOME: home,
       PATH: env.PATH,
@@ -185,6 +187,7 @@ describe.skipIf(process.platform === 'win32')('GitRunner', () => {
       GIT_TERMINAL_PROMPT: '0',
       GIT_NO_LAZY_FETCH: '1',
       GIT_ALLOW_PROTOCOL: '',
+      GIT_GRAFT_FILE: path.join(process.execPath, 'no-grafts'),
       LC_ALL: 'C',
     });
   });

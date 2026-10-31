@@ -60,6 +60,65 @@ describe('SessionStore', () => {
     store.reset();
   });
 
+  describe('a backend switch (B11a C4)', () => {
+    it('starts nothing while corrallm switches, then sends what waited on the new connection', async () => {
+      const { backend } = fakeBackend();
+      const store = new SessionStore(engine, backend);
+      store.sync([{ id: 'a', connection: 'claude-code.sdk' }]);
+      const switched = Promise.withResolvers<undefined>();
+      store.switching('a', switched.promise);
+      // Yours, the run's and a party's: each waits, in order, none starting a session.
+      store.send('a', 'claude-code', 'Yours');
+      store.send('a', 'claude-code', 'The run’s', undefined, undefined, undefined, 'queue');
+      store.open('a');
+      let ready = false;
+      const readying = store.ready('a').then(() => {
+        ready = true;
+      });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(backend.start).not.toHaveBeenCalled();
+      expect(backend.send).not.toHaveBeenCalled();
+      expect(ready).toBe(false);
+      expect(store.of('a').queued.map(({ text }) => text)).toEqual(['Yours', 'The run’s']);
+      // The document now names the other connection: once released, what waited goes there.
+      store.sync([{ id: 'a', connection: 'codex.app-server' }]);
+      switched.resolve(undefined);
+      await readying;
+      await vi.waitFor(() => {
+        expect(backend.send).toHaveBeenCalled();
+      });
+      expect(backend.start.mock.calls.map(([, options]) => options.connection)).toEqual([
+        'codex.app-server',
+      ]);
+      expect(backend.send.mock.calls[0]?.[1]).toMatchObject({ text: 'Yours' });
+      store.reset();
+    });
+
+    it('lets go of the hold when the agent is gone, or the switch fails', async () => {
+      const { backend } = fakeBackend();
+      const store = new SessionStore(engine, backend);
+      store.sync([{ id: 'a', connection: 'claude-code.sdk' }]);
+      const failed = Promise.withResolvers<undefined>();
+      store.switching('a', failed.promise);
+      store.send('a', 'claude-code', 'Yours');
+      failed.reject(new Error('Abandoned'));
+      await vi.waitFor(() => {
+        expect(backend.send).toHaveBeenCalled();
+      });
+      expect(backend.start.mock.calls.map(([, options]) => options.connection)).toEqual([
+        'claude-code.sdk',
+      ]);
+      store.switching('a', new Promise(() => undefined));
+      store.sync([]);
+      store.sync([{ id: 'a', connection: 'claude-code.sdk' }]);
+      store.send('a', 'claude-code', 'Again');
+      await vi.waitFor(() => {
+        expect(backend.send).toHaveBeenCalledTimes(2);
+      });
+      store.reset();
+    });
+  });
+
   describe('held queues', () => {
     it.each(['reset', 'remove', 'rehold'] as const)(
       'does not dispatch a released queue if %s supersedes it in the same call stack',
