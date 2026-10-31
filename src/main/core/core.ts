@@ -827,6 +827,9 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     },
     // Read again at once once a merge settles, so its answer's receipt carries it.
     observe: (canvas, workspace) => observer.now(canvas, workspace),
+    observationTimedOut: (workspace) => {
+      observer.markUnknown(workspace);
+    },
   });
   const windows = new Windows({
     restore: async () => {
