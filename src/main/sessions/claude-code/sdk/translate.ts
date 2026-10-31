@@ -136,6 +136,8 @@ export class Translator {
   #window: number | null = null;
   #maxOutput: number | null = null;
   #compactAt: number | null = null;
+  /** Whether the CLI compacts by itself: it says not when auto-compact is turned off. */
+  #autoCompact = true;
   /** The last top-level response's model (initially init's): whose window to show. */
   #running: string | undefined;
   /** When a limit hit (a rejected request) resets, to say with its error. */
@@ -767,6 +769,7 @@ export class Translator {
   setContextUsage(summary: unknown): void {
     const threshold = property(summary, 'autoCompactThreshold');
     this.#compactAt = tokenCount(threshold) ? threshold : null;
+    this.#autoCompact = property(summary, 'isAutoCompactEnabled') !== false;
   }
 
   #usage(): SessionEvent {
@@ -780,10 +783,13 @@ export class Translator {
             : {
                 used: this.#context,
                 window: this.#window,
-                compactAt: Math.min(
-                  this.#window,
-                  this.#compactAt ?? compactAt(this.#window, this.#maxOutput),
-                ),
+                // A CLI that does not compact by itself has no point to ask before.
+                compactAt: this.#autoCompact
+                  ? Math.min(
+                      this.#window,
+                      this.#compactAt ?? compactAt(this.#window, this.#maxOutput),
+                    )
+                  : null,
               },
         contextTokens: this.#context,
         contextWindow: this.#window,

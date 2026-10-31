@@ -4,7 +4,8 @@ import type { ModelInfo, SDKMessage, SDKResultMessage } from '@anthropic-ai/clau
 import { describe, expect, it } from 'vitest';
 
 import type { SessionEvent } from '../../../../shared/session';
-import { RECORDED_PLACES, recorded, recordedMessages } from './recorded';
+import { compactAt } from '../context';
+import { RECORDED_PLACES, recorded, recordedContextUsage, recordedMessages } from './recorded';
 import type { Fixture } from './recorded';
 import { Translator } from './translate';
 
@@ -745,5 +746,104 @@ describe('Translator, on to-dos and background work', () => {
         }),
       ),
     ).toEqual([{ type: 'cleared', id: 'reset-1' }]);
+  });
+});
+
+/**
+ * Replays a context recording as the session does: the summary asked after a turn's result is
+ * given to the translator just before that result is translated. Returns the context each usage
+ * event reported and the notices, in order.
+ */
+function playContext(fixture: 'auto-compact' | 'no-auto-compact') {
+  const translate = translator();
+  const items = recorded(fixture);
+  const told: { context: unknown; note?: string }[] = [];
+  items.forEach((item, at) => {
+    if (item.kind !== 'message') return;
+    if (item.data.type === 'result') {
+      const next = items.slice(at).find((later) => later.kind === 'contextUsage');
+      translate.setContextUsage(next?.kind === 'contextUsage' ? next.data.usage : undefined);
+    }
+    for (const event of translate.translate(item.data)) {
+      if (event.type === 'usage') told.push({ context: event.usage.context });
+      if (event.type === 'notice') told.push({ context: undefined, note: event.text });
+    }
+  });
+  return told;
+}
+
+describe('Translator, through a real automatic compaction (Claude Code 2.1.316, B11a C4)', () => {
+  it('reports the last top-level response against the model window and the CLI’s own threshold', () => {
+    const readings = playContext('auto-compact')
+      .filter((told) => told.note === undefined)
+      .map((told) => told.context);
+    const window = 1_000_000;
+    // The model's window is 1M; the threshold is the CLI's own (lowered for the recording to
+    // 100,000 − 20,000 − 13,000). Each used count is input + cache creation + cache read + output
+    // of the last response (the CLI's own /context total at that moment was within 4 tokens of it).
+    expect(readings[0]).toEqual({ used: 2 + 23_606 + 1_697 + 4, window, compactAt: 67_000 });
+    expect(readings).toContainEqual({ used: 2 + 23_424 + 25_419 + 1, window, compactAt: 67_000 });
+    expect(readings).toContainEqual({ used: 2 + 23_412 + 48_892 + 4, window, compactAt: 67_000 });
+  });
+
+  it('puts the reading at what the compaction left, then at the next response', () => {
+    const told = playContext('auto-compact');
+    const compacted = told.findIndex((t) =>
+      t.note?.startsWith('Compacted the conversation automatically'),
+    );
+    expect(told[compacted]?.note).toBe(
+      'Compacted the conversation automatically: 72,344 → 1,446 tokens.',
+    );
+    // Before it: the third turn's last response left 72,310 tokens, at or over the 67,000 threshold,
+    // and the turn before it (48,846) did not compact.
+    expect(told[compacted - 1]?.context).toEqual({
+      used: 2 + 23_412 + 48_892 + 4,
+      window: 1_000_000,
+      compactAt: 67_000,
+    });
+    // After it: what the CLI says it left (post_tokens), until its next response.
+    expect(told[compacted + 1]?.context).toEqual({
+      used: 1_446,
+      window: 1_000_000,
+      compactAt: 67_000,
+    });
+    expect(told[compacted + 2]?.context).toEqual({
+      used: 2 + 2_437 + 1_051 + 16,
+      window: 1_000_000,
+      compactAt: 67_000,
+    });
+  });
+
+  it('compacts where the CLI’s default rule says, for the window it was given', () => {
+    // autoCompactThreshold 67000 is window − min(max output, 20,000) − 13,000 with the lowered
+    // 100,000 window; the model allowed 128,000 tokens of output.
+    expect(compactAt(100_000, 128_000)).toBe(67_000);
+    expect(compactAt(1_000_000, 128_000)).toBe(967_000);
+    const boundary = recordedMessages('auto-compact').find(
+      (message) => message.type === 'system' && message.subtype === 'compact_boundary',
+    );
+    if (boundary?.type !== 'system' || !('compact_metadata' in boundary)) throw new Error('none');
+    expect(boundary.compact_metadata.trigger).toBe('auto');
+    expect(boundary.compact_metadata.pre_tokens).toBeGreaterThanOrEqual(67_000);
+    expect(recordedContextUsage('auto-compact').map((c) => c.usage.autoCompactThreshold)).toEqual(
+      Array.from({ length: 10 }, () => 67_000),
+    );
+  });
+
+  it('knows no compaction point where the CLI has auto-compact turned off', () => {
+    const summaries = recordedContextUsage('no-auto-compact');
+    expect(
+      summaries.map((c) => [c.usage.autoCompactThreshold, c.usage.isAutoCompactEnabled]),
+    ).toEqual([
+      [undefined, false],
+      [undefined, false],
+    ]);
+    // It never compacts, so it has no point to ask before (and not the default rule's).
+    const readings = playContext('no-auto-compact').filter((told) => told.note === undefined);
+    expect(readings.at(-1)?.context).toEqual({
+      used: 2 + 23_636 + 1_697 + 1,
+      window: 1_000_000,
+      compactAt: null,
+    });
   });
 });

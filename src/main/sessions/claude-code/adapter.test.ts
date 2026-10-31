@@ -31,8 +31,12 @@ function declared(session: object) {
 }
 
 describe("Claude Code's adapter", () => {
-  it('declares no proven context source until its context recording lands', () => {
-    for (const connection of descriptor.connections) expect(connection.context).toBe(false);
+  it('declares context on both connections, proven by the recordings of real automatic compactions', () => {
+    // The Agent SDK: sdk/translate.test.ts replays sdk/fixtures/auto-compact.jsonl and
+    // no-auto-compact.jsonl. The Terminal: statusline.test.ts replays
+    // fixtures/status-line-compaction.jsonl (Claude Code 2.1.316, B11a C4).
+    expect(connection('claude-code.terminal').context).toBe(true);
+    expect(connection('claude-code.sdk').context).toBe(true);
   });
 
   it('declares the four prompt kinds per connection, and signals only where recordings prove them', () => {
