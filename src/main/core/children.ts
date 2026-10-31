@@ -13,6 +13,8 @@ import path from 'node:path';
 
 import { withProcesses } from '../sessions/process';
 import type { ProcessOwner } from '../sessions/process';
+import { groupIsGone, hasLiveGroupMembers } from './process-groups';
+import type { LiveGroupMembers } from './process-groups';
 import { inspectProcess, isProcessStart, sameStart } from './process-identity';
 import type { ProcessStart } from './process-identity';
 
@@ -28,6 +30,8 @@ export interface ChildSystem {
   inspect: (pid: number) => { started: ProcessStart; group: number } | undefined;
   alive: (group: number) => boolean;
   signal: (group: number, signal: NodeJS.Signals | number) => void;
+  /** A denied group is gone only when a complete membership read finds no live member. */
+  hasLiveMembers?: LiveGroupMembers;
   wait: (ms: number) => Promise<void>;
   /** Blocks the thread: a new CLI is recorded inside its spawner's synchronous call. */
   pause: (ms: number) => void;
@@ -57,6 +61,7 @@ const SYSTEM: ChildSystem = {
   signal: (group, signal) => {
     process.kill(-group, signal);
   },
+  hasLiveMembers: hasLiveGroupMembers,
   wait: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   pause: (ms) => {
     Atomics.wait(PAUSE, 0, 0, ms);
@@ -154,12 +159,12 @@ export class Children implements ProcessOwner {
     if (this.#system.platform === 'win32' || record.pid === process.pid) return;
     const found = this.#system.inspect(record.pid);
     if (found === undefined ? !owned : !same(found, record)) return;
-    this.#system.signal(record.pid, signal);
+    if (!this.#signal(record.pid, signal)) return;
     if (await this.#gone(record.pid, GRACE_MS)) return;
     const after = this.#system.inspect(record.pid);
     // A new process may now have the leader's pid. It is never ours to signal.
     if (after !== undefined && !same(after, record)) return;
-    this.#system.signal(record.pid, 'SIGKILL');
+    if (!this.#signal(record.pid, 'SIGKILL')) return;
     if (await this.#gone(record.pid, KILL_WAIT_MS)) return;
     const last = this.#system.inspect(record.pid);
     if (last === undefined || same(last, record)) {
@@ -167,10 +172,29 @@ export class Children implements ProcessOwner {
     }
   }
 
+  #signal(group: number, signal: NodeJS.Signals | number): boolean {
+    try {
+      this.#system.signal(group, signal);
+      return true;
+    } catch (error) {
+      if (groupIsGone(error, group, this.#system.hasLiveMembers)) return false;
+      throw error;
+    }
+  }
+
+  #alive(group: number): boolean {
+    try {
+      return this.#system.alive(group);
+    } catch (error) {
+      if (groupIsGone(error, group, this.#system.hasLiveMembers)) return false;
+      throw error;
+    }
+  }
+
   /** The grace is a limit, not a delay once the whole group has already exited. */
   async #gone(group: number, ms: number): Promise<boolean> {
     for (let left = ms; ;) {
-      if (!this.#system.alive(group)) return true;
+      if (!this.#alive(group)) return true;
       if (left === 0) return false;
       const step = Math.min(left, 50);
       await this.#system.wait(step);
