@@ -304,6 +304,16 @@ export async function inventoryUncommitted(
 }
 
 /** The uncommitted files status names, by path, and whether it named only what it says. */
+/**
+ * How many paths a worktree's status (`status --porcelain=v2 -z --untracked-files=all
+ * --no-renames`, read whole) lists as uncommitted, counted as the inventory counts them: each
+ * changed tracked path once, staged or not, and each untracked file. Null if it can't be parsed.
+ */
+export function uncommittedCount(stdout: string): number | null {
+  const read = entriesOf(statusEntries(stdout));
+  return read.parsed ? read.files.size : null;
+}
+
 function entriesOf(entries: readonly StatusEntry[]): {
   files: Map<string, UncommittedFile>;
   unmerged: boolean;

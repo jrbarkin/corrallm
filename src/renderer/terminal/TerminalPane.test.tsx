@@ -154,6 +154,7 @@ describe('a Terminal agent', () => {
             },
           ],
           kept: [],
+          into: null,
         },
       });
     });

@@ -188,6 +188,8 @@ it('lists a kept canvas’s remembered project without opening it or making a wo
       },
     ],
     kept: [],
+    // Nothing observed of a canvas not opened: no Git asked to list it (B9b C12).
+    into: null,
   });
   expect(core.engines.opened()).toEqual([TEAM]);
   expect(readOnDisk(profile, (disk) => disk.prepare('SELECT id FROM worktree').all())).toEqual([]);
