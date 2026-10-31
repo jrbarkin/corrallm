@@ -31,6 +31,19 @@ import type { SDKMessage, SessionMessage } from '@anthropic-ai/claude-agent-sdk'
  *   to open (onElicitation, `mode` form and url), each accepted.
  * - plan-into-mode: in plan mode, ExitPlanMode allowed with a session setMode to Accept edits: the
  *   CLI says it is in Accept edits at once, and writes the file unasked.
+ *
+ * Claude Code 2.1.316, through the Agent SDK 0.3.306 (B11a C4), Haiku 5.5 in a scratch folder with
+ * only the Read tool, its user, MCP and plugin settings left out, and its auto-compact window
+ * lowered to the minimum for the recording alone (CLAUDE_CODE_AUTO_COMPACT_WINDOW=100000, so that
+ * it compacts at 67,000 tokens rather than near 967,000). The long file contents it read are
+ * replaced by their lengths. `contextUsage` is what `getContextUsage({ detail: 'summary' })`
+ * answered at that moment, keeping only the fields the connector reads (after each result, and
+ * when each message's init arrived):
+ * - auto-compact: five turns, each reading a generated 42 KB text file. The CLI compacted by
+ *   itself (`compact_boundary` trigger `auto`, 72,344 → 1,446 tokens) at the start of the fourth
+ *   turn, after the third left 72,310 tokens in context.
+ * - no-auto-compact: one such turn with DISABLE_AUTO_COMPACT=1, where the summary has no
+ *   `autoCompactThreshold` and says `isAutoCompactEnabled: false`.
  */
 
 export type Fixture =
@@ -41,7 +54,9 @@ export type Fixture =
   | 'suggestions-and-denials'
   | 'safety-check'
   | 'mcp-elicitations'
-  | 'plan-into-mode';
+  | 'plan-into-mode'
+  | 'auto-compact'
+  | 'no-auto-compact';
 
 /** The fixtures recorded with their sessions' histories. */
 export type HistoryFixture = 'tools-and-compact' | 'question-and-plan' | 'subagent-and-interrupt';
@@ -71,7 +86,24 @@ export type Recorded =
   | { kind: 'elicitation'; data: RecordedElicitation }
   | { kind: 'elicitationResult'; data: unknown }
   | { kind: 'initializationResult'; data: { commands: unknown[]; models: unknown[] } }
-  | { kind: 'interruptReceipt'; data: unknown };
+  | { kind: 'interruptReceipt'; data: unknown }
+  | { kind: 'contextUsage'; data: RecordedContextUsage };
+
+/** What `getContextUsage({ detail: 'summary' })` answered, as far as the connector reads it. */
+export interface RecordedContextUsage {
+  /** When it was asked: the first message's init, or after turn N's result. */
+  when: string;
+  usage: {
+    totalTokens: number;
+    maxTokens: number;
+    rawMaxTokens: number;
+    autocompactSource: string;
+    percentage: number;
+    model: string;
+    autoCompactThreshold?: number;
+    isAutoCompactEnabled: boolean;
+  };
+}
 
 const FOLDER = path.join(import.meta.dirname, 'fixtures');
 
@@ -92,4 +124,9 @@ export function recordedHistory(name: HistoryFixture): SessionMessage[] {
   return JSON.parse(
     readFileSync(path.join(FOLDER, `${name}.history.json`), 'utf8'),
   ) as SessionMessage[];
+}
+
+/** The context summaries the CLI gave, in order. */
+export function recordedContextUsage(name: Fixture): RecordedContextUsage[] {
+  return recorded(name).flatMap((item) => (item.kind === 'contextUsage' ? [item.data] : []));
 }
