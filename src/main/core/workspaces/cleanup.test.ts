@@ -121,6 +121,29 @@ describe('what a tree holds', { timeout: 60_000 }, () => {
     expect(safe(committed)).toBe(false);
   });
 
+  it('keeps commits outside the picked checkout’s history when grafts name other parents', async () => {
+    const service = cleanup();
+    const tree = await kept();
+    writeFileSync(path.join(tree.path, 'agent.txt'), 'agent\n');
+    git(tree.path, made.env, 'add', '-A');
+    commit(tree.path, made.env, 'agent work');
+    const tip = git(tree.path, made.env, 'rev-parse', 'HEAD').trim();
+    writeFileSync(path.join(made.app, 'yours.txt'), 'yours\n');
+    git(made.app, made.env, 'add', 'yours.txt');
+    commit(made.app, made.env, 'your work');
+    const base = git(made.app, made.env, 'rev-parse', 'HEAD').trim();
+    const info = path.join(made.app, '.git', 'info');
+    mkdirSync(info, { recursive: true });
+    writeFileSync(path.join(info, 'grafts'), `${base} ${tip}\n`);
+    git(made.app, made.env, 'config', 'advice.graftFileDeprecated', 'false');
+    expect(
+      git(made.app, made.env, '--no-replace-objects', 'merge-base', '--is-ancestor', tip, base),
+    ).toBe('');
+    const state = await service.assess(tree);
+    expect(state.merged).toBe(false);
+    expect(safe(state)).toBe(false);
+  });
+
   it('says it can’t tell, never safe, when its checkout is gone', async () => {
     const service = cleanup();
     const tree = await kept();
