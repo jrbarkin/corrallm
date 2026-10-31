@@ -22,6 +22,12 @@ export const MAX_IMAGES = 20;
 export const MAX_MESSAGE_BYTES = 16 * 1024;
 
 /**
+ * The longest handoff kept, in bytes of UTF-8, once trimmed (B11a C7): the cap for automated text
+ * (Q-B11-1). A longer reply isn't accepted, never cut, so a handoff is exactly the agent's own.
+ */
+export const MAX_HANDOFF_BYTES = 16 * 1024;
+
+/**
  * The newest settled messages the store keeps per party (a message counts for its sender and its
  * recipient), within STORE_BYTES per canvas; pending and unresolved ones are always kept, and the
  * oldest settled go first (API Spec §5.8).
