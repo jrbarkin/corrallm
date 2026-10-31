@@ -1,3 +1,4 @@
+import type { WorktreeMerge, WorktreeMergeListing } from '../../../shared/api/branch';
 import type { CanvasId } from '../../../shared/canvas';
 import type { CanvasDocument } from '../../../shared/model/canvas';
 import { workspaceOwners } from '../../../shared/model/workspaces';
@@ -49,6 +50,8 @@ export interface ListedWorktree {
   branch: string | null;
   base: { ref: string | null; oid: string } | null;
   state: ListedState;
+  /** Unknown until the core’s observation service supplies a reading. */
+  merge: WorktreeMerge;
   /** Yours alone: the card waiting for you on it (its setup, or a workspace change). */
   need?: string;
   /** Yours alone: why it failed, or was lost. */
@@ -77,7 +80,7 @@ export interface ListedKept {
   createdAt: number;
 }
 
-export interface WorktreeListing {
+export interface WorktreeListing extends WorktreeMergeListing {
   items: ListedWorktree[];
   kept: ListedKept[];
 }
@@ -158,7 +161,7 @@ export function listWorktrees(
           location: deps.workspaces.worktree(tree.workspace)?.path ?? '',
           createdAt: tree.createdAt,
         }));
-  return { items, kept };
+  return { items, kept, into: null };
 }
 
 /**
@@ -188,6 +191,7 @@ function unplaced(agent: string, owner: WorkspaceOwner, state: ListedState): Lis
     branch: null,
     base: null,
     state,
+    merge: { merged: null, uncommitted: null },
   };
 }
 
@@ -214,6 +218,7 @@ function unbound(
       branch: null,
       base: null,
       state: 'ready',
+      merge: { merged: null, uncommitted: null },
       location: root,
     };
   }
@@ -238,6 +243,7 @@ function boundItem(
       branch: null,
       base: null,
       state: 'error',
+      merge: { merged: null, uncommitted: null },
       error: 'workspace-unknown',
     };
   }
@@ -249,6 +255,7 @@ function boundItem(
     branch: branchOf(tree),
     base: { ref: tree.baseRef, oid: tree.baseOid },
     state: stateOf(tree),
+    merge: { merged: null, uncommitted: null },
     location: tree.path,
   };
   if (tree.errorCode !== null) item.error = tree.errorCode;

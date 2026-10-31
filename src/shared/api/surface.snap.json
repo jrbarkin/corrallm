@@ -18,6 +18,8 @@
     "api.project.clearSetupApproval",
     "api.worktree.remove",
     "api.worktree.list",
+    "api.branch.diff",
+    "api.branch.merge",
     "api.worktree.retry",
     "api.canvas.list",
     "api.canvas.get",
@@ -95,6 +97,7 @@
       "agent_setSettings",
       "agents",
       "app_info",
+      "branch_diff",
       "canvas_addAgent",
       "canvas_addParent",
       "canvas_batch",
@@ -149,6 +152,7 @@
     "worker": [
       "agents",
       "app_info",
+      "branch_diff",
       "catalog_get",
       "message",
       "messages",
@@ -163,6 +167,7 @@
     "outside-read": [
       "agents",
       "app_info",
+      "branch_diff",
       "canvas_get",
       "canvas_list",
       "catalog_get",
@@ -189,6 +194,8 @@
       "agent_setSettings",
       "agents",
       "app_info",
+      "branch_diff",
+      "branch_merge",
       "canvas_addAgent",
       "canvas_addParent",
       "canvas_batch",
@@ -252,10 +259,10 @@
     ]
   },
   "counts": {
-    "lead": 54,
-    "worker": 12,
-    "outside-read": 22,
-    "outside-write": 64
+    "lead": 55,
+    "worker": 13,
+    "outside-read": 23,
+    "outside-write": 66
   },
   "deviations": {
     "canvas.open": "trust-gate",
@@ -289,7 +296,7 @@
   "schemas": {
     "topics.subscribe": {
       "input": "8c5be84f0a1a163a",
-      "output": "9c32edf1781ba70f"
+      "output": "2bd63940a43ed908"
     },
     "topics.unsubscribe": {
       "input": "8c5be84f0a1a163a",
@@ -325,7 +332,7 @@
     },
     "worktree.list": {
       "input": "72e6f4bc2806201b",
-      "output": "e4de311f541963b7"
+      "output": "16f5c85e00d21a28"
     },
     "worktree.retry": {
       "input": "dafe7f6753754290",
@@ -334,6 +341,14 @@
     "worktree.remove": {
       "input": "6c53b4b2cbe1d85f",
       "output": "d2717814b126a90e"
+    },
+    "branch.diff": {
+      "input": "ea58dbaf93714d81",
+      "output": "6dc40e67f1ded7b5"
+    },
+    "branch.merge": {
+      "input": "da10d56b6075c1fc",
+      "output": "b705ce599e9be4df"
     },
     "canvas.create": {
       "input": "3394f69e468a0469",

@@ -2124,6 +2124,7 @@ describe('workspace-safety and the worktree list, over real worktrees', () => {
       branch: trees.lead.branchRef.slice('refs/heads/'.length),
       base: { ref: trees.lead.baseRef, oid: trees.lead.baseOid },
       state: 'pending-change',
+      merge: { merged: null, uncommitted: null },
     });
   });
 

@@ -92,18 +92,20 @@ describe('the worktree list contract', () => {
       branch: `corrallm/p/${worktree}`,
       base: { ref: 'refs/heads/main', oid: 'a'.repeat(40) },
       state: 'setup',
+      merge: { merged: null, uncommitted: null },
     };
-    expect(op.output.safeParse({ items: [token], kept: [] }).success).toBe(true);
+    expect(op.output.safeParse({ items: [token], kept: [], into: null }).success).toBe(true);
     const yours = {
       ...token,
       need: `setup/${worktree}/1`,
       location: '/picked/.corral/worktrees/p/w',
       setup: { state: 'pending', command: 'npm ci', source: 'detected', exitCode: null },
     };
-    expect(op.output.safeParse({ items: [yours], kept: [] }).success).toBe(true);
-    expect(op.output.safeParse({ items: [{ ...token, state: 'deleted' }], kept: [] }).success).toBe(
-      false,
-    );
+    expect(op.output.safeParse({ items: [yours], kept: [], into: null }).success).toBe(true);
+    expect(
+      op.output.safeParse({ items: [{ ...token, state: 'deleted' }], kept: [], into: null })
+        .success,
+    ).toBe(false);
     expect(op.output.safeParse({ items: [] }).success).toBe(false);
   });
 });

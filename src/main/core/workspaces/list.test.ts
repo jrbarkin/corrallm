@@ -175,6 +175,12 @@ const byAgent = (listing: ReturnType<typeof listWorktrees>) =>
   Object.fromEntries(listing.items.map((item) => [item.agent, item]));
 
 describe('as you see it', () => {
+  it('keeps merge observations unknown until an observation is supplied', () => {
+    const listing = listWorktrees(deps(), canvas, DOCUMENT, { kind: 'you' });
+    expect(listing.into).toBeNull();
+    for (const item of listing.items)
+      expect(item.merge).toEqual({ merged: null, uncommitted: null });
+  });
   it('lists every agent with its tree, sharing and state, and what is yours alone', () => {
     const listing = listWorktrees(deps(), canvas, DOCUMENT, { kind: 'you' });
     expect(listing.items.map((item) => item.agent)).toEqual([
@@ -199,6 +205,7 @@ describe('as you see it', () => {
         branch: `corrallm/profile/${team.id}`,
         base: { ref: 'refs/heads/main', oid: 'a'.repeat(40) },
         state: 'ready',
+        merge: { merged: null, uncommitted: null },
         location: team.path,
       });
     }
@@ -207,6 +214,7 @@ describe('as you see it', () => {
       mode: 'own',
       workspace: ids.solo,
       state: 'setup',
+      merge: { merged: null, uncommitted: null },
       need: `setup/${ids.solo}/${String(workspaces.setup(ids.solo)?.generation)}`,
       location: trees.solo.path,
       setup: {
@@ -235,6 +243,7 @@ describe('as you see it', () => {
       branch: null,
       base: null,
       state: 'unmade',
+      merge: { merged: null, uncommitted: null },
     });
     expect(items.inner).toMatchObject({ mode: 'group', group: 'frame', state: 'unmade' });
     expect(workspaces.worktreesOf(canvas)).toHaveLength(4);
@@ -290,6 +299,7 @@ describe('as you see it', () => {
       branch: null,
       base: null,
       state: 'ready',
+      merge: { merged: null, uncommitted: null },
       location: ROOT,
     });
     root = undefined;
@@ -322,6 +332,7 @@ describe('as a token sees it', () => {
         base: { ref: 'refs/heads/main', oid: 'a'.repeat(40) },
         // It waits for setup; the command, the card and where it runs are yours.
         state: 'setup',
+        merge: { merged: null, uncommitted: null },
       },
       expect.objectContaining({ agent: 'mover', state: 'pending-change' }),
       expect.objectContaining({ agent: 'fresh', state: 'unmade' }),
@@ -345,6 +356,7 @@ describe('as a token sees it', () => {
         branch: `corrallm/profile/${ids.team}`,
         base: { ref: 'refs/heads/main', oid: 'a'.repeat(40) },
         state: 'ready',
+        merge: { merged: null, uncommitted: null },
       },
     ]);
     expect(JSON.stringify(listing)).not.toMatch(/lead|helper/);

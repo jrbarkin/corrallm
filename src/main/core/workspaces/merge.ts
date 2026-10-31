@@ -147,7 +147,7 @@ export type MergeResult =
       checkpoint?: string;
       /**
        * False when the checkpoint couldn't be recorded on the agent's branch (it moved meanwhile):
-       * its files keep the work, uncommitted. B9b's wire contract has no field for this yet (X2).
+       * its files keep the work, uncommitted. The operation maps this to checkpointRecorded: false.
        */
       recorded?: false;
     }

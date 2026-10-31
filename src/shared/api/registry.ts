@@ -6,6 +6,7 @@ import { agentOps } from './ops/agent';
 import { queueOps } from './ops/queue';
 import { appOps } from './ops/app';
 import { batchOps } from './ops/batch';
+import { branchOps } from './ops/branch';
 import { canvasOps } from './ops/canvas';
 import { catalogOps } from './ops/catalog';
 import { filesOps } from './ops/files';
@@ -35,6 +36,7 @@ export const OPS = {
   ...templatesOps,
   ...projectOps,
   ...b9aWorktreeOps,
+  ...branchOps,
   ...filesOps,
   ...canvasOps,
   ...batchOps,

@@ -203,6 +203,20 @@ export const SURFACE = {
     self: 'allowed',
     varies: ['items', 'kept'],
   },
+  'branch.diff': {
+    access: { ...R, worker: 'own' },
+    kind: 'read',
+    scope: 'none',
+    self: 'allowed',
+    varies: ['shared'],
+  },
+  'branch.merge': {
+    access: W,
+    kind: 'command',
+    scope: 'none',
+    self: 'refused',
+    rules: ['merge-permits'],
+  },
   // An agent's worktree tried again as it was recorded: never forced, never deleted, its setup
   // still asking you on its card. Yours alone, as the folder it works in is (D1, trust-gate).
   'worktree.retry': { access: Y, kind: 'command', scope: 'canvas' },

@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { MAX_SETUP_COMMAND_BYTES, UNSEEN_IN_COMMAND } from '../../model/worktree-setup';
 import { MAX_FILE_MATCHES, MAX_FILE_QUERY_LENGTH } from '../../session';
 import { define } from '../define';
+import { BranchInto, WorktreeMerge } from '../branch';
 import type { OpDef } from '../define';
 import { AgentId, OpCanvas, WorktreeId } from '../ids';
 import type { OpName } from '../surface';
@@ -77,6 +78,7 @@ const ListedWorktree = z.strictObject({
   branch: z.string().nullable(),
   base: Base.nullable(),
   state: ListedState,
+  merge: WorktreeMerge,
   // The user's alone: the card waiting on it, why it failed, where it is and its setup.
   need: z.string().optional(),
   error: z.string().optional(),
@@ -118,7 +120,11 @@ export const b9aWorktreeOps = {
       'With agent, that agent alone. Agents sharing a worktree have the same workspace. What ' +
       'it runs to set up, where it is and the worktrees kept are the user’s alone.',
     input: z.strictObject({ canvas: OpCanvas, agent: AgentId.optional() }),
-    output: z.strictObject({ items: z.array(ListedWorktree), kept: z.array(KeptWorktree) }),
+    output: z.strictObject({
+      items: z.array(ListedWorktree),
+      kept: z.array(KeptWorktree),
+      into: BranchInto.nullable(),
+    }),
   }),
   'worktree.retry': define('worktree.retry', {
     summary:

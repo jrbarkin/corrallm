@@ -264,3 +264,35 @@ it('quits only once a merge past its point of no return settled, before the work
   core = undefined;
   expect(stop).toHaveBeenCalled();
 }, 60000);
+
+it('reviews and merges through registered operations, retaining the caller’s pins and request', async () => {
+  const running = await start();
+  const checkout = await ready(running);
+  writeFileSync(path.join(checkout, 'done.txt'), 'done\n');
+  git(checkout, env, 'add', 'done.txt');
+  commit(checkout, env, 'Done');
+  const review = await running.call('branch.diff', { canvas: CANVAS, agent: 'a' }, CALLERS.you);
+  expect(review.ok).toBe(true);
+  if (!review.ok) throw new Error(review.error.sentence);
+  const page = review.value as {
+    source: { ref: string; oid: string };
+    into: { ref: string; oid: string };
+    files: { path: string }[];
+  };
+  expect(page.files.map(({ path: at }) => at)).toContain('done.txt');
+  const args = {
+    canvas: CANVAS,
+    agent: 'a',
+    source: { ref: page.source.ref, oid: page.source.oid },
+    into: page.into,
+    request: randomUUID(),
+  };
+  const merged = await running.call('branch.merge', args, CALLERS['outside-write']);
+  expect(merged.ok, JSON.stringify(merged)).toBe(true);
+  expect(merged).toMatchObject({
+    ok: true,
+    value: { outcome: 'merged', source: page.source.oid, revs: {} },
+  });
+  expect(git(project, env, 'show', 'HEAD:done.txt')).toBe('done\n');
+  expect(await running.call('branch.merge', args, CALLERS['outside-write'])).toEqual(merged);
+}, 60000);

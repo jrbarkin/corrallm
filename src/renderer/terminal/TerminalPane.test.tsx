@@ -149,10 +149,12 @@ describe('a Terminal agent', () => {
               branch: 'corral/a',
               base: null,
               state: 'setup',
+              merge: { merged: null, uncommitted: null },
               need,
               setup: { state: 'pending', command: 'npm ci', source: 'detected', exitCode: null },
             },
           ],
+          into: null,
           kept: [],
         },
       });

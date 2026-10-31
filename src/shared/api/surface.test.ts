@@ -38,8 +38,6 @@ const REAL: Registry = {
   ops: OPS,
   deviations: DEVIATIONS,
   rules: RULES,
-  // B9b §9 C1: Q30's rule and its core.call check land before branch.merge, which X2 registers.
-  awaiting: { 'merge-permits': 'branch.merge' },
 };
 
 it('hosts every operation whose audience includes you, but those main’s native UI alone calls', () => {
@@ -90,7 +88,8 @@ function takesUnbrandedText(schema: z.ZodType): boolean {
   if (ID_BRANDS.has(schema)) return false;
   const { type } = defOf(schema);
   if (type === 'string' || type === 'template_literal') return true;
-  if (type === 'record') return false;
+  // An object is a selector, not an id; its fields are checked under their own names below.
+  if (type === 'record' || type === 'object') return false;
   return children(schema).some((child) => takesUnbrandedText(child.schema));
 }
 
@@ -365,6 +364,19 @@ describe('T1: the surface’s rules', () => {
     input?: z.ZodObject<z.core.$ZodShape, z.core.$strict>,
     output?: z.ZodType,
   ): [Surface, OpDef] => [surface, read(surface, input, output)];
+
+  it('checks a structured selector at its own field names', () => {
+    expect(
+      unbrandedIds(
+        z.strictObject({
+          into: z.strictObject({ ref: z.string().max(100), oid: z.string().max(64) }),
+        }),
+      ),
+    ).toEqual([]);
+    expect(
+      unbrandedIds(z.strictObject({ into: z.strictObject({ agent: z.string().max(64) }) })),
+    ).toEqual(['.into.agent']);
+  });
 
   it('distinguishes explicitly authored message text from message ids', () => {
     const text = z.string().max(100).meta({ contentMediaType: 'text/plain' });
