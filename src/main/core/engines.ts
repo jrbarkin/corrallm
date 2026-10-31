@@ -97,6 +97,8 @@ export interface EnginesDeps {
   locale?: string;
   /** What else waits for you on a canvas, besides its run's holds and its sessions' prompts. */
   needs?: (canvas: CanvasId) => readonly NeedsItem[];
+  /** How many prompts of an agent's the core's prompt owner holds (B13 C3), which its counts add. */
+  prompted?: (canvas: CanvasId, agent: string) => number;
 }
 
 /**
@@ -135,6 +137,11 @@ export interface OpenCanvas {
    * Needs ids carry: none while none runs.
    */
   sessionGeneration?: (agent: string) => number | undefined;
+  /**
+   * How many prompts of an agent's the core's prompt owner holds (B13 C3), beside those its
+   * session shows itself: none where the core composes no owner.
+   */
+  ownedPrompts?: (agent: string) => number;
 }
 
 /** How a canvas opens. */
@@ -921,6 +928,7 @@ export class Engines {
     } as Running;
     running.reads = new ReadPositions(await journal.reads(canvas));
     running.sessionGeneration = (agent) => this.#deps.sessions.generationOf(canvas, agent);
+    running.ownedPrompts = (agent) => this.#deps.prompted?.(canvas, agent) ?? 0;
     running.journal = () => this.#write(running);
     // What its messages write, they write with its run, if that changed since it was last on disk.
     messages.writeWith(() => this.#runWithin(running, false));

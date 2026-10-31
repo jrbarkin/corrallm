@@ -148,10 +148,13 @@ export const Questions = z
 export type Questions = z.infer<typeof Questions>;
 
 /** JSON data only, with a bounded traversal before serialization (no cycles, getters or toJSON). */
-const Input = z.custom<PromptJson>(
-  (value) => boundedPromptJson(value, MAX_PROMPT_INPUT_BYTES, MAX_PROMPT_INPUT_DEPTH),
-  { message: 'Bounded JSON tool input', abort: true },
-);
+const Input = z
+  .unknown()
+  .refine(
+    (value): value is PromptJson =>
+      boundedPromptJson(value, MAX_PROMPT_INPUT_BYTES, MAX_PROMPT_INPUT_DEPTH),
+    { message: 'Bounded JSON tool input', abort: true },
+  );
 const Extension = z
   .looseObject({
     type: z.templateLiteral([

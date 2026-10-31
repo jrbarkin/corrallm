@@ -13,10 +13,10 @@ import {
 } from '../../../shared/api/limits';
 import type { NodeLike } from '../../../shared/model/canvas';
 import type { PartyId } from '../../../shared/model/messages';
-import type { NeedChoice, NeedQuestion, NeedsItem } from '../../../shared/model/needs';
-import { detailOf, previewLines } from '../../../shared/model/needs-selectors';
-import { mcpRequestTitle } from '../../../shared/model/words';
+import type { NeedsItem } from '../../../shared/model/needs';
 import { promptJsonBytes } from '../../../shared/model/prompt-data';
+import { NOT_WAITING, promptNeed, undescribed } from '../../../shared/model/prompt-views';
+import type { PromptOccurrence, PromptReader } from '../../../shared/model/prompt-views';
 import {
   checkPromptReply,
   Prompt,
@@ -79,10 +79,11 @@ import { classify } from './classify';
  *   until a distinct wait (`PromptAnswers.dismiss`); its CLI is told nothing. Nothing else in a
  *   terminal is answered here.
  *
- * Its Needs items (`items`) are yours, with their choices; a token's copy drops them (Needs'
- * `withoutChoices`), and a form's title is the core's, never the server's words, which may hold
- * its link. The prompt's other fields (subject, summary, reason, effects) and the transcript and
- * session views of each occurrence are C7's selector's (B13 §9.2 C11), read from `prompts`.
+ * What each reader sees of a prompt is the one selector's (B13 §9.2 C11:
+ * src/shared/model/prompt-views.ts), read from each live occurrence (`occurrences`): its Needs items
+ * (`items`), yours with their choices, a token's without them, without a form's own words or a
+ * terminal's screen; how one that ended is told to a later reply (`settled`), yours by its record,
+ * a token's only who settled it; and the refusal a token's reply gets, in what it may read.
  */
 
 /** Its budgets (B13 Design §9.2 C6), which tests may lower. */
@@ -182,14 +183,6 @@ type Declined = keyof typeof DECLINED;
 /** The core's line in a prompt's reason when its adapter left out a choice it couldn't word. */
 const OMITTED = 'corrallm left out a choice its CLI offers, which it can’t show completely.';
 
-/** B13 C7's Not waiting: the core's own choice on a terminal's wait raised from its report alone. */
-const NOT_WAITING = 'not-waiting';
-const NOT_WAITING_CHOICE: NeedChoice = {
-  value: NOT_WAITING,
-  label: 'Not waiting',
-  humanOnly: 'Only you can tell, from its terminal, that its CLI isn’t waiting for you.',
-};
-
 export class PromptOwner implements PromptSink {
   readonly #deps: PromptOwnerDeps;
   readonly #limits: PromptLimits;
@@ -266,8 +259,21 @@ export class PromptOwner implements PromptSink {
     }
   }
 
-  /** What waits on the canvas, yours: each live prompt of an agent on it, as its Needs item. */
-  items(canvas: CanvasId): NeedsItem[] {
+  /**
+   * What waits on the canvas: each live prompt of an agent on it, as its Needs item, as `reader`
+   * sees it (yours, unless said).
+   */
+  items(canvas: CanvasId, reader: PromptReader = 'you'): NeedsItem[] {
+    return this.occurrences(canvas).map((occurrence) => promptNeed(occurrence, reader));
+  }
+
+  /**
+   * Each live prompt of an agent on the canvas, as the selector reads it (B13 C11): its Needs id,
+   * its agent's name now, and whether it is the core's stand-in (so a wait its report alone
+   * describes, `undescribed`, offers Not waiting wherever it is shown). Not one its session also
+   * shows as one of the events B13 replaces (until X10), whose old item stands for it.
+   */
+  occurrences(canvas: CanvasId): PromptOccurrence[] {
     const nodes = this.#deps.canvas(canvas)?.nodes;
     if (nodes === undefined) return [];
     return [...(this.#canvases.get(canvas)?.live.values() ?? [])]
@@ -276,7 +282,12 @@ export class PromptOwner implements PromptSink {
           !mirrored &&
           nodes.some((node) => node.id === agent && (node.type ?? 'agent') === 'agent'),
       )
-      .map((occurrence) => needOf(occurrence, nodes));
+      .map((occurrence) => occurrenceOf(occurrence, nodes));
+  }
+
+  /** How many prompts wait on `agent` (as `occurrences` lists them): what its counts add. */
+  count(canvas: CanvasId, agent: string): number {
+    return this.occurrences(canvas).filter(({ prompt }) => prompt.agent === agent).length;
   }
 
   /**
@@ -298,25 +309,34 @@ export class PromptOwner implements PromptSink {
     return this.#resolve(canvas, to) !== undefined;
   }
 
-  /** The Needs item `to` names, if it names a live prompt on the canvas. */
+  /** The Needs item `to` names, yours, if it names a live prompt on the canvas. */
   current(canvas: CanvasId, to: string): NeedsItem | undefined {
     const occurrence = this.#resolve(canvas, to);
     const nodes = this.#deps.canvas(canvas)?.nodes;
-    return occurrence === undefined || nodes === undefined ? undefined : needOf(occurrence, nodes);
+    return occurrence === undefined || nodes === undefined
+      ? undefined
+      : promptNeed(occurrenceOf(occurrence, nodes), 'you');
   }
 
   /**
-   * Why `to` waits no more, if it named a prompt here: settled (who decided, as recorded, a crash's
-   * unresolved answer too), withdrawn or answered in its terminal. None: not one this core knows.
+   * Why `to` waits no more, if it named a prompt here, as `reader` may be told: settled (yours: who
+   * decided and how, as recorded, a crash's unresolved answer too; a token's: who settled it, never
+   * how), withdrawn or answered in its terminal. None: not one this core knows.
    */
-  settled(canvas: CanvasId, to: string): OpFailure | undefined {
+  settled(canvas: CanvasId, to: string, reader: PromptReader = 'you'): OpFailure | undefined {
     const open = this.#deps.canvas(canvas);
+    const nodes = open?.nodes ?? [];
     const record = open === undefined ? undefined : decidedOf(open.messages, to);
-    if (record !== undefined)
-      return new OpFailure('conflict', `${to} is settled already: ${record.body}`);
+    if (record !== undefined) {
+      return new OpFailure(
+        'conflict',
+        reader === 'you'
+          ? `${to} is settled already: ${record.body}`
+          : `${to} is settled already: ${partyText(nodes, record.by ?? 'you')} answered it.`,
+      );
+    }
     const ended = this.#canvases.get(canvas)?.ended.get(to);
     if (ended === undefined) return undefined;
-    const nodes = open?.nodes ?? [];
     if (ended.reason === 'answered') {
       return new OpFailure(
         'conflict',
@@ -353,11 +373,12 @@ export class PromptOwner implements PromptSink {
     if (open === undefined) {
       throw new OpFailure('unavailable', 'That canvas isn’t open in corrallm.');
     }
-    // Every native prompt is yours alone until B24's grants: no token answers as you.
+    // Every native prompt is yours alone until B24's grants: no token answers as you. It is told
+    // what it may read of the prompt (B13 C11).
     if (ctx.by !== 'you') {
       throw new OpFailure(
         'refused',
-        `Only the user may answer ${to}: ${needOf(occurrence, open.nodes).title}`,
+        `Only the user may answer ${to}: ${promptNeed(occurrenceOf(occurrence, open.nodes), 'token').title}`,
       );
     }
     // Not waiting, before a terminal's answers are refused: settled at once, nothing recorded.
@@ -468,7 +489,7 @@ export class PromptOwner implements PromptSink {
   /** The answer `given` as the prompt takes it, or an `invalid` failure saying what it takes. */
   #check(occurrence: Occurrence, given: unknown): PromptAnswer {
     const { prompt, need } = occurrence;
-    if (undescribed(occurrence) && picks(given, NOT_WAITING)) {
+    if (undescribed(occurrence.prompt, occurrence.standIn) && picks(given, NOT_WAITING)) {
       throw new OpFailure('invalid', `${need}: Not waiting takes no words.`);
     }
     if (prompt.answerIn === 'terminal') {
@@ -718,24 +739,6 @@ function cutText(text: string, length: number): string {
   return text.slice(0, code >= 0xd800 && code <= 0xdbff ? length - 1 : length);
 }
 
-/**
- * Whether an occurrence is a terminal's wait raised from its CLI's report alone (B13 C7): no
- * subject, choice, question or plan (no hook described it, and it isn't the trust screen), and not
- * the core's stand-in for an observation it couldn't show (which a hook may have described).
- */
-function undescribed({ prompt, standIn }: Occurrence): boolean {
-  if (standIn || prompt.answerIn !== 'terminal') return false;
-  switch (prompt.kind) {
-    case 'approval':
-      return prompt.subject === undefined && prompt.choices.length === 0;
-    case 'question':
-      return prompt.questions.length === 0;
-    case 'plan':
-    case 'form':
-      return false;
-  }
-}
-
 /** Whether `given` picks the choice `value`, whatever else it holds. */
 function picks(given: unknown, value: string): boolean {
   return (
@@ -746,82 +749,21 @@ function picks(given: unknown, value: string): boolean {
 /** Whether `given` is Not waiting, as the occurrence takes it: that choice alone, where offered. */
 function notWaiting(occurrence: Occurrence, given: unknown): boolean {
   return (
-    undescribed(occurrence) &&
+    undescribed(occurrence.prompt, occurrence.standIn) &&
     picks(given, NOT_WAITING) &&
     Object.keys(given as object).length === 1
   );
 }
 
-/** An occurrence's Needs item, yours: generic fields only, the router's and Needs'. */
-function needOf(occurrence: Occurrence, nodes: readonly NodeLike[]): NeedsItem {
-  const { prompt } = occurrence;
-  // The core's own choice, where it is offered.
-  const own = undescribed(occurrence) ? [NOT_WAITING_CHOICE] : [];
-  const base = {
-    id: occurrence.need,
+/** An occurrence as the selector reads it (B13 C11), its agent named as `nodes` name it now. */
+function occurrenceOf(occurrence: Occurrence, nodes: readonly NodeLike[]): PromptOccurrence {
+  return {
     canvas: occurrence.canvas,
-    agent: occurrence.agent,
-    kind: 'prompt' as const,
-    for: 'you' as const,
-    by: ['you' as const],
-    answerIn: prompt.answerIn,
+    need: occurrence.need,
+    prompt: occurrence.prompt,
+    name: nameOf(nodes, occurrence.agent),
+    standIn: occurrence.standIn,
   };
-  // A whole prompt only you may answer marks each of its choices so, for the router's check too.
-  const choices = (): NeedChoice[] =>
-    prompt.kind !== 'approval' && prompt.kind !== 'plan'
-      ? []
-      : prompt.choices.map(({ value, label, description, humanOnly }) => {
-          const why = humanOnly ?? prompt.humanOnly;
-          return {
-            value,
-            label,
-            ...(description === undefined ? {} : { description }),
-            ...(why === undefined ? {} : { humanOnly: why }),
-          };
-        });
-  switch (prompt.kind) {
-    case 'approval':
-      return {
-        ...base,
-        title: prompt.title,
-        ...detailOf(prompt.detail),
-        choices: [...choices(), ...own],
-      };
-    case 'plan':
-      return { ...base, title: prompt.title, ...previewLines(prompt.plan), choices: choices() };
-    case 'question':
-      return {
-        ...base,
-        title: prompt.title,
-        ...detailOf(prompt.detail),
-        choices: own,
-        questions: prompt.questions.map(
-          ({ id, header, text, options, multiple, other }): NeedQuestion => ({
-            id,
-            header,
-            text,
-            options: options.map(({ label, description }) => ({
-              label,
-              ...(description === undefined ? {} : { description }),
-            })),
-            multiple,
-            other,
-          }),
-        ),
-      };
-    case 'form':
-      // The server's own words may hold its link: the core's title, naming the server where its
-      // adapter says which (by the name it is configured under), and no detail, for everyone.
-      return {
-        ...base,
-        title:
-          prompt.server === undefined
-            ? `${nameOf(nodes, occurrence.agent)}’s CLI asks you to ${'url' in prompt.form ? 'open a link' : 'fill in a form'}`
-            : mcpRequestTitle(prompt.server, 'url' in prompt.form),
-        choices: [],
-        form: prompt.form,
-      };
-  }
 }
 
 /** What a prompt takes, said to an answer that isn't one. */

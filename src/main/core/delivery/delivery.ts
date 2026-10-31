@@ -6,6 +6,7 @@ import type { AdapterId, ConnectionId } from '../../../shared/adapter';
 import type { CanvasId } from '../../../shared/canvas';
 import { needsItem, needsOf } from '../../../shared/model/needs-selectors';
 import type { NeedsInput, UnaskingWhy } from '../../../shared/model/needs-selectors';
+import { needFor } from '../../../shared/model/prompt-views';
 import type { Engine } from '../engine/engine';
 import type { PauseCause } from '../engine/run/runner';
 import type { AgentNode, CanvasNode } from '../../../shared/model/canvas';
@@ -1235,10 +1236,13 @@ export class Delivery {
     for (const { agent, message } of turns) {
       const need = asked.find((one) => one.agent.id === agent);
       if (need) {
+        // Its sender is a token (yours aren't told): it reads what a token may of the prompt (B13
+        // C11's selector).
+        const { title } = needFor(needsItem(need, input), 'token');
         this.#tell(
           `waiting:${message.id}`,
           message,
-          `${this.#name(agent)} is waiting for the user: ${threadTitle(needsItem(need, input).title, TITLE)}`,
+          `${this.#name(agent)} is waiting for the user: ${threadTitle(title, TITLE)}`,
         );
       }
     }

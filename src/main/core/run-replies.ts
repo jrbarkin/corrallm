@@ -6,6 +6,7 @@ import type { NeedsItem } from '../../shared/model/needs';
 import { isOpen } from '../../shared/model/session';
 import type { Prompt } from '../../shared/model/session';
 import type { PromptAnswer, PromptReplyAnswer } from '../../shared/model/prompts';
+import type { PromptReader } from '../../shared/model/prompt-views';
 import { MAX_CANVAS_PROMPTS } from '../../shared/api/limits';
 import type { SessionAnswer } from '../../shared/session';
 import type { SessionManager } from '../sessions/manager';
@@ -117,14 +118,28 @@ export function runReplies({
    * until X11).
    */
   const bridged = new Map<CanvasId, Map<string, string>>();
-  /** Settled already: a conflict naming who settled it, if a record of it is kept. */
-  const settled = (canvas: CanvasId, to: string): OpFailure | undefined => {
+  /**
+   * Settled already: a conflict naming who settled it, if a record of it is kept; and, to you, how
+   * (its record's words). A token is told a prompt's settler alone (B13 C11).
+   */
+  const settled = (
+    canvas: CanvasId,
+    to: string,
+    reader: PromptReader = 'you',
+  ): OpFailure | undefined => {
     const through = bridged.get(canvas)?.get(to);
-    if (through !== undefined && owner !== undefined) return owner.settled(canvas, through);
+    if (through !== undefined && owner !== undefined) {
+      return owner.settled(canvas, through, reader);
+    }
     const open = engines.canvas(canvas);
     const record = open === undefined ? undefined : decidedOf(open.messages, to);
-    if (record === undefined) return undefined;
-    return new OpFailure('conflict', `${to} is settled already: ${record.body}`);
+    if (record === undefined || open === undefined) return undefined;
+    return new OpFailure(
+      'conflict',
+      reader === 'you'
+        ? `${to} is settled already: ${record.body}`
+        : `${to} is settled already: ${partyText(open.document.nodes, record.by ?? 'you')} answered it.`,
+    );
   };
 
   const holds: ReplyHandler = {
@@ -305,7 +320,7 @@ export function runReplies({
   const legacy: ReplyHandler = {
     prefixes: ['prompt'],
     current: (canvas, to) => items(canvas).find((item) => item.id === to),
-    gone: (canvas, to) => {
+    gone: (canvas, to, reader) => {
       const id = promptOf(to);
       const open = engines.canvas(canvas);
       if (id !== undefined && open !== undefined) {
@@ -322,7 +337,7 @@ export function runReplies({
           );
         }
       }
-      return settled(canvas, to);
+      return settled(canvas, to, reader);
     },
     fits: (item, answer) => {
       if (item.answerIn === 'terminal') {
@@ -431,7 +446,8 @@ export function runReplies({
   const prompts: ReplyHandler = {
     prefixes: ['prompt'],
     current: (canvas, to) => owner?.current(canvas, to) ?? legacy.current(canvas, to),
-    gone: (canvas, to) => owner?.settled(canvas, to) ?? legacy.gone?.(canvas, to),
+    gone: (canvas, to, reader) =>
+      owner?.settled(canvas, to, reader) ?? legacy.gone?.(canvas, to, reader),
     fits: (item, answer) =>
       owner?.owns(item.canvas, item.id) === true
         ? owner.fits(item.canvas, item.id, answer)

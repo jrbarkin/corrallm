@@ -1024,6 +1024,7 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
       ...setups.items(canvas),
       ...changes.items(canvas),
     ],
+    prompted: (canvas, agent) => prompts.count(canvas, agent),
   });
   const warnings = new Set<Promise<void>>();
   const stalled = new StalledTurns({

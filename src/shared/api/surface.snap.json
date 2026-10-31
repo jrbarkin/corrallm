@@ -289,7 +289,7 @@
   "schemas": {
     "topics.subscribe": {
       "input": "8c5be84f0a1a163a",
-      "output": "5a4e16d999235512"
+      "output": "720454187e13e7e2"
     },
     "topics.unsubscribe": {
       "input": "8c5be84f0a1a163a",
@@ -457,11 +457,11 @@
     },
     "status": {
       "input": "41356bc15da6df1b",
-      "output": "cb91151f949f1731"
+      "output": "898448dc0ae49c21"
     },
     "needs": {
       "input": "41356bc15da6df1b",
-      "output": "90b6a28175b9f458"
+      "output": "92c451f1bdba9c2c"
     },
     "messages": {
       "input": "aa02e84f7d3e9a8e",

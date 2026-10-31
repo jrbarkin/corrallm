@@ -510,9 +510,9 @@ describe('admission', () => {
     };
     const known = raise(origin(7, handle(), { startMode: 'plan' }), plan);
     expect(known?.choices).toEqual([
-      { value: 'plan', label: 'Go on in plan' },
-      { value: 'auto', label: 'Go on in auto', humanOnly: expect.any(String) as string },
-      { value: 'no', label: 'No' },
+      into('plan'),
+      { ...into('auto'), humanOnly: expect.any(String) as string },
+      no,
     ]);
     // Its start mode unknown: every mode choice is yours.
     const unknown = raise(origin(7, handle(), { startMode: null }), plan, KEY2);
@@ -1244,5 +1244,79 @@ describe('the record of a decision (B13 C9)', () => {
         },
       }),
     ]);
+  });
+});
+
+describe('what each reader reads of a prompt (B13 C11)', () => {
+  const LINK = 'https://signin.example.test/link?token=private-signin-secret';
+  const link = {
+    kind: 'form',
+    title: `Sign in at ${LINK}`,
+    summary: LINK,
+    server: 'tracker',
+    answerIn: 'api',
+    form: { url: LINK },
+  };
+  const screen = {
+    kind: 'approval',
+    title: 'The CLI needs you: see its terminal.',
+    answerIn: 'terminal',
+    detail: { kind: 'output', text: 'private-screen-row' },
+    choices: [],
+  };
+  /** An outside token's call. */
+  const outside = () =>
+    context({
+      by: 'outside:orchestrator',
+      caller: {
+        kind: 'outside',
+        token: 'write-token',
+        name: 'orchestrator',
+        access: 'write',
+        merge: true,
+        canvases: [CANVAS],
+      },
+    });
+
+  it('lists each prompt for you whole and for a token as the selector says, from the same occurrence', () => {
+    raise(origin(7, handle()), screen);
+    raise(origin(7, handle()), link, KEY2);
+    const [waits, form] = owner.occurrences(CANVAS);
+    expect(waits).toMatchObject({ name: 'Reviewer', standIn: false });
+    expect(form?.prompt.kind).toBe('form');
+    const [yourWait, yourForm] = owner.items(CANVAS);
+    const [theirWait, theirForm] = owner.items(CANVAS, 'token');
+    expect(waits?.need).toBe(yourWait?.id);
+    expect(yourWait).toMatchObject({
+      detail: 'private-screen-row',
+      choices: [{ value: 'not-waiting' }],
+    });
+    expect(theirWait?.choices).toEqual([]);
+    expect(theirWait).not.toHaveProperty('detail');
+    expect(yourForm).toMatchObject({ form: { url: LINK } });
+    expect(JSON.stringify(theirForm)).not.toContain('private-signin-secret');
+    expect(owner.count(CANVAS, 'b')).toBe(2);
+    expect(owner.count(CANVAS, 'c')).toBe(0);
+  });
+
+  it('refuses a token’s reply in what it may read of the prompt', async () => {
+    raise(origin(7, handle()), link);
+    const id = only();
+    expect(await answer(id, { form: { action: 'accept' } }, outside())).toEqual({
+      code: 'refused',
+      sentence: `Only the user may answer ${id}: MCP server “tracker” asks you to open a link`,
+    });
+  });
+
+  it('tells you how a prompt was settled, and a token only who settled it', async () => {
+    raise(origin(7, handle()), approval);
+    const id = only();
+    await answer(id, { choice: 'yes' });
+    expect(owner.settled(CANVAS, id)?.message).toBe(
+      `${id} is settled already: You allowed Reviewer’s command once.`,
+    );
+    expect(owner.settled(CANVAS, id, 'token')?.message).toBe(
+      `${id} is settled already: the user answered it.`,
+    );
   });
 });
