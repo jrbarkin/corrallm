@@ -1,4 +1,4 @@
-import type { SessionMode, TerminalAsk, TurnReason } from '../../../shared/session';
+import type { SessionMode, SessionUsage, TerminalAsk, TurnReason } from '../../../shared/session';
 import type { UsageWindows } from '../../../shared/usage';
 import type { HookEvent, HookRegistration } from './hooks';
 import type { Screen } from './screen';
@@ -75,6 +75,8 @@ export interface TerminalUsage {
 
 /** What its status line was given, as its CLI reads it (`statusLine`). */
 export interface StatusLineReading {
+  /** The CLI's context on its own meter's basis, or null if it cannot say. */
+  context?: SessionUsage['context'];
   /** Its account's usage limits' windows, for main's readings, if it says any. */
   usage: UsageWindows | undefined;
   /**
@@ -160,6 +162,8 @@ export interface TerminalCli<M extends SessionMode> {
    * untrusted JSON: read, never acted on beyond.
    */
   statusLine?(input: HookEvent): StatusLineReading;
+  /** Context read by this adapter from its title or hooks. */
+  context?(): SessionUsage['context'];
   /**
    * Reads its account's usage limits apart from its terminal, when the session starts and after
    * each turn ends (before it ends one the CLI ended with an error without saying why, to tell

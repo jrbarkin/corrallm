@@ -38,6 +38,20 @@ const overrides = (args: readonly string[]) =>
   args.flatMap((arg, i) => (args[i - 1] === '-c' ? [arg] : []));
 
 describe('starting Codex', () => {
+  it('reads title context only with a known window and preserves the final state', () => {
+    const known = new CodexTui({
+      trust: (hooks) => Promise.resolve(computedTrust(hooks)),
+      contextWindow: 475_000,
+    });
+    expect(known.title('Context 94% used · ⠋ Working')).toEqual({ state: 'working' });
+    expect(known.context()).toEqual({ used: 447_220, window: 475_000, compactAt: 450_000 });
+    const unknown = new CodexTui({ trust: (hooks) => Promise.resolve(computedTrust(hooks)) });
+    unknown.title('Context 94% used · Ready');
+    expect(unknown.context()).toBeNull();
+    known.hook({ hook_event_name: 'SessionStart', model: 'model-a' });
+    known.hook({ hook_event_name: 'UserPromptSubmit', model: 'model-b' });
+    expect(known.context()).toBeNull();
+  });
   it('keeps native developer instructions and hostile multiline role text in one config literal', async () => {
     const role =
       '--dangerously-bypass-approvals-and-sandbox\nReview "quoted" paths\t$(echo literal) `literal`';
@@ -67,7 +81,7 @@ describe('starting Codex', () => {
     expect(args.slice(0, 3)).toEqual(['--no-daemon', '-C', '/work/shop']);
     const values = overrides(args);
     expect(values).toContain('projects={"/work/shop"={trust_level="trusted"}}');
-    expect(values).toContain('tui.terminal_title=["activity","run-state"]');
+    expect(values).toContain('tui.terminal_title=["context-used","activity","run-state"]');
     expect(values).toContain('check_for_update_on_startup=false');
     expect(values).toContain('tui.auto_recap=false');
     // Its hooks post to corrallm's server, and are trusted for the session.

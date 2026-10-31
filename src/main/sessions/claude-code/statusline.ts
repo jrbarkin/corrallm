@@ -2,6 +2,8 @@ import { readFile, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import path from 'node:path';
 
+import type { SessionUsage } from '../../../shared/session';
+import { compactAt, tokenCount } from './context';
 import type { UsageWindows, WindowUsage } from '../../../shared/usage';
 
 /*
@@ -76,6 +78,39 @@ export function statusLineUsage(
   return Object.keys(windows).length > 0 ? windows : undefined;
 }
 
+/** The last call's context, never the cumulative session totals. */
+export function statusLineContext(
+  input: Readonly<Record<string, unknown>>,
+): SessionUsage['context'] {
+  const context = input.context_window;
+  if (!isRecord(context)) return null;
+  const window = context.context_window_size;
+  if (!tokenCount(window) || window === 0) return null;
+  let used: number;
+  if (isRecord(context.current_usage)) {
+    const current = context.current_usage;
+    const counts = [
+      'input_tokens',
+      'cache_creation_input_tokens',
+      'cache_read_input_tokens',
+      'output_tokens',
+    ].map((key) => current[key]);
+    if (
+      counts.every((value) => value === undefined) ||
+      counts.some((value) => value !== undefined && !tokenCount(value))
+    )
+      return null;
+    used = counts.reduce<number>((sum, value) => sum + (tokenCount(value) ? value : 0), 0);
+  } else {
+    if (context.current_usage !== undefined && context.current_usage !== null) return null;
+    const percent = context.used_percentage;
+    if (typeof percent !== 'number' || !Number.isFinite(percent) || percent < 0 || percent > 100)
+      return null;
+    used = Math.round(window * (percent / 100));
+  }
+  return tokenCount(used) ? { used, window, compactAt: compactAt(window, undefined) } : null;
+}
+
 /**
  * The fields of Claude Code's status line input that only its work moves (as 2.1.310 gives them):
  * its session's cost, API time and lines changed, and its last response's tokens.
@@ -146,7 +181,7 @@ export function shellQuote(text: string): string {
 
 /**
  * The script corrallm's status line runs: posts its input to `url` (in the background, headers
- * from `header`, giving up after 2 s) if it says anything of usage limits, then runs the user's
+ * from `header`, giving up after 2 s) if it says anything of limits or context, then runs the user's
  * own status line (`theirs`) with the same input and exits as it does; or, with none, prints
  * nothing.
  */
@@ -161,7 +196,7 @@ export function statusLineScript(url: string, header: string, theirs: string | u
     '"; done',
     'input=$input$line',
     'case $input in',
-    `*'"rate_limits"'*)`,
+    `*'"rate_limits"'*|*'"context_window"'*)`,
     '  for curl in curl /usr/bin/curl; do command -v "$curl" >/dev/null 2>&1 && break; curl=; done',
     '  if [ -n "$curl" ]; then',
     `    printf '%s' "$input" | "$curl" -s -m 2 -o /dev/null -H 'Content-Type: application/json' -H @${shellQuote(header)} --data-binary @- ${shellQuote(url)} >/dev/null 2>&1 &`,

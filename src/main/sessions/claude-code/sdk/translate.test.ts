@@ -42,6 +42,97 @@ function texts(events: SessionEvent[], type: 'text' | 'thinking'): Map<string, s
 }
 
 describe('Translator, on what the real Claude Code did', () => {
+  it('uses the top-level response and its model window, apart from subagents', () => {
+    const messages = structuredClone(recordedMessages('tools-and-compact'));
+    const end = messages.findIndex((message) => message.type === 'result');
+    const result = messages[end];
+    const assistant = messages
+      .slice(0, end)
+      .filter((message) => message.type === 'assistant')
+      .at(-1);
+    if (result?.type !== 'result' || assistant === undefined) throw new Error('no turn');
+    const model = result.modelUsage['claude-haiku-5-5'];
+    if (model === undefined) throw new Error('no model');
+    result.modelUsage['another-model'] = { ...model, contextWindow: 2_000_000 };
+    messages.splice(end, 0, {
+      ...assistant,
+      parent_tool_use_id: 'subagent',
+      message: {
+        ...assistant.message,
+        usage: { ...assistant.message.usage, input_tokens: 800_000 },
+      },
+    });
+    const translate = translator();
+    const events = messages.slice(0, end + 2).flatMap((message) => translate.translate(message));
+    expect(ofType(events, 'usage').at(-1)?.usage.context).toEqual({
+      used: 40_035,
+      window: 1_000_000,
+      compactAt: 967_000,
+    });
+  });
+
+  it('uses the latest top-level response model after a native model change', () => {
+    const messages = structuredClone(recordedMessages('tools-and-compact'));
+    const end = messages.findIndex((message) => message.type === 'result');
+    const result = messages[end];
+    if (result?.type !== 'result') throw new Error('no turn');
+    const model = result.modelUsage['claude-haiku-5-5'];
+    if (model === undefined) throw new Error('no model');
+    result.modelUsage['another-model'] = {
+      ...model,
+      contextWindow: 200_000,
+      maxOutputTokens: 8_000,
+    };
+    for (const message of messages.slice(0, end)) {
+      if (message.type === 'assistant' && message.parent_tool_use_id === null)
+        message.message.model = 'another-model';
+    }
+    const translate = translator();
+    const events = messages.slice(0, end + 1).flatMap((message) => translate.translate(message));
+    expect(ofType(events, 'usage').at(-1)?.usage.context).toEqual({
+      used: 40_035,
+      window: 200_000,
+      compactAt: 179_000,
+    });
+  });
+
+  it('reserves a smaller reported output allowance when computing default compaction', () => {
+    const messages = structuredClone(recordedMessages('tools-and-compact'));
+    const end = messages.findIndex((message) => message.type === 'result');
+    const result = messages[end];
+    if (result?.type !== 'result') throw new Error('no turn');
+    const model = result.modelUsage['claude-haiku-5-5'];
+    if (model === undefined) throw new Error('no model');
+    model.contextWindow = 200_000;
+    model.maxOutputTokens = 8_000;
+    const translate = translator();
+    const events = messages.slice(0, end + 1).flatMap((message) => translate.translate(message));
+    expect(ofType(events, 'usage').at(-1)?.usage.context).toEqual({
+      used: 40_035,
+      window: 200_000,
+      compactAt: 179_000,
+    });
+  });
+
+  it.each([-1, NaN, Infinity, 1.5])(
+    'leaves malformed assistant token counts unknown (%s)',
+    (input) => {
+      const translatorUnderTest = translator();
+      const messages = structuredClone(recordedMessages('tools-and-compact'));
+      const last = messages.findIndex((message) => message.type === 'result');
+      const assistant = messages
+        .slice(0, last)
+        .filter((message) => message.type === 'assistant')
+        .at(-1);
+      if (assistant === undefined) throw new Error('no assistant');
+      assistant.message.usage.input_tokens = input;
+      const events = messages
+        .slice(0, last + 1)
+        .flatMap((message) => translatorUnderTest.translate(message));
+      expect(ofType(events, 'usage').at(-1)?.usage.context).toBeNull();
+    },
+  );
+
   it('shows each tool call running, then done, with what it acted on and its result', () => {
     const events = play('tools-and-compact');
 
@@ -105,14 +196,14 @@ describe('Translator, on what the real Claude Code did', () => {
     expect(usage.at(0)?.usage).toEqual({
       costUsd: 0.006818879999999999,
       // The last reply's input, cache and output tokens.
-      context: null,
+      context: { used: 2 + 316 + 39709 + 8, window: 1_000_000, compactAt: 967_000 },
       contextTokens: 2 + 316 + 39709 + 8,
       contextWindow: 1_000_000,
     });
     // Compacting leaves less in context.
     expect(usage.at(-1)?.usage).toMatchObject({
       costUsd: 0.007957245,
-      context: null,
+      context: { used: 9021, window: 1_000_000, compactAt: 967_000 },
       contextTokens: 9021,
     });
   });

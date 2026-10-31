@@ -33,6 +33,18 @@ it('the recorded fake reports whether native instructions reached it, without th
   });
 });
 
+it('reports the last request context with the native configured compaction limit before end', async () => {
+  const { turn, events } = await start({}, { FAKE_CODEX_COMPACT_AT: '150000' });
+  await turn('Hello');
+  const beforeEnd = events.slice(
+    0,
+    events.findIndex((event) => event.type === 'end'),
+  );
+  expect(beforeEnd.filter((event) => event.type === 'usage').at(-1)).toMatchObject({
+    usage: { context: { used: 2000, window: 200000, compactAt: 150000 } },
+  });
+});
+
 it('refuses a resume option before finding or spawning a CLI', async () => {
   const findCodex = vi.fn().mockResolvedValue('/not-run');
   const spawn = vi.fn();
@@ -261,7 +273,7 @@ describe('the App Server connection', () => {
     },
   );
 
-  it('resumes without a role without reading native instructions, even if the read would fail', async () => {
+  it('resumes without a role even if the optional context config read fails', async () => {
     const env = {
       FAKE_CODEX_STATE: path.join(dir, 'threads.json'),
       FAKE_CODEX_CONFIG_FAIL: 'Could not read config',
@@ -273,7 +285,7 @@ describe('the App Server connection', () => {
     await first.session.close();
 
     const next = await start({ resume: id ?? null, roleChanged: false }, env);
-    expect(await requests('config/read')).toEqual([]);
+    expect(await requests('config/read')).toEqual([{ cwd: dir }, { cwd: dir }]);
     expect((await requests('thread/resume')).at(-1)).toMatchObject({ threadId: id });
     expect((await requests('thread/resume')).at(-1)).not.toHaveProperty('developerInstructions');
     expect(next.events[0]).toMatchObject({ type: 'started' });
@@ -1083,7 +1095,11 @@ describe('the App Server connection, replaying the real Codex', () => {
     expect(remembered).toEqual(['01a1348d-2ce8-78b1-9629-fd1c7f6a8e4b']);
     // How full the context is, and the plan's limits, as the turn went.
     expect(events.filter((e) => e.type === 'usage').at(-1)).toMatchObject({
-      usage: { context: null, contextTokens: 18_246, contextWindow: 258_400 },
+      usage: {
+        context: { used: 18_246, window: 258_400, compactAt: 244_800 },
+        contextTokens: 18_246,
+        contextWindow: 258_400,
+      },
     });
     await turn('/mcp', 'mcp');
     expect(texts(events).at(-1)).toMatch(/^\*\*MCP servers\*\*/);
