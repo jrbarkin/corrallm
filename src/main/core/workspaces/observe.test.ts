@@ -1,4 +1,4 @@
-import { rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { mkdirSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -119,6 +119,67 @@ describe.skipIf(process.platform === 'win32')('what it reads', () => {
     w.work(w.cwd, { 'more.txt': 'more\n' });
     await o.now(CANVAS, w.tree.id);
     expect(o.of(w.tree.id)).toEqual({ merged: false, uncommitted: 0 });
+  });
+
+  it('reads ancestry from the commits themselves when grafts name other parents', async () => {
+    const w = await make();
+    const tip = w.work(w.cwd, { 'agent.txt': 'agent\n' });
+    const base = w.work(w.picked, { 'yours.txt': 'yours\n' });
+    const info = path.join(w.record.commonDir, 'info');
+    mkdirSync(info, { recursive: true });
+    writeFileSync(path.join(info, 'grafts'), `${base} ${tip}\n`);
+    // Replace-object suppression alone still lets ordinary Git read these other parents.
+    expect(w.g(w.picked, '--no-replace-objects', 'merge-base', '--is-ancestor', tip, base)).toBe(
+      '',
+    );
+    const { observer: o } = observing(w);
+    await o.now(CANVAS, w.tree.id);
+    expect(o.into(CANVAS)).toEqual({ ref: 'refs/heads/main', oid: base });
+    expect(o.of(w.tree.id).merged).toBe(false);
+  });
+
+  it('leaves a branch unknown if its tip moves while its merge state is read', async () => {
+    const w = await make();
+    w.work(w.cwd, { 'agent.txt': 'agent\n' });
+    mergedByYou(w);
+    const { observer: o } = observing(w);
+    const run = w.git.run.bind(w.git);
+    let moved = false;
+    vi.spyOn(w.git, 'run').mockImplementation(async (call) => {
+      const result = await run(call);
+      if (!moved && call.args.includes('merge-base')) {
+        moved = true;
+        w.work(w.cwd, { 'next.txt': 'next\n' });
+      }
+      return result;
+    });
+    await o.now(CANVAS, w.tree.id);
+    expect(moved).toBe(true);
+    expect(o.of(w.tree.id)).toEqual({ merged: null, uncommitted: null });
+    await o.now(CANVAS, w.tree.id);
+    expect(o.of(w.tree.id)).toEqual({ merged: false, uncommitted: 0 });
+  });
+
+  it('leaves a checkout unknown if it changes branch while its merge state is read', async () => {
+    const w = await make();
+    w.work(w.cwd, { 'agent.txt': 'agent\n' });
+    mergedByYou(w);
+    const { observer: o } = observing(w);
+    const run = w.git.run.bind(w.git);
+    let moved = false;
+    vi.spyOn(w.git, 'run').mockImplementation(async (call) => {
+      const result = await run(call);
+      if (!moved && call.args.includes('status')) {
+        moved = true;
+        w.g(w.cwd, 'switch', '-q', '--detach');
+      }
+      return result;
+    });
+    await o.now(CANVAS, w.tree.id);
+    expect(moved).toBe(true);
+    expect(o.of(w.tree.id)).toEqual({ merged: null, uncommitted: null });
+    await o.now(CANVAS, w.tree.id);
+    expect(o.of(w.tree.id)).toEqual({ merged: true, uncommitted: null });
   });
 
   it('counts uncommitted work as Review changes counts it: changed, staged or not, and untracked', async () => {
@@ -400,6 +461,56 @@ describe('when it reads', () => {
     // Nothing asked: nothing read.
     await vi.advanceTimersByTimeAsync(10_000);
     expect(reads.workspace).toHaveBeenCalledTimes(4);
+  });
+
+  it('coalesces requests during a slow pass into one later interval', async () => {
+    const [one] = await trees(canvas, REPOSITORIES[0] ?? '', 1);
+    const reads = fakeReads();
+    const held = Promise.withResolvers<WorkspaceRead>();
+    reads.workspace.mockReturnValueOnce(held.promise);
+    const o = observe(reads);
+    o.workspace(one ?? '');
+    await vi.advanceTimersByTimeAsync(2000);
+    for (let i = 0; i < 3; i++) {
+      o.workspace(one ?? '');
+      await vi.advanceTimersByTimeAsync(2000);
+    }
+    expect(reads.workspace).toHaveBeenCalledTimes(1);
+    held.resolve({ tip: OID(3), merged: false, uncommitted: 0 });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(reads.workspace).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1999);
+    expect(reads.workspace).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(reads.workspace).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(reads.workspace).toHaveBeenCalledTimes(2);
+  });
+
+  it('prunes observations of removed workspaces, including a read still finishing', async () => {
+    const ids = await trees(canvas, REPOSITORIES[0] ?? '', 2);
+    const [one = '', two = ''] = ids;
+    const reads = fakeReads();
+    const o = observe(reads);
+    await o.now(canvas, one);
+    const held = Promise.withResolvers<WorkspaceRead>();
+    reads.workspace.mockReturnValueOnce(held.promise);
+    const finishing = o.now(canvas, two);
+    await vi.advanceTimersByTimeAsync(0);
+    await workspaces.write((w) => {
+      for (const [at, id] of ids.entries()) {
+        w.unbind(canvas, `a${String(at)}`);
+        w.transition(id, { from: 'ready', to: 'removing' });
+        w.forget(id);
+      }
+    });
+    expect(o.prune()).toBe(1);
+    expect(o.prune()).toBe(0);
+    held.resolve({ tip: OID(3), merged: true, uncommitted: 0 });
+    await finishing;
+    expect(o.prune()).toBe(0);
+    expect(o.of(one)).toEqual({ merged: null, uncommitted: null });
+    expect(o.of(two)).toEqual({ merged: null, uncommitted: null });
   });
 
   it('reads at most 64 workspaces a pass, the rest at the next', async () => {

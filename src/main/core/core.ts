@@ -460,6 +460,7 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     forgetSetup: (workspace: string) => setups.forget(workspace),
     nameOf: (canvas: CanvasId, owner: string) => ownerName(canvas, owner),
     changed: (canvas: CanvasId) => {
+      observer.prune();
       topics.changed(`needs:${canvas}`, 'corrallm');
       topics.changed(`worktrees:${canvas}`, 'corrallm');
       engines.needsChanged(canvas);

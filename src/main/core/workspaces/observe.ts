@@ -113,25 +113,27 @@ async function readWorkspace(
     throw error;
   }
   const ref = tree.branchRef;
-  const tip = await known(async () => {
-    const { stdout } = await git.run({
-      ...call,
-      args: [
-        '--no-optional-locks',
-        'for-each-ref',
-        '--format=%(objectname)%00%(objecttype)%00%(symref)%00%(refname)',
-        '--end-of-options',
-        ref,
-      ],
+  const readTip = () =>
+    known(async () => {
+      const { stdout } = await git.run({
+        ...call,
+        args: [
+          '--no-optional-locks',
+          'for-each-ref',
+          '--format=%(objectname)%00%(objecttype)%00%(symref)%00%(refname)',
+          '--end-of-options',
+          ref,
+        ],
+      });
+      // The branch itself, a ref of its own naming a commit: not one below it, nor a symbolic one.
+      const line = stdout
+        .split('\n')
+        .map((one) => one.split('\0'))
+        .find(([, , , name]) => name === ref);
+      const [oid = '', type, symref] = line ?? [];
+      return OID.test(oid) && type === 'commit' && symref === '' ? oid : null;
     });
-    // The branch itself, a ref of its own naming a commit: not one below it, nor a symbolic one.
-    const line = stdout
-      .split('\n')
-      .map((one) => one.split('\0'))
-      .find(([, , , name]) => name === ref);
-    const [oid = '', type, symref] = line ?? [];
-    return OID.test(oid) && type === 'commit' && symref === '' ? oid : null;
-  });
+  const tip = await readTip();
   if (tip === null) return UNKNOWN;
   const merged =
     tip === tree.baseOid || against === null
@@ -171,6 +173,17 @@ async function readWorkspace(
           });
           return stderr.trim() === '' ? uncommittedCount(stdout) : null;
         });
+  // All parts must describe the same checkout and branch tip. A later trigger can read one
+  // that moved while Git was answering; combining its old ancestry with its new status cannot.
+  const after = await verifiedCheckout(git, repository, tree);
+  if (
+    !after.ok ||
+    after.checkout.branch !== checkout.branch ||
+    after.checkout.head !== checkout.head ||
+    (await readTip()) !== tip
+  ) {
+    return UNKNOWN;
+  }
   return { tip, merged, uncommitted };
 }
 
@@ -224,6 +237,7 @@ interface Lane {
   workspaces: Set<string>;
   timer: ReturnType<typeof setTimeout> | undefined;
   tail: Promise<void>;
+  pending: number;
 }
 
 export class MergeObserver {
@@ -269,11 +283,7 @@ export class MergeObserver {
         : this.#deps.workspaces.worktree(workspace)?.repository;
     if (this.#closed || repository === null || repository === undefined) return;
     const lane = this.#lane(repository);
-    const pass = lane.tail.then(() =>
-      this.#pass(repository, [canvas], workspace === undefined ? [] : [workspace]),
-    );
-    lane.tail = pass.catch(() => undefined);
-    await pass;
+    await this.#enqueue(repository, lane, [canvas], workspace === undefined ? [] : [workspace]);
   }
 
   /** Your picked checkout's branch and commit, as last read for the canvas's project now. */
@@ -310,9 +320,29 @@ export class MergeObserver {
     };
   }
 
+  /** Drops observations of trees cleanup has removed, returning the number dropped. */
+  prune(): number {
+    let removed = 0;
+    for (const workspace of this.#kept.keys()) {
+      if (this.#deps.workspaces.worktree(workspace) === undefined) {
+        this.#kept.delete(workspace);
+        removed++;
+      }
+    }
+    for (const lane of this.#lanes.values()) {
+      for (const workspace of lane.workspaces) {
+        if (this.#deps.workspaces.worktree(workspace) === undefined)
+          lane.workspaces.delete(workspace);
+      }
+    }
+    return removed;
+  }
+
   /** Stops: nothing read from now on, no pass waiting. */
   close(): void {
     this.#closed = true;
+    this.#kept.clear();
+    this.#into.clear();
     for (const lane of this.#lanes.values()) {
       clearTimeout(lane.timer);
       lane.timer = undefined;
@@ -342,6 +372,7 @@ export class MergeObserver {
         workspaces: new Set(),
         timer: undefined,
         tail: Promise.resolve(),
+        pending: 0,
       };
       this.#lanes.set(repository, lane);
     }
@@ -358,7 +389,7 @@ export class MergeObserver {
   }
 
   #schedule(repository: string, lane: Lane): void {
-    if (this.#closed || lane.timer !== undefined) return;
+    if (this.#closed || lane.timer !== undefined || lane.pending > 0) return;
     if (lane.canvases.size === 0 && lane.workspaces.size === 0) return;
     lane.timer = setTimeout(() => {
       lane.timer = undefined;
@@ -366,15 +397,29 @@ export class MergeObserver {
       lane.canvases.clear();
       const workspaces = [...lane.workspaces].slice(0, this.#deps.perPass ?? OBSERVE_PER_PASS);
       for (const workspace of workspaces) lane.workspaces.delete(workspace);
-      const pass = lane.tail.then(() => this.#pass(repository, canvases, workspaces));
-      lane.tail = pass.catch((error: unknown) => {
+      void this.#enqueue(repository, lane, canvases, workspaces).catch((error: unknown) => {
         console.error('Could not observe a repository’s merge state:', error);
       });
-      // What waits beyond this pass (more than one pass reads, or asked meanwhile): the next.
-      void lane.tail.then(() => {
-        this.#schedule(repository, lane);
-      });
     }, this.#deps.everyMs ?? OBSERVE_EVERY_MS);
+  }
+
+  /** Serializes immediate reads too; ordinary triggers stay coalesced until all reads settle. */
+  #enqueue(
+    repository: string,
+    lane: Lane,
+    canvases: readonly CanvasId[],
+    workspaces: readonly string[],
+  ): Promise<void> {
+    clearTimeout(lane.timer);
+    lane.timer = undefined;
+    lane.pending++;
+    const pass = lane.tail.then(() => this.#pass(repository, canvases, workspaces));
+    const done = pass.finally(() => {
+      lane.pending--;
+      this.#schedule(repository, lane);
+    });
+    lane.tail = done.catch(() => undefined);
+    return done;
   }
 
   /**
@@ -386,6 +431,8 @@ export class MergeObserver {
     canvases: readonly CanvasId[],
     workspaces: readonly string[],
   ): Promise<void> {
+    // A close may happen while a read is awaited; don't retain TypeScript's earlier narrowing.
+    const closed = () => this.#closed;
     const { reads } = this.#deps;
     const changed = new Set<CanvasId>();
     const record = this.#deps.workspaces.repository(repository);
@@ -398,6 +445,7 @@ export class MergeObserver {
         this.#into.delete(canvas);
       } else {
         const seen = await reads.into(picked, record);
+        if (closed()) return;
         this.#into.set(canvas, { repository, generation: link.generation, seen });
       }
       const after = this.into(canvas);
@@ -426,7 +474,16 @@ export class MergeObserver {
       } else {
         const against = this.into(tree.canvas)?.oid ?? null;
         const read = await reads.workspace(record, tree, against);
-        this.#kept.set(workspace, { ...read, generation: tree.generation, against });
+        const current = this.#deps.workspaces.worktree(workspace);
+        if (
+          closed() ||
+          current?.generation !== tree.generation ||
+          !OBSERVED.includes(current.state)
+        ) {
+          this.#kept.delete(workspace);
+        } else {
+          this.#kept.set(workspace, { ...read, generation: tree.generation, against });
+        }
       }
       const after = this.of(workspace);
       if (before.merged !== after.merged || before.uncommitted !== after.uncommitted) {
