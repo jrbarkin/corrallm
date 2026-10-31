@@ -291,6 +291,51 @@ it('carries a merge’s settled state in its receipt: the cards read again befor
   expect((await itemOf(running)).merge).toEqual({ merged: true, uncommitted: 0 });
 }, 60000);
 
+it('receipts each already-merged call’s settled revision, even for the same party', async () => {
+  const running = await start();
+  const cwd = await ready(running);
+  const source = { ref: g(cwd, 'symbolic-ref', 'HEAD'), oid: g(cwd, 'rev-parse', 'HEAD') };
+  const into = { ref: 'refs/heads/main', oid: g(project, 'rev-parse', 'main') };
+  const topic = `worktrees:${CANVAS}` as const;
+  const revisions: number[] = [];
+  const states: unknown[] = [];
+
+  // Each call admits a job (merging), observes, then clears it, even when Git changes nothing.
+  // The revision follows those publications, not the caller's party or the settled contents.
+  for (const caller of [CALLERS.you, CALLERS.you, CALLERS['outside-write']]) {
+    const result = await running.call(
+      'branch.merge',
+      { canvas: CANVAS, agent: 'a', source, into, request: randomUUID() },
+      caller,
+    );
+    expect(result.ok, JSON.stringify(result)).toBe(true);
+    if (!result.ok) throw new Error(result.error.sentence);
+    const { revs, ...settled } = result.value;
+    expect(settled).toEqual({
+      outcome: 'already-merged',
+      source: source.oid,
+      into: { ref: into.ref, before: into.oid, after: into.oid },
+    });
+    const { snapshot, stop } = await running.topics.follow(CALLERS.you, topic, () => undefined);
+    try {
+      if (!('state' in snapshot)) throw new Error('Expected a whole worktree snapshot.');
+      expect(revs).toEqual({ [topic]: snapshot.rev });
+      expect(snapshot.state).toMatchObject({
+        into,
+        items: [expect.objectContaining({ agent: 'a', merge: { merged: null, uncommitted: 0 } })],
+      });
+      revisions.push(snapshot.rev);
+      states.push(snapshot.state);
+    } finally {
+      stop();
+    }
+  }
+  expect(revisions[1]).toBeGreaterThan(revisions[0] ?? 0);
+  expect(revisions[2]).toBeGreaterThan(revisions[1] ?? 0);
+  expect(states[1]).toEqual(states[0]);
+  expect(states[2]).toEqual(states[0]);
+}, 60000);
+
 it('reads a tree’s merge state again as its member’s turn ends, with no window watching', async () => {
   config.observeEveryMs = 50;
   const running = await start();

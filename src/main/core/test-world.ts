@@ -819,6 +819,9 @@ export const REAL_FIXTURES: Readonly<Record<OpName, OpFixture>> = {
     ],
   },
   'branch.merge': {
+    // Even already-merged calls publish their job's admission and end: receipts are per call,
+    // not per party. C6 observes before answering, so each revision names that call's settled state.
+    fresh: ['revs'],
     valid: [{ ...BRANCH_MERGE, request: controlRequest(400) }],
     invalid: [
       {},
