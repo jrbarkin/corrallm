@@ -36,7 +36,7 @@ import { madeAtSchema, openTestStore, readOnDisk, refuseWrites } from './test-st
 /** No timers: nothing checkpoints or takes a snapshot while a test compares the database. */
 const QUIET: StoreDeps = { ...SYSTEM_DEPS, later: () => () => undefined };
 /** The schema a profile is migrated to as it opens, and the oldest that may open it then. */
-const LATEST = { version: SCHEMA, minReader: SCHEMA };
+const LATEST = { version: SCHEMA, minReader: MIGRATIONS.at(-1)?.minReader };
 
 type Row = Record<string, unknown>;
 interface Fixture {
