@@ -4,6 +4,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import type { MockInstance } from 'vitest';
 
+import type { ResultOf } from '../../shared/api/registry';
 import { createCore } from './core';
 import type { Core, CoreConfig } from './core';
 import * as ops from './ops';
@@ -13,6 +14,7 @@ import * as connectors from '../sessions/connectors';
 import type { Conversations } from '../sessions/adapter';
 import { keepCanvases, readOnDisk, writeOnDisk } from './store/test-store';
 import { CALLERS, CANVAS, NO_DESKTOP } from './test-registry';
+import { GitRunner } from './workspaces/git';
 import { MergeService } from './workspaces/merge';
 import { WorkspaceGit } from './workspaces/runtime-git';
 import { commit, git, gitEnvironment, makeRepository, scratch } from './workspaces/test-git';
@@ -242,6 +244,130 @@ it('reconciles a merge a crash left going on as the core starts: never installed
     { timeout: 15000 },
   );
   expect(g(project, 'rev-parse', 'main')).toBe(before);
+}, 60000);
+
+/** Agent a's item as you list it now: its tree's merge state among the rest. */
+async function itemOf(running: Core): Promise<ResultOf<'worktree.list'>['items'][number]> {
+  const listed = await running.call('worktree.list', { canvas: CANVAS }, CALLERS.you);
+  if (!listed.ok) throw new Error(listed.error.sentence);
+  const item = listed.value.items.find((one) => one.agent === 'a');
+  if (item === undefined) throw new Error('No item for a.');
+  return item;
+}
+
+async function intoOf(running: Core): Promise<ResultOf<'worktree.list'>['into']> {
+  const listed = await running.call('worktree.list', { canvas: CANVAS }, CALLERS.you);
+  if (!listed.ok) throw new Error(listed.error.sentence);
+  return listed.value.into;
+}
+
+it('carries a merge’s settled state in its receipt: the cards read again before it answers', async () => {
+  const running = await start();
+  const cwd = await ready(running);
+  writeFileSync(path.join(cwd, 'agent.txt'), 'agent\n');
+  g(cwd, 'add', '-A');
+  commit(cwd, env, 'agent work');
+  const merge = worktrees().merge;
+  if (merge === undefined) throw new Error('No merge service composed.');
+  const since = running.topics.mark();
+
+  const result = await merge({
+    canvas: CANVAS,
+    agent: 'a',
+    source: { ref: g(cwd, 'symbolic-ref', 'HEAD'), oid: g(cwd, 'rev-parse', 'HEAD') },
+    into: { ref: 'refs/heads/main', oid: g(project, 'rev-parse', 'main') },
+    request: randomUUID(),
+    caller: { key: 'you', requester: 'you' },
+  });
+
+  expect(result).toMatchObject({ ok: true, value: { outcome: 'merged' } });
+  // As X2's branch.merge names worktrees: its receipt is a revision already holding the merge.
+  const revs = await running.topics.receipts([`worktrees:${CANVAS}`], since);
+  expect(revs[`worktrees:${CANVAS}`]).toEqual(expect.any(Number));
+  expect(await intoOf(running)).toEqual({
+    ref: 'refs/heads/main',
+    oid: g(project, 'rev-parse', 'main'),
+  });
+  expect((await itemOf(running)).merge).toEqual({ merged: true, uncommitted: 0 });
+}, 60000);
+
+it('reads a tree’s merge state again as its member’s turn ends, with no window watching', async () => {
+  config.observeEveryMs = 50;
+  const running = await start();
+  const cwd = await ready(running);
+  writeFileSync(path.join(cwd, 'draft.txt'), 'draft\n');
+  expect(
+    await running.call('message', { canvas: CANVAS, to: 'a', body: 'hello' }, CALLERS.you),
+  ).toMatchObject({ ok: true });
+  await vi.waitFor(
+    async () => {
+      expect((await itemOf(running)).merge).toEqual({ merged: null, uncommitted: 1 });
+    },
+    { timeout: 15000 },
+  );
+}, 60000);
+
+it('reads a tree’s merge state again as Review changes reads it', async () => {
+  config.observeEveryMs = 50;
+  const running = await start();
+  const cwd = await ready(running);
+  writeFileSync(path.join(cwd, 'agent.txt'), 'agent\n');
+  g(cwd, 'add', '-A');
+  commit(cwd, env, 'agent work');
+  writeFileSync(path.join(cwd, 'draft.txt'), 'draft\n');
+  const diff = worktrees().diff;
+  if (diff === undefined) throw new Error('No diff service composed.');
+  expect(
+    await diff({ canvas: CANVAS, agent: 'a', limit: 50, viewer: { kind: 'you' } }),
+  ).toMatchObject({ ok: true });
+  await vi.waitFor(
+    async () => {
+      expect((await itemOf(running)).merge).toEqual({ merged: false, uncommitted: 1 });
+    },
+    { timeout: 15000 },
+  );
+}, 60000);
+
+it('reads your checkout and the canvas’s trees again as a window showing it gains focus', async () => {
+  config.observeEveryMs = 50;
+  const running = await start();
+  await ready(running);
+  expect(await running.call('window.show', { canvas: CANVAS }, CALLERS.you)).toMatchObject({
+    ok: true,
+  });
+  g(project, 'commit', '-q', '--allow-empty', '-m', 'yours');
+  await running.focused(1);
+  await vi.waitFor(
+    async () => {
+      expect(await intoOf(running)).toEqual({
+        ref: 'refs/heads/main',
+        oid: g(project, 'rev-parse', 'main'),
+      });
+    },
+    { timeout: 15000 },
+  );
+}, 60000);
+
+it('asks Git nothing to list who works where or to commit a document', async () => {
+  config.observeEveryMs = 50;
+  const running = await start();
+  await ready(running);
+  // Whatever the start set going finishes first.
+  await new Promise((resolve) => setTimeout(resolve, 500));
+  const runs = vi.spyOn(WorkspaceGit.prototype, 'run');
+  const inspects = vi.spyOn(GitRunner.prototype, 'inspect');
+  for (let i = 0; i < 5; i++) await itemOf(running);
+  expect(
+    await running.call(
+      'canvas.rename',
+      { canvas: CANVAS, node: 'a', label: 'Builder' },
+      CALLERS.you,
+    ),
+  ).toMatchObject({ ok: true });
+  for (let i = 0; i < 5; i++) await itemOf(running);
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  expect(runs).not.toHaveBeenCalled();
+  expect(inspects).not.toHaveBeenCalled();
 }, 60000);
 
 it('quits only once a merge past its point of no return settled, before the workspaces’ Git stops', async () => {

@@ -2,8 +2,8 @@ import { z } from 'zod';
 
 import { MAX_SETUP_COMMAND_BYTES, UNSEEN_IN_COMMAND } from '../../model/worktree-setup';
 import { MAX_FILE_MATCHES, MAX_FILE_QUERY_LENGTH } from '../../session';
-import { define } from '../define';
 import { BranchInto, WorktreeMerge } from '../branch';
+import { define } from '../define';
 import type { OpDef } from '../define';
 import { AgentId, OpCanvas, WorktreeId } from '../ids';
 import type { OpName } from '../surface';
@@ -78,7 +78,6 @@ const ListedWorktree = z.strictObject({
   branch: z.string().nullable(),
   base: Base.nullable(),
   state: ListedState,
-  merge: WorktreeMerge,
   // The user's alone: the card waiting on it, why it failed, where it is and its setup.
   need: z.string().optional(),
   error: z.string().optional(),
@@ -91,6 +90,8 @@ const ListedWorktree = z.strictObject({
       exitCode: z.int().nullable(),
     })
     .optional(),
+  // B9b C12: its tree's merge state, present when it has a tree; a held job's sentence is yours.
+  merge: WorktreeMerge.optional(),
 });
 
 /** A worktree the canvas keeps, its agents gone: the user's alone (Kept worktrees). */
@@ -118,7 +119,11 @@ export const b9aWorktreeOps = {
       'folder (not a Git repository), with its branch, the commit it was made from and whether ' +
       'it is ready, being made or set up, waiting for the user to switch it, lost or failed. ' +
       'With agent, that agent alone. Agents sharing a worktree have the same workspace. What ' +
-      'it runs to set up, where it is and the worktrees kept are the user’s alone.',
+      'it runs to set up, where it is and the worktrees kept are the user’s alone. into is the ' +
+      'branch the user’s project checkout is on and its commit (ref null: detached; null: no ' +
+      'repository, or not read yet); each worktree’s merge says whether its branch’s commits are ' +
+      'in that branch’s history and how many files are uncommitted in it (null: not known), and ' +
+      'a merge going on or held.',
     input: z.strictObject({ canvas: OpCanvas, agent: AgentId.optional() }),
     output: z.strictObject({
       items: z.array(ListedWorktree),

@@ -38,7 +38,7 @@ const diff = {
 };
 
 describe('branch contracts', () => {
-  it('registers the frozen branch audiences and adds unknown worktree observations', () => {
+  it('registers the frozen branch audiences; the listing takes C6’s additive fields', () => {
     expect(SURFACE).toHaveProperty('branch.diff', {
       access: { ...R, worker: 'own' },
       kind: 'read',

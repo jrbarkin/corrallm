@@ -29,6 +29,11 @@ import type {
  *   reach: each item is one agent's, and the group's node is named only where the token sees it
  *   (an agent it reaches, or a frame around one, as canvas.get shows it). No kept tree is listed
  *   to a token: their former agents are gone, and their removal is yours.
+ * - **The merge state** (B9b Design §9 C12), for everyone alike, as the observation service last
+ *   read it (workspaces/observe.ts; nothing here asks Git): at the top, `into`, your picked
+ *   checkout's branch and commit; on each item with a tree, `merge`, that tree's (every member's
+ *   the same): whether its branch's commits are in that branch's history, how much is uncommitted
+ *   there, and a merge of it going on or held. A held merge's sentence is yours alone.
  *
  * A binding whose agent has left the document (its cleanup recorded) is no one's to list.
  */
@@ -50,8 +55,6 @@ export interface ListedWorktree {
   branch: string | null;
   base: { ref: string | null; oid: string } | null;
   state: ListedState;
-  /** Unknown until the core’s observation service supplies a reading. */
-  merge: WorktreeMerge;
   /** Yours alone: the card waiting for you on it (its setup, or a workspace change). */
   need?: string;
   /** Yours alone: why it failed, or was lost. */
@@ -65,6 +68,8 @@ export interface ListedWorktree {
     source: SetupSource;
     exitCode: number | null;
   };
+  /** Its tree's merge state, when it has a tree (a held merge's sentence yours alone). */
+  merge?: WorktreeMerge;
 }
 
 /** A tree the canvas keeps (retained, or being removed): yours alone. */
@@ -83,6 +88,8 @@ export interface ListedKept {
 export interface WorktreeListing extends WorktreeMergeListing {
   items: ListedWorktree[];
   kept: ListedKept[];
+  /** Your picked checkout's branch (null: detached) and commit as last read; null: not read. */
+  into: { ref: string | null; oid: string | null } | null;
 }
 
 /** Who reads the list: you, or a token by the agents it reaches now. */
@@ -106,6 +113,14 @@ export interface WorktreeListDeps {
   provisioning?: (canvas: CanvasId, owner: WorkspaceOwnerKey) => Provisioning | undefined;
   /** The trees the canvas keeps (cleanup's `kept`). */
   kept: (canvas: CanvasId) => readonly KeptTree[];
+  /**
+   * The merge state as last observed (B9b C12): your picked checkout's branch and commit, and a
+   * tree's state with its merge going on or held. None: nothing observed (no `into`, no `merge`).
+   */
+  merges?: {
+    into: (canvas: CanvasId) => { ref: string | null; oid: string | null } | null;
+    of: (canvas: CanvasId, workspace: string) => WorktreeMerge;
+  };
 }
 
 /**
@@ -145,6 +160,10 @@ export function listWorktrees(
     if (item.group !== undefined && visible !== undefined && !visible.has(item.group)) {
       delete item.group;
     }
+    // A tree's merge state, every member's the same: what the observation last read of it.
+    if (item.workspace !== null && deps.merges !== undefined) {
+      item.merge = deps.merges.of(canvas, item.workspace);
+    }
     items.push(yours ? item : withoutYours(item));
   }
   const kept =
@@ -161,7 +180,7 @@ export function listWorktrees(
           location: deps.workspaces.worktree(tree.workspace)?.path ?? '',
           createdAt: tree.createdAt,
         }));
-  return { items, kept, into: null };
+  return { items, kept, into: deps.merges?.into(canvas) ?? null };
 }
 
 /**
@@ -191,7 +210,6 @@ function unplaced(agent: string, owner: WorkspaceOwner, state: ListedState): Lis
     branch: null,
     base: null,
     state,
-    merge: { merged: null, uncommitted: null },
   };
 }
 
@@ -218,7 +236,6 @@ function unbound(
       branch: null,
       base: null,
       state: 'ready',
-      merge: { merged: null, uncommitted: null },
       location: root,
     };
   }
@@ -243,7 +260,6 @@ function boundItem(
       branch: null,
       base: null,
       state: 'error',
-      merge: { merged: null, uncommitted: null },
       error: 'workspace-unknown',
     };
   }
@@ -255,7 +271,6 @@ function boundItem(
     branch: branchOf(tree),
     base: { ref: tree.baseRef, oid: tree.baseOid },
     state: stateOf(tree),
-    merge: { merged: null, uncommitted: null },
     location: tree.path,
   };
   if (tree.errorCode !== null) item.error = tree.errorCode;
@@ -315,6 +330,10 @@ function withoutYours(item: ListedWorktree): ListedWorktree {
   delete seen.error;
   delete seen.location;
   delete seen.setup;
+  if (seen.merge?.sentence !== undefined) {
+    seen.merge = { ...seen.merge };
+    delete seen.merge.sentence;
+  }
   return seen;
 }
 

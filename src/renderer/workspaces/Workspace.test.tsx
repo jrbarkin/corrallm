@@ -40,7 +40,7 @@ const item: ResultOf<'worktree.list'>['items'][number] = {
 async function setup(next = item) {
   const core = fakeCore();
   cores.push(core);
-  core.snapshot(`worktrees:${canvas}`, { items: [next], into: null, kept: [] });
+  core.snapshot(`worktrees:${canvas}`, { items: [next], kept: [], into: null });
   core.snapshot(`needs:${canvas}`, { items: [] });
   const onNeed = vi.fn();
   await renderReady(
@@ -89,7 +89,7 @@ it('does not call a worktree failed while its setup card is still being prepared
     core.change({
       topic: `worktrees:${canvas}`,
       rev: 1,
-      replace: { items: [item], into: null, kept: [] },
+      replace: { items: [item], kept: [], into: null },
     });
   });
   expect(document.querySelector('.workspace-badge')?.textContent).toContain('Setup');
@@ -101,8 +101,8 @@ it('does not call a worktree failed while its setup card is still being prepared
         items: [
           { ...item, state: 'error', need: undefined, setup: undefined, error: 'git-timeout' },
         ],
-        into: null,
         kept: [],
+        into: null,
       },
     });
   });
@@ -125,8 +125,8 @@ it('replaces pushed workspace state and retries a missing workspace with exactly
             error: 'Checkout disappeared',
           },
         ],
-        into: null,
         kept: [],
+        into: null,
       },
     });
   });
@@ -158,8 +158,8 @@ it('shows setup completion briefly once per shared tree, never on an already-rea
             state: 'done' as const,
           },
         })),
-        into: null,
         kept: [],
+        into: null,
       },
     });
   });
@@ -219,7 +219,7 @@ it('does not announce setup already complete when subscribing, or a skipped setu
     core.change({
       topic: `worktrees:${canvas}`,
       rev: 1,
-      replace: { items: [item], into: null, kept: [] },
+      replace: { items: [item], kept: [], into: null },
     });
   });
   act(() => {
@@ -238,8 +238,8 @@ it('does not announce setup already complete when subscribing, or a skipped setu
             },
           },
         ],
-        into: null,
         kept: [],
+        into: null,
       },
     });
   });
@@ -311,7 +311,7 @@ it.each(['retained', 'removing'] as const)(
       location: '/kept/tree',
       createdAt: 1,
     };
-    core.snapshot(`worktrees:${canvas}`, { items: [], into: null, kept: [kept] });
+    core.snapshot(`worktrees:${canvas}`, { items: [], kept: [kept], into: null });
     core.snapshot(`needs:${canvas}`, { items: [] });
     core.reply('worktree.remove', () => {
       core.change({

@@ -154,8 +154,8 @@ describe('a Terminal agent', () => {
               setup: { state: 'pending', command: 'npm ci', source: 'detected', exitCode: null },
             },
           ],
-          into: null,
           kept: [],
+          into: null,
         },
       });
     });

@@ -48,11 +48,10 @@ function setup() {
 it('keeps closed-canvas work and its pending confirmation reachable after reopening the list', async () => {
   const core = setup();
   const worktree = '11111111-1111-4111-8111-111111111111';
-  core.snapshot(`worktrees:${current}`, { items: [], into: null, kept: [] });
+  core.snapshot(`worktrees:${current}`, { items: [], kept: [], into: null });
   core.snapshot(`needs:${current}`, { items: [] });
   core.snapshot(`worktrees:${other}`, {
     items: [],
-    into: null,
     kept: [
       {
         workspace: worktree,
@@ -66,6 +65,7 @@ it('keeps closed-canvas work and its pending confirmation reachable after reopen
         createdAt: 1,
       },
     ],
+    into: null,
   });
   core.snapshot(`needs:${other}`, {
     items: [

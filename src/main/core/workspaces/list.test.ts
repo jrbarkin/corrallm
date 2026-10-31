@@ -175,12 +175,6 @@ const byAgent = (listing: ReturnType<typeof listWorktrees>) =>
   Object.fromEntries(listing.items.map((item) => [item.agent, item]));
 
 describe('as you see it', () => {
-  it('keeps merge observations unknown until an observation is supplied', () => {
-    const listing = listWorktrees(deps(), canvas, DOCUMENT, { kind: 'you' });
-    expect(listing.into).toBeNull();
-    for (const item of listing.items)
-      expect(item.merge).toEqual({ merged: null, uncommitted: null });
-  });
   it('lists every agent with its tree, sharing and state, and what is yours alone', () => {
     const listing = listWorktrees(deps(), canvas, DOCUMENT, { kind: 'you' });
     expect(listing.items.map((item) => item.agent)).toEqual([
@@ -205,7 +199,6 @@ describe('as you see it', () => {
         branch: `corrallm/profile/${team.id}`,
         base: { ref: 'refs/heads/main', oid: 'a'.repeat(40) },
         state: 'ready',
-        merge: { merged: null, uncommitted: null },
         location: team.path,
       });
     }
@@ -214,7 +207,6 @@ describe('as you see it', () => {
       mode: 'own',
       workspace: ids.solo,
       state: 'setup',
-      merge: { merged: null, uncommitted: null },
       need: `setup/${ids.solo}/${String(workspaces.setup(ids.solo)?.generation)}`,
       location: trees.solo.path,
       setup: {
@@ -243,7 +235,6 @@ describe('as you see it', () => {
       branch: null,
       base: null,
       state: 'unmade',
-      merge: { merged: null, uncommitted: null },
     });
     expect(items.inner).toMatchObject({ mode: 'group', group: 'frame', state: 'unmade' });
     expect(workspaces.worktreesOf(canvas)).toHaveLength(4);
@@ -299,7 +290,6 @@ describe('as you see it', () => {
       branch: null,
       base: null,
       state: 'ready',
-      merge: { merged: null, uncommitted: null },
       location: ROOT,
     });
     root = undefined;
@@ -332,7 +322,6 @@ describe('as a token sees it', () => {
         base: { ref: 'refs/heads/main', oid: 'a'.repeat(40) },
         // It waits for setup; the command, the card and where it runs are yours.
         state: 'setup',
-        merge: { merged: null, uncommitted: null },
       },
       expect.objectContaining({ agent: 'mover', state: 'pending-change' }),
       expect.objectContaining({ agent: 'fresh', state: 'unmade' }),
@@ -356,7 +345,6 @@ describe('as a token sees it', () => {
         branch: `corrallm/profile/${ids.team}`,
         base: { ref: 'refs/heads/main', oid: 'a'.repeat(40) },
         state: 'ready',
-        merge: { merged: null, uncommitted: null },
       },
     ]);
     expect(JSON.stringify(listing)).not.toMatch(/lead|helper/);
@@ -397,5 +385,71 @@ describe('as a token sees it', () => {
     expect(listWorktrees(deps(), canvas, DOCUMENT, token()).items).toEqual([]);
     // Asked for one it doesn't reach (core.call refuses that first): nothing.
     expect(listWorktrees(deps(), canvas, DOCUMENT, token('solo'), 'lead').items).toEqual([]);
+  });
+});
+
+describe('the merge state (B9b C12)', () => {
+  const OID = 'e'.repeat(40);
+  const HELD =
+    'A merge into main was interrupted; your checkout may be partly merged: check git status there.';
+  const token = (...reached: string[]) => ({ kind: 'token', reached: new Set(reached) }) as const;
+
+  /** The observation as the core composes it: your checkout's branch, each tree's state and job. */
+  function observed(): WorktreeListDeps {
+    return {
+      ...deps(),
+      merges: {
+        into: () => ({ ref: 'refs/heads/main', oid: OID }),
+        of: (_canvas, workspace) =>
+          workspace === ids.team
+            ? { merged: true, uncommitted: 0 }
+            : workspace === ids.solo
+              ? { merged: false, uncommitted: 2, job: 'held', sentence: HELD }
+              : { merged: null, uncommitted: null },
+      },
+    };
+  }
+
+  it('says your checkout’s branch at the top, and each tree’s merge state on every agent in it', () => {
+    const listing = listWorktrees(observed(), canvas, DOCUMENT, { kind: 'you' });
+    expect(listing.into).toEqual({ ref: 'refs/heads/main', oid: OID });
+    const items = byAgent(listing);
+    for (const one of ['lead', 'helper', 'member']) {
+      expect(items[one]?.merge).toEqual({ merged: true, uncommitted: 0 });
+    }
+    expect(items.solo?.merge).toEqual({
+      merged: false,
+      uncommitted: 2,
+      job: 'held',
+      sentence: HELD,
+    });
+    // A tree a change waits on: its active tree's, unknown here.
+    expect(items.mover?.merge).toEqual({ merged: null, uncommitted: null });
+    // No tree: nothing to merge.
+    expect(items.fresh).not.toHaveProperty('merge');
+  });
+
+  it('gives a token the same state, but never a held job’s sentence', () => {
+    const listing = listWorktrees(observed(), canvas, DOCUMENT, token('solo', 'member'));
+    expect(listing.into).toEqual({ ref: 'refs/heads/main', oid: OID });
+    const items = byAgent(listing);
+    expect(items.solo?.merge).toEqual({ merged: false, uncommitted: 2, job: 'held' });
+    expect(items.member?.merge).toEqual({ merged: true, uncommitted: 0 });
+    expect(JSON.stringify(listing)).not.toContain('interrupted');
+  });
+
+  it('says nothing of a shared project folder or a canvas with no project', async () => {
+    await workspaces.write((w) => {
+      for (const one of w.bindingsOf(canvas)) w.unbind(canvas, one.agent);
+      w.bindCanvas(canvas, null);
+    });
+    const listing = listWorktrees(observed(), canvas, DOCUMENT, { kind: 'you' });
+    expect(listing.items.every((item) => !('merge' in item))).toBe(true);
+  });
+
+  it('says nothing observed without the observation composed', () => {
+    const listing = listWorktrees(deps(), canvas, DOCUMENT, { kind: 'you' });
+    expect(listing.into).toBeNull();
+    expect(listing.items.every((item) => !('merge' in item))).toBe(true);
   });
 });

@@ -210,13 +210,17 @@ export const BranchMergeOutput = z
   );
 export type BranchMergeOutput = z.infer<typeof BranchMergeOutput>;
 
-/** Merge observations on worktree.list and its topic. */
+/**
+ * worktree.list's and `worktrees:<c>`'s additive merge state (B9b Design §9 C12, built by C6): an
+ * item's tree's, present when the item has a tree; and, at the top, your picked checkout's
+ * branch and commit (`WorktreeMergeListing`).
+ */
 export const WorktreeMerge = z
   .strictObject({
     merged: z.boolean().nullable(),
     uncommitted: Count.nullable(),
     job: z.enum(['merging', 'held']).optional(),
-    /** Yours alone; the eventual selector must omit it for every token. */
+    /** Yours alone: the selector omits it for every token. */
     sentence: text(BRANCH_LIMITS.sentenceBytes).min(1).optional(),
   })
   .refine(

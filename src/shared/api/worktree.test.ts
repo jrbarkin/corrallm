@@ -106,7 +106,53 @@ describe('the worktree list contract', () => {
       op.output.safeParse({ items: [{ ...token, state: 'deleted' }], kept: [], into: null })
         .success,
     ).toBe(false);
-    expect(op.output.safeParse({ items: [] }).success).toBe(false);
+    expect(op.output.safeParse({ items: [], into: null }).success).toBe(false);
+  });
+
+  it('says the merge state as additive fields: your checkout’s branch at the top, each tree’s on its agents', () => {
+    const op = opOf('worktree.list');
+    expect(op).toBeDefined();
+    if (op === undefined) return;
+    const oid = 'b'.repeat(40);
+    const item = {
+      agent: 'builder',
+      mode: 'own',
+      workspace: worktree,
+      generation: 1,
+      branch: `corrallm/p/${worktree}`,
+      base: { ref: 'refs/heads/main', oid: 'a'.repeat(40) },
+      state: 'ready',
+    };
+    const listed = (merge: unknown, into: unknown = { ref: 'refs/heads/main', oid }) =>
+      op.output.safeParse({ items: [{ ...item, merge }], kept: [], into }).success;
+    // Read, or not yet (null), as B9b Design §9 C12 freezes them; a held job's sentence is yours.
+    expect(listed({ merged: true, uncommitted: 0 })).toBe(true);
+    expect(listed({ merged: null, uncommitted: null })).toBe(true);
+    expect(listed({ merged: false, uncommitted: 3, job: 'merging' })).toBe(true);
+    expect(
+      listed({ merged: null, uncommitted: null, job: 'held', sentence: 'Check git status.' }),
+    ).toBe(true);
+    expect(listed({ merged: true, uncommitted: 0 }, null)).toBe(true);
+    expect(listed({ merged: true, uncommitted: 0 }, { ref: null, oid })).toBe(true);
+    expect(listed({ merged: true, uncommitted: 0 }, { ref: null, oid: null })).toBe(true);
+    // An item with no tree carries none.
+    expect(
+      op.output.safeParse({ items: [{ ...item, workspace: null }], kept: [], into: null }).success,
+    ).toBe(true);
+    for (const [merge, into] of [
+      [{ merged: true }, undefined],
+      [{ merged: true, uncommitted: -1 }, undefined],
+      [{ merged: true, uncommitted: 0, job: 'done' }, undefined],
+      [{ merged: true, uncommitted: 0, sentence: 'not held' }, undefined],
+      [{ merged: true, uncommitted: 0, tip: oid }, undefined],
+      [
+        { merged: true, uncommitted: 0 },
+        { ref: 'refs/heads/main', oid: 'nope' },
+      ],
+      [{ merged: true, uncommitted: 0 }, { ref: 'refs/heads/main' }],
+    ] as const) {
+      expect(listed(merge, into)).toBe(false);
+    }
   });
 });
 
