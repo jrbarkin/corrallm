@@ -34,7 +34,6 @@ function setup(nodes: AgentNode[], extra: Partial<RunIO> = {}) {
       };
     },
     tell: () => undefined,
-    connect: () => undefined,
     later: () => () => undefined,
     now: () => now,
     ...extra,
@@ -105,7 +104,6 @@ describe('who stopped the run', () => {
     const restored = new RunStore(TEST_ENGINE, {
       send: () => () => undefined,
       tell: () => undefined,
-      connect: () => undefined,
       later: () => () => undefined,
       now: () => 0,
     });
@@ -178,7 +176,6 @@ describe('who decided what the run held', () => {
     const restored = new RunStore(TEST_ENGINE, {
       send: () => () => undefined,
       tell: () => undefined,
-      connect: () => undefined,
       later: () => () => undefined,
       now: () => 0,
     });

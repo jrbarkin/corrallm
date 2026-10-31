@@ -4,6 +4,7 @@ import { ID_PATTERN } from '../../adapter';
 import { parseRole } from '../../role';
 import { EFFORT_PATTERN, MAX_ROLE_LENGTH, MODEL_PATTERN } from '../../session';
 import { define } from '../define';
+import { SetFallbackInput } from '../fallback';
 import type { OpDef } from '../define';
 import { AgentId, OpCanvas } from '../ids';
 import { MAX_LABEL } from '../limits';
@@ -45,6 +46,14 @@ export const agentOps = {
       'Switches an agent’s connection, dropping a saved mode the new connection cannot start.',
     input: z.strictObject({ canvas: OpCanvas, agent: AgentId, connection: CatalogId }),
     output: z.strictObject({}),
+  }),
+  'agent.setFallback': define('agent.setFallback', {
+    summary:
+      'Sets the backends an agent carries on with when its usage runs out (up to three, each an ' +
+      'adapter, its connection and optionally a model and effort; back: return to switch back ' +
+      'at the reset), or null to remove them. Yours alone.',
+    input: SetFallbackInput,
+    output: z.strictObject({ changed: z.boolean() }),
   }),
   'agent.setSettings': define('agent.setSettings', {
     summary: 'Merges one adapter’s saved settings: omitted fields stay; null unsets a field.',

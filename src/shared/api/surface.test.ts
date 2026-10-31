@@ -85,12 +85,15 @@ const ID_KEYS = new Set([
 /** The brands that name an agent, which an op open to a token must say whether it may aim at itself. */
 const AGENT_BRANDS: readonly Brand[] = ['AgentId', 'NodeId', 'GroupId'];
 
-/** Whether `schema` takes strings that aren't a branded id (a literal or an enum is a fixed word). */
+/**
+ * Whether `schema` takes strings that aren't a branded id (a literal or an enum is a fixed word).
+ * An object is no id: its fields are read by their own names (a fallback chain's steps, `to`).
+ */
 function takesUnbrandedText(schema: z.ZodType): boolean {
   if (ID_BRANDS.has(schema)) return false;
   const { type } = defOf(schema);
   if (type === 'string' || type === 'template_literal') return true;
-  if (type === 'record') return false;
+  if (type === 'record' || type === 'object') return false;
   return children(schema).some((child) => takesUnbrandedText(child.schema));
 }
 
@@ -374,6 +377,14 @@ describe('T1: the surface’s rules', () => {
       '.agent',
       '.before',
     ]);
+  });
+
+  it('reads objects under an id’s name by their own fields’ names', () => {
+    const steps = (field: string) =>
+      z.strictObject({ to: z.array(z.strictObject({ [field]: z.string().max(9) })).max(3) });
+    expect(unbrandedIds(steps('adapter'))).toEqual([]);
+    expect(unbrandedIds(steps('agent'))).toEqual(['.to.agent']);
+    expect(unbrandedIds(z.strictObject({ to: z.array(z.string().max(9)) }))).toEqual(['.to']);
   });
 
   it.each<[string, Registry, string]>([

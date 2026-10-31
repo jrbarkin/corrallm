@@ -24,8 +24,15 @@ const live = new Set<Live>();
 
 /** A run, as `new RunStore(catalog, io)`, kept to check that it restores (expectRestorable). */
 export function liveRun(catalog: EngineCatalog, io: RunIO): RunStore {
-  const store = new RunStore(catalog, io);
-  const run: Live = { store, catalog, now: io.now, nodes: [] };
+  return liveRunOf(new RunStore(catalog, io), catalog, io.now);
+}
+
+/**
+ * A run made elsewhere (an Engine's: `engine.run`), before it is given its nodes, kept to check
+ * that it restores as `liveRun`'s are (expectRestorable).
+ */
+export function liveRunOf(store: RunStore, catalog: EngineCatalog, now: () => number): RunStore {
+  const run: Live = { store, catalog, now, nodes: [] };
   const update = store.update.bind(store);
   store.update = (nodes) => {
     run.nodes = nodes;
@@ -44,7 +51,6 @@ export function expectRestorable(): void {
     const restored = new RunStore(catalog, {
       send: () => () => undefined,
       tell: () => undefined,
-      connect: () => undefined,
       later: () => () => undefined,
       now,
     });

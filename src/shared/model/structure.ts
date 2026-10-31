@@ -139,6 +139,9 @@ export function spawnAgent(
         ...newAgent(source.data.adapter ?? context.defaultAdapter, context.newId),
         ...(source.data.connection === undefined ? {} : { connection: source.data.connection }),
         ...(source.data.settings === undefined ? {} : { settings: source.data.settings }),
+        // An exact copy of the chain and handoff settings you gave its source (B11a C1, R11).
+        ...(source.data.fallback === undefined ? {} : { fallback: source.data.fallback }),
+        ...(source.data.handoff === undefined ? {} : { handoff: source.data.handoff }),
         ...(source.data.role === undefined ? {} : { role: source.data.role }),
       },
     },
