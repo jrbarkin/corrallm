@@ -24,14 +24,31 @@ export interface HandoffExport {
   sha256: string;
 }
 
+/**
+ * Why there was no handoff to carry as a switch was made: its context never reached its ask point
+ * (`reached`); it did, but no handoff was accepted (`unaccepted`: not asked, its backend out of
+ * usage, or its requests not answered with one); its handoffs were off; or its connection
+ * reported no context.
+ */
+export const CARRY_WHYS = ['reached', 'unaccepted', 'off', 'unreported'] as const;
+export type CarryWhy = (typeof CARRY_WHYS)[number];
+
+/** How the export of an agent's latest handoff went (none said: not made, or none to make). */
+export const EXPORT_STATES = ['done', 'refused', 'failed'] as const;
+export type ExportState = (typeof EXPORT_STATES)[number];
+
 /** What the core keeps of an agent's handoff. */
 export interface HandoffRecord {
   /** Its latest accepted handoff, if one is. */
   handoff?: Handoff;
   /** The switch whose first automated send carries it, if one waits to. */
   carry?: string;
+  /** Why there was no handoff to carry as the last switch was made, if there wasn't one. */
+  carryWhy?: CarryWhy;
   /** Its last Markdown copy, if one was exported. */
   exported?: HandoffExport;
+  /** How its latest handoff's export went, once it was made. */
+  export?: ExportState;
 }
 
 /** The profile's handoffs, every canvas's, in the database's `handoff` table. */
@@ -48,7 +65,7 @@ export class HandoffTable {
   rows(canvas: CanvasId): Record<string, unknown>[] {
     return this.#store
       .prepare(
-        `SELECT agent_id, text, at, source, during, bytes, carry, exported
+        `SELECT agent_id, text, at, source, during, bytes, carry, carry_why, exported
          FROM handoff WHERE canvas_id = ?`,
       )
       .all(canvas);
@@ -60,16 +77,21 @@ export class HandoffTable {
   }
 
   /** Within a write: an agent's row, as kept (each column by name). */
-  keep(canvas: CanvasId, agent: string, { handoff, carry, exported }: HandoffRecord): void {
+  keep(
+    canvas: CanvasId,
+    agent: string,
+    { handoff, carry, carryWhy, exported, export: state }: HandoffRecord,
+  ): void {
     this.#memory.ensure(canvas);
     this.#store
       .prepare(
-        `INSERT INTO handoff (canvas_id, agent_id, text, at, source, during, bytes, carry, exported)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `INSERT INTO handoff (canvas_id, agent_id, text, at, source, during, bytes, carry,
+           carry_why, exported)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT (canvas_id, agent_id) DO UPDATE SET
            text = excluded.text, at = excluded.at, source = excluded.source,
            during = excluded.during, bytes = excluded.bytes, carry = excluded.carry,
-           exported = excluded.exported`,
+           carry_why = excluded.carry_why, exported = excluded.exported`,
       )
       .run(
         canvas,
@@ -80,19 +102,23 @@ export class HandoffTable {
         json(handoff?.during),
         handoff?.bytes ?? null,
         carry ?? null,
-        json(exported),
+        carryWhy ?? null,
+        exported === undefined && state === undefined
+          ? null
+          : JSON.stringify({ ...exported, ...(state === undefined ? {} : { state }) }),
       );
   }
 
-  /** Within a write: an agent's carry alone, its row made if it has none. */
-  carry(canvas: CanvasId, agent: string, carry: string): void {
+  /** Within a write: an agent's carry and why there was no handoff, its row made if it has none. */
+  carry(canvas: CanvasId, agent: string, carry: string, why: CarryWhy | undefined): void {
     this.#memory.ensure(canvas);
     this.#store
       .prepare(
-        `INSERT INTO handoff (canvas_id, agent_id, carry) VALUES (?, ?, ?)
-         ON CONFLICT (canvas_id, agent_id) DO UPDATE SET carry = excluded.carry`,
+        `INSERT INTO handoff (canvas_id, agent_id, carry, carry_why) VALUES (?, ?, ?, ?)
+         ON CONFLICT (canvas_id, agent_id) DO UPDATE SET
+           carry = excluded.carry, carry_why = excluded.carry_why`,
       )
-      .run(canvas, agent, carry);
+      .run(canvas, agent, carry, why ?? null);
   }
 
   /** Within a write: deletes an agent's row. */
@@ -149,18 +175,24 @@ export class HandoffStore {
    * write (the one that records its reply), what waits to be carried and the last export kept.
    */
   accept(agent: string, handoff: Handoff): void {
-    this.#set(agent, { ...this.#kept.get(agent), handoff });
+    // Its own export is yet to be made: how the last one went no longer says.
+    const record: HandoffRecord = { ...this.#kept.get(agent), handoff };
+    delete record.export;
+    this.#set(agent, record);
   }
 
   /**
-   * Within a switch's commit write (B11a C4): the agent's carry set to that switch, on disk with
-   * it or not at all. Kept at once, so that nothing written after it writes it out again; undone,
-   * as it was, if the write fails.
+   * Within a switch's commit write (B11a C4): the agent's carry set to that switch, with why there
+   * is no handoff to carry if there isn't (`why`), on disk with it or not at all. Kept at once, so
+   * that nothing written after it writes it out again; undone, as it was, if the write fails.
    */
-  stageCarry(agent: string, carry: string): Staged {
+  stageCarry(agent: string, carry: string, why?: CarryWhy): Staged {
     const before = this.#kept.get(agent);
-    this.#table.carry(this.canvas, agent, carry);
-    this.#kept.set(agent, { ...before, carry });
+    this.#table.carry(this.canvas, agent, carry, why);
+    const record: HandoffRecord = { ...before, carry };
+    if (why === undefined) delete record.carryWhy;
+    else record.carryWhy = why;
+    this.#kept.set(agent, record);
     this.#unread.delete(agent);
     return {
       reveal: () => undefined,
@@ -175,26 +207,44 @@ export class HandoffStore {
   /**
    * The send that carries an agent's handoff takes it (C7): the switch it waits for and the latest
    * handoff (none if none was written), its carry cleared at once, so the write that records that
-   * send clears it on disk too. Undefined where nothing waits to be carried.
+   * send clears it on disk too; why there was none, where there wasn't, stays. Undefined where
+   * nothing waits to be carried.
    */
-  take(agent: string): { carry: string; handoff?: Handoff } | undefined {
+  take(agent: string): { carry: string; why?: CarryWhy; handoff?: Handoff } | undefined {
     const record = this.#kept.get(agent);
     if (record?.carry === undefined) return undefined;
     const { carry, ...rest } = record;
     this.#set(agent, rest);
-    return { carry, ...(record.handoff === undefined ? {} : { handoff: record.handoff }) };
+    return {
+      carry,
+      ...(record.handoff === undefined && record.carryWhy !== undefined
+        ? { why: record.carryWhy }
+        : {}),
+      ...(record.handoff === undefined ? {} : { handoff: record.handoff }),
+    };
   }
 
-  /** The send that took `carry` was never recorded: it still waits, unless another is set since. */
+  /**
+   * The send that took `carry` never went (its record not kept, taken back before its session had
+   * it, or cut off by a crash before it was sent): it still waits, unless another is set since.
+   */
   untake(agent: string, carry: string): void {
     const record = this.#kept.get(agent);
     if (record?.carry !== undefined) return;
     this.#set(agent, { ...record, carry });
   }
 
-  /** The agent's handoff was exported as `exported`: what its next export may replace. */
-  exported(agent: string, exported: HandoffExport): void {
-    this.#set(agent, { ...this.#kept.get(agent), exported });
+  /**
+   * How the export of the agent's latest handoff went: done, its copy what its next export may
+   * replace; refused or failed, its last copy still its own.
+   */
+  exported(
+    agent: string,
+    outcome: ({ state: 'done' } & HandoffExport) | { state: 'refused' | 'failed' },
+  ): void {
+    const record: HandoffRecord = { ...this.#kept.get(agent), export: outcome.state };
+    if (outcome.state === 'done') record.exported = { path: outcome.path, sha256: outcome.sha256 };
+    this.#set(agent, record);
   }
 
   /** As the canvas opens: the rows of agents no longer on it go, with the next write. */
@@ -247,11 +297,13 @@ export class HandoffStore {
 /** A row of `handoff`, read: undefined if it holds anything this code doesn't read. */
 function recordOf(row: Record<string, unknown>): HandoffRecord | undefined {
   const { text, at, bytes, carry } = row;
+  const carryWhy = CARRY_WHYS.find((one) => one === row.carry_why);
   const source = parsed(row.source);
   const during = parsed(row.during);
   const exported = parsed(row.exported);
   if (source === null || during === null || exported === null) return undefined;
   if (carry !== null && typeof carry !== 'string') return undefined;
+  if (row.carry_why !== null && carryWhy === undefined) return undefined;
   let handoff: Handoff | undefined;
   if (text !== null) {
     const read = HandoffSchema.safeParse({
@@ -264,20 +316,28 @@ function recordOf(row: Record<string, unknown>): HandoffRecord | undefined {
     if (!read.success) return undefined;
     handoff = read.data;
   }
+  // What was exported: its last copy (path and hash, together or neither), and how its latest
+  // export went.
+  const { path, sha256, state, ...others } = exported ?? {};
+  const copy = path !== undefined || sha256 !== undefined;
+  const last =
+    typeof path === 'string' && typeof sha256 === 'string' && /^[0-9a-f]{64}$/.test(sha256)
+      ? { path, sha256 }
+      : undefined;
+  const outcome = EXPORT_STATES.find((one) => one === state);
   if (
-    exported !== undefined &&
-    (typeof exported.path !== 'string' ||
-      typeof exported.sha256 !== 'string' ||
-      !/^[0-9a-f]{64}$/.test(exported.sha256) ||
-      Object.keys(exported).length !== 2)
+    Object.keys(others).length > 0 ||
+    (copy && last === undefined) ||
+    (state !== undefined && outcome === undefined) ||
+    (exported !== undefined && !copy && outcome === undefined)
   )
     return undefined;
   return {
     ...(handoff === undefined ? {} : { handoff }),
     ...(typeof carry === 'string' ? { carry } : {}),
-    ...(exported === undefined
-      ? {}
-      : { exported: { path: exported.path as string, sha256: exported.sha256 as string } }),
+    ...(carryWhy === undefined ? {} : { carryWhy }),
+    ...(last === undefined ? {} : { exported: last }),
+    ...(outcome === undefined ? {} : { export: outcome }),
   };
 }
 

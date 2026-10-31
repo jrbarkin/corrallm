@@ -123,10 +123,20 @@ describe('a carry', () => {
     expect(loaded().of('worker')).toEqual({ handoff: HANDOFF, carry: 'switch-2' });
   });
 
-  it('is staged for an agent that wrote none yet, carrying the line that says so', async () => {
+  it('is staged for an agent that wrote none yet, with why, which stays once carried', async () => {
     const store = loaded();
-    await database.write(() => store.stageCarry('worker', 'switch-1'));
-    expect(loaded().of('worker')).toEqual({ carry: 'switch-1' });
+    await database.write(() => store.stageCarry('worker', 'switch-1', 'unreported'));
+    expect(loaded().of('worker')).toEqual({ carry: 'switch-1', carryWhy: 'unreported' });
+    expect(store.take('worker')).toEqual({ carry: 'switch-1', why: 'unreported' });
+    await store.durable();
+    expect(loaded().of('worker')).toEqual({ carryWhy: 'unreported' });
+    // A later switch says why anew; with a handoff kept, there's no why.
+    await database.write(() => store.stageCarry('worker', 'switch-2', 'off'));
+    expect(loaded().of('worker')).toEqual({ carry: 'switch-2', carryWhy: 'off' });
+    store.accept('worker', HANDOFF);
+    await store.durable();
+    await database.write(() => store.stageCarry('worker', 'switch-3'));
+    expect(loaded().of('worker')).toEqual({ handoff: HANDOFF, carry: 'switch-3' });
   });
 
   it('is taken by the send that carries it, cleared with that send’s write, and put back if it failed', async () => {
@@ -176,14 +186,30 @@ describe('as the canvas opens', () => {
     expect(rows()).toEqual([expect.objectContaining({ agent_id: 'newer', text: 'Done.' })]);
   });
 
-  it('keeps what was exported, to replace only the agent’s own copy', async () => {
+  it('keeps what was exported, to replace only the agent’s own copy, and how its latest export went', async () => {
     const store = loaded();
     store.accept('worker', HANDOFF);
-    store.exported('worker', { path: 'HANDOFF.md', sha256: 'a'.repeat(64) });
+    store.exported('worker', { state: 'done', path: 'HANDOFF.md', sha256: 'a'.repeat(64) });
     await store.durable();
     expect(loaded().of('worker')).toEqual({
       handoff: HANDOFF,
       exported: { path: 'HANDOFF.md', sha256: 'a'.repeat(64) },
+      export: 'done',
     });
+    // A newer handoff's export not yet made: none said; refused, its last copy still its own.
+    store.accept('worker', { ...HANDOFF, text: 'Newer.', bytes: 6 });
+    expect(store.of('worker')?.export).toBeUndefined();
+    store.exported('worker', { state: 'refused' });
+    await store.durable();
+    expect(loaded().of('worker')).toEqual({
+      handoff: { ...HANDOFF, text: 'Newer.', bytes: 6 },
+      exported: { path: 'HANDOFF.md', sha256: 'a'.repeat(64) },
+      export: 'refused',
+    });
+    // One never written: failed, with no copy of its own.
+    store.accept('other', HANDOFF);
+    store.exported('other', { state: 'failed' });
+    await store.durable();
+    expect(loaded().of('other')).toEqual({ handoff: HANDOFF, export: 'failed' });
   });
 });

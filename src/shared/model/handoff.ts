@@ -52,12 +52,21 @@ export const HANDOFF_STATES = ['kept', 'asking', 'failed', 'unreported', 'off'] 
 export type HandoffState = (typeof HANDOFF_STATES)[number];
 
 /**
+ * How the Markdown export of an agent's latest handoff went (C10): `none`, no file is set or none
+ * was made for it yet; `done`; `refused` (your edit or another agent's file there, a symlink, a
+ * folder missing); or `failed` (the file system said no). Why is said in its transcript.
+ */
+export const HANDOFF_EXPORTS = ['none', 'done', 'refused', 'failed'] as const;
+export type HandoffExportState = (typeof HANDOFF_EXPORTS)[number];
+
+/**
  * An agent's handoff as views show it (C11): when its latest was kept and how long it is (null
- * while none is), and its state. No text, native id or path.
+ * while none is), its state, and how its export went. No text, native id, path or reason.
  */
 export const HandoffViewSchema = z.strictObject({
   at: z.int().nonnegative().nullable(),
   bytes: z.int().min(1).max(MAX_HANDOFF_BYTES).nullable(),
   state: z.enum(HANDOFF_STATES),
+  export: z.enum(HANDOFF_EXPORTS),
 });
 export type HandoffView = z.infer<typeof HandoffViewSchema>;

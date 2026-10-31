@@ -91,12 +91,26 @@ export interface DeliveryDeps {
      * The first automated send to `agent` since a switch: `framed`, a party's message as delivery
      * frames it, with what it carries; taken now, so the write recording it clears the carry.
      */
-    carry(agent: string, framed: string): { text: string; undo: () => void } | undefined;
+    carry(
+      agent: string,
+      framed: string,
+    ): { text: string; carry: string; undo: () => void } | undefined;
+    /**
+     * As delivery starts, once what the core last left out is cut off: each send cut off before
+     * its session had it that carried a handoff leaves that carry to the next send.
+     */
+    recover(): void;
   };
 }
 
 /** The told key a handoff request of corrallm's is kept with starts with this (B11a C7). */
 export const HANDOFF_REQUEST = 'handoff:';
+/**
+ * The told key a send that carried an agent's handoff is kept with starts with this, followed by
+ * the switch it carried it for (B11a C7): value-free, so a crash that cuts it off unsent leaves
+ * the carry to the next send.
+ */
+export const HANDOFF_CARRIED = 'carried:';
 
 /**
  * Whether an agent's session asks before it acts on what it is sent, now or as it would start:
@@ -320,6 +334,8 @@ export class Delivery {
       // run's own to settle as its turn ends: only what the core last left out is cut off.
       if (this.#inFlight(message) && !this.#runSending(message)) this.#cutOff(message);
     }
+    // B11a C7: a carrying send cut off unsent leaves its carry to the next, in this same write.
+    this.#deps.handoff?.recover();
     await this.#deps.store.durable();
     this.schedule();
   }
@@ -1164,7 +1180,11 @@ export class Delivery {
       message.from === 'you' || request
         ? undefined
         : this.#deps.handoff?.carry(node.id, this.#frame(message));
-    if (carried !== undefined) this.#carried.set(message.id, carried);
+    if (carried !== undefined) {
+      this.#carried.set(message.id, carried);
+      // Its record says it carried one (never what), in the write that records it delivering.
+      this.#deps.store.retell(message.id, `${HANDOFF_CARRIED}${carried.carry}`);
+    }
     this.#deps.store.update(message.id, {
       state: 'delivering',
       delivery: { at: this.#deps.now(), as, attempt },
@@ -1227,8 +1247,11 @@ export class Delivery {
 
   /** A message being delivered was never sent: what it carried waits for the next send. */
   #uncarry(id: string): void {
-    this.#carried.get(id)?.undo();
+    const carried = this.#carried.get(id);
+    if (carried === undefined) return;
+    carried.undo();
     this.#carried.delete(id);
+    this.#deps.store.retell(id, undefined);
   }
 
   /**
@@ -1400,6 +1423,12 @@ export class Delivery {
    * the run's own, whose attempt the run restores uncertain, telling no one).
    */
   #cutOff(message: Message): void {
+    // One its session had carried what it carried: nothing is left to carry again (B11a C7).
+    if (
+      message.state === 'delivered' &&
+      this.#deps.store.toldOf(message.id)?.startsWith(HANDOFF_CARRIED) === true
+    )
+      this.#deps.store.retell(message.id, undefined);
     this.#deps.store.update(message.id, { state: 'unresolved' });
     if (sentByRun(message)) return;
     this.#notice(

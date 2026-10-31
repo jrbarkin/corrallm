@@ -26,7 +26,7 @@ import type { SessionManager } from '../sessions/manager';
 import type { UsageReadings } from '../usage';
 import type { Documents } from './canvas/documents';
 import { recoverDecisions } from './decisions';
-import { Delivery } from './delivery/delivery';
+import { Delivery, HANDOFF_CARRIED } from './delivery/delivery';
 import { HandoffStore } from './delivery/handoffs';
 import type { HandoffTable } from './delivery/handoffs';
 import { capBody, MessageStore, sentByRun } from './delivery/messages';
@@ -128,7 +128,9 @@ export interface EnginesDeps {
       agent: string,
       text: string,
       kind: 'run' | 'party',
-    ): { text: string; undo: () => void } | undefined;
+    ): { text: string; carry: string; undo: () => void } | undefined;
+    /** As a canvas's delivery starts: what sends cut off unsent carried waits to be carried again. */
+    recover(canvas: CanvasId): void;
     view(canvas: CanvasId, agent: string): HandoffView | null;
   };
 }
@@ -1061,6 +1063,9 @@ export class Engines {
                 handoff.replied(canvas, message, reply, result);
               },
               carry: (agent, framed) => handoff.carry(canvas, agent, framed, 'party'),
+              recover: () => {
+                handoff.recover(canvas);
+              },
             },
           }),
     });
@@ -1314,12 +1319,17 @@ export class Engines {
  * under its own id; never a reply, a notice or a party's message to deliver. Its body is capped as
  * any message's is: the session gets the whole of it, from memory. The first of the run's own sends
  * to an agent since a switch (never your correction) carries the agent's handoff (`carry`, B11a
- * C7), taken as it is recorded, so the write that records it clears the carry; one whose record
- * couldn't be kept, or that was taken back before its session had it, leaves it to the next.
+ * C7), taken as it is recorded, so the write that records it clears the carry, and kept with a
+ * told key that says it carried one (HANDOFF_CARRIED and the switch, never the text); one whose
+ * record couldn't be kept, or that was taken back before its session had it, leaves it to the
+ * next, and a crash that cut it off unsent does too (Delivery.start).
  */
 function runMailbox(
   messages: MessageStore,
-  carry?: (to: string, text: string) => { text: string; undo: () => void } | undefined,
+  carry?: (
+    to: string,
+    text: string,
+  ) => { text: string; carry: string; undo: () => void } | undefined,
 ): RunMailbox {
   const carried = new Map<string, () => void>();
   return {
@@ -1332,16 +1342,19 @@ function runMailbox(
           : { text: typed, task: { agent: task.agent, item: task.item } }),
         ...(images > 0 ? { images } : {}),
       };
-      const message = messages.add({
-        from: typed !== undefined ? 'you' : owner === to ? 'corrallm' : agentParty(owner),
-        to: agentParty(to),
-        kind: 'text',
-        origin: typed === undefined ? 'run' : 'manual',
-        ...(Object.keys(display).length === 0 ? {} : { display }),
-        body: capBody(text, 'prompt'),
-        task,
-        state: 'delivering',
-      });
+      const message = messages.add(
+        {
+          from: typed !== undefined ? 'you' : owner === to ? 'corrallm' : agentParty(owner),
+          to: agentParty(to),
+          kind: 'text',
+          origin: typed === undefined ? 'run' : 'manual',
+          ...(Object.keys(display).length === 0 ? {} : { display }),
+          body: capBody(text, 'prompt'),
+          task,
+          state: 'delivering',
+        },
+        carrying === undefined ? undefined : `${HANDOFF_CARRIED}${carrying.carry}`,
+      );
       messages.update(message.id, { delivery: { at: message.at, as: message.id, attempt: 1 } });
       if (carrying !== undefined) carried.set(message.id, carrying.undo);
       return { id: message.id, text };
@@ -1350,7 +1363,10 @@ function runMailbox(
       const { state, turn } = end;
       const undo = carried.get(id);
       carried.delete(id);
-      if (state === 'unresolved' || (state === 'withdrawn' && end.unsent === true)) undo?.();
+      if (undo !== undefined && (state === 'unresolved' || (state === 'withdrawn' && end.unsent))) {
+        undo();
+        messages.retell(id, undefined);
+      }
       const message = messages.get(id);
       // Cut off meanwhile (the core stopping), it stays as that left it.
       if (message?.state !== 'delivering' && message?.state !== 'delivered') return;

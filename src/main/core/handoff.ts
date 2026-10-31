@@ -14,8 +14,8 @@ import type { Message } from '../../shared/model/messages';
 import type { TurnResult } from '../../shared/session';
 import type { UsageReadings } from '../usage';
 import type { Delivery } from './delivery/delivery';
-import { HANDOFF_REQUEST } from './delivery/delivery';
-import type { HandoffStore } from './delivery/handoffs';
+import { HANDOFF_CARRIED, HANDOFF_REQUEST } from './delivery/delivery';
+import type { CarryWhy, HandoffStore } from './delivery/handoffs';
 import type { HandoffExporter } from './handoff-file';
 import type { MessageStore, Staged } from './delivery/messages';
 import type { Engine } from './engine/engine';
@@ -94,6 +94,11 @@ interface Following {
   asked: number;
   /** Its requests this crossing weren't accepted: the view says so until it re-arms. */
   failed: boolean;
+  /**
+   * A turn's report reached its ask point since it was last armed: a switch with no handoff kept
+   * says its context reached it but none was accepted, not that it never did.
+   */
+  crossed: boolean;
   /** Its session's last context report since its last turn ended. */
   report: SessionContext | undefined;
   request: Request | undefined;
@@ -227,7 +232,26 @@ export class HandoffService {
    * disk with the switch or neither is.
    */
   stage(canvas: CanvasId, agent: string, change: string): Staged | undefined {
-    return this.#deps.canvas(canvas)?.handoffs.stageCarry(agent, change);
+    const runtime = this.#deps.canvas(canvas);
+    if (runtime === undefined) return undefined;
+    // Its document as it is before the switch commits: why it has no handoff, if it hasn't one.
+    const why =
+      runtime.handoffs.of(agent)?.handoff === undefined
+        ? this.#whyNone(canvas, runtime, agent)
+        : undefined;
+    return runtime.handoffs.stageCarry(agent, change, why);
+  }
+
+  /**
+   * Why an agent has no handoff, as a switch from its backend is made: its handoffs are off, its
+   * connection reports no context, its context reached its ask point but none was accepted, or it
+   * never reached it.
+   */
+  #whyNone(canvas: CanvasId, runtime: HandoffRuntime, agent: string): CarryWhy {
+    const node = agentIn(runtime.document, agent);
+    if (node?.data.handoff?.off === true) return 'off';
+    if (node === undefined || !this.#reports(runtime, node)) return 'unreported';
+    return this.#following(canvas, agent)?.crossed === true ? 'unaccepted' : 'reached';
   }
 
   /**
@@ -244,7 +268,7 @@ export class HandoffService {
     agent: string,
     text: string,
     kind: 'run' | 'party',
-  ): { text: string; undo: () => void } | undefined {
+  ): { text: string; carry: string; undo: () => void } | undefined {
     const runtime = this.#deps.canvas(canvas);
     const node = runtime === undefined ? undefined : agentIn(runtime.document, agent);
     if (runtime === undefined || node === undefined) return undefined;
@@ -260,14 +284,35 @@ export class HandoffService {
     const framed = [
       this.#switchLine(runtime, node),
       text,
-      this.#handoffBlock(runtime, node, taken.handoff),
+      this.#handoffBlock(runtime, node, taken.handoff, taken.why),
     ].join('\n\n');
     return {
       text: framed,
+      carry: taken.carry,
       undo: () => {
         runtime.handoffs.untake(agent, taken.carry);
       },
     };
+  }
+
+  /**
+   * As a canvas's delivery starts: each send that took a carry (kept with a told key starting
+   * HANDOFF_CARRIED) and was cut off unresolved before its session had it, by a crash or a close,
+   * leaves that carry to the next automated send; its record no longer says it carried one, in
+   * the same write.
+   */
+  recover(canvas: CanvasId): void {
+    const runtime = this.#canvases.get(canvas)?.runtime;
+    if (runtime === undefined) return;
+    for (const message of runtime.messages.all()) {
+      const told = runtime.messages.toldOf(message.id);
+      const agent = agentOf(message.to);
+      if (message.state !== 'unresolved' || agent === undefined) continue;
+      if (told?.startsWith(HANDOFF_CARRIED) !== true) continue;
+      runtime.handoffs.untake(agent, told.slice(HANDOFF_CARRIED.length));
+      runtime.messages.retell(message.id, undefined);
+      this.#changed(canvas, agent);
+    }
   }
 
   /** The agent's handoff as views show it (C11): when, how long and its state; no text. */
@@ -280,11 +325,22 @@ export class HandoffService {
     const kept = runtime.handoffs.of(agent)?.handoff;
     const shown = { at: kept?.at ?? null, bytes: kept?.bytes ?? null };
     const following = attached?.agents.get(agent);
-    if (node.data.handoff?.off === true) return { ...shown, state: 'off' };
-    if (!this.#reports(runtime, node)) return { ...shown, state: 'unreported' };
-    if (following?.request !== undefined) return { ...shown, state: 'asking' };
-    if (following?.failed === true) return { ...shown, state: 'failed' };
-    return kept === undefined ? null : { ...shown, state: 'kept' };
+    // How its latest handoff's export went, where a file is set: never where, never why.
+    const record = runtime.handoffs.of(agent);
+    const exported =
+      node.data.handoff?.file === undefined || record?.export === undefined
+        ? 'none'
+        : record.export;
+    const view = (state: HandoffView['state']): HandoffView => ({
+      ...shown,
+      state,
+      export: exported,
+    });
+    if (node.data.handoff?.off === true) return view('off');
+    if (!this.#reports(runtime, node)) return view('unreported');
+    if (following?.request !== undefined) return view('asking');
+    if (following?.failed === true) return view('failed');
+    return kept === undefined ? null : view('kept');
   }
 
   /** What an agent's session did, as the engine reduced it. */
@@ -320,6 +376,7 @@ export class HandoffService {
     following.armed = true;
     following.asked = 0;
     following.failed = false;
+    following.crossed = false;
   }
 
   /** A turn ended: corrallm asks for the handoff if its last report crossed the ask point. */
@@ -332,14 +389,16 @@ export class HandoffService {
     following.report = undefined;
     // While a request waits or runs (its own turn among them), nothing more is asked.
     if (following.request !== undefined) return;
-    if (report === undefined || !following.armed || following.asked >= TRIES) return;
+    if (report === undefined || !following.armed) return;
     const node = agentIn(runtime.document, agent);
     if (node === undefined || node.data.handoff?.off === true || !this.#reports(runtime, node))
       return;
-    // An exhausted backend's agent is never asked: its work carries on elsewhere, or waits.
-    if (this.#exhausted(runtime, agent)) return;
     const point = this.#point(node, report);
     if (point === undefined || report.used < point) return;
+    following.crossed = true;
+    if (following.asked >= TRIES) return;
+    // An exhausted backend's agent is never asked: its work carries on elsewhere, or waits.
+    if (this.#exhausted(runtime, agent)) return;
     const connection = runtime.engine.catalog.connectionOf(node.data);
     const adapter = runtime.engine.catalog.adapterOf(connection);
     const during = duringOf(runtime.messages, messages);
@@ -407,14 +466,19 @@ export class HandoffService {
       last: record.exported,
     });
     if (this.#canvases.get(canvas) !== attached) return;
-    if (result.ok) {
-      runtime.handoffs.exported(agent, { path, sha256: result.sha256 });
-      await runtime.handoffs.durable().catch((error: unknown) => {
-        console.error('Could not keep where a handoff was exported:', error);
-      });
-      return;
-    }
-    // Shown, never retried.
+    // A newer handoff since has an export of its own to say.
+    if (runtime.handoffs.of(agent)?.handoff !== handoff) return;
+    runtime.handoffs.exported(
+      agent,
+      result.ok ? { state: 'done', path, sha256: result.sha256 } : { state: result.why },
+    );
+    this.#changed(canvas, agent);
+    await runtime.handoffs.durable().catch((error: unknown) => {
+      console.error('Could not keep how a handoff’s export went:', error);
+    });
+    if (result.ok) return;
+    // Why, said to you in its transcript; the views say only that it was refused or failed. Never
+    // retried.
     runtime.engine.sessions.notice(
       agent,
       'warning',
@@ -431,11 +495,29 @@ export class HandoffService {
 
   /**
    * The handoff, framed as the previous agent's own text: between two lines holding a random
-   * nonce, labeled with the CLI that wrote it, when and the task it was on; or why there is none.
+   * nonce, labeled with the CLI that wrote it, when and the task it was on; or why there is none
+   * (`why`, as the switch found it), x% the agent's ask point as its settings say now.
    */
-  #handoffBlock(runtime: HandoffRuntime, node: AgentNode, handoff: Handoff | undefined): string {
-    if (handoff === undefined)
-      return `[corrallm] No handoff was written: its context never reached ${String(node.data.handoff?.at ?? HANDOFF_AT)}%.`;
+  #handoffBlock(
+    runtime: HandoffRuntime,
+    node: AgentNode,
+    handoff: Handoff | undefined,
+    why: CarryWhy | undefined,
+  ): string {
+    if (handoff === undefined) {
+      const at = `${String(node.data.handoff?.at ?? HANDOFF_AT)}%`;
+      switch (why) {
+        case 'off':
+          return '[corrallm] No handoff was written: this agent’s handoffs are off.';
+        case 'unreported':
+          return '[corrallm] No handoff was written: its connection doesn’t report its context.';
+        case 'unaccepted':
+          return `[corrallm] No handoff was written: its context reached ${at}, but no handoff was accepted before the switch.`;
+        case 'reached':
+        case undefined:
+          return `[corrallm] No handoff was written: its context never reached ${at}.`;
+      }
+    }
     let nonce = randomBytes(12).toString('hex');
     while (handoff.text.includes(nonce)) nonce = randomBytes(12).toString('hex');
     const { adapter, connection, model } = handoff.source;
@@ -490,7 +572,14 @@ export class HandoffService {
   #follow(attached: Attached, agent: string): Following {
     let following = attached.agents.get(agent);
     if (following === undefined) {
-      following = { armed: true, asked: 0, failed: false, report: undefined, request: undefined };
+      following = {
+        armed: true,
+        asked: 0,
+        failed: false,
+        crossed: false,
+        report: undefined,
+        request: undefined,
+      };
       attached.agents.set(agent, following);
     }
     return following;

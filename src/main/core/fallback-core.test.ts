@@ -153,7 +153,7 @@ describe('the fallback chain through the core', () => {
       // saying none was written (B11a C7).
       expect(claude.sent.map(({ text }) => text)).toEqual([
         expect.stringMatching(
-          /^\[corrallm\] corrallm switched this agent to Claude Code · Terminal, [^\n]+\n\nSay hello\n\n\[corrallm\] No handoff was written: its context never reached 95%\.$/,
+          /^\[corrallm\] corrallm switched this agent to Claude Code · Terminal, [^\n]+\n\nSay hello\n\n\[corrallm\] No handoff was written: its connection doesn’t report its context\.$/,
         ),
       ]);
     });
@@ -218,7 +218,7 @@ describe('the fallback chain through the core', () => {
     });
     // Framed as the party's, after corrallm's switch line, before what it carries (B11a C7).
     expect(claude.sent[0]?.text).toMatch(
-      /^\[corrallm\] corrallm switched this agent to [^\n]+\n\n\[corrallm\] Message from "orchestrator" [^\n]+\nThen this\n\n\[corrallm\] No handoff was written: its context never reached 95%\.$/,
+      /^\[corrallm\] corrallm switched this agent to [^\n]+\n\n\[corrallm\] Message from "orchestrator" [^\n]+\nThen this\n\n\[corrallm\] No handoff was written: its connection doesn’t report its context\.$/,
     );
     expect(codex.sent).toHaveLength(1);
     const id = first.ok ? (first.value as { id: string }).id : '';

@@ -50,7 +50,11 @@ export type HandoffExporter = (request: {
   path: string;
   text: string;
   last: { path: string; sha256: string } | undefined;
-}) => Promise<{ ok: true; sha256: string } | { ok: false; sentence: string }>;
+}) => Promise<
+  | { ok: true; sha256: string }
+  /** `refused` by its rules (the path, a symlink, a file not its own); `failed` otherwise. */
+  | { ok: false; why: 'refused' | 'failed'; sentence: string }
+>;
 
 /** Why a copy isn't written: a sentence the transcript's notice ends with. */
 class Refused extends Error {}
@@ -159,9 +163,9 @@ export function exportHandoff(deps: ExportDeps): HandoffExporter {
       }
       return { ok: true, sha256 };
     } catch (error) {
-      if (error instanceof Refused) return { ok: false, sentence: error.message };
+      if (error instanceof Refused) return { ok: false, why: 'refused', sentence: error.message };
       const why = error instanceof Error ? error.message : String(error);
-      return { ok: false, sentence: `it couldn’t be written (${why}).` };
+      return { ok: false, why: 'failed', sentence: `it couldn’t be written (${why}).` };
     } finally {
       if (temp !== undefined) await fs.unlink(temp).catch(() => undefined);
     }

@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -15,7 +15,7 @@ import { FakeConnector } from '../sessions/fake';
 import type { OutsideCaller } from './caller';
 import { createCore } from './core';
 import type { Core } from './core';
-import { keepCanvases, readOnDisk } from './store/test-store';
+import { keepCanvases, readOnDisk, writeOnDisk } from './store/test-store';
 import { CALLERS, NO_DESKTOP } from './test-registry';
 import { legacyDirectories } from './workspaces/test-directories';
 
@@ -113,7 +113,12 @@ afterEach(async () => {
 });
 
 /** A connector whose session the test drives: what it was sent, and each turn's report and end. */
-function driven(adapter: 'codex' | 'claude-code', mode?: SessionMode) {
+function driven(
+  adapter: 'codex' | 'claude-code',
+  mode?: SessionMode,
+  /** Whether its CLI never says it got what it is sent (it never reaches it). */
+  silent = false,
+) {
   const fake = new FakeConnector({
     adapter,
     mode: mode ?? (adapter === 'codex' ? 'auto' : 'acceptEdits'),
@@ -129,6 +134,7 @@ function driven(adapter: 'codex' | 'claude-code', mode?: SessionMode) {
       session.send = (message) => {
         sent.push(message);
         mine.sent.push(message);
+        if (silent) return Promise.resolve();
         given.emit({ type: 'user', id: message.id, text: message.text });
         given.emit({ type: 'status', status: 'working' });
         return Promise.resolve();
@@ -193,6 +199,12 @@ async function start(codex: Connector<SessionMode>, claude: Connector<SessionMod
 }
 
 const kept = (core: Core) => core.engines.canvas(CANVAS)?.handoffs.of('worker');
+/** The worker's handoff as you read it in its session's summary. */
+async function handoffView(core: Core): Promise<Record<string, unknown> | null> {
+  const result = await core.call('session.get', { canvas: CANVAS, agent: 'worker' }, CALLERS.you);
+  if (!result.ok) throw new Error(result.error.sentence);
+  return (result.value as { handoff: Record<string, unknown> | null }).handoff;
+}
 const row = () =>
   readOnDisk(profile, (disk) =>
     disk
@@ -266,7 +278,7 @@ describe('asking an agent for its handoff', () => {
     );
     expect(summary).toMatchObject({
       ok: true,
-      value: { handoff: { at: kept(core)?.handoff?.at, bytes: 33, state: 'kept' } },
+      value: { handoff: { at: kept(core)?.handoff?.at, bytes: 33, state: 'kept', export: 'none' } },
     });
     // Disarmed: the turn after it, still past the ask point, isn't asked again.
     codex.reply('Hello again.', { ...CROSSED, used: 445_000 });
@@ -378,7 +390,7 @@ describe('asking an agent for its handoff', () => {
     await vi.waitFor(() => {
       expect(codex.sent).toHaveLength(2);
     });
-    expect(await views()).toEqual({ at: null, bytes: null, state: 'asking' });
+    expect(await views()).toEqual({ at: null, bytes: null, state: 'asking', export: 'none' });
     // An empty reply isn't a handoff.
     codex.reply('   ', CROSSED);
     await vi.waitFor(async () => {
@@ -395,7 +407,7 @@ describe('asking an agent for its handoff', () => {
     // Over 16 KiB: refused whole, never cut.
     codex.reply('x'.repeat(16 * 1024 + 1), CROSSED);
     await vi.waitFor(async () => {
-      expect(await views()).toEqual({ at: null, bytes: null, state: 'failed' });
+      expect(await views()).toEqual({ at: null, bytes: null, state: 'failed', export: 'none' });
     });
     await say('Three');
     await vi.waitFor(() => {
@@ -416,7 +428,7 @@ describe('asking an agent for its handoff', () => {
     expect(kept(core)).toBeUndefined();
   });
 
-  it('never asks an agent whose handoff is off, nor one whose backend ran out', async () => {
+  it('never asks an agent whose handoff is off: the switch says so', async () => {
     await keep({ off: true });
     const codex = driven('codex');
     const claude = driven('claude-code');
@@ -431,21 +443,53 @@ describe('asking an agent for its handoff', () => {
       expect(codex.sent).toHaveLength(2);
     });
     expect(codex.sent[1]?.text).toBe('Say it again');
-    const set = await core.call(
-      'agent.setHandoff',
-      { canvas: CANVAS, agent: 'worker', handoff: null },
-      CALLERS.you,
+    codex.reply('', CROSSED, LIMIT());
+    await vi.waitFor(() => {
+      expect(claude.sent).toHaveLength(1);
+    });
+    expect(claude.sent[0]?.text).toMatch(
+      /^\[corrallm\] corrallm switched this agent to Claude Code · Terminal, in a new conversation[^\n]*\n\nSay it again\n\n\[corrallm\] No handoff was written: this agent’s handoffs are off\.$/,
     );
-    expect(set).toMatchObject({ ok: true, value: { changed: true } });
+  });
+
+  it('says, where its context never reached its ask point, that it didn’t', async () => {
+    await keep({ at: 80 });
+    const codex = driven('codex');
+    const claude = driven('claude-code');
+    const core = await start(codex.connector, claude.connector);
+    const engine = await core.engines.open(CANVAS);
+    engine.run.start();
+    await vi.waitFor(() => {
+      expect(codex.sent).toHaveLength(1);
+    });
+    codex.reply('', UNDER, LIMIT());
+    await vi.waitFor(() => {
+      expect(claude.sent).toHaveLength(1);
+    });
+    expect(claude.sent[0]?.text).toMatch(
+      /\n\nSay hello\n\n\[corrallm\] No handoff was written: its context never reached 80%\.$/,
+    );
+  });
+
+  it('never asks one whose backend ran out as its context crossed: the switch says so', async () => {
+    await keep();
+    const codex = driven('codex');
+    const claude = driven('claude-code');
+    const core = await start(codex.connector, claude.connector);
+    const engine = await core.engines.open(CANVAS);
+    engine.run.start();
+    await vi.waitFor(() => {
+      expect(codex.sent).toHaveLength(1);
+    });
     // Its turn passes the ask point and ends on Codex's limit: corrallm asks nothing of it, and
     // the next backend starts from the task, no handoff written.
     codex.reply('', CROSSED, LIMIT());
     await vi.waitFor(() => {
       expect(claude.sent).toHaveLength(1);
     });
-    expect(codex.sent).toHaveLength(2);
+    expect(codex.sent).toHaveLength(1);
     expect(claude.sent[0]?.text).toMatch(
-      /^\[corrallm\] corrallm switched this agent to Claude Code · Terminal, in a new conversation[^\n]*\n\nSay it again\n\n\[corrallm\] No handoff was written: its context never reached 95%\.$/,
+      /\n\nSay hello\n\n\[corrallm\] No handoff was written: its context reached 95%, but no handoff was accepted before the switch\.$/,
     );
   });
 });
@@ -485,7 +529,7 @@ describe('a request whose backend runs out', () => {
       expect(claude.sentTo('worker')).toHaveLength(1);
     });
     expect(claude.sentTo('worker')[0]?.text).toMatch(
-      /\n\nSay it again\n\n\[corrallm\] No handoff was written: its context never reached 95%\.$/,
+      /\n\nSay it again\n\n\[corrallm\] No handoff was written: its context reached 95%, but no handoff was accepted before the switch\.$/,
     );
   });
 });
@@ -627,6 +671,87 @@ describe('across a restart', () => {
   });
 });
 
+describe('a carrying send cut off unsent', () => {
+  it.each(['a crash', 'a close'] as const)(
+    'carries the handoff again with the next send after %s between its record and its send',
+    async (stop) => {
+      await keep();
+      const codex = driven('codex');
+      // Claude Code is sent the continuation but never gets it: it is cut off unsent.
+      const silent = driven('claude-code', undefined, true);
+      let core = await start(codex.connector, silent.connector);
+      const engine = await core.engines.open(CANVAS);
+      engine.run.start();
+      await vi.waitFor(() => {
+        expect(codex.sent).toHaveLength(1);
+      });
+      codex.reply('Hello.', CROSSED);
+      await vi.waitFor(() => {
+        expect(codex.sent).toHaveLength(2);
+      });
+      codex.reply('My handoff.', CROSSED);
+      await vi.waitFor(() => {
+        expect(codex.sent).toHaveLength(3);
+      });
+      codex.reply('', CROSSED, LIMIT());
+      await vi.waitFor(() => {
+        expect(silent.sent).toHaveLength(1);
+      });
+      expect(silent.sent[0]?.text).toMatch(/\nMy handoff\.\nhandoff [0-9a-f]{24} ends$/);
+      const messages = await core.engines.messagesOf(CANVAS);
+      const carrying = messages
+        .all()
+        .findLast((one) => one.task?.item === 'again' && one.to === 'agent:worker');
+      if (carrying === undefined) throw new Error('No continuation.');
+      // Its record is on disk, the carry cleared in the same write.
+      await vi.waitFor(() => {
+        expect(row()).toMatchObject({ text: 'My handoff.', carry: null });
+      });
+      await core.close();
+      cores.splice(0);
+      // A crash leaves the record as it was written: being delivered, never sent.
+      if (stop === 'a crash')
+        writeOnDisk(
+          profile,
+          `UPDATE message SET state = 'delivering', turn = NULL WHERE id = '${carrying.id}'`,
+        );
+      const claude = driven('claude-code');
+      core = await start(driven('codex').connector, claude.connector);
+      const reopened = await core.engines.open(CANVAS);
+      // Cut off, unresolved, never sent again: what it carried waits to be carried again.
+      await vi.waitFor(() => {
+        expect(row()).toMatchObject({ carry: expect.any(String) as unknown });
+      });
+      expect((await core.engines.messagesOf(CANVAS)).get(carrying.id)?.state).toBe('unresolved');
+      // Your Retry of the task is the next automated send: it carries the handoff.
+      reopened.run.resume();
+      await vi.waitFor(() => {
+        expect(reopened.run.snapshot().agents.worker).toMatchObject({
+          status: 'asking',
+          problem: { kind: 'uncertain' },
+        });
+      });
+      reopened.run.decide('worker', 'again', { choice: 'retry' });
+      await vi.waitFor(() => {
+        expect(claude.sent).toHaveLength(1);
+      });
+      expect(claude.sent[0]?.text).toMatch(
+        /^\[corrallm\] corrallm switched this agent to Claude Code · Terminal[^\n]*\n\nSay it again\n\n\[corrallm\] The handoff Codex · App Server \(default\) wrote at [^\n]+\nhandoff [0-9a-f]{24} begins\nMy handoff\.\nhandoff [0-9a-f]{24} ends$/,
+      );
+      await vi.waitFor(() => {
+        expect(row()).toMatchObject({ carry: null });
+      });
+      // Restored once: a later restart restores nothing more.
+      await core.close();
+      cores.splice(0);
+      core = await start(driven('codex').connector, driven('claude-code').connector);
+      await core.engines.open(CANVAS);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(row()).toMatchObject({ carry: null });
+    },
+  );
+});
+
 describe('the Markdown copy', () => {
   it('writes the accepted handoff’s exact text to the file its settings name', async () => {
     await keep({ file: 'HANDOFF.md' });
@@ -650,5 +775,62 @@ describe('the Markdown copy', () => {
     await vi.waitFor(() => {
       expect(kept(core)?.exported).toMatchObject({ path: 'HANDOFF.md' });
     });
+    expect(await handoffView(core)).toMatchObject({ state: 'kept', export: 'done' });
   });
+
+  it.each([
+    [
+      'refused',
+      'refused where a file it didn’t write is there',
+      async () => {
+        await writeFile(path.join(project, 'HANDOFF.md'), 'Your notes.');
+      },
+      /^corrallm couldn’t write this agent’s handoff to HANDOFF\.md: HANDOFF\.md holds a file this agent didn’t write there/,
+    ],
+    [
+      'failed',
+      'failed where its folder can’t be written',
+      async () => {
+        await chmod(project, 0o555);
+      },
+      /^corrallm couldn’t write this agent’s handoff to HANDOFF\.md: it couldn’t be written \(/,
+    ],
+  ] as const)(
+    'says its export %s on the view, and why in the transcript: %s',
+    async (state, _what, before, said) => {
+      await keep({ file: 'HANDOFF.md' });
+      await before();
+      try {
+        const codex = driven('codex');
+        const core = await start(codex.connector, driven('claude-code').connector);
+        const engine = await core.engines.open(CANVAS);
+        engine.run.start();
+        await vi.waitFor(() => {
+          expect(codex.sent).toHaveLength(1);
+        });
+        codex.reply('Hello.', CROSSED);
+        await vi.waitFor(() => {
+          expect(codex.sent).toHaveLength(2);
+        });
+        codex.reply('The handoff.', CROSSED);
+        await vi.waitFor(async () => {
+          expect(await handoffView(core)).toMatchObject({ state: 'kept', export: state });
+        });
+        // The view says how it went, never where or why: the transcript says why, to you.
+        expect(Object.keys((await handoffView(core)) ?? {}).sort()).toEqual([
+          'at',
+          'bytes',
+          'export',
+          'state',
+        ]);
+        expect(
+          engine.sessions
+            .of('worker')
+            .entries.flatMap((entry) => (entry.kind === 'notice' ? [entry.text] : [])),
+        ).toContainEqual(expect.stringMatching(said));
+      } finally {
+        await chmod(project, 0o755);
+      }
+    },
+  );
 });

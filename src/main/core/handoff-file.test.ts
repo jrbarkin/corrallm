@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import {
+  chmod,
   mkdir,
   mkdtemp,
   readdir,
@@ -93,6 +94,7 @@ describe('the Markdown copy of a handoff', () => {
     await writeFile(path.join(checkout, 'HANDOFF.md'), 'Your notes.');
     expect(await write('HANDOFF.md', { path: 'HANDOFF.md', sha256: sha256('Newer.') })).toEqual({
       ok: false,
+      why: 'refused',
       sentence: expect.stringMatching(/didn’t write/) as unknown,
     });
     expect(await readFile(path.join(checkout, 'HANDOFF.md'), 'utf8')).toBe('Your notes.');
@@ -102,13 +104,13 @@ describe('the Markdown copy of a handoff', () => {
   it('never replaces another agent’s copy in a shared tree, nor one at a path it last wrote elsewhere', async () => {
     // Another agent of the same workspace wrote its own there.
     await writeFile(path.join(checkout, 'HANDOFF.md'), 'Another agent’s handoff.');
-    expect(await write('HANDOFF.md')).toMatchObject({ ok: false });
+    expect(await write('HANDOFF.md')).toMatchObject({ ok: false, why: 'refused' });
     expect(
       await write('HANDOFF.md', {
         path: 'docs/HANDOFF.md',
         sha256: sha256('Another agent’s handoff.'),
       }),
-    ).toMatchObject({ ok: false });
+    ).toMatchObject({ ok: false, why: 'refused' });
     expect(await readFile(path.join(checkout, 'HANDOFF.md'), 'utf8')).toBe(
       'Another agent’s handoff.',
     );
@@ -117,6 +119,7 @@ describe('the Markdown copy of a handoff', () => {
   it('refuses a folder that doesn’t exist, making none', async () => {
     expect(await write('notes/HANDOFF.md')).toEqual({
       ok: false,
+      why: 'refused',
       sentence: 'its folder notes doesn’t exist.',
     });
     expect(await names(checkout)).toEqual(['docs']);
@@ -128,10 +131,12 @@ describe('the Markdown copy of a handoff', () => {
     await symlink(path.join(outside, 'kept.md'), path.join(checkout, 'docs', 'link.md'));
     expect(await write('linked/HANDOFF.md')).toEqual({
       ok: false,
+      why: 'refused',
       sentence: 'linked is a symlink.',
     });
     expect(await write('docs/link.md')).toEqual({
       ok: false,
+      why: 'refused',
       sentence: 'docs/link.md is a symlink.',
     });
     expect(await names(outside)).toEqual(['kept.md']);
@@ -140,7 +145,11 @@ describe('the Markdown copy of a handoff', () => {
 
   it('refuses a folder at its path', async () => {
     await mkdir(path.join(checkout, 'folder.md'));
-    expect(await write('folder.md')).toEqual({ ok: false, sentence: 'folder.md isn’t a file.' });
+    expect(await write('folder.md')).toEqual({
+      ok: false,
+      why: 'refused',
+      sentence: 'folder.md isn’t a file.',
+    });
   });
 
   it('refuses a path it doesn’t write: outside, Git’s, an option, or not Markdown', async () => {
@@ -153,9 +162,24 @@ describe('the Markdown copy of a handoff', () => {
     ])
       expect(await write(file), file).toEqual({
         ok: false,
+        why: 'refused',
         sentence: 'its path isn’t a relative Markdown path corrallm writes.',
       });
     expect(await names(path.dirname(checkout))).toEqual(['checkout', 'outside']);
+  });
+
+  it('says it failed, not that it refused, where the file system says no', async () => {
+    await chmod(path.join(checkout, 'docs'), 0o555);
+    try {
+      expect(await write('docs/HANDOFF.md')).toEqual({
+        ok: false,
+        why: 'failed',
+        sentence: expect.stringMatching(/^it couldn’t be written \(.*EACCES/) as unknown,
+      });
+    } finally {
+      await chmod(path.join(checkout, 'docs'), 0o755);
+    }
+    expect(await names(path.join(checkout, 'docs'))).toEqual([]);
   });
 
   it('writes nothing while the agent’s workspace isn’t ready, saying why', async () => {
@@ -166,6 +190,7 @@ describe('the Markdown copy of a handoff', () => {
     }));
     expect(await write('HANDOFF.md', undefined, held)).toEqual({
       ok: false,
+      why: 'refused',
       sentence: 'its workspace isn’t ready: Its worktree is being made.',
     });
     expect(await names(checkout)).toEqual(['docs']);
@@ -184,6 +209,7 @@ describe('a race with the copy', () => {
     });
     expect(await write('HANDOFF.md', undefined, raced)).toEqual({
       ok: false,
+      why: 'refused',
       sentence: 'a file appeared at HANDOFF.md as it was written.',
     });
     expect(await readFile(target, 'utf8')).toBe('Made meanwhile.');
@@ -202,7 +228,7 @@ describe('a race with the copy', () => {
     });
     expect(
       await write('HANDOFF.md', { path: 'HANDOFF.md', sha256: sha256(TEXT) }, raced, 'Newer.'),
-    ).toEqual({ ok: false, sentence: 'HANDOFF.md changed as it was written.' });
+    ).toEqual({ ok: false, why: 'refused', sentence: 'HANDOFF.md changed as it was written.' });
     expect(await readFile(target, 'utf8')).toBe('Your edit.');
     expect(await names(checkout)).toEqual(['HANDOFF.md', 'docs']);
   });
@@ -223,6 +249,7 @@ describe('a race with the copy', () => {
     });
     expect(await write('docs/HANDOFF.md', undefined, raced)).toEqual({
       ok: false,
+      why: 'refused',
       sentence: 'its folder docs changed as it was written.',
     });
     // Nothing reached the folder the symlink names, and the copy never landed.
