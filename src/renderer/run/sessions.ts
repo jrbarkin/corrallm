@@ -92,9 +92,11 @@ export function sessionDisplay(
 ): Session {
   if (!summary) return NEW_SESSION;
   const shown = orderedEntries(view).map(entryOf);
-  // Where the agent is in its fallback chain is the chain picker's to show (B11a X4), not a session's.
+  // Where the agent is in its fallback chain is the chain picker's to show, and its handoff the
+  // handoff tile's (B11a X4), not a session's.
   const { running, usage, modes, ...top } = copy(summary);
   delete (top as Partial<typeof top>).fallback;
+  delete (top as Partial<typeof top>).handoff;
   const received = new Set(
     shown.flatMap((entry) => (entry.kind === 'user' && entry.reached ? [entry.id] : [])),
   );

@@ -29,8 +29,11 @@ export function setup(
   initial: readonly CanvasNode[],
   results: typeof manual | (() => FixtureResult) = () => true,
   unheard: ReadonlySet<string> = new Set(),
-  /** What else the run is given: B11a's admission and its note on a usage limit, say. */
-  more: Pick<RunIO, 'admit' | 'limitNote'> = {},
+  /**
+   * What else the run is given: B11a's admission and its note on a usage limit, whether a handoff
+   * request waits, and a mailbox and the journal before each send, say.
+   */
+  more: Pick<RunIO, 'admit' | 'limitNote' | 'handoff' | 'mailbox' | 'beforeSend'> = {},
 ) {
   let clock = 0;
   let timers: { run: () => void; at: number; native?: boolean }[] = [];

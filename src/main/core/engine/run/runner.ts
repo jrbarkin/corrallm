@@ -105,8 +105,11 @@ export interface RunSend {
 export type RunSendEnd =
   /** Its turn ended, however. */
   | { state: 'replied'; turn: TurnResult }
-  /** Taken back, or never handed to its session (the run stopped, its text refused). */
-  | { state: 'withdrawn'; turn: TurnResult }
+  /**
+   * Taken back, or never handed to its session (the run stopped, its text refused): `unsent` where
+   * its session never had it.
+   */
+  | { state: 'withdrawn'; turn: TurnResult; unsent?: true }
   /** Its record couldn't be kept, so it never went. */
   | { state: 'unresolved'; turn: TurnResult };
 
@@ -119,8 +122,12 @@ export type RunSendEnd =
  * goes. Unit harnesses may omit the mailbox.
  */
 export interface RunMailbox {
-  /** Records a send: its message's id, the one its session is sent it under. */
-  record: (send: RunSend) => string;
+  /**
+   * Records a send: its message's id, the one its session is sent it under, and the text its
+   * session is sent, as recorded (the first send to an agent after B11a's switch carries the
+   * agent's handoff with it: C7).
+   */
+  record: (send: RunSend) => { id: string; text: string };
   settle: (id: string, end: RunSendEnd) => void;
 }
 
@@ -198,6 +205,12 @@ export interface RunIO {
   admit?: (agent: string, work: AdmittedWork) => Admission;
   /** B11a C3: what a task held on `agent`'s usage limit says of its fallback chain, if anything. */
   limitNote?: (agent: string) => string | undefined;
+  /**
+   * B11a C7: whether corrallm's handoff request to `agent` waits or runs (the core's handoff
+   * service's): its next task waits meanwhile, and goes once the run hears it may have ended
+   * (`admissionChanged`). None: no request ever waits.
+   */
+  handoff?: (agent: string) => boolean;
 }
 
 /**
@@ -943,7 +956,10 @@ export class RunStore {
     if (this.#run.running) this.#settle(false);
   }
 
-  /** B11a C3: what admission says may have changed (a switch committed or abandoned). */
+  /**
+   * B11a C3, C7: what admission says may have changed (a switch committed or abandoned), or a
+   * handoff request that held an agent's next task ended.
+   */
   admissionChanged(): void {
     if (this.#run.running) this.#settle(false);
   }
@@ -1500,6 +1516,10 @@ export class RunStore {
   ): AgentRun | undefined {
     const destination = isMessage(task) ? (task.target ?? agent) : agent;
     if (this.#run.agents[destination]?.paused)
+      return { current: task.id, status: 'waiting', outcomes };
+    // B11a C7: corrallm's handoff request to the recipient goes first, never triggering admission;
+    // the task waits until its turn has ended, and a switch is admitted then.
+    if (this.#io.handoff?.(destination) === true)
       return { current: task.id, status: 'waiting', outcomes };
     const to = this.#agents().find((n) => n.id === destination);
     if (to && this.#catalog.connectionOf(to.data) === 'unavailable')
@@ -2084,7 +2104,7 @@ export class RunStore {
     // An attempt's send is recorded first, where the core keeps a mailbox: its message goes in the
     // write that journals the run (beforeSend), the attempt linked to it, and is settled once.
     const { mailbox } = this.#io;
-    const id =
+    const recorded =
       mailbox === undefined || task === undefined
         ? undefined
         : mailbox.record({
@@ -2095,6 +2115,9 @@ export class RunStore {
             images: images?.length ?? 0,
             ...(origin === 'user' ? { typed: displayText ?? text } : {}),
           });
+    const id = recorded?.id;
+    // What its session is sent: as recorded (the first send after a switch carries the handoff).
+    const sending = recorded?.text ?? text;
     let settled = false;
     const settle = (end: RunSendEnd) => {
       if (id === undefined || settled) return;
@@ -2138,14 +2161,14 @@ export class RunStore {
           sent.over = true;
           this.#sent.delete(sent);
           const result: TurnResult = { status: 'failed', reason: 'declined', message: refusal };
-          settle({ state: 'withdrawn', turn: result });
+          settle({ state: 'withdrawn', turn: result, unsent: true });
           ended?.({ failed: true, reply: '', result });
         });
         return;
       }
       const withdraw = this.#io.send(
         to,
-        text,
+        sending,
         (turn) => {
           if (sent.over) return;
           sent.over = true;
@@ -2181,9 +2204,10 @@ export class RunStore {
       destination: to.id,
       journaling: !ready,
       dispatch,
+      // Taken back before it went: its session never had it.
       withdraw: () => {
         sent.over = true;
-        settle({ state: 'withdrawn', turn: TAKEN_BACK });
+        settle({ state: 'withdrawn', turn: TAKEN_BACK, unsent: true });
       },
     };
     this.#sent.set(sent, pending);

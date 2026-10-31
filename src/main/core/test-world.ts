@@ -1127,6 +1127,37 @@ export const REAL_FIXTURES: Readonly<Record<OpName, OpFixture>> = {
       },
     },
   },
+  'agent.setHandoff': {
+    valid: [
+      {
+        canvas: CANVAS,
+        agent: 'stranger',
+        handoff: { at: 80, file: 'docs/HANDOFF.md' },
+        expect: NO_ITEM,
+        request: request(57),
+      },
+    ],
+    fresh: ['revs'],
+    invalid: [
+      { agent: 'helper' },
+      { agent: 'helper', handoff: { at: 9 } },
+      { agent: 'helper', handoff: { at: 96 } },
+      { agent: 'helper', handoff: { off: false } },
+      { agent: 'helper', handoff: { file: '../HANDOFF.md' } },
+      { agent: 'helper', handoff: { file: 'HANDOFF.txt' } },
+      { agent: 'helper', handoff: { file: '.git/HANDOFF.md' } },
+      { agent: 'helper', handoff: { file: '-HANDOFF.md' } },
+    ],
+    // Yours alone: no token is in its audience to refuse.
+    meetsRule: {
+      connection: {
+        canvas: CANVAS,
+        agent: 'stranger',
+        handoff: { off: true },
+        request: request(58),
+      },
+    },
+  },
   'agent.setSettings': {
     valid: [
       {
@@ -1694,6 +1725,11 @@ export const REAL_FIXTURES: Readonly<Record<OpName, OpFixture>> = {
       { canvas: CANVAS, agent: 'peer', limit: 0 },
       { canvas: CANVAS, agent: 'peer', after: '' },
     ],
+  },
+  // B11a C10: whoever reads an agent's session reads its handoff (none kept here: null).
+  'session.handoff': {
+    valid: [{ canvas: CANVAS, agent: 'peer' }],
+    invalid: [{ canvas: CANVAS }, { canvas: CANVAS, agent: '' }, { agent: 'peer', text: 'x' }],
   },
   'session.interrupt': {
     valid: [{ canvas: CANVAS, agent: 'helper', request: request(30) }],

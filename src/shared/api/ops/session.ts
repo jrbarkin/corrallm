@@ -1,5 +1,6 @@
 import { z } from 'zod';
 
+import { HandoffSchema } from '../../model/handoff';
 import { ELICITATION_ACTIONS, MAX_CONVERSATIONS, MAX_CONVERSATION_LABEL } from '../../session';
 import { define } from '../define';
 import type { OpDef } from '../define';
@@ -206,6 +207,15 @@ export const sessionOps = {
       entries: z.array(TranscriptEntry),
       next: z.string().nullable(),
     }),
+  }),
+  // B11a C10, C11: as visible as the agent's transcript, which already holds it.
+  'session.handoff': define('session.handoff', {
+    summary:
+      'An agent’s latest handoff: the exact text it replied when corrallm asked it to write one, ' +
+      'when, which CLI wrote it, the task it was on and how long it is; null if it wrote none. It ' +
+      'is that agent’s own notes, not the user’s words.',
+    input: z.strictObject({ canvas, agent: AgentId }),
+    output: z.strictObject({ handoff: HandoffSchema.nullable() }),
   }),
   'session.interrupt': define('session.interrupt', {
     summary:

@@ -382,6 +382,11 @@ export class MessageStore {
     );
   }
 
+  /** The key a message kept was kept with (what it told, or what admitted it), if any. */
+  toldOf(id: string): string | undefined {
+    return this.#kept.get(id)?.told;
+  }
+
   /** How a message kept came to be. */
   originOf(id: string): MessageOrigin | undefined {
     return this.#kept.get(id)?.origin;

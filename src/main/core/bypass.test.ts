@@ -529,10 +529,20 @@ describe('R8: no token changes how an existing agent runs', () => {
         { agent: 'helper', fallback: { to: [{ adapter: 'claude-code' }] } },
         caller,
       );
+      // B11a C7: so are when it is asked for its handoff, and its file.
+      await failed(
+        'human-only',
+        'agent.setHandoff',
+        { agent: 'helper', handoff: { off: true } },
+        caller,
+      );
     }
   });
 
-  it('refuses a token’s batch that sets a chain, as a whole', async () => {
+  it.each([
+    ['a chain', 'agent.setFallback', { fallback: { to: [{ adapter: 'claude-code' }] } }],
+    ['handoff settings', 'agent.setHandoff', { handoff: { file: 'HANDOFF.md' } }],
+  ] as const)('refuses a token’s batch that sets %s, as a whole', async (_what, op, args) => {
     const before = doc();
     for (const caller of [OUTSIDE, LEAD]) {
       const result = await call(
@@ -540,10 +550,7 @@ describe('R8: no token changes how an existing agent runs', () => {
         {
           ops: [
             { op: 'canvas.move', args: { moves: [{ node: 'helper', position: { x: 9, y: 9 } }] } },
-            {
-              op: 'agent.setFallback',
-              args: { agent: 'helper', fallback: { to: [{ adapter: 'claude-code' }] } },
-            },
+            { op, args: { agent: 'helper', ...args } },
           ],
         },
         caller,
@@ -577,11 +584,13 @@ describe('R11: what a token’s new agents run with, and how many it keeps', () 
       { agent: 'a', fallback: { to: [{ adapter: 'claude-code' }], back: 'return' } },
       YOU,
     );
+    await applied('agent.setHandoff', { agent: 'a', handoff: { at: 70 } }, YOU);
     const { id } = await applied('canvas.spawnAgent', { from: 'a', relation: 'linked' });
     expect(node(String(id)).data.fallback).toEqual({
       to: [{ adapter: 'claude-code', connection: 'claude-code.terminal' }],
       back: 'return',
     });
+    expect(node(String(id)).data.handoff).toEqual({ at: 70 });
   });
 
   it('refuses the ninth live agent its party created, across its canvases, a restart and a renewal', async () => {

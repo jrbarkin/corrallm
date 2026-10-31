@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import { FallbackViewSchema } from '../../model/fallback';
+import { HandoffViewSchema } from '../../model/handoff';
 import { MESSAGE_KINDS, MESSAGE_STATES, PARTY_PATTERN } from '../../model/messages';
 import { NEED_KINDS } from '../../model/needs';
 import { TURN_REASONS } from '../../session';
@@ -104,8 +105,8 @@ export const conversationOps = {
   agents: define('agents', {
     summary:
       'The agents you reach on the canvas: each one’s id, name, adapter and connection, how it is ' +
-      'now, how many prompts of its own wait for an answer, the agents it is linked to, and ' +
-      'where it is in its fallback chain.',
+      'now, how many prompts of its own wait for an answer, the agents it is linked to, ' +
+      'where it is in its fallback chain, and its handoff’s state.',
     input: z.strictObject({ canvas }),
     output: z.strictObject({
       agents: z.array(
@@ -119,6 +120,7 @@ export const conversationOps = {
           linked: z.array(z.string()),
           api: z.boolean(),
           fallback: FallbackViewSchema.nullable(),
+          handoff: HandoffViewSchema.nullable(),
         }),
       ),
     }),
@@ -137,6 +139,7 @@ export const conversationOps = {
           model: z.string().nullable(),
           effort: z.string().nullable(),
           fallback: FallbackViewSchema.nullable(),
+          handoff: HandoffViewSchema.nullable(),
         }),
       ),
       waitingForYou: z.array(NeedsItem),

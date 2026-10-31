@@ -37,6 +37,7 @@
     "api.agent.setType",
     "api.agent.setConnection",
     "api.agent.setFallback",
+    "api.agent.setHandoff",
     "api.agent.setSettings",
     "api.agent.setRole",
     "api.queue.add",
@@ -68,6 +69,7 @@
     "api.session.changeMcpServer",
     "api.session.get",
     "api.session.transcript",
+    "api.session.handoff",
     "api.session.interrupt",
     "api.run.get",
     "api.run.pause",
@@ -128,6 +130,7 @@
       "run_unpause",
       "session_changeMcpServer",
       "session_get",
+      "session_handoff",
       "session_interrupt",
       "session_mcpServers",
       "session_newConversation",
@@ -174,6 +177,7 @@
       "run_get",
       "session_conversations",
       "session_get",
+      "session_handoff",
       "session_mcpServers",
       "session_options",
       "session_rewindPreview",
@@ -230,6 +234,7 @@
       "session_changeMcpServer",
       "session_conversations",
       "session_get",
+      "session_handoff",
       "session_interrupt",
       "session_mcpServers",
       "session_newConversation",
@@ -253,10 +258,10 @@
     ]
   },
   "counts": {
-    "lead": 54,
+    "lead": 55,
     "worker": 12,
-    "outside-read": 22,
-    "outside-write": 64
+    "outside-read": 23,
+    "outside-write": 65
   },
   "deviations": {
     "canvas.open": "trust-gate",
@@ -272,6 +277,7 @@
     "agent.setType": "permissions",
     "agent.setConnection": "permissions",
     "agent.setFallback": "permissions",
+    "agent.setHandoff": "permissions",
     "topics.subscribe": "transport",
     "topics.unsubscribe": "transport",
     "usage.setRule": "spending-guard",
@@ -291,7 +297,7 @@
   "schemas": {
     "topics.subscribe": {
       "input": "8c5be84f0a1a163a",
-      "output": "ed5e3f359c8e60b8"
+      "output": "57f2591094e7cc00"
     },
     "topics.unsubscribe": {
       "input": "8c5be84f0a1a163a",
@@ -418,7 +424,7 @@
       "output": "647bbd6cc7b4f077"
     },
     "canvas.batch": {
-      "input": "d5d5e992eb74f4ab",
+      "input": "4b1b92094dfe622c",
       "output": "d8db8b91eea3da57"
     },
     "agent.setType": {
@@ -431,6 +437,10 @@
     },
     "agent.setFallback": {
       "input": "61f7a59a418a62a9",
+      "output": "938d66756294f02f"
+    },
+    "agent.setHandoff": {
+      "input": "c67a5fe98e897201",
       "output": "938d66756294f02f"
     },
     "agent.setSettings": {
@@ -459,11 +469,11 @@
     },
     "agents": {
       "input": "41356bc15da6df1b",
-      "output": "6a04147aba846f89"
+      "output": "f40869334856a673"
     },
     "status": {
       "input": "41356bc15da6df1b",
-      "output": "527aa502cf3288c2"
+      "output": "b3eac4ce125cf7a8"
     },
     "needs": {
       "input": "41356bc15da6df1b",
@@ -491,11 +501,15 @@
     },
     "session.get": {
       "input": "c804536f3eb2a39b",
-      "output": "8f109ef4d692002d"
+      "output": "c02f357d3bbe48eb"
     },
     "session.transcript": {
       "input": "b0a50f8eb22508f9",
       "output": "7f76735450a0757f"
+    },
+    "session.handoff": {
+      "input": "c804536f3eb2a39b",
+      "output": "aa4343f8de88efec"
     },
     "session.interrupt": {
       "input": "dafe7f6753754290",

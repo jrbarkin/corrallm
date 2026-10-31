@@ -74,7 +74,29 @@ export interface DeliveryDeps {
    * and a fallback rule holds as ask does.
    */
   admit?: (agent: string, work: AdmittedWork) => Admission;
+  /**
+   * B11a C7: the core's handoff service, for corrallm's handoff requests (`ask`) and what the first
+   * send after a switch carries. None: a request is withdrawn, and nothing is carried.
+   */
+  handoff?: {
+    /**
+     * Whether a request waiting goes (`go`), waits while corrallm switches its agent (`hold`), or
+     * is withdrawn by corrallm (`stale`: not the agent's current one, its handoff off, its
+     * connection changed or its backend exhausted).
+     */
+    request(message: Message): 'go' | 'hold' | 'stale';
+    /** A request's turn ended, with its whole reply: in the same tick as its reply's record. */
+    replied(message: Message, reply: string, result: TurnResult): void;
+    /**
+     * The first automated send to `agent` since a switch: `framed`, a party's message as delivery
+     * frames it, with what it carries; taken now, so the write recording it clears the carry.
+     */
+    carry(agent: string, framed: string): { text: string; undo: () => void } | undefined;
+  };
 }
+
+/** The told key a handoff request of corrallm's is kept with starts with this (B11a C7). */
+export const HANDOFF_REQUEST = 'handoff:';
 
 /**
  * Whether an agent's session asks before it acts on what it is sent, now or as it would start:
@@ -252,6 +274,11 @@ export class Delivery {
   >();
   /** What admission said of each agent as its hold was last looked at (#holdOf). */
   readonly #admitted = new Map<string, Admission>();
+  /**
+   * What each party's message being delivered carries, the first send to its agent since a switch
+   * (B11a C7), by the message's id: taken as its delivering record was written.
+   */
+  readonly #carried = new Map<string, { text: string; undo: () => void }>();
   /** What wakes delivery when a usage window resets. */
   #alarm: { at: number; cancel: () => void } | undefined;
   /**
@@ -312,6 +339,7 @@ export class Delivery {
   async close(): Promise<void> {
     this.#closed = true;
     this.#images.clear();
+    this.#carried.clear();
     for (const stop of this.#stop) stop();
     this.#alarm?.cancel();
     this.#alarm = undefined;
@@ -348,6 +376,51 @@ export class Delivery {
   /** Yours, as you typed it (manual): it goes past the run's holds; your resend waits on them. */
   #yours(message: Message): boolean {
     return this.#deps.store.originOf(message.id) === 'manual';
+  }
+
+  /** Whether a message is a handoff request of corrallm's (B11a C7), by the key it is kept with. */
+  #request(message: Message): boolean {
+    return (
+      message.from === 'corrallm' &&
+      this.#deps.store.toldOf(message.id)?.startsWith(HANDOFF_REQUEST) === true
+    );
+  }
+
+  /**
+   * B11a C7: corrallm asks agent `to` for its handoff, `told` the key it is kept with (starting
+   * HANDOFF_REQUEST). Recorded now, and delivered once its record is on disk, first in line for its
+   * agent: held by its pause, its workspace, a session that won't start, the barrier, an exhausted
+   * backend (which withdraws it), a rule that asks or waits, and while corrallm switches the agent;
+   * never by its asking mode (it is corrallm's fixed text, as the run's own sends are), and never
+   * admitted as work. Its record that can't reach the disk leaves it unresolved, never sent.
+   */
+  ask(to: string, body: string, told: string): Message {
+    const { store } = this.#deps;
+    const message = store.add(
+      {
+        from: 'corrallm',
+        to: agentParty(to),
+        kind: 'text',
+        origin: 'party',
+        body,
+        state: 'pending',
+      },
+      told,
+    );
+    this.#recording.add(message.id);
+    void store.durable().then(
+      () => {
+        this.#recording.delete(message.id);
+        this.schedule();
+      },
+      (error: unknown) => {
+        this.#recording.delete(message.id);
+        console.error('Could not record corrallm’s handoff request:', error);
+        if (store.get(message.id)?.state === 'pending')
+          store.update(message.id, { state: 'unresolved', turn: unrecorded(error) });
+      },
+    );
+    return message;
   }
 
   /** Looks again, soon, at what waits: once, however often asked before then. */
@@ -573,7 +646,11 @@ export class Delivery {
     const waiting = this.#waiting();
     return this.#deps.nodes().flatMap((node) => {
       if (node.type !== 'agent') return [];
-      if (!waiting.get(node.id)?.some((message) => !this.#yours(message))) return [];
+      // corrallm's handoff request isn't held by the asking mode: only a party's message is.
+      if (
+        !waiting.get(node.id)?.some((message) => !this.#yours(message) && !this.#request(message))
+      )
+        return [];
       if (this.#stuckOf(node) !== undefined) return [];
       const why = this.#asking(node);
       return why === 'asks' || why === 'reading' ? [] : [{ agent: node.id, why }];
@@ -603,6 +680,7 @@ export class Delivery {
     if (!this.#started || this.#closed || this.#frozen) return;
     const { engine, store } = this.#deps;
     this.#withdrawGone();
+    this.#withdrawStale();
     let messages = store.active();
     for (const id of this.#images.keys()) {
       const message = store.get(id);
@@ -650,6 +728,13 @@ export class Delivery {
     if (lostImages) messages = store.active();
     /** What waits for each agent, in the order it came, once its record is on disk. */
     const waiting = this.#waiting(messages.filter(({ id }) => !this.#recording.has(id)));
+    // A handoff request whose record is on its way to disk is first in line already: no party's
+    // message to its agent goes before it.
+    const asking = new Set(
+      messages.flatMap((message) =>
+        this.#recording.has(message.id) && this.#request(message) ? [message.to] : [],
+      ),
+    );
     this.#tellWaiting(messages);
     this.#followDefaults();
     let alarm: number | undefined;
@@ -664,17 +749,28 @@ export class Delivery {
       const waits = waiting.get(node.id);
       if (!waits || this.#writing.has(node.id)) continue;
       // Yours go past the run's holds, into its session's queue, unless that won't start; what
-      // holds a party's message holds every party's behind it.
+      // holds a party's message holds every party's behind it. corrallm's handoff request, first in
+      // line, is held by what holds the agent, but never by its asking mode, and never admitted.
       const directory = this.#directoryHold(node.id);
+      const request = waits.find((message) => this.#request(message));
       const holds = {
         yours: directory ?? this.#stuckHold(node),
-        theirs:
-          directory ??
-          (waits.some((message) => !this.#yours(message)) ? this.#holdOf(node) : undefined),
+        request:
+          request === undefined ? undefined : (directory ?? this.#requestHold(node, request)),
+        theirs: asking.has(agentParty(node.id))
+          ? ({ kind: 'busy' } as const)
+          : (directory ??
+            (waits.some((message) => !this.#yours(message) && !this.#request(message))
+              ? this.#holdOf(node)
+              : undefined)),
       };
       let next: Message | undefined;
       for (const message of waits) {
-        const hold = this.#yours(message) ? holds.yours : holds.theirs;
+        const hold = this.#yours(message)
+          ? holds.yours
+          : message === request
+            ? holds.request
+            : holds.theirs;
         if (!hold) {
           next ??= message;
           continue;
@@ -726,7 +822,7 @@ export class Delivery {
         }
       }
       if (next === undefined || this.#unrecordable) continue;
-      if (!this.#yours(next)) this.#warnUsage(node);
+      if (!this.#yours(next) && next !== request) this.#warnUsage(node);
       this.#directories.delete(node.id);
       this.#deliver(node, next);
     }
@@ -761,8 +857,22 @@ export class Delivery {
   }
 
   /**
+   * Withdraws (for corrallm) each of its handoff requests still waiting that the handoff service
+   * says is stale: not the agent's current one (a restart re-arms), its handoff off, its
+   * connection changed (a switch), or its backend exhausted (B11a C7).
+   */
+  #withdrawStale(): void {
+    for (const message of this.#deps.store.active()) {
+      if (message.state !== 'pending' || !this.#request(message)) continue;
+      if ((this.#deps.handoff?.request(message) ?? 'stale') !== 'stale') continue;
+      this.#deps.store.update(message.id, { state: 'withdrawn', by: 'corrallm' });
+    }
+  }
+
+  /**
    * The messages waiting for each agent, of `messages` (those delivery acts on, unless given), by
-   * its id, each in the order they came: none for an agent nothing waits for.
+   * its id, each in the order they came, but corrallm's handoff request first: none for an agent
+   * nothing waits for.
    */
   #waiting(messages = this.#deps.store.active()): Map<string, Message[]> {
     const waiting = new Map<string, Message[]>();
@@ -770,10 +880,46 @@ export class Delivery {
       const agent = agentOf(message.to);
       if (agent === undefined || message.state !== 'pending') continue;
       const waits = waiting.get(agent);
-      if (waits) waits.push(message);
-      else waiting.set(agent, [message]);
+      if (!waits) waiting.set(agent, [message]);
+      else if (this.#request(message)) waits.unshift(message);
+      else waits.push(message);
     }
     return waiting;
+  }
+
+  /**
+   * What holds corrallm's handoff request `message` to agent `node` now (B11a C7), if anything:
+   * an exhausted backend (which withdraws it as it is next looked at), a pause, a session that
+   * won't start, corrallm switching the agent, the agent busy, or a rule over its share that asks
+   * or waits, whose window's reset is known. Never its asking mode, and never admission: a
+   * fallback rule's switch waits for it to go first.
+   */
+  #requestHold(node: AgentNode, message: Message): Hold | undefined {
+    const { engine } = this.#deps;
+    const limited = this.#limited(node);
+    if (limited !== undefined) return limited;
+    const holding = engine.run.holding({ agent: node.id });
+    if (holding.length > 0) return { kind: 'paused', holding };
+    const stuck = this.#stuckHold(node);
+    if (stuck !== undefined) return stuck;
+    if (this.#deps.handoff?.request(message) !== 'go') return { kind: 'busy' };
+    const session = engine.sessions.of(node.id);
+    if (
+      session.status !== 'idle' ||
+      session.queued.length > 0 ||
+      (session.asking?.length ?? 0) > 0 ||
+      engine.run.sending(node.id)
+    ) {
+      return { kind: 'busy' };
+    }
+    const rule = engine.run.usageRule(node.id, this.#deps.now());
+    if (
+      rule === undefined ||
+      (rule.action !== 'ask' && rule.action !== 'waitForReset') ||
+      rule.hold.resetsAt === null
+    )
+      return undefined;
+    return { kind: 'usage', hold: rule.hold, until: rule.hold.resetsAt };
   }
 
   /** What holds a message from you to agent `node` now: only a session that won't start. */
@@ -1011,6 +1157,14 @@ export class Delivery {
   #deliver(node: AgentNode, message: Message): void {
     const as = randomUUID();
     const attempt = (message.delivery?.attempt ?? 0) + 1;
+    const request = this.#request(message);
+    // B11a C7: a party's message, the first automated send to its agent since a switch, carries
+    // the agent's handoff: taken now, so the write that records it delivering clears the carry.
+    const carried =
+      message.from === 'you' || request
+        ? undefined
+        : this.#deps.handoff?.carry(node.id, this.#frame(message));
+    if (carried !== undefined) this.#carried.set(message.id, carried);
     this.#deps.store.update(message.id, {
       state: 'delivering',
       delivery: { at: this.#deps.now(), as, attempt },
@@ -1033,8 +1187,10 @@ export class Delivery {
           }
           if (this.#closed) return;
           // Taken back while it was journaled, it is never sent: what waits behind it goes.
-          if (this.#deps.store.get(message.id)?.state !== 'delivering') this.schedule();
-          else {
+          if (this.#deps.store.get(message.id)?.state !== 'delivering') {
+            this.#uncarry(message.id);
+            this.schedule();
+          } else {
             const current = this.#deps
               .nodes()
               .find((one) => one.id === node.id && one.type === 'agent');
@@ -1042,8 +1198,10 @@ export class Delivery {
               !this.#yours(message) &&
               (current?.type !== 'agent' ||
                 this.#deps.engine.sessions.of(node.id).running === undefined ||
-                this.#holdOf(current) !== undefined)
+                (request ? this.#requestHold(current, message) : this.#holdOf(current)) !==
+                  undefined)
             ) {
+              this.#uncarry(message.id);
               this.#deps.store.update(message.id, { state: 'pending' });
               this.schedule();
             } else this.#hand(node, message, as);
@@ -1056,6 +1214,8 @@ export class Delivery {
         this.#writing.delete(node.id);
         if (this.#closed || this.#deps.store.get(message.id)?.state !== 'delivering') return;
         console.error('Could not record a message as delivering:', error);
+        // Never sent: what it would have carried waits for the next send.
+        this.#uncarry(message.id);
         this.#deps.store.update(message.id, { state: 'pending' });
         this.#unrecordable ??= this.#deps.later(() => {
           this.#unrecordable = undefined;
@@ -1065,14 +1225,25 @@ export class Delivery {
     );
   }
 
-  /** Hands a message, journaled, to its agent's session: as you typed it, or framed. */
+  /** A message being delivered was never sent: what it carried waits for the next send. */
+  #uncarry(id: string): void {
+    this.#carried.get(id)?.undo();
+    this.#carried.delete(id);
+  }
+
+  /**
+   * Hands a message, journaled, to its agent's session: as you typed it, or framed (with what the
+   * first send since a switch carries).
+   */
   #hand(node: AgentNode, message: Message, as: string): void {
     const { engine } = this.#deps;
     const yours = message.from === 'you';
+    // Kept until its turn ends: a session that won't start sends it back, still to be carried.
+    const carried = this.#carried.get(message.id);
     const takeBack = engine.sessions.send(
       node.id,
       node.data.adapter ?? engine.catalog.defaultAdapter,
-      yours ? message.body : this.#frame(message),
+      yours ? message.body : (carried?.text ?? this.#frame(message)),
       (interrupted, reply, result) => {
         this.#ended(message.id, interrupted, reply, result);
       },
@@ -1100,12 +1271,16 @@ export class Delivery {
     const message = store.get(id);
     // Cut off as the canvas closed, or back to waiting: its session would not start.
     if (this.#closed || !message || !this.#inFlight(message)) return;
+    // What it carried was sent with it.
+    this.#carried.delete(id);
     const taking = this.#withdrawing.get(id);
     if (taking !== undefined) {
       this.#takenBack(message, taking, result.status === 'cancelled');
       this.schedule();
       return;
     }
+    // B11a C7: a handoff request's whole reply, kept (if accepted) in the write recording it.
+    if (this.#request(message)) this.#deps.handoff?.replied(message, reply, result);
     store.update(id, { state: 'replied' });
     // A reply never makes a reply.
     if (message.turn === undefined) {
@@ -1130,6 +1305,7 @@ export class Delivery {
    */
   #refused(node: AgentNode, id: string, text: string): void {
     if (this.#closed || this.#deps.store.get(id)?.state !== 'delivering') return;
+    this.#uncarry(id);
     this.#deps.store.update(id, { state: 'pending' });
     this.#stuck.set(node.id, {
       connection: this.#deps.engine.catalog.connectionOf(node.data),

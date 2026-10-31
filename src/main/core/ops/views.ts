@@ -1,6 +1,7 @@
 import type { Reach } from '../../../shared/api/surface';
 import { fallbackView } from '../../../shared/model/fallback';
 import type { FallbackView } from '../../../shared/model/fallback';
+import type { HandoffView } from '../../../shared/model/handoff';
 import type { Message } from '../../../shared/model/messages';
 import { isOpen, turnReply } from '../../../shared/model/session';
 import { mcpRequestTitle } from '../../../shared/model/words';
@@ -48,6 +49,15 @@ export function fallbackOf(open: OpenCanvas, agent: string): FallbackView | null
   return fallbackView(agentOf(open, agent).data.fallback, open.switching?.(agent) === true);
 }
 
+/**
+ * An agent's handoff as views show it (B11a C11): when its latest was kept, how long it is, and
+ * its state; never its text. Alike for every caller who reaches it.
+ */
+export function handoffOf(open: OpenCanvas, agent: string): HandoffView | null {
+  agentOf(open, agent);
+  return open.handoff?.(agent) ?? null;
+}
+
 export function sessionSummary(open: OpenCanvas, agent: string, yours = true) {
   const node = agentOf(open, agent);
   const { engine } = open;
@@ -57,6 +67,7 @@ export function sessionSummary(open: OpenCanvas, agent: string, yours = true) {
     agent,
     connection: engine.catalog.connectionOf(node.data),
     fallback: fallbackOf(open, agent),
+    handoff: handoffOf(open, agent),
     status: session.status,
     paused: engine.run.snapshot().agents[agent]?.paused === true,
     queued: session.queued.length,
