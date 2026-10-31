@@ -479,6 +479,21 @@ describe('an entry of a transcript (the events B13 replaces)', () => {
     expect(entryFor(user, 'you')).toEqual({ id: 'u1', kind: 'user', text: 'Look', images: 1 });
   });
 
+  it('keeps a native prompt reply’s text yours alone, without exposing its private marker', () => {
+    const reply = {
+      id: 'reply',
+      kind: 'user' as const,
+      text: 'private-revision',
+      promptReply: true as const,
+    };
+    expect(entryFor(reply, 'you')).toEqual({ id: 'reply', kind: 'user', text: 'private-revision' });
+    expect(entryFor(reply, 'token')).toEqual({
+      id: 'reply',
+      kind: 'user',
+      text: 'The user answered a prompt.',
+    });
+  });
+
   it('is a token’s without an answer, a choice’s label, feedback, or a form’s link or words', () => {
     expect(entryFor(permission, 'token')).toEqual({
       id: 'p1',

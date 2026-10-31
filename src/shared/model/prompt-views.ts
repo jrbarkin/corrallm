@@ -200,15 +200,19 @@ export function needFor(item: NeedsItem, reader: PromptReader): NeedsItem {
  * An entry of a transcript (the events B13 replaces, until X11), as `reader` sees it: a message's
  * pasted images only counted. A token's prompt entry has no answer (a question's, a permission's,
  * a plan's or a form's), no feedback and no "always" choice's label; an MCP server's request
- * only the core's words, never its message, form or link. Whether it was withdrawn is everyone's.
+ * only the core's words, never its message, form or link. Native user turns made from a prompt
+ * answer retain their provenance internally: a token sees only that a prompt was answered.
+ * Whether it was withdrawn is everyone's.
  */
 export function entryFor(entry: Entry, reader: PromptReader): EntryView {
   switch (entry.kind) {
     case 'user': {
-      const { images, ...rest } = entry;
+      const { images, promptReply, ...rest } = entry;
+      const seen =
+        promptReply && reader === 'token' ? { ...rest, text: 'The user answered a prompt.' } : rest;
       return images === undefined || images.length === 0
-        ? rest
-        : { ...rest, images: images.length };
+        ? seen
+        : { ...seen, images: images.length };
     }
     case 'permission': {
       if (reader === 'you') return entry;

@@ -436,6 +436,41 @@ describe('the counts agents and session.get give', () => {
 });
 
 describe('session.transcript and the session topic', () => {
+  it('keep restored prompt-reply text yours alone at both read boundaries', async () => {
+    const fake = new FakeConnector({ mode: 'acceptEdits' });
+    const core = await start({
+      start: async (spec, host) => {
+        const session = await fake.start(spec, host);
+        host.emit({
+          type: 'history',
+          events: [
+            { type: 'user', id: 'native-reply', text: 'private-revision', promptReply: true },
+          ],
+        });
+        return session;
+      },
+    });
+    await ok(core, 'message', { to: 'b', body: 'Continue' });
+    await vi.waitFor(async () => {
+      const { entries } = await ok<{ entries: Entry[] }>(core, 'session.transcript', {
+        agent: 'b',
+      });
+      expect(entries).toContainEqual(expect.objectContaining({ id: 'native-reply' }));
+    });
+    for (const caller of [YOU, ...REACHED]) {
+      const transcript = await ok(core, 'session.transcript', { agent: 'b' }, caller);
+      const topic = await core.topics.read(`session:${CANVAS}:b`, caller);
+      expect(topic.ok).toBe(true);
+      const shown = JSON.stringify({ transcript, topic });
+      expect(shown.includes('private-revision')).toBe(caller.kind === 'human');
+      expect(shown).not.toContain('promptReply');
+    }
+    for (const caller of [PARENT, STRANGER]) {
+      expect((await call(core, 'session.transcript', { agent: 'b' }, caller)).ok).toBe(false);
+      expect((await core.topics.read(`session:${CANVAS}:b`, caller)).ok).toBe(false);
+    }
+  });
+
   /** The Worker's prompts among the events B13 replaces, each answered by you. */
   async function answered(core: Core): Promise<void> {
     const isWorkers = (item: NeedsItem) => item.agent === 'w' && item.kind === 'prompt';

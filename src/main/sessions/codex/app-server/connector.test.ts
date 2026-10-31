@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { PromptEvent } from '../../../../shared/model/prompts';
+import { entryFor } from '../../../../shared/model/prompt-views';
 import type { CodexMode, SessionAnswer, SessionEvent } from '../../../../shared/session';
 import type { UsageBackendId } from '../../../../shared/adapter';
 import type { UsageWindows } from '../../../../shared/usage';
@@ -18,6 +19,45 @@ import { replay } from './replay';
 
 /** A fake `codex` that speaks the app server's protocol (../fake-codex.mjs), run with node. */
 const FAKE = fileURLToPath(new URL('../fake-codex.mjs', import.meta.url));
+
+it('keeps plan-revision feedback private when resuming a native conversation', async () => {
+  const env = { FAKE_CODEX_STATE: path.join(dir, 'threads.json') };
+  const first = await start({ mode: 'plan' }, env);
+  await first.session.send({ id: 'review-plan', text: 'Plan a change' });
+  const plan = await first.heard('plan');
+  first.answer(plan.id, { kind: 'plan', answer: { approve: false, feedback: 'private-revision' } });
+  let revised: Extract<SessionEvent, { type: 'plan' }> | undefined;
+  await vi.waitFor(() => {
+    revised = first.events.find(
+      (event): event is Extract<SessionEvent, { type: 'plan' }> =>
+        event.type === 'plan' && event.id !== plan.id,
+    );
+    expect(revised).toBeDefined();
+  });
+  if (!revised) throw new Error('No revised plan');
+  first.answer(revised.id, { kind: 'plan', answer: { approve: false, feedback: '' } });
+  await first.ended('review-plan');
+  const conversation = first.remembered.at(-1);
+  if (!conversation) throw new Error('No conversation');
+  await first.session.close();
+  const resumed = await start({ resume: conversation, mode: 'plan' }, env);
+  const history = resumed.events.find((event) => event.type === 'history');
+  if (!history) throw new Error('No history');
+  const users = history.events
+    .filter((event): event is Extract<SessionEvent, { type: 'user' }> => event.type === 'user')
+    .map((event) => ({
+      id: event.id,
+      kind: 'user' as const,
+      text: event.text,
+      ...(event.promptReply ? { promptReply: true as const } : {}),
+    }));
+  expect(users.map((entry) => entryFor(entry, 'you'))).toContainEqual(
+    expect.objectContaining({ text: 'private-revision' }),
+  );
+  expect(JSON.stringify(users.map((entry) => entryFor(entry, 'token')))).not.toContain(
+    'private-revision',
+  );
+}, 15000);
 
 it('the recorded fake reports whether native instructions reached it, without their text', async () => {
   const file = path.join(dir, 'diagnostics.jsonl');

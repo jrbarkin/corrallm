@@ -480,7 +480,13 @@ export type SessionEvent =
    * transcript already shows them. Sent once it runs, outside any turn.
    */
   | { type: 'history'; events: SessionEvent[] }
-  | { type: 'user'; id: string; text: string }
+  | {
+      type: 'user';
+      id: string;
+      text: string;
+      /** A native turn made from a prompt answer. */
+      promptReply?: true;
+    }
   | { type: 'status'; status: 'working' | 'waiting' }
   | { type: 'text'; id: string; text: string; parent?: string }
   | { type: 'thinking'; id: string; text: string; parent?: string }

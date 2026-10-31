@@ -44,6 +44,9 @@ type ToolEvent = Extract<SessionEvent, { type: 'tool' }>;
 /** How long a running command's output goes without being shown, at most. */
 export const OUTPUT_EVERY_MS = 150;
 
+/** Native user turns synthesized from a prompt answer, never ordinary authored messages. */
+export const PROMPT_REPLY_ID_PREFIX = 'corrallm-prompt-reply:';
+
 const LOGIN_HELP =
   'corrallm uses Codex’s own login: log Codex in again in a terminal (`codex login --with-api-key`), then send your message again.';
 
@@ -391,7 +394,14 @@ export class Translator {
         // Live, the session told the user's message as it sent it.
         if (!this.#history) return [];
         const clientId = text(property(item, 'clientId'));
-        return [{ type: 'user', id: clientId ?? id, text: inputText(property(item, 'content')) }];
+        return [
+          {
+            type: 'user',
+            id: clientId ?? id,
+            text: inputText(property(item, 'content')),
+            ...(clientId?.startsWith(PROMPT_REPLY_ID_PREFIX) ? { promptReply: true } : {}),
+          },
+        ];
       }
       default:
         return [];

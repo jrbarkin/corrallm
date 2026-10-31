@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto';
+
 import { UNASKING_MODES } from '../../../../shared/session';
 
 import type {
@@ -33,7 +35,7 @@ import {
 } from './protocol';
 import type { SandboxPolicy, UserInput } from './protocol';
 import type { Translator } from './translate';
-import { historyEvents, OUTPUT_EVERY_MS } from './translate';
+import { historyEvents, OUTPUT_EVERY_MS, PROMPT_REPLY_ID_PREFIX } from './translate';
 
 /*
  * A Codex thread, run through Codex's app server: the session a Codex agent's App Server connection
@@ -575,11 +577,14 @@ export class AppServerSession implements LiveSession<CodexMode> {
       }
     }
     this.#host.emit({ type: 'status', status: 'working' });
-    this.#start(turn, [textInput(next)]).catch((error: unknown) => {
-      if (this.#turn !== turn) return;
-      this.#host.emit(notice('error', failureText(error)));
-      this.#end(turn, requestResult(error));
-    });
+    // Codex keeps this client id in history: an answer must not return as an ordinary message.
+    this.#start(turn, [textInput(next)], `${PROMPT_REPLY_ID_PREFIX}${randomUUID()}`).catch(
+      (error: unknown) => {
+        if (this.#turn !== turn) return;
+        this.#host.emit(notice('error', failureText(error)));
+        this.#end(turn, requestResult(error));
+      },
+    );
   }
 
   async #interrupt(turn: Turn, codex: string): Promise<void> {
