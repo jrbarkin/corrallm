@@ -522,6 +522,77 @@ describe('SdkConnector', () => {
     expect(events[0]).toMatchObject({ type: 'started', model: 'haiku' });
   });
 
+  it('shows the model and effort the user’s settings start it with, before its first turn', async () => {
+    // Their own effort: what the composer shows for each model that takes it, none being chosen.
+    const effort = connector({
+      prepare: (q) => {
+        q.settings = { effective: { effortLevel: 'xhigh' } };
+      },
+    });
+    await effort.sdk.start(SPEC, effort.host);
+    const started = effort.events[0];
+    if (started?.type !== 'started') throw new Error('it never started');
+    expect(started).toMatchObject({ model: 'default', effort: null });
+    expect(started.models.find((m) => m.value === 'default')?.defaultEffort).toBe('xhigh');
+    // A model that takes no effort has none.
+    expect(
+      started.models.find((m) => m.value === 'claude-haiku-4-5-20251001')?.defaultEffort,
+    ).toBeUndefined();
+
+    // Their own model, rather than the account's default.
+    const model = connector({
+      prepare: (q) => {
+        q.settings = { effective: { model: 'haiku' } };
+      },
+    });
+    await model.sdk.start(SPEC, model.host);
+    expect(model.query().options).not.toHaveProperty('model');
+    expect(model.events[0]).toMatchObject({ type: 'started', model: 'haiku' });
+  });
+
+  it.each([
+    ['hold', /hold messages from other sessions/],
+    ['refuse', /refuse messages from other sessions/],
+  ])(
+    'never sends another party’s message where the settings %s them, and says why',
+    async (inbound, why) => {
+      const { sdk, host, query } = connector({
+        prepare: (q) => {
+          q.settings = { effective: { crossSessionInbound: inbound } };
+        },
+      });
+      const session = await sdk.start(SPEC, host);
+      await expect(
+        session.send({
+          id: '00000000-0000-4000-8000-00000000001c',
+          text: 'Hello',
+          from: { party: 'outside:orchestrator', name: 'orchestrator' },
+        }),
+      ).rejects.toThrow(why);
+      await settle();
+      expect(query().sent).toEqual([]);
+    },
+  );
+
+  it('sends another party’s message while it bypasses permissions where the settings accept them', async () => {
+    const { sdk, host, query } = connector({
+      prepare: (q) => {
+        q.settings = { effective: { crossSessionInbound: 'accept' } };
+      },
+    });
+    const session = await sdk.start(SPEC, host);
+    await session.setMode('bypassPermissions');
+    await session.send({
+      id: '00000000-0000-4000-8000-00000000001d',
+      text: 'Hello',
+      from: { party: 'outside:orchestrator', name: 'orchestrator' },
+    });
+    await settle();
+    expect(query().sent.map((message) => message.origin)).toEqual([
+      { kind: 'peer', from: 'outside:orchestrator', name: 'orchestrator' },
+    ]);
+  });
+
   it('tells the CLI a message from another party is a peer’s, never the user’s', async () => {
     const { sdk, host, query } = connector();
     const session = await sdk.start(SPEC, host);
