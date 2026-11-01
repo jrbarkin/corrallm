@@ -36,6 +36,7 @@ export type Scope = 'app' | 'canvas' | 'agent' | 'none';
  */
 export type Rule =
   | 'shell-text'
+  | 'file-mentions'
   | 'human-text'
   | 'corral-mcp'
   | 'mode-permits'
@@ -391,7 +392,7 @@ export const SURFACE = {
     access: M,
     kind: 'command',
     scope: 'agent',
-    rules: ['shell-text', 'human-text'],
+    rules: ['shell-text', 'file-mentions', 'human-text'],
     self: 'refused',
   },
   withdraw: { access: M, kind: 'command', scope: 'canvas', preempt: true, destructive: true },

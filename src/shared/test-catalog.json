@@ -210,7 +210,8 @@
           "keys": {
             "shiftEnter": "\u001b\r"
           },
-          "shellPrefix": "!"
+          "shellPrefix": "!",
+          "fileMentions": true
         },
         {
           "id": "claude-code.sdk",

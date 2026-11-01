@@ -156,6 +156,8 @@ export interface ConnectionDescriptor {
   keys?: { shiftEnter: string | null };
   /** Text it runs as a shell command, without asking, when a message starts with it. */
   shellPrefix?: string;
+  /** Expands @ file mentions in text it is sent, without asking. */
+  fileMentions?: true;
 }
 
 export interface UsageBackendDescriptor {
