@@ -57,6 +57,7 @@ export function branchOps({
         request,
         caller: mergeCallerOf(caller),
         authorized: () => {
+          ctx.recheck();
           if (caller.kind === 'human') return true;
           if (!canvasesOf(caller).includes(id)) return false;
           const open = engines.canvas(id);

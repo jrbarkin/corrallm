@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { TOKEN_REPLACED } from '../../shared/api/errors';
 import type { CanvasId } from '../../shared/canvas';
@@ -13,8 +13,9 @@ import { createCore } from './core';
 import type { Core } from './core';
 import { SYSTEM_DEPS } from './store/store';
 import { keepCanvases } from './store/test-store';
-import { NO_DESKTOP } from './test-registry';
+import { CALLERS, NO_DESKTOP } from './test-registry';
 import { legacyDirectories } from './workspaces/test-directories';
+import { WorkspacePlanner } from './workspaces/planner';
 
 /*
  * The authority stamp (B21 §9 C2), composed in the real core: a caller a token identifies holds
@@ -126,6 +127,59 @@ function sentBy(party: string): string[] {
 }
 
 describe('an outside token’s authority', () => {
+  it.each(['writing', 'proposing'] as const)(
+    'rechecks a document commit’s caller after workspace preflight, before %s',
+    async (effect) => {
+      await keep();
+      await start();
+      const caller = await token();
+      const entered = Promise.withResolvers<undefined>();
+      const go = Promise.withResolvers<undefined>();
+      // eslint-disable-next-line @typescript-eslint/unbound-method -- Called with the actual planner below.
+      const preflight = WorkspacePlanner.prototype.preflight;
+      const spy = vi
+        .spyOn(WorkspacePlanner.prototype, 'preflight')
+        .mockImplementation(async function (this: WorkspacePlanner, commit) {
+          entered.resolve(undefined);
+          await go.promise;
+          return preflight.call(this, commit);
+        });
+      const pending =
+        effect === 'writing'
+          ? current().call(
+              'canvas.rename',
+              { canvas: M1, node: 'builder', label: 'New name' },
+              caller,
+            )
+          : current().call(
+              'canvas.batch',
+              {
+                canvas: M1,
+                ops: [{ op: 'canvas.delete', args: { nodes: ['builder'] } }],
+              },
+              caller,
+            );
+      try {
+        await entered.promise;
+        await current().tokens.revoke('orchestrator');
+        go.resolve(undefined);
+        expect(await pending).toEqual({
+          ok: false,
+          error: { code: 'refused', sentence: TOKEN_REPLACED },
+        });
+        expect(current().engines.canvas(M1)?.document.nodes[0]?.data.label).toBe('Builder');
+        const needs = await current().call('needs', { canvas: M1 }, CALLERS.you);
+        expect(needs.ok && needs.value.items.some((item) => item.id.startsWith('proposal/'))).toBe(
+          false,
+        );
+      } finally {
+        go.resolve(undefined);
+        await pending;
+        spy.mockRestore();
+      }
+    },
+  );
+
   it.each(['revoke', 'renew'] as const)(
     'ends with its token (%s): a call admitted before, queued in a scope, is refused when it runs',
     async (how) => {

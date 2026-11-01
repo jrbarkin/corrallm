@@ -187,7 +187,9 @@ describe('registered branch services', () => {
       expect(call?.signal).toBeInstanceOf(AbortSignal);
       expect(call?.authorized?.()).toBe(true);
       at.remove();
-      expect(call?.authorized?.()).toBe(party === 'you');
+      if (party === 'you') expect(call?.authorized?.()).toBe(true);
+      else
+        expect(() => call?.authorized?.()).toThrow(expect.objectContaining({ code: 'not-found' }));
       expect(at.diff).not.toHaveBeenCalled();
     },
   );

@@ -104,6 +104,8 @@ export interface OpContext {
   readonly proposedBy?: PartyId;
   /** Aborts when a preempting op supersedes it, or its caller gives up: then it unwinds. */
   readonly signal: AbortSignal;
+  /** Rechecks this call’s current authority, audience and reach without making it irreversible. */
+  readonly recheck: () => void;
   /** Marks a native effect irreversible, checking current authority and cancellation first. */
   noReturn(): void;
   /** Defers a command's final cleanup until its successful proposal settlement. */
@@ -516,6 +518,9 @@ export function createDispatcher(registry: Registry, options: DispatchOptions = 
       by,
       ...(options.proposedBy === undefined ? {} : { proposedBy: options.proposedBy }),
       signal: turn.signal,
+      recheck: () => {
+        checkReach(name, surface, def, args, caller);
+      },
       noReturn: () => {
         if (!irreversible) checkReach(name, surface, def, args, caller);
         turn.noReturn();
@@ -549,7 +554,9 @@ export function createDispatcher(registry: Registry, options: DispatchOptions = 
             ...(expect === undefined ? {} : { expect }),
             ...(options.unchanged === undefined ? {} : { unchanged: options.unchanged }),
             signal: turn.signal,
+            recheck: ctx.recheck,
             noReturn: () => {
+              ctx.recheck();
               turn.noReturn();
             },
             proposes,

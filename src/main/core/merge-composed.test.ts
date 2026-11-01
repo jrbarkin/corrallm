@@ -5,6 +5,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import type { MockInstance } from 'vitest';
 
 import type { ResultOf } from '../../shared/api/registry';
+import { TOKEN_REPLACED } from '../../shared/api/errors';
 import { createCore } from './core';
 import type { Core, CoreConfig } from './core';
 import * as ops from './ops';
@@ -533,4 +534,66 @@ it('reviews and merges through registered operations, retaining the caller’s p
   });
   expect(git(project, env, 'show', 'HEAD:done.txt')).toBe('done\n');
   expect(await running.call('branch.merge', args, CALLERS['outside-write'])).toEqual(merged);
+}, 60000);
+
+it('checks a merge’s caller again before installing its prepared commit', async () => {
+  const running = await start();
+  const checkout = await ready(running);
+  writeFileSync(path.join(checkout, 'done.txt'), 'done\n');
+  git(checkout, env, 'add', 'done.txt');
+  commit(checkout, env, 'Done');
+  const before = g(project, 'rev-parse', 'HEAD');
+  const review = await running.call('branch.diff', { canvas: CANVAS, agent: 'a' }, CALLERS.you);
+  if (!review.ok) throw new Error(review.error.sentence);
+  const token = await running.tokens.create({
+    name: 'orchestrator',
+    canvases: [CANVAS],
+    access: 'write',
+  });
+  const caller = running.clientOf(token);
+  if (!caller) throw new Error('The credential names no caller.');
+  const entered = Promise.withResolvers<undefined>();
+  const go = Promise.withResolvers<undefined>();
+  // eslint-disable-next-line @typescript-eslint/unbound-method -- Called with the actual runner below.
+  const run = GitRunner.prototype.run;
+  const spy = vi.spyOn(GitRunner.prototype, 'run').mockImplementation(async function (
+    this: GitRunner,
+    request,
+  ) {
+    if (request.args.includes('merge-tree')) {
+      entered.resolve(undefined);
+      await go.promise;
+    }
+    return run.call(this, request);
+  });
+  const pending = running.call(
+    'branch.merge',
+    {
+      canvas: CANVAS,
+      agent: 'a',
+      source: { ref: review.value.source.ref, oid: review.value.source.oid },
+      into: review.value.into,
+      request: randomUUID(),
+    },
+    caller,
+  );
+  try {
+    await Promise.race([
+      entered.promise,
+      pending.then(() => {
+        throw new Error('The merge settled before its preparation gate.');
+      }),
+    ]);
+    await running.tokens.revoke('orchestrator');
+    go.resolve(undefined);
+    expect(await pending).toMatchObject({
+      ok: false,
+      error: { code: 'refused', sentence: TOKEN_REPLACED },
+    });
+    expect(g(project, 'rev-parse', 'HEAD')).toBe(before);
+  } finally {
+    go.resolve(undefined);
+    await pending;
+    spy.mockRestore();
+  }
 }, 60000);

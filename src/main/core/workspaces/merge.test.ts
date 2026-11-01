@@ -5,6 +5,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { CanvasId } from '../../../shared/canvas';
 import type { Caller } from '../caller';
+import { OpFailure } from '../call';
+import { TOKEN_REPLACED } from '../../../shared/api/errors';
 import { mintTrustedPath } from '../host';
 
 import { mergeCallerOf } from './merge';
@@ -191,6 +193,64 @@ describe.skipIf(process.platform === 'win32')('a merge', () => {
       outcome: 'merged',
       requestId: request.request,
     });
+  });
+
+  it('returns a durable merge retry only while its caller is current', async () => {
+    const w = await make();
+    w.work(w.cwd, { 'agent.txt': 'agent\n' });
+    let current = true;
+    const request = w.request({
+      authorized: () => {
+        if (!current) throw new OpFailure('refused', TOKEN_REPLACED);
+        return true;
+      },
+    });
+    expect((await w.service.merge(request)).ok).toBe(true);
+    w.restart();
+    await w.service.reconcile();
+    const retry = w.service.merge(request);
+    current = false;
+    expect(await retry).toEqual({
+      ok: false,
+      error: { code: 'refused', sentence: TOKEN_REPLACED },
+    });
+  });
+
+  it('rechecks a queued merge copy before returning the first merge’s kept result', async () => {
+    const pause = pauseAt('prepared');
+    let current = true;
+    const w = await make({
+      deps: {
+        fault: async (at) => {
+          await pause.fault(at);
+          if (at === 'installing') current = false;
+        },
+      },
+    });
+    w.work(w.cwd, { 'agent.txt': 'agent\n' });
+    const request = w.request({
+      authorized: () => {
+        if (!current) throw new OpFailure('refused', TOKEN_REPLACED);
+        return true;
+      },
+    });
+    const first = w.service.merge(request);
+    await pause.reached;
+    const copy = w.service.merge(request);
+    try {
+      await vi.waitFor(() => {
+        expect(w.queue.size).toBe(2);
+      });
+      pause.resume();
+      expect((await first).ok).toBe(true);
+      expect(await copy).toEqual({
+        ok: false,
+        error: { code: 'refused', sentence: TOKEN_REPLACED },
+      });
+    } finally {
+      pause.resume();
+      await Promise.allSettled([first, copy]);
+    }
   });
 
   it.each(['preparation', 'install'] as const)(

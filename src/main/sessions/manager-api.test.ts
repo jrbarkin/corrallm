@@ -2,7 +2,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { Catalog, ConnectionId } from '../../shared/adapter';
 import { newCanvasId } from '../../shared/canvas';
@@ -17,6 +17,7 @@ import { CATALOG } from './adapters';
 import type { Connector, SessionApi, SessionHost } from './connector';
 import { FakeConnector } from './fake';
 import { SessionManager } from './manager';
+import { ProcessScope } from './process';
 import type { PromptSink } from './manager';
 
 /*
@@ -225,6 +226,35 @@ describe('a session generation’s route', () => {
 });
 
 describe('a session generation’s credential', () => {
+  it('revokes a failed start’s credential before awaiting child cleanup', async () => {
+    const cleaning = Promise.withResolvers<undefined>();
+    const go = Promise.withResolvers<undefined>();
+    // eslint-disable-next-line @typescript-eslint/unbound-method -- Called with the actual scope below.
+    const close = ProcessScope.prototype.close;
+    const spy = vi.spyOn(ProcessScope.prototype, 'close').mockImplementation(async function (
+      this: ProcessScope,
+    ) {
+      cleaning.resolve(undefined);
+      await go.promise;
+      return close.call(this);
+    });
+    const sessions = manager({
+      'claude-code.sdk': { start: () => Promise.reject(new Error('It won’t start here.')) },
+    });
+    const canvas = newCanvasId();
+    const pending = sessions.start(canvas, 'b', SDK).catch(() => undefined);
+    try {
+      await cleaning.promise;
+      expect(log.filter((line) => line.startsWith('issue b '))).toHaveLength(1);
+      expect(log.some((line) => line.startsWith('revoke b '))).toBe(true);
+    } finally {
+      go.resolve(undefined);
+      await pending;
+      await sessions.closeEverything();
+      spy.mockRestore();
+    }
+  });
+
   it('is revoked beside every end of its prompts: closed, stopped by itself, replaced, never started, its canvas closed', async () => {
     const hosts: SessionHost[] = [];
     const failing: Connector<SessionMode> = {

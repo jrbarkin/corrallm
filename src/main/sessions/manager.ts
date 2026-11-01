@@ -1297,6 +1297,7 @@ export class SessionManager {
       ]);
     } catch (error) {
       agent.unheard = true;
+      this.#deps.api?.revoke(canvas, agentId, agent.generation);
       await processes.close();
       throw error;
     } finally {

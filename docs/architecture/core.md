@@ -123,3 +123,5 @@ The C9 authorization seam is NativeNotifications.prepare(working, enabled). Main
 At the final native send boundary, `Engines.sending` checks the text after withdrawal notes against the receiving native session’s `fileMentions` declaration, using the kept run origin or other-party sender. Manual typing passes.
 
 Prepared B21 party targets use the canvas lane: `scopeOf` assigns an agent-scoped operation whose `to` is an object to its canvas, preserving the existing lanes for string agent ids and group targets. The AttemptId vocabulary names a core attempt; without a composed resolver a token reaches none.
+
+The dispatcher's `OpContext.recheck` checks the current caller, audience and reach without advancing the point of no return. Each dispatched document commit uses it after workspace preflight, before conflicts, change rules or proposals, and again as the write becomes irreversible. Repository-lane merge checks use the same recheck before their effects. An operation already past its irreversible point still finishes what it began.

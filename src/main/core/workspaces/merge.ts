@@ -128,7 +128,7 @@ export interface MergeRequest {
   /** The request's id: a repeat of it by the same caller is answered with its first result. */
   request: string;
   caller: MergeCaller;
-  /** Whether the caller still reaches the agent: asked again in the lane and before the install. */
+  /** Current authority and reach: checked before effects and kept replies; may throw its refusal. */
   authorized?: (() => boolean) | undefined;
   /** The caller left: work before the point of no return stops, changing nothing. */
   signal?: AbortSignal | undefined;
@@ -409,7 +409,7 @@ export class MergeService {
     });
     // A repeated request: answered from the journal, never run again.
     const kept = journal.byRequest(request.caller.key, request.request);
-    if (kept !== undefined) return answered(kept, args, name);
+    if (kept !== undefined) return answered(kept, args, name, request);
 
     // Admission: the agent's workspace, as the store keeps it; no member of its tree writing.
     const binding = workspaces.binding(canvas, agent);
@@ -498,7 +498,7 @@ export class MergeService {
     // Another copy may have queued before the first one recorded its intent. The repository's
     // lane has now finished that call: answer it before reading the pins the first merge moved.
     const kept = this.#deps.journal.byRequest(job.request.caller.key, job.request.request);
-    if (kept !== undefined) return answered(kept, job.args, job.name);
+    if (kept !== undefined) return answered(kept, job.args, job.name, job.request);
     // One a restart couldn't reconcile is tried again before any other merge into its repository.
     const repository = this.#deps.workspaces.worktree(job.admitted.workspace)?.repository;
     const open = repository === undefined ? undefined : this.#deps.journal.openIn(repository);
@@ -1554,7 +1554,10 @@ export class MergeService {
 }
 
 /** A repeated request, answered from the journal as its first call settled. */
-function answered(job: MergeJob, args: string, name: string): MergeResult {
+function answered(job: MergeJob, args: string, name: string, request: MergeRequest): MergeResult {
+  if (request.authorized?.() === false) {
+    throw new OpFailure('not-found', `There is no agent ${request.agent}.`);
+  }
   if (job.intent.args !== args) {
     throw new OpFailure('conflict', 'That request id was used for another merge: send a new one.');
   }
