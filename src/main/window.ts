@@ -39,6 +39,8 @@ export async function createMainWindow(
       window.show();
     });
   }
+  // The constructor's size is still clamped to a small display; this is not (see above).
+  if (options.hidden) window.setSize(1200, 800);
   await window.loadURL(url);
   return window;
 }
