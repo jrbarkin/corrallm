@@ -193,6 +193,7 @@
           },
           "signals": false,
           "context": true,
+          "api": null,
           "startModes": [
             "manual",
             "acceptEdits",
@@ -226,6 +227,7 @@
           },
           "signals": true,
           "context": true,
+          "api": null,
           "startModes": [
             "manual",
             "acceptEdits",
@@ -492,6 +494,7 @@
           },
           "signals": false,
           "context": false,
+          "api": null,
           "startModes": [
             "read-only"
           ],
@@ -521,6 +524,7 @@
           },
           "signals": false,
           "context": true,
+          "api": null,
           "startModes": [
             "read-only",
             "auto",

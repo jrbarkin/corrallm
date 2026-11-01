@@ -794,7 +794,7 @@ export function scopeOf(surface: Pick<Surface, 'scope'>, args: unknown): string[
     case 'canvas':
       return ['app', String(canvas)];
     case 'agent':
-      return target?.group !== undefined
+      return target?.group !== undefined || (to !== null && typeof to === 'object')
         ? ['app', String(canvas)]
         : ['app', String(canvas), String(agent ?? to ?? target?.agent)];
   }
