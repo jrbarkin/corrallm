@@ -8,6 +8,18 @@ type Listed = ResultOf<'worktree.list'>;
 export type Workspace = Listed['items'][number];
 export type MergeInto = ResultOf<'branch.diff'>['into'];
 
+/** Display repository text literally; patch lines retain their ordinary tabs and backslashes. */
+export function branchText(text: string, patch = false): string {
+  return text.replace(/[\\\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, (character) => {
+    if (character === '\\') return patch ? character : '\\\\';
+    if (patch && character === '\t') return character;
+    const code = character.codePointAt(0) ?? 0;
+    return code <= 0xffff
+      ? `\\u${code.toString(16).padStart(4, '0')}`
+      : `\\u{${code.toString(16)}}`;
+  });
+}
+
 /** Observation only. A job takes precedence over ancestry; nothing here runs Git. */
 export function mergeMark(merge: Workspace['merge']): string {
   if (merge?.job === 'merging') return 'merging…';

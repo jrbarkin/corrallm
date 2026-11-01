@@ -1,13 +1,17 @@
 import { act, cleanup, screen, within } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 import { BranchMergeInput } from '../../shared/api/branch';
+import { newCanvasId } from '../../shared/canvas';
+import type { CanvasId } from '../../shared/canvas';
 import type { BranchDiffOutput, WorktreeMerge } from '../../shared/api/branch';
 import type { MergeInto } from './state';
 import type { ResultOf } from '../../shared/api/registry';
 import type { FakeCanvas } from '../test-canvas';
-import { expectOneOp, expectOneRead } from '../test-api';
+import { expectOneOp, expectOneRead, fakeCore } from '../test-api';
 import { GraphEditor } from '../test-graph';
 import { events, renderReady } from '../test-render';
+import { WorkspaceProvider } from './Workspace';
+import { BranchControls } from './BranchReview';
 
 vi.mock('../terminal/screen', async () => {
   const { fakeScreens } = await import('../terminal/test-screen');
@@ -15,6 +19,10 @@ vi.mock('../terminal/screen', async () => {
 });
 
 afterEach(cleanup);
+const isolatedCores: ReturnType<typeof fakeCore>[] = [];
+afterEach(() => {
+  for (const core of isolatedCores.splice(0)) core.dispose();
+});
 const source = { ref: 'refs/heads/corrallm/team', oid: 'a'.repeat(40) };
 const into = { ref: 'refs/heads/main', oid: 'b'.repeat(40) };
 const digest = 'd'.repeat(64);
@@ -49,6 +57,85 @@ const page: BranchDiffOutput = {
   ],
   next: 'YQ',
 };
+
+async function isolatedReview() {
+  const core = fakeCore();
+  isolatedCores.push(core);
+  const first = newCanvasId();
+  const second = newCanvasId();
+  for (const canvas of [first, second]) {
+    core.snapshot(`worktrees:${canvas}`, { items: [], kept: [], into });
+    core.snapshot(`needs:${canvas}`, { items: [] });
+  }
+  core.respond('branch.diff', page);
+  const show = (canvas: CanvasId, inert = false) => (
+    <WorkspaceProvider
+      canvas={canvas}
+      client={core.api}
+      mirror={core.topics}
+      nodes={[
+        { id: 'builder', type: 'agent', position: { x: 0, y: 0 }, data: { label: 'Builder' } },
+      ]}
+      onNeed={() => undefined}
+      inert={inert}
+    >
+      <BranchControls agent="builder" />
+    </WorkspaceProvider>
+  );
+  const view = await renderReady(show(first));
+  return { ...view, core, first, second, show };
+}
+
+it('ends a review when its canvas changes, including when returning before a pending read completes', async () => {
+  const { core, first, second, rerender, show } = await isolatedReview();
+  let resolve: ((value: { ok: true; value: BranchDiffOutput }) => void) | undefined;
+  core.reply(
+    'branch.diff',
+    () =>
+      new Promise((done) => {
+        resolve = done;
+      }),
+  );
+  await events.click(screen.getByRole('button', { name: 'Review changes' }));
+  expectOneRead(core, 'branch.diff', { canvas: first, agent: 'builder' });
+  rerender(show(second));
+  expect(screen.queryByRole('dialog', { name: 'Builder’s changes' })).toBeNull();
+  core.reads.length = 0;
+  rerender(show(first));
+  expect(screen.queryByRole('dialog', { name: 'Builder’s changes' })).toBeNull();
+  await act(async () => {
+    resolve?.({ ok: true, value: page });
+    await Promise.resolve();
+  });
+  expect(screen.queryByRole('dialog', { name: 'Builder’s changes' })).toBeNull();
+  expect(core.reads).toEqual([]);
+  expect(core.operations).toEqual([]);
+});
+
+it('shows filename and patch control characters as visible text while preserving ordinary diff layout', async () => {
+  const { open } = await setup({
+    review: {
+      ...page,
+      files: [
+        {
+          section: 'committed',
+          path: 'new\n\u202efile.txt',
+          oldPath: 'old\tname.txt',
+          status: 'renamed',
+          patch: '@@ -1 +1 @@\n-\told\n+\tnew\u202e text\n',
+        },
+      ],
+      next: null,
+    },
+  });
+  const review = await open();
+  const heading = review.getByRole('heading', { name: /old.*name.txt/ });
+  expect(heading.textContent).not.toMatch(/[\n\t\u202e]/);
+  expect(heading.textContent).toContain('\\u202e');
+  const patch = document.querySelector('.branch-review .agent-tool-detail');
+  expect(patch?.textContent).not.toContain('\u202e');
+  expect(patch?.textContent).toContain('+\tnew\\u202e text\n');
+});
 
 async function setup(
   options: { review?: BranchDiffOutput; into?: MergeInto | null; merge?: WorktreeMerge } = {},

@@ -3,11 +3,11 @@ import { createPortal } from 'react-dom';
 import type { BranchDiffOutput, BranchFile, BranchMergeOutput } from '../../shared/api/branch';
 import { ToolDetailView } from '../agent/ToolDetail';
 import { ipcErrorMessage } from '../ipc-error';
-import { Context, mergeMark, workspaceSharing } from './state';
+import { Context, mergeMark, workspaceSharing, branchText } from './state';
 import type { MergeInto } from './state';
 import './BranchReview.css';
 
-const branchName = (ref: string) => ref.replace(/^refs\/heads\//, '');
+const branchName = (ref: string) => branchText(ref.replace(/^refs\/heads\//, ''));
 const destinationName = (into: MergeInto | null | undefined) =>
   into?.ref ? branchName(into.ref) : 'your checkout';
 
@@ -65,7 +65,7 @@ export function BranchReview({
   if (!context) throw new Error('A branch review needs its canvas.');
   const { canvas, client, nodes, state, inert = false } = context;
   const label = nodes.find((node) => node.id === agent)?.data.label;
-  const name = label?.length ? label : 'Agent';
+  const name = label?.length ? branchText(label) : 'Agent';
   const item = state?.items.find((item) => item.agent === agent);
   const panel = useRef<HTMLDivElement>(null);
   const mounted = useRef(true);
@@ -243,7 +243,7 @@ export function BranchReview({
             Close review
           </button>
         </header>
-        {item && <p>{workspaceSharing(item, nodes)}</p>}
+        {item && <p>{branchText(workspaceSharing(item, nodes))}</p>}
         {item?.state === 'pending-change' && (
           <p>Reviewing the active worktree while its workspace change waits.</p>
         )}
@@ -411,10 +411,10 @@ function ReviewFile({ file }: { file: BranchFile }) {
       <h4>
         {file.oldPath && (
           <>
-            <span>{file.oldPath}</span> →{' '}
+            <span>{branchText(file.oldPath)}</span> →{' '}
           </>
         )}
-        <span>{file.path}</span>
+        <span>{branchText(file.path)}</span>
       </h4>
       <p>
         {file.status}
@@ -437,7 +437,7 @@ function ReviewFile({ file }: { file: BranchFile }) {
                   : line.startsWith('-') && !line.startsWith('---')
                     ? ('remove' as const)
                     : ('same' as const),
-              text: line,
+              text: branchText(line, true),
             })),
           }}
         />

@@ -14,6 +14,7 @@ import {
   workspaceState,
   workspaceSharing,
   mergeMark,
+  branchText,
 } from './state';
 import type { Workspace, MergeInto } from './state';
 import { BranchReview } from './BranchReview';
@@ -46,6 +47,8 @@ export function WorkspaceProvider({
     into: MergeInto | null;
     key: string;
   }>();
+  // Returning to a canvas never reopens a review or reads again without a new gesture.
+  if (review && review.canvas !== canvas) setReview(undefined);
   return (
     <Context
       value={{
@@ -141,14 +144,18 @@ export function WorkspaceBadge({ agent, card = false }: { agent: string; card?: 
   if (!context || !item) return null;
   const need = item.need;
   const state = workspaceState(item);
-  const branch = item.branch ?? (item.mode === 'shared-folder' ? 'Shared folder' : state);
+  const branch = branchText(
+    item.branch ?? (item.mode === 'shared-folder' ? 'Shared folder' : state),
+  );
   const mark = mergeMark(item.merge);
-  const history = context.state?.into?.ref?.replace(/^refs\/heads\//, '');
+  const history = context.state?.into?.ref
+    ? branchText(context.state.into.ref.replace(/^refs\/heads\//, ''))
+    : undefined;
   const explanation = item.merge?.merged
     ? `its commits are in ${history ? `${history}’s` : 'your checkout’s'} history`
     : undefined;
   const title = [
-    item.branch,
+    item.branch && branchText(item.branch),
     workspaceSharing(item, context.nodes),
     state,
     explanation,
