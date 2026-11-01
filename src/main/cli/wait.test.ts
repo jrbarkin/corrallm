@@ -14,8 +14,9 @@ import { waitCommand } from './wait';
  * How `corrallm wait` exits on each refusal the server gives (API Spec §8.6): 2 only for its token,
  * so an orchestrator that asks the person for a new token on 2 never does for anything else; 3 for
  * a server that can't take the wait now, so it tries again later; 5 for what the wait asked, so it
- * gives up that cursor or id. serve.test.ts runs it against the real server; here a stand-in
- * answers each refusal as the MCP server words one.
+ * gives up that cursor or id; and that it sends its token nowhere but corrallm's server on this
+ * machine. serve.test.ts runs it against the real server; here a stand-in answers each refusal as
+ * the MCP server words one.
  */
 
 let server: Server | undefined;
@@ -108,6 +109,62 @@ describe('corrallm wait', () => {
       { error: { code: 'refused', sentence: TOKEN_REPLACED } },
     ]);
     expect(tokens).toEqual(['Bearer an-old-token']);
+  });
+
+  it('sends its token only to corrallm’s own server on this machine: anywhere else exits 3, sending nothing', async () => {
+    const heard: string[] = [];
+    server = createServer((request, response) => {
+      heard.push(request.headers.authorization ?? '');
+      request.resume();
+      response.writeHead(500).end();
+    });
+    await new Promise<void>((resolve) => server?.listen(0, '127.0.0.1', resolve));
+    const { port } = server.address() as { port: number };
+    const url = `http://127.0.0.1:${String(port)}/mcp`;
+    for (const elsewhere of [
+      'http://example.com/mcp',
+      `https://127.0.0.1:${String(port)}/mcp`,
+      `${url}?token=1`,
+      url.replace('http://', 'http://user:pass@'),
+    ]) {
+      const printed: string[] = [];
+      const exit = await waitCommand(
+        { command: 'wait', timeout: 1 },
+        {
+          env: { CORRALLM_URL: elsewhere, CORRALLM_OUTSIDE_TOKEN: 'a-token' },
+          print: (line) => printed.push(line),
+        },
+      );
+      expect(exit, elsewhere).toBe(3);
+      expect(printed.map((line) => JSON.parse(line) as unknown)).toMatchObject([
+        { error: { code: 'unavailable' } },
+      ]);
+    }
+    expect(heard).toEqual([]);
+  });
+
+  it('refuses with 2, sending nothing, when it has no token', async () => {
+    let heard = 0;
+    server = createServer((request, response) => {
+      heard += 1;
+      request.resume();
+      response.writeHead(500).end();
+    });
+    await new Promise<void>((resolve) => server?.listen(0, '127.0.0.1', resolve));
+    const { port } = server.address() as { port: number };
+    const printed: string[] = [];
+    const exit = await waitCommand(
+      { command: 'wait', timeout: 1 },
+      {
+        env: { CORRALLM_URL: `http://127.0.0.1:${String(port)}/mcp` },
+        print: (line) => printed.push(line),
+      },
+    );
+    expect(exit).toBe(2);
+    expect(printed.map((line) => JSON.parse(line) as unknown)).toMatchObject([
+      { error: { code: 'refused' } },
+    ]);
+    expect(heard).toBe(0);
   });
 
   describe.skipIf(process.platform === 'win32')('with its token in a file', () => {
