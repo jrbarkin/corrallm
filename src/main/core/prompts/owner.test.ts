@@ -1481,6 +1481,35 @@ describe('its agents’ transcripts (B13 C9): each prompt it lists placed as rai
     expect(changesOf(need)).toEqual([]);
   });
 
+  it('keeps an MCP server’s words for its tool yours alone: a token reads what waits and how it ended in the core’s', async () => {
+    const tool = {
+      kind: 'approval',
+      title: `Create the issue? Sign in at ${LINK}`,
+      summary: 'private-server-summary',
+      subject: { type: 'mcpTool', server: 'tracker', tool: 'create_issue', input: {} },
+      answerIn: 'api',
+      choices: [yes, no],
+    };
+    const core = 'MCP server “tracker” asks to use its tool “create_issue”';
+    const one = handle();
+    raise(origin(7, one), tool);
+    const id = only();
+    expect(owner.items(CANVAS)[0]?.title).toBe(tool.title);
+    expect(owner.items(CANVAS, 'token')[0]?.title).toBe(core);
+    expect(owner.waiting(CANVAS, 'b')?.title).toBe(core);
+    expect(JSON.stringify(owner.waiting(CANVAS, 'b'))).not.toMatch(/private-|signin\.example/);
+    await answer(id, { choice: 'yes' });
+    expect(changesOf(id).at(-1)).toMatchObject({
+      type: 'ended',
+      prompt: { title: tool.title },
+      tokenTitle: core,
+    });
+    // Any other prompt is read alike: no title of a token's own.
+    raise(origin(7, one), approval, KEY2);
+    await answer(only(), { choice: 'yes' });
+    expect(placed.at(-1)?.change).not.toHaveProperty('tokenTitle');
+  });
+
   it('says what each agent waits on: its oldest live prompt, mirrored or not, being answered too, as a token reads it', async () => {
     expect(owner.waiting(CANVAS, 'b')).toBeUndefined();
     const one = handle();

@@ -793,12 +793,14 @@ export class PromptOwner implements PromptSink {
       prompts.ended.delete(oldest);
     }
     if (!occurrence.mirrored) {
+      const seen = occurrenceOf(occurrence, this.#deps.canvas(occurrence.canvas)?.nodes ?? []);
+      const yours = settledPrompt(seen, 'you');
+      const theirs = settledPrompt(seen, 'token').title;
       this.#deps.transcript?.(occurrence.canvas, occurrence.agent, {
         type: 'ended',
         id: occurrence.prompt.id,
-        prompt: settledPrompt(
-          occurrenceOf(occurrence, this.#deps.canvas(occurrence.canvas)?.nodes ?? []),
-        ),
+        prompt: yours,
+        ...(theirs === yours.title ? {} : { tokenTitle: theirs }),
         outcome,
       });
     }

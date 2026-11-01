@@ -186,7 +186,9 @@ export interface SettledPromptEntry {
   id: string;
   kind: 'prompt';
   need: string;
+  /** Yours: a token reads `tokenTitle` for its title, where it reads another (an MCP server's tool). */
   prompt: SettledPromptView;
+  tokenTitle?: string;
   outcome: LiveOutcome;
 }
 

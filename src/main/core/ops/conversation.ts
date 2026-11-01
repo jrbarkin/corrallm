@@ -44,7 +44,7 @@ export function conversationOps(
     const id = open.document.id;
     const reader = promptReaderOf(ctx.caller);
     const items = [
-      ...needs(needsInput(open, locale)).map((item) => needFor(item, reader)),
+      ...needs(needsInput(open, locale), reader).map((item) => needFor(item, reader)),
       ...(services.prompts?.items(id, reader) ?? []),
       ...[
         ...proposals.items(id, ctx.caller.kind === 'human' ? undefined : reach),

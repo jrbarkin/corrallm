@@ -548,6 +548,7 @@ export class SessionStore {
               kind: 'prompt',
               need: entry.need,
               prompt: change.prompt,
+              ...(change.tokenTitle === undefined ? {} : { tokenTitle: change.tokenTitle }),
               outcome: change.outcome,
             }
           : entry,

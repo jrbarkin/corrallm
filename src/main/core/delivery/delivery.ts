@@ -1492,7 +1492,7 @@ export class Delivery {
       const title =
         need === undefined
           ? this.#deps.waitingOn?.(agent)?.title
-          : needFor(needsItem(need, input), 'token').title;
+          : needFor(needsItem(need, input, 'token'), 'token').title;
       if (title !== undefined) {
         this.#tell(
           `waiting:${message.id}`,

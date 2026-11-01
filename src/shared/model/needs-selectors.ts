@@ -125,15 +125,24 @@ export function needsOf({
   ];
 }
 
-/** Everything that waits for you, each worded as a NeedsItem. */
-export function needs(input: NeedsInput): NeedsItem[] {
-  return needsOf(input).map((need) => needsItem(need, input));
+/**
+ * Everything that waits for you, each worded as a NeedsItem, as `reader` words it (a token reads
+ * an old permission's tool and summary, never its CLI's own title: B13 C9).
+ */
+export function needs(input: NeedsInput, reader: 'you' | 'token' = 'you'): NeedsItem[] {
+  return needsOf(input).map((need) => needsItem(need, input, reader));
 }
 
-/** A need as a NeedsItem, yours: addressed to you, answered by you. */
+/**
+ * A need as a NeedsItem, yours: addressed to you, answered by you. Worded for `reader`: what a
+ * permission of the events B13 replaces asks in its CLI's words (an MCP server's own, for its
+ * tool) is yours alone; a token reads its tool and summary (B13 C9). The rest of what a token may
+ * read of it is `needFor`'s (prompt-views.ts).
+ */
 export function needsItem(
   need: Need,
   { canvas, nodes, run, catalog, now = Date.now(), locale, sessionGenerations }: NeedsInput,
+  reader: 'you' | 'token' = 'you',
 ): NeedsItem {
   const yours = { canvas, agent: need.agent.id, for: 'you' as const, by: ['you' as const] };
   switch (need.kind) {
@@ -214,7 +223,7 @@ export function needsItem(
           String(sessionGenerations?.(need.agent.id) ?? 0),
         ),
         ...yours,
-        ...promptWords(need.prompt),
+        ...promptWords(need.prompt, reader),
       };
     case 'ask':
       return {
@@ -310,12 +319,15 @@ type Worded = Pick<
 >;
 
 /** What an open prompt of an agent's session asks, in words, and how you may answer it. */
-function promptWords(prompt: Prompt): Worded {
+function promptWords(prompt: Prompt, reader: 'you' | 'token'): Worded {
   switch (prompt.kind) {
     case 'permission':
       return {
         kind: 'prompt',
-        title: prompt.title ?? approve(prompt.tool, prompt.summary),
+        title:
+          reader === 'you' && prompt.title !== undefined
+            ? prompt.title
+            : approve(prompt.tool, prompt.summary),
         ...detailOf(prompt.detail),
         choices: [
           { value: 'once', label: 'Yes' },

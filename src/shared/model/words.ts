@@ -365,3 +365,12 @@ export function mcpRequestTitle(server: string, link: boolean, host?: string): s
   const what = link ? `open a link${host === undefined ? '' : ` on ${host}`}` : 'fill in a form';
   return `${mcpServerWords(server)} asks you to ${what}`;
 }
+
+/**
+ * An approval to use an MCP server's tool, as a token reads it (B13 C9's rule of C11): in the
+ * core's words, by the server's configured name and the tool's, never the server's own words for
+ * it (a title, a description or a message it supplies for its approval).
+ */
+export function mcpToolTitle(server: string, tool: string): string {
+  return `${mcpServerWords(server)} asks to use its tool “${tool}”`;
+}
