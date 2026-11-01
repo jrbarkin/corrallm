@@ -34,6 +34,24 @@ const end = (messages: string[], extra: Partial<Extract<SessionEvent, { type: 'e
   }) as const;
 
 describe('a connected session', () => {
+  it('retains prompt-reply provenance when restoring a native transcript', async () => {
+    const { store, emit } = connected('codex.app-server');
+    store.open('a');
+    await settle();
+    emit('a', 'codex.app-server', {
+      type: 'history',
+      events: [{ type: 'user', id: 'reply', text: 'private-revision', promptReply: true }],
+    });
+    expect(store.of('a').entries).toContainEqual(
+      expect.objectContaining({
+        id: 'reply',
+        kind: 'user',
+        text: 'private-revision',
+        promptReply: true,
+      }),
+    );
+  });
+
   it('starts when its view opens, and takes the models it offers', async () => {
     const { store, backend, emit } = connected();
     store.open('a');

@@ -6,13 +6,21 @@ import type { NeedsItem } from '../../shared/model/needs';
 import { isOpen } from '../../shared/model/session';
 import type { Prompt } from '../../shared/model/session';
 import type { PromptAnswer, PromptReplyAnswer } from '../../shared/model/prompts';
+import type { PromptReader } from '../../shared/model/prompt-views';
 import { MAX_CANVAS_PROMPTS } from '../../shared/api/limits';
 import type { SessionAnswer } from '../../shared/session';
 import type { SessionManager } from '../sessions/manager';
 import type { PromptOwner } from './prompts/owner';
 import { OpFailure } from './call';
 import type { OpContext } from './call';
-import { decided, decidedOf, deciding, landed, withdrawnDecision } from './decisions';
+import {
+  decided,
+  decidedOf,
+  decisionWords,
+  deciding,
+  landed,
+  withdrawnDecision,
+} from './decisions';
 import type { Engines, OpenCanvas } from './engines';
 import { needsInput } from './engines';
 import { nameOf, partyText, pausesText, RELEASES } from './parties';
@@ -52,7 +60,9 @@ import type { Answer, ReplyHandler, ReplyResult } from './replies';
  *   took it; one the CLI refused still waits, its record withdrawn. A crash in between leaves the
  *   record unresolved, never answered again.
  * - No record holds what was answered: no words, values, answers or feedback (a secret is never
- *   written), only what kind of answer it was.
+ *   written), only what kind of answer it was. A prompt's is worded as the owner words one
+ *   (decisions.ts' decisionWords: B13 §9.2 C9), from its kind, what was chosen and the agent's name,
+ *   never its tool's input, its plan's mode, its server or anything else the CLI said.
  */
 
 export interface RunRepliesDeps {
@@ -108,14 +118,28 @@ export function runReplies({
    * until X11).
    */
   const bridged = new Map<CanvasId, Map<string, string>>();
-  /** Settled already: a conflict naming who settled it, if a record of it is kept. */
-  const settled = (canvas: CanvasId, to: string): OpFailure | undefined => {
+  /**
+   * Settled already: a conflict naming who settled it, if a record of it is kept; and, to you, how
+   * (its record's words). A token is told a prompt's settler alone (B13 C11).
+   */
+  const settled = (
+    canvas: CanvasId,
+    to: string,
+    reader: PromptReader = 'you',
+  ): OpFailure | undefined => {
     const through = bridged.get(canvas)?.get(to);
-    if (through !== undefined && owner !== undefined) return owner.settled(canvas, through);
+    if (through !== undefined && owner !== undefined) {
+      return owner.settled(canvas, through, reader);
+    }
     const open = engines.canvas(canvas);
     const record = open === undefined ? undefined : decidedOf(open.messages, to);
-    if (record === undefined) return undefined;
-    return new OpFailure('conflict', `${to} is settled already: ${record.body}`);
+    if (record === undefined || open === undefined) return undefined;
+    return new OpFailure(
+      'conflict',
+      reader === 'you'
+        ? `${to} is settled already: ${record.body}`
+        : `${to} is settled already: ${partyText(open.document.nodes, record.by ?? 'you')} answered it.`,
+    );
   };
 
   const holds: ReplyHandler = {
@@ -296,7 +320,7 @@ export function runReplies({
   const legacy: ReplyHandler = {
     prefixes: ['prompt'],
     current: (canvas, to) => items(canvas).find((item) => item.id === to),
-    gone: (canvas, to) => {
+    gone: (canvas, to, reader) => {
       const id = promptOf(to);
       const open = engines.canvas(canvas);
       if (id !== undefined && open !== undefined) {
@@ -313,7 +337,7 @@ export function runReplies({
           );
         }
       }
-      return settled(canvas, to);
+      return settled(canvas, to, reader);
     },
     fits: (item, answer) => {
       if (item.answerIn === 'terminal') {
@@ -422,7 +446,8 @@ export function runReplies({
   const prompts: ReplyHandler = {
     prefixes: ['prompt'],
     current: (canvas, to) => owner?.current(canvas, to) ?? legacy.current(canvas, to),
-    gone: (canvas, to) => owner?.settled(canvas, to) ?? legacy.gone?.(canvas, to),
+    gone: (canvas, to, reader) =>
+      owner?.settled(canvas, to, reader) ?? legacy.gone?.(canvas, to, reader),
     fits: (item, answer) =>
       owner?.owns(item.canvas, item.id) === true
         ? owner.fits(item.canvas, item.id, answer)
@@ -599,20 +624,47 @@ function chose(item: NeedsItem, answer: Answer): string {
   return `answered “${item.title}”: ${String(label)}`;
 }
 
-/** What a prompt's answer was, in words, never its values: "allowed Builder’s Bash: npm test once". */
+/**
+ * What a prompt's answer was, in the core's words (decisionWords, B13 §9.2 C9): a permission as a
+ * tool call allowed once or from now on, or refused; a plan approved or kept planning; questions
+ * answered; a form accepted, declined or cancelled. Never its tool's input, its mode, its server,
+ * the words or the values given.
+ */
 function answered(name: string, prompt: Prompt, given: SessionAnswer): string {
   switch (given.kind) {
     case 'permission':
-      return prompt.kind === 'permission'
-        ? `${given.answer === 'deny' ? 'denied' : 'allowed'} ${name}’s ${prompt.tool}${prompt.summary.trim() === '' ? '' : `: ${prompt.summary.trim()}`}${given.answer === 'always' ? ', always' : given.answer === 'once' ? ', once' : ''}`
-        : `answered ${name}’s prompt`;
+      return decisionWords(name, {
+        prompt: { kind: 'approval', subject: 'tool' },
+        outcome: {
+          type: 'choice',
+          value: given.answer,
+          hint:
+            given.answer === 'once'
+              ? 'allow_once'
+              : given.answer === 'always'
+                ? 'allow_always'
+                : 'reject_once',
+        },
+      });
     case 'question':
-      return `answered ${name}’s question${given.answers.length === 1 ? '' : 's'}`;
+      return decisionWords(name, {
+        prompt: { kind: 'question' },
+        outcome: { type: 'answers', count: Math.max(given.answers.length, 1) },
+      });
     case 'plan':
-      return given.answer.approve
-        ? `approved ${name}’s plan, to carry it out in ${given.answer.mode}`
-        : `asked ${name} to revise its plan`;
+      return decisionWords(name, {
+        prompt: { kind: 'plan' },
+        outcome: {
+          type: 'choice',
+          value: given.answer.approve ? 'approve' : 'revise',
+          hint: given.answer.approve ? 'allow_once' : 'reject_once',
+        },
+      });
     case 'elicitation':
-      return `${given.action === 'accept' ? 'accepted' : given.action === 'decline' ? 'declined' : 'cancelled'} ${prompt.kind === 'elicitation' ? `the ${prompt.server} MCP server’s request` : 'a request'} for ${name}`;
+      return decisionWords(
+        name,
+        { prompt: { kind: 'form' }, outcome: { type: 'form', action: given.action } },
+        prompt.kind === 'elicitation' && prompt.url !== undefined,
+      );
   }
 }

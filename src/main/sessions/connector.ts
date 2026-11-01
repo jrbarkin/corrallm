@@ -69,6 +69,18 @@ export interface SessionSpec<M extends SessionMode = PermissionMode> {
  */
 export type HostEvent = SessionEvent | PromptEvent | PromptEnded;
 
+/**
+ * Transitional (B13 C4, C5, until X10 converts the renderer; X11 removes it): how a session that
+ * also shows each prompt it raises as one of the events B13 replaces translates an answer to the
+ * old event `promptId` into the key of the prompt it shows and the answer as that prompt takes it,
+ * so the core answers it through its prompt owner. Answers nothing itself. Throws for one no
+ * longer asked, or an answer the prompt doesn't offer.
+ */
+export type Bridge = (
+  promptId: string,
+  answer: SessionAnswer,
+) => { key: string; answer: PromptAnswer };
+
 /** Where a session reports to. */
 export interface SessionHost {
   /** CLI activity with no session event (a hook or untranslated progress, not cosmetic redraws). */
@@ -85,6 +97,13 @@ export interface SessionHost {
    * whenever it changes (as /clear starts a new one).
    */
   remember(sessionId: string): void;
+  /**
+   * Transitional (B13 C4, C5, until X10; X11 removes it), for a session that shows each prompt it
+   * raises as one of the events B13 replaces too: installs its `Bridge` as its start begins, before
+   * it raises anything, so that what it raises before its start resolves is shown once too, its
+   * old event standing for it, and answered through the owner (refused until it runs).
+   */
+  bridge?(translate: Bridge): void;
 }
 
 /**
@@ -106,6 +125,13 @@ export interface PromptAnswers {
    * pending as the session closes gets the same nonapproval from the session itself.
    */
   decline(key: string, why: string): void;
+  /**
+   * B13 C7's Not waiting, for a session whose terminal the prompt is answered in: you settled a
+   * wait it raised from its CLI's report alone (no hook described it) as not waiting, so it stops
+   * raising that observation until a distinct wait (a new report, its title leaving and coming
+   * back, a hook's description). Tells its CLI nothing and changes nothing in it; never throws.
+   */
+  dismiss?(key: string): void;
 }
 
 /** A session that runs. The manager calls these with arguments it has validated. */
@@ -116,14 +142,6 @@ export interface LiveSession<M extends SessionMode = PermissionMode> {
   answer(promptId: string, answer: SessionAnswer): Promise<void>;
   /** Answers and declines the prompts it raised (`prompt` events), where its connection raises them. */
   readonly prompts?: PromptAnswers;
-  /**
-   * Transitional (B13 C4, until X10 converts the renderer; X11 removes it), for a session that
-   * also shows each prompt it raises as one of the events B13 replaces: the key of the prompt the
-   * old event `promptId` shows, and `answer` as that prompt takes it, so the core answers it
-   * through its prompt owner. Answers nothing itself. Throws for one no longer asked, or an answer
-   * the prompt doesn't offer.
-   */
-  bridge?(promptId: string, answer: SessionAnswer): { key: string; answer: PromptAnswer };
   /** Interrupts the turn going on, if any: it ends with an 'end' that says so. */
   interrupt(): Promise<void>;
   setMode(mode: M): Promise<void>;

@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { FallbackInputSchema, HandoffInputSchema } from '../model/fallback';
 import { AgentId, OpCanvas } from './ids';
 
-/** B11a inputs: agent.setFallback's (registered, C2) and agent.setHandoff's (C3's, unregistered). */
+/** B11a inputs: agent.setFallback's (C2) and agent.setHandoff's (C3), both registered. */
 export const SetFallbackInput = z.strictObject({
   canvas: OpCanvas,
   agent: AgentId,

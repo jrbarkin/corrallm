@@ -1,6 +1,7 @@
 import type { Party } from '../../shared/api/surface';
 import type { CanvasId } from '../../shared/canvas';
 import type { PartyId } from '../../shared/model/messages';
+import type { PromptReader } from '../../shared/model/prompt-views';
 import type { WindowId } from './host';
 
 /*
@@ -98,6 +99,14 @@ export function partyIdOf(caller: Caller): PartyId {
     case 'outside':
       return `outside:${caller.name}`;
   }
+}
+
+/**
+ * Who reads a prompt, as the one selector of what each reader sees of one (B13 C11) knows them:
+ * you, or any token (whose reach each read boundary decides first). No token is ever you.
+ */
+export function promptReaderOf(caller: Caller): PromptReader {
+  return caller.kind === 'human' ? 'you' : 'token';
 }
 
 /** The canvases a token caller has: an agent its own, an outside orchestrator those it was granted. */

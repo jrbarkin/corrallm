@@ -369,6 +369,31 @@ it('dumps how each message came to be, what a view shows of it and what it resen
   ]);
 });
 
+it('dumps a record’s settled decision decoded, as other JSON columns are', async () => {
+  const record = messages.all()[0];
+  if (record === undefined) throw new Error('No message');
+  const settled = {
+    v: 1,
+    need: 'prompt/a/1/0f1e2d3c-4b5a-4968-8776-655443322110',
+    prompt: { id: '0f1e2d3c-4b5a-4968-8776-655443322110', kind: 'form' },
+    outcome: { type: 'form', action: 'decline' },
+  };
+  await store.write(() => {
+    store
+      .prepare('UPDATE message SET settled = ? WHERE id = ?')
+      .run(JSON.stringify(settled), record.id);
+  });
+  const lines: string[] = [];
+  await dump(store.file, (line) => {
+    lines.push(line);
+    return Promise.resolve();
+  });
+  expect(lines.map((line) => JSON.parse(line) as unknown).at(-1)).toMatchObject({
+    type: 'message',
+    data: { id: record.id, settled },
+  });
+});
+
 it('dumps a schema-3 database without migrating it: its runs and messages as schema 3 kept them', async () => {
   const older = await mkdtemp(path.join(tmpdir(), 'corrallm-dump-3-'));
   try {

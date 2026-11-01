@@ -8,6 +8,7 @@ import type { PartyId } from './messages';
 import type { AgentId } from '../api/ids';
 import type { ConnectionId } from '../adapter';
 import type { FallbackView } from './fallback';
+import type { HandoffView } from './handoff';
 import { MAX_QUESTIONS } from '../session';
 import type { BackgroundTask, SlashCommand, TerminalAsk } from '../session';
 import type { Message, MessageDisplay, MessageOrigin } from './messages';
@@ -15,6 +16,7 @@ import type { QueueItem } from './queue';
 import type { Run } from './run';
 import { isOpen, turnReply } from './session';
 import type { Entry, Session } from './session';
+import { entryFor } from './prompt-views';
 
 /** Wire/view data only. No mutable store, callback or timer is part of a view. */
 export type ReadonlyData<T> = T extends string | number | boolean | null | undefined
@@ -60,6 +62,8 @@ export interface SessionSummary {
   readonly connection: ConnectionId;
   /** Where it is in the fallback chain you set, and whether corrallm switches it (B11a C11). */
   readonly fallback: ReadonlyData<FallbackView> | null;
+  /** Its handoff: when its latest was kept, how long, and its state (B11a C11); no text. */
+  readonly handoff: ReadonlyData<HandoffView> | null;
   readonly status: Session['status'];
   readonly paused: boolean;
   readonly queued: number;
@@ -85,7 +89,7 @@ export interface SessionSummary {
 /** Images are counted for display, never serialized as bytes on the general topic. */
 export type EntryView = ReadonlyData<
   | Exclude<Entry, { kind: 'user' }>
-  | (Omit<Extract<Entry, { kind: 'user' }>, 'images'> & { images?: number })
+  | (Omit<Extract<Entry, { kind: 'user' }>, 'images' | 'promptReply'> & { images?: number })
 >;
 export interface SessionView {
   readonly summary: SessionSummary;
@@ -182,12 +186,14 @@ export function sessionView(
   paused = false,
   previous?: SessionView,
   fallback: FallbackView | null = null,
+  handoff: HandoffView | null = null,
 ): SessionView {
   const last = session.entries.findLast((entry) => entry.kind === 'user');
   const summary: SessionSummary = {
     agent,
     connection,
     fallback,
+    handoff,
     status: session.status,
     paused,
     queued: session.queued.length,
@@ -207,11 +213,10 @@ export function sessionView(
     ...presentationOf(session),
   };
   const entries = Object.fromEntries(
-    session.entries.map((entry): readonly [string, EntryView] => {
-      if (entry.kind !== 'user') return [entry.id, entry];
-      const { images, ...rest } = entry;
-      return [entry.id, images?.length ? { ...rest, images: images.length } : rest];
-    }),
+    session.entries.map((entry): readonly [string, EntryView] => [
+      entry.id,
+      entryFor(entry, 'you'),
+    ]),
   );
   return projectData({ summary, entries, order: session.entries.map(({ id }) => id) }, previous);
 }

@@ -156,6 +156,21 @@ export class Screen {
     return lines.join('\n').trim();
   }
 
+  /** The last `count` rows in view that show anything, top to bottom, without trailing blanks. */
+  lastRows(count: number): string[] {
+    const buffer = this.#terminal.buffer.active;
+    const rows: string[] = [];
+    for (
+      let y = buffer.viewportY + this.#terminal.rows - 1;
+      y >= buffer.viewportY && rows.length < count;
+      y -= 1
+    ) {
+      const row = buffer.getLine(y)?.translateToString(true).trimEnd() ?? '';
+      if (row.trim() !== '') rows.unshift(row);
+    }
+    return rows;
+  }
+
   /**
    * The rows in view, for a CLI's reading: the active buffer, where its view starts and ends, and
    * whether its cursor shows.

@@ -333,6 +333,7 @@ export class ConnectedDriver implements SessionDriver {
               id: event.id,
               kind: 'user',
               text: event.text,
+              ...(event.promptReply ? { promptReply: true } : {}),
               reached: true,
               conversation: this.#catalog.adapterOf(this.connection),
             },

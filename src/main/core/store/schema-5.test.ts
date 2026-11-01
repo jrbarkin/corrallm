@@ -23,7 +23,8 @@ import { madeAtSchema, openTestStore, readOnDisk, writeOnDisk } from './test-sto
 
 /** No timers: nothing checkpoints or takes a snapshot while a test compares the database. */
 const QUIET: StoreDeps = { ...SYSTEM_DEPS, later: () => () => undefined };
-const LATEST = { version: SCHEMA, minReader: SCHEMA };
+/** The schema a profile is migrated to as it opens, and the oldest that may open it then. */
+const LATEST = { version: SCHEMA, minReader: MIGRATIONS.at(-1)?.minReader };
 
 const CANVAS = '0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b' as CanvasId;
 const REPOSITORY = '7c0e9a1e-1b6f-4b4f-9f3a-2d1c0b9a8e70';
