@@ -198,6 +198,8 @@ async function start(codex: Connector<SessionMode>, claude: Connector<SessionMod
       distribution: 'local',
       directoryResolver: legacyDirectories,
       sessions: {
+        // Its agent callers are made up: no session authority issued them.
+        callers: () => true,
         connectors: { 'codex.app-server': codex, 'claude-code.terminal': claude },
         environment: () => Promise.resolve({}),
       },
@@ -1029,7 +1031,7 @@ it('a resumed conversation never previews an accepted handoff, after its request
     CALLERS.you,
     ORCHESTRATOR,
     { ...ORCHESTRATOR, access: 'read' },
-    { kind: 'agent', canvas: CANVAS, agent: 'worker', session: 'resumed-worker' },
+    { kind: 'agent', canvas: CANVAS, agent: 'worker', generation: 1, session: 'resumed-worker' },
   ];
   for (const caller of callers) {
     const read = await restarted.call('session.get', { canvas: CANVAS, agent: 'worker' }, caller);
@@ -1113,6 +1115,7 @@ it.each([
     kind: 'agent',
     canvas: CANVAS,
     agent: 'helper',
+    generation: 1,
     session: 'helper-session',
   } as const;
   expect(

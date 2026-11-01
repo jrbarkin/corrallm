@@ -386,7 +386,7 @@ describe('canvas.create', () => {
       access: 'write',
     });
     const before = core.clientOf(token);
-    expect(before?.canvases).toEqual([TEAM]);
+    expect(before).toMatchObject({ canvases: [TEAM] });
     if (before === undefined) throw new Error('The token isn’t kept.');
     const { canvas } = (await applied('canvas.create', {}, before)) as {
       canvas: CanvasId;
@@ -415,7 +415,7 @@ describe('canvas.create', () => {
     // Across a restart too.
     await core.close();
     core = await start();
-    expect(core.clientOf(renewal)?.canvases).toEqual([TEAM, canvas]);
+    expect(core.clientOf(renewal)).toMatchObject({ canvases: [TEAM, canvas] });
   });
 
   it('marks the text a token’s values filled in as the token’s, and checks its agents as R11 does', async () => {
@@ -751,7 +751,7 @@ describe('R4: what a token may not discard comes to you as a proposal', () => {
       if (canvas === undefined) throw new Error('Allow made no canvas.');
       expect(createdBy(canvas)).toBe('outside:orchestrator');
       const after = core.clientOf(token);
-      if (after === undefined) throw new Error('The token isn’t kept.');
+      if (after?.kind !== 'outside') throw new Error('The token isn’t kept.');
       expect(after.canvases).toContain(canvas);
       expect(Object.keys(await listed(after))).toContain(canvas);
       await applied('canvas.get', { canvas }, after);

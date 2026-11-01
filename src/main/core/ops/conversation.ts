@@ -83,7 +83,8 @@ export function conversationOps(
             state: stateOf(open, id),
             prompts: promptsOf(open, id),
             linked: reach.filter((other) => other !== id && areLinked(document.links, id, other)),
-            api: false,
+            // Observed, never claimed: its session's generation listed corrallm's tools.
+            api: services.listed?.(document.id, id) === true,
             fallback: fallbackOf(open, id),
             handoff: handoffOf(open, id),
           };

@@ -51,6 +51,13 @@ export const TOKEN_REPLACED =
   'This token was replaced, revoked or expired: call with the token its maker has now (corrallm token renew).';
 
 /**
+ * What a call of one of corrallm's own agents is refused with (`refused`) once the session
+ * generation its credential was issued for has ended (restarted, closed, switched, its agent
+ * deleted): the credential works only for that generation's life.
+ */
+export const SESSION_ENDED = 'This session has ended; its credential no longer works.';
+
+/**
  * What a token's `wait` is refused with (`refused`) while it has as many going as it may
  * (TOKEN_WAITS): a refusal that passes, which `corrallm wait` tells apart by these words.
  */

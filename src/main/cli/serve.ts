@@ -172,6 +172,9 @@ export async function serveCommand(command: ServeCommand, io: ServeIO): Promise<
       core: opened,
       clientOf: (token) => opened.clientOf(token),
       stale: (token) => opened.tokens.stale(token),
+      listed: (caller) => {
+        opened.listed(caller);
+      },
       settings: opened.settings,
       changed: (status) => {
         opened.served(status);

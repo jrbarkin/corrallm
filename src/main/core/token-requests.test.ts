@@ -136,7 +136,7 @@ describe('a token request the core that owns the profile answers', () => {
     const renewed = tokenOf(renewal);
     expect(owner.clientOf(old)).toBeUndefined();
     expect(owner.tokens.stale(old)).toBe(true);
-    expect(owner.clientOf(renewed)?.canvases).toEqual([CANVAS]);
+    expect(owner.clientOf(renewed)).toMatchObject({ canvases: [CANVAS] });
 
     expect(await owner.tokenRequest({ version: 1, op: 'revoke', name: 'bot' }, host)).toEqual({
       ok: true,
@@ -175,7 +175,7 @@ describe('a token request with no owner', () => {
     expect(existsSync(path.join(profile, 'core.lock'))).toBe(false);
     // The owner that starts next serves it.
     const owner = await start();
-    expect(owner.clientOf(token)?.name).toBe('bot');
+    expect(owner.clientOf(token)).toMatchObject({ name: 'bot' });
   });
 
   it('makes and renews a --no-merge token as one, which the owner that starts next serves as one', async () => {
@@ -212,7 +212,7 @@ describe('a token request with no owner', () => {
     );
     const owner = await start();
     expect(owner.clientOf(old)).toBeUndefined();
-    expect(owner.clientOf(renewed)?.name).toBe('bot');
+    expect(owner.clientOf(renewed)).toMatchObject({ name: 'bot' });
     await owner.close();
     core = undefined;
 

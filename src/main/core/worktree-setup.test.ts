@@ -88,6 +88,8 @@ beforeEach(async () => {
       distribution: 'local',
       limitsClock: () => (clock += 1000),
       sessions: {
+        // Its agent callers are made up: no session authority issued them.
+        callers: () => true,
         connectors: { 'codex.app-server': new FakeConnector({ adapter: 'codex' }) },
         environment: () => Promise.resolve(env),
       },

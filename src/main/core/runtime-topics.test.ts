@@ -43,11 +43,18 @@ import type { RuntimeSnapshot } from './topics';
  * each within a frame; revisions never skip, and a new core is a new epoch.
  */
 
-const LEAD: AgentCaller = { kind: 'agent', canvas: CANVAS, agent: 'lead', session: 'lead-session' };
+const LEAD: AgentCaller = {
+  kind: 'agent',
+  canvas: CANVAS,
+  agent: 'lead',
+  generation: 1,
+  session: 'lead-session',
+};
 const WORKER: AgentCaller = {
   kind: 'agent',
   canvas: CANVAS,
   agent: 'worker',
+  generation: 1,
   session: 'worker-session',
 };
 const WRITER = CALLERS['outside-write'] as OutsideCaller;
@@ -129,6 +136,8 @@ async function start(
       directoryResolver: legacyDirectories,
       leads,
       sessions: {
+        // Its agent callers are made up: no session authority issued them.
+        callers: () => true,
         connectors: { 'codex.app-server': connector },
         environment: () => Promise.resolve({}),
       },

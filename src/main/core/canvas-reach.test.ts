@@ -80,6 +80,8 @@ async function world() {
         },
       },
       sessions: {
+        // Its agent callers are made up: no session authority issued them.
+        callers: () => true,
         connectors: { 'codex.app-server': new FakeConnector({ adapter: 'codex' }) },
         environment: () => Promise.resolve({}),
       },

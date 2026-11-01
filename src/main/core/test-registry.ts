@@ -246,12 +246,14 @@ export const CALLERS: Readonly<Record<Party, Caller>> = {
     kind: 'agent',
     canvas: CANVAS,
     agent: 'lead',
+    generation: 1,
     session: 'lead-session',
   } satisfies AgentCaller,
   worker: {
     kind: 'agent',
     canvas: CANVAS,
     agent: 'worker',
+    generation: 1,
     session: 'worker-session',
   } satisfies AgentCaller,
   'outside-read': {

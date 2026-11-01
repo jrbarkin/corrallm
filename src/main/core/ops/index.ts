@@ -130,6 +130,11 @@ export interface OpServices {
   /** The outside tokens: whether one was replaced or expires, as a call it made still goes on. */
   tokens: Pick<TokenStore, 'revoked' | 'onRevoke' | 'expiresOf'>;
   /**
+   * Whether the agent's session now has listed corrallm's tools, as the session authority heard
+   * it (B21 §9 C1): `agents`' `api`. None: no agent's has.
+   */
+  listed?: (canvas: CanvasId, agent: string) => boolean;
+  /**
    * The worktrees' setup (workspaces/setup.ts): its cards, their answers and the setup command you
    * set. Composed by createCore; isolated implementation tests may omit it.
    */

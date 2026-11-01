@@ -127,7 +127,8 @@ export const conversationOps = {
     summary:
       'The agents you reach on the canvas: each one’s id, name, adapter and connection, how it is ' +
       'now, how many prompts of its own wait for an answer, the agents it is linked to, ' +
-      'where it is in its fallback chain, and its handoff’s state.',
+      'whether its session has listed corrallm’s tools (api), where it is in its fallback ' +
+      'chain, and its handoff’s state.',
     input: z.strictObject({ canvas }),
     output: z.strictObject({
       agents: z.array(

@@ -36,7 +36,13 @@ const ORCHESTRATOR: OutsideCaller = {
 };
 const YOU = CALLERS.you;
 /** The Reviewer, as its own session's token. */
-const REVIEWER: AgentCaller = { kind: 'agent', canvas: CANVAS, agent: 'b', session: 'b-session' };
+const REVIEWER: AgentCaller = {
+  kind: 'agent',
+  canvas: CANVAS,
+  agent: 'b',
+  generation: 1,
+  session: 'b-session',
+};
 const COMMAND = 'rm -rf build # private-command-text';
 const URL_SECRET = 'https://signin.example.test/link?token=private-signin-secret';
 
@@ -139,6 +145,8 @@ async function start(connector: Connector<SessionMode>): Promise<Core> {
       distribution: 'local',
       directoryResolver: legacyDirectories,
       sessions: {
+        // Its agent callers are made up: no session authority issued them.
+        callers: () => true,
         connectors: { 'claude-code.sdk': connector },
         environment: () => Promise.resolve({}),
       },

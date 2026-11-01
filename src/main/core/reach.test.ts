@@ -58,7 +58,13 @@ const DOCUMENT: CanvasDocument = {
   links: [],
 };
 
-const LEAD: AgentCaller = { kind: 'agent', canvas: CANVAS, agent: 'lead', session: 'lead-session' };
+const LEAD: AgentCaller = {
+  kind: 'agent',
+  canvas: CANVAS,
+  agent: 'lead',
+  generation: 1,
+  session: 'lead-session',
+};
 const ORCHESTRATOR: OutsideCaller = {
   kind: 'outside',
   token: 'write-token',

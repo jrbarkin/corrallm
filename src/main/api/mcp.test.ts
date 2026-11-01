@@ -364,6 +364,28 @@ describe('the MCP server’s tools', () => {
     },
   );
 
+  it('tells who listed its tools only for an agent’s session, as it lists them, never a call or an outside token', async () => {
+    const heard: TokenCaller[] = [];
+    await server.close();
+    server = await startApiServer({
+      core,
+      clientOf,
+      listed: (caller) => {
+        heard.push(caller);
+      },
+      port: 0,
+    });
+    const outside = await connect('write-token');
+    await outside.listTools();
+    expect(heard).toEqual([]);
+    const worker = await connect('worker-token');
+    expect(heard).toEqual([]);
+    await worker.callTool({ name: 'test_read', arguments: {} });
+    expect(heard).toEqual([]);
+    await worker.listTools();
+    expect(heard).toEqual([CALLERS.worker]);
+  });
+
   it('gives instructions that stand alone in what Codex reads of them, 512 characters', async () => {
     const client = await connect();
     const instructions = client.getInstructions() ?? '';
@@ -470,6 +492,12 @@ describe('the MCP server on the registry', () => {
         check: true,
         distribution: 'local',
         leads: isLead,
+        // Its agent callers are made up: no session authority issued them.
+        sessions: {
+          connectors: {},
+          environment: () => Promise.resolve({}),
+          callers: () => true,
+        },
       },
       NO_DESKTOP,
     );

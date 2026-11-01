@@ -1,9 +1,10 @@
 import { TOKEN_IN_FLIGHT, TOKEN_WAITS, TOKEN_WRITES_PER_SECOND } from '../../shared/api/limits';
 
 /*
- * The limits per token (Core Server §6.7): at most TOKEN_IN_FLIGHT calls in flight and
- * TOKEN_WRITES_PER_SECOND writes in any second, so a runaway or hijacked client can't load the
- * core. A call that waits for what comes (a long poll, `wait`) counts apart, against TOKEN_WAITS:
+ * The limits per token (Core Server §6.7), kept by `callerKey` (an outside token's id; for one of
+ * corrallm's agents the logical agent, across its sessions' generations): at most TOKEN_IN_FLIGHT
+ * calls in flight and TOKEN_WRITES_PER_SECOND writes in any second, so a runaway or hijacked
+ * client can't load the core. A call that waits for what comes (a long poll, `wait`) counts apart, against TOKEN_WAITS:
  * a token waiting on each of its workers still makes its other calls. core.call admits each
  * token's call here; you are never limited.
  */

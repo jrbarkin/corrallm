@@ -72,7 +72,13 @@ const entities: Entities = Object.fromEntries(
       : { ...row, rev: 1, by: 'you' }) as Entity,
   ]),
 );
-const lead: AgentCaller = { kind: 'agent', canvas, agent: 'lead', session: 'lead-session' };
+const lead: AgentCaller = {
+  kind: 'agent',
+  canvas,
+  agent: 'lead',
+  generation: 1,
+  session: 'lead-session',
+};
 const outside: OutsideCaller = {
   kind: 'outside',
   token: 'token',

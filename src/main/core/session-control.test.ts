@@ -176,6 +176,8 @@ async function start(
       // The builder leads (B24's leads, as tests say them): it may call what a lead may.
       leads: (_canvas, agent) => agent === 'a',
       sessions: {
+        // Its agent callers are made up: no session authority issued them.
+        callers: () => true,
         connectors: { 'claude-code.sdk': restoring(sdk), 'claude-code.terminal': terminal },
         environment: () => Promise.resolve({}),
         // Never the user's own: what the test says Claude Code keeps for the folder.
@@ -291,7 +293,7 @@ describe('rewind and R5', () => {
       core,
       'session.rewind',
       { agent: 'a', message, restore: 'code' },
-      { kind: 'agent', canvas: CANVAS, agent: 'a', session: 'a-session' },
+      { kind: 'agent', canvas: CANVAS, agent: 'a', generation: 1, session: 'a-session' },
     );
     expect(own.code).toBe('refused');
     expect(own.sentence).toMatch(/on itself/);
@@ -402,7 +404,13 @@ describe('reach', () => {
     const own = await turn(core, 'a', 'Write the app');
     const others = await turn(core, 'b', 'Review it');
     // The builder leads, reaching itself alone here (nothing is linked to it).
-    const lead = { kind: 'agent', canvas: CANVAS, agent: 'a', session: 'a-session' } as const;
+    const lead = {
+      kind: 'agent',
+      canvas: CANVAS,
+      agent: 'a',
+      generation: 1,
+      session: 'a-session',
+    } as const;
     expect(
       await ok(core, 'session.rewindPreview', { agent: 'a', message: own }, lead),
     ).toMatchObject({ possible: true });
@@ -684,7 +692,13 @@ describe('your messages (R22, B11 §16.6)', () => {
 
 describe('conversations, resume and options', () => {
   const NEWER = '6e2f8d4b-0c3a-4f7e-9b2d-4a5f6e7d8c9b';
-  const AGENT_A = { kind: 'agent', canvas: CANVAS, agent: 'a', session: 'a-session' } as const;
+  const AGENT_A = {
+    kind: 'agent',
+    canvas: CANVAS,
+    agent: 'a',
+    generation: 1,
+    session: 'a-session',
+  } as const;
 
   it('lists the agent’s conversations in its workspace, and resumes one only for a caller it was listed to', async () => {
     kept = [
@@ -884,7 +898,7 @@ describe('MCP servers (/mcp)', () => {
       for (const server of ['corrallm-server', 'corrallm'])
         for (const caller of [
           ORCHESTRATOR,
-          { kind: 'agent', canvas: CANVAS, agent: 'a', session: 'lead-session' },
+          { kind: 'agent', canvas: CANVAS, agent: 'a', generation: 1, session: 'lead-session' },
         ] as const) {
           const error = await fails(
             core,
@@ -917,7 +931,7 @@ describe('MCP servers (/mcp)', () => {
         core,
         'session.changeMcpServer',
         { agent: 'a', server: 'sentry', change: 'disable' },
-        { kind: 'agent', canvas: CANVAS, agent: 'a', session: 'a-session' },
+        { kind: 'agent', canvas: CANVAS, agent: 'a', generation: 1, session: 'a-session' },
       ),
     ).toMatchObject({ code: 'refused' });
     // A Terminal's are its terminal's own /mcp.

@@ -3,10 +3,11 @@ import { readFile, realpath, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import path from 'node:path';
 
+import { connectionIn } from '../../shared/adapter';
 import type { AdapterId, ConnectionId, UsageBackendId } from '../../shared/adapter';
 import { canvasIdOf } from '../../shared/canvas';
 import type { CanvasId } from '../../shared/canvas';
-import { TOKEN_REPLACED } from '../../shared/api/errors';
+import { SESSION_ENDED, TOKEN_REPLACED } from '../../shared/api/errors';
 import type { OpResult } from '../../shared/api/errors';
 import type { ApiStatus } from '../../shared/api/ops/settings';
 import { MAX_CREATED_AGENTS } from '../../shared/api/limits';
@@ -66,6 +67,7 @@ import type { WatchFolder } from './canvas/watch';
 import { seesAll, viewOf } from './canvas/view';
 import { TerminalEvents } from './terminal-events';
 import { Windows } from './windows';
+import { SessionAuthority } from './agent-api';
 import { createDispatcher, OpFailure } from './call';
 import type { Dispatcher } from './call';
 import { readBranchDiff } from './workspaces/diff';
@@ -76,7 +78,7 @@ import { listWorktrees } from './workspaces/list';
 import { gitReads, MergeObserver } from './workspaces/observe';
 import type { Viewer, WorktreeListing } from './workspaces/list';
 import type { CanvasDocument } from '../../shared/model/canvas';
-import type { Caller, OutsideCaller } from './caller';
+import type { AgentCaller, Caller, TokenCaller } from './caller';
 import { HandoffTable } from './delivery/handoffs';
 import { MessageTable } from './delivery/messages';
 import { Engines, needsInput } from './engines';
@@ -198,6 +200,18 @@ export interface CoreConfig {
     options?: Readonly<Partial<Record<AdapterId, OptionsReader>>>;
     /** What lists (and forks) each adapter's kept conversations, instead of its CLI's own files. */
     conversations?: Readonly<Partial<Record<AdapterId, Conversations>>>;
+    /**
+     * Each connection's route for corrallm's agent API, instead of its descriptor's `api` (null on
+     * every connection until its recording): for the session authority's own tests.
+     */
+    api?: Readonly<Partial<Record<ConnectionId, 'http' | 'channel' | null>>>;
+    /**
+     * For tests that call as an agent they made up, whose session's credential the session
+     * authority never issued: whether such a caller holds its authority. A credential the
+     * authority issued is checked as always; production composes none, so a caller it didn't
+     * issue never holds.
+     */
+    callers?: (caller: AgentCaller) => boolean;
   };
   /**
    * For tests, overriding the composed service: the worktrees' setup service, made over the
@@ -248,11 +262,19 @@ export interface Core extends Dispatcher {
   /** The outside tokens, kept in the profile's tokens.json. */
   tokens: TokenStore;
   /**
-   * The outside orchestrator a token names, if it is one that hasn't expired: reaching the
-   * canvases it was granted, and those its party made (canvas.create: document.created_by),
-   * kept across renewals.
+   * Who a bearer token names, for the endpoint (B21 §9 C2): the current generation of one of its
+   * agents' sessions, by the session authority's credential; else the outside orchestrator a
+   * token names, if it is one that hasn't expired, reaching the canvases it was granted and those
+   * its party made (canvas.create: document.created_by), kept across renewals. A credential is one
+   * or the other.
    */
-  clientOf(token: string): OutsideCaller | undefined;
+  clientOf(token: string): TokenCaller | undefined;
+  /**
+   * The endpoint heard an agent's session generation list corrallm's tools (an http `tools/list`
+   * with its credential): `agents` reports that agent's `api` from then on, while that generation
+   * is its session.
+   */
+  listed(caller: AgentCaller): void;
   /**
    * Answers what `corrallm token new|renew|revoke` asks over the token socket (Build Plan B30), as
    * `owner` (the app or `corrallm serve`), whose MCP server listens at `url` (null: none, and
@@ -668,6 +690,23 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
         });
     },
   });
+  // The session authority (B21 §9 C1, C2): the one issuer of the credentials and channels agents
+  // call corrallm's MCP server by, each for one generation of its session, while the endpoint
+  // listens; handed to the session manager alone, which issues and revokes them.
+  const authority = new SessionAuthority({
+    route: (connection) => {
+      const given = config.sessions?.api;
+      if (given !== undefined && Object.hasOwn(given, connection)) return given[connection] ?? null;
+      return connectionIn(CATALOG, connection)?.connection.api ?? null;
+    },
+    url: () => (api.state === 'listening' ? api.url : undefined),
+    core: () => dispatcher,
+    generationOf: (canvas, agent) => sessions.generationOf(canvas, agent),
+    onCanvas: (canvas, agent) =>
+      documents
+        .loaded(canvas)
+        ?.document.nodes.some((node) => node.id === agent && node.type === 'agent') === true,
+  });
   const sessions: SessionManager = new SessionManager({
     catalog: CATALOG,
     connectors:
@@ -725,6 +764,7 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
       observer.agent(canvas, agent);
     },
     prompts,
+    api: authority,
     // A restore of a tree holds new work for the other agents working in it until it is done.
     gate: {
       onAvailability: (listener) => gate.subscribe(listener),
@@ -1410,6 +1450,7 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
           isLead,
           host,
           tokens,
+          listed: (canvas, agent) => authority.hasListed(canvas, agent),
           ...(config.locale === undefined ? {} : { locale: config.locale }),
           setups,
           workspaceReplies: [changes.handler()],
@@ -1467,10 +1508,17 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
       holds: holder(engines),
       publication: topics,
       ...(config.limitsClock === undefined ? {} : { now: config.limitsClock }),
-      // An outside token holds its authority only while it works (B21 §9 C2): a call it has going
-      // is refused at its next seam once the token is replaced, revoked or expires.
-      current: (caller) =>
-        caller.kind === 'outside' && tokens.revoked(caller.token) ? TOKEN_REPLACED : undefined,
+      // A token's caller holds its authority only while its token works (B21 §9 C2): an outside
+      // token until it is replaced, revoked or expires; an agent's credential while its session's
+      // generation is the agent's and the agent is on the canvas. A call either has going is
+      // refused at its next seam once it no longer does.
+      current: (caller) => {
+        if (caller.kind === 'outside')
+          return tokens.revoked(caller.token) ? TOKEN_REPLACED : undefined;
+        return authority.current(caller) || config.sessions?.callers?.(caller) === true
+          ? undefined
+          : SESSION_ENDED;
+      },
     },
   );
   // A setup that was running as the last core stopped is interrupted, after the process owner's
@@ -1627,10 +1675,15 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     notificationStatus: () => notifier?.status(),
     tokens,
     clientOf: (token) => {
+      const agent = authority.lookup(token);
+      if (agent !== undefined) return agent;
       const caller = tokens.clientOf(token);
       if (caller === undefined) return undefined;
       const made = documents.createdBy(`outside:${caller.name}`);
       return { ...caller, canvases: [...new Set([...caller.canvases, ...made])] };
+    },
+    listed: (caller) => {
+      authority.listed(caller);
     },
     tokenRequest: (request, { owner, url, unserved }) =>
       answerTokenRequest(request, {

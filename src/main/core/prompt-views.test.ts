@@ -41,6 +41,7 @@ const agent = (id: string): AgentCaller => ({
   kind: 'agent',
   canvas: CANVAS,
   agent: id,
+  generation: 1,
   session: `${id}-session`,
 });
 /** A lead linked to the Reviewer and the Worker: it reaches them, their transcripts too. */
@@ -215,6 +216,8 @@ async function start(connector: Connector<SessionMode>): Promise<Core> {
       directoryResolver: legacyDirectories,
       leads: (_canvas, id) => id === 'l',
       sessions: {
+        // Its agent callers are made up: no session authority issued them.
+        callers: () => true,
         connectors: {
           'claude-code.sdk': connector,
           // The Worker's CLI asks before it runs a command, and plays /question and /plan.

@@ -852,7 +852,7 @@ describe('who asks', () => {
       requester: 'outside:orchestrator',
     });
     expect(() =>
-      mergeCallerOf({ kind: 'agent', canvas: CANVAS, agent: 'a', session: 's' }),
+      mergeCallerOf({ kind: 'agent', canvas: CANVAS, agent: 'a', generation: 1, session: 's' }),
     ).toThrow();
     expect(() =>
       mergeCallerOf({

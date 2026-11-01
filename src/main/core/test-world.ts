@@ -586,6 +586,8 @@ export async function startWorld(): Promise<{
           },
         },
         environment: () => Promise.resolve(env),
+        // Its lead and worker are callers it made up (CALLERS), whose sessions it doesn't run.
+        callers: () => true,
         // Never the user's own conversations: the world's, for its folder.
         conversations: {
           [CONTROL.adapter.id]: {

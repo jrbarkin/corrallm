@@ -7,6 +7,7 @@ import { MAX_CONVERSATIONS, MAX_CONVERSATION_LABEL } from '../../shared/session'
 import type { AdapterId, Catalog, ConnectionId } from '../../shared/adapter';
 import type { CanvasId } from '../../shared/canvas';
 import type { AgentId, NeedId } from '../../shared/api/ids';
+import type { AgentApi } from '../core/agent-api';
 import { quotedName } from '../core/parties';
 import type { DirectoryResolver, WorkingDirectory, WorkspaceId } from '../core/workspaces/resolver';
 import type {
@@ -72,6 +73,9 @@ const NO_TASKS = 'This agent’s background tasks are stopped in its terminal.';
 const NO_OPTIONS = 'corrallm can’t read that agent’s settings.';
 const STARTING = 'This agent’s session is still starting: answer once it runs.';
 const UNHEARD = 'corrallm declined this request: nothing in corrallm hears what this session asks.';
+/** What a session's transcript says, once, when its connection takes corrallm's server but none was issued. */
+const NO_API =
+  'corrallm’s MCP server isn’t listening, so this session started without corrallm’s tools.';
 /** How long a session may take to close before the manager stops waiting for it. */
 const CLOSE_MS = 5000;
 /** All connections have this long to spawn, handshake and finish their first ready state. */
@@ -198,6 +202,14 @@ export interface SessionManagerDeps {
    * generation's end. None: whatever a session raises is declined at once.
    */
   prompts?: PromptSink;
+  /**
+   * The core's session authority (core/agent-api.ts, B21 §9 C1, C2), its one issuer of the routes
+   * agents call corrallm's MCP server by: asked for each generation's as it launches, after its
+   * folder is admitted and its conversation claimed, before its connector starts; told each
+   * generation's end beside every end of its prompts, as its close begins. None: no session gets
+   * corrallm's server.
+   */
+  api?: Pick<AgentApi, 'issue' | 'revoke'>;
   /** Sends a terminal event to the view showing the canvas's agent's terminal. */
   terminal?: (canvas: CanvasId, agentId: string, event: TerminalEvent) => void;
   /** The live claims on native conversations (claims.ts): the core's one, else the manager's own. */
@@ -382,8 +394,8 @@ export class SessionManager {
         agents.delete(agentId);
         this.#deps.ended?.(canvas, agentId);
       }
-      // What it raised as it started ends with it.
-      this.#deps.prompts?.gone(canvas, agentId, agent.generation);
+      // What it raised as it started ends with it, and so does its credential.
+      this.#gone(canvas, agentId, agent.generation);
       throw error;
     }
     // A view waiting to show the agent's terminal shows this session's.
@@ -1134,9 +1146,10 @@ export class SessionManager {
           if (event.type === 'cleared') agent.tasks = 0;
           if (event.type === 'closed') {
             this.#agents.get(canvas)?.delete(agentId);
-            // It stopped by itself: what it ran is no longer its, nor what it asked.
+            // It stopped by itself: what it ran is no longer its, nor what it asked, nor its
+            // credential.
             this.#claims.release(owner);
-            this.#deps.prompts?.gone(canvas, agentId, agent.generation);
+            this.#gone(canvas, agentId, agent.generation);
           }
           this.#deps.emit(canvas, agentId, connection, event);
         },
@@ -1174,9 +1187,33 @@ export class SessionManager {
           text: `This agent’s conversation is open in ${this.#holderIn(canvas, holder)}, so it started a new one: two agents never share one conversation.`,
         });
       }
+      // This generation's route to corrallm's server, from the core's one issuer: only while it
+      // is still the agent's session (one whose close began meanwhile was revoked already).
+      const api = live()
+        ? this.#deps.api?.issue({
+            canvas,
+            agent: agentId,
+            generation: agent.generation,
+            connection,
+          })
+        : undefined;
+      if (
+        api === undefined &&
+        this.#deps.api !== undefined &&
+        live() &&
+        (connectionIn(this.#deps.catalog, connection)?.connection.api ?? null) !== null
+      ) {
+        this.#deps.emit(canvas, agentId, connection, {
+          type: 'notice',
+          id: randomUUID(),
+          level: 'warning',
+          text: NO_API,
+        });
+      }
       const session = await this.#start(
         connector,
         {
+          ...(api === undefined ? {} : { api }),
           agentId,
           cwd: directory.cwd,
           env,
@@ -1199,6 +1236,8 @@ export class SessionManager {
       const now = await this.#deps.directories.workingDirectory(canvas, agentId as AgentId);
       if (now.state !== 'ready' || !sameBinding(now, binding)) {
         agent.unheard = true;
+        // Unheard, it is ending: its credential ends now, before its close.
+        this.#deps.api?.revoke(canvas, agentId, agent.generation);
         await session.close().catch((error: unknown) => {
           console.error(`Could not close ${agentId}'s session:`, error);
         });
@@ -1244,6 +1283,7 @@ export class SessionManager {
           timer = setTimeout(() => {
             expired = true;
             agent.unheard = true;
+            this.#deps.api?.revoke(canvas, agentId, agent.generation);
             const found = connectionIn(this.#deps.catalog, agent.connection);
             const connection =
               found === undefined
@@ -1298,6 +1338,15 @@ export class SessionManager {
   /** A generation reserved for the agent's next session, which takes over what it reserves. */
   #reservation(canvas: CanvasId, agentId: string): ClaimOwner {
     return { canvas, agent: agentId, generation: this.#generation() };
+  }
+
+  /**
+   * A generation ended, whatever ended it: its credential is revoked (B21 §9 C2), then its prompts
+   * end. Both say it again harmlessly.
+   */
+  #gone(canvas: CanvasId, agentId: string, generation: number): void {
+    this.#deps.api?.revoke(canvas, agentId, generation);
+    this.#deps.prompts?.gone(canvas, agentId, generation);
   }
 
   #generation(): number {
@@ -1484,8 +1533,8 @@ export class SessionManager {
       this.#deps.ended?.(canvas, agentId);
     }
     // Its prompts end as its close begins: the session answers each still pending with its
-    // nonapproval as it closes, and none is answered meanwhile.
-    this.#deps.prompts?.gone(canvas, agentId, agent.generation);
+    // nonapproval as it closes, and none is answered meanwhile. Its credential ends with them.
+    this.#gone(canvas, agentId, agent.generation);
     if (tell) this.#deps.emit(canvas, agentId, agent.connection, { type: 'closed' });
     let session: LiveSession<SessionMode>;
     try {

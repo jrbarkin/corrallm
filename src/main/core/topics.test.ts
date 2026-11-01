@@ -55,7 +55,12 @@ describe('T3c: usage and settings topics', () => {
         check: true,
         distribution: 'local',
         directoryResolver: legacyDirectories,
-        sessions: { connectors: {}, environment: () => Promise.resolve({}) },
+        sessions: {
+          connectors: {},
+          environment: () => Promise.resolve({}),
+          // Its agent callers are made up: no session authority issued them.
+          callers: () => true,
+        },
       },
       NO_DESKTOP,
     );
@@ -177,7 +182,12 @@ describe('T3c: usage and settings topics', () => {
         check: true,
         distribution: 'local',
         directoryResolver: legacyDirectories,
-        sessions: { connectors: {}, environment: () => Promise.resolve({}) },
+        sessions: {
+          connectors: {},
+          environment: () => Promise.resolve({}),
+          // Its agent callers are made up: no session authority issued them.
+          callers: () => true,
+        },
       },
       NO_DESKTOP,
     );

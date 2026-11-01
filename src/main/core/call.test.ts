@@ -171,19 +171,25 @@ describe('the authority stamp (current)', () => {
     expect(await core.call('test.yours', {}, CALLERS.you)).toMatchObject({ ok: true });
   });
 
-  it('refuses an outside call admitted before its token ended, queued in a scope, when it runs', async () => {
-    const { core, registry, ended, entered, release } = stamped();
-    const held = core.call('test.hold', { canvas: CANVAS, agent: 'peer' }, CALLERS.you);
-    await entered.promise;
-    const waiting = core.call('test.message', message(), outside);
-    // Admitted: it waits in peer's scope behind the held call.
-    await Promise.resolve();
-    ended.add(outside);
-    release.resolve(undefined);
-    await held;
-    expect(await waiting).toEqual({ ok: false, error: { code: 'refused', sentence: ENDED } });
-    expect(registry.calls['test.message']).toEqual([]);
-  });
+  it.each([
+    ['an outside token', outside],
+    ['an agent session generation', CALLERS.worker],
+  ] as const)(
+    'refuses a call of %s admitted before it ended, queued in a scope, when it runs',
+    async (_label, caller) => {
+      const { core, registry, ended, entered, release } = stamped();
+      const held = core.call('test.hold', { canvas: CANVAS, agent: 'peer' }, CALLERS.you);
+      await entered.promise;
+      const waiting = core.call('test.message', message(), caller);
+      // Admitted: it waits in peer's scope behind the held call.
+      await Promise.resolve();
+      ended.add(caller);
+      release.resolve(undefined);
+      await held;
+      expect(await waiting).toEqual({ ok: false, error: { code: 'refused', sentence: ENDED } });
+      expect(registry.calls['test.message']).toEqual([]);
+    },
+  );
 
   it('refuses it after an awaited rule, at its point of no return and as its commit builds', async () => {
     const gate = Promise.withResolvers<undefined>();
@@ -1152,6 +1158,32 @@ describe('core.call', () => {
     expect((await core.call('test.read', {}, caller)).ok).toBe(true);
   });
 
+  it('keeps one agent’s limits and repeated requests by the agent, across its sessions’ generations', async () => {
+    let now = 1000;
+    const { core, calls } = setup({ now: () => now });
+    const worker = CALLERS.worker as AgentCaller;
+    // The same agent's session restarted: another generation, another session id.
+    const restarted: AgentCaller = { ...worker, generation: 2, session: 'worker-session-2' };
+    const first = await core.call('test.message', message({ request: REQUEST }), worker);
+    expect(await core.call('test.message', message({ request: REQUEST }), restarted)).toEqual(
+      first,
+    );
+    expect(calls['test.message']).toHaveLength(1);
+    // Its writes a second count together, whichever generation made them (the two above too).
+    for (let i = 2; i < TOKEN_WRITES_PER_SECOND; i++) {
+      const caller = i % 2 === 0 ? worker : restarted;
+      expect((await core.call('test.message', message(), caller)).ok).toBe(true);
+    }
+    expect(await core.call('test.message', message(), restarted)).toEqual({
+      ok: false,
+      error: { code: 'refused', sentence: 'Too many calls; slow down.' },
+    });
+    // Another agent is its own.
+    expect((await core.call('test.message', message(), CALLERS.lead)).ok).toBe(true);
+    now += 1000;
+    expect((await core.call('test.message', message(), worker)).ok).toBe(true);
+  });
+
   it('limits a token’s writes a second, never its reads, and never yours', async () => {
     let now = 1000;
     const { core } = setup({ now: () => now });
@@ -1233,7 +1265,13 @@ describe('core.call', () => {
   it('reads a caller’s party on every call', async () => {
     let leads = true;
     const { core } = setup({ isLead: () => leads });
-    const helper: Caller = { kind: 'agent', canvas: CANVAS, agent: 'lead', session: 's' };
+    const helper: Caller = {
+      kind: 'agent',
+      canvas: CANVAS,
+      agent: 'lead',
+      generation: 1,
+      session: 's',
+    };
     expect((await core.call('test.agent', { canvas: CANVAS, agent: 'helper' }, helper)).ok).toBe(
       true,
     );
