@@ -328,7 +328,7 @@ export const PromptNeedView = z
         .optional(),
     }),
     z.strictObject({ ...needEnvelope, kind: z.literal('question') }),
-    z.strictObject({ ...needEnvelope, kind: z.literal('form') }),
+    z.strictObject({ ...needEnvelope, kind: z.literal('form'), server: Id.optional() }),
   ])
   .refine((view) => jsonBytes(view) <= MAX_PROMPT_BYTES, 'A bounded Needs preview');
 export type PromptNeedView = z.infer<typeof PromptNeedView>;

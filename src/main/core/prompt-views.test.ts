@@ -375,6 +375,7 @@ describe('needs, status and the needs topic', () => {
         expect(opened?.prompt).toEqual({
           id: yours[1]?.prompt?.id,
           kind: 'form',
+          server: 'tracker',
           raised: yours[1]?.prompt?.raised,
           humanOnly: yours[1]?.prompt?.humanOnly,
         });
