@@ -3,7 +3,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { runGit } from './diff';
 
 type Callback = (error: unknown, stdout: string) => void;
-const fake = vi.hoisted(() => ({ error: undefined, stdout: '' }));
+const fake = vi.hoisted(() => {
+  const state: { error: unknown; stdout: string } = { error: undefined, stdout: '' };
+  return state;
+});
 
 vi.mock('../../process', () => ({
   execFile: (_file: string, _args: string[], _options: unknown, done: Callback) => {
