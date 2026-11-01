@@ -17,6 +17,7 @@ import type { Run } from './run';
 import { isOpen, turnReply } from './session';
 import type { Entry, Session } from './session';
 import { entryFor } from './prompt-views';
+import type { PromptEntryView } from './prompt-views';
 
 /** Wire/view data only. No mutable store, callback or timer is part of a view. */
 export type ReadonlyData<T> = T extends string | number | boolean | null | undefined
@@ -86,10 +87,14 @@ export interface SessionSummary {
   readonly asking?: readonly ReadonlyData<AskView>[];
 }
 
-/** Images are counted for display, never serialized as bytes on the general topic. */
+/**
+ * Images are counted for display, never serialized as bytes on the general topic; a prompt the
+ * core's owner holds is read through B13 C11's selector (PromptEntryView).
+ */
 export type EntryView = ReadonlyData<
-  | Exclude<Entry, { kind: 'user' }>
+  | Exclude<Entry, { kind: 'user' | 'prompt' }>
   | (Omit<Extract<Entry, { kind: 'user' }>, 'images' | 'promptReply'> & { images?: number })
+  | PromptEntryView
 >;
 export interface SessionView {
   readonly summary: SessionSummary;

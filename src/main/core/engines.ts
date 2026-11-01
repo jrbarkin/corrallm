@@ -102,8 +102,13 @@ export interface EnginesDeps {
   locale?: string;
   /** What else waits for you on a canvas, besides its run's holds and its sessions' prompts. */
   needs?: (canvas: CanvasId) => readonly NeedsItem[];
-  /** How many prompts of an agent's the core's prompt owner holds (B13 C3), which its counts add. */
-  prompted?: (canvas: CanvasId, agent: string) => number;
+  /** The core's prompt owner (B13 C3, C9): what each canvas's views and delivery read of it. */
+  prompts?: {
+    /** How many prompts of an agent's it lists, which the agent's counts add. */
+    count(canvas: CanvasId, agent: string): number;
+    /** What the agent waits on in it now, as a token reads it, if anything. */
+    waiting(canvas: CanvasId, agent: string): NeedsItem | undefined;
+  };
   /**
    * B11a's fallback service (core/fallback.ts), which each canvas's run and delivery ask before
    * automated work goes (admission), and whose switching the canvas's views say. None: nothing
@@ -182,6 +187,12 @@ export interface OpenCanvas {
    * session shows itself: none where the core composes no owner.
    */
   ownedPrompts?: (agent: string) => number;
+  /**
+   * What an agent waits on in the core's prompt owner now (B13 C9): its oldest live prompt,
+   * whether or not its session also shows it, as a token reads it. None where the core composes no
+   * owner, or nothing waits.
+   */
+  waitingOn?: (agent: string) => NeedsItem | undefined;
   /** Whether corrallm switches an agent's backend now (B11a C4): what its views say. */
   switching?: (agent: string) => boolean;
   /** An agent's handoff as its views show it (B11a C11): none where no service is composed. */
@@ -299,6 +310,17 @@ export class Engines {
   needsChanged(canvas: CanvasId): void {
     const running = this.#canvases.get(canvas);
     if (running) this.#look(running);
+  }
+
+  /**
+   * What the core's prompt owner holds on the canvas changed (B13 C9): what waits on it is looked
+   * at again, and so is what its delivery holds (a message that waited on a prompt may go now).
+   */
+  promptsChanged(canvas: CanvasId): void {
+    const running = this.#canvases.get(canvas);
+    if (!running) return;
+    this.#look(running);
+    running.delivery.schedule();
   }
 
   /**
@@ -1005,7 +1027,8 @@ export class Engines {
     } as Running;
     running.reads = new ReadPositions(await journal.reads(canvas));
     running.sessionGeneration = (agent) => this.#deps.sessions.generationOf(canvas, agent);
-    running.ownedPrompts = (agent) => this.#deps.prompted?.(canvas, agent) ?? 0;
+    running.ownedPrompts = (agent) => this.#deps.prompts?.count(canvas, agent) ?? 0;
+    running.waitingOn = (agent) => this.#deps.prompts?.waiting(canvas, agent);
     const { fallback, handoff } = this.#deps;
     if (fallback !== undefined) running.switching = (agent) => fallback.switching(canvas, agent);
     if (handoff !== undefined) running.handoff = (agent) => handoff.view(canvas, agent);
@@ -1075,6 +1098,8 @@ export class Engines {
       changed: () => {
         this.#look(running);
       },
+      // B13 C9: a party's message waits while its agent waits on a prompt the core's owner holds.
+      waitingOn: (agent) => this.#deps.prompts?.waiting(canvas, agent),
       defaultAsks: (adapter, agent) =>
         this.#deps.processes
           .run(() => this.#deps.sessions.settingsOptions(canvas, adapter, agent))

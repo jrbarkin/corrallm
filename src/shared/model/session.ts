@@ -20,6 +20,8 @@ import type {
   ToolStatus,
   TurnResult,
 } from '../session';
+import type { LiveOutcome, SettledPromptView } from './prompt-views';
+import type { Prompt as CorePrompt } from './prompts';
 import type { SubmittedMessage } from './queue';
 
 export type {
@@ -146,6 +148,16 @@ export type Entry =
       text: string;
       switchTo?: ConnectionId;
     }
+  /**
+   * A prompt the core's prompt owner holds (B13 C9), placed by the core as it is raised, under its
+   * PromptId, and settled in place as it ends; never from a CLI or its history. While it waits:
+   * the prompt as admitted (`prompt`), its Needs id (`need`, what `reply` names), its agent's name
+   * as it was raised (the core's words for a form), and whether it is the core's stand-in for a
+   * terminal's wait it couldn't show. Once it ends: what was asked, in short, and how it ended.
+   * Every read goes through B13 C11's selector (`entryFor`).
+   */
+  | OpenPromptEntry
+  | SettledPromptEntry
   /** Where the conversation was cleared (/clear): it starts afresh after it. */
   | { id: string; kind: 'cleared'; conversation?: Conversation }
   /** The end of a turn: how long it took, and whether the user interrupted it, or it failed. */
@@ -157,6 +169,26 @@ export type Entry =
       failed?: boolean;
       result?: TurnResult;
     };
+
+/** A prompt the core's owner holds, waiting (B13 C9): see Entry. */
+export interface OpenPromptEntry {
+  id: string;
+  kind: 'prompt';
+  need: string;
+  prompt: CorePrompt;
+  name: string;
+  standIn?: true;
+  outcome?: never;
+}
+
+/** A prompt the core's owner held, ended (B13 C9): see Entry. */
+export interface SettledPromptEntry {
+  id: string;
+  kind: 'prompt';
+  need: string;
+  prompt: SettledPromptView;
+  outcome: LiveOutcome;
+}
 
 /**
  * Why a connected session would not start, as it said (a notice offering another connection), and

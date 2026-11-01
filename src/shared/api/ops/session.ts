@@ -1,13 +1,15 @@
 import { z } from 'zod';
 
 import { HandoffSchema } from '../../model/handoff';
+import { PARTY_PATTERN } from '../../model/messages';
+import { AnswerIn, ChoiceHint, PromptId, PromptKind, PromptSubject } from '../../model/prompts';
 import { ELICITATION_ACTIONS, MAX_CONVERSATIONS, MAX_CONVERSATION_LABEL } from '../../session';
 import { define } from '../define';
 import type { OpDef } from '../define';
 import { AgentId, OpCanvas } from '../ids';
 import { MAX_PAGE } from '../limits';
 import type { OpName } from '../surface';
-import { TurnResult } from './conversation';
+import { NeedChoiceSchema, NeedFormSchema, NeedQuestionSchema, TurnResult } from './conversation';
 import { ConversationId, EntryId, TaskId } from '../ids';
 import {
   CatalogId,
@@ -58,6 +60,88 @@ const withdrawn = z.boolean().optional();
  * stays in the session.
  */
 const cut = z.literal(true).optional();
+
+/** A party: you, corrallm, an agent or an outside orchestrator. */
+const Party = z.string().regex(PARTY_PATTERN);
+
+/** What every prompt the core's owner holds says of itself, as a transcript entry gives it. */
+const promptEnvelope = {
+  id: PromptId,
+  agent: z.string(),
+  raised: z.number(),
+  title: z.string(),
+  summary: z.string().optional(),
+  reason: z.string().optional(),
+  detail: ToolDetail.optional(),
+  answerIn: AnswerIn,
+  cut,
+  humanOnly: z.string().optional(),
+  choices: z.array(NeedChoiceSchema),
+};
+
+/**
+ * B13 C9: a prompt the core's owner holds, while it waits, as the reader sees it (C11's selector,
+ * `promptFor`): yours whole, with its choices as Needs offers them; a token's without choices, a
+ * form's schema, link or words, or a terminal's screen. A page may cut it (`cut`), never its ids.
+ */
+const WaitingPrompt = z.discriminatedUnion('kind', [
+  z.strictObject({
+    ...promptEnvelope,
+    kind: z.literal('approval'),
+    subject: PromptSubject.optional(),
+  }),
+  z.strictObject({ ...promptEnvelope, kind: z.literal('plan'), plan: z.string() }),
+  z.strictObject({
+    ...promptEnvelope,
+    kind: z.literal('question'),
+    questions: z.array(NeedQuestionSchema),
+  }),
+  z.strictObject({
+    ...promptEnvelope,
+    kind: z.literal('form'),
+    form: NeedFormSchema.optional(),
+    server: z.string().optional(),
+  }),
+]);
+
+/** B13 C9: what stays of a prompt once it ends, alike for every reader (`settledPrompt`). */
+const SettledPrompt = z.strictObject({
+  id: PromptId,
+  kind: PromptKind,
+  agent: z.string(),
+  raised: z.number(),
+  answerIn: AnswerIn,
+  title: z.string(),
+  cut,
+});
+
+/**
+ * How a prompt ended, as the reader sees it (`outcomeFor`): yours whole (a choice's value and
+ * hint, how many questions were answered, a form's action, by whom); a token's its type and by
+ * whom. Never a label, words or values.
+ */
+const LiveOutcome = z.discriminatedUnion('type', [
+  z.strictObject({
+    type: z.literal('choice'),
+    value: z.string().optional(),
+    hint: ChoiceHint.optional(),
+    by: Party,
+  }),
+  z.strictObject({
+    type: z.literal('answers'),
+    count: z.int().min(0).optional(),
+    secret: z.literal(true).optional(),
+    by: Party,
+  }),
+  z.strictObject({
+    type: z.literal('form'),
+    action: z.enum(['accept', 'decline', 'cancel']).optional(),
+    by: Party,
+  }),
+  z.strictObject({ type: z.literal('withdrawn') }),
+  z.strictObject({ type: z.literal('answered-in-terminal'), by: z.literal('terminal') }),
+  z.strictObject({ type: z.literal('dismissed'), by: Party }),
+]);
 
 /**
  * An entry of an agent's transcript, as its view shows it (src/shared/model/session.ts Entry). A
@@ -164,6 +248,19 @@ export const TranscriptEntry = z.discriminatedUnion('kind', [
     level: z.enum(['info', 'warning', 'error']),
     text: z.string(),
     switchTo: z.string().optional(),
+    cut,
+  }),
+  /**
+   * B13 C9: a prompt the core's owner holds, by its PromptId, placed as it was raised: while it
+   * waits, whole as the reader sees it; once it ended, in short, with how it ended. `need` is its
+   * Needs id, which `reply` names.
+   */
+  z.strictObject({
+    id: z.string(),
+    kind: z.literal('prompt'),
+    need: z.string(),
+    prompt: z.union([WaitingPrompt, SettledPrompt]),
+    outcome: LiveOutcome.optional(),
     cut,
   }),
   z.strictObject({

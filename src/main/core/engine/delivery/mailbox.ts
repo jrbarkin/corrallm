@@ -19,6 +19,7 @@ import type {
   TurnResult,
 } from '../../../../shared/session';
 import { adapterRefusal, fileMentionRefusal, shellRefusal } from '../../../../shared/model/catalog';
+import type { PromptEntryChange } from '../../../../shared/model/prompt-views';
 import type { EngineCatalog, ResolvedStep } from '../../../../shared/model/catalog';
 import { ConnectedDriver, NO_BACKEND } from '../transcript/receive';
 import type { SessionBackend } from '../transcript/receive';
@@ -523,6 +524,33 @@ export class SessionStore {
     this.#dispatch(agentId, {
       type: 'add',
       entry: { id: crypto.randomUUID(), kind: 'notice', level, text },
+    });
+  }
+
+  /**
+   * B13 C9: a prompt the core's prompt owner holds, placed in the agent's transcript as it is
+   * raised (after what it shows now), or settled in place as it ends. Nothing else places or
+   * changes one: no CLI event, history or turn's end.
+   */
+  promptEntry(agentId: string, change: PromptEntryChange): void {
+    if (change.type === 'raised') {
+      this.#dispatch(agentId, { type: 'add', entry: change.entry });
+      return;
+    }
+    if (!this.of(agentId).entries.some((entry) => entry.id === change.id)) return;
+    this.#dispatch(agentId, {
+      type: 'update',
+      id: change.id,
+      update: (entry) =>
+        entry.kind === 'prompt'
+          ? {
+              id: entry.id,
+              kind: 'prompt',
+              need: entry.need,
+              prompt: change.prompt,
+              outcome: change.outcome,
+            }
+          : entry,
     });
   }
 

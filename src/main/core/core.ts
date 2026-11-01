@@ -649,9 +649,16 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
         : { messages: open.messages, nodes: open.document.nodes };
     },
     generationOf: (canvas, agent) => sessions.generationOf(canvas, agent),
-    changed: (canvas) => {
+    // B13 C9: what it holds is published at once, whether or not a window watches: Needs, the
+    // agent's summary and its count, and what delivery holds for it.
+    changed: (canvas, agent) => {
       topics.changed(`needs:${canvas}`, 'corrallm');
-      engines.needsChanged(canvas);
+      engines.promptsChanged(canvas);
+      runtime.promptsChanged(canvas, agent);
+    },
+    // B13 C9: each prompt it lists in its agent's transcript, which its session topic publishes.
+    transcript: (canvas, agent, change) => {
+      engines.canvas(canvas)?.engine.sessions.promptEntry(agent, change);
     },
     // The core's own words in the agent's transcript, never CLI activity for the watchdog.
     notice: (canvas, agent, connection, text) => {
@@ -1059,7 +1066,10 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
       ...setups.items(canvas),
       ...changes.items(canvas),
     ],
-    prompted: (canvas, agent) => prompts.count(canvas, agent),
+    prompts: {
+      count: (canvas, agent) => prompts.count(canvas, agent),
+      waiting: (canvas, agent) => prompts.waiting(canvas, agent),
+    },
     // B11a C2: admission before each canvas's automated work goes, by the fallback service below.
     fallback: {
       admit: (canvas, agent, work) => fallback.admit(canvas, agent, work),
@@ -1135,6 +1145,8 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     catalog: CATALOG,
     ...(config.watchdog === undefined ? {} : { clock: config.watchdog }),
     ...(config.watchdogNetwork === undefined ? {} : { network: config.watchdogNetwork }),
+    // B13 C9: a turn waiting on a prompt the core's owner holds is never silent.
+    waiting: (canvas, agent) => prompts.waiting(canvas, agent) !== undefined,
     changed: (canvas) => {
       topics.changed(`needs:${canvas}`, 'corrallm');
       engines.needsChanged(canvas);
@@ -1219,6 +1231,8 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
       states.listChanged();
     },
     closed: (canvas) => {
+      // B13 C9's close barrier: what its sessions asked ends with it, and it is forgotten.
+      prompts.closed(canvas);
       notifier?.closed(canvas);
       presenceChanged();
       live.get(canvas)?.stop?.();

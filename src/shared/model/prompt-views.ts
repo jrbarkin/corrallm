@@ -4,7 +4,7 @@ import type { PartyId } from './messages';
 import type { NeedChoice, NeedQuestion, NeedsItem } from './needs';
 import { detailOf, previewLines } from './needs-selectors';
 import type { CoreChoice, Prompt, PromptNeedView } from './prompts';
-import type { Entry } from './session';
+import type { Entry, OpenPromptEntry, SettledPromptEntry } from './session';
 import type { EntryView } from './views';
 import { mcpRequestTitle } from './words';
 
@@ -115,11 +115,11 @@ export function promptNeed(occurrence: PromptOccurrence, reader: PromptReader): 
 
 /**
  * A prompt whole, as `reader` sees it: what the agent window's card shows, from the agent's
- * session topic and transcript once B13 C9 places it there. You: every field, with each choice as
- * Needs offers it (Not waiting where offered). A token: no choice, no form's schema, link or words
- * (the core's title alone), no terminal's screen; its plan and subject whole.
+ * session topic and transcript, where B13 C9 places it (`entryFor`). You: every field, with each
+ * choice as Needs offers it (Not waiting where offered). A token: no choice, no form's schema,
+ * link or words (the core's title alone), no terminal's screen; its plan and subject whole.
  */
-export function promptFor(occurrence: PromptOccurrence, reader: PromptReader): PromptView {
+export function promptFor(occurrence: SeenOccurrence, reader: PromptReader): PromptView {
   const { prompt } = occurrence;
   if (reader === 'you') return { ...prompt, choices: choicesOf(occurrence) };
   if (prompt.kind === 'form') {
@@ -139,6 +139,63 @@ export function promptFor(occurrence: PromptOccurrence, reader: PromptReader): P
   if (undescribed(prompt, occurrence.standIn)) delete seen.detail;
   return seen;
 }
+
+/** What `promptFor` and `settledPrompt` read of an occurrence: not its canvas. */
+export type SeenOccurrence = Omit<PromptOccurrence, 'canvas'>;
+
+/**
+ * What stays of a prompt once it ends (B13 C9), for every reader alike: its id, kind, agent, when
+ * it was raised, where it was answered, its Needs title (a form's in the core's words) and whether
+ * it was cut. Nothing of a command, plan, question, form, screen or choice: what was decided is
+ * its live outcome's, and B19's records' after that.
+ */
+export function settledPrompt(occurrence: SeenOccurrence): SettledPromptView {
+  const { prompt } = occurrence;
+  return {
+    id: prompt.id,
+    kind: prompt.kind,
+    agent: prompt.agent,
+    raised: prompt.raised,
+    answerIn: prompt.answerIn,
+    title: needTitle(occurrence),
+    ...(prompt.cut === true ? { cut: true } : {}),
+  };
+}
+
+/** A prompt in short, once it ended (settledPrompt). */
+export interface SettledPromptView {
+  readonly id: Prompt['id'];
+  readonly kind: Prompt['kind'];
+  readonly agent: string;
+  readonly raised: number;
+  readonly answerIn: Prompt['answerIn'];
+  readonly title: string;
+  readonly cut?: true;
+}
+
+/**
+ * A prompt the core's owner holds as an entry of its agent's transcript reads (B13 C9): while it
+ * waits, the prompt whole as the reader sees it; once it ended, in short, with how it ended as the
+ * reader sees that. `cut`: a page cut it to fit (the whole is on the session topic, for you).
+ */
+export type PromptEntryView =
+  | { id: string; kind: 'prompt'; need: string; prompt: PromptView; cut?: true }
+  | {
+      id: string;
+      kind: 'prompt';
+      need: string;
+      prompt: SettledPromptView;
+      outcome: LiveOutcome;
+      cut?: true;
+    };
+
+/**
+ * What the core's prompt owner places in an agent's transcript (B13 C9): a prompt as it is raised,
+ * by its PromptId; or how it ended, settled in place.
+ */
+export type PromptEntryChange =
+  | { type: 'raised'; entry: OpenPromptEntry }
+  | { type: 'ended'; id: string; prompt: SettledPromptView; outcome: LiveOutcome };
 
 /** A prompt whole, as a reader sees it (promptFor). */
 export type PromptView =
@@ -247,9 +304,42 @@ export function entryFor(entry: Entry, reader: PromptReader): EntryView {
       delete seen.answer;
       return seen;
     }
+    case 'prompt':
+      return promptEntryFor(entry, reader);
     default:
       return entry;
   }
+}
+
+/**
+ * A prompt the core's owner holds, as an entry of its agent's transcript, as `reader` sees it (B13
+ * C9 through C11's selector): while it waits, `promptFor`'s; once it ended, in short, with how it
+ * ended as `outcomeFor` gives it. Never its agent's name as raised, nor whether it is a stand-in:
+ * those are what the core words it from.
+ */
+export function promptEntryFor(
+  entry: OpenPromptEntry | SettledPromptEntry,
+  reader: PromptReader,
+): PromptEntryView {
+  const { id, need } = entry;
+  if (entry.outcome === undefined) {
+    return {
+      id,
+      kind: 'prompt',
+      need,
+      prompt: promptFor(
+        { need, prompt: entry.prompt, name: entry.name, standIn: entry.standIn === true },
+        reader,
+      ),
+    };
+  }
+  return {
+    id,
+    kind: 'prompt',
+    need,
+    prompt: entry.prompt,
+    outcome: outcomeFor(entry.outcome, reader),
+  };
 }
 
 /**
@@ -257,7 +347,7 @@ export function entryFor(entry: Entry, reader: PromptReader): EntryView {
  * (the MCP server that asks, by the name it is configured under, else its agent's CLI, asks you to
  * fill in a form or to open a link).
  */
-function needTitle({ prompt, name }: PromptOccurrence): string {
+function needTitle({ prompt, name }: SeenOccurrence): string {
   if (prompt.kind !== 'form') return prompt.title;
   const link = 'url' in prompt.form;
   return prompt.server === undefined
@@ -308,7 +398,7 @@ function needView({ prompt }: PromptOccurrence, reader: PromptReader): PromptNee
  * may pick it (every one of a prompt only you may answer, for the router's check too), then the
  * core's own Not waiting where it is offered.
  */
-function choicesOf({ prompt, standIn }: PromptOccurrence): NeedChoice[] {
+function choicesOf({ prompt, standIn }: SeenOccurrence): NeedChoice[] {
   const own = undescribed(prompt, standIn) ? [NOT_WAITING_CHOICE] : [];
   if (prompt.kind !== 'approval' && prompt.kind !== 'plan') return own;
   return [

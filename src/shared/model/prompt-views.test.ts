@@ -10,6 +10,7 @@ import {
   outcomeFor,
   promptFor,
   promptNeed,
+  settledPrompt,
   undescribed,
 } from './prompt-views';
 import type { PromptOccurrence } from './prompt-views';
@@ -536,6 +537,88 @@ describe('an entry of a transcript (the events B13 replaces)', () => {
     for (const entry of [permission, question, plan, elicitation]) {
       expect(JSON.stringify(entryFor(entry, 'token'))).not.toMatch(
         /private-|signin\.example|"answer"/,
+      );
+    }
+  });
+});
+
+describe('a prompt the core’s owner holds, as an entry of its agent’s transcript (B13 C9)', () => {
+  /** Its entry as the owner places it as it is raised: the prompt whole, as admitted. */
+  const open = (raw: object, standIn = false): Entry => ({
+    id: ID,
+    kind: 'prompt',
+    need: NEED,
+    name: 'Reviewer',
+    prompt: prompt(raw),
+    ...(standIn ? { standIn: true as const } : {}),
+  });
+  const ALL = [APPROVAL, PLAN, QUESTION, FORM, URL_FORM, UNDESCRIBED, HOOKED];
+
+  it('is yours whole while it waits, every choice as Needs offers it, Not waiting where offered', () => {
+    for (const raw of ALL) {
+      expect(entryFor(open(raw), 'you')).toEqual({
+        id: ID,
+        kind: 'prompt',
+        need: NEED,
+        prompt: promptFor(occurrence(raw), 'you'),
+      });
+    }
+    // The core's own stand-in for a wait it couldn't show offers no Not waiting.
+    expect(entryFor(open(UNDESCRIBED, true), 'you')).toEqual({
+      id: ID,
+      kind: 'prompt',
+      need: NEED,
+      prompt: promptFor(occurrence(UNDESCRIBED, true), 'you'),
+    });
+  });
+
+  it('is a token’s through the one selector: no choice, form, a form’s words or a terminal’s screen', () => {
+    for (const raw of ALL) {
+      const seen = entryFor(open(raw), 'token');
+      expect(seen).toEqual({
+        id: ID,
+        kind: 'prompt',
+        need: NEED,
+        prompt: promptFor(occurrence(raw), 'token'),
+      });
+      expect(JSON.stringify(seen)).not.toMatch(
+        /private-form|private-field|private-screen|private-rule|signin\.example|"name"|standIn/,
+      );
+    }
+  });
+
+  it('once settled, keeps what was asked in short and how it ended: yours whole, a token’s its type and by whom', () => {
+    const settled: Entry = {
+      id: ID,
+      kind: 'prompt',
+      need: NEED,
+      prompt: settledPrompt(occurrence(APPROVAL)),
+      outcome: { type: 'choice', value: 'always', hint: 'allow_always', by: 'you' },
+    };
+    expect(settled.prompt).toEqual({
+      id: ID,
+      kind: 'approval',
+      agent: 'b',
+      raised: 1_700_000_000_000,
+      answerIn: 'api',
+      title: APPROVAL.title,
+      cut: true,
+    });
+    expect(entryFor(settled, 'you')).toEqual(settled);
+    expect(entryFor(settled, 'token')).toEqual({
+      ...settled,
+      outcome: { type: 'choice', by: 'you' },
+    });
+    // A form is told in the core's words for everyone: its link and its own words are no one's.
+    for (const raw of [FORM, URL_FORM]) {
+      const short = settledPrompt(occurrence(raw));
+      expect(short.title).toBe(promptNeed(occurrence(raw), 'token').title);
+      expect(JSON.stringify(short)).not.toMatch(/private-|signin\.example/);
+    }
+    // Nothing of a command, plan, question, screen or choice stays once it ends.
+    for (const raw of ALL) {
+      expect(JSON.stringify(settledPrompt(occurrence(raw)))).not.toMatch(
+        /private-|rm -rf|Which size|choices|detail|subject/,
       );
     }
   });

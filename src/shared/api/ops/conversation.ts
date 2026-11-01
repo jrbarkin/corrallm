@@ -59,6 +59,41 @@ export const Message = z.strictObject({
   at: z.number(),
 });
 
+/** A choice of what waits, as a reader may see it: a prompt's also say what its CLI does with it. */
+export const NeedChoiceSchema = z.strictObject({
+  value: z.string(),
+  label: z.string(),
+  description: z.string().optional(),
+  humanOnly: z.string().optional(),
+  hint: Choice.shape.hint.optional(),
+  effects: Choice.shape.effects,
+  feedback: Choice.shape.feedback,
+  endsTurn: Choice.shape.endsTurn,
+});
+
+/** A question a prompt asks, by its id: whole, never an answer. */
+export const NeedQuestionSchema = z.strictObject({
+  id: z.string(),
+  header: z.string(),
+  text: z.string(),
+  options: z.array(
+    z.strictObject({
+      label: z.string(),
+      description: z.string().optional(),
+      preview: z.string().optional(),
+    }),
+  ),
+  multiple: z.boolean(),
+  other: z.boolean(),
+  secret: z.boolean().optional(),
+});
+
+/** A form a prompt asks to fill in (its flat schema) or to open (its link): yours alone. */
+export const NeedFormSchema = z.union([
+  z.strictObject({ schema: z.record(z.string(), z.unknown()) }),
+  z.strictObject({ url: z.string() }),
+]);
+
 export const NeedsItem = z.strictObject({
   id: z.string(),
   canvas: z.uuid(),
@@ -70,44 +105,10 @@ export const NeedsItem = z.strictObject({
   detail: z.string().optional(),
   until: z.number().optional(),
   /** A prompt's choices also say what its CLI does with each (B13 C1): yours alone (C11). */
-  choices: z.array(
-    z.strictObject({
-      value: z.string(),
-      label: z.string(),
-      description: z.string().optional(),
-      humanOnly: z.string().optional(),
-      hint: Choice.shape.hint.optional(),
-      effects: Choice.shape.effects,
-      feedback: Choice.shape.feedback,
-      endsTurn: Choice.shape.endsTurn,
-    }),
-  ),
+  choices: z.array(NeedChoiceSchema),
   text: z.strictObject({ placeholder: z.string() }).optional(),
-  questions: z
-    .array(
-      z.strictObject({
-        id: z.string(),
-        header: z.string(),
-        text: z.string(),
-        options: z.array(
-          z.strictObject({
-            label: z.string(),
-            description: z.string().optional(),
-            preview: z.string().optional(),
-          }),
-        ),
-        multiple: z.boolean(),
-        other: z.boolean(),
-        secret: z.boolean().optional(),
-      }),
-    )
-    .optional(),
-  form: z
-    .union([
-      z.strictObject({ schema: z.record(z.string(), z.unknown()) }),
-      z.strictObject({ url: z.string() }),
-    ])
-    .optional(),
+  questions: z.array(NeedQuestionSchema).optional(),
+  form: NeedFormSchema.optional(),
   answerIn: z.enum(['api', 'terminal', 'both']),
   /**
    * A prompt the core's prompt owner holds (B13 C1): its id, kind, when it was raised, its words,

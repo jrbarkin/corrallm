@@ -15,8 +15,18 @@ import type { NodeLike } from '../../../shared/model/canvas';
 import type { PartyId } from '../../../shared/model/messages';
 import type { NeedsItem } from '../../../shared/model/needs';
 import { promptJsonBytes } from '../../../shared/model/prompt-data';
-import { NOT_WAITING, promptNeed, undescribed } from '../../../shared/model/prompt-views';
-import type { PromptOccurrence, PromptReader } from '../../../shared/model/prompt-views';
+import {
+  NOT_WAITING,
+  promptNeed,
+  settledPrompt,
+  undescribed,
+} from '../../../shared/model/prompt-views';
+import type {
+  LiveOutcome,
+  PromptEntryChange,
+  PromptOccurrence,
+  PromptReader,
+} from '../../../shared/model/prompt-views';
 import {
   checkPromptReply,
   Prompt,
@@ -79,6 +89,21 @@ import { classify } from './classify';
  *   until a distinct wait (`PromptAnswers.dismiss`); its CLI is told nothing. Nothing else in a
  *   terminal is answered here.
  *
+ * - The one publisher of what it holds (B13 C9): each prompt it lists is placed in its agent's
+ *   transcript as it is raised (by its PromptId, `transcript`) and settled there in place as it
+ *   ends, how it ended (`LiveOutcome`) with what was asked kept only in short; every change says
+ *   so at once (`changed`: Needs, the agent's summary and its count, what delivery holds). What
+ *   each agent waits on (`waiting`: its oldest live prompt, mirrored or not, as a token reads it)
+ *   holds a party's message, keeps the watchdog from taking the wait for silence, and makes
+ *   `agents` and `status` say it waits.
+ * - Its close barrier (C9): what a session raises for a canvas the core no longer runs (closing,
+ *   or closed) is declined and never kept; an answer whose canvas stopped being run while its
+ *   record was written is withdrawn, its session never told; a closed canvas (`closed`) ends what
+ *   still waits on it and is forgotten.
+ * - Its budgets hold under load (C9): an answer being made keeps its room until its session has
+ *   it; every end gives its room back; and each reason a generation's requests are declined is
+ *   told its agent's transcript once, until one of its requests is admitted again.
+ *
  * What each reader sees of a prompt is the one selector's (B13 §9.2 C11:
  * src/shared/model/prompt-views.ts), read from each live occurrence (`occurrences`): its Needs items
  * (`items`), yours with their choices, a token's without them, without a form's own words or a
@@ -113,6 +138,12 @@ export interface PromptOwnerDeps {
   changed(canvas: CanvasId, agent: string): void;
   /** Tells the agent's transcript something, in the core's words (why a prompt was declined). */
   notice(canvas: CanvasId, agent: string, connection: ConnectionId, text: string): void;
+  /**
+   * B13 C9: places a prompt it lists in its agent's transcript as it is raised, and settles it
+   * there as it ends (what the session topic and `session.transcript` read, through C11's
+   * selector). None: no transcript shows them.
+   */
+  transcript?: (canvas: CanvasId, agent: string, change: PromptEntryChange) => void;
   /** The time now (epoch ms): when a prompt was raised. */
   now?: () => number;
   limits?: Partial<PromptLimits>;
@@ -189,6 +220,12 @@ export class PromptOwner implements PromptSink {
   readonly #canvases = new Map<CanvasId, CanvasPrompts>();
   /** Every live occurrence by its generation's key: what ends it, and a duplicate's check. */
   readonly #keys = new Map<string, Occurrence>();
+  /**
+   * Why each generation's requests were declined since one of its was last admitted, as told to
+   * its agent's transcript: each said once (B13 C9's budgets under load), until one is admitted
+   * again or the generation ends.
+   */
+  readonly #told = new Map<string, Set<string>>();
   #bytes = 0;
 
   constructor(deps: PromptOwnerDeps) {
@@ -203,8 +240,9 @@ export class PromptOwner implements PromptSink {
   raised(at: PromptOrigin, event: unknown): void {
     const key = rawKey(event);
     const terminal = rawAnswerIn(event) === 'terminal';
-    if (!at.live) {
-      // Its session is replaced or closing: what it asked ends with it, unanswered.
+    if (!at.live || this.#deps.canvas(at.canvas) === undefined) {
+      // Its session is replaced or closing, or its canvas closing or closed (B13 C9's close
+      // barrier: a late callback never reopens it): what it asked ends with it, unanswered.
       if (key !== undefined && !terminal) this.#decline(at, key, 'ended', false);
       return;
     }
@@ -235,10 +273,8 @@ export class PromptOwner implements PromptSink {
       return;
     }
     console.error('A session raised a prompt with no key: it can’t be answered or declined.');
-    this.#deps.notice(
-      at.canvas,
-      at.agent,
-      at.connection,
+    this.#tell(
+      at,
       `corrallm couldn’t read a request from ${this.#name(at.canvas, at.agent)}’s CLI: look at its session.`,
     );
   }
@@ -252,11 +288,42 @@ export class PromptOwner implements PromptSink {
   }
 
   gone(canvas: CanvasId, agent: string, generation: number): void {
+    this.#told.delete(keyOf({ canvas, agent, generation }, ''));
     for (const occurrence of [...(this.#canvases.get(canvas)?.live.values() ?? [])]) {
       if (occurrence.agent === agent && occurrence.generation === generation) {
         this.#ending(occurrence, 'withdrawn');
       }
     }
+  }
+
+  /**
+   * B13 C9's close barrier: the canvas closed (its sessions with it). Whatever of it still waits
+   * ends withdrawn, its room given back, and the canvas is forgotten: how its prompts ended is no
+   * longer told (its records still say who decided), and what its sessions raise is declined
+   * until it runs again (`raised`).
+   */
+  closed(canvas: CanvasId): void {
+    for (const occurrence of [...(this.#canvases.get(canvas)?.live.values() ?? [])]) {
+      this.#ending(occurrence, 'withdrawn');
+    }
+    this.#canvases.delete(canvas);
+    const prefix = `${canvas}\u0000`;
+    for (const key of [...this.#told.keys()]) if (key.startsWith(prefix)) this.#told.delete(key);
+  }
+
+  /**
+   * What `agent` waits on now, if anything (B13 C9): its oldest live prompt, open or being
+   * answered, mirrored by one of the events B13 replaces or not, as a token reads its Needs item
+   * (C11's selector: what a notice to a token may quote). What delivery holds a party's message
+   * for, the watchdog takes for no silence, and `agents` and `status` call waiting.
+   */
+  waiting(canvas: CanvasId, agent: string): NeedsItem | undefined {
+    const nodes = this.#deps.canvas(canvas)?.nodes ?? [];
+    if (!nodes.some((node) => node.id === agent)) return undefined;
+    for (const occurrence of this.#canvases.get(canvas)?.live.values() ?? []) {
+      if (occurrence.agent === agent) return promptNeed(occurrenceOf(occurrence, nodes), 'token');
+    }
+    return undefined;
   }
 
   /**
@@ -414,11 +481,13 @@ export class PromptOwner implements PromptSink {
         'The answer couldn’t be recorded, so it wasn’t given: try again.',
       );
     }
-    // Still reserved, and its generation still the agent's: an end meanwhile won.
+    // Still reserved, its generation still the agent's, and its canvas still run (B13 C9's close
+    // barrier: one closing gives its sessions nothing more): an end meanwhile won.
     const now = stateOf(occurrence);
     if (
       now.at !== 'answering' ||
-      this.#deps.generationOf(canvas, occurrence.agent) !== occurrence.generation
+      this.#deps.generationOf(canvas, occurrence.agent) !== occurrence.generation ||
+      this.#deps.canvas(canvas) === undefined
     ) {
       const reason = now.at === 'ended' ? now.reason : 'withdrawn';
       if (now.at === 'answering') this.#end(occurrence, 'withdrawn');
@@ -453,7 +522,7 @@ export class PromptOwner implements PromptSink {
           : `${name}’s CLI didn’t take the answer, and its prompt has ended: ${why}`,
       );
     }
-    this.#settle(occurrence, ctx.by);
+    this.#settle(occurrence, ctx.by, settled);
     landed(open.messages, record.id);
     try {
       await open.messages.durable();
@@ -477,7 +546,11 @@ export class PromptOwner implements PromptSink {
     }
     ctx.noReturn();
     occurrence.state = { at: 'dismissed', by: ctx.by };
-    this.#forget(occurrence, { agent: occurrence.agent, reason: 'dismissed', by: ctx.by });
+    this.#forget(
+      occurrence,
+      { agent: occurrence.agent, reason: 'dismissed', by: ctx.by },
+      { type: 'dismissed', by: ctx.by },
+    );
     try {
       occurrence.answers.dismiss?.(occurrence.key);
     } catch (error) {
@@ -561,6 +634,23 @@ export class PromptOwner implements PromptSink {
     prompts.live.set(built.id, occurrence);
     this.#keys.set(keyOf(at, key), occurrence);
     this.#bytes += bytes;
+    // One admitted: a decline after it is told again.
+    this.#told.delete(keyOf(at, ''));
+    // Placed in its agent's transcript as it is raised (B13 C9); one its session also shows as
+    // one of the events B13 replaces is the old entry's, until X10.
+    if (!occurrence.mirrored) {
+      this.#deps.transcript?.(at.canvas, at.agent, {
+        type: 'raised',
+        entry: {
+          id: built.id,
+          kind: 'prompt',
+          need: occurrence.need,
+          prompt: built,
+          name: this.#name(at.canvas, at.agent),
+          ...(standIn ? { standIn: true as const } : {}),
+        },
+      });
+    }
     this.#deps.changed(at.canvas, at.agent);
   }
 
@@ -615,14 +705,24 @@ export class PromptOwner implements PromptSink {
       }
     }
     if (why === 'ended') return;
-    this.#deps.notice(
-      at.canvas,
-      at.agent,
-      at.connection,
-      terminal
-        ? `corrallm can’t list what ${name}’s CLI asks in its terminal (${DECLINED[why]}): look at its terminal.`
-        : `corrallm declined a request from ${name}’s CLI: ${DECLINED[why]}.`,
-    );
+    const text = terminal
+      ? `corrallm can’t list what ${name}’s CLI asks in its terminal (${DECLINED[why]}): look at its terminal.`
+      : `corrallm declined a request from ${name}’s CLI: ${DECLINED[why]}.`;
+    this.#tell(at, text);
+  }
+
+  /**
+   * Tells the agent's transcript `text` once for its generation, however often its CLI asks past
+   * its room or unreadably, until one of its requests is admitted again (B13 C9's budgets under
+   * load).
+   */
+  #tell(at: PromptOrigin, text: string): void {
+    const generation = keyOf(at, '');
+    const told = this.#told.get(generation) ?? new Set<string>();
+    if (told.has(text)) return;
+    told.add(text);
+    this.#told.set(generation, told);
+    this.#deps.notice(at.canvas, at.agent, at.connection, text);
   }
 
   /** Ends an occurrence by its session's word, or its generation's end: as its state allows. */
@@ -638,12 +738,33 @@ export class PromptOwner implements PromptSink {
 
   #end(occurrence: Occurrence, reason: EndReason): void {
     occurrence.state = { at: 'ended', reason };
-    this.#forget(occurrence, { agent: occurrence.agent, reason });
+    this.#forget(
+      occurrence,
+      { agent: occurrence.agent, reason },
+      reason === 'answered-natively'
+        ? { type: 'answered-in-terminal', by: 'terminal' }
+        : { type: 'withdrawn' },
+    );
   }
 
-  #settle(occurrence: Occurrence, by: PartyId): void {
+  /** Settled by `by`'s answer, which `settled` says, value-free. */
+  #settle(occurrence: Occurrence, by: PartyId, settled: SettledDecision): void {
     occurrence.state = { at: 'answered', by };
-    this.#forget(occurrence, { agent: occurrence.agent, reason: 'answered', by });
+    const { outcome } = settled;
+    this.#forget(
+      occurrence,
+      { agent: occurrence.agent, reason: 'answered', by },
+      outcome.type === 'choice'
+        ? { type: 'choice', value: outcome.value, hint: outcome.hint, by }
+        : outcome.type === 'answers'
+          ? {
+              type: 'answers',
+              count: outcome.count,
+              ...(settled.secret === true ? { secret: true as const } : {}),
+              by,
+            }
+          : { type: 'form', action: outcome.action, by },
+    );
   }
 
   /** A reservation given back: open again, unless its session ended it meanwhile. */
@@ -656,7 +777,11 @@ export class PromptOwner implements PromptSink {
     }
   }
 
-  #forget(occurrence: Occurrence, ended: Ended): void {
+  /**
+   * An occurrence no longer live: its room given back, how it ended kept to tell a later reply,
+   * and settled in its agent's transcript as `outcome` (B13 C9), what was asked kept in short.
+   */
+  #forget(occurrence: Occurrence, ended: Ended, outcome: LiveOutcome): void {
     const prompts = this.#canvasOf(occurrence.canvas);
     if (prompts.live.get(occurrence.prompt.id) !== occurrence) return;
     prompts.live.delete(occurrence.prompt.id);
@@ -666,6 +791,16 @@ export class PromptOwner implements PromptSink {
     for (const oldest of prompts.ended.keys()) {
       if (prompts.ended.size <= MAX_CANVAS_PROMPTS) break;
       prompts.ended.delete(oldest);
+    }
+    if (!occurrence.mirrored) {
+      this.#deps.transcript?.(occurrence.canvas, occurrence.agent, {
+        type: 'ended',
+        id: occurrence.prompt.id,
+        prompt: settledPrompt(
+          occurrenceOf(occurrence, this.#deps.canvas(occurrence.canvas)?.nodes ?? []),
+        ),
+        outcome,
+      });
     }
     this.#deps.changed(occurrence.canvas, occurrence.agent);
   }

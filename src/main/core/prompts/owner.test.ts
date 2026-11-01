@@ -8,7 +8,9 @@ import type { CanvasId } from '../../../shared/canvas';
 import { MAX_SESSION_PROMPTS } from '../../../shared/api/limits';
 import type { NodeLike } from '../../../shared/model/canvas';
 import type { Message } from '../../../shared/model/messages';
+import type { PromptEntryChange } from '../../../shared/model/prompt-views';
 import type { PromptAnswer } from '../../../shared/model/prompts';
+import { promptJsonBytes } from '../../../shared/model/prompt-data';
 import { MADE_UP } from '../../../shared/test-made-up';
 import { CanvasMemory } from '../../memory';
 import type { PromptAnswers } from '../../sessions/connector';
@@ -79,6 +81,10 @@ let messages: MessageStore;
 let generations: Map<string, number>;
 let notices: { agent: string; text: string }[];
 let changes: number;
+/** What the owner placed in, and settled in, its agents' transcripts (B13 C9). */
+let placed: { canvas: CanvasId; agent: string; change: PromptEntryChange }[];
+/** The canvases the core no longer runs (closing, or closed). */
+let stopped: Set<CanvasId>;
 let owner: PromptOwner;
 
 interface Handle extends PromptAnswers {
@@ -129,13 +135,18 @@ function make(limits?: Partial<PromptLimits>): PromptOwner {
   return new PromptOwner({
     catalog: MADE_UP,
     canvas: (canvas) =>
-      canvas === CANVAS || canvas === OTHER ? { messages, nodes: NODES } : undefined,
+      (canvas === CANVAS || canvas === OTHER) && !stopped.has(canvas)
+        ? { messages, nodes: NODES }
+        : undefined,
     generationOf: (_canvas, agent) => generations.get(agent),
     changed: () => {
       changes += 1;
     },
     notice: (_canvas, agent, _connection, text) => {
       notices.push({ agent, text });
+    },
+    transcript: (canvas, agent, change) => {
+      placed.push({ canvas, agent, change });
     },
     ...(limits === undefined ? {} : { limits }),
   });
@@ -207,6 +218,8 @@ beforeEach(async () => {
   ]);
   notices = [];
   changes = 0;
+  placed = [];
+  stopped = new Set();
   owner = make();
 });
 
@@ -394,10 +407,11 @@ describe('admission', () => {
       ],
       ['an unknown kind', { kind: 'dialog', title: 'Hm', answerIn: 'api' }],
     ];
-    for (const [what, prompt] of cases) {
+    for (const [index, [what, prompt]] of cases.entries()) {
       const one = handle();
       notices = [];
-      owner.raised(origin(7, one), { type: 'prompt', key: KEY, prompt });
+      // Each from a generation of its own: one generation is told each reason once (B13 C9).
+      owner.raised(origin(100 + index, one), { type: 'prompt', key: KEY, prompt });
       expect.soft(one.declined, what).toEqual([[KEY, expect.any(String)]]);
       expect.soft(notices, what).toEqual([{ agent: 'b', text: expect.any(String) as string }]);
       expect.soft(owner.items(CANVAS), what).toEqual([]);
@@ -1318,5 +1332,332 @@ describe('what each reader reads of a prompt (B13 C11)', () => {
     expect(owner.settled(CANVAS, id, 'token')?.message).toBe(
       `${id} is settled already: the user answered it.`,
     );
+  });
+});
+
+describe('its agents’ transcripts (B13 C9): each prompt it lists placed as raised, settled in place', () => {
+  const LINK = 'https://signin.example.test/link?token=private-signin-secret';
+  const link = {
+    kind: 'form',
+    title: `Sign in at ${LINK}`,
+    server: 'tracker',
+    answerIn: 'api',
+    form: { url: LINK },
+  };
+  const waiting = {
+    kind: 'approval',
+    title: 'Claude Code is waiting for you.',
+    answerIn: 'terminal',
+    choices: [],
+  };
+  const secret = {
+    ...question,
+    questions: [{ ...question.questions[0], secret: true, options: [], other: true }],
+  };
+
+  /** The PromptId a Needs id names. */
+  const idOf = (need: string) => need.split('/').at(-1) ?? '';
+  /** What was placed for the prompt `need` names, in order. */
+  const changesOf = (need: string) =>
+    placed.flatMap(({ change }) =>
+      (change.type === 'raised' ? change.entry.id : change.id) === idOf(need) ? [change] : [],
+    );
+  /** How the prompt `need` names was settled in its transcript, if it was. */
+  const outcomeOf = (need: string) => {
+    const last = changesOf(need).at(-1);
+    return last?.type === 'ended' ? last.outcome : undefined;
+  };
+
+  it('places each prompt it lists in its agent’s transcript as raised, whole, by its PromptId; never its key', () => {
+    const one = handle();
+    const item = raise(origin(7, one), approval);
+    const need = item?.id ?? '';
+    expect(placed).toEqual([
+      {
+        canvas: CANVAS,
+        agent: 'b',
+        change: {
+          type: 'raised',
+          entry: {
+            id: idOf(need),
+            kind: 'prompt',
+            need,
+            name: 'Reviewer',
+            prompt: owner.prompts(CANVAS)[0],
+          },
+        },
+      },
+    ]);
+    expect(JSON.stringify(placed)).not.toContain(KEY);
+    // The core's own stand-in for a terminal's wait it couldn't show is placed as one.
+    raise(origin(7, one), { ...waiting, title: 'w'.repeat(5000) }, KEY2);
+    expect(placed.at(-1)?.change).toMatchObject({
+      type: 'raised',
+      entry: { standIn: true, prompt: { cut: true } },
+    });
+    // One its session shows as one of the events B13 replaces isn't: the old entry stands for it.
+    owner.raised(origin(7, one, { mirrored: true }), {
+      type: 'prompt',
+      key: crypto.randomUUID(),
+      prompt: approval,
+    });
+    // Nor is one declined.
+    raise(origin(7, one), { ...approval, choices: [yes] }, crypto.randomUUID());
+    expect(placed).toHaveLength(2);
+  });
+
+  it('settles it in place as it ends: how, and by whom, never a label, words or values; what was asked kept only in short', async () => {
+    const one = handle();
+    const raisedAt = (prompt: object, key = crypto.randomUUID()) => {
+      raise(origin(7, one), prompt, key);
+      return { need: owner.items(CANVAS).at(-1)?.id ?? '', key };
+    };
+    const told = raisedAt(approval);
+    await answer(told.need, { choice: 'tell', feedback: 'private-feedback-words' });
+    const asked = raisedAt(question);
+    await answer(asked.need, { answers: { q1: { text: 'private-answer-text' } } });
+    const hidden = raisedAt(secret);
+    await answer(hidden.need, { answers: { q1: { text: 'private-secret-text' } } });
+    const opened = raisedAt(link);
+    await answer(opened.need, { form: { action: 'decline' } });
+    const withdrawn = raisedAt(approval);
+    owner.ended(origin(7, one), { type: 'prompt-ended', key: withdrawn.key, reason: 'withdrawn' });
+    const native = raisedAt(waiting);
+    owner.ended(origin(7, one), {
+      type: 'prompt-ended',
+      key: native.key,
+      reason: 'answered-natively',
+    });
+    const dismissed = raisedAt(waiting);
+    await answer(dismissed.need, { choice: 'not-waiting' });
+    const gone = raisedAt(approval);
+    owner.gone(CANVAS, 'b', 7);
+    expect(outcomeOf(told.need)).toEqual({
+      type: 'choice',
+      value: 'tell',
+      hint: 'reject_once',
+      by: 'you',
+    });
+    expect(outcomeOf(asked.need)).toEqual({ type: 'answers', count: 1, by: 'you' });
+    expect(outcomeOf(hidden.need)).toEqual({ type: 'answers', count: 1, secret: true, by: 'you' });
+    expect(outcomeOf(opened.need)).toEqual({ type: 'form', action: 'decline', by: 'you' });
+    expect(outcomeOf(withdrawn.need)).toEqual({ type: 'withdrawn' });
+    expect(outcomeOf(native.need)).toEqual({ type: 'answered-in-terminal', by: 'terminal' });
+    expect(outcomeOf(dismissed.need)).toEqual({ type: 'dismissed', by: 'you' });
+    expect(outcomeOf(gone.need)).toEqual({ type: 'withdrawn' });
+    // Each placed once and settled once.
+    for (const { need } of [told, asked, hidden, opened, withdrawn, native, dismissed, gone]) {
+      expect(changesOf(need).map(({ type }) => type)).toEqual(['raised', 'ended']);
+    }
+    // What stays of it is what was asked, in short: a form in the core's words, never its link.
+    expect(changesOf(told.need).at(-1)).toMatchObject({
+      type: 'ended',
+      prompt: { id: idOf(told.need), kind: 'approval', agent: 'b', title: approval.title },
+    });
+    expect(changesOf(opened.need).at(-1)).toMatchObject({
+      prompt: { kind: 'form', title: 'MCP server “tracker” asks you to open a link' },
+    });
+    const settled = JSON.stringify(placed.filter(({ change }) => change.type === 'ended'));
+    expect(settled).not.toMatch(/private-|signin\.example|"label"|choices|subject|questions/);
+  });
+
+  it('settles nothing it hasn’t: a refused answer leaves it waiting, and an answer it took through an old event is the old entry’s', async () => {
+    const one = handle();
+    one.onAnswer = () => {
+      throw new Error('The CLI moved on');
+    };
+    raise(origin(7, one), approval);
+    const id = only();
+    expect(await answer(id, { choice: 'yes' })).toMatchObject({ code: 'unavailable' });
+    expect(changesOf(id).map(({ type }) => type)).toEqual(['raised']);
+    const two = handle();
+    owner.raised(origin(7, two, { mirrored: true }), {
+      type: 'prompt',
+      key: KEY2,
+      prompt: approval,
+    });
+    const need = owner.keyed(CANVAS, 'b', 7, KEY2) ?? '';
+    await answer(need, { choice: 'yes' });
+    expect(changesOf(need)).toEqual([]);
+  });
+
+  it('says what each agent waits on: its oldest live prompt, mirrored or not, being answered too, as a token reads it', async () => {
+    expect(owner.waiting(CANVAS, 'b')).toBeUndefined();
+    const one = handle();
+    owner.raised(origin(7, one, { mirrored: true }), { type: 'prompt', key: KEY, prompt: link });
+    const first = owner.waiting(CANVAS, 'b');
+    expect(first).toMatchObject({
+      agent: 'b',
+      kind: 'prompt',
+      title: 'MCP server “tracker” asks you to open a link',
+      choices: [],
+    });
+    expect(JSON.stringify(first)).not.toMatch(/private-|signin\.example/);
+    raise(origin(7, one), approval, KEY2);
+    expect(owner.waiting(CANVAS, 'b')?.id).toBe(first?.id);
+    expect(owner.waiting(CANVAS, 'c')).toBeUndefined();
+    owner.ended(origin(7, one, { mirrored: true }), {
+      type: 'prompt-ended',
+      key: KEY,
+      reason: 'withdrawn',
+    });
+    const next = owner.waiting(CANVAS, 'b');
+    expect(next?.title).toBe(approval.title);
+    // One being answered waits until its session has the answer.
+    const durable = messages.durable.bind(messages);
+    let during: unknown;
+    vi.spyOn(messages, 'durable').mockImplementationOnce(async () => {
+      during = owner.waiting(CANVAS, 'b');
+      await durable();
+    });
+    await answer(next?.id ?? '', { choice: 'yes' });
+    expect(during).toMatchObject({ id: next?.id });
+    expect(owner.waiting(CANVAS, 'b')).toBeUndefined();
+  });
+});
+
+describe('the close barrier (B13 C9)', () => {
+  it('declines what a session raises for a canvas the core no longer runs, and keeps nothing of it', () => {
+    owner = make({ canvas: 1 });
+    const one = handle();
+    stopped.add(CANVAS);
+    owner.raised(origin(7, one), { type: 'prompt', key: KEY, prompt: approval });
+    expect(one.declined).toEqual([[KEY, expect.any(String)]]);
+    // A terminal's observation then is answered by no one, and nothing is said of it.
+    owner.raised(origin(7, one), {
+      type: 'prompt',
+      key: KEY2,
+      prompt: { kind: 'approval', title: 'Waiting', answerIn: 'terminal', choices: [] },
+    });
+    expect(one.declined).toHaveLength(1);
+    expect(notices).toEqual([]);
+    expect(placed).toEqual([]);
+    stopped.delete(CANVAS);
+    expect(owner.items(CANVAS)).toEqual([]);
+    expect(owner.waiting(CANVAS, 'b')).toBeUndefined();
+    // It took none of the canvas's room: one raised once it runs again is admitted.
+    raise(origin(7, one), approval, crypto.randomUUID());
+    expect(owner.items(CANVAS)).toHaveLength(1);
+  });
+
+  it('refuses an answer whose canvas stopped being run while its record was written: the record withdrawn, its session never told', async () => {
+    const one = handle();
+    raise(origin(7, one), approval);
+    const id = only();
+    const durable = messages.durable.bind(messages);
+    vi.spyOn(messages, 'durable').mockImplementationOnce(async () => {
+      await durable();
+      stopped.add(CANVAS);
+    });
+    expect(await answer(id, { choice: 'yes' })).toMatchObject({
+      code: 'conflict',
+      sentence: expect.stringMatching(/withdrawn/) as string,
+    });
+    expect(one.answered).toEqual([]);
+    expect(settledRecords().at(-1)?.state).toBe('withdrawn');
+    expect(placed.at(-1)?.change).toMatchObject({ type: 'ended', outcome: { type: 'withdrawn' } });
+  });
+
+  it('forgets a canvas that closed: its prompts end withdrawn, their room is freed, nothing ended there is told any more', async () => {
+    owner = make({ canvas: 2 });
+    const one = handle();
+    raise(origin(7, one), approval);
+    raise(origin(7, one), question, KEY2);
+    const [first, second] = owner.items(CANVAS).map(({ id }) => id);
+    await answer(first ?? '', { choice: 'yes' });
+    owner.ended(origin(7, one), { type: 'prompt-ended', key: KEY2, reason: 'withdrawn' });
+    raise(origin(7, one), approval, crypto.randomUUID());
+    const third = owner.items(CANVAS).at(-1)?.id ?? '';
+    owner.closed(CANVAS);
+    expect(owner.items(CANVAS)).toEqual([]);
+    expect(outcomeOfIn(third)).toEqual({ type: 'withdrawn' });
+    // Its decided record still says who settled the first; how the others ended is forgotten.
+    expect(owner.settled(CANVAS, first ?? '')?.message).toMatch(/You allowed/);
+    expect(owner.settled(CANVAS, second ?? '')).toBeUndefined();
+    expect(owner.settled(CANVAS, third)).toBeUndefined();
+    // Its room is freed.
+    raise(origin(7, one), approval, crypto.randomUUID());
+    raise(origin(7, one), approval, crypto.randomUUID());
+    expect(owner.items(CANVAS)).toHaveLength(2);
+    expect(one.declined).toEqual([]);
+  });
+
+  /** How the prompt `need` names was settled in its transcript, if it was. */
+  function outcomeOfIn(need: string) {
+    const id = need.split('/').at(-1);
+    const last = placed
+      .map(({ change }) => change)
+      .filter((change) => (change.type === 'raised' ? change.entry.id : change.id) === id)
+      .at(-1);
+    return last?.type === 'ended' ? last.outcome : undefined;
+  }
+});
+
+describe('budgets under load (B13 C9)', () => {
+  it('counts every prompt until it ends, one being answered too, and gives all its room back as each ends', async () => {
+    owner = make({ canvas: 2 });
+    const one = handle();
+    raise(origin(7, one), approval);
+    raise(origin(9, handle(), { agent: 'c' }), approval, KEY2);
+    const [first] = owner.items(CANVAS).map(({ id }) => id);
+    // An answer being made holds its room until its session has it.
+    let release: () => void = () => undefined;
+    const durable = messages.durable.bind(messages);
+    vi.spyOn(messages, 'durable').mockImplementationOnce(async () => {
+      await new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      await durable();
+    });
+    const answering = answer(first ?? '', { choice: 'yes' });
+    const late = handle();
+    raise(origin(7, late), approval, crypto.randomUUID());
+    expect(late.declined).toHaveLength(1);
+    release();
+    expect(await answering).toMatchObject({ outcome: 'answered' });
+    raise(origin(7, late), approval, crypto.randomUUID());
+    expect(late.declined).toHaveLength(1);
+    expect(owner.items(CANVAS)).toHaveLength(2);
+    // The core's bytes, across canvases, given back as each ends: by its key, its generation's
+    // end, or its canvas's closing.
+    const bytes = promptJsonBytes(owner.prompts(CANVAS)[0]);
+    owner = make({ bytes: bytes * 2 });
+    const two = handle();
+    raise(origin(7, two), approval);
+    raise(origin(7, two, { canvas: OTHER }), approval, KEY2);
+    raise(origin(7, two, { canvas: OTHER }), approval, crypto.randomUUID());
+    expect(two.declined).toHaveLength(1);
+    owner.gone(CANVAS, 'b', 7);
+    raise(origin(7, two, { canvas: OTHER }), approval, crypto.randomUUID());
+    expect(owner.items(OTHER)).toHaveLength(2);
+    owner.closed(OTHER);
+    raise(origin(7, two), approval, crypto.randomUUID());
+    raise(origin(7, two), approval, crypto.randomUUID());
+    expect(owner.items(CANVAS)).toHaveLength(2);
+    expect(two.declined).toHaveLength(1);
+  });
+
+  it('tells an agent’s transcript once why its requests are declined, until one is admitted again', () => {
+    owner = make({ session: 1 });
+    const one = handle();
+    raise(origin(7, one), approval);
+    for (let i = 0; i < 5; i += 1) raise(origin(7, one), approval, crypto.randomUUID());
+    expect(one.declined).toHaveLength(5);
+    expect(notices).toHaveLength(1);
+    // A request that can't be shown whole is another reason: told once too.
+    for (let i = 0; i < 3; i += 1)
+      raise(origin(7, one), { ...approval, choices: [yes] }, crypto.randomUUID());
+    expect(notices).toHaveLength(2);
+    // Room again, and a request admitted: the next decline is told again.
+    owner.ended(origin(7, one), { type: 'prompt-ended', key: KEY, reason: 'withdrawn' });
+    raise(origin(7, one), approval, crypto.randomUUID());
+    raise(origin(7, one), approval, crypto.randomUUID());
+    expect(notices).toHaveLength(3);
+    // Another generation's are its own.
+    generations.set('b', 8);
+    raise(origin(8, one), approval, crypto.randomUUID());
+    raise(origin(8, one), approval, crypto.randomUUID());
+    expect(notices).toHaveLength(4);
+    expect(new Set(notices.map(({ text }) => text)).size).toBe(2);
   });
 });

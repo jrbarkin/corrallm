@@ -6,6 +6,7 @@ import type { AdapterId, ConnectionId } from '../../../shared/adapter';
 import type { CanvasId } from '../../../shared/canvas';
 import { needsItem, needsOf } from '../../../shared/model/needs-selectors';
 import type { NeedsInput, UnaskingWhy } from '../../../shared/model/needs-selectors';
+import type { NeedsItem } from '../../../shared/model/needs';
 import { needFor } from '../../../shared/model/prompt-views';
 import type { Engine } from '../engine/engine';
 import type { Admission, AdmittedWork, PauseCause } from '../engine/run/runner';
@@ -60,6 +61,13 @@ export interface DeliveryDeps {
   later: (run: () => void, ms: number) => () => void;
   /** Delivery's clock released a hold: needs may have changed without a session event. */
   changed: () => void;
+  /**
+   * B13 C9: what agent `agent` waits on in the core's prompt owner now (its oldest live prompt,
+   * whether or not its session shows it too), as a token reads it; none if nothing. A party's
+   * message waits while it does, its session idle or not, and a sender whose message's turn waits
+   * on it is told in those words. None composed: only what its session shows holds.
+   */
+  waitingOn?: (agent: string) => NeedsItem | undefined;
   /** The locale times of day are told in (the host's): the runtime's own, when none. */
   locale?: string;
   /**
@@ -920,15 +928,7 @@ export class Delivery {
     const stuck = this.#stuckHold(node);
     if (stuck !== undefined) return stuck;
     if (this.#deps.handoff?.request(message) !== 'go') return { kind: 'busy' };
-    const session = engine.sessions.of(node.id);
-    if (
-      session.status !== 'idle' ||
-      session.queued.length > 0 ||
-      (session.asking?.length ?? 0) > 0 ||
-      engine.run.sending(node.id)
-    ) {
-      return { kind: 'busy' };
-    }
+    if (this.#busy(node)) return { kind: 'busy' };
     const rule = engine.run.usageRule(node.id, this.#deps.now());
     if (
       rule === undefined ||
@@ -937,6 +937,23 @@ export class Delivery {
     )
       return undefined;
     return { kind: 'usage', hold: rule.hold, until: rule.hold.resetsAt };
+  }
+
+  /**
+   * Whether agent `node` is busy for a party's message (or corrallm's request): a turn going on,
+   * something queued in its session or on its way there from the run, or anything asked of it, by
+   * its session or (B13 C9) waiting in the core's prompt owner, its session idle or not.
+   */
+  #busy(node: AgentNode): boolean {
+    const { engine } = this.#deps;
+    const session = engine.sessions.of(node.id);
+    return (
+      session.status !== 'idle' ||
+      session.queued.length > 0 ||
+      (session.asking?.length ?? 0) > 0 ||
+      engine.run.sending(node.id) ||
+      this.#deps.waitingOn?.(node.id) !== undefined
+    );
   }
 
   /** What holds a message from you to agent `node` now: only a session that won't start. */
@@ -963,15 +980,7 @@ export class Delivery {
     if (asking === 'reading') return { kind: 'busy' };
     if (asking !== 'asks') return { kind: 'unasking', why: asking };
     // The run's own message on its way to it goes first, as one in its session's queue would.
-    const session = engine.sessions.of(node.id);
-    if (
-      session.status !== 'idle' ||
-      session.queued.length > 0 ||
-      (session.asking?.length ?? 0) > 0 ||
-      engine.run.sending(node.id)
-    ) {
-      return { kind: 'busy' };
-    }
+    if (this.#busy(node)) return { kind: 'busy' };
     // A usage hold the run set (AgentRun.usage) is this rule, with your Go on or Wait for the reset,
     // read now: so one a stopped run left, or whose window has reset, holds nothing.
     const rule = this.#holdingRule(node);
@@ -1457,9 +1466,11 @@ export class Delivery {
       ) {
         return [];
       }
-      // Its turn has started (the session has it), and waits on the user.
+      // Its turn has started (the session has it), and waits on the user: by its session's word,
+      // or on a prompt the core's owner holds (B13 C9).
       const { entries, status } = engine.sessions.of(agent);
-      return status === 'waiting' && entries.some((entry) => entry.id === message.delivery?.as)
+      return (status === 'waiting' || this.#deps.waitingOn?.(agent) !== undefined) &&
+        entries.some((entry) => entry.id === message.delivery?.as)
         ? [{ agent, message }]
         : [];
     });
@@ -1476,10 +1487,13 @@ export class Delivery {
     const asked = needsOf(input).filter((need) => need.kind === 'prompt' || need.kind === 'ask');
     for (const { agent, message } of turns) {
       const need = asked.find((one) => one.agent.id === agent);
-      if (need) {
-        // Its sender is a token (yours aren't told): it reads what a token may of the prompt (B13
-        // C11's selector).
-        const { title } = needFor(needsItem(need, input), 'token');
+      // Its sender is a token (yours aren't told): it reads what a token may of the prompt (B13
+      // C11's selector), its session's own, else the one the core's owner holds (C9).
+      const title =
+        need === undefined
+          ? this.#deps.waitingOn?.(agent)?.title
+          : needFor(needsItem(need, input), 'token').title;
+      if (title !== undefined) {
         this.#tell(
           `waiting:${message.id}`,
           message,

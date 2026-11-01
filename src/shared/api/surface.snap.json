@@ -304,7 +304,7 @@
   "schemas": {
     "topics.subscribe": {
       "input": "8c5be84f0a1a163a",
-      "output": "4fb3493eca21aa52"
+      "output": "61a66deea9639fa4"
     },
     "topics.unsubscribe": {
       "input": "8c5be84f0a1a163a",
@@ -520,7 +520,7 @@
     },
     "session.transcript": {
       "input": "b0a50f8eb22508f9",
-      "output": "7f76735450a0757f"
+      "output": "6a04de37197a4a41"
     },
     "session.handoff": {
       "input": "c804536f3eb2a39b",

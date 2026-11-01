@@ -597,6 +597,123 @@ describe('session.transcript and the session topic', () => {
   });
 });
 
+describe('the owner’s prompts in session.transcript and the session topic (B13 C9)', () => {
+  interface Placed {
+    id: string;
+    kind: 'prompt';
+    need: string;
+    prompt: { choices?: unknown[]; form?: unknown; detail?: unknown } & Record<string, unknown>;
+    outcome?: Record<string, unknown>;
+  }
+
+  /** The prompt entries of the Reviewer's transcript and of its session topic, as `caller` reads them. */
+  async function placed(core: Core, caller: Caller) {
+    const isPlaced = (entry: { kind: string } | undefined): entry is Placed =>
+      entry?.kind === 'prompt';
+    const { entries } = await ok<{ entries: { kind: string }[] }>(
+      core,
+      'session.transcript',
+      { agent: 'b', limit: 200 },
+      caller,
+    );
+    const topic = await core.topics.read(`session:${CANVAS}:b`, caller);
+    if (!topic.ok) throw new Error(topic.error.sentence);
+    const state = topic.value as { entries: Record<string, { kind: string }>; order: string[] };
+    return {
+      transcript: entries.filter(isPlaced),
+      topic: state.order.flatMap((id) => {
+        const entry = state.entries[id];
+        return isPlaced(entry) ? [entry] : [];
+      }),
+    };
+  }
+
+  it('place each as raised: yours whole, with its choices; a token’s as its Needs item says, alike at both boundaries', async () => {
+    const core = await start(raising([...RAISED]).connector);
+    await ok(core, 'message', { to: 'b', body: 'Clean up' });
+    const yours = await owned(core, RAISED.length);
+    await vi.waitFor(async () => {
+      expect((await placed(core, YOU)).transcript).toHaveLength(RAISED.length);
+    });
+    const mine = await placed(core, YOU);
+    expect(mine.topic).toEqual(mine.transcript);
+    expect(mine.transcript.map(({ id, need }) => [id, need])).toEqual(
+      yours.map(({ id, prompt }) => [prompt?.id, id]),
+    );
+    const [asked, opened, filled, waits, told] = mine.transcript;
+    expect(asked?.prompt).toMatchObject({
+      kind: 'approval',
+      title: approval.title,
+      summary: approval.summary,
+      subject: approval.subject,
+      choices: yours[0]?.choices,
+    });
+    expect(opened?.prompt).toMatchObject({ title: link.title, form: { url: LINK } });
+    expect(filled?.prompt).toMatchObject({ form: form.form, reason: form.reason });
+    expect(waits?.prompt).toMatchObject({
+      detail: { kind: 'output', text: SCREEN },
+      choices: [expect.objectContaining({ value: 'not-waiting' })],
+    });
+    expect(told?.prompt).toMatchObject({ subject: hooked.subject });
+    for (const entry of mine.transcript) expect(entry).not.toHaveProperty('outcome');
+    for (const caller of REACHED) {
+      const who = JSON.stringify(caller);
+      const theirs = await placed(core, caller);
+      expect(theirs.topic, who).toEqual(theirs.transcript);
+      expect(theirs.transcript.map(({ id }) => id)).toEqual(mine.transcript.map(({ id }) => id));
+      for (const entry of theirs.transcript) {
+        expect(entry.prompt.choices, who).toEqual([]);
+        expect(entry.prompt, who).not.toHaveProperty('form');
+      }
+      const [theirAsk, theirLink, , theirWait, theirTold] = theirs.transcript;
+      expect(theirAsk?.prompt).toMatchObject({ subject: approval.subject });
+      expect(theirLink?.prompt.title).toBe('MCP server “tracker” asks you to open a link');
+      expect(theirWait?.prompt).not.toHaveProperty('detail');
+      expect(theirTold?.prompt).toMatchObject({ subject: hooked.subject });
+      expectNothingPrivate(theirs, who);
+    }
+    for (const caller of [PARENT, STRANGER]) {
+      expect((await call(core, 'session.transcript', { agent: 'b' }, caller)).ok).toBe(false);
+    }
+  });
+
+  it('settle each in place as it ends: how and by whom yours, a token’s only its type and by whom, never what was given', async () => {
+    const core = await start(raising([approval, screen]).connector);
+    await ok(core, 'message', { to: 'b', body: 'Clean up' });
+    const [asked, waits] = await owned(core, 2);
+    await ok(core, 'reply', { to: asked?.id, answer: { choice: 'always' } });
+    await ok(core, 'reply', { to: waits?.id, answer: { choice: 'not-waiting' } });
+    await vi.waitFor(async () => {
+      expect((await placed(core, YOU)).transcript.map(({ outcome }) => outcome)).toEqual([
+        { type: 'choice', value: 'always', hint: 'allow_always', by: 'you' },
+        { type: 'dismissed', by: 'you' },
+      ]);
+    });
+    const mine = await placed(core, YOU);
+    expect(mine.topic).toEqual(mine.transcript);
+    expect(mine.transcript[0]?.prompt).toEqual({
+      id: asked?.prompt?.id,
+      kind: 'approval',
+      agent: 'b',
+      raised: asked?.prompt?.raised,
+      answerIn: 'api',
+      title: approval.title,
+    });
+    for (const caller of REACHED) {
+      const theirs = await placed(core, caller);
+      expect(theirs.topic).toEqual(theirs.transcript);
+      expect(theirs.transcript.map(({ outcome }) => outcome)).toEqual([
+        { type: 'choice', by: 'you' },
+        { type: 'dismissed', by: 'you' },
+      ]);
+      const text = JSON.stringify(theirs);
+      for (const word of ['always', 'allow_always', 'rm -rf', 'private-']) {
+        expect.soft(text, `${JSON.stringify(caller)}: ${word}`).not.toContain(word);
+      }
+    }
+  });
+});
+
 describe('records, messages and wait', () => {
   it('keep yours typed and value-free; a token reads none of them, nor what was decided', async () => {
     const native = raising([approval]);

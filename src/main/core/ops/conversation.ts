@@ -223,13 +223,21 @@ function failed(error: unknown): never {
   throw error;
 }
 
-/** How an agent is now: waiting for you, working, limited by usage, paused, or idle. */
+/**
+ * How an agent is now: waiting for you (by its session's word, or on a prompt the core's owner
+ * holds: B13 C9), working, limited by usage, paused, or idle.
+ */
 export function stateOf(
-  { engine, delivery }: OpenCanvas,
+  { engine, delivery, waitingOn }: OpenCanvas,
   id: string,
 ): (typeof AGENT_STATES)[number] {
   const session = engine.sessions.of(id);
-  if (session.status === 'waiting' || (session.asking?.length ?? 0) > 0) return 'waiting';
+  if (
+    session.status === 'waiting' ||
+    (session.asking?.length ?? 0) > 0 ||
+    waitingOn?.(id) !== undefined
+  )
+    return 'waiting';
   if (session.status === 'working') return 'working';
   if (delivery.limited().some(({ agent }) => agent === id)) return 'limited';
   return engine.run.snapshot().agents[id]?.paused ? 'paused' : 'idle';
