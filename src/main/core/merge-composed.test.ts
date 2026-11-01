@@ -15,7 +15,8 @@ import type { Conversations } from '../sessions/adapter';
 import { keepCanvases, readOnDisk, writeOnDisk } from './store/test-store';
 import { CALLERS, CANVAS, NO_DESKTOP } from './test-registry';
 import { GitRunner } from './workspaces/git';
-import { MergeService } from './workspaces/merge';
+import { MergeService, OBSERVED_WITHIN_MS } from './workspaces/merge';
+import { MergeObserver } from './workspaces/observe';
 import { WorkspaceGit } from './workspaces/runtime-git';
 import { commit, git, gitEnvironment, makeRepository, scratch } from './workspaces/test-git';
 
@@ -334,6 +335,72 @@ it('receipts each already-merged call’s settled revision, even for the same pa
   expect(revisions[2]).toBeGreaterThan(revisions[1] ?? 0);
   expect(states[1]).toEqual(states[0]);
   expect(states[2]).toEqual(states[0]);
+}, 60000);
+
+it('a merge whose observation times out leaves its card unknown, never stale', async () => {
+  config.observeEveryMs = 50;
+  const running = await start();
+  const cwd = await ready(running);
+  writeFileSync(path.join(cwd, 'agent.txt'), 'agent\n');
+  g(cwd, 'add', '-A');
+  commit(cwd, env, 'agent work');
+  const { diff, merge } = worktrees();
+  if (diff === undefined || merge === undefined) throw new Error('No branch services.');
+  expect(
+    await diff({ canvas: CANVAS, agent: 'a', limit: 50, viewer: { kind: 'you' } }),
+  ).toMatchObject({ ok: true });
+  await vi.waitFor(
+    async () => {
+      expect((await itemOf(running)).merge).toEqual({ merged: false, uncommitted: 0 });
+    },
+    { timeout: 15000 },
+  );
+
+  const held = Promise.withResolvers<undefined>();
+  // eslint-disable-next-line @typescript-eslint/unbound-method -- Called with the observed instance below.
+  const original = MergeObserver.prototype.now;
+  let refresh: Promise<void> | undefined;
+  const observing = vi.spyOn(MergeObserver.prototype, 'now').mockImplementation(function (
+    this: MergeObserver,
+    canvas,
+    workspace,
+  ) {
+    refresh = held.promise.then(() => original.call(this, canvas, workspace));
+    return refresh;
+  });
+  try {
+    const topic = `worktrees:${CANVAS}` as const;
+    const since = running.topics.mark();
+    expect(OBSERVED_WITHIN_MS).toBe(10_000);
+    const result = await merge({
+      canvas: CANVAS,
+      agent: 'a',
+      source: { ref: g(cwd, 'symbolic-ref', 'HEAD'), oid: g(cwd, 'rev-parse', 'HEAD') },
+      into: { ref: 'refs/heads/main', oid: g(project, 'rev-parse', 'main') },
+      request: randomUUID(),
+      caller: { key: 'you', requester: 'you' },
+    });
+    expect(result).toMatchObject({ ok: true, value: { outcome: 'merged' } });
+    expect((await itemOf(running)).merge).toEqual({ merged: null, uncommitted: null });
+    const revs = await running.topics.receipts([topic], since);
+    expect(revs[topic]).toEqual(expect.any(Number));
+    const followed = await running.topics.follow(CALLERS.you, topic, () => undefined);
+    try {
+      expect(followed.snapshot).toMatchObject({
+        rev: revs[topic],
+        state: {
+          items: [{ agent: 'a', merge: { merged: null, uncommitted: null } }],
+        },
+      });
+    } finally {
+      followed.stop();
+    }
+  } finally {
+    observing.mockRestore();
+    held.resolve(undefined);
+    await refresh;
+  }
+  expect((await itemOf(running)).merge).toEqual({ merged: true, uncommitted: 0 });
 }, 60000);
 
 it('reads a tree’s merge state again as its member’s turn ends, with no window watching', async () => {

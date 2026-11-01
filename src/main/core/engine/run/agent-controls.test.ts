@@ -42,7 +42,6 @@ function setup(nodes: AgentNode[], extra: Partial<RunIO> = {}) {
       events.push(`hold:${id}:${String(held)}`);
     },
     tell: () => undefined,
-    connect: () => undefined,
     later: (callback) => {
       timers.add(callback);
       return () => {

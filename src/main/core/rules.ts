@@ -400,16 +400,29 @@ export function changeChecks({
       }
       return undefined;
     },
-    // R8: how an agent that existed runs, its adapter or its connection.
+    // R8: how an agent that existed runs, its adapter or its connection; and (B11a C1) its
+    // fallback chain, the run's place in it included, and its handoff settings, as JSON says them.
     connection: (change) => {
       for (const [id, was, is] of keptAgents(change)) {
-        if (runs(was).join() === runs(is).join()) continue;
-        const [from, to] = [runs(was), runs(is)].map(
-          ([adapter, connection]) => connection ?? adapter,
-        );
-        return {
-          refuse: `Only the user changes how ${nameOf(change.before.nodes, id)} runs (${String(from)}, not ${String(to)}): its adapter and connection are theirs to choose.`,
-        };
+        const name = nameOf(change.before.nodes, id);
+        if (runs(was).join() !== runs(is).join()) {
+          const [from, to] = [runs(was), runs(is)].map(
+            ([adapter, connection]) => connection ?? adapter,
+          );
+          return {
+            refuse: `Only the user changes how ${name} runs (${String(from)}, not ${String(to)}): its adapter and connection are theirs to choose.`,
+          };
+        }
+        if (!sameJson(canonical(was.fallback), canonical(is.fallback))) {
+          return {
+            refuse: `Only the user changes ${name}’s fallback chain: the backends it carries on with are theirs to choose.`,
+          };
+        }
+        if (!sameJson(canonical(was.handoff), canonical(is.handoff))) {
+          return {
+            refuse: `Only the user changes ${name}’s handoff settings.`,
+          };
+        }
       }
       return undefined;
     },
@@ -441,6 +454,21 @@ export function changeChecks({
         if (moded) {
           return {
             refuse: `A token’s new agent starts in its user’s own default mode: only the user starts ${name} in ${String(moded[1]?.mode)}.`,
+          };
+        }
+        // B11a C1: a chain and handoff settings come only as an exact copy of its source's.
+        for (const [field, words] of [
+          ['fallback', 'fallback chain'],
+          ['handoff', 'handoff settings'],
+        ] as const) {
+          if (node.data[field] === undefined) continue;
+          if (
+            source !== undefined &&
+            sameJson(canonical(node.data[field]), canonical(source.data[field]))
+          )
+            continue;
+          return {
+            refuse: `A token’s new agent has no ${words} but its source’s, copied as it is: only the user gives ${name} one.`,
           };
         }
       }
@@ -572,6 +600,18 @@ function crossing(
 /** Whether two plain values are the same, as JSON says them. */
 function sameJson(a: unknown, b: unknown): boolean {
   return JSON.stringify(a) === JSON.stringify(b);
+}
+
+/** A value with its objects' keys in one order, so that equal settings compare equal as JSON. */
+function canonical(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonical);
+  if (value === null || typeof value !== 'object') return value;
+  return Object.fromEntries(
+    Object.entries(value)
+      .filter(([, one]) => one !== undefined)
+      .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+      .map(([key, one]) => [key, canonical(one)]),
+  );
 }
 
 /** Where a change puts an agent, as its manager says it: under an agent, or under none. */

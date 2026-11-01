@@ -449,6 +449,7 @@ describe('a Terminal session', () => {
       const input = {
         session_id: 's',
         rate_limits: { five_hour: { used_percentage: 61, resets_at: 1_791_810_000 } },
+        context_window: { context_window_size: 1_000_000, used_percentage: 94.7 },
       };
       const child = spawn(statusLine.command, [], { shell: true, env: claude().options.env });
       child.stdin.end(`${JSON.stringify(input)}\n`);
@@ -456,6 +457,11 @@ describe('a Terminal session', () => {
         expect(readings).toEqual([
           ['claude-code', { fiveHour: { usedPercent: 61, resetsAt: 1_791_810_000_000 } }],
         ]);
+        expect(last('usage')?.usage.context).toEqual({
+          used: 947_000,
+          window: 1_000_000,
+          compactAt: 967_000,
+        });
       });
     },
   );

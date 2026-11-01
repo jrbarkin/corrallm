@@ -346,6 +346,14 @@ export class RuntimeSource {
     this.#changed(source);
   }
 
+  /** Whether corrallm switches an agent's backend changed (B11a C4): its summary says it again. */
+  switchingChanged(canvas: CanvasId, agent: string): void {
+    const source = this.#canvases.get(canvas);
+    if (!source?.attached) return;
+    if (source.dirty.summaries !== 'all') source.dirty.summaries.add(agent);
+    this.#changed(source);
+  }
+
   /** Whether its run's checkpoint could be kept changed: the run's `saveError`. */
   problemChanged(canvas: CanvasId): void {
     const source = this.#canvases.get(canvas);

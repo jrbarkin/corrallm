@@ -1179,6 +1179,48 @@ export const REAL_FIXTURES: Readonly<Record<OpName, OpFixture>> = {
       },
     },
   },
+  'agent.setFallback': {
+    valid: [
+      {
+        canvas: CANVAS,
+        agent: 'stranger',
+        fallback: {
+          to: [{ adapter: 'codex', connection: 'codex.terminal' }, { adapter: 'claude-code' }],
+          back: 'return',
+        },
+        expect: NO_ITEM,
+        request: request(55),
+      },
+    ],
+    fresh: ['revs'],
+    invalid: [
+      { agent: 'helper' },
+      { agent: 'helper', fallback: { to: [] } },
+      { agent: 'helper', fallback: { to: [{ adapter: 'codex' }], back: 'stay' } },
+      { agent: 'helper', fallback: { to: [{ adapter: 'codex', model: '-flag' }] } },
+      { agent: 'helper', fallback: { to: [{ adapter: 'codex', mode: 'auto' }] } },
+      {
+        agent: 'helper',
+        fallback: {
+          to: [
+            { adapter: 'codex' },
+            { adapter: 'codex', model: 'a' },
+            { adapter: 'codex', model: 'b' },
+            { adapter: 'codex', model: 'c' },
+          ],
+        },
+      },
+    ],
+    // Yours alone: no token is in its audience to refuse.
+    meetsRule: {
+      connection: {
+        canvas: CANVAS,
+        agent: 'stranger',
+        fallback: { to: [{ adapter: 'claude-code', connection: 'claude-code.terminal' }] },
+        request: request(56),
+      },
+    },
+  },
   'agent.setSettings': {
     valid: [
       {

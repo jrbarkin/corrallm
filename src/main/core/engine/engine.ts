@@ -7,7 +7,7 @@ import { SessionStore } from './delivery/mailbox';
 import { decodeSubmissions } from './delivery/submission-state';
 import { readRun } from './run/checkpoint';
 import { RunStore } from './run/runner';
-import type { RunMailbox } from './run/runner';
+import type { RunIO, RunMailbox } from './run/runner';
 import type { SessionBackend } from './transcript/receive';
 
 /*
@@ -30,11 +30,6 @@ export interface EngineIO {
   now: () => number;
   /** Every usage backend's latest reading and its usage rule, read when the run needs them. */
   usage?: () => UsageState;
-  /**
-   * Runs an agent another way: the connection the user chose for it, as its session would not
-   * start. The canvas is the host's, which changes it, then gives the engine its nodes again.
-   */
-  connect: (agent: string, connection: ConnectionId) => void;
   /** Writes the engine's checkpoint out, before an automated message leaves for a session. */
   beforeSend?: () => Promise<void>;
   /**
@@ -44,6 +39,10 @@ export interface EngineIO {
   mailbox?: RunMailbox;
   /** The locale the run tells times of day in (the host's): the runtime's own, when none. */
   locale?: string;
+  /** B11a C3: admission before the run's tasks go (RunIO.admit): the core's fallback service. */
+  admit?: RunIO['admit'];
+  /** B11a C3: what a task held on a usage limit says of its recipient's chain (RunIO.limitNote). */
+  limitNote?: RunIO['limitNote'];
 }
 
 /** How often a held retry (Interrupt and resend) is checked again while something holds it. */
@@ -126,14 +125,13 @@ export class Engine {
       tell: (agent, text) => {
         sessions.notice(agent.id, 'warning', text);
       },
-      connect: (agent, connection) => {
-        io.connect(agent.id, connection);
-      },
       later: io.later,
       now: io.now,
       ...(io.usage ? { usage: io.usage } : {}),
       unheard: (agent) => sessions.of(agent.id).unheard !== undefined,
       ...(io.locale === undefined ? {} : { locale: io.locale }),
+      ...(io.admit === undefined ? {} : { admit: io.admit }),
+      ...(io.limitNote === undefined ? {} : { limitNote: io.limitNote }),
     });
     this.run.subscribe(() => {
       this.#checkRetries();

@@ -38,6 +38,7 @@
     "api.canvas.batch",
     "api.agent.setType",
     "api.agent.setConnection",
+    "api.agent.setFallback",
     "api.agent.setSettings",
     "api.agent.setRole",
     "api.queue.add",
@@ -277,6 +278,7 @@
     "session.viewCommand": "view",
     "agent.setType": "permissions",
     "agent.setConnection": "permissions",
+    "agent.setFallback": "permissions",
     "topics.subscribe": "transport",
     "topics.unsubscribe": "transport",
     "usage.setRule": "spending-guard",
@@ -296,7 +298,7 @@
   "schemas": {
     "topics.subscribe": {
       "input": "8c5be84f0a1a163a",
-      "output": "047a9e376e0f6ef8"
+      "output": "ed5e3f359c8e60b8"
     },
     "topics.unsubscribe": {
       "input": "8c5be84f0a1a163a",
@@ -431,7 +433,7 @@
       "output": "647bbd6cc7b4f077"
     },
     "canvas.batch": {
-      "input": "1257d2b1e10134be",
+      "input": "d5d5e992eb74f4ab",
       "output": "d8db8b91eea3da57"
     },
     "agent.setType": {
@@ -441,6 +443,10 @@
     "agent.setConnection": {
       "input": "1c2f2508eb96bb91",
       "output": "647bbd6cc7b4f077"
+    },
+    "agent.setFallback": {
+      "input": "61f7a59a418a62a9",
+      "output": "938d66756294f02f"
     },
     "agent.setSettings": {
       "input": "4a7da49e2038ee1b",
@@ -468,11 +474,11 @@
     },
     "agents": {
       "input": "41356bc15da6df1b",
-      "output": "48d08855f6623662"
+      "output": "6a04147aba846f89"
     },
     "status": {
       "input": "41356bc15da6df1b",
-      "output": "cb91151f949f1731"
+      "output": "527aa502cf3288c2"
     },
     "needs": {
       "input": "41356bc15da6df1b",
@@ -500,7 +506,7 @@
     },
     "session.get": {
       "input": "c804536f3eb2a39b",
-      "output": "606e09e2a5284c7e"
+      "output": "8f109ef4d692002d"
     },
     "session.transcript": {
       "input": "b0a50f8eb22508f9",

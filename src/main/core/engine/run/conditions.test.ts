@@ -36,7 +36,6 @@ function setup(queue: QueueItem[], unheard = false) {
     tell: (_node, text) => {
       notices.push(text);
     },
-    connect: () => undefined,
     later: () => () => undefined,
     now: () => 1234,
     unheard: () => unheard,
