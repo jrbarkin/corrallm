@@ -10,6 +10,16 @@ It is for developers who already run Claude Code and Codex and pass work between
 
 corrallm runs the Claude Code and Codex CLIs you install, with your own logins and settings. It is an independent project, not made, endorsed or supported by Anthropic or OpenAI.
 
+![A canvas of four agents at work. One opens in its own window as its turn streams in; All queues then shows every queue side by side, and the view goes back to the canvas.](docs/images/flow.gif)
+
+| ![The canvas: a lead and three workers on both CLIs, each card showing its status and branch](docs/images/canvas.png) |    ![An agent's window: its queue beside the transcript of its turns](docs/images/agent.png)     |
+| :-------------------------------------------------------------------------------------------------------------------: | :----------------------------------------------------------------------------------------------: |
+|                **The canvas.** Each agent is a card; arrows show the work one agent's queue waits on.                 |          **An agent's window.** Its queue beside its transcript, streaming as it works.          |
+|     ![All queues: four lanes side by side, waits joined by ribbons to what they wait for](docs/images/queues.png)     | ![Review changes: an agent's committed and uncommitted changes as diffs](docs/images/review.png) |
+|                   **All queues.** Every queue side by side, each wait level with what it waits for.                   |              **Review changes.** What an agent's branch holds, before you merge it.              |
+
+These pictures come from a demo canvas with scripted fake agents: `pnpm media` remakes them (see [toolchain](docs/architecture/toolchain.md)).
+
 ## How it works
 
 - **Agents.** Each agent runs its CLI in a git worktree of the canvas's project, on a branch of its own; a group shares one worktree. A project that isn't a Git repository is used as it is. You work with an agent in its own window: in the CLI's own terminal, or in corrallm's transcript and composer.
@@ -118,16 +128,17 @@ To try the production build, run `pnpm package` and open the app in `out/` (for 
 
 corrallm is an Electron app built with Electron Forge, Vite, React and TypeScript. [AGENTS.md](AGENTS.md) holds the development rules, and [the architecture overview](docs/architecture/overview.md) maps each area to its doc.
 
-| Script           | What it does                                                          |
-| ---------------- | --------------------------------------------------------------------- |
-| `pnpm dev`       | Run the app in development mode                                       |
-| `pnpm typecheck` | Type-check all TypeScript projects                                    |
-| `pnpm lint`      | ESLint (type-aware rules)                                             |
-| `pnpm format`    | Format all files with Prettier                                        |
-| `pnpm test`      | Unit tests (Vitest) for main, preload, renderer and store-performance |
-| `pnpm test:e2e`  | Build the app (unsigned) and run the Playwright tests                 |
-| `pnpm package`   | Package the app for the current OS into `out/`                        |
-| `pnpm make`      | Build installers for the current OS into `out/make/`                  |
+| Script           | What it does                                                           |
+| ---------------- | ---------------------------------------------------------------------- |
+| `pnpm dev`       | Run the app in development mode                                        |
+| `pnpm typecheck` | Type-check all TypeScript projects                                     |
+| `pnpm lint`      | ESLint (type-aware rules)                                              |
+| `pnpm format`    | Format all files with Prettier                                         |
+| `pnpm test`      | Unit tests (Vitest) for main, preload, renderer and store-performance  |
+| `pnpm test:e2e`  | Build the app (unsigned) and run the Playwright tests                  |
+| `pnpm package`   | Package the app for the current OS into `out/`                         |
+| `pnpm make`      | Build installers for the current OS into `out/make/`                   |
+| `pnpm media`     | Remake the screenshots and GIF above, in `docs/images/` (needs ffmpeg) |
 
 While `pnpm dev` runs, renderer changes update in place and preload changes reload the window. Main-process changes are rebuilt, but the app keeps running the old code until you press `r` in the Forge terminal. Changes to `forge.config.mts`, `vite.*.config.mts` or `package.json` need `pnpm dev` started again.
 
