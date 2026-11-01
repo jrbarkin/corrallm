@@ -1,8 +1,10 @@
 name: CI
 
+# The full gate, on every pushed branch, so a branch is checked without a local run (AGENTS.md:
+# Commands and done gate). Pull requests from forks run it too; a pull request from a branch of
+# this repository is already covered by its push.
 on:
   push:
-    branches: [main]
   pull_request:
   workflow_dispatch:
 
@@ -10,8 +12,10 @@ permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.head_ref || github.ref }}
+  # A newer push to the same branch replaces an older run, except on main, where every merge is
+  # checked.
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 env:
   # No git hooks in CI.
@@ -20,13 +24,17 @@ env:
 jobs:
   build:
     name: ${{ matrix.os }}
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
     strategy:
       fail-fast: false
       matrix:
-        # ubuntu-24.04 rather than ubuntu-latest, so runner image upgrades happen deliberately.
-        os: [macos-latest, windows-latest, ubuntu-24.04]
+        # Pinned images rather than *-latest for Linux, so runner image upgrades happen deliberately.
+        os: [macos-latest, ubuntu-24.04, ubuntu-24.04-arm, windows-latest]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
+    # Windows is held for the MVP (the prelaunch checklist): its result is reported but does not
+    # fail the run.
+    continue-on-error: ${{ matrix.os == 'windows-latest' }}
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
         with:
@@ -56,8 +64,21 @@ jobs:
       # Electron >= 42 downloads its binary on first use rather than at install time.
       - run: pnpm exec install-electron
 
+      # GitHub's Ubuntu (and possibly macOS) images install git-lfs system-wide (`filter.lfs` in /etc/gitconfig).
+      # corrallm's workspace Git reads the system configuration as a user's machine has it (its
+      # GIT_* environment is scrubbed, so a test can't opt out), and the workspace tests assume a
+      # machine without a system filter driver, as on a developer's laptop.
+      - name: Remove the image's system Git filter
+        if: runner.os != 'Windows'
+        run: sudo git lfs uninstall --system || sudo git config --system --remove-section filter.lfs || true
+
       - run: pnpm run typecheck
-      - run: pnpm run lint
+      - name: Lint
+        run: pnpm run lint
+        env:
+          # Type-aware ESLint over the whole solution needs more than Node's default heap on a
+          # 7 GB runner (it aborted at ~2 GB).
+          NODE_OPTIONS: --max-old-space-size=6144
       - run: pnpm run format:check
       - run: pnpm run test
       - run: pnpm run package
@@ -106,3 +127,53 @@ jobs:
           pnpm run corrallm
         env:
           CORRALLM_NATIVE_SELFTEST: '1'
+
+  e2e:
+    name: e2e ${{ matrix.os }}
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - name: Cache Electron binary
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cache/electron
+            ~/Library/Caches/electron
+          key: electron-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: electron-${{ runner.os }}-${{ runner.arch }}-
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec install-electron
+
+      # The display and software-GL packages the local Docker gate installs
+      # (scripts/lib/linux-build.Dockerfile), the same sandbox allowance and Git filter as above.
+      - name: Display and GL (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends xvfb xauth libgl1-mesa-dri libgl1 \
+            libglx-mesa0 libegl1 libegl-mesa0 mesa-utils fonts-liberation libgbm1
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          sudo git lfs uninstall --system || sudo git config --system --remove-section filter.lfs || true
+
+      - name: e2e (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          sudo git lfs uninstall --system || true
+          pnpm test:e2e --reporter=list
+      # As scripts/lib/linux-workspace.sh runs it in Docker.
+      - name: e2e (Linux)
+        if: runner.os == 'Linux'
+        run: xvfb-run -a -s '-screen 0 1920x1080x24 +extension GLX' pnpm test:e2e --reporter=list

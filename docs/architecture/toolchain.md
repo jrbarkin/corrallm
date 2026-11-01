@@ -85,11 +85,13 @@ macOS signing discovers the bundled Node with the other enclosed binaries. It us
 - The CLI bundle must not import Electron: `vite.cli.config.mts` fails the build if it does.
 - Packaged app updates use Electron's `autoUpdater` with update-electron-app's fixed public service feed on macOS and Windows; Linux checks GitHub for a newer stable release. Signed macOS only; never in dev, unpackaged e2e, the native self-test, CLI or serve. `CORRALLM_NO_UPDATE_CHECK=1` disables checks. See [App updates](updates.md) for contacted services, schedule, signature detection and the save-before-restart path.
 
-## Local CI
+## CI
 
-The GitHub CI workflow is disabled on GitHub until it is re-enabled before launch; `.github/workflows/ci.yml` stays checked in. Local gates are CI meanwhile. On macOS run the done gate in AGENTS.md, then `pnpm package` and `scripts/check-macos.sh` (or pass `arm64` or `x64` explicitly). The script checks the exact output bundle: `codesign --verify --deep --strict`, executable node-pty spawn-helper, the native self-test in main/core/shipped Node, the three refused launch switches (exit 1), and the shipped command's self-test and --help with an empty PATH. It does not rebuild or download anything, and reports the failed step before stopping. Keep the machine awake and avoid overlapping gates for the load measurements.
+`.github/workflows/ci.yml` runs on every pushed branch (and on pull requests from forks; one from a branch of this repository is covered by its push), cancelling an older run of the same branch except on main. Its `build` job runs typecheck, lint (with a 6 GB heap: type-aware lint over the solution aborts at Node's default on a 7 GB runner), format, unit, `pnpm package`, the packaged-app checks and the CLI bundle check on macOS, Linux x64 and Linux arm64, and on Windows without failing the run while Windows is held. Its `e2e` job runs Playwright on macOS and on Linux under xvfb with the Docker gate's display and software-GL packages. Both remove the runner image's system `filter.lfs` first: workspace Git reads the system configuration as a user's machine has it, and the workspace tests assume none. Standard runners are free for this public repository. A change is done when CI is green on its head; locally, run what you changed, and a full suite or e2e only when nothing else runs one.
 
-On Linux use Docker (Docker Desktop on macOS), from the checkout:
+Before a release, on macOS also run `pnpm package` and `scripts/check-macos.sh` (or pass `arm64` or `x64` explicitly). On macOS run the done gate in AGENTS.md, then `pnpm package` and `scripts/check-macos.sh` (or pass `arm64` or `x64` explicitly). The script checks the exact output bundle: `codesign --verify --deep --strict`, executable node-pty spawn-helper, the native self-test in main/core/shipped Node, the three refused launch switches (exit 1), and the shipped command's self-test and --help with an empty PATH. It does not rebuild or download anything, and reports the failed step before stopping. Keep the machine awake and avoid overlapping gates for the load measurements.
+
+To reproduce Linux locally, use Docker (Docker Desktop on macOS), from the checkout:
 
 ```sh
 scripts/ci-linux.sh arm64
