@@ -207,6 +207,26 @@ describe('Prompts: each request Codex makes raised to the core under a fresh key
 });
 
 describe('Prompts: the events B13 replaces, answered only through the owner (until X10)', () => {
+  it('bridges prototype-shaped question ids without dropping the person’s answer', async () => {
+    const h = prompts();
+    const told = h.ask({
+      ...first('question'),
+      params: {
+        questions: [
+          { id: '__proto__', header: 'Pick', question: 'Which?', isOther: true, options: [] },
+        ],
+      },
+    });
+    const bridged = h.asking.bridge(h.shown().id, { kind: 'question', answers: ['chosen'] });
+    expect(bridged.answer).toEqual({
+      kind: 'questions',
+      answers: Object.fromEntries([['__proto__', { text: 'chosen' }]]),
+    });
+    h.asking.answers.answer(bridged.key, bridged.answer);
+    await expect(told).resolves.toEqual({
+      answers: Object.fromEntries([['__proto__', { answers: ['chosen'] }]]),
+    });
+  });
   it('takes an old card’s “always” as the decision it shows: Codex’s first that keeps', async () => {
     const asked = first('mcp-approvals', 1);
     const { ask, shown, answerShown } = prompts();

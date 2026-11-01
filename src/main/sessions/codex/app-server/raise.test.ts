@@ -63,6 +63,64 @@ const choice = (value: string): PromptAnswer => ({ kind: 'choice', value });
 const NO_WORDS = { feedback: 'none', endsTurn: false } as const;
 
 describe('a command’s approval', () => {
+  it('omits a persistence decision whose complete label exceeds the bound, keeping once and cancel', () => {
+    const result = prompt(
+      raise(
+        'item/commandExecution/requestApproval',
+        {
+          command: 'echo ok',
+          cwd: '/work/smoke/p1',
+          availableDecisions: [
+            'accept',
+            {
+              acceptWithExecpolicyAmendment: {
+                execpolicy_amendment: ['echo', 'x'.repeat(600)],
+              },
+            },
+            'cancel',
+          ],
+        },
+        context(),
+      ),
+    );
+    expect(result.prompt).toMatchObject({ omitted: true });
+    expect(
+      result.prompt.kind === 'approval' && result.prompt.choices.map(({ value }) => value),
+    ).toEqual(['accept', 'cancel']);
+    expect(told(result, choice('accept'))).toEqual({ decision: 'accept' });
+    expect(() => told(result, choice('acceptWithExecpolicyAmendment'))).toThrow();
+  });
+
+  it('names the host a persistent network decision actually changes when it differs from the request', () => {
+    const decision = {
+      applyNetworkPolicyAmendment: {
+        network_policy_amendment: { host: 'other.example.test', action: 'allow' },
+      },
+    };
+    const result = prompt(
+      raise(
+        'item/commandExecution/requestApproval',
+        {
+          command: 'curl safe.example.test',
+          cwd: '/work/smoke/p1',
+          networkApprovalContext: { host: 'safe.example.test' },
+          availableDecisions: ['accept', decision, 'cancel'],
+        },
+        context(),
+      ),
+    );
+    if (result.prompt.kind !== 'approval') throw new Error('Not an approval');
+    const keeping = result.prompt.choices.find(({ hint }) => hint === 'allow_always');
+    expect(keeping?.label).toContain('other.example.test');
+    expect(keeping?.effects).toEqual({
+      network: {
+        host: 'other.example.test',
+        allow: true,
+        scope: 'user',
+      },
+    });
+    expect(told(result, choice('applyNetworkPolicyAmendment:allow'))).toEqual({ decision });
+  });
   it('offers each decision Codex lists, in its order, with its TUI’s words and their effects', () => {
     const { asked, raised } = raisedFrom('turns');
     const command = prompt(raised);
@@ -329,6 +387,43 @@ describe('a command’s approval', () => {
 });
 
 describe('a file change’s approval', () => {
+  it('names a directory-wide session grant instead of describing it as only the patch’s files', () => {
+    const asked = ask('approvals');
+    const result = prompt(
+      raise(
+        asked.method,
+        {
+          ...(asked.params as Record<string, unknown>),
+          grantRoot: '/outside/shared',
+        },
+        context(asked.before),
+      ),
+    );
+    if (result.prompt.kind !== 'approval') throw new Error('Not an approval');
+    const keeping = result.prompt.choices.find(({ value }) => value === 'acceptForSession');
+    expect(keeping?.label).toContain('/outside/shared');
+    expect(keeping?.effects).toEqual({ directories: ['/outside/shared'] });
+    expect(told(result, choice('acceptForSession'))).toEqual({ decision: 'acceptForSession' });
+  });
+
+  it('omits a directory grant it cannot name whole within its label, keeping once and cancel', () => {
+    const asked = ask('approvals');
+    const result = prompt(
+      raise(
+        asked.method,
+        {
+          ...(asked.params as Record<string, unknown>),
+          grantRoot: `/outside/${'x'.repeat(600)}`,
+        },
+        context(asked.before),
+      ),
+    );
+    expect(result.prompt).toMatchObject({ omitted: true });
+    expect(
+      result.prompt.kind === 'approval' && result.prompt.choices.map(({ value }) => value),
+    ).toEqual(['accept', 'cancel']);
+    expect(() => told(result, choice('acceptForSession'))).toThrow();
+  });
   it('names its files and their diffs, and keeps a rule for them for the session', () => {
     const { asked, raised } = raisedFrom('approvals', 0);
     const change = prompt(raised);
@@ -534,6 +629,27 @@ describe('a permissions request', () => {
 });
 
 describe('Codex’s questions', () => {
+  it('declines a question whose header cannot be shown whole, without silently truncating it', () => {
+    const result = raise(
+      'item/tool/requestUserInput',
+      {
+        questions: [
+          {
+            id: 'where',
+            header: 'h'.repeat(201),
+            question: 'Which region?',
+            isOther: true,
+            options: [],
+          },
+        ],
+      },
+      context(),
+    );
+    expect(result).toMatchObject({
+      declined: expect.any(String) as unknown,
+      result: { answers: {} },
+    });
+  });
   it('keeps its ids, its own-words option and its options; answers by id, words or a pick', () => {
     const { asked, raised } = raisedFrom('question');
     const question = prompt(raised);
@@ -617,6 +733,23 @@ describe('Codex’s questions', () => {
         q_4: { answers: ['hunter2'] },
       },
     });
+  });
+
+  it('sends prototype-shaped question ids as own response keys without losing their answers', () => {
+    const result = prompt(
+      raise(
+        'item/tool/requestUserInput',
+        {
+          questions: [
+            { id: '__proto__', header: 'Pick', question: 'Which?', isOther: true, options: [] },
+          ],
+        },
+        context(),
+      ),
+    );
+    const answers = Object.fromEntries([['__proto__', { text: 'chosen' }]]);
+    const response = told(result, { kind: 'questions', answers });
+    expect(JSON.stringify(response)).toBe('{"answers":{"__proto__":{"answers":["chosen"]}}}');
   });
 
   it('declines questions it can’t key faithfully, never answering by the first match', () => {
