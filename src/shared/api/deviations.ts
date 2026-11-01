@@ -40,6 +40,7 @@ export const DEVIATIONS: Partial<Record<OpName, Reason>> = {
   'agent.setType': 'permissions',
   'agent.setConnection': 'permissions',
   'agent.setFallback': 'permissions',
+  'agent.setHandoff': 'permissions',
   'topics.subscribe': 'transport',
   'topics.unsubscribe': 'transport',
   'usage.setRule': 'spending-guard',

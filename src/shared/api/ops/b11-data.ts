@@ -11,6 +11,7 @@ import {
 } from '../../session';
 import { PARTY_PATTERN } from '../../model/messages';
 import { FallbackViewSchema, SessionContextSchema } from '../../model/fallback';
+import { HandoffViewSchema } from '../../model/handoff';
 import { USAGE_WINDOWS } from '../../usage';
 import { AgentId, ItemId, MessageId } from '../ids';
 import {
@@ -196,6 +197,8 @@ export const SessionSummarySchema = z.strictObject({
   connection: z.string(),
   // B11a C11: where the agent is in the fallback chain you set, and whether corrallm switches it.
   fallback: FallbackViewSchema.nullable(),
+  // B11a C11: its handoff: when its latest was kept, how long, and its state; never its text.
+  handoff: HandoffViewSchema.nullable(),
   status: z.enum(['idle', 'working', 'waiting']),
   paused: z.boolean(),
   queued: z.int(),

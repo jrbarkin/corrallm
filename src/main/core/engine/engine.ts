@@ -43,6 +43,8 @@ export interface EngineIO {
   admit?: RunIO['admit'];
   /** B11a C3: what a task held on a usage limit says of its recipient's chain (RunIO.limitNote). */
   limitNote?: RunIO['limitNote'];
+  /** B11a C7: whether a handoff request holds an agent's next task (RunIO.handoff). */
+  handoff?: RunIO['handoff'];
 }
 
 /** How often a held retry (Interrupt and resend) is checked again while something holds it. */
@@ -132,6 +134,7 @@ export class Engine {
       ...(io.locale === undefined ? {} : { locale: io.locale }),
       ...(io.admit === undefined ? {} : { admit: io.admit }),
       ...(io.limitNote === undefined ? {} : { limitNote: io.limitNote }),
+      ...(io.handoff === undefined ? {} : { handoff: io.handoff }),
     });
     this.run.subscribe(() => {
       this.#checkRetries();

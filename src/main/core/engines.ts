@@ -12,9 +12,10 @@ import type { CanvasDocument } from '../../shared/model/canvas';
 import type { Message, MessageDisplay, PartyId } from '../../shared/model/messages';
 import { agentParty } from '../../shared/model/messages';
 import type { NeedsItem } from '../../shared/model/needs';
+import type { HandoffView } from '../../shared/model/handoff';
 import type { RunCheckpoint } from '../../shared/run';
 import { MAX_FILE_MATCHES } from '../../shared/session';
-import type { SessionEvent, TaskMessage, UserMessage } from '../../shared/session';
+import type { SessionEvent, TaskMessage, TurnResult, UserMessage } from '../../shared/session';
 import { usedUpUntil } from '../../shared/usage';
 import type { ProjectFiles } from '../files';
 import type { ProjectFolders } from '../project';
@@ -25,7 +26,9 @@ import type { SessionManager } from '../sessions/manager';
 import type { UsageReadings } from '../usage';
 import type { Documents } from './canvas/documents';
 import { recoverDecisions } from './decisions';
-import { Delivery } from './delivery/delivery';
+import { Delivery, HANDOFF_CARRIED } from './delivery/delivery';
+import { HandoffStore } from './delivery/handoffs';
+import type { HandoffTable } from './delivery/handoffs';
 import { capBody, MessageStore, sentByRun } from './delivery/messages';
 import type { MessageTable } from './delivery/messages';
 import { WithdrawalNotes } from './delivery/withdrawals';
@@ -86,6 +89,8 @@ export interface EnginesDeps {
   documents: Pick<Documents, 'review' | 'live' | 'loaded' | 'hasRows'>;
   /** Every canvas's messages, in the profile's database. */
   messages: MessageTable;
+  /** Every canvas's agents' latest handoffs, in the profile's database (B11a C7). */
+  handoffs: HandoffTable;
   /** The profile's database, whose commits hold what changes together. */
   store: Pick<Database, 'write'>;
   usage: Pick<UsageReadings, 'state' | 'subscribe' | 'exhaust' | 'exhausted'>;
@@ -110,6 +115,27 @@ export interface EnginesDeps {
     /** A canvas's agents' availability changed: a switch a held workspace stopped may go. */
     availabilityChanged(canvas: CanvasId): void;
   };
+  /**
+   * B11a's handoff service (core/handoff.ts): what each canvas's sessions report of their context
+   * and how their turns end, its handoff requests through delivery, the run's gate held while one
+   * waits, and what the first send after a switch carries. None: no handoff is asked or carried.
+   */
+  handoff?: {
+    attach(canvas: CanvasId, runtime: OpenCanvas): () => void;
+    asking(canvas: CanvasId, agent: string): boolean;
+    request(canvas: CanvasId, message: Message): 'go' | 'hold' | 'stale';
+    replied(canvas: CanvasId, message: Message, reply: string, result: TurnResult): void;
+    carry(
+      canvas: CanvasId,
+      agent: string,
+      text: string,
+      kind: 'run' | 'party',
+      owner?: string,
+    ): { text: string; carry: string; undo: () => void } | undefined;
+    /** As a canvas's delivery starts: what sends cut off unsent carried waits to be carried again. */
+    recover(canvas: CanvasId): void;
+    view(canvas: CanvasId, agent: string): HandoffView | null;
+  };
 }
 
 /**
@@ -130,6 +156,8 @@ export interface OpenCanvas {
   readonly state: RuntimeState;
   engine: Engine;
   messages: MessageStore;
+  /** Its agents' latest handoffs (B11a C7). */
+  handoffs: HandoffStore;
   delivery: Delivery;
   /** Where each party's `wait` has read to in its messages. */
   reads: ReadPositions;
@@ -155,6 +183,8 @@ export interface OpenCanvas {
   ownedPrompts?: (agent: string) => number;
   /** Whether corrallm switches an agent's backend now (B11a C4): what its views say. */
   switching?: (agent: string) => boolean;
+  /** An agent's handoff as its views show it (B11a C11): none where no service is composed. */
+  handoff?: (agent: string) => HandoffView | null;
 }
 
 /** How a canvas opens. */
@@ -218,7 +248,10 @@ export class Engines {
   #initialized: Promise<readonly Initialized[]> | undefined;
   /** The canvases open now, once opened. */
   readonly #canvases = new Map<CanvasId, Running>();
-  readonly #mail = new Map<CanvasId, Promise<{ messages: MessageStore; notes: WithdrawalNotes }>>();
+  readonly #mail = new Map<
+    CanvasId,
+    Promise<{ messages: MessageStore; notes: WithdrawalNotes; handoffs: HandoffStore }>
+  >();
   readonly #watchers = new Set<Watcher>();
   readonly #events = new Map<string, Promise<void>>();
   #closed = false;
@@ -914,16 +947,26 @@ export class Engines {
     const { document } = await documents.review(canvas);
     if (context.checkpoint) Engine.check(context.checkpoint);
     const listeners: Running['listeners'] = new Set();
-    const { messages } = await this.#mailOf(canvas);
-    const warnings: readonly string[] = [context.warning, messages.warning].filter(
-      (one) => one !== undefined,
+    const { messages, handoffs } = await this.#mailOf(canvas);
+    const warnings: readonly string[] = [
+      context.warning,
+      messages.warning,
+      handoffs.warning,
+    ].filter((one) => one !== undefined);
+    // B11a C7: the handoffs of agents no longer on the canvas go as it opens.
+    handoffs.prune(
+      new Set(document.nodes.flatMap(({ id, type }) => (type === 'agent' ? [id] : []))),
     );
+    await handoffs.durable().catch((error: unknown) => {
+      console.error('Could not forget the handoffs of agents no longer on the canvas:', error);
+    });
     // The engine and what journals it need each other.
     const running = {
       get document() {
         return documents.live(canvas).document;
       },
       messages,
+      handoffs,
       warnings,
       unwatch: messages.subscribe((message) => {
         for (const watcher of this.#watchers) watcher.message?.(message);
@@ -942,11 +985,18 @@ export class Engines {
     running.reads = new ReadPositions(await journal.reads(canvas));
     running.sessionGeneration = (agent) => this.#deps.sessions.generationOf(canvas, agent);
     running.ownedPrompts = (agent) => this.#deps.prompted?.(canvas, agent) ?? 0;
-    const { fallback } = this.#deps;
+    const { fallback, handoff } = this.#deps;
     if (fallback !== undefined) running.switching = (agent) => fallback.switching(canvas, agent);
+    if (handoff !== undefined) running.handoff = (agent) => handoff.view(canvas, agent);
     running.journal = () => this.#write(running);
-    // What its messages write, they write with its run, if that changed since it was last on disk.
-    messages.writeWith(() => this.#runWithin(running, false));
+    // What its messages write, they write with its run, if that changed since it was last on disk,
+    // and its handoffs (a reply's accepted handoff, a send's carry cleared: B11a C7).
+    messages.writeWith(() => {
+      const done = [this.#runWithin(running, false), handoffs.changes()];
+      return () => {
+        for (const one of done) one();
+      };
+    });
     const engine: Engine = new Engine({
       catalog: this.#deps.engineCatalog,
       backend: this.#backend(canvas, listeners),
@@ -965,8 +1015,14 @@ export class Engines {
         const problem = journal.problem(canvas);
         if (problem !== undefined) throw new Error(problem);
       },
-      // Each attempt the run sends is a message first, written with the run (B11 Design §3).
-      mailbox: runMailbox(messages),
+      // Each attempt the run sends is a message first, written with the run (B11 Design §3); the
+      // first to an agent since a switch carries its handoff (B11a C7).
+      mailbox: runMailbox(
+        messages,
+        handoff === undefined
+          ? undefined
+          : (agent, text, owner) => handoff.carry(canvas, agent, text, 'run', owner),
+      ),
       ...(this.#deps.locale === undefined ? {} : { locale: this.#deps.locale }),
       // B11a C3: admission before each task's attempt goes.
       ...(fallback === undefined
@@ -975,6 +1031,8 @@ export class Engines {
             admit: (agent, work) => fallback.admit(canvas, agent, work),
             limitNote: (agent) => fallback.limitNote(canvas, agent),
           }),
+      // B11a C7: an agent's next task waits while corrallm's handoff request to it waits or runs.
+      ...(handoff === undefined ? {} : { handoff: (agent) => handoff.asking(canvas, agent) }),
     });
     running.engine = engine;
     engine.update(document.nodes);
@@ -1004,6 +1062,21 @@ export class Engines {
       ...(fallback === undefined
         ? {}
         : { admit: (agent, work) => fallback.admit(canvas, agent, work) }),
+      // B11a C7: corrallm's handoff requests, and what the first send after a switch carries.
+      ...(handoff === undefined
+        ? {}
+        : {
+            handoff: {
+              request: (message) => handoff.request(canvas, message),
+              replied: (message, reply, result) => {
+                handoff.replied(canvas, message, reply, result);
+              },
+              carry: (agent, framed) => handoff.carry(canvas, agent, framed, 'party'),
+              recover: () => {
+                handoff.recover(canvas);
+              },
+            },
+          }),
     });
     running.delivery = delivery;
     // One opened while the shutdown barrier holds is held by it too.
@@ -1043,6 +1116,8 @@ export class Engines {
         delivery.schedule();
         look();
       }),
+      // B11a C7: what its sessions report of their context, and how their turns end.
+      ...(handoff === undefined ? [] : [handoff.attach(canvas, running)]),
     ];
     running.stop = () => {
       for (const stop of unsubscribe) stop();
@@ -1057,12 +1132,16 @@ export class Engines {
     return running;
   }
 
-  #mailOf(canvas: CanvasId): Promise<{ messages: MessageStore; notes: WithdrawalNotes }> {
+  #mailOf(
+    canvas: CanvasId,
+  ): Promise<{ messages: MessageStore; notes: WithdrawalNotes; handoffs: HandoffStore }> {
     let mail = this.#mail.get(canvas);
     if (!mail) {
       mail = (async () => {
         const messages = new MessageStore(canvas, this.#deps.messages, () => Date.now());
         await messages.load();
+        const handoffs = new HandoffStore(canvas, this.#deps.handoffs);
+        handoffs.load();
         // A decision a crash cut off as it was being made is unresolved, never made again.
         if (recoverDecisions(messages)) {
           await messages.durable().catch((error: unknown) => {
@@ -1072,6 +1151,7 @@ export class Engines {
         return {
           messages,
           notes: new WithdrawalNotes(messages, this.#deps.engineCatalog.shellPrefixes),
+          handoffs,
         };
       })();
       this.#mail.set(canvas, mail);
@@ -1149,7 +1229,11 @@ export class Engines {
    * marks them on disk once the write's commit returned.
    */
   #journalWithin(running: Running, run: boolean): () => void {
-    const done = [this.#runWithin(running, run), running.messages.changes()];
+    const done = [
+      this.#runWithin(running, run),
+      running.messages.changes(),
+      running.handoffs.changes(),
+    ];
     return () => {
       for (const one of done) one();
     };
@@ -1242,31 +1326,57 @@ export class Engines {
  * another), or, for a correction you typed with it, yours as you typed it (origin `manual`, what
  * you typed its display, beside the held task it corrects), its task link the attempt, delivering
  * under its own id; never a reply, a notice or a party's message to deliver. Its body is capped as
- * any message's is: the session gets the whole of it, from memory.
+ * any message's is: the session gets the whole of it, from memory. The first of the run's own sends
+ * to an agent since a switch (never your correction) carries the agent's handoff (`carry`, B11a
+ * C7), taken as it is recorded, so the write that records it clears the carry, and kept with a
+ * told key that says it carried one (HANDOFF_CARRIED and the switch, never the text); one whose
+ * record couldn't be kept, or that was taken back before its session had it, leaves it to the
+ * next, and a crash that cut it off unsent does too (Delivery.start).
  */
-function runMailbox(messages: MessageStore): RunMailbox {
+function runMailbox(
+  messages: MessageStore,
+  carry?: (
+    to: string,
+    text: string,
+    owner: string,
+  ) => { text: string; carry: string; undo: () => void } | undefined,
+): RunMailbox {
+  const carried = new Map<string, () => void>();
   return {
-    record: ({ to, owner, text, task, images, typed }) => {
+    record: ({ to, owner, text: given, task, images, typed }) => {
+      const carrying = typed === undefined ? carry?.(to, given, owner) : undefined;
+      const text = carrying?.text ?? given;
       const display: MessageDisplay = {
         ...(typed === undefined
           ? {}
           : { text: typed, task: { agent: task.agent, item: task.item } }),
         ...(images > 0 ? { images } : {}),
       };
-      const message = messages.add({
-        from: typed !== undefined ? 'you' : owner === to ? 'corrallm' : agentParty(owner),
-        to: agentParty(to),
-        kind: 'text',
-        origin: typed === undefined ? 'run' : 'manual',
-        ...(Object.keys(display).length === 0 ? {} : { display }),
-        body: capBody(text, 'prompt'),
-        task,
-        state: 'delivering',
-      });
+      const message = messages.add(
+        {
+          from: typed !== undefined ? 'you' : owner === to ? 'corrallm' : agentParty(owner),
+          to: agentParty(to),
+          kind: 'text',
+          origin: typed === undefined ? 'run' : 'manual',
+          ...(Object.keys(display).length === 0 ? {} : { display }),
+          body: capBody(given, 'prompt'),
+          task,
+          state: 'delivering',
+        },
+        carrying === undefined ? undefined : `${HANDOFF_CARRIED}${carrying.carry}`,
+      );
       messages.update(message.id, { delivery: { at: message.at, as: message.id, attempt: 1 } });
-      return message.id;
+      if (carrying !== undefined) carried.set(message.id, carrying.undo);
+      return { id: message.id, text };
     },
-    settle: (id, { state, turn }) => {
+    settle: (id, end) => {
+      const { state, turn } = end;
+      const undo = carried.get(id);
+      carried.delete(id);
+      if (undo !== undefined && (state === 'unresolved' || (state === 'withdrawn' && end.unsent))) {
+        undo();
+        messages.retell(id, undefined);
+      }
       const message = messages.get(id);
       // Cut off meanwhile (the core stopping), it stays as that left it.
       if (message?.state !== 'delivering' && message?.state !== 'delivered') return;
