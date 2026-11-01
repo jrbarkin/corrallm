@@ -10,12 +10,9 @@ import {
   utimesSync,
   writeFileSync,
 } from 'node:fs';
-import { spawnSync } from 'node:child_process';
-import { mkdtempSync } from 'node:fs';
-import { tmpdir } from 'node:os';
 import path from 'node:path';
 
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { CanvasId } from '../../../shared/canvas';
 import { CanvasMemory } from '../../memory';
@@ -33,11 +30,14 @@ import {
   commit,
   git,
   gitEnvironment,
+  gitInits,
   makeRepository,
   ran,
   scratch,
   sentinelProgram,
+  templateRepository,
 } from './test-git';
+import type { RepositoryTemplate } from './test-git';
 
 /*
  * Provisioning (B9a Design §3, Provisioning protocol): a workspace's intent recorded first, then
@@ -45,24 +45,22 @@ import {
  * HEAD, a worktree registered without a checkout, then populated, every phase marked on disk),
  * verified, and handed to setup; reused by its owner's every start; finished on restart from what
  * Git actually has, never made twice; and a checkout lost or changed noticed before its path is
- * trusted. Real Git in throwaway repositories, a real store in a throwaway profile.
+ * trusted. Real Git in throwaway repositories (each test's picked checkout a copy of one made
+ * once), a real store in a throwaway profile.
  */
 
+// Real Git, a repository and a provisioning or more each: slower under load, or on Linux CI's
+// emulated x64.
+vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 });
+
 /** Whether the Git these tests run can make a reftable repository (Git 2.45 and later can). */
-function gitMakesReftable(): boolean {
-  const probe = mkdtempSync(path.join(tmpdir(), 'reftable-probe-'));
-  try {
-    return spawnSync('git', ['init', '-q', '--ref-format=reftable', probe]).status === 0;
-  } finally {
-    rmSync(probe, { recursive: true, force: true });
-  }
-}
-const REFTABLE = gitMakesReftable();
+const REFTABLE = gitInits('--ref-format=reftable');
 
 const CANVAS = '11111111-1111-4111-8111-111111111111' as CanvasId;
 const PROFILE = '0b6f5c1e-2a3d-4e5f-8a9b-0c1d2e3f4a5b';
 const OWNER = 'agent/builder' as const;
 
+let template: RepositoryTemplate<string>;
 let root: string;
 let remove: () => void;
 let env: Record<string, string>;
@@ -72,11 +70,17 @@ let profile: string;
 let store: Store;
 let workspaces: WorkspaceStore;
 
+beforeAll(async () => {
+  template = await templateRepository({ 'README.md': 'hello\n', 'src/main.ts': 'export {};\n' });
+});
+afterAll(() => {
+  template.remove();
+});
 beforeEach(async () => {
   ({ root, remove } = scratch());
   env = gitEnvironment(path.join(root, 'home'));
   app = path.join(root, 'app');
-  base = makeRepository(app, env, { 'README.md': 'hello\n', 'src/main.ts': 'export {};\n' });
+  base = template.copy(app, env);
   profile = path.join(root, 'profile');
   mkdirSync(profile);
   store = await openTestStore(profile);

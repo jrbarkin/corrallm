@@ -13,13 +13,14 @@ import {
 } from 'node:fs';
 import path from 'node:path';
 
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { fingerprint, safe, WorkspaceCleanup } from './cleanup';
 import { GitError } from './git';
 import type { Removal } from './cleanup';
 import type { WorktreeRecord } from './store';
-import { commit, git, makeRepository, ran, sentinelProgram } from './test-git';
+import { commit, git, makeRepository, ran, sentinelProgram, templateRepository } from './test-git';
+import type { RepositoryTemplate } from './test-git';
 import { CANVAS, testWorkspaces } from './test-workspace';
 import type { TestWorkspaces } from './test-workspace';
 
@@ -27,15 +28,26 @@ import type { TestWorkspaces } from './test-workspace';
  * A workspace's cleanup (B9a C7, workspaces/cleanup.ts), against real Git in throwaway folders:
  * what a tree holds, removed only once it is still what was decided (safe, or the fingerprint you
  * approved), never work added since; its branch deleted only where it was; what fails kept
- * `removing`, saying why, and tried again.
+ * `removing`, saying why, and tried again. Each test's picked checkout is a copy of one made once.
  */
 
+// Real Git, a provisioning and a removal or more each: slower under load, or on Linux CI's
+// emulated x64.
+vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 });
+
+let template: RepositoryTemplate<string>;
 let made: TestWorkspaces;
 let writers: string[];
 let forgotten: string[];
 
+beforeAll(async () => {
+  template = await templateRepository();
+});
+afterAll(() => {
+  template.remove();
+});
 beforeEach(async () => {
-  made = await testWorkspaces();
+  made = await testWorkspaces(template);
   writers = [];
   forgotten = [];
 });
@@ -161,12 +173,24 @@ describe('what a tree holds', { timeout: 60_000 }, () => {
    * an approval is bound to.
    */
   describe('with a submodule', () => {
-    const files = { '.gitattributes': '*.txt filter=evil\n', 'data.txt': 'base\n' };
+    let submodule: RepositoryTemplate<string>;
     let sentinel: string;
+
+    // The submodule's repository, made once: each test copies it as the picked checkout's
+    // submodule and, checked out, into the tree, its filter (the test's own sentinel) set there.
+    beforeAll(async () => {
+      submodule = await templateRepository({
+        '.gitattributes': '*.txt filter=evil\n',
+        'data.txt': 'base\n',
+      });
+    });
+    afterAll(() => {
+      submodule.remove();
+    });
 
     /** The picked checkout's HEAD with a submodule at `sub`, and a tree of it, kept. */
     async function withSubmodule(): Promise<WorktreeRecord> {
-      const oid = makeRepository(path.join(made.app, 'sub'), made.env, files);
+      const oid = submodule.copy(path.join(made.app, 'sub'), made.env);
       git(made.app, made.env, 'update-index', '--add', '--cacheinfo', `160000,${oid},sub`);
       commit(made.app, made.env, 'gitlink');
       sentinel = path.join(made.root, 'ran');
@@ -176,7 +200,7 @@ describe('what a tree holds', { timeout: 60_000 }, () => {
     /** The submodule checked out in the tree, its clean filter a program that records it ran. */
     function checkOut(tree: WorktreeRecord): string {
       const checkout = path.join(tree.path, 'sub');
-      makeRepository(checkout, made.env, files);
+      submodule.copy(checkout, made.env);
       git(checkout, made.env, 'config', 'filter.evil.clean', sentinelProgram(made.root, sentinel));
       return checkout;
     }
