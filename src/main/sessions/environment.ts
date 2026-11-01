@@ -29,11 +29,11 @@ const INHERITED = new Set([
 ]);
 const INHERITED_PREFIXES = ['ITERM_', 'ELECTRON_', 'CORRALLM_'];
 
-/** `env` without what agents must not inherit (see INHERITED), and without unset variables. */
+/** A clean agent environment, with its session marker and proxy exclusions for loopback. */
 export function agentEnvironment(
   env: Readonly<Record<string, string | undefined>>,
 ): Record<string, string> {
-  return Object.fromEntries(
+  const clean = Object.fromEntries(
     Object.entries(env).filter(
       (entry): entry is [string, string] =>
         entry[1] !== undefined &&
@@ -41,6 +41,14 @@ export function agentEnvironment(
         !INHERITED_PREFIXES.some((prefix) => entry[0].startsWith(prefix)),
     ),
   );
+  clean.CORRALLM_AGENT_SESSION = '1';
+  for (const key of ['NO_PROXY', 'no_proxy']) {
+    const kept = clean[key] ?? '';
+    const entries = kept.split(',').map((entry) => entry.trim().toLowerCase());
+    const missing = ['127.0.0.1', 'localhost', '::1'].filter((host) => !entries.includes(host));
+    clean[key] = [kept, ...missing].filter(Boolean).join(',');
+  }
+  return clean;
 }
 
 /**

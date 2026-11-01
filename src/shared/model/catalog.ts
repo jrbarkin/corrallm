@@ -62,6 +62,8 @@ export interface EngineCatalog {
    * none for one that runs no shell command from a message (or one the catalog lacks).
    */
   shellPrefix(connection: ConnectionId): string | undefined;
+  /** Whether this connection expands @ file mentions in input without asking. */
+  fileMentions(connection: ConnectionId): boolean;
   /** Every text any connection runs as a shell command, without asking, when a message starts with it. */
   readonly shellPrefixes: readonly string[];
   /**
@@ -105,6 +107,7 @@ export function engineCatalog(catalog: Catalog, defaultAdapter: AdapterId): Engi
       return found && `${found.adapter.name} · ${found.connection.label}`;
     },
     shellPrefix: (id) => connection(id)?.connection.shellPrefix,
+    fileMentions: (id) => connection(id)?.connection.fileMentions === true,
     shellPrefixes: [
       ...new Set(
         catalog.adapters.flatMap(({ connections }) =>
@@ -143,6 +146,22 @@ export function adapterRefusal(
 /** Whether `text` starts with `prefix`, the text a connection runs as a shell command, if any. */
 export function startsWithShell(text: string, prefix: string | undefined): prefix is string {
   return prefix !== undefined && prefix !== '' && text.trimStart().startsWith(prefix);
+}
+
+/** An @ at the start or after a non-ASCII-letter/digit, followed by non-whitespace; no path lookup. */
+export function hasFileMention(text: string): boolean {
+  return /(?:^|[^A-Za-z0-9])@\S/u.test(text);
+}
+
+/** Only the user's typed text may ask a connection to expand a native file mention. */
+export function fileMentionRefusal(
+  catalog: EngineCatalog,
+  connection: ConnectionId,
+  text: string,
+): string | undefined {
+  if (!catalog.fileMentions(connection) || !hasFileMention(text)) return undefined;
+  const name = catalog.connectionName(connection) ?? 'its connection';
+  return `Not sent: it contains a file mention, which ${name} reads without asking. Reword it, or type it in the agent’s terminal yourself.`;
 }
 
 /**

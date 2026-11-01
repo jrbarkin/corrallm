@@ -31,6 +31,10 @@ function declared(session: object) {
 }
 
 describe("Codex's adapter", () => {
+  it('keeps the agent API unavailable on every connection until its evidence gate opens', () => {
+    for (const one of descriptor.connections) expect(one).toHaveProperty('api', null);
+  });
+
   it('declares context on the App Server alone: its Terminal knows no window in production', () => {
     // App Server: app-server/translate.test.ts replays app-server/fixtures/compact-default.jsonl
     // and compact-limit.jsonl (Codex 0.162.1, B11a C4). Terminal: its title's percentage is

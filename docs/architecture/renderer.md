@@ -151,3 +151,5 @@ Needs observes each agent's Terminal asks through the shown canvas's `sessions:<
 The view-only draft acknowledgement drains manual sends until none remains, including sends admitted while it waits for an earlier one. An operation's own draft flush still never waits on manual sends, so concurrent sends cannot wait on one another. Renderer test helpers record reads separately (`reads`, `expectOneRead`) from mutations (`operations`, `expectOneOp`); a panel's read does not hide a second mutation.
 
 B14 X1 passes `windowOnShow` through the bridge and client as a fixed removable event listener, with the same event in the fake core. It dispatches no operation, flushes no draft and changes no selection. X7 supplies navigation through the normal canvas switch.
+
+The registry admits B13's owner replies (X8), while session cards still send legacy permission, plan and string/array question answers until X10; X11 removes those consumers and the bridge together. The renderer's legacy runtime fixture accepts only its old entries' question answers, so it never treats an owner answer object as display text.

@@ -14,6 +14,7 @@ import {
 import type { OpName, Reach, Rule } from '../../shared/api/surface';
 import type { CanvasId } from '../../shared/canvas';
 import { itemKey, linkKey, nodeKey } from '../../shared/model/rows';
+import type { AdapterPrompt } from '../../shared/model/prompts';
 import type { SessionMode } from '../../shared/session';
 import { MAX_FILE_QUERY_LENGTH, MAX_MESSAGE_LENGTH, MAX_ROLE_LENGTH } from '../../shared/session';
 import type { Connector } from '../sessions/connector';
@@ -187,6 +188,101 @@ const controlRequest = (n: number) =>
   `2c3d4e5f-6071-4829-9bac-1d2e3f4a${String(n).padStart(4, '0')}`;
 const CONTROL_MODE = CONTROL.connection.startModes[0];
 if (!CONTROL_MODE) throw new Error('The fixture needs an asking start mode');
+
+/** Owner occurrences are core-minted; setup fills the plain-data arguments before any call. */
+const OWNER_CASES: {
+  prompt: AdapterPrompt;
+  args: { canvas: string; to: string; answer: unknown; request: string };
+}[] = (
+  [
+    ...['strict', 'always', 'deny-network'].map((value) => ({
+      prompt: {
+        kind: 'approval' as const,
+        title: `Fixture ${value}`,
+        answerIn: 'api' as const,
+        choices: [
+          { value, label: value, hint: 'allow_once' as const, effects: {} },
+          { value: 'no', label: 'No', hint: 'reject_once' as const, effects: {} },
+        ],
+      },
+      answer: { choice: value },
+    })),
+    {
+      prompt: {
+        kind: 'plan',
+        title: 'Fixture plan',
+        plan: 'Read, then implement.',
+        answerIn: 'api',
+        choices: [
+          {
+            value: 'revise',
+            label: 'Keep planning',
+            hint: 'reject_once',
+            effects: {},
+            feedback: 'optional',
+          },
+        ],
+      },
+      answer: { choice: 'revise', feedback: 'Cover the empty case' },
+    },
+    {
+      prompt: {
+        kind: 'question',
+        title: 'Fixture questions',
+        answerIn: 'api',
+        questions: [
+          {
+            id: 'branch',
+            header: 'Branch',
+            text: 'Which branch?',
+            options: [{ label: 'main' }],
+            multiple: false,
+            other: false,
+          },
+          {
+            id: 'checks',
+            header: 'Checks',
+            text: 'Which checks?',
+            options: [],
+            multiple: false,
+            other: true,
+          },
+        ],
+      },
+      answer: { answers: { branch: { picked: ['main'] }, checks: { text: 'Full suite' } } },
+    },
+    {
+      prompt: {
+        kind: 'form',
+        title: 'Fixture form',
+        server: 'fixture-server',
+        answerIn: 'api',
+        form: {
+          schema: {
+            type: 'object',
+            properties: { count: { type: 'integer', title: 'Count' } },
+            required: ['count'],
+            additionalProperties: false,
+          },
+        },
+      },
+      answer: { form: { action: 'accept', values: { count: 3 } } },
+    },
+    {
+      prompt: {
+        kind: 'approval',
+        title: 'Fixture terminal wait',
+        answerIn: 'terminal',
+        choices: [],
+      },
+      answer: { choice: 'not-waiting' },
+    },
+  ] satisfies { prompt: AdapterPrompt; answer: unknown }[]
+).map(({ prompt, answer }, i) => ({
+  prompt,
+  args: { canvas: CANVAS, to: '', answer, request: controlRequest(600 + i) },
+}));
+
 function controlConnector(): Connector<SessionMode> {
   const fake = new FakeConnector({ adapter: CONTROL.adapter.id });
   return {
@@ -195,6 +291,12 @@ function controlConnector(): Connector<SessionMode> {
       if (spec.agentId === RESUMER) host.remember(WORLD_KEPT[0].id);
       // The resumer's sessions run nothing in the background, so its folder's restores go on.
       if (spec.agentId !== CONTROL_AGENT) return live;
+      Object.assign(live, {
+        prompts: { answer: () => undefined, decline: () => undefined, dismiss: () => undefined },
+      });
+      for (const { prompt } of OWNER_CASES) {
+        host.emit({ type: 'prompt', key: crypto.randomUUID(), prompt });
+      }
       let tasks = CONTROL_TASKS.map((id) => ({
         id,
         description: 'Fixture task',
@@ -249,7 +351,7 @@ const NODES = [
   { id: 'worker', connection: 'codex.app-server' },
   { id: 'apprentice', connection: 'codex.app-server', parent: 'worker' },
   { id: 'peer', adapter: 'gemini' },
-  { id: 'shell', connection: 'codex.terminal' },
+  { id: 'shell', adapter: 'claude-code', connection: 'claude-code.terminal' },
   { id: 'stranger', connection: 'codex.app-server' },
   // What tokens' deletes propose to remove, each once: alone, in a batch, and the two proposals
   // waiting as the tests begin.
@@ -318,7 +420,7 @@ const REFUSING: Connector<SessionMode> = {
       id: crypto.randomUUID(),
       level: 'error',
       text: 'This terminal can’t start here.',
-      switchTo: 'codex.app-server',
+      switchTo: 'claude-code.sdk',
     });
     return Promise.reject(new Error('This terminal can’t start here.'));
   },
@@ -540,6 +642,7 @@ export async function startWorld(): Promise<{
   let clock = 0;
   let cap = MAX_CREATED_AGENTS;
   const proposals = Object.values(PROPOSED).map((id) => id.slice('proposal/'.length));
+  const spending = silent(SPENDING.adapter.id);
   const core = await createCore(
     {
       profile,
@@ -577,8 +680,12 @@ export async function startWorld(): Promise<{
         connectors: {
           'codex.app-server': new FakeConnector({ adapter: 'codex' }),
           'codex.terminal': REFUSING,
+          'claude-code.terminal': REFUSING,
           [CONTROL.connection.id]: controlConnector(),
-          [SPENDING.connection.id]: silent(SPENDING.adapter.id),
+          [SPENDING.connection.id]: {
+            start: (spec, host) =>
+              spec.agentId === 'shell' ? REFUSING.start(spec, host) : spending.start(spec, host),
+          },
         },
         environment: () => Promise.resolve(env),
         // Never the user's own conversations: the world's, for its folder.
@@ -613,6 +720,19 @@ export async function startWorld(): Promise<{
   );
   await core.engines.open(CANVAS);
   await core.engines.canvas(CANVAS)?.engine.sessions.ready(CONTROL_AGENT);
+  const ownerNeeds = await core.call('needs', { canvas: CANVAS }, CALLERS.you);
+  if (!ownerNeeds.ok) throw new Error(ownerNeeds.error.sentence);
+  for (const fixture of OWNER_CASES) {
+    const item = ownerNeeds.value.items.find(
+      (item) =>
+        item.agent === CONTROL_AGENT &&
+        (fixture.prompt.kind === 'form'
+          ? item.prompt?.kind === 'form'
+          : item.title === fixture.prompt.title),
+    );
+    if (!item) throw new Error(`The fixture prompt was not raised: ${fixture.prompt.title}`);
+    fixture.args.to = item.id;
+  }
   // The spender's backend is over its usage rule's share for a day: once the run starts, its task
   // waits for the window's reset, which only you go on past (R3 on run.goOn).
   for (const [name, args] of [
@@ -1568,6 +1688,7 @@ export const REAL_FIXTURES: Readonly<Record<OpName, OpFixture>> = {
     ],
     meetsRule: {
       'shell-text': { canvas: CANVAS, to: 'shell', body: '!ls', request: request(2) },
+      'file-mentions': { canvas: CANVAS, to: 'shell', body: 'Read @link', request: request(3) },
       // Past a token's 16 KiB: yours, as your composer's are (B11 §16.6).
       'human-text': {
         canvas: CANVAS,
@@ -1597,6 +1718,7 @@ export const REAL_FIXTURES: Readonly<Record<OpName, OpFixture>> = {
     valid: [],
     by: {
       you: [
+        ...OWNER_CASES.map(({ args }) => args),
         {
           canvas: CANVAS,
           to: PROPOSED.refused,
@@ -1611,6 +1733,16 @@ export const REAL_FIXTURES: Readonly<Record<OpName, OpFixture>> = {
       { to: PROPOSED.allowed, answer: {} },
       { to: PROPOSED.allowed, answer: { choice: '' } },
       { to: PROPOSED.allowed, answer: { choice: 'allow' }, extra: true },
+      {
+        canvas: CANVAS,
+        to: PROPOSED.allowed,
+        answer: { choice: 'allow', feedback: 'why', text: 'more' },
+      },
+      {
+        canvas: CANVAS,
+        to: PROPOSED.allowed,
+        answer: { answers: { q: { picked: ['Yes'], text: 'more' } } },
+      },
     ],
     meetsRule: {
       'human-choice': {
@@ -2205,6 +2337,9 @@ export const REAL_OUT_OF_REACH: OutOfReach = {
   TaskId: () => ['missing-task'],
   // A conversation no list showed the caller, kept or not (B11 §7).
   ConversationId: () => ['0c1d2e3f-4a5b-4c6d-8e7f-9a0b1c2d3eff', WORLD_KEPT[1].id],
-  // A Needs item that isn't there.
-  NeedId: () => ['proposal/1b2c3d4e-5f60-4718-8a9b-0c1d2e3f4aff'],
+  // Neither a missing proposal nor a textual owner id at another generation resolves.
+  NeedId: () => [
+    'proposal/1b2c3d4e-5f60-4718-8a9b-0c1d2e3f4aff',
+    `prompt/${CONTROL_AGENT}/0/1b2c3d4e-5f60-4718-8a9b-0c1d2e3f4aff`,
+  ],
 };

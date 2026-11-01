@@ -25,7 +25,8 @@ export type Brand =
   | 'EntryId'
   | 'TaskId'
   | 'TokenId'
-  | 'WorktreeId';
+  | 'WorktreeId'
+  | 'AttemptId';
 
 /** Each id schema's brand, at run time. */
 export const ID_BRANDS = z.registry<{ brand: Brand }>();
@@ -48,7 +49,9 @@ export const NeedId = brandedId(
   z
     .string()
     .max(MAX_NEED_ID)
-    .regex(/^(?:hold|start|unasking|limited|prompt|proposal|file|stalled|setup|rebind)\/[\s\S]+$/),
+    .regex(
+      /^(?:hold|start|unasking|limited|prompt|proposal|file|stalled|setup|rebind|message|ask|loop)\/[\s\S]+$/,
+    ),
 );
 export type NeedId = z.infer<typeof NeedId>;
 
@@ -73,6 +76,14 @@ export const OpCanvas = CanvasId.optional();
 /** An agent of a canvas, by its node's id. */
 export const AgentId = brandedId('AgentId', z.string().min(1).max(MAX_NODE_ID));
 export type AgentId = z.infer<typeof AgentId>;
+
+/** A string always names an agent; reserved parties use a disjoint object form. */
+export const Target = z.union([AgentId, z.strictObject({ party: z.enum(['you', 'manager']) })]);
+export type Target = z.infer<typeof Target>;
+
+/** A core task attempt, never a native conversation, turn or background task id. */
+export const AttemptId = brandedId('AttemptId', z.uuid());
+export type AttemptId = z.infer<typeof AttemptId>;
 
 /** A node of a canvas, by its id: an agent, as itself, or a frame, as every agent inside it. */
 export const NodeId = brandedId('NodeId', z.string().min(1).max(MAX_NODE_ID));

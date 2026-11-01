@@ -110,6 +110,7 @@ export const claudeCode: Adapter = {
         prompts: { approval: 'seen', question: 'seen', plan: 'seen', form: 'none' },
         signals: false,
         context: true,
+        api: null,
         startModes: START_MODES,
         live: { effort: false, stopTask: false },
         panels: {},
@@ -119,6 +120,7 @@ export const claudeCode: Adapter = {
         keys: { shiftEnter: '\x1b\r' },
         // Its bash mode: what follows runs as a shell command, without asking.
         shellPrefix: '!',
+        fileMentions: true,
       },
       {
         id: 'claude-code.sdk',
@@ -137,6 +139,7 @@ export const claudeCode: Adapter = {
         // Claude Code 2.1.311 (sdk/fixtures/ask-rule.jsonl, safety-check.jsonl): B13 C4.
         signals: true,
         context: true,
+        api: null,
         startModes: START_MODES,
         live: { effort: true, stopTask: true },
         panels: {

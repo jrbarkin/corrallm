@@ -304,7 +304,7 @@
   "schemas": {
     "topics.subscribe": {
       "input": "8c5be84f0a1a163a",
-      "output": "6b4e2652530fc3bf"
+      "output": "4fb3493eca21aa52"
     },
     "topics.unsubscribe": {
       "input": "8c5be84f0a1a163a",
@@ -316,7 +316,7 @@
     },
     "catalog.get": {
       "input": "e5fa5cc18e054cdd",
-      "output": "52b2fe4cd717e692"
+      "output": "96ab2eb5510c7423"
     },
     "catalog.installed": {
       "input": "e5fa5cc18e054cdd",
@@ -348,7 +348,7 @@
     },
     "worktree.remove": {
       "input": "6c53b4b2cbe1d85f",
-      "output": "d2717814b126a90e"
+      "output": "16d9c3e93cdb745e"
     },
     "branch.diff": {
       "input": "ea58dbaf93714d81",
@@ -360,7 +360,7 @@
     },
     "canvas.create": {
       "input": "3394f69e468a0469",
-      "output": "6837192ee223cf50"
+      "output": "acea2da07183ace8"
     },
     "canvas.open": {
       "input": "8ed9ce92c68e70c8",
@@ -368,7 +368,7 @@
     },
     "canvas.save": {
       "input": "f676d264f07b5166",
-      "output": "dc2cdf0a6f25f4a5"
+      "output": "d04339764c838ea7"
     },
     "canvas.saveAs": {
       "input": "f676d264f07b5166",
@@ -376,7 +376,7 @@
     },
     "canvas.close": {
       "input": "1a908234579fefb6",
-      "output": "c7d3b8a6259feb00"
+      "output": "eba6496cf38ca8d8"
     },
     "project.choose": {
       "input": "f676d264f07b5166",
@@ -412,7 +412,7 @@
     },
     "canvas.delete": {
       "input": "13089a4ee94a5b15",
-      "output": "4e5ad502b4237e86"
+      "output": "18a421e3864bef06"
     },
     "canvas.link": {
       "input": "621da187728c140f",
@@ -440,7 +440,7 @@
     },
     "canvas.batch": {
       "input": "4b1b92094dfe622c",
-      "output": "d8db8b91eea3da57"
+      "output": "f1b91b6477f67401"
     },
     "agent.setType": {
       "input": "ae31f270ae564f34",
@@ -488,11 +488,11 @@
     },
     "status": {
       "input": "41356bc15da6df1b",
-      "output": "ad8ad0de8a6ede55"
+      "output": "808be2537c077866"
     },
     "needs": {
       "input": "41356bc15da6df1b",
-      "output": "92c451f1bdba9c2c"
+      "output": "63ece9d9d45121ed"
     },
     "messages": {
       "input": "aa02e84f7d3e9a8e",
@@ -507,8 +507,8 @@
       "output": "50a2dfd89653c978"
     },
     "reply": {
-      "input": "64eb7ca52232e2a9",
-      "output": "c9c1b028c0775abd"
+      "input": "16f9e56ad87e2b37",
+      "output": "d334f64773514652"
     },
     "withdraw": {
       "input": "c0fce69c0611e40f",
@@ -564,7 +564,7 @@
     },
     "session.rewind": {
       "input": "948321df0cdae09f",
-      "output": "6b0655527549cf1a"
+      "output": "624b766511d75eb2"
     },
     "session.continueIn": {
       "input": "8c4c055fef37a203",
