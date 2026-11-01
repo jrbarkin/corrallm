@@ -397,29 +397,16 @@ describe('agent and queue commits through core.call', () => {
     expect(result.revs).toEqual({});
     expect(rows()).toEqual([]);
   });
-  const operations: [string, object][] = [
-    ['agent.setType', { adapter: 'codex' }],
-    ['agent.setConnection', { connection: 'codex.app-server' }],
-    ['agent.setSettings', { adapter: 'codex', settings: {} }],
-    ['agent.setRole', { role: '' }],
-    ['queue.add', { entry: { message: '' } }],
-    ['queue.remove', { item: 'm' }],
-    ['queue.move', { item: 'm', before: null }],
-    ['queue.update', { item: 'm', change: { kind: 'message', message: '' } }],
-  ];
-  it.each(
-    operations.flatMap(([name, args]) =>
-      (
-        [
-          ['ghost', 'not-found'],
-          ['G', 'invalid'],
-        ] as const
-      ).map(([agent, code]) => [name, { ...args, agent }, code] satisfies [string, object, string]),
-    ),
-  )('%s refuses missing and wrong-kind agents (%j)', async (name, args, code) => {
+  // Every operation resolves its agent through requireAgent; one agent-document and one queue
+  // operation cover its two refusals (the matrix of all eight repeated one code path).
+  it.each([
+    ['agent.setRole', { role: '', agent: 'ghost' }, 'not-found'],
+    ['agent.setRole', { role: '', agent: 'G' }, 'invalid'],
+    ['queue.remove', { item: 'm', agent: 'ghost' }, 'not-found'],
+  ])('%s refuses missing and wrong-kind agents (%j)', async (name, args, code) => {
     const before = doc();
     expect(
-      await (core as Dispatcher).call(name, { canvas: CANVAS, ...(args as object) }, CALLERS.you),
+      await (core as Dispatcher).call(name, { canvas: CANVAS, ...args }, CALLERS.you),
     ).toMatchObject({ ok: false, error: { code } });
     expect(doc()).toBe(before);
     expect(rows()).toEqual([]);

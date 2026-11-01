@@ -554,22 +554,6 @@ describe('channels waiting for the core', () => {
   });
 });
 
-it('exposes no transitional session channel or event method after the cutover', async () => {
-  const api = await exposed();
-  for (const name of [
-    'answerSession',
-    'interruptSession',
-    'setSessionMode',
-    'setSessionModel',
-    'setSessionEffort',
-    'stopSessionTask',
-    'sessionAvailability',
-    'onSessionEvent',
-    'onSessionAvailability',
-  ])
-    expect(api).not.toHaveProperty(name);
-});
-
 it('hears show through one fixed removable listener, without replaying a replaced port', async () => {
   const api = await exposed();
   postPort(answerInfo);

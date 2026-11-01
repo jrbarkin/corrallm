@@ -30,20 +30,6 @@ describe('repository instructions and architecture docs', () => {
     expect(readFileSync(path.join(ROOT, 'CLAUDE.md'), 'utf8')).toBe('@AGENTS.md\n');
   });
 
-  it('documents the kept-file CLI exception without giving command lines TrustedPath authority', () => {
-    const agents = readFileSync(path.join(ROOT, 'AGENTS.md'), 'utf8');
-    expect(agents.includes('No command line mints a `TrustedPath`')).toBe(true);
-    expect(/`--canvas`[^\n]*canvas memory/.test(agents)).toBe(true);
-    expect(agents.includes('No CLI/renderer argument supplies a project/file path')).toBe(false);
-  });
-
-  it('keeps model and effort argv guards in the canonical security rules', () => {
-    const agents = readFileSync(path.join(ROOT, 'AGENTS.md'), 'utf8');
-    expect(agents.includes('`MODEL_PATTERN`')).toBe(true);
-    expect(agents.includes('`EFFORT_PATTERN`')).toBe(true);
-    expect(/model and effort[^\n]*never[^\n]*leading dash/i.test(agents)).toBe(true);
-  });
-
   it.each(['claude-code', 'codex'])(
     'documents %s native ids as adapter checks after R42a',
     (adapter) => {

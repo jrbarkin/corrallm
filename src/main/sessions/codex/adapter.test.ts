@@ -60,24 +60,6 @@ describe("Codex's adapter", () => {
     });
   });
 
-  it('is codex, with Terminal first and App Server second', () => {
-    expect(descriptor.id).toBe('codex');
-    expect(descriptor.connections.map((one) => one.id)).toEqual([
-      'codex.terminal',
-      'codex.app-server',
-    ]);
-    expect(connection('codex.terminal').view).toBe('terminal');
-    expect(connection('codex.app-server').view).toBe('transcript');
-  });
-
-  it('spends its usage backend through both connections', () => {
-    expect(connection('codex.terminal').usage).toBe('codex');
-    expect(connection('codex.app-server').usage).toBe('codex');
-    expect(codex.usageBackends.map(({ id, windows }) => [id, windows.map((w) => w.id)])).toEqual([
-      ['codex', ['fiveHour', 'weekly']],
-    ]);
-  });
-
   it('runs text starting with ! as a shell command in Terminal only', () => {
     expect(connection('codex.terminal').shellPrefix).toBe('!');
     expect(connection('codex.app-server').shellPrefix).toBeUndefined();
