@@ -12,7 +12,7 @@ import type { SessionEvent, SessionMode, TurnResult, UserMessage } from '../../s
 import type { Connector, SessionHost } from '../sessions/connector';
 import { CATALOG } from '../sessions/adapters';
 import { FakeConnector } from '../sessions/fake';
-import type { OutsideCaller } from './caller';
+import type { Caller, OutsideCaller } from './caller';
 import { createCore } from './core';
 import type { Core } from './core';
 import { keepCanvases, readOnDisk, writeOnDisk } from './store/test-store';
@@ -979,6 +979,79 @@ it('keeps a handoff reply out of session summaries', async () => {
       value: { reply: 'Ordinary reply after the handoff.' },
     });
   });
+});
+
+it('a resumed conversation never previews an accepted handoff, after its request is pruned', async () => {
+  await keep();
+  const codex = driven('codex');
+  const core = await start(codex.connector, driven('claude-code').connector);
+  await core.engines.open(CANVAS);
+  const open = core.engines.canvas(CANVAS);
+  if (open === undefined) throw new Error('No open canvas.');
+  const work = async (body: string, context: SessionContext, count: number) => {
+    await core.call('message', { canvas: CANVAS, to: 'worker', body }, CALLERS.you);
+    await vi.waitFor(() => {
+      expect(codex.sent).toHaveLength(count);
+    });
+    codex.reply('Ordinary work reply.', context);
+  };
+  await work('Work', CROSSED, 1);
+  await vi.waitFor(() => {
+    expect(codex.sent).toHaveLength(2);
+  });
+  codex.reply('historical-handoff-private', CROSSED);
+  await vi.waitFor(() => {
+    expect(kept(core)?.handoff?.text).toBe('historical-handoff-private');
+  });
+  // Native history preserves the request's client id when this conversation is resumed.
+  const resumed = structuredClone(open.engine.sessions.of('worker'));
+  await work('Re-arm', UNDER, 3);
+  await work('Cross again', CROSSED, 4);
+  await vi.waitFor(() => {
+    expect(codex.sent).toHaveLength(5);
+  });
+  codex.reply('A newer handoff.', CROSSED);
+  await vi.waitFor(() => {
+    expect(kept(core)?.handoff?.text).toBe('A newer handoff.');
+  });
+  await core.close();
+  cores.splice(cores.indexOf(core), 1);
+  // Retention has removed the request and its handoff marker; only native history remains.
+  writeOnDisk(profile, `DELETE FROM message WHERE canvas_id = '${CANVAS}'`);
+  const restarted = await start(driven('codex').connector, driven('claude-code').connector);
+  await restarted.engines.open(CANVAS);
+  const reopened = restarted.engines.canvas(CANVAS);
+  if (reopened === undefined) throw new Error('No reopened canvas.');
+  expect(reopened.messages.all()).toEqual([]);
+  expect(kept(restarted)?.handoff?.text).toBe('A newer handoff.');
+  vi.spyOn(reopened.engine.sessions, 'of').mockReturnValue(resumed);
+  const callers: Caller[] = [
+    CALLERS.you,
+    ORCHESTRATOR,
+    { ...ORCHESTRATOR, access: 'read' },
+    { kind: 'agent', canvas: CANVAS, agent: 'worker', session: 'resumed-worker' },
+  ];
+  for (const caller of callers) {
+    const read = await restarted.call('session.get', { canvas: CANVAS, agent: 'worker' }, caller);
+    expect(read).toMatchObject({ ok: true, value: { reply: null } });
+    expect(JSON.stringify(read)).not.toContain('historical-handoff-private');
+    const sessions = await restarted.topics.read(`sessions:${CANVAS}`, caller);
+    expect(sessions.ok).toBe(true);
+    expect(JSON.stringify(sessions)).not.toContain('historical-handoff-private');
+    const topic = await restarted.topics.read(`session:${CANVAS}:worker`, caller);
+    if (!topic.ok) throw new Error(topic.error.sentence);
+    expect(JSON.stringify((topic.value as { summary: object }).summary)).not.toContain(
+      'historical-handoff-private',
+    );
+    // It is still the agent's transcript, readable under the usual reach rules.
+    const transcript = await restarted.call(
+      'session.transcript',
+      { canvas: CANVAS, agent: 'worker' },
+      caller,
+    );
+    expect(transcript.ok).toBe(true);
+    expect(JSON.stringify(transcript)).toContain('historical-handoff-private');
+  }
 });
 
 it.each([

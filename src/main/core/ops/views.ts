@@ -67,18 +67,20 @@ export function sessionSummary(open: OpenCanvas, agent: string, yours = true) {
   const lastTurn = session.entries.findLast((entry) => entry.kind === 'user');
   const reply = lastTurn === undefined ? null : turnReply(session, lastTurn.id) || null;
   // Maintenance replies belong in the transcript and session.handoff, never a summary, including
-  // while they stream. The accepted text remains withheld if its request record was pruned.
+  // while they stream. Accepted turn ids survive request pruning and newer handoffs, so resumed
+  // native history cannot preview an older handoff either.
   const handoffReply =
     (lastTurn !== undefined &&
-      open.messages
-        .all()
-        .some(
-          (message) =>
-            message.from === 'corrallm' &&
-            message.to === agentParty(agent) &&
-            message.delivery?.as === lastTurn.id &&
-            open.messages.toldOf(message.id)?.startsWith(HANDOFF_REQUEST) === true,
-        )) ||
+      (open.handoffs.of(agent)?.acceptedTurns?.includes(lastTurn.id) === true ||
+        open.messages
+          .all()
+          .some(
+            (message) =>
+              message.from === 'corrallm' &&
+              message.to === agentParty(agent) &&
+              message.delivery?.as === lastTurn.id &&
+              open.messages.toldOf(message.id)?.startsWith(HANDOFF_REQUEST) === true,
+          ))) ||
     (reply !== null && reply.trim() === open.handoffs.of(agent)?.handoff?.text);
   return {
     agent,

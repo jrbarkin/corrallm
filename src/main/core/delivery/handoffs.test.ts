@@ -90,6 +90,23 @@ describe('a handoff accepted', () => {
     });
   });
 
+  it('keeps only the 64 newest accepted turn ids per agent across a restart', async () => {
+    const store = loaded();
+    const turns = Array.from({ length: 66 }, (_, index) => `turn-${String(index)}`);
+    for (const turn of turns) store.accept('worker', HANDOFF, turn);
+    store.accept('helper', HANDOFF, 'helper-turn');
+    // Repeating an acceptance keeps a single id, in its newest place.
+    store.accept('worker', HANDOFF, 'turn-10');
+    await store.durable();
+    const expected = [...turns.slice(2).filter((turn) => turn !== 'turn-10'), 'turn-10'];
+    expect(loaded().of('worker')?.acceptedTurns).toEqual(expected);
+    expect(loaded().of('helper')?.acceptedTurns).toEqual(['helper-turn']);
+    expect(rows()).toEqual([
+      expect.objectContaining({ agent_id: 'helper', accepted_turns: '["helper-turn"]' }),
+      expect.objectContaining({ agent_id: 'worker', accepted_turns: JSON.stringify(expected) }),
+    ]);
+  });
+
   it('stays in memory where its write fails, and goes with the next', async () => {
     const store = loaded();
     store.accept('worker', HANDOFF);

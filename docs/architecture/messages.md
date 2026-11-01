@@ -34,3 +34,5 @@ Directory readiness also holds delivery before any delivering record or native s
 Workspace readiness is a separate delivery hold, not a failed or missing session: provisioning, setup and a pending Switch keep the original message pending and tell its sender why once. A still-live old session does not clear that hold. Only a fresh readiness check releases it; availability changes wake it to check again. No message is marked delivered until its agent's verified active directory is ready.
 
 A carrying run send keeps only its original task in the message record, so the queue owner cannot read the recipient’s handoff through its own sent-message history. The complete framed carry is live send data; the existing value-free carry marker still drives recovery.
+
+The handoff store durably keeps the 64 newest accepted request turn ids per agent (`handoff.accepted_turns`, ids only), independently of message retention and the latest handoff; the shared session summary selector withholds those turns’ replies for every reader, including when an older native conversation is resumed after its request was pruned.

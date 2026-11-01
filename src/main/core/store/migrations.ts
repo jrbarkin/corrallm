@@ -593,6 +593,8 @@ export const MIGRATIONS: readonly Migration[] = [
       -- connection reported no context), kept once carried; and the Markdown copy last exported
       -- and how its latest export went
       -- (exported: its path and its bytes' SHA-256, and done, refused or failed).
+      -- The 64 newest accepted request turn ids (accepted_turns), independent of message
+      -- retention, keep resumed handoff replies out of summaries; no text is retained there.
       CREATE TABLE handoff (
         canvas_id TEXT NOT NULL REFERENCES canvas (id) ON DELETE CASCADE,
         agent_id TEXT NOT NULL,
@@ -606,6 +608,8 @@ export const MIGRATIONS: readonly Migration[] = [
         carry_why TEXT CHECK (carry_why IS NULL
           OR carry_why IN ('reached', 'unaccepted', 'off', 'unreported')),
         exported TEXT CHECK (exported IS NULL OR json_valid(exported)),
+        accepted_turns TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(accepted_turns)
+          AND json_type(accepted_turns) = 'array' AND json_array_length(accepted_turns) <= 64),
         CHECK ((text IS NULL) = (at IS NULL) AND (text IS NULL) = (source IS NULL)
           AND (text IS NULL) = (bytes IS NULL)),
         CHECK (during IS NULL OR text IS NOT NULL),

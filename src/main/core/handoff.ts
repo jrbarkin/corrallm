@@ -219,7 +219,7 @@ export class HandoffService {
       ...(request.during === undefined ? {} : { during: request.during }),
       bytes,
     };
-    runtime.handoffs.accept(agent, handoff);
+    runtime.handoffs.accept(agent, handoff, message.delivery?.as ?? message.id);
     following.armed = false;
     following.asked = 0;
     following.failed = false;

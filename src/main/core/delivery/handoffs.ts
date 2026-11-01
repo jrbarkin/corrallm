@@ -1,3 +1,5 @@
+import { z } from 'zod';
+
 import type { CanvasId } from '../../../shared/canvas';
 import { HandoffSchema } from '../../../shared/model/handoff';
 import type { Handoff } from '../../../shared/model/handoff';
@@ -6,6 +8,9 @@ import type { Database } from '../store/store';
 import type { Staged } from './messages';
 
 export type { Handoff } from '../../../shared/model/handoff';
+
+const ACCEPTED_TURNS = 64;
+const AcceptedTurns = z.array(z.string().min(1).max(128)).max(ACCEPTED_TURNS);
 
 /*
  * Each agent's latest handoff (B11a Design §12 C7, §12.4), as the core keeps it: a row of
@@ -41,6 +46,8 @@ export type ExportState = (typeof EXPORT_STATES)[number];
 export interface HandoffRecord {
   /** Its latest accepted handoff, if one is. */
   handoff?: Handoff;
+  /** The 64 newest accepted request turn ids, independent of message retention; never text. */
+  acceptedTurns?: readonly string[];
   /** The switch whose first automated send carries it, if one waits to. */
   carry?: string;
   /** Why there was no handoff to carry as the last switch was made, if there wasn't one. */
@@ -65,7 +72,7 @@ export class HandoffTable {
   rows(canvas: CanvasId): Record<string, unknown>[] {
     return this.#store
       .prepare(
-        `SELECT agent_id, text, at, source, during, bytes, carry, carry_why, exported
+        `SELECT agent_id, text, at, source, during, bytes, carry, carry_why, exported, accepted_turns
          FROM handoff WHERE canvas_id = ?`,
       )
       .all(canvas);
@@ -80,18 +87,19 @@ export class HandoffTable {
   keep(
     canvas: CanvasId,
     agent: string,
-    { handoff, carry, carryWhy, exported, export: state }: HandoffRecord,
+    { handoff, acceptedTurns, carry, carryWhy, exported, export: state }: HandoffRecord,
   ): void {
     this.#memory.ensure(canvas);
     this.#store
       .prepare(
         `INSERT INTO handoff (canvas_id, agent_id, text, at, source, during, bytes, carry,
-           carry_why, exported)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           carry_why, exported, accepted_turns)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT (canvas_id, agent_id) DO UPDATE SET
            text = excluded.text, at = excluded.at, source = excluded.source,
            during = excluded.during, bytes = excluded.bytes, carry = excluded.carry,
-           carry_why = excluded.carry_why, exported = excluded.exported`,
+           carry_why = excluded.carry_why, exported = excluded.exported,
+           accepted_turns = excluded.accepted_turns`,
       )
       .run(
         canvas,
@@ -106,6 +114,7 @@ export class HandoffTable {
         exported === undefined && state === undefined
           ? null
           : JSON.stringify({ ...exported, ...(state === undefined ? {} : { state }) }),
+        JSON.stringify(acceptedTurns ?? []),
       );
   }
 
@@ -174,9 +183,14 @@ export class HandoffStore {
    * An accepted handoff, the agent's latest now: kept at once, written with the canvas's next
    * write (the one that records its reply), what waits to be carried and the last export kept.
    */
-  accept(agent: string, handoff: Handoff): void {
+  accept(agent: string, handoff: Handoff, turn?: string): void {
     // Its own export is yet to be made: how the last one went no longer says.
     const record: HandoffRecord = { ...this.#kept.get(agent), handoff };
+    if (turn !== undefined)
+      record.acceptedTurns = [
+        ...(record.acceptedTurns ?? []).filter((id) => id !== turn),
+        turn,
+      ].slice(-ACCEPTED_TURNS);
     delete record.export;
     this.#set(agent, record);
   }
@@ -307,7 +321,9 @@ function recordOf(row: Record<string, unknown>): HandoffRecord | undefined {
   const source = parsed(row.source);
   const during = parsed(row.during);
   const exported = parsed(row.exported);
+  const acceptedTurns = turnsOf(row.accepted_turns);
   if (source === null || during === null || exported === null) return undefined;
+  if (acceptedTurns === undefined) return undefined;
   if (carry !== null && typeof carry !== 'string') return undefined;
   if (row.carry_why !== null && carryWhy === undefined) return undefined;
   let handoff: Handoff | undefined;
@@ -340,11 +356,23 @@ function recordOf(row: Record<string, unknown>): HandoffRecord | undefined {
     return undefined;
   return {
     ...(handoff === undefined ? {} : { handoff }),
+    ...(acceptedTurns.length === 0 ? {} : { acceptedTurns }),
     ...(typeof carry === 'string' ? { carry } : {}),
     ...(carryWhy === undefined ? {} : { carryWhy }),
     ...(last === undefined ? {} : { exported: last }),
     ...(outcome === undefined ? {} : { export: outcome }),
   };
+}
+
+/** Only bounded ids are retained as provenance, never request or reply text. */
+function turnsOf(value: unknown): string[] | undefined {
+  if (typeof value !== 'string') return undefined;
+  try {
+    const read = AcceptedTurns.safeParse(JSON.parse(value));
+    return read.success ? read.data : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /** A JSON column's object: undefined for none, null for anything else. */
