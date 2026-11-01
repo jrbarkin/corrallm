@@ -51,7 +51,7 @@ Requires Node 24.22.1 (`.nvmrc`) and pnpm 12.11.2 (`packageManager`).
 | `pnpm corrallm`                              | CLI: serve, wait, dump or native self-test               |
 | `pnpm api:surface`                           | Regenerate the API snapshot; review its diff             |
 
-Before calling a change done on macOS: `pnpm typecheck && pnpm lint && pnpm format:check && pnpm test && pnpm test:e2e`, then `pnpm package` and `scripts/check-macos.sh` (bundle signature, native self-test, refused switches and shipped command). The Linux half runs locally in Docker: `scripts/ci-linux.sh`, `scripts/check-linux.sh` and `scripts/check-linux-packages.sh`, each with `arm64` and `x64`. GitHub CI is disabled on GitHub until it is re-enabled before launch; the local gates are CI meanwhile.
+GitHub CI (`.github/workflows/ci.yml`) runs the full gate on every pushed branch: typecheck, lint, format, unit, `pnpm package` and the packaged self-tests on Linux, macOS and Windows, and e2e on macOS and Linux. A change is done when its blocking jobs are green ([toolchain](docs/architecture/toolchain.md) says which block today) and, until CI's e2e blocks, `pnpm test:e2e` passes locally. Locally run typecheck, lint, format and the tests for what you changed; run a full suite or e2e only when nothing else runs one. Before a release, also run `scripts/check-macos.sh` (it adds the shipped command); `scripts/ci-linux.sh`, `scripts/check-linux.sh` and `scripts/check-linux-packages.sh` reproduce Linux locally in Docker.
 See [toolchain](docs/architecture/toolchain.md) for executable overrides, build environments and the packaged self-test; [testing](docs/architecture/testing.md) for load/crash gates and production-build reuse.
 
 ## Testing rules
