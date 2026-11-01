@@ -48,6 +48,9 @@ const RENDERER = { group: ['**/renderer/**', '@xyflow/*'], message: SHARED_MESSA
 
 export default defineConfig(
   globalIgnores([
+    // Nested agent worktrees.
+    '.claude/worktrees/',
+    '.corral/',
     '.vite/',
     'dist-cli/',
     'out/',
