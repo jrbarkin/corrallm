@@ -292,6 +292,51 @@ it('carries a merge’s settled state in its receipt: the cards read again befor
   expect((await itemOf(running)).merge).toEqual({ merged: true, uncommitted: 0 });
 }, 60000);
 
+it('receipts each already-merged call’s settled revision, even for the same party', async () => {
+  const running = await start();
+  const cwd = await ready(running);
+  const source = { ref: g(cwd, 'symbolic-ref', 'HEAD'), oid: g(cwd, 'rev-parse', 'HEAD') };
+  const into = { ref: 'refs/heads/main', oid: g(project, 'rev-parse', 'main') };
+  const topic = `worktrees:${CANVAS}` as const;
+  const revisions: number[] = [];
+  const states: unknown[] = [];
+
+  // Each call admits a job (merging), observes, then clears it, even when Git changes nothing.
+  // The revision follows those publications, not the caller's party or the settled contents.
+  for (const caller of [CALLERS.you, CALLERS.you, CALLERS['outside-write']]) {
+    const result = await running.call(
+      'branch.merge',
+      { canvas: CANVAS, agent: 'a', source, into, request: randomUUID() },
+      caller,
+    );
+    expect(result.ok, JSON.stringify(result)).toBe(true);
+    if (!result.ok) throw new Error(result.error.sentence);
+    const { revs, ...settled } = result.value;
+    expect(settled).toEqual({
+      outcome: 'already-merged',
+      source: source.oid,
+      into: { ref: into.ref, before: into.oid, after: into.oid },
+    });
+    const { snapshot, stop } = await running.topics.follow(CALLERS.you, topic, () => undefined);
+    try {
+      if (!('state' in snapshot)) throw new Error('Expected a whole worktree snapshot.');
+      expect(revs).toEqual({ [topic]: snapshot.rev });
+      expect(snapshot.state).toMatchObject({
+        into,
+        items: [expect.objectContaining({ agent: 'a', merge: { merged: null, uncommitted: 0 } })],
+      });
+      revisions.push(snapshot.rev);
+      states.push(snapshot.state);
+    } finally {
+      stop();
+    }
+  }
+  expect(revisions[1]).toBeGreaterThan(revisions[0] ?? 0);
+  expect(revisions[2]).toBeGreaterThan(revisions[1] ?? 0);
+  expect(states[1]).toEqual(states[0]);
+  expect(states[2]).toEqual(states[0]);
+}, 60000);
+
 it('a merge whose observation times out leaves its card unknown, never stale', async () => {
   config.observeEveryMs = 50;
   const running = await start();
@@ -456,4 +501,36 @@ it('quits only once a merge past its point of no return settled, before the work
   await closing;
   core = undefined;
   expect(stop).toHaveBeenCalled();
+}, 60000);
+
+it('reviews and merges through registered operations, retaining the caller’s pins and request', async () => {
+  const running = await start();
+  const checkout = await ready(running);
+  writeFileSync(path.join(checkout, 'done.txt'), 'done\n');
+  git(checkout, env, 'add', 'done.txt');
+  commit(checkout, env, 'Done');
+  const review = await running.call('branch.diff', { canvas: CANVAS, agent: 'a' }, CALLERS.you);
+  expect(review.ok).toBe(true);
+  if (!review.ok) throw new Error(review.error.sentence);
+  const page = review.value as {
+    source: { ref: string; oid: string };
+    into: { ref: string; oid: string };
+    files: { path: string }[];
+  };
+  expect(page.files.map(({ path: at }) => at)).toContain('done.txt');
+  const args = {
+    canvas: CANVAS,
+    agent: 'a',
+    source: { ref: page.source.ref, oid: page.source.oid },
+    into: page.into,
+    request: randomUUID(),
+  };
+  const merged = await running.call('branch.merge', args, CALLERS['outside-write']);
+  expect(merged.ok, JSON.stringify(merged)).toBe(true);
+  expect(merged).toMatchObject({
+    ok: true,
+    value: { outcome: 'merged', source: page.source.oid, revs: {} },
+  });
+  expect(git(project, env, 'show', 'HEAD:done.txt')).toBe('done\n');
+  expect(await running.call('branch.merge', args, CALLERS['outside-write'])).toEqual(merged);
 }, 60000);
