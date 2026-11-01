@@ -29,12 +29,11 @@ jobs:
       fail-fast: false
       matrix:
         # Pinned images rather than *-latest for Linux, so runner image upgrades happen deliberately.
-        os: [macos-latest, ubuntu-24.04, ubuntu-24.04-arm, windows-latest]
+        os: ${{ fromJSON(github.ref == 'refs/heads/main' && '["macos-latest","ubuntu-24.04","ubuntu-24.04-arm","windows-latest"]' || '["macos-latest","ubuntu-24.04","ubuntu-24.04-arm"]') }}
     runs-on: ${{ matrix.os }}
-    # Linux x64 blocks. Windows is held for the MVP (the prelaunch checklist), and macOS and Linux
-    # arm64 are reported without failing the run until their runner fixes land (the toolchain doc
-    # lists them); each flips to blocking once it passes.
-    continue-on-error: ${{ matrix.os != 'ubuntu-24.04' }}
+    # Windows is held for the MVP (the prelaunch checklist): it runs on main only and never fails
+    # the run. Every other job blocks.
+    continue-on-error: ${{ matrix.os == 'windows-latest' }}
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
@@ -143,52 +142,43 @@ jobs:
       matrix:
         os: [macos-latest, ubuntu-24.04]
     runs-on: ${{ matrix.os }}
-    # Reported without failing the run until the runner fixes land (macOS: a 1024x768 display;
-    # Linux: WebGL2 under Xvfb); the local gate runs e2e until then.
-    continue-on-error: true
+    # macOS is reported without failing the run until its specs pass (the toolchain doc).
+    continue-on-error: ${{ matrix.os == 'macos-latest' }}
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
+      # macOS runs the specs on the host. Linux runs them in the local gate's Docker image
+      # (Debian bookworm, its Mesa and Xvfb): the runner's own Ubuntu 24.04 stack hangs a
+      # renderer on quit after a forced crash (core-continuity), which the image does not.
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        if: runner.os == 'macOS'
       - uses: actions/setup-node@v7
+        if: runner.os == 'macOS'
         with:
           node-version-file: .nvmrc
           cache: pnpm
       - name: Cache Electron binary
+        if: runner.os == 'macOS'
         uses: actions/cache@v6
         with:
-          path: |
-            ~/.cache/electron
-            ~/Library/Caches/electron
+          path: ~/Library/Caches/electron
           key: electron-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('pnpm-lock.yaml') }}
           restore-keys: electron-${{ runner.os }}-${{ runner.arch }}-
       - run: pnpm install --frozen-lockfile
+        if: runner.os == 'macOS'
       - run: pnpm exec install-electron
-
-      # The display and software-GL packages the local Docker gate installs
-      # (scripts/lib/linux-build.Dockerfile), the same sandbox allowance and Git filter as above.
-      - name: Display and GL (Linux)
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends xvfb xauth libgl1-mesa-dri libgl1 \
-            libglx-mesa0 libegl1 libegl-mesa0 mesa-utils fonts-liberation libgbm1
-          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-          sudo git lfs uninstall --system || sudo git config --system --remove-section filter.lfs || true
+        if: runner.os == 'macOS'
 
       - name: e2e (macOS)
         if: runner.os == 'macOS'
+        env:
+          # The 3-core runner's loop delay is about twice the budget (see e2e/load.e2e.ts).
+          CORRALLM_LOAD_BUDGET_SCALE: '3'
         run: |
           sudo git lfs uninstall --system || true
           pnpm test:e2e --reporter=list
-      # As scripts/lib/linux-workspace.sh runs it in Docker.
-      - name: e2e (Linux)
+      - name: e2e (Linux, Docker)
         if: runner.os == 'Linux'
-        env:
-          # Mesa's software GL, as scripts/lib/linux-workspace.sh runs it; launch.ts reads CORRALLM_E2E_GL.
-          LIBGL_ALWAYS_SOFTWARE: 'true'
-          GALLIUM_DRIVER: llvmpipe
-          CORRALLM_E2E_GL: mesa
-        run: xvfb-run -a -s '-screen 0 1920x1080x24 +extension GLX' pnpm test:e2e --reporter=list
+        run: scripts/e2e-linux.sh x64
