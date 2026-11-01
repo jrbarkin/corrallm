@@ -20,6 +20,8 @@ B11 schemas live beside each area's operations (`b11RunOps`, `b11SessionOps` and
 
 `run.pauseAll` (B14 C3: Y, a command, scope none, no drains, not destructive, no preempt) is the one op main's native UI alone calls (`host: true` in SURFACE, the `native-menu` deviation): GUI_OPS and GuiOp leave it out, so no window's port serves it and the preload exposes nothing for it, and no token is in its audience. `{}` → `{ agents, canvases, unsaved: { canvas, sentence }[] }`, counts capped at `MAX_PRESENCE_COUNT`, at most `MAX_PAUSE_UNSAVED` unsaved. Main asks the core's fixed `pauseAll` request and `WindowPorts.pauseAll` calls it as `asHuman('host')` through core.call (see [Core](core.md)). T1 checks that a `host` op is yours alone with the native-menu deviation, and that the deviation names only a `host` op; its fixture runs last in REAL_FIXTURES, since it pauses every agent the world runs.
 
+B14 notification activation is one existing `window.show` gesture, called by the window after flushing drafts; the private `show` event registers no operation or new audience. Its optional Need id is used only for local focus after all canvas snapshots bind and only while the Need is current. The event supplies no arguments to `reply`, session or run commands.
+
 Queued message take-back is hosted in the GUI through the existing caller-checked withdraw service, with no new audience or policy.
 
 Continue's human-only `then.text` accepts up to 200,000 characters (MAX_MESSAGE_LENGTH, B11 §16.6), preserving the composer's exact input and live images.
