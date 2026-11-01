@@ -45,7 +45,7 @@ const CHECKPOINT = {
   updatedAt: 1,
 } as const;
 /** The schema a profile is migrated to as it opens, and the oldest that may open it then. */
-const LATEST = { version: SCHEMA, minReader: SCHEMA };
+const LATEST = { version: SCHEMA, minReader: MIGRATIONS.at(-1)?.minReader };
 const DOCUMENT: CanvasDocument = {
   id: CANVAS,
   arrange: false,

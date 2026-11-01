@@ -331,7 +331,7 @@ export class Notifier {
     }
   }
 
-  /** What waits for you on a canvas the core runs now, by id (the last seen if it can't be read). */
+  /** What waits for you on a canvas now, by id; no count when its live Needs can't be read. */
   #live(canvas: CanvasId): ReadonlySet<string> {
     if (!this.#deps.runs(canvas)) return new Set();
     try {
@@ -343,7 +343,8 @@ export class Notifier {
       );
     } catch {
       console.error('corrallm couldn’t read what waits for you, for its notifications.');
-      return this.#canvases.get(canvas)?.seen ?? new Set();
+      // Items held by id still go; a count without ids needs a successful live read.
+      return new Set();
     }
   }
 

@@ -10,7 +10,7 @@ import { OPS } from '../../shared/api/registry';
 import { RULES } from '../../shared/api/rules';
 import type { Message } from '../../shared/model/messages';
 import type { Entry } from '../../shared/model/session';
-import { withoutChoices } from '../../shared/model/needs-selectors';
+import { needFor } from '../../shared/model/prompt-views';
 import type { NeedsItem } from '../../shared/model/needs';
 import type { CanvasId } from '../../shared/canvas';
 import type { AdapterId } from '../../shared/adapter';
@@ -1209,7 +1209,7 @@ describe('delivery', () => {
     expect(yours[0]?.choices.map(({ value }) => value)).toEqual(['once', 'always', 'deny']);
     for (const caller of [OUTSIDE, READER]) {
       const theirs = (await ok<{ items: NeedsItem[] }>('needs', {}, caller)).items;
-      expect(theirs).toEqual(yours.map(withoutChoices));
+      expect(theirs).toEqual(yours.map((item) => needFor(item, 'token')));
     }
     // Builder, linked to it, sees it too; Shell, linked to nobody, sees nothing.
     expect((await ok<{ items: NeedsItem[] }>('needs', {}, BUILDER)).items).toHaveLength(1);

@@ -3,20 +3,21 @@ import { DEFAULT_PAGE } from '../../../shared/api/limits';
 import { imageBytes } from '../../../shared/session';
 import { nameOf } from '../parties';
 import type { AGENT_STATES } from '../../../shared/api/ops/conversation';
-import { needs, withoutChoices } from '../../../shared/model/needs-selectors';
+import { needs } from '../../../shared/model/needs-selectors';
+import { needFor } from '../../../shared/model/prompt-views';
 import type { CanvasId } from '../../../shared/canvas';
 import type { NeedsItem } from '../../../shared/model/needs';
 import { agentName, areLinked, teamOf } from '../../../shared/model/queries';
 import { OpFailure } from '../call';
 import type { OpContext } from '../call';
-import { canvasesOf, isTokenCaller, partyIdOf } from '../caller';
+import { canvasesOf, isTokenCaller, partyIdOf, promptReaderOf } from '../caller';
 import { DeliveryError } from '../delivery/delivery';
 import { cursorOf, readCursor } from '../delivery/messages';
 import { needsInput } from '../engines';
 import type { OpenCanvas } from '../engines';
 import { agentsReached } from '../reach';
 import { agentOf, openCanvas, pageOf, reachFor } from './open';
-import { fallbackOf, messagesSeen, promptsOf } from './views';
+import { fallbackOf, handoffOf, messagesSeen, promptsOf } from './views';
 import type { Implementations, OpServices } from '.';
 
 /** Conversation (Core Server §4 H; API Spec §7.2). */
@@ -34,33 +35,36 @@ export function conversationOps(
   /**
    * What waits on an open canvas for the caller: yours (the run's holds, the sessions' prompts,
    * the proposals and the review of its file changed on disk waiting for you), with their choices,
-   * for you; for anyone else, yours on the agents it reaches without them (never a review, which
-   * is on no agent), and an agent's team's prompts too.
+   * for you; for anyone else, yours on the agents it reaches (never a review, which is on no
+   * agent), and an agent's team's prompts too, each as a token sees it (B13 C11's selector: no
+   * choices or form, a prompt the core's owner holds without a form's own words or a terminal's
+   * screen).
    */
   const waiting = (open: OpenCanvas, ctx: OpContext, reach: readonly string[]): NeedsItem[] => {
     const id = open.document.id;
+    const reader = promptReaderOf(ctx.caller);
     const items = [
-      ...needs(needsInput(open, locale)),
-      ...(services.prompts?.items(id) ?? []),
-      ...proposals.items(id, ctx.caller.kind === 'human' ? undefined : reach),
-      ...reviews.items(id),
-      ...stalled.items(id),
-      ...(services.runProblems?.(id) ?? []),
-      // A worktree's setup card names no agent: a token's view below never holds it; nor does
-      // a workspace change's (B9a C7).
-      ...(ctx.caller.kind === 'human' ? (services.setups?.items(id) ?? []) : []),
-      ...(ctx.caller.kind === 'human' ? (services.workspaceItems?.(id) ?? []) : []),
+      ...needs(needsInput(open, locale)).map((item) => needFor(item, reader)),
+      ...(services.prompts?.items(id, reader) ?? []),
+      ...[
+        ...proposals.items(id, ctx.caller.kind === 'human' ? undefined : reach),
+        ...reviews.items(id),
+        ...stalled.items(id),
+        ...(services.runProblems?.(id) ?? []),
+        // A worktree's setup card names no agent: a token's view below never holds it; nor does
+        // a workspace change's (B9a C7).
+        ...(ctx.caller.kind === 'human' ? (services.setups?.items(id) ?? []) : []),
+        ...(ctx.caller.kind === 'human' ? (services.workspaceItems?.(id) ?? []) : []),
+      ].map((item) => needFor(item, reader)),
     ];
     if (ctx.caller.kind === 'human') return items;
     const { caller } = ctx;
     const team = caller.kind === 'agent' ? teamOf(open.document.nodes, caller.agent) : [];
-    return items
-      .filter(
-        (item) =>
-          item.agent !== undefined &&
-          (reach.includes(item.agent) || (item.kind === 'prompt' && team.includes(item.agent))),
-      )
-      .map(withoutChoices);
+    return items.filter(
+      (item) =>
+        item.agent !== undefined &&
+        (reach.includes(item.agent) || (item.kind === 'prompt' && team.includes(item.agent))),
+    );
   };
 
   return {
@@ -81,6 +85,7 @@ export function conversationOps(
             linked: reach.filter((other) => other !== id && areLinked(document.links, id, other)),
             api: false,
             fallback: fallbackOf(open, id),
+            handoff: handoffOf(open, id),
           };
         }),
       };
@@ -98,9 +103,10 @@ export function conversationOps(
             model: session.model,
             effort: session.effort ?? null,
             fallback: fallbackOf(open, id),
+            handoff: handoffOf(open, id),
           };
         }),
-        waitingForYou: waiting(open, ctx, reach).map(withoutChoices),
+        waitingForYou: waiting(open, ctx, reach),
         // At the end of every canvas the caller has, so a `wait` from it reads only what comes.
         next: cursorOf(
           'wait',

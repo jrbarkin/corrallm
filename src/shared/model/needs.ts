@@ -1,6 +1,7 @@
 import type { CanvasId } from '../canvas';
 import type { JsonSchema } from '../session';
 import type { PartyId } from './messages';
+import type { Choice, PromptNeedView } from './prompts';
 
 /*
  * What waits for someone (API Spec §5.9): one shape for a hold the run has for you, a prompt an
@@ -25,23 +26,35 @@ import type { PartyId } from './messages';
 export const NEED_KINDS = ['hold', 'prompt', 'message', 'proposal', 'file', 'worktree'] as const;
 export type NeedKind = (typeof NEED_KINDS)[number];
 
-/** A question a prompt asks: its answers by label, and whether several or one of its own may be given. */
+/**
+ * A question a prompt asks: its answers by label (each with a preview, where its CLI shows one),
+ * whether several or one of its own may be given, and whether its answer is secret (B13 C1).
+ */
 export interface NeedQuestion {
   id: string;
   header: string;
   text: string;
-  options: { label: string; description?: string }[];
+  options: { label: string; description?: string; preview?: string }[];
   multiple: boolean;
   other: boolean;
+  secret?: boolean;
 }
 
-/** One way to answer: `value` is what an answer names, `humanOnly` why only you may pick it. */
+/**
+ * One way to answer: `value` is what an answer names, `humanOnly` why only you may pick it. A
+ * prompt's choice says what its CLI does with it (B13 C1, C4): its hint, its effects (absent where
+ * its adapter can't tell), whether it takes words, and whether it ends the turn.
+ */
 export interface NeedChoice {
   value: string;
   label: string;
   /** What it means, when that needs saying. */
   description?: string;
   humanOnly?: string;
+  hint?: Choice['hint'];
+  effects?: Choice['effects'];
+  feedback?: Choice['feedback'];
+  endsTurn?: boolean;
 }
 
 /**
@@ -66,4 +79,10 @@ export interface NeedsItem {
   questions?: NeedQuestion[];
   form?: { schema: JsonSchema } | { url: string };
   answerIn: 'api' | 'terminal' | 'both';
+  /**
+   * A prompt the core's prompt owner holds, beyond the generic fields (B13 C1): its PromptId, kind,
+   * when it was raised, its words, its subject, a plan's first lines, whether it was cut, and why
+   * only you may answer it; as each reader may see it (C11: shared/model/prompt-views.ts).
+   */
+  prompt?: PromptNeedView;
 }

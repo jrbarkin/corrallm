@@ -28,6 +28,8 @@ Appdmg 0.6.6 still requires vulnerable image-size 0.x. Its scoped override selec
 
 Local dependency content stores (`.pnpm-store/`) are generated caches and are ignored alongside node_modules. Scratch work stays under node_modules/.cache/probes.
 
+Nested agent worktrees in `.claude/worktrees/` and `.corral/` are excluded from Git, ESLint and Prettier; the rest of `.claude/` remains available for project settings.
+
 ## Commands
 
 Requires Node 24.22.1 (`.nvmrc`) and pnpm 12.11.2 (`packageManager`).

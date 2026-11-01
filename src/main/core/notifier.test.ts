@@ -572,6 +572,95 @@ describe('a count held without ids, bounded by what is live at delivery', () => 
     expect(notifier.activation(shown?.handle ?? '')).toBeUndefined();
   });
 
+  it('closes a counted banner when its remaining Needs settle and the other canvas closes', async () => {
+    opened(A);
+    opened(B);
+    waits(B, [prompt('other')]);
+    waits(A, many(257));
+    await vi.advanceTimersByTimeAsync(SETTLED);
+    expect(bodies()).toEqual(['258 things need you']);
+    const handle = sent[0]?.handle ?? '';
+    waits(A, []);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(closed).toEqual([]);
+    open.delete(B);
+    notifier.closed(B);
+    expect(closed).toEqual([handle]);
+    expect(notifier.activation(handle)).toBeUndefined();
+  });
+
+  it.each([
+    { remaining: 'none', other: false, expected: [] },
+    { remaining: 'on a readable canvas', other: true, expected: ['1 thing needs you'] },
+  ])(
+    'drops unreadable counts at delivery with Needs remaining $remaining',
+    async ({ other, expected }) => {
+      const said = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      let unreadable = false;
+      make({
+        needs: (canvas) => {
+          if (canvas === A && unreadable) throw new Error('Needs could not be read.');
+          return needs.get(canvas) ?? [];
+        },
+      });
+      try {
+        opened(A);
+        opened(B);
+        const items = many(257);
+        waits(A, items);
+        if (other) waits(B, [prompt('other')]);
+        await vi.advanceTimersByTimeAsync(500);
+        // All id-held items settle; the last comparison still contains one counted item.
+        waits(A, items.slice(256));
+        await vi.advanceTimersByTimeAsync(500);
+        needs.set(A, []);
+        unreadable = true;
+        notifier.needsChanged(A);
+        await vi.advanceTimersByTimeAsync(SETTLED);
+        expect(bodies()).toEqual(expected);
+        expect(said).toHaveBeenCalled();
+        if (other) {
+          const handle = sent[0]?.handle ?? '';
+          expect(notifier.activation(handle)).toEqual({ canvas: B });
+          waits(B, []);
+          await vi.advanceTimersByTimeAsync(500);
+          expect(closed).toEqual([handle]);
+          expect(notifier.activation(handle)).toBeUndefined();
+        }
+      } finally {
+        said.mockRestore();
+      }
+    },
+  );
+
+  it('delivers Needs held by id when the live read fails, then withdraws them as they settle', async () => {
+    const said = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    let unreadable = false;
+    make({
+      needs: (canvas) => {
+        if (unreadable) throw new Error('Needs could not be read.');
+        return needs.get(canvas) ?? [];
+      },
+    });
+    try {
+      opened(A);
+      waits(A, many(257));
+      await vi.advanceTimersByTimeAsync(500);
+      unreadable = true;
+      await vi.advanceTimersByTimeAsync(SETTLED);
+      expect(bodies()).toEqual(['256 things need you']);
+      const handle = sent[0]?.handle ?? '';
+      expect(notifier.activation(handle)).toEqual({ canvas: A });
+      unreadable = false;
+      waits(A, []);
+      await vi.advanceTimersByTimeAsync(500);
+      expect(closed).toEqual([handle]);
+      expect(notifier.activation(handle)).toBeUndefined();
+    } finally {
+      said.mockRestore();
+    }
+  });
+
   it('keeps run-end counts as held: they never go stale', async () => {
     const ended: FakeRun[] = [];
     for (let i = 0; i < 257; i++) {

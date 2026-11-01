@@ -19,8 +19,8 @@ import type { AgentRun, Run } from './run';
  * won't start, or run in a mode that never asks, while parties' messages to them wait. One
  * derivation (`needsOf`) for the canvas's
  * Needs you sidebar and the core's `needs`, which words each as a NeedsItem (`needsItem`), in the
- * host's locale. Until leads (B24), each is yours alone to answer: a token sees yours without
- * their choices or forms (`withoutChoices`).
+ * host's locale. Until leads (B24), each is yours alone to answer: a token sees yours as the one
+ * selector of what each reader sees of a prompt says (B13 C11: prompt-views.ts' `needFor`).
  */
 
 export interface NeedsInput {
@@ -289,17 +289,6 @@ export function holdGeneration(at: AgentRun | undefined): string {
     hash = Math.imul(hash, 0x01000193) >>> 0;
   }
   return hash.toString(16).padStart(8, '0');
-}
-
-/**
- * An item of yours as a token sees it: what waits, without the choices only you may make, nor the
- * form only you fill in (an MCP server's link, often a sign-in's, among them: Core Server R3).
- */
-export function withoutChoices(item: NeedsItem): NeedsItem {
-  const seen: NeedsItem = { ...item, choices: [] };
-  delete seen.text;
-  delete seen.form;
-  return seen;
 }
 
 /** Why only you may pick a hold's choice `key`, if only you may (`usage`: a usage rule's hold). */

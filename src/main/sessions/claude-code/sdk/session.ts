@@ -18,13 +18,11 @@ import type {
   McpChange,
   McpServer,
   PermissionMode,
-  SessionAnswer,
   SessionEvent,
   SlashCommand,
   UserMessage,
   TurnResult,
 } from '../../../../shared/session';
-import type { PromptAnswer } from '../../../../shared/model/prompts';
 import type { LiveSession, PromptAnswers, SessionHost } from '../../connector';
 import type { Inbox } from './inbox';
 import { mcpServer } from './mcp';
@@ -207,14 +205,6 @@ export class SdkSession implements LiveSession {
   /** How the core answers and declines what it raised (B13 C4): the owner's accepted answers only. */
   get prompts(): PromptAnswers {
     return this.#prompts.answers;
-  }
-
-  /**
-   * Transitional (B13 C4, until X10; X11 removes it): the key of what an event B13 replaces shows,
-   * and the answer given to it as its prompt takes it, for the core's owner to answer.
-   */
-  bridge(promptId: string, answer: SessionAnswer): { key: string; answer: PromptAnswer } {
-    return this.#prompts.bridge(promptId, answer);
   }
 
   async interrupt(): Promise<void> {

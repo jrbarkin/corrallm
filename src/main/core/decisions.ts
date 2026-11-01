@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
 import type { Message, PartyId } from '../../shared/model/messages';
+import type { SettledDecision, SettledOutcome, SubjectType } from '../../shared/model/settled';
 import type { MessageStore } from './delivery/messages';
 
 /*
@@ -13,6 +14,11 @@ import type { MessageStore } from './delivery/messages';
  *   answer's values: no typed text, no form's values, no question's answers, no feedback. A secret
  *   answer is never written anywhere; neither is anything a token could read of it (records to you
  *   are yours alone).
+ * - A native prompt's decision (B13 §9.2 C9) is worded by the core from the prompt's kind, its
+ *   subject's type, what was chosen (a choice's hint, a form's action) and the agent's name alone
+ *   (`decisionWords`: "You allowed Builder’s command once"), never a title, a label, a command, a
+ *   path, a plan, feedback or an answer, whatever the CLI asked; and, for a prompt the core owns,
+ *   recorded typed beside its words too (`settled`, ../../shared/model/settled.ts).
  * - A decision the core makes itself (a run's hold) is recorded in the same write as what it
  *   changed (the run, written with the store's messages: `writeWith`), so both are on disk or
  *   neither is.
@@ -41,6 +47,8 @@ export interface Decision {
   words: string;
   /** To whom it is addressed: you, unless said. */
   to?: PartyId;
+  /** A native prompt's decision, typed and value-free, kept with its record. */
+  settled?: SettledDecision;
 }
 
 /** Records a decision made now (its effect in the same write as the record). */
@@ -112,5 +120,61 @@ function draftOf(decision: Decision, state: 'delivered' | 'delivering') {
     body: decision.words,
     state,
     by: decision.by,
+    ...(decision.settled === undefined ? {} : { settled: decision.settled }),
   };
+}
+
+/** What a decision's words call a prompt's subject, by its type. */
+const SUBJECTS: Readonly<Record<SubjectType, string>> = {
+  command: 'command',
+  fileChange: 'file change',
+  mcpTool: 'MCP tool call',
+  network: 'network access',
+  permissions: 'request for permissions',
+  tool: 'tool call',
+  trust: 'request to trust its folder',
+  consent: 'request for consent',
+};
+
+/**
+ * What a native prompt's answer decided, as a clause after who decided ("allowed Builder’s
+ * command once"), in the core's words from the prompt's kind, its subject's type, what was chosen
+ * and the agent's `name` (and whether a form is a link to open): never a title, a label, a
+ * command, a path, a plan, feedback, an answer or a value.
+ */
+export function decisionWords(
+  name: string,
+  {
+    prompt,
+    outcome,
+    secret,
+  }: {
+    prompt: { kind: SettledDecision['prompt']['kind']; subject?: SubjectType | undefined };
+    outcome: SettledOutcome;
+    secret?: true | undefined;
+  },
+  link = false,
+): string {
+  switch (outcome.type) {
+    case 'choice': {
+      const allows = outcome.hint === 'allow_once' || outcome.hint === 'allow_always';
+      if (prompt.kind === 'plan') {
+        return allows ? `approved ${name}’s plan` : `asked ${name} to keep planning`;
+      }
+      const what = prompt.subject === undefined ? 'request' : SUBJECTS[prompt.subject];
+      const when = outcome.hint.endsWith('_always') ? ' from now on' : allows ? ' once' : '';
+      return `${allows ? 'allowed' : 'refused'} ${name}’s ${what}${when}`;
+    }
+    case 'answers':
+      return `answered ${name}’s question${outcome.count === 1 ? '' : 's'}${secret === true ? ' (secret)' : ''}`;
+    case 'form': {
+      const verb =
+        outcome.action === 'accept'
+          ? 'accepted'
+          : outcome.action === 'decline'
+            ? 'declined'
+            : 'cancelled';
+      return `${verb} ${name}’s ${link ? 'link' : 'form'}`;
+    }
+  }
 }

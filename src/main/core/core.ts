@@ -76,9 +76,12 @@ import { gitReads, MergeObserver } from './workspaces/observe';
 import type { Viewer, WorktreeListing } from './workspaces/list';
 import type { CanvasDocument } from '../../shared/model/canvas';
 import type { Caller, OutsideCaller } from './caller';
+import { HandoffTable } from './delivery/handoffs';
 import { MessageTable } from './delivery/messages';
 import { Engines, needsInput } from './engines';
 import { FallbackService } from './fallback';
+import { HandoffService } from './handoff';
+import { exportHandoff } from './handoff-file';
 import type { Watcher } from './engines';
 import type { HostServices, WindowId } from './host';
 import type { ShutdownPrepared, ShutdownReason } from './protocol';
@@ -1041,6 +1044,7 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     journal,
     documents,
     messages: new MessageTable(store, memory),
+    handoffs: new HandoffTable(store, memory),
     store,
     usage,
     files,
@@ -1055,6 +1059,7 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
       ...setups.items(canvas),
       ...changes.items(canvas),
     ],
+    prompted: (canvas, agent) => prompts.count(canvas, agent),
     // B11a C2: admission before each canvas's automated work goes, by the fallback service below.
     fallback: {
       admit: (canvas, agent, work) => fallback.admit(canvas, agent, work),
@@ -1064,17 +1069,34 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
         fallback.availabilityChanged(canvas);
       },
     },
+    // B11a C7: the handoff service below hears each canvas's sessions, asks through its delivery,
+    // holds its run's gate while a request waits, and frames the first send after a switch.
+    handoff: {
+      attach: (canvas, open) => handoff.attach(canvas, open),
+      asking: (canvas, agent) => handoff.asking(canvas, agent),
+      request: (canvas, message) => handoff.request(canvas, message),
+      replied: (canvas, message, reply, result) => {
+        handoff.replied(canvas, message, reply, result);
+      },
+      carry: (canvas, agent, text, kind, owner) => handoff.carry(canvas, agent, text, kind, owner),
+      recover: (canvas) => {
+        handoff.recover(canvas);
+      },
+      view: (canvas, agent) => handoff.view(canvas, agent),
+    },
   });
+  /** A canvas the core runs, executing (its delivery started): what B11a's services act on. */
+  const executing = (canvas: CanvasId) => {
+    const open = engines.canvas(canvas);
+    return open?.state === 'executing' ? open : undefined;
+  };
   // B11a's fallback service (C2–C6, C8): switches an agent to the next backend of the chain you set
   // when its usage runs out, or a usage rule says to, and back at the reset if the chain says so.
   // It alone, beside canvas/commit.ts, commits to a document (Documents.change), as corrallm.
-  const fallback = new FallbackService({
+  const fallback: FallbackService = new FallbackService({
     catalog: CATALOG,
     defaultAdapter: DEFAULT_ADAPTER,
-    canvas: (canvas) => {
-      const open = engines.canvas(canvas);
-      return open?.state === 'executing' ? open : undefined;
-    },
+    canvas: executing,
     documents,
     sessions,
     usage,
@@ -1085,8 +1107,28 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     switchingChanged: (canvas, agent) => {
       runtime.switchingChanged(canvas, agent);
     },
+    // B11a C7: a switch's commit stages the handoff's carry in its own write, and waits for a
+    // handoff request that goes first.
+    carry: (canvas, agent, change) => handoff.stage(canvas, agent, change),
+    handoffFirst: (canvas, agent) => handoff.first(canvas, agent),
     now: () => Date.now(),
     ...(config.locale === undefined ? {} : { locale: config.locale }),
+  });
+  // B11a's handoff service (C7, C10): asks an agent whose reported context passed its ask point to
+  // write its own handoff, keeps the exact reply as its latest, exports it where its settings say,
+  // and has the first automated send after a switch carry it.
+  const handoff: HandoffService = new HandoffService({
+    catalog: CATALOG,
+    canvas: executing,
+    usage,
+    switching: (canvas, agent) => fallback.switching(canvas, agent),
+    exporter: exportHandoff({
+      directory: (canvas, agent) => directories.workingDirectory(canvas, agent as AgentId),
+    }),
+    changed: (canvas, agent) => {
+      runtime.handoffChanged(canvas, agent);
+    },
+    now: () => Date.now(),
   });
   const warnings = new Set<Promise<void>>();
   const stalled = new StalledTurns({

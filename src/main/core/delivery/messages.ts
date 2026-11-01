@@ -20,6 +20,7 @@ import type {
   MessageOrigin,
   PartyId,
 } from '../../../shared/model/messages';
+import { SettledDecision } from '../../../shared/model/settled';
 import type { CanvasMemory } from '../../memory';
 import type { Database } from '../store/store';
 import { Sequence } from './sequence';
@@ -29,7 +30,9 @@ import { Sequence } from './sequence';
  * order they came, and in the profile's database (Core Database §5), each a row of `message`, with
  * the key of what it tells, for a notice (`told`), the note its recipient must still be told of
  * a withdrawal (`withdrawal`), how it came to be (`origin`, which its caller says, never a party:
- * B11 Design §3) and what a view shows of it beside its body (`display`). Their order (`seq`) is one every canvas's messages share, whose
+ * B11 Design §3), what a view shows of it beside its body (`display`) and, for a record of a native
+ * prompt's decision, what was decided (`settled`: B13 §9.2 C9, written with its row and never
+ * changed after). Their order (`seq`) is one every canvas's messages share, whose
  * places are never given again (MessageTable), so a cursor into it survives pruning, restarts and
  * restores. It keeps the newest STORE_SETTLED_PER_PARTY settled messages of each party within
  * STORE_BYTES, and every pending and unresolved one, deleting the oldest settled first (delivery
@@ -107,7 +110,7 @@ export class MessageTable {
     return this.#store
       .prepare(
         `SELECT seq, id, from_party, to_party, kind, origin, body, display, reply_to, resend_of,
-           task, turn, state, delivery, by_party, sent_at, told, withdrawal
+           task, turn, state, delivery, by_party, sent_at, told, withdrawal, settled
          FROM message WHERE canvas_id = ? ORDER BY seq`,
       )
       .all(canvas);
@@ -139,14 +142,16 @@ export class MessageTable {
 
   /**
    * Within a write: a message's row, as kept (each column written by name, so that what a newer
-   * corrallm keeps beside them stays).
+   * corrallm keeps beside them stays). A record's settled decision is written with its row and
+   * never after: no change writes it again.
    */
   keep({ seq, message, origin, display, told, withdrawal }: Kept): void {
     this.#store
       .prepare(
         `INSERT INTO message (seq, id, canvas_id, from_party, to_party, kind, origin, body, display,
-           reply_to, resend_of, task, turn, state, delivery, by_party, sent_at, told, withdrawal)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           reply_to, resend_of, task, turn, state, delivery, by_party, sent_at, told, withdrawal,
+           settled)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT (id) DO UPDATE SET
            body = excluded.body, display = excluded.display, reply_to = excluded.reply_to,
            task = excluded.task, turn = excluded.turn, state = excluded.state,
@@ -173,6 +178,7 @@ export class MessageTable {
         message.at,
         told ?? null,
         json(withdrawal),
+        json(message.settled),
       );
   }
 
@@ -380,6 +386,26 @@ export class MessageStore {
     return [...this.#kept.values()].flatMap(({ message, told }) =>
       told?.startsWith(prefix) === true ? [message] : [],
     );
+  }
+
+  /** The key a message kept was kept with (what it told, or what admitted it), if any. */
+  toldOf(id: string): string | undefined {
+    return this.#kept.get(id)?.told;
+  }
+
+  /**
+   * Keeps a message with another key (none: `undefined`), written with the next write: B11a C7's
+   * mark of a send that carried an agent's handoff, value-free. False if it isn't kept.
+   */
+  retell(id: string, told: string | undefined): boolean {
+    const kept = this.#kept.get(id);
+    if (!kept) return false;
+    if (kept.told === told) return true;
+    const next: Kept = { ...kept };
+    if (told === undefined) delete next.told;
+    else next.told = told;
+    this.#keep(next);
+    return true;
   }
 
   /** How a message kept came to be. */
@@ -749,6 +775,13 @@ function keptOf(row: Record<string, unknown>, canvas: CanvasId): Kept | undefine
   const by = row.by_party;
   const display = row.display === null ? undefined : displayOf(parsed(row.display));
   if (display === null) return undefined;
+  // A decision this code doesn't read (another version's, or one holding more than it may): the
+  // row is left as it is.
+  const decided =
+    row.settled === null || row.settled === undefined
+      ? undefined
+      : SettledDecision.safeParse(parsed(row.settled));
+  if (decided?.success === false) return undefined;
   const task = parsed(row.task);
   const turn = parsed(row.turn);
   const delivery = parsed(row.delivery);
@@ -767,6 +800,7 @@ function keptOf(row: Record<string, unknown>, canvas: CanvasId): Kept | undefine
     state,
     ...(delivery === undefined ? {} : { delivery }),
     ...(party(by) ? { by } : {}),
+    ...(decided === undefined ? {} : { settled: decided.data }),
     at,
   } as unknown as Message;
   const kept: Kept = {

@@ -83,6 +83,8 @@ export type Entry =
       kind: 'user';
       text: string;
       images?: MessageImage[];
+      /** Native prompt-answer provenance, retained internally so token views withhold its text. */
+      promptReply?: true;
       reached?: true;
       conversation?: Conversation;
     }

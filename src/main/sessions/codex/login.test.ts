@@ -52,8 +52,7 @@ describe('the Codex login', () => {
       title: 'Use your ChatGPT plan here?',
       always: "Yes, and don't ask again on this computer",
     });
-    const said =
-      prompt.type === 'permission' && prompt.detail?.kind === 'output' ? prompt.detail.text : '';
+    const said = prompt.detail?.kind === 'output' ? prompt.detail.text : '';
     const unwrapped = said.replace(/\s+/g, ' ');
     expect(unwrapped).toContain(
       '"If you’ve built a local or open-source application using Codex app-server authentication, you can continue using it',

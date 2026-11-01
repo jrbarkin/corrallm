@@ -1,9 +1,11 @@
 import type { Reach } from '../../../shared/api/surface';
 import { fallbackView } from '../../../shared/model/fallback';
 import type { FallbackView } from '../../../shared/model/fallback';
+import type { HandoffView } from '../../../shared/model/handoff';
+import { agentParty } from '../../../shared/model/messages';
 import type { Message } from '../../../shared/model/messages';
+import { entryFor } from '../../../shared/model/prompt-views';
 import { isOpen, turnReply } from '../../../shared/model/session';
-import { mcpRequestTitle } from '../../../shared/model/words';
 import type { Entry } from '../../../shared/model/session';
 import { messageView, presentationOf, runView, summaryReply } from '../../../shared/model/views';
 import type {
@@ -17,6 +19,7 @@ import type { Caller } from '../caller';
 import { partyIdOf } from '../caller';
 import { cursorOf } from '../delivery/messages';
 import type { MessageStore } from '../delivery/messages';
+import { HANDOFF_REQUEST } from '../delivery/delivery';
 import type { OpenCanvas } from '../engines';
 import { agentsReached, reachesGroup } from '../reach';
 import { agentOf } from './open';
@@ -30,10 +33,18 @@ import { agentOf } from './open';
  * second way to see anything, and a page boundary never a missing row.
  */
 
-/** How many prompts of its own an agent waits on an answer to: its session's, and its terminal's. */
-export function promptsOf({ engine }: OpenCanvas, id: string): number {
+/**
+ * How many prompts of its own an agent waits on an answer to, each once: its session's, its
+ * terminal's, and those the core's prompt owner holds that its session doesn't show itself (B13
+ * C11's counts; the same for every reader that reaches the agent).
+ */
+export function promptsOf({ engine, ownedPrompts }: OpenCanvas, id: string): number {
   const session = engine.sessions.of(id);
-  return session.entries.filter(isOpen).length + (session.asking?.length ?? 0);
+  return (
+    session.entries.filter(isOpen).length +
+    (session.asking?.length ?? 0) +
+    (ownedPrompts?.(id) ?? 0)
+  );
 }
 
 /**
@@ -48,15 +59,42 @@ export function fallbackOf(open: OpenCanvas, agent: string): FallbackView | null
   return fallbackView(agentOf(open, agent).data.fallback, open.switching?.(agent) === true);
 }
 
+/**
+ * An agent's handoff as views show it (B11a C11): when its latest was kept, how long it is, and
+ * its state; never its text. Alike for every caller who reaches it.
+ */
+export function handoffOf(open: OpenCanvas, agent: string): HandoffView | null {
+  agentOf(open, agent);
+  return open.handoff?.(agent) ?? null;
+}
+
 export function sessionSummary(open: OpenCanvas, agent: string, yours = true) {
   const node = agentOf(open, agent);
   const { engine } = open;
   const session = engine.sessions.of(agent);
   const lastTurn = session.entries.findLast((entry) => entry.kind === 'user');
+  const reply = lastTurn === undefined ? null : turnReply(session, lastTurn.id) || null;
+  // Maintenance replies belong in the transcript and session.handoff, never a summary, including
+  // while they stream. Accepted turn ids survive request pruning and newer handoffs, so resumed
+  // native history cannot preview an older handoff either.
+  const handoffReply =
+    (lastTurn !== undefined &&
+      (open.handoffs.of(agent)?.acceptedTurns?.includes(lastTurn.id) === true ||
+        open.messages
+          .all()
+          .some(
+            (message) =>
+              message.from === 'corrallm' &&
+              message.to === agentParty(agent) &&
+              message.delivery?.as === lastTurn.id &&
+              open.messages.toldOf(message.id)?.startsWith(HANDOFF_REQUEST) === true,
+          ))) ||
+    (reply !== null && reply.trim() === open.handoffs.of(agent)?.handoff?.text);
   return {
     agent,
     connection: engine.catalog.connectionOf(node.data),
     fallback: fallbackOf(open, agent),
+    handoff: handoffOf(open, agent),
     status: session.status,
     paused: engine.run.snapshot().agents[agent]?.paused === true,
     queued: session.queued.length,
@@ -71,27 +109,19 @@ export function sessionSummary(open: OpenCanvas, agent: string, yours = true) {
     ...(session.modes === undefined ? {} : { modes: [...session.modes] }),
     ...(session.running === undefined ? {} : { running: session.running }),
     ...(session.usage === undefined ? {} : { usage: session.usage }),
-    ...summaryReply(lastTurn === undefined ? null : turnReply(session, lastTurn.id) || null),
+    ...summaryReply(handoffReply ? null : reply),
     ...(yours ? presentationOf(session) : {}),
   };
 }
 
 /**
- * An entry as a transcript gives it: a message's pasted images only counted; and an MCP server's
- * request, for anyone but you (`yours`), only in the core's words: never its link (often a
- * sign-in), its form or its message, which may hold the link, as Needs leaves them out: a form is
- * yours alone (Core Server R3, B13 C11).
+ * An entry as a transcript gives it, `yours` (you) or a token's, through the one selector of what
+ * each reader sees of a prompt (B13 C11: `entryFor`): a message's pasted images only counted; a
+ * token's prompt entry without an answer, feedback or a choice's label, and an MCP server's request
+ * only in the core's words, never its link (often a sign-in), its form or its message.
  */
 export function transcriptEntry(entry: Entry, yours: boolean): EntryView {
-  if (entry.kind !== 'user') {
-    if (entry.kind !== 'elicitation' || yours) return entry;
-    const seen = { ...entry, message: mcpRequestTitle(entry.server, entry.url !== undefined) };
-    delete seen.url;
-    delete seen.fields;
-    return seen;
-  }
-  const { images, ...rest } = entry;
-  return images === undefined || images.length === 0 ? rest : { ...rest, images: images.length };
+  return entryFor(entry, yours ? 'you' : 'token');
 }
 
 /**

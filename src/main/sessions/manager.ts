@@ -32,12 +32,13 @@ import {
   withConversationsIn,
 } from '../memory';
 import type { PromptAnswer } from '../../shared/model/prompts';
-import type { Connector, LiveSession, PromptAnswers, SessionHost } from './connector';
+import type { Bridge, Connector, LiveSession, PromptAnswers, SessionHost } from './connector';
 import type { Conversations } from './adapter';
 import { ConversationClaims } from './claims';
 import type { ClaimOwner } from './claims';
 import { droppedPaste } from './terminal/drop';
 import { isConversationId, requireConversationId } from './adapters';
+import { ProcessScope } from './process';
 
 const NOT_RUNNING = 'This agent’s session is not running.';
 const NOT_LISTED = 'That is not one of this project folder’s conversations.';
@@ -73,6 +74,8 @@ const STARTING = 'This agent’s session is still starting: answer once it runs.
 const UNHEARD = 'corrallm declined this request: nothing in corrallm hears what this session asks.';
 /** How long a session may take to close before the manager stops waiting for it. */
 const CLOSE_MS = 5000;
+/** All connections have this long to spawn, handshake and finish their first ready state. */
+const START_MS = 90_000;
 /** How long a silent turn's interrupt waits for its CLI's answer before it counts as unanswered. */
 export const STALLED_INTERRUPT_MS = 30_000;
 const UNANSWERED = 'The CLI did not answer the interrupt.';
@@ -128,8 +131,9 @@ export interface PromptOrigin {
   answers: PromptAnswers;
   /**
    * Transitional (B13 C4, until X10; X11 removes it): whether its session shows each prompt it
-   * raises as one of the events B13 replaces too (`LiveSession.bridge`), whose Needs item and
-   * card then stand for it, answered through the owner.
+   * raises as one of the events B13 replaces too (it installed its `SessionHost.bridge` as its
+   * start began: so from its first raise, before its start resolves), whose Needs item and card
+   * then stand for it, answered through the owner.
    */
   mirrored?: boolean;
 }
@@ -256,6 +260,11 @@ interface Agent {
   session: Promise<LiveSession<SessionMode>>;
   /** The session, once its start resolved: what the prompts it raised are answered on. */
   live?: LiveSession<SessionMode>;
+  /**
+   * Transitional (B13 C4, C5, until X10; X11 removes it): how its session translates an answer to
+   * one of the events B13 replaces it shows, installed as its start began (`SessionHost.bridge`).
+   */
+  bridge?: Bridge;
   /** The mode it reported in its first `started`, captured once (B13 C4's effective start mode). */
   started?: { mode: SessionMode | null };
 }
@@ -549,12 +558,13 @@ export class SessionManager {
   }
 
   /**
-   * Transitional (B13 C4, until X10; X11 removes it): for an agent whose running session shows
-   * each prompt it raised as one of the events B13 replaces too (`LiveSession.bridge`), the
-   * generation and key of the prompt the old event `promptId` shows, and `answer` as it takes it,
-   * for the core's prompt owner to answer. Undefined where its session shows no such twin (it
-   * still answers the old events itself), or none runs. Throws, saying why, for one its session
-   * no longer asks or an answer it doesn't offer. Never starts a session.
+   * Transitional (B13 C4, until X10; X11 removes it): for an agent whose session shows each
+   * prompt it raises as one of the events B13 replaces too (its `SessionHost.bridge`, installed as
+   * its start began: so while it still starts too, the owner then refusing the answer until it
+   * runs), the generation and key of the prompt the old event `promptId` shows, and `answer` as it
+   * takes it, for the core's prompt owner to answer. Undefined where its session shows no such
+   * twin (it still answers the old events itself), or none runs or starts. Throws, saying why, for
+   * one its session no longer asks or an answer it doesn't offer. Never starts a session.
    */
   bridge(
     canvas: CanvasId,
@@ -563,7 +573,7 @@ export class SessionManager {
     answer: SessionAnswer,
   ): { generation: number; key: string; answer: PromptAnswer } | undefined {
     const agent = this.#agents.get(canvas)?.get(agentId);
-    const bridge = agent?.live?.bridge?.bind(agent.live);
+    const bridge = agent?.bridge;
     if (agent === undefined || bridge === undefined) return undefined;
     return { generation: agent.generation, ...bridge(promptId, answer) };
   }
@@ -927,6 +937,9 @@ export class SessionManager {
    */
   async restarting(canvas: CanvasId, agentId: string, adapter: AdapterId): Promise<void> {
     await this.#settled(canvas);
+    // A restart waiting on a launch hears its failure too; only a later open retries it.
+    const starting = this.#agents.get(canvas)?.get(agentId);
+    if (starting !== undefined && starting.live === undefined) await starting.session;
     const remembered = (await this.#conversation(canvas, adapter, agentId))?.id;
     if (remembered !== undefined) {
       requireConversationId(adapter, remembered);
@@ -1050,6 +1063,17 @@ export class SessionManager {
         if (agent.live !== undefined) decline(agent.live);
         else void agent.session.then(decline, () => undefined);
       },
+      dismiss: (key) => {
+        const dismiss = (session: LiveSession<SessionMode>) => {
+          try {
+            session.prompts?.dismiss?.(key);
+          } catch (error) {
+            console.error(`Could not dismiss ${agentId}'s prompt:`, error);
+          }
+        };
+        if (agent.live !== undefined) dismiss(agent.live);
+        else void agent.session.then(dismiss, () => undefined);
+      },
     };
     const origin = (): PromptOrigin => ({
       canvas,
@@ -1059,7 +1083,7 @@ export class SessionManager {
       live: live(),
       startMode: agent.started?.mode,
       answers,
-      ...(agent.live?.bridge === undefined ? {} : { mirrored: true }),
+      ...(agent.bridge === undefined ? {} : { mirrored: true }),
     });
     try {
       const fingerprint = roleFingerprint(role);
@@ -1082,6 +1106,9 @@ export class SessionManager {
       const host: SessionHost = {
         activity: () => {
           if (live()) this.#deps.activity?.(canvas, agentId);
+        },
+        bridge: (translate) => {
+          agent.bridge = translate;
         },
         emit: (event) => {
           // Prompts go to the core's prompt owner, with this generation, never to a window.
@@ -1145,7 +1172,8 @@ export class SessionManager {
           text: `This agent’s conversation is open in ${this.#holderIn(canvas, holder)}, so it started a new one: two agents never share one conversation.`,
         });
       }
-      const session = await connector.start(
+      const session = await this.#start(
+        connector,
         {
           agentId,
           cwd: directory.cwd,
@@ -1159,6 +1187,9 @@ export class SessionManager {
           ...(resume === null ? {} : { roleChanged }),
         },
         host,
+        canvas,
+        agentId,
+        agent,
       );
       agent.live = session;
       // Installed only for the binding it launched in (B9a Design §3): a late start for one no
@@ -1175,6 +1206,59 @@ export class SessionManager {
     } catch (error) {
       this.#claims.release(owner);
       throw error;
+    }
+  }
+
+  /** Bounds the whole connector start, including helpers and any handshake or first thread. */
+  async #start(
+    connector: Connector<SessionMode>,
+    spec: Parameters<Connector<SessionMode>['start']>[0],
+    host: SessionHost,
+    canvas: CanvasId,
+    agentId: string,
+    agent: Agent,
+  ): Promise<LiveSession<SessionMode>> {
+    const processes = new ProcessScope();
+    let expired = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const starting = Promise.resolve().then(() => processes.run(() => connector.start(spec, host)));
+    // A connector can finish after the race was lost: its generation stays unheard and closes.
+    void starting.then(
+      (session) => {
+        if (expired) {
+          void Promise.resolve()
+            .then(() => session.close())
+            .catch((error: unknown) => {
+              console.error(`Could not close ${agentId}'s late session:`, error);
+            });
+        }
+      },
+      () => undefined,
+    );
+    try {
+      return await Promise.race([
+        starting,
+        new Promise<never>((_resolve, reject) => {
+          timer = setTimeout(() => {
+            expired = true;
+            agent.unheard = true;
+            const found = connectionIn(this.#deps.catalog, agent.connection);
+            const connection =
+              found === undefined
+                ? agent.connection
+                : `${found.adapter.name} · ${found.connection.label}`;
+            const error = `${connection} didn't finish starting within ${String(START_MS / 1000)} seconds`;
+            this.#deps.emit(canvas, agentId, agent.connection, { type: 'closed', error });
+            reject(new Error(error));
+          }, START_MS);
+        }),
+      ]);
+    } catch (error) {
+      agent.unheard = true;
+      await processes.close();
+      throw error;
+    } finally {
+      clearTimeout(timer);
     }
   }
 

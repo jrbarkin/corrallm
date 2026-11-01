@@ -385,6 +385,28 @@ describe('following Codex', () => {
     expect(tui.title('Ready')).toEqual({ state: 'done' });
   });
 
+  it('reads what Action Required waits for from its screen’s last rows, as the real Codex drew them', async () => {
+    const tui = await prepared();
+    // The command's approval, as corrallm's own session of it was asked (fixtures/turns).
+    const rows = tui.waitDetail(await recordedScreen('turns', 9583));
+    expect(rows?.split('\n')).toEqual([
+      '• I’ll create hi.txt in the current workspace with hi as its contents.',
+      '• The workspace is mounted read-only, so the write was denied. I’m requesting the required write',
+      '  access to create the file.',
+      "• Running printf 'hi' > hi.txt",
+      '  Would you like to run the following command?',
+      '  Environment: local',
+      '  Reason: May I write hi.txt in the current workspace with the word hi?',
+      "  $ printf 'hi' > hi.txt",
+      '› 1. Yes, proceed (y)',
+      "  2. Yes, and don't ask again for commands that start with `printf 'hi' > hi.txt` (p)",
+      '  3. No, and tell Codex what to do differently (esc)',
+      '  Press enter to confirm or esc to cancel',
+    ]);
+    // Nothing on screen: nothing to show.
+    expect(tui.waitDetail(await recordedScreen('turns', 0))).toBeUndefined();
+  });
+
   it('leaves out a subagent’s hooks, and a model it already said', async () => {
     const tui = await prepared();
     expect(
