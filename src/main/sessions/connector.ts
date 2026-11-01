@@ -10,6 +10,8 @@ import type {
 } from '../../shared/session';
 import type { PromptAnswer, PromptEnded, PromptEvent } from '../../shared/model/prompts';
 import type { TerminalEvent } from '../../shared/terminal';
+import type { ToolListing } from '../../shared/api/registry';
+import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 
 /*
  * The seam a connection plugs into. A connector starts an agent's session (Claude Code or Codex,
@@ -26,8 +28,41 @@ import type { TerminalEvent } from '../../shared/terminal';
  * otherwise; Codex's modes for a Codex connection): the manager passes only those.
  */
 
+/** Exact MCP names from the generation's listing, with each tool's destructive classification. */
+export interface ToolGrant {
+  name: string;
+  destructive: boolean;
+}
+
+/** An in-process MCP route already bound to its caller by the core. */
+export interface AgentChannel {
+  /** Lists the bound generation's tools, marking that generation listed. */
+  list(): ToolListing[];
+  call(name: string, args: unknown, signal: AbortSignal): Promise<CallToolResult>;
+}
+
+/** Private startup data for the connector alone: never an event, topic or renderer value. */
+export type SessionApi =
+  | {
+      kind: 'http';
+      server: 'corrallm';
+      url: string;
+      token: string;
+      tools: readonly ToolGrant[];
+      off: readonly string[];
+    }
+  | {
+      kind: 'channel';
+      server: 'corrallm';
+      tools: readonly ToolGrant[];
+      off: readonly string[];
+      channel: AgentChannel;
+    };
+
 /** What a connector is given to start a session. */
 export interface SessionSpec<M extends SessionMode = PermissionMode> {
+  /** The core-issued API route for this generation, absent when unavailable. */
+  api?: SessionApi;
   /**
    * The agent the session is for, as the renderer names it: for logs only. Events are routed by the
    * manager; never put it in a path or a command line.

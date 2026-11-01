@@ -330,6 +330,147 @@ const REFUSING = refusing();
 const FRAME = (id: string) =>
   `[corrallm] Message from "orchestrator" (an orchestrator outside corrallm, not the user; message ${id}):\n`;
 
+describe('native file mentions in messages', () => {
+  it('uses the receiving session’s connection when checking final text', async () => {
+    await keepCanvas(
+      [{ id: 'helper', label: 'Helper', adapter: 'claude-code', connection: 'claude-code.sdk' }],
+      [],
+    );
+    const running = await start();
+    const native = vi.fn().mockResolvedValue(undefined);
+    await expect(
+      running.engines.sending(
+        CANVAS,
+        'helper',
+        {
+          id: 'peer-send',
+          text: 'Read @link',
+          from: { party: 'outside:orchestrator', name: 'orchestrator' },
+        },
+        native,
+        undefined,
+        'claude-code.terminal',
+      ),
+    ).rejects.toThrow('file mention');
+    expect(native).not.toHaveBeenCalled();
+  });
+
+  it('checks another party’s file mentions at the final session send boundary', async () => {
+    await keepCanvas(
+      [
+        {
+          id: 'helper',
+          label: 'Helper',
+          adapter: 'claude-code',
+          connection: 'claude-code.terminal',
+        },
+      ],
+      [],
+    );
+    const running = await start({ claude: new FakeConnector({ adapter: 'claude-code' }) });
+    const native = vi.fn().mockResolvedValue(undefined);
+    await expect(
+      running.engines.sending(
+        CANVAS,
+        'helper',
+        {
+          id: 'peer-send',
+          text: 'Read @link',
+          from: { party: 'outside:orchestrator', name: 'orchestrator' },
+        },
+        native,
+      ),
+    ).rejects.toThrow('file mention');
+    expect(native).not.toHaveBeenCalled();
+    expect(
+      await running.engines.sending(
+        CANVAS,
+        'helper',
+        { id: 'own-send', text: 'Read @link' },
+        native,
+      ),
+    ).toBe(true);
+    expect(native).toHaveBeenCalledExactlyOnceWith({ id: 'own-send', text: 'Read @link' });
+  });
+
+  it('refuses every file mention from a token on a connection that expands it', async () => {
+    await keepCanvas(
+      [
+        BUILDER_AGENT,
+        {
+          id: 'helper',
+          label: 'Helper',
+          adapter: 'claude-code',
+          connection: 'claude-code.terminal',
+        },
+      ],
+      [['builder', 'helper']],
+    );
+    const claude = new FakeConnector({ adapter: 'claude-code' });
+    await start({ claude });
+    for (const caller of [OUTSIDE, BUILDER]) {
+      for (const body of [
+        '@/x',
+        '@../x',
+        '@"a b"',
+        '@~/x',
+        '@link',
+        '@src/x#L2-3',
+        '(@x)',
+        'Read @x',
+      ]) {
+        expect(
+          await core?.call('message', { canvas: CANVAS, to: 'helper', body }, caller),
+          body,
+        ).toMatchObject({
+          ok: false,
+          error: { code: 'refused', sentence: expect.stringContaining('file mention') as unknown },
+        });
+      }
+    }
+    expect(sent(claude)).toEqual([]);
+    expect(await inbox()).toEqual([]);
+  });
+
+  it('admits ordinary at signs and the user’s own file mentions', async () => {
+    await keepCanvas(
+      [
+        {
+          id: 'helper',
+          label: 'Helper',
+          adapter: 'claude-code',
+          connection: 'claude-code.terminal',
+        },
+      ],
+      [],
+    );
+    const claude = new FakeConnector({ adapter: 'claude-code' });
+    await start({ claude });
+    await ok('run.pause', { target: { agent: 'helper' } }, YOU);
+    for (const body of ['a@b.com', 'a@/x', 'a lone @ before whitespace']) {
+      const id = await send('helper', body);
+      expect(await find(id, YOU)).toMatchObject({ body });
+    }
+    const own = await send('helper', 'Read @link', YOU);
+    expect(await find(own, YOU)).toMatchObject({ body: 'Read @link' });
+    await vi.waitFor(() => {
+      expect(sent(claude)).toContain('Read @link');
+    });
+  });
+
+  it.each([
+    ['codex', 'codex.terminal'],
+    ['codex', 'codex.app-server'],
+    ['claude-code', 'claude-code.sdk'],
+  ])('admits file mentions on %s %s without native expansion', async (adapter, connection) => {
+    await keepCanvas([{ id: 'helper', label: 'Helper', adapter, connection }], []);
+    await start();
+    await ok('run.pause', { target: { agent: 'helper' } }, YOU);
+    const id = await send('helper', 'Read @link');
+    expect(await find(id)).toMatchObject({ body: 'Read @link' });
+  });
+});
+
 describe('stalled message turns', () => {
   it('tells every sender of a coalesced turn once, including after the store is reloaded', async () => {
     await keepCanvas();

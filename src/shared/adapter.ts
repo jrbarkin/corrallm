@@ -122,6 +122,8 @@ export interface ConnectionDescriptor {
   signals: boolean;
   /** Whether a recording proves token context reports on this connection's own basis. */
   context: boolean;
+  /** The native route for corrallm's agent API; null until that connection's evidence gate opens. */
+  api: 'http' | 'channel' | null;
   /**
    * The modes (each one that asks) an agent's saved setting may name for it, to start its
    * sessions in; none: always the user's own default.
@@ -154,6 +156,8 @@ export interface ConnectionDescriptor {
   keys?: { shiftEnter: string | null };
   /** Text it runs as a shell command, without asking, when a message starts with it. */
   shellPrefix?: string;
+  /** Expands @ file mentions in text it is sent, without asking. */
+  fileMentions?: true;
 }
 
 export interface UsageBackendDescriptor {

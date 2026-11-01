@@ -76,6 +76,27 @@ describe('loginShellEnvironment on Windows', () => {
 });
 
 describe('agentEnvironment', () => {
+  it('marks its own agents after cleaning the outside orchestrator’s credentials', () => {
+    expect(
+      agentEnvironment({
+        CORRALLM_AGENT_SESSION: 'parent',
+        CORRALLM_OUTSIDE_TOKEN: 'outside-secret',
+        CORRALLM_OUTSIDE_TOKEN_FILE: '/outside/token',
+        CORRALLM_URL: 'http://127.0.0.1:42',
+      }),
+    ).toEqual({
+      CORRALLM_AGENT_SESSION: '1',
+      NO_PROXY: '127.0.0.1,localhost,::1',
+      no_proxy: '127.0.0.1,localhost,::1',
+    });
+  });
+
+  it('preserves each proxy exclusion list and adds every loopback address to both', () => {
+    const env = agentEnvironment({ NO_PROXY: 'example.com,localhost', no_proxy: 'internal,::1' });
+    expect(env.NO_PROXY?.split(',')).toEqual(['example.com', 'localhost', '127.0.0.1', '::1']);
+    expect(env.no_proxy?.split(',')).toEqual(['internal', '::1', '127.0.0.1', 'localhost']);
+  });
+
   it('leaves out what the app was started from: a Claude Code session, a terminal, Electron', () => {
     const env = agentEnvironment({
       PATH: '/usr/bin',
@@ -99,6 +120,9 @@ describe('agentEnvironment', () => {
       HOME: '/Users/me',
       ANTHROPIC_API_KEY: 'sk-test',
       CLAUDE_CODE_USE_BEDROCK: '1',
+      CORRALLM_AGENT_SESSION: '1',
+      NO_PROXY: '127.0.0.1,localhost,::1',
+      no_proxy: '127.0.0.1,localhost,::1',
     });
   });
 });

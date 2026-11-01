@@ -351,7 +351,7 @@ const NODES = [
   { id: 'worker', connection: 'codex.app-server' },
   { id: 'apprentice', connection: 'codex.app-server', parent: 'worker' },
   { id: 'peer', adapter: 'gemini' },
-  { id: 'shell', connection: 'codex.terminal' },
+  { id: 'shell', adapter: 'claude-code', connection: 'claude-code.terminal' },
   { id: 'stranger', connection: 'codex.app-server' },
   // What tokens' deletes propose to remove, each once: alone, in a batch, and the two proposals
   // waiting as the tests begin.
@@ -420,7 +420,7 @@ const REFUSING: Connector<SessionMode> = {
       id: crypto.randomUUID(),
       level: 'error',
       text: 'This terminal can’t start here.',
-      switchTo: 'codex.app-server',
+      switchTo: 'claude-code.sdk',
     });
     return Promise.reject(new Error('This terminal can’t start here.'));
   },
@@ -642,6 +642,7 @@ export async function startWorld(): Promise<{
   let clock = 0;
   let cap = MAX_CREATED_AGENTS;
   const proposals = Object.values(PROPOSED).map((id) => id.slice('proposal/'.length));
+  const spending = silent(SPENDING.adapter.id);
   const core = await createCore(
     {
       profile,
@@ -679,8 +680,12 @@ export async function startWorld(): Promise<{
         connectors: {
           'codex.app-server': new FakeConnector({ adapter: 'codex' }),
           'codex.terminal': REFUSING,
+          'claude-code.terminal': REFUSING,
           [CONTROL.connection.id]: controlConnector(),
-          [SPENDING.connection.id]: silent(SPENDING.adapter.id),
+          [SPENDING.connection.id]: {
+            start: (spec, host) =>
+              spec.agentId === 'shell' ? REFUSING.start(spec, host) : spending.start(spec, host),
+          },
         },
         environment: () => Promise.resolve(env),
         // Never the user's own conversations: the world's, for its folder.
@@ -1683,6 +1688,7 @@ export const REAL_FIXTURES: Readonly<Record<OpName, OpFixture>> = {
     ],
     meetsRule: {
       'shell-text': { canvas: CANVAS, to: 'shell', body: '!ls', request: request(2) },
+      'file-mentions': { canvas: CANVAS, to: 'shell', body: 'Read @link', request: request(3) },
       // Past a token's 16 KiB: yours, as your composer's are (B11 §16.6).
       'human-text': {
         canvas: CANVAS,

@@ -21,6 +21,15 @@ export const MAX_IMAGES = 20;
  */
 export const MAX_MESSAGE_BYTES = 16 * 1024;
 
+/** Prepared agent questions, deadlines, completion summaries and pair-turn budget (B21). */
+export const MAX_ASK_QUESTIONS = 4;
+export const MAX_ASK_BYTES = MAX_MESSAGE_BYTES;
+export const MAX_OPEN_ASKS = 256;
+export const MIN_ASK_SECONDS = 60;
+export const MAX_ASK_SECONDS = 86_400;
+export const MAX_SUMMARY_BYTES = 4096;
+export const LOOP_TURNS = 10;
+
 /**
  * The longest handoff kept, in bytes of UTF-8, once trimmed (B11a C7): the cap for automated text
  * (Q-B11-1). A longer reply isn't accepted, never cut, so a handoff is exactly the agent's own.

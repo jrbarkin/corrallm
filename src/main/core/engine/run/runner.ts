@@ -34,7 +34,13 @@ import { deadline } from '../../../../shared/model/time';
 import { readRun } from './checkpoint';
 import type { SavedRun } from './checkpoint';
 import { warningText } from '../../../../shared/model/words';
-import { adapterRefusal, shellRefusal, startsWithShell } from '../../../../shared/model/catalog';
+import {
+  adapterRefusal,
+  fileMentionRefusal,
+  hasFileMention,
+  shellRefusal,
+  startsWithShell,
+} from '../../../../shared/model/catalog';
 import type { EngineCatalog, ResolvedStep } from '../../../../shared/model/catalog';
 import {
   conditionQuestion,
@@ -233,10 +239,13 @@ function taskMessage(
  * What a correction the user typed sends: their note, then what it corrects. A note that starts
  * with any connection's shell prefix (`prefixes`) may be a shell command for its CLI's bash mode,
  * once the recipient runs there (it may switch before the note goes), so it is sent alone: the
- * canvas's text after it would be run as part of it.
+ * canvas's text after it would be run as part of it. A task containing a file mention likewise
+ * stays out of a typed correction, including on a later connection that expands mentions.
  */
 const corrected = (note: string, task: string, prefixes: readonly string[]) =>
-  prefixes.some((prefix) => startsWithShell(note, prefix)) ? note : `${note}\n\n${task}`;
+  prefixes.some((prefix) => startsWithShell(note, prefix)) || hasFileMention(task)
+    ? note
+    : `${note}\n\n${task}`;
 
 /**
  * What the run says when it waits for a usage window's reset that has never been read (the backend
@@ -2154,7 +2163,8 @@ export class RunStore {
       const refusal =
         origin === 'user'
           ? undefined
-          : shellRefusal(this.#catalog, this.#catalog.connectionOf(now.data), text);
+          : (shellRefusal(this.#catalog, this.#catalog.connectionOf(now.data), text) ??
+            fileMentionRefusal(this.#catalog, this.#catalog.connectionOf(now.data), sending));
       if (refusal !== undefined) {
         this.#after(0, () => {
           if (sent.over) return;

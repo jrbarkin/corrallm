@@ -22,6 +22,10 @@ export interface RuleRow {
 
 /** Each rule key some operation carries. */
 export const RULES = {
+  'file-mentions': {
+    kind: 'argument',
+    sentence: 'Only you may send file mentions to a connection that expands them without asking.',
+  },
   'shell-text': {
     kind: 'argument',
     sentence:
