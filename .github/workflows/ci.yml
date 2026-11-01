@@ -181,4 +181,6 @@ jobs:
           pnpm test:e2e --reporter=list
       - name: e2e (Linux, Docker)
         if: runner.os == 'Linux'
-        run: scripts/e2e-linux.sh x64
+        run: |
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          scripts/e2e-linux.sh x64
