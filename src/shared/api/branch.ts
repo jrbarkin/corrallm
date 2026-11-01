@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { AgentId, OpCanvas, WorktreeId } from './ids';
 import { DEFAULT_PAGE, MAX_EXPECT, MAX_PAGE, MAX_PAGE_BYTES } from './limits';
 
-/** Prepared B9b wire contracts only. Importing this file registers nothing. */
+/** B9b wire contracts. Importing this file alone registers nothing. */
 export const BRANCH_LIMITS = {
   refBytes: 1024,
   pathBytes: 4096,
@@ -184,12 +184,14 @@ export const BranchMergeOutput = z
         into: IntoResult,
         mergeCommit: BranchOid,
         checkpoint: BranchOid.optional(),
+        checkpointRecorded: z.literal(false).optional(),
         revs: Revs,
       })
       .refine(
         (value) =>
           value.mergeCommit === value.into.after &&
-          (value.checkpoint === undefined || value.source === value.checkpoint),
+          (value.checkpoint === undefined || value.source === value.checkpoint) &&
+          (value.checkpointRecorded === undefined || value.checkpoint !== undefined),
         'The result names the commits installed and merged',
       ),
     z

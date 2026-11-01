@@ -53,6 +53,7 @@ it('shows topic workspace attention beside Idle, glows the dock, and opens the e
             branch: 'corral/Builder',
             base: null,
             state: 'setup',
+            merge: { merged: null, uncommitted: null },
             need,
             setup: {
               state: 'pending',

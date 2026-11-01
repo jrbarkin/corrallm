@@ -92,6 +92,7 @@ describe('the worktree list contract', () => {
       branch: `corrallm/p/${worktree}`,
       base: { ref: 'refs/heads/main', oid: 'a'.repeat(40) },
       state: 'setup',
+      merge: { merged: null, uncommitted: null },
     };
     expect(op.output.safeParse({ items: [token], kept: [], into: null }).success).toBe(true);
     const yours = {
