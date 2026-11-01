@@ -13,6 +13,7 @@ import { Provisioner } from './provision';
 import { WorkspaceStore } from './store';
 import type { RepositoryRecord, WorktreeRecord } from './store';
 import { gitEnvironment, makeRepository, scratch } from './test-git';
+import type { RepositoryTemplate } from './test-git';
 
 /*
  * For the workspaces' tests past provisioning (copying local files, setup): a throwaway profile
@@ -43,19 +44,26 @@ export interface TestWorkspaces {
   close(): Promise<void>;
 }
 
+function isTemplate(
+  files: Record<string, string> | RepositoryTemplate<string>,
+): files is RepositoryTemplate<string> {
+  return typeof files.copy === 'function';
+}
+
 /**
- * A profile and a repository (its files committed once, `init` adding to its `git init`: an object
- * format, say) for one test.
+ * A profile and a repository for one test: its files committed once (`init` adding to its
+ * `git init`: an object format, say), or a copy of a template made once for the test's describe
+ * (`templateRepository`'s, its first commit the base).
  */
 export async function testWorkspaces(
-  files: Record<string, string> = { 'README.md': 'hello\n' },
+  files: Record<string, string> | RepositoryTemplate<string> = { 'README.md': 'hello\n' },
   extra: Partial<GitRunnerDeps> = {},
   init: readonly string[] = [],
 ): Promise<TestWorkspaces> {
   const { root, remove } = scratch();
   const env = gitEnvironment(path.join(root, 'home'));
   const app = path.join(root, 'app');
-  const base = makeRepository(app, env, files, init);
+  const base = isTemplate(files) ? files.copy(app, env) : makeRepository(app, env, files, init);
   const profile = path.join(root, 'profile');
   mkdirSync(profile);
   mkdirSync(path.join(profile, 'workspaces'));
