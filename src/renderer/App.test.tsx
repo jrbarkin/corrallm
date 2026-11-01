@@ -16,6 +16,7 @@ function stubApi(api: Partial<AppApi>) {
   const canvas = newCanvasId();
   const usage: Partial<AppApi> = {
     windowGet: vi.fn<AppApi['windowGet']>().mockResolvedValue({ ok: true, value: { canvas } }),
+    windowOnShow: vi.fn<AppApi['windowOnShow']>(() => () => undefined),
     catalogInstalled: vi.fn<AppApi['catalogInstalled']>().mockResolvedValue({
       ok: true,
       value: {},

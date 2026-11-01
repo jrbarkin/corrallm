@@ -13,6 +13,7 @@ import type { ReactNode } from 'react';
 
 import { AdapterLogo } from '../AdapterLogo';
 import { WorkspaceBadge } from '../workspaces/Workspace';
+import { BranchControls } from '../workspaces/BranchReview';
 import { useLabel } from '../useDraft';
 import { useGraphActions } from './actions';
 import { pointOnBezier } from './curve';
@@ -83,6 +84,7 @@ export function AgentNodeView({ id, data, parentId }: NodeProps<GraphNode>) {
       )}
       <Handle type="source" id="bottom" position={Position.Bottom} />
       <NodeToolbar isVisible={hover.active} className="graph-actions" {...hover.target}>
+        <BranchControls agent={id} />
         {isParent && (
           <ActionButton
             title={`Release the nodes in this group (${SHORTCUTS.ungroup})`}

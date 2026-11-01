@@ -11,6 +11,10 @@ import type { PromptAnswer } from '../../shared/model/prompts';
 import type { SessionMode } from '../../shared/session';
 import type { Connector, LiveSession, SessionHost } from '../sessions/connector';
 import { FakeConnector } from '../sessions/fake';
+import { callTool } from '../api/mcp';
+import { toolName } from '../../shared/api/registry';
+import { WindowPorts } from './gui';
+import { openWindow } from './test-window';
 import type { AgentCaller, Caller, OutsideCaller } from './caller';
 import { createCore } from './core';
 import type { Core } from './core';
@@ -97,6 +101,7 @@ interface Raising {
   host: SessionHost;
   answered: [string, PromptAnswer][];
   declined: [string, string][];
+  dismissed: string[];
 }
 
 /**
@@ -109,7 +114,7 @@ function raising(prompts: object[]) {
   const connector: Connector<SessionMode> = {
     start: async (spec, host) => {
       const session: LiveSession<SessionMode> = await fake.start(spec, host);
-      const raised: Raising = { host, answered: [], declined: [] };
+      const raised: Raising = { host, answered: [], declined: [], dismissed: [] };
       sessions.push(raised);
       session.send = (message) => {
         host.emit({ type: 'user', id: message.id, text: message.text });
@@ -127,6 +132,9 @@ function raising(prompts: object[]) {
           },
           decline: (key: string, why: string) => {
             raised.declined.push([key, why]);
+          },
+          dismiss: (key: string) => {
+            raised.dismissed.push(key);
           },
         },
       });
@@ -208,6 +216,139 @@ afterEach(async () => {
 });
 
 describe('a prompt the core owns', () => {
+  it.each(['core', 'MCP', 'window'] as const)(
+    'takes feedback and id-keyed answers through %s, with value-free records',
+    async (route) => {
+      const native = raising([
+        {
+          kind: 'plan',
+          title: 'Ready to implement?',
+          plan: 'Read it, then change it.',
+          answerIn: 'api',
+          choices: [
+            { value: 'yes', label: 'Yes', hint: 'allow_once', effects: {} },
+            {
+              value: 'revise',
+              label: 'Keep planning',
+              hint: 'reject_once',
+              effects: {},
+              feedback: 'optional',
+            },
+          ],
+        },
+        {
+          kind: 'question',
+          title: 'Choose the work',
+          answerIn: 'api',
+          questions: [
+            {
+              id: 'branch',
+              header: 'Branch',
+              text: 'Which branch?',
+              options: [{ label: 'main' }],
+              multiple: false,
+              other: false,
+            },
+            {
+              id: 'checks',
+              header: 'Checks',
+              text: 'Which checks?',
+              options: [],
+              multiple: false,
+              other: true,
+            },
+          ],
+        },
+        { ...link, server: 'fixture-server' },
+      ]);
+      const core = await start(native.connector);
+      await ok(core, 'message', { to: 'b', body: 'Review it' });
+      const asked = await prompts(core, 3);
+      const window = route === 'window' ? openWindow(new WindowPorts(core), 1) : undefined;
+      const replies = [
+        { choice: 'revise', feedback: 'Keep the first step small' },
+        { answers: { branch: { picked: ['main'] }, checks: { text: 'Run the full suite' } } },
+        { form: { action: 'accept' } },
+      ];
+      try {
+        for (const [i, answer] of replies.entries()) {
+          const args = { canvas: CANVAS, to: asked[i]?.id, answer };
+          if (route === 'core') {
+            expect(await call(core, 'reply', args)).toMatchObject({
+              ok: true,
+              value: { outcome: 'answered' },
+            });
+          } else if (route === 'MCP') {
+            const result = await callTool(core, YOU, toolName('reply'), args);
+            expect(result.isError).not.toBe(true);
+            expect(result.structuredContent).toMatchObject({ outcome: 'answered' });
+          } else {
+            expect(await window?.link.request('call', 'reply', args)).toMatchObject({
+              ok: true,
+              value: { ok: true, value: { outcome: 'answered' } },
+            });
+          }
+        }
+      } finally {
+        window?.close();
+      }
+      expect(native.sessions[0]?.answered.map(([, answer]) => answer)).toEqual([
+        { kind: 'choice', value: 'revise', feedback: 'Keep the first step small' },
+        { kind: 'questions', answers: replies[1]?.answers },
+        { kind: 'form', action: 'accept' },
+      ]);
+      const settled = await records(core);
+      expect(settled).toHaveLength(3);
+      expect(settled.map(({ settled }) => settled?.outcome.type)).toEqual([
+        'choice',
+        'answers',
+        'form',
+      ]);
+      for (const words of ['Keep the first step small', 'Run the full suite', URL_SECRET]) {
+        expect(JSON.stringify(settled)).not.toContain(words);
+      }
+    },
+  );
+
+  it('settles Not waiting through the registered receipt, with no decision record or native answer', async () => {
+    const native = raising([
+      { kind: 'approval', title: 'See its terminal', answerIn: 'terminal', choices: [] },
+    ]);
+    const core = await start(native.connector);
+    await ok(core, 'message', { to: 'b', body: 'Go on' });
+    const [asked] = await prompts(core);
+    expect(
+      await call(core, 'reply', { to: asked?.id, answer: { choice: 'not-waiting' } }),
+    ).toMatchObject({ ok: true, value: { outcome: 'dismissed' } });
+    expect(native.sessions[0]?.dismissed).toHaveLength(1);
+    expect(native.sessions[0]?.answered).toEqual([]);
+    expect(await records(core)).toEqual([]);
+    expect(await prompts(core, 0)).toEqual([]);
+  });
+
+  it('refuses a token’s typed form answer in the selector’s words and preserves the current prompt', async () => {
+    const native = raising([{ ...link, server: 'fixture-server' }]);
+    const core = await start(native.connector);
+    await ok(core, 'message', { to: 'b', body: 'Review it' });
+    const [asked] = await prompts(core);
+    const [seen] = await needsOf(core, ORCHESTRATOR);
+    expect(seen?.prompt).toMatchObject({ kind: 'form', server: 'fixture-server' });
+    for (const answer of [
+      { form: { action: 'accept' } },
+      { choice: 'no', feedback: 'Use a different approach' },
+      { answers: { q: { text: 'An answer' } } },
+    ]) {
+      const result = await call(core, 'reply', { to: asked?.id, answer }, ORCHESTRATOR);
+      expect(result).toMatchObject({
+        ok: false,
+        error: { code: 'refused', sentence: expect.stringContaining(seen?.title ?? '') as string },
+      });
+      expect(JSON.stringify(result)).not.toContain(URL_SECRET);
+    }
+    expect(native.sessions[0]?.answered).toEqual([]);
+    expect(await prompts(core)).toHaveLength(1);
+  });
+
   it('waits in Needs as yours, with its choices; a token sees it without them, and a form by the core’s title', async () => {
     const native = raising([approval, link]);
     const core = await start(native.connector);

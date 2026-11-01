@@ -4,7 +4,7 @@ import { FallbackViewSchema } from '../../model/fallback';
 import { HandoffViewSchema } from '../../model/handoff';
 import { MESSAGE_KINDS, MESSAGE_STATES, PARTY_PATTERN } from '../../model/messages';
 import { NEED_KINDS } from '../../model/needs';
-import { Choice, PromptNeedView } from '../../model/prompts';
+import { Choice, PromptNeedView, PromptReplyAnswer } from '../../model/prompts';
 import { SettledDecision } from '../../model/settled';
 import { TURN_REASONS } from '../../session';
 import { define } from '../define';
@@ -19,7 +19,6 @@ import {
   MAX_ID_LENGTH,
   MAX_QUESTIONS,
   PLAN_MODES,
-  ELICITATION_ACTIONS,
 } from '../../session';
 import { MAX_REPLY_ANSWER_BYTES } from '../limits';
 
@@ -284,17 +283,8 @@ export const conversationOps = {
 
 const AnswerText = z.string().max(MAX_ANSWER_LENGTH);
 const FieldName = z.string().min(1).max(MAX_ID_LENGTH);
-const FormValue = z.union([
-  AnswerText,
-  z.number(),
-  z.boolean(),
-  z.array(AnswerText).max(MAX_FORM_FIELDS),
-]);
-const FormValues = z
-  .record(FieldName, FormValue)
-  .refine((values) => Object.keys(values).length <= MAX_FORM_FIELDS, 'Too many form fields')
-  .meta({ maxProperties: MAX_FORM_FIELDS });
-const QuestionAnswers = z
+// X11 removes the renderer's index-keyed answers with the old question cards.
+const LegacyQuestionAnswers = z
   .record(FieldName, z.union([AnswerText, z.array(AnswerText).max(MAX_FORM_FIELDS)]))
   .refine(
     (answers) => Object.keys(answers).length > 0 && Object.keys(answers).length <= MAX_QUESTIONS,
@@ -307,9 +297,16 @@ const PermissionAnswer = z
     (answer) => answer.feedback === undefined || answer.permission === 'deny',
     'Feedback accompanies a denial',
   );
-/** Strict disjoint answer forms; C7 checks that a live Need offers the particular answer. */
+/** Owner replies and hold text; X11 removes the old cards' permission, plan and question forms. */
 export const ReplyAnswer = z
   .union([
+    PromptReplyAnswer.options[0],
+    PromptReplyAnswer.options[1].safeExtend({
+      answers: PromptReplyAnswer.options[1].shape.answers
+        .refine((answers) => Object.keys(answers).length > 0, 'Answer the prompt’s questions')
+        .meta({ minProperties: 1 }),
+    }),
+    PromptReplyAnswer.options[2],
     z
       .strictObject({
         choice: z.string().min(1).max(64),
@@ -321,16 +318,14 @@ export const ReplyAnswer = z
         'Images accompany typed text',
       ),
     z.strictObject({ text: B11Body, images: Images.optional() }),
-    z.strictObject({ answers: QuestionAnswers }),
+    z.strictObject({ answers: LegacyQuestionAnswers }),
+    // The renderer still sends these through the owner's temporary bridge until X10/X11.
     PermissionAnswer,
     z.strictObject({
       plan: z.union([
         z.strictObject({ approve: z.literal(true), mode: z.enum(PLAN_MODES) }),
         z.strictObject({ approve: z.literal(false), feedback: AnswerText }),
       ]),
-    }),
-    z.strictObject({
-      form: z.strictObject({ action: z.enum(ELICITATION_ACTIONS), values: FormValues.optional() }),
     }),
   ])
   .refine(
@@ -363,6 +358,7 @@ export const b11ConversationOps = {
             'stopped',
             'completed',
             'retained',
+            'dismissed',
           ])
           .optional(),
         raised: NeedId.optional(),

@@ -17,6 +17,15 @@ import type { fakeCore } from './test-api';
 import { fakeSessions } from './test-sessions';
 import type { SessionReplies } from './test-sessions';
 
+/** X11 removes these legacy fixture entries and their string/array answers together. */
+function legacyQuestionText(value: unknown): string {
+  if (typeof value === 'string') return value;
+  if (Array.isArray(value) && value.every((part: unknown) => typeof part === 'string')) {
+    return value.join(', ');
+  }
+  throw new Error('This question fixture takes the old card’s answers.');
+}
+
 /** Scripted operation/topic fixture. It runs no queue, driver, retry loop or checkpoint. */
 export function canvasRuntime(
   core: ReturnType<typeof fakeCore>,
@@ -512,9 +521,7 @@ export function canvasRuntime(
           const questions = prompt.questions.map((q, i) => {
             const key = fields[i]?.id;
             const value = key === undefined ? undefined : answer.answers[key];
-            return value === undefined
-              ? q
-              : { ...q, answer: Array.isArray(value) ? value.join(', ') : value };
+            return value === undefined ? q : { ...q, answer: legacyQuestionText(value) };
           });
           put(agent, { ...prompt, questions });
           if (questions.every((q) => q.answer !== undefined))
@@ -534,9 +541,7 @@ export function canvasRuntime(
             : 'answers' in answer
               ? {
                   kind: 'question',
-                  answers: Object.values(answer.answers).map((a) =>
-                    Array.isArray(a) ? a.join(', ') : a,
-                  ),
+                  answers: Object.values(answer.answers).map(legacyQuestionText),
                 }
               : 'plan' in answer
                 ? { kind: 'plan', answer: answer.plan }
@@ -561,7 +566,7 @@ export function canvasRuntime(
                 ? {
                     questions: prompt.questions.map((q, i) => ({
                       ...q,
-                      answer: Object.values(answer.answers)[i],
+                      answer: legacyQuestionText(Object.values(answer.answers)[i]),
                     })),
                   }
                 : { answer: 'form' in answer ? answer.form.action : undefined }),

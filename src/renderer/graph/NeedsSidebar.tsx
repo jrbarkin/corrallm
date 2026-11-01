@@ -186,6 +186,13 @@ export function NeedsSidebar({
               return (
                 <TerminalAskCard
                   key={item.id}
+                  ref={
+                    request?.id === item.id
+                      ? (element) => {
+                          target.current = element;
+                        }
+                      : null
+                  }
                   // Shown, never changed: the summary's immutable ask, as the card reads it.
                   ask={ask as TerminalAsk}
                   agent={{
