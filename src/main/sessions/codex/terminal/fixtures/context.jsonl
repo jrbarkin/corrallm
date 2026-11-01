@@ -1,0 +1,63 @@
+{"t":0,"kind":"argv","data":["--no-daemon","-C","/work/smoke/ctx3","-c","tui.terminal_title=[\"context-used\",\"activity\",\"run-state\"]","-c","check_for_update_on_startup=false","-c","tui.auto_recap=false","-c","notify=[]","-c","model_reasoning_effort=\"low\"","-c","model_context_window=50000","-c","model_auto_compact_token_limit=40000","-m","gpt-6-luna","-s","read-only","-a","never"]}
+{"t":1415,"kind":"title","data":"Context 0% used | Ready"}
+{"t":1630,"kind":"title","data":"Context 0% used ⠹ Starting"}
+{"t":2784,"kind":"title","data":"Context 0% used | Ready"}
+{"t":3012,"kind":"note","data":"pastefile part1.txt"}
+{"t":3013,"kind":"in","data":"<paste: filler part1.txt>"}
+{"t":3773,"kind":"hook","data":{"ok":true,"ev":{"hook_event_name":"SessionStart","source":"startup","model":"gpt-6-luna","permission_mode":"bypassPermissions"}}}
+{"t":3814,"kind":"in","data":"\r"}
+{"t":3814,"kind":"hook","data":{"ok":true,"ev":{"hook_event_name":"UserPromptSubmit","model":"gpt-6-luna","permission_mode":"bypassPermissions"}}}
+{"t":4051,"kind":"title","data":"Context 0% used ⠦ Working"}
+{"t":4927,"kind":"hook","data":{"ok":true,"ev":{"hook_event_name":"Stop","model":"gpt-6-luna","permission_mode":"bypassPermissions"}}}
+{"t":5525,"kind":"title","data":"Context 33% used ⠙ Working"}
+{"t":5576,"kind":"title","data":"Context 33% used | Ready"}
+{"t":8321,"kind":"note","data":"stop 1"}
+{"t":8324,"kind":"note","data":"pastefile part2.txt"}
+{"t":8325,"kind":"in","data":"<paste: filler part2.txt>"}
+{"t":8549,"kind":"hook","data":{"ok":true,"ev":{"hook_event_name":"UserPromptSubmit","model":"gpt-6-luna","permission_mode":"bypassPermissions"}}}
+{"t":9126,"kind":"in","data":"\r"}
+{"t":9143,"kind":"title","data":"Context 33% used ⠧ Working"}
+{"t":9752,"kind":"hook","data":{"ok":true,"ev":{"hook_event_name":"Stop","model":"gpt-6-luna","permission_mode":"bypassPermissions"}}}
+{"t":10331,"kind":"title","data":"Context 58% used ⠏ Working"}
+{"t":10388,"kind":"title","data":"Context 58% used | Ready"}
+{"t":13131,"kind":"note","data":"stop 2"}
+{"t":13131,"kind":"note","data":"pastefile part3.txt"}
+{"t":13131,"kind":"in","data":"<paste: filler part3.txt>"}
+{"t":13356,"kind":"hook","data":{"ok":true,"ev":{"hook_event_name":"UserPromptSubmit","model":"gpt-6-luna","permission_mode":"bypassPermissions"}}}
+{"t":13932,"kind":"in","data":"\r"}
+{"t":13947,"kind":"title","data":"Context 58% used ⠴ Working"}
+{"t":14403,"kind":"hook","data":{"ok":true,"ev":{"hook_event_name":"Stop","model":"gpt-6-luna","permission_mode":"bypassPermissions"}}}
+{"t":14968,"kind":"title","data":"Context 83% used ⠴ Working"}
+{"t":15039,"kind":"title","data":"Context 83% used | Ready"}
+{"t":17939,"kind":"note","data":"stop 3"}
+{"t":17939,"kind":"note","data":"pastefile part4.txt"}
+{"t":17939,"kind":"in","data":"<paste: filler part4.txt>"}
+{"t":18743,"kind":"in","data":"\r"}
+{"t":18771,"kind":"title","data":"Context 83% used ⠸ Working"}
+{"t":18777,"kind":"note","data":"the screen says: Compacting context"}
+{"t":19727,"kind":"hook","data":{"ok":true,"ev":{"hook_event_name":"SessionStart","source":"compact","model":"gpt-6-luna","permission_mode":"bypassPermissions"}}}
+{"t":19762,"kind":"hook","data":{"ok":true,"ev":{"hook_event_name":"UserPromptSubmit","model":"gpt-6-luna","permission_mode":"bypassPermissions"}}}
+{"t":20323,"kind":"title","data":"Context 38% used ⠏ Working"}
+{"t":21144,"kind":"hook","data":{"ok":true,"ev":{"hook_event_name":"Stop","model":"gpt-6-luna","permission_mode":"bypassPermissions"}}}
+{"t":21742,"kind":"title","data":"Context 100% used ⠸ Working"}
+{"t":21781,"kind":"title","data":"Context 100% used | Ready"}
+{"t":24753,"kind":"note","data":"stop 4"}
+{"t":24754,"kind":"in","data":"/model"}
+{"t":25754,"kind":"in","data":"\r"}
+{"t":27256,"kind":"in","data":"8"}
+{"t":28759,"kind":"in","data":"1"}
+{"t":28782,"kind":"note","data":"the screen says: Model changed to gpt-5.6-luna"}
+{"t":31262,"kind":"note","data":"paste Reply with just: OK"}
+{"t":31262,"kind":"in","data":"<paste: Reply with just: OK>"}
+{"t":32064,"kind":"in","data":"\r"}
+{"t":32072,"kind":"title","data":"Context 100% used ⠦ Working"}
+{"t":32085,"kind":"note","data":"the screen says: Compacting context"}
+{"t":33109,"kind":"hook","data":{"ok":true,"ev":{"hook_event_name":"SessionStart","source":"compact","model":"gpt-5.6-luna","permission_mode":"bypassPermissions"}}}
+{"t":33142,"kind":"hook","data":{"ok":true,"ev":{"hook_event_name":"UserPromptSubmit","model":"gpt-5.6-luna","permission_mode":"bypassPermissions"}}}
+{"t":33707,"kind":"title","data":"Context 69% used ⠹ Working"}
+{"t":34698,"kind":"hook","data":{"ok":true,"ev":{"hook_event_name":"Stop","model":"gpt-5.6-luna","permission_mode":"bypassPermissions"}}}
+{"t":35284,"kind":"title","data":"Context 100% used ⠇ Working"}
+{"t":35333,"kind":"title","data":"Context 100% used | Ready"}
+{"t":38073,"kind":"note","data":"stop 5"}
+{"t":40074,"kind":"note","data":"done"}
+{"t":40090,"kind":"exit","data":{"exitCode":0,"signal":1}}

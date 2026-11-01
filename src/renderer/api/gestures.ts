@@ -8,4 +8,6 @@ export const NO_GESTURE = {
   status:
     'The run, session summaries and Needs topics supply status; no renderer gesture polls it.',
   'canvas.batch': 'Several edits as one commit, for tokens: no gesture of the window’s is one.',
+  'agent.setFallback':
+    'The chain picker on the model chip and in Agent settings (B11a X4) is not built yet.',
 } satisfies Partial<Record<GuiOp, string>>;

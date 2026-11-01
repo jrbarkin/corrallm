@@ -90,6 +90,8 @@ describe('T3c: wait', () => {
         expect(got).toEqual(await sentTo(caller));
       }
     },
+    // A fixture may do real Git work (branch.merge: a merge, then its observation).
+    30_000,
   );
 
   it('has something addressed to each party by the end, so that the check above meant something', async () => {

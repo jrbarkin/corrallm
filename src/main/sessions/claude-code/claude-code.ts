@@ -21,7 +21,12 @@ import { hookSettings } from './hooks';
 import type { HookEvent, HookRegistration } from '../terminal/hooks';
 import { hooksOff, hooksOffWarning, managedSettingsFolder } from './hooks-off';
 import type { Screen } from '../terminal/screen';
-import { statusLineProgress, statusLineSettings, statusLineUsage } from './statusline';
+import {
+  statusLineContext,
+  statusLineProgress,
+  statusLineSettings,
+  statusLineUsage,
+} from './statusline';
 import { keystrokes, typeable } from './typing';
 
 /*
@@ -319,7 +324,11 @@ export class ClaudeCode implements TerminalCli<PermissionMode> {
   }
 
   statusLine(input: HookEvent): StatusLineReading {
-    return { usage: statusLineUsage(input, Date.now()), progress: statusLineProgress(input) };
+    return {
+      usage: statusLineUsage(input, Date.now()),
+      progress: statusLineProgress(input),
+      context: statusLineContext(input),
+    };
   }
 }
 

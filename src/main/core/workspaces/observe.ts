@@ -320,6 +320,17 @@ export class MergeObserver {
     };
   }
 
+  /** A merge's refresh timed out: no state read before it may remain on the card. */
+  markUnknown(workspace: string): void {
+    if (this.#closed) return;
+    const tree = this.#deps.workspaces.worktree(workspace);
+    if (tree === undefined) return;
+    const before = this.of(workspace);
+    // A new kept value also invalidates any pass that started before this timeout.
+    this.#kept.set(workspace, { ...UNKNOWN, generation: tree.generation, against: null });
+    if (before.merged !== null || before.uncommitted !== null) this.#deps.changed(tree.canvas);
+  }
+
   /** Drops observations of trees cleanup has removed, returning the number dropped. */
   prune(): number {
     let removed = 0;
@@ -434,6 +445,9 @@ export class MergeObserver {
     // A close may happen while a read is awaited; don't retain TypeScript's earlier narrowing.
     const closed = () => this.#closed;
     const { reads } = this.#deps;
+    const keptAtStart = new Map(
+      workspaces.map((workspace) => [workspace, this.#kept.get(workspace)]),
+    );
     const changed = new Set<CanvasId>();
     const record = this.#deps.workspaces.repository(repository);
     for (const canvas of canvases) {
@@ -463,6 +477,7 @@ export class MergeObserver {
     }
     for (const workspace of workspaces) {
       if (this.#closed) return;
+      if (this.#kept.get(workspace) !== keptAtStart.get(workspace)) continue;
       const tree = this.#deps.workspaces.worktree(workspace);
       const before = this.of(workspace);
       if (tree === undefined || record === undefined || tree.repository !== repository) {
@@ -474,6 +489,7 @@ export class MergeObserver {
       } else {
         const against = this.into(tree.canvas)?.oid ?? null;
         const read = await reads.workspace(record, tree, against);
+        if (this.#kept.get(workspace) !== keptAtStart.get(workspace)) continue;
         const current = this.#deps.workspaces.worktree(workspace);
         if (
           closed() ||

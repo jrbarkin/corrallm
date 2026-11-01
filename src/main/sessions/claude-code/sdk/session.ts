@@ -319,7 +319,7 @@ export class SdkSession implements LiveSession {
 
   async #read(): Promise<void> {
     try {
-      for await (const message of this.#query) this.#receive(message);
+      for await (const message of this.#query) await this.#receive(message);
       if (!this.#closing) {
         this.#host.emit(
           this.#pending.size > 0
@@ -338,7 +338,26 @@ export class SdkSession implements LiveSession {
     }
   }
 
-  #receive(message: SDKMessage): void {
+  async #receive(message: SDKMessage): Promise<void> {
+    if (message.type === 'result') {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        const summary = await Promise.race([
+          this.#query.getContextUsage({ detail: 'summary' }),
+          new Promise<undefined>((resolve) => {
+            timer = setTimeout(() => {
+              resolve(undefined);
+            }, 2000);
+          }),
+        ]);
+        this.#translator.setContextUsage(summary);
+      } catch {
+        this.#translator.setContextUsage(undefined);
+      } finally {
+        clearTimeout(timer);
+      }
+      if (this.#closing) return;
+    }
     this.#host.activity?.();
     // Its id, once a turn has made it a conversation to resume (its transcript is written from
     // the first message), and again when /clear starts a new one.

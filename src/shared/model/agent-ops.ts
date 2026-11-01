@@ -8,7 +8,7 @@ import { isIf, isRepeat } from './queue';
 import type { QueueItem } from './queue';
 import type { Built } from './structure';
 import { endpointOf, parseFallback, readFallback, sameFallback, sameStep } from './fallback';
-import type { FallbackInput } from './fallback';
+import type { Fallback, FallbackInput } from './fallback';
 
 export interface AgentContext {
   catalog: Catalog;
@@ -153,6 +153,83 @@ export function setFallback(
       current,
     );
     return sameFallback(before.fallback, next) ? before : { ...before, fallback: next };
+  });
+}
+
+/**
+ * B11a C2, corrallm's commit of a switch (`fallback.switch`) or a return (`fallback.return`): the
+ * agent runs step `step` of its chain, or its own endpoint (`on.from`) again (null). Leaving a step
+ * puts back what `on.kept` holds, only into fields still holding what corrallm wrote there; arriving
+ * at a step writes the model and effort it names into that adapter's settings, the values they
+ * replace kept (null: none was). `on` says which step, the endpoint the agent came from, why and
+ * when; on its own endpoint the agent has none. The queue is never rewritten: actions are resolved
+ * as each step is sent (C9).
+ */
+export function fallbackMove(
+  doc: CanvasDocument,
+  {
+    agent,
+    step,
+    why,
+    at,
+  }: { agent: string; step: number | null; why: 'usage-limit' | 'rule'; at: number },
+  context: AgentContext,
+): Built {
+  return editAgent(doc, agent, (before) => {
+    const chain = before.fallback;
+    if (chain === undefined) throw new TypeError('The agent has no fallback chain to switch on');
+    const own = chain.on?.from ?? endpointOf(before, context.catalog, context.defaultAdapter);
+    const target = step === null ? own : chain.to[step];
+    if (own === undefined || target === undefined)
+      throw new TypeError('The agent’s fallback chain has no such step');
+    if (step === null && chain.on === undefined) return before;
+    let settings = before.settings;
+    const left = chain.on === undefined ? undefined : chain.to[chain.on.step];
+    if (left !== undefined && chain.on?.kept !== undefined) {
+      const saved = settings && Object.hasOwn(settings, left.adapter) ? settings[left.adapter] : {};
+      const change: AgentSettingsChange = {};
+      for (const field of ['model', 'effort'] as const) {
+        const kept = chain.on.kept[field];
+        if (kept !== undefined && saved?.[field] === left[field]) change[field] = kept;
+      }
+      settings = mergeAgentSettings(settings, left.adapter, change);
+    }
+    const kept: { model?: string | null; effort?: string | null } = {};
+    if (step !== null) {
+      const saved =
+        settings && Object.hasOwn(settings, target.adapter) ? settings[target.adapter] : {};
+      const change: AgentSettingsChange = {};
+      for (const field of ['model', 'effort'] as const) {
+        const value = target[field];
+        if (value === undefined) continue;
+        kept[field] = saved?.[field] ?? null;
+        change[field] = value;
+      }
+      settings = mergeAgentSettings(settings, target.adapter, change);
+    }
+    const plan: Fallback = { ...chain };
+    delete plan.on;
+    const data: AgentData = { ...before };
+    delete data.settings;
+    return {
+      ...data,
+      adapter: target.adapter,
+      connection: target.connection,
+      ...(settings === undefined ? {} : { settings }),
+      fallback:
+        step === null
+          ? plan
+          : {
+              ...plan,
+              on: {
+                step,
+                from: own,
+                ...(Object.keys(kept).length === 0 ? {} : { kept }),
+                why,
+                at,
+              },
+            },
+    };
   });
 }
 

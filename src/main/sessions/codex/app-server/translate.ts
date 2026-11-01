@@ -111,6 +111,7 @@ export class Translator {
   }
   #context: number | null = null;
   #window: number | null = null;
+  #compactLimit: number | null = null;
   #limits: UsageLimit[] | undefined;
   /** The usage last told, so that the same is not told again. */
   #told: string | undefined;
@@ -122,6 +123,13 @@ export class Translator {
     this.#history = history;
     this.#now = now;
     this.#usageOut = usage;
+  }
+
+  /** The native configured limit can lower, never raise, the model's default point. */
+  setConfig(response: unknown): void {
+    const limit = property(property(response, 'config'), 'model_auto_compact_token_limit');
+    this.#compactLimit =
+      typeof limit === 'number' && Number.isSafeInteger(limit) && limit > 0 ? limit : null;
   }
 
   /** Whether a running command has output not shown yet: `flush` shows it. */
@@ -634,8 +642,10 @@ export class Translator {
     // What the last request took in and wrote: how full the context is now.
     const last = property(property(usage, 'last'), 'totalTokens');
     const window = property(usage, 'modelContextWindow');
-    if (typeof last === 'number') this.#context = last;
-    if (typeof window === 'number') this.#window = window;
+    this.#context =
+      typeof last === 'number' && Number.isSafeInteger(last) && last >= 0 ? last : null;
+    this.#window =
+      typeof window === 'number' && Number.isSafeInteger(window) && window > 0 ? window : null;
     return this.#usage();
   }
 
@@ -645,7 +655,17 @@ export class Translator {
       type: 'usage',
       usage: {
         costUsd: null,
-        context: null,
+        context:
+          this.#context === null || this.#window === null
+            ? null
+            : {
+                used: this.#context,
+                window: this.#window,
+                compactAt: Math.min(
+                  Math.floor(this.#window * (90 / 95)),
+                  this.#compactLimit ?? this.#window,
+                ),
+              },
         contextTokens: this.#context,
         contextWindow: this.#window,
         ...(this.#limits === undefined ? {} : { limits: this.#limits }),

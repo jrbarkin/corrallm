@@ -29,7 +29,6 @@ function setup(queue: QueueItem[], overrides: Partial<RunIO> = {}, connection = 
       return () => undefined;
     },
     tell: () => undefined,
-    connect: () => undefined,
     later: () => () => undefined,
     now: () => 1234,
     ...overrides,

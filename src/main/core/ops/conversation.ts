@@ -16,7 +16,7 @@ import { needsInput } from '../engines';
 import type { OpenCanvas } from '../engines';
 import { agentsReached } from '../reach';
 import { agentOf, openCanvas, pageOf, reachFor } from './open';
-import { messagesSeen, promptsOf } from './views';
+import { fallbackOf, messagesSeen, promptsOf } from './views';
 import type { Implementations, OpServices } from '.';
 
 /** Conversation (Core Server §4 H; API Spec §7.2). */
@@ -80,6 +80,7 @@ export function conversationOps(
             prompts: promptsOf(open, id),
             linked: reach.filter((other) => other !== id && areLinked(document.links, id, other)),
             api: false,
+            fallback: fallbackOf(open, id),
           };
         }),
       };
@@ -96,6 +97,7 @@ export function conversationOps(
             message: open.delivery.current(id) ?? null,
             model: session.model,
             effort: session.effort ?? null,
+            fallback: fallbackOf(open, id),
           };
         }),
         waitingForYou: waiting(open, ctx, reach).map(withoutChoices),

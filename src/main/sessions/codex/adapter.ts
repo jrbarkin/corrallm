@@ -139,7 +139,7 @@ export const codex: Adapter = {
           form: 'answerable',
         },
         signals: false,
-        context: false,
+        context: true,
         startModes: ['read-only', 'auto', 'plan'],
         live: { effort: true, stopTask: false },
         panels: {},
