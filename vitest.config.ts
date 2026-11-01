@@ -5,6 +5,9 @@ import { defineConfig } from 'vitest/config';
 // `include` are concatenated, so keep environment-specific options inside each project.
 export default defineConfig({
   test: {
+    // Locally leave 40% of the cores to the rest of the machine: all of them peg a laptop and turn
+    // timing-sensitive tests red. CI keeps Vitest's default (every core of a runner that is ours).
+    ...(process.env.CI ? {} : { maxWorkers: '60%' }),
     projects: [
       {
         test: {

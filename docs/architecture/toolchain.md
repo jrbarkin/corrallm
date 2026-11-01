@@ -34,19 +34,21 @@ Nested agent worktrees in `.claude/worktrees/` and `.corral/` are excluded from 
 
 Requires Node 24.22.1 (`.nvmrc`) and pnpm 12.11.2 (`packageManager`).
 
-| Command            | Purpose                                                                                                                                                   |
-| ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `pnpm dev`         | `electron-forge start`: Vite dev server + HMR; press `r` in its terminal UI after main-process changes                                                    |
-| `pnpm typecheck`   | `tsc -b` over the solution (node, web, tooling projects)                                                                                                  |
-| `pnpm lint`        | ESLint, type-aware, zero warnings allowed (`lint:fix` to autofix)                                                                                         |
-| `pnpm format`      | Prettier write (`format:check` to verify)                                                                                                                 |
-| `pnpm test`        | Vitest: `main`, `preload` (Node), `renderer` (jsdom), then `store-performance` alone                                                                      |
-| `pnpm test:e2e`    | Playwright; its global setup first builds the app unsigned (`electron-forge package`) and the CLI                                                         |
-| `pnpm package`     | Packaged app for the current OS in `out/`                                                                                                                 |
-| `pnpm make`        | Installers for the current OS in `out/make/`                                                                                                              |
-| `pnpm build:cli`   | The `corrallm` CLI for plain Node (`vite.cli.config.mts`) in `dist-cli/corrallm.cjs`                                                                      |
-| `pnpm corrallm`    | Runs the CLI bundle: `serve`, `wait`, `dump` (see Headless) or the self-test (`scripts/corrallm.mjs`; it says to run `pnpm build:cli` when it is missing) |
-| `pnpm api:surface` | Writes `src/shared/api/surface.snap.json`, every party's surface, after the registry changes                                                              |
+| Command               | Purpose                                                                                                                                                   |
+| --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `pnpm dev`            | `electron-forge start`: Vite dev server + HMR; press `r` in its terminal UI after main-process changes                                                    |
+| `pnpm typecheck`      | `tsc -b` over the solution (node, web, tooling projects)                                                                                                  |
+| `pnpm lint`           | ESLint, type-aware, zero warnings allowed (`lint:fix` to autofix)                                                                                         |
+| `pnpm format`         | Prettier write (`format:check` to verify)                                                                                                                 |
+| `pnpm test:fast`      | Local tier: Vitest `main`, `renderer`, `preload`, minus `src/main/cli/crash.test.ts` (the SIGKILL gate) and `store-performance`                           |
+| `pnpm test`           | Vitest: `main`, `preload` (Node), `renderer` (jsdom), then `store-performance` alone                                                                      |
+| `pnpm test:e2e:smoke` | Local tier: Playwright `smoke`, `security`, `files` and `lock` specs (same build step as `test:e2e`)                                                      |
+| `pnpm test:e2e`       | Playwright; its global setup first builds the app unsigned (`electron-forge package`) and the CLI                                                         |
+| `pnpm package`        | Packaged app for the current OS in `out/`                                                                                                                 |
+| `pnpm make`           | Installers for the current OS in `out/make/`                                                                                                              |
+| `pnpm build:cli`      | The `corrallm` CLI for plain Node (`vite.cli.config.mts`) in `dist-cli/corrallm.cjs`                                                                      |
+| `pnpm corrallm`       | Runs the CLI bundle: `serve`, `wait`, `dump` (see Headless) or the self-test (`scripts/corrallm.mjs`; it says to run `pnpm build:cli` when it is missing) |
+| `pnpm api:surface`    | Writes `src/shared/api/surface.snap.json`, every party's surface, after the registry changes                                                              |
 
 - Run one Vitest project with `pnpm exec vitest run --project main`.
 - `pnpm exec vitest run --project store-performance` runs the large-snapshot loop measurement. Its `sequence.groupOrder` runs it after the parallel pool in a full gate, with its original fixture, timeout and responsiveness bound.
@@ -126,3 +128,9 @@ Before any specs, the app's actual renderer must pass a WebGL2 pixel-readback pr
 `check-linux-packages.sh` makes only the deb and rpm through Forge's configured Linux makers (`--targets deb,rpm`: Forge 8 names those instances deb and rpm; module names would construct fresh defaults, losing the launcher, desktop entry and patched spec). A temporary volume carries exactly one installer of each kind and the check scripts into fresh Debian bookworm and Fedora 44 containers; no build tools or checkout are mounted there. apt and dnf install the package with recommends/weak dependencies disabled. Linked libraries are checked before installing the headless harness (Xvfb, xauth, desktop-file-validate and tools for a non-root user). Forge explicitly requires the audio library (Electron links it; the installer's Debian recommendation is insufficient). It requires no procps: on Linux the core identifies its lock owner and CLI process groups from /proc (`src/main/core/process-identity.ts`), and only macOS runs ps. No runtime library is added by hand to rescue an installation.
 
 Each installation checks its package architecture, the /usr/bin/corrallm symlink, the desktop entry and its GUI executable, then runs the same native and refusal checks as a dedicated non-root user. There is no system Node; command checks additionally empty PATH. Purging/removing the package must remove /usr/bin/corrallm, including a dangling link. Containers and the temporary artifact volume are removed on success or failure; the cache and diagnostic volumes remain. [Fedora 44's Xvfb package](https://packages.fedoraproject.org/pkgs/xorg-x11-server/xorg-x11-server-Xvfb/fedora-44.html) includes xvfb-run, so both distributions use the same smoke script.
+
+### Local and CI tiers
+
+Two tiers keep the laptop gate short without weakening the repository's. Locally: typecheck, lint, format, `pnpm test:fast` (or the files changed) and `pnpm test:e2e:smoke`. CI (and any release check) runs everything: `pnpm test` adds `src/main/cli/crash.test.ts` and the `store-performance` project, and `pnpm test:e2e` runs every spec. The smoke specs prove the app boots with the strict CSP and a port to the core (`smoke`), that navigation, new windows and permissions are refused (`security`), that a canvas saves to a `.corral` file and opens again, a real gesture round trip through the dialog, operation registry and core (`files`), and that the core lock holds both ways (`lock`).
+
+Vitest runs with `maxWorkers: '60%'` unless `CI` is set (CI keeps every core). The `main` project's global setup skips building `dist-cli/` and the test-lifetime guardian when the command line names only exact test files none of which runs the CLI (`needsCliBuild` in `src/main/cli/global-setup.ts`; a full run, a directory or word filter, or any CLI-using file builds). `src/main/cli/global-setup.test.ts` fails when a test file outside its `CLI_BUILD_USERS` pattern uses the built outputs.

@@ -37,21 +37,23 @@ Start with [the overview](docs/architecture/overview.md). Paths include their te
 
 Requires Node 24.22.1 (`.nvmrc`) and pnpm 12.11.2 (`packageManager`).
 
-| Command                                      | Purpose                                                  |
-| -------------------------------------------- | -------------------------------------------------------- |
-| `pnpm dev`                                   | Forge + Vite + HMR; press `r` after main-process changes |
-| `pnpm typecheck`                             | TypeScript solution (node, web, tooling)                 |
-| `pnpm lint`                                  | Type-aware ESLint, zero warnings                         |
-| `pnpm format` / `pnpm format:check`          | Prettier write / verify                                  |
-| `pnpm test`                                  | Vitest main, preload, renderer and store-performance     |
-| `pnpm exec vitest run --project main <file>` | Focused main tests                                       |
-| `pnpm test:e2e`                              | Playwright; first builds the unsigned app and CLI        |
-| `pnpm package` / `pnpm make`                 | Packaged app / installers                                |
-| `pnpm build:cli`                             | Plain Node CLI in `dist-cli/`                            |
-| `pnpm corrallm`                              | CLI: serve, wait, dump or native self-test               |
-| `pnpm api:surface`                           | Regenerate the API snapshot; review its diff             |
+| Command                                      | Purpose                                                                          |
+| -------------------------------------------- | -------------------------------------------------------------------------------- |
+| `pnpm dev`                                   | Forge + Vite + HMR; press `r` after main-process changes                         |
+| `pnpm typecheck`                             | TypeScript solution (node, web, tooling)                                         |
+| `pnpm lint`                                  | Type-aware ESLint, zero warnings                                                 |
+| `pnpm format` / `pnpm format:check`          | Prettier write / verify                                                          |
+| `pnpm test:fast`                             | Local tier: Vitest main, renderer, preload (no crash gate, no store-performance) |
+| `pnpm test`                                  | Vitest main, preload, renderer and store-performance                             |
+| `pnpm exec vitest run --project main <file>` | Focused main tests                                                               |
+| `pnpm test:e2e:smoke`                        | Local tier: boot, CSP/sandbox, canvas save/open, lock                            |
+| `pnpm test:e2e`                              | Playwright; first builds the unsigned app and CLI                                |
+| `pnpm package` / `pnpm make`                 | Packaged app / installers                                                        |
+| `pnpm build:cli`                             | Plain Node CLI in `dist-cli/`                                                    |
+| `pnpm corrallm`                              | CLI: serve, wait, dump or native self-test                                       |
+| `pnpm api:surface`                           | Regenerate the API snapshot; review its diff                                     |
 
-GitHub CI (`.github/workflows/ci.yml`) runs the full gate on every pushed branch: typecheck, lint, format, unit, `pnpm package` and the packaged self-tests on Linux, macOS and Windows, and e2e on macOS and Linux. A change is done when its blocking jobs are green ([toolchain](docs/architecture/toolchain.md) says which block today) and, until CI's e2e blocks, `pnpm test:e2e` passes locally. Locally run typecheck, lint, format and the tests for what you changed; run a full suite or e2e only when nothing else runs one. Before a release, also run `scripts/check-macos.sh` (it adds the shipped command); `scripts/ci-linux.sh`, `scripts/check-linux.sh` and `scripts/check-linux-packages.sh` reproduce Linux locally in Docker.
+Two tiers. Locally run typecheck, lint, format, `pnpm test:fast` (or the files you changed) and `pnpm test:e2e:smoke`. GitHub CI (`.github/workflows/ci.yml`) runs everything on every pushed branch: the full `pnpm test` (with the crash gate and store-performance), `pnpm package` and the packaged self-tests on Linux, macOS and Windows, and the full `pnpm test:e2e` on macOS and Linux. A change is done when its blocking jobs are green ([toolchain](docs/architecture/toolchain.md) says which block today); read CI's other jobs for failures in what you touched. Run the full suites locally only for a release or when nothing else is running. Before a release, also run `scripts/check-macos.sh` (it adds the shipped command); `scripts/ci-linux.sh`, `scripts/check-linux.sh` and `scripts/check-linux-packages.sh` reproduce Linux locally in Docker.
 See [toolchain](docs/architecture/toolchain.md) for executable overrides, build environments and the packaged self-test; [testing](docs/architecture/testing.md) for load/crash gates and production-build reuse.
 
 ## Testing rules
