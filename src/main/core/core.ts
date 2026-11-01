@@ -1055,6 +1055,7 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
       ...setups.items(canvas),
       ...changes.items(canvas),
     ],
+    prompted: (canvas, agent) => prompts.count(canvas, agent),
     // B11a C2: admission before each canvas's automated work goes, by the fallback service below.
     fallback: {
       admit: (canvas, agent, work) => fallback.admit(canvas, agent, work),

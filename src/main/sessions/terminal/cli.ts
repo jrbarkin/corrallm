@@ -1,3 +1,4 @@
+import type { AdapterPrompt } from '../../../shared/model/prompts';
 import type { SessionMode, SessionUsage, TerminalAsk, TurnReason } from '../../../shared/session';
 import type { UsageWindows } from '../../../shared/usage';
 import type { HookEvent, HookRegistration } from './hooks';
@@ -56,8 +57,12 @@ export type TerminalSignal<M extends SessionMode> =
   | { kind: 'state'; state: CliState }
   | { kind: 'mode'; mode: M }
   | { kind: 'model'; model: string }
-  /** What it is about to ask the user in its terminal (a permission, questions, a plan). */
-  | { kind: 'ask'; ask: TerminalAsk }
+  /**
+   * What it is about to ask the user in its terminal (a permission, questions, a plan), as the
+   * core's prompt (B13 C6: answered in its terminal, in its hook's words), and as the event B13
+   * replaces lists it (`ask`, until X11 removes it). Told only where the prompt can be made.
+   */
+  | { kind: 'ask'; ask: TerminalAsk; prompt: AdapterPrompt }
   /** It needs the user, as its notification says (what it says). */
   | { kind: 'needs'; text: string };
 
@@ -131,6 +136,13 @@ export interface TerminalCli<M extends SessionMode> {
    * reports anything or runs a hook.
    */
   trusting?(screen: Screen): boolean;
+  /**
+   * What its screen shows of a wait only its report describes (as its own dialog draws it), read
+   * once the screen has settled after the wait began: the detail of the prompt raised for it, at
+   * most its last twelve lines. Undefined where the screen shows nothing. A CLI whose hooks
+   * describe what it waits for has none.
+   */
+  waitDetail?(screen: Screen): string | undefined;
   /**
    * Whether it is still getting ready: it holds a message sent
    * meanwhile until then, so the message is waited for rather than given up on.

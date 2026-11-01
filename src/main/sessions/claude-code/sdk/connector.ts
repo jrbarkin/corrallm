@@ -169,6 +169,9 @@ export class SdkConnector implements Connector {
     };
     // What it asks goes to the core's prompt owner (B13 C4); a plan may go into any mode it offers.
     const prompts = new Prompts({ emit }, places, PERMISSION_MODES);
+    // Until X10, each prompt is shown as the events B13 replaces too, answered through the owner:
+    // from the first, before the session runs.
+    host.bridge?.((promptId, answer) => prompts.bridge(promptId, answer));
     const model = spec.model === null || spec.model === 'default' ? undefined : spec.model;
     const options: Options = {
       pathToClaudeCodeExecutable: claude,

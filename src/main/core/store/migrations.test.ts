@@ -1146,7 +1146,7 @@ describe('migration 4', () => {
     });
     journal3(broken, BROKEN);
 
-    migrate(connection);
+    migrate(connection, MIGRATIONS.slice(0, 4));
 
     expect(stateOf()).toEqual({ format: 3, run: SAVED_RUN });
     expect(stateOf(OTHER)).toEqual({ format: 3, run: SAVED_RUN, saveError: 'Too large' });
@@ -1527,11 +1527,57 @@ describe('migration 6', () => {
     addNode('team', 'frame');
     addNode('a');
     const before = connection.prepare('SELECT * FROM node ORDER BY id').all();
-    migrate(connection);
+    migrate(connection, MIGRATIONS.slice(0, 6));
     expect(schemaOf(connection)).toBe(6);
     expect(minReaderOf(connection)).toBe(6);
     expect(connection.prepare('SELECT * FROM node ORDER BY id').all()).toEqual(
       before.map((row) => ({ ...row, fallback: null, handoff: null })),
+    );
+  });
+});
+
+/** A native prompt's decision, value-free, as the owner records it (B13 §9.2 C9). */
+const SETTLED = JSON.stringify({
+  v: 1,
+  need: 'prompt/a/1/0f1e2d3c-4b5a-4968-8776-655443322110',
+  prompt: { id: '0f1e2d3c-4b5a-4968-8776-655443322110', kind: 'approval', subject: 'command' },
+  outcome: { type: 'choice', value: 'yes', hint: 'allow_once' },
+});
+
+describe('schema 7: a message’s settled decision', () => {
+  beforeEach(() => {
+    migrate(connection);
+    connection.exec('PRAGMA foreign_keys = ON');
+    addCanvas();
+  });
+
+  it('keeps a record’s settled decision as valid JSON, or none', () => {
+    const seq = addMessage('record');
+    const settle = connection.prepare('UPDATE message SET settled = ? WHERE seq = ?');
+    settle.run(SETTLED, seq);
+    expect(connection.prepare('SELECT settled FROM message WHERE seq = ?').get(seq)).toEqual({
+      settled: SETTLED,
+    });
+    settle.run(null, seq);
+    expect(() => settle.run('not JSON', seq)).toThrow(/CHECK constraint failed/);
+  });
+});
+
+describe('migration 7', () => {
+  it('adds a settled decision to every message of a schema-6 database, keeping every row, which a schema-6 corrallm may still open', () => {
+    migrate(connection, MIGRATIONS.slice(0, 6));
+    connection.exec('PRAGMA foreign_keys = ON');
+    addCanvas();
+    addMessage('kept');
+    const before = connection.prepare('SELECT * FROM message').all();
+
+    migrate(connection, MIGRATIONS.slice(0, 7));
+
+    expect(schemaOf(connection)).toBe(7);
+    // A column only: a corrallm of schema 6 still reads and writes its own columns.
+    expect(minReaderOf(connection)).toBe(6);
+    expect(connection.prepare('SELECT * FROM message').all()).toEqual(
+      before.map((row) => ({ ...row, settled: null })),
     );
   });
 });

@@ -3,6 +3,8 @@ import { z } from 'zod';
 import { FallbackViewSchema } from '../../model/fallback';
 import { MESSAGE_KINDS, MESSAGE_STATES, PARTY_PATTERN } from '../../model/messages';
 import { NEED_KINDS } from '../../model/needs';
+import { Choice, PromptNeedView } from '../../model/prompts';
+import { SettledDecision } from '../../model/settled';
 import { TURN_REASONS } from '../../session';
 import { define } from '../define';
 import type { OpDef } from '../define';
@@ -52,6 +54,8 @@ export const Message = z.strictObject({
   state: z.enum(MESSAGE_STATES),
   delivery: z.strictObject({ at: z.number(), as: z.string(), attempt: z.int() }).optional(),
   by: Party.optional(),
+  /** A record of a native prompt's decision: what was decided, value-free. Yours alone. */
+  settled: SettledDecision.optional(),
   at: z.number(),
 });
 
@@ -65,12 +69,17 @@ export const NeedsItem = z.strictObject({
   title: z.string(),
   detail: z.string().optional(),
   until: z.number().optional(),
+  /** A prompt's choices also say what its CLI does with each (B13 C1): yours alone (C11). */
   choices: z.array(
     z.strictObject({
       value: z.string(),
       label: z.string(),
       description: z.string().optional(),
       humanOnly: z.string().optional(),
+      hint: Choice.shape.hint.optional(),
+      effects: Choice.shape.effects,
+      feedback: Choice.shape.feedback,
+      endsTurn: Choice.shape.endsTurn,
     }),
   ),
   text: z.strictObject({ placeholder: z.string() }).optional(),
@@ -80,9 +89,16 @@ export const NeedsItem = z.strictObject({
         id: z.string(),
         header: z.string(),
         text: z.string(),
-        options: z.array(z.strictObject({ label: z.string(), description: z.string().optional() })),
+        options: z.array(
+          z.strictObject({
+            label: z.string(),
+            description: z.string().optional(),
+            preview: z.string().optional(),
+          }),
+        ),
         multiple: z.boolean(),
         other: z.boolean(),
+        secret: z.boolean().optional(),
       }),
     )
     .optional(),
@@ -93,6 +109,11 @@ export const NeedsItem = z.strictObject({
     ])
     .optional(),
   answerIn: z.enum(['api', 'terminal', 'both']),
+  /**
+   * A prompt the core's prompt owner holds (B13 C1): its id, kind, when it was raised, its words,
+   * subject and a plan's first lines, as the caller may read them (C11).
+   */
+  prompt: PromptNeedView.optional(),
 });
 
 /** How an agent is now: waiting for you, working, paused (its queue held), or idle. */

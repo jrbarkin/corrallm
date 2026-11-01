@@ -2,6 +2,8 @@ import { randomUUID } from 'node:crypto';
 import { realpath, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
+import { MAX_ID_LENGTH, MAX_MESSAGE_LENGTH } from '../../../shared/api/limits';
+import type { AdapterPrompt } from '../../../shared/model/prompts';
 import {
   MAX_ANSWER_LENGTH,
   MAX_QUESTIONS,
@@ -13,6 +15,7 @@ import type { PermissionMode, TerminalAsk } from '../../../shared/session';
 import { claudeFailure } from './claude-errors';
 import { isUuid } from '../id';
 import { askedQuestions } from './sdk/prompts';
+import { boundedInput, Cuts, shownDetail } from './sdk/raise';
 import { proposedDetail, property, text as textOf, toolSummary } from './sdk/tools';
 import type { Places } from './sdk/tools';
 import { preview } from '../transcript';
@@ -62,6 +65,9 @@ const PROMPT = '❯';
 const RULE = '─'.repeat(8);
 /** Its folder trust dialog's choice to go on. */
 const TRUST_DIALOG = 'Yes, I trust this folder';
+/** Its built-in tools that ask the user (no MCP server's tool is named so in its hooks). */
+const QUESTION_TOOL = 'AskUserQuestion';
+const PLAN_TOOL = 'ExitPlanMode';
 
 export interface ClaudeCodeOptions {
   /** The project folder it works in: its asks show the files in it relative to it. */
@@ -236,8 +242,8 @@ export class ClaudeCode implements TerminalCli<PermissionMode> {
       // their tools start: told by both).
       case 'PermissionRequest':
       case 'PreToolUse': {
-        const ask = this.#askOf(text('tool_name'), event.tool_input, text('tool_use_id'));
-        if (ask) signals.push({ kind: 'ask', ask });
+        const asked = this.#askOf(text('tool_name'), event.tool_input, text('tool_use_id'));
+        if (asked) signals.push({ kind: 'ask', ...asked });
         break;
       }
       case 'Notification': {
@@ -251,31 +257,42 @@ export class ClaudeCode implements TerminalCli<PermissionMode> {
     return signals;
   }
 
-  /** What a tool call asks of the user, as a hook tells it: its questions, a plan, or permission. */
+  /**
+   * What a tool call asks of the user, as a hook tells it (its questions, a plan, or permission):
+   * as the core's prompt, and as the event B13 replaces lists it. None where it can't be read.
+   */
   #askOf(
     tool: string | undefined,
     input: unknown,
     toolUseId: string | undefined,
-  ): TerminalAsk | undefined {
+  ): { ask: TerminalAsk; prompt: AdapterPrompt } | undefined {
     if (tool === undefined || tool === '') return undefined;
+    const prompt = terminalPrompt(tool, input === undefined ? {} : input, this.#places);
+    if (prompt === undefined) return undefined;
     const id =
       toolUseId !== undefined && /^[\w-]{1,200}$/.test(toolUseId) ? toolUseId : randomUUID();
-    if (tool === 'AskUserQuestion') {
-      const questions = askedQuestions(property(input, 'questions'));
-      return questions && { kind: 'question', id, questions: questions.slice(0, MAX_QUESTIONS) };
+    if (tool === QUESTION_TOOL) {
+      const questions = askedQuestions(property(input, 'questions')) ?? [];
+      return {
+        ask: { kind: 'question', id, questions: questions.slice(0, MAX_QUESTIONS) },
+        prompt,
+      };
     }
-    if (tool === 'ExitPlanMode') {
+    if (tool === PLAN_TOOL) {
       const plan = (textOf(property(input, 'plan')) ?? '').slice(0, MAX_ANSWER_LENGTH);
-      return { kind: 'plan', id, plan };
+      return { ask: { kind: 'plan', id, plan }, prompt };
     }
     // What it is for, as its prompt shows it: a command in full, an edit's diff, a new file.
     const detail = proposedDetail(tool, input);
     return {
-      kind: 'permission',
-      id,
-      tool,
-      summary: toolSummary(tool, input, this.#places),
-      ...(detail === undefined ? {} : { detail: preview(detail, PREVIEW_LINES) }),
+      ask: {
+        kind: 'permission',
+        id,
+        tool,
+        summary: toolSummary(tool, input, this.#places),
+        ...(detail === undefined ? {} : { detail: preview(detail, PREVIEW_LINES) }),
+      },
+      prompt,
     };
   }
 
@@ -330,6 +347,72 @@ export class ClaudeCode implements TerminalCli<PermissionMode> {
       context: statusLineContext(input),
     };
   }
+}
+
+/**
+ * What Claude Code waits on in its terminal, as its hook tells it, as the core's prompt (B13 C6:
+ * §9.2 C7): answered in its terminal, so with no choice of corrallm's, in the hook's words, worded
+ * as the Agent SDK's card words the same request. AskUserQuestion's questions (each an id of
+ * corrallm's, `q1`…), ExitPlanMode's plan, or any other tool's permission with its tool and input.
+ * What is too large is cut and marked (the terminal shows it whole); none where it can't be read
+ * (its report's words then say what it waits for).
+ */
+function terminalPrompt(tool: string, input: unknown, places: Places): AdapterPrompt | undefined {
+  const cuts = new Cuts();
+  if (tool === QUESTION_TOOL) {
+    const questions = askedQuestions(property(input, 'questions'));
+    if (questions === undefined) return undefined;
+    const [only] = questions;
+    return {
+      kind: 'question',
+      title: cuts.text(
+        questions.length === 1 && only
+          ? only.text
+          : `Claude asks ${String(questions.length)} questions`,
+      ),
+      answerIn: 'terminal',
+      questions: questions.map(({ header, text, options, multiple }, index) => ({
+        id: `q${String(index + 1)}`,
+        header: cuts.text(header, MAX_ID_LENGTH),
+        text: cuts.text(text, MAX_ANSWER_LENGTH),
+        options: options.map(({ label, description }) => ({
+          label,
+          ...(description === '' ? {} : { description: cuts.text(description) }),
+        })),
+        multiple,
+        other: true,
+      })),
+      ...cuts.mark(),
+    };
+  }
+  if (tool === PLAN_TOOL) {
+    const plan = textOf(property(input, 'plan'));
+    if (plan === undefined || plan.trim() === '') return undefined;
+    return {
+      kind: 'plan',
+      title: 'Approve Claude’s plan?',
+      plan: cuts.text(plan, MAX_MESSAGE_LENGTH),
+      answerIn: 'terminal',
+      choices: [],
+      ...cuts.mark(),
+    };
+  }
+  const summary = toolSummary(tool, input, places);
+  const detail = shownDetail(proposedDetail(tool, input), cuts);
+  return {
+    kind: 'approval',
+    title: cuts.text(`Claude wants to use ${tool}`),
+    ...(summary === '' ? {} : { summary: cuts.text(summary) }),
+    subject: {
+      type: 'tool',
+      tool: cuts.text(tool, MAX_ID_LENGTH),
+      input: boundedInput(input, cuts),
+    },
+    ...(detail === undefined ? {} : { detail }),
+    answerIn: 'terminal',
+    choices: [],
+    ...cuts.mark(),
+  };
 }
 
 /** A permission mode as Claude Code's hooks name it ('default' is Manual). */

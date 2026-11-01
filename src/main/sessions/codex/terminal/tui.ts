@@ -1,3 +1,4 @@
+import { MAX_DETAIL_LINES } from '../../../../shared/api/limits';
 import { MODEL_PATTERN } from '../../../../shared/session';
 import type { CodexMode, SessionUsage } from '../../../../shared/session';
 import { isUuid } from '../../id';
@@ -288,6 +289,16 @@ export class CodexTui implements TerminalCli<CodexMode> {
   draft(screen: Screen): string | undefined {
     // Until its title first says something, a startup screen is up (or it is still loading).
     return this.#titled ? composerDraft(screen) : undefined;
+  }
+
+  /**
+   * What Action Required waits for, as its screen shows it (B13 C6): nothing else says (no hook
+   * tells it), and its dialog (an approval's command, its reason and choices) is drawn last, in
+   * place of its composer.
+   */
+  waitDetail(screen: Screen): string | undefined {
+    const rows = screen.lastRows(MAX_DETAIL_LINES);
+    return rows.length === 0 ? undefined : rows.join('\n');
   }
 
   keystrokes(text: string): string[] {

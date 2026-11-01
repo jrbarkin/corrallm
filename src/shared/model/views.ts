@@ -15,6 +15,7 @@ import type { QueueItem } from './queue';
 import type { Run } from './run';
 import { isOpen, turnReply } from './session';
 import type { Entry, Session } from './session';
+import { entryFor } from './prompt-views';
 
 /** Wire/view data only. No mutable store, callback or timer is part of a view. */
 export type ReadonlyData<T> = T extends string | number | boolean | null | undefined
@@ -85,7 +86,7 @@ export interface SessionSummary {
 /** Images are counted for display, never serialized as bytes on the general topic. */
 export type EntryView = ReadonlyData<
   | Exclude<Entry, { kind: 'user' }>
-  | (Omit<Extract<Entry, { kind: 'user' }>, 'images'> & { images?: number })
+  | (Omit<Extract<Entry, { kind: 'user' }>, 'images' | 'promptReply'> & { images?: number })
 >;
 export interface SessionView {
   readonly summary: SessionSummary;
@@ -207,11 +208,10 @@ export function sessionView(
     ...presentationOf(session),
   };
   const entries = Object.fromEntries(
-    session.entries.map((entry): readonly [string, EntryView] => {
-      if (entry.kind !== 'user') return [entry.id, entry];
-      const { images, ...rest } = entry;
-      return [entry.id, images?.length ? { ...rest, images: images.length } : rest];
-    }),
+    session.entries.map((entry): readonly [string, EntryView] => [
+      entry.id,
+      entryFor(entry, 'you'),
+    ]),
   );
   return projectData({ summary, entries, order: session.entries.map(({ id }) => id) }, previous);
 }

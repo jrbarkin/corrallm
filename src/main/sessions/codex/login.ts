@@ -94,32 +94,46 @@ const ALLOWANCE = [
 ];
 
 /**
+ * What asking before a session first uses the user's ChatGPT plan says: the plan's name, and the
+ * whole of what it quotes and decides (hard-wrapped: it shows as is).
+ */
+export function planConsent(login: Extract<CodexLogin, { kind: 'chatgpt' }>): {
+  plan: string;
+  text: string;
+} {
+  const plan =
+    login.plan === null ? 'ChatGPT' : login.plan.charAt(0).toUpperCase() + login.plan.slice(1);
+  return {
+    plan,
+    text: [
+      `Codex is logged in with ChatGPT${login.plan === null ? '' : ` (${plan})`}: this agent's`,
+      'turns would use your plan, through Codex’s app server.',
+      '',
+      ...ALLOWANCE,
+      '',
+      'corrallm runs on your computer, for you. Yes: for this session.',
+      'Don’t ask again: for every Codex agent here. No: nothing is sent.',
+    ].join('\n'),
+  };
+}
+
+/**
  * The prompt that asks before a session first uses the user's ChatGPT plan (one with no 'always'
- * kept): Yes allows it for the session, "always" for good, No sends nothing.
+ * kept), as the events B13 replaces show it: Yes allows it for the session, "always" for good, No
+ * sends nothing.
  */
 export function planPrompt(
   id: string,
   login: Extract<CodexLogin, { kind: 'chatgpt' }>,
-): SessionEvent {
-  const plan =
-    login.plan === null ? 'ChatGPT' : login.plan.charAt(0).toUpperCase() + login.plan.slice(1);
+): Extract<SessionEvent, { type: 'permission' }> {
+  const { plan, text } = planConsent(login);
   return {
     type: 'permission',
     id,
     tool: 'ChatGPT plan',
     summary: plan,
     title: 'Use your ChatGPT plan here?',
-    detail: output(
-      [
-        `Codex is logged in with ChatGPT${login.plan === null ? '' : ` (${plan})`}: this agent's`,
-        'turns would use your plan, through Codex’s app server.',
-        '',
-        ...ALLOWANCE,
-        '',
-        'corrallm runs on your computer, for you. Yes: for this session.',
-        'Don’t ask again: for every Codex agent here. No: nothing is sent.',
-      ].join('\n'),
-    ),
+    detail: output(text),
     always: "Yes, and don't ask again on this computer",
   };
 }

@@ -91,11 +91,14 @@ export const ChoiceEffects = z.strictObject({
     .optional(),
 });
 export type ChoiceEffects = z.infer<typeof ChoiceEffects>;
+/** What a choice does, in the four words a CLI's decision maps to (C4's tables). */
+export const ChoiceHint = z.enum(['allow_once', 'allow_always', 'reject_once', 'reject_always']);
+export type ChoiceHint = z.infer<typeof ChoiceHint>;
 export const Choice = z.strictObject({
   value: z.string().min(1).max(MAX_PROMPT_CHOICE_LENGTH),
   label: Label,
   description: Text.optional(),
-  hint: z.enum(['allow_once', 'allow_always', 'reject_once', 'reject_always']),
+  hint: ChoiceHint,
   effects: ChoiceEffects.optional(),
   feedback: z.enum(['none', 'optional', 'required']).optional(),
   endsTurn: z.boolean().optional(),
@@ -145,10 +148,13 @@ export const Questions = z
 export type Questions = z.infer<typeof Questions>;
 
 /** JSON data only, with a bounded traversal before serialization (no cycles, getters or toJSON). */
-const Input = z.custom<PromptJson>(
-  (value) => boundedPromptJson(value, MAX_PROMPT_INPUT_BYTES, MAX_PROMPT_INPUT_DEPTH),
-  { message: 'Bounded JSON tool input', abort: true },
-);
+const Input = z
+  .unknown()
+  .refine(
+    (value): value is PromptJson =>
+      boundedPromptJson(value, MAX_PROMPT_INPUT_BYTES, MAX_PROMPT_INPUT_DEPTH),
+    { message: 'Bounded JSON tool input', abort: true },
+  );
 const Extension = z
   .looseObject({
     type: z.templateLiteral([

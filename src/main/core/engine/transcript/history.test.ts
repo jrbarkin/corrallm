@@ -19,6 +19,15 @@ const outline = (entries: readonly Entry[]) =>
   entries.map((entry) => (entry.kind === 'end' ? `end ${String(entry.seconds)}s` : entry.id));
 
 describe('mergeHistory', () => {
+  it('keeps prompt-reply provenance when refreshing a turn already shown', () => {
+    const shown = [user('reply', 'Revision'), reply('r1', 'Updated')];
+    const past = [
+      { id: 'reply', kind: 'user' as const, text: 'Private revision', promptReply: true as const },
+      reply('r1', 'Updated'),
+    ];
+    expect(mergeHistory(shown, past)).toEqual(past);
+  });
+
   it('puts what a resumed session did before ahead of a transcript that shows none of it', () => {
     expect(
       outline(

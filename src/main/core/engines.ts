@@ -96,6 +96,8 @@ export interface EnginesDeps {
   locale?: string;
   /** What else waits for you on a canvas, besides its run's holds and its sessions' prompts. */
   needs?: (canvas: CanvasId) => readonly NeedsItem[];
+  /** How many prompts of an agent's the core's prompt owner holds (B13 C3), which its counts add. */
+  prompted?: (canvas: CanvasId, agent: string) => number;
   /**
    * B11a's fallback service (core/fallback.ts), which each canvas's run and delivery ask before
    * automated work goes (admission), and whose switching the canvas's views say. None: nothing
@@ -146,6 +148,11 @@ export interface OpenCanvas {
    * Needs ids carry: none while none runs.
    */
   sessionGeneration?: (agent: string) => number | undefined;
+  /**
+   * How many prompts of an agent's the core's prompt owner holds (B13 C3), beside those its
+   * session shows itself: none where the core composes no owner.
+   */
+  ownedPrompts?: (agent: string) => number;
   /** Whether corrallm switches an agent's backend now (B11a C4): what its views say. */
   switching?: (agent: string) => boolean;
 }
@@ -934,6 +941,7 @@ export class Engines {
     } as Running;
     running.reads = new ReadPositions(await journal.reads(canvas));
     running.sessionGeneration = (agent) => this.#deps.sessions.generationOf(canvas, agent);
+    running.ownedPrompts = (agent) => this.#deps.prompted?.(canvas, agent) ?? 0;
     const { fallback } = this.#deps;
     if (fallback !== undefined) running.switching = (agent) => fallback.switching(canvas, agent);
     running.journal = () => this.#write(running);

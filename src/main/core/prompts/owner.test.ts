@@ -84,6 +84,7 @@ let owner: PromptOwner;
 interface Handle extends PromptAnswers {
   answered: [string, PromptAnswer][];
   declined: [string, string][];
+  dismissed: string[];
   /** What answering does: by default takes it; a test may make it refuse, or end it first. */
   onAnswer?: (key: string) => void;
 }
@@ -92,12 +93,16 @@ function handle(): Handle {
   const made: Handle = {
     answered: [],
     declined: [],
+    dismissed: [],
     answer: (key, answer) => {
       made.onAnswer?.(key);
       made.answered.push([key, answer]);
     },
     decline: (key, why) => {
       made.declined.push([key, why]);
+    },
+    dismiss: (key) => {
+      made.dismissed.push(key);
     },
   };
   return made;
@@ -505,9 +510,9 @@ describe('admission', () => {
     };
     const known = raise(origin(7, handle(), { startMode: 'plan' }), plan);
     expect(known?.choices).toEqual([
-      { value: 'plan', label: 'Go on in plan' },
-      { value: 'auto', label: 'Go on in auto', humanOnly: expect.any(String) as string },
-      { value: 'no', label: 'No' },
+      into('plan'),
+      { ...into('auto'), humanOnly: expect.any(String) as string },
+      no,
     ]);
     // Its start mode unknown: every mode choice is yours.
     const unknown = raise(origin(7, handle(), { startMode: null }), plan, KEY2);
@@ -603,6 +608,146 @@ describe('prompts its session also shows as the events B13 replaces (until X10)'
     expect(await answer(need, { choice: 'yes' })).toMatchObject({ outcome: 'answered' });
     expect(answers.answered).toEqual([[KEY, { kind: 'choice', value: 'yes' }]]);
     expect(owner.keyed(CANVAS, 'b', 7, KEY)).toBeUndefined();
+  });
+});
+
+describe('Not waiting (B13 C7)', () => {
+  /** What a terminal's CLI waits on, raised from its report alone: in its words, nothing more. */
+  const waiting = {
+    kind: 'approval',
+    title: 'Claude Code is waiting for you.',
+    answerIn: 'terminal',
+    choices: [],
+  };
+  const waitingQuestion = {
+    kind: 'question',
+    title: 'answer: Which region?',
+    answerIn: 'terminal',
+    questions: [],
+  };
+  const screenWait = {
+    ...waiting,
+    title: 'Codex needs you: see its terminal.',
+    detail: { kind: 'output', text: '  Would you like to run the following command?\n› 1. Yes' },
+  };
+  /** What a hook described, the trust screen, and what is answered through corrallm. */
+  const described = {
+    kind: 'approval',
+    title: 'Claude wants to use Bash',
+    subject: { type: 'tool', tool: 'Bash', input: { command: 'ls' } },
+    answerIn: 'terminal',
+    choices: [],
+  };
+  const trust = {
+    kind: 'approval',
+    title: 'Claude Code asks whether you trust the project folder.',
+    subject: { type: 'trust' },
+    answerIn: 'terminal',
+    choices: [],
+  };
+  const plan = {
+    kind: 'plan',
+    title: 'Approve Claude’s plan?',
+    plan: '## Plan',
+    answerIn: 'terminal',
+    choices: [],
+  };
+  const NOT_WAITING = {
+    value: 'not-waiting',
+    label: 'Not waiting',
+    humanOnly: expect.any(String) as string,
+  };
+
+  it('is offered, yours alone, only on a terminal wait raised from an undescribed report', () => {
+    const one = handle();
+    for (const wait of [waiting, waitingQuestion, screenWait]) {
+      const item = raise(origin(7, one), wait, crypto.randomUUID());
+      expect(item?.choices, wait.title).toEqual([NOT_WAITING]);
+    }
+    const oversized = { ...waiting, title: 'y'.repeat(5000) };
+    for (const wait of [described, trust, plan, { ...question, answerIn: 'terminal' }, approval]) {
+      const item = raise(origin(7, one), wait, crypto.randomUUID());
+      expect(
+        item?.choices.map(({ value }) => value),
+        wait.title,
+      ).not.toContain('not-waiting');
+    }
+    // Nor on the core's own stand-in for an observation it can't show whole: a hook may have
+    // described it.
+    const standIn = raise(origin(7, one), oversized, crypto.randomUUID());
+    expect(standIn?.choices).toEqual([]);
+  });
+
+  it('settles a wait dismissed by you: no record, the session told to stop raising it, a later reply told so', async () => {
+    const one = handle();
+    raise(origin(7, one), waiting);
+    const id = only();
+    expect(owner.fits(CANVAS, id, { choice: 'not-waiting' })).toBeUndefined();
+    const noReturn = vi.fn();
+    expect(await answer(id, { choice: 'not-waiting' }, context({ noReturn }))).toEqual({
+      outcome: 'dismissed',
+    });
+    expect(noReturn).toHaveBeenCalled();
+    expect(one.dismissed).toEqual([KEY]);
+    expect(one.answered).toEqual([]);
+    expect(one.declined).toEqual([]);
+    expect(messages.all()).toEqual([]);
+    expect(owner.items(CANVAS)).toEqual([]);
+    expect(owner.current(CANVAS, id)).toBeUndefined();
+    // Settled: a later reply is told so; a late end of its key ends nothing.
+    owner.ended(origin(7, one), { type: 'prompt-ended', key: KEY, reason: 'answered-natively' });
+    expect(await answer(id, { choice: 'not-waiting' })).toMatchObject({
+      code: 'conflict',
+      sentence: expect.stringMatching(/isn’t waiting/) as string,
+    });
+    expect(one.dismissed).toEqual([KEY]);
+    // A question in its report's words, and one with its screen's last rows, likewise.
+    raise(origin(7, one), waitingQuestion, KEY2);
+    expect(await answer(only(), { choice: 'not-waiting' })).toEqual({ outcome: 'dismissed' });
+    expect(one.dismissed).toEqual([KEY, KEY2]);
+  });
+
+  it('is refused to any other party, with words, or where it isn’t offered, invoking nothing', async () => {
+    const one = handle();
+    raise(origin(7, one), waiting);
+    const id = only();
+    const token = context({
+      by: 'outside:orchestrator',
+      caller: {
+        kind: 'outside',
+        token: 't',
+        name: 'orchestrator',
+        access: 'write',
+        merge: true,
+        canvases: [CANVAS],
+      },
+    });
+    expect(await answer(id, { choice: 'not-waiting' }, token)).toMatchObject({
+      code: 'refused',
+    });
+    for (const given of [
+      { choice: 'not-waiting', feedback: 'it isn’t' },
+      { choice: 'not-waiting', text: 'it isn’t' },
+      { choice: 'yes' },
+    ]) {
+      expect.soft(owner.fits(CANVAS, id, given), JSON.stringify(given)).toEqual(expect.any(String));
+      expect
+        .soft(await answer(id, given), JSON.stringify(given))
+        .toMatchObject({ code: 'invalid' });
+    }
+    for (const [wait, key] of [
+      [described, KEY2],
+      [trust, crypto.randomUUID()],
+      [approval, crypto.randomUUID()],
+    ] as const) {
+      raise(origin(7, one), wait, key);
+      const other = owner.items(CANVAS).at(-1)?.id ?? '';
+      expect(owner.fits(CANVAS, other, { choice: 'not-waiting' })).toEqual(expect.any(String));
+      expect(await answer(other, { choice: 'not-waiting' })).toMatchObject({ code: 'invalid' });
+    }
+    expect(one.dismissed).toEqual([]);
+    expect(one.answered).toEqual([]);
+    expect(owner.items(CANVAS)).toHaveLength(4);
   });
 });
 
@@ -937,5 +1082,241 @@ describe('answers', () => {
     expect(owner.settled(CANVAS, id)).toMatchObject({ code: 'conflict' });
     expect(await answer(id, { choice: 'yes' })).toMatchObject({ code: 'conflict' });
     expect(one.answered).toHaveLength(1);
+  });
+});
+
+describe('the record of a decision (B13 C9)', () => {
+  /** The PromptId a Needs id ends with. */
+  const promptOf = (need: string) => need.split('/').at(-1);
+  /** Every text a record holds, as one string: what must never hold a value. */
+  const recorded = () => JSON.stringify(settledRecords());
+
+  it('records what was decided, typed and value-free: the prompt’s kind, its subject’s type, the choice’s value and hint', async () => {
+    const one = handle();
+    raise(origin(7, one), {
+      ...approval,
+      choices: [
+        { ...yes, label: 'Yes, run private-label-text' },
+        no,
+        { ...tell, label: 'No, private-feedback-label' },
+      ],
+    });
+    const id = only();
+    await answer(id, { choice: 'tell', feedback: 'Use private-feedback-words' });
+    const [record] = settledRecords();
+    expect(record?.settled).toEqual({
+      v: 1,
+      need: id,
+      prompt: { id: promptOf(id), kind: 'approval', subject: 'command' },
+      outcome: { type: 'choice', value: 'tell', hint: 'reject_once' },
+    });
+    for (const value of [
+      'private-label-text',
+      'private-feedback-label',
+      'private-feedback-words',
+      'private-command-text',
+      '/work/app',
+      'Run rm',
+      'build folder',
+    ]) {
+      expect(recorded()).not.toContain(value);
+    }
+  });
+
+  it('records a plan’s choice, how many questions were answered, and a form’s action, never a value', async () => {
+    const one = handle();
+    raise(origin(7, one), {
+      kind: 'plan',
+      title: 'Approve the plan?',
+      plan: '1. private-plan-text',
+      answerIn: 'api',
+      choices: [{ ...yes, effects: { mode: 'auto' } }, no],
+    });
+    await answer(only(), { choice: 'yes' });
+    raise(
+      origin(7, one),
+      {
+        ...question,
+        questions: [
+          question.questions[0],
+          { ...question.questions[0], id: 'q2', text: 'Which size?' },
+        ],
+      },
+      KEY2,
+    );
+    await answer(only(), {
+      answers: { q1: { text: 'private-answer-text' }, q2: { picked: ['Blue'] } },
+    });
+    raise(
+      origin(7, one),
+      {
+        kind: 'form',
+        title: 'Your key, from private-form-message',
+        server: 'tracker',
+        answerIn: 'api',
+        form: {
+          schema: {
+            type: 'object',
+            properties: { key: { type: 'string', title: 'Key' } },
+            required: ['key'],
+            additionalProperties: false,
+          },
+        },
+      },
+      '3c9e4b5d-6f70-4a82-9d3e-4f5a6b7c8d9e',
+    );
+    await answer(only(), { form: { action: 'accept', values: { key: 'private-form-value' } } });
+    expect(settledRecords().map(({ settled }) => [settled?.prompt.kind, settled?.outcome])).toEqual(
+      [
+        ['plan', { type: 'choice', value: 'yes', hint: 'allow_once' }],
+        ['question', { type: 'answers', count: 2 }],
+        ['form', { type: 'form', action: 'accept' }],
+      ],
+    );
+    expect(settledRecords().map(({ body }) => body)).toEqual([
+      'You approved Reviewer’s plan.',
+      'You answered Reviewer’s questions.',
+      'You accepted Reviewer’s form.',
+    ]);
+    for (const value of [
+      'private-plan-text',
+      'private-answer-text',
+      'Blue',
+      'private-form-message',
+      'private-form-value',
+      'tracker',
+    ]) {
+      expect(recorded()).not.toContain(value);
+    }
+  });
+
+  it('marks a secret answer secret, saying only so', async () => {
+    const one = handle();
+    raise(origin(7, one), {
+      ...question,
+      questions: [{ ...question.questions[0], secret: true }],
+    });
+    await answer(only(), { answers: { q1: { text: 'private-secret-answer' } } });
+    const [record] = settledRecords();
+    expect(record?.settled).toMatchObject({ outcome: { type: 'answers', count: 1 }, secret: true });
+    expect(record?.body).toBe('You answered Reviewer’s question (secret).');
+    expect(recorded()).not.toContain('private-secret-answer');
+  });
+
+  it('records a subject’s type only where it is one of the protocol’s own, never an extension’s', async () => {
+    const one = handle();
+    raise(origin(7, one), {
+      ...approval,
+      subject: { type: '_private-extension-type', detail: 'private-extension-text' },
+    });
+    await answer(only(), { choice: 'yes' });
+    const [record] = settledRecords();
+    expect(record?.settled?.prompt).toEqual({ id: expect.any(String) as string, kind: 'approval' });
+    expect(record?.body).toBe('You allowed Reviewer’s request once.');
+    expect(recorded()).not.toContain('private-extension');
+  });
+
+  it('keeps what a crash cut off decided, typed, as the canvas loads again unresolved', async () => {
+    const one = handle();
+    raise(origin(7, one), approval);
+    const id = only();
+    const durable = messages.durable.bind(messages);
+    vi.spyOn(messages, 'durable')
+      .mockImplementationOnce(() => durable())
+      .mockImplementation(() => new Promise<void>(() => undefined));
+    void answer(id, { choice: 'no' });
+    await vi.waitFor(() => {
+      expect(one.answered).toHaveLength(1);
+    });
+    vi.restoreAllMocks();
+    await database.close();
+    database = await openTestStore(profile);
+    messages = await loadMessages();
+    recoverDecisions(messages);
+    expect(settledRecords()).toEqual([
+      expect.objectContaining({
+        state: 'unresolved',
+        settled: {
+          v: 1,
+          need: id,
+          prompt: { id: promptOf(id), kind: 'approval', subject: 'command' },
+          outcome: { type: 'choice', value: 'no', hint: 'reject_once' },
+        },
+      }),
+    ]);
+  });
+});
+
+describe('what each reader reads of a prompt (B13 C11)', () => {
+  const LINK = 'https://signin.example.test/link?token=private-signin-secret';
+  const link = {
+    kind: 'form',
+    title: `Sign in at ${LINK}`,
+    summary: LINK,
+    server: 'tracker',
+    answerIn: 'api',
+    form: { url: LINK },
+  };
+  const screen = {
+    kind: 'approval',
+    title: 'The CLI needs you: see its terminal.',
+    answerIn: 'terminal',
+    detail: { kind: 'output', text: 'private-screen-row' },
+    choices: [],
+  };
+  /** An outside token's call. */
+  const outside = () =>
+    context({
+      by: 'outside:orchestrator',
+      caller: {
+        kind: 'outside',
+        token: 'write-token',
+        name: 'orchestrator',
+        access: 'write',
+        merge: true,
+        canvases: [CANVAS],
+      },
+    });
+
+  it('lists each prompt for you whole and for a token as the selector says, from the same occurrence', () => {
+    raise(origin(7, handle()), screen);
+    raise(origin(7, handle()), link, KEY2);
+    const [waits, form] = owner.occurrences(CANVAS);
+    expect(waits).toMatchObject({ name: 'Reviewer', standIn: false });
+    expect(form?.prompt.kind).toBe('form');
+    const [yourWait, yourForm] = owner.items(CANVAS);
+    const [theirWait, theirForm] = owner.items(CANVAS, 'token');
+    expect(waits?.need).toBe(yourWait?.id);
+    expect(yourWait).toMatchObject({
+      detail: 'private-screen-row',
+      choices: [{ value: 'not-waiting' }],
+    });
+    expect(theirWait?.choices).toEqual([]);
+    expect(theirWait).not.toHaveProperty('detail');
+    expect(yourForm).toMatchObject({ form: { url: LINK } });
+    expect(JSON.stringify(theirForm)).not.toContain('private-signin-secret');
+    expect(owner.count(CANVAS, 'b')).toBe(2);
+    expect(owner.count(CANVAS, 'c')).toBe(0);
+  });
+
+  it('refuses a token’s reply in what it may read of the prompt', async () => {
+    raise(origin(7, handle()), link);
+    const id = only();
+    expect(await answer(id, { form: { action: 'accept' } }, outside())).toEqual({
+      code: 'refused',
+      sentence: `Only the user may answer ${id}: MCP server “tracker” asks you to open a link`,
+    });
+  });
+
+  it('tells you how a prompt was settled, and a token only who settled it', async () => {
+    raise(origin(7, handle()), approval);
+    const id = only();
+    await answer(id, { choice: 'yes' });
+    expect(owner.settled(CANVAS, id)?.message).toBe(
+      `${id} is settled already: You allowed Reviewer’s command once.`,
+    );
+    expect(owner.settled(CANVAS, id, 'token')?.message).toBe(
+      `${id} is settled already: the user answered it.`,
+    );
   });
 });
