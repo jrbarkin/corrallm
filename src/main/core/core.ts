@@ -6,6 +6,7 @@ import path from 'node:path';
 import type { AdapterId, ConnectionId, UsageBackendId } from '../../shared/adapter';
 import { canvasIdOf } from '../../shared/canvas';
 import type { CanvasId } from '../../shared/canvas';
+import { TOKEN_REPLACED } from '../../shared/api/errors';
 import type { OpResult } from '../../shared/api/errors';
 import type { ApiStatus } from '../../shared/api/ops/settings';
 import { MAX_CREATED_AGENTS } from '../../shared/api/limits';
@@ -1466,6 +1467,10 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
       holds: holder(engines),
       publication: topics,
       ...(config.limitsClock === undefined ? {} : { now: config.limitsClock }),
+      // An outside token holds its authority only while it works (B21 §9 C2): a call it has going
+      // is refused at its next seam once the token is replaced, revoked or expires.
+      current: (caller) =>
+        caller.kind === 'outside' && tokens.revoked(caller.token) ? TOKEN_REPLACED : undefined,
     },
   );
   // A setup that was running as the last core stopped is interrupted, after the process owner's

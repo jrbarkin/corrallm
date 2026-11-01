@@ -42,7 +42,10 @@ import { Throttle } from './throttle';
  * a proposal for you), since they read what the ops before it in its scope left; its reach is
  * checked once more as each of its commits builds, in the canvas's turn, and so is each inner op's
  * of a batch, recomputing its party each time, since its authority and reach may change while it
- * waits. It never throws: a failure is a value, whose code survives any transport. An op may run
+ * waits. Each audience check stamps a token's caller first (`current`, B21 §9 C2): one whose
+ * outside token was replaced, revoked or expired, or whose session's generation ended, is refused
+ * there, so at every one of those seams and around a projection's read, and is never given another
+ * call's kept result. It never throws: a failure is a value, whose code survives any transport. An op may run
  * another as part of itself, in its own turn (`ctx.call`, `ctx.prepare`): checked as a call of its
  * caller's own would be (its audience,
  * arguments, reach, self and argument rules), never throttled, deduped or scoped apart; `ctx.call`
@@ -268,6 +271,14 @@ export interface DispatchOptions {
    */
   check?: boolean;
   now?: () => number;
+  /**
+   * Whether a token's caller still holds its authority (B21 §9 C2): the sentence it is refused with
+   * once it doesn't (its outside token replaced, revoked or expired; its session's generation
+   * ended), else undefined. Checked inside every audience check: as a call comes, in its scope,
+   * after its rules, at its point of no return, as each of its commits builds, around a projection's
+   * read, and before another call's kept result is returned to it. Without it, every one does.
+   */
+  current?: (caller: TokenCaller) => string | undefined;
 }
 
 /** The core's operations, as every transport serves them. */
@@ -338,6 +349,7 @@ export function createDispatcher(registry: Registry, options: DispatchOptions = 
     publication,
     check = false,
     now = Date.now,
+    current,
   } = options;
   const scopes = new Scopes();
   const throttle = new Throttle(now);
@@ -413,6 +425,7 @@ export function createDispatcher(registry: Registry, options: DispatchOptions = 
 
   /** The caller's party and audience now, including calls that waited in a scope or a build. */
   function audience(name: string, surface: Surface, caller: Caller): Party {
+    if (caller.kind !== 'human') stamp(caller);
     const party = partyOf(caller, isLead);
     if (surface.access[party] === undefined) {
       throw party !== 'you' && Object.keys(surface.access).every((p) => p === 'you')
@@ -420,6 +433,12 @@ export function createDispatcher(registry: Registry, options: DispatchOptions = 
         : new OpFailure('forbidden', `${PARTY_WORDS[party]} can’t call ${name}.`);
     }
     return party;
+  }
+
+  /** Throws, refused, unless a token's caller still holds its authority now. */
+  function stamp(caller: TokenCaller): void {
+    const ended = current?.(caller);
+    if (ended !== undefined) throw new OpFailure('refused', ended);
   }
 
   /**
@@ -699,7 +718,10 @@ export function createDispatcher(registry: Registry, options: DispatchOptions = 
       const args = parse(def, withCanvas(name, def, raw, caller, openCanvases, holds));
       // A caller's own repeated request is answered before reach is resolved: what its first call
       // did (a delete) may have put what it names out of reach. One that runs is checked first.
+      /** Whether this call ran the op itself, rather than being given another call's result. */
+      const own = { ran: false };
       const run = async (): Promise<Attempt> => {
+        own.ran = true;
         try {
           checkReach(name, surface, def, args, caller);
         } catch (error) {
@@ -712,6 +734,8 @@ export function createDispatcher(registry: Registry, options: DispatchOptions = 
         typeof request === 'string'
           ? await requests.remembered(callerKey(caller), `${name}|${request}|${keyOf(args)}`, run)
           : (await run()).result;
+      // Another call's kept result goes only to a caller that still holds its authority.
+      if (!own.ran && caller.kind !== 'human') stamp(caller);
       if (surface.kind === 'read') checkReach(name, surface, def, args, caller);
       // Current rows are disclosed only while the caller still reaches them, even in a cached
       // refusal. Successful deletes keep their first result after their targets have gone.
