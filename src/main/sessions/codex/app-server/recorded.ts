@@ -35,6 +35,21 @@ import path from 'node:path';
  *     granted for the turn with strict auto review.
  *   - approvals: in Read only, a patch's approval, a command run outside the sandbox, then input
  *     written to it (kind writeStdin, with its approvalId), cancelled.
+ *
+ * Codex CLI 0.162.1 (B11a C4), GPT-6-Luna at low effort, an ephemeral thread in a scratch folder
+ * (/work/smoke/ctx1, ctx2), its model window lowered for the recording alone with a per-run
+ * override (`-c model_context_window=50000`, so that its usable window is 47,500 and it compacts
+ * near 45,000 rather than near 244,800). Its notifications and the requests that matter are kept
+ * (config/read keeps only the compaction settings); the long filler messages it was given, and
+ * what `cat` printed, are replaced by their lengths; the account, MCP-server and rate-limit
+ * traffic is left out.
+ * - compact-default: no compaction limit configured (config/read says null). Two messages of
+ *   filler text, then `cat` calls (output capped at 2,500 tokens by `tool_output_token_limit`).
+ *   It compacted in the middle of the fifth turn, after a request of 42,934 tokens whose `cat`
+ *   output was still to come; the turn before had ended at 42,861 without compacting.
+ * - compact-limit: the same window with `model_auto_compact_token_limit=40000` (config/read says
+ *   40000). Filler text only. It compacted as the fourth turn began, after a request of 42,915
+ *   tokens (and again as the fifth began); the one before, 34,052, did not.
  */
 
 export type Fixture =
@@ -49,7 +64,9 @@ export type Fixture =
   | 'mcp-question'
   | 'question'
   | 'permissions'
-  | 'approvals';
+  | 'approvals'
+  | 'compact-default'
+  | 'compact-limit';
 
 /** One message: sent to the app server ('out'), from it ('in'), or its exit ('close'). */
 export interface RecordedLine {

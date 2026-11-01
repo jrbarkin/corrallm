@@ -780,7 +780,12 @@ async function handle({ method, id, params }) {
         }
       }
       return reply({
-        config: { developer_instructions: process.env.FAKE_CODEX_DEVELOPER_INSTRUCTIONS ?? null },
+        config: {
+          developer_instructions: process.env.FAKE_CODEX_DEVELOPER_INSTRUCTIONS ?? null,
+          model_auto_compact_token_limit: process.env.FAKE_CODEX_COMPACT_AT
+            ? Number(process.env.FAKE_CODEX_COMPACT_AT)
+            : null,
+        },
       });
     case 'model/list':
       return reply({ data: MODELS, nextCursor: null });

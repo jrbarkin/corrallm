@@ -10,14 +10,141 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  statusLineContext,
   statusLineProgress,
   statusLineSettings,
   statusLineUsage,
   userStatusLine,
 } from './statusline';
 import type { StatusLine } from './statusline';
+import { recordedStatus } from './status-recorded';
 
 const NOW = Date.UTC(2026, 9, 12, 12, 0);
+
+describe('status line context', () => {
+  it('reads current request tokens, including caches and output, rather than session totals', () => {
+    expect(
+      statusLineContext({
+        context_window: {
+          context_window_size: 1_000_000,
+          total_input_tokens: 900_000,
+          used_percentage: 95,
+          current_usage: {
+            input_tokens: 2,
+            cache_creation_input_tokens: 3,
+            cache_read_input_tokens: 4,
+            output_tokens: 5,
+          },
+        },
+      }),
+    ).toEqual({ used: 14, window: 1_000_000, compactAt: 967_000 });
+  });
+  it('uses the reported percentage only when no current request tokens are supplied', () => {
+    expect(
+      statusLineContext({
+        context_window: { context_window_size: 1_000_000, used_percentage: 94.7 },
+      }),
+    ).toEqual({ used: 947_000, window: 1_000_000, compactAt: 967_000 });
+  });
+  it.each([
+    {},
+    { context_window_size: 0 },
+    { context_window_size: 200_000, used_percentage: 101 },
+    { context_window_size: 200_000, used_percentage: 8, current_usage: { input_tokens: -1 } },
+  ])('leaves absent or malformed context unknown (%j)', (context_window) => {
+    expect(statusLineContext({ context_window })).toBeNull();
+  });
+});
+
+describe('status line context, on what the real Claude Code did (2.1.316, B11a C4)', () => {
+  const records = recordedStatus();
+  const statuses = records.flatMap((record) =>
+    record.kind === 'status' ? [{ t: record.t, input: record.data }] : [],
+  );
+  const hooks = records.flatMap((record) =>
+    record.kind === 'hook' ? [{ t: record.t, ...record.data }] : [],
+  );
+  const window = 1_000_000;
+  const used = (input: Record<string, unknown>) => statusLineContext(input)?.used;
+
+  it('knows nothing before its first response, and no usage limits until it has one', () => {
+    const first = statuses[0]?.input ?? {};
+    expect(first.context_window).toMatchObject({
+      context_window_size: window,
+      current_usage: null,
+      used_percentage: null,
+    });
+    expect(first.rate_limits).toBeUndefined();
+    expect(statusLineContext(first)).toBeNull();
+    expect(statusLineUsage(first, NOW)).toBeUndefined();
+  });
+
+  it('reads the last response’s tokens, with output, against the model’s window', () => {
+    const second = statuses[1]?.input ?? {};
+    // 2 input + 5,106 cache creation + 0 cache read + 121 output
+    expect(statusLineContext(second)).toEqual({ used: 5_229, window, compactAt: 967_000 });
+    // A usage limit came with it: only the seven-day window had one, and corrallm reads that.
+    expect(Object.keys(second.rate_limits as Record<string, unknown>)).toEqual(['seven_day']);
+    expect(Object.keys(statusLineUsage(second, Date.now()) ?? {})).toEqual(['weekly']);
+  });
+
+  it('gives its share as a whole number of the input side, so tokens come from the counts', () => {
+    let checked = 0;
+    for (const { input } of statuses) {
+      const context = input.context_window as {
+        context_window_size: number;
+        used_percentage: number | null;
+        current_usage: Record<string, number> | null;
+      };
+      if (context.used_percentage === null || context.current_usage === null) continue;
+      const {
+        input_tokens: a = 0,
+        cache_creation_input_tokens: b = 0,
+        cache_read_input_tokens: c = 0,
+      } = context.current_usage;
+      // Rounded to the nearest percent of 1M (10,000 tokens a step), output not in it.
+      expect(context.used_percentage).toBe(Math.round((100 * (a + b + c)) / window));
+      checked += 1;
+    }
+    expect(checked).toBeGreaterThan(10);
+    // 54,263 tokens read as 5%: the share alone would say 50,000.
+    const last = statuses.at(-1)?.input;
+    expect(last?.context_window).toMatchObject({ used_percentage: 5 });
+    expect(used(last ?? {})).toBe(2 + 27 + 23_423 + 30_811);
+  });
+
+  it('shows its automatic compaction by its hooks, and a reading of nothing until the next response', () => {
+    const pre = hooks.find((hook) => hook.hook_event_name === 'PreCompact');
+    const post = hooks.find((hook) => hook.hook_event_name === 'PostCompact');
+    expect([pre?.trigger, post?.trigger]).toEqual(['auto', 'auto']);
+    expect(hooks.find((hook) => hook.source === 'compact')).toBeDefined();
+    // The last reading before it: 52,381 tokens, under the 67,000 it compacts at with the window
+    // lowered to 100,000: the 20,000-odd tokens of the file it had just asked to read would have
+    // followed, and counted.
+    const before = statuses.filter((status) => status.t < (post?.t ?? 0)).at(-1);
+    expect(statusLineContext(before?.input ?? {})).toEqual({
+      used: 52_381,
+      window,
+      compactAt: 967_000,
+    });
+    // Right after it, until the next response: no tokens, and the share is 0.
+    const after = statuses.find((status) => status.t > (post?.t ?? 0));
+    expect(after?.input.context_window).toMatchObject({ used_percentage: 0 });
+    expect(statusLineContext(after?.input ?? {})).toEqual({ used: 0, window, compactAt: 967_000 });
+    // Then the next response's.
+    const next = statuses.find((status) => status.t > (post?.t ?? 0) && used(status.input) !== 0);
+    expect(used(next?.input ?? {})).toBe(2 + 661 + 25_946 + 4_159);
+  });
+
+  it('shows no sign of a lowered compaction window, so its rule is the model’s default', () => {
+    // CLAUDE_CODE_AUTO_COMPACT_WINDOW moved its compaction point to 67,000, but every input still
+    // said 1M: corrallm reads 967,000 (the default rule) and cannot see a lowered setting.
+    for (const { input } of statuses) {
+      const context = statusLineContext(input);
+      if (context !== null) expect(context).toMatchObject({ window, compactAt: 967_000 });
+    }
+  });
+});
 
 /** Claude Code's status line input, as it was seen (2.1.296), with its usage limits. */
 const INPUT = {
@@ -328,7 +455,18 @@ describe.skipIf(process.platform === 'win32')('the status line corrallm gives Cl
     });
   });
 
-  it('posts nothing when the input says nothing of usage limits', async () => {
+  it('posts context alone even when the input says nothing of usage limits', async () => {
+    const { statusLine } = await settings();
+    if (!statusLine) throw new Error('no status line');
+    const input = { context_window: { context_window_size: 1_000_000, used_percentage: 94.7 } };
+    await run(statusLine, JSON.stringify(input), cwd);
+    await vi.waitFor(() => {
+      expect(server.posts).toHaveLength(1);
+    });
+    expect(JSON.parse(server.posts[0]?.body ?? '')).toEqual(input);
+  });
+
+  it('posts nothing when the input says nothing of context or usage limits', async () => {
     const { statusLine } = await settings();
     if (!statusLine) throw new Error('no status line');
     await run(statusLine, JSON.stringify({ ...INPUT, rate_limits: undefined }), cwd);

@@ -170,10 +170,23 @@ export class AppServerConnector implements Connector<CodexMode> {
         });
         throw new Error(refused);
       }
+      const needsInstructions =
+        instructions !== undefined || (spec.resume !== null && spec.roleChanged === true);
       const [listed, skilled, limits] = await Promise.all([
         server.request('model/list', { limit: 100 }).catch(() => undefined),
         server.request('skills/list', { cwds: [spec.cwd] }).catch(() => undefined),
         server.request('account/rateLimits/read', {}).catch(() => undefined),
+        // Without a role this read is optional: a missing config leaves the default compaction rule.
+        ...(needsInstructions
+          ? []
+          : [
+              server
+                .request('config/read', { cwd: spec.cwd })
+                .then((response) => {
+                  translator.setConfig(response);
+                })
+                .catch(() => undefined),
+            ]),
       ]);
       const models = readModels(listed);
       const skills = readSkills(skilled);
@@ -184,7 +197,12 @@ export class AppServerConnector implements Connector<CodexMode> {
       // With no supplied instructions or role change, keep native defaults untouched.
       const developerInstructions =
         instructions !== undefined || (spec.resume !== null && spec.roleChanged === true)
-          ? appendRole(await readDeveloperInstructions(server, spec.cwd), instructions)
+          ? appendRole(
+              await readDeveloperInstructions(server, spec.cwd, (response) => {
+                translator.setConfig(response);
+              }),
+              instructions,
+            )
           : undefined;
       const begin = (mode: CodexMode | null, model: string | null) => {
         const settings = mode === null ? undefined : modeSettings(mode);

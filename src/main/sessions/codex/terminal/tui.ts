@@ -1,6 +1,6 @@
 import { MAX_DETAIL_LINES } from '../../../../shared/api/limits';
 import { MODEL_PATTERN } from '../../../../shared/session';
-import type { CodexMode } from '../../../../shared/session';
+import type { CodexMode, SessionUsage } from '../../../../shared/session';
 import { isUuid } from '../../id';
 import type { Launch, TerminalCli, TerminalSignal, TerminalUsage } from '../../terminal/cli';
 import type { HookEvent, HookRegistration } from '../../terminal/hooks';
@@ -43,7 +43,7 @@ export const PASTE_START = '\x1b[200~';
 export const PASTE_END = '\x1b[201~';
 
 /** Its title, as corrallm asks it to be: what it is doing, and its state. */
-const TITLE = '["activity","run-state"]';
+const TITLE = '["context-used","activity","run-state"]';
 /** The states its title says (the last word), and what they mean to corrallm. */
 const WORKING = new Set(['Working', 'Thinking', 'Waiting']);
 
@@ -56,6 +56,8 @@ const MODE_FLAGS: Record<CodexMode, readonly string[]> = {
 };
 
 export interface CodexTuiOptions {
+  /** A known usable model window, never guessed from its name. */
+  contextWindow?: number;
   /** The trust its hooks need: their keys and hashes (trust.ts). */
   trust: (hooks: readonly SessionHook[]) => Promise<HookTrust>;
   /**
@@ -105,6 +107,8 @@ export class CodexTui implements TerminalCli<CodexMode> {
   #interrupted = false;
   /** The model its hooks last said. */
   #model: string | undefined;
+  #contextWindow: number | undefined;
+  #context: SessionUsage['context'] = null;
   /** Permissions last heard from a hook; terminal changes are visible only at the next hook. */
   #mode: CodexMode | undefined;
   /** A malformed native id is warned about once, while its hooks are still heard. */
@@ -116,12 +120,17 @@ export class CodexTui implements TerminalCli<CodexMode> {
     developerInstructions,
     platform = process.platform,
     usage,
+    contextWindow,
   }: CodexTuiOptions) {
     this.#trust = trust;
     this.#effort = effort;
     this.#developerInstructions = developerInstructions;
     this.#platform = platform;
     this.#usage = usage;
+    this.#contextWindow =
+      Number.isSafeInteger(contextWindow) && (contextWindow ?? 0) > 12_000
+        ? contextWindow
+        : undefined;
   }
 
   newId(): null {
@@ -170,7 +179,23 @@ export class CodexTui implements TerminalCli<CodexMode> {
     return this.#starting;
   }
 
+  context(): SessionUsage['context'] {
+    return this.#context;
+  }
+
   title(title: string): ProgramStatus | undefined {
+    const reading = /(?:^|\s)Context (\d{1,3}(?:\.\d+)?)% used(?=\s|$)/.exec(title);
+    const percent = reading === null ? NaN : Number(reading[1]);
+    const window = this.#contextWindow;
+    // Codex removes a 12,000-token baseline from both numerator and denominator in its TUI.
+    this.#context =
+      window === undefined || !Number.isFinite(percent) || percent > 100
+        ? null
+        : {
+            used: Math.round(12_000 + (window - 12_000) * (percent / 100)),
+            window,
+            compactAt: Math.floor(window * (90 / 95)),
+          };
     this.#titled = true;
     if (title.includes('Action Required')) {
       this.#ran = true;
@@ -223,6 +248,10 @@ export class CodexTui implements TerminalCli<CodexMode> {
     }
     const model = text('model');
     if (model !== undefined && model !== this.#model && MODEL_PATTERN.test(model)) {
+      if (this.#model !== undefined) {
+        this.#contextWindow = undefined;
+        this.#context = null;
+      }
       this.#model = model;
       signals.push({ kind: 'model', model });
     }

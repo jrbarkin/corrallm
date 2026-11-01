@@ -4,6 +4,7 @@ import type { SessionEvent } from '../../../../shared/session';
 import type { UsageWindows } from '../../../../shared/usage';
 import { property } from '../../transcript';
 import { RECORDED_PLACES, recordedNotifications, recordedResult } from './recorded';
+import type { Fixture } from './recorded';
 import { OUTPUT_EVERY_MS, Translator, commandLine, historyEvents, unwrapShell } from './translate';
 
 const THREAD = '01a1344c-68e9-7bf2-a777-b062d871bb26';
@@ -38,6 +39,44 @@ function tools(events: SessionEvent[]) {
 const about = (params: Record<string, unknown>) => ({ threadId: THREAD, turnId: 't1', ...params });
 
 describe('the App Server translator, on what Codex did', () => {
+  it('uses the reported window and last request, with a lower native compaction limit', () => {
+    const { translator } = play([]);
+    translator.setConfig({ config: { model_auto_compact_token_limit: 400_000 } });
+    const update = (used: number) =>
+      translator.notification(
+        'thread/tokenUsage/updated',
+        about({
+          tokenUsage: {
+            total: { totalTokens: 900_000 },
+            last: { totalTokens: used },
+            modelContextWindow: 475_000,
+          },
+        }),
+      );
+    expect(update(430_000)).toMatchObject([
+      { type: 'usage', usage: { context: { used: 430_000, window: 475_000, compactAt: 400_000 } } },
+    ]);
+    translator.setConfig({ config: { model_auto_compact_token_limit: 600_000 } });
+    expect(update(431_000)).toMatchObject([
+      { type: 'usage', usage: { context: { used: 431_000, window: 475_000, compactAt: 450_000 } } },
+    ]);
+  });
+
+  it.each([null, -1, 1.5, NaN, Infinity])(
+    'does not retain context after an invalid window %s',
+    (window) => {
+      const { translator } = play([]);
+      const update = (modelContextWindow: unknown) =>
+        translator.notification(
+          'thread/tokenUsage/updated',
+          about({ tokenUsage: { last: { totalTokens: 1 }, modelContextWindow } }),
+        );
+      expect(update(475_000)).toMatchObject([
+        { type: 'usage', usage: { context: { used: 1, window: 475_000, compactAt: 450_000 } } },
+      ]);
+      expect(update(window)).toMatchObject([{ type: 'usage', usage: { context: null } }]);
+    },
+  );
   it('reports a typed terminal failure while leaving individual command errors within the turn', () => {
     const { translator } = play([]);
     translator.notification(
@@ -104,7 +143,7 @@ describe('the App Server translator, on what Codex did', () => {
       type: 'usage',
       usage: {
         costUsd: null,
-        context: null,
+        context: { used: expect.any(Number) as number, window: 258_400, compactAt: 244_800 },
         contextTokens: expect.any(Number) as number,
         contextWindow: 258_400,
         limits: [
@@ -538,5 +577,95 @@ describe('commands as Codex shows them', () => {
     );
     expect(commandLine(['npm', 'run', 'build:prod'])).toBe('npm run build:prod');
     expect(commandLine(['git', 'commit', '-m', 'a b'])).toBe("git commit -m 'a b'");
+  });
+});
+
+/**
+ * What a real compaction recording makes the translator say: each usage event's context and
+ * cumulative-count-free reading, and the notices, in order, with the compaction's start marked.
+ */
+function playCompaction(name: Extract<Fixture, 'compact-default' | 'compact-limit'>) {
+  const threadId = property(
+    property(recordedResult(name, 'thread/start'), 'thread'),
+    'id',
+  ) as string;
+  const translator = new Translator({ places: RECORDED_PLACES });
+  translator.thread = threadId;
+  translator.setConfig(recordedResult(name, 'config/read'));
+  const told: (
+    { context: unknown; contextTokens: unknown } | { note: string } | { started: true }
+  )[] = [];
+  for (const { method, params } of recordedNotifications(name)) {
+    if (
+      method === 'item/started' &&
+      property(property(params, 'item'), 'type') === 'contextCompaction'
+    )
+      told.push({ started: true });
+    for (const event of translator.notification(method, params)) {
+      if (event.type === 'usage')
+        told.push({ context: event.usage.context, contextTokens: event.usage.contextTokens });
+      if (event.type === 'notice') told.push({ note: event.text });
+    }
+  }
+  return told;
+}
+
+describe('the App Server translator, through real automatic compactions (Codex 0.162.1, B11a C4)', () => {
+  const window = 47_500;
+
+  it('reports the last request, never the running total, against the usable window', () => {
+    const told = playCompaction('compact-default');
+    const contexts = told.flatMap((t) => ('context' in t ? [t.context] : []));
+    expect(contexts[0]).toEqual({ used: 24_060, window, compactAt: 45_000 });
+    // The session had spent over 250,000 tokens in all by then: not what fills its context.
+    expect(contexts).toContainEqual({ used: 42_934, window, compactAt: 45_000 });
+    for (const t of told) if ('context' in t) expect(t.contextTokens).toBeLessThan(window + 10_000);
+  });
+
+  it('puts compaction at 90% of the raw window, which is 45,000 of this 50,000', () => {
+    // The recording's model window was 50,000 (so its usable window 47,500 = 95%): Codex
+    // compacted after a request of 42,934 tokens (its next request would have held that and
+    // the output of the command it had just asked for, up to 2,500 tokens), and not after the
+    // 42,861 before it. floor(47,500 × 90 / 95) is 45,000.
+    expect(Math.floor((window * 90) / 95)).toBe(45_000);
+    const told = playCompaction('compact-default');
+    const at = told.findIndex((t) => 'started' in t);
+    expect(told[at - 1]).toMatchObject({ context: { used: 42_934, compactAt: 45_000 } });
+    expect(told[at - 2]).toMatchObject({ context: { used: 42_861, compactAt: 45_000 } });
+  });
+
+  it('reports what the compaction left, then says it compacted', () => {
+    const told = playCompaction('compact-default');
+    const at = told.findIndex((t) => 'started' in t);
+    expect(told[at + 1]).toMatchObject({ context: { used: 19_554, window, compactAt: 45_000 } });
+    expect(told[at + 2]).toEqual({ note: 'Context compacted' });
+    expect(told[at + 3]).toMatchObject({ context: { used: 33_083, window, compactAt: 45_000 } });
+  });
+
+  it('lowers the compaction point to the configured limit, the limit config/read reports', () => {
+    expect(
+      property(
+        property(recordedResult('compact-limit', 'config/read'), 'config'),
+        'model_auto_compact_token_limit',
+      ),
+    ).toBe(40_000);
+    expect(
+      property(
+        property(recordedResult('compact-default', 'config/read'), 'config'),
+        'model_auto_compact_token_limit',
+      ),
+    ).toBeNull();
+    const told = playCompaction('compact-limit');
+    const contexts = told.flatMap((t) => ('context' in t ? [t.context] : []));
+    expect(contexts.slice(0, 3)).toEqual([
+      { used: 24_060, window, compactAt: 40_000 },
+      { used: 34_052, window, compactAt: 40_000 },
+      { used: 42_915, window, compactAt: 40_000 },
+    ]);
+    // It compacted as the next turn began, past the limit, and not at 34,052.
+    const at = told.findIndex((t) => 'started' in t);
+    expect(told[at - 1]).toMatchObject({ context: { used: 42_915 } });
+    expect(told[at + 1]).toMatchObject({ context: { used: 25_632, window, compactAt: 40_000 } });
+    expect(told[at + 2]).toEqual({ note: 'Context compacted' });
   });
 });

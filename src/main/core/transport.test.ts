@@ -136,6 +136,8 @@ describe.each(REGISTRIES)('T3a on %s', (_label, fixtures, world, start) => {
         );
       }
     },
+    // Branch parity includes repeated, uncached reads through real Git.
+    30_000,
   );
 
   it.each(Object.entries(fixtures))(
@@ -161,6 +163,8 @@ describe.each(REGISTRIES)('T3a on %s', (_label, fixtures, world, start) => {
         ).toBe(JSON.stringify(direct));
       }
     },
+    // Branch parity includes repeated, uncached reads through real Git.
+    30_000,
   );
 });
 

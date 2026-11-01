@@ -8,6 +8,7 @@ import type {
   PermissionMode,
   SessionMode,
   SessionEvent,
+  SessionUsage,
   TerminalAsk,
   TurnResult,
   UserMessage,
@@ -251,6 +252,7 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
   readonly #reports = new Map<string, string>();
   /** The progress its status line last said (TerminalCli.statusLine): timed posts repeat it. */
   #progress: string | undefined;
+  #context: SessionUsage['context'] = null;
   #turn: Turn | undefined;
   /** An ended turn being classified, ahead of anything the CLI does in its next turn. */
   #ending: { end: Extract<SessionEvent, { type: 'end' }>; events: SessionEvent[] } | undefined;
@@ -581,6 +583,7 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
       },
       title: (title) => {
         const report = this.#cli.title?.(title);
+        this.#takeContext(this.#cli.context?.());
         if (report) this.#status(report, 'title');
       },
       // A view's terminal answers what the CLI asks; with none, this screen does.
@@ -994,7 +997,9 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
     if (this.#exited || this.#closing) return;
     this.#host.activity?.();
     this.#pass();
-    for (const signal of this.#cli.hook(event)) this.#signal(signal);
+    const signals = this.#cli.hook(event);
+    this.#takeContext(this.#cli.context?.());
+    for (const signal of signals) this.#signal(signal);
   }
 
   /** Acts on what a hook told (cli.ts: TerminalSignal). */
@@ -1285,6 +1290,27 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
 
   // ---- Usage.
 
+  /** Forwards only changes in the context the adapter reports. */
+  #takeContext(context: SessionUsage['context'] | undefined): void {
+    if (
+      context === undefined ||
+      this.#exited ||
+      this.#closing ||
+      JSON.stringify(context) === JSON.stringify(this.#context)
+    )
+      return;
+    this.#context = context;
+    this.#emit({
+      type: 'usage',
+      usage: {
+        costUsd: null,
+        context,
+        contextTokens: context?.used ?? null,
+        contextWindow: context?.window ?? null,
+      },
+    });
+  }
+
   /**
    * What its CLI gave its status line: its usage limits go to main's readings. Only a change in
    * its progress is activity: a CLI may post it again on a timer while its model is gone.
@@ -1296,6 +1322,7 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
       this.#progress = reading.progress;
       this.#host.activity?.();
     }
+    this.#takeContext(reading?.context);
     if (reading?.usage) this.#deps.usage?.(reading.usage);
   }
 

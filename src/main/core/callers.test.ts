@@ -223,33 +223,40 @@ describe.each(REGISTRIES)('T3b on %s', (_label, fixtures, world, start) => {
       },
     );
 
-    it('answers every party in its audience alike, but for the fields it says vary', async () => {
-      const varies = surfaceOf(name).varies ?? [];
-      const proposes = (surfaceOf(name).rules ?? []).some((rule) => PROPOSING_RULES.includes(rule));
-      const audience = PARTIES.filter((p) => inAudience(name, p));
-      // A party with arguments of its own takes them, and is answered.
-      for (const party of audience.filter((p) => fixture.by?.[p] !== undefined)) {
-        for (const args of validFor(fixture, party)) {
-          const theirs = await setup.core.call(name, args, CALLERS[party]);
-          expect(theirs.ok, `${party}: ${JSON.stringify(theirs)}`).toBe(true);
+    it(
+      'answers every party in its audience alike, but for the fields it says vary',
+      async () => {
+        const varies = surfaceOf(name).varies ?? [];
+        const proposes = (surfaceOf(name).rules ?? []).some((rule) =>
+          PROPOSING_RULES.includes(rule),
+        );
+        const audience = PARTIES.filter((p) => inAudience(name, p));
+        // A party with arguments of its own takes them, and is answered.
+        for (const party of audience.filter((p) => fixture.by?.[p] !== undefined)) {
+          for (const args of validFor(fixture, party)) {
+            const theirs = await setup.core.call(name, args, CALLERS[party]);
+            expect(theirs.ok, `${party}: ${JSON.stringify(theirs)}`).toBe(true);
+          }
         }
-      }
-      // Each other party's answer against the first's: yours, where you are in the audience.
-      const [first, ...others] = audience.filter((p) => fixture.by?.[p] === undefined);
-      if (first === undefined) return;
-      for (const args of fixture.valid) {
-        const firsts = await setup.core.call(name, args, CALLERS[first]);
-        expect(firsts.ok, JSON.stringify(firsts)).toBe(true);
-        for (const party of others) {
-          const theirs = await setup.core.call(name, args, CALLERS[party]);
-          // A token's call that came to you as a proposal is its rule's to check, below.
-          if (proposes && theirs.ok && 'proposed' in (theirs.value as object)) continue;
-          expect(invariant(theirs, varies, fixture.fresh), party).toEqual(
-            invariant(firsts, varies, fixture.fresh),
-          );
+        // Each other party's answer against the first's: yours, where you are in the audience.
+        const [first, ...others] = audience.filter((p) => fixture.by?.[p] === undefined);
+        if (first === undefined) return;
+        for (const args of fixture.valid) {
+          const firsts = await setup.core.call(name, args, CALLERS[first]);
+          expect(firsts.ok, JSON.stringify(firsts)).toBe(true);
+          for (const party of others) {
+            const theirs = await setup.core.call(name, args, CALLERS[party]);
+            // A token's call that came to you as a proposal is its rule's to check, below.
+            if (proposes && theirs.ok && 'proposed' in (theirs.value as object)) continue;
+            expect(invariant(theirs, varies, fixture.fresh), party).toEqual(
+              invariant(firsts, varies, fixture.fresh),
+            );
+          }
         }
-      }
-    });
+        // The branch fixtures read real Git once per party.
+      },
+      name.startsWith('branch.') ? 30_000 : 5000,
+    );
 
     it('refuses what doesn’t fit it, to everyone in its audience', async () => {
       for (const args of fixture.invalid) {

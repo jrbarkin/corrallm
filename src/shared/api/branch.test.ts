@@ -14,6 +14,7 @@ import {
 import { idsIn } from './ids';
 import { MAX_PAGE, MAX_PAGE_BYTES } from './limits';
 import { OPS } from './registry';
+import { R, SURFACE, W } from './surface';
 
 const canvas = '11111111-1111-4111-8111-111111111111';
 const workspace = '22222222-2222-4222-8222-222222222222';
@@ -36,10 +37,24 @@ const diff = {
   next: null,
 };
 
-describe('prepared branch contracts', () => {
-  it('prepares contracts without registering either operation; the listing takes C6’s additive fields', () => {
-    expect(OPS).not.toHaveProperty('branch.diff');
-    expect(OPS).not.toHaveProperty('branch.merge');
+describe('branch contracts', () => {
+  it('registers the frozen branch audiences; the listing takes C6’s additive fields', () => {
+    expect(SURFACE).toHaveProperty('branch.diff', {
+      access: { ...R, worker: 'own' },
+      kind: 'read',
+      scope: 'none',
+      self: 'allowed',
+      varies: ['shared'],
+    });
+    expect(SURFACE).toHaveProperty('branch.merge', {
+      access: W,
+      kind: 'command',
+      scope: 'none',
+      self: 'refused',
+      rules: ['merge-permits'],
+    });
+    expect(OPS).toHaveProperty('branch.diff');
+    expect(OPS).toHaveProperty('branch.merge');
     expect(OPS['worktree.list'].output.safeParse({ items: [], kept: [], into: null }).success).toBe(
       true,
     );
@@ -189,6 +204,16 @@ describe('prepared branch contracts', () => {
     };
     expect(BranchMergeOutput.safeParse(result).success).toBe(true);
     expect(BranchMergeOutput.safeParse({ ...result, checkpoint: oid }).success).toBe(true);
+    expect(
+      BranchMergeOutput.safeParse({ ...result, checkpoint: oid, checkpointRecorded: false })
+        .success,
+    ).toBe(true);
+    expect(BranchMergeOutput.safeParse({ ...result, checkpointRecorded: false }).success).toBe(
+      false,
+    );
+    expect(
+      BranchMergeOutput.safeParse({ ...result, checkpoint: oid, checkpointRecorded: true }).success,
+    ).toBe(false);
     expect(
       BranchMergeOutput.safeParse({
         outcome: 'already-merged',

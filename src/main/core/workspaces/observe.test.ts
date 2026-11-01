@@ -463,6 +463,47 @@ describe('when it reads', () => {
     expect(reads.workspace).toHaveBeenCalledTimes(4);
   });
 
+  it.each(['into', 'workspace'] as const)(
+    'keeps an invalidated observation unknown until a fresh pass, including a pending %s read',
+    async (part) => {
+      const [workspace = ''] = await trees(canvas, REPOSITORIES[0] ?? '', 1);
+      const reads = fakeReads();
+      const changed = vi.fn<(canvas: CanvasId) => void>();
+      const o = observe(reads, changed);
+      await o.now(canvas, workspace);
+      expect(o.of(workspace)).toEqual({ merged: false, uncommitted: 0 });
+      changed.mockClear();
+      const held = Promise.withResolvers<undefined>();
+      if (part === 'into')
+        reads.into.mockImplementationOnce(async () => {
+          await held.promise;
+          return { ref: 'refs/heads/main', oid: OID(2) };
+        });
+      else
+        reads.workspace.mockImplementationOnce(async () => {
+          await held.promise;
+          return { tip: OID(3), merged: false, uncommitted: 0 };
+        });
+      const pending = o.now(canvas, workspace);
+      await vi.advanceTimersByTimeAsync(0);
+      try {
+        o.markUnknown(workspace);
+        expect(o.of(workspace)).toEqual({ merged: null, uncommitted: null });
+        expect(changed).toHaveBeenCalledExactlyOnceWith(canvas);
+        o.markUnknown(workspace);
+        expect(changed).toHaveBeenCalledTimes(1);
+      } finally {
+        held.resolve(undefined);
+        await pending;
+      }
+      expect(o.of(workspace)).toEqual({ merged: null, uncommitted: null });
+      reads.workspace.mockResolvedValue({ tip: OID(3), merged: true, uncommitted: 0 });
+      await o.now(canvas, workspace);
+      expect(o.of(workspace)).toEqual({ merged: true, uncommitted: 0 });
+      expect(changed).toHaveBeenCalledTimes(2);
+    },
+  );
+
   it('coalesces requests during a slow pass into one later interval', async () => {
     const [one] = await trees(canvas, REPOSITORIES[0] ?? '', 1);
     const reads = fakeReads();
