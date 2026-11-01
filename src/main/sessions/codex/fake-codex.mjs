@@ -32,11 +32,10 @@
 // file it keeps its threads in, so that a later app server resumes them), FAKE_CODEX_LOG (a file
 // it appends each request it gets to, one JSON line each, and each answer to one of its requests,
 // as `answer:<method>`), FAKE_CODEX_CONFIG_FAIL (config/read
-// fails with that message), FAKE_CODEX_LINGER (how many ms it takes to exit once its input ends,
-// as one finishing what it runs: none by default), FAKE_CODEX_LINGER_UNTIL (a release-file path:
-// once its input ends, an app server that loaded a thread exits only once <path> exists, writing
-// <path>.waiting first; one only asked something, as corrallm's private ones are, exits at once),
-// FAKE_CODEX_START_GATE (a release-file path: as a
+// fails with that message), FAKE_CODEX_LINGER_UNTIL (a release-file path: once its input ends,
+// an app server that loaded a thread exits only once <path> exists, as one finishing what it runs,
+// writing <path>.waiting first; one only asked something, as corrallm's private ones are, exits at
+// once), FAKE_CODEX_START_GATE (a release-file path: as a
 // thread starts, an MCP server asks for a form, and thread/start answers only once <path> exists;
 // it writes <path>.waiting first), FAKE_CODEX_SANDBOX and FAKE_CODEX_APPROVAL
 // (the sandbox and approvals a thread given none runs with, as the user's config.toml would set
@@ -962,9 +961,8 @@ createInterface({ input: process.stdin }).on('line', (line) => {
   }
   if (message.id !== undefined) void handle(message);
 });
-// Its input ends: it exits, as the real one does (FAKE_CODEX_LINGER ms later, or once
-// FAKE_CODEX_LINGER_UNTIL's file exists, if set).
-const linger = Number(process.env.FAKE_CODEX_LINGER ?? 0);
+// Its input ends: it exits, as the real one does (once FAKE_CODEX_LINGER_UNTIL's file exists, if
+// set).
 const lingerUntil = process.env.FAKE_CODEX_LINGER_UNTIL;
 const close = async () => {
   await Promise.all(
@@ -983,8 +981,7 @@ const close = async () => {
       else setTimeout(released, 10);
     };
     released();
-  } else if (linger > 0) setTimeout(() => process.exit(0), linger);
-  else process.exit(0);
+  } else process.exit(0);
 };
 process.stdin.on('end', () => {
   void close();
