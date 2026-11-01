@@ -3,7 +3,7 @@ import { existsSync, realpathSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import type { IncomingHttpHeaders, Server } from 'node:http';
-import type { AddressInfo } from 'node:net';
+import type { AddressInfo, Socket } from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -370,19 +370,57 @@ function run(
   line: StatusLine,
   input: string,
   cwd: string,
-): Promise<{ stdout: string; code: number | null; ms: number }> {
+): Promise<{ stdout: string; code: number | null }> {
   return new Promise((resolve, reject) => {
-    const started = Date.now();
     const child = spawn(line.command, [], { shell: true, cwd, env: { ...process.env } });
     let stdout = '';
     child.stdout.setEncoding('utf8');
     child.stdout.on('data', (chunk: string) => (stdout += chunk));
     child.on('error', reject);
     child.on('close', (code) => {
-      resolve({ stdout, code, ms: Date.now() - started });
+      resolve({ stdout, code });
     });
     child.stdin.end(`${input}\n`);
   });
+}
+
+/**
+ * A server standing in for a main that takes each post and never answers it: how many posts it
+ * heard, and how many of their connections their sender gave up and closed.
+ */
+async function holding(): Promise<{
+  url: string;
+  heard: () => number;
+  gaveUp: () => number;
+  close: () => Promise<void>;
+}> {
+  let heard = 0;
+  let gaveUp = 0;
+  const sockets = new Set<Socket>();
+  const server: Server = createServer((request) => {
+    heard += 1;
+    request.resume();
+    request.socket.once('close', () => {
+      gaveUp += 1;
+    });
+  });
+  server.on('connection', (socket: Socket) => {
+    sockets.add(socket);
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address() as AddressInfo;
+  return {
+    url: `http://127.0.0.1:${String(port)}/status`,
+    heard: () => heard,
+    gaveUp: () => gaveUp,
+    close: () =>
+      new Promise((resolve) => {
+        for (const socket of sockets) socket.destroy();
+        server.close(() => {
+          resolve();
+        });
+      }),
+  };
 }
 
 describe.skipIf(process.platform === 'win32')('the status line corrallm gives Claude Code', () => {
@@ -474,17 +512,43 @@ describe.skipIf(process.platform === 'win32')('the status line corrallm gives Cl
     expect(server.posts).toEqual([]);
   });
 
-  it('still shows the user’s line, at once, when corrallm cannot be reached', async () => {
+  it('still shows the user’s line when corrallm cannot be reached', async () => {
     await settingsFile(path.join(home, '.claude', 'settings.json'), {
       statusLine: { type: 'command', command: 'echo mine' },
     });
     await server.close();
     const { statusLine } = await settings(server.url);
     if (!statusLine) throw new Error('no status line');
-    const { stdout, code, ms } = await run(statusLine, JSON.stringify(INPUT), cwd);
-    expect({ stdout, code }).toEqual({ stdout: 'mine\n', code: 0 });
-    expect(ms).toBeLessThan(1500);
+    expect(await run(statusLine, JSON.stringify(INPUT), cwd)).toEqual({
+      stdout: 'mine\n',
+      code: 0,
+    });
     server = await listen();
+  });
+
+  it('shows the user’s line without waiting on corrallm, which may never answer', async () => {
+    await settingsFile(path.join(home, '.claude', 'settings.json'), {
+      statusLine: { type: 'command', command: 'echo mine' },
+    });
+    const silent = await holding();
+    try {
+      const { statusLine } = await settings(silent.url);
+      if (!statusLine) throw new Error('no status line');
+      const shown = await run(statusLine, JSON.stringify(INPUT), cwd);
+      // Its line shown and the command ended, its reading's post had not given up waiting for an
+      // answer: the command never waited on it.
+      const gaveUp = silent.gaveUp();
+      expect(shown).toEqual({ stdout: 'mine\n', code: 0 });
+      expect(gaveUp).toBe(0);
+      await vi.waitFor(
+        () => {
+          expect(silent.heard()).toBe(1);
+        },
+        { timeout: 5000 },
+      );
+    } finally {
+      await silent.close();
+    }
   });
 
   it('runs nothing the input says, whatever it holds', async () => {

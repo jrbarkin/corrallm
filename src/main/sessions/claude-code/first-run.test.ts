@@ -3,12 +3,16 @@ import { describe, expect, it } from 'vitest';
 import { FirstRuns } from './first-run';
 import type { FirstRunTurn } from '../terminal/first-run';
 
-/** Whether a turn may start: now, or once its wait has resolved (by the time this settles). */
+/**
+ * Whether a turn may start: now, or because its wait has resolved. A wait is resolved in a
+ * microtask, so one still unresolved once the next macrotask runs (setImmediate, after every
+ * microtask queued before it) is still waiting: no clock decides it.
+ */
 async function started(turn: FirstRunTurn): Promise<boolean> {
   if (turn.ready === undefined) return true;
   return Promise.race([
     turn.ready.then(() => true),
-    new Promise<boolean>((resolve) => setTimeout(resolve, 5, false)),
+    new Promise<boolean>((resolve) => setImmediate(resolve, false)),
   ]);
 }
 

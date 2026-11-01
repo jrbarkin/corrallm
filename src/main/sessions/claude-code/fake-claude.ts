@@ -126,6 +126,11 @@ export class FakeClaude implements Pty {
     }, 0);
   }
 
+  /** How many characters it printed are waiting for it to be resumed. */
+  get held(): number {
+    return this.#held.reduce((sum, data) => sum + data.length, 0);
+  }
+
   /** Whether everything it printed has been read. */
   get drained(): boolean {
     return !this.paused && this.#held.length === 0;
