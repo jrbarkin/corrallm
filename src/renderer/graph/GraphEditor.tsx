@@ -946,6 +946,7 @@ function Editor({
 
   return (
     <GraphContext
+      inert={restoring}
       actions={actions}
       canvas={canvasId}
       mirror={mirror}

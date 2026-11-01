@@ -13,8 +13,10 @@ import {
   workspaceAttention,
   workspaceState,
   workspaceSharing,
+  mergeMark,
 } from './state';
-import type { Workspace } from './state';
+import type { Workspace, MergeInto } from './state';
+import { BranchReview } from './BranchReview';
 import './Workspace.css';
 
 /** Only the topic owns workspace state. The short-lived notice remembers a visual transition. */
@@ -25,6 +27,7 @@ export function WorkspaceProvider({
   nodes,
   onNeed,
   children,
+  inert = false,
 }: {
   canvas: CanvasId;
   mirror: TopicMirror;
@@ -32,13 +35,52 @@ export function WorkspaceProvider({
   nodes: readonly CanvasNode[];
   onNeed: (id: string) => void;
   children: ReactNode;
+  inert?: boolean;
 }) {
   const state = useTopic(`worktrees:${canvas}`, mirror);
   const needs = useTopic(`needs:${canvas}`, mirror);
+  const [review, setReview] = useState<{
+    canvas: CanvasId;
+    agent: string;
+    merge: boolean;
+    into: MergeInto | null;
+    key: string;
+  }>();
   return (
-    <Context value={{ canvas, client, state, nodes, onNeed, needs }}>
+    <Context
+      value={{
+        canvas,
+        client,
+        state,
+        nodes,
+        onNeed,
+        needs,
+        inert,
+        onBranch: (agent, merge) => {
+          if (!inert)
+            setReview({
+              canvas,
+              agent,
+              merge,
+              into: state?.into ?? null,
+              key: crypto.randomUUID(),
+            });
+        },
+      }}
+    >
       {children}
       <SetupFinished key={canvas} canvas={canvas} mirror={mirror} />
+      {review?.canvas === canvas && (
+        <BranchReview
+          key={review.key}
+          agent={review.agent}
+          merge={review.merge}
+          into={review.into}
+          onClose={() => {
+            setReview(undefined);
+          }}
+        />
+      )}
     </Context>
   );
 }
@@ -100,7 +142,18 @@ export function WorkspaceBadge({ agent, card = false }: { agent: string; card?: 
   const need = item.need;
   const state = workspaceState(item);
   const branch = item.branch ?? (item.mode === 'shared-folder' ? 'Shared folder' : state);
-  const title = [item.branch, workspaceSharing(item, context.nodes), state]
+  const mark = mergeMark(item.merge);
+  const history = context.state?.into?.ref?.replace(/^refs\/heads\//, '');
+  const explanation = item.merge?.merged
+    ? `its commits are in ${history ? `${history}’s` : 'your checkout’s'} history`
+    : undefined;
+  const title = [
+    item.branch,
+    workspaceSharing(item, context.nodes),
+    state,
+    explanation,
+    item.merge?.sentence,
+  ]
     .filter(Boolean)
     .join(' · ');
   return (
@@ -110,6 +163,11 @@ export function WorkspaceBadge({ agent, card = false }: { agent: string; card?: 
       title={title}
     >
       <span title={title}>{branch}</span>
+      {mark && (
+        <small className="workspace-merge-state" title={title}>
+          {mark}
+        </small>
+      )}
       {!card && item.branch && <small>{state}</small>}
       {need && (
         <button

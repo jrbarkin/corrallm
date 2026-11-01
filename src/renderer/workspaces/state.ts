@@ -6,6 +6,15 @@ import type { CanvasNode } from '../../shared/model/canvas';
 
 type Listed = ResultOf<'worktree.list'>;
 export type Workspace = Listed['items'][number];
+export type MergeInto = ResultOf<'branch.diff'>['into'];
+
+/** Observation only. A job takes precedence over ancestry; nothing here runs Git. */
+export function mergeMark(merge: Workspace['merge']): string {
+  if (merge?.job === 'merging') return 'merging…';
+  if (merge?.job === 'held') return 'Merge held';
+  if (merge?.merged === true) return merge.uncommitted === 0 ? '· merged' : '· commits merged';
+  return '';
+}
 export const Context = createContext<{
   canvas: CanvasId;
   client: GuiApi;
@@ -13,6 +22,8 @@ export const Context = createContext<{
   nodes: readonly CanvasNode[];
   onNeed: (id: string) => void;
   needs: ResultOf<'needs'> | undefined;
+  onBranch?: (agent: string, merge: boolean) => void;
+  inert?: boolean;
 } | null>(null);
 
 export function useWorkspace(agent: string) {
