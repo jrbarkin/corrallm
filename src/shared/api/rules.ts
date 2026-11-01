@@ -51,11 +51,12 @@ export const RULES = {
   },
   // R3: as `reply` arrives, the caller must be one the item names to answer it (its `by`), and
   // may pick no choice marked `humanOnly` (a proposal's, a file review's: yours alone); and only
-  // you go on past a usage rule's hold (run.goOn).
+  // you go on past a usage rule's hold (run.goOn). B13's owner prompts are yours alone until
+  // B24; Not waiting is a human-only choice too. Refusals use the prompt selector's words.
   'human-choice': {
     kind: 'argument',
     sentence:
-      'Only you answer what only you may decide: a choice marked human-only, or Go on past a usage rule.',
+      'Only you answer a session prompt, including Not waiting, choose a choice marked human-only, or Go on past a usage rule.',
   },
   // R4: a token's commit that removes an agent becomes a proposal for you, unless another rule
   // refuses it; and so do, on their arguments, canvas.close and canvas.create's `replace` that
