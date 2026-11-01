@@ -264,7 +264,7 @@ export const CALLERS: Readonly<Record<Party, Caller>> = {
   } satisfies OutsideCaller,
   'outside-write': {
     kind: 'outside',
-    token: 'write-token',
+    token: '4e5f6071-8293-4a4b-9cbd-3f4a5b6c7d80',
     name: 'orchestrator',
     access: 'write',
     merge: true,

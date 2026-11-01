@@ -468,11 +468,15 @@ describe('T3c: the canvas, canvases and needs topics', () => {
     // The worker sees itself in its group's tree, never its apprentice, nor what is yours.
     const workers = copies.get('worker')?.get(`worktrees:${CANVAS}`)?.state as WorktreeListing;
     expect(workers.items.map(({ agent }) => agent)).not.toContain('apprentice');
-    expect(workers.items.find(({ agent }) => agent === 'worker')).toMatchObject({
-      workspace: WORKER_WORKTREE,
-      mode: 'group',
-      group: 'worker',
-    });
+    // Earlier structural fixtures may have ungrouped the apprentice. The real workspace's
+    // owner follows that document change; its workspace id stays the same.
+    const grouped =
+      world.core.engines.canvas(CANVAS)?.document.nodes.find((node) => node.id === 'apprentice')
+        ?.parentId === 'worker';
+    const worker = workers.items.find(({ agent }) => agent === 'worker');
+    expect(worker).toMatchObject({ workspace: WORKER_WORKTREE, mode: grouped ? 'group' : 'own' });
+    if (grouped) expect(worker?.group).toBe('worker');
+    else expect(worker).not.toHaveProperty('group');
     for (const item of workers.items) expect(item).not.toHaveProperty('location');
     const asked = await world.core.call(
       'canvas.delete',

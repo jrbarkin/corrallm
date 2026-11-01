@@ -32,6 +32,7 @@ const item: ResultOf<'worktree.list'>['items'][number] = {
   branch: 'corral/team/a-long-branch',
   base: { ref: 'main', oid: '123' },
   state: 'setup',
+  merge: { merged: null, uncommitted: null },
   location: '/repo/worktrees/team',
   need: `setup/${workspace}/1`,
   setup: { state: 'pending', command: "printf 'a  b'", source: 'detected', exitCode: null },
