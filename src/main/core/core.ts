@@ -701,8 +701,8 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     // A claim's holder named as a notice names an agent: quoted, escaped and capped.
     nameOf: (canvas, agent) =>
       quotedName(agentName(documents.loaded(canvas)?.document.nodes ?? [], agent)),
-    sending: (canvas, agentId, message, send, stopped) =>
-      engines.sending(canvas, agentId, message, send, stopped),
+    sending: (canvas, agentId, message, send, stopped, connection) =>
+      engines.sending(canvas, agentId, message, send, stopped, connection),
     emit: (canvas, agentId, connection, event) => {
       stalled.event(canvas, agentId, connection, event);
       void engines.emit(canvas, agentId, connection, event).catch((error: unknown) => {

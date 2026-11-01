@@ -119,6 +119,7 @@ export const claudeCode: Adapter = {
         keys: { shiftEnter: '\x1b\r' },
         // Its bash mode: what follows runs as a shell command, without asking.
         shellPrefix: '!',
+        fileMentions: true,
       },
       {
         id: 'claude-code.sdk',

@@ -3,6 +3,7 @@ import type { ConnectionId } from '../../shared/adapter';
 import { canvasIdOf } from '../../shared/canvas';
 import type { CanvasId } from '../../shared/canvas';
 import type { EngineCatalog } from '../../shared/model/catalog';
+import { fileMentionRefusal } from '../../shared/model/catalog';
 import { Engine } from './engine/engine';
 import { needs } from '../../shared/model/needs-selectors';
 import type { NeedsInput } from '../../shared/model/needs-selectors';
@@ -786,14 +787,34 @@ export class Engines {
     message: UserMessage,
     send: (message: UserMessage) => Promise<void>,
     stopped?: () => boolean,
+    nativeConnection?: ConnectionId,
   ): Promise<boolean> {
     if (this.#closed) throw new Error('The canvas closed before its message could be sent.');
     const key = `${canvas}\u0000${agentId}`;
     const inputs = this.#inputs.get(key) ?? new Map<string, UserMessage>();
     inputs.set(message.id, message);
     this.#inputs.set(key, inputs);
-    const { notes } = await this.#mailOf(canvas);
-    return notes.send(agentId, message, send, stopped);
+    const { messages, notes } = await this.#mailOf(canvas);
+    return notes.send(
+      agentId,
+      message,
+      (next) => {
+        // Check the final text after notes and startup, using the core's kept provenance.
+        if (next.from !== undefined || messages.originOf(message.id) === 'run') {
+          const node = this.#canvases.get(canvas)?.document.nodes.find((one) => one.id === agentId);
+          const catalog = this.#deps.engineCatalog;
+          const connection =
+            nativeConnection ??
+            (node?.type === 'agent' ? catalog.connectionOf(node.data) : undefined);
+          if (connection !== undefined) {
+            const refusal = fileMentionRefusal(catalog, connection, next.text);
+            if (refusal !== undefined) throw new Error(refusal);
+          }
+        }
+        return send(next);
+      },
+      stopped,
+    );
   }
 
   /**

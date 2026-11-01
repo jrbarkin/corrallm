@@ -302,6 +302,12 @@ function madeText(
 
 /** `corrallm token header --from <file>`: the Authorization header, as a headers helper prints it. */
 async function header(from: string, io: TokenIO): Promise<number> {
+  if (io.env.CORRALLM_AGENT_SESSION === '1') {
+    io.stderr.write(
+      'corrallm token header: an outside token is unavailable in a corrallm agent session.\n',
+    );
+    return 1;
+  }
   let token: string;
   try {
     token = await readTokenFile(path.resolve(io.cwd, from), io.platform);

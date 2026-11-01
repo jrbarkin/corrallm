@@ -53,6 +53,7 @@ const Connection = z.strictObject({
     .optional(),
   keys: z.strictObject({ shiftEnter: z.string().nullable() }).optional(),
   shellPrefix: z.string().optional(),
+  fileMentions: z.literal(true).optional(),
 });
 
 const Adapter = z.strictObject({
