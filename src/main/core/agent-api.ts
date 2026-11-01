@@ -138,9 +138,10 @@ export class SessionAuthority implements AgentApi {
       };
     }
     const token = randomBytes(32).toString('base64url');
-    const entry: Entry = { caller, hash: sha256(token), listed: false };
+    const hash = sha256(token);
+    const entry: Entry = { caller, hash, listed: false };
     this.#entries.set(keyOf(canvas, agent, generation), entry);
-    this.#byHash.set(sha256(token), entry);
+    this.#byHash.set(hash, entry);
     return { kind: 'http', server: CORRALLM_AGENT_MCP_SERVER, url, token, tools, off };
   }
 
