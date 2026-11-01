@@ -22,3 +22,7 @@ Workspace-managed gallery templates use the core's grouping rather than native w
 ## Prepared context capability
 
 Each connection declares `context`, currently false for every production connection and the made-up catalog. It becomes true only when a sanitized recording proves its context reports. Session usage prepares a separate nullable token context (`used`, `window`, `compactAt`); all producers currently set it to null, preserving their existing context counters for display. No percentage or compaction point is inferred by the platform.
+
+## Prepared agent API gate
+
+Each connection declares `api: 'http' | 'channel' | null` in `ConnectionDescriptor`. The strict catalog schema carries it as plain metadata, including for unfamiliar adapters. Every shipped connection and the made-up catalog declares `null`, pinned by the adapter contracts and regenerated test catalog: a native route is enabled only with that connection's evidence gate. This declaration alone creates no credential or running API.

@@ -32,6 +32,7 @@ const Connection = z.strictObject({
   view: z.enum(['terminal', 'transcript']),
   ...PromptDescriptor.shape,
   context: z.boolean(),
+  api: z.enum(['http', 'channel']).nullable(),
   startModes: z.array(z.string()),
   live: z.strictObject({ effort: z.boolean(), stopTask: z.boolean() }),
   panels: z.strictObject({

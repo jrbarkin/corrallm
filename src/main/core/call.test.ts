@@ -55,6 +55,15 @@ describe('partyOf', () => {
 });
 
 describe('scopeOf', () => {
+  it.each(['you', 'manager'])('runs an object target for %s in its canvas’s scope', (party) => {
+    expect(scopeOf({ scope: 'agent' }, { canvas: CANVAS, to: { party } })).toEqual(['app', CANVAS]);
+    expect(scopeOf({ scope: 'agent' }, { canvas: CANVAS, to: party })).toEqual([
+      'app',
+      CANVAS,
+      party,
+    ]);
+  });
+
   it('runs an op aimed at a group in its canvas’s scope, which holds every member’s', () => {
     const agentScoped = { scope: 'agent' } as const;
     expect(scopeOf(agentScoped, { canvas: CANVAS, target: { group: 'team' } })).toEqual([

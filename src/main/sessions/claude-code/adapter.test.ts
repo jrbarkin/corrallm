@@ -31,6 +31,10 @@ function declared(session: object) {
 }
 
 describe("Claude Code's adapter", () => {
+  it('keeps the agent API unavailable on every connection until its evidence gate opens', () => {
+    for (const one of descriptor.connections) expect(one).toHaveProperty('api', null);
+  });
+
   it('declares context on both connections, proven by the recordings of real automatic compactions', () => {
     // The Agent SDK: sdk/translate.test.ts replays sdk/fixtures/auto-compact.jsonl and
     // no-auto-compact.jsonl. The Terminal: statusline.test.ts replays
