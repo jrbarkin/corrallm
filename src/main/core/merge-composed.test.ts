@@ -534,3 +534,46 @@ it('reviews and merges through registered operations, retaining the caller’s p
   expect(git(project, env, 'show', 'HEAD:done.txt')).toBe('done\n');
   expect(await running.call('branch.merge', args, CALLERS['outside-write'])).toEqual(merged);
 }, 60000);
+
+// Q30 (Design §9 C1), as the composed core meets it. A token made with --no-merge reads a review
+// like any writer, but can't merge: nothing lands, whichever transport brought the call, and a
+// token made to merge on the same canvas still does. Core-level because a token is made by a
+// person on a terminal and the call has no window in it; the rule's own unit test is
+// merge-permits.test.ts.
+it('refuses a --no-merge token’s merge with its sentence and lands nothing, while a merging token merges', async () => {
+  const running = await start();
+  const checkout = await ready(running);
+  writeFileSync(path.join(checkout, 'done.txt'), 'done\n');
+  git(checkout, env, 'add', 'done.txt');
+  commit(checkout, env, 'Done');
+  const noMerge = { ...CALLERS['outside-write'], token: 'no-merge-token', merge: false };
+  const review = await running.call('branch.diff', { canvas: CANVAS, agent: 'a' }, noMerge);
+  expect(review.ok).toBe(true);
+  if (!review.ok) throw new Error(review.error.sentence);
+  const page = review.value as {
+    source: { ref: string; oid: string };
+    into: { ref: string; oid: string };
+  };
+  const args = {
+    canvas: CANVAS,
+    agent: 'a',
+    source: { ref: page.source.ref, oid: page.source.oid },
+    into: page.into,
+    request: randomUUID(),
+  };
+  const before = g(project, 'rev-parse', 'HEAD');
+  const refused = await running.call('branch.merge', args, noMerge);
+  expect(refused).toMatchObject({
+    ok: false,
+    error: { sentence: 'This token was made with --no-merge: it can’t merge an agent’s branch.' },
+  });
+  expect(g(project, 'rev-parse', 'HEAD')).toBe(before);
+  expect(g(project, 'status', '--porcelain')).toBe('');
+  const merged = await running.call(
+    'branch.merge',
+    { ...args, request: randomUUID() },
+    CALLERS['outside-write'],
+  );
+  expect(merged.ok, JSON.stringify(merged)).toBe(true);
+  expect(git(project, env, 'show', 'HEAD:done.txt')).toBe('done\n');
+}, 60000);
