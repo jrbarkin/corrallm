@@ -15,8 +15,10 @@ const destinationName = (into: MergeInto | null | undefined) =>
 export function BranchControls({ agent }: { agent: string }) {
   const context = useContext(Context);
   if (!context?.onBranch) return null;
-  const merging =
-    context.state?.items.find((item) => item.agent === agent)?.merge?.job === 'merging';
+  // Only an agent whose worktree has a generated branch has changes to review or merge.
+  const item = context.state?.items.find((candidate) => candidate.agent === agent);
+  if (!item?.branch) return null;
+  const merging = item.merge?.job === 'merging';
   return (
     <span
       className="branch-controls nodrag nopan"

@@ -59,12 +59,21 @@ const page: BranchDiffOutput = {
 };
 
 async function isolatedReview() {
+  const builder: ResultOf<'worktree.list'>['items'][number] = {
+    agent: 'builder',
+    workspace: page.workspace,
+    mode: 'own',
+    generation: 1,
+    branch: source.ref.slice('refs/heads/'.length),
+    base: page.base,
+    state: 'ready',
+  };
   const core = fakeCore();
   isolatedCores.push(core);
   const first = newCanvasId();
   const second = newCanvasId();
   for (const canvas of [first, second]) {
-    core.snapshot(`worktrees:${canvas}`, { items: [], kept: [], into });
+    core.snapshot(`worktrees:${canvas}`, { items: [builder], kept: [], into });
     core.snapshot(`needs:${canvas}`, { items: [] });
   }
   core.respond('branch.diff', page);
@@ -85,6 +94,36 @@ async function isolatedReview() {
   const view = await renderReady(show(first));
   return { ...view, core, first, second, show };
 }
+
+it('offers the controls only to an agent whose worktree has a generated branch', async () => {
+  const { core, first } = await isolatedReview();
+  const topic = `worktrees:${first}` as const;
+  const review = () => screen.queryByRole('button', { name: 'Review changes' });
+  expect(review()).not.toBeNull();
+  const publish = (items: ResultOf<'worktree.list'>['items']) => {
+    act(() => {
+      core.change({
+        topic,
+        rev: (core.state(topic)?.rev ?? 0) + 1,
+        replace: { items, kept: [], into },
+      });
+    });
+  };
+  publish([]);
+  expect(review()).toBeNull();
+  publish([
+    {
+      agent: 'builder',
+      workspace: null,
+      mode: 'own',
+      generation: 0,
+      branch: null,
+      base: null,
+      state: 'pending-change',
+    },
+  ]);
+  expect(review()).toBeNull();
+});
 
 it('ends a review when its canvas changes, including when returning before a pending read completes', async () => {
   const { core, first, second, rerender, show } = await isolatedReview();
