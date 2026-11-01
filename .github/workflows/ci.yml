@@ -180,4 +180,9 @@ jobs:
       # As scripts/lib/linux-workspace.sh runs it in Docker.
       - name: e2e (Linux)
         if: runner.os == 'Linux'
+        env:
+          # Mesa's software GL, as scripts/lib/linux-workspace.sh runs it; launch.ts reads CORRALLM_E2E_GL.
+          LIBGL_ALWAYS_SOFTWARE: 'true'
+          GALLIUM_DRIVER: llvmpipe
+          CORRALLM_E2E_GL: mesa
         run: xvfb-run -a -s '-screen 0 1920x1080x24 +extension GLX' pnpm test:e2e --reporter=list

@@ -1,0 +1,12 @@
+name: diag
+on: push
+jobs:
+  d:
+    runs-on: macos-latest
+    steps:
+      - run: |
+          echo "$PATH"; which -a git; for g in $(which -a git | sort -u); do $g --version; done
+          ls /opt/homebrew/Cellar/git 2>/dev/null; brew list --versions git
+          system_profiler SPDisplaysDataType | head -30
+          which displayplacer || true
+          git config --show-origin --list | head -30
