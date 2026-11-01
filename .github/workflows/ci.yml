@@ -31,9 +31,10 @@ jobs:
         # Pinned images rather than *-latest for Linux, so runner image upgrades happen deliberately.
         os: [macos-latest, ubuntu-24.04, ubuntu-24.04-arm, windows-latest]
     runs-on: ${{ matrix.os }}
-    # Windows is held for the MVP (the prelaunch checklist): its result is reported but does not
-    # fail the run.
-    continue-on-error: ${{ matrix.os == 'windows-latest' }}
+    # Linux x64 blocks. Windows is held for the MVP (the prelaunch checklist), and macOS and Linux
+    # arm64 are reported without failing the run until their runner fixes land (the toolchain doc
+    # lists them); each flips to blocking once it passes.
+    continue-on-error: ${{ matrix.os != 'ubuntu-24.04' }}
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
@@ -136,6 +137,9 @@ jobs:
       matrix:
         os: [macos-latest, ubuntu-24.04]
     runs-on: ${{ matrix.os }}
+    # Reported without failing the run until the runner fixes land (macOS: a 1024x768 display;
+    # Linux: WebGL2 under Xvfb); the local gate runs e2e until then.
+    continue-on-error: true
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
