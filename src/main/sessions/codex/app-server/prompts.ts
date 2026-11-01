@@ -246,13 +246,15 @@ function translated(prompt: AdapterPrompt, answer: SessionAnswer): PromptAnswer 
       if (prompt.kind !== 'question') break;
       if (answer.answers.length !== prompt.questions.length)
         throw new Error('Answer every question it asks.');
-      const answers: Record<string, QuestionAnswer> = {};
-      prompt.questions.forEach((question, index) => {
-        const given = answer.answers[index] ?? '';
-        answers[question.id] = question.options.some(({ label }) => label === given)
-          ? { picked: [given] }
-          : { text: given };
-      });
+      const answers = Object.fromEntries(
+        prompt.questions.map((question, index) => {
+          const given = answer.answers[index] ?? '';
+          const value: QuestionAnswer = question.options.some(({ label }) => label === given)
+            ? { picked: [given] }
+            : { text: given };
+          return [question.id, value];
+        }),
+      );
       return { kind: 'questions', answers };
     }
     case 'plan': {

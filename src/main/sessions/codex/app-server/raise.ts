@@ -3,6 +3,7 @@ import {
   MAX_PROMPT_DIFF_BYTES,
   MAX_PROMPT_INPUT_BYTES,
   MAX_PROMPT_INPUT_DEPTH,
+  MAX_PROMPT_LABEL_LENGTH,
   MAX_PROMPT_TEXT_LENGTH,
 } from '../../../../shared/api/limits';
 import { boundedPromptJson } from '../../../../shared/model/prompt-data';
@@ -218,7 +219,7 @@ function commandPrompt(params: unknown, { places }: RaiseContext): Raised {
       more: asked !== null,
       command: shownCommand,
     });
-    if (choice === undefined) {
+    if (choice === undefined || choice.label.length > MAX_PROMPT_LABEL_LENGTH) {
       omitted = true;
       continue;
     }
@@ -335,8 +336,8 @@ function commandChoice(
     value: `applyNetworkPolicyAmendment:${action}`,
     label:
       action === 'allow'
-        ? 'Yes, and allow this host in the future'
-        : 'No, and block this host in the future',
+        ? `Yes, and allow ${amended === host ? 'this host' : `host \`${amended}\``} in the future`
+        : `No, and block ${amended === host ? 'this host' : `host \`${amended}\``} in the future`,
     hint: action === 'allow' ? 'allow_always' : 'reject_always',
     ...effects({ network: { host: amended, allow: action === 'allow', scope: 'user' } }),
     feedback: 'none',
@@ -383,6 +384,24 @@ function fileChangePrompt(params: unknown, context: RaiseContext): Raised {
           'session',
         )
       : effects({ directories: [root] });
+  const label =
+    root === undefined || root === ''
+      ? "Yes, and don't ask again for these files"
+      : `Yes, and allow edits in \`${root}\` for this session`;
+  const keeping: Choice[] =
+    label.length > MAX_PROMPT_LABEL_LENGTH
+      ? []
+      : [
+          {
+            value: 'acceptForSession',
+            label,
+            hint: 'allow_always',
+            ...session,
+            feedback: 'none',
+            endsTurn: false,
+          },
+        ];
+  const choices = [once('accept', 'Yes, proceed'), ...keeping, STOP];
   return {
     prompt: {
       kind: 'approval',
@@ -392,33 +411,19 @@ function fileChangePrompt(params: unknown, context: RaiseContext): Raised {
       ...(detail === undefined ? {} : { detail }),
       subject: { type: 'fileChange', files },
       answerIn: 'api',
-      choices: [
-        once('accept', 'Yes, proceed'),
-        {
-          value: 'acceptForSession',
-          label: "Yes, and don't ask again for these files",
-          hint: 'allow_always',
-          ...session,
-          feedback: 'none',
-          endsTurn: false,
-        },
-        STOP,
-      ],
+      choices,
+      ...(keeping.length === 0 ? { omitted: true as const } : {}),
       ...cuts.mark(),
     },
     native: {
       kind: 'decision',
-      decisions: new Map([
-        ['accept', 'accept'],
-        ['acceptForSession', 'acceptForSession'],
-        ['cancel', 'cancel'],
-      ]),
+      decisions: new Map(choices.map(({ value }) => [value, value])),
     },
     shown: {
       type: 'permission',
       tool: 'apply_patch',
       summary: found.summary,
-      always: "Yes, and don't ask again for these files",
+      always: keeping[0]?.label ?? null,
       ...(found.detail === undefined ? {} : { detail: found.detail }),
       ...(reason !== undefined
         ? { title: reason }
@@ -584,6 +589,8 @@ function questionsPrompt(params: unknown, context: RaiseContext): Raised {
     if (id === undefined || id === '' || asked === undefined)
       return cant('a question has no id or text');
     if (questions.some((question) => question.id === id)) return cant('two questions under one id');
+    const header = text(property(item, 'header')) ?? '';
+    if (header.length > MAX_ID_LENGTH) return cant('a question’s header is too long');
     const options = property(item, 'options');
     const offered: unknown[] | undefined =
       options === null || options === undefined ? [] : Array.isArray(options) ? options : undefined;
@@ -593,7 +600,7 @@ function questionsPrompt(params: unknown, context: RaiseContext): Raised {
     if (new Set(labels).size !== labels.length) return cant('two answers the same');
     questions.push({
       id,
-      header: cuts.text(text(property(item, 'header')) ?? '', MAX_ID_LENGTH),
+      header,
       text: asked,
       options: offered.map((option, i) => {
         const description = text(property(option, 'description'));
@@ -998,12 +1005,13 @@ export function nativeResult(native: Native, answer: PromptAnswer): unknown {
     case 'questions': {
       if (answer.kind !== 'questions') throw new Error('Answer the questions.');
       if (answer.decider !== undefined) throw new Error(ONLY_THE_USER);
-      const answers: Record<string, { answers: string[] }> = {};
-      for (const id of native.ids) {
-        const given = Object.hasOwn(answer.answers, id) ? answer.answers[id] : undefined;
-        if (given === undefined) throw new Error(`Answer question ${id}.`);
-        answers[id] = { answers: 'picked' in given ? [...given.picked] : [given.text] };
-      }
+      const answers = Object.fromEntries(
+        native.ids.map((id) => {
+          const given = Object.hasOwn(answer.answers, id) ? answer.answers[id] : undefined;
+          if (given === undefined) throw new Error(`Answer question ${id}.`);
+          return [id, { answers: 'picked' in given ? [...given.picked] : [given.text] }];
+        }),
+      );
       return { answers };
     }
     case 'mcpQuestion': {
