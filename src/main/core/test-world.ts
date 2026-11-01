@@ -741,6 +741,11 @@ const request = (n: number) => `2c3d4e5f-6071-4829-9bac-1d2e3f4a5b${String(n).pa
 const INSERT_REQUEST = '3c3d4e5f-6071-4829-9bac-1d2e3f4a5b00';
 const ARRANGE_REQUEST = '3c3d4e5f-6071-4829-9bac-1d2e3f4a5b01';
 const SHOW_REQUEST = '3c3d4e5f-6071-4829-9bac-1d2e3f4a5b02';
+/** settings.set's two writes: a default agent, then none again. */
+const DEFAULT_REQUESTS = [
+  '3c3d4e5f-6071-4829-9bac-1d2e3f4a5b04',
+  '3c3d4e5f-6071-4829-9bac-1d2e3f4a5b05',
+] as const;
 
 /** A request id for each fixture of a canvas's lifetime that writes. */
 const lifetime = (n: number) => `3d4e5f60-7182-4a3b-8cad-2e3f4a5b6c${String(n).padStart(2, '0')}`;
@@ -778,6 +783,23 @@ export const REAL_FIXTURES: Readonly<Record<OpName, OpFixture>> = {
     invalid: [{ canvas: CANVAS }, { extra: true }, 'text', null],
   },
   'settings.get': { valid: [{}, undefined], invalid: [{ canvas: CANVAS }, 'text', null] },
+  // Yours alone (the consent deviation): set, then none again, so the world reads as it began.
+  'settings.set': {
+    valid: [
+      { defaultAdapter: 'codex', request: DEFAULT_REQUESTS[0] },
+      { defaultAdapter: null, request: DEFAULT_REQUESTS[1] },
+    ],
+    invalid: [
+      {},
+      { defaultAdapter: 'zed' },
+      { defaultAdapter: '-codex' },
+      { defaultAdapter: '' },
+      { defaultAdapter: 'x'.repeat(33) },
+      { defaultAdapter: 'codex', canvas: CANVAS },
+      'codex',
+      null,
+    ],
+  },
   'project.files': {
     valid: [
       { canvas: CANVAS, query: 'ipc' },

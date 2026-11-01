@@ -20,3 +20,14 @@ describe('a chunked worktrees snapshot (B9a §7)', () => {
     ).toEqual({ items, kept });
   });
 });
+
+describe('a chunked settings snapshot (B12 C2)', () => {
+  it('keeps the default agent, none included, and where the MCP server listens', () => {
+    const api = { state: 'listening', port: 4242, url: 'http://127.0.0.1:4242/mcp' };
+    for (const defaultAdapter of ['codex', null]) {
+      expect(
+        assembledState('settings', { defaultAdapter, api }, [['codex', { plan: true }]]),
+      ).toEqual({ defaultAdapter, api, consents: { codex: { plan: true } } });
+    }
+  });
+});

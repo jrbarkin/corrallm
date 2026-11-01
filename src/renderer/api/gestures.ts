@@ -10,4 +10,5 @@ export const NO_GESTURE = {
   'canvas.batch': 'Several edits as one commit, for tokens: no gesture of the window’s is one.',
   'agent.setFallback':
     'The chain picker on the model chip and in Agent settings (B11a X4) is not built yet.',
+  'settings.set': 'The default-agent control in the add chooser and Start (B12 X5).',
 } satisfies Partial<Record<GuiOp, string>>;

@@ -1117,10 +1117,12 @@ export function partsOf(
         ],
       };
     }
-    const value = state as { defaultAdapter: string; consents: Record<string, unknown> };
+    // The settings: their consents divided, the rest of `settings.get` (the default agent, none
+    // included, and where the MCP server listens) in the summary, whole.
+    const { consents, ...rest } = state as { consents: Record<string, unknown> };
     return {
-      summary: { defaultAdapter: value.defaultAdapter },
-      entries: Object.entries(value.consents).map(([key, one]) => ({ key, value: one })),
+      summary: rest,
+      entries: Object.entries(consents).map(([key, one]) => ({ key, value: one })),
     };
   }
   switch (kindOf(topic)) {

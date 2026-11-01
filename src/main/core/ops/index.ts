@@ -75,7 +75,7 @@ export interface OpServices {
   catalog: Catalog;
   /** The adapter agents run when none is chosen. */
   defaultAdapter: AdapterId;
-  settings: Pick<Settings, 'get' | 'apiPort'>;
+  settings: Pick<Settings, 'get' | 'apiPort' | 'setDefaultAdapter'>;
   /** Whether corrallm's MCP server listens now, and where, as its owner says (core/endpoint.ts). */
   api: () => ApiStatus;
   /** The agents’ environment, read from the login shell when first needed. */

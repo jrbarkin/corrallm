@@ -1,4 +1,4 @@
-import { adapterIn } from '../../shared/adapter';
+import { adapterIn, connectionIn } from '../../shared/adapter';
 import type { AdapterId, Catalog } from '../../shared/adapter';
 import { MAX_MESSAGE_BYTES } from '../../shared/api/limits';
 import type { ArgsOf } from '../../shared/api/registry';
@@ -9,6 +9,13 @@ import type { CanvasId } from '../../shared/canvas';
 import type { Run } from './engine/run/runner';
 import type { PartyId } from '../../shared/model/messages';
 import type { AgentNode, CanvasDocument } from '../../shared/model/canvas';
+import {
+  agentEndpoint,
+  sameEndpoint,
+  shellPrefixesIn,
+  startsWithShell,
+} from '../../shared/model/catalog';
+import type { AgentEndpoint } from '../../shared/model/catalog';
 import type { NeedsItem } from '../../shared/model/needs';
 import { isApproval, isIf, isRepeat } from '../../shared/model/queue';
 import type { QueueItem } from '../../shared/model/queue';
@@ -111,12 +118,14 @@ export function onEveryCarrier<R extends ArgumentRule>(
 }
 
 /**
- * The rules checked on a token's arguments, over the canvases the core runs (`engines`) and what
- * waits for an answer on each, as you see it (`needOf`: an item by its id). R4's (`discard`), on a
- * canvas's lifetime, are its ops' own (ops/files.ts).
+ * The rules checked on a token's arguments, over the canvases the core runs (`engines`), what every
+ * adapter declares (`catalog`), and what waits for an answer on each canvas, as you see it
+ * (`needOf`: an item by its id). R4's (`discard`), on a canvas's lifetime, are its ops' own
+ * (ops/files.ts).
  */
 export function ruleChecks(
   engines: Engines,
+  catalog: Catalog,
   needOf: (canvas: CanvasId, id: string) => NeedsItem | undefined = () => undefined,
 ): Omit<ArgumentChecks, 'discard' | 'restore-code'> {
   /** The open canvas a call names, if it is open. */
@@ -160,20 +169,30 @@ export function ruleChecks(
       },
     },
     // R1: only what you typed may run a shell command, and a body that starts with its recipient's
-    // shell prefix would (src/shared/adapter.ts ConnectionDescriptor.shellPrefix).
+    // shell prefix would (src/shared/adapter.ts ConnectionDescriptor.shellPrefix), its recipient
+    // read through the one resolver (B12 C3). One that runs no connection yet (unchosen, or one
+    // this build lacks) may come to run any: every prefix the catalog declares is refused to it.
     'shell-text': {
       message: ({ canvas, to, body }) => {
         const open = openOf(canvas);
         const node = open?.document.nodes.find((one) => one.id === to);
         if (!open || node?.type !== 'agent') return undefined;
-        const { catalog } = open.engine;
-        const connection = catalog.connectionOf(node.data);
-        const prefix = catalog.shellPrefix(connection);
-        if (prefix === undefined || prefix === '' || !body.trimStart().startsWith(prefix)) {
-          return undefined;
+        const endpoint = agentEndpoint(node.data, catalog);
+        if (endpoint.kind === 'known') {
+          const runs = connectionIn(catalog, endpoint.connection);
+          const prefix = runs?.connection.shellPrefix;
+          if (runs === undefined || !startsWithShell(body, prefix)) return undefined;
+          return {
+            refuse: `It starts with "${prefix}", which ${runs.adapter.name} · ${runs.connection.label} runs as a shell command without asking: only the user may send that.`,
+          };
         }
+        const prefix = shellPrefixesIn(catalog).find((one) => startsWithShell(body, one));
+        if (prefix === undefined) return undefined;
+        const name = nameOf(open.document.nodes, to);
+        const runs =
+          endpoint.kind === 'unchosen' ? 'has no agent chosen yet' : 'runs none this build has';
         return {
-          refuse: `It starts with "${prefix}", which ${catalog.connectionName(connection) ?? 'its connection'} runs as a shell command without asking: only the user may send that.`,
+          refuse: `It starts with "${prefix}", which an agent may run as a shell command without asking, and ${name} ${runs}: only the user may send that.`,
         };
       },
     },
@@ -256,11 +275,13 @@ export function ruleChecks(
   };
 }
 
-/** What the change rules read besides the change: how agents run, and what the run holds. */
+/**
+ * What the change rules read besides the change: what every adapter declares, which the one
+ * resolver reads each agent's endpoint against (B12 C3: there is no default), and what the run
+ * holds.
+ */
 export interface ChangeCheckDeps {
   catalog: Catalog;
-  /** The adapter an agent naming none runs. */
-  defaultAdapter: AdapterId;
   /** The items a canvas's run holds for you now, by their keys (heldBy). */
   held: (canvas: CanvasId) => ReadonlySet<EntityKey>;
   /** How many live agents `party` created: on `canvas`, or on every canvas the core keeps. */
@@ -294,16 +315,13 @@ export function heldBy(run: Run | undefined): Set<EntityKey> {
  */
 export function changeChecks({
   catalog,
-  defaultAdapter,
   held,
   created,
   maxCreated,
 }: ChangeCheckDeps): ChangeChecks {
-  /** The adapter and the connection an agent runs: its adapter's first, if it names none. */
-  const runs = (row: Pick<NodeRow, 'adapter' | 'connection'>): [AdapterId, string | undefined] => {
-    const adapter = row.adapter ?? defaultAdapter;
-    return [adapter, row.connection ?? adapterIn(catalog, adapter)?.connections[0]?.id];
-  };
+  /** What an agent runs, as the one resolver reads it: unchosen is no endpoint but itself. */
+  const runs = (row: Pick<NodeRow, 'adapter' | 'connection'>): AgentEndpoint =>
+    agentEndpoint(row, catalog);
   return {
     // R4: deleting an agent is yours to decide: a token's delete comes to you as a proposal, unless
     // another rule refuses it.
@@ -339,7 +357,7 @@ export function changeChecks({
         [
           ['role', (was.role ?? '') !== (is.role ?? '')],
           ['settings', !sameSettings(was.settings, is.settings)],
-          ['adapter or connection', runs(was).join() !== runs(is).join()],
+          ['adapter or connection', !sameEndpoint(runs(was), runs(is))],
         ] as const
       ).find(([, differs]) => differs);
       return (
@@ -400,17 +418,16 @@ export function changeChecks({
       }
       return undefined;
     },
-    // R8: how an agent that existed runs, its adapter or its connection; and (B11a C1) its
-    // fallback chain, the run's place in it included, and its handoff settings, as JSON says them.
+    // R8: how an agent that existed runs, its adapter or its connection, as the one resolver reads
+    // them (choosing an unchosen agent's is a change); and (B11a C1) its fallback chain, the run's
+    // place in it included, and its handoff settings, as JSON says them.
     connection: (change) => {
       for (const [id, was, is] of keptAgents(change)) {
         const name = nameOf(change.before.nodes, id);
-        if (runs(was).join() !== runs(is).join()) {
-          const [from, to] = [runs(was), runs(is)].map(
-            ([adapter, connection]) => connection ?? adapter,
-          );
+        const [from, to] = [runs(was), runs(is)];
+        if (!sameEndpoint(from, to)) {
           return {
-            refuse: `Only the user changes how ${name} runs (${String(from)}, not ${String(to)}): its adapter and connection are theirs to choose.`,
+            refuse: `Only the user changes how ${name} runs (${endpointText(from)}, not ${endpointText(to)}): its adapter and connection are theirs to choose.`,
           };
         }
         if (!sameJson(canonical(was.fallback), canonical(is.fallback))) {
@@ -426,25 +443,34 @@ export function changeChecks({
       }
       return undefined;
     },
-    // R11: a new agent runs as its adapter's first connection does, in its user's own default
-    // mode, unless it copies the agent it was spawned from; and its party keeps at most
-    // maxCreated() live agents it created: an outside party across every canvas, an agent on its
-    // own (B9 Design §12). Copies count; agents you create count toward no one.
+    // R11: a new agent runs an adapter and connection this build has (B12 C3: never unchosen,
+    // copy or not), as its adapter's first connection does, in its user's own default mode, unless
+    // it copies the agent it was spawned from; and its party keeps at most maxCreated() live agents
+    // it created: an outside party across every canvas, an agent on its own (B9 Design §12).
+    // Copies count; agents you create count toward no one.
     'new-agent': (change, { caller }) => {
       for (const id of change.created) {
         const node = change.after.nodes.find((one) => one.id === id);
         if (node?.type !== 'agent') continue;
         const source = copiedFrom(change, id);
         const name = nameOf(change.after.nodes, id);
-        const adapter = node.data.adapter ?? defaultAdapter;
-        const first = adapterIn(catalog, adapter)?.connections[0]?.id;
+        const endpoint = runs(node.data);
+        if (endpoint.kind !== 'known') {
+          const on =
+            endpoint.kind === 'unchosen'
+              ? 'with none chosen'
+              : `on ${endpoint.connection ?? endpoint.adapter}`;
+          return {
+            refuse: `A token’s new agent runs an agent this build has: only the user adds ${name} ${on}.`,
+          };
+        }
+        const first = adapterIn(catalog, endpoint.adapter)?.connections[0]?.id;
         if (
-          node.data.connection !== undefined &&
-          node.data.connection !== first &&
-          (source === undefined || runs(node.data).join() !== runs(source.data).join())
+          endpoint.connection !== first &&
+          (source === undefined || !sameEndpoint(endpoint, runs(source.data)))
         ) {
           return {
-            refuse: `A token’s new agent runs on its adapter’s first connection, ${first ?? adapter}: only the user runs ${name} on ${node.data.connection}.`,
+            refuse: `A token’s new agent runs on its adapter’s first connection, ${first ?? endpoint.adapter}: only the user runs ${name} on ${endpoint.connection}.`,
           };
         }
         const moded = Object.entries(node.data.settings ?? {}).find(
@@ -612,6 +638,12 @@ function canonical(value: unknown): unknown {
       .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
       .map(([key, one]) => [key, canonical(one)]),
   );
+}
+
+/** What an agent runs, as a refusal says it: its connection, else its adapter, else none chosen. */
+function endpointText(endpoint: AgentEndpoint): string {
+  if (endpoint.connection !== undefined) return endpoint.connection;
+  return endpoint.kind === 'unchosen' ? 'no agent chosen' : endpoint.adapter;
 }
 
 /** Where a change puts an agent, as its manager says it: under an agent, or under none. */

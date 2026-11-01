@@ -23,19 +23,30 @@ export const ApiStatus = z.discriminatedUnion('state', [
 ]);
 export type ApiStatus = z.infer<typeof ApiStatus>;
 
+/** A catalog id: an adapter's, as ID_PATTERN shapes it (never a leading dash), at most 32. */
+const CatalogId = z.string().min(1).max(32).regex(ID_PATTERN);
+
 /** The app's settings (Core Server §4 A). */
 export const settingsOps = {
   'settings.get': define('settings.get', {
     summary:
-      'The default adapter, the consents the user has given for good, by adapter and key, and whether corrallm’s MCP server listens, and where.',
+      'The agent corrallm adds when the user adds one (null: it asks each time; an id this build lacks counts as none), the consents the user has given for good, by adapter and key, and whether corrallm’s MCP server listens, and where.',
     input: z.strictObject({}),
     output: z.strictObject({
-      defaultAdapter: z.string().regex(ID_PATTERN),
+      defaultAdapter: CatalogId.nullable(),
       consents: z.record(
         z.string().regex(ID_PATTERN),
         z.record(z.string().regex(ID_PATTERN), z.literal(true)),
       ),
       api: ApiStatus,
     }),
+  }),
+  // B12 C2: yours alone (the consent deviation, Core Server D8). It writes first, then publishes;
+  // a write that fails changes nothing.
+  'settings.set': define('settings.set', {
+    summary:
+      'Sets the agent corrallm adds when you add one, or null to be asked each time. Yours alone.',
+    input: z.strictObject({ defaultAdapter: CatalogId.nullable() }),
+    output: z.strictObject({ defaultAdapter: CatalogId.nullable() }),
   }),
 } satisfies Partial<Record<OpName, OpDef>>;

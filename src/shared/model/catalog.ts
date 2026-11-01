@@ -25,6 +25,64 @@ interface Runs {
   connection?: ConnectionId;
 }
 
+/**
+ * What an agent runs, as the one resolver reads it (B12 C3): an adapter and connection the catalog
+ * has (`known`); an adapter it names that can't run here (`unavailable`: one the catalog lacks, or
+ * a connection its adapter doesn't offer), both kept as written; or none chosen yet (`unchosen`),
+ * an unknown connection kept as written. No string ever stands for unchosen in a connection's
+ * place.
+ */
+export type AgentEndpoint =
+  | { readonly kind: 'known'; readonly adapter: AdapterId; readonly connection: ConnectionId }
+  | {
+      readonly kind: 'unavailable';
+      readonly adapter: AdapterId;
+      readonly connection?: ConnectionId;
+    }
+  | { readonly kind: 'unchosen'; readonly connection?: ConnectionId };
+
+/**
+ * The one place an agent's identity is read (B12 C3): the adapter it names, else the owner of a
+ * connection it names that the catalog knows, on that connection, or its adapter's first when it
+ * names none. With neither it is unchosen: no preference, registry order, label or other adapter
+ * ever chooses for it.
+ */
+export function agentEndpoint(
+  agent: { readonly adapter?: AdapterId; readonly connection?: ConnectionId },
+  catalog: Catalog,
+): AgentEndpoint {
+  const { adapter, connection } = agent;
+  const named = connection === undefined ? {} : { connection };
+  if (adapter === undefined) {
+    const owner = connection === undefined ? undefined : connectionIn(catalog, connection);
+    return owner === undefined || connection === undefined
+      ? { kind: 'unchosen', ...named }
+      : { kind: 'known', adapter: owner.adapter.id, connection };
+  }
+  const offered = adapterIn(catalog, adapter)?.connections;
+  const runs =
+    connection === undefined
+      ? offered?.[0]?.id
+      : offered?.some((one) => one.id === connection) === true
+        ? connection
+        : undefined;
+  return runs === undefined
+    ? { kind: 'unavailable', adapter, ...named }
+    : { kind: 'known', adapter, connection: runs };
+}
+
+/**
+ * Whether two endpoints are the same, as the resolver reads them: of one kind, naming the same
+ * adapter and connection, as written. Unchosen is no endpoint but itself, as it was written.
+ */
+export function sameEndpoint(a: AgentEndpoint, b: AgentEndpoint): boolean {
+  return (
+    a.kind === b.kind &&
+    ('adapter' in a ? a.adapter : undefined) === ('adapter' in b ? b.adapter : undefined) &&
+    a.connection === b.connection
+  );
+}
+
 export interface EngineCatalog {
   /** The adapter an agent that names none runs (the one a new agent starts with). */
   readonly defaultAdapter: AdapterId;
@@ -105,15 +163,7 @@ export function engineCatalog(catalog: Catalog, defaultAdapter: AdapterId): Engi
       return found && `${found.adapter.name} · ${found.connection.label}`;
     },
     shellPrefix: (id) => connection(id)?.connection.shellPrefix,
-    shellPrefixes: [
-      ...new Set(
-        catalog.adapters.flatMap(({ connections }) =>
-          connections.flatMap(({ shellPrefix }) =>
-            shellPrefix === undefined || shellPrefix === '' ? [] : [shellPrefix],
-          ),
-        ),
-      ),
-    ],
+    shellPrefixes: shellPrefixesIn(catalog),
     isStartMode: (id, mode) => {
       const found = connection(id);
       return found !== undefined && isStartMode(catalog, found.adapter.id, id, mode);
@@ -138,6 +188,19 @@ export function adapterRefusal(
 ): string | undefined {
   if (catalog.adapterOf(connection) === resolved.adapter) return undefined;
   return `Not sent: ${resolved.action} was built for ${resolved.adapter}, but this agent now runs ${catalog.connectionName(connection) ?? connection}. Edit the step or change its backend to check it again.`;
+}
+
+/** Every text any of `catalog`'s connections runs as a shell command, without asking, once each. */
+export function shellPrefixesIn(catalog: Catalog): readonly string[] {
+  return [
+    ...new Set(
+      catalog.adapters.flatMap(({ connections }) =>
+        connections.flatMap(({ shellPrefix }) =>
+          shellPrefix === undefined || shellPrefix === '' ? [] : [shellPrefix],
+        ),
+      ),
+    ),
+  ];
 }
 
 /** Whether `text` starts with `prefix`, the text a connection runs as a shell command, if any. */

@@ -173,9 +173,11 @@ export type Implementation = (args: never, ctx: OpContext) => unknown;
 
 /**
  * The topics a write's receipt may name besides a document's (`canvas:<c>`, which its commit
- * reaches): a canvas's run, sessions, messages, Needs and worktrees (B11 §5, B9a §7).
+ * reaches): the app's settings (B12 C2: `settings.set`), and a canvas's run, sessions, messages,
+ * Needs and worktrees (B11 §5, B9a §7).
  */
 export type ReceiptTopic =
+  | 'settings'
   | `run:${CanvasId}`
   | `sessions:${CanvasId}`
   | `messages:${CanvasId}`

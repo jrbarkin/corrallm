@@ -1,19 +1,22 @@
 import { legacyDirectories } from './workspaces/test-directories';
 import { existsSync } from 'node:fs';
-import { chmod, copyFile, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { chmod, copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { toolName } from '../../shared/api/registry';
 import { PARTIES } from '../../shared/api/surface';
 import { newCanvasId } from '../../shared/canvas';
 import { EXAMPLES } from '../../shared/examples';
 import { isIf, isRepeat } from '../../shared/model/queue';
 import type { QueueItem } from '../../shared/model/queue';
 import type { Job } from '../../shared/adapter';
-import { ADAPTERS, CATALOG, DEFAULT_ADAPTER } from '../sessions/adapters';
+import { listTools } from '../api/mcp';
+import { ADAPTERS, CATALOG } from '../sessions/adapters';
 import { FakeConnector } from '../sessions/fake';
+import { Settings } from '../settings';
 import { createCore } from './core';
 import type { Core, CoreConfig } from './core';
 import { STORE_FILE } from './store/open';
@@ -197,29 +200,41 @@ describe('createCore', () => {
     );
   });
 
-  it('reads the default adapter and the app consents the profile remembers', async () => {
+  it('reads the default agent and the app consents the profile remembers', async () => {
     const consents = { codex: { plan: true }, 'old-adapter': { allowed: true } };
     await writeFile(
       path.join(profile, 'settings.json'),
-      JSON.stringify({ version: 2, consents, api: { port: 12345 } }),
+      JSON.stringify({ version: 2, consents, api: { port: 12345 }, defaultAdapter: 'codex' }),
     );
     const started = await start();
     expect(await started.call('settings.get', {}, CALLERS['outside-read'])).toEqual({
       ok: true,
       value: {
-        defaultAdapter: DEFAULT_ADAPTER,
+        defaultAdapter: 'codex',
         consents,
         api: { state: 'stopped', port: 12345 },
       },
     });
   });
 
-  it('starts with no app consents in a new profile', async () => {
+  it('serves a saved default agent this build lacks as it is: the window treats it as none', async () => {
+    await writeFile(
+      path.join(profile, 'settings.json'),
+      JSON.stringify({ version: 2, consents: {}, defaultAdapter: 'zed' }),
+    );
+    const started = await start();
+    expect(await started.call('settings.get', {}, CALLERS.you)).toMatchObject({
+      ok: true,
+      value: { defaultAdapter: 'zed' },
+    });
+  });
+
+  it('starts with no app consents and no default agent in a new profile', async () => {
     const started = await start();
     expect(await started.call('settings.get', undefined, CALLERS.you)).toEqual({
       ok: true,
       value: {
-        defaultAdapter: DEFAULT_ADAPTER,
+        defaultAdapter: null,
         consents: {},
         api: { state: 'stopped', port: null },
       },
@@ -434,4 +449,154 @@ describe('the core’s database', () => {
       readOnDisk(profile, (disk) => disk.prepare('SELECT min_reader FROM meta').get()),
     ).toEqual({ min_reader: 999 });
   });
+});
+
+/** Whether a file's permissions can keep its owner from reading it: not on Windows, nor as root. */
+const CAN_DENY = process.platform !== 'win32' && process.getuid?.() !== 0;
+
+describe('settings.set: the default agent, yours alone (B12 C2)', () => {
+  const file = () => path.join(profile, 'settings.json');
+  /** A window subscribed to the settings topic: each state it is told. */
+  async function watching(started: Core, id: number) {
+    const window = openWindow(new WindowPorts(started), id);
+    const heard: unknown[] = [];
+    window.link.on('topic', (batch) => {
+      for (const change of batch)
+        if (change.topic === 'settings' && 'replace' in change) heard.push(change.replace);
+    });
+    await window.link.request('call', 'topics.subscribe', { topic: 'settings' });
+    return { ...window, heard };
+  }
+
+  it('is listed for you alone, and refused to every token as human-only, changing nothing', async () => {
+    const started = await start();
+    for (const party of PARTIES.filter((one) => one !== 'you')) {
+      const listed = listTools(started, CALLERS[party]).map((tool) => tool.name);
+      expect(listed, party).not.toContain(toolName('settings.set'));
+      for (const defaultAdapter of ['codex', null]) {
+        expect(
+          await started.call('settings.set', { defaultAdapter }, CALLERS[party]),
+          party,
+        ).toMatchObject({ ok: false, error: { code: 'human-only' } });
+      }
+    }
+    expect(existsSync(file())).toBe(false);
+    expect(await started.call('settings.get', {}, CALLERS.you)).toMatchObject({
+      ok: true,
+      value: { defaultAdapter: null },
+    });
+  });
+
+  it('writes, then shows every window; refuses an id this build lacks; null removes it; the same writes nothing', async () => {
+    const started = await start();
+    const seven = await watching(started, 7);
+    const eight = await watching(started, 8);
+    try {
+      expect(await seven.link.request('call', 'settings.set', { defaultAdapter: 'codex' })).toEqual(
+        {
+          ok: true,
+          value: { ok: true, value: { defaultAdapter: 'codex', revs: { settings: 1 } } },
+        },
+      );
+      for (const window of [seven, eight]) {
+        await vi.waitFor(() => {
+          expect(window.heard).toEqual([expect.objectContaining({ defaultAdapter: 'codex' })]);
+        });
+      }
+      expect(await new Settings(file()).defaultAdapter()).toBe('codex');
+      expect(await started.call('settings.get', {}, CALLERS['outside-read'])).toMatchObject({
+        ok: true,
+        value: { defaultAdapter: 'codex' },
+      });
+
+      // An id this build lacks: refused, and nothing changes.
+      expect(await started.call('settings.set', { defaultAdapter: 'zed' }, CALLERS.you)).toEqual({
+        ok: false,
+        error: { code: 'invalid', sentence: 'There is no adapter zed in this build.' },
+      });
+      expect(await new Settings(file()).defaultAdapter()).toBe('codex');
+
+      // The value it already has: no revision, nothing written (the file keeps its layout).
+      const compact = JSON.stringify({ version: 2, consents: {}, defaultAdapter: 'codex' });
+      await writeFile(file(), compact);
+      expect(await started.call('settings.set', { defaultAdapter: 'codex' }, CALLERS.you)).toEqual({
+        ok: true,
+        value: { defaultAdapter: 'codex', revs: {} },
+      });
+      expect(await readFile(file(), 'utf8')).toBe(compact);
+
+      // None: the field goes, and every window is told.
+      expect(await started.call('settings.set', { defaultAdapter: null }, CALLERS.you)).toEqual({
+        ok: true,
+        value: { defaultAdapter: null, revs: { settings: 2 } },
+      });
+      expect(JSON.parse(await readFile(file(), 'utf8'))).toEqual({ version: 2, consents: {} });
+      for (const window of [seven, eight]) {
+        await vi.waitFor(() => {
+          expect(window.heard.at(-1)).toEqual(expect.objectContaining({ defaultAdapter: null }));
+        });
+        expect(window.heard).toHaveLength(2);
+      }
+    } finally {
+      seven.close();
+      eight.close();
+    }
+  });
+
+  it('refuses a failed write as unavailable, leaving the read and the topic as they were; the next write succeeds', async () => {
+    const started = await start();
+    const window = await watching(started, 7);
+    try {
+      // Its file a folder: written beside it, the move over it fails.
+      await mkdir(file());
+      await writeFile(path.join(file(), 'in-the-way'), '');
+      expect(await started.call('settings.set', { defaultAdapter: 'codex' }, CALLERS.you)).toEqual({
+        ok: false,
+        error: {
+          code: 'unavailable',
+          sentence: 'corrallm couldn’t save your default agent; it is unchanged.',
+        },
+      });
+      expect(await started.call('settings.get', {}, CALLERS.you)).toMatchObject({
+        ok: true,
+        value: { defaultAdapter: null },
+      });
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(window.heard).toEqual([]);
+
+      await rm(file(), { recursive: true });
+      expect(await started.call('settings.set', { defaultAdapter: 'codex' }, CALLERS.you)).toEqual({
+        ok: true,
+        value: { defaultAdapter: 'codex', revs: { settings: 1 } },
+      });
+      expect(await new Settings(file()).defaultAdapter()).toBe('codex');
+      await vi.waitFor(() => {
+        expect(window.heard).toEqual([expect.objectContaining({ defaultAdapter: 'codex' })]);
+      });
+    } finally {
+      window.close();
+    }
+  });
+
+  it.skipIf(!CAN_DENY)(
+    'refuses as unavailable when the settings can’t be read, never writing over them',
+    async () => {
+      const kept = `${JSON.stringify({ version: 2, consents: {}, defaultAdapter: 'codex' })}\n`;
+      await writeFile(file(), kept);
+      await chmod(file(), 0);
+      const started = await start();
+      try {
+        expect(await started.call('settings.set', { defaultAdapter: null }, CALLERS.you)).toEqual({
+          ok: false,
+          error: {
+            code: 'unavailable',
+            sentence: 'corrallm couldn’t read your settings, so your default agent is unchanged.',
+          },
+        });
+      } finally {
+        await chmod(file(), 0o600);
+      }
+      expect(await readFile(file(), 'utf8')).toBe(kept);
+    },
+  );
 });

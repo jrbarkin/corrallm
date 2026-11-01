@@ -49,6 +49,24 @@ it('hosts every operation whose audience includes you, but those main’s native
   expect(GUI_OPS).not.toContain('run.pauseAll');
 });
 
+it('lists settings.set to you alone, a command of no scope with the consent deviation (B12 C2)', () => {
+  expect(SURFACE['settings.set']).toEqual({
+    access: { you: 'all' },
+    kind: 'command',
+    scope: 'none',
+  });
+  expect(DEVIATIONS['settings.set']).toBe('consent');
+  expect(GUI_OPS).toContain('settings.set');
+  for (const party of PARTIES.filter((one) => one !== 'you'))
+    expect(opsFor(SURFACE, party), party).not.toContain('settings.set');
+  // Its input is the one id, or null, of a catalog id's shape: never a leading dash.
+  const input = OPS['settings.set'].input;
+  for (const defaultAdapter of ['codex', null])
+    expect(input.safeParse({ defaultAdapter }).success).toBe(true);
+  for (const args of [{}, { defaultAdapter: '-x' }, { defaultAdapter: 'x'.repeat(33) }])
+    expect(input.safeParse(args).success, JSON.stringify(args)).toBe(false);
+});
+
 const NAME = /^[a-z]+(\.[a-zA-Z]+)?$/;
 const TOOL_NAME = /^[A-Za-z0-9_-]{1,49}$/;
 /** Argument names that hold ids, which must therefore be branded. */
