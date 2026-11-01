@@ -183,20 +183,25 @@ describe('T3a on a window’s port', () => {
     await setup.close();
   });
 
-  it.each(GUI_OPS)('answers %s through a window’s port as directly, for you', async (name) => {
-    for (const { args } of transportCases(
-      setup.core,
-      name,
-      REAL_FIXTURES[name],
-      REAL_OUT_OF_REACH,
-      ['you'],
-    )) {
-      const direct = await setup.core.call(name, args, CALLERS.you);
-      const answer = await window.link.request('call', name, args);
-      expect(answer.ok).toBe(true);
-      expect(JSON.stringify(answer.ok && answer.value), JSON.stringify(args)).toBe(
-        JSON.stringify(direct),
-      );
-    }
-  });
+  it.each(GUI_OPS)(
+    'answers %s through a window’s port as directly, for you',
+    async (name) => {
+      for (const { args } of transportCases(
+        setup.core,
+        name,
+        REAL_FIXTURES[name],
+        REAL_OUT_OF_REACH,
+        ['you'],
+      )) {
+        const direct = await setup.core.call(name, args, CALLERS.you);
+        const answer = await window.link.request('call', name, args);
+        expect(answer.ok).toBe(true);
+        expect(JSON.stringify(answer.ok && answer.value), JSON.stringify(args)).toBe(
+          JSON.stringify(direct),
+        );
+      }
+    },
+    // A case may do real Git work (branch.merge: a merge, then its observation; branch.diff's reads).
+    30_000,
+  );
 });
