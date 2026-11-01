@@ -8,3 +8,7 @@ coverage/
 playwright-report/
 test-results/
 src/shared/test-catalog.json
+
+# Nested agent worktrees
+.claude/worktrees/
+.corral/
