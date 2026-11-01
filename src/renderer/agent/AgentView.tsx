@@ -43,6 +43,7 @@ import { ResumePicker } from './ResumePicker';
 import { Rewind } from './Rewind';
 import { AgentChip } from './AgentChip';
 import { WorkspaceBadge, WorkspaceWait } from '../workspaces/Workspace';
+import { BranchControls } from '../workspaces/BranchReview';
 import { AgentSettingsSummary } from './AgentSettings';
 import type { Relation, StackedAgent } from './Rail';
 import type { ComposerControls } from './Composer';
@@ -504,6 +505,7 @@ export function AgentView({
                 All queues
               </button>
               <WorkspaceBadge agent={node.id} />
+              <BranchControls agent={node.id} />
               <AgentSettingsSummary
                 node={node}
                 options={controls.settingsOptions}

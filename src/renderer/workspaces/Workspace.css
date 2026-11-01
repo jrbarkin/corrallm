@@ -15,6 +15,9 @@
 .workspace-badge small {
   white-space: nowrap;
 }
+.workspace-merge-state {
+  flex: none;
+}
 .workspace-badge button {
   flex: none;
   padding: 0 4px;
