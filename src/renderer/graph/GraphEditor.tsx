@@ -30,7 +30,7 @@ import type { Overlays } from './overlay';
 import { api as windowApi } from '../api/client';
 import { topics as windowTopics, useTopic } from '../api/topics';
 import type { TopicMirror } from '../api/topics';
-import type { GuiApi } from '../../shared/gui-link';
+import type { GuiApi, WindowShow } from '../../shared/gui-link';
 import * as Structure from '../../shared/model/structure';
 import type { CanvasId } from '../../shared/canvas';
 import type { AgentData, CanvasDocument } from '../../shared/model/canvas';
@@ -134,6 +134,15 @@ export function GraphEditor({
 }) {
   const [shown, setShown] = useState<CanvasId>();
   const [failure, setFailure] = useState<string>();
+  // A reopened window can hear its destination before window.get finishes binding its view.
+  const [show, setShow] = useState<WindowShow>();
+  useEffect(
+    () =>
+      client.windowOnShow(({ canvas, need }) => {
+        setShow({ canvas, ...(need ? { need } : {}) });
+      }),
+    [client],
+  );
   useEffect(() => {
     if (canvas !== undefined) return;
     let live = true;
@@ -166,6 +175,7 @@ export function GraphEditor({
         files={files}
         terminalBackend={terminalBackend}
         usageSource={usageSource}
+        show={show}
       />
     </ReactFlowProvider>
   );
@@ -179,6 +189,7 @@ function Editor({
   files,
   terminalBackend,
   usageSource,
+  show,
 }: {
   canvas: CanvasId;
   client: GuiApi;
@@ -187,6 +198,7 @@ function Editor({
   files: boolean;
   terminalBackend: TerminalBackend;
   usageSource: UsageSource | undefined;
+  show: WindowShow | undefined;
 }) {
   const [binding] = useState(() => new CanvasSource(canvas, mirror));
   const canonical = useSyncExternalStore(binding.subscribe, binding.read);
@@ -618,6 +630,7 @@ function Editor({
       setWork(undefined);
       setDrawn(undefined);
       setAgentMenu(undefined);
+      setRequestedNeed(undefined);
       setProblem(undefined);
       setNotice(undefined);
       await binding.ready();
@@ -633,7 +646,11 @@ function Editor({
      * the canvas it names. The canvas before stays open in the core, its changes with it, so
      * nothing asks to discard them; the window says so when it had any.
      */
-    const switchTo = async (action: () => Promise<CanvasId | null>, keepsBefore = true) => {
+    const switchTo = async (
+      action: () => Promise<CanvasId | null>,
+      keepsBefore = true,
+      need?: string,
+    ) => {
       if (switching.current) return;
       switching.current = true;
       setChangingView(true);
@@ -648,6 +665,11 @@ function Editor({
         };
         const id = await target();
         if (id !== null) await load(id);
+        if (need !== undefined) {
+          await binding.ready();
+          if (mirror.snapshot(`needs:${binding.canvas}`)?.items.some((item) => item.id === need))
+            setRequestedNeed({ id: need });
+        }
         if (keepsBefore && before && before.document.id !== binding.canvas && before.meta.edited)
           setNotice([
             `${before.meta.name ?? 'The previous canvas'} stays open with its changes. Find it in Canvases.`,
@@ -662,11 +684,15 @@ function Editor({
       }
     };
     return {
-      show: (canvas: CanvasId) =>
-        switchTo(async () => {
-          await api.windowShow({ canvas });
-          return canvas;
-        }),
+      show: (canvas: CanvasId, need?: string) =>
+        switchTo(
+          async () => {
+            await api.windowShow({ canvas });
+            return canvas;
+          },
+          true,
+          need,
+        ),
       close: (canvas: CanvasId, discard: boolean) =>
         switchTo(async () => {
           const result = await api.canvasClose({ canvas, ...(discard ? { discard: true } : {}) });
@@ -729,7 +755,11 @@ function Editor({
         }).catch(failed('save the canvas'));
       },
     };
-  }, [load, api, binding]);
+  }, [load, api, binding, mirror]);
+  useEffect(() => {
+    if (show) void commands.show(show.canvas, show.need).catch(() => undefined);
+    // The switch reports a refusal through the same file float as any other canvas switch.
+  }, [commands, show]);
   useEffect(() => {
     if (files)
       document.title = `${name ?? 'Untitled'}${canonical?.meta.edited ? ' (edited)' : ''} — corrallm`;
