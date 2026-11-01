@@ -81,7 +81,13 @@ jobs:
           # 7 GB runner (it aborted at ~2 GB).
           NODE_OPTIONS: --max-old-space-size=6144
       - run: pnpm run format:check
-      - run: pnpm run test
+      # macOS: the image's Homebrew Git 2.56.0 crashes (SIGSEGV) in files.test.ts's sparse partial
+      # clone, so Apple's Git 2.50.1 (the laptop's) comes first. The snapshot loop budget is wider
+      # for the 3-core runner (see testing.md).
+      - name: Unit tests
+        run: |
+          if [ "$RUNNER_OS" = macOS ]; then export PATH="/usr/bin:$PATH"; export CORRALLM_SNAPSHOT_LOOP_BUDGET_MS=250; fi
+          pnpm run test
       - run: pnpm run package
 
       # Checks the packaged, fused app on every OS, in the main process and then in its core
