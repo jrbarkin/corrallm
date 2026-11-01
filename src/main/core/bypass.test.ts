@@ -1045,10 +1045,12 @@ describe('on the change itself, whatever builds it', () => {
       editing('u', (data) => ({ ...data, connection: 'claude-code.terminal' })),
     ]) {
       const before = documents.live(BUILT).rev;
-      await expect(build(edit)).rejects.toMatchObject({
-        code: 'refused',
-        message: /Only the user changes how Unchosen runs/,
-      });
+      for (const caller of [OUTSIDE, LEAD]) {
+        await expect(build(edit, caller)).rejects.toMatchObject({
+          code: 'refused',
+          message: /Only the user changes how Unchosen runs \(no agent chosen, not /,
+        });
+      }
       expect(documents.live(BUILT).rev).toBe(before);
     }
     // A change that leaves it unchosen is no change of how it runs.
@@ -1065,12 +1067,20 @@ describe('on the change itself, whatever builds it', () => {
   });
 
   it('refuses a token’s new agent that is unchosen or runs what this build lacks, copy or not (B12 C2)', async () => {
-    for (const edit of [unchosen('new'), adding('new', { adapter: 'zed' })]) {
+    for (const [edit, on] of [
+      [unchosen('new'), 'with none chosen'],
+      [adding('new', { adapter: 'zed' }), 'on zed'],
+    ] as const) {
       const before = documents.live(BUILT).rev;
-      await expect(build(edit)).rejects.toMatchObject({ code: 'refused' });
-      await expect(build(edit, OUTSIDE, new Map([['new', 'a']]))).rejects.toMatchObject({
-        code: 'refused',
-      });
+      for (const caller of [OUTSIDE, LEAD]) {
+        await expect(build(edit, caller)).rejects.toMatchObject({
+          code: 'refused',
+          message: `A token’s new agent runs an agent this build has: only the user adds ${on === 'on zed' ? 'New' : 'Unchosen'} ${on}.`,
+        });
+        await expect(build(edit, caller, new Map([['new', 'a']]))).rejects.toMatchObject({
+          code: 'refused',
+        });
+      }
       expect(documents.live(BUILT).rev).toBe(before);
       // Yours may be either.
       await build(edit, YOU);
