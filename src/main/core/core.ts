@@ -41,6 +41,7 @@ import { WorkspaceStore } from './workspaces/store';
 import type { TreeKey } from './workspaces/gate';
 import { ownerNode } from './workspaces/planner';
 import { WorkspaceCleanup } from './workspaces/cleanup';
+import { upgradeIdentities } from './workspaces/discovery';
 import { WorkspaceChanges } from './workspaces/rebind';
 import type { WorktreeRecord } from './workspaces/store';
 import { RunJournal } from '../run-journal';
@@ -1468,6 +1469,9 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
       ...(config.limitsClock === undefined ? {} : { now: config.limitsClock }),
     },
   );
+  // Repositories kept in the identity's old form (their common directory's inode alone) are
+  // compared by it once and rewritten, before anything below or any call compares one.
+  if (opened.store !== undefined) await upgradeIdentities(workspaceStore);
   // A setup that was running as the last core stopped is interrupted, after the process owner's
   // recovery ended what it left (above), and before any call could start one: never rerun by itself.
   if (opened.store !== undefined) await setups.recover();

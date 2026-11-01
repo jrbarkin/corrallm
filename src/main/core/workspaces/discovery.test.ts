@@ -3,19 +3,29 @@ import {
   readFileSync,
   readdirSync,
   renameSync,
+  statSync,
   symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import path from 'node:path';
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { openTestStore } from '../store/test-store';
-import { discoverRepository, recordRepository, repositoryIdentity } from './discovery';
+import { checkCheckout, verifiedCheckout } from './checkout';
+import {
+  discoverRepository,
+  recordRepository,
+  repositoryIdentity,
+  upgradeIdentities,
+} from './discovery';
 import { WorkspaceStore } from './store';
+import type { RepositoryRecord } from './store';
 import type { Discovery, FoundRepository } from './discovery';
 import { GitRunner } from './git';
 import { commit, git, gitEnvironment, makeRepository, scratch } from './test-git';
+import { testWorkspaces } from './test-workspace';
+import type { TestWorkspaces } from './test-workspace';
 
 /*
  * Safe repository discovery (B9a Design §2, Repository discovery and authority): the picked
@@ -227,3 +237,144 @@ const PROFILE = '0b6f5c1e-2a3d-4e5f-8a9b-0c1d2e3f4a5b';
 const OTHER_PROFILE = '0b6f5c1e-2a3d-4e5f-8a9b-0c1d2e3f4a5c';
 const REPOSITORY = '7c0e9a1e-1b6f-4b4f-9f3a-2d1c0b9a8e70';
 const OTHER_REPOSITORY = '7c0e9a1e-1b6f-4b4f-9f3a-2d1c0b9a8e71';
+
+describe('repositoryIdentity', () => {
+  /** The common directory as `statSync(…, { bigint: true })` reads it. */
+  const statOf = (dev: bigint, ino: bigint, birthtimeNs: bigint) =>
+    vi.fn(() => ({ dev, ino, birthtimeNs }));
+  const BORN = 1_700_000_000_123_456_789n;
+
+  it('is the common directory’s device, inode and birth time: an inode reused is another repository', () => {
+    const stat = statOf(7n, 42n, BORN);
+    const first = repositoryIdentity('/work/app/.git', stat);
+    expect(stat).toHaveBeenCalledWith('/work/app/.git', { bigint: true });
+    expect(first).toBe(`git common-dir v2 dev 7 ino 42 birth ${BORN.toString()}`);
+    // The same directory, read again.
+    expect(repositoryIdentity('/work/app/.git', statOf(7n, 42n, BORN))).toBe(first);
+    // Deleted and made again on the same inode number: born later, so another repository.
+    expect(repositoryIdentity('/work/app/.git', statOf(7n, 42n, BORN + 1n))).not.toBe(first);
+    // The same inode number on another device.
+    expect(repositoryIdentity('/work/app/.git', statOf(8n, 42n, BORN))).not.toBe(first);
+  });
+
+  it('keeps the device and inode alone where the file system keeps no birth time', () => {
+    expect(repositoryIdentity('/work/app/.git', statOf(7n, 42n, 0n))).toBe(
+      'git common-dir v2 dev 7 ino 42',
+    );
+  });
+});
+
+describe.skipIf(process.platform === 'win32')('a repository kept in the form before v2', () => {
+  let made: TestWorkspaces;
+
+  beforeEach(async () => {
+    made = await testWorkspaces();
+  });
+  afterEach(async () => {
+    await made.close();
+  });
+
+  const kept = (id: string): RepositoryRecord => {
+    const record = made.workspaces.repository(id);
+    if (record === undefined) throw new Error(`No repository ${id}.`);
+    return record;
+  };
+  const expected = (workspace: string) =>
+    made.workspaces.jobsOf(workspace).map((job) => job.expectedIdentity);
+
+  /** The old form of `commonDir`'s identity, as a corrallm before v2 wrote it: its inode alone. */
+  const before = (commonDir: string, offset = 0n) =>
+    `git common-dir inode ${(statSync(commonDir, { bigint: true }).ino + offset).toString()}`;
+
+  /** As that corrallm kept it: the repository by `identity`, and its workspaces' jobs expecting it. */
+  async function keepAs(repository: RepositoryRecord, identity: string): Promise<void> {
+    await made.store.write(() => {
+      made.store
+        .prepare('UPDATE repository SET identity = ? WHERE id = ?')
+        .run(identity, repository.id);
+      made.store
+        .prepare(
+          `UPDATE worktree_job SET expected_identity = ?
+           WHERE workspace_id IN (SELECT id FROM worktree WHERE repository_id = ?)`,
+        )
+        .run(identity, repository.id);
+    });
+  }
+
+  it('is compared by its inode once as the core starts, rewritten, then compared strictly', async () => {
+    const { tree } = await made.provision();
+    const record = await made.repository();
+    const now = record.identity;
+    const old = before(record.commonDir);
+    await keepAs(record, old);
+
+    expect(await upgradeIdentities(made.workspaces)).toBe(1);
+    expect(kept(record.id)).toMatchObject({ identity: now });
+    expect(expected(tree.id)).toEqual([now]);
+    expect((await verifiedCheckout(made.git, kept(record.id), tree)).ok).toBe(true);
+
+    // Once: nothing is left in the old form to be compared by its inode.
+    expect(await upgradeIdentities(made.workspaces)).toBe(0);
+    expect(made.workspaces.repositoryAt(record.realRoot, old)).toBeUndefined();
+    // Strictly from then on: the same inode, born at another time, is another repository, and
+    // never compared by its inode again.
+    const reborn = `${now.replace(/ birth [0-9]+$/, '')} birth 1`;
+    await keepAs(record, reborn);
+    expect(await upgradeIdentities(made.workspaces)).toBe(0);
+    expect(await checkCheckout(made.git, kept(record.id), tree)).toMatchObject({
+      ok: false,
+      fault: 'repository-changed',
+    });
+  });
+
+  it('is compared by its inode once as its project folder is found again, then compared strictly', async () => {
+    const { tree } = await made.provision();
+    const record = await made.repository();
+    const now = record.identity;
+    const old = before(record.commonDir);
+    // Its Git directory not there as the core started, say: still in the old form.
+    await keepAs(record, old);
+
+    const again = await made.repository();
+    expect(again).toMatchObject({ id: record.id, identity: now });
+    expect(expected(tree.id)).toEqual([now]);
+    expect(made.workspaces.repositoryAt(record.realRoot, old)).toBeUndefined();
+    expect((await made.repository()).id).toBe(record.id);
+    expect((await verifiedCheckout(made.git, kept(record.id), tree)).ok).toBe(true);
+  });
+
+  it('leaves one whose Git directory has another inode, or is gone, or is kept in the new form already', async () => {
+    const record = await made.repository();
+    const now = record.identity;
+    // Another inode: another repository, as before.
+    const other = before(record.commonDir, 1n);
+    await keepAs(record, other);
+    // Gone just now (a disk not mounted): left to be found again.
+    const gone = path.join(made.root, 'gone');
+    const missing = {
+      ...record,
+      id: '7c0e9a1e-1b6f-4b4f-9f3a-2d1c0b9a8e7a',
+      pickedRoot: gone,
+      realRoot: gone,
+      commonDir: path.join(gone, '.git'),
+      identity: 'git common-dir inode 12345',
+      ownedRoot: path.join(gone, '.corral', 'worktrees', 'profile'),
+    };
+    // A record an older corrallm added beside the one in the new form: never two of one.
+    const twin = {
+      ...record,
+      id: '7c0e9a1e-1b6f-4b4f-9f3a-2d1c0b9a8e7b',
+      identity: before(record.commonDir),
+    };
+    await made.workspaces.write((w) => {
+      w.addRepository(missing);
+      w.addRepository(twin);
+      w.addRepository({ ...record, id: '7c0e9a1e-1b6f-4b4f-9f3a-2d1c0b9a8e7c', identity: now });
+    });
+
+    expect(await upgradeIdentities(made.workspaces)).toBe(0);
+    expect(kept(record.id).identity).toBe(other);
+    expect(kept(missing.id).identity).toBe(missing.identity);
+    expect(kept(twin.id).identity).toBe(twin.identity);
+  });
+});

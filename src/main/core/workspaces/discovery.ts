@@ -1,4 +1,5 @@
 import { lstatSync, readFileSync, realpathSync, statSync } from 'node:fs';
+import type { BigIntStats } from 'node:fs';
 import path from 'node:path';
 
 import { GitError } from './git';
@@ -78,14 +79,88 @@ const CONTROL = /[\u0000-\u001f\u007f]/;
 /** A `.git` file, and a worktree's back-pointer, are a line. */
 const MAX_POINTER_BYTES = 4096;
 
+/** What `repositoryIdentity` reads of the common Git directory: `statSync`'s, in bigints. */
+export type IdentityStat = (
+  file: string,
+  options: { bigint: true },
+) => Pick<BigIntStats, 'dev' | 'ino' | 'birthtimeNs'>;
+
+/** An identity as a corrallm before v2 kept it: the common directory's inode alone. */
+const OLD_IDENTITY = /^git common-dir inode [0-9]+$/;
+const IDENTITY = /^git common-dir v2 dev [0-9]+ ino ([0-9]+)(?: birth -?[0-9]+)?$/;
+
 /**
- * What identifies a repository beside its path: its common Git directory's inode, so a repository
- * made again where one was (deleted and cloned again) is another. Checked again before its
- * workspaces are used; throws if the directory is gone.
+ * What identifies a repository beside its path: its common Git directory's device, inode and birth
+ * time, so a repository made again where one was (deleted and cloned again) is another, even where
+ * the file system gives the new directory the old one's inode number. Where the file system keeps
+ * no birth time (0), the device and inode alone: there, one made again on the inode number of the
+ * one recorded is taken for it. Checked again before its workspaces are used; throws if the
+ * directory is gone.
  */
-export function repositoryIdentity(commonDir: string): string {
-  const { ino } = statSync(commonDir, { bigint: true });
-  return `git common-dir inode ${ino.toString()}`;
+export function repositoryIdentity(commonDir: string, stat: IdentityStat = statSync): string {
+  const { dev, ino, birthtimeNs } = stat(commonDir, { bigint: true });
+  const identity = `git common-dir v2 dev ${dev.toString()} ino ${ino.toString()}`;
+  return birthtimeNs === 0n ? identity : `${identity} birth ${birthtimeNs.toString()}`;
+}
+
+/** The identity `now` names in the old form (its inode alone), which a record may hold. */
+function oldForm(now: string): string | undefined {
+  const ino = IDENTITY.exec(now)?.[1];
+  return ino === undefined ? undefined : `git common-dir inode ${ino}`;
+}
+
+/**
+ * Whether `now` is the identity a record that is never rewritten (a merge's journaled intent)
+ * holds: the same, or its old form once the repository's own record (`kept`) was rewritten to
+ * `now`, its inode compared once (`upgradeIdentities`, `recordRepository`).
+ */
+export function recordedIdentity(recorded: string, now: string, kept: string | undefined): boolean {
+  return recorded === now || (kept === now && oldForm(now) === recorded);
+}
+
+/**
+ * As the core starts, before anything compares them: each repository kept in the old form whose
+ * common directory has that inode now is rewritten to its identity now, with its workspaces' jobs
+ * expecting it (`WorkspaceStore.reidentify`), so it is compared by its inode just this once and
+ * strictly from then on. One whose directory isn't there now is left as it is, to be rewritten as
+ * its project folder is found again (`recordRepository`); one whose inode differs is another
+ * repository, as it was, and so is one another record keeps in the new form already (an older
+ * corrallm's, made beside it). Says how many it rewrote.
+ */
+export async function upgradeIdentities(
+  workspaces: WorkspaceStore,
+  stat: IdentityStat = statSync,
+): Promise<number> {
+  const found: { id: string; realRoot: string; from: string; to: string }[] = [];
+  for (const repository of workspaces.repositories()) {
+    if (!OLD_IDENTITY.test(repository.identity)) continue;
+    let now: string;
+    try {
+      now = repositoryIdentity(repository.commonDir, stat);
+    } catch {
+      continue;
+    }
+    if (oldForm(now) === repository.identity) {
+      found.push({
+        id: repository.id,
+        realRoot: repository.realRoot,
+        from: repository.identity,
+        to: now,
+      });
+    }
+  }
+  if (found.length === 0) return 0;
+  return workspaces.write((w) => {
+    let rewritten = 0;
+    for (const { id, realRoot, from, to } of found) {
+      // As it is within the write, and never a second record of one repository.
+      if (w.repository(id)?.identity === from && w.repositoryAt(realRoot, to) === undefined) {
+        w.reidentify(id, from, to);
+        rewritten += 1;
+      }
+    }
+    return rewritten;
+  });
 }
 
 /** The worktrees `git worktree list --porcelain -z` printed. */
@@ -166,15 +241,17 @@ export function agrees(checkout: string, gitDir: string, commonDir: string): boo
 /**
  * Within a write: keeps the repository found, by its real path and identity. One kept already is
  * found again (its picked path and common directory as they are now; its generation moves on if
- * either changed), its workspaces' folder never moved; a new one (`id`) gets this profile's folder
- * inside its checkout.
+ * either changed), its workspaces' folder never moved; one kept in the old form for the inode found
+ * is compared so this once, and rewritten to the identity found (`upgradeIdentities`); a new one
+ * (`id`) gets this profile's folder inside its checkout.
  */
 export function recordRepository(
   workspaces: WorkspaceStore,
   found: FoundRepository,
   { profile, id }: { profile: string; id: string },
 ): RepositoryRecord {
-  const kept = workspaces.repositoryAt(found.realRoot, found.identity);
+  const kept =
+    workspaces.repositoryAt(found.realRoot, found.identity) ?? keptBefore(workspaces, found);
   if (kept !== undefined) {
     return workspaces.rediscovered(kept.id, {
       pickedRoot: found.pickedRoot,
@@ -190,6 +267,18 @@ export function recordRepository(
     rootKind: 'project',
     ownedRoot: projectOwnedRoot(found.realRoot, profile),
   });
+}
+
+/** The repository found, kept in the old form for its inode: rewritten to the identity found. */
+function keptBefore(
+  workspaces: WorkspaceStore,
+  found: FoundRepository,
+): RepositoryRecord | undefined {
+  const old = oldForm(found.identity);
+  const before = old === undefined ? undefined : workspaces.repositoryAt(found.realRoot, old);
+  return before === undefined
+    ? undefined
+    : workspaces.reidentify(before.id, before.identity, found.identity);
 }
 
 function refuse(reason: DiscoveryRefusal, sentence: string): Discovery {
