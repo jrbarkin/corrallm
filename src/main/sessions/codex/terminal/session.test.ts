@@ -5,6 +5,7 @@ import path from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import type { PromptEnded, PromptEvent } from '../../../../shared/model/prompts';
 import type { CodexMode, SessionEvent } from '../../../../shared/session';
 import type { UsageBackendId } from '../../../../shared/adapter';
 import type { UsageWindows } from '../../../../shared/usage';
@@ -31,6 +32,8 @@ import { UsageReader } from './usage';
 
 let dir: string;
 let events: SessionEvent[];
+/** What its sessions raised and ended for the core's prompt owner (B13 C6), in order. */
+let prompts: (PromptEvent | PromptEnded)[];
 let remembered: string[];
 let runs: Replay[];
 let sessions: LiveSession<CodexMode>[];
@@ -40,6 +43,7 @@ let without: (record: TerminalRecord) => boolean;
 beforeEach(async () => {
   dir = await mkdtemp(path.join(tmpdir(), 'corrallm-codex-terminal-'));
   events = [];
+  prompts = [];
   remembered = [];
   runs = [];
   sessions = [];
@@ -91,7 +95,13 @@ async function start(
   });
   const session = await connector.start(
     { ...SPEC, ...spec },
-    { emit: (event: SessionEvent) => events.push(event), remember: (id) => remembered.push(id) },
+    {
+      emit: (event) => {
+        if (event.type === 'prompt' || event.type === 'prompt-ended') prompts.push(event);
+        else events.push(event);
+      },
+      remember: (id) => remembered.push(id),
+    },
   );
   sessions.push(session);
   return session;
@@ -343,6 +353,48 @@ describe('Codex in a terminal, as the real one ran', () => {
       'end:interrupted',
     ]);
     expect(remembered).toEqual([RECORDED_TURNS_SESSION]);
+  });
+
+  it('raises Action Required to the core’s prompt owner in its own words, with its screen’s last rows, once; answered there as it goes on', async () => {
+    const session = await start(['prompts']);
+    await session.send({ id: 'm1', text: 'Say hi in one word.' });
+    await until(() => {
+      expect(ends()).toBe(1);
+    });
+    expect(prompts).toEqual([]);
+    await session.send({ id: 'm2', text: 'Create a file named bye.txt containing the word bye.' });
+    await until(() => {
+      expect(prompts).toHaveLength(1);
+    });
+    const [raised] = prompts;
+    if (raised?.type !== 'prompt') throw new Error('Nothing was raised');
+    expect(raised.key).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+    );
+    expect(raised.prompt).toEqual({
+      kind: 'approval',
+      title: 'Codex needs you: see its terminal.',
+      answerIn: 'terminal',
+      choices: [],
+      detail: { kind: 'output', text: expect.any(String) as string },
+    });
+    const detail = raised.prompt.detail?.kind === 'output' ? raised.prompt.detail.text : '';
+    expect(detail.split('\n')).toHaveLength(12);
+    expect(detail).toContain('Would you like to run the following command?');
+    expect(detail).toContain("$ printf 'bye' > bye.txt");
+    expect(detail).toContain('1. Yes, proceed (y)');
+    expect(detail.split('\n').at(-1)).toBe('  Press enter to confirm or esc to cancel');
+    // Its title blinks while it waits: nothing more is raised.
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    expect(prompts).toHaveLength(1);
+    session.terminal?.input('y');
+    await until(() => {
+      expect(ends()).toBe(2);
+    });
+    expect(prompts).toEqual([
+      raised,
+      { type: 'prompt-ended', key: raised.key, reason: 'answered-natively' },
+    ]);
   });
 
   it('resumes the agent’s session', async () => {

@@ -128,9 +128,14 @@ export class AppServerConnector implements Connector<CodexMode> {
         },
         settled: () => live.session?.settled(),
         patch: (itemId) => translator.patch(itemId),
+        mcpCall: (itemId) => translator.mcpCall(itemId),
+        mcpCalls: () => translator.mcpCalls(),
       },
       places,
     );
+    // Until X10, each prompt is shown as the events B13 replaces too, answered through the owner:
+    // from the first (an MCP server may ask as the thread starts), before the session runs.
+    host.bridge?.((promptId, answer) => prompts.bridge(promptId, answer));
     const version = /\/(\S+)$/.exec(this.#clientApp)?.[1] ?? '0.0.0';
     const server = await startAppServer({
       codex,
@@ -165,10 +170,23 @@ export class AppServerConnector implements Connector<CodexMode> {
         });
         throw new Error(refused);
       }
+      const needsInstructions =
+        instructions !== undefined || (spec.resume !== null && spec.roleChanged === true);
       const [listed, skilled, limits] = await Promise.all([
         server.request('model/list', { limit: 100 }).catch(() => undefined),
         server.request('skills/list', { cwds: [spec.cwd] }).catch(() => undefined),
         server.request('account/rateLimits/read', {}).catch(() => undefined),
+        // Without a role this read is optional: a missing config leaves the default compaction rule.
+        ...(needsInstructions
+          ? []
+          : [
+              server
+                .request('config/read', { cwd: spec.cwd })
+                .then((response) => {
+                  translator.setConfig(response);
+                })
+                .catch(() => undefined),
+            ]),
       ]);
       const models = readModels(listed);
       const skills = readSkills(skilled);
@@ -179,7 +197,12 @@ export class AppServerConnector implements Connector<CodexMode> {
       // With no supplied instructions or role change, keep native defaults untouched.
       const developerInstructions =
         instructions !== undefined || (spec.resume !== null && spec.roleChanged === true)
-          ? appendRole(await readDeveloperInstructions(server, spec.cwd), instructions)
+          ? appendRole(
+              await readDeveloperInstructions(server, spec.cwd, (response) => {
+                translator.setConfig(response);
+              }),
+              instructions,
+            )
           : undefined;
       const begin = (mode: CodexMode | null, model: string | null) => {
         const settings = mode === null ? undefined : modeSettings(mode);

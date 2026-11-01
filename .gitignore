@@ -2,6 +2,10 @@
 node_modules/
 .pnpm-store/
 
+# Nested agent worktrees
+.claude/worktrees/
+.corral/
+
 # Build output
 .vite/
 out/

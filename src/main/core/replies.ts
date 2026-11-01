@@ -3,10 +3,12 @@ import type { z } from 'zod';
 import type { ReplyAnswer } from '../../shared/api/ops/conversation';
 import type { CanvasId } from '../../shared/canvas';
 import type { NeedsItem } from '../../shared/model/needs';
+import { needFor } from '../../shared/model/prompt-views';
+import type { PromptReader } from '../../shared/model/prompt-views';
 import { andList } from '../../shared/model/words';
 import { OpFailure } from './call';
 import type { OpContext } from './call';
-import { partyIdOf } from './caller';
+import { partyIdOf, promptReaderOf } from './caller';
 import { partyText } from './parties';
 
 /*
@@ -52,7 +54,9 @@ export interface ReplyResult {
     | 'skipped'
     | 'stopped'
     | 'completed'
-    | 'retained';
+    | 'retained'
+    /** A terminal's wait you said isn't one (B13 C7's Not waiting): nothing is recorded. */
+    | 'dismissed';
   raised?: string;
 }
 
@@ -63,10 +67,10 @@ export interface ReplyHandler {
   /** The item `to` names, as it waits now on the canvas, as you see it: none if none does. */
   current(canvas: CanvasId, to: string): NeedsItem | undefined | Promise<NeedsItem | undefined>;
   /**
-   * Why `to` doesn't wait now, if it did (settled, asked again, held by a pause): the failure the
-   * router throws. None: not found.
+   * Why `to` doesn't wait now, if it did (settled, asked again, held by a pause), as `reader` may
+   * be told it: the failure the router throws. None: not found.
    */
-  gone?(canvas: CanvasId, to: string): OpFailure | undefined;
+  gone?(canvas: CanvasId, to: string, reader: PromptReader): OpFailure | undefined;
   /**
    * Why `answer` isn't one the item takes, if it isn't (invalid). None given: it takes one of its
    * choices, with words only where it takes words.
@@ -127,22 +131,25 @@ export class ReplyRouter {
       prefixes.some((prefix) => to.startsWith(`${prefix}/`)),
     );
     if (handler === undefined) throw notFound(to);
-    const item = await handler.current(id, to);
-    if (item === undefined) throw handler.gone?.(id, to) ?? notFound(to);
     const { caller } = ctx;
+    const reader = promptReaderOf(caller);
+    const item = await handler.current(id, to);
+    if (item === undefined) throw handler.gone?.(id, to, reader) ?? notFound(to);
     const by = partyIdOf(caller);
+    // A refusal says only what the caller may read of the item (B13 C11).
+    const { title } = needFor(item, reader);
     // R6: what waits on an agent is never that agent's to answer, whoever may answer it.
     if (caller.kind === 'agent' && caller.canvas === id && item.agent === caller.agent) {
       throw new OpFailure(
         'refused',
-        `An agent never answers what waits on itself: ${item.title} is for ${andList(item.by.map((party) => partyText([], party)))}.`,
+        `An agent never answers what waits on itself: ${title} is for ${andList(item.by.map((party) => partyText([], party)))}.`,
       );
     }
     // R3: the item's `by`, then a choice only you may make.
     if (!item.by.includes(by)) {
       throw new OpFailure(
         'refused',
-        `Only ${andList(item.by.map((party) => (party === 'you' ? 'the user' : partyText([], party))))} may answer ${to}: ${item.title}.`,
+        `Only ${andList(item.by.map((party) => (party === 'you' ? 'the user' : partyText([], party))))} may answer ${to}: ${title}.`,
       );
     }
     const unfit = (handler.fits ?? fitsChoices)(item, answer);

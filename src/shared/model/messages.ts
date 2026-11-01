@@ -1,6 +1,7 @@
 import type { CanvasId } from '../canvas';
 import type { TurnResult } from '../session';
 import { MAX_NODE_ID } from './canvas';
+import type { SettledDecision } from './settled';
 
 /*
  * Messages (API Spec §5): what parties send each other on a canvas, as the core keeps them (its
@@ -98,8 +99,9 @@ export interface MessageDisplay {
  * `task`: the queue task a hand-off, an ask or a verdict belongs to. `turn`: how the turn an
  * agent's reply came from ended, or why a message ended withdrawn or unresolved. `by`: who
  * withdrew it. `resendOf`: the message it sends again, at your request (never a reply to it:
- * `replyTo` is only a reply's, or a record's about another message). Images a message carried
- * are never kept.
+ * `replyTo` is only a reply's, or a record's about another message). `settled`: for a record of a
+ * native prompt's decision, what was decided, typed and value-free (./settled.ts), never changed
+ * after; yours alone to read. Images a message carried are never kept.
  */
 export interface Message {
   id: string;
@@ -116,6 +118,7 @@ export interface Message {
   state: MessageState;
   delivery?: { at: number; as: string; attempt: number };
   by?: PartyId;
+  settled?: SettledDecision;
   /** When it was sent, in epoch ms. */
   at: number;
 }

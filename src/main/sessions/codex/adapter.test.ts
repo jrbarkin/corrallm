@@ -31,8 +31,13 @@ function declared(session: object) {
 }
 
 describe("Codex's adapter", () => {
-  it('declares no proven context source until its context recording lands', () => {
-    for (const connection of descriptor.connections) expect(connection.context).toBe(false);
+  it('declares context on the App Server alone: its Terminal knows no window in production', () => {
+    // App Server: app-server/translate.test.ts replays app-server/fixtures/compact-default.jsonl
+    // and compact-limit.jsonl (Codex 0.162.1, B11a C4). Terminal: its title's percentage is
+    // proven (terminal/tui.test.ts, fixtures/context.jsonl), but no source of its window is
+    // read, so it reports none.
+    expect(connection('codex.app-server').context).toBe(true);
+    expect(connection('codex.terminal').context).toBe(false);
   });
 
   it('declares App Server prompts answerable and Terminal approvals seen, without authority signals', () => {

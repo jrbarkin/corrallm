@@ -20,6 +20,7 @@ import type { Connector } from '../sessions/connector';
 import { CATALOG } from '../sessions/adapters';
 import { FakeConnector } from '../sessions/fake';
 import type { OutsideCaller } from './caller';
+import { mintTrustedPath } from './host';
 import { createCore } from './core';
 import type { Core } from './core';
 import { cursorOf } from './delivery/messages';
@@ -50,9 +51,9 @@ import type { OpFixture, OutOfReach } from './test-registry';
  * `condemned-a` and `condemned-b`, which the worker is linked to).
  * While a call meets R11 (`meeting`), every token's party is at its cap.
  *
- * Its workspace records (B9a; nothing provisions here, the directory resolver is the legacy one),
- * each tree made once and its checkout gone since (lost): the worker and its apprentice share
- * their group's tree (WORKER_WORKTREE), which the worker lists without the apprentice;
+ * Its workspace records: the worker and apprentice share a real, idle tree for Review and
+ * Merge (WORKER_WORKTREE), which the worker lists without the apprentice. Other trees were
+ * made once and their checkouts have gone since (lost):
  * `kept-work` and `kept-work-batch`, in the lead's team, each work alone in a tree of its own, so
  * deleting either asks you (workspace-safety: what it holds can't be read); and a retained tree
  * (KEPT_WORKTREE), whose removal asks you too.
@@ -298,6 +299,8 @@ const LINKS = [
   ['helper', 'unlink-you'],
   ['worker', 'peer'],
   ['lead', 'peer'],
+  // Lets the lead review the worker's shared branch, but never name its hidden apprentice.
+  ['lead', 'worker'],
   ['worker', 'shell'],
   ['lead', 'shell'],
   ['lead', 'deputy'],
@@ -338,12 +341,15 @@ export async function startWorld(): Promise<{
   const profile = await mkdtemp(path.join(tmpdir(), 'corrallm-world-'));
   const project = path.join(profile, 'project');
   await mkdir(project);
+  // The synthetic native sessions are separate from the picked checkout that Merge writes.
+  const sessionFolder = mintTrustedPath(path.join(profile, 'sessions-folder'));
+  await mkdir(sessionFolder);
   // A repository with one commit and no files, so its worktrees' setup command can be kept for it.
   const env = gitEnvironment(path.join(profile, 'home'));
   git(project, env, 'init', '-q', '-b', 'main');
   git(
     project,
-    env,
+    { ...env, GIT_AUTHOR_DATE: '2026-10-26T12:00:00Z', GIT_COMMITTER_DATE: '2026-10-26T12:00:00Z' },
     '-c',
     'user.name=Test',
     '-c',
@@ -447,16 +453,10 @@ export async function startWorld(): Promise<{
         });
       make(KEPT_WORKTREE, 'agent/former');
       w.retain(KEPT_WORKTREE);
-      // In use and bound (the canvas's link is left alone: nothing provisions here): each made
+      // In use and bound: each made
       // once, its checkout gone since, so lost as the core's own check would leave it, and a
       // retry finds nothing to make again (deterministic: no Git work goes on in the background).
       const inUse: [string, `${'agent' | 'group'}/${string}`, readonly string[], string][] = [
-        [
-          WORKER_WORKTREE,
-          'group/worker',
-          ['worker', 'apprentice'],
-          `${KEPT_WORKTREE.slice(0, -2)}60`,
-        ],
         ...Object.entries(KEPT_WORK).map(
           ([agent, id], i): [string, `agent/${string}`, string[], string] => [
             id,
@@ -480,6 +480,35 @@ export async function startWorld(): Promise<{
         w.transition(id, { from: 'creating', to: 'missing', errorCode: 'checkout-missing' });
         for (const agent of agents) w.bind(CANVAS, agent, id);
       }
+    });
+    // A real, idle shared branch for Review and an already-merged Merge. Fixed Git dates make
+    // its compared pins stable across transport retries; no native session runs in this tree.
+    const ids = ['4e5f6071-8293-4a4b-9cbd-3f4a5b6c7d81', WORKER_WORKTREE];
+    const runner = new GitRunner({
+      environment: () => Promise.resolve(env),
+      hooks: path.join(profile, 'fixture-hooks'),
+    });
+    const provisioner = new Provisioner({
+      workspaces,
+      git: runner,
+      profile: WORLD_PROFILE,
+      ids: () => ids.shift() ?? crypto.randomUUID(),
+    });
+    const found = await provisioner.repository(project);
+    if (found.kind !== 'repository') throw new Error('The fixture needs a Git repository.');
+    const tree = await provisioner.provision({
+      canvas: CANVAS,
+      repository: found.record,
+      owner: 'group/worker',
+      within: (w, made) => {
+        w.bindCanvas(CANVAS, found.record.id);
+        for (const agent of ['worker', 'apprentice']) w.bind(CANVAS, agent, made.id);
+      },
+    });
+    if (tree.state !== 'setup')
+      throw new Error(`The fixture tree did not populate: ${tree.errorCode ?? tree.state}`);
+    await workspaces.write((w) => {
+      w.transition(tree.id, { from: 'setup', to: 'ready' });
     });
   } finally {
     await store.close();
@@ -517,7 +546,28 @@ export async function startWorld(): Promise<{
       app: { name: 'corrallm', version: '1.0.0' },
       check: true,
       distribution: 'local',
-      directoryResolver: legacyDirectories,
+      directoryResolver: (projects) => {
+        const legacy = legacyDirectories(projects);
+        return {
+          workingDirectory: async (canvas, agent) => {
+            const directory = await legacy.workingDirectory(canvas, agent);
+            return directory.state === 'ready' ? { ...directory, cwd: sessionFolder } : directory;
+          },
+          projectRoot: (canvas) => legacy.projectRoot(canvas),
+          onAvailability: (canvas, listener) => legacy.onAvailability(canvas, listener),
+        };
+      },
+      // Registry parity tests exercise Git results, not OS process inspection.
+      watchFolder: () => ({ close: () => undefined }),
+      children: {
+        platform: 'darwin',
+        inspect: (pid) => ({ started: 1, group: pid }),
+        alive: () => false,
+        signal: () => undefined,
+        wait: () => Promise.resolve(),
+        pause: () => undefined,
+        now: Date.now,
+      },
       leads: isLead,
       // Each call a second after the last: no token's writes are limited here.
       limitsClock: () => (clock += 1000),
@@ -530,7 +580,7 @@ export async function startWorld(): Promise<{
           [CONTROL.connection.id]: controlConnector(),
           [SPENDING.connection.id]: silent(SPENDING.adapter.id),
         },
-        environment: () => Promise.resolve({}),
+        environment: () => Promise.resolve(env),
         // Never the user's own conversations: the world's, for its folder.
         conversations: {
           [CONTROL.adapter.id]: {
@@ -658,6 +708,13 @@ export async function startWorld(): Promise<{
         core.engines.canvas(CANVAS)?.engine.run.stop();
         return () => undefined;
       }
+      if (rule === 'merge-permits') {
+        const caller = CALLERS['outside-write'] as OutsideCaller;
+        Object.assign(caller, { merge: false });
+        return () => {
+          Object.assign(caller, { merge: true });
+        };
+      }
       if (rule === 'discard') {
         const granted = (CALLERS['outside-write'] as OutsideCaller).canvases as CanvasId[];
         const before = granted.length;
@@ -690,6 +747,14 @@ const lifetime = (n: number) => `3d4e5f60-7182-4a3b-8cad-2e3f4a5b6c${String(n).p
 
 /** The world's profile id, which its worktrees' branches and folders would be named by. */
 const WORLD_PROFILE = '4e5f6071-8293-4a4b-9cbd-3f4a5b6c7d8e';
+const BRANCH_TIP = 'fc0c4e764a79c32ba8aeb05c0f97ada0fafd9c7f';
+const BRANCH_MERGE = {
+  canvas: CANVAS,
+  agent: 'worker',
+  source: { ref: `refs/heads/corrallm/${WORLD_PROFILE}/${WORKER_WORKTREE}`, oid: BRANCH_TIP },
+  into: { ref: 'refs/heads/main', oid: BRANCH_TIP },
+};
+
 /** A request id for each fixture of the worktrees' setup that writes. */
 const setupRequest = (n: number) =>
   `4e5f6071-8293-4a4b-9cbd-3f4a5b6c7d${String(n).padStart(2, '0')}`;
@@ -740,7 +805,36 @@ export const REAL_FIXTURES: Readonly<Record<OpName, OpFixture>> = {
       'text',
     ],
   },
-  // The worker's tree was made, then lost: tried again, it is still gone (missing), as it says.
+  'branch.diff': {
+    valid: [{ canvas: CANVAS, agent: 'worker' }],
+    invalid: [
+      {},
+      { canvas: CANVAS, agent: '' },
+      { canvas: 'nope', agent: 'worker' },
+      { canvas: CANVAS, agent: 'worker', limit: 0 },
+      { canvas: CANVAS, agent: 'worker', limit: 201 },
+      { canvas: CANVAS, agent: 'worker', after: 'x'.repeat(513) },
+      { canvas: CANVAS, agent: 'worker', after: 'e30=' },
+      { canvas: CANVAS, agent: 'worker', path: '/another/checkout' },
+    ],
+  },
+  'branch.merge': {
+    // Even already-merged calls publish their job's admission and end: receipts are per call,
+    // not per party. C6 observes before answering, so each revision names that call's settled state.
+    fresh: ['revs'],
+    valid: [{ ...BRANCH_MERGE, request: controlRequest(400) }],
+    invalid: [
+      {},
+      { ...BRANCH_MERGE, request: controlRequest(401), source: undefined },
+      { ...BRANCH_MERGE, request: controlRequest(401), into: undefined },
+      { ...BRANCH_MERGE, request: undefined },
+      { ...BRANCH_MERGE, request: controlRequest(401), agent: '' },
+      { ...BRANCH_MERGE, request: controlRequest(401), force: true },
+      { ...BRANCH_MERGE, request: controlRequest(401), uncommitted: { choice: 'commit' } },
+    ],
+    meetsRule: { 'merge-permits': { ...BRANCH_MERGE, request: controlRequest(402) } },
+  },
+  // Retrying the worker's ready tree neither forces nor remakes it.
   'worktree.retry': {
     fresh: ['revs'],
     valid: [{ canvas: CANVAS, agent: 'worker', request: controlRequest(392) }],
@@ -2059,11 +2153,11 @@ const AGENTS_OUT_OF_REACH: Readonly<Record<string, Partial<Record<Reach, readonl
   // A lead's write reaches its team; its read, its links too.
   lead: {
     team: ['worker', 'apprentice', 'peer', 'shell', 'stranger'],
-    linked: ['worker', 'apprentice', 'stranger'],
+    linked: ['apprentice', 'stranger'],
   },
   // A worker reaches the agents linked to it, never its own children; or, for its own, itself.
   worker: {
-    linked: ['lead', 'helper', 'apprentice', 'stranger'],
+    linked: ['helper', 'apprentice', 'stranger'],
     own: ['lead', 'helper', 'apprentice', 'peer', 'shell', 'stranger'],
   },
 };

@@ -192,7 +192,7 @@
             "form": "none"
           },
           "signals": false,
-          "context": false,
+          "context": true,
           "startModes": [
             "manual",
             "acceptEdits",
@@ -224,7 +224,7 @@
             "form": "answerable"
           },
           "signals": true,
-          "context": false,
+          "context": true,
           "startModes": [
             "manual",
             "acceptEdits",
@@ -519,7 +519,7 @@
             "form": "answerable"
           },
           "signals": false,
-          "context": false,
+          "context": true,
           "startModes": [
             "read-only",
             "auto",

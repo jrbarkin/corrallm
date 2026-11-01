@@ -4,7 +4,8 @@ import type { Catalog } from '../../../../shared/adapter';
 import type { AgentNode } from '../../../../shared/model/canvas';
 import type { CanvasId } from '../../../../shared/canvas';
 import { engineCatalog } from '../../../../shared/model/catalog';
-import { needs, withoutChoices } from '../../../../shared/model/needs-selectors';
+import { needs } from '../../../../shared/model/needs-selectors';
+import { needFor } from '../../../../shared/model/prompt-views';
 import type { QueueItem, QueueStep } from '../../../../shared/model/queue';
 import { heldAsks } from '../../../../shared/model/run-words';
 import { MADE_UP } from '../../../../shared/test-made-up';
@@ -131,7 +132,7 @@ describe('step action admission', () => {
         answerIn: 'api',
         choices: [{ value: 'skip' }, { value: 'stop' }],
       });
-      expect(need && withoutChoices(need).choices).toEqual([]);
+      expect(need && needFor(need, 'token').choices).toEqual([]);
       for (const choice of ['retry', 'goOn', 'continue', 'switch'])
         run.decide('a', 'step', { choice });
       run.decide('a', 'step', { reply: 'Try anyway' });

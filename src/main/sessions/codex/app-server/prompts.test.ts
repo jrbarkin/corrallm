@@ -1,342 +1,341 @@
-import path from 'node:path';
-
 import { describe, expect, it, vi } from 'vitest';
 
-import type { SessionAnswer, SessionEvent } from '../../../../shared/session';
+import type { PromptEnded, PromptEvent } from '../../../../shared/model/prompts';
+import type { SessionAnswer } from '../../../../shared/session';
+import type { HostEvent } from '../../connector';
 import { Prompts } from './prompts';
-import { RECORDED_PLACES, recorded } from './recorded';
+import { recordedAsks, recordedPlaces } from './recorded';
+import type { Fixture, RecordedAsk } from './recorded';
+import { Translator } from './translate';
 
-/** Prompts, with what they show recorded, and the patches the translator would know. */
-function prompts() {
-  const events: SessionEvent[] = [];
-  const settled = vi.fn();
-  const asking = new Prompts(
-    {
-      emit: (event) => events.push(event),
-      settled,
-      patch: (itemId) =>
-        itemId === 'call_1'
-          ? {
-              summary: 'hello.txt',
-              detail: { kind: 'diff', added: 1, removed: 0, lines: [{ kind: 'add', text: 'hi' }] },
-            }
-          : undefined,
-    },
-    RECORDED_PLACES,
-  );
-  /** The prompt shown last. */
-  const shown = () => {
-    const prompt = events
-      .filter((e) => e.type === 'permission' || e.type === 'question' || e.type === 'elicitation')
-      .at(-1);
-    if (!prompt) throw new Error('nothing was asked');
-    return prompt;
-  };
-  /** Asks, then answers it as the user did; resolves with what Codex is told. */
-  const answered = async (method: string, params: unknown, answer: SessionAnswer, id = 0) => {
-    const reply = asking.request(method, params, id);
-    await vi.waitFor(() => {
-      expect(asking.waiting).toBe(true);
-    });
-    asking.answer(shown().id, answer);
-    return reply;
-  };
-  return { asking, events, settled, shown, answered };
-}
-
-/** The command approval Codex asked for in the recording. */
-const recordedApproval = () => {
-  const line = recorded('turns').find(
-    ({ msg }) => msg.method === 'item/commandExecution/requestApproval',
-  );
-  if (!line) throw new Error('no approval recorded');
-  return line.msg.params;
-};
-
-const permission = (answer: 'once' | 'always' | 'deny'): SessionAnswer => ({
-  kind: 'permission',
-  answer,
-});
+/*
+ * Codex's requests as B13 C5 raises them: each a prompt of the core's owner's under a key minted
+ * for that request, answered or declined only by that key, ended when Codex stops waiting or the
+ * session closes, and always answered. Until X10 converts the renderer, each is shown as the events
+ * B13 replaces too, whose answers reach Codex only through the owner (`bridge`).
+ */
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
-describe('Codex’s approvals, as prompts', () => {
-  it('asks to run a command as Codex words it, offering to keep the rule it proposes', async () => {
-    const { answered, shown, events } = prompts();
-    await expect(
-      answered('item/commandExecution/requestApproval', recordedApproval(), permission('once')),
-    ).resolves.toEqual({ decision: 'accept' });
-    expect(shown()).toEqual({
-      type: 'permission',
-      id: expect.stringMatching(UUID) as string,
-      tool: 'exec_command',
-      summary: "printf 'hi' > hello.txt",
-      always: "Yes, and don't ask again for commands that start with `printf 'hi' > hello.txt`",
-      title: 'May I create hello.txt containing hi in the workspace?',
-    });
-    expect(events.at(-1)).toEqual({ type: 'status', status: 'waiting' });
-
-    await expect(
-      answered('item/commandExecution/requestApproval', recordedApproval(), permission('always')),
-    ).resolves.toEqual({
-      decision: {
-        acceptWithExecpolicyAmendment: {
-          execpolicy_amendment: ['/bin/zsh', '-lc', "printf 'hi' > hello.txt"],
-        },
+/** Prompts, the events it emits, a translator that read what came before; `decline` as the owner. */
+function prompts({ decline }: { decline?: string } = {}) {
+  const events: HostEvent[] = [];
+  const settled = vi.fn();
+  const translator = new Translator({ places: recordedPlaces('p1') });
+  const asking: Prompts = new Prompts(
+    {
+      emit: (event) => {
+        events.push(event);
+        if (decline !== undefined && event.type === 'prompt')
+          asking.answers.decline(event.key, decline);
       },
-    });
-    // No stops the turn, as the TUI's "No, and tell Codex what to do differently" does.
-    await expect(
-      answered('item/commandExecution/requestApproval', recordedApproval(), permission('deny')),
-    ).resolves.toEqual({ decision: 'cancel' });
-  });
-
-  it('offers what Codex offers: this session, a host, or no “always” at all', async () => {
-    const { answered, shown } = prompts();
-    const base = { itemId: 'exec-2', command: '/bin/zsh -lc "curl example.com"' };
-    await answered(
-      'item/commandExecution/requestApproval',
-      { ...base, availableDecisions: ['accept', 'acceptForSession', 'decline'] },
-      permission('deny'),
-    ).then((reply) => {
-      // Without cancel on offer, No declines (it goes on without running it).
-      expect(reply).toEqual({ decision: 'decline' });
-    });
-    expect(shown()).toMatchObject({
-      summary: 'curl example.com',
-      always: "Yes, and don't ask again for this command in this session",
-    });
-    await answered(
-      'item/commandExecution/requestApproval',
-      {
-        ...base,
-        networkApprovalContext: { host: 'example.com', protocol: 'https' },
-        availableDecisions: ['accept', 'acceptForSession', 'cancel'],
-        reason: 'to fetch the page',
-      },
-      permission('always'),
-    ).then((reply) => {
-      expect(reply).toEqual({ decision: 'acceptForSession' });
-    });
-    expect(shown()).toMatchObject({
-      summary: 'https://example.com',
-      always: 'Yes, and allow this host for this conversation',
-      title: 'Codex wants to reach example.com: to fetch the page',
-    });
-    await answered(
-      'item/commandExecution/requestApproval',
-      { ...base, availableDecisions: ['accept', 'cancel'] },
-      permission('once'),
-    );
-    expect(shown()).toMatchObject({ always: null });
-  });
-
-  it('asks to apply a patch, showing its diff', async () => {
-    const { answered, shown } = prompts();
-    await expect(
-      answered(
-        'item/fileChange/requestApproval',
-        { itemId: 'call_1', reason: null },
-        permission('always'),
-      ),
-    ).resolves.toEqual({ decision: 'acceptForSession' });
-    expect(shown()).toEqual({
-      type: 'permission',
-      id: expect.stringMatching(UUID) as string,
-      tool: 'apply_patch',
-      summary: 'hello.txt',
-      always: "Yes, and don't ask again for these files",
-      detail: { kind: 'diff', added: 1, removed: 0, lines: [{ kind: 'add', text: 'hi' }] },
-    });
-  });
-
-  it('asks for more permissions, for this turn or the session', async () => {
-    const { answered, shown } = prompts();
-    const params = {
-      itemId: 'perm-1',
-      reason: 'to install packages',
-      permissions: {
-        network: { enabled: true },
-        fileSystem: { read: null, write: ['/Users/someone/.npm'] },
-      },
-    };
-    await expect(
-      answered('item/permissions/requestApproval', params, permission('always')),
-    ).resolves.toEqual({
-      permissions: params.permissions,
-      scope: 'session',
-    });
-    expect(shown()).toMatchObject({
-      tool: 'permissions',
-      summary: `network access; write ${path.join('~', '.npm')}`,
-      title: 'Codex wants more permissions: to install packages',
-    });
-    await expect(
-      answered('item/permissions/requestApproval', params, permission('deny')),
-    ).resolves.toEqual({
-      permissions: {},
-      scope: 'turn',
-    });
-  });
-
-  it('asks Codex’s questions, and answers each by its id', async () => {
-    const { answered, shown } = prompts();
-    const params = {
-      itemId: 'call_q',
-      isBlocking: true,
-      questions: [
-        {
-          id: 'db',
-          header: 'Database',
-          question: 'Which database?',
-          isOther: true,
-          isSecret: false,
-          options: [
-            { label: 'Postgres', description: 'Recommended' },
-            { label: 'SQLite', description: 'Simplest' },
-          ],
-        },
-        {
-          id: 'name',
-          header: 'Name',
-          question: 'What is it called?',
-          isOther: true,
-          isSecret: false,
-          options: null,
-        },
-      ],
-    };
-    await expect(
-      answered('item/tool/requestUserInput', params, {
-        kind: 'question',
-        answers: ['SQLite', 'shop'],
-      }),
-    ).resolves.toEqual({ answers: { db: { answers: ['SQLite'] }, name: { answers: ['shop'] } } });
-    expect(shown()).toEqual({
-      type: 'question',
-      id: expect.stringMatching(UUID) as string,
-      questions: [
-        {
-          header: 'Database',
-          text: 'Which database?',
-          options: [
-            { label: 'Postgres', description: 'Recommended' },
-            { label: 'SQLite', description: 'Simplest' },
-          ],
-          multiple: false,
-        },
-        { header: 'Name', text: 'What is it called?', options: [], multiple: false },
-      ],
-    });
-  });
-
-  it('asks an MCP server’s form as questions, and gives its values typed', async () => {
-    const { answered } = prompts();
-    const params = {
-      threadId: 't',
-      turnId: 'u',
-      serverName: 'tickets',
-      mode: 'form',
-      _meta: null,
-      message: 'New ticket.',
-      requestedSchema: {
-        type: 'object',
-        properties: {
-          priority: {
-            type: 'string',
-            oneOf: [
-              { const: 'p1', title: 'Urgent' },
-              { const: 'p3', title: 'Low' },
-            ],
-          },
-          points: { type: 'number', title: 'Points' },
-          public: { type: 'boolean', title: 'Public?' },
-        },
-      },
-    };
-    await expect(
-      answered('mcpServer/elicitation/request', params, {
-        kind: 'question',
-        answers: ['Urgent', '3', 'No'],
-      }),
-    ).resolves.toEqual({
-      action: 'accept',
-      content: { priority: 'p1', points: 3, public: false },
-      _meta: null,
-    });
-  });
-
-  it.each(['accept', 'decline', 'cancel'] as const)(
-    'keeps a URL elicitation in its url field and returns the user’s %s action',
-    async (action) => {
-      const { answered, shown } = prompts();
-      const url = 'https://signin.example.test/connect?token=only-for-the-person';
-      await expect(
-        answered(
-          'mcpServer/elicitation/request',
-          { serverName: 'tracker', mode: 'url', message: 'Connect the tracker', url },
-          { kind: 'elicitation', action },
-        ),
-      ).resolves.toEqual({ action, content: null, _meta: null });
-      expect(shown()).toEqual({
-        type: 'elicitation',
-        id: expect.stringMatching(UUID) as string,
-        server: 'tracker',
-        message: 'Connect the tracker',
-        url,
-      });
+      settled,
+      patch: (itemId) => translator.patch(itemId),
+      mcpCall: (itemId) => translator.mcpCall(itemId),
+      mcpCalls: () => translator.mcpCalls(),
     },
+    recordedPlaces('p1'),
   );
-
-  it('cancels a URL elicitation when Codex resolves its request and refuses a later answer', async () => {
-    const { asking, shown, events } = prompts();
-    const response = asking.request(
-      'mcpServer/elicitation/request',
-      {
-        serverName: 'tracker',
-        mode: 'url',
-        message: 'Connect the tracker',
-        url: 'https://signin.example.test/connect',
-      },
-      7,
+  /** Asks a recorded request, as Codex asked it, after what it said before. */
+  const ask = (recorded: RecordedAsk, id: string | number = recorded.id) => {
+    for (const { method, params } of recorded.before) translator.notification(method, params);
+    return asking.request(recorded.method, recorded.params, id);
+  };
+  const raised = () => events.filter((event): event is PromptEvent => event.type === 'prompt');
+  const ended = () => events.filter((event): event is PromptEnded => event.type === 'prompt-ended');
+  const key = (index = -1) => {
+    const found = raised().at(index);
+    if (!found) throw new Error('nothing raised');
+    return found.key;
+  };
+  /** The id of the event B13 replaces that shows the last prompt. */
+  const shown = () => {
+    const found = events.findLast(
+      (event) =>
+        event.type === 'permission' ||
+        event.type === 'question' ||
+        event.type === 'plan' ||
+        event.type === 'elicitation',
     );
-    const { id } = shown();
-    asking.resolved(7);
-    await expect(response).resolves.toEqual({ action: 'cancel', content: null, _meta: null });
-    expect(events).toContainEqual({ type: 'withdrawn', id });
+    if (!found || !('id' in found)) throw new Error('nothing shown');
+    return found;
+  };
+  /** Answers the shown prompt as an old card would: through the owner, by its key. */
+  const answerShown = (answer: SessionAnswer, id = shown().id) => {
+    const bridged = asking.bridge(id, answer);
+    asking.answers.answer(bridged.key, bridged.answer);
+  };
+  return { asking, events, settled, ask, raised, ended, key, shown, answerShown };
+}
+
+function asks(fixture: Fixture): RecordedAsk[] {
+  return recordedAsks(fixture);
+}
+function first(fixture: Fixture, nth = 0): RecordedAsk {
+  const found = asks(fixture)[nth];
+  if (!found) throw new Error(`${fixture} has no request #${String(nth)}`);
+  return found;
+}
+
+describe('Prompts: each request Codex makes raised to the core under a fresh key', () => {
+  it('raises a recorded approval, shows it as before, and tells Codex only the owner’s answer', async () => {
+    const asked = first('turns');
+    const { asking, events, ask, key, settled } = prompts();
+    const told = ask(asked);
+    expect(events).toEqual([
+      {
+        type: 'prompt',
+        key: expect.stringMatching(UUID) as unknown,
+        prompt: expect.objectContaining({ kind: 'approval', answerIn: 'api' }) as unknown,
+      },
+      {
+        type: 'permission',
+        id: expect.stringMatching(/^prompt:[0-9a-f-]{36}$/) as unknown,
+        tool: 'exec_command',
+        summary: "printf 'hi' > hello.txt",
+        always: "Yes, and don't ask again for commands that start with `printf 'hi' > hello.txt`",
+        title: 'May I create hello.txt containing hi in the workspace?',
+      },
+      { type: 'status', status: 'waiting' },
+    ]);
+    expect(asking.waiting).toBe(true);
+    // An answer it doesn't offer is refused, and it still waits.
     expect(() => {
-      asking.answer(id, { kind: 'elicitation', action: 'accept' });
+      asking.answers.answer(key(), { kind: 'choice', value: 'acceptForSession' });
+    }).toThrow(/not offered/);
+    asking.answers.answer(key(), { kind: 'choice', value: 'accept' });
+    // As recorded.
+    await expect(told).resolves.toEqual(asked.result);
+    expect(asking.waiting).toBe(false);
+    expect(settled).toHaveBeenCalledOnce();
+    expect(() => {
+      asking.answers.answer(key(), { kind: 'choice', value: 'accept' });
     }).toThrow(/no longer asked/);
   });
 
-  it('withdraws a prompt Codex stops waiting for, and answers it anyway', async () => {
-    const { asking, events, settled, shown } = prompts();
-    const reply = asking.request('item/commandExecution/requestApproval', recordedApproval(), 7);
-    await vi.waitFor(() => {
-      expect(asking.waiting).toBe(true);
+  it('gives two approvals of one item keys of their own: an answer to one never answers the other (F14)', async () => {
+    const [, command, input] = asks('approvals');
+    if (!command || !input) throw new Error('not recorded');
+    const { asking, ask, key } = prompts();
+    const commandTold = ask(command);
+    const one = key();
+    asking.answers.answer(one, { kind: 'choice', value: 'accept' });
+    await expect(commandTold).resolves.toEqual(command.result);
+    const inputTold = ask(input);
+    const two = key();
+    expect(two).not.toBe(one);
+    // A late answer meant for the first is refused: the second still waits.
+    expect(() => {
+      asking.answers.answer(one, { kind: 'choice', value: 'accept' });
+    }).toThrow(/no longer asked/);
+    expect(asking.waiting).toBe(true);
+    asking.answers.answer(two, { kind: 'choice', value: 'cancel' });
+    await expect(inputTold).resolves.toEqual(input.result);
+  });
+
+  it('declines with Codex’s nonapproval and shows nothing of a request the owner declines as it comes', async () => {
+    const { events, ask } = prompts({ decline: 'corrallm declined this request: too many wait.' });
+    await expect(ask(first('turns'))).resolves.toEqual({ decision: 'cancel' });
+    await expect(ask(first('permissions'))).resolves.toEqual({ permissions: {}, scope: 'turn' });
+    await expect(ask(first('question'))).resolves.toEqual({ answers: {} });
+    await expect(ask(first('mcp-approvals', 3))).resolves.toEqual({
+      action: 'cancel',
+      content: null,
+      _meta: null,
     });
+    expect(events.map(({ type }) => type)).toEqual(['prompt', 'prompt', 'prompt', 'prompt']);
+  });
+
+  it('declines what corrallm can’t pass on faithfully, telling the user, never raising it', async () => {
+    const { events, ask } = prompts();
+    const asked = first('mcp-approvals', 0);
+    // Its tool's call was never seen.
+    await expect(ask({ ...asked, before: [] })).resolves.toEqual({
+      action: 'decline',
+      content: null,
+      _meta: null,
+    });
+    expect(events).toEqual([
+      {
+        type: 'notice',
+        id: expect.any(String) as unknown,
+        level: 'warning',
+        text: 'Codex asked to approve a tool call of MCP server “probe” corrallm couldn’t tell, so it was declined.',
+      },
+    ]);
+  });
+
+  it('ends a request Codex stops waiting for, answering it still; a numeric id is not its text', async () => {
+    const asked = first('turns');
+    const { asking, events, ask, key, ended, shown, settled } = prompts();
+    const told = ask(asked, 7);
     const { id } = shown();
+    asking.resolved('7');
+    expect(asking.waiting).toBe(true);
     asking.resolved(7);
-    await expect(reply).resolves.toEqual({ decision: 'cancel' });
-    expect(events).toContainEqual({
-      type: 'withdrawn',
-      id,
-    });
+    await expect(told).resolves.toEqual({ decision: 'cancel' });
+    expect(ended()).toEqual([{ type: 'prompt-ended', key: key(), reason: 'withdrawn' }]);
+    expect(events).toContainEqual({ type: 'withdrawn', id });
     expect(settled).toHaveBeenCalled();
     expect(() => {
-      asking.answer(id, permission('once'));
+      asking.answers.answer(key(), { kind: 'choice', value: 'accept' });
     }).toThrow(/no longer asked/);
+    // Codex says so after every answer too: then it ends nothing.
+    asking.resolved(7);
+    expect(ended()).toHaveLength(1);
   });
 
-  it('refuses what it does not handle, and tells the time', async () => {
+  it('withdraws every open request through the owner as the session closes, each answered', async () => {
+    const { asking, ask, ended } = prompts();
+    const command = ask(first('turns'), 1);
+    const question = ask(first('question'), 2);
+    asking.withdrawAll();
+    await expect(command).resolves.toEqual({ decision: 'cancel' });
+    await expect(question).resolves.toEqual({ answers: {} });
+    expect(ended().map(({ reason }) => reason)).toEqual(['withdrawn', 'withdrawn']);
+    expect(asking.waiting).toBe(false);
+  });
+
+  it('answers what it doesn’t handle as unhandled, and tells the time', async () => {
     const { asking } = prompts();
     await expect(asking.request('item/tool/call', {}, 1)).rejects.toMatchObject({ code: -32601 });
-    await expect(asking.request('account/chatgptAuthTokens/refresh', {}, 2)).rejects.toMatchObject({
-      code: -32601,
-    });
     const { currentTimeAt } = (await asking.request('currentTime/read', { threadId: 't' }, 3)) as {
       currentTimeAt: number;
     };
     expect(Math.abs(currentTimeAt - Date.now() / 1000)).toBeLessThan(5);
+  });
+});
+
+describe('Prompts: the events B13 replaces, answered only through the owner (until X10)', () => {
+  it('bridges prototype-shaped question ids without dropping the person’s answer', async () => {
+    const h = prompts();
+    const told = h.ask({
+      ...first('question'),
+      params: {
+        questions: [
+          { id: '__proto__', header: 'Pick', question: 'Which?', isOther: true, options: [] },
+        ],
+      },
+    });
+    const bridged = h.asking.bridge(h.shown().id, { kind: 'question', answers: ['chosen'] });
+    expect(bridged.answer).toEqual({
+      kind: 'questions',
+      answers: Object.fromEntries([['__proto__', { text: 'chosen' }]]),
+    });
+    h.asking.answers.answer(bridged.key, bridged.answer);
+    await expect(told).resolves.toEqual({
+      answers: Object.fromEntries([['__proto__', { answers: ['chosen'] }]]),
+    });
+  });
+  it('takes an old card’s “always” as the decision it shows: Codex’s first that keeps', async () => {
+    const asked = first('mcp-approvals', 1);
+    const { ask, shown, answerShown } = prompts();
+    const told = ask(asked);
+    expect(shown()).toEqual({
+      type: 'permission',
+      id: expect.stringMatching(/^prompt:/) as unknown,
+      tool: 'mcp__probe__save_note',
+      summary: 'b',
+      always: 'Allow for this session',
+      title: 'Allow the probe MCP server to run tool "save_note"?',
+    });
+    answerShown({ kind: 'permission', answer: 'always' });
+    // As recorded: allowed for the session.
+    await expect(told).resolves.toEqual(asked.result);
+  });
+
+  it('takes an old card’s No as Codex’s No, and its once as Yes', async () => {
+    const { ask, answerShown } = prompts();
+    const command = ask(first('turns'));
+    answerShown({ kind: 'permission', answer: 'deny', feedback: 'not now' });
+    await expect(command).resolves.toEqual({ decision: 'cancel' });
+    const permissions = ask(first('permissions'));
+    answerShown({ kind: 'permission', answer: 'once' });
+    await expect(permissions).resolves.toEqual({
+      permissions: { network: { enabled: true }, fileSystem: null },
+      scope: 'turn',
+    });
+  });
+
+  it('takes an old card’s answers to questions by their order, a pick or words', async () => {
+    const asked = first('question');
+    const { ask, shown, answerShown } = prompts();
+    const told = ask(asked);
+    expect(shown()).toEqual({
+      type: 'question',
+      id: expect.stringMatching(/^prompt:/) as unknown,
+      questions: [
+        {
+          header: 'Filename',
+          text: 'Should the new file be named a.txt or b.txt?',
+          options: [
+            { label: 'a.txt (Recommended)', description: 'Plan to create a file named a.txt.' },
+            { label: 'b.txt', description: 'Plan to create a file named b.txt.' },
+          ],
+          multiple: false,
+        },
+      ],
+    });
+    answerShown({ kind: 'question', answers: ['c.txt'] });
+    await expect(told).resolves.toEqual(asked.result);
+  });
+
+  it('shows a form’s fields and a link in the core’s words, and takes their answers', async () => {
+    const form = first('mcp-approvals', 3);
+    const link = first('mcp-approvals', 4);
+    const { ask, shown, answerShown } = prompts();
+    const formTold = ask(form);
+    expect(shown()).toMatchObject({
+      type: 'elicitation',
+      server: 'probe',
+      message: 'Fill in your profile.',
+      fields: expect.arrayContaining([
+        expect.objectContaining({ name: 'age', kind: 'integer' }),
+      ]) as unknown,
+    });
+    const values = (form.result as { content: Record<string, never> }).content;
+    answerShown({ kind: 'elicitation', action: 'accept', values });
+    await expect(formTold).resolves.toEqual(form.result);
+    const linkTold = ask(link);
+    expect(shown()).toEqual({
+      type: 'elicitation',
+      id: expect.stringMatching(/^elicitation:/) as unknown,
+      server: 'probe',
+      message: 'MCP server “probe” asks you to open a link on auth.example.com',
+      url: 'https://auth.example.com/sign-in?state=probe',
+    });
+    answerShown({ kind: 'elicitation', action: 'accept' });
+    await expect(linkTold).resolves.toEqual(link.result);
+  });
+
+  it('declines a secret question while the old events show prompts: they keep every answer', async () => {
+    const asked = first('question');
+    const params = asked.params as { questions: Record<string, unknown>[] };
+    const { events, ask } = prompts();
+    await expect(
+      ask({
+        ...asked,
+        params: { ...params, questions: params.questions.map((q) => ({ ...q, isSecret: true })) },
+      }),
+    ).resolves.toEqual({ answers: {} });
+    expect(events).toEqual([
+      {
+        type: 'notice',
+        id: expect.any(String) as unknown,
+        level: 'warning',
+        text: 'Codex asked a secret question, which corrallm can’t ask yet, so it was declined.',
+      },
+    ]);
+  });
+
+  it('refuses an old answer the prompt doesn’t take, and one no longer asked', () => {
+    const { asking, ask, shown } = prompts();
+    void ask(first('turns'));
+    expect(() => asking.bridge(shown().id, { kind: 'question', answers: ['yes'] })).toThrow(
+      /isn’t one this request takes/,
+    );
+    expect(() => asking.bridge('prompt:gone', { kind: 'permission', answer: 'once' })).toThrow(
+      /no longer asked/,
+    );
   });
 });

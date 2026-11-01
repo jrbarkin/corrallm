@@ -44,6 +44,9 @@ type ToolEvent = Extract<SessionEvent, { type: 'tool' }>;
 /** How long a running command's output goes without being shown, at most. */
 export const OUTPUT_EVERY_MS = 150;
 
+/** Native user turns synthesized from a prompt answer, never ordinary authored messages. */
+export const PROMPT_REPLY_ID_PREFIX = 'corrallm-prompt-reply:';
+
 const LOGIN_HELP =
   'corrallm uses Codex’s own login: log Codex in again in a terminal (`codex login --with-api-key`), then send your message again.';
 
@@ -69,6 +72,25 @@ export interface ProposedPlan {
   text: string;
 }
 
+/**
+ * What a file change would do, as its approval prompt shows it: its entry, and each file it
+ * writes as Codex gave it (one moved, where it goes too).
+ */
+export interface Patch {
+  summary: string;
+  detail: ToolDetail | undefined;
+  /** Each file's path (Codex's own, absolute) and its diff, as Codex gave them. */
+  files: { path: string; diff?: string }[];
+}
+
+/** An MCP tool call, as Codex reported it starting: what its approval prompt names. */
+export interface McpCall {
+  id: string;
+  server: string;
+  tool: string;
+  arguments: unknown;
+}
+
 export class Translator {
   readonly #places: Places;
   readonly #history: boolean;
@@ -87,7 +109,9 @@ export class Translator {
   /** Commands whose output has more to show. */
   readonly #pending = new Set<string>();
   /** File changes' entries, by their item's id: for their approval prompts. */
-  readonly #patches = new Map<string, { summary: string; detail: ToolDetail | undefined }>();
+  readonly #patches = new Map<string, Patch>();
+  /** MCP tool calls still running, by their item's id: for their approval prompts. */
+  readonly #mcpCalls = new Map<string, McpCall>();
   /** Subagents' threads, and the entry their work nests under (the call that spawned each). */
   readonly #children = new Map<string, string>();
   /** The plan proposed in the turn going on. */
@@ -111,6 +135,7 @@ export class Translator {
   }
   #context: number | null = null;
   #window: number | null = null;
+  #compactLimit: number | null = null;
   #limits: UsageLimit[] | undefined;
   /** The usage last told, so that the same is not told again. */
   #told: string | undefined;
@@ -124,14 +149,31 @@ export class Translator {
     this.#usageOut = usage;
   }
 
+  /** The native configured limit can lower, never raise, the model's default point. */
+  setConfig(response: unknown): void {
+    const limit = property(property(response, 'config'), 'model_auto_compact_token_limit');
+    this.#compactLimit =
+      typeof limit === 'number' && Number.isSafeInteger(limit) && limit > 0 ? limit : null;
+  }
+
   /** Whether a running command has output not shown yet: `flush` shows it. */
   get pendingOutput(): boolean {
     return this.#pending.size > 0;
   }
 
   /** What a file change would do (its approval prompt shows it): its files and their diffs. */
-  patch(itemId: string): { summary: string; detail: ToolDetail | undefined } | undefined {
+  patch(itemId: string): Patch | undefined {
     return this.#patches.get(itemId);
+  }
+
+  /** The MCP tool call item `itemId`, while it runs (its approval prompt names it). */
+  mcpCall(itemId: string): McpCall | undefined {
+    return this.#mcpCalls.get(itemId);
+  }
+
+  /** Every MCP tool call still running, in the order they started. */
+  mcpCalls(): McpCall[] {
+    return [...this.#mcpCalls.values()];
   }
 
   /** The plan proposed in the turn that just ended, if any (it is taken: asked once). */
@@ -360,7 +402,14 @@ export class Translator {
         // Live, the session told the user's message as it sent it.
         if (!this.#history) return [];
         const clientId = text(property(item, 'clientId'));
-        return [{ type: 'user', id: clientId ?? id, text: inputText(property(item, 'content')) }];
+        return [
+          {
+            type: 'user',
+            id: clientId ?? id,
+            text: inputText(property(item, 'content')),
+            ...(clientId?.startsWith(PROMPT_REPLY_ID_PREFIX) ? { promptReply: true } : {}),
+          },
+        ];
       }
       default:
         return [];
@@ -449,11 +498,14 @@ export class Translator {
     parent: string | undefined,
   ): SessionEvent[] {
     if (!Array.isArray(changes) || id === '') return [];
+    const raw: Patch['files'] = [];
     const files = changes.flatMap((change) => {
       const file = text(property(change, 'path'));
       if (file === undefined) return [];
       const kind = property(change, 'kind');
       const moved = text(property(kind, 'move_path'));
+      raw.push({ path: file, diff: text(property(change, 'diff')) ?? '' });
+      if (moved !== undefined) raw.push({ path: moved });
       const patch = text(property(change, 'diff')) ?? '';
       const detail =
         property(kind, 'type') === 'add'
@@ -466,6 +518,7 @@ export class Translator {
       return [{ summary, detail }];
     });
     this.#patches.set(id, {
+      files: raw,
       summary: files.map((file) => file.summary).join(', '),
       detail:
         files.length === 1
@@ -495,6 +548,9 @@ export class Translator {
   #mcp(id: string, item: unknown, done: boolean, nest: { parent?: string }): ToolEvent {
     const server = text(property(item, 'server')) ?? '';
     const tool = text(property(item, 'tool')) ?? '';
+    if (done || this.#history) this.#mcpCalls.delete(id);
+    else if (server !== '' && tool !== '')
+      this.#mcpCalls.set(id, { id, server, tool, arguments: property(item, 'arguments') });
     const error = text(property(property(item, 'error'), 'message'));
     const status = done ? statusOf(property(item, 'status'), this.#history) : 'running';
     const result = property(item, 'result');
@@ -634,8 +690,10 @@ export class Translator {
     // What the last request took in and wrote: how full the context is now.
     const last = property(property(usage, 'last'), 'totalTokens');
     const window = property(usage, 'modelContextWindow');
-    if (typeof last === 'number') this.#context = last;
-    if (typeof window === 'number') this.#window = window;
+    this.#context =
+      typeof last === 'number' && Number.isSafeInteger(last) && last >= 0 ? last : null;
+    this.#window =
+      typeof window === 'number' && Number.isSafeInteger(window) && window > 0 ? window : null;
     return this.#usage();
   }
 
@@ -645,7 +703,17 @@ export class Translator {
       type: 'usage',
       usage: {
         costUsd: null,
-        context: null,
+        context:
+          this.#context === null || this.#window === null
+            ? null
+            : {
+                used: this.#context,
+                window: this.#window,
+                compactAt: Math.min(
+                  Math.floor(this.#window * (90 / 95)),
+                  this.#compactLimit ?? this.#window,
+                ),
+              },
         contextTokens: this.#context,
         contextWindow: this.#window,
         ...(this.#limits === undefined ? {} : { limits: this.#limits }),
@@ -894,7 +962,7 @@ function jsonText(value: unknown): string | undefined {
 }
 
 /** What a tool's arguments act on, in a line: their first short text, or their JSON. */
-function argumentsSummary(args: unknown): string {
+export function argumentsSummary(args: unknown): string {
   if (typeof args === 'string') return firstLine(args);
   if (typeof args !== 'object' || args === null) return '';
   const first = Object.values(args).find(

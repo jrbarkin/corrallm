@@ -755,23 +755,27 @@ function deniedWith(answer: PromptAnswer): string {
 
 /** An input shown whole, or a marked preview of one too big; a command always whole. */
 function shownInput(tool: string, input: Record<string, unknown>, cuts: Cuts): PromptJson {
-  if (
-    COMMANDS.has(tool) ||
-    boundedPromptJson(input, MAX_PROMPT_INPUT_BYTES, MAX_PROMPT_INPUT_DEPTH)
-  )
-    return input as PromptJson;
-  let json: string;
+  return COMMANDS.has(tool) ? (input as PromptJson) : boundedInput(input, cuts);
+}
+
+/**
+ * An input shown whole, or a marked preview of one too big (what the Terminal connection, which
+ * answers nothing, shows of any input, a command's too).
+ */
+export function boundedInput(input: unknown, cuts: Cuts): PromptJson {
+  if (boundedPromptJson(input, MAX_PROMPT_INPUT_BYTES, MAX_PROMPT_INPUT_DEPTH)) return input;
+  let json: string | undefined;
   try {
     json = JSON.stringify(input);
   } catch {
-    json = '';
+    json = undefined;
   }
   cuts.cut = true;
-  return `${json.slice(0, INPUT_PREVIEW)}…`;
+  return `${(json ?? '').slice(0, INPUT_PREVIEW)}…`;
 }
 
 /** What a request would do, in at most twelve lines, each of a bounded length. */
-function shownDetail(detail: ToolDetail | undefined, cuts: Cuts): ToolDetail | undefined {
+export function shownDetail(detail: ToolDetail | undefined, cuts: Cuts): ToolDetail | undefined {
   if (detail === undefined) return undefined;
   const shown = preview(detail, DETAIL_LINES);
   if (shown !== detail) cuts.cut = true;
@@ -791,7 +795,7 @@ function shownDetail(detail: ToolDetail | undefined, cuts: Cuts): ToolDetail | u
 }
 
 /** Content cut to its bound, and whether anything was. */
-class Cuts {
+export class Cuts {
   cut = false;
 
   text(value: string, max = MAX_PROMPT_TEXT_LENGTH): string {

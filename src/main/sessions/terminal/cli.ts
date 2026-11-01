@@ -1,4 +1,5 @@
-import type { SessionMode, TerminalAsk, TurnReason } from '../../../shared/session';
+import type { AdapterPrompt } from '../../../shared/model/prompts';
+import type { SessionMode, SessionUsage, TerminalAsk, TurnReason } from '../../../shared/session';
 import type { UsageWindows } from '../../../shared/usage';
 import type { HookEvent, HookRegistration } from './hooks';
 import type { Screen } from './screen';
@@ -56,8 +57,12 @@ export type TerminalSignal<M extends SessionMode> =
   | { kind: 'state'; state: CliState }
   | { kind: 'mode'; mode: M }
   | { kind: 'model'; model: string }
-  /** What it is about to ask the user in its terminal (a permission, questions, a plan). */
-  | { kind: 'ask'; ask: TerminalAsk }
+  /**
+   * What it is about to ask the user in its terminal (a permission, questions, a plan), as the
+   * core's prompt (B13 C6: answered in its terminal, in its hook's words), and as the event B13
+   * replaces lists it (`ask`, until X11 removes it). Told only where the prompt can be made.
+   */
+  | { kind: 'ask'; ask: TerminalAsk; prompt: AdapterPrompt }
   /** It needs the user, as its notification says (what it says). */
   | { kind: 'needs'; text: string };
 
@@ -75,6 +80,8 @@ export interface TerminalUsage {
 
 /** What its status line was given, as its CLI reads it (`statusLine`). */
 export interface StatusLineReading {
+  /** The CLI's context on its own meter's basis, or null if it cannot say. */
+  context?: SessionUsage['context'];
   /** Its account's usage limits' windows, for main's readings, if it says any. */
   usage: UsageWindows | undefined;
   /**
@@ -130,6 +137,13 @@ export interface TerminalCli<M extends SessionMode> {
    */
   trusting?(screen: Screen): boolean;
   /**
+   * What its screen shows of a wait only its report describes (as its own dialog draws it), read
+   * once the screen has settled after the wait began: the detail of the prompt raised for it, at
+   * most its last twelve lines. Undefined where the screen shows nothing. A CLI whose hooks
+   * describe what it waits for has none.
+   */
+  waitDetail?(screen: Screen): string | undefined;
+  /**
    * Whether it is still getting ready: it holds a message sent
    * meanwhile until then, so the message is waited for rather than given up on.
    */
@@ -160,6 +174,8 @@ export interface TerminalCli<M extends SessionMode> {
    * untrusted JSON: read, never acted on beyond.
    */
   statusLine?(input: HookEvent): StatusLineReading;
+  /** Context read by this adapter from its title or hooks. */
+  context?(): SessionUsage['context'];
   /**
    * Reads its account's usage limits apart from its terminal, when the session starts and after
    * each turn ends (before it ends one the CLI ended with an error without saying why, to tell

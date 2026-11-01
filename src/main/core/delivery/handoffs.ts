@@ -14,7 +14,7 @@ const AcceptedTurns = z.array(z.string().min(1).max(128)).max(ACCEPTED_TURNS);
 
 /*
  * Each agent's latest handoff (B11a Design §12 C7, §12.4), as the core keeps it: a row of
- * `handoff` (schema 7) per agent while it is on the canvas, in memory and in the profile's
+ * `handoff` (schema 8) per agent while it is on the canvas, in memory and in the profile's
  * database. The text of a handoff accepted is written with the write that records the reply that
  * held it (it is kept in memory at once, and whatever the canvas writes next writes it: the reply's
  * record goes in that same write); a switch's carry is staged within the switch's own commit

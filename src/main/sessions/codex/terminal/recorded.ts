@@ -20,9 +20,21 @@ import { Screen } from '../../terminal/screen';
  *   shaded), in Read only: "Say hi in one word.", "Create a file named hi.txt containing the word
  *   hi." (approved with y), "Write the numbers from 1 to 400, one per line, as plain text."
  *   (interrupted with Escape), then closed (SIGHUP).
+ * - context (Codex 0.162.1, B11a C4; GPT-6-Luna at low effort, then GPT-5.6-Luna; /work/smoke/ctx3):
+ *   its window titles as corrallm asks for them (`["context-used","activity","run-state"]`) with the
+ *   hooks it ran, its screen's compaction notices, and the keys sent. Only titles (a spinner
+ *   frame's change kept out), hooks (what corrallm reads), keys and notes are kept, not its
+ *   screen. Its model window was lowered for the recording alone (`-c model_context_window=50000`,
+ *   so 47,500 usable) and a compaction limit of 40,000 set (`-c model_auto_compact_token_limit`),
+ *   neither of which its title shows. Four messages of filler text (the pasted text is left out),
+ *   which compacted it as the fourth began (hook SessionStart, source compact); then `/model` to
+ *   GPT-5.6-Luna at low effort (picker keys 8, 1); then a short message, which compacted it again.
+ *   The hooks' times are lined up with the keys by the first prompt, to within a second. The
+ *   token counts beside it in the tests (the session's own `token_count` records, numbers only)
+ *   are what its rollout file held for the same session.
  */
 
-export type TerminalFixture = 'prompts' | 'resume' | 'resume-missing' | 'turns';
+export type TerminalFixture = 'prompts' | 'resume' | 'resume-missing' | 'turns' | 'context';
 
 /** The recorded sessions' ids (their threads'): prompts' (and resume's), and turns'. */
 export const RECORDED_SESSION = '01a13450-a090-78e2-aba2-01792d6d732d';

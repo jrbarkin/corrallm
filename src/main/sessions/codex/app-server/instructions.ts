@@ -4,8 +4,11 @@ import { property } from '../../transcript';
 export async function readDeveloperInstructions(
   server: { request(method: string, params: unknown): Promise<unknown> },
   cwd: string,
+  onRead?: (response: unknown) => void,
 ): Promise<string | undefined> {
-  const config = property(await server.request('config/read', { cwd }), 'config');
+  const response = await server.request('config/read', { cwd });
+  onRead?.(response);
+  const config = property(response, 'config');
   if (typeof config !== 'object' || config === null || Array.isArray(config)) {
     throw new Error('Codex did not return its current developer instructions.');
   }

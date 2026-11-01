@@ -18,13 +18,11 @@ import type {
   McpChange,
   McpServer,
   PermissionMode,
-  SessionAnswer,
   SessionEvent,
   SlashCommand,
   UserMessage,
   TurnResult,
 } from '../../../../shared/session';
-import type { PromptAnswer } from '../../../../shared/model/prompts';
 import type { LiveSession, PromptAnswers, SessionHost } from '../../connector';
 import type { Inbox } from './inbox';
 import { mcpServer } from './mcp';
@@ -209,14 +207,6 @@ export class SdkSession implements LiveSession {
     return this.#prompts.answers;
   }
 
-  /**
-   * Transitional (B13 C4, until X10; X11 removes it): the key of what an event B13 replaces shows,
-   * and the answer given to it as its prompt takes it, for the core's owner to answer.
-   */
-  bridge(promptId: string, answer: SessionAnswer): { key: string; answer: PromptAnswer } {
-    return this.#prompts.bridge(promptId, answer);
-  }
-
   async interrupt(): Promise<void> {
     if (this.#pending.size > 0) this.#interrupting = true;
     const interrupt: Interrupt = this.#query.interrupt.bind(this.#query);
@@ -319,7 +309,7 @@ export class SdkSession implements LiveSession {
 
   async #read(): Promise<void> {
     try {
-      for await (const message of this.#query) this.#receive(message);
+      for await (const message of this.#query) await this.#receive(message);
       if (!this.#closing) {
         this.#host.emit(
           this.#pending.size > 0
@@ -338,7 +328,26 @@ export class SdkSession implements LiveSession {
     }
   }
 
-  #receive(message: SDKMessage): void {
+  async #receive(message: SDKMessage): Promise<void> {
+    if (message.type === 'result') {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        const summary = await Promise.race([
+          this.#query.getContextUsage({ detail: 'summary' }),
+          new Promise<undefined>((resolve) => {
+            timer = setTimeout(() => {
+              resolve(undefined);
+            }, 2000);
+          }),
+        ]);
+        this.#translator.setContextUsage(summary);
+      } catch {
+        this.#translator.setContextUsage(undefined);
+      } finally {
+        clearTimeout(timer);
+      }
+      if (this.#closing) return;
+    }
     this.#host.activity?.();
     // Its id, once a turn has made it a conversation to resume (its transcript is written from
     // the first message), and again when /clear starts a new one.

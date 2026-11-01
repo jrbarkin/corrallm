@@ -34,7 +34,13 @@ export function mergeHistory(shown: readonly Entry[], past: readonly Entry[]): E
             ? same
             : merged.findLastIndex((entry, i) => i <= Math.min(...places) && entry.kind === 'user');
         const shown = merged[place];
-        if (shown?.kind === 'user') merged[place] = { ...shown, text: user.text };
+        if (shown?.kind === 'user') {
+          merged[place] = {
+            ...shown,
+            text: user.text,
+            ...(user.promptReply ? { promptReply: true } : {}),
+          };
+        }
       }
       after = endOfTurn(merged, Math.max(...places));
       continue;

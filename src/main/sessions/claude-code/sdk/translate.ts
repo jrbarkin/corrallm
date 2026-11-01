@@ -20,6 +20,7 @@ import type {
   ToolStatus,
   TurnResult,
 } from '../../../../shared/session';
+import { compactAt, tokenCount } from '../context';
 import { claudeFailure, isLoginError } from '../claude-errors';
 import { notice, resetTime } from '../../transcript';
 import type { Places } from './tools';
@@ -133,7 +134,11 @@ export class Translator {
   #cost: number | null = null;
   #context: number | null = null;
   #window: number | null = null;
-  /** The model the CLI said it runs (init), by its id: whose context window to show. */
+  #maxOutput: number | null = null;
+  #compactAt: number | null = null;
+  /** Whether the CLI compacts by itself: it says not when auto-compact is turned off. */
+  #autoCompact = true;
+  /** The last top-level response's model (initially init's): whose window to show. */
   #running: string | undefined;
   /** When a limit hit (a rejected request) resets, to say with its error. */
   #reset: { at: number; window: string | undefined } | undefined;
@@ -294,18 +299,28 @@ export class Translator {
           : undefined;
     const events: SessionEvent[] = [];
     if (parent === undefined && message.error === undefined) {
+      if (message.message.model !== this.#running) {
+        const hadWindow = this.#window !== null;
+        this.#running = message.message.model;
+        this.#window = this.#maxOutput = this.#compactAt = null;
+        if (hadWindow) events.push(this.#usage());
+      }
       // What the reply took in (input, cache) and wrote: how full the context is now. The CLI's
       // own messages (an error, history) may carry no usage.
-      const used = [
+      const counts = [
         'input_tokens',
         'cache_creation_input_tokens',
         'cache_read_input_tokens',
         'output_tokens',
-      ].reduce((sum, name) => {
-        const tokens = property(usage, name);
-        return sum + (typeof tokens === 'number' ? tokens : 0);
-      }, 0);
-      if (used > 0 && used !== this.#context) {
+      ].map((name) => property(usage, name));
+      const sum = counts.reduce<number>((sum, value) => sum + (tokenCount(value) ? value : 0), 0);
+      const used =
+        counts.some((value) => tokenCount(value)) &&
+        counts.every((value) => value === undefined || tokenCount(value)) &&
+        tokenCount(sum)
+          ? sum
+          : null;
+      if (used !== this.#context) {
         this.#context = used;
         if (this.#window !== null) events.push(this.#usage());
       }
@@ -659,11 +674,14 @@ export class Translator {
   /** A turn ended: what it cost, and why, if it failed. */
   #result(result: SDKResultMessage): SessionEvent[] {
     this.#cost = result.total_cost_usd;
-    const windows = Object.entries(result.modelUsage);
-    const window =
-      windows.find(([model]) => model === this.#running)?.[1].contextWindow ??
-      Math.max(0, ...windows.map(([, usage]) => usage.contextWindow));
-    if (window > 0) this.#window = window;
+    const models = Object.entries(result.modelUsage);
+    // Never take a subagent's larger window for this session. A single model is unambiguous.
+    const usage =
+      models.find(([model]) => model === this.#running)?.[1] ??
+      (this.#running === undefined && models.length === 1 ? models[0]?.[1] : undefined);
+    this.#window =
+      tokenCount(usage?.contextWindow) && usage.contextWindow > 0 ? usage.contextWindow : null;
+    this.#maxOutput = tokenCount(usage?.maxOutputTokens) ? usage.maxOutputTokens : null;
     const events: SessionEvent[] = [this.#usage()];
     const shown = this.#failed;
     this.#failed = false;
@@ -747,12 +765,32 @@ export class Translator {
     return [{ type: 'model', model: named.value }];
   }
 
+  /** The summary read for this result only; an absent threshold uses the CLI's default rule. */
+  setContextUsage(summary: unknown): void {
+    const threshold = property(summary, 'autoCompactThreshold');
+    this.#compactAt = tokenCount(threshold) ? threshold : null;
+    this.#autoCompact = property(summary, 'isAutoCompactEnabled') !== false;
+  }
+
   #usage(): SessionEvent {
     return {
       type: 'usage',
       usage: {
         costUsd: this.#cost,
-        context: null,
+        context:
+          this.#context === null || this.#window === null
+            ? null
+            : {
+                used: this.#context,
+                window: this.#window,
+                // A CLI that does not compact by itself has no point to ask before.
+                compactAt: this.#autoCompact
+                  ? Math.min(
+                      this.#window,
+                      this.#compactAt ?? compactAt(this.#window, this.#maxOutput),
+                    )
+                  : null,
+              },
         contextTokens: this.#context,
         contextWindow: this.#window,
       },

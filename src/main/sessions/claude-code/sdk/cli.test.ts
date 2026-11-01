@@ -100,6 +100,32 @@ async function raised(events: HostEvent[], count = 1): Promise<PromptEvent> {
 }
 
 describe('SdkConnector through the Agent SDK', () => {
+  it.each([undefined, '150000'])(
+    'reads the SDK context summary from the fake CLI (%s)',
+    async (threshold) => {
+      const { session, events } = await start('acceptEdits', {
+        ANTHROPIC_API_KEY: 'sk-ant-test',
+        ...(threshold === undefined ? {} : { FAKE_CLAUDE_COMPACT_AT: threshold }),
+      });
+      const id = '00000000-0000-4000-8000-00000000000a';
+      await session.send({ id, text: 'Hello' });
+      await waitFor(events, (event) => event.type === 'end');
+      const beforeEnd = events.slice(
+        0,
+        events.findIndex((event) => event.type === 'end'),
+      );
+      expect(beforeEnd.filter((event) => event.type === 'usage').at(-1)).toMatchObject({
+        usage: {
+          context: {
+            used: expect.any(Number) as number,
+            window: 200000,
+            compactAt: threshold === undefined ? 167000 : 150000,
+          },
+        },
+      });
+    },
+  );
+
   it('holds only the selected fake turn until its explicit gate opens, and still honours interruption', async () => {
     const release = path.join(folder, 'release-turn');
     const text = 'controlled first turn';

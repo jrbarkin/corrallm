@@ -6,12 +6,8 @@ import type { AgentNode } from '../../../shared/model/canvas';
 import type { QueueItem } from '../../../shared/model/queue';
 import { NEW_SESSION } from '../../../shared/model/session';
 import type { Session } from '../../../shared/model/session';
-import {
-  holdGeneration,
-  needs,
-  needsOf,
-  withoutChoices,
-} from '../../../shared/model/needs-selectors';
+import { holdGeneration, needs, needsOf } from '../../../shared/model/needs-selectors';
+import { needFor } from '../../../shared/model/prompt-views';
 import type { NeedsInput } from '../../../shared/model/needs-selectors';
 import type { Run } from './run/runner';
 import { TEST_ENGINE } from './test-engine';
@@ -366,7 +362,7 @@ describe('needs', () => {
   it('shows a token your items without their choices', () => {
     const [item] = needs(input({ run: held }));
     if (!item) throw new Error('no item');
-    const theirs = withoutChoices(item);
+    const theirs = needFor(item, 'token');
     expect(theirs.choices).toEqual([]);
     expect(theirs).not.toHaveProperty('text');
     expect(theirs).toMatchObject({ title: item.title, by: ['you'], for: 'you' });
@@ -403,7 +399,7 @@ describe('needs', () => {
     expect(form).toMatchObject({ title: 'MCP server “tracker” asks you to fill in a form' });
     if (!link || !form) throw new Error('no item');
     for (const item of [link, form]) {
-      const theirs = withoutChoices(item);
+      const theirs = needFor(item, 'token');
       expect(theirs).not.toHaveProperty('form');
       expect(theirs.title).toBe(item.title);
       expect(JSON.stringify(theirs)).not.toMatch(/secret|Sign in at|Paste the key|example\.com/);

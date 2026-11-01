@@ -2,12 +2,12 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 
 /*
- * For tests: what the real Codex app server (Codex CLI 0.160.1, GPT-6-Luna) said and was told,
- * recorded in fixtures/ as one JSON-RPC message per line, both ways, with when (ms from its
- * start), in scratch folders (/work/smoke/…, home /Users/someone), the account's ids, the
- * machine's name and the user's own MCP servers (tool_repl, web_repl) replaced with stand-ins,
- * and the user's own skills left out (Codex's system skills kept). A line starting "//" says what
- * the recording is.
+ * For tests: what the real Codex app server (Codex CLI 0.160.1, and 0.162.1 below, GPT-6-Luna)
+ * said and was told, recorded in fixtures/ as one JSON-RPC message per line, both ways, with when
+ * (ms from its start), in scratch folders (/work/smoke/…, home /Users/someone), the account's
+ * ids, the machine's name and the user's own MCP servers (tool_repl, web_repl) replaced with
+ * stand-ins, and the user's own skills left out (Codex's system skills kept). A line starting "//"
+ * says what the recording is.
  *
  * - handshake: initialize, account/read (a ChatGPT login), model/list, account/rateLimits/read,
  *   collaborationMode/list, an ephemeral thread/start, fuzzyFileSearch.
@@ -21,10 +21,52 @@ import path from 'node:path';
  * - options: config/read and model/list, asked together as corrallm asks them for an agent's
  *   settings (codex/options.ts), on a server of their own; only what corrallm reads of the
  *   config is kept.
+ * - What Codex 0.162.1 asks (B13 C5), each an ephemeral thread at low effort in a scratch folder
+ *   (/work/smoke/p1), with the user's own MCP servers, plugins and hooks off:
+ *   - mcp-approvals: an MCP server of corrallm's (probe) whose destructive tools Codex asks about
+ *     through an elicitation marked `codex_approval_kind: mcp_tool_call` (persist session and
+ *     always): allowed once, then for the session (the next call doesn't ask), then cancelled;
+ *     then a six-field form and a link (mode url), both accepted.
+ *   - mcp-question: the same approval as a request_user_input question, with Codex's
+ *     tool_call_mcp_elicitation off; allowed.
+ *   - question: in Plan mode, the model's own request_user_input question (isOther), answered in
+ *     the user's words.
+ *   - permissions: request_permissions (under development, turned on) for network access,
+ *     granted for the turn with strict auto review.
+ *   - approvals: in Read only, a patch's approval, a command run outside the sandbox, then input
+ *     written to it (kind writeStdin, with its approvalId), cancelled.
+ *
+ * Codex CLI 0.162.1 (B11a C4), GPT-6-Luna at low effort, an ephemeral thread in a scratch folder
+ * (/work/smoke/ctx1, ctx2), its model window lowered for the recording alone with a per-run
+ * override (`-c model_context_window=50000`, so that its usable window is 47,500 and it compacts
+ * near 45,000 rather than near 244,800). Its notifications and the requests that matter are kept
+ * (config/read keeps only the compaction settings); the long filler messages it was given, and
+ * what `cat` printed, are replaced by their lengths; the account, MCP-server and rate-limit
+ * traffic is left out.
+ * - compact-default: no compaction limit configured (config/read says null). Two messages of
+ *   filler text, then `cat` calls (output capped at 2,500 tokens by `tool_output_token_limit`).
+ *   It compacted in the middle of the fifth turn, after a request of 42,934 tokens whose `cat`
+ *   output was still to come; the turn before had ended at 42,861 without compacting.
+ * - compact-limit: the same window with `model_auto_compact_token_limit=40000` (config/read says
+ *   40000). Filler text only. It compacted as the fourth turn began, after a request of 42,915
+ *   tokens (and again as the fifth began); the one before, 34,052, did not.
  */
 
 export type Fixture =
-  'handshake' | 'turns' | 'patch' | 'interrupt' | 'image' | 'resume' | 'options';
+  | 'handshake'
+  | 'turns'
+  | 'patch'
+  | 'interrupt'
+  | 'image'
+  | 'resume'
+  | 'options'
+  | 'mcp-approvals'
+  | 'mcp-question'
+  | 'question'
+  | 'permissions'
+  | 'approvals'
+  | 'compact-default'
+  | 'compact-limit';
 
 /** One message: sent to the app server ('out'), from it ('in'), or its exit ('close'). */
 export interface RecordedLine {
@@ -69,4 +111,42 @@ export function recordedResult(name: Fixture, method: string, nth = 0): unknown 
   );
   if (!answer) throw new Error(`${name} has no answer to ${method}`);
   return answer.msg.result;
+}
+
+/** A request the app server made of its client, recorded: what it asked, and what it was told. */
+export interface RecordedAsk {
+  method: string;
+  id: string | number;
+  params: unknown;
+  /** The result its client answered with. */
+  result: unknown;
+  /** The notifications the app server sent before it asked, in order. */
+  before: { method: string; params: unknown }[];
+}
+
+/** The requests the app server made of its client, in order, each with its answer. */
+export function recordedAsks(name: Fixture): RecordedAsk[] {
+  const lines = recorded(name);
+  const asks: RecordedAsk[] = [];
+  const before: { method: string; params: unknown }[] = [];
+  for (const { dir, msg } of lines) {
+    if (dir !== 'in' || typeof msg.method !== 'string') continue;
+    const { id } = msg;
+    if (typeof id !== 'string' && typeof id !== 'number') {
+      before.push({ method: msg.method, params: msg.params });
+      continue;
+    }
+    const answer = lines.find(
+      (line) => line.dir === 'out' && line.msg.method === undefined && line.msg.id === id,
+    );
+    if (!answer) throw new Error(`${name} has no answer to ${msg.method} #${String(id)}`);
+    asks.push({
+      method: msg.method,
+      id,
+      params: msg.params,
+      result: answer.msg.result,
+      before: [...before],
+    });
+  }
+  return asks;
 }

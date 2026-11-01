@@ -147,7 +147,7 @@ export type MergeResult =
       checkpoint?: string;
       /**
        * False when the checkpoint couldn't be recorded on the agent's branch (it moved meanwhile):
-       * its files keep the work, uncommitted. B9b's wire contract has no field for this yet (X2).
+       * its files keep the work, uncommitted. The operation maps this to checkpointRecorded: false.
        */
       recorded?: false;
     }
@@ -210,6 +210,8 @@ export interface MergeServiceDeps {
    * answer past `observeWithinMs`.
    */
   observe?: (canvas: CanvasId, workspace: string) => Promise<void>;
+  /** An observation exceeded its bound: publish this workspace as unknown before answering. */
+  observationTimedOut?: (workspace: string) => void;
   /** Tests only: how long a merge's answer waits for its observation (OBSERVED_WITHIN_MS). */
   observeWithinMs?: number;
   /** Tests only: called at each point of §9.3 a fault test stops at. */
@@ -467,14 +469,23 @@ export class MergeService {
     if (observe === undefined || this.#closing) return;
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      await Promise.race([
-        observe(canvas, workspace).catch((error: unknown) => {
-          console.error('Could not read a merge’s cards again:', error);
-        }),
-        new Promise<void>((resolve) => {
-          timer = setTimeout(resolve, this.#deps.observeWithinMs ?? OBSERVED_WITHIN_MS);
+      const refreshed = await Promise.race([
+        observe(canvas, workspace).then(
+          () => true,
+          (error: unknown) => {
+            console.error('Could not read a merge’s cards again:', error);
+            return true;
+          },
+        ),
+        new Promise<boolean>((resolve) => {
+          timer = setTimeout(() => {
+            resolve(false);
+          }, this.#deps.observeWithinMs ?? OBSERVED_WITHIN_MS);
         }),
       ]);
+      if (!refreshed) this.#deps.observationTimedOut?.(workspace);
+    } catch (error) {
+      console.error('Could not read a merge’s cards again:', error);
     } finally {
       clearTimeout(timer);
     }

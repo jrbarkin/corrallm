@@ -578,10 +578,25 @@ export const MIGRATIONS: readonly Migration[] = [
     `,
   },
   {
-    // B11a's handoff (B11a Design §12 C7, §12.4): the latest handoff each agent wrote, kept exactly,
-    // and the switch it waits to be carried for. Only a table is added: a corrallm of schema 6
-    // reads everything it knows as it was, and never writes this one, so it may still open it.
+    // B13's (B13 Design §9.2 C9): what a record of a native prompt's decision decided, typed and
+    // value-free, beside its words. A column only, so it keeps the oldest schema that may read the
+    // database as migration 6 left it: a corrallm of schema 6 still reads and writes its own
+    // columns (each by name), leaving this one as it is.
     version: 7,
+    minReader: 6,
+    sql: `
+      -- A settled record's decision, for a prompt the core owned: its Needs item, the prompt's id,
+      -- kind and subject's type, and what was chosen (a choice's value and hint, how many questions
+      -- were answered, a form's action), never a label, a title, a command, a path, a plan, words
+      -- or a value given. None for every other message.
+      ALTER TABLE message ADD COLUMN settled TEXT CHECK (settled IS NULL OR json_valid(settled));
+    `,
+  },
+  {
+    // B11a's handoff (B11a Design §12 C7, §12.4): the latest handoff each agent wrote, kept exactly,
+    // and the switch it waits to be carried for. Only a table is added: a corrallm of schema 6 or 7
+    // reads everything it knows as it was, and never writes this one, so it may still open it.
+    version: 8,
     minReader: 6,
     sql: `
       -- One row per agent while it is on the canvas: the exact text its last accepted handoff

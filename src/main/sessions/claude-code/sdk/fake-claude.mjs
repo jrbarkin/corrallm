@@ -25,6 +25,9 @@
 // FAKE_CLAUDE_TURN_GATES is a JSON map from exact prompt text to release-file paths: a selected
 // turn writes <path>.waiting, then waits for <path> (or an interrupt). Tests release work by
 // state, without racing a fixed-length slow stream against a UI action on a loaded machine.
+// FAKE_CLAUDE_START_GATE is a release-file path: as the SDK first applies its settings (an effort,
+// as a session starts with one), its github server asks for a form, and the settings are applied
+// only once <path> exists (it writes <path>.waiting first, and the form's answer to <path>.answer).
 //
 // `claude auth status --json` says how it is logged in, as the real one would: with a cloud
 // provider (CLAUDE_CODE_USE_BEDROCK, …), an API key (ANTHROPIC_API_KEY), or an apiKeyHelper in
@@ -54,6 +57,7 @@ import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import {
   appendFileSync,
+  existsSync,
   mkdirSync,
   readFileSync,
   realpathSync,
@@ -278,6 +282,8 @@ const background = new Map();
 let tasks = 0;
 /** Whether the SDK asked for predictions of the next message (initialize). */
 let suggestions = false;
+/** The release file a session's start waits for (FAKE_CLAUDE_START_GATE), until it first does. */
+let startGate = process.env.FAKE_CLAUDE_START_GATE;
 const hookEvents = args.includes('--include-hook-events');
 
 const MODELS = [
@@ -1251,6 +1257,13 @@ input.on('line', (line) => {
         permissionMode: mode,
         uuid: randomUUID(),
       });
+    } else if (subtype === 'get_context_usage') {
+      respond(message.request_id, {
+        isAutoCompactEnabled: true,
+        ...(process.env.FAKE_CLAUDE_COMPACT_AT
+          ? { autoCompactThreshold: Number(process.env.FAKE_CLAUDE_COMPACT_AT) }
+          : {}),
+      });
     } else if (subtype === 'get_settings') {
       respond(message.request_id, {
         effective: projectSettings(),
@@ -1296,6 +1309,19 @@ input.on('line', (line) => {
     } else if (subtype === 'set_model') {
       model = message.request.model ?? 'claude-opus-5-5';
       respond(message.request_id, {});
+    } else if (subtype === 'apply_flag_settings' && startGate !== undefined) {
+      // An MCP server asks for a form as the session starts: it starts once the gate opens.
+      const gate = startGate;
+      startGate = undefined;
+      void elicit().then((answer) => {
+        writeFileSync(`${gate}.answer`, JSON.stringify(answer));
+      });
+      writeFileSync(`${gate}.waiting`, 'waiting');
+      const opening = setInterval(() => {
+        if (!existsSync(gate)) return;
+        clearInterval(opening);
+        respond(message.request_id, {});
+      }, 20);
     } else {
       respond(message.request_id, {});
     }

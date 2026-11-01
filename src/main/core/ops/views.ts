@@ -4,8 +4,8 @@ import type { FallbackView } from '../../../shared/model/fallback';
 import type { HandoffView } from '../../../shared/model/handoff';
 import { agentParty } from '../../../shared/model/messages';
 import type { Message } from '../../../shared/model/messages';
+import { entryFor } from '../../../shared/model/prompt-views';
 import { isOpen, turnReply } from '../../../shared/model/session';
-import { mcpRequestTitle } from '../../../shared/model/words';
 import type { Entry } from '../../../shared/model/session';
 import { messageView, presentationOf, runView, summaryReply } from '../../../shared/model/views';
 import type {
@@ -33,10 +33,18 @@ import { agentOf } from './open';
  * second way to see anything, and a page boundary never a missing row.
  */
 
-/** How many prompts of its own an agent waits on an answer to: its session's, and its terminal's. */
-export function promptsOf({ engine }: OpenCanvas, id: string): number {
+/**
+ * How many prompts of its own an agent waits on an answer to, each once: its session's, its
+ * terminal's, and those the core's prompt owner holds that its session doesn't show itself (B13
+ * C11's counts; the same for every reader that reaches the agent).
+ */
+export function promptsOf({ engine, ownedPrompts }: OpenCanvas, id: string): number {
   const session = engine.sessions.of(id);
-  return session.entries.filter(isOpen).length + (session.asking?.length ?? 0);
+  return (
+    session.entries.filter(isOpen).length +
+    (session.asking?.length ?? 0) +
+    (ownedPrompts?.(id) ?? 0)
+  );
 }
 
 /**
@@ -107,21 +115,13 @@ export function sessionSummary(open: OpenCanvas, agent: string, yours = true) {
 }
 
 /**
- * An entry as a transcript gives it: a message's pasted images only counted; and an MCP server's
- * request, for anyone but you (`yours`), only in the core's words: never its link (often a
- * sign-in), its form or its message, which may hold the link, as Needs leaves them out: a form is
- * yours alone (Core Server R3, B13 C11).
+ * An entry as a transcript gives it, `yours` (you) or a token's, through the one selector of what
+ * each reader sees of a prompt (B13 C11: `entryFor`): a message's pasted images only counted; a
+ * token's prompt entry without an answer, feedback or a choice's label, and an MCP server's request
+ * only in the core's words, never its link (often a sign-in), its form or its message.
  */
 export function transcriptEntry(entry: Entry, yours: boolean): EntryView {
-  if (entry.kind !== 'user') {
-    if (entry.kind !== 'elicitation' || yours) return entry;
-    const seen = { ...entry, message: mcpRequestTitle(entry.server, entry.url !== undefined) };
-    delete seen.url;
-    delete seen.fields;
-    return seen;
-  }
-  const { images, ...rest } = entry;
-  return images === undefined || images.length === 0 ? rest : { ...rest, images: images.length };
+  return entryFor(entry, yours ? 'you' : 'token');
 }
 
 /**

@@ -1,4 +1,4 @@
-import type { WorktreeMerge } from '../../../shared/api/branch';
+import type { WorktreeMerge, WorktreeMergeListing } from '../../../shared/api/branch';
 import type { CanvasId } from '../../../shared/canvas';
 import type { CanvasDocument } from '../../../shared/model/canvas';
 import { workspaceOwners } from '../../../shared/model/workspaces';
@@ -85,7 +85,7 @@ export interface ListedKept {
   createdAt: number;
 }
 
-export interface WorktreeListing {
+export interface WorktreeListing extends WorktreeMergeListing {
   items: ListedWorktree[];
   kept: ListedKept[];
   /** Your picked checkout's branch (null: detached) and commit as last read; null: not read. */

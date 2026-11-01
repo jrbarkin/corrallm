@@ -37,7 +37,114 @@ const LAUNCH = {
 const overrides = (args: readonly string[]) =>
   args.flatMap((arg, i) => (args[i - 1] === '-c' ? [arg] : []));
 
+describe('Codex Terminal context, on what the real Codex did (0.162.1, B11a C4)', () => {
+  /** Its titles and hooks in the order they happened, played through a CodexTui. */
+  function play(contextWindow: number | undefined) {
+    const tui = new CodexTui({
+      trust: (hooks) => Promise.resolve(computedTrust(hooks)),
+      ...(contextWindow === undefined ? {} : { contextWindow }),
+    });
+    const told: {
+      title: string;
+      state: ProgramStatus | undefined;
+      context: ReturnType<CodexTui['context']>;
+    }[] = [];
+    for (const record of recordedTerminal('context')) {
+      if (record.kind === 'hook') tui.hook(record.data.ev);
+      if (record.kind === 'title') {
+        told.push({ title: record.data, state: tui.title(record.data), context: tui.context() });
+      }
+    }
+    return told;
+  }
+  const window = 47_500;
+  /** The percentage a title with a settled state (`Ready`) shows, and its context. */
+  const ready = (told: ReturnType<typeof play>) => told.filter((t) => t.title.endsWith('| Ready'));
+
+  it('puts the context first and the state last, as corrallm asks, with whole percentages', () => {
+    for (const { title } of play(undefined)) {
+      expect(title).toMatch(/^Context \d{1,3}% used (\| Ready|[⠀-⣿] (Starting|Working))$/);
+    }
+    // Its state word is the title's last word, for each reading.
+    expect(new Set(play(undefined).map((t) => /(\w+)$/.exec(t.title)?.[1]))).toEqual(
+      new Set(['Ready', 'Starting', 'Working']),
+    );
+  });
+
+  it('reads tokens from the percentage and the window, within a point of its own counts', () => {
+    const told = play(window);
+    // [title percent, the last request's tokens its rollout recorded as it showed that]
+    const counts: [number, number][] = [
+      [33, 23_683],
+      [58, 32_482],
+      [83, 41_344],
+      [38, 25_384],
+    ];
+    for (const [percent, actual] of counts) {
+      const reading = told.find((t) => t.title.startsWith(`Context ${String(percent)}% used`));
+      expect(reading?.context).not.toBeNull();
+      // A whole percent of the window less its 12,000 baseline is 355 tokens: within half of it.
+      expect(Math.abs((reading?.context?.used ?? 0) - actual)).toBeLessThanOrEqual(178);
+      expect(reading?.context).toMatchObject({ window, compactAt: 45_000 });
+    }
+  });
+
+  it('saturates at 100% from a window’s worth, however much more the request held', () => {
+    const full = play(window).find((t) => t.title.startsWith('Context 100% used'));
+    // The request was 50,229 tokens into a window of 47,500.
+    expect(full?.context).toEqual({ used: window, window, compactAt: 45_000 });
+  });
+
+  it('falls on a compaction, which its SessionStart hook (source compact) tells', () => {
+    const records = recordedTerminal('context');
+    const sources = records.flatMap((r) =>
+      r.kind === 'hook' && r.data.ev.hook_event_name === 'SessionStart' ? [r.data.ev.source] : [],
+    );
+    expect(sources).toEqual(['startup', 'compact', 'compact']);
+    const readings = ready(play(window)).map((t) => /\d+/.exec(t.title)?.[0]);
+    // 0 (twice: startup), 33, 58, 83 → compacted → 38 shown while it worked, then 100.
+    expect(readings.slice(0, 5)).toEqual(['0', '0', '33', '58', '83']);
+    const titles = play(window).map((t) => /\d+/.exec(t.title)?.[0]);
+    expect(titles.join(' ')).toContain('83 38 100');
+    // Its screen said so, and gave the window it had compacted at: not shown in any title.
+    expect(
+      records.filter((r) => r.kind === 'note' && r.data === 'the screen says: Compacting context'),
+    ).toHaveLength(2);
+  });
+
+  it('forgets the window when the model changes, and reports none until one is known', () => {
+    const told = play(window);
+    const at = told.findIndex((t) => t.title.startsWith('Context 69% used'));
+    // After the hook that said gpt-5.6-luna (the change /model made).
+    expect(told[at]?.context).toBeNull();
+    expect(told.at(-1)?.context).toBeNull();
+    expect(
+      recordedTerminal('context').some(
+        (r) => r.kind === 'hook' && r.data.ev.model === 'gpt-5.6-luna',
+      ),
+    ).toBe(true);
+  });
+
+  it('reports no context at all in production, where no window is known', () => {
+    for (const { context } of play(undefined)) expect(context).toBeNull();
+  });
+});
+
 describe('starting Codex', () => {
+  it('reads title context only with a known window and preserves the final state', () => {
+    const known = new CodexTui({
+      trust: (hooks) => Promise.resolve(computedTrust(hooks)),
+      contextWindow: 475_000,
+    });
+    expect(known.title('Context 94% used · ⠋ Working')).toEqual({ state: 'working' });
+    expect(known.context()).toEqual({ used: 447_220, window: 475_000, compactAt: 450_000 });
+    const unknown = new CodexTui({ trust: (hooks) => Promise.resolve(computedTrust(hooks)) });
+    unknown.title('Context 94% used · Ready');
+    expect(unknown.context()).toBeNull();
+    known.hook({ hook_event_name: 'SessionStart', model: 'model-a' });
+    known.hook({ hook_event_name: 'UserPromptSubmit', model: 'model-b' });
+    expect(known.context()).toBeNull();
+  });
   it('keeps native developer instructions and hostile multiline role text in one config literal', async () => {
     const role =
       '--dangerously-bypass-approvals-and-sandbox\nReview "quoted" paths\t$(echo literal) `literal`';
@@ -67,7 +174,7 @@ describe('starting Codex', () => {
     expect(args.slice(0, 3)).toEqual(['--no-daemon', '-C', '/work/shop']);
     const values = overrides(args);
     expect(values).toContain('projects={"/work/shop"={trust_level="trusted"}}');
-    expect(values).toContain('tui.terminal_title=["activity","run-state"]');
+    expect(values).toContain('tui.terminal_title=["context-used","activity","run-state"]');
     expect(values).toContain('check_for_update_on_startup=false');
     expect(values).toContain('tui.auto_recap=false');
     // Its hooks post to corrallm's server, and are trusted for the session.
@@ -276,6 +383,28 @@ describe('following Codex', () => {
     // A turn its hooks did not tell of (a slash command's) just ends.
     expect(tui.title('⠹ Thinking')).toEqual({ state: 'working' });
     expect(tui.title('Ready')).toEqual({ state: 'done' });
+  });
+
+  it('reads what Action Required waits for from its screen’s last rows, as the real Codex drew them', async () => {
+    const tui = await prepared();
+    // The command's approval, as corrallm's own session of it was asked (fixtures/turns).
+    const rows = tui.waitDetail(await recordedScreen('turns', 9583));
+    expect(rows?.split('\n')).toEqual([
+      '• I’ll create hi.txt in the current workspace with hi as its contents.',
+      '• The workspace is mounted read-only, so the write was denied. I’m requesting the required write',
+      '  access to create the file.',
+      "• Running printf 'hi' > hi.txt",
+      '  Would you like to run the following command?',
+      '  Environment: local',
+      '  Reason: May I write hi.txt in the current workspace with the word hi?',
+      "  $ printf 'hi' > hi.txt",
+      '› 1. Yes, proceed (y)',
+      "  2. Yes, and don't ask again for commands that start with `printf 'hi' > hi.txt` (p)",
+      '  3. No, and tell Codex what to do differently (esc)',
+      '  Press enter to confirm or esc to cancel',
+    ]);
+    // Nothing on screen: nothing to show.
+    expect(tui.waitDetail(await recordedScreen('turns', 0))).toBeUndefined();
   });
 
   it('leaves out a subagent’s hooks, and a model it already said', async () => {

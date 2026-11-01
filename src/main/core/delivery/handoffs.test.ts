@@ -13,7 +13,7 @@ import type { Handoff } from './handoffs';
 
 /*
  * Each agent's latest handoff (B11a C7), kept in memory and in the profile's database (`handoff`,
- * schema 7): written only within a canvas's writes, the text with the reply's, the carry with the
+ * schema 8): written only within a canvas's writes, the text with the reply's, the carry with the
  * switch's commit, and cleared with the send that carries it.
  */
 
