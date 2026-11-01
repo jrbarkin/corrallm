@@ -1,8 +1,11 @@
 import { execFileSync, spawn } from 'node:child_process';
+import type { ChildProcessWithoutNullStreams } from 'node:child_process';
+import { EventEmitter } from 'node:events';
 import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { Worker } from 'node:worker_threads';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -16,9 +19,86 @@ import { AppServerConnector } from './connector';
 import type { AppServerConnectorDeps } from './connector';
 import type { Fixture } from './recorded';
 import { replay } from './replay';
+import type { SpawnAppServer } from '../rpc';
 
 /** A fake `codex` that speaks the app server's protocol (../fake-codex.mjs), run with node. */
 const FAKE = fileURLToPath(new URL('../fake-codex.mjs', import.meta.url));
+
+/*
+ * What these tests check is the protocol between the connector and its app server, so the fake
+ * runs in a worker thread of this process (`inProcess`): its stdio the worker's streams, its
+ * environment and folder those a spawn gives it, a signal emitted on its process, its exit the
+ * worker's. The commands it runs are still real processes. A few tests run it as a process of
+ * its own (`asProcess`), as Codex runs: an ordinary turn, its crash, and the facts it reports
+ * about its own process.
+ */
+
+/** Starts the fake in a worker: where it runs, then the fake itself. */
+const BOOT = new URL(
+  `data:text/javascript,${encodeURIComponent(`
+import { parentPort, workerData } from 'node:worker_threads';
+process.cwd = () => workerData.cwd;
+parentPort.on('message', (signal) => {
+  process.emit(signal, signal);
+});
+parentPort.unref();
+await import(workerData.fake);
+`)}`,
+);
+
+/** Workers still running, ended after each test as a process group would be. */
+const workers = new Set<Worker>();
+
+/** The fake in a worker of this process, as a child process for the connector to speak to. */
+function inProcess(
+  args: readonly string[],
+  options: { cwd?: string | URL | undefined; env?: NodeJS.ProcessEnv | undefined },
+): ChildProcessWithoutNullStreams {
+  const worker = new Worker(BOOT, {
+    argv: [FAKE, ...args],
+    env: { ...options.env },
+    stdin: true,
+    stdout: true,
+    stderr: true,
+    workerData: { cwd: String(options.cwd ?? process.cwd()), fake: pathToFileURL(FAKE).href },
+  });
+  workers.add(worker);
+  const child = Object.assign(new EventEmitter(), {
+    stdin: worker.stdin,
+    stdout: worker.stdout,
+    stderr: worker.stderr,
+    kill: (signal: NodeJS.Signals = 'SIGTERM') => {
+      worker.postMessage(signal);
+      return true;
+    },
+  });
+  // 'close' once it has exited and its output is read to the end, as a process's.
+  let code: number | null = null;
+  let exited = false;
+  let read = false;
+  const closed = () => {
+    if (exited && read) child.emit('close', code);
+  };
+  worker.stdout.once('end', () => {
+    read = true;
+    closed();
+  });
+  worker.once('exit', (exitCode) => {
+    workers.delete(worker);
+    code = exitCode;
+    exited = true;
+    child.emit('exit', exitCode, null);
+    closed();
+  });
+  worker.once('error', (error) => child.emit('error', error));
+  return child as unknown as ChildProcessWithoutNullStreams;
+}
+
+/** The fake as a process of its own, with `env` added to its environment. */
+function asProcess(env: Record<string, string> = {}): SpawnAppServer {
+  return (_codex, args, options) =>
+    spawn(process.execPath, [FAKE, ...args], { ...options, env: { ...options.env, ...env } });
+}
 
 it('keeps plan-revision feedback private when resuming a native conversation', async () => {
   const env = { FAKE_CODEX_STATE: path.join(dir, 'threads.json') };
@@ -62,10 +142,8 @@ it('keeps plan-revision feedback private when resuming a native conversation', a
 it('the recorded fake reports whether native instructions reached it, without their text', async () => {
   const file = path.join(dir, 'diagnostics.jsonl');
   const instructions = 'Native project guidance';
-  await start(
-    { role: 'Reviewer' },
-    { FAKE_CODEX_DEVELOPER_INSTRUCTIONS: instructions, FAKE_CODEX_DIAGNOSTICS: file },
-  );
+  const env = { FAKE_CODEX_DEVELOPER_INSTRUCTIONS: instructions, FAKE_CODEX_DIAGNOSTICS: file };
+  await start({ role: 'Reviewer' }, env, { spawn: asProcess(env) });
   const text = await readFile(file, 'utf8');
   expect(text).not.toContain(instructions);
   expect(JSON.parse(text)).toMatchObject({
@@ -129,6 +207,7 @@ beforeEach(async () => {
 });
 afterEach(async () => {
   await Promise.all(sessions.map((session) => session.close()));
+  await Promise.all([...workers].map((worker) => worker.terminate()));
   await rm(dir, { recursive: true, force: true });
 });
 
@@ -138,7 +217,7 @@ function connector(env: Record<string, string> = {}, deps: Partial<AppServerConn
     clientApp: 'corrallm/0.1.0',
     findCodex: () => Promise.resolve('/home/me/.local/bin/codex'),
     spawn: (_codex, args, options) =>
-      spawn(process.execPath, [FAKE, ...args], { ...options, env: { ...options.env, ...env } }),
+      inProcess(args, { ...options, env: { ...options.env, ...env } }),
     home: '/home/me',
     ...deps,
   });
@@ -508,7 +587,7 @@ describe('the App Server connection', () => {
   });
 
   it('runs a turn: reasoning and the reply stream in, and the thread is remembered once it has one', async () => {
-    const { turn, events, remembered } = await start();
+    const { turn, events, remembered } = await start({}, {}, { spawn: asProcess() });
     expect(remembered).toEqual([]);
     const id = await turn('Hello');
     expect(events.filter((e) => e.type === 'user' || e.type === 'status').slice(0, 2)).toEqual([
@@ -754,7 +833,12 @@ describe('the App Server connection', () => {
   it.each(['missing', 'unknown', 'fail', 'hang'])(
     'warns with the command id and releases the next turn when termination is %s',
     async (behavior) => {
-      const { session, heard, ended, events } = await start({}, { FAKE_CODEX_TERMINATE: behavior });
+      // Codex's answer is waited for 100 ms here, not two seconds: a hang is one all the same.
+      const { session, heard, ended, events } = await start(
+        {},
+        { FAKE_CODEX_TERMINATE: behavior },
+        { terminateMs: 100 },
+      );
       await session.send({ id: 'm1', text: 'slow' });
       await heard('tool', { detail: { kind: 'output' } });
       await session.send({ id: 'm2', text: 'next' });
@@ -1096,7 +1180,7 @@ describe('the App Server connection', () => {
   });
 
   it('says it stopped, and why, when its app server goes', async () => {
-    const { session, heard } = await start();
+    const { session, heard } = await start({}, {}, { spawn: asProcess() });
     await session.send({ id: 'm1', text: 'crash' });
     const closed = await heard('closed');
     expect(closed.error).toMatch(/Codex's app server stopped \(exit code 3\): Error: it crashed/);

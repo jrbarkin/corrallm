@@ -96,6 +96,8 @@ export interface AppServerSessionParts {
   newThread: (mode: CodexMode | null, model: string) => Promise<ThreadInfo>;
   /** The time, in milliseconds. */
   now?: () => number;
+  /** How long a command's termination is waited for (TERMINATE_MS; shorter in tests). */
+  terminateMs?: number;
 }
 
 /** A turn of corrallm's: the message it answers, and the Codex turns it takes. */
@@ -164,6 +166,7 @@ export class AppServerSession implements LiveSession<CodexMode> {
   readonly #git: RunGit;
   readonly #newThread: AppServerSessionParts['newThread'];
   readonly #now: () => number;
+  readonly #terminateMs: number;
   readonly #login: CodexLogin;
   /** Whom to ask before using the user's ChatGPT plan: none once it may be used. */
   #consent: Consent | undefined;
@@ -193,6 +196,7 @@ export class AppServerSession implements LiveSession<CodexMode> {
     this.#git = parts.git;
     this.#newThread = parts.newThread;
     this.#now = parts.now ?? Date.now;
+    this.#terminateMs = parts.terminateMs ?? TERMINATE_MS;
     this.#login = parts.login;
     this.#consent = parts.consent;
     this.#thread = parts.thread;
@@ -659,7 +663,7 @@ export class AppServerSession implements LiveSession<CodexMode> {
             new Promise<never>((_, reject) => {
               timer = setTimeout(() => {
                 reject(new Error('Codex did not answer in two seconds'));
-              }, TERMINATE_MS);
+              }, this.#terminateMs);
             }),
           ]);
         } catch (error) {
