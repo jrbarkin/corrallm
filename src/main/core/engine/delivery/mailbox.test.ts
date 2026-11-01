@@ -6,6 +6,8 @@ import type { SubmittedMessage } from '../../../../shared/model/queue';
 import { decodeSubmissions, encodeSubmissions } from './submission-state';
 import { fakeBackend } from '../test-backend';
 import { TEST_ENGINE } from '../test-engine';
+import { engineCatalog } from '../../../../shared/model/catalog';
+import { MADE_UP } from '../../../../shared/test-made-up';
 
 /** The run's catalog, as the app gives the sessions. */
 const engine = TEST_ENGINE;
@@ -728,6 +730,99 @@ describe('SessionStore', () => {
     expect(store.of('a').submissions).toMatchObject([{ text: '/mcp', status: 'completed' }]);
     expect(backend.send).not.toHaveBeenCalled();
     expect(store.of('a').entries).toEqual([]);
+  });
+
+  it('checks automatic text again after startup, before sending it', async () => {
+    const catalog = structuredClone(MADE_UP);
+    const connection = catalog.adapters[0]?.connections[0];
+    if (!connection) throw new Error('The fixture needs a connection');
+    const { backend } = fakeBackend();
+    const starting = Promise.withResolvers<null>();
+    backend.start.mockReturnValue(starting.promise);
+    const store = new SessionStore(engineCatalog(catalog, 'zed'), backend);
+    store.sync([{ id: 'a', connection: 'zed.acp' }]);
+    const done = vi.fn();
+    store.send('a', 'zed', 'Read @link', done, undefined, undefined, 'queue');
+    expect(backend.start).toHaveBeenCalledOnce();
+    // The current descriptor is authoritative when startup completes too.
+    Object.assign(connection, { fileMentions: true });
+    starting.resolve(null);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(backend.send).not.toHaveBeenCalled();
+    expect(done).toHaveBeenCalledWith(
+      true,
+      '',
+      expect.objectContaining({
+        reason: 'declined',
+        message: expect.stringContaining('file mention') as unknown,
+      }),
+    );
+    store.reset();
+  });
+
+  it('rechecks a file mention retained after startup refusal before continuing in Terminal', async () => {
+    const { backend, emit } = fakeBackend();
+    backend.start.mockImplementationOnce(() => {
+      emit('a', 'claude-code.sdk', {
+        type: 'notice',
+        id: 'refusal',
+        level: 'error',
+        text: 'Use Terminal',
+        switchTo: 'claude-code.terminal',
+      });
+      return Promise.reject(new Error('Use Terminal'));
+    });
+    const store = new SessionStore(engine, backend);
+    store.sync([{ id: 'a', connection: 'claude-code.sdk' }]);
+    const done = vi.fn();
+    store.send('a', 'claude-code', 'Read @link', done, undefined, undefined, 'queue');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(store.of('a').queued).toMatchObject([{ text: 'Read @link' }]);
+    store.sync([{ id: 'a', connection: 'claude-code.terminal' }]);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(done).toHaveBeenCalledWith(true, '', expect.objectContaining({ reason: 'declined' }));
+    expect(backend.send).not.toHaveBeenCalled();
+    store.reset();
+  });
+
+  it('rechecks queued file mentions when a fallback starts them on Terminal', async () => {
+    const { backend } = fakeBackend();
+    const store = new SessionStore(engine, backend);
+    store.sync([{ id: 'a', connection: 'claude-code.sdk' }]);
+    store.send('a', 'claude-code', 'Take your time');
+    const done = vi.fn();
+    store.send('a', 'claude-code', 'Read @link', done, undefined, undefined, 'queue');
+    store.send('a', 'claude-code', 'Read @my-file');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    store.sync([{ id: 'a', connection: 'claude-code.terminal' }]);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(done).toHaveBeenCalledWith(true, '', {
+      status: 'failed',
+      reason: 'declined',
+      message: expect.stringContaining('file mention') as unknown,
+    });
+    expect(backend.send.mock.calls.map(([, message]) => message.text)).toEqual([
+      'Take your time',
+      'Read @my-file',
+    ]);
+    store.reset();
+  });
+
+  it('holds a party’s file mention if its connection changes before delivery', async () => {
+    const { backend } = fakeBackend();
+    const store = new SessionStore(engine, backend);
+    store.sync([{ id: 'a', connection: 'claude-code.sdk' }]);
+    store.send('a', 'claude-code', 'Take your time');
+    const done = vi.fn();
+    store.send('a', 'claude-code', 'Read @link', done, undefined, undefined, 'queue', undefined, {
+      from: { party: 'outside:orchestrator', name: 'orchestrator' },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    store.sync([{ id: 'a', connection: 'claude-code.terminal' }]);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(done).toHaveBeenCalledWith(true, '', expect.objectContaining({ reason: 'declined' }));
+    expect(backend.send.mock.calls.map(([, message]) => message.text)).toEqual(['Take your time']);
+    store.reset();
   });
 
   it('never starts canvas text that the connection it would go to runs as a shell command', async () => {

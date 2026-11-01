@@ -1,4 +1,5 @@
 import { adapterIn } from '../../shared/adapter';
+import { fileMentionRefusal } from '../../shared/model/catalog';
 import type { AdapterId, Catalog } from '../../shared/adapter';
 import { MAX_MESSAGE_BYTES } from '../../shared/api/limits';
 import type { ArgsOf } from '../../shared/api/registry';
@@ -175,6 +176,16 @@ export function ruleChecks(
         return {
           refuse: `It starts with "${prefix}", which ${catalog.connectionName(connection) ?? 'its connection'} runs as a shell command without asking: only the user may send that.`,
         };
+      },
+    },
+    'file-mentions': {
+      message: ({ canvas, to, body }) => {
+        const open = openOf(canvas);
+        const node = open?.document.nodes.find((one) => one.id === to);
+        if (!open || node?.type !== 'agent') return undefined;
+        const { catalog } = open.engine;
+        const sentence = fileMentionRefusal(catalog, catalog.connectionOf(node.data), body);
+        return sentence === undefined ? undefined : { refuse: sentence };
       },
     },
     // B11 §16.6: past 16 KiB of text, or with images, a message is your composer's alone; a

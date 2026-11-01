@@ -169,6 +169,8 @@ export interface SessionManagerDeps {
     message: UserMessage,
     send: (message: UserMessage) => Promise<void>,
     stopped: () => boolean,
+    /** The native session receiving this send, even if the document now chooses another. */
+    connection: ConnectionId,
   ) => Promise<boolean>;
   /**
    * What an agent of each adapter can be set to run with, read in a folder for the agents'
@@ -407,7 +409,7 @@ export class SessionManager {
     const send = (next: UserMessage) => session.send(next);
     if (!this.#deps.sending) return send(message);
     const stopped = () => agent.interrupts !== interrupts;
-    if (await this.#deps.sending(canvas, agentId, message, send, stopped)) return;
+    if (await this.#deps.sending(canvas, agentId, message, send, stopped, agent.connection)) return;
     if (this.#agents.get(canvas)?.get(agentId) !== agent || agent.unheard === true) return;
     this.#deps.emit(canvas, agentId, agent.connection, {
       type: 'end',

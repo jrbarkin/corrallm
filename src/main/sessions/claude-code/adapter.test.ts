@@ -31,6 +31,10 @@ function declared(session: object) {
 }
 
 describe("Claude Code's adapter", () => {
+  it('declares native file mentions on Terminal only', () => {
+    expect(connection('claude-code.terminal')).toHaveProperty('fileMentions', true);
+    expect(connection('claude-code.sdk')).not.toHaveProperty('fileMentions');
+  });
   it('declares context on both connections, proven by the recordings of real automatic compactions', () => {
     // The Agent SDK: sdk/translate.test.ts replays sdk/fixtures/auto-compact.jsonl and
     // no-auto-compact.jsonl. The Terminal: statusline.test.ts replays
