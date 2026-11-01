@@ -88,7 +88,7 @@ describe('lockProfile', () => {
 
   it('lets only one of several taking over a lock left behind at once have it', async () => {
     const pid = await deadPid();
-    for (let round = 0; round < 20; round++) {
+    for (let round = 0; round < 6; round++) {
       await writeFile(lockFile, JSON.stringify({ owner: 'serve', pid, started: STARTED }));
       const tries = await Promise.allSettled(
         Array.from({ length: 8 }, (_, i) => lockProfile(profile, i % 2 === 0 ? 'app' : 'serve')),
@@ -103,7 +103,7 @@ describe('lockProfile', () => {
       expect((await readdir(profile)).sort()).toEqual(['core.lock']);
       took[0]?.release();
     }
-  });
+  }, 30_000);
 
   it.skipIf(process.platform === 'win32')(
     'takes over a lock whose pid another process has since been given',

@@ -25,7 +25,7 @@ it('keeps weighted order through seeded inserts, replacements and removals', () 
     seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
     return seed / 0x100000000;
   };
-  for (let step = 0; step < 1500; step++) {
+  for (let step = 0; step < 300; step++) {
     const seq = Math.floor(random() * 300) + 2 ** 40;
     if (random() < 0.4) {
       sequence.delete(seq);

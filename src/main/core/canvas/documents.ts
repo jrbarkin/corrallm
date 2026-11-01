@@ -133,6 +133,8 @@ export interface DocumentsDeps {
    */
   workspaces?: Pick<WorkspacePlanner, 'preflight' | 'within' | 'removed' | 'made'>;
   now?: () => number;
+  /** A test seam: how many revisions are kept and how often the rest are trimmed. */
+  trim?: { kept: number; every: number };
 }
 
 /** What Apply did: committed the file's canvas, at a revision; or found the file changed since. */
@@ -1169,10 +1171,11 @@ export class Documents {
         after === undefined ? null : JSON.stringify(after),
       );
     }
-    if (rev % TRIM_EVERY === 0) {
+    const { kept, every } = this.#deps.trim ?? { kept: REVISIONS_KEPT, every: TRIM_EVERY };
+    if (rev % every === 0) {
       store
         .prepare('DELETE FROM revision WHERE canvas_id = ? AND rev <= ?')
-        .run(canvas, rev - REVISIONS_KEPT);
+        .run(canvas, rev - kept);
     }
   }
 

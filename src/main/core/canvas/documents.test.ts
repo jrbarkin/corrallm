@@ -630,25 +630,32 @@ describe('a canvas’s document', () => {
     ]);
   });
 
-  it('keeps the last thousand revisions, trimmed every hundred commits with what each changed', async () => {
-    // Its log's flushes skipped: a thousand commits, quickly.
+  it('keeps the last revisions, trimmed every few commits with what each changed', async () => {
+    // The trim's threshold lowered (the product keeps 1,000 and trims every 100): the same rule, in
+    // twenty-six commits.
     await restart({ ...SYSTEM_DEPS, flush: () => Promise.resolve() });
+    documents = new Documents({
+      store,
+      memory,
+      catalog: CATALOG,
+      defaultAdapter: DEFAULT_ADAPTER,
+      trim: { kept: 10, every: 5 },
+    });
     const canvas = newCanvasId();
     await documents.load(canvas);
-    for (let i = 1; i <= 1101; i++) {
+    for (let i = 1; i <= 26; i++) {
       await commit(canvas, renamed(canvasOf(canvas), 'lead', `Lead ${String(i)}`));
     }
+    // The last trim, at revision 25, dropped through 15; revision 26 came after it.
     expect(
       disk
         .prepare('SELECT count(*) AS n, min(rev) AS first FROM revision WHERE canvas_id = ?')
         .get(canvas),
-    ).toEqual({ n: 1001, first: 101 });
+    ).toEqual({ n: 11, first: 16 });
     expect(
       disk.prepare('SELECT min(rev) AS first FROM change WHERE canvas_id = ?').get(canvas),
-    ).toEqual({ first: 101 });
-    // 1,101 real commits through the store: about 0.5 s alone, but several times that on a loaded
-    // machine, past vitest's default 5 s. The work is the point, so the bound is generous.
-  }, 30_000);
+    ).toEqual({ first: 16 });
+  });
 
   it('fails alone a write whose reference is to nothing, while what shares its commit lands', async () => {
     const canvas = newCanvasId();
