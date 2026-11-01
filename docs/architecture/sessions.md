@@ -2,6 +2,8 @@
 
 [Architecture index](overview.md) · [Canonical instructions](../../AGENTS.md)
 
+Every connection's complete connector start (spawn, handshake and first thread or ready state) has the shared 90-second `START_MS` budget in `sessions/manager.ts`: expiry ends the generation as failed with a fixed connection-named error, stops its owned groups through `sessions/process.ts`'s `ProcessScope` and `core/children.ts`'s identity checks, refuses late spawns and events, rejects waiting opens and restarts, and lets a later open start afresh.
+
 ## Prompt protocol
 
 `src/shared/model/prompts.ts` holds B13's discriminated approval, question, plan and form schemas, the private-key raise/end events, the core's prompt and nested Needs-preview types, and the adapter-answer and outer reply shapes. API approvals and plans require an offered rejection; terminal-only observations may carry no choices or questions. Choice effects preserve the distinction between absent (unknown) and an empty object (no additional effect). Answer validation checks offered values, declared feedback, exact question ids, distinct labels and exclusive pick-or-text answers. It performs no authority classification. An adapter may mark a raise `omitted` (it left out a decision its CLI offers that it can't word completely); like `signals`, that never leaves the core. A form may name the MCP server that asks (`server`, the name it is configured under: its words, untrusted), which the core's title for it uses.

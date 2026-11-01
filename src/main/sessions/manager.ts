@@ -38,6 +38,7 @@ import { ConversationClaims } from './claims';
 import type { ClaimOwner } from './claims';
 import { droppedPaste } from './terminal/drop';
 import { isConversationId, requireConversationId } from './adapters';
+import { ProcessScope } from './process';
 
 const NOT_RUNNING = 'This agent’s session is not running.';
 const NOT_LISTED = 'That is not one of this project folder’s conversations.';
@@ -73,6 +74,8 @@ const STARTING = 'This agent’s session is still starting: answer once it runs.
 const UNHEARD = 'corrallm declined this request: nothing in corrallm hears what this session asks.';
 /** How long a session may take to close before the manager stops waiting for it. */
 const CLOSE_MS = 5000;
+/** All connections have this long to spawn, handshake and finish their first ready state. */
+const START_MS = 90_000;
 /** How long a silent turn's interrupt waits for its CLI's answer before it counts as unanswered. */
 export const STALLED_INTERRUPT_MS = 30_000;
 const UNANSWERED = 'The CLI did not answer the interrupt.';
@@ -934,6 +937,9 @@ export class SessionManager {
    */
   async restarting(canvas: CanvasId, agentId: string, adapter: AdapterId): Promise<void> {
     await this.#settled(canvas);
+    // A restart waiting on a launch hears its failure too; only a later open retries it.
+    const starting = this.#agents.get(canvas)?.get(agentId);
+    if (starting !== undefined && starting.live === undefined) await starting.session;
     const remembered = (await this.#conversation(canvas, adapter, agentId))?.id;
     if (remembered !== undefined) {
       requireConversationId(adapter, remembered);
@@ -1166,7 +1172,8 @@ export class SessionManager {
           text: `This agent’s conversation is open in ${this.#holderIn(canvas, holder)}, so it started a new one: two agents never share one conversation.`,
         });
       }
-      const session = await connector.start(
+      const session = await this.#start(
+        connector,
         {
           agentId,
           cwd: directory.cwd,
@@ -1180,6 +1187,9 @@ export class SessionManager {
           ...(resume === null ? {} : { roleChanged }),
         },
         host,
+        canvas,
+        agentId,
+        agent,
       );
       agent.live = session;
       // Installed only for the binding it launched in (B9a Design §3): a late start for one no
@@ -1196,6 +1206,59 @@ export class SessionManager {
     } catch (error) {
       this.#claims.release(owner);
       throw error;
+    }
+  }
+
+  /** Bounds the whole connector start, including helpers and any handshake or first thread. */
+  async #start(
+    connector: Connector<SessionMode>,
+    spec: Parameters<Connector<SessionMode>['start']>[0],
+    host: SessionHost,
+    canvas: CanvasId,
+    agentId: string,
+    agent: Agent,
+  ): Promise<LiveSession<SessionMode>> {
+    const processes = new ProcessScope();
+    let expired = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const starting = Promise.resolve().then(() => processes.run(() => connector.start(spec, host)));
+    // A connector can finish after the race was lost: its generation stays unheard and closes.
+    void starting.then(
+      (session) => {
+        if (expired) {
+          void Promise.resolve()
+            .then(() => session.close())
+            .catch((error: unknown) => {
+              console.error(`Could not close ${agentId}'s late session:`, error);
+            });
+        }
+      },
+      () => undefined,
+    );
+    try {
+      return await Promise.race([
+        starting,
+        new Promise<never>((_resolve, reject) => {
+          timer = setTimeout(() => {
+            expired = true;
+            agent.unheard = true;
+            const found = connectionIn(this.#deps.catalog, agent.connection);
+            const connection =
+              found === undefined
+                ? agent.connection
+                : `${found.adapter.name} · ${found.connection.label}`;
+            const error = `${connection} didn't finish starting within ${String(START_MS / 1000)} seconds`;
+            this.#deps.emit(canvas, agentId, agent.connection, { type: 'closed', error });
+            reject(new Error(error));
+          }, START_MS);
+        }),
+      ]);
+    } catch (error) {
+      agent.unheard = true;
+      await processes.close();
+      throw error;
+    } finally {
+      clearTimeout(timer);
     }
   }
 
