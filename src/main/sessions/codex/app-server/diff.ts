@@ -46,6 +46,9 @@ export function runGit(env: Readonly<Record<string, string>>): RunGit {
         (error, stdout) => {
           if (!error) resolve({ code: 0, stdout });
           else if (typeof error.code === 'number') resolve({ code: error.code, stdout });
+          // Git ended by a signal it wasn't sent (a refusing transport helper closes its pipe and
+          // git dies of SIGPIPE) fails as a nonzero exit does; our own timeout kill is an error.
+          else if (error.signal && !error.killed) resolve({ code: 1, stdout });
           else reject(new Error(`git ${args.join(' ')} failed`, { cause: error }));
         },
       );
