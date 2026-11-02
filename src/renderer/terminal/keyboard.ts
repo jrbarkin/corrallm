@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
 
 /*
- * The Option key in a Terminal agent's terminal, on macOS. Claude Code's Option shortcuts (as
- * Option+P, its model picker) need Option to work as Meta; but on many keyboard layouts Option
+ * The Option key in a Terminal agent's terminal, on macOS. An agent's Option shortcuts
+ * need Option to work as Meta; but on many keyboard layouts Option
  * types characters people need (@ on a German or French one). So Option is Meta by default only on
  * a layout like the US one, whose Option characters are rare symbols; the user can choose
  * otherwise, and their choice is kept for them (in this app's storage, on this computer).

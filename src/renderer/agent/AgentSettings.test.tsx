@@ -1,3 +1,5 @@
+import { MADE_UP } from '../../shared/test-made-up';
+import { useCatalog } from '../test-catalog';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { useState } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -513,7 +515,17 @@ describe('shared agent settings', () => {
           working={false}
         />,
       );
-      expect(screen.getByRole('group', { name: 'Its CLI settings' })).toBeTruthy();
+      expect(screen.getByRole('group', { name: `${adapter} settings` })).toBeTruthy();
     },
   );
+});
+
+it('shows an unfamiliar agent’s catalog identity on its settings summary and sheet', async () => {
+  await useCatalog(MADE_UP);
+  render(<Editor initial={agent({ adapter: 'zed', connection: 'zed.acp' })} />);
+  expect(screen.getByRole('button', { name: 'Agent settings: Reviewer' }).textContent).toContain(
+    'Zed Agent · ACP',
+  );
+  const { panel } = open();
+  expect(panel.getByRole('button', { name: 'Agent: Zed Agent · ACP' })).toBeTruthy();
 });

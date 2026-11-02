@@ -339,7 +339,7 @@ interface PauseCauses {
  * edits take effect at once. What it knows of each agent's adapter (how it runs, what its steps
  * can name, the usage it spends) it reads in the catalog it is given (catalog.ts). Stop takes
  * back what the run sent that is still going (RunIO.send). A task whose session would not start
- * (an Agent SDK agent on a Claude subscription) neither fails nor goes on: its agent asks the user
+ * (a connection that needs a different login) neither fails nor goes on: its agent asks the user
  * to switch that agent to another connection (the reply router's Switch, session.continueIn, which
  * changes the document; never the run), and works again once it runs another way, its session
  * sending what it kept.
@@ -1539,7 +1539,7 @@ export class RunStore {
         refused: {
           agent: destination,
           connection: 'unavailable',
-          text: 'This agent has no connection; choose Claude or Codex in Agent settings.',
+          text: 'This agent has no connection; choose another agent in Agent settings.',
         },
       };
     // B11a C3: admission, before the attempt goes to its recipient. A fallback rule is read

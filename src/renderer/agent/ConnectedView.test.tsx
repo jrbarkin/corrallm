@@ -373,15 +373,15 @@ describe('a connected agent', () => {
       mode: null,
     });
     const chip = () => view.getByRole('button', { name: /^Agent: / });
-    expect(chip().getAttribute('aria-label')).toBe('Agent: Claude · Agent SDK');
-    expect(card().getAttribute('aria-label')).toBe('a, Claude · SDK');
+    expect(chip().getAttribute('aria-label')).toBe('Agent: Claude Code · Agent SDK');
+    expect(card().getAttribute('aria-label')).toBe('a, Claude Code · SDK');
 
     await events.click(chip());
-    await events.click(view.getByRole('option', { name: /^Claude · Agent SDK/ }));
-    expect(chip().getAttribute('aria-label')).toBe('Agent: Claude · Agent SDK');
-    expect(card().getAttribute('aria-label')).toBe('a, Claude · SDK');
+    await events.click(view.getByRole('option', { name: /^Claude Code · Agent SDK/ }));
+    expect(chip().getAttribute('aria-label')).toBe('Agent: Claude Code · Agent SDK');
+    expect(card().getAttribute('aria-label')).toBe('a, Claude Code · SDK');
     expect(card().querySelector('.graph-card')?.getAttribute('title')).toBe(
-      'Agent: Claude · Agent SDK',
+      'Agent: Claude Code · Agent SDK',
     );
     expect(card().querySelector('img')?.getAttribute('alt')).toBe('Claude Code');
     // Its view is open: its session starts.
@@ -483,9 +483,9 @@ describe('a connected agent', () => {
     expect(side.queryByRole('group', { name: /^Current chat/ })).toBeNull();
 
     // Back to Claude Code's conversation and its native terminal.
-    await runAs(/^Claude · Agent SDK/);
+    await runAs(/^Claude Code · Agent SDK/);
     expect(messages()).toEqual(submitted);
-    await runAs(/^Claude · Terminal/);
+    await runAs(/^Claude Code · Terminal/);
     expect(messages()).toEqual(submitted);
     expect(rows()[0]?.dataset.submission).toBe(first);
     expect(new Set(rows().map((row) => row.dataset.submission)).size).toBe(4);
@@ -523,9 +523,9 @@ describe('a connected agent', () => {
 
     await events.click(transcript.getByRole('button', { name: 'Switch to Terminal' }));
     expect(view.getByRole('button', { name: /^Agent: / }).getAttribute('aria-label')).toBe(
-      'Agent: Claude · Terminal',
+      'Agent: Claude Code · Terminal',
     );
-    expect(card().getAttribute('aria-label')).toBe('a, Claude · Terminal');
+    expect(card().getAttribute('aria-label')).toBe('a, Claude Code · Terminal');
     await settle();
     expect(replies.start).toHaveBeenLastCalledWith(
       'a',
@@ -570,7 +570,7 @@ describe('a connected agent', () => {
       });
     });
     expect(view.queryByRole('list', { name: 'Queued messages' })).toBeNull();
-    expect(view.getByRole('button', { name: 'Agent: Claude · Terminal' })).toBeTruthy();
+    expect(view.getByRole('button', { name: 'Agent: Claude Code · Terminal' })).toBeTruthy();
   });
 
   it('holds the run for you when it would not start, until you switch it to Terminal', async () => {
@@ -636,8 +636,8 @@ describe('a connected agent', () => {
     await events.click(view.getByRole('button', { name: /^Agent: / }));
     const options = view.getAllByRole('option').map((option) => option.textContent);
     expect(options.filter((option) => option.startsWith('Claude'))).toEqual([
-      expect.stringMatching(/^Claude · Terminal.*works with your Claude login/),
-      expect.stringMatching(/^Claude · Agent SDK.*needs an API key or a cloud provider/),
+      expect.stringMatching(/^Claude Code · Terminal.*works with your Claude login/),
+      expect.stringMatching(/^Claude Code · Agent SDK.*needs an API key or a cloud provider/),
     ]);
   });
 
@@ -1683,9 +1683,9 @@ describe('a connected agent', () => {
 
     // The same CLI's other connection starts with them.
     await events.click(view.getByRole('button', { name: /^Agent: / }));
-    await events.click(view.getByRole('option', { name: /^Claude · Terminal/ }));
+    await events.click(view.getByRole('option', { name: /^Claude Code · Terminal/ }));
     await settle();
-    expect(card().getAttribute('aria-label')).toBe('a, Claude · Terminal');
+    expect(card().getAttribute('aria-label')).toBe('a, Claude Code · Terminal');
     expect(replies.start).toHaveBeenLastCalledWith('a', {
       connection: 'claude-code.terminal',
       model: 'haiku',
@@ -1748,9 +1748,9 @@ describe('an Agent SDK agent continued in Terminal', () => {
       },
     ]);
     expect(view.getByRole('button', { name: /^Agent: / }).getAttribute('aria-label')).toBe(
-      'Agent: Claude · Terminal',
+      'Agent: Claude Code · Terminal',
     );
-    expect(card().getAttribute('aria-label')).toBe('a, Claude · Terminal');
+    expect(card().getAttribute('aria-label')).toBe('a, Claude Code · Terminal');
     expect(replies.start).toHaveBeenLastCalledWith(
       'a',
       expect.objectContaining({ connection: 'claude-code.terminal' }),
@@ -1772,7 +1772,7 @@ describe('an Agent SDK agent continued in Terminal', () => {
     await events.click(offer.getByRole('button', { name: 'Continue in Terminal' }));
     await settle();
     expect(view.getByRole('button', { name: /^Agent: / }).getAttribute('aria-label')).toBe(
-      'Agent: Claude · Terminal',
+      'Agent: Claude Code · Terminal',
     );
     expect(replies.send).toHaveBeenCalledExactlyOnceWith('a', {
       id: expect.any(String) as unknown,
@@ -1798,12 +1798,12 @@ describe('an Agent SDK agent continued in Terminal', () => {
     const { replies, view } = await open({ connection: 'claude-code.sdk' });
     await events.click(view.getByRole('button', { name: /^Agent: / }));
     const first = view.getAllByRole('option')[0];
-    expect(first?.textContent).toMatch(/^Continue in Terminal.*Claude Code’s own terminal/);
+    expect(first?.textContent).toMatch(/^Continue in Terminal.*agent’s own terminal/);
     if (!first) throw new Error('no options');
     await events.click(first);
     await settle();
     expect(view.getByRole('button', { name: /^Agent: / }).getAttribute('aria-label')).toBe(
-      'Agent: Claude · Terminal',
+      'Agent: Claude Code · Terminal',
     );
     expect(replies.start).toHaveBeenLastCalledWith(
       'a',
@@ -1933,7 +1933,7 @@ describe('an Agent SDK agent’s MCP servers (/mcp)', () => {
     await events.click(view.getByRole('button', { name: 'Sign in in Terminal' }));
     await settle();
     expect(view.getByRole('button', { name: /^Agent: / }).getAttribute('aria-label')).toBe(
-      'Agent: Claude · Terminal',
+      'Agent: Claude Code · Terminal',
     );
     expect(replies.send).toHaveBeenCalledExactlyOnceWith('a', {
       id: expect.any(String) as unknown,

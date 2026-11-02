@@ -44,6 +44,15 @@ export function fakeCore() {
   const shows = new Set<Parameters<GuiApi['windowOnShow']>[0]>();
   let epoch = 'test-core';
   let seq = 0;
+  snapshots.set('settings', {
+    epoch,
+    rev: 0,
+    state: {
+      defaultAdapter: null,
+      consents: {},
+      api: { state: 'stopped', port: null },
+    },
+  });
   let restore: (() => void) | undefined;
   const raw = {
     ...Object.fromEntries(
@@ -67,6 +76,17 @@ export function fakeCore() {
                 };
           }
           (SURFACE[op].kind === 'read' ? reads : operations).push({ op, args });
+          if (!replies.has(op) && (op === 'settings.get' || op === 'settings.set')) {
+            const previous = core.state('settings');
+            if (!previous) throw new Error('No settings fixture');
+            if (op === 'settings.get') return { ok: true, value: previous.state };
+            const { defaultAdapter } = args as Parameters<GuiApi['settingsSet']>[0];
+            if (previous.state.defaultAdapter === defaultAdapter)
+              return { ok: true, value: { defaultAdapter } };
+            const rev = previous.rev + 1;
+            core.change({ topic: 'settings', rev, replace: { ...previous.state, defaultAdapter } });
+            return { ok: true, value: { defaultAdapter, revs: { settings: rev } } };
+          }
           const reply = replies.get(op) ?? { ok: true, value: {} };
           return typeof reply === 'function' ? reply(args) : reply;
         },
@@ -96,7 +116,7 @@ export function fakeCore() {
   const source = fromBridge(() => raw);
   const topics = new TopicMirror(source);
   const api = createClient(source, topics);
-  return {
+  const core = {
     api,
     show(target: Parameters<Parameters<GuiApi['windowOnShow']>[0]>[0]): void {
       for (const listener of shows) listener(target);
@@ -168,6 +188,7 @@ export function fakeCore() {
       restore?.();
     },
   };
+  return core;
 }
 
 /** A gesture has exactly one intent, with its explicit arguments (B9 Design §11, T6). */
