@@ -16,7 +16,7 @@ import { opsFor, toolName, toolOf } from '../../shared/api/registry';
 import type { ToolListing } from '../../shared/api/registry';
 import type { Dispatcher } from '../core/call';
 import { isTokenCaller } from '../core/caller';
-import type { Caller, TokenCaller } from '../core/caller';
+import type { AgentCaller, Caller, TokenCaller } from '../core/caller';
 import { foreignRequest } from '../loopback';
 
 /*
@@ -24,7 +24,9 @@ import { foreignRequest } from '../loopback';
  * (Core Server §3.3). One tool per operation, listed to each caller by its party, and every call
  * goes through core.call, so the server adds nothing of its own: a tool missing from a caller's
  * list is refused when called anyway, by the same audience check. A bearer token names the caller:
- * an agent's session, or an outside orchestrator a person made a token for, never you. Stateless,
+ * an agent's session generation (by the credential the session authority issued it, which the
+ * server hears list its tools), or an outside orchestrator a person made a token for, never you.
+ * A session's credential that no longer works gets a plain 401: its session is ending. Stateless,
  * with a fresh server per request, so a caller's party is read on every request.
  *
  * Before the token, in this order (API Spec §8.2): a Host other than its own, and any Origin
@@ -57,6 +59,11 @@ export interface ApiServerOptions {
    * revoked or expired): its 401 then says so, as TOKEN_REPLACED.
    */
   stale?: (token: string) => boolean;
+  /**
+   * Hears an agent's session generation list corrallm's tools (B21 §9 C1): what `agents` then
+   * reports as its `api`.
+   */
+  listed?: (caller: AgentCaller) => void;
   /** 0 for any free port. */
   port: number;
 }
@@ -212,9 +219,10 @@ export async function startApiServer(options: ApiServerOptions): Promise<ApiServ
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: undefined,
     } as unknown as StreamableHTTPServerTransportOptions);
-    server.setRequestHandler(ListToolsRequestSchema, () => ({
-      tools: listTools(options.core, caller),
-    }));
+    server.setRequestHandler(ListToolsRequestSchema, () => {
+      if (caller.kind === 'agent') options.listed?.(caller);
+      return { tools: listTools(options.core, caller) };
+    });
     server.setRequestHandler(CallToolRequestSchema, ({ params }, { signal }) =>
       callTool(options.core, caller, params.name, params.arguments, signal),
     );

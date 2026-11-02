@@ -61,6 +61,7 @@ const BUILDER: AgentCaller = {
   kind: 'agent',
   canvas: CANVAS,
   agent: 'builder',
+  generation: 1,
   session: 'builder-session',
 };
 /** Shell, calling as itself: linked to nobody. */
@@ -68,6 +69,7 @@ const SHELL: AgentCaller = {
   kind: 'agent',
   canvas: CANVAS,
   agent: 'shell',
+  generation: 1,
   session: 'shell-session',
 };
 
@@ -242,6 +244,8 @@ async function start(
       ...(watchdogNetwork === undefined ? {} : { watchdogNetwork }),
       ...(leads === undefined ? {} : { leads }),
       sessions: {
+        // Its agent callers are made up: no session authority issued them.
+        callers: () => true,
         connectors: {
           'codex.app-server': connectors.appServer ?? appServer,
           'codex.terminal': connectors.terminal ?? terminal,

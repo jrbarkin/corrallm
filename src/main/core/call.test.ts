@@ -112,6 +112,194 @@ describe('drainsOf', () => {
   });
 });
 
+describe('the authority stamp (current)', () => {
+  const ENDED = 'This token no longer works.';
+  const outside = CALLERS['outside-write'] as OutsideCaller;
+
+  /**
+   * A dispatcher whose `current` refuses the callers in `ended`, its op `test.slow` holding its
+   * agent's scope until `release` resolves, and its document's commits made at once.
+   */
+  function stamped(
+    more: { implementations?: Record<string, unknown>; rules?: Record<string, unknown> } = {},
+  ) {
+    const registry = testRegistry();
+    const ended = new Set<Caller>();
+    const entered = Promise.withResolvers<undefined>();
+    const release = Promise.withResolvers<undefined>();
+    const holdSurface = registry.surface['test.hold'];
+    if (!holdSurface) throw new Error('The registry lacks its fixture ops.');
+    const core = createDispatcher(
+      {
+        ...registry,
+        surface: { ...registry.surface, 'test.hold': { ...holdSurface, kind: 'command' } },
+        implementations: {
+          ...registry.implementations,
+          'test.hold': async () => {
+            entered.resolve(undefined);
+            await release.promise;
+            return { stopped: true };
+          },
+          ...(more.implementations as Record<string, never>),
+        },
+        rules: { ...registry.rules, ...(more.rules as Record<string, never>) },
+      },
+      {
+        isLead,
+        resolvers: RESOLVERS,
+        check: true,
+        current: (caller) => (ended.has(caller) ? ENDED : undefined),
+        commit: (_canvas, build) =>
+          Promise.resolve({
+            result: build({ id: CANVAS, arrange: false, nodes: [], links: [] }).result,
+            rev: 2,
+          }),
+      },
+    );
+    return { core, registry, ended, entered, release };
+  }
+
+  it('refuses a caller that no longer holds its authority as its call comes, saying why', async () => {
+    const { core, registry, ended } = stamped();
+    ended.add(outside);
+    expect(await core.call('test.message', message(), outside)).toEqual({
+      ok: false,
+      error: { code: 'refused', sentence: ENDED },
+    });
+    expect(registry.calls['test.message']).toEqual([]);
+    // You hold no token: nothing ever stamps you.
+    expect(await core.call('test.yours', {}, CALLERS.you)).toMatchObject({ ok: true });
+  });
+
+  it.each([
+    ['an outside token', outside],
+    ['an agent session generation', CALLERS.worker],
+  ] as const)(
+    'refuses a call of %s admitted before it ended, queued in a scope, when it runs',
+    async (_label, caller) => {
+      const { core, registry, ended, entered, release } = stamped();
+      const held = core.call('test.hold', { canvas: CANVAS, agent: 'peer' }, CALLERS.you);
+      await entered.promise;
+      const waiting = core.call('test.message', message(), caller);
+      // Admitted: it waits in peer's scope behind the held call.
+      await Promise.resolve();
+      ended.add(caller);
+      release.resolve(undefined);
+      await held;
+      expect(await waiting).toEqual({ ok: false, error: { code: 'refused', sentence: ENDED } });
+      expect(registry.calls['test.message']).toEqual([]);
+    },
+  );
+
+  it('refuses it after an awaited rule, at its point of no return and as its commit builds', async () => {
+    const gate = Promise.withResolvers<undefined>();
+    const checking = Promise.withResolvers<undefined>();
+    const native = vi.fn();
+    const built = vi.fn();
+    const { core, ended, registry } = stamped({
+      rules: {
+        'shell-text': {
+          'test.message': async () => {
+            checking.resolve(undefined);
+            await gate.promise;
+            return undefined;
+          },
+        },
+      },
+    });
+    const afterRule = core.call('test.message', message(), outside);
+    await checking.promise;
+    ended.add(outside);
+    gate.resolve(undefined);
+    expect(await afterRule).toMatchObject({ ok: false, error: { code: 'refused' } });
+    expect(registry.calls['test.message']).toEqual([]);
+
+    for (const step of ['noReturn', 'build'] as const) {
+      const reached = Promise.withResolvers<undefined>();
+      const go = Promise.withResolvers<undefined>();
+      const caller = { ...outside };
+      const { core: other, ended: gone } = stamped({
+        implementations: {
+          'test.tokens': async (_args: unknown, ctx: OpContext) => {
+            reached.resolve(undefined);
+            await go.promise;
+            if (step === 'noReturn') {
+              ctx.noReturn();
+              native();
+              return { done: true };
+            }
+            return ctx.commit(CANVAS, (doc) => {
+              built();
+              return { next: doc, result: { done: true } };
+            });
+          },
+        },
+      });
+      const pending = other.call('test.tokens', {}, caller);
+      await reached.promise;
+      gone.add(caller);
+      go.resolve(undefined);
+      expect(await pending).toEqual({ ok: false, error: { code: 'refused', sentence: ENDED } });
+    }
+    expect(native).not.toHaveBeenCalled();
+    expect(built).not.toHaveBeenCalled();
+  });
+
+  it('refuses a projection read across an await by a caller whose authority ended meanwhile', async () => {
+    const { core, ended } = stamped();
+    const read = Promise.withResolvers<undefined>();
+    const go = Promise.withResolvers<undefined>();
+    let waits = false;
+    const projection = {
+      name: 'test.view',
+      surface: { access: { 'outside-write': 'canvas' }, kind: 'read', scope: 'none' } as const,
+      input: z.strictObject({}),
+      read: async () => {
+        if (waits) {
+          read.resolve(undefined);
+          await go.promise;
+        }
+        return { secret: 'kept' };
+      },
+    };
+    expect(await core.project(projection, {}, outside)).toMatchObject({ ok: true });
+    waits = true;
+    const pending = core.project(projection, {}, outside);
+    await read.promise;
+    ended.add(outside);
+    go.resolve(undefined);
+    expect(await pending).toEqual({ ok: false, error: { code: 'refused', sentence: ENDED } });
+  });
+
+  it('never returns another call’s kept result to a caller whose authority ended', async () => {
+    const entered = Promise.withResolvers<undefined>();
+    const release = Promise.withResolvers<undefined>();
+    const ran = vi.fn();
+    const { core, ended } = stamped({
+      implementations: {
+        'test.agent': async ({ agent }: { agent: string }) => {
+          ran();
+          entered.resolve(undefined);
+          await release.promise;
+          return { agent };
+        },
+      },
+    });
+    const args = { canvas: CANVAS, agent: 'helper', request: REQUEST };
+    const first = core.call('test.agent', args, outside);
+    await entered.promise;
+    // The same caller's retry waits for the first call's result, to be given it.
+    const retry = core.call('test.agent', args, outside);
+    await Promise.resolve();
+    ended.add(outside);
+    release.resolve(undefined);
+    // The first call passed every check before its token ended: it ran, and says so.
+    expect(await first).toMatchObject({ ok: true, value: { agent: 'helper' } });
+    expect(await retry).toEqual({ ok: false, error: { code: 'refused', sentence: ENDED } });
+    expect(ran).toHaveBeenCalledOnce();
+  });
+});
+
 describe('core.call', () => {
   it('revokes a queued lead-only call before it gets its scope', async () => {
     const registry = testRegistry();
@@ -970,6 +1158,32 @@ describe('core.call', () => {
     expect((await core.call('test.read', {}, caller)).ok).toBe(true);
   });
 
+  it('keeps one agent’s limits and repeated requests by the agent, across its sessions’ generations', async () => {
+    let now = 1000;
+    const { core, calls } = setup({ now: () => now });
+    const worker = CALLERS.worker as AgentCaller;
+    // The same agent's session restarted: another generation, another session id.
+    const restarted: AgentCaller = { ...worker, generation: 2, session: 'worker-session-2' };
+    const first = await core.call('test.message', message({ request: REQUEST }), worker);
+    expect(await core.call('test.message', message({ request: REQUEST }), restarted)).toEqual(
+      first,
+    );
+    expect(calls['test.message']).toHaveLength(1);
+    // Its writes a second count together, whichever generation made them (the two above too).
+    for (let i = 2; i < TOKEN_WRITES_PER_SECOND; i++) {
+      const caller = i % 2 === 0 ? worker : restarted;
+      expect((await core.call('test.message', message(), caller)).ok).toBe(true);
+    }
+    expect(await core.call('test.message', message(), restarted)).toEqual({
+      ok: false,
+      error: { code: 'refused', sentence: 'Too many calls; slow down.' },
+    });
+    // Another agent is its own.
+    expect((await core.call('test.message', message(), CALLERS.lead)).ok).toBe(true);
+    now += 1000;
+    expect((await core.call('test.message', message(), worker)).ok).toBe(true);
+  });
+
   it('limits a token’s writes a second, never its reads, and never yours', async () => {
     let now = 1000;
     const { core } = setup({ now: () => now });
@@ -1051,7 +1265,13 @@ describe('core.call', () => {
   it('reads a caller’s party on every call', async () => {
     let leads = true;
     const { core } = setup({ isLead: () => leads });
-    const helper: Caller = { kind: 'agent', canvas: CANVAS, agent: 'lead', session: 's' };
+    const helper: Caller = {
+      kind: 'agent',
+      canvas: CANVAS,
+      agent: 'lead',
+      generation: 1,
+      session: 's',
+    };
     expect((await core.call('test.agent', { canvas: CANVAS, agent: 'helper' }, helper)).ok).toBe(
       true,
     );
