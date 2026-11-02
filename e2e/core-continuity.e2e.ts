@@ -1,6 +1,7 @@
 import { expect, test } from '@playwright/test';
 
 import { continuityWorld } from './continuity-world';
+import { crashRenderer } from './crash-renderer';
 
 test.skip(process.platform === 'win32', 'The native fakes use POSIX wrappers.');
 
@@ -19,11 +20,7 @@ for (const [terminal, loss] of [
       const sessions = await world.sessions();
       if (loss === 'reload') await world.page.reload();
       else {
-        const crashed = world.page.waitForEvent('crash');
-        await world.app.evaluate(({ BrowserWindow }) => {
-          BrowserWindow.getAllWindows()[0]?.webContents.forcefullyCrashRenderer();
-        });
-        await crashed;
+        await crashRenderer(world.app, world.page);
         // Playwright keeps a crashed page dead even when its window reloads, so the view is
         // recovered as a user does: the dead window closed, a new one opened. A renderer death
         // must not restart the utility core, whose run goes on beneath either.
@@ -36,6 +33,10 @@ for (const [terminal, loss] of [
       expect(await world.prompts()).toEqual(['continuity-first']);
       await world.release();
       await world.completed();
+    } catch (error) {
+      // Preserve the original operation if cleanup fails too.
+      console.error('Continuity scenario failed before closing:', error);
+      throw error;
     } finally {
       await world.close();
     }
