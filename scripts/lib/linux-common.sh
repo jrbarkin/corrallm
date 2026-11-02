@@ -60,7 +60,7 @@ linux_workspace() {
   if [ -n "$artifacts" ]; then mounts+=(--volume "$artifacts:/artifacts"); fi
   linux_archive | docker run --rm --interactive "${linux_docker[@]}" \
     --env HUSKY=0 --env CI=1 --env CORRALLM_UNSIGNED=1 --env CORRALLM_NO_UPDATE_CHECK=1 \
-    --env PLAYWRIGHT_HTML_OPEN=never \
+    --env PLAYWRIGHT_HTML_OPEN=never --env CORRALLM_LOAD_CPU_PROFILE \
     "${mounts[@]}" "$linux_image" bash -c '
       set -Eeuo pipefail
       trap '\''printf "FAILED: unpack Linux working tree (exit %s)\n" "$?" >&2'\'' ERR
