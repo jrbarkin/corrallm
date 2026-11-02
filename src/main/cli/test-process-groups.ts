@@ -18,16 +18,14 @@ export const TEST_GROUP_SYSTEM: ChildSystem = {
   alive: (pid) => {
     try {
       process.kill(process.platform === 'win32' ? pid : -pid, 0);
-      return true;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ESRCH') return false;
-      if ((error as NodeJS.ErrnoException).code === 'EPERM' && process.platform !== 'win32') {
-        // A group probe can be denied even after its leader exited. Inspect every member,
-        // not just the recorded leader: descendants may still run in that private group.
-        return hasLiveGroupMembers(pid);
-      }
-      throw error;
+      if ((error as NodeJS.ErrnoException).code !== 'EPERM' || process.platform === 'win32')
+        throw error;
     }
+    // Success and EPERM can both describe an exited group awaiting reaping. Only a complete
+    // membership read distinguishes that from living descendants without their leader.
+    return process.platform === 'win32' || hasLiveGroupMembers(pid);
   },
   signal: (pid, signal) => {
     process.kill(process.platform === 'win32' ? pid : -pid, signal);
