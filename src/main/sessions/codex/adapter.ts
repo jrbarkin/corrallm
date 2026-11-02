@@ -170,7 +170,7 @@ export const codex: Adapter = {
   conversations: ({ executable }) => ({
     list: async (cwd, env) => codexConversations({ codex: await executable(env), cwd, env }),
   }),
-  fake: (pause) => new FakeConnector({ pause, adapter: 'codex' }),
+  fake: (pause) => new FakeConnector({ ownerPrompts: true, pause, adapter: 'codex' }),
   fakeOptions: {
     models: FAKE_CODEX_MODELS,
     // The fake's own default, Codex's Default, asks.

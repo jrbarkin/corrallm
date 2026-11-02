@@ -16,12 +16,6 @@ import type { Fixture, RecordedElicitation, RecordedRequest } from './recorded';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
-function shownId(events: readonly HostEvent[], type: 'permission' | 'question' | 'plan'): string {
-  const shown = events.findLast((event) => event.type === type);
-  if (shown === undefined || !('id' in shown)) throw new Error('not shown');
-  return shown.id;
-}
-
 function requests(fixture: Fixture): RecordedRequest[] {
   return recorded(fixture).flatMap((item) => (item.kind === 'canUseTool' ? [item.data] : []));
 }
@@ -66,7 +60,7 @@ function prompts({ decline }: { decline?: string } = {}) {
 }
 
 describe('Prompts: each native request raised to the core under a fresh key', () => {
-  it('raises a recorded permission request, shows it as before, and answers it only by its key', async () => {
+  it('raises a recorded permission request, answers it only by its key', async () => {
     const write = first('tools-and-compact', 'Write');
     const { asking, events, ask, key } = prompts();
     const told = ask(write);
@@ -75,14 +69,6 @@ describe('Prompts: each native request raised to the core under a fresh key', ()
         type: 'prompt',
         key: expect.stringMatching(UUID) as unknown,
         prompt: expect.objectContaining({ kind: 'approval', answerIn: 'api' }) as unknown,
-      },
-      {
-        type: 'permission',
-        id: expect.stringMatching(/^prompt:[0-9a-f-]{36}$/) as unknown,
-        tool: 'Write',
-        summary: 'notes.txt',
-        always: 'Yes, allow all edits during this session',
-        detail: { kind: 'diff', added: 1, removed: 0, lines: [{ kind: 'add', text: 'one' }] },
       },
       { type: 'status', status: 'waiting' },
     ]);
@@ -128,13 +114,10 @@ describe('Prompts: each native request raised to the core under a fresh key', ()
       behavior: 'deny',
       message: 'corrallm declined this request: too many wait.',
     });
-    expect(events.slice(-2)).toEqual([
-      { type: 'withdrawn', id: shownId(events, 'permission') },
-      { type: 'status', status: 'working' },
-    ]);
+    expect(events.slice(-1)).toEqual([{ type: 'status', status: 'working' }]);
     // Declining one no longer asked does nothing, and never throws.
     asking.answers.decline(key(), 'again');
-    expect(events.filter((event) => event.type === 'withdrawn')).toHaveLength(1);
+    expect(events.filter((event) => event.type === 'withdrawn')).toHaveLength(0);
   });
 
   it('shows nothing of a request the core declines as it is raised', async () => {
@@ -152,9 +135,8 @@ describe('Prompts: each native request raised to the core under a fresh key', ()
     const told = ask(first('tools-and-compact', 'Write'), abort.signal);
     abort.abort();
     expect(await told).toMatchObject({ behavior: 'deny' });
-    expect(events.slice(-3)).toEqual([
+    expect(events.slice(-2)).toEqual([
       { type: 'prompt-ended', key: key(), reason: 'withdrawn' },
-      { type: 'withdrawn', id: shownId(events, 'permission') },
       { type: 'status', status: 'working' },
     ]);
     expect(() => {
@@ -209,33 +191,18 @@ describe('Prompts: MCP servers’ requests', () => {
     item.kind === 'elicitation' ? [item.data] : [],
   ) as [RecordedElicitation, RecordedElicitation];
 
-  it('raises the recorded form, shows it as before, and answers what fits it', async () => {
+  it('raises the recorded form, answers what fits it', async () => {
     const { asking, events, elicit, key } = prompts();
     const told = elicit(form.request);
     expect(events[0]).toMatchObject({
       type: 'prompt',
       prompt: { kind: 'form', server: 'tracker' },
     });
-    expect(events[1]).toEqual({
-      type: 'elicitation',
-      id: expect.stringMatching(/^elicitation:/) as unknown,
-      server: 'tracker',
-      message: 'Which repository should the issue go in?',
-      fields: [
-        { name: 'repo', label: 'Repository', required: true, kind: 'text', min: 1 },
-        {
-          name: 'priority',
-          label: 'Priority',
-          required: false,
-          kind: 'choice',
-          options: [
-            { value: 'low', label: 'Low' },
-            { value: 'high', label: 'High' },
-          ],
-        },
-        { name: 'draft', label: 'Draft', required: false, kind: 'boolean', default: false },
-      ],
-    });
+    expect(
+      events.some(({ type }) =>
+        ['permission', 'question', 'plan', 'elicitation', 'withdrawn'].includes(type),
+      ),
+    ).toBe(false);
     expect(() => {
       asking.answers.answer(key(), { kind: 'form', action: 'accept', values: { draft: true } });
     }).toThrow(/Repository is required/);
@@ -259,13 +226,11 @@ describe('Prompts: MCP servers’ requests', () => {
       prompt: { kind: 'form', form: { url: 'https://tracker.example.com/sign-in?state=abc123' } },
     });
     // Shown in the core's words, naming the link's host, never the server's.
-    expect(events[1]).toEqual({
-      type: 'elicitation',
-      id: expect.stringMatching(/^elicitation:/) as unknown,
-      server: 'tracker',
-      message: 'MCP server “tracker” asks you to open a link on tracker.example.com',
-      url: 'https://tracker.example.com/sign-in?state=abc123',
-    });
+    expect(
+      events.some(({ type }) =>
+        ['permission', 'question', 'plan', 'elicitation', 'withdrawn'].includes(type),
+      ),
+    ).toBe(false);
     asking.answers.decline(
       key(),
       'corrallm declined this request: its link isn’t one corrallm opens.',
@@ -294,84 +259,19 @@ describe('Prompts: MCP servers’ requests', () => {
   });
 });
 
-describe('Prompts: the events B13 replaces answered through the owner (until X10)', () => {
-  it('translates an old card’s answer to the prompt’s own, answering nothing itself', async () => {
-    const { asking, ask, key, events } = prompts();
-    let settled = false;
-    const told = ask(first('suggestions-and-denials')).then((result) => {
-      settled = true;
-      return result;
-    });
-    const id = shownId(events, 'permission');
-    expect(asking.bridge(id, { kind: 'permission', answer: 'once' })).toEqual({
-      key: key(),
-      answer: { kind: 'choice', value: 'allow' },
-    });
-    expect(asking.bridge(id, { kind: 'permission', answer: 'always' }).answer).toEqual({
-      kind: 'choice',
-      value: 'always',
-    });
-    expect(asking.bridge(id, { kind: 'permission', answer: 'deny' }).answer).toEqual({
-      kind: 'choice',
-      value: 'deny',
-    });
-    expect(
-      asking.bridge(id, { kind: 'permission', answer: 'deny', feedback: ' Use pnpm ' }).answer,
-    ).toEqual({ kind: 'choice', value: 'deny-feedback', feedback: 'Use pnpm' });
-    await Promise.resolve();
-    expect(settled).toBe(false);
-    expect(asking.waiting).toBe(true);
+it('publishes each native request through the owner without a legacy transcript mirror', async () => {
+  const { asking, events, ask, key } = prompts();
+  const pending = ask(first('tools-and-compact', 'Write'));
+  try {
+    expect(events.map(({ type }) => type)).toEqual(['prompt', 'status']);
     asking.answers.answer(key(), { kind: 'choice', value: 'allow' });
-    await told;
-  });
-
-  it('refuses to translate what the prompt doesn’t offer, or one no longer asked', () => {
-    const { asking, ask, events } = prompts();
-    void ask(first('ask-rule'));
-    expect(() =>
-      asking.bridge(shownId(events, 'permission'), {
-        kind: 'permission',
-        answer: 'always',
-      }),
-    ).toThrow(/doesn’t offer/);
-    expect(() => asking.bridge('nope', { kind: 'permission', answer: 'once' })).toThrow(
-      /no longer asked/,
-    );
-  });
-
-  it('translates questions by id, a plan by its mode, and a form as it is', () => {
-    const { asking, ask, elicit, events } = prompts();
-    void ask(first('question-and-plan', 'AskUserQuestion'));
+    await pending;
     expect(
-      asking.bridge(shownId(events, 'question'), {
-        kind: 'question',
-        answers: ['a.txt'],
-      }).answer,
-    ).toEqual({ kind: 'questions', answers: { q1: { picked: ['a.txt'] } } });
-    expect(
-      asking.bridge(shownId(events, 'question'), {
-        kind: 'question',
-        answers: ['c.txt, please'],
-      }).answer,
-    ).toEqual({ kind: 'questions', answers: { q1: { text: 'c.txt, please' } } });
-
-    void ask(first('plan-into-mode'));
-    const plan = shownId(events, 'plan');
-    expect(
-      asking.bridge(plan, { kind: 'plan', answer: { approve: true, mode: 'auto' } }).answer,
-    ).toEqual({ kind: 'choice', value: 'auto' });
-    expect(
-      asking.bridge(plan, { kind: 'plan', answer: { approve: false, feedback: 'Smaller' } }).answer,
-    ).toEqual({ kind: 'choice', value: 'keep-planning', feedback: 'Smaller' });
-
-    void elicit(
-      recorded('mcp-elicitations').find((item) => item.kind === 'elicitation')?.data.request,
-    );
-    const shown = events.findLast((event) => event.type === 'elicitation');
-    if (shown?.type !== 'elicitation') throw new Error('not shown');
-    expect(
-      asking.bridge(shown.id, { kind: 'elicitation', action: 'accept', values: { repo: 'a/b' } })
-        .answer,
-    ).toEqual({ kind: 'form', action: 'accept', values: { repo: 'a/b' } });
-  });
+      events.some(({ type }) =>
+        ['permission', 'question', 'plan', 'elicitation', 'withdrawn'].includes(type),
+      ),
+    ).toBe(false);
+  } finally {
+    asking.withdrawAll();
+  }
 });

@@ -109,6 +109,19 @@ const prompts = async () =>
   (await logged()).flatMap((entry) => (entry.event === 'prompt' ? [entry.text] : []));
 const starts = async () =>
   (await logged()).flatMap((entry) => (entry.event === 'start' ? [entry.args ?? []] : []));
+
+/** Inspect owner entries while the CLI, rather than the renderer, owns its screen. */
+const promptEntries = () =>
+  page.evaluate(async () => {
+    const shown = await window.api.windowGet({});
+    if (!shown.ok) throw new Error(shown.error.sentence);
+    const result = await window.api.sessionTranscript({
+      canvas: shown.value.canvas,
+      agent: 'shop',
+    });
+    if (!result.ok) throw new Error(result.error.sentence);
+    return result.value.entries.filter((entry) => entry.kind === 'prompt');
+  });
 /** Waits for the fake's `count`th run to show its composer (its hooks trusted). */
 async function codexReady(count = 1) {
   await expect
@@ -256,6 +269,50 @@ test('runs Codex itself in a terminal in the project folder, and follows its tur
   await expect(card).not.toHaveClass(/\basking\b/);
   await expect(needs).toHaveCount(0);
   expect(await starts()).toHaveLength(1);
+});
+
+test('Not waiting settles only the owner observation, and a later terminal wait is new', async () => {
+  await canvasFile();
+  await chooseProject();
+  const { view, terminal } = await openShop();
+  await codexReady();
+  await typeIn(terminal, 'ask to run echo', 'Enter');
+  await expect(status(view)).toHaveText('Needs you, in the terminal');
+  await expect.poll(async () => (await promptEntries()).length).toBe(1);
+  const first = (await promptEntries())[0];
+  if (!first) throw new Error('No terminal wait');
+  await view.getByRole('button', { name: 'All queues', exact: true }).click();
+  const queues = page.getByRole('dialog', { name: 'All queues', exact: true });
+  await queues.getByRole('button', { name: 'Not waiting', exact: true }).click();
+  await expect(queues.getByRole('button', { name: 'Not waiting', exact: true })).toHaveCount(0);
+  await expect
+    .poll(async () => (await promptEntries())[0])
+    .toMatchObject({ id: first.id, outcome: { type: 'dismissed' } });
+  expect((await logged()).filter((row) => row.event === 'answer')).toEqual([]);
+  expect(await prompts()).toEqual(['ask to run echo']);
+  await queues.getByRole('button', { name: 'Open Shop', exact: true }).click();
+  await expect(status(view)).toHaveText('Needs you, in the terminal');
+  await expect(view.getByRole('button', { name: 'Not waiting', exact: true })).toHaveCount(0);
+  await typeIn(terminal, 'y');
+  await expect(status(view)).toHaveText('Idle');
+  expect((await logged()).filter((row) => row.event === 'answer')).toHaveLength(1);
+
+  await typeIn(terminal, 'ask again', 'Enter');
+  await expect(view.getByRole('button', { name: 'Not waiting', exact: true })).toBeVisible();
+  await expect.poll(async () => (await promptEntries()).length).toBe(2);
+  const next = (await promptEntries())[1];
+  expect(next?.id).not.toBe(first.id);
+  await typeIn(terminal, 'y');
+  await expect(status(view)).toHaveText('Idle');
+  await expect
+    .poll(async () => (await promptEntries())[1])
+    .toMatchObject({ id: next?.id, outcome: { type: 'answered-in-terminal' } });
+  expect((await promptEntries())[0]).toMatchObject({
+    id: first.id,
+    outcome: { type: 'dismissed' },
+  });
+  expect((await logged()).filter((row) => row.event === 'answer')).toHaveLength(2);
+  expect(await prompts()).toEqual(['ask to run echo', 'ask again']);
 });
 
 test('the fake preserves text and bracketed paste coalesced with terminal reports', async () => {

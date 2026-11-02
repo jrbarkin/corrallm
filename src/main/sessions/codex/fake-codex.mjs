@@ -474,6 +474,7 @@ async function turn(thread, turnId, input, { review, compact } = {}) {
   }
   let said = `You said: ${text}`;
   if (wanted.startsWith('ask')) {
+    const many = wanted.startsWith('ask many');
     const { id, answer } = await ask('item/tool/requestUserInput', {
       ...where,
       itemId: `call_${randomUUID()}`,
@@ -491,11 +492,66 @@ async function turn(thread, turnId, input, { review, compact } = {}) {
             { label: 'Blue', description: 'Cool' },
           ],
         },
+        ...(many
+          ? [
+              {
+                id: 'target',
+                header: 'Target',
+                question: 'Where should it go?',
+                isOther: true,
+                isSecret: false,
+                options: [
+                  { label: 'Preview', description: 'Review first' },
+                  { label: 'Release', description: 'Ship it' },
+                ],
+              },
+              {
+                id: 'scope',
+                header: 'Scope',
+                question: 'How much should change?',
+                isOther: true,
+                isSecret: false,
+                options: [
+                  { label: 'Small', description: 'One change' },
+                  { label: 'Large', description: 'Several changes' },
+                ],
+              },
+              {
+                id: 'notes',
+                header: 'Notes',
+                question: 'What should the release note say?',
+                isOther: true,
+                isSecret: false,
+                options: [],
+              },
+              {
+                id: 'checks',
+                header: 'Checks',
+                question: 'Which check should run?',
+                isOther: true,
+                isSecret: false,
+                options: [
+                  { label: 'Lint', description: 'ESLint' },
+                  { label: 'Tests', description: 'Vitest' },
+                ],
+              },
+              {
+                id: 'code',
+                header: 'Code',
+                question: 'What is the private code?',
+                isOther: true,
+                isSecret: true,
+                options: [],
+              },
+            ]
+          : []),
       ],
     });
     notify('serverRequest/resolved', { threadId, requestId: id });
     if (state.interrupted) return finish('interrupted');
-    said = `You picked ${answer?.result?.answers?.color?.answers?.[0] ?? 'nothing'}.`;
+    said = many
+      ? 'Answers received.'
+      : `You picked ${answer?.result?.answers?.color?.answers?.[0] ?? 'nothing'}.`;
   }
   /** An MCP server's tool call, as Codex reports it: asking first, as `asks` does. */
   const mcpCall = async (tool, args, readOnly, asks) => {

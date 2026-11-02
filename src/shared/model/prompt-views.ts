@@ -216,10 +216,9 @@ export type PromptEntryChange =
     };
 
 /** A prompt whole, as a reader sees it (promptFor). */
+type WithChoices<T> = T extends unknown ? Omit<T, 'choices'> & { choices: NeedChoice[] } : never;
 export type PromptView =
-  | (Omit<Extract<Prompt, { kind: 'approval' | 'plan' | 'question' }>, 'choices'> & {
-      choices: NeedChoice[];
-    })
+  | WithChoices<Extract<Prompt, { kind: 'approval' | 'plan' | 'question' }>>
   | (Omit<FormPrompt, 'form'> & { form?: FormPrompt['form']; choices: NeedChoice[] });
 type FormPrompt = Extract<Prompt, { kind: 'form' }>;
 

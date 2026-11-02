@@ -107,7 +107,7 @@ test('runs a connected agent in the project folder, answering its prompts throug
   await composer.press('Enter');
   const transcript = view.getByRole('log', { name: 'Transcript' });
   await expect(transcript.getByText('You said: Hello')).toBeVisible();
-  const prompt = transcript.getByRole('group', { name: 'Bash command: echo hello' });
+  const prompt = transcript.getByRole('group', { name: 'Run this command?' });
   await prompt.getByRole('button', { name: 'Yes', exact: true }).click();
   await expect(transcript.getByRole('button', { name: 'Bash echo hello' })).toBeVisible();
   await expect(transcript.getByText(/^Worked for \d+s$/)).toBeVisible();
@@ -116,17 +116,19 @@ test('runs a connected agent in the project folder, answering its prompts throug
   // It asks a question, answered in a question card.
   await composer.fill('/question');
   await composer.press('Enter');
-  const asked = transcript.getByRole('group', { name: 'Questions for you' });
-  await asked.getByRole('button', { name: 'Yes', exact: true }).click();
+  const asked = transcript.getByRole('group', { name: 'Shall I go on?' });
+  await asked.getByRole('radio', { name: 'Yes', exact: true }).check();
+  await asked.getByRole('button', { name: 'Send answers', exact: true }).click();
   await expect(transcript.getByText('Answer received: Yes')).toBeVisible();
-  await expect(asked.getByText('You answered: Yes')).toBeVisible();
+  await expect(asked.getByText('Answered by you.')).toBeVisible();
   await expect(transcript.getByText(/^Worked for \d+s$/)).toHaveCount(2);
 
   // It asks to approve a plan, carried out in the mode chosen.
   await composer.fill('/plan');
   await composer.press('Enter');
-  const plan = transcript.getByRole('group', { name: 'Plan' });
+  const plan = transcript.getByRole('group', { name: 'Approve this plan?', exact: true });
   await plan.getByRole('button', { name: 'Yes, and auto-accept edits' }).click();
+  await expect(plan.getByRole('status')).toHaveText('Allowed once by you.');
   await expect(transcript.getByText('Carrying out the plan.')).toBeVisible();
   await expect(view.getByRole('button', { name: 'Mode: Accept edits' })).toBeVisible();
 
@@ -229,8 +231,10 @@ test('runs a connected agent’s queue for real: a step, an If on its output, an
     ),
   ).toBeVisible();
   await expect(transcript.getByText('You said: Wrap up the tests')).toBeVisible();
-  const question = transcript.getByRole('group', { name: 'Questions for you' });
-  await expect(question.getByText('Shall I go on?')).toBeVisible();
+  const question = transcript.getByRole('group', { name: 'Shall I go on?' });
+  await expect(
+    question.getByRole('heading', { name: 'Shall I go on?', exact: true }),
+  ).toBeVisible();
   await expect(transcript.getByText(/Never sent/)).toHaveCount(0);
 
   // Stop interrupts the turn the run started: the question is no longer asked.
@@ -249,7 +253,7 @@ test('runs a connected agent’s queue for real: a step, an If on its output, an
   ).toHaveAttribute('data-run', 'skipped');
   await queues.getByRole('button', { name: 'Open Releaser' }).click();
   await expect(transcript.getByText(/^Interrupted · \d+s$/)).toBeVisible();
-  await expect(question.getByText('Not answered: Shall I go on?')).toBeVisible();
+  await expect(question.getByText('No longer waiting.')).toBeVisible();
 });
 
 test('runs a Codex agent through its app server, in Codex’s own modes', async () => {
@@ -289,7 +293,7 @@ test('runs a Codex agent through its app server, in Codex’s own modes', async 
   await expect(mode).toHaveAccessibleName('Mode: Read only');
   await composer.fill('Again');
   await composer.press('Enter');
-  const prompt = transcript.getByRole('group', { name: 'Bash command: echo hello' });
+  const prompt = transcript.getByRole('group', { name: 'Run this command?' });
   await prompt.getByRole('button', { name: 'Yes', exact: true }).click();
   await expect(transcript.getByText(/^Worked for \d+s$/)).toHaveCount(2);
 });

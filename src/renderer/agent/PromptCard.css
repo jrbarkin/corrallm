@@ -1,0 +1,40 @@
+.prompt-card {
+  margin: 8px 0;
+  padding: 12px;
+  border: 1px solid color-mix(in srgb, CanvasText 25%, transparent);
+  border-radius: 8px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.prompt-card h4 {
+  margin: 4px 0 8px;
+}
+.prompt-card pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: inherit;
+  max-height: none;
+}
+.prompt-card label {
+  display: block;
+  margin: 6px 0;
+}
+.prompt-card input:not([type='radio'], [type='checkbox']),
+.prompt-card textarea {
+  display: block;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+.prompt-actions {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  min-width: 0;
+}
+.prompt-source {
+  opacity: 0.65;
+  font-size: 12px;
+}
+.prompt-ended {
+  opacity: 0.75;
+}

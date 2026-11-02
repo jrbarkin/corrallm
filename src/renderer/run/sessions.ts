@@ -71,13 +71,16 @@ function copy<T>(value: T): Mutable<T> {
   return structuredClone(value) as Mutable<T>;
 }
 const entries = new WeakMap<EntryView, Entry>();
-function entryOf(value: Exclude<EntryView, { kind: 'prompt' }>): Entry {
+function entryOf(value: EntryView): Entry {
   let entry = entries.get(value);
   if (!entry) {
     if (value.kind === 'user') {
       const { images, ...text } = value;
       entry = { ...text, ...(images === undefined ? {} : { imageCount: images }) };
-    } else entry = copy(value);
+    } else {
+      // This is a widget projection of the core's already selected entry, never an owner input.
+      entry = copy(value) as Entry;
+    }
     entries.set(value, entry);
   }
   return entry;
@@ -91,11 +94,7 @@ export function sessionDisplay(
   presentation?: Presentation,
 ): Session {
   if (!summary) return NEW_SESSION;
-  // A prompt the core's owner holds is B13 X10's one prompt card, read from the topic as it is:
-  // this display holds none yet.
-  const shown = orderedEntries(view).flatMap((entry) =>
-    entry.kind === 'prompt' ? [] : [entryOf(entry)],
-  );
+  const shown = orderedEntries(view).map(entryOf);
   // Where the agent is in its fallback chain is the chain picker's to show, and its handoff the
   // handoff tile's (B11a X4), not a session's.
   const { running, usage, modes, ...top } = copy(summary);
@@ -226,6 +225,7 @@ export function sessionCommands(
     return need;
   };
   return {
+    replyPrompt: (to, answer) => api.reply({ canvas, to, answer }),
     // A command the view answers itself (its panel opens beside it): recorded, never sent.
     recordCommand: (text) => {
       act(viewSend(() => api.sessionViewCommand({ canvas, agent, text })));

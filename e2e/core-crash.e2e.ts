@@ -118,8 +118,9 @@ async function runCanvas() {
   await page.getByRole('button', { name: 'Show all queues' }).click();
   const queues = page.getByRole('dialog', { name: 'All queues', exact: true });
   await queues.getByRole('button', { name: 'Run', exact: true }).click();
-  // The fake session asks before it runs its command (Manual), so the task goes on running.
-  await expect(task()).toHaveAttribute('data-run', 'running');
+  // Wait for its owner prompt, so the crash cuts a native wait rather than an earlier startup.
+  await expect(queues.getByRole('group', { name: 'Run this command?', exact: true })).toBeVisible();
+  await expect(task()).toHaveAttribute('data-run', 'asking');
 }
 
 const task = () =>

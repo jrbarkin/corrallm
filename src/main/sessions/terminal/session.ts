@@ -53,7 +53,7 @@ import { ENTER } from './typing';
  * read before the turn ends: a limit used up then failed it, until its reset.
  *
  * What the CLI asks the user in its terminal is raised to the core's prompt owner (B13 C6), and
- * listed as the event B13 replaces ('asking', until X11), never answered: its hooks may tell what
+ * never mirrored as an asking event or answered by corrallm: its hooks may tell what
  * it is about to ask (what a permission prompt is for, its questions and a plan to approve, just
  * before it shows them: in the hook's words); its reports say when it waits on the user (and, in a
  * word, for what: in the report's words, where no hook told), and when it goes on (the user
@@ -271,8 +271,6 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
   readonly #blocks = new Map<string, Block>();
   /** What its last notification that it needs the user said (until it goes on). */
   #notified: { id: string; text: string } | undefined;
-  /** The asks last listed (JSON): only a change is sent. */
-  #listed = '[]';
   /**
    * What it raised to the core's prompt owner and has yet to end, by key: the wait each is of, the
    * observation as raised (JSON, to tell an unchanged one), and whether a hook described it.
@@ -346,11 +344,6 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
 
   /** Starts its CLI: resolves once it runs. */
   async launch(): Promise<void> {
-    // Transitional (B13 C6, until X10; X11 removes it): what it raises is listed as `asking` too,
-    // whose Needs items stand for it; their answers belong to its terminal.
-    this.#host.bridge?.(() => {
-      throw new Error(this.#cli.words.answer);
-    });
     try {
       this.#registration = await this.#deps.hooks.register(
         (event) => {
@@ -1281,12 +1274,6 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
    */
   #list(why: 'withdrawn' | 'answered-natively' = 'withdrawn'): void {
     const observed = this.#observed();
-    const asks = observed.map(({ ask }) => ask);
-    const listed = JSON.stringify(asks);
-    if (listed !== this.#listed) {
-      this.#listed = listed;
-      this.#emit({ type: 'asking', asks });
-    }
     // Closing withdrew what it raised: nothing is raised after.
     if (this.#closing) return;
     const waits = new Set(observed.map(({ wait }) => wait));

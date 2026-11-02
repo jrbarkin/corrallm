@@ -1,6 +1,7 @@
+import { agentCardName, agentChipName } from './catalog';
 import { dismissStart } from './canvas-actions';
 import { randomUUID } from 'node:crypto';
-import { chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -8,6 +9,7 @@ import { expect, test } from '@playwright/test';
 import type { ElectronApplication, Locator, Page } from '@playwright/test';
 
 import { launchApp } from './launch';
+import { mcpRequestTitle } from '../src/shared/model/words';
 
 /*
  * A Codex agent through its app server, in the built app: main runs the App Server connection
@@ -69,7 +71,10 @@ test.afterEach(async () => {
 async function launch() {
   closeApp = undefined;
   ({ app, close: closeApp } = await launchApp({
-    env: { CORRALLM_AGENT_PATHS: JSON.stringify({ codex: codex }) },
+    env: {
+      CORRALLM_AGENT_PATHS: JSON.stringify({ codex: codex }),
+      FAKE_CODEX_LOG: path.join(dir, 'requests.jsonl'),
+    },
     profile,
   }));
   page = await app.firstWindow();
@@ -133,7 +138,7 @@ async function canvasFile(queue: { id: string; message: string }[] = []) {
   await page.keyboard.press('ControlOrMeta+o');
   await expect(page.locator('.react-flow__node')).toHaveAttribute(
     'aria-label',
-    'Shop, Codex · App Server',
+    agentCardName('Shop', 'codex.app-server'),
   );
 }
 
@@ -144,15 +149,28 @@ async function send(view: Locator, text: string) {
   await composer.press('Enter');
 }
 
+async function nativeAnswers(method: string): Promise<unknown[]> {
+  return (await readFile(path.join(dir, 'requests.jsonl'), 'utf8'))
+    .split('\n')
+    .filter(Boolean)
+    .map((line) => JSON.parse(line) as { method: string; params: unknown })
+    .filter((row) => row.method === `answer:${method}`)
+    .map((row) => row.params);
+}
+
 test('runs a Codex agent as a Codex thread: turns, prompts, modes, models, commands', async () => {
   await chooseProject();
   await page.locator('.react-flow__pane').dblclick({ position: { x: 400, y: 300 } });
   await page.locator('.react-flow__node').dblclick();
   const view = page.getByRole('dialog', { name: 'Agent 1' });
-  await view.getByRole('button', { name: /^Agent: Claude/ }).click();
+  await view
+    .getByRole('button', { name: agentChipName('claude-code.terminal'), exact: true })
+    .click();
   await page.keyboard.type('codex app server');
   await page.keyboard.press('Enter');
-  await expect(view.getByRole('button', { name: 'Agent: Codex · App Server' })).toBeVisible();
+  await expect(
+    view.getByRole('button', { name: agentChipName('codex.app-server'), exact: true }),
+  ).toBeVisible();
   // Its thread started: Codex's models, and its reasoning efforts.
   await expect(view.getByRole('button', { name: 'Model: GPT-6.1-Sol' })).toBeVisible();
   await expect(view.getByRole('button', { name: 'Effort: Low' })).toBeVisible();
@@ -182,13 +200,15 @@ test('runs a Codex agent as a Codex thread: turns, prompts, modes, models, comma
   await mode.click();
   await view.getByRole('menuitemradio', { name: /^Read only/ }).click();
   await send(view, 'run the tests');
-  const prompt = transcript.getByRole('group', { name: 'May I run the tests?: npm test' });
+  const prompt = transcript.getByRole('group', { name: 'Codex wants to run a command' });
   await expect(
     prompt.getByRole('button', {
       name: "Yes, and don't ask again for commands that start with `npm test`",
     }),
   ).toBeVisible();
-  await prompt.getByRole('button', { name: 'Yes', exact: true }).click();
+  await expect(prompt).toContainText('npm test');
+  await prompt.getByRole('button', { name: 'Yes, proceed', exact: true }).click();
+  await expect(prompt.getByRole('status')).toHaveText('Allowed once by you.');
   const command = transcript.getByRole('button', { name: 'exec_command npm test' });
   await expect(command).toBeVisible();
   await command.click();
@@ -199,9 +219,10 @@ test('runs a Codex agent as a Codex thread: turns, prompts, modes, models, comma
   await mode.click();
   await view.getByRole('menuitemradio', { name: /^Plan/ }).click();
   await send(view, 'Plan the change');
-  const plan = transcript.getByRole('group', { name: 'Plan' });
-  await expect(plan.getByText('Change it')).toBeVisible();
+  const plan = transcript.getByRole('group', { name: 'Implement this plan?', exact: true });
+  await expect(plan).toContainText('Change it');
   await plan.getByRole('button', { name: 'Yes, implement this plan' }).click();
+  await expect(plan.getByRole('status')).toHaveText('Allowed once by you.');
   await expect(transcript.getByText('You said: Implement the plan.')).toBeVisible();
   await expect(mode).toHaveAccessibleName('Mode: Default');
 
@@ -231,19 +252,88 @@ test('asks before Codex calls an MCP tool, and keeps a form typed: answered thro
   // Codex's approval of an MCP tool call, kept for the session as its TUI keeps it.
   await send(view, 'mcp');
   const approval = transcript.getByRole('group', {
-    name: 'Allow the probe MCP server to run tool "save_note"?: a',
+    name: 'Allow the probe MCP server to run tool "save_note"?',
   });
   await approval.getByRole('button', { name: 'Allow for this session' }).click();
   await expect(transcript.getByText('Saved, and allowed for this session.')).toBeVisible();
-  await expect(transcript.getByText(/^Always allowed: mcp__probe__save_note/)).toBeVisible();
+  await expect(approval.getByRole('status')).toHaveText('Always allowed by you.');
 
   // A form of six fields stays a form, its values typed.
   await send(view, 'form');
   const form = transcript.getByRole('form', { name: 'probe asks' });
   await form.getByRole('textbox', { name: 'Name' }).fill('Ada');
   await form.getByRole('textbox', { name: 'Email' }).fill('ada@example.com');
+  await form.getByRole('spinbutton', { name: 'Age' }).fill('37');
+  await form.getByRole('combobox', { name: 'Color' }).selectOption('blue');
+  await form.getByRole('checkbox', { name: 'Subscribe' }).check();
+  await form.getByRole('checkbox', { name: 'news', exact: true }).check();
+  await form.getByRole('checkbox', { name: 'tips', exact: true }).check();
   await form.getByRole('button', { name: 'Submit' }).click();
   await expect(transcript.getByText('Hello, Ada.')).toBeVisible();
+  const settled = transcript.getByRole('group', {
+    name: mcpRequestTitle('probe', false),
+    exact: true,
+  });
+  await expect(settled.getByRole('status')).toHaveText('Submitted by you.');
+  await expect(settled).not.toContainText('ada@example.com');
+  expect(await nativeAnswers('mcpServer/elicitation/request')).toEqual([
+    { action: 'accept', content: null, _meta: { persist: 'session' } },
+    {
+      action: 'accept',
+      content: {
+        age: 37,
+        color: 'blue',
+        email: 'ada@example.com',
+        name: 'Ada',
+        subscribe: true,
+        topics: ['news', 'tips'],
+      },
+      _meta: null,
+    },
+  ]);
+});
+
+test('answers all six questions in All queues, preserving native ids and a secret draft', async () => {
+  await canvasFile();
+  await chooseProject();
+  await page.locator('.react-flow__node').dblclick();
+  const view = page.getByRole('dialog', { name: 'Shop', exact: true });
+  await send(view, 'ask many');
+  await expect(
+    view.getByRole('group', { name: 'Codex asks 6 questions', exact: true }),
+  ).toBeVisible();
+  await view.getByRole('button', { name: 'All queues', exact: true }).click();
+  const queues = page.getByRole('dialog', { name: 'All queues', exact: true });
+  const questions = queues.getByRole('group', { name: 'Codex asks 6 questions', exact: true });
+  await questions.getByRole('radio', { name: 'Blue', exact: true }).check();
+  await questions.getByRole('radio', { name: 'Preview', exact: true }).check();
+  await questions.getByRole('radio', { name: 'Small', exact: true }).check();
+  await questions
+    .getByRole('textbox', { name: 'What should the release note say?', exact: true })
+    .fill('Ready for review');
+  await questions.getByRole('radio', { name: 'Tests', exact: true }).check();
+  const secret = questions.getByLabel('What is the private code?', { exact: true });
+  await expect(secret).toHaveAttribute('type', 'password');
+  await secret.fill('private-code');
+  await questions.getByRole('button', { name: 'Send answers', exact: true }).click();
+  await expect(questions).toHaveCount(0);
+  await queues.getByRole('button', { name: 'Open Shop', exact: true }).click();
+  const settled = view.getByRole('group', { name: 'Codex asks 6 questions', exact: true });
+  await expect(settled.getByRole('status')).toHaveText('Answered (secret) by you.');
+  await expect(settled).not.toContainText('private-code');
+  await expect(view.getByText('Answers received.', { exact: true })).toBeVisible();
+  expect(await nativeAnswers('item/tool/requestUserInput')).toEqual([
+    {
+      answers: {
+        color: { answers: ['Blue'] },
+        target: { answers: ['Preview'] },
+        scope: { answers: ['Small'] },
+        notes: { answers: ['Ready for review'] },
+        checks: { answers: ['Tests'] },
+        code: { answers: ['private-code'] },
+      },
+    },
+  ]);
 });
 
 test('the queues’ Run sends its message to the Codex thread, and hears its turn end', async () => {
@@ -314,14 +404,20 @@ test('runs on the user’s ChatGPT plan once they allow it, and asks no more if 
   const transcript = view.getByRole('log', { name: 'Transcript' });
   await send(view, 'Hello');
   // Nothing goes until the user says so, quoting what OpenAI allows.
-  const prompt = transcript.getByRole('group', { name: 'Use your ChatGPT plan here?: Plus' });
+  const prompt = transcript.getByRole('group', { name: 'Use your ChatGPT plan here?' });
+  await expect(prompt).toContainText('Only you give consent.');
+  await expect(
+    prompt.getByRole('button', { name: "Yes, and don't ask again on this computer", exact: true }),
+  ).toBeDisabled();
+  await prompt.getByRole('button', { name: 'Show all', exact: true }).click();
+  await expect(prompt).toContainText('Plus');
   await expect(prompt.getByText(/local or open-source application/)).toBeVisible();
   await expect(prompt.getByText(/never been permitted for commercial/)).toBeVisible();
   // It needs the user, on the canvas too.
   await expect(page.locator('.react-flow__node')).toHaveClass(/\basking\b/);
   await prompt.getByRole('button', { name: "Yes, and don't ask again on this computer" }).click();
   await expect(transcript.getByText('You said: Hello')).toBeVisible();
-  await expect(transcript.getByText('Always allowed: ChatGPT plan')).toBeVisible();
+  await expect(prompt.getByRole('status')).toHaveText('Always allowed by you.');
   await page.keyboard.press('Escape');
   await page.keyboard.press('ControlOrMeta+s');
   await expect(page.getByText('team.corral')).toBeVisible();

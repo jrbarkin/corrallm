@@ -2185,10 +2185,19 @@ describe('telling an agent of a withdrawal after receipt', () => {
     const terminal = await startAtTrust();
     await terminal.start();
     const id = await send('builder', 'Never received', YOU);
-    await vi.waitFor(() => {
-      expect(
-        core?.engines.canvas(CANVAS)?.engine.sessions.of('builder').asking ?? [],
-      ).toContainEqual(expect.objectContaining({ kind: 'trust' }));
+    await vi.waitFor(async () => {
+      const needs = (await ok<{ items: NeedsItem[] }>('needs', {}, YOU)).items;
+      expect(needs).toContainEqual(
+        expect.objectContaining({
+          kind: 'prompt',
+          agent: 'builder',
+          answerIn: 'terminal',
+          prompt: expect.objectContaining({
+            kind: 'approval',
+            subject: { type: 'trust' },
+          }) as unknown,
+        }),
+      );
       expect(core?.engines.canvas(CANVAS)?.engine.sessions.of('builder').status).toBe('waiting');
     });
     expect(await ok('withdraw', { id }, YOU)).toEqual({

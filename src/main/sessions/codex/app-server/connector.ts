@@ -146,9 +146,6 @@ export class AppServerConnector implements Connector<CodexMode> {
       },
       places,
     );
-    // Until X10, each prompt is shown as the events B13 replaces too, answered through the owner:
-    // from the first (an MCP server may ask as the thread starts), before the session runs.
-    host.bridge?.((promptId, answer) => prompts.bridge(promptId, answer));
     const version = /\/(\S+)$/.exec(this.#clientApp)?.[1] ?? '0.0.0';
     const spawn = this.#spawn;
     const prepared =

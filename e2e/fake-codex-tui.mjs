@@ -348,6 +348,7 @@ function runTui() {
     }
     if (state === 'asking') {
       if (data === 'y') {
+        log({ event: 'answer', text: data });
         lines.push('• Ran echo hello');
         become('working');
         draw();
