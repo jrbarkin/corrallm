@@ -9,7 +9,7 @@ import {
   adapterCli,
   adapterName,
   agentLabel,
-  CONNECTED_AGENTS,
+  connectedAgents,
   connectionInfo,
   connectionOf,
   connectionsOf,
@@ -93,7 +93,7 @@ describe('native agent defaults', () => {
   });
 
   it('offers each adapter its connections, its first by default', () => {
-    expect(CONNECTED_AGENTS).toEqual(['claude-code', 'codex']);
+    expect(connectedAgents()).toEqual(['claude-code', 'codex']);
     expect(defaultConnection('claude-code')).toBe('claude-code.terminal');
     expect(defaultConnection('codex')).toBe('codex.terminal');
   });

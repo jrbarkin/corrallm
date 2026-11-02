@@ -9,7 +9,7 @@
   place-items: center;
   border-radius: 25%;
   color: white;
-  background: #c15f3c;
+  background: var(--agent-color);
   font-weight: 600;
   line-height: 1;
 }
@@ -39,6 +39,10 @@
 }
 
 /* The platform's agent accents, indexed by the catalog. */
-.adapter-logo-fallback[data-accent='1'] {
-  background: #0e8a6b;
+[data-accent='0'] {
+  --agent-color: #c15f3c;
+}
+
+[data-accent='1'] {
+  --agent-color: #0e8a6b;
 }

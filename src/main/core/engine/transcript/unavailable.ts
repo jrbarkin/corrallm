@@ -1,7 +1,7 @@
 import type { DriverIO, SessionDriver, Turn } from './driver';
 
 const UNAVAILABLE =
-  'This agent has no supported connection yet. Choose Claude or Codex and a native connection to run this work.';
+  'This agent has no supported connection yet. Choose another agent in its settings to run this work.';
 
 /** Unsupported agents keep work unsent; no turn, tool activity, or completion is fabricated. */
 export class UnavailableDriver implements SessionDriver {

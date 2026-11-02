@@ -43,6 +43,11 @@ interface Deps {
   catalog: Catalog;
   clock?: WatchdogClock;
   network?: WatchdogNetwork;
+  /**
+   * B13 C9: whether the agent waits on a prompt the core's prompt owner holds, whatever its session
+   * says. A turn waiting so is never silent: its silence counts from the wait's end.
+   */
+  waiting?: (canvas: CanvasId, agent: string) => boolean;
   changed: (canvas: CanvasId) => void;
   warning: (
     canvas: CanvasId,
@@ -164,8 +169,20 @@ export class StalledTurns {
   #disrupted(before: number, why: Disruption): void {
     const now = this.#clock.now();
     for (const turn of this.#turns.values()) {
-      if (!waitingForUser(turn) && turn.last <= before) turn.grace ??= { at: now, why };
+      if (!this.#waiting(turn) && turn.last <= before) turn.grace ??= { at: now, why };
     }
+  }
+
+  /**
+   * Whether a turn waits for the user: as its session's events say, or on a prompt the core's
+   * owner holds (B13 C9).
+   */
+  #waiting(turn: Turn): boolean {
+    return waitingForUser(turn) || this.#owned(turn);
+  }
+
+  #owned(turn: Turn): boolean {
+    return this.#deps.waiting?.(turn.canvas, turn.agent) === true;
   }
 
   #checkNetwork(now: number): void {
@@ -236,7 +253,7 @@ export class StalledTurns {
       release: () => {
         if (!current()) return;
         turn.answered = false;
-        turn.stalled = !waitingForUser(turn) && turn.last === last;
+        turn.stalled = !this.#waiting(turn) && turn.last === last;
         this.#deps.changed(canvas);
       },
     };
@@ -258,7 +275,12 @@ export class StalledTurns {
       // Check the jump before the deadline: waking must never immediately declare a stall.
       if (now - this.#checked > WAKE_GAP_MS) this.#disrupted(now - WAKE_GAP_MS, 'wake');
       this.#checked = now;
-      for (const turn of this.#turns.values()) {
+      for (const turn of [...this.#turns.values()]) {
+        // Waiting on a prompt the core's owner holds is no silence: it counts from the wait's end.
+        if (this.#owned(turn)) {
+          this.activity(turn.canvas, turn.agent);
+          continue;
+        }
         const due = turn.grace === undefined ? turn.last + STALL_MS : turn.grace.at + WAKE_GRACE_MS;
         if (waitingForUser(turn) || now < due || turn.stalled || turn.answered) continue;
         const cli = connectionIn(this.#deps.catalog, turn.connection)?.adapter.name ?? 'the agent';

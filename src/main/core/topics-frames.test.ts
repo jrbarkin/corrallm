@@ -143,3 +143,41 @@ it('bounds a large canvas subscription and live replacement using indexed transf
   for (const batch of batches)
     expect(Buffer.byteLength(JSON.stringify(batch))).toBeLessThan(MAX_TOPIC_FRAME);
 });
+
+it('keeps the settings’ default agent and api in a chunked snapshot’s summary (B12 C2)', async () => {
+  // Enough consents that the settings can't go in one frame.
+  const consents = Object.fromEntries(
+    Array.from({ length: 30_000 }, (_, n) => [
+      `adapter-${String(n).padStart(8, '0')}`,
+      { [`key-${'k'.repeat(20)}`]: true },
+    ]),
+  );
+  const api = { state: 'listening', port: 4242, url: 'http://127.0.0.1:4242/mcp' } as const;
+  const settings = { defaultAdapter: 'codex', consents, api };
+  topics = new Topics({ read: () => Promise.resolve({ ok: true, value: settings }) });
+  const batches: TopicUpdate[][] = [];
+  topics.listen(1, (batch) => batches.push(batch));
+  const ctx = { caller: CALLERS.you, signal: new AbortController().signal } as OpContext;
+  const first = await topics.subscribe(1, { topic: 'settings' }, ctx);
+  expect(first).toMatchObject({
+    kind: 'begin',
+    topic: 'settings',
+    summary: { defaultAdapter: 'codex', api },
+  });
+  await vi.waitFor(() => {
+    expect(batches.flat().at(-1)).toMatchObject({ kind: 'end' });
+  });
+  const frames = batches.flat() as RuntimeSnapshotFrame[];
+  expect(
+    frames.filter((frame) => frame.kind === 'chunk').flatMap((frame) => frame.entries),
+  ).toEqual(Object.entries(consents).map(([key, value]) => ({ key, value })));
+  // None is said as none.
+  topics.close();
+  topics = new Topics({
+    read: () => Promise.resolve({ ok: true, value: { ...settings, defaultAdapter: null } }),
+  });
+  expect(await topics.subscribe(1, { topic: 'settings' }, ctx)).toMatchObject({
+    kind: 'begin',
+    summary: { defaultAdapter: null, api },
+  });
+});

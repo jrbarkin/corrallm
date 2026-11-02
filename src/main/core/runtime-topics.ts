@@ -362,6 +362,14 @@ export class RuntimeSource {
     this.switchingChanged(canvas, agent);
   }
 
+  /**
+   * What the core's prompt owner holds of an agent's changed (B13 C9: one raised, or ended): its
+   * summary says its count again, whether or not its transcript changed with it.
+   */
+  promptsChanged(canvas: CanvasId, agent: string): void {
+    this.switchingChanged(canvas, agent);
+  }
+
   /** Whether its run's checkpoint could be kept changed: the run's `saveError`. */
   problemChanged(canvas: CanvasId): void {
     const source = this.#canvases.get(canvas);
@@ -1125,10 +1133,12 @@ export function partsOf(
         ],
       };
     }
-    const value = state as { defaultAdapter: string; consents: Record<string, unknown> };
+    // The settings: their consents divided, the rest of `settings.get` (the default agent, none
+    // included, and where the MCP server listens) in the summary, whole.
+    const { consents, ...rest } = state as { consents: Record<string, unknown> };
     return {
-      summary: { defaultAdapter: value.defaultAdapter },
-      entries: Object.entries(value.consents).map(([key, one]) => ({ key, value: one })),
+      summary: rest,
+      entries: Object.entries(consents).map(([key, one]) => ({ key, value: one })),
     };
   }
   switch (kindOf(topic)) {

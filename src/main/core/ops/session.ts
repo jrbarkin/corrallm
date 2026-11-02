@@ -62,9 +62,23 @@ function fitted(entry: TranscriptEntry, room: number): TranscriptEntry {
   if (bytesOf(lines) <= room) return lines;
   const total = bytesOf(lines);
   const cut = (chars: number, items: number) =>
-    ({ ...(capped(lines, chars, items) as object), id: entry.id, cut: true }) as TranscriptEntry;
+    whole(entry, {
+      ...(capped(lines, chars, items) as object),
+      id: entry.id,
+      cut: true,
+    } as TranscriptEntry);
   const texts = shortest(total, room, (n) => cut(Math.max(n, SHORTEST_TEXT), total));
   return bytesOf(texts) <= room ? texts : shortest(total, room, (n) => cut(SHORTEST_TEXT, n));
+}
+
+/**
+ * A cut entry with what names things whole again: a prompt the core's owner holds keeps its Needs
+ * id (what `reply` names), and its prompt's id, kind and agent (B13 C9), whatever else was cut.
+ */
+function whole(entry: TranscriptEntry, cut: TranscriptEntry): TranscriptEntry {
+  if (entry.kind !== 'prompt' || cut.kind !== 'prompt') return cut;
+  const { id, kind, agent } = entry.prompt;
+  return { ...cut, need: entry.need, prompt: { ...cut.prompt, id, kind, agent } };
 }
 
 /** A tool's or a permission's diff with its last lines left out to fit `room` bytes of JSON. */

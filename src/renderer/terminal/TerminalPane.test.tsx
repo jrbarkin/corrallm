@@ -517,7 +517,7 @@ describe('a Terminal agent', () => {
     const { sessions, terminals, card, view, session } = await open({
       data: { adapter: 'codex', connection: 'codex.terminal' },
     });
-    expect(view.getByText('Starting Codex CLI…')).toBeTruthy();
+    expect(view.getByText('Starting Codex…')).toBeTruthy();
     // Nothing set: the user's own defaults (Codex's Default mode, which leaves their own config).
     expect(sessions.replies.start).toHaveBeenCalledWith('a', {
       connection: 'codex.terminal',
@@ -1009,6 +1009,7 @@ describe('the Option key in a Terminal agent’s terminal', () => {
       'true',
     );
     expect(fakeScreens.latest().optionIsMeta).toBe(true);
+    expect(view.getByRole('button', { name: 'Option as Meta' }).title).not.toContain('Option+P');
   });
 
   it('is no choice off a Mac, where Alt is Meta anyway', async () => {
@@ -1050,7 +1051,7 @@ describe('a Terminal agent’s settings', () => {
     expect(sessions.replies.options).toHaveBeenCalledWith('claude-code', 'a');
     // What it starts with, the user's own where nothing is chosen.
     const button = () => view.getByRole('button', { name: 'Agent settings: a' });
-    expect(button().textContent).toContain('Claude · Terminal · Haiku · Auto');
+    expect(button().textContent).toContain('Claude Code · Terminal · Haiku · Auto');
     await events.click(button());
     await settle();
     const panel = within(screen.getByRole('dialog', { name: 'Agent settings: a' }));
@@ -1167,7 +1168,7 @@ describe('a Terminal agent’s settings', () => {
       mode: 'plan',
     });
     const button = view.getByRole('button', { name: 'Agent settings: a' });
-    expect(button.textContent).toContain('Claude · Terminal · haiku · Plan');
+    expect(button.textContent).toContain('Claude Code · Terminal · haiku · Plan');
     await events.click(button);
     await settle();
     expect(

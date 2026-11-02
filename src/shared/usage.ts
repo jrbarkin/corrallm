@@ -1,8 +1,8 @@
 /*
  * Usage readings and rules. A backend's usage limits belong to its account, not to one agent:
- * every Claude agent on the same login spends the same 5-hour and weekly windows. So main keeps
+ * every agent on the same login spends the same 5-hour and weekly windows. So main keeps
  * one reading per backend (src/main/usage.ts), taken from whichever of its agents' CLIs reports it
- * (Claude Code's status line, for a Terminal agent), and every agent on that backend sees it. A
+ * (a terminal status line, for example), and every agent on that backend sees it. A
  * reading holds only how much of each window is used and when it resets: never anything else the
  * CLI reported. A usage rule, one per backend, says what the queues' run does when usage passes a
  * share of a window.

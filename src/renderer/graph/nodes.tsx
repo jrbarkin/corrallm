@@ -1,3 +1,4 @@
+import { adapterAccent } from '../catalog';
 import {
   BaseEdge,
   EdgeToolbar,
@@ -40,6 +41,7 @@ export function AgentNodeView({ id, data, parentId }: NodeProps<GraphNode>) {
     <div
       className="graph-card"
       data-agent={data.adapter ?? DEFAULT_AGENT}
+      data-accent={adapterAccent(data.adapter ?? DEFAULT_AGENT)}
       data-status={card.status}
       title={`Agent: ${agentLabel(data.adapter ?? DEFAULT_AGENT, connectionOf(data))}`}
       {...hover.target}

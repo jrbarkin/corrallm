@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { catalog } from '../catalog';
+import { MADE_UP } from '../../shared/test-made-up';
 import { ageText, backendsOf, ruleText } from './usage';
 
 const at = (...parts: [number, number, number, number, number]) => new Date(...parts).getTime();
@@ -8,10 +9,14 @@ const NOW = at(2026, 9, 12, 12, 0); // Monday 12 October 2026, noon
 
 describe('backendsOf', () => {
   it('lists the backends a canvas’s agents use (by their adapters), once each, in order', () => {
-    expect(backendsOf(catalog(), ['codex', 'claude-code', 'qwen', 'claude-code'])).toEqual([
-      'claude-code',
-      'codex',
-    ]);
+    expect(
+      backendsOf(
+        catalog(),
+        ['codex.terminal', 'claude-code.terminal', 'qwen.acp', 'claude-code.sdk'].map(
+          (connection) => ({ connection }),
+        ),
+      ),
+    ).toEqual(['claude-code', 'codex']);
     expect(backendsOf(catalog(), [])).toEqual([]);
   });
 });
@@ -30,4 +35,9 @@ describe('the wording of usage', () => {
       'Over 80% of the 5-hour window: pause and ask me',
     );
   });
+});
+
+it('shows a meter only for the connection an agent actually spends', () => {
+  expect(backendsOf(MADE_UP, [{ connection: 'zed.free' }])).toEqual([]);
+  expect(backendsOf(MADE_UP, [{ connection: 'zed.acp' }])).toEqual(['zed']);
 });

@@ -2,6 +2,10 @@ import { describe, expect, it } from 'vitest';
 
 import type { CanvasId } from '../canvas';
 import type { NeedsItem } from './needs';
+import { MADE_UP } from '../test-made-up';
+import { engineCatalog } from './catalog';
+import { needs, needsItem, needsOf } from './needs-selectors';
+import type { NeedsInput } from './needs-selectors';
 import { Prompt, PromptNeedView } from './prompts';
 import {
   entryFor,
@@ -10,9 +14,11 @@ import {
   outcomeFor,
   promptFor,
   promptNeed,
+  settledPrompt,
   undescribed,
 } from './prompt-views';
 import type { PromptOccurrence } from './prompt-views';
+import { NEW_SESSION } from './session';
 import type { Entry } from './session';
 
 /*
@@ -505,12 +511,13 @@ describe('an entry of a transcript (the events B13 replaces)', () => {
   });
 
   it('is a token’s without an answer, a choice’s label, feedback, or a form’s link or words', () => {
+    // A permission's title in its CLI's words (an MCP server's own, for its tool) is yours alone:
+    // a token reads its tool and summary (B13 C9).
     expect(entryFor(permission, 'token')).toEqual({
       id: 'p1',
       kind: 'permission',
       tool: 'Bash',
       summary: 'npm test',
-      title: 'Run the tests?',
       detail: { kind: 'output', text: 'npm test' },
     });
     expect(entryFor(question, 'token')).toEqual({
@@ -538,5 +545,178 @@ describe('an entry of a transcript (the events B13 replaces)', () => {
         /private-|signin\.example|"answer"/,
       );
     }
+  });
+});
+
+describe('a prompt the core’s owner holds, as an entry of its agent’s transcript (B13 C9)', () => {
+  /** Its entry as the owner places it as it is raised: the prompt whole, as admitted. */
+  const open = (raw: object, standIn = false): Entry => ({
+    id: ID,
+    kind: 'prompt',
+    need: NEED,
+    name: 'Reviewer',
+    prompt: prompt(raw),
+    ...(standIn ? { standIn: true as const } : {}),
+  });
+  const ALL = [APPROVAL, PLAN, QUESTION, FORM, URL_FORM, UNDESCRIBED, HOOKED];
+
+  it('is yours whole while it waits, every choice as Needs offers it, Not waiting where offered', () => {
+    for (const raw of ALL) {
+      expect(entryFor(open(raw), 'you')).toEqual({
+        id: ID,
+        kind: 'prompt',
+        need: NEED,
+        prompt: promptFor(occurrence(raw), 'you'),
+      });
+    }
+    // The core's own stand-in for a wait it couldn't show offers no Not waiting.
+    expect(entryFor(open(UNDESCRIBED, true), 'you')).toEqual({
+      id: ID,
+      kind: 'prompt',
+      need: NEED,
+      prompt: promptFor(occurrence(UNDESCRIBED, true), 'you'),
+    });
+  });
+
+  it('is a token’s through the one selector: no choice, form, a form’s words or a terminal’s screen', () => {
+    for (const raw of ALL) {
+      const seen = entryFor(open(raw), 'token');
+      expect(seen).toEqual({
+        id: ID,
+        kind: 'prompt',
+        need: NEED,
+        prompt: promptFor(occurrence(raw), 'token'),
+      });
+      expect(JSON.stringify(seen)).not.toMatch(
+        /private-form|private-field|private-screen|private-rule|signin\.example|"name"|standIn/,
+      );
+    }
+  });
+
+  it('once settled, keeps what was asked in short and how it ended: yours whole, a token’s its type and by whom', () => {
+    const settled: Entry = {
+      id: ID,
+      kind: 'prompt',
+      need: NEED,
+      prompt: settledPrompt(occurrence(APPROVAL), 'you'),
+      outcome: { type: 'choice', value: 'always', hint: 'allow_always', by: 'you' },
+    };
+    expect(settledPrompt(occurrence(APPROVAL), 'token')).toEqual(settled.prompt);
+    expect(settled.prompt).toEqual({
+      id: ID,
+      kind: 'approval',
+      agent: 'b',
+      raised: 1_700_000_000_000,
+      answerIn: 'api',
+      title: APPROVAL.title,
+      cut: true,
+    });
+    expect(entryFor(settled, 'you')).toEqual(settled);
+    expect(entryFor(settled, 'token')).toEqual({
+      ...settled,
+      outcome: { type: 'choice', by: 'you' },
+    });
+    // A form is told in the core's words for everyone: its link and its own words are no one's.
+    for (const raw of [FORM, URL_FORM]) {
+      for (const reader of ['you', 'token'] as const) {
+        const short = settledPrompt(occurrence(raw), reader);
+        expect(short.title).toBe(promptNeed(occurrence(raw), 'token').title);
+        expect(JSON.stringify(short)).not.toMatch(/private-|signin\.example/);
+      }
+    }
+    // Nothing of a command, plan, question, screen or choice stays once it ends.
+    for (const raw of ALL) {
+      expect(JSON.stringify(settledPrompt(occurrence(raw), 'you'))).not.toMatch(
+        /private-|rm -rf|Which size|choices|detail|subject/,
+      );
+    }
+  });
+});
+
+describe('an approval of an MCP server’s tool: its words yours alone, a token’s in the core’s (B13 C9)', () => {
+  /** As its adapter raises it: the server words its title and description (F7), maybe a link. */
+  const MCP = {
+    kind: 'approval',
+    title: `Create the issue? Sign in first at ${LINK}`,
+    summary: 'private-server-summary',
+    reason: 'private-server-reason',
+    detail: { kind: 'output', text: 'private-server-detail' },
+    subject: { type: 'mcpTool', server: 'tracker', tool: 'create_issue', input: { title: 'Bug' } },
+    answerIn: 'api',
+    choices: [
+      { value: 'allow', label: 'Yes', hint: 'allow_once', effects: {} },
+      { value: 'deny', label: 'No', hint: 'reject_once', effects: {} },
+    ],
+  };
+  const CORE = 'MCP server “tracker” asks to use its tool “create_issue”';
+  const SERVER = /private-server|signin\.example|Create the issue/;
+
+  it('titles it for a token in the core’s words at Needs, without its words; you read the server’s', () => {
+    const yours = promptNeed(occurrence(MCP), 'you');
+    expect(yours).toMatchObject({
+      title: MCP.title,
+      detail: 'private-server-detail',
+      prompt: { summary: MCP.summary, reason: MCP.reason, subject: MCP.subject },
+    });
+    const theirs = promptNeed(occurrence(MCP), 'token');
+    expect(theirs.title).toBe(CORE);
+    expect(theirs.prompt).toMatchObject({ kind: 'approval', subject: MCP.subject });
+    expect(JSON.stringify(theirs)).not.toMatch(SERVER);
+    // The same whichever way a token's copy is made: from your item too (the router's refusals).
+    expect(needFor(yours, 'token')).toEqual(theirs);
+  });
+
+  it('gives a token the core’s words in a transcript, waiting or settled; you the server’s', () => {
+    expect(promptFor(occurrence(MCP), 'you')).toMatchObject({
+      title: MCP.title,
+      summary: MCP.summary,
+      reason: MCP.reason,
+      detail: MCP.detail,
+    });
+    const theirs = promptFor(occurrence(MCP), 'token');
+    expect(theirs).toMatchObject({ title: CORE, subject: MCP.subject, choices: [] });
+    expect(JSON.stringify(theirs)).not.toMatch(SERVER);
+    expect(settledPrompt(occurrence(MCP), 'you').title).toBe(MCP.title);
+    expect(settledPrompt(occurrence(MCP), 'token').title).toBe(CORE);
+    const settled: Entry = {
+      id: ID,
+      kind: 'prompt',
+      need: NEED,
+      prompt: settledPrompt(occurrence(MCP), 'you'),
+      tokenTitle: CORE,
+      outcome: { type: 'choice', value: 'allow', hint: 'allow_once', by: 'you' },
+    };
+    expect(entryFor(settled, 'you')).toMatchObject({ prompt: { title: MCP.title } });
+    expect(entryFor(settled, 'you')).not.toHaveProperty('tokenTitle');
+    expect(entryFor(settled, 'token')).toMatchObject({ prompt: { title: CORE } });
+    expect(JSON.stringify(entryFor(settled, 'token'))).not.toMatch(SERVER);
+  });
+
+  it('gives a token an old permission event’s tool and summary, never its CLI’s title, wherever it is read', () => {
+    const asked: Entry = {
+      id: 'p1',
+      kind: 'permission',
+      tool: 'mcp__tracker__create_issue',
+      summary: 'create_issue',
+      title: MCP.title,
+    };
+    const input = {
+      canvas: CANVAS,
+      nodes: [{ id: 'b', type: 'agent' as const, data: { label: 'Reviewer' } }],
+      run: { running: false, agents: {} },
+      sessions: { b: { ...NEW_SESSION, status: 'waiting' as const, entries: [asked] } },
+      catalog: engineCatalog(MADE_UP, 'zed'),
+      now: 1,
+    } as unknown as NeedsInput;
+    const [need] = needsOf(input);
+    if (need === undefined) throw new Error('nothing waits');
+    expect(needsItem(need, input).title).toBe(MCP.title);
+    expect(needsItem(need, input, 'token').title).toBe(
+      'Approve mcp__tracker__create_issue: create_issue?',
+    );
+    expect(needs(input, 'token').map(({ title }) => title)).toEqual([
+      'Approve mcp__tracker__create_issue: create_issue?',
+    ]);
+    expect(JSON.stringify(entryFor(asked, 'token'))).not.toMatch(SERVER);
   });
 });

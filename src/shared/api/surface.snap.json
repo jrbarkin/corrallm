@@ -7,6 +7,7 @@
     "api.catalog.installed",
     "api.templates.list",
     "api.settings.get",
+    "api.settings.set",
     "api.project.files",
     "api.canvas.create",
     "api.canvas.open",
@@ -281,6 +282,7 @@
     "session.setMode": "permissions",
     "session.continueIn": "permissions",
     "session.viewCommand": "view",
+    "settings.set": "consent",
     "agent.setType": "permissions",
     "agent.setConnection": "permissions",
     "agent.setFallback": "permissions",
@@ -304,7 +306,7 @@
   "schemas": {
     "topics.subscribe": {
       "input": "8c5be84f0a1a163a",
-      "output": "4fb3493eca21aa52"
+      "output": "c64b9b51cf656912"
     },
     "topics.unsubscribe": {
       "input": "8c5be84f0a1a163a",
@@ -520,7 +522,7 @@
     },
     "session.transcript": {
       "input": "b0a50f8eb22508f9",
-      "output": "7f76735450a0757f"
+      "output": "6a04de37197a4a41"
     },
     "session.handoff": {
       "input": "c804536f3eb2a39b",
@@ -596,7 +598,11 @@
     },
     "settings.get": {
       "input": "e5fa5cc18e054cdd",
-      "output": "a1f28cb1576ced66"
+      "output": "c339e41eb923e2cc"
+    },
+    "settings.set": {
+      "input": "43014ed80db4c428",
+      "output": "7512c86943435f4c"
     },
     "run.pause": {
       "input": "a85fe9cb1eb6d55a",

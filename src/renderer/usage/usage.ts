@@ -1,5 +1,5 @@
-import { adapterIn } from '../../shared/adapter';
-import type { AdapterId, Catalog, UsageBackendId } from '../../shared/adapter';
+import { connectionIn } from '../../shared/adapter';
+import type { Catalog, ConnectionId, UsageBackendId } from '../../shared/adapter';
 import type { UsageAction, UsageReading, UsageRule, UsageState } from '../../shared/usage';
 import { windowText } from '../../shared/model/words';
 
@@ -9,19 +9,15 @@ import { windowText } from '../../shared/model/words';
  * agent spends, are the engine's (src/shared/model/words.ts, src/shared/model/catalog.ts).
  */
 
-/**
- * The backend an adapter's agents spend in `catalog`: the first its connections declare, if any.
- * One agent's is its connection's (the engine's usageBackendOf), which may be none.
- */
-function backendOfType(catalog: Catalog, adapter: AdapterId): UsageBackendId | undefined {
-  const found = adapterIn(catalog, adapter);
-  return found?.connections.find((connection) => connection.usage !== null)?.usage ?? undefined;
-}
-
-/** The backends the agents of `adapters` use, in the order `catalog` lists backends. */
-export function backendsOf(catalog: Catalog, adapters: readonly AdapterId[]): UsageBackendId[] {
-  const used = new Set(adapters.map((adapter) => backendOfType(catalog, adapter)));
-  return catalog.usageBackends.map((backend) => backend.id).filter((backend) => used.has(backend));
+/** Backends spent by the actual connections, in catalog order, once each. */
+export function backendsOf(
+  catalog: Catalog,
+  agents: readonly { connection: ConnectionId }[],
+): UsageBackendId[] {
+  const used = new Set(
+    agents.map(({ connection }) => connectionIn(catalog, connection)?.connection.usage),
+  );
+  return catalog.usageBackends.map(({ id }) => id).filter((id) => used.has(id));
 }
 
 /** A backend's latest reading, if it has one. */
