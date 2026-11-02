@@ -8,6 +8,7 @@ import type {
   PlanAnswer,
   Prompt,
   Session,
+  SettledPromptEntry,
   SessionUsage,
   SlashCommand,
   BackgroundTask,
@@ -22,6 +23,9 @@ import { mergeHistory } from './history';
  * (receive.ts, unavailable.ts), or the mailbox takes for it (delivery/mailbox.ts), reduced.
  */
 
+/** Ended owner prompts retained per agent, in their original transcript order. */
+const MAX_ENDED_PROMPT_ENTRIES = 100;
+
 export type SessionAction =
   /** A turn starts with the user's message. */
   | { type: 'start'; entry: Extract<Entry, { kind: 'user' }>; before?: string }
@@ -30,6 +34,8 @@ export type SessionAction =
   | { type: 'add'; entry: Entry }
   /** Replaces the entry `id` with what `update` makes of it. */
   | { type: 'update'; id: string; update: (entry: Entry) => Entry }
+  /** The owner settles a prompt and drops only the oldest ended entries beyond the cap. */
+  | { type: 'settlePrompt'; entry: SettledPromptEntry }
   /** Appends text to the text or thinking entry `id`. */
   | { type: 'stream'; id: string; text: string }
   /** Shows a prompt and waits for its answer. */
@@ -146,6 +152,27 @@ export function reduceWithChanges(
         entries: sent.reached
           ? update(action.id, () => received)
           : [...session.entries.filter((entry) => entry.id !== action.id), received],
+      };
+    }
+    case 'settlePrompt': {
+      const entries = update(action.entry.id, (entry) =>
+        entry.kind === 'prompt' ? action.entry : entry,
+      );
+      let excess =
+        entries.filter((entry) => entry.kind === 'prompt' && entry.outcome !== undefined).length -
+        MAX_ENDED_PROMPT_ENTRIES;
+      return {
+        ...session,
+        entries:
+          excess <= 0
+            ? entries
+            : entries.filter((entry) => {
+                if (excess > 0 && entry.kind === 'prompt' && entry.outcome !== undefined) {
+                  excess--;
+                  return false;
+                }
+                return true;
+              }),
       };
     }
     case 'update':
