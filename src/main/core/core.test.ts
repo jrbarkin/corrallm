@@ -1,5 +1,5 @@
 import { legacyDirectories } from './workspaces/test-directories';
-import { existsSync } from 'node:fs';
+import { existsSync, statSync } from 'node:fs';
 import { chmod, copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -32,6 +32,8 @@ import {
 import { CALLERS, NO_DESKTOP } from './test-registry';
 import { asHuman, WindowPorts } from './gui';
 import { openWindow } from './test-window';
+import { repositoryIdentity } from './workspaces/discovery';
+import { WorkspaceStore } from './workspaces/store';
 
 const READING = {
   backend: 'codex',
@@ -453,6 +455,36 @@ describe('the core’s database', () => {
     expect(
       readOnDisk(profile, (disk) => disk.prepare('SELECT min_reader FROM meta').get()),
     ).toEqual({ min_reader: 999 });
+  });
+
+  it('rewrites a repository kept in the form before v2 as it starts, comparing its inode once', async () => {
+    const project = path.join(profile, 'project');
+    const commonDir = path.join(project, '.git');
+    await mkdir(commonDir, { recursive: true });
+    const store = await openTestStore(profile);
+    try {
+      await new WorkspaceStore({ store }).write((w) =>
+        w.addRepository({
+          id: '7c0e9a1e-1b6f-4b4f-9f3a-2d1c0b9a8e70',
+          pickedRoot: project,
+          realRoot: project,
+          commonDir,
+          identity: `git common-dir inode ${statSync(commonDir, { bigint: true }).ino.toString()}`,
+          rootKind: 'project',
+          ownedRoot: path.join(project, '.corral', 'worktrees', 'profile'),
+        }),
+      );
+    } finally {
+      await store.close();
+    }
+    const started = await start({ connectors: {}, environment: () => Promise.resolve({}) });
+    await started.close();
+    core = undefined;
+    const now = repositoryIdentity(commonDir);
+    expect(now).toMatch(/^git common-dir v2 ino [0-9]+(?: birth -?[0-9]+)?$/);
+    expect(
+      readOnDisk(profile, (disk) => disk.prepare('SELECT identity FROM repository').all()),
+    ).toEqual([{ identity: now }]);
   });
 });
 

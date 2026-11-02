@@ -10,7 +10,7 @@ import { OpFailure } from '../call';
 import type { Caller } from '../caller';
 import type { TrustedPath } from '../host';
 import { verifiedCheckout } from './checkout';
-import { discoverRepository } from './discovery';
+import { discoverRepository, recordedIdentity } from './discovery';
 import type { DrainWords, TreeKey, WorkspaceGate } from './gate';
 import { GitError, MERGE_TIMEOUT_MS } from './git';
 import type { GitCall, GitIdentity, GitRunner } from './git';
@@ -1434,7 +1434,12 @@ export class MergeService {
       found.repository.realRoot !== intent.destination.root ||
       found.repository.gitDir !== intent.destination.gitDir ||
       found.repository.commonDir !== intent.destination.commonDir ||
-      found.repository.identity !== intent.destination.identity
+      // The intent is never rewritten: one recorded in the old form follows its repository's record.
+      !recordedIdentity(
+        intent.destination.identity,
+        found.repository.identity,
+        this.#deps.workspaces.repository(job.repository)?.identity,
+      )
     ) {
       await this.#settle(job, {
         outcome: 'held',

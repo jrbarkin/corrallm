@@ -1,4 +1,5 @@
-import { existsSync, readFileSync, utimesSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { existsSync, readFileSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -6,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mintTrustedPath } from '../host';
 import type { TrustedPath } from '../host';
 import { refuseWrites } from '../store/test-store';
+import { upgradeIdentities } from './discovery';
 import { GitError, GitRunner } from './git';
 import type { GitOutput } from './git';
 import type { MergeResult } from './merge';
@@ -319,6 +321,31 @@ describe.skipIf(process.platform === 'win32')('a crash at each phase, and the re
     expect(w.journal.latest(w.tree.id)).toMatchObject({ outcome: 'merged', phase: 'done' });
     expect(w.g(w.picked, 'rev-parse', 'feature')).toBe(m);
     expect(w.g(w.app, 'rev-parse', 'main')).not.toBe(m);
+  });
+
+  it('step 8, recorded by a corrallm keeping identities in the form before v2: found again once its repository’s record is rewritten, merged', async () => {
+    const { w } = await crashing('installed');
+    const job = w.journal.open()[0];
+    if (job === undefined) throw new Error('No merge left going on.');
+    const m = job.intent.merge.commit;
+    // As that corrallm recorded them: the repository and the merge's destination by the common
+    // directory's inode alone. The journal's intent is never rewritten.
+    const before = `git common-dir inode ${statSync(w.record.commonDir, { bigint: true }).ino.toString()}`;
+    const intent = JSON.stringify({
+      ...job.intent,
+      destination: { ...job.intent.destination, identity: before },
+    });
+    await w.store.write(() => {
+      w.store
+        .prepare('UPDATE merge_job SET intent = ?, intent_hash = ? WHERE id = ?')
+        .run(intent, createHash('sha256').update(intent).digest('hex'), job.id);
+      w.store.prepare('UPDATE repository SET identity = ? WHERE id = ?').run(before, w.record.id);
+    });
+    // The next core rewrites its repository's record as it starts, comparing the inode once.
+    expect(await upgradeIdentities(w.workspaces)).toBe(1);
+    await restart(w);
+    expect(w.journal.latest(w.tree.id)).toMatchObject({ outcome: 'merged', phase: 'done' });
+    expect(w.g(w.app, 'rev-parse', 'main')).toBe(m);
   });
 
   it('after settling, its answer lost: the repeated request is answered, nothing merged twice', async () => {
