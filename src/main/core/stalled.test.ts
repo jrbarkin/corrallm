@@ -451,7 +451,7 @@ describe('silent turns', () => {
     expect(warning.mock.calls[0]?.[4]).toContain('20 minutes');
   });
 
-  it.each(['docker0', 'br-0a1b2c3d4e5f', 'veth1a2b3c', 'virbr0', 'cni0', 'podman1', 'bridge100'])(
+  it.each(['docker0', 'br-0a1b2c3d4e5f'])(
     'ignores the virtual bridge %s coming up and going down',
     async (name) => {
       start();

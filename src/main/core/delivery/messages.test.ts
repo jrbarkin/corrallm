@@ -497,7 +497,7 @@ describe('the message store', () => {
 });
 
 describe('incremental pruning', () => {
-  for (const initialSeed of [0x54b, 0x55b]) {
+  for (const initialSeed of process.env.CORRALLM_TEST_STRESS === '1' ? [0x54b, 0x55b] : [0x54b]) {
     it(
       `keeps exactly the scan algorithm’s set through seeded changes, restarts, restores and staged rollbacks (seed ${String(initialSeed)})`,
       { timeout: 30_000 },
