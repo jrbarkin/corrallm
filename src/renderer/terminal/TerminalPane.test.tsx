@@ -118,6 +118,36 @@ async function open({
 const SCREEN = { type: 'screen', data: 'Claude Code\r\n❯ ', cols: 100, rows: 30 } as const;
 
 describe('a Terminal agent', () => {
+  it('shows folder trust before a turn from the owner entry alone', async () => {
+    const { canvas, view } = await open();
+    const id = PromptId.parse('30000000-0000-4000-8000-000000000002');
+    act(() => {
+      canvas.session('a', {
+        ...NEW_SESSION,
+        entries: [
+          {
+            id,
+            kind: 'prompt',
+            need: `prompt/a/1/${id}`,
+            name: 'a',
+            prompt: Prompt.parse({
+              id,
+              agent: 'a',
+              raised: 1,
+              kind: 'approval',
+              title: 'Trust this folder',
+              answerIn: 'terminal',
+              subject: { type: 'trust' },
+              choices: [],
+            }),
+          },
+        ],
+      });
+    });
+    expect(view.getByText('Trust this folder in the terminal')).toBeTruthy();
+    expect(canvas.session('a')?.asking).toBeUndefined();
+  });
+
   it('focuses its own terminal from the owner prompt card without replying', async () => {
     const { canvas, view } = await open();
     const id = PromptId.parse('30000000-0000-4000-8000-000000000001');

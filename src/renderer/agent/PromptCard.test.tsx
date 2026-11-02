@@ -273,6 +273,37 @@ it('offers only the core’s Not waiting choice and terminal navigation for a te
   core.dispose();
 });
 
+it('shows a terminal question and every offered answer without API answer controls', () => {
+  const core = setup({
+    kind: 'question',
+    choices: undefined,
+    answerIn: 'terminal',
+    questions: [
+      {
+        id: 'db',
+        header: 'Database',
+        text: 'Which database?',
+        multiple: false,
+        other: true,
+        options: [
+          { label: 'Postgres', description: 'What the app uses today' },
+          { label: 'SQLite', description: 'One file, for tests' },
+        ],
+      },
+    ],
+  });
+  expect(screen.getByText('Which database?')).toBeTruthy();
+  expect(screen.getByText('Database')).toBeTruthy();
+  expect(screen.getByText('Postgres')).toBeTruthy();
+  expect(screen.getByText('What the app uses today')).toBeTruthy();
+  expect(screen.getByText('SQLite')).toBeTruthy();
+  expect(screen.getByText('One file, for tests')).toBeTruthy();
+  expect(screen.queryByRole('textbox')).toBeNull();
+  expect(screen.queryByRole('radio')).toBeNull();
+  expect(screen.queryByRole('button', { name: 'Send answers' })).toBeNull();
+  core.dispose();
+});
+
 it('requires Show all before allowing a long command and labels admitted cuts', async () => {
   const core = setup({
     subject: {
