@@ -13,13 +13,6 @@ import { AgentId, MessageId, NeedId, OpCanvas } from '../ids';
 import { MAX_PAGE, MAX_WAIT_SECONDS } from '../limits';
 import type { OpName } from '../surface';
 import { Body as B11Body, Images, ManualBody } from './b11-data';
-import {
-  MAX_ANSWER_LENGTH,
-  MAX_FORM_FIELDS,
-  MAX_ID_LENGTH,
-  MAX_QUESTIONS,
-  PLAN_MODES,
-} from '../../session';
 import { MAX_REPLY_ANSWER_BYTES } from '../limits';
 
 /**
@@ -282,23 +275,7 @@ export const conversationOps = {
   }),
 } satisfies Partial<Record<OpName, OpDef>>;
 
-const AnswerText = z.string().max(MAX_ANSWER_LENGTH);
-const FieldName = z.string().min(1).max(MAX_ID_LENGTH);
-// X11 removes the renderer's index-keyed answers with the old question cards.
-const LegacyQuestionAnswers = z
-  .record(FieldName, z.union([AnswerText, z.array(AnswerText).max(MAX_FORM_FIELDS)]))
-  .refine(
-    (answers) => Object.keys(answers).length > 0 && Object.keys(answers).length <= MAX_QUESTIONS,
-    'Answer the bounded set of questions',
-  )
-  .meta({ minProperties: 1, maxProperties: MAX_QUESTIONS });
-const PermissionAnswer = z
-  .strictObject({ permission: z.enum(['once', 'always', 'deny']), feedback: AnswerText.optional() })
-  .refine(
-    (answer) => answer.feedback === undefined || answer.permission === 'deny',
-    'Feedback accompanies a denial',
-  );
-/** Owner replies and hold text; X11 removes the old cards' permission, plan and question forms. */
+/** Owner replies and run-hold text. */
 export const ReplyAnswer = z
   .union([
     PromptReplyAnswer.options[0],
@@ -319,15 +296,6 @@ export const ReplyAnswer = z
         'Images accompany typed text',
       ),
     z.strictObject({ text: B11Body, images: Images.optional() }),
-    z.strictObject({ answers: LegacyQuestionAnswers }),
-    // The renderer still sends these through the owner's temporary bridge until X10/X11.
-    PermissionAnswer,
-    z.strictObject({
-      plan: z.union([
-        z.strictObject({ approve: z.literal(true), mode: z.enum(PLAN_MODES) }),
-        z.strictObject({ approve: z.literal(false), feedback: AnswerText }),
-      ]),
-    }),
   ])
   .refine(
     (answer) => new TextEncoder().encode(JSON.stringify(answer)).length <= MAX_REPLY_ANSWER_BYTES,

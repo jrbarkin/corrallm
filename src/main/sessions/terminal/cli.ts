@@ -1,5 +1,5 @@
 import type { AdapterPrompt } from '../../../shared/model/prompts';
-import type { SessionMode, SessionUsage, TerminalAsk, TurnReason } from '../../../shared/session';
+import type { SessionMode, SessionUsage, TurnReason } from '../../../shared/session';
 import type { UsageWindows } from '../../../shared/usage';
 import type { HookEvent, HookRegistration } from './hooks';
 import type { Screen } from './screen';
@@ -59,10 +59,10 @@ export type TerminalSignal<M extends SessionMode> =
   | { kind: 'model'; model: string }
   /**
    * What it is about to ask the user in its terminal (a permission, questions, a plan), as the
-   * core's prompt (B13 C6: answered in its terminal, in its hook's words), and as the event B13
-   * replaces lists it (`ask`, until X11 removes it). Told only where the prompt can be made.
+   * core's prompt (B13 C6: answered in its terminal, in its hook's words). Told only where the
+   * prompt can be made.
    */
-  | { kind: 'ask'; ask: TerminalAsk; prompt: AdapterPrompt }
+  | { kind: 'ask'; id: string; prompt: AdapterPrompt }
   /** It needs the user, as its notification says (what it says). */
   | { kind: 'needs'; text: string };
 

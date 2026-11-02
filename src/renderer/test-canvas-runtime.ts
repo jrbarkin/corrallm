@@ -1,30 +1,25 @@
+import { Prompt, checkPromptAnswer } from '../shared/model/prompts';
+import { promptNeed, settledPrompt } from '../shared/model/prompt-views';
+import type { LiveOutcome } from '../shared/model/prompt-views';
+import type { OpenPromptEntry } from '../shared/model/session';
 import type { CanvasDocument } from '../shared/model/canvas';
-import type { Session, Entry, Prompt } from '../shared/model/session';
-import { isOpen, NEW_SESSION } from '../shared/model/session';
+import type { Session, Entry } from '../shared/model/session';
+import { NEW_SESSION } from '../shared/model/session';
 import type { Run } from '../shared/model/run';
-import type { MessageImage, SessionMode, SessionAnswer, SessionOptions } from '../shared/session';
+import type { MessageImage, SessionMode, SessionOptions } from '../shared/session';
 import { isSessionMode } from '../shared/session';
 import type { ConnectionId } from '../shared/adapter';
 import { OPS } from '../shared/api/registry';
 import { AgentId, MessageId } from '../shared/api/ids';
 import { runView, sessionView } from '../shared/model/views';
 import type { MessageView } from '../shared/model/views';
-import { needs, needsOf, needsItem } from '../shared/model/needs-selectors';
+import { needs } from '../shared/model/needs-selectors';
 import * as AgentOps from '../shared/model/agent-ops';
 import { catalog } from './catalog';
 import { runCatalog } from './graph/agents';
 import type { fakeCore } from './test-api';
 import { fakeSessions } from './test-sessions';
 import type { SessionReplies } from './test-sessions';
-
-/** X11 removes these legacy fixture entries and their string/array answers together. */
-function legacyQuestionText(value: unknown): string {
-  if (typeof value === 'string') return value;
-  if (Array.isArray(value) && value.every((part: unknown) => typeof part === 'string')) {
-    return value.join(', ');
-  }
-  throw new Error('This question fixture takes the old card’s answers.');
-}
 
 /** Scripted operation/topic fixture. It runs no queue, driver, retry loop or checkpoint. */
 export function canvasRuntime(
@@ -141,12 +136,51 @@ export function canvasRuntime(
     core.change({
       topic: `needs:${canvas}`,
       rev: (core.state(`needs:${canvas}`)?.rev ?? 0) + 1,
-      replace: { items: needs(input()) },
+      replace: {
+        items: [
+          ...needs(input()),
+          ...Object.values(sessions).flatMap((session) =>
+            session.entries.flatMap((entry) =>
+              entry.kind === 'prompt' && entry.outcome === undefined
+                ? [
+                    promptNeed(
+                      {
+                        canvas,
+                        need: entry.need,
+                        name: entry.name,
+                        standIn: entry.standIn === true,
+                        prompt: entry.prompt,
+                      },
+                      'you',
+                    ),
+                  ]
+                : [],
+            ),
+          ),
+        ],
+      },
     });
   }
   function setSession(agent: string, session: Session) {
     sessions[agent] = session;
     publish();
+  }
+  function settle(agent: string, entry: OpenPromptEntry, outcome: LiveOutcome) {
+    put(agent, {
+      kind: 'prompt',
+      id: entry.id,
+      need: entry.need,
+      prompt: settledPrompt(
+        {
+          need: entry.need,
+          name: entry.name,
+          standIn: entry.standIn === true,
+          prompt: entry.prompt,
+        },
+        'you',
+      ),
+      outcome,
+    });
   }
   function put(agent: string, entry: Entry) {
     const session = of(agent);
@@ -157,7 +191,6 @@ export function canvasRuntime(
     setSession(agent, {
       ...session,
       entries,
-      prompts: entries.filter((e): e is Prompt => isOpen(e)),
     });
   }
   const stopEvents = replies.onEvent((agent, connection, event) => {
@@ -190,9 +223,6 @@ export function canvasRuntime(
         break;
       case 'suggestion':
         setSession(agent, { ...current, suggestion: event.text });
-        break;
-      case 'asking':
-        setSession(agent, { ...current, asking: event.asks });
         break;
       case 'unheard':
         setSession(agent, { ...current, unheard: event.text });
@@ -238,19 +268,43 @@ export function canvasRuntime(
       }
       case 'tool':
       case 'todos':
-      case 'permission':
-      case 'question':
-      case 'plan':
-      case 'elicitation':
       case 'notice':
         put(agent, { ...event, kind: event.type } as Entry);
         break;
-      case 'withdrawn':
-        setSession(agent, {
-          ...current,
-          entries: current.entries.map((e) => (e.id === event.id ? { ...e, withdrawn: true } : e)),
+      case 'prompt': {
+        const raised = { ...event.prompt };
+        delete raised.signals;
+        delete raised.omitted;
+        const prompt = Prompt.parse({
+          ...raised,
+          id: event.key,
+          agent,
+          raised: Date.now(),
+          ...('choices' in raised
+            ? { choices: raised.choices.map((choice) => ({ ...choice })) }
+            : {}),
+        });
+        put(agent, {
+          kind: 'prompt',
+          id: prompt.id,
+          need: `prompt/${encodeURIComponent(agent)}/1/${prompt.id}`,
+          prompt,
+          name: nodes.find((node) => node.id === agent)?.data.label ?? agent,
         });
         break;
+      }
+      case 'prompt-ended': {
+        const entry = current.entries.find((entry) => entry.id === event.key);
+        if (entry?.kind === 'prompt' && entry.outcome === undefined)
+          settle(
+            agent,
+            entry,
+            event.reason === 'withdrawn'
+              ? { type: 'withdrawn' }
+              : { type: 'answered-in-terminal', by: 'terminal' },
+          );
+        break;
+      }
       case 'cleared':
         setSession(agent, {
           ...current,
@@ -507,73 +561,49 @@ export function canvasRuntime(
     });
     core.reply('reply', async (raw) => {
       const { to, answer } = OPS.reply.input.parse(raw);
-      const need = needsOf(input()).find((n) => needsItem(n, input()).id === to);
-      if (!need)
-        return {
-          ok: false,
-          error: { code: 'not-found', sentence: 'That question is no longer current.' },
-        };
-      if (need.kind === 'prompt') {
-        const agent = need.agent.id,
-          prompt = need.prompt;
-        if ('answers' in answer && prompt.kind === 'question') {
-          const fields = needsItem(need, input()).questions ?? [];
-          const questions = prompt.questions.map((q, i) => {
-            const key = fields[i]?.id;
-            const value = key === undefined ? undefined : answer.answers[key];
-            return value === undefined ? q : { ...q, answer: legacyQuestionText(value) };
-          });
-          put(agent, { ...prompt, questions });
-          if (questions.every((q) => q.answer !== undefined))
-            await replies.answer(agent, prompt.id, {
-              kind: 'question',
-              answers: questions.map((q) => q.answer ?? ''),
-            });
-          return result({ outcome: 'answered' });
-        }
-        const native: SessionAnswer =
-          'permission' in answer
+      for (const [agent, session] of Object.entries(sessions)) {
+        const entry = session.entries.find((entry) => entry.kind === 'prompt' && entry.need === to);
+        if (entry?.kind !== 'prompt' || entry.outcome !== undefined) continue;
+        const native = checkPromptAnswer(
+          entry.prompt,
+          'choice' in answer
             ? {
-                kind: 'permission',
-                answer: answer.permission,
-                ...(answer.feedback ? { feedback: answer.feedback } : {}),
+                kind: 'choice',
+                value: answer.choice,
+                ...('feedback' in answer ? { feedback: answer.feedback } : {}),
               }
             : 'answers' in answer
-              ? {
-                  kind: 'question',
-                  answers: Object.values(answer.answers).map(legacyQuestionText),
-                }
-              : 'plan' in answer
-                ? { kind: 'plan', answer: answer.plan }
-                : 'form' in answer
-                  ? {
-                      kind: 'elicitation',
-                      action: answer.form.action,
-                      ...(answer.form.values ? { values: answer.form.values } : {}),
-                    }
-                  : { kind: 'permission', answer: 'deny' };
-        await replies.answer(agent, prompt.id, native);
-        put(agent, {
-          ...prompt,
-          ...('permission' in answer
+              ? { kind: 'questions', answers: answer.answers }
+              : 'form' in answer
+                ? { kind: 'form', ...answer.form }
+                : { kind: 'choice', value: '' },
+        );
+        await replies.answer(agent, entry.id, native);
+        const outcome: LiveOutcome =
+          native.kind === 'choice'
             ? {
-                answer: answer.permission,
-                ...(answer.feedback ? { feedback: answer.feedback } : {}),
+                type: 'choice',
+                value: native.value,
+                by: 'you',
+                ...('choices' in entry.prompt
+                  ? {
+                      hint:
+                        entry.prompt.choices.find((choice) => choice.value === native.value)
+                          ?.hint ?? 'reject_once',
+                    }
+                  : {}),
               }
-            : 'plan' in answer
-              ? { answer: answer.plan }
-              : 'answers' in answer && prompt.kind === 'question'
-                ? {
-                    questions: prompt.questions.map((q, i) => ({
-                      ...q,
-                      answer: legacyQuestionText(Object.values(answer.answers)[i]),
-                    })),
-                  }
-                : { answer: 'form' in answer ? answer.form.action : undefined }),
-        } as Entry);
+            : native.kind === 'questions'
+              ? { type: 'answers', count: Object.keys(native.answers).length, by: 'you' }
+              : { type: 'form', action: native.action, by: 'you' };
+        settle(agent, entry, outcome);
         setSession(agent, { ...of(agent), status: 'working' });
+        return result({ outcome: 'answered' });
       }
-      return result({ outcome: 'answered' });
+      return {
+        ok: false,
+        error: { code: 'not-found', sentence: 'That question is no longer current.' },
+      };
     });
   }
   register();

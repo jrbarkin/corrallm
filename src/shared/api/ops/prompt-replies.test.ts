@@ -90,7 +90,7 @@ describe('registered prompt replies', () => {
     { permission: 'deny', feedback: 'Use a safer command' },
     { plan: { approve: false, feedback: 'Keep planning' } },
     { answers: { '0': 'main', '1': ['unit', 'lint'] } },
-  ])('keeps the renderer bridge answer until its consumers convert: %j', (answer) => {
-    expect(OPS.reply.input.parse(input(answer))).toEqual(input(answer));
+  ])('refuses the removed prompt answer shapes: %j', (answer) => {
+    expect(OPS.reply.input.safeParse(input(answer)).success).toBe(false);
   });
 });

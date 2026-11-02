@@ -1,21 +1,16 @@
-import { isOpen } from '../../../../shared/model/session';
 import type {
-  Answer,
   Entry,
   MessageImage,
   Mode,
   ModelChoice,
-  PlanAnswer,
-  Prompt,
   Session,
   SettledPromptEntry,
   SessionUsage,
   SlashCommand,
   BackgroundTask,
-  TerminalAsk,
   TurnResult,
 } from '../../../../shared/model/session';
-import type { AgentStartSettings, ElicitationAction } from '../../../../shared/session';
+import type { AgentStartSettings } from '../../../../shared/session';
 import { mergeHistory } from './history';
 
 /*
@@ -38,16 +33,6 @@ export type SessionAction =
   | { type: 'settlePrompt'; entry: SettledPromptEntry }
   /** Appends text to the text or thinking entry `id`. */
   | { type: 'stream'; id: string; text: string }
-  /** Shows a prompt and waits for its answer. */
-  | { type: 'ask'; entry: Prompt }
-  /** Answers a permission prompt; `feedback`, with a no: what to do instead. */
-  | { type: 'answer'; id: string; answer: Answer; feedback?: string }
-  /** Answers question `index` of the question prompt `id`. */
-  | { type: 'answerQuestion'; id: string; index: number; answer: string }
-  | { type: 'answerPlan'; id: string; answer: PlanAnswer }
-  | { type: 'answerElicitation'; id: string; action: ElicitationAction }
-  /** The prompt `id` no longer waits for an answer. */
-  | { type: 'withdraw'; id: string }
   /** Mid-turn: working, or waiting on the user (as a connected session says). */
   | { type: 'status'; status: 'working' | 'waiting' }
   | {
@@ -88,7 +73,6 @@ export type SessionAction =
   | { type: 'commands'; commands: readonly SlashCommand[] }
   | { type: 'tasks'; tasks: readonly BackgroundTask[] }
   | { type: 'suggestion'; text: string }
-  | { type: 'asking'; asks: readonly TerminalAsk[] }
   /** corrallm can't hear the session's replies, and why. */
   | { type: 'unheard'; text: string }
   /** What a resumed session did before: what the transcript does not show yet goes in (history.ts). */
@@ -101,28 +85,12 @@ export type SessionAction =
   | { type: 'clear' };
 
 export function reduce(session: Session, action: SessionAction): Session {
-  return reduceWithChanges(session, action);
-}
-
-/** Entry rewrites observed by SessionStore while reducing, without another transcript scan. */
-export function reduceWithChanges(
-  session: Session,
-  action: SessionAction,
-  changed?: (before: Entry, after: Entry) => void,
-): Session {
   const update = (id: string, change: (entry: Entry) => Entry): Entry[] =>
     session.entries.map((entry) => {
       if (entry.id !== id) return entry;
       const next = change(entry);
-      changed?.(entry, next);
       return next;
     });
-  /** `entries`, the turn waiting while one of their prompts is open, and working otherwise. */
-  const settled = (entries: Entry[]): Session => ({
-    ...session,
-    entries,
-    status: session.status === 'idle' ? 'idle' : entries.some(isOpen) ? 'waiting' : 'working',
-  });
   switch (action.type) {
     case 'start': {
       // What was predicted for it is no longer.
@@ -186,52 +154,6 @@ export function reduceWithChanges(
             : entry,
         ),
       };
-    case 'ask':
-      return { ...session, status: 'waiting', entries: [...session.entries, action.entry] };
-    case 'answer': {
-      const asked = session.entries.find((e) => e.id === action.id);
-      if (asked?.kind !== 'permission') return session;
-      return settled(
-        update(action.id, (entry) =>
-          entry.kind === 'permission'
-            ? {
-                ...entry,
-                answer: action.answer,
-                ...(action.feedback === undefined ? {} : { feedback: action.feedback }),
-              }
-            : entry,
-        ),
-      );
-    }
-    case 'answerQuestion':
-      return settled(
-        update(action.id, (entry) =>
-          entry.kind === 'question'
-            ? {
-                ...entry,
-                questions: entry.questions.map((q, i) =>
-                  i === action.index ? { ...q, answer: action.answer } : q,
-                ),
-              }
-            : entry,
-        ),
-      );
-    case 'answerPlan':
-      return settled(
-        update(action.id, (entry) =>
-          entry.kind === 'plan' ? { ...entry, answer: action.answer } : entry,
-        ),
-      );
-    case 'answerElicitation':
-      return settled(
-        update(action.id, (entry) =>
-          entry.kind === 'elicitation' ? { ...entry, answer: action.action } : entry,
-        ),
-      );
-    case 'withdraw':
-      return settled(
-        update(action.id, (entry) => (isOpen(entry) ? { ...entry, withdrawn: true } : entry)),
-      );
     case 'status':
       return { ...session, status: action.status };
     case 'end': {
@@ -239,7 +161,6 @@ export function reduceWithChanges(
       const interrupted = result.status === 'cancelled';
       const failed = result.status === 'failed';
       const entries = session.entries.map((entry): Entry => {
-        if (isOpen(entry)) return { ...entry, withdrawn: true };
         return interrupted && entry.kind === 'tool' && entry.status === 'running'
           ? { ...entry, status: 'interrupted' }
           : entry;
@@ -306,7 +227,6 @@ export function reduceWithChanges(
       if (asks === undefined) delete next.asks;
       else next.asks = asks;
       if (effort !== undefined) next.effort = effort;
-      delete next.asking;
       // One that can't hear its CLI says so after it starts.
       delete next.unheard;
       return next;
@@ -319,12 +239,6 @@ export function reduceWithChanges(
       return { ...session, tasks: action.tasks };
     case 'suggestion':
       return { ...session, suggestion: action.text };
-    case 'asking': {
-      if (action.asks.length > 0) return { ...session, asking: action.asks };
-      const asked: Session = { ...session };
-      delete asked.asking;
-      return asked;
-    }
     case 'unheard':
       return { ...session, unheard: action.text };
     case 'restore':

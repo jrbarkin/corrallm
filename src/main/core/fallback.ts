@@ -519,10 +519,7 @@ export class FallbackService {
   #idle({ agent, runtime }: Lane): boolean {
     const session = runtime.engine.sessions.of(agent);
     return (
-      session.status === 'idle' &&
-      session.queued.length === 0 &&
-      (session.asking?.length ?? 0) === 0 &&
-      !runtime.engine.run.sending(agent)
+      session.status === 'idle' && session.queued.length === 0 && !runtime.engine.run.sending(agent)
     );
   }
 

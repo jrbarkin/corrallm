@@ -121,9 +121,7 @@ const seen = () =>
           ? `${event.type}:${event.text}`
           : event.type === 'model'
             ? `model:${event.model}`
-            : event.type === 'asking'
-              ? `asking:${event.asks.map((ask) => (ask.kind === 'other' ? ask.text : ask.kind)).join('|')}`
-              : event.type,
+            : event.type,
   );
 const ends = () => events.filter((event) => event.type === 'end').length;
 

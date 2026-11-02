@@ -1,3 +1,4 @@
+import { testPromptEvent, testPromptId } from '../../shared/test-prompts';
 import type { FakeCanvas } from '../test-canvas';
 import { NEW_SESSION } from '../../shared/model/session';
 import { renderReady, events } from '../test-render';
@@ -287,11 +288,33 @@ describe('the queues view', () => {
     await act(async () => {
       await Promise.resolve();
     });
+    await act(async () => {
+      await canvas.core.api.sessionOpen({ canvas: canvas.document.id, agent: 'a' });
+    });
     act(() => {
       fake.emit(
         'a',
         'claude-code.sdk',
-        { type: 'permission', id: 'approve', tool: 'Bash', summary: 'npm test', always: null },
+        testPromptEvent(
+          {
+            kind: 'approval',
+            title: 'Run this command?',
+            answerIn: 'api',
+            summary: 'npm test',
+            subject: { type: 'tool', tool: 'Bash', input: {} },
+            choices: [
+              { value: 'once', label: 'Yes', hint: 'allow_once', effects: {} },
+              {
+                value: 'deny',
+                label: 'No',
+                hint: 'reject_once',
+                effects: {},
+                feedback: 'optional',
+              },
+            ],
+          },
+          testPromptId('approve'),
+        ),
         { type: 'status', status: 'waiting' },
       );
     });

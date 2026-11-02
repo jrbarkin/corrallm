@@ -19,7 +19,6 @@ import {
 } from '../../shared/model/catalog';
 import type { AgentEndpoint } from '../../shared/model/catalog';
 import type { NeedsItem } from '../../shared/model/needs';
-import { needs } from '../../shared/model/needs-selectors';
 import { needFor } from '../../shared/model/prompt-views';
 import { isApproval, isIf, isRepeat } from '../../shared/model/queue';
 import type { QueueItem } from '../../shared/model/queue';
@@ -33,8 +32,7 @@ import type { ChangeSet } from './canvas/change';
 import type { ChangeRule } from './canvas/commit';
 import { partyIdOf } from './caller';
 import type { TokenCaller } from './caller';
-import { needsInput } from './engines';
-import type { Engines, OpenCanvas } from './engines';
+import type { Engines } from './engines';
 import { nameOf, partyText, pausesText, RELEASES } from './parties';
 import { resumeUndoes, startUndoes, usageGoOn } from './run-control';
 
@@ -122,16 +120,9 @@ export function onEveryCarrier<R extends ArgumentRule>(
   ) as ArgumentChecks[R];
 }
 
-/**
- * An item's title as a token may read it (B13 C11's selector, `needFor`): an MCP server's words for
- * its tool, and an old permission's title in its CLI's words, are yours alone (B13 C9).
- */
-function tokenTitle(open: OpenCanvas | undefined, item: NeedsItem): string {
-  const old =
-    open === undefined || item.prompt !== undefined || item.kind !== 'prompt'
-      ? undefined
-      : needs(needsInput(open, undefined), 'token').find(({ id }) => id === item.id);
-  return needFor(old ?? item, 'token').title;
+/** An item's title as C11 permits the caller to read it. */
+function tokenTitle(item: NeedsItem): string {
+  return needFor(item, 'token').title;
 }
 
 /**
@@ -158,7 +149,7 @@ export function ruleChecks(
         const item = canvas === undefined ? undefined : needOf(canvas as string as CanvasId, to);
         if (item === undefined) return undefined;
         // A refusal says only what a token may read of the item (B13 C11, C9).
-        const title = () => tokenTitle(openOf(canvas), item);
+        const title = () => tokenTitle(item);
         // R6 first: what waits on an agent is never that agent's to answer, whoever `by` names.
         if (
           caller.kind === 'agent' &&
@@ -172,9 +163,7 @@ export function ruleChecks(
             refuse: `Only ${andList(item.by.map((party) => partyText([], party)))} may answer this: ${title()}.`,
           };
         }
-        // A typed answer (B11 C7's prepared reply) picks a choice too: a permission's, say.
-        const typed = answer as { choice?: string; permission?: string };
-        const chosen = typed.choice ?? typed.permission;
+        const chosen = 'choice' in answer ? answer.choice : undefined;
         const choice = item.choices.find(({ value }) => value === chosen);
         return choice?.humanOnly === undefined
           ? undefined

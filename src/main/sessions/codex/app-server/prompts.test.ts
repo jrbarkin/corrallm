@@ -10,8 +10,7 @@ import { Translator } from './translate';
 /*
  * Codex's requests as B13 C5 raises them: each a prompt of the core's owner's under a key minted
  * for that request, answered or declined only by that key, ended when Codex stops waiting or the
- * session closes, and always answered. Until X10 converts the renderer, each is shown as the events
- * B13 replaces too, whose answers reach Codex only through the owner (`bridge`).
+ * session closes, and always answered through the owner's captured answer handle.
  */
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
@@ -148,7 +147,7 @@ describe('Prompts: each request Codex makes raised to the core under a fresh key
     asking.resolved(7);
     await expect(told).resolves.toEqual({ decision: 'cancel' });
     expect(ended()).toEqual([{ type: 'prompt-ended', key: key(), reason: 'withdrawn' }]);
-    expect(events.some(({ type }) => type === 'withdrawn')).toBe(false);
+    expect(events.some(({ type }) => ['withdrawn'].includes(type))).toBe(false);
     expect(settled).toHaveBeenCalled();
     expect(() => {
       asking.answers.answer(key(), { kind: 'choice', value: 'accept' });
@@ -203,7 +202,7 @@ it('raises a secret question to the owner and answers it without a legacy answer
       prompt.questions.map(({ id }) => [id, { answers: ['private response'] }]),
     ),
   });
-  expect(h.events.filter(({ type }) => type === 'question')).toEqual([]);
+  expect(h.events.filter(({ type }) => ['question'].includes(type))).toEqual([]);
 });
 
 it('publishes each native request through the owner without a legacy transcript mirror', async () => {

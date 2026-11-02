@@ -610,7 +610,7 @@ export class Engines {
     given: SessionEvent,
   ): Promise<void> {
     const key = `${canvas}\u0000${agentId}`;
-    if (given.type === 'started' || given.type === 'mode' || given.type === 'asking') {
+    if (given.type === 'started' || given.type === 'mode') {
       const reports = this.#reports.get(key) ?? new Map<string, SessionEvent>();
       if (given.type === 'started') reports.clear();
       reports.delete(given.type);
@@ -1327,8 +1327,6 @@ export class Engines {
         }),
       installed: () => run(async () => installedClis(await environment())),
       send: (agentId, message) => done(() => sessions.send(canvas, agentId, message)),
-      answer: (agentId, promptId, answer) =>
-        done(() => sessions.answer(canvas, agentId, promptId, answer)),
       interrupt: (agentId) => done(() => sessions.interrupt(canvas, agentId)),
       setMode: (agentId, mode) => done(() => sessions.setMode(canvas, agentId, mode)),
       setModel: (agentId, model) => done(() => sessions.setModel(canvas, agentId, model)),
@@ -1444,7 +1442,6 @@ export function needsInput(open: OpenCanvas, locale: string | undefined): NeedsI
     stuck: delivery.stuck(),
     unasking: delivery.unasking(),
     limited: delivery.limited(),
-    ...(open.sessionGeneration === undefined ? {} : { sessionGenerations: open.sessionGeneration }),
     ...(locale === undefined ? {} : { locale }),
   };
 }

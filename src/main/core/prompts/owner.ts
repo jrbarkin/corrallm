@@ -93,7 +93,7 @@ import { classify } from './classify';
  *   transcript as it is raised (by its PromptId, `transcript`) and settled there in place as it
  *   ends, how it ended (`LiveOutcome`) with what was asked kept only in short; every change says
  *   so at once (`changed`: Needs, the agent's summary and its count, what delivery holds). What
- *   each agent waits on (`waiting`: its oldest live prompt, mirrored or not, as a token reads it)
+ *   each agent waits on (`waiting`: its oldest live prompt, as a token reads it)
  *   holds a party's message, keeps the watchdog from taking the wait for silence, and makes
  *   `agents` and `status` say it waits.
  * - Its close barrier (C9): what a session raises for a canvas the core no longer runs (closing,
@@ -174,11 +174,6 @@ interface Occurrence {
   readonly prompt: Prompt;
   /** The raising generation's answers, captured as it was raised. */
   readonly answers: PromptAnswers;
-  /**
-   * Transitional (B13 C4, until X10; X11 removes it): its session shows it as one of the events
-   * B13 replaces too, whose Needs item stands for it (answered through `keyed`), so it isn't listed.
-   */
-  readonly mirrored: boolean;
   /** The core's own stand-in for a terminal observation it couldn't show whole. */
   readonly standIn: boolean;
   readonly bytes: number;
@@ -313,7 +308,7 @@ export class PromptOwner implements PromptSink {
 
   /**
    * What `agent` waits on now, if anything (B13 C9): its oldest live prompt, open or being
-   * answered, mirrored by one of the events B13 replaces or not, as a token reads its Needs item
+   * answered, as a token reads its Needs item
    * (C11's selector: what a notice to a token may quote). What delivery holds a party's message
    * for, the watchdog takes for no silence, and `agents` and `status` call waiting.
    */
@@ -337,17 +332,14 @@ export class PromptOwner implements PromptSink {
   /**
    * Each live prompt of an agent on the canvas, as the selector reads it (B13 C11): its Needs id,
    * its agent's name now, and whether it is the core's stand-in (so a wait its report alone
-   * describes, `undescribed`, offers Not waiting wherever it is shown). Not one its session also
-   * shows as one of the events B13 replaces (until X10), whose old item stands for it.
+   * describes, `undescribed`, offers Not waiting wherever it is shown).
    */
   occurrences(canvas: CanvasId): PromptOccurrence[] {
     const nodes = this.#deps.canvas(canvas)?.nodes;
     if (nodes === undefined) return [];
     return [...(this.#canvases.get(canvas)?.live.values() ?? [])]
-      .filter(
-        ({ agent, mirrored }) =>
-          !mirrored &&
-          nodes.some((node) => node.id === agent && (node.type ?? 'agent') === 'agent'),
+      .filter(({ agent }) =>
+        nodes.some((node) => node.id === agent && (node.type ?? 'agent') === 'agent'),
       )
       .map((occurrence) => occurrenceOf(occurrence, nodes));
   }
@@ -355,15 +347,6 @@ export class PromptOwner implements PromptSink {
   /** How many prompts wait on `agent` (as `occurrences` lists them): what its counts add. */
   count(canvas: CanvasId, agent: string): number {
     return this.occurrences(canvas).filter(({ prompt }) => prompt.agent === agent).length;
-  }
-
-  /**
-   * Transitional (B13 C4, until X10; X11 removes it): the NeedId of the live prompt its session
-   * raised under `key` in `generation`, for the reply router to answer one of the events B13
-   * replaces through the owner. None if that prompt isn't live.
-   */
-  keyed(canvas: CanvasId, agent: string, generation: number, key: string): string | undefined {
-    return this.#keys.get(keyOf({ canvas, agent, generation }, key))?.need;
   }
 
   /** The live prompts on the canvas, as raised and classified: what C7's selector reads. */
@@ -626,7 +609,6 @@ export class PromptOwner implements PromptSink {
       need: needIdOf(at.agent, at.generation, built.id),
       prompt: built,
       answers: at.answers,
-      mirrored: at.mirrored === true,
       standIn,
       bytes,
       state: { at: 'open' },
@@ -634,21 +616,18 @@ export class PromptOwner implements PromptSink {
     prompts.live.set(built.id, occurrence);
     this.#keys.set(keyOf(at, key), occurrence);
     this.#bytes += bytes;
-    // Placed in its agent's transcript as it is raised (B13 C9); one its session also shows as
-    // one of the events B13 replaces is the old entry's, until X10.
-    if (!occurrence.mirrored) {
-      this.#deps.transcript?.(at.canvas, at.agent, {
-        type: 'raised',
-        entry: {
-          id: built.id,
-          kind: 'prompt',
-          need: occurrence.need,
-          prompt: built,
-          name: this.#name(at.canvas, at.agent),
-          ...(standIn ? { standIn: true as const } : {}),
-        },
-      });
-    }
+    // Placed in its agent's transcript as it is raised (B13 C9).
+    this.#deps.transcript?.(at.canvas, at.agent, {
+      type: 'raised',
+      entry: {
+        id: built.id,
+        kind: 'prompt',
+        need: occurrence.need,
+        prompt: built,
+        name: this.#name(at.canvas, at.agent),
+        ...(standIn ? { standIn: true as const } : {}),
+      },
+    });
     this.#deps.changed(at.canvas, at.agent);
   }
 
@@ -789,18 +768,16 @@ export class PromptOwner implements PromptSink {
       if (prompts.ended.size <= MAX_CANVAS_PROMPTS) break;
       prompts.ended.delete(oldest);
     }
-    if (!occurrence.mirrored) {
-      const seen = occurrenceOf(occurrence, this.#deps.canvas(occurrence.canvas)?.nodes ?? []);
-      const yours = settledPrompt(seen, 'you');
-      const theirs = settledPrompt(seen, 'token').title;
-      this.#deps.transcript?.(occurrence.canvas, occurrence.agent, {
-        type: 'ended',
-        id: occurrence.prompt.id,
-        prompt: yours,
-        ...(theirs === yours.title ? {} : { tokenTitle: theirs }),
-        outcome,
-      });
-    }
+    const seen = occurrenceOf(occurrence, this.#deps.canvas(occurrence.canvas)?.nodes ?? []);
+    const yours = settledPrompt(seen, 'you');
+    const theirs = settledPrompt(seen, 'token').title;
+    this.#deps.transcript?.(occurrence.canvas, occurrence.agent, {
+      type: 'ended',
+      id: occurrence.prompt.id,
+      prompt: yours,
+      ...(theirs === yours.title ? {} : { tokenTitle: theirs }),
+      outcome,
+    });
     this.#deps.changed(occurrence.canvas, occurrence.agent);
   }
 

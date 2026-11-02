@@ -30,8 +30,6 @@ interface Turn {
   messages: Set<string>;
   last: number;
   waiting: boolean;
-  prompts: Set<string>;
-  asking: boolean;
   grace?: { at: number; why: Disruption };
   notified: boolean;
   answered?: boolean;
@@ -110,8 +108,6 @@ export class StalledTurns {
         messages: new Set(),
         last: this.#clock.now(),
         waiting: false,
-        prompts: new Set(),
-        asking: false,
         notified: false,
         stalled: false,
         text: '',
@@ -120,22 +116,7 @@ export class StalledTurns {
     }
     if (turn) {
       if (event.type === 'user') turn.messages.add(event.id);
-      if (event.type === 'status') {
-        turn.waiting = event.status === 'waiting';
-        // SDK answers need not emit withdrawn: working says no prompt still holds it.
-        if (!turn.waiting) turn.prompts.clear();
-      } else if (event.type === 'asking') {
-        turn.asking = event.asks.length > 0;
-      } else if (event.type === 'withdrawn') {
-        turn.prompts.delete(event.id);
-      } else if (
-        event.type === 'permission' ||
-        event.type === 'question' ||
-        event.type === 'plan' ||
-        event.type === 'elicitation'
-      ) {
-        turn.prompts.add(event.id);
-      }
+      if (event.type === 'status') turn.waiting = event.status === 'waiting';
     }
     this.activity(canvas, agent);
   }
@@ -310,7 +291,7 @@ export class StalledTurns {
 }
 
 function waitingForUser(turn: Turn): boolean {
-  return turn.waiting || turn.asking || turn.prompts.size > 0;
+  return turn.waiting;
 }
 
 function keyOf(canvas: CanvasId, agent: string): string {

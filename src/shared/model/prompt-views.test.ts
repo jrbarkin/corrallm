@@ -2,10 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { CanvasId } from '../canvas';
 import type { NeedsItem } from './needs';
-import { MADE_UP } from '../test-made-up';
-import { engineCatalog } from './catalog';
-import { needs, needsItem, needsOf } from './needs-selectors';
-import type { NeedsInput } from './needs-selectors';
+
 import { Prompt, PromptNeedView } from './prompts';
 import {
   entryFor,
@@ -18,7 +15,7 @@ import {
   undescribed,
 } from './prompt-views';
 import type { PromptOccurrence } from './prompt-views';
-import { NEW_SESSION } from './session';
+
 import type { Entry } from './session';
 
 /*
@@ -442,45 +439,7 @@ describe('any other item of yours', () => {
   });
 });
 
-describe('an entry of a transcript (the events B13 replaces)', () => {
-  const permission: Entry = {
-    id: 'p1',
-    kind: 'permission',
-    tool: 'Bash',
-    summary: 'npm test',
-    title: 'Run the tests?',
-    detail: { kind: 'output', text: 'npm test' },
-    always: 'Yes, and don’t ask again for private-always-label',
-    answer: 'deny',
-    feedback: 'private-feedback-words',
-  };
-  const question: Entry = {
-    id: 'q1',
-    kind: 'question',
-    questions: [
-      {
-        header: 'Key',
-        text: 'Your key?',
-        options: [{ label: 'One', description: '' }],
-        multiple: false,
-        answer: 'private-answer-text',
-      },
-    ],
-  };
-  const plan: Entry = {
-    id: 'pl1',
-    kind: 'plan',
-    plan: '1. Clean',
-    answer: { approve: false, feedback: 'private-revise-words' },
-  };
-  const elicitation: Entry = {
-    id: 'e1',
-    kind: 'elicitation',
-    server: 'tracker',
-    message: `Sign in at ${LINK}`,
-    url: LINK,
-    answer: 'accept',
-  };
+describe('a user entry of a transcript', () => {
   const user: Entry = {
     id: 'u1',
     kind: 'user',
@@ -489,9 +448,6 @@ describe('an entry of a transcript (the events B13 replaces)', () => {
   };
 
   it('is yours whole, a message’s images counted', () => {
-    for (const entry of [permission, question, plan, elicitation]) {
-      expect(entryFor(entry, 'you')).toBe(entry);
-    }
     expect(entryFor(user, 'you')).toEqual({ id: 'u1', kind: 'user', text: 'Look', images: 1 });
   });
 
@@ -508,43 +464,6 @@ describe('an entry of a transcript (the events B13 replaces)', () => {
       kind: 'user',
       text: 'The user answered a prompt.',
     });
-  });
-
-  it('is a token’s without an answer, a choice’s label, feedback, or a form’s link or words', () => {
-    // A permission's title in its CLI's words (an MCP server's own, for its tool) is yours alone:
-    // a token reads its tool and summary (B13 C9).
-    expect(entryFor(permission, 'token')).toEqual({
-      id: 'p1',
-      kind: 'permission',
-      tool: 'Bash',
-      summary: 'npm test',
-      detail: { kind: 'output', text: 'npm test' },
-    });
-    expect(entryFor(question, 'token')).toEqual({
-      id: 'q1',
-      kind: 'question',
-      questions: [
-        {
-          header: 'Key',
-          text: 'Your key?',
-          options: [{ label: 'One', description: '' }],
-          multiple: false,
-        },
-      ],
-    });
-    expect(entryFor(plan, 'token')).toEqual({ id: 'pl1', kind: 'plan', plan: '1. Clean' });
-    expect(entryFor(elicitation, 'token')).toEqual({
-      id: 'e1',
-      kind: 'elicitation',
-      server: 'tracker',
-      message: 'MCP server “tracker” asks you to open a link',
-    });
-    expect(entryFor({ ...plan, withdrawn: true }, 'token')).toMatchObject({ withdrawn: true });
-    for (const entry of [permission, question, plan, elicitation]) {
-      expect(JSON.stringify(entryFor(entry, 'token'))).not.toMatch(
-        /private-|signin\.example|"answer"/,
-      );
-    }
   });
 });
 
@@ -690,33 +609,5 @@ describe('an approval of an MCP server’s tool: its words yours alone, a token�
     expect(entryFor(settled, 'you')).not.toHaveProperty('tokenTitle');
     expect(entryFor(settled, 'token')).toMatchObject({ prompt: { title: CORE } });
     expect(JSON.stringify(entryFor(settled, 'token'))).not.toMatch(SERVER);
-  });
-
-  it('gives a token an old permission event’s tool and summary, never its CLI’s title, wherever it is read', () => {
-    const asked: Entry = {
-      id: 'p1',
-      kind: 'permission',
-      tool: 'mcp__tracker__create_issue',
-      summary: 'create_issue',
-      title: MCP.title,
-    };
-    const input = {
-      canvas: CANVAS,
-      nodes: [{ id: 'b', type: 'agent' as const, data: { label: 'Reviewer' } }],
-      run: { running: false, agents: {} },
-      sessions: { b: { ...NEW_SESSION, status: 'waiting' as const, entries: [asked] } },
-      catalog: engineCatalog(MADE_UP, 'zed'),
-      now: 1,
-    } as unknown as NeedsInput;
-    const [need] = needsOf(input);
-    if (need === undefined) throw new Error('nothing waits');
-    expect(needsItem(need, input).title).toBe(MCP.title);
-    expect(needsItem(need, input, 'token').title).toBe(
-      'Approve mcp__tracker__create_issue: create_issue?',
-    );
-    expect(needs(input, 'token').map(({ title }) => title)).toEqual([
-      'Approve mcp__tracker__create_issue: create_issue?',
-    ]);
-    expect(JSON.stringify(entryFor(asked, 'token'))).not.toMatch(SERVER);
   });
 });
