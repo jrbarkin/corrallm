@@ -60,7 +60,7 @@ describe('RunStore', () => {
     expect(store.snapshot().agents.a?.refused).toEqual({
       agent: 'a',
       connection: 'unavailable',
-      text: 'This agent has no connection; choose Claude or Codex in Agent settings.',
+      text: 'This agent has no connection; choose another agent in Agent settings.',
     });
     store.decide('a', 'inspect', { choice: 'switch' });
     advance(60 * MINUTE);
@@ -82,9 +82,7 @@ describe('RunStore', () => {
     store.start();
     expect(where()).toEqual({ a: 'asking search' });
     const [ask] = heldAsks([gemini], store.snapshot(), engine);
-    expect(ask?.text).toBe(
-      'This agent has no connection; choose Claude or Codex in Agent settings.',
-    );
+    expect(ask?.text).toBe('This agent has no connection; choose another agent in Agent settings.');
     expect(ask?.choices).toEqual([]);
     expect(sent).toHaveLength(0);
     edit([{ ...gemini, data: { ...gemini.data, adapter: 'claude-code' } }]);

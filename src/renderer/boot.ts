@@ -1,14 +1,17 @@
+import { createElement } from 'react';
 import type { ReactNode } from 'react';
 import type { Root } from 'react-dom/client';
 
 import type { Catalog } from '../shared/adapter';
 import { loadCatalog } from './catalog';
+import { CatalogError } from './CatalogError';
 
-/**
- * Mounts the app in `root` once the catalog has loaded (`get`: the core's catalog.get): nothing renders
- * before, so everything the app shows can read it (catalog.ts).
- */
+/** Only the retry view mounts after a failed catalog read; the app waits for a successful read. */
 export async function boot(root: Root, get: () => Promise<Catalog>, app: ReactNode): Promise<void> {
-  await loadCatalog(get);
-  root.render(app);
+  try {
+    await loadCatalog(get);
+    root.render(app);
+  } catch {
+    root.render(createElement(CatalogError, { retry: () => boot(root, get, app) }));
+  }
 }

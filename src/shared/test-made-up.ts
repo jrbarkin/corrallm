@@ -1,4 +1,4 @@
-import type { Catalog } from './adapter';
+import type { AdapterDescriptor, Catalog, ConnectionDescriptor } from './adapter';
 
 /**
  * For tests: a catalog declaring only an adapter no build has (Zed Agent), with a mode that asks
@@ -59,4 +59,34 @@ export const MADE_UP: Catalog = {
     },
   ],
   usageBackends: [{ id: 'zed', label: 'Zed', source: '', windows: [] }],
+};
+
+const [ZED] = MADE_UP.adapters as [AdapterDescriptor];
+const [ACP, FREE] = ZED.connections as [ConnectionDescriptor, ConnectionDescriptor];
+
+/** Two unfamiliar adapters; only the second adapter's second connection handles shell text. */
+export const TWO_MADE_UP: Catalog = {
+  adapters: [
+    ...MADE_UP.adapters,
+    {
+      ...ZED,
+      id: 'yak',
+      name: 'Yak Agent',
+      accent: 1,
+      words: { defaults: 'From your Yak preferences' },
+      connections: [
+        { ...FREE, id: 'yak.free' },
+        {
+          ...ACP,
+          id: 'yak.terminal',
+          label: 'Terminal',
+          short: 'Terminal',
+          view: 'terminal',
+          shellPrefix: '$',
+          fileMentions: true,
+        },
+      ],
+    },
+  ],
+  usageBackends: MADE_UP.usageBackends,
 };
