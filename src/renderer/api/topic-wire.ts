@@ -223,8 +223,9 @@ export function assembledState(
             .map(([key, value]) => [decodeURIComponent(key.slice(5)), value]),
         ),
       } as TopicStates['usage'];
+    // The settings' summary is the rest of settings.get: the default agent (none included) and api.
     return {
-      ...(summary as { defaultAdapter: string }),
+      ...(summary as Omit<TopicStates['settings'], 'consents'>),
       consents: values,
     } as TopicStates['settings'];
   }

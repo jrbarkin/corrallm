@@ -1396,7 +1396,6 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
   // Every change rule a token's commit is checked against (B9 Design §4).
   const changeRules = changeChecks({
     catalog: CATALOG,
-    defaultAdapter: DEFAULT_ADAPTER,
     held: (canvas) => heldBy(engines.canvas(canvas)?.engine.run.snapshot()),
     created: (party, canvas, removing) => documents.created(party, canvas, removing),
     maxCreated: config.maxCreatedAgents ?? (() => MAX_CREATED_AGENTS),
@@ -1483,7 +1482,7 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
       },
       rules: {
         ...sessionRules(control),
-        ...ruleChecks(engines, needOf),
+        ...ruleChecks(engines, CATALOG, needOf),
         discard: discardChecks({
           lifecycle,
           proposals,

@@ -4,6 +4,7 @@ import { AgentId, WorktreeId } from '../../../shared/api/ids';
 import { OPS } from '../../../shared/api/registry';
 import { SURFACE } from '../../../shared/api/surface';
 import type { CanvasDocument } from '../../../shared/model/canvas';
+import { MADE_UP } from '../../../shared/test-made-up';
 import { createDispatcher } from '../call';
 import type { Publication } from '../call';
 import type { OutsideCaller } from '../caller';
@@ -107,7 +108,7 @@ function world() {
         'canvas.batch': OPS['canvas.batch'],
       },
       implementations: { ...branchOps({ worktrees, engines, isLead }), ...batchOps() },
-      rules: ruleChecks(engines, () => undefined),
+      rules: ruleChecks(engines, MADE_UP, () => undefined),
     },
     {
       isLead,

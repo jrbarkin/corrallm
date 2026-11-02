@@ -803,7 +803,6 @@ describe('on the change itself, whatever builds it', () => {
       propose: () => Promise.resolve(PROPOSAL),
       rules: changeChecks({
         catalog: CATALOG,
-        defaultAdapter: DEFAULT_ADAPTER,
         held: () => new Set(['item/a/after']),
         created: (party, canvas, removing) => documents.created(party, canvas, removing),
         maxCreated: () => 8,
@@ -1036,6 +1035,71 @@ describe('on the change itself, whatever builds it', () => {
     }
     // Its adapter's first connection, named, is no other.
     await expect(build(adding('new', { connection: 'codex.terminal' }))).resolves.toBeDefined();
+  });
+
+  /** `document` with a new agent `id` naming neither adapter nor connection: unchosen (B12 C3). */
+  const unchosen =
+    (id: string) =>
+    (document: CanvasDocument): CanvasDocument => ({
+      ...document,
+      nodes: [
+        ...document.nodes,
+        { id, type: 'agent', position: { x: 4000, y: 0 }, data: { label: 'Unchosen' } },
+      ],
+    });
+
+  it('refuses a token’s change choosing an unchosen agent’s endpoint, whichever it names (B12 C2)', async () => {
+    await build(unchosen('u'), YOU);
+    for (const edit of [
+      editing('u', (data) => ({ ...data, adapter: 'claude-code' })),
+      editing('u', (data) => ({ ...data, adapter: 'codex' })),
+      editing('u', (data) => ({ ...data, connection: 'claude-code.terminal' })),
+    ]) {
+      const before = documents.live(BUILT).rev;
+      for (const caller of [OUTSIDE, LEAD]) {
+        await expect(build(edit, caller)).rejects.toMatchObject({
+          code: 'refused',
+          message: /Only the user changes how Unchosen runs \(no agent chosen, not /,
+        });
+      }
+      expect(documents.live(BUILT).rev).toBe(before);
+    }
+    // A change that leaves it unchosen is no change of how it runs.
+    await expect(
+      build(editing('u', (data) => ({ ...data, label: 'Renamed' }))),
+    ).resolves.toBeDefined();
+    // Only you choose.
+    await expect(
+      build(
+        editing('u', (data) => ({ ...data, adapter: 'codex' })),
+        YOU,
+      ),
+    ).resolves.toBeDefined();
+  });
+
+  it('refuses a token’s new agent that is unchosen or runs what this build lacks, copy or not (B12 C2)', async () => {
+    for (const [edit, on] of [
+      [unchosen('new'), 'with none chosen'],
+      [adding('new', { adapter: 'zed' }), 'on zed'],
+    ] as const) {
+      const before = documents.live(BUILT).rev;
+      for (const caller of [OUTSIDE, LEAD]) {
+        await expect(build(edit, caller)).rejects.toMatchObject({
+          code: 'refused',
+          message: `A token’s new agent runs an agent this build has: only the user adds ${on === 'on zed' ? 'New' : 'Unchosen'} ${on}.`,
+        });
+        await expect(build(edit, caller, new Map([['new', 'a']]))).rejects.toMatchObject({
+          code: 'refused',
+        });
+      }
+      expect(documents.live(BUILT).rev).toBe(before);
+      // Yours may be either.
+      await build(edit, YOU);
+      await build(
+        (document) => ({ ...document, nodes: document.nodes.filter(({ id }) => id !== 'new') }),
+        YOU,
+      );
+    }
   });
 
   it('refuses a token’s change to a chain you set, its run position too, or its removal', async () => {
@@ -1275,7 +1339,6 @@ describe('workspace-safety on the change itself, whatever builds it', () => {
       propose: () => Promise.resolve(PROPOSAL),
       rules: changeChecks({
         catalog: CATALOG,
-        defaultAdapter: DEFAULT_ADAPTER,
         held: () => new Set(),
         created: (party, canvas, removing) => documents.created(party, canvas, removing),
         maxCreated: () => 8,

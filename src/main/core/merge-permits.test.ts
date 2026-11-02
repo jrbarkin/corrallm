@@ -6,6 +6,7 @@ import { brandedId } from '../../shared/api/ids';
 import { RULES } from '../../shared/api/rules';
 import { SURFACE, W } from '../../shared/api/surface';
 import type { Surface } from '../../shared/api/surface';
+import { MADE_UP } from '../../shared/test-made-up';
 import { callTool, listTools } from '../api/mcp';
 import { createDispatcher } from './call';
 import type { Implementation, Registry } from './call';
@@ -108,7 +109,9 @@ describe('merge-permits', () => {
     const carriers = Object.entries(SURFACE as Readonly<Record<string, Surface>>)
       .filter(([, surface]) => surface.rules?.includes('merge-permits'))
       .map(([name]) => name);
-    expect(Object.keys(ruleChecks({} as Engines)['merge-permits']).sort()).toEqual(carriers.sort());
+    expect(Object.keys(ruleChecks({} as Engines, MADE_UP)['merge-permits']).sort()).toEqual(
+      carriers.sort(),
+    );
   });
 
   it('is checked in core.call for every caller: a --no-merge token is refused, you and a merging token aren’t', async () => {
