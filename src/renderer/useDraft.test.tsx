@@ -383,6 +383,49 @@ it.each(['returned', 'registered'])(
   },
 );
 
+it.each(['before', 'after'] as const)(
+  'commits a quick edit back to the original text, blurred %s the previous write reaches the mirror',
+  async (when) => {
+    const first = Promise.withResolvers<undefined>();
+    const second = Promise.withResolvers<undefined>();
+    const commit = vi
+      .fn<(text: string) => Promise<undefined>>()
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(second.promise);
+    const view = render(<Field value="Shared text" commit={commit} multiline />);
+    type('Intermediate');
+    fireEvent.blur(field());
+    // The core may already hold Intermediate while its receipt is waiting for the window's topic.
+    // The field still receives Shared text from that mirror when the next edit is made.
+    type('Shared text');
+    if (when === 'after') {
+      view.rerender(<Field value="Intermediate" commit={commit} multiline />);
+      await act(async () => {
+        first.resolve(undefined);
+        await first.promise;
+      });
+    }
+    fireEvent.blur(field());
+    try {
+      expect(commit.mock.calls).toEqual([['Intermediate'], ['Shared text']]);
+      view.rerender(<Field value="Intermediate" commit={commit} multiline />);
+      await act(async () => {
+        first.resolve(undefined);
+        await first.promise;
+      });
+      expect(field().value).toBe('Shared text');
+    } finally {
+      view.rerender(<Field value="Shared text" commit={commit} multiline />);
+      await act(async () => {
+        first.resolve(undefined);
+        second.resolve(undefined);
+        await flushDrafts();
+      });
+    }
+    expect(field().value).toBe('Shared text');
+  },
+);
+
 it('waits for both a returned promise and the operations registered by that callback', async () => {
   const registered = Promise.withResolvers<undefined>();
   const returned = Promise.withResolvers<undefined>();
