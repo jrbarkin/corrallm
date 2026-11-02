@@ -368,66 +368,6 @@ describe('a connected session', () => {
     expect(store.of('a').status).toBe('working');
   });
 
-  it('asks permission, and passes the user’s answer on', async () => {
-    const { store, backend, emit } = connected();
-    store.send('a', 'claude-code', 'Go');
-    await settle();
-    emit('a', 'claude-code.sdk', {
-      type: 'permission',
-      id: 'p',
-      tool: 'Bash',
-      summary: 'npm test',
-      always: 'Yes, and don’t ask again for npm test',
-    });
-    expect(store.of('a').status).toBe('waiting');
-    store.answer('a', 'p', 'always');
-    expect(store.of('a').status).toBe('working');
-    await settle();
-    expect(backend.answer).toHaveBeenCalledWith('a', 'p', { kind: 'permission', answer: 'always' });
-  });
-
-  it('asks questions, answering once each one has an answer', async () => {
-    const { store, backend, emit } = connected();
-    store.send('a', 'claude-code', 'Go');
-    await settle();
-    const option = (label: string) => ({ label, description: '' });
-    emit('a', 'claude-code.sdk', {
-      type: 'question',
-      id: 'q',
-      questions: [
-        { header: 'Branch', text: 'Which branch?', options: [option('main')], multiple: false },
-        { header: 'Tests', text: 'Run them?', options: [option('Yes')], multiple: false },
-      ],
-    });
-    store.answerQuestion('a', 'q', 0, 'main');
-    await settle();
-    expect(backend.answer).not.toHaveBeenCalled();
-    store.answerQuestion('a', 'q', 1, 'Yes');
-    expect(store.of('a').status).toBe('working');
-    await settle();
-    expect(backend.answer).toHaveBeenCalledWith('a', 'q', {
-      kind: 'question',
-      answers: ['main', 'Yes'],
-    });
-  });
-
-  it('asks to approve a plan', async () => {
-    const { store, backend, emit } = connected();
-    store.send('a', 'claude-code', 'Plan it');
-    await settle();
-    emit('a', 'claude-code.sdk', { type: 'plan', id: 'plan', plan: '1. Read\n2. Change' });
-    store.answerPlan('a', 'plan', { approve: false, feedback: 'Add tests' });
-    expect(store.of('a').entries.at(-1)).toMatchObject({
-      kind: 'plan',
-      answer: { approve: false, feedback: 'Add tests' },
-    });
-    await settle();
-    expect(backend.answer).toHaveBeenCalledWith('a', 'plan', {
-      kind: 'plan',
-      answer: { approve: false, feedback: 'Add tests' },
-    });
-  });
-
   it('interrupts the turn in main; one not sent yet is just dropped', async () => {
     const { store, backend, emit, sent } = connected();
     const done = vi.fn<(interrupted: boolean) => void>();
@@ -536,38 +476,6 @@ describe('a connected session', () => {
     emit('b', 'claude-code.sdk', { type: 'text', id: 'y', text: 'For another agent' });
     expect(store.of('a').entries.map((e) => e.kind)).toEqual(['user']);
     expect(store.of('b').entries).toEqual([]);
-  });
-
-  it('keeps what a Terminal session asks in its terminal, until it goes on or its CLI is gone', async () => {
-    const fake = fakeBackend();
-    const store = new SessionStore(engine, fake.backend);
-    store.sync([{ id: 'a', connection: 'claude-code.terminal' }]);
-    store.open('a');
-    await settle();
-    const permission = {
-      kind: 'permission',
-      id: 'p',
-      tool: 'Bash',
-      summary: 'npm test',
-    } as const;
-    fake.emit('a', 'claude-code.terminal', { type: 'asking', asks: [permission] });
-    expect(store.of('a').asking).toEqual([permission]);
-    // Answered in the terminal.
-    fake.emit('a', 'claude-code.terminal', { type: 'asking', asks: [] });
-    expect(store.of('a').asking).toBeUndefined();
-
-    fake.emit('a', 'claude-code.terminal', { type: 'asking', asks: [permission] });
-    fake.emit('a', 'claude-code.terminal', {
-      type: 'closed',
-      error: 'Claude Code exited with code 1.',
-    });
-    expect(store.of('a').asking).toBeUndefined();
-    store.open('a');
-    await settle();
-    fake.emit('a', 'claude-code.terminal', { type: 'asking', asks: [permission] });
-    // The agent runs another way: its terminal is gone, and what it asked.
-    store.sync([{ id: 'a', connection: 'claude-code.sdk' }]);
-    expect(store.of('a').asking).toBeUndefined();
   });
 
   it('closes when its agent runs another way, or is gone', async () => {
@@ -734,23 +642,6 @@ describe('a connected session, resumed or completed', () => {
     ]);
   });
 
-  it('shows a permission prompt as the CLI words it', () => {
-    const { store, emit } = connected();
-    store.open('a');
-    emit('a', 'claude-code.sdk', {
-      type: 'permission',
-      id: 'p',
-      tool: 'WebFetch',
-      summary: 'https://example.com',
-      always: null,
-      title: 'Claude wants to fetch example.com',
-    });
-    expect(store.of('a').entries[0]).toMatchObject({
-      kind: 'permission',
-      title: 'Claude wants to fetch example.com',
-    });
-  });
-
   it('searches the project folder’s files for @-mentions', async () => {
     const { store, backend } = connected();
     backend.files.mockResolvedValueOnce(['src/main/ipc.ts']);
@@ -851,34 +742,6 @@ describe('a connected session’s MCP servers', () => {
     await expect(store.changeMcpServer('a', 'github', 'reconnect')).resolves.toEqual(servers);
     expect(backend.mcp).toHaveBeenCalledWith('a');
     expect(backend.changeMcp).toHaveBeenCalledWith('a', 'github', 'reconnect');
-  });
-
-  it('asks what a server asks for, waiting on the user, and passes the answer on', async () => {
-    const { store, backend, emit, sent } = connected();
-    store.send('a', 'claude-code', 'File an issue');
-    await settle();
-    emit(
-      'a',
-      'claude-code.sdk',
-      { type: 'user', id: sent(), text: 'File an issue' },
-      {
-        type: 'elicitation',
-        id: 'e1',
-        server: 'github',
-        message: 'Which repository?',
-        fields: [{ name: 'repo', label: 'Repository', required: true, kind: 'text' }],
-      },
-    );
-    expect(store.of('a').status).toBe('waiting');
-    store.answerElicitation('a', 'e1', 'accept', { repo: 'acme/shop' });
-    expect(store.of('a').status).toBe('working');
-    expect(store.of('a').entries.at(-1)).toMatchObject({ kind: 'elicitation', answer: 'accept' });
-    await settle();
-    expect(backend.answer).toHaveBeenCalledWith('a', 'e1', {
-      kind: 'elicitation',
-      action: 'accept',
-      values: { repo: 'acme/shop' },
-    });
   });
 });
 

@@ -9,7 +9,6 @@ import type {
   SessionMode,
   SessionEvent,
   SessionUsage,
-  TerminalAsk,
   TurnResult,
   UserMessage,
 } from '../../../shared/session';
@@ -53,7 +52,7 @@ import { ENTER } from './typing';
  * read before the turn ends: a limit used up then failed it, until its reset.
  *
  * What the CLI asks the user in its terminal is raised to the core's prompt owner (B13 C6), and
- * never mirrored as an asking event or answered by corrallm: its hooks may tell what
+ * never answered by corrallm: its hooks may tell what
  * it is about to ask (what a permission prompt is for, its questions and a plan to approve, just
  * before it shows them: in the hook's words); its reports say when it waits on the user (and, in a
  * word, for what: in the report's words, where no hook told), and when it goes on (the user
@@ -161,19 +160,18 @@ interface Turn {
 /**
  * What the CLI waits on the user for, as one observation (B13 C6): `wait`, what keeps it waiting
  * (the same across redraws and better descriptions of it); `described`, whether a hook (or its
- * trust screen) says what it is, rather than its report alone; `ask`, as the event B13 replaces
- * lists it; `prompt`, as the core's prompt owner takes it (none while its screen is still read).
+ * trust screen) says what it is, rather than its report alone; `prompt`, as the core's prompt
+ * owner takes it (none while its screen is still read).
  */
 interface Observation {
   wait: string;
   described: boolean;
-  ask: TerminalAsk;
   prompt: AdapterPrompt | undefined;
 }
 
-/** What a hook told the CLI is about to ask, as both lists take it, and when. */
+/** What a hook told the CLI is about to ask, as the owner takes it, and when. */
 interface Told {
-  ask: TerminalAsk;
+  id: string;
   prompt: AdapterPrompt;
   at: number;
 }
@@ -279,7 +277,7 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
   /** The waits you said aren't (B13 C7's Not waiting), not raised again while they last. */
   readonly #dismissed = new Set<string>();
   /** The folder trust dialog its CLI shows now, as it is listed; undefined while none shows. */
-  #trust: TerminalAsk | undefined;
+  #trust: string | undefined;
   /**
    * Whether its CLI got past its first-run dialogs (it reported a state but that it is going, a
    * hook posted, or its prompt showed): it no longer asks whether to trust the folder.
@@ -399,10 +397,6 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
     this.#updateStatus();
     this.#check();
     return Promise.resolve();
-  }
-
-  answer(): Promise<void> {
-    return Promise.reject(new Error(this.#cli.words.answer));
   }
 
   async interrupt(): Promise<void> {
@@ -1081,7 +1075,7 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
         this.#emit({ type: 'model', model: signal.model });
         return;
       case 'ask':
-        this.#told(signal.ask, signal.prompt);
+        this.#told(signal.id, signal.prompt);
         return;
       case 'needs':
         this.#notified = { id: randomUUID(), text: signal.text };
@@ -1104,7 +1098,7 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
     }
     const shown = this.#cli.trusting?.(this.#screen) ?? false;
     if (shown === (this.#trust !== undefined)) return;
-    this.#trust = shown ? { kind: 'trust', id: randomUUID() } : undefined;
+    this.#trust = shown ? randomUUID() : undefined;
     this.#list();
   }
 
@@ -1123,11 +1117,9 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
   // ---- What it asks the user, in its terminal.
 
   /** A hook told what the CLI is about to ask (once, though two hooks may tell it). */
-  #told(ask: TerminalAsk, prompt: AdapterPrompt): void {
-    const same = (other: TerminalAsk) =>
-      JSON.stringify({ ...other, id: '' }) === JSON.stringify({ ...ask, id: '' });
-    if (this.#asks.some((told) => same(told.ask))) return;
-    this.#asks = [...this.#asks, { ask, prompt, at: Date.now() }].slice(-MAX_ASKS);
+  #told(id: string, prompt: AdapterPrompt): void {
+    if (this.#asks.some((told) => JSON.stringify(told.prompt) === JSON.stringify(prompt))) return;
+    this.#asks = [...this.#asks, { id, prompt, at: Date.now() }].slice(-MAX_ASKS);
     this.#list();
   }
 
@@ -1220,9 +1212,8 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
     if (this.#trust) {
       return [
         {
-          wait: `trust:${this.#trust.id}`,
+          wait: `trust:${this.#trust}`,
           described: true,
-          ask: this.#trust,
           prompt: {
             kind: 'approval',
             title: `${this.#cli.name} asks whether you trust the project folder.`,
@@ -1238,13 +1229,12 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
           {
             wait: `notified:${this.#notified.id}`,
             described: false,
-            ask: { kind: 'other', ...this.#notified },
             prompt: waitingFor('approval', this.#notified.text, null),
           },
         ]
       : [];
     const told = (asks: readonly Told[]): Observation[] =>
-      asks.map(({ ask, prompt }) => ({ wait: `told:${ask.id}`, described: true, ask, prompt }));
+      asks.map(({ id, prompt }) => ({ wait: `told:${id}`, described: true, prompt }));
     if (!this.#reporting && this.#blocks.size === 0) {
       return this.#asks.length > 0 ? told(this.#asks) : notified;
     }
@@ -1259,7 +1249,6 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
       return {
         wait: `block:${id}`,
         described: false,
-        ask: { kind: 'other', id, text },
         prompt:
           detail === undefined
             ? undefined

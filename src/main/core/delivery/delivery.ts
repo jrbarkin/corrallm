@@ -5,10 +5,10 @@ import { randomUUID } from 'node:crypto';
 import { MAX_WAITING } from '../../../shared/api/limits';
 import type { AdapterId, ConnectionId } from '../../../shared/adapter';
 import type { CanvasId } from '../../../shared/canvas';
-import { needsItem, needsOf } from '../../../shared/model/needs-selectors';
-import type { NeedsInput, UnaskingWhy } from '../../../shared/model/needs-selectors';
+
+import type { UnaskingWhy } from '../../../shared/model/needs-selectors';
 import type { NeedsItem } from '../../../shared/model/needs';
-import { needFor } from '../../../shared/model/prompt-views';
+
 import type { Engine } from '../engine/engine';
 import type { Admission, AdmittedWork, PauseCause } from '../engine/run/runner';
 import type { AgentNode, CanvasNode } from '../../../shared/model/canvas';
@@ -951,7 +951,6 @@ export class Delivery {
     return (
       session.status !== 'idle' ||
       session.queued.length > 0 ||
-      (session.asking?.length ?? 0) > 0 ||
       engine.run.sending(node.id) ||
       this.#deps.waitingOn?.(node.id) !== undefined
     );
@@ -1485,24 +1484,9 @@ export class Delivery {
         : [];
     });
     if (turns.length === 0) return;
-    const input: NeedsInput = {
-      canvas: this.#deps.canvas,
-      nodes: this.#deps.nodes(),
-      run: engine.run.snapshot(),
-      sessions: engine.sessions.snapshot(),
-      catalog: engine.catalog,
-      now: this.#deps.now(),
-      ...(this.#deps.locale === undefined ? {} : { locale: this.#deps.locale }),
-    };
-    const asked = needsOf(input).filter((need) => need.kind === 'prompt' || need.kind === 'ask');
     for (const { agent, message } of turns) {
-      const need = asked.find((one) => one.agent.id === agent);
-      // Its sender is a token (yours aren't told): it reads what a token may of the prompt (B13
-      // C11's selector), its session's own, else the one the core's owner holds (C9).
-      const title =
-        need === undefined
-          ? this.#deps.waitingOn?.(agent)?.title
-          : needFor(needsItem(need, input, 'token'), 'token').title;
+      // The owner supplies the title as a token may read it (B13 C11).
+      const title = this.#deps.waitingOn?.(agent)?.title;
       if (title !== undefined) {
         this.#tell(
           `waiting:${message.id}`,

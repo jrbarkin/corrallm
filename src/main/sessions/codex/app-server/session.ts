@@ -253,11 +253,6 @@ export class AppServerSession implements LiveSession<CodexMode> {
   }
 
   /** What it asks is answered only through the core's prompt owner (`prompts`), never so. */
-  answer(): Promise<void> {
-    return Promise.reject(
-      new Error('Codex’s requests are answered only through corrallm’s prompts.'),
-    );
-  }
 
   /** How the core answers and declines what it raised (B13 C5): the owner's accepted answers only. */
   get prompts(): PromptAnswers {

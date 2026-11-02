@@ -11,7 +11,7 @@ import type { SessionEvent } from '../../../shared/session';
 import type { TerminalEvent } from '../../../shared/terminal';
 import type { UsageBackendId } from '../../../shared/adapter';
 import type { UsageWindows } from '../../../shared/usage';
-import type { Bridge, LiveSession, SessionSpec } from '../connector';
+import type { LiveSession, SessionSpec } from '../connector';
 import { helpFlags } from '../claude-code/claude';
 import { TerminalConnector } from '../claude-code/connector';
 import { FakeClaude } from '../claude-code/fake-claude';
@@ -41,8 +41,6 @@ let events: SessionEvent[];
 let owners: WeakMap<SessionEvent[], (PromptEvent | PromptEnded)[]>;
 /** What its sessions raised and ended for the core's prompt owner (B13 C6), in order. */
 let prompts: (PromptEvent | PromptEnded)[];
-/** Records bridge installations, which the owner-only production path must never make. */
-let bridges: { translate: Bridge; before: number }[];
 let remembered: string[];
 let sessions: LiveSession[];
 let readings: [UsageBackendId, UsageWindows][];
@@ -61,7 +59,6 @@ beforeEach(async () => {
   events = [];
   owners = new WeakMap();
   prompts = [];
-  bridges = [];
   remembered = [];
   sessions = [];
   readings = [];
@@ -125,9 +122,6 @@ async function start(
       remember: (id) => remembered.push(id),
       activity: () => {
         activity++;
-      },
-      bridge: (translate) => {
-        bridges.push({ translate, before: prompts.length });
       },
     },
   );
@@ -195,8 +189,6 @@ const seen = (skip = 0) =>
         return `mode:${event.mode ?? 'unknown'}`;
       case 'closed':
         return `closed${event.error === undefined ? '' : `:${event.error}`}`;
-      case 'asking':
-        return `asking:${event.asks.map((ask) => ask.kind).join(',')}`;
       default:
         return event.type;
     }
@@ -715,7 +707,7 @@ describe('a Terminal session', () => {
         expect(open().size).toBe(1);
       });
       expect(onlyOpen()[1]).toMatchObject({ kind, answerIn: 'terminal' });
-      expect(events.filter(({ type }) => type === 'asking')).toEqual([]);
+      expect(events.filter(({ type }) => ['asking'].includes(type))).toEqual([]);
       expect(claude().answers.every(({ answer }) => answer === '{}')).toBe(true);
       session.terminal?.input(kind === 'plan' ? '\x1b' : '1');
       await until(() => {
@@ -744,6 +736,8 @@ describe('a Terminal session', () => {
       tool_name: 'Write',
       tool_input: { file_path: '/work/app/a.txt' },
     });
+    // A hook describing a possible request while the CLI works is not a waiting occurrence.
+    expect(open().size).toBe(0);
     const now = Date.now();
     vi.spyOn(Date, 'now').mockReturnValue(now + 6000);
     claude().report('state=blocked:kind=permission');
@@ -979,7 +973,7 @@ describe('a Terminal session', () => {
     expect(second.filter((event) => event.type === 'user')).toEqual([
       { type: 'user', id: 'm1', text: 'Hello from b' },
     ]);
-    expect(second.filter((event) => event.type === 'asking')).toEqual([]);
+    expect(second.filter((event) => ['asking'].includes(event.type))).toEqual([]);
     // Its view starts afresh, from the new process's screen.
     const fresh = shown.findLastIndex((event) => event.type === 'screen');
     expect(fresh).toBeGreaterThan(0);
@@ -1101,9 +1095,7 @@ describe('a Terminal session', () => {
 
   it('refuses what only its terminal does: answers, modes and models', async () => {
     const session = await start();
-    await expect(session.answer('p', { kind: 'permission', answer: 'once' })).rejects.toThrow(
-      /terminal/,
-    );
+    expect(session).not.toHaveProperty('answer');
     await expect(session.setMode('plan')).rejects.toThrow(/Shift\+Tab/);
     await expect(session.setModel('opus')).rejects.toThrow(/\/model/);
   });
@@ -1190,14 +1182,13 @@ describe('what Claude Code waits on in its terminal, raised to the core’s prom
   const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
   const pause = (ms = 40) => new Promise((resolve) => setTimeout(resolve, ms));
 
-  it('publishes a terminal wait only through the owner, without an asking mirror or bridge', async () => {
+  it('publishes a terminal wait only through the owner', async () => {
     const session = await start();
     await session.send({ id: 'm1', text: 'ask to run the tests' });
     await until(() => {
       expect(open().size).toBe(1);
     });
-    expect(events.filter(({ type }) => type === 'asking')).toEqual([]);
-    expect(bridges).toEqual([]);
+    expect(events.filter(({ type }) => ['asking'].includes(type))).toEqual([]);
   });
 
   it('raises a permission its hook described, answered in its terminal, once; ended so as its turn goes on', async () => {
@@ -1312,6 +1303,8 @@ describe('what Claude Code waits on in its terminal, raised to the core’s prom
       tool_name: 'Write',
       tool_input: { file_path: '/work/app/a.txt' },
     });
+    // A hook describing a possible request while the CLI works is not a waiting occurrence.
+    expect(open().size).toBe(0);
     const now = Date.now();
     vi.spyOn(Date, 'now').mockReturnValue(now + 6000);
     claude().report('state=blocked:kind=permission');
@@ -1462,7 +1455,7 @@ describe('what Claude Code waits on in its terminal, raised to the core’s prom
     await pause();
     expect(raised()).toHaveLength(1);
     expect(prompts.at(-1)).toMatchObject({ type: 'prompt' });
-    expect(events.filter(({ type }) => type === 'asking')).toEqual([]);
+    expect(events.filter(({ type }) => ['asking'].includes(type))).toEqual([]);
     expect(last('status')).toEqual({ type: 'status', status: 'waiting' });
     await session.send({ id: 'm2', text: 'From the queue' });
     await pause();
@@ -1494,9 +1487,8 @@ describe('what Claude Code waits on in its terminal, raised to the core’s prom
     expect(prompts.filter((event) => event.type === 'prompt-ended')).toEqual([]);
   });
 
-  it('answers no terminal request through the API and installs no legacy bridge', async () => {
+  it('answers no terminal request through the API', async () => {
     const session = await start();
-    expect(bridges).toEqual([]);
     await session.send({ id: 'm1', text: 'ask to run the tests' });
     await until(() => {
       expect(open().size).toBe(1);
@@ -1505,7 +1497,7 @@ describe('what Claude Code waits on in its terminal, raised to the core’s prom
     expect(() => session.prompts?.answer(key, { kind: 'choice', value: 'allow' })).toThrow(
       /terminal/,
     );
-    expect(events.filter(({ type }) => type === 'asking')).toEqual([]);
+    expect(events.filter(({ type }) => ['asking'].includes(type))).toEqual([]);
     expect(claude().written.filter((keys) => keys === '1')).toEqual([]);
   });
 });

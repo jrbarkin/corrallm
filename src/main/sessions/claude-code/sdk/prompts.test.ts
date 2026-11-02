@@ -10,8 +10,7 @@ import type { Fixture, RecordedElicitation, RecordedRequest } from './recorded';
 /*
  * The Agent SDK's prompts as B13 C4 raises them: each native request a prompt of the core's
  * owner's under a fresh key, answered or declined only by that key, and ended when the CLI stops
- * waiting or the session closes. Until X10 converts the renderer, each is shown as the events B13
- * replaces too, whose answers reach it only through the owner (`bridge`).
+ * waiting or the session closes. Native answers use only the owner's captured answer handle.
  */
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
@@ -117,7 +116,7 @@ describe('Prompts: each native request raised to the core under a fresh key', ()
     expect(events.slice(-1)).toEqual([{ type: 'status', status: 'working' }]);
     // Declining one no longer asked does nothing, and never throws.
     asking.answers.decline(key(), 'again');
-    expect(events.filter((event) => event.type === 'withdrawn')).toHaveLength(0);
+    expect(events.filter((event) => ['withdrawn'].includes(event.type))).toHaveLength(0);
   });
 
   it('shows nothing of a request the core declines as it is raised', async () => {

@@ -671,7 +671,7 @@ describe('the App Server connection', () => {
     const { session, turn, events } = await start({ mode: 'read-only' });
     await session.setMode('auto');
     await turn('run the tests');
-    expect(events.some((e) => e.type === 'permission')).toBe(false);
+    expect(events.some((e) => ['permission'].includes(e.type))).toBe(false);
     const [sent] = await requests('turn/start');
     expect(sent?.sandboxPolicy).toMatchObject({ type: 'workspaceWrite' });
     await session.setMode('full-access');
@@ -1209,7 +1209,7 @@ describe('the App Server connection', () => {
         readings.map(([backend, windows]) => [backend, windows.fiveHour?.usedPercent]),
       ).toEqual([['codex', 12]]);
       expect(consent.given).not.toHaveBeenCalled();
-      expect(events.some((e) => e.type === 'permission')).toBe(false);
+      expect(events.some((e) => ['permission'].includes(e.type))).toBe(false);
     });
 
     it('is refused by a build made as a commercial or hosted product', async () => {
@@ -1223,7 +1223,7 @@ describe('the App Server connection', () => {
     const consent = { given: vi.fn(), give: vi.fn() };
     const { turn, events } = await start({}, {}, { consent });
     await turn('Hello', 'm1');
-    expect(events.some((e) => e.type === 'permission')).toBe(false);
+    expect(events.some((e) => ['permission'].includes(e.type))).toBe(false);
     expect(consent.given).not.toHaveBeenCalled();
     await expect(start({}, { FAKE_CODEX_LOGIN: 'none' })).rejects.toThrow(/isn't logged in/);
   });
@@ -1263,9 +1263,7 @@ describe('the App Server connection’s prompts, through the core’s owner (B13
       },
     });
     // The old way answers nothing.
-    await expect(
-      session.answer('anything', { kind: 'permission', answer: 'once' }),
-    ).rejects.toThrow(/only through/);
+    expect(session).not.toHaveProperty('answer');
     session.prompts?.answer(prompt.key, {
       kind: 'choice',
       value: 'acceptWithExecpolicyAmendment',

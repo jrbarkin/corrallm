@@ -1,24 +1,19 @@
+import type { Question } from '../../../shared/model/prompts';
 import { randomUUID } from 'node:crypto';
 import { realpath, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 import { MAX_ID_LENGTH, MAX_MESSAGE_LENGTH } from '../../../shared/api/limits';
 import type { AdapterPrompt } from '../../../shared/model/prompts';
-import {
-  MAX_ANSWER_LENGTH,
-  MAX_QUESTIONS,
-  MODEL_PATTERN,
-  PERMISSION_MODES,
-} from '../../../shared/session';
+import { MAX_ANSWER_LENGTH, MODEL_PATTERN, PERMISSION_MODES } from '../../../shared/session';
 import { CLAUDE_EFFORTS } from './efforts';
-import type { PermissionMode, TerminalAsk } from '../../../shared/session';
+import type { PermissionMode } from '../../../shared/session';
 import { claudeFailure } from './claude-errors';
 import { isUuid } from '../id';
-import { askedQuestions } from './sdk/prompts';
 import { boundedInput, Cuts, shownDetail } from './sdk/raise';
 import { proposedDetail, property, text as textOf, toolSummary } from './sdk/tools';
 import type { Places } from './sdk/tools';
-import { preview } from '../transcript';
+
 import type { Launch, StatusLineReading, TerminalCli, TerminalSignal } from '../terminal/cli';
 import { hookSettings } from './hooks';
 import type { HookEvent, HookRegistration } from '../terminal/hooks';
@@ -60,7 +55,6 @@ const NEEDS_YOU = new Set([
 /** At most this much of a notification is listed. */
 const MAX_ASK_TEXT = 2000;
 /** At most this many lines of what a permission is for (a diff, a file, a command) are listed. */
-const PREVIEW_LINES = 12;
 const LOGIN = 'Claude Code needs you to log in: run /login in its terminal.';
 /** Its prompt mark, and the rules above and below its prompt box. */
 const PROMPT = '❯';
@@ -314,41 +308,19 @@ export class ClaudeCode implements TerminalCli<PermissionMode> {
 
   /**
    * What a tool call asks of the user, as a hook tells it (its questions, a plan, or permission):
-   * as the core's prompt, and as the event B13 replaces lists it. None where it can't be read.
+   * as the core's prompt. None where it can't be read.
    */
   #askOf(
     tool: string | undefined,
     input: unknown,
     toolUseId: string | undefined,
-  ): { ask: TerminalAsk; prompt: AdapterPrompt } | undefined {
+  ): { id: string; prompt: AdapterPrompt } | undefined {
     if (tool === undefined || tool === '') return undefined;
     const prompt = terminalPrompt(tool, input === undefined ? {} : input, this.#places);
     if (prompt === undefined) return undefined;
     const id =
       toolUseId !== undefined && /^[\w-]{1,200}$/.test(toolUseId) ? toolUseId : randomUUID();
-    if (tool === QUESTION_TOOL) {
-      const questions = askedQuestions(property(input, 'questions')) ?? [];
-      return {
-        ask: { kind: 'question', id, questions: questions.slice(0, MAX_QUESTIONS) },
-        prompt,
-      };
-    }
-    if (tool === PLAN_TOOL) {
-      const plan = (textOf(property(input, 'plan')) ?? '').slice(0, MAX_ANSWER_LENGTH);
-      return { ask: { kind: 'plan', id, plan }, prompt };
-    }
-    // What it is for, as its prompt shows it: a command in full, an edit's diff, a new file.
-    const detail = proposedDetail(tool, input);
-    return {
-      ask: {
-        kind: 'permission',
-        id,
-        tool,
-        summary: toolSummary(tool, input, this.#places),
-        ...(detail === undefined ? {} : { detail: preview(detail, PREVIEW_LINES) }),
-      },
-      prompt,
-    };
+    return { id, prompt };
   }
 
   /**
@@ -415,7 +387,7 @@ export class ClaudeCode implements TerminalCli<PermissionMode> {
 function terminalPrompt(tool: string, input: unknown, places: Places): AdapterPrompt | undefined {
   const cuts = new Cuts();
   if (tool === QUESTION_TOOL) {
-    const questions = askedQuestions(property(input, 'questions'));
+    const questions = hookQuestions(property(input, 'questions'));
     if (questions === undefined) return undefined;
     const [only] = questions;
     return {
@@ -432,7 +404,9 @@ function terminalPrompt(tool: string, input: unknown, places: Places): AdapterPr
         text: cuts.text(text, MAX_ANSWER_LENGTH),
         options: options.map(({ label, description }) => ({
           label,
-          ...(description === '' ? {} : { description: cuts.text(description) }),
+          ...(description === undefined || description === ''
+            ? {}
+            : { description: cuts.text(description) }),
         })),
         multiple,
         other: true,
@@ -474,4 +448,28 @@ function terminalPrompt(tool: string, input: unknown, places: Places): AdapterPr
 function modeOf(name: string | undefined): PermissionMode | undefined {
   if (name === 'default') return 'manual';
   return PERMISSION_MODES.find((mode) => mode === name);
+}
+
+/** Questions described by a terminal hook, keyed for the owner protocol. */
+function hookQuestions(value: unknown): Question[] | undefined {
+  if (!Array.isArray(value) || value.length === 0) return undefined;
+  const questions = value.map((item, index) => {
+    const asked = textOf(property(item, 'question'));
+    const options = property(item, 'options');
+    if (asked === undefined || !Array.isArray(options)) return undefined;
+    return {
+      id: `q${String(index + 1)}`,
+      header: textOf(property(item, 'header')) ?? '',
+      text: asked,
+      options: options.flatMap((option) => {
+        const label = textOf(property(option, 'label'));
+        return label === undefined
+          ? []
+          : [{ label, description: textOf(property(option, 'description')) ?? '' }];
+      }),
+      multiple: property(item, 'multiSelect') === true,
+      other: true,
+    };
+  });
+  return questions.every((question) => question !== undefined) ? questions : undefined;
 }

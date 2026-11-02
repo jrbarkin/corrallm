@@ -1,6 +1,4 @@
 import type { Consent, Distribution } from '../adapter';
-import type { SessionEvent } from '../../../shared/session';
-import { output } from '../transcript';
 
 /*
  * How Codex is logged in, and what that allows. corrallm never reads, stores or passes
@@ -13,7 +11,7 @@ import { output } from '../transcript';
  * it, though we recommend migrating to Sign in with ChatGPT so users have greater control over and
  * visibility into their usage. App-server authentication has never been permitted for commercial
  * or hosted services." corrallm runs on the user's own computer, for them: so the App Server
- * connection runs on their ChatGPT plan once they allow it (planPrompt: for the session, or for
+ * connection runs on their ChatGPT plan once they allow it (planConsent: for the session, or for
  * good, kept in main's settings), and refuses a ChatGPT login only in a build made as a commercial
  * or hosted product (`Distribution`). Sign in with ChatGPT (developers.openai.com/siwc) would have
  * corrallm keep and refresh the user's OAuth tokens itself, which it never does.
@@ -114,27 +112,6 @@ export function planConsent(login: Extract<CodexLogin, { kind: 'chatgpt' }>): {
       'corrallm runs on your computer, for you. Yes: for this session.',
       'Don’t ask again: for every Codex agent here. No: nothing is sent.',
     ].join('\n'),
-  };
-}
-
-/**
- * The prompt that asks before a session first uses the user's ChatGPT plan (one with no 'always'
- * kept), as the events B13 replaces show it: Yes allows it for the session, "always" for good, No
- * sends nothing.
- */
-export function planPrompt(
-  id: string,
-  login: Extract<CodexLogin, { kind: 'chatgpt' }>,
-): Extract<SessionEvent, { type: 'permission' }> {
-  const { plan, text } = planConsent(login);
-  return {
-    type: 'permission',
-    id,
-    tool: 'ChatGPT plan',
-    summary: plan,
-    title: 'Use your ChatGPT plan here?',
-    detail: output(text),
-    always: "Yes, and don't ask again on this computer",
   };
 }
 

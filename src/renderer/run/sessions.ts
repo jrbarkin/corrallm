@@ -12,7 +12,7 @@ import type { MirrorStates } from '../api/topic-wire';
 import { useCallback, useMemo, useSyncExternalStore } from 'react';
 import type { CanvasId } from '../../shared/canvas';
 import type { GuiApi } from '../../shared/gui-link';
-import { isOpen, NEW_SESSION } from '../../shared/model/session';
+import { NEW_SESSION } from '../../shared/model/session';
 import type { Entry, Session } from '../../shared/model/session';
 import type { EntryView, MessageView, SessionSummary, SessionView } from '../../shared/model/views';
 import { submissionOf } from '../queues/messages';
@@ -149,7 +149,6 @@ export function sessionDisplay(
         }
         return submission;
       }),
-    prompts: shown.filter(isOpen),
     queued: queued.map((message) => ({
       id: message.id,
       text: message.display?.text ?? message.body,
@@ -211,18 +210,6 @@ export function sessionCommands(
 ): SessionControls {
   const act = (call: Promise<unknown>) => {
     void call.catch(failed);
-  };
-  const prompt = (id: string) => {
-    const need = mirror
-      .snapshot(`needs:${canvas}`)
-      ?.items.find(
-        (need) =>
-          need.agent === agent &&
-          need.id.startsWith(`prompt/${encodeURIComponent(agent)}/`) &&
-          need.id.endsWith(`/${id}`),
-      );
-    if (!need) throw new Error('That prompt is no longer current.');
-    return need;
   };
   return {
     replyPrompt: (to, answer) => api.reply({ canvas, to, answer }),
@@ -298,33 +285,6 @@ export function sessionCommands(
       api
         .sessionChangeMcpServer({ canvas, agent, server, change })
         .then(({ items }) => items.map(mcpServerOf)),
-    answer: (id, permission, feedback) => {
-      act(
-        api.reply({
-          canvas,
-          to: prompt(id).id,
-          answer: { permission, ...(feedback === undefined ? {} : { feedback }) },
-        }),
-      );
-    },
-    answerQuestion: (id, index, answer) => {
-      const need = prompt(id),
-        question = need.questions?.[index];
-      if (!question) throw new Error('That question is no longer current.');
-      act(api.reply({ canvas, to: need.id, answer: { answers: { [question.id]: answer } } }));
-    },
-    answerPlan: (id, plan) => {
-      act(api.reply({ canvas, to: prompt(id).id, answer: { plan } }));
-    },
-    answerElicitation: (id, action, values) => {
-      act(
-        api.reply({
-          canvas,
-          to: prompt(id).id,
-          answer: { form: { action, ...(values === undefined ? {} : { values }) } },
-        }),
-      );
-    },
   };
 }
 

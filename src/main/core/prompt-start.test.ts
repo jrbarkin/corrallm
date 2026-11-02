@@ -18,8 +18,8 @@ import { legacyDirectories } from './workspaces/test-directories';
 
 /*
  * A prompt a session raises as it starts, before its start resolves (an MCP server's form, asked
- * as its CLI starts), on each converted adapter's real connector and fake CLI (B13 C4, C5): until
- * X10 it shows once, as the event B13 replaces its session shows it too; it is refused as its
+ * as its CLI starts), on each adapter's real connector and fake CLI (B13 C4, C5): it appears
+ * once through the owner, is refused as its
  * session is still starting (B13 C3), and answered through the owner once it runs.
  */
 
@@ -158,7 +158,7 @@ async function waitingAt(core: Core, gate: string, agent: string): Promise<Needs
     },
     { timeout: 20_000, interval: 20 },
   );
-  // Whatever stands for it has arrived by now: its raise and its old event come together.
+  // Leave time for any accidental duplicate publication to arrive.
   await new Promise((resolve) => setTimeout(resolve, 100));
   return ((await ok(core, 'needs', {})) as { items: NeedsItem[] }).items.filter(
     (item) => item.kind === 'prompt' && item.agent === agent,

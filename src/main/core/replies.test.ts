@@ -1,3 +1,5 @@
+import type { PromptAnswer } from '../../shared/model/prompts';
+import { fakeApproval } from '../sessions/fake-prompts';
 import { legacyDirectories } from './workspaces/test-directories';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -8,7 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CanvasId } from '../../shared/canvas';
 import type { Message } from '../../shared/model/messages';
 import type { NeedsItem } from '../../shared/model/needs';
-import type { SessionAnswer, SessionMode } from '../../shared/session';
+import type { SessionMode } from '../../shared/session';
 import type { Connector, LiveSession } from '../sessions/connector';
 import { FakeConnector } from '../sessions/fake';
 import { Prompts as CodexPrompts } from '../sessions/codex/app-server/prompts';
@@ -106,7 +108,7 @@ const cores: Core[] = [];
 /** Whether the Reviewer's CLI refuses the next answer it is given. */
 let refuseAnswer: boolean;
 /** Each answer the Reviewer's CLI took. */
-let taken: SessionAnswer[];
+let taken: PromptAnswer[];
 
 beforeEach(async () => {
   profile = await mkdtemp(path.join(tmpdir(), 'corrallm-replies-'));
@@ -130,13 +132,15 @@ function answering(fake: FakeConnector): Connector<SessionMode> {
   return {
     start: async (spec, host) => {
       const session: LiveSession<SessionMode> = await fake.start(spec, host);
-      const answer = session.answer.bind(session);
-      session.answer = async (prompt, given) => {
+      const prompts = session.prompts;
+      if (!prompts) throw new Error('No prompt channel');
+      const answer = prompts.answer.bind(prompts);
+      prompts.answer = (prompt, given) => {
         if (refuseAnswer) {
           refuseAnswer = false;
           throw new Error('The CLI is busy');
         }
-        await answer(prompt, given);
+        answer(prompt, given);
         taken.push(given);
       };
       return session;
@@ -161,23 +165,36 @@ function refusing(): Connector<SessionMode> {
 }
 
 /** A connector whose sessions ask an MCP server's form for a token, recording what was answered. */
-function eliciting(answers: SessionAnswer[]): Connector<SessionMode> {
+function eliciting(answers: PromptAnswer[]): Connector<SessionMode> {
   const fake = new FakeConnector({ mode: 'acceptEdits' });
   return {
     start: async (spec, host) => {
-      const session: LiveSession<SessionMode> = await fake.start(spec, host);
+      const session = await fake.start(spec, host);
+      const prompts = session.prompts;
+      if (!prompts) throw new Error('No prompt channel');
       session.send = (message) => {
         host.emit({ type: 'user', id: message.id, text: message.text });
-        host.emit({ type: 'status', status: 'working' });
+        const key = crypto.randomUUID();
         host.emit({
-          type: 'elicitation',
-          id: `${message.id}/form`,
-          server: 'tracker',
-          message: 'Sign in to the tracker',
-          fields: [{ name: 'token', label: 'Token', required: true, kind: 'text' }],
+          type: 'prompt',
+          key,
+          prompt: {
+            kind: 'form',
+            server: 'tracker',
+            title: 'Sign in to the tracker',
+            answerIn: 'api',
+            form: {
+              schema: {
+                type: 'object',
+                additionalProperties: false,
+                properties: { token: { type: 'string', title: 'Token' } },
+                required: ['token'],
+              },
+            },
+          },
         });
         host.emit({ type: 'status', status: 'waiting' });
-        session.answer = (_prompt, given) => {
+        prompts.answer = (_key, given) => {
           answers.push(given);
           host.emit({ type: 'status', status: 'working' });
           host.emit({
@@ -186,7 +203,6 @@ function eliciting(answers: SessionAnswer[]): Connector<SessionMode> {
             seconds: 1,
             result: { status: 'completed', reason: 'completed' },
           });
-          return Promise.resolve();
         };
         return Promise.resolve();
       };
@@ -200,7 +216,7 @@ function eliciting(answers: SessionAnswer[]): Connector<SessionMode> {
  * resumed conversation asks again for the call it was cut off at), recording which session (by
  * the order they started) took each answer.
  */
-function reasking(taken: { session: number; given: SessionAnswer }[]): Connector<SessionMode> {
+function reasking(taken: { session: number; given: PromptAnswer }[]): Connector<SessionMode> {
   const fake = new FakeConnector({ mode: 'acceptEdits' });
   let started = 0;
   return {
@@ -208,20 +224,18 @@ function reasking(taken: { session: number; given: SessionAnswer }[]): Connector
       const session: LiveSession<SessionMode> = await fake.start(spec, host);
       started += 1;
       const index = started;
-      session.send = (message) => {
+      session.send = async (message) => {
         host.emit({ type: 'user', id: message.id, text: message.text });
         host.emit({ type: 'status', status: 'working' });
         host.emit({
-          type: 'permission',
-          id: 'toolu_same',
-          tool: 'Bash',
-          summary: 'rm -rf build',
-          always: null,
+          type: 'prompt',
+          key: 'c1c2c3c4-1111-4111-8111-111111111111',
+          prompt: fakeApproval(),
         });
         host.emit({ type: 'status', status: 'waiting' });
-        session.answer = (_prompt, given) => {
+        if (!session.prompts) throw new Error('No prompt channel');
+        session.prompts.answer = (_prompt, given) => {
           taken.push({ session: index, given });
-          return Promise.resolve();
         };
         return Promise.resolve();
       };
@@ -253,7 +267,7 @@ function codexAsking() {
         { cwd: spec.cwd, home: profile },
       );
       prompts = asking;
-      session.send = (message) => {
+      session.send = async (message) => {
         host.emit({ type: 'user', id: message.id, text: message.text });
         host.emit({ type: 'status', status: 'working' });
         return Promise.resolve();
@@ -582,10 +596,10 @@ describe('a session’s prompt', () => {
     const { core } = await start();
     await ok(core, 'message', { to: 'b', body: 'Run the tests' });
     const prompt = await waitingFor(core, isPrompt('b'));
-    expect(prompt.id).toMatch(/^prompt\/b\/\d+\/.+\/permission$/);
+    expect(prompt.id).toMatch(/^prompt\/b\/\d+\/[0-9a-f-]{36}$/);
     // R6, then R3: not the agent whose prompt it is, nor any token.
     expect(
-      await call(core, 'reply', { to: prompt.id, answer: { permission: 'once' } }, REVIEWER),
+      await call(core, 'reply', { to: prompt.id, answer: { choice: 'allow' } }, REVIEWER),
     ).toMatchObject({
       ok: false,
       error: {
@@ -593,7 +607,7 @@ describe('a session’s prompt', () => {
         sentence: expect.stringMatching(/never answers what waits on itself/) as string,
       },
     });
-    for (const answer of [{ permission: 'once' }, { permission: 'always' }, { choice: 'deny' }]) {
+    for (const answer of [{ choice: 'allow' }, { choice: 'always' }, { choice: 'deny' }]) {
       expect(await call(core, 'reply', { to: prompt.id, answer }, ORCHESTRATOR)).toMatchObject({
         ok: false,
         error: { code: 'refused' },
@@ -602,26 +616,25 @@ describe('a session’s prompt', () => {
     // An earlier session's prompt of the same native id is another: refused as stale.
     const [, , generation, ...rest] = prompt.id.split('/');
     const earlier = ['prompt', 'b', String(Number(generation) - 1), ...rest].join('/');
-    expect(
-      await call(core, 'reply', { to: earlier, answer: { permission: 'once' } }),
-    ).toMatchObject({ ok: false, error: { code: 'conflict' } });
+    expect(await call(core, 'reply', { to: earlier, answer: { choice: 'allow' } })).toMatchObject({
+      ok: false,
+      error: { code: 'not-found' },
+    });
     // The CLI refuses the first answer: nothing is shown answered, and it still waits for one.
     refuseAnswer = true;
-    expect(
-      await call(core, 'reply', { to: prompt.id, answer: { permission: 'once' } }),
-    ).toMatchObject({
-      ok: false,
-      error: { code: 'unavailable', sentence: expect.stringMatching(/still waits/) as string },
-    });
+    expect(await call(core, 'reply', { to: prompt.id, answer: { choice: 'allow' } })).toMatchObject(
+      {
+        ok: false,
+        error: { code: 'unavailable', sentence: expect.stringMatching(/still waits/) as string },
+      },
+    );
     expect((await needsOf(core)).map(({ id }) => id)).toContain(prompt.id);
     expect(taken).toEqual([]);
     const answered = (await ok(core, 'reply', {
       to: prompt.id,
-      answer: { permission: 'deny', feedback: 'Use the other script' },
+      answer: { choice: 'deny', feedback: 'Use the other script' },
     })) as { id: string };
-    expect(taken).toEqual([
-      { kind: 'permission', answer: 'deny', feedback: 'Use the other script' },
-    ]);
+    expect(taken).toEqual([{ kind: 'choice', value: 'deny', feedback: 'Use the other script' }]);
     expect((await needsOf(core)).map(({ id }) => id)).not.toContain(prompt.id);
     // The answer that didn't take is withdrawn; the one that took is who decided, without its
     // feedback.
@@ -642,12 +655,12 @@ describe('a session’s prompt', () => {
     for (const value of ['echo hello', 'Bash', 'other script']) {
       expect(JSON.stringify(records)).not.toContain(value);
     }
-    expect(
-      await call(core, 'reply', { to: prompt.id, answer: { permission: 'once' } }),
-    ).toMatchObject({
-      ok: false,
-      error: { code: 'conflict', sentence: expect.stringMatching(/You refused/) as string },
-    });
+    expect(await call(core, 'reply', { to: prompt.id, answer: { choice: 'allow' } })).toMatchObject(
+      {
+        ok: false,
+        error: { code: 'conflict', sentence: expect.stringMatching(/You refused/) as string },
+      },
+    );
   });
 
   it('records a plan’s or questions’ answer in the core’s words, never the mode, the words or the answers given', async () => {
@@ -656,20 +669,20 @@ describe('a session’s prompt', () => {
     const plan = await waitingFor(core, isPrompt('b'));
     await ok(core, 'reply', {
       to: plan.id,
-      answer: { plan: { approve: false, feedback: 'Keep private-revise-words' } },
+      answer: { choice: 'keep-planning', feedback: 'Keep private-revise-words' },
     });
     await ok(core, 'message', { to: 'b', body: '/plan it again' });
     const again = await waitingFor(core, (item) => isPrompt('b')(item) && item.id !== plan.id);
     await ok(core, 'reply', {
       to: again.id,
-      answer: { plan: { approve: true, mode: 'acceptEdits' } },
+      answer: { choice: 'accept-edits' },
     });
     await ok(core, 'message', { to: 'b', body: '/question' });
     const asked = await waitingFor(
       core,
       (item) => isPrompt('b')(item) && ![plan.id, again.id].includes(item.id),
     );
-    await ok(core, 'reply', { to: asked.id, answer: { answers: { '0': 'Yes' } } });
+    await ok(core, 'reply', { to: asked.id, answer: { answers: { q1: { picked: ['Yes'] } } } });
     const records = (await yours(core)).filter((message) => message.kind === 'settled');
     expect(records.map(({ body }) => body)).toEqual([
       'You asked Reviewer to keep planning.',
@@ -682,7 +695,7 @@ describe('a session’s prompt', () => {
   });
 
   it('is never answered for a later session that asks again by the same native id', async () => {
-    const taken: { session: number; given: SessionAnswer }[] = [];
+    const taken: { session: number; given: PromptAnswer }[] = [];
     const { core } = await start({ 'claude-code.sdk': reasking(taken) });
     const open = core.engines.canvas(CANVAS);
     if (open === undefined) throw new Error('not open');
@@ -704,20 +717,20 @@ describe('a session’s prompt', () => {
       await open.delivery.send('you', 'b', 'Clean it again');
       again = await waitingFor(core, (item) => isPrompt('b')(item) && item.id !== first.id);
     });
-    const answered = await call(core, 'reply', { to: first.id, answer: { permission: 'once' } });
-    expect(again?.id).toMatch(/^prompt\/b\/\d+\/toolu_same$/);
+    const answered = await call(core, 'reply', { to: first.id, answer: { choice: 'allow' } });
+    expect(again?.id).toMatch(/^prompt\/b\/\d+\/[0-9a-f-]{36}$/);
     // The later session's prompt is not what you answered: nothing told it, and it still waits.
     expect(taken).toEqual([]);
     expect(answered).toMatchObject({ ok: false, error: { code: 'conflict' } });
     expect((await needsOf(core)).map(({ id }) => id)).toContain(again?.id);
     vi.restoreAllMocks();
     // Answered as itself, it is.
-    await ok(core, 'reply', { to: again?.id ?? '', answer: { permission: 'once' } });
-    expect(taken).toEqual([{ session: 2, given: { kind: 'permission', answer: 'once' } }]);
+    await ok(core, 'reply', { to: again?.id ?? '', answer: { choice: 'allow' } });
+    expect(taken).toEqual([{ session: 2, given: { kind: 'choice', value: 'allow' } }]);
   });
 
   it('never writes a secret, nor shows a token the form', async () => {
-    const answers: SessionAnswer[] = [];
+    const answers: PromptAnswer[] = [];
     const { core } = await start({ 'claude-code.sdk': eliciting(answers) });
     await ok(core, 'message', { to: 'b', body: 'Sign in' });
     const form = await waitingFor(core, isPrompt('b'));
@@ -743,7 +756,7 @@ describe('a session’s prompt', () => {
       answer: { form: { action: 'accept', values: { token: secret } } },
     });
     // Its CLI got the values, and nothing else did: no result, record, transcript, read or row.
-    expect(answers).toEqual([{ kind: 'elicitation', action: 'accept', values: { token: secret } }]);
+    expect(answers).toEqual([{ kind: 'form', action: 'accept', values: { token: secret } }]);
     expect(JSON.stringify(result)).not.toContain(secret);
     expect(JSON.stringify(await yours(core))).not.toContain(secret);
     expect(JSON.stringify(await ok(core, 'messages', {}, ORCHESTRATOR))).not.toContain(secret);
