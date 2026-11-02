@@ -124,6 +124,64 @@ describe('WorkspaceStore', () => {
     });
   });
 
+  it('rewrites a repository’s identity with the jobs of its workspaces expecting it, only from the one it holds', async () => {
+    const OTHER_REPOSITORY = '7c0e9a1e-1b6f-4b4f-9f3a-2d1c0b9a8e71';
+    const other = { ...REPO, id: OTHER_REPOSITORY, realRoot: '/work/other' };
+    await withWorktrees(W1, W2);
+    const J4 = 'c0ffee00-0000-4000-8000-000000000004';
+    await workspaces.write((w) => {
+      w.addRepository(other);
+      w.createWorktree({
+        ...tree(W3),
+        repository: OTHER_REPOSITORY,
+        path: `/work/other/.corral/worktrees/profile/${W3}`,
+      });
+      const job = (id: string, workspace: string, expectedIdentity: string | null) =>
+        w.recordJob({
+          id,
+          workspace,
+          kind: 'create',
+          phase: 'intent',
+          generation: 1,
+          expectedIdentity,
+          payload: { workspace },
+        });
+      job(J1, W1, 'repository identity');
+      job(J2, W2, null);
+      w.finishJob(J1, 'done');
+      job(J3, W1, 'repository identity');
+      job(J4, W3, 'repository identity');
+    });
+    expect(workspaces.repositories().map((repository) => repository.id)).toEqual(
+      [REPOSITORY, OTHER_REPOSITORY].sort(),
+    );
+
+    const rewritten = await workspaces.write((w) =>
+      w.reidentify(REPOSITORY, 'repository identity', 'its identity now'),
+    );
+    expect(rewritten).toEqual({ ...REPO, identity: 'its identity now', generation: 1 });
+    expect(workspaces.repository(REPOSITORY)).toEqual(rewritten);
+    expect(workspaces.repositoryAt('/work/app', 'repository identity')).toBeUndefined();
+    expect([J1, J2, J3].map((id) => workspaces.job(id)?.expectedIdentity)).toEqual([
+      'its identity now',
+      null,
+      'its identity now',
+    ]);
+    // Another repository holding the same text, and its workspaces' jobs, are another's.
+    expect(workspaces.repository(OTHER_REPOSITORY)?.identity).toBe('repository identity');
+    expect(workspaces.job(J4)?.expectedIdentity).toBe('repository identity');
+    // Only from the identity it holds; to one the store can keep.
+    await expect(
+      workspaces.write((w) => w.reidentify(REPOSITORY, 'repository identity', 'another')),
+    ).rejects.toMatchObject({ code: 'stale' });
+    await expect(
+      workspaces.write((w) => w.reidentify(REPOSITORY, 'its identity now', 'x'.repeat(1025))),
+    ).rejects.toMatchObject({ code: 'invalid' });
+    await expect(
+      workspaces.write((w) => w.reidentify(W1, 'repository identity', 'another')),
+    ).rejects.toMatchObject({ code: 'not-found' });
+  });
+
   it('binds a canvas to its project folder’s repository, or to none, its generation moving on with each', async () => {
     await workspaces.write((w) => w.addRepository(REPO));
     expect(workspaces.canvasRepository(CANVAS)).toBeUndefined();
