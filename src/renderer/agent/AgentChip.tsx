@@ -23,27 +23,30 @@ interface Choice {
 export function AgentChip({
   adapter,
   connection,
+  initiallyOpen = false,
   onChange,
   onContinueInTerminal,
 }: {
-  adapter: AdapterId;
-  connection: AgentConnection;
+  adapter: AdapterId | undefined;
+  connection: AgentConnection | undefined;
+  initiallyOpen?: boolean;
   onChange: (adapter: AdapterId, connection: AgentConnection) => void;
   onContinueInTerminal: () => void;
 }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(initiallyOpen);
   const button = useRef<HTMLButtonElement>(null);
   const label = agentLabel(adapter, connection);
   const continueIn =
-    connection === 'unavailable'
+    connection === undefined
       ? undefined
       : connectionIn(catalog(), connection)?.connection.continueIn;
   const offered = connectedAgents().flatMap((adapter) =>
     connectionsOf(adapter).map((connection) => ({ adapter, connection })),
   );
-  const choices: readonly Choice[] = continueIn
-    ? [{ adapter, connection: continueIn.connection, continues: true }, ...offered]
-    : offered;
+  const choices: readonly Choice[] =
+    continueIn && adapter !== undefined
+      ? [{ adapter, connection: continueIn.connection, continues: true }, ...offered]
+      : offered;
   /** A connection is explained where its adapter runs more than one way. */
   const detail = (one: Choice) =>
     connectionsOf(one.adapter).length > 1 ? connectionInfo(one.connection).description : undefined;
@@ -57,7 +60,11 @@ export function AgentChip({
         data-connection={connection}
         aria-label={`Agent: ${label}`}
         aria-expanded={open}
-        title={detail({ adapter, connection })}
+        title={
+          adapter !== undefined && connection !== undefined
+            ? detail({ adapter, connection })
+            : undefined
+        }
         onClick={() => {
           setOpen(!open);
         }}

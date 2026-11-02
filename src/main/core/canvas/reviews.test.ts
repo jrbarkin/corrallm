@@ -13,7 +13,7 @@ import type { PartyId } from '../../../shared/model/messages';
 import { toRows } from '../../../shared/model/rows';
 import * as wholeFile from '../../whole-file';
 import { CanvasMemory } from '../../memory';
-import { CATALOG, DEFAULT_ADAPTER } from '../../sessions/adapters';
+import { CATALOG } from '../../sessions/adapters';
 import { mintTrustedPath } from '../host';
 import type { Connection } from '../store/sqlite';
 import type { Store } from '../store/store';
@@ -59,7 +59,7 @@ function compose(): void {
     store,
     memory,
     catalog: CATALOG,
-    defaultAdapter: DEFAULT_ADAPTER,
+
     reviews,
   });
 }

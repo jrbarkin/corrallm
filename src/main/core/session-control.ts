@@ -1,3 +1,4 @@
+import { agentEndpoint, endpointRefusal } from '../../shared/model/catalog';
 import { homedir } from 'node:os';
 
 import type { z } from 'zod';
@@ -97,8 +98,6 @@ export interface SessionControlDeps {
   proposals: Pick<Proposals, 'raise'>;
   /** What every adapter declares. */
   catalog: Catalog;
-  /** The adapter agents run when none is chosen. */
-  defaultAdapter: AdapterId;
   /** The home folder a preview's `~` paths are in. */
   home?: () => string;
 }
@@ -689,12 +688,14 @@ export class SessionControl {
   #target(canvas: string | undefined, agent: string): Target {
     const open = this.#openCanvas(canvas);
     const node = this.#agentOf(open, agent);
-    const adapter = node.data.adapter ?? this.#deps.defaultAdapter;
-    const connection = open.engine.catalog.connectionOf(node.data);
+    const endpoint = agentEndpoint(node.data, this.#deps.catalog);
     const name = nameOf(open.document.nodes, agent);
-    if (connection === 'unavailable') {
-      throw new OpFailure('unavailable', `${name} runs on a connection this corrallm lacks.`);
-    }
+    if (endpoint.kind !== 'known')
+      throw new OpFailure(
+        'unavailable',
+        endpointRefusal(endpoint, name) ?? 'Choose an agent in its settings.',
+      );
+    const { adapter, connection } = endpoint;
     return { open, node, adapter, connection, name };
   }
 

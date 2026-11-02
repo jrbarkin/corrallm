@@ -1,10 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
-import type { AdapterDescriptor, Catalog, ConnectionDescriptor } from '../../shared/adapter';
 import type { ArgsOf } from '../../shared/api/registry';
 import type { CanvasDocument } from '../../shared/model/canvas';
 import { engineCatalog } from '../../shared/model/catalog';
-import { MADE_UP } from '../../shared/test-made-up';
+import { MADE_UP, TWO_MADE_UP as TWO } from '../../shared/test-made-up';
 import type { TokenCaller } from './caller';
 import type { Engines } from './engines';
 import { ruleChecks } from './rules';
@@ -15,34 +14,6 @@ import { CALLERS, CANVAS } from './test-registry';
  * against the connection that agent runs. An unchosen agent runs none yet, so text starting with
  * any connection's shell prefix the catalog declares is refused, whichever adapter is first.
  */
-
-const [ZED] = MADE_UP.adapters as [AdapterDescriptor];
-const [ACP, FREE] = ZED.connections as [ConnectionDescriptor, ConnectionDescriptor];
-
-/** Only the second adapter's second connection runs shell text or expands file mentions. */
-const TWO: Catalog = {
-  adapters: [
-    ZED,
-    {
-      ...ZED,
-      id: 'yak',
-      name: 'Yak Agent',
-      connections: [
-        { ...FREE, id: 'yak.free', label: 'Free', short: 'Free' },
-        {
-          ...ACP,
-          id: 'yak.terminal',
-          label: 'Terminal',
-          short: 'Terminal',
-          view: 'terminal',
-          shellPrefix: '$',
-          fileMentions: true,
-        },
-      ],
-    },
-  ],
-  usageBackends: MADE_UP.usageBackends,
-};
 
 const DOCUMENT: CanvasDocument = {
   id: CANVAS,
@@ -80,9 +51,7 @@ const DOCUMENT: CanvasDocument = {
 /** The canvas the rule reads: its document, and an engine whose lookups once had a default. */
 const ENGINES = {
   canvas: (canvas: string) =>
-    canvas === CANVAS
-      ? { document: DOCUMENT, engine: { catalog: engineCatalog(TWO, 'zed') } }
-      : undefined,
+    canvas === CANVAS ? { document: DOCUMENT, engine: { catalog: engineCatalog(TWO) } } : undefined,
 } as unknown as Engines;
 
 describe('R1 over the resolver (B12 C2)', () => {

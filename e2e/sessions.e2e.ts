@@ -1,4 +1,11 @@
-import { adapterName, agentCardName, agentChipName, connectionOptionName } from './catalog';
+import { chooseAddedAgent } from './agent-choice';
+import {
+  connectionLabel,
+  adapterName,
+  agentCardName,
+  agentChipName,
+  connectionOptionName,
+} from './catalog';
 import { dismissStart, canvasAction } from './canvas-actions';
 import { randomUUID } from 'node:crypto';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
@@ -91,12 +98,15 @@ test('runs a connected agent in the project folder, answering its prompts throug
 
   // An agent authored for the Agent SDK before its native session starts.
   await page.locator('.react-flow__pane').dblclick({ position: { x: 400, y: 300 } });
+  await chooseAddedAgent(page, 'claude-code');
   const view = await openConnectedAgent('claude-code.sdk');
   await expect(
     view.getByRole('button', { name: agentChipName('claude-code.sdk'), exact: true }),
   ).toBeVisible();
   await expect(
-    view.getByText(`${adapterName('claude-code')} works in shop, through the Agent SDK.`),
+    view.getByText(
+      `${adapterName('claude-code')} works in shop, through ${connectionLabel('claude-code.sdk')}.`,
+    ),
   ).toBeVisible();
   // Its session started: it offers its models.
   await expect(view.getByRole('button', { name: 'Model: Default' })).toBeVisible();
@@ -264,12 +274,15 @@ test('runs a Codex agent through its app server, in Codex’s own modes', async 
   await expect(page.getByRole('button', { name: 'Project folder: shop' })).toBeVisible();
 
   await page.locator('.react-flow__pane').dblclick({ position: { x: 400, y: 300 } });
+  await chooseAddedAgent(page, 'claude-code');
   const view = await openConnectedAgent('codex.app-server');
   await expect(
     view.getByRole('button', { name: agentChipName('codex.app-server'), exact: true }),
   ).toBeVisible();
   await expect(
-    view.getByText(`${adapterName('codex')} works in shop, through its app server.`),
+    view.getByText(
+      `${adapterName('codex')} works in shop, through ${connectionLabel('codex.app-server')}.`,
+    ),
   ).toBeVisible();
   await expect(page.locator('.react-flow__node')).toHaveAttribute(
     'aria-label',

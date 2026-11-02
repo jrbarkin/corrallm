@@ -21,7 +21,7 @@ import type { UsageWindows } from '../../shared/usage';
 import { callTool } from '../api/mcp';
 import type { Connector, SessionHost } from '../sessions/connector';
 import { CanvasMemory } from '../memory';
-import { CATALOG, DEFAULT_ADAPTER } from '../sessions/adapters';
+import { CATALOG } from '../sessions/adapters';
 import { FakeConnector } from '../sessions/fake';
 import { TerminalConnector } from '../sessions/claude-code/connector';
 import { FakeClaude } from '../sessions/claude-code/fake-claude';
@@ -214,7 +214,6 @@ async function editInApp(): Promise<void> {
       store,
       memory,
       catalog: CATALOG,
-      defaultAdapter: DEFAULT_ADAPTER,
     });
     const text = await readFile(path.join(profile, 'canvas.corral'), 'utf8');
     await commitDocument(documents, CANVAS, documents.read(text));
@@ -2135,8 +2134,8 @@ async function startAtTrust() {
       {
         id: 'builder',
         label: 'Builder',
-        adapter: DEFAULT_ADAPTER,
-        connection: `${DEFAULT_ADAPTER}.terminal`,
+        adapter: 'claude-code',
+        connection: 'claude-code.terminal',
       },
     ],
     [],

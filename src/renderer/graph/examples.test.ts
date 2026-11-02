@@ -1,8 +1,9 @@
+import { compileExample } from '../../shared/model/test-template';
+import { readTemplate } from '../../shared/model/template-file';
 import { describe, expect, it } from 'vitest';
 
-import { CANVAS_VERSION, canvasIdOf } from '../../shared/canvas';
 import { catalog } from '../catalog';
-import { actionsOf, connectionsOf, DEFAULT_AGENT } from './agents';
+import { actionsOf } from './agents';
 import { EXAMPLES } from '../../shared/examples';
 import { fromFile, toFile } from '../../shared/model/file';
 import { placeholdersOf } from '../../shared/model/templates';
@@ -20,25 +21,23 @@ import { workEdges } from '../../shared/model/work';
 import { documentOf, graphOf } from '../test-graph-data';
 
 describe.each(EXAMPLES)('the $name example', (example) => {
-  const graph = graphOf(fromFile(example.text, catalog(), DEFAULT_AGENT));
+  const graph = graphOf(compileExample(example, catalog(), 'claude-code'));
   const agents = new Map(graph.nodes.filter((n) => n.type === 'agent').map((n) => [n.id, n]));
 
-  it('reads a version-2 canvas and writes it canonically at the current version', () => {
-    expect(toFile(documentOf(graph, canvasIdOf(example.text)))).toBe(
-      example.text.replace('"version": 2', `"version": ${String(CANVAS_VERSION)}`),
-    );
-  });
-
-  it('pins roles only to agent types with a connection', () => {
-    for (const agent of agents.values()) {
-      if (agent.data.adapter !== undefined)
-        expect(connectionsOf(agent.data.adapter), agent.data.label).not.toHaveLength(0);
-    }
+  it('writes a compiled template as a canonical runtime canvas with explicit endpoints', () => {
+    const document = documentOf(graph, readTemplate(example.text).id);
+    const file = toFile(document);
+    expect(fromFile(file, catalog())).toEqual(document);
+    expect(toFile(fromFile(file, catalog()))).toBe(file);
+    for (const agent of agents.values())
+      expect(agent.data).toMatchObject({
+        adapter: 'claude-code',
+        connection: 'claude-code.terminal',
+      });
   });
 
   it("aims only at its own agents, and uses only each agent's own actions", () => {
     for (const agent of agents.values()) {
-      const actions = actionsOf(agent.data.adapter ?? DEFAULT_AGENT).map((a) => a.name);
       // Every level of nesting: what if-thens and repeats hold too.
       const check = (item: QueueItem) => {
         if (isWait(item)) {
@@ -60,21 +59,24 @@ describe.each(EXAMPLES)('the $name example', (example) => {
           item.repeat.forEach(check);
         } else if (!isDelay(item) && !isApproval(item)) {
           if (item.target !== undefined) expect(agents.has(item.target)).toBe(true);
-          if ('action' in item) expect(actions).toContain(item.action);
+          if ('action' in item)
+            expect(
+              actionsOf(agents.get(item.target ?? agent.id)?.data.adapter).map(
+                (action) => action.name,
+              ),
+            ).toContain(item.action);
         }
       };
       (agent.data.queue ?? []).forEach(check);
     }
   });
 
-  it('says what each tool step is to do, and what Codex’s /review looks at', () => {
-    // A tool alone ("Use the WebSearch tool for this step") leaves the agent to guess what for;
-    // Codex's /review without instructions asks, in its terminal, what to review.
+  it('says what every shipped job step is to do after compilation', () => {
     const vague = (item: QueueItem): string[] => {
       if (isIf(item)) return item.then.flatMap(vague);
       if (isRepeat(item)) return item.repeat.flatMap(vague);
       if (!('action' in item) || (item.instruction ?? '').trim() !== '') return [];
-      return item.action.startsWith('/') && item.action !== '/review' ? [] : [item.action];
+      return [item.action];
     };
     expect(
       [...agents.values()].flatMap((agent) => (agent.data.queue ?? []).flatMap(vague)),
@@ -99,7 +101,7 @@ describe.each(EXAMPLES)('the $name example', (example) => {
 
 describe('the examples', () => {
   it('each have an id of their own', () => {
-    const ids = EXAMPLES.map((example) => canvasIdOf(example.text));
+    const ids = EXAMPLES.map((example) => readTemplate(example.text).id);
     expect(new Set(ids).size).toBe(ids.length);
   });
 });

@@ -11,7 +11,7 @@ import type { QueueItem } from './queue';
 const ID = '7d0c2b9e-4f1a-4c3d-9e8b-2a1f0e6d5c4b' as CanvasId;
 
 /** A file's canvas, read as the app reads it: an agent naming no adapter runs Claude Code. */
-const read = (text: string) => fromFile(text, TEST_CATALOG, 'claude-code');
+const read = (text: string) => fromFile(text, TEST_CATALOG);
 
 /** What canvas `canvas`'s agent `id` is, if it has one by that id. */
 const agentData = (canvas: CanvasDocument, id: string): AgentData | undefined =>
@@ -421,7 +421,7 @@ describe('fromFile', () => {
         settings: { toString: { model: 'pro', mode: 'yolo' }, constructor: { effort: 'max' } },
       });
       // It runs no way this build has.
-      expect(TEST_ENGINE.connectionOf(data)).toBe('unavailable');
+      expect(TEST_ENGINE.connectionOf(data)).toBeUndefined();
       expect(JSON.parse(toFile(loaded))).toEqual(file);
     },
   );
@@ -438,13 +438,10 @@ describe('fromFile', () => {
     expect(loaded.nodes.map((n) => n.id)).toEqual(['G', 'a', 'b']);
   });
 
-  it('reads an agent naming no adapter as running the one it is told agents run by default', () => {
+  it('reads an adapter from its known connection without changing what the file stores', () => {
     const file = structuredClone(saved);
     Object.assign(file.nodes[2] ?? {}, { connection: 'codex.app-server' });
-    expect(() => read(JSON.stringify(file))).toThrow(
-      'nodes[2].connection: "codex.app-server" is a connection of codex, not of claude-code',
-    );
-    expect(agentData(fromFile(JSON.stringify(file), TEST_CATALOG, 'codex'), 'b')).toEqual({
+    expect(agentData(fromFile(JSON.stringify(file), TEST_CATALOG), 'b')).toEqual({
       label: 'Reviewer',
       connection: 'codex.app-server',
     });
@@ -518,7 +515,11 @@ describe('fromFile', () => {
     ],
     [
       'a mode of another adapter',
-      (f) => Object.assign(f.nodes[2] ?? {}, { settings: { codex: { mode: 'plan-ish' } } }),
+      (f) =>
+        Object.assign(f.nodes[2] ?? {}, {
+          adapter: 'claude-code',
+          settings: { codex: { mode: 'plan-ish' } },
+        }),
       /^nodes\[2\]\.settings\.codex\.mode must be one of: read-only, auto, plan$/,
     ],
     [
@@ -526,6 +527,7 @@ describe('fromFile', () => {
       'a mode that never asks',
       (f) =>
         Object.assign(f.nodes[2] ?? {}, {
+          adapter: 'claude-code',
           settings: { 'claude-code': { mode: 'bypassPermissions' } },
         }),
       /^nodes\[2\]\.settings\.claude-code\.mode must be one of: manual, acceptEdits, plan, auto$/,
@@ -1040,5 +1042,52 @@ describe('canvas label and position bounds', () => {
   ])('refuses an out-of-bounds position (%j)', (position) => {
     const copy = { ...canvas, nodes: canvas.nodes.map((node) => ({ ...node, position })) };
     expect(() => read(toFile(copy))).toThrow(/position/);
+  });
+});
+
+describe('an agent’s own endpoint', () => {
+  it('reads a known connection without an adapter and saves it without choosing one', () => {
+    const file = JSON.stringify({
+      ...saved,
+      nodes: [
+        {
+          id: 'a',
+          kind: 'agent',
+          label: 'Owner',
+          position: { x: 0, y: 0 },
+          connection: 'codex.terminal',
+        },
+      ],
+      links: [],
+    });
+    const document = read(file);
+    expect(agentData(document, 'a')).toMatchObject({ connection: 'codex.terminal' });
+    expect(agentData(document, 'a')).not.toHaveProperty('adapter');
+    expect(JSON.parse(toFile(document))).toMatchObject({
+      nodes: [{ connection: 'codex.terminal' }],
+    });
+  });
+
+  it('keeps unchosen work and shape-valid settings without applying another adapter’s modes', () => {
+    const file = JSON.stringify({
+      ...saved,
+      nodes: [
+        {
+          id: 'a',
+          kind: 'agent',
+          label: 'Unchosen',
+          position: { x: 0, y: 0 },
+          settings: { 'claude-code': { mode: 'future-mode' } },
+          queue: [{ id: 'step', action: 'future-action' }],
+        },
+      ],
+      links: [],
+    });
+    const document = read(file);
+    expect(agentData(document, 'a')).toMatchObject({
+      settings: { 'claude-code': { mode: 'future-mode' } },
+      queue: [{ id: 'step', action: 'future-action' }],
+    });
+    expect(agentData(document, 'a')).not.toHaveProperty('adapter');
   });
 });

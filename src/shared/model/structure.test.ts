@@ -44,15 +44,24 @@ const doc = (): CanvasDocument => ({
       id: 'a',
       type: 'agent',
       position: { x: 0, y: 0 },
-      data: { label: 'Builder', queue: [{ id: 'task', action: 'Read' }] },
+      data: { adapter: 'claude-code', label: 'Builder', queue: [{ id: 'task', action: 'Read' }] },
     },
     {
       id: 'b',
       type: 'agent',
       position: { x: 300, y: 0 },
-      data: { label: 'Reviewer', queue: [{ id: 'wait', waitFor: [{ agent: 'a', item: 'task' }] }] },
+      data: {
+        adapter: 'claude-code',
+        label: 'Reviewer',
+        queue: [{ id: 'wait', waitFor: [{ agent: 'a', item: 'task' }] }],
+      },
     },
-    { id: 'c', type: 'agent', position: { x: 600, y: 0 }, data: { label: 'Untouched' } },
+    {
+      id: 'c',
+      type: 'agent',
+      position: { x: 600, y: 0 },
+      data: { adapter: 'claude-code', label: 'Untouched' },
+    },
   ],
   links: [{ source: 'b', target: 'c' }],
 });
@@ -89,7 +98,8 @@ describe('canvas structure operations', () => {
       before,
       { at: { x: 1000, y: 500 }, adapter: 'codex' },
       {
-        defaultAdapter: 'claude-code',
+        catalog: TEST_CATALOG,
+
         newId: () => ids.shift() ?? 'unexpected',
       },
     );
@@ -108,13 +118,13 @@ describe('canvas structure operations', () => {
 
 const context = (id: string): StructureContext => {
   const ids = [id, `${id}/message`];
-  return { defaultAdapter: 'claude-code', newId: () => ids.shift() ?? 'unexpected-id' };
+  return { catalog: TEST_CATALOG, newId: () => ids.shift() ?? 'unexpected-id' };
 };
 const agent = (id: string, x = 0, y = 0, data: Partial<AgentData> = {}): CanvasNode => ({
   id,
   type: 'agent',
   position: { x, y },
-  data: { label: id, ...data },
+  data: { adapter: 'claude-code', label: id, ...data },
 });
 const frame = (id: string, x = 0, y = 0): CanvasNode => ({
   id,
@@ -155,7 +165,7 @@ function box(doc: CanvasDocument, id: string) {
 function grouped(id = 'G', kind: CanvasNode['type'] = 'frame'): CanvasDocument {
   return group(
     frozen([agent('a', 100, 100), agent('b', 300, 200)]),
-    { kind, nodes: ['a', 'b'] },
+    { kind, ...(kind === 'agent' ? { adapter: 'claude-code' } : {}), nodes: ['a', 'b'] },
     context(id),
   ).next;
 }
@@ -323,7 +333,7 @@ describe('spawnAgent', () => {
       { from: 'a', relation: 'peer' },
       context('n'),
     ).next;
-    expect(get(plain, 'n').data).not.toHaveProperty('connection');
+    expect(get(plain, 'n').data.connection).toBe('claude-code.terminal');
     expect(get(plain, 'n').data).not.toHaveProperty('role');
   });
   it('does nothing when the source is a frame or missing, minting no ids', () => {
@@ -333,7 +343,8 @@ describe('spawnAgent', () => {
         before,
         { from, relation: 'peer' },
         {
-          defaultAdapter: 'codex',
+          catalog: TEST_CATALOG,
+
           newId: () => {
             throw new Error('must not mint');
           },
@@ -448,7 +459,7 @@ describe('remove', () => {
       { id: 'step', action: 'Read' },
     ]);
     expect(changed.result.cleared.length).toBeGreaterThan(0);
-    expect(fromFile(toFile(changed.next), TEST_CATALOG, 'claude-code')).toEqual(changed.next);
+    expect(fromFile(toFile(changed.next), TEST_CATALOG)).toEqual(changed.next);
   });
   it('deletes explicit nodes and links, including links attached to removed agents', () => {
     const before = frozen(
@@ -547,7 +558,11 @@ describe('group', () => {
       agent('a', 0, 0, { label: 'Agent 1' }),
       agent('b', 0, 100, { label: 'Agent 2' }),
     ]);
-    const changed = group(before, { kind: 'agent', nodes: ['a', 'b'] }, context('P')).next;
+    const changed = group(
+      before,
+      { adapter: 'claude-code', kind: 'agent', nodes: ['a', 'b'] },
+      context('P'),
+    ).next;
     expect(get(changed, 'P').data).toEqual({
       label: 'Agent 3',
       color: 0,
@@ -564,7 +579,11 @@ describe('group', () => {
   });
   it('nests the new group in its shared parent, growing it without moving its members', () => {
     const before = grouped();
-    const changed = group(before, { kind: 'agent', nodes: ['a', 'b'] }, context('N')).next;
+    const changed = group(
+      before,
+      { adapter: 'claude-code', kind: 'agent', nodes: ['a', 'b'] },
+      context('N'),
+    ).next;
     expect(changed.nodes.map((node) => node.id)).toEqual(['G', 'N', 'a', 'b']);
     expect(get(changed, 'N').parentId).toBe('G');
     expect(positions(changed, ['a', 'b'])).toEqual(positions(before, ['a', 'b']));
@@ -585,7 +604,8 @@ describe('group', () => {
           before,
           { kind: 'frame', nodes },
           {
-            defaultAdapter: 'codex',
+            catalog: TEST_CATALOG,
+
             newId: () => {
               throw new Error('must not mint');
             },
@@ -598,7 +618,7 @@ describe('group', () => {
 describe('addParent', () => {
   it('centres the card where an empty frame was', () => {
     const before = frozen([frame('F', 100, 200)]);
-    const changed = addParent(before, { id: 'F' }, context('message')).next;
+    const changed = addParent(before, { adapter: 'claude-code', id: 'F' }, context('message')).next;
     expect(get(changed, 'F').position).toEqual({
       x: 100 + (EMPTY_FRAME.width - CARD_SIZE.width) / 2,
       y: 200,
@@ -606,7 +626,7 @@ describe('addParent', () => {
   });
   it('turns a frame into an agent parent without moving its children and selects the parent', () => {
     const before = grouped('F');
-    const changed = addParent(before, { id: 'F' }, context('F/message'));
+    const changed = addParent(before, { adapter: 'claude-code', id: 'F' }, context('F/message'));
     expect(get(changed.next, 'F').data).toEqual({
       label: 'Agent 1',
       color: 0,
@@ -619,13 +639,17 @@ describe('addParent', () => {
   });
   it('keeps the old top border in place, with half the card above it', () => {
     const before = grouped('F');
-    const changed = addParent(before, { id: 'F' }, context('message')).next;
+    const changed = addParent(before, { adapter: 'claude-code', id: 'F' }, context('message')).next;
     expect(get(changed, 'F').position.y + CARD_SIZE.height / 2).toBe(get(before, 'F').position.y);
   });
   it('does nothing for anything but a frame', () => {
     const before = frozen([agent('a')]);
-    expect(addParent(before, { id: 'a' }, context('unused')).next).toBe(before);
-    expect(addParent(before, { id: 'missing' }, context('unused')).next).toBe(before);
+    expect(addParent(before, { adapter: 'claude-code', id: 'a' }, context('unused')).next).toBe(
+      before,
+    );
+    expect(
+      addParent(before, { adapter: 'claude-code', id: 'missing' }, context('unused')).next,
+    ).toBe(before);
   });
 });
 
@@ -664,9 +688,10 @@ describe('group colours', () => {
   });
   it('keeps the colour when a frame gets a parent agent', () => {
     const before = grouped();
-    expect(get(addParent(before, { id: 'G' }, context('message')).next, 'G').data.color).toBe(
-      get(before, 'G').data.color,
-    );
+    expect(
+      get(addParent(before, { adapter: 'claude-code', id: 'G' }, context('message')).next, 'G').data
+        .color,
+    ).toBe(get(before, 'G').data.color);
   });
 });
 
@@ -711,7 +736,11 @@ describe('ungroup', () => {
     expectValid(changed);
   });
   it('shrinks a parent whose last child moves out', () => {
-    const before = group(frozen([agent('a')]), { kind: 'agent', nodes: ['a'] }, context('P')).next;
+    const before = group(
+      frozen([agent('a')]),
+      { adapter: 'claude-code', kind: 'agent', nodes: ['a'] },
+      context('P'),
+    ).next;
     const changed = ungroup(before, { nodes: ['a'] }).next;
     expect(get(changed, 'a').parentId).toBeUndefined();
     expectValid(changed);

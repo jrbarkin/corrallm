@@ -175,14 +175,17 @@ export interface AgentAction {
 }
 
 /** The adapter `id` names, if the catalog has it. */
-export function adapterIn(catalog: Catalog, id: AdapterId): AdapterDescriptor | undefined {
+export function adapterIn(
+  catalog: Catalog,
+  id: AdapterId | undefined,
+): AdapterDescriptor | undefined {
   return catalog.adapters.find((adapter) => adapter.id === id);
 }
 
 /** The connection `id` names and the adapter it belongs to, if the catalog has it. */
 export function connectionIn(
   catalog: Catalog,
-  id: ConnectionId,
+  id: ConnectionId | undefined,
 ): { adapter: AdapterDescriptor; connection: ConnectionDescriptor } | undefined {
   for (const adapter of catalog.adapters) {
     const connection = adapter.connections.find((one) => one.id === id);

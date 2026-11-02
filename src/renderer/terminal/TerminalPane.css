@@ -1,4 +1,4 @@
-/* A Terminal agent's session: Claude Code's terminal, and a bar under it. */
+/* A Terminal agent's session: the CLI's terminal, and a bar under it. */
 .agent-terminal-session {
   gap: 8px;
   padding: 12px 16px 14px;

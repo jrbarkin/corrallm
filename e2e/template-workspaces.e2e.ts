@@ -1,3 +1,4 @@
+import { chooseTemplateAgents } from './agent-choice';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -97,6 +98,7 @@ for (const [index, [name, artifact]] of cases.entries()) {
       .click();
     const gallery = page.getByRole('dialog', { name: 'Templates' });
     await gallery.getByRole('button', { name: new RegExp(`^${name}`) }).click();
+    await chooseTemplateAgents(page, 'claude-code');
     for (const choice of await gallery.getByRole('combobox', { name: /^How / }).all()) {
       const selected = await choice.inputValue();
       if (selected === 'claude-code.terminal') await choice.selectOption('claude-code.sdk');
@@ -198,7 +200,7 @@ for (const [index, [name, artifact]] of cases.entries()) {
         if (!tree) throw new Error(role);
         return tree;
       };
-      for (const role of ['claude', 'codex']) {
+      for (const role of ['a', 'b']) {
         const contestant = by(role);
         await mkdir(path.join(contestant.path, '.compete'));
         await writeFile(path.join(contestant.path, '.compete/result.md'), 'Round: 1\n');
@@ -209,17 +211,17 @@ for (const [index, [name, artifact]] of cases.entries()) {
         );
       }
       await mkdir(path.join(by('judge').path, '.compete'));
-      for (const role of ['claude', 'codex'])
+      for (const role of ['a', 'b'])
         await writeFile(
           path.join(by('judge').path, `.compete/feedback-${role}.md`),
           'Round: 1\nImprove this\n',
         );
       expect(() =>
-        git(by('claude').path, env, 'show', `${by('judge').ref}:.compete/feedback-claude.md`),
+        git(by('a').path, env, 'show', `${by('judge').ref}:.compete/feedback-a.md`),
       ).toThrow();
       git(by('judge').path, env, 'add', '-A');
       commit(by('judge').path, env, 'feedback');
-      for (const role of ['claude', 'codex'])
+      for (const role of ['a', 'b'])
         expect(
           git(by(role).path, env, 'show', `${by('judge').ref}:.compete/feedback-${role}.md`),
         ).toContain('Round: 1');

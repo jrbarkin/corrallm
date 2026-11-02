@@ -16,7 +16,7 @@ import {
 import { TEST_CATALOG } from '../test-model';
 import { MADE_UP } from '../test-made-up';
 
-const context = { catalog: TEST_CATALOG, defaultAdapter: 'claude-code' };
+const context = { catalog: TEST_CATALOG };
 const doc = (): CanvasDocument => ({
   id: '7d0c2b9e-4f1a-4c3d-9e8b-2a1f0e6d5c4b' as CanvasId,
   arrange: true,
@@ -25,9 +25,14 @@ const doc = (): CanvasDocument => ({
       id: 'a',
       type: 'agent',
       position: { x: 0, y: 0 },
-      data: { label: 'A', queue: [{ id: 's', action: 'Bash', by: 'you' }] },
+      data: { adapter: 'claude-code', label: 'A', queue: [{ id: 's', action: 'Bash', by: 'you' }] },
     },
-    { id: 'b', type: 'agent', position: { x: 300, y: 0 }, data: { label: 'B' } },
+    {
+      id: 'b',
+      type: 'agent',
+      position: { x: 300, y: 0 },
+      data: { adapter: 'claude-code', label: 'B' },
+    },
   ],
   links: [{ source: 'a', target: 'b' }],
 });
@@ -37,7 +42,7 @@ describe('agent setup operations', () => {
   it('keeps the chain when a later type, connection, model or effort edit matches a step', () => {
     const before = doc();
     data(before).adapter = 'other';
-    const ctx = { catalog: MADE_UP, defaultAdapter: 'zed' };
+    const ctx = { catalog: MADE_UP };
     const fallback = { to: [{ adapter: 'zed', connection: 'zed.acp' }] };
     data(before).fallback = fallback;
     const typed = setType(before, { agent: 'a', adapter: 'zed' }, ctx).next;
@@ -63,7 +68,7 @@ describe('agent setup operations', () => {
       to: [{ adapter: 'zed', connection: 'zed.acp' }],
       on: { step: 0, from: { adapter: 'old', connection: 'old.api' }, why: 'rule', at: 1 },
     };
-    const ctx = { catalog: MADE_UP, defaultAdapter: 'zed' };
+    const ctx = { catalog: MADE_UP };
     for (const next of [
       setType(before, { agent: 'a', adapter: 'zed' }, ctx).next,
       setConnection(before, { agent: 'a', connection: 'zed.acp' }, ctx).next,
@@ -86,7 +91,7 @@ describe('agent setup operations', () => {
     const from = { adapter: 'zed', connection: 'zed.acp' };
     const on = { step: 0, from, kept: { model: null }, why: 'rule' as const, at: 1 };
     data(before).fallback = { to: [{ adapter: 'zed', connection: 'zed.free' }], on };
-    const ctx = { catalog: MADE_UP, defaultAdapter: 'zed' };
+    const ctx = { catalog: MADE_UP };
     const fallback = {
       to: [
         { adapter: 'zed', model: 'other' },
@@ -124,11 +129,7 @@ describe('agent setup operations', () => {
   it('translates by catalog jobs, including an adapter the renderer does not know', () => {
     const catalog = { ...TEST_CATALOG, adapters: [...TEST_CATALOG.adapters, ...MADE_UP.adapters] };
     const before = doc();
-    const changed = setType(
-      before,
-      { agent: 'a', adapter: 'zed' },
-      { catalog, defaultAdapter: 'claude-code' },
-    ).next;
+    const changed = setType(before, { agent: 'a', adapter: 'zed' }, { catalog }).next;
     expect(data(changed).queue).toEqual([{ id: 's', action: 'shell', by: 'you' }]);
     expect(changed.nodes[1]).toBe(before.nodes[1]);
     expect(changed.links).toBe(before.links);
@@ -143,7 +144,7 @@ describe('agent setup operations', () => {
       zed: { model: 'chosen', effort: 'low', mode: 'plan' },
       codex: { model: 'other' },
     };
-    const ctx = { catalog: MADE_UP, defaultAdapter: 'zed' };
+    const ctx = { catalog: MADE_UP };
     const changed = setSettings(before, {
       agent: 'a',
       adapter: 'zed',
@@ -164,7 +165,13 @@ describe('agent setup operations', () => {
 });
 
 function agentNode(id: string, x: number, y: number, extra: Partial<AgentNode> = {}): AgentNode {
-  return { id, type: 'agent', position: { x, y }, data: { label: id }, ...extra };
+  return {
+    id,
+    type: 'agent',
+    position: { x, y },
+    ...extra,
+    data: { adapter: 'claude-code', label: id, ...extra.data },
+  };
 }
 function frame(id: string, x: number, y: number): CanvasNode {
   return { id, type: 'frame', position: { x, y }, data: { label: id } };
@@ -271,6 +278,7 @@ describe('setConnection', () => {
     expect(get(sdk, 'a').data.connection).toBe('claude-code.sdk');
     expect(setConnected(sdk, 'a', 'claude-code.sdk')).toBe(sdk);
     expect(get(setConnected(sdk, 'a', 'claude-code.terminal'), 'a').data).toEqual({
+      adapter: 'claude-code',
       label: 'a',
       connection: 'claude-code.terminal',
     });
@@ -322,7 +330,7 @@ describe('setSettings', () => {
     });
     expect(
       get(setSaved(claude, 'a', 'claude-code', { model: null, mode: null }), 'a').data,
-    ).toEqual({ label: 'a' });
+    ).toEqual({ label: 'a', adapter: 'claude-code' });
     expect(setSaved(g, 'F', 'claude-code', { model: 'haiku' })).toBe(g);
   });
 
@@ -557,4 +565,31 @@ describe('fallbackMove: corrallm’s commit of a switch or a return (B11a C2)', 
       fallbackMove(chained(), { agent: 'a', step: 2, why: 'rule', at: 1 }, context),
     ).toThrow(/step/);
   });
+});
+
+it('keeps unmapped native actions when changing an existing agent, translating jobs at every depth', () => {
+  const queue: QueueItem[] = [
+    { id: 'run', action: 'exec_command', expect: 'fails' },
+    { id: 'diff', action: '/diff' },
+    { id: 'if', if: { kind: 'failed' }, then: [{ id: 'patch', action: 'apply_patch' }] },
+    {
+      id: 'repeat',
+      repeat: [{ id: 'again', action: 'exec_command' }],
+      until: { kind: 'succeeded' },
+      rounds: 2,
+      otherwise: 'ask',
+    },
+  ];
+  expect(translateActions(queue, 'codex', 'claude-code', TEST_CATALOG)).toEqual([
+    { id: 'run', action: 'Bash', expect: 'fails' },
+    { id: 'diff', action: '/diff' },
+    { id: 'if', if: { kind: 'failed' }, then: [{ id: 'patch', action: 'Edit' }] },
+    {
+      id: 'repeat',
+      repeat: [{ id: 'again', action: 'Bash' }],
+      until: { kind: 'succeeded' },
+      rounds: 2,
+      otherwise: 'ask',
+    },
+  ]);
 });

@@ -110,7 +110,7 @@ interface QueueProps {
   node: AgentNode;
   /** Every node of the graph: the agents steps can act on, and their names. */
   nodes: readonly CanvasNode[];
-  agent: AdapterId;
+  agent: AdapterId | undefined;
   /** What the agent can do. */
   actions: readonly AgentAction[];
   /** `into`: the id of the if-then or repeat to add to. */
@@ -459,7 +459,7 @@ interface AddContext {
 }
 
 interface Context extends AddContext {
-  agent: AdapterId;
+  agent: AdapterId | undefined;
   name: (id: string | undefined) => string;
   ifText: (condition: Condition) => string;
   untilText: (until: Until) => string;
@@ -877,7 +877,7 @@ function StepRow({
   const known = context.actions.some((a) => a.name === item.action);
   const command = item.action.startsWith('/');
   const fails = item.expect === 'fails';
-  const unknown = known ? {} : { title: `${context.agent} has no ${item.action}` };
+  const unknown = known ? {} : { title: `${context.agent ?? 'This agent'} has no ${item.action}` };
   const toggle = () => {
     setExpecting(!expecting);
   };

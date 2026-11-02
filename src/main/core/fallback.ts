@@ -1,7 +1,9 @@
+import { endpointRefusal } from '../../shared/model/catalog';
+import { endpointOf } from '../../shared/model/fallback';
 import { randomUUID } from 'node:crypto';
 
 import { connectionIn } from '../../shared/adapter';
-import type { AdapterId, Catalog, UsageBackendId } from '../../shared/adapter';
+import type { Catalog, UsageBackendId } from '../../shared/adapter';
 import type { CanvasId } from '../../shared/canvas';
 import { fallbackMove } from '../../shared/model/agent-ops';
 import type { AgentData, AgentNode, CanvasDocument } from '../../shared/model/canvas';
@@ -68,8 +70,6 @@ export interface FallbackRuntime {
 
 export interface FallbackDeps {
   catalog: Catalog;
-  /** The adapter an agent naming none runs. */
-  defaultAdapter: AdapterId;
   /** The runtime of a canvas the core runs, if it runs it (Engines.canvas). */
   canvas(canvas: CanvasId): FallbackRuntime | undefined;
   /** Each canvas's document: what a switch is committed to, and what tells of commits. */
@@ -218,7 +218,7 @@ export class FallbackService {
     const now = this.#deps.now();
     const { engine } = runtime;
     const connection = engine.catalog.connectionOf(node.data);
-    if (connection === 'unavailable') return otherwise;
+    if (connection === undefined) return otherwise;
     const chain = node.data.fallback;
     const backend = engine.catalog.usageBackendOf(node.data);
     const blocked = this.#blocked.get(key);
@@ -320,6 +320,7 @@ export class FallbackService {
     const chain = node.data.fallback;
     if (chain === undefined) return { none: [] };
     const current = this.#endpoint(runtime, node.data);
+    if (current === undefined) return { none: [] };
     // C1a's edge: an agent whose own endpoint you made one of its steps, on none yet, keeps no
     // place to come back to that the chain can hold (its steps and its own endpoint are distinct):
     // the chain doesn't act until that step is removed from it.
@@ -328,8 +329,8 @@ export class FallbackService {
     const walked = next(
       {
         ...node.data,
-        adapter: current?.adapter ?? this.#deps.defaultAdapter,
-        connection: current?.connection ?? 'unavailable',
+        adapter: current.adapter,
+        connection: current.connection,
       },
       this.#deps.catalog,
       this.#held(runtime, now),
@@ -344,17 +345,7 @@ export class FallbackService {
 
   /** The agent's endpoint as its document names it now. */
   #endpoint(runtime: FallbackRuntime, data: AgentData): FallbackStep | undefined {
-    const adapter = data.adapter ?? this.#deps.defaultAdapter;
-    const connection = runtime.engine.catalog.connectionOf(data);
-    if (connection === 'unavailable') return undefined;
-    const settings =
-      data.settings && Object.hasOwn(data.settings, adapter) ? data.settings[adapter] : {};
-    return {
-      adapter,
-      connection,
-      ...(settings?.model === undefined ? {} : { model: settings.model }),
-      ...(settings?.effort === undefined ? {} : { effort: settings.effort }),
-    };
+    return endpointOf(data, this.#deps.catalog);
   }
 
   /**
@@ -601,7 +592,7 @@ export class FallbackService {
           return fallbackMove(
             document,
             { agent, step: lane.target.step, why: lane.why, at: lane.at },
-            { catalog: this.#deps.catalog, defaultAdapter: this.#deps.defaultAdapter },
+            { catalog: this.#deps.catalog },
           );
         },
         check: (_change, _live, losses) => {
@@ -778,11 +769,12 @@ export class FallbackService {
   #noneText(runtime: FallbackRuntime, node: AgentNode, passed: readonly FallbackPassed[]): string {
     const chain = node.data.fallback;
     const current = this.#endpoint(runtime, node.data);
-    if (
-      chain?.on === undefined &&
-      current !== undefined &&
-      chain?.to.some((step) => sameStep(step, current)) === true
-    )
+    if (current === undefined)
+      return (
+        endpointRefusal(runtime.engine.catalog.endpointOf(node.data), node.data.label) ??
+        'Choose an agent in its settings.'
+      );
+    if (chain?.on === undefined && chain?.to.some((step) => sameStep(step, current)) === true)
       // agent.setFallback refuses a chain naming the agent's own endpoint: removing that step,
       // not saving the chain again, is what lets it act.
       return `Its fallback chain didn’t act: this agent’s backend, ${this.#endpointName(current)}, is now one of its fallback steps. Removing that step from its chain lets the chain act again.`;

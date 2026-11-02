@@ -20,7 +20,7 @@ const agent = (id: string, queue: QueueItem[] = [], label = id): AgentNode => ({
   id,
   type: 'agent',
   position: { x: 0, y: 0 },
-  data: { label, queue },
+  data: { adapter: 'claude-code', label, queue },
 });
 
 /** An agent connected to the real CLI (in tests, its sessions are the test's). */
@@ -59,8 +59,8 @@ describe('RunStore', () => {
     expect(where()).toEqual({ a: 'asking inspect', b: 'waiting wait' });
     expect(store.snapshot().agents.a?.refused).toEqual({
       agent: 'a',
-      connection: 'unavailable',
-      text: 'This agent has no connection; choose another agent in Agent settings.',
+      connection: null,
+      text: "a runs qwen, which this build doesn't have. Choose another agent in its settings to run this work.",
     });
     store.decide('a', 'inspect', { choice: 'switch' });
     advance(60 * MINUTE);
@@ -82,7 +82,9 @@ describe('RunStore', () => {
     store.start();
     expect(where()).toEqual({ a: 'asking search' });
     const [ask] = heldAsks([gemini], store.snapshot(), engine);
-    expect(ask?.text).toBe('This agent has no connection; choose another agent in Agent settings.');
+    expect(ask?.text).toBe(
+      "a runs gemini, which this build doesn't have. Choose another agent in its settings to run this work.",
+    );
     expect(ask?.choices).toEqual([]);
     expect(sent).toHaveLength(0);
     edit([{ ...gemini, data: { ...gemini.data, adapter: 'claude-code' } }]);
@@ -112,7 +114,7 @@ describe('RunStore', () => {
     expect(second.sent).toEqual([]);
   });
 
-  it('dispatches a default agent step to its native session and waits for its actual verdict', () => {
+  it('dispatches an explicitly chosen agent step to its native session and waits for its actual verdict', () => {
     const { store, sent, pending, advance, reply } = setup(
       [agent('a', [{ id: 'inspect', action: 'Read', instruction: 'Inspect the release' }])],
       manual,

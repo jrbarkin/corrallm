@@ -160,7 +160,7 @@ describe('ifText', () => {
 
 describe('usage backends in words', () => {
   it('names a backend as the catalog the words are given does, wherever an item names one', () => {
-    const zed = engineCatalog(MADE_UP, 'zed');
+    const zed = engineCatalog(MADE_UP);
     const resets = { resets: 'fiveHour', backend: 'zed' } as const;
     expect(ifText({ kind: 'usageAbove', backend: 'zed', window: 'weekly', percent: 90 }, zed)).toBe(
       'Zed’s usage is over 90% (weekly)',

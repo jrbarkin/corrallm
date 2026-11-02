@@ -1,6 +1,6 @@
 {
-  "format": "corrallm",
-  "version": 2,
+  "format": "corrallm-template",
+  "version": 1,
   "id": "e8e28d07-3606-4062-8c23-a1706ced9e00",
   "nodes": [
     {
@@ -22,7 +22,6 @@
         "y": 52
       },
       "parent": "workspace",
-      "adapter": "claude-code",
       "queue": [
         {
           "id": "work",
@@ -60,7 +59,6 @@
         "y": 212
       },
       "parent": "workspace",
-      "adapter": "codex",
       "queue": [
         {
           "id": "reviewing",

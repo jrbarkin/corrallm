@@ -4,9 +4,26 @@ import { adapterAccent, catalog } from './catalog';
 import './AdapterLogo.css';
 
 /** An adapter's own mark, isolated as an image; a missing mark gets its name's first letter. */
-export function AdapterLogo({ adapter, size }: { adapter: AdapterId; size: 15 | 16 | 18 | 30 }) {
+export function AdapterLogo({
+  adapter,
+  size,
+}: {
+  adapter: AdapterId | undefined;
+  size: 15 | 16 | 18 | 30;
+}) {
   const descriptor = adapterIn(catalog(), adapter);
-  const name = descriptor?.name ?? adapter;
+  const name = descriptor?.name ?? adapter ?? 'Choose an agent';
+  if (adapter === undefined)
+    return (
+      <span
+        className="adapter-logo adapter-logo-fallback"
+        role="img"
+        aria-label={name}
+        data-size={size}
+      >
+        ○
+      </span>
+    );
   return descriptor?.logo === undefined ? (
     <span
       className="adapter-logo adapter-logo-fallback"

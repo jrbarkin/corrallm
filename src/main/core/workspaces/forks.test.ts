@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CanvasDocument, CanvasNode } from '../../../shared/model/canvas';
 import { toFile } from '../../../shared/model/file';
 import { CanvasMemory } from '../../memory';
-import { CATALOG, DEFAULT_ADAPTER } from '../../sessions/adapters';
+import { CATALOG } from '../../sessions/adapters';
 import { OpFailure } from '../call';
 import { Documents } from '../canvas/documents';
 import { FileReviews } from '../canvas/reviews';
@@ -62,7 +62,7 @@ function documentsOf(planner: WorkspacePlanner): Documents {
     store: t.store,
     memory,
     catalog: CATALOG,
-    defaultAdapter: DEFAULT_ADAPTER,
+
     reviews,
     workspaces: planner,
   });

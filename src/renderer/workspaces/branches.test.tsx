@@ -83,7 +83,12 @@ async function isolatedReview() {
       client={core.api}
       mirror={core.topics}
       nodes={[
-        { id: 'builder', type: 'agent', position: { x: 0, y: 0 }, data: { label: 'Builder' } },
+        {
+          id: 'builder',
+          type: 'agent',
+          position: { x: 0, y: 0 },
+          data: { adapter: 'claude-code', label: 'Builder' },
+        },
       ]}
       onNeed={() => undefined}
       inert={inert}
@@ -190,14 +195,14 @@ async function setup(
             type: 'agent',
             parentId: 'team',
             position: { x: 20, y: 40 },
-            data: { label: 'Builder' },
+            data: { adapter: 'claude-code', label: 'Builder' },
           },
           {
             id: 'reviewer',
             type: 'agent',
             parentId: 'team',
             position: { x: 250, y: 40 },
-            data: { label: 'Reviewer' },
+            data: { adapter: 'claude-code', label: 'Reviewer' },
           },
         ],
         edges: [],

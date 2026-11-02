@@ -1,4 +1,5 @@
-import { actionsOf, DEFAULT_AGENT } from '../graph/agents';
+import { agentAdapter } from '../graph/agents';
+import { actionsOf } from '../graph/agents';
 import { editsOf } from '../graph/edits';
 import type { QueueEdits } from '../graph/edits';
 import type { AgentNode, CanvasNode } from '../../shared/model/canvas';
@@ -29,7 +30,7 @@ export function PeerQueue({
   onClose: () => void;
 }) {
   const name = node.data.label || 'Unnamed agent';
-  const agent = node.data.adapter ?? DEFAULT_AGENT;
+  const agent = agentAdapter(node.data);
   return (
     <aside className="agent-side agent-peer" data-column="peer" aria-label={`${name}'s queue`}>
       <header className="agent-peer-header">

@@ -10,4 +10,4 @@ import { engineCatalog } from '../../../shared/model/catalog';
 
 export const TEST_CATALOG = testCatalog as Catalog;
 
-export const TEST_ENGINE = engineCatalog(TEST_CATALOG, 'claude-code');
+export const TEST_ENGINE = engineCatalog(TEST_CATALOG);

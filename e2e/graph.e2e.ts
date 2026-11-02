@@ -1,4 +1,11 @@
-import { agentChipName } from './catalog';
+import { chooseAddedAgent, chooseTemplateAgents } from './agent-choice';
+import {
+  adapterName,
+  agentCardName,
+  agentChipName,
+  connectionOptionName,
+  jobActionName,
+} from './catalog';
 import { dismissStart, canvasAction, openNeeds } from './canvas-actions';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -21,6 +28,179 @@ interface Point {
 const HEADER = 32;
 const PADDING = 20;
 
+test('adding an agent waits for a choice, accepts Enter only after a pick, and cancels without a card', async () => {
+  const where = await at(400, 250);
+  const chooser = page.getByRole('dialog', { name: 'Choose an agent', exact: true });
+  await page.mouse.dblclick(where.x, where.y);
+  await expect(chooser).toBeVisible();
+  await expect(page.locator('.react-flow__node-agent')).toHaveCount(0);
+  for (const row of await chooser.getByRole('radio').all()) await expect(row).not.toBeChecked();
+  await page.keyboard.press('Enter');
+  await expect(chooser).toBeVisible();
+  await expect(page.locator('.react-flow__node-agent')).toHaveCount(0);
+  await chooser.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await expect(chooser).toHaveCount(0);
+  await expect(page.locator('.react-flow__node-agent')).toHaveCount(0);
+  await page.mouse.dblclick(where.x, where.y);
+  await chooser.getByRole('radio', { name: adapterName('codex'), exact: true }).check();
+  await page.keyboard.press('Enter');
+  await expect(chooser).toHaveCount(0);
+  await expect(page.locator('.react-flow__node-agent')).toHaveAttribute(
+    'aria-label',
+    agentCardName('Agent 1', 'codex.terminal'),
+  );
+});
+
+test('an unchosen agent holds its work until the person chooses through its chip', async () => {
+  const file = nativePath.join(dir, 'unchosen.corral');
+  await writeFile(
+    file,
+    JSON.stringify({
+      format: 'corrallm',
+      version: 3,
+      id: newCanvasId(),
+      nodes: [
+        {
+          id: 'waiting',
+          kind: 'agent',
+          label: 'Waiting',
+          position: { x: 100, y: 200 },
+          queue: [{ id: 'work', message: 'Keep this authored work.' }],
+        },
+      ],
+      links: [],
+    }),
+  );
+  await app.evaluate(({ dialog }, picked) => {
+    Object.assign(dialog, {
+      showOpenDialog: () => Promise.resolve({ canceled: false, filePaths: [picked] }),
+    });
+  }, file);
+  await canvasAction(page, 'Open…');
+  await app.evaluate(
+    ({ dialog }, picked) => {
+      Object.assign(dialog, {
+        showOpenDialog: () => Promise.resolve({ canceled: false, filePaths: [picked] }),
+      });
+    },
+    nativePath.join(dir, 'project'),
+  );
+  await page.getByRole('button', { name: 'Choose a project folder', exact: true }).click();
+  await expect(
+    page.getByRole('button', { name: 'Project folder: project', exact: true }),
+  ).toBeVisible();
+  const before = await currentCanvas();
+  const args = { canvas: before.canvas, agent: 'waiting' };
+  const sentence = 'Waiting has no agent chosen yet. Choose one in its settings to run this work.';
+  await page.getByRole('button', { name: 'Run', exact: true }).click();
+  await expect
+    .poll(() =>
+      page.evaluate(async (args) => {
+        const result = await window.api.runGet({ canvas: args.canvas });
+        if (!result.ok) throw new Error(result.error.sentence);
+        return Object.entries(result.value.agents).find(([id]) => id === args.agent)?.[1].refused
+          ?.text;
+      }, args),
+    )
+    .toBe(sentence);
+  const held = await page.evaluate(async (args) => {
+    const summary = await window.api.sessionGet(args);
+    const transcript = await window.api.sessionTranscript(args);
+    if (!summary.ok) throw new Error(summary.error.sentence);
+    if (!transcript.ok) throw new Error(transcript.error.sentence);
+    return { summary: summary.value, transcript: transcript.value };
+  }, args);
+  expect(held.summary).toMatchObject({ connection: null, model: null, mode: null, tasks: [] });
+  expect(
+    held.transcript.entries.filter((entry) => entry.kind === 'user' || entry.kind === 'tool'),
+  ).toEqual([]);
+  expect(held.transcript.next).toBeNull();
+  const waiting = node('Waiting');
+  await expect(waiting.locator('.graph-card')).toHaveAttribute('title', 'Agent: Choose an agent');
+  await waiting.dblclick();
+  const view = page.getByRole('dialog', { name: 'Waiting', exact: true });
+  await expect(view.getByRole('textbox', { name: 'Message', exact: true })).toBeDisabled();
+  await expect(
+    view.getByText(
+      'Waiting has no agent chosen yet. Choose one in its settings to run this work.',
+      { exact: true },
+    ),
+  ).toBeVisible();
+  await expect(
+    view.getByRole('button', { name: 'Agent: Choose an agent', exact: true }),
+  ).toHaveAttribute('aria-expanded', 'true');
+  const beforeChoice = await currentCanvas();
+  await view.getByRole('option', { name: connectionOptionName('claude-code.sdk') }).click();
+  await expect(
+    view.getByRole('button', { name: agentChipName('claude-code.sdk'), exact: true }),
+  ).toBeVisible();
+  await expect(
+    view.getByRole('textbox', { name: 'Message to the agent', exact: true }).first(),
+  ).toHaveValue('Keep this authored work.');
+  // The chip's one agent.setType is one document commit; the held queue resumes without another gesture.
+  await expect
+    .poll(async () => (await currentCanvas()).entities['node/waiting']?.rev)
+    .toBe(beforeChoice.rev + 1);
+  const chosen = (await currentCanvas()).nodes.find((node) => node.id === 'waiting');
+  expect(chosen?.data).toMatchObject({
+    adapter: 'claude-code',
+    connection: 'claude-code.sdk',
+    queue: [{ id: 'work', message: 'Keep this authored work.' }],
+  });
+  const transcript = view.getByRole('log', { name: 'Transcript', exact: true });
+  await expect(transcript.getByText('Keep this authored work.', { exact: true })).toBeVisible();
+});
+
+test('inserts a template with every role chosen, keeping the current canvas and its existing work', async () => {
+  await addAgentAt('Agent 1', 250, 200);
+  const before = await currentCanvas();
+  const existing = before.nodes.find((node) => node.type === 'agent');
+  if (!existing) throw new Error('The existing agent is missing.');
+  await page.getByRole('button', { name: 'Templates…', exact: true }).click();
+  const gallery = page.getByRole('dialog', { name: 'Templates', exact: true });
+  await gallery.getByRole('button', { name: /^TDD relay/ }).click();
+  await expect(gallery.getByRole('button', { name: 'Create canvas', exact: true })).toBeDisabled();
+  await expect(
+    gallery.getByRole('button', { name: 'Insert into this canvas', exact: true }),
+  ).toBeDisabled();
+  await chooseTemplateAgents(page, 'codex');
+  await gallery
+    .getByRole('combobox', { name: "Implementer's agent", exact: true })
+    .selectOption('claude-code');
+  await gallery
+    .getByRole('combobox', { name: 'How Implementer runs', exact: true })
+    .selectOption('claude-code.sdk');
+  const beforeInsert = await currentCanvas();
+  await gallery.getByRole('button', { name: 'Insert into this canvas', exact: true }).click();
+  await expect(gallery).toHaveCount(0);
+  await expect.poll(async () => (await currentCanvas()).nodes.length).toBe(before.nodes.length + 4);
+  const after = await currentCanvas();
+  expect(after.canvas).toBe(before.canvas);
+  expect(after.nodes.find((node) => node.id === existing.id)).toEqual(existing);
+  const added = after.nodes.filter((node) => !before.nodes.some((old) => old.id === node.id));
+  expect(new Set(added.map((node) => after.entities[`node/${node.id}`]?.rev))).toEqual(
+    new Set([beforeInsert.rev + 1]),
+  );
+  const root = added.find((node) => node.type === 'frame');
+  expect(root?.data.label).toBe('TDD relay');
+  expect(root?.parentId).toBeUndefined();
+  expect(added.map((node) => node.id)).not.toContain('workspace');
+  const agents = added.filter((node) => node.type === 'agent');
+  expect(agents.map((node) => node.data.label)).toEqual(['Tester', 'Implementer', 'Refactorer']);
+  expect(agents.map((node) => node.parentId)).toEqual(agents.map(() => root?.id));
+  for (const agent of agents) {
+    expect(['tester', 'implementer', 'refactorer']).not.toContain(agent.id);
+    expect(agent.data).toMatchObject(
+      agent.data.label === 'Implementer'
+        ? { adapter: 'claude-code', connection: 'claude-code.sdk' }
+        : { adapter: 'codex', connection: 'codex.terminal' },
+    );
+    expect(JSON.stringify(agent.data.queue)).not.toContain('"job":');
+  }
+  await expect(node('Agent 1')).toBeAttached();
+  await expect(node('TDD relay')).toBeVisible();
+});
+
 test('long names and full queues keep ordinary and parent cards at the model’s fixed size', async () => {
   const file = nativePath.join(dir, 'cards.corral');
   const queue = Array.from({ length: 100 }, (_, i) => ({
@@ -30,6 +210,7 @@ test('long names and full queues keep ordinary and parent cards at the model’s
   const agent = (id: string, parent?: string) => ({
     id,
     kind: 'agent',
+    adapter: 'claude-code',
     // Just under the longest a file holds, and far wider than a card.
     label: `${id} ${'A very long name '.repeat(12)}`.slice(0, MAX_LABEL - 1),
     position: { x: 20, y: 70 },
@@ -135,6 +316,16 @@ test.afterEach(async () => {
   expect(problems).toEqual([]);
 });
 
+async function currentCanvas() {
+  return page.evaluate(async () => {
+    const shown = await window.api.windowGet({});
+    if (!shown.ok) throw new Error(shown.error.sentence);
+    const canvas = await window.api.canvasGet({ canvas: shown.value.canvas });
+    if (!canvas.ok) throw new Error(canvas.error.sentence);
+    return canvas.value;
+  });
+}
+
 const pane = () => page.locator('.react-flow__pane');
 const nodes = () => page.locator('.react-flow__node');
 const edges = () => page.locator('.react-flow__edge');
@@ -159,6 +350,7 @@ const selectionActions = () =>
 
 async function createTemplate() {
   const gallery = page.getByRole('dialog', { name: 'Templates' });
+  await chooseTemplateAgents(page, 'claude-code');
   for (const choice of await gallery.getByRole('combobox', { name: /^How / }).all()) {
     const selected = await choice.inputValue();
     if (selected === 'claude-code.terminal') await choice.selectOption('claude-code.sdk');
@@ -197,6 +389,7 @@ async function at(dx: number, dy: number): Promise<Point> {
 async function addAgentAt(label: string, dx: number, dy: number) {
   const p = await at(dx, dy);
   await page.mouse.dblclick(p.x, p.y);
+  await chooseAddedAgent(page, 'claude-code');
   await expect(node(label)).toBeVisible();
   return node(label);
 }
@@ -413,6 +606,7 @@ test('frames a marquee selection, works inside the frame, and ungroups', async (
 
   // Double-clicking the frame's body (here its top-left padding) adds a node inside it.
   await page.mouse.dblclick(grown.x + PADDING / 2, grown.y + HEADER + PADDING / 2);
+  await chooseAddedAgent(page, 'claude-code');
   const c = node('Agent 3');
   await expect(c).toBeVisible();
   const withC = await box(frame);
@@ -474,6 +668,7 @@ test('moves a group like one node: drag it anywhere, and what is inside comes al
   // A group with a parent node moves the same way.
   await titleBar('Group 1').hover();
   await page.getByRole('button', { name: 'Add a parent agent' }).click();
+  await chooseAddedAgent(page, 'claude-code');
   await dragBody(node('Agent 3'), [a, b]);
 });
 
@@ -502,6 +697,7 @@ test("gives a group a parent from the '+' on its top border, then connects and d
   expectNear(await center(plus), topMiddle, 1);
   const boxA = await box(a);
   await plus.click();
+  await chooseAddedAgent(page, 'claude-code');
 
   // The group's new parent node: its card where the '+' was, the group's nodes where they were.
   const parent = node('Agent 4');
@@ -958,15 +1154,16 @@ test('edits a queue in its lane by dragging, and animates the task each queue is
       .getByRole('group', { name: /^Builder: / })
       .evaluateAll((groups) => groups.map((g) => g.getAttribute('aria-label') ?? ''));
   const before = await builder();
-  // The template's test run says what it is to do.
-  const run = 'Builder: exec_command “Run the tests.”';
+  // The template's test run says what it is to do, with the action its shell job maps to.
+  const shell = jobActionName('claude-code', 'shell');
+  const run = `Builder: ${shell} “Run the tests.”`;
   const tests = before.indexOf(run);
   const wait = before.findIndex((label) => label.startsWith('Builder: Wait for'));
   expect(tests).toBeGreaterThan(wait);
 
   // Bring the handle into the scrollable lanes before measuring it: this template need not fit
   // the viewport. Check that the press starts its drag before testing the final persisted order.
-  const grip = view.getByRole('button', { name: 'Move exec_command', exact: true });
+  const grip = view.getByRole('button', { name: `Move ${shell}`, exact: true });
   await grip.evaluate((handle) => {
     handle.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'instant' });
   });
@@ -988,7 +1185,7 @@ test('edits a queue in its lane by dragging, and animates the task each queue is
   // Manual's fake asks permission and holds this task; its stable attention state still pulses.
   await view.getByRole('button', { name: 'Run', exact: true }).click();
   const research = view
-    .getByRole('group', { name: /^Researcher: \/deep-research “/ })
+    .getByRole('group', { name: /^Researcher: .*“Research this question/ })
     .locator('[data-run]');
   await expect(research).toHaveAttribute('data-run', 'asking');
   expect(await research.evaluate((row) => getComputedStyle(row).animationName)).toContain(
@@ -1155,9 +1352,9 @@ test('lines repeats up across lanes, round by round, with ribbons between the st
   // Each competitor's repeat goes round with the judge's: the two sit side by side, level.
   const follows = (lane: string) =>
     view.getByRole('group', { name: `${lane}: Repeat until Judge's repeat ends` });
-  const [claude, codex] = [await box(follows('Claude')), await box(follows('Codex'))];
-  expect(Math.abs(claude.y - codex.y)).toBeLessThanOrEqual(1);
-  expect(codex.x).toBeGreaterThan(claude.x + claude.width);
+  const [a, b] = [await box(follows('A')), await box(follows('B'))];
+  expect(Math.abs(a.y - b.y)).toBeLessThanOrEqual(1);
+  expect(b.x).toBeGreaterThan(a.x + a.width);
   const judging = view.getByRole('group', {
     name: 'Judge: Repeat until the output contains “WINNER” on a line of its own (up to 2 rounds)',
   });
@@ -1165,7 +1362,7 @@ test('lines repeats up across lanes, round by round, with ribbons between the st
 
   // The judge's wait inside its repeat comes after each build inside theirs, a ribbon joining
   // them from the side of one repeat to the side of the other, level with each.
-  const buildTask = follows('Codex').locator('.graph-queue-message');
+  const buildTask = follows('B').locator('.graph-queue-message');
   const builtTask = judging.locator('.graph-queue-wait');
   const build = await box(buildTask);
   const built = await box(builtTask);
@@ -1173,16 +1370,16 @@ test('lines repeats up across lanes, round by round, with ribbons between the st
   const buildEnd = await taskEnd(buildTask);
   expect(built.y).toBeGreaterThanOrEqual(build.y + build.height);
   const ribbon = await box(view.locator(`g[data-link="${builtEnd}>${buildEnd}"] .queues-ribbon`));
-  expect(Math.abs(ribbon.x - (codex.x + codex.width))).toBeLessThanOrEqual(1);
+  expect(Math.abs(ribbon.x - (b.x + b.width))).toBeLessThanOrEqual(1);
   expect(Math.abs(ribbon.x + ribbon.width - (await box(judging)).x)).toBeLessThanOrEqual(1);
   expect(ribbon.y).toBeGreaterThanOrEqual(build.y);
   expect(ribbon.y).toBeLessThan(build.y + build.height);
   expect(ribbon.y + ribbon.height).toBeGreaterThan(built.y);
   expect(ribbon.y + ribbon.height).toBeLessThanOrEqual(built.y + built.height);
-  const claudeBuildEnd = await taskEnd(follows('Claude').locator('.graph-queue-message'));
-  await expect(view.locator(`g[data-link="${builtEnd}>${claudeBuildEnd}"]`)).toHaveCount(2);
-  // Rows run through the repeats: Codex's wait inside its repeat is level with the judge's merge.
-  const scored = await box(follows('Codex').locator('.graph-queue-wait'));
+  const aBuildEnd = await taskEnd(follows('A').locator('.graph-queue-message'));
+  await expect(view.locator(`g[data-link="${builtEnd}>${aBuildEnd}"]`)).toHaveCount(2);
+  // Rows run through the repeats: B's wait inside its repeat is level with the judge's merge.
+  const scored = await box(follows('B').locator('.graph-queue-wait'));
   const merge = await box(view.getByRole('group', { name: /^Judge: Message/ }));
   expect(Math.abs(scored.y - merge.y)).toBeLessThanOrEqual(1);
   // Nothing waits in a loop.
@@ -1428,6 +1625,7 @@ test('double-click works inside the rectangle a marquee leaves around the select
   const between = { x: (boxA.x + boxA.width + boxB.x) / 2, y: (boxA.y + boxA.height + boxB.y) / 2 };
   expectInside({ ...between, width: 0, height: 0 }, await box(rect));
   await page.mouse.dblclick(between.x, between.y);
+  await chooseAddedAgent(page, 'claude-code');
   await expect(node('Agent 3')).toBeVisible();
 });
 

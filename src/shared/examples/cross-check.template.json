@@ -1,6 +1,6 @@
 {
-  "format": "corrallm",
-  "version": 2,
+  "format": "corrallm-template",
+  "version": 1,
   "id": "025199e6-fc9c-44da-8b21-4627eafeba7c",
   "nodes": [
     {
@@ -22,7 +22,6 @@
         "y": 52
       },
       "parent": "workspace",
-      "adapter": "claude-code",
       "queue": [
         {
           "id": "task",
@@ -39,7 +38,6 @@
         "y": 212
       },
       "parent": "workspace",
-      "adapter": "claude-code",
       "queue": [
         {
           "id": "brief",
@@ -47,8 +45,7 @@
         },
         {
           "id": "research",
-          "action": "Workflow",
-          "instruction": "Have subagents look into it from every side (what to limit, the limits to set, how clients are told they hit one), and write what they find to RESEARCH.md."
+          "message": "Have subagents look into it from every side (what to limit, the limits to set, how clients are told they hit one), and write what they find to RESEARCH.md."
         },
         {
           "id": "done",

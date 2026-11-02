@@ -1,3 +1,4 @@
+import { chooseAddedAgent } from './agent-choice';
 import { agentCardName, agentChipName } from './catalog';
 import { dismissStart } from './canvas-actions';
 import { existsSync } from 'node:fs';
@@ -118,6 +119,7 @@ async function createRun(message: string, named: boolean) {
   await page.getByRole('button', { name: 'Choose a project folder' }).click();
   await expect(page.getByRole('button', { name: 'Project folder: shop' })).toBeVisible();
   await page.locator('.react-flow__pane').dblclick({ position: { x: 400, y: 300 } });
+  await chooseAddedAgent(page, 'claude-code');
   await page.locator('.react-flow__node').dblclick();
   await view()
     .getByRole('button', { name: agentChipName('claude-code.terminal'), exact: true })

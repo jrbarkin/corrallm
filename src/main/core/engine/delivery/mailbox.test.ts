@@ -17,6 +17,33 @@ afterEach(() => {
 });
 
 describe('SessionStore', () => {
+  it('keeps a synchronized unchosen endpoint after a previously chosen send', async () => {
+    const { backend } = fakeBackend();
+    const store = new SessionStore(engine, backend);
+    store.sync([{ id: 'a', connection: 'claude-code.sdk' }]);
+    store.send('a', 'claude-code', 'Before');
+    await vi.waitFor(() => {
+      expect(backend.start).toHaveBeenCalledOnce();
+    });
+    store.sync([
+      {
+        id: 'a',
+        connection: undefined,
+        refusal: 'A has no agent chosen yet. Choose one in its settings to run this work.',
+      },
+    ]);
+    store.open('a');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(backend.start).toHaveBeenCalledOnce();
+    expect(store.of('a').entries).toContainEqual(
+      expect.objectContaining({
+        kind: 'notice',
+        text: 'A has no agent chosen yet. Choose one in its settings to run this work.',
+      }),
+    );
+    store.reset();
+  });
+
   it('shows what the run sends in the user’s words as theirs, without taking it for a correction', async () => {
     // An OK's "ask for changes", a repeat's "try this": the run knows which task they are for.
     const { backend, emit, sent } = fakeBackend();
@@ -742,7 +769,7 @@ describe('SessionStore', () => {
     const { backend } = fakeBackend();
     const starting = Promise.withResolvers<null>();
     backend.start.mockReturnValue(starting.promise);
-    const store = new SessionStore(engineCatalog(catalog, 'zed'), backend);
+    const store = new SessionStore(engineCatalog(catalog), backend);
     store.sync([{ id: 'a', connection: 'zed.acp' }]);
     const done = vi.fn();
     store.send('a', 'zed', 'Read @link', done, undefined, undefined, 'queue');

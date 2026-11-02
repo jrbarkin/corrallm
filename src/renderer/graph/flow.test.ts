@@ -1,3 +1,4 @@
+import { catalog } from '../catalog';
 import { expect, it } from 'vitest';
 import { newCanvasId } from '../../shared/canvas';
 import { toRows } from '../../shared/model/rows';
@@ -216,7 +217,7 @@ it('projects grouped frames in parent-relative coordinates without moving their 
   const position = (graph: Graph, name: string) =>
     absolutePosition(nodeOf(graph, name), new Map(graph.nodes.map((n) => [n.id, n])));
   const before = position(read(), 'a');
-  const context = (id: string) => ({ newId: () => id, defaultAdapter: 'claude-code' });
+  const context = (id: string) => ({ catalog: catalog(), newId: () => id });
   doc = group(doc, { nodes: ['a', 'b'], kind: 'frame' }, context('first')).next;
   read();
   doc = group(doc, { nodes: ['c', 'd'], kind: 'frame' }, context('second')).next;

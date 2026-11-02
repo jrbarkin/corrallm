@@ -1,3 +1,4 @@
+import { templateAgents } from './test-template';
 import { legacyDirectories } from './workspaces/test-directories';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -1046,6 +1047,7 @@ export const REAL_FIXTURES: Readonly<Record<OpName, OpFixture>> = {
   'canvas.insertTemplate': {
     valid: [
       {
+        agents: templateAgents(TEMPLATE, 'claude-code'),
         canvas: CANVAS,
         template: TEMPLATE,
         values: { feature: 'Export invoices' },
@@ -1056,20 +1058,34 @@ export const REAL_FIXTURES: Readonly<Record<OpName, OpFixture>> = {
     ],
     fresh: ['roots', 'agents', 'revs'],
     invalid: [
-      { template: 'missing' },
-      { template: TEMPLATE, values: { feature: 1 } },
-      { template: TEMPLATE, values: { feature: 'x'.repeat(MAX_MESSAGE_BYTES + 1) } },
-      { template: TEMPLATE, parent: '' },
-      { template: TEMPLATE, extra: true },
-      { template: TEMPLATE, agents: { planner: 1 } },
-      { template: TEMPLATE, connections: { planner: '' } },
+      { agents: templateAgents('missing', 'claude-code'), template: 'missing' },
       {
+        agents: templateAgents(TEMPLATE, 'claude-code'),
+        template: TEMPLATE,
+        values: { feature: 1 },
+      },
+      {
+        agents: templateAgents(TEMPLATE, 'claude-code'),
+        template: TEMPLATE,
+        values: { feature: 'x'.repeat(MAX_MESSAGE_BYTES + 1) },
+      },
+      { agents: templateAgents(TEMPLATE, 'claude-code'), template: TEMPLATE, parent: '' },
+      { agents: templateAgents(TEMPLATE, 'claude-code'), template: TEMPLATE, extra: true },
+      { template: TEMPLATE, agents: { ...templateAgents(TEMPLATE, 'claude-code'), planner: 1 } },
+      {
+        agents: templateAgents(TEMPLATE, 'claude-code'),
+        template: TEMPLATE,
+        connections: { planner: '' },
+      },
+      {
+        agents: templateAgents(TEMPLATE, 'claude-code'),
         template: TEMPLATE,
         values: Object.fromEntries(Array.from({ length: 129 }, (_, i) => [String(i), 'x'])),
       },
     ],
     meetsRule: {
       'new-agent': {
+        agents: templateAgents(TEMPLATE, 'claude-code'),
         canvas: CANVAS,
         template: TEMPLATE,
         values: {},
@@ -1214,9 +1230,21 @@ export const REAL_FIXTURES: Readonly<Record<OpName, OpFixture>> = {
     ],
     meetsRule: {
       // An agent made around the aide gives it another manager.
-      managers: { canvas: CANVAS, nodes: ['aide'], kind: 'agent', request: request(6) },
+      managers: {
+        adapter: 'claude-code',
+        canvas: CANVAS,
+        nodes: ['aide'],
+        kind: 'agent',
+        request: request(6),
+      },
       // One made around an empty frame changes no manager.
-      'new-agent': { canvas: CANVAS, nodes: ['frame-cap'], kind: 'agent', request: request(29) },
+      'new-agent': {
+        adapter: 'claude-code',
+        canvas: CANVAS,
+        nodes: ['frame-cap'],
+        kind: 'agent',
+        request: request(29),
+      },
     },
   },
   'canvas.ungroup': {
@@ -1238,15 +1266,37 @@ export const REAL_FIXTURES: Readonly<Record<OpName, OpFixture>> = {
     by: Object.fromEntries(
       (['you', 'lead', 'outside-write'] as const).map((party, i) => [
         party,
-        [{ canvas: CANVAS, frame: `frame-${party}`, expect: NO_ITEM, request: request(50 + i) }],
+        [
+          {
+            adapter: 'claude-code',
+            canvas: CANVAS,
+            frame: `frame-${party}`,
+            expect: NO_ITEM,
+            request: request(50 + i),
+          },
+        ],
       ]),
     ),
     fresh: ['revs'],
-    invalid: [{}, { frame: '' }, { frame: 'frame-you', extra: true }],
+    invalid: [
+      {},
+      { adapter: 'claude-code', frame: '' },
+      { adapter: 'claude-code', frame: 'frame-you', extra: true },
+    ],
     meetsRule: {
       // The frame holding the member becomes its manager.
-      managers: { canvas: CANVAS, frame: 'frame-team', request: request(8) },
-      'new-agent': { canvas: CANVAS, frame: 'frame-spare', request: request(33) },
+      managers: {
+        adapter: 'claude-code',
+        canvas: CANVAS,
+        frame: 'frame-team',
+        request: request(8),
+      },
+      'new-agent': {
+        adapter: 'claude-code',
+        canvas: CANVAS,
+        frame: 'frame-spare',
+        request: request(33),
+      },
     },
   },
   'canvas.move': {
@@ -1654,7 +1704,12 @@ export const REAL_FIXTURES: Readonly<Record<OpName, OpFixture>> = {
       },
       managers: {
         canvas: CANVAS,
-        ops: [{ op: 'canvas.group', args: { nodes: ['member'], kind: 'agent' } }],
+        ops: [
+          {
+            op: 'canvas.group',
+            args: { adapter: 'claude-code', nodes: ['member'], kind: 'agent' },
+          },
+        ],
         request: request(86),
       },
       // The last agent of a tree holding work, deleted beside a rename: the whole batch asks you.
@@ -2138,13 +2193,18 @@ export const REAL_FIXTURES: Readonly<Record<OpName, OpFixture>> = {
     by: {
       you: [
         { request: lifetime(1) },
-        { template: TEMPLATE, values: { feature: 'Export CSV' }, request: lifetime(2) },
+        {
+          agents: templateAgents(TEMPLATE, 'claude-code'),
+          template: TEMPLATE,
+          values: { feature: 'Export CSV' },
+          request: lifetime(2),
+        },
         { replace: { canvas: FILED.replaced }, request: lifetime(3) },
       ],
     },
     fresh: ['canvas', 'revs'],
     invalid: [
-      { template: 'nope' },
+      { agents: templateAgents('nope', 'claude-code'), template: 'nope' },
       { values: { feature: 'Export CSV' } },
       { replace: { canvas: 'nope' } },
       { replace: { canvas: CANVAS, discard: 'yes' } },
@@ -2155,7 +2215,11 @@ export const REAL_FIXTURES: Readonly<Record<OpName, OpFixture>> = {
         replace: { canvas: FILED['discard-replace'], discard: true },
         request: lifetime(4),
       },
-      'new-agent': { template: TEMPLATE, request: lifetime(5) },
+      'new-agent': {
+        agents: templateAgents(TEMPLATE, 'claude-code'),
+        template: TEMPLATE,
+        request: lifetime(5),
+      },
     },
   },
   'canvas.open': {

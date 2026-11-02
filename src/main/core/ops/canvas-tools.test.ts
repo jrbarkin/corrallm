@@ -1,3 +1,5 @@
+import { readTemplate } from '../../../shared/model/template-file';
+import { templateAgents } from '../test-template';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -9,7 +11,7 @@ import { EXAMPLES } from '../../../shared/examples';
 import { workspaceOwners } from '../../../shared/model/workspaces';
 import { fromFile, toFile } from '../../../shared/model/file';
 import { arrange } from '../../../shared/model/layout';
-import { CATALOG, DEFAULT_ADAPTER } from '../../sessions/adapters';
+import { CATALOG } from '../../sessions/adapters';
 import { FakeConnector } from '../../sessions/fake';
 import { createCore } from '../core';
 import type { Core } from '../core';
@@ -100,7 +102,7 @@ describe('canvas.insertTemplate', () => {
       {
         template: template.id,
         values: { feature: 'Export invoices' },
-        agents: { builder: 'codex' },
+        agents: { ...templateAgents(template.id, 'claude-code'), builder: 'codex' },
       },
       CALLERS['outside-write'],
     )) as { roots: string[]; agents: string[]; revs: Record<string, number> };
@@ -119,8 +121,8 @@ describe('canvas.insertTemplate', () => {
       expect(node.parentId).toBe(made.roots[0]);
       expect(node.id).toMatch(/^[a-f0-9-]{36}$/);
       expect(node.data.connection).toBe(
-        CATALOG.adapters.find((a) => a.id === (node.data.adapter ?? DEFAULT_ADAPTER))
-          ?.connections[0]?.id,
+        CATALOG.adapters.find((a) => a.id === (node.data.adapter ?? 'claude-code'))?.connections[0]
+          ?.id,
       );
     }
     const planner = agents.find((n) => n.data.label === 'Planner');
@@ -134,7 +136,7 @@ describe('canvas.insertTemplate', () => {
     expect(builder?.data.queue?.[0]).toMatchObject({
       waitFor: [{ agent: planner?.id, item: 'plan' }],
     });
-    expect(fromFile(toFile(doc()), CATALOG, DEFAULT_ADAPTER)).toEqual(doc());
+    expect(fromFile(toFile(doc()), CATALOG)).toEqual(doc());
     const rows = readOnDisk(profile, (disk) =>
       disk.prepare('SELECT entity FROM change WHERE canvas_id=? AND rev=?').all(CANVAS, before + 1),
     );
@@ -149,11 +151,16 @@ describe('canvas.insertTemplate', () => {
     const template = await spec();
     const lead = (await applied(
       'canvas.insertTemplate',
-      { template: template.id, values: { feature: 'Build it' } },
+      {
+        agents: templateAgents(template.id, 'claude-code'),
+        template: template.id,
+        values: { feature: 'Build it' },
+      },
       CALLERS.lead,
     )) as { roots: string[] };
     expect(doc().nodes.find((n) => n.id === lead.roots[0])?.parentId).toBe('lead');
     const yours = (await applied('canvas.insertTemplate', {
+      agents: templateAgents(template.id, 'claude-code'),
       template: template.id,
       values: { feature: 'Your work' },
       parent: lead.roots[0],
@@ -167,6 +174,7 @@ describe('canvas.insertTemplate', () => {
   it('is request-idempotent and gives independent ids to repeated insertions', async () => {
     const template = await spec();
     const args = {
+      agents: templateAgents(template.id, 'claude-code'),
       template: template.id,
       values: {},
       request: '2f1ad1f9-7978-4f49-b7ae-39291affdcf9',
@@ -195,12 +203,13 @@ describe('canvas.insertTemplate', () => {
       if (!template) throw new Error('No template');
       const before = new Set(doc().nodes.map(({ id }) => id));
       const made = (await applied('canvas.insertTemplate', {
-        template: fromFile(template.text, CATALOG, DEFAULT_ADAPTER).id,
+        agents: templateAgents(readTemplate(template.text).id, 'claude-code'),
+        template: readTemplate(template.text).id,
         ...(parent === undefined ? {} : { parent }),
       })) as { roots: string[]; agents: string[] };
       const added = doc().nodes.filter(({ id }) => !before.has(id));
       expect(added).toHaveLength(3);
-      expect(added.map(({ data }) => data.label)).toEqual(['Claude', 'Codex', 'Judge']);
+      expect(added.map(({ data }) => data.label)).toEqual(['A', 'B', 'Judge']);
       expect(made.roots).toEqual(added.map(({ id }) => id));
       expect(made.agents).toEqual(made.roots);
       expect(added.map(({ parentId }) => parentId)).toEqual([parent, parent, parent]);
@@ -217,22 +226,83 @@ describe('canvas.insertTemplate', () => {
     const template = await spec();
     const before = revision();
     for (const [args, code] of [
-      [{ template: crypto.randomUUID(), values: {} }, 'not-found'],
-      [{ template: template.id, values: {}, parent: 'missing' }, 'not-found'],
-      [{ template: template.id, values: { unknown: 'words' } }, 'invalid'],
+      [
+        {
+          agents: templateAgents(crypto.randomUUID(), 'claude-code'),
+          template: crypto.randomUUID(),
+          values: {},
+        },
+        'not-found',
+      ],
+      [
+        {
+          agents: templateAgents(template.id, 'claude-code'),
+          template: template.id,
+          values: {},
+          parent: 'missing',
+        },
+        'not-found',
+      ],
+      [
+        {
+          agents: templateAgents(template.id, 'claude-code'),
+          template: template.id,
+          values: { unknown: 'words' },
+        },
+        'invalid',
+      ],
       // An agent the template lacks is an argument it doesn't take, as canvas.create says.
-      [{ template: template.id, values: {}, agents: { missing: 'codex' } }, 'invalid'],
       [
-        { template: template.id, values: {}, connections: { missing: 'codex.terminal' } },
+        {
+          template: template.id,
+          values: {},
+          agents: { ...templateAgents(template.id, 'claude-code'), missing: 'codex' },
+        },
         'invalid',
       ],
-      [{ template: template.id, values: {}, agents: { builder: 'absent' } }, 'invalid'],
       [
-        { template: template.id, values: {}, connections: { builder: 'codex.app-server' } },
+        {
+          agents: templateAgents(template.id, 'claude-code'),
+          template: template.id,
+          values: {},
+          connections: { missing: 'codex.terminal' },
+        },
         'invalid',
       ],
-      [{ template: template.id, values: { feature: 'x'.repeat(MAX_MESSAGE_BYTES) } }, 'invalid'],
-      [{ canvas: crypto.randomUUID(), template: template.id, values: {} }, 'not-found'],
+      [
+        {
+          template: template.id,
+          values: {},
+          agents: { ...templateAgents(template.id, 'claude-code'), builder: 'absent' },
+        },
+        'invalid',
+      ],
+      [
+        {
+          agents: templateAgents(template.id, 'claude-code'),
+          template: template.id,
+          values: {},
+          connections: { builder: 'codex.app-server' },
+        },
+        'invalid',
+      ],
+      [
+        {
+          agents: templateAgents(template.id, 'claude-code'),
+          template: template.id,
+          values: { feature: 'x'.repeat(MAX_MESSAGE_BYTES) },
+        },
+        'invalid',
+      ],
+      [
+        {
+          agents: templateAgents(template.id, 'claude-code'),
+          canvas: crypto.randomUUID(),
+          template: template.id,
+          values: {},
+        },
+        'not-found',
+      ],
     ] as const) {
       expect(
         await core.call('canvas.insertTemplate', { canvas: CANVAS, ...args }, CALLERS.you),
@@ -246,14 +316,19 @@ describe('canvas.insertTemplate', () => {
     for (let i = 0; i < 2; i++)
       await applied(
         'canvas.insertTemplate',
-        { template: template.id, values: {} },
+        { agents: templateAgents(template.id, 'claude-code'), template: template.id, values: {} },
         CALLERS['outside-write'],
       );
     const before = revision();
     expect(
       await core.call(
         'canvas.insertTemplate',
-        { canvas: CANVAS, template: template.id, values: {} },
+        {
+          agents: templateAgents(template.id, 'claude-code'),
+          canvas: CANVAS,
+          template: template.id,
+          values: {},
+        },
         CALLERS['outside-write'],
       ),
     ).toMatchObject({
@@ -265,6 +340,7 @@ describe('canvas.insertTemplate', () => {
   it('applies explicit connections for you but R11 refuses a token’s non-default connection', async () => {
     const template = await spec();
     const args = {
+      agents: templateAgents(template.id, 'claude-code'),
       canvas: CANVAS,
       template: template.id,
       values: {},
@@ -290,7 +366,11 @@ describe('canvas.setArrange', () => {
         { op: 'canvas.setArrange', args: { on: true } },
         {
           op: 'canvas.insertTemplate',
-          args: { template: template.id, values: { feature: 'Batch work' } },
+          args: {
+            agents: templateAgents(template.id, 'claude-code'),
+            template: template.id,
+            values: { feature: 'Batch work' },
+          },
         },
       ],
     })) as { results: [object, { roots: string[] }]; revs: Record<string, number> };

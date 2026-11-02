@@ -57,7 +57,7 @@ export function stepVerdict(reply: string): boolean | undefined {
 /**
  * The question asked in a connected agent's session about a condition in the user's own words:
  * whether it holds now, answered yes or no. It says it is corrallm's, wherever it shows (the
- * transcript, or Claude Code's own terminal).
+ * transcript, or the CLI's own terminal).
  */
 export function conditionQuestion(condition: string): string {
   return `corrallm asks: is this true now? “${condition.trim()}” Start your answer with yes or no.`;

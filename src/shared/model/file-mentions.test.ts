@@ -32,7 +32,7 @@ describe('native file mentions', () => {
     const connection = catalog.adapters[0]?.connections[0];
     if (!connection) throw new Error('The fixture needs a connection');
     Object.assign(connection, { fileMentions: true });
-    const engine = engineCatalog(catalog, 'zed');
+    const engine = engineCatalog(catalog);
     expect(engine.fileMentions('zed.acp')).toBe(true);
     expect(engine.fileMentions('zed.free')).toBe(false);
     expect(engine.fileMentions('unavailable')).toBe(false);

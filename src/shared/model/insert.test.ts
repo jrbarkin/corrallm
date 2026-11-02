@@ -1,10 +1,10 @@
+import { compileExample } from './test-template';
 import { describe, expect, it } from 'vitest';
 
 import { EXAMPLES } from '../examples';
 import { TEST_CATALOG } from '../test-model';
 import type { CanvasId } from '../canvas';
 import type { AgentData, AgentNode, CanvasDocument, CanvasNode } from './canvas';
-import { fromFile } from './file';
 import { absolutePosition, CARD_SIZE, autosize } from './geometry';
 import { insert } from './insert';
 import type { QueueItem, QueueRepeat, Until } from './queue';
@@ -118,7 +118,7 @@ describe('template roots', () => {
   it.each(EXAMPLES)(
     'preserves $name workspace owners and root order, nesting roots only when a parent is given',
     (example) => {
-      const source = fromFile(example.text, TEST_CATALOG, 'claude-code');
+      const source = compileExample(example, TEST_CATALOG, 'claude-code');
       const parent = frame('parent');
       for (const into of [undefined, parent.id]) {
         const changed = insert(

@@ -5,7 +5,7 @@ import { ipcErrorMessage } from '../ipc-error';
 import { SearchPicker } from '../search/SearchPicker';
 
 /**
- * /resume for an Agent SDK agent, above its composer: the conversations Claude Code kept for the
+ * /resume for an Agent SDK agent, above its composer: the conversations the CLI kept for the
  * project folder (but the agent's own), most recent first, to type to search and pick from, each
  * with when it last changed, its size and its branch ("Fix the login bug · 3 days ago · 1.2 MB ·
  * main"). The one picked opens in this agent (`onPick`); Esc closes it.

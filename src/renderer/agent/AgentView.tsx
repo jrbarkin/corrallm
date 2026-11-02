@@ -1,3 +1,7 @@
+import { agentEndpoint, endpointRefusal } from '../../shared/model/catalog';
+import type { AgentData } from '../../shared/model/canvas';
+import { connectionOf } from '../graph/agents';
+import { agentAdapter } from '../graph/agents';
 import type { ArgsOf } from '../../shared/api/registry';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { flushSync } from 'react-dom';
@@ -16,7 +20,7 @@ import type {
 } from '../../shared/session';
 import { adapterAccent, adapterOf, isTerminal, catalog } from '../catalog';
 import { connectionIn } from '../../shared/adapter';
-import { actionsOf, adapterCli, DEFAULT_AGENT } from '../graph/agents';
+import { actionsOf, adapterCli } from '../graph/agents';
 import type { AgentConnection } from '../graph/agents';
 import { editsOf } from '../graph/edits';
 import type { QueueEdits } from '../graph/edits';
@@ -164,7 +168,7 @@ export function AgentView({
   onSwitch: (id: string, from: DOMRect) => void;
   onRename: (label: string) => void;
   /** How it runs: a real connection to the CLI. */
-  connection: AgentConnection;
+  connection: AgentConnection | undefined;
   /** The folder the canvas's agents work in, if one was chosen. */
   project: ProjectFolder | null;
   /** Where a Terminal agent's terminal comes from (the main process). */
@@ -396,7 +400,7 @@ export function AgentView({
   const label = node.data.label;
   const { problem: titleProblem, ...title } = useLabel(label, onRename);
   const name = label || 'Unnamed agent';
-  const agent = node.data.adapter ?? DEFAULT_AGENT;
+  const agent = agentAdapter(node.data);
   /** The chat's first message, which names it in the queue: of the conversation it is on now. */
   const firstMessage = chatStart(session.entries, adapterOf(connection));
   /** The lines its edits added and removed, this session. */
@@ -431,7 +435,7 @@ export function AgentView({
       setOffer({ text, ...(images?.length ? { images } : {}) });
       return;
     }
-    if (ask?.reply && !(connection !== 'unavailable' && isCommand(text, session.commands))) {
+    if (ask?.reply && !(connection !== undefined && isCommand(text, session.commands))) {
       own.onDecide(ask.item.id, {
         reply: text,
         ...(images === undefined || images.length === 0 ? {} : { images }),
@@ -504,6 +508,7 @@ export function AgentView({
                 onOpen={onOpenSettings}
               />
               <AgentChip
+                initiallyOpen={agent === undefined}
                 adapter={agent}
                 connection={connection}
                 onChange={onAgent}
@@ -555,11 +560,16 @@ export function AgentView({
                   }}
                 />
               )}
-              {connection === 'unavailable' ? (
+              {connection === undefined || agent === undefined ? (
                 <section className="agent-session agent-unavailable" aria-label="Session">
-                  <p className="agent-session-note">{sessionNote(agent, connection, project)}</p>
+                  <p className="agent-session-note">{sessionNote(node.data, project)}</p>
+                  <textarea
+                    aria-label="Message"
+                    disabled
+                    placeholder={sessionNote(node.data, project)}
+                  />
                   <button type="button" onClick={onOpenSettings}>
-                    Choose a connected agent
+                    Choose an agent
                   </button>
                 </section>
               ) : isTerminal(connection) ? (
@@ -568,7 +578,7 @@ export function AgentView({
                   cli={adapterCli(agent)}
                   backend={terminal}
                   session={session}
-                  note={sessionNote(agent, connection, project)}
+                  note={sessionNote(node.data, project)}
                   onStart={controls.open}
                   onUnqueue={controls.unqueue}
                   onPromptReply={controls.replyPrompt}
@@ -602,7 +612,7 @@ export function AgentView({
                   <Transcript
                     session={session}
                     agentName={name}
-                    note={sessionNote(agent, connection, project)}
+                    note={sessionNote(node.data, project)}
                     answers={{
                       onPromptReply: controls.replyPrompt,
                       onSwitch: (to) => {
@@ -864,18 +874,16 @@ function TerminalOffer({
 }
 
 /** What the empty transcript says about how the session runs, and what it needs. */
-function sessionNote(
-  agent: AdapterId,
-  connection: AgentConnection,
-  project: ProjectFolder | null,
-): string {
-  const cli = adapterCli(agent);
-  if (connection === 'unavailable') {
-    return `${cli} has no connector yet. Choose Claude Code or Codex in Agent settings.`;
-  }
-  const how = isTerminal(connection)
-    ? 'in a terminal'
-    : `through ${connection === 'claude-code.sdk' ? 'the Agent SDK' : 'its app server'}`;
+function sessionNote(data: AgentData, project: ProjectFolder | null): string {
+  const endpoint = agentEndpoint(data, catalog());
+  const reason = endpointRefusal(endpoint, data.label || 'Unnamed agent');
+  if (reason !== undefined) return reason;
+  const cli = adapterCli(agentAdapter(data));
+  const connection = connectionIn(catalog(), connectionOf(data))?.connection;
+  const how =
+    connection?.view === 'terminal'
+      ? 'in a terminal'
+      : `through ${connection?.label ?? 'its connection'}`;
   return project === null
     ? `Choose a project folder for this canvas (top left of the canvas) to run ${cli} in it, ${how}.`
     : `${cli} works in ${project.name}, ${how}.`;

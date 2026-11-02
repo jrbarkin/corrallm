@@ -1,3 +1,4 @@
+import { chooseAddedAgent } from './agent-choice';
 import { agentChipName, connectionOptionName } from './catalog';
 import { dismissStart } from './canvas-actions';
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
@@ -100,6 +101,7 @@ test('reconnects to a viewed session and its pending prompt without reopening or
   await page.getByRole('button', { name: 'Choose a project folder' }).click();
   await expect(page.getByRole('button', { name: 'Project folder: shop' })).toBeVisible();
   await page.locator('.react-flow__pane').dblclick({ position: { x: 400, y: 300 } });
+  await chooseAddedAgent(page, 'claude-code');
   let view = await openSdkAgent('Agent 1');
   await expect(view.getByRole('button', { name: /^Model: / })).toBeVisible();
   // The protocol fake asks before running a command in its default (Manual) mode: a pending
@@ -162,6 +164,7 @@ test('runs a Claude agent through the Agent SDK: a turn, a prompt, completions, 
   await expect(page.getByRole('button', { name: 'Project folder: shop' })).toBeVisible();
 
   await page.locator('.react-flow__pane').dblclick({ position: { x: 400, y: 300 } });
+  await chooseAddedAgent(page, 'claude-code');
   const view = await openSdkAgent('Agent 1');
   // The session started: the CLI's models are offered.
   await expect(view.getByRole('button', { name: 'Model: Default (recommended)' })).toBeVisible();
@@ -231,6 +234,7 @@ test('opens a link in a reply in the browser once main has asked, and not again 
       .then(({ asked, opened }) => ({ asked, opened }));
   await page.getByRole('button', { name: 'Choose a project folder' }).click();
   await page.locator('.react-flow__pane').dblclick({ position: { x: 400, y: 300 } });
+  await chooseAddedAgent(page, 'claude-code');
   const view = await openSdkAgent('Agent 1');
   const composer = view.getByRole('textbox', { name: 'Message Agent 1' });
   await composer.fill('markdown, please');
@@ -268,6 +272,7 @@ test('opens another conversation of the project folder in an agent with /resume'
 
   // Agent 1 has a conversation.
   await page.locator('.react-flow__pane').dblclick({ position: { x: 300, y: 300 } });
+  await chooseAddedAgent(page, 'claude-code');
   const first = await connect('Agent 1');
   await first.getByRole('textbox', { name: 'Message Agent 1' }).fill('Remember the shop');
   await first.getByRole('textbox', { name: 'Message Agent 1' }).press('Enter');
@@ -278,6 +283,7 @@ test('opens another conversation of the project folder in an agent with /resume'
 
   // Agent 2 can't open it while Agent 1's session runs it: two agents never share a conversation.
   await page.locator('.react-flow__pane').dblclick({ position: { x: 600, y: 420 } });
+  await chooseAddedAgent(page, 'claude-code');
   let second = await connect('Agent 2');
   let composer = second.getByRole('textbox', { name: 'Message Agent 2' });
   await composer.fill('/resume');
@@ -330,6 +336,7 @@ test('shows an agent’s MCP servers with /mcp, and a form one of them asks for'
   }, folder);
   await page.getByRole('button', { name: 'Choose a project folder' }).click();
   await page.locator('.react-flow__pane').dblclick({ position: { x: 400, y: 300 } });
+  await chooseAddedAgent(page, 'claude-code');
   const view = await openSdkAgent('Agent 1');
   // The session started: the CLI's models are offered (before that the button says "Default model"),
   // and /mcp asks a session that is running.
@@ -381,6 +388,7 @@ test('rewinds the code and the conversation to before a message', async () => {
   }, folder);
   await page.getByRole('button', { name: 'Choose a project folder' }).click();
   await page.locator('.react-flow__pane').dblclick({ position: { x: 400, y: 300 } });
+  await chooseAddedAgent(page, 'claude-code');
   const view = await openSdkAgent('Agent 1');
   await expect(view.getByRole('button', { name: /^Model: / })).toBeVisible();
   const composer = view.getByRole('textbox', { name: 'Message Agent 1' });
@@ -427,6 +435,7 @@ test('stops background work, requires an explicit keyboard approval, and sets th
   }, folder);
   await page.getByRole('button', { name: 'Choose a project folder' }).click();
   await page.locator('.react-flow__pane').dblclick({ position: { x: 400, y: 300 } });
+  await chooseAddedAgent(page, 'claude-code');
   const view = await openSdkAgent('Agent 1');
   const composer = view.getByRole('textbox', { name: 'Message Agent 1' });
   const transcript = view.getByRole('log', { name: 'Transcript' });

@@ -46,7 +46,7 @@ describe('starting a fresh native conversation', () => {
           id: 'a',
           connection,
           role: 'Revised role',
-          settings: { [cli]: { model: 'new-model', effort: 'low' } },
+          settings: { [cli ?? 'claude-code']: { model: 'new-model', effort: 'low' } },
         },
       ]);
       await store.fresh('a');

@@ -780,7 +780,7 @@ export class Engines {
   ): Promise<SessionEvent> {
     const { result } = event;
     const catalog = this.#deps.engineCatalog;
-    const backend = catalog.usageBackendOf({ adapter: catalog.adapterOf(connection), connection });
+    const backend = catalog.usageBackendOf({ connection });
     if (backend === undefined || result.status !== 'failed' || result.reason !== 'usage-limit') {
       return event;
     }

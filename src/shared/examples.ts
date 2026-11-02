@@ -1,27 +1,26 @@
-import crossCheck from './examples/cross-check.corral?raw';
-import fanOut from './examples/fan-out.corral?raw';
-import headToHead from './examples/head-to-head.corral?raw';
-import featureCrew from './examples/feature-crew.corral?raw';
-import releaseChecks from './examples/release-checks.corral?raw';
-import reviewLoop from './examples/review-loop.corral?raw';
-import reviewPanel from './examples/review-panel.corral?raw';
-import specFirst from './examples/spec-first.corral?raw';
-import tddRelay from './examples/tdd-relay.corral?raw';
-import teamLead from './examples/team-lead.corral?raw';
+import crossCheck from './examples/cross-check.template.json?raw';
+import fanOut from './examples/fan-out.template.json?raw';
+import headToHead from './examples/head-to-head.template.json?raw';
+import featureCrew from './examples/feature-crew.template.json?raw';
+import releaseChecks from './examples/release-checks.template.json?raw';
+import reviewLoop from './examples/review-loop.template.json?raw';
+import reviewPanel from './examples/review-panel.template.json?raw';
+import specFirst from './examples/spec-first.template.json?raw';
+import tddRelay from './examples/tdd-relay.template.json?raw';
+import teamLead from './examples/team-lead.template.json?raw';
 import type { Example } from './templates';
-import { canvasIdOf } from './canvas';
+import { readTemplate } from './model/template-file';
 export type { Example } from './templates';
 
 /**
- * A canvas to start from, in the Templates gallery: a `.corral` file's text. Its `fields` are the
- * blanks (`{{key}}`) in its agents' names, messages and conditions, filled in before it opens
- * (templates.ts); without any, it opens as it is.
+ * A shipped definition in the Templates gallery. Its `fields` name blanks (`{{key}}`) in its
+ * roles, messages and conditions, filled after the core compiles every chosen endpoint's jobs.
  */
 export const EXAMPLES: readonly Example[] = [
   {
     name: 'TDD relay',
     description:
-      'Codex writes the tests and checks they fail first; Claude works and runs them until they pass, asking you after three rounds; Codex refactors, with the tests run at every hand-off. All three roles share one relay worktree. After claudex.',
+      'A tester writes the tests and checks they fail first; an implementer works and runs them until they pass, asking you after three rounds; a refactorer improves the code, with the tests run at every hand-off. All three roles share one relay worktree.',
     text: tddRelay,
     fields: [
       {
@@ -36,7 +35,7 @@ export const EXAMPLES: readonly Example[] = [
   {
     name: 'Head to head',
     description:
-      'Claude and Codex commit competing versions in separate managed worktrees; a judge reads their generated refs, commits feedback in its own tree, and reports the winner for review. Two rounds at most, ending early on a clear winner. Requires core workspace context; never merges automatically. After claudex-compete.',
+      'Two contestants commit competing versions in separate managed worktrees; a judge reads their generated refs, commits feedback in its own tree, and reports the winner for review. Two rounds at most, ending early on a clear winner. Requires core workspace context; never merges automatically.',
     text: headToHead,
     fields: [
       {
@@ -50,7 +49,7 @@ export const EXAMPLES: readonly Example[] = [
   {
     name: 'Spec first',
     description:
-      "A planner writes the spec before any code, and the plan once you approve the spec; a builder writes the plan's tests, checks they fail, then makes them pass; a reviewer checks the result against the spec. All three share a Spec and implementation worktree. Any agents: pick one for each role, or leave it to the default.",
+      "A planner writes the spec before any code, and the plan once you approve the spec; a builder writes the plan's tests, checks they fail, then makes them pass; a reviewer checks the result against the spec. All three share a Spec and implementation worktree. Choose an agent for each role.",
     text: specFirst,
     fields: [
       {
@@ -113,5 +112,5 @@ export const EXAMPLES: readonly Example[] = [
 
 /** The shipped file to open or insert after the gallery chose its metadata by id. */
 export function exampleOf(id: string): Example | undefined {
-  return EXAMPLES.find((example) => canvasIdOf(example.text) === id);
+  return EXAMPLES.find((example) => readTemplate(example.text).id === id);
 }

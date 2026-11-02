@@ -1,3 +1,4 @@
+import { endpointRefusal } from '../shared/model/catalog';
 import { Prompt, checkPromptAnswer } from '../shared/model/prompts';
 import { promptNeed, settledPrompt } from '../shared/model/prompt-views';
 import type { LiveOutcome } from '../shared/model/prompt-views';
@@ -31,6 +32,16 @@ export function canvasRuntime(
   let nodes = document.nodes;
   const canvas = document.id;
   const lookups = runCatalog();
+  const conversationFor = (connection: string | undefined): { conversation?: string } => {
+    const adapter = lookups.adapterOf(connection);
+    return adapter === undefined ? {} : { conversation: adapter };
+  };
+  const chosenAdapter = (agent: string): string => {
+    const adapter = lookups.adapterOf(connectionOf(agent));
+    if (adapter === undefined) throw new Error('Choose an agent in its settings.');
+    return adapter;
+  };
+
   let run: Run = { running: false, agents: {} };
   const sessions: Record<string, Session> = {};
   const messages = new Map<string, MessageView>();
@@ -262,7 +273,7 @@ export function canvasRuntime(
           ...event,
           kind: 'user',
           reached: true,
-          conversation: lookups.adapterOf(connection),
+          ...conversationFor(connection),
         });
         break;
       }
@@ -351,7 +362,7 @@ export function canvasRuntime(
               ...item,
               kind: 'user',
               reached: true,
-              conversation: lookups.adapterOf(connection),
+              ...conversationFor(connection),
             });
           else if ('id' in item) {
             const { type, ...entry } = item;
@@ -363,10 +374,25 @@ export function canvasRuntime(
   });
   async function open(agent: string, again = false) {
     const connection = connectionOf(agent);
+    if (connection === undefined) {
+      const node = nodes.find((one) => one.id === agent);
+      const reason =
+        node?.type === 'agent'
+          ? endpointRefusal(lookups.endpointOf(node.data), node.data.label)
+          : 'Choose an agent.';
+      put(agent, {
+        kind: 'notice',
+        id: crypto.randomUUID(),
+        level: 'error',
+        text: reason ?? 'Choose an agent.',
+      });
+      refused.add(agent);
+      return false;
+    }
     if (!again && opened.get(agent) === connection) return !refused.has(agent);
     const node = nodes.find((n) => n.id === agent);
     const settings =
-      node?.type === 'agent' ? (node.data.settings?.[lookups.adapterOf(connection)] ?? {}) : {};
+      node?.type === 'agent' ? (node.data.settings?.[chosenAdapter(agent)] ?? {}) : {};
     const options: SessionOptions = {
       connection,
       model: settings.model ?? null,
@@ -486,7 +512,7 @@ export function canvasRuntime(
         commit(
           AgentOps.setSettings(
             { ...document, nodes },
-            { agent, adapter: lookups.adapterOf(connectionOf(agent)), change },
+            { agent, adapter: chosenAdapter(agent), change },
           ).next,
         );
         return result();
@@ -540,7 +566,7 @@ export function canvasRuntime(
       core.reply(op, async (raw) => {
         const { agent } = OPS[op].input.parse(raw);
         if (op === 'session.newConversation') {
-          await replies.fresh(agent, lookups.adapterOf(connectionOf(agent)));
+          await replies.fresh(agent, chosenAdapter(agent));
           setSession(agent, { ...NEW_SESSION, entries: [], queued: [] });
         } else await replies.close(agent);
         await open(agent, true);
@@ -553,7 +579,7 @@ export function canvasRuntime(
         AgentOps.setConnection(
           { ...document, nodes },
           { agent, connection },
-          { catalog: catalog(), defaultAdapter: lookups.defaultAdapter },
+          { catalog: catalog() },
         ).next,
       );
       await open(agent, true);

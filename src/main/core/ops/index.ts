@@ -1,4 +1,4 @@
-import type { AdapterId, Catalog } from '../../../shared/adapter';
+import type { Catalog } from '../../../shared/adapter';
 import type { ApiStatus } from '../../../shared/api/ops/settings';
 import type { ArgsOf, ProducedOf } from '../../../shared/api/registry';
 import type { OpName } from '../../../shared/api/surface';
@@ -73,8 +73,6 @@ export interface OpServices {
   app: { name: string; version: string };
   /** What every adapter declares. */
   catalog: Catalog;
-  /** The adapter agents run when none is chosen. */
-  defaultAdapter: AdapterId;
   settings: Pick<Settings, 'get' | 'apiPort' | 'setDefaultAdapter'>;
   /** Whether corrallm's MCP server listens now, and where, as its owner says (core/endpoint.ts). */
   api: () => ApiStatus;
@@ -158,7 +156,7 @@ export function implementations(services: OpServices): Implementations {
     ...topicsOps(services),
     ...appOps(services),
     ...catalogOps(services),
-    ...templatesOps(services),
+    ...templatesOps(),
     ...projectOps(services),
     ...worktreeOps(services),
     ...branchOps(services),

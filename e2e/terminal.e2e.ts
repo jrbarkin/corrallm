@@ -1,3 +1,4 @@
+import { chooseAddedAgent, chooseTemplateAgents } from './agent-choice';
 import { adapterName, agentCardName, agentChipName, connectionOptionName } from './catalog';
 import { dismissStart, openNeeds } from './canvas-actions';
 import { randomUUID } from 'node:crypto';
@@ -262,6 +263,7 @@ test('a new canvas agent defaults to real Claude Code in its Terminal, without a
   await chooseProject();
   // A new canvas agent runs Claude Code directly in its default native Terminal.
   await page.locator('.react-flow__pane').dblclick({ position: { x: 400, y: 300 } });
+  await chooseAddedAgent(page, 'claude-code');
   await page.locator('.react-flow__node').dblclick();
   const view = page.getByRole('dialog', { name: 'Agent 1' });
   await view
@@ -443,6 +445,7 @@ test('a template’s Claude agents run in their terminals, asked once whether to
   await page.getByRole('button', { name: 'Start from a template…' }).click();
   const gallery = page.getByRole('dialog', { name: 'Templates' });
   await gallery.getByRole('button', { name: /^Independent cross-check/ }).click();
+  await chooseTemplateAgents(page, 'claude-code');
   for (const role of ['Builder', 'Checker']) {
     await expect(gallery.getByRole('combobox', { name: `How ${role} runs` })).toHaveValue(
       'claude-code.terminal',

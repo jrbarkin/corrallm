@@ -1,4 +1,5 @@
-import type { AdapterId } from '../adapter';
+import { agentEndpoint } from './catalog';
+import type { AdapterId, Catalog } from '../adapter';
 import type { AgentData, CanvasDocument, CanvasNode, Link, Position } from './canvas';
 import {
   absolutePosition,
@@ -26,10 +27,10 @@ export interface Created {
   select?: string[];
 }
 
-/** The caller supplies ids and the default adapter; a view may supply its box sizes. */
+/** The caller supplies ids and the catalog; a view may supply its box sizes. */
 export interface StructureContext {
   newId: () => string;
-  defaultAdapter: AdapterId;
+  catalog: Catalog;
   sizing?: Sizing<CanvasNode>;
 }
 
@@ -98,6 +99,9 @@ export function spawnAgent(
   const nodes = boxes(doc.nodes, context);
   const source = nodes.find((node) => node.id === from);
   if (source?.type !== 'agent') return { next: doc, result: {} };
+  const endpoint = agentEndpoint(source.data, context.catalog);
+  if (endpoint.kind !== 'known')
+    throw new TypeError(`Choose ${source.data.label}'s agent before spawning another.`);
   const byId = indexById(nodes);
   const parentIds = new Set(nodes.map((node) => node.parentId));
   const footprint = (node: CanvasNode) => {
@@ -136,8 +140,8 @@ export function spawnAgent(
       position: { x: spot.x - origin.x, y: spot.y - origin.y },
       data: {
         label: nextLabel(nodes, 'Agent'),
-        ...newAgent(source.data.adapter ?? context.defaultAdapter, context.newId),
-        ...(source.data.connection === undefined ? {} : { connection: source.data.connection }),
+        ...newAgent(endpoint.adapter, context.newId),
+        connection: endpoint.connection,
         ...(source.data.settings === undefined ? {} : { settings: source.data.settings }),
         // An exact copy of the chain and handoff settings you gave its source (B11a C1, R11).
         ...(source.data.fallback === undefined ? {} : { fallback: source.data.fallback }),
@@ -256,7 +260,17 @@ export function groupMembers(nodes: readonly CanvasNode[], ids: readonly string[
 /** Groups explicit nodes, preserving their absolute positions. */
 export function group(
   doc: CanvasDocument,
-  { nodes: ids, kind }: { nodes: readonly string[]; kind: CanvasNode['type'] },
+  {
+    nodes: ids,
+    kind,
+    adapter,
+    connection,
+  }: {
+    nodes: readonly string[];
+    kind: CanvasNode['type'];
+    adapter?: AdapterId | undefined;
+    connection?: string | undefined;
+  },
   context: StructureContext,
 ): Built<Created> {
   const nodes = boxes(doc.nodes, context);
@@ -285,7 +299,8 @@ export function group(
             data: {
               label: nextLabel(nodes, 'Agent'),
               color: nextGroupColor(nodes),
-              ...newAgent(context.defaultAdapter, context.newId),
+              ...newAgent(chosenAdapter(adapter), context.newId),
+              ...(connection === undefined ? {} : { connection }),
             },
           },
           parentId,
@@ -315,7 +330,7 @@ export function group(
 /** Turns a frame into an agent parent, keeping its existing id and children. */
 export function addParent(
   doc: CanvasDocument,
-  { id }: { id: string },
+  { id, adapter, connection }: { id: string; adapter: AdapterId; connection?: string },
   context: StructureContext,
 ): Built<Created> {
   const original = boxes(doc.nodes, context);
@@ -329,7 +344,8 @@ export function addParent(
           data: {
             ...frame.data,
             label: nextLabel(doc.nodes, 'Agent'),
-            ...newAgent(context.defaultAdapter, context.newId),
+            ...newAgent(chosenAdapter(adapter), context.newId),
+            ...(connection === undefined ? {} : { connection }),
           },
         }
       : node,
@@ -484,4 +500,9 @@ function near(a: Position, b: Position): boolean {
 
 function sameEnds(a: Ends, b: Ends): boolean {
   return a.source === b.source && a.target === b.target;
+}
+
+function chosenAdapter(adapter: AdapterId | undefined): AdapterId {
+  if (adapter === undefined) throw new TypeError('Choose an adapter for the new agent.');
+  return adapter;
 }

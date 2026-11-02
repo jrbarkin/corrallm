@@ -28,7 +28,7 @@ const Values = z
   .refine((values) => Object.keys(values).length <= 128, 'At most 128 template fields')
   .meta({ maxProperties: 128 });
 const Agents = z
-  .record(TemplateRole, CatalogId.nullable())
+  .record(TemplateRole, CatalogId)
   .refine((agents) => Object.keys(agents).length <= MAX_OP_NODES, 'Too many template roles')
   .meta({ maxProperties: MAX_OP_NODES });
 const Connections = z
@@ -118,7 +118,7 @@ export const canvasOps = {
       'Inserts a shipped template’s own top-level nodes without a wrapper, returning roots in ' +
       'template order and its agent ids. Every inserted node gets a fresh id. ' +
       'Name a template from templates.list; values fill its fields, agents chooses adapters by ' +
-      'template role id (null: the default adapter), and connections chooses their connections. ' +
+      'template role id (every role required), and connections chooses their connections. ' +
       'Missing connections use each adapter’s first. Filled queue text records its author. ' +
       'The roots go under parent when given; a lead inserts inside its own agent unless parent ' +
       'names another node in its team.',
@@ -126,7 +126,7 @@ export const canvasOps = {
       canvas: OpCanvas,
       template: z.uuid(),
       values: Values.default({}),
-      agents: Agents.default({}),
+      agents: Agents,
       connections: Connections.default({}),
       parent: NodeId.optional(),
     }),
@@ -198,6 +198,8 @@ export const canvasOps = {
       canvas: OpCanvas,
       nodes: Nodes.min(1),
       kind: z.enum(['frame', 'agent']),
+      adapter: CatalogId.optional(),
+      connection: CatalogId.optional(),
     }),
     output: z.strictObject({ id: NodeId }),
   }),
@@ -210,7 +212,12 @@ export const canvasOps = {
   'canvas.addParent': define('canvas.addParent', {
     summary:
       'Turns a frame into an agent parent, keeping its id and children and adding a fresh queue.',
-    input: z.strictObject({ canvas: OpCanvas, frame: NodeId }),
+    input: z.strictObject({
+      canvas: OpCanvas,
+      frame: NodeId,
+      adapter: CatalogId,
+      connection: CatalogId.optional(),
+    }),
     output: z.strictObject({ id: AgentId }),
   }),
   'canvas.move': define('canvas.move', {

@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { NeedsItem } from '../../../shared/model/needs';
 import { CanvasMemory } from '../../memory';
-import { CATALOG, DEFAULT_ADAPTER } from '../../sessions/adapters';
+import { CATALOG } from '../../sessions/adapters';
 import { FakeConnector } from '../../sessions/fake';
 import type { Caller, OutsideCaller } from '../caller';
 import { Documents } from '../canvas/documents';
@@ -99,7 +99,6 @@ async function start({ file = true }: { file?: boolean } = {}): Promise<{
       store: made.store,
       memory,
       catalog: CATALOG,
-      defaultAdapter: DEFAULT_ADAPTER,
     });
     documents.create(CANVAS, 'you');
     await documents.change(CANVAS, {

@@ -1,3 +1,4 @@
+import { agentEndpoint } from './catalog';
 import { adapterIn, connectionIn, ID_PATTERN, isStartMode } from '../adapter';
 import type { AdapterId, Catalog, ConnectionId } from '../adapter';
 import { CANVAS_VERSION, canvasHeader } from '../canvas';
@@ -41,8 +42,8 @@ import type {
  *     "links": [{ "agents": [id, id], "dots"?: [from, to] }] }
  *
  * A node's position is relative to its parent's, as the model keeps it (canvas.ts). An agent's
- * adapter is the agent it runs (the default agent's when omitted, as a template may leave it: whoever
- * reads the file says which that is), and its connection
+ * adapter names the agent it runs; when absent only a known connection's owner identifies it,
+ * otherwise it remains unchosen. Its connection describes
  * how it runs (its adapter's first when omitted); where it runs (the project folder) is not in the
  * file, which main remembers per file instead. An adapter or connection the catalog lacks opens as
  * Not connected, and is saved back as it was, with that adapter's settings (checked for shape
@@ -191,22 +192,13 @@ function fileNodeOf(n: CanvasNode): FileNode {
 
 /**
  * Why `node` couldn't be read from its canvas's file as it is, against `catalog`, an agent naming
- * no adapter running `defaultAdapter`: what fromFile reads of a node (its id, label, position,
+ * its own endpoint: what fromFile reads of a node (its id, label, position,
  * adapter, connection, settings, role, colour and queue; not what it sits in, nor its links).
  * Undefined if it could.
  */
-export function nodeFault(
-  node: CanvasNode,
-  catalog: Catalog,
-  defaultAdapter: AdapterId,
-): string | undefined {
+export function nodeFault(node: CanvasNode, catalog: Catalog): string | undefined {
   try {
-    readNode(
-      JSON.parse(JSON.stringify(fileNodeOf(node))) as unknown,
-      `node "${node.id}"`,
-      catalog,
-      defaultAdapter,
-    );
+    readNode(JSON.parse(JSON.stringify(fileNodeOf(node))) as unknown, `node "${node.id}"`, catalog);
     return undefined;
   } catch (error) {
     return error instanceof Error ? error.message : String(error);
@@ -214,15 +206,10 @@ export function nodeFault(
 }
 
 /**
- * The canvas a `.corral` file holds, read against `catalog`, an agent that names no adapter running
- * `defaultAdapter`. Throws, saying what is wrong and where, for anything that is not a canvas this
+ * The canvas a `.corral` file holds, read against `catalog` and each agent's own endpoint. Throws, saying what is wrong and where, for anything that is not a canvas this
  * version can read.
  */
-export function fromFile(
-  text: string,
-  catalog: Catalog,
-  defaultAdapter: AdapterId,
-): CanvasDocument {
+export function fromFile(text: string, catalog: Catalog): CanvasDocument {
   let file: unknown;
   try {
     file = JSON.parse(text);
@@ -237,9 +224,7 @@ export function fromFile(
       return value;
     }) ?? false;
 
-  const nodes = list(file.nodes, 'nodes', (value, where) =>
-    readNode(value, where, catalog, defaultAdapter),
-  );
+  const nodes = list(file.nodes, 'nodes', (value, where) => readNode(value, where, catalog));
   const byId = new Map<string, FileNode>();
   for (const [i, node] of nodes.entries()) {
     if (byId.has(node.id)) throw new Error(`nodes[${String(i)}].id: "${node.id}" is used twice`);
@@ -323,12 +308,7 @@ function toCanvasNode({
   };
 }
 
-function readNode(
-  value: unknown,
-  where: string,
-  catalog: Catalog,
-  defaultAdapter: AdapterId,
-): FileNode {
+function readNode(value: unknown, where: string, catalog: Catalog): FileNode {
   const node = record(value, where);
   const id = name(node.id, `${where}.id`);
   if (id.length > MAX_NODE_ID) {
@@ -347,15 +327,28 @@ function readNode(
     if (kind === 'group') throw new Error(`${at}: a group has no connection`);
     const named = catalogId(v, at, 'a connection');
     const owner = connectionIn(catalog, named)?.adapter.id;
-    const runs = adapter ?? defaultAdapter;
-    if (owner !== undefined && owner !== runs) {
+    const runs = adapter;
+    if (runs !== undefined && owner !== undefined && owner !== runs) {
       throw new Error(`${at}: "${named}" is a connection of ${owner}, not of ${runs}`);
     }
     return named;
   });
   const settings = optional(node.settings, `${where}.settings`, (v, at) => {
     if (kind === 'group') throw new Error(`${at}: a group has no settings`);
-    return readSettings(v, at, catalog, adapter ?? defaultAdapter, connection);
+    const endpoint = agentEndpoint(
+      {
+        ...(adapter === undefined ? {} : { adapter }),
+        ...(connection === undefined ? {} : { connection }),
+      },
+      catalog,
+    );
+    return readSettings(
+      v,
+      at,
+      catalog,
+      endpoint.kind === 'known' ? endpoint.adapter : undefined,
+      connection,
+    );
   });
   const role = optional(node.role, `${where}.role`, (v, at) => {
     if (kind === 'group') throw new TypeError(`${at}: a group has no role`);
@@ -425,7 +418,7 @@ function readSettings(
   value: unknown,
   where: string,
   catalog: Catalog,
-  adapter: AdapterId,
+  adapter: AdapterId | undefined,
   connection: ConnectionId | undefined,
 ): FileNode['settings'] {
   const all: Partial<Record<AdapterId, AgentSettings>> = {};
@@ -454,7 +447,7 @@ function readSettings(
     const own = key === adapter ? (connection ?? known?.connections[0]?.id) : undefined;
     const runs = known?.connections.some((one) => one.id === own) ? own : undefined;
     const mode = optional(settings.mode, `${at}.mode`, (v, there) => {
-      if (!known) return catalogId(v, there, 'a mode');
+      if (!known || adapter === undefined) return catalogId(v, there, 'a mode');
       const starts = known.modes
         .map((one) => one.id)
         .filter((one) => isStartMode(catalog, key, runs, one));
@@ -496,6 +489,7 @@ function readQueue(value: unknown, where: string): QueueItem[] {
 
 function readItem(value: unknown, where: string): QueueItem {
   const item = record(value, where);
+  if ('job' in item) throw new Error(`${where}.job belongs only in a shipped template`);
   if ('waitFor' in item) return readWait(item, where);
   if ('delay' in item) return readDelay(item, where);
   if ('approve' in item) {
@@ -532,6 +526,7 @@ function author(item: Record<string, unknown>, where: string): { by?: PartyId } 
 /** A step or a message: what an if-then holds. */
 function readStep(value: unknown, where: string): QueueStep | QueueMessage {
   const item = record(value, where);
+  if ('job' in item) throw new Error(`${where}.job belongs only in a shipped template`);
   if ('if' in item) throw new Error(`${where}: an if-then cannot hold another if-then`);
   if ('waitFor' in item) throw new Error(`${where}: an if-then cannot hold a wait`);
   if ('delay' in item) throw new Error(`${where}: an if-then cannot hold a delay`);
@@ -584,6 +579,7 @@ function readRepeat(item: Record<string, unknown>, where: string): QueueRepeat {
 /** What a repeat holds: a step, a message, a wait or a delay. */
 function readRepeated(value: unknown, where: string): RepeatedItem {
   const item = record(value, where);
+  if ('job' in item) throw new Error(`${where}.job belongs only in a shipped template`);
   if ('if' in item) throw new Error(`${where}: a repeat cannot hold an if-then`);
   if ('repeat' in item) throw new Error(`${where}: a repeat cannot hold a repeat`);
   if ('approve' in item) throw new Error(`${where}: a repeat cannot hold an OK`);

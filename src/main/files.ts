@@ -6,7 +6,7 @@ import { setImmediate } from 'node:timers/promises';
 import { SAFE_GIT_ENV, SAFE_GIT_OPTIONS } from './git';
 
 /*
- * The files of a project folder, for the composer's @-mentions (as Claude Code completes
+ * The files of a project folder, for the composer's @-mentions (as the CLI completes
  * "@src/ma" to "@src/main/"): the files git knows of (tracked, and untracked but not ignored),
  * or, outside a git repository, the folder's files found by walking it. Folders are offered too,
  * ending in "/". The renderer names its canvas and query: the core knows the folder.

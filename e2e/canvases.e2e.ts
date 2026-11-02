@@ -41,7 +41,9 @@ async function fixture(name: string, label: string) {
       format: 'corrallm',
       version: 2,
       id: newCanvasId(),
-      nodes: [{ id: 'agent', kind: 'agent', label, position: { x: 300, y: 200 } }],
+      nodes: [
+        { id: 'agent', kind: 'agent', adapter: 'claude-code', label, position: { x: 300, y: 200 } },
+      ],
       links: [],
     }),
   );

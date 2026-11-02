@@ -95,3 +95,58 @@ test('Start opens over the canvas, starts an installed agent, reopens from the d
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test('a default chosen in Add is kept across restart, used only for new agents, and cleared in Start', async () => {
+  const profile = await mkdtemp(path.join(tmpdir(), 'corrallm-default-agent-'));
+  const options = { profile, env: { CORRALLM_FAKE_SESSIONS: '1' } };
+  let running = await launchApp(options);
+  let closed = false;
+  try {
+    let page = await running.app.firstWindow();
+    const initialStart = page.getByRole('dialog', { name: 'Start a session', exact: true });
+    await expect(initialStart.getByText('No default agent: corrallm asks each time')).toBeVisible();
+    await initialStart.getByRole('button', { name: 'Close Start a session', exact: true }).click();
+    await page.locator('.react-flow__pane').dblclick({ position: { x: 300, y: 240 } });
+    const chooser = page.getByRole('dialog', { name: 'Choose an agent', exact: true });
+    await chooser.getByRole('button', { name: 'Choose…', exact: true }).click();
+    await chooser.getByRole('option', { name: adapterName('codex'), exact: true }).click();
+    await expect(chooser.getByText(`Default agent: ${adapterName('codex')}`)).toBeVisible();
+    await expect(chooser.getByRole('button', { name: 'Add', exact: true })).toBeDisabled();
+    await expect(page.locator('.react-flow__node-agent')).toHaveCount(0);
+    await chooser.getByRole('button', { name: 'Cancel', exact: true }).click();
+    await page.getByRole('button', { name: 'Start a session', exact: true }).click();
+    const shownStart = page.getByRole('dialog', { name: 'Start a session', exact: true });
+    await expect(shownStart.getByText(`Default agent: ${adapterName('codex')}`)).toBeVisible();
+    for (const adapter of ['claude-code', 'codex'])
+      await expect(
+        shownStart.getByRole('button', { name: `Start ${adapterName(adapter)}`, exact: true }),
+      ).toBeVisible();
+    await running.close();
+    closed = true;
+    running = await launchApp(options);
+    closed = false;
+    page = await running.app.firstWindow();
+    const start = page.getByRole('dialog', { name: 'Start a session', exact: true });
+    await expect(start.getByText(`Default agent: ${adapterName('codex')}`)).toBeVisible();
+    await start.getByRole('button', { name: 'Close Start a session', exact: true }).click();
+    await page.locator('.react-flow__pane').dblclick({ position: { x: 300, y: 240 } });
+    const agent = page.locator('.react-flow__node-agent');
+    await expect(agent).toHaveCount(1);
+    await expect(agent).toHaveAttribute('aria-label', agentCardName('Agent 1', 'codex.terminal'));
+    await expect(page.getByRole('dialog', { name: 'Choose an agent', exact: true })).toHaveCount(0);
+    await page.getByRole('button', { name: 'Start a session', exact: true }).click();
+    await start.getByRole('button', { name: 'Clear', exact: true }).click();
+    await expect(start.getByText('No default agent: corrallm asks each time')).toBeVisible();
+    await expect(agent).toHaveAttribute('aria-label', agentCardName('Agent 1', 'codex.terminal'));
+    await expect(agent).toHaveCount(1);
+    await start.getByRole('button', { name: 'Close Start a session', exact: true }).click();
+    await page.locator('.react-flow__pane').dblclick({ position: { x: 600, y: 400 } });
+    const asked = page.getByRole('dialog', { name: 'Choose an agent', exact: true });
+    await expect(asked).toBeVisible();
+    await asked.getByRole('button', { name: 'Cancel', exact: true }).click();
+    await expect(agent).toHaveCount(1);
+  } finally {
+    if (!closed) await running.close();
+    await rm(profile, { recursive: true, force: true });
+  }
+});

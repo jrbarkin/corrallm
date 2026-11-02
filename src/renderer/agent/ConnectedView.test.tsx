@@ -1529,6 +1529,9 @@ describe('a connected agent', () => {
       },
     );
     expect(transcript.getByRole('separator', { name: 'Conversation cleared' })).toBeTruthy();
+    expect(
+      transcript.getByText('Conversation cleared · The agent starts afresh from here'),
+    ).toBeTruthy();
     expect(transcript.getByText('Hi there')).toBeTruthy();
   });
 

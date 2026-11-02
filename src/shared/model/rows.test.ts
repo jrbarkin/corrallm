@@ -1,6 +1,6 @@
+import { compileExample } from './test-template';
 import { describe, expect, it } from 'vitest';
 
-import { CANVAS_VERSION } from '../canvas';
 import type { CanvasId } from '../canvas';
 import { TEST_CATALOG } from '../test-model';
 import { EXAMPLES } from '../examples';
@@ -275,12 +275,10 @@ describe('toRows and fromRows', () => {
 
   it('read back every shipped template as it was read from its file, and writes it so', () => {
     for (const example of EXAMPLES) {
-      const document = fromFile(example.text, TEST_CATALOG, 'claude-code');
+      const document = compileExample(example, TEST_CATALOG, 'claude-code');
       const read = fromRows(document.id, toRows(document));
       expect(read, example.name).toEqual(document);
-      expect(toFile(read), example.name).toBe(
-        example.text.replace('"version": 2', `"version": ${String(CANVAS_VERSION)}`),
-      );
+      expect(toFile(read), example.name).toBe(toFile(document));
     }
   });
 
@@ -289,7 +287,7 @@ describe('toRows and fromRows', () => {
     expect(read).toEqual(everything);
     expect(toFile(read)).toBe(toFile(everything));
     // Its file holds an adapter no build has: read with a catalog that has it, as written.
-    expect(toFile(fromRows(ID, toRows(fromFile(toFile(read), TEST_CATALOG, 'claude-code'))))).toBe(
+    expect(toFile(fromRows(ID, toRows(fromFile(toFile(read), TEST_CATALOG))))).toBe(
       toFile(everything),
     );
   });
@@ -378,7 +376,7 @@ describe('toRows and fromRows', () => {
 describe('rowsFault', () => {
   it('finds nothing in a canvas its rows hold: every shipped template, and everything a canvas may hold', () => {
     for (const example of EXAMPLES) {
-      expect(rowsFault(fromFile(example.text, TEST_CATALOG, 'claude-code')), example.name).toBe(
+      expect(rowsFault(compileExample(example, TEST_CATALOG, 'claude-code')), example.name).toBe(
         undefined,
       );
     }
@@ -723,7 +721,7 @@ describe('diffRows by reference', () => {
 
   it('diffs every shipped template’s edits as it would by value', () => {
     for (const example of EXAMPLES) {
-      const document = fromFile(example.text, TEST_CATALOG, 'claude-code');
+      const document = compileExample(example, TEST_CATALOG, 'claude-code');
       const before = toRows(document);
       const [first] = document.nodes;
       const agent = document.nodes.find((node) =>

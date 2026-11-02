@@ -36,7 +36,7 @@ export interface SessionDriver {
   /** Starts a turn; `done` hears when it ends (true if it was interrupted, or failed). */
   start(turn: Turn, done: DriverDone): void;
   /** Passes on the user's answer to the prompt `id`, once it is complete. */
-  /** Interrupts the turn going on, if any, as Escape does in Claude Code. */
+  /** Interrupts the turn going on, if any. */
   stop(): void;
   /** The user switched mode, model or effort: the store has already recorded it. */
   setMode(mode: Mode): void;

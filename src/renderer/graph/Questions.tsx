@@ -7,7 +7,7 @@ import type { AskChoice } from '../../shared/model/run-words';
 /** Who asks, labelled on a card: a button that opens that agent. */
 interface Asker {
   name: string;
-  type: AdapterId;
+  type: AdapterId | undefined;
   onOpen: () => void;
 }
 

@@ -1,6 +1,6 @@
 {
-  "format": "corrallm",
-  "version": 2,
+  "format": "corrallm-template",
+  "version": 1,
   "id": "8150e630-f601-4abe-afae-e93bbf6aa197",
   "nodes": [
     {
@@ -22,7 +22,6 @@
         "y": 52
       },
       "parent": "workspace",
-      "adapter": "claude-code",
       "queue": [
         {
           "id": "plan",
@@ -48,7 +47,6 @@
         "y": 172.5
       },
       "parent": "workspace",
-      "adapter": "claude-code",
       "color": 1,
       "queue": [
         {
@@ -93,8 +91,7 @@
         "x": 20,
         "y": 88.5
       },
-      "parent": "lead",
-      "adapter": "codex"
+      "parent": "lead"
     },
     {
       "id": "backend",
@@ -104,8 +101,7 @@
         "x": 210,
         "y": 88.5
       },
-      "parent": "lead",
-      "adapter": "claude-code"
+      "parent": "lead"
     },
     {
       "id": "tester",

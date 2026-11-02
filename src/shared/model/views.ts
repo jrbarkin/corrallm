@@ -51,7 +51,7 @@ export interface RunView extends Omit<
 /** The single summary DTO, matching session.get (entries travel on the per-agent topic). */
 export interface SessionSummary {
   readonly agent: string;
-  readonly connection: ConnectionId;
+  readonly connection: ConnectionId | null;
   /** Where it is in the fallback chain you set, and whether corrallm switches it (B11a C11). */
   readonly fallback: ReadonlyData<FallbackView> | null;
   /** Its handoff: when its latest was kept, how long, and its state (B11a C11); no text. */
@@ -175,7 +175,7 @@ export function runView(
 
 export function sessionView(
   agent: AgentId,
-  connection: ConnectionId,
+  connection: ConnectionId | undefined,
   session: Session,
   paused = false,
   previous?: SessionView,
@@ -185,7 +185,7 @@ export function sessionView(
   const last = session.entries.findLast((entry) => entry.kind === 'user');
   const summary: SessionSummary = {
     agent,
-    connection,
+    connection: connection ?? null,
     fallback,
     handoff,
     status: session.status,

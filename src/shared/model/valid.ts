@@ -1,5 +1,6 @@
+import { agentEndpoint } from './catalog';
 import { adapterIn } from '../adapter';
-import type { AdapterId, Catalog } from '../adapter';
+import type { Catalog } from '../adapter';
 import type { CanvasDocument, CanvasNode } from './canvas';
 import { nodeFault } from './file';
 import { agentName } from './queries';
@@ -28,7 +29,6 @@ export function editFault(
   next: CanvasDocument,
   touched: Touched,
   catalog: Catalog,
-  defaultAdapter: AdapterId,
 ): string | undefined {
   const nodes = new Map(next.nodes.map((node) => [node.id, node]));
   const read = new Set<string>();
@@ -53,7 +53,7 @@ export function editFault(
   }
   for (const id of read) {
     const node = nodes.get(id);
-    const fault = node && nodeFault(node, catalog, defaultAdapter);
+    const fault = node && nodeFault(node, catalog);
     if (fault) return `That change can’t be kept: ${fault}.`;
   }
   for (const [id, ids] of written) {
@@ -61,7 +61,7 @@ export function editFault(
     if (node?.type !== 'agent') continue;
     for (const item of itemsOf(node.data.queue ?? [])) {
       if (!ids.has(item.id)) continue;
-      const fault = itemFault(next.nodes, node, item, catalog, defaultAdapter);
+      const fault = itemFault(next.nodes, node, item, catalog);
       if (fault) return fault;
     }
   }
@@ -74,17 +74,14 @@ function itemFault(
   owner: CanvasNode,
   item: QueueItem,
   catalog: Catalog,
-  defaultAdapter: AdapterId,
 ): string | undefined {
   const agentOf = (id: string) => {
     const node = nodes.find((one) => one.id === id);
     return node?.type === 'agent' ? node : undefined;
   };
   if ('action' in item) {
-    const adapter = adapterIn(
-      catalog,
-      (owner.type === 'agent' ? owner.data.adapter : undefined) ?? defaultAdapter,
-    );
+    const endpoint = owner.type === 'agent' ? agentEndpoint(owner.data, catalog) : undefined;
+    const adapter = endpoint?.kind === 'known' ? adapterIn(catalog, endpoint.adapter) : undefined;
     if (adapter && !adapter.actions.some(({ name }) => name === item.action)) {
       return `${adapter.name} declares no action "${item.action}", so ${agentName(nodes, owner.id)} can’t take that step (${item.id}).`;
     }

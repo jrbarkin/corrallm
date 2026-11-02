@@ -4,7 +4,7 @@ import { OPS } from '../../../shared/api/registry';
 import { SURFACE } from '../../../shared/api/surface';
 import type { CanvasDocument } from '../../../shared/model/canvas';
 import type { Message } from '../../../shared/model/messages';
-import { CATALOG, DEFAULT_ADAPTER } from '../../sessions/adapters';
+import { CATALOG } from '../../sessions/adapters';
 import { createDispatcher } from '../call';
 import type { OpContext } from '../call';
 import type { Proposal, Settlement } from '../canvas/proposals';
@@ -88,7 +88,7 @@ it.each(['canvas.delete', 'canvas.batch'] as const)(
         },
         implementations: {
           ...registry.implementations,
-          ...canvasOps({ catalog: CATALOG, defaultAdapter: DEFAULT_ADAPTER }),
+          ...canvasOps({ catalog: CATALOG }),
           ...batchOps(),
           ...replyOps({
             stalled: { items: () => [], take: () => undefined },

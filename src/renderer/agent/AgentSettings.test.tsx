@@ -11,7 +11,7 @@ import type { AgentSettings, SettingsOptions } from '../../shared/session';
 import type { AgentConnection } from '../graph/agents';
 import * as AgentOps from '../../shared/model/agent-ops';
 import { catalog } from '../catalog';
-import { DEFAULT_AGENT } from '../graph/agents';
+
 import type { CanvasId } from '../../shared/canvas';
 import type { AgentNode } from '../../shared/model/canvas';
 import { AgentSettingsPanel, AgentSettingsSummary } from './AgentSettings';
@@ -27,7 +27,7 @@ const agent = (data: Partial<AgentNode['data']> = {}): AgentNode => ({
   id: 'a',
   type: 'agent',
   position: { x: 0, y: 0 },
-  data: { label: 'Reviewer', ...data },
+  data: { adapter: 'claude-code', label: 'Reviewer', ...data },
 });
 const choices: SettingsOptions = {
   models: [{ value: 'opus', label: 'Opus', efforts: [{ value: 'low', label: 'Low' }] }],
@@ -68,7 +68,7 @@ function Editor({
     );
   };
   const changeAgent = (next: AdapterId, connection: AgentConnection) => {
-    const context = { catalog: catalog(), defaultAdapter: DEFAULT_AGENT };
+    const context = { catalog: catalog() };
     setNode((current) => {
       const typed = AgentOps.setType(asDoc(current), { agent: current.id, adapter: next }, context);
       const connected = AgentOps.setConnection(

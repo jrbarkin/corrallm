@@ -8,7 +8,7 @@ import type { CanvasId } from '../../../shared/canvas';
 import type { CanvasDocument } from '../../../shared/model/canvas';
 import { CanvasMemory, conversationsIn, PROJECT_WORKSPACE } from '../../memory';
 import { RunJournal } from '../../run-journal';
-import { CATALOG, DEFAULT_ADAPTER } from '../../sessions/adapters';
+import { CATALOG } from '../../sessions/adapters';
 import { Documents } from '../canvas/documents';
 import { Proposals } from '../canvas/proposals';
 import { FileReviews } from '../canvas/reviews';
@@ -125,7 +125,6 @@ async function keepReference(): Promise<void> {
       store,
       memory,
       catalog: CATALOG,
-      defaultAdapter: DEFAULT_ADAPTER,
     });
     documents.create(CANVAS, 'you');
     await commitDocument(documents, CANVAS, DOCUMENT);
@@ -248,7 +247,6 @@ async function readThrough(store: Store) {
     store,
     memory,
     catalog: CATALOG,
-    defaultAdapter: DEFAULT_ADAPTER,
   });
   const messages = new MessageStore(CANVAS, new MessageTable(store, memory), () => 2000);
   await messages.load();

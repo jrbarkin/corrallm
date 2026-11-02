@@ -1,10 +1,10 @@
+import { pickTemplateAgents } from '../test-agent-choice';
 import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { api } from '../api/client';
 import { newCanvasId } from '../../shared/canvas';
 import { EXAMPLES } from '../../shared/examples';
 import { templateInfo } from '../../shared/templates';
-import { catalog } from '../catalog';
 import { fakeCanvas } from '../test-canvas';
 import { fakeSessions } from '../test-sessions';
 import { expectOneOp } from '../test-api';
@@ -18,7 +18,7 @@ vi.mock('../terminal/screen', async () => ({
 const disposals: (() => void)[] = [];
 beforeEach(() => {
   vi.spyOn(api, 'templatesList').mockResolvedValue({
-    items: EXAMPLES.map((example) => templateInfo(example, catalog(), 'claude-code')),
+    items: EXAMPLES.map((example) => templateInfo(example)),
   });
   vi.spyOn(api, 'catalogInstalled').mockResolvedValue({ 'claude-code': true, codex: false });
 });
@@ -29,12 +29,15 @@ afterEach(() => {
   });
   vi.restoreAllMocks();
 });
-function setup() {
+function setup(preference: string | null = null) {
   const sessions = fakeSessions();
   const canvas = fakeCanvas(
     { id: newCanvasId(), arrange: false, nodes: [], links: [] },
     sessions.replies,
   );
+  const settings = canvas.core.state('settings');
+  if (!settings) throw new Error('No settings fixture');
+  canvas.core.snapshot('settings', { ...settings.state, defaultAdapter: preference });
   sessions.replies.installed.mockResolvedValue({ 'claude-code': true, codex: false });
   canvas.core.respond('catalog.installed', { 'claude-code': true, codex: false });
   disposals.push(() => {
@@ -159,6 +162,7 @@ it('a new canvas reopens Start with no folder, in one create', async () => {
   expect(next.getByRole('button', { name: 'Choose a project folder' })).toBeTruthy();
   expect(screen.queryByRole('button', { name: 'Project folder: Old' })).toBeNull();
 });
+
 it('a template chosen from Start creates the canvas in one op', async () => {
   const { canvas } = setup();
   const view = await start();
@@ -166,13 +170,15 @@ it('a template chosen from Start creates the canvas in one op', async () => {
   if (!template) throw new Error('Missing test template');
   await events.click(await view.findByRole('button', { name: /^Independent cross-check/ }));
   const gallery = within(await screen.findByRole('dialog', { name: 'Templates' }));
+
+  pickTemplateAgents();
   await events.click(gallery.getByRole('button', { name: 'Create canvas' }));
   await waitFor(() => {
     expect(canvas.core.operations).toEqual([
       {
         op: 'canvas.create',
         args: expect.objectContaining({
-          template: templateInfo(template, catalog(), 'claude-code').id,
+          template: templateInfo(template).id,
         }) as unknown,
       },
     ]);
@@ -284,3 +290,36 @@ it.each(['The canvas was refused.', 'Showing the canvas was cancelled.'])(
     expect(screen.getByRole('dialog', { name: 'Start a session' })).toBeTruthy();
   },
 );
+
+it('sets a default from Start without adding or starting an agent, keeping every Start button', async () => {
+  const { canvas, sessions } = setup();
+  const view = await start();
+  await events.click(view.getByRole('button', { name: 'Choose…' }));
+  await events.click(view.getByRole('option', { name: 'Codex' }));
+  expectOneOp(canvas.core, 'settings.set', { defaultAdapter: 'codex' });
+  expect(view.getByText('Default agent: Codex')).toBeTruthy();
+  expect(view.getByRole('button', { name: 'Start Claude Code' })).toBeTruthy();
+  expect(view.getByRole('button', { name: 'Start Codex' })).toBeTruthy();
+  expect(canvas.document.nodes).toEqual([]);
+  expect(sessions.replies.start).not.toHaveBeenCalled();
+});
+
+it('prefills a template opened from Start with the known default and still requires every role', async () => {
+  setup('codex');
+  const view = await start();
+  await events.click(await view.findByRole('button', { name: 'Independent cross-check' }));
+  const gallery = within(await screen.findByRole('dialog', { name: 'Templates' }));
+  for (const role of ['Builder', 'Checker']) {
+    expect(
+      gallery.getByRole<HTMLSelectElement>('combobox', { name: `${role}'s agent` }).value,
+    ).toBe('codex');
+    expect(
+      gallery.getByRole<HTMLSelectElement>('combobox', { name: `How ${role} runs` }).value,
+    ).toBe('codex.terminal');
+  }
+  expect(gallery.getByRole('button', { name: 'Create canvas' })).toHaveProperty('disabled', false);
+  await events.change(gallery.getByRole('combobox', { name: "Builder's agent" }), {
+    target: { value: '' },
+  });
+  expect(gallery.getByRole('button', { name: 'Create canvas' })).toHaveProperty('disabled', true);
+});

@@ -149,7 +149,7 @@ describe('queue operations', () => {
       },
       { id: 'ok', approve: 'Review', by: 'agent:b' },
     ]);
-    expect(fromFile(toFile(before), TEST_CATALOG, 'claude-code')).toEqual(before);
+    expect(fromFile(toFile(before), TEST_CATALOG)).toEqual(before);
   });
   it('leaves your text with no author: yours is written as none, and read as none', () => {
     const before = frozen(items);
@@ -174,9 +174,7 @@ describe('queue operations', () => {
     expect(queue(retargeted.next)[2]).toEqual({ ...items[2], target: 'b' });
     // A file can claim anything: one saying you wrote it says what saying nothing says.
     const claimed = toFile(doc([{ id: 'x', message: 'Claimed', by: 'you' }]));
-    expect(queue(fromFile(claimed, TEST_CATALOG, 'claude-code'))).toEqual([
-      { id: 'x', message: 'Claimed' },
-    ]);
+    expect(queue(fromFile(claimed, TEST_CATALOG))).toEqual([{ id: 'x', message: 'Claimed' }]);
   });
 });
 
@@ -679,5 +677,5 @@ it('writes a newly authored item in the same form that reopening it writes', () 
     () => 'new',
   ).next;
   const text = toFile(changed);
-  expect(toFile(fromFile(text, TEST_CATALOG, 'claude-code'))).toBe(text);
+  expect(toFile(fromFile(text, TEST_CATALOG))).toBe(text);
 });

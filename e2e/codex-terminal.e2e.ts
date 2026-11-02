@@ -1,3 +1,4 @@
+import { chooseAddedAgent } from './agent-choice';
 import { adapterName, agentCardName, agentChipName } from './catalog';
 import { dismissStart, openNeeds } from './canvas-actions';
 import { randomUUID } from 'node:crypto';
@@ -203,6 +204,7 @@ test('runs Codex itself in a terminal in the project folder, and follows its tur
   await chooseProject();
   // An agent, run as Codex in a Terminal from its chip.
   await page.locator('.react-flow__pane').dblclick({ position: { x: 400, y: 300 } });
+  await chooseAddedAgent(page, 'claude-code');
   await page.locator('.react-flow__node').dblclick();
   const view = page.getByRole('dialog', { name: 'Agent 1' });
   await view

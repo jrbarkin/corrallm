@@ -100,7 +100,7 @@ const AgentRun = z.strictObject({
   refused: z
     .strictObject({
       agent: AgentId,
-      connection: CatalogId,
+      connection: CatalogId.nullable(),
       text: z.string(),
       switchTo: CatalogId.optional(),
       kind: z.literal('unknown-action').optional(),
@@ -156,7 +156,7 @@ export const ModelChoice = z.strictObject({
 });
 export const SessionSummarySchema = z.strictObject({
   agent: z.string(),
-  connection: z.string(),
+  connection: z.string().nullable(),
   // B11a C11: where the agent is in the fallback chain you set, and whether corrallm switches it.
   fallback: FallbackViewSchema.nullable(),
   // B11a C11: its handoff: when its latest was kept, how long, and its state; never its text.

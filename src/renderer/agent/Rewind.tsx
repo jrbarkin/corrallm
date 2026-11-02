@@ -13,7 +13,7 @@ export interface RewindPoint {
 
 /**
  * Rewinding an Agent SDK agent to before one of the user's messages, above its composer, as
- * Claude Code's Esc Esc does: which message (when not picked already, with "Rewind to here"), then
+ * the CLI's Esc Esc does: which message (when not picked already, with "Rewind to here"), then
  * what it would restore, previewed ("Restores src/cart.ts (+4 −10)", and that the message and
  * what followed go, the message back in the box to edit), and the choice: code and conversation,
  * the conversation, or the code (the code only where files changed and can be restored), or

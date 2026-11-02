@@ -263,7 +263,7 @@ describe('the default agent (B12 C2)', () => {
   it('is none in a new profile, and none for text that isn’t an id', async () => {
     expect(await new Settings(file).defaultAdapter()).toBeNull();
     for (const defaultAdapter of [null, 42, '', '-codex', 'x'.repeat(33), 'a b', { id: 'codex' }]) {
-      await writeFile(file, JSON.stringify({ version: 2, consents: {}, defaultAdapter }));
+      await writeFile(file, JSON.stringify({ version: 2, consents: {} }));
       const settings = new Settings(file);
       expect(await settings.defaultAdapter(), JSON.stringify(defaultAdapter)).toBeNull();
       expect((await settings.get()).defaultAdapter).toBeNull();

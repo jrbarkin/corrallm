@@ -1,3 +1,4 @@
+import { agentEndpoint, endpointRefusal } from '../../shared/model/catalog';
 import { existsSync } from 'node:fs';
 import { readFile, realpath, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
@@ -47,7 +48,7 @@ import { upgradeIdentities } from './workspaces/discovery';
 import { WorkspaceChanges } from './workspaces/rebind';
 import type { WorktreeRecord } from './workspaces/store';
 import { RunJournal } from '../run-journal';
-import { ADAPTERS, CATALOG, DEFAULT_ADAPTER, isConversationId } from '../sessions/adapters';
+import { ADAPTERS, CATALOG, isConversationId } from '../sessions/adapters';
 import type { Conversations, OptionsReader } from '../sessions/adapter';
 import type { Connector } from '../sessions/connector';
 import { createConnectors, createConversations, createOptions } from '../sessions/connectors';
@@ -511,7 +512,7 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     store,
     memory,
     catalog: CATALOG,
-    defaultAdapter: DEFAULT_ADAPTER,
+
     reviews,
     workspaces: planner,
     baselineChanged: (canvas) => {
@@ -742,7 +743,9 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
         (node) => node.id === agentId,
       );
       if (node?.type !== 'agent') throw new Error('That agent is not on this canvas.');
-      return node.data.adapter ?? DEFAULT_ADAPTER;
+      const endpoint = agentEndpoint(node.data, CATALOG);
+      if (endpoint.kind !== 'known') throw new Error(endpointRefusal(endpoint, node.data.label));
+      return endpoint.adapter;
     },
     directories,
     memory,
@@ -1088,7 +1091,7 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
   });
   const engines: Engines = new Engines({
     processes: children,
-    engineCatalog: engineCatalog(CATALOG, DEFAULT_ADAPTER),
+    engineCatalog: engineCatalog(CATALOG),
     sessions,
     projects,
     directories,
@@ -1149,7 +1152,7 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
   // It alone, beside canvas/commit.ts, commits to a document (Documents.change), as corrallm.
   const fallback: FallbackService = new FallbackService({
     catalog: CATALOG,
-    defaultAdapter: DEFAULT_ADAPTER,
+
     canvas: executing,
     documents,
     sessions,
@@ -1343,7 +1346,6 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     gate,
     proposals,
     catalog: CATALOG,
-    defaultAdapter: DEFAULT_ADAPTER,
   });
   const sessionViews = new SessionViews({
     inspect: async (canvas, agent) => {
@@ -1442,7 +1444,7 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
           topics,
           app: config.app,
           catalog: CATALOG,
-          defaultAdapter: DEFAULT_ADAPTER,
+
           directories,
           files,
           settings,
@@ -1486,11 +1488,10 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
           lifecycle,
           proposals,
           catalog: CATALOG,
-          defaultAdapter: DEFAULT_ADAPTER,
+
           refusal: (document, call) =>
             refusalOf(document, call, changeRules, {
               catalog: CATALOG,
-              defaultAdapter: DEFAULT_ADAPTER,
             }),
         }),
       },
