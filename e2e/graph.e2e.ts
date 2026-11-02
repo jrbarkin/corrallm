@@ -985,12 +985,12 @@ test('edits a queue in its lane by dragging, and animates the task each queue is
   );
   await expect.poll(builder).toEqual(expected);
 
-  // Run: the task each agent is on pulses; the Reviewer is held at its wait.
+  // Manual's fake asks permission and holds this task; its stable attention state still pulses.
   await view.getByRole('button', { name: 'Run', exact: true }).click();
   const research = view
     .getByRole('group', { name: /^Researcher: \/deep-research “/ })
     .locator('[data-run]');
-  await expect(research).toHaveAttribute('data-run', 'running');
+  await expect(research).toHaveAttribute('data-run', 'asking');
   expect(await research.evaluate((row) => getComputedStyle(row).animationName)).toContain(
     'run-pulse',
   );
