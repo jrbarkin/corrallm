@@ -93,6 +93,111 @@ it('names exactly one Dockerfile source for an archived image context', async ()
   );
 });
 
+it.each(['1/2', '2/2'])(
+  'forwards e2e shard %s and quoted Playwright arguments into the build container',
+  async (shard) => {
+    const { env, commands } = await fixture();
+    const pattern = 'a name with spaces and [$]';
+    await exec('bash', ['scripts/e2e-linux.sh', 'x64', `--shard=${shard}`, '--grep', pattern], {
+      cwd: root,
+      env,
+    });
+    const run = (await commands()).find((args) => args[0] === 'run');
+    expect(run).toBeDefined();
+    expect(run?.slice(-6)).toEqual([
+      'e2e',
+      'x64',
+      '/artifacts',
+      `--shard=${shard}`,
+      '--grep',
+      pattern,
+    ]);
+    expect(run).toEqual(expect.arrayContaining(['--init', '--shm-size', '1g']));
+    expect(run).toContain('corrallm-check-linux-x64-results:/home/node/corrallm/test-results');
+    expect(run).toContain('corrallm-check-linux-x64-report:/home/node/corrallm/playwright-report');
+    expect(run?.join(' ')).not.toContain('--no-sandbox');
+  },
+);
+
+it('keeps the local e2e-only gate unsharded and preserves its failure reports', async () => {
+  const { env, commands } = await fixture();
+  await exec('bash', ['scripts/e2e-linux.sh', 'x64'], { cwd: root, env });
+  const run = (await commands()).find((args) => args[0] === 'run');
+  expect(run?.slice(-3)).toEqual(['e2e', 'x64', '/artifacts']);
+  expect(run).toContain('corrallm-check-linux-x64-results:/home/node/corrallm/test-results');
+  expect(run).toContain('corrallm-check-linux-x64-report:/home/node/corrallm/playwright-report');
+  expect(run?.some((arg) => arg.startsWith('--shard'))).toBe(false);
+});
+
+it('names the Linux e2e container step when Docker cannot launch it', async () => {
+  const { env } = await fixture();
+  await expect(
+    exec('bash', ['scripts/e2e-linux.sh', 'x64'], {
+      cwd: root,
+      env: { ...env, FAIL_DOCKER_STEP: 'run' },
+    }),
+  ).rejects.toMatchObject({ code: 19, stderr: expect.stringContaining('Linux x64 e2e') as string });
+});
+
+it.each(['1/2', '2/2'])(
+  'gives Playwright shard %s unchanged arguments after the production build setup',
+  async (shard) => {
+    const { folder, env } = await fixture();
+    const log = path.join(folder, 'pnpm.jsonl');
+    await writeFile(
+      path.join(folder, 'pnpm'),
+      `#!${process.execPath}
+import { appendFileSync } from 'node:fs';
+const args = process.argv.slice(2);
+appendFileSync(process.env.PNPM_LOG, JSON.stringify(args) + '\\n');
+if (args[0] === process.env.FAIL_PNPM_STEP) process.exit(23);
+`,
+      { mode: 0o755 },
+    );
+    await writeFile(path.join(folder, 'xvfb-run'), '#!/bin/bash\nshift 3\nexec "$@"\n', {
+      mode: 0o755,
+    });
+    const args = [
+      path.join(root, 'scripts/lib/linux-workspace.sh'),
+      'e2e',
+      'x64',
+      '/artifacts',
+      `--shard=${shard}`,
+      '--grep',
+      'a name with spaces',
+    ];
+    const result = await exec('bash', args, { cwd: folder, env: { ...env, PNPM_LOG: log } });
+    const calls = (await readFile(log, 'utf8'))
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line) as string[]);
+    expect(calls).toEqual([
+      ['install', '--frozen-lockfile'],
+      ['exec', 'install-electron'],
+      [
+        'test:e2e',
+        '--retries=0',
+        '--trace',
+        'retain-on-failure',
+        '--reporter=list,html',
+        `--shard=${shard}`,
+        '--grep',
+        'a name with spaces',
+      ],
+    ]);
+    expect(result.stdout).toContain('End-to-end tests (including production build)');
+    await expect(
+      exec('bash', args, {
+        cwd: folder,
+        env: { ...env, PNPM_LOG: log, FAIL_PNPM_STEP: 'test:e2e' },
+      }),
+    ).rejects.toMatchObject({
+      code: 23,
+      stderr: expect.stringContaining('End-to-end tests') as string,
+    });
+  },
+);
+
 it('refuses an unknown architecture before doing anything in Docker', async () => {
   const { env } = await fixture();
   await expect(

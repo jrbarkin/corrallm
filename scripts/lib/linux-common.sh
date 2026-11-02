@@ -47,15 +47,17 @@ linux_archive() {
 }
 
 linux_workspace() {
-  local mode=$1
+  local mode=$1 artifacts=${2:-}
+  shift
+  if [ "$#" -gt 0 ]; then shift; fi
   local mounts=(--volume "$linux_image-pnpm:/home/node/.local/share/pnpm"
     --volume "$linux_image-electron:/home/node/.cache/electron"
     --volume "$linux_image-node:/home/node/corrallm/node_modules/.cache/corrallm-node")
-  if [ "$mode" = ci ]; then
+  if [ "$mode" = ci ] || [ "$mode" = e2e ]; then
     mounts+=(--volume "$linux_image-results:/home/node/corrallm/test-results"
       --volume "$linux_image-report:/home/node/corrallm/playwright-report")
   fi
-  if [ "$#" -eq 2 ]; then mounts+=(--volume "$2:/artifacts"); fi
+  if [ -n "$artifacts" ]; then mounts+=(--volume "$artifacts:/artifacts"); fi
   linux_archive | docker run --rm --interactive "${linux_docker[@]}" \
     --env HUSKY=0 --env CI=1 --env CORRALLM_UNSIGNED=1 --env CORRALLM_NO_UPDATE_CHECK=1 \
     --env PLAYWRIGHT_HTML_OPEN=never \
@@ -64,5 +66,5 @@ linux_workspace() {
       trap '\''printf "FAILED: unpack Linux working tree (exit %s)\n" "$?" >&2'\'' ERR
       tar --extract --file - --warning=no-unknown-keyword
       exec bash scripts/lib/linux-workspace.sh "$@"
-    ' _ "$mode" "$linux_arch"
+    ' _ "$mode" "$linux_arch" /artifacts "$@"
 }

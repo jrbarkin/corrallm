@@ -4,6 +4,7 @@ source "$(dirname "$0")/linux-steps.sh"
 mode=${1:?mode required}
 arch=${2:?architecture required}
 artifacts=${3:-/artifacts}
+if [ "$#" -ge 3 ]; then shift 3; else shift 2; fi
 
 collect_installers() {
   local debs=(out/make/deb/"$arch"/*.deb)
@@ -23,7 +24,7 @@ e2e_tests() {
   # Xvfb's GLX; launch.ts opts only unpackaged Linux tests into Chromium's OpenGL backend.
   step 'End-to-end tests (including production build)' \
     env LIBGL_ALWAYS_SOFTWARE=true GALLIUM_DRIVER=llvmpipe CORRALLM_E2E_GL=mesa \
-    xvfb-run -a -s '-screen 0 1920x1080x24 +extension GLX' pnpm test:e2e --retries=0 --trace retain-on-failure --reporter=list,html
+    xvfb-run -a -s '-screen 0 1920x1080x24 +extension GLX' pnpm test:e2e --retries=0 --trace retain-on-failure --reporter=list,html "$@"
 }
 
 step 'Install dependencies' pnpm install --frozen-lockfile
@@ -35,9 +36,9 @@ case "$mode" in
     step 'Lint' env NODE_OPTIONS=--max-old-space-size=4096 pnpm lint
     step 'Check formatting' pnpm format:check
     step 'Unit tests' pnpm test
-    e2e_tests
+    e2e_tests "$@"
     ;;
-  e2e) e2e_tests ;;
+  e2e) e2e_tests "$@" ;;
   smoke)
     step 'Package Linux app' pnpm package --platform linux --arch "$arch"
     step 'Packaged Linux checks' bash "$(dirname "$0")/linux-smoke.sh" \
