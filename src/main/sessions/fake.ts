@@ -1,4 +1,7 @@
 import { randomUUID } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+
+import { z } from 'zod';
 
 import type { AdapterId } from '../../shared/adapter';
 import type { ModelChoice, SessionAnswer, SessionMode, UserMessage } from '../../shared/session';
@@ -25,6 +28,51 @@ export const FAKE_CODEX_MODELS: ModelChoice[] = [
   { value: 'fast', label: 'Fast', description: 'Another model to pick' },
 ];
 
+const SCRIPT = z.strictObject({
+  pause: z.number().int().min(0).max(60_000),
+  turns: z
+    .array(
+      z.strictObject({
+        when: z.string().min(1).optional(),
+        thinking: z.string().optional(),
+        tools: z
+          .array(
+            z.strictObject({
+              tool: z.string().min(1),
+              summary: z.string(),
+              output: z.string().optional(),
+              diff: z
+                .array(
+                  z.strictObject({ kind: z.enum(['add', 'remove', 'same']), text: z.string() }),
+                )
+                .optional(),
+            }),
+          )
+          .optional(),
+        reply: z.string().min(1),
+      }),
+    )
+    .min(1),
+});
+
+/**
+ * Scripted turns, for the README's pictures alone (`pnpm media`, e2e/media/): a turn plays the
+ * first of `turns` whose `when` its message holds (or that has none), streaming its thinking,
+ * tool calls and reply `pause` ms apart, and never asks.
+ */
+export type FakeScript = z.infer<typeof SCRIPT>;
+
+/**
+ * The script in the JSON file CORRALLM_FAKE_SCRIPT names, which only the media capture sets (tests
+ * never do): none without it. A file that isn't one is refused, not ignored.
+ */
+export function fakeScript(env: NodeJS.ProcessEnv = process.env): FakeScript | undefined {
+  const file = env.CORRALLM_FAKE_SCRIPT;
+  return file === undefined || file === ''
+    ? undefined
+    : SCRIPT.parse(JSON.parse(readFileSync(file, 'utf8')));
+}
+
 /**
  * A connector that runs no CLI, for tests, standing in for any connection of `adapter`. Each turn
  * echoes the message, thinks, and runs a command, asking first in the modes
@@ -46,13 +94,15 @@ export class FakeConnector implements Connector<SessionMode> {
   readonly #mode: SessionMode | null;
   readonly #asks: boolean | undefined;
   readonly #adapter: AdapterId;
+  readonly #script: FakeScript | undefined;
 
   /**
    * `pause`: how long (ms) between the events of a turn; `adapter`: the one it stands in for;
    * `mode`: its native setting, which applies when no mode is chosen (null: one it never reports,
    * as a CLI that never says its mode); `asks`: whether that setting asks, as it says where its
    * mode doesn't (a policy that is no mode). `step` replaces the delay with a test-controlled
-   * scheduler, so tests of another clock can run turns without advancing that clock.
+   * scheduler, so tests of another clock can run turns without advancing that clock. `script`:
+   * the turns it plays instead (FakeScript), by default CORRALLM_FAKE_SCRIPT's.
    */
   constructor({
     pause = 0,
@@ -60,14 +110,17 @@ export class FakeConnector implements Connector<SessionMode> {
     mode,
     asks,
     step = () => new Promise<void>((resolve) => setTimeout(resolve, pause)),
+    script = fakeScript(),
   }: {
     pause?: number;
     adapter?: AdapterId;
     mode?: SessionMode | null;
     asks?: boolean;
     step?: () => Promise<void>;
+    script?: FakeScript | undefined;
   } = {}) {
     this.#step = step;
+    this.#script = script;
     this.#adapter = adapter;
     this.#mode = mode === undefined ? (adapter === 'codex' ? 'auto' : 'manual') : mode;
     this.#asks = asks;
@@ -92,7 +145,7 @@ export class FakeConnector implements Connector<SessionMode> {
       ...(codex ? { effort: spec.effort ?? null } : {}),
       ...(spec.mode === null && this.#asks !== undefined ? { asks: this.#asks } : {}),
     });
-    const session = new FakeSession(mode, host, this.#step);
+    const session = new FakeSession(mode, host, this.#step, this.#script);
     this.sessions.push(session);
     return Promise.resolve(session);
   }
@@ -106,6 +159,8 @@ interface Turn {
   /** Entries still open: a running tool, an open prompt. */
   tool: string | undefined;
   prompt: string | undefined;
+  /** Ends a scripted turn's pause early, when it is stopped. */
+  wake?: (() => void) | undefined;
 }
 
 /** The modes in which a fake session asks before running its command. */
@@ -117,13 +172,20 @@ class FakeSession implements LiveSession<SessionMode> {
   #mode: SessionMode | null;
   readonly #host: SessionHost;
   readonly #step: () => Promise<void>;
+  readonly #script: FakeScript | undefined;
   #turn: Turn | undefined;
   #turns = 0;
 
-  constructor(mode: SessionMode | null, host: SessionHost, step: () => Promise<void>) {
+  constructor(
+    mode: SessionMode | null,
+    host: SessionHost,
+    step: () => Promise<void>,
+    script?: FakeScript,
+  ) {
     this.#mode = mode;
     this.#host = host;
     this.#step = step;
+    this.#script = script;
   }
 
   send(message: UserMessage): Promise<void> {
@@ -148,6 +210,7 @@ class FakeSession implements LiveSession<SessionMode> {
     if (turn) {
       turn.stopped = true;
       turn.answered?.(undefined);
+      turn.wake?.();
     }
     return Promise.resolve();
   }
@@ -277,7 +340,13 @@ class FakeSession implements LiveSession<SessionMode> {
       return true;
     };
 
-    const finished = await run();
+    const scripted = this.#script?.turns.find(
+      (one) => one.when === undefined || text.includes(one.when),
+    );
+    const finished =
+      scripted === undefined || this.#script === undefined
+        ? await run()
+        : await this.#scripted(id, text, turn, scripted, this.#script.pause);
     if (this.#turn === turn) this.#turn = undefined;
     if (!finished) {
       if (turn.tool !== undefined) {
@@ -309,5 +378,72 @@ class FakeSession implements LiveSession<SessionMode> {
         ? { status: 'completed', reason: 'completed' }
         : { status: 'cancelled', reason: 'interrupted' },
     });
+  }
+
+  /** Plays a scripted turn (FakeScript): false if it was stopped. */
+  async #scripted(
+    id: string,
+    text: string,
+    turn: Turn,
+    scripted: FakeScript['turns'][number],
+    pause: number,
+  ): Promise<boolean> {
+    const emit = this.#host.emit.bind(this.#host);
+    const step = async (count = 1) => {
+      await new Promise<void>((resolve) => {
+        const timer = setTimeout(resolve, pause * count);
+        turn.wake = () => {
+          clearTimeout(timer);
+          resolve();
+        };
+      });
+      turn.wake = undefined;
+      return !turn.stopped;
+    };
+    /** Streams `words` into entry `entry`, a few words at a time (a list marker with its first). */
+    const stream = async (type: 'text' | 'thinking', entry: string, words: string) => {
+      const pieces = words.match(/(?:(?:[-*]|\d+\.)\s+)?\S+\s*|\s+/g) ?? [];
+      for (let i = 0; i < pieces.length; i += 3) {
+        emit({ type, id: entry, text: pieces.slice(i, i + 3).join('') });
+        if (!(await step())) return false;
+      }
+      return true;
+    };
+    emit({ type: 'user', id, text });
+    emit({ type: 'status', status: 'working' });
+    if (scripted.thinking !== undefined) {
+      if (!(await stream('thinking', `${id}/thinking`, scripted.thinking))) return false;
+    }
+    for (const [i, { tool, summary, output, diff }] of (scripted.tools ?? []).entries()) {
+      const call = `${id}/tool-${String(i)}`;
+      turn.tool = call;
+      emit({ type: 'tool', id: call, tool, summary, status: 'running' });
+      if (!(await step(4))) {
+        emit({ type: 'tool', id: call, tool, summary, status: 'interrupted' });
+        turn.tool = undefined;
+        return false;
+      }
+      emit({
+        type: 'tool',
+        id: call,
+        tool,
+        summary,
+        status: 'done',
+        ...(diff !== undefined
+          ? {
+              detail: {
+                kind: 'diff' as const,
+                added: diff.filter((line) => line.kind === 'add').length,
+                removed: diff.filter((line) => line.kind === 'remove').length,
+                lines: diff,
+              },
+            }
+          : output !== undefined
+            ? { detail: { kind: 'output' as const, text: output } }
+            : {}),
+      });
+      turn.tool = undefined;
+    }
+    return stream('text', `${id}/reply`, scripted.reply);
   }
 }

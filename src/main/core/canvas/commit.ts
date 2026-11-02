@@ -69,6 +69,8 @@ export interface CommitCall {
   unchanged?: Readonly<Record<string, number>>;
   /** Aborts when the call is superseded or its caller gives up: before its point of no return. */
   signal: AbortSignal;
+  /** Rechecks the dispatcher’s caller after workspace preflight, before checks or proposals. */
+  recheck?(): void;
   /** Says the call is past its point of no return: nothing aborts it then. */
   noReturn(): void;
   /** Whether its op may come to you as a proposal (it declares R4 or R5), and its arguments. */
@@ -157,6 +159,7 @@ export function committer({ documents, rules, committed, propose }: CommitterDep
           return build(document);
         },
         check: (change, live, losses) => {
+          call.recheck?.();
           checkExpect(call.expect, live);
           const before = call.unchanged;
           if (before !== undefined) {

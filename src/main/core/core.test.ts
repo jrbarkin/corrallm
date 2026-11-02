@@ -60,7 +60,12 @@ async function start(sessions?: CoreConfig['sessions']): Promise<Core> {
       check: true,
       distribution: 'local',
       directoryResolver: legacyDirectories,
-      ...(sessions === undefined ? {} : { sessions }),
+      // Its agent callers are made up: no session authority issued them.
+      sessions: sessions ?? {
+        connectors: {},
+        environment: () => Promise.resolve({}),
+        callers: () => true,
+      },
     },
     NO_DESKTOP,
   );
