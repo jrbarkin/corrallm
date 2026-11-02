@@ -17,7 +17,7 @@ import { Store, SYSTEM_DEPS, unopened } from '../store/store';
 import type { StoreDeps } from '../store/store';
 import { openTestStore, readOnDisk, refuseWrites } from '../store/test-store';
 import { isActive, MessageStore, MessageTable } from './messages';
-import type { Draft } from './messages';
+import type { Draft, Staged } from './messages';
 import { scanPrune } from './test-prune';
 import type { PruneRecord } from './test-prune';
 
@@ -98,6 +98,71 @@ const rows = (canvas = CANVAS) =>
   );
 
 describe('the message store', () => {
+  it('writes each changed row once while an earlier log flush is pending', async () => {
+    const gate = Promise.withResolvers<undefined>();
+    let held = false;
+    await restart({
+      ...SYSTEM_DEPS,
+      flush: async (fd) => {
+        if (held) await gate.promise;
+        await SYSTEM_DEPS.flush(fd);
+      },
+    });
+    const messages = await store();
+    for (let i = 0; i < STORE_SETTLED_PER_PARTY; i++)
+      messages.add(draft('agent:builder', 'outside:orchestrator', 'delivered'));
+    await messages.durable();
+    const keep = vi.spyOn(table, 'keep');
+    const forget = vi.spyOn(table, 'forget');
+    const pending: Promise<void>[] = [];
+    held = true;
+    try {
+      for (let i = 0; i < 6; i++) {
+        const next = messages.add(draft('agent:builder', 'outside:orchestrator', 'delivered'));
+        pending.push(messages.durable());
+        await vi.waitFor(() => {
+          expect(keep.mock.calls.some(([kept]) => kept.message.id === next.id)).toBe(true);
+        });
+      }
+      expect(keep).toHaveBeenCalledTimes(6);
+      expect(forget).toHaveBeenCalledTimes(6);
+      let durable = false;
+      pending.push(
+        messages.durable().then(() => {
+          durable = true;
+        }),
+      );
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(durable).toBe(false);
+    } finally {
+      held = false;
+      gate.resolve(undefined);
+      await Promise.all(pending);
+    }
+    expect(rows()).toHaveLength(STORE_SETTLED_PER_PARTY);
+  });
+
+  it('retries message rows from a failed containing savepoint in the next queued write', async () => {
+    const messages = await store();
+    const message = messages.add(draft('outside:orchestrator', 'agent:builder'));
+    let staged: Staged | undefined;
+    const failed = database.write(
+      () => {
+        staged = messages.changes();
+        throw new Error('The containing write failed');
+      },
+      (error) => {
+        staged?.undo(error);
+      },
+    );
+    const retry = messages.durable();
+    await expect(failed).rejects.toThrow('The containing write failed');
+    await retry;
+    expect(rows().map(({ id, state }) => ({ id, state }))).toEqual([
+      { id: message.id, state: 'pending' },
+    ]);
+  });
   it('keeps a stalled turn’s told key after receipt, settlement and a restart', async () => {
     const messages = await store();
     const sent = messages.add(draft('outside:orchestrator', 'agent:builder', 'delivered'));

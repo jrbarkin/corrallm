@@ -268,6 +268,27 @@ describe('the write lane', () => {
     expect(notes()).toEqual(['kept', 'kept too']);
   });
 
+  it('restores staged state before the next write runs after a failed savepoint', async () => {
+    let staged = false;
+    const settled = await outcomes([
+      store.write(
+        () => {
+          staged = true;
+          throw new Error('The write failed');
+        },
+        () => {
+          staged = false;
+        },
+      ),
+      store.write(() => {
+        expect(staged).toBe(false);
+        add('next');
+      }),
+    ]);
+    expect(settled.map(({ status }) => status)).toEqual(['rejected', 'fulfilled']);
+    expect(notes()).toEqual(['next']);
+  });
+
   it('keeps nothing of a write whose statement a trigger aborted, and rejects it', async () => {
     store.exec(`CREATE TRIGGER refuse AFTER INSERT ON note WHEN NEW.text = 'refused'
       BEGIN SELECT RAISE(ABORT, 'Refused by the test'); END`);

@@ -187,6 +187,9 @@ function groupOf(caller: Caller): string {
 const SUMMARY_TOO_LARGE =
   'This topic’s summary is too large to send in one frame, so it can’t be subscribed to.';
 
+/** Background publications yield after this many; explicit reads and receipts still flush now. */
+const RUNTIME_PUBLICATIONS_PER_TURN = 8;
+
 export class Topics implements Publication {
   readonly epoch = randomUUID();
   readonly #deps: TopicsDeps;
@@ -212,6 +215,8 @@ export class Topics implements Publication {
   #publication = 0;
   /** The canvases whose runtime topics' publication is queued and hasn't begun. */
   readonly #scheduled = new Set<CanvasId>();
+  #backgroundPublications = 0;
+  #resetPublications: ReturnType<typeof setImmediate> | undefined;
   /** Who made what a runtime topic has waiting to publish, as the op that made it says. */
   readonly #attributed = new Map<string, PartyId>();
   readonly #stopRuntime: (() => void) | undefined;
@@ -454,6 +459,7 @@ export class Topics implements Publication {
     this.#closed = true;
     this.#stopRuntime?.();
     clearTimeout(this.#timer);
+    clearImmediate(this.#resetPublications);
     this.#listeners.clear();
     for (const [id, topics] of this.#subscriptions)
       for (const topic of topics.keys()) this.#forget(id, topic);
@@ -629,7 +635,17 @@ export class Topics implements Publication {
     if (this.#closed || this.#scheduled.has(canvas)) return;
     this.#scheduled.add(canvas);
     void this.#serialize(async () => {
+      if (this.#backgroundPublications >= RUNTIME_PUBLICATIONS_PER_TURN)
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
       this.#scheduled.delete(canvas);
+      if (this.#closed) return;
+      this.#backgroundPublications += 1;
+      this.#resetPublications ??= setImmediate(() => {
+        this.#resetPublications = undefined;
+        this.#backgroundPublications = 0;
+      });
       await this.#publishRuntime(canvas);
     }).catch((error: unknown) => {
       console.error('Could not publish a canvas’s runtime topics:', error);

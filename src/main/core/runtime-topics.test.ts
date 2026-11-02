@@ -29,7 +29,7 @@ import { commitDocument } from './canvas/test-documents';
 import { createCore } from './core';
 import type { Core } from './core';
 import { WindowPorts } from './gui';
-import { partsOf, readerOf, TOPIC_BUDGET } from './runtime-topics';
+import { partsOf, readerOf, RuntimeSource, TOPIC_BUDGET } from './runtime-topics';
 import { keepCanvases } from './store/test-store';
 import { CALLERS, CANVAS, NO_DESKTOP, OTHER_CANVAS } from './test-registry';
 import { openWindow } from './test-window';
@@ -1337,6 +1337,51 @@ describe('runtime topics: revisions and epochs', () => {
   let folder: string;
   afterEach(async () => {
     await rm(folder, { recursive: true, force: true });
+  });
+
+  it('reuses session summaries for queue edits and recomputes only a changed endpoint', async () => {
+    folder = await keepWorld();
+    const core = await start(folder);
+    const open = core.engines.canvas(CANVAS);
+    if (!open) throw new Error('No runtime');
+    const source = new RuntimeSource({
+      engines: core.engines,
+      isLead: () => false,
+      problem: () => undefined,
+    });
+    source.start();
+    const lookup = vi.spyOn(open.engine.catalog, 'connectionOf');
+    try {
+      expect(
+        await core.call(
+          'queue.add',
+          { canvas: CANVAS, agent: 'worker', entry: { message: 'More work' } },
+          CALLERS.you,
+        ),
+      ).toMatchObject({ ok: true });
+      source.documentChanged(CANVAS);
+      lookup.mockClear();
+      expect(source.take(SESSIONS)).toBeUndefined();
+      expect(lookup).not.toHaveBeenCalled();
+
+      expect(
+        await core.call(
+          'agent.setConnection',
+          { canvas: CANVAS, agent: 'worker', connection: 'codex.terminal' },
+          CALLERS.you,
+        ),
+      ).toMatchObject({ ok: true });
+      source.documentChanged(CANVAS);
+      lookup.mockClear();
+      expect(source.take(SESSIONS)).toMatchObject({
+        body: { agents: { set: { worker: { connection: 'codex.terminal' } } } },
+      });
+      // The summary and its handoff projection each resolve that one agent's connection.
+      expect(lookup).toHaveBeenCalledTimes(2);
+    } finally {
+      source.close();
+      lookup.mockRestore();
+    }
   });
 
   it('returns publication receipts through a registered write, and none for its no-op', async () => {

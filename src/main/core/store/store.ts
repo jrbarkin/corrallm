@@ -241,13 +241,23 @@ export class Store {
    * Queues `run` (synchronous, with no await inside) for the lane's next commit, with the other
    * writes queued in this turn of the loop. Resolves with what it returned once that commit has
    * returned; rejects, keeping nothing of it, if it threw or the commit failed. Refused once the
-   * store is closing.
+   * store is closing. `failed` restores in-memory staging synchronously on rejection, before the
+   * next savepoint runs; it must not throw. A successful write still waits for the log flush.
    */
-  write<T>(run: () => T): Promise<T> {
+  write<T>(run: () => T, failed?: (error: unknown) => void): Promise<T> {
     if (this.#failed !== undefined) return Promise.reject(this.#failed);
     if (this.#shut) return Promise.reject(closed());
     return new Promise<T>((resolve, reject) => {
-      this.#queue.push({ run, resolve: resolve as (value: unknown) => void, reject });
+      this.#queue.push({
+        run,
+        resolve: resolve as (value: unknown) => void,
+        reject: (error) => {
+          failed?.(error);
+          // Preserve the containing write's original rejection after restoring its staging.
+          // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors
+          reject(error);
+        },
+      });
       if (this.#scheduled) return;
       this.#scheduled = true;
       setImmediate(() => {

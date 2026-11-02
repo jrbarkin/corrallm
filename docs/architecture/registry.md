@@ -2,6 +2,8 @@
 
 [Architecture index](overview.md) · [Canonical instructions](../../AGENTS.md)
 
+Runtime topics reuse session summaries across queue, label and position edits, invalidating only changed endpoints, fallback or handoff settings, and the sessions whose runtime state changed. Background publication yields after eight passes per event-loop turn; reads and receipt publication retain their request ordering, canonical revisions and append frames.
+
 ## `src/main/api/`
 
 mcp.ts, the agents' server: MCP over streamable HTTP on 127.0.0.1, generated from the registry (one tool per op, listed by the caller's party; every call through core.call), the caller named by its bearer token: a generation of an agent's session (the session authority's credential, whose `tools/list` the server reports as that generation listed: `ApiServerOptions.listed`) or an outside token, never you; authentication is rechecked after the request body arrives, so a token replaced, revoked or expired meanwhile dispatches nothing; a token it doesn't take is answered 401, and one its store made that no longer works (renewed, revoked or expired: `TokenStore.stale`) 401 with `TOKEN_REPLACED`'s sentence. `corrallm serve` starts it, for outside tokens; the app doesn't yet (B11). No operation makes, renews or revokes a token: `corrallm token` asks the profile's owner over its token socket instead (see [Security](security.md)).
