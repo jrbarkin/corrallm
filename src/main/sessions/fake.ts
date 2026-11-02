@@ -5,7 +5,9 @@ import { z } from 'zod';
 
 import type { AdapterId } from '../../shared/adapter';
 import type { ModelChoice, SessionAnswer, SessionMode, UserMessage } from '../../shared/session';
-import type { Connector, LiveSession, SessionHost, SessionSpec } from './connector';
+import type { Connector, LiveSession, PromptAnswers, SessionHost, SessionSpec } from './connector';
+import { checkPromptAnswer } from '../../shared/model/prompts';
+import { fakePrompt } from './fake-prompts';
 
 /** The models a fake session offers. */
 export const FAKE_MODELS: ModelChoice[] = [
@@ -95,6 +97,7 @@ export class FakeConnector implements Connector<SessionMode> {
   readonly #asks: boolean | undefined;
   readonly #adapter: AdapterId;
   readonly #script: FakeScript | undefined;
+  readonly #ownerPrompts: boolean;
 
   /**
    * `pause`: how long (ms) between the events of a turn; `adapter`: the one it stands in for;
@@ -111,6 +114,7 @@ export class FakeConnector implements Connector<SessionMode> {
     asks,
     step = () => new Promise<void>((resolve) => setTimeout(resolve, pause)),
     script = fakeScript(),
+    ownerPrompts = false,
   }: {
     pause?: number;
     adapter?: AdapterId;
@@ -118,7 +122,10 @@ export class FakeConnector implements Connector<SessionMode> {
     asks?: boolean;
     step?: () => Promise<void>;
     script?: FakeScript | undefined;
+    /** App fixtures use the owner; legacy unit fixtures can keep their old protocol until X11. */
+    ownerPrompts?: boolean;
   } = {}) {
+    this.#ownerPrompts = ownerPrompts;
     this.#step = step;
     this.#script = script;
     this.#adapter = adapter;
@@ -145,7 +152,7 @@ export class FakeConnector implements Connector<SessionMode> {
       ...(codex ? { effort: spec.effort ?? null } : {}),
       ...(spec.mode === null && this.#asks !== undefined ? { asks: this.#asks } : {}),
     });
-    const session = new FakeSession(mode, host, this.#step, this.#script);
+    const session = new FakeSession(mode, host, this.#step, this.#script, this.#ownerPrompts);
     this.sessions.push(session);
     return Promise.resolve(session);
   }
@@ -175,17 +182,38 @@ class FakeSession implements LiveSession<SessionMode> {
   readonly #script: FakeScript | undefined;
   #turn: Turn | undefined;
   #turns = 0;
+  readonly prompts?: PromptAnswers;
+  #owned: (ReturnType<typeof fakePrompt> & { key: string }) | undefined;
 
   constructor(
     mode: SessionMode | null,
     host: SessionHost,
     step: () => Promise<void>,
     script?: FakeScript,
+    ownerPrompts = false,
   ) {
     this.#mode = mode;
     this.#host = host;
     this.#step = step;
     this.#script = script;
+    if (ownerPrompts)
+      this.prompts = {
+        answer: (key, answer) => {
+          const owned = this.#owned;
+          if (owned?.key !== key) throw new Error('That prompt is no longer waiting.');
+          const native = owned.answer(checkPromptAnswer(owned.prompt, answer));
+          this.#owned = undefined;
+          void this.answer(key, native);
+        },
+        decline: (key) => {
+          if (this.#owned?.key !== key) return;
+          this.#owned = undefined;
+          if (this.#turn) {
+            this.#turn.prompt = undefined;
+            this.#turn.answered?.(undefined);
+          }
+        },
+      };
   }
 
   send(message: UserMessage): Promise<void> {
@@ -236,7 +264,20 @@ class FakeSession implements LiveSession<SessionMode> {
   }
 
   async #play({ id, text }: UserMessage, turn: Turn): Promise<void> {
-    const emit = this.#host.emit.bind(this.#host);
+    const emit: SessionHost['emit'] = (event) => {
+      if (
+        this.prompts &&
+        (event.type === 'permission' || event.type === 'question' || event.type === 'plan')
+      ) {
+        const owned = { ...fakePrompt(event), key: randomUUID() };
+        this.#owned = owned;
+        turn.prompt = owned.key;
+        this.#host.emit({ type: 'prompt', key: owned.key, prompt: owned.prompt });
+      } else if (this.prompts && event.type === 'withdrawn') {
+        this.#owned = undefined;
+        this.#host.emit({ type: 'prompt-ended', key: event.id, reason: 'withdrawn' });
+      } else this.#host.emit(event);
+    };
     const started = Date.now();
     const step = async () => {
       await this.#step();

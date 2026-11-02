@@ -123,6 +123,19 @@ function Card({
         <fieldset disabled={busy} className="prompt-actions">
           {live.answerIn === 'terminal' && (
             <>
+              {questions.map((question) => (
+                <div key={question.id}>
+                  {question.header && <p>{question.header}</p>}
+                  <p>{question.text}</p>
+                  {question.options.map((option) => (
+                    <div key={option.label}>
+                      <p>{option.label}</p>
+                      {option.description && <p>{option.description}</p>}
+                      {option.preview && <pre>{option.preview}</pre>}
+                    </div>
+                  ))}
+                </div>
+              ))}
               <p>Answer it in the terminal.</p>
               {onOpenTerminal && (
                 <button type="button" onClick={onOpenTerminal}>

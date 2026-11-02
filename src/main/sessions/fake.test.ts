@@ -5,7 +5,72 @@ import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import type { HostEvent } from './connector';
 import { FakeConnector, fakeScript } from './fake';
+import { PromptEnded, PromptEvent } from '../../shared/model/prompts';
+import type { PromptAnswer } from '../../shared/model/prompts';
 import type { FakeScript } from './fake';
+
+it.each([
+  { text: 'Hello', kind: 'approval', answer: { kind: 'choice', value: 'allow' } },
+  {
+    text: '/question',
+    kind: 'question',
+    answer: { kind: 'questions', answers: { q1: { picked: ['Yes'] } } },
+  },
+  { text: '/plan', kind: 'plan', answer: { kind: 'choice', value: 'accept-edits' } },
+] satisfies { text: string; kind: string; answer: PromptAnswer }[])(
+  'the app fake raises $kind through the owner and accepts its answer once',
+  async ({ text, kind, answer }) => {
+    const events: HostEvent[] = [];
+    const session = await new FakeConnector({ ownerPrompts: true }).start(
+      { agentId: 'a', cwd: '/unused', env: {}, model: null, mode: 'manual', resume: null },
+      { emit: (event) => events.push(event), remember: vi.fn() },
+    );
+    try {
+      await session.send({ id: 'message', text });
+      await expect.poll(() => events.some((event) => event.type === 'prompt')).toBe(true);
+      const raised = PromptEvent.parse(events.find((event) => event.type === 'prompt'));
+      expect(raised.prompt.kind).toBe(kind);
+      expect(events.some((event) => ['permission', 'question', 'plan'].includes(event.type))).toBe(
+        false,
+      );
+      session.prompts?.answer(raised.key, answer);
+      await expect.poll(() => events.some((event) => event.type === 'end')).toBe(true);
+      expect(events.filter((event) => event.type === 'end')).toHaveLength(1);
+      expect(() => session.prompts?.answer(raised.key, answer)).toThrow();
+    } finally {
+      await session.close();
+    }
+  },
+);
+
+it('the app fake withdraws its owner occurrence when a waiting turn is interrupted', async () => {
+  const events: HostEvent[] = [];
+  const session = await new FakeConnector({ ownerPrompts: true }).start(
+    { agentId: 'a', cwd: '/unused', env: {}, model: null, mode: 'manual', resume: null },
+    { emit: (event) => events.push(event), remember: vi.fn() },
+  );
+  try {
+    await session.send({ id: 'message', text: '/question' });
+    await expect.poll(() => events.some((event) => event.type === 'prompt')).toBe(true);
+    const raised = PromptEvent.parse(events.find((event) => event.type === 'prompt'));
+    await session.interrupt();
+    await expect.poll(() => events.some((event) => event.type === 'end')).toBe(true);
+    expect(PromptEnded.parse(events.find((event) => event.type === 'prompt-ended'))).toEqual({
+      type: 'prompt-ended',
+      key: raised.key,
+      reason: 'withdrawn',
+    });
+    expect(events.some((event) => event.type === 'withdrawn')).toBe(false);
+    expect(() =>
+      session.prompts?.answer(raised.key, {
+        kind: 'questions',
+        answers: { q1: { picked: ['Yes'] } },
+      }),
+    ).toThrow();
+  } finally {
+    await session.close();
+  }
+});
 
 it('reports context before a fake turn ends', async () => {
   const events: HostEvent[] = [];

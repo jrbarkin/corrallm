@@ -8,6 +8,7 @@ import { expect, test } from '@playwright/test';
 import type { ElectronApplication, Page } from '@playwright/test';
 
 import { launchApp } from './launch';
+import { mcpRequestTitle } from '../src/shared/model/words';
 
 /*
  * A Claude agent connected through the Agent SDK, in the built app: the SDK bundled into main
@@ -37,6 +38,7 @@ test.beforeEach(async () => {
       CLAUDE_CONFIG_DIR: path.join(dir, 'config'),
       FAKE_CLAUDE_PROMPTS: path.join(dir, 'prompts.jsonl'),
       FAKE_CLAUDE_INITIALIZE: path.join(dir, 'starts.jsonl'),
+      FAKE_CLAUDE_ANSWERS: path.join(dir, 'answers.jsonl'),
     },
   }));
   page = await app.firstWindow();
@@ -80,6 +82,13 @@ async function openSdkAgent(name: string) {
   return page.getByRole('dialog', { name, exact: true });
 }
 
+async function nativeAnswers(): Promise<unknown[]> {
+  return (await readFile(path.join(dir, 'answers.jsonl'), 'utf8'))
+    .split('\n')
+    .filter(Boolean)
+    .map((line) => JSON.parse(line) as unknown);
+}
+
 test('reconnects to a viewed session and its pending prompt without reopening or replaying it', async () => {
   const folder = path.join(dir, 'shop');
   await mkdir(folder);
@@ -98,7 +107,7 @@ test('reconnects to a viewed session and its pending prompt without reopening or
   const text = 'please run it';
   await view.getByRole('textbox', { name: 'Message Agent 1' }).fill(text);
   await view.getByRole('textbox', { name: 'Message Agent 1' }).press('Enter');
-  await expect(view.getByRole('group', { name: 'Bash command: echo hello' })).toBeVisible();
+  await expect(view.getByRole('group', { name: 'Claude wants to use Bash' })).toBeVisible();
   const composer = view.getByRole('textbox', { name: 'Message Agent 1' });
   await composer.fill('This queued draft must not reach the CLI');
   await composer.press('Enter');
@@ -118,12 +127,19 @@ test('reconnects to a viewed session and its pending prompt without reopening or
   const transcript = view.getByRole('log', { name: 'Transcript' });
   await expect(transcript.locator('.agent-user')).toHaveCount(1);
   await expect(transcript.getByText(text, { exact: true })).toBeVisible();
-  const prompt = transcript.getByRole('group', { name: 'Bash command: echo hello' });
+  const prompt = transcript.getByRole('group', { name: 'Claude wants to use Bash' });
   await prompt.getByRole('button', { name: 'Yes', exact: true }).click();
+  await expect(prompt.getByRole('status')).toHaveText('Allowed once by you.');
   await expect(transcript.getByRole('button', { name: 'Bash echo hello' })).toBeVisible();
   await expect(transcript.getByText(/^Worked for \d+s$/)).toHaveCount(1);
   expect(await readFile(path.join(dir, 'starts.jsonl'), 'utf8')).toBe(starts);
   expect(await readFile(path.join(dir, 'prompts.jsonl'), 'utf8')).toBe(prompts);
+  expect(await nativeAnswers()).toEqual([
+    expect.objectContaining({
+      request: expect.objectContaining({ tool_name: 'Bash' }),
+      answer: expect.objectContaining({ behavior: 'allow' }),
+    }),
+  ]);
 
   await view.getByRole('button', { name: 'All queues', exact: true }).click();
   await expect(page.getByRole('dialog', { name: 'All queues', exact: true })).toBeVisible();
@@ -172,8 +188,9 @@ test('runs a Claude agent through the Agent SDK: a turn, a prompt, completions, 
   await composer.fill('please run it');
   await composer.press('Enter');
   await expect(transcript.getByText('You said: please run it')).toBeVisible();
-  const prompt = transcript.getByRole('group', { name: 'Bash command: echo hello' });
+  const prompt = transcript.getByRole('group', { name: 'Claude wants to use Bash' });
   await prompt.getByRole('button', { name: 'Yes', exact: true }).click();
+  await expect(prompt.getByRole('status')).toHaveText('Allowed once by you.');
   await expect(transcript.getByRole('button', { name: 'Bash echo hello' })).toBeVisible();
   await expect(transcript.getByText(/^Worked for \d+s$/)).toBeVisible();
   await expect(view.getByText('$0.01 · 1% context')).toBeVisible();
@@ -341,6 +358,12 @@ test('shows an agent’s MCP servers with /mcp, and a form one of them asks for'
   const form = transcript.getByRole('form', { name: 'github asks' });
   await form.getByRole('textbox', { name: 'Repository' }).fill('acme/shop');
   await form.getByRole('button', { name: 'Submit' }).click();
+  const settled = transcript.getByRole('group', {
+    name: mcpRequestTitle('github', false),
+    exact: true,
+  });
+  await expect(settled.getByRole('status')).toHaveText('Submitted by you.');
+  await expect(settled).not.toContainText('acme/shop');
   await expect(
     transcript.getByText('github got: accept {"repo":"acme/shop","draft":false}'),
   ).toBeVisible();
@@ -369,7 +392,7 @@ test('rewinds the code and the conversation to before a message', async () => {
   await composer.fill('please edit it');
   await composer.press('Enter');
   await transcript
-    .getByRole('group', { name: 'Edit file: notes.txt' })
+    .getByRole('group', { name: 'Claude wants to use Edit' })
     .getByRole('button', { name: 'Yes', exact: true })
     .click();
   await expect(transcript.getByRole('button', { name: 'Edit notes.txt +1 −1' })).toBeVisible();
@@ -394,7 +417,7 @@ test('rewinds the code and the conversation to before a message', async () => {
   await expect(composer).toHaveValue('please edit it');
 });
 
-test('stops work in the background, answers with the keyboard, and sets the effort', async () => {
+test('stops background work, requires an explicit keyboard approval, and sets the effort', async () => {
   const folder = path.join(dir, 'shop');
   await mkdir(folder);
   await app.evaluate(({ dialog }, picked) => {
@@ -413,15 +436,37 @@ test('stops work in the background, answers with the keyboard, and sets the effo
   await view.getByRole('menuitemradio', { name: /^High/ }).click();
   await expect(view.getByRole('button', { name: 'Effort: High' })).toBeVisible();
 
-  // Its permission prompt is answered with 1, typed in the empty composer.
+  // A number typed in the composer stays a draft; approval requires choosing its button.
   await composer.fill('start the dev server in the background');
   await composer.press('Enter');
-  await expect(transcript.getByRole('group', { name: 'Bash command: npm run dev' })).toBeVisible();
+  const approval = transcript.getByRole('group', { name: 'Claude wants to use Bash', exact: true });
+  await expect(approval).toContainText('npm run dev');
   await composer.press('1');
-  await expect(composer).toHaveValue('');
+  await expect(composer).toHaveValue('1');
+  await expect(approval.getByRole('button', { name: 'Yes', exact: true })).toBeEnabled();
+  await expect(view.getByRole('group', { name: 'Background tasks' })).toHaveCount(0);
+  await composer.fill('');
+  const allow = approval.getByRole('button', { name: 'Yes', exact: true });
+  await allow.focus();
+  await allow.press('Enter');
+  await expect(approval.getByRole('status')).toHaveText('Allowed once by you.');
   const tasks = view.getByRole('group', { name: 'Background tasks' });
   await expect(tasks.getByText('npm run dev')).toBeVisible();
   await expect(transcript.getByText(/^Worked for \d+s$/)).toBeVisible();
+
+  expect(await nativeAnswers()).toEqual([
+    expect.objectContaining({
+      request: expect.objectContaining({
+        tool_name: 'Bash',
+        input: {
+          command: 'npm run dev',
+          description: 'Start the dev server',
+          run_in_background: true,
+        },
+      }),
+      answer: expect.objectContaining({ behavior: 'allow' }),
+    }),
+  ]);
 
   // Stopped from its line (session.stopTask): its line says so, and the list is gone.
   const line = transcript.locator('.agent-tool', {

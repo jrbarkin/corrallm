@@ -754,6 +754,47 @@ describe('the App Server connection', () => {
     expect(texts(events)).toEqual(['You picked Blue.']);
   });
 
+  it('carries six native question ids with picked, typed and secret answers once', async () => {
+    const { session, answer, heard, ended, events } = await start();
+    await session.send({ id: 'many-questions', text: 'ask many' });
+    const asked = await heard('prompt', { prompt: { kind: 'question' } });
+    if (asked.prompt.kind !== 'question') throw new Error('No questions');
+    expect(asked.prompt.questions.map(({ id }) => id)).toEqual([
+      'color',
+      'target',
+      'scope',
+      'notes',
+      'checks',
+      'code',
+    ]);
+    expect(asked.prompt.questions[5]).toMatchObject({ secret: true, other: true });
+    answer(asked.key, {
+      kind: 'questions',
+      answers: {
+        color: { picked: ['Blue'] },
+        target: { picked: ['Preview'] },
+        scope: { picked: ['Small'] },
+        notes: { text: 'Ready for review' },
+        checks: { picked: ['Tests'] },
+        code: { text: 'private-code' },
+      },
+    });
+    await ended('many-questions');
+    expect(await requests('answer:item/tool/requestUserInput')).toEqual([
+      {
+        answers: {
+          color: { answers: ['Blue'] },
+          target: { answers: ['Preview'] },
+          scope: { answers: ['Small'] },
+          notes: { answers: ['Ready for review'] },
+          checks: { answers: ['Tests'] },
+          code: { answers: ['private-code'] },
+        },
+      },
+    ]);
+    expect(texts(events)).toEqual(['Answers received.']);
+  });
+
   it('interrupts a turn, whose simulated command’s output streamed meanwhile', async () => {
     const { session, heard, ended, events } = await start();
     await session.send({ id: 'm1', text: 'slow' });

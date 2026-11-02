@@ -144,7 +144,15 @@ export function TerminalPane({
   );
   /** The warning the user dismissed, by id. */
   const [dismissed, setDismissed] = useState<string>();
-  const trusting = session.asking?.some((asked) => asked.kind === 'trust') ?? false;
+  const trusting =
+    session.entries.some(
+      (entry) =>
+        entry.kind === 'prompt' &&
+        entry.outcome === undefined &&
+        entry.prompt.kind === 'approval' &&
+        entry.prompt.subject?.type === 'trust',
+    ) ||
+    (session.asking?.some((asked) => asked.kind === 'trust') ?? false);
   return (
     <section className="agent-session agent-terminal-session" aria-label="Session">
       <div

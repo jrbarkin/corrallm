@@ -86,6 +86,7 @@ export async function continuityWorld({
   const gate = path.join(dir, 'continue');
   const promptLog = path.join(dir, 'prompts.jsonl');
   const initializeLog = path.join(dir, 'initialize.jsonl');
+  const answerLog = path.join(dir, 'answers.jsonl');
   const { app, close } = await launchApp({
     profile,
     diagnoseFailure: () => test.info().status !== test.info().expectedStatus,
@@ -95,6 +96,7 @@ export async function continuityWorld({
       CLAUDE_CONFIG_DIR: config,
       FAKE_CLAUDE_PROMPTS: promptLog,
       FAKE_CLAUDE_INITIALIZE: initializeLog,
+      FAKE_CLAUDE_ANSWERS: answerLog,
       FAKE_CLAUDE_TURN_GATES: JSON.stringify({ 'continuity-first': gate }),
     },
   });
@@ -182,8 +184,17 @@ export async function continuityWorld({
       client,
       raw,
       call,
+      async reconnectApi() {
+        await client.close();
+        await client.connect(
+          new StreamableHTTPClientTransport(new URL((await discovery()).url), {
+            requestInit: { headers: { Authorization: `Bearer ${token}` } },
+          }),
+        );
+      },
       discovery,
       prompts,
+      answers: () => lines<unknown>(answerLog),
       sessions,
       queues,
       row,

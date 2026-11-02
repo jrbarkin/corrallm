@@ -333,7 +333,16 @@ function request(body) {
   process.stdout.write(
     `${JSON.stringify({ type: 'control_request', request_id: requestId, request: body })}\n`,
   );
-  return new Promise((resolve) => asked.set(requestId, resolve));
+  return new Promise((resolve) =>
+    asked.set(requestId, (answer) => {
+      if (process.env.FAKE_CLAUDE_ANSWERS)
+        appendFileSync(
+          process.env.FAKE_CLAUDE_ANSWERS,
+          `${JSON.stringify({ request: body, answer })}\n`,
+        );
+      resolve(answer);
+    }),
+  );
 }
 
 /**
@@ -586,7 +595,7 @@ function stopInBackground(taskId) {
 }
 
 /** Asks a question taking several answers, as AskUserQuestion does; says what was answered. */
-async function askQuestion(id) {
+async function askQuestion(id, combined) {
   const toolUseId = `toolu_${randomUUID().replace(/-/g, '')}`;
   const input = {
     questions: [
@@ -602,6 +611,16 @@ async function askQuestion(id) {
       },
     ],
   };
+  if (combined)
+    input.questions.push({
+      question: 'What should the release note say?',
+      header: 'Release note',
+      options: [
+        { label: 'Ready', description: 'Announce the release' },
+        { label: 'Review', description: 'Ask for another review' },
+      ],
+      multiSelect: false,
+    });
   say({
     type: 'assistant',
     message: {
@@ -1091,7 +1110,8 @@ async function play(message) {
   }
   if (!commandLog && !current.interrupted && !recovery && text.includes('background'))
     await startInBackground(current, id);
-  if (!current.interrupted && !recovery && text.includes('ask')) await askQuestion(id);
+  if (!current.interrupted && !recovery && text.includes('ask'))
+    await askQuestion(id, text.includes('ask combined'));
   if (!current.interrupted && !recovery && text.includes('edit')) {
     const file = NOTES;
     await useTool(
