@@ -5,4 +5,4 @@ arch=${1:-arm64}
 if [ "$#" -gt 0 ]; then shift; fi
 linux_init "$arch"
 linux_build_image
-step "Linux $linux_arch e2e container" linux_workspace e2e '' "$@"
+step "Linux $linux_arch e2e container" linux_workspace e2e "${DIAG_ARTIFACTS:-}" "$@"
