@@ -5,7 +5,6 @@ import { api } from '../api/client';
 import { newCanvasId } from '../../shared/canvas';
 import { EXAMPLES } from '../../shared/examples';
 import { templateInfo } from '../../shared/templates';
-import { catalog } from '../catalog';
 import { fakeCanvas } from '../test-canvas';
 import { fakeSessions } from '../test-sessions';
 import { expectOneOp } from '../test-api';
@@ -19,7 +18,7 @@ vi.mock('../terminal/screen', async () => ({
 const disposals: (() => void)[] = [];
 beforeEach(() => {
   vi.spyOn(api, 'templatesList').mockResolvedValue({
-    items: EXAMPLES.map((example) => templateInfo(example, catalog())),
+    items: EXAMPLES.map((example) => templateInfo(example)),
   });
   vi.spyOn(api, 'catalogInstalled').mockResolvedValue({ 'claude-code': true, codex: false });
 });
@@ -179,7 +178,7 @@ it('a template chosen from Start creates the canvas in one op', async () => {
       {
         op: 'canvas.create',
         args: expect.objectContaining({
-          template: templateInfo(template, catalog()).id,
+          template: templateInfo(template).id,
         }) as unknown,
       },
     ]);

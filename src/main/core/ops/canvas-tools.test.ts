@@ -1,3 +1,4 @@
+import { readTemplate } from '../../../shared/model/template-file';
 import { templateAgents } from '../test-template';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -202,13 +203,13 @@ describe('canvas.insertTemplate', () => {
       if (!template) throw new Error('No template');
       const before = new Set(doc().nodes.map(({ id }) => id));
       const made = (await applied('canvas.insertTemplate', {
-        agents: templateAgents(fromFile(template.text, CATALOG).id, 'claude-code'),
-        template: fromFile(template.text, CATALOG).id,
+        agents: templateAgents(readTemplate(template.text).id, 'claude-code'),
+        template: readTemplate(template.text).id,
         ...(parent === undefined ? {} : { parent }),
       })) as { roots: string[]; agents: string[] };
       const added = doc().nodes.filter(({ id }) => !before.has(id));
       expect(added).toHaveLength(3);
-      expect(added.map(({ data }) => data.label)).toEqual(['Claude', 'Codex', 'Judge']);
+      expect(added.map(({ data }) => data.label)).toEqual(['A', 'B', 'Judge']);
       expect(made.roots).toEqual(added.map(({ id }) => id));
       expect(made.agents).toEqual(made.roots);
       expect(added.map(({ parentId }) => parentId)).toEqual([parent, parent, parent]);

@@ -31,3 +31,7 @@ Each connection declares `context`, true for Claude Code’s Terminal and Agent 
 ## Prepared agent API gate
 
 Each connection declares `api: 'http' | 'channel' | null` in `ConnectionDescriptor`. The strict catalog schema carries it as plain metadata, including for unfamiliar adapters. Every shipped connection and the made-up catalog declares `null`, pinned by the adapter contracts and regenerated test catalog: a native route is enabled only with that connection's evidence gate. This declaration alone creates no credential or running API.
+
+## Template jobs
+
+Shipped templates declare `Job`s directly in their own format; `templates.list` reports only each role's id, name and received jobs, with no adapter. The gallery compares those jobs with each adapter's declared actions, without inferring capability from a CLI name or installation. At the core's template boundary, each job becomes the recipient's first action declaring that job; an unsupported job is invalid before a canvas change or workspace allocation. Runtime action translation for an explicit adapter change remains separate.

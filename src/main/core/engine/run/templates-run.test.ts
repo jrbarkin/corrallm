@@ -1,11 +1,11 @@
-import { TEST_CATALOG, TEST_ENGINE } from '../test-engine';
+import { TEST_CATALOG } from '../test-engine';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { fromFile } from '../../../../shared/model/file';
+import { compileExample } from '../../../../shared/model/test-template';
 import { expectRestorable } from './test-restore';
 import { manual, setup } from './test-run';
 import { EXAMPLES } from '../../../../shared/examples';
-import { withAgents, withConnections, fillTemplate } from '../../../../shared/model/templates';
+import { fillTemplate } from '../../../../shared/model/templates';
 import { findItem } from '../../../../shared/model/queue';
 
 /*
@@ -18,31 +18,8 @@ afterEach(expectRestorable);
 const exampleNodes = (name: string) => {
   const example = EXAMPLES.find((e) => e.name === name);
   const values = Object.fromEntries((example?.fields ?? []).map((f) => [f.key, f.example]));
-  const document = fromFile(example?.text ?? '', TEST_CATALOG);
-  const roles = Object.fromEntries(
-    document.nodes
-      .filter((node) => node.type === 'agent')
-      .map((node) => [
-        node.id,
-        TEST_ENGINE.endpointOf(node.data).kind === 'known'
-          ? TEST_ENGINE.adapterOf(TEST_ENGINE.connectionOf(node.data))
-          : 'claude-code',
-      ]),
-  );
-  return fillTemplate(
-    withConnections(
-      withAgents(document, roles, { catalog: TEST_CATALOG }),
-      {},
-      { catalog: TEST_CATALOG },
-    ),
-    values,
-  ).nodes.map((node) => {
-    if (node.type !== 'agent') return node;
-    const connection = TEST_CATALOG.adapters.find(
-      (a) => a.id === TEST_ENGINE.adapterOf(TEST_ENGINE.connectionOf(node.data)),
-    )?.connections[0]?.id;
-    return connection ? { ...node, data: { ...node.data, connection } } : node;
-  });
+  if (!example) throw new Error('Missing template');
+  return fillTemplate(compileExample(example, TEST_CATALOG, 'claude-code'), values).nodes;
 };
 
 describe('the built-in templates, run', () => {
@@ -132,10 +109,10 @@ describe('the built-in templates, run', () => {
   ] as const)('Head to head ends the repeat only on a WINNER line: %s', (output, ends) => {
     const { store, reply, where, sent } = setup(exampleNodes('Head to head'), manual);
     store.start();
-    reply('claude', false, 'SUCCEEDED');
-    reply('codex');
-    reply('claude');
-    reply('codex');
+    reply('a', false, 'SUCCEEDED');
+    reply('b');
+    reply('a');
+    reply('b');
     reply('judge', false, output);
     expect(store.snapshot().agents.judge?.rounds).toEqual({
       judging: { round: ends ? 1 : 2 },
@@ -147,23 +124,23 @@ describe('the built-in templates, run', () => {
   it('Head to head bounds both contestants and Judge to two completed rounds before the review report', () => {
     const { store, reply, where, sent } = setup(exampleNodes('Head to head'), manual);
     store.start();
-    reply('claude');
-    reply('codex');
+    reply('a');
+    reply('b');
     for (const round of ['1', '2']) {
-      reply('claude', false, `Committed result for round ${round}.`);
-      reply('codex', false, `Committed result for round ${round}.`);
+      reply('a', false, `Committed result for round ${round}.`);
+      reply('b', false, `Committed result for round ${round}.`);
       expect(where().judge).toBe('running judge');
       reply('judge', false, `Committed feedback for round ${round}; neither version clearly wins.`);
     }
-    expect(where()).toMatchObject({ claude: 'done', codex: 'done', judge: 'running merge' });
-    for (const role of ['claude', 'codex']) {
+    expect(where()).toMatchObject({ a: 'done', b: 'done', judge: 'running merge' });
+    for (const role of ['a', 'b']) {
       const turns = sent.filter((turn) => turn.agent === role);
       expect(turns).toHaveLength(3); // Startup instructions, then two builds.
     }
     expect(sent.filter((turn) => turn.agent === 'judge')).toHaveLength(3);
     expect(sent.at(-1)?.text).toMatch(/^Report the winning role, ref and reason for review/);
     reply('judge');
-    expect(where()).toMatchObject({ claude: 'done', codex: 'done', judge: 'done' });
+    expect(where()).toMatchObject({ a: 'done', b: 'done', judge: 'done' });
   });
 
   it('Fan-out research sends each search only after its question turn ends', () => {

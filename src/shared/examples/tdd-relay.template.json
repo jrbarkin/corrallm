@@ -1,6 +1,6 @@
 {
-  "format": "corrallm",
-  "version": 2,
+  "format": "corrallm-template",
+  "version": 1,
   "id": "619067df-7b8c-4d38-adea-d5064f06f091",
   "nodes": [
     {
@@ -22,7 +22,6 @@
         "y": 52
       },
       "parent": "workspace",
-      "adapter": "codex",
       "queue": [
         {
           "id": "write-tests",
@@ -30,9 +29,9 @@
         },
         {
           "id": "red",
-          "action": "exec_command",
           "instruction": "Run the new tests.",
-          "expect": "fails"
+          "expect": "fails",
+          "job": "shell"
         },
         {
           "id": "red-check",
@@ -57,7 +56,6 @@
         "y": 272
       },
       "parent": "workspace",
-      "adapter": "claude-code",
       "queue": [
         {
           "id": "tests-ready",
@@ -77,8 +75,8 @@
             },
             {
               "id": "green",
-              "action": "Bash",
-              "instruction": "Run the tests."
+              "instruction": "Run the tests.",
+              "job": "shell"
             }
           ],
           "until": {
@@ -98,7 +96,6 @@
         "y": 492
       },
       "parent": "workspace",
-      "adapter": "codex",
       "queue": [
         {
           "id": "implemented",
@@ -114,8 +111,8 @@
         },
         {
           "id": "still-green",
-          "action": "exec_command",
-          "instruction": "Run the tests."
+          "instruction": "Run the tests.",
+          "job": "shell"
         },
         {
           "id": "broke",

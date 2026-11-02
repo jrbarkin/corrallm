@@ -10,8 +10,6 @@ import { toolName } from '../../shared/api/registry';
 import { PARTIES } from '../../shared/api/surface';
 import { newCanvasId } from '../../shared/canvas';
 import { EXAMPLES } from '../../shared/examples';
-import { isIf, isRepeat } from '../../shared/model/queue';
-import type { QueueItem } from '../../shared/model/queue';
 import type { Job } from '../../shared/adapter';
 import { listTools } from '../api/mcp';
 import { ADAPTERS, CATALOG } from '../sessions/adapters';
@@ -109,19 +107,12 @@ describe('createCore', () => {
   });
   it('lists each shipped template’s fields and agent roles with the jobs of all their steps', async () => {
     const started = await start({ connectors: {}, environment: () => Promise.resolve({}) });
-    const jobs = (queue: QueueItem[]): Job[] => [
-      ...new Set(
-        queue.flatMap((item): Job[] => {
-          if (isIf(item)) return jobs(item.then);
-          if (isRepeat(item)) return jobs(item.repeat);
-          if (!('action' in item)) return [];
-          const job = CATALOG.adapters
-            .flatMap((adapter) => adapter.actions)
-            .find((action) => action.name === item.action)?.job;
-          return job === undefined ? [] : [job];
-        }),
-      ),
-    ];
+    interface Item {
+      job?: Job;
+      target?: string;
+      then?: Item[];
+      repeat?: Item[];
+    }
     const expected = EXAMPLES.map((example) => {
       const blanks = [
         ...new Set([...example.text.matchAll(/\{\{(\w+)\}\}/g)].map((match) => match[1])),
@@ -129,7 +120,18 @@ describe('createCore', () => {
       expect((example.fields ?? []).map((field) => field.key).sort()).toEqual(blanks);
       const file = JSON.parse(example.text) as {
         id: string;
-        nodes: { id: string; kind: string; label: string; adapter?: string; queue?: QueueItem[] }[];
+        nodes: { id: string; kind: string; label: string; queue?: Item[] }[];
+      };
+      const jobs = (recipient: string): Job[] => {
+        const found = new Set<Job>();
+        const visit = (items: Item[], owner: string): void => {
+          for (const item of items) {
+            if (item.job && (item.target ?? owner) === recipient) found.add(item.job);
+            visit(item.then ?? item.repeat ?? [], owner);
+          }
+        };
+        for (const node of file.nodes) visit(node.queue ?? [], node.id);
+        return [...found];
       };
       return {
         id: file.id,
@@ -141,8 +143,7 @@ describe('createCore', () => {
           .map((node) => ({
             id: node.id,
             name: node.label,
-            ...(node.adapter === undefined ? {} : { adapter: node.adapter }),
-            jobs: jobs(node.queue ?? []),
+            jobs: jobs(node.id),
           })),
       };
     });
@@ -150,7 +151,7 @@ describe('createCore', () => {
       ok: true,
       value: { items: expected },
     });
-    expect(expected.flatMap((item) => item.agents).some((agent) => !('adapter' in agent))).toBe(
+    expect(expected.flatMap((item) => item.agents).every((agent) => !('adapter' in agent))).toBe(
       true,
     );
     expect(expected.flatMap((item) => item.fields).length).toBeGreaterThan(0);

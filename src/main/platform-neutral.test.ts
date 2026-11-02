@@ -2,6 +2,8 @@ import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 
 import { describe, expect, it } from 'vitest';
+import { EXAMPLES } from '../shared/examples';
+import { readTemplate } from '../shared/model/template-file';
 
 /*
  * The platform names no CLI: what is particular to one belongs in its adapter's folder
@@ -45,16 +47,6 @@ const ALLOWED: Readonly<Record<string, number>> = {
   'src/renderer/graph/GraphEditor.css': 2,
   'src/renderer/graph/Questions.tsx': 3,
 
-  'src/shared/examples.ts': 7,
-  'src/shared/examples/cross-check.corral': 2,
-  'src/shared/examples/fan-out.corral': 4,
-  'src/shared/examples/feature-crew.corral': 4,
-  'src/shared/examples/head-to-head.corral': 13,
-  'src/shared/examples/release-checks.corral': 2,
-  'src/shared/examples/review-loop.corral': 2,
-  'src/shared/examples/review-panel.corral': 4,
-  'src/shared/examples/tdd-relay.corral': 3,
-  'src/shared/examples/team-lead.corral': 4,
   'src/renderer/open-link.ts': 1,
   'src/renderer/terminal/TerminalPane.css': 1,
   'src/renderer/terminal/screen.ts': 4,
@@ -100,4 +92,14 @@ describe('the platform', () => {
     );
     expect(counts, 'Lower a file’s count when it names fewer; never raise it').toEqual(ALLOWED);
   });
+});
+
+it('lists every shipped template definition exactly once', () => {
+  const dir = path.join(ROOT, 'src/shared/examples');
+  const files = readdirSync(dir);
+  expect(files).toHaveLength(10);
+  expect(files.every((file) => file.endsWith('.template.json'))).toBe(true);
+  const texts = files.map((file) => readFileSync(path.join(dir, file), 'utf8'));
+  expect(texts.sort()).toEqual(EXAMPLES.map((example) => example.text).sort());
+  for (const text of texts) expect(readTemplate(text).nodes.length).toBeGreaterThan(0);
 });

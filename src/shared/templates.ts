@@ -1,7 +1,6 @@
-import type { AdapterId, Catalog, Job } from './adapter';
-import { fromFile } from './model/file';
-import { isIf, isRepeat } from './model/queue';
-import type { QueueItem } from './model/queue';
+import type { Job } from './adapter';
+import { readTemplate } from './model/template-file';
+import type { TemplateItem } from './model/template-file';
 
 export { fillTemplate, placeholdersOf } from './model/templates';
 
@@ -12,7 +11,7 @@ export interface TemplateField {
   example: string;
 }
 
-/** A shipped canvas file, with the words and blanks the gallery asks about before opening it. */
+/** A shipped template definition, with the words and blanks the gallery asks about before opening it. */
 export interface Example {
   name: string;
   description: string;
@@ -24,7 +23,6 @@ export interface Example {
 export interface TemplateAgent {
   id: string;
   name: string;
-  adapter?: AdapterId;
   jobs: Job[];
 }
 
@@ -38,36 +36,35 @@ export interface TemplateInfo {
 }
 
 /** A shipped template's blanks and roles, including the jobs needed inside Ifs and repeats. */
-export function templateInfo(example: Example, catalog: Catalog): TemplateInfo {
-  const canvas = fromFile(example.text, catalog);
-  const actions = catalog.adapters.flatMap((adapter) => adapter.actions);
-  const jobs = (items: readonly QueueItem[]): Job[] => [
-    ...new Set(
-      items.flatMap((item): Job[] => {
-        if (isIf(item)) return jobs(item.then);
-        if (isRepeat(item)) return jobs(item.repeat);
-        if (!('action' in item)) return [];
-        const job = actions.find((action) => action.name === item.action)?.job;
-        return job === undefined ? [] : [job];
-      }),
-    ),
-  ];
+export function templateInfo(example: Example): TemplateInfo {
+  const template = readTemplate(example.text);
+  const jobs = new Map<string, Set<Job>>();
+  const visit = (items: readonly TemplateItem[], owner: string): void => {
+    for (const item of items) {
+      if ('then' in item) visit(item.then, owner);
+      else if ('repeat' in item) visit(item.repeat, owner);
+      else if ('job' in item) {
+        const recipient = item.target ?? owner;
+        let set = jobs.get(recipient);
+        if (!set) {
+          set = new Set();
+          jobs.set(recipient, set);
+        }
+        set.add(item.job);
+      }
+    }
+  };
+  for (const node of template.nodes)
+    if (node.type === 'agent') visit(node.data.queue ?? [], node.id);
   return {
-    id: canvas.id,
+    id: template.id,
     name: example.name,
     description: example.description,
     fields: [...(example.fields ?? [])],
-    agents: canvas.nodes.flatMap((node): TemplateAgent[] =>
+    agents: template.nodes.flatMap((node) =>
       node.type !== 'agent'
         ? []
-        : [
-            {
-              id: node.id,
-              name: node.data.label,
-              ...(node.data.adapter === undefined ? {} : { adapter: node.data.adapter }),
-              jobs: jobs(node.data.queue ?? []),
-            },
-          ],
+        : [{ id: node.id, name: node.data.label, jobs: [...(jobs.get(node.id) ?? [])] }],
     ),
   };
 }

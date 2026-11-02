@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import { adapterIn } from '../../shared/adapter';
 import { catalog } from '../catalog';
 import type { NewAgentEndpoint } from './AddAgentChooser';
-import type { AdapterId } from '../../shared/adapter';
+import type { Job, AdapterId } from '../../shared/adapter';
 import type { InstalledClis } from '../../shared/session';
 import { api } from '../api/client';
 import { AdapterLogo } from '../AdapterLogo';
@@ -211,9 +211,19 @@ export function ExampleGallery({
                     {connectedAgents().map((type) => (
                       <option key={type} value={type}>
                         {adapterName(type)}
+                        {missingJobs(type, role.jobs).length
+                          ? ` (missing jobs: ${missingJobs(type, role.jobs).join(', ')})`
+                          : ''}
                       </option>
                     ))}
                   </select>
+                  {chosen.agents[role.id] &&
+                    missingJobs(chosen.agents[role.id], role.jobs).length > 0 && (
+                      <span role="status">
+                        {adapterName(chosen.agents[role.id])} lacks jobs for {role.name}:{' '}
+                        {missingJobs(chosen.agents[role.id], role.jobs).join(', ')}
+                      </span>
+                    )}
                   <ConnectionSelect
                     role={role.name}
                     agent={chosen.agents[role.id]}
@@ -270,15 +280,8 @@ export function ExampleGallery({
                   <span className="graph-example-description">{example.description}</span>
                   <span className="graph-example-agents" aria-hidden="true">
                     {example.agents.map((role) => (
-                      <span
-                        key={role.id}
-                        title={role.adapter === undefined ? 'Any agent' : adapterName(role.adapter)}
-                      >
-                        {role.adapter === undefined ? (
-                          <span className="graph-example-any-agent" />
-                        ) : (
-                          <AdapterLogo adapter={role.adapter} size={18} />
-                        )}
+                      <span key={role.id} title="Any agent">
+                        <span className="graph-example-any-agent" />
                       </span>
                     ))}
                   </span>
@@ -330,4 +333,9 @@ function ConnectionSelect({
       ))}
     </select>
   );
+}
+
+function missingJobs(adapter: AdapterId | undefined, jobs: readonly Job[]): Job[] {
+  const actions = adapterIn(catalog(), adapter)?.actions ?? [];
+  return jobs.filter((job) => !actions.some((action) => action.job === job));
 }

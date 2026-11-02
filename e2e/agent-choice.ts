@@ -21,7 +21,7 @@ export async function chooseAddedAgent(
   await expect(chooser).toHaveCount(0);
 }
 
-/** Keep these native-template fixtures' former endpoints, with every role explicitly chosen. */
+/** Choose every template role explicitly for the fixture. */
 export async function chooseTemplateAgents(page: Page, unassigned: AdapterId): Promise<void> {
   const gallery = page.getByRole('dialog', { name: 'Templates', exact: true });
   const name = await gallery.getByRole('heading', { level: 2 }).textContent();
@@ -36,5 +36,5 @@ export async function chooseTemplateAgents(page: Page, unassigned: AdapterId): P
   for (const role of template.agents)
     await gallery
       .getByRole('combobox', { name: `${role.name}'s agent`, exact: true })
-      .selectOption(role.adapter ?? unassigned);
+      .selectOption(unassigned);
 }

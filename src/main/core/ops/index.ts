@@ -156,7 +156,7 @@ export function implementations(services: OpServices): Implementations {
     ...topicsOps(services),
     ...appOps(services),
     ...catalogOps(services),
-    ...templatesOps(services),
+    ...templatesOps(),
     ...projectOps(services),
     ...worktreeOps(services),
     ...branchOps(services),

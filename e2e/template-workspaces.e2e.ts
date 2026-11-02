@@ -200,7 +200,7 @@ for (const [index, [name, artifact]] of cases.entries()) {
         if (!tree) throw new Error(role);
         return tree;
       };
-      for (const role of ['claude', 'codex']) {
+      for (const role of ['a', 'b']) {
         const contestant = by(role);
         await mkdir(path.join(contestant.path, '.compete'));
         await writeFile(path.join(contestant.path, '.compete/result.md'), 'Round: 1\n');
@@ -211,17 +211,17 @@ for (const [index, [name, artifact]] of cases.entries()) {
         );
       }
       await mkdir(path.join(by('judge').path, '.compete'));
-      for (const role of ['claude', 'codex'])
+      for (const role of ['a', 'b'])
         await writeFile(
           path.join(by('judge').path, `.compete/feedback-${role}.md`),
           'Round: 1\nImprove this\n',
         );
       expect(() =>
-        git(by('claude').path, env, 'show', `${by('judge').ref}:.compete/feedback-claude.md`),
+        git(by('a').path, env, 'show', `${by('judge').ref}:.compete/feedback-a.md`),
       ).toThrow();
       git(by('judge').path, env, 'add', '-A');
       commit(by('judge').path, env, 'feedback');
-      for (const role of ['claude', 'codex'])
+      for (const role of ['a', 'b'])
         expect(
           git(by(role).path, env, 'show', `${by('judge').ref}:.compete/feedback-${role}.md`),
         ).toContain('Round: 1');

@@ -1,3 +1,4 @@
+import { chooseExample } from '../shared/model/test-template';
 import type { Run } from '../shared/model/run';
 import type { Session } from '../shared/model/session';
 import type { MessageView } from '../shared/model/views';
@@ -18,7 +19,7 @@ import * as A from '../shared/model/agent-ops';
 import type { QueueChange, QueueEntry } from '../shared/model/queue';
 import { arrange } from '../shared/model/layout';
 import { insert } from '../shared/model/insert';
-import { fillTemplate, withAgents, withConnections } from '../shared/model/templates';
+import { fillTemplate } from '../shared/model/templates';
 import { exampleOf, EXAMPLES } from '../shared/examples';
 import { templateInfo } from '../shared/templates';
 import { catalog } from './catalog';
@@ -53,7 +54,7 @@ export function fakeCanvas(
     return { ok: true, value: { items: await (replies ?? fallback).files(query, agent) } };
   });
   core.respond('templates.list', {
-    items: EXAMPLES.map((example) => templateInfo(example, catalog())),
+    items: EXAMPLES.map((example) => templateInfo(example)),
   });
   let runtime: ReturnType<typeof canvasRuntime> | undefined;
   const runtimes = new Map<CanvasId, ReturnType<typeof canvasRuntime>>();
@@ -145,14 +146,9 @@ export function fakeCanvas(
     if (args.template !== undefined && !example) throw new Error('No test template');
     const part = !example
       ? emptyCanvas()
-      : withConnections(
-          withAgents(
-            fillTemplate(fromFile(example.text, catalog()), args.values ?? {}),
-            args.agents ?? {},
-            { catalog: catalog() },
-          ),
-          args.connections ?? {},
-          { catalog: catalog() },
+      : fillTemplate(
+          chooseExample(example, catalog(), args.agents ?? {}, args.connections ?? {}),
+          args.values ?? {},
         );
     meta.name = null;
     meta.project = null;
@@ -385,12 +381,9 @@ export function fakeCanvas(
           const args = OPS[op].input.parse(raw);
           const template = exampleOf(args.template);
           if (!template) throw new Error('No template');
-          const part = withConnections(
-            withAgents(fillTemplate(fromFile(template.text, catalog()), args.values), args.agents, {
-              catalog: catalog(),
-            }),
-            args.connections,
-            { catalog: catalog() },
+          const part = fillTemplate(
+            chooseExample(template, catalog(), args.agents, args.connections),
+            args.values,
           );
           const made = insert(
             document,

@@ -566,3 +566,30 @@ describe('fallbackMove: corrallm’s commit of a switch or a return (B11a C2)', 
     ).toThrow(/step/);
   });
 });
+
+it('keeps unmapped native actions when changing an existing agent, translating jobs at every depth', () => {
+  const queue: QueueItem[] = [
+    { id: 'run', action: 'exec_command', expect: 'fails' },
+    { id: 'diff', action: '/diff' },
+    { id: 'if', if: { kind: 'failed' }, then: [{ id: 'patch', action: 'apply_patch' }] },
+    {
+      id: 'repeat',
+      repeat: [{ id: 'again', action: 'exec_command' }],
+      until: { kind: 'succeeded' },
+      rounds: 2,
+      otherwise: 'ask',
+    },
+  ];
+  expect(translateActions(queue, 'codex', 'claude-code', TEST_CATALOG)).toEqual([
+    { id: 'run', action: 'Bash', expect: 'fails' },
+    { id: 'diff', action: '/diff' },
+    { id: 'if', if: { kind: 'failed' }, then: [{ id: 'patch', action: 'Edit' }] },
+    {
+      id: 'repeat',
+      repeat: [{ id: 'again', action: 'Bash' }],
+      until: { kind: 'succeeded' },
+      rounds: 2,
+      otherwise: 'ask',
+    },
+  ]);
+});

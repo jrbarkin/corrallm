@@ -148,7 +148,7 @@ describe('an agent with no endpoint chosen', () => {
   it('requires every role for template creation too, without creating a canvas on refusal', async () => {
     const example = EXAMPLES[0];
     if (!example) throw new Error('No template');
-    const info = templateInfo(example, CATALOG);
+    const info = templateInfo(example);
     const before = await core.call('canvas.list', {}, CALLERS.you);
     const full = Object.fromEntries(info.agents.map((role) => [role.id, 'claude-code']));
     const role = info.agents[0];
@@ -209,7 +209,7 @@ describe('an agent with no endpoint chosen', () => {
   it('requires every template role before inserting anything', async () => {
     const example = EXAMPLES[0];
     if (!example) throw new Error('No template');
-    const info = templateInfo(example, CATALOG);
+    const info = templateInfo(example);
     const before = core.engines.canvas(CANVAS)?.document;
     for (const agents of [
       {},
@@ -222,4 +222,41 @@ describe('an agent with no endpoint chosen', () => {
       expect(core.engines.canvas(CANVAS)?.document).toBe(before);
     }
   });
+});
+
+it('checks every template job before creating or inserting anything', async () => {
+  const example = EXAMPLES.find((example) => example.name === 'Feature crew');
+  if (!example) throw new Error('Missing fixture');
+  const info = templateInfo(example);
+  const adapter = CATALOG.adapters.find((adapter) => adapter.id === 'claude-code');
+  if (!adapter) throw new Error('Missing fixture adapter');
+  const actions = adapter.actions;
+  adapter.actions = actions.filter((action) => action.job !== 'code-review');
+  try {
+    const before = core.engines.canvas(CANVAS)?.document;
+    const canvases = await core.call('canvas.list', {}, CALLERS.you);
+    const args = {
+      template: info.id,
+      agents: Object.fromEntries(info.agents.map((role) => [role.id, adapter.id])),
+    };
+    for (const op of ['canvas.create', 'canvas.insertTemplate'] as const) {
+      const result = await core.call(
+        op,
+        { ...(op === 'canvas.insertTemplate' ? { canvas: CANVAS } : {}), ...args },
+        CALLERS.you,
+      );
+      expect(result).toMatchObject({
+        ok: false,
+        error: {
+          code: 'invalid',
+          sentence: expect.stringMatching(/Reviewer.*review.*code-review/) as unknown,
+        },
+      });
+      expect(core.engines.canvas(CANVAS)?.document).toBe(before);
+      expect(await core.call('canvas.list', {}, CALLERS.you)).toEqual(canvases);
+      expect(fake.started).toEqual([]);
+    }
+  } finally {
+    adapter.actions = actions;
+  }
 });

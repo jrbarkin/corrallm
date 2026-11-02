@@ -1,6 +1,6 @@
 {
-  "format": "corrallm",
-  "version": 2,
+  "format": "corrallm-template",
+  "version": 1,
   "id": "2f1ad1f9-7978-4f49-b7ae-39291affdcf9",
   "nodes": [
     {
@@ -22,7 +22,6 @@
         "y": 52
       },
       "parent": "workspace",
-      "adapter": "claude-code",
       "queue": [
         {
           "id": "brief",
@@ -30,8 +29,8 @@
         },
         {
           "id": "tests",
-          "action": "Bash",
-          "instruction": "Run the full test suite, then say how many tests failed as “N failed” on a line of its own."
+          "instruction": "Run the full test suite, then say how many tests failed as “N failed” on a line of its own.",
+          "job": "shell"
         },
         {
           "id": "red",
@@ -56,7 +55,7 @@
           "then": [
             {
               "id": "audit",
-              "action": "/security-review"
+              "message": "Review the changes for security issues. Report concrete risks and how to fix them."
             },
             {
               "id": "tag",
@@ -74,8 +73,7 @@
         "x": 380,
         "y": 212
       },
-      "parent": "workspace",
-      "adapter": "codex"
+      "parent": "workspace"
     }
   ],
   "links": []

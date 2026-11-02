@@ -1,6 +1,6 @@
 {
-  "format": "corrallm",
-  "version": 2,
+  "format": "corrallm-template",
+  "version": 1,
   "id": "3054f47c-1451-4c68-8afb-d3b38cae4ff2",
   "nodes": [
     {
@@ -22,7 +22,6 @@
         "y": 52
       },
       "parent": "workspace",
-      "adapter": "claude-code",
       "queue": [
         {
           "id": "build",
@@ -30,8 +29,8 @@
         },
         {
           "id": "tests",
-          "action": "Bash",
-          "instruction": "Run the tests."
+          "instruction": "Run the tests.",
+          "job": "shell"
         }
       ]
     },
@@ -44,7 +43,6 @@
         "y": 292
       },
       "parent": "workspace",
-      "adapter": "codex",
       "queue": [
         {
           "id": "built",
@@ -56,8 +54,8 @@
         },
         {
           "id": "review",
-          "action": "/review",
-          "instruction": "Review the uncommitted changes Builder just made, for bugs."
+          "instruction": "Review the uncommitted changes Builder just made, for bugs.",
+          "job": "code-review"
         },
         {
           "id": "write-up",
@@ -74,7 +72,6 @@
         "y": 292
       },
       "parent": "workspace",
-      "adapter": "claude-code",
       "queue": [
         {
           "id": "built",
@@ -86,7 +83,7 @@
         },
         {
           "id": "review",
-          "action": "/security-review"
+          "message": "Review the changes for security issues. Report concrete risks and how to fix them."
         },
         {
           "id": "write-up",
@@ -127,7 +124,6 @@
         "y": 532
       },
       "parent": "workspace",
-      "adapter": "claude-code",
       "queue": [
         {
           "id": "reviewed",

@@ -1,9 +1,9 @@
+import { compileExample } from './test-template';
 import { describe, expect, it } from 'vitest';
 
 import { EXAMPLES } from '../examples';
 import { TEST_CATALOG } from '../test-model';
 import type { QueueItem } from './queue';
-import { fromFile } from './file';
 import { workspaceOwners } from './workspaces';
 import identities from './test-templates-identity.json';
 
@@ -18,14 +18,14 @@ const walk = (items: readonly QueueItem[]): QueueItem[] =>
   ]);
 
 describe.each(EXAMPLES)('$name workspaces', (example) => {
-  const document = fromFile(example.text, TEST_CATALOG);
+  const document = compileExample(example, TEST_CATALOG, 'claude-code');
   const agents = document.nodes.filter((node) => node.type === 'agent');
   it('shares handoff files in one outer frame, except the three independent competitors/judge trees', () => {
     const owners = workspaceOwners(document);
     if (example.name === 'Head to head') {
       expect(owners.map(({ key, agents }) => ({ key, agents }))).toEqual([
-        { key: 'agent/claude', agents: ['claude'] },
-        { key: 'agent/codex', agents: ['codex'] },
+        { key: 'agent/a', agents: ['a'] },
+        { key: 'agent/b', agents: ['b'] },
         { key: 'agent/judge', agents: ['judge'] },
       ]);
     } else {
@@ -43,7 +43,11 @@ describe.each(EXAMPLES)('$name workspaces', (example) => {
     const original = identities[document.id as keyof typeof identities];
     expect(document.links).toEqual(original.links);
     for (const old of original.nodes) {
-      const node = document.nodes.find(({ id }) => id === old.id);
+      const renamed =
+        example.name === 'Head to head'
+          ? (({ claude: 'a', codex: 'b' } as Record<string, string>)[old.id] ?? old.id)
+          : old.id;
+      const node = document.nodes.find(({ id }) => id === renamed);
       expect(node).toBeDefined();
       expect(node?.type).toBe(old.kind === 'group' ? 'frame' : 'agent');
       expect(
@@ -58,7 +62,13 @@ describe.each(EXAMPLES)('$name workspaces', (example) => {
       );
     }
     expect(agents.map(({ id }) => id)).toEqual(
-      original.nodes.filter(({ kind }) => kind === 'agent').map(({ id }) => id),
+      original.nodes
+        .filter(({ kind }) => kind === 'agent')
+        .map(({ id }) =>
+          example.name === 'Head to head'
+            ? (({ claude: 'a', codex: 'b' } as Record<string, string>)[id] ?? id)
+            : id,
+        ),
     );
   });
 
@@ -71,8 +81,9 @@ describe.each(EXAMPLES)('$name workspaces', (example) => {
 
 it('Head to head exchanges committed refs/feedback and reports a winner for review', () => {
   const example = EXAMPLES.find(({ name }) => name === 'Head to head');
-  const doc = fromFile(example?.text ?? '', TEST_CATALOG);
-  for (const id of ['claude', 'codex']) {
+  if (!example) throw new Error('Missing template');
+  const doc = compileExample(example, TEST_CATALOG, 'claude-code');
+  for (const id of ['a', 'b']) {
     const node = doc.nodes.find((node) => node.id === id);
     const queue = walk(node?.type === 'agent' ? (node.data.queue ?? []) : []);
     const build = queue.find((item) => item.id === 'build');

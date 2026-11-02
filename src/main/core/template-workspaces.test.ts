@@ -1,11 +1,12 @@
+import { readTemplate } from '../../shared/model/template-file';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { afterEach, expect, it, vi } from 'vitest';
 
 import type { SessionMode } from '../../shared/session';
 import { EXAMPLES } from '../../shared/examples';
-import { fromFile, toFile } from '../../shared/model/file';
-import { fillTemplate } from '../../shared/model/templates';
+import { toFile } from '../../shared/model/file';
+import { compileTemplate, fillTemplate } from '../../shared/model/templates';
 import { CATALOG } from '../sessions/adapters';
 import { FakeConnector } from '../sessions/fake';
 import type { SessionSpec } from '../sessions/connector';
@@ -36,21 +37,24 @@ async function prepare(name: string, owned = true) {
   const values = Object.fromEntries(
     (fixture.fields ?? []).map(({ key, example }) => [key, example]),
   );
-  const doc = fillTemplate(fromFile(fixture.text, CATALOG), values);
-  doc.nodes = doc.nodes.map((node) =>
-    node.type !== 'agent'
-      ? node
-      : {
-          ...node,
-          data: {
-            ...node.data,
-            connection:
-              (node.data.adapter ?? 'claude-code') === 'codex'
-                ? 'codex.app-server'
-                : 'claude-code.sdk',
-          },
-        },
+  const template = readTemplate(fixture.text);
+  const choices = Object.fromEntries(
+    template.nodes.flatMap((node) => {
+      if (node.type !== 'agent') return [];
+      const adapter =
+        (name === 'TDD relay' && ['tester', 'refactorer'].includes(node.id)) ||
+        (name === 'Head to head' && node.id === 'b')
+          ? 'codex'
+          : 'claude-code';
+      return [
+        [
+          node.id,
+          { adapter, connection: adapter === 'codex' ? 'codex.app-server' : 'claude-code.sdk' },
+        ],
+      ];
+    }),
   );
+  const doc = fillTemplate(compileTemplate(template, choices, CATALOG), values);
   const profile = path.join(root, 'profile');
   mkdirSync(profile);
   const file = path.join(root, 'template.corral');
@@ -256,7 +260,7 @@ it('Head to head reads contestants and two rounds of Judge feedback only through
   // Test-owned facts only: C's authorized context selector is not yet composed. Never expose
   // these raw store/Git facts to a caller as a substitute for that missing selector.
   const refs = new Map(
-    ['claude', 'codex', 'judge'].map((role) => [
+    ['a', 'b', 'judge'].map((role) => [
       role,
       git(made.cwd(role), made.env, 'symbolic-ref', 'HEAD').trim(),
     ]),
@@ -268,7 +272,7 @@ it('Head to head reads contestants and two rounds of Judge feedback only through
     return ref;
   };
   for (const round of ['1', '2']) {
-    for (const role of ['claude', 'codex']) {
+    for (const role of ['a', 'b']) {
       if (round === '2') {
         const feedback = git(
           made.cwd(role),
@@ -303,7 +307,7 @@ it('Head to head reads contestants and two rounds of Judge feedback only through
     made.write('judge', '.compete/judged-round.md', `Round: ${round}\n`);
     git(made.cwd('judge'), made.env, 'add', '-A');
     commit(made.cwd('judge'), made.env, `feedback ${round}`);
-    for (const role of ['claude', 'codex'])
+    for (const role of ['a', 'b'])
       expect(
         git(made.cwd(role), made.env, 'show', `${refOf('judge')}:.compete/feedback-${role}.md`),
       ).toContain(`Round: ${round}`);

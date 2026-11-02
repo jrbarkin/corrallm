@@ -5,7 +5,6 @@ import { newCanvasId } from '../../shared/canvas';
 import { EXAMPLES } from '../../shared/examples';
 import { templateInfo } from '../../shared/templates';
 import { api } from '../api/client';
-import { catalog } from '../catalog';
 
 import type { AgentNode } from '../../shared/model/canvas';
 import { fakeCanvas } from '../test-canvas';
@@ -20,7 +19,7 @@ vi.mock('../terminal/screen', async () => ({
 const cleanups: (() => void)[] = [];
 beforeEach(() => {
   vi.spyOn(api, 'templatesList').mockResolvedValue({
-    items: EXAMPLES.map((example) => templateInfo(example, catalog())),
+    items: EXAMPLES.map((example) => templateInfo(example)),
   });
 });
 afterEach(() => {

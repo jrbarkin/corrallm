@@ -1,3 +1,4 @@
+import { compileExample } from '../../shared/model/test-template';
 import { useCatalog } from '../test-catalog';
 import { TWO_MADE_UP } from '../../shared/test-made-up';
 import { pickAddedAgent, pickTemplateAgents } from '../test-agent-choice';
@@ -13,7 +14,7 @@ import { catalog } from '../catalog';
 import { newCanvasId } from '../../shared/canvas';
 import type { QueueItem } from '../../shared/model/queue';
 import type { CanvasDocument } from '../../shared/model/canvas';
-import { fromFile, toFile } from '../../shared/model/file';
+import { toFile } from '../../shared/model/file';
 import { absolutePosition } from '../../shared/model/geometry';
 import { workspaceOwners } from '../../shared/model/workspaces';
 import { move } from '../../shared/model/structure';
@@ -467,11 +468,11 @@ it.each(['TDD relay', 'Head to head'])(
   async (name) => {
     const example = EXAMPLES.find((example) => example.name === name);
     if (!example) throw new Error('No template');
-    const template = templateInfo(example, catalog());
+    const template = templateInfo(example);
     vi.spyOn(api, 'templatesList').mockResolvedValue({ items: [template] });
     const view = await setup({ files: true });
     const previous = new Set(view.document.nodes.map(({ id }) => id));
-    const source = fromFile(example.text, catalog());
+    const source = compileExample(example, catalog(), 'claude-code');
     fireEvent.click(button('Templates…'));
     const gallery = within(await screen.findByRole('dialog', { name: 'Templates' }));
     fireEvent.click(await gallery.findByRole('button', { name: new RegExp(`^${example.name}`) }));
@@ -920,7 +921,7 @@ it('keeps nested group cards inside the new frame through a reparenting operatio
 it('creates a template as the new canvas, retaining its node ids and choosing a fresh project', async () => {
   const example = EXAMPLES[0];
   if (!example) throw new Error('No template');
-  const template = templateInfo(example, catalog());
+  const template = templateInfo(example);
   vi.spyOn(api, 'templatesList').mockResolvedValue({ items: [template] });
   const view = await setup({ files: true, project: true });
   expect(button('Project folder: Old project')).toBeDefined();
@@ -953,7 +954,7 @@ it('creates a template as the new canvas, retaining its node ids and choosing a 
   await waitFor(() => {
     expect(view.document.id).not.toBe(view.canvas);
   });
-  const source = fromFile(example.text, catalog());
+  const source = compileExample(example, catalog(), 'claude-code');
   const shape = (node: CanvasDocument['nodes'][number]) => ({
     id: node.id,
     type: node.type,

@@ -1,6 +1,6 @@
 {
-  "format": "corrallm",
-  "version": 2,
+  "format": "corrallm-template",
+  "version": 1,
   "id": "fb9ce84a-7237-4271-b494-933cb4d5f274",
   "nodes": [
     {
@@ -62,9 +62,9 @@
         },
         {
           "id": "red",
-          "action": "Bash",
           "instruction": "Run the new tests.",
-          "expect": "fails"
+          "expect": "fails",
+          "job": "shell"
         },
         {
           "id": "red-check",
@@ -84,8 +84,8 @@
         },
         {
           "id": "tests",
-          "action": "Bash",
-          "instruction": "Run the tests."
+          "instruction": "Run the tests.",
+          "job": "shell"
         }
       ]
     },
@@ -109,7 +109,8 @@
         },
         {
           "id": "review",
-          "action": "/code-review"
+          "job": "code-review",
+          "instruction": "Review the completed implementation against SPEC.md and PLAN.md. Report concrete defects, missing behavior and test gaps."
         },
         {
           "id": "verify",

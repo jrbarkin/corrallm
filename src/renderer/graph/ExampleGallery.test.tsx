@@ -48,7 +48,7 @@ it('lists and fills the fields and open agents returned by templates.list', asyn
   expect(onPick.mock.calls[0]?.[0]).toEqual(item);
 });
 
-it('distinguishes an open role from a role pinned to an adapter in the gallery', async () => {
+it('shows every unresolved gallery role with a hollow mark', async () => {
   vi.stubGlobal('api', {
     templatesList: vi.fn().mockResolvedValue({
       ok: true,
@@ -60,8 +60,8 @@ it('distinguishes an open role from a role pinned to an adapter in the gallery',
             description: 'Roles',
             fields: [],
             agents: [
-              { id: 'open', name: 'Open' },
-              { id: 'pinned', name: 'Pinned', adapter: 'codex' },
+              { id: 'open', name: 'Open', jobs: [] },
+              { id: 'other', name: 'Other', jobs: [] },
             ],
           },
         ],
@@ -70,10 +70,8 @@ it('distinguishes an open role from a role pinned to an adapter in the gallery',
   } satisfies Partial<AppApi>);
   render(<ExampleGallery canInsert={false} onPick={() => undefined} onClose={() => undefined} />);
   const card = await screen.findByRole('button', { name: /Open and pinned/ });
-  const open = within(card).getByTitle('Any agent');
-  expect(open.querySelector('img')).toBeNull();
-  const pinned = within(card).getByTitle('Codex');
-  expect(pinned.querySelector('img')?.getAttribute('alt')).toBe('Codex');
+  expect(within(card).getAllByTitle('Any agent')).toHaveLength(2);
+  expect(card.querySelector('img')).toBeNull();
 });
 
 it.each(['zed', 'missing', undefined])(
@@ -88,7 +86,7 @@ it.each(['zed', 'missing', undefined])(
       description: 'Both required',
       fields: [],
       agents: [
-        { id: 'a', name: 'First', adapter: 'yak', jobs: [] },
+        { id: 'a', name: 'First', jobs: [] },
         { id: 'b', name: 'Second', jobs: [] },
       ],
     };
@@ -196,5 +194,49 @@ it('fills untouched roles when the initial preference arrives, preserving local 
   expect(screen.getByRole('button', { name: 'Insert into this canvas' })).toHaveProperty(
     'disabled',
     true,
+  );
+});
+
+it('marks adapters missing a role’s received jobs while keeping every catalog choice', async () => {
+  const { TWO_MADE_UP } = await import('../../shared/test-made-up');
+  const { useCatalog } = await import('../test-catalog');
+  await useCatalog(TWO_MADE_UP);
+  const template = {
+    id: '0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a11',
+    name: 'Jobs',
+    description: '',
+    fields: [],
+    agents: [{ id: 'a', name: 'Reviewer', jobs: ['shell', 'edit'] as const }],
+  };
+  vi.stubGlobal('api', {
+    templatesList: vi.fn().mockResolvedValue({ ok: true, value: { items: [template] } }),
+  } satisfies Partial<AppApi>);
+  const onPick = vi.fn();
+  render(
+    <ExampleGallery
+      canInsert={true}
+      initialTemplate={{
+        ...template,
+        agents: template.agents.map((a) => ({ ...a, jobs: [...a.jobs] })),
+      }}
+      onPick={onPick}
+      onClose={() => undefined}
+    />,
+  );
+  const select = screen.getByRole('combobox', { name: "Reviewer's agent" });
+  expect(
+    within(select).getByRole('option', { name: 'Zed Agent (missing jobs: edit)' }),
+  ).toBeTruthy();
+  expect(
+    within(select).getByRole('option', { name: 'Yak Agent (missing jobs: edit)' }),
+  ).toBeTruthy();
+  fireEvent.change(select, { target: { value: 'zed' } });
+  expect(await screen.findByText('Zed Agent lacks jobs for Reviewer: edit')).toBeTruthy();
+  expect(screen.getByRole('button', { name: 'Create canvas' })).toHaveProperty('disabled', false);
+  fireEvent.click(screen.getByRole('button', { name: 'Insert into this canvas' }));
+  expect(onPick).toHaveBeenCalledWith(
+    expect.anything(),
+    { values: {}, agents: { a: 'zed' }, connections: { a: 'zed.acp' } },
+    'insert',
   );
 });

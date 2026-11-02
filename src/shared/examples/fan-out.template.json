@@ -1,6 +1,6 @@
 {
-  "format": "corrallm",
-  "version": 2,
+  "format": "corrallm-template",
+  "version": 1,
   "id": "229ea1db-f6d9-41d3-8b72-f6725798f7bf",
   "nodes": [
     {
@@ -22,7 +22,6 @@
         "y": 52
       },
       "parent": "workspace",
-      "adapter": "claude-code",
       "queue": [
         {
           "id": "q1",
@@ -61,7 +60,6 @@
         "y": 52
       },
       "parent": "research",
-      "adapter": "claude-code",
       "queue": [
         {
           "id": "question",
@@ -74,8 +72,8 @@
         },
         {
           "id": "search",
-          "action": "WebSearch",
-          "instruction": "Search the web for the answer to the question Lead asked you, and write what you find to NOTES-1.md, with a link to each source."
+          "instruction": "Search the web for the answer to the question Lead asked you, and write what you find to NOTES-1.md, with a link to each source.",
+          "job": "web-search"
         },
         {
           "id": "report",
@@ -93,7 +91,6 @@
         "y": 52
       },
       "parent": "research",
-      "adapter": "codex",
       "queue": [
         {
           "id": "question",
@@ -106,8 +103,8 @@
         },
         {
           "id": "search",
-          "action": "web_search",
-          "instruction": "Search the web for the answer to the question Lead asked you, and write what you find to NOTES-2.md, with a link to each source."
+          "instruction": "Search the web for the answer to the question Lead asked you, and write what you find to NOTES-2.md, with a link to each source.",
+          "job": "web-search"
         },
         {
           "id": "report",
@@ -137,8 +134,8 @@
         },
         {
           "id": "search",
-          "action": "WebSearch",
-          "instruction": "Search the web for the answer to the question Lead asked you, and write what you find to NOTES-3.md, with a link to each source."
+          "instruction": "Search the web for the answer to the question Lead asked you, and write what you find to NOTES-3.md, with a link to each source.",
+          "job": "web-search"
         },
         {
           "id": "report",
@@ -156,7 +153,6 @@
         "y": 372
       },
       "parent": "workspace",
-      "adapter": "claude-code",
       "queue": [
         {
           "id": "reports",

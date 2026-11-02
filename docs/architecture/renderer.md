@@ -46,15 +46,17 @@ Stored edges are links (agents that can talk); arrows for the work one agent's q
 
 Drawing an edge asks which (ConnectMenu.tsx).
 
-Canvases save as .corral files (versioned JSON, version 3, holding the canvas's id: see Canvas identity; format and validation in src/shared/model/file.ts, which reads a CanvasDocument against the catalog; the top-left float in CanvasMenu.tsx, whose New, Open, Save, Save As and project folder call `canvas.create`, `canvas.open`, `canvas.save` (`canvas.saveAs` for a canvas never saved), `canvas.saveAs` and `project.choose`, New and Open as a switch: see Run recovery and persistence; an agent's adapter, connection and settings, by adapter, among what it saves: see Agent settings). src/shared/examples/ holds .corral templates, listed in src/shared/examples.ts.
+Canvases save as .corral files (versioned JSON, version 3, holding the canvas's id: see Canvas identity; format and validation in src/shared/model/file.ts, which reads a CanvasDocument against the catalog; the top-left float in CanvasMenu.tsx, whose New, Open, Save, Save As and project folder call `canvas.create`, `canvas.open`, `canvas.save` (`canvas.saveAs` for a canvas never saved), `canvas.saveAs` and `project.choose`, New and Open as a switch: see Run recovery and persistence; an agent's adapter, connection and settings, by adapter, among what it saves: see Agent settings). src/shared/examples/ holds the shipped .template.json definitions, listed in src/shared/examples.ts.
 
-ExampleGallery.tsx reads their fields and agent roles through templates.list; a test keeps each one valid and written exactly as toFile writes it.
+ExampleGallery.tsx reads their fields and adapter-free roles through templates.list; each role reports the jobs of every step it receives, including targeted steps inside Ifs and repeats. Tests compile every definition and round-trip the resulting runtime canvas.
 
-A template may leave blanks ({{key}}, filled from its `fields`; src/shared/model/templates.ts) and leave agents' types open (every role must be chosen when used; withAgents translates template steps by catalog jobs).
+A template may leave blanks ({{key}}, filled from its `fields`; src/shared/model/templates.ts). Every role is chosen when used; the core compiles its jobs only after those endpoints are resolved. All unresolved gallery roles have hollow marks. Adapter options name missing jobs and a chosen incompatible role explains them; all adapters remain selectable and Create/Insert require every role, while the core is the final job check. Missing installation remains a separate mark, never a capability inference.
 
-The gallery's form also chooses how each agent runs (withConnections): on the chosen adapter’s first declared connection (`defaultConnection`); missing installed CLIs are labelled without falling back to fake work.
+Template credits: TDD relay is after claudex; Head to head is after claudex-compete. Their descriptions and definitions name roles without preferring a tool.
 
-A template's tool steps say what they are to do (`instruction`, which may hold blanks too), as does Codex's /review: a test keeps it so.
+The gallery's form also chooses how each agent runs (explicit connections passed to the compiler): on the chosen adapter’s first declared connection (`defaultConnection`); missing installed CLIs are labelled without falling back to fake work.
+
+Every shipped job step says what it is to do (`instruction`, which may hold blanks too); a test checks those instructions after compilation.
 
 It opens as a new canvas or is inserted with its own top-level roots through api.canvasInsertTemplate (model/insert.ts in the core, which fills fields, mints every node id and remaps references, adding no wrapper). The gallery selects and fits all returned roots after that one operation; New calls api.canvasCreate with the template and choices, making the template the canvas itself, retaining its node ids, with no enclosing group and no project folder inherited.
 

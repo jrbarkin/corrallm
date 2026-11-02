@@ -1,13 +1,11 @@
-import { endpointOf, resolveAction } from './fallback';
 import { adapterIn } from '../adapter';
 import type { AdapterId, Catalog, ConnectionId } from '../adapter';
 import { parseRole } from '../role';
-import type { AgentData } from './canvas';
+import type { AgentData, CanvasDocument } from './canvas';
+import type { TemplateDocument, TemplateItem, TemplateRepeated } from './template-file';
 import type { PartyId } from './messages';
-import { translateActions } from './agent-ops';
-import type { AgentContext } from './agent-ops';
 import { isApproval, isDelay, isIf, isMessage, isRepeat, isWait } from './queue';
-import type { Condition, QueueItem, RepeatedItem, Until } from './queue';
+import type { Condition, QueueItem, QueueStep, QueueMessage, RepeatedItem, Until } from './queue';
 
 /** The text a model or a view's nodes keep, without depending on how either draws them. */
 export interface TemplateCanvas {
@@ -122,60 +120,6 @@ export function fillTemplate<C extends TemplateCanvas>(
   });
 }
 
-/** Gives explicit template roles their adapters, translating steps by catalog jobs. */
-export function withAgents<C extends TemplateCanvas>(
-  canvas: C,
-  types: Readonly<Record<string, AdapterId | undefined>>,
-  context: AgentContext,
-): C {
-  return mapNodes(canvas, (node) => {
-    if (node.type !== 'agent' || !Object.hasOwn(types, node.id)) return node;
-    const adapter = types[node.id];
-    const source = endpointOf(node.data, context.catalog);
-    const queue =
-      node.data.queue === undefined || adapter === undefined
-        ? node.data.queue
-        : source === undefined
-          ? templateActions(node.data.queue, adapter, context.catalog)
-          : translateActions(node.data.queue, source.adapter, adapter, context.catalog);
-    if (adapter === node.data.adapter && queue === node.data.queue) return node;
-    const data = { ...node.data, ...(queue ? { queue } : {}) };
-    if (adapter === undefined) delete data.adapter;
-    else data.adapter = adapter;
-    if (
-      adapter === undefined ||
-      !adapterIn(context.catalog, adapter)?.connections.some((one) => one.id === data.connection)
-    )
-      delete data.connection;
-    return { ...node, data };
-  });
-}
-
-/** Fills native connection choices from the catalog's first; defaults:false applies a partial edit. */
-export function withConnections<C extends TemplateCanvas>(
-  canvas: C,
-  connections: Readonly<Record<string, ConnectionId>>,
-  context: AgentContext,
-  { defaults = true }: { defaults?: boolean } = {},
-): C {
-  return mapNodes(canvas, (node) => {
-    if (node.type !== 'agent') return node;
-    const named = Object.hasOwn(connections, node.id);
-    if (!named && !defaults) return node;
-    const endpoint = endpointOf(node.data, context.catalog);
-    const adapter =
-      endpoint === undefined ? undefined : adapterIn(context.catalog, endpoint.adapter);
-    const connection = named ? connections[node.id] : adapter?.connections[0]?.id;
-    if (
-      connection === undefined ||
-      connection === node.data.connection ||
-      !adapter?.connections.some((one) => one.id === connection)
-    )
-      return node;
-    return { ...node, data: { ...node.data, connection } };
-  });
-}
-
 function mapNodes<C extends TemplateCanvas>(
   canvas: C,
   change: (node: C['nodes'][number]) => C['nodes'][number],
@@ -187,20 +131,79 @@ function same(a: readonly QueueItem[], b: readonly QueueItem[]): boolean {
   return a.length === b.length && a.every((item, i) => item === b[i]);
 }
 
-/** Old-format template actions keep their catalog jobs when each role is explicitly chosen. */
-function templateActions(
-  queue: readonly QueueItem[],
-  adapter: AdapterId,
+/** An explicit endpoint for each shipped role. */
+export interface RoleChoice {
+  adapter: AdapterId;
+  connection: ConnectionId;
+}
+export class TemplateFault extends Error {}
+
+/** Compiles jobs once, using the actual recipient's first declared implementation. */
+export function compileTemplate(
+  template: TemplateDocument,
+  roles: Readonly<Record<string, RoleChoice>>,
   catalog: Catalog,
-): QueueItem[] {
-  const change = <T extends QueueItem>(item: T): T => {
-    if (isIf(item)) return { ...item, then: item.then.map(change) };
-    if (isRepeat(item)) return { ...item, repeat: item.repeat.map(change) };
-    if (!('action' in item)) return item;
-    const resolved = resolveAction(item.action, adapter, catalog);
-    return 'unknown' in resolved || resolved.action === item.action
-      ? item
-      : { ...item, action: resolved.action };
+): CanvasDocument {
+  const agents = template.nodes.filter((node) => node.type === 'agent');
+  const byId = new Map(agents.map((node) => [node.id, node]));
+  for (const id of Object.keys(roles))
+    if (!byId.has(id)) throw new TemplateFault(`There is no template role ${id}.`);
+  for (const node of agents) {
+    const choice = Object.hasOwn(roles, node.id) ? roles[node.id] : undefined;
+    if (!choice) throw new TemplateFault(`Choose an endpoint for ${node.data.label} (${node.id}).`);
+    const adapter = adapterIn(catalog, choice.adapter);
+    if (!adapter?.connections.some((connection) => connection.id === choice.connection))
+      throw new TemplateFault(
+        `${node.data.label} (${node.id}) has no endpoint ${choice.adapter} / ${choice.connection}.`,
+      );
+  }
+  const step = (item: TemplateRepeated, owner: string): RepeatedItem => {
+    if (!('job' in item)) return item;
+    const recipient = item.target ?? owner;
+    const node = byId.get(recipient);
+    const choice = roles[recipient];
+    const action =
+      choice &&
+      adapterIn(catalog, choice.adapter)?.actions.find((action) => action.job === item.job);
+    if (!node || !action)
+      throw new TemplateFault(
+        `${node?.data.label ?? recipient} (${recipient}): step ${item.id} needs job ${item.job}.`,
+      );
+    return {
+      id: item.id,
+      action: action.name,
+      ...(item.target === undefined ? {} : { target: item.target }),
+      ...(item.instruction === undefined ? {} : { instruction: item.instruction }),
+      ...(item.expect === undefined ? {} : { expect: item.expect }),
+    };
   };
-  return queue.map(change);
+  const item = (value: TemplateItem, owner: string): QueueItem => {
+    if ('then' in value)
+      return {
+        ...value,
+        then: value.then.map((value) => step(value, owner) as QueueStep | QueueMessage),
+      };
+    if ('repeat' in value)
+      return { ...value, repeat: value.repeat.map((value) => step(value, owner)) };
+    return 'approve' in value ? value : step(value, owner);
+  };
+  return {
+    ...template,
+    nodes: template.nodes.map((node) =>
+      node.type === 'frame'
+        ? node
+        : {
+            ...node,
+            data: {
+              label: node.data.label,
+              ...(node.data.role === undefined ? {} : { role: node.data.role }),
+              ...(node.data.color === undefined ? {} : { color: node.data.color }),
+              ...roles[node.id],
+              ...(node.data.queue === undefined
+                ? {}
+                : { queue: node.data.queue.map((value) => item(value, node.id)) }),
+            },
+          },
+    ),
+  };
 }

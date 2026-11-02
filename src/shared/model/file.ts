@@ -489,6 +489,7 @@ function readQueue(value: unknown, where: string): QueueItem[] {
 
 function readItem(value: unknown, where: string): QueueItem {
   const item = record(value, where);
+  if ('job' in item) throw new Error(`${where}.job belongs only in a shipped template`);
   if ('waitFor' in item) return readWait(item, where);
   if ('delay' in item) return readDelay(item, where);
   if ('approve' in item) {
@@ -525,6 +526,7 @@ function author(item: Record<string, unknown>, where: string): { by?: PartyId } 
 /** A step or a message: what an if-then holds. */
 function readStep(value: unknown, where: string): QueueStep | QueueMessage {
   const item = record(value, where);
+  if ('job' in item) throw new Error(`${where}.job belongs only in a shipped template`);
   if ('if' in item) throw new Error(`${where}: an if-then cannot hold another if-then`);
   if ('waitFor' in item) throw new Error(`${where}: an if-then cannot hold a wait`);
   if ('delay' in item) throw new Error(`${where}: an if-then cannot hold a delay`);
@@ -577,6 +579,7 @@ function readRepeat(item: Record<string, unknown>, where: string): QueueRepeat {
 /** What a repeat holds: a step, a message, a wait or a delay. */
 function readRepeated(value: unknown, where: string): RepeatedItem {
   const item = record(value, where);
+  if ('job' in item) throw new Error(`${where}.job belongs only in a shipped template`);
   if ('if' in item) throw new Error(`${where}: a repeat cannot hold an if-then`);
   if ('repeat' in item) throw new Error(`${where}: a repeat cannot hold a repeat`);
   if ('approve' in item) throw new Error(`${where}: a repeat cannot hold an OK`);

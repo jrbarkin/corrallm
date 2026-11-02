@@ -1,3 +1,4 @@
+import { readTemplate } from './template-file';
 import { describe, expect, it } from 'vitest';
 import { MAX_ROLE_LENGTH } from '../session';
 import type { CanvasId } from '../canvas';
@@ -6,7 +7,7 @@ import { TEST_CATALOG } from '../test-model';
 import { fromFile, toFile } from './file';
 import { setConnection, setRole, setType } from './agent-ops';
 import { insert } from './insert';
-import { fillTemplate, placeholdersOf, withAgents, withConnections } from './templates';
+import { compileTemplate, fillTemplate, placeholdersOf } from './templates';
 
 const ID = '7d0c2b9e-4f1a-4c3d-9e8b-2a1f0e6d5c4b' as CanvasId;
 const context = { catalog: TEST_CATALOG };
@@ -101,10 +102,14 @@ describe('authored roles in model documents and files', () => {
   });
   it('preserves the role when switching adapter, importing and inserting a template with remapped IDs', () => {
     const before = document();
-    const template = withConnections(
-      withAgents(before, { a: 'codex' }, context),
-      { a: 'codex.app-server' },
-      context,
+    const template = compileTemplate(
+      readTemplate(
+        toFile(before)
+          .replace('"format": "corrallm"', '"format": "corrallm-template"')
+          .replace('"version": 3', '"version": 1'),
+      ),
+      { a: { adapter: 'codex', connection: 'codex.app-server' } },
+      TEST_CATALOG,
     );
     expect(data(template).role).toBe(data(before).role);
     expect(data(template).connection).toBe('codex.app-server');

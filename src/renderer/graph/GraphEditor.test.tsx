@@ -116,7 +116,7 @@ const actions = (id: string) => {
 
 beforeEach(() => {
   vi.spyOn(api, 'templatesList').mockResolvedValue({
-    items: EXAMPLES.map((example) => templateInfo(example, catalog())),
+    items: EXAMPLES.map((example) => templateInfo(example)),
   });
 });
 
