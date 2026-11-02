@@ -362,6 +362,14 @@ export class RuntimeSource {
     this.switchingChanged(canvas, agent);
   }
 
+  /**
+   * What the core's prompt owner holds of an agent's changed (B13 C9: one raised, or ended): its
+   * summary says its count again, whether or not its transcript changed with it.
+   */
+  promptsChanged(canvas: CanvasId, agent: string): void {
+    this.switchingChanged(canvas, agent);
+  }
+
   /** Whether its run's checkpoint could be kept changed: the run's `saveError`. */
   problemChanged(canvas: CanvasId): void {
     const source = this.#canvases.get(canvas);

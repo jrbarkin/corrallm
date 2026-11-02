@@ -10,6 +10,7 @@ import {
 } from './sessions';
 import { MAX_IMAGE_BYTES } from '../../shared/api/limits';
 import { imageBytes } from '../../shared/session';
+import { PromptId } from '../../shared/model/prompts';
 import { NEW_SESSION } from '../../shared/model/session';
 import { sessionView } from '../../shared/model/views';
 import type { MessageView } from '../../shared/model/views';
@@ -426,6 +427,37 @@ it('keeps a handed-off manual message queued until the native user receipt arriv
     entries: [{ kind: 'user', id: 'native', text: message.body, reached: true }],
   });
   expect(sessionDisplay(received.summary, received, [message]).queued).toEqual([]);
+});
+
+it('holds none of the core prompt owner’s transcript entries, which are B13 X10’s card, and keeps the rest', () => {
+  const id = '0f1e2d3c-4b5a-4968-8776-655443322110';
+  const view = sessionView(AgentId.parse('a'), connection, {
+    ...NEW_SESSION,
+    status: 'working',
+    entries: [
+      { kind: 'text', id: 'before', text: 'Asking' },
+      {
+        id,
+        kind: 'prompt',
+        need: `prompt/a/1/${id}`,
+        prompt: {
+          id: PromptId.parse(id),
+          kind: 'approval',
+          agent: 'a',
+          raised: 1,
+          answerIn: 'api',
+          title: 'Run it?',
+        },
+        outcome: { type: 'withdrawn' },
+      },
+      { kind: 'text', id: 'after', text: 'Done' },
+    ],
+  });
+  expect(view.order).toContain(id);
+  expect(sessionDisplay(view.summary, view).entries.map((entry) => entry.id)).toEqual([
+    'before',
+    'after',
+  ]);
 });
 
 it('shows a native manual turn still running without confusing its durable restart record for a live cancellation', () => {

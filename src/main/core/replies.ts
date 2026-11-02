@@ -67,6 +67,11 @@ export interface ReplyHandler {
   /** The item `to` names, as it waits now on the canvas, as you see it: none if none does. */
   current(canvas: CanvasId, to: string): NeedsItem | undefined | Promise<NeedsItem | undefined>;
   /**
+   * Your item as `reader` may read it, where it words it otherwise than `needFor` makes of yours
+   * (B13 C9: an old permission's title in its CLI's words is yours alone). None: `needFor`'s.
+   */
+  seen?(canvas: CanvasId, item: NeedsItem, reader: PromptReader): NeedsItem | undefined;
+  /**
    * Why `to` doesn't wait now, if it did (settled, asked again, held by a pause), as `reader` may
    * be told it: the failure the router throws. None: not found.
    */
@@ -138,7 +143,8 @@ export class ReplyRouter {
     if (item === undefined) throw handler.gone?.(id, to, reader) ?? notFound(to);
     const by = partyIdOf(caller);
     // A refusal says only what the caller may read of the item (B13 C11).
-    const { title } = needFor(item, reader);
+    const { title } =
+      (reader === 'you' ? undefined : handler.seen?.(id, item, reader)) ?? needFor(item, reader);
     // R6: what waits on an agent is never that agent's to answer, whoever may answer it.
     if (caller.kind === 'agent' && caller.canvas === id && item.agent === caller.agent) {
       throw new OpFailure(
