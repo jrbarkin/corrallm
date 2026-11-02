@@ -1,5 +1,5 @@
 import { legacyDirectories } from './workspaces/test-directories';
-import { existsSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, writeFileSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -42,7 +42,7 @@ import type { WorktreeListing } from './workspaces/list';
 import { WorkspacePlanner } from './workspaces/planner';
 import { WorkspaceStore } from './workspaces/store';
 import type { WorktreeRecord } from './workspaces/store';
-import { testWorkspaces } from './workspaces/test-workspace';
+import { fakeTestWorkspaces, testWorkspaces } from './workspaces/test-workspace';
 import type { TestWorkspaces } from './workspaces/test-workspace';
 
 /*
@@ -2117,18 +2117,18 @@ describe('proposal defaults and bounds', () => {
 });
 
 /*
- * Over real worktrees, through core.call: the canvas's project a real repository, `lead`'s group
+ * Through core.call, with fake Git except the clean-tree removal integration case: `lead`'s group
  * (the lead, the helper, the member) working in one tree, waiting for its setup; `a` and `b` each
  * in one of their own, ready, b's holding work not committed; and `c`, moved out of the lead's
  * group while it worked there, its move waiting for your Switch (still in the lead's tree).
  */
-describe('workspace-safety and the worktree list, over real worktrees', () => {
+describe('workspace-safety and the worktree list', () => {
   let made: TestWorkspaces;
   let wcore: Core;
   let trees: Record<'lead' | 'a' | 'b', WorktreeRecord>;
 
-  beforeEach(async () => {
-    made = await testWorkspaces();
+  async function startWorktrees(realGit = false): Promise<void> {
+    made = await (realGit ? testWorkspaces() : fakeTestWorkspaces());
     await made.store.write(() => {
       new CanvasMemory(made.store).ensure(CANVAS);
     });
@@ -2158,6 +2158,16 @@ describe('workspace-safety and the worktree list, over real worktrees', () => {
         distribution: 'local',
         leads: isLead,
         limitsClock: () => (clock += 1000),
+        // These policy tests own no native sessions; process inspection is a separate gate.
+        children: {
+          platform: 'darwin',
+          inspect: (pid) => ({ started: 1, group: pid }),
+          alive: () => false,
+          signal: () => undefined,
+          wait: () => Promise.resolve(),
+          pause: () => undefined,
+          now: Date.now,
+        },
         sessions: {
           // Its agent callers are made up: no session authority issued them.
           callers: () => true,
@@ -2168,10 +2178,10 @@ describe('workspace-safety and the worktree list, over real worktrees', () => {
       NO_DESKTOP,
     );
     await wcore.engines.open(CANVAS);
-  });
+  }
   afterEach(async () => {
     await wcore.close();
-    rmSync(made.root, { recursive: true, force: true });
+    await made.close();
   });
 
   const wcall = (name: OpName, args: object, caller: Caller) =>
@@ -2198,6 +2208,7 @@ describe('workspace-safety and the worktree list, over real worktrees', () => {
   const lead = LEAD;
 
   it('asks you before a delete leaves a tree holding work with no agent, a token’s and yours, and keeps it on Delete', async () => {
+    await startWorktrees();
     const before = wdoc();
     const theirs = await done('canvas.delete', { nodes: ['b'] }, OUTSIDE);
     expect(theirs.proposed).toMatch(/^proposal\//);
@@ -2221,6 +2232,7 @@ describe('workspace-safety and the worktree list, over real worktrees', () => {
   });
 
   it('asks for a whole batch leaving one, a token’s and yours, applying none of it', async () => {
+    await startWorktrees();
     const ops = [
       { op: 'canvas.rename', args: { node: 'c', label: 'Sea' } },
       { op: 'canvas.delete', args: { nodes: ['b'] } },
@@ -2234,6 +2246,7 @@ describe('workspace-safety and the worktree list, over real worktrees', () => {
   });
 
   it('removes a clean, merged tree with its last agent without asking you, yours', async () => {
+    await startWorktrees(true);
     expect(await done('canvas.delete', { nodes: ['a'] }, YOU)).not.toHaveProperty('proposed');
     expect(has('a')).toBe(false);
     await vi.waitFor(
@@ -2260,6 +2273,7 @@ describe('workspace-safety and the worktree list, over real worktrees', () => {
   ] as const)(
     'never moves an agent working in a tree: a token’s frame around two, %s, waits for your Switch',
     async (_how, name, args) => {
+      await startWorktrees();
       const { revs } = await done(name, args, OUTSIDE);
       // Who works where changed with the document: its revision is said, though no window watches.
       expect(revs).toMatchObject({ [`worktrees:${CANVAS}`]: expect.any(Number) as number });
@@ -2274,6 +2288,7 @@ describe('workspace-safety and the worktree list, over real worktrees', () => {
   );
 
   it('joins a token’s new agent to its group’s tree at once, running and approving no setup', async () => {
+    await startWorktrees();
     await vi.waitFor(async () => {
       expect((await itemOf('lead'))?.need).toMatch(/^setup\//);
     });
@@ -2286,6 +2301,7 @@ describe('workspace-safety and the worktree list, over real worktrees', () => {
   });
 
   it('keeps what a file’s Apply leaves holding work, asking nothing more of it', async () => {
+    await startWorktrees();
     const file = path.join(made.root, 'main.corral');
     await writeFile(
       file,
@@ -2308,6 +2324,7 @@ describe('workspace-safety and the worktree list, over real worktrees', () => {
   });
 
   it('lists to a lead only the agents it reaches: a member of its tree it doesn’t reach is never named', async () => {
+    await startWorktrees();
     const theirs = await listed(lead);
     expect(theirs.items.map((item) => item.agent)).toEqual(['lead', 'helper', 'member']);
     expect(theirs.kept).toEqual([]);
@@ -2338,6 +2355,7 @@ describe('workspace-safety and the worktree list, over real worktrees', () => {
   });
 
   it('reads reach afresh: linked, an agent is listed to the lead; unlinked, or deleted, it isn’t', async () => {
+    await startWorktrees();
     expect((await listed(lead)).items.map((item) => item.agent)).not.toContain('a');
     await done('canvas.link', { a: 'lead', b: 'a' }, YOU);
     expect((await listed(lead)).items.map((item) => item.agent)).toContain('a');

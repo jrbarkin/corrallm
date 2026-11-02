@@ -125,7 +125,7 @@ let leads: ((canvas: CanvasId, agent: string) => boolean) | undefined;
 let watchdog: CoreConfig['watchdog'];
 let watchdogNetwork: CoreConfig['watchdogNetwork'];
 
-beforeEach(async () => {
+async function makeFixture(): Promise<void> {
   profile = await mkdtemp(path.join(tmpdir(), 'corrallm-delivery-'));
   project = path.join(profile, 'project');
   await mkdir(project);
@@ -136,9 +136,10 @@ beforeEach(async () => {
   leads = undefined;
   watchdog = undefined;
   watchdogNetwork = undefined;
-});
+}
+beforeEach(makeFixture);
 
-afterEach(async () => {
+async function closeFixture(): Promise<void> {
   const stores = (core?.engines.opened() ?? []).flatMap(
     (canvas) => core?.engines.canvas(canvas)?.messages ?? [],
   );
@@ -154,7 +155,8 @@ afterEach(async () => {
   // did, and once the core has closed.
   expect(before).toEqual(keptBefore);
   expect(indexed()).toEqual(kept());
-});
+}
+afterEach(closeFixture);
 
 const realNow = Date.now.bind(Date);
 /** Runs the clock everything here reads (Date.now) `ms` ahead of the real one, from now on. */
@@ -3497,66 +3499,60 @@ describe('usage', () => {
     );
   }
 
-  it.each(['ask', 'waitForReset'])(
-    'holds a party’s message by the recipient’s rule (%s) until the window resets, telling its sender once',
-    async (action) => {
-      // Startup, fsync and scheduler delays must not consume the usage window's 400 ms.
-      vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
-      vi.setSystemTime(Date.UTC(2026, 9, 21, 12));
-      const resetsAt = Date.now() + 400;
-      await overRule(action, resetsAt);
-      await keepCanvas();
-      await start();
-      const id = await send('builder', 'Say hello');
-      await vi.advanceTimersByTimeAsync(50);
-      expect((await find(id))?.state).toBe('pending');
-      expect((await inbox()).filter((message) => message.kind === 'notice')).toEqual([
+  async function holdsUntilReset(action: string): Promise<void> {
+    // Startup, fsync and scheduler delays must not consume the usage window's 400 ms.
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+    vi.setSystemTime(Date.UTC(2026, 9, 21, 12));
+    const resetsAt = Date.now() + 400;
+    await overRule(action, resetsAt);
+    await keepCanvas();
+    await start();
+    const id = await send('builder', 'Say hello');
+    await vi.advanceTimersByTimeAsync(50);
+    expect((await find(id))?.state).toBe('pending');
+    expect((await inbox()).filter((message) => message.kind === 'notice')).toEqual([
+      expect.objectContaining({
+        replyTo: id,
+        body: expect.stringMatching(
+          /^Codex has used 80% of its 5-hour window \(over 50%\), so your message to Builder waits until it resets at \d{1,2}:\d\d\.$/,
+        ) as string,
+      }),
+    ]);
+    await vi.advanceTimersByTimeAsync(resetsAt - Date.now() - 1);
+    expect((await find(id))?.state).toBe('pending');
+    expect(appServer.started).toEqual([]);
+    await vi.advanceTimersByTimeAsync(1);
+    await vi.waitFor(
+      async () => {
+        expect((await find(id))?.state).toBe('replied');
+      },
+      { timeout: 3000 },
+    );
+    expect((await inbox()).filter((message) => message.kind === 'notice')).toHaveLength(1);
+  }
+
+  async function deliversWithoutReset(action: string): Promise<void> {
+    // Headless, nothing would read its usage again while the message waited: it never resets.
+    await overRule(action, null);
+    await keepCanvas();
+    const engine = await (await start()).engines.open(CANVAS);
+    const id = await send('builder', 'Say hello');
+    await vi.waitFor(async () => {
+      expect((await find(id))?.state).toBe('replied');
+    });
+    expect(await notices()).toEqual([]);
+    await vi.waitFor(() => {
+      expect(
+        engine.sessions
+          .of('builder')
+          .entries.filter((entry) => entry.kind === 'notice' && entry.level === 'warning'),
+      ).toEqual([
         expect.objectContaining({
-          replyTo: id,
-          body: expect.stringMatching(
-            /^Codex has used 80% of its 5-hour window \(over 50%\), so your message to Builder waits until it resets at \d{1,2}:\d\d\.$/,
-          ) as string,
+          text: expect.stringMatching(/^Codex has used 80% of its 5-hour window/) as string,
         }),
       ]);
-      await vi.advanceTimersByTimeAsync(resetsAt - Date.now() - 1);
-      expect((await find(id))?.state).toBe('pending');
-      expect(appServer.started).toEqual([]);
-      await vi.advanceTimersByTimeAsync(1);
-      await vi.waitFor(
-        async () => {
-          expect((await find(id))?.state).toBe('replied');
-        },
-        { timeout: 3000 },
-      );
-      expect((await inbox()).filter((message) => message.kind === 'notice')).toHaveLength(1);
-    },
-  );
-
-  it.each(['ask', 'waitForReset'])(
-    'delivers a party’s message over a rule (%s) whose window’s reset isn’t known, warning its agent',
-    async (action) => {
-      // Headless, nothing would read its usage again while the message waited: it never resets.
-      await overRule(action, null);
-      await keepCanvas();
-      const engine = await (await start()).engines.open(CANVAS);
-      const id = await send('builder', 'Say hello');
-      await vi.waitFor(async () => {
-        expect((await find(id))?.state).toBe('replied');
-      });
-      expect(await notices()).toEqual([]);
-      await vi.waitFor(() => {
-        expect(
-          engine.sessions
-            .of('builder')
-            .entries.filter((entry) => entry.kind === 'notice' && entry.level === 'warning'),
-        ).toEqual([
-          expect.objectContaining({
-            text: expect.stringMatching(/^Codex has used 80% of its 5-hour window/) as string,
-          }),
-        ]);
-      });
-    },
-  );
+    });
+  }
 
   it('delivers parties’ messages over a rule that warns, warning their agent once', async () => {
     await overRule('warn', Date.now() + 60_000);
@@ -3648,37 +3644,50 @@ describe('usage', () => {
     ]);
   });
 
-  it.each(['ask', 'waitForReset'])(
-    'holds a party’s message while the run holds its agent on usage (%s) until the window resets, but never yours',
-    async (action) => {
-      const resetsAt = frozenWindow(1500);
-      const engine = await heldOnUsage(action, resetsAt);
-      const id = await send('builder', 'Say hello');
-      await vi.advanceTimersByTimeAsync(50);
-      expect((await find(id))?.state).toBe('pending');
-      expect(await notices()).toEqual([
-        expect.objectContaining({ replyTo: id, body: expect.stringMatching(WAITS) as string }),
-      ]);
-      // What you send goes past the hold.
-      const yours = await send('builder', 'From you', YOU);
-      await vi.waitFor(async () => {
-        expect((await find(yours, YOU))?.state).toBe('replied');
-      });
-      expect((await find(id))?.state).toBe('pending');
-      expect(sent(appServer)).toEqual(['From you']);
+  async function holdsWithRun(action: string): Promise<void> {
+    const resetsAt = frozenWindow(1500);
+    const engine = await heldOnUsage(action, resetsAt);
+    const id = await send('builder', 'Say hello');
+    await vi.advanceTimersByTimeAsync(50);
+    expect((await find(id))?.state).toBe('pending');
+    expect(await notices()).toEqual([
+      expect.objectContaining({ replyTo: id, body: expect.stringMatching(WAITS) as string }),
+    ]);
+    // What you send goes past the hold.
+    const yours = await send('builder', 'From you', YOU);
+    await vi.waitFor(async () => {
+      expect((await find(yours, YOU))?.state).toBe('replied');
+    });
+    expect((await find(id))?.state).toBe('pending');
+    expect(sent(appServer)).toEqual(['From you']);
 
-      await vi.advanceTimersByTimeAsync(resetsAt - Date.now());
-      await vi.waitFor(
-        async () => {
-          expect((await find(id))?.state).toBe('replied');
-        },
-        { timeout: 3500 },
-      );
-      expect(Date.now()).toBeGreaterThanOrEqual(resetsAt);
-      // The run's hold went with its window, so the party's turn waited for no one.
-      expect(engine.run.snapshot().agents.builder?.usage).toBeUndefined();
-      expect(await notices()).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(resetsAt - Date.now());
+    await vi.waitFor(
+      async () => {
+        expect((await find(id))?.state).toBe('replied');
+      },
+      { timeout: 3500 },
+    );
+    expect(Date.now()).toBeGreaterThanOrEqual(resetsAt);
+    // The run's hold went with its window, so the party's turn waited for no one.
+    expect(engine.run.snapshot().agents.builder?.usage).toBeUndefined();
+    expect(await notices()).toHaveLength(1);
+  }
+
+  it.each(['ask', 'waitForReset'])(
+    'honours %s for party messages with a known reset, an unknown reset and a held run, while yours pass',
+    async (action) => {
+      const scenarios = [holdsUntilReset, deliversWithoutReset, holdsWithRun];
+      for (const [index, scenario] of scenarios.entries()) {
+        if (index > 0) {
+          await closeFixture();
+          await makeFixture();
+        }
+        await scenario(action);
+      }
     },
+    // Three independent scenarios retain their former combined deadline.
+    15_000,
   );
 
   it.each([

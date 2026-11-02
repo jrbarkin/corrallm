@@ -5,7 +5,6 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import type { OpError, OpResult } from '../../shared/api/errors';
 import { toolName } from '../../shared/api/registry';
-import { GUI_OPS } from '../../shared/api/surface';
 import type { Party } from '../../shared/api/surface';
 import { callTool, startApiServer } from '../api/mcp';
 import type { ApiServer } from '../api/mcp';
@@ -16,6 +15,7 @@ import type { AgentCaller, TokenCaller } from './caller';
 import { WindowPorts } from './gui';
 import {
   CALLERS,
+  CANVAS,
   isLead,
   RESOLVERS,
   TEST_FIXTURES,
@@ -32,8 +32,8 @@ import { transportCases } from './test-transport';
  * calls) and dispatch (what the call answers); every op's fixtures are called through each
  * transport's dispatch half with the same synthetic caller (you, then each party), and must answer
  * byte for byte as core.call does directly. MCP is also driven end to end, over HTTP, for every
- * caller a token can be, a window's port (core/gui.ts) for you, whose window it is, and an agent
- * session's in-process channel (agent-api.ts, B21) for each agent caller.
+ * caller a token can be and a window's port (core/gui.ts) for you on representative wire shapes;
+ * every operation still runs through dispatch and an agent session's in-process channel.
  */
 
 const TOKENS: Readonly<Partial<Record<Party, string>>> = {
@@ -44,6 +44,30 @@ const TOKENS: Readonly<Partial<Record<Party, string>>> = {
 };
 const partyOfToken = (token: string) =>
   (Object.keys(TOKENS) as Party[]).find((party) => TOKENS[party] === token);
+
+// Read object, page (array and cursor), write receipt, and proposal. Invalid, audience, reach and
+// rule cases travel with each representative; dispatch and T3b still check every operation.
+const WIRE_OPS = ['app.info', 'messages', 'canvas.rename', 'canvas.delete'] as const;
+const TEST_WIRE_OPS = ['test.read', 'test.message', 'test.delete'] as const;
+function wireFixtures(fixtures: Readonly<Record<string, OpFixture>>, names: readonly string[]) {
+  return names.map((name): [string, OpFixture] => {
+    const fixture = fixtures[name];
+    if (fixture === undefined) throw new Error(`No wire fixture for ${name}`);
+    return [
+      name,
+      name === 'canvas.rename'
+        ? {
+            ...fixture,
+            // An error carrying the current row and revision, besides the plain errors.
+            valid: [
+              ...fixture.valid,
+              { canvas: CANVAS, node: 'helper', label: 'Helper', expect: { 'node/helper': 0 } },
+            ],
+          }
+        : fixture,
+    ];
+  });
+}
 
 /** A tool's answer as core.call's: what MCP carries, read back. */
 function unwrap(result: CallToolResult): OpResult<unknown> {
@@ -164,7 +188,7 @@ describe.each(REGISTRIES)('T3a on %s', (_label, fixtures, world, start) => {
     30_000,
   );
 
-  it.each(Object.entries(fixtures))(
+  it.each(wireFixtures(fixtures, fixtures === REAL_FIXTURES ? WIRE_OPS : TEST_WIRE_OPS))(
     'answers %s over HTTP as directly, for every caller a token can be',
     async (name, fixture) => {
       await http();
@@ -187,8 +211,6 @@ describe.each(REGISTRIES)('T3a on %s', (_label, fixtures, world, start) => {
         ).toBe(JSON.stringify(direct));
       }
     },
-    // Branch parity includes repeated, uncached reads through real Git.
-    30_000,
   );
 });
 
@@ -207,16 +229,12 @@ describe('T3a on a window’s port', () => {
     await setup.close();
   });
 
-  it.each(GUI_OPS)(
+  it.each(wireFixtures(REAL_FIXTURES, WIRE_OPS))(
     'answers %s through a window’s port as directly, for you',
-    async (name) => {
-      for (const { args } of transportCases(
-        setup.core,
-        name,
-        REAL_FIXTURES[name],
-        REAL_OUT_OF_REACH,
-        ['you'],
-      )) {
+    async (name, fixture) => {
+      for (const { args } of transportCases(setup.core, name, fixture, REAL_OUT_OF_REACH, [
+        'you',
+      ])) {
         const direct = await setup.core.call(name, args, CALLERS.you);
         const answer = await window.link.request('call', name, args);
         expect(answer.ok).toBe(true);
@@ -225,7 +243,5 @@ describe('T3a on a window’s port', () => {
         );
       }
     },
-    // A case may do real Git work (branch.merge: a merge, then its observation; branch.diff's reads).
-    30_000,
   );
 });

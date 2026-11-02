@@ -14,6 +14,7 @@ import { WorkspaceStore } from './store';
 import type { RepositoryRecord, WorktreeRecord } from './store';
 import { gitEnvironment, makeRepository, scratch } from './test-git';
 import type { RepositoryTemplate } from './test-git';
+import { fakeWorkspaceGit } from './test-fake-git';
 
 /*
  * For the workspaces' tests past provisioning (copying local files, setup): a throwaway profile
@@ -60,10 +61,29 @@ export async function testWorkspaces(
   extra: Partial<GitRunnerDeps> = {},
   init: readonly string[] = [],
 ): Promise<TestWorkspaces> {
+  return workspaceFixture(files, extra, init, false);
+}
+
+/** The same provisioner and filesystem checks, with Git's answers in memory for policy tests. */
+export function fakeTestWorkspaces(): Promise<TestWorkspaces> {
+  return workspaceFixture({}, {}, [], true);
+}
+
+async function workspaceFixture(
+  files: Record<string, string> | RepositoryTemplate<string>,
+  extra: Partial<GitRunnerDeps>,
+  init: readonly string[],
+  fake: boolean,
+): Promise<TestWorkspaces> {
   const { root, remove } = scratch();
   const env = gitEnvironment(path.join(root, 'home'));
   const app = path.join(root, 'app');
-  const base = isTemplate(files) ? files.copy(app, env) : makeRepository(app, env, files, init);
+  const stopFake = fake ? fakeWorkspaceGit(app, 'a'.repeat(40)) : undefined;
+  const base = fake
+    ? 'a'.repeat(40)
+    : isTemplate(files)
+      ? files.copy(app, env)
+      : makeRepository(app, env, files, init);
   const profile = path.join(root, 'profile');
   mkdirSync(profile);
   mkdirSync(path.join(profile, 'workspaces'));
@@ -110,6 +130,7 @@ export async function testWorkspaces(
     },
     close: async () => {
       await store.close();
+      stopFake?.();
       remove();
     },
   };

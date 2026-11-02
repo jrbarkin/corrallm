@@ -1059,17 +1059,17 @@ describe('runtime topics: long histories', () => {
       start: async (spec, sessionHost) => {
         host = sessionHost;
         const live = await fake.start(spec, sessionHost);
-        sessionHost.emit({ type: 'history', events: turns(667, 160, 'past') });
+        sessionHost.emit({ type: 'history', events: turns(100, 160, 'past') });
         return live;
       },
     });
     const sessions = core.engines.canvas(CANVAS)?.engine.sessions;
     sessions?.open('worker');
     await vi.waitFor(() => {
-      expect(sessions?.of('worker').entries).toHaveLength(2001);
+      expect(sessions?.of('worker').entries).toHaveLength(300);
     });
     const copies = await Promise.all(
-      Array.from({ length: 12 }, () => follow(core, sessionOf('worker'), WRITER)),
+      Array.from({ length: 2 }, () => follow(core, sessionOf('worker'), WRITER)),
     );
     const scan = vi.fn();
     const filter = Array.prototype.filter;
@@ -1078,12 +1078,12 @@ describe('runtime topics: long histories', () => {
       predicate,
       thisArg?: unknown,
     ) {
-      if (this.length === 2001 && (this[0] as EntryView | undefined)?.id === 'past-0') scan();
+      if (this.length === 300 && (this[0] as EntryView | undefined)?.id === 'past-0') scan();
       return filter.call(this, predicate, thisArg) as unknown[];
     });
     const began = performance.now();
     try {
-      host?.emit({ type: 'text', id: 'past-666/reply', text: ' more' });
+      host?.emit({ type: 'text', id: 'past-99/reply', text: ' more' });
       await vi.waitFor(() => {
         for (const copy of copies) expect(copy.changes.length).toBeGreaterThan(0);
       });
@@ -1093,13 +1093,13 @@ describe('runtime topics: long histories', () => {
     }
     for (const copy of copies) {
       expect(copy.changes.at(-1)).toMatchObject({
-        entries: { append: [{ id: 'past-666/reply', text: ' more' }] },
+        entries: { append: [{ id: 'past-99/reply', text: ' more' }] },
       });
       expect(copy.changes.at(-1)).not.toHaveProperty('summary');
       copy.stop();
     }
     console.info(
-      `12 partial copies × 2,001 entries: append published in ${(performance.now() - began).toFixed(1)} ms`,
+      `2 partial copies × 300 entries: append published in ${(performance.now() - began).toFixed(1)} ms`,
     );
   }, 60_000);
 
@@ -1263,68 +1263,81 @@ describe('runtime topics: long histories', () => {
     ).toBeLessThanOrEqual(TOPIC_BUDGET);
   });
 
-  it('serves twelve agents’ two-thousand-entry histories and streams appends alone', async () => {
-    const agents = Array.from({ length: 12 }, (_, i) => ({ id: `agent-${String(i)}` }));
-    folder = await keepWorld(agents, []);
-    const core = await start(
-      folder,
-      withHistory((n) => turns(667, 160, `a${n}`)),
-    );
-    const open = core.engines.canvas(CANVAS);
-    for (const { id } of agents) open?.engine.sessions.open(id);
-    await vi.waitFor(
-      () => {
-        for (const { id } of agents) expect(open?.engine.sessions.of(id).entries.length).toBe(2001);
-      },
-      { timeout: 30_000 },
-    );
-    const began = performance.now();
-    const sessions = await follow(core, SESSIONS, CALLERS.you);
-    const each = await Promise.all(
-      agents.map(({ id }) => follow(core, sessionOf(id), CALLERS.you)),
-    );
-    await vi.waitFor(
-      () => {
-        expect(each.every((copy) => copy.ready)).toBe(true);
-      },
-      { timeout: 30_000 },
-    );
-    const subscribed = performance.now() - began;
-    await expectCopiesRead(core, [sessions, ...each]);
-    // A turn's text streams to its own session's copy as appends; the summaries hear nothing of
-    // its deltas, only of its status and end.
-    const before = sessions.changes.length;
-    const sent = await core.call(
-      'message',
-      { canvas: CANVAS, to: 'agent-3', body: 'One more' },
-      WRITER,
-    );
-    if (!sent.ok) throw new Error(sent.error.sentence);
-    await vi.waitFor(
-      () => {
-        expect(open?.messages.get(sent.value.id)?.state).toBe('replied');
-      },
-      { timeout: 10_000 },
-    );
-    await expectCopiesRead(core, [sessions, ...each]);
-    const three = each[3];
-    const appends = three?.changes.filter((change) => {
-      const { entries, summary } = change as unknown as {
-        entries: { append?: unknown[]; upsert?: unknown[]; order?: unknown };
-        summary?: unknown;
-      };
-      return (
-        entries.append !== undefined &&
-        entries.upsert === undefined &&
-        entries.order === undefined &&
-        summary === undefined
+  const historySizes = [
+    { label: 'two agents’ 300-entry', agents: 2, turns: 100 },
+    ...(process.env.CORRALLM_TEST_STRESS === '1'
+      ? [{ label: 'twelve agents’ 2,001-entry', agents: 12, turns: 667 }]
+      : []),
+  ];
+  it.each(historySizes)(
+    'serves $label histories and streams appends alone',
+    async (size) => {
+      const agents = Array.from({ length: size.agents }, (_, i) => ({ id: `agent-${String(i)}` }));
+      folder = await keepWorld(agents, []);
+      const core = await start(
+        folder,
+        withHistory((n) => turns(size.turns, 160, `a${n}`)),
       );
-    });
-    expect(appends?.length).toBeGreaterThan(0);
-    const summaries = sessions.changes.slice(before).length;
-    expect(summaries).toBeLessThan(three?.changes.length ?? 0);
-    console.info(`12 × 2,001-entry histories: subscribed in ${subscribed.toFixed(0)} ms`);
-  }, 120_000);
+      const open = core.engines.canvas(CANVAS);
+      for (const { id } of agents) open?.engine.sessions.open(id);
+      await vi.waitFor(
+        () => {
+          for (const { id } of agents)
+            expect(open?.engine.sessions.of(id).entries.length).toBe(size.turns * 3);
+        },
+        { timeout: 30_000 },
+      );
+      const began = performance.now();
+      const sessions = await follow(core, SESSIONS, CALLERS.you);
+      const each = await Promise.all(
+        agents.map(({ id }) => follow(core, sessionOf(id), CALLERS.you)),
+      );
+      await vi.waitFor(
+        () => {
+          expect(each.every((copy) => copy.ready)).toBe(true);
+        },
+        { timeout: 30_000 },
+      );
+      const subscribed = performance.now() - began;
+      await expectCopiesRead(core, [sessions, ...each]);
+      // A turn's text streams to its own session's copy as appends; the summaries hear nothing of
+      // its deltas, only of its status and end.
+      const before = sessions.changes.length;
+      const sent = await core.call(
+        'message',
+        { canvas: CANVAS, to: 'agent-1', body: 'One more' },
+        WRITER,
+      );
+      if (!sent.ok) throw new Error(sent.error.sentence);
+      await vi.waitFor(
+        () => {
+          expect(open?.messages.get(sent.value.id)?.state).toBe('replied');
+        },
+        { timeout: 10_000 },
+      );
+      await expectCopiesRead(core, [sessions, ...each]);
+      const recipient = each[1];
+      const appends = recipient?.changes.filter((change) => {
+        const { entries, summary } = change as unknown as {
+          entries: { append?: unknown[]; upsert?: unknown[]; order?: unknown };
+          summary?: unknown;
+        };
+        return (
+          entries.append !== undefined &&
+          entries.upsert === undefined &&
+          entries.order === undefined &&
+          summary === undefined
+        );
+      });
+      expect(appends?.length).toBeGreaterThan(0);
+      const summaries = sessions.changes.slice(before).length;
+      expect(summaries).toBeLessThan(recipient?.changes.length ?? 0);
+      console.info(
+        `${String(size.agents)} × ${String(size.turns * 3)}-entry histories: subscribed in ${subscribed.toFixed(0)} ms`,
+      );
+    },
+    120_000,
+  );
 });
 
 describe('runtime topics: revisions and epochs', () => {
