@@ -11,6 +11,8 @@ import type { PartyId } from '../../shared/model/messages';
 import type { AgentNode, CanvasDocument } from '../../shared/model/canvas';
 import {
   agentEndpoint,
+  fileMentionRefusal,
+  hasFileMention,
   sameEndpoint,
   shellPrefixesIn,
   startsWithShell,
@@ -193,6 +195,31 @@ export function ruleChecks(
           endpoint.kind === 'unchosen' ? 'has no agent chosen yet' : 'runs none this build has';
         return {
           refuse: `It starts with "${prefix}", which an agent may run as a shell command without asking, and ${name} ${runs}: only the user may send that.`,
+        };
+      },
+    },
+    'file-mentions': {
+      message: ({ canvas, to, body }) => {
+        const open = openOf(canvas);
+        const node = open?.document.nodes.find((one) => one.id === to);
+        if (!open || node?.type !== 'agent') return undefined;
+        // How the agent runs, as the one resolver reads it (B12 C3), never a default.
+        const endpoint = agentEndpoint(node.data, catalog);
+        if (endpoint.kind === 'known') {
+          const sentence = fileMentionRefusal(open.engine.catalog, endpoint.connection, body);
+          return sentence === undefined ? undefined : { refuse: sentence };
+        }
+        // Unchosen or unavailable: refused when any connection may expand a mention, as R1
+        // refuses any catalog shell prefix for such an agent.
+        const expands = catalog.adapters.some(({ connections }) =>
+          connections.some((one) => one.fileMentions === true),
+        );
+        if (!expands || !hasFileMention(body)) return undefined;
+        const name = nameOf(open.document.nodes, to);
+        const runs =
+          endpoint.kind === 'unchosen' ? 'has no agent chosen yet' : 'runs none this build has';
+        return {
+          refuse: `Not sent: it contains a file mention, which an agent may read without asking, and ${name} ${runs}: only the user may send that.`,
         };
       },
     },

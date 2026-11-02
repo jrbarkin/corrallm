@@ -1,0 +1,448 @@
+{
+  "recordedWith": {
+    "claude": "2.1.316",
+    "sdk": "0.3.306",
+    "platform": "macOS arm64",
+    "date": "2026-10-31",
+    "model": "none: a local stub Messages API answered each turn (a call to the tool, then \"done\"); no tokens were spent",
+    "config": "a throwaway CLAUDE_CONFIG_DIR, HOME and project; a stand-in MCP server registered as { type: \"sdk\", name: \"corrallm\", instance }, its list and calls answered in-process"
+  },
+  "minimumVersion": {
+    "claude": "2.1.316",
+    "sdk": "0.3.306"
+  },
+  "entry": {
+    "note": "The planned entry (§9.4): mcpServers.corrallm = { type: 'sdk', name: 'corrallm', instance }, the instance a low-level MCP server whose list and calls are the channel's; allowedTools the exact non-destructive names; settings.deniedMcpServers the outside names. No credential: the channel is bound. `tools: [{ name, permission_policy: 'always_ask' }]` on the server asks even for an allowed tool.",
+    "mcpServers": {
+      "corrallm": {
+        "type": "sdk",
+        "name": "corrallm"
+      }
+    },
+    "allowedTools": ["mcp__corrallm__probe_read"],
+    "settings": {
+      "deniedMcpServers": [
+        {
+          "serverName": "corrallm-server"
+        },
+        {
+          "serverName": "corrallm-server-dev"
+        }
+      ]
+    }
+  },
+  "cases": {
+    "clean": {
+      "how": "No configured corrallm; mcpServerStatus() before any turn.",
+      "statusBeforeTurn": [
+        {
+          "name": "corrallm",
+          "status": "connected",
+          "transport": "sdk",
+          "scope": "dynamic",
+          "source": "sdk",
+          "tools": ["probe_delete", "probe_read"]
+        }
+      ],
+      "probesHeard": []
+    },
+    "sameNameConfigured": {
+      "how": "The user's local scope also configures a server named corrallm (another url and canary); a turn calling probe_read.",
+      "statusBeforeTurn": [
+        {
+          "name": "corrallm",
+          "status": "pending",
+          "transport": "http",
+          "scope": "local",
+          "source": "local",
+          "url": "http://127.0.0.1:47104/mcp"
+        },
+        {
+          "name": "corrallm-server",
+          "status": "pending",
+          "transport": "http",
+          "scope": "user",
+          "source": "user",
+          "url": "http://127.0.0.1:47104/mcp"
+        }
+      ],
+      "statusAfterTurn": [
+        {
+          "name": "corrallm",
+          "status": "connected",
+          "transport": "http",
+          "scope": "local",
+          "source": "local",
+          "tools": ["probe_delete", "probe_read"],
+          "url": "http://127.0.0.1:47104/mcp"
+        },
+        {
+          "name": "corrallm-server",
+          "status": "connected",
+          "transport": "http",
+          "scope": "user",
+          "source": "user",
+          "tools": ["probe_delete", "probe_read"],
+          "url": "http://127.0.0.1:47104/mcp"
+        }
+      ],
+      "initMcpServers": [
+        {
+          "name": "corrallm",
+          "status": "connected",
+          "source": "local"
+        },
+        {
+          "name": "corrallm-server",
+          "status": "connected",
+          "source": "user"
+        }
+      ],
+      "channelCalls": ["probe_read"],
+      "canUseTool": [],
+      "permissionDenials": [],
+      "probesHeard": [
+        {
+          "server": "extra",
+          "method": "server/discover"
+        },
+        {
+          "server": "extra",
+          "method": "initialize"
+        },
+        {
+          "server": "extra",
+          "method": "notifications/initialized"
+        },
+        {
+          "server": "extra",
+          "method": "tools/list"
+        }
+      ]
+    },
+    "allowedTool": {
+      "how": "allowedTools names probe_read; a turn calls it. canUseTool is never asked.",
+      "statusBeforeTurn": [
+        {
+          "name": "corrallm",
+          "status": "connected",
+          "transport": "sdk",
+          "scope": "dynamic",
+          "source": "sdk",
+          "tools": ["probe_delete", "probe_read"]
+        }
+      ],
+      "statusAfterTurn": [
+        {
+          "name": "corrallm",
+          "status": "connected",
+          "transport": "sdk",
+          "scope": "dynamic",
+          "source": "sdk",
+          "tools": ["probe_delete", "probe_read"]
+        }
+      ],
+      "initMcpServers": [
+        {
+          "name": "corrallm",
+          "status": "connected",
+          "source": "sdk"
+        }
+      ],
+      "channelCalls": ["probe_read"],
+      "canUseTool": [],
+      "permissionDenials": [],
+      "probesHeard": []
+    },
+    "destructiveTool": {
+      "how": "A turn calls probe_delete, not in allowedTools: canUseTool is asked (here it denies).",
+      "statusBeforeTurn": [
+        {
+          "name": "corrallm",
+          "status": "connected",
+          "transport": "sdk",
+          "scope": "dynamic",
+          "source": "sdk",
+          "tools": ["probe_delete", "probe_read"]
+        }
+      ],
+      "statusAfterTurn": [
+        {
+          "name": "corrallm",
+          "status": "connected",
+          "transport": "sdk",
+          "scope": "dynamic",
+          "source": "sdk",
+          "tools": ["probe_delete", "probe_read"]
+        }
+      ],
+      "initMcpServers": [
+        {
+          "name": "corrallm",
+          "status": "connected",
+          "source": "sdk"
+        }
+      ],
+      "channelCalls": [],
+      "canUseTool": ["mcp__corrallm__probe_delete"],
+      "permissionDenials": ["mcp__corrallm__probe_delete"],
+      "probesHeard": []
+    },
+    "alwaysAskOnAllowedTool": {
+      "how": "The server's tool policy says always_ask for probe_read, which allowedTools also names: canUseTool is asked.",
+      "statusBeforeTurn": [
+        {
+          "name": "corrallm",
+          "status": "connected",
+          "transport": "sdk",
+          "scope": "dynamic",
+          "source": "sdk",
+          "tools": ["probe_delete", "probe_read"]
+        }
+      ],
+      "statusAfterTurn": [
+        {
+          "name": "corrallm",
+          "status": "connected",
+          "transport": "sdk",
+          "scope": "dynamic",
+          "source": "sdk",
+          "tools": ["probe_delete", "probe_read"]
+        }
+      ],
+      "initMcpServers": [
+        {
+          "name": "corrallm",
+          "status": "connected",
+          "source": "sdk"
+        }
+      ],
+      "channelCalls": [],
+      "canUseTool": ["mcp__corrallm__probe_read"],
+      "permissionDenials": ["mcp__corrallm__probe_read"],
+      "probesHeard": []
+    },
+    "alwaysAskOnDestructiveTool": {
+      "how": "The server's tool policy says always_ask for probe_delete.",
+      "statusBeforeTurn": [
+        {
+          "name": "corrallm",
+          "status": "connected",
+          "transport": "sdk",
+          "scope": "dynamic",
+          "source": "sdk",
+          "tools": ["probe_delete", "probe_read"]
+        }
+      ],
+      "statusAfterTurn": [
+        {
+          "name": "corrallm",
+          "status": "connected",
+          "transport": "sdk",
+          "scope": "dynamic",
+          "source": "sdk",
+          "tools": ["probe_delete", "probe_read"]
+        }
+      ],
+      "initMcpServers": [
+        {
+          "name": "corrallm",
+          "status": "connected",
+          "source": "sdk"
+        }
+      ],
+      "channelCalls": [],
+      "canUseTool": ["mcp__corrallm__probe_delete"],
+      "permissionDenials": ["mcp__corrallm__probe_delete"],
+      "probesHeard": []
+    },
+    "userServerNotSwitchedOff": {
+      "how": "The user's scope registers corrallm-server (a headers helper); no settings option.",
+      "statusBeforeTurn": [
+        {
+          "name": "corrallm-server",
+          "status": "pending",
+          "transport": "http",
+          "scope": "user",
+          "source": "user",
+          "url": "http://127.0.0.1:47104/mcp"
+        },
+        {
+          "name": "corrallm",
+          "status": "connected",
+          "transport": "sdk",
+          "scope": "dynamic",
+          "source": "sdk",
+          "tools": ["probe_delete", "probe_read"]
+        }
+      ],
+      "statusAfterTurn": [
+        {
+          "name": "corrallm-server",
+          "status": "connected",
+          "transport": "http",
+          "scope": "user",
+          "source": "user",
+          "tools": ["probe_delete", "probe_read"],
+          "url": "http://127.0.0.1:47104/mcp"
+        },
+        {
+          "name": "corrallm",
+          "status": "connected",
+          "transport": "sdk",
+          "scope": "dynamic",
+          "source": "sdk",
+          "tools": ["probe_delete", "probe_read"]
+        }
+      ],
+      "initMcpServers": [
+        {
+          "name": "corrallm-server",
+          "status": "connected",
+          "source": "user"
+        },
+        {
+          "name": "corrallm",
+          "status": "connected",
+          "source": "sdk"
+        }
+      ],
+      "channelCalls": ["probe_read"],
+      "canUseTool": [],
+      "permissionDenials": [],
+      "probesHeard": [
+        {
+          "server": "extra",
+          "method": "server/discover"
+        },
+        {
+          "server": "extra",
+          "method": "initialize"
+        },
+        {
+          "server": "extra",
+          "method": "notifications/initialized"
+        },
+        {
+          "server": "extra",
+          "method": "tools/list"
+        }
+      ],
+      "helperRuns": 1
+    },
+    "userServerSwitchedOff": {
+      "how": "The same, with the SDK's settings option { deniedMcpServers } naming corrallm-server and corrallm-server-dev.",
+      "statusBeforeTurn": [
+        {
+          "name": "corrallm",
+          "status": "connected",
+          "transport": "sdk",
+          "scope": "dynamic",
+          "source": "sdk",
+          "tools": ["probe_delete", "probe_read"]
+        }
+      ],
+      "statusAfterTurn": [
+        {
+          "name": "corrallm",
+          "status": "connected",
+          "transport": "sdk",
+          "scope": "dynamic",
+          "source": "sdk",
+          "tools": ["probe_delete", "probe_read"]
+        }
+      ],
+      "initMcpServers": [
+        {
+          "name": "corrallm",
+          "status": "connected",
+          "source": "sdk"
+        }
+      ],
+      "channelCalls": ["probe_read"],
+      "canUseTool": [],
+      "permissionDenials": [],
+      "probesHeard": [],
+      "helperRuns": 0
+    },
+    "userDeniesCorrallm": {
+      "how": "The user's settings.json (user scope) denies corrallm; the SDK server is registered by the host.",
+      "statusBeforeTurn": [
+        {
+          "name": "corrallm-server",
+          "status": "pending",
+          "transport": "http",
+          "scope": "user",
+          "source": "user",
+          "url": "http://127.0.0.1:47104/mcp"
+        },
+        {
+          "name": "corrallm",
+          "status": "connected",
+          "transport": "sdk",
+          "scope": "dynamic",
+          "source": "sdk",
+          "tools": ["probe_delete", "probe_read"]
+        }
+      ],
+      "statusAfterTurn": [
+        {
+          "name": "corrallm-server",
+          "status": "connected",
+          "transport": "http",
+          "scope": "user",
+          "source": "user",
+          "tools": ["probe_delete", "probe_read"],
+          "url": "http://127.0.0.1:47104/mcp"
+        },
+        {
+          "name": "corrallm",
+          "status": "connected",
+          "transport": "sdk",
+          "scope": "dynamic",
+          "source": "sdk",
+          "tools": ["probe_delete", "probe_read"]
+        }
+      ],
+      "initMcpServers": [
+        {
+          "name": "corrallm-server",
+          "status": "connected",
+          "source": "user"
+        },
+        {
+          "name": "corrallm",
+          "status": "connected",
+          "source": "sdk"
+        }
+      ],
+      "channelCalls": ["probe_read"],
+      "canUseTool": [],
+      "permissionDenials": [],
+      "probesHeard": [
+        {
+          "server": "extra",
+          "method": "server/discover"
+        },
+        {
+          "server": "extra",
+          "method": "initialize"
+        },
+        {
+          "server": "extra",
+          "method": "notifications/initialized"
+        },
+        {
+          "server": "extra",
+          "method": "tools/list"
+        }
+      ],
+      "helperRuns": 1
+    }
+  },
+  "mentions": {
+    "note": "T2: an '@' mention of a file outside the project in a user message; 'seen' lists the canary lines of files that reached the stub API's request.",
+    "plain": ["OUTSIDE-CANARY-LINE"],
+    "clientComposed": []
+  }
+}

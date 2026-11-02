@@ -182,6 +182,13 @@ export class ConnectedDriver implements SessionDriver {
       .then(() => {
         // Stopped before it went: it never does.
         if (!this.#turns.has(turn.id)) return null;
+        const refusal = this.#io.sending?.(turn.id, turn.text);
+        if (refusal !== undefined) {
+          this.#end([turn.id], {
+            result: { status: 'failed', reason: 'declined', message: refusal },
+          });
+          return null;
+        }
         sent.sent = true;
         const { id, text, images, from, origin, task } = turn;
         return this.#backend.send(this.#agentId, {

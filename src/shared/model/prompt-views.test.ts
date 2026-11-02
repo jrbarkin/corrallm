@@ -154,6 +154,16 @@ const HOOKED = {
 };
 
 describe('a prompt’s Needs item', () => {
+  it.each(['you', 'token'] as const)(
+    'names a form’s configured server for %s without its form values',
+    (reader) => {
+      const item = promptNeed(occurrence(URL_FORM), reader);
+      expect(item.prompt).toMatchObject({ kind: 'form', server: 'tracker' });
+      expect(PromptNeedView.parse(item.prompt)).toEqual(item.prompt);
+      expect(item.prompt).not.toHaveProperty('form');
+    },
+  );
+
   it('is yours whole: its words, choices with what each does, questions, form and the prompt’s own fields', () => {
     const yours = promptNeed(occurrence(APPROVAL), 'you');
     expect(yours).toEqual({
@@ -276,7 +286,7 @@ describe('a prompt’s Needs item', () => {
         answerIn: 'api',
         title,
         choices: [],
-        prompt: { id: ID, kind: 'form', raised: 1_700_000_000_000 },
+        prompt: { id: ID, kind: 'form', raised: 1_700_000_000_000, server: raw.server },
       });
       for (const word of ['private-signin-secret', 'private-form', 'private-field-title']) {
         expect(JSON.stringify(theirs)).not.toContain(word);

@@ -388,6 +388,26 @@ export class MessageStore {
     );
   }
 
+  /** The key a message kept was kept with (what it told, or what admitted it), if any. */
+  toldOf(id: string): string | undefined {
+    return this.#kept.get(id)?.told;
+  }
+
+  /**
+   * Keeps a message with another key (none: `undefined`), written with the next write: B11a C7's
+   * mark of a send that carried an agent's handoff, value-free. False if it isn't kept.
+   */
+  retell(id: string, told: string | undefined): boolean {
+    const kept = this.#kept.get(id);
+    if (!kept) return false;
+    if (kept.told === told) return true;
+    const next: Kept = { ...kept };
+    if (told === undefined) delete next.told;
+    else next.told = told;
+    this.#keep(next);
+    return true;
+  }
+
   /** How a message kept came to be. */
   originOf(id: string): MessageOrigin | undefined {
     return this.#kept.get(id)?.origin;

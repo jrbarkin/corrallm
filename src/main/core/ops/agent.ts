@@ -13,6 +13,7 @@ export function agentOps(
   | 'agent.setType'
   | 'agent.setConnection'
   | 'agent.setFallback'
+  | 'agent.setHandoff'
   | 'agent.setSettings'
   | 'agent.setRole'
 > {
@@ -51,6 +52,13 @@ export function agentOps(
         } catch (error) {
           throw new OpFailure('invalid', invalidChain(error));
         }
+        return { ...built, result: { changed: built.next !== doc } };
+      }),
+    // B11a C7: when your agent is asked for its handoff, and its Markdown copy, replaced whole.
+    'agent.setHandoff': ({ canvas, agent, handoff }, ctx) =>
+      ctx.commit(canvas, (doc) => {
+        requireAgent(doc, agent);
+        const built = agents.setHandoff(doc, { agent, handoff });
         return { ...built, result: { changed: built.next !== doc } };
       }),
     'agent.setSettings': ({ canvas, agent, adapter, settings }, ctx) =>

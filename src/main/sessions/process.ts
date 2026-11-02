@@ -37,6 +37,58 @@ export function withProcesses<T>(processes: ProcessOwner, run: () => T): T {
   return owner.run(processes, run);
 }
 
+/** A launch's children, still owned by the core, that can be stopped before it returns a session. */
+export class ProcessScope implements ProcessOwner {
+  readonly #parent = owner.getStore();
+  readonly #children = new Set<Parameters<ProcessOwner['node']>[0]>();
+  #closed = false;
+
+  run<T>(work: () => T): T {
+    return withProcesses(this, work);
+  }
+
+  beforeSpawn(): void {
+    if (this.#closed) throw new Error('This session is no longer starting.');
+    this.#parent?.beforeSpawn();
+  }
+
+  node(child: Parameters<ProcessOwner['node']>[0], until?: 'close'): void {
+    this.#parent?.node(child, until);
+    if (child.pid === undefined) return;
+    this.#children.add(child);
+    child.once(until ?? 'exit', () => {
+      this.#children.delete(child);
+    });
+  }
+
+  pty(child: Parameters<ProcessOwner['pty']>[0]): void {
+    this.#parent?.pty(child);
+    const process = {
+      pid: child.pid,
+      once: (_event: 'exit' | 'close', listener: () => void) => child.onExit(listener),
+      kill: (signal?: NodeJS.Signals | number) =>
+        child.kill(typeof signal === 'number' ? undefined : signal),
+    };
+    this.#children.add(process);
+    child.onExit(() => {
+      this.#children.delete(process);
+    });
+  }
+
+  async stop(
+    child: Parameters<ProcessOwner['node']>[0],
+    signal: NodeJS.Signals | number,
+  ): Promise<void> {
+    await this.#parent?.stop(child, signal);
+  }
+
+  /** Refuses late spawns and ends only this launch's groups through the core's identity checks. */
+  async close(): Promise<void> {
+    this.#closed = true;
+    await Promise.all([...this.#children].map((child) => this.stop(child, 'SIGTERM')));
+  }
+}
+
 /** The spawn overloads are Node's; the owner records a successful spawn before it is returned. */
 export const spawn = ((
   command: string,

@@ -4,7 +4,7 @@ import { ID_PATTERN } from '../../adapter';
 import { parseRole } from '../../role';
 import { EFFORT_PATTERN, MAX_ROLE_LENGTH, MODEL_PATTERN } from '../../session';
 import { define } from '../define';
-import { SetFallbackInput } from '../fallback';
+import { SetFallbackInput, SetHandoffInput } from '../fallback';
 import type { OpDef } from '../define';
 import { AgentId, OpCanvas } from '../ids';
 import { MAX_LABEL } from '../limits';
@@ -53,6 +53,14 @@ export const agentOps = {
       'adapter, its connection and optionally a model and effort; back: return to switch back ' +
       'at the reset), or null to remove them. Yours alone.',
     input: SetFallbackInput,
+    output: z.strictObject({ changed: z.boolean() }),
+  }),
+  'agent.setHandoff': define('agent.setHandoff', {
+    summary:
+      'Sets when corrallm asks an agent to write its handoff: off, or at a whole percentage of its ' +
+      'context window from 10 to 95 (95 when unset), and the Markdown file in its checkout its ' +
+      'handoff is copied to (null: none); or null for the defaults. Yours alone.',
+    input: SetHandoffInput,
     output: z.strictObject({ changed: z.boolean() }),
   }),
   'agent.setSettings': define('agent.setSettings', {

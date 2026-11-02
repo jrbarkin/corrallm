@@ -10,10 +10,20 @@ type TranscriptEntry = ResultOf<'session.transcript'>['entries'][number];
 /** Sessions (Core Server §4 G): an agent's session as it is, its transcript, and interrupting it. */
 export function sessionOps({
   engines,
-}: OpServices): Pick<Implementations, 'session.get' | 'session.transcript' | 'session.interrupt'> {
+}: OpServices): Pick<
+  Implementations,
+  'session.get' | 'session.transcript' | 'session.handoff' | 'session.interrupt'
+> {
   return {
     'session.get': ({ canvas, agent }, { caller }) =>
       sessionSummary(openCanvas(engines, canvas), agent, caller.kind === 'human'),
+    // B11a C10: the agent's latest handoff, as whoever reads its session may: read and returned
+    // in its scope, with nothing awaited between its reach's check and its answer.
+    'session.handoff': ({ canvas, agent }) => {
+      const open = openCanvas(engines, canvas);
+      agentOf(open, agent);
+      return { handoff: open.handoffs.of(agent)?.handoff ?? null };
+    },
     'session.transcript': ({ canvas, agent, after, limit = DEFAULT_PAGE }, { caller }) => {
       const open = openCanvas(engines, canvas);
       // The transcript as the caller sees it, whole (as its topic gives it), then paged.

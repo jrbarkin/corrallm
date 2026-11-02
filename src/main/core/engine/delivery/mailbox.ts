@@ -18,7 +18,7 @@ import type {
   TaskMessage,
   TurnResult,
 } from '../../../../shared/session';
-import { adapterRefusal, shellRefusal } from '../../../../shared/model/catalog';
+import { adapterRefusal, fileMentionRefusal, shellRefusal } from '../../../../shared/model/catalog';
 import type { EngineCatalog, ResolvedStep } from '../../../../shared/model/catalog';
 import { ConnectedDriver, NO_BACKEND } from '../transcript/receive';
 import type { SessionBackend } from '../transcript/receive';
@@ -768,7 +768,8 @@ export class SessionStore {
    * Starts a turn with message `id` (a queued message keeps its own). The run's own text (a
    * canvas's, which a shared file may hold) that starts with what the connection it goes to runs as
    * a shell command never starts: its turn fails, saying why, and the next message goes. Checked
-   * here, as it leaves, since the agent may run another way than when it was sent.
+   * here, as it leaves, since the agent may run another way than when it was sent. Automated
+   * text's file mentions are checked here and again by the driver after startup.
    */
   #start(
     agentId: string,
@@ -792,9 +793,9 @@ export class SessionStore {
       });
       return;
     }
-    const refusal = this.#queueMessages.has(id)
-      ? shellRefusal(this.#catalog, connection, text)
-      : undefined;
+    const refusal =
+      (this.#queueMessages.has(id) ? shellRefusal(this.#catalog, connection, text) : undefined) ??
+      this.#fileMentionRefusal(agentId, id, text);
     if (refusal !== undefined) {
       const onDone = this.#heard(id);
       this.#idle(agentId);
@@ -841,6 +842,12 @@ export class SessionStore {
     this.#tasks.delete(id);
     this.#retryOf.delete(id);
     return onDone;
+  }
+
+  /** Rechecked at startup and at native send, using the current connection and kept provenance. */
+  #fileMentionRefusal(agentId: string, id: string, text: string): string | undefined {
+    if (!this.#queueMessages.has(id) && !this.#senders.has(id)) return undefined;
+    return fileMentionRefusal(this.#catalog, this.#connection(agentId), text);
   }
 
   /**
@@ -923,6 +930,7 @@ export class SessionStore {
         if (current()) this.#dispatch(agentId, action);
       },
       session: () => this.of(agentId),
+      sending: (id, text) => this.#fileMentionRefusal(agentId, id, text),
       settings: () => {
         const settings =
           driving.connection === 'unavailable'

@@ -1,0 +1,1581 @@
+{
+  "recordedWith": {
+    "codex": "0.162.1",
+    "platform": "macOS arm64",
+    "date": "2026-10-31",
+    "model": "none: a local stub Responses API answered each turn (a call to the tool, then \"done\"); no tokens were spent",
+    "config": "a throwaway CODEX_HOME and HOME, a throwaway project; the probe is a local MCP server (streamable HTTP, JSON replies) that logs each request"
+  },
+  "minimumVersion": "0.162.1",
+  "entry": {
+    "note": "The planned entry as -c overrides on the session's private `codex app-server` (probe-shaped: two tools, as the stand-in for the generation's listing); the credential only in the process environment as CORRALLM_SESSION_TOKEN.",
+    "overrides": [
+      "mcp_servers.corrallm={url=\"http://127.0.0.1:47101/mcp\",enabled=true,disabled_tools=[],bearer_token_env_var=\"CORRALLM_SESSION_TOKEN\",default_tools_approval_mode=\"prompt\",tools={probe_read={approval_mode=\"approve\"},probe_delete={approval_mode=\"prompt\"}}}"
+    ],
+    "plainOverrides": [
+      "mcp_servers.corrallm={url=\"http://127.0.0.1:47101/mcp\",bearer_token_env_var=\"CORRALLM_SESSION_TOKEN\",default_tools_approval_mode=\"prompt\",tools={probe_read={approval_mode=\"approve\"},probe_delete={approval_mode=\"prompt\"}}}"
+    ],
+    "token": "CORRALLM_SESSION_TOKEN"
+  },
+  "cases": {
+    "clean": {
+      "how": "Only the session overrides: the planned entry, CORRALLM_SESSION_TOKEN in the environment of that app server.",
+      "probes": [
+        {
+          "server": "ours",
+          "method": "initialize",
+          "headers": {
+            "authorization": "Bearer canary-as-clean"
+          }
+        },
+        {
+          "server": "ours",
+          "method": "notifications/initialized",
+          "headers": {
+            "authorization": "Bearer canary-as-clean"
+          }
+        },
+        {
+          "server": "ours",
+          "method": "tools/list",
+          "headers": {
+            "authorization": "Bearer canary-as-clean"
+          }
+        },
+        {
+          "server": "ours",
+          "method": "resources/templates/list",
+          "headers": {
+            "authorization": "Bearer canary-as-clean"
+          }
+        },
+        {
+          "server": "ours",
+          "method": "resources/list",
+          "headers": {
+            "authorization": "Bearer canary-as-clean"
+          }
+        }
+      ],
+      "config": {
+        "mcp_servers": {
+          "corrallm": {
+            "url": "http://127.0.0.1:47101/mcp",
+            "bearer_token_env_var": "CORRALLM_SESSION_TOKEN",
+            "environment_id": "local",
+            "enabled": true,
+            "tool_timeout_sec": null,
+            "default_tools_approval_mode": "prompt",
+            "disabled_tools": [],
+            "tools": {
+              "probe_read": {
+                "approval_mode": "approve"
+              },
+              "probe_delete": {
+                "approval_mode": "prompt"
+              }
+            }
+          }
+        },
+        "origins": {
+          "corrallm.bearer_token_env_var": "sessionFlags",
+          "corrallm.default_tools_approval_mode": "sessionFlags",
+          "corrallm.enabled": "sessionFlags",
+          "corrallm.tools.probe_delete.approval_mode": "sessionFlags",
+          "corrallm.tools.probe_read.approval_mode": "sessionFlags",
+          "corrallm.url": "sessionFlags"
+        },
+        "layers": [
+          {
+            "type": "sessionFlags",
+            "mcp_servers": {
+              "corrallm": {
+                "url": "http://127.0.0.1:47101/mcp",
+                "enabled": true,
+                "disabled_tools": [],
+                "bearer_token_env_var": "CORRALLM_SESSION_TOKEN",
+                "default_tools_approval_mode": "prompt",
+                "tools": {
+                  "probe_read": {
+                    "approval_mode": "approve"
+                  },
+                  "probe_delete": {
+                    "approval_mode": "prompt"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "type": "project"
+          },
+          {
+            "type": "user"
+          },
+          {
+            "type": "system"
+          }
+        ]
+      },
+      "status": [
+        {
+          "name": "corrallm",
+          "connected": true,
+          "authStatus": "bearerToken",
+          "tools": ["probe_delete", "probe_read"]
+        }
+      ]
+    },
+    "userPlain": {
+      "how": "The user's config.toml has a same-named entry (another url, http_headers with X-Evil, disabled_tools probe_read); the entry is the plain one, without enabled or disabled_tools.",
+      "probes": [
+        {
+          "server": "ours",
+          "method": "initialize",
+          "headers": {
+            "authorization": "Bearer canary-as-user-plain",
+            "x-evil": "user-corrallm"
+          }
+        },
+        {
+          "server": "ours",
+          "method": "notifications/initialized",
+          "headers": {
+            "authorization": "Bearer canary-as-user-plain",
+            "x-evil": "user-corrallm"
+          }
+        },
+        {
+          "server": "ours",
+          "method": "tools/list",
+          "headers": {
+            "authorization": "Bearer canary-as-user-plain",
+            "x-evil": "user-corrallm"
+          }
+        },
+        {
+          "server": "ours",
+          "method": "resources/list",
+          "headers": {
+            "authorization": "Bearer canary-as-user-plain",
+            "x-evil": "user-corrallm"
+          }
+        },
+        {
+          "server": "ours",
+          "method": "resources/templates/list",
+          "headers": {
+            "authorization": "Bearer canary-as-user-plain",
+            "x-evil": "user-corrallm"
+          }
+        }
+      ],
+      "config": {
+        "mcp_servers": {
+          "corrallm": {
+            "url": "http://127.0.0.1:47101/mcp",
+            "bearer_token_env_var": "CORRALLM_SESSION_TOKEN",
+            "http_headers": {
+              "X-Evil": "user-corrallm"
+            },
+            "environment_id": "local",
+            "enabled": true,
+            "tool_timeout_sec": null,
+            "default_tools_approval_mode": "prompt",
+            "disabled_tools": ["probe_read"],
+            "tools": {
+              "probe_read": {
+                "approval_mode": "approve"
+              },
+              "probe_delete": {
+                "approval_mode": "prompt"
+              }
+            }
+          }
+        },
+        "origins": {
+          "corrallm.bearer_token_env_var": "sessionFlags",
+          "corrallm.default_tools_approval_mode": "sessionFlags",
+          "corrallm.disabled_tools.0": "user",
+          "corrallm.http_headers.X-Evil": "user",
+          "corrallm.tools.probe_delete.approval_mode": "sessionFlags",
+          "corrallm.tools.probe_read.approval_mode": "sessionFlags",
+          "corrallm.url": "sessionFlags"
+        },
+        "layers": [
+          {
+            "type": "sessionFlags",
+            "mcp_servers": {
+              "corrallm": {
+                "url": "http://127.0.0.1:47101/mcp",
+                "bearer_token_env_var": "CORRALLM_SESSION_TOKEN",
+                "default_tools_approval_mode": "prompt",
+                "tools": {
+                  "probe_read": {
+                    "approval_mode": "approve"
+                  },
+                  "probe_delete": {
+                    "approval_mode": "prompt"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "type": "project"
+          },
+          {
+            "type": "user",
+            "mcp_servers": {
+              "corrallm": {
+                "url": "http://127.0.0.1:47102/mcp",
+                "disabled_tools": ["probe_read"],
+                "http_headers": {
+                  "X-Evil": "user-corrallm"
+                }
+              }
+            }
+          },
+          {
+            "type": "system"
+          }
+        ]
+      },
+      "status": [
+        {
+          "name": "corrallm",
+          "connected": true,
+          "authStatus": "bearerToken",
+          "tools": ["probe_delete"]
+        }
+      ]
+    },
+    "userDisabled": {
+      "how": "The user's same-named entry has enabled = false (and headers, disabled_tools, enabled_tools, env_http_headers); the plain entry.",
+      "probes": [],
+      "config": {
+        "mcp_servers": {
+          "corrallm": {
+            "url": "http://127.0.0.1:47101/mcp",
+            "bearer_token_env_var": "CORRALLM_SESSION_TOKEN",
+            "http_headers": {
+              "X-Evil": "user-corrallm",
+              "Authorization": "Bearer user-static-header"
+            },
+            "env_http_headers": {
+              "X-Env-Extra": "ENV_EXTRA"
+            },
+            "environment_id": "local",
+            "enabled": false,
+            "tool_timeout_sec": null,
+            "default_tools_approval_mode": "prompt",
+            "enabled_tools": ["probe_delete"],
+            "disabled_tools": ["probe_read"],
+            "tools": {
+              "probe_delete": {
+                "approval_mode": "prompt"
+              },
+              "probe_read": {
+                "approval_mode": "approve"
+              }
+            }
+          }
+        },
+        "origins": {
+          "corrallm.bearer_token_env_var": "sessionFlags",
+          "corrallm.default_tools_approval_mode": "sessionFlags",
+          "corrallm.disabled_tools.0": "user",
+          "corrallm.enabled": "user",
+          "corrallm.enabled_tools.0": "user",
+          "corrallm.env_http_headers.X-Env-Extra": "user",
+          "corrallm.http_headers.Authorization": "user",
+          "corrallm.http_headers.X-Evil": "user",
+          "corrallm.tools.probe_delete.approval_mode": "sessionFlags",
+          "corrallm.tools.probe_read.approval_mode": "sessionFlags",
+          "corrallm.url": "sessionFlags"
+        },
+        "layers": [
+          {
+            "type": "sessionFlags",
+            "mcp_servers": {
+              "corrallm": {
+                "url": "http://127.0.0.1:47101/mcp",
+                "bearer_token_env_var": "CORRALLM_SESSION_TOKEN",
+                "default_tools_approval_mode": "prompt",
+                "tools": {
+                  "probe_read": {
+                    "approval_mode": "approve"
+                  },
+                  "probe_delete": {
+                    "approval_mode": "prompt"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "type": "project"
+          },
+          {
+            "type": "user",
+            "mcp_servers": {
+              "corrallm": {
+                "url": "http://127.0.0.1:47102/mcp",
+                "enabled": false,
+                "disabled_tools": ["probe_read"],
+                "enabled_tools": ["probe_delete"],
+                "http_headers": {
+                  "Authorization": "Bearer user-static-header",
+                  "X-Evil": "user-corrallm"
+                },
+                "env_http_headers": {
+                  "X-Env-Extra": "ENV_EXTRA"
+                }
+              }
+            }
+          },
+          {
+            "type": "system"
+          }
+        ]
+      },
+      "status": [
+        {
+          "name": "corrallm",
+          "connected": false,
+          "authStatus": "unsupported",
+          "tools": []
+        }
+      ]
+    },
+    "userHardened": {
+      "how": "The same user entry; the entry adds enabled=true and disabled_tools=[].",
+      "probes": [
+        {
+          "server": "ours",
+          "method": "initialize",
+          "headers": {
+            "authorization": "Bearer canary-as-user-hardened",
+            "x-evil": "user-corrallm"
+          }
+        },
+        {
+          "server": "ours",
+          "method": "notifications/initialized",
+          "headers": {
+            "authorization": "Bearer canary-as-user-hardened",
+            "x-evil": "user-corrallm"
+          }
+        },
+        {
+          "server": "ours",
+          "method": "tools/list",
+          "headers": {
+            "authorization": "Bearer canary-as-user-hardened",
+            "x-evil": "user-corrallm"
+          }
+        },
+        {
+          "server": "ours",
+          "method": "resources/list",
+          "headers": {
+            "authorization": "Bearer canary-as-user-hardened",
+            "x-evil": "user-corrallm"
+          }
+        },
+        {
+          "server": "ours",
+          "method": "resources/templates/list",
+          "headers": {
+            "authorization": "Bearer canary-as-user-hardened",
+            "x-evil": "user-corrallm"
+          }
+        }
+      ],
+      "config": {
+        "mcp_servers": {
+          "corrallm": {
+            "url": "http://127.0.0.1:47101/mcp",
+            "bearer_token_env_var": "CORRALLM_SESSION_TOKEN",
+            "http_headers": {
+              "X-Evil": "user-corrallm",
+              "Authorization": "Bearer user-static-header"
+            },
+            "env_http_headers": {
+              "X-Env-Extra": "ENV_EXTRA"
+            },
+            "environment_id": "local",
+            "enabled": true,
+            "tool_timeout_sec": null,
+            "default_tools_approval_mode": "prompt",
+            "enabled_tools": ["probe_delete"],
+            "disabled_tools": [],
+            "tools": {
+              "probe_delete": {
+                "approval_mode": "prompt"
+              },
+              "probe_read": {
+                "approval_mode": "approve"
+              }
+            }
+          }
+        },
+        "origins": {
+          "corrallm.bearer_token_env_var": "sessionFlags",
+          "corrallm.default_tools_approval_mode": "sessionFlags",
+          "corrallm.disabled_tools.0": "user",
+          "corrallm.enabled": "sessionFlags",
+          "corrallm.enabled_tools.0": "user",
+          "corrallm.env_http_headers.X-Env-Extra": "user",
+          "corrallm.http_headers.Authorization": "user",
+          "corrallm.http_headers.X-Evil": "user",
+          "corrallm.tools.probe_delete.approval_mode": "sessionFlags",
+          "corrallm.tools.probe_read.approval_mode": "sessionFlags",
+          "corrallm.url": "sessionFlags"
+        },
+        "layers": [
+          {
+            "type": "sessionFlags",
+            "mcp_servers": {
+              "corrallm": {
+                "url": "http://127.0.0.1:47101/mcp",
+                "enabled": true,
+                "disabled_tools": [],
+                "bearer_token_env_var": "CORRALLM_SESSION_TOKEN",
+                "default_tools_approval_mode": "prompt",
+                "tools": {
+                  "probe_read": {
+                    "approval_mode": "approve"
+                  },
+                  "probe_delete": {
+                    "approval_mode": "prompt"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "type": "project"
+          },
+          {
+            "type": "user",
+            "mcp_servers": {
+              "corrallm": {
+                "url": "http://127.0.0.1:47102/mcp",
+                "enabled": false,
+                "disabled_tools": ["probe_read"],
+                "enabled_tools": ["probe_delete"],
+                "http_headers": {
+                  "Authorization": "Bearer user-static-header",
+                  "X-Evil": "user-corrallm"
+                },
+                "env_http_headers": {
+                  "X-Env-Extra": "ENV_EXTRA"
+                }
+              }
+            }
+          },
+          {
+            "type": "system"
+          }
+        ]
+      },
+      "status": [
+        {
+          "name": "corrallm",
+          "connected": true,
+          "authStatus": "bearerToken",
+          "tools": ["probe_delete"]
+        }
+      ]
+    },
+    "userHelper": {
+      "how": "The user's entry has an http_headers_helper (a command that prints Authorization and X-Canary); the hardened entry.",
+      "probes": [
+        {
+          "server": "ours",
+          "method": "initialize",
+          "headers": {
+            "authorization": "Bearer canary-as-user-helper",
+            "x-canary": "helper"
+          }
+        },
+        {
+          "server": "ours",
+          "method": "notifications/initialized",
+          "headers": {
+            "authorization": "Bearer canary-as-user-helper",
+            "x-canary": "helper"
+          }
+        },
+        {
+          "server": "ours",
+          "method": "tools/list",
+          "headers": {
+            "authorization": "Bearer canary-as-user-helper",
+            "x-canary": "helper"
+          }
+        },
+        {
+          "server": "ours",
+          "method": "resources/list",
+          "headers": {
+            "authorization": "Bearer canary-as-user-helper",
+            "x-canary": "helper"
+          }
+        },
+        {
+          "server": "ours",
+          "method": "resources/templates/list",
+          "headers": {
+            "authorization": "Bearer canary-as-user-helper",
+            "x-canary": "helper"
+          }
+        }
+      ],
+      "config": {
+        "mcp_servers": {
+          "corrallm": {
+            "url": "http://127.0.0.1:47101/mcp",
+            "bearer_token_env_var": "CORRALLM_SESSION_TOKEN",
+            "http_headers_helper": "/work/scratch/bin/helper.sh",
+            "environment_id": "local",
+            "enabled": true,
+            "tool_timeout_sec": null,
+            "default_tools_approval_mode": "prompt",
+            "disabled_tools": [],
+            "tools": {
+              "probe_read": {
+                "approval_mode": "approve"
+              },
+              "probe_delete": {
+                "approval_mode": "prompt"
+              }
+            }
+          }
+        },
+        "origins": {
+          "corrallm.bearer_token_env_var": "sessionFlags",
+          "corrallm.default_tools_approval_mode": "sessionFlags",
+          "corrallm.enabled": "sessionFlags",
+          "corrallm.http_headers_helper": "user",
+          "corrallm.tools.probe_delete.approval_mode": "sessionFlags",
+          "corrallm.tools.probe_read.approval_mode": "sessionFlags",
+          "corrallm.url": "sessionFlags"
+        },
+        "layers": [
+          {
+            "type": "sessionFlags",
+            "mcp_servers": {
+              "corrallm": {
+                "url": "http://127.0.0.1:47101/mcp",
+                "enabled": true,
+                "disabled_tools": [],
+                "bearer_token_env_var": "CORRALLM_SESSION_TOKEN",
+                "default_tools_approval_mode": "prompt",
+                "tools": {
+                  "probe_read": {
+                    "approval_mode": "approve"
+                  },
+                  "probe_delete": {
+                    "approval_mode": "prompt"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "type": "project"
+          },
+          {
+            "type": "user",
+            "mcp_servers": {
+              "corrallm": {
+                "url": "http://127.0.0.1:47102/mcp",
+                "http_headers_helper": "/work/scratch/bin/helper.sh"
+              }
+            }
+          },
+          {
+            "type": "system"
+          }
+        ]
+      },
+      "status": [
+        {
+          "name": "corrallm",
+          "connected": true,
+          "authStatus": "bearerToken",
+          "tools": ["probe_delete", "probe_read"]
+        }
+      ]
+    },
+    "userEnvAuth": {
+      "how": "The user's entry has env_http_headers { Authorization = USER_AUTH } and that variable is set; the hardened entry.",
+      "probes": [
+        {
+          "server": "ours",
+          "method": "initialize",
+          "headers": {
+            "authorization": "Bearer canary-as-user-envauth"
+          }
+        },
+        {
+          "server": "ours",
+          "method": "notifications/initialized",
+          "headers": {
+            "authorization": "Bearer canary-as-user-envauth"
+          }
+        },
+        {
+          "server": "ours",
+          "method": "tools/list",
+          "headers": {
+            "authorization": "Bearer canary-as-user-envauth"
+          }
+        },
+        {
+          "server": "ours",
+          "method": "resources/templates/list",
+          "headers": {
+            "authorization": "Bearer canary-as-user-envauth"
+          }
+        },
+        {
+          "server": "ours",
+          "method": "resources/list",
+          "headers": {
+            "authorization": "Bearer canary-as-user-envauth"
+          }
+        }
+      ],
+      "config": {
+        "mcp_servers": {
+          "corrallm": {
+            "url": "http://127.0.0.1:47101/mcp",
+            "bearer_token_env_var": "CORRALLM_SESSION_TOKEN",
+            "env_http_headers": {
+              "Authorization": "USER_AUTH"
+            },
+            "environment_id": "local",
+            "enabled": true,
+            "tool_timeout_sec": null,
+            "default_tools_approval_mode": "prompt",
+            "disabled_tools": [],
+            "tools": {
+              "probe_delete": {
+                "approval_mode": "prompt"
+              },
+              "probe_read": {
+                "approval_mode": "approve"
+              }
+            }
+          }
+        },
+        "origins": {
+          "corrallm.bearer_token_env_var": "sessionFlags",
+          "corrallm.default_tools_approval_mode": "sessionFlags",
+          "corrallm.enabled": "sessionFlags",
+          "corrallm.env_http_headers.Authorization": "user",
+          "corrallm.tools.probe_delete.approval_mode": "sessionFlags",
+          "corrallm.tools.probe_read.approval_mode": "sessionFlags",
+          "corrallm.url": "sessionFlags"
+        },
+        "layers": [
+          {
+            "type": "sessionFlags",
+            "mcp_servers": {
+              "corrallm": {
+                "url": "http://127.0.0.1:47101/mcp",
+                "enabled": true,
+                "disabled_tools": [],
+                "bearer_token_env_var": "CORRALLM_SESSION_TOKEN",
+                "default_tools_approval_mode": "prompt",
+                "tools": {
+                  "probe_read": {
+                    "approval_mode": "approve"
+                  },
+                  "probe_delete": {
+                    "approval_mode": "prompt"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "type": "project"
+          },
+          {
+            "type": "user",
+            "mcp_servers": {
+              "corrallm": {
+                "url": "http://127.0.0.1:47102/mcp",
+                "env_http_headers": {
+                  "Authorization": "USER_AUTH"
+                }
+              }
+            }
+          },
+          {
+            "type": "system"
+          }
+        ]
+      },
+      "status": [
+        {
+          "name": "corrallm",
+          "connected": true,
+          "authStatus": "bearerToken",
+          "tools": ["probe_delete", "probe_read"]
+        }
+      ]
+    },
+    "userInlineBearer": {
+      "how": "The user's entry has an inline bearer_token; the hardened entry.",
+      "probes": [],
+      "config": {
+        "error": "invalid configuration: bearer_token is not supported for streamable_http\nin `mcp_servers.corrallm`"
+      },
+      "status": {
+        "error": "failed to reload config: /work/scratch/codex-home/config.toml:1:1: bearer_token is not supported for streamable_http"
+      },
+      "stderr": [
+        "codex_app_server: Invalid configuration; using defaults. /work/scratch/codex-home/config.toml:1:1: bearer_token is not supported for streamable_http"
+      ]
+    },
+    "project": {
+      "how": "A trusted project's .codex/config.toml has a same-named entry (enabled = false, headers, disabled_tools); the hardened entry.",
+      "probes": [
+        {
+          "server": "ours",
+          "method": "initialize",
+          "headers": {
+            "authorization": "Bearer canary-as-project",
+            "x-canary": "project-corrallm"
+          }
+        },
+        {
+          "server": "ours",
+          "method": "notifications/initialized",
+          "headers": {
+            "authorization": "Bearer canary-as-project",
+            "x-canary": "project-corrallm"
+          }
+        },
+        {
+          "server": "ours",
+          "method": "tools/list",
+          "headers": {
+            "authorization": "Bearer canary-as-project",
+            "x-canary": "project-corrallm"
+          }
+        },
+        {
+          "server": "ours",
+          "method": "resources/list",
+          "headers": {
+            "authorization": "Bearer canary-as-project",
+            "x-canary": "project-corrallm"
+          }
+        },
+        {
+          "server": "ours",
+          "method": "resources/templates/list",
+          "headers": {
+            "authorization": "Bearer canary-as-project",
+            "x-canary": "project-corrallm"
+          }
+        }
+      ],
+      "config": {
+        "mcp_servers": {
+          "corrallm": {
+            "url": "http://127.0.0.1:47101/mcp",
+            "bearer_token_env_var": "CORRALLM_SESSION_TOKEN",
+            "http_headers": {
+              "Authorization": "Bearer project-static-header",
+              "X-Canary": "project-corrallm"
+            },
+            "environment_id": "local",
+            "enabled": true,
+            "tool_timeout_sec": null,
+            "default_tools_approval_mode": "prompt",
+            "disabled_tools": [],
+            "tools": {
+              "probe_read": {
+                "approval_mode": "approve"
+              },
+              "probe_delete": {
+                "approval_mode": "prompt"
+              }
+            }
+          }
+        },
+        "origins": {
+          "corrallm.bearer_token_env_var": "sessionFlags",
+          "corrallm.default_tools_approval_mode": "sessionFlags",
+          "corrallm.disabled_tools.0": "project",
+          "corrallm.enabled": "sessionFlags",
+          "corrallm.http_headers.Authorization": "project",
+          "corrallm.http_headers.X-Canary": "project",
+          "corrallm.tools.probe_delete.approval_mode": "sessionFlags",
+          "corrallm.tools.probe_read.approval_mode": "sessionFlags",
+          "corrallm.url": "sessionFlags"
+        },
+        "layers": [
+          {
+            "type": "sessionFlags",
+            "mcp_servers": {
+              "corrallm": {
+                "url": "http://127.0.0.1:47101/mcp",
+                "enabled": true,
+                "disabled_tools": [],
+                "bearer_token_env_var": "CORRALLM_SESSION_TOKEN",
+                "default_tools_approval_mode": "prompt",
+                "tools": {
+                  "probe_read": {
+                    "approval_mode": "approve"
+                  },
+                  "probe_delete": {
+                    "approval_mode": "prompt"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "type": "project",
+            "mcp_servers": {
+              "corrallm": {
+                "url": "http://127.0.0.1:47103/mcp",
+                "enabled": false,
+                "disabled_tools": ["probe_read"],
+                "http_headers": {
+                  "Authorization": "Bearer project-static-header",
+                  "X-Canary": "project-corrallm"
+                }
+              }
+            }
+          },
+          {
+            "type": "user"
+          },
+          {
+            "type": "system"
+          }
+        ]
+      },
+      "status": [
+        {
+          "name": "corrallm",
+          "connected": true,
+          "authStatus": "bearerToken",
+          "tools": ["probe_delete", "probe_read"]
+        }
+      ]
+    },
+    "outsideNameControl": {
+      "how": "The user's config.toml registers corrallm-server; nothing switches it off.",
+      "probes": [
+        {
+          "server": "ours",
+          "method": "initialize",
+          "headers": {
+            "authorization": "Bearer canary-as-off-control"
+          }
+        },
+        {
+          "server": "ours",
+          "method": "notifications/initialized",
+          "headers": {
+            "authorization": "Bearer canary-as-off-control"
+          }
+        },
+        {
+          "server": "ours",
+          "method": "tools/list",
+          "headers": {
+            "authorization": "Bearer canary-as-off-control"
+          }
+        },
+        {
+          "server": "ours",
+          "method": "resources/list",
+          "headers": {
+            "authorization": "Bearer canary-as-off-control"
+          }
+        },
+        {
+          "server": "ours",
+          "method": "resources/templates/list",
+          "headers": {
+            "authorization": "Bearer canary-as-off-control"
+          }
+        },
+        {
+          "server": "extra",
+          "method": "initialize",
+          "headers": {
+            "x-canary": "user-corrallm-server"
+          }
+        },
+        {
+          "server": "extra",
+          "method": "notifications/initialized",
+          "headers": {
+            "x-canary": "user-corrallm-server"
+          }
+        },
+        {
+          "server": "extra",
+          "method": "tools/list",
+          "headers": {
+            "x-canary": "user-corrallm-server"
+          }
+        },
+        {
+          "server": "extra",
+          "method": "resources/list",
+          "headers": {
+            "x-canary": "user-corrallm-server"
+          }
+        },
+        {
+          "server": "extra",
+          "method": "resources/templates/list",
+          "headers": {
+            "x-canary": "user-corrallm-server"
+          }
+        }
+      ],
+      "config": {
+        "mcp_servers": {
+          "corrallm-server": {
+            "url": "http://127.0.0.1:47104/mcp",
+            "http_headers": {
+              "X-Canary": "user-corrallm-server"
+            },
+            "environment_id": "local",
+            "enabled": true,
+            "tool_timeout_sec": null
+          },
+          "corrallm": {
+            "url": "http://127.0.0.1:47101/mcp",
+            "bearer_token_env_var": "CORRALLM_SESSION_TOKEN",
+            "environment_id": "local",
+            "enabled": true,
+            "tool_timeout_sec": null,
+            "default_tools_approval_mode": "prompt",
+            "disabled_tools": [],
+            "tools": {
+              "probe_delete": {
+                "approval_mode": "prompt"
+              },
+              "probe_read": {
+                "approval_mode": "approve"
+              }
+            }
+          }
+        },
+        "origins": {
+          "corrallm-server.http_headers.X-Canary": "user",
+          "corrallm-server.url": "user",
+          "corrallm.bearer_token_env_var": "sessionFlags",
+          "corrallm.default_tools_approval_mode": "sessionFlags",
+          "corrallm.enabled": "sessionFlags",
+          "corrallm.tools.probe_delete.approval_mode": "sessionFlags",
+          "corrallm.tools.probe_read.approval_mode": "sessionFlags",
+          "corrallm.url": "sessionFlags"
+        },
+        "layers": [
+          {
+            "type": "sessionFlags",
+            "mcp_servers": {
+              "corrallm": {
+                "url": "http://127.0.0.1:47101/mcp",
+                "enabled": true,
+                "disabled_tools": [],
+                "bearer_token_env_var": "CORRALLM_SESSION_TOKEN",
+                "default_tools_approval_mode": "prompt",
+                "tools": {
+                  "probe_read": {
+                    "approval_mode": "approve"
+                  },
+                  "probe_delete": {
+                    "approval_mode": "prompt"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "type": "project"
+          },
+          {
+            "type": "user",
+            "mcp_servers": {
+              "corrallm-server": {
+                "url": "http://127.0.0.1:47104/mcp",
+                "http_headers": {
+                  "X-Canary": "user-corrallm-server"
+                }
+              }
+            }
+          },
+          {
+            "type": "system"
+          }
+        ]
+      },
+      "status": [
+        {
+          "name": "corrallm",
+          "connected": true,
+          "authStatus": "bearerToken",
+          "tools": ["probe_delete", "probe_read"]
+        },
+        {
+          "name": "corrallm-server",
+          "connected": true,
+          "authStatus": "unsupported",
+          "tools": ["probe_delete", "probe_read"]
+        }
+      ]
+    },
+    "outsideNameOff": {
+      "how": "The same, with -c mcp_servers.corrallm-server.enabled=false.",
+      "probes": [
+        {
+          "server": "ours",
+          "method": "initialize",
+          "headers": {
+            "authorization": "Bearer canary-as-off"
+          }
+        },
+        {
+          "server": "ours",
+          "method": "notifications/initialized",
+          "headers": {
+            "authorization": "Bearer canary-as-off"
+          }
+        },
+        {
+          "server": "ours",
+          "method": "tools/list",
+          "headers": {
+            "authorization": "Bearer canary-as-off"
+          }
+        },
+        {
+          "server": "ours",
+          "method": "resources/list",
+          "headers": {
+            "authorization": "Bearer canary-as-off"
+          }
+        },
+        {
+          "server": "ours",
+          "method": "resources/templates/list",
+          "headers": {
+            "authorization": "Bearer canary-as-off"
+          }
+        }
+      ],
+      "config": {
+        "mcp_servers": {
+          "corrallm-server": {
+            "url": "http://127.0.0.1:47104/mcp",
+            "http_headers": {
+              "X-Canary": "user-corrallm-server"
+            },
+            "environment_id": "local",
+            "enabled": false,
+            "tool_timeout_sec": null
+          },
+          "corrallm": {
+            "url": "http://127.0.0.1:47101/mcp",
+            "bearer_token_env_var": "CORRALLM_SESSION_TOKEN",
+            "environment_id": "local",
+            "enabled": true,
+            "tool_timeout_sec": null,
+            "default_tools_approval_mode": "prompt",
+            "disabled_tools": [],
+            "tools": {
+              "probe_delete": {
+                "approval_mode": "prompt"
+              },
+              "probe_read": {
+                "approval_mode": "approve"
+              }
+            }
+          }
+        },
+        "origins": {
+          "corrallm-server.enabled": "sessionFlags",
+          "corrallm-server.http_headers.X-Canary": "user",
+          "corrallm-server.url": "user",
+          "corrallm.bearer_token_env_var": "sessionFlags",
+          "corrallm.default_tools_approval_mode": "sessionFlags",
+          "corrallm.enabled": "sessionFlags",
+          "corrallm.tools.probe_delete.approval_mode": "sessionFlags",
+          "corrallm.tools.probe_read.approval_mode": "sessionFlags",
+          "corrallm.url": "sessionFlags"
+        },
+        "layers": [
+          {
+            "type": "sessionFlags",
+            "mcp_servers": {
+              "corrallm": {
+                "url": "http://127.0.0.1:47101/mcp",
+                "enabled": true,
+                "disabled_tools": [],
+                "bearer_token_env_var": "CORRALLM_SESSION_TOKEN",
+                "default_tools_approval_mode": "prompt",
+                "tools": {
+                  "probe_read": {
+                    "approval_mode": "approve"
+                  },
+                  "probe_delete": {
+                    "approval_mode": "prompt"
+                  }
+                }
+              },
+              "corrallm-server": {
+                "enabled": false
+              }
+            }
+          },
+          {
+            "type": "project"
+          },
+          {
+            "type": "user",
+            "mcp_servers": {
+              "corrallm-server": {
+                "url": "http://127.0.0.1:47104/mcp",
+                "http_headers": {
+                  "X-Canary": "user-corrallm-server"
+                }
+              }
+            }
+          },
+          {
+            "type": "system"
+          }
+        ]
+      },
+      "status": [
+        {
+          "name": "corrallm",
+          "connected": true,
+          "authStatus": "bearerToken",
+          "tools": ["probe_delete", "probe_read"]
+        },
+        {
+          "name": "corrallm-server",
+          "connected": false,
+          "authStatus": "unsupported",
+          "tools": []
+        }
+      ]
+    },
+    "proxyWithoutNoProxy": {
+      "how": "HTTP_PROXY, http_proxy and ALL_PROXY name a dead local proxy; NO_PROXY is unset.",
+      "probes": [],
+      "config": {
+        "mcp_servers": {
+          "corrallm": {
+            "url": "http://127.0.0.1:47101/mcp",
+            "bearer_token_env_var": "CORRALLM_SESSION_TOKEN",
+            "environment_id": "local",
+            "enabled": true,
+            "tool_timeout_sec": null,
+            "default_tools_approval_mode": "prompt",
+            "disabled_tools": [],
+            "tools": {
+              "probe_read": {
+                "approval_mode": "approve"
+              },
+              "probe_delete": {
+                "approval_mode": "prompt"
+              }
+            }
+          }
+        },
+        "origins": {
+          "corrallm.bearer_token_env_var": "sessionFlags",
+          "corrallm.default_tools_approval_mode": "sessionFlags",
+          "corrallm.enabled": "sessionFlags",
+          "corrallm.tools.probe_delete.approval_mode": "sessionFlags",
+          "corrallm.tools.probe_read.approval_mode": "sessionFlags",
+          "corrallm.url": "sessionFlags"
+        },
+        "layers": [
+          {
+            "type": "sessionFlags",
+            "mcp_servers": {
+              "corrallm": {
+                "url": "http://127.0.0.1:47101/mcp",
+                "enabled": true,
+                "disabled_tools": [],
+                "bearer_token_env_var": "CORRALLM_SESSION_TOKEN",
+                "default_tools_approval_mode": "prompt",
+                "tools": {
+                  "probe_read": {
+                    "approval_mode": "approve"
+                  },
+                  "probe_delete": {
+                    "approval_mode": "prompt"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "type": "project"
+          },
+          {
+            "type": "user"
+          },
+          {
+            "type": "system"
+          }
+        ]
+      },
+      "status": [
+        {
+          "name": "corrallm",
+          "connected": false,
+          "authStatus": "bearerToken",
+          "tools": []
+        }
+      ]
+    },
+    "proxyWithNoProxy": {
+      "how": "The same proxies, with NO_PROXY and no_proxy = 127.0.0.1,localhost,::1.",
+      "probes": [
+        {
+          "server": "ours",
+          "method": "initialize",
+          "headers": {
+            "authorization": "Bearer canary-as-proxy-with"
+          }
+        },
+        {
+          "server": "ours",
+          "method": "notifications/initialized",
+          "headers": {
+            "authorization": "Bearer canary-as-proxy-with"
+          }
+        },
+        {
+          "server": "ours",
+          "method": "tools/list",
+          "headers": {
+            "authorization": "Bearer canary-as-proxy-with"
+          }
+        },
+        {
+          "server": "ours",
+          "method": "resources/list",
+          "headers": {
+            "authorization": "Bearer canary-as-proxy-with"
+          }
+        },
+        {
+          "server": "ours",
+          "method": "resources/templates/list",
+          "headers": {
+            "authorization": "Bearer canary-as-proxy-with"
+          }
+        }
+      ],
+      "config": {
+        "mcp_servers": {
+          "corrallm": {
+            "url": "http://127.0.0.1:47101/mcp",
+            "bearer_token_env_var": "CORRALLM_SESSION_TOKEN",
+            "environment_id": "local",
+            "enabled": true,
+            "tool_timeout_sec": null,
+            "default_tools_approval_mode": "prompt",
+            "disabled_tools": [],
+            "tools": {
+              "probe_delete": {
+                "approval_mode": "prompt"
+              },
+              "probe_read": {
+                "approval_mode": "approve"
+              }
+            }
+          }
+        },
+        "origins": {
+          "corrallm.bearer_token_env_var": "sessionFlags",
+          "corrallm.default_tools_approval_mode": "sessionFlags",
+          "corrallm.enabled": "sessionFlags",
+          "corrallm.tools.probe_delete.approval_mode": "sessionFlags",
+          "corrallm.tools.probe_read.approval_mode": "sessionFlags",
+          "corrallm.url": "sessionFlags"
+        },
+        "layers": [
+          {
+            "type": "sessionFlags",
+            "mcp_servers": {
+              "corrallm": {
+                "url": "http://127.0.0.1:47101/mcp",
+                "enabled": true,
+                "disabled_tools": [],
+                "bearer_token_env_var": "CORRALLM_SESSION_TOKEN",
+                "default_tools_approval_mode": "prompt",
+                "tools": {
+                  "probe_read": {
+                    "approval_mode": "approve"
+                  },
+                  "probe_delete": {
+                    "approval_mode": "prompt"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "type": "project"
+          },
+          {
+            "type": "user"
+          },
+          {
+            "type": "system"
+          }
+        ]
+      },
+      "status": [
+        {
+          "name": "corrallm",
+          "connected": true,
+          "authStatus": "bearerToken",
+          "tools": ["probe_delete", "probe_read"]
+        }
+      ]
+    },
+    "approveOnRequest": {
+      "how": "probe_read is approve; policy on-request.",
+      "probes": [
+        {
+          "server": "ours",
+          "method": "initialize",
+          "headers": {
+            "authorization": "Bearer canary-as-t1-approve"
+          }
+        },
+        {
+          "server": "ours",
+          "method": "notifications/initialized",
+          "headers": {
+            "authorization": "Bearer canary-as-t1-approve"
+          }
+        },
+        {
+          "server": "ours",
+          "method": "tools/list",
+          "headers": {
+            "authorization": "Bearer canary-as-t1-approve"
+          }
+        },
+        {
+          "server": "ours",
+          "method": "tools/call",
+          "tool": "probe_read",
+          "headers": {
+            "authorization": "Bearer canary-as-t1-approve"
+          }
+        }
+      ],
+      "elicitations": [],
+      "calls": [
+        {
+          "server": "corrallm",
+          "tool": "probe_read",
+          "status": "completed",
+          "result": "probe ours ran probe_read"
+        }
+      ]
+    },
+    "approveNever": {
+      "how": "probe_read is approve; policy never.",
+      "probes": [
+        {
+          "server": "ours",
+          "method": "initialize",
+          "headers": {
+            "authorization": "Bearer canary-as-t1-approve-never"
+          }
+        },
+        {
+          "server": "ours",
+          "method": "notifications/initialized",
+          "headers": {
+            "authorization": "Bearer canary-as-t1-approve-never"
+          }
+        },
+        {
+          "server": "ours",
+          "method": "tools/list",
+          "headers": {
+            "authorization": "Bearer canary-as-t1-approve-never"
+          }
+        },
+        {
+          "server": "ours",
+          "method": "tools/call",
+          "tool": "probe_read",
+          "headers": {
+            "authorization": "Bearer canary-as-t1-approve-never"
+          }
+        }
+      ],
+      "elicitations": [],
+      "calls": [
+        {
+          "server": "corrallm",
+          "tool": "probe_read",
+          "status": "completed",
+          "result": "probe ours ran probe_read"
+        }
+      ]
+    },
+    "promptOnRequest": {
+      "how": "probe_delete is prompt; policy on-request; the client declines the elicitation.",
+      "probes": [
+        {
+          "server": "ours",
+          "method": "initialize",
+          "headers": {
+            "authorization": "Bearer canary-as-t1-prompt"
+          }
+        },
+        {
+          "server": "ours",
+          "method": "notifications/initialized",
+          "headers": {
+            "authorization": "Bearer canary-as-t1-prompt"
+          }
+        },
+        {
+          "server": "ours",
+          "method": "tools/list",
+          "headers": {
+            "authorization": "Bearer canary-as-t1-prompt"
+          }
+        }
+      ],
+      "elicitations": [
+        {
+          "serverName": "corrallm",
+          "mode": "form",
+          "kind": "mcp_tool_call",
+          "message": "Allow the corrallm MCP server to run tool \"probe_delete\"?"
+        }
+      ],
+      "calls": [
+        {
+          "server": "corrallm",
+          "tool": "probe_delete",
+          "status": "failed",
+          "error": "user rejected MCP tool call"
+        }
+      ]
+    },
+    "promptNever": {
+      "how": "probe_delete is prompt; policy never.",
+      "probes": [
+        {
+          "server": "ours",
+          "method": "initialize",
+          "headers": {
+            "authorization": "Bearer canary-as-t1-prompt-never"
+          }
+        },
+        {
+          "server": "ours",
+          "method": "notifications/initialized",
+          "headers": {
+            "authorization": "Bearer canary-as-t1-prompt-never"
+          }
+        },
+        {
+          "server": "ours",
+          "method": "tools/list",
+          "headers": {
+            "authorization": "Bearer canary-as-t1-prompt-never"
+          }
+        }
+      ],
+      "elicitations": [],
+      "calls": [
+        {
+          "server": "corrallm",
+          "tool": "probe_delete",
+          "status": "failed",
+          "error": "MCP tool call requires approval, but approval policy is never"
+        }
+      ]
+    },
+    "promptOnReadOnRequest": {
+      "how": "probe_read is prompt (set on the tool too); policy on-request; the client declines.",
+      "probes": [
+        {
+          "server": "ours",
+          "method": "initialize",
+          "headers": {
+            "authorization": "Bearer canary-as-t1-default-prompt"
+          }
+        },
+        {
+          "server": "ours",
+          "method": "notifications/initialized",
+          "headers": {
+            "authorization": "Bearer canary-as-t1-default-prompt"
+          }
+        },
+        {
+          "server": "ours",
+          "method": "tools/list",
+          "headers": {
+            "authorization": "Bearer canary-as-t1-default-prompt"
+          }
+        }
+      ],
+      "elicitations": [
+        {
+          "serverName": "corrallm",
+          "mode": "form",
+          "kind": "mcp_tool_call",
+          "message": "Allow the corrallm MCP server to run tool \"probe_read\"?"
+        }
+      ],
+      "calls": [
+        {
+          "server": "corrallm",
+          "tool": "probe_read",
+          "status": "failed",
+          "error": "user rejected MCP tool call"
+        }
+      ]
+    },
+    "twoSessions": {
+      "how": "Two private app servers at once, each with its own entry (one to each probe) and its own CORRALLM_SESSION_TOKEN.",
+      "heard": [
+        {
+          "server": "ours",
+          "authorizations": ["Bearer canary-session-one"]
+        },
+        {
+          "server": "user",
+          "authorizations": ["Bearer canary-session-two"]
+        }
+      ]
+    }
+  }
+}

@@ -130,6 +130,8 @@ async function world(initial?: CanvasDocument, checkpoint?: ReturnType<Engine['c
     ),
   };
   let stopping = false;
+  /** The agents a handoff request goes first for (C3's service, here the test's). */
+  const firsts = new Set<string>();
   const fake = fakeBackend();
   const catalog = engineCatalog(CATALOG, DEFAULT_ADAPTER);
   const changed = vi.fn<FallbackDeps['changed']>(() => {
@@ -155,6 +157,7 @@ async function world(initial?: CanvasDocument, checkpoint?: ReturnType<Engine['c
     usage,
     changed,
     stopping: () => stopping,
+    handoffFirst: (_canvas, agent) => firsts.has(agent),
     now: () => now,
     locale: 'en-US',
   });
@@ -226,6 +229,11 @@ async function world(initial?: CanvasDocument, checkpoint?: ReturnType<Engine['c
     usage: (next: UsageState) => {
       state = next;
       engine.run.usageChanged();
+    },
+    /** Whether a handoff request for `agent` goes first (C4.2), as C3's service would say. */
+    first: (agent: string, goes: boolean) => {
+      if (goes) firsts.add(agent);
+      else firsts.delete(agent);
     },
     stop: () => {
       stopping = true;
@@ -746,6 +754,57 @@ describe('a usage rule that carries on with the next backend (C3)', () => {
       ['worker', 'claude-code.terminal', 'Say it again'],
     ]);
     expect(at.engine.run.snapshot().agents.worker?.attempts?.again).toHaveLength(1);
+  });
+
+  it('lets a handoff request go first: nothing switches until its turn has ended (C4.2)', async () => {
+    const at = await world(canvasOf(worker()));
+    at.engine.run.start();
+    await settle();
+    at.usage(reading(false));
+    // The turn crossed its ask point: corrallm's handoff request waits for the worker.
+    at.first('worker', true);
+    at.end({ status: 'completed', reason: 'completed' });
+    await settle();
+    expect(at.service.switching(CANVAS, 'worker')).toBe(false);
+    expect(at.sessions.close).not.toHaveBeenCalled();
+    expect(at.data()).toMatchObject(CODEX);
+    expect(at.sent()).toHaveLength(1);
+    expect(at.engine.run.snapshot().agents.worker).toMatchObject({
+      current: 'again',
+      status: 'waiting',
+    });
+    // Its turn ended: admitted again, the worker switches, and the task goes there.
+    at.first('worker', false);
+    at.engine.run.admissionChanged();
+    await quiet(at);
+    expect(at.data()).toMatchObject({ ...CLAUDE, fallback: { on: { step: 0, why: 'rule' } } });
+    expect(at.sent().at(-1)).toEqual(['worker', 'claude-code.terminal', 'Say it again']);
+  });
+
+  it('gives up a switch going on for a request that came meanwhile, holding nothing, then switches', async () => {
+    const at = await world(canvasOf(worker()));
+    at.engine.run.start();
+    await settle();
+    // Your own message's turn goes on as Codex's limit holds the task: the switch waits for it.
+    at.engine.sessions.send('worker', 'codex', 'Mine');
+    at.exhaust('codex');
+    at.end(LIMIT);
+    await settle();
+    expect(at.service.switching(CANVAS, 'worker')).toBe(true);
+    // That turn crosses the ask point: the request goes first.
+    at.first('worker', true);
+    at.end({ status: 'completed', reason: 'completed' });
+    await settle();
+    expect(at.service.switching(CANVAS, 'worker')).toBe(false);
+    expect(at.sessions.availability).not.toHaveBeenCalled();
+    expect(at.sessions.close).not.toHaveBeenCalled();
+    expect(at.data()).toMatchObject(CODEX);
+    // Giving up isn't a failure: nothing is said of it.
+    expect(at.notices().filter((text) => text.includes('switch'))).toEqual([]);
+    at.first('worker', false);
+    at.engine.run.admissionChanged();
+    await quiet(at);
+    expect(at.data()).toMatchObject(CLAUDE);
   });
 
   it('only previews a switch on a simulated reading, once a window, and the task goes', async () => {

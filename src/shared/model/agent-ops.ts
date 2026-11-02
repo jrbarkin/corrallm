@@ -7,7 +7,15 @@ import type { AgentData, CanvasDocument } from './canvas';
 import { isIf, isRepeat } from './queue';
 import type { QueueItem } from './queue';
 import type { Built } from './structure';
-import { endpointOf, parseFallback, readFallback, sameFallback, sameStep } from './fallback';
+import {
+  endpointOf,
+  parseFallback,
+  parseHandoff,
+  readFallback,
+  sameFallback,
+  sameHandoff,
+  sameStep,
+} from './fallback';
 import type { Fallback, FallbackInput } from './fallback';
 
 export interface AgentContext {
@@ -153,6 +161,25 @@ export function setFallback(
       current,
     );
     return sameFallback(before.fallback, next) ? before : { ...before, fallback: next };
+  });
+}
+
+/**
+ * B11a C7: your handoff settings for the agent, replaced whole (null: the defaults, on at 95% with
+ * no file; a null file: none).
+ */
+export function setHandoff(
+  doc: CanvasDocument,
+  { agent, handoff }: { agent: string; handoff: unknown },
+): Built {
+  const parsed = parseHandoff(handoff);
+  // Settings that say nothing are the defaults: none kept.
+  const next = parsed === undefined || Object.keys(parsed).length === 0 ? undefined : parsed;
+  return editAgent(doc, agent, (before) => {
+    if (sameHandoff(before.handoff, next)) return before;
+    const data = { ...before };
+    delete data.handoff;
+    return next === undefined ? data : { ...data, handoff: next };
   });
 }
 

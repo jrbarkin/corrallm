@@ -179,7 +179,7 @@ export function runReplies({
       return settled(canvas, to);
     },
     fits: (item, answer) => {
-      if ('choice' in answer && answer.text !== undefined) {
+      if ('choice' in answer && 'text' in answer && answer.text !== undefined) {
         if (!WITH_WORDS.has(answer.choice)) {
           return `${item.id} takes no words with "${answer.choice}".`;
         }
@@ -352,7 +352,8 @@ export function runReplies({
               ? undefined
               : `${item.id} doesn’t offer "${answer.permission}".`;
           }
-          if ('choice' in answer && answer.text === undefined) return fitsChoices(item, answer);
+          if ('choice' in answer && (!('text' in answer) || answer.text === undefined))
+            return fitsChoices(item, answer);
           return `${item.id} takes a permission: "once", "deny"${prompt.always ? ' or "always"' : ''}.`;
         case 'question':
           return 'answers' in answer ? undefined : `${item.id} takes answers to its questions.`;
@@ -555,6 +556,9 @@ function sessionAnswer(item: NeedsItem, prompt: Prompt, answer: Answer): Session
         const given = answer.answers[String(unanswered.indexOf(index))];
         if (given === undefined) {
           throw new OpFailure('invalid', `Answer every question ${item.id} asks.`);
+        }
+        if (typeof given !== 'string' && !Array.isArray(given)) {
+          throw new OpFailure('invalid', `Answer ${item.id} using its question card.`);
         }
         const text = Array.isArray(given) ? given.join(', ') : given;
         if (!said(text)) throw new OpFailure('invalid', `Answer every question ${item.id} asks.`);

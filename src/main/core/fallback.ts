@@ -89,6 +89,11 @@ export interface FallbackDeps {
    * the switch `change`), so that it is on disk with the switch or neither is. None: nothing.
    */
   carry?(canvas: CanvasId, agent: string, change: string): Staged | undefined;
+  /**
+   * C3's seam (C4.2): whether a handoff request for the agent waits or runs, its backend not
+   * exhausted: it goes first, and the switch is admitted again after its turn. None: never.
+   */
+  handoffFirst?(canvas: CanvasId, agent: string): boolean;
   now(): number;
   /** The locale times are told in (the host's): the runtime's own, when none. */
   locale?: string;
@@ -414,6 +419,9 @@ export class FallbackService {
   ): Admission {
     const from = this.#endpoint(runtime, node.data);
     if (from === undefined) return 'go';
+    // C4.2: a handoff request for the agent goes first; the work waits for it, and this switch is
+    // admitted again once its turn has ended (the handoff service says so to the run and delivery).
+    if (this.#deps.handoffFirst?.(canvas, node.id) === true) return 'switching';
     const settled = Promise.withResolvers<undefined>();
     // Its rejection is the lane's own to say: nothing else waits for it.
     settled.promise.catch(() => undefined);
@@ -473,8 +481,11 @@ export class FallbackService {
         runtime.engine.sessions.switching(agent, lane.settled.promise);
       },
     );
-    // C3's seam, here: a handoff request waiting for the agent goes first, unless its backend is
-    // exhausted, and the switch is admitted again after its turn (not built in C2).
+    // C4.2: a handoff request for the agent that came meanwhile goes first, unless its backend is
+    // exhausted (then it is withdrawn): the switch gives up, holding nothing, and is admitted again
+    // once the request's turn has ended.
+    if (this.#deps.handoffFirst?.(canvas, agent) === true)
+      throw new Abandoned('Its handoff request goes first');
     // Never while its workspace is held.
     const availability = await sessions.availability(canvas, agent);
     this.#check(lane);

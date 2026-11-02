@@ -89,6 +89,7 @@ export function picked(answer: Answer): string | undefined {
 
 /** Why an answer isn't one of an item's choices (with words only where it takes them), if it isn't. */
 export function fitsChoices(item: NeedsItem, answer: Answer): string | undefined {
+  if ('feedback' in answer) return `${item.id} takes no prompt feedback.`;
   const offered = () =>
     item.choices.length === 0
       ? `${item.id} offers no choice to make here`
@@ -97,7 +98,7 @@ export function fitsChoices(item: NeedsItem, answer: Answer): string | undefined
     if (!item.choices.some(({ value }) => value === answer.choice)) {
       return `${offered()}, not "${answer.choice}".`;
     }
-    if (answer.text !== undefined && item.text === undefined) {
+    if ('text' in answer && answer.text !== undefined && item.text === undefined) {
       return `${item.id} takes no words with a choice.`;
     }
     return undefined;

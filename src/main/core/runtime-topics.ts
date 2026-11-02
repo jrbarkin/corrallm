@@ -354,6 +354,14 @@ export class RuntimeSource {
     this.#changed(source);
   }
 
+  /**
+   * An agent's handoff changed (B11a C7: a request made or ended, one kept): its summary says it
+   * again.
+   */
+  handoffChanged(canvas: CanvasId, agent: string): void {
+    this.switchingChanged(canvas, agent);
+  }
+
   /** Whether its run's checkpoint could be kept changed: the run's `saveError`. */
   problemChanged(canvas: CanvasId): void {
     const source = this.#canvases.get(canvas);

@@ -160,6 +160,7 @@ export class SdkSession implements LiveSession {
     this.#pending.set(uuid, id);
     this.#inbox.push({
       type: 'user',
+      ...(from === undefined ? {} : { client_composed: true }),
       message: { role: 'user', content },
       parent_tool_use_id: null,
       uuid: uuid as SDKUserMessage['uuid'] & string,

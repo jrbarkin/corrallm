@@ -1277,6 +1277,44 @@ describe('RunStore', () => {
       expect(sent).toHaveLength(1);
     });
 
+    it.each(['Read @src/x only', 'Inspect only the selected file'])(
+      'holds a step’s native file mentions until you supply %s to send',
+      (note) => {
+        const a = connected(
+          'a',
+          [{ id: 'inspect', action: 'Read', instruction: 'Inspect @link' }],
+          'claude-code.terminal',
+        );
+        const { store, where, sent, tick } = setup([a], manual);
+        store.start();
+        tick();
+        expect(sent).toEqual([]);
+        expect(where()).toEqual({ a: 'asking inspect' });
+        expect(store.snapshot().agents.a?.problem).toMatchObject({
+          kind: 'failed',
+          text: expect.stringContaining('file mention') as unknown,
+        });
+        store.decide('a', 'inspect', { reply: note });
+        tick();
+        expect(sent).toHaveLength(1);
+        expect(sent[0]).toMatchObject({ text: note, origin: 'user' });
+      },
+    );
+
+    it('holds a message’s native file mentions at its recipient', () => {
+      const a = connected('a', [], 'claude-code.terminal');
+      const b = codex(
+        'b',
+        [{ id: 'hand', message: 'Read @link', target: 'a' }],
+        'codex.app-server',
+      );
+      const { store, sent, where, tick } = setup([a, b], manual);
+      store.start();
+      tick();
+      expect(sent).toEqual([]);
+      expect(where()).toEqual({ a: 'done', b: 'asking hand' });
+    });
+
     it('never sends canvas text its recipient’s connection would run as a shell command', () => {
       // A shared canvas could hold one, for its own agent or another: a Terminal runs what is
       // typed after its shell prefix with no permission prompt.

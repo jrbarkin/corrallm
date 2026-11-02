@@ -99,6 +99,8 @@ describe.skipIf(process.platform !== 'darwin' && process.platform !== 'linux')(
     function cliEnv(extra: Record<string, string> = {}): NodeJS.ProcessEnv {
       const env: NodeJS.ProcessEnv = { ...process.env };
       delete env.CORRALLM_URL;
+      // This fixture runs the outside orchestrator, not one of corrallm's agents.
+      delete env.CORRALLM_AGENT_SESSION;
       delete env.CORRALLM_OUTSIDE_TOKEN;
       delete env.CORRALLM_OUTSIDE_TOKEN_FILE;
       return {

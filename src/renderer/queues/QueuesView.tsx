@@ -4,6 +4,8 @@ import type { MouseEvent as ReactMouseEvent, ReactNode, RefObject } from 'react'
 import type { AdapterId } from '../../shared/adapter';
 import type { SettingsOptions } from '../../shared/session';
 import { AgentSettingsSummary } from '../agent/AgentSettings';
+import { BranchControls } from '../workspaces/BranchReview';
+import { WorkspaceBadge } from '../workspaces/Workspace';
 import type { Session } from '../../shared/model/session';
 import {
   actionsOf,
@@ -576,6 +578,8 @@ function LaneCells({
         {queueControlText(run, id) && (
           <span className="queues-control-state">{queueControlText(run, id)}</span>
         )}
+        <WorkspaceBadge agent={id} />
+        <BranchControls agent={id} />
         {needsYou === 'switch' && ask?.refusal && (
           <div className="queues-refused" role="group" aria-label={`${name(id)} needs you`}>
             <p title={ask.text}>{ask.text}</p>

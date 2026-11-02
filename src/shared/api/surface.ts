@@ -36,6 +36,7 @@ export type Scope = 'app' | 'canvas' | 'agent' | 'none';
  */
 export type Rule =
   | 'shell-text'
+  | 'file-mentions'
   | 'human-text'
   | 'corral-mcp'
   | 'mode-permits'
@@ -327,6 +328,14 @@ export const SURFACE = {
     scope: 'canvas',
     rules: ['connection'],
   },
+  // B11a C7, C11: when an agent is asked for its handoff, and its Markdown copy, are yours alone
+  // (D9), on R8's guard; changing them restarts nothing.
+  'agent.setHandoff': {
+    access: Y,
+    kind: 'doc',
+    scope: 'canvas',
+    rules: ['connection'],
+  },
   'agent.setSettings': {
     access: L,
     kind: 'doc',
@@ -385,7 +394,7 @@ export const SURFACE = {
     access: M,
     kind: 'command',
     scope: 'agent',
-    rules: ['shell-text', 'human-text'],
+    rules: ['shell-text', 'file-mentions', 'human-text'],
     self: 'refused',
   },
   withdraw: { access: M, kind: 'command', scope: 'canvas', preempt: true, destructive: true },
@@ -459,6 +468,15 @@ export const SURFACE = {
     self: 'allowed',
     // An MCP server's link (a sign-in) is yours alone (R3).
     varies: ['entries'],
+  },
+  // B11a C10, C11: an agent's latest handoff, read by whoever reads its session; its reach is
+  // checked as its scope is entered, and nothing awaits before it returns.
+  'session.handoff': {
+    access: R,
+    kind: 'read',
+    scope: 'agent',
+    reads: 'sessions',
+    self: 'allowed',
   },
   'session.interrupt': {
     access: L,

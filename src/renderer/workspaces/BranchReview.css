@@ -1,0 +1,68 @@
+.branch-controls {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.branch-controls button {
+  font: inherit;
+  font-size: 11px;
+  border-radius: 5px;
+  padding: 3px 6px;
+}
+.agent-header:has(> .branch-controls),
+.queues-head:has(> .branch-controls) {
+  flex-wrap: wrap;
+}
+.branch-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: #0005;
+}
+.branch-review {
+  width: min(900px, 100%);
+  max-height: calc(100vh - 48px);
+  overflow: auto;
+  box-sizing: border-box;
+  border: 1px solid color-mix(in srgb, CanvasText 20%, transparent);
+  border-radius: 12px;
+  padding: 20px;
+  background: Canvas;
+  color: CanvasText;
+  box-shadow: 0 12px 48px #0004;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.branch-review header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+.branch-review h2 {
+  font-size: 16px;
+}
+.branch-review button {
+  font: inherit;
+}
+.branch-review fieldset {
+  margin-block: 12px;
+}
+.branch-review fieldset label {
+  display: block;
+  margin: 8px 0;
+}
+.branch-file {
+  border-block-start: 1px solid color-mix(in srgb, CanvasText 15%, transparent);
+}
+.branch-file h4,
+.branch-sentence {
+  white-space: pre-wrap;
+}
+.branch-file .agent-tool-detail {
+  margin-inline-start: 0;
+  white-space: pre;
+}

@@ -114,6 +114,7 @@ export const codex: Adapter = {
         prompts: { approval: 'seen', question: 'none', plan: 'none', form: 'none' },
         signals: false,
         context: false,
+        api: null,
         // Its command line starts it in Read only (-s, -a); Default is the user's own config, and
         // Plan is chosen in its terminal.
         startModes: ['read-only'],
@@ -140,6 +141,7 @@ export const codex: Adapter = {
         },
         signals: false,
         context: true,
+        api: null,
         startModes: ['read-only', 'auto', 'plan'],
         live: { effort: true, stopTask: false },
         panels: {},

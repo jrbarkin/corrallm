@@ -1,0 +1,698 @@
+{
+  "recordedWith": {
+    "claude": "2.1.316",
+    "platform": "macOS arm64",
+    "date": "2026-10-31",
+    "model": "none: a local stub Messages API answered each turn (a call to the tool, then \"done\"); no tokens were spent",
+    "config": "a throwaway CLAUDE_CONFIG_DIR, HOME and project; the probe is a local MCP server (streamable HTTP, JSON replies) that logs each request"
+  },
+  "minimumVersion": "2.1.316",
+  "entry": {
+    "note": "The planned entry (§9.4): the session's own 0600 mcp.json beside the hook files, given as --mcp-config=<file>; the credential only in that file; the session's settings.json (--settings=<file>) pre-approves the non-destructive tools by exact name and denies the user's outside names.",
+    "flag": "--mcp-config=<dir>/mcp.json",
+    "mcpJson": {
+      "mcpServers": {
+        "corrallm": {
+          "type": "http",
+          "url": "http://127.0.0.1:47101/mcp",
+          "headers": {
+            "Authorization": "Bearer canary-claude-ours"
+          }
+        }
+      }
+    },
+    "settings": {
+      "deniedMcpServers": [
+        {
+          "serverName": "corrallm-server"
+        },
+        {
+          "serverName": "corrallm-server-dev"
+        }
+      ],
+      "permissions": {
+        "allow": ["mcp__corrallm__probe_read"]
+      }
+    },
+    "settingsAlsoAllowingTheServer": {
+      "deniedMcpServers": [
+        {
+          "serverName": "corrallm-server"
+        },
+        {
+          "serverName": "corrallm-server-dev"
+        }
+      ],
+      "permissions": {
+        "allow": ["mcp__corrallm__probe_read"]
+      },
+      "allowedMcpServers": [
+        {
+          "serverName": "corrallm"
+        }
+      ]
+    }
+  },
+  "cases": {
+    "startup": {
+      "how": "--mcp-config only, no model turn (claude -p, stream-json input held open, then closed).",
+      "heard": [
+        {
+          "server": "ours",
+          "method": "server/discover",
+          "headers": {
+            "authorization": "Bearer canary-claude-ours"
+          }
+        },
+        {
+          "server": "ours",
+          "method": "initialize",
+          "headers": {
+            "authorization": "Bearer canary-claude-ours"
+          }
+        },
+        {
+          "server": "ours",
+          "method": "notifications/initialized",
+          "headers": {
+            "authorization": "Bearer canary-claude-ours"
+          }
+        },
+        {
+          "server": "ours",
+          "method": "tools/list",
+          "headers": {
+            "authorization": "Bearer canary-claude-ours"
+          }
+        },
+        {
+          "server": "extra",
+          "method": "server/discover",
+          "headers": {
+            "authorization": "Bearer canary-claude-helper"
+          }
+        },
+        {
+          "server": "extra",
+          "method": "initialize",
+          "headers": {
+            "authorization": "Bearer canary-claude-helper"
+          }
+        },
+        {
+          "server": "extra",
+          "method": "notifications/initialized",
+          "headers": {
+            "authorization": "Bearer canary-claude-helper"
+          }
+        },
+        {
+          "server": "extra",
+          "method": "tools/list",
+          "headers": {
+            "authorization": "Bearer canary-claude-helper"
+          }
+        }
+      ]
+    },
+    "sameNameBeside": {
+      "how": "The user's local scope, the project's .mcp.json (approved) and the user's scope each define corrallm (own canary and headers), and a user-scope corrallm-server has a headersHelper. No flag.",
+      "heard": [
+        {
+          "server": "extra",
+          "method": "server/discover",
+          "headers": {
+            "authorization": "Bearer canary-claude-local",
+            "x-canary": "local-scope"
+          }
+        },
+        {
+          "server": "extra",
+          "method": "initialize",
+          "headers": {
+            "authorization": "Bearer canary-claude-local",
+            "x-canary": "local-scope"
+          }
+        },
+        {
+          "server": "extra",
+          "method": "server/discover",
+          "headers": {
+            "authorization": "Bearer canary-claude-helper"
+          }
+        },
+        {
+          "server": "extra",
+          "method": "notifications/initialized",
+          "headers": {
+            "authorization": "Bearer canary-claude-local",
+            "x-canary": "local-scope"
+          }
+        },
+        {
+          "server": "extra",
+          "method": "initialize",
+          "headers": {
+            "authorization": "Bearer canary-claude-helper"
+          }
+        },
+        {
+          "server": "extra",
+          "method": "notifications/initialized",
+          "headers": {
+            "authorization": "Bearer canary-claude-helper"
+          }
+        },
+        {
+          "server": "extra",
+          "method": "tools/list",
+          "headers": {
+            "authorization": "Bearer canary-claude-local",
+            "x-canary": "local-scope"
+          }
+        },
+        {
+          "server": "extra",
+          "method": "tools/list",
+          "headers": {
+            "authorization": "Bearer canary-claude-helper"
+          }
+        }
+      ]
+    },
+    "sameNameWithFlag": {
+      "how": "The same, with --mcp-config.",
+      "heard": [
+        {
+          "server": "ours",
+          "method": "server/discover",
+          "headers": {
+            "authorization": "Bearer canary-claude-ours"
+          }
+        },
+        {
+          "server": "ours",
+          "method": "initialize",
+          "headers": {
+            "authorization": "Bearer canary-claude-ours"
+          }
+        },
+        {
+          "server": "ours",
+          "method": "notifications/initialized",
+          "headers": {
+            "authorization": "Bearer canary-claude-ours"
+          }
+        },
+        {
+          "server": "ours",
+          "method": "tools/list",
+          "headers": {
+            "authorization": "Bearer canary-claude-ours"
+          }
+        },
+        {
+          "server": "extra",
+          "method": "server/discover",
+          "headers": {
+            "authorization": "Bearer canary-claude-helper"
+          }
+        },
+        {
+          "server": "extra",
+          "method": "initialize",
+          "headers": {
+            "authorization": "Bearer canary-claude-helper"
+          }
+        },
+        {
+          "server": "extra",
+          "method": "notifications/initialized",
+          "headers": {
+            "authorization": "Bearer canary-claude-helper"
+          }
+        },
+        {
+          "server": "extra",
+          "method": "tools/list",
+          "headers": {
+            "authorization": "Bearer canary-claude-helper"
+          }
+        }
+      ]
+    },
+    "switchedOff": {
+      "how": "The same with --settings holding deniedMcpServers for corrallm-server and corrallm-server-dev.",
+      "heard": [
+        {
+          "server": "ours",
+          "method": "server/discover",
+          "headers": {
+            "authorization": "Bearer canary-claude-ours"
+          }
+        },
+        {
+          "server": "ours",
+          "method": "initialize",
+          "headers": {
+            "authorization": "Bearer canary-claude-ours"
+          }
+        },
+        {
+          "server": "ours",
+          "method": "notifications/initialized",
+          "headers": {
+            "authorization": "Bearer canary-claude-ours"
+          }
+        },
+        {
+          "server": "ours",
+          "method": "tools/list",
+          "headers": {
+            "authorization": "Bearer canary-claude-ours"
+          }
+        }
+      ],
+      "helperRuns": 0,
+      "warnings": []
+    },
+    "resume": {
+      "how": "claude --resume=<an earlier session that called the tool> with a new generation's file.",
+      "heard": [
+        {
+          "server": "ours",
+          "method": "server/discover",
+          "headers": {
+            "authorization": "Bearer canary-claude-ours-gen2"
+          }
+        },
+        {
+          "server": "ours",
+          "method": "initialize",
+          "headers": {
+            "authorization": "Bearer canary-claude-ours-gen2"
+          }
+        },
+        {
+          "server": "ours",
+          "method": "notifications/initialized",
+          "headers": {
+            "authorization": "Bearer canary-claude-ours-gen2"
+          }
+        },
+        {
+          "server": "ours",
+          "method": "tools/list",
+          "headers": {
+            "authorization": "Bearer canary-claude-ours-gen2"
+          }
+        }
+      ]
+    },
+    "allowedTool": {
+      "how": "A turn calling probe_read, the only tool the settings allow.",
+      "heard": [
+        {
+          "server": "ours",
+          "method": "server/discover",
+          "headers": {
+            "authorization": "Bearer canary-claude-ours"
+          }
+        },
+        {
+          "server": "ours",
+          "method": "initialize",
+          "headers": {
+            "authorization": "Bearer canary-claude-ours"
+          }
+        },
+        {
+          "server": "ours",
+          "method": "notifications/initialized",
+          "headers": {
+            "authorization": "Bearer canary-claude-ours"
+          }
+        },
+        {
+          "server": "ours",
+          "method": "tools/list",
+          "headers": {
+            "authorization": "Bearer canary-claude-ours"
+          }
+        },
+        {
+          "server": "ours",
+          "method": "tools/call",
+          "tool": "probe_read",
+          "headers": {
+            "authorization": "Bearer canary-claude-ours"
+          }
+        }
+      ],
+      "mcp_servers": [
+        {
+          "name": "corrallm",
+          "status": "connected",
+          "source": "dynamic"
+        }
+      ],
+      "tools": ["mcp__corrallm__probe_delete", "mcp__corrallm__probe_read"],
+      "permission_denials": [],
+      "tool_results": ["probe ours ran probe_read"]
+    },
+    "deniedDestructive": {
+      "how": "A turn calling probe_delete (not allowed) in claude -p, where nothing can answer a prompt.",
+      "heard": [
+        {
+          "server": "ours",
+          "method": "server/discover",
+          "headers": {
+            "authorization": "Bearer canary-claude-ours"
+          }
+        },
+        {
+          "server": "ours",
+          "method": "initialize",
+          "headers": {
+            "authorization": "Bearer canary-claude-ours"
+          }
+        },
+        {
+          "server": "ours",
+          "method": "notifications/initialized",
+          "headers": {
+            "authorization": "Bearer canary-claude-ours"
+          }
+        },
+        {
+          "server": "ours",
+          "method": "tools/list",
+          "headers": {
+            "authorization": "Bearer canary-claude-ours"
+          }
+        }
+      ],
+      "mcp_servers": [
+        {
+          "name": "corrallm",
+          "status": "connected",
+          "source": "dynamic"
+        }
+      ],
+      "tools": ["mcp__corrallm__probe_delete", "mcp__corrallm__probe_read"],
+      "permission_denials": ["mcp__corrallm__probe_delete"],
+      "tool_results": [
+        "Claude requested permissions to use mcp__corrallm__probe_delete, but you haven't granted it yet."
+      ]
+    },
+    "terminalPrompt": {
+      "how": "Interactive, --permission-mode default, a turn calling probe_delete; the dialog answered Yes.",
+      "heard": [
+        {
+          "server": "ours",
+          "method": "server/discover",
+          "headers": {
+            "authorization": "Bearer canary-claude-ours"
+          }
+        },
+        {
+          "server": "ours",
+          "method": "initialize",
+          "headers": {
+            "authorization": "Bearer canary-claude-ours"
+          }
+        },
+        {
+          "server": "ours",
+          "method": "notifications/initialized",
+          "headers": {
+            "authorization": "Bearer canary-claude-ours"
+          }
+        },
+        {
+          "server": "ours",
+          "method": "tools/list",
+          "headers": {
+            "authorization": "Bearer canary-claude-ours"
+          }
+        },
+        {
+          "server": "ours",
+          "method": "tools/call",
+          "tool": "probe_delete",
+          "headers": {
+            "authorization": "Bearer canary-claude-ours"
+          }
+        }
+      ],
+      "screen": {
+        "Tool use": true,
+        "corrallm — Probe Delete": true,
+        "Do you want to proceed?": true,
+        "1. Yes": true,
+        "2. Yes, and don't ask again": true,
+        "3. No": true,
+        "Called corrallm": true,
+        "Read ../outside/secret.txt": false
+      },
+      "hooks": [
+        {
+          "hook_event_name": "PermissionRequest",
+          "permission_mode": "default",
+          "tool_name": "mcp__corrallm__probe_delete",
+          "tool_input": {},
+          "permission_suggestions": [
+            {
+              "type": "addRules",
+              "rules": [
+                {
+                  "toolName": "mcp__corrallm__probe_delete"
+                }
+              ],
+              "behavior": "allow",
+              "destination": "localSettings"
+            }
+          ],
+          "mcp_server": {
+            "name": "corrallm",
+            "source": "dynamic"
+          }
+        }
+      ]
+    },
+    "terminalAllowed": {
+      "how": "Interactive, a turn calling probe_read (allowed).",
+      "heard": [
+        {
+          "server": "ours",
+          "method": "server/discover",
+          "headers": {
+            "authorization": "Bearer canary-claude-ours"
+          }
+        },
+        {
+          "server": "ours",
+          "method": "initialize",
+          "headers": {
+            "authorization": "Bearer canary-claude-ours"
+          }
+        },
+        {
+          "server": "ours",
+          "method": "notifications/initialized",
+          "headers": {
+            "authorization": "Bearer canary-claude-ours"
+          }
+        },
+        {
+          "server": "ours",
+          "method": "tools/list",
+          "headers": {
+            "authorization": "Bearer canary-claude-ours"
+          }
+        },
+        {
+          "server": "ours",
+          "method": "tools/call",
+          "tool": "probe_read",
+          "headers": {
+            "authorization": "Bearer canary-claude-ours"
+          }
+        }
+      ],
+      "screen": {
+        "Tool use": false,
+        "corrallm — Probe Delete": false,
+        "Do you want to proceed?": false,
+        "1. Yes": false,
+        "2. Yes, and don't ask again": false,
+        "3. No": false,
+        "Called corrallm": true,
+        "Read ../outside/secret.txt": false
+      },
+      "hooks": []
+    },
+    "userDeniesServer": {
+      "how": "The user's settings.json (user scope) denies corrallm; the flag and settings as the planned entry.",
+      "heard": [],
+      "warnings": ["Warning: MCP server blocked by enterprise policy: corrallm"],
+      "mcp_servers": [],
+      "tools": [],
+      "permission_denials": []
+    },
+    "userDeniesTool": {
+      "how": "The user's settings.json has permissions.deny for mcp__corrallm__probe_read; the session's settings allow it.",
+      "heard": [
+        {
+          "server": "ours",
+          "method": "server/discover",
+          "headers": {
+            "authorization": "Bearer canary-claude-ours"
+          }
+        },
+        {
+          "server": "ours",
+          "method": "initialize",
+          "headers": {
+            "authorization": "Bearer canary-claude-ours"
+          }
+        },
+        {
+          "server": "ours",
+          "method": "notifications/initialized",
+          "headers": {
+            "authorization": "Bearer canary-claude-ours"
+          }
+        },
+        {
+          "server": "ours",
+          "method": "tools/list",
+          "headers": {
+            "authorization": "Bearer canary-claude-ours"
+          }
+        }
+      ],
+      "mcp_servers": [
+        {
+          "name": "corrallm",
+          "status": "connected",
+          "source": "dynamic"
+        }
+      ],
+      "tools": ["mcp__corrallm__probe_delete"],
+      "permission_denials": []
+    },
+    "userAllowsOtherServersOnly": {
+      "how": "The user's settings.json has allowedMcpServers naming another server only.",
+      "heard": [],
+      "warnings": ["Warning: MCP server blocked by enterprise policy: corrallm"],
+      "mcp_servers": [],
+      "tools": [],
+      "permission_denials": []
+    },
+    "sessionAllowlistAddsServer": {
+      "how": "The same user allowlist, with allowedMcpServers for corrallm added in the session's own --settings file.",
+      "heard": [
+        {
+          "server": "ours",
+          "method": "server/discover",
+          "headers": {
+            "authorization": "Bearer canary-claude-ours"
+          }
+        },
+        {
+          "server": "ours",
+          "method": "initialize",
+          "headers": {
+            "authorization": "Bearer canary-claude-ours"
+          }
+        },
+        {
+          "server": "ours",
+          "method": "notifications/initialized",
+          "headers": {
+            "authorization": "Bearer canary-claude-ours"
+          }
+        },
+        {
+          "server": "ours",
+          "method": "tools/list",
+          "headers": {
+            "authorization": "Bearer canary-claude-ours"
+          }
+        },
+        {
+          "server": "ours",
+          "method": "tools/call",
+          "tool": "probe_read",
+          "headers": {
+            "authorization": "Bearer canary-claude-ours"
+          }
+        }
+      ],
+      "mcp_servers": [
+        {
+          "name": "corrallm",
+          "status": "connected",
+          "source": "dynamic"
+        }
+      ],
+      "tools": ["mcp__corrallm__probe_delete", "mcp__corrallm__probe_read"],
+      "permission_denials": [],
+      "tool_results": ["probe ours ran probe_read"]
+    }
+  },
+  "mentions": {
+    "note": "Q24: `@` mentions in a prompt, expanded by the CLI before the model sees them. 'seen' lists the canary lines of files that reached the stub API's request. The project folder holds inside.txt; the files outside it are siblings. Permission mode default, no Read rule.",
+    "inside": {
+      "INSIDE-CANARY": 1
+    },
+    "absoluteOutside": {
+      "OUTSIDE-CANARY-LINE": 3
+    },
+    "dotDotOutside": {
+      "OUTSIDE-CANARY-LINE": 3
+    },
+    "quotedOutsideWithSpace": {
+      "OUTSIDE-CANARY-SPACE": 1
+    },
+    "outsideLineRange2to3": {
+      "OUTSIDE-CANARY-LINE": 2
+    },
+    "clientComposedAbsoluteOutside": {},
+    "disabledByEnvAbsoluteOutside": {},
+    "terminalTypedAbsoluteOutside": {
+      "seen": {
+        "OUTSIDE-CANARY-LINE": 3
+      },
+      "screen": {
+        "Read ../outside/secret.txt": true,
+        "Do you want to proceed?": false,
+        "Yes, allow reading": false
+      }
+    },
+    "edges": {
+      "note": "C3b: mention edges in `claude -p` against the stub; HOME is a throwaway holding secret.txt (canary OUTSIDE-CANARY-HOME). The text is literal: `$HOME` and `~` are not expanded by a shell.",
+      "midWordAbsolute": {},
+      "homeVariable": {},
+      "tilde": {
+        "OUTSIDE-CANARY-HOME": 1
+      },
+      "symlinkInProjectToOutside": {
+        "OUTSIDE-CANARY-LINE": 3
+      },
+      "absoluteHomeControl": {
+        "OUTSIDE-CANARY-HOME": 1
+      },
+      "terminalTypedSymlink": {
+        "seen": {
+          "OUTSIDE-CANARY-LINE": 3
+        },
+        "screen": {
+          "Read link": true,
+          "Do you want to proceed?": false
+        }
+      }
+    }
+  }
+}

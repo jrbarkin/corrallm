@@ -10,6 +10,16 @@ It is for developers who already run Claude Code and Codex and pass work between
 
 corrallm runs the Claude Code and Codex CLIs you install, with your own logins and settings. It is an independent project, not made, endorsed or supported by Anthropic or OpenAI.
 
+![A canvas of four agents at work. One opens in its own window as its turn streams in; All queues then shows every queue side by side, and the view goes back to the canvas.](docs/images/flow.gif)
+
+| ![The canvas: a lead and three workers on both CLIs, each card showing its status and branch](docs/images/canvas.png) |    ![An agent's window: its queue beside the transcript of its turns](docs/images/agent.png)     |
+| :-------------------------------------------------------------------------------------------------------------------: | :----------------------------------------------------------------------------------------------: |
+|                **The canvas.** Each agent is a card; arrows show the work one agent's queue waits on.                 |          **An agent's window.** Its queue beside its transcript, streaming as it works.          |
+|     ![All queues: four lanes side by side, waits joined by ribbons to what they wait for](docs/images/queues.png)     | ![Review changes: an agent's committed and uncommitted changes as diffs](docs/images/review.png) |
+|                   **All queues.** Every queue side by side, each wait level with what it waits for.                   |              **Review changes.** What an agent's branch holds, before you merge it.              |
+
+These pictures come from a demo canvas with scripted fake agents: `pnpm media` remakes them (see [toolchain](docs/architecture/toolchain.md)).
+
 ## How it works
 
 - **Agents.** Each agent runs its CLI in a git worktree of the canvas's project, on a branch of its own; a group shares one worktree. A project that isn't a Git repository is used as it is. You work with an agent in its own window: in the CLI's own terminal, or in corrallm's transcript and composer.
@@ -57,7 +67,7 @@ An orchestrator outside corrallm (Claude Code or Codex in another folder, or a s
 1. **Build the command.** From your checkout, `pnpm build:cli`, then run it as `pnpm corrallm …`. A build from `pnpm package` also holds it, at `corrallm.app/Contents/Resources/bin/corrallm` on macOS and `resources/bin/corrallm` on Linux. It isn't available on Windows yet.
 2. **Open the canvas in the app**, choose its project folder there, and save it. corrallm runs a canvas only in the folder you picked in the app.
 3. **Make a token**, in a terminal: `corrallm token new --canvas path/to/canvas.corral --into ~/.corrallm/orchestrator.token`. The running app (or `serve`) answers it at once; with neither running, it writes the token itself. With `--into`, the token goes only to that file, readable only by you; without it, it is shown once. A token lasts an hour unless you say `--hours` (12 at most), reaches only the canvases you name, and can write unless `--read-only`. corrallm keeps only its hash.
-4. **Register corrallm** in your orchestrator's folder with the command `corrallm token` printed for each CLI you have. Claude Code's reads the token from the file each time it connects (`corrallm token header --from <file>`); Codex's reads it from `CORRALLM_OUTSIDE_TOKEN` as Codex starts. Claude Code's registration stays local to that folder. Codex's is user-wide but holds no token, and corrallm never passes `CORRALLM_` variables to its own agents.
+4. **Register corrallm** in your orchestrator's folder, which must be no canvas's project folder, with the command `corrallm token` printed for each CLI you have. Claude Code's reads the token from the file each time it connects (`corrallm token header --from <file>`); Codex's reads it from `CORRALLM_OUTSIDE_TOKEN` as Codex starts. Claude Code's registration stays local to that folder. Codex's is user-wide but holds no token, and corrallm strips outside-token variables from its own agents' environment.
 5. **Send work and wait.** Your orchestrator calls `message` to send an agent work, `status` and `messages` to see where things are, and `wait` for what comes back. For a wait longer than its client lets a tool call run, it runs `corrallm wait --for <message id>`, which reads the token from `CORRALLM_OUTSIDE_TOKEN`, or from the file `CORRALLM_OUTSIDE_TOKEN_FILE` names.
 6. **Or serve without the app.** Quit the app (one corrallm owns a profile at a time), then run `corrallm serve --canvas path/to/canvas.corral`. It stops when its terminal closes, so run it in tmux or screen to keep it going.
 
@@ -118,16 +128,17 @@ To try the production build, run `pnpm package` and open the app in `out/` (for 
 
 corrallm is an Electron app built with Electron Forge, Vite, React and TypeScript. [AGENTS.md](AGENTS.md) holds the development rules, and [the architecture overview](docs/architecture/overview.md) maps each area to its doc.
 
-| Script           | What it does                                                          |
-| ---------------- | --------------------------------------------------------------------- |
-| `pnpm dev`       | Run the app in development mode                                       |
-| `pnpm typecheck` | Type-check all TypeScript projects                                    |
-| `pnpm lint`      | ESLint (type-aware rules)                                             |
-| `pnpm format`    | Format all files with Prettier                                        |
-| `pnpm test`      | Unit tests (Vitest) for main, preload, renderer and store-performance |
-| `pnpm test:e2e`  | Build the app (unsigned) and run the Playwright tests                 |
-| `pnpm package`   | Package the app for the current OS into `out/`                        |
-| `pnpm make`      | Build installers for the current OS into `out/make/`                  |
+| Script           | What it does                                                           |
+| ---------------- | ---------------------------------------------------------------------- |
+| `pnpm dev`       | Run the app in development mode                                        |
+| `pnpm typecheck` | Type-check all TypeScript projects                                     |
+| `pnpm lint`      | ESLint (type-aware rules)                                              |
+| `pnpm format`    | Format all files with Prettier                                         |
+| `pnpm test`      | Unit tests (Vitest) for main, preload, renderer and store-performance  |
+| `pnpm test:e2e`  | Build the app (unsigned) and run the Playwright tests                  |
+| `pnpm package`   | Package the app for the current OS into `out/`                         |
+| `pnpm make`      | Build installers for the current OS into `out/make/`                   |
+| `pnpm media`     | Remake the screenshots and GIF above, in `docs/images/` (needs ffmpeg) |
 
 While `pnpm dev` runs, renderer changes update in place and preload changes reload the window. Main-process changes are rebuilt, but the app keeps running the old code until you press `r` in the Forge terminal. Changes to `forge.config.mts`, `vite.*.config.mts` or `package.json` need `pnpm dev` started again.
 

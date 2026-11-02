@@ -224,6 +224,41 @@ describe('agent and queue commits through core.call', () => {
     expect(result).toMatchObject({ ok: false, error: { code: 'invalid' } });
     expect(doc()).toBe(before);
   });
+  it('sets when your agent is asked for its handoff, and its file, in one revision; null is the defaults', async () => {
+    const result = await edit('agent.setHandoff', {
+      agent: 'a',
+      handoff: { at: 80, file: 'docs/HANDOFF.md' },
+    });
+    expect(result.changed).toBe(true);
+    expect(agent().handoff).toEqual({ at: 80, file: 'docs/HANDOFF.md' });
+    committed('agent.setHandoff', result, [nodeKey('a')]);
+    // The same settings again change nothing; a null file is none, as are absent fields.
+    expect(
+      await edit('agent.setHandoff', { agent: 'a', handoff: { file: 'docs/HANDOFF.md', at: 80 } }),
+    ).toMatchObject({ changed: false, revs: {} });
+    await edit('agent.setHandoff', { agent: 'a', handoff: { off: true, file: null } });
+    expect(agent().handoff).toEqual({ off: true });
+    expect((await edit('agent.setHandoff', { agent: 'a', handoff: null })).changed).toBe(true);
+    expect(agent().handoff).toBeUndefined();
+  });
+  it.each([
+    ['a share under 10', { at: 9 }],
+    ['a share over 95', { at: 96 }],
+    ['a share that isn’t whole', { at: 50.5 }],
+    ['a path outside its checkout', { file: '../HANDOFF.md' }],
+    ['a file that isn’t Markdown', { file: 'HANDOFF.txt' }],
+    ['a path in Git’s folder', { file: '.git/HANDOFF.md' }],
+    ['off as false', { off: false }],
+  ])('refuses handoff settings with %s, changing nothing', async (_what, handoff) => {
+    const before = doc();
+    const result = await (core as Dispatcher).call(
+      'agent.setHandoff',
+      { canvas: CANVAS, agent: 'a', handoff },
+      CALLERS.you,
+    );
+    expect(result).toMatchObject({ ok: false, error: { code: 'invalid' } });
+    expect(doc()).toBe(before);
+  });
   it('switches connection and drops only an incompatible saved mode', async () => {
     const result = await edit('agent.setConnection', { agent: 'a', connection: 'codex.terminal' });
     expect(agent()).toMatchObject({

@@ -1,0 +1,256 @@
+{
+  "recordedWith": {
+    "codex": "0.162.1",
+    "platform": "macOS arm64",
+    "date": "2026-10-31",
+    "model": "none: a local stub Responses API answered each turn (a call to the tool, then \"done\"); no tokens were spent",
+    "config": "a throwaway CODEX_HOME and HOME, a throwaway project trusted by -c; the probe is a local MCP server (streamable HTTP, JSON replies) that logs each request; the TUI in a pty of 120×40 with --no-alt-screen"
+  },
+  "minimumVersion": "0.162.1",
+  "entry": {
+    "note": "The planned entry as -c overrides on the TUI's own command line (§9.4); the credential only in the TUI's environment as CORRALLM_SESSION_TOKEN.",
+    "overrides": [
+      "mcp_servers.corrallm={url=\"http://127.0.0.1:47101/mcp\",enabled=true,disabled_tools=[],bearer_token_env_var=\"CORRALLM_SESSION_TOKEN\",default_tools_approval_mode=\"prompt\",tools={probe_read={approval_mode=\"approve\"},probe_delete={approval_mode=\"prompt\"}}}"
+    ],
+    "token": "CORRALLM_SESSION_TOKEN"
+  },
+  "cases": {
+    "startup": {
+      "how": "The TUI started with the entry; no turn.",
+      "heard": [
+        {
+          "server": "ours",
+          "method": "initialize",
+          "headers": {
+            "authorization": "Bearer canary-tui-ctui-s1"
+          }
+        },
+        {
+          "server": "ours",
+          "method": "notifications/initialized",
+          "headers": {
+            "authorization": "Bearer canary-tui-ctui-s1"
+          }
+        },
+        {
+          "server": "ours",
+          "method": "tools/list",
+          "headers": {
+            "authorization": "Bearer canary-tui-ctui-s1"
+          }
+        }
+      ]
+    },
+    "approveTool": {
+      "how": "A turn calling probe_read (approve), approval policy on-request (-a on-request).",
+      "heard": [
+        {
+          "server": "ours",
+          "method": "initialize",
+          "headers": {
+            "authorization": "Bearer canary-tui-ctui-t1-approve"
+          }
+        },
+        {
+          "server": "ours",
+          "method": "notifications/initialized",
+          "headers": {
+            "authorization": "Bearer canary-tui-ctui-t1-approve"
+          }
+        },
+        {
+          "server": "ours",
+          "method": "tools/list",
+          "headers": {
+            "authorization": "Bearer canary-tui-ctui-t1-approve"
+          }
+        },
+        {
+          "server": "ours",
+          "method": "tools/call",
+          "tool": "probe_read",
+          "headers": {
+            "authorization": "Bearer canary-tui-ctui-t1-approve"
+          }
+        }
+      ],
+      "screen": {
+        "Called corrallm": true,
+        "probe_read": true,
+        "probe ours ran probe_read": true,
+        "Allow the corrallm MCP server": false
+      }
+    },
+    "promptTool": {
+      "how": "A turn calling probe_delete (prompt), -a on-request; the dialog answered with Enter (Allow).",
+      "heard": [
+        {
+          "server": "ours",
+          "method": "initialize",
+          "headers": {
+            "authorization": "Bearer canary-tui-ctui-t1-prompt"
+          }
+        },
+        {
+          "server": "ours",
+          "method": "notifications/initialized",
+          "headers": {
+            "authorization": "Bearer canary-tui-ctui-t1-prompt"
+          }
+        },
+        {
+          "server": "ours",
+          "method": "tools/list",
+          "headers": {
+            "authorization": "Bearer canary-tui-ctui-t1-prompt"
+          }
+        },
+        {
+          "server": "ours",
+          "method": "tools/call",
+          "tool": "probe_delete",
+          "headers": {
+            "authorization": "Bearer canary-tui-ctui-t1-prompt"
+          }
+        }
+      ],
+      "screen": {
+        "Allow the corrallm MCP server to run tool \"probe_delete\"?": true,
+        "1. Allow": true,
+        "2. Cancel": true,
+        "Called corrallm": true,
+        "probe ours ran probe_delete": true
+      }
+    },
+    "promptToolNever": {
+      "how": "The same under -a never.",
+      "heard": [
+        {
+          "server": "ours",
+          "method": "initialize",
+          "headers": {
+            "authorization": "Bearer canary-tui-ctui-t1-prompt-never"
+          }
+        },
+        {
+          "server": "ours",
+          "method": "notifications/initialized",
+          "headers": {
+            "authorization": "Bearer canary-tui-ctui-t1-prompt-never"
+          }
+        },
+        {
+          "server": "ours",
+          "method": "tools/list",
+          "headers": {
+            "authorization": "Bearer canary-tui-ctui-t1-prompt-never"
+          }
+        }
+      ],
+      "screen": {
+        "MCP tool call requires approval, but approval policy is never": true,
+        "Allow the corrallm MCP server": false
+      }
+    },
+    "resume": {
+      "how": "codex resume <the approve run's session>, with another token in the environment.",
+      "heard": [
+        {
+          "server": "ours",
+          "method": "initialize",
+          "headers": {
+            "authorization": "Bearer canary-tui-ctui-resume"
+          }
+        },
+        {
+          "server": "ours",
+          "method": "notifications/initialized",
+          "headers": {
+            "authorization": "Bearer canary-tui-ctui-resume"
+          }
+        },
+        {
+          "server": "ours",
+          "method": "tools/list",
+          "headers": {
+            "authorization": "Bearer canary-tui-ctui-resume"
+          }
+        }
+      ]
+    },
+    "proxyWithoutNoProxy": {
+      "how": "HTTP_PROXY, http_proxy and ALL_PROXY name a dead local proxy; NO_PROXY is unset.",
+      "heard": []
+    },
+    "proxyWithNoProxy": {
+      "how": "The same proxies, with NO_PROXY and no_proxy = 127.0.0.1,localhost,::1.",
+      "heard": [
+        {
+          "server": "ours",
+          "method": "initialize",
+          "headers": {
+            "authorization": "Bearer canary-tui-ctui-proxy-with"
+          }
+        },
+        {
+          "server": "ours",
+          "method": "notifications/initialized",
+          "headers": {
+            "authorization": "Bearer canary-tui-ctui-proxy-with"
+          }
+        },
+        {
+          "server": "ours",
+          "method": "tools/list",
+          "headers": {
+            "authorization": "Bearer canary-tui-ctui-proxy-with"
+          }
+        }
+      ]
+    }
+  },
+  "mcpGet": {
+    "note": "`codex mcp get corrallm --json -c <entry>` (a throwaway CODEX_HOME). It reports the transport, enabled, the tool allow and deny lists, but not the approval modes.",
+    "clean": {
+      "name": "corrallm",
+      "enabled": true,
+      "disabled_reason": null,
+      "transport": {
+        "type": "streamable_http",
+        "url": "http://127.0.0.1:47101/mcp",
+        "bearer_token_env_var": "CORRALLM_SESSION_TOKEN",
+        "http_headers": null,
+        "env_http_headers": null,
+        "http_headers_helper": null
+      },
+      "enabled_tools": null,
+      "disabled_tools": [],
+      "startup_timeout_sec": null,
+      "tool_timeout_sec": null
+    },
+    "withUserEntry": {
+      "userConfig": "[mcp_servers.corrallm] url = \".../47102/mcp\", http_headers = { X-Evil = \"user\" }, enabled_tools = [\"probe_delete\"]",
+      "got": {
+        "name": "corrallm",
+        "enabled": true,
+        "disabled_reason": null,
+        "transport": {
+          "type": "streamable_http",
+          "url": "http://127.0.0.1:47101/mcp",
+          "bearer_token_env_var": "CORRALLM_SESSION_TOKEN",
+          "http_headers": {
+            "X-Evil": "user"
+          },
+          "env_http_headers": null,
+          "http_headers_helper": null
+        },
+        "enabled_tools": ["probe_delete"],
+        "disabled_tools": [],
+        "startup_timeout_sec": null,
+        "tool_timeout_sec": null
+      }
+    },
+    "withStdioEntry": "Error: failed to load bootstrap configuration\n\nCaused by:\n    url is not supported for stdio\n    in `mcp_servers.corrallm`",
+    "undefinedNameDisabled": "Error: failed to load bootstrap configuration\n\nCaused by:\n    invalid transport\n    in `mcp_servers.nothere`"
+  }
+}

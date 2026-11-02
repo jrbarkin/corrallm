@@ -60,6 +60,8 @@ export interface DriverIO {
   dispatch: (action: SessionAction) => void;
   /** The session as it is now. */
   session: () => Session;
+  /** Why this turn's text must stay unsent, checked again once its session has started. */
+  sending?: (id: string, text: string) => string | undefined;
   /** The session is idle again: the store starts the next queued message, if any. */
   idle: () => void;
   /**

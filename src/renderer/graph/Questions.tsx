@@ -1,5 +1,5 @@
 import { useId, useState } from 'react';
-import type { ReactNode } from 'react';
+import type { ReactNode, Ref } from 'react';
 
 import type { AdapterId } from '../../shared/adapter';
 import type { TerminalAsk } from '../../shared/session';
@@ -220,7 +220,15 @@ export function QuestionCard({
  * (as it first runs there), or what it waits for, in its own words. The user answers in the
  * terminal: Open terminal opens the agent's view.
  */
-export function TerminalAskCard({ ask, agent }: { ask: TerminalAsk; agent: Asker }) {
+export function TerminalAskCard({
+  ask,
+  agent,
+  ref,
+}: {
+  ask: TerminalAsk;
+  agent: Asker;
+  ref?: Ref<HTMLDivElement>;
+}) {
   const body = () => {
     switch (ask.kind) {
       case 'permission':
@@ -279,6 +287,9 @@ export function TerminalAskCard({ ask, agent }: { ask: TerminalAsk; agent: Asker
     <div
       className="graph-question"
       data-in-terminal=""
+      ref={ref}
+      tabIndex={ref ? -1 : undefined}
+      data-requested={ref ? '' : undefined}
       role="group"
       aria-label={`${agent.name} asks, in its terminal`}
     >

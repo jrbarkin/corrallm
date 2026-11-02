@@ -5,7 +5,7 @@ import type { Settings } from '../settings';
 import { removeOwnApiFile, writeApiFile } from './api-file';
 import type { ApiFile } from './api-file';
 import type { Dispatcher } from './call';
-import type { TokenCaller } from './caller';
+import type { AgentCaller, TokenCaller } from './caller';
 import { processStart } from './lock';
 import type { ProcessStart } from './process-identity';
 
@@ -39,6 +39,8 @@ export interface EndpointDeps {
   clientOf: (token: string) => TokenCaller | undefined;
   /** Whether a token it doesn't take is one its store made that no longer works. */
   stale: (token: string) => boolean;
+  /** Hears an agent's session generation list corrallm's tools (`Core.listed`). */
+  listed?: (caller: AgentCaller) => void;
   /** Where the profile keeps its port. */
   settings: Pick<Settings, 'apiPort' | 'keepApiPort'>;
   /** Hears each change of its status. */
@@ -100,6 +102,7 @@ export class Endpoint {
         core: this.#deps.core,
         clientOf: this.#deps.clientOf,
         stale: this.#deps.stale,
+        ...(this.#deps.listed === undefined ? {} : { listed: this.#deps.listed }),
         port,
       });
     } catch (error) {

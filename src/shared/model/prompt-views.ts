@@ -295,7 +295,11 @@ function needView({ prompt }: PromptOccurrence, reader: PromptReader): PromptNee
     case 'question':
       return { ...envelope, kind: 'question' };
     case 'form':
-      return { ...envelope, kind: 'form' };
+      return {
+        ...envelope,
+        kind: 'form',
+        ...(prompt.server === undefined ? {} : { server: prompt.server }),
+      };
   }
 }
 

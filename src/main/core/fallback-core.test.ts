@@ -149,7 +149,13 @@ describe('the fallback chain through the core', () => {
     codex.end(LIMIT(resetsAt));
     // Codex's limit is on disk before the run hears the end (B8).
     await vi.waitFor(() => {
-      expect(claude.sent.map(({ text }) => text)).toEqual(['Say hello']);
+      // The task, once more: the first send since the switch, carrying the worker's handoff, or
+      // saying none was written (B11a C7).
+      expect(claude.sent.map(({ text }) => text)).toEqual([
+        expect.stringMatching(
+          /^\[corrallm\] corrallm switched this agent to Claude Code · Terminal, [^\n]+\n\nSay hello\n\n\[corrallm\] No handoff was written: its context never reached 95%\.$/,
+        ),
+      ]);
     });
     const usage = JSON.parse(await readFile(path.join(profile, 'usage.json'), 'utf8')) as {
       exhausted: Record<string, { resetsAt: number }>;
@@ -210,7 +216,10 @@ describe('the fallback chain through the core', () => {
     await vi.waitFor(() => {
       expect(claude.sent).toHaveLength(1);
     });
-    expect(claude.sent[0]?.text).toMatch(/Then this$/);
+    // Framed as the party's, after corrallm's switch line, before what it carries (B11a C7).
+    expect(claude.sent[0]?.text).toMatch(
+      /^\[corrallm\] corrallm switched this agent to [^\n]+\n\n\[corrallm\] Message from "orchestrator" [^\n]+\nThen this\n\n\[corrallm\] No handoff was written: its context never reached 95%\.$/,
+    );
     expect(codex.sent).toHaveLength(1);
     const id = first.ok ? (first.value as { id: string }).id : '';
     expect(

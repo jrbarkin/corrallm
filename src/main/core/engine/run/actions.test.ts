@@ -42,7 +42,7 @@ const node = (queue: QueueItem[], adapter = 'quill', id = 'a'): AgentNode => ({
 
 function setup(nodes: AgentNode[], overrides: Partial<RunIO> = {}) {
   const sent: { to: string; text: string; done: (turn: TurnEnd) => void }[] = [];
-  const record = vi.fn(() => crypto.randomUUID());
+  const record = vi.fn(({ text }: { text: string }) => ({ id: crypto.randomUUID(), text }));
   const settle = vi.fn();
   const run = liveRun(engine, {
     send: (to, text, done) => {

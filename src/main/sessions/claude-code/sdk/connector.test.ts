@@ -538,6 +538,17 @@ describe('SdkConnector', () => {
       from: 'outside:orchestrator',
       name: 'orchestrator',
     });
+    expect(query().sent[0]).toHaveProperty('client_composed', true);
+  });
+
+  it('leaves the user’s and the run’s text available to native input processing', async () => {
+    const { sdk, host, query } = connector();
+    const session = await sdk.start(SPEC, host);
+    await session.send({ id: 'own', text: 'Read @src/x' });
+    await session.send({ id: 'run', text: 'Inspect @src/y' });
+    await settle();
+    expect(query().sent).toHaveLength(2);
+    for (const message of query().sent) expect(message).not.toHaveProperty('client_composed');
   });
 
   it('plays a turn: the message goes to the CLI, what it does comes back, and its result ends it', async () => {
