@@ -19,6 +19,7 @@ import { AppServerConnector } from './connector';
 import type { AppServerConnectorDeps } from './connector';
 import type { Fixture } from './recorded';
 import { replay } from './replay';
+import { testMcpServer } from '../../test-mcp';
 import type { SpawnAppServer } from '../rpc';
 
 /** A fake `codex` that speaks the app server's protocol (../fake-codex.mjs), run with node. */
@@ -512,6 +513,7 @@ describe('the App Server connection', () => {
     const { events } = await start({ mode: 'read-only' });
     expect(events[0]).toEqual({
       type: 'started',
+      api: false,
       model: 'gpt-6.1-sol',
       mode: 'read-only',
       models: [
@@ -1498,4 +1500,77 @@ describe('the App Server connection, replaying the real Codex', () => {
     });
     expect(problems).toEqual([]);
   });
+});
+
+it('lists and calls its session MCP entry, preserving the credential only in its process environment', async () => {
+  const token = 'app-server-credential-canary';
+  const endpoint = await testMcpServer(token);
+  const log = path.join(dir, 'native-requests.jsonl');
+  const runs: { args: readonly string[]; env: NodeJS.ProcessEnv | undefined }[] = [];
+  try {
+    const opened = await start(
+      {
+        api: {
+          kind: 'http',
+          server: 'corrallm',
+          url: endpoint.url,
+          token,
+          tools: [
+            { name: 'probe_read', destructive: false },
+            { name: 'probe_delete', destructive: true },
+          ],
+          off: ['corrallm-server', 'corrallm-server-dev'],
+        },
+      },
+      { FAKE_CODEX_LOG: log, FAKE_CODEX_MCP_CALL: 'probe_read' },
+      {
+        spawn: (_file, args, options) => {
+          runs.push({ args, env: options.env });
+          return spawn(process.execPath, [FAKE, ...args], {
+            ...options,
+            env: { ...options.env, FAKE_CODEX_LOG: log, FAKE_CODEX_MCP_CALL: 'probe_read' },
+          });
+        },
+      },
+    );
+    expect(opened.events.find((one) => one.type === 'started')).toMatchObject({ api: true });
+    expect(endpoint.methods).toContain('tools/call');
+    expect(runs).toHaveLength(3);
+    expect(runs.slice(0, 2).every((run) => run.env?.CORRALLM_SESSION_TOKEN === undefined)).toBe(
+      true,
+    );
+    expect(runs[2]?.env?.CORRALLM_SESSION_TOKEN).toBe(token);
+    expect(runs[2]?.args).toContain('shell_environment_policy.set.CORRALLM_SESSION_TOKEN=""');
+    for (const value of [runs.map((run) => run.args), opened.events, await readFile(log, 'utf8')])
+      expect(JSON.stringify(value)).not.toContain(token);
+  } finally {
+    await Promise.all(sessions.map((session) => session.close()));
+    await endpoint.close();
+  }
+});
+
+it('starts without the API after a whole-entry check differs, with one fixed notice', async () => {
+  const token = 'unverified-credential-canary';
+  const { events } = await start(
+    {
+      api: {
+        kind: 'http',
+        server: 'corrallm',
+        url: 'http://127.0.0.1:1/mcp',
+        token,
+        tools: [],
+        off: ['corrallm-server', 'corrallm-server-dev'],
+      },
+    },
+    {
+      FAKE_CODEX_CONFIG: JSON.stringify({
+        mcp_servers: { corrallm: { http_headers: { Extra: 'user-value' } } },
+      }),
+    },
+  );
+  expect(events.find((one) => one.type === 'started')).toMatchObject({ api: false });
+  const notices = events.filter((one) => one.type === 'notice' && one.text.includes('API is off'));
+  expect(notices).toHaveLength(1);
+  expect(JSON.stringify(events)).not.toContain(token);
+  expect(JSON.stringify(events)).not.toContain('user-value');
 });

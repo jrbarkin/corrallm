@@ -10,4 +10,5 @@ export const NO_GESTURE = {
     'The chain picker on the model chip and in Agent settings (B11a X4) is not built yet.',
   'agent.setHandoff': 'The handoff tile’s gear menu (B11a X4) is not built yet.',
   'session.handoff': 'The handoff tile, which opens the text (B11a X4), is not built yet.',
+  'settings.set': 'The default-agent control in the add chooser and Start (B12 X5).',
 } satisfies Partial<Record<GuiOp, string>>;

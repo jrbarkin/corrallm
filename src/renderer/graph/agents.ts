@@ -1,25 +1,11 @@
+import { adapterIn, connectionIn } from '../../shared/adapter';
 import type { AdapterId, ConnectionId } from '../../shared/adapter';
 import { catalog } from '../catalog';
 import { engineCatalog } from '../../shared/model/catalog';
 import type { EngineCatalog } from '../../shared/model/catalog';
 
-/*
- * The renderer's own tables of what each adapter offers (main declares it in the catalog, which
- * catalog.ts loads): how agents and connections are named and worded on the canvas, and what each
- * can be asked to do. A node naming an adapter or a connection none of them has is Not connected:
- * its work stays unsent, and it is saved back as it was. The run reads none of them: it reads the
- * catalog (runCatalog).
- */
-
+/** Display names, connection words and actions come from the loaded catalog. */
 export type { AdapterId };
-
-/**
- * `table`'s own entry for `id`: never what every object inherits (`toString`, `constructor`, …),
- * which an adapter or connection a file names may be called.
- */
-function own<T>(table: Readonly<Record<string, T>>, id: string): T | undefined {
-  return Object.hasOwn(table, id) ? table[id] : undefined;
-}
 
 /**
  * The adapter a new node starts with, and one naming none runs: main's DEFAULT_ADAPTER, which the
@@ -36,47 +22,21 @@ export function runCatalog(): EngineCatalog {
   return engineCatalog(catalog(), DEFAULT_AGENT);
 }
 
-/** How each adapter's agents are named on the canvas ("Claude · Terminal"). */
-const AGENT_NAMES: Readonly<Record<AdapterId, string>> = {
-  'claude-code': 'Claude',
-  codex: 'Codex',
-};
-
-/** How an adapter's agents are named: its id, for an adapter this build doesn't have. */
+/** Catalog selectors are evaluated when a view renders, after boot has loaded the catalog. */
 export function adapterName(adapter: AdapterId): string {
-  return own(AGENT_NAMES, adapter) ?? adapter;
+  return adapterIn(catalog(), adapter)?.name ?? adapter;
 }
 
-/** The CLI each adapter runs. */
-const AGENT_CLIS: Readonly<Record<AdapterId, string>> = {
-  'claude-code': 'Claude Code',
-  codex: 'Codex CLI',
-};
-
-/** The CLI an adapter runs, as its user knows it: its id, for an adapter this build doesn't have. */
-export function adapterCli(adapter: AdapterId): string {
-  return own(AGENT_CLIS, adapter) ?? adapter;
-}
-
-/**
- * How an agent runs: a real native connection, or 'unavailable' (Not connected): its adapter, or the
- * connection it names, is one this build lacks.
- */
+export const adapterCli = adapterName;
 export type AgentConnection = ConnectionId;
 
-/** Terminal works with the CLI's own login; structured connections are an explicit choice. */
-const AGENT_CONNECTIONS: Readonly<Record<AdapterId, readonly ConnectionId[]>> = {
-  'claude-code': ['claude-code.terminal', 'claude-code.sdk'],
-  codex: ['codex.terminal', 'codex.app-server'],
-};
-
-/** The connections an adapter offers, in its order: none, for one this build doesn't have. */
 export function connectionsOf(adapter: AdapterId): readonly ConnectionId[] {
-  return own(AGENT_CONNECTIONS, adapter) ?? [];
+  return adapterIn(catalog(), adapter)?.connections.map(({ id }) => id) ?? [];
 }
 
-/** The adapters with working connectors, offered when choosing an agent. */
-export const CONNECTED_AGENTS: readonly AdapterId[] = Object.keys(AGENT_CONNECTIONS);
+export function connectedAgents(): readonly AdapterId[] {
+  return catalog().adapters.map(({ id }) => id);
+}
 
 /** How a connection is named (`short`: on an agent's card) and explained. */
 export interface ConnectionInfo {
@@ -88,36 +48,15 @@ export interface ConnectionInfo {
 const NOT_CONNECTED: ConnectionInfo = {
   label: 'Not connected',
   short: 'Not connected',
-  description: 'This agent has no connector in this build. Choose Claude Code or Codex',
+  description: 'This agent has no connector in this build. Choose another agent in its settings.',
 };
 
-const CONNECTION_INFO: Readonly<Record<ConnectionId, ConnectionInfo>> = {
-  'claude-code.terminal': {
-    label: 'Terminal',
-    short: 'Terminal',
-    description: 'Claude Code itself, in a terminal in its view: works with your Claude login',
-  },
-  'claude-code.sdk': {
-    label: 'Agent SDK',
-    short: 'SDK',
-    description:
-      'Claude Code through the Agent SDK, in corrallm’s transcript: needs an API key or a cloud provider',
-  },
-  'codex.terminal': {
-    label: 'Terminal',
-    short: 'Terminal',
-    description: 'Codex itself, in a terminal in its view',
-  },
-  'codex.app-server': {
-    label: 'App Server',
-    short: 'App Server',
-    description: 'Codex through its app server, in corrallm’s transcript',
-  },
-};
-
-/** How a connection is named and explained: Not connected, for one this build doesn't have. */
+/** How a connection is named and explained: Not connected, for one this build lacks. */
 export function connectionInfo(connection: AgentConnection): ConnectionInfo {
-  return own(CONNECTION_INFO, connection) ?? NOT_CONNECTED;
+  const found = connectionIn(catalog(), connection)?.connection;
+  return found
+    ? { label: found.label, short: found.short, description: found.description }
+    : NOT_CONNECTED;
 }
 
 /** An adapter's first connection: what a new agent runs as; unavailable, for an unknown adapter. */
@@ -154,68 +93,12 @@ export interface AgentAction {
   description: string;
 }
 
-/**
- * What each adapter's agents can do: their built-in tools and the slash commands that do work, as
- * documented. Tools and commands that only run the session itself (help, settings, feedback,
- * notifications, task-list and MCP plumbing) are left out.
- */
-const AGENT_ACTIONS: Readonly<Record<AdapterId, readonly AgentAction[]>> = {
-  // https://code.claude.com/docs/en/tools-reference.md, https://code.claude.com/docs/en/commands.md
-  // (read 2026-10-11, Claude Code v2.1.287)
-  'claude-code': [
-    { name: 'Read', description: 'Read files' },
-    { name: 'Write', description: 'Create or overwrite files' },
-    { name: 'Edit', description: 'Make targeted edits to files' },
-    { name: 'NotebookEdit', description: 'Edit Jupyter notebook cells' },
-    { name: 'Glob', description: 'Find files by pattern' },
-    { name: 'Grep', description: 'Search file contents' },
-    { name: 'LSP', description: 'Code intelligence: definitions, references, type errors' },
-    { name: 'Bash', description: 'Run shell commands' },
-    { name: 'PowerShell', description: 'Run PowerShell commands' },
-    { name: 'Monitor', description: 'Run a background command and watch its output' },
-    { name: 'WebFetch', description: 'Fetch a web page' },
-    { name: 'WebSearch', description: 'Search the web' },
-    { name: 'Agent', description: 'Hand a task to a subagent' },
-    { name: 'Workflow', description: 'Run a script that orchestrates many subagents' },
-    { name: 'EnterWorktree', description: 'Work in an isolated git worktree' },
-    { name: '/code-review', description: 'Review a diff or PR for bugs' },
-    { name: '/security-review', description: 'Check changes for security vulnerabilities' },
-    { name: '/simplify', description: 'Clean up changed code and apply the fixes' },
-    { name: '/verify', description: 'Build and run the app to confirm a change works' },
-    { name: '/init', description: 'Write a CLAUDE.md guide for the project' },
-    { name: '/plan', description: 'Plan an approach before changing code' },
-    { name: '/batch', description: 'Split a large change into parallel units' },
-    { name: '/subtask', description: 'Run a task in a background subagent' },
-    { name: '/goal', description: 'Keep working until a condition is met' },
-    { name: '/deep-research', description: 'Research the web and write a cited report' },
-    { name: '/compact', description: 'Summarize the conversation to free context' },
-    { name: '/clear', description: 'Start over with empty context' },
-    { name: '/rewind', description: 'Roll code and conversation back to a checkpoint' },
-  ],
-  // https://developers.openai.com/codex/cli/slash-commands (now learn.chatgpt.com) and the CLI's
-  // source, openai/codex rust-v0.162.1 (read 2026-10-11)
-  codex: [
-    { name: 'exec_command', description: 'Run a shell command' },
-    { name: 'apply_patch', description: 'Create, edit, delete or move files with a patch' },
-    { name: 'view_image', description: 'Look at a local image' },
-    { name: 'web_search', description: 'Search the web' },
-    { name: 'image_gen.imagegen', description: 'Generate or edit images' },
-    { name: 'spawn_agent', description: 'Hand a task to a subagent' },
-    { name: '/review', description: 'Review working-tree changes and report issues' },
-    { name: '/diff', description: 'Show the git diff, untracked files included' },
-    { name: '/init', description: 'Write an AGENTS.md for the project' },
-    { name: '/plan', description: 'Plan before changing code' },
-    { name: '/goal', description: 'Work toward a long-running goal' },
-    { name: '/worktree', description: 'Continue in a new git worktree' },
-    { name: '/fork', description: 'Fork the chat into a new one' },
-    { name: '/compact', description: 'Summarize the conversation to free context' },
-    { name: '/recap', description: 'Summarize the conversation now' },
-    { name: '/new', description: 'Start a new chat' },
-    { name: '/export', description: 'Export the conversation as Markdown' },
-  ],
-};
-
-/** What an adapter's agents can be asked to do: nothing, for an adapter this build doesn't have. */
+/** An adapter's declared actions, or none for an adapter this build lacks. */
 export function actionsOf(adapter: AdapterId): readonly AgentAction[] {
-  return own(AGENT_ACTIONS, adapter) ?? [];
+  return (
+    adapterIn(catalog(), adapter)?.actions.map(({ name, description }) => ({
+      name,
+      description,
+    })) ?? []
+  );
 }

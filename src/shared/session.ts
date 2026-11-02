@@ -459,6 +459,8 @@ export type SessionEvent =
    */
   | {
       type: 'started';
+      /** Whether the adapter delivered this generation’s private MCP entry. */
+      api?: boolean;
       model: string | null;
       /** Null until its native mode is known; the user’s own settings apply meanwhile. */
       mode: SessionMode | null;

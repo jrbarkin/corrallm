@@ -73,6 +73,7 @@ export interface SdkSessionParts {
   places: Places;
   /** What the CLI's settings say it does with a message from another session, if they say. */
   peers?: PeerMessages;
+  apiClose?: () => Promise<void>;
 }
 
 /** The end of what a CLI wrote to stderr: what it said last, when it stops. */
@@ -109,6 +110,7 @@ export class SdkSession implements LiveSession {
   readonly #stderr: Stderr;
   readonly #places: Places;
   readonly #peers: PeerMessages | undefined;
+  readonly #apiClose: (() => Promise<void>) | undefined;
   /** Messages sent whose turn has not ended: the CLI's uuid for each, and the renderer's id. */
   readonly #pending = new Map<string, string>();
   /** The background tasks the turns going on started (task_started while one was pending). */
@@ -129,11 +131,13 @@ export class SdkSession implements LiveSession {
     mode,
     places,
     peers,
+    apiClose,
   }: SdkSessionParts) {
     this.#mode = mode;
     this.#places = places;
     this.#peers = peers;
     this.#query = query;
+    this.#apiClose = apiClose;
     this.#inbox = inbox;
     this.#host = host;
     this.#translator = translator;
@@ -326,6 +330,7 @@ export class SdkSession implements LiveSession {
     } finally {
       this.#closing = true;
       this.#prompts.withdrawAll();
+      await this.#apiClose?.();
     }
   }
 

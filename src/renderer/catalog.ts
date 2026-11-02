@@ -1,4 +1,4 @@
-import { connectionIn } from '../shared/adapter';
+import { adapterIn, connectionIn } from '../shared/adapter';
 import type { AdapterId, Catalog, ConnectionId } from '../shared/adapter';
 
 /*
@@ -37,4 +37,10 @@ export function continuesIn(connection: ConnectionId): ConnectionId | undefined 
 export function isTerminal(connection: ConnectionId): boolean {
   if (connection === 'unavailable') return false;
   return connectionIn(catalog(), connection)?.connection.view === 'terminal';
+}
+
+/** A fixed palette index; an unknown or out-of-range accent uses the first colour. */
+export function adapterAccent(adapter: AdapterId): number {
+  const accent = adapterIn(catalog(), adapter)?.accent;
+  return accent === 1 ? 1 : 0;
 }

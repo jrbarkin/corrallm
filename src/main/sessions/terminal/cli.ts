@@ -122,6 +122,10 @@ export interface TerminalCli<M extends SessionMode> {
    * to corrallm), in a sentence that says what won't work; undefined when it can.
    */
   unheard?(): string | undefined;
+  /** Delivered API entry and a fixed reason when omitted. No credential or native config value. */
+  api?(): { available: boolean; reason?: string };
+  /** One documented startup refusal may retry without the API entry. */
+  retryWithoutApi?(screen: string): Promise<boolean>;
   /** Its command line. */
   args(launch: Launch<M>): string[];
   /**

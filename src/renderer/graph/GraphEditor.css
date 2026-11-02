@@ -855,15 +855,6 @@ input.graph-label {
   background: color-mix(in srgb, var(--group-color) 7%, transparent);
 }
 
-/* Adapter accents retained by the agent window. Cards use catalog logos. */
-[data-agent='claude-code'] {
-  --agent-color: #c15f3c;
-}
-
-[data-agent='codex'] {
-  --agent-color: #0e8a6b;
-}
-
 .graph-agent-chip {
   position: relative;
 }

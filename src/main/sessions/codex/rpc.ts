@@ -221,6 +221,9 @@ export async function startAppServer({
   spawn = spawnProcess,
   closeMs = CLOSE_MS,
 }: AppServerOptions): Promise<AppServer> {
+  const credential = env.CORRALLM_SESSION_TOKEN;
+  const safe = (value: string) =>
+    credential ? value.replaceAll(credential, '[session credential]') : value;
   const child = spawn(codex, ['app-server', ...args], {
     cwd,
     env: { ...env },
@@ -244,15 +247,15 @@ export async function startAppServer({
     },
   );
   createInterface({ input: child.stdout }).on('line', (line) => {
-    peer.receive(line);
+    peer.receive(safe(line));
   });
   const exited = new Promise<{ code: number | null; stderr: string }>((resolve) => {
     const stopped = (code: number | null, error?: Error) => {
-      const said = stderr.trim();
+      const said = safe(stderr.trim());
       peer.close(
         new Error(
           `Codex's app server stopped${code === null ? '' : ` (exit code ${String(code)})`}` +
-            (error ? `: ${error.message}` : said === '' ? '.' : `: ${said}`),
+            (error ? `: ${safe(error.message)}` : said === '' ? '.' : `: ${said}`),
         ),
       );
       resolve({ code, stderr: said });

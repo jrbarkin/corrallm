@@ -320,6 +320,51 @@ describe('the canonical publisher', () => {
     );
   });
 
+  it('publishes the oldest ended prompt’s removal with settlement, keeping all waiting entries in transcript order', async () => {
+    await ok('message', { to: 'b', body: 'Review' });
+    await vi.waitFor(() => {
+      expect(hosts).toHaveLength(1);
+    });
+    const waitingKey = raise(host(), approval);
+    const [waiting] = await owned(1);
+    const ids: string[] = [];
+    let lastKey = '';
+    for (let n = 0; n < 101; n++) {
+      lastKey = raise(host(), approval);
+      const live = await owned(2);
+      const added = live.find(({ id }) => id !== waiting?.id)?.prompt?.id;
+      if (!added) throw new Error('No new prompt');
+      ids.push(added);
+      if (n < 100) host().emit({ type: 'prompt-ended', key: lastKey, reason: 'withdrawn' });
+    }
+    const before = await promptEntries();
+    expect(before).toHaveLength(102);
+    const topic = await follow(SESSION);
+    host().emit({ type: 'prompt-ended', key: lastKey, reason: 'withdrawn' });
+    const expected = before.filter(({ id }) => id !== ids[0]);
+    const after = await promptEntries();
+    expect(after.map(({ id }) => id)).toEqual(expected.map(({ id }) => id));
+    expect(after.filter((entry) => 'outcome' in entry)).toHaveLength(100);
+    expect(after.filter(({ id }) => id !== ids.at(-1))).toEqual(
+      expected.filter(({ id }) => id !== ids.at(-1)),
+    );
+    expect((await owned(1))[0]?.id).toBe(waiting?.id);
+    const read = await core.topics.read(SESSION, YOU);
+    if (!read.ok) throw new Error(read.error.sentence);
+    const state = read.value as { entries: Record<string, EntryView>; order: string[] };
+    expect(
+      state.order.map((id) => state.entries[id]).filter((entry) => entry?.kind === 'prompt'),
+    ).toEqual(after);
+    await vi.waitFor(() => {
+      const updates = topic.flatMap(
+        (update) => (update as { entries?: { order?: string[] } }).entries?.order ?? [],
+      );
+      expect(updates).toEqual(state.order);
+    });
+    expect(state.entries).not.toHaveProperty(ids[0] ?? 'missing');
+    host().emit({ type: 'prompt-ended', key: waitingKey, reason: 'withdrawn' });
+  });
+
   it('cuts a prompt too big for one page and marks it so, its ids whole; the topic gives it whole', async () => {
     const command = `echo ${'x'.repeat(62 * 1024)}`;
     onSend = (given) => {

@@ -1,4 +1,5 @@
 import { ID_PATTERN } from '../shared/adapter';
+import type { AdapterId } from '../shared/adapter';
 import { readWhole, unknownFields, writeWhole } from './whole-file';
 
 /** What the user chose for corrallm as a whole, rather than for one canvas (memory.ts). */
@@ -19,6 +20,12 @@ export interface AppSettings {
    * `settings.get`.
    */
   notifications?: { enabled: boolean };
+  /**
+   * The agent corrallm adds when you add one (B12 C2), or null to be asked each time: yours alone
+   * to set (`settings.set`). Kept as it was saved, even an id this build's catalog lacks, which
+   * the window treats as none. Nothing in the core reads it to create or run an agent.
+   */
+  defaultAdapter: AdapterId | null;
 }
 
 /** A consent only the user gives: whether they gave it for good, and giving it. */
@@ -27,18 +34,30 @@ export interface Consent {
   give(): Promise<void>;
 }
 
+/** Why a setting is as it was: its file couldn't be read, or couldn't be written. */
+export class SettingsFailure extends Error {
+  readonly stage: 'read' | 'write';
+
+  constructor(stage: 'read' | 'write', cause: unknown) {
+    super(`Could not ${stage} the settings.`, { cause });
+    this.name = 'SettingsFailure';
+    this.stage = stage;
+  }
+}
+
 const VERSION = 2;
 
 /**
  * The user's settings for the app, kept between runs in a JSON file in the app's user data:
  *
  *   { "version": 2, "consents": { "<adapter>": { "<key>": true } }, "api"?: { "port" },
- *     "notifications"?: { "enabled" } }
+ *     "notifications"?: { "enabled" }, "defaultAdapter"?: "<id>" }
  *
  * Updates are applied one at a time, in order, and written whole, with what it holds that this
  * corrallm doesn't know (a newer one's fields, of the file and of `api`) written back as it was. A
  * file of another version, or one that isn't JSON, reads as nothing chosen and is set aside
  * (readWhole); one that can't be read fails what needed it, and is read again next time.
+ * `defaultAdapter` is absent for none, and text without an id's shape reads as none.
  */
 export class Settings {
   readonly #file: string;
@@ -106,32 +125,77 @@ export class Settings {
     }
   }
 
+  /** The agent corrallm adds when you add one, or null to be asked each time (B12 C2). */
+  async defaultAdapter(): Promise<AdapterId | null> {
+    return (await this.get()).defaultAdapter;
+  }
+
+  /**
+   * Sets the default agent (B12 C2): written first, then held and told to listeners. True once
+   * written; false when it was already so, writing nothing and telling no one. Rejects with a
+   * SettingsFailure saying which, memory, file and listeners as they were, when the file can't be
+   * read or written; later updates still run. (A consent keeps `#update`'s log-and-continue.)
+   */
+  setDefaultAdapter(id: AdapterId | null): Promise<boolean> {
+    const run = async (): Promise<boolean> => {
+      let current: AppSettings;
+      try {
+        current = await this.#load();
+      } catch (error) {
+        throw new SettingsFailure('read', error);
+      }
+      if (current.defaultAdapter === id) return false;
+      const next: AppSettings = { ...current, defaultAdapter: id };
+      try {
+        await writeWhole(this.#file, this.#text(next));
+      } catch (error) {
+        throw new SettingsFailure('write', error);
+      }
+      this.#settings = Promise.resolve(next);
+      for (const listener of this.#listeners) listener();
+      return true;
+    };
+    const result = this.#writing.then(run);
+    this.#writing = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
+  }
+
   /** Resolves once every update so far is written: before the app quits. */
   flush(): Promise<void> {
     return this.#writing;
+  }
+
+  /** The file's text for `next`, with what this corrallm doesn't know written back as it was. */
+  #text(next: AppSettings): string {
+    const { file, api, notifications } = this.#unknown;
+    const { defaultAdapter, ...kept } = next;
+    const text = JSON.stringify(
+      {
+        version: VERSION,
+        ...file,
+        ...kept,
+        ...(next.api === undefined && Object.keys(api).length === 0
+          ? {}
+          : { api: { ...api, ...next.api } }),
+        ...(next.notifications === undefined && Object.keys(notifications).length === 0
+          ? {}
+          : { notifications: { ...notifications, ...next.notifications } }),
+        ...(defaultAdapter === null ? {} : { defaultAdapter }),
+      },
+      null,
+      2,
+    );
+    return `${text}\n`;
   }
 
   #update(change: (settings: AppSettings) => AppSettings): Promise<void> {
     const run = async () => {
       const next = change(await this.#load());
       this.#settings = Promise.resolve(next);
-      const { file, api, notifications } = this.#unknown;
-      const text = JSON.stringify(
-        {
-          version: VERSION,
-          ...file,
-          ...next,
-          ...(next.api === undefined && Object.keys(api).length === 0
-            ? {}
-            : { api: { ...api, ...next.api } }),
-          ...(next.notifications === undefined && Object.keys(notifications).length === 0
-            ? {}
-            : { notifications: { ...notifications, ...next.notifications } }),
-        },
-        null,
-        2,
-      );
-      await writeWhole(this.#file, `${text}\n`);
+      await writeWhole(this.#file, this.#text(next));
     };
     // A failed write is logged: the setting holds for this run.
     this.#writing = this.#writing
@@ -149,7 +213,13 @@ export class Settings {
     this.#settings ??= readWhole(this.#file, VERSION).then(
       (file) => {
         this.#unknown = {
-          file: unknownFields(file, ['version', 'consents', 'api', 'notifications']),
+          file: unknownFields(file, [
+            'version',
+            'consents',
+            'api',
+            'notifications',
+            'defaultAdapter',
+          ]),
           api: unknownFields(
             file?.api,
             isRecord(file?.api) && isPort(file.api.port) ? ['port'] : [],
@@ -178,9 +248,11 @@ function parse(file: Record<string, unknown> | undefined): AppSettings {
   const consents = isRecord(file?.consents) ? file.consents : {};
   const port = isRecord(file?.api) ? file.api.port : undefined;
   const enabled = isRecord(file?.notifications) ? file.notifications.enabled : undefined;
+  const chosen = file?.defaultAdapter;
   return {
     ...(isPort(port) ? { api: { port } } : {}),
     ...(typeof enabled === 'boolean' ? { notifications: { enabled } } : {}),
+    defaultAdapter: typeof chosen === 'string' && ID_PATTERN.test(chosen) ? chosen : null,
     consents: Object.fromEntries(
       Object.entries(consents).flatMap(([adapter, given]) => {
         if (!ID_PATTERN.test(adapter) || !isRecord(given)) return [];

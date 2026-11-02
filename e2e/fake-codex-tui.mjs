@@ -71,6 +71,29 @@ function hookHash(event, command, timeout) {
   return `sha256:${createHash('sha256').update(JSON.stringify(identity)).digest('hex')}`;
 }
 
+const nativeConfig =
+  [...overrides.keys()].some(
+    (key) => key.startsWith('mcp_servers.') || key.startsWith('shell_environment_policy.'),
+  ) || process.env.FAKE_CODEX_CONFIG
+    ? (await import('../src/main/sessions/codex/fake-config.mjs')).fakeConfig(
+        argv,
+        JSON.parse(process.env.FAKE_CODEX_CONFIG ?? '{}'),
+      )
+    : { config: {}, origins: {} };
+if (argv[0] !== 'app-server') {
+  const entry = nativeConfig.config.mcp_servers?.corrallm;
+  const token = entry && process.env[entry.bearer_token_env_var];
+  if (entry?.enabled !== false && entry?.url && token) {
+    const { connectHttp } = await import('../src/main/sessions/fake-mcp-client.mjs');
+    const api = await connectHttp({ url: entry.url, token });
+    await api.list();
+    if (process.env.FAKE_MCP_TOOL) await api.call(process.env.FAKE_MCP_TOOL, {});
+    process.once('exit', () => {
+      void api.close();
+    });
+  }
+}
+
 if (argv[0] === 'app-server') {
   // Just enough of its app server: hello, then hooks/list and account/rateLimits/read; it ends
   // with its input.
@@ -114,12 +137,13 @@ if (argv[0] === 'app-server') {
       });
     } else if (method === 'config/read') {
       const config = {
+        ...nativeConfig.config,
         model: 'gpt-6.1-sol',
         model_reasoning_effort: 'max',
         approval_policy: null,
         sandbox_mode: null,
       };
-      send({ id, result: { config, origins: {}, layers: null } });
+      send({ id, result: { config, origins: nativeConfig.origins, layers: null } });
     } else if (method === 'hooks/list') {
       const listed = hooks.map(({ key, command, hash }) => ({
         key,

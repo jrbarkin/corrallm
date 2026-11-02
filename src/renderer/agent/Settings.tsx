@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 
-import { connectionIn } from '../../shared/adapter';
+import { adapterIn, connectionIn } from '../../shared/adapter';
 import type { AdapterId, ConnectionId } from '../../shared/adapter';
 import type {
   AgentSettings,
@@ -12,19 +12,6 @@ import { catalog } from '../catalog';
 import { ipcErrorMessage } from '../ipc-error';
 import { ChoiceMenu } from './ChoiceMenu';
 import { modeOf, modesOf } from './modes';
-
-/** How each adapter's CLI is named, and where the user's own defaults come from. */
-const CLI_WORDS: Readonly<Record<AdapterId, { name: string; yours: string; its: string }>> = {
-  'claude-code': {
-    name: 'Claude Code',
-    yours: 'Yours, from Claude Code’s settings',
-    its: 'Claude Code’s choice for your account',
-  },
-  codex: { name: 'Codex', yours: 'Yours, from your Codex config', its: 'Codex’s choice' },
-};
-
-/** Words for an adapter this build has no words for. */
-const SOME_WORDS = { name: 'Its CLI', yours: 'Yours', its: 'Its CLI’s choice' };
 
 /** The menus' key for nothing chosen: the user's own default. */
 const DEFAULT = '';
@@ -93,8 +80,15 @@ export function SettingsMenu({
     };
   }, [adapter]);
 
-  // Its own words only: an adapter a file names may be called `toString` or `constructor`.
-  const words = (Object.hasOwn(CLI_WORDS, adapter) ? CLI_WORDS[adapter] : undefined) ?? SOME_WORDS;
+  const descriptor = adapterIn(catalog(), adapter);
+  const defaultsWords = descriptor?.words.defaults;
+  const words = {
+    name: descriptor?.name ?? adapter,
+    defaults:
+      defaultsWords === undefined || defaultsWords === ''
+        ? 'The agent’s own default'
+        : defaultsWords,
+  };
   const models: readonly ModelChoice[] = read.options?.models ?? [];
   const defaults = read.options?.defaults ?? { model: null, effort: null, mode: null };
   const named = (value: string | null) => models.find((m) => m.value === value);
@@ -205,7 +199,7 @@ export function SettingsMenu({
                 {
                   key: DEFAULT,
                   label: yours(modelName(defaults.model)),
-                  detail: defaults.model === null ? words.its : words.yours,
+                  detail: words.defaults,
                 },
                 ...models.map((m) => ({
                   key: m.value,
@@ -234,7 +228,7 @@ export function SettingsMenu({
                   {
                     key: DEFAULT,
                     label: yours(effortName(defaultEffort)),
-                    detail: defaults.effort === null ? 'The model’s own' : words.yours,
+                    detail: defaults.effort === null ? 'The model’s own' : words.defaults,
                   },
                   ...efforts.map((e) => ({
                     key: e.value,
@@ -260,7 +254,7 @@ export function SettingsMenu({
                 {
                   key: DEFAULT,
                   label: yours(modeName(defaults.mode)),
-                  detail: defaults.mode === null ? words.its : words.yours,
+                  detail: words.defaults,
                 },
                 ...startable.map((m) => {
                   const info = modeOf(adapter, m);
