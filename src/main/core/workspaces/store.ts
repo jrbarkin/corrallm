@@ -290,6 +290,11 @@ export class WorkspaceStore {
     return row === undefined ? undefined : repositoryOf(row);
   }
 
+  /** Every repository kept, by id. */
+  repositories(): RepositoryRecord[] {
+    return this.#store.prepare('SELECT * FROM repository ORDER BY id').all().map(repositoryOf);
+  }
+
   /** The repository found at `realRoot` with `identity`, if it is kept. */
   repositoryAt(realRoot: string, identity: string): RepositoryRecord | undefined {
     const row = this.#store
@@ -349,6 +354,28 @@ export class WorkspaceStore {
         found.generation,
         id,
       );
+    return found;
+  }
+
+  /**
+   * Within a write: the repository's identity, `from`, rewritten as `to` (its generation moves on),
+   * with every job of its workspaces expecting `from`, so a record kept in an older form is
+   * compared in it once (discovery.ts' `upgradeIdentities`). Stale unless it holds `from`.
+   */
+  reidentify(id: string, from: string, to: string): RepositoryRecord {
+    const kept = this.repository(id);
+    if (kept === undefined) throw notFound('repository', id);
+    if (kept.identity !== from) {
+      throw new WorkspaceStoreError('stale', `The repository ${id} isn’t kept by that identity.`);
+    }
+    const found = this.rediscovered(id, { identity: to });
+    this.#store
+      .prepare(
+        `UPDATE worktree_job SET expected_identity = ?
+         WHERE expected_identity = ?
+           AND workspace_id IN (SELECT id FROM worktree WHERE repository_id = ?)`,
+      )
+      .run(to, from, id);
     return found;
   }
 
