@@ -9,7 +9,7 @@ import {
 } from 'node:fs';
 import path from 'node:path';
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { SAFE_GIT_OPTIONS } from '../../git';
 import { Children } from '../children';
@@ -24,22 +24,34 @@ import {
   ran,
   scratch,
   sentinelProgram,
+  templateRepository,
 } from './test-git';
+import type { RepositoryTemplate } from './test-git';
 
 /*
  * The one runner every workspace Git call goes through (B9a Design §2, Git execution boundary):
  * fixed options that keep a repository's programs from running, a scrubbed environment, Git found
  * only on the PATH's absolute folders, bounded time and output, each git a child the core owns.
- * Real Git runs in throwaway repositories; a stand-in git only where real Git can't be made to
- * hang, print too much or be too old.
+ * Real Git runs in throwaway repositories (a test's plain one a copy of one made once); a
+ * stand-in git only where real Git can't be made to hang, print too much or be too old.
  */
 
+// Real Git, a repository or two each: slower under load, or on Linux CI's emulated x64.
+vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 });
+
+let template: RepositoryTemplate<string>;
 let root: string;
 let remove: () => void;
 let home: string;
 let hooks: string;
 let env: Record<string, string>;
 
+beforeAll(async () => {
+  template = await templateRepository();
+});
+afterAll(() => {
+  template.remove();
+});
 beforeEach(() => {
   ({ root, remove } = scratch());
   home = path.join(root, 'home');
@@ -197,7 +209,7 @@ describe.skipIf(process.platform === 'win32')('GitRunner', () => {
     const program = sentinelProgram(root, sentinel);
     const here = path.join(root, 'here');
     const elsewhere = path.join(root, 'elsewhere');
-    const oid = makeRepository(here, env);
+    const oid = template.copy(here, env);
     makeRepository(elsewhere, env, { 'other.md': 'other\n' });
     const evil = path.join(root, 'evil-hooks');
     mkdirSync(evil);
@@ -228,7 +240,7 @@ describe.skipIf(process.platform === 'win32')('GitRunner', () => {
     const sentinel = path.join(root, 'ran');
     const program = sentinelProgram(root, sentinel);
     const here = path.join(root, 'here');
-    const oid = makeRepository(here, env);
+    const oid = template.copy(here, env);
     const hook = `#!/bin/sh\n'${program}' "$@"\n`;
     for (const name of ['reference-transaction', 'post-index-change', 'post-checkout']) {
       writeFileSync(path.join(here, '.git', 'hooks', name), hook, { mode: 0o755 });
@@ -250,7 +262,7 @@ describe.skipIf(process.platform === 'win32')('GitRunner', () => {
   it('uses no transport, whatever protocols the repository allows', async () => {
     const sentinel = path.join(root, 'ran');
     const here = path.join(root, 'here');
-    makeRepository(here, env);
+    template.copy(here, env);
     // protocol.<name>.allow outranks protocol.allow, whichever configuration sets either.
     git(here, env, 'config', 'protocol.ext.allow', 'always');
     git(here, env, 'config', 'protocol.file.allow', 'always');
@@ -306,7 +318,7 @@ describe.skipIf(process.platform === 'win32')('GitRunner', () => {
 
   it('refuses to run while its hooks folder holds anything, or isn’t a folder of its own', async () => {
     const here = path.join(root, 'here');
-    makeRepository(here, env);
+    template.copy(here, env);
     const git2 = runner();
     await git2.run({ cwd: here, args: ['status'] });
     writeFileSync(path.join(hooks, 'post-checkout'), '#!/bin/sh\n', { mode: 0o755 });
@@ -321,7 +333,7 @@ describe.skipIf(process.platform === 'win32')('GitRunner', () => {
   it('finds git only in the PATH’s absolute folders, never one a repository plants', async () => {
     const sentinel = path.join(root, 'ran');
     const here = path.join(root, 'here');
-    makeRepository(here, env);
+    template.copy(here, env);
     writeFileSync(path.join(here, 'git'), `#!/bin/sh\necho planted >> '${sentinel}'\n`, {
       mode: 0o755,
     });
@@ -345,7 +357,7 @@ describe.skipIf(process.platform === 'win32')('GitRunner', () => {
 
   it('answers with the exit codes a call expects, and fails others with Git’s words, bounded', async () => {
     const here = path.join(root, 'here');
-    makeRepository(here, env);
+    template.copy(here, env);
     const git2 = runner();
     const none = await git2.run({
       cwd: here,
@@ -428,7 +440,7 @@ describe.skipIf(process.platform === 'win32')('GitRunner', () => {
   describe('inspect', () => {
     it('names every filter driver configured where the call runs, conditional includes as they apply there', async () => {
       const here = path.join(root, 'here');
-      makeRepository(here, env);
+      template.copy(here, env);
       git(here, env, 'config', 'filter.lfs.process', 'git-lfs filter-process');
       git(here, env, 'config', 'filter.lfs.required', 'true');
       git(here, env, 'config', 'filter.Other.Name.smudge', 'other');
@@ -447,7 +459,7 @@ describe.skipIf(process.platform === 'win32')('GitRunner', () => {
 
     it('says what it can’t neutralize: a driver -c can’t name, a redirected checkout, configured hooks', async () => {
       const here = path.join(root, 'here');
-      makeRepository(here, env);
+      template.copy(here, env);
       git(here, env, 'config', 'filter.x=y.clean', 'evil');
       git(here, env, 'config', 'core.worktree', '/elsewhere');
       git(here, env, 'config', 'hook.audit.command', 'evil');
@@ -496,7 +508,7 @@ describe.skipIf(process.platform === 'win32')('GitRunner', () => {
       const sentinel = path.join(root, 'ran');
       const program = sentinelProgram(root, sentinel);
       const here = path.join(root, 'here');
-      makeRepository(here, env);
+      template.copy(here, env);
       // A commit carrying a signature header, as a signed one does (it needn't be valid).
       const tree = git(here, env, 'rev-parse', 'HEAD^{tree}').trim();
       const parent = git(here, env, 'rev-parse', 'HEAD').trim();
@@ -579,7 +591,7 @@ describe.skipIf(process.platform === 'win32')('GitRunner', () => {
       const sub = path.join(root, 'sub');
       makeRepository(sub, env, { '.gitattributes': '*.txt filter=inner\n', 's.txt': 'aaa\n' });
       const here = path.join(root, 'here');
-      makeRepository(here, env);
+      template.copy(here, env);
       git(here, env, '-c', 'protocol.file.allow=always', 'submodule', 'add', '-q', sub, 'sub');
       // A committed .gitmodules can ask for a submodule's changes to be looked at in full.
       git(here, env, 'config', '-f', '.gitmodules', 'submodule.sub.ignore', 'none');
