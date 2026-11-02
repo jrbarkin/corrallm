@@ -4,9 +4,9 @@ import type { PartyId } from './messages';
 import type { NeedChoice, NeedQuestion, NeedsItem } from './needs';
 import { detailOf, previewLines } from './needs-selectors';
 import type { CoreChoice, Prompt, PromptNeedView } from './prompts';
-import type { Entry } from './session';
+import type { Entry, OpenPromptEntry, SettledPromptEntry } from './session';
 import type { EntryView } from './views';
-import { mcpRequestTitle } from './words';
+import { mcpRequestTitle, mcpToolTitle } from './words';
 
 /*
  * What each reader sees of a prompt (B13 Design §9.2 C11): the one selector every read boundary
@@ -83,7 +83,8 @@ export function undescribed(prompt: Prompt, standIn: boolean): boolean {
 export function promptNeed(occurrence: PromptOccurrence, reader: PromptReader): NeedsItem {
   const { prompt } = occurrence;
   const yours = reader === 'you';
-  const shown = !undescribed(prompt, occurrence.standIn) || yours;
+  // A terminal's screen, and an MCP server's words for its tool, are yours alone.
+  const shown = yours || (!undescribed(prompt, occurrence.standIn) && toolOf(prompt) === undefined);
   const base: NeedsItem = {
     id: occurrence.need,
     canvas: occurrence.canvas,
@@ -92,7 +93,7 @@ export function promptNeed(occurrence: PromptOccurrence, reader: PromptReader): 
     for: 'you',
     by: ['you'],
     answerIn: prompt.answerIn,
-    title: needTitle(occurrence),
+    title: needTitle(occurrence, reader),
     choices: yours ? choicesOf(occurrence) : [],
     prompt: needView(occurrence, reader),
   };
@@ -115,11 +116,11 @@ export function promptNeed(occurrence: PromptOccurrence, reader: PromptReader): 
 
 /**
  * A prompt whole, as `reader` sees it: what the agent window's card shows, from the agent's
- * session topic and transcript once B13 C9 places it there. You: every field, with each choice as
- * Needs offers it (Not waiting where offered). A token: no choice, no form's schema, link or words
- * (the core's title alone), no terminal's screen; its plan and subject whole.
+ * session topic and transcript, where B13 C9 places it (`entryFor`). You: every field, with each
+ * choice as Needs offers it (Not waiting where offered). A token: no choice, no form's schema,
+ * link or words (the core's title alone), no terminal's screen; its plan and subject whole.
  */
-export function promptFor(occurrence: PromptOccurrence, reader: PromptReader): PromptView {
+export function promptFor(occurrence: SeenOccurrence, reader: PromptReader): PromptView {
   const { prompt } = occurrence;
   if (reader === 'you') return { ...prompt, choices: choicesOf(occurrence) };
   if (prompt.kind === 'form') {
@@ -128,7 +129,7 @@ export function promptFor(occurrence: PromptOccurrence, reader: PromptReader): P
       agent: prompt.agent,
       raised: prompt.raised,
       kind: 'form',
-      title: needTitle(occurrence),
+      title: needTitle(occurrence, reader),
       answerIn: prompt.answerIn,
       ...(prompt.cut === true ? { cut: true } : {}),
       ...(prompt.humanOnly === undefined ? {} : { humanOnly: prompt.humanOnly }),
@@ -137,8 +138,82 @@ export function promptFor(occurrence: PromptOccurrence, reader: PromptReader): P
   }
   const seen = { ...prompt, choices: [] };
   if (undescribed(prompt, occurrence.standIn)) delete seen.detail;
+  if (seen.kind === 'approval' && toolOf(prompt) !== undefined) {
+    // An MCP server's tool: in the core's words, as a form is; its subject (the tool and its
+    // input) whole.
+    seen.title = needTitle(occurrence, reader);
+    delete seen.summary;
+    delete seen.reason;
+    delete seen.detail;
+  }
   return seen;
 }
+
+/** What `promptFor` and `settledPrompt` read of an occurrence: not its canvas. */
+export type SeenOccurrence = Omit<PromptOccurrence, 'canvas'>;
+
+/**
+ * What stays of a prompt once it ends (B13 C9), as `reader` sees it: its id, kind, agent, when it
+ * was raised, where it was answered, its Needs title as the reader reads it (a form's in the core's
+ * words for everyone, an MCP server's tool's for a token) and whether it was cut. Nothing of a
+ * command, plan, question, form, screen or choice: what was decided is its live outcome's, and
+ * B19's records' after that.
+ */
+export function settledPrompt(occurrence: SeenOccurrence, reader: PromptReader): SettledPromptView {
+  const { prompt } = occurrence;
+  return {
+    id: prompt.id,
+    kind: prompt.kind,
+    agent: prompt.agent,
+    raised: prompt.raised,
+    answerIn: prompt.answerIn,
+    title: needTitle(occurrence, reader),
+    ...(prompt.cut === true ? { cut: true } : {}),
+  };
+}
+
+/** A prompt in short, once it ended (settledPrompt). */
+export interface SettledPromptView {
+  readonly id: Prompt['id'];
+  readonly kind: Prompt['kind'];
+  readonly agent: string;
+  readonly raised: number;
+  readonly answerIn: Prompt['answerIn'];
+  readonly title: string;
+  readonly cut?: true;
+}
+
+/**
+ * A prompt the core's owner holds as an entry of its agent's transcript reads (B13 C9): while it
+ * waits, the prompt whole as the reader sees it; once it ended, in short, with how it ended as the
+ * reader sees that. `cut`: a page cut it to fit (the whole is on the session topic, for you).
+ */
+export type PromptEntryView =
+  | { id: string; kind: 'prompt'; need: string; prompt: PromptView; cut?: true }
+  | {
+      id: string;
+      kind: 'prompt';
+      need: string;
+      prompt: SettledPromptView;
+      outcome: LiveOutcome;
+      cut?: true;
+    };
+
+/**
+ * What the core's prompt owner places in an agent's transcript (B13 C9): a prompt as it is raised,
+ * by its PromptId; or how it ended, settled in place.
+ */
+export type PromptEntryChange =
+  | { type: 'raised'; entry: OpenPromptEntry }
+  | {
+      type: 'ended';
+      id: string;
+      /** Yours. */
+      prompt: SettledPromptView;
+      /** The title a token reads instead, where it reads another (an MCP server's tool). */
+      tokenTitle?: string;
+      outcome: LiveOutcome;
+    };
 
 /** A prompt whole, as a reader sees it (promptFor). */
 export type PromptView =
@@ -187,7 +262,13 @@ export function needFor(item: NeedsItem, reader: PromptReader): NeedsItem {
   const seen: NeedsItem = { ...item, choices: [] };
   delete seen.text;
   delete seen.form;
-  if (seen.prompt?.kind === 'form') {
+  const subject = seen.prompt?.kind === 'approval' ? seen.prompt.subject : undefined;
+  if (subject?.type === 'mcpTool') {
+    // An MCP server's tool, in the core's words (B13 C9): as `promptNeed` gives a token.
+    seen.title = mcpToolTitle(subject.server, subject.tool);
+    delete seen.detail;
+  }
+  if (seen.prompt !== undefined && (seen.prompt.kind === 'form' || subject?.type === 'mcpTool')) {
     const view = { ...seen.prompt };
     delete view.summary;
     delete view.reason;
@@ -220,6 +301,9 @@ export function entryFor(entry: Entry, reader: PromptReader): EntryView {
       delete seen.always;
       delete seen.answer;
       delete seen.feedback;
+      // What it asks in its CLI's words (an MCP server's own, for its tool) is yours alone: a
+      // token reads its tool and summary (B13 C9).
+      delete seen.title;
       return seen;
     }
     case 'question':
@@ -247,17 +331,56 @@ export function entryFor(entry: Entry, reader: PromptReader): EntryView {
       delete seen.answer;
       return seen;
     }
+    case 'prompt':
+      return promptEntryFor(entry, reader);
     default:
       return entry;
   }
 }
 
 /**
- * A prompt's title in Needs, for every reader: its own, but a form's, which is the core's words
- * (the MCP server that asks, by the name it is configured under, else its agent's CLI, asks you to
- * fill in a form or to open a link).
+ * A prompt the core's owner holds, as an entry of its agent's transcript, as `reader` sees it (B13
+ * C9 through C11's selector): while it waits, `promptFor`'s; once it ended, in short, with how it
+ * ended as `outcomeFor` gives it. Never its agent's name as raised, nor whether it is a stand-in:
+ * those are what the core words it from.
  */
-function needTitle({ prompt, name }: PromptOccurrence): string {
+export function promptEntryFor(
+  entry: OpenPromptEntry | SettledPromptEntry,
+  reader: PromptReader,
+): PromptEntryView {
+  const { id, need } = entry;
+  if (entry.outcome === undefined) {
+    return {
+      id,
+      kind: 'prompt',
+      need,
+      prompt: promptFor(
+        { need, prompt: entry.prompt, name: entry.name, standIn: entry.standIn === true },
+        reader,
+      ),
+    };
+  }
+  return {
+    id,
+    kind: 'prompt',
+    need,
+    prompt:
+      reader === 'token' && entry.tokenTitle !== undefined
+        ? { ...entry.prompt, title: entry.tokenTitle }
+        : entry.prompt,
+    outcome: outcomeFor(entry.outcome, reader),
+  };
+}
+
+/**
+ * A prompt's title, as `reader` reads it: its own, but a form's, which is the core's words for
+ * everyone (the MCP server that asks, by the name it is configured under, else its agent's CLI,
+ * asks you to fill in a form or to open a link); and an approval to use an MCP server's tool,
+ * which a token reads in the core's words (B13 C9), never the server's own.
+ */
+function needTitle({ prompt, name }: SeenOccurrence, reader: PromptReader): string {
+  const tool = toolOf(prompt);
+  if (tool !== undefined && reader === 'token') return mcpToolTitle(tool.server, tool.tool);
   if (prompt.kind !== 'form') return prompt.title;
   const link = 'url' in prompt.form;
   return prompt.server === undefined
@@ -266,11 +389,22 @@ function needTitle({ prompt, name }: PromptOccurrence): string {
 }
 
 /**
- * A prompt's own fields beyond the generic ones, as `reader` sees them: a token's form has no
- * summary or reason; a plan is given as its first MAX_DETAIL_LINES lines.
+ * The MCP server's tool an approval asks to use (its `mcpTool` subject: every adapter raises an
+ * MCP server's tool so), whose words for it are the server's own; none for any other prompt.
+ */
+function toolOf(prompt: Prompt): { server: string; tool: string } | undefined {
+  return prompt.kind === 'approval' && prompt.subject?.type === 'mcpTool'
+    ? { server: prompt.subject.server, tool: prompt.subject.tool }
+    : undefined;
+}
+
+/**
+ * A prompt's own fields beyond the generic ones, as `reader` sees them: a token's form, or approval
+ * of an MCP server's tool, has no summary or reason; a plan is given as its first MAX_DETAIL_LINES
+ * lines.
  */
 function needView({ prompt }: PromptOccurrence, reader: PromptReader): PromptNeedView {
-  const words = prompt.kind !== 'form' || reader === 'you';
+  const words = reader === 'you' || (prompt.kind !== 'form' && toolOf(prompt) === undefined);
   const envelope = {
     id: prompt.id,
     raised: prompt.raised,
@@ -308,7 +442,7 @@ function needView({ prompt }: PromptOccurrence, reader: PromptReader): PromptNee
  * may pick it (every one of a prompt only you may answer, for the router's check too), then the
  * core's own Not waiting where it is offered.
  */
-function choicesOf({ prompt, standIn }: PromptOccurrence): NeedChoice[] {
+function choicesOf({ prompt, standIn }: SeenOccurrence): NeedChoice[] {
   const own = undescribed(prompt, standIn) ? [NOT_WAITING_CHOICE] : [];
   if (prompt.kind !== 'approval' && prompt.kind !== 'plan') return own;
   return [

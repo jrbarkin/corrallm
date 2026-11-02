@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { answersOf, NEW_SESSION, sessionQuestions } from '../../../../shared/model/session';
+import { Prompt, PromptId } from '../../../../shared/model/prompts';
 import type { Entry, Session } from '../../../../shared/model/session';
 import { reduce } from './reduce';
 
@@ -189,5 +190,52 @@ describe('reduce, for connected sessions', () => {
     expect(cleared.tasks ?? []).toEqual([]);
     expect(cleared.suggestion).toBeUndefined();
     expect(cleared.usage).toBeUndefined();
+  });
+
+  it('keeps a prompt the core’s owner holds open across another conversation; one settled goes (B13 C9)', () => {
+    const id = '0f1e2d3c-4b5a-4968-8776-655443322110';
+    const waits: Entry = {
+      id,
+      kind: 'prompt',
+      need: `prompt/b/3/${id}`,
+      name: 'Reviewer',
+      prompt: Prompt.parse({
+        id,
+        agent: 'b',
+        raised: 1,
+        kind: 'approval',
+        title: 'Run it?',
+        answerIn: 'terminal',
+        choices: [],
+      }),
+    };
+    const other = '1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d';
+    const settled: Entry = {
+      id: other,
+      kind: 'prompt',
+      need: `prompt/b/3/${other}`,
+      prompt: {
+        id: PromptId.parse(other),
+        kind: 'approval',
+        agent: 'b',
+        raised: 1,
+        answerIn: 'api',
+        title: 'Run?',
+      },
+      outcome: { type: 'withdrawn' },
+    };
+    let s = reduce(started, { type: 'add', entry: settled });
+    s = reduce(s, { type: 'add', entry: waits });
+    s = reduce(s, { type: 'add', entry: { id: 't', kind: 'text', text: 'More' } });
+    expect(reduce(s, { type: 'clear' }).entries).toEqual([waits]);
+    // A turn's end leaves it as the owner holds it: only the owner ends it.
+    expect(
+      reduce(s, {
+        type: 'end',
+        id: 'e',
+        seconds: 1,
+        result: { status: 'cancelled', reason: 'interrupted' },
+      }).entries,
+    ).toContainEqual(waits);
   });
 });

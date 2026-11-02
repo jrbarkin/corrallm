@@ -44,7 +44,7 @@ export function conversationOps(
     const id = open.document.id;
     const reader = promptReaderOf(ctx.caller);
     const items = [
-      ...needs(needsInput(open, locale)).map((item) => needFor(item, reader)),
+      ...needs(needsInput(open, locale), reader).map((item) => needFor(item, reader)),
       ...(services.prompts?.items(id, reader) ?? []),
       ...[
         ...proposals.items(id, ctx.caller.kind === 'human' ? undefined : reach),
@@ -83,7 +83,8 @@ export function conversationOps(
             state: stateOf(open, id),
             prompts: promptsOf(open, id),
             linked: reach.filter((other) => other !== id && areLinked(document.links, id, other)),
-            api: false,
+            // Observed, never claimed: its session's generation listed corrallm's tools.
+            api: services.listed?.(document.id, id) === true,
             fallback: fallbackOf(open, id),
             handoff: handoffOf(open, id),
           };
@@ -223,13 +224,21 @@ function failed(error: unknown): never {
   throw error;
 }
 
-/** How an agent is now: waiting for you, working, limited by usage, paused, or idle. */
+/**
+ * How an agent is now: waiting for you (by its session's word, or on a prompt the core's owner
+ * holds: B13 C9), working, limited by usage, paused, or idle.
+ */
 export function stateOf(
-  { engine, delivery }: OpenCanvas,
+  { engine, delivery, waitingOn }: OpenCanvas,
   id: string,
 ): (typeof AGENT_STATES)[number] {
   const session = engine.sessions.of(id);
-  if (session.status === 'waiting' || (session.asking?.length ?? 0) > 0) return 'waiting';
+  if (
+    session.status === 'waiting' ||
+    (session.asking?.length ?? 0) > 0 ||
+    waitingOn?.(id) !== undefined
+  )
+    return 'waiting';
   if (session.status === 'working') return 'working';
   if (delivery.limited().some(({ agent }) => agent === id)) return 'limited';
   return engine.run.snapshot().agents[id]?.paused ? 'paused' : 'idle';

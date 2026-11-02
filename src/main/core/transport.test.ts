@@ -11,7 +11,8 @@ import { callTool, startApiServer } from '../api/mcp';
 import type { ApiServer } from '../api/mcp';
 import { createDispatcher } from './call';
 import type { Dispatcher } from './call';
-import type { TokenCaller } from './caller';
+import { agentChannel } from './agent-api';
+import type { AgentCaller, TokenCaller } from './caller';
 import { WindowPorts } from './gui';
 import {
   CALLERS,
@@ -31,8 +32,8 @@ import { transportCases } from './test-transport';
  * calls) and dispatch (what the call answers); every op's fixtures are called through each
  * transport's dispatch half with the same synthetic caller (you, then each party), and must answer
  * byte for byte as core.call does directly. MCP is also driven end to end, over HTTP, for every
- * caller a token can be, and a window's port (core/gui.ts) for you, whose window it is. B21 adds the
- * Agent SDK's in-process server and Codex's dynamic tools.
+ * caller a token can be, a window's port (core/gui.ts) for you, whose window it is, and an agent
+ * session's in-process channel (agent-api.ts, B21) for each agent caller.
  */
 
 const TOKENS: Readonly<Partial<Record<Party, string>>> = {
@@ -132,6 +133,29 @@ describe.each(REGISTRIES)('T3a on %s', (_label, fixtures, world, start) => {
         const direct = await setup.core.call(name, args, CALLERS[party]);
         const mcp = unwrap(await callTool(setup.core, CALLERS[party], toolName(name), args));
         expect(JSON.stringify(mcp), `${party}: ${JSON.stringify(args)}`).toBe(
+          JSON.stringify(direct),
+        );
+      }
+    },
+    // Branch parity includes repeated, uncached reads through real Git.
+    30_000,
+  );
+
+  it.each(Object.entries(fixtures))(
+    'answers %s through an agent’s in-process channel as directly, for every agent caller',
+    async (name, fixture) => {
+      for (const { party, args } of transportCases(setup.core, name, fixture, world, [
+        'lead',
+        'worker',
+      ])) {
+        const caller = CALLERS[party] as AgentCaller;
+        const channel = agentChannel(() => setup.core, caller, {
+          current: () => true,
+          listed: () => undefined,
+        });
+        const direct = await setup.core.call(name, args, caller);
+        const result = await channel.call(toolName(name), args, new AbortController().signal);
+        expect(JSON.stringify(unwrap(result)), `${party}: ${JSON.stringify(args)}`).toBe(
           JSON.stringify(direct),
         );
       }

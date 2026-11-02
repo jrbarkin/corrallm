@@ -6,6 +6,7 @@ import type { NeedsItem } from '../../shared/model/needs';
 import { isOpen } from '../../shared/model/session';
 import type { Prompt } from '../../shared/model/session';
 import type { PromptAnswer, PromptReplyAnswer } from '../../shared/model/prompts';
+import { needFor } from '../../shared/model/prompt-views';
 import type { PromptReader } from '../../shared/model/prompt-views';
 import { MAX_CANVAS_PROMPTS } from '../../shared/api/limits';
 import type { SessionAnswer } from '../../shared/session';
@@ -447,6 +448,16 @@ export function runReplies({
   const prompts: ReplyHandler = {
     prefixes: ['prompt'],
     current: (canvas, to) => owner?.current(canvas, to) ?? legacy.current(canvas, to),
+    // One of the events B13 replaces, as `reader` words it (B13 C9); the owner's are `needFor`'s.
+    seen: (canvas, item, reader) => {
+      if (owner?.owns(canvas, item.id) === true) return undefined;
+      const open = engines.canvas(canvas);
+      const found =
+        open === undefined
+          ? undefined
+          : needs(needsInput(open, locale), reader).find(({ id }) => id === item.id);
+      return found === undefined ? undefined : needFor(found, reader);
+    },
     gone: (canvas, to, reader) =>
       owner?.settled(canvas, to, reader) ?? legacy.gone?.(canvas, to, reader),
     fits: (item, answer) =>

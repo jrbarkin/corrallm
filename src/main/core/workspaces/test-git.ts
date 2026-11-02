@@ -1,6 +1,7 @@
 import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
+  cpSync,
   existsSync,
   lstatSync,
   mkdirSync,
@@ -71,6 +72,62 @@ export function makeRepository(
   git(at, env, 'add', '-A');
   commit(at, env, 'first');
   return git(at, env, 'rev-parse', 'HEAD').trim();
+}
+
+/**
+ * A repository made once for a describe's (or a file's) tests, each test given a copy of its own:
+ * the folder copied instead of the git runs that made it. What a test writes in its copy never
+ * reaches the template or another test's copy. A copy keeps every object, ref, file, mode and
+ * time, so its commits are the template's; its index is refreshed for the copy's own files (new
+ * inodes), as Git would have written it there. Programs a test configures (sentinels) belong in
+ * its copy, after copying, so that what records a run is the test's own.
+ */
+export interface RepositoryTemplate<T> {
+  /** What making it answered (its commits, say): each copy's too. */
+  readonly made: T;
+  /**
+   * A copy at `at` (which must not exist yet, or be an empty folder: a submodule's in a checkout,
+   * say), its index refreshed with the test's `env`.
+   */
+  copy(at: string, env: Record<string, string>): T;
+  /** Deletes the template: an afterAll's. */
+  remove(): void;
+}
+
+/**
+ * Makes a template with `make`: in a throwaway folder (`root`) of its own, the repository at
+ * `at`, with git's `env` of its own home.
+ */
+export async function repositoryTemplate<T>(
+  make: (at: string, env: Record<string, string>, root: string) => T | Promise<T>,
+): Promise<RepositoryTemplate<T>> {
+  const { root, remove } = scratch('corrallm-template-');
+  try {
+    const env = gitEnvironment(path.join(root, 'home'));
+    const at = path.join(root, 'repository');
+    const made = await make(at, env, root);
+    return {
+      made,
+      copy: (to, testEnv) => {
+        if (existsSync(to) && readdirSync(to).length > 0) throw new Error(`${to} isn’t empty.`);
+        cpSync(at, to, { recursive: true, preserveTimestamps: true, verbatimSymlinks: true });
+        git(to, testEnv, 'update-index', '-q', '--refresh');
+        return made;
+      },
+      remove,
+    };
+  } catch (error) {
+    remove();
+    throw error;
+  }
+}
+
+/** `makeRepository`'s repository (its files committed once) as a template: its commit. */
+export function templateRepository(
+  files: Record<string, string> = { 'README.md': 'hello\n' },
+  init: readonly string[] = [],
+): Promise<RepositoryTemplate<string>> {
+  return repositoryTemplate((at, env) => makeRepository(at, env, files, init));
 }
 
 /** Commits what is staged, as a test author. */

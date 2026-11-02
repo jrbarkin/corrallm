@@ -575,18 +575,24 @@ describe('a Terminal session', () => {
   });
 
   it('pauses Claude Code while its screen copy is behind, so a flood of output never overflows it', async () => {
-    // xterm.js throws away writes (throwing in main) once more than 5e7 characters are pending.
+    // xterm.js throws away writes (throwing in main) once more than 5e7 characters are pending:
+    // 60 MiB unpaused once did (24146f23). The screen copy pauses the CLI once it is a million
+    // behind, so whatever the CLI prints, the copy has at most that and one read pending. Eight
+    // reads of a MiB show that bound as the 60 did: each read past the mark pauses the CLI before
+    // the next, which it holds until the copy has caught up.
     await start();
     await until(() => {
       expect(claude().written).toContain('\x1b]7501;?\x1b\\');
     });
     const chunk = 'x'.repeat(1 << 20);
-    for (let i = 0; i < 60; i += 1) claude().print(chunk);
-    expect(claude().pauses).toBeGreaterThan(0);
+    for (let i = 0; i < 8; i += 1) claude().print(chunk);
+    expect(claude().pauses).toBe(1);
+    expect(claude().held).toBe(7 * chunk.length);
     await until(() => {
       expect(claude().drained).toBe(true);
-    }, 30_000);
-  }, 60_000);
+    }, 10_000);
+    expect(claude().pauses).toBe(8);
+  }, 15_000);
 
   it('resumes the session it had; one with no transcript starts afresh under its id', async () => {
     const kept = '0b3a7d52-6a0c-4f39-9c4e-2f8f0c1d9e11';

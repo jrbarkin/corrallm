@@ -115,6 +115,38 @@ describe('silent turns', () => {
     expect(warning).toHaveBeenCalledOnce();
   });
 
+  it('never flags a turn while the core’s prompt owner holds a prompt of its agent’s, and counts silence from its end (B13 C9)', async () => {
+    watchdog.close();
+    let waits = false;
+    watchdog = new StalledTurns({
+      catalog: CATALOG,
+      warning,
+      changed,
+      network,
+      // What the core's prompt owner says: one of its prompts waits, whatever its session says.
+      waiting: (canvas, agent) => waits && canvas === CANVAS && agent === AGENT,
+    });
+    start();
+    waits = true;
+    await vi.advanceTimersByTimeAsync(STALL_MS * 3);
+    watchdog.resume();
+    await vi.advanceTimersByTimeAsync(STALL_MS);
+    expect(warning).not.toHaveBeenCalled();
+    expect(watchdog.items(CANVAS)).toEqual([]);
+    // It ended (answered, withdrawn or said not to be waiting) with nothing more from the CLI:
+    // silence counts from then, never from before the wait.
+    waits = false;
+    await vi.advanceTimersByTimeAsync(STALL_MS - 2 * WATCH_EVERY_MS);
+    expect(warning).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(2 * WATCH_EVERY_MS);
+    expect(warning).toHaveBeenCalledOnce();
+    expect(watchdog.items(CANVAS)).toHaveLength(1);
+    // A stalled turn whose agent is asked something again is waiting, not stalled.
+    waits = true;
+    await vi.advanceTimersByTimeAsync(WATCH_EVERY_MS);
+    expect(watchdog.items(CANVAS)).toEqual([]);
+  });
+
   it('keeps waiting until every prompt closes, despite unrelated activity', async () => {
     start();
     watchdog.event(CANVAS, AGENT, 'codex.app-server', { type: 'plan', id: 'one', plan: 'Plan' });

@@ -122,6 +122,7 @@ describe.skipIf(process.platform === 'win32')(
       if (args !== undefined) git(...SAFE_GIT_OPTIONS, ...args);
       expect(existsSync(sentinel)).toBe(false);
       expect(args).toBeUndefined();
-    });
+      // Real Git spawns: several times slower on a loaded machine, past vitest's default 5 s.
+    }, 30_000);
   },
 );

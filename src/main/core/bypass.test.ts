@@ -159,6 +159,8 @@ async function start(): Promise<Core> {
       // Each call a second after the last: no token's writes are limited here.
       limitsClock: () => (clock += 1000),
       sessions: {
+        // Its agent callers are made up: no session authority issued them.
+        callers: () => true,
         connectors: { 'codex.app-server': new FakeConnector({ adapter: 'codex' }) },
         environment: () => Promise.resolve({}),
       },
@@ -2094,6 +2096,8 @@ describe('workspace-safety and the worktree list, over real worktrees', () => {
         leads: isLead,
         limitsClock: () => (clock += 1000),
         sessions: {
+          // Its agent callers are made up: no session authority issued them.
+          callers: () => true,
           connectors: { 'codex.app-server': new FakeConnector({ adapter: 'codex' }) },
           environment: () => Promise.resolve(made.env),
         },

@@ -290,6 +290,9 @@ function EntryView({
               : `Worked for ${String(entry.seconds)}s`}
         </p>
       );
+    case 'prompt':
+      // A prompt the core's owner holds is B13 X10's one prompt card: the display holds none yet.
+      return null;
   }
 }
 

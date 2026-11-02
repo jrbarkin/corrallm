@@ -122,6 +122,8 @@ beforeEach(async () => {
     },
     watchdogNetwork: () => ({}),
     sessions: {
+      // Its agent callers are made up: no session authority issued them.
+      callers: () => true,
       connectors: { 'codex.app-server': connector },
       environment: () => Promise.resolve({}),
     },
@@ -705,7 +707,13 @@ it('keeps a core queue retry going after its window leaves', async () => {
 });
 
 it('resends an agent party’s message back to that party under its new id', async () => {
-  const original = await send({ kind: 'agent', canvas: CANVAS, agent: 'b', session: 'peer' });
+  const original = await send({
+    kind: 'agent',
+    canvas: CANVAS,
+    agent: 'b',
+    generation: 1,
+    session: 'peer',
+  });
   await stall();
   await choose();
   end();

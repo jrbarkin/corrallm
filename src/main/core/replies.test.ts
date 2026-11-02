@@ -41,10 +41,17 @@ const REVIEWER: AgentCaller = {
   kind: 'agent',
   canvas: CANVAS,
   agent: 'b',
+  generation: 1,
   session: 'b-session',
 };
 /** The Builder, a lead (as tests say leads, B24's): it may call what a lead may. */
-const BUILDER: AgentCaller = { kind: 'agent', canvas: CANVAS, agent: 'a', session: 'a-session' };
+const BUILDER: AgentCaller = {
+  kind: 'agent',
+  canvas: CANVAS,
+  agent: 'a',
+  generation: 1,
+  session: 'a-session',
+};
 
 /**
  * Builder writes a spec, asks for your OK on it, then builds; Reviewer runs in Manual (its CLI asks
@@ -287,6 +294,8 @@ async function start(
       directoryResolver: legacyDirectories,
       leads: (_canvas, agent) => agent === 'a',
       sessions: {
+        // Its agent callers are made up: no session authority issued them.
+        callers: () => true,
         connectors: {
           'claude-code.sdk': answering(sdk),
           'codex.app-server': refusing(),
