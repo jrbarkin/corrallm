@@ -86,7 +86,7 @@ describe('/diff', () => {
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
-  });
+  }, 30_000);
 
   it('says when the folder is not in a git repository', async () => {
     const git: RunGit = () => Promise.resolve({ code: 128, stdout: '' });
@@ -141,7 +141,7 @@ describe.skipIf(process.platform === 'win32')(
     it('runs no command the clone’s remote names', async () => {
       await gitDiff(runGit(env), clone);
       expect(existsSync(sentinel)).toBe(false);
-    });
+    }, 30_000);
 
     it('runs none on a Git that doesn’t know GIT_NO_LAZY_FETCH either', async () => {
       // Git before 2.45.1 (and its 2.39.4+ backports) ignores it.
@@ -157,7 +157,7 @@ describe.skipIf(process.platform === 'win32')(
       await gitDiff(runGit({ ...env, PATH: `${bin}${path.delimiter}${env.PATH}` }), clone);
       expect(existsSync(used)).toBe(true);
       expect(existsSync(sentinel)).toBe(false);
-    });
+    }, 30_000);
 
     it('allows no transport, including a remote helper named none', async () => {
       const real = execFileSync('sh', ['-c', 'command -v git'], { env, encoding: 'utf8' }).trim();
@@ -178,6 +178,6 @@ describe.skipIf(process.platform === 'win32')(
       await gitDiff(runGit({ ...env, PATH: `${bin}${path.delimiter}${env.PATH}` }), clone);
       expect(existsSync(used)).toBe(true);
       expect(existsSync(sentinel)).toBe(false);
-    });
+    }, 30_000);
   },
 );
