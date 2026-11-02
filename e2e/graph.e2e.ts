@@ -1,5 +1,11 @@
 import { chooseAddedAgent, chooseTemplateAgents } from './agent-choice';
-import { adapterName, agentCardName, agentChipName, connectionOptionName } from './catalog';
+import {
+  adapterName,
+  agentCardName,
+  agentChipName,
+  connectionOptionName,
+  jobActionName,
+} from './catalog';
 import { dismissStart, canvasAction, openNeeds } from './canvas-actions';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -1037,15 +1043,16 @@ test('edits a queue in its lane by dragging, and animates the task each queue is
       .getByRole('group', { name: /^Builder: / })
       .evaluateAll((groups) => groups.map((g) => g.getAttribute('aria-label') ?? ''));
   const before = await builder();
-  // The template's test run says what it is to do.
-  const run = 'Builder: exec_command “Run the tests.”';
+  // The template's test run says what it is to do, with the action its shell job maps to.
+  const shell = jobActionName('claude-code', 'shell');
+  const run = `Builder: ${shell} “Run the tests.”`;
   const tests = before.indexOf(run);
   const wait = before.findIndex((label) => label.startsWith('Builder: Wait for'));
   expect(tests).toBeGreaterThan(wait);
 
   // Bring the handle into the scrollable lanes before measuring it: this template need not fit
   // the viewport. Check that the press starts its drag before testing the final persisted order.
-  const grip = view.getByRole('button', { name: 'Move exec_command', exact: true });
+  const grip = view.getByRole('button', { name: `Move ${shell}`, exact: true });
   await grip.evaluate((handle) => {
     handle.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'instant' });
   });
@@ -1067,7 +1074,7 @@ test('edits a queue in its lane by dragging, and animates the task each queue is
   // Manual's fake asks permission and holds this task; its stable attention state still pulses.
   await view.getByRole('button', { name: 'Run', exact: true }).click();
   const research = view
-    .getByRole('group', { name: /^Researcher: \/deep-research “/ })
+    .getByRole('group', { name: /^Researcher: .*“Research this question/ })
     .locator('[data-run]');
   await expect(research).toHaveAttribute('data-run', 'asking');
   expect(await research.evaluate((row) => getComputedStyle(row).animationName)).toContain(

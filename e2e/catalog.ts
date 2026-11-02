@@ -35,3 +35,10 @@ export function connectionLabel(id: ConnectionId): string {
   if (!found) throw new Error(`The test catalog has no connection ${id}.`);
   return found.connection.label;
 }
+
+/** The native action an adapter does a template job with, as its queue item names it. */
+export function jobActionName(id: AdapterId, job: string): string {
+  const action = adapterIn(catalog, id)?.actions.find((action) => action.job === job);
+  if (!action) throw new Error(`The test catalog's ${id} has no action for the ${job} job.`);
+  return action.name;
+}
