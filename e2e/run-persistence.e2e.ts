@@ -1,3 +1,4 @@
+import { agentCardName, agentChipName } from './catalog';
 import { dismissStart } from './canvas-actions';
 import { existsSync } from 'node:fs';
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
@@ -119,11 +120,13 @@ async function createRun(message: string, named: boolean) {
   await page.locator('.react-flow__pane').dblclick({ position: { x: 400, y: 300 } });
   await page.locator('.react-flow__node').dblclick();
   await view()
-    .getByRole('button', { name: /^Agent: Claude/ })
+    .getByRole('button', { name: agentChipName('claude-code.terminal'), exact: true })
     .click();
   await page.keyboard.type('terminal');
   await page.keyboard.press('Enter');
-  await expect(view().getByRole('button', { name: 'Agent: Claude · Terminal' })).toBeVisible();
+  await expect(
+    view().getByRole('button', { name: agentChipName('claude-code.terminal'), exact: true }),
+  ).toBeVisible();
   await expect(view().locator('.agent-terminal')).toHaveAttribute('data-state', 'live');
   await ready(1);
   await view().getByRole('textbox', { name: 'Message to the agent' }).fill(message);
@@ -163,7 +166,7 @@ async function restored(named: boolean, paused = true) {
   await expect(page.locator('.react-flow__node')).toHaveCount(1);
   await expect(page.locator('.react-flow__node')).toHaveAttribute(
     'aria-label',
-    'Agent 1, Claude · Terminal',
+    agentCardName('Agent 1', 'claude-code.terminal'),
   );
   await expect(page.getByRole('button', { name: 'Project folder: shop' })).toBeVisible();
   await expect(page.getByText('team.corral', { exact: true })).toHaveCount(named ? 1 : 0);
