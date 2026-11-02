@@ -16,6 +16,7 @@ import { AgentChip } from './AgentChip';
 import { SettingsMenu } from './Settings';
 import type { Session } from '../../shared/model/session';
 import './AgentSettings.css';
+import { HandoffTile } from './Fallback';
 import { WorkspaceDetails } from '../workspaces/Workspace';
 
 type Options = (adapter: AdapterId) => Promise<SettingsOptions>;
@@ -131,7 +132,7 @@ export function AgentSettingsPanel({
       if (event.key !== 'Escape') return;
       if (
         event.target instanceof Element &&
-        (event.target.closest('[data-draft], .search-picker') ||
+        (event.target.closest('[data-draft], .search-picker, .fallback-dialog') ||
           event.target.closest('.agent-choice')?.querySelector('[aria-expanded="true"]'))
       )
         return;
@@ -201,6 +202,7 @@ export function AgentSettingsPanel({
         <div className="agent-settings-connection">
           <span>CLI and connection</span>
           <AgentChip
+            agentId={node.id}
             adapter={adapter}
             connection={connection}
             onChange={onAgent}
@@ -212,6 +214,7 @@ export function AgentSettingsPanel({
         </div>
         <p className="agent-settings-help">{connectionInfo(connection).description}.</p>
         <WorkspaceDetails agent={node.id} />
+        <HandoffTile agent={node.id} />
         <label className="agent-settings-field">
           Role
           <textarea

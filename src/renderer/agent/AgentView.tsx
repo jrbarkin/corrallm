@@ -44,6 +44,7 @@ import { QueueLinks } from './QueueLinks';
 import { Rail } from './Rail';
 import { ResumePicker } from './ResumePicker';
 import { Rewind } from './Rewind';
+import { HandoffTile } from './Fallback';
 import { AgentChip } from './AgentChip';
 import { WorkspaceBadge, WorkspaceWait } from '../workspaces/Workspace';
 import { BranchControls } from '../workspaces/BranchReview';
@@ -508,6 +509,7 @@ export function AgentView({
                 onOpen={onOpenSettings}
               />
               <AgentChip
+                agentId={node.id}
                 initiallyOpen={agent === undefined}
                 adapter={agent}
                 connection={connection}
@@ -520,6 +522,7 @@ export function AgentView({
             <WorkspaceWait agent={node.id} />
             <div ref={body} className="agent-body">
               <aside className="agent-side" data-column="own" aria-label="Questions and queue">
+                <HandoffTile agent={node.id} />
                 <h2 className="agent-side-title">Queue</h2>
                 {firstMessage && (session.submissions?.length ?? 0) === 0 && (
                   <div

@@ -142,6 +142,10 @@ export function TerminalPane({
   const warning = session.entries.findLast(
     (entry) => entry.kind === 'notice' && entry.level === 'warning',
   );
+  const information = session.entries.findLast(
+    (entry) => entry.kind === 'notice' && entry.level === 'info',
+  );
+  const [dismissedInfo, setDismissedInfo] = useState<string>();
   /** The warning the user dismissed, by id. */
   const [dismissed, setDismissed] = useState<string>();
   const trusting = session.entries.some(
@@ -216,6 +220,18 @@ export function TerminalPane({
             />
           ))}
         {ask}
+        {information?.kind === 'notice' && information.id !== dismissedInfo && (
+          <p className="agent-terminal-warning" role="note">
+            {information.text}
+            <button
+              type="button"
+              aria-label="Dismiss notice"
+              onClick={() => {
+                setDismissedInfo(information.id);
+              }}
+            />
+          </p>
+        )}
         {warning?.kind === 'notice' && warning.id !== dismissed && (
           <p className="agent-terminal-warning" role="note">
             {warning.text}

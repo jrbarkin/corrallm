@@ -1316,3 +1316,18 @@ describe('a Terminal agent’s settings', () => {
     ).toBe('Codex could not list its models');
   });
 });
+
+it('shows the core switch notice in a Terminal session without rewriting its words', async () => {
+  const { session } = await open();
+  session({
+    type: 'notice',
+    id: 'switch',
+    level: 'info',
+    text: 'Writer carries on with Yak: usage ran out. Your messages were not sent again.',
+  });
+  expect(
+    await screen.findByText(
+      'Writer carries on with Yak: usage ran out. Your messages were not sent again.',
+    ),
+  ).toBeTruthy();
+});
