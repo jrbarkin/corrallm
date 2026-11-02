@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
+import type { GuiApi } from '../../shared/gui-link';
+import { DefaultAgentControl } from '../DefaultAgentControl';
 import type { AdapterId, ConnectionId } from '../../shared/adapter';
 import type { CanvasId } from '../../shared/canvas';
 import type { ProjectFolder } from '../../shared/canvas';
@@ -15,6 +17,7 @@ import './StartSession.css';
 
 /** A window over the canvas: start an installed CLI, use a template, or return to kept work. */
 export function StartSession({
+  client = api,
   canvas,
   mirror,
   project,
@@ -25,6 +28,7 @@ export function StartSession({
   onShow,
   onClose,
 }: {
+  client?: Pick<GuiApi, 'settingsSet'>;
   canvas: CanvasId;
   mirror: TopicMirror;
   project: ProjectFolder | null;
@@ -135,6 +139,7 @@ export function StartSession({
               {project ? 'Change folder…' : 'Choose a project folder'}
             </button>
           </div>
+          <DefaultAgentControl client={client} mirror={mirror} disabled={busy} />
           <section aria-label="Agents to start">
             <p>Agents get their own worktrees; groups share one.</p>
             <h3>Your agents</h3>

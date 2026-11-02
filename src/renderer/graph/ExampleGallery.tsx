@@ -1,5 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 
+import { adapterIn } from '../../shared/adapter';
+import { catalog } from '../catalog';
+import type { NewAgentEndpoint } from './AddAgentChooser';
 import type { AdapterId } from '../../shared/adapter';
 import type { InstalledClis } from '../../shared/session';
 import { api } from '../api/client';
@@ -36,12 +39,16 @@ type Chosen = Omit<TemplateChoices, 'agents' | 'connections'> & {
 
 /** Templates require every role's explicit adapter; connections retain declared order. */
 export function ExampleGallery({
+  preferredEndpoint,
+  preferenceReady = true,
   canInsert,
   installed,
   initialTemplate,
   onPick,
   onClose,
 }: {
+  preferredEndpoint?: NewAgentEndpoint | undefined;
+  preferenceReady?: boolean;
   canInsert: boolean;
   /** Which CLIs the user has; undefined while main has not said. */
   installed?: InstalledClis | undefined;
@@ -50,16 +57,31 @@ export function ExampleGallery({
   onClose: () => void;
 }) {
   const panel = useRef<HTMLDivElement>(null);
+  const preferred = adapterIn(catalog(), preferredEndpoint?.adapter)?.id;
   /** The template picked, and what it is to be used with so far. */
   const chosenOf = (example: TemplateInfo) => ({
+    prefillPending: !preferenceReady,
+    editedRoles: new Set<string>(),
     example,
     values: Object.fromEntries(example.fields.map((f) => [f.key, f.example])),
-    agents: Object.fromEntries(example.agents.map((a) => [a.id, undefined])),
+    agents: Object.fromEntries(example.agents.map((a) => [a.id, preferred])),
     connections: {},
   });
-  const [chosen, setChosen] = useState<({ example: TemplateInfo } & Chosen) | undefined>(() =>
-    initialTemplate ? chosenOf(initialTemplate) : undefined,
-  );
+  const [chosen, setChosen] = useState<
+    | ({
+        example: TemplateInfo;
+        prefillPending: boolean;
+        editedRoles: ReadonlySet<string>;
+      } & Chosen)
+    | undefined
+  >(() => (initialTemplate ? chosenOf(initialTemplate) : undefined));
+  // Settle the initial prop snapshot before committing this render, preserving local drafts.
+  if (chosen?.prefillPending && preferenceReady) {
+    const agents = { ...chosen.agents };
+    for (const role of chosen.example.agents)
+      if (!chosen.editedRoles.has(role.id)) agents[role.id] = preferred;
+    setChosen({ ...chosen, agents, prefillPending: false });
+  }
   /** How an agent of the template picked runs: as chosen, or its type's default. */
   const connectionOf = (id: string): AgentConnection | undefined =>
     chosen?.connections[id] ?? defaultConnection(chosen?.agents[id]);
@@ -180,6 +202,7 @@ export function ExampleGallery({
                       setChosen({
                         ...chosen,
                         agents: { ...chosen.agents, [role.id]: type },
+                        editedRoles: new Set([...chosen.editedRoles, role.id]),
                         connections: { ...chosen.connections, [role.id]: undefined },
                       });
                     }}

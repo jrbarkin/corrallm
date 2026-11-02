@@ -1,5 +1,5 @@
 import { AddAgentChooser } from './AddAgentChooser';
-import { useAddEndpoint } from '../useAddEndpoint';
+import { useAgentPreference } from '../useAddEndpoint';
 import type { NewAgentEndpoint } from './AddAgentChooser';
 import { agentAdapter } from './agents';
 import { OwnedPrompt } from '../agent/OwnedPrompt';
@@ -319,7 +319,7 @@ function Editor({
     />
   );
   /** Whether the templates gallery is open. */
-  const preferredEndpoint = useAddEndpoint(mirror);
+  const { endpoint: preferredEndpoint, ready: preferenceReady } = useAgentPreference(mirror, api);
   const [adding, setAdding] = useState<{ choose: (endpoint: NewAgentEndpoint) => void }>();
   const chooseEndpoint = useCallback(
     (choose: (endpoint: NewAgentEndpoint) => void) => {
@@ -1552,6 +1552,8 @@ function Editor({
         )}
         {adding && (
           <AddAgentChooser
+            client={api}
+            mirror={mirror}
             installed={installed}
             onClose={() => {
               setAdding(undefined);
@@ -1564,6 +1566,7 @@ function Editor({
         )}
         {showStart && !gallery && !adding && (
           <StartSession
+            client={api}
             canvas={canvasId}
             mirror={mirror}
             project={project}
@@ -1605,6 +1608,8 @@ function Editor({
         )}
         {gallery && (
           <ExampleGallery
+            preferredEndpoint={preferredEndpoint}
+            preferenceReady={preferenceReady}
             canInsert={gallery === true && graph.nodes.length > 0}
             initialTemplate={typeof gallery === 'object' ? gallery : undefined}
             installed={installed}

@@ -1,4 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
+import type { GuiApi } from '../../shared/gui-link';
+import type { TopicMirror } from '../api/topics';
+import { topics } from '../api/topics';
+import { api } from '../api/client';
+import { DefaultAgentControl } from '../DefaultAgentControl';
 import type { InstalledClis } from '../../shared/session';
 import { catalog } from '../catalog';
 import { AdapterLogo } from '../AdapterLogo';
@@ -10,10 +15,14 @@ export interface NewAgentEndpoint {
 
 /** An add plans a card. Installation never blocks choosing its endpoint. */
 export function AddAgentChooser({
+  client = api,
+  mirror = topics,
   installed,
   onPick,
   onClose,
 }: {
+  client?: Pick<GuiApi, 'settingsSet'>;
+  mirror?: TopicMirror;
   installed: InstalledClis | undefined;
   onPick: (endpoint: NewAgentEndpoint) => void;
   onClose: () => void;
@@ -92,7 +101,7 @@ export function AddAgentChooser({
               );
             })}
           </div>
-          <p>No default agent: corrallm asks each time</p>
+          <DefaultAgentControl client={client} mirror={mirror} />
           <button type="button" onClick={onClose}>
             Cancel
           </button>

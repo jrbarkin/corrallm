@@ -1,4 +1,7 @@
-import { useMemo } from 'react';
+import { useCallback, useMemo } from 'react';
+import type { AdapterId } from '../shared/adapter';
+import type { GuiApi } from '../shared/gui-link';
+import { api } from './api/client';
 import type { TopicMirror } from './api/topics';
 import { useTopic } from './api/topics';
 import { catalog } from './catalog';
@@ -13,4 +16,14 @@ export function useAddEndpoint(mirror: TopicMirror): NewAgentEndpoint | undefine
     const connection = adapter?.connections[0];
     return adapter && connection ? { adapter: adapter.id, connection: connection.id } : undefined;
   }, [preferred]);
+}
+
+/** Shared preference boundary for the window's controls and next creation. */
+export function useAgentPreference(mirror: TopicMirror, client: Pick<GuiApi, 'settingsSet'> = api) {
+  const endpoint = useAddEndpoint(mirror);
+  const set = useCallback(
+    (adapter: AdapterId | null) => client.settingsSet({ defaultAdapter: adapter }),
+    [client],
+  );
+  return { endpoint, ready: mirror.snapshot('settings') !== undefined, set };
 }

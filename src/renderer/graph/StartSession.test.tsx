@@ -30,12 +30,15 @@ afterEach(() => {
   });
   vi.restoreAllMocks();
 });
-function setup() {
+function setup(preference: string | null = null) {
   const sessions = fakeSessions();
   const canvas = fakeCanvas(
     { id: newCanvasId(), arrange: false, nodes: [], links: [] },
     sessions.replies,
   );
+  const settings = canvas.core.state('settings');
+  if (!settings) throw new Error('No settings fixture');
+  canvas.core.snapshot('settings', { ...settings.state, defaultAdapter: preference });
   sessions.replies.installed.mockResolvedValue({ 'claude-code': true, codex: false });
   canvas.core.respond('catalog.installed', { 'claude-code': true, codex: false });
   disposals.push(() => {
@@ -288,3 +291,36 @@ it.each(['The canvas was refused.', 'Showing the canvas was cancelled.'])(
     expect(screen.getByRole('dialog', { name: 'Start a session' })).toBeTruthy();
   },
 );
+
+it('sets a default from Start without adding or starting an agent, keeping every Start button', async () => {
+  const { canvas, sessions } = setup();
+  const view = await start();
+  await events.click(view.getByRole('button', { name: 'Choose…' }));
+  await events.click(view.getByRole('option', { name: 'Codex' }));
+  expectOneOp(canvas.core, 'settings.set', { defaultAdapter: 'codex' });
+  expect(view.getByText('Default agent: Codex')).toBeTruthy();
+  expect(view.getByRole('button', { name: 'Start Claude Code' })).toBeTruthy();
+  expect(view.getByRole('button', { name: 'Start Codex' })).toBeTruthy();
+  expect(canvas.document.nodes).toEqual([]);
+  expect(sessions.replies.start).not.toHaveBeenCalled();
+});
+
+it('prefills a template opened from Start with the known default and still requires every role', async () => {
+  setup('codex');
+  const view = await start();
+  await events.click(await view.findByRole('button', { name: 'Independent cross-check' }));
+  const gallery = within(await screen.findByRole('dialog', { name: 'Templates' }));
+  for (const role of ['Builder', 'Checker']) {
+    expect(
+      gallery.getByRole<HTMLSelectElement>('combobox', { name: `${role}'s agent` }).value,
+    ).toBe('codex');
+    expect(
+      gallery.getByRole<HTMLSelectElement>('combobox', { name: `How ${role} runs` }).value,
+    ).toBe('codex.terminal');
+  }
+  expect(gallery.getByRole('button', { name: 'Create canvas' })).toHaveProperty('disabled', false);
+  await events.change(gallery.getByRole('combobox', { name: "Builder's agent" }), {
+    target: { value: '' },
+  });
+  expect(gallery.getByRole('button', { name: 'Create canvas' })).toHaveProperty('disabled', true);
+});

@@ -1,0 +1,21 @@
+.default-agent-control {
+  grid-column: 1 / -1;
+  margin: 10px 0;
+  font-size: 12px;
+}
+.start-session-body > .default-agent-control {
+  margin: 0 14px 14px;
+}
+.default-agent-control-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.default-agent-control .search-picker {
+  margin-top: 6px;
+  max-width: 100%;
+}
+.default-agent-control [role='alert'] {
+  margin: 6px 0 0;
+}

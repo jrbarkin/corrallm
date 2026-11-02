@@ -1,3 +1,5 @@
+import { useCatalog } from '../test-catalog';
+import { TWO_MADE_UP } from '../../shared/test-made-up';
 import { pickAddedAgent, pickTemplateAgents } from '../test-agent-choice';
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import type { ComponentProps } from 'react';
@@ -224,6 +226,66 @@ it('uses a known preference only for the next explicit creation', async () => {
   expect(screen.queryByRole('dialog', { name: 'Choose an agent' })).toBeNull();
   for (const node of before)
     expect(view.document.nodes.find((one) => one.id === node.id)).toEqual(node);
+});
+
+it.each(['add', 'group', 'parent'] as const)(
+  'uses the preference’s first declared connection for %s without asking',
+  async (gesture) => {
+    await useCatalog(TWO_MADE_UP);
+    const view = await setup({ group: gesture === 'parent', preference: 'zed' });
+    if (gesture === 'add') {
+      const pane = view.container.querySelector('.react-flow__pane');
+      if (!pane) throw new Error('No canvas');
+      fireEvent.doubleClick(pane, { clientX: 500, clientY: 350 });
+    } else if (gesture === 'group')
+      fireEvent.keyDown(document.body, { key: 'g', ctrlKey: true, altKey: true });
+    else
+      fireEvent.click(
+        view.node('F').querySelector('button[aria-label="Add a parent agent"]') ?? view.node('F'),
+      );
+    const endpoint = { adapter: 'zed', connection: 'zed.acp' };
+    await waitFor(() => {
+      if (gesture === 'add')
+        expectOneOp(view.core, 'canvas.addAgent', {
+          canvas: view.canvas,
+          ...endpoint,
+          at: { x: expect.any(Number) as unknown, y: expect.any(Number) as unknown },
+        });
+      else if (gesture === 'group')
+        expectOneOp(view.core, 'canvas.group', {
+          canvas: view.canvas,
+          ...endpoint,
+          kind: 'agent',
+          nodes: ['a', 'b'],
+        });
+      else
+        expectOneOp(view.core, 'canvas.addParent', {
+          canvas: view.canvas,
+          ...endpoint,
+          frame: 'F',
+        });
+    });
+    expect(screen.queryByRole('dialog', { name: 'Choose an agent' })).toBeNull();
+  },
+);
+
+it('setting and clearing the default leaves every existing agent and session alone', async () => {
+  const view = await setup();
+  const before = view.document;
+  fireEvent.click(button('Start a session'));
+  const start = within(await screen.findByRole('dialog', { name: 'Start a session' }));
+  fireEvent.click(start.getByRole('button', { name: 'Choose…' }));
+  fireEvent.click(start.getByRole('option', { name: 'Codex' }));
+  await waitFor(() => {
+    expectOneOp(view.core, 'settings.set', { defaultAdapter: 'codex' });
+  });
+  expect(view.document).toBe(before);
+  view.core.operations.length = 0;
+  fireEvent.click(await start.findByRole('button', { name: 'Clear' }));
+  await waitFor(() => {
+    expectOneOp(view.core, 'settings.set', { defaultAdapter: null });
+  });
+  expect(view.document).toBe(before);
 });
 
 it('adds with one operation and uses the id from the core', async () => {
