@@ -1,3 +1,4 @@
+import { adapterName, agentCardName, agentChipName, connectionOptionName } from './catalog';
 import { dismissStart, canvasAction } from './canvas-actions';
 import { randomUUID } from 'node:crypto';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
@@ -62,10 +63,7 @@ async function answerDialogs(folder: string, canvas: string) {
 }
 
 /** Save the intended native connection before a view can start its default Terminal. */
-async function openConnectedAgent(
-  agent: 'Claude' | 'Codex',
-  connection: 'Agent SDK' | 'App Server',
-) {
+async function openConnectedAgent(connection: 'claude-code.sdk' | 'codex.app-server') {
   const card = page.locator('.react-flow__node-agent');
   await card.click({ button: 'right' });
   await page
@@ -73,8 +71,10 @@ async function openConnectedAgent(
     .getByRole('menuitem', { name: /^Settings/ })
     .click();
   const settings = page.getByRole('dialog', { name: 'Agent settings: Agent 1', exact: true });
-  await settings.getByRole('button', { name: /^Agent: Claude/ }).click();
-  await settings.getByRole('option', { name: new RegExp(`^${agent} · ${connection}`) }).click();
+  await settings
+    .getByRole('button', { name: agentChipName('claude-code.terminal'), exact: true })
+    .click();
+  await settings.getByRole('option', { name: connectionOptionName(connection) }).click();
   await settings.getByRole('button', { name: 'Close agent settings' }).click();
   await card.dblclick();
   return page.getByRole('dialog', { name: 'Agent 1', exact: true });
@@ -91,9 +91,13 @@ test('runs a connected agent in the project folder, answering its prompts throug
 
   // An agent authored for the Agent SDK before its native session starts.
   await page.locator('.react-flow__pane').dblclick({ position: { x: 400, y: 300 } });
-  const view = await openConnectedAgent('Claude', 'Agent SDK');
-  await expect(view.getByRole('button', { name: 'Agent: Claude · Agent SDK' })).toBeVisible();
-  await expect(view.getByText('Claude Code works in shop, through the Agent SDK.')).toBeVisible();
+  const view = await openConnectedAgent('claude-code.sdk');
+  await expect(
+    view.getByRole('button', { name: agentChipName('claude-code.sdk'), exact: true }),
+  ).toBeVisible();
+  await expect(
+    view.getByText(`${adapterName('claude-code')} works in shop, through the Agent SDK.`),
+  ).toBeVisible();
   // Its session started: it offers its models.
   await expect(view.getByRole('button', { name: 'Model: Default' })).toBeVisible();
 
@@ -146,7 +150,7 @@ test('runs a connected agent in the project folder, answering its prompts throug
   await page.keyboard.press('ControlOrMeta+o');
   await expect(page.getByRole('button', { name: 'Project folder: shop' })).toBeVisible();
   const agent = page.locator('.react-flow__node');
-  await expect(agent).toHaveAttribute('aria-label', 'Agent 1, Claude · SDK');
+  await expect(agent).toHaveAttribute('aria-label', agentCardName('Agent 1', 'claude-code.sdk'));
 
   // Switching only changes the view (§8): its session and transcript stayed live in the core.
   await agent.dblclick();
@@ -256,12 +260,16 @@ test('runs a Codex agent through its app server, in Codex’s own modes', async 
   await expect(page.getByRole('button', { name: 'Project folder: shop' })).toBeVisible();
 
   await page.locator('.react-flow__pane').dblclick({ position: { x: 400, y: 300 } });
-  const view = await openConnectedAgent('Codex', 'App Server');
-  await expect(view.getByRole('button', { name: 'Agent: Codex · App Server' })).toBeVisible();
-  await expect(view.getByText('Codex CLI works in shop, through its app server.')).toBeVisible();
+  const view = await openConnectedAgent('codex.app-server');
+  await expect(
+    view.getByRole('button', { name: agentChipName('codex.app-server'), exact: true }),
+  ).toBeVisible();
+  await expect(
+    view.getByText(`${adapterName('codex')} works in shop, through its app server.`),
+  ).toBeVisible();
   await expect(page.locator('.react-flow__node')).toHaveAttribute(
     'aria-label',
-    'Agent 1, Codex · App Server',
+    agentCardName('Agent 1', 'codex.app-server'),
   );
 
   // It starts in Codex's Default mode, which runs the command without asking.

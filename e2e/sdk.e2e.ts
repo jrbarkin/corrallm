@@ -1,3 +1,4 @@
+import { agentChipName, connectionOptionName } from './catalog';
 import { dismissStart } from './canvas-actions';
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -70,8 +71,10 @@ async function openSdkAgent(name: string) {
     .getByRole('menuitem', { name: /^Settings/ })
     .click();
   const settings = page.getByRole('dialog', { name: `Agent settings: ${name}`, exact: true });
-  await settings.getByRole('button', { name: /^Agent: Claude/ }).click();
-  await settings.getByRole('option', { name: /^Claude · Agent SDK/ }).click();
+  await settings
+    .getByRole('button', { name: agentChipName('claude-code.terminal'), exact: true })
+    .click();
+  await settings.getByRole('option', { name: connectionOptionName('claude-code.sdk') }).click();
   await settings.getByRole('button', { name: 'Close agent settings' }).click();
   await card.dblclick();
   return page.getByRole('dialog', { name, exact: true });
