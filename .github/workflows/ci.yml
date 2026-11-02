@@ -29,12 +29,11 @@ jobs:
       fail-fast: false
       matrix:
         # Pinned images rather than *-latest for Linux, so runner image upgrades happen deliberately.
-        os: [macos-latest, ubuntu-24.04, ubuntu-24.04-arm, windows-latest]
+        os: ${{ fromJSON(github.ref == 'refs/heads/main' && '["macos-latest","ubuntu-24.04","ubuntu-24.04-arm","windows-latest"]' || '["macos-latest","ubuntu-24.04","ubuntu-24.04-arm"]') }}
     runs-on: ${{ matrix.os }}
-    # Linux x64 blocks. Windows is held for the MVP (the prelaunch checklist), and macOS and Linux
-    # arm64 are reported without failing the run until their runner fixes land (the toolchain doc
-    # lists them); each flips to blocking once it passes.
-    continue-on-error: ${{ matrix.os != 'ubuntu-24.04' }}
+    # Windows is held for the MVP (the prelaunch checklist): it runs on main only and never fails
+    # the run. Every other job blocks.
+    continue-on-error: ${{ matrix.os == 'windows-latest' }}
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
@@ -81,7 +80,13 @@ jobs:
           # 7 GB runner (it aborted at ~2 GB).
           NODE_OPTIONS: --max-old-space-size=6144
       - run: pnpm run format:check
-      - run: pnpm run test
+      # macOS: the image's Homebrew Git 2.56.0 crashes (SIGSEGV) in files.test.ts's sparse partial
+      # clone, so Apple's Git 2.50.1 (the laptop's) comes first. The snapshot loop budget is wider
+      # for the 3-core runner (see testing.md).
+      - name: Unit tests
+        run: |
+          if [ "$RUNNER_OS" = macOS ]; then export PATH="/usr/bin:$PATH"; export CORRALLM_SNAPSHOT_LOOP_BUDGET_MS=250; fi
+          pnpm run test
       - run: pnpm run package
 
       # Checks the packaged, fused app on every OS, in the main process and then in its core
@@ -130,54 +135,56 @@ jobs:
           CORRALLM_NATIVE_SELFTEST: '1'
 
   e2e:
-    name: e2e ${{ matrix.os }}
+    name: e2e ${{ matrix.os }} (${{ matrix.shard }}/2)
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
     strategy:
       fail-fast: false
       matrix:
         os: [macos-latest, ubuntu-24.04]
+        shard: [1, 2]
     runs-on: ${{ matrix.os }}
-    # Reported without failing the run until the runner fixes land (macOS: a 1024x768 display;
-    # Linux: WebGL2 under Xvfb); the local gate runs e2e until then.
+    # macOS remains non-blocking until two green runs.
+    # Every e2e shard reports without blocking until Linux's renderer-crash close and the queue-drag
+    # case are fixed and both OSes are green on two runs (toolchain doc); then this flips to false.
     continue-on-error: true
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
+      # macOS runs the specs on the host. Linux runs them in the local gate's Docker image
+      # (Debian bookworm, its Mesa and Xvfb): the runner's own Ubuntu 24.04 stack hangs a
+      # renderer on quit after a forced crash (core-continuity), which the image does not.
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        if: runner.os == 'macOS'
       - uses: actions/setup-node@v7
+        if: runner.os == 'macOS'
         with:
           node-version-file: .nvmrc
           cache: pnpm
       - name: Cache Electron binary
+        if: runner.os == 'macOS'
         uses: actions/cache@v6
         with:
-          path: |
-            ~/.cache/electron
-            ~/Library/Caches/electron
+          path: ~/Library/Caches/electron
           key: electron-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('pnpm-lock.yaml') }}
           restore-keys: electron-${{ runner.os }}-${{ runner.arch }}-
       - run: pnpm install --frozen-lockfile
+        if: runner.os == 'macOS'
       - run: pnpm exec install-electron
-
-      # The display and software-GL packages the local Docker gate installs
-      # (scripts/lib/linux-build.Dockerfile), the same sandbox allowance and Git filter as above.
-      - name: Display and GL (Linux)
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends xvfb xauth libgl1-mesa-dri libgl1 \
-            libglx-mesa0 libegl1 libegl-mesa0 mesa-utils fonts-liberation libgbm1
-          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-          sudo git lfs uninstall --system || sudo git config --system --remove-section filter.lfs || true
+        if: runner.os == 'macOS'
 
       - name: e2e (macOS)
         if: runner.os == 'macOS'
+        env:
+          # The 3-core runner's loop delay is about twice the budget (see e2e/load.e2e.ts).
+          CORRALLM_LOAD_BUDGET_SCALE: '3'
         run: |
           sudo git lfs uninstall --system || true
-          pnpm test:e2e --reporter=list
-      # As scripts/lib/linux-workspace.sh runs it in Docker.
-      - name: e2e (Linux)
+          pnpm test:e2e --reporter=list --shard=${{ matrix.shard }}/2
+      - name: Allow Chromium sandbox (Linux)
         if: runner.os == 'Linux'
-        run: xvfb-run -a -s '-screen 0 1920x1080x24 +extension GLX' pnpm test:e2e --reporter=list
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      - name: e2e (Linux, Docker)
+        if: runner.os == 'Linux'
+        run: scripts/e2e-linux.sh x64 --shard=${{ matrix.shard }}/2

@@ -139,7 +139,11 @@ export async function launchApp({
         }
         await app.close();
         const code = child.exitCode;
-        if (code !== 0) throw new Error(`corrallm exited with code ${String(code)} while closing.`);
+        if (code !== 0) {
+          throw new Error(
+            `corrallm exited with code ${String(code)} while closing.\n[e2e app output]\n${output.slice(-8192) || '(no output)'}`,
+          );
+        }
       } finally {
         remove();
       }

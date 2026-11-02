@@ -980,6 +980,24 @@ describe('single-instance startup', () => {
 
 describe('starting the app’s core', () => {
   it.each([false, true])(
+    'honours the hidden-window opt-in only unpackaged (packaged: %s)',
+    async (packaged) => {
+      app.isPackaged = packaged;
+      app.whenReady.mockResolvedValueOnce();
+      vi.stubEnv('CORRALLM_HIDE_WINDOW', '1');
+      await import('./index');
+      await vi.waitFor(() => {
+        expect(createWindow).toHaveBeenCalledOnce();
+      });
+      expect(createWindow).toHaveBeenCalledWith('app://main_window/index.html', {
+        devTools: !packaged,
+        hidden: !packaged,
+      });
+      if (packaged) expect(app.setActivationPolicy).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([false, true])(
     'passes the profile, app, distribution and locale, admitting fake sessions only unpackaged (packaged: %s)',
     async (packaged) => {
       app.isPackaged = packaged;
