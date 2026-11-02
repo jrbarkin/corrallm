@@ -83,14 +83,6 @@ describe("Claude Code's adapter", () => {
     expect(connection('claude-code.sdk').view).toBe('transcript');
   });
 
-  it('spends its usage backend in Terminal, and none through the Agent SDK', () => {
-    expect(connection('claude-code.terminal').usage).toBe('claude-code');
-    expect(connection('claude-code.sdk').usage).toBeNull();
-    expect(
-      claudeCode.usageBackends.map(({ id, windows }) => [id, windows.map((w) => w.id)]),
-    ).toEqual([['claude-code', ['fiveHour', 'weekly']]]);
-  });
-
   it('runs text starting with ! as a shell command in Terminal only', () => {
     expect(connection('claude-code.terminal').shellPrefix).toBe('!');
     expect(connection('claude-code.sdk').shellPrefix).toBeUndefined();

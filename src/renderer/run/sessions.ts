@@ -71,7 +71,7 @@ function copy<T>(value: T): Mutable<T> {
   return structuredClone(value) as Mutable<T>;
 }
 const entries = new WeakMap<EntryView, Entry>();
-function entryOf(value: EntryView): Entry {
+function entryOf(value: Exclude<EntryView, { kind: 'prompt' }>): Entry {
   let entry = entries.get(value);
   if (!entry) {
     if (value.kind === 'user') {
@@ -91,7 +91,11 @@ export function sessionDisplay(
   presentation?: Presentation,
 ): Session {
   if (!summary) return NEW_SESSION;
-  const shown = orderedEntries(view).map(entryOf);
+  // A prompt the core's owner holds is B13 X10's one prompt card, read from the topic as it is:
+  // this display holds none yet.
+  const shown = orderedEntries(view).flatMap((entry) =>
+    entry.kind === 'prompt' ? [] : [entryOf(entry)],
+  );
   // Where the agent is in its fallback chain is the chain picker's to show, and its handoff the
   // handoff tile's (B11a X4), not a session's.
   const { running, usage, modes, ...top } = copy(summary);

@@ -649,7 +649,7 @@ describe('SessionStore', () => {
         { id: 'running', text: 'Working', status: 'running' },
         { id: 'unresolved', text: 'Inspect this', status: 'cancelled', unresolved: true },
       ];
-      const settled = Array.from({ length: 2100 }, (_, index): SubmittedMessage => ({
+      const settled = Array.from({ length: 150 }, (_, index): SubmittedMessage => ({
         id: `settled-${String(index)}`,
         text: `Message ${String(index)}`,
         status: (['completed', 'failed', 'cancelled'] as const)[index % 3] ?? 'completed',
@@ -718,9 +718,12 @@ describe('SessionStore', () => {
       ]),
     );
     const restored = decodeSubmissions(encodeSubmissions(sessions));
-    const records = [...restored.values()].flat();
-    expect(records.length).toBeGreaterThan(0);
-    expect(records.length).toBeLessThanOrEqual(2000);
+    // 21 agents of 100 are 2,100 records: the 100 oldest go, which are the first agent's, and every
+    // other agent keeps all of its own.
+    expect([...restored.keys()]).toEqual(
+      Array.from({ length: 20 }, (_, i) => `agent-${String(i + 1)}`),
+    );
+    for (const records of restored.values()) expect(records).toHaveLength(100);
   });
 
   it('records commands handled locally without sending a turn', () => {

@@ -303,7 +303,11 @@ export function reduceWithChanges(
     case 'restore':
       return { ...session, entries: mergeHistory(session.entries, action.entries) };
     case 'clear': {
-      const next: Session = { ...session, entries: [], status: 'idle', tasks: [] };
+      // What the core's prompt owner holds open still waits (B13 C9): only it ends that.
+      const waiting = session.entries.filter(
+        (entry) => entry.kind === 'prompt' && entry.outcome === undefined,
+      );
+      const next: Session = { ...session, entries: waiting, status: 'idle', tasks: [] };
       delete next.usage;
       delete next.suggestion;
       return next;

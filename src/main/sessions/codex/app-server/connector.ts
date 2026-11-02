@@ -59,6 +59,8 @@ export interface AppServerConnectorDeps {
   home?: string;
   /** Takes the usage readings Codex reports (main's UsageReadings). */
   usage?: (backend: UsageBackendId, windows: UsageWindows) => void;
+  /** How long a command's termination is waited for (the session's TERMINATE_MS; shorter in tests). */
+  terminateMs?: number;
 }
 
 /** How many of a resumed thread's last turns its history shows. */
@@ -75,6 +77,7 @@ export class AppServerConnector implements Connector<CodexMode> {
   readonly #git: (env: Readonly<Record<string, string>>) => RunGit;
   readonly #home: string;
   readonly #usage: ((backend: UsageBackendId, windows: UsageWindows) => void) | undefined;
+  readonly #terminateMs: number | undefined;
 
   constructor({
     clientApp,
@@ -85,6 +88,7 @@ export class AppServerConnector implements Connector<CodexMode> {
     git = runGit,
     home = homedir(),
     usage,
+    terminateMs,
   }: AppServerConnectorDeps) {
     this.#clientApp = clientApp;
     this.#findCodex = findCodex;
@@ -94,6 +98,7 @@ export class AppServerConnector implements Connector<CodexMode> {
     this.#git = git;
     this.#home = home;
     this.#usage = usage;
+    this.#terminateMs = terminateMs;
   }
 
   async start(spec: SessionSpec<CodexMode>, host: SessionHost): Promise<LiveSession<CodexMode>> {
@@ -272,6 +277,7 @@ export class AppServerConnector implements Connector<CodexMode> {
         ...(login.kind === 'chatgpt' ? { consent: this.#consent } : {}),
         git: this.#git(spec.env),
         newThread: (mode, current) => newThread(mode, current),
+        ...(this.#terminateMs === undefined ? {} : { terminateMs: this.#terminateMs }),
       });
       live.session = session;
       host.emit({

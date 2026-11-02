@@ -12,11 +12,20 @@ import {
 } from 'node:fs';
 import path from 'node:path';
 
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { makeTemporaryIndex } from './merge-index';
 import type { WorktreeRecord } from './store';
-import { commit, git, gitInits, hooksInto, ran, sentinelProgram } from './test-git';
+import {
+  commit,
+  git,
+  gitInits,
+  hooksInto,
+  ran,
+  sentinelProgram,
+  templateRepository,
+} from './test-git';
+import type { RepositoryTemplate } from './test-git';
 import { inventoryUncommitted, treeDigest } from './uncommitted';
 import type { Uncommitted } from './uncommitted';
 import { testWorkspaces } from './test-workspace';
@@ -32,16 +41,18 @@ import type { TestWorkspaces } from './test-workspace';
  * lock, writes nothing and runs no program a repository configures.
  */
 
-// Real Git, a repository and a worktree each: slower under load.
-vi.setConfig({ testTimeout: 60_000 });
+// Real Git, a repository and a worktree each: slower under load. The worktree is provisioned in
+// beforeEach, under the same bound; each test's picked checkout is a copy of one made once.
+vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 });
 
+let template: RepositoryTemplate<string>;
 let made: TestWorkspaces;
 let tree: WorktreeRecord;
 let at: string;
 let tip: string;
 
-beforeEach(async () => {
-  made = await testWorkspaces({
+beforeAll(async () => {
+  template = await templateRepository({
     'README.md': 'hello\n',
     's.txt': 'staged\n',
     'del.txt': 'deleted\n',
@@ -49,6 +60,12 @@ beforeEach(async () => {
     't.txt': 'becomes a link\n',
     '.gitignore': '*.log\n',
   });
+});
+afterAll(() => {
+  template.remove();
+});
+beforeEach(async () => {
+  made = await testWorkspaces(template);
   ({ tree } = await made.provision());
   at = tree.path;
   tip = g('rev-parse', 'HEAD');
