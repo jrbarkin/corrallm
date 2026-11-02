@@ -788,6 +788,8 @@ describe('an approval of an MCP serverâ€™s tool: its words yours alone, a tokenâ
         directoryResolver: legacyDirectories,
         leads: (_canvas, id) => id === 'l',
         sessions: {
+          // Its agent callers are made up: no session authority issued them.
+          callers: () => true,
           connectors: {
             'claude-code.sdk': asking(mirrored, 'claude-code'),
             'codex.app-server': asking(mirrored, 'codex'),

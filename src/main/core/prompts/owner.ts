@@ -102,7 +102,7 @@ import { classify } from './classify';
  *   still waits on it and is forgotten.
  * - Its budgets hold under load (C9): an answer being made keeps its room until its session has
  *   it; every end gives its room back; and each reason a generation's requests are declined is
- *   told its agent's transcript once, until one of its requests is admitted again.
+ *   told its agent's transcript once per generation, across later admissions and agent renames.
  *
  * What each reader sees of a prompt is the one selector's (B13 §9.2 C11:
  * src/shared/model/prompt-views.ts), read from each live occurrence (`occurrences`): its Needs items
@@ -221,11 +221,10 @@ export class PromptOwner implements PromptSink {
   /** Every live occurrence by its generation's key: what ends it, and a duplicate's check. */
   readonly #keys = new Map<string, Occurrence>();
   /**
-   * Why each generation's requests were declined since one of its was last admitted, as told to
-   * its agent's transcript: each said once (B13 C9's budgets under load), until one is admitted
-   * again or the generation ends.
+   * Why each generation's requests were declined, as told to its agent's transcript: each reason
+   * said once (B13 C9's budgets under load), until the generation ends.
    */
-  readonly #told = new Map<string, Set<string>>();
+  readonly #told = new Map<string, Set<Declined | 'key'>>();
   #bytes = 0;
 
   constructor(deps: PromptOwnerDeps) {
@@ -275,6 +274,7 @@ export class PromptOwner implements PromptSink {
     console.error('A session raised a prompt with no key: it can’t be answered or declined.');
     this.#tell(
       at,
+      'key',
       `corrallm couldn’t read a request from ${this.#name(at.canvas, at.agent)}’s CLI: look at its session.`,
     );
   }
@@ -634,8 +634,6 @@ export class PromptOwner implements PromptSink {
     prompts.live.set(built.id, occurrence);
     this.#keys.set(keyOf(at, key), occurrence);
     this.#bytes += bytes;
-    // One admitted: a decline after it is told again.
-    this.#told.delete(keyOf(at, ''));
     // Placed in its agent's transcript as it is raised (B13 C9); one its session also shows as
     // one of the events B13 replaces is the old entry's, until X10.
     if (!occurrence.mirrored) {
@@ -708,19 +706,18 @@ export class PromptOwner implements PromptSink {
     const text = terminal
       ? `corrallm can’t list what ${name}’s CLI asks in its terminal (${DECLINED[why]}): look at its terminal.`
       : `corrallm declined a request from ${name}’s CLI: ${DECLINED[why]}.`;
-    this.#tell(at, text);
+    this.#tell(at, why, text);
   }
 
   /**
-   * Tells the agent's transcript `text` once for its generation, however often its CLI asks past
-   * its room or unreadably, until one of its requests is admitted again (B13 C9's budgets under
-   * load).
+   * Tells the agent's transcript each reason once for its generation, independently of the name
+   * used to word it and of later admissions (B13 C9's budgets under load).
    */
-  #tell(at: PromptOrigin, text: string): void {
+  #tell(at: PromptOrigin, why: Declined | 'key', text: string): void {
     const generation = keyOf(at, '');
-    const told = this.#told.get(generation) ?? new Set<string>();
-    if (told.has(text)) return;
-    told.add(text);
+    const told = this.#told.get(generation) ?? new Set<Declined | 'key'>();
+    if (told.has(why)) return;
+    told.add(why);
     this.#told.set(generation, told);
     this.#deps.notice(at.canvas, at.agent, at.connection, text);
   }

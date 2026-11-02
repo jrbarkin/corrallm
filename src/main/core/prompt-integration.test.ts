@@ -398,6 +398,32 @@ describe('delivery', () => {
 });
 
 describe('the watchdog', () => {
+  it('starts a full silence interval when an owner wait ends between watchdog checks', async () => {
+    onSend = (given) => {
+      keys.push(raise(given, approval));
+    };
+    await ok('message', { to: 'b', body: 'Clean up' });
+    await owned(1);
+    now += WATCH_EVERY_MS;
+    tick?.();
+    // The wait ends just before the next check, with no other CLI activity.
+    now += WATCH_EVERY_MS - 1;
+    host().emit({ type: 'prompt-ended', key: keyOf(0), reason: 'withdrawn' });
+    await owned(0);
+    now += 1;
+    tick?.();
+    for (let i = 1; i < STALL_MS / WATCH_EVERY_MS; i++) {
+      now += WATCH_EVERY_MS;
+      tick?.();
+    }
+    const stalled = async () =>
+      (await ok<{ items: NeedsItem[] }>('needs', {})).items.some(({ id }) => id === 'stalled/b');
+    expect(await stalled()).toBe(false);
+    now += WATCH_EVERY_MS;
+    tick?.();
+    expect(await stalled()).toBe(true);
+  });
+
   it('never takes a turn waiting on a prompt for silence, and counts silence from the wait’s end', async () => {
     onSend = (given) => {
       keys.push(raise(given, approval));

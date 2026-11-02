@@ -675,6 +675,8 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     // B13 C9: what it holds is published at once, whether or not a window watches: Needs, the
     // agent's summary and its count, and what delivery holds for it.
     changed: (canvas, agent) => {
+      // Silence starts at the wait's actual end, including between watchdog checks.
+      stalled.activity(canvas, agent);
       topics.changed(`needs:${canvas}`, 'corrallm');
       engines.promptsChanged(canvas);
       runtime.promptsChanged(canvas, agent);

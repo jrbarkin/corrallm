@@ -131,12 +131,12 @@ function origin(
   };
 }
 
-function make(limits?: Partial<PromptLimits>): PromptOwner {
+function make(limits?: Partial<PromptLimits>, nodes = NODES): PromptOwner {
   return new PromptOwner({
     catalog: MADE_UP,
     canvas: (canvas) =>
       (canvas === CANVAS || canvas === OTHER) && !stopped.has(canvas)
-        ? { messages, nodes: NODES }
+        ? { messages, nodes }
         : undefined,
     generationOf: (_canvas, agent) => generations.get(agent),
     changed: () => {
@@ -489,7 +489,8 @@ describe('admission', () => {
       crypto.randomUUID(),
     );
     expect(four.declined).toEqual([]);
-    expect(notices).toHaveLength(1);
+    // This generation has already heard why its session budget holds another request.
+    expect(notices).toHaveLength(0);
   });
 
   it('holds at most MAX_SESSION_PROMPTS open for one generation', () => {
@@ -1666,8 +1667,9 @@ describe('budgets under load (B13 C9)', () => {
     expect(two.declined).toHaveLength(1);
   });
 
-  it('tells an agent’s transcript once why its requests are declined, until one is admitted again', () => {
-    owner = make({ session: 1 });
+  it('tells each decline reason once per generation, across admissions and agent renames', () => {
+    const nodes = NODES.map((node) => ({ ...node, data: { ...node.data } }));
+    owner = make({ session: 1 }, nodes);
     const one = handle();
     raise(origin(7, one), approval);
     for (let i = 0; i < 5; i += 1) raise(origin(7, one), approval, crypto.randomUUID());
@@ -1677,16 +1679,24 @@ describe('budgets under load (B13 C9)', () => {
     for (let i = 0; i < 3; i += 1)
       raise(origin(7, one), { ...approval, choices: [yes] }, crypto.randomUUID());
     expect(notices).toHaveLength(2);
-    // Room again, and a request admitted: the next decline is told again.
+    // Room again, and a request admitted: the generation has already heard these reasons.
     owner.ended(origin(7, one), { type: 'prompt-ended', key: KEY, reason: 'withdrawn' });
     raise(origin(7, one), approval, crypto.randomUUID());
     raise(origin(7, one), approval, crypto.randomUUID());
-    expect(notices).toHaveLength(3);
+    expect(notices).toHaveLength(2);
+    const reviewer = nodes.find(({ id }) => id === 'b');
+    if (reviewer === undefined) throw new Error('No Reviewer.');
+    reviewer.data.label = 'Renamed';
+    raise(origin(7, one), approval, crypto.randomUUID());
+    raise(origin(7, one), { ...approval, choices: [yes] }, crypto.randomUUID());
+    expect(notices).toHaveLength(2);
+    reviewer.data.label = 'Reviewer';
     // Another generation's are its own.
+    owner.gone(CANVAS, 'b', 7);
     generations.set('b', 8);
     raise(origin(8, one), approval, crypto.randomUUID());
     raise(origin(8, one), approval, crypto.randomUUID());
-    expect(notices).toHaveLength(4);
+    expect(notices).toHaveLength(3);
     expect(new Set(notices.map(({ text }) => text)).size).toBe(2);
   });
 });
