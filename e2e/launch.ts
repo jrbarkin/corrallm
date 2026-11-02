@@ -6,6 +6,7 @@ import { _electron as electron } from '@playwright/test';
 import type { ElectronApplication } from '@playwright/test';
 
 import { agentElectronExecutable } from './agent-electron';
+import { quitApp } from './quit-app';
 
 /**
  * Launches the production build ('.' resolves package.json "main", .vite/build/main.cjs) with its
@@ -137,13 +138,17 @@ export async function launchApp({
             console.error(`[e2e window before close]\n${text.slice(-32_768)}`);
           }
         }
-        await app.close();
+        const closed = await quitApp(app).then(
+          () => ({ ok: true as const }),
+          (error: unknown) => ({ ok: false as const, error }),
+        );
         const code = child.exitCode;
         if (code !== 0) {
           throw new Error(
             `corrallm exited with code ${String(code)} while closing.\n[e2e app output]\n${output.slice(-8192) || '(no output)'}`,
           );
         }
+        if (!closed.ok) throw closed.error;
       } finally {
         remove();
       }
