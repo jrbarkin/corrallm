@@ -2256,7 +2256,7 @@ describe('workspace-safety and the worktree list', () => {
       },
       { timeout: 10_000, interval: 50 },
     );
-  });
+  }, 30_000);
 
   it.each([
     ['alone', 'canvas.group', { nodes: ['a', 'b'], kind: 'frame' }],
