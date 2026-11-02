@@ -4,7 +4,7 @@ import type { GuiApi } from '../shared/gui-link';
 
 /**
  * Opens a link the user clicked (a transcript's Markdown, a terminal's links): an http(s) link in
- * their browser, a file:// link (a file Claude Code names in its terminal) by showing its file in
+ * their browser, a file:// link (a file the CLI names in its terminal) by showing its file in
  * the OS file manager. The core decides whether: it asks before opening a site, unless the
  * site is allowlisted or the user said to always open it (src/main/links.ts), and shows a file
  * only if it is in the canvas's project folder (src/main/reveal.ts). The renderer never opens a

@@ -29,7 +29,7 @@ afterEach(() => {
     stop();
   });
 });
-function setup(saved = true) {
+function setup(saved = true, unchosen = false) {
   const canvas = fakeCanvas({
     id: newCanvasId(),
     arrange: false,
@@ -39,7 +39,7 @@ function setup(saved = true) {
         id: 'a',
         type: 'agent',
         position: { x: 0, y: 0 },
-        data: { adapter: 'claude-code', label: 'Writer' },
+        data: { ...(unchosen ? {} : { adapter: 'claude-code' }), label: 'Writer' },
       },
     ],
   });
@@ -207,6 +207,30 @@ it.each([
     expectOneOp(canvas.core, op, { canvas: canvas.document.id, agent: 'a', ...args });
   });
   expect(await screen.findByRole('button', { name: `Agent: ${choice}` })).toBeTruthy();
+});
+
+it('chooses an unchosen agent through its open chip with one agent.setType', async () => {
+  const canvas = setup(true, true);
+  await openWriter(canvas);
+  expect(
+    (await screen.findByRole('button', { name: 'Agent: Choose an agent' })).getAttribute(
+      'aria-expanded',
+    ),
+  ).toBe('true');
+  canvas.core.operations.length = 0;
+  await events.click(await screen.findByRole('option', { name: /^Claude Code · Agent SDK/ }));
+  await waitFor(() => {
+    expectOneOp(canvas.core, 'agent.setType', {
+      canvas: canvas.document.id,
+      agent: 'a',
+      adapter: 'claude-code',
+      connection: 'claude-code.sdk',
+    });
+  });
+  expect(writer(canvas)?.data).toMatchObject({
+    adapter: 'claude-code',
+    connection: 'claude-code.sdk',
+  });
 });
 
 it('the settings sheet’s chip changes the agent’s CLI with one agent.setType', async () => {

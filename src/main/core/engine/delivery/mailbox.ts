@@ -48,8 +48,8 @@ interface Driving {
  * SessionManager runs (transcript/receive.ts, through `backend`). A message sent while an agent
  * works is queued, and sent once the turn ends, interrupted or not. Whoever sends a message can
  * hear when the turn it starts ends, and what the agent replied in it, and can take the message
- * back (the queues' run, run/runner.ts). A session that would not start (an Agent SDK agent on a
- * Claude subscription) keeps its messages queued, unsent, and says so to whoever sent them, until
+ * back (the queues' run, run/runner.ts). A session that would not start keeps its messages
+ * queued, unsent, and says so to whoever sent them, until
  * the agent runs another way (or the session starts after all). Each agent's adapter and
  * connection are read in the catalog it is given (the run's: catalog.ts).
  * The prompt owner keeps the live occurrence index; this store keeps its transcript entries.
@@ -91,7 +91,7 @@ export class SessionStore {
   readonly #heldQueues = new Set<string>();
   /**
    * What the user had queued when they stopped an agent the run holds (Kill): set aside until the
-   * hold is released, as an interrupt in Claude Code sends nothing it had queued.
+   * hold is released; an interrupt sends nothing that was queued.
    */
   readonly #setAside = new Map<string, ReadonlySet<string>>();
   /** A durable conversation replacement gates new sends until the new driver can start. */
@@ -471,7 +471,7 @@ export class SessionStore {
 
   /**
    * Sends a message once the agent runs with `connection`, as the canvas switches it (`sync`): a
-   * command typed for Claude Code's terminal, sent there once the agent continues in Terminal.
+   * command typed for the CLI's terminal, sent there once the agent continues in Terminal.
    */
   sendOnceIn(agentId: string, connection: ConnectionId, agent: AdapterId, text: string): void {
     if (this.#connections.get(agentId) === connection) {
@@ -544,7 +544,7 @@ export class SessionStore {
     return this.#backend.files(query, ...(agentId === undefined ? [] : [agentId]));
   }
 
-  /** The conversations Claude Code kept for the project folder, for /resume. */
+  /** The conversations the CLI kept for the project folder, for /resume. */
   pastSessions(agentId: string): Promise<PastSession[]> {
     return this.#backend.sessions(agentId);
   }

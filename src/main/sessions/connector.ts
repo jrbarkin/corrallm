@@ -13,7 +13,7 @@ import type { ToolListing } from '../../shared/api/registry';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 
 /*
- * The seam a connection plugs into. A connector starts an agent's session (Claude Code or Codex,
+ * The seam a connection plugs into. A connector starts an agent's session (a supported CLI,
  * in a terminal or through a structured interface) and turns what its CLI does into corrallm's
  * session events (src/shared/session.ts). The manager (manager.ts) owns everything around it: which renderer and
  * agent a session belongs to, the project folder it runs in, the environment, which session to
@@ -23,8 +23,7 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
  * To add a connection: write a `Connector` in its own folder (src/main/sessions/<name>/) and
  * register it in connectors.ts. Its tests use a fake CLI, never the real one.
  *
- * `M` is the modes of the CLI a connection runs (Claude Code's permission modes unless said
- * otherwise; Codex's modes for a Codex connection): the manager passes only those.
+ * `M` names the modes accepted by this connection; the manager passes only those.
  */
 
 /** Exact MCP names from the generation's listing, with each tool's destructive classification. */
@@ -161,8 +160,8 @@ export interface LiveSession<M extends SessionMode = PermissionMode> {
   setModel(model: string): Promise<void>;
   /**
    * Switches the reasoning effort for this session (one its model offers; null: the model's
-   * default), for a connection that takes it from corrallm (the Agent SDK's, Codex's app
-   * server's); a Terminal session's is set in its terminal.
+   * default), where the connection accepts live effort changes. A Terminal session's effort
+   * is set in its terminal.
    */
   setEffort?(effort: string | null): Promise<void>;
   /**
@@ -182,7 +181,7 @@ export interface LiveSession<M extends SessionMode = PermissionMode> {
   /** Reconnects, enables or disables one of them. */
   changeMcpServer?(name: string, change: McpChange): Promise<void>;
   /**
-   * Restores the files it changed to how they were before message `messageId` (Claude Code's
+   * Restores the files it changed to how they were before message `messageId` (the CLI's
    * file checkpoints), or, with `dryRun`, says what that would change. Where a connection rewinds
    * itself (a Terminal session: Esc Esc in its terminal), it has none.
    */
@@ -205,7 +204,7 @@ export interface TerminalScreen {
   resize(cols: number, rows: number): void;
   /**
    * Text pasted into the view (the paths of files dropped on it): typed in as a terminal pastes,
-   * bracketed when the CLI asked for that (as Claude Code does, to tell a paste from typing).
+   * bracketed when the CLI asks to distinguish a paste from typing.
    */
   paste(text: string): void;
 }

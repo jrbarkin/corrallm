@@ -31,28 +31,20 @@ const NAMES = /claude|codex|anthropic|openai|chatgpt|(['"])(?:sdk|app-server)\1/
 
 /** Today's offenders, by file: how many names each has. */
 const ALLOWED: Readonly<Record<string, number>> = {
-  'src/main/files.ts': 1,
-  'src/main/native-selftest.ts': 1,
-  'src/main/sessions/connector.ts': 8,
+  // B16: native model/mode fixtures stay until fake connections consume capability data; removing the branches now would change connector regressions.
   'src/main/sessions/fake.ts': 12,
+  // B16: continuation, terminal-only interception and its notices still use native connection identity; descriptor wiring must preserve command precedence and session continuity.
   'src/renderer/agent/AgentView.tsx': 21,
-  'src/renderer/agent/Composer.tsx': 8,
-  'src/renderer/agent/ResumePicker.tsx': 1,
-  'src/renderer/agent/Rewind.tsx': 1,
-  'src/renderer/agent/Transcript.tsx': 3,
+  // B16: the native terminal command table and shell interpretation move to continuation descriptors; deleting them now would send interactive commands to a structured session.
   'src/renderer/agent/commands.ts': 15,
-  'src/renderer/agent/completion.ts': 1,
-  'src/renderer/agent/tools.ts': 1,
-  'src/renderer/graph/GraphEditor.css': 1,
 
-  'src/renderer/open-link.ts': 1,
-  'src/renderer/terminal/TerminalPane.css': 1,
+  // B16: NEW_LINE still encodes one native Shift+Enter binding; only recorded per-connection keys can replace it without guessing input bytes.
   'src/renderer/terminal/screen.ts': 4,
-  'src/main/core/engine/delivery/mailbox.ts': 4,
-  'src/main/core/engine/run/turns.ts': 1,
-  'src/main/core/engine/transcript/driver.ts': 1,
+  // B16: the disconnected backend still names fixed installation keys; the backend/capability seam must define a catalog-driven unavailable result first.
   'src/main/core/engine/transcript/receive.ts': 5,
+  // B16: rewindPoints still filters by one native conversation owner; another connection needs proven rewind identifiers and effective support.
   'src/shared/model/session.ts': 4,
+  // B15: native permission/mode unions still validate session events and changes; replacing them needs the mode authority/confirmation contract, not a type alias rename.
   'src/shared/session.ts': 5,
 };
 

@@ -260,3 +260,43 @@ it('checks every template job before creating or inserting anything', async () =
     adapter.actions = actions;
   }
 });
+
+it('holds a queued message unsent until one endpoint choice releases it', async () => {
+  expect(await call('queue.remove', { agent: 'a', item: 'step' })).toMatchObject({ ok: true });
+  expect(
+    await call('queue.add', { agent: 'a', entry: { message: 'Keep this authored work.' } }),
+  ).toMatchObject({ ok: true });
+  expect(await call('run.start')).toMatchObject({ ok: true });
+  await vi.waitFor(async () => {
+    expect(JSON.stringify(await call('needs'))).toContain(S1);
+  });
+  expect(fake.started).toEqual([]);
+  expect(fake.sessions).toEqual([]);
+  const args = { canvas: CANVAS, agent: 'a' };
+  expect(await core.call('run.get', { canvas: CANVAS }, CALLERS.you)).toMatchObject({
+    ok: true,
+    value: { agents: { a: { refused: { text: S1 } } } },
+  });
+  expect(await core.call('session.get', args, CALLERS.you)).toMatchObject({
+    ok: true,
+    value: { connection: null, model: null, mode: null, tasks: [] },
+  });
+  const transcript = await core.call('session.transcript', args, CALLERS.you);
+  if (!transcript.ok) throw new Error(transcript.error.sentence);
+  expect(
+    transcript.value.entries.filter((entry) => entry.kind === 'user' || entry.kind === 'tool'),
+  ).toEqual([]);
+  expect(transcript.value.next).toBeNull();
+  expect(
+    await call('agent.setType', {
+      agent: 'a',
+      adapter: 'claude-code',
+      connection: 'claude-code.sdk',
+    }),
+  ).toMatchObject({ ok: true });
+  await vi.waitFor(() => {
+    expect(fake.started).toHaveLength(1);
+    expect(fake.sessions[0]?.sent).toHaveLength(1);
+    expect(fake.sessions[0]?.sent[0]?.text).toContain('Keep this authored work.');
+  });
+});

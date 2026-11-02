@@ -14,7 +14,7 @@ import { checkShippedCommand } from './shipped-command';
  * process (an Electron utility process, where the core runs), then under the shipped command's
  * own Node on supported packaged platforms. Triggered by CORRALLM_NATIVE_SELFTEST=1;
  * see docs/architecture/native-modules.md. The checks are core/selftest.ts's: node-pty, a
- * terminal screen, an Agent SDK query against a fake `claude` of its own (run with `node`, which
+ * terminal screen, an Agent SDK query against its own fake executable (run with `node`, which
  * comes from the app when packaged), the core's database (Node's SQLite), loopback HTTP, spawning,
  * and, in Electron packaged, that child_process.fork is refused. Exits 0 once every host passed, 2 if one
  * failed (saying which) or the core process failed, 3 on a timeout, 4 on an uncaught error.

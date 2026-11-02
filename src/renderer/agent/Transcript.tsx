@@ -152,7 +152,7 @@ function EntryView({
       return (
         <details className="agent-thinking">
           <summary>Thought for {entry.seconds}s</summary>
-          {/* Markdown: Codex's reasoning summaries open with a bold title. */}
+          {/* Markdown: the CLI's reasoning summaries open with a bold title. */}
           <Markdown text={entry.text} />
         </details>
       );
@@ -212,7 +212,7 @@ function EntryView({
     case 'cleared':
       return (
         <div className="agent-cleared" role="separator" aria-label="Conversation cleared">
-          <span aria-hidden="true">Conversation cleared · Claude starts afresh from here</span>
+          <span aria-hidden="true">Conversation cleared · The agent starts afresh from here</span>
         </div>
       );
     case 'end':
@@ -302,7 +302,7 @@ function ToolCall({
 }
 
 /**
- * How a tool call is going, as Claude Code says it: what a subagent does now, its tool uses and
+ * How a tool call is going, as the CLI says it: what a subagent does now, its tool uses and
  * tokens, and how long it has run ("Reading README.md · 1 tool use · 21.5k tokens · 4s"); once
  * done, "Done · …".
  */

@@ -71,6 +71,44 @@ test('an unchosen agent holds its work until the person chooses through its chip
     });
   }, file);
   await canvasAction(page, 'Open…');
+  await app.evaluate(
+    ({ dialog }, picked) => {
+      Object.assign(dialog, {
+        showOpenDialog: () => Promise.resolve({ canceled: false, filePaths: [picked] }),
+      });
+    },
+    nativePath.join(dir, 'project'),
+  );
+  await page.getByRole('button', { name: 'Choose a project folder', exact: true }).click();
+  await expect(
+    page.getByRole('button', { name: 'Project folder: project', exact: true }),
+  ).toBeVisible();
+  const before = await currentCanvas();
+  const args = { canvas: before.canvas, agent: 'waiting' };
+  const sentence = 'Waiting has no agent chosen yet. Choose one in its settings to run this work.';
+  await page.getByRole('button', { name: 'Run', exact: true }).click();
+  await expect
+    .poll(() =>
+      page.evaluate(async (args) => {
+        const result = await window.api.runGet({ canvas: args.canvas });
+        if (!result.ok) throw new Error(result.error.sentence);
+        return Object.entries(result.value.agents).find(([id]) => id === args.agent)?.[1].refused
+          ?.text;
+      }, args),
+    )
+    .toBe(sentence);
+  const held = await page.evaluate(async (args) => {
+    const summary = await window.api.sessionGet(args);
+    const transcript = await window.api.sessionTranscript(args);
+    if (!summary.ok) throw new Error(summary.error.sentence);
+    if (!transcript.ok) throw new Error(transcript.error.sentence);
+    return { summary: summary.value, transcript: transcript.value };
+  }, args);
+  expect(held.summary).toMatchObject({ connection: null, model: null, mode: null, tasks: [] });
+  expect(
+    held.transcript.entries.filter((entry) => entry.kind === 'user' || entry.kind === 'tool'),
+  ).toEqual([]);
+  expect(held.transcript.next).toBeNull();
   const waiting = node('Waiting');
   await expect(waiting.locator('.graph-card')).toHaveAttribute('title', 'Agent: Choose an agent');
   await waiting.dblclick();
@@ -85,6 +123,7 @@ test('an unchosen agent holds its work until the person chooses through its chip
   await expect(
     view.getByRole('button', { name: 'Agent: Choose an agent', exact: true }),
   ).toHaveAttribute('aria-expanded', 'true');
+  const beforeChoice = await currentCanvas();
   await view.getByRole('option', { name: connectionOptionName('claude-code.sdk') }).click();
   await expect(
     view.getByRole('button', { name: agentChipName('claude-code.sdk'), exact: true }),
@@ -92,6 +131,68 @@ test('an unchosen agent holds its work until the person chooses through its chip
   await expect(
     view.getByRole('textbox', { name: 'Message to the agent', exact: true }).first(),
   ).toHaveValue('Keep this authored work.');
+  // The chip's one agent.setType is one document commit; the held queue resumes without another gesture.
+  await expect
+    .poll(async () => (await currentCanvas()).entities['node/waiting']?.rev)
+    .toBe(beforeChoice.rev + 1);
+  const chosen = (await currentCanvas()).nodes.find((node) => node.id === 'waiting');
+  expect(chosen?.data).toMatchObject({
+    adapter: 'claude-code',
+    connection: 'claude-code.sdk',
+    queue: [{ id: 'work', message: 'Keep this authored work.' }],
+  });
+  const transcript = view.getByRole('log', { name: 'Transcript', exact: true });
+  await expect(transcript.getByText('Keep this authored work.', { exact: true })).toBeVisible();
+});
+
+test('inserts a template with every role chosen, keeping the current canvas and its existing work', async () => {
+  await addAgentAt('Agent 1', 250, 200);
+  const before = await currentCanvas();
+  const existing = before.nodes.find((node) => node.type === 'agent');
+  if (!existing) throw new Error('The existing agent is missing.');
+  await page.getByRole('button', { name: 'Templates…', exact: true }).click();
+  const gallery = page.getByRole('dialog', { name: 'Templates', exact: true });
+  await gallery.getByRole('button', { name: /^TDD relay/ }).click();
+  await expect(gallery.getByRole('button', { name: 'Create canvas', exact: true })).toBeDisabled();
+  await expect(
+    gallery.getByRole('button', { name: 'Insert into this canvas', exact: true }),
+  ).toBeDisabled();
+  await chooseTemplateAgents(page, 'codex');
+  await gallery
+    .getByRole('combobox', { name: "Implementer's agent", exact: true })
+    .selectOption('claude-code');
+  await gallery
+    .getByRole('combobox', { name: 'How Implementer runs', exact: true })
+    .selectOption('claude-code.sdk');
+  const beforeInsert = await currentCanvas();
+  await gallery.getByRole('button', { name: 'Insert into this canvas', exact: true }).click();
+  await expect(gallery).toHaveCount(0);
+  await expect.poll(async () => (await currentCanvas()).nodes.length).toBe(before.nodes.length + 4);
+  const after = await currentCanvas();
+  expect(after.canvas).toBe(before.canvas);
+  expect(after.nodes.find((node) => node.id === existing.id)).toEqual(existing);
+  const added = after.nodes.filter((node) => !before.nodes.some((old) => old.id === node.id));
+  expect(new Set(added.map((node) => after.entities[`node/${node.id}`]?.rev))).toEqual(
+    new Set([beforeInsert.rev + 1]),
+  );
+  const root = added.find((node) => node.type === 'frame');
+  expect(root?.data.label).toBe('TDD relay');
+  expect(root?.parentId).toBeUndefined();
+  expect(added.map((node) => node.id)).not.toContain('workspace');
+  const agents = added.filter((node) => node.type === 'agent');
+  expect(agents.map((node) => node.data.label)).toEqual(['Tester', 'Implementer', 'Refactorer']);
+  expect(agents.map((node) => node.parentId)).toEqual(agents.map(() => root?.id));
+  for (const agent of agents) {
+    expect(['tester', 'implementer', 'refactorer']).not.toContain(agent.id);
+    expect(agent.data).toMatchObject(
+      agent.data.label === 'Implementer'
+        ? { adapter: 'claude-code', connection: 'claude-code.sdk' }
+        : { adapter: 'codex', connection: 'codex.terminal' },
+    );
+    expect(JSON.stringify(agent.data.queue)).not.toContain('"job":');
+  }
+  await expect(node('Agent 1')).toBeAttached();
+  await expect(node('TDD relay')).toBeVisible();
 });
 
 test('long names and full queues keep ordinary and parent cards at the model’s fixed size', async () => {
@@ -208,6 +309,16 @@ test.afterEach(async () => {
   await rm(dir, { recursive: true, force: true });
   expect(problems).toEqual([]);
 });
+
+async function currentCanvas() {
+  return page.evaluate(async () => {
+    const shown = await window.api.windowGet({});
+    if (!shown.ok) throw new Error(shown.error.sentence);
+    const canvas = await window.api.canvasGet({ canvas: shown.value.canvas });
+    if (!canvas.ok) throw new Error(canvas.error.sentence);
+    return canvas.value;
+  });
+}
 
 const pane = () => page.locator('.react-flow__pane');
 const nodes = () => page.locator('.react-flow__node');

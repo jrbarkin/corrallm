@@ -16,7 +16,7 @@ export const EDIT_TOOLS = new Set([
   'write_file',
 ]);
 
-/** What a permission prompt asks, as Claude Code words it: to make an edit to a file, or to go on. */
+/** What a permission prompt asks, as the CLI words it: to make an edit to a file, or to go on. */
 export function permissionQuestion(tool: string, summary: string): string {
   return EDIT_TOOLS.has(tool)
     ? `Do you want to make this edit to ${summary}?`

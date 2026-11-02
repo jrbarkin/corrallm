@@ -56,19 +56,19 @@ const DEFAULT_MODEL: readonly ModelChoice[] = [{ value: 'default', label: 'Defau
 const DEFAULT_EFFORT = 'default';
 
 /**
- * Where the user writes to the agent, as in Claude Code: Enter sends, Shift+Enter starts a new
+ * Where the user writes to the agent: Enter sends, Shift+Enter starts a new
  * line, Shift+Tab switches mode (never into one that never asks), Up and Down bring back the
  * messages sent before (from the first or last line of the box; Down past the last brings the
  * draft back). While the agent works, Enter queues the message (shown above, ✕ takes it back to
  * edit) and Esc interrupts; otherwise Esc clears the draft. Under the box: the mode (its CLI's: its
- * menu offers bypassing permissions or Codex's Full access once the user confirms it, unless the
+ * menu offers modes that bypass permissions only once the user confirms them, unless the
  * session says its settings turn it off), the model (a connected session's own models, once it has
- * started), how hard it reasons (where its model offers a choice, as Claude Code's /effort levels
- * and Codex's reasoning efforts), what a connected session has used, and Send (or Stop).
+ * started), how hard it reasons (where its model offers a choice), what a connected session has
+ * used, and Send (or Stop).
  *
  * A connected session's composer also completes slash commands ("/" at the start: Tab puts one
  * in, Enter runs it) and file mentions ("@": the project folder's files), takes images pasted
- * or dropped into it, sent with the message, offers what Claude Code predicts the user sends next
+ * or dropped into it, sent with the message, offers what the CLI predicts the user sends next
  * (the empty box shows it; Tab takes it), and lists the work the session runs in the background,
  * above the box, each with a Stop.
  */
@@ -140,7 +140,7 @@ export function Composer({
   const effort = session.effort ?? model?.defaultEffort ?? null;
   const effortName = efforts.find((e) => e.value === effort)?.label ?? effort ?? 'Default';
   const tasks = session.tasks ?? [];
-  /** What the empty box offers: Claude Code's guess at what is sent next. */
+  /** What the empty box offers: the CLI's guess at what is sent next. */
   const suggestion = working || placeholder !== undefined ? undefined : session.suggestion;
   /** The messages sent before, oldest first, each once in a row: what Up brings back. */
   const sent = useMemo(() => {
@@ -223,7 +223,7 @@ export function Composer({
     setRecalled(undefined);
   };
 
-  /** Puts the completion in; a command picked with Enter runs at once, as in Claude Code. */
+  /** Puts the completion in; a command picked with Enter runs at once. */
   const accept = (choice: Choice, run: boolean) => {
     if (!at) return;
     const done = complete(draft, at, choice.value);
@@ -235,7 +235,7 @@ export function Composer({
     edit(done.text, done.caret);
   };
 
-  /** Adds pasted or dropped images to the draft (what Claude reads, up to its limits). */
+  /** Adds pasted or dropped images to the draft (what the agent reads, up to its limits). */
   const attach = (files: readonly File[]) => {
     let total = images.reduce((sum, { data }) => sum + imageBytes(data), 0);
     for (const file of files) {

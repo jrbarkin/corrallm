@@ -13,7 +13,7 @@ export async function findProjectFiles(query: string, agent?: string): Promise<s
 }
 
 /*
- * What the composer completes as the user types, as Claude Code does: a slash command at the start
+ * What the composer completes as the user types: a slash command at the start
  * of the message ("/comp" → "/compact "), or a file mention anywhere ("@src/ma" → "@src/main/").
  */
 
