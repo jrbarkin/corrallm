@@ -100,7 +100,7 @@ The composer's suggestion and the terminal's asks come with the session summary 
 
 ## `src/renderer/queues/`
 
-Every agent's queue side by side, task by task, laid out like a diff viewer (QueuesView.tsx), from the canvas or an agent. lanes.ts aligns rows so a wait sits below what it waits for, links waits and work handed over, and finds waits stuck in a loop; ribbons.ts shapes the ribbons in the gaps between lanes that join linked tasks (from where the view measures them); `src/shared/model/queue-marks.ts` marks tasks (links, the run, a repeat's round) wherever a queue is shown.
+Every agent's queue side by side, task by task, laid out like a diff viewer (QueuesView.tsx), from the canvas or an agent. Owner prompt cards occupy a scrolling row below the sticky agent controls, so a long card never stays over a queue’s wait or task controls; every lane and its ribbons share the same task-row offset, and no extra row is reserved while no prompt waits. lanes.ts aligns rows so a wait sits below what it waits for, links waits and work handed over, and finds waits stuck in a loop; ribbons.ts shapes the ribbons in the gaps between lanes that join linked tasks (from where the view measures them); `src/shared/model/queue-marks.ts` marks tasks (links, the run, a repeat's round) wherever a queue is shown.
 
 A repeat is one cell spanning the rows of what it holds (Cell.span, Cell.inner): the cell, its card and its list are CSS subgrids of the lanes' rows, so each item sits in its own row, level with the other lanes.
 

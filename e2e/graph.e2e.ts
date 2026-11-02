@@ -1259,7 +1259,7 @@ test('agents show their type and ask questions, which a sidebar lists until answ
   const composer = panel.getByRole('textbox', { name: 'Message Agent 1', exact: true });
   await composer.fill('/question');
   await composer.press('Enter');
-  await expect(panel.getByRole('group', { name: 'Shall I go on?' })).toBeVisible();
+  await expect(panel.getByRole('group', { name: 'Shall I go on?', exact: true })).toBeVisible();
   await panel.getByRole('button', { name: 'Back to the canvas' }).click();
   await expect(panel).toHaveCount(0);
   await expect(a).toHaveClass(/asking/);

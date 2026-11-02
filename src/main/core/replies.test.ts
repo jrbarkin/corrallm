@@ -263,7 +263,6 @@ function codexAsking() {
         await close();
       };
       // As the App Server's session: answered only through the core's owner, by key (B13 C5).
-      host.bridge?.((id, answer) => asking.bridge(id, answer));
       return Object.assign(session, {
         answer: () => Promise.reject(new Error('answered only through the owner')),
         prompts: asking.answers,
@@ -532,7 +531,15 @@ describe('a session’s prompt', () => {
       entries: unknown[];
     };
     expect(humanTranscript.entries).toContainEqual(
-      expect.objectContaining({ kind: 'elicitation', server: 'tracker', url }),
+      expect.objectContaining({
+        kind: 'prompt',
+        need: prompt.id,
+        prompt: expect.objectContaining({
+          kind: 'form',
+          server: 'tracker',
+          form: { url },
+        }) as unknown,
+      }),
     );
     expect(
       await call(core, 'reply', { to: prompt.id, answer: { form: { action: 'accept' } } }),
@@ -553,20 +560,20 @@ describe('a session’s prompt', () => {
     };
     const firstResponse = asking.request('item/commandExecution/requestApproval', params, 7);
     const first = await waitingFor(core, isPrompt('w'));
-    await ok(core, 'reply', { to: first.id, answer: { permission: 'once' } });
+    await ok(core, 'reply', { to: first.id, answer: { choice: 'accept' } });
     await expect(firstResponse).resolves.toEqual({ decision: 'accept' });
 
     const secondResponse = asking.request('item/commandExecution/requestApproval', params, '7');
     const second = await waitingFor(core, isPrompt('w'));
     asking.resolved(7);
-    expect(
-      await call(core, 'reply', { to: first.id, answer: { permission: 'once' } }),
-    ).toMatchObject({ ok: false, error: { code: 'conflict' } });
+    expect(await call(core, 'reply', { to: first.id, answer: { choice: 'accept' } })).toMatchObject(
+      { ok: false, error: { code: 'conflict' } },
+    );
     expect(second.id).not.toBe(first.id);
     expect(asking.waiting).toBe(true);
     expect(await needsOf(core)).toContainEqual(expect.objectContaining({ id: second.id }));
 
-    await ok(core, 'reply', { to: second.id, answer: { permission: 'deny' } });
+    await ok(core, 'reply', { to: second.id, answer: { choice: 'cancel' } });
     await expect(secondResponse).resolves.toEqual({ decision: 'cancel' });
     expect(asking.waiting).toBe(false);
   });

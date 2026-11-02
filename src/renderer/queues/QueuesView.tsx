@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { Children, Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { MouseEvent as ReactMouseEvent, ReactNode, RefObject } from 'react';
 
 import type { AdapterId } from '../../shared/adapter';
@@ -114,6 +114,10 @@ export function QueuesView({
   /** What the run, and the queues' words, read of the catalog. */
   const [engine] = useState(runCatalog);
   const { lanes, rows, links, isStuck } = layout;
+  const prompts = lanes.map((lane) => renderPrompts?.(lane.agent.id));
+  const hasPrompts = prompts.some((cards) => Children.count(cards) > 0);
+  // Prompt cards scroll; only the compact agent controls stay over the tasks.
+  const taskRow = hasPrompts ? 3 : 2;
   const grid = useRef<HTMLDivElement>(null);
   const name = (id: string) =>
     (nodes.find((n) => n.id === id)?.data.label ?? '') || 'Unnamed agent';
@@ -335,7 +339,7 @@ export function QueuesView({
             data-pointing={active.size > 0 ? '' : undefined}
             style={{
               gridTemplateColumns: lanes.map(() => 'minmax(280px, 1fr)').join(` ${String(GAP)}px `),
-              gridTemplateRows: `auto repeat(${String(rows)}, auto) minmax(16px, 1fr)`,
+              gridTemplateRows: `auto ${hasPrompts ? 'auto ' : ''}repeat(${String(rows)}, auto) minmax(16px, 1fr)`,
             }}
             onPointerOver={(event) => {
               const on = event.target instanceof Element ? event.target : null;
@@ -353,7 +357,8 @@ export function QueuesView({
               <Fragment key={lane.agent.id}>
                 <LaneCells
                   lane={lane}
-                  prompts={renderPrompts?.(lane.agent.id)}
+                  prompts={prompts[i]}
+                  taskRow={taskRow}
                   column={2 * i + 1}
                   nodes={nodes}
                   catalog={engine}
@@ -384,7 +389,10 @@ export function QueuesView({
                 {i < lanes.length - 1 && (
                   <div
                     className="queues-gap"
-                    style={{ gridColumn: 2 * i + 2, gridRow: `2 / span ${String(rows)}` }}
+                    style={{
+                      gridColumn: 2 * i + 2,
+                      gridRow: `${String(taskRow)} / span ${String(rows)}`,
+                    }}
                   >
                     <svg aria-hidden="true">
                       {piecesIn(ribbons, i).map((piece) => {
@@ -426,6 +434,7 @@ export function QueuesView({
  */
 function LaneCells({
   prompts,
+  taskRow,
   lane,
   column,
   nodes,
@@ -449,6 +458,7 @@ function LaneCells({
   onOpenAgent,
 }: {
   prompts?: ReactNode;
+  taskRow: number;
   lane: Lane;
   column: number;
   nodes: readonly CanvasNode[];
@@ -633,15 +643,22 @@ function LaneCells({
           </button>
         )}
         {ask?.problem && <p className="queues-problem">{ask.text}</p>}
-        {prompts}
       </div>
+      {taskRow === 3 && (
+        <div className="queues-prompts" style={{ gridColumn: column, gridRow: 2 }}>
+          {prompts}
+        </div>
+      )}
       {idle.map(({ from, to, held }) => (
         <div
           key={`idle-${String(from)}`}
           className="queues-idle"
           title={`${name(id)} waits`}
           data-held={held ? '' : undefined}
-          style={{ gridColumn: column, gridRow: `${String(from + 2)} / ${String(to + 2)}` }}
+          style={{
+            gridColumn: column,
+            gridRow: `${String(from + taskRow)} / ${String(to + taskRow)}`,
+          }}
         />
       ))}
       {shown.cells.map(({ item, row, span, inner }) => (
@@ -654,7 +671,7 @@ function LaneCells({
           data-sortable={items.includes(item) ? '' : undefined}
           // A repeat's cell is a subgrid of the rows it spans: each item it holds in its own.
           data-repeat={inner ? '' : undefined}
-          style={{ gridColumn: column, gridRow: `${String(row + 2)} / span ${String(span)}` }}
+          style={{ gridColumn: column, gridRow: `${String(row + taskRow)} / span ${String(span)}` }}
         >
           <QueueRow
             item={item}
@@ -685,7 +702,7 @@ function LaneCells({
           )}
         </div>
       ))}
-      <div className="queues-end-cell" style={{ gridColumn: column, gridRow: shown.end + 2 }}>
+      <div className="queues-end-cell" style={{ gridColumn: column, gridRow: shown.end + taskRow }}>
         <QueueEnd
           marks={marks(id, null)}
           pick={

@@ -99,16 +99,19 @@ test('keeps the same approval across reload, rejects unoffered decisions, and se
   await expect(ended).not.toContainText('Use the existing check instead.');
   await expect(transcript().getByText(/^Worked for \d+s$/)).toHaveCount(1);
   expect(await world.prompts()).toEqual(['please run it']);
-  expect(await world.answers()).toEqual([
+  const answers = await world.answers();
+  expect(answers).toEqual([
     expect.objectContaining({
       request: expect.objectContaining({ tool_name: 'Bash' }),
       answer: expect.objectContaining({
         behavior: 'deny',
         message: expect.stringContaining('Use the existing check instead.'),
-        interrupt: false,
+        decisionClassification: 'user_reject',
       }),
     }),
   ]);
+  // The recorded SDK reply continues the turn by omitting interrupt; No sends interrupt: true.
+  expect(answers[0]).not.toHaveProperty('answer.interrupt');
   const entries = (
     await world.call('session.transcript', { canvas: world.canvas, agent: 'builder' })
   ).entries.filter((entry) => entry.kind === 'prompt');
@@ -121,7 +124,7 @@ test('raises an approval with its view closed, and never replays or reopens it a
   await expect(view()).toHaveCount(0);
   await world.call('message', {
     canvas: world.canvas,
-    to: 'agent:builder',
+    to: 'builder',
     body: 'please run it with the view closed',
   });
   await expect
