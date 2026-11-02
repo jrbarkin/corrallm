@@ -537,21 +537,18 @@ export class SessionStore {
       this.#dispatch(agentId, { type: 'add', entry: change.entry });
       return;
     }
-    if (!this.of(agentId).entries.some((entry) => entry.id === change.id)) return;
+    const entry = this.of(agentId).entries.find((entry) => entry.id === change.id);
+    if (entry?.kind !== 'prompt') return;
     this.#dispatch(agentId, {
-      type: 'update',
-      id: change.id,
-      update: (entry) =>
-        entry.kind === 'prompt'
-          ? {
-              id: entry.id,
-              kind: 'prompt',
-              need: entry.need,
-              prompt: change.prompt,
-              ...(change.tokenTitle === undefined ? {} : { tokenTitle: change.tokenTitle }),
-              outcome: change.outcome,
-            }
-          : entry,
+      type: 'settlePrompt',
+      entry: {
+        id: entry.id,
+        kind: 'prompt',
+        need: entry.need,
+        prompt: change.prompt,
+        ...(change.tokenTitle === undefined ? {} : { tokenTitle: change.tokenTitle }),
+        outcome: change.outcome,
+      },
     });
   }
 
