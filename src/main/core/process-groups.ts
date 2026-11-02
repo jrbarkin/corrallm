@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process';
 
-/** A complete group-membership read, used only after a denied signal or liveness probe. */
+/** A complete membership read distinguishes living members from unreaped, exited ones. */
 export type LiveGroupMembers = (group: number) => boolean;
 
 /** Zombies have exited; a missing leader alone says nothing about its descendants. */
