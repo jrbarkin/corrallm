@@ -167,6 +167,9 @@ const link = new CoreLink<CoreSide, HostSide>(
         core,
         clientOf: (token) => core.clientOf(token),
         stale: (token) => core.tokens.stale(token),
+        listed: (caller) => {
+          core.listed(caller);
+        },
         settings: core.settings,
         changed: (status) => {
           core.served(status);

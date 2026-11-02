@@ -198,6 +198,22 @@
   color: var(--graph-accent, #2563eb);
 }
 
+/* The lane head's text buttons above are plain; Review changes and Merge stay buttons, as in the
+   agent header (B9b X3). */
+.queues-head .branch-controls button {
+  padding: 3px 6px;
+  border: 1px solid color-mix(in srgb, currentColor 30%, transparent);
+  border-radius: 5px;
+  background: Canvas;
+  font-size: 11px;
+  font-weight: 400;
+}
+
+.queues-head .branch-controls button:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
 .queues-status {
   flex: none;
   width: 8px;

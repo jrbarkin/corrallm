@@ -7,8 +7,9 @@ import type { WindowId } from './host';
 /*
  * Who calls an operation (Core Server §6.1). You come only over a window's port, which main hands
  * the core after its sender check, or from main's own native UI (the quit dialog, Pause all): no
- * token is ever you (decision 7). An agent comes with its session's token, or over the pipe of a
- * session corrallm runs; an outside orchestrator with the token a person made for it. A caller's
+ * token is ever you (decision 7). An agent comes with its session generation's credential, or over
+ * the channel bound to that generation (the session authority, agent-api.ts: B21 §9 C1, C2); an
+ * outside orchestrator with the token a person made for it. A caller's
  * party is read on every call, never fixed when its token is made: lead status is kept on this
  * machine, and taking it away refuses the agent's next lead call at once.
  */
@@ -25,11 +26,16 @@ export interface HumanCaller {
   readonly [human]: true;
 }
 
-/** An agent corrallm runs: its session, on its canvas. */
+/**
+ * An agent corrallm runs, on its canvas, as one generation of its session: the generation its
+ * credential was issued for (core.call refuses it once that generation is no longer the agent's
+ * session), and a fresh session UUID, for logs only.
+ */
 export interface AgentCaller {
   readonly kind: 'agent';
   readonly canvas: CanvasId;
   readonly agent: string;
+  readonly generation: number;
   readonly session: string;
 }
 
@@ -73,13 +79,17 @@ export function partyOf(
   }
 }
 
-/** What a caller's limits and repeated requests are kept by: its window, session or token. */
+/**
+ * What a caller's limits and repeated requests are kept by: its window, its token, or for an agent
+ * the logical agent (its canvas and id, escaped), so a restart of its session neither resets its
+ * limits nor loses a retried request's first result (B21 §9 C2).
+ */
 export function callerKey(caller: Caller): string {
   switch (caller.kind) {
     case 'human':
       return `window:${String(caller.window)}`;
     case 'agent':
-      return `session:${caller.session}`;
+      return `agent:${caller.canvas}/${encodeURIComponent(caller.agent)}`;
     case 'outside':
       return `token:${caller.token}`;
   }
