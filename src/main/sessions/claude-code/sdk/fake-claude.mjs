@@ -1204,6 +1204,37 @@ function held(message) {
   return fromMode === undefined ? bypassing : (fromMode === 'bypass') !== bypassing;
 }
 
+async function connectApi() {
+  const { connectChannel } = await import('../../fake-mcp-client.mjs');
+  let id = 0;
+  const rpc = async (method, params = {}) => {
+    const answer = await request({
+      subtype: 'mcp_message',
+      server_name: 'corrallm',
+      message: { jsonrpc: '2.0', id: ++id, method, params },
+    });
+    const response = answer.mcp_response;
+    if (response?.error) throw new Error('The fake MCP request was refused.');
+    return response?.result;
+  };
+  await rpc('initialize', {
+    protocolVersion: '2025-03-26',
+    capabilities: {},
+    clientInfo: { name: 'corrallm-fake-agent', version: '1.0.0' },
+  });
+  await request({
+    subtype: 'mcp_message',
+    server_name: 'corrallm',
+    message: { jsonrpc: '2.0', method: 'notifications/initialized' },
+  });
+  const client = connectChannel({
+    list: async () => (await rpc('tools/list')).tools,
+    call: (name, args) => rpc('tools/call', { name, arguments: args }),
+  });
+  await client.list();
+  if (process.env.FAKE_CLAUDE_MCP_CALL) await client.call(process.env.FAKE_CLAUDE_MCP_CALL, {});
+}
+
 const input = createInterface({ input: process.stdin });
 input.on('line', (line) => {
   if (line.trim() === '') return;
@@ -1227,6 +1258,10 @@ input.on('line', (line) => {
         account: {},
         claude_code_version: '2.1.296',
       });
+      if (message.request.sdkMcpServers?.includes('corrallm'))
+        void connectApi().catch(() => undefined);
+    } else if (subtype === 'mcp_message') {
+      respond(message.request_id, { mcp_response: { jsonrpc: '2.0', id: 0, result: {} } });
     } else if (subtype === 'interrupt') {
       if (turn) turn.interrupted = true;
       respond(message.request_id, { still_queued: [] });

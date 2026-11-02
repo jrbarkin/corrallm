@@ -23,7 +23,7 @@ const STATUS: Record<Session['status'], string> = {
 const TRUST = 'Trust this folder in the terminal';
 
 /**
- * A Terminal agent's session: its CLI's own terminal (Claude Code's or Codex's: it runs in the main
+ * A Terminal agent's session: its CLI's own terminal (it runs in the main
  * process, and this shows it: link.ts), in place of the transcript and composer, so that
  * everything the CLI does works here as it does in a terminal. Under it, a bar with what the
  * queues' run asks of the user (`ask`: their OK, or a repeat out of rounds), the last warning the
@@ -39,7 +39,7 @@ const TRUST = 'Trust this folder in the terminal';
  */
 export function TerminalPane({
   agentId,
-  cli = 'Claude Code',
+  cli = 'Agent',
   backend,
   session,
   note,
@@ -50,7 +50,7 @@ export function TerminalPane({
   screens = createScreen,
 }: {
   agentId: string;
-  /** The CLI it runs, as messages name it ("Claude Code"). */
+  /** The CLI it runs, as messages name it (its catalog name). */
   cli?: string;
   backend: TerminalBackend;
   session: Session;
@@ -80,8 +80,6 @@ export function TerminalPane({
   /** Whether files are dragged over the terminal (to drop: their paths are pasted). */
   const [dragging, setDragging] = useState(false);
   const [optionIsMeta, setOptionIsMeta] = useOptionIsMeta();
-  /** One of its Option shortcuts, where we know one (Claude Code's model picker). */
-  const example = cli === 'Claude Code' ? ' (as Option+P)' : '';
   /** The terminal shown, and the Option key's setting as it last was (for a new terminal). */
   const shown = useRef<Screen>(undefined);
   const meta = useRef(optionIsMeta);
@@ -240,8 +238,8 @@ export function TerminalPane({
               aria-pressed={optionIsMeta}
               title={
                 optionIsMeta
-                  ? `Option works as Meta, for ${cli}’s shortcuts${example}. Turn it off to type the characters Option types (as @ on a German or French keyboard).`
-                  : `Option types characters (as @ on a German or French keyboard). Turn this on for ${cli}’s Option shortcuts${example}.`
+                  ? `Option works as Meta, for ${cli}’s shortcuts. Turn it off to type the characters Option types (as @ on a German or French keyboard).`
+                  : `Option types characters (as @ on a German or French keyboard). Turn this on for ${cli}’s Option shortcuts.`
               }
               onClick={() => {
                 setOptionIsMeta(!optionIsMeta);

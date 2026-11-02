@@ -33,7 +33,11 @@ const TERMINAL = { TERM: 'xterm-256color', COLORTERM: 'truecolor', TERM_PROGRAM:
  */
 export function terminalEnvironment(env: Readonly<Record<string, string>>): Record<string, string> {
   const rest = Object.fromEntries(
-    Object.entries(env).filter(([name]) => name !== 'CLAUDE_CODE_DISABLE_TERMINAL_TITLE'),
+    Object.entries(env).filter(
+      ([name]) =>
+        name !== 'CLAUDE_CODE_DISABLE_TERMINAL_TITLE' &&
+        name.toUpperCase() !== 'CORRALLM_SESSION_TOKEN',
+    ),
   );
   return {
     ...rest,
@@ -55,6 +59,7 @@ export interface TerminalConnectorOptions {
   timing?: Partial<TerminalTiming>;
   /** The user's home folder. */
   home?: string;
+  managed?: string;
   /** Takes the usage readings its sessions' status lines report (main's UsageReadings). */
   usage?: (backend: UsageBackendId, windows: UsageWindows) => void;
 }
@@ -69,6 +74,7 @@ export class TerminalConnector implements Connector {
   readonly #tmp: string;
   readonly #timing: TerminalTiming;
   readonly #home: string;
+  readonly #managed: string | undefined;
   readonly #usage: ((backend: UsageBackendId, windows: UsageWindows) => void) | undefined;
   /** The server every session's hooks post to (it runs while any session does). */
   readonly #hooks = new HookServer();
@@ -82,6 +88,7 @@ export class TerminalConnector implements Connector {
     tmp = tmpdir(),
     timing = {},
     home = homedir(),
+    managed,
     usage,
   }: TerminalConnectorOptions) {
     this.#spawn = spawn;
@@ -90,6 +97,7 @@ export class TerminalConnector implements Connector {
     this.#tmp = tmp;
     this.#timing = { ...TIMING, ...timing };
     this.#home = home;
+    this.#managed = managed;
     this.#usage = usage;
   }
 
@@ -118,6 +126,8 @@ export class TerminalConnector implements Connector {
         cwd: spec.cwd,
         home: this.#home,
         env: spec.env,
+        ...(spec.api === undefined ? {} : { api: spec.api }),
+        ...(this.#managed === undefined ? {} : { managed: this.#managed }),
         effort,
         resetPromptSnapshot: roleChanged && flags.has('--system-prompt-snapshot'),
       }),

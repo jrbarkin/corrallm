@@ -5,7 +5,7 @@ import { ipcErrorMessage } from '../ipc-error';
 
 import type { AdapterId } from '../../shared/adapter';
 import { MAX_IMAGE_BYTES, MAX_IMAGE_TOTAL, MAX_IMAGES } from '../../shared/api/limits';
-import { imageBytes, IMAGE_TYPES, UNASKING_MODES } from '../../shared/session';
+import { imageBytes, IMAGE_TYPES } from '../../shared/session';
 import type { ImageType, SlashCommand } from '../../shared/session';
 
 import { ChoiceMenu } from './ChoiceMenu';
@@ -126,7 +126,7 @@ export function Composer({
   const modes = modesOf(agent).filter((m) => session.modes?.includes(m.mode) ?? true);
   /** Switches to a mode picked from the menu: one that never asks only once confirmed. */
   const pickMode = (picked: Mode) => {
-    if (UNASKING_MODES.includes(picked) && session.mode !== picked) {
+    if (!cycledModes(agent).includes(picked) && session.mode !== picked) {
       setConfirming(picked);
       return;
     }

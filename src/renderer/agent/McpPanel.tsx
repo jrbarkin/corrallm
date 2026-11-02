@@ -1,25 +1,30 @@
+import type { AdapterId } from '../../shared/adapter';
+import { adapterIn } from '../../shared/adapter';
+import { catalog } from '../catalog';
 import { useEffect, useRef, useState } from 'react';
 
 import type { McpChange, McpServer } from '../../shared/session';
 import { ipcErrorMessage } from '../ipc-error';
 
 /**
- * /mcp for an Agent SDK agent, above its composer: its session's MCP servers, each with how it is
+ * /mcp for an agent, above its composer: its session's MCP servers, each with how it is
  * ("Connected · user · 12 tools", "Failed: Connection refused · project") and what can be done:
- * reconnect, disable, enable, or, for a server that needs the user to sign in, Claude Code's own
- * /mcp in Terminal (the Agent SDK has no way to sign in). Esc or Close closes it.
+ * reconnect, disable, enable, or, for a server that needs the user to sign in, the agent's own
+ * /mcp in Terminal (where the connection cannot sign in). Esc or Close closes it.
  */
 export function McpPanel({
+  adapter,
   list,
   change,
   onSignIn,
   onClose,
 }: {
+  adapter: AdapterId;
   /** The servers, from main (session:mcp). */
   list: () => Promise<McpServer[]>;
   /** Changes one; resolves with them all as they are then. */
   change: (server: string, change: McpChange) => Promise<McpServer[]>;
-  /** Signs in to a server: in Terminal, where Claude Code's /mcp does it. */
+  /** Signs in to a server through the agent’s own terminal. */
   onSignIn: () => void;
   onClose: () => void;
 }) {
@@ -90,8 +95,8 @@ export function McpPanel({
         problem === undefined && <p>Looking for its MCP servers…</p>
       ) : servers.length === 0 ? (
         <p>
-          No MCP servers yet: add them with <code>claude mcp add</code>, or in the project’s
-          .mcp.json.
+          No MCP servers yet.{' '}
+          {adapterIn(catalog(), adapter)?.words.mcpHint ?? 'Add them in the agent’s own settings.'}
         </p>
       ) : (
         <ul className="agent-mcp-servers">

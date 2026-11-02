@@ -57,7 +57,7 @@ export const ifText = (condition: Condition, catalog: BackendNames): string =>
         ? usageAboveText(condition, catalog)
         : (CONDITIONS.find((c) => c.kind === condition.kind)?.label ?? '');
 
-/** How a usage condition reads: "Claude’s usage is over 80% (5-hour)". */
+/** How a usage condition reads: "The backend’s usage is over 80% (5-hour)". */
 export const usageAboveText = (
   { backend, percent, window }: UsageAbove,
   catalog: BackendNames,
@@ -249,7 +249,7 @@ const LENGTH_WORDS = [
 
 /**
  * A time in words: "10 minutes", "1 hour 30 minutes", "until 9:00 AM" (in `locale`'s way), "until
- * Claude’s usage resets (5-hour)" (its backend named by `catalog`).
+ * The backend’s usage resets (5-hour)" (its backend named by `catalog`).
  */
 export function timeText(time: Time, catalog: BackendNames, locale?: string): string {
   if (isUsageReset(time)) return `until ${resetText(time, catalog)}`;
@@ -272,7 +272,7 @@ export function limitText(time: Time, catalog: BackendNames, locale?: string): s
     : `at most ${timeText(time, catalog)}`;
 }
 
-/** "Claude’s usage resets (5-hour)". */
+/** "The backend’s usage resets (5-hour)". */
 function resetText({ backend, resets }: UsageReset, catalog: BackendNames): string {
   return `${catalog.backendName(backend)}’s usage resets (${WINDOW_NAMES[resets]})`;
 }
@@ -327,7 +327,7 @@ export function resetTime(at: number, now: number, locale?: string): string {
 export const windowText = (window: UsageWindow): string => `${WINDOW_NAMES[window]} window`;
 
 /**
- * What a usage rule's hold says, the backend named by `catalog`: "Claude has used 84% of its
+ * What a usage rule's hold says, the backend named by `catalog`: "The backend has used 84% of its
  * 5-hour window (over 80%)".
  */
 export function holdText(
@@ -338,7 +338,7 @@ export function holdText(
 }
 
 /**
- * What a usage rule's warning says, in the agent's session: "Claude has used 84% of its 5-hour
+ * What a usage rule's warning says, in the agent's session: "The backend has used 84% of its 5-hour
  * window (over 80%). It resets at 3:40 PM."
  */
 export function warningText(

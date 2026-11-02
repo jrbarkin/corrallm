@@ -32,10 +32,12 @@ it('shows a logo-less adapter’s first letter on its catalog accent', async () 
   const logo = screen.getByRole('img', { name: 'Zed Agent' });
   expect(logo.textContent).toBe('Z');
   expect(logo.getAttribute('data-accent')).toBe(String(MADE_UP.adapters[0]?.accent));
-  expect(getComputedStyle(logo).backgroundColor).toBe('rgb(193, 95, 60)');
+  expect(getComputedStyle(logo).getPropertyValue('--agent-color')).toBe('#c15f3c');
   expect(getComputedStyle(logo).width).toBe('18px');
   expect(getComputedStyle(logo).height).toBe('18px');
   expect(logo.querySelector('img, svg')).toBeNull();
+  // jsdom does not resolve background colours expressed with CSS custom properties.
+  expect(css).toContain('background: var(--agent-color)');
 });
 
 it('uses an unavailable adapter’s id as its name and first letter', () => {
@@ -55,7 +57,9 @@ it('takes the fallback colour from the adapter’s accent rather than its identi
   rules.textContent = css;
   document.head.append(rules);
   render(<AdapterLogo adapter="zed" size={30} />);
-  expect(getComputedStyle(screen.getByRole('img', { name: 'Zed Agent' })).backgroundColor).toBe(
-    'rgb(14, 138, 107)',
-  );
+  expect(
+    getComputedStyle(screen.getByRole('img', { name: 'Zed Agent' })).getPropertyValue(
+      '--agent-color',
+    ),
+  ).toBe('#0e8a6b');
 });

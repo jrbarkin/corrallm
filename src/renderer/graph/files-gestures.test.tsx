@@ -187,12 +187,12 @@ it('a role draft commits as one agent.setRole and a refusal stays at the field',
 });
 
 it.each([
-  ['Claude · Agent SDK', 'session.continueIn', { connection: 'claude-code.sdk' }],
+  ['Claude Code · Agent SDK', 'session.continueIn', { connection: 'claude-code.sdk' }],
   ['Codex · App Server', 'agent.setType', { adapter: 'codex', connection: 'codex.app-server' }],
 ] as const)('the agent chip chooses %s with one %s', async (choice, op, args) => {
   const canvas = setup();
   await openWriter(canvas);
-  await click('Agent: Claude · Terminal');
+  await click('Agent: Claude Code · Terminal');
   await events.click(await screen.findByRole('option', { name: new RegExp(`^${choice}`) }));
   await waitFor(() => {
     expectOneOp(canvas.core, op, { canvas: canvas.document.id, agent: 'a', ...args });
@@ -205,7 +205,7 @@ it('the settings sheet’s chip changes the agent’s CLI with one agent.setType
   await openWriter(canvas);
   await click('Agent settings: Writer');
   const sheet = await screen.findByRole('dialog', { name: 'Agent settings: Writer' });
-  await events.click(within(sheet).getByRole('button', { name: 'Agent: Claude · Terminal' }));
+  await events.click(within(sheet).getByRole('button', { name: 'Agent: Claude Code · Terminal' }));
   await events.click(await screen.findByRole('option', { name: /^Codex · Terminal/ }));
   await waitFor(() => {
     expectOneOp(canvas.core, 'agent.setType', {

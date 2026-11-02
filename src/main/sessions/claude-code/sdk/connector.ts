@@ -7,7 +7,12 @@ import {
   getSessionMessages as readHistory,
   query as startQuery,
 } from '@anthropic-ai/claude-agent-sdk';
-import type { ModelInfo, Options, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
+import type {
+  McpSdkServerConfigWithInstance,
+  ModelInfo,
+  Options,
+  SDKUserMessage,
+} from '@anthropic-ai/claude-agent-sdk';
 
 import { PERMISSION_MODES } from '../../../../shared/session';
 import type { ModelChoice, SessionEvent } from '../../../../shared/session';
@@ -29,6 +34,8 @@ import { SdkSession, Stderr, stopped } from './session';
 import { modeSettings } from './settings';
 import type { Places } from './tools';
 import { sdkMode, Translator } from './translate';
+import { channelServer } from './api';
+import { entrySettings, managedApiReason } from '../mcp-entry';
 
 /*
  * The Agent SDK connection: a Claude agent runs as a real Claude Code session, through the
@@ -53,6 +60,7 @@ export interface SdkConnectorDeps {
   /** How that `claude` is logged in (`claude auth status`; a fake in tests). */
   authStatus?: typeof askAuthStatus;
   home?: string;
+  managed?: string;
 }
 
 /**
@@ -83,7 +91,7 @@ function startingModel(
 const NO_CONVERSATION = /No conversation found/i;
 
 export class SdkConnector implements Connector {
-  readonly #deps: Required<SdkConnectorDeps>;
+  readonly #deps: Omit<Required<SdkConnectorDeps>, 'managed'> & { managed: string | undefined };
 
   constructor({
     clientApp,
@@ -92,8 +100,9 @@ export class SdkConnector implements Connector {
     findClaude,
     authStatus = askAuthStatus,
     home = homedir(),
+    managed,
   }: SdkConnectorDeps) {
-    this.#deps = { clientApp, query, getSessionMessages, findClaude, authStatus, home };
+    this.#deps = { clientApp, query, getSessionMessages, findClaude, authStatus, home, managed };
   }
 
   async start(spec: SessionSpec, host: SessionHost): Promise<LiveSession> {
@@ -173,7 +182,31 @@ export class SdkConnector implements Connector {
     // from the first, before the session runs.
     host.bridge?.((promptId, answer) => prompts.bridge(promptId, answer));
     const model = spec.model === null || spec.model === 'default' ? undefined : spec.model;
+    const apiReason =
+      spec.api === undefined ? undefined : await managedApiReason(this.#deps.managed);
+    const api = apiReason === undefined && spec.api?.kind === 'channel' ? spec.api : undefined;
+    const instance = api === undefined ? undefined : channelServer(api.channel);
     const options: Options = {
+      ...(spec.api === undefined
+        ? {}
+        : {
+            settings: entrySettings(spec.api, api !== undefined),
+            ...(api === undefined
+              ? {}
+              : {
+                  // SDK 0.3.306 calls instance.connect; its public type names the high-level wrapper.
+                  mcpServers: {
+                    [api.server]: {
+                      type: 'sdk' as const,
+                      name: api.server,
+                      instance: instance as unknown as McpSdkServerConfigWithInstance['instance'],
+                    },
+                  },
+                  allowedTools: api.tools
+                    .filter((tool) => !tool.destructive)
+                    .map((tool) => `mcp__${api.server}__${tool.name}`),
+                }),
+          }),
       pathToClaudeCodeExecutable: claude,
       spawnClaudeCodeProcess: ({ command, args, cwd, env, signal }) => {
         const child = spawn(command, args, {
@@ -190,7 +223,11 @@ export class SdkConnector implements Connector {
       },
       cwd: spec.cwd,
       env: {
-        ...spec.env,
+        ...Object.fromEntries(
+          Object.entries(spec.env).filter(
+            ([key]) => key.toUpperCase() !== 'CORRALLM_SESSION_TOKEN',
+          ),
+        ),
         CLAUDE_AGENT_SDK_CLIENT_APP: this.#deps.clientApp,
         // 'idle', 'running', 'requires_action'; and startup refusals as results, with their reason.
         CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS: '1',
@@ -236,6 +273,7 @@ export class SdkConnector implements Connector {
     } catch (error) {
       inbox.end();
       query.close();
+      await instance?.close();
       throw new Error(stopped(error, stderr), { cause: error });
     }
 
@@ -261,6 +299,7 @@ export class SdkConnector implements Connector {
     if (mode !== null) translator.setMode(mode);
     const session = new SdkSession({
       query,
+      ...(instance === undefined ? {} : { apiClose: () => instance.close() }),
       inbox,
       host,
       translator,
@@ -278,6 +317,7 @@ export class SdkConnector implements Connector {
     if (effort !== null) await session.setEffort(effort);
     host.emit({
       type: 'started',
+      api: api !== undefined,
       model: current,
       mode,
       models,
@@ -287,6 +327,8 @@ export class SdkConnector implements Connector {
         ? { modes: PERMISSION_MODES.filter((m) => m !== 'bypassPermissions') }
         : {}),
     });
+    if (apiReason !== undefined)
+      host.emit({ type: 'notice', id: randomUUID(), level: 'warning', text: apiReason });
     host.emit({ type: 'commands', commands: SdkSession.commands(init.commands) });
     if (resume !== null) {
       const history = await this.#history(resume, places);

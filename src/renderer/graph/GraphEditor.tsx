@@ -294,7 +294,9 @@ function Editor({
     () =>
       backendsOf(
         catalog(),
-        graph.nodes.flatMap((n) => (n.type === 'agent' ? [n.data.adapter ?? DEFAULT_AGENT] : [])),
+        graph.nodes.flatMap((n) =>
+          n.type === 'agent' ? [{ connection: connectionOf(n.data) }] : [],
+        ),
       ),
     [graph.nodes],
   );

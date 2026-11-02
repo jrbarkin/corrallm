@@ -8,7 +8,7 @@ import { ipcErrorMessage } from '../ipc-error';
 import type { TemplateInfo } from '../../shared/templates';
 import {
   adapterName,
-  CONNECTED_AGENTS,
+  connectedAgents,
   connectionInfo,
   connectionsOf,
   DEFAULT_AGENT,
@@ -175,7 +175,7 @@ export function ExampleGallery({
                     aria-label={`${role.name}'s agent`}
                     value={chosen.agents[role.id] ?? ''}
                     onChange={(event) => {
-                      const type = CONNECTED_AGENTS.find((t) => t === event.target.value);
+                      const type = connectedAgents().find((t) => t === event.target.value);
                       // Another type runs as that type does, unless chosen again.
                       setChosen({
                         ...chosen,
@@ -185,7 +185,7 @@ export function ExampleGallery({
                     }}
                   >
                     <option value="">Default ({adapterName(DEFAULT_AGENT)})</option>
-                    {CONNECTED_AGENTS.map((type) => (
+                    {connectedAgents().map((type) => (
                       <option key={type} value={type}>
                         {adapterName(type)}
                       </option>

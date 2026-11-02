@@ -52,3 +52,26 @@ it('keeps what a view reads apart from a gesture’s intents', async () => {
   }).toThrow();
   core.dispose();
 });
+
+it('keeps settings changes in its topic and returns the settled revision with one intent', async () => {
+  const core = fakeCore();
+  try {
+    core.topics.subscribe('settings', () => undefined);
+    await vi.waitFor(() => {
+      expect(core.topics.snapshot('settings')).toBeDefined();
+    });
+    expect(core.topics.snapshot('settings')).toEqual({
+      defaultAdapter: null,
+      consents: {},
+      api: { state: 'stopped', port: null },
+    });
+    expect(await core.api.settingsSet({ defaultAdapter: 'zed' })).toMatchObject({
+      defaultAdapter: 'zed',
+    });
+    expectOneOp(core, 'settings.set', { defaultAdapter: 'zed' });
+    expect(core.topics.snapshot('settings')?.defaultAdapter).toBe('zed');
+    expect(core.state('settings')?.rev).toBe(1);
+  } finally {
+    core.dispose();
+  }
+});

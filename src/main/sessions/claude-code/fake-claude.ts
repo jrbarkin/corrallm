@@ -1,4 +1,6 @@
 import { readFileSync } from 'node:fs';
+import { connectHttp } from '../fake-mcp-client.mjs';
+import type { FakeMcpClient } from '../fake-mcp-client.mjs';
 
 import { HOOK_HEADER } from '../terminal/hooks';
 import type { Pty, PtyOptions } from '../terminal/pty';
@@ -20,6 +22,8 @@ const RULE = '─'.repeat(40);
 export interface FakeClaudeOptions {
   /** Test graceful native exit after this many Ctrl+C keys. */
   exitOnCtrlC?: number;
+  startupRefusal?: string;
+  mcpFetch?: typeof fetch;
   /** Whether it reports its status (Claude Code 2.1.295 and later do). */
   reports?: boolean;
   /** Shows the folder trust dialog first, until "Yes" (Enter on option 2) is picked. */
@@ -42,6 +46,8 @@ export interface FakeClaudeOptions {
 /** One run of the fake CLI. */
 export class FakeClaude implements Pty {
   readonly pid = 4242;
+  apiReady: Promise<void> = Promise.resolve();
+  #apiClient: FakeMcpClient | undefined;
   readonly file: string;
   readonly args: readonly string[];
   readonly options: PtyOptions;
@@ -77,6 +83,21 @@ export class FakeClaude implements Pty {
     this.args = args;
     this.options = options;
     this.#options = fake;
+    const entryFile = this.arg('--mcp-config');
+    if (entryFile !== undefined && fake.startupRefusal === undefined)
+      this.apiReady = (async () => {
+        const file = JSON.parse(readFileSync(entryFile, 'utf8')) as {
+          mcpServers: { corrallm: { url: string; headers: { Authorization: string } } };
+        };
+        const { url, headers } = file.mcpServers.corrallm;
+        this.#apiClient = await connectHttp(
+          { url, token: headers.Authorization.slice('Bearer '.length) },
+          fake.mcpFetch === undefined ? {} : { fetch: fake.mcpFetch },
+        );
+        await this.#apiClient.list();
+        const tool = options.env.FAKE_MCP_TOOL;
+        if (tool !== undefined) await this.#apiClient.call(tool, {});
+      })();
     this.#mode = this.arg('--permission-mode') ?? this.#mode;
     this.#trusting = fake.trust ?? false;
     setTimeout(() => {
@@ -151,6 +172,7 @@ export class FakeClaude implements Pty {
     if (this.exited) return;
     this.print('\x1b]7501;state=clear\x07');
     this.exited = true;
+    void this.#apiClient?.close();
     for (const listener of this.#exit) listener({ exitCode: code });
   }
 
@@ -266,6 +288,11 @@ export class FakeClaude implements Pty {
   }
 
   #boot(): void {
+    if (this.#options.startupRefusal !== undefined) {
+      this.print(this.#options.startupRefusal);
+      this.exit(1);
+      return;
+    }
     if (this.exited) return;
     const resume = this.arg('--resume');
     if (resume !== undefined && !(this.#options.transcripts ?? []).includes(resume)) {
