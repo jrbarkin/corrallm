@@ -153,7 +153,11 @@ export function useDraft(
         setText(draft.text);
       }
       latest.current.validate?.(draft.text);
-      const changed = draft.text !== draft.original && draft.text !== latest.current.value;
+      // An earlier write can already be committed while the mirror still shows the old value.
+      // Every new edit during that write must go through, including a return to that old value.
+      const changed =
+        draft.inflight !== undefined ||
+        (draft.text !== draft.original && draft.text !== latest.current.value);
       if (!changed) return finish();
       const result = latest.current.onCommit(draft.text);
       if (result instanceof Promise) calls.add(result);
@@ -209,7 +213,6 @@ export function useDraft(
       draft.version++;
       draft.dirty = true;
       draft.failed = false;
-      draft.inflight = undefined;
       draft.text = event.target.value;
       setSavingDraft(false);
       setFocused(true);
