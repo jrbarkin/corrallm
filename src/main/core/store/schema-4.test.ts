@@ -9,7 +9,7 @@ import type { CanvasId } from '../../../shared/canvas';
 import { decodeSubmissions } from '../engine/delivery/submission-state';
 import { CanvasMemory, conversationsIn, PROJECT_WORKSPACE } from '../../memory';
 import { RunJournal } from '../../run-journal';
-import { CATALOG, DEFAULT_ADAPTER } from '../../sessions/adapters';
+import { CATALOG } from '../../sessions/adapters';
 import { Documents } from '../canvas/documents';
 import { Proposals } from '../canvas/proposals';
 import { FileReviews } from '../canvas/reviews';
@@ -229,7 +229,6 @@ async function readThrough(store: Store) {
     store,
     memory,
     catalog: CATALOG,
-    defaultAdapter: DEFAULT_ADAPTER,
   });
   const proposals = new Proposals({
     store,

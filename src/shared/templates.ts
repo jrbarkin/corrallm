@@ -20,7 +20,7 @@ export interface Example {
   fields?: readonly TemplateField[];
 }
 
-/** A template's role, open to the default adapter unless it names one. */
+/** A template's role; every adapter is explicitly chosen when it is used. */
 export interface TemplateAgent {
   id: string;
   name: string;
@@ -38,12 +38,8 @@ export interface TemplateInfo {
 }
 
 /** A shipped template's blanks and roles, including the jobs needed inside Ifs and repeats. */
-export function templateInfo(
-  example: Example,
-  catalog: Catalog,
-  defaultAdapter: AdapterId,
-): TemplateInfo {
-  const canvas = fromFile(example.text, catalog, defaultAdapter);
+export function templateInfo(example: Example, catalog: Catalog): TemplateInfo {
+  const canvas = fromFile(example.text, catalog);
   const actions = catalog.adapters.flatMap((adapter) => adapter.actions);
   const jobs = (items: readonly QueueItem[]): Job[] => [
     ...new Set(

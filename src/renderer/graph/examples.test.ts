@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { CANVAS_VERSION, canvasIdOf } from '../../shared/canvas';
 import { catalog } from '../catalog';
-import { actionsOf, connectionsOf, DEFAULT_AGENT } from './agents';
+import { actionsOf, connectionsOf } from './agents';
 import { EXAMPLES } from '../../shared/examples';
 import { fromFile, toFile } from '../../shared/model/file';
 import { placeholdersOf } from '../../shared/model/templates';
@@ -20,7 +20,7 @@ import { workEdges } from '../../shared/model/work';
 import { documentOf, graphOf } from '../test-graph-data';
 
 describe.each(EXAMPLES)('the $name example', (example) => {
-  const graph = graphOf(fromFile(example.text, catalog(), DEFAULT_AGENT));
+  const graph = graphOf(fromFile(example.text, catalog()));
   const agents = new Map(graph.nodes.filter((n) => n.type === 'agent').map((n) => [n.id, n]));
 
   it('reads a version-2 canvas and writes it canonically at the current version', () => {
@@ -38,7 +38,7 @@ describe.each(EXAMPLES)('the $name example', (example) => {
 
   it("aims only at its own agents, and uses only each agent's own actions", () => {
     for (const agent of agents.values()) {
-      const actions = actionsOf(agent.data.adapter ?? DEFAULT_AGENT).map((a) => a.name);
+      const actions = actionsOf(agent.data.adapter ?? 'claude-code').map((a) => a.name);
       // Every level of nesting: what if-thens and repeats hold too.
       const check = (item: QueueItem) => {
         if (isWait(item)) {

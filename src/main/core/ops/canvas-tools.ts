@@ -13,13 +13,12 @@ import type { Implementations, OpServices } from '.';
 /** Template insertion and the saved layout preference, each one pure document build. */
 export function canvasToolsOps({
   catalog,
-  defaultAdapter,
   states,
-}: Pick<OpServices, 'catalog' | 'defaultAdapter' | 'states'>): Pick<
+}: Pick<OpServices, 'catalog' | 'states'>): Pick<
   Implementations,
   'canvas.insertTemplate' | 'canvas.setArrange'
 > {
-  const context = { catalog, defaultAdapter };
+  const context = { catalog };
   function ready(canvas: string | undefined): void {
     if (canvas === undefined) throw new OpFailure('unavailable', 'No canvas is open in corrallm.');
     if (!states.keeps(canvas as CanvasId))

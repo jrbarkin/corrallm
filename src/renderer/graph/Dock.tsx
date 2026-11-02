@@ -1,3 +1,4 @@
+import { agentAdapter } from './agents';
 import { useLayoutEffect, useMemo, useRef } from 'react';
 import type { ReactNode } from 'react';
 import type { CanvasNode, AgentNode } from '../../shared/model/canvas';
@@ -7,7 +8,7 @@ import { agentStatus } from '../../shared/model/run-display';
 import { AdapterLogo } from '../AdapterLogo';
 import { useWorkspaces, workspaceAttention, workspaceState } from '../workspaces/state';
 import { slide } from '../agent/motion';
-import { agentLabel, connectionOf, DEFAULT_AGENT } from './agents';
+import { agentLabel, connectionOf } from './agents';
 import './Dock.css';
 
 /** The canvas's agents, grouped as on the canvas; the same buttons become its window taskbar. */
@@ -99,7 +100,7 @@ export function Dock({
   }, [nodes]);
   const icon = (node: AgentNode) => {
     const name = node.data.label || 'Unnamed agent';
-    const adapter = node.data.adapter ?? DEFAULT_AGENT;
+    const adapter = agentAdapter(node.data);
     const state = agentStatus(node.id, sessions, run, needs);
     const workspace = workspaces.find((item) => item.agent === node.id);
     const attention = workspaceAttention(workspace);

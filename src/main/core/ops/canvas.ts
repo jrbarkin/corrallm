@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
+import { agentEndpoint } from '../../../shared/model/catalog';
 import { adapterIn } from '../../../shared/adapter';
 import { AgentId, NodeId } from '../../../shared/api/ids';
 import type { CanvasDocument, CanvasNode } from '../../../shared/model/canvas';
@@ -14,9 +15,8 @@ import type { Implementations, OpServices } from '.';
 
 /** Each structural op builds one pure change over the document ctx.commit supplies. */
 export function canvasOps({
-  defaultAdapter,
   catalog,
-}: Pick<OpServices, 'defaultAdapter' | 'catalog'>): Pick<
+}: Pick<OpServices, 'catalog'>): Pick<
   Implementations,
   | 'canvas.rename'
   | 'canvas.addAgent'
@@ -29,7 +29,7 @@ export function canvasOps({
   | 'canvas.addParent'
   | 'canvas.move'
 > {
-  const context: StructureContext = { newId: randomUUID, defaultAdapter };
+  const context: StructureContext = { newId: randomUUID, catalog };
   // Layout is part of the same pure build, so its changed positions share the op's revision,
   // rules and provenance (including a spawn's copies) rather than a later renderer edit.
   const commit = <R>(
@@ -43,6 +43,17 @@ export function canvasOps({
         ? { ...built, next: arrange(built.next) }
         : built;
     });
+  const creationEndpoint = (adapter: string | undefined, connection?: string) => {
+    if (adapter === undefined)
+      throw new OpFailure('invalid', 'Choose an adapter for the new agent.');
+    const found = agentEndpoint(
+      { adapter, ...(connection === undefined ? {} : { connection }) },
+      catalog,
+    );
+    if (found.kind !== 'known')
+      throw new OpFailure('invalid', `There is no available connection for ${adapter}.`);
+    return { adapter: found.adapter, connection: found.connection };
+  };
   return {
     'canvas.rename': ({ canvas, node, label }, ctx) =>
       ctx.commit(canvas, (doc) => {
@@ -67,7 +78,7 @@ export function canvasOps({
           next = agents.setConnection(
             next,
             { agent: built.result.id, connection },
-            { catalog, defaultAdapter },
+            { catalog },
           ).next;
         if (role === undefined) return { next, result: built.result };
         // Its role as it is made: in the same change, which a token may give it (R12).
@@ -78,7 +89,14 @@ export function canvasOps({
       }),
     'canvas.spawnAgent': ({ canvas, from, relation }, ctx) =>
       commit(ctx, canvas, (doc) => {
-        requireNode(doc, from, 'agent');
+        const source = requireNode(doc, from, 'agent');
+        if (source.type !== 'agent')
+          throw new OpFailure('invalid', 'Choose an agent to spawn from.');
+        if (agentEndpoint(source.data, catalog).kind !== 'known')
+          throw new OpFailure(
+            'invalid',
+            `Choose ${source.data.label}'s agent before spawning another.`,
+          );
         const built = created(structure.spawnAgent(doc, { from, relation }, context), AgentId);
         return { ...built, copies: new Map([[built.result.id, from]]) };
       }),
@@ -108,22 +126,32 @@ export function canvasOps({
         requireLink(doc, a, b);
         return { next: structure.unlink(doc, { source: a, target: b }).next, result: {} };
       }),
-    'canvas.group': ({ canvas, nodes, kind }, ctx) =>
+    'canvas.group': ({ canvas, nodes, kind, adapter, connection }, ctx) =>
       commit(ctx, canvas, (doc) => {
+        if (kind === 'frame' && (adapter !== undefined || connection !== undefined))
+          throw new OpFailure('invalid', 'A frame takes no adapter or connection.');
+        const endpoint = kind === 'agent' ? creationEndpoint(adapter, connection) : {};
         for (const node of nodes) requireNode(doc, node);
         if (structure.groupMembers(doc.nodes, nodes).length === 0)
           throw new OpFailure('invalid', 'The nodes must share a container to be grouped.');
-        return created(structure.group(doc, { nodes, kind }, context), NodeId);
+        return created(structure.group(doc, { nodes, kind, ...endpoint }, context), NodeId);
       }),
     'canvas.ungroup': ({ canvas, nodes }, ctx) =>
       commit(ctx, canvas, (doc) => {
         for (const node of nodes) requireNode(doc, node);
         return { next: structure.ungroup(doc, { nodes }).next, result: {} };
       }),
-    'canvas.addParent': ({ canvas, frame }, ctx) =>
+    'canvas.addParent': ({ canvas, frame, adapter, connection }, ctx) =>
       commit(ctx, canvas, (doc) => {
         requireNode(doc, frame, 'frame');
-        return created(structure.addParent(doc, { id: frame }, context), AgentId);
+        return created(
+          structure.addParent(
+            doc,
+            { id: frame, ...creationEndpoint(adapter, connection) },
+            context,
+          ),
+          AgentId,
+        );
       }),
     'canvas.move': ({ canvas, moves }, ctx) =>
       ctx.commit(canvas, (doc) => {

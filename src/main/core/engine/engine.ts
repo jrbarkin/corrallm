@@ -1,3 +1,4 @@
+import { endpointRefusal } from '../../../shared/model/catalog';
 import type { ConnectionId } from '../../../shared/adapter';
 import type { CanvasNode } from '../../../shared/model/canvas';
 import type { TaskMessage } from '../../../shared/session';
@@ -61,7 +62,7 @@ export class Engine {
   readonly catalog: EngineCatalog;
   readonly sessions: SessionStore;
   readonly run: RunStore;
-  readonly #connections = new Map<string, ConnectionId>();
+  readonly #connections = new Map<string, ConnectionId | undefined>();
   /**
    * The attempts to retry once nothing holds their recipient, by owner: until when an exhausted
    * backend holds the recipient (read as each is looked at), and whether the turn's cancelled end
@@ -108,7 +109,9 @@ export class Engine {
       send: (agent, text, done, images, refused, origin, displayText, task, id, resolvedStep) =>
         sessions.send(
           agent.id,
-          agent.data.adapter ?? io.catalog.defaultAdapter,
+          io.catalog.endpointOf(agent.data).kind === 'known'
+            ? io.catalog.adapterOf(io.catalog.connectionOf(agent.data))
+            : undefined,
           text,
           (failed, reply, result) => {
             done({ failed, reply, result });
@@ -252,6 +255,7 @@ export class Engine {
               {
                 id: n.id,
                 connection: this.catalog.connectionOf(n.data),
+                refusal: endpointRefusal(this.catalog.endpointOf(n.data), n.data.label),
                 settings: n.data.settings,
                 role: n.data.role,
               },

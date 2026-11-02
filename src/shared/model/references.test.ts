@@ -338,7 +338,7 @@ describe('clearDeletedReferences', () => {
       nodes: result.nodes.filter((n) => n.id !== 'builder'),
       links: [],
     };
-    expect(fromFile(toFile(canvas), TEST_CATALOG, 'claude-code')).toEqual(canvas);
+    expect(fromFile(toFile(canvas), TEST_CATALOG)).toEqual(canvas);
     expect(queueOf(result.nodes)).toEqual([{ id: 'review', action: 'Read' }, keep]);
   });
 });

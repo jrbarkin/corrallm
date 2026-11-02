@@ -12,7 +12,7 @@ import type { CanvasId } from '../../../shared/canvas';
 import type { CanvasDocument, CanvasNode } from '../../../shared/model/canvas';
 import { toFile } from '../../../shared/model/file';
 import { CanvasMemory } from '../../memory';
-import { CATALOG, DEFAULT_ADAPTER } from '../../sessions/adapters';
+import { CATALOG } from '../../sessions/adapters';
 import { mintTrustedPath } from '../host';
 import type { Connection } from '../store/sqlite';
 import { SYSTEM_DEPS } from '../store/store';
@@ -116,7 +116,6 @@ function documentsOf(database: Store = store): Documents {
     store: database,
     memory,
     catalog: CATALOG,
-    defaultAdapter: DEFAULT_ADAPTER,
   });
 }
 /** Closes the store and opens it again, as the core does when it starts again. */
@@ -638,7 +637,7 @@ describe('a canvas’s document', () => {
       store,
       memory,
       catalog: CATALOG,
-      defaultAdapter: DEFAULT_ADAPTER,
+
       trim: { kept: 10, every: 5 },
     });
     const canvas = newCanvasId();
@@ -709,7 +708,6 @@ describe('a canvas’s document', () => {
         store,
         memory: freshMemory,
         catalog: CATALOG,
-        defaultAdapter: DEFAULT_ADAPTER,
       });
       await fresh.load(canvas);
       expect(fresh.edited(canvas)).toBe(true);

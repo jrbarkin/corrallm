@@ -30,7 +30,7 @@ const nodes: CanvasNode[] = [
     type: 'agent',
     parentId: 'frame',
     position: { x: 0, y: 0 },
-    data: { label: 'Writer' },
+    data: { adapter: 'claude-code', label: 'Writer' },
   },
   {
     id: 'nested',
@@ -46,8 +46,19 @@ const nodes: CanvasNode[] = [
     position: { x: 0, y: 0 },
     data: { label: 'Reviewer', adapter: 'codex' },
   },
-  { id: 'c', type: 'agent', position: { x: 0, y: 0 }, data: { label: 'Lead' } },
-  { id: 'd', type: 'agent', parentId: 'c', position: { x: 0, y: 0 }, data: { label: 'Helper' } },
+  {
+    id: 'c',
+    type: 'agent',
+    position: { x: 0, y: 0 },
+    data: { adapter: 'claude-code', label: 'Lead' },
+  },
+  {
+    id: 'd',
+    type: 'agent',
+    parentId: 'c',
+    position: { x: 0, y: 0 },
+    data: { adapter: 'claude-code', label: 'Helper' },
+  },
 ];
 const props = () => ({
   nodes,

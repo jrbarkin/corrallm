@@ -16,7 +16,7 @@ import { OpenLinkContext } from '../open-link';
 import { fakeSessions } from '../test-sessions';
 import { fakeScreens, fakeTerminals, keyboardLayout, macKeyboard } from './test-screen';
 import { graphOf } from '../test-graph-data';
-import { DEFAULT_AGENT } from '../graph/agents';
+
 import * as motion from '../agent/motion';
 
 // jsdom cannot draw xterm.js: a fake terminal stands in (test-screen.ts).
@@ -1150,9 +1150,7 @@ describe('a Terminal agent’s settings', () => {
     await waitFor(() => {
       expect(saved()).toHaveLength(1);
     });
-    expect(
-      graphOf(fromFile(saved().at(-1) ?? '', catalog(), DEFAULT_AGENT)).nodes[0]?.data.settings,
-    ).toEqual({
+    expect(graphOf(fromFile(saved().at(-1) ?? '', catalog())).nodes[0]?.data.settings).toEqual({
       'claude-code': { effort: 'low', mode: 'plan' },
     });
 

@@ -34,7 +34,7 @@ const ALLOWED: Readonly<Record<string, number>> = {
   'src/main/sessions/connector.ts': 8,
   'src/main/sessions/fake.ts': 12,
   'src/renderer/agent/AgentView.css': 1,
-  'src/renderer/agent/AgentView.tsx': 25,
+  'src/renderer/agent/AgentView.tsx': 22,
   'src/renderer/agent/Composer.tsx': 8,
   'src/renderer/agent/ResumePicker.tsx': 1,
   'src/renderer/agent/Rewind.tsx': 1,
@@ -44,7 +44,7 @@ const ALLOWED: Readonly<Record<string, number>> = {
   'src/renderer/agent/tools.ts': 1,
   'src/renderer/graph/GraphEditor.css': 2,
   'src/renderer/graph/Questions.tsx': 3,
-  'src/renderer/graph/agents.ts': 1,
+
   'src/shared/examples.ts': 7,
   'src/shared/examples/cross-check.corral': 2,
   'src/shared/examples/fan-out.corral': 4,

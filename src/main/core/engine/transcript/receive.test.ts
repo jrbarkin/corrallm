@@ -621,7 +621,7 @@ describe('a connected session of an adapter only the catalog it is given declare
   /** A store over that catalog, with agent `a` on its ACP connection, set to start in Plan. */
   function madeUp() {
     const fake = fakeBackend();
-    const store = new SessionStore(engineCatalog(MADE_UP, 'zed'), fake.backend);
+    const store = new SessionStore(engineCatalog(MADE_UP), fake.backend);
     store.sync([{ id: 'a', connection: 'zed.acp', settings: { zed: { mode: 'plan' } } }]);
     return { store, ...fake };
   }

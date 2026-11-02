@@ -6,7 +6,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 
 import type { AgentId } from '../../shared/api/ids';
 import { CanvasMemory } from '../memory';
-import { CATALOG, DEFAULT_ADAPTER } from '../sessions/adapters';
+import { CATALOG } from '../sessions/adapters';
 import { Documents } from './canvas/documents';
 import { createCore } from './core';
 import type { Core } from './core';
@@ -45,7 +45,6 @@ beforeEach(async () => {
       store,
       memory,
       catalog: CATALOG,
-      defaultAdapter: DEFAULT_ADAPTER,
     });
     documents.create(CANVAS, 'you');
     await documents.keep(CANVAS);

@@ -6,7 +6,7 @@ import type { SessionMode } from '../../shared/session';
 import { EXAMPLES } from '../../shared/examples';
 import { fromFile, toFile } from '../../shared/model/file';
 import { fillTemplate } from '../../shared/model/templates';
-import { CATALOG, DEFAULT_ADAPTER } from '../sessions/adapters';
+import { CATALOG } from '../sessions/adapters';
 import { FakeConnector } from '../sessions/fake';
 import type { SessionSpec } from '../sessions/connector';
 import { createCore } from './core';
@@ -36,7 +36,7 @@ async function prepare(name: string, owned = true) {
   const values = Object.fromEntries(
     (fixture.fields ?? []).map(({ key, example }) => [key, example]),
   );
-  const doc = fillTemplate(fromFile(fixture.text, CATALOG, DEFAULT_ADAPTER), values);
+  const doc = fillTemplate(fromFile(fixture.text, CATALOG), values);
   doc.nodes = doc.nodes.map((node) =>
     node.type !== 'agent'
       ? node
@@ -45,7 +45,7 @@ async function prepare(name: string, owned = true) {
           data: {
             ...node.data,
             connection:
-              (node.data.adapter ?? DEFAULT_ADAPTER) === 'codex'
+              (node.data.adapter ?? 'claude-code') === 'codex'
                 ? 'codex.app-server'
                 : 'claude-code.sdk',
           },

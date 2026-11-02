@@ -5,7 +5,7 @@ import { fromFile } from '../../../../shared/model/file';
 import { expectRestorable } from './test-restore';
 import { manual, setup } from './test-run';
 import { EXAMPLES } from '../../../../shared/examples';
-import { fillTemplate } from '../../../../shared/model/templates';
+import { withAgents, withConnections, fillTemplate } from '../../../../shared/model/templates';
 import { findItem } from '../../../../shared/model/queue';
 
 /*
@@ -18,13 +18,28 @@ afterEach(expectRestorable);
 const exampleNodes = (name: string) => {
   const example = EXAMPLES.find((e) => e.name === name);
   const values = Object.fromEntries((example?.fields ?? []).map((f) => [f.key, f.example]));
+  const document = fromFile(example?.text ?? '', TEST_CATALOG);
+  const roles = Object.fromEntries(
+    document.nodes
+      .filter((node) => node.type === 'agent')
+      .map((node) => [
+        node.id,
+        TEST_ENGINE.endpointOf(node.data).kind === 'known'
+          ? TEST_ENGINE.adapterOf(TEST_ENGINE.connectionOf(node.data))
+          : 'claude-code',
+      ]),
+  );
   return fillTemplate(
-    fromFile(example?.text ?? '', TEST_CATALOG, TEST_ENGINE.defaultAdapter),
+    withConnections(
+      withAgents(document, roles, { catalog: TEST_CATALOG }),
+      {},
+      { catalog: TEST_CATALOG },
+    ),
     values,
   ).nodes.map((node) => {
     if (node.type !== 'agent') return node;
     const connection = TEST_CATALOG.adapters.find(
-      (a) => a.id === (node.data.adapter ?? TEST_ENGINE.defaultAdapter),
+      (a) => a.id === TEST_ENGINE.adapterOf(TEST_ENGINE.connectionOf(node.data)),
     )?.connections[0]?.id;
     return connection ? { ...node, data: { ...node.data, connection } } : node;
   });

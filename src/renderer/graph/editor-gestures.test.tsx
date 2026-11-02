@@ -1,3 +1,4 @@
+import { pickAddedAgent } from '../test-agent-choice';
 // Canvas gestures whose outcome is an operation, or none, and not a drawn geometry: selection,
 // renaming, deleting, links, groups of groups, Arrange, panning and the floats. They drive the
 // editor by role and label against the fake core (test-canvas.ts); e2e/graph.e2e.ts keeps what a
@@ -46,7 +47,7 @@ const agent = (id: string, x: number, y: number, parentId?: string): CanvasNode 
   type: 'agent',
   position: { x, y },
   ...(parentId === undefined ? {} : { parentId }),
-  data: { label: id },
+  data: { adapter: 'claude-code', label: id },
 });
 const frame = (id: string, x: number, y: number, color: number): CanvasNode => ({
   id,
@@ -158,6 +159,8 @@ async function setup({
 
 /** The operations' arrival: a gesture's write is asynchronous. */
 async function called(core: ReturnType<typeof fakeCanvas>['core']) {
+  await pickAddedAgent();
+
   await waitFor(() => {
     expect(core.operations).toHaveLength(1);
   });
@@ -321,7 +324,12 @@ it('groups two groups in a third, which takes a parent that links like any agent
   fireEvent.mouseEnter(view.node(outer).querySelector('.graph-frame-title') ?? view.node(outer));
   fireEvent.click(within(view.node(outer)).getByRole('button', { name: 'Add a parent agent' }));
   await called(view.core);
-  expectOneOp(view.core, 'canvas.addParent', { canvas: view.canvas, frame: outer });
+  expectOneOp(view.core, 'canvas.addParent', {
+    adapter: 'claude-code',
+    connection: 'claude-code.terminal',
+    canvas: view.canvas,
+    frame: outer,
+  });
   await waitFor(() => {
     expect(view.node(outer).classList.contains('parent')).toBe(true);
     expect(view.node(outer).classList.contains('react-flow__node-agent')).toBe(true);
@@ -356,8 +364,11 @@ it('draws an agent added while Arranging where the arrangement puts it, from one
     arranged: true,
   });
   fireEvent.doubleClick(view.pane, { clientX: 150, clientY: 560 });
+  await pickAddedAgent();
+
   await called(view.core);
   expectOneOp(view.core, 'canvas.addAgent', {
+    connection: 'claude-code.terminal',
     canvas: view.canvas,
     adapter: 'claude-code',
     at: { x: expect.any(Number) as unknown, y: expect.any(Number) as unknown },

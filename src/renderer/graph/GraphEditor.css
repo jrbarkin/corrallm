@@ -1542,7 +1542,7 @@ input.graph-label {
 }
 
 /*
- * A template's agents: each with its selected or default adapter's logo, and how it runs.
+ * A template's agents: each with its chosen adapter's logo or a hollow mark, and how it runs.
  * Their rows share the fieldset's columns, so their pickers line up.
  */
 .graph-template-agents {

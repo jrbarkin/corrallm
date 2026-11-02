@@ -11,7 +11,6 @@ import {
   connectedAgents,
   connectionInfo,
   connectionsOf,
-  DEFAULT_AGENT,
   defaultConnection,
 } from './agents';
 import type { AgentConnection } from './agents';
@@ -20,30 +19,22 @@ import type { AgentConnection } from './agents';
 export type TemplateUse = 'new' | 'insert';
 
 /**
- * What a template is used with: its blanks filled in, each agent's type (undefined: open), and how
+ * What a template is used with: its blanks filled in, every agent's chosen type, and how
  * each agent runs.
  */
 export interface TemplateChoices {
   values: Readonly<Record<string, string>>;
-  agents: Readonly<Record<string, AdapterId | undefined>>;
+  agents: Readonly<Record<string, AdapterId>>;
   connections: Readonly<Record<string, AgentConnection>>;
 }
 
 /** What the user chose for a template so far: how an agent runs only where they chose it. */
-type Chosen = Omit<TemplateChoices, 'connections'> & {
+type Chosen = Omit<TemplateChoices, 'agents' | 'connections'> & {
+  agents: Readonly<Record<string, AdapterId | undefined>>;
   connections: Readonly<Record<string, AgentConnection | undefined>>;
 };
 
-/**
- * The templates gallery: a card for each template (its name, what it does, a dot for each of its
- * agents, in its type's colour, or hollow where the template leaves the agent open). Picking one
- * shows what it asks: its blanks, each starting from the template's own example, and each agent's
- * type, which the user may change or leave to the default agent, and how it runs: in a Terminal
- * by default, with missing CLIs shown explicitly, unless the user
- * picks another way its type runs. Then it opens as a new canvas, or (`canInsert`, when the canvas
- * has something on it) is inserted into this one with its own roots. Escape steps back from that, then
- * closes the gallery, as do the close button and a click outside.
- */
+/** Templates require every role's explicit adapter; connections retain declared order. */
 export function ExampleGallery({
   canInsert,
   installed,
@@ -63,15 +54,15 @@ export function ExampleGallery({
   const chosenOf = (example: TemplateInfo) => ({
     example,
     values: Object.fromEntries(example.fields.map((f) => [f.key, f.example])),
-    agents: Object.fromEntries(example.agents.map((a) => [a.id, a.adapter])),
+    agents: Object.fromEntries(example.agents.map((a) => [a.id, undefined])),
     connections: {},
   });
   const [chosen, setChosen] = useState<({ example: TemplateInfo } & Chosen) | undefined>(() =>
     initialTemplate ? chosenOf(initialTemplate) : undefined,
   );
   /** How an agent of the template picked runs: as chosen, or its type's default. */
-  const connectionOf = (id: string): AgentConnection =>
-    chosen?.connections[id] ?? defaultConnection(chosen?.agents[id] ?? DEFAULT_AGENT);
+  const connectionOf = (id: string): AgentConnection | undefined =>
+    chosen?.connections[id] ?? defaultConnection(chosen?.agents[id]);
   useEffect(() => {
     panel.current?.focus();
     const onKeyDown = (event: KeyboardEvent) => {
@@ -100,12 +91,21 @@ export function ExampleGallery({
       current = false;
     };
   }, []);
+  const ready = chosen?.example.agents.every(
+    (role) => chosen.agents[role.id] !== undefined && connectionOf(role.id) !== undefined,
+  );
   const use = (how: TemplateUse) => {
-    if (!chosen) return;
-    const { example, values, agents } = chosen;
-    const connections = Object.fromEntries(
-      example.agents.map((role) => [role.id, connectionOf(role.id)]),
-    );
+    if (!chosen || !ready) return;
+    const { example, values } = chosen;
+    const agents: Record<string, AdapterId> = {};
+    const connections: Record<string, AgentConnection> = {};
+    for (const role of example.agents) {
+      const adapter = chosen.agents[role.id];
+      const connection = connectionOf(role.id);
+      if (adapter === undefined || connection === undefined) return;
+      agents[role.id] = adapter;
+      connections[role.id] = connection;
+    }
     onPick(example, { values, agents, connections }, how);
   };
   const pick = (example: TemplateInfo) => {
@@ -168,7 +168,7 @@ export function ExampleGallery({
               <legend>Agents</legend>
               {chosen.example.agents.map((role) => (
                 <label key={role.id} className="graph-template-agent">
-                  <AdapterLogo adapter={chosen.agents[role.id] ?? DEFAULT_AGENT} size={18} />
+                  <AdapterLogo adapter={chosen.agents[role.id]} size={18} />
                   <span>{role.name}</span>
                   <select
                     id={`template-agent-${role.id}`}
@@ -184,7 +184,7 @@ export function ExampleGallery({
                       });
                     }}
                   >
-                    <option value="">Default ({adapterName(DEFAULT_AGENT)})</option>
+                    <option value="">Choose an agent</option>
                     {connectedAgents().map((type) => (
                       <option key={type} value={type}>
                         {adapterName(type)}
@@ -193,7 +193,7 @@ export function ExampleGallery({
                   </select>
                   <ConnectionSelect
                     role={role.name}
-                    agent={chosen.agents[role.id] ?? DEFAULT_AGENT}
+                    agent={chosen.agents[role.id]}
                     value={connectionOf(role.id)}
                     installed={installed}
                     onChange={(connection) => {
@@ -217,6 +217,7 @@ export function ExampleGallery({
               </button>
               <button
                 type="button"
+                disabled={!ready}
                 className={canInsert ? undefined : 'primary'}
                 onClick={() => {
                   use('new');
@@ -225,7 +226,7 @@ export function ExampleGallery({
                 Create canvas
               </button>
               {canInsert && (
-                <button type="submit" className="primary">
+                <button type="submit" className="primary" disabled={!ready}>
                   Insert into this canvas
                 </button>
               )}
@@ -280,8 +281,8 @@ function ConnectionSelect({
   onChange,
 }: {
   role: string;
-  agent: AdapterId;
-  value: AgentConnection;
+  agent: AdapterId | undefined;
+  value: AgentConnection | undefined;
   installed: InstalledClis | undefined;
   onChange: (connection: AgentConnection) => void;
 }) {
@@ -289,7 +290,7 @@ function ConnectionSelect({
   return (
     <select
       aria-label={`How ${role} runs`}
-      value={value}
+      value={value ?? ''}
       disabled={ways.length <= 1}
       title={connectionInfo(value).description}
       onChange={(event) => {
@@ -297,11 +298,11 @@ function ConnectionSelect({
         if (way !== undefined) onChange(way);
       }}
     >
-      {ways.length === 0 && <option value="unavailable">Not connected</option>}
+      {ways.length === 0 && <option value="">Choose an agent</option>}
       {ways.map((connection) => (
         <option key={connection} value={connection} title={connectionInfo(connection).description}>
           {connectionInfo(connection).label}
-          {installed?.[agent] === false ? ' (CLI not found)' : ''}
+          {agent !== undefined && installed?.[agent] === false ? ' (CLI not found)' : ''}
         </option>
       ))}
     </select>

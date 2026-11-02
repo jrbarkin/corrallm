@@ -1,36 +1,35 @@
 import { adapterIn, connectionIn } from '../../shared/adapter';
 import type { AdapterId, ConnectionId } from '../../shared/adapter';
 import { catalog } from '../catalog';
-import { engineCatalog } from '../../shared/model/catalog';
+import { engineCatalog, agentEndpoint } from '../../shared/model/catalog';
 import type { EngineCatalog } from '../../shared/model/catalog';
 
 /** Display names, connection words and actions come from the loaded catalog. */
 export type { AdapterId };
 
-/**
- * The adapter a new node starts with, and one naming none runs: main's DEFAULT_ADAPTER, which the
- * core runs such a node with, is the same (both pinned by their tests) until B12 makes it the user's.
- */
-export const DEFAULT_AGENT: AdapterId = 'claude-code';
-
-/**
- * What the run, and the sessions it sends to, read of each agent's adapter
- * (src/shared/model/catalog.ts): the catalog main declares, a node naming no adapter running
- * DEFAULT_AGENT.
- */
+/** The loaded catalog supplies the same endpoint lookups as the core. */
 export function runCatalog(): EngineCatalog {
-  return engineCatalog(catalog(), DEFAULT_AGENT);
+  return engineCatalog(catalog());
+}
+
+/** The named adapter, or the owner of a known connection, without choosing for an agent. */
+export function agentAdapter(data: {
+  adapter?: AdapterId;
+  connection?: ConnectionId;
+}): AdapterId | undefined {
+  const endpoint = agentEndpoint(data, catalog());
+  return endpoint.kind === 'unchosen' ? undefined : endpoint.adapter;
 }
 
 /** Catalog selectors are evaluated when a view renders, after boot has loaded the catalog. */
-export function adapterName(adapter: AdapterId): string {
-  return adapterIn(catalog(), adapter)?.name ?? adapter;
+export function adapterName(adapter: AdapterId | undefined): string {
+  return adapterIn(catalog(), adapter)?.name ?? adapter ?? 'Choose an agent';
 }
 
 export const adapterCli = adapterName;
 export type AgentConnection = ConnectionId;
 
-export function connectionsOf(adapter: AdapterId): readonly ConnectionId[] {
+export function connectionsOf(adapter: AdapterId | undefined): readonly ConnectionId[] {
   return adapterIn(catalog(), adapter)?.connections.map(({ id }) => id) ?? [];
 }
 
@@ -52,7 +51,7 @@ const NOT_CONNECTED: ConnectionInfo = {
 };
 
 /** How a connection is named and explained: Not connected, for one this build lacks. */
-export function connectionInfo(connection: AgentConnection): ConnectionInfo {
+export function connectionInfo(connection: AgentConnection | undefined): ConnectionInfo {
   const found = connectionIn(catalog(), connection)?.connection;
   return found
     ? { label: found.label, short: found.short, description: found.description }
@@ -60,8 +59,8 @@ export function connectionInfo(connection: AgentConnection): ConnectionInfo {
 }
 
 /** An adapter's first connection: what a new agent runs as; unavailable, for an unknown adapter. */
-export function defaultConnection(adapter: AdapterId): AgentConnection {
-  return connectionsOf(adapter)[0] ?? 'unavailable';
+export function defaultConnection(adapter: AdapterId | undefined): AgentConnection | undefined {
+  return connectionsOf(adapter)[0];
 }
 
 /**
@@ -71,18 +70,18 @@ export function defaultConnection(adapter: AdapterId): AgentConnection {
 export function connectionOf(data: {
   adapter?: AdapterId;
   connection?: ConnectionId;
-}): AgentConnection {
-  const adapter = data.adapter ?? DEFAULT_AGENT;
-  if (data.connection === undefined) return defaultConnection(adapter);
-  return connectionsOf(adapter).includes(data.connection) ? data.connection : 'unavailable';
+}): AgentConnection | undefined {
+  const endpoint = agentEndpoint(data, catalog());
+  return endpoint.kind === 'known' ? endpoint.connection : undefined;
 }
 
 /** An agent's adapter and real connection, or its unavailable connector status. */
 export function agentLabel(
-  adapter: AdapterId,
-  connection: AgentConnection,
+  adapter: AdapterId | undefined,
+  connection: AgentConnection | undefined,
   { short = false }: { short?: boolean } = {},
 ): string {
+  if (adapter === undefined) return 'Choose an agent';
   const info = connectionInfo(connection);
   return `${adapterName(adapter)} · ${short ? info.short : info.label}`;
 }
@@ -94,7 +93,7 @@ export interface AgentAction {
 }
 
 /** An adapter's declared actions, or none for an adapter this build lacks. */
-export function actionsOf(adapter: AdapterId): readonly AgentAction[] {
+export function actionsOf(adapter: AdapterId | undefined): readonly AgentAction[] {
   return (
     adapterIn(catalog(), adapter)?.actions.map(({ name, description }) => ({
       name,

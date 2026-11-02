@@ -12,7 +12,7 @@ import { nodeKey } from '../../shared/model/rows';
 import type { TurnResult } from '../../shared/session';
 import type { UsageState } from '../../shared/usage';
 import { CanvasMemory } from '../memory';
-import { CATALOG, DEFAULT_ADAPTER } from '../sessions/adapters';
+import { CATALOG } from '../sessions/adapters';
 import { Documents } from './canvas/documents';
 import { commitDocument } from './canvas/test-documents';
 import { MessageStore, MessageTable } from './delivery/messages';
@@ -100,7 +100,6 @@ async function world(initial?: CanvasDocument, checkpoint?: ReturnType<Engine['c
     store,
     memory,
     catalog: CATALOG,
-    defaultAdapter: DEFAULT_ADAPTER,
   });
   if (initial !== undefined) await commitDocument(documents, CANVAS, initial);
   else await documents.load(CANVAS);
@@ -133,7 +132,7 @@ async function world(initial?: CanvasDocument, checkpoint?: ReturnType<Engine['c
   /** The agents a handoff request goes first for (C3's service, here the test's). */
   const firsts = new Set<string>();
   const fake = fakeBackend();
-  const catalog = engineCatalog(CATALOG, DEFAULT_ADAPTER);
+  const catalog = engineCatalog(CATALOG);
   const changed = vi.fn<FallbackDeps['changed']>(() => {
     engine.update(documents.live(CANVAS).document.nodes);
   });
@@ -150,7 +149,7 @@ async function world(initial?: CanvasDocument, checkpoint?: ReturnType<Engine['c
   };
   const service: FallbackService = new FallbackService({
     catalog: CATALOG,
-    defaultAdapter: DEFAULT_ADAPTER,
+
     canvas: (canvas) => (canvas === CANVAS ? runtime : undefined),
     documents,
     sessions,

@@ -1,3 +1,4 @@
+import { templateAgents } from './test-template';
 import { legacyDirectories } from './workspaces/test-directories';
 import { existsSync, writeFileSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
@@ -19,7 +20,7 @@ import type { NeedsItem } from '../../shared/model/needs';
 import { findItem } from '../../shared/model/queue';
 import type { QueueItem } from '../../shared/model/queue';
 import { CanvasMemory } from '../memory';
-import { CATALOG, DEFAULT_ADAPTER } from '../sessions/adapters';
+import { CATALOG } from '../sessions/adapters';
 import { FakeConnector } from '../sessions/fake';
 import { committer } from './canvas/commit';
 import type { Committer } from './canvas/commit';
@@ -337,7 +338,13 @@ describe('R6: an agent never edits itself', () => {
     await refused('agent.setRole', { agent: 'lead', role: 'Decides everything' }, LEAD);
     await refused('canvas.delete', { nodes: ['lead'] }, LEAD);
     // Nothing names it as the target here: the change gives it a manager.
-    expect(await refused('canvas.group', { nodes: ['lead'], kind: 'agent' }, LEAD)).toMatch(/Lead/);
+    expect(
+      await refused(
+        'canvas.group',
+        { adapter: 'claude-code', nodes: ['lead'], kind: 'agent' },
+        LEAD,
+      ),
+    ).toMatch(/Lead/);
   });
 
   it('lets the lead put itself in a frame, which gives it no manager', async () => {
@@ -611,8 +618,8 @@ describe('R11: what a token’s new agents run with, and how many it keeps', () 
     await created('canvas.addAgent', { at: { x: 2300, y: 0 }, adapter: 'codex' });
     await created('canvas.spawnAgent', { from: 'c', relation: 'peer' });
     // An agent made around a frame, or of one, counts too.
-    await created('canvas.group', { nodes: ['loose'], kind: 'agent' });
-    await created('canvas.addParent', { frame: 'spare' });
+    await created('canvas.group', { adapter: 'claude-code', nodes: ['loose'], kind: 'agent' });
+    await created('canvas.addParent', { adapter: 'claude-code', frame: 'spare' });
     expect(mine).toHaveLength(5);
 
     await core.close();
@@ -626,7 +633,7 @@ describe('R11: what a token’s new agents run with, and how many it keeps', () 
     expect(ninth).toMatch(/8/);
     for (const [name, args] of [
       ['canvas.spawnAgent', { from: 'c', relation: 'peer' }],
-      ['canvas.group', { nodes: ['c'], kind: 'agent' }],
+      ['canvas.group', { adapter: 'claude-code', nodes: ['c'], kind: 'agent' }],
     ] as const) {
       expect(await refused(name, args, RENEWED)).toMatch(/at most 8 live agents/);
     }
@@ -678,12 +685,16 @@ describe('R13: no token links or unlinks agents that existed', () => {
 
 describe('R14: no token changes who manages an existing agent; frames are free', () => {
   it('refuses an agent made around agents, of a frame holding one, or out of one', async () => {
-    await refused('canvas.group', { nodes: ['helper'], kind: 'agent' });
-    await refused('canvas.addParent', { frame: 'team' });
+    await refused('canvas.group', { adapter: 'claude-code', nodes: ['helper'], kind: 'agent' });
+    await refused('canvas.addParent', { adapter: 'claude-code', frame: 'team' });
     await refused('canvas.ungroup', { nodes: ['lead'] });
     // Deleting a manager gives its team another: refused, not proposed.
     await refused('canvas.delete', { nodes: ['lead'] });
-    await refused('canvas.group', { nodes: ['member'], kind: 'agent' }, LEAD);
+    await refused(
+      'canvas.group',
+      { adapter: 'claude-code', nodes: ['member'], kind: 'agent' },
+      LEAD,
+    );
   });
 
   it('lets frames come and go around agents', async () => {
@@ -693,9 +704,13 @@ describe('R14: no token changes who manages an existing agent; frames are free',
   });
 
   it('applies yours', async () => {
-    const { id } = await applied('canvas.group', { nodes: ['helper'], kind: 'agent' }, YOU);
+    const { id } = await applied(
+      'canvas.group',
+      { adapter: 'claude-code', nodes: ['helper'], kind: 'agent' },
+      YOU,
+    );
     expect(node('helper').parentId).toBe(id);
-    await applied('canvas.addParent', { frame: 'team' }, YOU);
+    await applied('canvas.addParent', { adapter: 'claude-code', frame: 'team' }, YOU);
     expect(node('team').type).toBe('agent');
   });
 });
@@ -795,7 +810,6 @@ describe('on the change itself, whatever builds it', () => {
       store,
       memory: new CanvasMemory(store),
       catalog: CATALOG,
-      defaultAdapter: DEFAULT_ADAPTER,
     });
     await commitDocument(documents, BUILT, { ...documents.read(JSON.stringify(MAIN)), id: BUILT });
     commit = committer({
@@ -1295,7 +1309,7 @@ describe('workspace-safety on the change itself, whatever builds it', () => {
       store,
       memory,
       catalog: CATALOG,
-      defaultAdapter: DEFAULT_ADAPTER,
+
       workspaces: new WorkspacePlanner({ workspaces, cleanup }),
     });
     await commitDocument(documents, BUILT, { ...documents.read(JSON.stringify(MAIN)), id: BUILT });
@@ -2048,7 +2062,11 @@ describe('proposal defaults and bounds', () => {
           ops: [
             {
               op: 'canvas.insertTemplate',
-              args: { template: TEMPLATE, values: { feature: 'Keep this authorship' } },
+              args: {
+                agents: templateAgents(TEMPLATE, 'claude-code'),
+                template: TEMPLATE,
+                values: { feature: 'Keep this authorship' },
+              },
             },
             { op: 'canvas.delete', args: { nodes: ['helper'] } },
           ],

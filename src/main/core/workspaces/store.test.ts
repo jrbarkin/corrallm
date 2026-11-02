@@ -8,7 +8,7 @@ import type { CanvasId } from '../../../shared/canvas';
 import type { CanvasDocument } from '../../../shared/model/canvas';
 import { CanvasMemory } from '../../memory';
 import { RunJournal } from '../../run-journal';
-import { CATALOG, DEFAULT_ADAPTER } from '../../sessions/adapters';
+import { CATALOG } from '../../sessions/adapters';
 import { Documents } from '../canvas/documents';
 import { commitDocument } from '../canvas/test-documents';
 import { unopened } from '../store/store';
@@ -762,7 +762,6 @@ describe('WorkspaceStore', () => {
       store,
       memory,
       catalog: CATALOG,
-      defaultAdapter: DEFAULT_ADAPTER,
     });
     const agent = (id: string): CanvasDocument['nodes'][number] => ({
       id,

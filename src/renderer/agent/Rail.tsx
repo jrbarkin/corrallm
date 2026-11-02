@@ -8,7 +8,7 @@ import type { Session } from '../../shared/model/session';
 export interface StackedAgent {
   id: string;
   name: string;
-  agent: AdapterId;
+  agent: AdapterId | undefined;
   status: Session['status'];
 }
 

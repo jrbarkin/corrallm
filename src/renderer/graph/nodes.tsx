@@ -1,3 +1,4 @@
+import { agentAdapter } from './agents';
 import { adapterAccent } from '../catalog';
 import {
   BaseEdge,
@@ -18,7 +19,7 @@ import { BranchControls } from '../workspaces/BranchReview';
 import { useLabel } from '../useDraft';
 import { useGraphActions } from './actions';
 import { pointOnBezier } from './curve';
-import { agentLabel, connectionOf, DEFAULT_AGENT } from './agents';
+import { agentLabel, connectionOf } from './agents';
 import type { GraphNode } from './flow';
 import { SHORTCUTS } from './keys';
 import { isBlank } from '../../shared/model/queue';
@@ -40,15 +41,15 @@ export function AgentNodeView({ id, data, parentId }: NodeProps<GraphNode>) {
   return (
     <div
       className="graph-card"
-      data-agent={data.adapter ?? DEFAULT_AGENT}
-      data-accent={adapterAccent(data.adapter ?? DEFAULT_AGENT)}
+      data-agent={agentAdapter(data)}
+      data-accent={adapterAccent(agentAdapter(data))}
       data-status={card.status}
-      title={`Agent: ${agentLabel(data.adapter ?? DEFAULT_AGENT, connectionOf(data))}`}
+      title={`Agent: ${agentLabel(agentAdapter(data), connectionOf(data))}`}
       {...hover.target}
     >
       <Handle type="source" id="top" position={Position.Top} />
       <div className="graph-card-top">
-        <AdapterLogo adapter={data.adapter ?? DEFAULT_AGENT} size={15} />
+        <AdapterLogo adapter={agentAdapter(data)} size={15} />
         <Label id={id} label={data.label} />
         <span className="graph-card-status-dot" aria-hidden="true" />
       </div>

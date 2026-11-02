@@ -1,4 +1,4 @@
-import type { AdapterId, Catalog } from '../../../shared/adapter';
+import type { Catalog } from '../../../shared/adapter';
 import type { Current } from '../../../shared/api/errors';
 import type { NeedId } from '../../../shared/api/ids';
 import type { Party, Rule } from '../../../shared/api/surface';
@@ -301,14 +301,14 @@ export function refusalOf(
   next: CanvasDocument,
   call: { op: string; by: PartyId; caller: TokenCaller; party: Party },
   rules: Readonly<Partial<Record<Rule, ChangeRule>>>,
-  context: { catalog: Catalog; defaultAdapter: AdapterId },
+  context: { catalog: Catalog },
 ): string | undefined {
   const fault = rowsFault(next);
   if (fault !== undefined) return `That canvas can’t be kept: ${fault}.`;
   const empty: CanvasDocument = { id: next.id, arrange: false, nodes: [], links: [] };
   const before = { document: empty, rows: { [META]: { arrange: false } }, revs: new Map() };
   const change = changeSetOf(before, next, diffRows(before.rows, next, empty), call);
-  const invalid = editFault(next, change.entities, context.catalog, context.defaultAdapter);
+  const invalid = editFault(next, change.entities, context.catalog);
   if (invalid !== undefined) return invalid;
   for (const rule of Object.values(rules)) {
     const outcome = rule(change, { caller: call.caller, party: call.party });

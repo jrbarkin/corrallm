@@ -6,20 +6,22 @@ const UNAVAILABLE =
 /** Unsupported agents keep work unsent; no turn, tool activity, or completion is fabricated. */
 export class UnavailableDriver implements SessionDriver {
   readonly #io: DriverIO;
+  readonly #text: string;
 
-  constructor(io: DriverIO) {
+  constructor(io: DriverIO, text = UNAVAILABLE) {
     this.#io = io;
+    this.#text = text;
   }
 
   start(turn: Turn): void {
     this.open();
-    this.#io.refused(turn.id, { text: UNAVAILABLE });
+    this.#io.refused(turn.id, { text: this.#text });
   }
 
   open(): void {
     this.#io.dispatch({
       type: 'add',
-      entry: { id: this.#io.newId(), kind: 'notice', level: 'error', text: UNAVAILABLE },
+      entry: { id: this.#io.newId(), kind: 'notice', level: 'error', text: this.#text },
     });
   }
 

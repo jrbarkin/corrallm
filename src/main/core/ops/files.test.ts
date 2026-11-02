@@ -1,3 +1,4 @@
+import { templateAgents } from '../test-template';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -291,7 +292,11 @@ describe('canvas.create', () => {
     let reach = TOKEN;
     let refused: OpResult<unknown> | undefined;
     for (let i = 0; i <= MAX_CREATED_CANVASES; i++) {
-      const result = await call('canvas.create', { template: TEMPLATE }, reach);
+      const result = await call(
+        'canvas.create',
+        { agents: templateAgents(TEMPLATE, 'claude-code'), template: TEMPLATE },
+        reach,
+      );
       if (!result.ok) {
         refused = result;
         break;
@@ -325,7 +330,11 @@ describe('canvas.create', () => {
     const { canvas, revs } = (await applied('canvas.create', {
       template: TEMPLATE,
       values: { feature: 'Export CSV' },
-      agents: { planner: 'claude-code', builder: 'codex' },
+      agents: {
+        ...templateAgents(TEMPLATE, 'claude-code'),
+        planner: 'claude-code',
+        builder: 'codex',
+      },
       connections: { builder: 'codex.app-server' },
     })) as { canvas: CanvasId; revs: Record<string, number> };
     expect(revs).toMatchObject({ [`canvas:${canvas}`]: 1 });
@@ -346,10 +355,16 @@ describe('canvas.create', () => {
   });
 
   it('keeps the first template canvas and its folder when showing a new template canvas', async () => {
-    const { canvas: first } = await applied('canvas.create', { template: TEMPLATE });
+    const { canvas: first } = await applied('canvas.create', {
+      agents: templateAgents(TEMPLATE, 'claude-code'),
+      template: TEMPLATE,
+    });
     answers.folder.push(profile);
     await applied('project.choose', { canvas: first });
-    const { canvas: second } = await applied('canvas.create', { template: TEMPLATE });
+    const { canvas: second } = await applied('canvas.create', {
+      agents: templateAgents(TEMPLATE, 'claude-code'),
+      template: TEMPLATE,
+    });
     expect(await listed()).toMatchObject({
       [String(first)]: { open: true, edited: true, project: { path: profile }, shownIn: [] },
       [String(second)]: { open: true, edited: true, project: null, shownIn: [1] },
@@ -359,17 +374,38 @@ describe('canvas.create', () => {
   it('refuses a template there isn’t, or choices it doesn’t have, making nothing', async () => {
     const before = Object.keys(await listed());
     expect(
-      await call('canvas.create', { template: '0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4cff' }),
+      await call('canvas.create', {
+        agents: templateAgents('0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4cff', 'claude-code'),
+        template: '0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4cff',
+      }),
     ).toMatchObject({ ok: false, error: { code: 'not-found' } });
     for (const args of [
-      { template: TEMPLATE, agents: { nobody: 'codex' } },
-      { template: TEMPLATE, agents: { planner: 'nothing' } },
-      { template: TEMPLATE, connections: { planner: 'codex.terminal' } },
+      {
+        template: TEMPLATE,
+        agents: { ...templateAgents(TEMPLATE, 'claude-code'), nobody: 'codex' },
+      },
+      {
+        template: TEMPLATE,
+        agents: { ...templateAgents(TEMPLATE, 'claude-code'), planner: 'nothing' },
+      },
+      {
+        agents: templateAgents(TEMPLATE, 'claude-code'),
+        template: TEMPLATE,
+        connections: { planner: 'codex.terminal' },
+      },
       { values: { feature: 'Export CSV' } },
       // As canvas.insertTemplate refuses them (the one fill): a blank it hasn't, and a value
       // that, filled in among the template's words, passes what a message holds.
-      { template: TEMPLATE, values: { nothing: 'Export CSV' } },
-      { template: TEMPLATE, values: { feature: 'x'.repeat(MAX_MESSAGE_BYTES) } },
+      {
+        agents: templateAgents(TEMPLATE, 'claude-code'),
+        template: TEMPLATE,
+        values: { nothing: 'Export CSV' },
+      },
+      {
+        agents: templateAgents(TEMPLATE, 'claude-code'),
+        template: TEMPLATE,
+        values: { feature: 'x'.repeat(MAX_MESSAGE_BYTES) },
+      },
     ]) {
       expect(await call('canvas.create', args), JSON.stringify(args)).toMatchObject({
         ok: false,
@@ -421,7 +457,11 @@ describe('canvas.create', () => {
   it('marks the text a token’s values filled in as the token’s, and checks its agents as R11 does', async () => {
     const { canvas } = (await applied(
       'canvas.create',
-      { template: TEMPLATE, values: { feature: 'Export CSV' } },
+      {
+        agents: templateAgents(TEMPLATE, 'claude-code'),
+        template: TEMPLATE,
+        values: { feature: 'Export CSV' },
+      },
       TOKEN,
     )) as { canvas: CanvasId };
     const [spec, ok, plan] = queueOf(await documentOf(canvas), 'planner');
@@ -442,14 +482,20 @@ describe('canvas.create', () => {
       'canvas.create',
       {
         template: TEMPLATE,
-        agents: { builder: 'codex' },
+        agents: { ...templateAgents(TEMPLATE, 'claude-code'), builder: 'codex' },
         connections: { builder: 'codex.app-server' },
       },
       TOKEN,
     );
     expect(refused).toMatchObject({ ok: false, error: { code: 'refused' } });
     cap = 3;
-    expect(await call('canvas.create', { template: TEMPLATE }, TOKEN)).toMatchObject({
+    expect(
+      await call(
+        'canvas.create',
+        { agents: templateAgents(TEMPLATE, 'claude-code'), template: TEMPLATE },
+        TOKEN,
+      ),
+    ).toMatchObject({
       ok: false,
       error: { code: 'refused', sentence: expect.stringMatching(/at most 3/) as string },
     });
@@ -706,7 +752,7 @@ describe('R4: what a token may not discard comes to you as a proposal', () => {
         'canvas.create',
         {
           template: TEMPLATE,
-          agents: { builder: 'codex' },
+          agents: { ...templateAgents(TEMPLATE, 'claude-code'), builder: 'codex' },
           connections: { builder: 'codex.app-server' },
           replace: { canvas: OTHER, discard: true },
         },
@@ -724,7 +770,7 @@ describe('R4: what a token may not discard comes to you as a proposal', () => {
   });
 
   it.each([
-    ['from a template', { template: TEMPLATE }],
+    ['from a template', { agents: templateAgents(TEMPLATE, 'claude-code'), template: TEMPLATE }],
     ['empty', {}],
   ])(
     'keeps a token’s replace, allowed, as the token’s own canvas, %s: in its reach',
@@ -864,7 +910,11 @@ describe('command proposal completion', () => {
     await edit(OTHER, 'solo', 'Unsaved');
     const { proposed } = await applied(
       'canvas.create',
-      { template: TEMPLATE, replace: { canvas: OTHER, discard: true } },
+      {
+        agents: templateAgents(TEMPLATE, 'claude-code'),
+        template: TEMPLATE,
+        replace: { canvas: OTHER, discard: true },
+      },
       TOKEN,
     );
     await writeFile(files.other, 'not a canvas');
@@ -887,7 +937,11 @@ it('rolls back a new template canvas when closing its replacement fails after pr
   await edit(OTHER, 'solo', 'Unsaved');
   const { proposed } = await applied(
     'canvas.create',
-    { template: TEMPLATE, replace: { canvas: OTHER, discard: true } },
+    {
+      agents: templateAgents(TEMPLATE, 'claude-code'),
+      template: TEMPLATE,
+      replace: { canvas: OTHER, discard: true },
+    },
     TOKEN,
   );
   const before = await listed();

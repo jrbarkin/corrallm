@@ -1,3 +1,4 @@
+import { agentAdapter } from './agents';
 import { useId, useState } from 'react';
 import type { ReactNode, Ref } from 'react';
 
@@ -13,12 +14,12 @@ import { ToolDetailView } from '../agent/ToolDetail';
 import { permissionQuestion } from '../agent/tools';
 import type { AskChoice } from '../../shared/model/run-words';
 import type { Answer } from '../../shared/model/run';
-import { adapterCli, DEFAULT_AGENT } from './agents';
+import { adapterCli } from './agents';
 
 /** Who asks, labelled on a card: a button that opens that agent. */
 interface Asker {
   name: string;
-  type: AdapterId;
+  type: AdapterId | undefined;
   onOpen: () => void;
 }
 
@@ -372,7 +373,7 @@ export function QuestionsSidebar({
     const { agent } = need;
     const asker: Asker = {
       name: agent.data.label || 'Unnamed agent',
-      type: agent.data.adapter ?? DEFAULT_AGENT,
+      type: agentAdapter(agent.data),
       onOpen: () => {
         onOpen(agent.id);
       },

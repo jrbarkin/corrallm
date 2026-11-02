@@ -75,11 +75,12 @@ export function conversationOps(
       return {
         agents: reach.map((id) => {
           const node = agentOf(open, id);
+          const endpoint = engine.catalog.endpointOf(node.data);
           return {
             id,
             name: agentName(document.nodes, id),
-            adapter: node.data.adapter ?? engine.catalog.defaultAdapter,
-            connection: engine.catalog.connectionOf(node.data),
+            adapter: endpoint.kind === 'unchosen' ? null : endpoint.adapter,
+            connection: engine.catalog.connectionOf(node.data) ?? null,
             state: stateOf(open, id),
             prompts: promptsOf(open, id),
             linked: reach.filter((other) => other !== id && areLinked(document.links, id, other)),
@@ -176,7 +177,9 @@ export function conversationOps(
       const pasted = images ?? [];
       if (pasted.length > 0) {
         const connection = open.engine.catalog.connectionOf(node.data);
-        const takes = connectionIn(services.catalog, connection)?.connection.images ?? null;
+        const takes =
+          (connection === undefined ? undefined : connectionIn(services.catalog, connection))
+            ?.connection.images ?? null;
         const name = nameOf(open.document.nodes, to);
         if (takes === null) throw new OpFailure('refused', `${name}’s connection takes no images.`);
         if (pasted.length > takes.max) {

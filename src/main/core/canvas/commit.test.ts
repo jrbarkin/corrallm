@@ -8,7 +8,7 @@ import { newCanvasId } from '../../../shared/canvas';
 import type { CanvasId } from '../../../shared/canvas';
 import type { CanvasDocument } from '../../../shared/model/canvas';
 import { CanvasMemory } from '../../memory';
-import { CATALOG, DEFAULT_ADAPTER } from '../../sessions/adapters';
+import { CATALOG } from '../../sessions/adapters';
 import { OpFailure } from '../call';
 import type { Caller } from '../caller';
 import { asHuman } from '../gui';
@@ -85,7 +85,7 @@ beforeEach(async () => {
   profile = await mkdtemp(path.join(tmpdir(), 'corrallm-commit-'));
   store = await openTestStore(profile);
   const memory = new CanvasMemory(store);
-  documents = new Documents({ store, memory, catalog: CATALOG, defaultAdapter: DEFAULT_ADAPTER });
+  documents = new Documents({ store, memory, catalog: CATALOG });
   canvas = newCanvasId();
   await commitDocument(documents, canvas, document(canvas));
 });
@@ -191,7 +191,6 @@ describe('a commit', () => {
       store,
       memory: new CanvasMemory(store),
       catalog: CATALOG,
-      defaultAdapter: DEFAULT_ADAPTER,
     });
     await documents.load(canvas);
     const heard: ChangeSet[] = [];
@@ -305,7 +304,6 @@ describe('a commit', () => {
       store,
       memory: new CanvasMemory(store),
       catalog: CATALOG,
-      defaultAdapter: DEFAULT_ADAPTER,
     });
     await documents.load(canvas);
     const said: string[] = [];

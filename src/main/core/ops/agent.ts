@@ -1,3 +1,4 @@
+import { agentEndpoint } from '../../../shared/model/catalog';
 import { z } from 'zod';
 
 import { adapterIn, isStartMode } from '../../../shared/adapter';
@@ -7,7 +8,7 @@ import type { Implementations, OpServices } from '.';
 import { requireAgent, withoutUndefined } from './agent-document';
 
 export function agentOps(
-  context: Pick<OpServices, 'catalog' | 'defaultAdapter'>,
+  context: Pick<OpServices, 'catalog'>,
 ): Pick<
   Implementations,
   | 'agent.setType'
@@ -39,7 +40,10 @@ export function agentOps(
     'agent.setConnection': ({ canvas, agent, connection }, ctx) =>
       ctx.commit(canvas, (doc) => {
         const node = requireAgent(doc, agent);
-        connectionOf(node.data.adapter ?? context.defaultAdapter, connection);
+        const endpoint = agentEndpoint(node.data, context.catalog);
+        if (endpoint.kind === 'unchosen')
+          throw new OpFailure('invalid', `Choose ${node.data.label}'s agent first.`);
+        connectionOf(endpoint.adapter, connection);
         return agents.setConnection(doc, { agent, connection }, context);
       }),
     // B11a C1: your chain, its connections resolved now, distinct from the agent's own endpoint.
@@ -64,13 +68,15 @@ export function agentOps(
     'agent.setSettings': ({ canvas, agent, adapter, settings }, ctx) =>
       ctx.commit(canvas, (doc) => {
         const node = requireAgent(doc, agent);
-        const current = node.data.adapter ?? context.defaultAdapter;
+        const endpoint = agentEndpoint(node.data, context.catalog);
+        const current = endpoint.kind === 'known' ? endpoint.adapter : undefined;
         const descriptor = adapterIn(context.catalog, adapter);
         const connection =
           adapter === current
             ? (node.data.connection ?? descriptor?.connections[0]?.id)
             : undefined;
         if (
+          endpoint.kind !== 'unchosen' &&
           settings.mode != null &&
           descriptor &&
           !isStartMode(context.catalog, adapter, connection, settings.mode)

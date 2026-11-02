@@ -51,21 +51,29 @@ export const filesOps = {
       'adapter’s first). Text a token’s values fill in is marked as that token’s. With `replace`, ' +
       'that canvas is closed once this one is made. A token’s canvas has no project folder until ' +
       'the user picks one in the app: nothing runs on it till then. Returns the new canvas’s id.',
-    input: z.strictObject({
-      template: z.uuid().optional(),
-      values: most(
-        z.record(z.string().min(1).max(128), z.string().max(MAX_TEMPLATE_VALUE)),
-        MAX_TEMPLATE_FIELDS,
-        'values',
-      ).optional(),
-      agents: most(z.record(TemplateAgent, CatalogId), MAX_TEMPLATE_AGENTS, 'agents').optional(),
-      connections: most(
-        z.record(TemplateAgent, CatalogId),
-        MAX_TEMPLATE_AGENTS,
-        'connections',
-      ).optional(),
-      replace: Replace.optional(),
-    }),
+    input: z
+      .strictObject({
+        template: z.uuid().optional(),
+        values: most(
+          z.record(z.string().min(1).max(128), z.string().max(MAX_TEMPLATE_VALUE)),
+          MAX_TEMPLATE_FIELDS,
+          'values',
+        ).optional(),
+        agents: most(z.record(TemplateAgent, CatalogId), MAX_TEMPLATE_AGENTS, 'agents').optional(),
+        connections: most(
+          z.record(TemplateAgent, CatalogId),
+          MAX_TEMPLATE_AGENTS,
+          'connections',
+        ).optional(),
+        replace: Replace.optional(),
+      })
+      .refine(
+        (input) =>
+          input.template === undefined
+            ? input.agents === undefined && input.connections === undefined
+            : input.agents !== undefined,
+        'A template requires explicit role adapters; an empty canvas takes none',
+      ),
     output: z.strictObject({ canvas: z.uuid() }),
   }),
   'canvas.open': define('canvas.open', {

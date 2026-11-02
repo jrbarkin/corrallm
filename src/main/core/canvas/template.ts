@@ -1,5 +1,5 @@
 import { adapterIn } from '../../../shared/adapter';
-import type { AdapterId, Catalog } from '../../../shared/adapter';
+import type { Catalog } from '../../../shared/adapter';
 import { MAX_MESSAGE_BYTES } from '../../../shared/api/limits';
 import { exampleOf } from '../../../shared/examples';
 import type { CanvasDocument } from '../../../shared/model/canvas';
@@ -20,13 +20,13 @@ import { OpFailure } from '../call';
  */
 
 /**
- * What a call chose of a template: which, its blanks' values, its agents' adapters (null: the
- * default adapter) and connections, each agent by its id in the template.
+ * What a call chose of a template: which, its blanks' values, every agent's explicit adapter
+ * and optional connections, each agent by its id in the template.
  */
 export interface TemplateChoice {
   template: string;
   values?: Readonly<Record<string, string>>;
-  agents?: Readonly<Record<string, string | null>>;
+  agents: Readonly<Record<string, string>>;
   connections?: Readonly<Record<string, string>>;
 }
 
@@ -38,9 +38,9 @@ export interface TemplateChoice {
  * MAX_MESSAGE_BYTES (or a role past its bound).
  */
 export function filledTemplate(
-  { template, values = {}, agents = {}, connections = {} }: TemplateChoice,
+  { template, values = {}, agents, connections = {} }: TemplateChoice,
   by: PartyId,
-  context: { catalog: Catalog; defaultAdapter: AdapterId },
+  context: { catalog: Catalog },
 ): { name: string; document: CanvasDocument } {
   const example = exampleOf(template);
   if (example === undefined) {
@@ -55,7 +55,7 @@ export function filledTemplate(
       throw new OpFailure('invalid', `${example.name} has no field ${key} (values).`);
     }
   }
-  const shipped = fromFile(example.text, context.catalog, context.defaultAdapter);
+  const shipped = fromFile(example.text, context.catalog);
   const roles = new Set(shipped.nodes.flatMap((node) => (node.type === 'agent' ? [node.id] : [])));
   for (const [what, chosen] of [
     ['agents', agents],
@@ -67,26 +67,26 @@ export function filledTemplate(
       }
     }
   }
+  for (const role of roles) {
+    if (!Object.hasOwn(agents, role))
+      throw new OpFailure('invalid', `Choose an adapter for ${role} (agents.${role}).`);
+  }
   for (const [role, adapter] of Object.entries(agents)) {
-    if (adapter !== null && adapterIn(context.catalog, adapter) === undefined) {
+    if (adapterIn(context.catalog, adapter) === undefined) {
       throw new OpFailure('invalid', `There is no adapter ${adapter} (agents.${role}).`);
     }
   }
-  const typed = withAgents(
-    shipped,
-    Object.fromEntries(
-      Object.entries(agents).map(([role, adapter]) => [role, adapter ?? undefined]),
-    ),
-    context,
-  );
+  const typed = withAgents(shipped, agents, context);
   for (const [role, connection] of Object.entries(connections)) {
     const node = typed.nodes.find((one) => one.id === role);
-    const adapter =
-      (node?.type === 'agent' ? node.data.adapter : undefined) ?? context.defaultAdapter;
-    if (!adapterIn(context.catalog, adapter)?.connections.some(({ id }) => id === connection)) {
+    const adapter = node?.type === 'agent' ? node.data.adapter : undefined;
+    if (
+      adapter === undefined ||
+      !adapterIn(context.catalog, adapter)?.connections.some(({ id }) => id === connection)
+    ) {
       throw new OpFailure(
         'invalid',
-        `${adapter} has no connection ${connection} (connections.${role}).`,
+        `${adapter ?? role} has no connection ${connection} (connections.${role}).`,
       );
     }
   }

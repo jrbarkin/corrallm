@@ -21,26 +21,25 @@ export function catalog(): Catalog {
   return loaded;
 }
 
-/** The adapter a connection runs, or 'unavailable' for one the catalog lacks (or 'unavailable'). */
-export function adapterOf(connection: ConnectionId): AdapterId {
-  if (connection === 'unavailable') return 'unavailable';
-  return connectionIn(catalog(), connection)?.adapter.id ?? 'unavailable';
+/** The owner of a known connection; none for an unchosen or unavailable endpoint. */
+export function adapterOf(connection: ConnectionId | undefined): AdapterId | undefined {
+  return connectionIn(catalog(), connection)?.adapter.id;
 }
 
 /** The connection that continues a connection's conversation for what it can't do, if any. */
-export function continuesIn(connection: ConnectionId): ConnectionId | undefined {
-  if (connection === 'unavailable') return undefined;
+export function continuesIn(connection: ConnectionId | undefined): ConnectionId | undefined {
+  if (connection === undefined) return undefined;
   return connectionIn(catalog(), connection)?.connection.continueIn?.connection;
 }
 
 /** Whether a connection's agent view is its CLI's own terminal (else corrallm's transcript). */
-export function isTerminal(connection: ConnectionId): boolean {
-  if (connection === 'unavailable') return false;
+export function isTerminal(connection: ConnectionId | undefined): boolean {
+  if (connection === undefined) return false;
   return connectionIn(catalog(), connection)?.connection.view === 'terminal';
 }
 
 /** A fixed palette index; an unknown or out-of-range accent uses the first colour. */
-export function adapterAccent(adapter: AdapterId): number {
+export function adapterAccent(adapter: AdapterId | undefined): number {
   const accent = adapterIn(catalog(), adapter)?.accent;
   return accent === 1 ? 1 : 0;
 }

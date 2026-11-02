@@ -1,6 +1,7 @@
+import { agentAdapter } from './agents';
 import { useEffect, useRef } from 'react';
 
-import { actionsOf, DEFAULT_AGENT } from './agents';
+import { actionsOf } from './agents';
 import type { AgentNode, CanvasNode } from '../../shared/model/canvas';
 import { editsOf } from './edits';
 import type { QueueEdits } from './edits';
@@ -51,7 +52,7 @@ export function WorkDetail({
 
   /** The part of `owner`'s queue that makes this work. */
   const part = (owner: AgentNode, add: 'nothing' | { workFor: string }) => {
-    const agent = owner.data.adapter ?? DEFAULT_AGENT;
+    const agent = agentAdapter(owner.data);
     return (
       <section className="graph-work-part" aria-label={`In ${name(owner)}'s queue`}>
         <h3>In {name(owner)}&apos;s queue</h3>

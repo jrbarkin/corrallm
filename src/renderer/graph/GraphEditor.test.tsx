@@ -1,3 +1,4 @@
+import { pickAddedAgent, pickTemplateAgents } from '../test-agent-choice';
 import { NEW_SESSION } from '../../shared/model/session';
 import { renderReady, events } from '../test-render';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
@@ -25,7 +26,6 @@ import type { GuiOp } from '../../shared/api/surface';
 import { PADDING } from '../../shared/model/geometry';
 import type { Graph, GraphNode } from './flow';
 import { documentOf, graphOf } from '../test-graph-data';
-import { DEFAULT_AGENT } from './agents';
 
 // jsdom cannot draw xterm.js: a fake terminal stands in for a Terminal agent's (test-screen.ts).
 vi.mock('../terminal/screen', async () => {
@@ -42,8 +42,8 @@ const agentNode = (
   id,
   type: 'agent',
   position: { x, y },
-  data: { label: id },
   ...extra,
+  data: { adapter: 'claude-code', label: id, ...extra.data },
 });
 
 const frame: GraphNode = {
@@ -116,7 +116,7 @@ const actions = (id: string) => {
 
 beforeEach(() => {
   vi.spyOn(api, 'templatesList').mockResolvedValue({
-    items: EXAMPLES.map((example) => templateInfo(example, catalog(), DEFAULT_AGENT)),
+    items: EXAMPLES.map((example) => templateInfo(example, catalog())),
   });
 });
 
@@ -248,9 +248,9 @@ describe('GraphEditor', () => {
     await waitFor(() => {
       expect(canvas.files.saved).toHaveLength(1);
     });
-    expect(
-      fromFile(canvas.files.saved[0] ?? '', catalog(), DEFAULT_AGENT).nodes[0]?.data.label,
-    ).toBe('Drafted label');
+    expect(fromFile(canvas.files.saved[0] ?? '', catalog()).nodes[0]?.data.label).toBe(
+      'Drafted label',
+    );
   });
 
   it('runs a pending message draft before the idle commit or blur', async () => {
@@ -332,7 +332,7 @@ describe('GraphEditor', () => {
       await waitFor(() => {
         expect(canvas.files.saved).toHaveLength(1);
       });
-      const loaded = fromFile(canvas.files.saved[0] ?? '', catalog(), DEFAULT_AGENT);
+      const loaded = fromFile(canvas.files.saved[0] ?? '', catalog());
       expect(loaded.nodes[0]?.data).toHaveProperty('settings', {
         'claude-code': expected,
         codex: other,
@@ -509,10 +509,10 @@ describe('GraphEditor', () => {
     expect(fake.replies.send).not.toHaveBeenCalled();
     await events.click(queues.getByRole('button', { name: 'Open Legacy' }));
     const view = within(screen.getByRole('dialog', { name: 'Legacy' }));
-    expect(view.getByText(/qwen has no connector yet/)).toBeTruthy();
+    expect(view.getByText(/qwen, which this build doesn't have/)).toBeTruthy();
     expect(view.queryByRole('textbox', { name: 'Message Legacy' })).toBeNull();
     expect(view.queryByText(/scripted session|SUCCEEDED/)).toBeNull();
-    await events.click(view.getByRole('button', { name: 'Choose a connected agent' }));
+    await events.click(view.getByRole('button', { name: 'Choose an agent' }));
     const settings = within(screen.getByRole('dialog', { name: 'Agent settings: Legacy' }));
     await events.click(settings.getByRole('button', { name: /^Agent:/ }));
     expect(
@@ -521,6 +521,31 @@ describe('GraphEditor', () => {
         .map((option) => option.textContent)
         .join(' '),
     ).not.toMatch(/Simulated|qwen|gemini/i);
+  });
+
+  it('opens an unchosen agent with its chip ready, a disabled composer and its own hold', async () => {
+    const { node } = await setup({
+      nodes: [
+        {
+          id: 'a',
+          type: 'agent',
+          position: { x: 0, y: 0 },
+          data: { label: 'Unchosen', queue: [{ id: 'step', action: 'Bash' }] },
+        },
+      ],
+      edges: [],
+    });
+    await events.doubleClick(node('a'));
+    const view = within(screen.getByRole('dialog', { name: 'Unchosen' }));
+    expect(view.getByRole('textbox', { name: 'Message' })).toHaveProperty('disabled', true);
+    expect(
+      view.getByText(
+        'Unchosen has no agent chosen yet. Choose one in its settings to run this work.',
+      ),
+    ).toBeTruthy();
+    expect(
+      view.getByRole('button', { name: 'Agent: Choose an agent' }).getAttribute('aria-expanded'),
+    ).toBe('true');
   });
 
   it('draws agents whose adapters are named like what every object inherits as Not connected', async () => {
@@ -543,7 +568,7 @@ describe('GraphEditor', () => {
     expect(queues.getByRole('group', { name: 'S: Bash' })).toBeTruthy();
     await events.click(queues.getByRole('button', { name: 'Open C' }));
     const view = within(screen.getByRole('dialog', { name: 'C' }));
-    expect(view.getByText(/constructor has no connector yet/)).toBeTruthy();
+    expect(view.getByText(/constructor, which this build doesn't have/)).toBeTruthy();
   });
 
   it('holds one agent through its context menu without changing the saved canvas', async () => {
@@ -745,12 +770,16 @@ describe('GraphEditor', () => {
   it('adds a node on double-click on the empty canvas', async () => {
     const { nodes, pane } = await setup();
     await events.doubleClick(pane, { clientX: 200, clientY: 100 });
+    await pickAddedAgent();
+
     expect(nodes().map((n) => n.querySelector('.graph-label')?.textContent)).toEqual(['Agent 1']);
   });
 
   it("starts a new agent's queue with a message to write, counted on its card once written", async () => {
     const { nodes, pane } = await setup();
     await events.doubleClick(pane, { clientX: 200, clientY: 100 });
+    await pickAddedAgent();
+
     const [card] = nodes();
     if (!card) throw new Error('no node');
     const count = () => card.querySelector('.graph-queue-count')?.getAttribute('data-count');
@@ -838,6 +867,8 @@ describe('GraphEditor', () => {
   it('adds a node inside a group when double-clicking its body', async () => {
     const { nodes, node } = await setup({ nodes: [frame], edges: [] });
     await events.doubleClick(node('F'), { clientX: 100, clientY: 60 });
+    await pickAddedAgent();
+
     expect(nodes('.react-flow__node-frame.parent')).toHaveLength(1);
     expect(screen.queryByRole('textbox')).toBeNull();
   });
@@ -859,9 +890,9 @@ describe('GraphEditor', () => {
     await waitFor(() => {
       expect(canvas.files.saved).toHaveLength(1);
     });
-    expect(
-      fromFile(canvas.files.saved[0] ?? '', catalog(), DEFAULT_AGENT).nodes[0]?.data.label,
-    ).toBe('x'.repeat(MAX_LABEL));
+    expect(fromFile(canvas.files.saved[0] ?? '', catalog()).nodes[0]?.data.label).toBe(
+      'x'.repeat(MAX_LABEL),
+    );
   });
 
   it('renames a node in place on F2: Enter keeps the text, Escape restores it', async () => {
@@ -1832,6 +1863,8 @@ describe('GraphEditor', () => {
       edges: [],
     });
     await events.click(button('Add a parent agent'));
+    await pickAddedAgent();
+
     expect(nodes('.react-flow__node-agent.parent').map((n) => n.dataset.id)).toEqual(['F']);
     expect(node('F').querySelector('.graph-label')?.textContent).toBe('Agent 1');
     expect(node('F').classList.contains('selected')).toBe(true);
@@ -2135,7 +2168,7 @@ describe('GraphEditor', () => {
       unmount();
       const { pane, nodes, canvas } = await setup(undefined, true);
       canvas.files.open = {
-        document: fromFile(text, catalog(), DEFAULT_AGENT),
+        document: fromFile(text, catalog()),
         name: 'team.corral',
       };
       await events.click(button('Open…'));
@@ -2144,6 +2177,8 @@ describe('GraphEditor', () => {
       });
       expect(document.title).toBe('team.corral — corrallm');
       await events.doubleClick(pane, { clientX: 200, clientY: 100 });
+      await pickAddedAgent();
+
       expect(nodes()[0]?.classList.contains('draggable')).toBe(false);
       expect(button('Arrange automatically').getAttribute('aria-pressed')).toBe('true');
       await events.click(button('Arrange automatically'));
@@ -2161,6 +2196,8 @@ describe('GraphEditor', () => {
       const { pane, canvas } = await setup(undefined, true);
       expect(document.title).toBe('Untitled — corrallm');
       await events.doubleClick(pane, { clientX: 200, clientY: 100 });
+      await pickAddedAgent();
+
       expect(document.title).toBe('Untitled (edited) — corrallm');
 
       // Never saved: Save picks its file, as Save As does.
@@ -2171,9 +2208,7 @@ describe('GraphEditor', () => {
       });
       expectOneOp(canvas.core, 'canvas.saveAs', { canvas: canvas.document.id });
       expect(
-        graphOf(fromFile(canvas.files.saved[0] ?? '', catalog(), DEFAULT_AGENT)).nodes.map(
-          (n) => n.data.label,
-        ),
+        graphOf(fromFile(canvas.files.saved[0] ?? '', catalog())).nodes.map((n) => n.data.label),
       ).toEqual(['Agent 1']);
 
       // Ctrl/⌘ Shift S saves as, Ctrl/⌘ S saves.
@@ -2194,6 +2229,7 @@ describe('GraphEditor', () => {
       const { pane, nodes, canvas } = await setup(undefined, true);
       canvas.files.open = opening(coder, id, 'review.corral');
       await events.doubleClick(pane, { clientX: 200, clientY: 100 });
+      await pickAddedAgent();
 
       canvas.core.operations.length = 0;
       await events.click(button('Open…'));
@@ -2223,6 +2259,8 @@ describe('GraphEditor', () => {
       await events.click(button('Start from a template…'));
       const gallery = within(screen.getByRole('dialog', { name: 'Templates' }));
       await events.click(await gallery.findByRole('button', { name: /^Team lead/ }));
+
+      pickTemplateAgents();
       await events.click(gallery.getByRole('button', { name: 'Create canvas' }));
       expect(screen.queryByRole('dialog')).toBeNull();
       // The template is the canvas, created by the core operation.
@@ -2250,6 +2288,8 @@ describe('GraphEditor', () => {
         await events.click(button('Templates…'));
         const gallery = within(await screen.findByRole('dialog', { name: 'Templates' }));
         await events.click(await gallery.findByRole('button', { name: new RegExp(`^${name}`) }));
+
+        pickTemplateAgents();
         await events.click(gallery.getByRole('button', { name: 'Create canvas' }));
         await screen.findByRole('button', { name: 'Choose a project folder' });
       };
@@ -2306,6 +2346,8 @@ describe('GraphEditor', () => {
       await events.change(gallery.getByRole('textbox', { name: 'What should they build?' }), {
         target: { value: 'A slugify(text) helper in src/text.ts.' },
       });
+
+      pickTemplateAgents();
       await events.click(gallery.getByRole('button', { name: 'Create canvas' }));
       expect(screen.queryByRole('dialog')).toBeNull();
       await waitFor(() => {
@@ -2338,10 +2380,14 @@ describe('GraphEditor', () => {
       await events.click(button('Templates…'));
       const gallery = within(screen.getByRole('dialog', { name: 'Templates' }));
       await events.click(await gallery.findByRole('button', { name: /^TDD relay/ }));
-      // Each agent starts as the template names it; the Tester is left to the default agent.
+      // Every role needs an explicit choice, including roles the template used to name.
       const tester = gallery.getByRole('combobox', { name: "Tester's agent" });
-      expect((tester as HTMLSelectElement).value).toBe('codex');
-      await events.change(tester, { target: { value: '' } });
+      expect((tester as HTMLSelectElement).value).toBe('');
+      await events.change(gallery.getByRole('combobox', { name: "Refactorer's agent" }), {
+        target: { value: 'codex' },
+      });
+
+      pickTemplateAgents();
       await events.click(gallery.getByRole('button', { name: 'Insert into this canvas' }));
       expect(screen.queryByRole('dialog')).toBeNull();
       expect(nodes().map((n) => n.querySelector('.graph-label')?.textContent)).toEqual([
@@ -2375,7 +2421,15 @@ describe('GraphEditor', () => {
       const how = (role: string) =>
         gallery.getByRole<HTMLSelectElement>('combobox', { name: `How ${role} runs` });
       const options = (role: string) => [...how(role).options].map((o) => o.textContent);
-      // Missing CLIs never substitute a scripted runtime: each role keeps a native connection.
+      // Missing CLIs never block a native connection after choosing its adapter.
+      expect(how('Implementer').value).toBe('');
+      pickTemplateAgents();
+      await events.change(gallery.getByRole('combobox', { name: "Tester's agent" }), {
+        target: { value: 'codex' },
+      });
+      await events.change(gallery.getByRole('combobox', { name: "Refactorer's agent" }), {
+        target: { value: 'codex' },
+      });
       await waitFor(() => {
         expect(how('Implementer').value).toBe('claude-code.terminal');
       });
@@ -2395,11 +2449,12 @@ describe('GraphEditor', () => {
             .options,
         ].map((option) => [option.value, option.textContent]),
       ).toEqual([
-        ['', 'Default (Claude Code)'],
+        ['', 'Choose an agent'],
         ['claude-code', 'Claude Code'],
         ['codex', 'Codex'],
       ]);
 
+      pickTemplateAgents();
       await events.click(gallery.getByRole('button', { name: 'Create canvas' }));
       const cards = () =>
         [...container.querySelectorAll('.react-flow__node-agent')].map((n) =>

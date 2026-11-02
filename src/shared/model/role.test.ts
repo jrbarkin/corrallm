@@ -9,7 +9,7 @@ import { insert } from './insert';
 import { fillTemplate, placeholdersOf, withAgents, withConnections } from './templates';
 
 const ID = '7d0c2b9e-4f1a-4c3d-9e8b-2a1f0e6d5c4b' as CanvasId;
-const context = { catalog: TEST_CATALOG, defaultAdapter: 'claude-code' };
+const context = { catalog: TEST_CATALOG };
 const document = (): CanvasDocument => ({
   id: ID,
   arrange: false,
@@ -24,7 +24,7 @@ const document = (): CanvasDocument => ({
   links: [],
 });
 const data = (doc: CanvasDocument) => (doc.nodes[0] as AgentNode).data;
-const read = (text: string) => fromFile(text, TEST_CATALOG, context.defaultAdapter);
+const read = (text: string) => fromFile(text, TEST_CATALOG);
 const file = (role: unknown, kind = 'agent') =>
   JSON.stringify({
     format: 'corrallm',

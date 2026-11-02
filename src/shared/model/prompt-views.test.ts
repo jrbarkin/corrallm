@@ -705,7 +705,7 @@ describe('an approval of an MCP serverâ€™s tool: its words yours alone, a tokenâ
       nodes: [{ id: 'b', type: 'agent' as const, data: { label: 'Reviewer' } }],
       run: { running: false, agents: {} },
       sessions: { b: { ...NEW_SESSION, status: 'waiting' as const, entries: [asked] } },
-      catalog: engineCatalog(MADE_UP, 'zed'),
+      catalog: engineCatalog(MADE_UP),
       now: 1,
     } as unknown as NeedsInput;
     const [need] = needsOf(input);

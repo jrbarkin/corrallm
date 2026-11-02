@@ -53,7 +53,7 @@ export interface SubmissionObserver {
 
 /** An agent's driver, how it runs, and whether it is being let go. */
 interface Driving {
-  connection: ConnectionId;
+  connection: ConnectionId | undefined;
   driver: SessionDriver;
   closing: boolean;
 }
@@ -82,7 +82,8 @@ export class SessionStore {
   readonly #backend: SessionBackend;
   readonly #drivers = new Map<string, Driving>();
   /** How each agent runs, as the canvas last said (`sync`). */
-  readonly #connections = new Map<string, ConnectionId>();
+  readonly #connections = new Map<string, ConnectionId | undefined>();
+  readonly #refusals = new Map<string, string>();
   /** What each agent is set to run with in each CLI, as the canvas last said (`sync`). */
   readonly #settings = new Map<string, Partial<Record<AdapterId, AgentSettings>>>();
   /** The authored role is independent of the settings remembered for each CLI. */
@@ -240,7 +241,8 @@ export class SessionStore {
   sync(
     agents: readonly {
       id: string;
-      connection: ConnectionId;
+      connection: ConnectionId | undefined;
+      refusal?: string | undefined;
       settings?: Partial<Record<AdapterId, AgentSettings>> | undefined;
       role?: string | undefined;
     }[],
@@ -256,6 +258,9 @@ export class SessionStore {
     ]);
     for (const id of known) if (!wanted.has(id)) this.#forget(id);
     for (const id of this.#connections.keys()) if (!wanted.has(id)) this.#connections.delete(id);
+    this.#refusals.clear();
+    for (const { id, refusal } of agents)
+      if (refusal !== undefined) this.#refusals.set(id, refusal);
     this.#settings.clear();
     this.#roles.clear();
     for (const { id, settings } of agents) if (settings) this.#settings.set(id, settings);
@@ -275,7 +280,7 @@ export class SessionStore {
         this.#idle(id);
       }
       const once = this.#onceIn.get(id);
-      if (once?.connection === connection) {
+      if (once !== undefined && once.connection === connection) {
         this.#onceIn.delete(id);
         this.send(id, once.agent, once.text);
       }
@@ -377,7 +382,8 @@ export class SessionStore {
     const pending = Promise.resolve().then(async () => {
       try {
         if (this.#freshening.get(agentId) !== pending) return;
-        await this.#backend.fresh(agentId, this.#catalog.adapterOf(connection));
+        const adapter = this.#catalog.adapterOf(connection);
+        if (adapter !== undefined) await this.#backend.fresh(agentId, adapter);
         if (this.#freshening.get(agentId) !== pending) return;
         this.#letGo(agentId);
         this.#dispatch(agentId, { type: 'clear' });
@@ -430,7 +436,7 @@ export class SessionStore {
    */
   send(
     agentId: string,
-    agent: AdapterId,
+    agent: AdapterId | undefined,
     text: string,
     onDone?: (interrupted: boolean, reply: string, result: TurnResult) => void,
     images?: MessageImage[],
@@ -449,7 +455,8 @@ export class SessionStore {
     if (as.task) this.#tasks.set(id, as.task);
     if (as.retryOf) this.#retryOf.set(id, as.retryOf);
     if (as.resolvedStep) this.#resolvedSteps.set(id, as.resolvedStep);
-    this.#types.set(agentId, agent);
+    if (agent === undefined) this.#types.delete(agentId);
+    else this.#types.set(agentId, agent);
     if (origin === 'queue') this.#queueMessages.add(id);
     else if (origin === 'run') this.#runMessages.add(id);
     if (displayText !== undefined) this.#displayTexts.set(id, displayText);
@@ -781,6 +788,8 @@ export class SessionStore {
     this.#displayTexts.clear();
     this.#senders.clear();
     this.#onceIn.clear();
+    this.#refusals.clear();
+
     this.#settings.clear();
     this.#roles.clear();
     this.#options.clear();
@@ -837,7 +846,13 @@ export class SessionStore {
     const conversation = this.#catalog.adapterOf(connection);
     this.#dispatch(agentId, {
       type: 'start',
-      entry: { id, kind: 'user', text, ...pasted, conversation },
+      entry: {
+        id,
+        kind: 'user',
+        text,
+        ...pasted,
+        ...(conversation === undefined ? {} : { conversation }),
+      },
     });
     const from = this.#senders.get(id);
     this.#driver(agentId).start(
@@ -918,13 +933,11 @@ export class SessionStore {
     this.#start(agentId, { text: next.text, images: next.images }, next.id);
   }
 
-  /** Missing runtime configuration follows the same native default as an authored agent. */
-  #connection(agentId: string): ConnectionId {
+  /** A synchronized endpoint, including no endpoint, wins over a prior send's adapter. */
+  #connection(agentId: string): ConnectionId | undefined {
+    if (this.#connections.has(agentId)) return this.#connections.get(agentId);
     const adapter = this.#types.get(agentId);
-    return (
-      this.#connections.get(agentId) ??
-      this.#catalog.connectionOf(adapter === undefined ? {} : { adapter })
-    );
+    return this.#catalog.connectionOf(adapter === undefined ? {} : { adapter });
   }
 
   /** The agent's driver, made as the agent runs if it has none. */
@@ -935,8 +948,8 @@ export class SessionStore {
     // The driver's io needs its entry, and the driver its io.
     const driving = { connection, closing: false } as Driving;
     const io = this.#io(agentId, driving);
-    if (connection === 'unavailable') {
-      driving.driver = new UnavailableDriver(io);
+    if (connection === undefined || this.#catalog.adapterOf(connection) === undefined) {
+      driving.driver = new UnavailableDriver(io, this.#refusals.get(agentId));
     } else {
       this.#listen();
       driving.driver = new ConnectedDriver(agentId, connection, this.#catalog, this.#backend, io);
@@ -958,10 +971,9 @@ export class SessionStore {
       session: () => this.of(agentId),
       sending: (id, text) => this.#fileMentionRefusal(agentId, id, text),
       settings: () => {
+        const adapter = this.#catalog.adapterOf(driving.connection);
         const settings =
-          driving.connection === 'unavailable'
-            ? {}
-            : (this.#settings.get(agentId)?.[this.#catalog.adapterOf(driving.connection)] ?? {});
+          adapter === undefined ? {} : (this.#settings.get(agentId)?.[adapter] ?? {});
         const role = this.#roles.get(agentId);
         return { ...settings, ...(role === undefined ? {} : { role }) };
       },

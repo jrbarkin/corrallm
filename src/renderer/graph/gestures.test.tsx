@@ -1,3 +1,4 @@
+import { pickAddedAgent, pickTemplateAgents } from '../test-agent-choice';
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import type { ComponentProps } from 'react';
 import { afterEach, expect, it, vi } from 'vitest';
@@ -94,6 +95,7 @@ async function setup({
             position: { x: i * 220 + 20, y: 52 },
             ...(group ? { parentId: 'F' } : {}),
             data: {
+              adapter: 'claude-code',
               label: id,
               ...(id === 'a'
                 ? { queue: approval ? [{ id: 'ok', approve: 'Review' }] : queue }
@@ -149,6 +151,8 @@ const button = (name: string | RegExp) => {
   return screen.getByRole('button', { name });
 };
 async function called(core: ReturnType<typeof fakeCanvas>['core']) {
+  await pickAddedAgent();
+
   await waitFor(() => {
     expect(core.operations).toHaveLength(1);
   });
@@ -159,8 +163,11 @@ it('adds with one operation and uses the id from the core', async () => {
   const pane = view.container.querySelector('.react-flow__pane');
   if (!pane) throw new Error('No pane');
   fireEvent.doubleClick(pane, { clientX: 100, clientY: 200 });
+  await pickAddedAgent();
+
   await called(view.core);
   expectOneOp(view.core, 'canvas.addAgent', {
+    connection: 'claude-code.terminal',
     canvas: view.canvas,
     adapter: 'claude-code',
     at: { x: expect.any(Number) as unknown, y: expect.any(Number) as unknown },
@@ -176,6 +183,7 @@ it('adds with one operation and uses the id from the core', async () => {
       expect(node.measured?.height).toBeGreaterThan(0);
     }
 });
+
 async function openAgent(view: Awaited<ReturnType<typeof setup>>) {
   fireEvent.doubleClick(view.node('a'));
   await act(() => Promise.resolve());
@@ -204,7 +212,12 @@ it.each([
   fireEvent.keyDown(document.body, { key: 'g', ctrlKey: true, shiftKey, altKey });
   await called(view.core);
   if (kind)
-    expectOneOp(view.core, 'canvas.group', { canvas: view.canvas, nodes: ['a', 'b'], kind });
+    expectOneOp(view.core, 'canvas.group', {
+      canvas: view.canvas,
+      nodes: ['a', 'b'],
+      kind,
+      ...(kind === 'agent' ? { adapter: 'claude-code', connection: 'claude-code.terminal' } : {}),
+    });
   else expectOneOp(view.core, 'canvas.ungroup', { canvas: view.canvas, nodes: ['F'] });
 });
 it('deletes with one operation and shows cleared queue references', async () => {
@@ -220,9 +233,17 @@ it('deletes with one operation and shows cleared queue references', async () => 
 it('adds a parent with one operation', async () => {
   const view = await setup({ group: true, selected: [] });
   fireEvent.click(button('Add a parent agent'));
+  await pickAddedAgent();
+
   await called(view.core);
-  expectOneOp(view.core, 'canvas.addParent', { canvas: view.canvas, frame: 'F' });
+  expectOneOp(view.core, 'canvas.addParent', {
+    adapter: 'claude-code',
+    connection: 'claude-code.terminal',
+    canvas: view.canvas,
+    frame: 'F',
+  });
 });
+
 it('links with one operation', async () => {
   const view = await setup();
   act(() => {
@@ -310,19 +331,22 @@ it.each(['peer', 'linked'] as const)('spawns a %s with one operation', async (re
   await called(view.core);
   expectOneOp(view.core, 'canvas.spawnAgent', { canvas: view.canvas, from: 'a', relation });
 });
+
 it.each(['TDD relay', 'Head to head'])(
   'inserts %s with one operation, preserving its roots with core-minted ids',
   async (name) => {
     const example = EXAMPLES.find((example) => example.name === name);
     if (!example) throw new Error('No template');
-    const template = templateInfo(example, catalog(), 'claude-code');
+    const template = templateInfo(example, catalog());
     vi.spyOn(api, 'templatesList').mockResolvedValue({ items: [template] });
     const view = await setup({ files: true });
     const previous = new Set(view.document.nodes.map(({ id }) => id));
-    const source = fromFile(example.text, catalog(), 'claude-code');
+    const source = fromFile(example.text, catalog());
     fireEvent.click(button('Templates…'));
     const gallery = within(await screen.findByRole('dialog', { name: 'Templates' }));
     fireEvent.click(await gallery.findByRole('button', { name: new RegExp(`^${example.name}`) }));
+
+    pickTemplateAgents();
     const agents = Object.fromEntries(
       template.agents.map((role) => [
         role.id,
@@ -343,6 +367,8 @@ it.each(['TDD relay', 'Head to head'])(
       });
       connections[role.id] = select.value;
     }
+
+    pickTemplateAgents();
     fireEvent.click(gallery.getByRole('button', { name: 'Insert into this canvas' }));
     await called(view.core);
     expectOneOp(view.core, 'canvas.insertTemplate', {
@@ -417,11 +443,18 @@ it('keeps an untouched rendered node object when another queue changes', async (
           {
             id: 'a',
             kind: 'agent',
+            adapter: 'claude-code',
             label: 'a',
             position: { x: 20, y: 52 },
             queue: [{ id: 'work', message: 'Changed' }],
           },
-          { id: 'b', kind: 'agent', label: 'b', position: { x: 240, y: 52 } },
+          {
+            id: 'b',
+            kind: 'agent',
+            adapter: 'claude-code',
+            label: 'b',
+            position: { x: 240, y: 52 },
+          },
         ],
         links: [],
       }),
@@ -633,10 +666,14 @@ it('does not leave a viewport fit queued for the first node of an empty restored
   const pane = view.container.querySelector('.react-flow__pane');
   if (!pane) throw new Error('No pane');
   fireEvent.doubleClick(pane, { clientX: 300, clientY: 200 });
+  await pickAddedAgent();
+
   await called(view.core);
   expect(view.document.nodes[0]?.position).toEqual({ x: 207, y: 164 });
   expect(seen.fits).toEqual([]);
   fireEvent.doubleClick(pane, { clientX: 650, clientY: 380 });
+  await pickAddedAgent();
+
   await waitFor(() => {
     expect(view.document.nodes).toHaveLength(2);
   });
@@ -719,6 +756,8 @@ it('keeps nested group cards inside the new frame through a reparenting operatio
   const add = async (x: number, y: number) => {
     const before = canvas.document.nodes.length;
     fireEvent.doubleClick(pane, { clientX: x, clientY: y });
+    await pickAddedAgent();
+
     await waitFor(() => {
       expect(canvas.document.nodes).toHaveLength(before + 1);
     });
@@ -751,13 +790,15 @@ it('keeps nested group cards inside the new frame through a reparenting operatio
 it('creates a template as the new canvas, retaining its node ids and choosing a fresh project', async () => {
   const example = EXAMPLES[0];
   if (!example) throw new Error('No template');
-  const template = templateInfo(example, catalog(), 'claude-code');
+  const template = templateInfo(example, catalog());
   vi.spyOn(api, 'templatesList').mockResolvedValue({ items: [template] });
   const view = await setup({ files: true, project: true });
   expect(button('Project folder: Old project')).toBeDefined();
   fireEvent.click(button('Templates…'));
   const gallery = within(await screen.findByRole('dialog', { name: 'Templates' }));
   fireEvent.click(await gallery.findByRole('button', { name: new RegExp(`^${example.name}`) }));
+
+  pickTemplateAgents();
   const agents: Record<string, string> = {},
     connections: Record<string, string> = {};
   for (const role of template.agents) {
@@ -769,6 +810,8 @@ it('creates a template as the new canvas, retaining its node ids and choosing a 
       name: `How ${role.name} runs`,
     }).value;
   }
+
+  pickTemplateAgents();
   fireEvent.click(gallery.getByRole('button', { name: 'Create canvas' }));
   await called(view.core);
   expectOneOp(view.core, 'canvas.create', {
@@ -780,7 +823,7 @@ it('creates a template as the new canvas, retaining its node ids and choosing a 
   await waitFor(() => {
     expect(view.document.id).not.toBe(view.canvas);
   });
-  const source = fromFile(example.text, catalog(), 'claude-code');
+  const source = fromFile(example.text, catalog());
   const shape = (node: CanvasDocument['nodes'][number]) => ({
     id: node.id,
     type: node.type,

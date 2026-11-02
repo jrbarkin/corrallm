@@ -75,7 +75,7 @@ export interface AgentRun {
    */
   refused?: RunRefusal & {
     agent: string;
-    connection: ConnectionId;
+    connection: ConnectionId | null;
   };
   /** While held at a delay, or at a wait with a time limit: when that time comes (epoch ms). */
   until?: number;

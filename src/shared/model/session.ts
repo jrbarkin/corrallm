@@ -262,7 +262,7 @@ export interface Session {
  */
 function messagesOf(
   entries: readonly Entry[],
-  conversation: Conversation,
+  conversation: Conversation | undefined,
 ): Extract<Entry, { kind: 'user' }>[] {
   const ours = entries.filter(
     (entry): entry is Extract<Entry, { kind: 'user' | 'cleared' }> =>
@@ -279,7 +279,7 @@ function messagesOf(
  */
 export function chatStart(
   entries: readonly Entry[],
-  conversation: Conversation,
+  conversation: Conversation | undefined,
 ): Extract<Entry, { kind: 'user' }> | undefined {
   return messagesOf(entries, conversation)[0];
 }

@@ -24,7 +24,14 @@ it('shows topic workspace attention beside Idle, glows the dock, and opens the e
   const { container } = await renderReady(
     <GraphEditor
       initialGraph={{
-        nodes: [{ id: 'a', type: 'agent', position: { x: 0, y: 0 }, data: { label: 'Builder' } }],
+        nodes: [
+          {
+            id: 'a',
+            type: 'agent',
+            position: { x: 0, y: 0 },
+            data: { adapter: 'claude-code', label: 'Builder' },
+          },
+        ],
         edges: [],
       }}
       onCanvas={(canvas) => {
@@ -145,6 +152,7 @@ it('constrains a long name and full queue to the same card, clipping the label w
             type: 'agent',
             position: { x: 0, y: 0 },
             data: {
+              adapter: 'claude-code',
               label: name,
               queue: Array.from({ length: 100 }, (_, i) => ({
                 id: `m${String(i)}`,
@@ -180,7 +188,11 @@ it('uses the guide’s 186 by 73 card, with a catalog image, name, status and qu
             id: 'a',
             type: 'agent',
             position: { x: 0, y: 0 },
-            data: { label: 'Writer', queue: [{ id: 'one', message: 'Work' }] },
+            data: {
+              adapter: 'claude-code',
+              label: 'Writer',
+              queue: [{ id: 'one', message: 'Work' }],
+            },
           },
         ],
         edges: [],

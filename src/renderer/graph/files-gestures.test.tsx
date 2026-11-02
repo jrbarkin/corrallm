@@ -1,3 +1,4 @@
+import { pickTemplateAgents } from '../test-agent-choice';
 import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { newCanvasId } from '../../shared/canvas';
@@ -5,7 +6,7 @@ import { EXAMPLES } from '../../shared/examples';
 import { templateInfo } from '../../shared/templates';
 import { api } from '../api/client';
 import { catalog } from '../catalog';
-import { DEFAULT_AGENT } from './agents';
+
 import type { AgentNode } from '../../shared/model/canvas';
 import { fakeCanvas } from '../test-canvas';
 import { expectOneOp } from '../test-api';
@@ -19,7 +20,7 @@ vi.mock('../terminal/screen', async () => ({
 const cleanups: (() => void)[] = [];
 beforeEach(() => {
   vi.spyOn(api, 'templatesList').mockResolvedValue({
-    items: EXAMPLES.map((example) => templateInfo(example, catalog(), DEFAULT_AGENT)),
+    items: EXAMPLES.map((example) => templateInfo(example, catalog())),
   });
 });
 afterEach(() => {
@@ -34,7 +35,14 @@ function setup(saved = true) {
     id: newCanvasId(),
     arrange: false,
     links: [],
-    nodes: [{ id: 'a', type: 'agent', position: { x: 0, y: 0 }, data: { label: 'Writer' } }],
+    nodes: [
+      {
+        id: 'a',
+        type: 'agent',
+        position: { x: 0, y: 0 },
+        data: { adapter: 'claude-code', label: 'Writer' },
+      },
+    ],
   });
   if (saved) canvas.meta({ name: 'work.corral' });
   cleanups.push(() => {
@@ -120,6 +128,8 @@ it('a template’s New is one canvas.create, keeping edited work open as New and
   await click('Templates…');
   const gallery = within(await screen.findByRole('dialog', { name: 'Templates' }));
   await events.click(await gallery.findByRole('button', { name: /^Review loop/ }));
+
+  pickTemplateAgents();
   await events.click(gallery.getByRole('button', { name: 'Create canvas' }));
   expect(screen.queryByRole('alertdialog')).toBeNull();
   await waitFor(() => {

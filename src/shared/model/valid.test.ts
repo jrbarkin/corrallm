@@ -71,7 +71,7 @@ function faultOf(next: CanvasDocument, was: CanvasDocument = BEFORE): string | u
   const entities = new Map<EntityKey, { before: Row | null; after: Row | null }>(
     changed.map((key) => [key, { before: before[key] ?? null, after: rows[key] ?? null }]),
   );
-  return editFault(next, entities, TEST_CATALOG, 'claude-code');
+  return editFault(next, entities, TEST_CATALOG);
 }
 
 describe('editFault', () => {

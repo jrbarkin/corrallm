@@ -84,79 +84,78 @@ export function sameEndpoint(a: AgentEndpoint, b: AgentEndpoint): boolean {
 }
 
 export interface EngineCatalog {
-  /** The adapter an agent that names none runs (the one a new agent starts with). */
-  readonly defaultAdapter: AdapterId;
+  /** The one resolver, with no preference or implicit endpoint. */
+  endpointOf(agent: Runs): AgentEndpoint;
   /**
-   * How an agent runs: its connection; its adapter's first, when it names none (its adapter the
-   * default, when it names none); 'unavailable' when it names one its adapter doesn't offer, or
-   * its adapter is one the catalog lacks.
+   * The connection of a known endpoint; undefined for unchosen or unavailable agents.
    */
-  connectionOf(agent: Runs): ConnectionId;
-  /** The adapter a connection runs: 'unavailable' for one the catalog lacks (or 'unavailable'). */
-  adapterOf(connection: ConnectionId): AdapterId;
+  connectionOf(agent: Runs): ConnectionId | undefined;
+  /** The owner of a known connection; undefined otherwise. */
+  adapterOf(connection: ConnectionId | undefined): AdapterId | undefined;
   /** What an agent's steps can name, with what each does: none, for an adapter the catalog lacks. */
-  actionsOf(agent: Pick<Runs, 'adapter'>): readonly AgentAction[];
+  actionsOf(agent: Runs): readonly AgentAction[];
   /** Resolves a step for this send only, by its declared action or equivalent catalog job. */
-  resolveAction(
-    action: string,
-    agent: Pick<Runs, 'adapter'>,
-  ): { action: string } | { unknown: true };
+  resolveAction(action: string, agent: Runs): { action: string } | { unknown: true };
   /**
    * The usage backend an agent spends, whose usage rule applies to it: its connection's (none where
    * no reading can see it, as on an API key).
    */
   usageBackendOf(agent: Runs): UsageBackendId | undefined;
   /** How a connection is named ("Terminal"): nothing, for one the catalog lacks. */
-  connectionLabel(connection: ConnectionId): string | undefined;
+  connectionLabel(connection: ConnectionId | undefined): string | undefined;
   /** Whether this connection runs its CLI's own terminal. */
-  isTerminal(connection: ConnectionId): boolean;
+  isTerminal(connection: ConnectionId | undefined): boolean;
   /**
    * How a connection is named in full, with its adapter's name ("<adapter> · Terminal"): nothing,
    * for one the catalog lacks.
    */
-  connectionName(connection: ConnectionId): string | undefined;
+  connectionName(connection: ConnectionId | undefined): string | undefined;
   /**
    * The text a connection runs as a shell command, without asking, when a message starts with it:
    * none for one that runs no shell command from a message (or one the catalog lacks).
    */
-  shellPrefix(connection: ConnectionId): string | undefined;
+  shellPrefix(connection: ConnectionId | undefined): string | undefined;
   /** Whether this connection expands @ file mentions in input without asking. */
-  fileMentions(connection: ConnectionId): boolean;
+  fileMentions(connection: ConnectionId | undefined): boolean;
   /** Every text any connection runs as a shell command, without asking, when a message starts with it. */
   readonly shellPrefixes: readonly string[];
   /**
    * Whether a connection's sessions may start in `mode`: one its adapter lists that asks, among
    * those the connection starts in (never, for a connection the catalog lacks).
    */
-  isStartMode(connection: ConnectionId, mode: ModeId): boolean;
+  isStartMode(connection: ConnectionId | undefined, mode: ModeId): boolean;
   /**
    * Whether a session on `connection` acts without asking in `mode`: one its adapter lists that
    * never asks (never a mode it doesn't list, nor one on a connection the catalog lacks).
    */
-  neverAsks(connection: ConnectionId, mode: ModeId): boolean;
+  neverAsks(connection: ConnectionId | undefined, mode: ModeId): boolean;
   /** How a usage backend is named: its label; its id, for one the catalog lacks. */
   backendName(backend: UsageBackendId): string;
 }
 
-/**
- * The run's lookups in `catalog`, an agent naming no adapter running `defaultAdapter` (the agent a
- * new node starts with).
- */
-export function engineCatalog(catalog: Catalog, defaultAdapter: AdapterId): EngineCatalog {
-  const connection = (id: ConnectionId) =>
-    id === 'unavailable' ? undefined : connectionIn(catalog, id);
-  const connectionOf = ({ adapter = defaultAdapter, connection: id }: Runs): ConnectionId => {
-    const offered = adapterIn(catalog, adapter)?.connections ?? [];
-    if (id === undefined) return offered[0]?.id ?? 'unavailable';
-    return offered.some((one) => one.id === id) ? id : 'unavailable';
+/** Runtime lookups resolve only the endpoint the agent itself names. */
+export function engineCatalog(catalog: Catalog): EngineCatalog {
+  const connection = (id: ConnectionId | undefined) =>
+    id === undefined ? undefined : connectionIn(catalog, id);
+  const endpoint = (agent: Runs) => agentEndpoint(agent, catalog);
+  const connectionOf = (agent: Runs): ConnectionId | undefined => {
+    const found = endpoint(agent);
+    return found.kind === 'known' ? found.connection : undefined;
   };
   return {
-    defaultAdapter,
+    endpointOf: endpoint,
     connectionOf,
-    adapterOf: (id) => connection(id)?.adapter.id ?? 'unavailable',
-    actionsOf: ({ adapter = defaultAdapter }) => adapterIn(catalog, adapter)?.actions ?? [],
-    resolveAction: (action, { adapter = defaultAdapter }) =>
-      resolveAction(action, adapter, catalog),
+    adapterOf: (id) => connection(id)?.adapter.id,
+    actionsOf: (agent) => {
+      const found = endpoint(agent);
+      return found.kind === 'known' ? (adapterIn(catalog, found.adapter)?.actions ?? []) : [];
+    },
+    resolveAction: (action, agent) => {
+      const found = endpoint(agent);
+      return found.kind === 'known'
+        ? resolveAction(action, found.adapter, catalog)
+        : { unknown: true };
+    },
     usageBackendOf: (agent) => connection(connectionOf(agent))?.connection.usage ?? undefined,
     connectionLabel: (id) => connection(id)?.connection.label,
     isTerminal: (id) => connection(id)?.connection.view === 'terminal',
@@ -187,10 +186,10 @@ export interface ResolvedStep {
 export function adapterRefusal(
   catalog: EngineCatalog,
   resolved: ResolvedStep,
-  connection: ConnectionId,
+  connection: ConnectionId | undefined,
 ): string | undefined {
   if (catalog.adapterOf(connection) === resolved.adapter) return undefined;
-  return `Not sent: ${resolved.action} was built for ${resolved.adapter}, but this agent now runs ${catalog.connectionName(connection) ?? connection}. Edit the step or change its backend to check it again.`;
+  return `Not sent: ${resolved.action} was built for ${resolved.adapter}, but this agent now runs ${catalog.connectionName(connection) ?? connection ?? 'no chosen endpoint'}. Edit the step or change its backend to check it again.`;
 }
 
 /** Every text any of `catalog`'s connections runs as a shell command, without asking, once each. */
@@ -219,7 +218,7 @@ export function hasFileMention(text: string): boolean {
 /** Only the user's typed text may ask a connection to expand a native file mention. */
 export function fileMentionRefusal(
   catalog: EngineCatalog,
-  connection: ConnectionId,
+  connection: ConnectionId | undefined,
   text: string,
 ): string | undefined {
   if (!catalog.fileMentions(connection) || !hasFileMention(text)) return undefined;
@@ -234,11 +233,19 @@ export function fileMentionRefusal(
  */
 export function shellRefusal(
   catalog: EngineCatalog,
-  connection: ConnectionId,
+  connection: ConnectionId | undefined,
   text: string,
 ): string | undefined {
   const prefix = catalog.shellPrefix(connection);
   if (!startsWithShell(text, prefix)) return undefined;
   const name = catalog.connectionName(connection) ?? 'its connection';
   return `Not sent: it starts with "${prefix}", which ${name} runs as a shell command, without asking. Reword it, or type it in the agent’s terminal yourself.`;
+}
+
+/** Why an agent cannot run until you choose an endpoint in its settings. */
+export function endpointRefusal(endpoint: AgentEndpoint, name: string): string | undefined {
+  if (endpoint.kind === 'known') return undefined;
+  return endpoint.kind === 'unchosen'
+    ? `${name} has no agent chosen yet. Choose one in its settings to run this work.`
+    : `${name} runs ${endpoint.adapter}, which this build doesn't have. Choose another agent in its settings to run this work.`;
 }

@@ -1,3 +1,4 @@
+import { agentAdapter } from '../graph/agents';
 import { useEffect, useLayoutEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { useDraft, useLabel } from '../useDraft';
@@ -8,7 +9,7 @@ import { parseRole } from '../../shared/role';
 import { MAX_ROLE_LENGTH } from '../../shared/session';
 import type { AgentSettings, SettingsOptions } from '../../shared/session';
 import { catalog, continuesIn } from '../catalog';
-import { adapterName, connectionInfo, connectionOf, DEFAULT_AGENT } from '../graph/agents';
+import { adapterName, connectionInfo, connectionOf } from '../graph/agents';
 import type { AgentConnection } from '../graph/agents';
 import type { AgentNode } from '../../shared/model/canvas';
 import { AgentChip } from './AgentChip';
@@ -30,14 +31,17 @@ export function AgentSettingsSummary({
   onOpen: () => void;
 }) {
   const name = node.data.label || 'Unnamed agent';
-  const adapter = node.data.adapter ?? DEFAULT_AGENT;
+  const adapter = agentAdapter(node.data);
   const connection = connectionOf(node.data);
-  const prefix = `${adapterName(adapter)} · ${connectionInfo(connection).label}`;
+  const prefix =
+    adapter === undefined
+      ? 'Choose an agent'
+      : `${adapterName(adapter)} · ${connectionInfo(connection).label}`;
   const role = node.data.role?.split(/\r?\n/)[0];
   const suffix = ` · ${role ?? 'No role'}`;
   return (
     <div className="agent-settings-summary" title={node.data.role}>
-      {connection === 'unavailable' ? (
+      {connection === undefined || adapter === undefined ? (
         <button
           type="button"
           className="agent-settings-button"
@@ -98,15 +102,17 @@ export function AgentSettingsPanel({
     validate: parseRole,
   });
   const name = node.data.label || 'Unnamed agent';
-  const adapter = node.data.adapter ?? DEFAULT_AGENT;
+  const adapter = agentAdapter(node.data);
   const connection = connectionOf(node.data);
-  const settings = connection === 'unavailable' ? {} : (node.data.settings?.[adapter] ?? {});
+  const settings =
+    connection === undefined || adapter === undefined ? {} : (node.data.settings?.[adapter] ?? {});
   const running = session.running;
   // A resumed conversation keeps the role it started with: a changed role needs a new one.
   const keepsRole = adapterIn(catalog(), adapter)?.role === 'append-new';
   const changedRole = running !== undefined && running.role !== node.data.role;
   const pending =
-    connection !== 'unavailable' &&
+    connection !== undefined &&
+    adapter !== undefined &&
     running !== undefined &&
     (running.role !== node.data.role ||
       running.model !== settings.model ||
@@ -199,7 +205,8 @@ export function AgentSettingsPanel({
             connection={connection}
             onChange={onAgent}
             onContinueInTerminal={() => {
-              onAgent(adapter, continuesIn(connection) ?? connection);
+              if (adapter !== undefined && connection !== undefined)
+                onAgent(adapter, continuesIn(connection) ?? connection);
             }}
           />
         </div>
@@ -226,7 +233,7 @@ export function AgentSettingsPanel({
             {problem}
           </p>
         )}
-        {connection !== 'unavailable' && (
+        {connection !== undefined && adapter !== undefined && (
           <SettingsMenu
             inline
             adapter={adapter}

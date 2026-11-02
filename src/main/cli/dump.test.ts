@@ -10,7 +10,7 @@ import { afterEach, beforeEach, expect, it } from 'vitest';
 import { newCanvasId } from '../../shared/canvas';
 import { CanvasMemory } from '../memory';
 import { RunJournal } from '../run-journal';
-import { CATALOG, DEFAULT_ADAPTER } from '../sessions/adapters';
+import { CATALOG } from '../sessions/adapters';
 import { Documents } from '../core/canvas/documents';
 import { commitDocument } from '../core/canvas/test-documents';
 import { MessageStore, MessageTable } from '../core/delivery/messages';
@@ -43,7 +43,7 @@ beforeEach(async () => {
     later: () => () => undefined,
   });
   const memory = new CanvasMemory(store);
-  documents = new Documents({ store, memory, catalog: CATALOG, defaultAdapter: DEFAULT_ADAPTER });
+  documents = new Documents({ store, memory, catalog: CATALOG });
   documents.create(canvas, 'you');
   await commitDocument(documents, canvas, {
     id: canvas,

@@ -14,7 +14,7 @@ import type { Entities, MetaEntity } from '../../../shared/model/state';
 import { canvasStateOf } from '../../../shared/model/state';
 import { CanvasMemory } from '../../memory';
 import { RunJournal } from '../../run-journal';
-import { CATALOG, DEFAULT_ADAPTER } from '../../sessions/adapters';
+import { CATALOG } from '../../sessions/adapters';
 import { mintTrustedPath } from '../host';
 import type { Connection } from '../store/sqlite';
 import type { Store } from '../store/store';
@@ -96,7 +96,7 @@ async function filed(document: CanvasDocument): Promise<string> {
   return file;
 }
 function start(): void {
-  documents = new Documents({ store, memory, catalog: CATALOG, defaultAdapter: DEFAULT_ADAPTER });
+  documents = new Documents({ store, memory, catalog: CATALOG });
   states = new CanvasStates({
     documents,
     memory,

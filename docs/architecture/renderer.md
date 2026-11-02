@@ -50,9 +50,9 @@ Canvases save as .corral files (versioned JSON, version 3, holding the canvas's 
 
 ExampleGallery.tsx reads their fields and agent roles through templates.list; a test keeps each one valid and written exactly as toFile writes it.
 
-A template may leave blanks ({{key}}, filled from its `fields`; src/shared/model/templates.ts) and leave agents' types open (no `adapter`: the default, or chosen when it is used; withAgents translates steps between types by their catalog jobs through model/agent-ops.ts).
+A template may leave blanks ({{key}}, filled from its `fields`; src/shared/model/templates.ts) and leave agents' types open (every role must be chosen when used; withAgents translates template steps by catalog jobs).
 
-The gallery's form also chooses how each agent runs (withConnections): by default in a Terminal by native default (`defaultConnection`); missing installed CLIs are labelled without falling back to fake work.
+The gallery's form also chooses how each agent runs (withConnections): on the chosen adapter’s first declared connection (`defaultConnection`); missing installed CLIs are labelled without falling back to fake work.
 
 A template's tool steps say what they are to do (`instruction`, which may hold blanks too), as does Codex's /review: a test keeps it so.
 
@@ -157,3 +157,9 @@ B13 X10 uses one `src/renderer/agent/PromptCard.tsx` over the owner's selected p
 B12's catalog display selectors read names, connection words, actions and modes from the loaded catalog on each render; the agent chip never captures choices at module evaluation. Startup settings offer only the connection's `startModes`, mode cycling uses `asks`, and default details and the empty MCP list use the adapter's words with neutral fallbacks. Cards, chips, windows and logo fallbacks use catalog accent indices into the fixed palette (out-of-range values use zero). Gauges reflect the actual connections on the canvas, including connections with no usage backend. `DEFAULT_AGENT` and default-agent creation remain for X3.
 
 A terminal question's owner card shows every question, option and description read-only, with navigation to the terminal and no API answer controls. Folder trust in the owner entry sets the terminal bar's pre-turn trust status without a legacy asking mirror.
+
+## Choosing an agent
+
+Add (including a double-click), group-as-agent and frame-to-agent ask for an endpoint when the saved preference is absent or unavailable. `graph/AddAgentChooser.tsx` lists all catalog adapters and connections in declared order, marks missing installations without blocking a planned card, and starts with no selected row or focused choice. Enter is inert until a row is chosen; Cancel sends nothing. Add sends one operation naming the adapter and connection. `useAddEndpoint` reads a known preference only for the next creation, never for an existing agent. The preference controls and gallery prefill remain the next settings slice.
+
+Gallery roles start empty and each is required before Create or Insert. An unchosen card or dock has a hollow mark and “Choose an agent”; its window opens the chip, disables the composer, and explains “<name> has no agent chosen yet. Choose one in its settings to run this work.” Its queues retain free text and offer no native actions. Choosing through the chip is one `agent.setType`; settings, model names and registry order never choose an endpoint.

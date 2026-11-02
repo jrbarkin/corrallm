@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { readFile, realpath, stat } from 'node:fs/promises';
 import path from 'node:path';
 
-import type { AdapterId, Catalog } from '../../../shared/adapter';
+import type { Catalog } from '../../../shared/adapter';
 import type { CanvasId } from '../../../shared/canvas';
 import { MAX_CANVAS_BYTES } from '../../../shared/canvas';
 import type { CanvasDocument } from '../../../shared/model/canvas';
@@ -118,8 +118,6 @@ export interface DocumentsDeps {
   memory: CanvasMemory;
   /** What files are read against. */
   catalog: Catalog;
-  /** The adapter an agent naming none runs. */
-  defaultAdapter: AdapterId;
   /** An accepted file changes the saved baseline without changing the document's rows. */
   baselineChanged?: (canvas: CanvasId) => void;
   /** The reviews of files changed on disk. Without them, no file is checked (a document's tests). */
@@ -645,7 +643,7 @@ export class Documents {
 
   /** A canvas file's text as a document, read against the catalog. Throws, saying why. */
   read(text: string): CanvasDocument {
-    return fromFile(text, this.#deps.catalog, this.#deps.defaultAdapter);
+    return fromFile(text, this.#deps.catalog);
   }
 
   /**
@@ -667,7 +665,7 @@ export class Documents {
         throw new OpFailure('invalid', `That change can’t be kept: ${fault}.`);
       const set = changeSetOf(live, next, rows, change.revision, copies);
       // Whoever makes it (revision R34): what a file would hold, and names what is there.
-      const invalid = editFault(next, set.entities, this.#deps.catalog, this.#deps.defaultAdapter);
+      const invalid = editFault(next, set.entities, this.#deps.catalog);
       if (invalid !== undefined) throw new OpFailure('invalid', invalid);
       // The workspaces' loss preflight, before the checks (nothing awaited between them and the
       // commit, so a cap a change passed is counted from then on).

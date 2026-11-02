@@ -11,12 +11,13 @@ import { TEST_CATALOG } from './test-engine';
 
 afterEach(expectRestorable);
 
-/** The catalog main declares, read with Claude Code as the agent a node without one runs. */
-const engine = engineCatalog(TEST_CATALOG, 'claude-code');
+/** The catalog main declares, read only through each agent’s own endpoint. */
+const engine = engineCatalog(TEST_CATALOG);
 
 describe('engineCatalog', () => {
-  it('runs an agent as its connection, else its adapter’s first, its adapter the default if none', () => {
-    expect(engine.connectionOf({})).toBe('claude-code.terminal');
+  it('runs only the endpoint the agent names, on its adapter’s first when no connection is named', () => {
+    expect(engine.connectionOf({})).toBeUndefined();
+    expect(engine.connectionOf({ connection: 'codex.terminal' })).toBe('codex.terminal');
     expect(engine.connectionOf({ connection: 'claude-code.sdk' })).toBe('claude-code.sdk');
     expect(engine.connectionOf({ adapter: 'codex' })).toBe('codex.terminal');
     expect(engine.connectionOf({ adapter: 'codex', connection: 'codex.app-server' })).toBe(
@@ -26,34 +27,33 @@ describe('engineCatalog', () => {
 
   it.each([
     [{ adapter: 'codex', connection: 'claude-code.sdk' }],
-    [{ connection: 'codex.terminal' }],
     [{ adapter: 'codex', connection: 'unavailable' }],
     [{ adapter: 'qwen' }],
     [{ adapter: 'toString' }],
     [{ adapter: 'constructor', connection: 'constructor' }],
   ])('runs %o as Not connected: its adapter lacks that connection, or the catalog it', (agent) => {
-    expect(engine.connectionOf(agent)).toBe('unavailable');
+    expect(engine.connectionOf(agent)).toBeUndefined();
   });
 
   it('says which adapter runs a connection, unavailable for one the catalog lacks', () => {
     expect(engine.adapterOf('claude-code.sdk')).toBe('claude-code');
     expect(engine.adapterOf('codex.app-server')).toBe('codex');
-    expect(engine.adapterOf('unavailable')).toBe('unavailable');
-    expect(engine.adapterOf('qwen.acp')).toBe('unavailable');
-    expect(engine.adapterOf('toString')).toBe('unavailable');
+    expect(engine.adapterOf('unavailable')).toBeUndefined();
+    expect(engine.adapterOf('qwen.acp')).toBeUndefined();
+    expect(engine.adapterOf('toString')).toBeUndefined();
   });
 
   it('gives an agent its adapter’s actions, as the catalog declares them; none for one it lacks', () => {
     for (const adapter of TEST_CATALOG.adapters) {
       expect(engine.actionsOf({ adapter: adapter.id })).toEqual(adapter.actions);
     }
-    expect(engine.actionsOf({})).toEqual(engine.actionsOf({ adapter: 'claude-code' }));
+    expect(engine.actionsOf({})).toEqual([]);
     expect(engine.actionsOf({ adapter: 'qwen' })).toEqual([]);
     expect(engine.actionsOf({ adapter: 'hasOwnProperty' })).toEqual([]);
   });
 
   it('spends the usage backend its connection declares', () => {
-    expect(engine.usageBackendOf({})).toBe('claude-code');
+    expect(engine.usageBackendOf({})).toBeUndefined();
     expect(
       engine.usageBackendOf({ adapter: 'claude-code', connection: 'claude-code.terminal' }),
     ).toBe('claude-code');
@@ -132,7 +132,7 @@ describe('engineCatalog', () => {
 
   it('runs a queue with whatever adapter the catalog declares, wording steps from it', () => {
     const sent: [string, string][] = [];
-    const store = liveRun(engineCatalog(MADE_UP, 'zed'), {
+    const store = liveRun(engineCatalog(MADE_UP), {
       send: (to, text) => {
         sent.push([to.id, text]);
         return () => undefined;
@@ -151,7 +151,7 @@ describe('engineCatalog', () => {
         queue: [{ id: 'run', action: 'shell' }],
       },
     });
-    store.update([agent('zed'), agent('claude', 'claude-code')]);
+    store.update([agent('zed', 'zed'), agent('claude', 'claude-code')]);
     store.start();
     expect(sent).toEqual([
       ['zed', expect.stringMatching(/^Use the shell tool .*\(run a command\)/)],
@@ -159,20 +159,20 @@ describe('engineCatalog', () => {
     // An adapter the catalog lacks is Not connected, whatever the renderer's own tables say.
     expect(store.snapshot().agents.claude).toMatchObject({
       status: 'asking',
-      refused: { agent: 'claude', connection: 'unavailable' },
+      refused: { agent: 'claude', connection: null },
     });
   });
 
   it('reads whatever adapter the catalog declares, and only that', () => {
-    const zed = engineCatalog(MADE_UP, 'zed');
-    expect(zed.connectionOf({})).toBe('zed.acp');
+    const zed = engineCatalog(MADE_UP);
+    expect(zed.connectionOf({ adapter: 'zed' })).toBe('zed.acp');
     expect(zed.connectionOf({ connection: 'zed.free' })).toBe('zed.free');
-    expect(zed.connectionOf({ adapter: 'claude-code' })).toBe('unavailable');
+    expect(zed.connectionOf({ adapter: 'claude-code' })).toBeUndefined();
     expect(zed.adapterOf('zed.free')).toBe('zed');
-    expect(zed.actionsOf({})).toEqual([
+    expect(zed.actionsOf({ adapter: 'zed' })).toEqual([
       { name: 'shell', description: 'Run a command', job: 'shell' },
     ]);
-    expect(zed.usageBackendOf({})).toBe('zed');
+    expect(zed.usageBackendOf({ adapter: 'zed' })).toBe('zed');
     expect(zed.usageBackendOf({ connection: 'zed.free' })).toBeUndefined();
     expect(zed.connectionLabel('zed.acp')).toBe('ACP');
     expect(zed.connectionLabel('claude-code.terminal')).toBeUndefined();
@@ -188,7 +188,7 @@ describe('engineCatalog', () => {
   });
 
   it('words a usage rule’s warning and hold with the backend the catalog it is given names', () => {
-    const zed = engineCatalog(MADE_UP, 'zed');
+    const zed = engineCatalog(MADE_UP);
     const told: string[] = [];
     const timers: (() => void)[] = [];
     let usage: UsageState = {
@@ -214,7 +214,7 @@ describe('engineCatalog', () => {
         id: 'zed',
         type: 'agent',
         position: { x: 0, y: 0 },
-        data: { label: 'Zed', queue: [{ id: 'run', action: 'shell' }] },
+        data: { label: 'Zed', adapter: 'zed', queue: [{ id: 'run', action: 'shell' }] },
       },
     ];
     const warned = liveRun(zed, io);

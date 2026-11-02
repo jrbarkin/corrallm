@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { agentEndpoint } from './catalog';
 
 import { adapterIn, connectionIn, ID_PATTERN } from '../adapter';
 import type { Catalog, UsageBackendId } from '../adapter';
@@ -59,11 +60,10 @@ export type Fallback = z.infer<typeof FallbackSchema>;
 export function endpointOf(
   agent: Pick<AgentData, 'adapter' | 'connection' | 'settings'>,
   catalog: Catalog,
-  defaultAdapter: string,
 ): FallbackStep | undefined {
-  const adapter = agent.adapter ?? defaultAdapter;
-  const connection = agent.connection ?? adapterIn(catalog, adapter)?.connections[0]?.id;
-  if (connection === undefined) return undefined;
+  const endpoint = agentEndpoint(agent, catalog);
+  if (endpoint.kind !== 'known') return undefined;
+  const { adapter, connection } = endpoint;
   const settings = Object.hasOwn(agent.settings ?? {}, adapter)
     ? agent.settings?.[adapter]
     : undefined;
@@ -239,7 +239,7 @@ export function next(
 ): FallbackNext {
   if (agent.fallback === undefined) return { none: [] };
   const fallback = FallbackSchema.parse(agent.fallback);
-  const current = endpointOf(agent, catalog, agent.adapter);
+  const current = endpointOf(agent, catalog);
   const candidates = fallback.to.slice(fallback.on === undefined ? 0 : fallback.on.step + 1);
   if (fallback.on !== undefined) candidates.push(fallback.on.from);
   const passed: FallbackPassed[] = [];

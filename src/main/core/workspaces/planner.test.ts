@@ -8,7 +8,7 @@ import type { CanvasId } from '../../../shared/canvas';
 import type { CanvasDocument, CanvasNode } from '../../../shared/model/canvas';
 import { toFile } from '../../../shared/model/file';
 import { CanvasMemory } from '../../memory';
-import { CATALOG, DEFAULT_ADAPTER } from '../../sessions/adapters';
+import { CATALOG } from '../../sessions/adapters';
 import { FakeConnector } from '../../sessions/fake';
 import { OpFailure } from '../call';
 import { Documents } from '../canvas/documents';
@@ -112,7 +112,7 @@ beforeEach(async () => {
     store,
     memory,
     catalog: CATALOG,
-    defaultAdapter: DEFAULT_ADAPTER,
+
     reviews,
     workspaces: new WorkspacePlanner({
       workspaces,
@@ -323,7 +323,7 @@ describe('trees left with no agent (B9a C7)', () => {
       store,
       memory,
       catalog: CATALOG,
-      defaultAdapter: DEFAULT_ADAPTER,
+
       reviews,
       workspaces: new WorkspacePlanner({ workspaces, cleanup }),
     });
@@ -420,7 +420,7 @@ describe('the workspace-safety contract on every plan (B9a §7)', () => {
         store,
         memory,
         catalog: CATALOG,
-        defaultAdapter: DEFAULT_ADAPTER,
+
         workspaces: new Wrong({ workspaces }),
       });
       await wrong.load(CANVAS);
@@ -451,7 +451,6 @@ describe('the workspace-safety contract on every plan (B9a §7)', () => {
         store,
         memory,
         catalog: CATALOG,
-        defaultAdapter: DEFAULT_ADAPTER,
       });
       expect((await reloaded.load(CANVAS)).document).toEqual(before);
     },
@@ -570,7 +569,6 @@ async function commitLoaded(): Promise<void> {
     store,
     memory,
     catalog: CATALOG,
-    defaultAdapter: DEFAULT_ADAPTER,
   });
   await loaded.load(CANVAS);
   await seed(

@@ -16,7 +16,7 @@ import type { HostServices } from './core/host';
 import type { Store } from './core/store/store';
 import { openTestStore } from './core/store/test-store';
 import { CanvasMemory } from './memory';
-import { CATALOG, DEFAULT_ADAPTER } from './sessions/adapters';
+import { CATALOG } from './sessions/adapters';
 
 const WINDOW = 3;
 
@@ -34,7 +34,7 @@ beforeEach(async () => {
   profile = await mkdtemp(path.join(tmpdir(), 'corrallm-profile-'));
   store = await openTestStore(profile);
   memory = new CanvasMemory(store);
-  documents = new Documents({ store, memory, catalog: CATALOG, defaultAdapter: DEFAULT_ADAPTER });
+  documents = new Documents({ store, memory, catalog: CATALOG });
   pickCanvasToOpen = vi.fn<HostServices['pickCanvasToOpen']>();
   pickCanvasToSave = vi.fn<HostServices['pickCanvasToSave']>();
   canvases = new CanvasFiles({ host: { pickCanvasToOpen, pickCanvasToSave }, memory, documents });

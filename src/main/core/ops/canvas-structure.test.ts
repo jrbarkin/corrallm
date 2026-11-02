@@ -11,7 +11,7 @@ import { toFile } from '../../../shared/model/file';
 import { arrange } from '../../../shared/model/layout';
 import * as structure from '../../../shared/model/structure';
 import { itemKey, linkKey, nodeKey } from '../../../shared/model/rows';
-import { CATALOG, DEFAULT_ADAPTER } from '../../sessions/adapters';
+import { CATALOG } from '../../sessions/adapters';
 import { FakeConnector } from '../../sessions/fake';
 import { createDispatcher } from '../call';
 import type { Dispatcher, OpContext } from '../call';
@@ -140,7 +140,7 @@ describe('canvas structure commits through core.call', () => {
   it('keeps empty revs for a structural no-op on an arranged parent group', async () => {
     const group = created(await edit('canvas.group', { nodes: ['a', 'b'], kind: 'frame' }));
     await edit('canvas.setArrange', { on: true });
-    await edit('canvas.addParent', { frame: group });
+    await edit('canvas.addParent', { adapter: 'claude-code', frame: group });
     const before = doc();
     const written = rows();
     expect(await edit('canvas.delete', { nodes: [], links: [] })).toEqual({
@@ -174,13 +174,14 @@ describe('canvas structure commits through core.call', () => {
           ? {}
           : name === 'canvas.ungroup'
             ? { nodes: [group] }
-            : { frame: group }),
+            : { adapter: 'claude-code', frame: group }),
       });
       const after = doc();
       // Compare one layout of the pure edit's result, including group fitting, not a second
       // layout of an already laid-out result (rounding can move a parent group's origin again).
       const context = {
-        defaultAdapter: DEFAULT_ADAPTER,
+        catalog: CATALOG,
+
         newId: () => (typeof result.id === 'string' ? result.id : 'new-item'),
       };
       let next: CanvasDocument;
@@ -213,7 +214,7 @@ describe('canvas structure commits through core.call', () => {
           break;
         case 'canvas.addParent':
           if (group === undefined) throw new Error('No group to head');
-          next = structure.addParent(previous, { id: group }, context).next;
+          next = structure.addParent(previous, { adapter: 'claude-code', id: group }, context).next;
           break;
         default:
           throw new Error(`No structural build for ${name}`);
@@ -330,11 +331,15 @@ describe('canvas structure commits through core.call', () => {
   it.each(['frame', 'agent'] as const)(
     'groups nodes under a new %s in one revision',
     async (kind) => {
-      const result = await edit('canvas.group', { nodes: ['a', 'b'], kind });
+      const result = await edit('canvas.group', {
+        nodes: ['a', 'b'],
+        kind,
+        ...(kind === 'agent' ? { adapter: 'claude-code' } : {}),
+      });
       const id = created(result);
       expect(node(id).type).toBe(kind);
       expect([node('a').parentId, node('b').parentId]).toEqual([id, id]);
-      if (kind === 'agent') expect(node(id).data).toHaveProperty('adapter', DEFAULT_ADAPTER);
+      if (kind === 'agent') expect(node(id).data).toHaveProperty('adapter', 'claude-code');
       committed('canvas.group', result, [
         nodeKey(id),
         nodeKey('a'),
@@ -349,10 +354,10 @@ describe('canvas structure commits through core.call', () => {
     committed('canvas.ungroup', result, [nodeKey('G')]);
   });
   it('turns a frame into an agent parent, returning its preserved id', async () => {
-    const result = await edit('canvas.addParent', { frame: 'G' });
+    const result = await edit('canvas.addParent', { adapter: 'claude-code', frame: 'G' });
     expect(result.id).toBe('G');
     expect(node('G').type).toBe('agent');
-    expect(node('G').data).toHaveProperty('adapter', DEFAULT_ADAPTER);
+    expect(node('G').data).toHaveProperty('adapter', 'claude-code');
     committed('canvas.addParent', result, [nodeKey('G'), initialItem('G')]);
   });
   it('moves every named node in one revision', async () => {
@@ -393,8 +398,8 @@ describe('canvas structure commits through core.call', () => {
     ['canvas.group', { nodes: ['a', 'ghost'], kind: 'frame' }, 'not-found'],
     ['canvas.group', { nodes: [], kind: 'frame' }, 'invalid'],
     ['canvas.ungroup', { nodes: ['ghost'] }, 'not-found'],
-    ['canvas.addParent', { frame: 'ghost' }, 'not-found'],
-    ['canvas.addParent', { frame: 'a' }, 'invalid'],
+    ['canvas.addParent', { adapter: 'claude-code', frame: 'ghost' }, 'not-found'],
+    ['canvas.addParent', { adapter: 'claude-code', frame: 'a' }, 'invalid'],
     ['canvas.move', { moves: [{ node: 'ghost', position: { x: 0, y: 0 } }] }, 'not-found'],
   ])('%s refuses absent nodes and inappropriate kinds (%j)', async (name, args, code) => {
     const before = doc();
@@ -427,7 +432,7 @@ describe('canvas structure commits through core.call', () => {
         ops: { ...registry.ops, 'canvas.delete': OPS['canvas.delete'] },
         implementations: {
           ...registry.implementations,
-          ...canvasOps({ defaultAdapter: DEFAULT_ADAPTER, catalog: CATALOG }),
+          ...canvasOps({ catalog: CATALOG }),
           'test.hold': (_args, { signal }: OpContext) =>
             new Promise((resolve) => {
               signal.addEventListener(

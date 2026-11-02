@@ -1,4 +1,4 @@
-import type { AdapterId, Catalog } from '../../shared/adapter';
+import type { Catalog } from '../../shared/adapter';
 import type { Adapter } from './adapter';
 import { isNativeId } from './id';
 import { claudeCode } from './claude-code/adapter';
@@ -22,12 +22,6 @@ export function catalogOf(adapters: readonly Adapter[]): Catalog {
 
 /** The catalog every process reads (catalog.get). */
 export const CATALOG: Catalog = catalogOf(ADAPTERS);
-
-/**
- * The adapter an agent naming none runs (as a template may leave it), as in the app (the
- * renderer's DEFAULT_AGENT), until the user chooses their own (Build Plan B12).
- */
-export const DEFAULT_ADAPTER: AdapterId = claudeCode.descriptor.id;
 
 /** Validates saved unknown adapters' ids too; known adapters add their stricter shape. */
 export function isConversationId(adapter: string, value: unknown): value is string {

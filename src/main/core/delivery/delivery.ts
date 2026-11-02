@@ -1,3 +1,4 @@
+import { endpointRefusal } from '../../../shared/model/catalog';
 import type { SessionAvailability } from '../../../shared/session';
 import { randomUUID } from 'node:crypto';
 
@@ -161,7 +162,7 @@ type Hold =
  * whether a message sent since is trying it again.
  */
 interface Stuck {
-  connection: string;
+  connection: string | undefined;
   text: string;
   at: number;
   retrying: boolean;
@@ -1005,7 +1006,7 @@ export class Delivery {
     const { catalog, sessions } = this.#deps.engine;
     const connection = catalog.connectionOf(node.data);
     // It runs nothing: a session that won't start holds it (#stuckOf).
-    if (connection === 'unavailable') return 'asks';
+    if (connection === undefined) return 'asks';
     const session = sessions.of(node.id);
     if (session.running !== undefined) {
       if (session.mode !== null || session.asks !== undefined)
@@ -1024,7 +1025,8 @@ export class Delivery {
       }
       return 'unknown-running';
     } else {
-      const mode = node.data.settings?.[catalog.adapterOf(connection)]?.mode;
+      const adapter = catalog.adapterOf(connection);
+      const mode = adapter === undefined ? undefined : node.data.settings?.[adapter]?.mode;
       if (mode !== undefined && isSessionMode(mode) && catalog.isStartMode(connection, mode)) {
         return 'asks';
       }
@@ -1038,6 +1040,8 @@ export class Delivery {
    * at again.
    */
   #default(agent: string, connection: ConnectionId, read: boolean): Asking {
+    const adapter = this.#deps.engine.catalog.adapterOf(connection);
+    if (adapter === undefined) return 'asks';
     const known = this.#defaults.get(agent);
     if (known?.connection === connection) {
       if (known.asks === 'reading') return 'reading';
@@ -1047,7 +1051,7 @@ export class Delivery {
     const reading: Default = { connection, at: this.#deps.now(), asks: 'reading', ran: false };
     this.#defaults.set(agent, reading);
     void this.#deps
-      .defaultAsks(this.#deps.engine.catalog.adapterOf(connection), agent)
+      .defaultAsks(adapter, agent)
       .catch(() => undefined)
       .then((asks) => {
         if (this.#defaults.get(agent) !== reading) return;
@@ -1137,7 +1141,13 @@ export class Delivery {
   #stuckOf(node: AgentNode): Unstartable | undefined {
     const { engine } = this.#deps;
     const connection = engine.catalog.connectionOf(node.data);
-    if (connection === 'unavailable') return { text: NO_CONNECTION, clears: SWITCH };
+    if (connection === undefined)
+      return {
+        text:
+          endpointRefusal(this.#deps.engine.catalog.endpointOf(node.data), this.#name(node.id)) ??
+          NO_CONNECTION,
+        clears: SWITCH,
+      };
     const stuck = this.#stuck.get(node.id);
     if (!stuck) return undefined;
     if (stuck.connection === connection && engine.sessions.of(node.id).running === undefined) {
@@ -1275,7 +1285,7 @@ export class Delivery {
     const carried = this.#carried.get(message.id);
     const takeBack = engine.sessions.send(
       node.id,
-      node.data.adapter ?? engine.catalog.defaultAdapter,
+      engine.catalog.adapterOf(engine.catalog.connectionOf(node.data)),
       yours ? message.body : (carried?.text ?? this.#frame(message)),
       (interrupted, reply, result) => {
         this.#ended(message.id, interrupted, reply, result);

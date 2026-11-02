@@ -11,7 +11,7 @@ import {
   withConnections as chooseConnections,
 } from './templates';
 type Graph = Pick<CanvasDocument, 'links'> & { nodes: AgentNode[] };
-const context = { catalog: TEST_CATALOG, defaultAdapter: 'claude-code' };
+const context = { catalog: TEST_CATALOG };
 const withAgents = (graph: Graph, types: Readonly<Record<string, string | undefined>>) =>
   chooseAgents(graph, types, context);
 const withConnections = (graph: Graph, connections: Readonly<Record<string, string>>) =>
@@ -216,10 +216,10 @@ describe('withAgents', () => {
     });
   });
 
-  it('leaves an agent left open without a type, to be the default agent', () => {
+  it('keeps the steps of a role left unchosen', () => {
     const [tester] = withAgents(pinned, { tester: undefined }).nodes;
     expect(tester?.data.adapter).toBeUndefined();
-    expect(tester?.data.queue?.[0]).toEqual({ id: 'run', action: 'Bash', expect: 'fails' });
+    expect(tester?.data.queue?.[0]).toEqual({ id: 'run', action: 'exec_command', expect: 'fails' });
   });
 });
 
@@ -254,8 +254,8 @@ describe('withConnections', () => {
     expect(run.nodes.map((n) => n.data.connection)).toEqual([
       'claude-code.terminal',
       'codex.terminal',
-      // An agent left to the default agent (Claude) runs as Claude does.
-      'claude-code.terminal',
+      // No endpoint is chosen for an unchosen role.
+      undefined,
       // Gemini has no connector yet; an invalid connection never makes it runnable.
       undefined,
     ]);
@@ -284,7 +284,7 @@ it('preserves every unchanged item and returns the same canvas for no-op templat
 
 it('chooses an adapter and its first connection from the supplied catalog alone', () => {
   const catalog = { ...TEST_CATALOG, adapters: [...TEST_CATALOG.adapters, ...MADE_UP.adapters] };
-  const context = { catalog, defaultAdapter: 'zed' };
+  const context = { catalog };
   const doc: Graph = {
     nodes: [
       {
@@ -307,10 +307,10 @@ it('chooses an adapter and its first connection from the supplied catalog alone'
 });
 
 it('fills omitted connections from each adapter’s first, even if a template saved another', () => {
-  const context = { catalog: MADE_UP, defaultAdapter: 'zed' };
+  const context = { catalog: MADE_UP };
   const doc: Graph = {
     nodes: [
-      { id: 'a', type: 'agent', position: { x: 0, y: 0 }, data: { label: 'A' } },
+      { id: 'a', type: 'agent', position: { x: 0, y: 0 }, data: { label: 'A', adapter: 'zed' } },
       {
         id: 'b',
         type: 'agent',

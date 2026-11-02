@@ -92,7 +92,7 @@ export function sessionSummary(open: OpenCanvas, agent: string, yours = true) {
     (reply !== null && reply.trim() === open.handoffs.of(agent)?.handoff?.text);
   return {
     agent,
-    connection: engine.catalog.connectionOf(node.data),
+    connection: engine.catalog.connectionOf(node.data) ?? null,
     fallback: fallbackOf(open, agent),
     handoff: handoffOf(open, agent),
     status: session.status,

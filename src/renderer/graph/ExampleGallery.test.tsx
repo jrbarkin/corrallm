@@ -35,7 +35,8 @@ it('lists and fills the fields and open agents returned by templates.list', asyn
   ).toBe('A core-supplied example.');
   expect(screen.getByRole('combobox', { name: "Researcher's agent" })).toBeTruthy();
   const role = screen.getByRole('combobox', { name: "Researcher's agent" }).closest('label');
-  expect(role?.querySelector('img')?.getAttribute('alt')).toBe('Claude Code');
+  expect(role && within(role).getByRole('img', { name: 'Choose an agent' })).toBeTruthy();
+  expect(screen.getByRole('button', { name: 'Create canvas' })).toHaveProperty('disabled', true);
   fireEvent.change(screen.getByRole('combobox', { name: "Researcher's agent" }), {
     target: { value: 'codex' },
   });

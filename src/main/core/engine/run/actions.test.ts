@@ -31,7 +31,7 @@ const catalog: Catalog = {
     },
   ],
 };
-const engine = engineCatalog(catalog, 'zed');
+const engine = engineCatalog(catalog);
 const step: QueueStep = { id: 'step', action: '/zed-only', instruction: 'Inspect the result' };
 const node = (queue: QueueItem[], adapter = 'quill', id = 'a'): AgentNode => ({
   id,
@@ -65,7 +65,9 @@ const sessionSend =
   (to, text, done, images, refused, origin, displayText, task, id, resolvedStep) =>
     sessions.send(
       to.id,
-      to.data.adapter ?? engine.defaultAdapter,
+      engine.endpointOf(to.data).kind === 'known'
+        ? engine.adapterOf(engine.connectionOf(to.data))
+        : undefined,
       text,
       (failed, reply, result) => {
         done({ failed, reply, result });

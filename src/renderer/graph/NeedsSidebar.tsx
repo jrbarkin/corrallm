@@ -1,10 +1,10 @@
+import { agentAdapter } from './agents';
 import { OwnedPrompt } from '../agent/OwnedPrompt';
 import { useEffect, useRef, useState } from 'react';
 import { useSessionSummaries } from '../api/runtime';
 import type { SessionSummary } from '../../shared/model/views';
 import type { TerminalAsk } from '../../shared/session';
 import { TerminalAskCard } from './Questions';
-import { DEFAULT_AGENT } from './agents';
 
 import type { CanvasId } from '../../shared/canvas';
 import type { GuiApi } from '../../shared/gui-link';
@@ -198,7 +198,7 @@ export function NeedsSidebar({
                   ask={ask as TerminalAsk}
                   agent={{
                     name: agentName(nodes, node.id),
-                    type: node.data.adapter ?? DEFAULT_AGENT,
+                    type: agentAdapter(node.data),
                     onOpen: () => {
                       close();
                       onOpen(node.id);

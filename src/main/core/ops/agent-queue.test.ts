@@ -12,7 +12,7 @@ import { toFile } from '../../../shared/model/file';
 import { findItem, isIf, isRepeat } from '../../../shared/model/queue';
 import type { QueueChange, QueueItem } from '../../../shared/model/queue';
 import { itemKey, nodeKey } from '../../../shared/model/rows';
-import { CATALOG, DEFAULT_ADAPTER } from '../../sessions/adapters';
+import { CATALOG } from '../../sessions/adapters';
 import { FakeConnector } from '../../sessions/fake';
 import { createDispatcher } from '../call';
 import type { Dispatcher, OpContext } from '../call';
@@ -497,7 +497,7 @@ describe('switching agent lanes', () => {
         ops: { ...registry.ops, [name]: OPS[name] },
         implementations: {
           ...registry.implementations,
-          ...agentOps({ catalog: CATALOG, defaultAdapter: DEFAULT_ADAPTER }),
+          ...agentOps({ catalog: CATALOG }),
           'test.hold': (_args, { signal }: OpContext) =>
             new Promise((resolve) => {
               signal.addEventListener(

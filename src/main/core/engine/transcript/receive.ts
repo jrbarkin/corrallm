@@ -125,6 +125,11 @@ interface SentTurn {
  * is given (the mailbox's: src/shared/model/catalog.ts).
  */
 export class ConnectedDriver implements SessionDriver {
+  #conversation(): { conversation?: string } {
+    const adapter = this.#catalog.adapterOf(this.connection);
+    return adapter === undefined ? {} : { conversation: adapter };
+  }
+
   readonly connection: ConnectionId;
   readonly #agentId: string;
   readonly #catalog: EngineCatalog;
@@ -342,7 +347,7 @@ export class ConnectedDriver implements SessionDriver {
               text: event.text,
               ...(event.promptReply ? { promptReply: true } : {}),
               reached: true,
-              conversation: this.#catalog.adapterOf(this.connection),
+              ...this.#conversation(),
             },
           });
         } else if (known.kind === 'user' && (known.reached !== true || known.text !== event.text)) {
@@ -481,7 +486,7 @@ export class ConnectedDriver implements SessionDriver {
             entry: {
               id: event.id,
               kind: 'cleared',
-              conversation: this.#catalog.adapterOf(this.connection),
+              ...this.#conversation(),
             },
           });
         }

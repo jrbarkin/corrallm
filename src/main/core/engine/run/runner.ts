@@ -1,3 +1,4 @@
+import { endpointRefusal } from '../../../../shared/model/catalog';
 import type { MessageImage, TaskMessage, TurnResult } from '../../../../shared/session';
 import { WINDOW_NAMES, windowNow } from '../../../../shared/usage';
 import type { UsageBackendId } from '../../../../shared/adapter';
@@ -1531,15 +1532,17 @@ export class RunStore {
     if (this.#io.handoff?.(destination) === true)
       return { current: task.id, status: 'waiting', outcomes };
     const to = this.#agents().find((n) => n.id === destination);
-    if (to && this.#catalog.connectionOf(to.data) === 'unavailable')
+    if (to && this.#catalog.connectionOf(to.data) === undefined)
       return {
         current: task.id,
         status: 'asking',
         outcomes,
         refused: {
           agent: destination,
-          connection: 'unavailable',
-          text: 'This agent has no connection; choose another agent in Agent settings.',
+          connection: null,
+          text:
+            endpointRefusal(this.#catalog.endpointOf(to.data), to.data.label) ??
+            'Choose an agent in its settings.',
         },
       };
     // B11a C3: admission, before the attempt goes to its recipient. A fallback rule is read
@@ -1918,8 +1921,8 @@ export class RunStore {
           refused: {
             kind: 'unknown-action',
             agent,
-            connection,
-            text: `Not sent: ${task.action} is not declared by ${this.#catalog.connectionName(connection) ?? connection} and has no equivalent action. Edit the step or change its backend to check it again.`,
+            connection: connection ?? null,
+            text: `Not sent: ${task.action} is not declared by ${this.#catalog.connectionName(connection) ?? connection ?? 'this agent'} and has no equivalent action. Edit the step or change its backend to check it again.`,
           },
           ...(previous?.attempts ? { attempts: previous.attempts } : {}),
         };
@@ -1934,7 +1937,8 @@ export class RunStore {
     };
     const holder = { agent, token };
     if (!isMessage(task)) {
-      if (node) {
+      const endpoint = node === undefined ? undefined : this.#catalog.endpointOf(node.data);
+      if (node && endpoint?.kind === 'known') {
         const original = this.#stepMessage(node, task);
         const text = correction
           ? corrected(
@@ -1947,7 +1951,7 @@ export class RunStore {
           ended,
           holder,
           resolvedStep: {
-            adapter: node.data.adapter ?? this.#catalog.defaultAdapter,
+            adapter: endpoint.adapter,
             action: task.action,
           },
           task: taskMessage(agent, task.id, attempts),
@@ -2297,7 +2301,7 @@ export class RunStore {
     }
     const refused = {
       agent: to.id,
-      connection: this.#catalog.connectionOf(to.data),
+      connection: this.#catalog.connectionOf(to.data) ?? null,
       text,
       ...(switchTo === undefined ? {} : { switchTo }),
       ...(kind === undefined ? {} : { kind }),

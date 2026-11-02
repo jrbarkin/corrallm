@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
 import type { AdapterDescriptor, Catalog } from '../adapter';
-import { MADE_UP } from '../test-made-up';
+import { MADE_UP, TWO_MADE_UP } from '../test-made-up';
 import { TEST_CATALOG } from '../test-model';
-import { agentEndpoint, sameEndpoint } from './catalog';
+import { agentEndpoint, engineCatalog, sameEndpoint } from './catalog';
 
 /*
  * B12 C3's one resolver (§11.3): an agent's adapter is the one it names, else the owner of a
@@ -150,5 +150,24 @@ describe('sameEndpoint', () => {
       sameEndpoint(of({ adapter: 'zed' }), of({ adapter: 'zed', connection: 'zed.acp' })),
     ).toBe(false);
     expect(sameEndpoint(of({ adapter: 'codex' }), of({ adapter: 'claude-code' }))).toBe(false);
+  });
+});
+
+describe('engine identity without a default', () => {
+  it('offers no runtime capability to an unchosen agent', () => {
+    const engine = engineCatalog(MADE_UP);
+    expect(engine.connectionOf({})).toBeUndefined();
+    expect(engine.actionsOf({})).toEqual([]);
+    expect(engine.resolveAction('shell', {})).toEqual({ unknown: true });
+    expect(engine.usageBackendOf({})).toBeUndefined();
+  });
+
+  it('uses the owner of a named connection for every runtime lookup', () => {
+    const engine = engineCatalog(TWO_MADE_UP);
+    const agent = { connection: 'yak.terminal' };
+    expect(engine.connectionOf(agent)).toBe('yak.terminal');
+    expect(engine.actionsOf(agent).map(({ name }) => name)).toEqual(['shell']);
+    expect(engine.resolveAction('shell', agent)).toEqual({ action: 'shell' });
+    expect(engine.usageBackendOf(agent)).toBe('zed');
   });
 });

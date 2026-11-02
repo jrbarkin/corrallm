@@ -1,3 +1,4 @@
+import { pickTemplateAgents } from '../test-agent-choice';
 import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { api } from '../api/client';
@@ -18,7 +19,7 @@ vi.mock('../terminal/screen', async () => ({
 const disposals: (() => void)[] = [];
 beforeEach(() => {
   vi.spyOn(api, 'templatesList').mockResolvedValue({
-    items: EXAMPLES.map((example) => templateInfo(example, catalog(), 'claude-code')),
+    items: EXAMPLES.map((example) => templateInfo(example, catalog())),
   });
   vi.spyOn(api, 'catalogInstalled').mockResolvedValue({ 'claude-code': true, codex: false });
 });
@@ -159,6 +160,7 @@ it('a new canvas reopens Start with no folder, in one create', async () => {
   expect(next.getByRole('button', { name: 'Choose a project folder' })).toBeTruthy();
   expect(screen.queryByRole('button', { name: 'Project folder: Old' })).toBeNull();
 });
+
 it('a template chosen from Start creates the canvas in one op', async () => {
   const { canvas } = setup();
   const view = await start();
@@ -166,13 +168,15 @@ it('a template chosen from Start creates the canvas in one op', async () => {
   if (!template) throw new Error('Missing test template');
   await events.click(await view.findByRole('button', { name: /^Independent cross-check/ }));
   const gallery = within(await screen.findByRole('dialog', { name: 'Templates' }));
+
+  pickTemplateAgents();
   await events.click(gallery.getByRole('button', { name: 'Create canvas' }));
   await waitFor(() => {
     expect(canvas.core.operations).toEqual([
       {
         op: 'canvas.create',
         args: expect.objectContaining({
-          template: templateInfo(template, catalog(), 'claude-code').id,
+          template: templateInfo(template, catalog()).id,
         }) as unknown,
       },
     ]);

@@ -55,13 +55,12 @@ export function filesOps({
   lifecycle,
   documents,
   catalog,
-  defaultAdapter,
   windows,
   states,
-}: Pick<
-  OpServices,
-  'lifecycle' | 'documents' | 'catalog' | 'defaultAdapter' | 'windows' | 'states'
->): Pick<Implementations, FileOps> {
+}: Pick<OpServices, 'lifecycle' | 'documents' | 'catalog' | 'windows' | 'states'>): Pick<
+  Implementations,
+  FileOps
+> {
   return {
     'canvas.create': async (args, ctx) => {
       const { template, values, agents, connections, replace } = args;
@@ -99,7 +98,7 @@ export function filesOps({
               canvas,
               { template, ...defined({ values, agents, connections }) },
               creator,
-              { catalog, defaultAdapter },
+              { catalog },
             );
       documents.create(canvas, creator);
       try {
@@ -195,7 +194,6 @@ export interface DiscardDeps {
   >;
   proposals: Pick<Proposals, 'raise'>;
   catalog: OpServices['catalog'];
-  defaultAdapter: OpServices['defaultAdapter'];
   /**
    * Why the change rules would refuse `by`'s new canvas holding `document`, made as `op` by
    * `caller`, if they would: its commit's check, made ahead (refusals win over a proposal).
@@ -207,13 +205,7 @@ export interface DiscardDeps {
 }
 
 /** R4's checks on a token's arguments: each op carrying `discard`. */
-export function discardChecks({
-  lifecycle,
-  proposals,
-  catalog,
-  defaultAdapter,
-  refusal,
-}: DiscardDeps) {
+export function discardChecks({ lifecycle, proposals, catalog, refusal }: DiscardDeps) {
   /** Why a token may not close `canvas` itself: a window shows it, or it would discard edits. */
   async function closing(canvas: CanvasId, discard: boolean | undefined) {
     if (!lifecycle.keeps(canvas)) return undefined;
@@ -283,7 +275,7 @@ export function discardChecks({
           newCanvasId(),
           { template, ...defined({ values, agents, connections }) },
           by,
-          { catalog, defaultAdapter },
+          { catalog },
         );
         const refused = refusal(document, { op: 'canvas.create', by, caller, party });
         if (refused !== undefined) return { refuse: refused };
@@ -380,7 +372,10 @@ function windowIn({ caller }: OpContext): WindowId | undefined {
 function defined(choice: {
   [K in keyof Omit<TemplateChoice, 'template'>]?: TemplateChoice[K] | undefined;
 }): Omit<TemplateChoice, 'template'> {
-  return Object.fromEntries(Object.entries(choice).filter(([, value]) => value !== undefined));
+  return {
+    ...Object.fromEntries(Object.entries(choice).filter(([, value]) => value !== undefined)),
+    agents: choice.agents ?? {},
+  };
 }
 
 /** Template `choice` as canvas `canvas`'s document, filled by `by` (canvas/template.ts). */

@@ -406,6 +406,7 @@ export class HandoffService {
     if (this.#exhausted(runtime, agent)) return;
     const connection = runtime.engine.catalog.connectionOf(node.data);
     const adapter = runtime.engine.catalog.adapterOf(connection);
+    if (adapter === undefined || connection === undefined) return;
     const during = duringOf(runtime.messages, messages);
     const message = runtime.delivery.ask(
       agent,
@@ -517,7 +518,8 @@ export class HandoffService {
   /** corrallm's switch line: what a carried send starts with, so nothing else can start it. */
   #switchLine(runtime: HandoffRuntime, node: AgentNode): string {
     const connection = runtime.engine.catalog.connectionOf(node.data);
-    const to = runtime.engine.catalog.connectionName(connection) ?? connection;
+    const to =
+      runtime.engine.catalog.connectionName(connection) ?? connection ?? 'an unchosen endpoint';
     return `[corrallm] corrallm switched this agent to ${to}, in a new conversation: nothing of the conversation before is in it. What follows is the work, then the handoff written before the switch.`;
   }
 
@@ -568,7 +570,11 @@ export class HandoffService {
   /** Whether the agent's connection reports its context, and its session hasn't said it doesn't. */
   #reports(runtime: HandoffRuntime, node: AgentNode): boolean {
     const connection = runtime.engine.catalog.connectionOf(node.data);
-    if (connectionIn(this.#deps.catalog, connection)?.connection.context !== true) return false;
+    if (
+      connection === undefined ||
+      connectionIn(this.#deps.catalog, connection)?.connection.context !== true
+    )
+      return false;
     const session = runtime.engine.sessions.of(node.id);
     if (session.unheard !== undefined) return false;
     return session.usage?.context !== null;

@@ -118,7 +118,7 @@ describe('template roots', () => {
   it.each(EXAMPLES)(
     'preserves $name workspace owners and root order, nesting roots only when a parent is given',
     (example) => {
-      const source = fromFile(example.text, TEST_CATALOG, 'claude-code');
+      const source = fromFile(example.text, TEST_CATALOG);
       const parent = frame('parent');
       for (const into of [undefined, parent.id]) {
         const changed = insert(

@@ -1,3 +1,4 @@
+import { agentEndpoint } from './catalog';
 import { adapterIn, isStartMode } from '../adapter';
 import type { AdapterId, Catalog, ConnectionId } from '../adapter';
 import { parseRole } from '../role';
@@ -20,7 +21,6 @@ import type { Fallback, FallbackInput } from './fallback';
 
 export interface AgentContext {
   catalog: Catalog;
-  defaultAdapter: AdapterId;
 }
 
 /** Applies an agent data edit, preserving every untouched node and document array. */
@@ -44,12 +44,14 @@ export function editAgent(
 /** The action doing the same catalog job, if both adapters declare one. */
 export function equivalentAction(
   action: string,
-  from: AdapterId,
+  from: AdapterId | undefined,
   to: AdapterId,
   catalog: Catalog,
 ): string | undefined {
   if (from === to) return action;
-  const job = adapterIn(catalog, from)?.actions.find((one) => one.name === action)?.job;
+  const job = (from === undefined ? undefined : adapterIn(catalog, from))?.actions.find(
+    (one) => one.name === action,
+  )?.job;
   return job === undefined
     ? undefined
     : adapterIn(catalog, to)?.actions.find((one) => one.job === job)?.name;
@@ -58,7 +60,7 @@ export function equivalentAction(
 /** Steps keep their job across adapters; unknown actions stay for their author to change. */
 export function translateActions(
   queue: readonly QueueItem[],
-  from: AdapterId,
+  from: AdapterId | undefined,
   to: AdapterId,
   catalog: Catalog,
 ): QueueItem[] {
@@ -100,7 +102,7 @@ export function setType(
       data.queue &&
       translateActions(
         data.queue,
-        data.adapter ?? context.defaultAdapter,
+        endpointOf(before, context.catalog)?.adapter,
         adapter,
         context.catalog,
       );
@@ -126,7 +128,9 @@ export function setConnection(
   context: AgentContext,
 ): Built {
   return editAgent(doc, agent, (before) => {
-    const adapter = before.adapter ?? context.defaultAdapter;
+    const endpoint = agentEndpoint(before, context.catalog);
+    if (endpoint.kind === 'unchosen') throw new TypeError(`Choose ${before.label}'s agent first.`);
+    const adapter = endpoint.adapter;
     if (!adapterIn(context.catalog, adapter)?.connections.some((one) => one.id === connection))
       return before;
     const chosen = withoutPosition(before);
@@ -143,13 +147,15 @@ export function setFallback(
   context: AgentContext,
 ): Built {
   return editAgent(doc, agent, (before) => {
+    if (agentEndpoint(before, context.catalog).kind === 'unchosen')
+      throw new TypeError(`Choose ${before.label}'s agent first.`);
     if (fallback === null) {
       if (before.fallback === undefined) return before;
       const data = { ...before };
       delete data.fallback;
       return data;
     }
-    const current = endpointOf(before, context.catalog, context.defaultAdapter);
+    const current = endpointOf(before, context.catalog);
     if (current === undefined)
       throw new TypeError('Choose the agent’s endpoint before its fallback');
     const parsed = parseFallback(fallback, context.catalog);
@@ -205,7 +211,7 @@ export function fallbackMove(
   return editAgent(doc, agent, (before) => {
     const chain = before.fallback;
     if (chain === undefined) throw new TypeError('The agent has no fallback chain to switch on');
-    const own = chain.on?.from ?? endpointOf(before, context.catalog, context.defaultAdapter);
+    const own = chain.on?.from ?? endpointOf(before, context.catalog);
     const target = step === null ? own : chain.to[step];
     if (own === undefined || target === undefined)
       throw new TypeError('The agent’s fallback chain has no such step');

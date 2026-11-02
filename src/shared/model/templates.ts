@@ -1,5 +1,6 @@
+import { endpointOf, resolveAction } from './fallback';
 import { adapterIn } from '../adapter';
-import type { AdapterId, ConnectionId } from '../adapter';
+import type { AdapterId, Catalog, ConnectionId } from '../adapter';
 import { parseRole } from '../role';
 import type { AgentData } from './canvas';
 import type { PartyId } from './messages';
@@ -130,18 +131,22 @@ export function withAgents<C extends TemplateCanvas>(
   return mapNodes(canvas, (node) => {
     if (node.type !== 'agent' || !Object.hasOwn(types, node.id)) return node;
     const adapter = types[node.id];
+    const source = endpointOf(node.data, context.catalog);
     const queue =
-      node.data.queue &&
-      translateActions(
-        node.data.queue,
-        node.data.adapter ?? context.defaultAdapter,
-        adapter ?? context.defaultAdapter,
-        context.catalog,
-      );
+      node.data.queue === undefined || adapter === undefined
+        ? node.data.queue
+        : source === undefined
+          ? templateActions(node.data.queue, adapter, context.catalog)
+          : translateActions(node.data.queue, source.adapter, adapter, context.catalog);
     if (adapter === node.data.adapter && queue === node.data.queue) return node;
     const data = { ...node.data, ...(queue ? { queue } : {}) };
     if (adapter === undefined) delete data.adapter;
     else data.adapter = adapter;
+    if (
+      adapter === undefined ||
+      !adapterIn(context.catalog, adapter)?.connections.some((one) => one.id === data.connection)
+    )
+      delete data.connection;
     return { ...node, data };
   });
 }
@@ -157,7 +162,9 @@ export function withConnections<C extends TemplateCanvas>(
     if (node.type !== 'agent') return node;
     const named = Object.hasOwn(connections, node.id);
     if (!named && !defaults) return node;
-    const adapter = adapterIn(context.catalog, node.data.adapter ?? context.defaultAdapter);
+    const endpoint = endpointOf(node.data, context.catalog);
+    const adapter =
+      endpoint === undefined ? undefined : adapterIn(context.catalog, endpoint.adapter);
     const connection = named ? connections[node.id] : adapter?.connections[0]?.id;
     if (
       connection === undefined ||
@@ -178,4 +185,22 @@ function mapNodes<C extends TemplateCanvas>(
 }
 function same(a: readonly QueueItem[], b: readonly QueueItem[]): boolean {
   return a.length === b.length && a.every((item, i) => item === b[i]);
+}
+
+/** Old-format template actions keep their catalog jobs when each role is explicitly chosen. */
+function templateActions(
+  queue: readonly QueueItem[],
+  adapter: AdapterId,
+  catalog: Catalog,
+): QueueItem[] {
+  const change = <T extends QueueItem>(item: T): T => {
+    if (isIf(item)) return { ...item, then: item.then.map(change) };
+    if (isRepeat(item)) return { ...item, repeat: item.repeat.map(change) };
+    if (!('action' in item)) return item;
+    const resolved = resolveAction(item.action, adapter, catalog);
+    return 'unknown' in resolved || resolved.action === item.action
+      ? item
+      : { ...item, action: resolved.action };
+  };
+  return queue.map(change);
 }

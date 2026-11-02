@@ -1,3 +1,4 @@
+import { agentAdapter } from '../graph/agents';
 import { Children, Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { MouseEvent as ReactMouseEvent, ReactNode, RefObject } from 'react';
 
@@ -7,13 +8,7 @@ import { AgentSettingsSummary } from '../agent/AgentSettings';
 import { BranchControls } from '../workspaces/BranchReview';
 import { WorkspaceBadge } from '../workspaces/Workspace';
 import type { Session } from '../../shared/model/session';
-import {
-  actionsOf,
-  connectionInfo,
-  connectionOf,
-  DEFAULT_AGENT,
-  runCatalog,
-} from '../graph/agents';
+import { actionsOf, connectionInfo, connectionOf, runCatalog } from '../graph/agents';
 import { editsOf } from '../graph/edits';
 import type { QueueEdits } from '../graph/edits';
 import type { CanvasNode } from '../../shared/model/canvas';
@@ -487,7 +482,7 @@ function LaneCells({
 }) {
   const { agent: node } = lane;
   const id = node.id;
-  const agent = node.data.adapter ?? DEFAULT_AGENT;
+  const agent = agentAdapter(node.data);
   const connection = connectionOf(node.data);
   const items = lane.cells
     .map((cell) => cell.item)

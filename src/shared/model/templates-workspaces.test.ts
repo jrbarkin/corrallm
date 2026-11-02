@@ -18,7 +18,7 @@ const walk = (items: readonly QueueItem[]): QueueItem[] =>
   ]);
 
 describe.each(EXAMPLES)('$name workspaces', (example) => {
-  const document = fromFile(example.text, TEST_CATALOG, 'claude-code');
+  const document = fromFile(example.text, TEST_CATALOG);
   const agents = document.nodes.filter((node) => node.type === 'agent');
   it('shares handoff files in one outer frame, except the three independent competitors/judge trees', () => {
     const owners = workspaceOwners(document);
@@ -71,7 +71,7 @@ describe.each(EXAMPLES)('$name workspaces', (example) => {
 
 it('Head to head exchanges committed refs/feedback and reports a winner for review', () => {
   const example = EXAMPLES.find(({ name }) => name === 'Head to head');
-  const doc = fromFile(example?.text ?? '', TEST_CATALOG, 'claude-code');
+  const doc = fromFile(example?.text ?? '', TEST_CATALOG);
   for (const id of ['claude', 'codex']) {
     const node = doc.nodes.find((node) => node.id === id);
     const queue = walk(node?.type === 'agent' ? (node.data.queue ?? []) : []);

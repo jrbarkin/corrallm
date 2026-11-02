@@ -135,8 +135,8 @@ export const conversationOps = {
         z.strictObject({
           id: z.string(),
           name: z.string(),
-          adapter: z.string(),
-          connection: z.string(),
+          adapter: z.string().nullable(),
+          connection: z.string().nullable(),
           state: z.enum(AGENT_STATES),
           prompts: z.int(),
           linked: z.array(z.string()),

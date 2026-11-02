@@ -1,3 +1,7 @@
+import { AddAgentChooser } from './AddAgentChooser';
+import { useAddEndpoint } from '../useAddEndpoint';
+import type { NewAgentEndpoint } from './AddAgentChooser';
+import { agentAdapter } from './agents';
 import { OwnedPrompt } from '../agent/OwnedPrompt';
 import {
   Background,
@@ -71,7 +75,7 @@ import { backendsOf } from '../usage/usage';
 import { NO_TERMINAL } from '../terminal/backend';
 import type { TerminalBackend } from '../terminal/backend';
 import { GraphActionsContext } from './actions';
-import { agentLabel, connectionOf, DEFAULT_AGENT, runCatalog } from './agents';
+import { agentLabel, connectionOf, runCatalog } from './agents';
 import type { GraphActions } from './actions';
 import { areLinked, groupMembers as groupAgentIds, isGroup } from '../../shared/model/queries';
 import type { Graph } from './flow';
@@ -295,9 +299,10 @@ function Editor({
     () =>
       backendsOf(
         catalog(),
-        graph.nodes.flatMap((n) =>
-          n.type === 'agent' ? [{ connection: connectionOf(n.data) }] : [],
-        ),
+        graph.nodes.flatMap((n) => {
+          const connection = n.type === 'agent' ? connectionOf(n.data) : undefined;
+          return connection === undefined ? [] : [{ connection }];
+        }),
       ),
     [graph.nodes],
   );
@@ -314,6 +319,15 @@ function Editor({
     />
   );
   /** Whether the templates gallery is open. */
+  const preferredEndpoint = useAddEndpoint(mirror);
+  const [adding, setAdding] = useState<{ choose: (endpoint: NewAgentEndpoint) => void }>();
+  const chooseEndpoint = useCallback(
+    (choose: (endpoint: NewAgentEndpoint) => void) => {
+      if (preferredEndpoint) choose(preferredEndpoint);
+      else setAdding({ choose });
+    },
+    [preferredEndpoint],
+  );
   const [gallery, setGallery] = useState<boolean | TemplateInfo>(false);
   const [startChoice, setStartChoice] = useState<{ canvas: CanvasId; open: boolean }>();
   const showStart =
@@ -322,7 +336,7 @@ function Editor({
   /** Which CLIs the user has, asked of main as the gallery opens: its agents' default connections. */
   const [installed, setInstalled] = useState<InstalledClis>();
   useEffect(() => {
-    if (!gallery && !showStart) return;
+    if (!gallery && !showStart && !adding) return;
     let open = true;
     api.catalogInstalled().then(
       (found) => {
@@ -333,7 +347,7 @@ function Editor({
     return () => {
       open = false;
     };
-  }, [gallery, showStart, api]);
+  }, [gallery, showStart, adding, api]);
   /** Every agent's queue, side by side, if shown: opened from the canvas, or from an agent. */
   const [queues, setQueues] = useState<{ from?: string }>();
   /** The canvas's saved automatic layout setting (nodes cannot be dragged while it is on). */
@@ -424,6 +438,7 @@ function Editor({
   const wrapper = useRef<HTMLDivElement>(null);
   /** Whether a panel, menu or question is open, which has the keyboard (Escape closes it). */
   const modal =
+    adding !== undefined ||
     showStart ||
     front !== undefined ||
     work !== undefined ||
@@ -476,19 +491,34 @@ function Editor({
           setSelection(after);
         });
       } else {
-        perform(
-          api.canvasGroup({
-            canvas: canvasId,
-            nodes: selected,
-            kind: command === 'group' ? 'frame' : 'agent',
-          }),
-          (result) => {
-            if ('id' in result) selectOne(result.id);
-          },
-        );
+        const group = (endpoint?: NewAgentEndpoint) => {
+          perform(
+            api.canvasGroup({
+              canvas: canvasId,
+              nodes: selected,
+              kind: command === 'group' ? 'frame' : 'agent',
+              ...endpoint,
+            }),
+            (result) => {
+              if ('id' in result) selectOne(result.id);
+            },
+          );
+        };
+        if (command === 'group') group();
+        else chooseEndpoint(group);
       }
     },
-    [api, canvasId, selection, perform, selectOne, clearSelection, removed, model.nodes],
+    [
+      api,
+      canvasId,
+      selection,
+      perform,
+      selectOne,
+      clearSelection,
+      removed,
+      model.nodes,
+      chooseEndpoint,
+    ],
   );
   const moveNodes = (moves: readonly { node: string; position: { x: number; y: number } }[]) => {
     perform(
@@ -527,7 +557,7 @@ function Editor({
   const changeAgent = (id: string, adapter: string, connection: string) => {
     const node = binding.required().document.nodes.find((n) => n.id === id);
     return draftCall(() =>
-      node?.type === 'agent' && (node.data.adapter ?? DEFAULT_AGENT) === adapter
+      node?.type === 'agent' && agentAdapter(node.data) === adapter
         ? api.agentSetConnection({ canvas: binding.canvas, agent: id, connection })
         : api.agentSetType({ canvas: binding.canvas, agent: id, adapter, connection }),
     );
@@ -560,8 +590,10 @@ function Editor({
         });
       },
       addParent: (node) => {
-        perform(api.canvasAddParent({ canvas: canvasId, frame: node }), (result) => {
-          if ('id' in result) selectOne(result.id);
+        chooseEndpoint((endpoint) => {
+          perform(api.canvasAddParent({ canvas: canvasId, frame: node, ...endpoint }), (result) => {
+            if ('id' in result) selectOne(result.id);
+          });
         });
       },
       removeEdge: (id) => {
@@ -584,6 +616,7 @@ function Editor({
       sessions,
       dockNeeds,
       engineCatalog,
+      chooseEndpoint,
     ],
   );
 
@@ -735,11 +768,7 @@ function Editor({
           const result = await api.canvasCreate({
             template,
             values: choices.values,
-            agents: Object.fromEntries(
-              Object.entries(choices.agents).flatMap(([key, value]) =>
-                value === undefined ? [] : [[key, value]],
-              ),
-            ),
+            agents: choices.agents,
             connections: choices.connections,
           });
           return 'canvas' in result ? (result.canvas as CanvasId) : null;
@@ -818,8 +847,10 @@ function Editor({
   /** Adds a node where the pointer is: into the innermost group there, if any. */
   const addAtPointer = (event: ReactMouseEvent) => {
     const at = screenToFlowPosition({ x: event.clientX, y: event.clientY });
-    perform(api.canvasAddAgent({ canvas: canvasId, adapter: DEFAULT_AGENT, at }), (result) => {
-      if ('id' in result) selectOne(result.id);
+    chooseEndpoint((endpoint) => {
+      perform(api.canvasAddAgent({ canvas: canvasId, at, ...endpoint }), (result) => {
+        if ('id' in result) selectOne(result.id);
+      });
     });
   };
   const onDoubleClick = (event: ReactMouseEvent) => {
@@ -851,7 +882,7 @@ function Editor({
       ];
       const data = dataById.get(n.id) ?? n.data;
       const name = data.label || 'Unnamed agent';
-      const type = agentLabel(data.adapter ?? DEFAULT_AGENT, connectionOf(data), {
+      const type = agentLabel(agentAdapter(data), connectionOf(data), {
         short: true,
       });
       return nodeView(
@@ -928,7 +959,7 @@ function Editor({
           {
             id,
             name: n.data.label || 'Unnamed agent',
-            agent: n.data.adapter ?? DEFAULT_AGENT,
+            agent: agentAdapter(n.data),
             status: sessions[id]?.status ?? 'idle',
           },
         ]
@@ -1427,7 +1458,7 @@ function Editor({
               // The foreground session's connection chooser is a single composite. The settings
               // sheet still changes only the document; X13 takes over these session controls.
               perform(
-                agent === (openedNode.data.adapter ?? DEFAULT_AGENT)
+                agent === agentAdapter(openedNode.data)
                   ? api.sessionContinueIn({ canvas: canvasId, agent: openedNode.id, connection })
                   : changeAgent(openedNode.id, agent, connection),
               );
@@ -1519,7 +1550,19 @@ function Editor({
             onClose={closeQueues}
           />
         )}
-        {showStart && !gallery && (
+        {adding && (
+          <AddAgentChooser
+            installed={installed}
+            onClose={() => {
+              setAdding(undefined);
+            }}
+            onPick={(endpoint) => {
+              adding.choose(endpoint);
+              setAdding(undefined);
+            }}
+          />
+        )}
+        {showStart && !gallery && !adding && (
           <StartSession
             canvas={canvasId}
             mirror={mirror}
@@ -1576,9 +1619,7 @@ function Editor({
                   canvas: canvasId,
                   template: template.id,
                   values: choices.values,
-                  agents: Object.fromEntries(
-                    Object.entries(choices.agents).map(([key, value]) => [key, value ?? null]),
-                  ),
+                  agents: choices.agents,
                   connections: choices.connections,
                 }),
                 (result) => {

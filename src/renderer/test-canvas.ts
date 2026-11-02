@@ -22,7 +22,7 @@ import { fillTemplate, withAgents, withConnections } from '../shared/model/templ
 import { exampleOf, EXAMPLES } from '../shared/examples';
 import { templateInfo } from '../shared/templates';
 import { catalog } from './catalog';
-import { DEFAULT_AGENT } from './graph/agents';
+
 import { fakeCore } from './test-api';
 import { UsageStore } from './usage/store';
 import type { UsageSource } from './usage/store';
@@ -53,7 +53,7 @@ export function fakeCanvas(
     return { ok: true, value: { items: await (replies ?? fallback).files(query, agent) } };
   });
   core.respond('templates.list', {
-    items: EXAMPLES.map((example) => templateInfo(example, catalog(), DEFAULT_AGENT)),
+    items: EXAMPLES.map((example) => templateInfo(example, catalog())),
   });
   let runtime: ReturnType<typeof canvasRuntime> | undefined;
   const runtimes = new Map<CanvasId, ReturnType<typeof canvasRuntime>>();
@@ -73,7 +73,7 @@ export function fakeCanvas(
     for (const one of runtimes.values()) one.dispose();
     dispose();
   };
-  const context = { newId: () => crypto.randomUUID(), defaultAdapter: DEFAULT_AGENT };
+  const context = { catalog: catalog(), newId: () => crypto.randomUUID() };
   const keep = (next: CanvasDocument) => {
     const prior = document;
     if (toFile(next) === toFile(prior)) return rev;
@@ -147,12 +147,12 @@ export function fakeCanvas(
       ? emptyCanvas()
       : withConnections(
           withAgents(
-            fillTemplate(fromFile(example.text, catalog(), DEFAULT_AGENT), args.values ?? {}),
+            fillTemplate(fromFile(example.text, catalog()), args.values ?? {}),
             args.agents ?? {},
-            { catalog: catalog(), defaultAdapter: DEFAULT_AGENT },
+            { catalog: catalog() },
           ),
           args.connections ?? {},
-          { catalog: catalog(), defaultAdapter: DEFAULT_AGENT },
+          { catalog: catalog() },
         );
     meta.name = null;
     meta.project = null;
@@ -243,7 +243,6 @@ export function fakeCanvas(
           const args = OPS[op].input.parse(raw);
           const next = A.setType(document, args, {
             catalog: catalog(),
-            defaultAdapter: DEFAULT_AGENT,
           });
           built =
             args.connection === undefined
@@ -251,7 +250,7 @@ export function fakeCanvas(
               : A.setConnection(
                   next.next,
                   { agent: args.agent, connection: args.connection },
-                  { catalog: catalog(), defaultAdapter: DEFAULT_AGENT },
+                  { catalog: catalog() },
                 );
           break;
         }
@@ -259,7 +258,6 @@ export function fakeCanvas(
           const args = OPS[op].input.parse(raw);
           built = A.setConnection(document, args, {
             catalog: catalog(),
-            defaultAdapter: DEFAULT_AGENT,
           });
           break;
         }
@@ -317,7 +315,7 @@ export function fakeCanvas(
                   next: A.setConnection(
                     added.next,
                     { agent: added.result.id, connection: args.connection },
-                    { catalog: catalog(), defaultAdapter: DEFAULT_AGENT },
+                    { catalog: catalog() },
                   ).next,
                 };
           break;
@@ -359,8 +357,12 @@ export function fakeCanvas(
           built = S.ungroup(document, OPS[op].input.parse(raw));
           break;
         case 'canvas.addParent': {
-          const { frame } = OPS[op].input.parse(raw);
-          built = S.addParent(document, { id: frame }, context);
+          const { frame, adapter, connection } = OPS[op].input.parse(raw);
+          built = S.addParent(
+            document,
+            { adapter, ...(connection === undefined ? {} : { connection }), id: frame },
+            context,
+          );
           break;
         }
         case 'canvas.move':
@@ -384,15 +386,11 @@ export function fakeCanvas(
           const template = exampleOf(args.template);
           if (!template) throw new Error('No template');
           const part = withConnections(
-            withAgents(
-              fillTemplate(fromFile(template.text, catalog(), DEFAULT_AGENT), args.values),
-              Object.fromEntries(
-                Object.entries(args.agents).map(([key, value]) => [key, value ?? undefined]),
-              ),
-              { catalog: catalog(), defaultAdapter: DEFAULT_AGENT },
-            ),
+            withAgents(fillTemplate(fromFile(template.text, catalog()), args.values), args.agents, {
+              catalog: catalog(),
+            }),
             args.connections,
-            { catalog: catalog(), defaultAdapter: DEFAULT_AGENT },
+            { catalog: catalog() },
           );
           const made = insert(
             document,
@@ -469,7 +467,7 @@ export function fakeCanvas(
     },
     edit(text: string, expected: number): Promise<number> {
       if (expected !== rev) return Promise.reject(new Error('Stale test canvas'));
-      return Promise.resolve(keep(fromFile(text, catalog(), DEFAULT_AGENT)));
+      return Promise.resolve(keep(fromFile(text, catalog())));
     },
     files,
     meta: view,
