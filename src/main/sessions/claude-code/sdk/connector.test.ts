@@ -757,9 +757,7 @@ describe('SdkConnector', () => {
     // The owner publishes the prompt; the connector retains only its waiting status.
     expect(events.slice(-1)).toEqual([{ type: 'status', status: 'waiting' }]);
     // The old way answers nothing.
-    await expect(
-      session.answer('toolu_1:prompt', { kind: 'permission', answer: 'once' }),
-    ).rejects.toThrow(/only through/);
+    expect(session).not.toHaveProperty('answer');
     session.prompts?.answer(raised.key, { kind: 'choice', value: 'allow' });
     expect(await asked).toMatchObject({ behavior: 'allow', updatedInput: { command: 'npm test' } });
     expect(() => session.prompts?.answer(raised.key, { kind: 'choice', value: 'allow' })).toThrow(
@@ -786,12 +784,11 @@ describe('SdkConnector', () => {
         requestId: 'r',
       },
     );
-    const ids = events.flatMap((event) =>
-      event.type === 'tool' || event.type === 'permission' ? [`${event.type} ${event.id}`] : [],
-    );
-    expect(ids).toContain('tool toolu_01BcsAQYMNM52sfGgGbPDfjx');
-    const prompt = events.find((event) => event.type === 'permission');
-    expect(prompt?.type === 'permission' && prompt.id).not.toBe('toolu_01BcsAQYMNM52sfGgGbPDfjx');
+    const ids = events.flatMap((event) => (event.type === 'tool' ? [event.id] : []));
+    expect(ids).toContain('toolu_01BcsAQYMNM52sfGgGbPDfjx');
+    const prompt = raisedOf(events);
+    expect(prompt.key).toMatch(/^[0-9a-f-]{36}$/);
+    expect(prompt.key).not.toBe('toolu_01BcsAQYMNM52sfGgGbPDfjx');
   });
 
   it('interrupts the turn: its result ends it, interrupted', async () => {

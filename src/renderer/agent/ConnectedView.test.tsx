@@ -1,10 +1,11 @@
+import { testPromptEvent, testPromptId } from '../../shared/test-prompts';
 import { NEW_SESSION } from '../../shared/model/session';
 import { Prompt, PromptId } from '../../shared/model/prompts';
 import { renderReady, events } from '../test-render';
-import { act, screen, within } from '@testing-library/react';
+import { act, screen, within, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import type { SessionEvent } from '../../shared/session';
+import type { FixtureSessionEvent as SessionEvent } from '../test-sessions';
 import { newCanvasId } from '../../shared/canvas';
 import type { AppApi } from '../../shared/gui-link';
 import { findProjectFiles } from './completion';
@@ -246,26 +247,44 @@ describe('a connected Codex agent', () => {
     await send('Plan the change');
     emit(
       { type: 'user', id: sent(), text: 'Plan the change' },
-      { type: 'plan', id: 'p', plan: '1. Read it\n2. Change it' },
+      testPromptEvent(
+        {
+          kind: 'plan',
+          title: 'Implement this plan?',
+          answerIn: 'api',
+          plan: '1. Read it\n2. Change it',
+          choices: [
+            {
+              value: 'implement',
+              label: 'Yes, implement this plan',
+              hint: 'allow_once',
+              effects: { mode: 'auto' },
+            },
+            {
+              value: 'keep-planning',
+              label: 'Keep planning',
+              hint: 'reject_once',
+              effects: {},
+              feedback: 'optional',
+            },
+          ],
+        },
+        testPromptId('p'),
+      ),
     );
-    const plan = within(transcript.getByRole('group', { name: 'Plan' }));
-    // As Codex's TUI shows it: the proposed plan, then whether to implement it.
-    expect(plan.getByText('Proposed plan')).toBeTruthy();
-    expect(plan.getByText('Implement this plan?')).toBeTruthy();
+    const plan = within(transcript.getByRole('group', { name: 'Implement this plan?' }));
+    expect(plan.getByText(/1\. Read it\s+2\. Change it/)).toBeTruthy();
     expect(plan.getAllByRole('button').map((button) => button.textContent)).toEqual([
       'Yes, implement this plan',
       'Keep planning',
     ]);
-    expect(plan.getByRole('textbox', { name: 'What to change' }).getAttribute('placeholder')).toBe(
-      'No, keep planning: tell Codex what to change',
-    );
     await events.click(plan.getByRole('button', { name: 'Yes, implement this plan' }));
     await settle();
-    expect(replies.answer).toHaveBeenCalledWith('a', 'p', {
-      kind: 'plan',
-      answer: { approve: true, mode: 'auto' },
+    expect(replies.answer).toHaveBeenCalledWith('a', testPromptId('p'), {
+      kind: 'choice',
+      value: 'implement',
     });
-    expect(plan.getByText('Approved: carrying it out in Default')).toBeTruthy();
+    expect(await transcript.findByText('Allowed once by you.')).toBeTruthy();
   });
 });
 
@@ -750,24 +769,40 @@ describe('a connected agent', () => {
       { type: 'status', status: 'working' },
       { type: 'text', id: 'x', text: 'Fixing **it**' },
       { type: 'tool', id: 'r', tool: 'Read', summary: 'src/a.ts', status: 'done' },
-      {
-        type: 'permission',
-        id: 'p',
-        tool: 'Bash',
-        summary: 'npm test',
-        always: 'Yes, and don’t ask again for npm test commands in this folder',
-      },
+      testPromptEvent(
+        {
+          kind: 'approval',
+          title: 'Run this command?',
+          answerIn: 'api',
+          summary: 'npm test',
+          subject: { type: 'tool', tool: 'Bash', input: {} },
+          choices: [
+            { value: 'once', label: 'Yes', hint: 'allow_once', effects: {} },
+            {
+              value: 'always',
+              label: 'Yes, and don’t ask again for npm test commands in this folder',
+              hint: 'allow_always',
+              effects: {},
+            },
+            { value: 'deny', label: 'No', hint: 'reject_once', effects: {}, feedback: 'optional' },
+          ],
+        },
+        testPromptId('p'),
+      ),
     );
     expect(transcript.getByText('it').tagName).toBe('STRONG');
     expect(transcript.getByRole('button', { name: 'Read src/a.ts' })).toBeTruthy();
-    const prompt = within(transcript.getByRole('group', { name: 'Bash command: npm test' }));
+    const prompt = within(transcript.getByRole('group', { name: 'Run this command?' }));
     await events.click(
       prompt.getByRole('button', {
         name: 'Yes, and don’t ask again for npm test commands in this folder',
       }),
     );
     await settle();
-    expect(replies.answer).toHaveBeenCalledWith('a', 'p', { kind: 'permission', answer: 'always' });
+    expect(replies.answer).toHaveBeenCalledWith('a', testPromptId('p'), {
+      kind: 'choice',
+      value: 'always',
+    });
 
     emit(
       {
@@ -809,140 +844,156 @@ describe('a connected agent', () => {
   it('asks the user questions with corrallm’s question cards, in its transcript and on the canvas', async () => {
     const { replies, view, send, emit, transcript } = await open({ connection: 'claude-code.sdk' });
     await send('Go');
-    emit({
-      type: 'question',
-      id: 'q',
-      questions: [
+    emit(
+      testPromptEvent(
         {
-          header: 'Branch',
-          text: 'Which branch?',
-          options: [
-            { label: 'main', description: 'The default branch' },
-            { label: 'develop', description: 'Where work goes first' },
-          ],
-          multiple: false,
+          kind: 'question',
+          title: 'Questions for you',
+          answerIn: 'api',
+          questions: [
+            {
+              header: 'Branch',
+              text: 'Which branch?',
+              options: [
+                { label: 'main', description: 'The default branch' },
+                { label: 'develop', description: 'Where work goes first' },
+              ],
+              multiple: false,
+            },
+          ].map((question, index) => ({ ...question, id: 'q' + String(index + 1), other: true })),
         },
-      ],
-    });
+        testPromptId('q'),
+      ),
+    );
     const asked = within(transcript.getByRole('group', { name: 'Questions for you' }));
-    expect(asked.getByText('Which branch?')).toBeTruthy();
+    expect(asked.getByRole('group', { name: 'Branch: Which branch?' })).toBeTruthy();
 
     // Back on the canvas, the Needs you sidebar asks it too, and answers it.
     await events.click(view.getByRole('button', { name: 'Back to the canvas' }));
     await events.click(screen.getByRole('button', { name: 'Needs you' }));
     const sidebar = within(screen.getByRole('complementary', { name: 'Needs you' }));
-    await events.click(sidebar.getByRole('button', { name: 'develop' }));
+    await events.click(sidebar.getByRole('radio', { name: 'develop' }));
+    await events.click(sidebar.getByRole('button', { name: 'Send answers' }));
     await settle();
-    expect(replies.answer).toHaveBeenCalledWith('a', 'q', {
-      kind: 'question',
-      answers: ['develop'],
+    expect(replies.answer).toHaveBeenCalledWith('a', testPromptId('q'), {
+      kind: 'questions',
+      answers: { q1: { picked: ['develop'] } },
     });
-    expect(screen.queryByRole('complementary', { name: 'Needs you' })).toBeNull();
+    await waitFor(() => {
+      expect(screen.queryByRole('button', { name: 'Send answers' })).toBeNull();
+    });
   });
 
-  it('answers each question of a prompt from the canvas’s sidebar as that question', async () => {
+  it('answers every question of one prompt together by its own id', async () => {
     const { replies, view, send, emit } = await open({ connection: 'claude-code.sdk' });
     await send('Go');
-    emit({
-      type: 'question',
-      id: 'q',
-      questions: [
+    emit(
+      testPromptEvent(
         {
-          header: 'Branch',
-          text: 'Which branch?',
-          options: [
-            { label: 'main', description: '' },
-            { label: 'develop', description: '' },
-          ],
-          multiple: false,
+          kind: 'question',
+          title: 'Questions for you',
+          answerIn: 'api',
+          questions: [
+            {
+              header: 'Branch',
+              text: 'Which branch?',
+              options: [
+                { label: 'main', description: '' },
+                { label: 'develop', description: '' },
+              ],
+              multiple: false,
+            },
+            {
+              header: 'Speed',
+              text: 'How fast?',
+              options: [
+                { label: 'fast', description: '' },
+                { label: 'careful', description: '' },
+              ],
+              multiple: false,
+            },
+          ].map((question, index) => ({ ...question, id: 'q' + String(index + 1), other: true })),
         },
-        {
-          header: 'Speed',
-          text: 'How fast?',
-          options: [
-            { label: 'fast', description: '' },
-            { label: 'careful', description: '' },
-          ],
-          multiple: false,
-        },
-      ],
-    });
+        testPromptId('q'),
+      ),
+    );
     await events.click(view.getByRole('button', { name: 'Back to the canvas' }));
     await events.click(screen.getByRole('button', { name: 'Needs you' }));
     const sidebar = () => within(screen.getByRole('complementary', { name: 'Needs you' }));
-    // The badge counts questions, as the popover does, rather than just their one prompt.
-    expect(screen.getByRole('button', { name: 'Needs you' }).textContent).toBe('2');
-    // The second first: each answer is its own question's.
-    await events.click(sidebar().getByRole('button', { name: 'careful' }));
+    // The badge counts the one prompt; its questions are submitted together.
     expect(screen.getByRole('button', { name: 'Needs you' }).textContent).toBe('1');
-    await events.click(sidebar().getByRole('button', { name: 'main' }));
+    // The second first: each answer is its own question's.
+    await events.click(sidebar().getByRole('radio', { name: 'careful' }));
+    expect(screen.getByRole('button', { name: 'Needs you' }).textContent).toBe('1');
+    await events.click(sidebar().getByRole('radio', { name: 'main' }));
+    expect(replies.answer).not.toHaveBeenCalled();
+    await events.click(sidebar().getByRole('button', { name: 'Send answers' }));
     await settle();
-    expect(replies.answer).toHaveBeenCalledWith('a', 'q', {
-      kind: 'question',
-      answers: ['main', 'careful'],
+    expect(replies.answer).toHaveBeenCalledWith('a', testPromptId('q'), {
+      kind: 'questions',
+      answers: { q1: { picked: ['main'] }, q2: { picked: ['careful'] } },
     });
   });
 
-  it('shows a question’s header and what each answer means, and takes several answers with Submit', async () => {
+  it('shows question headers and meanings, and sends picks or exclusive own words together', async () => {
     const { replies, view, send, emit, transcript } = await open({ connection: 'claude-code.sdk' });
     await send('Go');
-    const question = (id: string) => ({
-      type: 'question' as const,
-      id,
-      questions: [
+    const question = (id: string) =>
+      testPromptEvent(
         {
-          header: 'Checks',
-          text: 'Which checks should run?',
-          options: [
-            { label: 'Lint', description: 'ESLint, zero warnings' },
-            { label: 'Tests', description: 'Vitest, every project' },
-            { label: 'E2E', description: 'Playwright, on the built app' },
+          kind: 'question',
+          title: 'Questions for you',
+          answerIn: 'api',
+          questions: [
+            {
+              id: 'checks',
+              header: 'Checks',
+              text: 'Which checks should run?',
+              options: [
+                { label: 'Lint', description: 'ESLint, zero warnings' },
+                { label: 'Tests', description: 'Vitest, every project' },
+                { label: 'E2E', description: 'Playwright, on the built app' },
+              ],
+              multiple: true,
+              other: true,
+            },
           ],
-          multiple: true,
         },
-      ],
-    });
+        testPromptId(id),
+      );
     emit(question('q1'));
     const card = within(transcript.getByRole('group', { name: 'Questions for you' }));
-    expect(card.getByText('Checks').className).toBe('graph-question-header');
-    // Each answer says what it means; picking one does not answer yet.
-    const lint = card.getByRole('button', { name: 'Lint' });
-    expect(lint.getAttribute('aria-pressed')).toBe('false');
-    expect(lint.getAttribute('aria-describedby')).toBeTruthy();
-    expect(document.getElementById(lint.getAttribute('aria-describedby') ?? '')?.textContent).toBe(
-      'ESLint, zero warnings',
-    );
-    const submit = card.getByRole('button', { name: 'Submit' });
+    expect(card.getByRole('group', { name: 'Checks: Which checks should run?' })).toBeTruthy();
+    expect(card.getByText('ESLint, zero warnings')).toBeTruthy();
+    const lint = card.getByRole<HTMLInputElement>('checkbox', { name: 'Lint' });
+    const submit = card.getByRole('button', { name: 'Send answers' });
     expect(submit).toHaveProperty('disabled', true);
     await events.click(lint);
-    await events.click(card.getByRole('button', { name: 'E2E' }));
-    expect(lint.getAttribute('aria-pressed')).toBe('true');
+    await events.click(card.getByRole('checkbox', { name: 'E2E' }));
+    expect(lint.checked).toBe(true);
     expect(replies.answer).not.toHaveBeenCalled();
-    // What is typed in the box goes with the answers picked.
-    await events.change(card.getByRole('textbox', { name: 'Your answer' }), {
-      target: { value: 'and the packaged self-test' },
-    });
     await events.click(submit);
     await settle();
-    expect(replies.answer).toHaveBeenCalledWith('a', 'q1', {
-      kind: 'question',
-      answers: ['Lint, E2E, and the packaged self-test'],
+    expect(replies.answer).toHaveBeenCalledWith('a', testPromptId('q1'), {
+      kind: 'questions',
+      answers: { checks: { picked: ['Lint', 'E2E'] } },
     });
-    expect(card.getByText('You answered: Lint, E2E, and the packaged self-test')).toBeTruthy();
-
-    // The Needs you sidebar asks the same way.
+    expect(await transcript.findByText('Answered by you.')).toBeTruthy();
     emit(question('q2'));
     await events.click(view.getByRole('button', { name: 'Back to the canvas' }));
     await events.click(screen.getByRole('button', { name: 'Needs you' }));
     const sidebar = within(screen.getByRole('complementary', { name: 'Needs you' }));
-    expect(sidebar.getByText('Checks')).toBeTruthy();
     expect(sidebar.getByText('Vitest, every project')).toBeTruthy();
-    await events.click(sidebar.getByRole('button', { name: 'Tests' }));
-    await events.click(sidebar.getByRole('button', { name: 'Submit' }));
+    await events.click(sidebar.getByRole('checkbox', { name: 'Tests' }));
+    await events.change(sidebar.getByRole('textbox', { name: 'Which checks should run?' }), {
+      target: { value: 'the packaged self-test' },
+    });
+    expect(sidebar.getByRole('checkbox', { name: 'Tests' })).toHaveProperty('checked', false);
+    await events.click(sidebar.getByRole('button', { name: 'Send answers' }));
     await settle();
-    expect(replies.answer).toHaveBeenLastCalledWith('a', 'q2', {
-      kind: 'question',
-      answers: ['Tests'],
+    expect(replies.answer).toHaveBeenLastCalledWith('a', testPromptId('q2'), {
+      kind: 'questions',
+      answers: { checks: { text: 'the packaged self-test' } },
     });
   });
 
@@ -1151,28 +1202,35 @@ describe('a connected agent', () => {
       });
     });
     await events.click(view.getByRole('button', { name: 'Back to the canvas' }));
-    emit({
-      type: 'question',
-      id: 'q',
-      questions: [
+    emit(
+      testPromptEvent(
         {
-          header: 'Branch',
-          text: 'Which branch?',
-          options: [
-            { label: 'main', description: 'The default branch' },
-            { label: 'develop', description: 'Where work goes first' },
-          ],
-          multiple: false,
+          kind: 'question',
+          title: 'Questions for you',
+          answerIn: 'api',
+          questions: [
+            {
+              header: 'Branch',
+              text: 'Which branch?',
+              options: [
+                { label: 'main', description: 'The default branch' },
+                { label: 'develop', description: 'Where work goes first' },
+              ],
+              multiple: false,
+            },
+          ].map((question, index) => ({ ...question, id: 'q' + String(index + 1), other: true })),
         },
-      ],
-    });
+        testPromptId('q'),
+      ),
+    );
     await events.click(screen.getByRole('button', { name: 'Needs you' }));
     const sidebar = () => within(screen.getByRole('complementary', { name: 'Needs you' }));
-    await events.click(sidebar().getByRole('button', { name: 'develop' }));
+    await events.click(sidebar().getByRole('radio', { name: 'develop' }));
+    await events.click(sidebar().getByRole('button', { name: 'Send answers' }));
     await settle();
-    expect(replies.answer).toHaveBeenCalledWith('a', 'q', {
-      kind: 'question',
-      answers: ['develop'],
+    expect(replies.answer).toHaveBeenCalledWith('a', testPromptId('q'), {
+      kind: 'questions',
+      answers: { q1: { picked: ['develop'] } },
     });
     act(() => {
       canvas.run({
@@ -1214,16 +1272,53 @@ describe('a connected agent', () => {
   it('asks to approve its plan, and to carry it out in a mode', async () => {
     const { replies, send, emit, transcript } = await open({ connection: 'claude-code.sdk' });
     await send('Plan it');
-    emit({ type: 'plan', id: 'plan', plan: '1. Read the code\n2. Change it' });
-    const plan = within(transcript.getByRole('group', { name: 'Plan' }));
-    expect(plan.getByText('Read the code')).toBeTruthy();
+    emit(
+      testPromptEvent(
+        {
+          kind: 'plan',
+          title: 'Approve this plan?',
+          answerIn: 'api',
+          plan: '1. Read the code\n2. Change it',
+          choices: [
+            {
+              value: 'acceptEdits',
+              label: 'Yes, and auto-accept edits',
+              hint: 'allow_once',
+              effects: { mode: 'acceptEdits' },
+            },
+            {
+              value: 'auto',
+              label: 'Yes, carry it out',
+              hint: 'allow_once',
+              effects: { mode: 'auto' },
+            },
+            {
+              value: 'manual',
+              label: 'Yes, manually approve edits',
+              hint: 'allow_once',
+              effects: { mode: 'manual' },
+            },
+            {
+              value: 'revise',
+              label: 'No, keep planning',
+              hint: 'reject_once',
+              effects: {},
+              feedback: 'required',
+            },
+          ],
+        },
+        testPromptId('plan'),
+      ),
+    );
+    const plan = within(transcript.getByRole('group', { name: 'Approve this plan?' }));
+    expect(plan.getByText(/1\. Read the code\s+2\. Change it/)).toBeTruthy();
     await events.click(plan.getByRole('button', { name: 'Yes, and auto-accept edits' }));
     await settle();
-    expect(replies.answer).toHaveBeenCalledWith('a', 'plan', {
-      kind: 'plan',
-      answer: { approve: true, mode: 'acceptEdits' },
+    expect(replies.answer).toHaveBeenCalledWith('a', testPromptId('plan'), {
+      kind: 'choice',
+      value: 'acceptEdits',
     });
-    expect(plan.getByText('Approved: carrying it out in Accept edits')).toBeTruthy();
+    expect(await transcript.findByText('Allowed once by you.')).toBeTruthy();
   });
 
   it('shows a subagent’s work under the call that started it', async () => {
@@ -1437,103 +1532,128 @@ describe('a connected agent', () => {
     expect(transcript.getByText('Hi there')).toBeTruthy();
   });
 
-  it('lists what its session asks in the canvas’s Needs you, to answer in its view', async () => {
+  it('lists the same owner prompt in the canvas’s Needs you', async () => {
     const { send, emit } = await open({ connection: 'claude-code.sdk' });
     await send('Test it');
-    emit({ type: 'permission', id: 'p', tool: 'Bash', summary: 'npm test', always: null });
+    emit(
+      testPromptEvent(
+        {
+          kind: 'approval',
+          title: 'Run this command?',
+          answerIn: 'api',
+          summary: 'npm test',
+          subject: { type: 'tool', tool: 'Bash', input: {} },
+          choices: [
+            { value: 'once', label: 'Yes', hint: 'allow_once', effects: {} },
+            { value: 'deny', label: 'No', hint: 'reject_once', effects: {}, feedback: 'optional' },
+          ],
+        },
+        testPromptId('p'),
+      ),
+    );
     await events.click(screen.getByRole('button', { name: 'Needs you' }));
     const needs = within(screen.getByRole('complementary', { name: 'Needs you' }));
     expect(needs.getByRole('heading', { level: 2 }).textContent).toBe('Needs you 1');
     const asked = within(needs.getByRole('group', { name: 'a asks' }));
-    expect(asked.getByText('Approve Bash: npm test?')).toBeTruthy();
-    expect(asked.getByText('Answer it in its session.')).toBeTruthy();
-    expect(asked.getByRole('button', { name: 'Open session' })).toBeTruthy();
+    expect(asked.getByText('Run this command?')).toBeTruthy();
+    expect(asked.getByRole('button', { name: 'Yes' })).toBeTruthy();
   });
 
   it('words a permission prompt as the CLI does', async () => {
     const { send, emit, transcript } = await open({ connection: 'claude-code.sdk' });
     await send('Fetch it');
-    emit({
-      type: 'permission',
-      id: 'p',
-      tool: 'WebFetch',
-      summary: 'https://example.com',
-      always: null,
-      title: 'Claude wants to fetch example.com',
-    });
+    emit(
+      testPromptEvent(
+        {
+          kind: 'approval',
+          title: 'Claude wants to fetch example.com',
+          answerIn: 'api',
+          summary: 'https://example.com',
+          subject: { type: 'tool', tool: 'WebFetch', input: {} },
+          choices: [
+            { value: 'once', label: 'Yes', hint: 'allow_once', effects: {} },
+            { value: 'deny', label: 'No', hint: 'reject_once', effects: {}, feedback: 'optional' },
+          ],
+        },
+        testPromptId('p'),
+      ),
+    );
     const prompt = within(
       transcript.getByRole('group', {
-        name: 'Claude wants to fetch example.com: https://example.com',
+        name: 'Claude wants to fetch example.com',
       }),
     );
-    expect(prompt.getByText('Do you want to proceed?')).toBeTruthy();
-    // Numbered as in Claude Code; then what to tell Claude instead.
+    expect(prompt.getByText('https://example.com')).toBeTruthy();
     expect(
       prompt
         .getAllByRole('button')
-        .map((b) => [b.getAttribute('aria-keyshortcuts'), b.textContent]),
+        .map((button) => [button.getAttribute('aria-keyshortcuts'), button.textContent]),
     ).toEqual([
-      ['1', '1Yes'],
-      ['2', '2No'],
-      [null, 'Tell Claude'],
+      [null, 'Yes'],
+      [null, 'No'],
     ]);
   });
 
-  it('answers a permission prompt with 1, 2 or 3, or with what to do instead', async () => {
+  it('answers an approval explicitly, with optional feedback, and never through number keys', async () => {
     const { replies, composer, send, emit, transcript } = await open({
       connection: 'claude-code.sdk',
     });
     await send('Test it');
     const ask = (id: string) => {
-      emit({
-        type: 'permission',
-        id,
-        tool: 'Bash',
-        summary: 'npm test',
-        always: "Yes, and don't ask again for `npm test` commands in shop",
-      });
+      emit(
+        testPromptEvent(
+          {
+            kind: 'approval',
+            title: 'Run this command?',
+            summary: 'npm test',
+            answerIn: 'api',
+            subject: { type: 'tool', tool: 'Bash', input: {} },
+            choices: [
+              { value: 'once', label: 'Yes', hint: 'allow_once', effects: {} },
+              { value: 'always', label: 'Always', hint: 'allow_always', effects: {} },
+              {
+                value: 'deny',
+                label: 'No',
+                hint: 'reject_once',
+                effects: {},
+                feedback: 'optional',
+              },
+            ],
+          },
+          testPromptId(id),
+        ),
+      );
     };
     ask('p1');
-    // A draft being written takes the key; an empty box gives it to the prompt.
     await events.change(composer, { target: { value: 'x' } });
     await events.keyDown(composer, { key: '2' });
-    expect(replies.answer).not.toHaveBeenCalled();
     await events.change(composer, { target: { value: '' } });
     await events.keyDown(composer, { key: '2' });
-    await settle();
-    expect(replies.answer).toHaveBeenLastCalledWith('a', 'p1', {
-      kind: 'permission',
-      answer: 'always',
-    });
-
-    ask('p2');
     await events.keyDown(document.body, { key: '3' });
+    expect(replies.answer).not.toHaveBeenCalled();
+    let card = within(transcript.getByRole('group', { name: 'Run this command?' }));
+    await events.click(card.getByRole('button', { name: 'Always' }));
     await settle();
-    expect(replies.answer).toHaveBeenLastCalledWith('a', 'p2', {
-      kind: 'permission',
-      answer: 'deny',
+    expect(replies.answer).toHaveBeenLastCalledWith('a', testPromptId('p1'), {
+      kind: 'choice',
+      value: 'always',
     });
-
-    ask('p3');
-    // The prompt still open, after the answered ones.
-    const asked = transcript.getAllByRole('group', { name: 'Bash command: npm test' }).at(-1);
-    const prompt = within(asked ?? document.body);
-    const instead = prompt.getByRole('textbox', {
-      name: 'No, and tell Claude what to do differently',
-    });
-    await events.change(instead, { target: { value: 'Use pnpm, not npm' } });
-    // Typing there types: digits are not answers.
-    await events.keyDown(instead, { key: '1' });
-    await events.keyDown(instead, { key: 'Enter' });
-    await settle();
-    expect(replies.answer).toHaveBeenLastCalledWith('a', 'p3', {
-      kind: 'permission',
-      answer: 'deny',
-      feedback: 'Use pnpm, not npm',
-    });
-    expect(transcript.getByText(/Use pnpm, not npm/).textContent).toBe(
-      'Denied: Bash npm test · Use pnpm, not npm',
+    ask('p2');
+    card = within(
+      transcript.getAllByRole('group', { name: 'Run this command?' }).at(-1) ?? document.body,
     );
+    await events.click(card.getByRole('button', { name: 'No' }));
+    await events.change(card.getByRole('textbox', { name: 'Feedback' }), {
+      target: { value: 'Use the other script' },
+    });
+    await events.click(card.getByRole('button', { name: 'Send feedback' }));
+    await settle();
+    expect(replies.answer).toHaveBeenLastCalledWith('a', testPromptId('p2'), {
+      kind: 'choice',
+      value: 'deny',
+      feedback: 'Use the other script',
+    });
+    expect(replies.answer).toHaveBeenCalledTimes(2);
   });
 
   it('shows how long a tool call has run, and how a subagent is going', async () => {
@@ -1995,44 +2115,45 @@ describe('an Agent SDK agent’s MCP servers (/mcp)', () => {
 });
 
 describe('an MCP server asking the user (an elicitation)', () => {
-  const asked = {
-    type: 'elicitation',
-    id: 'e1',
-    server: 'github',
-    message: 'Which repository should the issue go in?',
-    fields: [
-      { name: 'repo', label: 'Repository', required: true, kind: 'text' },
-      { name: 'count', label: 'How many', required: false, kind: 'integer', min: 1 },
-      { name: 'draft', label: 'Draft', required: false, kind: 'boolean' },
-      {
-        name: 'priority',
-        label: 'Priority',
-        required: false,
-        kind: 'choice',
-        options: [
-          { value: 'p1', label: 'High' },
-          { value: 'p2', label: 'Low' },
-        ],
+  const asked = testPromptEvent(
+    {
+      kind: 'form',
+      server: 'github',
+      title: 'Which repository should the issue go in?',
+      answerIn: 'api',
+      form: {
+        schema: {
+          type: 'object',
+          properties: {
+            repo: { title: 'Repository', type: 'string' },
+            count: { title: 'How many', type: 'integer', minimum: 1 },
+            draft: { title: 'Draft', type: 'boolean' },
+            priority: {
+              title: 'Priority',
+              type: 'string',
+              enum: ['p1', 'p2'],
+              enumNames: ['High', 'Low'],
+            },
+            labels: {
+              title: 'Labels',
+              type: 'array',
+              items: { type: 'string', enum: ['bug', 'ui'], enumNames: ['Bug', 'UI'] },
+            },
+          },
+          required: ['repo'],
+          additionalProperties: false,
+        },
       },
-      {
-        name: 'labels',
-        label: 'Labels',
-        required: false,
-        kind: 'choices',
-        options: [
-          { value: 'bug', label: 'Bug' },
-          { value: 'ui', label: 'UI' },
-        ],
-      },
-    ],
-  } satisfies SessionEvent;
+    },
+    testPromptId('e1'),
+  );
 
   it('shows its form in the transcript, and answers with what was filled in', async () => {
     const { replies, send, emit, sent, transcript } = await open({ connection: 'claude-code.sdk' });
     await send('File an issue');
     emit({ type: 'user', id: sent(), text: 'File an issue' }, asked);
     const form = within(transcript.getByRole('form', { name: 'github asks' }));
-    expect(form.getByText('Which repository should the issue go in?')).toBeTruthy();
+    expect(transcript.getByText('Which repository should the issue go in?')).toBeTruthy();
     // It waits for what is required.
     const submit = form.getByRole('button', { name: 'Submit' });
     expect(submit.hasAttribute('disabled')).toBe(true);
@@ -2049,45 +2170,54 @@ describe('an MCP server asking the user (an elicitation)', () => {
     await events.click(form.getByRole('checkbox', { name: 'UI' }));
     await events.click(submit);
     await settle();
-    expect(replies.answer).toHaveBeenCalledWith('a', 'e1', {
-      kind: 'elicitation',
+    expect(replies.answer).toHaveBeenCalledWith('a', testPromptId('e1'), {
+      kind: 'form',
       action: 'accept',
       values: { repo: 'acme/shop', count: 2, draft: true, priority: 'p2', labels: ['ui'] },
     });
-    expect(
-      transcript.getByText('Sent to github: Which repository should the issue go in?'),
-    ).toBeTruthy();
+    expect(await transcript.findByText('Submitted by you.')).toBeTruthy();
   });
 
   it('declines, and opens a link a server asks to open through main', async () => {
-    const { replies, send, emit, sent, transcript, openLink } = await open({
+    const { replies, send, emit, sent, transcript, canvas } = await open({
       connection: 'claude-code.sdk',
     });
     await send('File an issue');
     emit({ type: 'user', id: sent(), text: 'File an issue' }, asked);
     await events.click(transcript.getByRole('button', { name: 'Decline' }));
     await settle();
-    expect(replies.answer).toHaveBeenLastCalledWith('a', 'e1', {
-      kind: 'elicitation',
+    expect(replies.answer).toHaveBeenLastCalledWith('a', testPromptId('e1'), {
+      kind: 'form',
       action: 'decline',
     });
-    expect(transcript.getByText('Declined: Which repository should the issue go in?')).toBeTruthy();
+    expect(await transcript.findByText('Declined by you.')).toBeTruthy();
 
-    emit({
-      type: 'elicitation',
-      id: 'e2',
-      server: 'linear',
-      message: 'Sign in to Linear to go on',
-      url: 'https://linear.app/oauth/authorize?state=1',
-    });
-    const link = within(transcript.getByRole('group', { name: 'linear asks' }));
+    emit(
+      testPromptEvent(
+        {
+          kind: 'form',
+          server: 'linear',
+          title: 'Sign in to Linear to go on',
+          answerIn: 'api',
+          form: { url: 'https://linear.app/oauth/authorize?state=1' },
+        },
+        testPromptId('e2'),
+      ),
+    );
+    const link = within(transcript.getByRole('group', { name: 'Sign in to Linear to go on' }));
+    const restore = canvas.core.install();
+    canvas.core.operations.length = 0;
     await events.click(link.getByRole('button', { name: 'Open linear.app' }));
     await settle();
-    expect(openLink).toHaveBeenCalledWith('https://linear.app/oauth/authorize?state=1');
-    expect(replies.answer).toHaveBeenLastCalledWith('a', 'e2', {
-      kind: 'elicitation',
+    expectOneOp(canvas.core, 'link.open', { url: 'https://linear.app/oauth/authorize?state=1' });
+    expect(replies.answer).toHaveBeenCalledTimes(1);
+    await events.click(link.getByRole('button', { name: 'Tell linear to go on' }));
+    await settle();
+    expect(replies.answer).toHaveBeenLastCalledWith('a', testPromptId('e2'), {
+      kind: 'form',
       action: 'accept',
     });
+    restore();
   });
 });
 

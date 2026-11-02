@@ -1,19 +1,14 @@
 import type { AdapterId, ConnectionId } from '../adapter';
 import type {
   AgentStartSettings,
-  AskedQuestion,
   BackgroundTask,
   DiffLine,
   EffortChoice,
-  ElicitationAction,
-  FormField,
   MessageImage,
   ModelChoice,
-  PlanAnswer,
   SessionMode,
   SessionUsage,
   SlashCommand,
-  TerminalAsk,
   Todo,
   ToolDetail,
   ToolProgress,
@@ -30,10 +25,8 @@ export type {
   EffortChoice,
   MessageImage,
   ModelChoice,
-  PlanAnswer,
   SessionUsage,
   SlashCommand,
-  TerminalAsk,
   Todo,
   ToolDetail,
   ToolProgress,
@@ -61,17 +54,8 @@ export type Mode = SessionMode;
  */
 export type Conversation = AdapterId;
 
-/** How the user answered a permission prompt: allow this once, always allow the tool, or deny. */
-export type Answer = 'once' | 'always' | 'deny';
-
-/** A question the agent asked, with the user's answer once given. */
-export interface SessionQuestion extends AskedQuestion {
-  answer?: string;
-}
-
 /**
  * An entry of the transcript. `parent`: the Agent tool call a subagent's entry belongs to.
- * Prompts (permission, question, plan) are `withdrawn` when the session stops waiting for them.
  */
 export type Entry =
   /**
@@ -103,40 +87,7 @@ export type Entry =
       /** How it is going, as a connected session reports: time, a subagent's work. */
       progress?: ToolProgress;
     }
-  | {
-      id: string;
-      kind: 'permission';
-      tool: string;
-      summary: string;
-      /** What it would do: an edit's diff, a command. */
-      detail?: ToolDetail;
-      /** What "always" allows, as the CLI words it; null where it offers none. */
-      always?: string | null;
-      /** What it asks, as the CLI words it, when it says. */
-      title?: string;
-      answer?: Answer;
-      /** What the user told Claude to do instead, with a no. */
-      feedback?: string;
-      withdrawn?: boolean;
-    }
-  | { id: string; kind: 'question'; questions: SessionQuestion[]; withdrawn?: boolean }
-  /** Plan mode's plan (Markdown), to approve or not. */
-  | { id: string; kind: 'plan'; plan: string; answer?: PlanAnswer; withdrawn?: boolean }
   | { id: string; kind: 'todos'; items: Todo[] }
-  /**
-   * An MCP server asks the user something (an elicitation): to fill in a form (`fields`), or to
-   * open a link (`url`); then how they answered.
-   */
-  | {
-      id: string;
-      kind: 'elicitation';
-      server: string;
-      message: string;
-      fields?: FormField[];
-      url?: string;
-      answer?: ElicitationAction;
-      withdrawn?: boolean;
-    }
   /**
    * What the session tells the user: compaction, a usage limit, a login problem. `switchTo`: the
    * connection the agent can switch to, to get past it (offered with the notice).
@@ -201,13 +152,8 @@ export interface Refusal {
   switchTo?: ConnectionId;
 }
 
-/** An entry the user answers while the turn waits. */
-export type Prompt = Extract<Entry, { kind: 'permission' | 'question' | 'plan' | 'elicitation' }>;
-
 export interface Session {
   entries: Entry[];
-  /** Runtime index maintained by SessionStore; plain session inputs may supply entries alone. */
-  prompts?: readonly Prompt[];
   /** Live manual messages only: not automation sends or restored native history. */
   submissions?: readonly SubmittedMessage[];
   /** Working on a turn; waiting (mid-turn) for the user to answer a prompt; or idle. */
@@ -246,8 +192,6 @@ export interface Session {
   tasks?: readonly BackgroundTask[];
   /** What a connected session predicts the user sends next, until a turn starts. */
   suggestion?: string;
-  /** What a Terminal session's Claude Code asks the user in its terminal now (answered there). */
-  asking?: readonly TerminalAsk[];
   /**
    * Why corrallm can't hear a connected session's replies, as it said when it started (its CLI's
    * settings turn off the hooks it listens to): the queues' Run can't read them.
@@ -315,20 +259,6 @@ export const NEW_SESSION: Session = {
   model: null,
 };
 
-/** Whether a prompt still waits for the user. */
-export function isOpen(entry: Entry): entry is Prompt {
-  switch (entry.kind) {
-    case 'permission':
-    case 'plan':
-    case 'elicitation':
-      return entry.answer === undefined && entry.withdrawn !== true;
-    case 'question':
-      return entry.withdrawn !== true && entry.questions.some((q) => q.answer === undefined);
-    default:
-      return false;
-  }
-}
-
 /**
  * What the agent replied in the turn the user's message `id` started: the text of its replies
  * (not its subagents'), from that message to the turn's end, a paragraph each. '' if it said
@@ -346,58 +276,4 @@ export function turnReply(session: Session, id: string): string {
         : [],
     )
     .join('\n\n');
-}
-
-/**
- * What a question card asks (graph/Questions.tsx): one an agent asks in its session (a `question`
- * entry), offering its answers by name; it may also have a header (a chip), say what each answer
- * means, and take several answers (`multiple`).
- */
-export interface CardQuestion {
-  id: string;
-  text: string;
-  header?: string;
-  options?: readonly (string | { label: string; description?: string })[];
-  multiple?: boolean;
-  answer?: string;
-}
-
-/** A question asked in a session, as corrallm's question cards show it (graph/Questions.tsx). */
-export interface AskedInSession {
-  /** The question prompt it is in, and where in it. */
-  prompt: string;
-  index: number;
-  /** With Claude Code's header, what each answer means, and whether several may be given. */
-  question: CardQuestion;
-}
-
-/** Every question a session asked and still waits on, or that was answered. */
-export function sessionQuestions(session: Session): AskedInSession[] {
-  return session.entries.flatMap((entry) =>
-    entry.kind === 'question' && entry.withdrawn !== true ? promptQuestions(entry) : [],
-  );
-}
-
-/** The questions of one question prompt, each as a question card shows it, with its answer once given. */
-export function promptQuestions(entry: Extract<Entry, { kind: 'question' }>): AskedInSession[] {
-  return entry.questions.map((q, index) => ({
-    prompt: entry.id,
-    index,
-    question: {
-      id: `${entry.id}#${String(index)}`,
-      text: q.text,
-      ...(q.header === '' ? {} : { header: q.header }),
-      ...(q.options.length > 0 ? { options: q.options } : {}),
-      ...(q.multiple ? { multiple: true } : {}),
-      ...(q.answer === undefined ? {} : { answer: q.answer }),
-    },
-  }));
-}
-
-/** The answers to the question prompt `id`, once every question in it has one. */
-export function answersOf(session: Session, id: string): string[] | undefined {
-  const entry = session.entries.find((e) => e.id === id);
-  if (entry?.kind !== 'question') return undefined;
-  const answers = entry.questions.map((q) => q.answer);
-  return answers.every((a) => a !== undefined) ? answers : undefined;
 }

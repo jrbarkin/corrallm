@@ -59,16 +59,14 @@ it('uses the foreground session topic summary with its entries, even before the 
   }
 });
 
-it('shows the CLI’s suggestion and its terminal’s asks from the session topic’s summary', async () => {
+it('shows the CLI’s suggestion from the session topic’s summary', async () => {
   const core = fakeCore();
   const canvas = newCanvasId();
-  const ask = { kind: 'trust' as const, id: 'trust-1' };
   core.snapshot(
     `session:${canvas}:a`,
     sessionView(AgentId.parse('a'), connection, {
       ...NEW_SESSION,
       suggestion: 'Run the tests',
-      asking: [ask],
     }),
   );
   const hook = renderHook(() =>
@@ -76,7 +74,7 @@ it('shows the CLI’s suggestion and its terminal’s asks from the session topi
   );
   try {
     await waitFor(() => {
-      expect(hook.result.current).toMatchObject({ suggestion: 'Run the tests', asking: [ask] });
+      expect(hook.result.current).toMatchObject({ suggestion: 'Run the tests' });
     });
     expect(core.operations).toEqual([]);
   } finally {
@@ -332,34 +330,14 @@ it('answers each native prompt through exactly one typed reply', async () => {
   await core.topics.whenAt(`needs:${canvas}`, 0);
   const failed = vi.fn();
   const controls = sessionCommands(core.api, canvas, 'a', core.topics, failed);
-  for (const [answer, send] of [
-    [
-      { permission: 'deny', feedback: 'Try another way' },
-      () => {
-        controls.answer('p', 'deny', 'Try another way');
-      },
-    ],
-    [
-      { answers: { q: 'main' } },
-      () => {
-        controls.answerQuestion('p', 0, 'main');
-      },
-    ],
-    [
-      { plan: { approve: false, feedback: 'Keep planning' } },
-      () => {
-        controls.answerPlan('p', { approve: false, feedback: 'Keep planning' });
-      },
-    ],
-    [
-      { form: { action: 'accept', values: { approved: true } } },
-      () => {
-        controls.answerElicitation('p', 'accept', { approved: true });
-      },
-    ],
+  for (const answer of [
+    { choice: 'deny', feedback: 'Try another way' },
+    { answers: { q: { text: 'main' } } },
+    { choice: 'revise', feedback: 'Keep planning' },
+    { form: { action: 'accept', values: { approved: true } } },
   ] as const) {
     core.operations.length = 0;
-    send();
+    await controls.replyPrompt?.('prompt/a/0/p', answer);
     await Promise.resolve();
     await Promise.resolve();
     expectOneOp(core, 'reply', { canvas, to: 'prompt/a/0/p', answer });

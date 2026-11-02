@@ -982,27 +982,18 @@ describe('commands the agent view answers itself', () => {
 });
 
 describe('what your session view shows beside its state', () => {
-  const ask = {
-    kind: 'permission' as const,
-    id: 'perm-1',
-    tool: 'Bash',
-    summary: 'npm test',
-  };
-
-  it('gives you the CLI’s suggestion and its terminal’s asks in the summary, and a token neither', async () => {
+  it('gives you the CLI’s suggestion in the summary, and a token none', async () => {
     const { core } = await start();
     await ok(core, 'session.open', { agent: 'a' });
     hosts.get('a')?.emit({ type: 'suggestion', text: 'Run the tests' });
-    hosts.get('a')?.emit({ type: 'asking', asks: [ask] });
     await vi.waitFor(async () => {
       expect(await ok(core, 'session.get', { agent: 'a' })).toMatchObject({
         suggestion: 'Run the tests',
-        asking: [ask],
-        prompts: 1,
+        prompts: 0,
       });
     });
     const theirs = await ok(core, 'session.get', { agent: 'a' }, ORCHESTRATOR);
-    expect(theirs).toMatchObject({ prompts: 1 });
+    expect(theirs).toMatchObject({ prompts: 0 });
     expect(theirs).not.toHaveProperty('suggestion');
     expect(theirs).not.toHaveProperty('asking');
     // So do the topics a window reads, read as each would follow them.
@@ -1010,7 +1001,6 @@ describe('what your session view shows beside its state', () => {
       const yours = await core.topics.read(topic, YOU);
       const token = await core.topics.read(topic, ORCHESTRATOR);
       expect(JSON.stringify(yours)).toContain('Run the tests');
-      expect(JSON.stringify(yours)).toContain('perm-1');
       expect(token.ok).toBe(true);
       expect(JSON.stringify(token)).not.toContain('Run the tests');
       expect(JSON.stringify(token)).not.toContain('perm-1');

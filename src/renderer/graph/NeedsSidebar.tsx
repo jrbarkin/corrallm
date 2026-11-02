@@ -1,10 +1,5 @@
-import { agentAdapter } from './agents';
 import { OwnedPrompt } from '../agent/OwnedPrompt';
 import { useEffect, useRef, useState } from 'react';
-import { useSessionSummaries } from '../api/runtime';
-import type { SessionSummary } from '../../shared/model/views';
-import type { TerminalAsk } from '../../shared/session';
-import { TerminalAskCard } from './Questions';
 
 import type { CanvasId } from '../../shared/canvas';
 import type { GuiApi } from '../../shared/gui-link';
@@ -12,7 +7,7 @@ import type { ResultOf } from '../../shared/api/registry';
 import { useTopic } from '../api/topics';
 import type { TopicMirror } from '../api/topics';
 import { ipcErrorMessage } from '../ipc-error';
-import { AskCard, QuestionCard } from './Questions';
+import { AskCard } from './Questions';
 import type { CanvasNode } from '../../shared/model/canvas';
 import type { ArgsOf } from '../../shared/api/registry';
 import { agentName } from '../../shared/model/queries';
@@ -68,11 +63,6 @@ export function NeedsSidebar({
   request?: { id: string } | undefined;
 }) {
   const state = useTopic(`needs:${canvas}`, mirror);
-  /** What each agent's terminal asks, in its words: its summary's, yours alone and bounded. */
-  const summaries: Readonly<Record<string, SessionSummary>> | undefined = useSessionSummaries(
-    canvas,
-    mirror,
-  );
   const target = useRef<HTMLElement>(null);
   const focused = useRef<typeof request>(undefined);
   useEffect(() => {
@@ -172,40 +162,6 @@ export function NeedsSidebar({
           </h2>
           {[...current.values()].map((item) => {
             const settlement = kept.get(item.id);
-            const prefix = `prompt/${encodeURIComponent(item.agent ?? '')}/`;
-            // Only the agent is encoded. The native prompt id follows the generation verbatim,
-            // and may itself contain separators (the shared Needs router uses the same shape).
-            const prompt = item.id.startsWith(prefix)
-              ? item.id.slice(prefix.length).split('/').slice(1).join('/')
-              : undefined;
-            const ask =
-              item.answerIn === 'terminal' && item.agent
-                ? summaries?.[item.agent]?.asking?.find((ask) => ask.id === prompt)
-                : undefined;
-            const node = nodes.find((node) => node.id === item.agent && node.type === 'agent');
-            if (ask && node?.type === 'agent')
-              return (
-                <TerminalAskCard
-                  key={item.id}
-                  ref={
-                    request?.id === item.id
-                      ? (element) => {
-                          target.current = element;
-                        }
-                      : null
-                  }
-                  // Shown, never changed: the summary's immutable ask, as the card reads it.
-                  ask={ask as TerminalAsk}
-                  agent={{
-                    name: agentName(nodes, node.id),
-                    type: agentAdapter(node.data),
-                    onOpen: () => {
-                      close();
-                      onOpen(node.id);
-                    },
-                  }}
-                />
-              );
             return (
               <article
                 key={item.id}
@@ -268,70 +224,6 @@ export function NeedsSidebar({
                       onOpen(agent);
                     }}
                   />
-                ) : item.answerIn === 'terminal' ? (
-                  <>
-                    {item.questions?.map((question) => (
-                      <div key={question.id} className="graph-question-asked">
-                        {question.header && (
-                          <span className="graph-question-header">{question.header}</span>
-                        )}
-                        <p>{question.text}</p>
-                        <ul aria-label="Its answers">
-                          {question.options.map((option) => (
-                            <li key={option.label}>
-                              <span>{option.label}</span>
-                              {option.description && <span>{option.description}</span>}
-                            </li>
-                          ))}
-                        </ul>
-                      </div>
-                    ))}
-                    <p>Answer it in the terminal.</p>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        if (item.agent) {
-                          close();
-                          onOpen(item.agent);
-                        }
-                      }}
-                    >
-                      Open terminal
-                    </button>
-                  </>
-                ) : item.questions?.length ? (
-                  item.questions.map((question) => (
-                    <QuestionCard
-                      key={question.id}
-                      question={{
-                        ...question,
-                        options: question.options.map((option) => ({
-                          label: option.label,
-                          ...(option.description === undefined
-                            ? {}
-                            : { description: option.description }),
-                        })),
-                      }}
-                      onAnswer={(text) => {
-                        void answer(item, { answers: { [question.id]: text } });
-                      }}
-                    />
-                  ))
-                ) : item.kind === 'prompt' && item.id.startsWith('prompt/') ? (
-                  <>
-                    <p>Answer it in its session.</p>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        if (item.agent) {
-                          close();
-                          onOpen(item.agent);
-                        }
-                      }}
-                    >
-                      Open session
-                    </button>
-                  </>
                 ) : (
                   <AskCard
                     text=""

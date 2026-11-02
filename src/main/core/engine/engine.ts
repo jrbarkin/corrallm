@@ -220,7 +220,6 @@ export class Engine {
           at.paused ||
           session.status !== 'idle' ||
           session.queued.length > 0 ||
-          (session.asking?.length ?? 0) > 0 ||
           this.run.holding({ agent: requested.recipient }).length ||
           (rule !== undefined && rule.action !== 'warn' && rule.hold.resetsAt !== null) ||
           (session.mode === null

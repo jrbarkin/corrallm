@@ -1,73 +1,7 @@
-import { useContext, useState } from 'react';
+import { useState } from 'react';
 import type { SyntheticEvent } from 'react';
 
 import type { ElicitationAction, FormField, FormValue } from '../../shared/session';
-import { OpenLinkContext } from '../open-link';
-import type { Entry } from '../../shared/model/session';
-
-/**
- * An MCP server asking the user something (an elicitation), in the transcript: a form to fill in
- * ("github asks: Which repository should the issue go in?", its fields, then Submit, Decline or
- * Cancel), or a link to open ("Open linear.app", which goes to main, as any link does, or
- * Decline). Once answered, or no longer asked, a line says how it went.
- */
-export function Elicitation({
-  entry,
-  onAnswer,
-}: {
-  entry: Extract<Entry, { kind: 'elicitation' }>;
-  onAnswer: (action: ElicitationAction, values?: Record<string, FormValue>) => void;
-}) {
-  const openLink = useContext(OpenLinkContext);
-  const { server, message, url, fields = [] } = entry;
-  if (entry.answer !== undefined || entry.withdrawn === true) {
-    const said =
-      entry.answer === 'accept'
-        ? url === undefined
-          ? `Sent to ${server}`
-          : `Opened for ${server}`
-        : entry.answer === 'decline'
-          ? 'Declined'
-          : entry.answer === 'cancel'
-            ? 'Cancelled'
-            : 'Not answered';
-    return (
-      <p className="agent-permission-answer" data-answer={entry.answer ?? 'withdrawn'}>
-        {said}: {message}
-      </p>
-    );
-  }
-  if (url !== undefined) {
-    const host = hostOf(url);
-    return (
-      <div className="agent-permission" role="group" aria-label={`${server} asks`}>
-        <p className="agent-permission-title">{server} asks</p>
-        <p>{message}</p>
-        <code className="agent-permission-summary">{url}</code>
-        <div className="agent-permission-choices">
-          <button
-            type="button"
-            onClick={() => {
-              openLink(url);
-              onAnswer('accept');
-            }}
-          >
-            Open {host}
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              onAnswer('decline');
-            }}
-          >
-            Decline
-          </button>
-        </div>
-      </div>
-    );
-  }
-  return <Form server={server} message={message} fields={fields} onAnswer={onAnswer} />;
-}
 
 /** A form an MCP server asks the user to fill in: Submit once what it requires is there. */
 export function Form({
@@ -312,13 +246,4 @@ function answered(
       return [[field.name, value]];
     }),
   );
-}
-
-/** A link's site, as the button names it ("linear.app"); the link itself if it has none. */
-function hostOf(url: string): string {
-  try {
-    return new URL(url).host || url;
-  } catch {
-    return url;
-  }
 }

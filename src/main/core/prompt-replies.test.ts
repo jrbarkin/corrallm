@@ -527,107 +527,6 @@ describe('a prompt the core owns', () => {
     expect(native.sessions[0]?.answered).toEqual([]);
   });
 
-  it('is answered through the owner when its session also shows it as one of the events B13 replaces (until X10)', async () => {
-    const fake = new FakeConnector({ mode: 'acceptEdits' });
-    const key = crypto.randomUUID();
-    const told: [string, PromptAnswer][] = [];
-    const old: unknown[] = [];
-    const connector: Connector<SessionMode> = {
-      start: async (spec, host) => {
-        const session: LiveSession<SessionMode> = await fake.start(spec, host);
-        session.send = (message) => {
-          host.emit({ type: 'user', id: message.id, text: message.text });
-          host.emit({ type: 'prompt', key, prompt: tool as never });
-          host.emit({
-            type: 'permission',
-            id: 'toolu_1:prompt',
-            tool: 'Bash',
-            summary: 'touch made.txt',
-            always: null,
-          });
-          host.emit({ type: 'status', status: 'waiting' });
-          return Promise.resolve();
-        };
-        host.bridge?.((id, answer) => {
-          if (id !== 'toolu_1:prompt') throw new Error('That request is no longer asked.');
-          if (answer.kind !== 'permission' || answer.answer === 'always')
-            throw new Error('That prompt doesn’t offer "always".');
-          return {
-            key,
-            answer: { kind: 'choice', value: answer.answer === 'once' ? 'allow' : 'deny' },
-          };
-        });
-        Object.assign(session, {
-          answer: (...args: unknown[]) => {
-            old.push(args);
-            return Promise.reject(new Error('answered only through the owner'));
-          },
-          prompts: {
-            answer: (answered: string, answer: PromptAnswer) => {
-              told.push([answered, answer]);
-            },
-            decline: () => undefined,
-          },
-        });
-        return session;
-      },
-    };
-    const tool = {
-      kind: 'approval',
-      title: 'Claude wants to use Bash',
-      subject: { type: 'tool', tool: 'Bash', input: { command: 'touch made.txt' } },
-      answerIn: 'api',
-      choices: [
-        { value: 'allow', label: 'Yes', hint: 'allow_once', effects: {} },
-        { value: 'deny', label: 'No', hint: 'reject_once', effects: {}, endsTurn: true },
-      ],
-    };
-    const core = await start(connector);
-    await ok(core, 'message', { to: 'b', body: 'Touch it' });
-    // One item: the old event's, which the window's card answers, standing for the owner's.
-    const [asked] = await prompts(core);
-    expect(asked?.id).toMatch(/^prompt\/b\/\d+\/toolu_1:prompt$/);
-    expect(
-      await call(core, 'reply', { to: asked?.id, answer: { permission: 'always' } }),
-    ).toMatchObject({ ok: false, error: { code: 'invalid' } });
-    // No token answers it this way either.
-    expect(
-      await call(core, 'reply', { to: asked?.id, answer: { permission: 'once' } }, ORCHESTRATOR),
-    ).toMatchObject({ ok: false, error: { code: 'refused' } });
-    expect(told).toEqual([]);
-    const result = (await ok(core, 'reply', {
-      to: asked?.id,
-      answer: { permission: 'once' },
-    })) as { id: string; outcome: string };
-    expect(result.outcome).toBe('answered');
-    // Through the owner, by its key: never the old way.
-    expect(told).toEqual([[key, { kind: 'choice', value: 'allow' }]]);
-    expect(old).toEqual([]);
-    const [record] = await records(core);
-    expect(record).toMatchObject({
-      id: result.id,
-      by: 'you',
-      state: 'delivered',
-      body: 'You allowed Reviewer’s tool call once.',
-    });
-    expect(JSON.stringify(await records(core))).not.toContain('touch');
-    // The card shows it answered; a second answer is a conflict naming who settled it.
-    const transcript = (await ok(core, 'session.transcript', { agent: 'b' })) as {
-      entries: { id: string; kind: string; answer?: string }[];
-    };
-    expect(transcript.entries.find(({ id }) => id === 'toolu_1:prompt')).toMatchObject({
-      answer: 'once',
-    });
-    expect(await prompts(core, 0)).toEqual([]);
-    expect(
-      await call(core, 'reply', { to: asked?.id, answer: { permission: 'deny' } }),
-    ).toMatchObject({
-      ok: false,
-      error: { code: 'conflict', sentence: expect.stringMatching(/You allowed/) as string },
-    });
-    expect(told).toHaveLength(1);
-  });
-
   it('shows a reached token an MCP server’s request only in the core’s words, while you see its form', async () => {
     const fake = new FakeConnector({ mode: 'acceptEdits' });
     const url = 'https://tracker.example.test/sign-in?state=link-private';
@@ -637,18 +536,33 @@ describe('a prompt the core owns', () => {
         session.send = (message) => {
           host.emit({ type: 'user', id: message.id, text: message.text });
           host.emit({
-            type: 'elicitation',
-            id: 'elicitation:link',
-            server: 'tracker',
-            message: 'Sign in at tracker.example.test/sign-in%3Fstate%3Dlink-private',
-            url,
+            type: 'prompt',
+            key: crypto.randomUUID(),
+            prompt: {
+              kind: 'form',
+              server: 'tracker',
+              title: 'Sign in at tracker.example.test/sign-in%3Fstate%3Dlink-private',
+              answerIn: 'api',
+              form: { url },
+            },
           });
           host.emit({
-            type: 'elicitation',
-            id: 'elicitation:form',
-            server: 'tracker',
-            message: 'Paste the key from tracker.example.test/k%3Ftoken%3Dform-private',
-            fields: [{ name: 'key', label: 'Key', required: true, kind: 'text' }],
+            type: 'prompt',
+            key: crypto.randomUUID(),
+            prompt: {
+              kind: 'form',
+              server: 'tracker',
+              title: 'Paste the key from tracker.example.test/k%3Ftoken%3Dform-private',
+              answerIn: 'api',
+              form: {
+                schema: {
+                  type: 'object',
+                  additionalProperties: false,
+                  properties: { key: { type: 'string', title: 'Key' } },
+                  required: ['key'],
+                },
+              },
+            },
           });
           host.emit({ type: 'status', status: 'waiting' });
           return Promise.resolve();
@@ -671,10 +585,10 @@ describe('a prompt the core owns', () => {
     const needs = await needsOf(core, ORCHESTRATOR);
     expect(needs.map(({ title }) => title)).toEqual([titles.link, titles.form]);
     const transcript = (await ok(core, 'session.transcript', { agent: 'b' }, ORCHESTRATOR)) as {
-      entries: { id: string; kind: string; message?: string }[];
+      entries: { id: string; kind: string; prompt?: { title: string; form?: unknown } }[];
     };
-    const asked = transcript.entries.filter(({ kind }) => kind === 'elicitation');
-    expect(asked.map(({ message }) => message)).toEqual([titles.link, titles.form]);
+    const asked = transcript.entries.filter(({ kind }) => kind === 'prompt');
+    expect(asked.map(({ prompt }) => prompt?.title)).toEqual([titles.link, titles.form]);
     for (const entry of asked) {
       expect(entry).not.toHaveProperty('url');
       expect(entry).not.toHaveProperty('fields');
@@ -691,13 +605,20 @@ describe('a prompt the core owns', () => {
     }
     // Yours, the card: the form as its server words it, and the link to open.
     const card = (await ok(core, 'session.transcript', { agent: 'b' })) as {
-      entries: { id: string; kind: string; message?: string; url?: string; fields?: unknown[] }[];
+      entries: {
+        id: string;
+        kind: string;
+        prompt?: { kind: string; title: string; form?: unknown };
+      }[];
     };
-    expect(card.entries.find(({ id }) => id === 'elicitation:form')).toMatchObject({
-      message: 'Paste the key from tracker.example.test/k%3Ftoken%3Dform-private',
-      fields: [{ name: 'key' }],
+    expect(
+      card.entries.find(({ prompt }) => prompt?.title.startsWith('Paste the key')),
+    ).toMatchObject({
+      prompt: { form: { schema: { properties: { key: { type: 'string' } } } } },
     });
-    expect(card.entries.find(({ id }) => id === 'elicitation:link')).toMatchObject({ url });
+    expect(card.entries.find(({ prompt }) => prompt?.title.startsWith('Sign in at'))).toMatchObject(
+      { prompt: { form: { url } } },
+    );
   });
 
   it('declines what it can’t show whole, its transcript saying why', async () => {

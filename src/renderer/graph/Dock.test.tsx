@@ -1,3 +1,4 @@
+import { testPromptEvent, testPromptId } from '../../shared/test-prompts';
 import { act, cleanup, render, screen, within } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 import { MADE_UP } from '../../shared/test-made-up';
@@ -269,17 +270,31 @@ it('glows for a core run or native-session need until the topic clears', async (
     expect(node.classList.contains('asking')).toBe(true);
     expect(card.querySelector('.graph-card-status')?.textContent).toBe('Needs you');
     act(() => {
-      sessions.emit('a', 'claude-code.terminal', {
-        type: 'asking',
-        asks: [{ id: 'trust', kind: 'trust' }],
-      });
+      sessions.emit(
+        'a',
+        'claude-code.terminal',
+        testPromptEvent(
+          {
+            kind: 'approval',
+            answerIn: 'terminal',
+            title: 'Trust the folder?',
+            subject: { type: 'trust' },
+            choices: [],
+          },
+          testPromptId('trust'),
+        ),
+      );
     });
     expect(writer.hasAttribute('data-needs')).toBe(true);
     expect(card.getAttribute('data-status')).toBe('Needs you');
     expect(node.classList.contains('asking')).toBe(true);
     expect(card.querySelector('.graph-card-status')?.textContent).toBe('Needs you');
     act(() => {
-      sessions.emit('a', 'claude-code.terminal', { type: 'asking', asks: [] });
+      sessions.emit('a', 'claude-code.terminal', {
+        type: 'prompt-ended',
+        key: testPromptId('trust'),
+        reason: 'answered-natively',
+      });
     });
     expect(writer.hasAttribute('data-needs')).toBe(false);
     expect(card.getAttribute('data-status')).toBe('Idle');

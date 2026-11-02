@@ -10,7 +10,6 @@ import type {
   PastSession,
   RewindRestore,
   RewindResult,
-  SessionAnswer,
   SessionEvent,
   SessionMode,
   SessionOptions,
@@ -36,7 +35,6 @@ export interface SessionBackend {
   /** Which CLIs the user has (main finds them as its connections would run them). */
   installed(): Promise<InstalledClis>;
   send(agentId: string, message: UserMessage): Promise<null>;
-  answer(agentId: string, promptId: string, answer: SessionAnswer): Promise<null>;
   interrupt(agentId: string): Promise<null>;
   setMode(agentId: string, mode: SessionMode): Promise<null>;
   setModel(agentId: string, model: string): Promise<null>;
@@ -78,7 +76,6 @@ export const NO_BACKEND: SessionBackend = (() => {
     start: refuse,
     installed: () => Promise.resolve({ claude: false, codex: false }),
     send: refuse,
-    answer: refuse,
     interrupt: refuse,
     setMode: refuse,
     setModel: refuse,
@@ -116,9 +113,9 @@ interface SentTurn {
  * the core's own process (SessionBackend). It starts the session when
  * first needed (with what the agent is set to run with in its CLI: its settings' model, effort and
  * mode), sends each turn's message,
- * and plays the events main sends back (src/shared/session.ts) onto the session: entries, prompts,
- * status, mode, model and effort, usage, and each turn's end. Mode, model and effort changes,
- * answers and interrupts go to main. A session that would not start says why (a notice offering
+ * and plays the events main sends back (src/shared/session.ts) onto the session: entries, status,
+ * mode, model and effort, usage, and each turn's end. Prompt entries belong to the core owner.
+ * Mode, model and effort changes and interrupts go to main. A session that would not start says why (a notice offering
  * another connection) before its start fails: the turn that started it never was, and the store
  * keeps its message (DriverIO.refused). Main's echo of a message marks it as the CLI's. Which
  * conversation a message is of, and the modes its connection starts in, it reads in the catalog it
@@ -225,24 +222,6 @@ export class ConnectedDriver implements SessionDriver {
       });
   }
 
-  answer(id: string, answer: SessionAnswer): void {
-    // A question's answers are recorded one by one by the store; the others here.
-    if (answer.kind === 'permission') {
-      const { feedback } = answer;
-      this.#io.dispatch({
-        type: 'answer',
-        id,
-        answer: answer.answer,
-        ...(feedback === undefined ? {} : { feedback }),
-      });
-    } else if (answer.kind === 'plan') {
-      this.#io.dispatch({ type: 'answerPlan', id, answer: answer.answer });
-    } else if (answer.kind === 'elicitation') {
-      this.#io.dispatch({ type: 'answerElicitation', id, action: answer.action });
-    }
-    this.#tell((agentId) => this.#backend.answer(agentId, id, answer));
-  }
-
   stop(): void {
     const unsent = [...this.#turns].flatMap(([id, turn]) => (turn.sent ? [] : [id]));
     if (unsent.length > 0) {
@@ -285,7 +264,6 @@ export class ConnectedDriver implements SessionDriver {
 
   close(): void {
     this.#closed = true;
-    this.#stopAsking();
     if (this.#turns.size > 0 || this.#io.session().status !== 'idle') {
       this.#end([...new Set([...this.#turns.keys(), ...this.#messages])], {
         result: { status: 'cancelled', reason: 'connection-closed' },
@@ -412,9 +390,6 @@ export class ConnectedDriver implements SessionDriver {
       case 'suggestion':
         io.dispatch({ type: 'suggestion', text: event.text });
         return;
-      case 'asking':
-        io.dispatch({ type: 'asking', asks: event.asks });
-        return;
       case 'unheard':
         // Said as a warning (a Terminal agent's bar shows it), and kept for the queues' Run.
         this.#notice('warning', event.text);
@@ -422,53 +397,6 @@ export class ConnectedDriver implements SessionDriver {
         return;
       case 'todos':
         this.#put({ id: event.id, kind: 'todos', items: event.items });
-        return;
-      case 'permission': {
-        const { id, tool, summary, always, detail, title } = event;
-        io.dispatch({
-          type: 'ask',
-          entry: {
-            id,
-            kind: 'permission',
-            tool,
-            summary,
-            always,
-            ...(detail === undefined ? {} : { detail }),
-            ...(title === undefined ? {} : { title }),
-          },
-        });
-        return;
-      }
-      case 'question':
-        io.dispatch({
-          type: 'ask',
-          entry: {
-            id: event.id,
-            kind: 'question',
-            questions: event.questions.map((q) => ({ ...q })),
-          },
-        });
-        return;
-      case 'plan':
-        io.dispatch({ type: 'ask', entry: { id: event.id, kind: 'plan', plan: event.plan } });
-        return;
-      case 'elicitation': {
-        const { id, server, message, fields, url } = event;
-        io.dispatch({
-          type: 'ask',
-          entry: {
-            id,
-            kind: 'elicitation',
-            server,
-            message,
-            ...(fields === undefined ? {} : { fields }),
-            ...(url === undefined ? {} : { url }),
-          },
-        });
-        return;
-      }
-      case 'withdrawn':
-        io.dispatch({ type: 'withdraw', id: event.id });
         return;
       case 'notice':
         if (event.switchTo !== undefined) {
@@ -511,7 +439,6 @@ export class ConnectedDriver implements SessionDriver {
         io.dispatch({ type: 'running', settings: undefined });
         // Its CLI is gone, and what it ran in the background or asked with it.
         if ((io.session().tasks?.length ?? 0) > 0) io.dispatch({ type: 'tasks', tasks: [] });
-        this.#stopAsking();
         if (event.error !== undefined) this.#notice('error', event.error);
         if (this.#turns.size > 0 || io.session().status !== 'idle') {
           this.#end([...new Set([...this.#turns.keys(), ...this.#messages])], {
@@ -573,11 +500,6 @@ export class ConnectedDriver implements SessionDriver {
       .catch((error: unknown) => {
         this.#notice('error', errorMessage(error));
       });
-  }
-
-  /** Its CLI asks nothing in its terminal any more (it is gone). */
-  #stopAsking(): void {
-    if (this.#io.session().asking !== undefined) this.#io.dispatch({ type: 'asking', asks: [] });
   }
 
   /** Adds an entry, or replaces the one with its id. */
