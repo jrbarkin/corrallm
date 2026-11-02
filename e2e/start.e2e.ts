@@ -1,3 +1,4 @@
+import { adapterName, agentCardName } from './catalog';
 import { chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -52,10 +53,16 @@ test('Start opens over the canvas, starts an installed agent, reopens from the d
     );
     await start.getByRole('button', { name: 'Choose a project folder' }).click();
     await expect(start.getByRole('button', { name: 'Project folder: project' })).toBeVisible();
-    const connection = start.getByRole('combobox', { name: 'Claude Code connection' });
+    const connection = start.getByRole('combobox', {
+      name: `${adapterName('claude-code')} connection`,
+    });
     await expect(connection).toHaveValue('claude-code.terminal');
-    await expect(start.getByRole('button', { name: 'Start Codex', exact: true })).toBeDisabled();
-    await start.getByRole('button', { name: 'Start Claude Code', exact: true }).click();
+    await expect(
+      start.getByRole('button', { name: `Start ${adapterName('codex')}`, exact: true }),
+    ).toBeDisabled();
+    await start
+      .getByRole('button', { name: `Start ${adapterName('claude-code')}`, exact: true })
+      .click();
     await expect(start).toHaveCount(0);
     const agent = page.getByRole('dialog', { name: 'Agent 1', exact: true });
     await expect(agent).toBeVisible();
@@ -79,7 +86,7 @@ test('Start opens over the canvas, starts an installed agent, reopens from the d
     await expect(page.locator('.graph-file-name')).toHaveText('first.corral');
     await expect(page.locator('.react-flow__node-agent')).toHaveAttribute(
       'aria-label',
-      'Agent 1, Claude · Terminal',
+      agentCardName('Agent 1', 'claude-code.terminal'),
     );
     await expect(page.getByRole('button', { name: 'Project folder: project' })).toBeVisible();
     expect(problems).toEqual([]);

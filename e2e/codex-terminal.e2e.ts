@@ -1,3 +1,4 @@
+import { adapterName, agentCardName, agentChipName } from './catalog';
 import { dismissStart, openNeeds } from './canvas-actions';
 import { randomUUID } from 'node:crypto';
 import { existsSync, realpathSync } from 'node:fs';
@@ -140,7 +141,7 @@ async function canvasFile(queue: { id: string; message: string }[] = []) {
   await page.keyboard.press('ControlOrMeta+o');
   await expect(page.locator('.react-flow__node')).toHaveAttribute(
     'aria-label',
-    'Shop, Codex · Terminal',
+    agentCardName('Shop', 'codex.terminal'),
   );
 }
 
@@ -191,13 +192,19 @@ test('runs Codex itself in a terminal in the project folder, and follows its tur
   await page.locator('.react-flow__pane').dblclick({ position: { x: 400, y: 300 } });
   await page.locator('.react-flow__node').dblclick();
   const view = page.getByRole('dialog', { name: 'Agent 1' });
-  await view.getByRole('button', { name: /^Agent: Claude/ }).click();
+  await view
+    .getByRole('button', { name: agentChipName('claude-code.terminal'), exact: true })
+    .click();
   await page.keyboard.type('codex terminal');
   await page.keyboard.press('Enter');
-  await expect(view.getByRole('button', { name: 'Agent: Codex · Terminal' })).toBeVisible();
+  await expect(
+    view.getByRole('button', { name: agentChipName('codex.terminal'), exact: true }),
+  ).toBeVisible();
   const terminal = view.locator('.agent-terminal');
   await expect(terminal).toHaveAttribute('data-state', 'live');
-  await expect(view.getByText('Codex CLI works in shop, in a terminal.')).toBeVisible();
+  await expect(
+    view.getByText(`${adapterName('codex')} works in shop, in a terminal.`),
+  ).toBeVisible();
 
   // Codex itself, its own agent, in the folder (trusted for this session), as a terminal; its
   // hooks trusted for the session (else it would stop at "Hooks need review").

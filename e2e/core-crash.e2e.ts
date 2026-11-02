@@ -1,3 +1,4 @@
+import { agentCardName } from './catalog';
 import { dismissStart, canvasAction } from './canvas-actions';
 import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
@@ -168,7 +169,7 @@ test('a killed core restarts: the window reconnects, and the canvas is still the
   await expect(page.getByText('crash.corral', { exact: true })).toBeVisible();
   await expect(page.locator('.react-flow__node')).toHaveAttribute(
     'aria-label',
-    'Builder, Claude · SDK',
+    agentCardName('Builder', 'claude-code.sdk'),
   );
   await expect(page.getByRole('button', { name: 'Project folder: shop' })).toBeVisible();
   await page.getByRole('button', { name: 'Show all queues' }).click();

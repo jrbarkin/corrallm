@@ -1,3 +1,4 @@
+import { adapterName, agentCardName, agentChipName, connectionOptionName } from './catalog';
 import { dismissStart, openNeeds } from './canvas-actions';
 import { randomUUID } from 'node:crypto';
 import { existsSync, realpathSync } from 'node:fs';
@@ -154,7 +155,7 @@ async function canvasFile(
   await page.keyboard.press('ControlOrMeta+o');
   await expect(page.locator('.react-flow__node')).toHaveAttribute(
     'aria-label',
-    connection === 'claude-code.terminal' ? 'Shop, Claude · Terminal' : 'Shop, Claude · SDK',
+    agentCardName('Shop', connection),
   );
 }
 
@@ -223,7 +224,7 @@ test('an omitted connection runs in the native Terminal as a chosen one does, wi
   ] as const) {
     await expect(page.locator(`.react-flow__node-agent[data-id="${id}"]`)).toHaveAttribute(
       'aria-label',
-      `${name}, Claude · Terminal`,
+      agentCardName(name, 'claude-code.terminal'),
     );
   }
   await chooseProject();
@@ -263,13 +264,19 @@ test('a new canvas agent defaults to real Claude Code in its Terminal, without a
   await page.locator('.react-flow__pane').dblclick({ position: { x: 400, y: 300 } });
   await page.locator('.react-flow__node').dblclick();
   const view = page.getByRole('dialog', { name: 'Agent 1' });
-  await view.getByRole('button', { name: /^Agent: Claude/ }).click();
+  await view
+    .getByRole('button', { name: agentChipName('claude-code.terminal'), exact: true })
+    .click();
   await expect(view.getByRole('option', { name: /Simulated|Qwen|Gemini/ })).toHaveCount(0);
   await page.keyboard.press('Escape');
-  await expect(view.getByRole('button', { name: 'Agent: Claude · Terminal' })).toBeVisible();
+  await expect(
+    view.getByRole('button', { name: agentChipName('claude-code.terminal'), exact: true }),
+  ).toBeVisible();
   const terminal = view.locator('.agent-terminal');
   await expect(terminal).toHaveAttribute('data-state', 'live');
-  await expect(view.getByText('Claude Code works in shop, in a terminal.')).toBeVisible();
+  await expect(
+    view.getByText(`${adapterName('claude-code')} works in shop, in a terminal.`),
+  ).toBeVisible();
 
   // Claude Code itself: in the folder, as a terminal, reporting to corrallm's hooks.
   await expect.poll(starts).toHaveLength(1);
@@ -434,7 +441,7 @@ test('a template’s Claude agents run in their terminals, asked once whether to
   await gallery.getByRole('button', { name: 'Create canvas' }).click();
   await expect(page.locator('.react-flow__node[data-id="builder"]')).toHaveAttribute(
     'aria-label',
-    'Builder, Claude · Terminal',
+    agentCardName('Builder', 'claude-code.terminal'),
   );
   await chooseProject();
   // Their Claude Codes start only when needed.
@@ -477,7 +484,9 @@ test('an Agent SDK agent on a Claude subscription says why it can’t run, and r
   await chooseProject();
   await page.locator('.react-flow__node').dblclick();
   const view = page.getByRole('dialog', { name: 'Shop' });
-  await expect(view.getByRole('button', { name: 'Agent: Claude · Agent SDK' })).toBeVisible();
+  await expect(
+    view.getByRole('button', { name: agentChipName('claude-code.sdk'), exact: true }),
+  ).toBeVisible();
   const transcript = view.getByRole('log', { name: 'Transcript' });
   const refusal = transcript.getByRole('alert');
   await expect(refusal).toContainText(
@@ -493,7 +502,9 @@ test('an Agent SDK agent on a Claude subscription says why it can’t run, and r
   await expect(transcript.getByText('Fix the login bug')).toHaveCount(0);
 
   await refusal.getByRole('button', { name: 'Switch to Terminal' }).click();
-  await expect(view.getByRole('button', { name: 'Agent: Claude · Terminal' })).toBeVisible();
+  await expect(
+    view.getByRole('button', { name: agentChipName('claude-code.terminal'), exact: true }),
+  ).toBeVisible();
   await expect(view.locator('.agent-terminal')).toHaveAttribute('data-state', 'live');
   await claudeReady();
   // Claude Code ran only in the terminal: the Agent SDK never started it. What was kept goes there.
@@ -501,9 +512,15 @@ test('an Agent SDK agent on a Claude subscription says why it can’t run, and r
   await expect.poll(prompts).toEqual(['Fix the login bug']);
 
   // Its chip's menu opens over the terminal, and takes the pointer there.
-  await view.getByRole('button', { name: 'Agent: Claude · Terminal' }).click();
-  await view.getByRole('option', { name: /^Claude · Agent SDK/ }).click({ timeout: 5000 });
-  await expect(view.getByRole('button', { name: 'Agent: Claude · Agent SDK' })).toBeVisible();
+  await view
+    .getByRole('button', { name: agentChipName('claude-code.terminal'), exact: true })
+    .click();
+  await view
+    .getByRole('option', { name: connectionOptionName('claude-code.sdk') })
+    .click({ timeout: 5000 });
+  await expect(
+    view.getByRole('button', { name: agentChipName('claude-code.sdk'), exact: true }),
+  ).toBeVisible();
 });
 
 test('opens a link Cmd-clicked in the terminal in the browser, once main has asked', async () => {
