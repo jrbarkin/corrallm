@@ -1,0 +1,119 @@
+{
+  "recordedWith": {
+    "codex": "0.162.1",
+    "platform": "macOS arm64",
+    "date": "2026-10-31",
+    "model": "none: a local stub Responses API; one shell call printing `env | grep -E \"CORRALLM_|AWS_\"`; no tokens were spent"
+  },
+  "environment": "The App Server process had AWS_SECRET=CANARY2-aws, CORRALLM_AGENT_SESSION=1 and CORRALLM_SESSION_TOKEN=SNAPTOKEN-\u2026 (the entry reads it with bearer_token_env_var).",
+  "cases": {
+    "c4": {
+      "userConfig": "none",
+      "override": "-c shell_environment_policy.set.CORRALLM_SESSION_TOKEN=\"\"",
+      "configRead": {
+        "effective": {
+          "inherit": null,
+          "ignore_default_excludes": null,
+          "exclude": null,
+          "set": {
+            "CORRALLM_SESSION_TOKEN": ""
+          },
+          "include_only": null,
+          "filters": null,
+          "experimental_use_profile": null
+        },
+        "origins": {
+          "shell_environment_policy.set.CORRALLM_SESSION_TOKEN": "sessionFlags"
+        },
+        "layers": [
+          {
+            "type": "sessionFlags",
+            "shell_environment_policy": {
+              "set": {
+                "CORRALLM_SESSION_TOKEN": ""
+              }
+            }
+          }
+        ]
+      },
+      "shell": {
+        "commandRan": true,
+        "showsAwsSecret": true,
+        "showsAgentSession": true,
+        "showsSessionTokenValue": false,
+        "showsSessionTokenEmpty": true
+      },
+      "probeBearer": ["Bearer SNAPTOKEN"],
+      "filesHolding": {
+        "sessionToken": {
+          "afterTurn": [],
+          "afterSigterm": []
+        },
+        "awsSecret": {
+          "afterTurn": ["rollout", "shellSnapshot", "sqliteWal"],
+          "afterSigterm": ["rollout", "sqliteWal"]
+        }
+      }
+    },
+    "c4user": {
+      "userConfig": "exclude = [\"AWS_*\"], set = { FOO = \"bar\" }",
+      "override": "-c shell_environment_policy.set.CORRALLM_SESSION_TOKEN=\"\"",
+      "configRead": {
+        "effective": {
+          "inherit": null,
+          "ignore_default_excludes": null,
+          "exclude": ["AWS_*"],
+          "set": {
+            "FOO": "bar",
+            "CORRALLM_SESSION_TOKEN": ""
+          },
+          "include_only": null,
+          "filters": null,
+          "experimental_use_profile": null
+        },
+        "origins": {
+          "shell_environment_policy.exclude.0": "user",
+          "shell_environment_policy.set.CORRALLM_SESSION_TOKEN": "sessionFlags",
+          "shell_environment_policy.set.FOO": "user"
+        },
+        "layers": [
+          {
+            "type": "sessionFlags",
+            "shell_environment_policy": {
+              "set": {
+                "CORRALLM_SESSION_TOKEN": ""
+              }
+            }
+          },
+          {
+            "type": "user",
+            "shell_environment_policy": {
+              "exclude": ["AWS_*"],
+              "set": {
+                "FOO": "bar"
+              }
+            }
+          }
+        ]
+      },
+      "shell": {
+        "commandRan": true,
+        "showsAwsSecret": false,
+        "showsAgentSession": true,
+        "showsSessionTokenValue": false,
+        "showsSessionTokenEmpty": true
+      },
+      "probeBearer": ["Bearer SNAPTOKEN"],
+      "filesHolding": {
+        "sessionToken": {
+          "afterTurn": [],
+          "afterSigterm": []
+        },
+        "awsSecret": {
+          "afterTurn": [],
+          "afterSigterm": []
+        }
+      }
+    }
+  }
+}

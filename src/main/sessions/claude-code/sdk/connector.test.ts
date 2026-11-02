@@ -11,7 +11,7 @@ import type {
   SDKUserMessage,
   SessionMessage,
 } from '@anthropic-ai/claude-agent-sdk';
-import { mkdtemp, realpath, rm, symlink } from 'node:fs/promises';
+import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -20,6 +20,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { PromptEvent } from '../../../../shared/model/prompts';
 import type { HostEvent, SessionHost, SessionSpec } from '../../connector';
 import { SdkConnector } from './connector';
+import { connectServer } from '../../fake-mcp-client.mjs';
 import { SUBSCRIPTION_LOGIN } from './login';
 import type { AuthStatus } from './login';
 import { recorded, recordedHistory, recordedMessages } from './recorded';
@@ -161,8 +162,10 @@ function connector({
   history = [],
   prepare,
   login = () => Promise.resolve(API_KEY),
+  managed = path.join(SPEC.cwd, 'managed'),
 }: {
   history?: SessionMessage[];
+  managed?: string;
   prepare?: (query: FakeQuery, call: number) => void;
   login?: () => Promise<AuthStatus>;
 } = {}) {
@@ -187,6 +190,7 @@ function connector({
     findClaude: () => Promise.resolve('/home/user/.local/bin/claude'),
     authStatus,
     home: '/home/user',
+    managed,
   });
   const query = () => {
     const last = queries.at(-1);
@@ -1207,4 +1211,105 @@ describe('SdkConnector', () => {
     expect(asked.query().close).toHaveBeenCalled();
     expect(asked.events.filter((event) => event.type === 'closed')).toEqual([]);
   });
+});
+
+it('delivers its own channel server, listing and calling it before a turn without trusting status', async () => {
+  const list = vi.fn(() => [
+    {
+      name: 'probe_read',
+      description: 'Read',
+      inputSchema: { type: 'object' as const, properties: {} },
+      outputSchema: { type: 'object' as const },
+      annotations: { readOnlyHint: true, destructiveHint: false },
+    },
+  ]);
+  const call = vi.fn().mockResolvedValue({
+    content: [{ type: 'text', text: 'channel reply' }],
+    structuredContent: {},
+  });
+  let client: Awaited<ReturnType<typeof connectServer>> | undefined;
+  const { sdk, host, query, events } = connector({
+    prepare(query) {
+      query.initialization = (async () => {
+        const entry = query.options.mcpServers?.corrallm;
+        expect(entry).toMatchObject({ type: 'sdk', name: 'corrallm' });
+        if (entry?.type !== 'sdk') throw new Error('No bound channel');
+        client = await connectServer(
+          entry.instance as unknown as Parameters<typeof connectServer>[0],
+        );
+        await client.list();
+        expect(await client.call('probe_read', {})).toMatchObject({
+          content: [{ text: 'channel reply' }],
+        });
+        return INIT;
+      })();
+    },
+  });
+  const session = await sdk.start(
+    {
+      ...SPEC,
+      api: {
+        kind: 'channel',
+        server: 'corrallm',
+        tools: [
+          { name: 'probe_read', destructive: false },
+          { name: 'probe_delete', destructive: true },
+        ],
+        off: ['corrallm-server', 'corrallm-server-dev'],
+        channel: { list, call },
+      },
+    },
+    host,
+  );
+  try {
+    expect(list).toHaveBeenCalledOnce();
+    expect(call).toHaveBeenCalledWith('probe_read', {}, expect.any(AbortSignal));
+    expect(query().options.allowedTools).toEqual(['mcp__corrallm__probe_read']);
+    expect(query().options.settings).toMatchObject({
+      deniedMcpServers: [{ serverName: 'corrallm-server' }, { serverName: 'corrallm-server-dev' }],
+      allowedMcpServers: [{ serverName: 'corrallm' }],
+    });
+    expect(events.find((one) => one.type === 'started')).toMatchObject({ api: true });
+    expect(query().mcpServerStatus).not.toHaveBeenCalled();
+  } finally {
+    await session.close();
+    await client?.close();
+  }
+});
+
+it('starts the SDK without a channel entry when a managed source is deployed', async () => {
+  const folder = await mkdtemp(path.join(tmpdir(), 'corrallm-managed-'));
+  try {
+    await mkdir(path.join(folder, 'managed-settings.d'));
+    await writeFile(path.join(folder, 'managed-settings.d', 'one.json'), '{}');
+    const list = vi.fn(() => []);
+    const call = vi.fn();
+    const { sdk, host, query, events } = connector({ managed: folder });
+    const session = await sdk.start(
+      {
+        ...SPEC,
+        api: {
+          kind: 'channel',
+          server: 'corrallm',
+          off: ['corrallm-server', 'corrallm-server-dev'],
+          tools: [],
+          channel: { list, call },
+        },
+      },
+      host,
+    );
+    try {
+      expect(query().options.mcpServers).toBeUndefined();
+      expect(query().options.allowedTools).toBeUndefined();
+      expect(list).not.toHaveBeenCalled();
+      expect(events.find((one) => one.type === 'started')).toMatchObject({ api: false });
+      expect(
+        events.filter((one) => one.type === 'notice' && one.text.includes('managed')),
+      ).toHaveLength(1);
+    } finally {
+      await session.close();
+    }
+  } finally {
+    await rm(folder, { recursive: true, force: true });
+  }
 });

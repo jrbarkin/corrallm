@@ -45,6 +45,17 @@ import { createInterface } from 'node:readline';
 
 const VERSION = '0.160.1';
 const args = process.argv.slice(2);
+const nativeConfig =
+  args.some(
+    (one) => one.startsWith('mcp_servers.') || one.startsWith('shell_environment_policy.'),
+  ) || process.env.FAKE_CODEX_CONFIG
+    ? (await import('./fake-config.mjs')).fakeConfig(
+        args,
+        JSON.parse(process.env.FAKE_CODEX_CONFIG ?? '{}'),
+      )
+    : { config: {}, origins: {} };
+let apiReady = Promise.resolve();
+let apiClient;
 
 if (args.includes('--version')) {
   process.stdout.write(`codex-cli ${VERSION}\n`);
@@ -780,7 +791,9 @@ async function handle({ method, id, params }) {
         }
       }
       return reply({
+        origins: nativeConfig.origins,
         config: {
+          ...nativeConfig.config,
           developer_instructions: process.env.FAKE_CODEX_DEVELOPER_INSTRUCTIONS ?? null,
           model_auto_compact_token_limit: process.env.FAKE_CODEX_COMPACT_AT
             ? Number(process.env.FAKE_CODEX_COMPACT_AT)
@@ -954,14 +967,25 @@ createInterface({ input: process.stdin }).on('line', (line) => {
     return;
   }
   if (message.method === 'initialized') {
+    const entry = nativeConfig.config.mcp_servers?.corrallm;
+    const token = entry && process.env[entry.bearer_token_env_var];
+    if (entry?.enabled !== false && token && entry.url)
+      apiReady = (async () => {
+        const { connectHttp } = await import('../fake-mcp-client.mjs');
+        apiClient = await connectHttp({ url: entry.url, token });
+        await apiClient.list();
+        if (process.env.FAKE_CODEX_MCP_CALL)
+          await apiClient.call(process.env.FAKE_CODEX_MCP_CALL, {});
+      })().catch(() => undefined);
     initialized = true;
     return;
   }
-  if (message.id !== undefined) void handle(message);
+  if (message.id !== undefined) void apiReady.then(() => handle(message));
 });
 // Its input ends: it exits, as the real one does (FAKE_CODEX_LINGER ms later, if set).
 const linger = Number(process.env.FAKE_CODEX_LINGER ?? 0);
 const close = async () => {
+  await apiClient?.close();
   await Promise.all(
     [...processes.values()].map(
       ({ child }) =>

@@ -1,4 +1,6 @@
 import { readFileSync } from 'node:fs';
+import { connectHttp } from '../../fake-mcp-client.mjs';
+import type { FakeMcpClient } from '../../fake-mcp-client.mjs';
 
 import { HOOK_HEADER } from '../../terminal/hooks';
 import type { Pty, PtyOptions } from '../../terminal/pty';
@@ -15,6 +17,8 @@ const SPEED = 50;
  */
 export class Replay implements Pty {
   readonly pid = 4242;
+  apiReady: Promise<void> = Promise.resolve();
+  #apiClient: FakeMcpClient | undefined;
   readonly written: string[] = [];
   readonly args: readonly string[];
   readonly options: PtyOptions;
@@ -32,10 +36,24 @@ export class Replay implements Pty {
     args: readonly string[],
     options: PtyOptions,
     without: (record: TerminalRecord) => boolean = () => false,
+    apiFetch?: typeof fetch,
   ) {
     this.#records = recordedTerminal(name).filter((record) => !without(record));
     this.args = args;
     this.options = options;
+    const entry = args.find((one) => one.startsWith('mcp_servers.corrallm='));
+    const token = options.env.CORRALLM_SESSION_TOKEN;
+    const url = entry && /(?:"url"|url)=("(?:\\.|[^"\\])*")/.exec(entry)?.[1];
+    if (url !== undefined && token !== undefined)
+      this.apiReady = (async () => {
+        this.#apiClient = await connectHttp(
+          { url: JSON.parse(url) as string, token },
+          apiFetch === undefined ? {} : { fetch: apiFetch },
+        );
+        await this.#apiClient.list();
+        const tool = options.env.FAKE_MCP_TOOL;
+        if (tool !== undefined) await this.#apiClient.call(tool, {});
+      })();
     void this.#play();
   }
 
@@ -76,6 +94,7 @@ export class Replay implements Pty {
   #end(code: number): void {
     if (this.exited) return;
     this.exited = true;
+    void this.#apiClient?.close();
     this.#wake?.();
     for (const listener of this.#exit) listener({ exitCode: code });
   }

@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { realpath, writeFile } from 'node:fs/promises';
+import { realpath, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 import { MAX_ID_LENGTH, MAX_MESSAGE_LENGTH } from '../../../shared/api/limits';
@@ -23,6 +23,8 @@ import type { Launch, StatusLineReading, TerminalCli, TerminalSignal } from '../
 import { hookSettings } from './hooks';
 import type { HookEvent, HookRegistration } from '../terminal/hooks';
 import { hooksOff, hooksOffWarning, managedSettingsFolder } from './hooks-off';
+import type { SessionApi } from '../connector';
+import { entrySettings, managedApiReason, sideloadRefused } from './mcp-entry';
 import type { Screen } from '../terminal/screen';
 import {
   statusLineContext,
@@ -82,6 +84,7 @@ export interface ClaudeCodeOptions {
   resetPromptSnapshot?: boolean;
   /** Where its managed settings are (the organization's): the OS's folder for them by default. */
   managed?: string;
+  api?: SessionApi;
 }
 
 export class ClaudeCode implements TerminalCli<PermissionMode> {
@@ -113,6 +116,11 @@ export class ClaudeCode implements TerminalCli<PermissionMode> {
   readonly #effort: string | undefined;
   readonly #resetPromptSnapshot: boolean;
   readonly #managed: string;
+  readonly #api: SessionApi | undefined;
+  #apiReason: string | undefined;
+  #entry = false;
+  #settings: Record<string, unknown> = {};
+  #dir: string | undefined;
   /** Why corrallm can't hear it, once its settings were read (they turn its hooks off). */
   #unheard: string | undefined;
   /** A malformed native id is warned about once, while its hooks are still heard. */
@@ -125,12 +133,14 @@ export class ClaudeCode implements TerminalCli<PermissionMode> {
     effort = null,
     resetPromptSnapshot = false,
     managed = managedSettingsFolder(),
+    api,
   }: ClaudeCodeOptions) {
     this.#places = { cwd, home };
     this.#env = env;
     this.#effort = effort !== null && Object.hasOwn(CLAUDE_EFFORTS, effort) ? effort : undefined;
     this.#resetPromptSnapshot = resetPromptSnapshot;
     this.#managed = managed;
+    this.#api = api;
   }
 
   newId(): string {
@@ -152,15 +162,59 @@ export class ClaudeCode implements TerminalCli<PermissionMode> {
     });
     // Respect restrictions on our HTTP endpoint for the command-type startup post too.
     const off = await hooksOff({ cwd, env: this.#env, managed: this.#managed, url: hooks.url });
+    this.#dir = dir;
+    this.#apiReason = this.#api === undefined ? undefined : await managedApiReason(this.#managed);
+    this.#entry = this.#api?.kind === 'http' && this.#apiReason === undefined;
+    this.#settings = {
+      ...(off === undefined ? hookSettings(hooks.url, hooks.token) : { hooks: {} }),
+      ...statusLine,
+    };
+    if (this.#entry && this.#api?.kind === 'http') {
+      await writeFile(
+        path.join(dir, 'mcp.json'),
+        JSON.stringify({
+          mcpServers: {
+            [this.#api.server]: {
+              type: 'http',
+              url: this.#api.url,
+              headers: { Authorization: `Bearer ${this.#api.token}` },
+            },
+          },
+        }),
+        { mode: 0o600 },
+      );
+    }
+    await this.#writeSettings();
+    this.#unheard = off && hooksOffWarning(off);
+  }
+
+  api(): { available: boolean; reason?: string } {
+    return {
+      available: this.#entry,
+      ...(this.#apiReason === undefined ? {} : { reason: this.#apiReason }),
+    };
+  }
+
+  async retryWithoutApi(screen: string): Promise<boolean> {
+    if (!this.#entry || !sideloadRefused(screen)) return false;
+    this.#entry = false;
+    this.#apiReason =
+      'Claude Code’s settings refused the session entry; corrallm’s API is off for this session.';
+    await this.#writeSettings();
+    if (this.#dir !== undefined) await rm(path.join(this.#dir, 'mcp.json'), { force: true });
+    return true;
+  }
+
+  async #writeSettings(): Promise<void> {
+    if (this.#dir === undefined) return;
     await writeFile(
-      path.join(dir, SETTINGS),
+      path.join(this.#dir, SETTINGS),
       JSON.stringify({
-        ...(off === undefined ? hookSettings(hooks.url, hooks.token) : { hooks: {} }),
-        ...statusLine,
+        ...this.#settings,
+        ...(this.#api === undefined ? {} : entrySettings(this.#api, this.#entry)),
       }),
       { mode: 0o600 },
     );
-    this.#unheard = off && hooksOffWarning(off);
   }
 
   unheard(): string | undefined {
@@ -170,6 +224,7 @@ export class ClaudeCode implements TerminalCli<PermissionMode> {
   args({ dir, id, resume, model, mode, role }: Launch<PermissionMode>): string[] {
     if (id !== null && !isUuid(id)) throw new TypeError('Expected a UUID session id');
     return [
+      ...(this.#entry ? [`--mcp-config=${path.join(dir, 'mcp.json')}`] : []),
       '--settings',
       path.join(dir, SETTINGS),
       ...(id === null ? [] : resume ? [`--resume=${id}`] : ['--session-id', id]),

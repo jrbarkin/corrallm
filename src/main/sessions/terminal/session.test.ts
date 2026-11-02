@@ -448,7 +448,7 @@ describe('a Terminal session', () => {
     // The user's own default mode applies, and the CLI's default model.
     expect(run.args).not.toContain('--permission-mode');
     expect(run.args).not.toContain('--model');
-    expect(events[0]).toEqual({ type: 'started', model: null, mode: null, models: [] });
+    expect(events[0]).toEqual({ type: 'started', api: false, model: null, mode: null, models: [] });
 
     const { env } = run.options;
     expect(env).toMatchObject({ PATH: '/usr/bin', TERM: 'xterm-256color', COLORTERM: 'truecolor' });

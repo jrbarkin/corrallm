@@ -78,6 +78,20 @@ if (args[0] === 'auth' && args[1] === 'status') {
   process.stdout.write(`${JSON.stringify(status)}\n`);
   process.exit(0);
 }
+const mcpFile = arg('--mcp-config');
+if (mcpFile !== undefined) {
+  const { connectHttp } = await import('../src/main/sessions/fake-mcp-client.mjs');
+  const entry = JSON.parse(readFileSync(mcpFile, 'utf8')).mcpServers.corrallm;
+  const api = await connectHttp({
+    url: entry.url,
+    token: entry.headers.Authorization.slice('Bearer '.length),
+  });
+  await api.list();
+  if (process.env.FAKE_MCP_TOOL) await api.call(process.env.FAKE_MCP_TOOL, {});
+  process.once('exit', () => {
+    void api.close();
+  });
+}
 const home = path.join(process.cwd(), '.fake-claude');
 mkdirSync(home, { recursive: true });
 const log = (entry) => appendFileSync(path.join(home, 'log.jsonl'), `${JSON.stringify(entry)}\n`);
