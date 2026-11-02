@@ -112,13 +112,12 @@ describe('SdkConnector through the Agent SDK', () => {
 
     const id = '00000000-0000-4000-8000-00000000000a';
     await session.send({ id, text: 'please run it' });
-    const asked = await waitFor(events, (e) => e.type === 'permission');
-    expect(asked).toMatchObject({
-      tool: 'Bash',
-      summary: 'echo hello',
-      always: "Yes, and don't ask again for `echo` commands in " + path.basename(folder),
+    const asked = await raised(events);
+    expect(asked.prompt).toMatchObject({
+      kind: 'approval',
+      subject: { type: 'tool', tool: 'Bash', input: { command: 'echo hello' } },
     });
-    if (asked.type !== 'permission') throw new Error('no prompt');
+    expect(events.some(({ type }) => type === 'permission')).toBe(false);
     const { key } = await raised(events);
     session.prompts?.answer(key, { kind: 'choice', value: 'allow' });
 

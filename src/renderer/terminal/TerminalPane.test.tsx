@@ -1,4 +1,5 @@
 import { NEW_SESSION } from '../../shared/model/session';
+import { Prompt, PromptId } from '../../shared/model/prompts';
 import { expectOneOp } from '../test-api';
 import { renderReady, events } from '../test-render';
 import { act, screen, waitFor, within } from '@testing-library/react';
@@ -117,6 +118,40 @@ async function open({
 const SCREEN = { type: 'screen', data: 'Claude Code\r\n❯ ', cols: 100, rows: 30 } as const;
 
 describe('a Terminal agent', () => {
+  it('focuses its own terminal from the owner prompt card without replying', async () => {
+    const { canvas, view } = await open();
+    const id = PromptId.parse('30000000-0000-4000-8000-000000000001');
+    act(() => {
+      canvas.session('a', {
+        ...NEW_SESSION,
+        status: 'waiting',
+        entries: [
+          {
+            id,
+            kind: 'prompt',
+            need: `prompt/a/1/${id}`,
+            name: 'a',
+            prompt: Prompt.parse({
+              id,
+              agent: 'a',
+              raised: 1,
+              kind: 'approval',
+              title: 'Check the terminal',
+              answerIn: 'terminal',
+              choices: [],
+            }),
+          },
+        ],
+      });
+    });
+    const terminal = fakeScreens.latest();
+    terminal.focused = false;
+    canvas.core.operations.length = 0;
+    await events.click(view.getByRole('button', { name: 'Open terminal' }));
+    expect(terminal.focused).toBe(true);
+    expect(canvas.core.operations).toEqual([]);
+  });
+
   it('explains setup instead of Starting and links straight to its live card', async () => {
     let made: FakeCanvas | undefined;
     const need = 'setup/tree/1';

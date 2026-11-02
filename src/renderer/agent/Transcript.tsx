@@ -1,3 +1,6 @@
+import type { ArgsOf } from '../../shared/api/registry';
+import { PromptCard } from './PromptCard';
+import type { OwnerPromptEntry } from './PromptCard';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 
 import type { AdapterId, ConnectionId } from '../../shared/adapter';
@@ -21,6 +24,8 @@ import type {
 
 /** What the transcript does with the user's answers to prompts (and its Stops). */
 export interface TranscriptAnswers {
+  onPromptReply?:
+    ((need: string, answer: ArgsOf<'reply'>['answer']) => Promise<unknown>) | undefined;
   /** `feedback`, with a no: what Claude should do instead. */
   onAnswer: (permissionId: string, answer: Answer, feedback?: string) => void;
   onAnswerQuestion: (promptId: string, index: number, answer: string) => void;
@@ -291,8 +296,15 @@ function EntryView({
         </p>
       );
     case 'prompt':
-      // A prompt the core's owner holds is B13 X10's one prompt card: the display holds none yet.
-      return null;
+      return (
+        <PromptCard
+          entry={entry as OwnerPromptEntry}
+          onReply={(answer) =>
+            answers.onPromptReply?.(entry.need, answer) ??
+            Promise.reject(new Error('The prompt is no longer available.'))
+          }
+        />
+      );
   }
 }
 

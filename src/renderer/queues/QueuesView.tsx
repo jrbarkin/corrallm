@@ -87,8 +87,10 @@ export function QueuesView({
   onAgentContextMenu,
   onOpenSettings,
   settingsOptions,
+  renderPrompts,
   onClose,
 }: {
+  renderPrompts?: ((agent: string) => ReactNode) | undefined;
   nodes: readonly CanvasNode[];
   sessions: Readonly<Record<string, Session>>;
   run: RunSnapshot;
@@ -351,6 +353,7 @@ export function QueuesView({
               <Fragment key={lane.agent.id}>
                 <LaneCells
                   lane={lane}
+                  prompts={renderPrompts?.(lane.agent.id)}
                   column={2 * i + 1}
                   nodes={nodes}
                   catalog={engine}
@@ -422,6 +425,7 @@ export function QueuesView({
  * target is picked in it (`picking`), each task and its end are buttons that pick.
  */
 function LaneCells({
+  prompts,
   lane,
   column,
   nodes,
@@ -444,6 +448,7 @@ function LaneCells({
   picking,
   onOpenAgent,
 }: {
+  prompts?: ReactNode;
   lane: Lane;
   column: number;
   nodes: readonly CanvasNode[];
@@ -628,6 +633,7 @@ function LaneCells({
           </button>
         )}
         {ask?.problem && <p className="queues-problem">{ask.text}</p>}
+        {prompts}
       </div>
       {idle.map(({ from, to, held }) => (
         <div

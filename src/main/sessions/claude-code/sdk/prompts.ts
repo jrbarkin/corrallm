@@ -37,15 +37,11 @@ export { DENIED, DENIED_WITH_FEEDBACK } from './raise';
  *   nonapproval, and ends).
  * - One corrallm can't pass on faithfully (questions it can't key, a form it can't show, a plan it
  *   can't read) is declined here, never raised, and the user told.
- * - Until X10 converts the renderer, each raised request is shown as the events B13 replaces too
- *   (`permission`, `question`, `plan`, `elicitation`, `withdrawn` and the session's waiting
- *   status), each under its own fresh view id (`prompt:<uuid>`, `elicitation:<uuid>`): unless
- *   the owner declined it as it was raised. Their answers never reach the CLI from here: `bridge`
- *   translates one into the prompt's own answer and names its key, for the core to answer it
- *   through the owner (X11 removes this).
+ * - Prompts reach the renderer only through the owner's transcript entries. The unused legacy
+ *   translation helpers remain for X11 to remove; no connection installs their bridge.
  */
 
-/** Where prompts go: the core's owner (prompt events), and the transcript (the events B13 replaces). */
+/** Where prompts go: the core's owner (prompt events) and session status. */
 export interface PromptHost {
   emit(event: HostEvent): void;
 }
@@ -57,8 +53,8 @@ interface Pending {
   readonly shown: string;
   readonly prompt: AdapterPrompt;
   readonly native: Native;
-  /** Whether that event was shown (none if the owner declined it as it was raised). */
-  visible: boolean;
+  /** Whether the owner kept the raise (false if it declined it as it was raised). */
+  admitted: boolean;
   /** Tells the CLI: its callback resolved. */
   readonly settle: (result: PermissionResult | ElicitationResult) => void;
   /** What the CLI is told if it ends unanswered (aborted, or the session closed). */
@@ -106,8 +102,7 @@ export class Prompts {
       if (pending === undefined) return;
       this.#pending.delete(key);
       pending.settle(declined(pending.native, why));
-      if (pending.visible) {
-        this.#host.emit({ type: 'withdrawn', id: pending.shown });
+      if (pending.admitted) {
         this.#settled();
       }
     },
@@ -142,7 +137,7 @@ export class Prompts {
   };
 
   /**
-   * Transitional (B13 C4, until X10 converts the renderer; X11 removes it): the key of the request
+   * Transitional (B13 C4, unused after X10; X11 removes it): the key of the request
    * the event B13 replaces `id` shows, and `answer` as its prompt takes it, for the core to answer
    * through its owner. Answers nothing itself. Throws for one no longer asked, or an answer its
    * prompt doesn't offer.
@@ -196,7 +191,7 @@ export class Prompts {
         shown: shown.id,
         prompt,
         native,
-        visible: false,
+        admitted: false,
         settle: resolve,
         unanswered,
       });
@@ -211,8 +206,7 @@ export class Prompts {
       // The owner may decline it as it is raised: then it is never shown.
       const pending = this.#pending.get(key);
       if (pending === undefined) return;
-      pending.visible = true;
-      this.#host.emit(shown);
+      pending.admitted = true;
       this.#host.emit({ type: 'status', status: 'waiting' });
     });
   }
@@ -224,8 +218,7 @@ export class Prompts {
     this.#pending.delete(key);
     pending.settle(pending.unanswered);
     this.#host.emit({ type: 'prompt-ended', key, reason: 'withdrawn' });
-    if (pending.visible) {
-      this.#host.emit({ type: 'withdrawn', id: pending.shown });
+    if (pending.admitted) {
       this.#settled();
     }
   }
@@ -236,7 +229,7 @@ export class Prompts {
   }
 }
 
-/** A permission request as the event B13 replaces showed it (until X10). */
+/** A permission request as the event B13 replaces showed it (unused after X10; removed by X11). */
 function shownTool(
   id: string,
   tool: string,
@@ -279,7 +272,7 @@ function shownTool(
   }
 }
 
-/** An MCP server's request as the event B13 replaces showed it, in the prompt's words (until X10). */
+/** An MCP server's request as the event B13 replaces showed it, in the prompt's words (unused after X10; removed by X11). */
 function shownForm(
   id: string,
   prompt: AdapterPrompt,

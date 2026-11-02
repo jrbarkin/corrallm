@@ -750,17 +750,8 @@ describe('SdkConnector', () => {
       kind: 'approval',
       subject: { type: 'tool', tool: 'Bash', input: { command: 'npm test' } },
     });
-    // Shown as before, until the renderer reads the owner's prompts (X10).
-    expect(events.slice(-2)).toEqual([
-      {
-        type: 'permission',
-        id: expect.stringMatching(/^prompt:[0-9a-f-]{36}$/) as unknown,
-        tool: 'Bash',
-        summary: 'npm test',
-        always: "Yes, and don't ask again for `npm test` commands in shop",
-      },
-      { type: 'status', status: 'waiting' },
-    ]);
+    // The owner publishes the prompt; the connector retains only its waiting status.
+    expect(events.slice(-1)).toEqual([{ type: 'status', status: 'waiting' }]);
     // The old way answers nothing.
     await expect(
       session.answer('toolu_1:prompt', { kind: 'permission', answer: 'once' }),

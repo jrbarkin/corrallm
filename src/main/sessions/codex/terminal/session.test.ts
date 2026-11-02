@@ -252,9 +252,7 @@ describe('Codex in a terminal, as the real one ran', () => {
       'status:working',
       'user:Create a file named bye.txt containing the word bye.',
       // Listed outside its terminal while it waits (Needs you), until the user answers there.
-      'asking:Codex needs you: see its terminal.',
       'status:waiting',
-      'asking:',
       'status:working',
       'text:Created [bye.txt](/work/smoke/p2/bye.txt) with the word `bye`.',
       'end:done',

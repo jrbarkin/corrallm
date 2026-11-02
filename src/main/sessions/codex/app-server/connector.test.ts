@@ -9,12 +9,12 @@ import { Worker } from 'node:worker_threads';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { PromptEvent } from '../../../../shared/model/prompts';
+import type { PromptAnswer, PromptEvent } from '../../../../shared/model/prompts';
 import { entryFor } from '../../../../shared/model/prompt-views';
-import type { CodexMode, SessionAnswer, SessionEvent } from '../../../../shared/session';
+import type { CodexMode, SessionEvent } from '../../../../shared/session';
 import type { UsageBackendId } from '../../../../shared/adapter';
 import type { UsageWindows } from '../../../../shared/usage';
-import type { Bridge, HostEvent, LiveSession, SessionSpec } from '../../connector';
+import type { HostEvent, LiveSession, SessionSpec } from '../../connector';
 import { AppServerConnector } from './connector';
 import type { AppServerConnectorDeps } from './connector';
 import type { Fixture } from './recorded';
@@ -104,18 +104,18 @@ it('keeps plan-revision feedback private when resuming a native conversation', a
   const env = { FAKE_CODEX_STATE: path.join(dir, 'threads.json') };
   const first = await start({ mode: 'plan' }, env);
   await first.session.send({ id: 'review-plan', text: 'Plan a change' });
-  const plan = await first.heard('plan');
-  first.answer(plan.id, { kind: 'plan', answer: { approve: false, feedback: 'private-revision' } });
-  let revised: Extract<SessionEvent, { type: 'plan' }> | undefined;
+  const plan = await first.heard('prompt', { prompt: { kind: 'plan' } });
+  first.answer(plan.key, { kind: 'choice', value: 'keep-planning', feedback: 'private-revision' });
+  let revised: PromptEvent | undefined;
   await vi.waitFor(() => {
     revised = first.events.find(
-      (event): event is Extract<SessionEvent, { type: 'plan' }> =>
-        event.type === 'plan' && event.id !== plan.id,
+      (event): event is PromptEvent =>
+        event.type === 'prompt' && event.prompt.kind === 'plan' && event.key !== plan.key,
     );
     expect(revised).toBeDefined();
   });
   if (!revised) throw new Error('No revised plan');
-  first.answer(revised.id, { kind: 'plan', answer: { approve: false, feedback: '' } });
+  first.answer(revised.key, { kind: 'choice', value: 'keep-planning' });
   await first.ended('review-plan');
   const conversation = first.remembered.at(-1);
   if (!conversation) throw new Error('No conversation');
@@ -232,7 +232,6 @@ async function start(
   const events: HostEvent[] = [];
   const remembered: string[] = [];
   const activity = vi.fn();
-  let bridge: Bridge | undefined;
   const session = await connector(env, deps).start(
     {
       agentId: 'a',
@@ -247,9 +246,6 @@ async function start(
       emit: (event: HostEvent) => events.push(event),
       remember: (id) => remembered.push(id),
       activity,
-      bridge: (translate) => {
-        bridge = translate;
-      },
     },
   );
   sessions.push(session);
@@ -269,29 +265,22 @@ async function start(
       { timeout: 5000 },
     );
   /** Waits for an event like `like`, and returns it. */
-  const heard = async <T extends SessionEvent['type']>(type: T, like: object = {}) => {
-    let found: Extract<SessionEvent, { type: T }> | undefined;
+  const heard = async <T extends HostEvent['type']>(type: T, like: object = {}) => {
+    let found: Extract<HostEvent, { type: T }> | undefined;
     await vi.waitFor(
       () => {
         found = events.find(
-          (event): event is Extract<SessionEvent, { type: T }> =>
+          (event): event is Extract<HostEvent, { type: T }> =>
             event.type === type && matches(event, like),
         );
         expect(found).toBeDefined();
       },
       { timeout: 5000 },
     );
-    return found as Extract<SessionEvent, { type: T }>;
+    return found as Extract<HostEvent, { type: T }>;
   };
-  /**
-   * Answers a prompt shown as the events B13 replaces show it, as the core answers an old card's
-   * answer (until X11): its session names the prompt's key, and the owner answers by that key.
-   */
-  const answer = (id: string, given: SessionAnswer) => {
-    const bridged = bridge?.(id, given);
-    if (bridged === undefined) throw new Error('no bridge');
-    session.prompts?.answer(bridged.key, bridged.answer);
-  };
+  /** Models the core handing the typed answer to the captured session, by its occurrence key. */
+  const answer = (key: string, given: PromptAnswer) => session.prompts?.answer(key, given);
   /** The prompts raised to the core's owner so far. */
   const raised = () => events.filter((event): event is PromptEvent => event.type === 'prompt');
   return { session, events, remembered, turn, ended, heard, activity, answer, raised };
@@ -646,15 +635,16 @@ describe('the App Server connection', () => {
   it('asks before running a command in Read only, and runs it once allowed', async () => {
     const { session, answer, heard, ended, events } = await start({ mode: 'read-only' });
     await session.send({ id: 'm1', text: 'run the tests' });
-    const prompt = await heard('permission');
+    const prompt = await heard('prompt', { prompt: { kind: 'approval' } });
     expect(prompt).toMatchObject({
-      tool: 'exec_command',
-      summary: 'npm test',
-      always: "Yes, and don't ask again for commands that start with `npm test`",
-      title: 'May I run the tests?',
+      prompt: {
+        kind: 'approval',
+        subject: { type: 'command', command: '/bin/zsh -lc "npm test"' },
+        title: 'Codex wants to run a command',
+      },
     });
     expect(events.at(-1)).toEqual({ type: 'status', status: 'waiting' });
-    answer(prompt.id, { kind: 'permission', answer: 'once' });
+    answer(prompt.key, { kind: 'choice', value: 'accept' });
     await ended('m1');
     expect(events.filter((e) => e.type === 'tool').at(-1)).toMatchObject({
       tool: 'exec_command',
@@ -668,8 +658,8 @@ describe('the App Server connection', () => {
   it('stops the turn when the user says no, as Codex’s No does', async () => {
     const { session, answer, heard, ended, events } = await start({ mode: 'read-only' });
     await session.send({ id: 'm1', text: 'run the tests' });
-    const prompt = await heard('permission');
-    answer(prompt.id, { kind: 'permission', answer: 'deny' });
+    const prompt = await heard('prompt', { prompt: { kind: 'approval' } });
+    answer(prompt.key, { kind: 'choice', value: 'cancel' });
     await ended('m1');
     expect(events.at(-1)).toMatchObject({ type: 'end', result: { status: 'cancelled' } });
     expect(events.filter((e) => e.type === 'tool').at(-1)).toMatchObject({ status: 'failed' });
@@ -693,12 +683,14 @@ describe('the App Server connection', () => {
   it('asks to implement a plan once plan mode proposes one, and carries it out in the same turn', async () => {
     const { session, answer, heard, ended, events } = await start({ mode: 'plan' });
     await session.send({ id: 'm1', text: 'Plan the change' });
-    const plan = await heard('plan');
-    expect(plan.plan).toBe('# Plan\n\n1. Read the code\n2. Change it\n');
+    const plan = await heard('prompt', { prompt: { kind: 'plan' } });
+    expect(plan.prompt.kind === 'plan' && plan.prompt.plan).toBe(
+      '# Plan\n\n1. Read the code\n2. Change it\n',
+    );
     // The turn waits on the user: it has not ended.
     expect(events.some((e) => e.type === 'end')).toBe(false);
     expect(events.at(-1)).toEqual({ type: 'status', status: 'waiting' });
-    answer(plan.id, { kind: 'plan', answer: { approve: true, mode: 'auto' } });
+    answer(plan.key, { kind: 'choice', value: 'implement' });
     await ended('m1');
     expect(events).toContainEqual({ type: 'mode', mode: 'auto' });
     expect(events.filter((e) => e.type === 'end')).toHaveLength(1);
@@ -715,10 +707,11 @@ describe('the App Server connection', () => {
   it('keeps planning with what the user says to change, or stops', async () => {
     const { session, answer, heard, ended, events } = await start({ mode: 'plan' });
     await session.send({ id: 'm1', text: 'Plan the change' });
-    const first = await heard('plan');
-    answer(first.id, {
-      kind: 'plan',
-      answer: { approve: false, feedback: 'Smaller steps' },
+    const first = await heard('prompt', { prompt: { kind: 'plan' } });
+    answer(first.key, {
+      kind: 'choice',
+      value: 'keep-planning',
+      feedback: 'Smaller steps',
     });
     await vi.waitFor(async () => {
       expect(await requests('turn/start')).toHaveLength(2);
@@ -727,12 +720,13 @@ describe('the App Server connection', () => {
       { type: 'text', text: 'Smaller steps', text_elements: [] },
     ]);
     await vi.waitFor(() => {
-      expect(events.filter((e) => e.type === 'plan')).toHaveLength(2);
+      expect(events.filter((e) => e.type === 'prompt' && e.prompt.kind === 'plan')).toHaveLength(2);
     });
-    const second = events.filter((e) => e.type === 'plan').at(-1);
-    answer(second?.id ?? '', {
-      kind: 'plan',
-      answer: { approve: false, feedback: '' },
+    const second = events.filter((e) => e.type === 'prompt' && e.prompt.kind === 'plan').at(-1);
+    if (second?.type !== 'prompt') throw new Error('No second plan');
+    answer(second.key, {
+      kind: 'choice',
+      value: 'keep-planning',
     });
     await ended('m1');
     expect(events.some((e) => e.type === 'mode')).toBe(false);
@@ -741,9 +735,19 @@ describe('the App Server connection', () => {
   it('asks Codex’s questions, and goes on with the answers', async () => {
     const { session, answer, heard, ended, events } = await start();
     await session.send({ id: 'm1', text: 'ask me' });
-    const question = await heard('question');
-    expect(question.questions[0]).toMatchObject({ header: 'Color', text: 'Which color?' });
-    answer(question.id, { kind: 'question', answers: ['Blue'] });
+    const question = await heard('prompt', { prompt: { kind: 'question' } });
+    expect(question.prompt.kind === 'question' && question.prompt.questions[0]).toMatchObject({
+      header: 'Color',
+      text: 'Which color?',
+    });
+    answer(question.key, {
+      kind: 'questions',
+      answers: {
+        [question.prompt.kind === 'question'
+          ? (question.prompt.questions[0]?.id ?? 'missing')
+          : 'missing']: { picked: ['Blue'] },
+      },
+    });
     await ended('m1');
     expect(texts(events)).toEqual(['You picked Blue.']);
   });
@@ -785,7 +789,7 @@ describe('the App Server connection', () => {
   it('interrupts a plan prompt and stops the command its plan turn left running', async () => {
     const { session, heard, ended } = await start({ mode: 'plan' });
     await session.send({ id: 'm1', text: 'background plan' });
-    await heard('plan');
+    await heard('prompt', { prompt: { kind: 'plan' } });
     await session.interrupt();
     await ended('m1');
     expect(await requests('turn/interrupt')).toEqual([]); // The native plan turn already ended.
@@ -1080,42 +1084,44 @@ describe('the App Server connection', () => {
       const consent = kept();
       const { session, answer, events, heard, ended, turn } = await start({}, CHATGPT, { consent });
       await session.send({ id: 'm1', text: 'Hello' });
-      const prompt = await heard('permission', {
-        tool: 'ChatGPT plan',
-        summary: 'Plus',
-        always: "Yes, and don't ask again on this computer",
+      const prompt = await heard('prompt', {
+        prompt: { kind: 'approval', subject: { type: 'consent' }, summary: 'Plus' },
       });
       expect(events.at(-1)).toEqual({ type: 'status', status: 'waiting' });
       // Nothing went to Codex's model yet.
       expect(await requests('turn/start')).toEqual([]);
-      answer(prompt.id, { kind: 'permission', answer: 'once' });
+      answer(prompt.key, { kind: 'choice', value: 'once' });
       await ended('m1');
       expect(texts(events)).toContain('You said: Hello');
       expect(consent.give).not.toHaveBeenCalled();
       // Asked once a session.
       await turn('/review', 'r');
       await turn('Again', 'm2');
-      expect(events.filter((e) => e.type === 'permission')).toHaveLength(1);
+      expect(
+        events.filter((e) => e.type === 'prompt' && e.prompt.kind === 'approval'),
+      ).toHaveLength(1);
 
       // The next session asks again.
       const next = await start({}, CHATGPT, { consent });
       await next.session.send({ id: 'n1', text: 'Hello' });
-      await next.heard('permission', { tool: 'ChatGPT plan' });
+      await next.heard('prompt', { prompt: { subject: { type: 'consent' } } });
     });
 
     it('asks no more once told not to ask again, in this session or the next', async () => {
       const consent = kept();
       const first = await start({}, CHATGPT, { consent });
       await first.session.send({ id: 'm1', text: 'Hello' });
-      const prompt = await first.heard('permission');
-      first.answer(prompt.id, { kind: 'permission', answer: 'always' });
+      const prompt = await first.heard('prompt', { prompt: { kind: 'approval' } });
+      first.answer(prompt.key, { kind: 'choice', value: 'always' });
       await first.ended('m1');
       expect(consent.give).toHaveBeenCalledOnce();
 
       const next = await start({}, CHATGPT, { consent });
       await next.turn('Hello', 'n1');
       expect(texts(next.events)).toContain('You said: Hello');
-      expect(next.events.some((e) => e.type === 'permission')).toBe(false);
+      expect(next.events.some((e) => e.type === 'prompt' && e.prompt.kind === 'approval')).toBe(
+        false,
+      );
     });
 
     it('sends nothing when the user says no, and says what else runs on the plan', async () => {
@@ -1123,8 +1129,8 @@ describe('the App Server connection', () => {
         consent: kept(),
       });
       await session.send({ id: 'm1', text: 'Hello' });
-      const prompt = await heard('permission');
-      answer(prompt.id, { kind: 'permission', answer: 'deny' });
+      const prompt = await heard('prompt', { prompt: { kind: 'approval' } });
+      answer(prompt.key, { kind: 'choice', value: 'no' });
       await ended('m1');
       expect(events.at(-2)).toMatchObject({
         type: 'notice',
@@ -1141,10 +1147,10 @@ describe('the App Server connection', () => {
     it('stops asking when the turn is interrupted, and sends nothing', async () => {
       const { session, events, heard, ended } = await start({}, CHATGPT, { consent: kept() });
       await session.send({ id: 'm1', text: 'Hello' });
-      const prompt = await heard('permission');
+      const prompt = await heard('prompt', { prompt: { kind: 'approval' } });
       await session.interrupt();
       await ended('m1');
-      expect(events).toContainEqual({ type: 'withdrawn', id: prompt.id });
+      expect(events).toContainEqual({ type: 'prompt-ended', key: prompt.key, reason: 'withdrawn' });
       expect(events.at(-1)).toMatchObject({ type: 'end', result: { status: 'cancelled' } });
       expect(await requests('turn/start')).toEqual([]);
     });
@@ -1329,10 +1335,10 @@ describe('the App Server connection’s prompts, through the core’s owner (B13
       'implement',
       'keep-planning',
     ]);
-    const shown = await heard('plan');
+    const shown = await heard('prompt', { prompt: { kind: 'plan' } });
     expect(() => {
-      answer(shown.id, { kind: 'plan', answer: { approve: true, mode: 'acceptEdits' } });
-    }).toThrow(/doesn’t offer acceptEdits/);
+      answer(shown.key, { kind: 'choice', value: 'not-offered' });
+    }).toThrow(/not offered/);
     session.prompts?.answer(plan.key, { kind: 'choice', value: 'implement' });
     await ended('m1');
     expect(events).toContainEqual({ type: 'mode', mode: 'auto' });

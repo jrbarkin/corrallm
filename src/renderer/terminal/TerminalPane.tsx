@@ -1,7 +1,10 @@
 import { useContext, useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 
+import type { ArgsOf } from '../../shared/api/registry';
 import type { Session } from '../../shared/model/session';
+import { PromptCard } from '../agent/PromptCard';
+import type { OwnerPromptEntry } from '../agent/PromptCard';
 import { OpenLinkContext } from '../open-link';
 import type { TerminalBackend } from './backend';
 import { isMac, useOptionIsMeta } from './keyboard';
@@ -47,6 +50,7 @@ export function TerminalPane({
   above,
   onStart,
   onUnqueue,
+  onPromptReply,
   screens = createScreen,
 }: {
   agentId: string;
@@ -56,7 +60,7 @@ export function TerminalPane({
   session: Session;
   /** How the session runs, and where (or what it needs to). */
   note: string;
-  /** What the queues' run asks of the user, if anything: first in the bar, with its answers. */
+  /** What the queues' run asks of the user, if anything: in the bar with its answers. */
   ask?: ReactNode;
   /** What sits in the bar (the queue's ⊕). */
   above?: ReactNode;
@@ -64,6 +68,8 @@ export function TerminalPane({
   onStart: () => void;
   /** Takes a queued message off the queue. */
   onUnqueue: (queuedId: string) => void;
+  onPromptReply?:
+    ((need: string, answer: ArgsOf<'reply'>['answer']) => Promise<unknown>) | undefined;
   /** Makes the terminal (xterm.js; a fake in tests). */
   screens?: ScreenFactory;
 }) {
@@ -192,6 +198,19 @@ export function TerminalPane({
         )}
       </div>
       <div className="agent-terminal-bar">
+        {session.entries
+          .filter((entry) => entry.kind === 'prompt' && entry.outcome === undefined)
+          .map((entry) => (
+            <PromptCard
+              key={entry.id}
+              entry={entry as OwnerPromptEntry}
+              onReply={(answer) =>
+                onPromptReply?.(entry.need, answer) ??
+                Promise.reject(new Error('The prompt is no longer available.'))
+              }
+              onOpenTerminal={() => shown.current?.focus()}
+            />
+          ))}
         {ask}
         {warning?.kind === 'notice' && warning.id !== dismissed && (
           <p className="agent-terminal-warning" role="note">

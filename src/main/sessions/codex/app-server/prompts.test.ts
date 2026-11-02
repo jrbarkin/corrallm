@@ -1,7 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import type { PromptEnded, PromptEvent } from '../../../../shared/model/prompts';
-import type { SessionAnswer } from '../../../../shared/session';
 import type { HostEvent } from '../../connector';
 import { Prompts } from './prompts';
 import { recordedAsks, recordedPlaces } from './recorded';
@@ -48,24 +47,7 @@ function prompts({ decline }: { decline?: string } = {}) {
     if (!found) throw new Error('nothing raised');
     return found.key;
   };
-  /** The id of the event B13 replaces that shows the last prompt. */
-  const shown = () => {
-    const found = events.findLast(
-      (event) =>
-        event.type === 'permission' ||
-        event.type === 'question' ||
-        event.type === 'plan' ||
-        event.type === 'elicitation',
-    );
-    if (!found || !('id' in found)) throw new Error('nothing shown');
-    return found;
-  };
-  /** Answers the shown prompt as an old card would: through the owner, by its key. */
-  const answerShown = (answer: SessionAnswer, id = shown().id) => {
-    const bridged = asking.bridge(id, answer);
-    asking.answers.answer(bridged.key, bridged.answer);
-  };
-  return { asking, events, settled, ask, raised, ended, key, shown, answerShown };
+  return { asking, events, settled, ask, raised, ended, key };
 }
 
 function asks(fixture: Fixture): RecordedAsk[] {
@@ -78,7 +60,7 @@ function first(fixture: Fixture, nth = 0): RecordedAsk {
 }
 
 describe('Prompts: each request Codex makes raised to the core under a fresh key', () => {
-  it('raises a recorded approval, shows it as before, and tells Codex only the owner’s answer', async () => {
+  it('raises a recorded approval, tells Codex only the owner’s answer', async () => {
     const asked = first('turns');
     const { asking, events, ask, key, settled } = prompts();
     const told = ask(asked);
@@ -87,14 +69,6 @@ describe('Prompts: each request Codex makes raised to the core under a fresh key
         type: 'prompt',
         key: expect.stringMatching(UUID) as unknown,
         prompt: expect.objectContaining({ kind: 'approval', answerIn: 'api' }) as unknown,
-      },
-      {
-        type: 'permission',
-        id: expect.stringMatching(/^prompt:[0-9a-f-]{36}$/) as unknown,
-        tool: 'exec_command',
-        summary: "printf 'hi' > hello.txt",
-        always: "Yes, and don't ask again for commands that start with `printf 'hi' > hello.txt`",
-        title: 'May I create hello.txt containing hi in the workspace?',
       },
       { type: 'status', status: 'waiting' },
     ]);
@@ -167,15 +141,14 @@ describe('Prompts: each request Codex makes raised to the core under a fresh key
 
   it('ends a request Codex stops waiting for, answering it still; a numeric id is not its text', async () => {
     const asked = first('turns');
-    const { asking, events, ask, key, ended, shown, settled } = prompts();
+    const { asking, events, ask, key, ended, settled } = prompts();
     const told = ask(asked, 7);
-    const { id } = shown();
     asking.resolved('7');
     expect(asking.waiting).toBe(true);
     asking.resolved(7);
     await expect(told).resolves.toEqual({ decision: 'cancel' });
     expect(ended()).toEqual([{ type: 'prompt-ended', key: key(), reason: 'withdrawn' }]);
-    expect(events).toContainEqual({ type: 'withdrawn', id });
+    expect(events.some(({ type }) => type === 'withdrawn')).toBe(false);
     expect(settled).toHaveBeenCalled();
     expect(() => {
       asking.answers.answer(key(), { kind: 'choice', value: 'accept' });
@@ -206,136 +179,80 @@ describe('Prompts: each request Codex makes raised to the core under a fresh key
   });
 });
 
-describe('Prompts: the events B13 replaces, answered only through the owner (until X10)', () => {
-  it('bridges prototype-shaped question ids without dropping the person’s answer', async () => {
-    const h = prompts();
-    const told = h.ask({
-      ...first('question'),
-      params: {
-        questions: [
-          { id: '__proto__', header: 'Pick', question: 'Which?', isOther: true, options: [] },
-        ],
-      },
-    });
-    const bridged = h.asking.bridge(h.shown().id, { kind: 'question', answers: ['chosen'] });
-    expect(bridged.answer).toEqual({
-      kind: 'questions',
-      answers: Object.fromEntries([['__proto__', { text: 'chosen' }]]),
-    });
-    h.asking.answers.answer(bridged.key, bridged.answer);
-    await expect(told).resolves.toEqual({
-      answers: Object.fromEntries([['__proto__', { answers: ['chosen'] }]]),
-    });
+it('raises a secret question to the owner and answers it without a legacy answer entry', async () => {
+  const asked = first('question');
+  const params = asked.params as { questions: Record<string, unknown>[] };
+  const h = prompts();
+  const told = h.ask({
+    ...asked,
+    params: {
+      ...params,
+      questions: params.questions.map((q) => ({ ...q, isSecret: true, isOther: true })),
+    },
   });
-  it('takes an old card’s “always” as the decision it shows: Codex’s first that keeps', async () => {
-    const asked = first('mcp-approvals', 1);
-    const { ask, shown, answerShown } = prompts();
-    const told = ask(asked);
-    expect(shown()).toEqual({
-      type: 'permission',
-      id: expect.stringMatching(/^prompt:/) as unknown,
-      tool: 'mcp__probe__save_note',
-      summary: 'b',
-      always: 'Allow for this session',
-      title: 'Allow the probe MCP server to run tool "save_note"?',
-    });
-    answerShown({ kind: 'permission', answer: 'always' });
-    // As recorded: allowed for the session.
-    await expect(told).resolves.toEqual(asked.result);
+  const prompt = h.raised()[0]?.prompt;
+  expect(prompt?.kind).toBe('question');
+  if (prompt?.kind !== 'question') throw new Error('No question');
+  expect(prompt.questions.every(({ secret }) => secret === true)).toBe(true);
+  const answers = Object.fromEntries(
+    prompt.questions.map(({ id }) => [id, { text: 'private response' }]),
+  );
+  h.asking.answers.answer(h.key(), { kind: 'questions', answers });
+  await expect(told).resolves.toEqual({
+    answers: Object.fromEntries(
+      prompt.questions.map(({ id }) => [id, { answers: ['private response'] }]),
+    ),
   });
+  expect(h.events.filter(({ type }) => type === 'question')).toEqual([]);
+});
 
-  it('takes an old card’s No as Codex’s No, and its once as Yes', async () => {
-    const { ask, answerShown } = prompts();
-    const command = ask(first('turns'));
-    answerShown({ kind: 'permission', answer: 'deny', feedback: 'not now' });
-    await expect(command).resolves.toEqual({ decision: 'cancel' });
-    const permissions = ask(first('permissions'));
-    answerShown({ kind: 'permission', answer: 'once' });
-    await expect(permissions).resolves.toEqual({
-      permissions: { network: { enabled: true }, fileSystem: null },
-      scope: 'turn',
-    });
-  });
+it('publishes each native request through the owner without a legacy transcript mirror', async () => {
+  const { asking, events, ask, key } = prompts();
+  const pending = ask(first('turns'));
+  try {
+    expect(events.map(({ type }) => type)).toEqual(['prompt', 'status']);
+    asking.answers.answer(key(), { kind: 'choice', value: 'accept' });
+    await pending;
+    expect(
+      events.some(({ type }) =>
+        ['permission', 'question', 'plan', 'elicitation', 'withdrawn'].includes(type),
+      ),
+    ).toBe(false);
+  } finally {
+    asking.withdrawAll();
+  }
+});
 
-  it('takes an old card’s answers to questions by their order, a pick or words', async () => {
-    const asked = first('question');
-    const { ask, shown, answerShown } = prompts();
-    const told = ask(asked);
-    expect(shown()).toEqual({
-      type: 'question',
-      id: expect.stringMatching(/^prompt:/) as unknown,
+it('answers prototype-shaped question ids through the owner without dropping the person’s answer', async () => {
+  const h = prompts();
+  const told = h.ask({
+    ...first('question'),
+    params: {
       questions: [
-        {
-          header: 'Filename',
-          text: 'Should the new file be named a.txt or b.txt?',
-          options: [
-            { label: 'a.txt (Recommended)', description: 'Plan to create a file named a.txt.' },
-            { label: 'b.txt', description: 'Plan to create a file named b.txt.' },
-          ],
-          multiple: false,
-        },
+        { id: '__proto__', header: 'Pick', question: 'Which?', isOther: true, options: [] },
       ],
-    });
-    answerShown({ kind: 'question', answers: ['c.txt'] });
-    await expect(told).resolves.toEqual(asked.result);
+    },
   });
-
-  it('shows a form’s fields and a link in the core’s words, and takes their answers', async () => {
-    const form = first('mcp-approvals', 3);
-    const link = first('mcp-approvals', 4);
-    const { ask, shown, answerShown } = prompts();
-    const formTold = ask(form);
-    expect(shown()).toMatchObject({
-      type: 'elicitation',
-      server: 'probe',
-      message: 'Fill in your profile.',
-      fields: expect.arrayContaining([
-        expect.objectContaining({ name: 'age', kind: 'integer' }),
-      ]) as unknown,
-    });
-    const values = (form.result as { content: Record<string, never> }).content;
-    answerShown({ kind: 'elicitation', action: 'accept', values });
-    await expect(formTold).resolves.toEqual(form.result);
-    const linkTold = ask(link);
-    expect(shown()).toEqual({
-      type: 'elicitation',
-      id: expect.stringMatching(/^elicitation:/) as unknown,
-      server: 'probe',
-      message: 'MCP server “probe” asks you to open a link on auth.example.com',
-      url: 'https://auth.example.com/sign-in?state=probe',
-    });
-    answerShown({ kind: 'elicitation', action: 'accept' });
-    await expect(linkTold).resolves.toEqual(link.result);
+  h.asking.answers.answer(h.key(), {
+    kind: 'questions',
+    answers: Object.fromEntries([['__proto__', { text: 'chosen' }]]),
   });
-
-  it('declines a secret question while the old events show prompts: they keep every answer', async () => {
-    const asked = first('question');
-    const params = asked.params as { questions: Record<string, unknown>[] };
-    const { events, ask } = prompts();
-    await expect(
-      ask({
-        ...asked,
-        params: { ...params, questions: params.questions.map((q) => ({ ...q, isSecret: true })) },
-      }),
-    ).resolves.toEqual({ answers: {} });
-    expect(events).toEqual([
-      {
-        type: 'notice',
-        id: expect.any(String) as unknown,
-        level: 'warning',
-        text: 'Codex asked a secret question, which corrallm can’t ask yet, so it was declined.',
-      },
-    ]);
+  await expect(told).resolves.toEqual({
+    answers: Object.fromEntries([['__proto__', { answers: ['chosen'] }]]),
   });
-
-  it('refuses an old answer the prompt doesn’t take, and one no longer asked', () => {
-    const { asking, ask, shown } = prompts();
-    void ask(first('turns'));
-    expect(() => asking.bridge(shown().id, { kind: 'question', answers: ['yes'] })).toThrow(
-      /isn’t one this request takes/,
-    );
-    expect(() => asking.bridge('prompt:gone', { kind: 'permission', answer: 'once' })).toThrow(
-      /no longer asked/,
-    );
+});
+it('answers a normalized form and URL only through the owner’s typed form answer', async () => {
+  const h = prompts();
+  const form = first('mcp-approvals', 3);
+  const link = first('mcp-approvals', 4);
+  const told = h.ask(form);
+  h.asking.answers.answer(h.key(), {
+    kind: 'form',
+    action: 'accept',
+    values: (form.result as { content: Record<string, never> }).content,
   });
+  await expect(told).resolves.toEqual(form.result);
+  const linked = h.ask(link);
+  h.asking.answers.answer(h.key(), { kind: 'form', action: 'accept' });
+  await expect(linked).resolves.toEqual(link.result);
 });

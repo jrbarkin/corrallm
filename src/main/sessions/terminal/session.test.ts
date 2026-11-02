@@ -38,9 +38,10 @@ let dir: string;
 let runs: FakeClaude[];
 let fake: FakeClaudeOptions;
 let events: SessionEvent[];
+let owners: WeakMap<SessionEvent[], (PromptEvent | PromptEnded)[]>;
 /** What its sessions raised and ended for the core's prompt owner (B13 C6), in order. */
 let prompts: (PromptEvent | PromptEnded)[];
-/** The bridges they installed (B13 C4's mirror, until X10), and when, among what they raised. */
+/** Records bridge installations, which the owner-only production path must never make. */
 let bridges: { translate: Bridge; before: number }[];
 let remembered: string[];
 let sessions: LiveSession[];
@@ -58,6 +59,7 @@ beforeEach(async () => {
   runs = [];
   fake = {};
   events = [];
+  owners = new WeakMap();
   prompts = [];
   bridges = [];
   remembered = [];
@@ -109,12 +111,16 @@ async function start(
   spec: Partial<SessionSpec> = {},
   { using = connector(), sink = events }: { using?: TerminalConnector; sink?: SessionEvent[] } = {},
 ) {
+  const owner: (PromptEvent | PromptEnded)[] = [];
+  owners.set(sink, owner);
   const session = await using.start(
     { ...SPEC, ...spec },
     {
       emit: (event) => {
-        if (event.type === 'prompt' || event.type === 'prompt-ended') prompts.push(event);
-        else sink.push(event);
+        if (event.type === 'prompt' || event.type === 'prompt-ended') {
+          prompts.push(event);
+          owner.push(event);
+        } else sink.push(event);
       },
       remember: (id) => remembered.push(id),
       activity: () => {
@@ -690,78 +696,33 @@ describe('a Terminal session', () => {
       'status:working',
       'user:ask to run the tests',
       'mode:manual',
-      'asking:permission',
       'status:waiting',
-      'asking:',
       'status:working',
       'text:Done: ask to run the tests',
       'end:done',
     ]);
   });
 
-  it('lists what Claude Code asks in its terminal while it waits there, and never answers it', async () => {
+  it('raises described terminal approvals, questions and plans through the owner and never answers them', async () => {
     const session = await start();
-    await session.send({ id: 'm1', text: 'ask to run the tests' });
-    await until(() => {
-      expect(last('asking')?.asks).toHaveLength(1);
-    });
-    expect(last('asking')?.asks).toEqual([
-      {
-        kind: 'permission',
-        id: expect.any(String) as unknown,
-        tool: 'Bash',
-        summary: 'echo hello',
-      },
-    ]);
-    // Every hook is answered with no decision: the user answers in the terminal.
-    expect(claude().answers.length).toBeGreaterThan(0);
-    expect(claude().answers.every(({ answer }) => answer === '{}')).toBe(true);
-    // Answered there: it goes on, and asks nothing.
-    session.terminal?.input('1');
-    await until(() => {
-      expect(last('end')).toBeDefined();
-    });
-    expect(last('asking')?.asks).toEqual([]);
-
-    // Its question, as both hooks tell it (once), and its plan.
-    await session.send({ id: 'm2', text: 'question first' });
-    await until(() => {
-      expect(last('asking')?.asks).toHaveLength(1);
-    });
-    expect(last('asking')?.asks).toEqual([
-      {
-        kind: 'question',
-        id: 'toolu_question',
-        questions: [
-          {
-            header: 'Color',
-            text: 'Pick a color',
-            options: [
-              { label: 'Red', description: 'Warm' },
-              { label: 'Blue', description: 'Cool' },
-            ],
-            multiple: false,
-          },
-        ],
-      },
-    ]);
-    session.terminal?.input('1');
-    await until(() => {
-      expect(last('asking')?.asks).toEqual([]);
-    });
-    await until(() => {
-      expect(seen().filter((one) => one.startsWith('end'))).toHaveLength(2);
-    });
-    await session.send({ id: 'm3', text: 'plan it' });
-    await until(() => {
-      expect(last('asking')?.asks).toEqual([
-        { kind: 'plan', id: 'toolu_plan', plan: '## Plan\nRun `git init`.\n' },
-      ]);
-    });
-    session.terminal?.input('\x1b');
-    await until(() => {
-      expect(last('asking')?.asks).toEqual([]);
-    });
+    for (const [n, text, kind] of [
+      [1, 'ask to run the tests', 'approval'],
+      [2, 'question first', 'question'],
+      [3, 'plan it', 'plan'],
+    ] as const) {
+      await session.send({ id: `m${String(n)}`, text });
+      await until(() => {
+        expect(open().size).toBe(1);
+      });
+      expect(onlyOpen()[1]).toMatchObject({ kind, answerIn: 'terminal' });
+      expect(events.filter(({ type }) => type === 'asking')).toEqual([]);
+      expect(claude().answers.every(({ answer }) => answer === '{}')).toBe(true);
+      session.terminal?.input(kind === 'plan' ? '\x1b' : '1');
+      await until(() => {
+        expect(open().size).toBe(0);
+        expect(events.filter(({ type }) => type === 'end')).toHaveLength(n);
+      });
+    }
   });
 
   it('says what Claude Code waits for when its hooks tell nothing: its status’s words, or its notification’s', async () => {
@@ -772,13 +733,11 @@ describe('a Terminal session', () => {
     });
     claude().report(`state=blocked:kind=question:msg=${btoa('answer: Which region?')}`);
     await until(() => {
-      expect(last('asking')?.asks).toEqual([
-        { kind: 'other', id: expect.any(String) as unknown, text: 'answer: Which region?' },
-      ]);
+      expect(onlyOpen()[1]).toMatchObject({ title: 'answer: Which region?', answerIn: 'terminal' });
     });
     claude().report('state=working');
     await until(() => {
-      expect(last('asking')?.asks).toEqual([]);
+      expect(open().size).toBe(0);
     });
     // A permission it was about to ask long ago (another hook answered it) is not listed.
     await claude().hook('PermissionRequest', {
@@ -789,13 +748,10 @@ describe('a Terminal session', () => {
     vi.spyOn(Date, 'now').mockReturnValue(now + 6000);
     claude().report('state=blocked:kind=permission');
     await until(() => {
-      expect(last('asking')?.asks).toEqual([
-        {
-          kind: 'other',
-          id: expect.any(String) as unknown,
-          text: 'Claude Code asks for your permission.',
-        },
-      ]);
+      expect(onlyOpen()[1]).toMatchObject({
+        title: 'Claude Code asks for your permission.',
+        answerIn: 'terminal',
+      });
     });
     vi.restoreAllMocks();
     claude().report('state=working');
@@ -807,16 +763,17 @@ describe('a Terminal session', () => {
     // An MCP server's question: only its notification says what.
     await session.send({ id: 'm2', text: 'elicit a region' });
     await until(() => {
-      expect(last('asking')?.asks).toEqual([
-        { kind: 'other', id: expect.any(String) as unknown, text: 'shop-db needs your input' },
-      ]);
+      expect(onlyOpen()[1]).toMatchObject({
+        title: 'shop-db needs your input',
+        answerIn: 'terminal',
+      });
     });
     // Claude Code exits: nothing is asked any more.
     claude().exit(1);
     await until(() => {
       expect(last('closed')).toBeDefined();
     });
-    expect(seen().slice(-2)).toEqual(['asking:', 'closed:Claude Code exited with code 1.']);
+    expect(seen().slice(-1)).toEqual(['closed:Claude Code exited with code 1.']);
   });
 
   it('lists what its hooks tell until the turn ends, without status reports', async () => {
@@ -826,9 +783,9 @@ describe('a Terminal session', () => {
     const hide = session.terminal?.show((event) => shown.push(event));
     await session.send({ id: 'm1', text: 'ask to run the tests' });
     await until(() => {
-      expect(last('asking')?.asks).toHaveLength(1);
+      expect(open().size).toBe(1);
     });
-    expect(last('asking')?.asks[0]).toMatchObject({ kind: 'permission', summary: 'echo hello' });
+    expect(onlyOpen()[1]).toMatchObject({ kind: 'approval', summary: 'echo hello' });
     // The hook reaches main before the CLI receives its HTTP response and draws the choices.
     // Answer only once the native prompt is visible, as a person at the console would.
     await until(() => {
@@ -842,7 +799,7 @@ describe('a Terminal session', () => {
     await until(() => {
       expect(last('end')).toBeDefined();
     });
-    expect(last('asking')?.asks).toEqual([]);
+    expect(open().size).toBe(0);
     hide?.();
   });
 
@@ -943,22 +900,24 @@ describe('a Terminal session', () => {
     fake.trust = true;
     const session = await start();
     await until(() => {
-      expect(last('asking')?.asks).toEqual([{ kind: 'trust', id: expect.any(String) as unknown }]);
+      expect(onlyOpen()[1]).toMatchObject({ kind: 'approval', subject: { type: 'trust' } });
     });
     // The user trusts the folder, in the terminal: it asks nothing more.
     session.terminal?.input('\r');
     await until(() => {
-      expect(last('asking')?.asks).toEqual([]);
+      expect(open().size).toBe(0);
     });
     // Nothing ran: no turn, so no status.
-    expect(seen()).toEqual(['started', 'asking:trust', 'asking:']);
+    expect(seen()).toEqual(['started']);
   });
 
   it('waits on the user at once while the folder trust dialog keeps the prompt from showing', async () => {
     fake.trust = true;
     const session = await start();
     await until(() => {
-      expect(seen()).toContain('asking:trust');
+      expect(
+        raised().some((prompt) => prompt.kind === 'approval' && prompt.subject?.type === 'trust'),
+      ).toBe(true);
     });
     await session.send({ id: 'm1', text: 'Hello' });
     expect(seen()).toContain('status:waiting');
@@ -970,9 +929,7 @@ describe('a Terminal session', () => {
     });
     expect(claude().prompts).toEqual(['Hello']);
     expect(seen(1)).toEqual([
-      'asking:trust',
       'status:waiting',
-      'asking:',
       'status:working',
       'user:Hello',
       'mode:manual',
@@ -991,8 +948,8 @@ describe('a Terminal session', () => {
     // Only the first runs, and asks whether to trust the folder.
     expect(runs).toHaveLength(1);
     await until(() => {
-      expect(first.findLast((event) => event.type === 'asking')).toMatchObject({
-        asks: [{ kind: 'trust' }],
+      expect(owners.get(first)?.findLast((event) => event.type === 'prompt')).toMatchObject({
+        prompt: { kind: 'approval', subject: { type: 'trust' } },
       });
     });
     // The other's view says why it waits.
@@ -1073,8 +1030,8 @@ describe('a Terminal session', () => {
       expect(runs).toHaveLength(2);
     });
     await until(() => {
-      expect(second.findLast((event) => event.type === 'asking')).toMatchObject({
-        asks: [{ kind: 'trust' }],
+      expect(owners.get(second)?.findLast((event) => event.type === 'prompt')).toMatchObject({
+        prompt: { kind: 'approval', subject: { type: 'trust' } },
       });
     });
     await new Promise((resolve) => setTimeout(resolve, 30));
@@ -1232,6 +1189,16 @@ describe('a Terminal session', () => {
 describe('what Claude Code waits on in its terminal, raised to the core’s prompt owner (B13 C6)', () => {
   const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
   const pause = (ms = 40) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  it('publishes a terminal wait only through the owner, without an asking mirror or bridge', async () => {
+    const session = await start();
+    await session.send({ id: 'm1', text: 'ask to run the tests' });
+    await until(() => {
+      expect(open().size).toBe(1);
+    });
+    expect(events.filter(({ type }) => type === 'asking')).toEqual([]);
+    expect(bridges).toEqual([]);
+  });
 
   it('raises a permission its hook described, answered in its terminal, once; ended so as its turn goes on', async () => {
     const session = await start();
@@ -1495,7 +1462,7 @@ describe('what Claude Code waits on in its terminal, raised to the core’s prom
     await pause();
     expect(raised()).toHaveLength(1);
     expect(prompts.at(-1)).toMatchObject({ type: 'prompt' });
-    expect(last('asking')?.asks).toHaveLength(1);
+    expect(events.filter(({ type }) => type === 'asking')).toEqual([]);
     expect(last('status')).toEqual({ type: 'status', status: 'waiting' });
     await session.send({ id: 'm2', text: 'From the queue' });
     await pause();
@@ -1527,14 +1494,9 @@ describe('what Claude Code waits on in its terminal, raised to the core’s prom
     expect(prompts.filter((event) => event.type === 'prompt-ended')).toEqual([]);
   });
 
-  it('shows each as the events B13 replaces too, whose answers belong to its terminal, and answers none itself', async () => {
+  it('answers no terminal request through the API and installs no legacy bridge', async () => {
     const session = await start();
-    // Installed before anything is raised.
-    expect(bridges).toHaveLength(1);
-    expect(bridges[0]?.before).toBe(0);
-    expect(() => bridges[0]?.translate('any', { kind: 'permission', answer: 'once' })).toThrow(
-      /terminal/,
-    );
+    expect(bridges).toEqual([]);
     await session.send({ id: 'm1', text: 'ask to run the tests' });
     await until(() => {
       expect(open().size).toBe(1);
@@ -1543,7 +1505,7 @@ describe('what Claude Code waits on in its terminal, raised to the core’s prom
     expect(() => session.prompts?.answer(key, { kind: 'choice', value: 'allow' })).toThrow(
       /terminal/,
     );
-    expect(last('asking')?.asks).toEqual([expect.objectContaining({ kind: 'permission' })]);
+    expect(events.filter(({ type }) => type === 'asking')).toEqual([]);
     expect(claude().written.filter((keys) => keys === '1')).toEqual([]);
   });
 });
