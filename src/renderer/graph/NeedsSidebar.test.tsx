@@ -1,3 +1,5 @@
+import { testPromptEntry } from '../../shared/test-prompts';
+import { promptNeed } from '../../shared/model/prompt-views';
 import { cleanup, render, screen, waitFor, act, within } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 import type { NeedsItem } from '../../shared/model/needs';
@@ -349,28 +351,35 @@ it.each(['before', 'after'] as const)(
 it.each(['permission', 'trust'] as const)(
   'keeps the native Terminal %s wording beside its core Need',
   async (kind) => {
-    const ask =
-      kind === 'permission'
-        ? { kind, id: 'native:/question?%', tool: 'Bash', summary: 'echo hello' }
-        : { kind, id: 'native:/question?%' };
-    const item: NeedsItem = {
-      ...proposal,
-      kind: 'prompt',
-      id: 'prompt/a/0/native:/question?%',
-      agent: 'a',
-      title: kind === 'permission' ? 'Approve Bash: echo hello?' : 'Trust the project folder?',
-      answerIn: 'terminal',
-      choices: [],
-    };
+    const entry = testPromptEntry(
+      {
+        kind: 'approval',
+        title: kind === 'permission' ? 'Approve Bash: echo hello?' : 'Trust the project folder?',
+        answerIn: 'terminal',
+        choices: [],
+        ...(kind === 'permission'
+          ? { summary: 'echo hello', subject: { type: 'tool', tool: 'Bash', input: {} } as const }
+          : { subject: { type: 'trust' } as const }),
+      },
+      'a',
+    );
+    const item = promptNeed(
+      { canvas, need: entry.need, name: 'A', prompt: entry.prompt, standIn: false },
+      'you',
+    );
     const core = fakeCore();
     cores.push(core);
     core.snapshot(`needs:${canvas}`, { items: [item] });
     // Its wording comes with the agent's summary, yours alone (B11 C: bounded asks).
     const summary = sessionView(AgentId.parse('a'), 'claude-code.terminal', {
       ...NEW_SESSION,
-      asking: [ask],
+      entries: [entry],
     }).summary;
     core.snapshot(`sessions:${canvas}`, { agents: { [AgentId.parse('a')]: summary } });
+    core.snapshot(
+      `session:${canvas}:a`,
+      sessionView(AgentId.parse('a'), 'claude-code.terminal', { ...NEW_SESSION, entries: [entry] }),
+    );
     const opened = vi.fn();
     render(
       <NeedsSidebar
@@ -387,9 +396,7 @@ it.each(['permission', 'trust'] as const)(
     await events.click(screen.getByRole('button', { name: 'Needs you' }));
     const card = await screen.findByRole('group', { name: 'A asks, in its terminal' });
     expect(card.textContent).toContain(
-      kind === 'permission'
-        ? 'Bashecho helloDo you want to proceed?'
-        : 'Trust this folder in the terminal.',
+      kind === 'permission' ? 'Approve Bash: echo hello?' : 'Trust the project folder?',
     );
     await events.click(within(card).getByRole('button', { name: 'Open terminal' }));
     expect(opened).toHaveBeenCalledExactlyOnceWith('a');

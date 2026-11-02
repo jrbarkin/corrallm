@@ -17,7 +17,7 @@ import type {
   Question,
 } from '../../../../shared/model/prompts';
 import { mcpRequestTitle, mcpServerWords } from '../../../../shared/model/words';
-import type { FormField, SessionEvent, ToolDetail } from '../../../../shared/session';
+import type { FormField, ToolDetail } from '../../../../shared/session';
 import { displayPath, firstLine, output, preview, property, text } from '../../transcript';
 import type { Places } from '../../transcript';
 import { planConsent } from '../login';
@@ -76,19 +76,12 @@ export type Native =
   | { kind: 'plan' }
   | { kind: 'consent' };
 
-/** How the events B13 replaces show a prompt (until X10 converts the renderer; X11 removes it). */
-export type Shown =
-  | Omit<Extract<SessionEvent, { type: 'permission' }>, 'id'>
-  | Omit<Extract<SessionEvent, { type: 'question' }>, 'id'>
-  | Omit<Extract<SessionEvent, { type: 'plan' }>, 'id'>
-  | Omit<Extract<SessionEvent, { type: 'elicitation' }>, 'id'>;
-
 /**
- * A request raised (its prompt, how its answer goes, how it is shown until X10), or declined at
+ * A request raised (its prompt and how its answer goes), or declined at
  * once: what to tell the user, and what Codex is told.
  */
 export type Raised =
-  { prompt: AdapterPrompt; native: Native; shown: Shown } | { declined: string; result: unknown };
+  { prompt: AdapterPrompt; native: Native } | { declined: string; result: unknown };
 
 /** What a request is raised with: the session's places, and what the translator saw before it. */
 export interface RaiseContext {
@@ -252,22 +245,6 @@ function commandPrompt(params: unknown, { places }: RaiseContext): Raised {
       ...cuts.mark(),
     },
     native: { kind: 'decision', decisions: native },
-    shown: {
-      type: 'permission',
-      tool: stdin ? 'write_stdin' : 'exec_command',
-      summary,
-      always: choices.find(({ hint }) => hint === 'allow_always')?.label ?? null,
-      ...(network === undefined && shownCommand.includes('\n')
-        ? { detail: output(shownCommand) }
-        : {}),
-      ...(network !== undefined
-        ? {
-            title: `Codex wants to reach ${network.host}${reason === undefined ? '' : `: ${reason}`}`,
-          }
-        : reason === undefined
-          ? {}
-          : { title: reason }),
-    },
   };
 }
 
@@ -354,7 +331,6 @@ function hostOf(context: unknown): { host: string; protocol?: string } | undefin
 }
 
 function fileChangePrompt(params: unknown, context: RaiseContext): Raised {
-  const { places } = context;
   const itemId = text(property(params, 'itemId'));
   const found = itemId === undefined ? undefined : context.patch(itemId);
   if (found === undefined || found.files.length === 0)
@@ -418,18 +394,6 @@ function fileChangePrompt(params: unknown, context: RaiseContext): Raised {
     native: {
       kind: 'decision',
       decisions: new Map(choices.map(({ value }) => [value, value])),
-    },
-    shown: {
-      type: 'permission',
-      tool: 'apply_patch',
-      summary: found.summary,
-      always: keeping[0]?.label ?? null,
-      ...(found.detail === undefined ? {} : { detail: found.detail }),
-      ...(reason !== undefined
-        ? { title: reason }
-        : root === undefined
-          ? {}
-          : { title: `Codex wants to write in ${displayPath(root, places)}` }),
     },
   };
 }
@@ -555,13 +519,6 @@ function permissionsPrompt(params: unknown, { places }: RaiseContext): Raised {
       ...cuts.mark(),
     },
     native: { kind: 'permissions', requested },
-    shown: {
-      type: 'permission',
-      tool: 'permissions',
-      summary: words,
-      always: 'Yes, grant these permissions for this session',
-      title: `Codex wants more permissions${reason === undefined ? '' : `: ${reason}`}`,
-    },
   };
 }
 
@@ -630,18 +587,6 @@ function questionsPrompt(params: unknown, context: RaiseContext): Raised {
       ...cuts.mark(),
     },
     native: { kind: 'questions', ids: questions.map(({ id }) => id) },
-    shown: {
-      type: 'question',
-      questions: questions.map((question) => ({
-        header: question.header,
-        text: question.text,
-        options: question.options.map(({ label, description }) => ({
-          label,
-          description: description ?? '',
-        })),
-        multiple: false,
-      })),
-    },
   };
 }
 
@@ -691,7 +636,7 @@ function mcpApproval(
   choices: Choice[],
   omitted: boolean,
   cuts: Cuts,
-): { prompt: AdapterPrompt; shown: Shown } {
+): { prompt: AdapterPrompt } {
   const summary = argumentsSummary(call.arguments);
   return {
     prompt: {
@@ -709,13 +654,6 @@ function mcpApproval(
       choices,
       ...(omitted ? { omitted: true as const } : {}),
       ...cuts.mark(),
-    },
-    shown: {
-      type: 'permission',
-      tool: `mcp__${call.server}__${call.tool}`,
-      summary,
-      always: choices.find(({ hint }) => hint === 'allow_always')?.label ?? null,
-      title,
     },
   };
 }
@@ -874,7 +812,6 @@ function elicitationPrompt(params: unknown, context: RaiseContext): Raised {
         ...cuts.mark(),
       },
       native: { kind: 'link' },
-      shown: { type: 'elicitation', server, message: title, url },
     };
   }
   if (mode === 'form' || mode === 'openai/form' || mode === 'openaiForm') {
@@ -897,7 +834,6 @@ function elicitationPrompt(params: unknown, context: RaiseContext): Raised {
         ...cuts.mark(),
       },
       native: { kind: 'form', fields: parsed.fields },
-      shown: { type: 'elicitation', server, message: title, fields: [...parsed.fields] },
     };
   }
   if (mode === 'openai/userVerification')
@@ -935,7 +871,6 @@ export function implementPrompt(plan: string): Raised {
       ],
     },
     native: { kind: 'plan' },
-    shown: { type: 'plan', plan },
   };
 }
 
@@ -966,14 +901,6 @@ export function consentPrompt(login: Extract<CodexLogin, { kind: 'chatgpt' }>): 
       ],
     },
     native: { kind: 'consent' },
-    shown: {
-      type: 'permission',
-      tool: 'ChatGPT plan',
-      summary: plan,
-      title,
-      detail: output(words),
-      always,
-    },
   };
 }
 

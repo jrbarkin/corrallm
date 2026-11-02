@@ -2,7 +2,6 @@ import type {
   AgentStartSettings,
   MessageImage,
   MessageSender,
-  SessionAnswer,
   TaskMessage,
   TurnResult,
 } from '../../../../shared/session';
@@ -37,7 +36,6 @@ export interface SessionDriver {
   /** Starts a turn; `done` hears when it ends (true if it was interrupted, or failed). */
   start(turn: Turn, done: DriverDone): void;
   /** Passes on the user's answer to the prompt `id`, once it is complete. */
-  answer(id: string, answer: SessionAnswer): void;
   /** Interrupts the turn going on, if any, as Escape does in Claude Code. */
   stop(): void;
   /** The user switched mode, model or effort: the store has already recorded it. */

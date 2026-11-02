@@ -6,8 +6,6 @@ import { useLabel } from '../useDraft';
 import type { AdapterId } from '../../shared/adapter';
 import type { ProjectFolder } from '../../shared/canvas';
 import type {
-  ElicitationAction,
-  FormValue,
   McpChange,
   McpServer,
   PastSession,
@@ -49,7 +47,7 @@ import { AgentSettingsSummary } from './AgentSettings';
 import type { Relation, StackedAgent } from './Rail';
 import type { ComposerControls } from './Composer';
 import { chatStart, rewindPoints, threadTitle } from '../../shared/model/session';
-import type { Answer, MessageImage, PlanAnswer, Session } from '../../shared/model/session';
+import type { MessageImage, Session } from '../../shared/model/session';
 import { Transcript } from './Transcript';
 import './AgentView.css';
 
@@ -60,10 +58,6 @@ export interface SessionControls extends ComposerControls {
   recordCommand?: (text: string) => void;
   /** Starts the session (again), as when the view opens: a connected one resumes. */
   open: () => void;
-  /** `feedback`, with a no: what Claude should do instead. */
-  answer: (permissionId: string, answer: Answer, feedback?: string) => void;
-  answerQuestion: (promptId: string, index: number, answer: string) => void;
-  answerPlan: (promptId: string, answer: PlanAnswer) => void;
   /** The conversations Claude Code kept for the project folder (/resume). */
   pastSessions: () => Promise<PastSession[]>;
   /** Opens one of them in the agent, in place of its own. */
@@ -78,11 +72,6 @@ export interface SessionControls extends ComposerControls {
   /** Its session's MCP servers (/mcp), and a change to one (resolving with them all then). */
   mcpServers: () => Promise<McpServer[]>;
   changeMcpServer: (server: string, change: McpChange) => Promise<McpServer[]>;
-  answerElicitation: (
-    promptId: string,
-    action: ElicitationAction,
-    values?: Record<string, FormValue>,
-  ) => void;
 }
 
 /**
@@ -613,23 +602,9 @@ export function AgentView({
                   <Transcript
                     session={session}
                     agentName={name}
-                    agent={agent}
                     note={sessionNote(agent, connection, project)}
                     answers={{
                       onPromptReply: controls.replyPrompt,
-                      // The prompt's buttons are gone: the keyboard goes back to the composer.
-                      onAnswer: (permissionId, answer, feedback) => {
-                        controls.answer(permissionId, answer, feedback);
-                        composer.current?.focus();
-                      },
-                      onAnswerQuestion: (promptId, index, answer) => {
-                        controls.answerQuestion(promptId, index, answer);
-                        composer.current?.focus();
-                      },
-                      onAnswerPlan: (promptId, answer) => {
-                        controls.answerPlan(promptId, answer);
-                        composer.current?.focus();
-                      },
                       onSwitch: (to) => {
                         onAgent(agent, to);
                       },
@@ -641,10 +616,6 @@ export function AgentView({
                             },
                           }
                         : {}),
-                      onAnswerElicitation: (promptId, action, values) => {
-                        controls.answerElicitation(promptId, action, values);
-                        composer.current?.focus();
-                      },
                       ...(controls.stopTask ? { onStopTask: controls.stopTask } : {}),
                     }}
                   />

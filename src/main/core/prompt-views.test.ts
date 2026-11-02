@@ -181,17 +181,20 @@ function raising(prompts: object[]) {
         }
         if (message.text.includes('Sign in')) {
           host.emit({
-            type: 'elicitation',
-            id: 'sign-in',
-            server: 'tracker',
-            message: `private-form-message: ${LINK}`,
-            url: LINK,
+            type: 'prompt',
+            key: crypto.randomUUID(),
+            prompt: {
+              kind: 'form',
+              server: 'tracker',
+              title: `private-form-message: ${LINK}`,
+              answerIn: 'api',
+              form: { url: LINK },
+            },
           });
         }
         host.emit({ type: 'status', status: 'waiting' });
         return Promise.resolve();
       };
-      session.answer = () => Promise.resolve();
       Object.assign(session, {
         prompts: {
           answer: (key: string, answer: PromptAnswer) => {
@@ -475,7 +478,7 @@ describe('session.transcript and the session topic', () => {
     }
   });
 
-  /** The Worker's prompts among the events B13 replaces, each answered by you. */
+  /** The Worker's owner prompts, each answered by you. */
   async function answered(core: Core): Promise<void> {
     const isWorkers = (item: NeedsItem) => item.agent === 'w' && item.kind === 'prompt';
     const asked = new Set<string>();
@@ -487,24 +490,23 @@ describe('session.transcript and the session topic', () => {
     await ok(core, 'message', { to: 'w', body: '/question' });
     await ok(core, 'reply', {
       to: (await next()).id,
-      answer: { answers: { '0': 'private-answer-text' } },
+      answer: { answers: { q1: { text: 'private-answer-text' } } },
     });
     await ok(core, 'message', { to: 'w', body: '/plan it' });
     await ok(core, 'reply', {
       to: (await next()).id,
-      answer: { plan: { approve: false, feedback: 'private-revise-words' } },
+      answer: { choice: 'keep-planning', feedback: 'private-revise-words' },
     });
     await ok(core, 'message', { to: 'w', body: 'Run it' });
     await ok(core, 'reply', {
       to: (await next()).id,
-      answer: { permission: 'deny', feedback: 'private-feedback-words' },
+      answer: { choice: 'deny', feedback: 'private-feedback-words' },
     });
   }
 
   /** The prompt entries of `agent`'s transcript and of its session topic, as `caller` reads them. */
   async function prompts(core: Core, agent: string, caller: Caller) {
-    const isPrompt = ({ kind }: { kind: string }) =>
-      ['permission', 'question', 'plan', 'elicitation'].includes(kind);
+    const isPrompt = ({ kind }: { kind: string }) => kind === 'prompt';
     const { entries } = await ok<{ entries: Entry[] }>(
       core,
       'session.transcript',
@@ -523,38 +525,37 @@ describe('session.transcript and the session topic', () => {
     };
   }
 
-  it('give you each prompt with your answers; a token that reaches its agent none of them, no label and no feedback', async () => {
+  it('keep each ended prompt in short with your outcome; no reader gets an answer, label or feedback', async () => {
     const core = await start(raising([]).connector);
     await answered(core);
     const yours = await prompts(core, 'w', YOU);
     expect(yours.topic).toEqual(yours.transcript);
     expect(yours.transcript).toEqual([
       expect.objectContaining({
-        kind: 'question',
-        questions: [expect.objectContaining({ answer: 'private-answer-text' })],
+        kind: 'prompt',
+        prompt: expect.objectContaining({ kind: 'question' }) as object,
+        outcome: { type: 'answers', count: 1, by: 'you' },
       }),
       expect.objectContaining({
-        kind: 'plan',
-        answer: { approve: false, feedback: 'private-revise-words' },
+        kind: 'prompt',
+        prompt: expect.objectContaining({ kind: 'plan' }) as object,
+        outcome: expect.objectContaining({ type: 'choice', by: 'you' }) as object,
       }),
       expect.objectContaining({
-        kind: 'permission',
-        always: expect.any(String) as string,
-        answer: 'deny',
-        feedback: 'private-feedback-words',
+        kind: 'prompt',
+        prompt: expect.objectContaining({ kind: 'approval' }) as object,
+        outcome: expect.objectContaining({ type: 'choice', by: 'you' }) as object,
       }),
     ]);
+    expectNothingPrivate(yours, 'your ended prompts');
     for (const caller of REACHED) {
       const theirs = await prompts(core, 'w', caller);
       expect(theirs.topic).toEqual(theirs.transcript);
-      expect(theirs.transcript.map(({ kind }) => kind)).toEqual(['question', 'plan', 'permission']);
+      expect(theirs.transcript.map(({ kind }) => kind)).toEqual(['prompt', 'prompt', 'prompt']);
       for (const entry of theirs.transcript) {
         expect(entry).not.toHaveProperty('answer');
         expect(entry).not.toHaveProperty('feedback');
         expect(entry).not.toHaveProperty('always');
-        if (entry.kind === 'question') {
-          for (const question of entry.questions) expect(question).not.toHaveProperty('answer');
-        }
       }
       expectNothingPrivate(theirs, JSON.stringify(caller));
     }
@@ -567,19 +568,26 @@ describe('session.transcript and the session topic', () => {
     await ok(core, 'reply', { to: item.id, answer: { form: { action: 'accept' } } });
     await vi.waitFor(async () => {
       expect((await prompts(core, 'b', YOU)).transcript).toEqual([
-        expect.objectContaining({ kind: 'elicitation', url: LINK, answer: 'accept' }),
+        expect.objectContaining({
+          kind: 'prompt',
+          prompt: expect.objectContaining({ kind: 'form' }) as object,
+          outcome: { type: 'form', action: 'accept', by: 'you' },
+        }),
       ]);
     });
     for (const caller of REACHED) {
       const theirs = await prompts(core, 'b', caller);
       expect(theirs.transcript).toEqual([
-        {
-          id: 'sign-in',
-          kind: 'elicitation',
-          server: 'tracker',
-          message: 'MCP server “tracker” asks you to open a link',
-        },
+        expect.objectContaining({
+          kind: 'prompt',
+          prompt: expect.objectContaining({
+            kind: 'form',
+            title: 'MCP server “tracker” asks you to open a link',
+          }) as object,
+          outcome: { type: 'form', by: 'you' },
+        }),
       ]);
+      expectNothingPrivate(theirs, JSON.stringify(caller));
       expect(theirs.topic).toEqual(theirs.transcript);
     }
   });
@@ -741,32 +749,17 @@ describe('an approval of an MCP server’s tool: its words yours alone, a token�
 
   /**
    * A session that asks to use the server's tool as each turn starts, as the Agent SDK's and Codex
-   * App Server's adapters raise it: through the core's owner, and, `mirrored` (as both do until
-   * X10), as the event B13 replaces too, its title the server's words.
+   * App Server's adapters raise it through the core's owner, its title the server's words.
    */
-  function asking(mirrored: boolean, adapter: 'claude-code' | 'codex'): Connector<SessionMode> {
+  function asking(adapter: 'claude-code' | 'codex'): Connector<SessionMode> {
     const fake = new FakeConnector({ adapter, mode: adapter === 'codex' ? 'read-only' : 'manual' });
     return {
       start: async (spec, host) => {
-        if (mirrored)
-          host.bridge?.(() => {
-            throw new Error('Answered through the owner in these tests.');
-          });
         const session = await fake.start(spec, host);
         session.send = (message) => {
           host.emit({ type: 'user', id: message.id, text: message.text });
           host.emit({ type: 'status', status: 'working' });
           host.emit({ type: 'prompt', key: crypto.randomUUID(), prompt: tool as never });
-          if (mirrored) {
-            host.emit({
-              type: 'permission',
-              id: `${message.id}/tool`,
-              tool: 'mcp__tracker__create_issue',
-              summary: 'create_issue',
-              always: null,
-              title: WORDS,
-            });
-          }
           host.emit({ type: 'status', status: 'waiting' });
           return Promise.resolve();
         };
@@ -778,7 +771,7 @@ describe('an approval of an MCP server’s tool: its words yours alone, a token�
     };
   }
 
-  async function both(mirrored: boolean): Promise<Core> {
+  async function both(): Promise<Core> {
     const core = await createCore(
       {
         profile,
@@ -791,8 +784,8 @@ describe('an approval of an MCP server’s tool: its words yours alone, a token�
           // Its agent callers are made up: no session authority issued them.
           callers: () => true,
           connectors: {
-            'claude-code.sdk': asking(mirrored, 'claude-code'),
-            'codex.app-server': asking(mirrored, 'codex'),
+            'claude-code.sdk': asking('claude-code'),
+            'codex.app-server': asking('codex'),
           },
           environment: () => Promise.resolve({}),
         },
@@ -838,41 +831,9 @@ describe('an approval of an MCP server’s tool: its words yours alone, a token�
     ['the Agent SDK’s', 'b', 'Reviewer'],
     ['Codex’s', 'w', 'Worker'],
   ])(
-    'gives a reached token the core’s words for %s, in Needs, the transcript and the waiting notice; you the server’s',
+    'gives a reached token the core’s words for %s, waiting and settled; you the server’s',
     async (_which, agent, name) => {
-      // As every adapter raises it until X10: the event B13 replaces stands for the owner's prompt.
-      const live = await both(true);
-      await ok(live, 'message', { to: agent, body: 'File it' }, ORCHESTRATOR);
-      await waitingFor(live, (item) => item.agent === agent && item.kind === 'prompt');
-      const yours = await readsOf(live, agent, YOU);
-      expect(yours.items.map(({ title }) => title)).toEqual([WORDS]);
-      expect(JSON.stringify(yours.transcript)).toContain(WORDS);
-      for (const caller of REACHED) {
-        const theirs = await readsOf(live, agent, caller);
-        expect(theirs.items).toHaveLength(1);
-        expect(JSON.stringify(theirs), JSON.stringify(caller)).not.toMatch(SERVER);
-        // Its reply is refused in what it may read.
-        const refused = await call(
-          live,
-          'reply',
-          { to: yours.items[0]?.id, answer: { choice: 'once' } },
-          caller,
-        );
-        expect(refused).toMatchObject({ ok: false, error: { code: 'refused' } });
-        expect(JSON.stringify(refused)).not.toMatch(SERVER);
-      }
-      const notices = await told(live, name);
-      expect(notices.join('\n')).not.toMatch(SERVER);
-    },
-  );
-
-  it.each([
-    ['the Agent SDK’s', 'b', 'Reviewer'],
-    ['Codex’s', 'w', 'Worker'],
-  ])(
-    'once X10 stops the mirror, gives a reached token the core’s words for %s, waiting and settled; you the server’s',
-    async (_which, agent, name) => {
-      const owned = await both(false);
+      const owned = await both();
       await ok(owned, 'message', { to: agent, body: 'File it' }, ORCHESTRATOR);
       const asked = await waitingFor(
         owned,

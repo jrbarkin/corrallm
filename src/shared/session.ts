@@ -367,52 +367,6 @@ export interface FormField {
 export const ELICITATION_ACTIONS = ['accept', 'decline', 'cancel'] as const;
 export type ElicitationAction = (typeof ELICITATION_ACTIONS)[number];
 
-/** A question the agent asks the user, with answers to pick from. */
-export interface AskedQuestion {
-  /** A short name for it, as a chip shows it. */
-  header: string;
-  text: string;
-  options: { label: string; description: string }[];
-  /** Whether several answers may be picked: they are given joined with ", ". */
-  multiple: boolean;
-}
-
-/**
- * What a session's CLI asks the user in its own terminal (a Terminal session's), as corrallm lists
- * it outside the terminal: a permission (the tool, what it acts on and, where its prompt shows
- * more, a short `detail`: a command in full, an edit's diff, the start of a new file), its
- * questions, a plan to approve, whether to trust the project folder (asked in or out of a turn, as
- * the CLI starts), or anything else it waits on, in its own words. corrallm never answers it: the
- * user does, in the terminal.
- */
-export type TerminalAsk =
-  | { kind: 'permission'; id: string; tool: string; summary: string; detail?: ToolDetail }
-  | { kind: 'question'; id: string; questions: AskedQuestion[] }
-  | { kind: 'plan'; id: string; plan: string }
-  /** Whether to trust the project folder: its CLI's dialog the first time it runs there. */
-  | { kind: 'trust'; id: string }
-  | { kind: 'other'; id: string; text: string };
-
-/**
- * The modes a plan may be carried out in once approved, where the connection lets the user pick.
- */
-export const PLAN_MODES = ['auto', 'acceptEdits', 'manual'] as const;
-export type PlanMode = (typeof PLAN_MODES)[number];
-
-/** How the user answers a plan: go ahead in a mode; or keep planning, saying what to change. */
-export type PlanAnswer = { approve: true; mode: PlanMode } | { approve: false; feedback: string };
-
-/**
- * The user's answer to a prompt a session showed; `feedback` tells it what to do instead.
- */
-export type SessionAnswer =
-  | { kind: 'permission'; answer: 'once' | 'always' | 'deny'; feedback?: string }
-  /** An answer to each of the questions asked, in order. */
-  | { kind: 'question'; answers: string[] }
-  | { kind: 'plan'; answer: PlanAnswer }
-  /** An MCP server's request answered: accepted (with the form's values), declined, or cancelled. */
-  | { kind: 'elicitation'; action: ElicitationAction; values?: Record<string, FormValue> };
-
 /** What a session has used: null where its CLI has not said. */
 export interface SessionUsage {
   /** Whole tokens on this connection's reported basis; null until a proven source reports it. */
@@ -512,47 +466,11 @@ export type SessionEvent =
   /** What the user might send next, as the CLI predicts it after a turn: the composer offers it. */
   | { type: 'suggestion'; text: string }
   /**
-   * What the CLI asks the user in its own terminal now (a Terminal session's), every ask (it
-   * replaces the last list; none once it goes on). Shown outside the terminal, never answered
-   * there: the user answers in the terminal. A session that starts asks nothing yet.
-   */
-  | { type: 'asking'; asks: TerminalAsk[] }
-  /**
    * That corrallm can't hear the session's replies, and why, in the CLI's words (a Terminal
    * session's: the user's or their organization's settings turn off the hooks it listens to). Sent
    * once, as it starts: the queues' Run can't read what it replies.
    */
   | { type: 'unheard'; text: string }
-  /**
-   * It asks before running a tool. `always`: what answering "always" allows, as the CLI words it,
-   * or null where it offers no "always". `title`: what it asks, in the CLI's words, when reported.
-   */
-  | {
-      type: 'permission';
-      id: string;
-      tool: string;
-      summary: string;
-      detail?: ToolDetail;
-      always: string | null;
-      title?: string;
-    }
-  | { type: 'question'; id: string; questions: AskedQuestion[] }
-  /** Plan mode's plan (Markdown), for the user to approve. */
-  | { type: 'plan'; id: string; plan: string }
-  /**
-   * An MCP server asks the user something (an elicitation): to fill in a form (`fields`), or to
-   * open a link (`url`) and go on there.
-   */
-  | {
-      type: 'elicitation';
-      id: string;
-      server: string;
-      message: string;
-      fields?: FormField[];
-      url?: string;
-    }
-  /** A prompt no longer waits for the user: its turn was interrupted, or it was answered elsewhere. */
-  | { type: 'withdrawn'; id: string }
   /**
    * Something to tell the user: compaction, a retry, a usage limit and when it resets, a login
    * problem. `switchTo`: another connection the agent can switch to, to get past it.
@@ -597,8 +515,6 @@ export {
 export const MAX_FILE_QUERY_LENGTH = 500;
 /** At most this many files are offered for a file mention. */
 export const MAX_FILE_MATCHES = 50;
-/** At most this many questions in one prompt. */
-export const MAX_QUESTIONS = 4;
 /** The longest name of an MCP server the renderer may give. */
 export const MAX_MCP_NAME_LENGTH = 200;
 /** The most MCP servers /mcp shows (a session's first, as it reports them). */

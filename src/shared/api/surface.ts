@@ -458,7 +458,7 @@ export const SURFACE = {
     scope: 'none',
     reads: 'sessions',
     self: 'allowed',
-    varies: ['suggestion', 'asking'],
+    varies: ['suggestion'],
   },
   'session.transcript': {
     access: { ...R, worker: 'own' },

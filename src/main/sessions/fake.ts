@@ -4,10 +4,11 @@ import { readFileSync } from 'node:fs';
 import { z } from 'zod';
 
 import type { AdapterId } from '../../shared/adapter';
-import type { ModelChoice, SessionAnswer, SessionMode, UserMessage } from '../../shared/session';
+import type { ModelChoice, SessionMode, UserMessage } from '../../shared/session';
 import type { Connector, LiveSession, PromptAnswers, SessionHost, SessionSpec } from './connector';
 import { checkPromptAnswer } from '../../shared/model/prompts';
-import { fakePrompt } from './fake-prompts';
+import { fakeApproval, fakeQuestions, fakePlan } from './fake-prompts';
+import type { AdapterPrompt, PromptAnswer } from '../../shared/model/prompts';
 
 /** The models a fake session offers. */
 export const FAKE_MODELS: ModelChoice[] = [
@@ -97,7 +98,6 @@ export class FakeConnector implements Connector<SessionMode> {
   readonly #asks: boolean | undefined;
   readonly #adapter: AdapterId;
   readonly #script: FakeScript | undefined;
-  readonly #ownerPrompts: boolean;
 
   /**
    * `pause`: how long (ms) between the events of a turn; `adapter`: the one it stands in for;
@@ -114,7 +114,6 @@ export class FakeConnector implements Connector<SessionMode> {
     asks,
     step = () => new Promise<void>((resolve) => setTimeout(resolve, pause)),
     script = fakeScript(),
-    ownerPrompts = false,
   }: {
     pause?: number;
     adapter?: AdapterId;
@@ -122,10 +121,7 @@ export class FakeConnector implements Connector<SessionMode> {
     asks?: boolean;
     step?: () => Promise<void>;
     script?: FakeScript | undefined;
-    /** App fixtures use the owner; legacy unit fixtures can keep their old protocol until X11. */
-    ownerPrompts?: boolean;
   } = {}) {
-    this.#ownerPrompts = ownerPrompts;
     this.#step = step;
     this.#script = script;
     this.#adapter = adapter;
@@ -152,7 +148,7 @@ export class FakeConnector implements Connector<SessionMode> {
       ...(codex ? { effort: spec.effort ?? null } : {}),
       ...(spec.mode === null && this.#asks !== undefined ? { asks: this.#asks } : {}),
     });
-    const session = new FakeSession(mode, host, this.#step, this.#script, this.#ownerPrompts);
+    const session = new FakeSession(mode, host, this.#step, this.#script);
     this.sessions.push(session);
     return Promise.resolve(session);
   }
@@ -162,7 +158,7 @@ export class FakeConnector implements Connector<SessionMode> {
 interface Turn {
   stopped: boolean;
   /** Ends the wait for the prompt it shows, with the user's answer (or none, when stopped). */
-  answered?: (answer: SessionAnswer | undefined) => void;
+  answered?: (answer: PromptAnswer | undefined) => void;
   /** Entries still open: a running tool, an open prompt. */
   tool: string | undefined;
   prompt: string | undefined;
@@ -182,38 +178,36 @@ class FakeSession implements LiveSession<SessionMode> {
   readonly #script: FakeScript | undefined;
   #turn: Turn | undefined;
   #turns = 0;
-  readonly prompts?: PromptAnswers;
-  #owned: (ReturnType<typeof fakePrompt> & { key: string }) | undefined;
+  readonly prompts: PromptAnswers;
+  #owned: { prompt: AdapterPrompt; key: string } | undefined;
 
   constructor(
     mode: SessionMode | null,
     host: SessionHost,
     step: () => Promise<void>,
     script?: FakeScript,
-    ownerPrompts = false,
   ) {
     this.#mode = mode;
     this.#host = host;
     this.#step = step;
     this.#script = script;
-    if (ownerPrompts)
-      this.prompts = {
-        answer: (key, answer) => {
-          const owned = this.#owned;
-          if (owned?.key !== key) throw new Error('That prompt is no longer waiting.');
-          const native = owned.answer(checkPromptAnswer(owned.prompt, answer));
-          this.#owned = undefined;
-          void this.answer(key, native);
-        },
-        decline: (key) => {
-          if (this.#owned?.key !== key) return;
-          this.#owned = undefined;
-          if (this.#turn) {
-            this.#turn.prompt = undefined;
-            this.#turn.answered?.(undefined);
-          }
-        },
-      };
+    this.prompts = {
+      answer: (key, answer) => {
+        const owned = this.#owned;
+        if (owned?.key !== key) throw new Error('That prompt is no longer waiting.');
+        const checked = checkPromptAnswer(owned.prompt, answer);
+        this.#owned = undefined;
+        this.#answer(key, checked);
+      },
+      decline: (key) => {
+        if (this.#owned?.key !== key) return;
+        this.#owned = undefined;
+        if (this.#turn) {
+          this.#turn.prompt = undefined;
+          this.#turn.answered?.(undefined);
+        }
+      },
+    };
   }
 
   send(message: UserMessage): Promise<void> {
@@ -224,13 +218,11 @@ class FakeSession implements LiveSession<SessionMode> {
     return Promise.resolve();
   }
 
-  answer(promptId: string, answer: SessionAnswer): Promise<void> {
+  #answer(promptId: string, answer: PromptAnswer): void {
     const turn = this.#turn;
-    if (turn?.prompt !== promptId)
-      return Promise.reject(new Error(`No prompt ${promptId} is open`));
+    if (turn?.prompt !== promptId) throw new Error(`No prompt ${promptId} is open`);
     turn.prompt = undefined;
     turn.answered?.(answer);
-    return Promise.resolve();
   }
 
   interrupt(): Promise<void> {
@@ -264,31 +256,20 @@ class FakeSession implements LiveSession<SessionMode> {
   }
 
   async #play({ id, text }: UserMessage, turn: Turn): Promise<void> {
-    const emit: SessionHost['emit'] = (event) => {
-      if (
-        this.prompts &&
-        (event.type === 'permission' || event.type === 'question' || event.type === 'plan')
-      ) {
-        const owned = { ...fakePrompt(event), key: randomUUID() };
-        this.#owned = owned;
-        turn.prompt = owned.key;
-        this.#host.emit({ type: 'prompt', key: owned.key, prompt: owned.prompt });
-      } else if (this.prompts && event.type === 'withdrawn') {
-        this.#owned = undefined;
-        this.#host.emit({ type: 'prompt-ended', key: event.id, reason: 'withdrawn' });
-      } else this.#host.emit(event);
-    };
+    const emit = this.#host.emit.bind(this.#host);
     const started = Date.now();
     const step = async () => {
       await this.#step();
       return !turn.stopped;
     };
     /** Shows a prompt, and waits for its answer (undefined: the turn was stopped). */
-    const ask = (prompt: string, show: () => void) =>
-      new Promise<SessionAnswer | undefined>((resolve) => {
-        turn.prompt = prompt;
+    const ask = (prompt: AdapterPrompt) =>
+      new Promise<PromptAnswer | undefined>((resolve) => {
+        const key = randomUUID();
+        this.#owned = { key, prompt };
+        turn.prompt = key;
         turn.answered = resolve;
-        show();
+        emit({ type: 'prompt', key, prompt });
         emit({ type: 'status', status: 'waiting' });
       });
     const run = async (): Promise<boolean> => {
@@ -302,45 +283,29 @@ class FakeSession implements LiveSession<SessionMode> {
       emit({ type: 'text', id: `${id}/reply`, text });
 
       if (text.startsWith('/question')) {
-        const answer = await ask(`${id}/question`, () => {
-          emit({
-            type: 'question',
-            id: `${id}/question`,
-            questions: [
-              {
-                header: 'Go on?',
-                text: 'Shall I go on?',
-                options: [
-                  { label: 'Yes', description: 'Carry on' },
-                  { label: 'No', description: 'Stop here' },
-                ],
-                multiple: false,
-              },
-            ],
-          });
-        });
-        if (answer?.kind !== 'question') return false;
+        const answer = await ask(fakeQuestions());
+        if (answer?.kind !== 'questions') return false;
         emit({ type: 'status', status: 'working' });
         emit({
           type: 'text',
           id: `${id}/answer`,
-          text: `Answer received: ${answer.answers.join('; ')}`,
+          text: `Answer received: ${Object.values(answer.answers)
+            .map((one) => ('text' in one ? one.text : one.picked.join(', ')))
+            .join('; ')}`,
         });
         return true;
       }
 
       if (text.startsWith('/plan')) {
-        const answer = await ask(`${id}/plan`, () => {
-          emit({ type: 'plan', id: `${id}/plan`, plan: '1. Read the code\n2. Change it' });
-        });
-        if (answer?.kind !== 'plan') return false;
+        const answer = await ask(fakePlan());
+        if (answer?.kind !== 'choice') return false;
         emit({ type: 'status', status: 'working' });
-        if (answer.answer.approve) {
-          this.#mode = answer.answer.mode;
-          emit({ type: 'mode', mode: answer.answer.mode });
+        if (answer.value !== 'keep-planning') {
+          this.#mode = answer.value === 'accept-edits' ? 'acceptEdits' : 'manual';
+          emit({ type: 'mode', mode: answer.value === 'accept-edits' ? 'acceptEdits' : 'manual' });
           emit({ type: 'text', id: `${id}/approved`, text: 'Carrying out the plan.' });
         } else {
-          emit({ type: 'text', id: `${id}/revise`, text: `Revising: ${answer.answer.feedback}` });
+          emit({ type: 'text', id: `${id}/revise`, text: `Revising: ${answer.feedback ?? ''}` });
         }
         return true;
       }
@@ -350,17 +315,10 @@ class FakeSession implements LiveSession<SessionMode> {
       turn.tool = tool;
       emit({ type: 'tool', id: tool, ...command, status: 'running' });
       if (this.#mode !== null && ASKING.includes(this.#mode)) {
-        const answer = await ask(`${id}/permission`, () => {
-          emit({
-            type: 'permission',
-            id: `${id}/permission`,
-            ...command,
-            always: 'Yes, and don’t ask again for echo commands in this folder',
-          });
-        });
+        const answer = await ask(fakeApproval());
         if (answer === undefined) return false;
         emit({ type: 'status', status: 'working' });
-        if (answer.kind === 'permission' && answer.answer === 'deny') {
+        if (answer.kind === 'choice' && answer.value === 'deny') {
           emit({ type: 'tool', id: tool, ...command, status: 'failed' });
           turn.tool = undefined;
           emit({ type: 'text', id: `${id}/denied`, text: 'OK, I won’t run it.' });
@@ -399,7 +357,10 @@ class FakeSession implements LiveSession<SessionMode> {
           status: 'interrupted',
         });
       }
-      if (turn.prompt !== undefined) emit({ type: 'withdrawn', id: turn.prompt });
+      if (turn.prompt !== undefined) {
+        this.#owned = undefined;
+        emit({ type: 'prompt-ended', key: turn.prompt, reason: 'withdrawn' });
+      }
     }
     this.#turns += 1;
     emit({

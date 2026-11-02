@@ -4,16 +4,13 @@ import type { RunRefusal as Refusal } from '../../../../shared/model/run';
 import { parseRole } from '../../../../shared/role';
 import type {
   AgentSettings,
-  ElicitationAction,
   FilesRewind,
-  FormValue,
   McpChange,
   McpServer,
   MessageSender,
   PastSession,
   RewindRestore,
   RewindResult,
-  SessionAnswer,
   SettingsOptions,
   TaskMessage,
   TurnResult,
@@ -26,23 +23,9 @@ import type { SessionBackend } from '../transcript/receive';
 import type { DriverIO, SessionDriver } from '../transcript/driver';
 import { UnavailableDriver } from '../transcript/unavailable';
 import { decodeSubmissions, encodeSubmissions, pruneSubmissions } from './submission-state';
-import {
-  answersOf,
-  isOpen,
-  NEW_SESSION,
-  threadTitle,
-  turnReply,
-} from '../../../../shared/model/session';
-import { reduceWithChanges } from '../transcript/reduce';
-import type {
-  Answer,
-  Entry,
-  MessageImage,
-  Mode,
-  PlanAnswer,
-  Prompt,
-  Session,
-} from '../../../../shared/model/session';
+import { NEW_SESSION, threadTitle, turnReply } from '../../../../shared/model/session';
+import { reduce } from '../transcript/reduce';
+import type { MessageImage, Mode, Session } from '../../../../shared/model/session';
 import type { SessionAction } from '../transcript/reduce';
 
 export interface SubmissionObserver {
@@ -69,9 +52,7 @@ interface Driving {
  * Claude subscription) keeps its messages queued, unsent, and says so to whoever sent them, until
  * the agent runs another way (or the session starts after all). Each agent's adapter and
  * connection are read in the catalog it is given (the run's: catalog.ts).
- * Each session carries its open prompts, in transcript order, maintained with entry changes so
- * Needs never scans closed history. Checkpoints keep submissions only; native history rebuilds
- * the runtime index when it is merged, and resets/rewinds discard it with the transcript.
+ * The prompt owner keeps the live occurrence index; this store keeps its transcript entries.
  */
 export class SessionStore {
   #sessions: Readonly<Record<string, Session>> = {};
@@ -510,7 +491,6 @@ export class SessionStore {
       ...this.#sessions,
       [agentId]: {
         ...session,
-        prompts: session.prompts ?? session.entries.filter(isOpen),
         submissions: pruneSubmissions([...(session.submissions ?? []), message]),
       },
     };
@@ -626,74 +606,6 @@ export class SessionStore {
   /** Reconnects, enables or disables one of them; resolves with them all as they are then. */
   changeMcpServer(agentId: string, server: string, change: McpChange): Promise<McpServer[]> {
     return this.#backend.changeMcp(agentId, server, change);
-  }
-
-  /** Answers an MCP server's request: accepted (with the form's values), declined or cancelled. */
-  answerElicitation(
-    agentId: string,
-    promptId: string,
-    action: ElicitationAction,
-    values?: Record<string, FormValue>,
-  ): void {
-    this.#drivers.get(agentId)?.driver.answer(promptId, {
-      kind: 'elicitation',
-      action,
-      ...(values === undefined ? {} : { values }),
-    });
-  }
-
-  /** Answers a permission prompt; with a no, `feedback` tells Claude what to do instead. */
-  answer(agentId: string, permissionId: string, answer: Answer, feedback?: string): void {
-    this.#drivers.get(agentId)?.driver.answer(permissionId, {
-      kind: 'permission',
-      answer,
-      ...(feedback === undefined || feedback.trim() === '' ? {} : { feedback: feedback.trim() }),
-    });
-  }
-
-  /** Answers one of the questions of a question prompt; once all have answers, they go. */
-  answerQuestion(agentId: string, promptId: string, index: number, answer: string): void {
-    this.#dispatch(agentId, { type: 'answerQuestion', id: promptId, index, answer });
-    const answers = answersOf(this.of(agentId), promptId);
-    if (answers) {
-      this.#drivers.get(agentId)?.driver.answer(promptId, { kind: 'question', answers });
-    }
-  }
-
-  /** Approves a plan, or not. */
-  answerPlan(agentId: string, promptId: string, answer: PlanAnswer): void {
-    this.#drivers.get(agentId)?.driver.answer(promptId, { kind: 'plan', answer });
-  }
-
-  /**
-   * An answer the agent's CLI has taken already (the core's reply, B11 Design §7: told the CLI first,
-   * and awaited, so a CLI that refused it leaves its prompt open), shown on its prompt: nothing is
-   * told the CLI again.
-   */
-  answered(agentId: string, promptId: string, answer: SessionAnswer): void {
-    switch (answer.kind) {
-      case 'permission':
-        this.#dispatch(agentId, {
-          type: 'answer',
-          id: promptId,
-          answer: answer.answer,
-          ...(answer.feedback === undefined || answer.feedback.trim() === ''
-            ? {}
-            : { feedback: answer.feedback.trim() }),
-        });
-        return;
-      case 'question':
-        answer.answers.forEach((one, index) => {
-          this.#dispatch(agentId, { type: 'answerQuestion', id: promptId, index, answer: one });
-        });
-        return;
-      case 'plan':
-        this.#dispatch(agentId, { type: 'answerPlan', id: promptId, answer: answer.answer });
-        return;
-      case 'elicitation':
-        this.#dispatch(agentId, { type: 'answerElicitation', id: promptId, action: answer.action });
-        return;
-    }
   }
 
   /** Interrupts the turn going on, if any. */
@@ -1085,7 +997,7 @@ export class SessionStore {
     this.#sessions = {
       ...this.#sessions,
       [agentId]: {
-        ...indexed(session, action),
+        ...reduce(session, action),
         ...(submissions === undefined ? {} : { submissions }),
       },
     };
@@ -1148,7 +1060,6 @@ export class SessionStore {
       const session = this.of(id);
       next[id] = {
         ...session,
-        prompts: session.prompts ?? session.entries.filter(isOpen),
         submissions,
       };
     }
@@ -1159,38 +1070,6 @@ export class SessionStore {
   #notify(): void {
     for (const listener of this.#listeners) listener();
   }
-}
-
-/**
- * Keep the exact prompt objects, in transcript order, beside the transcript. Normal output never
- * scans history to update this index. A history merge, or a generic update reopening an entry,
- * can change their order/places arbitrarily and rebuilds once. Metadata-only session writes
- * retain the index with their unchanged entries.
- */
-function indexed(session: Session, action: SessionAction): Session {
-  const prompts = session.prompts ?? session.entries.filter(isOpen);
-  const replacements = new Map<Entry, Entry>();
-  const changes = { opened: false };
-  const next = reduceWithChanges(session, action, (before, after) => {
-    if (isOpen(before) || isOpen(after)) replacements.set(before, after);
-    if (!isOpen(before) && isOpen(after)) changes.opened = true;
-  });
-  if (next.entries === session.entries) return { ...next, prompts };
-  let index: readonly Prompt[] = prompts;
-  if (action.type === 'restore' || changes.opened) index = next.entries.filter(isOpen);
-  else if (action.type === 'clear' || action.type === 'end') index = [];
-  else if ((action.type === 'add' || action.type === 'ask') && isOpen(action.entry)) {
-    index = [...prompts, action.entry];
-  } else if (action.type === 'received') {
-    // Receipt can move a user entry past native messages (and remove duplicate ids).
-    index = prompts.filter((entry) => entry.id !== action.id);
-  } else if (replacements.size > 0) {
-    index = prompts.flatMap((entry) => {
-      const after = replacements.get(entry) ?? entry;
-      return isOpen(after) ? [after] : [];
-    });
-  }
-  return { ...next, prompts: index };
 }
 
 /** The files a rewind restored, as a notice names them: "notes.txt (+1 −1)", "4 files (a, b, c and 1 more; +4 −2)". */

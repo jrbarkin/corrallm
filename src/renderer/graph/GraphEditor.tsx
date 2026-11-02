@@ -842,7 +842,6 @@ function Editor({
       const asking =
         dockNeeds.has(n.id) ||
         status === 'waiting' ||
-        (sessions[n.id]?.asking?.length ?? 0) > 0 ||
         (run.running && run.agents[n.id]?.status === 'asking');
       const classes = [
         ...(color === undefined ? [] : [`group-color-${String(color)}`]),

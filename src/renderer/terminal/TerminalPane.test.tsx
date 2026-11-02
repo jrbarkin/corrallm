@@ -1,3 +1,4 @@
+import { testPromptEvent, testPromptId } from '../../shared/test-prompts';
 import { NEW_SESSION } from '../../shared/model/session';
 import { Prompt, PromptId } from '../../shared/model/prompts';
 import { expectOneOp } from '../test-api';
@@ -5,7 +6,8 @@ import { renderReady, events } from '../test-render';
 import { act, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { SessionEvent, SettingsOptions, TerminalAsk } from '../../shared/session';
+import type { SettingsOptions } from '../../shared/session';
+import type { FixtureSessionEvent as SessionEvent } from '../test-sessions';
 import type { TerminalEvent } from '../../shared/terminal';
 import { catalog } from '../catalog';
 import { fromFile } from '../../shared/model/file';
@@ -145,7 +147,7 @@ describe('a Terminal agent', () => {
       });
     });
     expect(view.getByText('Trust this folder in the terminal')).toBeTruthy();
-    expect(canvas.session('a')?.asking).toBeUndefined();
+    expect(canvas.session('a')).not.toHaveProperty('asking');
   });
 
   it('focuses its own terminal from the owner prompt card without replying', async () => {
@@ -285,24 +287,32 @@ describe('a Terminal agent', () => {
           terminal.finish();
         });
         const element = view.getByLabelText('Claude Code’s terminal');
-        for (const asks of [
-          [{ kind: 'permission', id: 'p', tool: 'Bash', summary: 'echo hello' }],
-          [
-            {
-              kind: 'question',
-              id: 'q',
-              questions: [
-                {
-                  header: 'Database',
-                  text: 'Which database?',
-                  options: [{ label: 'SQLite', description: 'One file, for tests' }],
-                  multiple: false,
-                },
-              ],
-            },
-          ],
-        ] satisfies TerminalAsk[][]) {
-          session({ type: 'asking', asks }, { type: 'status', status: 'waiting' });
+        for (const raised of [
+          testPromptEvent({
+            kind: 'approval',
+            title: 'Approve Bash',
+            summary: 'echo hello',
+            subject: { type: 'tool', tool: 'Bash', input: {} },
+            answerIn: 'terminal',
+            choices: [],
+          }),
+          testPromptEvent({
+            kind: 'question',
+            title: 'Questions for you',
+            answerIn: 'terminal',
+            questions: [
+              {
+                id: 'database',
+                header: 'Database',
+                text: 'Which database?',
+                options: [{ label: 'SQLite', description: 'One file, for tests' }],
+                multiple: false,
+                other: true,
+              },
+            ],
+          }),
+        ]) {
+          session(raised, { type: 'status', status: 'waiting' });
           await events.click(view.getByRole('button', { name: 'Back to the canvas' }));
           const closing = closings.at(-1);
           expect(closing).toBeDefined();
@@ -320,7 +330,7 @@ describe('a Terminal agent', () => {
           expect(closing?.cancel).toHaveBeenCalledOnce();
           expect(terminal.disposed).toBe(false);
           session(
-            { type: 'asking', asks: [] },
+            { type: 'prompt-ended', key: raised.key, reason: 'answered-natively' },
             {
               type: 'end',
               messages: [],
@@ -445,13 +455,23 @@ describe('a Terminal agent', () => {
     session(
       { type: 'status', status: 'working' },
       { type: 'user', id: 'typed', text: 'Set up the repo' },
-      {
-        type: 'asking',
-        asks: [
-          { kind: 'permission', id: 'p', tool: 'Bash', summary: 'git init' },
+      ...[
+        testPromptEvent(
+          {
+            kind: 'approval',
+            title: 'Approve ' + 'Bash',
+            summary: 'git init',
+            subject: { type: 'tool', tool: 'Bash', input: {} },
+            answerIn: 'terminal',
+            choices: [],
+          },
+          testPromptId('p'),
+        ),
+        testPromptEvent(
           {
             kind: 'question',
-            id: 'q',
+            title: 'Questions for you',
+            answerIn: 'terminal',
             questions: [
               {
                 header: 'Color',
@@ -462,12 +482,25 @@ describe('a Terminal agent', () => {
                 ],
                 multiple: false,
               },
-            ],
+            ].map((question, index) => ({ ...question, id: 'q' + String(index + 1), other: true })),
           },
-          { kind: 'plan', id: 'plan', plan: '## Set up\nRun `git init`.' },
-          { kind: 'other', id: 'o', text: 'answer: Which region?' },
-        ],
-      },
+          testPromptId('q'),
+        ),
+        testPromptEvent(
+          {
+            kind: 'plan',
+            title: 'Approve its plan?',
+            plan: '## Set up\nRun `git init`.',
+            answerIn: 'terminal',
+            choices: [],
+          },
+          testPromptId('plan'),
+        ),
+        testPromptEvent(
+          { kind: 'approval', title: 'answer: Which region?', answerIn: 'terminal', choices: [] },
+          testPromptId('o'),
+        ),
+      ],
       { type: 'status', status: 'waiting' },
     );
     await events.click(view.getByRole('button', { name: 'Back to the canvas' }));
@@ -477,15 +510,15 @@ describe('a Terminal agent', () => {
     expect(sidebar.getByRole('heading', { level: 2 }).textContent).toBe('Needs you 4');
     const cards = sidebar.getAllByRole('group', { name: 'a asks, in its terminal' });
     expect(cards.map((card) => card.textContent)).toEqual([
-      'aBashgit initDo you want to proceed?Answer it in the terminal.Open terminal',
-      'aColorPick a colorRedWarmBlueCoolAnswer it in the terminal.Open terminal',
-      'aPlanReady to code? Here is the plan:Set upRun git init.Answer it in the terminal.Open terminal',
-      'aanswer: Which region?Answer it in the terminal.Open terminal',
+      'Session promptaAgent’s requestApprove Bashgit initTool: Bash\n{}Answer it in the terminal.Open terminal',
+      'Session promptaAgent’s requestQuestions for youColorPick a colorRedWarmBlueCoolAnswer it in the terminal.Open terminal',
+      'Session promptaAgent’s requestApprove its plan?## Set up\nRun `git init`.Answer it in the terminal.Open terminal',
+      'Session promptaAgent’s requestanswer: Which region?Answer it in the terminal.Open terminalNot waitingOnly you can tell, from its terminal, that its CLI isn’t waiting for you.',
     ]);
     // Never answered here: nothing to type in, no answers to pick.
     expect(sidebar.queryByRole('textbox')).toBeNull();
     expect(new Set(sidebar.getAllByRole('button').map((button) => button.textContent))).toEqual(
-      new Set(['a', 'Open terminal']),
+      new Set(['a', 'Open terminal', 'Not waiting']),
     );
 
     // Open terminal: the agent's view, where the user answers it.
@@ -495,7 +528,14 @@ describe('a Terminal agent', () => {
     await settle();
     expect(screen.getByRole('dialog', { name: 'a' })).toBeTruthy();
     // Answered there: nothing is listed any more.
-    session({ type: 'asking', asks: [] }, { type: 'status', status: 'working' });
+    session(
+      ...['p', 'q', 'plan', 'o'].map((id) => ({
+        type: 'prompt-ended' as const,
+        key: testPromptId(id),
+        reason: 'answered-natively' as const,
+      })),
+      { type: 'status', status: 'working' },
+    );
     expect(screen.queryByRole('complementary', { name: 'Needs you' })).toBeNull();
   });
 
@@ -504,7 +544,18 @@ describe('a Terminal agent', () => {
     // Started fresh, no turn going on: its folder trust dialog, whose default is "No, exit".
     session(
       { type: 'started', model: null, mode: 'manual', models: [] },
-      { type: 'asking', asks: [{ kind: 'trust', id: 't' }] },
+      ...[
+        testPromptEvent(
+          {
+            kind: 'approval',
+            title: 'Trust the project folder?',
+            subject: { type: 'trust' },
+            answerIn: 'terminal',
+            choices: [],
+          },
+          testPromptId('t'),
+        ),
+      ],
     );
     /** What its bar says the session is doing. */
     const status = () =>
@@ -518,12 +569,18 @@ describe('a Terminal agent', () => {
     const sidebar = within(screen.getByRole('complementary', { name: 'Needs you' }));
     const asked = sidebar.getByRole('group', { name: 'a asks, in its terminal' });
     expect(asked.textContent).toBe(
-      'aClaude Code asks whether you trust this folder before it works in it.Trust this folder in the terminal.Open terminal',
+      'Session promptaAgent’s requestTrust the project folder?Trust this project folderAnswer it in the terminal.Open terminal',
     );
     await events.click(within(asked).getByRole('button', { name: 'Open terminal' }));
     await settle();
     // Trusted there: it no longer needs the user.
-    session({ type: 'asking', asks: [] });
+    session(
+      ...['t'].map((id) => ({
+        type: 'prompt-ended' as const,
+        key: testPromptId(id),
+        reason: 'answered-natively' as const,
+      })),
+    );
     expect(status()?.textContent).toBe('Idle');
     expect(card().classList.contains('asking')).toBe(false);
   });
@@ -533,14 +590,15 @@ describe('a Terminal agent', () => {
     session(
       { type: 'status', status: 'working' },
       { type: 'user', id: 'typed', text: 'Greet the world' },
-      {
-        type: 'asking',
-        asks: [
+      ...[
+        testPromptEvent(
           {
-            kind: 'permission',
-            id: 'edit',
-            tool: 'Edit',
+            kind: 'approval',
+            title: 'Approve ' + 'Edit',
             summary: 'notes.txt',
+            subject: { type: 'tool', tool: 'Edit', input: {} },
+            answerIn: 'terminal',
+            choices: [],
             detail: {
               kind: 'diff',
               added: 1,
@@ -551,15 +609,21 @@ describe('a Terminal agent', () => {
               ],
             },
           },
+          testPromptId('edit'),
+        ),
+        testPromptEvent(
           {
-            kind: 'permission',
-            id: 'bash',
-            tool: 'Bash',
+            kind: 'approval',
+            title: 'Approve ' + 'Bash',
             summary: 'git add -A …',
+            subject: { type: 'tool', tool: 'Bash', input: {} },
+            answerIn: 'terminal',
+            choices: [],
             detail: { kind: 'output', text: 'git add -A\ngit commit -m "Greet"' },
           },
-        ],
-      },
+          testPromptId('bash'),
+        ),
+      ],
       { type: 'status', status: 'waiting' },
     );
     await events.click(view.getByRole('button', { name: 'Back to the canvas' }));
@@ -568,14 +632,13 @@ describe('a Terminal agent', () => {
     const sidebar = within(screen.getByRole('complementary', { name: 'Needs you' }));
     const cards = sidebar.getAllByRole('group', { name: 'a asks, in its terminal' });
     expect(cards.map((card) => card.textContent)).toEqual([
-      'aEditnotes.txt- hello\n+ hello world\n' +
-        'Do you want to make this edit to notes.txt?Answer it in the terminal.Open terminal',
-      'aBashgit add -A …git add -A\ngit commit -m "Greet"' +
-        'Do you want to proceed?Answer it in the terminal.Open terminal',
+      'Session promptaAgent’s requestApprove Editnotes.txt- hello\n+ hello worldTool: Edit\n{}Answer it in the terminal.Open terminal',
+      'Session promptaAgent’s requestApprove Bashgit add -A …git add -A\ngit commit -m "Greet"Tool: Bash\n{}Answer it in the terminal.Open terminal',
     ]);
     const [edit] = cards;
-    const removed = edit?.querySelector('[data-line="remove"]');
-    expect(removed?.textContent).toBe('- hello\n');
+    expect([...(edit?.querySelectorAll('pre') ?? [])].map((part) => part.textContent)).toContain(
+      '- hello\n+ hello world',
+    );
   });
 
   it('shows Codex’s own terminal for a Codex agent, and follows its turns there and on the canvas', async () => {
@@ -597,10 +660,17 @@ describe('a Terminal agent', () => {
     );
     expect(card().classList.contains('working')).toBe(true);
     session(
-      {
-        type: 'asking',
-        asks: [{ kind: 'other', id: 'w', text: 'Codex needs you: see its terminal.' }],
-      },
+      ...[
+        testPromptEvent(
+          {
+            kind: 'approval',
+            title: 'Codex needs you: see its terminal.',
+            answerIn: 'terminal',
+            choices: [],
+          },
+          testPromptId('w'),
+        ),
+      ],
       { type: 'status', status: 'waiting' },
     );
     expect(status().textContent).toBe('Needs you, in the terminal');
@@ -611,7 +681,13 @@ describe('a Terminal agent', () => {
     expect(sidebar.getByRole('group', { name: 'a asks, in its terminal' }).textContent).toContain(
       'Codex needs you: see its terminal.',
     );
-    session({ type: 'asking', asks: [] });
+    session(
+      ...['w'].map((id) => ({
+        type: 'prompt-ended' as const,
+        key: testPromptId(id),
+        reason: 'answered-natively' as const,
+      })),
+    );
     session({
       type: 'end',
       messages: ['typed'],

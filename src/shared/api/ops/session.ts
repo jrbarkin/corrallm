@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { HandoffSchema } from '../../model/handoff';
 import { PARTY_PATTERN } from '../../model/messages';
 import { AnswerIn, ChoiceHint, PromptId, PromptKind, PromptSubject } from '../../model/prompts';
-import { ELICITATION_ACTIONS, MAX_CONVERSATIONS, MAX_CONVERSATION_LABEL } from '../../session';
+import { MAX_CONVERSATIONS, MAX_CONVERSATION_LABEL } from '../../session';
 import { define } from '../define';
 import type { OpDef } from '../define';
 import { AgentId, OpCanvas } from '../ids';
@@ -42,17 +42,6 @@ const ToolDetail = z.union([
   }),
   z.strictObject({ kind: z.literal('output'), text: z.string() }),
 ]);
-
-const Question = z.strictObject({
-  header: z.string(),
-  text: z.string(),
-  options: z.array(z.strictObject({ label: z.string(), description: z.string() })),
-  multiple: z.boolean(),
-  answer: z.string().optional(),
-});
-
-/** Whether an entry is withdrawn: a prompt the session stopped waiting for. */
-const withdrawn = z.boolean().optional();
 
 /**
  * Whether an entry was cut to fit its page (MAX_PAGE_BYTES): its text, plan, output or diff ends
@@ -192,54 +181,10 @@ export const TranscriptEntry = z.discriminatedUnion('kind', [
   }),
   z.strictObject({
     id: z.string(),
-    kind: z.literal('permission'),
-    tool: z.string(),
-    summary: z.string(),
-    detail: ToolDetail.optional(),
-    always: z.string().nullable().optional(),
-    title: z.string().optional(),
-    answer: z.enum(['once', 'always', 'deny']).optional(),
-    feedback: z.string().optional(),
-    withdrawn,
-    cut,
-  }),
-  z.strictObject({
-    id: z.string(),
-    kind: z.literal('question'),
-    questions: z.array(Question),
-    withdrawn,
-    cut,
-  }),
-  z.strictObject({
-    id: z.string(),
-    kind: z.literal('plan'),
-    plan: z.string(),
-    answer: z
-      .union([
-        z.strictObject({ approve: z.literal(true), mode: z.string() }),
-        z.strictObject({ approve: z.literal(false), feedback: z.string() }),
-      ])
-      .optional(),
-    withdrawn,
-    cut,
-  }),
-  z.strictObject({
-    id: z.string(),
     kind: z.literal('todos'),
     items: z.array(
       z.strictObject({ text: z.string(), status: z.enum(['pending', 'active', 'done']) }),
     ),
-    cut,
-  }),
-  z.strictObject({
-    id: z.string(),
-    kind: z.literal('elicitation'),
-    server: z.string(),
-    message: z.string(),
-    fields: z.array(z.record(z.string(), z.unknown())).optional(),
-    url: z.string().optional(),
-    answer: z.enum(ELICITATION_ACTIONS).optional(),
-    withdrawn,
     cut,
   }),
   z.strictObject({

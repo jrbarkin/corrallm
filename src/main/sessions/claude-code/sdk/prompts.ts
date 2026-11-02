@@ -7,8 +7,7 @@ import type {
   PermissionResult,
 } from '@anthropic-ai/claude-agent-sdk';
 
-import type { AdapterPrompt, PromptAnswer, QuestionAnswer } from '../../../../shared/model/prompts';
-import type { AskedQuestion, SessionAnswer, SessionEvent } from '../../../../shared/session';
+import type { AdapterPrompt } from '../../../../shared/model/prompts';
 import type { HostEvent, PromptAnswers } from '../../connector';
 import {
   declined,
@@ -19,7 +18,6 @@ import {
 } from './raise';
 import type { Native, Raised } from './raise';
 import type { Places } from './tools';
-import { property, text } from './tools';
 
 export { DENIED, DENIED_WITH_FEEDBACK } from './raise';
 
@@ -37,8 +35,7 @@ export { DENIED, DENIED_WITH_FEEDBACK } from './raise';
  *   nonapproval, and ends).
  * - One corrallm can't pass on faithfully (questions it can't key, a form it can't show, a plan it
  *   can't read) is declined here, never raised, and the user told.
- * - Prompts reach the renderer only through the owner's transcript entries. The unused legacy
- *   translation helpers remain for X11 to remove; no connection installs their bridge.
+ * - Prompts reach the renderer only through the owner's transcript entries.
  */
 
 /** Where prompts go: the core's owner (prompt events) and session status. */
@@ -49,8 +46,6 @@ export interface PromptHost {
 /** A native request waiting for its answer. */
 interface Pending {
   readonly key: string;
-  /** The id of the event B13 replaces that shows it. */
-  readonly shown: string;
   readonly prompt: AdapterPrompt;
   readonly native: Native;
   /** Whether the owner kept the raise (false if it declined it as it was raised). */
@@ -114,39 +109,18 @@ export class Prompts {
       places: this.#places,
       modes: this.#modes,
     });
-    const shown = `prompt:${randomUUID()}`;
-    return this.#raise(
-      raised,
-      options.signal,
-      (prompt) => shownTool(shown, tool, options, prompt),
-      UNANSWERED,
-      (why) => ({ behavior: 'deny', message: why }),
-    ) as Promise<PermissionResult>;
+    return this.#raise(raised, options.signal, UNANSWERED, (why) => ({
+      behavior: 'deny',
+      message: why,
+    })) as Promise<PermissionResult>;
   };
 
   /** The SDK's onElicitation: an MCP server asks for a form, or to open a link. */
   readonly onElicitation: OnElicitation = (request, { signal }) => {
-    const shown = `elicitation:${randomUUID()}`;
-    return this.#raise(
-      elicitationPrompt(request),
-      signal,
-      (prompt, native) => shownForm(shown, prompt, native),
-      { action: 'cancel' },
-      () => ({ action: 'decline' }),
-    ) as Promise<ElicitationResult>;
+    return this.#raise(elicitationPrompt(request), signal, { action: 'cancel' }, () => ({
+      action: 'decline',
+    })) as Promise<ElicitationResult>;
   };
-
-  /**
-   * Transitional (B13 C4, unused after X10; X11 removes it): the key of the request
-   * the event B13 replaces `id` shows, and `answer` as its prompt takes it, for the core to answer
-   * through its owner. Answers nothing itself. Throws for one no longer asked, or an answer its
-   * prompt doesn't offer.
-   */
-  bridge(id: string, answer: SessionAnswer): { key: string; answer: PromptAnswer } {
-    const pending = [...this.#pending.values()].findLast((one) => one.shown === id);
-    if (pending === undefined) throw new Error('That request is no longer asked.');
-    return { key: pending.key, answer: translated(pending.prompt, answer) };
-  }
 
   /** As the session closes: every request still waiting gets its nonapproval, and ends. */
   withdrawAll(): void {
@@ -164,7 +138,6 @@ export class Prompts {
   #raise(
     raised: Raised,
     signal: AbortSignal,
-    show: (prompt: AdapterPrompt, native: Native) => SessionEvent & { id: string },
     unanswered: PermissionResult | ElicitationResult,
     refuse: (why: string) => PermissionResult | ElicitationResult,
   ): Promise<PermissionResult | ElicitationResult> {
@@ -185,10 +158,8 @@ export class Prompts {
       }
       const key = randomUUID();
       const { prompt, native } = raised;
-      const shown = show(prompt, native);
       this.#pending.set(key, {
         key,
-        shown: shown.id,
         prompt,
         native,
         admitted: false,
@@ -227,143 +198,4 @@ export class Prompts {
   #settled(): void {
     if (this.#pending.size === 0) this.#host.emit({ type: 'status', status: 'working' });
   }
-}
-
-/** A permission request as the event B13 replaces showed it (unused after X10; removed by X11). */
-function shownTool(
-  id: string,
-  tool: string,
-  options: Parameters<CanUseTool>[2],
-  prompt: AdapterPrompt,
-): SessionEvent & { id: string } {
-  switch (prompt.kind) {
-    case 'question':
-      return {
-        type: 'question',
-        id,
-        questions: prompt.questions.map((question) => ({
-          header: question.header,
-          text: question.text,
-          options: question.options.map((option) => ({
-            label: option.label,
-            description: option.description ?? '',
-          })),
-          multiple: question.multiple,
-        })),
-      };
-    case 'plan':
-      return { type: 'plan', id, plan: prompt.plan };
-    case 'approval': {
-      const { detail } = prompt;
-      const title =
-        options.title === undefined && options.blockedPath === undefined ? undefined : prompt.title;
-      return {
-        type: 'permission',
-        id,
-        tool,
-        summary: prompt.summary ?? '',
-        always: prompt.choices.find(({ value }) => value === 'always')?.label ?? null,
-        ...(detail === undefined ? {} : { detail }),
-        ...(title === undefined ? {} : { title }),
-      };
-    }
-    case 'form':
-      throw new Error('Not a tool request.');
-  }
-}
-
-/** An MCP server's request as the event B13 replaces showed it, in the prompt's words (unused after X10; removed by X11). */
-function shownForm(
-  id: string,
-  prompt: AdapterPrompt,
-  native: Native,
-): SessionEvent & { id: string } {
-  if (prompt.kind !== 'form') throw new Error('Not a form.');
-  return {
-    type: 'elicitation',
-    id,
-    server: prompt.server ?? '',
-    message: prompt.title,
-    ...('url' in prompt.form
-      ? { url: prompt.form.url }
-      : { fields: native.kind === 'form' ? [...native.fields] : [] }),
-  };
-}
-
-/** An answer given as the events B13 replaces take it, as the prompt takes it; throws if it can't be. */
-function translated(prompt: AdapterPrompt, answer: SessionAnswer): PromptAnswer {
-  const offers = (value: string) =>
-    (prompt.kind === 'approval' || prompt.kind === 'plan') &&
-    prompt.choices.some((choice) => choice.value === value);
-  switch (answer.kind) {
-    case 'permission': {
-      if (prompt.kind !== 'approval') break;
-      if (answer.answer === 'once') return { kind: 'choice', value: 'allow' };
-      if (answer.answer === 'always') {
-        if (!offers('always')) throw new Error('That prompt doesn’t offer "always".');
-        return { kind: 'choice', value: 'always' };
-      }
-      const feedback = answer.feedback?.trim() ?? '';
-      return feedback === ''
-        ? { kind: 'choice', value: 'deny' }
-        : { kind: 'choice', value: 'deny-feedback', feedback };
-    }
-    case 'question': {
-      if (prompt.kind !== 'question') break;
-      if (answer.answers.length !== prompt.questions.length)
-        throw new Error('Answer every question it asks.');
-      const answers: Record<string, QuestionAnswer> = {};
-      prompt.questions.forEach((question, index) => {
-        const given = answer.answers[index] ?? '';
-        answers[question.id] = question.options.some(({ label }) => label === given)
-          ? { picked: [given] }
-          : { text: given };
-      });
-      return { kind: 'questions', answers };
-    }
-    case 'plan': {
-      if (prompt.kind !== 'plan') break;
-      if (answer.answer.approve) {
-        const { mode } = answer.answer;
-        if (!offers(mode)) throw new Error(`That plan doesn’t offer ${mode}.`);
-        return { kind: 'choice', value: mode };
-      }
-      const feedback = answer.answer.feedback.trim();
-      return {
-        kind: 'choice',
-        value: 'keep-planning',
-        ...(feedback === '' ? {} : { feedback }),
-      };
-    }
-    case 'elicitation':
-      if (prompt.kind !== 'form') break;
-      return {
-        kind: 'form',
-        action: answer.action,
-        ...(answer.values === undefined ? {} : { values: answer.values }),
-      };
-  }
-  throw new Error('That answer isn’t one this request takes.');
-}
-
-/** AskUserQuestion's questions, as corrallm asks them; undefined if they are not what it expects. */
-export function askedQuestions(value: unknown): AskedQuestion[] | undefined {
-  if (!Array.isArray(value) || value.length === 0) return undefined;
-  const questions = value.map((item): AskedQuestion | undefined => {
-    const asked = text(property(item, 'question'));
-    const options = property(item, 'options');
-    if (asked === undefined || !Array.isArray(options)) return undefined;
-    return {
-      header: text(property(item, 'header')) ?? '',
-      text: asked,
-      options: options.flatMap((option) => {
-        const label = text(property(option, 'label'));
-        return label === undefined
-          ? []
-          : [{ label, description: text(property(option, 'description')) ?? '' }];
-      }),
-      multiple: property(item, 'multiSelect') === true,
-    };
-  });
-  return questions.every((q) => q !== undefined) ? questions : undefined;
 }

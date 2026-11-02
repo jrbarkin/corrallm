@@ -55,13 +55,6 @@ describe('silent turns', () => {
     'does not flag a permission wait past its %s, and restarts silence once working',
     async (disruption) => {
       start();
-      watchdog.event(CANVAS, AGENT, 'codex.app-server', {
-        type: 'permission',
-        id: 'approval',
-        tool: 'Run',
-        summary: 'May I?',
-        always: null,
-      });
       watchdog.event(CANVAS, AGENT, 'codex.app-server', { type: 'status', status: 'waiting' });
       await vi.advanceTimersByTimeAsync(WATCH_EVERY_MS);
       if (disruption === 'wake') watchdog.resume();
@@ -78,30 +71,6 @@ describe('silent turns', () => {
       expect(warning.mock.calls[0]?.[4]).toContain('20 minutes');
     },
   );
-
-  it.each<SessionEvent>([
-    { type: 'status', status: 'waiting' },
-    { type: 'permission', id: 'p', tool: 'Run', summary: 'May I?', always: null },
-    { type: 'question', id: 'p', questions: [] },
-    { type: 'plan', id: 'p', plan: 'A plan' },
-    { type: 'elicitation', id: 'p', server: 'server', message: 'A question' },
-    { type: 'asking', asks: [{ kind: 'trust', id: 'trust' }] },
-  ])('suspends silence on $type even without another waiting signal', async (event) => {
-    start();
-    watchdog.event(CANVAS, AGENT, 'codex.app-server', event);
-    await vi.advanceTimersByTimeAsync(STALL_MS * 2);
-    expect(warning).not.toHaveBeenCalled();
-    expect(watchdog.items(CANVAS)).toEqual([]);
-    if (event.type === 'asking') {
-      watchdog.event(CANVAS, AGENT, 'codex.app-server', { type: 'asking', asks: [] });
-    } else if ('id' in event) {
-      watchdog.event(CANVAS, AGENT, 'codex.app-server', { type: 'withdrawn', id: event.id });
-    } else {
-      watchdog.event(CANVAS, AGENT, 'codex.app-server', { type: 'status', status: 'working' });
-    }
-    await vi.advanceTimersByTimeAsync(STALL_MS);
-    expect(warning).toHaveBeenCalledOnce();
-  });
 
   it('clears a stalled Need while the turn waits on the user, including after a wake', async () => {
     start();
@@ -147,22 +116,25 @@ describe('silent turns', () => {
     expect(watchdog.items(CANVAS)).toEqual([]);
   });
 
-  it('keeps waiting until every prompt closes, despite unrelated activity', async () => {
-    start();
-    watchdog.event(CANVAS, AGENT, 'codex.app-server', { type: 'plan', id: 'one', plan: 'Plan' });
-    watchdog.event(CANVAS, AGENT, 'codex.app-server', {
-      type: 'question',
-      id: 'two',
-      questions: [],
+  it('keeps waiting until every owner prompt closes, despite unrelated activity', async () => {
+    watchdog.close();
+    const waiting = new Set(['one', 'two']);
+    watchdog = new StalledTurns({
+      catalog: CATALOG,
+      warning,
+      changed,
+      network,
+      waiting: () => waiting.size > 0,
     });
-    watchdog.event(CANVAS, AGENT, 'codex.app-server', { type: 'withdrawn', id: 'one' });
+    start();
+    waiting.delete('one');
     watchdog.activity(CANVAS, AGENT);
     await vi.advanceTimersByTimeAsync(STALL_MS * 2);
     expect(warning).not.toHaveBeenCalled();
-    watchdog.event(CANVAS, AGENT, 'codex.app-server', { type: 'withdrawn', id: 'two' });
+    waiting.delete('two');
     await vi.advanceTimersByTimeAsync(STALL_MS - WATCH_EVERY_MS);
     expect(warning).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(WATCH_EVERY_MS);
+    await vi.advanceTimersByTimeAsync(2 * WATCH_EVERY_MS);
     expect(warning).toHaveBeenCalledOnce();
   });
 

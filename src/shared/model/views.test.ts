@@ -1,3 +1,4 @@
+import { testPromptEntry, testQuestions } from '../test-prompts';
 import { describe, expect, it } from 'vitest';
 
 import { AgentId } from '../api/ids';
@@ -6,8 +7,8 @@ import { NEW_SESSION } from './session';
 import type { Entry } from './session';
 import type { Run } from './run';
 import { SessionSummarySchema } from '../api/ops/b11-data';
-import { MAX_ASKING_BYTES, MAX_SUGGESTION_BYTES } from '../api/limits';
-import { askingView, messageView, queueRows, runView, sessionView, summaryFor } from './views';
+import { MAX_SUGGESTION_BYTES } from '../api/limits';
+import { messageView, queueRows, runView, sessionView, summaryFor } from './views';
 import { agentStatus, queueControlText, taskState } from './run-display';
 
 const agent = AgentId.parse('a');
@@ -146,7 +147,7 @@ describe('read-only runtime projections', () => {
     expect(next.entries.thinking).not.toBe(first.entries.thinking);
   });
 
-  it('projects prompts, native terminal asks and last reply like session.get', () => {
+  it('projects owner prompt counts and last reply like session.get', () => {
     const view = sessionView(
       agent,
       'test.connection',
@@ -155,13 +156,15 @@ describe('read-only runtime projections', () => {
         entries: [
           { id: 'u', kind: 'user', text: 'hi' },
           { id: 't', kind: 'text', text: 'reply' },
-          {
-            id: 'q',
-            kind: 'question',
-            questions: [{ header: 'Question', text: '?', options: [], multiple: false }],
-          },
+          testPromptEntry(testQuestions()),
+          testPromptEntry({
+            kind: 'approval',
+            title: 'Trust?',
+            subject: { type: 'trust' },
+            answerIn: 'terminal',
+            choices: [],
+          }),
         ],
-        asking: [{ kind: 'trust', id: 'trust' }],
       },
       true,
     );
@@ -174,20 +177,12 @@ describe('read-only runtime projections', () => {
     });
   });
 
-  it('carries the CLI’s suggestion and its terminal’s asks in the summary, bounded, for you alone', () => {
-    const ask = {
-      kind: 'permission' as const,
-      id: 'p1',
-      tool: 'Bash',
-      summary: 'npm test',
-      detail: { kind: 'output' as const, text: 'npm test' },
-    };
+  it('carries the CLI’s suggestion in the summary, bounded, for you alone', () => {
     const view = sessionView(agent, 'test.connection', {
       ...NEW_SESSION,
       suggestion: 'Run the tests',
-      asking: [ask],
     });
-    expect(view.summary).toMatchObject({ suggestion: 'Run the tests', asking: [ask] });
+    expect(view.summary).toMatchObject({ suggestion: 'Run the tests' });
     expect(SessionSummarySchema.parse(view.summary)).toEqual(view.summary);
     expect(summaryFor(view.summary, false)).not.toHaveProperty('suggestion');
     expect(summaryFor(view.summary, false)).not.toHaveProperty('asking');
@@ -198,50 +193,6 @@ describe('read-only runtime projections', () => {
       suggestion: 'x'.repeat(MAX_SUGGESTION_BYTES + 1),
     });
     expect(long.summary).not.toHaveProperty('suggestion');
-  });
-
-  it('keeps the newest terminal asks within their byte budget, cutting what is too long and saying so', () => {
-    const huge = (i: number) => ({
-      kind: 'plan' as const,
-      id: `plan-${String(i)}`,
-      plan: '\u0001'.repeat(MAX_ASKING_BYTES),
-    });
-    const asks = [
-      ...Array.from({ length: 20 }, (_, i) => huge(i)),
-      {
-        kind: 'question' as const,
-        id: 'q',
-        questions: Array.from({ length: 10 }, () => ({
-          header: 'h'.repeat(1000),
-          text: '€'.repeat(20_000),
-          options: Array.from({ length: 50 }, () => ({ label: 'l', description: 'd' })),
-          multiple: false,
-        })),
-      },
-      {
-        kind: 'permission' as const,
-        id: 'p',
-        tool: 'Edit',
-        summary: 'notes.txt',
-        detail: {
-          kind: 'diff' as const,
-          added: 5000,
-          removed: 0,
-          lines: Array.from({ length: 5000 }, () => ({ kind: 'add' as const, text: 'x' })),
-        },
-      },
-      { kind: 'other' as const, id: 'x'.repeat(5000), text: 'An id no Need could name' },
-    ];
-    const shown = askingView(asks);
-    expect(new TextEncoder().encode(JSON.stringify(shown)).length).toBeLessThanOrEqual(
-      MAX_ASKING_BYTES,
-    );
-    // The newest first kept; an ask no Need could name is left out.
-    expect(shown?.at(-1)).toMatchObject({ id: 'p', cut: true });
-    expect(shown?.some((one) => one.id.length > 256)).toBe(false);
-    expect(shown?.find((one) => one.id === 'q')).toMatchObject({ cut: true });
-    expect(SessionSummarySchema.shape.asking.parse(shown)).toEqual(shown);
-    expect(askingView([])).toBeUndefined();
   });
 
   it('never puts message rows into authored queue items and does not guess origin from sender', () => {

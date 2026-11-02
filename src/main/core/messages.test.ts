@@ -1,3 +1,5 @@
+import type { HostEvent } from '../sessions/connector';
+import { MAX_PROMPT_TEXT_LENGTH } from '../../shared/api/limits';
 import { legacyDirectories } from './workspaces/test-directories';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -1150,7 +1152,6 @@ describe('delivery', () => {
             message.from === undefined
               ? session.send(message)
               : Promise.reject(new Error('Not sent: it takes no message from another party now.')),
-          answer: (id, answer) => session.answer(id, answer),
           interrupt: () => session.interrupt(),
           setMode: (mode) => session.setMode(mode),
           setModel: (model) => session.setModel(model),
@@ -1339,7 +1340,7 @@ describe('delivery', () => {
     expect((await inbox()).find((message) => message.kind === 'notice')).toMatchObject({
       from: 'corrallm',
       replyTo: id,
-      body: 'Checker is waiting for the user: Approve Bash: echo hello?',
+      body: 'Checker is waiting for the user: Run this command?',
     });
     // You see the prompt with its choices; a token sees it, without them.
     const yours = (await ok<{ items: NeedsItem[] }>('needs', {}, YOU)).items;
@@ -1349,11 +1350,11 @@ describe('delivery', () => {
         agent: 'checker',
         for: 'you',
         by: ['you'],
-        title: 'Approve Bash: echo hello?',
+        title: 'Run this command?',
         answerIn: 'api',
       }),
     ]);
-    expect(yours[0]?.choices.map(({ value }) => value)).toEqual(['once', 'always', 'deny']);
+    expect(yours[0]?.choices.map(({ value }) => value)).toEqual(['allow', 'always', 'deny']);
     for (const caller of [OUTSIDE, READER]) {
       const theirs = (await ok<{ items: NeedsItem[] }>('needs', {}, caller)).items;
       expect(theirs).toEqual(yours.map((item) => needFor(item, 'token')));
@@ -1846,6 +1847,7 @@ describe('an agent that isn’t idle', () => {
 
   /** A Terminal whose CLI asks `asks` in its terminal, whenever a test says (`ask`). */
   function asksInTerminal() {
+    const waits = new Map<string, string>();
     let host: Parameters<Connector<SessionMode>['start']>[1] | undefined;
     const connector: Connector<SessionMode> = {
       start: async (spec, given) => {
@@ -1856,7 +1858,18 @@ describe('an agent that isn’t idle', () => {
     return {
       connector,
       ask: (asks: { kind: 'other'; id: string; text: string }[]) => {
-        host?.emit({ type: 'asking', asks });
+        for (const key of waits.values())
+          host?.emit({ type: 'prompt-ended', key, reason: 'answered-natively' });
+        waits.clear();
+        for (const ask of asks) {
+          const key = crypto.randomUUID();
+          waits.set(ask.id, key);
+          host?.emit({
+            type: 'prompt',
+            key,
+            prompt: { kind: 'approval', title: ask.text, answerIn: 'terminal', choices: [] },
+          });
+        }
       },
     };
   }
@@ -1881,18 +1894,17 @@ describe('an agent that isn’t idle', () => {
     });
   });
 
-  it('tells no one a turn waits for you over what a Terminal asks while it still works', async () => {
+  it('tells no one a turn waits for you while a Terminal reports work without a current wait', async () => {
     await keepCanvas();
     const shell = asksInTerminal();
     await start({
       terminal: {
-        // Its turn works on, and its CLI lists what it asks (no status report says it waits).
+        // Its turn works on; the Terminal toolkit has not raised a waiting occurrence.
         start: async (spec, host) => {
           const session = await shell.connector.start(spec, host);
           session.send = (message) => {
             host.emit({ type: 'user', id: message.id, text: message.text });
             host.emit({ type: 'status', status: 'working' });
-            shell.ask([{ kind: 'other', id: 'login', text: 'Log in to continue' }]);
             return Promise.resolve();
           };
           return session;
@@ -1935,7 +1947,7 @@ describe('a turn waiting for you', () => {
   });
 
   /** A connector whose every turn waits on what `prompt` asks, for the message it was sent. */
-  const asking = (prompt: (message: string) => SessionEvent): Connector<SessionMode> => ({
+  const asking = (prompt: (message: string) => HostEvent): Connector<SessionMode> => ({
     start: (_spec, host) => {
       host.emit({ type: 'started', model: 'default', mode: 'auto', models: [] });
       const idle = () => Promise.resolve();
@@ -1947,7 +1959,6 @@ describe('a turn waiting for you', () => {
           host.emit({ type: 'status', status: 'waiting' });
           return idle();
         },
-        answer: idle,
         interrupt: idle,
         setMode: idle,
         setModel: idle,
@@ -1956,30 +1967,44 @@ describe('a turn waiting for you', () => {
     },
   });
 
-  it.each<[string, (message: string) => SessionEvent]>([
+  it.each<[string, (message: string) => HostEvent]>([
     [
       'a very long one-line command',
-      (message) => ({
-        type: 'permission',
-        id: `${message}/permission`,
-        tool: 'Bash',
-        summary: `echo ${'a'.repeat(MAX_MESSAGE_BYTES)}`,
-        always: null,
+      () => ({
+        type: 'prompt',
+        key: crypto.randomUUID(),
+        prompt: {
+          kind: 'approval',
+          answerIn: 'api',
+          title: `Approve Bash: echo ${'a'.repeat(MAX_PROMPT_TEXT_LENGTH - 20)}`,
+          subject: { type: 'tool', tool: 'Bash', input: {} },
+          choices: [
+            { value: 'yes', label: 'Yes', hint: 'allow_once' },
+            { value: 'no', label: 'No', hint: 'reject_once' },
+          ],
+        },
       }),
     ],
     [
       'a very long question',
-      (message) => ({
-        type: 'question',
-        id: `${message}/question`,
-        questions: [
-          {
-            header: 'Which',
-            text: `Which of these ${'very '.repeat(MAX_MESSAGE_BYTES / 4)}long names?`,
-            options: [{ label: 'This one', description: '' }],
-            multiple: false,
-          },
-        ],
+      () => ({
+        type: 'prompt',
+        key: crypto.randomUUID(),
+        prompt: {
+          kind: 'question',
+          answerIn: 'api',
+          title: `Which of these ${'very '.repeat(700)}long names?`,
+          questions: [
+            {
+              id: 'which',
+              header: 'Which',
+              text: 'Which?',
+              options: [{ label: 'This one' }],
+              multiple: false,
+              other: true,
+            },
+          ],
+        },
       }),
     ],
   ])('quotes %s in a waiting notice cut short, within a message’s size', async (_, prompt) => {
@@ -2008,7 +2033,7 @@ describe('a turn waiting for you', () => {
     expect(await notices()).toEqual([
       expect.objectContaining({
         replyTo: id,
-        body: 'Checker is waiting for the user: Approve Bash: echo hello?',
+        body: 'Checker is waiting for the user: Run this command?',
       }),
     ]);
   });
@@ -4227,7 +4252,6 @@ describe('reads', () => {
             });
             return idle();
           },
-          answer: idle,
           interrupt: idle,
           setMode: idle,
           setModel: idle,
@@ -4310,7 +4334,6 @@ describe('reads', () => {
             });
             return idle();
           },
-          answer: idle,
           interrupt: idle,
           setMode: idle,
           setModel: idle,
@@ -4391,16 +4414,19 @@ describe('reads', () => {
             host.emit({ type: 'user', id: message.id, text: message.text });
             host.emit({ type: 'status', status: 'working' });
             host.emit({
-              type: 'elicitation',
-              id: 'sign-in',
-              server: 'tracker',
-              message: 'Sign in to the tracker',
-              url: 'https://tracker.example/sign-in?code=secret',
+              type: 'prompt',
+              key: crypto.randomUUID(),
+              prompt: {
+                kind: 'form',
+                server: 'tracker',
+                title: 'Sign in to the tracker',
+                answerIn: 'api',
+                form: { url: 'https://tracker.example/sign-in?code=secret' },
+              },
             });
             host.emit({ type: 'status', status: 'waiting' });
             return idle();
           },
-          answer: idle,
           interrupt: idle,
           setMode: idle,
           setModel: idle,
@@ -4412,25 +4438,26 @@ describe('reads', () => {
     await start({ appServer: signIn });
     await send('builder', 'Look up the ticket');
     interface Entries {
-      entries: { kind: string; url?: string; server?: string }[];
+      entries: {
+        kind: string;
+        prompt?: { title: string; form?: { url?: string }; server?: string };
+      }[];
     }
     const shown = async (caller: Caller) =>
       (await ok<Entries>('session.transcript', { agent: 'builder' }, caller)).entries.find(
-        ({ kind }) => kind === 'elicitation',
+        ({ kind }) => kind === 'prompt',
       );
     await vi.waitFor(async () => {
       expect(await shown(YOU)).toMatchObject({
-        server: 'tracker',
-        url: 'https://tracker.example/sign-in?code=secret',
+        prompt: { server: 'tracker', form: { url: 'https://tracker.example/sign-in?code=secret' } },
       });
     });
     for (const caller of [OUTSIDE, READER]) {
       const theirs = await shown(caller);
       expect(theirs).toMatchObject({
-        server: 'tracker',
-        message: 'MCP server “tracker” asks you to open a link',
+        prompt: { title: 'MCP server “tracker” asks you to open a link' },
       });
-      expect(theirs).not.toHaveProperty('url');
+      expect(theirs?.prompt).not.toHaveProperty('form');
     }
   });
 

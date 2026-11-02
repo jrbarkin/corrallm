@@ -1,26 +1,18 @@
 import { MAX_DETAIL_LINES } from '../api/limits';
 import type { CanvasId } from '../canvas';
 import type { AgentNode, CanvasNode } from './canvas';
-import type { NeedChoice, NeedQuestion, NeedsItem } from './needs';
+import type { NeedChoice, NeedsItem } from './needs';
 import { agentName } from './queries';
-import { isOpen } from './session';
-import type { Prompt, Session } from './session';
-import { mcpRequestTitle, resetTime } from './words';
-import type { AskedQuestion, TerminalAsk, ToolDetail } from '../session';
+import type { Session } from './session';
+import { resetTime } from './words';
+import type { ToolDetail } from '../session';
 import type { EngineCatalog } from './catalog';
 import { heldAsks } from './run-words';
 import type { HeldAsk } from './run-words';
 import type { AgentRun, Run } from './run';
 
-/*
- * What waits for you on a canvas (API Spec §5.9), derived from the run and the sessions, never
- * stored: the holds the run has for you (run/asks.ts), what each agent's session asks (its open
- * prompts), what each Terminal agent's CLI asks in its terminal, and the agents whose sessions
- * won't start, or run in a mode that never asks, while parties' messages to them wait. One
- * derivation (`needsOf`) for the canvas's
- * Needs you sidebar and the core's `needs`, which words each as a NeedsItem (`needsItem`), in the
- * host's locale. Until leads (B24), each is yours alone to answer: a token sees yours as the one
- * selector of what each reader sees of a prompt says (B13 C11: prompt-views.ts' `needFor`).
+/* Run holds and delivery holds, derived from durable run and session state. The prompt owner
+ * contributes its own Needs through C11's selector; this module never interprets native prompts.
  */
 
 export interface NeedsInput {
@@ -45,12 +37,6 @@ export interface NeedsInput {
   unasking?: readonly { agent: string; why: UnaskingWhy }[];
   /** Agents spending a backend whose hard limit was hit, until its reset. */
   limited?: readonly { agent: string; backend: string; until: number }[];
-  /**
-   * The generation of each agent's running session (the core's session manager gives each session
-   * it starts a new one), which a prompt's id carries: a prompt of an earlier session whose native
-   * id a later one reuses is another prompt. None: 0.
-   */
-  sessionGenerations?: (agent: string) => number | undefined;
 }
 
 /**
@@ -65,9 +51,7 @@ export type Need =
   | { kind: 'hold'; agent: AgentNode; ask: HeldAsk }
   | { kind: 'stuck'; agent: AgentNode; text: string; clears: string }
   | { kind: 'unasking'; agent: AgentNode; why: UnaskingWhy }
-  | { kind: 'limited'; agent: AgentNode; backend: string; until: number }
-  | { kind: 'prompt'; agent: AgentNode; prompt: Prompt }
-  | { kind: 'ask'; agent: AgentNode; ask: TerminalAsk };
+  | { kind: 'limited'; agent: AgentNode; backend: string; until: number };
 
 /** Why only you pick a hold's choice (Core Server rule R3), by what the hold is. */
 const YOURS = {
@@ -80,13 +64,11 @@ const YOURS = {
 
 /**
  * Everything that waits for you, in order: the run's holds, in graph order; then the agents whose
- * sessions won't start, or run in a mode that never asks, for parties' messages; then each agent's
- * open prompts; then what Terminal agents' CLIs ask in their terminals.
+ * sessions won't start, or run in a mode that never asks, for parties' messages.
  */
 export function needsOf({
   nodes,
   run,
-  sessions,
   catalog,
   now,
   locale,
@@ -114,35 +96,18 @@ export function needsOf({
       const found = agent(id);
       return found ? [{ kind: 'limited', agent: found, backend, until }] : [];
     }),
-    ...agents.flatMap((node) =>
-      (sessions[node.id]?.prompts ?? sessions[node.id]?.entries.filter(isOpen) ?? []).map(
-        (prompt): Need => ({ kind: 'prompt', agent: node, prompt }),
-      ),
-    ),
-    ...agents.flatMap((node) =>
-      (sessions[node.id]?.asking ?? []).map((ask): Need => ({ kind: 'ask', agent: node, ask })),
-    ),
   ];
 }
 
-/**
- * Everything that waits for you, each worded as a NeedsItem, as `reader` words it (a token reads
- * an old permission's tool and summary, never its CLI's own title: B13 C9).
- */
-export function needs(input: NeedsInput, reader: 'you' | 'token' = 'you'): NeedsItem[] {
-  return needsOf(input).map((need) => needsItem(need, input, reader));
+/** Run and delivery holds, each worded as a NeedsItem. */
+export function needs(input: NeedsInput): NeedsItem[] {
+  return needsOf(input).map((need) => needsItem(need, input));
 }
 
-/**
- * A need as a NeedsItem, yours: addressed to you, answered by you. Worded for `reader`: what a
- * permission of the events B13 replaces asks in its CLI's words (an MCP server's own, for its
- * tool) is yours alone; a token reads its tool and summary (B13 C9). The rest of what a token may
- * read of it is `needFor`'s (prompt-views.ts).
- */
+/** A run or delivery hold, addressed to you and answered by you. */
 export function needsItem(
   need: Need,
-  { canvas, nodes, run, catalog, now = Date.now(), locale, sessionGenerations }: NeedsInput,
-  reader: 'you' | 'token' = 'you',
+  { canvas, nodes, run, catalog, now = Date.now(), locale }: NeedsInput,
 ): NeedsItem {
   const yours = { canvas, agent: need.agent.id, for: 'you' as const, by: ['you' as const] };
   switch (need.kind) {
@@ -214,30 +179,6 @@ export function needsItem(
         choices: [],
         answerIn: 'api',
       };
-    case 'prompt':
-      return {
-        id: idOf(
-          'prompt',
-          need.agent.id,
-          need.prompt.id,
-          String(sessionGenerations?.(need.agent.id) ?? 0),
-        ),
-        ...yours,
-        ...promptWords(need.prompt, reader),
-      };
-    case 'ask':
-      return {
-        id: idOf(
-          'prompt',
-          need.agent.id,
-          need.ask.id,
-          String(sessionGenerations?.(need.agent.id) ?? 0),
-        ),
-        ...yours,
-        ...askWords(need.ask),
-        choices: [],
-        answerIn: 'terminal',
-      };
   }
 }
 
@@ -249,7 +190,7 @@ export function needsItem(
  * agent's it is (a queue item's id, a prompt's), last, as it may hold slashes.
  */
 function idOf(
-  kind: 'hold' | 'start' | 'unasking' | 'limited' | 'prompt',
+  kind: 'hold' | 'start' | 'unasking' | 'limited',
   agent: string,
   of?: string,
   generation?: string,
@@ -311,100 +252,6 @@ function holdChoiceYours(ask: HeldAsk, key: string, usage: boolean): string | un
   // Go on and Wait for the reset decide for every agent on the backend, until the window resets.
   if (usage) return key === 'goOn' || key === 'wait' ? YOURS.usage : undefined;
   return key === 'approve' ? YOURS.approve : undefined;
-}
-
-type Worded = Pick<
-  NeedsItem,
-  'kind' | 'title' | 'detail' | 'choices' | 'questions' | 'form' | 'answerIn'
->;
-
-/** What an open prompt of an agent's session asks, in words, and how you may answer it. */
-function promptWords(prompt: Prompt, reader: 'you' | 'token'): Worded {
-  switch (prompt.kind) {
-    case 'permission':
-      return {
-        kind: 'prompt',
-        title:
-          reader === 'you' && prompt.title !== undefined
-            ? prompt.title
-            : approve(prompt.tool, prompt.summary),
-        ...detailOf(prompt.detail),
-        choices: [
-          { value: 'once', label: 'Yes' },
-          ...(prompt.always
-            ? [{ value: 'always', label: prompt.always, humanOnly: YOURS.always }]
-            : []),
-          { value: 'deny', label: 'No' },
-        ],
-        answerIn: 'api',
-      };
-    case 'question':
-      return {
-        kind: 'prompt',
-        ...questionWords(prompt.questions.filter((question) => question.answer === undefined)),
-        choices: [],
-        answerIn: 'api',
-      };
-    case 'plan':
-      return {
-        kind: 'prompt',
-        title: 'Approve its plan?',
-        ...previewLines(prompt.plan),
-        choices: [],
-        answerIn: 'api',
-      };
-    case 'elicitation':
-      // The core's words, for everyone: the server's own may hold its link (B13 C11).
-      return {
-        kind: 'prompt',
-        title: mcpRequestTitle(prompt.server, prompt.url !== undefined),
-        ...(prompt.url === undefined ? {} : { form: { url: prompt.url } }),
-        choices: [],
-        answerIn: 'api',
-      };
-  }
-}
-
-/** What a Terminal agent's CLI asks in its terminal, in words. */
-function askWords(ask: TerminalAsk): Pick<NeedsItem, 'kind' | 'title' | 'detail' | 'questions'> {
-  switch (ask.kind) {
-    case 'permission':
-      return { kind: 'prompt', title: approve(ask.tool, ask.summary), ...detailOf(ask.detail) };
-    case 'question':
-      return { kind: 'prompt', ...questionWords(ask.questions) };
-    case 'plan':
-      return { kind: 'prompt', title: 'Approve its plan?', ...previewLines(ask.plan) };
-    case 'trust':
-      return { kind: 'prompt', title: 'Trust the project folder?' };
-    case 'other':
-      return { kind: 'prompt', title: ask.text };
-  }
-}
-
-/** "Approve Bash: npm test?" */
-function approve(tool: string, summary: string): string {
-  return `Approve ${tool}${summary.trim() === '' ? '' : `: ${summary.trim()}`}?`;
-}
-
-/** Questions, titled by the first (or by how many there are), each with its answers. */
-function questionWords(
-  questions: readonly AskedQuestion[],
-): Pick<NeedsItem, 'title' | 'questions'> {
-  const [first] = questions;
-  return {
-    title: questions.length === 1 && first ? first.text : `${String(questions.length)} questions`,
-    questions: questions.map(({ header, text, options, multiple }, index): NeedQuestion => ({
-      id: String(index),
-      header,
-      text,
-      options: options.map(({ label, description }) => ({
-        label,
-        ...(description === '' || description === label ? {} : { description }),
-      })),
-      multiple,
-      other: true,
-    })),
-  };
 }
 
 /** What a tool call would do, in at most MAX_DETAIL_LINES lines: its diff, or its output. */

@@ -334,8 +334,7 @@
   padding-left: 22px;
 }
 
-.agent-text code,
-.agent-permission-summary {
+.agent-text code {
   padding: 1px 5px;
   border-radius: 4px;
   background: color-mix(in srgb, CanvasText 7%, transparent);
@@ -474,10 +473,8 @@
   color: #dc2626;
 }
 
-/* A prompt: permission to run a tool, the agent's questions, a plan to approve. */
-.agent-permission,
-.agent-questions,
-.agent-plan {
+/* The shared form controls reused inside the owner prompt card. */
+.agent-permission {
   padding: 12px 14px;
   border: 1px solid color-mix(in srgb, var(--agent-color, CanvasText) 45%, transparent);
   border-left-width: 3px;
@@ -485,12 +482,11 @@
   background: color-mix(in srgb, var(--agent-color, CanvasText) 6%, Canvas);
 }
 
-.agent-permission p,
-.agent-plan p {
+.agent-permission p {
   margin: 6px 0;
 }
 
-:is(.agent-permission, .agent-plan) .agent-permission-title {
+.agent-permission .agent-permission-title {
   margin: 0 0 6px;
   font-weight: 600;
 }
@@ -517,57 +513,8 @@
   color: white;
 }
 
-/* An answer's number: typing it answers, as in Claude Code. */
-.agent-key {
-  margin-right: 6px;
-  font-family: ui-monospace, monospace;
-  font-size: 11px;
-  opacity: 0.7;
-}
-
-.agent-permission-instead {
-  margin-top: 8px;
-}
-
 .agent-permission-choices button:hover {
   filter: brightness(0.95);
-}
-
-.agent-permission-answer {
-  margin: 0;
-  padding: 0 6px;
-  font-size: 13px;
-  opacity: 0.6;
-}
-
-.agent-permission-answer code {
-  font-family: ui-monospace, monospace;
-}
-
-.agent-permission-answer[data-answer='deny'] {
-  color: #dc2626;
-  opacity: 0.85;
-}
-
-/* The agent's questions: corrallm's question cards, the first without its rule. */
-.agent-questions .graph-question:first-child {
-  padding-top: 0;
-  border-top: 0;
-}
-
-.agent-questions .graph-question:last-child {
-  padding-bottom: 0;
-}
-
-.agent-plan-text {
-  margin: 4px 0 10px;
-  padding: 8px 12px;
-  border-radius: 8px;
-  background: Canvas;
-}
-
-.agent-plan .graph-question-reply {
-  margin-top: 8px;
 }
 
 /* A subagent's work, under the call that started it. */

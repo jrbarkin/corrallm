@@ -1,7 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
-import type { AdapterPrompt, PromptAnswer, QuestionAnswer } from '../../../../shared/model/prompts';
-import type { SessionAnswer } from '../../../../shared/session';
+import type { AdapterPrompt } from '../../../../shared/model/prompts';
 import type { HostEvent, PromptAnswers } from '../../connector';
 import { notice } from '../../transcript';
 import type { Places } from '../../transcript';
@@ -28,8 +27,7 @@ import type { McpCall, Patch } from './translate';
  * - One corrallm can't pass on faithfully (questions it can't key, a form it can't show, an MCP
  *   tool call's approval whose call it can't tell) is declined here, never raised, and the user
  *   told.
- * - Prompts reach the renderer only through the owner's transcript entries. The unused legacy
- *   translation helpers remain for X11 to remove; no connection installs their bridge.
+ * - Prompts reach the renderer only through the owner's transcript entries.
  */
 
 /** Where prompts go, and what the session knows that they show. */
@@ -50,8 +48,6 @@ interface Pending {
   readonly key: string;
   /** Codex's request, by its typed JSON-RPC id (`1` is not `"1"`); none for the session's own. */
   readonly request: RequestId | undefined;
-  /** The id of the event B13 replaces that shows it. */
-  readonly shown: string;
   readonly prompt: AdapterPrompt;
   readonly native: Native;
   /** Whether the owner kept the raise (false if it declined it as it was raised). */
@@ -157,18 +153,6 @@ export class Prompts {
   }
 
   /**
-   * Transitional (B13 C5, unused after X10; X11 removes it): the key of the request
-   * the event B13 replaces `id` shows, and `answer` as its prompt takes it, for the core to answer
-   * through its owner. Answers nothing itself. Throws for one no longer asked, or an answer its
-   * prompt doesn't take.
-   */
-  bridge(id: string, answer: SessionAnswer): { key: string; answer: PromptAnswer } {
-    const pending = [...this.#pending.values()].findLast((one) => one.shown === id);
-    if (pending === undefined) throw new Error('That request is no longer asked.');
-    return { key: pending.key, answer: translated(pending.prompt, answer) };
-  }
-
-  /**
    * Raises a request to the owner under a fresh key: declined at once (the user told) if corrallm
    * can't pass it on faithfully. The owner may decline it as it is raised: then it is never shown.
    */
@@ -177,14 +161,13 @@ export class Prompts {
       this.#host.emit(notice('warning', asked.declined));
       return { key: undefined, answered: Promise.resolve(asked.result) };
     }
-    const { prompt, native, shown } = asked;
+    const { prompt, native } = asked;
     const key = randomUUID();
-    const id = `${shown.type === 'elicitation' ? 'elicitation' : 'prompt'}:${randomUUID()}`;
     let settle: (result: unknown) => void = () => undefined;
     const answered = new Promise<unknown>((resolve) => {
       settle = resolve;
     });
-    this.#pending.set(key, { key, request, shown: id, prompt, native, admitted: false, settle });
+    this.#pending.set(key, { key, request, prompt, native, admitted: false, settle });
     this.#host.emit({ type: 'prompt', key, prompt });
     const pending = this.#pending.get(key);
     if (pending !== undefined) {
@@ -194,7 +177,7 @@ export class Prompts {
     return { key, answered };
   }
 
-  /** It ends unanswered: Codex gets its nonapproval, the owner and the old card hear. */
+  /** It ends unanswered: Codex gets its nonapproval, the owner hears. */
   #end(pending: Pending): void {
     this.#pending.delete(pending.key);
     pending.settle(nonapproval(pending.native));
@@ -205,66 +188,4 @@ export class Prompts {
   #settled(pending: Pending): void {
     if (pending.request !== undefined && this.#pending.size === 0) this.#host.settled();
   }
-}
-
-/** An answer given as the events B13 replaces take it, as the prompt takes it; throws if it can't be. */
-function translated(prompt: AdapterPrompt, answer: SessionAnswer): PromptAnswer {
-  switch (answer.kind) {
-    case 'permission': {
-      if (prompt.kind !== 'approval') break;
-      const { choices } = prompt;
-      // "always" is the decision the old card shows: Codex's first that keeps (raise.ts).
-      const picked =
-        answer.answer === 'once'
-          ? choices.find(({ hint }) => hint === 'allow_once')
-          : answer.answer === 'always'
-            ? choices.find(({ hint }) => hint === 'allow_always')
-            : (choices.find(({ value }) => value === 'cancel') ??
-              choices.find(({ value }) => value === 'decline') ??
-              choices.find(({ hint }) => hint === 'reject_once'));
-      if (picked === undefined) throw new Error(`That request doesn’t offer "${answer.answer}".`);
-      // Codex's decisions carry no words (as before: what to do instead is the next message).
-      return { kind: 'choice', value: picked.value };
-    }
-    case 'question': {
-      if (prompt.kind !== 'question') break;
-      if (answer.answers.length !== prompt.questions.length)
-        throw new Error('Answer every question it asks.');
-      const answers = Object.fromEntries(
-        prompt.questions.map((question, index) => {
-          const given = answer.answers[index] ?? '';
-          const value: QuestionAnswer = question.options.some(({ label }) => label === given)
-            ? { picked: [given] }
-            : { text: given };
-          return [question.id, value];
-        }),
-      );
-      return { kind: 'questions', answers };
-    }
-    case 'plan': {
-      if (prompt.kind !== 'plan') break;
-      if (answer.answer.approve) {
-        const { mode } = answer.answer;
-        if (mode !== 'auto')
-          throw new Error(
-            `That plan doesn’t offer ${mode}: Codex carries a plan out in its Default.`,
-          );
-        return { kind: 'choice', value: 'implement' };
-      }
-      const feedback = answer.answer.feedback.trim();
-      return {
-        kind: 'choice',
-        value: 'keep-planning',
-        ...(feedback === '' ? {} : { feedback }),
-      };
-    }
-    case 'elicitation':
-      if (prompt.kind !== 'form') break;
-      return {
-        kind: 'form',
-        action: answer.action,
-        ...(answer.values === undefined ? {} : { values: answer.values }),
-      };
-  }
-  throw new Error('That answer isn’t one this request takes.');
 }

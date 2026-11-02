@@ -255,7 +255,6 @@ it('focuses the current native Terminal Need without sending or opening its sess
     agents: {
       [id]: sessionView(id, 'claude-code.terminal', {
         ...NEW_SESSION,
-        asking: [{ kind: 'trust', id: 'native' }],
       }).summary,
     },
   });

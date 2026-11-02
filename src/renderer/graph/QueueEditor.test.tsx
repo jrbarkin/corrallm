@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, within, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
 import { newCanvasId } from '../../shared/canvas';
@@ -8,8 +8,10 @@ import { QueuesView } from '../queues/QueuesView';
 import { lanesOf } from '../queues/lanes';
 import { queueMarks } from '../../shared/model/queue-marks';
 import type { Run } from '../../shared/model/run';
-import { needsOf } from '../../shared/model/needs-selectors';
-import { QuestionsSidebar } from './Questions';
+import { needs } from '../../shared/model/needs-selectors';
+import { NeedsSidebar } from './NeedsSidebar';
+import { fakeCore, expectOneOp } from '../test-api';
+import { events } from '../test-render';
 import { actionsOf, runCatalog } from './agents';
 import { editsOf } from './edits';
 import type { QueueEdits } from './edits';
@@ -170,29 +172,40 @@ describe('task recovery in the shared queue row', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Run again' }));
     expect(again).toHaveBeenCalledOnce();
   });
-  it('uses the same recovery choices in the canvas Needs you sidebar', () => {
-    const decide = vi.fn();
+  it('uses the same recovery choices in the canvas Needs you sidebar', async () => {
+    const canvas = newCanvasId();
+    const core = fakeCore();
     const input = {
-      canvas: newCanvasId(),
+      canvas,
       nodes: canvasNodes([node]),
       run: run(),
       sessions: {},
       catalog: runCatalog(),
       now: Date.now(),
     };
-    render(
-      <QuestionsSidebar
-        needs={needsOf(input)}
-        input={input}
-        onDecide={decide}
-        onAnswer={vi.fn()}
-        onOpen={vi.fn()}
-      />,
-    );
-    const needs = within(screen.getByRole('complementary', { name: 'Needs you' }));
-    expect(needs.getByText(problem.text)).toBeTruthy();
-    fireEvent.click(needs.getByRole('button', { name: /^Continue with failure/ }));
-    expect(decide).toHaveBeenLastCalledWith('a', 'work', { choice: 'continue' });
+    const items = needs(input);
+    core.snapshot(`needs:${canvas}`, { items });
+    try {
+      render(
+        <NeedsSidebar
+          canvas={canvas}
+          mirror={core.topics}
+          nodes={input.nodes}
+          onOpen={vi.fn()}
+          onReply={(to, answer) => core.api.reply({ canvas, to, answer })}
+        />,
+      );
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: 'Needs you' })).toHaveProperty('disabled', false);
+      });
+      await events.click(screen.getByRole('button', { name: 'Needs you' }));
+      const sidebar = within(screen.getByRole('complementary', { name: 'Needs you' }));
+      expect(sidebar.getByText(problem.text)).toBeTruthy();
+      await events.click(sidebar.getByRole('button', { name: /^Continue with failure/ }));
+      expectOneOp(core, 'reply', { canvas, to: items[0]?.id, answer: { choice: 'continue' } });
+    } finally {
+      core.dispose();
+    }
   });
 });
 

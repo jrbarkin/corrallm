@@ -201,11 +201,6 @@ export class SdkSession implements LiveSession {
   }
 
   /** What it asks is answered only through the core's prompt owner (`prompts`), never so. */
-  answer(): Promise<void> {
-    return Promise.reject(
-      new Error('Claude Code’s requests are answered only through corrallm’s prompts.'),
-    );
-  }
 
   /** How the core answers and declines what it raised (B13 C4): the owner's accepted answers only. */
   get prompts(): PromptAnswers {

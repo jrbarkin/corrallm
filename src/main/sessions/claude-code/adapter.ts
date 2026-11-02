@@ -214,7 +214,7 @@ export const claudeCode: Adapter = {
     'claude-code.sdk': new SdkConnector({ clientApp, findClaude: executable }),
   }),
   readOptions: ({ env, cwd }) => claudeOptions(env, cwd),
-  fake: (pause) => new FakeConnector({ ownerPrompts: true, pause }),
+  fake: (pause) => new FakeConnector({ pause }),
   fakeOptions: {
     models: FAKE_MODELS,
     // The fake's own default, Manual, asks.
