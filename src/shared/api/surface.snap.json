@@ -306,7 +306,7 @@
   "schemas": {
     "topics.subscribe": {
       "input": "8c5be84f0a1a163a",
-      "output": "e47394dddf3e4166"
+      "output": "a92c457fc658ed1a"
     },
     "topics.unsubscribe": {
       "input": "8c5be84f0a1a163a",
@@ -509,7 +509,7 @@
       "output": "50a2dfd89653c978"
     },
     "reply": {
-      "input": "16f9e56ad87e2b37",
+      "input": "21ada39b9ec4d54c",
       "output": "d334f64773514652"
     },
     "withdraw": {
@@ -518,11 +518,11 @@
     },
     "session.get": {
       "input": "c804536f3eb2a39b",
-      "output": "0ee7ba8f42bed671"
+      "output": "eb2cec5a5ca416e7"
     },
     "session.transcript": {
       "input": "b0a50f8eb22508f9",
-      "output": "6a04de37197a4a41"
+      "output": "56548bebad317de1"
     },
     "session.handoff": {
       "input": "c804536f3eb2a39b",

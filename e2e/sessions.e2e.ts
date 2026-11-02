@@ -104,7 +104,9 @@ test('runs a connected agent in the project folder, answering its prompts throug
     view.getByRole('button', { name: agentChipName('claude-code.sdk'), exact: true }),
   ).toBeVisible();
   await expect(
-    view.getByText(`${adapterName('claude-code')} works in shop, through the Agent SDK.`),
+    view.getByText(
+      `${adapterName('claude-code')} works in shop, through ${connectionLabel('claude-code.sdk')}.`,
+    ),
   ).toBeVisible();
   // Its session started: it offers its models.
   await expect(view.getByRole('button', { name: 'Model: Default' })).toBeVisible();

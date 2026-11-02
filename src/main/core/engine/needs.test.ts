@@ -1,11 +1,11 @@
+import { Prompt } from '../../../shared/model/prompts';
+import { promptNeed } from '../../../shared/model/prompt-views';
 import { describe, expect, it } from 'vitest';
 
-import { MAX_DETAIL_LINES } from '../../../shared/api/limits';
 import type { CanvasId } from '../../../shared/canvas';
 import type { AgentNode } from '../../../shared/model/canvas';
 import type { QueueItem } from '../../../shared/model/queue';
-import { NEW_SESSION } from '../../../shared/model/session';
-import type { Session } from '../../../shared/model/session';
+
 import { holdGeneration, needs, needsOf } from '../../../shared/model/needs-selectors';
 import { needFor } from '../../../shared/model/prompt-views';
 import type { NeedsInput } from '../../../shared/model/needs-selectors';
@@ -47,16 +47,6 @@ const input = (more: Partial<NeedsInput> = {}): NeedsInput => ({
   ...more,
 });
 
-/** A session waiting on a permission prompt. */
-const asking: Session = {
-  ...NEW_SESSION,
-  status: 'waiting',
-  entries: [
-    { id: 'm1', kind: 'user', text: 'Run the tests' },
-    { id: 'm1/permission', kind: 'permission', tool: 'Bash', summary: 'npm test', always: null },
-  ],
-};
-
 describe('needs', () => {
   it('words a hold in the host’s locale', () => {
     const [item] = needs(input({ run: held, locale: 'en-GB' }));
@@ -85,44 +75,9 @@ describe('needs', () => {
     );
   });
 
-  it('lists run holds, then session prompts, then what Terminal agents ask in their terminals', () => {
-    const terminal = agent('t', 'Shell', [], 'codex.terminal');
-    const items = needs(
-      input({
-        nodes: [terminal, builder, planner],
-        run: held,
-        sessions: {
-          b: asking,
-          t: { ...NEW_SESSION, asking: [{ kind: 'other', id: 'ask-1', text: 'Action Required' }] },
-        },
-      }),
-    );
-    expect(items.map(({ id, kind, answerIn }) => [id, kind, answerIn])).toEqual([
-      [`hold/p/${holdGeneration(held.agents.p)}/ok`, 'hold', 'api'],
-      ['prompt/b/0/m1/permission', 'prompt', 'api'],
-      ['prompt/t/0/ask-1', 'prompt', 'terminal'],
-    ]);
-    expect(items[1]).toMatchObject({
-      agent: 'b',
-      title: 'Approve Bash: npm test?',
-      choices: [
-        { value: 'once', label: 'Yes' },
-        { value: 'deny', label: 'No' },
-      ],
-    });
-    // Answered in its terminal: nothing to choose here.
-    expect(items[2]).toMatchObject({ title: 'Action Required', choices: [] });
-  });
-
   it('derives what the sidebar shows from the same list', () => {
-    expect(
-      needsOf(input({ run: held, sessions: { b: asking } })).map(({ kind, agent }) => [
-        kind,
-        agent.id,
-      ]),
-    ).toEqual([
+    expect(needsOf(input({ run: held })).map(({ kind, agent }) => [kind, agent.id])).toEqual([
       ['hold', 'p'],
-      ['prompt', 'b'],
     ]);
   });
 
@@ -218,21 +173,6 @@ describe('needs', () => {
             }),
           },
         },
-        sessions: {
-          b: {
-            ...asking,
-            entries: [
-              { id: 'm1', kind: 'user', text: 'Run the tests' },
-              {
-                id: 'm1/permission',
-                kind: 'permission',
-                tool: 'Bash',
-                summary: 'npm test',
-                always: 'Always allow npm test',
-              },
-            ],
-          },
-        },
       }),
     );
     const marks = (agentId: string) =>
@@ -252,11 +192,6 @@ describe('needs', () => {
       no: 'Only you judge a condition.',
     });
     expect(marks('s')).toEqual({ switch: 'Only you switch how an agent runs.' });
-    expect(marks('b')).toEqual({
-      once: undefined,
-      always: 'Only you allow it always.',
-      deny: undefined,
-    });
   });
 
   it('gives an action refusal a different question from a session startup refusal', () => {
@@ -265,48 +200,6 @@ describe('needs', () => {
     expect(holdGeneration({ ...at, refused: { ...refused, kind: 'unknown-action' } })).not.toBe(
       holdGeneration(at),
     );
-  });
-
-  it('lists only a question prompt’s questions still unanswered, and cuts a long detail short', () => {
-    const output = Array.from({ length: 20 }, (_, i) => `line ${String(i + 1)}`).join('\n');
-    const items = needs(
-      input({
-        sessions: {
-          b: {
-            ...NEW_SESSION,
-            status: 'waiting',
-            entries: [
-              {
-                id: 'q',
-                kind: 'question',
-                questions: [
-                  { header: 'A', text: 'First?', options: [], multiple: false, answer: 'yes' },
-                  { header: 'B', text: 'Second?', options: [], multiple: false },
-                ],
-              },
-            ],
-          },
-          p: {
-            ...asking,
-            entries: [
-              {
-                id: 'p1',
-                kind: 'permission',
-                tool: 'Bash',
-                summary: 'npm test',
-                always: null,
-                detail: { kind: 'output', text: output },
-              },
-            ],
-          },
-        },
-      }),
-    );
-    expect(items[0]).toMatchObject({ title: 'Second?' });
-    expect(items[0]?.questions?.map(({ text }) => text)).toEqual(['Second?']);
-    const detail = items[1]?.detail?.split('\n') ?? [];
-    expect(detail).toHaveLength(MAX_DETAIL_LINES + 1);
-    expect(detail.at(-1)).toBe(`… ${String(20 - MAX_DETAIL_LINES)} more lines`);
   });
 
   it('tells every time of day in a hold’s words in the host’s locale', () => {
@@ -369,35 +262,57 @@ describe('needs', () => {
   });
 
   it('shows a token an MCP server’s request without the link only you may open', () => {
-    const signIn: Session = {
-      ...NEW_SESSION,
-      status: 'waiting',
-      entries: [
-        { id: 'm1', kind: 'user', text: 'Read the issues' },
-        {
-          id: 'm1/elicitation',
-          kind: 'elicitation',
+    const link = promptNeed(
+      {
+        canvas: CANVAS,
+        need: 'link',
+        name: 'Builder',
+        standIn: false,
+        prompt: Prompt.parse({
+          id: crypto.randomUUID(),
+          agent: 'b',
+          raised: 1,
+          kind: 'form',
+          answerIn: 'api',
           server: 'tracker',
-          message: 'Sign in at tracker.example.com/oauth%3Fstate%3Dsecret',
-          url: 'https://tracker.example.com/oauth?state=secret',
-        },
-        {
-          id: 'm1/form',
-          kind: 'elicitation',
+          title: 'Sign in at tracker.example.com/oauth%3Fstate%3Dsecret',
+          form: { url: 'https://tracker.example.com/oauth?state=secret' },
+        }),
+      },
+      'you',
+    );
+    const form = promptNeed(
+      {
+        canvas: CANVAS,
+        need: 'form',
+        name: 'Builder',
+        standIn: false,
+        prompt: Prompt.parse({
+          id: crypto.randomUUID(),
+          agent: 'b',
+          raised: 1,
+          kind: 'form',
+          answerIn: 'api',
           server: 'tracker',
-          message: 'Paste the key tracker.example.com/key%3Ftoken%3Dsecret shows',
-          fields: [{ name: 'key', label: 'Key', required: true, kind: 'text' }],
-        },
-      ],
-    };
-    const [link, form] = needs(input({ sessions: { b: signIn } }));
+          title: 'Paste the key tracker.example.com/key%3Ftoken%3Dsecret shows',
+          form: {
+            schema: {
+              type: 'object',
+              properties: { key: { type: 'string', title: 'Key' } },
+              required: [],
+              additionalProperties: false,
+            },
+          },
+        }),
+      },
+      'you',
+    );
     // Titled in the core's words, never the server's, which may hold its link.
     expect(link).toMatchObject({
       title: 'MCP server “tracker” asks you to open a link',
       form: { url: 'https://tracker.example.com/oauth?state=secret' },
     });
     expect(form).toMatchObject({ title: 'MCP server “tracker” asks you to fill in a form' });
-    if (!link || !form) throw new Error('no item');
     for (const item of [link, form]) {
       const theirs = needFor(item, 'token');
       expect(theirs).not.toHaveProperty('form');
@@ -432,13 +347,5 @@ describe('needs', () => {
       agents: { p: { ...at, usage: { ...usage, percent, used: percent } as never } },
     });
     expect(id(asking(91))).toBe(id(asking(97)));
-  });
-
-  it('gives a prompt of another session whose native id is reused another id', () => {
-    const generations = (generation: number) => () => generation;
-    const of = (generation: number) =>
-      needs(input({ sessions: { b: asking }, sessionGenerations: generations(generation) }))[0]?.id;
-    expect(of(3)).toBe('prompt/b/3/m1/permission');
-    expect(of(4)).toBe('prompt/b/4/m1/permission');
   });
 });

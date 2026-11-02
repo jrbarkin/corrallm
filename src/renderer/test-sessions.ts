@@ -1,3 +1,5 @@
+import type { PromptAnswer, PromptEvent, PromptEnded } from '../shared/model/prompts';
+export type FixtureSessionEvent = SessionEvent | PromptEvent | PromptEnded;
 import { vi } from 'vitest';
 
 import type { ConnectionId, AdapterId } from '../shared/adapter';
@@ -6,7 +8,6 @@ import type {
   SessionMode,
   SessionOptions,
   UserMessage,
-  SessionAnswer,
   SettingsOptions,
   InstalledClis,
   PastSession,
@@ -21,7 +22,7 @@ export interface SessionReplies {
   start(agent: string, options: SessionOptions): Promise<null>;
   installed(): Promise<InstalledClis>;
   send(agent: string, message: UserMessage): Promise<null>;
-  answer(agent: string, prompt: string, answer: SessionAnswer): Promise<null>;
+  answer(agent: string, prompt: string, answer: PromptAnswer): Promise<null>;
   interrupt(agent: string): Promise<null>;
   setMode(agent: string, mode: SessionMode): Promise<null>;
   setModel(agent: string, model: string): Promise<null>;
@@ -38,14 +39,14 @@ export interface SessionReplies {
   rewind(agent: string, id: string, restore: RewindRestore): Promise<RewindResult>;
   changeMcp(agent: string, server: string, change: McpChange): Promise<McpServer[]>;
   onEvent(
-    listener: (agent: string, connection: ConnectionId, event: SessionEvent) => void,
+    listener: (agent: string, connection: ConnectionId, event: FixtureSessionEvent) => void,
   ): () => void;
 }
 
 /** Scripted operation answers and topic inputs for a window's session widgets. */
 export function fakeSessions() {
   let listener:
-    ((agentId: string, connection: ConnectionId, event: SessionEvent) => void) | undefined;
+    ((agentId: string, connection: ConnectionId, event: FixtureSessionEvent) => void) | undefined;
   const replies = {
     start: vi.fn<SessionReplies['start']>().mockResolvedValue(null),
     installed: vi
@@ -83,7 +84,7 @@ export function fakeSessions() {
   return {
     replies,
     /** Main says `events` happened in agent `agentId`'s session, connected through `connection`. */
-    emit: (agentId: string, connection: ConnectionId, ...events: SessionEvent[]) => {
+    emit: (agentId: string, connection: ConnectionId, ...events: FixtureSessionEvent[]) => {
       for (const event of events) listener?.(agentId, connection, event);
     },
     /** Whether a topic fixture is attached. */

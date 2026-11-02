@@ -18,7 +18,6 @@ export function fakeBackend() {
       .fn<SessionBackend['installed']>()
       .mockResolvedValue({ 'claude-code': false, codex: false }),
     send: vi.fn<SessionBackend['send']>().mockResolvedValue(null),
-    answer: vi.fn<SessionBackend['answer']>().mockResolvedValue(null),
     interrupt: vi.fn<SessionBackend['interrupt']>().mockResolvedValue(null),
     setMode: vi.fn<SessionBackend['setMode']>().mockResolvedValue(null),
     setModel: vi.fn<SessionBackend['setModel']>().mockResolvedValue(null),

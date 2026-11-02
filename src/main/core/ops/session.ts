@@ -83,7 +83,7 @@ function whole(entry: TranscriptEntry, cut: TranscriptEntry): TranscriptEntry {
 
 /** A tool's or a permission's diff with its last lines left out to fit `room` bytes of JSON. */
 function withFewerLines(entry: TranscriptEntry, room: number): TranscriptEntry {
-  if (entry.kind !== 'tool' && entry.kind !== 'permission') return entry;
+  if (entry.kind !== 'tool') return entry;
   const { detail } = entry;
   if (detail?.kind !== 'diff') return entry;
   return shortest(detail.lines.length, room, (n) => ({

@@ -1,9 +1,8 @@
+import type { AdapterPrompt } from '../../../shared/model/prompts';
 import path from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
-import type { AdapterPrompt } from '../../../shared/model/prompts';
-import type { TerminalAsk } from '../../../shared/session';
 import { ClaudeCode } from './claude-code';
 
 const SESSION = '0b3a7d52-6a0c-4f39-9c4e-2f8f0c1d9e11';
@@ -125,7 +124,7 @@ describe('a turn Claude Code could not finish', () => {
 });
 
 /** What Claude Code asks, as its PermissionRequest hook tells it for `tool` with `input`. */
-function asked(tool: string, input: Record<string, unknown>): TerminalAsk | undefined {
+function asked(tool: string, input: Record<string, unknown>): AdapterPrompt | undefined {
   const claude = new ClaudeCode({ cwd: '/work/app', home: '/Users/me', env: {} });
   const signals = claude.hook({
     hook_event_name: 'PermissionRequest',
@@ -134,16 +133,22 @@ function asked(tool: string, input: Record<string, unknown>): TerminalAsk | unde
     tool_input: input,
   });
   const ask = signals.find((signal) => signal.kind === 'ask');
-  return ask?.kind === 'ask' ? ask.ask : undefined;
+  return ask?.kind === 'ask' ? ask.prompt : undefined;
 }
 
 describe('a permission Claude Code asks for in its terminal', () => {
   it('says what it is for: the command in full, the edit’s diff, the new file’s start', () => {
     expect(asked('Bash', { command: 'npm test', description: 'Run the tests' })).toEqual({
-      kind: 'permission',
-      id: expect.any(String) as unknown,
-      tool: 'Bash',
+      kind: 'approval',
+      answerIn: 'terminal',
+      title: 'Claude wants to use Bash',
+      subject: {
+        type: 'tool',
+        tool: 'Bash',
+        input: { command: 'npm test', description: 'Run the tests' },
+      },
       summary: 'npm test',
+      choices: [],
     });
     expect(asked('Bash', { command: 'git add -A\ngit commit -m "Tests"' })).toMatchObject({
       summary: 'git add -A …',
@@ -156,7 +161,7 @@ describe('a permission Claude Code asks for in its terminal', () => {
         new_string: 'hello world',
       }),
     ).toMatchObject({
-      tool: 'Edit',
+      subject: { type: 'tool', tool: 'Edit' },
       summary: 'notes.txt',
       detail: {
         kind: 'diff',
@@ -172,12 +177,16 @@ describe('a permission Claude Code asks for in its terminal', () => {
     // A long file shows its start: the card is a preview, the terminal shows it all.
     const content = Array.from({ length: 30 }, (_, i) => `line ${String(i + 1)}`).join('\n');
     const write = asked('Write', { file_path: '/work/app/src/long.ts', content });
-    expect(write).toMatchObject({ tool: 'Write', summary: path.join('src', 'long.ts') });
-    const detail = write?.kind === 'permission' ? write.detail : undefined;
+    expect(write).toMatchObject({
+      subject: { type: 'tool', tool: 'Write' },
+      summary: path.join('src', 'long.ts'),
+    });
+    const detail = write?.kind === 'approval' ? write.detail : undefined;
     expect(detail?.kind === 'diff' && detail.added).toBe(30);
+    expect(write).toMatchObject({ cut: true });
     expect(detail?.kind === 'diff' && detail.lines.map((line) => line.text)).toEqual([
-      ...Array.from({ length: 12 }, (_, i) => `line ${String(i + 1)}`),
-      '… (18 more lines)',
+      ...Array.from({ length: 11 }, (_, i) => `line ${String(i + 1)}`),
+      '… (19 more lines)',
     ]);
   });
 });

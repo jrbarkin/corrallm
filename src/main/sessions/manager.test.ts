@@ -690,7 +690,6 @@ describe('SessionManager', () => {
   it('passes the user’s requests on to the session, and rejects them for an agent without one', async () => {
     const live = {
       send: vi.fn<LiveSession['send']>().mockResolvedValue(undefined),
-      answer: vi.fn<LiveSession['answer']>().mockResolvedValue(undefined),
       interrupt: vi.fn<LiveSession['interrupt']>().mockResolvedValue(undefined),
       setMode: vi.fn<LiveSession['setMode']>().mockResolvedValue(undefined),
       setModel: vi.fn<LiveSession['setModel']>().mockResolvedValue(undefined),
@@ -701,12 +700,10 @@ describe('SessionManager', () => {
     await expect(sessions.interrupt(canvas, 'a')).rejects.toThrow(/not running/);
     await sessions.start(canvas, 'a', OPTIONS);
     await sessions.send(canvas, 'a', { id: 'm', text: 'Hi' });
-    await sessions.answer(canvas, 'a', 'p', { kind: 'permission', answer: 'once' });
     await sessions.interrupt(canvas, 'a');
     await sessions.setMode(canvas, 'a', 'plan');
     await sessions.setModel(canvas, 'a', 'opus');
     expect(live.send).toHaveBeenCalledWith({ id: 'm', text: 'Hi' });
-    expect(live.answer).toHaveBeenCalledWith('p', { kind: 'permission', answer: 'once' });
     expect(live.interrupt).toHaveBeenCalled();
     expect(live.setMode).toHaveBeenCalledWith('plan');
     expect(live.setModel).toHaveBeenCalledWith('opus');
@@ -720,7 +717,6 @@ describe('SessionManager', () => {
   it('never sends what an interrupt stopped on its way to the CLI, ending its turn taken back', async () => {
     const live = {
       send: vi.fn<LiveSession['send']>().mockResolvedValue(undefined),
-      answer: () => Promise.resolve(),
       interrupt: vi.fn<LiveSession['interrupt']>().mockResolvedValue(undefined),
       setMode: () => Promise.resolve(),
       setModel: () => Promise.resolve(),
@@ -786,7 +782,6 @@ describe('SessionManager', () => {
     const servers = [{ name: 'github', status: 'connected' as const }];
     const live = {
       send: () => Promise.resolve(),
-      answer: () => Promise.resolve(),
       interrupt: () => Promise.resolve(),
       setMode: () => Promise.resolve(),
       setModel: () => Promise.resolve(),
@@ -815,7 +810,6 @@ describe('SessionManager', () => {
     // A Terminal session has neither: its terminal sets them.
     const terminal: LiveSession = {
       send: () => Promise.resolve(),
-      answer: () => Promise.resolve(),
       interrupt: () => Promise.resolve(),
       setMode: () => Promise.resolve(),
       setModel: () => Promise.resolve(),
@@ -847,7 +841,6 @@ describe('SessionManager', () => {
     const specs: SessionSpec[] = [];
     const plain: LiveSession = {
       send: () => Promise.resolve(),
-      answer: () => Promise.resolve(),
       interrupt: () => Promise.resolve(),
       setMode: () => Promise.resolve(),
       setModel: () => Promise.resolve(),
@@ -949,7 +942,6 @@ describe('SessionManager', () => {
     let host: SessionHost | undefined;
     const live: LiveSession = {
       send: () => Promise.resolve(),
-      answer: () => Promise.resolve(),
       interrupt: () => Promise.resolve(),
       setMode: () => Promise.resolve(),
       setModel: () => Promise.resolve(),
@@ -984,7 +976,6 @@ describe('SessionManager', () => {
       start: (spec) =>
         Promise.resolve({
           send: () => Promise.resolve(),
-          answer: () => Promise.resolve(),
           interrupt: () => Promise.resolve(),
           setMode: () => Promise.resolve(),
           setModel: () => Promise.resolve(),
@@ -1014,7 +1005,6 @@ describe('SessionManager', () => {
     const close = vi.fn(() => closing);
     const live: LiveSession = {
       send: () => Promise.resolve(),
-      answer: () => Promise.resolve(),
       interrupt: () => Promise.resolve(),
       setMode: () => Promise.resolve(),
       setModel: () => Promise.resolve(),
@@ -1057,7 +1047,6 @@ describe('SessionManager', () => {
           host.remember(spec.resume ?? id);
           return Promise.resolve({
             send: () => Promise.resolve(),
-            answer: () => Promise.resolve(),
             interrupt: () => Promise.resolve(),
             setMode: () => Promise.resolve(),
             setModel: () => Promise.resolve(),
@@ -1102,7 +1091,6 @@ describe('SessionManager', () => {
           const screen = `run ${String(runs.length)}`;
           return Promise.resolve({
             send: () => Promise.resolve(),
-            answer: () => Promise.resolve(),
             interrupt: () => Promise.resolve(),
             setMode: () => Promise.resolve(),
             setModel: () => Promise.resolve(),
@@ -1389,7 +1377,6 @@ describe('SessionManager rewinding a session', () => {
         host.remember(spec.resume ?? REMEMBERED);
         return Promise.resolve({
           send: () => Promise.resolve(),
-          answer: () => Promise.resolve(),
           interrupt: () => Promise.resolve(),
           setMode: () => Promise.resolve(),
           setModel: () => Promise.resolve(),
@@ -1575,7 +1562,6 @@ it.each(['ended', 'deadline'] as const)(
     const live: LiveSession = {
       send: vi.fn().mockResolvedValue(undefined),
       interrupt: interrupted,
-      answer: vi.fn().mockResolvedValue(undefined),
       close: vi.fn().mockResolvedValue(undefined),
       setMode: vi.fn().mockResolvedValue(undefined),
       setModel: vi.fn().mockResolvedValue(undefined),

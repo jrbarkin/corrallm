@@ -35,7 +35,7 @@ import { partyText } from './parties';
  * person's decision is this call, made once they decided.
  */
 
-/** A typed answer (B11 Design §7): a choice, words, a question's answers, a permission, a plan or a form. */
+/** A typed owner reply or run-hold answer (B11 Design §7, B13 C1). */
 export type Answer = z.infer<typeof ReplyAnswer>;
 
 /** What `reply` returns: how the item was settled, and the record or new item it made. */
@@ -68,7 +68,7 @@ export interface ReplyHandler {
   current(canvas: CanvasId, to: string): NeedsItem | undefined | Promise<NeedsItem | undefined>;
   /**
    * Your item as `reader` may read it, where it words it otherwise than `needFor` makes of yours
-   * (B13 C9: an old permission's title in its CLI's words is yours alone). None: `needFor`'s.
+   * (B13 C11's prompt selector). None: `needFor`'s.
    */
   seen?(canvas: CanvasId, item: NeedsItem, reader: PromptReader): NeedsItem | undefined;
   /**
@@ -88,7 +88,6 @@ export interface ReplyHandler {
 /** The choice an answer picks, as an item's choices name it: what R3's humanOnly is read of. */
 export function picked(answer: Answer): string | undefined {
   if ('choice' in answer) return answer.choice;
-  if ('permission' in answer) return answer.permission;
   return undefined;
 }
 

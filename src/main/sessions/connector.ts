@@ -3,7 +3,6 @@ import type {
   McpChange,
   McpServer,
   PermissionMode,
-  SessionAnswer,
   SessionEvent,
   SessionMode,
   UserMessage,
@@ -104,18 +103,6 @@ export interface SessionSpec<M extends SessionMode = PermissionMode> {
  */
 export type HostEvent = SessionEvent | PromptEvent | PromptEnded;
 
-/**
- * Transitional (B13 C4, C5, until X10 converts the renderer; X11 removes it): how a session that
- * also shows each prompt it raises as one of the events B13 replaces translates an answer to the
- * old event `promptId` into the key of the prompt it shows and the answer as that prompt takes it,
- * so the core answers it through its prompt owner. Answers nothing itself. Throws for one no
- * longer asked, or an answer the prompt doesn't offer.
- */
-export type Bridge = (
-  promptId: string,
-  answer: SessionAnswer,
-) => { key: string; answer: PromptAnswer };
-
 /** Where a session reports to. */
 export interface SessionHost {
   /** CLI activity with no session event (a hook or untranslated progress, not cosmetic redraws). */
@@ -132,13 +119,6 @@ export interface SessionHost {
    * whenever it changes (as /clear starts a new one).
    */
   remember(sessionId: string): void;
-  /**
-   * Transitional (B13 C4, C5, until X10; X11 removes it), for a session that shows each prompt it
-   * raises as one of the events B13 replaces too: installs its `Bridge` as its start begins, before
-   * it raises anything, so that what it raises before its start resolves is shown once too, its
-   * old event standing for it, and answered through the owner (refused until it runs).
-   */
-  bridge?(translate: Bridge): void;
 }
 
 /**
@@ -173,8 +153,6 @@ export interface PromptAnswers {
 export interface LiveSession<M extends SessionMode = PermissionMode> {
   /** Sends a message: a turn starts (the manager sends one at a time, once the last has ended). */
   send(message: UserMessage): Promise<void>;
-  /** Answers a prompt it emitted, by the prompt's id (the events B13 replaces). */
-  answer(promptId: string, answer: SessionAnswer): Promise<void>;
   /** Answers and declines the prompts it raised (`prompt` events), where its connection raises them. */
   readonly prompts?: PromptAnswers;
   /** Interrupts the turn going on, if any: it ends with an 'end' that says so. */

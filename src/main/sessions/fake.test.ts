@@ -21,7 +21,7 @@ it.each([
   'the app fake raises $kind through the owner and accepts its answer once',
   async ({ text, kind, answer }) => {
     const events: HostEvent[] = [];
-    const session = await new FakeConnector({ ownerPrompts: true }).start(
+    const session = await new FakeConnector({}).start(
       { agentId: 'a', cwd: '/unused', env: {}, model: null, mode: 'manual', resume: null },
       { emit: (event) => events.push(event), remember: vi.fn() },
     );
@@ -45,7 +45,7 @@ it.each([
 
 it('the app fake withdraws its owner occurrence when a waiting turn is interrupted', async () => {
   const events: HostEvent[] = [];
-  const session = await new FakeConnector({ ownerPrompts: true }).start(
+  const session = await new FakeConnector({}).start(
     { agentId: 'a', cwd: '/unused', env: {}, model: null, mode: 'manual', resume: null },
     { emit: (event) => events.push(event), remember: vi.fn() },
   );
@@ -60,7 +60,7 @@ it('the app fake withdraws its owner occurrence when a waiting turn is interrupt
       key: raised.key,
       reason: 'withdrawn',
     });
-    expect(events.some((event) => event.type === 'withdrawn')).toBe(false);
+    expect(events.some((event) => ['withdrawn'].includes(event.type))).toBe(false);
     expect(() =>
       session.prompts?.answer(raised.key, {
         kind: 'questions',
@@ -177,7 +177,7 @@ describe('a scripted fake (CORRALLM_FAKE_SCRIPT, for the README media only)', ()
     });
     expect(tools[5]?.detail).toEqual({ kind: 'output', text: '6 passed' });
     // A scripted turn never asks, whatever its mode.
-    expect(events.some((event) => event.type === 'permission')).toBe(false);
+    expect(events.some((event) => ['permission'].includes(event.type))).toBe(false);
     expect(events.find((event) => event.type === 'end')).toMatchObject({
       messages: ['m'],
       result: { status: 'completed' },

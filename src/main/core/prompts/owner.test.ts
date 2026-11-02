@@ -603,29 +603,6 @@ describe('admission', () => {
   });
 });
 
-describe('prompts its session also shows as the events B13 replaces (until X10)', () => {
-  it('lists none in Needs, where the old event’s item stands for it, yet finds it by its key', async () => {
-    const answers = handle();
-    owner.raised(origin(7, answers, { mirrored: true }), {
-      type: 'prompt',
-      key: KEY,
-      prompt: approval,
-    });
-    expect(owner.items(CANVAS)).toEqual([]);
-    const need = owner.keyed(CANVAS, 'b', 7, KEY);
-    expect(need).toMatch(/^prompt\/b\/7\/[0-9a-f-]{36}$/);
-    // Not another generation's, nor another agent's, nor another key's.
-    expect(owner.keyed(CANVAS, 'b', 8, KEY)).toBeUndefined();
-    expect(owner.keyed(CANVAS, 'c', 7, KEY)).toBeUndefined();
-    expect(owner.keyed(CANVAS, 'b', 7, KEY2)).toBeUndefined();
-    // Answered through the owner as any other: by its NeedId, on the handle captured at raise.
-    if (need === undefined) throw new Error('not found');
-    expect(await answer(need, { choice: 'yes' })).toMatchObject({ outcome: 'answered' });
-    expect(answers.answered).toEqual([[KEY, { kind: 'choice', value: 'yes' }]]);
-    expect(owner.keyed(CANVAS, 'b', 7, KEY)).toBeUndefined();
-  });
-});
-
 describe('Not waiting (B13 C7)', () => {
   /** What a terminal's CLI waits on, raised from its report alone: in its words, nothing more. */
   const waiting = {
@@ -1396,15 +1373,15 @@ describe('its agents’ transcripts (B13 C9): each prompt it lists placed as rai
       type: 'raised',
       entry: { standIn: true, prompt: { cut: true } },
     });
-    // One its session shows as one of the events B13 replaces isn't: the old entry stands for it.
-    owner.raised(origin(7, one, { mirrored: true }), {
+    // Each additional admitted prompt is placed once too.
+    owner.raised(origin(7, one), {
       type: 'prompt',
       key: crypto.randomUUID(),
       prompt: approval,
     });
     // Nor is one declined.
     raise(origin(7, one), { ...approval, choices: [yes] }, crypto.randomUUID());
-    expect(placed).toHaveLength(2);
+    expect(placed).toHaveLength(3);
   });
 
   it('settles it in place as it ends: how, and by whom, never a label, words or values; what was asked kept only in short', async () => {
@@ -1462,7 +1439,7 @@ describe('its agents’ transcripts (B13 C9): each prompt it lists placed as rai
     expect(settled).not.toMatch(/private-|signin\.example|"label"|choices|subject|questions/);
   });
 
-  it('settles nothing it hasn’t: a refused answer leaves it waiting, and an answer it took through an old event is the old entry’s', async () => {
+  it('settles only an accepted answer, leaving a refused answer waiting', async () => {
     const one = handle();
     one.onAnswer = () => {
       throw new Error('The CLI moved on');
@@ -1472,14 +1449,14 @@ describe('its agents’ transcripts (B13 C9): each prompt it lists placed as rai
     expect(await answer(id, { choice: 'yes' })).toMatchObject({ code: 'unavailable' });
     expect(changesOf(id).map(({ type }) => type)).toEqual(['raised']);
     const two = handle();
-    owner.raised(origin(7, two, { mirrored: true }), {
+    owner.raised(origin(7, two), {
       type: 'prompt',
       key: KEY2,
       prompt: approval,
     });
-    const need = owner.keyed(CANVAS, 'b', 7, KEY2) ?? '';
+    const need = owner.items(CANVAS).at(-1)?.id ?? '';
     await answer(need, { choice: 'yes' });
-    expect(changesOf(need)).toEqual([]);
+    expect(changesOf(need).map(({ type }) => type)).toEqual(['raised', 'ended']);
   });
 
   it('keeps an MCP server’s words for its tool yours alone: a token reads what waits and how it ended in the core’s', async () => {
@@ -1511,10 +1488,10 @@ describe('its agents’ transcripts (B13 C9): each prompt it lists placed as rai
     expect(placed.at(-1)?.change).not.toHaveProperty('tokenTitle');
   });
 
-  it('says what each agent waits on: its oldest live prompt, mirrored or not, being answered too, as a token reads it', async () => {
+  it('says what each agent waits on: its oldest live prompt, being answered too, as a token reads it', async () => {
     expect(owner.waiting(CANVAS, 'b')).toBeUndefined();
     const one = handle();
-    owner.raised(origin(7, one, { mirrored: true }), { type: 'prompt', key: KEY, prompt: link });
+    owner.raised(origin(7, one), { type: 'prompt', key: KEY, prompt: link });
     const first = owner.waiting(CANVAS, 'b');
     expect(first).toMatchObject({
       agent: 'b',
@@ -1526,7 +1503,7 @@ describe('its agents’ transcripts (B13 C9): each prompt it lists placed as rai
     raise(origin(7, one), approval, KEY2);
     expect(owner.waiting(CANVAS, 'b')?.id).toBe(first?.id);
     expect(owner.waiting(CANVAS, 'c')).toBeUndefined();
-    owner.ended(origin(7, one, { mirrored: true }), {
+    owner.ended(origin(7, one), {
       type: 'prompt-ended',
       key: KEY,
       reason: 'withdrawn',

@@ -1,3 +1,4 @@
+import { MAX_PROMPT_QUESTIONS } from '../../api/limits';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 
@@ -18,7 +19,7 @@ import { MAX_NODE_ID } from '../../model/canvas';
 import { NEW_SESSION } from '../../model/session';
 import { runView, sessionView } from '../../model/views';
 import { AgentId } from '../ids';
-import { MAX_FORM_FIELDS, MAX_QUESTIONS, MAX_MESSAGE_LENGTH } from '../../session';
+import { MAX_FORM_FIELDS, MAX_MESSAGE_LENGTH } from '../../session';
 import { b11RunOps } from './run';
 import { b11SessionOps } from './session';
 import { b11ConversationOps, ReplyAnswer } from './conversation';
@@ -131,8 +132,11 @@ describe('prepared operation schemas, not registrations', () => {
     }
     expect(OPS.reply).toBe(b11ConversationOps.reply);
     expect(
-      OPS.reply.input.safeParse({ canvas, to: 'prompt/a/q', answer: { answers: { q: 'yes' } } })
-        .success,
+      OPS.reply.input.safeParse({
+        canvas,
+        to: 'prompt/a/q',
+        answer: { answers: { q: { text: 'yes' } } },
+      }).success,
     ).toBe(true);
   });
 
@@ -257,7 +261,10 @@ describe('prepared operation schemas, not registrations', () => {
       false,
     );
     const questions = Object.fromEntries(
-      Array.from({ length: MAX_QUESTIONS + 1 }, (_, i) => [`q${String(i)}`, 'yes']),
+      Array.from({ length: MAX_PROMPT_QUESTIONS + 1 }, (_, i) => [
+        `q${String(i)}`,
+        { text: 'yes' },
+      ]),
     );
     expect(ReplyAnswer.safeParse({ answers: questions }).success).toBe(false);
     for (const [name, field] of [
@@ -276,10 +283,10 @@ describe('prepared operation schemas, not registrations', () => {
     { choice: 'approve' },
     { choice: 'retry', text: 'try again', images: [{ mediaType: 'image/png', data: 'AAAA' }] },
     { text: 'changes' },
-    { answers: { q1: 'one', q2: ['two', 'three'] } },
-    { permission: 'deny', feedback: 'do this instead' },
-    { plan: { approve: true, mode: 'manual' } },
-    { plan: { approve: false, feedback: 'change it' } },
+    { answers: { q1: { text: 'one' }, q2: { picked: ['two', 'three'] } } },
+    { choice: 'deny', feedback: 'do this instead' },
+    { choice: 'manual' },
+    { choice: 'revise', feedback: 'change it' },
     {
       form: { action: 'accept', values: { text: 'hello', yes: true, number: 3, choices: ['one'] } },
     },

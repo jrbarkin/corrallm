@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { appServerRefusal, codexLogin, PLAN_DECLINED, planPrompt } from './login';
+import { appServerRefusal, codexLogin, PLAN_DECLINED, planConsent } from './login';
 
 describe('the Codex login', () => {
   it('reads what account/read says (as the real app server said it)', () => {
@@ -43,16 +43,9 @@ describe('the Codex login', () => {
   });
 
   it('asks before using a ChatGPT plan, quoting what OpenAI allows and where it says so', () => {
-    const prompt = planPrompt('m1:chatgpt-plan', { kind: 'chatgpt', plan: 'plus' });
-    expect(prompt).toMatchObject({
-      type: 'permission',
-      id: 'm1:chatgpt-plan',
-      tool: 'ChatGPT plan',
-      summary: 'Plus',
-      title: 'Use your ChatGPT plan here?',
-      always: "Yes, and don't ask again on this computer",
-    });
-    const said = prompt.detail?.kind === 'output' ? prompt.detail.text : '';
+    const prompt = planConsent({ kind: 'chatgpt', plan: 'plus' });
+    expect(prompt.plan).toBe('Plus');
+    const said = prompt.text;
     const unwrapped = said.replace(/\s+/g, ' ');
     expect(unwrapped).toContain(
       '"If you’ve built a local or open-source application using Codex app-server authentication, you can continue using it',
@@ -63,7 +56,7 @@ describe('the Codex login', () => {
     expect(unwrapped).toContain('learn.chatgpt.com/docs/app-server');
     // It fits the prompt's box: no line scrolls.
     for (const line of said.split('\n')) expect(line.length).toBeLessThanOrEqual(80);
-    expect(planPrompt('p', { kind: 'chatgpt', plan: null })).toMatchObject({ summary: 'ChatGPT' });
+    expect(planConsent({ kind: 'chatgpt', plan: null })).toMatchObject({ plan: 'ChatGPT' });
     expect(PLAN_DECLINED).toMatch(/Codex · Terminal.*codex login --with-api-key/s);
   });
 });

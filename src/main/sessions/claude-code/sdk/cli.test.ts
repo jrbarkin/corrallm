@@ -159,7 +159,7 @@ describe('SdkConnector through the Agent SDK', () => {
       kind: 'approval',
       subject: { type: 'tool', tool: 'Bash', input: { command: 'echo hello' } },
     });
-    expect(events.some(({ type }) => type === 'permission')).toBe(false);
+    expect(events.some(({ type }) => ['permission'].includes(type))).toBe(false);
     const { key } = await raised(events);
     session.prompts?.answer(key, { kind: 'choice', value: 'allow' });
 
@@ -276,7 +276,7 @@ describe('SdkConnector through the Agent SDK', () => {
     const id = '00000000-0000-4000-8000-00000000000c';
     await session.send({ id, text: 'please edit it' });
     await waitFor(events, (e) => e.type === 'end');
-    expect(events.some((e) => e.type === 'permission' || e.type === 'mode')).toBe(false);
+    expect(events.some((e) => ['permission'].includes(e.type) || e.type === 'mode')).toBe(false);
     // The CLI refuses bypassing, and the composer goes back to the mode it was in.
     await expect(session.setMode('bypassPermissions')).rejects.toThrow(/disabled by settings/);
     expect(events.at(-1)).toEqual({ type: 'mode', mode: 'acceptEdits' });

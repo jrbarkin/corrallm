@@ -1476,7 +1476,6 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
           prompts,
           replies: runReplies({
             engines,
-            sessions,
             prompts,
             ...(config.locale === undefined ? {} : { locale: config.locale }),
           }),

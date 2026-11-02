@@ -251,8 +251,7 @@ export function outcomeFor(outcome: LiveOutcome, reader: PromptReader): LiveOutc
 }
 
 /**
- * Any item of yours that waits, already worded (a hold of the run, a prompt of the events B13
- * replaces, a proposal, a review), as `reader` sees it: a token's has no choices, no words to give,
+ * Any item of yours that waits, already worded (a hold of the run, a proposal, a review), as `reader` sees it: a token's has no choices, no words to give,
  * no form, and a form prompt's own words left out. A prompt the core's owner holds is worded for
  * each reader by `promptNeed`, which reads what this can't (a terminal's screen).
  */
@@ -277,12 +276,8 @@ export function needFor(item: NeedsItem, reader: PromptReader): NeedsItem {
 }
 
 /**
- * An entry of a transcript (the events B13 replaces, until X11), as `reader` sees it: a message's
- * pasted images only counted. A token's prompt entry has no answer (a question's, a permission's,
- * a plan's or a form's), no feedback and no "always" choice's label; an MCP server's request
- * only the core's words, never its message, form or link. Native user turns made from a prompt
- * answer retain their provenance internally: a token sees only that a prompt was answered.
- * Whether it was withdrawn is everyone's.
+ * An entry of a transcript as each reader sees it: images counted, native prompt-reply text
+ * withheld from tokens, and owner prompts projected by the one selector.
  */
 export function entryFor(entry: Entry, reader: PromptReader): EntryView {
   switch (entry.kind) {
@@ -293,42 +288,6 @@ export function entryFor(entry: Entry, reader: PromptReader): EntryView {
       return images === undefined || images.length === 0
         ? seen
         : { ...seen, images: images.length };
-    }
-    case 'permission': {
-      if (reader === 'you') return entry;
-      const seen = { ...entry };
-      delete seen.always;
-      delete seen.answer;
-      delete seen.feedback;
-      // What it asks in its CLI's words (an MCP server's own, for its tool) is yours alone: a
-      // token reads its tool and summary (B13 C9).
-      delete seen.title;
-      return seen;
-    }
-    case 'question':
-      return reader === 'you'
-        ? entry
-        : {
-            ...entry,
-            questions: entry.questions.map((question) => {
-              const seen = { ...question };
-              delete seen.answer;
-              return seen;
-            }),
-          };
-    case 'plan': {
-      if (reader === 'you') return entry;
-      const seen = { ...entry };
-      delete seen.answer;
-      return seen;
-    }
-    case 'elicitation': {
-      if (reader === 'you') return entry;
-      const seen = { ...entry, message: mcpRequestTitle(entry.server, entry.url !== undefined) };
-      delete seen.url;
-      delete seen.fields;
-      delete seen.answer;
-      return seen;
     }
     case 'prompt':
       return promptEntryFor(entry, reader);

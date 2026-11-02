@@ -5,9 +5,9 @@ import type { HandoffView } from '../../../shared/model/handoff';
 import { agentParty } from '../../../shared/model/messages';
 import type { Message } from '../../../shared/model/messages';
 import { entryFor } from '../../../shared/model/prompt-views';
-import { isOpen, turnReply } from '../../../shared/model/session';
+import { turnReply } from '../../../shared/model/session';
 import type { Entry } from '../../../shared/model/session';
-import { messageView, presentationOf, runView, summaryReply } from '../../../shared/model/views';
+import { messageView, suggestionOf, runView, summaryReply } from '../../../shared/model/views';
 import type {
   EntryView,
   MessageView,
@@ -33,18 +33,9 @@ import { agentOf } from './open';
  * second way to see anything, and a page boundary never a missing row.
  */
 
-/**
- * How many prompts of its own an agent waits on an answer to, each once: its session's, its
- * terminal's, and those the core's prompt owner holds that its session doesn't show itself (B13
- * C11's counts; the same for every reader that reaches the agent).
- */
-export function promptsOf({ engine, ownedPrompts }: OpenCanvas, id: string): number {
-  const session = engine.sessions.of(id);
-  return (
-    session.entries.filter(isOpen).length +
-    (session.asking?.length ?? 0) +
-    (ownedPrompts?.(id) ?? 0)
-  );
+/** How many live prompts the owner holds for this agent, alike for each reached reader. */
+export function promptsOf({ ownedPrompts }: OpenCanvas, id: string): number {
+  return ownedPrompts?.(id) ?? 0;
 }
 
 /**
@@ -110,7 +101,7 @@ export function sessionSummary(open: OpenCanvas, agent: string, yours = true) {
     ...(session.running === undefined ? {} : { running: session.running }),
     ...(session.usage === undefined ? {} : { usage: session.usage }),
     ...summaryReply(handoffReply ? null : reply),
-    ...(yours ? presentationOf(session) : {}),
+    ...(yours ? suggestionOf(session) : {}),
   };
 }
 

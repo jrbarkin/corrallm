@@ -1,13 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
-import { answersOf, NEW_SESSION, sessionQuestions } from '../../../../shared/model/session';
+import { NEW_SESSION } from '../../../../shared/model/session';
 import { Prompt, PromptId } from '../../../../shared/model/prompts';
 import type { Entry, Session } from '../../../../shared/model/session';
 import { reduce } from './reduce';
-
-/** The questions a session still waits on an answer to. */
-const pending = (session: Session) =>
-  sessionQuestions(session).filter(({ question }) => question.answer === undefined);
 
 const tool = (id: string, status: 'running' | 'done' = 'running'): Entry => ({
   id,
@@ -28,23 +24,6 @@ describe('reduce', () => {
       { id: 'u', kind: 'user', text: 'Hi' },
       { id: 't', kind: 'text', text: 'Hello there' },
     ]);
-  });
-
-  it('waits on a permission prompt, and records the answer it was given', () => {
-    const asked: Session = reduce(
-      reduce(NEW_SESSION, { type: 'start', entry: { id: 'u', kind: 'user', text: 'Go' } }),
-      { type: 'ask', entry: { id: 'p', kind: 'permission', tool: 'Bash', summary: 'npm test' } },
-    );
-    expect(asked.status).toBe('waiting');
-    const always = reduce(asked, { type: 'answer', id: 'p', answer: 'always' });
-    expect(always.status).toBe('working');
-    expect(always.entries.at(-1)).toEqual({
-      id: 'p',
-      kind: 'permission',
-      tool: 'Bash',
-      summary: 'npm test',
-      answer: 'always',
-    });
   });
 
   it('ends a turn; an interrupted one stops its running tools', () => {
@@ -98,62 +77,6 @@ describe('reduce, for connected sessions', () => {
     const waiting = reduce(started, { type: 'status', status: 'waiting' });
     expect(waiting.status).toBe('waiting');
     expect(reduce(waiting, { type: 'status', status: 'working' }).status).toBe('working');
-  });
-
-  it('asks questions, and works on once every one is answered', () => {
-    const asked = reduce(started, {
-      type: 'ask',
-      entry: {
-        id: 'q',
-        kind: 'question',
-        questions: [
-          { header: 'Branch', text: 'Which branch?', options: [], multiple: false },
-          { header: 'Tests', text: 'Run the tests?', options: [], multiple: false },
-        ],
-      },
-    });
-    expect(asked.status).toBe('waiting');
-    const one = reduce(asked, { type: 'answerQuestion', id: 'q', index: 1, answer: 'Yes' });
-    expect(one.status).toBe('waiting');
-    expect(pending(one).map((q) => q.question.text)).toEqual(['Which branch?']);
-    const both = reduce(one, { type: 'answerQuestion', id: 'q', index: 0, answer: 'main' });
-    expect(both.status).toBe('working');
-    expect(answersOf(both, 'q')).toEqual(['main', 'Yes']);
-  });
-
-  it('asks to approve a plan, and keeps waiting while another prompt is open', () => {
-    let s = reduce(started, {
-      type: 'ask',
-      entry: { id: 'p', kind: 'permission', tool: 'Bash', summary: 'ls' },
-    });
-    s = reduce(s, { type: 'ask', entry: { id: 'plan', kind: 'plan', plan: '1. Do it' } });
-    s = reduce(s, { type: 'answerPlan', id: 'plan', answer: { approve: true, mode: 'auto' } });
-    expect(s.status).toBe('waiting');
-    s = reduce(s, { type: 'answer', id: 'p', answer: 'once' });
-    expect(s.status).toBe('working');
-    expect(s.entries.find((e) => e.id === 'plan')).toMatchObject({
-      answer: { approve: true, mode: 'auto' },
-    });
-  });
-
-  it('withdraws a prompt the session no longer waits on, and every prompt open when a turn ends', () => {
-    let s = reduce(started, {
-      type: 'ask',
-      entry: { id: 'p', kind: 'permission', tool: 'Bash', summary: 'ls' },
-    });
-    s = reduce(s, { type: 'withdraw', id: 'p' });
-    expect(s.status).toBe('working');
-    expect(s.entries.at(-1)).toMatchObject({ id: 'p', withdrawn: true });
-
-    s = reduce(s, { type: 'ask', entry: { id: 'p2', kind: 'plan', plan: 'Plan' } });
-    s = reduce(s, {
-      type: 'end',
-      id: 'e',
-      seconds: 2,
-      result: { status: 'cancelled', reason: 'interrupted' },
-    });
-    expect(s.entries.find((e) => e.id === 'p2')).toMatchObject({ withdrawn: true });
-    expect(pending(s)).toEqual([]);
   });
 
   it('marks a turn that failed', () => {

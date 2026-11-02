@@ -188,13 +188,5 @@ export const MAX_SESSION_REPLY_BYTES = 4096;
  * longer is left out, never cut, so the composer never offers what wasn't suggested.
  */
 export const MAX_SUGGESTION_BYTES = 2048;
-/** The most of what a terminal asks (its newest) a summary carries. */
-export const MAX_TERMINAL_ASKS = 8;
-/**
- * The most JSON a summary's terminal asks take together, in UTF-8: the newest that fit, each cut
- * to its bounds first (marked `cut`), so the summary fits its begin frame (B11 §16.3a).
- */
-export const MAX_ASKING_BYTES = 256 * 1024;
-
 /** The longest link the renderer may ask to open, in characters. */
 export const MAX_LINK_LENGTH = 4096;
