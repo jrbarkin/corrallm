@@ -1,10 +1,18 @@
 import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { gitDiff, runGit, splitDiff } from './diff';
 import type { RunGit } from './diff';
@@ -86,7 +94,7 @@ describe('/diff', () => {
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
-  });
+  }, 30_000);
 
   it('says when the folder is not in a git repository', async () => {
     const git: RunGit = () => Promise.resolve({ code: 128, stdout: '' });
@@ -97,43 +105,66 @@ describe('/diff', () => {
 /*
  * A partial clone whose index names a blob it never fetched, and whose remote is a command its
  * configuration allows: a patch of that file would fetch the blob, and the fetch would run the
- * command. Real Git, in a throwaway folder.
+ * command. Real Git, in throwaway folders: the clone made once, its control run there, then
+ * copied for each test, whose copy's remote records into that test's own sentinel.
  */
 describe.skipIf(process.platform === 'win32')(
   '/diff in a partial clone',
   { timeout: 30_000 },
   () => {
+    let template: string;
     let root: string;
     let env: Record<string, string> & { PATH: string };
     let clone: string;
     let sentinel: string;
-    beforeEach(() => {
-      root = realpathSync(mkdtempSync(path.join(tmpdir(), 'corrallm-git-')));
-      env = { PATH: process.env.PATH ?? '', HOME: root, GIT_CONFIG_NOSYSTEM: '1', LC_ALL: 'C' };
-      sentinel = path.join(root, 'ran');
-      const source = path.join(root, 'source');
-      clone = path.join(root, 'clone');
-      const git = (cwd: string, ...args: string[]) =>
-        execFileSync('git', args, { cwd, env, encoding: 'utf8' });
+    const environment = (home: string) => ({
+      PATH: process.env.PATH ?? '',
+      HOME: home,
+      GIT_CONFIG_NOSYSTEM: '1',
+      LC_ALL: 'C',
+    });
+    const git = (cwd: string, e: Record<string, string>, ...args: string[]) =>
+      execFileSync('git', args, { cwd, env: e, encoding: 'utf8' });
+    beforeAll(() => {
+      template = realpathSync(mkdtempSync(path.join(tmpdir(), 'corrallm-git-')));
+      const made = environment(template);
+      const source = path.join(template, 'source');
+      const ran = path.join(template, 'ran');
+      const at = path.join(template, 'clone');
       mkdirSync(source);
-      git(source, 'init', '-q');
-      git(source, 'config', 'uploadpack.allowFilter', 'true');
+      git(source, made, 'init', '-q');
+      git(source, made, 'config', 'uploadpack.allowFilter', 'true');
       for (const text of ['one\n', 'two\n']) {
         writeFileSync(path.join(source, 'a.txt'), text);
-        git(source, 'add', 'a.txt');
-        git(source, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qm', text);
+        git(source, made, 'add', 'a.txt');
+        git(source, made, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qm', text);
       }
-      git(root, 'clone', '-q', '--filter=blob:none', `file://${source}`, clone);
+      git(template, made, 'clone', '-q', '--filter=blob:none', `file://${source}`, at);
       // The index names a.txt's first blob, which the clone never fetched; the folder holds the
       // second.
-      git(clone, 'read-tree', 'HEAD~1');
-      git(clone, 'config', 'remote.origin.url', `ext::sh -c touch% ${sentinel}`);
-      git(clone, 'config', 'protocol.ext.allow', 'always');
-      // The control: plain git fetches the blob to show the patch, running the remote's command.
-      spawnSync('git', ['diff'], { cwd: clone, env });
-      expect(existsSync(sentinel)).toBe(true);
-      rmSync(sentinel);
+      git(at, made, 'read-tree', 'HEAD~1');
+      git(at, made, 'config', 'remote.origin.url', `ext::sh -c touch% ${ran}`);
+      git(at, made, 'config', 'protocol.ext.allow', 'always');
+      // The control: plain git fetches the blob to show the patch, running the remote's command
+      // (whose fetch fails, so the blob stays missing for every copy).
+      spawnSync('git', ['diff'], { cwd: at, env: made });
+      expect(existsSync(ran)).toBe(true);
     }, 30_000);
+    afterAll(() => {
+      rmSync(template, { recursive: true, force: true });
+    });
+    beforeEach(() => {
+      root = realpathSync(mkdtempSync(path.join(tmpdir(), 'corrallm-git-')));
+      env = environment(root);
+      sentinel = path.join(root, 'ran');
+      clone = path.join(root, 'clone');
+      cpSync(path.join(template, 'clone'), clone, {
+        recursive: true,
+        preserveTimestamps: true,
+        verbatimSymlinks: true,
+      });
+      git(clone, env, 'config', 'remote.origin.url', `ext::sh -c touch% ${sentinel}`);
+    });
     afterEach(() => {
       rmSync(root, { recursive: true, force: true });
     });
@@ -141,7 +172,7 @@ describe.skipIf(process.platform === 'win32')(
     it('runs no command the clone’s remote names', async () => {
       await gitDiff(runGit(env), clone);
       expect(existsSync(sentinel)).toBe(false);
-    });
+    }, 30_000);
 
     it('runs none on a Git that doesn’t know GIT_NO_LAZY_FETCH either', async () => {
       // Git before 2.45.1 (and its 2.39.4+ backports) ignores it.
@@ -157,7 +188,7 @@ describe.skipIf(process.platform === 'win32')(
       await gitDiff(runGit({ ...env, PATH: `${bin}${path.delimiter}${env.PATH}` }), clone);
       expect(existsSync(used)).toBe(true);
       expect(existsSync(sentinel)).toBe(false);
-    });
+    }, 30_000);
 
     it('allows no transport, including a remote helper named none', async () => {
       const real = execFileSync('sh', ['-c', 'command -v git'], { env, encoding: 'utf8' }).trim();
@@ -178,6 +209,6 @@ describe.skipIf(process.platform === 'win32')(
       await gitDiff(runGit({ ...env, PATH: `${bin}${path.delimiter}${env.PATH}` }), clone);
       expect(existsSync(used)).toBe(true);
       expect(existsSync(sentinel)).toBe(false);
-    });
+    }, 30_000);
   },
 );

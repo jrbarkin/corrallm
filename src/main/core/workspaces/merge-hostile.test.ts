@@ -12,11 +12,12 @@ import {
 } from 'node:fs';
 import path from 'node:path';
 
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { GitError, GitRunner } from './git';
 import type { GitIdentity, GitOutput } from './git';
 import { makeTemporaryIndex } from './merge-index';
+import type { RepositoryTemplate } from './test-git';
 import {
   caseInsensitive,
   commit,
@@ -28,6 +29,7 @@ import {
   listing,
   makeRepository,
   ran,
+  repositoryTemplate,
   scratch,
   sentinelProgram,
 } from './test-git';
@@ -43,8 +45,9 @@ import {
  * (a merge driver blanked), either failure passes, never a merged result.
  */
 
-// Real Git, a repository or two each: slower under load, or on Linux CI's emulated x64.
-vi.setConfig({ testTimeout: 60_000 });
+// Real Git, a repository or two each: slower under load, or on Linux CI's emulated x64. A
+// describe's template repository is made in its beforeAll, under the same bound.
+vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 });
 
 const REFTABLE = gitInits('--ref-format=reftable');
 const SHA256 = gitInits('--object-format=sha256');
@@ -60,15 +63,23 @@ let sentinel: string;
 let program: string;
 let runner: GitRunner;
 
+/**
+ * A runner as the merge service's: git's environment as `environment` says at each call (a test
+ * that changes `env` changes what its runner's git sees), and an empty hooks folder in `at`.
+ */
+function runnerIn(at: string, environment: () => Record<string, string>): GitRunner {
+  return new GitRunner({
+    environment: () => Promise.resolve(environment()),
+    hooks: path.join(at, 'hooks'),
+  });
+}
+
 beforeEach(() => {
   ({ root, remove } = scratch('corrallm-merge-'));
   env = gitEnvironment(path.join(root, 'home'));
   sentinel = path.join(root, 'ran');
   program = sentinelProgram(root, sentinel);
-  runner = new GitRunner({
-    environment: () => Promise.resolve(env),
-    hooks: path.join(root, 'hooks'),
-  });
+  runner = runnerIn(root, () => env);
 });
 afterEach(() => {
   remove();
@@ -81,8 +92,13 @@ function heard(): string[] {
   return found;
 }
 
-/** Writes `files` in `at` (null deletes one), then commits them all. */
-function change(at: string, files: Record<string, string | null>, message: string): string {
+/** Writes `files` in `at` (null deletes one), then commits them all (with git's `e`). */
+function change(
+  at: string,
+  files: Record<string, string | null>,
+  message: string,
+  e: Record<string, string> = env,
+): string {
   for (const [file, text] of Object.entries(files)) {
     const full = path.join(at, file);
     if (text === null) rmSync(full, { recursive: true, force: true });
@@ -91,9 +107,9 @@ function change(at: string, files: Record<string, string | null>, message: strin
       writeFileSync(full, text);
     }
   }
-  git(at, env, 'add', '-A', '--force');
-  commit(at, env, message);
-  return git(at, env, 'rev-parse', 'HEAD').trim();
+  git(at, e, 'add', '-A', '--force');
+  commit(at, e, message);
+  return git(at, e, 'rev-parse', 'HEAD').trim();
 }
 
 /**
@@ -112,14 +128,15 @@ function diverged(
     main?: Record<string, string | null>;
   } = {},
   options: string[] = [],
+  e: Record<string, string> = env,
 ): { base: string; agent: string; main: string } {
   mkdirSync(at, { recursive: true });
-  git(at, env, 'init', '-q', '-b', 'main', ...options);
-  const first = change(at, base, 'base');
-  git(at, env, 'switch', '-q', '-c', 'agent');
-  const theirs = change(at, agent, 'agent');
-  git(at, env, 'switch', '-q', 'main');
-  const ours = change(at, main, 'main');
+  git(at, e, 'init', '-q', '-b', 'main', ...options);
+  const first = change(at, base, 'base', e);
+  git(at, e, 'switch', '-q', '-c', 'agent');
+  const theirs = change(at, agent, 'agent', e);
+  git(at, e, 'switch', '-q', 'main');
+  const ours = change(at, main, 'main', e);
   return { base: first, agent: theirs, main: ours };
 }
 
@@ -129,9 +146,10 @@ async function mergeTree(
   ours: string,
   theirs: string,
   { profile = true, filters = true }: { profile?: boolean; filters?: boolean } = {},
+  through: GitRunner = runner,
 ): Promise<{ code: number; tree: string; conflicted: string[] }> {
-  const { drivers, mergeDrivers } = await runner.inspect(cwd);
-  const { code, stdout } = await runner.run({
+  const { drivers, mergeDrivers } = await through.inspect(cwd);
+  const { code, stdout } = await through.run({
     cwd,
     args: ['merge-tree', '--write-tree', '--name-only', '-z', '--no-messages', ours, theirs],
     ...(filters ? { drivers } : {}),
@@ -143,17 +161,22 @@ async function mergeTree(
 }
 
 /** The merge commit of `theirs` into `ours`, prepared as the merge service prepares it: M. */
-async function prepare(cwd: string, ours: string, theirs: string): Promise<string> {
-  const { code, tree } = await mergeTree(cwd, ours, theirs);
+async function prepare(
+  cwd: string,
+  ours: string,
+  theirs: string,
+  through: GitRunner = runner,
+): Promise<string> {
+  const { code, tree } = await mergeTree(cwd, ours, theirs, {}, through);
   expect(code).toBe(0);
-  return runner.commitTree({
+  return through.commitTree({
     cwd,
     tree,
     parents: [ours, theirs],
     message: "Merge branch 'agent' into main\n\nCorrallm-Requested-By: you\n",
     author: YOU,
     committer: YOU,
-    merge: { drivers: (await runner.inspect(cwd)).mergeDrivers },
+    merge: { drivers: (await through.inspect(cwd)).mergeDrivers },
   });
 }
 
@@ -236,16 +259,31 @@ describe.skipIf(process.platform === 'win32')('merge-tree under the merge profil
   });
 
   describe('runs no custom merge driver, and a path that needs one fails closed (F2, F3)', () => {
+    let template: RepositoryTemplate<{ main: string; agent: string }>;
     let at: string;
     let ours: string;
     let theirs: string;
 
+    // Both sides change a.txt's same line, made once; each test's copy names its own driver.
+    beforeAll(async () => {
+      template = await repositoryTemplate((made, e) =>
+        diverged(
+          made,
+          {
+            agent: { 'a.txt': 'one\nTWO-agent\nthree\n' },
+            main: { 'a.txt': 'one\nTWO-main\nthree\n' },
+          },
+          [],
+          e,
+        ),
+      );
+    });
+    afterAll(() => {
+      template.remove();
+    });
     beforeEach(() => {
       at = path.join(root, 'r');
-      ({ main: ours, agent: theirs } = diverged(at, {
-        agent: { 'a.txt': 'one\nTWO-agent\nthree\n' },
-        main: { 'a.txt': 'one\nTWO-main\nthree\n' },
-      }));
+      ({ main: ours, agent: theirs } = template.copy(at, env));
       git(at, env, 'config', 'merge.sent.driver', `${driverProgram()} %O %A %B`);
     });
 
@@ -501,36 +539,59 @@ describe.skipIf(process.platform === 'win32')('the install', () => {
   });
 
   describe('refuses an ignored or untracked file in the way, writing only ORIG_HEAD (F5, F6)', () => {
+    let template: RepositoryTemplate<{ old: string; m: string }>;
     let at: string;
     let old: string;
     let m: string;
     const outside = () => path.join(root, 'outside');
 
-    beforeEach(async () => {
+    // The repository and its M, prepared once (by a runner of the template's own); each test
+    // puts its obstacle in a copy of its own.
+    beforeAll(async () => {
+      template = await repositoryTemplate(async (made, e, folder) => {
+        const commits = diverged(
+          made,
+          {
+            base: {
+              '.gitignore': 'build/\n*.log\n*.tmp\nout\ngone/cache/\n',
+              'a.txt': 'base\n',
+              'gone/t.txt': 'tracked\n',
+            },
+            agent: {
+              'a.txt': 'base\nagent\n',
+              'build/out.txt': 'tracked in build\n',
+              'gen.log': 'tracked log\n',
+              'out/x.txt': 'x\n',
+              'case.tmp': 'lower\n',
+              gone: null,
+            },
+            main: { 'm.txt': 'main\n' },
+          },
+          [],
+          e,
+        );
+        // A tracked folder that becomes a file, in a second commit (a path can't be both at once).
+        git(made, e, 'switch', '-q', 'agent');
+        const agent = change(made, { gone: 'now a file\n' }, 'gone', e);
+        git(made, e, 'switch', '-q', 'main');
+        return {
+          old: commits.main,
+          m: await prepare(
+            made,
+            commits.main,
+            agent,
+            runnerIn(folder, () => e),
+          ),
+        };
+      });
+    });
+    afterAll(() => {
+      template.remove();
+    });
+    beforeEach(() => {
       at = path.join(root, 'r');
       mkdirSync(outside());
-      const commits = diverged(at, {
-        base: {
-          '.gitignore': 'build/\n*.log\n*.tmp\nout\ngone/cache/\n',
-          'a.txt': 'base\n',
-          'gone/t.txt': 'tracked\n',
-        },
-        agent: {
-          'a.txt': 'base\nagent\n',
-          'build/out.txt': 'tracked in build\n',
-          'gen.log': 'tracked log\n',
-          'out/x.txt': 'x\n',
-          'case.tmp': 'lower\n',
-          gone: null,
-        },
-        main: { 'm.txt': 'main\n' },
-      });
-      // A tracked folder that becomes a file, in a second commit (a path can't be both at once).
-      git(at, env, 'switch', '-q', 'agent');
-      const agent = change(at, { gone: 'now a file\n' }, 'gone');
-      git(at, env, 'switch', '-q', 'main');
-      old = commits.main;
-      m = await prepare(at, old, agent);
+      ({ old, m } = template.copy(at, env));
     });
 
     /** That the install refused with `obstacle` in place, changing nothing but ORIG_HEAD. */
@@ -547,53 +608,80 @@ describe.skipIf(process.platform === 'win32')('the install', () => {
       expect(readdirSync(outside())).toEqual([]);
     }
 
-    it('an ignored file where the merge brings a tracked one', async () => {
-      writeFileSync(path.join(at, 'gen.log'), 'precious\n');
-      await refused();
-      // The control: plumbing's two-tree read-tree writes over it.
-      const plumbing = await runner.run({
-        cwd: at,
-        args: ['read-tree', '-m', '-u', '--no-recurse-submodules', old, m],
-      });
-      expect(plumbing.code).toBe(0);
-      expect(readFileSync(path.join(at, 'gen.log'), 'utf8')).toBe('tracked log\n');
-    });
+    /** Each obstacle: put in the way, then (`then`) what else holds once the install refused. */
+    const obstacles: {
+      name: string;
+      place: () => void | Promise<void>;
+      then?: () => void | Promise<void>;
+      /** Only where the filesystem doesn't tell names apart by case. */
+      caseInsensitive?: true;
+    }[] = [
+      {
+        name: 'an ignored file where the merge brings a tracked one',
+        place: () => {
+          writeFileSync(path.join(at, 'gen.log'), 'precious\n');
+        },
+        then: async () => {
+          // The control: plumbing's two-tree read-tree writes over it.
+          const plumbing = await runner.run({
+            cwd: at,
+            args: ['read-tree', '-m', '-u', '--no-recurse-submodules', old, m],
+          });
+          expect(plumbing.code).toBe(0);
+          expect(readFileSync(path.join(at, 'gen.log'), 'utf8')).toBe('tracked log\n');
+        },
+      },
+      {
+        name: 'an ignored file where the merge brings a folder',
+        place: () => {
+          writeFileSync(path.join(at, 'out'), 'precious\n');
+        },
+      },
+      {
+        name: 'an ignored symlink where the merge brings a folder: nothing written through it',
+        place: () => {
+          symlinkSync(outside(), path.join(at, 'out'));
+        },
+        then: () => {
+          expect(readlinkSync(path.join(at, 'out'))).toBe(outside());
+        },
+      },
+      {
+        name: 'an ignored file inside a tracked folder that becomes a file',
+        place: () => {
+          mkdirSync(path.join(at, 'gone', 'cache'), { recursive: true });
+          writeFileSync(path.join(at, 'gone', 'cache', 'blob'), 'cached\n');
+        },
+      },
+      {
+        name: 'an ignored file whose name differs only in case, where the filesystem doesn’t tell them apart',
+        caseInsensitive: true,
+        place: () => {
+          writeFileSync(path.join(at, 'CASE.tmp'), 'upper\n');
+        },
+      },
+      {
+        name: 'an untracked file where the merge brings a tracked one',
+        place: async () => {
+          writeFileSync(path.join(at, '.git', 'info', 'exclude'), '');
+          rmSync(path.join(at, '.gitignore'));
+          git(at, env, 'add', '-A');
+          commit(at, env, 'no ignores');
+          old = git(at, env, 'rev-parse', 'HEAD').trim();
+          m = await prepare(at, old, git(at, env, 'rev-parse', 'agent').trim());
+          writeFileSync(path.join(at, 'gen.log'), 'precious\n');
+        },
+      },
+    ];
 
-    it('an ignored file where the merge brings a folder', async () => {
-      writeFileSync(path.join(at, 'out'), 'precious\n');
-      await refused();
-    });
-
-    it('an ignored symlink where the merge brings a folder: nothing written through it', async () => {
-      symlinkSync(outside(), path.join(at, 'out'));
-      await refused();
-      expect(readlinkSync(path.join(at, 'out'))).toBe(outside());
-    });
-
-    it('an ignored file inside a tracked folder that becomes a file', async () => {
-      mkdirSync(path.join(at, 'gone', 'cache'), { recursive: true });
-      writeFileSync(path.join(at, 'gone', 'cache', 'blob'), 'cached\n');
-      await refused();
-    });
-
-    it('an ignored file whose name differs only in case, where the filesystem doesn’t tell them apart', async (context) => {
-      if (!CASE_INSENSITIVE) {
+    it.for(obstacles)('$name', async ({ place, then, caseInsensitive }, context) => {
+      if (caseInsensitive && !CASE_INSENSITIVE) {
         context.skip('this filesystem tells names apart by case');
         return;
       }
-      writeFileSync(path.join(at, 'CASE.tmp'), 'upper\n');
+      await place();
       await refused();
-    });
-
-    it('an untracked file where the merge brings a tracked one', async () => {
-      writeFileSync(path.join(at, '.git', 'info', 'exclude'), '');
-      rmSync(path.join(at, '.gitignore'));
-      git(at, env, 'add', '-A');
-      commit(at, env, 'no ignores');
-      old = git(at, env, 'rev-parse', 'HEAD').trim();
-      m = await prepare(at, old, git(at, env, 'rev-parse', 'agent').trim());
-      writeFileSync(path.join(at, 'gen.log'), 'precious\n');
-      await refused();
+      await then?.();
     });
 
     it('but brings a tracked file into an ignored folder, keeping the folder’s other files', async () => {

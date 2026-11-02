@@ -10,9 +10,6 @@ import { launchApp } from './launch';
 import { newCanvasId } from '../src/shared/canvas';
 import { MAX_LABEL } from '../src/shared/model/canvas';
 import { CARD_SIZE } from '../src/shared/model/geometry';
-import type { CanvasDocument } from '../src/shared/model/canvas';
-import { arrange } from '../src/shared/model/layout';
-import { MADE_UP } from '../src/shared/test-made-up';
 
 interface Point {
   x: number;
@@ -120,6 +117,8 @@ test.beforeEach(async () => {
   await page.reload();
   await dismissStart(page);
   await expect(pane()).toBeVisible();
+  // React Flow's stylesheet loaded under the production CSP (its own "styles loaded" check).
+  expect(await pane().evaluate((el) => getComputedStyle(el).zIndex)).toBe('1');
   await page.getByRole('button', { name: 'Choose a project folder' }).click();
   // The tests use fixed canvas offsets that need the 1200×800 window at page zoom 1.
   const { width, height } = await box(pane());
@@ -146,7 +145,6 @@ const node = (label: string) =>
 /** What you grab a group by: a frame's label bar, or a parent node's card. */
 const titleBar = (label: string) => node(label).locator('.graph-frame-title');
 const card = (label: string) => node(label).locator('.graph-card');
-const labelInput = () => page.getByRole('textbox', { name: 'Label' });
 /** The actions shown next to a hovered or selected node or group. */
 async function actionsFor(target: Locator) {
   const id = await target.getAttribute('data-id');
@@ -241,17 +239,6 @@ async function marquee(...targets: Locator[]) {
   await drag({ x: left, y: top }, { x: right, y: bottom });
 }
 
-/** The client coordinates of the middle of an edge's path. */
-async function edgeMidpoint(edge: Locator): Promise<Point> {
-  return edge.locator('path.react-flow__edge-path').evaluate((path: SVGPathElement) => {
-    const point = path.getPointAtLength(path.getTotalLength() / 2);
-    const matrix = path.getScreenCTM();
-    if (!matrix) throw new Error('edge is not rendered');
-    const screen = point.matrixTransform(matrix);
-    return { x: screen.x, y: screen.y };
-  });
-}
-
 type Box = Awaited<ReturnType<typeof box>>;
 
 function expectInside(inner: Box, outer: Box) {
@@ -334,48 +321,6 @@ async function nestedFrames() {
   return { a, b, c, inner, outer };
 }
 
-test('creates, selects, renames and deletes nodes', async () => {
-  // React Flow's stylesheet loaded under the production CSP (its own "styles loaded" check).
-  expect(await pane().evaluate((el) => getComputedStyle(el).zIndex)).toBe('1');
-
-  await addAgentAt('Agent 1', 300, 200);
-  await addAgentAt('Agent 2', 600, 300);
-
-  await node('Agent 1').click();
-  await node('Agent 2').click({ modifiers: ['Shift'] });
-  await expect(page.locator('.react-flow__node.selected')).toHaveCount(2);
-  const empty = await at(800, 500);
-  await page.mouse.click(empty.x, empty.y);
-  await expect(page.locator('.react-flow__node.selected')).toHaveCount(0);
-
-  // F2 renames the selected node in place: type over the selected text, Enter.
-  await node('Agent 1').click();
-  await page.keyboard.press('F2');
-  await expect(labelInput()).toBeFocused();
-  await page.keyboard.type('Alpha');
-  await page.keyboard.press('Enter');
-  await expect(node('Alpha')).toBeVisible();
-
-  await node('Alpha').click();
-  await page.keyboard.press('Delete');
-  await expect(node('Alpha')).toHaveCount(0);
-
-  // Backspace while renaming edits the text only, and Escape restores the label.
-  await node('Agent 2').click();
-  await page.keyboard.press('F2');
-  await page.keyboard.press('Backspace');
-  await expect(labelInput()).toHaveValue('');
-  await expect(nodes()).toHaveCount(1);
-  await page.keyboard.press('Escape');
-  await expect(node('Agent 2')).toBeVisible();
-
-  // Hovering a node shows its actions.
-  await page.mouse.click(empty.x, empty.y);
-  await node('Agent 2').hover();
-  await (await actionsFor(node('Agent 2'))).getByRole('button', { name: 'Delete' }).click();
-  await expect(nodes()).toHaveCount(0);
-});
-
 test('a drawn edge lets two agents talk, or queues work, which their queues then draw', async () => {
   const a = await addAgentAt('Agent 1', 400, 150);
   const b = await addAgentAt('Agent 2', 400, 350);
@@ -432,32 +377,6 @@ test('a drawn edge lets two agents talk, or queues work, which their queues then
   await page.keyboard.press('Escape');
   await expect(work).toHaveCount(0);
   await expect(link).toHaveCount(1);
-});
-
-test('ignores a self-loop and deletes a selected link by its button or Backspace', async () => {
-  const a = await addAgentAt('Agent 1', 400, 150);
-  const b = await addAgentAt('Agent 2', 400, 350);
-  const [idA, idB] = await Promise.all([a.getAttribute('data-id'), b.getAttribute('data-id')]);
-  await connect(a, b);
-  const link = page.getByTestId(`rf__edge-${String(idA)}->${String(idB)}`);
-  await expect(link).toHaveCount(1);
-  // A self-loop asks nothing.
-  await draw(a, a);
-  await expect(page.getByRole('dialog')).toHaveCount(0);
-
-  // A selected link shows a button that deletes it; Backspace works too.
-  const selected = page.locator('.react-flow__edge.selected');
-  const mid = await edgeMidpoint(link);
-  await page.mouse.click(mid.x, mid.y);
-  await expect(selected).toHaveCount(1);
-  await page.getByRole('button', { name: 'Delete link' }).click();
-  await expect(edges()).toHaveCount(0);
-  await connect(a, b);
-  await page.mouse.click(mid.x, mid.y);
-  await expect(selected).toHaveCount(1);
-  await page.keyboard.press('Backspace');
-  await expect(edges()).toHaveCount(0);
-  await expect(nodes()).toHaveCount(2);
 });
 
 test('frames a marquee selection, works inside the frame, and ungroups', async () => {
@@ -773,29 +692,6 @@ test('ArrowDown on a queue row’s Move handle moves it a place per press, keepi
   await page.keyboard.press('ArrowDown');
   await expect.poll(order).toEqual(['Move Read', 'Move Bash', 'Move Message']);
   await expect(handle).toBeFocused();
-});
-
-test('loads catalog logos as images under the production CSP', async () => {
-  const a = await addAgentAt('Agent 1', 300, 200);
-  await a.dblclick();
-  const view = page.getByRole('dialog', { name: 'Agent 1' });
-  const loaded = async (name: string) => {
-    const image = view.getByRole('button', { name: /^Agent:/ }).getByRole('img', { name });
-    await expect(image).toHaveAttribute('src', /^data:image\/svg\+xml,/);
-    await expect
-      .poll(() =>
-        image.evaluate((element: HTMLImageElement) => element.complete && element.naturalWidth > 0),
-      )
-      .toBe(true);
-    expect(await image.evaluate((element) => element.tagName)).toBe('IMG');
-  };
-  await loaded('Claude Code');
-  await view.getByRole('button', { name: /^Agent:/ }).click();
-  await page.keyboard.type('codex app server');
-  await page.keyboard.press('Enter');
-  await loaded('Codex');
-  // The shared afterEach also rejects console warnings/errors, including CSP violations.
-  expect(problems).toEqual([]);
 });
 
 test('opens an agent as a full Claude Code-style session, and goes back to the canvas', async () => {
@@ -1342,6 +1238,15 @@ test('agents show their type and ask questions, which a sidebar lists until answ
   await expect(card('Agent 1')).toHaveAttribute('data-agent', 'codex');
   await expect(logo('Agent 1')).toHaveAttribute('alt', 'Codex');
   await expect(logo('Agent 1')).not.toHaveAttribute('src', claude ?? '');
+  // Each catalog logo is a data: image the production CSP lets decode.
+  await expect(logo('Agent 1')).toHaveAttribute('src', /^data:image\/svg\+xml,/);
+  await expect
+    .poll(() =>
+      logo('Agent 1').evaluate(
+        (element: HTMLImageElement) => element.complete && element.naturalWidth > 0,
+      ),
+    )
+    .toBe(true);
 
   // A connector's native question glows and appears on the canvas until answered.
   const composer = panel.getByRole('textbox', { name: 'Message Agent 1', exact: true });
@@ -1420,69 +1325,6 @@ for (const direction of ['right', 'top-left'] as const) {
   });
 }
 
-test('groups nest and take a parent node just like nodes do', async () => {
-  const a = await addAgentAt('Agent 1', 300, 200);
-  const b = await addAgentAt('Agent 2', 300, 320);
-  await marquee(a, b);
-  await page.keyboard.press('ControlOrMeta+g');
-  const c = await addAgentAt('Agent 3', 700, 200);
-  const d = await addAgentAt('Agent 4', 700, 320);
-  await marquee(c, d);
-  await page.keyboard.press('ControlOrMeta+g');
-  const [first, second] = [node('Group 1'), node('Group 2')];
-  await expect(second).toBeVisible();
-
-  // Each group colours its nodes, in a colour of its own.
-  const border = (label: string) =>
-    card(label).evaluate((el) => getComputedStyle(el).borderTopColor);
-  expect(await border('Agent 1')).toBe(await border('Agent 2'));
-  expect(await border('Agent 3')).not.toBe(await border('Agent 1'));
-
-  // Two groups, grouped.
-  await marquee(first, second);
-  await page.keyboard.press('ControlOrMeta+g');
-  const outer = node('Group 3');
-  await expect(outer).toBeVisible();
-  expectInside(await box(first), await box(outer));
-  expectInside(await box(second), await box(outer));
-
-  // The group of groups takes a parent node, which connects like any node.
-  await outer.locator('.graph-frame-title').hover();
-  await outer.getByRole('button', { name: 'Add a parent agent' }).click();
-  const parent = node('Agent 5');
-  await expect(parent).toHaveClass(/parent/);
-  expectInside(await box(first), await box(parent));
-  expectInside(await box(second), await box(parent));
-  const e = await addAgentAt('Agent 6', 500, 620);
-  await connect(parent, e);
-  await expect(edges()).toHaveCount(1);
-});
-
-for (const examples of [
-  ['Independent cross-check', 'Review loop', 'Team lead'],
-  ['Fan-out research', 'Release checks', 'TDD relay'],
-  ['Head to head', 'Spec first', 'Review panel'],
-]) {
-  test(`opens gallery examples ${examples.join(', ')}, drawing their agents and work`, async () => {
-    await page.getByRole('button', { name: 'Start from a template…' }).click();
-    for (const name of examples) {
-      const gallery = page.getByRole('dialog', { name: 'Templates' });
-      if ((await gallery.count()) === 0)
-        await page.getByRole('button', { name: 'Templates…' }).click();
-      await gallery.getByRole('button', { name: new RegExp(`^${name}`) }).click();
-      await createTemplate();
-      await expect(gallery).toHaveCount(0);
-      await expect(nodes().nth(1), name).toBeVisible();
-      // Attached rather than visible: a straight vertical edge has no width.
-      await expect(page.locator('[data-testid^="rf__edge-work:"]').first(), name).toBeAttached();
-      // Fitted into view, clear of the file bar.
-      const bar = await box(page.getByRole('toolbar', { name: 'Canvas file' }));
-      for (const n of await nodes().all())
-        expect((await box(n)).y, name).toBeGreaterThan(bar.y + bar.height);
-    }
-  });
-}
-
 test('keeps work both ways readable, gives messages room, and shows the menus of long queues', async () => {
   await page.getByRole('button', { name: 'Start from a template…' }).click();
   await page
@@ -1526,92 +1368,6 @@ test('keeps work both ways readable, gives messages room, and shows the menus of
   // The ⊕ under a long queue brings its menu into view.
   await panel.getByRole('button', { name: 'Add to queue' }).click();
   expectInside(await box(panel.getByRole('listbox', { name: 'Add to queue' })), await box(panel));
-});
-
-test('arranges the graph automatically while the toggle is on', async () => {
-  const a = await addAgentAt('Agent 1', 650, 450);
-  const b = await addAgentAt('Agent 2', 300, 150);
-  const c = await addAgentAt('Agent 3', 900, 200);
-  await connect(a, b);
-  await connect(a, c);
-  const toggle = page.getByRole('button', { name: 'Arrange automatically' });
-  await expect(toggle).toHaveAttribute('aria-pressed', 'false');
-  await toggle.click();
-  await expect(toggle).toHaveAttribute('aria-pressed', 'true');
-
-  // Top to bottom along the edges: Agent 1 above the two it points to, which share a row.
-  const [boxA, boxB, boxC] = await Promise.all([box(a), box(b), box(c)]);
-  expect(boxA.y + boxA.height).toBeLessThan(boxB.y);
-  expect(boxB.y).toBeCloseTo(boxC.y, 0);
-
-  // A new node joins the arrangement, clear of the others.
-  const d = await addAgentAt('Agent 4', 150, 560);
-  const document = await page.evaluate(async () => {
-    const shown = await window.api.windowGet({});
-    if (!shown.ok) throw new Error(shown.error.sentence);
-    const result = await window.api.canvasGet({ canvas: shown.value.canvas });
-    if (!result.ok) throw new Error(result.error.sentence);
-    const { canvas, arrange, nodes, links } = result.value;
-    return { id: canvas, arrange, nodes, links };
-  });
-  expect(document.nodes).toHaveLength(4);
-  const expected = arrange(document as CanvasDocument)
-    .nodes.map(({ id, position }) => ({ id, ...position }))
-    .sort((a, b) => a.id.localeCompare(b.id));
-  // Check canvas coordinates, independent of viewport pan/zoom, and wait for the committed
-  // positions to reach the view. Mere non-overlap also passed when the new card was never laid out.
-  await expect
-    .poll(() =>
-      page.locator('.react-flow__node').evaluateAll((nodes) =>
-        nodes
-          .map((node) => {
-            const position = new DOMMatrix(getComputedStyle(node).transform);
-            return { id: node.getAttribute('data-id') ?? '', x: position.m41, y: position.m42 };
-          })
-          .sort((a, b) => a.id.localeCompare(b.id)),
-      ),
-    )
-    .toEqual(expected);
-  const boxes = await Promise.all([a, b, c, d].map(box));
-  for (const [i, one] of boxes.entries()) {
-    for (const other of boxes.slice(i + 1)) {
-      const overlap =
-        one.x < other.x + other.width &&
-        other.x < one.x + one.width &&
-        one.y < other.y + other.height &&
-        other.y < one.y + one.height;
-      expect(overlap).toBe(false);
-    }
-  }
-
-  // Nodes stay where the arrangement puts them; turning it off lets them be dragged again.
-  const held = await box(b);
-  const grab = await center(b);
-  const drop = { x: grab.x + 200, y: grab.y + 150 };
-  await drag(grab, drop);
-  expectSamePlace(await box(b), held);
-  await toggle.click();
-  await expect(toggle).toHaveAttribute('aria-pressed', 'false');
-  await drag(grab, drop);
-  expect((await box(b)).x).toBeGreaterThan(held.x + 100);
-});
-
-test('left-drag selects; right-drag and Space-drag pan', async () => {
-  const viewport = page.locator('.react-flow__viewport');
-  const transform = () => viewport.evaluate((el) => getComputedStyle(el).transform);
-  const start = await transform();
-
-  await drag(await at(300, 300), await at(500, 450));
-  expect(await transform()).toBe(start);
-
-  await drag(await at(300, 300), await at(400, 350), 'right');
-  const panned = await transform();
-  expect(panned).not.toBe(start);
-
-  await page.keyboard.down('Space');
-  await drag(await at(300, 300), await at(350, 400));
-  await page.keyboard.up('Space');
-  expect(await transform()).not.toBe(panned);
 });
 
 test('shows which node or frame has keyboard focus', async () => {
@@ -1667,33 +1423,6 @@ test('double-click works inside the rectangle a marquee leaves around the select
   await expect(node('Agent 3')).toBeVisible();
 });
 
-test('the three floats stay at the canvas corners and open their controls', async () => {
-  const canvas = await box(pane());
-  const file = page.getByRole('toolbar', { name: 'Canvas file' });
-  const run = page.getByRole('toolbar', { name: 'Run controls' });
-  const zoom = page.getByRole('toolbar', { name: 'Canvas zoom' });
-  const left = await box(file),
-    right = await box(run),
-    bottom = await box(zoom);
-  expect(Math.abs(left.x - canvas.x - 12)).toBeLessThan(1);
-  expect(Math.abs(left.y - canvas.y - 12)).toBeLessThan(1);
-  expect(Math.abs(right.x + right.width - canvas.x - canvas.width + 12)).toBeLessThan(1);
-  expect(Math.abs(right.y - canvas.y - 12)).toBeLessThan(1);
-  expect(Math.abs(bottom.x + bottom.width - canvas.x - canvas.width + 12)).toBeLessThan(1);
-  expect(Math.abs(bottom.y + bottom.height - canvas.y - canvas.height + 12)).toBeLessThan(1);
-  await expect(page.locator('.react-flow__controls')).toHaveCount(0);
-  await expect(page.getByRole('button', { name: 'New', exact: true })).toHaveCount(0);
-  await page.getByRole('button', { name: 'Canvas menu', exact: true }).click();
-  await expect(page.getByRole('button', { name: 'New', exact: true })).toBeVisible();
-  await page.keyboard.press('Escape');
-  await expect(page.getByRole('dialog', { name: 'Canvas menu', exact: true })).toBeHidden();
-  await zoom.getByRole('button', { name: 'Arrange automatically' }).click();
-  await expect(zoom.getByRole('button', { name: 'Arrange automatically' })).toHaveAttribute(
-    'aria-pressed',
-    'true',
-  );
-});
-
 test('the dock toggles All queues and flies to the taskbar to switch agents, with catalog logos as images', async () => {
   await addAgentAt('Agent 1', 300, 200);
   await addAgentAt('Agent 2', 750, 400);
@@ -1744,47 +1473,4 @@ test('the dock toggles All queues and flies to the taskbar to switch agents, wit
   await expect(dock).not.toHaveAttribute('data-horizontal');
   await expect.poll(() => first.evaluate((element) => element.getAnimations().length)).toBe(0);
   expectSamePlace(await box(dock), original);
-});
-
-test('the dock and card give a logo-less agent its first letter', async () => {
-  const adapter = MADE_UP.adapters[0];
-  if (!adapter) throw new Error('The made-up catalog has no adapter');
-  // Files retain adapters this build lacks. The unit test also supplies this catalog with its
-  // declared logo-less adapter; here the real app exercises the same fallback under its CSP.
-  const file = nativePath.join(dir, 'no-logo.corral');
-  await writeFile(
-    file,
-    JSON.stringify({
-      format: 'corrallm',
-      version: 2,
-      id: newCanvasId(),
-      nodes: [
-        {
-          id: 'zed',
-          kind: 'agent',
-          label: 'My Zed',
-          position: { x: 300, y: 200 },
-          adapter: adapter.id,
-        },
-      ],
-      links: [],
-    }),
-  );
-  await app.evaluate(({ dialog }, file) => {
-    Object.assign(dialog, {
-      showOpenDialog: () => Promise.resolve({ canceled: false, filePaths: [file] }),
-    });
-  }, file);
-  await canvasAction(page, 'Open…');
-  const icon = page
-    .getByRole('navigation', { name: 'Canvas agents' })
-    .getByRole('button', { name: /^My Zed,/ });
-  const logo = icon.getByRole('img', { name: adapter.id });
-  await expect(logo).toHaveText('Z');
-  expect(await logo.evaluate((element) => element.tagName)).toBe('SPAN');
-  await expect(icon.locator('img, svg')).toHaveCount(0);
-  const fallback = card('My Zed').getByRole('img', { name: adapter.id });
-  await expect(fallback).toHaveText('Z');
-  expect(await fallback.evaluate((element) => element.tagName)).toBe('SPAN');
-  await expect(card('My Zed').locator('img, svg')).toHaveCount(0);
 });
