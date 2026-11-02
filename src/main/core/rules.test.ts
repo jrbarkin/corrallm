@@ -19,7 +19,7 @@ import { CALLERS, CANVAS } from './test-registry';
 const [ZED] = MADE_UP.adapters as [AdapterDescriptor];
 const [ACP, FREE] = ZED.connections as [ConnectionDescriptor, ConnectionDescriptor];
 
-/** Two adapters: the first runs no shell command from a message; only the second's second does. */
+/** Only the second adapter's second connection runs shell text or expands file mentions. */
 const TWO: Catalog = {
   adapters: [
     ZED,
@@ -36,6 +36,7 @@ const TWO: Catalog = {
           short: 'Terminal',
           view: 'terminal',
           shellPrefix: '$',
+          fileMentions: true,
         },
       ],
     },
@@ -114,6 +115,36 @@ describe('R1 over the resolver (B12 C2)', () => {
     expect(await send('zed', '$ ls')).toBeUndefined();
     // Named by its connection alone, it runs that connection's adapter.
     expect(await send('shell', '$ ls')).toEqual({
+      refuse: expect.stringContaining('Yak Agent · Terminal') as string,
+    });
+  });
+});
+
+describe('file mentions over the resolver', () => {
+  const caller = CALLERS['outside-write'] as TokenCaller;
+  const send = (to: string, body: string, catalog = TWO) =>
+    ruleChecks(ENGINES, catalog)['file-mentions'].message(
+      { canvas: CANVAS, to, body } as unknown as ArgsOf<'message'>,
+      { caller, party: 'outside-write' },
+    );
+
+  it.each([
+    ['unchosen', 'Unchosen has no agent chosen yet'],
+    ['missing', 'Missing runs none this build has'],
+  ])('checks every catalog connection for mentions sent to %s agents', async (to, reason) => {
+    // The engine's old default is Zed, which expands no mention. The catalog's other adapter
+    // still declares one: neither an unchosen nor an unavailable endpoint consumes that default.
+    expect(await send(to, 'Read @src/x')).toEqual({
+      refuse: `Not sent: it contains a file mention, which an agent may read without asking, and ${reason}: only the user may send that.`,
+    });
+    expect(await send(to, 'mail a@b.com')).toBeUndefined();
+    expect(await send(to, 'Read @src/x', MADE_UP)).toBeUndefined();
+  });
+
+  it('checks a known agent’s mentions against its own connection alone', async () => {
+    expect(await send('quiet', 'Read @src/x')).toBeUndefined();
+    expect(await send('zed', 'Read @src/x')).toBeUndefined();
+    expect(await send('shell', 'Read @src/x')).toEqual({
       refuse: expect.stringContaining('Yak Agent · Terminal') as string,
     });
   });
