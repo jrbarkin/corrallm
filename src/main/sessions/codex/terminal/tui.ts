@@ -58,6 +58,7 @@ const MODE_FLAGS: Record<CodexMode, readonly string[]> = {
 export interface CodexTuiOptions {
   /** A known usable model window, never guessed from its name. */
   contextWindow?: number;
+  api?: { args: readonly string[]; available: boolean; reason?: string };
   /** The trust its hooks need: their keys and hashes (trust.ts). */
   trust: (hooks: readonly SessionHook[]) => Promise<HookTrust>;
   /**
@@ -88,6 +89,7 @@ export class CodexTui implements TerminalCli<CodexMode> {
     },
   };
   readonly waitsForPrompt = true;
+  readonly #api: CodexTuiOptions['api'];
   readonly #trust: (hooks: readonly SessionHook[]) => Promise<HookTrust>;
   readonly #effort: string | null;
   readonly #developerInstructions: string | undefined;
@@ -121,7 +123,9 @@ export class CodexTui implements TerminalCli<CodexMode> {
     platform = process.platform,
     usage,
     contextWindow,
+    api,
   }: CodexTuiOptions) {
+    this.#api = api;
     this.#trust = trust;
     this.#effort = effort;
     this.#developerInstructions = developerInstructions;
@@ -131,6 +135,13 @@ export class CodexTui implements TerminalCli<CodexMode> {
       Number.isSafeInteger(contextWindow) && (contextWindow ?? 0) > 12_000
         ? contextWindow
         : undefined;
+  }
+
+  api(): { available: boolean; reason?: string } {
+    return {
+      available: this.#api?.available === true,
+      ...(this.#api?.reason === undefined ? {} : { reason: this.#api.reason }),
+    };
   }
 
   newId(): null {
@@ -158,6 +169,7 @@ export class CodexTui implements TerminalCli<CodexMode> {
     ];
     return [
       ...(resume && id !== null ? ['resume', id] : []),
+      ...(this.#api?.args ?? []),
       '--no-daemon',
       '-C',
       cwd,

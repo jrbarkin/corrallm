@@ -489,7 +489,7 @@ describe('GraphEditor', () => {
             refused: {
               agent: 'legacy',
               connection: 'unavailable',
-              text: 'This agent has no connection; choose Claude or Codex in Agent settings.',
+              text: 'This agent has no connection; choose another agent in Agent settings.',
             },
           },
         },
@@ -501,7 +501,7 @@ describe('GraphEditor', () => {
     const row = queues.getByRole('group', { name: 'Legacy: Message “Keep this work pending”' });
     expect(row.querySelector('[data-run]')?.getAttribute('data-run')).toBe('asking');
     expect(
-      queues.getByText('This agent has no connection; choose Claude or Codex in Agent settings.'),
+      queues.getByText('This agent has no connection; choose another agent in Agent settings.'),
     ).toBeTruthy();
     expect(within(row).queryByText(/attempt/)).toBeNull();
     expect(within(row).queryByText('Running')).toBeNull();
@@ -1768,9 +1768,11 @@ describe('GraphEditor', () => {
     await events.click(panel.getByRole('button', { name: 'Agent: Codex · Terminal' }));
     expect(panel.queryByRole('option', { name: /qwen/i })).toBeNull();
     expect(panel.queryByRole('option', { name: /Simulated/ })).toBeNull();
-    await events.click(panel.getByRole('option', { name: /^Claude · Agent SDK/ }));
+    await events.click(panel.getByRole('option', { name: /^Claude Code · Agent SDK/ }));
     expect(tag('a')).toBe('claude-code');
-    expect(await panel.findByRole('button', { name: 'Agent: Claude · Agent SDK' })).toBeTruthy();
+    expect(
+      await panel.findByRole('button', { name: 'Agent: Claude Code · Agent SDK' }),
+    ).toBeTruthy();
   });
 
   it('opens only a double-clicked node that is part of a multi-selection', async () => {
@@ -2393,8 +2395,8 @@ describe('GraphEditor', () => {
             .options,
         ].map((option) => [option.value, option.textContent]),
       ).toEqual([
-        ['', 'Default (Claude)'],
-        ['claude-code', 'Claude'],
+        ['', 'Default (Claude Code)'],
+        ['claude-code', 'Claude Code'],
         ['codex', 'Codex'],
       ]);
 
@@ -2405,8 +2407,8 @@ describe('GraphEditor', () => {
         );
       await waitFor(() => {
         expect(cards()).toEqual([
-          'Tester, Claude · Terminal',
-          'Implementer, Claude · Terminal',
+          'Tester, Claude Code · Terminal',
+          'Implementer, Claude Code · Terminal',
           'Refactorer, Codex · App Server',
         ]);
       });

@@ -19,6 +19,8 @@ import type { InstructionsContext } from './instructions';
 import { HookTruster } from './trust';
 import { CodexTui } from './tui';
 import { UsageReader } from './usage';
+import { prepareApi } from '../mcp';
+import type { startAppServer } from '../rpc';
 
 /*
  * The Codex Terminal connection: a Codex agent runs Codex's own interactive CLI (the user's
@@ -86,6 +88,7 @@ export interface CodexTerminalConnectorOptions {
   tmp?: string;
   timing?: Partial<TerminalTiming>;
   platform?: NodeJS.Platform;
+  apiStart?: typeof startAppServer;
 }
 
 export class CodexTerminalConnector implements Connector<CodexMode> {
@@ -99,6 +102,7 @@ export class CodexTerminalConnector implements Connector<CodexMode> {
   readonly #tmp: string;
   readonly #timing: TerminalTiming;
   readonly #platform: NodeJS.Platform;
+  readonly #apiStart: typeof startAppServer | undefined;
   /** The server every session's hooks post to (it runs while any session does). */
   readonly #hooks = new HookServer();
 
@@ -113,6 +117,7 @@ export class CodexTerminalConnector implements Connector<CodexMode> {
     tmp = tmpdir(),
     timing = {},
     platform = process.platform,
+    apiStart,
   }: CodexTerminalConnectorOptions) {
     this.#spawn = spawn;
     this.#findCodex = findCodex;
@@ -124,6 +129,7 @@ export class CodexTerminalConnector implements Connector<CodexMode> {
     this.#tmp = tmp;
     this.#timing = { ...TIMING, ...CODEX_TIMING, ...timing };
     this.#platform = platform;
+    this.#apiStart = apiStart;
   }
 
   async start(spec: SessionSpec<CodexMode>, host: SessionHost): Promise<LiveSession<CodexMode>> {
@@ -140,6 +146,14 @@ export class CodexTerminalConnector implements Connector<CodexMode> {
       instructions !== undefined || (spec.resume !== null && spec.roleChanged === true)
         ? appendRole(await this.#readInstructions({ codex, cwd, env: spec.env }), instructions)
         : undefined;
+    const api =
+      spec.api?.kind === 'http'
+        ? await prepareApi(
+            { codex, cwd, env: spec.env },
+            spec.api,
+            this.#apiStart === undefined ? {} : { start: this.#apiStart },
+          )
+        : undefined;
     const usage = this.#usage;
     const session = new TerminalSession<CodexMode>({ ...spec, cwd }, host, {
       executable: codex,
@@ -148,12 +162,13 @@ export class CodexTerminalConnector implements Connector<CodexMode> {
         effort: spec.effort ?? null,
         ...(developerInstructions === undefined ? {} : { developerInstructions }),
         platform: this.#platform,
+        ...(api === undefined ? {} : { api }),
         usage: () => this.#reader.read({ codex, cwd, env: spec.env }),
       }),
       spawn: this.#spawn,
       hooks: this.#hooks,
       tmp: this.#tmp,
-      env: () => codexEnvironment(spec.env),
+      env: () => codexEnvironment(api?.env ?? spec.env),
       timing: this.#timing,
       ...(usage === undefined
         ? {}

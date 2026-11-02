@@ -16,7 +16,7 @@ import type {
   RewindResult,
   SettingsOptions,
 } from '../../shared/session';
-import { adapterOf, isTerminal, catalog } from '../catalog';
+import { adapterAccent, adapterOf, isTerminal, catalog } from '../catalog';
 import { connectionIn } from '../../shared/adapter';
 import { actionsOf, adapterCli, DEFAULT_AGENT } from '../graph/agents';
 import type { AgentConnection } from '../graph/agents';
@@ -462,6 +462,7 @@ export function AgentView({
       <div
         className="agent-view"
         data-agent={agent}
+        data-accent={adapterAccent(agent)}
         role="dialog"
         aria-modal="false"
         aria-label={name}
@@ -676,6 +677,7 @@ export function AgentView({
                         )}
                         {opened === 'mcp' && (
                           <McpPanel
+                            adapter={agent}
                             list={controls.mcpServers}
                             change={controls.changeMcpServer}
                             onSignIn={() => {

@@ -373,6 +373,7 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
     const unheard = this.#cli.unheard?.();
     this.#emit({
       type: 'started',
+      api: this.#cli.api?.().available === true,
       model: this.#spec.model,
       mode: this.#mode,
       ...(this.#mode === null && unheard === undefined && this.#spec.startupAsks !== undefined
@@ -382,6 +383,9 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
       models: [],
     });
     if (unheard !== undefined) this.#emit({ type: 'unheard', text: unheard });
+    const apiReason = this.#cli.api?.().reason;
+    if (apiReason !== undefined)
+      this.#emit({ type: 'notice', id: randomUUID(), level: 'warning', text: apiReason });
     this.#readUsage();
   }
 
@@ -592,6 +596,29 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
   async #ended(pty: Pty, code: number): Promise<void> {
     if (pty !== this.#pty) return;
     await this.#screen.settled();
+    let retryApi = false;
+    try {
+      retryApi =
+        !this.#closing &&
+        !this.#reporting &&
+        (await this.#cli.retryWithoutApi?.(this.#screen.text())) === true;
+    } catch {
+      /* A failed preparation ends the session below. */
+    }
+    if (retryApi) {
+      const text = this.#cli.api?.().reason;
+      if (text !== undefined)
+        this.#emit({ type: 'notice', id: randomUUID(), level: 'warning', text });
+      this.#screen.dispose();
+      this.#screen = this.#newScreen();
+      if (this.#link) this.#reshow(this.#link);
+      try {
+        await this.#start();
+        return;
+      } catch {
+        /* End the failed retry below. */
+      }
+    }
     if (
       !this.#closing &&
       this.#resuming &&

@@ -166,3 +166,19 @@ describe('startAppServer', () => {
     );
   });
 });
+
+it('keeps a session bearer out of native startup failure sentences', async () => {
+  const token = 'failure-credential-canary';
+  const server = await startAppServer({
+    codex: process.execPath,
+    cwd: process.cwd(),
+    env: { PATH: process.env.PATH ?? '', CORRALLM_SESSION_TOKEN: token, FAKE_CODEX_FAIL: token },
+    clientInfo: { name: 'corrallm', title: 'corrallm', version: 'test' },
+    spawn: (_file, args, options) => spawn(process.execPath, [FAKE, ...args], options),
+  }).then(
+    () => undefined,
+    (error: unknown) => error as Error,
+  );
+  expect(server).toBeInstanceOf(Error);
+  expect(server?.message).not.toContain(token);
+});

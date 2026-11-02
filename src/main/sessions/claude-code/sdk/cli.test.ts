@@ -5,7 +5,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import type { PromptEvent } from '../../../../shared/model/prompts';
-import type { HostEvent, LiveSession, SessionHost } from '../../connector';
+import type { HostEvent, LiveSession, SessionApi, SessionHost } from '../../connector';
 import { SdkConnector } from './connector';
 import { Conversations } from './conversations';
 
@@ -57,6 +57,7 @@ async function start(
   login: Record<string, string> = { ANTHROPIC_API_KEY: 'sk-ant-test' },
   events: HostEvent[] = [],
   resume: string | null = null,
+  api?: SessionApi,
 ) {
   const remembered: string[] = [];
   const host: SessionHost = {
@@ -77,7 +78,15 @@ async function start(
     findClaude: () => Promise.resolve(FAKE),
   });
   session = await connector.start(
-    { agentId: 'a', cwd: folder, env, model: null, mode, resume },
+    {
+      ...(api === undefined ? {} : { api }),
+      agentId: 'a',
+      cwd: folder,
+      env,
+      model: null,
+      mode,
+      resume,
+    },
     host,
   );
   return { session, events, remembered };
@@ -260,4 +269,39 @@ describe('SdkConnector through the Agent SDK', () => {
       possible: false,
     });
   });
+});
+
+it('lists and calls the bound MCP channel through the native SDK control protocol', async () => {
+  const { vi } = await import('vitest');
+  const list = vi.fn(() => [
+    {
+      name: 'probe_read',
+      description: 'Read',
+      inputSchema: { type: 'object' as const },
+      outputSchema: { type: 'object' as const },
+      annotations: { readOnlyHint: true, destructiveHint: false },
+    },
+  ]);
+  const call = vi
+    .fn()
+    .mockResolvedValue({ content: [{ type: 'text', text: 'bound reply' }], structuredContent: {} });
+  const events: HostEvent[] = [];
+  await start(
+    'manual',
+    { ANTHROPIC_API_KEY: 'sk-ant-test', FAKE_CLAUDE_MCP_CALL: 'probe_read' },
+    events,
+    null,
+    {
+      kind: 'channel',
+      server: 'corrallm',
+      tools: [{ name: 'probe_read', destructive: false }],
+      off: ['corrallm-server', 'corrallm-server-dev'],
+      channel: { list, call },
+    },
+  );
+  await vi.waitFor(() => {
+    expect(list).toHaveBeenCalled();
+    expect(call).toHaveBeenCalledWith('probe_read', {}, expect.any(AbortSignal));
+  });
+  expect(events.find((one) => one.type === 'started')).toMatchObject({ api: true });
 });

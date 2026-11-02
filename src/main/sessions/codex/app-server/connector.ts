@@ -14,8 +14,16 @@ import { checkVersion } from '../codex';
 import { appServerRefusal, ASK_EACH_SESSION, codexLogin } from '../login';
 import type { Distribution, Consent } from '../../adapter';
 import { startAppServer } from '../rpc';
-import type { SpawnAppServer } from '../rpc';
+import type { AppServer, SpawnAppServer } from '../rpc';
 import { folderTrust } from '../terminal/hooks';
+import {
+  apiEntry,
+  entryIsCurrent,
+  prepareApi,
+  outsideIsCurrent,
+  shellIsCurrent,
+  withoutSessionToken,
+} from '../mcp';
 import { readSkills, slashCommands } from './commands';
 import { runGit } from './diff';
 import type { RunGit } from './diff';
@@ -139,25 +147,68 @@ export class AppServerConnector implements Connector<CodexMode> {
       places,
     );
     const version = /\/(\S+)$/.exec(this.#clientApp)?.[1] ?? '0.0.0';
-    const server = await startAppServer({
-      codex,
-      cwd: spec.cwd,
-      env: spec.env,
-      clientInfo: { name: 'corrallm', title: 'corrallm', version },
-      // The project folder trusted for this server alone, as a Terminal session trusts it: by the
-      // path its thread works in, and its real path where they differ (Codex may resolve it).
-      args: ['-c', folderTrust(spec.cwd, realCwd)],
-      onNotification: (method, params) => {
-        if (live.session) live.session.notification(method, params);
-        else early.push({ method, params });
-      },
-      onRequest: (method, params, id) => {
-        host.activity?.();
-        return prompts.request(method, params, id);
-      },
-      ...(this.#spawn === undefined ? {} : { spawn: this.#spawn }),
-    });
+    const spawn = this.#spawn;
+    const prepared =
+      spec.api?.kind === 'http'
+        ? await prepareApi(
+            { codex, cwd: spec.cwd, env: spec.env },
+            spec.api,
+            spawn === undefined
+              ? {}
+              : { start: (options) => startAppServer({ ...options, spawn }) },
+          )
+        : undefined;
+    let apiAvailable = prepared?.available === true;
+    let apiReason = prepared?.reason;
+    const openServer = (args: readonly string[], env: Readonly<Record<string, string>>) =>
+      startAppServer({
+        codex,
+        cwd: spec.cwd,
+        env,
+        clientInfo: { name: 'corrallm', title: 'corrallm', version },
+        // The project folder trusted for this server alone, as a Terminal session trusts it: by the
+        // path its thread works in, and its real path where they differ (Codex may resolve it).
+        args: ['-c', folderTrust(spec.cwd, realCwd), ...args],
+        onNotification: (method, params) => {
+          if (live.session) live.session.notification(method, params);
+          else early.push({ method, params });
+        },
+        onRequest: (method, params, id) => {
+          host.activity?.();
+          return prompts.request(method, params, id);
+        },
+        ...(this.#spawn === undefined ? {} : { spawn: this.#spawn }),
+      });
+    let server: AppServer;
     try {
+      server = await openServer(prepared?.args ?? [], prepared?.env ?? spec.env);
+    } catch (error) {
+      if (!apiAvailable) throw error;
+      apiAvailable = false;
+      apiReason =
+        'Codex could not start corrallm’s session entry; its API is off for this session.';
+      server = await openServer(prepared?.off ?? [], withoutSessionToken(spec.env));
+    }
+    try {
+      if (apiAvailable && spec.api?.kind === 'http') {
+        let current = false;
+        try {
+          const read = await server.request('config/read', { cwd: spec.cwd, includeLayers: true });
+          current =
+            entryIsCurrent(read, apiEntry(spec.api)) &&
+            shellIsCurrent(read) &&
+            outsideIsCurrent(read, prepared?.disabled ?? []);
+        } catch {
+          /* An unverifiable entry starts no thread with the bearer. */
+        }
+        if (!current) {
+          await server.close();
+          apiAvailable = false;
+          apiReason =
+            'Codex could not verify corrallm’s session entry and shell policy; its API is off for this session.';
+          server = await openServer(prepared?.off ?? [], withoutSessionToken(spec.env));
+        }
+      }
       const old = server.version === undefined ? undefined : checkVersion(server.version);
       if (old !== undefined) throw new Error(old);
       const login = codexLogin(await server.request('account/read', { refreshToken: false }));
@@ -279,12 +330,15 @@ export class AppServerConnector implements Connector<CodexMode> {
       live.session = session;
       host.emit({
         type: 'started',
+        api: apiAvailable,
         model: thread.model,
         mode: session.mode,
         models: choices(models, thread.model),
         effort: session.effort,
         ...(session.asks === undefined ? {} : { asks: session.asks }),
       });
+      if (apiReason !== undefined)
+        host.emit({ type: 'notice', id: randomUUID(), level: 'warning', text: apiReason });
       host.emit({ type: 'commands', commands: slashCommands(skills) });
       if (history.length > 0) host.emit({ type: 'history', events: history });
       for (const event of [...told, ...translator.setLimits(property(limits, 'rateLimits'))]) {

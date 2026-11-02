@@ -23,6 +23,9 @@ import type { TerminalFixture, TerminalRecord } from './recorded';
 import { Replay } from './replay';
 import { PASTE_END, PASTE_START } from './tui';
 import { UsageReader } from './usage';
+import { apiEntry } from '../mcp';
+import { testMcpServer } from '../../test-mcp';
+import type { AppServer, startAppServer } from '../rpc';
 
 /*
  * Codex in corrallm's terminal, as the real Codex CLI 0.160.1 behaved: each pseudo-terminal plays a
@@ -665,4 +668,63 @@ describe('the Codex Terminal connector', () => {
       expect(state).toContain(`${JSON.stringify(key)}={trusted_hash="${hash}"}`);
     }
   });
+});
+
+it('its Terminal fake lists and calls the verified session entry with the shell’s empty-token override', async () => {
+  const token = 'tui-credential-canary';
+  const endpoint = await testMcpServer(token);
+  const api = {
+    kind: 'http' as const,
+    server: 'corrallm' as const,
+    url: endpoint.url,
+    token,
+    tools: [{ name: 'probe_read', destructive: false }],
+    off: ['corrallm-server', 'corrallm-server-dev'],
+  };
+  const close = vi.fn().mockResolvedValue(undefined);
+  let calls = 0;
+  const apiStart = (() => {
+    const nth = ++calls;
+    return Promise.resolve({
+      close,
+      request: () =>
+        Promise.resolve(
+          nth === 1
+            ? { config: { mcp_servers: {} } }
+            : {
+                config: {
+                  mcp_servers: { corrallm: apiEntry(api) },
+                  shell_environment_policy: { set: { CORRALLM_SESSION_TOKEN: '' } },
+                },
+                origins: {
+                  'corrallm.url': 'sessionFlags',
+                  'corrallm.enabled': 'sessionFlags',
+                  'corrallm.bearer_token_env_var': 'sessionFlags',
+                  'corrallm.default_tools_approval_mode': 'sessionFlags',
+                  'corrallm.tools.probe_read.approval_mode': 'sessionFlags',
+                  'shell_environment_policy.set.CORRALLM_SESSION_TOKEN': 'sessionFlags',
+                },
+              },
+        ),
+    } as unknown as AppServer);
+  }) as typeof startAppServer;
+  try {
+    await start(
+      ['prompts'],
+      { api, env: { ...SPEC.env, FAKE_MCP_TOOL: 'probe_read' } },
+      { apiStart, timing: { ...TIMING, kill: 20 } },
+    );
+    const run = runs[0];
+    if (!run) throw new Error('No fake');
+    await run.apiReady;
+    expect(endpoint.methods).toContain('tools/call');
+    expect(events.find((one) => one.type === 'started')).toMatchObject({ api: true });
+    expect(run.options.env.CORRALLM_SESSION_TOKEN).toBe(token);
+    expect(run.args).toContain('shell_environment_policy.set.CORRALLM_SESSION_TOKEN=""');
+    expect(JSON.stringify([run.args, events])).not.toContain(token);
+    expect(close).toHaveBeenCalledTimes(2);
+  } finally {
+    await Promise.all(sessions.map((one) => one.close()));
+    await endpoint.close();
+  }
 });

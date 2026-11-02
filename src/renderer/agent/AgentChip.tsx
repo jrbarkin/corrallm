@@ -2,9 +2,9 @@ import { useRef, useState } from 'react';
 
 import { connectionIn } from '../../shared/adapter';
 import type { AdapterId } from '../../shared/adapter';
-import { catalog } from '../catalog';
+import { adapterAccent, catalog } from '../catalog';
 import { AdapterLogo } from '../AdapterLogo';
-import { agentLabel, CONNECTED_AGENTS, connectionInfo, connectionsOf } from '../graph/agents';
+import { agentLabel, connectedAgents, connectionInfo, connectionsOf } from '../graph/agents';
 import type { AgentConnection } from '../graph/agents';
 import { SearchPicker } from '../search/SearchPicker';
 
@@ -15,13 +15,8 @@ interface Choice {
   continues?: true;
 }
 
-/** Every adapter with each way it runs, as the agent chip offers them. */
-const CHOICES: readonly Choice[] = CONNECTED_AGENTS.flatMap((adapter) =>
-  connectionsOf(adapter).map((connection) => ({ adapter, connection })),
-);
-
 /**
- * The agent's adapter and how it runs: its logo and label ("Claude · Terminal") that open a
+ * The agent's adapter and how it runs: its logo and label (adapter and connection) that open a
  * dropdown of the adapters, each with the ways it can run; for a connection that continues its
  * conversation in another (an Agent SDK agent's, in Terminal), first, continuing it there.
  */
@@ -43,9 +38,12 @@ export function AgentChip({
     connection === 'unavailable'
       ? undefined
       : connectionIn(catalog(), connection)?.connection.continueIn;
+  const offered = connectedAgents().flatMap((adapter) =>
+    connectionsOf(adapter).map((connection) => ({ adapter, connection })),
+  );
   const choices: readonly Choice[] = continueIn
-    ? [{ adapter, connection: continueIn.connection, continues: true }, ...CHOICES]
-    : CHOICES;
+    ? [{ adapter, connection: continueIn.connection, continues: true }, ...offered]
+    : offered;
   /** A connection is explained where its adapter runs more than one way. */
   const detail = (one: Choice) =>
     connectionsOf(one.adapter).length > 1 ? connectionInfo(one.connection).description : undefined;
@@ -55,6 +53,7 @@ export function AgentChip({
         ref={button}
         type="button"
         data-agent={adapter}
+        data-accent={adapterAccent(adapter)}
         data-connection={connection}
         aria-label={`Agent: ${label}`}
         aria-expanded={open}
@@ -76,7 +75,9 @@ export function AgentChip({
               : agentLabel(choice.adapter, choice.connection)
           }
           optionDetail={(choice) =>
-            choice.continues ? 'This conversation, in Claude Code’s own terminal' : detail(choice)
+            choice.continues
+              ? 'Continue this conversation with the agent’s own terminal'
+              : detail(choice)
           }
           optionKey={(choice) =>
             choice.continues ? 'continue' : `${choice.adapter}/${choice.connection}`

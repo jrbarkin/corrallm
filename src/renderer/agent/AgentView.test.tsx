@@ -637,9 +637,9 @@ describe('the agent view', () => {
       await events.click(shown('Agent 1').getByRole('button', { name: 'Back to the canvas' }));
       expect(screen.queryByRole('dialog')).toBeNull();
       // The agent shown last has the keyboard on the canvas.
-      expect(document.activeElement?.getAttribute('aria-label')).toBe('Agent 1, Claude · SDK');
+      expect(document.activeElement?.getAttribute('aria-label')).toBe('Agent 1, Claude Code · SDK');
 
-      await events.doubleClick(screen.getByRole('group', { name: 'a, Claude · SDK' }));
+      await events.doubleClick(screen.getByRole('group', { name: 'a, Claude Code · SDK' }));
       expect(stacked()).toEqual([]);
       await events.keyDown(document.body, { key: 'Escape' });
       expect(screen.queryByRole('dialog')).toBeNull();

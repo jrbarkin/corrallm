@@ -140,9 +140,7 @@ export function StartSession({
             <h3>Your agents</h3>
             {installed === undefined && <p role="status">Looking for installed agents…</p>}
             {catalog().adapters.map((adapter) => {
-              const choices = [...adapter.connections].sort(
-                (a, b) => Number(b.view === 'terminal') - Number(a.view === 'terminal'),
-              );
+              const choices = adapter.connections;
               const connection = connections[adapter.id] ?? choices[0]?.id;
               return (
                 <div className="start-session-agent" key={adapter.id}>

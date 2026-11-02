@@ -72,7 +72,7 @@ describe('sessions without placeholder execution', () => {
       await settle();
       expect(refused).toHaveBeenCalled();
       expect(secondRefused).toHaveBeenCalledOnce();
-      expect(refused.mock.calls[0]?.[0].text).toMatch(/Choose Claude or Codex/);
+      expect(refused.mock.calls[0]?.[0].text).toMatch(/Choose another agent in its settings/);
       expect(refused.mock.calls[0]?.[0].switchTo).toBeUndefined();
       expect(backend.start).not.toHaveBeenCalled();
       expect(backend.send).not.toHaveBeenCalled();

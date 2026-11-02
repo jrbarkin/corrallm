@@ -387,7 +387,13 @@ describe('a Terminal session of another CLI', () => {
   it('remembers the session id only once the CLI’s hooks tell it', async () => {
     const session = await start();
     expect(remembered).toEqual([]);
-    expect(events[0]).toEqual({ type: 'started', model: null, mode: 'auto', models: [] });
+    expect(events[0]).toEqual({
+      type: 'started',
+      api: false,
+      model: null,
+      mode: 'auto',
+      models: [],
+    });
     await session.send({ id: 'm1', text: 'Hello' });
     await until(() => {
       expect(last('end')).toBeDefined();
