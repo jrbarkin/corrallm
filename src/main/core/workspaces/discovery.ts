@@ -83,23 +83,22 @@ const MAX_POINTER_BYTES = 4096;
 export type IdentityStat = (
   file: string,
   options: { bigint: true },
-) => Pick<BigIntStats, 'dev' | 'ino' | 'birthtimeNs'>;
+) => Pick<BigIntStats, 'ino' | 'birthtimeNs'>;
 
 /** An identity as a corrallm before v2 kept it: the common directory's inode alone. */
 const OLD_IDENTITY = /^git common-dir inode [0-9]+$/;
-const IDENTITY = /^git common-dir v2 dev [0-9]+ ino ([0-9]+)(?: birth -?[0-9]+)?$/;
+const IDENTITY = /^git common-dir v2 ino ([0-9]+)(?: birth -?[0-9]+)?$/;
 
 /**
- * What identifies a repository beside its path: its common Git directory's device, inode and birth
- * time, so a repository made again where one was (deleted and cloned again) is another, even where
- * the file system gives the new directory the old one's inode number. Where the file system keeps
- * no birth time (0), the device and inode alone: there, one made again on the inode number of the
- * one recorded is taken for it. Checked again before its workspaces are used; throws if the
- * directory is gone.
+ * What identifies a repository beside its path: its common Git directory's inode and birth time,
+ * stable across a change of device number. A directory born later has another identity even with
+ * the same inode. Where the file system keeps no birth time (0), the inode alone: there, one made
+ * again on the inode number of the one recorded is taken for it. Checked again before its
+ * workspaces are used; throws if the directory is gone.
  */
 export function repositoryIdentity(commonDir: string, stat: IdentityStat = statSync): string {
-  const { dev, ino, birthtimeNs } = stat(commonDir, { bigint: true });
-  const identity = `git common-dir v2 dev ${dev.toString()} ino ${ino.toString()}`;
+  const { ino, birthtimeNs } = stat(commonDir, { bigint: true });
+  const identity = `git common-dir v2 ino ${ino.toString()}`;
   return birthtimeNs === 0n ? identity : `${identity} birth ${birthtimeNs.toString()}`;
 }
 

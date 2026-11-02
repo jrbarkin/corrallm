@@ -466,7 +466,7 @@ describe('the core’s database', () => {
     await started.close();
     core = undefined;
     const now = repositoryIdentity(commonDir);
-    expect(now).toMatch(/^git common-dir v2 dev [0-9]+ ino [0-9]+/);
+    expect(now).toMatch(/^git common-dir v2 ino [0-9]+(?: birth -?[0-9]+)?$/);
     expect(
       readOnDisk(profile, (disk) => disk.prepare('SELECT identity FROM repository').all()),
     ).toEqual([{ identity: now }]);

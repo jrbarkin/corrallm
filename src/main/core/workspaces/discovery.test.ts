@@ -244,23 +244,26 @@ describe('repositoryIdentity', () => {
     vi.fn(() => ({ dev, ino, birthtimeNs }));
   const BORN = 1_700_000_000_123_456_789n;
 
-  it('is the common directory’s device, inode and birth time: an inode reused is another repository', () => {
+  it('uses the common directory’s inode and birth time to distinguish a directory born later', () => {
     const stat = statOf(7n, 42n, BORN);
     const first = repositoryIdentity('/work/app/.git', stat);
     expect(stat).toHaveBeenCalledWith('/work/app/.git', { bigint: true });
-    expect(first).toBe(`git common-dir v2 dev 7 ino 42 birth ${BORN.toString()}`);
+    expect(first).toBe(`git common-dir v2 ino 42 birth ${BORN.toString()}`);
     // The same directory, read again.
     expect(repositoryIdentity('/work/app/.git', statOf(7n, 42n, BORN))).toBe(first);
     // Deleted and made again on the same inode number: born later, so another repository.
     expect(repositoryIdentity('/work/app/.git', statOf(7n, 42n, BORN + 1n))).not.toBe(first);
-    // The same inode number on another device.
-    expect(repositoryIdentity('/work/app/.git', statOf(8n, 42n, BORN))).not.toBe(first);
   });
 
-  it('keeps the device and inode alone where the file system keeps no birth time', () => {
-    expect(repositoryIdentity('/work/app/.git', statOf(7n, 42n, 0n))).toBe(
-      'git common-dir v2 dev 7 ino 42',
-    );
+  it('keeps a repository’s identity when its device number changes', () => {
+    const first = repositoryIdentity('/work/app/.git', statOf(7n, 42n, BORN));
+    expect(repositoryIdentity('/work/app/.git', statOf(8n, 42n, BORN))).toBe(first);
+  });
+
+  it('keeps the inode alone where the file system keeps no birth time', () => {
+    const first = repositoryIdentity('/work/app/.git', statOf(7n, 42n, 0n));
+    expect(first).toBe('git common-dir v2 ino 42');
+    expect(repositoryIdentity('/work/app/.git', statOf(8n, 42n, 0n))).toBe(first);
   });
 });
 
