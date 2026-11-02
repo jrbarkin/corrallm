@@ -70,12 +70,14 @@ export function Elicitation({
 }
 
 /** A form an MCP server asks the user to fill in: Submit once what it requires is there. */
-function Form({
+export function Form({
   server,
   message,
   fields,
   onAnswer,
+  explicit = false,
 }: {
+  explicit?: boolean;
   server: string;
   message: string;
   fields: readonly FormField[];
@@ -95,7 +97,17 @@ function Form({
     onAnswer('accept', answered(fields, values));
   };
   return (
-    <form className="agent-permission agent-form" aria-label={`${server} asks`} onSubmit={submit}>
+    <form
+      className="agent-permission agent-form"
+      aria-label={`${server} asks`}
+      onKeyDown={(event) => {
+        if (explicit && event.key === 'Enter') event.preventDefault();
+      }}
+      onSubmit={(event) => {
+        event.preventDefault();
+        if (!explicit) submit();
+      }}
+    >
       <p className="agent-permission-title">{server} asks</p>
       <p>{message}</p>
       {fields.map((field) => (
@@ -109,7 +121,17 @@ function Form({
         />
       ))}
       <div className="agent-permission-choices">
-        <button type="submit" disabled={missing}>
+        <button
+          type={explicit ? 'button' : 'submit'}
+          disabled={missing}
+          onClick={
+            explicit
+              ? () => {
+                  submit();
+                }
+              : undefined
+          }
+        >
           Submit
         </button>
         <button

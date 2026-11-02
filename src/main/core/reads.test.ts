@@ -35,6 +35,42 @@ const OUTSIDERS = [
 const PAGED = cursorOf('messages', { [CANVAS]: 0 });
 const WAITED = cursorOf('wait', { [CANVAS]: 0 });
 
+// Direct sends, withdrawals/settlements, and operations that can end a recipient or release its
+// delivery hold. Pure reads and edits that send no message belong to T3a/T3b, not wait parity.
+const MESSAGE_WRITES: readonly OpName[] = [
+  'message',
+  'withdraw',
+  'reply',
+  'canvas.delete',
+  'canvas.batch',
+  'canvas.create',
+  'canvas.open',
+  'canvas.close',
+  'agent.setType',
+  'agent.setConnection',
+  'agent.setSettings',
+  'session.open',
+  'session.setMode',
+  'session.setModel',
+  'session.setEffort',
+  'session.stopTask',
+  'session.restart',
+  'session.newConversation',
+  'session.continueIn',
+  'session.resumeConversation',
+  'session.changeMcpServer',
+  'session.rewind',
+  'session.interrupt',
+  'run.start',
+  'run.stop',
+  'run.resume',
+  'run.goOn',
+  'run.pause',
+  'run.kill',
+  'run.unpause',
+  'run.pauseAll',
+];
+
 describe('T3c: wait', () => {
   let world: { core: Core; close(): Promise<void> };
 
@@ -74,14 +110,15 @@ describe('T3c: wait', () => {
     return items;
   }
 
-  it.each(Object.entries(REAL_FIXTURES))(
+  it.each(MESSAGE_WRITES)(
     'returns each outside party only what is addressed to it, after %s’s writes',
-    async (name, fixture) => {
+    async (name) => {
+      const fixture = REAL_FIXTURES[name];
       const surface = world.core.surface[name];
       for (const party of PARTIES) {
         if (surface?.kind === 'read' || !surface?.access[party]) continue;
         for (const args of validFor(fixture, party)) {
-          await world.core.call(name as OpName, args, CALLERS[party]);
+          await world.core.call(name, args, CALLERS[party]);
         }
       }
       for (const caller of OUTSIDERS) {
@@ -90,8 +127,6 @@ describe('T3c: wait', () => {
         expect(got).toEqual(await sentTo(caller));
       }
     },
-    // A fixture may do real Git work (branch.merge: a merge, then its observation).
-    30_000,
   );
 
   it('has something addressed to each party by the end, so that the check above meant something', async () => {

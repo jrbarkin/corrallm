@@ -429,7 +429,7 @@ it('keeps a handed-off manual message queued until the native user receipt arriv
   expect(sessionDisplay(received.summary, received, [message]).queued).toEqual([]);
 });
 
-it('holds none of the core prompt owner’s transcript entries, which are B13 X10’s card, and keeps the rest', () => {
+it('keeps the core prompt owner’s transcript entries in place beside native output', () => {
   const id = '0f1e2d3c-4b5a-4968-8776-655443322110';
   const view = sessionView(AgentId.parse('a'), connection, {
     ...NEW_SESSION,
@@ -456,6 +456,7 @@ it('holds none of the core prompt owner’s transcript entries, which are B13 X1
   expect(view.order).toContain(id);
   expect(sessionDisplay(view.summary, view).entries.map((entry) => entry.id)).toEqual([
     'before',
+    id,
     'after',
   ]);
 });

@@ -1,4 +1,5 @@
 import { NEW_SESSION } from '../../shared/model/session';
+import { Prompt, PromptId } from '../../shared/model/prompts';
 import { renderReady, events } from '../test-render';
 import { act, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -130,6 +131,47 @@ const MODELS = [
   { value: 'opus', label: 'Opus', description: 'The most capable' },
   { value: 'haiku', label: 'Haiku', description: 'The fastest' },
 ];
+
+it('answers the owner prompt in an agent window through one registered reply', async () => {
+  const { canvas, transcript } = await open();
+  const id = PromptId.parse('40000000-0000-4000-8000-000000000001');
+  const need = `prompt/a/1/${id}`;
+  canvas.core.respond('reply', { outcome: 'answered' });
+  act(() => {
+    canvas.session('a', {
+      ...NEW_SESSION,
+      status: 'waiting',
+      entries: [
+        {
+          id,
+          kind: 'prompt',
+          name: 'a',
+          need,
+          prompt: Prompt.parse({
+            id,
+            agent: 'a',
+            raised: 1,
+            kind: 'approval',
+            title: 'Review the command',
+            answerIn: 'api',
+            subject: { type: 'command', command: 'echo reviewed', cwd: '/work' },
+            choices: [
+              { value: 'once', label: 'Allow once', hint: 'allow_once', effects: {} },
+              { value: 'no', label: 'Decline', hint: 'reject_once', effects: {} },
+            ],
+          }),
+        },
+      ],
+    });
+  });
+  canvas.core.operations.length = 0;
+  await events.click(transcript.getByRole('button', { name: 'Allow once' }));
+  expectOneOp(canvas.core, 'reply', {
+    canvas: canvas.document.id,
+    to: need,
+    answer: { choice: 'once' },
+  });
+});
 
 describe('a connected Codex agent', () => {
   it('runs in a terminal or through its app server, as its chip says', async () => {

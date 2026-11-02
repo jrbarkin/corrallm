@@ -1,3 +1,4 @@
+import { OwnedPrompt } from '../agent/OwnedPrompt';
 import {
   Background,
   ConnectionMode,
@@ -1472,6 +1473,23 @@ function Editor({
         )}
         {queues && (
           <QueuesView
+            renderPrompts={(agent) =>
+              coreNeeds?.items
+                .filter((item) => item.agent === agent && item.prompt)
+                .map((item) => (
+                  <OwnedPrompt
+                    key={item.id}
+                    item={item}
+                    mirror={mirror}
+                    onReply={(answer) => commands.reply(item.id, answer)}
+                    onOpen={(id) => {
+                      setQueues(undefined);
+                      selectOne(id);
+                      setOpened({ ids: [id] });
+                    }}
+                  />
+                ))
+            }
             nodes={displayNodes}
             sessions={sessions}
             run={run}

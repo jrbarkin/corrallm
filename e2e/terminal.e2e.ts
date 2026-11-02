@@ -321,7 +321,10 @@ test('a new canvas agent defaults to real Claude Code in its Terminal, without a
   await openNeeds(page);
   const needsYou = page.getByRole('complementary', { name: 'Needs you' });
   const asked = needsYou.getByRole('group', { name: 'Agent 1 asks, in its terminal' });
-  await expect(asked).toContainText('Bashecho helloDo you want to proceed?');
+  await expect(asked).toContainText('Claude wants to use Bash');
+  await expect(asked).toContainText('echo hello');
+  await expect(asked).toContainText('Answer it in the terminal.');
+  await expect(asked.getByRole('button', { name: 'Yes', exact: true })).toHaveCount(0);
 
   // The session ran on with its view closed; opened again, it shows the same terminal.
   await asked.getByRole('button', { name: 'Open terminal' }).click();
@@ -340,9 +343,16 @@ test('a new canvas agent defaults to real Claude Code in its Terminal, without a
   await expect(status(view)).toHaveText('Needs you, in the terminal');
   await view.getByRole('button', { name: 'Back to the canvas' }).click();
   await openNeeds(page);
-  await expect(asked).toContainText(
-    'DatabaseWhich database?PostgresWhat the app uses todaySQLiteOne file, for tests',
-  );
+  for (const words of [
+    'Database',
+    'Which database?',
+    'Postgres',
+    'What the app uses today',
+    'SQLite',
+    'One file, for tests',
+  ]) {
+    await expect(asked).toContainText(words);
+  }
   await expect(asked.getByRole('textbox')).toHaveCount(0);
   await asked.getByRole('button', { name: 'Open terminal' }).click();
   await typeIn(terminal, '1');
@@ -462,7 +472,10 @@ test('a template’s Claude agents run in their terminals, asked once whether to
     .getByRole('complementary', { name: 'Needs you' })
     .getByRole('group', { name: / asks, in its terminal$/ });
   await expect(asked).toHaveCount(1);
-  await expect(asked).toContainText('Trust this folder in the terminal.');
+  await expect(asked).toContainText(
+    `${adapterName('claude-code')} asks whether you trust the project folder.`,
+  );
+  await expect(asked).toContainText('Answer it in the terminal.');
   await asked.getByRole('button', { name: 'Open terminal' }).click();
   const view = page.getByRole('dialog', { name: /^(Builder|Checker)$/ });
   await expect(status(view)).toHaveText('Trust this folder in the terminal');

@@ -1,3 +1,4 @@
+import type { ArgsOf } from '../../shared/api/registry';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { flushSync } from 'react-dom';
 import { useLabel } from '../useDraft';
@@ -54,6 +55,7 @@ import './AgentView.css';
 
 /** What the view does to its agent's session (src/main/core/engine/delivery/mailbox.ts). */
 export interface SessionControls extends ComposerControls {
+  replyPrompt?: ((need: string, answer: ArgsOf<'reply'>['answer']) => Promise<unknown>) | undefined;
   /** Records a command the view answers itself in a panel, without sending a turn. */
   recordCommand?: (text: string) => void;
   /** Starts the session (again), as when the view opens: a connected one resumes. */
@@ -580,6 +582,7 @@ export function AgentView({
                   note={sessionNote(agent, connection, project)}
                   onStart={controls.open}
                   onUnqueue={controls.unqueue}
+                  onPromptReply={controls.replyPrompt}
                   ask={
                     ask && (
                       <AskBar
@@ -613,6 +616,7 @@ export function AgentView({
                     agent={agent}
                     note={sessionNote(agent, connection, project)}
                     answers={{
+                      onPromptReply: controls.replyPrompt,
                       // The prompt's buttons are gone: the keyboard goes back to the composer.
                       onAnswer: (permissionId, answer, feedback) => {
                         controls.answer(permissionId, answer, feedback);

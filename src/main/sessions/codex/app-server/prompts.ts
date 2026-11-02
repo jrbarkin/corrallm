@@ -28,12 +28,8 @@ import type { McpCall, Patch } from './translate';
  * - One corrallm can't pass on faithfully (questions it can't key, a form it can't show, an MCP
  *   tool call's approval whose call it can't tell) is declined here, never raised, and the user
  *   told.
- * - Until X10 converts the renderer, each raised request is shown as the events B13 replaces too
- *   (`permission`, `question`, `plan`, `elicitation`, `withdrawn` and the session's waiting
- *   status), each under its own fresh view id: unless the owner declined it as it was raised. A
- *   secret question isn't asked through them (they keep every answer): it is declined.
- *   Their answers never reach Codex from here: `bridge` translates one into the prompt's own
- *   answer and names its key, for the core to answer it through the owner (X11 removes this).
+ * - Prompts reach the renderer only through the owner's transcript entries. The unused legacy
+ *   translation helpers remain for X11 to remove; no connection installs their bridge.
  */
 
 /** Where prompts go, and what the session knows that they show. */
@@ -58,14 +54,11 @@ interface Pending {
   readonly shown: string;
   readonly prompt: AdapterPrompt;
   readonly native: Native;
-  /** Whether that event was shown (none if the owner declined it as it was raised). */
-  visible: boolean;
+  /** Whether the owner kept the raise (false if it declined it as it was raised). */
+  admitted: boolean;
   /** Answers it: Codex's response, or the session's own answer (undefined: it ended unanswered). */
   readonly settle: (result: unknown) => void;
 }
-
-/** What the user is told of a secret question, declined until X10 (see `#raise`). */
-const SECRET = 'Codex asked a secret question, which corrallm can’t ask yet, so it was declined.';
 
 /** One of the session's own asks, raised: its key, and its answer as raise.ts gives it. */
 export interface Asked {
@@ -107,8 +100,7 @@ export class Prompts {
       if (pending === undefined) return;
       this.#pending.delete(key);
       pending.settle(nonapproval(pending.native));
-      if (pending.visible) {
-        this.#host.emit({ type: 'withdrawn', id: pending.shown });
+      if (pending.admitted) {
         this.#settled(pending);
       }
     },
@@ -165,7 +157,7 @@ export class Prompts {
   }
 
   /**
-   * Transitional (B13 C5, until X10 converts the renderer; X11 removes it): the key of the request
+   * Transitional (B13 C5, unused after X10; X11 removes it): the key of the request
    * the event B13 replaces `id` shows, and `answer` as its prompt takes it, for the core to answer
    * through its owner. Answers nothing itself. Throws for one no longer asked, or an answer its
    * prompt doesn't take.
@@ -186,24 +178,17 @@ export class Prompts {
       return { key: undefined, answered: Promise.resolve(asked.result) };
     }
     const { prompt, native, shown } = asked;
-    // Until X10: the events B13 replaces keep and show each question's answer, so a secret one
-    // isn't asked through them.
-    if (prompt.kind === 'question' && prompt.questions.some(({ secret }) => secret === true)) {
-      this.#host.emit(notice('warning', SECRET));
-      return { key: undefined, answered: Promise.resolve(nonapproval(native)) };
-    }
     const key = randomUUID();
     const id = `${shown.type === 'elicitation' ? 'elicitation' : 'prompt'}:${randomUUID()}`;
     let settle: (result: unknown) => void = () => undefined;
     const answered = new Promise<unknown>((resolve) => {
       settle = resolve;
     });
-    this.#pending.set(key, { key, request, shown: id, prompt, native, visible: false, settle });
+    this.#pending.set(key, { key, request, shown: id, prompt, native, admitted: false, settle });
     this.#host.emit({ type: 'prompt', key, prompt });
     const pending = this.#pending.get(key);
     if (pending !== undefined) {
-      pending.visible = true;
-      this.#host.emit({ ...shown, id });
+      pending.admitted = true;
       this.#host.emit({ type: 'status', status: 'waiting' });
     }
     return { key, answered };
@@ -214,7 +199,6 @@ export class Prompts {
     this.#pending.delete(pending.key);
     pending.settle(nonapproval(pending.native));
     this.#host.emit({ type: 'prompt-ended', key: pending.key, reason: 'withdrawn' });
-    if (pending.visible) this.#host.emit({ type: 'withdrawn', id: pending.shown });
   }
 
   /** A request of Codex's no longer waits: the session works again once none does. */

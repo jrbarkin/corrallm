@@ -1,3 +1,4 @@
+import { OwnedPrompt } from '../agent/OwnedPrompt';
 import { useEffect, useRef, useState } from 'react';
 import { useSessionSummaries } from '../api/runtime';
 import type { SessionSummary } from '../../shared/model/views';
@@ -142,7 +143,7 @@ export function NeedsSidebar({
   };
   const count = [...current.values()]
     .filter((item) => !kept.get(item.id)?.outcome)
-    .reduce((count, item) => count + (item.questions?.length ?? 1), 0);
+    .reduce((count, item) => count + (item.prompt ? 1 : (item.questions?.length ?? 1)), 0);
   const bell = (
     <>
       <svg viewBox="0 0 16 16" aria-hidden="true">
@@ -249,14 +250,24 @@ export function NeedsSidebar({
                     {agentName(nodes, item.agent)}
                   </button>
                 )}
-                {(!item.questions?.length || item.answerIn === 'terminal') && (
+                {!item.prompt && (!item.questions?.length || item.answerIn === 'terminal') && (
                   <p className="graph-question-text">{item.title}</p>
                 )}
-                {item.detail && <NeedDetail text={item.detail} />}
+                {!item.prompt && item.detail && <NeedDetail text={item.detail} />}
                 {settlement?.outcome ? (
                   <p role="status">
                     {settlement.outcome.charAt(0).toUpperCase() + settlement.outcome.slice(1)}.
                   </p>
+                ) : item.prompt ? (
+                  <OwnedPrompt
+                    item={item}
+                    mirror={mirror}
+                    onReply={(value) => onReply(item.id, value)}
+                    onOpen={(agent) => {
+                      close();
+                      onOpen(agent);
+                    }}
+                  />
                 ) : item.answerIn === 'terminal' ? (
                   <>
                     {item.questions?.map((question) => (

@@ -9,7 +9,7 @@ import type { SessionEvent, SessionMode } from '../../shared/session';
 import { TURN_REASONS } from '../../shared/session';
 import { CATALOG } from './adapters';
 import { createConnectors } from './connectors';
-import type { Connector, LiveSession } from './connector';
+import type { Connector, HostEvent, LiveSession } from './connector';
 import { AppServerConnector } from './codex/app-server/connector';
 import { recordedResult } from './codex/app-server/recorded';
 import { resumedHistory } from './codex/app-server/session';
@@ -86,7 +86,7 @@ const fixtures: Record<string, () => Connector<SessionMode>> = {
     }),
 };
 
-function check(events: readonly SessionEvent[], expected: string[]) {
+function check(events: readonly HostEvent[], expected: string[]) {
   for (const event of events)
     if (event.type === 'started') {
       for (const model of event.models)
@@ -182,7 +182,7 @@ it.each(connections)('%s emits results for completed and interrupted turns', asy
 });
 
 it.each(connections)('%s’s fake connector emits the same result contract', async (id) => {
-  const events: SessionEvent[] = [];
+  const events: HostEvent[] = [];
   const connectors = createConnectors({
     fake: true,
     clientApp: 'corrallm/test',
@@ -193,7 +193,7 @@ it.each(connections)('%s’s fake connector emits the same result contract', asy
   if (!connector) throw new Error(`No fake connector for ${id}`);
   const session = await connector.start(
     { agentId: 'a', cwd: folder, env: {}, model: null, mode: 'auto', resume: null },
-    { emit: (event: SessionEvent) => events.push(event), remember: () => undefined },
+    { emit: (event) => events.push(event), remember: () => undefined },
   );
   sessions.push(session);
   await session.send({ id: 'first', text: 'Hello' });
@@ -202,12 +202,19 @@ it.each(connections)('%s’s fake connector emits the same result contract', asy
   });
   await session.send({ id: 'last', text: '/question Wait here' });
   await vi.waitFor(() => {
-    expect(events.some((event) => event.type === 'question')).toBe(true);
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: 'prompt',
+        prompt: expect.objectContaining({ kind: 'question' }) as unknown,
+      }),
+    );
   });
+  const prompt = events.find((event) => event.type === 'prompt');
   await session.interrupt();
   await vi.waitFor(() => {
     expect(events.filter((event) => event.type === 'end')).toHaveLength(2);
   });
+  expect(events).toContainEqual({ type: 'prompt-ended', key: prompt?.key, reason: 'withdrawn' });
   check(events, ['completed', 'cancelled']);
 });
 

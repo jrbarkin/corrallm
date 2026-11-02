@@ -9,6 +9,8 @@ import { automaticSessions } from '../test-sessions';
 import { GraphEditor } from '../test-graph';
 import type { Graph, GraphNode } from '../graph/flow';
 import type { QueueItem } from '../../shared/model/queue';
+import { Prompt, PromptId } from '../../shared/model/prompts';
+import { promptNeed } from '../../shared/model/prompt-views';
 
 vi.mock('../terminal/screen', async () => {
   const { fakeScreens } = await import('../terminal/test-screen');
@@ -66,6 +68,64 @@ afterEach(() => {
 });
 
 describe('the queues view', () => {
+  it('keeps a long owner prompt in the scrolling lane, below the sticky agent controls', async () => {
+    const { queues, canvas } = await setup();
+    await events.click(screen.getByRole('button', { name: 'Show all queues' }));
+    await act(async () => {
+      await canvas.core.api.sessionOpen({ canvas: canvas.document.id, agent: 'a' });
+    });
+    const id = PromptId.parse('10000000-0000-4000-8000-000000000001');
+    const prompt = Prompt.parse({
+      id,
+      agent: 'a',
+      raised: 1,
+      kind: 'approval',
+      answerIn: 'api',
+      title: 'Review this command',
+      summary: 'A long command\n'.repeat(100),
+      choices: [
+        { value: 'allow', label: 'Allow once', hint: 'allow_once', effects: {} },
+        { value: 'deny', label: 'Decline', hint: 'reject_once', effects: {} },
+      ],
+    });
+    const need = `prompt/a/1/${id}`;
+    act(() => {
+      canvas.session('a', {
+        ...NEW_SESSION,
+        status: 'waiting',
+        entries: [{ id, kind: 'prompt', need, name: 'a', prompt }],
+      });
+      canvas.core.change({
+        topic: `needs:${canvas.document.id}`,
+        rev: (canvas.core.state(`needs:${canvas.document.id}`)?.rev ?? 0) + 1,
+        replace: {
+          items: [
+            promptNeed(
+              {
+                canvas: canvas.document.id,
+                need,
+                prompt,
+                name: 'a',
+                standIn: false,
+              },
+              'you',
+            ),
+          ],
+        },
+      });
+    });
+    const view = within(queues());
+    await view.findByRole('button', { name: 'Show all' });
+    const card = view.getByRole('group', { name: 'Review this command' });
+    expect(card.closest('.queues-head')).toBeNull();
+    // The prompt scrolls before every task, without changing either lane's task alignment.
+    const promptRow = card.closest<HTMLElement>('.queues-prompts');
+    expect(promptRow?.style.gridRow).toBe('2');
+    const tasks = ['a: Workflow', 'b: Edit'].map((name) => view.getByRole('group', { name }));
+    expect(tasks.map((task) => task.style.gridRow)).toEqual(['3 / span 1', '3 / span 1']);
+    expect(queues().querySelector<HTMLElement>('.queues-gap')?.style.gridRow).toMatch(/^3 \/ span/);
+  });
+
   it("shows every agent's queue in a lane, with ribbons for its waits and the work it hands on", async () => {
     const { queues } = await setup();
     await events.click(screen.getByRole('button', { name: 'Show all queues' }));

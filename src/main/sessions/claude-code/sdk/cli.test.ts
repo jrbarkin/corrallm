@@ -114,6 +114,39 @@ async function raised(events: HostEvent[], count = 1): Promise<PromptEvent> {
 }
 
 describe('SdkConnector through the Agent SDK', () => {
+  it('carries picked and typed answers to every native question in one request', async () => {
+    const log = path.join(folder, 'answers.jsonl');
+    const { session, events } = await start('acceptEdits', {
+      ANTHROPIC_API_KEY: 'sk-ant-test',
+      FAKE_CLAUDE_ANSWERS: log,
+    });
+    await session.send({ id: 'combined-questions', text: 'ask combined' });
+    const asked = await raised(events);
+    if (asked.prompt.kind !== 'question') throw new Error('No questions');
+    expect(asked.prompt.questions.map(({ id, text }) => ({ id, text }))).toEqual([
+      { id: 'q1', text: 'Which checks should run?' },
+      { id: 'q2', text: 'What should the release note say?' },
+    ]);
+    session.prompts?.answer(asked.key, {
+      kind: 'questions',
+      answers: { q1: { picked: ['Lint', 'Tests'] }, q2: { text: 'Ready for review' } },
+    });
+    await waitFor(events, (event) => event.type === 'end');
+    expect(JSON.parse(await readFile(log, 'utf8'))).toMatchObject({
+      request: { tool_name: 'AskUserQuestion' },
+      answer: {
+        behavior: 'allow',
+        updatedInput: {
+          answers: {
+            'Which checks should run?': 'Lint, Tests',
+            'What should the release note say?': 'Ready for review',
+          },
+        },
+      },
+    });
+    expect(events.filter((event) => event.type === 'prompt')).toHaveLength(1);
+  });
+
   it('starts the CLI, plays a turn with a permission prompt, and ends it', async () => {
     const { session, events, remembered } = await start();
     expect(events[0]).toMatchObject({ type: 'started', model: 'default', mode: 'manual' });
@@ -121,13 +154,12 @@ describe('SdkConnector through the Agent SDK', () => {
 
     const id = '00000000-0000-4000-8000-00000000000a';
     await session.send({ id, text: 'please run it' });
-    const asked = await waitFor(events, (e) => e.type === 'permission');
-    expect(asked).toMatchObject({
-      tool: 'Bash',
-      summary: 'echo hello',
-      always: "Yes, and don't ask again for `echo` commands in " + path.basename(folder),
+    const asked = await raised(events);
+    expect(asked.prompt).toMatchObject({
+      kind: 'approval',
+      subject: { type: 'tool', tool: 'Bash', input: { command: 'echo hello' } },
     });
-    if (asked.type !== 'permission') throw new Error('no prompt');
+    expect(events.some(({ type }) => type === 'permission')).toBe(false);
     const { key } = await raised(events);
     session.prompts?.answer(key, { kind: 'choice', value: 'allow' });
 
@@ -147,6 +179,59 @@ describe('SdkConnector through the Agent SDK', () => {
     const replied = events.flatMap((e) => (e.type === 'text' ? [e.text] : [])).join('');
     expect(replied).toBe('You said: please run it');
     expect(remembered).toHaveLength(1);
+  });
+
+  it('raises native forms, URL requests and plans only through the owner', async () => {
+    const log = path.join(folder, 'answers.jsonl');
+    const { session, events } = await start('manual', {
+      ANTHROPIC_API_KEY: 'sk-ant-test',
+      FAKE_CLAUDE_ANSWERS: log,
+    });
+    await session.send({ id: 'form', text: 'a form' });
+    const form = await raised(events, 1);
+    expect(form.prompt).toMatchObject({
+      kind: 'form',
+      title: 'Which repository should the issue go in?',
+    });
+    session.prompts?.answer(form.key, {
+      kind: 'form',
+      action: 'accept',
+      values: { repo: 'acme/shop', draft: false },
+    });
+    await waitFor(events, (event) => event.type === 'end' && event.messages.includes('form'));
+    await session.send({ id: 'link', text: 'a link' });
+    const permission = await raised(events, 2);
+    expect(permission.prompt).toMatchObject({
+      kind: 'approval',
+      title: 'Claude wants to use Sign In',
+    });
+    session.prompts?.answer(permission.key, { kind: 'choice', value: 'allow' });
+    const link = await raised(events, 3);
+    expect(link.prompt).toMatchObject({
+      kind: 'form',
+      title: 'MCP server “tracker” asks you to open a link on tracker.example.com',
+    });
+    session.prompts?.answer(link.key, { kind: 'form', action: 'accept' });
+    await waitFor(events, (event) => event.type === 'end' && event.messages.includes('link'));
+    await session.send({ id: 'plan', text: 'a plan' });
+    const plan = await raised(events, 4);
+    expect(plan.prompt).toMatchObject({ kind: 'plan', title: 'Approve Claude’s plan?' });
+    session.prompts?.answer(plan.key, { kind: 'choice', value: 'acceptEdits' });
+    await waitFor(events, (event) => event.type === 'end' && event.messages.includes('plan'));
+    expect(
+      events.some((event) =>
+        ['permission', 'question', 'plan', 'elicitation'].includes(event.type),
+      ),
+    ).toBe(false);
+    const answers = (await readFile(log, 'utf8'))
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line) as unknown);
+    expect(answers).toHaveLength(4);
+    expect(answers[0]).toMatchObject({
+      answer: { action: 'accept', content: { repo: 'acme/shop', draft: false } },
+    });
+    expect(answers[2]).toMatchObject({ answer: { action: 'accept' } });
   });
 
   it('interrupts a turn, and switches mode and model', async () => {

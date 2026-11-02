@@ -1,3 +1,4 @@
+import { agentChipName } from './catalog';
 import { dismissStart, canvasAction, openNeeds } from './canvas-actions';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -706,14 +707,16 @@ test('opens an agent as a full Claude Code-style session, and goes back to the c
   expect(opened.height).toBeGreaterThan(editor.height * 0.9);
 
   // This fixture drives a native structured connection through main's test connector.
-  await view.getByRole('button', { name: /^Agent: Claude/ }).click();
+  await view
+    .getByRole('button', { name: agentChipName('claude-code.terminal'), exact: true })
+    .click();
   await page.keyboard.type('agent sdk');
   await page.keyboard.press('Enter');
   const composer = view.getByRole('textbox', { name: 'Message Agent 1', exact: true });
   await composer.fill('Add rate limiting');
   await composer.press('Enter');
   const transcript = view.getByRole('log', { name: 'Transcript' });
-  const permission = transcript.getByRole('group', { name: 'Bash command: echo hello' });
+  const permission = transcript.getByRole('group', { name: 'Run this command?' });
   await expect(permission).toBeVisible();
   await composer.fill('Then update the docs');
   await composer.press('Enter');
@@ -1064,7 +1067,9 @@ test('holds a queue for your OK, pulsing amber with its decision shown, until ap
   const agent = await addAgentAt('Agent 1', 400, 300);
   await agent.dblclick();
   const panel = page.getByRole('dialog', { name: 'Agent 1' });
-  await panel.getByRole('button', { name: /^Agent: Claude/ }).click();
+  await panel
+    .getByRole('button', { name: agentChipName('claude-code.terminal'), exact: true })
+    .click();
   await page.keyboard.type('agent sdk');
   await page.keyboard.press('Enter');
   await expect(panel.getByRole('button', { name: 'Model: Default', exact: true })).toBeVisible();
@@ -1226,7 +1231,9 @@ test('agents show their type and ask questions, which a sidebar lists until answ
   await expect(card('Agent 1').locator('svg')).toHaveCount(0);
   await a.dblclick();
   const panel = page.getByRole('dialog', { name: 'Agent 1' });
-  await panel.getByRole('button', { name: /^Agent: Claude/ }).click();
+  await panel
+    .getByRole('button', { name: agentChipName('claude-code.terminal'), exact: true })
+    .click();
   // Its dropdown fits in the panel, which does not scroll to show it.
   await expect(panel.getByRole('listbox', { name: 'Agent' })).toBeVisible();
   expect(await panel.evaluate((el) => [el.scrollLeft, el.scrollWidth - el.clientWidth])).toEqual([
@@ -1252,7 +1259,7 @@ test('agents show their type and ask questions, which a sidebar lists until answ
   const composer = panel.getByRole('textbox', { name: 'Message Agent 1', exact: true });
   await composer.fill('/question');
   await composer.press('Enter');
-  await expect(panel.getByRole('group', { name: 'Questions for you' })).toBeVisible();
+  await expect(panel.getByRole('group', { name: 'Shall I go on?', exact: true })).toBeVisible();
   await panel.getByRole('button', { name: 'Back to the canvas' }).click();
   await expect(panel).toHaveCount(0);
   await expect(a).toHaveClass(/asking/);
@@ -1261,7 +1268,8 @@ test('agents show their type and ask questions, which a sidebar lists until answ
   await openNeeds(page);
   const sidebar = page.getByRole('complementary', { name: 'Needs you' });
   await expect(sidebar.getByRole('button', { name: 'Open Agent 1' })).toBeVisible();
-  await sidebar.getByRole('button', { name: 'Yes', exact: true }).click();
+  await sidebar.getByRole('radio', { name: 'Yes', exact: true }).check();
+  await sidebar.getByRole('button', { name: 'Send answers', exact: true }).click();
   await expect(sidebar).toHaveCount(0);
   await expect(a).not.toHaveClass(/asking/);
   await expect(card('Agent 1')).not.toHaveAttribute('data-status', 'Needs you');
