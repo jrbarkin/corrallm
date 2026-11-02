@@ -1,3 +1,4 @@
+import { chooseAddedAgent } from './agent-choice';
 import { agentCardName, agentChipName } from './catalog';
 import { dismissStart } from './canvas-actions';
 import { randomUUID } from 'node:crypto';
@@ -161,6 +162,7 @@ async function nativeAnswers(method: string): Promise<unknown[]> {
 test('runs a Codex agent as a Codex thread: turns, prompts, modes, models, commands', async () => {
   await chooseProject();
   await page.locator('.react-flow__pane').dblclick({ position: { x: 400, y: 300 } });
+  await chooseAddedAgent(page, 'claude-code');
   await page.locator('.react-flow__node').dblclick();
   const view = page.getByRole('dialog', { name: 'Agent 1' });
   await view

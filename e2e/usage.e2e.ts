@@ -1,3 +1,4 @@
+import { chooseTemplateAgents } from './agent-choice';
 import { dismissStart } from './canvas-actions';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -20,6 +21,7 @@ async function claudeCanvas(page: Page) {
     .getByRole('dialog', { name: 'Templates' })
     .getByRole('button', { name: /^Independent cross-check/ })
     .click();
+  await chooseTemplateAgents(page, 'claude-code');
   await page.getByRole('button', { name: 'Create canvas' }).click();
 }
 

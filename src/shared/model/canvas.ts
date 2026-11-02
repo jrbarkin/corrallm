@@ -31,8 +31,8 @@ export interface Position {
 }
 
 /**
- * What an agent is: its name (`label`), the agent it runs (`adapter`: the default agent's when
- * none) and how (`connection`: its adapter's first when none), what it is set to run with by each
+ * What an agent is: its name (`label`), the agent it names (`adapter`, else a known
+ * connection's owner, otherwise unchosen) and how (`connection`: its adapter's first when none), what it is set to run with by each
  * adapter it has run (`settings`: its model, effort and starting mode, src/shared/session.ts), its
  * standing instructions (`role`, whichever adapter runs it), its queue, and, while it holds other
  * nodes, their group's colour (`color`, an index into the palette of group colours).

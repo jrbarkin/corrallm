@@ -1,3 +1,4 @@
+import { chooseTemplateAgents } from './agent-choice';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -97,6 +98,7 @@ for (const [index, [name, artifact]] of cases.entries()) {
       .click();
     const gallery = page.getByRole('dialog', { name: 'Templates' });
     await gallery.getByRole('button', { name: new RegExp(`^${name}`) }).click();
+    await chooseTemplateAgents(page, 'claude-code');
     for (const choice of await gallery.getByRole('combobox', { name: /^How / }).all()) {
       const selected = await choice.inputValue();
       if (selected === 'claude-code.terminal') await choice.selectOption('claude-code.sdk');

@@ -42,8 +42,8 @@ import type {
  *     "links": [{ "agents": [id, id], "dots"?: [from, to] }] }
  *
  * A node's position is relative to its parent's, as the model keeps it (canvas.ts). An agent's
- * adapter is the agent it runs (the default agent's when omitted, as a template may leave it: whoever
- * reads the file says which that is), and its connection
+ * adapter names the agent it runs; when absent only a known connection's owner identifies it,
+ * otherwise it remains unchosen. Its connection describes
  * how it runs (its adapter's first when omitted); where it runs (the project folder) is not in the
  * file, which main remembers per file instead. An adapter or connection the catalog lacks opens as
  * Not connected, and is saved back as it was, with that adapter's settings (checked for shape

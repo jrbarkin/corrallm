@@ -8,6 +8,7 @@ import { templateInfo } from '../../shared/templates';
 import { CATALOG } from '../sessions/adapters';
 import { FakeConnector } from '../sessions/fake';
 import { createCore } from './core';
+import { asHuman } from './gui';
 import type { Core } from './core';
 import { keepCanvases } from './store/test-store';
 import { CALLERS, NO_DESKTOP } from './test-registry';
@@ -110,6 +111,58 @@ describe('an agent with no endpoint chosen', () => {
       expect(JSON.stringify(needs)).toContain(S1);
     });
     expect(fake.started).toEqual([]);
+  });
+  it('keeps an unchosen view subscribed, then starts only after your setType choice', async () => {
+    const request = { topic: 'session', canvas: CANVAS, agent: 'a' };
+    expect(await core.call('topics.subscribe', request, asHuman(1))).toMatchObject({ ok: true });
+    await vi.waitFor(() => {
+      expect(core.engines.canvas(CANVAS)?.engine.sessions.of('a').entries).toContainEqual(
+        expect.objectContaining({ kind: 'notice', text: S1 }),
+      );
+    });
+    expect(fake.started).toEqual([]);
+    expect(
+      await call('agent.setType', {
+        agent: 'a',
+        adapter: 'claude-code',
+        connection: 'claude-code.sdk',
+      }),
+    ).toMatchObject({ ok: true });
+    await vi.waitFor(() => {
+      expect(fake.started).toHaveLength(1);
+    });
+    expect(await core.call('topics.unsubscribe', request, asHuman(1))).toMatchObject({ ok: true });
+  });
+  it('requires a known endpoint before changing only a connection or its fallback', async () => {
+    const before = core.engines.canvas(CANVAS)?.document;
+    expect(
+      await call('agent.setConnection', { agent: 'a', connection: 'claude-code.sdk' }),
+    ).toMatchObject({ ok: false, error: { code: 'invalid' } });
+    expect(await call('agent.setFallback', { agent: 'a', fallback: null })).toMatchObject({
+      ok: false,
+      error: { code: 'invalid' },
+    });
+    expect(core.engines.canvas(CANVAS)?.document).toBe(before);
+    expect(fake.started).toEqual([]);
+  });
+  it('requires every role for template creation too, without creating a canvas on refusal', async () => {
+    const example = EXAMPLES[0];
+    if (!example) throw new Error('No template');
+    const info = templateInfo(example, CATALOG);
+    const before = await core.call('canvas.list', {}, CALLERS.you);
+    const full = Object.fromEntries(info.agents.map((role) => [role.id, 'claude-code']));
+    const role = info.agents[0];
+    if (!role) throw new Error('No template role');
+    for (const agents of [undefined, {}, { ...full, [role.id]: null }]) {
+      expect(
+        await core.call(
+          'canvas.create',
+          { template: info.id, ...(agents === undefined ? {} : { agents }) },
+          CALLERS.you,
+        ),
+      ).toMatchObject({ ok: false, error: { code: 'invalid' } });
+      expect(await core.call('canvas.list', {}, CALLERS.you)).toEqual(before);
+    }
   });
   it('refuses spawn until chosen, and pins a connection-only source’s own endpoint', async () => {
     expect(await call('canvas.spawnAgent', { from: 'a', relation: 'peer' })).toMatchObject({

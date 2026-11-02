@@ -1,4 +1,5 @@
-import { agentChipName } from './catalog';
+import { chooseAddedAgent, chooseTemplateAgents } from './agent-choice';
+import { adapterName, agentCardName, agentChipName, connectionOptionName } from './catalog';
 import { dismissStart, canvasAction, openNeeds } from './canvas-actions';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -21,6 +22,78 @@ interface Point {
 const HEADER = 32;
 const PADDING = 20;
 
+test('adding an agent waits for a choice, accepts Enter only after a pick, and cancels without a card', async () => {
+  const where = await at(400, 250);
+  const chooser = page.getByRole('dialog', { name: 'Choose an agent', exact: true });
+  await page.mouse.dblclick(where.x, where.y);
+  await expect(chooser).toBeVisible();
+  await expect(page.locator('.react-flow__node-agent')).toHaveCount(0);
+  for (const row of await chooser.getByRole('radio').all()) await expect(row).not.toBeChecked();
+  await page.keyboard.press('Enter');
+  await expect(chooser).toBeVisible();
+  await expect(page.locator('.react-flow__node-agent')).toHaveCount(0);
+  await chooser.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await expect(chooser).toHaveCount(0);
+  await expect(page.locator('.react-flow__node-agent')).toHaveCount(0);
+  await page.mouse.dblclick(where.x, where.y);
+  await chooser.getByRole('radio', { name: adapterName('codex'), exact: true }).check();
+  await page.keyboard.press('Enter');
+  await expect(chooser).toHaveCount(0);
+  await expect(page.locator('.react-flow__node-agent')).toHaveAttribute(
+    'aria-label',
+    agentCardName('Agent 1', 'codex.terminal'),
+  );
+});
+
+test('an unchosen agent holds its work until the person chooses through its chip', async () => {
+  const file = nativePath.join(dir, 'unchosen.corral');
+  await writeFile(
+    file,
+    JSON.stringify({
+      format: 'corrallm',
+      version: 3,
+      id: newCanvasId(),
+      nodes: [
+        {
+          id: 'waiting',
+          kind: 'agent',
+          label: 'Waiting',
+          position: { x: 100, y: 200 },
+          queue: [{ id: 'work', message: 'Keep this authored work.' }],
+        },
+      ],
+      links: [],
+    }),
+  );
+  await app.evaluate(({ dialog }, picked) => {
+    Object.assign(dialog, {
+      showOpenDialog: () => Promise.resolve({ canceled: false, filePaths: [picked] }),
+    });
+  }, file);
+  await canvasAction(page, 'Open…');
+  const waiting = node('Waiting');
+  await expect(waiting.locator('.graph-card')).toHaveAttribute('title', 'Agent: Choose an agent');
+  await waiting.dblclick();
+  const view = page.getByRole('dialog', { name: 'Waiting', exact: true });
+  await expect(view.getByRole('textbox', { name: 'Message', exact: true })).toBeDisabled();
+  await expect(
+    view.getByText(
+      'Waiting has no agent chosen yet. Choose one in its settings to run this work.',
+      { exact: true },
+    ),
+  ).toBeVisible();
+  await expect(
+    view.getByRole('button', { name: 'Agent: Choose an agent', exact: true }),
+  ).toHaveAttribute('aria-expanded', 'true');
+  await view.getByRole('option', { name: connectionOptionName('claude-code.sdk') }).click();
+  await expect(
+    view.getByRole('button', { name: agentChipName('claude-code.sdk'), exact: true }),
+  ).toBeVisible();
+  await expect(
+    view.getByRole('textbox', { name: 'Message to the agent', exact: true }).first(),
+  ).toHaveValue('Keep this authored work.');
+});
+
 test('long names and full queues keep ordinary and parent cards at the model’s fixed size', async () => {
   const file = nativePath.join(dir, 'cards.corral');
   const queue = Array.from({ length: 100 }, (_, i) => ({
@@ -30,6 +103,7 @@ test('long names and full queues keep ordinary and parent cards at the model’s
   const agent = (id: string, parent?: string) => ({
     id,
     kind: 'agent',
+    adapter: 'claude-code',
     // Just under the longest a file holds, and far wider than a card.
     label: `${id} ${'A very long name '.repeat(12)}`.slice(0, MAX_LABEL - 1),
     position: { x: 20, y: 70 },
@@ -159,6 +233,7 @@ const selectionActions = () =>
 
 async function createTemplate() {
   const gallery = page.getByRole('dialog', { name: 'Templates' });
+  await chooseTemplateAgents(page, 'claude-code');
   for (const choice of await gallery.getByRole('combobox', { name: /^How / }).all()) {
     const selected = await choice.inputValue();
     if (selected === 'claude-code.terminal') await choice.selectOption('claude-code.sdk');
@@ -197,6 +272,7 @@ async function at(dx: number, dy: number): Promise<Point> {
 async function addAgentAt(label: string, dx: number, dy: number) {
   const p = await at(dx, dy);
   await page.mouse.dblclick(p.x, p.y);
+  await chooseAddedAgent(page, 'claude-code');
   await expect(node(label)).toBeVisible();
   return node(label);
 }
@@ -413,6 +489,7 @@ test('frames a marquee selection, works inside the frame, and ungroups', async (
 
   // Double-clicking the frame's body (here its top-left padding) adds a node inside it.
   await page.mouse.dblclick(grown.x + PADDING / 2, grown.y + HEADER + PADDING / 2);
+  await chooseAddedAgent(page, 'claude-code');
   const c = node('Agent 3');
   await expect(c).toBeVisible();
   const withC = await box(frame);
@@ -474,6 +551,7 @@ test('moves a group like one node: drag it anywhere, and what is inside comes al
   // A group with a parent node moves the same way.
   await titleBar('Group 1').hover();
   await page.getByRole('button', { name: 'Add a parent agent' }).click();
+  await chooseAddedAgent(page, 'claude-code');
   await dragBody(node('Agent 3'), [a, b]);
 });
 
@@ -502,6 +580,7 @@ test("gives a group a parent from the '+' on its top border, then connects and d
   expectNear(await center(plus), topMiddle, 1);
   const boxA = await box(a);
   await plus.click();
+  await chooseAddedAgent(page, 'claude-code');
 
   // The group's new parent node: its card where the '+' was, the group's nodes where they were.
   const parent = node('Agent 4');
@@ -1428,6 +1507,7 @@ test('double-click works inside the rectangle a marquee leaves around the select
   const between = { x: (boxA.x + boxA.width + boxB.x) / 2, y: (boxA.y + boxA.height + boxB.y) / 2 };
   expectInside({ ...between, width: 0, height: 0 }, await box(rect));
   await page.mouse.dblclick(between.x, between.y);
+  await chooseAddedAgent(page, 'claude-code');
   await expect(node('Agent 3')).toBeVisible();
 });
 

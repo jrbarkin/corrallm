@@ -1,3 +1,4 @@
+import { chooseAddedAgent } from './agent-choice';
 import { dismissStart, canvasAction } from './canvas-actions';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -43,7 +44,9 @@ test('saves a canvas as a .corral file, and opens it again', async () => {
   const pane = page.locator('.react-flow__pane');
   const nodes = page.locator('.react-flow__node');
   await pane.dblclick({ position: { x: 300, y: 200 } });
+  await chooseAddedAgent(page, 'claude-code');
   await pane.dblclick({ position: { x: 600, y: 400 } });
+  await chooseAddedAgent(page, 'claude-code');
   await expect(nodes).toHaveCount(2);
   await expect.poll(windowTitle).toBe('Untitled (edited) — corrallm');
 

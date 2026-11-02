@@ -72,6 +72,7 @@ async function setup({
   empty = false,
   project = false,
   queue = [] as QueueItem[],
+  preference = null as string | null,
 } = {}) {
   const doc: CanvasDocument = {
     id: newCanvasId(),
@@ -106,6 +107,9 @@ async function setup({
     links: linked ? [{ source: 'a', target: 'b' }] : [],
   };
   const canvas = fakeCanvas(doc);
+  const settings = canvas.core.state('settings');
+  if (!settings) throw new Error('No settings fixture');
+  canvas.core.snapshot('settings', { ...settings.state, defaultAdapter: preference });
   if (project) canvas.meta({ project: { name: 'Old project', path: '/old/project' } });
   cleanups.push(() => {
     canvas.core.dispose();
@@ -157,6 +161,70 @@ async function called(core: ReturnType<typeof fakeCanvas>['core']) {
     expect(core.operations).toHaveLength(1);
   });
 }
+
+it.each(['add', 'group', 'parent'] as const)(
+  'asks for an endpoint before %s and sends nothing on Enter or Cancel',
+  async (gesture) => {
+    const view = await setup({ group: gesture === 'parent' });
+    const before = view.document;
+    if (gesture === 'add') {
+      const pane = view.container.querySelector('.react-flow__pane');
+      if (!pane) throw new Error('No canvas');
+      fireEvent.doubleClick(pane, { clientX: 500, clientY: 350 });
+    } else if (gesture === 'group') {
+      fireEvent.keyDown(document.body, { key: 'g', ctrlKey: true, altKey: true });
+    } else {
+      fireEvent.click(
+        view.node('F').querySelector('button[aria-label="Add a parent agent"]') ?? view.node('F'),
+      );
+    }
+    const chooser = await screen.findByRole('dialog', { name: 'Choose an agent' });
+    expect(document.activeElement).toBe(chooser);
+    expect(view.core.operations).toEqual([]);
+    fireEvent.submit(chooser.querySelector('form') ?? chooser);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(view.core.operations).toEqual([]);
+    fireEvent.click(within(chooser).getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByRole('dialog', { name: 'Choose an agent' })).toBeNull();
+    expect(view.core.operations).toEqual([]);
+    expect(view.document).toBe(before);
+  },
+);
+
+it('asks when the saved preference is unavailable, without selecting a substitute', async () => {
+  const view = await setup({ preference: 'missing' });
+  const pane = view.container.querySelector('.react-flow__pane');
+  if (!pane) throw new Error('No canvas');
+  fireEvent.doubleClick(pane, { clientX: 500, clientY: 350 });
+  const chooser = await screen.findByRole('dialog', { name: 'Choose an agent' });
+  expect(
+    within(chooser)
+      .getAllByRole('radio')
+      .every((item) => !(item as HTMLInputElement).checked),
+  ).toBe(true);
+  expect(view.core.operations).toEqual([]);
+});
+
+it('uses a known preference only for the next explicit creation', async () => {
+  const view = await setup({ preference: 'codex' });
+  const before = view.document.nodes;
+  const pane = view.container.querySelector('.react-flow__pane');
+  if (!pane) throw new Error('No canvas');
+  fireEvent.doubleClick(pane, { clientX: 500, clientY: 350 });
+  await waitFor(() => {
+    expectOneOp(view.core, 'canvas.addAgent', {
+      canvas: view.canvas,
+      adapter: 'codex',
+      connection: 'codex.terminal',
+      at: { x: expect.any(Number) as unknown, y: expect.any(Number) as unknown },
+    });
+  });
+  expect(screen.queryByRole('dialog', { name: 'Choose an agent' })).toBeNull();
+  for (const node of before)
+    expect(view.document.nodes.find((one) => one.id === node.id)).toEqual(node);
+});
 
 it('adds with one operation and uses the id from the core', async () => {
   const view = await setup({ selected: [] });
