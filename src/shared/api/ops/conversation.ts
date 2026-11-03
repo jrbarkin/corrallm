@@ -6,6 +6,7 @@ import { MESSAGE_KINDS, MESSAGE_STATES, PARTY_PATTERN } from '../../model/messag
 import { NEED_KINDS } from '../../model/needs';
 import { Choice, PromptNeedView, PromptReplyAnswer } from '../../model/prompts';
 import { AskColumn } from '../../model/asks';
+import { Verdict } from '../../model/results';
 import { Settled } from '../../model/settled';
 import { TURN_REASONS } from '../../session';
 import { define } from '../define';
@@ -55,6 +56,8 @@ export const Message = z.strictObject({
   settled: Settled.optional(),
   /** An ask's questions and deadline, or an answer's answers (B21 C6). */
   ask: AskColumn.optional(),
+  /** A result record's verdict (B21 C8): the outcome its agent reported, and its summary. */
+  verdict: Verdict.optional(),
   at: z.number(),
 });
 

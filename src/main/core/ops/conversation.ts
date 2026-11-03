@@ -15,7 +15,8 @@ import { canvasesOf, isTokenCaller, partyIdOf, promptReaderOf } from '../caller'
 import type { MessageId } from '../../../shared/api/ids';
 import { agentParty } from '../../../shared/model/messages';
 import { DeliveryError } from '../delivery/errors';
-import { cursorOf, readCursor } from '../delivery/messages';
+import { capBody, cursorOf, readCursor } from '../delivery/messages';
+import { resultKey } from '../delivery/tasks';
 import { needsInput } from '../engines';
 import type { OpenCanvas } from '../engines';
 import { agentsReached } from '../reach';
@@ -28,7 +29,7 @@ export function conversationOps(
   services: OpServices,
 ): Pick<
   Implementations,
-  'agents' | 'status' | 'needs' | 'messages' | 'message' | 'withdraw' | 'ask'
+  'agents' | 'status' | 'needs' | 'messages' | 'message' | 'withdraw' | 'ask' | 'complete'
 > {
   const { engines, states, isLead, locale, proposals, reviews, stalled } = services;
   const lead = (canvas: CanvasId, { caller }: OpContext) =>
@@ -255,6 +256,51 @@ export function conversationOps(
       } catch (error) {
         return failed(error);
       }
+    },
+    // B21 C5 (Design §9.2 C8): the caller's own tool step's attempt, during its own turn, once; a
+    // result record on disk before it returns, its verdict fixed then and applied as that turn ends.
+    complete: async ({ canvas, task, outcome, summary }, ctx) => {
+      const open = openCanvas(engines, canvas);
+      const { caller } = ctx;
+      // Its reach resolved it as the caller's own (`ownTurn`): read again here, nothing awaited.
+      const own = caller.kind === 'agent' ? ownTurn(open, caller.agent) : undefined;
+      if (own?.task.attempt !== task) {
+        throw new OpFailure('not-found', `There is no attempt ${task}.`);
+      }
+      const { messages } = open;
+      const first = messages.toldAs(resultKey(task));
+      if (first !== undefined) {
+        throw new OpFailure(
+          'conflict',
+          `This step was already reported ${first.verdict?.outcome ?? 'once'}.`,
+        );
+      }
+      messages.add(
+        {
+          from: partyIdOf(caller),
+          to: 'corrallm',
+          kind: 'result',
+          origin: 'party',
+          body: capBody(`${outcome === 'succeeded' ? 'Succeeded' : 'Failed'}: ${summary}`, 'reply'),
+          replyTo: own.message.id,
+          task: own.task,
+          state: 'delivered',
+          verdict: { v: 1, outcome, summary },
+        },
+        resultKey(task),
+      );
+      // At once: its open asks and its continuations to come are withdrawn, so no later turn joins
+      // its task; nothing downstream moves before its turn's native end.
+      open.delivery.asks.withdrawTask(own.task, 'completed');
+      try {
+        await messages.durable();
+      } catch (error) {
+        throw new OpFailure(
+          'unavailable',
+          `The report stands now, but it could not be saved and may not survive a restart (${error instanceof Error ? error.message : String(error)}).`,
+        );
+      }
+      return {};
     },
     withdraw: async ({ canvas, id }, ctx) => {
       const open = openCanvas(engines, canvas);

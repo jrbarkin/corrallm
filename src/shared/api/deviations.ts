@@ -58,4 +58,5 @@ export const DEVIATIONS: Partial<Record<OpName, Reason>> = {
   'terminal.drop': 'os-action',
   wait: 'transport',
   ask: 'caller-bound',
+  complete: 'caller-bound',
 };

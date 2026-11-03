@@ -412,6 +412,15 @@ export const SURFACE = {
     rules: ['shell-text', 'file-mentions'],
     self: 'refused',
   },
+  // B21 C5 (Design §9.2 C4, C8): an agent's report of its own tool step's attempt, during that
+  // step's own turn (the AttemptId's reach, `own`, resolves nothing else); never yours, nor an
+  // outside orchestrator's (the caller-bound deviation, D10). It names no agent: its canvas's scope.
+  complete: {
+    access: { lead: 'own', worker: 'own' },
+    kind: 'command',
+    scope: 'canvas',
+    self: 'allowed',
+  },
   'session.open': { access: L, kind: 'command', scope: 'agent', self: 'allowed' },
   // D9: the mode an agent runs in is yours alone.
   'session.setMode': { access: Y, kind: 'command', scope: 'agent' },

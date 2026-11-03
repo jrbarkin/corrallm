@@ -83,7 +83,7 @@ describe('prepared agent API contracts', () => {
     expect(
       idsIn(
         CompleteInput,
-        CompleteInput.parse({ task: attempt, outcome: 'succeeded', summary: '' }),
+        CompleteInput.parse({ task: attempt, outcome: 'succeeded', summary: 'Done.' }),
       ),
     ).toEqual([{ brand: 'AttemptId', id: attempt, path: '.task' }]);
     for (const value of ['native-turn', '-thread', '', 1])
@@ -94,16 +94,22 @@ describe('prepared agent API contracts', () => {
     expect(NeedId.parse(id)).toBe(id);
   });
 
-  it('validates an ask and its request/revision envelope, registered as prepared (C4), complete not yet', () => {
+  it('validates an ask and a completion and their request/revision envelope, registered as prepared (C4, C5)', () => {
     const parsed = AskInput.parse({ ...ask, request });
     expect(parsed).toEqual({ ...ask, request, deadlineSeconds: 86_400 });
     expect(AskOutput.parse({ id: attempt, revs: {} })).toEqual({ id: attempt, revs: {} });
     expect(CompleteOutput.parse({ revs: {} })).toEqual({ revs: {} });
-    // B21 C4 registers ask with exactly these schemas; C5 registers complete.
+    // B21 C4 registers ask with exactly these schemas; C5 registers complete so too.
     expect(OPS.ask.input).toBe(AskInput);
     expect(OPS.ask.output).toBe(AskOutput);
-    expect(Object.hasOwn(OPS, 'complete')).toBe(false);
-    expect(Object.hasOwn(SURFACE, 'complete')).toBe(false);
+    expect(OPS.complete.input).toBe(CompleteInput);
+    expect(OPS.complete.output).toBe(CompleteOutput);
+    expect(Object.hasOwn(SURFACE, 'complete')).toBe(true);
+    // C5 tightens X1's summary: it says something.
+    for (const summary of ['', '   '])
+      expect(
+        CompleteInput.safeParse({ task: attempt, outcome: 'succeeded', summary }).success,
+      ).toBe(false);
     expect(
       OPS.message.input.safeParse({ canvas, to: { party: 'you' }, body: 'Hello' }).success,
     ).toBe(true);
@@ -170,16 +176,17 @@ describe('prepared agent API contracts', () => {
   });
 
   it('bounds completion summaries by UTF-8 without cutting or changing them', () => {
-    for (const summary of ['', 'x'.repeat(4096), '€'.repeat(1365)]) {
+    for (const summary of ['x', ' x ', 'x'.repeat(4096), '€'.repeat(1365)]) {
       const value = { canvas, task: attempt, outcome: 'failed', summary, request };
       expect(CompleteInput.parse(value)).toEqual(value);
     }
-    for (const summary of ['x'.repeat(4097), '€'.repeat(1366)])
+    // C5: a summary says something; X1 took an empty one.
+    for (const summary of ['', ' \n', 'x'.repeat(4097), '€'.repeat(1366)])
       expect(CompleteInput.safeParse({ task: attempt, outcome: 'failed', summary }).success).toBe(
         false,
       );
     expect(
-      CompleteInput.safeParse({ task: attempt, outcome: 'cancelled', summary: '' }).success,
+      CompleteInput.safeParse({ task: attempt, outcome: 'cancelled', summary: 'x' }).success,
     ).toBe(false);
   });
 });

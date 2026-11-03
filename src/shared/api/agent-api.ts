@@ -4,7 +4,8 @@ import { AskQuestions } from '../model/asks';
 import { promptJsonBytes } from '../model/prompt-data';
 import { define } from './define';
 import { AttemptId, MessageId, OpCanvas, Target } from './ids';
-import { MAX_ASK_BYTES, MAX_ASK_SECONDS, MAX_SUMMARY_BYTES, MIN_ASK_SECONDS } from './limits';
+import { MAX_ASK_BYTES, MAX_ASK_SECONDS, MIN_ASK_SECONDS } from './limits';
+import { REPORTED_OUTCOMES, Summary } from '../model/results';
 
 /** Pure B21 contracts. Importing these schemas registers no operation or authority. */
 export { AskQuestions } from '../model/asks';
@@ -39,18 +40,15 @@ const complete = define(
   { kind: 'command' },
   {
     summary:
-      'Reports the outcome and bounded summary of the caller’s own running tool-step attempt.',
+      'Reports how your own step went: `task` is the attempt id your step’s text names, `outcome` ' +
+      'whether the step succeeded, `summary` what you did in a few words (at most 4 KB). Only ' +
+      'during that step’s own turn, once a step. Your turn’s end applies it: a native failure or ' +
+      'cancellation still wins, and a last line that says otherwise holds the step for the user.',
     input: z.strictObject({
       canvas: OpCanvas,
       task: AttemptId,
-      outcome: z.enum(['succeeded', 'failed']),
-      summary: z
-        .string()
-        .max(MAX_SUMMARY_BYTES)
-        .refine(
-          (text) => new TextEncoder().encode(text).length <= MAX_SUMMARY_BYTES,
-          'A completion summary is at most 4 KiB of UTF-8.',
-        ),
+      outcome: z.enum(REPORTED_OUTCOMES),
+      summary: Summary,
     }),
     output: z.strictObject({}),
   },

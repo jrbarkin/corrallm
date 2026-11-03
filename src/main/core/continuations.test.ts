@@ -506,3 +506,124 @@ describe('an ask during a task (C7)', () => {
     expect(cli.sentTo('planner')).toHaveLength(2);
   });
 });
+
+describe('complete (C8)', () => {
+  it('reports only the caller’s own tool step, in its own turn, once', async () => {
+    await keepCanvas();
+    const cli = driven();
+    const core = await start(cli.connector);
+    const report = (task: string, caller: Caller, more: Record<string, unknown> = {}) =>
+      call(core, 'complete', { task, outcome: 'succeeded', summary: 'Built it.', ...more }, caller);
+    // No run, no attempt.
+    expect(await report(randomUUID(), PLANNER)).toMatchObject({
+      ok: false,
+      error: { code: 'not-found' },
+    });
+    await run(core, cli);
+    const attempt = attemptOf(core);
+    // Another agent's attempt, an unknown one, an outside token, you: never.
+    expect(await report(attempt, BUILDER)).toMatchObject({
+      ok: false,
+      error: { code: 'not-found' },
+    });
+    expect(await report(randomUUID(), PLANNER)).toMatchObject({
+      ok: false,
+      error: { code: 'not-found' },
+    });
+    expect(await report(attempt, OUTSIDE)).toMatchObject({
+      ok: false,
+      error: { code: 'forbidden' },
+    });
+    expect(await report(attempt, YOU)).toMatchObject({ ok: false, error: { code: 'forbidden' } });
+    // A summary that says nothing.
+    expect(await report(attempt, PLANNER, { summary: ' \n' })).toMatchObject({
+      ok: false,
+      error: { code: 'invalid' },
+    });
+    const request = randomUUID();
+    const first = await report(attempt, PLANNER, { request });
+    expect(first).toMatchObject({ ok: true, value: { revs: expect.any(Object) as object } });
+    // On disk before it returned: a result record, from Planner to corrallm, replying to its turn.
+    const step = cli.sentTo('planner')[0]?.id;
+    const row = readOnDisk(profile, (disk) =>
+      disk
+        .prepare(
+          "SELECT from_party, to_party, kind, reply_to, task, verdict FROM message WHERE kind = 'result'",
+        )
+        .get(),
+    ) as Record<string, string>;
+    expect(row).toMatchObject({
+      from_party: 'agent:planner',
+      to_party: 'corrallm',
+      kind: 'result',
+      reply_to: step,
+    });
+    expect(JSON.parse(row.task ?? '')).toEqual({ agent: 'planner', item: 'build', attempt });
+    expect(JSON.parse(row.verdict ?? '')).toEqual({
+      v: 1,
+      outcome: 'succeeded',
+      summary: 'Built it.',
+    });
+    // The same request is the first result; another is a conflict.
+    expect(await report(attempt, PLANNER, { request })).toEqual(first);
+    expect(await report(attempt, PLANNER, { outcome: 'failed' })).toEqual({
+      ok: false,
+      error: { code: 'conflict', sentence: 'This step was already reported succeeded.' },
+    });
+    // Applied at its turn's end: no last line needed.
+    cli.reply('planner', 'Built.');
+    await vi.waitFor(() => {
+      expect(planner(core)?.outcomes.build).toBe('succeeded');
+    });
+    // Ended, it is no one's to report; nor is a message item's turn.
+    expect(await report(attempt, PLANNER)).toMatchObject({
+      ok: false,
+      error: { code: 'not-found' },
+    });
+    await vi.waitFor(() => {
+      expect(cli.sentTo('planner')).toHaveLength(2);
+    });
+    expect(await report(attemptOf(core, 'ship'), PLANNER)).toMatchObject({
+      ok: false,
+      error: { code: 'not-found' },
+    });
+  });
+
+  it('withdraws its attempt’s open asks at once, and a native failure still wins at its turn’s end', async () => {
+    await keepCanvas([BUILD]);
+    const cli = driven();
+    const core = await start(cli.connector);
+    await run(core, cli);
+    const asked = await ask(core, { party: 'you' }, PLANNER);
+    await ok(
+      core,
+      'complete',
+      { task: attemptOf(core), outcome: 'succeeded', summary: 'Done without it.' },
+      PLANNER,
+    );
+    expect(messageOf(core, asked)).toMatchObject({
+      state: 'withdrawn',
+      settled: { outcome: { type: 'withdrawn', why: 'completed' } },
+    });
+    cli.reply('planner', '', { status: 'failed', reason: 'api', message: 'Overloaded.' });
+    await vi.waitFor(() => {
+      expect(planner(core)?.problem).toMatchObject({ kind: 'failed', reason: 'api' });
+    });
+  });
+
+  it('holds uncertain, saying what it reported, a step a restart cut off after complete', async () => {
+    await keepCanvas([BUILD]);
+    const cli = driven();
+    let core = await start(cli.connector);
+    await run(core, cli);
+    await ok(
+      core,
+      'complete',
+      { task: attemptOf(core), outcome: 'failed', summary: 'Two tests fail.' },
+      PLANNER,
+    );
+    core = await restart(cli.connector);
+    expect(planner(core)?.problem).toMatchObject({ kind: 'uncertain' });
+    expect(planner(core)?.problem?.text).toContain('The agent had reported this step failed.');
+  });
+});

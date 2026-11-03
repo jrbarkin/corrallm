@@ -63,6 +63,7 @@ export const OPS = {
   'session.changeMcpServer': b11SessionOps['session.changeMcpServer'],
   reply: b11ConversationOps.reply,
   ask: agentApiOps.ask,
+  complete: agentApiOps.complete,
   ...settingsOps,
   ...runOps,
   'run.get': b11RunOps['run.get'],

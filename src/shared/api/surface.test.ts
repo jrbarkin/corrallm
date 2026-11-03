@@ -49,7 +49,7 @@ it('hosts every operation whose audience includes you, but those main’s native
   expect(GUI_OPS).not.toContain('run.pauseAll');
 });
 
-it('lists ask to agents and outside writers alone, on MCP alone, and no complete yet (B21 C4)', () => {
+it('lists ask to agents and outside writers alone, on MCP alone (B21 C4)', () => {
   expect(SURFACE.ask).toEqual({
     access: { lead: 'linked', worker: 'linked', 'outside-write': 'canvas' },
     kind: 'command',
@@ -62,11 +62,36 @@ it('lists ask to agents and outside writers alone, on MCP alone, and no complete
   for (const party of ['lead', 'worker', 'outside-write'] as const)
     expect(opsFor(SURFACE, party), party).toContain('ask');
   expect(opsFor(SURFACE, 'outside-read')).not.toContain('ask');
-  // C5 registers complete: until then no party has it.
-  expect(Object.keys(SURFACE)).not.toContain('complete');
   // Its result is the ask's id; a string target is an agent, a party an object.
   expect(OPS.message.input.safeParse({ to: { party: 'you' }, body: 'Hi' }).success).toBe(true);
   expect(OPS.ask.input.safeParse({ to: 'you', questions: [] }).success).toBe(false);
+});
+
+it('lists complete to agents alone, for their own work, on MCP alone (B21 C5)', () => {
+  expect(SURFACE.complete).toEqual({
+    access: { lead: 'own', worker: 'own' },
+    kind: 'command',
+    scope: 'canvas',
+    self: 'allowed',
+  });
+  expect(DEVIATIONS.complete).toBe('caller-bound');
+  expect(GUI_OPS).not.toContain('complete');
+  for (const party of ['lead', 'worker'] as const)
+    expect(opsFor(SURFACE, party), party).toContain('complete');
+  for (const party of ['outside-read', 'outside-write'] as const)
+    expect(opsFor(SURFACE, party), party).not.toContain('complete');
+  // An attempt is a UUID of its own brand; its summary says something.
+  const task = '0c1d2e3f-4a5b-4c6d-8e7f-9a0b1c2d3e4f';
+  expect(
+    OPS.complete.input.safeParse({ task, outcome: 'succeeded', summary: 'Done.' }).success,
+  ).toBe(true);
+  for (const summary of ['', ' \n\t'])
+    expect(OPS.complete.input.safeParse({ task, outcome: 'succeeded', summary }).success).toBe(
+      false,
+    );
+  expect(
+    OPS.complete.input.safeParse({ task: 'native', outcome: 'failed', summary: 'x' }).success,
+  ).toBe(false);
 });
 
 it('lists settings.set to you alone, a command of no scope with the consent deviation (B12 C2)', () => {
