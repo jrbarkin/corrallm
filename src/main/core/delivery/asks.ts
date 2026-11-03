@@ -106,6 +106,11 @@ export class Asks {
   readonly #open = new Set<string>();
   /** The parties' messages to you that wait on you, by id. */
   readonly #toYou = new Set<string>();
+  /**
+   * The tasks' continuations still to be delivered (pending), by id: what a sweep looks at for a
+   * stopped task's, never every message delivery acts on.
+   */
+  readonly #continuing = new Set<string>();
   #unwatch: () => void;
   #alarm: { at: number; cancel: () => void } | undefined;
   #started = false;
@@ -298,6 +303,8 @@ export class Asks {
    * left, which the next sweep withdraws (a read settles nothing).
    */
   items(): NeedsItem[] {
+    // Every look at Needs asks, at every change: none open, nothing read.
+    if (this.#open.size === 0 && this.#toYou.size === 0) return [];
     const { store } = this.#deps;
     const here = this.#here();
     return [
@@ -529,6 +536,9 @@ export class Asks {
    * restart that holds it uncertain).
    */
   sweep(): void {
+    // Delivery sweeps as it looks at what waits, at every change: it reads the open asks and the
+    // continuations still to come, never every message it acts on.
+    if (this.#open.size === 0 && this.#continuing.size === 0) return;
     const here = this.#here();
     const now = this.#deps.now();
     let changed = false;
@@ -545,15 +555,9 @@ export class Asks {
       const task = taskOf(ask);
       if (task !== undefined && !this.#deps.running(task)) stopped.set(task.attempt, task);
     }
-    for (const message of this.#deps.store.active()) {
+    for (const message of this.#ordered(this.#continuing)) {
       const { task } = message;
-      if (
-        task !== undefined &&
-        message.state === 'pending' &&
-        isContinuation(message) &&
-        !this.#deps.running(task)
-      )
-        stopped.set(task.attempt, task);
+      if (task !== undefined && !this.#deps.running(task)) stopped.set(task.attempt, task);
     }
     for (const task of stopped.values()) this.withdrawTask(task, 'stopped');
     if (changed) {
@@ -596,8 +600,13 @@ export class Asks {
 
   /** Every open ask, in the store's order. */
   #asks(): Message[] {
+    return this.#ordered(this.#open);
+  }
+
+  /** The messages `ids` names, in the store's order. */
+  #ordered(ids: ReadonlySet<string>): Message[] {
     const { store } = this.#deps;
-    return [...this.#open]
+    return [...ids]
       .flatMap((id) => store.get(id) ?? [])
       .sort((a, b) => (store.seqOf(a.id) ?? 0) - (store.seqOf(b.id) ?? 0));
   }
@@ -692,6 +701,8 @@ export class Asks {
     if (open !== was) this.#arm();
     if (message !== undefined && isOpenToYou(message)) this.#toYou.add(id);
     else this.#toYou.delete(id);
+    if (message?.state === 'pending' && isContinuation(message)) this.#continuing.add(id);
+    else this.#continuing.delete(id);
   }
 
   /** Expires every open ask whose deadline passed, then watches for the next. */

@@ -417,16 +417,29 @@ async function finish(planned) {
   if (!planned) await statusLine();
 }
 
-function key(data) {
-  // Answers to its terminal queries: the Program Status probe's says the terminal supports it.
-  if (data.includes('\x1b]7501;?')) {
-    reporting = true;
-    if (state === 'starting' && !trusting) {
-      become('idle');
-      draw();
-      void statusLine();
-    }
-    return;
+// What a terminal answers to the probes above (OSC replies, CSI replies led by ? or >) and its
+// focus reports. A pty read can join these with keys typed right after them, so they are taken
+// out wherever they sit, not only when they lead the chunk (that dropped the typed keys with them).
+const TERMINAL_REPLIES =
+  // eslint-disable-next-line no-control-regex
+  /\x1b\](?:[^\x07\x1b]|\x1b(?!\\))*(?:\x07|\x1b\\|$)|\x1b\[[?>][0-9;:]*[A-Za-z]|\x1b\[[IO]/g;
+
+function key(received) {
+  let data = received;
+  if (!data.startsWith('\x1b[200~')) {
+    data = data.replace(TERMINAL_REPLIES, (reply) => {
+      // The Program Status probe's answer says the terminal supports it.
+      if (reply.startsWith('\x1b]7501;?')) {
+        reporting = true;
+        if (state === 'starting' && !trusting) {
+          become('idle');
+          draw();
+          void statusLine();
+        }
+      }
+      return '';
+    });
+    if (data === '') return;
   }
   if (data.startsWith('\x1b[200~')) {
     const end = data.indexOf('\x1b[201~');
