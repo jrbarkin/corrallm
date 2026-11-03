@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { ID_PATTERN } from '../../shared/adapter';
 import type { AdapterDescriptor } from '../../shared/adapter';
+import { OPS } from '../../shared/api/registry';
 import type { Adapter } from './adapter';
 import { ADAPTERS, CATALOG, catalogOf } from './adapters';
 import { createConnectors, createOptions } from './connectors';
@@ -96,6 +97,31 @@ describe('the catalog', () => {
       expect(Object.keys(connectors).sort()).toEqual(connections);
       expect(Object.keys(createOptions({ fake })).sort()).toEqual(ids(CATALOG.adapters).sort());
     }
+  });
+
+  it('declares, by key, exactly the consents its connectors ask for, on its own connections (B22a C3)', () => {
+    for (const adapter of ADAPTERS) {
+      const { descriptor } = adapter;
+      const declared = descriptor.consents ?? [];
+      // What its connectors ask for, read as they are built: none may ask by a key it doesn't declare.
+      const asked = new Set<string>();
+      adapter.connectors?.({
+        clientApp: 'corrallm/test',
+        distribution: 'local',
+        executable: () => Promise.reject(new Error('Tests never find a CLI.')),
+        consent: (key) => {
+          asked.add(key);
+          return { given: () => Promise.resolve(false), give: () => Promise.resolve() };
+        },
+      });
+      expect([...asked].sort(), descriptor.id).toEqual(declared.map(({ key }) => key).sort());
+      const connections = ids(descriptor.connections);
+      for (const consent of declared) {
+        expect(consent.connections.length).toBeGreaterThan(0);
+        for (const connection of consent.connections) expect(connections).toContain(connection);
+      }
+    }
+    expect(OPS['catalog.get'].output.safeParse(CATALOG).success).toBe(true);
   });
 
   it('is plain data, so that it crosses to the renderer as it is', () => {

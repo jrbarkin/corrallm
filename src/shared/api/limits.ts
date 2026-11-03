@@ -190,3 +190,12 @@ export const MAX_SESSION_REPLY_BYTES = 4096;
 export const MAX_SUGGESTION_BYTES = 2048;
 /** The longest link the renderer may ask to open, in characters. */
 export const MAX_LINK_LENGTH = 4096;
+/** The most sites a profile remembers to open without asking ("Always for this site"). */
+export const MAX_REMEMBERED_SITES = 500;
+
+/** The most consents an adapter declares it asks you for (B22a C3). */
+export const MAX_CONSENTS = 16;
+/** The longest title of a declared consent, in characters. */
+export const MAX_CONSENT_TITLE = 120;
+/** The longest description of a declared consent, in characters. */
+export const MAX_CONSENT_DESCRIPTION = 2048;
