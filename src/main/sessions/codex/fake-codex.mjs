@@ -182,6 +182,11 @@ const LIMITS = {
   rateLimitReachedType: null,
 };
 
+const limitsSnapshot = () =>
+  process.env.FAKE_CODEX_LIMITS
+    ? JSON.parse(readFileSync(process.env.FAKE_CODEX_LIMITS, 'utf8'))
+    : LIMITS;
+
 /** Asks the client something, and waits for its answer: resolves with it, and the request's id. */
 function ask(method, params) {
   const id = nextRequest;
@@ -306,6 +311,22 @@ async function turn(thread, turnId, input, { review, compact } = {}) {
   const text = input.map((part) => (part.type === 'text' ? part.text : '')).join('');
   // What it is asked to do: the message, after the first line corrallm frames a party's with.
   const wanted = text.replace(/^\[corrallm\] [^\n]*\n/, '');
+  const script = process.env.FAKE_CODEX_FALLBACK;
+  const planned = script
+    ? (await import('./fixtures/fallback.mjs')).fallbackTurn(
+        JSON.parse(readFileSync(script, 'utf8')),
+        text,
+        Date.now(),
+      )
+    : null;
+  if (planned?.limits && process.env.FAKE_CODEX_LIMITS)
+    writeFileSync(process.env.FAKE_CODEX_LIMITS, JSON.stringify(planned.limits));
+  if (planned?.gate) {
+    writeFileSync(`${planned.gate}.waiting`, 'waiting');
+    while (!state.interrupted && !existsSync(planned.gate)) await pause(20);
+    if (state.interrupted) return finish('interrupted');
+  }
+  if (planned?.limits) notify('account/rateLimits/updated', { rateLimits: planned.limits });
   if (wanted.startsWith('crash')) {
     process.stderr.write('Error: it crashed\n');
     process.exit(3);
@@ -357,7 +378,7 @@ async function turn(thread, turnId, input, { review, compact } = {}) {
     );
     return finish('completed');
   }
-  if (wanted.startsWith('fail')) {
+  if (planned?.fail || wanted.startsWith('fail')) {
     const error = {
       message: 'You’ve hit your usage limit.',
       codexErrorInfo: 'usageLimitExceeded',
@@ -472,7 +493,7 @@ async function turn(thread, turnId, input, { review, compact } = {}) {
     items.push(done);
     if (!accepted) return finish('interrupted');
   }
-  let said = `You said: ${text}`;
+  let said = planned?.reply ?? `You said: ${text}`;
   if (wanted.startsWith('ask')) {
     const many = wanted.startsWith('ask many');
     const { id, answer } = await ask('item/tool/requestUserInput', {
@@ -802,7 +823,7 @@ async function turn(thread, turnId, input, { review, compact } = {}) {
       modelContextWindow: 200000,
     },
   });
-  notify('account/rateLimits/updated', { rateLimits: LIMITS });
+  notify('account/rateLimits/updated', { rateLimits: limitsSnapshot() });
   finish('completed');
 }
 
@@ -828,7 +849,10 @@ async function handle({ method, id, params }) {
     case 'account/read':
       return reply(ACCOUNTS[process.env.FAKE_CODEX_LOGIN ?? 'apikey'] ?? ACCOUNTS.apikey);
     case 'account/rateLimits/read':
-      return reply({ rateLimits: LIMITS, rateLimitsByLimitId: { codex: LIMITS } });
+      return reply({
+        rateLimits: limitsSnapshot(),
+        rateLimitsByLimitId: { codex: limitsSnapshot() },
+      });
     case 'config/read':
       if (process.env.FAKE_CODEX_CONFIG_FAIL)
         return fail(-32000, process.env.FAKE_CODEX_CONFIG_FAIL);
