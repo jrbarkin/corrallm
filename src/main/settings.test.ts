@@ -24,7 +24,7 @@ describe('Settings', () => {
   it('keeps the consents the user gave, by adapter, across instances (runs of the app)', async () => {
     const settings = new Settings(file);
     expect(await settings.get()).toEqual({ consents: {}, defaultAdapter: null });
-    await settings.consent('codex', 'plan').give();
+    await give(settings, 'codex', 'plan');
     expect(await settings.get()).toEqual({
       consents: { codex: { plan: true } },
       defaultAdapter: null,
@@ -46,7 +46,7 @@ describe('Settings', () => {
     const settings = new Settings(file);
     const plan = settings.consent('codex', 'plan');
     expect(await plan.given()).toBe(false);
-    await plan.give();
+    await plan.give(plan.generation());
     expect(await plan.given()).toBe(true);
     expect(await settings.consent('codex', 'other').given()).toBe(false);
     expect(await settings.consent('claude-code', 'plan').given()).toBe(false);
@@ -103,7 +103,7 @@ describe('Settings', () => {
   it('keeps the port the API server listens on, so registrations survive restarts', async () => {
     const settings = new Settings(file);
     expect(await settings.apiPort()).toBeUndefined();
-    await settings.consent('codex', 'plan').give();
+    await give(settings, 'codex', 'plan');
     await settings.keepApiPort(47123);
     expect(await settings.apiPort()).toBe(47123);
     expect(await new Settings(file).apiPort()).toBe(47123);
@@ -161,7 +161,7 @@ describe('Settings', () => {
       api: { port: 47123 },
       defaultAdapter: null,
     });
-    await settings.consent('claude-code', 'plan').give();
+    await give(settings, 'claude-code', 'plan');
     await settings.keepApiPort(47124);
     expect(JSON.parse(await readFile(file, 'utf8'))).toEqual({
       version: 2,
@@ -179,7 +179,7 @@ describe('Settings', () => {
     await writeFile(file, JSON.stringify({ version: 2, consents: {}, api }));
     const settings = new Settings(file);
     expect(await settings.apiPort()).toBeUndefined();
-    await settings.consent('codex', 'plan').give();
+    await give(settings, 'codex', 'plan');
     expect(JSON.parse(await readFile(file, 'utf8'))).toMatchObject({ api });
     await settings.keepApiPort(47124);
     expect(JSON.parse(await readFile(file, 'utf8'))).toMatchObject({
@@ -236,7 +236,7 @@ describe('Settings', () => {
     ]) {
       await writeFile(file, JSON.stringify({ version: 2, consents: {}, notifications }));
       const settings = new Settings(file);
-      await settings.consent('codex', 'plan').give();
+      await give(settings, 'codex', 'plan');
       await settings.keepApiPort(47123);
       expect(JSON.parse(await readFile(file, 'utf8'))).toEqual({
         version: 2,
@@ -250,7 +250,7 @@ describe('Settings', () => {
   it('applies updates in order, and a failed write fails no one', async () => {
     const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const settings = new Settings(path.join(dir, 'missing', 'settings.json'));
-    await settings.consent('codex', 'plan').give();
+    await give(settings, 'codex', 'plan');
     expect(errors).toHaveBeenCalledOnce();
     // What it was told stays, for this run.
     expect(await settings.consent('codex', 'plan').given()).toBe(true);
@@ -268,7 +268,7 @@ describe('the default agent (B12 C2)', () => {
       expect(await settings.defaultAdapter(), JSON.stringify(defaultAdapter)).toBeNull();
       expect((await settings.get()).defaultAdapter).toBeNull();
       // Written back absent, with what it does know.
-      await settings.consent('codex', 'plan').give();
+      await give(settings, 'codex', 'plan');
       expect(JSON.parse(await readFile(file, 'utf8'))).toEqual({
         version: 2,
         consents: { codex: { plan: true } },
@@ -293,7 +293,7 @@ describe('the default agent (B12 C2)', () => {
     await expect(settings.setDefaultAdapter('zed')).resolves.toBe(true);
     expect(await new Settings(file).defaultAdapter()).toBe('zed');
     // It survives a consent's write.
-    await settings.consent('codex', 'plan').give();
+    await give(settings, 'codex', 'plan');
     expect(await new Settings(file).get()).toEqual({
       consents: { codex: { plan: true } },
       defaultAdapter: 'zed',
@@ -340,7 +340,7 @@ describe('the default agent (B12 C2)', () => {
     expect(told).not.toHaveBeenCalled();
     // A consent after it keeps its own log-and-continue, and doesn't write what failed.
     const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined);
-    await settings.consent('codex', 'plan').give();
+    await give(settings, 'codex', 'plan');
     errors.mockRestore();
     expect(told).toHaveBeenCalledOnce();
     await mkdir(folder);
@@ -370,4 +370,242 @@ describe('the default agent (B12 C2)', () => {
       expect(await new Settings(file).defaultAdapter()).toBeNull();
     },
   );
+});
+
+/** Gives `adapter`'s consent `key` for good, at its generation now. */
+async function give(settings: Settings, adapter: string, key: string): Promise<void> {
+  const consent = settings.consent(adapter, key);
+  await consent.give(consent.generation());
+}
+
+describe('taking a consent back (B22a C4, C6)', () => {
+  it('writes it gone first, then moves its generation, so no grant made before it holds', async () => {
+    const settings = new Settings(file);
+    const told = vi.fn();
+    settings.subscribe(told);
+    const plan = settings.consent('codex', 'plan');
+    const before = plan.generation();
+    await plan.give(before);
+    await give(settings, 'codex', 'other');
+    told.mockClear();
+
+    await expect(settings.resetConsent('codex', 'plan', true)).resolves.toBe(true);
+    expect(plan.generation()).toBeGreaterThan(before);
+    // Another key's, or another adapter's, doesn't move.
+    expect(settings.consent('codex', 'other').generation()).toBe(0);
+    expect(settings.consent('zed', 'plan').generation()).toBe(0);
+    expect(await plan.given()).toBe(false);
+    expect(JSON.parse(await readFile(file, 'utf8'))).toEqual({
+      version: 2,
+      consents: { codex: { other: true } },
+    });
+    expect(told).toHaveBeenCalledOnce();
+
+    // A grant answered against the generation before it keeps nothing.
+    await plan.give(before);
+    expect(await plan.given()).toBe(false);
+    expect(await new Settings(file).consent('codex', 'plan').given()).toBe(false);
+    expect(told).toHaveBeenCalledOnce();
+    // A new answer, at the new generation, is kept again.
+    await plan.give(plan.generation());
+    expect(await new Settings(file).consent('codex', 'plan').given()).toBe(true);
+  });
+
+  it('takes back a declared consent nothing keeps: its generation moves, writing nothing', async () => {
+    const settings = new Settings(file);
+    const told = vi.fn();
+    settings.subscribe(told);
+    const plan = settings.consent('codex', 'plan');
+    await expect(settings.resetConsent('codex', 'plan', true)).resolves.toBe(true);
+    expect(plan.generation()).toBe(1);
+    await expect(settings.resetConsent('codex', 'plan', true)).resolves.toBe(true);
+    expect(plan.generation()).toBe(2);
+    expect(existsSync(file)).toBe(false);
+    expect(told).not.toHaveBeenCalled();
+  });
+
+  it('removes an undeclared kept consent; one not kept is nothing, its generation as it was', async () => {
+    await writeFile(
+      file,
+      JSON.stringify({ version: 2, consents: { 'old-adapter': { allowed: true, kept: true } } }),
+    );
+    const settings = new Settings(file);
+    const old = settings.consent('old-adapter', 'allowed');
+    await expect(settings.resetConsent('old-adapter', 'allowed', false)).resolves.toBe(true);
+    expect(old.generation()).toBe(1);
+    expect(JSON.parse(await readFile(file, 'utf8'))).toEqual({
+      version: 2,
+      consents: { 'old-adapter': { kept: true } },
+    });
+    const layout = await readFile(file, 'utf8');
+    await expect(settings.resetConsent('old-adapter', 'allowed', false)).resolves.toBe(false);
+    await expect(settings.resetConsent('nobody', 'allowed', false)).resolves.toBe(false);
+    expect(old.generation()).toBe(1);
+    expect(settings.consent('nobody', 'allowed').generation()).toBe(0);
+    expect(await readFile(file, 'utf8')).toBe(layout);
+    // The last key of an adapter takes the adapter with it.
+    await settings.resetConsent('old-adapter', 'kept', false);
+    expect(JSON.parse(await readFile(file, 'utf8'))).toEqual({ version: 2, consents: {} });
+  });
+
+  it('keeps what it doesn’t know, of the file, api and notifications, and every other consent', async () => {
+    await writeFile(
+      file,
+      JSON.stringify({
+        version: 2,
+        consents: { codex: { plan: true, other: true }, zed: { plan: true } },
+        api: { port: 47123, host: '127.0.0.2' },
+        notifications: { enabled: false, preview: 'names' },
+        defaultAdapter: 'codex',
+        theme: 'dark',
+      }),
+    );
+    await new Settings(file).resetConsent('codex', 'plan', true);
+    expect(JSON.parse(await readFile(file, 'utf8'))).toEqual({
+      version: 2,
+      consents: { codex: { other: true }, zed: { plan: true } },
+      api: { port: 47123, host: '127.0.0.2' },
+      notifications: { enabled: false, preview: 'names' },
+      defaultAdapter: 'codex',
+      theme: 'dark',
+    });
+  });
+
+  it('is serialized with the grants: one queued before it is taken back, one after it at the old generation is stale', async () => {
+    const settings = new Settings(file);
+    const plan = settings.consent('codex', 'plan');
+    // Queued in this order, run in this order: the reset reads the give's write.
+    const given = plan.give(plan.generation());
+    const reset = settings.resetConsent('codex', 'plan', true);
+    await Promise.all([given, reset]);
+    expect(await new Settings(file).consent('codex', 'plan').given()).toBe(false);
+
+    // A give answered at the generation before a reset queued ahead of it.
+    const stale = plan.generation();
+    const second = settings.resetConsent('codex', 'plan', true);
+    const late = plan.give(stale);
+    await Promise.all([second, late]);
+    expect(await plan.given()).toBe(false);
+    expect(await new Settings(file).consent('codex', 'plan').given()).toBe(false);
+  });
+
+  it('refuses a reset it can’t save: kept, its generation as it was, later updates still run', async () => {
+    const folder = path.join(dir, 'missing');
+    const settings = new Settings(path.join(folder, 'settings.json'));
+    const told = vi.fn();
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    // Given for this run (its own write failed, logged).
+    await give(settings, 'codex', 'plan');
+    errors.mockRestore();
+    settings.subscribe(told);
+    const plan = settings.consent('codex', 'plan');
+    await expect(settings.resetConsent('codex', 'plan', true)).rejects.toMatchObject({
+      stage: 'write',
+    });
+    expect(plan.generation()).toBe(0);
+    expect(await plan.given()).toBe(true);
+    expect(told).not.toHaveBeenCalled();
+    await mkdir(folder);
+    await expect(settings.resetConsent('codex', 'plan', true)).resolves.toBe(true);
+    expect(plan.generation()).toBe(1);
+    expect(JSON.parse(await readFile(path.join(folder, 'settings.json'), 'utf8'))).toEqual({
+      version: 2,
+      consents: {},
+    });
+  });
+
+  it.skipIf(!CAN_DENY)(
+    'refuses a reset when its file can’t be read, never writing over it or moving the generation',
+    async () => {
+      const kept = `${JSON.stringify({ version: 2, consents: { codex: { plan: true } } })}\n`;
+      await writeFile(file, kept);
+      await chmod(file, 0);
+      const settings = new Settings(file);
+      const plan = settings.consent('codex', 'plan');
+      try {
+        await expect(settings.resetConsent('codex', 'plan', true)).rejects.toMatchObject({
+          stage: 'read',
+        });
+        expect(plan.generation()).toBe(0);
+      } finally {
+        await chmod(file, 0o600);
+      }
+      expect(await readFile(file, 'utf8')).toBe(kept);
+    },
+  );
+});
+
+describe('turning OS notifications on or off (B22a C1, C6)', () => {
+  it('writes the preference first, then holds and tells it; absent is already on', async () => {
+    const settings = new Settings(file);
+    const told = vi.fn();
+    settings.subscribe(told);
+    await expect(settings.setNotifications(true)).resolves.toBe(false);
+    expect(existsSync(file)).toBe(false);
+    await expect(settings.setNotifications(false)).resolves.toBe(true);
+    expect(told).toHaveBeenCalledOnce();
+    expect(await settings.notificationsEnabled()).toBe(false);
+    expect(JSON.parse(await readFile(file, 'utf8'))).toEqual({
+      version: 2,
+      consents: {},
+      notifications: { enabled: false },
+    });
+    expect(await new Settings(file).notificationsEnabled()).toBe(false);
+    await expect(settings.setNotifications(false)).resolves.toBe(false);
+    expect(told).toHaveBeenCalledOnce();
+    await expect(settings.setNotifications(true)).resolves.toBe(true);
+    expect(await new Settings(file).notificationsEnabled()).toBe(true);
+    expect(told).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps what a newer corrallm adds to the field; one not a boolean is on', async () => {
+    await writeFile(
+      file,
+      JSON.stringify({
+        version: 2,
+        consents: {},
+        notifications: { enabled: 'no', preview: 'names' },
+      }),
+    );
+    const settings = new Settings(file);
+    await expect(settings.setNotifications(true)).resolves.toBe(false);
+    await expect(settings.setNotifications(false)).resolves.toBe(true);
+    expect(JSON.parse(await readFile(file, 'utf8'))).toEqual({
+      version: 2,
+      consents: {},
+      notifications: { enabled: false, preview: 'names' },
+    });
+  });
+
+  it('refuses a failed write with the preference, file and listeners as they were', async () => {
+    const folder = path.join(dir, 'missing');
+    const settings = new Settings(path.join(folder, 'settings.json'));
+    const told = vi.fn();
+    settings.subscribe(told);
+    await expect(settings.setNotifications(false)).rejects.toMatchObject({ stage: 'write' });
+    expect(await settings.notificationsEnabled()).toBe(true);
+    expect(told).not.toHaveBeenCalled();
+    await mkdir(folder);
+    await expect(settings.setNotifications(false)).resolves.toBe(true);
+    expect(await settings.notificationsEnabled()).toBe(false);
+  });
+
+  it('runs in order with every other update, each from the latest settings', async () => {
+    const settings = new Settings(file);
+    await Promise.all([
+      settings.setDefaultAdapter('codex'),
+      settings.setNotifications(false),
+      give(settings, 'codex', 'plan'),
+      settings.keepApiPort(47123),
+      settings.resetConsent('codex', 'plan', true),
+      give(settings, 'zed', 'plan'),
+    ]);
+    expect(JSON.parse(await readFile(file, 'utf8'))).toEqual({
+      version: 2,
+      consents: { zed: { plan: true } },
+      api: { port: 47123 },
+      notifications: { enabled: false },
+      defaultAdapter: 'codex',
+    });
+  });
 });

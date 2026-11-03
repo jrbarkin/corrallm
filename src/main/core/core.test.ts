@@ -245,6 +245,8 @@ describe('createCore', () => {
         defaultAdapter: null,
         consents: {},
         api: { state: 'stopped', port: null },
+        notifications: { enabled: true, lastDelivery: null },
+        links: { state: 'ready', sites: [], builtIn: ['https://github.com'] },
       },
     });
   });
@@ -637,4 +639,397 @@ describe('settings.set: the default agent, yours alone (B12 C2)', () => {
       expect(await readFile(file(), 'utf8')).toBe(kept);
     },
   );
+});
+
+describe('settings, yours alone (B22a C1, C2, C6)', () => {
+  const settingsFile = () => path.join(profile, 'settings.json');
+  const linksFile = () => path.join(profile, 'links.json');
+  /** A site no token may learn you open without asking. */
+  const SECRET = 'https://intranet.example.com:8443';
+  const LOCAL = 'http://localhost:5173';
+  const API = { state: 'stopped', port: null } as const;
+  /** Outside tokens, which read the settings (T3b reads them as a lead too, in its world). */
+  const READERS = ['outside-read', 'outside-write'] as const;
+  const TOKENS = PARTIES.filter((party) => party !== 'you');
+  const PLAN = { kind: 'adapter', adapter: 'codex', key: 'plan' } as const;
+
+  /** A window subscribed to the settings topic: each state it is told. */
+  async function watching(started: Core, id: number) {
+    const window = openWindow(new WindowPorts(started), id);
+    const heard: Record<string, unknown>[] = [];
+    window.link.on('topic', (batch) => {
+      for (const change of batch)
+        if (change.topic === 'settings' && 'replace' in change) heard.push(change.replace);
+    });
+    await window.link.request('call', 'topics.subscribe', { topic: 'settings' });
+    return { ...window, heard };
+  }
+
+  it('gives you OS notifications and the sites you open without asking; every token its read as it was', async () => {
+    await writeFile(
+      settingsFile(),
+      JSON.stringify({
+        version: 2,
+        consents: { codex: { plan: true } },
+        notifications: { enabled: false },
+      }),
+    );
+    await writeFile(linksFile(), JSON.stringify({ version: 1, sites: [SECRET, LOCAL] }));
+    const started = await start();
+    expect(await started.call('settings.get', {}, CALLERS.you)).toEqual({
+      ok: true,
+      value: {
+        defaultAdapter: null,
+        consents: { codex: { plan: true } },
+        api: API,
+        notifications: { enabled: false, lastDelivery: null },
+        links: { state: 'ready', sites: [SECRET, LOCAL], builtIn: ['https://github.com'] },
+      },
+    });
+    for (const party of READERS) {
+      const theirs = await started.call('settings.get', {}, CALLERS[party]);
+      expect(theirs, party).toEqual({
+        ok: true,
+        value: { defaultAdapter: null, consents: { codex: { plan: true } }, api: API },
+      });
+    }
+    // Nor does a token's copy of the topic carry them, which you see.
+    const followed = await started.topics.follow(
+      CALLERS['outside-read'],
+      'settings',
+      () => undefined,
+    );
+    followed.stop();
+    expect(JSON.stringify(followed.snapshot)).not.toMatch(/intranet|notifications|links/);
+    const yours = await started.topics.follow(CALLERS.you, 'settings', () => undefined);
+    yours.stop();
+    expect(JSON.stringify(yours.snapshot)).toContain(SECRET);
+  });
+
+  it.skipIf(!CAN_DENY)(
+    'says the remembered sites can’t be read, in fixed words, with the rest as it is',
+    async () => {
+      await writeFile(linksFile(), JSON.stringify({ version: 1, sites: [SECRET] }));
+      await chmod(linksFile(), 0);
+      try {
+        const started = await start();
+        expect(await started.call('settings.get', {}, CALLERS.you)).toEqual({
+          ok: true,
+          value: {
+            defaultAdapter: null,
+            consents: {},
+            api: API,
+            notifications: { enabled: true, lastDelivery: null },
+            links: {
+              state: 'unavailable',
+              sentence: 'corrallm couldn’t read the sites you said to open without asking.',
+            },
+          },
+        });
+        expect(await started.call('settings.get', {}, CALLERS['outside-read'])).toEqual({
+          ok: true,
+          value: { defaultAdapter: null, consents: {}, api: API },
+        });
+        expect(
+          await started.call(
+            'settings.set',
+            { consent: { kind: 'site', origin: SECRET } },
+            CALLERS.you,
+          ),
+        ).toEqual({
+          ok: false,
+          error: {
+            code: 'unavailable',
+            sentence:
+              'corrallm couldn’t read the sites you said to open without asking, so this one is unchanged.',
+          },
+        });
+      } finally {
+        await chmod(linksFile(), 0o600);
+      }
+      expect(JSON.parse(await readFile(linksFile(), 'utf8'))).toEqual({
+        version: 1,
+        sites: [SECRET],
+      });
+    },
+  );
+
+  it('takes each intent alone: none, two, a grant or anything else is invalid, touching nothing', async () => {
+    const started = await start();
+    for (const args of [
+      {},
+      { defaultAdapter: 'codex', notifications: { enabled: false } },
+      { notifications: { enabled: false }, consent: PLAN },
+      { notifications: { enabled: 'no' } },
+      { notifications: {} },
+      { notifications: { enabled: false, preview: 'names' } },
+      { consent: { ...PLAN, given: true } },
+      { consent: { kind: 'grant', adapter: 'codex', key: 'plan' } },
+      { consent: { kind: 'adapter', adapter: '-codex', key: 'plan' } },
+      { consent: { kind: 'site', origin: 'x'.repeat(4097) } },
+      { consent: true },
+      { api: { port: 4242 } },
+    ]) {
+      expect(
+        await started.call('settings.set', args, CALLERS.you),
+        JSON.stringify(args),
+      ).toMatchObject({
+        ok: false,
+        error: { code: 'invalid' },
+      });
+    }
+    expect(existsSync(settingsFile())).toBe(false);
+    expect(existsSync(linksFile())).toBe(false);
+    expect((started.settings as Settings).consent('codex', 'plan').generation()).toBe(0);
+  });
+
+  it('turns OS notifications off and on, written first, then every window told; refused to every token', async () => {
+    const started = await start();
+    const window = await watching(started, 7);
+    try {
+      for (const party of TOKENS) {
+        expect(
+          await started.call('settings.set', { notifications: { enabled: false } }, CALLERS[party]),
+          party,
+        ).toMatchObject({ ok: false, error: { code: 'human-only' } });
+      }
+      expect(existsSync(settingsFile())).toBe(false);
+      // Already on: nothing written, no revision.
+      expect(
+        await started.call('settings.set', { notifications: { enabled: true } }, CALLERS.you),
+      ).toEqual({
+        ok: true,
+        value: { notifications: { enabled: true }, revs: {} },
+      });
+      expect(existsSync(settingsFile())).toBe(false);
+      expect(
+        await window.link.request('call', 'settings.set', { notifications: { enabled: false } }),
+      ).toEqual({
+        ok: true,
+        value: { ok: true, value: { notifications: { enabled: false }, revs: { settings: 1 } } },
+      });
+      expect(JSON.parse(await readFile(settingsFile(), 'utf8'))).toEqual({
+        version: 2,
+        consents: {},
+        notifications: { enabled: false },
+      });
+      await vi.waitFor(() => {
+        expect(window.heard.at(-1)).toMatchObject({
+          notifications: { enabled: false, lastDelivery: null },
+        });
+      });
+      expect(
+        await started.call('settings.set', { notifications: { enabled: true } }, CALLERS.you),
+      ).toEqual({
+        ok: true,
+        value: { notifications: { enabled: true }, revs: { settings: 2 } },
+      });
+      expect(await new Settings(settingsFile()).notificationsEnabled()).toBe(true);
+    } finally {
+      window.close();
+    }
+  });
+
+  it('refuses a notification setting it can’t save as unavailable, leaving it as it was', async () => {
+    const started = await start();
+    await mkdir(settingsFile());
+    await writeFile(path.join(settingsFile(), 'in-the-way'), '');
+    expect(
+      await started.call('settings.set', { notifications: { enabled: false } }, CALLERS.you),
+    ).toEqual({
+      ok: false,
+      error: {
+        code: 'unavailable',
+        sentence: 'corrallm couldn’t save your notification setting; it is unchanged.',
+      },
+    });
+    expect(await started.call('settings.get', {}, CALLERS.you)).toMatchObject({
+      ok: true,
+      value: { notifications: { enabled: true } },
+    });
+  });
+
+  it.skipIf(!CAN_DENY)(
+    'refuses a notification setting as unavailable when the settings can’t be read',
+    async () => {
+      const kept = `${JSON.stringify({ version: 2, consents: {} })}\n`;
+      await writeFile(settingsFile(), kept);
+      await chmod(settingsFile(), 0);
+      try {
+        const started = await start();
+        expect(
+          await started.call('settings.set', { notifications: { enabled: false } }, CALLERS.you),
+        ).toEqual({
+          ok: false,
+          error: {
+            code: 'unavailable',
+            sentence: 'corrallm couldn’t read your settings, so notifications are unchanged.',
+          },
+        });
+      } finally {
+        await chmod(settingsFile(), 0o600);
+      }
+      expect(await readFile(settingsFile(), 'utf8')).toBe(kept);
+    },
+  );
+
+  it('takes back a consent: kept or only a session’s, its generation moved; an undeclared one only if kept', async () => {
+    await writeFile(
+      settingsFile(),
+      JSON.stringify({
+        version: 2,
+        consents: { codex: { plan: true }, 'old-adapter': { allowed: true } },
+      }),
+    );
+    const started = await start();
+    const plan = (started.settings as Settings).consent('codex', 'plan');
+    for (const party of TOKENS) {
+      expect(
+        await started.call('settings.set', { consent: PLAN }, CALLERS[party]),
+        party,
+      ).toMatchObject({ ok: false, error: { code: 'human-only' } });
+    }
+    expect(plan.generation()).toBe(0);
+    const window = await watching(started, 7);
+    try {
+      expect(await window.link.request('call', 'settings.set', { consent: PLAN })).toEqual({
+        ok: true,
+        value: {
+          ok: true,
+          value: { consent: { target: PLAN, changed: true }, revs: { settings: 1 } },
+        },
+      });
+      expect(plan.generation()).toBe(1);
+      expect(JSON.parse(await readFile(settingsFile(), 'utf8'))).toEqual({
+        version: 2,
+        consents: { 'old-adapter': { allowed: true } },
+      });
+      await vi.waitFor(() => {
+        expect(window.heard.at(-1)).toMatchObject({
+          consents: { 'old-adapter': { allowed: true } },
+        });
+      });
+      // Declared, nothing kept: a live session may hold it for itself, so it moves again, writing
+      // nothing and publishing no revision.
+      const layout = await readFile(settingsFile(), 'utf8');
+      expect(await started.call('settings.set', { consent: PLAN }, CALLERS.you)).toEqual({
+        ok: true,
+        value: { consent: { target: PLAN, changed: true }, revs: {} },
+      });
+      expect(plan.generation()).toBe(2);
+      expect(await readFile(settingsFile(), 'utf8')).toBe(layout);
+
+      // One this build doesn't declare: removed only while kept.
+      const old = { kind: 'adapter', adapter: 'old-adapter', key: 'allowed' } as const;
+      expect(await started.call('settings.set', { consent: old }, CALLERS.you)).toEqual({
+        ok: true,
+        value: { consent: { target: old, changed: true }, revs: { settings: 2 } },
+      });
+      expect(await started.call('settings.set', { consent: old }, CALLERS.you)).toEqual({
+        ok: true,
+        value: { consent: { target: old, changed: false }, revs: {} },
+      });
+      expect(JSON.parse(await readFile(settingsFile(), 'utf8'))).toEqual({
+        version: 2,
+        consents: {},
+      });
+    } finally {
+      window.close();
+    }
+  });
+
+  it('refuses taking back a consent it can’t save: kept, its generation as it was; a repeat request takes nothing back again', async () => {
+    await writeFile(
+      settingsFile(),
+      JSON.stringify({ version: 2, consents: { codex: { plan: true } } }),
+    );
+    const started = await start();
+    const plan = (started.settings as Settings).consent('codex', 'plan');
+    await rm(settingsFile());
+    await mkdir(settingsFile());
+    await writeFile(path.join(settingsFile(), 'in-the-way'), '');
+    expect(await started.call('settings.set', { consent: PLAN }, CALLERS.you)).toEqual({
+      ok: false,
+      error: {
+        code: 'unavailable',
+        sentence: 'corrallm couldn’t save taking back this consent; it is unchanged.',
+      },
+    });
+    expect(plan.generation()).toBe(0);
+    expect(await plan.given()).toBe(true);
+    await rm(settingsFile(), { recursive: true });
+
+    const request = '7a8b9c0d-1e2f-4a3b-8c4d-5e6f7a8b9c0d';
+    const first = await started.call('settings.set', { consent: PLAN, request }, CALLERS.you);
+    expect(first).toEqual({
+      ok: true,
+      value: { consent: { target: PLAN, changed: true }, revs: {} },
+    });
+    expect(plan.generation()).toBe(1);
+    expect(await started.call('settings.set', { consent: PLAN, request }, CALLERS.you)).toEqual(
+      first,
+    );
+    expect(plan.generation()).toBe(1);
+  });
+
+  it('takes back a remembered site exactly, refusing what isn’t one as Settings lists it', async () => {
+    await writeFile(linksFile(), JSON.stringify({ version: 1, sites: [SECRET, LOCAL] }));
+    const started = await start();
+    const site = { kind: 'site', origin: SECRET } as const;
+    for (const party of TOKENS) {
+      expect(
+        await started.call('settings.set', { consent: site }, CALLERS[party]),
+        party,
+      ).toMatchObject({ ok: false, error: { code: 'human-only' } });
+    }
+    for (const origin of [
+      `${SECRET}/`,
+      `${SECRET}/path?q=1`,
+      'https://INTRANET.example.com:8443',
+      'https://user@intranet.example.com:8443',
+      'http://intranet.example.com',
+      'intranet.example.com',
+    ]) {
+      expect(
+        await started.call('settings.set', { consent: { kind: 'site', origin } }, CALLERS.you),
+        origin,
+      ).toEqual({
+        ok: false,
+        error: {
+          code: 'invalid',
+          sentence:
+            'A site is taken back by its origin alone, as Settings lists it: its scheme, host and any port.',
+        },
+      });
+    }
+    const window = await watching(started, 7);
+    try {
+      expect(await window.link.request('call', 'settings.set', { consent: site })).toEqual({
+        ok: true,
+        value: {
+          ok: true,
+          value: { consent: { target: site, changed: true }, revs: { settings: 1 } },
+        },
+      });
+      expect(JSON.parse(await readFile(linksFile(), 'utf8'))).toEqual({
+        version: 1,
+        sites: [LOCAL],
+      });
+      await vi.waitFor(() => {
+        expect(window.heard.at(-1)).toMatchObject({
+          links: { state: 'ready', sites: [LOCAL] },
+        });
+      });
+      // Not remembered (now, or ever): nothing to take back.
+      for (const origin of [SECRET, 'https://github.com'])
+        expect(
+          await started.call('settings.set', { consent: { kind: 'site', origin } }, CALLERS.you),
+        ).toEqual({
+          ok: true,
+          value: { consent: { target: { kind: 'site', origin }, changed: false }, revs: {} },
+        });
+    } finally {
+      window.close();
+    }
+  });
 });

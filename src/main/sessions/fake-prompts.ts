@@ -72,3 +72,43 @@ export function fakePlan(): AdapterPrompt {
     ],
   };
 }
+
+/**
+ * A connection's consent (B22a C4), asked before a turn that would use what it covers: Yes for
+ * the session, Yes for good, or No.
+ */
+export function fakeConsent(key: string): AdapterPrompt {
+  return {
+    kind: 'approval',
+    answerIn: 'api',
+    signals: { requiresUser: true },
+    title: 'Use your made-up plan here?',
+    summary: 'The fake’s plan',
+    subject: { type: 'consent', key, text: 'The fake asks before a turn uses its plan.' },
+    choices: [
+      {
+        value: 'once',
+        label: 'Yes',
+        hint: 'allow_once',
+        effects: {},
+        feedback: 'none',
+        endsTurn: false,
+      },
+      {
+        value: 'always',
+        label: "Yes, and don't ask again on this computer",
+        hint: 'allow_always',
+        feedback: 'none',
+        endsTurn: false,
+      },
+      {
+        value: 'no',
+        label: 'No',
+        hint: 'reject_once',
+        effects: {},
+        feedback: 'none',
+        endsTurn: true,
+      },
+    ],
+  };
+}

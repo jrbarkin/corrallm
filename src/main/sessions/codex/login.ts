@@ -73,6 +73,7 @@ export function appServerRefusal(
 
 /** Nothing kept: every session asks. */
 export const ASK_EACH_SESSION: Consent = {
+  generation: () => 0,
   given: () => Promise.resolve(false),
   give: () => Promise.resolve(),
 };

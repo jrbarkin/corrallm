@@ -53,7 +53,10 @@ import { historyEvents, OUTPUT_EVERY_MS, PROMPT_REPLY_ID_PREFIX } from './transl
  * of the thread; the others are answered here.
  *
  * On a ChatGPT login, the first turn that would use the user's plan asks first (login.ts), unless
- * they allowed it for good: Yes allows it for the session, No sends nothing.
+ * they allowed it for good: Yes allows it for the session, No sends nothing. Every turn of Codex's
+ * it admits (a message, a command's, a plan's implementation) checks again, by the consent's
+ * generation (B22a C4): taken back in Settings since it was allowed, the next one asks again, while
+ * a turn already sent goes on.
  */
 
 /** A model, as model/list lists it: its choice, and what it takes. */
@@ -168,8 +171,13 @@ export class AppServerSession implements LiveSession<CodexMode> {
   readonly #now: () => number;
   readonly #terminateMs: number;
   readonly #login: CodexLogin;
-  /** Whom to ask before using the user's ChatGPT plan: none once it may be used. */
-  #consent: Consent | undefined;
+  /** Whom to ask before using the user's ChatGPT plan: none on another login. */
+  readonly #consent: Consent | undefined;
+  /**
+   * The consent's generation at which this session was allowed to use the plan (for the session,
+   * or for good): none until it is. Taken back since (the generation moved), it asks again.
+   */
+  #allowed: number | undefined;
   #thread: ThreadInfo;
   /** The thread whose id was last remembered (a thread is kept once it has a turn). */
   #remembered: string | undefined;
@@ -442,21 +450,32 @@ export class AppServerSession implements LiveSession<CodexMode> {
 
   /**
    * Whether the turn may go on to use the user's ChatGPT plan: at once where it may be used (another
-   * login, or allowed for this session or for good), else once the user says so (consentPrompt,
-   * raised to the core's owner). False if the turn ended meanwhile (interrupted: nothing was sent);
-   * throws if they said no, or the core declined to ask.
+   * login, or allowed for this session or for good at the consent's generation now), else once the
+   * user says so (consentPrompt, raised to the core's owner). An answer to a question asked before
+   * the consent was taken back (its generation moved) grants nothing: it asks again. Only an Always
+   * answered at the generation now is kept for good. False if the turn ended meanwhile (interrupted:
+   * nothing was sent); throws if they said no, or the core declined to ask. Checked before every
+   * turn of Codex's the session admits, so its answer is the turn's admission (B22a C4).
    */
   async #mayUsePlan(turn: Turn): Promise<boolean> {
     const consent = this.#consent;
     const login = this.#login;
     if (consent === undefined || login.kind !== 'chatgpt') return true;
-    const given = await consent.given().catch(() => false);
-    if (this.#turn !== turn) return false;
-    if (turn.stop) {
-      this.#end(turn, { status: 'cancelled', reason: 'interrupted' });
-      return false;
-    }
-    if (!given) {
+    for (;;) {
+      const generation = consent.generation();
+      if (this.#allowed === generation) return true;
+      const given = await consent.given().catch(() => false);
+      if (this.#turn !== turn) return false;
+      if (turn.stop) {
+        this.#end(turn, { status: 'cancelled', reason: 'interrupted' });
+        return false;
+      }
+      // Taken back while it read: read again.
+      if (consent.generation() !== generation) continue;
+      if (given) {
+        this.#allowed = generation;
+        return true;
+      }
       const asked = this.#prompts.ask(consentPrompt(login));
       turn.consent = asked.key;
       const answer = await asked.answered;
@@ -465,15 +484,17 @@ export class AppServerSession implements LiveSession<CodexMode> {
       turn.consent = undefined;
       // Declined by the core, or No.
       if (answer !== 'once' && answer !== 'always') throw new Error(PLAN_DECLINED);
+      // Taken back while it was asked: that answer grants nothing, so it asks again.
+      if (consent.generation() !== generation) continue;
       if (answer === 'always') {
-        consent.give().catch((error: unknown) => {
+        consent.give(generation).catch((error: unknown) => {
           console.error('Could not keep that the ChatGPT plan may be used:', error);
         });
       }
+      this.#allowed = generation;
       this.#host.emit({ type: 'status', status: 'working' });
+      return true;
     }
-    this.#consent = undefined;
-    return true;
   }
 
   /** The prompt asking to use the user's ChatGPT plan no longer waits: the turn was interrupted. */

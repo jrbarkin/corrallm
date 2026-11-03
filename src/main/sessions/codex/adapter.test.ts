@@ -60,6 +60,17 @@ describe("Codex's adapter", () => {
     });
   });
 
+  it('declares its one consent, to use a ChatGPT plan, asked on the App Server alone (B22a C3)', () => {
+    expect(descriptor.consents).toEqual([
+      {
+        key: 'plan',
+        title: 'Use your ChatGPT plan',
+        description: expect.stringMatching(/App Server.*ChatGPT plan.*asks again/s) as unknown,
+        connections: ['codex.app-server'],
+      },
+    ]);
+  });
+
   it('runs text starting with ! as a shell command in Terminal only', () => {
     expect(connection('codex.terminal').shellPrefix).toBe('!');
     expect(connection('codex.app-server').shellPrefix).toBeUndefined();

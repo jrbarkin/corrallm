@@ -36,6 +36,15 @@ export const CODEX_USAGE = 'codex';
 /** Codex's Terminal connection: where an agent goes when its App Server refuses its login. */
 export const CODEX_TERMINAL = 'codex.terminal';
 
+/** Codex's App Server connection. */
+const APP_SERVER = 'codex.app-server';
+
+/**
+ * The key the App Server asks consent to use the user's ChatGPT plan by (app-server/session.ts),
+ * which settings keep under Codex: never the prompt's subject key, which names what it asks.
+ */
+export const PLAN_CONSENT = 'plan';
+
 /**
  * Codex's modes: its permission presets, as its /permissions names them (by their ids in its
  * source, codex-rs/utils/approval-presets), then its plan collaboration mode, which has Default's
@@ -145,7 +154,7 @@ export const codex: Adapter = {
         shellPrefix: '!',
       },
       {
-        id: 'codex.app-server',
+        id: APP_SERVER,
         label: 'App Server',
         short: 'App Server',
         description: 'Codex through its app server, in corrallm’s transcript',
@@ -167,6 +176,18 @@ export const codex: Adapter = {
       },
     ],
     registerMcp: 'codex mcp add {server} --url {url} --bearer-token-env-var {var}',
+    consents: [
+      {
+        key: PLAN_CONSENT,
+        title: 'Use your ChatGPT plan',
+        description:
+          'On a ChatGPT login, the App Server asks before a session’s first turn uses your ChatGPT ' +
+          'plan, quoting what OpenAI allows. Yes allows it for that session; “Don’t ask again” for ' +
+          'every Codex agent on this computer. Taking it back covers both: a turn already running ' +
+          'can finish, and before the next turn uses your plan, corrallm asks again.',
+        connections: [APP_SERVER],
+      },
+    ],
   },
   find: findCodex,
   isConversationId: isUuid,
@@ -174,11 +195,11 @@ export const codex: Adapter = {
     const readings = usage === undefined ? {} : { usage };
     return {
       [CODEX_TERMINAL]: new CodexTerminalConnector({ ...readings, findCodex: executable }),
-      'codex.app-server': new AppServerConnector({
+      [APP_SERVER]: new AppServerConnector({
         clientApp,
         findCodex: executable,
         distribution,
-        consent: consent('plan'),
+        consent: consent(PLAN_CONSENT),
         ...readings,
       }),
     };
