@@ -26,7 +26,7 @@
 // line its --settings give once it is ready and after each reply, as Claude Code does (`/bin/sh -c`,
 // its input on stdin), and shows and logs what that printed.
 import { fallbackTurn } from './fallback.mjs';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import {
   appendFileSync,
   existsSync,
@@ -79,19 +79,74 @@ if (args[0] === 'auth' && args[1] === 'status') {
   process.stdout.write(`${JSON.stringify(status)}\n`);
   process.exit(0);
 }
+// Its session's own corrallm entry (--mcp-config), connected and listed as it starts, as the real
+// one does; a turn's scripted calls (FAKE_MCP_SCRIPT) go through it. A route that fails to connect
+// is logged (FAKE_MCP_LOG) and the CLI starts without it, as Claude Code does.
+const mcp = await import('../../fake-mcp-client.mjs');
+let api;
 const mcpFile = arg('--mcp-config');
 if (mcpFile !== undefined) {
-  const { connectHttp } = await import('../../fake-mcp-client.mjs');
   const entry = JSON.parse(readFileSync(mcpFile, 'utf8')).mcpServers.corrallm;
-  const api = await connectHttp({
-    url: entry.url,
-    token: entry.headers.Authorization.slice('Bearer '.length),
-  });
-  await api.list();
-  if (process.env.FAKE_MCP_TOOL) await api.call(process.env.FAKE_MCP_TOOL, {});
+  const token = entry.headers.Authorization.slice('Bearer '.length);
+  try {
+    api = await mcp.connectHttp({ url: entry.url, token });
+    mcp.logConnected(token);
+    await api.list();
+    if (process.env.FAKE_MCP_TOOL) await api.call(process.env.FAKE_MCP_TOOL, {});
+  } catch (error) {
+    mcp.logScripted({ event: 'connect-failed', error: String(error?.message ?? error) });
+    api = undefined;
+  }
   process.once('exit', () => {
-    void api.close();
+    void api?.close();
   });
+}
+// Outside registrations, as Claude Code treats them (recorded, fixtures/mcp-entry.json's
+// switchedOff), for a test that logs its calls: each user-scope MCP server in CLAUDE_CONFIG_DIR's
+// .claude.json that the session's --settings don't deny has its headersHelper run in a shell, in
+// this process's environment, as it connects; a denied one never connects, and its helper never
+// runs. Logged: what of an outside registration's environment reached it, and per server whether
+// it was denied, its helper's exit status and whether it printed anything (never what).
+if (process.env.FAKE_MCP_LOG && process.env.CLAUDE_CONFIG_DIR) {
+  const settings = arg('--settings');
+  const denied = new Set(
+    (settings === undefined
+      ? []
+      : (JSON.parse(readFileSync(settings, 'utf8')).deniedMcpServers ?? [])
+    ).map((one) => one.serverName),
+  );
+  let servers;
+  try {
+    servers =
+      JSON.parse(readFileSync(path.join(process.env.CLAUDE_CONFIG_DIR, '.claude.json'), 'utf8'))
+        .mcpServers ?? {};
+  } catch {
+    servers = {};
+  }
+  mcp.logScripted({
+    event: 'environment',
+    outsideToken: process.env.CORRALLM_OUTSIDE_TOKEN !== undefined,
+    agentSession: process.env.CORRALLM_AGENT_SESSION ?? null,
+  });
+  for (const [name, server] of Object.entries(servers)) {
+    if (denied.has(name)) {
+      mcp.logScripted({ event: 'outside-server', name, denied: true });
+      continue;
+    }
+    if (typeof server.headersHelper !== 'string') continue;
+    const ran = spawnSync('/bin/sh', ['-c', server.headersHelper], {
+      env: process.env,
+      encoding: 'utf8',
+      timeout: 15_000,
+    });
+    mcp.logScripted({
+      event: 'outside-server',
+      name,
+      denied: false,
+      helperExit: ran.status,
+      printed: (ran.stdout ?? '').trim() !== '',
+    });
+  }
 }
 const home = path.join(process.cwd(), '.fake-claude');
 mkdirSync(home, { recursive: true });
@@ -120,7 +175,13 @@ function quit(code) {
 for (const signal of ['SIGHUP', 'SIGTERM']) {
   process.on(signal, () => {
     log({ event: 'signal', signal });
-    quit(0);
+    // A test that logs its calls also learns whether this session's credential still works as it
+    // closes (its close revoked it first).
+    if (process.env.FAKE_MCP_LOG && api !== undefined) {
+      void mcp.closingCall(api).finally(() => {
+        quit(0);
+      });
+    } else quit(0);
   });
 }
 
@@ -243,6 +304,12 @@ async function submit() {
   lines.push(`> ${prompt.split('\n').join(' ⏎ ')}`);
   draw();
   await hook('UserPromptSubmit', { prompt });
+  // Its scripted calls to corrallm's tools, made in this turn; their rule's reply ends it.
+  const scripted = await mcp.scriptedTurn(api, prompt);
+  if (scripted !== undefined) {
+    setTimeout(() => void finish({ reply: scripted }), 100);
+    return;
+  }
   const script = process.env.FAKE_CLAUDE_FALLBACK;
   const planned = fallbackTurn(
     script ? JSON.parse(readFileSync(script, 'utf8')) : undefined,
@@ -336,7 +403,7 @@ async function finish(planned) {
         ? 'See https://docs.example.com/hooks for more'
         : said.startsWith('files')
           ? 'Wrote notes.txt and read outside.txt'
-          : `You said: ${said}${said.includes('End your reply with SUCCEEDED or FAILED') ? '\nSUCCEEDED' : ''}`);
+          : `You said: ${said}${/SUCCEEDED or FAILED on a line of its own/.test(said) ? '\nSUCCEEDED' : ''}`);
   lines.push(
     said.startsWith('files')
       ? `⏺ Wrote ${fileLink(path.resolve('notes.txt'), 'notes.txt')} and read ${fileLink(path.resolve('..', 'outside.txt'), 'outside.txt')}`

@@ -876,18 +876,25 @@ async function play(message) {
     while (!current.interrupted && contents(gate) === null) await pause(20);
   }
 
-  const got = !current.interrupted && text.includes('a form') ? await elicit() : undefined;
-  const linked =
-    !current.interrupted && text.includes('a link') ? await signIn(current, id) : undefined;
-  const planned =
-    !current.interrupted && text.includes('a plan') ? await exitPlan(current, id) : undefined;
-  const recovery = text.includes('recovery-corrected')
-    ? 'The original task is complete.\nSUCCEEDED'
-    : text.includes('recovery-failed')
-      ? 'The original task needs a correction.\nFAILED'
-      : text.includes('recovery-missing')
-        ? 'I inspected the checklist, but gave no task verdict.'
-        : undefined;
+  // Its scripted calls to corrallm's tools (FAKE_MCP_SCRIPT), made in this turn over its channel.
+  const scripted =
+    current.interrupted || !process.env.FAKE_MCP_SCRIPT
+      ? undefined
+      : await (await import('../../fake-mcp-client.mjs')).scriptedTurn(await apiReady, text);
+  // A scripted turn is that and nothing else: none of the keywords below acts on its text.
+  const acts = scripted === undefined && !current.interrupted;
+  const got = acts && text.includes('a form') ? await elicit() : undefined;
+  const linked = acts && text.includes('a link') ? await signIn(current, id) : undefined;
+  const planned = acts && text.includes('a plan') ? await exitPlan(current, id) : undefined;
+  const recovery =
+    scripted ??
+    (text.includes('recovery-corrected')
+      ? 'The original task is complete.\nSUCCEEDED'
+      : text.includes('recovery-failed')
+        ? 'The original task needs a correction.\nFAILED'
+        : text.includes('recovery-missing')
+          ? 'I inspected the checklist, but gave no task verdict.'
+          : undefined);
   const reply = got
     ? [`github got: ${got.action}`, got.content ? ` ${JSON.stringify(got.content)}` : '']
     : linked
@@ -907,11 +914,15 @@ async function play(message) {
               `You said: ${text}`,
               images > 0 ? ` (with ${images} image${images === 1 ? '' : 's'})` : '',
             ];
-  const pieces = text.includes('slow')
-    ? Array.from({ length: 40 }, (_, i) => `${i} `)
-    : recovery
-      ? [recovery]
-      : reply.filter(Boolean);
+  const pieces =
+    scripted !== undefined
+      ? [scripted]
+      : text.includes('slow')
+        ? Array.from({ length: 40 }, (_, i) => `${i} `)
+        : recovery
+          ? [recovery]
+          : reply.filter(Boolean);
+  // (recovery holds a scripted reply too, so that the keyword actions below leave it alone.)
   say({
     type: 'stream_event',
     event: { type: 'content_block_start', index: 1, content_block: { type: 'text', text: '' } },
@@ -1253,7 +1264,10 @@ async function connectApi() {
   });
   await client.list();
   if (process.env.FAKE_CLAUDE_MCP_CALL) await client.call(process.env.FAKE_CLAUDE_MCP_CALL, {});
+  return client;
 }
+/** Its corrallm route once connected (undefined: none, or it failed), for a turn's scripted calls. */
+let apiReady = Promise.resolve(undefined);
 
 const input = createInterface({ input: process.stdin });
 input.on('line', (line) => {
@@ -1279,7 +1293,7 @@ input.on('line', (line) => {
         claude_code_version: '2.1.296',
       });
       if (message.request.sdkMcpServers?.includes('corrallm'))
-        void connectApi().catch(() => undefined);
+        apiReady = connectApi().catch(() => undefined);
     } else if (subtype === 'mcp_message') {
       respond(message.request_id, { mcp_response: { jsonrpc: '2.0', id: 0, result: {} } });
     } else if (subtype === 'interrupt') {

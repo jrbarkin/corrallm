@@ -16,6 +16,18 @@ export function connectHttp(
   options?: { fetch?: typeof globalThis.fetch; signal?: AbortSignal },
 ): Promise<FakeMcpClient>;
 
+/** A fake's scripted calls for a turn (FAKE_MCP_SCRIPT); resolves with its rule's reply. */
+export function scriptedTurn(
+  client: FakeMcpClient | undefined,
+  text: string,
+): Promise<string | undefined>;
+/** One more call as a fake's session closes, logged to FAKE_MCP_LOG. */
+export function closingCall(client: FakeMcpClient | undefined): Promise<void>;
+/** Logs that a fake connected, naming its credential only by a short hash. */
+export function logConnected(token: string): void;
+/** Appends a line to FAKE_MCP_LOG, if the test gave one. */
+export function logScripted(entry: Record<string, unknown>): void;
+
 /** Uses the delivered low-level MCP server instance through its native MCP transport. */
 // eslint-disable-next-line @typescript-eslint/no-deprecated -- The adapter's SDK entry is the low-level server instance, not the high-level wrapper.
 export function connectServer(server: Server): Promise<FakeMcpClient>;

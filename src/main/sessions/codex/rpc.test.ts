@@ -119,7 +119,7 @@ describe('startAppServer', () => {
     });
     const server = await start({ args: ['-c', 'analytics.enabled=false'], spawn: spawned });
     expect(spawned).toHaveBeenCalledTimes(1);
-    expect(server.version).toBe('0.160.1');
+    expect(server.version).toBe('0.162.1');
     expect(server.codexHome).toMatch(/\.codex$/);
     // The fake refuses anything before initialized; this went through.
     expect(await server.request('account/read', { refreshToken: false })).toMatchObject({

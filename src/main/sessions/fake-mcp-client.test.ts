@@ -1,3 +1,7 @@
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+
 import { describe, expect, it, vi } from 'vitest';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
@@ -5,7 +9,13 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 
 import type { ToolListing } from '../../shared/api/registry';
 import type { AgentChannel } from './connector';
-import { connectChannel, connectHttp, connectServer } from './fake-mcp-client.mjs';
+import {
+  connectChannel,
+  connectHttp,
+  connectServer,
+  logConnected,
+  scriptedTurn,
+} from './fake-mcp-client.mjs';
 
 const tool: ToolListing = {
   name: 'fixture_read',
@@ -162,5 +172,93 @@ describe('the shared fake MCP client', () => {
       'loopback',
     );
     expect(fetcher).not.toHaveBeenCalled();
+  });
+});
+
+describe('a fake agent’s scripted calls', () => {
+  const TASK = '0b3a7d52-6a0c-4f39-9c4e-2f8f0c1d9e11';
+  const ASK = '7f1e2d3c-4b5a-4968-8776-655443322110';
+
+  it('make each matching rule’s calls in order, naming the task and question its texts named, and log every outcome', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'corrallm-fake-script-'));
+    const script = path.join(dir, 'script.json');
+    const log = path.join(dir, 'log.jsonl');
+    await writeFile(
+      script,
+      JSON.stringify({
+        rules: [
+          {
+            when: 'step-one',
+            calls: [{ tool: 'ask', args: { to: { party: 'you' }, note: 'for {task}' } }],
+            reply: 'Asked.',
+          },
+          {
+            when: 'Question from',
+            calls: [{ tool: 'reply', args: { to: 'ask/{ask}' } }],
+            reply: 'Answered {ask}.',
+            once: true,
+          },
+          { when: 'answered', calls: [{ tool: 'complete', args: { task: '{task}' } }] },
+        ],
+      }),
+    );
+    vi.stubEnv('FAKE_MCP_SCRIPT', script);
+    vi.stubEnv('FAKE_MCP_LOG', log);
+    try {
+      const call = vi.fn<(name: string, args: unknown) => Promise<CallToolResult>>((name) =>
+        Promise.resolve(
+          name === 'complete' ? failure : { ...success, structuredContent: { id: 'm1' } },
+        ),
+      );
+      const client = connectChannel({ list: () => [tool], call });
+      expect(await scriptedTurn(client, `step-one, then complete with task "${TASK}".`)).toBe(
+        'Asked.',
+      );
+      const question = `[corrallm] Question from agent "Planner" (an agent, not the user; question ${ASK}).`;
+      expect(await scriptedTurn(client, question)).toBe(`Answered ${ASK}.`);
+      // Once only; and a continuation that names no task still names the last one seen.
+      expect(await scriptedTurn(client, question)).toBeUndefined();
+      expect(await scriptedTurn(client, 'The user answered.')).toBeUndefined();
+      expect(call.mock.calls.map(([name, args]) => [name, args])).toEqual([
+        ['ask', { to: { party: 'you' }, note: `for ${TASK}` }],
+        ['reply', { to: `ask/${ASK}` }],
+        ['complete', { task: TASK }],
+      ]);
+      const lines = (await readFile(log, 'utf8'))
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line) as Record<string, unknown>);
+      expect(lines.map(({ tool: name, ok }) => [name, ok])).toEqual([
+        ['ask', true],
+        ['reply', true],
+        ['complete', false],
+      ]);
+      expect(lines[0]).toMatchObject({ result: { id: 'm1' } });
+      expect(lines[2]).toMatchObject({ error: 'Not in reach.' });
+      // Without a route, each call is logged as unmade.
+      expect(await scriptedTurn(undefined, 'step-one')).toBe('Asked.');
+      expect(await readFile(log, 'utf8')).toContain('"error":"no route"');
+    } finally {
+      vi.unstubAllEnvs();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('logs a connection by a short hash of its credential, never the credential', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'corrallm-fake-script-'));
+    const log = path.join(dir, 'log.jsonl');
+    vi.stubEnv('FAKE_MCP_LOG', log);
+    try {
+      logConnected('credential-canary');
+      const text = await readFile(log, 'utf8');
+      expect(text).not.toContain('credential-canary');
+      expect(JSON.parse(text)).toMatchObject({
+        event: 'connected',
+        credential: expect.stringMatching(/^[0-9a-f]{16}$/) as string,
+      });
+    } finally {
+      vi.unstubAllEnvs();
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });
