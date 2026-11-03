@@ -97,6 +97,7 @@ import { AgentContextMenu } from './AgentContextMenu';
 import type { WorkFlowEdge } from './nodes';
 import { NeedsSidebar } from './NeedsSidebar';
 import { Canvases } from './Canvases';
+import { FallbackProvider } from '../agent/Fallback';
 import { WorkspaceProvider } from '../workspaces/Workspace';
 import { workEdges } from '../../shared/model/work';
 import { WorkDetail } from './WorkDetail';
@@ -1790,7 +1791,15 @@ function GraphContext({
 }: ComponentProps<typeof WorkspaceProvider> & { actions: GraphActions }) {
   return (
     <GraphActionsContext value={actions}>
-      <WorkspaceProvider {...workspace} />
+      <FallbackProvider
+        canvas={workspace.canvas}
+        client={workspace.client}
+        mirror={workspace.mirror}
+        nodes={workspace.nodes}
+        inert={workspace.inert}
+      >
+        <WorkspaceProvider {...workspace} />
+      </FallbackProvider>
     </GraphActionsContext>
   );
 }

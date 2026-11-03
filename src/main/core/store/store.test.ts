@@ -194,7 +194,104 @@ describe('the write lane', () => {
     expect(resolved).toBe(true);
   });
 
-  it('flushes its log one flush at a time, the commits made meanwhile resolving with the next', async () => {
+  it.each([0, 1, 4])(
+    'bounds a queued burst of writes changing %i rows, preserving their row and acknowledgement order',
+    async (rows) => {
+      flushes = [];
+      const settled: number[] = [];
+      const ran: number[] = [];
+      const entries = (i: number) =>
+        Array.from({ length: rows }, (_, j) => `${String(i)}.${String(j)}`);
+      const writes = Array.from({ length: 40 }, (_, i) =>
+        store
+          .write(() => {
+            ran.push(i);
+            for (const text of entries(i)) add(text);
+          })
+          .then(() => settled.push(i)),
+      );
+      try {
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        const first = Array.from({ length: rows === 4 ? 8 : 16 }, (_, i) => i);
+        expect(ran).toEqual(first);
+        expect(notes()).toEqual(first.flatMap(entries));
+        expect(settled).toEqual([]);
+      } finally {
+        const held = flushes;
+        flushes = undefined;
+        held[0]?.done();
+        await Promise.all(writes);
+      }
+      expect(ran).toEqual(Array.from({ length: 40 }, (_, i) => i));
+      expect(notes()).toEqual(ran.flatMap(entries));
+      expect(settled).toEqual(Array.from({ length: 40 }, (_, i) => i));
+    },
+  );
+
+  it('keeps a large atomic write intact and leaves the next write for its next commit', async () => {
+    flushes = [];
+    const first = store.write(() => {
+      for (let i = 0; i < 40; i++) add(String(i));
+    });
+    const second = store.write(() => add('next'));
+    try {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(notes()).toEqual(Array.from({ length: 40 }, (_, i) => String(i)));
+    } finally {
+      const held = flushes;
+      flushes = undefined;
+      held[0]?.done();
+      await Promise.all([first, second]);
+    }
+    expect(notes().at(-1)).toBe('next');
+  });
+
+  it('rolls back a failed bounded commit and still runs the writes after it in order', async () => {
+    store.exec(`CREATE TABLE parent (id INTEGER PRIMARY KEY) STRICT;
+      CREATE TABLE child (parent INTEGER NOT NULL
+        REFERENCES parent (id) DEFERRABLE INITIALLY DEFERRED) STRICT`);
+    const settled = await outcomes([
+      store.write(() => {
+        for (let i = 0; i < 40; i++) add('rolled back');
+        store.prepare('INSERT INTO child (parent) VALUES (1)').run();
+      }),
+      store.write(() => add('second')),
+      store.write(() => add('third')),
+    ]);
+    expect(settled.map(({ status }) => status)).toEqual(['rejected', 'fulfilled', 'fulfilled']);
+    expect(settled[0]).toMatchObject({ reason: { message: 'FOREIGN KEY constraint failed' } });
+    expect(notes()).toEqual(['second', 'third']);
+  });
+
+  it('keeps later SQL off the loop while the log flush is running, in write order', async () => {
+    flushes = [];
+    const order: string[] = [];
+    const first = store.write(() => add('first')).then(() => order.push('first durable'));
+    await vi.waitFor(() => {
+      expect(flushes).toHaveLength(1);
+    });
+    const later = ['second', 'third'].map((text) =>
+      store.write(() => {
+        order.push(text);
+        add(text);
+      }),
+    );
+    try {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(notes()).toEqual(['first']);
+      expect(order).toEqual([]);
+    } finally {
+      const held = flushes;
+      flushes = undefined;
+      held[0]?.done();
+      await first;
+      await Promise.all(later);
+    }
+    expect(order).toEqual(['first durable', 'second', 'third']);
+    expect(notes()).toEqual(['first', 'second', 'third']);
+  });
+
+  it('flushes its log one flush at a time, queued writes resolving only with their own flush', async () => {
     flushes = [];
     const first = store.write(() => add('first'));
     await vi.waitFor(() => {
@@ -206,16 +303,16 @@ describe('the write lane', () => {
         .then(() => store.write(() => add(text)))
         .then(() => settled.push(text)),
     );
-    await vi.waitFor(() => {
-      expect(notes()).toEqual(['first', 'second', 'third']);
-    });
-    // Committed while the first flush went on, they wait for one flush after it.
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(notes()).toEqual(['first']);
+    // Queued while the first flush went on, they commit and wait for their own flush after it.
     expect(flushes).toHaveLength(1);
     flushes[0]?.done();
     await first;
     await vi.waitFor(() => {
       expect(flushes).toHaveLength(2);
     });
+    expect(notes()).toEqual(['first', 'second', 'third']);
     expect(settled).toEqual([]);
     flushes[1]?.done();
     await Promise.all(later);
@@ -266,6 +363,27 @@ describe('the write lane', () => {
     expect(settled.map(({ status }) => status)).toEqual(['fulfilled', 'rejected', 'fulfilled']);
     expect(settled[1]).toEqual({ status: 'rejected', reason: failure });
     expect(notes()).toEqual(['kept', 'kept too']);
+  });
+
+  it('restores staged state before the next write runs after a failed savepoint', async () => {
+    let staged = false;
+    const settled = await outcomes([
+      store.write(
+        () => {
+          staged = true;
+          throw new Error('The write failed');
+        },
+        () => {
+          staged = false;
+        },
+      ),
+      store.write(() => {
+        expect(staged).toBe(false);
+        add('next');
+      }),
+    ]);
+    expect(settled.map(({ status }) => status)).toEqual(['rejected', 'fulfilled']);
+    expect(notes()).toEqual(['next']);
   });
 
   it('keeps nothing of a write whose statement a trigger aborted, and rejects it', async () => {
@@ -334,14 +452,15 @@ describe('the write lane', () => {
   });
 
   it('commits the writes queued before it closes, and refuses those after', async () => {
-    const queued = store.write(() => add('queued'));
+    const wanted = Array.from({ length: 40 }, (_, i) => `queued ${String(i)}`);
+    const queued = Promise.all(wanted.map((text) => store.write(() => add(text))));
     const closed = store.close();
     await expect(store.write(() => add('too late'))).rejects.toThrow(
       'The core’s database is closed.',
     );
     await expect(queued).resolves.toBeDefined();
     await closed;
-    expect(notes()).toEqual(['queued']);
+    expect(notes()).toEqual(wanted);
   });
 
   it('refuses a write that a write queues as it closes, and leaves nothing to run after', async () => {
@@ -432,11 +551,10 @@ describe('a failed flush', () => {
     await vi.waitFor(() => {
       expect(flushes).toHaveLength(1);
     });
-    // Committed while that flush went on, for the next.
+    // Queued while that flush went on: it must fail too, without ever writing.
     const meanwhile = store.write(() => add('meanwhile'));
-    await vi.waitFor(() => {
-      expect(notes()).toEqual(['kept', 'lost', 'meanwhile']);
-    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(notes()).toEqual(['kept', 'lost']);
     await failFlush();
     await expect(lost).rejects.toThrow(FAILED);
     await expect(meanwhile).rejects.toThrow(FAILED);

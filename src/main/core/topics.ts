@@ -630,6 +630,7 @@ export class Topics implements Publication {
     this.#scheduled.add(canvas);
     void this.#serialize(async () => {
       this.#scheduled.delete(canvas);
+      if (this.#closed) return;
       await this.#publishRuntime(canvas);
     }).catch((error: unknown) => {
       console.error('Could not publish a canvas’s runtime topics:', error);

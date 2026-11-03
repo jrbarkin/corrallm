@@ -77,7 +77,7 @@ export type Draft = Omit<Message, 'id' | 'canvas' | 'at'> & Provenance;
  */
 export interface Staged {
   reveal(): void;
-  undo(): void;
+  undo(error?: unknown): void;
 }
 
 /**
@@ -137,8 +137,8 @@ export class MessageTable {
   }
 
   /** Queues `write` for the database's next commit: resolves once that commit has returned. */
-  write<T>(write: () => T): Promise<T> {
-    return this.#store.write(write);
+  write<T>(write: () => T, failed?: (error: unknown) => void): Promise<T> {
+    return this.#store.write(write, failed);
   }
 
   /** Within a write: gives the canvas its row, if it has none, for its messages to refer to. */
@@ -213,16 +213,22 @@ export class MessageStore {
   readonly #parties = new Map<PartyId, Sequence>();
   /** Records that may just have fallen outside both parties’ newest-message quotas. */
   readonly #candidates = new Set<string>();
+  /** Results by the native turn they report: its unsettled turn keeps its fixed verdict. */
+  readonly #results = new Map<string, Set<string>>();
+  /** Settling a turn and judging its report are one synchronous action. */
+  readonly #judging = new Set<string>();
   #bytes = 0;
   /** What hears each message added. */
   readonly #listeners = new Set<(message: Message) => void>();
   /** What hears each message kept, changed or no longer kept (its id): the topics' source. */
   readonly #watchers = new Set<(id: string) => void>();
   /**
-   * The messages changed (or deleted) whose rows aren't on disk as they are yet, each with the
-   * number of its last change: a write marks a row on disk only if it has not changed since.
+   * Changes that still need SQL, each with its last change number. Issued SQL moves to #inFlight
+   * until the containing write flushes; a rollback restores it here before the next write runs.
    */
   readonly #changed = new Map<string, number>();
+  /** The latest issued write's flush covers the preceding SQL too: the store flushes a prefix. */
+  #inFlight: Promise<void> | undefined;
   #changes = 0;
   #scheduled = false;
   /** The write queued that hasn't run yet: it writes every change made before it runs. */
@@ -286,6 +292,25 @@ export class MessageStore {
 
   get(id: string): Message | undefined {
     return this.#kept.get(id)?.message;
+  }
+
+  /** Keeps a turn's result readable through settlement and the judgment that immediately follows. */
+  judging(id: string, use: () => void): void {
+    if (!this.#results.has(id) || this.#judging.has(id)) {
+      use();
+      return;
+    }
+    this.#judging.add(id);
+    try {
+      use();
+    } finally {
+      this.#judging.delete(id);
+      for (const result of this.#results.get(id) ?? []) {
+        const kept = this.#kept.get(result);
+        if (kept !== undefined && this.#prunable(kept)) this.#settle(kept);
+      }
+      this.#prune();
+    }
   }
 
   /** A message's place in the store's order, if it is kept. */
@@ -519,19 +544,25 @@ export class MessageStore {
     if (this.#unjournaled !== undefined) {
       return this.#lost ? Promise.reject(new Error(this.#unjournaled)) : Promise.resolve();
     }
-    if (this.#changed.size === 0) return Promise.resolve();
+    if (this.#changed.size === 0) return this.#inFlight ?? Promise.resolve();
     if (this.#queued) return this.#queued;
     let written: () => void = () => undefined;
+    let mine: Staged | undefined;
     const write = this.#table
-      .write(() => {
-        if (this.#queued === write) this.#queued = undefined;
-        const others = this.#alongside?.();
-        const mine = this.changes();
-        written = () => {
-          others?.();
-          mine();
-        };
-      })
+      .write(
+        () => {
+          if (this.#queued === write) this.#queued = undefined;
+          const others = this.#alongside?.();
+          mine = this.changes();
+          written = () => {
+            others?.();
+            mine?.reveal();
+          };
+        },
+        (error) => {
+          mine?.undo(error);
+        },
+      )
       .then(() => {
         written();
       });
@@ -543,14 +574,14 @@ export class MessageStore {
   }
 
   /**
-   * Within a write: writes every change whose row isn't on disk as it is now; returns what marks
-   * them on disk once the write's commit returned. Throws if the store journals nothing but
+   * Within a write: issues SQL for changes not already in a pending write. Reveal once flushed,
+   * or undo in the containing write's failure callback. Throws if the store journals nothing but
    * something changed.
    */
-  changes(): () => void {
+  changes(): Staged {
     if (this.#unjournaled !== undefined) {
       if (this.#lost) throw new Error(this.#unjournaled);
-      return () => undefined;
+      return { reveal: () => undefined, undo: () => undefined };
     }
     const written = new Map(this.#changed);
     if (written.size > 0) this.#table.ensure(this.canvas);
@@ -559,12 +590,39 @@ export class MessageStore {
       if (kept) this.#table.keep(kept);
       else this.#table.forget(id);
     }
+    // B21 C6: the loop counts go in the same write; marked on disk only once it flushed.
     const also = this.#companion?.();
-    return () => {
-      also?.();
-      for (const [id, change] of written) {
-        if (this.#changed.get(id) === change) this.#changed.delete(id);
-      }
+    if (written.size === 0)
+      return {
+        reveal: () => {
+          also?.();
+        },
+        undo: () => undefined,
+      };
+    for (const id of written.keys()) this.#changed.delete(id);
+    const flushed = Promise.withResolvers<undefined>();
+    this.#inFlight = flushed.promise;
+    // A containing write may be awaited directly, rather than through durable().
+    void flushed.promise.catch(() => undefined);
+    let settled = false;
+    return {
+      reveal: () => {
+        if (settled) return;
+        settled = true;
+        also?.();
+        if (this.#inFlight === flushed.promise) this.#inFlight = undefined;
+        for (const [id, change] of written)
+          if ((this.#changed.get(id) ?? Infinity) <= change) this.#changed.delete(id);
+        flushed.resolve(undefined);
+      },
+      undo: (error) => {
+        if (settled) return;
+        settled = true;
+        if (this.#inFlight === flushed.promise) this.#inFlight = undefined;
+        for (const [id, change] of written)
+          this.#changed.set(id, Math.max(change, this.#changed.get(id) ?? 0));
+        flushed.reject(error ?? new Error('The message write failed.'));
+      },
     };
   }
 
@@ -573,8 +631,8 @@ export class MessageStore {
     const { id } = kept.message;
     const before = this.#kept.get(id);
     this.#bytes += kept.bytes - (before?.bytes ?? 0);
-    const was = before !== undefined && prunable(before);
-    const now = prunable(kept);
+    const was = before !== undefined && this.#prunable(before);
+    const now = this.#prunable(kept);
     const same =
       was &&
       now &&
@@ -583,7 +641,17 @@ export class MessageStore {
       before.message.to === kept.message.to;
     if (was && !same) this.#unsettle(before);
     this.#kept.set(id, kept);
+    this.#indexResult(before, false);
+    this.#indexResult(kept, true);
     if (now && !same) this.#settle(kept);
+    if (before !== undefined && isSettled(before.message) !== isSettled(kept.message)) {
+      for (const result of this.#results.get(id) ?? []) {
+        const row = this.#kept.get(result);
+        if (row === undefined || !prunable(row)) continue;
+        if (isSettled(kept.message) && !this.#judging.has(id)) this.#settle(row);
+        else this.#unsettle(row);
+      }
+    }
     if (!isActive(kept.message)) {
       this.#active.delete(id);
     } else if (this.#active.has(id) || kept.seq > this.#activeLast) {
@@ -602,7 +670,8 @@ export class MessageStore {
     const kept = this.#kept.get(id);
     if (kept) {
       this.#bytes -= kept.bytes;
-      if (prunable(kept)) this.#unsettle(kept);
+      if (this.#prunable(kept)) this.#unsettle(kept);
+      this.#indexResult(kept, false);
     }
     this.#kept.delete(id);
     this.#active.delete(id);
@@ -627,6 +696,24 @@ export class MessageStore {
         if (candidate !== undefined) this.#candidates.add(candidate);
       }
     }
+  }
+
+  #indexResult(kept: Kept | undefined, add: boolean): void {
+    const message = kept?.message;
+    if (message?.verdict === undefined || message.replyTo === undefined) return;
+    const ids = this.#results.get(message.replyTo) ?? new Set<string>();
+    if (add) ids.add(message.id);
+    else ids.delete(message.id);
+    if (ids.size === 0) this.#results.delete(message.replyTo);
+    else this.#results.set(message.replyTo, ids);
+  }
+
+  #prunable(kept: Kept): boolean {
+    if (!prunable(kept)) return false;
+    const { verdict, replyTo } = kept.message;
+    if (verdict !== undefined && replyTo !== undefined && this.#judging.has(replyTo)) return false;
+    const turn = replyTo === undefined ? undefined : this.#kept.get(replyTo)?.message;
+    return verdict === undefined || turn === undefined || isSettled(turn);
   }
 
   #unsettle({ seq, message: { id, from, to } }: Kept): void {
@@ -664,7 +751,7 @@ export class MessageStore {
   #prune(): void {
     for (const id of this.#candidates) {
       const kept = this.#kept.get(id);
-      if (!kept || !prunable(kept)) continue;
+      if (!kept || !this.#prunable(kept)) continue;
       const { from, to } = kept.message;
       const wanted = [from, to].some((party) => {
         const sequence = this.#parties.get(party);

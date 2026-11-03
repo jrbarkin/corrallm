@@ -136,6 +136,8 @@ export interface RunMailbox {
    */
   record: (send: RunSend) => { id: string; text: string };
   settle: (id: string, end: RunSendEnd) => void;
+  /** Keeps its result readable while its native end settles the send and judges the attempt. */
+  judging?: (id: string, use: () => void) => void;
 }
 
 /**
@@ -2402,9 +2404,13 @@ export class RunStore {
           if (sent.over) return;
           sent.over = true;
           this.#sent.delete(sent);
-          // In the same turn as what its end changes in the run: one write holds both.
-          settle({ state: 'replied', turn: turn.result ?? resultOf(turn) });
-          ended?.(turn);
+          const finish = () => {
+            // In the same turn as what its end changes in the run: one write holds both.
+            settle({ state: 'replied', turn: turn.result ?? resultOf(turn) });
+            ended?.(turn);
+          };
+          if (id !== undefined && mailbox?.judging !== undefined) mailbox.judging(id, finish);
+          else finish();
         },
         images,
         holder &&

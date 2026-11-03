@@ -403,7 +403,7 @@ export class Delivery {
     // B21 C6: what expired while the core was down expires now, in this same write.
     this.asks.start();
     await this.#deps.store.durable();
-    this.schedule();
+    this.#pump();
   }
 
   /** Whether a message is the live run's send of an attempt it still runs (its own to settle). */
@@ -515,10 +515,12 @@ export class Delivery {
   schedule(): void {
     if (this.#scheduled || !this.#started || this.#closed) return;
     this.#scheduled = true;
-    queueMicrotask(() => {
+    const check = () => {
       this.#scheduled = false;
+      if (this.#closed) return;
       this.#pump();
-    });
+    };
+    queueMicrotask(check);
   }
 
   /**
@@ -1650,17 +1652,19 @@ export class Delivery {
       this.schedule();
       return;
     }
-    store.update(id, { state: 'replied' });
     // B21 C7: a continuation's turn is its task's attempt's own: the run hears it end, in this
     // same tick, so one write holds its reply's end and what the run judged of it.
     const { task } = message;
-    if (task !== undefined && isContinuation(message)) {
-      this.#deps.engine.run.continued(task, {
-        failed: result.status !== 'completed',
-        reply,
-        result,
-      });
-    }
+    store.judging(id, () => {
+      store.update(id, { state: 'replied' });
+      if (task !== undefined && isContinuation(message)) {
+        this.#deps.engine.run.continued(task, {
+          failed: result.status !== 'completed',
+          reply,
+          result,
+        });
+      }
+    });
     // A reply never makes a reply; nor does an answer, or an ask's end, its asker was sent.
     if (message.turn === undefined && message.kind === 'text' && message.ask === undefined) {
       store.add({

@@ -13,6 +13,9 @@ import { createCore } from './core';
 import type { Core } from './core';
 import { keepCanvases, readOnDisk } from './store/test-store';
 import { CALLERS, NO_DESKTOP } from './test-registry';
+import { SYSTEM_DEPS } from './store/store';
+import type { StoreDeps } from './store/store';
+import { expectRestorable, liveRunOf } from './engine/run/test-restore';
 import { legacyDirectories } from './workspaces/test-directories';
 
 /*
@@ -64,6 +67,7 @@ beforeEach(async () => {
   await writeFile(file, JSON.stringify(FILE));
   await keepCanvases(profile, { [CANVAS]: { file, project } });
 });
+afterEach(expectRestorable);
 afterEach(async () => {
   vi.restoreAllMocks();
   for (const core of cores.splice(0)) await core.close().catch(() => undefined);
@@ -71,9 +75,10 @@ afterEach(async () => {
 });
 
 /** A connector whose agent takes each message and works on it until the test ends its turn. */
-function held(adapter: 'codex' | 'claude-code') {
+function heldConnector(adapter: 'codex' | 'claude-code') {
   const fake = new FakeConnector({ adapter, mode: adapter === 'codex' ? 'auto' : 'acceptEdits' });
   const sent: UserMessage[] = [];
+  const listeners = new Set<() => void>();
   let host: SessionHost | undefined;
   const connector: Connector<SessionMode> = {
     start: async (spec, given) => {
@@ -83,6 +88,7 @@ function held(adapter: 'codex' | 'claude-code') {
         sent.push(message);
         given.emit({ type: 'user', id: message.id, text: message.text });
         given.emit({ type: 'status', status: 'working' });
+        for (const listener of listeners) listener();
         return Promise.resolve();
       };
       return session;
@@ -94,10 +100,25 @@ function held(adapter: 'codex' | 'claude-code') {
     if (last === undefined) throw new Error('Nothing was sent.');
     host?.emit({ type: 'end', messages: [last.id], seconds: 1, result });
   };
-  return { connector, fake, sent, end };
+  const received = (count: number) =>
+    new Promise<void>((resolve) => {
+      const changed = () => {
+        if (sent.length >= count) {
+          listeners.delete(changed);
+          resolve();
+        }
+      };
+      listeners.add(changed);
+      changed();
+    });
+  return { connector, fake, sent, end, received };
 }
 
-async function start(codex: Connector<SessionMode>, claude: Connector<SessionMode>): Promise<Core> {
+async function start(
+  codex: Connector<SessionMode>,
+  claude: Connector<SessionMode>,
+  store?: StoreDeps,
+): Promise<Core> {
   const core = await createCore(
     {
       profile,
@@ -105,6 +126,7 @@ async function start(codex: Connector<SessionMode>, claude: Connector<SessionMod
       check: true,
       distribution: 'local',
       directoryResolver: legacyDirectories,
+      ...(store === undefined ? {} : { store }),
       sessions: {
         connectors: { 'codex.app-server': codex, 'claude-code.terminal': claude },
         environment: () => Promise.resolve({}),
@@ -114,6 +136,9 @@ async function start(codex: Connector<SessionMode>, claude: Connector<SessionMod
     NO_DESKTOP,
   );
   cores.push(core);
+  const opened = await core.engines.open(CANVAS);
+  liveRunOf(opened.run, opened.catalog, Date.now);
+  opened.run.update(core.engines.canvas(CANVAS)?.document.nodes ?? []);
   return core;
 }
 
@@ -136,27 +161,66 @@ const LIMIT = (resetsAt: number): TurnResult => ({
 });
 
 describe('the fallback chain through the core', () => {
+  it('waits for the continuation send while its fallback write outlasts a polling interval', async () => {
+    const gate = Promise.withResolvers<undefined>();
+    const writing = Promise.withResolvers<undefined>();
+    let held = false;
+    const codex = heldConnector('codex');
+    const claude = heldConnector('claude-code');
+    const core = await start(codex.connector, claude.connector, {
+      ...SYSTEM_DEPS,
+      flush: async (fd) => {
+        if (held) {
+          writing.resolve(undefined);
+          await gate.promise;
+        }
+        await SYSTEM_DEPS.flush(fd);
+      },
+    });
+    const engine = await core.engines.open(CANVAS);
+    engine.run.start();
+    await codex.received(1);
+    await core.flush();
+    held = true;
+    codex.end(LIMIT(Date.now() + 60 * 60_000));
+    await writing.promise;
+    const received = claude.received(1);
+    // A controlled slow flush, past waitFor's one-second deadline. Both timers are registered
+    // here, so the old polling deadline always precedes release even on a busy runner.
+    const release = setTimeout(() => {
+      held = false;
+      gate.resolve(undefined);
+    }, 1100);
+    try {
+      await received;
+    } finally {
+      clearTimeout(release);
+      held = false;
+      gate.resolve(undefined);
+    }
+    expect(claude.sent).toHaveLength(1);
+    expect(claude.sent[0]?.text).toContain('Say hello');
+  });
+
   it('switches a task held on Codex’s limit, held on disk, to Claude Code, and continues it there (§12.5)', async () => {
-    const codex = held('codex');
-    const claude = held('claude-code');
+    const codex = heldConnector('codex');
+    const claude = heldConnector('claude-code');
     const core = await start(codex.connector, claude.connector);
     const engine = await core.engines.open(CANVAS);
     engine.run.start();
-    await vi.waitFor(() => {
-      expect(codex.sent).toHaveLength(1);
-    });
+    await codex.received(1);
+    expect(codex.sent).toHaveLength(1);
     const resetsAt = Date.now() + 60 * 60_000;
     codex.end(LIMIT(resetsAt));
     // Codex's limit is on disk before the run hears the end (B8).
-    await vi.waitFor(() => {
-      // The task, once more: the first send since the switch, carrying the worker's handoff, or
-      // saying none was written (B11a C7).
-      expect(claude.sent.map(({ text }) => text)).toEqual([
-        expect.stringMatching(
-          /^\[corrallm\] corrallm switched this agent to Claude Code · Terminal, [^\n]+\n\nSay hello\n\n\[corrallm\] No handoff was written: its context never reached 95%\.$/,
-        ),
-      ]);
-    });
+    await claude.received(1);
+    // The task, once more: the first send since the switch, carrying the worker's handoff, or
+    // saying none was written (B11a C7).
+    expect(claude.sent.map(({ text }) => text)).toEqual([
+      expect.stringMatching(
+        /^\[corrallm\] corrallm switched this agent to Claude Code · Terminal, [^\n]+\n\nSay hello\n\n\[corrallm\] No handoff was written: its context never reached 95%\.$/,
+      ),
+    ]);
     const usage = JSON.parse(await readFile(path.join(profile, 'usage.json'), 'utf8')) as {
       exhausted: Record<string, { resetsAt: number }>;
     };
@@ -183,18 +247,21 @@ describe('the fallback chain through the core', () => {
     ]);
     // Your Save writes it: corrallm never saves the file, which shows the canvas edited.
     expect(JSON.parse(await readFile(file, 'utf8'))).toEqual(FILE);
-    await vi.waitFor(async () => {
-      const listed = await core.call('canvas.list', {}, CALLERS.you);
-      expect(listed).toMatchObject({
-        ok: true,
-        value: { items: [expect.objectContaining({ canvas: CANVAS, edited: true })] },
-      });
-    });
+    await vi.waitFor(
+      async () => {
+        const listed = await core.call('canvas.list', {}, CALLERS.you);
+        expect(listed).toMatchObject({
+          ok: true,
+          value: { items: [expect.objectContaining({ canvas: CANVAS, edited: true })] },
+        });
+      },
+      { timeout: 5000 },
+    );
   });
 
   it('carries a party’s message waiting for the worker to Claude Code, telling the sender whose turn failed', async () => {
-    const codex = held('codex');
-    const claude = held('claude-code');
+    const codex = heldConnector('codex');
+    const claude = heldConnector('claude-code');
     const core = await start(codex.connector, claude.connector);
     await core.engines.open(CANVAS);
     const first = await core.call(
@@ -203,19 +270,20 @@ describe('the fallback chain through the core', () => {
       ORCHESTRATOR,
     );
     expect(first.ok).toBe(true);
-    await vi.waitFor(() => {
-      expect(codex.sent).toHaveLength(1);
-    });
+    await codex.received(1);
+    expect(codex.sent).toHaveLength(1);
     codex.end(LIMIT(Date.now() + 60 * 60_000));
     const messages = await core.engines.messagesOf(CANVAS);
-    await vi.waitFor(() => {
-      expect(messages.all().some((message) => message.turn?.reason === 'usage-limit')).toBe(true);
-    });
+    await vi.waitFor(
+      () => {
+        expect(messages.all().some((message) => message.turn?.reason === 'usage-limit')).toBe(true);
+      },
+      { timeout: 5000 },
+    );
     // The next goes to Claude Code, once corrallm switched the worker.
     await core.call('message', { canvas: CANVAS, to: 'worker', body: 'Then this' }, ORCHESTRATOR);
-    await vi.waitFor(() => {
-      expect(claude.sent).toHaveLength(1);
-    });
+    await claude.received(1);
+    expect(claude.sent).toHaveLength(1);
     // Framed as the party's, after corrallm's switch line, before what it carries (B11a C7).
     expect(claude.sent[0]?.text).toMatch(
       /^\[corrallm\] corrallm switched this agent to [^\n]+\n\n\[corrallm\] Message from "orchestrator" [^\n]+\nThen this\n\n\[corrallm\] No handoff was written: its context never reached 95%\.$/,
@@ -231,8 +299,8 @@ describe('the fallback chain through the core', () => {
   });
 
   it('shows the chain in the session summary, agents and status: where it is, and switching', async () => {
-    const codex = held('codex');
-    const claude = held('claude-code');
+    const codex = heldConnector('codex');
+    const claude = heldConnector('claude-code');
     const core = await start(codex.connector, claude.connector);
     const engine = await core.engines.open(CANVAS);
     const views = async () =>
@@ -248,22 +316,19 @@ describe('the fallback chain through the core', () => {
       );
     expect(await views()).toEqual(Array(3).fill({ step: null, steps: 1, back: 'stay' }));
     engine.run.start();
-    await vi.waitFor(() => {
-      expect(codex.sent).toHaveLength(1);
-    });
+    await codex.received(1);
+    expect(codex.sent).toHaveLength(1);
     // Your own message, typed as the task goes, is the turn its switch waits for.
     await core.call('message', { canvas: CANVAS, to: 'worker', body: 'Mine' }, CALLERS.you);
     codex.end(LIMIT(Date.now() + 60 * 60_000));
-    await vi.waitFor(() => {
-      expect(codex.sent).toHaveLength(2);
-    });
+    await codex.received(2);
+    expect(codex.sent).toHaveLength(2);
     expect(await views()).toEqual(
       Array(3).fill({ step: null, steps: 1, back: 'stay', switching: true }),
     );
     codex.end({ status: 'completed', reason: 'completed' });
-    await vi.waitFor(() => {
-      expect(claude.sent).toHaveLength(1);
-    });
+    await claude.received(1);
+    expect(claude.sent).toHaveLength(1);
     expect(await views()).toEqual(
       Array(3).fill({
         step: 0,
@@ -275,22 +340,20 @@ describe('the fallback chain through the core', () => {
   });
 
   it('keeps the switch across a restart, and switches nothing again: the held task waits for you', async () => {
-    const codex = held('codex');
-    const claude = held('claude-code');
+    const codex = heldConnector('codex');
+    const claude = heldConnector('claude-code');
     let core = await start(codex.connector, claude.connector);
     let engine = await core.engines.open(CANVAS);
     engine.run.start();
-    await vi.waitFor(() => {
-      expect(codex.sent).toHaveLength(1);
-    });
+    await codex.received(1);
+    expect(codex.sent).toHaveLength(1);
     codex.end(LIMIT(Date.now() + 60 * 60_000));
-    await vi.waitFor(() => {
-      expect(claude.sent).toHaveLength(1);
-    });
+    await claude.received(1);
+    expect(claude.sent).toHaveLength(1);
     await core.close();
     cores.splice(0);
-    const after = held('claude-code');
-    core = await start(held('codex').connector, after.connector);
+    const after = heldConnector('claude-code');
+    core = await start(heldConnector('codex').connector, after.connector);
     engine = await core.engines.open(CANVAS);
     expect(worker(core)).toMatchObject({ adapter: 'claude-code', fallback: { on: { step: 0 } } });
     // The continuation was in flight: restored uncertain, never sent again.

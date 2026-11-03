@@ -4,6 +4,7 @@ import type { MouseEvent as ReactMouseEvent, ReactNode, RefObject } from 'react'
 
 import type { AdapterId } from '../../shared/adapter';
 import type { SettingsOptions } from '../../shared/session';
+import { FallbackMark } from '../agent/Fallback';
 import { AgentSettingsSummary } from '../agent/AgentSettings';
 import { BranchControls } from '../workspaces/BranchReview';
 import { WorkspaceBadge } from '../workspaces/Workspace';
@@ -589,6 +590,7 @@ function LaneCells({
           <span className="queues-control-state">{queueControlText(run, id)}</span>
         )}
         <WorkspaceBadge agent={id} />
+        <FallbackMark agent={id} />
         <BranchControls agent={id} />
         {needsYou === 'switch' && ask?.refusal && (
           <div className="queues-refused" role="group" aria-label={`${name(id)} needs you`}>

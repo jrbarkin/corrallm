@@ -201,9 +201,10 @@ export function mentionRefusal(
   };
 }
 
-/** Every text an ask sends its recipient: each question's header and words, each option's. */
+/** Every text an ask sends its recipient: each question's id, header and words, each option's. */
 export function askTexts(questions: readonly AskQuestion[]): string[] {
   return questions.flatMap((question) => [
+    question.id,
     question.header,
     question.text,
     ...question.options.flatMap(({ label, description }) =>

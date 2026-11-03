@@ -634,11 +634,10 @@ export const MIGRATIONS: readonly Migration[] = [
   },
   {
     // B21's durable asks (B21 Design §9.2 C6): an ask is a message, of kind `prompt`, whose
-    // questions and deadline this column keeps, as an answer's keeps its answers. A column only,
-    // so it keeps the oldest schema that may read the database: a corrallm of schema 6 still reads
-    // and writes its own columns (each by name), leaving this one as it is.
+    // questions and deadline this column keeps, as an answer's keeps its answers. Reader 9 keeps
+    // the ask's ownership, waiting state and framed answer throughout its lifetime.
     version: 9,
-    minReader: 6,
+    minReader: 9,
     sql: `
       -- On an ask's row: its questions (bounded, never secret), its deadline, whether it was sent
       -- to the asker's manager, and its task; on an answer's row: the ask it answers, and the
@@ -648,11 +647,10 @@ export const MIGRATIONS: readonly Migration[] = [
   },
   {
     // B21's completions (B21 Design §9.2 C8): a task's result is a message, of kind `result`, from
-    // its agent to corrallm, whose verdict this column keeps. A column only, so it keeps the oldest
-    // schema that may read the database: a corrallm of schema 6 still reads and writes its own
-    // columns (each by name), leaving this one as it is.
+    // its agent to corrallm, whose verdict this column keeps. Reader 10 preserves that fixed
+    // report when judging or recovering the attempt.
     version: 10,
-    minReader: 6,
+    minReader: 10,
     sql: `
       -- On a result record: the outcome its agent reported of its task's attempt (succeeded or
       -- failed) and its summary, in the agent's own words (at most 4 KiB). None for every other
@@ -662,10 +660,10 @@ export const MIGRATIONS: readonly Migration[] = [
   },
   {
     // B21's loop breaker (B21 Design §9.2 C9): how many turns two agents have passed between them
-    // since the user last spoke to either. Only a table is added, so a corrallm of schema 6 to 10
-    // reads everything it knows as it was and never writes this one, so it may still open it.
+    // since the user last spoke to either. A corrallm without the breaker would send a turn it
+    // holds, so none older may open the database once this ran (Claude's decision, Nov 2).
     version: 11,
-    minReader: 6,
+    minReader: 11,
     sql: `
       -- One row per pair of agents of a canvas while it counts turns (turns > 0): the two agents'
       -- ids, ordered (a before b, by their UTF-8 bytes), and the turns delivered between them

@@ -17,6 +17,7 @@ import type {
 } from '../../shared/api/topics';
 import { isRuntimeTopic, topicRequest } from '../../shared/api/topics';
 import type { CanvasId } from '../../shared/canvas';
+import type { AgentData } from '../../shared/model/canvas';
 import type { SessionAction } from './engine/transcript/reduce';
 import type { Entry, Session } from '../../shared/model/session';
 import { MESSAGE_ORIGINS } from '../../shared/model/messages';
@@ -223,6 +224,8 @@ interface CanvasSource {
   action?: { agent: string; action: SessionAction };
   /** Each agent's session as the store last said, for a change no action says. */
   seen: Map<string, Session>;
+  /** Authored inputs a summary reads, independent of queue, position and label edits. */
+  summaryData: Map<string, AgentData>;
 }
 
 function fresh(): CanvasSource['dirty'] {
@@ -336,7 +339,25 @@ export class RuntimeSource {
   documentChanged(canvas: CanvasId): void {
     const source = this.#canvases.get(canvas);
     if (!source?.attached) return;
-    source.dirty.summaries = 'all';
+    const next = new Map<string, AgentData>();
+    for (const node of source.attached.open.document.nodes) {
+      if (node.type !== 'agent') continue;
+      const was = source.summaryData.get(node.id);
+      const now = node.data;
+      next.set(node.id, now);
+      if (
+        source.dirty.summaries !== 'all' &&
+        (was === undefined ||
+          was.adapter !== now.adapter ||
+          was.connection !== now.connection ||
+          was.fallback !== now.fallback ||
+          was.handoff !== now.handoff)
+      )
+        source.dirty.summaries.add(node.id);
+    }
+    if (source.dirty.summaries !== 'all')
+      for (const id of source.summaryData.keys()) if (!next.has(id)) source.dirty.summaries.add(id);
+    source.summaryData = next;
     for (const agent of source.session.keys()) {
       if (
         !source.attached.open.document.nodes.some(
@@ -526,7 +547,13 @@ export class RuntimeSource {
     if (!open) return;
     let source = this.#canvases.get(canvas);
     const again = source !== undefined;
-    source ??= { canvas, session: new Map(), dirty: fresh(), seen: new Map() };
+    source ??= {
+      canvas,
+      session: new Map(),
+      dirty: fresh(),
+      seen: new Map(),
+      summaryData: new Map(),
+    };
     this.#canvases.set(canvas, source);
     source.attached?.stop();
     const it = source;
@@ -559,6 +586,11 @@ export class RuntimeSource {
       },
     };
     source.seen = new Map(Object.entries(engine.sessions.snapshot()));
+    source.summaryData = new Map(
+      open.document.nodes.flatMap((node) =>
+        node.type === 'agent' ? [[node.id, node.data] as const] : [],
+      ),
+    );
     if (again) {
       // Reopened: what changed while it was closed is said from what was last published.
       source.dirty = { ...fresh(), run: true, summaries: 'all', touched: true };
