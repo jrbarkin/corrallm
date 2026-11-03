@@ -661,7 +661,7 @@ export const MIGRATIONS: readonly Migration[] = [
   {
     // B21's loop breaker (B21 Design §9.2 C9): how many turns two agents have passed between them
     // since the user last spoke to either. A corrallm without the breaker would send a turn it
-    // holds, so none older may open the database once this ran (Claude's decision, Nov 2).
+    // holds, so none older may open the database once this ran (decided Nov 2).
     version: 11,
     minReader: 11,
     sql: `
