@@ -140,7 +140,8 @@ export const codex: Adapter = {
         prompts: { approval: 'seen', question: 'none', plan: 'none', form: 'none' },
         signals: false,
         context: false,
-        api: null,
+        // corrallm's agent API: the session's -c entry and shell policy (recorded on 0.162.1).
+        api: 'http',
         // Its command line starts it in Read only (-s, -a); Default is the user's own config, and
         // Plan is chosen in its terminal.
         startModes: ['read-only'],
@@ -167,7 +168,8 @@ export const codex: Adapter = {
         },
         signals: false,
         context: true,
-        api: null,
+        // corrallm's agent API: the private app server's -c entry and shell policy (0.162.1).
+        api: 'http',
         startModes: ['read-only', 'auto', 'plan'],
         live: { effort: true, stopTask: false },
         panels: {},

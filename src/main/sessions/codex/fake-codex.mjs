@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // A stand-in for the `codex` CLI, for tests: `codex --version`, and `codex app-server`, which
 // speaks the app server's JSON-RPC over stdio in the shapes the real one uses (Codex CLI 0.160.1:
-// see app-server/fixtures/), without a model. It refuses requests before `initialized`, and
+// see app-server/fixtures/; it says it is 0.162.1, the version its MCP entry was recorded with),
+// without a model. It refuses requests before `initialized`, and
 // requests without params, as the real one does.
 //
 // A turn reasons (a summary, streamed), then replies "You said: <text>" (streamed), and reports
@@ -45,7 +46,7 @@ import { spawn } from 'node:child_process';
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { createInterface } from 'node:readline';
 
-const VERSION = '0.160.1';
+const VERSION = '0.162.1';
 const args = process.argv.slice(2);
 const nativeConfig =
   args.some(
@@ -493,7 +494,11 @@ async function turn(thread, turnId, input, { review, compact } = {}) {
     items.push(done);
     if (!accepted) return finish('interrupted');
   }
-  let said = planned?.reply ?? `You said: ${text}`;
+  // Its scripted calls to corrallm's tools (FAKE_MCP_SCRIPT), made in this turn over its entry.
+  const scripted = process.env.FAKE_MCP_SCRIPT
+    ? await (await import('../fake-mcp-client.mjs')).scriptedTurn(apiClient, text)
+    : undefined;
+  let said = scripted ?? planned?.reply ?? `You said: ${text}`;
   if (wanted.startsWith('ask')) {
     const many = wanted.startsWith('ask many');
     const { id, answer } = await ask('item/tool/requestUserInput', {
@@ -1053,8 +1058,9 @@ createInterface({ input: process.stdin }).on('line', (line) => {
     const token = entry && process.env[entry.bearer_token_env_var];
     if (entry?.enabled !== false && token && entry.url)
       apiReady = (async () => {
-        const { connectHttp } = await import('../fake-mcp-client.mjs');
+        const { connectHttp, logConnected } = await import('../fake-mcp-client.mjs');
         apiClient = await connectHttp({ url: entry.url, token });
+        logConnected(token);
         await apiClient.list();
         if (process.env.FAKE_CODEX_MCP_CALL)
           await apiClient.call(process.env.FAKE_CODEX_MCP_CALL, {});

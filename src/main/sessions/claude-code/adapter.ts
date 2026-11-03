@@ -118,7 +118,8 @@ export const claudeCode: Adapter = {
         prompts: { approval: 'seen', question: 'seen', plan: 'seen', form: 'none' },
         signals: false,
         context: true,
-        api: null,
+        // corrallm's agent API: the session's own --mcp-config entry (recorded on 2.1.316).
+        api: 'http',
         startModes: START_MODES,
         live: { effort: false, stopTask: false },
         panels: {},
@@ -147,7 +148,8 @@ export const claudeCode: Adapter = {
         // Claude Code 2.1.311 (sdk/fixtures/ask-rule.jsonl, safety-check.jsonl): B13 C4.
         signals: true,
         context: true,
-        api: null,
+        // corrallm's agent API: its host-registered channel (recorded on SDK 0.3.306).
+        api: 'channel',
         startModes: START_MODES,
         live: { effort: true, stopTask: true },
         panels: {

@@ -31,8 +31,11 @@ function declared(session: object) {
 }
 
 describe("Codex's adapter", () => {
-  it('keeps the agent API unavailable on every connection until its evidence gate opens', () => {
-    for (const one of descriptor.connections) expect(one).toHaveProperty('api', null);
+  it('routes the agent API over http on both connections, as recorded (B21 C7)', () => {
+    // Each takes the session's -c entry, its bearer from CORRALLM_SESSION_TOKEN, and the per-key
+    // shell policy that keeps the token out of the agent's shell and Codex's files, recorded with
+    // Codex 0.162.1 (app-server/ and terminal/ fixtures/mcp-entry.json, mcp-shell-policy.json).
+    for (const one of descriptor.connections) expect(one.api).toBe('http');
   });
 
   it('declares context on the App Server alone: its Terminal knows no window in production', () => {

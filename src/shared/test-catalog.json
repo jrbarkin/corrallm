@@ -193,7 +193,7 @@
           },
           "signals": false,
           "context": true,
-          "api": null,
+          "api": "http",
           "startModes": [
             "manual",
             "acceptEdits",
@@ -227,7 +227,7 @@
           },
           "signals": true,
           "context": true,
-          "api": null,
+          "api": "channel",
           "startModes": [
             "manual",
             "acceptEdits",
@@ -494,7 +494,7 @@
           },
           "signals": false,
           "context": false,
-          "api": null,
+          "api": "http",
           "startModes": [
             "read-only"
           ],
@@ -524,7 +524,7 @@
           },
           "signals": false,
           "context": true,
-          "api": null,
+          "api": "http",
           "startModes": [
             "read-only",
             "auto",

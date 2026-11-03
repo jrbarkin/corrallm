@@ -6,7 +6,7 @@
 // placeholder and the cursor in it, and the hooks it was given with -c, run as Codex runs them
 // (the user's shell, the event on stdin), but only if trusted as Codex trusts them (hooks.state;
 // else it stops at "Hooks need review"). It asks to trust the folder unless told it is trusted.
-// `codex --version` says 0.160.1, and `codex app-server` lists its hooks (hooks/list), says
+// `codex --version` says 0.162.1 (the version its MCP entry was recorded with), and `codex app-server` lists its hooks (hooks/list), says
 // its usage limits (account/rateLimits/read: the RateLimitSnapshot in .fake-codex-usage.json in
 // the folder it runs in, or, without one, that it has none), lists two models (model/list) and
 // says the user's config (config/read: GPT-6.1-Sol at max effort, no sandbox or approvals set),
@@ -24,7 +24,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } fr
 import path from 'node:path';
 import { createInterface } from 'node:readline';
 
-const VERSION = '0.160.1';
+const VERSION = '0.162.1';
 const argv = process.argv.slice(2);
 if (argv[0] === '--version') {
   process.stdout.write(`codex-cli ${VERSION}\n`);
@@ -80,16 +80,25 @@ const nativeConfig =
         JSON.parse(process.env.FAKE_CODEX_CONFIG ?? '{}'),
       )
     : { config: {}, origins: {} };
+// Its session's corrallm entry (-c, its bearer from the variable it names), connected and listed as
+// it starts; a turn's scripted calls (FAKE_MCP_SCRIPT) go through it.
+const mcp = await import('../src/main/sessions/fake-mcp-client.mjs');
+let api;
 if (argv[0] !== 'app-server') {
   const entry = nativeConfig.config.mcp_servers?.corrallm;
   const token = entry && process.env[entry.bearer_token_env_var];
   if (entry?.enabled !== false && entry?.url && token) {
-    const { connectHttp } = await import('../src/main/sessions/fake-mcp-client.mjs');
-    const api = await connectHttp({ url: entry.url, token });
-    await api.list();
-    if (process.env.FAKE_MCP_TOOL) await api.call(process.env.FAKE_MCP_TOOL, {});
+    try {
+      api = await mcp.connectHttp({ url: entry.url, token });
+      mcp.logConnected(token);
+      await api.list();
+      if (process.env.FAKE_MCP_TOOL) await api.call(process.env.FAKE_MCP_TOOL, {});
+    } catch (error) {
+      mcp.logScripted({ event: 'connect-failed', error: String(error?.message ?? error) });
+      api = undefined;
+    }
     process.once('exit', () => {
-      void api.close();
+      void api?.close();
     });
   }
 }
@@ -192,7 +201,17 @@ function runTui() {
     out('\x1b[?1049l\x1b[?2004l');
     process.exit(code);
   }
-  for (const signal of ['SIGHUP', 'SIGTERM']) process.on(signal, () => quit(0));
+  for (const signal of ['SIGHUP', 'SIGTERM']) {
+    process.on(signal, () => {
+      // A test that logs its calls also learns whether this session's credential still works as
+      // it closes (its close revoked it first).
+      if (process.env.FAKE_MCP_LOG && api !== undefined) {
+        void mcp.closingCall(api).finally(() => {
+          quit(0);
+        });
+      } else quit(0);
+    });
+  }
 
   /** Runs a hook as Codex does: the user's shell, the event on stdin; waits for it. */
   function hook(event, fields = {}) {
@@ -295,15 +314,17 @@ function runTui() {
       return;
     }
     if (prompt.startsWith('slow')) return;
-    setTimeout(() => void finish(prompt), 300);
+    // Its scripted calls to corrallm's tools, made in this turn; their rule's reply ends it.
+    const scripted = await mcp.scriptedTurn(api, prompt);
+    setTimeout(() => void finish(prompt, scripted), 300);
   }
 
-  async function finish(prompt) {
+  async function finish(prompt, scripted) {
     if (state !== 'working') return;
     if (prompt.startsWith('fail')) {
       lines.push('■ You’ve hit your usage limit.');
     } else {
-      const reply = `You said: ${prompt}`;
+      const reply = scripted ?? `You said: ${prompt}`;
       lines.push(`• ${reply}`);
       await hook('Stop', {
         turn_id: turnId,

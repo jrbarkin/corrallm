@@ -66,11 +66,11 @@ const SDK_ENTRY: Status = {
 };
 
 describe("Claude Code · Agent SDK's corrallm entry (B21 C10)", () => {
-  it('keeps api null until the connection is turned on, and records its versions', () => {
+  it('turns api on over its channel on this recording (C7), and records its versions', () => {
     const connection = claudeCode.descriptor.connections.find(
       (one) => one.id === 'claude-code.sdk',
     );
-    expect((connection as { api?: unknown } | undefined)?.api ?? null).toBeNull();
+    expect(connection?.api).toBe('channel');
     expect(fixture.recordedWith).toEqual({
       ...fixture.recordedWith,
       claude: '2.1.316',

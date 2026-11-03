@@ -1,4 +1,5 @@
 import type { SessionApi } from '../connector';
+import { MIN_API_CODEX_VERSION, versionAtLeast } from './codex';
 import { askAppServer, startAppServer } from './rpc';
 import type { AppServerOptions } from './rpc';
 import { folderTrust } from './terminal/hooks';
@@ -151,11 +152,15 @@ export async function prepareApi(
   const read = (args: string[]) =>
     askAppServer(
       { ...base, args },
-      (server) => server.request('config/read', { cwd: context.cwd, includeLayers: true }),
+      async (server) => ({
+        version: server.version,
+        config: await server.request('config/read', { cwd: context.cwd, includeLayers: true }),
+      }),
       { start, ms: 15_000, slow: REASON },
     );
   try {
-    const original = record(record(await read(['-c', folderTrust(context.cwd)]))?.config);
+    const first = await read(['-c', folderTrust(context.cwd)]);
+    const original = record(record(first.config)?.config);
     const servers = record(original?.mcp_servers);
     if (original === undefined || servers === undefined) {
       // An absent table is empty; an unreadable config is not.
@@ -167,8 +172,24 @@ export async function prepareApi(
     }
     disabled = api.off.filter((name) => servers !== undefined && Object.hasOwn(servers, name));
     off = disabled.flatMap((name) => ['-c', `mcp_servers.${name}.enabled=false`]);
+    // Only on the recorded version or later: an older Codex starts without the entry or bearer.
+    const version = first.version;
+    if (version === undefined || !versionAtLeast(version, MIN_API_CODEX_VERSION)) {
+      const which =
+        version !== undefined && /^\d+\.\d+\.\d+[0-9A-Za-z.+-]{0,24}$/.test(version)
+          ? `Codex ${version}`
+          : 'an unknown version of Codex';
+      return {
+        args: off,
+        off,
+        disabled,
+        env,
+        available: false,
+        reason: `This is ${which}; corrallm’s tools need Codex ${MIN_API_CODEX_VERSION} or later, so this session started without them.`,
+      };
+    }
     const args = [...off, ...entryArgs(api)];
-    const effective = await read(['-c', folderTrust(context.cwd), ...args]);
+    const effective = (await read(['-c', folderTrust(context.cwd), ...args])).config;
     if (
       !entryIsCurrent(effective, apiEntry(api)) ||
       !shellIsCurrent(effective) ||

@@ -282,9 +282,11 @@ test('a new canvas agent defaults to real Claude Code in its Terminal, without a
 
   // Claude Code itself: in the folder, as a terminal, reporting to corrallm's hooks.
   await expect.poll(starts).toHaveLength(1);
-  const [args] = await starts();
-  expect(args?.[0]).toBe('--settings');
-  expect(args?.[2]).toBe('--session-id');
+  const [args = []] = await starts();
+  // Its session's own corrallm entry first (B21 C7: agent-api.e2e.ts runs it), then its settings.
+  expect(args[0]).toMatch(/^--mcp-config=.+mcp\.json$/);
+  expect(args[1]).toBe('--settings');
+  expect(args[3]).toBe('--session-id');
   const [start] = await logged();
   expect(start).toMatchObject({ cwd: realpathSync(folder), term: 'xterm-256color' });
 
@@ -772,8 +774,8 @@ test('resumes the agent’s session after the app restarts', async () => {
   await page.getByRole('button', { name: 'Back to the canvas' }).click();
   await page.keyboard.press('ControlOrMeta+s');
   await expect(page.getByText('team.corral')).toBeVisible();
-  const [first] = await starts();
-  const id = first?.[3] ?? '';
+  const [first = []] = await starts();
+  const id = first[first.indexOf('--session-id') + 1] ?? '';
 
   // Quitting ends Claude Code first.
   await closeApp();
