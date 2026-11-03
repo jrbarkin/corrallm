@@ -78,6 +78,11 @@ export interface AsksDeps {
    * the asks of one that doesn't, and its continuations still to come, are withdrawn (`sweep`).
    */
   running: (task: TaskMessage) => boolean;
+  /**
+   * B21 C6: you gave these agents input (the loop breaker's reset): in memory at once, on disk
+   * with the write that holds the answer, dismissal or reply that was it.
+   */
+  heard: (agents: readonly string[]) => void;
 }
 
 /** An ask's answer: the answers by question id, or the text that answered it. */
@@ -369,6 +374,8 @@ export class Asks {
       'answer',
       answer,
     );
+    // Your answer is input to its asker and to the agent it was asked of (B21 C6).
+    if (by === 'you') this.#heard(ask.from, ask.to);
     await this.#saved('answer');
     if (row === undefined) throw new Error('An answer makes a row.');
     return row;
@@ -378,6 +385,7 @@ export class Asks {
   async dismiss(need: string): Promise<Message | undefined> {
     const ask = this.#openOrGone(need);
     const record = this.#settle(ask, { type: 'dismissed' }, 'you', 'record');
+    this.#heard(ask.from);
     await this.#saved('dismissal');
     return record;
   }
@@ -386,6 +394,7 @@ export class Asks {
   async dismissMessage(need: string): Promise<void> {
     const message = this.#waitingOn(need);
     this.#deps.store.update(message.id, { state: 'answered', by: 'you' });
+    this.#heard(message.from);
     await this.#saved('dismissal');
   }
 
@@ -411,6 +420,7 @@ export class Asks {
       );
     }
     store.update(message.id, { state: 'answered', by: 'you' });
+    this.#heard(message.from);
     if (agent !== undefined) return this.#deps.sendYours(agent, text, message.id);
     const reply = store.add({
       from: 'you',
@@ -739,6 +749,11 @@ export class Asks {
       text: { placeholder: 'Reply' },
       answerIn: 'api',
     };
+  }
+
+  /** You gave these parties input: those that are agents start their pairs again (B21 C6). */
+  #heard(...parties: PartyId[]): void {
+    this.#deps.heard(parties.flatMap((party) => agentOf(party) ?? []));
   }
 
   /** The agents on the canvas now. */

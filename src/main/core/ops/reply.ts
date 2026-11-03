@@ -363,6 +363,26 @@ export function replyOps({
     },
   };
 
+  // B21 C6: two agents held after ten turns between them without you: Go on, yours alone. No token
+  // sees it (it names no agent they reach), and a call that got here is refused all the same.
+  const loop: ReplyHandler = {
+    prefixes: ['loop'],
+    current: (canvas, to) => engines.canvas(canvas)?.delivery.loopItem(to),
+    act: async (canvas, item, _answer, ctx) => {
+      if (ctx.caller.kind !== 'human') {
+        throw new OpFailure('human-only', 'Only the user lets agents that looped go on.');
+      }
+      const open = engines.canvas(canvas);
+      if (open === undefined) throw notFound(item.id);
+      try {
+        await open.delivery.goOn(item.id);
+        return { outcome: 'answered' };
+      } catch (error) {
+        return asOp(error);
+      }
+    },
+  };
+
   // Without the runtime's handlers, what it asks is answered in corrallm's window.
   const window: ReplyHandler = {
     prefixes: ['hold', 'start', 'unasking', 'limited', 'prompt'],
@@ -377,16 +397,20 @@ export function replyOps({
       ),
   };
 
-  const router = new ReplyRouter([
-    proposal,
-    review,
-    silent,
-    setup,
-    ask,
-    message,
-    ...(workspaceReplies ?? []),
-    ...(replies ?? [window]),
-  ]);
+  const router = new ReplyRouter(
+    [
+      proposal,
+      review,
+      silent,
+      setup,
+      ask,
+      message,
+      loop,
+      ...(workspaceReplies ?? []),
+      ...(replies ?? [window]),
+    ],
+    (canvas, agent) => engines.canvas(canvas)?.delivery.hear([agent]) ?? Promise.resolve(),
+  );
 
   const answer = (
     args: { canvas?: string | undefined; to: string; answer: Answer },

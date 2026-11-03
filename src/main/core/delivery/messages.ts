@@ -229,6 +229,11 @@ export class MessageStore {
   #queued: Promise<void> | undefined;
   /** What its canvas writes with its changes, within the same write. */
   #alongside: (() => () => void) | undefined;
+  /**
+   * What is written with its changes in every write that holds them, whoever makes it (B21 C6: the
+   * loop breaker's counts, which a turn journaled as delivering is counted in).
+   */
+  #companion: (() => () => void) | undefined;
   /** Why the store journals nothing, if it can't. */
   #unjournaled: string | undefined;
   /** Whether anything changed that wasn't journaled, as the store journals nothing. */
@@ -498,6 +503,15 @@ export class MessageStore {
   }
 
   /**
+   * What every write that holds this store's changes writes with them, within the same write
+   * (none: nothing): `companion` writes it, and returns what marks it on disk once the write's
+   * commit returned.
+   */
+  writeAlso(companion: (() => () => void) | undefined): void {
+    this.#companion = companion;
+  }
+
+  /**
    * Resolves once every change so far is on disk, with what its canvas writes with it; rejects if
    * it couldn't be.
    */
@@ -545,7 +559,9 @@ export class MessageStore {
       if (kept) this.#table.keep(kept);
       else this.#table.forget(id);
     }
+    const also = this.#companion?.();
     return () => {
+      also?.();
       for (const [id, change] of written) {
         if (this.#changed.get(id) === change) this.#changed.delete(id);
       }

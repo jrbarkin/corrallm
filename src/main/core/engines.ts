@@ -31,6 +31,8 @@ import { Delivery, HANDOFF_CARRIED } from './delivery/delivery';
 import { mailboxTasks } from './delivery/tasks';
 import { HandoffStore } from './delivery/handoffs';
 import type { HandoffTable } from './delivery/handoffs';
+import { LoopStore } from './delivery/loops';
+import type { LoopTable } from './delivery/loops';
 import { capBody, MessageStore, sentByRun } from './delivery/messages';
 import type { MessageTable } from './delivery/messages';
 import { WithdrawalNotes } from './delivery/withdrawals';
@@ -93,6 +95,8 @@ export interface EnginesDeps {
   messages: MessageTable;
   /** Every canvas's agents' latest handoffs, in the profile's database (B11a C7). */
   handoffs: HandoffTable;
+  /** Every canvas's loop breaker counts, in the profile's database (B21 C6). */
+  loops: LoopTable;
   /** The profile's database, whose commits hold what changes together. */
   store: Pick<Database, 'write'>;
   usage: Pick<UsageReadings, 'state' | 'subscribe' | 'exhaust' | 'exhausted'>;
@@ -170,6 +174,8 @@ export interface OpenCanvas {
   messages: MessageStore;
   /** Its agents' latest handoffs (B11a C7). */
   handoffs: HandoffStore;
+  /** The turns delivered between its pairs of agents since you last spoke to either (B21 C6). */
+  loops: LoopStore;
   delivery: Delivery;
   /** Where each party's `wait` has read to in its messages. */
   reads: ReadPositions;
@@ -268,7 +274,12 @@ export class Engines {
   readonly #canvases = new Map<CanvasId, Running>();
   readonly #mail = new Map<
     CanvasId,
-    Promise<{ messages: MessageStore; notes: WithdrawalNotes; handoffs: HandoffStore }>
+    Promise<{
+      messages: MessageStore;
+      notes: WithdrawalNotes;
+      handoffs: HandoffStore;
+      loops: LoopStore;
+    }>
   >();
   readonly #watchers = new Set<Watcher>();
   readonly #events = new Map<string, Promise<void>>();
@@ -1001,11 +1012,12 @@ export class Engines {
     const { document } = await documents.review(canvas);
     if (context.checkpoint) Engine.check(context.checkpoint);
     const listeners: Running['listeners'] = new Set();
-    const { messages, handoffs } = await this.#mailOf(canvas);
+    const { messages, handoffs, loops } = await this.#mailOf(canvas);
     const warnings: readonly string[] = [
       context.warning,
       messages.warning,
       handoffs.warning,
+      loops.warning,
     ].filter((one) => one !== undefined);
     // B11a C7: the handoffs of agents no longer on the canvas go as it opens.
     handoffs.prune(
@@ -1014,6 +1026,11 @@ export class Engines {
     await handoffs.durable().catch((error: unknown) => {
       console.error('Could not forget the handoffs of agents no longer on the canvas:', error);
     });
+    // B21 C6: and the loop counts of pairs with one of them.
+    loops.prune(new Set(document.nodes.flatMap(({ id, type }) => (type === 'agent' ? [id] : []))));
+    await loops.durable().catch((error: unknown) => {
+      console.error('Could not forget the loop counts of agents no longer on the canvas:', error);
+    });
     // The engine and what journals it need each other.
     const running = {
       get document() {
@@ -1021,6 +1038,7 @@ export class Engines {
       },
       messages,
       handoffs,
+      loops,
       warnings,
       unwatch: messages.subscribe((message) => {
         for (const watcher of this.#watchers) watcher.message?.(message);
@@ -1052,6 +1070,8 @@ export class Engines {
         for (const one of done) one();
       };
     });
+    // A turn journaled as delivering is counted in that same write, whoever makes it (B21 C6).
+    messages.writeAlso(() => loops.changes());
     const engine: Engine = new Engine({
       catalog: this.#deps.engineCatalog,
       backend: this.#backend(canvas, listeners),
@@ -1104,6 +1124,7 @@ export class Engines {
       canvas,
       engine,
       store: messages,
+      loops,
       nodes: () => running.document.nodes,
       usage: this.#deps.usage,
       now: () => Date.now(),
@@ -1196,9 +1217,12 @@ export class Engines {
     return running;
   }
 
-  #mailOf(
-    canvas: CanvasId,
-  ): Promise<{ messages: MessageStore; notes: WithdrawalNotes; handoffs: HandoffStore }> {
+  #mailOf(canvas: CanvasId): Promise<{
+    messages: MessageStore;
+    notes: WithdrawalNotes;
+    handoffs: HandoffStore;
+    loops: LoopStore;
+  }> {
     let mail = this.#mail.get(canvas);
     if (!mail) {
       mail = (async () => {
@@ -1206,6 +1230,8 @@ export class Engines {
         await messages.load();
         const handoffs = new HandoffStore(canvas, this.#deps.handoffs);
         handoffs.load();
+        const loops = new LoopStore(canvas, this.#deps.loops);
+        loops.load();
         // A decision a crash cut off as it was being made is unresolved, never made again.
         if (recoverDecisions(messages)) {
           await messages.durable().catch((error: unknown) => {
@@ -1216,6 +1242,7 @@ export class Engines {
           messages,
           notes: new WithdrawalNotes(messages, this.#deps.engineCatalog.shellPrefixes),
           handoffs,
+          loops,
         };
       })();
       this.#mail.set(canvas, mail);
@@ -1244,7 +1271,7 @@ export class Engines {
       const items = [
         ...needs(needsInput(running, this.#deps.locale)),
         // B21 C5, C6: its asks, and parties' messages to you.
-        ...running.delivery.asks.items(),
+        ...running.delivery.items(),
         ...(this.#deps.needs?.(running.document.id) ?? []),
       ];
       for (const item of items) {

@@ -120,9 +120,18 @@ export function said(text: string): boolean {
 
 export class ReplyRouter {
   readonly #handlers: readonly ReplyHandler[];
+  readonly #heard: ((canvas: CanvasId, agent: string) => Promise<void>) | undefined;
 
-  constructor(handlers: readonly ReplyHandler[]) {
+  /**
+   * `heard`: told, once your answer to a run hold or a session prompt of an agent was acted on, so
+   * that the loop breaker (B21 C6) counts it as your input to that agent.
+   */
+  constructor(
+    handlers: readonly ReplyHandler[],
+    heard?: (canvas: CanvasId, agent: string) => Promise<void>,
+  ) {
     this.#handlers = handlers;
+    this.#heard = heard;
   }
 
   /** Answers the item `to` on the canvas with `answer`, as `ctx`'s caller: how it was settled. */
@@ -167,7 +176,16 @@ export class ReplyRouter {
         `Only the user may choose ${choice.label}: ${choice.humanOnly}`,
       );
     }
-    return handler.act(id, item, answer, ctx);
+    const result = await handler.act(id, item, answer, ctx);
+    // Your answer to what an agent's run hold or session prompt waits on is input to that agent.
+    if (
+      by === 'you' &&
+      item.agent !== undefined &&
+      (item.kind === 'hold' || item.kind === 'prompt')
+    ) {
+      await this.#heard?.(id, item.agent);
+    }
+    return result;
   }
 }
 

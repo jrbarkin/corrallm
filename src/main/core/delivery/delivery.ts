@@ -2,7 +2,7 @@ import { endpointRefusal } from '../../../shared/model/catalog';
 import type { SessionAvailability } from '../../../shared/session';
 import { randomUUID } from 'node:crypto';
 
-import { MAX_WAITING } from '../../../shared/api/limits';
+import { LOOP_TURNS, MAX_NEED_ID, MAX_WAITING } from '../../../shared/api/limits';
 import type { AdapterId, ConnectionId } from '../../../shared/adapter';
 import type { CanvasId } from '../../../shared/canvas';
 
@@ -38,6 +38,8 @@ import {
 } from '../parties';
 import { answerFrame, askFrame, Asks, continuationFrame } from './asks';
 import { DeliveryError } from './errors';
+import { orderedPair } from './loops';
+import type { LoopStore, Pair } from './loops';
 import { capBody, sentByRun } from './messages';
 
 export { DeliveryError } from './errors';
@@ -58,13 +60,21 @@ import type { MessageStore } from './messages';
  * the turn ended: delivered to an agent as a turn, kept for anyone else to read, and never answered
  * by another reply. corrallm tells a sender once when its message waits on something (a pause, a
  * session that won't start, one that would act without asking, a usage window) or its turn waits
- * for you, and when it ends withdrawn or unresolved.
+ * for you, and when it ends withdrawn or unresolved. A turn between two agents is also counted as
+ * it is journaled (B21 C6, LoopStore): after ten without you, the eleventh and every later one of
+ * that pair wait for you, whatever else frees their agent, until you let them go on or speak to
+ * either agent.
  */
 
 export interface DeliveryDeps {
   canvas: CanvasId;
   engine: Engine;
   store: MessageStore;
+  /**
+   * B21 C6: the turns delivered between each pair of agents since you last spoke to either. A turn
+   * is counted in the write that journals it as delivering; the eleventh waits for you.
+   */
+  loops: LoopStore;
   /** The canvas's nodes now. */
   nodes: () => readonly CanvasNode[];
   usage: Pick<UsageReadings, 'exhausted'>;
@@ -160,6 +170,8 @@ interface Unstartable {
 /** What holds a message to an agent, if anything does. */
 type Hold =
   | { kind: 'busy' }
+  /** B21 C6: ten turns have passed between its pair without you: it waits for you. */
+  | { kind: 'loop' }
   | { kind: 'workspace'; sentence: string }
   | { kind: 'paused'; holding: PauseCause[] }
   | ({ kind: 'stuck' } & Unstartable)
@@ -294,6 +306,8 @@ export class Delivery {
   }
   /** What takes each message being delivered back from its agent's session, by the message's id. */
   readonly #sent = new Map<string, () => void>();
+  /** The pair each message journaled as delivering was counted in (B21 C6), by the message's id. */
+  readonly #counted = new Map<string, Pair>();
   /** The agents a message is being journaled for, before it is sent: nothing else starts meanwhile. */
   readonly #writing = new Set<string>();
   /** The messages sent whose records are on their way to disk: none goes before it is there. */
@@ -357,6 +371,9 @@ export class Delivery {
       waiting: (agent, from) => this.waitingFrom(agent, from),
       sendYours: (agent, body, replyTo) => this.send('you', agent, body, replyTo),
       running: (task) => this.#running(task),
+      heard: (agents) => {
+        this.heard(agents);
+      },
     });
     this.#stop = [deps.engine.sessions.subscribe(schedule), deps.engine.run.subscribe(schedule)];
   }
@@ -567,8 +584,140 @@ export class Delivery {
     ) {
       this.#defaults.delete(to);
     }
+    // B21 C6: what you send an agent, once it is on disk, is input to it: every pair holding it
+    // starts again from zero.
+    if (from === 'you') this.heard([to]);
     this.#pump();
+    if (from === 'you') await this.#savedLoops();
     return this.#deps.store.get(message.id) ?? message;
+  }
+
+  /**
+   * B21 C6: what waits for you on the canvas that delivery keeps: its asks and parties' messages
+   * to you, and the pairs of agents held for ten turns without you.
+   */
+  items(): NeedsItem[] {
+    return [...this.asks.items(), ...this.#holds().map(({ item }) => item)];
+  }
+
+  /** The pair hold `loop/<a>/<b>` names, as you see it in Needs, if it holds now. */
+  loopItem(need: string): NeedsItem | undefined {
+    return this.#holds().find(({ item }) => item.id === need)?.item;
+  }
+
+  /**
+   * B21 C6: you gave these agents input (a message, an answer, a decision, a dismissal or a reply):
+   * every pair holding one starts again from zero, and what it held goes. In memory at once; on
+   * disk with the next write, or `hear`.
+   */
+  heard(agents: readonly string[]): void {
+    let reset = false;
+    for (const agent of new Set(agents)) reset = this.#deps.loops.resetAgent(agent) || reset;
+    if (!reset) return;
+    this.schedule();
+    this.#deps.changed();
+  }
+
+  /** `heard`, and on disk once it resolves (a failed write is kept for the next, never fails you). */
+  async hear(agents: readonly string[]): Promise<void> {
+    this.heard(agents);
+    await this.#savedLoops();
+  }
+
+  /**
+   * You let a pair go on (`loop/<a>/<b>`, yours alone): it starts again from zero, and every
+   * message it held goes, in order. On disk before it resolves; throws a conflict if the pair isn't
+   * held now, and 'unavailable' if the reset can't be kept (it stands, but may not survive a
+   * restart).
+   */
+  async goOn(need: string): Promise<void> {
+    const held = this.#holds().find(({ item }) => item.id === need);
+    if (held === undefined)
+      throw new DeliveryError('conflict', `${need} is not holding any message now.`);
+    this.#deps.loops.resetPair(...held.pair);
+    this.schedule();
+    this.#deps.changed();
+    try {
+      await this.#deps.loops.durable();
+    } catch (error) {
+      throw new DeliveryError(
+        'unavailable',
+        `The pair goes on now, but that could not be saved and may not survive a restart (${threadTitle(error instanceof Error ? error.message : String(error), REASON)}).`,
+      );
+    }
+  }
+
+  /** Waits for the loop counts to reach the disk; a failure stays for the next write. */
+  async #savedLoops(): Promise<void> {
+    try {
+      await this.#deps.loops.durable();
+    } catch (error) {
+      console.error('Could not save the loop counts:', error);
+    }
+  }
+
+  /** The agents on the canvas now. */
+  #here(): Set<string> {
+    return new Set(this.#deps.nodes().flatMap((node) => (node.type === 'agent' ? [node.id] : [])));
+  }
+
+  /**
+   * The pair of agents a message is a turn between, if it is one that counts (B21 C6): a party's
+   * message, an ask, an answer, a reply delivered as a turn, a task's continuation, or the record
+   * of how an ask ended (counted for the pair that asked), each from one agent of the canvas to
+   * another. Nothing from you or an outside party, nor corrallm's own (the run's sends, a handoff
+   * request, a notice or any record no turn is made of).
+   */
+  #turnPair(message: Message): Pair | undefined {
+    if (!isTurn(message) || sentByRun(message) || this.#request(message)) return undefined;
+    let { from, to } = message;
+    if (message.kind === 'settled') {
+      const ask = message.replyTo === undefined ? undefined : this.#deps.store.get(message.replyTo);
+      if (ask?.kind !== 'prompt' || ask.ask?.type !== 'question' || ask.from !== message.to)
+        return undefined;
+      ({ to: from, from: to } = ask);
+    }
+    const x = agentOf(from);
+    const y = agentOf(to);
+    if (x === undefined || y === undefined || x === y) return undefined;
+    const here = this.#here();
+    return here.has(x) && here.has(y) ? orderedPair(x, y) : undefined;
+  }
+
+  /** The pairs held now, each with its Needs item: a pair at LOOP_TURNS with a turn waiting. */
+  #holds(): { pair: Pair; item: NeedsItem }[] {
+    const holds = new Map<string, { pair: Pair; item: NeedsItem }>();
+    for (const message of this.#deps.store.active()) {
+      if (message.state !== 'pending') continue;
+      const pair = this.#turnPair(message);
+      if (pair === undefined || !this.#deps.loops.held(...pair)) continue;
+      const key = pair.join('\u0000');
+      if (holds.has(key)) continue;
+      const id = `loop/${encodeURIComponent(pair[0])}/${encodeURIComponent(pair[1])}`;
+      // An id too long for the API is no item; the pair is still held, and speaking to either frees it.
+      if (id.length > MAX_NEED_ID) continue;
+      const nodes = this.#deps.nodes();
+      holds.set(key, {
+        pair,
+        item: {
+          id,
+          canvas: this.#deps.canvas,
+          kind: 'hold',
+          for: 'you',
+          by: ['you'],
+          title: `${partyName(nodes, agentParty(pair[0]))} and ${partyName(nodes, agentParty(pair[1]))} have passed ${String(LOOP_TURNS)} turns between them without the user`,
+          choices: [
+            {
+              value: 'goOn',
+              label: 'Go on',
+              humanOnly: 'Only you let agents that have gone back and forth go on.',
+            },
+          ],
+          answerIn: 'api',
+        },
+      });
+    }
+    return [...holds.values()];
   }
 
   /**
@@ -785,6 +934,8 @@ export class Delivery {
     this.asks.sweep();
     this.#withdrawGone();
     this.#withdrawStale();
+    // B21 C6: the counts of a pair with an agent no longer on the canvas go.
+    this.#deps.loops.prune(this.#here());
     let messages = store.active();
     for (const id of this.#images.keys()) {
       const message = store.get(id);
@@ -877,17 +1028,33 @@ export class Delivery {
               : undefined)),
       };
       let next: Message | undefined;
+      /** The pairs a message of waits is held for, and told so (B21 C6). */
+      const looped = new Set<string>();
       for (const message of waits) {
-        const hold = this.#yours(message)
-          ? holds.yours
-          : message === request
-            ? holds.request
-            : isContinuation(message)
-              ? holds.continuation
-              : holds.theirs;
+        // B21 C6: the eleventh turn between two agents waits for you, whatever else holds or frees
+        // the agent; nothing of yours, the run's or an outside party's is ever one.
+        const pair = this.#turnPair(message);
+        const hold: Hold | undefined =
+          pair !== undefined && this.#deps.loops.held(...pair)
+            ? { kind: 'loop' }
+            : this.#yours(message)
+              ? holds.yours
+              : message === request
+                ? holds.request
+                : isContinuation(message)
+                  ? holds.continuation
+                  : holds.theirs;
         if (!hold) {
           next ??= message;
           continue;
+        }
+        if (hold.kind === 'loop' && pair !== undefined && !looped.has(pair.join('\u0000'))) {
+          looped.add(pair.join('\u0000'));
+          this.#tell(
+            `loop:${message.id}`,
+            message,
+            `Your ${message.kind === 'prompt' ? 'question' : message.turn === undefined ? 'message' : 'reply'} to ${this.#nameOf(message.to)} is held: ${String(LOOP_TURNS)} turns have passed between you and ${this.#nameOf(message.to)} without the user. It goes once the user lets you go on, or speaks to either of you.`,
+          );
         }
         if (hold.kind === 'paused') {
           const causes = hold.holding.map(({ id, by }) => `${id}/${by}`).join(',');
@@ -1315,6 +1482,12 @@ export class Delivery {
       // Its record says it carried one (never what), in the write that records it delivering.
       this.#deps.store.retell(message.id, `${HANDOFF_CARRIED}${carried.carry}`);
     }
+    // B21 C6: a turn between two agents is counted in the write that journals it as delivering.
+    const pair = this.#turnPair(message);
+    if (pair !== undefined) {
+      this.#deps.loops.count(...pair);
+      this.#counted.set(message.id, pair);
+    }
     this.#deps.store.update(message.id, {
       state: 'delivering',
       delivery: { at: this.#deps.now(), as, attempt },
@@ -1339,6 +1512,7 @@ export class Delivery {
           // Taken back while it was journaled, it is never sent: what waits behind it goes.
           if (this.#deps.store.get(message.id)?.state !== 'delivering') {
             this.#uncarry(message.id);
+            this.#uncount(message.id);
             this.schedule();
           } else {
             const current = this.#deps
@@ -1355,6 +1529,7 @@ export class Delivery {
                     : this.#holdOf(current)) !== undefined)
             ) {
               this.#uncarry(message.id);
+              this.#uncount(message.id);
               this.#deps.store.update(message.id, { state: 'pending' });
               this.schedule();
             } else this.#hand(node, message, as);
@@ -1367,8 +1542,9 @@ export class Delivery {
         this.#writing.delete(node.id);
         if (this.#closed || this.#deps.store.get(message.id)?.state !== 'delivering') return;
         console.error('Could not record a message as delivering:', error);
-        // Never sent: what it would have carried waits for the next send.
+        // Never sent: what it would have carried waits for the next send, and its turn is not one.
         this.#uncarry(message.id);
+        this.#uncount(message.id);
         this.#deps.store.update(message.id, { state: 'pending' });
         this.#unrecordable ??= this.#deps.later(() => {
           this.#unrecordable = undefined;
@@ -1376,6 +1552,14 @@ export class Delivery {
         }, RECORD_RETRY);
       },
     );
+  }
+
+  /** A turn counted was never sent (B21 C6): it is not one, and is counted again when it goes. */
+  #uncount(id: string): void {
+    const pair = this.#counted.get(id);
+    if (pair === undefined) return;
+    this.#counted.delete(id);
+    this.#deps.loops.uncount(...pair);
   }
 
   /** A message being delivered was never sent: what it carried waits for the next send. */
@@ -1424,6 +1608,7 @@ export class Delivery {
   /** A message's turn ended: it was withdrawn, or replied to, its reply a message to its sender. */
   #ended(id: string, _interrupted: boolean, reply: string, result: TurnResult): void {
     this.#sent.delete(id);
+    this.#counted.delete(id);
     const { store } = this.#deps;
     const message = store.get(id);
     // Cut off as the canvas closed, or back to waiting: its session would not start.
@@ -1479,6 +1664,7 @@ export class Delivery {
   #refused(node: AgentNode, id: string, text: string): void {
     if (this.#closed || this.#deps.store.get(id)?.state !== 'delivering') return;
     this.#uncarry(id);
+    this.#uncount(id);
     this.#deps.store.update(id, { state: 'pending' });
     this.#stuck.set(node.id, {
       connection: this.#deps.engine.catalog.connectionOf(node.data),

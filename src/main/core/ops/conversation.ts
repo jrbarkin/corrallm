@@ -52,8 +52,8 @@ export function conversationOps(
     const reader = promptReaderOf(ctx.caller);
     const items = [
       ...needs(needsInput(open, locale)).map((item) => needFor(item, reader)),
-      // B21 C5, C6: its asks, and parties' messages to you (yours alone).
-      ...open.delivery.asks.items().map((item) => needFor(item, reader)),
+      // B21 C5, C6: its asks, parties’ messages to you and the pairs held after ten turns (yours alone).
+      ...open.delivery.items().map((item) => needFor(item, reader)),
       ...(services.prompts?.items(id, reader) ?? []),
       ...[
         ...proposals.items(id, ctx.caller.kind === 'human' ? undefined : reach),
