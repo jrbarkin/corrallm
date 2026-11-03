@@ -1698,3 +1698,39 @@ describe('migration 9', () => {
     expect(() => keep.run('not JSON', seq)).toThrow(/CHECK constraint failed/);
   });
 });
+
+/** A task's reported result, as B21 C8 keeps it on its `result` record (the `verdict` column). */
+const VERDICT = JSON.stringify({ v: 1, outcome: 'succeeded', summary: 'All 12 tests pass.' });
+
+describe('migration 10', () => {
+  it('adds a verdict to every message of a schema-9 database, keeping every row, which a schema-6 corrallm may still open', () => {
+    migrate(connection, MIGRATIONS.slice(0, 9));
+    connection.exec('PRAGMA foreign_keys = ON');
+    addCanvas();
+    addMessage('kept');
+    const before = connection.prepare('SELECT * FROM message').all();
+
+    migrate(connection, MIGRATIONS.slice(0, 10));
+
+    expect(schemaOf(connection)).toBe(10);
+    // A column only: a corrallm of schema 6 still reads and writes its own columns.
+    expect(minReaderOf(connection)).toBe(6);
+    expect(connection.prepare('SELECT * FROM message').all()).toEqual(
+      before.map((row) => ({ ...row, verdict: null })),
+    );
+  });
+
+  it('keeps a message’s verdict as valid JSON, or none', () => {
+    migrate(connection);
+    connection.exec('PRAGMA foreign_keys = ON');
+    addCanvas();
+    const seq = addMessage('result');
+    const keep = connection.prepare('UPDATE message SET verdict = ? WHERE seq = ?');
+    keep.run(VERDICT, seq);
+    expect(connection.prepare('SELECT verdict FROM message WHERE seq = ?').get(seq)).toEqual({
+      verdict: VERDICT,
+    });
+    keep.run(null, seq);
+    expect(() => keep.run('not JSON', seq)).toThrow(/CHECK constraint failed/);
+  });
+});

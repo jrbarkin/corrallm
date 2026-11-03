@@ -2,6 +2,7 @@ import type { CanvasId } from '../canvas';
 import type { TurnResult } from '../session';
 import { MAX_NODE_ID } from './canvas';
 import type { AskColumn } from './asks';
+import type { Verdict } from './results';
 import type { Settled } from './settled';
 
 /*
@@ -106,8 +107,10 @@ export interface MessageDisplay {
  * native prompt's decision, what was decided, typed and value-free (./settled.ts), never changed
  * after; yours alone to read; for an ask (B21 C6), how it ended, value-free, set once as it ends,
  * on its row and on the record its asker is sent. `ask`: an ask's questions and deadline, or an
- * answer's answers (./asks.ts), written with its row and never changed after. Images a message
- * carried are never kept.
+ * answer's answers (./asks.ts), written with its row and never changed after. `verdict`: on a
+ * `result` record (B21 C8), the outcome and summary its agent reported of its task's attempt with
+ * `complete` (./results.ts), written with its row and never changed after. Images a message carried
+ * are never kept.
  */
 export interface Message {
   id: string;
@@ -126,6 +129,7 @@ export interface Message {
   by?: PartyId;
   settled?: Settled;
   ask?: AskColumn;
+  verdict?: Verdict;
   /** When it was sent, in epoch ms. */
   at: number;
 }

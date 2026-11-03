@@ -646,6 +646,20 @@ export const MIGRATIONS: readonly Migration[] = [
       ALTER TABLE message ADD COLUMN ask TEXT CHECK (ask IS NULL OR json_valid(ask));
     `,
   },
+  {
+    // B21's completions (B21 Design §9.2 C8): a task's result is a message, of kind `result`, from
+    // its agent to corrallm, whose verdict this column keeps. A column only, so it keeps the oldest
+    // schema that may read the database: a corrallm of schema 6 still reads and writes its own
+    // columns (each by name), leaving this one as it is.
+    version: 10,
+    minReader: 6,
+    sql: `
+      -- On a result record: the outcome its agent reported of its task's attempt (succeeded or
+      -- failed) and its summary, in the agent's own words (at most 4 KiB). None for every other
+      -- message.
+      ALTER TABLE message ADD COLUMN verdict TEXT CHECK (verdict IS NULL OR json_valid(verdict));
+    `,
+  },
 ];
 
 /** The schema this code makes and reads. */

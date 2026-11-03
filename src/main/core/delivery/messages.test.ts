@@ -9,6 +9,7 @@ import type { CanvasId } from '../../../shared/canvas';
 import { MESSAGE_KINDS, MESSAGE_STATES } from '../../../shared/model/messages';
 import type { Message } from '../../../shared/model/messages';
 import { AskColumn, AskSettlement } from '../../../shared/model/asks';
+import { Verdict } from '../../../shared/model/results';
 import { SettledDecision } from '../../../shared/model/settled';
 import { CanvasMemory } from '../../memory';
 import { STORE_FILE } from '../store/open';
@@ -16,7 +17,7 @@ import { settleRestored } from '../store/restored';
 import { connect } from '../store/sqlite';
 import { Store, SYSTEM_DEPS, unopened } from '../store/store';
 import type { StoreDeps } from '../store/store';
-import { openTestStore, readOnDisk, refuseWrites } from '../store/test-store';
+import { openTestStore, readOnDisk, refuseWrites, writeOnDisk } from '../store/test-store';
 import { isActive, MessageStore, MessageTable } from './messages';
 import type { Draft } from './messages';
 import { scanPrune } from './test-prune';
@@ -465,6 +466,38 @@ describe('the message store', () => {
     again.add(draft('outside:orchestrator', 'agent:builder'));
     await again.durable();
     expect(rows().map(({ id }) => id)).toContain('newer ask');
+  });
+
+  it('keeps a result’s verdict with its row, never changing it after, and leaves one it can’t read as it is', async () => {
+    const messages = await store();
+    const verdict = Verdict.parse({ v: 1, outcome: 'failed', summary: 'Two tests fail.' });
+    const result = messages.add({
+      from: 'agent:builder',
+      to: 'corrallm',
+      kind: 'result',
+      origin: 'party',
+      body: 'Failed: Two tests fail.',
+      task: { agent: 'builder', item: 'tests', attempt: '0c1d2e3f-4a5b-4c6d-8e7f-9a0b1c2d3e4f' },
+      state: 'delivered',
+      verdict,
+    });
+    await messages.durable();
+    // A later change of the row never writes another verdict over it.
+    messages.update(result.id, { verdict: { ...verdict, outcome: 'succeeded' } });
+    await messages.durable();
+    expect(
+      readOnDisk(profile, (disk) =>
+        disk.prepare('SELECT verdict FROM message WHERE id = ?').get(result.id),
+      ),
+    ).toEqual({ verdict: JSON.stringify(verdict) });
+    // One a newer corrallm might keep: read as nothing, and left as it is.
+    writeOnDisk(
+      profile,
+      `UPDATE message SET verdict = '${JSON.stringify({ v: 2, outcome: 'partial' })}' WHERE id = '${result.id}'`,
+    );
+    await restart();
+    const again = await store();
+    expect(again.get(result.id)).toBeUndefined();
   });
 
   it('never drops an open ask, or your message waiting on you, past its party’s quota', async () => {
