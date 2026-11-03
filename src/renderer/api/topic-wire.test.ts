@@ -26,8 +26,75 @@ describe('a chunked settings snapshot (B12 C2)', () => {
     const api = { state: 'listening', port: 4242, url: 'http://127.0.0.1:4242/mcp' };
     for (const defaultAdapter of ['codex', null]) {
       expect(
-        assembledState('settings', { defaultAdapter, api }, [['codex', { plan: true }]]),
+        assembledState('settings', { defaultAdapter, api }, [['consent/codex', { plan: true }]]),
       ).toEqual({ defaultAdapter, api, consents: { codex: { plan: true } } });
     }
+  });
+});
+
+describe('a chunked settings snapshot, as only you are sent it (B22a C2)', () => {
+  const api = { state: 'stopped', port: null };
+  const notifications = { enabled: false, lastDelivery: 'shown' };
+  const SITES = ['https://b.example.com:8443', 'http://localhost:5173', 'https://a.example.com'];
+  const site = (origin: string) => [`site/${encodeURIComponent(origin)}`, origin] as const;
+
+  it('puts your remembered sites back in their order, beside the built-in ones', () => {
+    expect(
+      assembledState(
+        'settings',
+        {
+          defaultAdapter: null,
+          api,
+          notifications,
+          links: { state: 'ready', builtIn: ['https://github.com'] },
+        },
+        [
+          ['consent/old-adapter', { allowed: true }],
+          ['consent/codex', { plan: true }],
+          ...SITES.map(site),
+        ],
+      ),
+    ).toEqual({
+      defaultAdapter: null,
+      api,
+      notifications,
+      consents: { 'old-adapter': { allowed: true }, codex: { plan: true } },
+      links: { state: 'ready', sites: SITES, builtIn: ['https://github.com'] },
+    });
+    const unavailable = { state: 'unavailable', sentence: 'Not now.' };
+    expect(
+      assembledState(
+        'settings',
+        { defaultAdapter: null, api, notifications, links: unavailable },
+        [],
+      ),
+    ).toEqual({ defaultAdapter: null, api, notifications, consents: {}, links: unavailable });
+  });
+
+  it('refuses an entry of no namespace, a key that isn’t its value, a repeat, or a site with no list', () => {
+    const ready = {
+      defaultAdapter: null,
+      api,
+      notifications,
+      links: { state: 'ready', builtIn: [] },
+    };
+    for (const pairs of [
+      [['codex', { plan: true }]],
+      [['consentcodex', { plan: true }]],
+      [['other/codex', { plan: true }]],
+      [
+        ['consent/codex', { plan: true }],
+        ['consent/codex', { plan: true }],
+      ],
+      [['consent/%E0%A4%A', { plan: true }]],
+      [['consent/a%2fb', { plan: true }]],
+      [[`site/${encodeURIComponent(SITES[0] ?? '')}`, SITES[1]]],
+      [site(SITES[0] ?? ''), site(SITES[0] ?? '')],
+    ] as [string, unknown][][])
+      expect(() => assembledState('settings', ready, pairs), JSON.stringify(pairs)).toThrow();
+    // Sites for a reader told no list: none of them is kept.
+    expect(() =>
+      assembledState('settings', { defaultAdapter: null, api }, [site(SITES[0] ?? '')]),
+    ).toThrow();
   });
 });

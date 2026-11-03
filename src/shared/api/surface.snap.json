@@ -313,7 +313,7 @@
   "schemas": {
     "topics.subscribe": {
       "input": "8c5be84f0a1a163a",
-      "output": "6b135d5e2ae1b6c2"
+      "output": "2c4649064614bf4b"
     },
     "topics.unsubscribe": {
       "input": "8c5be84f0a1a163a",
@@ -325,7 +325,7 @@
     },
     "catalog.get": {
       "input": "e5fa5cc18e054cdd",
-      "output": "96ab2eb5510c7423"
+      "output": "20e715cf967c0564"
     },
     "catalog.installed": {
       "input": "e5fa5cc18e054cdd",
@@ -613,11 +613,11 @@
     },
     "settings.get": {
       "input": "e5fa5cc18e054cdd",
-      "output": "c339e41eb923e2cc"
+      "output": "dfeb369fa9284423"
     },
     "settings.set": {
-      "input": "43014ed80db4c428",
-      "output": "7512c86943435f4c"
+      "input": "6cbffd087130017f",
+      "output": "c5b3f7fe285edd7a"
     },
     "run.pause": {
       "input": "a85fe9cb1eb6d55a",

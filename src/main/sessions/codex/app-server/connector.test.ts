@@ -20,6 +20,7 @@ import type { AppServerConnectorDeps } from './connector';
 import type { Fixture } from './recorded';
 import { replay } from './replay';
 import { testMcpServer } from '../../test-mcp';
+import { Settings } from '../../../settings';
 import type { SpawnAppServer } from '../rpc';
 
 /** A fake `codex` that speaks the app server's protocol (../fake-codex.mjs), run with node. */
@@ -1114,6 +1115,7 @@ describe('the App Server connection', () => {
     /** The user's say, kept for good, as main's settings keep it. */
     function kept(given = false) {
       const consent = {
+        generation: () => 0,
         given: vi.fn(() => Promise.resolve(given)),
         give: vi.fn(() => {
           given = true;
@@ -1165,6 +1167,133 @@ describe('the App Server connection', () => {
       expect(next.events.some((e) => e.type === 'prompt' && e.prompt.kind === 'approval')).toBe(
         false,
       );
+    });
+
+    describe('taken back in Settings (B22a C4)', () => {
+      /** The core's consent owner, kept in this test's folder, and its handle for the plan. */
+      function owned(file = path.join(dir, 'settings.json')) {
+        const settings = new Settings(file);
+        return { settings, consent: settings.consent('codex', 'plan') };
+      }
+      /** The consent questions raised so far, in order. */
+      const asked = (events: HostEvent[]) =>
+        events.filter(
+          (event): event is PromptEvent =>
+            event.type === 'prompt' &&
+            event.prompt.kind === 'approval' &&
+            event.prompt.subject?.type === 'consent',
+        );
+      /** Waits for the `n`th consent question (from 1), and returns it. */
+      async function question(events: HostEvent[], n: number): Promise<PromptEvent> {
+        await vi.waitFor(() => {
+          expect(asked(events).length).toBeGreaterThanOrEqual(n);
+        });
+        const found = asked(events)[n - 1];
+        if (found === undefined) throw new Error(`No consent question ${String(n)}`);
+        return found;
+      }
+
+      it('asks again before the next turn of a live session it allowed for good', async () => {
+        const { settings, consent } = owned();
+        const { session, answer, events, ended, turn } = await start({}, CHATGPT, { consent });
+        await session.send({ id: 'm1', text: 'Hello' });
+        answer((await question(events, 1)).key, { kind: 'choice', value: 'always' });
+        await ended('m1');
+        await vi.waitFor(async () => {
+          expect(await consent.given()).toBe(true);
+        });
+        // While it holds, no turn asks.
+        await turn('Again', 'm2');
+        expect(asked(events)).toHaveLength(1);
+
+        await settings.resetConsent('codex', 'plan', true);
+        await session.send({ id: 'm3', text: 'Once more' });
+        const again = await question(events, 2);
+        // Asked before the turn reached Codex.
+        expect(await requests('turn/start')).toHaveLength(2);
+        answer(again.key, { kind: 'choice', value: 'once' });
+        await ended('m3');
+        expect(await requests('turn/start')).toHaveLength(3);
+        expect(texts(events)).toContain('You said: Once more');
+        expect(await consent.given()).toBe(false);
+      });
+
+      it('asks again in a session allowed just for itself, with nothing kept', async () => {
+        const { settings, consent } = owned();
+        const { session, answer, events, ended, turn } = await start({}, CHATGPT, { consent });
+        await session.send({ id: 'm1', text: 'Hello' });
+        answer((await question(events, 1)).key, { kind: 'choice', value: 'once' });
+        await ended('m1');
+        await turn('Again', 'm2');
+        expect(asked(events)).toHaveLength(1);
+        await settings.resetConsent('codex', 'plan', true);
+        await session.send({ id: 'm3', text: 'Once more' });
+        await question(events, 2);
+        expect(await requests('turn/start')).toHaveLength(2);
+      });
+
+      it('grants nothing by an answer to a question asked before it was taken back: it asks again', async () => {
+        const { settings, consent } = owned();
+        const { session, answer, events, ended } = await start({}, CHATGPT, { consent });
+        await session.send({ id: 'm1', text: 'Hello' });
+        const stale = await question(events, 1);
+        await settings.resetConsent('codex', 'plan', true);
+        answer(stale.key, { kind: 'choice', value: 'always' });
+        const again = await question(events, 2);
+        expect(again.key).not.toBe(stale.key);
+        expect(await requests('turn/start')).toEqual([]);
+        // The stale Always kept nothing.
+        await settings.flush();
+        expect(await consent.given()).toBe(false);
+        answer(again.key, { kind: 'choice', value: 'once' });
+        await ended('m1');
+        expect(await requests('turn/start')).toHaveLength(1);
+      });
+
+      it('asks again before a plan’s implementation turn, and before /review', async () => {
+        const { settings, consent } = owned();
+        const { session, answer, events, ended, heard } = await start({ mode: 'plan' }, CHATGPT, {
+          consent,
+        });
+        await session.send({ id: 'm1', text: 'Plan the change' });
+        answer((await question(events, 1)).key, { kind: 'choice', value: 'once' });
+        const plan = await heard('prompt', { prompt: { kind: 'plan' } });
+        await settings.resetConsent('codex', 'plan', true);
+        answer(plan.key, { kind: 'choice', value: 'implement' });
+        const again = await question(events, 2);
+        // The plan turn reached Codex; its implementation waits on the question.
+        expect(await requests('turn/start')).toHaveLength(1);
+        answer(again.key, { kind: 'choice', value: 'once' });
+        await ended('m1');
+        expect(await requests('turn/start')).toHaveLength(2);
+
+        await settings.resetConsent('codex', 'plan', true);
+        await session.send({ id: 'r', text: '/review' });
+        const review = await question(events, 3);
+        expect(await requests('review/start')).toEqual([]);
+        answer(review.key, { kind: 'choice', value: 'once' });
+        await ended('r');
+        expect(await requests('review/start')).toHaveLength(1);
+      });
+
+      it('changes nothing when taking it back couldn’t be saved: the session asks no more', async () => {
+        const folder = path.join(dir, 'profile');
+        await mkdir(folder);
+        const { settings, consent } = owned(path.join(folder, 'settings.json'));
+        const { session, answer, events, ended, turn } = await start({}, CHATGPT, { consent });
+        await session.send({ id: 'm1', text: 'Hello' });
+        answer((await question(events, 1)).key, { kind: 'choice', value: 'always' });
+        await ended('m1');
+        await settings.flush();
+        // Its folder now a file: the reset's write fails.
+        await rm(folder, { recursive: true });
+        await writeFile(folder, '');
+        await expect(settings.resetConsent('codex', 'plan', true)).rejects.toMatchObject({
+          stage: 'write',
+        });
+        await turn('Again', 'm2');
+        expect(asked(events)).toHaveLength(1);
+      });
     });
 
     it('sends nothing when the user says no, and says what else runs on the plan', async () => {
@@ -1220,7 +1349,7 @@ describe('the App Server connection', () => {
   });
 
   it('runs on an API key without asking; refuses no login, and says how to log in', async () => {
-    const consent = { given: vi.fn(), give: vi.fn() };
+    const consent = { generation: vi.fn(() => 0), given: vi.fn(), give: vi.fn() };
     const { turn, events } = await start({}, {}, { consent });
     await turn('Hello', 'm1');
     expect(events.some((e) => ['permission'].includes(e.type))).toBe(false);
@@ -1389,7 +1518,11 @@ describe('the App Server connection’s prompts, through the core’s owner (B13
   });
 
   it('asks consent to use the ChatGPT plan as a consent, withdrawn through the owner when interrupted', async () => {
-    const consent = { given: () => Promise.resolve(false), give: () => Promise.resolve() };
+    const consent = {
+      generation: () => 0,
+      given: () => Promise.resolve(false),
+      give: () => Promise.resolve(),
+    };
     const { session, raised, ended, events } = await start(
       {},
       { FAKE_CODEX_LOGIN: 'chatgpt' },
@@ -1426,7 +1559,11 @@ describe('the App Server connection, replaying the real Codex', () => {
       {
         spawn: replaying,
         // Recorded on a ChatGPT login, allowed for good.
-        consent: { given: () => Promise.resolve(true), give: () => Promise.resolve() },
+        consent: {
+          generation: () => 0,
+          given: () => Promise.resolve(true),
+          give: () => Promise.resolve(),
+        },
         home: '/Users/someone',
       },
     );

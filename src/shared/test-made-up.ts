@@ -3,8 +3,9 @@ import type { AdapterDescriptor, Catalog, ConnectionDescriptor } from './adapter
 /**
  * For tests: a catalog declaring only an adapter no build has (Zed Agent), with a mode that asks
  * and one that never does (its own classification, whatever another adapter's mode of the same name
- * does), and a usage backend of its own. What reads the catalog it is given knows it from this
- * alone; the catalog the renderer loaded (test-catalog.json) lacks all of it.
+ * does), a usage backend of its own, and two consents it asks for (B22a C3), on different
+ * connections. What reads the catalog it is given knows it from this alone; the catalog the
+ * renderer loaded (test-catalog.json) lacks all of it.
  */
 export const MADE_UP: Catalog = {
   adapters: [
@@ -56,6 +57,20 @@ export const MADE_UP: Catalog = {
           usage: null,
         },
       ],
+      consents: [
+        {
+          key: 'credits',
+          title: 'Spend your Zed credits',
+          description: 'Zed Agent asks before a turn spends credits from your account.',
+          connections: ['zed.acp'],
+        },
+        {
+          key: 'share',
+          title: 'Share your sessions with Zed',
+          description: 'Zed Agent asks before it uploads a session’s transcript.',
+          connections: ['zed.acp', 'zed.free'],
+        },
+      ],
     },
   ],
   usageBackends: [{ id: 'zed', label: 'Zed', source: '', windows: [] }],
@@ -64,7 +79,10 @@ export const MADE_UP: Catalog = {
 const [ZED] = MADE_UP.adapters as [AdapterDescriptor];
 const [ACP, FREE] = ZED.connections as [ConnectionDescriptor, ConnectionDescriptor];
 
-/** Two unfamiliar adapters; only the second adapter's second connection handles shell text. */
+/**
+ * Two unfamiliar adapters; only the second adapter's second connection handles shell text. The
+ * second asks a consent by a key the first asks by too, for its own connection.
+ */
 export const TWO_MADE_UP: Catalog = {
   adapters: [
     ...MADE_UP.adapters,
@@ -84,6 +102,14 @@ export const TWO_MADE_UP: Catalog = {
           view: 'terminal',
           shellPrefix: '$',
           fileMentions: true,
+        },
+      ],
+      consents: [
+        {
+          key: 'credits',
+          title: 'Spend your Yak credits',
+          description: 'Yak Agent asks before its terminal spends credits.',
+          connections: ['yak.terminal'],
         },
       ],
     },

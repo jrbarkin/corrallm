@@ -44,6 +44,12 @@ let profile: string;
 let core: Core;
 const closing: (() => void)[] = [];
 
+/** Gives the core's settings a consent of the test adapter's for good, at its generation now. */
+async function give(key: string): Promise<void> {
+  const consent = (core.settings as Settings).consent('codex', key);
+  await consent.give(consent.generation());
+}
+
 /** T3c: topic state is the corresponding read's, and only subscribed windows hear it. */
 describe('T3c: usage and settings topics', () => {
   beforeEach(async () => {
@@ -129,7 +135,7 @@ describe('T3c: usage and settings topics', () => {
             { backend: 'codex', windows: { fiveHour: { usedPercent: 70, resetsAt: null } } },
             CALLERS.you,
           );
-        } else await (core.settings as Settings).consent('codex', 'plan').give();
+        } else await give('plan');
       }
       await change();
       await vi.waitFor(() => {
@@ -150,7 +156,7 @@ describe('T3c: usage and settings topics', () => {
       await b.link.request('call', 'topics.subscribe', { topic });
       if (topic === 'usage')
         await core.call('usage.simulate', { backend: 'codex', windows: null }, CALLERS.you);
-      else await (core.settings as Settings).consent('codex', 'other').give();
+      else await give('other');
       await vi.waitFor(() => {
         expect(b.changes).toHaveLength(1);
       });
@@ -214,7 +220,7 @@ describe('T3c: usage and settings topics', () => {
         },
         CALLERS.you,
       );
-      await (core.settings as Settings).consent('codex', 'plan').give();
+      await give('plan');
       // Wait for the topic queue, without advancing its batching clock.
       await window.link.request('call', 'topics.subscribe', { topic: 'usage' });
       expect(batches).toEqual([]);

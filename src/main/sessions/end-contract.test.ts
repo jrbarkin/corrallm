@@ -187,7 +187,11 @@ it.each(connections)('%s’s fake connector emits the same result contract', asy
     fake: true,
     clientApp: 'corrallm/test',
     distribution: 'local',
-    consent: () => ({ given: () => Promise.resolve(false), give: () => Promise.resolve() }),
+    consent: () => ({
+      generation: () => 0,
+      given: () => Promise.resolve(false),
+      give: () => Promise.resolve(),
+    }),
   });
   const connector = connectors[id];
   if (!connector) throw new Error(`No fake connector for ${id}`);

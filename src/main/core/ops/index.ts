@@ -10,6 +10,7 @@ import type { LinkOpener } from '../../links';
 import type { FileRevealer } from '../../reveal';
 import type { ProjectFiles } from '../../files';
 import type { DirectoryResolver } from '../workspaces/resolver';
+import type { NotificationResult } from '../presence';
 import type { SetupService } from '../workspaces/setup';
 import type { ReplyHandler } from '../replies';
 import type { SessionManager } from '../../sessions/manager';
@@ -73,13 +74,21 @@ export interface OpServices {
   app: { name: string; version: string };
   /** What every adapter declares. */
   catalog: Catalog;
-  settings: Pick<Settings, 'get' | 'apiPort' | 'setDefaultAdapter'>;
+  settings: Pick<Settings, 'get' | 'apiPort' | 'setDefaultAdapter' | 'resetConsent'>;
+  /**
+   * OS notifications (B14 C11, B22a C1, C6): turning them on or off (written first, then the
+   * notifier and main told before it answers), and how the last one went, without values.
+   */
+  notifications: {
+    set(enabled: boolean): Promise<boolean>;
+    status(): NotificationResult | undefined;
+  };
   /** Whether corrallm's MCP server listens now, and where, as its owner says (core/endpoint.ts). */
   api: () => ApiStatus;
   /** The agents’ environment, read from the login shell when first needed. */
   environment: () => Promise<Readonly<Record<string, string>>>;
   usage: Pick<UsageReadings, 'state' | 'setRule' | 'simulate'>;
-  links: Pick<LinkOpener, 'open'>;
+  links: Pick<LinkOpener, 'open' | 'sites' | 'builtIn' | 'forget'>;
   reveal: Pick<FileRevealer, 'reveal'>;
   directories: DirectoryResolver;
   files: Pick<ProjectFiles, 'find'>;

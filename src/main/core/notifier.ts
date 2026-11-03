@@ -69,6 +69,11 @@ export interface NotifierDeps {
   notify(request: NotificationRequest): Promise<NotificationResult>;
   /** Asks main to close one it holds (HostServices.unnotify). */
   unnotify(handle: string): void;
+  /**
+   * Told once the last outcome (`status`) changes, already kept (B22a C2: your settings' line).
+   * Never a notification itself.
+   */
+  statusChanged?(): void;
   timing?: Partial<NotifierTiming>;
 }
 
@@ -494,16 +499,23 @@ export class Notifier {
     }
     void asked.then(
       (result) => {
-        this.#status = result;
+        this.#settle(result);
         // Nothing shown: nothing to close, nothing to click.
         if (result !== 'shown') this.#shown.delete(handle);
       },
       () => {
-        this.#status = 'failed';
+        this.#settle('failed');
         this.#shown.delete(handle);
         console.error('corrallm couldn’t show a notification.');
       },
     );
+  }
+
+  /** Keeps how the last notification went, and says so if it changed. */
+  #settle(result: NotificationResult): void {
+    if (result === this.#status) return;
+    this.#status = result;
+    this.#deps.statusChanged?.();
   }
 
   /** Closes a notification main may hold, and forgets its handle. */
