@@ -8,6 +8,9 @@ import { useTopic } from '../api/topics';
 import type { TopicMirror } from '../api/topics';
 import { ipcErrorMessage } from '../ipc-error';
 import { AskCard } from './Questions';
+import { QuestionFields } from '../agent/PromptCard';
+import type { FieldQuestion } from '../agent/PromptCard';
+import type { RuntimeTopicStates } from '../../shared/api/topics';
 import type { CanvasNode } from '../../shared/model/canvas';
 import type { ArgsOf } from '../../shared/api/registry';
 import { agentName } from '../../shared/model/queries';
@@ -34,6 +37,72 @@ function NeedDetail({ text }: { text: string }) {
   return <p className="graph-question-detail">{text}</p>;
 }
 
+/** The two agents a loop hold (`loop/<a>/<b>`, each part URI-encoded) names, in the core's order. */
+function loopPair(id: string): [string, string] | undefined {
+  const parts = id.split('/');
+  if (parts.length !== 3 || parts[0] !== 'loop') return undefined;
+  try {
+    return [decodeURIComponent(parts[1] ?? ''), decodeURIComponent(parts[2] ?? '')];
+  } catch {
+    return undefined;
+  }
+}
+
+/** What a card is, in a chip above it. */
+function headerOf(item: CoreNeed, nodes: readonly CanvasNode[]): string {
+  if (item.kind === 'file') return 'File review';
+  if (item.kind === 'worktree')
+    return item.id.startsWith('rebind/') ? 'Workspace change' : 'Worktree setup';
+  if (item.id.startsWith('stalled/'))
+    return `Silent session: ${item.agent === undefined ? 'agent' : agentName(nodes, item.agent)}`;
+  if (item.id.startsWith('unsaved/')) return 'Run progress';
+  if (item.id.startsWith('loop/')) return 'Agents going back and forth';
+  if (item.id.startsWith('ask/')) return 'Question';
+  if (item.kind === 'message') return 'Message';
+  if (item.kind === 'hold') return 'Run';
+  if (item.kind === 'prompt') return 'Session prompt';
+  return 'Proposal';
+}
+
+/** The messages a loop hold keeps back, between its two agents (the hold's own words name no text). */
+function HeldMessages({
+  pair,
+  messages,
+  nodes,
+}: {
+  pair: [string, string] | undefined;
+  messages: Messages | undefined;
+  nodes: readonly CanvasNode[];
+}) {
+  if (!pair || !messages) return null;
+  const parties = new Set(pair.map((agent) => `agent:${agent}`));
+  const held = messages.order.flatMap((id) => {
+    const message = messages.items[id];
+    return message?.state === 'pending' && parties.has(message.from) && parties.has(message.to)
+      ? [message]
+      : [];
+  });
+  if (held.length === 0) return null;
+  const name = (party: string) => agentName(nodes, party.slice('agent:'.length));
+  return (
+    <ul className="graph-question-held" aria-label="Held messages">
+      {held.map((message) => (
+        <li key={message.id}>
+          <span>
+            {name(message.from)} to {name(message.to)}, held
+          </span>
+          <p className="graph-question-detail">{message.body}</p>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/** An ask to you or to an agent, made with `ask`: its questions are the card's body. */
+const isAsk = (item: { id: string; prompt?: unknown }) =>
+  item.id.startsWith('ask/') && item.prompt === undefined;
+
+type Messages = RuntimeTopicStates[`messages:${CanvasId}`];
 type CoreNeed = ResultOf<'needs'>['items'][number];
 type Reply = Awaited<ReturnType<GuiApi['reply']>>;
 interface Settlement {
@@ -63,6 +132,7 @@ export function NeedsSidebar({
   request?: { id: string } | undefined;
 }) {
   const state = useTopic(`needs:${canvas}`, mirror);
+  const messages = useTopic(`messages:${canvas}`, mirror);
   const target = useRef<HTMLElement>(null);
   const focused = useRef<typeof request>(undefined);
   useEffect(() => {
@@ -133,7 +203,10 @@ export function NeedsSidebar({
   };
   const count = [...current.values()]
     .filter((item) => !kept.get(item.id)?.outcome)
-    .reduce((count, item) => count + (item.prompt ? 1 : (item.questions?.length ?? 1)), 0);
+    .reduce(
+      (count, item) => count + (item.prompt || isAsk(item) ? 1 : (item.questions?.length ?? 1)),
+      0,
+    );
   const bell = (
     <>
       <svg viewBox="0 0 16 16" aria-hidden="true">
@@ -169,30 +242,14 @@ export function NeedsSidebar({
                 tabIndex={-1}
                 ref={request?.id === item.id ? target : undefined}
                 data-requested={request?.id === item.id ? '' : undefined}
-                role={item.kind === 'prompt' ? 'group' : undefined}
+                role={item.kind === 'prompt' && !isAsk(item) ? 'group' : undefined}
                 aria-label={
                   item.kind === 'prompt' && item.agent
                     ? `${agentName(nodes, item.agent)} asks${item.answerIn === 'terminal' ? ', in its terminal' : ''}`
                     : item.title
                 }
               >
-                <span className="graph-question-header">
-                  {item.kind === 'file'
-                    ? 'File review'
-                    : item.kind === 'worktree'
-                      ? item.id.startsWith('rebind/')
-                        ? 'Workspace change'
-                        : 'Worktree setup'
-                      : item.id.startsWith('stalled/')
-                        ? `Silent session: ${item.agent === undefined ? 'agent' : agentName(nodes, item.agent)}`
-                        : item.id.startsWith('unsaved/')
-                          ? 'Run progress'
-                          : item.kind === 'hold'
-                            ? 'Run'
-                            : item.kind === 'prompt'
-                              ? 'Session prompt'
-                              : 'Proposal'}
-                </span>
+                <span className="graph-question-header">{headerOf(item, nodes)}</span>
                 {item.agent && (
                   <button
                     type="button"
@@ -206,10 +263,18 @@ export function NeedsSidebar({
                     {agentName(nodes, item.agent)}
                   </button>
                 )}
+                {isAsk(item) && item.for.startsWith('agent:') && (
+                  <p className="graph-question-detail">
+                    For {agentName(nodes, item.for.slice('agent:'.length))}
+                  </p>
+                )}
                 {!item.prompt && (!item.questions?.length || item.answerIn === 'terminal') && (
                   <p className="graph-question-text">{item.title}</p>
                 )}
                 {!item.prompt && item.detail && <NeedDetail text={item.detail} />}
+                {item.id.startsWith('loop/') && (
+                  <HeldMessages pair={loopPair(item.id)} messages={messages} nodes={nodes} />
+                )}
                 {settlement?.outcome ? (
                   <p role="status">
                     {settlement.outcome.charAt(0).toUpperCase() + settlement.outcome.slice(1)}.
@@ -225,34 +290,46 @@ export function NeedsSidebar({
                     }}
                   />
                 ) : (
-                  <AskCard
-                    text=""
-                    choices={item.choices.map((choice, index) => ({
-                      key: choice.value,
-                      label: choice.label,
-                      ...(choice.description === undefined ? {} : { detail: choice.description }),
-                      primary: index === 0,
-                    }))}
-                    reply={
-                      item.text
-                        ? {
-                            label: item.text.placeholder,
-                            button:
-                              item.kind === 'hold' &&
-                              item.choices.some((choice) => choice.value === 'approve')
-                                ? 'Ask for changes'
-                                : 'Reply',
-                          }
-                        : undefined
-                    }
-                    answered={settlement?.pending ? 'Sending…' : undefined}
-                    onChoose={(choice) => {
-                      void answer(item, { choice });
-                    }}
-                    onReply={(text) => {
-                      void answer(item, { text });
-                    }}
-                  />
+                  <>
+                    {isAsk(item) && item.questions?.length && item.answerIn !== 'terminal' ? (
+                      <fieldset disabled={settlement?.pending === true} className="prompt-actions">
+                        <QuestionFields
+                          questions={item.questions satisfies FieldQuestion[]}
+                          onSend={(answers) => {
+                            void answer(item, { answers });
+                          }}
+                        />
+                      </fieldset>
+                    ) : null}
+                    <AskCard
+                      text=""
+                      choices={item.choices.map((choice, index) => ({
+                        key: choice.value,
+                        label: choice.label,
+                        ...(choice.description === undefined ? {} : { detail: choice.description }),
+                        primary: index === 0,
+                      }))}
+                      reply={
+                        item.text
+                          ? {
+                              label: item.text.placeholder,
+                              button:
+                                item.kind === 'hold' &&
+                                item.choices.some((choice) => choice.value === 'approve')
+                                  ? 'Ask for changes'
+                                  : 'Reply',
+                            }
+                          : undefined
+                      }
+                      answered={settlement?.pending ? 'Sending…' : undefined}
+                      onChoose={(choice) => {
+                        void answer(item, { choice });
+                      }}
+                      onReply={(text) => {
+                        void answer(item, { text });
+                      }}
+                    />
+                  </>
                 )}
                 {settlement?.error && <p role="alert">{settlement.error}</p>}
                 {settlement?.outcome && (
