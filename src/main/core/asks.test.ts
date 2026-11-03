@@ -64,7 +64,10 @@ afterEach(async () => {
   await rm(profile, { recursive: true, force: true });
 });
 
-/** A profile keeping a canvas of Planner and Builder, linked, and Stranger, on Codex's App Server. */
+/**
+ * A profile keeping a canvas of Planner and Builder, linked, and Stranger, on Codex's App Server;
+ * and Shell, on Codex's Terminal (whose shell prefix is "!"), linked to Builder.
+ */
 async function keepCanvas(): Promise<void> {
   const project = path.join(profile, 'project');
   await mkdir(project);
@@ -75,15 +78,24 @@ async function keepCanvas(): Promise<void> {
       format: 'corrallm',
       version: 2,
       id: CANVAS,
-      nodes: ['planner', 'builder', 'stranger'].map((id, i) => ({
-        id,
-        kind: 'agent',
-        label: id.charAt(0).toUpperCase() + id.slice(1),
-        position: { x: 0, y: i * 100 },
-        adapter: 'codex',
-        connection: 'codex.app-server',
-      })),
-      links: [{ agents: ['planner', 'builder'] }],
+      nodes: ['planner', 'builder', 'stranger']
+        .map((id, i) => ({
+          id,
+          kind: 'agent',
+          label: id.charAt(0).toUpperCase() + id.slice(1),
+          position: { x: 0, y: i * 100 },
+          adapter: 'codex',
+          connection: 'codex.app-server',
+        }))
+        .concat({
+          id: 'shell',
+          kind: 'agent',
+          label: 'Shell',
+          position: { x: 0, y: 300 },
+          adapter: 'codex',
+          connection: 'codex.terminal',
+        }),
+      links: [{ agents: ['planner', 'builder'] }, { agents: ['shell', 'builder'] }],
     }),
   );
   await keepCanvases(profile, { [CANVAS]: { file, project } });
@@ -101,7 +113,10 @@ async function start(connector: FakeConnector = appServer): Promise<Core> {
       sessions: {
         // Its agent callers are made up: no session authority issued them.
         callers: () => true,
-        connectors: { 'codex.app-server': connector },
+        connectors: {
+          'codex.app-server': connector,
+          'codex.terminal': new FakeConnector({ adapter: 'codex' }),
+        },
         environment: () => Promise.resolve({}),
       },
     },
@@ -661,6 +676,31 @@ describe('an ask', () => {
       YOU,
     );
     expect(await find(id)).toMatchObject({ state: 'answered', by: 'you' });
+  });
+
+  it('refuses a token’s own words that its agent asker’s connection would run as a shell command', async () => {
+    await keepCanvas();
+    const held = gate();
+    const builder = new FakeConnector({ adapter: 'codex', step: held.step });
+    await start(builder);
+    const id = await ask('builder', agentCaller('shell'));
+    await vi.waitFor(() => {
+      expect(sent(builder)).toHaveLength(1);
+    });
+    expect(
+      await call(
+        'reply',
+        { to: `ask/${id}`, answer: { answers: { scope: { text: '!rm -rf .' } } } },
+        BUILDER,
+      ),
+    ).toMatchObject({ ok: false, error: { code: 'refused' } });
+    expect((await find(id))?.settled).toBeUndefined();
+    await ok(
+      'reply',
+      { to: `ask/${id}`, answer: { answers: { scope: { text: 'All of it' } } } },
+      BUILDER,
+    );
+    held.open();
   });
 
   it('frames your answer to an agent as the user’s, never as its own input', async () => {
