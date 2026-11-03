@@ -79,7 +79,6 @@ const NO_REWIND =
 const NOTHING_TO_REWIND = 'This conversation has nothing to rewind yet.';
 const NO_EFFORT = 'This agent’s effort is set in its terminal.';
 const NO_TASKS = 'This agent’s background tasks are stopped in its terminal.';
-const NO_LIST = 'This agent’s session can’t list its conversations.';
 const NO_RESUME = 'This agent’s connection can’t continue a conversation it ran before.';
 /** What a session whose `started` couldn't be read says, once (B16 C1): never what it reported. */
 const MALFORMED = (connection: string) =>
@@ -790,8 +789,6 @@ export class SessionManager {
     caller: string,
     ownedOnly = false,
   ): Promise<PastSession[]> {
-    // A session that runs lists only where its generation can (B16 C1); none: its adapter decides.
-    if (this.#agents.get(canvas)?.get(agentId)?.features?.list === false) throw new Error(NO_LIST);
     const directory = await this.#deps.directories.workingDirectory(canvas, agentId as AgentId);
     if (directory.state === 'held') throw new Error(directory.sentence);
     const folder = directory.cwd;

@@ -167,7 +167,8 @@ export const claudeCode: Adapter = {
               description: 'Export the current conversation to a file or clipboard',
             },
             { name: 'add-dir', description: 'Add a new working directory' },
-            { name: 'config', description: 'Open settings' },
+            // Bare only: `/config <key> <value>` is the session's own command.
+            { name: 'config', description: 'Open settings', bare: true as const },
             { name: 'theme', description: 'Change the theme' },
             { name: 'ide', description: 'Manage IDE integrations and show status' },
             { name: 'plugin', description: 'Manage Claude Code plugins' },

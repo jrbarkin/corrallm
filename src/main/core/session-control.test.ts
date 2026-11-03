@@ -1089,3 +1089,61 @@ describe('what a session can do (B16 C1)', () => {
     expect(sdk.started.slice(before).map(({ resume }) => resume)).toEqual([null]);
   });
 });
+
+describe('command text in a message (B16 C2)', () => {
+  it('refuses a panel’s command, a Terminal-only command or shell text for every caller, keeping nothing', async () => {
+    const { core, sdk } = await start();
+    await ok(core, 'session.open', { agent: 'a' });
+    // What the session offers itself: its own /config takes a setting.
+    hosts.get('a')?.emit({
+      type: 'commands',
+      commands: [{ name: 'config', description: 'Set a setting', argumentHint: '<key> <value>' }],
+    });
+    await vi.waitFor(() => {
+      expect(core.engines.canvas(CANVAS)?.engine.sessions.of('a').commands).toHaveLength(1);
+    });
+    const before = core.engines.canvas(CANVAS)?.messages.all().length;
+    for (const caller of [YOU, ORCHESTRATOR]) {
+      const resume = await fails(core, 'message', { to: 'a', body: '/resume' }, caller);
+      expect(resume).toEqual({
+        code: 'refused',
+        sentence:
+          'Builder’s /resume is answered by its view, never sent as a message: list its conversations with session.conversations and resume one with session.resumeConversation.',
+      });
+      const login = await fails(core, 'message', { to: 'a', body: ' /login\n' }, caller);
+      expect(login.code).toBe('refused');
+      expect(login.sentence).toBe(
+        '/login runs only in Builder’s Claude Code · Terminal: it runs there once you switch the agent to it (session.continueIn), which only you do.',
+      );
+      expect(await fails(core, 'message', { to: 'a', body: '/config' }, caller)).toMatchObject({
+        code: 'refused',
+      });
+      // Shell text by the Terminal's own prefix, though this connection has none of its own.
+      expect(await fails(core, 'message', { to: 'a', body: '!ls -la' }, caller)).toMatchObject({
+        code: 'refused',
+        sentence: expect.stringMatching(/^That shell command runs only in Builder’s/) as unknown,
+      });
+    }
+    expect(core.engines.canvas(CANVAS)?.messages.all().length).toBe(before);
+    expect(sdk.sessions[0]?.sent ?? []).toEqual([]);
+
+    // The session's own command with its setting, and a path, go as typed.
+    await ok(core, 'message', { to: 'a', body: '/config theme dark' });
+    await ok(core, 'message', { to: 'a', body: '/usr/local/bin is slow' });
+    await vi.waitFor(() => {
+      expect(sdk.sessions[0]?.sent.map(({ text }) => text)).toEqual([
+        '/config theme dark',
+        '/usr/local/bin is slow',
+      ]);
+    });
+  });
+
+  it('sends the same command text to a connection that runs it', async () => {
+    const { core, terminal } = await start();
+    await ok(core, 'session.continueIn', { agent: 'b', connection: 'claude-code.terminal' });
+    await ok(core, 'message', { to: 'b', body: '/resume' });
+    await vi.waitFor(() => {
+      expect(terminal.sessions[0]?.sent.map(({ text }) => text)).toEqual(['/resume']);
+    });
+  });
+});

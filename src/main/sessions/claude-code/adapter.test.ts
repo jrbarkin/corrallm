@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import { routeOf } from '../../../shared/routing';
 import { signalsOf } from './sdk/raise';
 import type { ToolOptions } from './sdk/raise';
 import { recorded } from './sdk/recorded';
@@ -91,6 +92,23 @@ describe("Claude Code's adapter", () => {
       shell: true,
       mcpSignIn: true,
     });
+  });
+
+  it('continues only a bare /config in Terminal: with a setting, the session’s own runs (B16 C2)', () => {
+    const commands = connection('claude-code.sdk').continueIn?.commands ?? [];
+    expect(commands.filter(({ bare }) => bare === true).map(({ name }) => name)).toEqual([
+      'config',
+    ]);
+    const context = {
+      connection: connection('claude-code.sdk'),
+      target: connection('claude-code.terminal'),
+      offered: [{ name: 'config', description: '', argumentHint: '' }],
+    };
+    expect(routeOf('/config', context)).toMatchObject({ kind: 'continue' });
+    expect(routeOf('/config theme dark', context)).toEqual({ kind: 'command', name: 'config' });
+    expect(routeOf('/login', context)).toMatchObject({ kind: 'continue' });
+    expect(routeOf('!ls', context)).toMatchObject({ kind: 'shell', command: 'ls' });
+    expect(routeOf('/rewind', context)).toEqual({ kind: 'panel', panel: 'rewind' });
   });
 
   it('classifies every mode, and starts sessions only in those that ask', () => {

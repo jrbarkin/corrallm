@@ -148,7 +148,7 @@ export interface ConnectionDescriptor {
    */
   continueIn?: {
     connection: ConnectionId;
-    commands: SlashCommand[];
+    commands: ContinuationCommand[];
     shell: boolean;
     mcpSignIn: boolean;
   };
@@ -158,6 +158,15 @@ export interface ConnectionDescriptor {
   shellPrefix?: string;
   /** Expands @ file mentions in text it is sent, without asking. */
   fileMentions?: true;
+}
+
+/**
+ * A command only a connection's `continueIn` connection runs (B16 C2). `bare`: only typed bare,
+ * without arguments; with them, a command of that name its session offers runs instead. Where its
+ * session offers none of that name, it continues either way.
+ */
+export interface ContinuationCommand extends SlashCommand {
+  bare?: true;
 }
 
 export interface UsageBackendDescriptor {
