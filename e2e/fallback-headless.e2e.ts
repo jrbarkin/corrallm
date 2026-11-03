@@ -57,6 +57,9 @@ test('serve switches into a fresh Terminal step and keeps its native permission 
     const session = await world.call('session.get', { canvas: world.canvas, agent: WORKER });
     expect(session.prompts, 'The core prompt owner must retain the headless native wait').toBe(1);
     await world.checkpoint();
+  } catch (error) {
+    await world.diagnose(error);
+    throw error;
   } finally {
     await world.close();
   }

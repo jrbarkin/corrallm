@@ -119,6 +119,9 @@ test('a Terminal context crossing writes its handoff, then a hard limit continue
       world.page.getByRole('dialog', { name: 'Latest handoff' }).locator('pre'),
       'The tile must open the exact kept handoff',
     ).toHaveText(HANDOFF);
+  } catch (error) {
+    await world.diagnose(error);
+    throw error;
   } finally {
     await world.close();
   }
@@ -174,6 +177,9 @@ test('a real native usage reading switches between tasks without failing or rese
     ).toHaveLength(1);
     expect(run?.attempts?.[ItemId.parse('boundary')]?.[0]?.status).toBe('succeeded');
     await world.checkpoint();
+  } catch (error) {
+    await world.diagnose(error);
+    throw error;
   } finally {
     await world.close();
   }
@@ -231,6 +237,9 @@ test('an opted-in return waits for the source reset and the next admitted task, 
       'The target must not receive the returned task',
     ).toBe(false);
     await world.checkpoint();
+  } catch (error) {
+    await world.diagnose(error);
+    throw error;
   } finally {
     await world.close();
   }
@@ -271,6 +280,9 @@ test('an unknown action stays unsent with only Skip and Stop here, and Skip rele
       expect.stringContaining('after-unknown'),
     ]);
     await world.checkpoint();
+  } catch (error) {
+    await world.diagnose(error);
+    throw error;
   } finally {
     await world.close();
   }
@@ -308,6 +320,9 @@ test('with no chain a native hard limit remains held for the user, without a sec
     expect(await world.claudePrompts(), 'No target CLI may start without a chain').toEqual([]);
     expect((await world.worker())?.data.adapter).toBe('codex');
     await world.checkpoint();
+  } catch (error) {
+    await world.diagnose(error);
+    throw error;
   } finally {
     await world.close();
   }
@@ -348,6 +363,9 @@ for (const noWindow of [false, true]) {
           .getByRole('button', { name: agentChipName('codex.app-server'), exact: true }),
         'The reopened chip must show the committed target',
       ).toBeVisible();
+    } catch (error) {
+      await world.diagnose(error);
+      throw error;
     } finally {
       await world.close();
     }
@@ -411,6 +429,9 @@ test('a core crash during source close leaves no switch committed; Resume decide
       'Recovery must retain the failed source and one successful continuation',
     ).toHaveLength(2);
     await world.checkpoint();
+  } catch (error) {
+    await world.diagnose(error);
+    throw error;
   } finally {
     await world.close();
   }

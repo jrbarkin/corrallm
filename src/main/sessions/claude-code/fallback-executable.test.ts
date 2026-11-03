@@ -11,6 +11,8 @@ it('the executable Terminal fake posts native readings before its exact handoff 
   const status = path.join(folder, 'status.mjs');
   const script = path.join(folder, 'script.json');
   const settings = path.join(folder, 'settings.json');
+  const initialGate = path.join(folder, 'initial-release');
+  const readingGate = path.join(folder, 'reading-release');
   const handoff = '# Handoff\nExact native reply.';
   const reading = (used: number) => ({
     context_window: { context_window_size: 1_000_000, used_percentage: 60 },
@@ -26,6 +28,10 @@ it('the executable Terminal fake posts native readings before its exact handoff 
         'fallback-limit': { fail: true, resetAfterSeconds: 60, reading: reading(100) },
       },
     }),
+  );
+  await writeFile(
+    path.join(folder, '.fake-claude-usage.json'),
+    JSON.stringify(reading(12).rate_limits),
   );
   await writeFile(
     status,
@@ -50,8 +56,21 @@ it('the executable Terminal fake posts native readings before its exact handoff 
     }),
   );
   const file = pathToFileURL(path.join(import.meta.dirname, 'fixtures/fake-terminal.mjs')).href;
-  const bootstrap =
-    "import {appendFileSync} from 'node:fs';process.stdin.setRawMode=()=>process.stdin;globalThis.fetch=async(_url,options)=>{appendFileSync(process.env.CAPTURE,JSON.stringify({kind:'hook',body:JSON.parse(options.body)})+'\\n');return new Response('{}');};process.argv=[process.execPath,'fake','--settings',process.env.SETTINGS];await import(process.env.FAKE_TOOL);";
+  const bootstrap = `
+    import {appendFileSync, existsSync} from 'node:fs';
+    process.stdin.setRawMode=()=>process.stdin;
+    globalThis.fetch=async(url,options)=>{
+      const body=JSON.parse(options.body);
+      const status=url.toString().endsWith('/status');
+      appendFileSync(process.env.CAPTURE,JSON.stringify({kind:status?'status':'hook',url: url.toString(),body})+'\\n');
+      const gate=status && !body.context_window ? process.env.INITIAL_GATE
+        : status && body.rate_limits?.five_hour?.used_percentage===12 ? process.env.READING_GATE : undefined;
+      while(gate && !existsSync(gate)) await new Promise(resolve=>setTimeout(resolve,10));
+      return new Response('{}');
+    };
+    process.argv=[process.execPath,'fake','--settings',process.env.SETTINGS];
+    await import(process.env.FAKE_TOOL);
+  `;
   const child = spawn(process.execPath, ['--input-type=module', '-e', bootstrap], {
     cwd: folder,
     env: {
@@ -60,6 +79,8 @@ it('the executable Terminal fake posts native readings before its exact handoff 
       SETTINGS: settings,
       FAKE_TOOL: file,
       FAKE_CLAUDE_FALLBACK: script,
+      INITIAL_GATE: initialGate,
+      READING_GATE: readingGate,
     },
     stdio: ['pipe', 'pipe', 'pipe'],
   });
@@ -80,7 +101,9 @@ it('the executable Terminal fake posts native readings before its exact handoff 
     (await readFile(capture, 'utf8').catch(() => ''))
       .split('\n')
       .filter(Boolean)
-      .map((line) => JSON.parse(line) as { kind: string; body: Record<string, unknown> });
+      .map(
+        (line) => JSON.parse(line) as { kind: string; url?: string; body: Record<string, unknown> },
+      );
   try {
     await vi.waitFor(() => {
       expect(output, errors).toContain('\x1b]7501;?');
@@ -90,6 +113,19 @@ it('the executable Terminal fake posts native readings before its exact handoff 
       expect(output, errors).toContain('state=idle');
     });
     child.stdin.write('fallback-warm\r');
+    await vi.waitFor(async () => {
+      expect((await rows()).some((row) => row.url === 'http://fake.invalid/status')).toBe(true);
+    });
+    // A first reading still in flight cannot overtake this turn's context later.
+    expect((await rows()).some((row) => row.body.context_window !== undefined)).toBe(false);
+    expect((await rows()).some((row) => row.body.hook_event_name === 'Stop')).toBe(false);
+    await writeFile(initialGate, 'go');
+    await vi.waitFor(async () => {
+      expect((await rows()).some((row) => row.body.context_window !== undefined)).toBe(true);
+    });
+    // Receipt, not the status command's exit, gates the native turn's end.
+    expect((await rows()).some((row) => row.body.hook_event_name === 'Stop')).toBe(false);
+    await writeFile(readingGate, 'go');
     await vi.waitFor(async () => {
       expect(
         (await rows()).some((row) => row.body.last_assistant_message === 'Warm done.'),

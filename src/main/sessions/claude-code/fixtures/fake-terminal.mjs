@@ -149,13 +149,15 @@ async function hook(name, fields = {}) {
 }
 
 let statusText = '';
+let scriptedStatus = Promise.resolve();
 
 /** Runs the status line from --settings, as Claude Code does, if usage limits are given. */
 function statusLine(reading) {
   const usage = path.join(process.cwd(), '.fake-claude-usage.json');
   const settings = arg('--settings');
   if (!settings || (!reading && !existsSync(usage))) return Promise.resolve();
-  const command = JSON.parse(readFileSync(settings, 'utf8')).statusLine?.command;
+  const given = JSON.parse(readFileSync(settings, 'utf8'));
+  const command = given.statusLine?.command;
   if (typeof command !== 'string') return Promise.resolve();
   const input = {
     session_id: sessionId,
@@ -164,6 +166,33 @@ function statusLine(reading) {
     ...(existsSync(usage) ? { rate_limits: JSON.parse(readFileSync(usage, 'utf8')) } : {}),
     ...reading,
   };
+  if (process.env.FAKE_CLAUDE_FALLBACK) {
+    // Scripted journeys need the recorded reading-before-Stop order. The real wrapper's
+    // background curl can finish after its shell exits: acknowledge the same native /status
+    // channel here, serially, including the initial reading. Ordinary turns still run the shell.
+    const registration = given.hooks?.UserPromptSubmit?.[0]?.hooks?.[0];
+    if (registration?.type !== 'http')
+      throw new Error('The scripted fake needs its native HTTP hook.');
+    const url = new URL(registration.url);
+    if (url.pathname !== '/hook') throw new Error('The scripted fake needs its native hook route.');
+    url.pathname = '/status';
+    scriptedStatus = scriptedStatus.then(async () => {
+      log({ event: 'statusline-reading', input });
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: registration.headers.Authorization,
+        },
+        body: JSON.stringify(input),
+        signal: AbortSignal.timeout(2000),
+      });
+      if (!response.ok)
+        throw new Error(`The native status reading was refused (${response.status}).`);
+      log({ event: 'statusline', code: response.status });
+    });
+    return scriptedStatus;
+  }
   return new Promise((resolve) => {
     const child = spawn('/bin/sh', ['-c', command], { cwd: process.cwd(), env: process.env });
     let output = '';

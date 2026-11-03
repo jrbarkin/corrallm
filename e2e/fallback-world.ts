@@ -332,6 +332,63 @@ export async function fallbackWorld(options: Options = {}) {
             ?.flatMap((part) => (part.type === 'text' ? (part.text ?? '') : []))
             .join('') ?? '',
       );
+  /** Capture before teardown removes the native logs, even if a core read no longer answers. */
+  const diagnose = async (error: unknown) => {
+    const bounded = async (read: () => Promise<unknown>) => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        return await Promise.race([
+          read(),
+          new Promise<string>((resolve) => {
+            timer = setTimeout(() => {
+              resolve('Diagnostic read did not finish within 3 seconds.');
+            }, 3000);
+          }),
+        ]);
+      } catch (failure) {
+        return { error: String(failure) };
+      } finally {
+        clearTimeout(timer);
+      }
+    };
+    const tail = async (file: string) => ({
+      file,
+      text: (await readFile(file, 'utf8').catch((failure: unknown) => String(failure)))
+        .split('\n')
+        .slice(-80)
+        .join('\n')
+        .slice(-32_768),
+    });
+    const reads = await Promise.all([
+      bounded(run),
+      bounded(worker),
+      bounded(() => call('session.get', { canvas, agent: WORKER })),
+      bounded(() => call('session.handoff', { canvas, agent: WORKER })),
+      bounded(() => call('needs', { canvas })),
+      bounded(() => call('usage.get')),
+      tail(path.join(project, '.fake-claude', 'log.jsonl')),
+      tail(codexLog),
+    ]);
+    const body = JSON.stringify(
+      {
+        failure: String(error),
+        canvas,
+        run: reads[0],
+        worker: reads[1],
+        session: reads[2],
+        handoff: reads[3],
+        needs: reads[4],
+        usage: reads[5],
+        claudeLog: reads[6],
+        codexLog: reads[7],
+        serve: output,
+      },
+      null,
+      2,
+    );
+    console.error(`Fallback journey failed before teardown:\n${body}`);
+    await test.info().attach('fallback-failure.json', { body, contentType: 'application/json' });
+  };
   const checkpoint = async () => {
     const expected = await run();
     const at = expected.agents[WORKER];
@@ -386,6 +443,7 @@ export async function fallbackWorld(options: Options = {}) {
     claudePrompts,
     codexPrompts,
     checkpoint,
+    diagnose,
     discovery,
     close,
     release,
