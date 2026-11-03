@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs';
 import { chmod, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -186,6 +187,173 @@ describe('LinkOpener', () => {
       await links.open(renderer(), 'https://docs.example.com/');
       expect(ask).not.toHaveBeenCalled();
       expect(openExternal).toHaveBeenCalledExactlyOnceWith('https://docs.example.com/');
+    },
+  );
+});
+
+/** A promise the test settles: `open` it to let what waits on it go on. */
+function gate<T = void>() {
+  let open: (value: T) => void = () => undefined;
+  const shut = new Promise<T>((resolve) => {
+    open = resolve;
+  });
+  return { shut, open };
+}
+
+describe('the sites it remembers, taken back in Settings (B22a C5)', () => {
+  const DOCS = 'https://docs.example.com';
+  const PORTED = 'https://docs.example.com:8443';
+  const LOCAL = 'http://localhost:5173';
+
+  it('lists them in the order kept, and the built-in sites apart, as origins', async () => {
+    await writeFile(file, JSON.stringify({ version: 1, sites: [PORTED, DOCS, LOCAL] }));
+    const { links } = opener();
+    expect(await links.sites()).toEqual([PORTED, DOCS, LOCAL]);
+    expect(links.builtIn()).toEqual(['https://github.com']);
+    // A remembered duplicate of a built-in site is listed as remembered too.
+    await writeFile(file, JSON.stringify({ version: 1, sites: ['https://github.com'] }));
+    expect(await opener().links.sites()).toEqual(['https://github.com']);
+  });
+
+  it('remembers at most the newest 500, even from a file that holds more', async () => {
+    const sites = Array.from({ length: 501 }, (_, n) => `https://site-${String(n)}.example.com`);
+    await writeFile(file, JSON.stringify({ version: 1, sites }));
+    expect(await opener().links.sites()).toEqual(sites.slice(1));
+  });
+
+  it('forgets one origin exactly: a later click on it asks, the others open, across restarts', async () => {
+    await writeFile(file, JSON.stringify({ version: 1, sites: [DOCS, PORTED, LOCAL], never: [1] }));
+    const { links, ask, openExternal } = opener();
+    const told = vi.fn();
+    links.subscribe(told);
+    await expect(links.forget(DOCS)).resolves.toBe(true);
+    expect(told).toHaveBeenCalledOnce();
+    // Forgetting opens nothing, asks nothing.
+    expect(openExternal).not.toHaveBeenCalled();
+    expect(ask).not.toHaveBeenCalled();
+    expect(await links.sites()).toEqual([PORTED, LOCAL]);
+    expect(JSON.parse(await readFile(file, 'utf8'))).toEqual({
+      version: 1,
+      sites: [PORTED, LOCAL],
+      never: [1],
+    });
+
+    const later = opener();
+    expect(await later.links.open(renderer(), 'https://docs.example.com/a')).toBe(false);
+    expect(later.ask).toHaveBeenCalledOnce();
+    expect(await later.links.open(renderer(), 'https://docs.example.com:8443/a')).toBe(true);
+    expect(await later.links.open(renderer(), 'http://localhost:5173/a')).toBe(true);
+    expect(later.ask).toHaveBeenCalledOnce();
+  });
+
+  it('forgets nothing for a site it doesn’t remember, writing nothing and telling no one', async () => {
+    const layout = JSON.stringify({ version: 1, sites: [DOCS] });
+    await writeFile(file, layout);
+    const { links } = opener();
+    const told = vi.fn();
+    links.subscribe(told);
+    await expect(links.forget(PORTED)).resolves.toBe(false);
+    await expect(links.forget('https://github.com')).resolves.toBe(false);
+    expect(await readFile(file, 'utf8')).toBe(layout);
+    expect(told).not.toHaveBeenCalled();
+  });
+
+  it('tells its listeners when "Always for this site" remembers one', async () => {
+    const { links } = opener({ open: true, always: true }, { open: true, always: false });
+    const told = vi.fn();
+    links.subscribe(told);
+    await links.open(renderer(), 'https://docs.example.com/');
+    expect(told).toHaveBeenCalledOnce();
+    expect(await links.sites()).toEqual([DOCS]);
+    await links.open(renderer(), 'https://one.example.com/');
+    expect(told).toHaveBeenCalledOnce();
+  });
+
+  it('wins over a grant whose dialog opened before it: that click opens once, nothing is kept', async () => {
+    const asked = gate<LinkAnswer>();
+    const ask = vi.fn(() => asked.shut);
+    const openExternal = vi.fn(() => Promise.resolve());
+    const links = new LinkOpener({ file, ask, openExternal });
+    const clicked = links.open(renderer(), 'https://docs.example.com/a');
+    await vi.waitFor(() => {
+      expect(ask).toHaveBeenCalledOnce();
+    });
+    // Nothing remembered yet, but a dialog is up for it: taking it back is no no-op.
+    await expect(links.forget(DOCS)).resolves.toBe(true);
+    asked.open({ open: true, always: true });
+    expect(await clicked).toBe(true);
+    expect(openExternal).toHaveBeenCalledExactlyOnceWith('https://docs.example.com/a');
+    expect(await links.sites()).toEqual([]);
+    expect(existsSync(file)).toBe(false);
+
+    // A new Always, after it, is remembered again.
+    ask.mockImplementation(() => Promise.resolve({ open: true, always: true }));
+    await links.open(renderer(), 'https://docs.example.com/b');
+    expect(await links.sites()).toEqual([DOCS]);
+    // A dialog for another site is another site's.
+    await expect(links.forget(PORTED)).resolves.toBe(false);
+  });
+
+  it('takes back a site whose save was still going when it was taken back', async () => {
+    const saving = gate();
+    const writes: string[] = [];
+    const write = vi.fn(async (_file: string, text: string) => {
+      writes.push(text);
+      if (writes.length === 1) await saving.shut;
+      await writeFile(file, text);
+    });
+    const ask = vi.fn(() => Promise.resolve({ open: true, always: true }));
+    const links = new LinkOpener({ file, ask, openExternal: () => Promise.resolve(), write });
+    const clicked = links.open(renderer(), 'https://docs.example.com/');
+    await vi.waitFor(() => {
+      expect(write).toHaveBeenCalledOnce();
+    });
+    const forgot = links.forget(DOCS);
+    saving.open();
+    expect(await clicked).toBe(true);
+    await expect(forgot).resolves.toBe(true);
+    expect(await links.sites()).toEqual([]);
+    expect(JSON.parse(await readFile(file, 'utf8'))).toEqual({ version: 1, sites: [] });
+  });
+
+  it('refuses a forget it can’t save: still remembered, nothing told; a later one succeeds', async () => {
+    await writeFile(file, JSON.stringify({ version: 1, sites: [DOCS] }));
+    let fail = true;
+    const write = vi.fn(async (_file: string, text: string) => {
+      if (fail) throw new Error('No room.');
+      await writeFile(file, text);
+    });
+    const links = new LinkOpener({
+      file,
+      ask: () => Promise.resolve({ open: false, always: false }),
+      openExternal: () => Promise.resolve(),
+      write,
+    });
+    const told = vi.fn();
+    links.subscribe(told);
+    await expect(links.forget(DOCS)).rejects.toMatchObject({ stage: 'write' });
+    expect(await links.sites()).toEqual([DOCS]);
+    expect(told).not.toHaveBeenCalled();
+    fail = false;
+    await expect(links.forget(DOCS)).resolves.toBe(true);
+    expect(await links.sites()).toEqual([]);
+  });
+
+  it.skipIf(!CAN_DENY)(
+    'refuses a forget, and its list, when its file can’t be read, never writing over it',
+    async () => {
+      const kept = `${JSON.stringify({ version: 1, sites: [DOCS] })}\n`;
+      await writeFile(file, kept);
+      await chmod(file, 0);
+      const { links } = opener();
+      try {
+        await expect(links.sites()).rejects.toThrow(/EACCES/);
+        await expect(links.forget(DOCS)).rejects.toMatchObject({ stage: 'read' });
+      } finally {
+        await chmod(file, 0o600);
+      }
+      expect(await readFile(file, 'utf8')).toBe(kept);
+      expect(await links.sites()).toEqual([DOCS]);
     },
   );
 });
