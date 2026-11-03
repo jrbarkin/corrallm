@@ -341,6 +341,12 @@ test('a restart rotates an agent’s credential and closing the window does not'
     expect(await connected()).toEqual([first]);
     expect((await world.listed()).worker).toBe(true);
 
+    // A restart waits for an idle session: the turn that said hello ends first.
+    await expect
+      .poll(async () => (await world.call('session.get', { canvas, agent: 'worker' })).status, {
+        timeout: 20_000,
+      })
+      .toBe('idle');
     // A restart is a new generation: the old credential ends as its close begins, and the new
     // session connects with a new one.
     await world.call('session.restart', { canvas, agent: 'worker' });
