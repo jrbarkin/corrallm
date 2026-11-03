@@ -313,7 +313,7 @@
   "schemas": {
     "topics.subscribe": {
       "input": "8c5be84f0a1a163a",
-      "output": "6b135d5e2ae1b6c2"
+      "output": "003d6afe36f5583e"
     },
     "topics.unsubscribe": {
       "input": "8c5be84f0a1a163a",
@@ -525,7 +525,7 @@
     },
     "session.get": {
       "input": "c804536f3eb2a39b",
-      "output": "85a8a73103a1e987"
+      "output": "7aef85becb733dc1"
     },
     "session.transcript": {
       "input": "b0a50f8eb22508f9",

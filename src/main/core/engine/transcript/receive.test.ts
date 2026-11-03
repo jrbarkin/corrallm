@@ -67,7 +67,15 @@ describe('a connected session', () => {
       { value: 'opus', label: 'Opus' },
       { value: 'haiku', label: 'Haiku' },
     ];
-    emit('a', 'claude-code.sdk', { type: 'started', model: 'opus', mode: 'acceptEdits', models });
+    emit('a', 'claude-code.sdk', {
+      type: 'started',
+      role: 'append',
+      resume: true,
+      list: true,
+      model: 'opus',
+      mode: 'acceptEdits',
+      models,
+    });
     expect(store.of('a')).toMatchObject({ models, model: 'opus', mode: 'acceptEdits' });
     await settle();
   });
@@ -127,6 +135,9 @@ describe('a connected session', () => {
     await settle();
     emit('a', 'claude-code.terminal', {
       type: 'started',
+      role: 'append',
+      resume: true,
+      list: true,
       model: 'haiku',
       mode: 'manual',
       models: [],
@@ -165,12 +176,28 @@ describe('a connected session', () => {
     store.open('a');
     const text =
       'Claude Code’s settings turn off its hooks (disableAllHooks in ~/.claude/settings.json).';
-    emit('a', 'claude-code.terminal', { type: 'started', model: null, mode: 'manual', models: [] });
+    emit('a', 'claude-code.terminal', {
+      type: 'started',
+      role: 'append',
+      resume: true,
+      list: true,
+      model: null,
+      mode: 'manual',
+      models: [],
+    });
     emit('a', 'claude-code.terminal', { type: 'unheard', text });
     expect(store.of('a').unheard).toBe(text);
     expect(store.of('a').entries.at(-1)).toMatchObject({ kind: 'notice', level: 'warning', text });
     // Started again, with the hooks back on: nothing more to say.
-    emit('a', 'claude-code.terminal', { type: 'started', model: null, mode: 'manual', models: [] });
+    emit('a', 'claude-code.terminal', {
+      type: 'started',
+      role: 'append',
+      resume: true,
+      list: true,
+      model: null,
+      mode: 'manual',
+      models: [],
+    });
     expect(store.of('a').unheard).toBeUndefined();
     await settle();
   });
@@ -654,7 +681,15 @@ describe('a connected session continued in Terminal', () => {
   it('sends a command typed for Terminal once the agent runs there, never to its SDK session', async () => {
     const { store, backend, emit } = connected();
     store.open('a');
-    emit('a', 'claude-code.sdk', { type: 'started', model: null, mode: 'manual', models: [] });
+    emit('a', 'claude-code.sdk', {
+      type: 'started',
+      role: 'append',
+      resume: true,
+      list: true,
+      model: null,
+      mode: 'manual',
+      models: [],
+    });
     store.sendOnceIn('a', 'claude-code.terminal', 'Claude', '/permissions');
     await settle();
     expect(backend.send).not.toHaveBeenCalled();

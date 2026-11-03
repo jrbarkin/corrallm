@@ -7,6 +7,7 @@ import { AppServerConnector } from './app-server/connector';
 import { CodexTerminalConnector } from './terminal/connector';
 import { codexOptions } from './options';
 import { FakeConnector, FAKE_CODEX_MODELS } from '../fake';
+import { CODEX_FEATURES } from './features';
 import logo from './logo.svg?raw';
 import { UsageReader } from './terminal/usage';
 import { codexConversations } from './conversations';
@@ -72,9 +73,7 @@ export const codex: Adapter = {
     })),
     runtimeModes: false,
     // A resumed thread keeps the developer instructions it started with (openai/codex#19045).
-    role: 'append-new',
-    resume: true,
-    list: false,
+    ...CODEX_FEATURES,
     // https://developers.openai.com/codex/cli/slash-commands (now learn.chatgpt.com) and the CLI's
     // source, openai/codex rust-v0.162.1 (read 2026-10-11)
     actions: [
@@ -170,7 +169,7 @@ export const codex: Adapter = {
   conversations: ({ executable }) => ({
     list: async (cwd, env) => codexConversations({ codex: await executable(env), cwd, env }),
   }),
-  fake: (pause) => new FakeConnector({ pause, adapter: 'codex' }),
+  fake: (pause) => new FakeConnector({ pause, adapter: 'codex', features: CODEX_FEATURES }),
   fakeOptions: {
     models: FAKE_CODEX_MODELS,
     // The fake's own default, Codex's Default, asks.

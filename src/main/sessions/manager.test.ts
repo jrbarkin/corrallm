@@ -107,6 +107,22 @@ function manager(
   });
 }
 
+/** What Claude Code reports it does (B16 C1), as its connections' `started` says. */
+const FEATURES = { role: 'append', resume: true, list: true } as const;
+
+/**
+ * A connector that runs `live`, ready once it reports `started` as every connection does (B16 C1:
+ * no control is offered, or taken, before that).
+ */
+function reporting(live: LiveSession | ((spec: SessionSpec) => LiveSession)): Connector {
+  return {
+    start: (spec, host) => {
+      host.emit({ type: 'started', model: null, mode: null, models: [], ...FEATURES });
+      return Promise.resolve(typeof live === 'function' ? live(spec) : live);
+    },
+  };
+}
+
 /** What `canvas`'s windows heard, as event types (with the agent), for a quick look. */
 const types = (canvas: CanvasId) =>
   (heard.get(canvas) ?? []).map(([agent, , event]) => `${agent}:${event.type}`);
@@ -507,7 +523,13 @@ describe('SessionManager', () => {
     expect(heard.get(one)?.[0]).toEqual([
       'a',
       'claude-code.sdk',
-      { type: 'started', model: 'fast', mode: 'acceptEdits', models: expect.any(Array) as unknown },
+      {
+        type: 'started',
+        model: 'fast',
+        mode: 'acceptEdits',
+        models: expect.any(Array) as unknown,
+        ...FEATURES,
+      },
     ]);
 
     await sessions.send(one, 'a', { id: 'm1', text: 'Hello' });
@@ -791,7 +813,7 @@ describe('SessionManager', () => {
         .fn<NonNullable<LiveSession['changeMcpServer']>>()
         .mockResolvedValue(undefined),
     };
-    const sessions = manager({ 'claude-code.sdk': { start: () => Promise.resolve(live) } });
+    const sessions = manager({ 'claude-code.sdk': reporting(live) });
     const canvas = shownCanvas();
     await expect(sessions.mcpServers(canvas, 'a')).rejects.toThrow(/not running/);
     await sessions.start(canvas, 'a', OPTIONS);
@@ -821,8 +843,8 @@ describe('SessionManager', () => {
       stopTask: vi.fn<NonNullable<LiveSession['stopTask']>>().mockResolvedValue(undefined),
     };
     const sessions = manager({
-      'claude-code.sdk': { start: () => Promise.resolve(live) },
-      'claude-code.terminal': { start: () => Promise.resolve(terminal) },
+      'claude-code.sdk': reporting(live),
+      'claude-code.terminal': reporting(terminal),
     });
     const canvas = shownCanvas();
     await sessions.start(canvas, 'a', OPTIONS);
@@ -846,11 +868,12 @@ describe('SessionManager', () => {
       setModel: () => Promise.resolve(),
       close: () => Promise.resolve(),
     };
-    const start = (spec: SessionSpec) => {
-      specs.push(spec);
-      return Promise.resolve({ ...plain, setEffort });
-    };
-    const sessions = manager({ 'claude-code.sdk': { start } });
+    const sessions = manager({
+      'claude-code.sdk': reporting((spec) => {
+        specs.push(spec);
+        return { ...plain, setEffort };
+      }),
+    });
     const canvas = shownCanvas();
     await sessions.start(canvas, 'a', { ...OPTIONS, effort: 'high' });
     expect(specs.at(-1)?.effort).toBe('high');
@@ -1375,6 +1398,7 @@ describe('SessionManager rewinding a session', () => {
     const connector: Connector = {
       start: (spec, host) => {
         host.remember(spec.resume ?? REMEMBERED);
+        host.emit({ type: 'started', model: null, mode: null, models: [], ...FEATURES });
         return Promise.resolve({
           send: () => Promise.resolve(),
           interrupt: () => Promise.resolve(),

@@ -180,7 +180,13 @@ describe('Codex in a terminal, as the real one ran', () => {
     expect(readInstructions).not.toHaveBeenCalled();
     expect(runs[0]?.args.slice(0, 2)).toEqual(['resume', RECORDED_SESSION]);
     expect(runs[0]?.args.some((arg) => arg.startsWith('developer_instructions='))).toBe(false);
-    expect(events[0]).toMatchObject({ type: 'started' });
+    // With what Codex does (B16 C1), as its adapter supplies the shared terminal.
+    expect(events[0]).toMatchObject({
+      type: 'started',
+      role: 'append-new',
+      resume: true,
+      list: false,
+    });
   });
 
   it('reconciles captured roles with current native instructions on exact-ID restart, including removal', async () => {

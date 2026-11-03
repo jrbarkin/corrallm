@@ -552,7 +552,15 @@ describe('stalled message turns', () => {
       const connector: Connector<SessionMode> = {
         start: (_spec, given) => {
           host = given;
-          given.emit({ type: 'started', model: null, mode: 'auto', models: [] });
+          given.emit({
+            type: 'started',
+            role: 'append',
+            resume: true,
+            list: true,
+            model: null,
+            mode: 'auto',
+            models: [],
+          });
           return Promise.resolve({
             send: (message) => {
               turns.push(message.id);
@@ -1948,7 +1956,15 @@ describe('a turn waiting for you', () => {
   /** A connector whose every turn waits on what `prompt` asks, for the message it was sent. */
   const asking = (prompt: (message: string) => HostEvent): Connector<SessionMode> => ({
     start: (_spec, host) => {
-      host.emit({ type: 'started', model: 'default', mode: 'auto', models: [] });
+      host.emit({
+        type: 'started',
+        role: 'append',
+        resume: true,
+        list: true,
+        model: 'default',
+        mode: 'auto',
+        models: [],
+      });
       const idle = () => Promise.resolve();
       return Promise.resolve({
         send: (message) => {
@@ -4211,7 +4227,15 @@ describe('reads', () => {
     // A turn that runs the tests (a long output) and writes a big file (a long diff).
     const long: Connector<SessionMode> = {
       start: (_spec, host) => {
-        host.emit({ type: 'started', model: 'default', mode: 'auto', models: [] });
+        host.emit({
+          type: 'started',
+          role: 'append',
+          resume: true,
+          list: true,
+          model: 'default',
+          mode: 'auto',
+          models: [],
+        });
         const idle = () => Promise.resolve();
         return Promise.resolve({
           send: (message) => {
@@ -4297,7 +4321,15 @@ describe('reads', () => {
     // given whole (a heredoc), and a long to-do list.
     const big: Connector<SessionMode> = {
       start: (_spec, host) => {
-        host.emit({ type: 'started', model: 'default', mode: 'auto', models: [] });
+        host.emit({
+          type: 'started',
+          role: 'append',
+          resume: true,
+          list: true,
+          model: 'default',
+          mode: 'auto',
+          models: [],
+        });
         const idle = () => Promise.resolve();
         return Promise.resolve({
           send: (message) => {
@@ -4406,7 +4438,15 @@ describe('reads', () => {
     // A turn whose MCP server asks the user to sign in, at a link.
     const signIn: Connector<SessionMode> = {
       start: (_spec, host) => {
-        host.emit({ type: 'started', model: 'default', mode: 'auto', models: [] });
+        host.emit({
+          type: 'started',
+          role: 'append',
+          resume: true,
+          list: true,
+          model: 'default',
+          mode: 'auto',
+          models: [],
+        });
         const idle = () => Promise.resolve();
         return Promise.resolve({
           send: (message) => {

@@ -2,6 +2,7 @@ import { MAX_IMAGE_BYTES, MAX_IMAGES } from '../../../shared/api/limits';
 import { IMAGE_TYPES } from '../../../shared/session';
 import type { Adapter } from '../adapter';
 import { FakeConnector, FAKE_MODELS } from '../fake';
+import { CLAUDE_FEATURES } from './features';
 import { findClaude } from './claude';
 import { isUuid } from '../id';
 import { claudeOptions } from './claude-settings';
@@ -65,9 +66,7 @@ export const claudeCode: Adapter = {
       rank: RANKS[mode.id],
     })),
     runtimeModes: false,
-    role: 'append',
-    resume: true,
-    list: true,
+    ...CLAUDE_FEATURES,
     // https://code.claude.com/docs/en/tools-reference.md, https://code.claude.com/docs/en/commands.md
     // (read 2026-10-11, Claude Code v2.1.287)
     actions: [
@@ -214,7 +213,7 @@ export const claudeCode: Adapter = {
     'claude-code.sdk': new SdkConnector({ clientApp, findClaude: executable }),
   }),
   readOptions: ({ env, cwd }) => claudeOptions(env, cwd),
-  fake: (pause) => new FakeConnector({ pause }),
+  fake: (pause) => new FakeConnector({ pause, features: CLAUDE_FEATURES }),
   fakeOptions: {
     models: FAKE_MODELS,
     // The fake's own default, Manual, asks.

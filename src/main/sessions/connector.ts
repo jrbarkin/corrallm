@@ -84,11 +84,17 @@ export interface SessionSpec<M extends SessionMode = PermissionMode> {
    * absent for the model's default.
    */
   effort?: string | null;
-  /** Standing instructions captured at launch, appended to native defaults without a user turn. */
+  /**
+   * Standing instructions captured at launch, appended to native defaults without a user turn:
+   * never given to a connection whose adapter applies no role.
+   */
   role?: string;
   /** C-owned authorized workspace context, separate from saved role; no producer is composed yet. */
   workspaceContext?: string;
-  /** The id of the session to resume (it was given to `remember`), or null to start a new one. */
+  /**
+   * The id of the session to resume (it was given to `remember`), or null to start a new one: never
+   * one for a connection whose adapter can't continue a conversation.
+   */
   resume: string | null;
   /** Whether the resumed conversation's role changed; an unknown previous role counts as changed. */
   roleChanged?: boolean;
@@ -99,6 +105,11 @@ export interface SessionSpec<M extends SessionMode = PermissionMode> {
  * a key the adapter mints fresh for every native request or observation (`randomUUID()`) and maps
  * privately to its native ids: never reused, never parsed, never put in argv or a path. The
  * manager hands prompts to the core's prompt owner (core/prompts/owner.ts), never to a window.
+ *
+ * Its `started` says what this session can do (B16 C1: its effective role, resume and list), from
+ * what its adapter supplies its connectors (each adapter's own declared maxima, which a negotiated
+ * protocol may narrow): the manager reads them against those maxima, keeps them for this
+ * generation, and passes on only what they come to.
  */
 export type HostEvent = SessionEvent | PromptEvent | PromptEnded;
 

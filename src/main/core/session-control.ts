@@ -93,6 +93,7 @@ export interface SessionControlDeps {
     | 'settingsOptions'
     | 'mcpServers'
     | 'changeMcpServer'
+    | 'features'
   >;
   gate: Pick<WorkspaceGate, 'mutate'>;
   proposals: Pick<Proposals, 'raise'>;
@@ -316,6 +317,13 @@ export class SessionControl {
   ): Promise<object> {
     const target = this.#target(canvas, agent);
     const { open, adapter } = target;
+    // B16 C4: a restart keeps the conversation; where it can't, Start new conversation is the way.
+    if (!this.#resumes(target)) {
+      throw new OpFailure(
+        'refused',
+        `${target.name}’s connection can’t continue its conversation, so it can’t restart on it: start a new conversation instead.`,
+      );
+    }
     await this.#launchable(target, 'restart');
     // Idle as it closes: nothing awaited between this check and its effect.
     this.#idle(target, 'restart it');
@@ -355,10 +363,14 @@ export class SessionControl {
   ): Promise<{ items: (PastSession & { id: z.infer<typeof ConversationId> })[] }> {
     const { open, adapter } = this.#target(canvas, agent);
     const descriptor = adapterIn(this.#deps.catalog, adapter);
-    if (descriptor?.list !== true) {
+    // Its adapter's maximum, and its running generation's (B16 C1), if one is ready.
+    const features = this.#deps.sessions.features(open.document.id, agent);
+    if (descriptor?.list !== true || features?.list === false) {
       throw new OpFailure(
         'refused',
-        `${descriptor?.name ?? adapter} keeps no conversations corrallm can list.`,
+        descriptor?.list !== true
+          ? `${descriptor?.name ?? adapter} keeps no conversations corrallm can list.`
+          : `${nameOf(open.document.nodes, agent)}’s session can’t list its conversations.`,
       );
     }
     const listed = await this.#effect(() =>
@@ -394,6 +406,9 @@ export class SessionControl {
     const target = this.#target(canvas, agent);
     const { open, name } = target;
     const caller = callerKey(ctx.caller);
+    if (!this.#resumes(target)) {
+      throw new OpFailure('refused', `${name}’s connection can’t continue a conversation.`);
+    }
     if (!this.#deps.sessions.listedTo(open.document.id, agent, caller, conversation)) {
       throw new OpFailure(
         'not-found',
@@ -697,6 +712,17 @@ export class SessionControl {
       );
     const { adapter, connection } = endpoint;
     return { open, node, adapter, connection, name };
+  }
+
+  /**
+   * Whether the agent's endpoint can continue a conversation (B16 C4): its adapter declares it, and
+   * its ready generation, if one runs, didn't report less.
+   */
+  #resumes({ open, node, adapter }: Target): boolean {
+    return (
+      adapterIn(this.#deps.catalog, adapter)?.resume === true &&
+      this.#deps.sessions.features(open.document.id, node.id)?.resume !== false
+    );
   }
 
   /** Refuses, before anything, a session that isn't idle or has messages waiting to go. */

@@ -430,7 +430,15 @@ describe('SdkConnector', () => {
   it('says it started, with the models and slash commands the CLI offers', async () => {
     const { sdk, host, events } = connector();
     await sdk.start({ ...SPEC, mode: 'plan' }, host);
-    expect(events[0]).toMatchObject({ type: 'started', model: 'default', mode: 'plan' });
+    // With what Claude Code does (B16 C1), from its adapter's own declaration.
+    expect(events[0]).toMatchObject({
+      type: 'started',
+      model: 'default',
+      mode: 'plan',
+      role: 'append',
+      resume: true,
+      list: true,
+    });
     const started = events[0]?.type === 'started' ? events[0] : undefined;
     expect(started?.models.map((m) => m.value).slice(0, 5)).toEqual([
       'default',

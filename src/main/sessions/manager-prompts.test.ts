@@ -174,7 +174,15 @@ describe('prompts a session raises', () => {
     const generation = sessionManager.generationOf(canvas, 'b');
     // Its mode changes as it runs, and it says it started again: its start mode stays the first.
     session.host.emit({ type: 'mode', mode: 'acceptEdits' });
-    session.host.emit({ type: 'started', model: 'default', mode: 'bypassPermissions', models: [] });
+    session.host.emit({
+      type: 'started',
+      role: 'append',
+      resume: true,
+      list: true,
+      model: 'default',
+      mode: 'bypassPermissions',
+      models: [],
+    });
     const event = { type: 'prompt' as const, key: KEY, prompt: PROMPT as never };
     session.host.emit(event);
     session.host.emit({ type: 'prompt-ended', key: KEY, reason: 'withdrawn' });

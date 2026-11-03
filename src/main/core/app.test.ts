@@ -319,7 +319,15 @@ describe('the app’s core and window channels', () => {
             [connection]: {
               start: (_spec, given) => {
                 host = given;
-                given.emit({ type: 'started', model: null, mode: null, models: [] });
+                given.emit({
+                  type: 'started',
+                  role: 'append',
+                  resume: true,
+                  list: true,
+                  model: null,
+                  mode: null,
+                  models: [],
+                });
                 return Promise.resolve({
                   send: (message) => {
                     given.emit({ type: 'user', id: message.id, text: message.text });

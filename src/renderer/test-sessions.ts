@@ -137,6 +137,9 @@ export function automaticSessions() {
     sessions.set(agentId, { connection: options.connection, mode });
     fake.emit(agentId, options.connection, {
       type: 'started',
+      role: 'append',
+      resume: true,
+      list: true,
       model: options.model,
       mode,
       models: [],

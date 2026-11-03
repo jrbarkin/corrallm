@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import { z } from 'zod';
 
 import type { AdapterId } from '../../shared/adapter';
+import type { EffectiveFeatures } from '../../shared/features';
 import type { ModelChoice, SessionMode, UserMessage } from '../../shared/session';
 import type { Connector, LiveSession, PromptAnswers, SessionHost, SessionSpec } from './connector';
 import { checkPromptAnswer } from '../../shared/model/prompts';
@@ -98,6 +99,7 @@ export class FakeConnector implements Connector<SessionMode> {
   readonly #asks: boolean | undefined;
   readonly #adapter: AdapterId;
   readonly #script: FakeScript | undefined;
+  readonly #features: EffectiveFeatures;
 
   /**
    * `pause`: how long (ms) between the events of a turn; `adapter`: the one it stands in for;
@@ -105,7 +107,9 @@ export class FakeConnector implements Connector<SessionMode> {
    * as a CLI that never says its mode); `asks`: whether that setting asks, as it says where its
    * mode doesn't (a policy that is no mode). `step` replaces the delay with a test-controlled
    * scheduler, so tests of another clock can run turns without advancing that clock. `script`:
-   * the turns it plays instead (FakeScript), by default CORRALLM_FAKE_SCRIPT's.
+   * the turns it plays instead (FakeScript), by default CORRALLM_FAKE_SCRIPT's. `features`: what
+   * its `started` reports it does (B16 C1), by default everything, which the manager narrows to
+   * what the adapter it stands in for declares.
    */
   constructor({
     pause = 0,
@@ -114,6 +118,7 @@ export class FakeConnector implements Connector<SessionMode> {
     asks,
     step = () => new Promise<void>((resolve) => setTimeout(resolve, pause)),
     script = fakeScript(),
+    features = { role: 'append', resume: true, list: true },
   }: {
     pause?: number;
     adapter?: AdapterId;
@@ -121,7 +126,9 @@ export class FakeConnector implements Connector<SessionMode> {
     asks?: boolean;
     step?: () => Promise<void>;
     script?: FakeScript | undefined;
+    features?: EffectiveFeatures;
   } = {}) {
+    this.#features = features;
     this.#step = step;
     this.#script = script;
     this.#adapter = adapter;
@@ -147,6 +154,7 @@ export class FakeConnector implements Connector<SessionMode> {
       models: codex ? FAKE_CODEX_MODELS : FAKE_MODELS,
       ...(codex ? { effort: spec.effort ?? null } : {}),
       ...(spec.mode === null && this.#asks !== undefined ? { asks: this.#asks } : {}),
+      ...this.#features,
     });
     const session = new FakeSession(mode, host, this.#step, this.#script);
     this.sessions.push(session);

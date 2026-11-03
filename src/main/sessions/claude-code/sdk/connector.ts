@@ -36,6 +36,7 @@ import type { Places } from './tools';
 import { sdkMode, Translator } from './translate';
 import { channelServer } from './api';
 import { entrySettings, managedApiReason } from '../mcp-entry';
+import { CLAUDE_FEATURES } from '../features';
 
 /*
  * The Agent SDK connection: a Claude agent runs as a real Claude Code session, through the
@@ -323,6 +324,7 @@ export class SdkConnector implements Connector {
       ...(settings.bypassDisabled
         ? { modes: PERMISSION_MODES.filter((m) => m !== 'bypassPermissions') }
         : {}),
+      ...CLAUDE_FEATURES,
     });
     if (apiReason !== undefined)
       host.emit({ type: 'notice', id: randomUUID(), level: 'warning', text: apiReason });

@@ -760,6 +760,9 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
       quotedName(agentName(documents.loaded(canvas)?.document.nodes ?? [], agent)),
     sending: (canvas, agentId, message, send, stopped, connection) =>
       engines.sending(canvas, agentId, message, send, stopped, connection),
+    featuresChanged: (canvas, agent) => {
+      runtime.featuresChanged(canvas, agent);
+    },
     emit: (canvas, agentId, connection, event) => {
       stalled.event(canvas, agentId, connection, event);
       void engines.emit(canvas, agentId, connection, event).catch((error: unknown) => {
@@ -1151,6 +1154,7 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     // B21 C8: a step asks for complete once its agent's session listed it (C1's observation).
     completes: (canvas, agent) => authority.hasListedTool(canvas, agent, 'complete'),
     listed: (canvas, agent) => authority.hasListed(canvas, agent),
+    features: (canvas, agent) => sessions.features(canvas, agent),
   });
   /** A canvas the core runs, executing (its delivery started): what B11a's services act on. */
   const executing = (canvas: CanvasId) => {

@@ -34,6 +34,7 @@ import { modeSettings } from './protocol';
 import { AppServerSession, readModels, resumedHistory } from './session';
 import type { CodexModel, ThreadInfo } from './session';
 import { Translator } from './translate';
+import { CODEX_FEATURES } from '../features';
 
 /*
  * The App Server connection: a Codex agent runs as a real Codex thread, through `codex app-server`
@@ -336,6 +337,7 @@ export class AppServerConnector implements Connector<CodexMode> {
         models: choices(models, thread.model),
         effort: session.effort,
         ...(session.asks === undefined ? {} : { asks: session.asks }),
+        ...CODEX_FEATURES,
       });
       if (apiReason !== undefined)
         host.emit({ type: 'notice', id: randomUUID(), level: 'warning', text: apiReason });

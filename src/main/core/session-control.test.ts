@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MAX_MESSAGE_BYTES } from '../../shared/api/limits';
 import { RULES } from '../../shared/api/rules';
 import type { CanvasId } from '../../shared/canvas';
+import type { EffectiveFeatures } from '../../shared/features';
 import type { FilesRewind, McpChange, McpServer, SessionMode } from '../../shared/session';
 import { MAX_MESSAGE_LENGTH } from '../../shared/session';
 import type { KeptConversation } from '../sessions/adapter';
@@ -145,7 +146,11 @@ function restoring(fake: FakeConnector): Connector<SessionMode> {
 
 async function start(
   conversations: Record<string, { id: string }> = {},
-  { other = false, team = false }: { other?: boolean; team?: boolean } = {},
+  {
+    other = false,
+    team = false,
+    features,
+  }: { other?: boolean; team?: boolean; features?: EffectiveFeatures } = {},
 ): Promise<{ core: Core; sdk: FakeConnector; terminal: FakeConnector }> {
   const file = path.join(profile, 'team.corral');
   await writeFile(file, canvasText(team));
@@ -164,7 +169,11 @@ async function start(
   // A turn holds where it is while the test holds it: a turn going on.
   const step = () => holding?.promise ?? Promise.resolve();
   // In a mode that doesn't ask: its turns run to their end.
-  const sdk = new FakeConnector({ step, mode: 'acceptEdits' });
+  const sdk = new FakeConnector({
+    step,
+    mode: 'acceptEdits',
+    ...(features === undefined ? {} : { features }),
+  });
   const terminal = new FakeConnector({ step, mode: 'acceptEdits' });
   const core = await createCore(
     {
@@ -1005,5 +1014,78 @@ describe('what your session view shows beside its state', () => {
       expect(JSON.stringify(token)).not.toContain('Run the tests');
       expect(JSON.stringify(token)).not.toContain('perm-1');
     }
+  });
+});
+
+describe('what a session can do (B16 C1)', () => {
+  /** What the Agent SDK's fake can do here: its methods, and a listing without a fork. */
+  const FEATURES = {
+    role: 'append',
+    resume: true,
+    list: true,
+    live: { effort: true, stopTask: false },
+    panels: {
+      resume: true,
+      mcp: { changes: ['reconnect', 'enable', 'disable'] },
+      rewind: { restores: ['code'] },
+    },
+  };
+
+  it('says what its ready generation can do in session.get and both topics, none before it runs or once it stops', async () => {
+    const { core } = await start();
+    expect(await ok(core, 'session.get', { agent: 'a' })).toMatchObject({ features: null });
+    await ok(core, 'session.open', { agent: 'a' });
+    await vi.waitFor(async () => {
+      expect(await ok(core, 'session.get', { agent: 'a' })).toMatchObject({ features: FEATURES });
+    });
+    // A token that reaches the agent reads the same capabilities, and the topics agree.
+    expect(await ok(core, 'session.get', { agent: 'a' }, ORCHESTRATOR)).toMatchObject({
+      features: FEATURES,
+    });
+    for (const caller of [YOU, ORCHESTRATOR]) {
+      expect(await core.topics.read(`sessions:${CANVAS}`, caller)).toMatchObject({
+        ok: true,
+        value: { agents: { a: { features: FEATURES }, b: { features: null } } },
+      });
+      expect(await core.topics.read(`session:${CANVAS}:a`, caller)).toMatchObject({
+        ok: true,
+        value: { summary: { features: FEATURES } },
+      });
+    }
+    // Its session stops by itself: what it could do goes with it.
+    hosts.get('a')?.emit({ type: 'closed' });
+    await vi.waitFor(async () => {
+      expect(await ok(core, 'session.get', { agent: 'a' })).toMatchObject({ features: null });
+    });
+  });
+
+  it('says what a narrower generation can do: no /resume listing, no restart', async () => {
+    const { core, sdk } = await start(
+      { a: { id: KEPT } },
+      {
+        features: { role: 'append', resume: false, list: false },
+      },
+    );
+    await ok(core, 'session.open', { agent: 'a' });
+    await vi.waitFor(async () => {
+      expect(await ok(core, 'session.get', { agent: 'a' })).toMatchObject({
+        features: { resume: false, list: false, panels: { rewind: { restores: ['code'] } } },
+      });
+    });
+    const summary = (await ok(core, 'session.get', { agent: 'a' })) as {
+      features: { panels: object };
+    };
+    expect(summary.features.panels).not.toHaveProperty('resume');
+    const listed = await fails(core, 'session.conversations', { agent: 'a' });
+    expect(listed.code).toBe('refused');
+    // B16 C4: a restart would promise the conversation it can't keep; a new conversation is the way.
+    const restart = await fails(core, 'session.restart', { agent: 'a' });
+    expect(restart).toMatchObject({ code: 'refused' });
+    expect(restart.sentence).toMatch(
+      /Builder’s connection can’t continue.*start a new conversation/,
+    );
+    const before = sdk.started.length;
+    await ok(core, 'session.newConversation', { agent: 'a' });
+    expect(sdk.started.slice(before).map(({ resume }) => resume)).toEqual([null]);
   });
 });

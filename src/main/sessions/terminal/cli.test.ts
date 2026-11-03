@@ -328,6 +328,7 @@ async function start(
       },
       hooks,
       tmp: dir,
+      features: { role: 'none', resume: false, list: false },
       env: () => ({ ...SPEC.env }),
       timing: {
         ...TIMING,
@@ -393,6 +394,10 @@ describe('a Terminal session of another CLI', () => {
       model: null,
       mode: 'auto',
       models: [],
+      // What its adapter supplies (B16 C1): the toolkit reports nothing of its own.
+      role: 'none',
+      resume: false,
+      list: false,
     });
     await session.send({ id: 'm1', text: 'Hello' });
     await until(() => {

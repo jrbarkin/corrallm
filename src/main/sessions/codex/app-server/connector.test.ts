@@ -505,6 +505,10 @@ describe('the App Server connection', () => {
       api: false,
       model: 'gpt-6.1-sol',
       mode: 'read-only',
+      // What Codex declares it does (B16 C1): append-new, resume, no listing.
+      role: 'append-new',
+      resume: true,
+      list: false,
       models: [
         {
           value: 'gpt-6.1-sol',

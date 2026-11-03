@@ -4,6 +4,8 @@ import { ID_PATTERN } from '../../adapter';
 import {
   IMAGE_TYPES,
   imageBytes,
+  MCP_CHANGES,
+  REWIND_RESTORES,
   TURN_REASONS,
   MODEL_PATTERN,
   EFFORT_PATTERN,
@@ -154,10 +156,32 @@ export const ModelChoice = z.strictObject({
   efforts: z.array(EffortChoice).optional(),
   defaultEffort: z.string().optional(),
 });
+/**
+ * What a ready session generation can do (B16 C1): bounded enums and flags, never a role's text,
+ * a path or a native value.
+ */
+export const SessionFeaturesSchema = z.strictObject({
+  role: z.enum(['append', 'append-new', 'none']),
+  resume: z.boolean(),
+  list: z.boolean(),
+  live: z.strictObject({ effort: z.boolean(), stopTask: z.boolean() }),
+  panels: z.strictObject({
+    resume: z.literal(true).optional(),
+    mcp: z
+      .strictObject({ changes: z.array(z.enum(MCP_CHANGES)).max(MCP_CHANGES.length) })
+      .optional(),
+    rewind: z
+      .strictObject({ restores: z.array(z.enum(REWIND_RESTORES)).max(REWIND_RESTORES.length) })
+      .optional(),
+  }),
+});
+
 export const SessionSummarySchema = z.strictObject({
   agent: z.string(),
   connection: z.string().nullable(),
   api: z.boolean(),
+  // B16 C1: what its ready session generation can do; null while none is ready.
+  features: SessionFeaturesSchema.nullable(),
   // B11a C11: where the agent is in the fallback chain you set, and whether corrallm switches it.
   fallback: FallbackViewSchema.nullable(),
   // B11a C11: its handoff: when its latest was kept, how long, and its state; never its text.
