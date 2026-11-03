@@ -870,6 +870,8 @@ export class Engines {
       return;
     }
     this.#canvases.delete(canvas);
+    // Closed for good (B21 C6): its open asks are withdrawn, nothing sent, in its last write.
+    running.delivery.asks.closing();
     try {
       await this.#stop(running);
     } finally {
@@ -1225,6 +1227,8 @@ export class Engines {
       if (![...this.#watchers].some((watcher) => watcher.need !== undefined)) return;
       const items = [
         ...needs(needsInput(running, this.#deps.locale)),
+        // B21 C5, C6: its asks, and parties' messages to you.
+        ...running.delivery.asks.items(),
         ...(this.#deps.needs?.(running.document.id) ?? []),
       ];
       for (const item of items) {

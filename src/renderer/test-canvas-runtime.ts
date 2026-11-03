@@ -484,6 +484,8 @@ export function canvasRuntime(
     });
     core.reply('message', async (raw) => {
       const args = OPS.message.input.parse(raw);
+      // As the core: you message agents, never a party (B21 C5).
+      if (typeof args.to !== 'string') throw new Error('You message agents: name an agent.');
       return send(args.to, args.body, args.images);
     });
     core.reply('session.viewCommand', async (raw) => {

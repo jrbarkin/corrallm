@@ -2,6 +2,7 @@ import { z } from 'zod';
 
 import type { JsonSchema } from '../session';
 import type { OpDef } from './define';
+import { agentApiOps } from './agent-api';
 import { agentOps } from './ops/agent';
 import { queueOps } from './ops/queue';
 import { appOps } from './ops/app';
@@ -61,6 +62,7 @@ export const OPS = {
   'session.mcpServers': b11SessionOps['session.mcpServers'],
   'session.changeMcpServer': b11SessionOps['session.changeMcpServer'],
   reply: b11ConversationOps.reply,
+  ask: agentApiOps.ask,
   ...settingsOps,
   ...runOps,
   'run.get': b11RunOps['run.get'],

@@ -325,6 +325,9 @@ export function resolvers(
         id,
         agentsReached(open.document, caller, reach, lead(caller, canvas as CanvasId)),
       );
+      // An ask is on no agent: only a party it names to answer it reaches it (B21 C6); a message
+      // to you, only you.
+      if (item !== undefined && id.startsWith('ask/')) return item.by.includes(partyIdOf(caller));
       if (item?.agent === undefined) return false;
       return reachesAgent(
         open.document,

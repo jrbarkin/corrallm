@@ -94,18 +94,19 @@ describe('prepared agent API contracts', () => {
     expect(NeedId.parse(id)).toBe(id);
   });
 
-  it('validates an ask and its request/revision envelope without registering operations', () => {
+  it('validates an ask and its request/revision envelope, registered as prepared (C4), complete not yet', () => {
     const parsed = AskInput.parse({ ...ask, request });
     expect(parsed).toEqual({ ...ask, request, deadlineSeconds: 86_400 });
     expect(AskOutput.parse({ id: attempt, revs: {} })).toEqual({ id: attempt, revs: {} });
     expect(CompleteOutput.parse({ revs: {} })).toEqual({ revs: {} });
-    for (const name of ['ask', 'complete']) {
-      expect(Object.hasOwn(OPS, name)).toBe(false);
-      expect(Object.hasOwn(SURFACE, name)).toBe(false);
-    }
+    // B21 C4 registers ask with exactly these schemas; C5 registers complete.
+    expect(OPS.ask.input).toBe(AskInput);
+    expect(OPS.ask.output).toBe(AskOutput);
+    expect(Object.hasOwn(OPS, 'complete')).toBe(false);
+    expect(Object.hasOwn(SURFACE, 'complete')).toBe(false);
     expect(
       OPS.message.input.safeParse({ canvas, to: { party: 'you' }, body: 'Hello' }).success,
-    ).toBe(false);
+    ).toBe(true);
     expect(AskInput.safeParse({ ...ask, extra: true }).success).toBe(false);
     expect(
       CompleteInput.safeParse({ task: attempt, outcome: 'succeeded', summary: '', extra: true })

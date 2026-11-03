@@ -295,6 +295,8 @@ describe.each(REGISTRIES)('T3b on %s', (_label, fixtures, world, start) => {
         } finally {
           met?.();
         }
+        // An op you never call (B21's ask: you answer questions) has no call of yours to apply.
+        if (!inAudience(name, 'you')) continue;
         const yours = await setup.core.call(name, args, CALLERS.you);
         expect(yours.ok, `${rule}: ${JSON.stringify(yours)}`).toBe(true);
         if (yours.ok)

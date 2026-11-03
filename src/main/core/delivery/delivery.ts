@@ -12,7 +12,7 @@ import type { NeedsItem } from '../../../shared/model/needs';
 import type { Engine } from '../engine/engine';
 import type { Admission, AdmittedWork, PauseCause } from '../engine/run/runner';
 import type { AgentNode, CanvasNode } from '../../../shared/model/canvas';
-import { agentOf, agentParty, outsideOf } from '../../../shared/model/messages';
+import { agentOf, agentParty, isTurn, outsideOf } from '../../../shared/model/messages';
 import type { Session } from '../../../shared/model/session';
 import type { Message, PartyId } from '../../../shared/model/messages';
 import { threadTitle } from '../../../shared/model/session';
@@ -30,7 +30,11 @@ import {
   quotedParty,
   RELEASES,
 } from '../parties';
+import { answerFrame, askFrame, Asks } from './asks';
+import { DeliveryError } from './errors';
 import { capBody, sentByRun } from './messages';
+
+export { DeliveryError } from './errors';
 import type { MessageStore } from './messages';
 
 /*
@@ -224,6 +228,11 @@ const PERMISSION_STARTUP_MS = 30_000;
 
 export class Delivery {
   readonly #deps: DeliveryDeps;
+  /**
+   * The canvas's asks and parties' messages to you (B21 C5, C6): delivered here as turns where
+   * they go to an agent, their Needs items, answers, deadlines and ends kept there.
+   */
+  readonly asks: Asks;
   readonly #directories = new Map<string, SessionAvailability>();
   readonly #checkingDirectories = new Map<string, object>();
 
@@ -324,6 +333,19 @@ export class Delivery {
     const schedule = () => {
       this.schedule();
     };
+    this.asks = new Asks({
+      canvas: deps.canvas,
+      store: deps.store,
+      nodes: deps.nodes,
+      now: deps.now,
+      later: deps.later,
+      changed: () => {
+        deps.changed();
+      },
+      schedule,
+      waiting: (agent, from) => this.waitingFrom(agent, from),
+      sendYours: (agent, body, replyTo) => this.send('you', agent, body, replyTo),
+    });
     this.#stop = [deps.engine.sessions.subscribe(schedule), deps.engine.run.subscribe(schedule)];
   }
 
@@ -346,6 +368,8 @@ export class Delivery {
     }
     // B11a C7: a carrying send cut off unsent leaves its carry to the next, in this same write.
     this.#deps.handoff?.recover();
+    // B21 C6: what expired while the core was down expires now, in this same write.
+    this.asks.start();
     await this.#deps.store.durable();
     this.schedule();
   }
@@ -364,6 +388,7 @@ export class Delivery {
    */
   async close(): Promise<void> {
     this.#closed = true;
+    this.asks.close();
     this.#images.clear();
     this.#carried.clear();
     for (const stop of this.#stop) stop();
@@ -447,6 +472,11 @@ export class Delivery {
       },
     );
     return message;
+  }
+
+  /** How many messages `from` has waiting for agent `agent` (asks count: MAX_WAITING). */
+  waitingFrom(agent: string, from: PartyId): number {
+    return (this.#waiting().get(agent) ?? []).filter((message) => message.from === from).length;
   }
 
   /** Looks again, soon, at what waits: once, however often asked before then. */
@@ -565,6 +595,13 @@ export class Delivery {
   async withdraw(id: string, by: PartyId): Promise<Withdrawal> {
     const message = this.#deps.store.get(id);
     if (!message) throw new DeliveryError('not-found', 'There is no such message.');
+    // B21 C6: a question ends with its answer, its dismissal, its deadline or its party leaving.
+    if (message.kind === 'prompt' || message.ask !== undefined || isAskEnd(message)) {
+      throw new DeliveryError(
+        'refused',
+        'A question, its answer and its end can’t be taken back: a question stays open until it is answered, dismissed or expires.',
+      );
+    }
     if (sentByRun(message)) {
       throw new DeliveryError(
         'refused',
@@ -705,6 +742,8 @@ export class Delivery {
   #pump(): void {
     if (!this.#started || this.#closed || this.#frozen) return;
     const { engine, store } = this.#deps;
+    // B21 C6: an ask whose asker or recipient left is withdrawn first.
+    this.asks.sweep();
     this.#withdrawGone();
     this.#withdrawStale();
     let messages = store.active();
@@ -868,7 +907,8 @@ export class Delivery {
       return agent !== undefined && !here.has(agent) ? agent : undefined;
     };
     for (const message of this.#deps.store.active()) {
-      if (message.kind !== 'text' || message.state !== 'pending') continue;
+      // An ask is the ask service's to withdraw (its sweep), with its settlement.
+      if (!isTurn(message) || message.kind === 'prompt' || message.state !== 'pending') continue;
       const to = gone(message.to);
       if (to === undefined && gone(message.from) === undefined) continue;
       this.#deps.store.update(message.id, { state: 'withdrawn', by: 'corrallm' });
@@ -1195,8 +1235,9 @@ export class Delivery {
     const request = this.#request(message);
     // B11a C7: a party's message, the first automated send to its agent since a switch, carries
     // the agent's handoff: taken now, so the write that records it delivering clears the carry.
+    // A question, or an ask's end, carries none: the agent's next party message does.
     const carried =
-      message.from === 'you' || request
+      message.from === 'you' || request || message.kind !== 'text'
         ? undefined
         : this.#deps.handoff?.carry(node.id, this.#frame(message));
     if (carried !== undefined) {
@@ -1279,7 +1320,8 @@ export class Delivery {
    */
   #hand(node: AgentNode, message: Message, as: string): void {
     const { engine } = this.#deps;
-    const yours = message.from === 'you';
+    // Your answer to an ask is framed as the user's answer, never sent as raw input (B21 §4.6).
+    const yours = message.from === 'you' && message.ask === undefined;
     // Kept until its turn ends: a session that won't start sends it back, still to be carried.
     const carried = this.#carried.get(message.id);
     const takeBack = engine.sessions.send(
@@ -1323,9 +1365,15 @@ export class Delivery {
     }
     // B11a C7: a handoff request's whole reply, kept (if accepted) in the write recording it.
     if (this.#request(message)) this.#deps.handoff?.replied(message, reply, result);
+    // B21 C6: an ask's turn ended with no structured answer: its reply answers it, or it stays open.
+    if (message.kind === 'prompt') {
+      this.asks.turnEnded(message, reply, result);
+      this.schedule();
+      return;
+    }
     store.update(id, { state: 'replied' });
-    // A reply never makes a reply.
-    if (message.turn === undefined) {
+    // A reply never makes a reply; nor does an answer, or an ask's end, its asker was sent.
+    if (message.turn === undefined && message.kind === 'text' && message.ask === undefined) {
       store.add({
         from: message.to,
         to: message.from,
@@ -1452,7 +1500,9 @@ export class Delivery {
     if (sentByRun(message)) return;
     this.#notice(
       message,
-      `Your message to ${this.#nameOf(message.to)} was cut off when corrallm stopped; it won’t be sent again.`,
+      message.kind === 'prompt'
+        ? `Your question to ${this.#nameOf(message.to)} was cut off when corrallm stopped; it won’t be sent again, and stays open for ${this.#nameOf(message.to)} or the user to answer until its deadline.`
+        : `Your message to ${this.#nameOf(message.to)} was cut off when corrallm stopped; it won’t be sent again.`,
       CUT_OFF,
     );
   }
@@ -1528,6 +1578,9 @@ export class Delivery {
    * the agent never takes it for its user's.
    */
   #frame(message: Message): string {
+    // B21 C6: a question, and an answer to one, are framed as such.
+    if (message.kind === 'prompt') return askFrame(this.#deps.nodes(), message);
+    if (message.ask?.type === 'answer') return answerFrame(this.#deps.nodes(), message);
     const { from, id, replyTo, turn, body } = message;
     const agent = agentOf(from);
     const outside = outsideOf(from);
@@ -1561,7 +1614,7 @@ export class Delivery {
   /** Whether a message to an agent is in its hands: being delivered, or its turn going on. */
   #inFlight(message: Message): boolean {
     return (
-      message.kind === 'text' &&
+      isTurn(message) &&
       agentOf(message.to) !== undefined &&
       (message.state === 'delivering' || message.state === 'delivered')
     );
@@ -1593,6 +1646,11 @@ export class Delivery {
   #nameOf(party: PartyId): string {
     return partyText(this.#deps.nodes(), party);
   }
+}
+
+/** Whether a message is the record of how an ask ended, sent its asker (B21 C6). */
+function isAskEnd(message: Message): boolean {
+  return message.settled !== undefined && 'ask' in message.settled;
 }
 
 /** The kinds of hold a sender is told of, by the agent they hold. */
@@ -1646,17 +1704,6 @@ function holdKey(kind: HoldKind, agent: string, ...rest: string[]): string {
  */
 function asked(reached: boolean): Withdrawal {
   return { reached, interrupted: reached };
-}
-
-/** Why a message couldn't be sent or taken back: a code, as an operation's failure carries it. */
-export class DeliveryError extends Error {
-  readonly code: 'not-found' | 'refused' | 'conflict' | 'unavailable';
-
-  constructor(code: DeliveryError['code'], sentence: string) {
-    super(sentence);
-    this.name = 'DeliveryError';
-    this.code = code;
-  }
 }
 
 /** Where a settled text message is, in words: "withdrawn", "replied to". */

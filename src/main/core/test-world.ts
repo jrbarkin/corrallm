@@ -86,6 +86,27 @@ export const SEEDED = {
 /** The notice corrallm sent the read-only token's party (`watcher`) before the core started. */
 export const NOTICE = '1b2c3d4e-5f60-4718-8a9b-0c1d2e3f4a54';
 
+/**
+ * B21 C5, C6: what another outside party (`other`) asked and sent before the core started, each
+ * open: a question waiting for `peer` (whose Needs item no token reaches: only `peer` and you may
+ * answer it), a question to you (which you answer) and a message to you (which you dismiss).
+ */
+export const ASKED = {
+  peer: '1b2c3d4e-5f60-4718-8a9b-0c1d2e3f4a5a',
+  you: '1b2c3d4e-5f60-4718-8a9b-0c1d2e3f4a5b',
+  message: '1b2c3d4e-5f60-4718-8a9b-0c1d2e3f4a5c',
+} as const;
+
+/** A question the world's asks ask: one choice, or words of one's own. */
+const QUESTION = {
+  id: 'scope',
+  header: 'Scope',
+  text: 'How much of it?',
+  options: [{ label: 'All' }, { label: 'Some', description: 'Only what changed' }],
+  multiple: false,
+  other: true,
+} as const;
+
 /** A retained tree whose checkout is gone: removal must ask, never assume it safe. */
 export const KEPT_WORKTREE = '1b2c3d4e-5f60-4718-8a9b-0c1d2e3f4a55';
 
@@ -639,6 +660,34 @@ export async function startWorld(): Promise<{
         at: 1,
       },
     },
+    ...(['peer', 'you'] as const).map((to) => ({
+      message: {
+        id: ASKED[to],
+        from: 'outside:other' as const,
+        to: to === 'you' ? ('you' as const) : ('agent:peer' as const),
+        kind: 'prompt' as const,
+        body: '"other" asks: Scope',
+        state: to === 'you' ? ('delivered' as const) : ('pending' as const),
+        ask: {
+          v: 1 as const,
+          type: 'question' as const,
+          questions: [{ ...QUESTION, options: [...QUESTION.options] }],
+          deadline: Date.now() + 86_400_000,
+        },
+        at: 1,
+      },
+    })),
+    {
+      message: {
+        id: ASKED.message,
+        from: 'outside:other' as const,
+        to: 'you' as const,
+        kind: 'text' as const,
+        body: 'For you',
+        state: 'delivered' as const,
+        at: 1,
+      },
+    },
   ]);
   let clock = 0;
   let cap = MAX_CREATED_AGENTS;
@@ -861,6 +910,8 @@ export async function startWorld(): Promise<{
 
 /** A request id for each fixture that writes, so that a call repeated through another transport dedupes. */
 const request = (n: number) => `2c3d4e5f-6071-4829-9bac-1d2e3f4a5b${String(n).padStart(2, '0')}`;
+/** B21's asks' and their answers' request ids. */
+const asked = (n: number) => `5d4e5f60-7182-4930-8bad-2e3f4a5b6c${String(n).padStart(2, '0')}`;
 const INSERT_REQUEST = '3c3d4e5f-6071-4829-9bac-1d2e3f4a5b00';
 const ARRANGE_REQUEST = '3c3d4e5f-6071-4829-9bac-1d2e3f4a5b01';
 const SHOW_REQUEST = '3c3d4e5f-6071-4829-9bac-1d2e3f4a5b02';
@@ -1755,11 +1806,29 @@ export const REAL_FIXTURES: Readonly<Record<OpName, OpFixture>> = {
             replyTo: SEEDED[party === 'outside-write' ? 'orchestrator' : party],
             request: request(10 + i),
           },
+          // B21 C5: to you, and to an agent's manager (you, until B24); no party for you.
+          ...(party === 'you'
+            ? []
+            : [
+                { canvas: CANVAS, to: { party: 'you' }, body: 'For you', request: request(44 + i) },
+              ]),
+          ...(party === 'lead' || party === 'worker'
+            ? [
+                {
+                  canvas: CANVAS,
+                  to: { party: 'manager' },
+                  body: 'For my manager',
+                  request: request(49 + i),
+                },
+              ]
+            : []),
         ],
       ]),
     ),
     fresh: ['id'],
     invalid: [
+      { canvas: CANVAS, to: { party: 'nobody' }, body: 'Hello' },
+      { canvas: CANVAS, to: { party: 'you', agent: 'peer' }, body: 'Hello' },
       { canvas: CANVAS, to: 'peer', body: '' },
       { canvas: CANVAS, to: 'peer', body: ' \n' },
       { canvas: CANVAS, to: 'peer', body: 'x'.repeat(MAX_MESSAGE_LENGTH + 1) },
@@ -1774,6 +1843,49 @@ export const REAL_FIXTURES: Readonly<Record<OpName, OpFixture>> = {
         to: 'peer',
         body: 'x'.repeat(MAX_MESSAGE_BYTES + 1),
         request: controlRequest(350),
+      },
+    },
+  },
+  // B21 C4, C6: to a reached agent, and to you; never asked by you.
+  ask: {
+    valid: [
+      { canvas: CANVAS, to: 'peer', questions: [QUESTION], request: asked(1) },
+      { canvas: CANVAS, to: { party: 'you' }, questions: [QUESTION], request: asked(2) },
+    ],
+    fresh: ['id', 'revs'],
+    invalid: [
+      { canvas: CANVAS, to: 'peer', questions: [] },
+      { canvas: CANVAS, to: 'peer', questions: [{ ...QUESTION, secret: true }] },
+      { canvas: CANVAS, to: 'peer', questions: [QUESTION, QUESTION] },
+      {
+        canvas: CANVAS,
+        to: 'peer',
+        questions: ['a', 'b', 'c', 'd', 'e'].map((id) => ({ ...QUESTION, id })),
+      },
+      { canvas: CANVAS, to: 'peer', questions: [QUESTION], deadlineSeconds: 59 },
+      { canvas: CANVAS, to: 'peer', questions: [QUESTION], deadlineSeconds: 86_401 },
+      {
+        canvas: CANVAS,
+        to: 'peer',
+        questions: [{ ...QUESTION, options: [{ label: 'All', preview: 'Everything' }] }],
+      },
+      // The whole ask past 16 KiB of JSON, though each part fits.
+      { canvas: CANVAS, to: 'peer', questions: [{ ...QUESTION, text: 'x'.repeat(17_000) }] },
+      { canvas: CANVAS, to: { party: 'nobody' }, questions: [QUESTION] },
+      { canvas: CANVAS, questions: [QUESTION] },
+    ],
+    meetsRule: {
+      'shell-text': {
+        canvas: CANVAS,
+        to: 'shell',
+        questions: [{ ...QUESTION, text: '!ls' }],
+        request: asked(3),
+      },
+      'file-mentions': {
+        canvas: CANVAS,
+        to: 'shell',
+        questions: [{ ...QUESTION, text: 'Read @link' }],
+        request: asked(4),
       },
     },
   },
@@ -1803,6 +1915,19 @@ export const REAL_FIXTURES: Readonly<Record<OpName, OpFixture>> = {
           to: PROPOSED.refused,
           answer: { choice: 'refuse' },
           request: request(87),
+        },
+        // B21 C5, C6: a party's message to you, dismissed; its question to you, answered.
+        {
+          canvas: CANVAS,
+          to: `message/${ASKED.message}`,
+          answer: { choice: 'dismiss' },
+          request: asked(5),
+        },
+        {
+          canvas: CANVAS,
+          to: `ask/${ASKED.you}`,
+          answer: { answers: { scope: { picked: ['All'] } } },
+          request: asked(6),
         },
       ],
     },
@@ -2425,9 +2550,14 @@ export const REAL_OUT_OF_REACH: OutOfReach = {
   TaskId: () => ['missing-task'],
   // A conversation no list showed the caller, kept or not (B11 §7).
   ConversationId: () => ['0c1d2e3f-4a5b-4c6d-8e7f-9a0b1c2d3eff', WORLD_KEPT[1].id],
-  // Neither a missing proposal nor a textual owner id at another generation resolves.
+  // Neither a missing proposal nor a textual owner id at another generation resolves; nor does
+  // a question only `peer` and you may answer, a party's message to you, or either unknown.
   NeedId: () => [
     'proposal/1b2c3d4e-5f60-4718-8a9b-0c1d2e3f4aff',
     `prompt/${CONTROL_AGENT}/0/1b2c3d4e-5f60-4718-8a9b-0c1d2e3f4aff`,
+    `ask/${ASKED.peer}`,
+    `message/${ASKED.message}`,
+    'ask/1b2c3d4e-5f60-4718-8a9b-0c1d2e3f4aff',
+    'message/1b2c3d4e-5f60-4718-8a9b-0c1d2e3f4aff',
   ],
 };

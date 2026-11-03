@@ -92,6 +92,8 @@ export interface MessageDisplay {
   readonly text?: string;
   readonly images?: number;
   readonly requiresImages?: true;
+  /** A party's message to you sent to its manager, which was you (B21 C5): B24 routes it again. */
+  readonly via?: 'manager';
 }
 
 /**

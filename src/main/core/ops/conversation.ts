@@ -11,7 +11,9 @@ import { agentName, areLinked, teamOf } from '../../../shared/model/queries';
 import { OpFailure } from '../call';
 import type { OpContext } from '../call';
 import { canvasesOf, isTokenCaller, partyIdOf, promptReaderOf } from '../caller';
-import { DeliveryError } from '../delivery/delivery';
+import type { MessageId } from '../../../shared/api/ids';
+import { agentParty } from '../../../shared/model/messages';
+import { DeliveryError } from '../delivery/errors';
 import { cursorOf, readCursor } from '../delivery/messages';
 import { needsInput } from '../engines';
 import type { OpenCanvas } from '../engines';
@@ -23,7 +25,10 @@ import type { Implementations, OpServices } from '.';
 /** Conversation (Core Server §4 H; API Spec §7.2). */
 export function conversationOps(
   services: OpServices,
-): Pick<Implementations, 'agents' | 'status' | 'needs' | 'messages' | 'message' | 'withdraw'> {
+): Pick<
+  Implementations,
+  'agents' | 'status' | 'needs' | 'messages' | 'message' | 'withdraw' | 'ask'
+> {
   const { engines, states, isLead, locale, proposals, reviews, stalled } = services;
   const lead = (canvas: CanvasId, { caller }: OpContext) =>
     caller.kind === 'agent' && isLead(canvas, caller.agent);
@@ -45,6 +50,8 @@ export function conversationOps(
     const reader = promptReaderOf(ctx.caller);
     const items = [
       ...needs(needsInput(open, locale)).map((item) => needFor(item, reader)),
+      // B21 C5, C6: its asks, and parties' messages to you (yours alone).
+      ...open.delivery.asks.items().map((item) => needFor(item, reader)),
       ...(services.prompts?.items(id, reader) ?? []),
       ...[
         ...proposals.items(id, ctx.caller.kind === 'human' ? undefined : reach),
@@ -60,10 +67,13 @@ export function conversationOps(
     if (ctx.caller.kind === 'human') return items;
     const { caller } = ctx;
     const team = caller.kind === 'agent' ? teamOf(open.document.nodes, caller.agent) : [];
-    return items.filter(
-      (item) =>
-        item.agent !== undefined &&
-        (reach.includes(item.agent) || (item.kind === 'prompt' && team.includes(item.agent))),
+    const party = partyIdOf(caller);
+    return items.filter((item) =>
+      // An ask is on no agent: its recipient sees it, as one it may answer (B21 C6).
+      item.id.startsWith('ask/')
+        ? item.by.includes(party)
+        : item.agent !== undefined &&
+          (reach.includes(item.agent) || (item.kind === 'prompt' && team.includes(item.agent))),
     );
   };
 
@@ -169,10 +179,25 @@ export function conversationOps(
     },
     message: async ({ canvas, to, body, images, replyTo }, ctx) => {
       const open = openCanvas(engines, canvas);
-      const node = agentOf(open, to);
       if (replyTo !== undefined && !open.messages.get(replyTo)) {
         throw new OpFailure('not-found', `There is no message ${replyTo}.`);
       }
+      // B21 C5: to you, or to the sender's manager (you, until B24): a record and a Needs item.
+      if (typeof to !== 'string') {
+        const { via } = partyTarget(to, ctx);
+        try {
+          const sent = await open.delivery.asks.toYou({
+            from: partyIdOf(ctx.caller),
+            body,
+            ...(replyTo === undefined ? {} : { replyTo }),
+            ...(via === undefined ? {} : { via }),
+          });
+          return { id: sent.id };
+        } catch (error) {
+          return failed(error);
+        }
+      }
+      const node = agentOf(open, to);
       // Images only of the kinds, number and size its connection takes (yours alone: human-text).
       const pasted = images ?? [];
       if (pasted.length > 0) {
@@ -207,6 +232,26 @@ export function conversationOps(
         return failed(error);
       }
     },
+    // B21 C4, C6: on disk before it returns; its answer comes later, as a message.
+    ask: async ({ canvas, to, questions, deadlineSeconds, request }, ctx) => {
+      const open = openCanvas(engines, canvas);
+      const recipient =
+        typeof to === 'string'
+          ? { to: agentParty(agentOf(open, to).id) }
+          : { to: 'you' as const, ...partyTarget(to, ctx) };
+      try {
+        const asked = await open.delivery.asks.ask({
+          from: partyIdOf(ctx.caller),
+          ...recipient,
+          questions,
+          seconds: deadlineSeconds,
+          ...(request === undefined ? {} : { request }),
+        });
+        return { id: asked.id as MessageId };
+      } catch (error) {
+        return failed(error);
+      }
+    },
     withdraw: async ({ canvas, id }, ctx) => {
       const open = openCanvas(engines, canvas);
       try {
@@ -216,6 +261,27 @@ export function conversationOps(
       }
     },
   };
+}
+
+/**
+ * Where a party target goes (B21 C4, C5): you, or the caller's manager, which is the nearest lead
+ * its tree grants questions, else you; until B24 grants none, you, `via` it. You name neither (you
+ * message agents), and an outside orchestrator has no manager.
+ */
+function partyTarget(
+  { party }: { party: 'you' | 'manager' },
+  { caller }: OpContext,
+): { via?: 'manager' } {
+  if (caller.kind === 'human') {
+    throw new OpFailure('invalid', 'You message agents: name an agent, not a party.');
+  }
+  if (party === 'manager' && caller.kind === 'outside') {
+    throw new OpFailure(
+      'invalid',
+      "An outside orchestrator has no manager: name an agent, or { party: 'you' }.",
+    );
+  }
+  return party === 'manager' ? { via: 'manager' } : {};
 }
 
 /**

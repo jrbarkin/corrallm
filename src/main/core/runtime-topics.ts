@@ -144,6 +144,8 @@ export const RUNTIME_STATES = {
             text: z.string().optional(),
             images: z.int().min(0).optional(),
             requiresImages: z.literal(true).optional(),
+            // B21 C5: a party's message to you, sent to its manager (you, until B24).
+            via: z.literal('manager').optional(),
           })
           .optional(),
       }),

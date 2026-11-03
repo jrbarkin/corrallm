@@ -49,6 +49,26 @@ it('hosts every operation whose audience includes you, but those main’s native
   expect(GUI_OPS).not.toContain('run.pauseAll');
 });
 
+it('lists ask to agents and outside writers alone, on MCP alone, and no complete yet (B21 C4)', () => {
+  expect(SURFACE.ask).toEqual({
+    access: { lead: 'linked', worker: 'linked', 'outside-write': 'canvas' },
+    kind: 'command',
+    scope: 'agent',
+    rules: ['shell-text', 'file-mentions'],
+    self: 'refused',
+  });
+  expect(DEVIATIONS.ask).toBe('caller-bound');
+  expect(GUI_OPS).not.toContain('ask');
+  for (const party of ['lead', 'worker', 'outside-write'] as const)
+    expect(opsFor(SURFACE, party), party).toContain('ask');
+  expect(opsFor(SURFACE, 'outside-read')).not.toContain('ask');
+  // C5 registers complete: until then no party has it.
+  expect(Object.keys(SURFACE)).not.toContain('complete');
+  // Its result is the ask's id; a string target is an agent, a party an object.
+  expect(OPS.message.input.safeParse({ to: { party: 'you' }, body: 'Hi' }).success).toBe(true);
+  expect(OPS.ask.input.safeParse({ to: 'you', questions: [] }).success).toBe(false);
+});
+
 it('lists settings.set to you alone, a command of no scope with the consent deviation (B12 C2)', () => {
   expect(SURFACE['settings.set']).toEqual({
     access: { you: 'all' },
@@ -119,7 +139,16 @@ function unbrandedIds(schema: z.ZodType, path = ''): string[] {
     const at = key === undefined ? path : `${path}.${key}`;
     // Queue entries and changes call their authored text `message`; other message fields name ids.
     const messageText = key === 'message' && child.meta()?.contentMediaType === 'text/plain';
-    if (key !== undefined && ID_KEYS.has(key) && !messageText && takesUnbrandedText(child))
+    // An ask's question names itself within its ask (B21 C6), as a reply's question ids do: answer
+    // data, which names nothing a caller could reach.
+    const questionId = key === 'id' && path.endsWith('.questions');
+    if (
+      key !== undefined &&
+      ID_KEYS.has(key) &&
+      !messageText &&
+      !questionId &&
+      takesUnbrandedText(child)
+    )
       return [at];
     return unbrandedIds(child, at);
   });

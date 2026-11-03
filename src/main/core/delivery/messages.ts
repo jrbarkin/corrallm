@@ -841,9 +841,10 @@ function keptOf(row: Record<string, unknown>, canvas: CanvasId): Kept | undefine
  */
 function displayOf(value: Record<string, unknown> | undefined): MessageDisplay | null {
   if (value === undefined) return null;
-  const { after, task, text, images, requiresImages, ...others } = value;
+  const { after, task, text, images, requiresImages, via, ...others } = value;
   const ok =
     Object.keys(others).length === 0 &&
+    (via === undefined || via === 'manager') &&
     (after === undefined || typeof after === 'string') &&
     (text === undefined || typeof text === 'string') &&
     (images === undefined || (Number.isSafeInteger(images) && (images as number) >= 0)) &&

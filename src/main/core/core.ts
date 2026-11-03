@@ -1039,6 +1039,8 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     const open = engines.canvas(canvas);
     return [
       ...(open ? needs(needsInput(open, config.locale)) : []),
+      // B21 C5, C6: its asks, and parties' messages to you.
+      ...(open ? open.delivery.asks.items() : []),
       ...prompts.items(canvas),
       ...proposals.items(canvas, reach),
       ...reviews.items(canvas),

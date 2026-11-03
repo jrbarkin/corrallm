@@ -399,8 +399,19 @@ export const SURFACE = {
   },
   withdraw: { access: M, kind: 'command', scope: 'canvas', preempt: true, destructive: true },
   // Answers a Needs item its caller may answer: in B9, a proposal (yours alone, R3); in B9a, a
-  // worktree's setup card, yours alone too.
+  // worktree's setup card, yours alone too; in B21, an ask (its recipient's or yours) and a
+  // party's message to you (yours alone).
   reply: { access: M, kind: 'command', scope: 'canvas', rules: ['human-choice'] },
+  // B21 C4, C6: a party's questions to a reached agent, to you or to its manager (you, until B24):
+  // asked by agents and outside writers, answered by you, never asked by you (the caller-bound
+  // deviation, D10). An agent target runs in its scope; a party target in its canvas's.
+  ask: {
+    access: { lead: 'linked', worker: 'linked', 'outside-write': 'canvas' },
+    kind: 'command',
+    scope: 'agent',
+    rules: ['shell-text', 'file-mentions'],
+    self: 'refused',
+  },
   'session.open': { access: L, kind: 'command', scope: 'agent', self: 'allowed' },
   // D9: the mode an agent runs in is yours alone.
   'session.setMode': { access: Y, kind: 'command', scope: 'agent' },

@@ -12,7 +12,14 @@ export { AskQuestions } from '../model/asks';
 const ask = define(
   { kind: 'command' },
   {
-    summary: 'Asks a reached agent or a named party bounded, non-secret questions.',
+    summary:
+      'Asks an agent you reach, the user ({ party: "you" }) or your manager ({ party: "manager" }; ' +
+      'the user, for now) one to four questions, each with options to pick or room for words. ' +
+      'Returns at once with the question’s id, once it is kept: the answer comes later, as a ' +
+      'message to you (the answers, or a record that it expired, was dismissed or withdrawn). ' +
+      'If you can do no more without the answer, end your turn now. One open question per ' +
+      'recipient; it expires after deadlineSeconds (a day unless you say). Never ask for logins ' +
+      'or secrets: they belong to your CLI.',
     input: z
       .strictObject({
         canvas: OpCanvas,

@@ -91,6 +91,7 @@ it.each(['canvas.delete', 'canvas.batch'] as const)(
           ...canvasOps({ catalog: CATALOG }),
           ...batchOps(),
           ...replyOps({
+            catalog: CATALOG,
             stalled: { items: () => [], take: () => undefined },
             sessions: { interruptIf: () => Promise.resolve(undefined) },
             windows: { shownIn: () => undefined },
@@ -102,6 +103,7 @@ it.each(['canvas.delete', 'canvas.batch'] as const)(
               keepFile: () => Promise.reject(new Error('No file is reviewed here.')),
             },
             engines: {
+              canvas: () => undefined,
               changed: () => undefined,
               resendAfter: () => Promise.resolve(),
               cancelResend: () => Promise.resolve(),

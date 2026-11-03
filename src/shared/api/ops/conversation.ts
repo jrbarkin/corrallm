@@ -10,7 +10,7 @@ import { Settled } from '../../model/settled';
 import { TURN_REASONS } from '../../session';
 import { define } from '../define';
 import type { OpDef } from '../define';
-import { AgentId, MessageId, NeedId, OpCanvas } from '../ids';
+import { MessageId, NeedId, OpCanvas, Target } from '../ids';
 import { MAX_PAGE, MAX_WAIT_SECONDS } from '../limits';
 import type { OpName } from '../surface';
 import { Body as B11Body, Images, ManualBody } from './b11-data';
@@ -193,11 +193,13 @@ export const conversationOps = {
       'Sends an agent a message, delivered as soon as it is idle and nothing holds it, with a ' +
       'first line saying who it is from. Its reply comes back to you as a message. Returns at ' +
       'once, with the message’s id. Yours is at most 16 KB of text: only the user’s own ' +
-      'messages are longer, or carry images.',
+      'messages are longer, or carry images. `to` is an agent’s id, or { party: "you" } for the ' +
+      'user (or "manager" for your manager, which is the user for now): the user sees it in Needs ' +
+      'and may reply or dismiss it; it asks and approves nothing.',
     input: z
       .strictObject({
         canvas,
-        to: AgentId,
+        to: Target,
         body: ManualBody,
         images: Images.optional(),
         replyTo: MessageId.optional(),
