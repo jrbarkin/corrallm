@@ -564,6 +564,44 @@ export function FallbackMark({ agent, card = false }: { agent: string; card?: bo
   );
 }
 
+/**
+ * A mark on an agent whose session has listed corrallm's tools (B21): the core observes it, as the
+ * session's tool listing is heard, so it is read as the session changes state; `agents` has no topic.
+ */
+export function ApiMark({ agent }: { agent: string }) {
+  const { context, summary } = useAgent(agent);
+  const [listed, setListed] = useState(false);
+  const canvas = context?.canvas;
+  const client = context?.client;
+  const status = summary?.status;
+  useEffect(() => {
+    if (!canvas || !client || status === undefined) return;
+    let live = true;
+    void client.agents({ canvas }).then(
+      ({ agents }) => {
+        if (live) setListed(agents.find((one) => one.id === agent)?.api === true);
+      },
+      () => {
+        if (live) setListed(false);
+      },
+    );
+    return () => {
+      live = false;
+    };
+  }, [agent, canvas, client, status]);
+  if (!listed) return null;
+  return (
+    <span
+      className="api-mark"
+      role="img"
+      aria-label="Uses corrallm’s tools"
+      title="Uses corrallm’s tools"
+    >
+      API
+    </span>
+  );
+}
+
 const HANDOFF_WORDS = {
   kept: 'Latest handoff kept',
   asking: 'Asking for a handoff…',

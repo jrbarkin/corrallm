@@ -102,3 +102,12 @@
   clip-path: inset(50%);
   white-space: nowrap;
 }
+
+.api-mark {
+  font-size: 0.7rem;
+  letter-spacing: 0.04em;
+  padding: 1px 6px;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  opacity: 0.7;
+}
