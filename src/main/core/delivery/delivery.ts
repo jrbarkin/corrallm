@@ -11,6 +11,7 @@ import type { NeedsItem } from '../../../shared/model/needs';
 
 import type { Engine } from '../engine/engine';
 import type { Admission, AdmittedWork, PauseCause } from '../engine/run/runner';
+import { streamed } from '../engine/transcript/reduce';
 import type { AgentNode, CanvasNode } from '../../../shared/model/canvas';
 import {
   agentOf,
@@ -378,7 +379,13 @@ export class Delivery {
         this.heard(agents);
       },
     });
-    this.#stop = [deps.engine.sessions.subscribe(schedule), deps.engine.run.subscribe(schedule)];
+    this.#stop = [
+      // A streamed word changes nothing a check reads: a reply's many never make one.
+      deps.engine.sessions.subscribe((action) => {
+        if (!streamed(action)) this.schedule();
+      }),
+      deps.engine.run.subscribe(schedule),
+    ];
   }
 
   /**
