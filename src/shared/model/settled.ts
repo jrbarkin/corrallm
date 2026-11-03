@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import { MAX_NEED_ID, MAX_PROMPT_CHOICE_LENGTH, MAX_PROMPT_QUESTIONS } from '../api/limits';
+import { AskSettlement } from './asks';
 import { ChoiceHint, PromptId, PromptKind } from './prompts';
 import type { PromptSubject } from './prompts';
 
@@ -82,3 +83,10 @@ export const SettledDecision = z
     'Its outcome is one its kind of prompt settles with',
   );
 export type SettledDecision = z.infer<typeof SettledDecision>;
+
+/**
+ * What a message's `settled` holds: a native prompt's decision (above), on a record to you; or an
+ * ask's settlement (./asks.ts, B21 C6), on the ask's row and the record its asker is sent.
+ */
+export const Settled = z.union([SettledDecision, AskSettlement]);
+export type Settled = z.infer<typeof Settled>;

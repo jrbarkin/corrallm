@@ -1,34 +1,13 @@
 import { z } from 'zod';
 
-import { Question, Questions } from '../model/prompts';
+import { AskQuestions } from '../model/asks';
 import { promptJsonBytes } from '../model/prompt-data';
 import { define } from './define';
 import { AttemptId, MessageId, OpCanvas, Target } from './ids';
-import {
-  MAX_ASK_BYTES,
-  MAX_ASK_QUESTIONS,
-  MAX_ASK_SECONDS,
-  MAX_PROMPT_OPTIONS,
-  MAX_SUMMARY_BYTES,
-  MIN_ASK_SECONDS,
-} from './limits';
+import { MAX_ASK_BYTES, MAX_ASK_SECONDS, MAX_SUMMARY_BYTES, MIN_ASK_SECONDS } from './limits';
 
 /** Pure B21 contracts. Importing these schemas registers no operation or authority. */
-const AskQuestion = Question.safeExtend({
-  options: z.array(Question.shape.options.element.omit({ preview: true })).max(MAX_PROMPT_OPTIONS),
-  secret: z
-    .literal(false, { error: "Logins and secrets belong to the agent's CLI; ask without them." })
-    .optional(),
-});
-export const AskQuestions = z
-  .array(AskQuestion)
-  .min(1)
-  .max(MAX_ASK_QUESTIONS)
-  .refine(
-    (questions) => Questions.safeParse(questions).success,
-    'Question ids are unique within the ask',
-  );
-export type AskQuestions = z.infer<typeof AskQuestions>;
+export { AskQuestions } from '../model/asks';
 
 const ask = define(
   { kind: 'command' },

@@ -1648,3 +1648,53 @@ describe('migration 8', () => {
     expect(count('handoff')).toBe(0);
   });
 });
+
+/** An ask's question, as B21 C6 keeps it on its message (the `ask` column). */
+const ASK = JSON.stringify({
+  v: 1,
+  type: 'question',
+  questions: [
+    {
+      id: 'scope',
+      header: 'Scope',
+      text: 'How much?',
+      options: [{ label: 'All' }],
+      multiple: false,
+      other: true,
+    },
+  ],
+  deadline: 86_400_000,
+});
+
+describe('migration 9', () => {
+  it('adds an ask to every message of a schema-8 database, keeping every row, which a schema-6 corrallm may still open', () => {
+    migrate(connection, MIGRATIONS.slice(0, 8));
+    connection.exec('PRAGMA foreign_keys = ON');
+    addCanvas();
+    addMessage('kept');
+    const before = connection.prepare('SELECT * FROM message').all();
+
+    migrate(connection, MIGRATIONS.slice(0, 9));
+
+    expect(schemaOf(connection)).toBe(9);
+    // A column only: a corrallm of schema 6 still reads and writes its own columns.
+    expect(minReaderOf(connection)).toBe(6);
+    expect(connection.prepare('SELECT * FROM message').all()).toEqual(
+      before.map((row) => ({ ...row, ask: null })),
+    );
+  });
+
+  it('keeps a message’s ask as valid JSON, or none', () => {
+    migrate(connection);
+    connection.exec('PRAGMA foreign_keys = ON');
+    addCanvas();
+    const seq = addMessage('ask');
+    const keep = connection.prepare('UPDATE message SET ask = ? WHERE seq = ?');
+    keep.run(ASK, seq);
+    expect(connection.prepare('SELECT ask FROM message WHERE seq = ?').get(seq)).toEqual({
+      ask: ASK,
+    });
+    keep.run(null, seq);
+    expect(() => keep.run('not JSON', seq)).toThrow(/CHECK constraint failed/);
+  });
+});

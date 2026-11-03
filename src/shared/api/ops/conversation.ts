@@ -5,7 +5,8 @@ import { HandoffViewSchema } from '../../model/handoff';
 import { MESSAGE_KINDS, MESSAGE_STATES, PARTY_PATTERN } from '../../model/messages';
 import { NEED_KINDS } from '../../model/needs';
 import { Choice, PromptNeedView, PromptReplyAnswer } from '../../model/prompts';
-import { SettledDecision } from '../../model/settled';
+import { AskColumn } from '../../model/asks';
+import { Settled } from '../../model/settled';
 import { TURN_REASONS } from '../../session';
 import { define } from '../define';
 import type { OpDef } from '../define';
@@ -47,8 +48,13 @@ export const Message = z.strictObject({
   state: z.enum(MESSAGE_STATES),
   delivery: z.strictObject({ at: z.number(), as: z.string(), attempt: z.int() }).optional(),
   by: Party.optional(),
-  /** A record of a native prompt's decision: what was decided, value-free. Yours alone. */
-  settled: SettledDecision.optional(),
+  /**
+   * A record of a native prompt's decision: what was decided, value-free, yours alone; or how an
+   * ask ended (B21 C6), value-free, on the ask and on the record its asker is sent.
+   */
+  settled: Settled.optional(),
+  /** An ask's questions and deadline, or an answer's answers (B21 C6). */
+  ask: AskColumn.optional(),
   at: z.number(),
 });
 

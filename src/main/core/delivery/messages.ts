@@ -6,9 +6,11 @@ import {
   STORE_SETTLED_PER_PARTY,
 } from '../../../shared/api/limits';
 import type { CanvasId } from '../../../shared/canvas';
+import { AskColumn } from '../../../shared/model/asks';
 import {
   agentOf,
   isSettled,
+  isTurn,
   MESSAGE_KINDS,
   MESSAGE_ORIGINS,
   MESSAGE_STATES,
@@ -20,7 +22,7 @@ import type {
   MessageOrigin,
   PartyId,
 } from '../../../shared/model/messages';
-import { SettledDecision } from '../../../shared/model/settled';
+import { Settled } from '../../../shared/model/settled';
 import type { CanvasMemory } from '../../memory';
 import type { Database } from '../store/store';
 import { Sequence } from './sequence';
@@ -30,9 +32,11 @@ import { Sequence } from './sequence';
  * order they came, and in the profile's database (Core Database §5), each a row of `message`, with
  * the key of what it tells, for a notice (`told`), the note its recipient must still be told of
  * a withdrawal (`withdrawal`), how it came to be (`origin`, which its caller says, never a party:
- * B11 Design §3), what a view shows of it beside its body (`display`) and, for a record of a native
+ * B11 Design §3), what a view shows of it beside its body (`display`), for a record of a native
  * prompt's decision, what was decided (`settled`: B13 §9.2 C9, written with its row and never
- * changed after). Their order (`seq`) is one every canvas's messages share, whose
+ * changed after), or for an ask, how it ended (B21 C6: written once, as it ends, never after), and
+ * an ask's questions or an answer's answers (`ask`: B21 C6, migration 9, written with its row and
+ * never changed after). Their order (`seq`) is one every canvas's messages share, whose
  * places are never given again (MessageTable), so a cursor into it survives pruning, restarts and
  * restores. It keeps the newest STORE_SETTLED_PER_PARTY settled messages of each party within
  * STORE_BYTES, and every pending and unresolved one, deleting the oldest settled first (delivery
@@ -110,7 +114,7 @@ export class MessageTable {
     return this.#store
       .prepare(
         `SELECT seq, id, from_party, to_party, kind, origin, body, display, reply_to, resend_of,
-           task, turn, state, delivery, by_party, sent_at, told, withdrawal, settled
+           task, turn, state, delivery, by_party, sent_at, told, withdrawal, settled, ask
          FROM message WHERE canvas_id = ? ORDER BY seq`,
       )
       .all(canvas);
@@ -143,20 +147,22 @@ export class MessageTable {
   /**
    * Within a write: a message's row, as kept (each column written by name, so that what a newer
    * corrallm keeps beside them stays). A record's settled decision is written with its row and
-   * never after: no change writes it again.
+   * never after: no change writes it again; an ask's settlement is written once, as it ends (a
+   * row that has one keeps it). An ask's questions or an answer's answers are written with its
+   * row and never after.
    */
   keep({ seq, message, origin, display, told, withdrawal }: Kept): void {
     this.#store
       .prepare(
         `INSERT INTO message (seq, id, canvas_id, from_party, to_party, kind, origin, body, display,
            reply_to, resend_of, task, turn, state, delivery, by_party, sent_at, told, withdrawal,
-           settled)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           settled, ask)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT (id) DO UPDATE SET
            body = excluded.body, display = excluded.display, reply_to = excluded.reply_to,
            task = excluded.task, turn = excluded.turn, state = excluded.state,
            delivery = excluded.delivery, by_party = excluded.by_party, told = excluded.told,
-           withdrawal = excluded.withdrawal`,
+           withdrawal = excluded.withdrawal, settled = coalesce(message.settled, excluded.settled)`,
       )
       .run(
         seq,
@@ -179,6 +185,7 @@ export class MessageTable {
         told ?? null,
         json(withdrawal),
         json(message.settled),
+        json(message.ask),
       );
   }
 
@@ -699,15 +706,16 @@ export function capBody(text: string, whole: 'reply' | 'prompt'): string {
 }
 
 /**
- * Whether delivery still acts on a message: it waits, is being delivered, or is a text to an agent
- * whose turn goes on (delivered, not yet replied to). Delivery never acts on one settled or
- * unresolved again.
+ * Whether delivery still acts on a message: it waits, is being delivered, or is a turn to an agent
+ * that goes on (delivered, not yet replied to: a text, an ask, an ask's end its asker is sent).
+ * Delivery never acts on one settled or unresolved again.
  */
-export function isActive({ state, kind, to }: Message): boolean {
+export function isActive(message: Message): boolean {
+  const { state, to } = message;
   return (
     state === 'pending' ||
     state === 'delivering' ||
-    (state === 'delivered' && kind === 'text' && agentOf(to) !== undefined)
+    (state === 'delivered' && isTurn(message) && agentOf(to) !== undefined)
   );
 }
 
@@ -780,8 +788,12 @@ function keptOf(row: Record<string, unknown>, canvas: CanvasId): Kept | undefine
   const decided =
     row.settled === null || row.settled === undefined
       ? undefined
-      : SettledDecision.safeParse(parsed(row.settled));
+      : Settled.safeParse(parsed(row.settled));
   if (decided?.success === false) return undefined;
+  // An ask this code doesn't read (another version's): the row is left as it is too.
+  const asked =
+    row.ask === null || row.ask === undefined ? undefined : AskColumn.safeParse(parsed(row.ask));
+  if (asked?.success === false) return undefined;
   const task = parsed(row.task);
   const turn = parsed(row.turn);
   const delivery = parsed(row.delivery);
@@ -801,6 +813,7 @@ function keptOf(row: Record<string, unknown>, canvas: CanvasId): Kept | undefine
     ...(delivery === undefined ? {} : { delivery }),
     ...(party(by) ? { by } : {}),
     ...(decided === undefined ? {} : { settled: decided.data }),
+    ...(asked === undefined ? {} : { ask: asked.data }),
     at,
   } as unknown as Message;
   const kept: Kept = {
