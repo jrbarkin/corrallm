@@ -2,14 +2,17 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { LOOP_TURNS } from '../../../shared/api/limits';
 import type { CanvasId } from '../../../shared/canvas';
 import { CanvasMemory } from '../../memory';
 import type { Store } from '../store/store';
+import { SYSTEM_DEPS } from '../store/store';
 import { openTestStore, readOnDisk, refuseWrites, writeOnDisk } from '../store/test-store';
 import { LoopStore, LoopTable, orderedPair } from './loops';
+import { MessageStore, MessageTable } from './messages';
+import type { Staged } from './messages';
 
 /*
  * The loop breaker's counts (B21 C6, Design §9.2 C9): the turns delivered between two agents since
@@ -22,10 +25,17 @@ const CANVAS = '3f2a1b0c-9d8e-4f70-8a6b-5c4d3e2f1a0b' as CanvasId;
 let profile: string;
 let database: Store;
 let table: LoopTable;
+let flushGate: Promise<void> | undefined;
 
 beforeEach(async () => {
   profile = await mkdtemp(path.join(tmpdir(), 'corrallm-loops-'));
-  database = await openTestStore(profile);
+  database = await openTestStore(profile, {
+    ...SYSTEM_DEPS,
+    flush: async (fd) => {
+      await flushGate;
+      await SYSTEM_DEPS.flush(fd);
+    },
+  });
   const memory = new CanvasMemory(database);
   table = new LoopTable(database, memory);
   await database.write(() => {
@@ -34,6 +44,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await database.close();
   await rm(profile, { recursive: true, force: true });
 });
@@ -49,6 +60,152 @@ const rows = () =>
   readOnDisk(profile, (disk) =>
     disk.prepare('SELECT a, b, turns FROM loop_pair WHERE canvas_id = ? ORDER BY a, b').all(CANVAS),
   );
+
+/** The real mailbox staging path; the test's explicit containing write owns persistence. */
+async function mailbox() {
+  const loops = loaded();
+  const messages = new MessageStore(
+    CANVAS,
+    new MessageTable(database, new CanvasMemory(database)),
+    () => 1000,
+  );
+  await messages.load();
+  vi.spyOn(messages, 'durable').mockResolvedValue();
+  messages.writeAlso(() => loops.changes());
+  const deliver = () => {
+    const message = messages.add({
+      from: 'agent:a',
+      to: 'agent:b',
+      kind: 'text',
+      origin: 'party',
+      body: 'Work',
+      state: 'delivering',
+    });
+    loops.count('a', 'b');
+    return message;
+  };
+  const write = async (after: () => void = () => undefined) => {
+    let staged: Staged | undefined;
+    await database.write(
+      () => {
+        staged = messages.changes();
+        after();
+      },
+      (error) => staged?.undo(error),
+    );
+    staged?.reveal();
+  };
+  return { loops, messages, deliver, write };
+}
+
+describe('counts staged with the mailbox', () => {
+  it.each([false, true])(
+    'keeps a failed log flush dirty, with message changes: %s',
+    async (withMessage) => {
+      const { loops, deliver, write } = await mailbox();
+      if (withMessage) deliver();
+      else loops.count('a', 'b');
+      vi.spyOn(SYSTEM_DEPS, 'flush').mockRejectedValue(new Error('The log flush failed.'));
+      await expect(write()).rejects.toThrow('log flush failed');
+      expect(loops.pending()).toBe(true);
+      expect(loops.turns('a', 'b')).toBe(1);
+    },
+  );
+
+  it('keeps the count and delivering record in one write, acknowledging neither before its flush', async () => {
+    const { loops, deliver, write } = await mailbox();
+    const message = deliver();
+    const gate = Promise.withResolvers<undefined>();
+    const issued = Promise.withResolvers<undefined>();
+    flushGate = gate.promise;
+    let flushed = false;
+    const pending = write(() => {
+      expect(database.prepare('SELECT state FROM message WHERE id = ?').get(message.id)).toEqual({
+        state: 'delivering',
+      });
+      expect(database.prepare('SELECT turns FROM loop_pair').get()).toEqual({ turns: 1 });
+      issued.resolve(undefined);
+    }).then(() => {
+      flushed = true;
+    });
+    void pending.catch(() => undefined);
+    try {
+      await Promise.race([issued.promise, pending]);
+      expect(flushed).toBe(false);
+      expect(loops.pending()).toBe(true);
+    } finally {
+      flushGate = undefined;
+      gate.resolve(undefined);
+      await pending;
+    }
+    expect(loops.pending()).toBe(false);
+    expect(rows()).toEqual([{ a: 'a', b: 'b', turns: 1 }]);
+    expect(
+      readOnDisk(profile, (disk) =>
+        disk.prepare('SELECT state FROM message WHERE id = ?').get(message.id),
+      ),
+    ).toEqual({ state: 'delivering' });
+  });
+
+  it('retains both staged changes after a containing write rolls back, and retries them together', async () => {
+    const { loops, deliver, write } = await mailbox();
+    const message = deliver();
+    await expect(
+      write(() => {
+        throw new Error('The containing write rolled back.');
+      }),
+    ).rejects.toThrow('rolled back');
+    expect(rows()).toEqual([]);
+    expect(readOnDisk(profile, (disk) => disk.prepare('SELECT id FROM message').all())).toEqual([]);
+    expect(loops.pending()).toBe(true);
+    await write();
+    expect(loops.pending()).toBe(false);
+    expect(rows()).toEqual([{ a: 'a', b: 'b', turns: 1 }]);
+    expect(
+      readOnDisk(profile, (disk) =>
+        disk.prepare('SELECT state FROM message WHERE id = ?').get(message.id),
+      ),
+    ).toEqual({ state: 'delivering' });
+  });
+
+  it('retains both changes when the companion SQL fails, and retries them together', async () => {
+    const { loops, deliver, write } = await mailbox();
+    const message = deliver();
+    const release = refuseWrites(profile, 'loop_pair', 'The count could not be written.');
+    try {
+      await expect(write()).rejects.toThrow('could not be written');
+    } finally {
+      release();
+    }
+    expect(rows()).toEqual([]);
+    expect(readOnDisk(profile, (disk) => disk.prepare('SELECT id FROM message').all())).toEqual([]);
+    expect(loops.pending()).toBe(true);
+    await write();
+    expect(loops.pending()).toBe(false);
+    expect(rows()).toEqual([{ a: 'a', b: 'b', turns: 1 }]);
+    expect(
+      readOnDisk(profile, (disk) =>
+        disk.prepare('SELECT state FROM message WHERE id = ?').get(message.id),
+      ),
+    ).toEqual({ state: 'delivering' });
+  });
+
+  it('commits and reveals a companion-only write, and keeps it dirty if that write rolls back', async () => {
+    const { loops, write } = await mailbox();
+    loops.count('a', 'b');
+    await expect(
+      write(() => {
+        throw new Error('Roll back the counts alone.');
+      }),
+    ).rejects.toThrow('counts alone');
+    expect(rows()).toEqual([]);
+    expect(loops.pending()).toBe(true);
+    await write();
+    expect(rows()).toEqual([{ a: 'a', b: 'b', turns: 1 }]);
+    expect(loops.pending()).toBe(false);
+    expect(readOnDisk(profile, (disk) => disk.prepare('SELECT id FROM message').all())).toEqual([]);
+  });
+});
 
 describe('a pair of agents', () => {
   it('is unordered: both directions count together, ordered by their ids’ UTF-8 bytes', () => {
