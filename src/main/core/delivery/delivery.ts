@@ -371,7 +371,7 @@ export class Delivery {
     // B21 C6: what expired while the core was down expires now, in this same write.
     this.asks.start();
     await this.#deps.store.durable();
-    this.schedule();
+    this.#pump();
   }
 
   /** Whether a message is the live run's send of an attempt it still runs (its own to settle). */
@@ -483,10 +483,12 @@ export class Delivery {
   schedule(): void {
     if (this.#scheduled || !this.#started || this.#closed) return;
     this.#scheduled = true;
-    queueMicrotask(() => {
+    const check = () => {
       this.#scheduled = false;
+      if (this.#closed) return;
       this.#pump();
-    });
+    };
+    queueMicrotask(check);
   }
 
   /**
