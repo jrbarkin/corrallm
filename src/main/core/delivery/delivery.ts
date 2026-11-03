@@ -306,8 +306,11 @@ export class Delivery {
   }
   /** What takes each message being delivered back from its agent's session, by the message's id. */
   readonly #sent = new Map<string, () => void>();
-  /** The pair each message journaled as delivering was counted in (B21 C6), by the message's id. */
-  readonly #counted = new Map<string, Pair>();
+  /**
+   * The pair each message journaled as delivering was counted in (B21 C6), and the run of its
+   * turns it was counted in, by the message's id.
+   */
+  readonly #counted = new Map<string, { pair: Pair; run: number }>();
   /** The agents a message is being journaled for, before it is sent: nothing else starts meanwhile. */
   readonly #writing = new Set<string>();
   /** The messages sent whose records are on their way to disk: none goes before it is there. */
@@ -1048,7 +1051,14 @@ export class Delivery {
           next ??= message;
           continue;
         }
-        if (hold.kind === 'loop' && pair !== undefined && !looped.has(pair.join('\u0000'))) {
+        // Told to the sender of the pair's oldest held turn that has one to tell: corrallm's own
+        // record of how an ask ended is told to no one, and takes no one's notice.
+        if (
+          hold.kind === 'loop' &&
+          pair !== undefined &&
+          message.from !== 'corrallm' &&
+          !looped.has(pair.join('\u0000'))
+        ) {
           looped.add(pair.join('\u0000'));
           this.#tell(
             `loop:${message.id}`,
@@ -1484,10 +1494,8 @@ export class Delivery {
     }
     // B21 C6: a turn between two agents is counted in the write that journals it as delivering.
     const pair = this.#turnPair(message);
-    if (pair !== undefined) {
-      this.#deps.loops.count(...pair);
-      this.#counted.set(message.id, pair);
-    }
+    if (pair !== undefined)
+      this.#counted.set(message.id, { pair, run: this.#deps.loops.count(...pair) });
     this.#deps.store.update(message.id, {
       state: 'delivering',
       delivery: { at: this.#deps.now(), as, attempt },
@@ -1540,11 +1548,12 @@ export class Delivery {
       },
       (error: unknown) => {
         this.#writing.delete(node.id);
+        // Never sent, whatever became of it meanwhile: its turn is not one (B21 C6).
+        this.#uncount(message.id);
         if (this.#closed || this.#deps.store.get(message.id)?.state !== 'delivering') return;
         console.error('Could not record a message as delivering:', error);
-        // Never sent: what it would have carried waits for the next send, and its turn is not one.
+        // Never sent: what it would have carried waits for the next send.
         this.#uncarry(message.id);
-        this.#uncount(message.id);
         this.#deps.store.update(message.id, { state: 'pending' });
         this.#unrecordable ??= this.#deps.later(() => {
           this.#unrecordable = undefined;
@@ -1554,12 +1563,16 @@ export class Delivery {
     );
   }
 
-  /** A turn counted was never sent (B21 C6): it is not one, and is counted again when it goes. */
+  /**
+   * A turn counted was never sent (B21 C6): it is not one, and is counted again when it goes. Taken
+   * back only from the run of turns it was counted in: once you spoke to either agent since, their
+   * pair counts what was delivered after, which it is none of.
+   */
   #uncount(id: string): void {
-    const pair = this.#counted.get(id);
-    if (pair === undefined) return;
+    const counted = this.#counted.get(id);
+    if (counted === undefined) return;
     this.#counted.delete(id);
-    this.#deps.loops.uncount(...pair);
+    this.#deps.loops.uncount(...counted.pair, counted.run);
   }
 
   /** A message being delivered was never sent: what it carried waits for the next send. */

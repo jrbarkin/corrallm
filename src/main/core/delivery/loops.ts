@@ -78,8 +78,12 @@ export class LoopTable {
 export class LoopStore {
   readonly canvas: CanvasId;
   readonly #table: LoopTable;
-  /** The pairs with a count above zero. */
-  readonly #kept = new Map<string, { pair: Pair; turns: number }>();
+  /**
+   * The pairs with a count above zero, each with the run of turns it counts: a new one begins each
+   * time the pair counts from zero (after the user spoke to either, or as it is read).
+   */
+  readonly #kept = new Map<string, { pair: Pair; turns: number; run: number }>();
+  #runs = 0;
   /** The pairs whose rows aren't on disk as they are, each with the number of its last change. */
   readonly #changed = new Map<string, { pair: Pair; change: number }>();
   #changes = 0;
@@ -106,7 +110,7 @@ export class LoopStore {
       // A count this code can't read is as high as one can be: held, never zero.
       const read =
         typeof turns === 'number' && Number.isSafeInteger(turns) && turns >= 1 ? turns : LOOP_TURNS;
-      this.#kept.set(keyOf(pair), { pair, turns: read });
+      this.#kept.set(keyOf(pair), { pair, turns: read, run: ++this.#runs });
     }
   }
 
@@ -125,16 +129,26 @@ export class LoopStore {
     return [...this.#kept.values()].map(({ pair, turns }) => ({ pair, turns }));
   }
 
-  /** A turn between two agents was journaled as delivering. */
-  count(x: string, y: string): void {
+  /**
+   * A turn between two agents was journaled as delivering: the run of turns it was counted in,
+   * which `uncount` takes it back from.
+   */
+  count(x: string, y: string): number {
     const pair = orderedPair(x, y);
-    this.#set(pair, this.turns(x, y) + 1);
+    const kept = this.#kept.get(keyOf(pair));
+    const run = kept?.run ?? ++this.#runs;
+    this.#set(pair, (kept?.turns ?? 0) + 1, run);
+    return run;
   }
 
-  /** A turn counted was never sent (taken back unsent, or its journal not kept). */
-  uncount(x: string, y: string): void {
-    const before = this.turns(x, y);
-    if (before > 0) this.#set(orderedPair(x, y), before - 1);
+  /**
+   * A turn counted in `run` was never sent (taken back unsent, or its journal not kept): taken
+   * back from that run alone. Since the user spoke to either agent, the pair counts the turns
+   * delivered since, and a turn counted before is none of them.
+   */
+  uncount(x: string, y: string, run: number): void {
+    const kept = this.#kept.get(keyOf(orderedPair(x, y)));
+    if (kept?.run === run) this.#set(kept.pair, kept.turns - 1, run);
   }
 
   /** The user gave `agent` input: every pair holding it is at zero. Whether any wasn't. */
@@ -142,7 +156,7 @@ export class LoopStore {
     let reset = false;
     for (const { pair } of [...this.#kept.values()]) {
       if (pair[0] !== agent && pair[1] !== agent) continue;
-      this.#set(pair, 0);
+      this.#clear(pair);
       reset = true;
     }
     return reset;
@@ -152,14 +166,14 @@ export class LoopStore {
   resetPair(x: string, y: string): boolean {
     const pair = orderedPair(x, y);
     if (!this.#kept.has(keyOf(pair))) return false;
-    this.#set(pair, 0);
+    this.#clear(pair);
     return true;
   }
 
   /** The agents on the canvas now: a pair with an agent that isn't goes. */
   prune(agents: ReadonlySet<string>): void {
     for (const { pair } of [...this.#kept.values()]) {
-      if (!agents.has(pair[0]) || !agents.has(pair[1])) this.#set(pair, 0);
+      if (!agents.has(pair[0]) || !agents.has(pair[1])) this.#clear(pair);
     }
   }
 
@@ -192,10 +206,16 @@ export class LoopStore {
     written();
   }
 
-  #set(pair: Pair, turns: number): void {
+  /** A pair's count, in its run of turns; at zero, none. */
+  #set(pair: Pair, turns: number, run: number): void {
     const key = keyOf(pair);
     if (turns <= 0) this.#kept.delete(key);
-    else this.#kept.set(key, { pair, turns });
+    else this.#kept.set(key, { pair, turns, run });
     this.#changed.set(key, { pair, change: ++this.#changes });
+  }
+
+  /** A pair starts again from zero: the run of turns it counted is over. */
+  #clear(pair: Pair): void {
+    this.#set(pair, 0, 0);
   }
 }

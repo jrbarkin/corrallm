@@ -78,14 +78,33 @@ describe('a pair of agents', () => {
 
   it('is counted back when a delivery was never sent, to none at zero', () => {
     const store = loaded();
-    store.count('a', 'b');
-    store.count('a', 'b');
-    store.uncount('a', 'b');
+    const first = store.count('a', 'b');
+    const second = store.count('a', 'b');
+    store.uncount('a', 'b', second);
     expect(store.turns('a', 'b')).toBe(1);
-    store.uncount('a', 'b');
-    store.uncount('a', 'b');
+    store.uncount('a', 'b', first);
+    store.uncount('a', 'b', first);
     expect(store.turns('a', 'b')).toBe(0);
     expect(store.pairs()).toEqual([]);
+  });
+
+  it('is counted back only in the count it was counted in, never in one begun since the user spoke', () => {
+    const store = loaded();
+    for (let i = 0; i < LOOP_TURNS - 1; i++) store.count('a', 'b');
+    // A turn counted, then the user speaks to one of them before it is sent.
+    const unsent = store.count('a', 'b');
+    store.resetAgent('a');
+    // Turns delivered since count from zero; the one never sent takes none of them back.
+    for (let i = 0; i < LOOP_TURNS; i++) store.count('b', 'a');
+    store.uncount('a', 'b', unsent);
+    expect(store.turns('a', 'b')).toBe(LOOP_TURNS);
+    expect(store.held('a', 'b')).toBe(true);
+    // Nor in a count begun again after the agent left and came back.
+    const gone = store.count('a', 'c');
+    store.prune(new Set(['a', 'b']));
+    store.count('a', 'c');
+    store.uncount('a', 'c', gone);
+    expect(store.turns('a', 'c')).toBe(1);
   });
 });
 

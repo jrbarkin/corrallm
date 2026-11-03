@@ -540,6 +540,112 @@ describe('the counts and the hold across a restart and a failed write', () => {
     });
   });
 
+  it('hold the end of an ask between the pair that expired while corrallm was down, and tell the agent whose turn waits behind it', async () => {
+    await keepCanvas();
+    await start();
+    await passTurns();
+    const { id: asked } = await ok<{ id: string }>(
+      'ask',
+      { to: 'builder', questions: [QUESTION], deadlineSeconds: 60 },
+      PLANNER,
+    );
+    await vi.waitFor(async () => {
+      expect((await needsOf()).map((item) => item.id)).toContain(HOLD);
+    });
+    // Its deadline passes while corrallm is down: it expires as the canvas opens again.
+    const now = Date.now.bind(Date);
+    vi.spyOn(Date, 'now').mockImplementation(() => now() + 61_000);
+    await restart();
+    const ended = (await inbox(PLANNER)).find(
+      (one) => one.kind === 'settled' && one.replyTo === asked,
+    );
+    expect(ended).toMatchObject({ from: 'corrallm', to: 'agent:planner', state: 'pending' });
+    expect((await needsOf()).map((item) => item.id)).toContain(HOLD);
+    // Builder's turn behind it waits with its pair, and Builder is told so, once.
+    const { id: behind } = await ok<{ id: string }>(
+      'message',
+      { to: 'planner', body: 'Still there?' },
+      BUILDER,
+    );
+    await vi.waitFor(async () => {
+      expect(
+        (await inbox(BUILDER)).filter((one) => one.kind === 'notice' && one.replyTo === behind),
+      ).toHaveLength(1);
+    });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(sent()).toHaveLength(LOOP_TURNS);
+    // Go on: the ask's end goes first, as a turn between the pair, then Builder's and its reply.
+    await ok('reply', { to: HOLD, answer: { choice: 'goOn' } }, YOU);
+    await vi.waitFor(async () => {
+      expect((await find(ended?.id ?? ''))?.state).toBe('replied');
+      expect((await find(behind))?.state).toBe('replied');
+    });
+    await vi.waitFor(() => {
+      expect(pairsOnDisk()).toEqual([{ a: 'builder', b: 'planner', turns: 3 }]);
+    });
+  });
+
+  it('hold a pair whose item id would be too long for the API, with no item, until you speak to either', async () => {
+    const [one, two] = ['あ'.repeat(256), 'い'.repeat(256)] as const;
+    const project = path.join(profile, 'project');
+    await mkdir(project);
+    const file = path.join(profile, 'canvas.corral');
+    await writeFile(
+      file,
+      JSON.stringify({
+        format: 'corrallm',
+        version: 2,
+        id: CANVAS,
+        nodes: [one, two].map((id, i) => ({
+          id,
+          kind: 'agent',
+          label: `Agent ${String(i + 1)}`,
+          position: { x: 0, y: i * 100 },
+          adapter: 'codex',
+          connection: 'codex.app-server',
+        })),
+        links: [{ agents: [one, two] }],
+      }),
+    );
+    await keepCanvases(profile, { [CANVAS]: { file, project } });
+    await start();
+    const first = agentCaller(one);
+    const second = agentCaller(two);
+    for (let n = 0; n < LOOP_TURNS / 2; n++)
+      await exchange(n % 2 === 0 ? first : second, n % 2 === 0 ? two : one);
+    const { id } = await ok<{ id: string }>('message', { to: two, body: 'Again' }, first);
+    await vi.waitFor(async () => {
+      expect(
+        (await inbox(first)).filter((note) => note.kind === 'notice' && note.replyTo === id),
+      ).toHaveLength(1);
+    });
+    expect(sent()).toHaveLength(LOOP_TURNS);
+    expect((await needsOf()).filter((item) => item.id.startsWith('loop/'))).toEqual([]);
+    expect(await find(id)).toMatchObject({ state: 'pending' });
+    await ok('message', { to: one, body: 'Carry on' }, YOU);
+    await vi.waitFor(async () => {
+      expect((await find(id))?.state).toBe('replied');
+    });
+  });
+
+  it('count nothing for a turn taken back as its journal is refused: it was never sent', async () => {
+    await keepCanvas();
+    await start();
+    const open = core?.engines.canvas(CANVAS);
+    if (open === undefined) throw new Error('The canvas is not open.');
+    const release = refuseWrites(profile, 'loop_pair', 'The disk is full.');
+    const { id } = await ok<{ id: string }>('message', { to: 'builder', body: 'Hello' }, PLANNER);
+    // Its sender takes it back while its delivering record is still on its way to the disk.
+    expect(open.messages.get(id)?.state).toBe('delivering');
+    await open.delivery.withdraw(id, 'agent:planner').catch(() => undefined);
+    release();
+    await open.messages.durable();
+    expect(open.messages.get(id)?.state).toBe('withdrawn');
+    expect(sent()).toEqual([]);
+    expect(open.loops.turns('planner', 'builder')).toBe(0);
+    expect(pairsOnDisk()).toEqual([]);
+  });
+
   it('go with an agent that leaves the canvas', async () => {
     await keepCanvas();
     await start();
