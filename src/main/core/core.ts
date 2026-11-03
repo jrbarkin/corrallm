@@ -1143,6 +1143,8 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
       },
       view: (canvas, agent) => handoff.view(canvas, agent),
     },
+    // B21 C8: a step asks for complete once its agent's session listed it (C1's observation).
+    completes: (canvas, agent) => authority.hasListedTool(canvas, agent, 'complete'),
   });
   /** A canvas the core runs, executing (its delivery started): what B11a's services act on. */
   const executing = (canvas: CanvasId) => {

@@ -218,6 +218,41 @@ export interface RunIO {
    * (`admissionChanged`). None: no request ever waits.
    */
   handoff?: (agent: string) => boolean;
+  /**
+   * B21 C5 (Design §9.2 C7, C8): what the canvas's mailbox holds of the asks a task's attempt made
+   * and of the outcome its agent reported, the core's alone. None (unit harnesses): no attempt ever
+   * waits on an ask or reports.
+   */
+  tasks?: RunTasks;
+  /**
+   * B21 C8: whether `agent`'s session now has listed corrallm's `complete` (C1's observation): its
+   * steps then ask for that call, with their attempt's id, before the last line. None: never.
+   */
+  completes?: (agent: string) => boolean;
+}
+
+/**
+ * What the canvas's mailbox holds of a task's attempt (B21 Design §9.2 C7, C8): its open asks and
+ * the continuations their settlements send it (the open asks are the durable state: the run keeps
+ * no copy of them in its checkpoint), and the outcome its agent reported with `complete`.
+ */
+export interface RunTasks {
+  /** Whether attempt `task` waits on its asks: one open, or a continuation not yet ended. */
+  waits(task: TaskMessage): boolean;
+  /** The outcome attempt `task`'s agent reported with `complete`, if it did. */
+  reported(task: TaskMessage): 'succeeded' | 'failed' | undefined;
+  /**
+   * What attempt `task`'s rows say of it as the run is held or restored with it running: it waits
+   * on its asks, its own turn over and none of its continuations in flight; or else whether an
+   * answer to one of its asks had reached its agent (a continuation in flight, or cut off).
+   */
+  recover(task: TaskMessage): { waiting: true } | { waiting: false; answered: boolean };
+  /**
+   * Attempt `task` was stopped (Stop, Kill, Run again) while it waited: a continuation of it in
+   * flight is taken back. Its open asks and the continuations still to come are withdrawn as
+   * delivery next looks (they belong to an attempt no longer running).
+   */
+  interrupt(task: TaskMessage): void;
 }
 
 /**
@@ -394,6 +429,12 @@ export class RunStore {
   /** The agents the run said it can't read the replies of, this run. */
   readonly #toldUnheard = new Set<string>();
   readonly #observed = new Map<string, { owner: string; item: string; token: object }>();
+  /**
+   * B21 C7: each agent whose step's attempt waits on its asks (its own turn over, a continuation of
+   * it to come), by its owner: the token it is busy with, the step (as resolved) and the attempt.
+   * The attempt's next turn's end (`continued`) judges it, or waits again.
+   */
+  readonly #deferred = new Map<string, { token: object; step: QueueStep; attempt: string }>();
 
   constructor(catalog: EngineCatalog, io: RunIO) {
     this.#catalog = catalog;
@@ -441,6 +482,8 @@ export class RunStore {
     for (const [key, value] of saved.usageDecided) this.#usageDecided.set(key, value);
     for (const key of saved.warned) this.#warned.add(key);
     const agents: Record<string, AgentRun> = {};
+    /** B21 C7: the attempts that wait on their asks, derived from the canvas's mailbox. */
+    const waiting: [string, { step: QueueStep; attempt: string }][] = [];
     for (const [id, at] of Object.entries(saved.run.agents)) {
       if (
         at.status === 'running' &&
@@ -449,6 +492,18 @@ export class RunStore {
       ) {
         const node = this.#agents().find((n) => n.id === id);
         const item = node && findItem(node.data.queue ?? [], at.current)?.item;
+        const last = at.attempts?.[at.current]?.at(-1);
+        const task =
+          last?.status === 'running'
+            ? { agent: id, item: at.current, attempt: last.id }
+            : undefined;
+        // Its own turn over and an ask of its open, it waits, not uncertain: no turn was going.
+        const step = this.#waitingStep(node, item, task);
+        if (step !== undefined && task !== undefined) {
+          agents[id] = at;
+          waiting.push([id, { step, attempt: task.attempt }]);
+          continue;
+        }
         const condition = conditionKey(id, item, at.rounds);
         agents[id] = {
           ...at,
@@ -456,7 +511,7 @@ export class RunStore {
           problem: {
             kind: 'uncertain',
             reason: 'interrupted',
-            text: 'This task was in progress when the session ended. Inspect its native conversation before resolving or retrying.',
+            text: this.#heldText('This task was in progress when the session ended.', task),
             agent: item && isMessage(item) ? (item.target ?? id) : id,
             ...(condition ? { conditionKey: condition } : {}),
           },
@@ -496,6 +551,12 @@ export class RunStore {
         ? { individualPauses: causes.individual, groupPauses: causes.groups }
         : {}),
     };
+    // Each waiting attempt is its agent's task still, until its next turn's end judges it.
+    for (const [id, { step, attempt }] of waiting) {
+      const token = {};
+      this.#busy.set(id, token);
+      this.#deferred.set(id, { token, step, attempt });
+    }
     this.#applyPauses();
     this.#set({ ...this.#run });
   }
@@ -535,11 +596,26 @@ export class RunStore {
    * pause, unless a party had stopped the run already.
    */
   pause(): void {
-    this.#interrupt(
-      'uncertain',
-      'The session was interrupted. Inspect its native conversation before resolving or retrying.',
+    // B21 C7: an attempt that waits on its asks, none of its turns going, is held as it is: it
+    // waits still once restored (its rows say so), never uncertain.
+    const waiting = [...this.#deferred].filter(
+      ([agent, { step, attempt }]) =>
+        this.#io.tasks?.recover({ agent, item: step.id, attempt }).waiting === true,
     );
-    this.#cancel();
+    for (const agent of this.#busy.keys()) {
+      if (waiting.some(([one]) => one === agent)) continue;
+      this.#interrupt(
+        'uncertain',
+        this.#heldText('The session was interrupted.', this.#runningTask(agent)),
+        new Set([agent]),
+        false,
+      );
+    }
+    this.#cancel(false);
+    for (const [agent, deferred] of waiting) {
+      this.#busy.set(agent, deferred.token);
+      this.#deferred.set(agent, deferred);
+    }
     this.#halt('corrallm');
   }
 
@@ -952,6 +1028,13 @@ export class RunStore {
    */
   update(nodes: readonly CanvasNode[]): void {
     this.#nodes = nodes;
+    // B21 C7: an agent gone while its attempt waited on its asks waits for nothing more (its asks
+    // are withdrawn as it goes).
+    for (const [agent, { token }] of this.#deferred) {
+      if (nodes.some((node) => node.id === agent && node.type === 'agent')) continue;
+      this.#deferred.delete(agent);
+      if (this.#busy.get(agent) === token) this.#busy.delete(agent);
+    }
     const changed = this.#applyPauses();
     this.#releasePending();
     if (this.#run.running) this.#settle(this.#unrefuse() || changed);
@@ -1006,6 +1089,95 @@ export class RunStore {
     this.#run = { ...this.#run, agents: { ...this.#run.agents, [owner]: cleared } };
     this.#settle(true);
     return true;
+  }
+
+  /**
+   * B21 C7: a continuation's turn ended (delivery's: an answer to an ask a task's attempt made, or
+   * the record of how that ask ended, sent its asker): the attempt's own turn, which judges it in
+   * C8's order once none of its asks waits, or waits again. Nothing for an attempt not waiting so
+   * now (stopped, killed, judged, another's).
+   */
+  continued(task: TaskMessage, turn: TurnEnd): void {
+    const deferred = this.#deferred.get(task.agent);
+    if (
+      deferred?.attempt !== task.attempt ||
+      deferred.step.id !== task.item ||
+      this.#busy.get(task.agent) !== deferred.token
+    )
+      return;
+    this.#deferred.delete(task.agent);
+    this.#taskEnded(task.agent, deferred.step, deferred.token, turn);
+  }
+
+  /**
+   * B21 C4, C8 (the AttemptId's resolver, the run's half): whether `task` is its agent's own current
+   * attempt, running, of a tool step (never a slash command's, a message's or a condition's), on a
+   * queue the run is busy with. Whether that attempt's own turn is in flight, the core reads of its
+   * mailbox and its session.
+   */
+  ownsAttempt(task: TaskMessage): boolean {
+    const at = this.#run.agents[task.agent];
+    const last = at?.attempts?.[task.item]?.at(-1);
+    if (
+      at?.current !== task.item ||
+      last?.id !== task.attempt ||
+      last.status !== 'running' ||
+      !this.#busy.has(task.agent)
+    )
+      return false;
+    const node = this.#agents().find((n) => n.id === task.agent);
+    const item = node && findItem(node.data.queue ?? [], task.item)?.item;
+    if (!node || !item || !isStep(item)) return false;
+    const resolved = this.#catalog.resolveAction(item.action, node.data);
+    return !('unknown' in resolved) && !isCommand(resolved.action);
+  }
+
+  /** The attempt agent `agent` runs now, if one is: its current task's last, running. */
+  #runningTask(agent: string): TaskMessage | undefined {
+    const at = this.#run.agents[agent];
+    const last = at?.current === undefined ? undefined : at.attempts?.[at.current]?.at(-1);
+    return at?.current === undefined || last?.status !== 'running'
+      ? undefined
+      : { agent, item: at.current, attempt: last.id };
+  }
+
+  /**
+   * B21 C7: the tool step `item` is (`node`'s, as its adapter resolves it now), where its running
+   * attempt `task` waits on its asks, its own turn over (RunTasks.recover); none otherwise.
+   */
+  #waitingStep(
+    node: AgentNode | undefined,
+    item: QueueItem | undefined,
+    task: TaskMessage | undefined,
+  ): QueueStep | undefined {
+    if (node === undefined || item === undefined || task === undefined || !isStep(item))
+      return undefined;
+    const resolved = this.#catalog.resolveAction(item.action, node.data);
+    if ('unknown' in resolved || isCommand(resolved.action)) return undefined;
+    return this.#io.tasks?.recover(task).waiting === true
+      ? { ...item, action: resolved.action }
+      : undefined;
+  }
+
+  /**
+   * Why a task whose turn was going is held uncertain (`what`: the run held as quitting holds it,
+   * or restored after its session ended), with what its attempt's rows add (B21 C7, C8): that an
+   * answer to a question it asked had reached its agent, or what its agent had reported.
+   */
+  #heldText(what: string, task: TaskMessage | undefined): string {
+    const tasks = this.#io.tasks;
+    const recovered = task === undefined ? undefined : tasks?.recover(task);
+    const reported = task === undefined ? undefined : tasks?.reported(task);
+    return [
+      what,
+      recovered?.waiting === false && recovered.answered
+        ? 'An answer to a question it asked had reached the agent.'
+        : undefined,
+      reported === undefined ? undefined : `The agent had reported this step ${reported}.`,
+      'Inspect its native conversation before resolving or retrying.',
+    ]
+      .filter((part) => part !== undefined)
+      .join(' ');
   }
 
   /** A prompt typed in the held task's own console is an observed attempt, not another send. */
@@ -1106,10 +1278,17 @@ export class RunStore {
     kind: TaskProblem['kind'],
     text: string,
     owners: ReadonlySet<string> = new Set(this.#busy.keys()),
+    takeBack = true,
   ): void {
     for (const agent of owners) {
       const at = this.#run.agents[agent];
       if (!at?.current) continue;
+      // B21 C7: an attempt waiting on its asks is stopped too: a continuation of it in flight is
+      // taken back, and its asks are withdrawn as delivery next looks.
+      const deferred = this.#deferred.get(agent);
+      this.#deferred.delete(agent);
+      if (takeBack && deferred !== undefined)
+        this.#io.tasks?.interrupt({ agent, item: deferred.step.id, attempt: deferred.attempt });
       this.#endAttempt(agent, at.current, kind, 'interrupted', text);
       const updated = { ...(this.#run.agents[agent] ?? at) };
       delete updated.refused;
@@ -1939,7 +2118,12 @@ export class RunStore {
     if (!isMessage(task)) {
       const endpoint = node === undefined ? undefined : this.#catalog.endpointOf(node.data);
       if (node && endpoint?.kind === 'known') {
-        const original = this.#stepMessage(node, task);
+        // B21 C8: once its session listed complete, the step asks for that call, with its attempt.
+        const original = this.#stepMessage(
+          node,
+          task,
+          this.#io.completes?.(agent) === true ? attempts[task.id]?.at(-1)?.id : undefined,
+        );
         const text = correction
           ? corrected(
               correction.note,
@@ -2038,10 +2222,40 @@ export class RunStore {
         agent: destination,
       };
     } else if (!isMessage(task)) {
-      const verdict = isCommand(task.action) ? true : stepVerdict(turn.reply);
+      const command = isCommand(task.action);
+      const last = this.#run.agents[agent]?.attempts?.[task.id]?.at(-1);
+      const own =
+        command || last?.status !== 'running'
+          ? undefined
+          : { agent, item: task.id, attempt: last.id };
+      // B21 C7: a turn that ends while its attempt waits on its asks is not judged: no verdict, no
+      // condition, the queue stays; its agent is free for others' turns meanwhile, and the next
+      // turn of its attempt (a continuation, delivery's) ends it again (`continued`).
+      if (own !== undefined && this.#io.tasks?.waits(own) === true) {
+        this.#deferred.set(agent, { token, step: task, attempt: own.attempt });
+        this.#heard();
+        return;
+      }
+      // B21 C8: what its agent reported with complete decides, fixed then and applied now; the
+      // exact last line is the fallback, and one that is a verdict and disagrees holds it.
+      const reported = own === undefined ? undefined : this.#io.tasks?.reported(own);
       const node = this.#agents().find((n) => n.id === agent);
       const unheard = node ? this.#unheard(node) : false;
-      if (verdict === undefined || unheard) {
+      const line = command ? true : stepVerdict(turn.reply);
+      const verdict =
+        reported === undefined
+          ? line
+          : unheard || line === undefined || line === (reported === 'succeeded')
+            ? reported === 'succeeded'
+            : undefined;
+      if (reported !== undefined && verdict === undefined) {
+        problem = {
+          kind: 'uncertain',
+          reason: 'disagreeing-verdict',
+          text: `The agent reported this step ${reported} with complete, but its reply’s last line says ${line === true ? 'SUCCEEDED' : 'FAILED'}. Inspect the session before continuing.`,
+          agent: destination,
+        };
+      } else if (verdict === undefined || (unheard && reported === undefined)) {
         problem = {
           kind: 'uncertain',
           reason: 'missing-verdict',
@@ -2070,7 +2284,7 @@ export class RunStore {
    * What a connected agent's step asks of it (turns.ts): its action, as its adapter names it, the
    * agent it acts on if that is another one still there, and what it is to do, in the user's words.
    */
-  #stepMessage(node: AgentNode, step: QueueStep): string {
+  #stepMessage(node: AgentNode, step: QueueStep, attempt?: string): string {
     const actions = this.#catalog.actionsOf(node.data);
     const other =
       step.target !== undefined && step.target !== node.id
@@ -2081,6 +2295,7 @@ export class RunStore {
       actions,
       other && agentName(this.#nodes, other.id),
       step.instruction,
+      attempt,
     );
   }
 
@@ -2465,10 +2680,17 @@ export class RunStore {
    * their queues, or their turns interrupted). No agent is busy any more, so how those turns end
    * is not heard.
    */
-  #cancel(): void {
+  #cancel(takeBack = true): void {
     this.#observed.clear();
     for (const cancel of this.#timers.keys()) cancel();
     this.#timers.clear();
+    // B21 C7: an attempt waiting on its asks is forgotten with the run (Run again): a continuation
+    // of it in flight is taken back, unless the run is only held (quitting holds it as it is).
+    const deferred = [...this.#deferred];
+    this.#deferred.clear();
+    if (takeBack)
+      for (const [agent, { step, attempt }] of deferred)
+        this.#io.tasks?.interrupt({ agent, item: step.id, attempt });
     this.#busy.clear();
     this.#alarm?.cancel();
     this.#alarm = undefined;
@@ -2560,6 +2782,18 @@ function lastRan(
     const outcome = outcomes[item.id];
     return outcome !== undefined && outcome !== 'skipped' && !isPause(item);
   });
+}
+
+/** Whether a queue item is a step (a tool's, or a slash command's). */
+function isStep(item: QueueItem): item is QueueStep {
+  return (
+    !isMessage(item) &&
+    !isIf(item) &&
+    !isRepeat(item) &&
+    !isWait(item) &&
+    !isDelay(item) &&
+    !isApproval(item)
+  );
 }
 
 /** Images sent with changes asked for, as the run records them: "[Image]", "[2 images]". */

@@ -21,27 +21,42 @@ const VERDICT =
   'expected it to fail.';
 
 /**
+ * What a tool's step asks for at its end once its session listed corrallm's `complete` (B21 Design
+ * §9.2 C8): that call, naming its attempt (`attempt`), with how it went and a summary; and, should
+ * that call be refused or unavailable, the last line VERDICT asks for.
+ */
+const COMPLETE = (attempt: string) =>
+  `When the step is done, report how it went with corrallm’s complete tool: task "${attempt}", ` +
+  'outcome "succeeded" or "failed" (whether the step succeeded: a command, whether it exited ' +
+  'with status 0; tests, whether they all passed; even if you expected it to fail), and a short ' +
+  'summary of what you did. If that call is refused or unavailable, end your reply with ' +
+  'SUCCEEDED or FAILED on a line of its own instead.';
+
+/**
  * What a step asks of a connected agent: a slash command is sent as that command, with what the
  * step is to do (`instruction`, the user's words) as its arguments; a tool, as a short instruction
  * to use it for the step, then what the step is to do ("Use the Bash tool for this step: run npm
  * test"), or else what the tool does (`actions`: its adapter's, as the catalog declares them), and
  * whose work it acts on when that is another agent's (`other`, its name). A tool's step then asks
  * how it went (VERDICT, read by stepVerdict), after the user's words in a paragraph of its own, as
- * they are.
+ * they are; or, given its attempt's id (`attempt`: its session listed `complete`), to report it with
+ * `complete`, the last line its fallback (COMPLETE).
  */
 export function stepMessage(
   action: string,
   actions: readonly AgentAction[],
   other?: string,
   instruction?: string,
+  attempt?: string,
 ): string {
   const told = instruction?.trim() ?? '';
   if (isCommand(action)) return told === '' ? action : `${action} ${told}`;
+  const verdict = attempt === undefined ? VERDICT : COMPLETE(attempt);
   const on = other === undefined ? '' : `, on the work of ${other} (another agent)`;
-  if (told !== '') return `Use the ${action} tool for this step${on}: ${told}\n\n${VERDICT}`;
+  if (told !== '') return `Use the ${action} tool for this step${on}: ${told}\n\n${verdict}`;
   const what = actions.find((a) => a.name === action)?.description;
   const does = what === undefined ? '' : ` (${what.charAt(0).toLowerCase()}${what.slice(1)})`;
-  return `Use the ${action} tool for this step${does}${on}. ${VERDICT}`;
+  return `Use the ${action} tool for this step${does}${on}. ${verdict}`;
 }
 
 /**

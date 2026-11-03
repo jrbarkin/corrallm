@@ -11,7 +11,7 @@ import type { Admission, AdmittedWork, RunMailbox } from './engine/run/runner';
 import type { SessionBackend } from './engine/transcript/receive';
 import type { CanvasDocument } from '../../shared/model/canvas';
 import type { Message, MessageDisplay, PartyId } from '../../shared/model/messages';
-import { agentParty } from '../../shared/model/messages';
+import { agentParty, isContinuation } from '../../shared/model/messages';
 import type { NeedsItem } from '../../shared/model/needs';
 import type { HandoffView } from '../../shared/model/handoff';
 import type { RunCheckpoint } from '../../shared/run';
@@ -28,6 +28,7 @@ import type { UsageReadings } from '../usage';
 import type { Documents } from './canvas/documents';
 import { recoverDecisions } from './decisions';
 import { Delivery, HANDOFF_CARRIED } from './delivery/delivery';
+import { mailboxTasks } from './delivery/tasks';
 import { HandoffStore } from './delivery/handoffs';
 import type { HandoffTable } from './delivery/handoffs';
 import { capBody, MessageStore, sentByRun } from './delivery/messages';
@@ -142,6 +143,11 @@ export interface EnginesDeps {
     recover(canvas: CanvasId): void;
     view(canvas: CanvasId, agent: string): HandoffView | null;
   };
+  /**
+   * B21 C8: whether an agent's session now has listed corrallm's `complete` (the session
+   * authority's observation): its steps then ask for that call. None: never.
+   */
+  completes?: (canvas: CanvasId, agent: string) => boolean;
 }
 
 /**
@@ -393,8 +399,9 @@ export class Engines {
     );
     if (this.#running.has(canvas)) {
       const open = this.#canvases.get(canvas);
+      // B21 C7: a task's continuation in it is that task's attempt's turn too, retried as one.
       const attempts = (open?.messages.active() ?? []).flatMap((message) =>
-        sentByRun(message) &&
+        (sentByRun(message) || isContinuation(message)) &&
         message.task !== undefined &&
         message.to === agentParty(agent) &&
         message.delivery !== undefined &&
@@ -676,8 +683,10 @@ export class Engines {
     const originals = store.all().filter(
       (m) =>
         m.kind === 'text' &&
-        // The run retries its own attempts (retryAttempt): never copied as a party's.
+        // The run retries its own attempts (retryAttempt), and a task's continuation with its
+        // attempt (B21 C7): never copied as a party's.
         !sentByRun(m) &&
+        !isContinuation(m) &&
         m.to === agentParty(agent) &&
         m.delivery &&
         request.ids.includes(m.delivery.as) &&
@@ -1079,6 +1088,13 @@ export class Engines {
           }),
       // B11a C7: an agent's next task waits while corrallm's handoff request to it waits or runs.
       ...(handoff === undefined ? {} : { handoff: (agent) => handoff.asking(canvas, agent) }),
+      // B21 C7, C8: what its messages hold of its tasks' asks and results, which the run reads as
+      // they end and as it is held or restored; a stopped task's continuation in flight is taken
+      // back by its delivery (none before it is made, as the run is restored).
+      tasks: mailboxTasks(messages, (task) => {
+        (running.delivery as Delivery | undefined)?.interruptTask(task);
+      }),
+      completes: (agent) => this.#deps.completes?.(canvas, agent) === true,
     });
     running.engine = engine;
     engine.update(document.nodes);

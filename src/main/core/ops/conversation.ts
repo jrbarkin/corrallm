@@ -10,6 +10,7 @@ import type { NeedsItem } from '../../../shared/model/needs';
 import { agentName, areLinked, teamOf } from '../../../shared/model/queries';
 import { OpFailure } from '../call';
 import type { OpContext } from '../call';
+import { ownTurn } from '../attempts';
 import { canvasesOf, isTokenCaller, partyIdOf, promptReaderOf } from '../caller';
 import type { MessageId } from '../../../shared/api/ids';
 import { agentParty } from '../../../shared/model/messages';
@@ -239,6 +240,8 @@ export function conversationOps(
         typeof to === 'string'
           ? { to: agentParty(agentOf(open, to).id) }
           : { to: 'you' as const, ...partyTarget(to, ctx) };
+      // B21 C7: asked during one of its task's attempt's own turns, it belongs to that task.
+      const own = ctx.caller.kind === 'agent' ? ownTurn(open, ctx.caller.agent) : undefined;
       try {
         const asked = await open.delivery.asks.ask({
           from: partyIdOf(ctx.caller),
@@ -246,6 +249,7 @@ export function conversationOps(
           questions,
           seconds: deadlineSeconds,
           ...(request === undefined ? {} : { request }),
+          ...(own === undefined ? {} : { task: own.task }),
         });
         return { id: asked.id as MessageId };
       } catch (error) {

@@ -687,10 +687,12 @@ function prunable({ message, withdrawal }: Kept): boolean {
 /**
  * Whether a message is one of the run's sends of a task's attempt (B11 Design §3): a text with a
  * task link, which only the runtime's mailbox gives a message (Engines), never a caller. The run
- * sends it and settles it; delivery never delivers, takes back or kills it as a party's.
+ * sends it and settles it; delivery never delivers, takes back or kills it as a party's. An answer
+ * to an ask a task's attempt made carries its task too (B21 C7: a continuation), but is no send of
+ * the run's: delivery delivers it, as the attempt's own turn.
  */
 export function sentByRun(message: Message): boolean {
-  return message.kind === 'text' && message.task !== undefined;
+  return message.kind === 'text' && message.task !== undefined && message.ask === undefined;
 }
 
 /**

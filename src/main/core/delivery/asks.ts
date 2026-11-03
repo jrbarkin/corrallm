@@ -11,6 +11,7 @@ import type {
 import type { CanvasNode } from '../../../shared/model/canvas';
 import {
   agentOf,
+  isContinuation,
   isOpenAsk,
   isOpenToYou,
   isMessageToYou,
@@ -20,11 +21,12 @@ import type { Message, PartyId } from '../../../shared/model/messages';
 import type { NeedsItem } from '../../../shared/model/needs';
 import type { QuestionAnswers } from '../../../shared/model/prompts';
 import { threadTitle } from '../../../shared/model/session';
-import type { TurnResult } from '../../../shared/session';
+import type { TaskMessage, TurnResult } from '../../../shared/session';
 import { partyName, partyText, quotedName, quotedParty } from '../parties';
 import { DeliveryError } from './errors';
 import { capBody } from './messages';
 import type { MessageStore } from './messages';
+import { continuationsOf, openAsksOf } from './tasks';
 
 /*
  * Asks and messages to you (B21 Design §9.2 C5, C6), on one canvas: no second inbox, only typed
@@ -47,8 +49,13 @@ import type { MessageStore } from './messages';
  *   withdraws it with nothing sent. One open ask per asker and recipient, MAX_OPEN_ASKS a canvas.
  *
  * Every row an asker is sent goes to an agent as an ordinary turn (making no reply of its own) and
- * to an outside party as a record. What C5 adds (a task's asks, its continuation first in line) is
- * built on these rows.
+ * to an outside party as a record. B21 C5 (§9.2 C7) builds a task's asks on these rows: an ask made
+ * during one of a task's attempt's own turns keeps that attempt in its column (`task`), and what it
+ * sends its asker carries it (`Message.task`: a continuation, which delivery sends first in line, as
+ * the attempt's own turn). The attempt stopped (Stop, Kill, its turn failing natively, Run again,
+ * a restart that holds it uncertain) or completed (`complete`), its open asks are withdrawn with
+ * nothing sent (`withdrawTask`), a note for an agent recipient it had reached, and its continuations
+ * still to come with them.
  */
 
 export interface AsksDeps {
@@ -66,6 +73,11 @@ export interface AsksDeps {
   waiting: (agent: string, from: PartyId) => number;
   /** Sends agent `agent` your message replying to `replyTo`, as yours: a turn, unframed. */
   sendYours: (agent: string, body: string, replyTo: string) => Promise<Message>;
+  /**
+   * B21 C7: whether a task's attempt still runs (its agent's current task's last attempt, running):
+   * the asks of one that doesn't, and its continuations still to come, are withdrawn (`sweep`).
+   */
+  running: (task: TaskMessage) => boolean;
 }
 
 /** An ask's answer: the answers by question id, or the text that answered it. */
@@ -141,6 +153,7 @@ export class Asks {
     questions,
     seconds,
     request,
+    task,
   }: {
     from: PartyId;
     to: PartyId;
@@ -148,6 +161,8 @@ export class Asks {
     questions: readonly AskQuestion[];
     seconds: number;
     request?: string;
+    /** B21 C7: the task attempt whose own turn its asker was on as it asked (`ownTurn`). */
+    task?: TaskMessage;
   }): Promise<Message> {
     const { store } = this.#deps;
     this.sweep();
@@ -191,6 +206,9 @@ export class Asks {
       questions: [...questions],
       deadline: this.#deps.now() + seconds * 1000,
       ...(via === undefined ? {} : { via }),
+      ...(task === undefined
+        ? {}
+        : { task: { owner: task.agent, item: task.item, attempt: task.attempt } }),
     };
     const message = store.add(
       {
@@ -445,8 +463,39 @@ export class Asks {
   }
 
   /**
+   * B21 C7, C8: withdraws the open asks a task's attempt made, and the continuations of it still to
+   * be delivered (`why`: its task stopped, or its agent completed it), nothing sent its asker. An ask
+   * that had reached its agent recipient leaves that agent a note, told with its next message; its
+   * turn going on isn't interrupted, and its late answer is a conflict saying why. Whether any was.
+   */
+  withdrawTask(task: TaskMessage, why: 'stopped' | 'completed'): boolean {
+    const { store } = this.#deps;
+    let changed = false;
+    for (const ask of openAsksOf(store, task)) {
+      const reached =
+        agentOf(ask.to) !== undefined &&
+        (ask.state === 'delivering' || ask.state === 'delivered' || ask.state === 'replied');
+      this.#settle(ask, withdrawn(why), 'corrallm', 'none');
+      if (reached) store.update(ask.id, {}, this.#withdrawalNote(ask, why));
+      changed = true;
+    }
+    for (const message of continuationsOf(store, task)) {
+      if (message.state !== 'pending') continue;
+      store.update(message.id, { state: 'withdrawn', by: 'corrallm' });
+      changed = true;
+    }
+    if (changed) {
+      this.#deps.schedule();
+      queueMicrotask(this.#deps.changed);
+    }
+    return changed;
+  }
+
+  /**
    * Withdraws each open ask whose asker or recipient is an agent no longer on the canvas: its
-   * asker's with nothing sent; its recipient's, its asker sent a record of it.
+   * asker's with nothing sent; its recipient's, its asker sent a record of it. And (B21 C7) the
+   * asks of a task's attempt no longer running, with its continuations still to come: its task
+   * stopped (Stop, Kill, a native failure, Run again, a restart that holds it uncertain).
    */
   sweep(): void {
     const here = this.#here();
@@ -457,10 +506,34 @@ export class Asks {
       else continue;
       changed = true;
     }
+    const stopped = new Map<string, TaskMessage>();
+    for (const ask of this.#asks()) {
+      const task = taskOf(ask);
+      if (task !== undefined && !this.#deps.running(task)) stopped.set(task.attempt, task);
+    }
+    for (const message of this.#deps.store.active()) {
+      const { task } = message;
+      if (
+        task !== undefined &&
+        message.state === 'pending' &&
+        isContinuation(message) &&
+        !this.#deps.running(task)
+      )
+        stopped.set(task.attempt, task);
+    }
+    for (const task of stopped.values()) this.withdrawTask(task, 'stopped');
     if (changed) {
       this.#deps.schedule();
       queueMicrotask(this.#deps.changed);
     }
+  }
+
+  /**
+   * What an agent recipient an ask had reached is told of it withdrawn, with its next message: whose
+   * question, why, and not to answer it. Names only parties, capped as notices cap them.
+   */
+  #withdrawalNote(ask: Message, why: AskWithdrawal): string {
+    return `Question ${ask.id} from ${quotedParty(this.#deps.nodes(), ask.from)} was withdrawn after it reached you: ${WITHDRAWN_WORDS[why]}. Do not answer it. Anything already done is left as it is.`;
   }
 
   /** The open ask `need` names: one answered or ended meanwhile is a conflict saying how. */
@@ -514,6 +587,9 @@ export class Asks {
     if (send === 'none') return undefined;
     // An agent is sent it as a turn; an outside party keeps it as a record.
     const state = agentOf(ask.from) === undefined ? 'delivered' : 'pending';
+    // B21 C7: an ask of a task's attempt continues that task, carrying it.
+    const task = taskOf(ask);
+    const carried = task === undefined ? {} : { task };
     const row =
       send === 'answer' && answer !== undefined
         ? store.add({
@@ -524,6 +600,7 @@ export class Asks {
             body: capBody(answerBody(ask.id, column.questions, answer), 'reply'),
             replyTo: ask.id,
             state,
+            ...carried,
             ask:
               'answers' in answer
                 ? { v: 1, type: 'answer', of: ask.id, answers: answer.answers }
@@ -537,6 +614,7 @@ export class Asks {
             body: this.#settledBody(ask, outcome),
             replyTo: ask.id,
             state,
+            ...carried,
             settled,
           });
     if (state === 'pending') this.#deps.schedule();
@@ -696,6 +774,14 @@ function stays(ask: Message, here: ReadonlySet<string>): boolean {
   return !gone(ask.from, here) && !gone(ask.to, here);
 }
 
+/** The task attempt an ask was made during, if any (B21 C7), as a task's messages name it. */
+function taskOf(ask: Message): TaskMessage | undefined {
+  const task = ask.ask?.type === 'question' ? ask.ask.task : undefined;
+  return task === undefined
+    ? undefined
+    : { agent: task.owner, item: task.item, attempt: task.attempt };
+}
+
 function settlement(column: AskQuestionColumn, outcome: AskOutcome): AskSettlement {
   return { v: 1, ask: { questions: column.questions.length }, outcome };
 }
@@ -767,6 +853,30 @@ export function answerFrame(nodes: readonly CanvasNode[], answer: Message): stri
           ? `${quotedName(outside)} (an orchestrator outside corrallm, not the user`
           : 'corrallm (corrallm itself, not the user';
   return `[corrallm] Answer from ${who}; message ${answer.id}, answering your question ${of ?? ''}):\n${answer.body}`;
+}
+
+/**
+ * How an agent is sent a continuation of its task (B21 C7): its frame (`framed`: the answer's, or
+ * the record's of how its ask ended), then the questions it asked (`ask`, its own words, quoted
+ * back), so that a fresh conversation (after a switch) can carry on, and a line saying to.
+ */
+export function continuationFrame(
+  framed: string,
+  ask: Message | undefined,
+  answered: boolean,
+): string {
+  const column = ask?.ask?.type === 'question' ? ask.ask : undefined;
+  return [
+    framed,
+    'Your question, asked during your current task:',
+    ...(column?.questions ?? []).map(
+      (question, i) =>
+        `${String(i + 1)}. ${JSON.stringify(question.header || question.id)}: ${question.text}`,
+    ),
+    answered
+      ? 'Carry on with that task now, and end it as its step asked.'
+      : 'Carry on with that task now without its answer, and end it as its step asked.',
+  ].join('\n');
 }
 
 /** An answer's body, in corrallm's words: each question with its answer, quoted. */

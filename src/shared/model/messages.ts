@@ -135,6 +135,21 @@ export interface Message {
 }
 
 /**
+ * Whether a message continues a queue task (B21 Design §9.2 C7): what an ask made during one of a
+ * task's attempt's own turns sends its asker as it ends (the answer, or the record of how it ended),
+ * carrying that attempt as its `task`. Its turn is the attempt's own, first in line for its agent.
+ */
+export function isContinuation(
+  message: Pick<Message, 'kind' | 'task' | 'ask' | 'settled'>,
+): boolean {
+  return (
+    message.task !== undefined &&
+    (message.ask?.type === 'answer' ||
+      (message.kind === 'settled' && message.settled !== undefined && 'ask' in message.settled))
+  );
+}
+
+/**
  * Whether a message to an agent is delivered to it as a turn: a party's text (an answer to an ask
  * among them), an ask (B21 C6), or the record of how an ask ended, sent its asker. Every other
  * record is only kept, for its party to read.
