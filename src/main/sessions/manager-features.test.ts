@@ -397,3 +397,20 @@ describe('a role the connection can’t apply (B16 C4)', () => {
     await sessions.closeEverything();
   });
 });
+
+describe('images at the send (B16 C3)', () => {
+  it('sends a connection no image it doesn’t take, whatever sent it, nor the text without them', async () => {
+    const send = vi.fn(() => Promise.resolve());
+    const made = connector({ methods: { send } });
+    const { canvas, sessions } = shown(MADE_UP, made.one);
+    await sessions.start(canvas, 'a', OPTIONS);
+    const image = { mediaType: 'image/png' as const, data: 'iVBORw0KGgo=' };
+    await expect(
+      sessions.send(canvas, 'a', { id: 'm1', text: 'Look', images: [image] }),
+    ).rejects.toThrow('Zed Agent · ACP takes no images.');
+    expect(send).not.toHaveBeenCalled();
+    await sessions.send(canvas, 'a', { id: 'm2', text: 'Look' });
+    expect(send).toHaveBeenCalledOnce();
+    await sessions.closeEverything();
+  });
+});

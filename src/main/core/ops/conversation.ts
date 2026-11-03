@@ -1,7 +1,7 @@
 import { connectionIn } from '../../../shared/adapter';
 import { routeOf, routeRefusal } from '../../../shared/routing';
 import { DEFAULT_PAGE } from '../../../shared/api/limits';
-import { imageBytes } from '../../../shared/session';
+import { imageRefusal } from '../../../shared/images';
 import { nameOf } from '../parties';
 import type { AGENT_STATES } from '../../../shared/api/ops/conversation';
 import { needs } from '../../../shared/model/needs-selectors';
@@ -209,22 +209,12 @@ export function conversationOps(
       const pasted = images ?? [];
       if (pasted.length > 0) {
         const connection = open.engine.catalog.connectionOf(node.data);
-        const takes =
-          (connection === undefined ? undefined : connectionIn(services.catalog, connection))
-            ?.connection.images ?? null;
-        const name = nameOf(open.document.nodes, to);
-        if (takes === null) throw new OpFailure('refused', `${name}’s connection takes no images.`);
-        if (pasted.length > takes.max) {
-          throw new OpFailure('refused', `${name} takes at most ${String(takes.max)} images.`);
-        }
-        if (
-          pasted.some(
-            ({ mediaType, data }) =>
-              !takes.types.includes(mediaType) || imageBytes(data) > takes.maxBytes,
-          )
-        ) {
-          throw new OpFailure('refused', `${name} takes none of those images, or not that large.`);
-        }
+        const refusal = imageRefusal(
+          pasted,
+          open.engine.catalog.images(connection),
+          `${nameOf(open.document.nodes, to)}’s connection`,
+        );
+        if (refusal !== undefined) throw new OpFailure('refused', refusal);
       }
       try {
         const sent = await open.delivery.send(

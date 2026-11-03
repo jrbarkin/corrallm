@@ -951,8 +951,7 @@ describe('a connected session that would not start', () => {
     store.open('a');
     await settle();
     const done = vi.fn();
-    const images = [{ mediaType: 'image/png' as const, data: 'iVBORw0KGgo=' }];
-    store.send('a', 'claude-code', 'Fix the login bug', done, images);
+    store.send('a', 'claude-code', 'Fix the login bug', done);
     const id = store.of('a').queued[0]?.id;
     await settle();
     expect(fake.backend.start).toHaveBeenCalledTimes(2);
@@ -964,7 +963,6 @@ describe('a connected session that would not start', () => {
     expect(fake.backend.send).toHaveBeenCalledExactlyOnceWith('a', {
       id,
       text: 'Fix the login bug',
-      images,
     });
     expect(done).not.toHaveBeenCalled();
     retry.resolve(null);
@@ -974,6 +972,33 @@ describe('a connected session that would not start', () => {
     expect(done).toHaveBeenCalledExactlyOnceWith(false, '', {
       status: 'completed',
       reason: 'completed',
+    });
+    store.reset();
+  });
+
+  it('keeps a submission whole and unsent, its images with it, on a connection that takes none (B16 C3)', async () => {
+    const fake = fakeBackend();
+    const store = new SessionStore(engine, {
+      ...fake.backend,
+      availability: () => Promise.resolve({ ready: true }),
+    });
+    store.sync([{ id: 'a', connection: 'claude-code.terminal' }]);
+    const done = vi.fn();
+    const refused = vi.fn();
+    const images = [{ mediaType: 'image/png' as const, data: 'iVBORw0KGgo=' }];
+    store.send('a', 'claude-code', 'Look at this', done, images, refused);
+    await settle();
+    expect(fake.backend.send).not.toHaveBeenCalled();
+    expect(done).not.toHaveBeenCalled();
+    expect(refused).toHaveBeenCalledExactlyOnceWith({
+      text: 'Claude Code · Terminal takes no images.',
+    });
+    expect(store.of('a').queued).toEqual([
+      expect.objectContaining({ text: 'Look at this', images }),
+    ]);
+    expect(store.of('a').entries.at(-1)).toMatchObject({
+      kind: 'notice',
+      text: 'Claude Code · Terminal takes no images.',
     });
     store.reset();
   });

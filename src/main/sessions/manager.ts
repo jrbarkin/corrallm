@@ -12,6 +12,7 @@ import {
   usableFeatures,
 } from '../../shared/features';
 import type { EffectiveFeatures, SessionFeatures } from '../../shared/features';
+import { imageRefusal } from '../../shared/images';
 import { MAX_PAGE_BYTES } from '../../shared/api/limits';
 import { MAX_CONVERSATIONS, MAX_CONVERSATION_LABEL } from '../../shared/session';
 import type { AdapterId, Catalog, ConnectionId } from '../../shared/adapter';
@@ -436,6 +437,13 @@ export class SessionManager {
     if (!agent) throw new Error(NOT_RUNNING);
     const began = this.#now();
     const interrupts = agent.interrupts;
+    // B16 C3: only images the connection it runs takes, whatever sent it (nothing goes otherwise).
+    const refusal = imageRefusal(
+      message.images ?? [],
+      connectionIn(this.#deps.catalog, agent.connection)?.connection.images ?? null,
+      this.#named(agent.connection),
+    );
+    if (refusal !== undefined) throw new Error(refusal);
     const session = await agent.session;
     // A restore of the tree it works in (its own code rewind too) finishes first.
     await this.#deps.gate?.pass(canvas, agentId, true);

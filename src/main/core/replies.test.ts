@@ -383,6 +383,26 @@ const isPrompt = (agent: string) => (item: NeedsItem) =>
   item.kind === 'prompt' && item.agent === agent;
 
 describe('a run’s hold', () => {
+  it('refuses words with images its agent’s connection takes none of, deciding nothing (B16 C3)', async () => {
+    const { core } = await start();
+    core.engines.canvas(CANVAS)?.engine.run.start();
+    const hold = await waitingFor(core, isHold('a'));
+    // The agent now runs where no image can go.
+    await ok(core, 'agent.setConnection', { agent: 'a', connection: 'claude-code.terminal' });
+    const image = { mediaType: 'image/png' as const, data: 'iVBORw0KGgo=' };
+    expect(
+      await call(core, 'reply', { to: hold.id, answer: { text: 'Like this', images: [image] } }),
+    ).toEqual({
+      ok: false,
+      error: { code: 'refused', sentence: 'Builder’s connection takes no images.' },
+    });
+    // Still asked, at the same generation: the same words alone are taken.
+    expect((await needsOf(core)).find(isHold('a'))?.id).toBe(hold.id);
+    expect(await ok(core, 'reply', { to: hold.id, answer: { text: 'Like this' } })).toMatchObject({
+      outcome: 'answered',
+    });
+  });
+
   it('is yours alone (R3), answered once at its generation, and who decided survives a restart', async () => {
     const { core } = await start();
     core.engines.canvas(CANVAS)?.engine.run.start();

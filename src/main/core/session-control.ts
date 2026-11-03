@@ -11,6 +11,7 @@ import type { NeedId } from '../../shared/api/ids';
 import type { CanvasId } from '../../shared/canvas';
 import * as agentEdits from '../../shared/model/agent-ops';
 import type { AgentNode } from '../../shared/model/canvas';
+import { imageRefusal } from '../../shared/images';
 import { threadTitle } from '../../shared/model/session';
 import { andList } from '../../shared/model/words';
 import { MAX_MCP_ERROR_LENGTH, MAX_MCP_NAME_LENGTH, MAX_MCP_SERVERS } from '../../shared/session';
@@ -152,6 +153,18 @@ export class SessionControl {
   ): Promise<{ id?: string }> {
     const open = this.#openCanvas(canvas);
     this.#agentOf(open, agent);
+    // B16 C3: images its destination can't take are refused before anything switches or closes,
+    // the input kept, whole, for you to correct.
+    const images = then?.images ?? [];
+    if (images.length > 0) {
+      const found = connectionIn(this.#deps.catalog, connection);
+      const refusal = imageRefusal(
+        images,
+        found?.connection.images ?? null,
+        found === undefined ? connection : `${found.adapter.name} · ${found.connection.label}`,
+      );
+      if (refusal !== undefined) throw new OpFailure('refused', refusal);
+    }
     // The switch lands first: what follows goes to the session it opens.
     await ctx.call('agent.setConnection', { canvas: open.document.id, agent, connection });
     let refusal: string | undefined;

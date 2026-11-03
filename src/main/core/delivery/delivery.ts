@@ -1609,6 +1609,8 @@ export class Delivery {
     const yours = message.from === 'you' && message.ask === undefined;
     // Kept until its turn ends: a session that won't start sends it back, still to be carried.
     const carried = this.#carried.get(message.id);
+    // Its images too (B16 C3): sent back unsent, it waits again with them, never without.
+    const images = this.#images.get(message.id);
     const takeBack = engine.sessions.send(
       node.id,
       engine.catalog.adapterOf(engine.catalog.connectionOf(node.data)),
@@ -1616,8 +1618,9 @@ export class Delivery {
       (interrupted, reply, result) => {
         this.#ended(message.id, interrupted, reply, result);
       },
-      this.#images.get(message.id),
+      images,
       (refusal) => {
+        if (images !== undefined) this.#images.set(message.id, images);
         this.#refused(node, message.id, refusal.text);
       },
       yours ? 'user' : 'queue',

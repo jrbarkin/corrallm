@@ -1147,3 +1147,82 @@ describe('command text in a message (B16 C2)', () => {
     });
   });
 });
+
+describe('images a connection takes (B16 C3)', () => {
+  const IMAGE = { mediaType: 'image/png' as const, data: 'iVBORw0KGgo=' };
+  const connectionOf = (core: Core, agent: string) =>
+    (
+      core.engines.canvas(CANVAS)?.document.nodes.find((node) => node.id === agent) as
+        { data: { connection?: string } } | undefined
+    )?.data.connection;
+
+  it('refuses a continuation carrying images its destination takes none of, before anything switches', async () => {
+    const { core, sdk, terminal } = await start();
+    await ok(core, 'session.open', { agent: 'a' });
+    const before = core.engines.canvas(CANVAS)?.messages.all().length;
+    const refused = await fails(core, 'session.continueIn', {
+      agent: 'a',
+      connection: 'claude-code.terminal',
+      then: { text: 'Look at this', images: [IMAGE] },
+      request: crypto.randomUUID(),
+    });
+    expect(refused).toEqual({
+      code: 'refused',
+      sentence: 'Claude Code · Terminal takes no images.',
+    });
+    // Nothing switched, closed, started or kept: its input is yours to correct.
+    expect(connectionOf(core, 'a')).toBe('claude-code.sdk');
+    expect(core.engines.canvas(CANVAS)?.messages.all().length).toBe(before);
+    expect(terminal.started).toEqual([]);
+    expect(sdk.started).toHaveLength(1);
+    // Without them, it continues.
+    await ok(core, 'session.continueIn', {
+      agent: 'a',
+      connection: 'claude-code.terminal',
+      then: { text: 'Look at this' },
+    });
+    expect(connectionOf(core, 'a')).toBe('claude-code.terminal');
+  });
+
+  it('keeps a queued message whole and unsent once its agent runs where its images can’t go', async () => {
+    const { core, sdk, terminal } = await start();
+    holding = Promise.withResolvers<undefined>();
+    await ok(core, 'message', { to: 'a', body: 'Keep working' });
+    const open = core.engines.canvas(CANVAS);
+    await vi.waitFor(() => {
+      expect(open?.engine.sessions.of('a').status).toBe('working');
+    });
+    // Queued behind that turn, with its image, as the Agent SDK takes them.
+    const { id } = (await ok(core, 'message', { to: 'a', body: 'Then this', images: [IMAGE] })) as {
+      id: string;
+    };
+    // The agent now runs in a Terminal, which takes no images.
+    await ok(core, 'agent.setConnection', { agent: 'a', connection: 'claude-code.terminal' });
+    holding.resolve(undefined);
+    holding = undefined;
+    await vi.waitFor(() => {
+      expect(
+        open?.engine.sessions
+          .of('a')
+          .entries.some(
+            (entry) => entry.kind === 'notice' && entry.text.includes('takes no images'),
+          ),
+      ).toBe(true);
+    });
+    // Never sent, as text alone or at all: still its message, waiting, with its image.
+    expect(terminal.sessions.flatMap(({ sent }) => sent)).toEqual([]);
+    expect(sdk.sessions.flatMap(({ sent }) => sent.map(({ text }) => text))).toEqual([
+      'Keep working',
+    ]);
+    expect(open?.messages.get(id)?.state).toBe('pending');
+    // Once it runs where they can go again, it goes, whole, once.
+    await ok(core, 'agent.setConnection', { agent: 'a', connection: 'claude-code.sdk' });
+    await vi.waitFor(() => {
+      expect(sdk.sessions.flatMap(({ sent }) => sent).at(-1)).toMatchObject({
+        text: 'Then this',
+        images: [IMAGE],
+      });
+    });
+    expect(terminal.sessions.flatMap(({ sent }) => sent)).toEqual([]);
+  });
+});
