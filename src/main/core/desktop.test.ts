@@ -98,6 +98,36 @@ describe('link.open', () => {
     expect(host.openExternal).toHaveBeenCalledExactlyOnceWith(url);
   });
 
+  it('shows a site you always open in your settings, and asks again once you take it back (B22a C5)', async () => {
+    const url = 'https://docs.example.com:8443/a';
+    host.askOpenLink.mockResolvedValue({ open: true, always: true });
+    expect(await core.call('link.open', { url }, SEVEN)).toMatchObject({
+      ok: true,
+      value: { opened: true },
+    });
+    expect(await core.call('settings.get', {}, CALLERS.you)).toMatchObject({
+      ok: true,
+      value: { links: { state: 'ready', sites: ['https://docs.example.com:8443'] } },
+    });
+    // Remembered: the next click opens without asking.
+    await core.call('link.open', { url }, SEVEN);
+    expect(host.askOpenLink).toHaveBeenCalledOnce();
+    host.openExternal.mockClear();
+    const origin = { kind: 'site', origin: 'https://docs.example.com:8443' } as const;
+    expect(await core.call('settings.set', { consent: origin }, CALLERS.you)).toMatchObject({
+      ok: true,
+      value: { consent: { target: origin, changed: true } },
+    });
+    // Taking it back opens nothing; the next click asks again.
+    expect(host.openExternal).not.toHaveBeenCalled();
+    host.askOpenLink.mockResolvedValue({ open: false, always: false });
+    expect(await core.call('link.open', { url }, SEVEN)).toMatchObject({
+      ok: true,
+      value: { opened: false },
+    });
+    expect(host.askOpenLink).toHaveBeenCalledTimes(2);
+  });
+
   it.each([
     'javascript:alert(1)',
     'file:///work/app',

@@ -548,7 +548,17 @@
           "usage": "codex"
         }
       ],
-      "registerMcp": "codex mcp add {server} --url {url} --bearer-token-env-var {var}"
+      "registerMcp": "codex mcp add {server} --url {url} --bearer-token-env-var {var}",
+      "consents": [
+        {
+          "key": "plan",
+          "title": "Use your ChatGPT plan",
+          "description": "On a ChatGPT login, the App Server asks before a session’s first turn uses your ChatGPT plan, quoting what OpenAI allows. Yes allows it for that session; “Don’t ask again” for every Codex agent on this computer. Taking it back covers both: a turn already running can finish, and before the next turn uses your plan, corrallm asks again.",
+          "connections": [
+            "codex.app-server"
+          ]
+        }
+      ]
     }
   ],
   "usageBackends": [

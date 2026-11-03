@@ -93,6 +93,15 @@ export function linkTarget(
 }
 
 /**
+ * `raw` if it is exactly a site's origin as "Always for this site" keeps it (`LinkTarget.origin`:
+ * a scheme a link opens, a lower-cased punycode host, a port only if not the default, nothing
+ * else), else null (B22a C5). Never turns one into another: a URL with a path is no origin.
+ */
+export function canonicalOrigin(raw: string): string | null {
+  return linkTarget(raw)?.origin === raw ? raw : null;
+}
+
+/**
  * The URL of a corrallm server on this machine, normalized, as `corrallm wait` may send a token to
  * it: http to localhost or 127.0.0.1 (where its server only ever listens), without credentials, a
  * query or a fragment; null for any other, which would carry the token off the machine or into a

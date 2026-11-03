@@ -7,12 +7,14 @@ import type { OpResult } from '../shared/api/errors';
 import { GUI_OPS, SURFACE } from '../shared/api/surface';
 import type { GuiOp } from '../shared/api/surface';
 import { topicKey } from '../shared/api/topics';
-import type { Change, TopicKey, RuntimeTopicKey } from '../shared/api/topics';
+import type { Change, TopicKey, TopicStates, RuntimeTopicKey } from '../shared/api/topics';
+import { consentIn } from '../shared/adapter';
 import { guiFunction } from '../shared/gui-link';
 import type { GuiApi, GuiBridge } from '../shared/gui-link';
 import { fromBridge } from './api/bridge';
 import { createClient } from './api/client';
 import { TopicMirror, topics as windowTopics } from './api/topics';
+import { catalog } from './catalog';
 
 export interface RecordedOp {
   op: GuiOp;
@@ -47,10 +49,13 @@ export function fakeCore() {
   snapshots.set('settings', {
     epoch,
     rev: 0,
+    // Your projection (B22a C2): notifications on, nothing attempted, no site remembered.
     state: {
       defaultAdapter: null,
       consents: {},
       api: { state: 'stopped', port: null },
+      notifications: { enabled: true, lastDelivery: null },
+      links: { state: 'ready', sites: [], builtIn: ['https://github.com'] },
     },
   });
   let restore: (() => void) | undefined;
@@ -81,12 +86,14 @@ export function fakeCore() {
             const previous = core.state('settings');
             if (!previous) throw new Error('No settings fixture');
             if (op === 'settings.get') return { ok: true, value: previous.state };
-            const { defaultAdapter } = args as Parameters<GuiApi['settingsSet']>[0];
-            if (previous.state.defaultAdapter === defaultAdapter)
-              return { ok: true, value: { defaultAdapter } };
+            const { state, value } = settingsSet(
+              previous.state,
+              args as NonNullable<Parameters<GuiApi['settingsSet']>[0]>,
+            );
+            if (state === previous.state) return { ok: true, value };
             const rev = previous.rev + 1;
-            core.change({ topic: 'settings', rev, replace: { ...previous.state, defaultAdapter } });
-            return { ok: true, value: { defaultAdapter, revs: { settings: rev } } };
+            core.change({ topic: 'settings', rev, replace: state });
+            return { ok: true, value: { ...value, revs: { settings: rev } } };
           }
           const reply = replies.get(op) ?? { ok: true, value: {} };
           return typeof reply === 'function' ? reply(args) : reply;
@@ -190,6 +197,56 @@ export function fakeCore() {
     },
   };
   return core;
+}
+
+type SettingsState = TopicStates['settings'];
+
+/**
+ * settings.set as the core answers it (B12 C2, B22a C1), over the fake's settings: the state it
+ * leaves (the same object when nothing changed, so no revision) and the result. A declared consent
+ * is taken back even with nothing kept, as a live session may hold it; an undeclared one, or a site,
+ * only while kept.
+ */
+function settingsSet(
+  state: SettingsState,
+  intent: NonNullable<Parameters<GuiApi['settingsSet']>[0]>,
+): { state: SettingsState; value: object } {
+  if (intent.notifications !== undefined) {
+    const { enabled } = intent.notifications;
+    const value = { notifications: { enabled } };
+    if ((state.notifications?.enabled ?? true) === enabled) return { state, value };
+    const lastDelivery = state.notifications?.lastDelivery ?? null;
+    return { state: { ...state, notifications: { enabled, lastDelivery } }, value };
+  }
+  if (intent.consent !== undefined) {
+    const target = intent.consent;
+    if (target.kind === 'site') {
+      const links = state.links;
+      const kept = links?.state === 'ready' && links.sites.includes(target.origin);
+      const value = { consent: { target, changed: kept } };
+      if (!kept) return { state, value };
+      const sites = links.sites.filter((site) => site !== target.origin);
+      return { state: { ...state, links: { ...links, sites } }, value };
+    }
+    const kept = state.consents[target.adapter]?.[target.key] === true;
+    const declared = consentIn(catalog(), target.adapter, target.key) !== undefined;
+    const value = { consent: { target, changed: kept || declared } };
+    if (!kept) return { state, value };
+    const rest = Object.fromEntries(
+      Object.entries(state.consents[target.adapter] ?? {}).filter(([key]) => key !== target.key),
+    );
+    const others = Object.fromEntries(
+      Object.entries(state.consents).filter(([adapter]) => adapter !== target.adapter),
+    );
+    const consents =
+      Object.keys(rest).length === 0 ? others : { ...state.consents, [target.adapter]: rest };
+    return { state: { ...state, consents }, value };
+  }
+  const defaultAdapter = intent.defaultAdapter ?? null;
+  const value = { defaultAdapter };
+  return state.defaultAdapter === defaultAdapter
+    ? { state, value }
+    : { state: { ...state, defaultAdapter }, value };
 }
 
 /** A gesture has exactly one intent, with its explicit arguments (B9 Design §11, T6). */

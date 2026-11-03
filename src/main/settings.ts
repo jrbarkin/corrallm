@@ -28,10 +28,17 @@ export interface AppSettings {
   defaultAdapter: AdapterId | null;
 }
 
-/** A consent only the user gives: whether they gave it for good, and giving it. */
+/**
+ * A consent only the user gives: whether they gave it for good, and giving it. Its generation
+ * moves each time you take it back (B22a C4), so a grant made at an older one holds no more: a
+ * session's "Yes, for this session", or an Always answered to a question asked before.
+ */
 export interface Consent {
+  /** Its generation now, read at once: moved by each successful `resetConsent`. */
+  generation(): number;
   given(): Promise<boolean>;
-  give(): Promise<void>;
+  /** Keeps it for good, unless it was taken back since `generation` (then nothing is kept). */
+  give(generation: number): Promise<void>;
 }
 
 /** Why a setting is as it was: its file couldn't be read, or couldn't be written. */
@@ -70,6 +77,11 @@ export class Settings {
   } = { file: {}, api: {}, notifications: {} };
   #writing: Promise<void> = Promise.resolve();
   readonly #listeners = new Set<() => void>();
+  /**
+   * Each consent's generation (B22a C4), by adapter and key, for this run: moved each time it is
+   * taken back, absent (0) until it is. A new run needs none: every session that held one ended.
+   */
+  readonly #generations = new Map<string, number>();
 
   constructor(file: string) {
     this.#file = file;
@@ -88,19 +100,60 @@ export class Settings {
     };
   }
 
-  /** The consent `adapter` asks the user for by `key`, as these settings keep it. */
+  /**
+   * The consent `adapter` asks the user for by `key`, as these settings keep it. Giving it keeps
+   * the historical log-and-continue (`#update`), checked against its generation in the same lane
+   * as a reset, so a grant queued after one, answered before it, keeps nothing.
+   */
   consent(adapter: string, key: string): Consent {
+    const id = consentId(adapter, key);
+    const generation = () => this.#generations.get(id) ?? 0;
     return {
+      generation,
       given: async () => (await this.get()).consents[adapter]?.[key] === true,
-      give: () =>
-        this.#update((settings) => ({
-          ...settings,
-          consents: {
-            ...settings.consents,
-            [adapter]: { ...settings.consents[adapter], [key]: true },
-          },
-        })),
+      give: (at) =>
+        this.#update((settings) =>
+          generation() !== at
+            ? settings
+            : {
+                ...settings,
+                consents: {
+                  ...settings.consents,
+                  [adapter]: { ...settings.consents[adapter], [key]: true },
+                },
+              },
+        ),
     };
+  }
+
+  /**
+   * Takes back the consent `adapter` asks for by `key` (B22a C4, C6), strictly: from the latest
+   * settings, written gone first if kept, then its generation moved, so no grant made before holds
+   * (a session's own included), then told to listeners if the file changed. `declared`: its adapter
+   * declares it, so a live session may hold it with nothing kept, and it moves even then. True if
+   * anything changed; false for an undeclared one not kept, which changes nothing. Rejects with a
+   * SettingsFailure, nothing changed, when the file can't be read or written.
+   */
+  resetConsent(adapter: string, key: string, declared: boolean): Promise<boolean> {
+    return this.#strictly((current) => {
+      const kept = current.consents[adapter]?.[key] === true;
+      if (!kept && !declared) return { result: false };
+      const then = () => {
+        const id = consentId(adapter, key);
+        this.#generations.set(id, (this.#generations.get(id) ?? 0) + 1);
+      };
+      if (!kept) return { result: true, then };
+      const rest = Object.fromEntries(
+        Object.entries(current.consents[adapter] ?? {}).filter(([one]) => one !== key),
+      );
+      const others = Object.fromEntries(
+        Object.entries(current.consents).filter(([one]) => one !== adapter),
+      );
+      // The adapter's last key takes the adapter with it; the others keep their order.
+      const consents =
+        Object.keys(rest).length === 0 ? others : { ...current.consents, [adapter]: rest };
+      return { next: { ...current, consents }, result: true, then };
+    });
   }
 
   /** The port the API server listens on, if one was kept. */
@@ -137,30 +190,24 @@ export class Settings {
    * read or written; later updates still run. (A consent keeps `#update`'s log-and-continue.)
    */
   setDefaultAdapter(id: AdapterId | null): Promise<boolean> {
-    const run = async (): Promise<boolean> => {
-      let current: AppSettings;
-      try {
-        current = await this.#load();
-      } catch (error) {
-        throw new SettingsFailure('read', error);
-      }
-      if (current.defaultAdapter === id) return false;
-      const next: AppSettings = { ...current, defaultAdapter: id };
-      try {
-        await writeWhole(this.#file, this.#text(next));
-      } catch (error) {
-        throw new SettingsFailure('write', error);
-      }
-      this.#settings = Promise.resolve(next);
-      for (const listener of this.#listeners) listener();
-      return true;
-    };
-    const result = this.#writing.then(run);
-    this.#writing = result.then(
-      () => undefined,
-      () => undefined,
+    return this.#strictly((current) =>
+      current.defaultAdapter === id
+        ? { result: false }
+        : { next: { ...current, defaultAdapter: id }, result: true },
     );
-    return result;
+  }
+
+  /**
+   * Turns OS notifications on or off (B22a C1, C6), as `setDefaultAdapter` sets the default:
+   * written first, then held and told; false, writing nothing, when they already are (absent, or
+   * not a boolean, is on). What a newer corrallm keeps beside `enabled` is written back as it was.
+   */
+  setNotifications(enabled: boolean): Promise<boolean> {
+    return this.#strictly((current) =>
+      (current.notifications?.enabled !== false) === enabled
+        ? { result: false }
+        : { next: { ...current, notifications: { enabled } }, result: true },
+    );
   }
 
   /** Resolves once every update so far is written: before the app quits. */
@@ -191,9 +238,51 @@ export class Settings {
     return `${text}\n`;
   }
 
+  /**
+   * A strict update (B12 C2, B22a C6), in the one lane, from the latest settings: `decide` says
+   * what they become (`next`, none to write nothing), what the caller is told, and what follows
+   * once it is written (`then`, before listeners hear). Read or write failing rejects with a
+   * SettingsFailure saying which, memory, file and listeners as they were; later updates run.
+   */
+  #strictly<T>(
+    decide: (current: AppSettings) => { next?: AppSettings; result: T; then?: () => void },
+  ): Promise<T> {
+    const run = async (): Promise<T> => {
+      let current: AppSettings;
+      try {
+        current = await this.#load();
+      } catch (error) {
+        throw new SettingsFailure('read', error);
+      }
+      const { next, result, then } = decide(current);
+      if (next !== undefined) {
+        try {
+          await writeWhole(this.#file, this.#text(next));
+        } catch (error) {
+          throw new SettingsFailure('write', error);
+        }
+        this.#settings = Promise.resolve(next);
+      }
+      then?.();
+      if (next !== undefined) for (const listener of this.#listeners) listener();
+      return result;
+    };
+    const result = this.#writing.then(run);
+    this.#writing = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
+  }
+
+  /** A log-and-continue update: one that changes nothing (a stale grant) writes nothing. */
   #update(change: (settings: AppSettings) => AppSettings): Promise<void> {
+    let changed = true;
     const run = async () => {
-      const next = change(await this.#load());
+      const current = await this.#load();
+      const next = change(current);
+      changed = next !== current;
+      if (!changed) return;
       this.#settings = Promise.resolve(next);
       await writeWhole(this.#file, this.#text(next));
     };
@@ -204,7 +293,7 @@ export class Settings {
         console.error('Could not keep the settings:', error);
       })
       .then(() => {
-        for (const listener of this.#listeners) listener();
+        if (changed) for (const listener of this.#listeners) listener();
       });
     return this.#writing;
   }
@@ -266,6 +355,11 @@ function parse(file: Record<string, unknown> | undefined): AppSettings {
       }),
     ),
   };
+}
+
+/** A consent's key in the generations: its adapter's and its own, which neither contains. */
+function consentId(adapter: string, key: string): string {
+  return `${adapter}\u0000${key}`;
 }
 
 /** Whether a value is a port a server may listen on. */

@@ -148,8 +148,16 @@ export const SURFACE = {
   'catalog.get': { access: A, kind: 'read', scope: 'none', reads: 'catalog' },
   'catalog.installed': { access: R, kind: 'read', scope: 'none' },
   'templates.list': { access: R, kind: 'read', scope: 'none' },
-  'settings.get': { access: R, kind: 'read', scope: 'none', reads: 'settings' },
-  // B12 C2: the default agent is yours alone to set (the consent deviation, Core Server D8).
+  // B22a C2: whether OS notifications are on and how the last went, and the sites you open
+  // without asking, are yours alone; every token reads the rest as it always has.
+  'settings.get': {
+    access: R,
+    kind: 'read',
+    scope: 'none',
+    reads: 'settings',
+    varies: ['notifications', 'links'],
+  },
+  // B12 C2, B22a C1: your settings are yours alone to set (the consent deviation, Core Server D8).
   'settings.set': { access: Y, kind: 'command', scope: 'none' },
   'project.files': { access: R, kind: 'read', scope: 'none', self: 'allowed' },
   // A canvas's lifetime and where it is kept (B9 Design §1, §8). A path comes only from a dialog

@@ -24,7 +24,10 @@ export interface Adapter {
   readonly connectors?: (context: ConnectorContext) => Record<ConnectionId, Connector<SessionMode>>;
   /** Reads the user's settings and choices without a session or a prompt. */
   readonly readOptions?: (context: AdapterReadContext) => Promise<SettingsOptions>;
-  /** The fake used in unpackaged test builds, shared by its connections. */
+  /**
+   * The fake used in unpackaged test builds, shared by its connections; a connection that
+   * declares a consent gets its own, given that consent (B22a C4).
+   */
   readonly fake?: (options?: FakeOptions) => FakeConnector;
   readonly fakeOptions?: SettingsOptions;
   /** Conversations the CLI keeps, when it can list and fork them. */
@@ -61,10 +64,25 @@ export interface AdapterReadContext extends UsageReadContext {
 /** How this build of corrallm is offered, set by CORRALLM_DISTRIBUTION when building. */
 export type Distribution = 'local' | 'commercial' | 'hosted';
 
-/** A consent only the user gives, kept by adapter and key in settings.ts. */
+/**
+ * A consent only the user gives, kept by adapter and key in settings.ts. Its generation moves each
+ * time you take it back in Settings (B22a C4): a connection that allowed it, for good or for its
+ * session, at an older generation asks again before its next qualifying turn, and gives it only at
+ * the generation it asked at.
+ */
 export interface Consent {
+  /** Its generation now, read at once. */
+  generation(): number;
+  /** Whether it is given for good now. */
   given(): Promise<boolean>;
-  give(): Promise<void>;
+  /** Keeps it for good, unless it was taken back since `generation` (then nothing is kept). */
+  give(generation: number): Promise<void>;
+}
+
+/** The consent a test build's fake connection asks before a "/consent" turn (sessions/fake.ts). */
+export interface FakeConsent {
+  key: string;
+  handle: Consent;
 }
 
 /** What every adapter's connectors run with. */

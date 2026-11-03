@@ -1,7 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
 import { MAX_LINK_LENGTH } from '../shared/api/limits';
-import { allowedExternalUrl, linkTarget, loopbackUrl, originKey } from './url-policy';
+import {
+  allowedExternalUrl,
+  canonicalOrigin,
+  linkTarget,
+  loopbackUrl,
+  originKey,
+} from './url-policy';
 
 describe('originKey', () => {
   it.each([
@@ -131,6 +137,43 @@ describe('linkTarget', () => {
 
   it('is allowlisted only on the default port', () => {
     expect(linkTarget('https://github.com:8443/')?.allowlisted).toBe(false);
+  });
+});
+
+describe('canonicalOrigin (B22a C5)', () => {
+  it.each([
+    'https://docs.example.com',
+    'https://docs.example.com:8443',
+    'http://localhost:5173',
+    'http://127.0.0.1',
+    'https://xn--bcher-kva.example',
+  ])('is %s exactly, as "Always for this site" keeps it', (origin) => {
+    expect(canonicalOrigin(origin)).toBe(origin);
+  });
+
+  it.each([
+    // Not as kept: a path, a query, a fragment, case, a default port, Unicode for punycode.
+    'https://docs.example.com/',
+    'https://docs.example.com/a',
+    'https://docs.example.com?q=1',
+    'https://docs.example.com#top',
+    'https://Docs.example.com',
+    'https://docs.example.com:443',
+    'https://bücher.example',
+    ' https://docs.example.com',
+    // Not a site a link opens.
+    'http://docs.example.com',
+    'https://user:pass@docs.example.com',
+    'file:///etc',
+    'javascript:alert(1)',
+    'docs.example.com',
+    '',
+  ])('refuses %s', (raw) => {
+    expect(canonicalOrigin(raw)).toBeNull();
+  });
+
+  it('refuses one longer than a link may be', () => {
+    expect(canonicalOrigin(`https://${'a'.repeat(MAX_LINK_LENGTH)}.example`)).toBeNull();
   });
 });
 

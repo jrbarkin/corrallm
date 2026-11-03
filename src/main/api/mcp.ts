@@ -7,6 +7,7 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 import type { StreamableHTTPServerTransportOptions } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
+import { AjvJsonSchemaValidator } from '@modelcontextprotocol/sdk/validation/ajv';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 
 import { TOKEN_REPLACED } from '../../shared/api/errors';
@@ -27,7 +28,9 @@ import { foreignRequest } from '../loopback';
  * an agent's session generation (by the credential the session authority issued it, which the
  * server hears list its tools), or an outside orchestrator a person made a token for, never you.
  * A session's credential that no longer works gets a plain 401: its session is ending. Stateless,
- * with a fresh server per request, so a caller's party is read on every request.
+ * with a fresh server per request, so a caller's party is read on every request; the servers share
+ * one JSON Schema validator (the SDK's default compiles Ajv anew for each, and only an elicitation,
+ * which corrallm never makes, uses it).
  *
  * Before the token, in this order (API Spec §8.2): a Host other than its own, and any Origin
  * header, get 403 (a page in a browser: loopback.ts), and a body that isn't exactly JSON 415. The
@@ -118,6 +121,7 @@ export async function callTool(
 /** Serves the core's operations as MCP tools, each request as the caller its token names. */
 export async function startApiServer(options: ApiServerOptions): Promise<ApiServer> {
   const transports = new Set<StreamableHTTPServerTransport>();
+  const validator = new AjvJsonSchemaValidator();
   let closing: Promise<void> | undefined;
   const http = createServer((request, response) => {
     const refuse = (status: number) => {
@@ -213,7 +217,7 @@ export async function startApiServer(options: ApiServerOptions): Promise<ApiServ
     // eslint-disable-next-line @typescript-eslint/no-deprecated -- Tools use the low-level server.
     const server = new Server(
       { name: 'corrallm', version: '1' },
-      { capabilities: { tools: {} }, instructions: INSTRUCTIONS },
+      { capabilities: { tools: {} }, instructions: INSTRUCTIONS, jsonSchemaValidator: validator },
     );
     // The SDK's optional properties do not allow explicit undefined in its types.
     const transport = new StreamableHTTPServerTransport({
