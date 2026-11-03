@@ -1167,12 +1167,29 @@ export function partsOf(
         ],
       };
     }
-    // The settings: their consents divided, the rest of `settings.get` (the default agent, none
-    // included, and where the MCP server listens) in the summary, whole.
-    const { consents, ...rest } = state as { consents: Record<string, unknown> };
+    // The settings (B22a C2): each adapter's consents (`consent/<adapter>`), then your remembered
+    // sites in their order (`site/<origin>`, each its own value), divided; the rest of
+    // `settings.get` (the default agent, none included, where the MCP server listens, your
+    // notifications, and your sites' list without its sites) in the summary, whole.
+    const { consents, links, ...rest } = state as {
+      consents: Record<string, unknown>;
+      links?: { state: 'ready'; sites: readonly string[]; builtIn: unknown } | { state: string };
+    };
+    const sites = links !== undefined && 'sites' in links ? links.sites : [];
     return {
-      summary: rest,
-      entries: Object.entries(consents).map(([key, one]) => ({ key, value: one })),
+      summary: {
+        ...rest,
+        ...(links === undefined
+          ? {}
+          : { links: 'sites' in links ? { state: links.state, builtIn: links.builtIn } : links }),
+      },
+      entries: [
+        ...Object.entries(consents).map(([adapter, one]) => ({
+          key: `consent/${encodeURIComponent(adapter)}`,
+          value: one,
+        })),
+        ...sites.map((site) => ({ key: `site/${encodeURIComponent(site)}`, value: site })),
+      ],
     };
   }
   switch (kindOf(topic)) {

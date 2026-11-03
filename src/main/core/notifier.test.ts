@@ -469,6 +469,38 @@ describe('delivery status', () => {
     said.mockRestore();
   });
 
+  it('says when the last outcome changes, for your settings (B22a C2), and not when it stays', async () => {
+    const said = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const statuses: (NotificationResult | undefined)[] = [];
+    make({
+      statusChanged: () => {
+        statuses.push(notifier.status());
+      },
+    });
+    opened(A);
+    for (const [n, outcome] of [
+      [1, 'shown'],
+      [2, 'shown'],
+      [3, 'failed'],
+      [4, 'failed'],
+      [5, 'suppressed'],
+    ] as const) {
+      answer = () => Promise.resolve(outcome);
+      waits(
+        A,
+        Array.from({ length: n }, (_, i) => prompt(`p${String(i)}`)),
+      );
+      await vi.advanceTimersByTimeAsync(SETTLED);
+    }
+    answer = () => Promise.reject(new Error('the link closed'));
+    waits(A, [prompt('p9')]);
+    await vi.advanceTimersByTimeAsync(SETTLED);
+    expect(sent).toHaveLength(6);
+    // Told with the outcome already kept, once a change: never another notification.
+    expect(statuses).toEqual(['shown', 'failed', 'suppressed', 'failed']);
+    said.mockRestore();
+  });
+
   it('never holds the core up when what waits can’t be read: said without values, read next time', async () => {
     const said = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     let broken = false;

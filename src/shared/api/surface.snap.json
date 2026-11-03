@@ -313,7 +313,7 @@
   "schemas": {
     "topics.subscribe": {
       "input": "8c5be84f0a1a163a",
-      "output": "e0ad379f6c6a899d"
+      "output": "49291f65c336621e"
     },
     "topics.unsubscribe": {
       "input": "8c5be84f0a1a163a",
@@ -613,11 +613,11 @@
     },
     "settings.get": {
       "input": "e5fa5cc18e054cdd",
-      "output": "c339e41eb923e2cc"
+      "output": "dfeb369fa9284423"
     },
     "settings.set": {
-      "input": "43014ed80db4c428",
-      "output": "7512c86943435f4c"
+      "input": "6cbffd087130017f",
+      "output": "c5b3f7fe285edd7a"
     },
     "run.pause": {
       "input": "a85fe9cb1eb6d55a",

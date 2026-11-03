@@ -198,6 +198,46 @@ export function runtimePatch(
     : { items, order, next };
 }
 
+/**
+ * The settings from a transfer (B22a C2): the summary is the rest of settings.get (the default
+ * agent, none included, api, and your notifications and sites' list without its sites); each
+ * entry an adapter's consents (`consent/<adapter>`) or one of your remembered sites, in order
+ * (`site/<origin>`, its own value). A key in no namespace, not canonically encoded, repeated, or
+ * a site for a reader told of no list refuses the transfer.
+ */
+function settingsState(
+  summary: unknown,
+  pairs: readonly (readonly [string, unknown])[],
+): TopicStates['settings'] {
+  const consents: [string, unknown][] = [];
+  const sites: string[] = [];
+  const seen = new Set<string>();
+  for (const [key, value] of pairs) {
+    const slash = key.indexOf('/');
+    const kind = slash < 0 ? '' : key.slice(0, slash);
+    const encoded = key.slice(slash + 1);
+    const id = decodeURIComponent(encoded);
+    if (encodeURIComponent(id) !== encoded || seen.has(key))
+      throw new Error('A settings entry names a canonical key once.');
+    seen.add(key);
+    if (kind === 'consent') consents.push([id, value]);
+    else if (kind === 'site' && value === id) sites.push(id);
+    else throw new Error('A settings entry is an adapter’s consents or a site, as its key says.');
+  }
+  const { links, ...rest } = summary as Omit<TopicStates['settings'], 'consents' | 'links'> & {
+    links?: { state: 'ready'; builtIn: string[] } | { state: 'unavailable'; sentence: string };
+  };
+  if (sites.length > 0 && links?.state !== 'ready')
+    throw new Error('Sites came for a reader told of no list of them.');
+  return {
+    ...rest,
+    consents: Object.fromEntries(consents) as TopicStates['settings']['consents'],
+    ...(links === undefined
+      ? {}
+      : { links: links.state === 'ready' ? { ...links, sites } : links }),
+  };
+}
+
 /** Chunk order is the only order on the wire; no partial snapshot escapes this builder. */
 export function assembledState(
   topic: MirrorTopicKey,
@@ -223,11 +263,7 @@ export function assembledState(
             .map(([key, value]) => [decodeURIComponent(key.slice(5)), value]),
         ),
       } as TopicStates['usage'];
-    // The settings' summary is the rest of settings.get: the default agent (none included) and api.
-    return {
-      ...(summary as Omit<TopicStates['settings'], 'consents'>),
-      consents: values,
-    } as TopicStates['settings'];
+    return settingsState(summary, pairs);
   }
   const request = topicRequest(topic);
   if (request.topic === 'session')

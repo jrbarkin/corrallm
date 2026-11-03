@@ -7,11 +7,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CanvasId } from '../../shared/canvas';
 import type { NeedsItem } from '../../shared/model/needs';
 import { FakeConnector } from '../sessions/fake';
+import { Settings } from '../settings';
 import { createCore } from './core';
 import type { Core } from './core';
+import { WindowPorts } from './gui';
 import type { NotificationRequest } from './presence';
 import { keepCanvases } from './store/test-store';
 import { CALLERS, NO_DESKTOP } from './test-registry';
+import { openWindow } from './test-window';
 import { legacyDirectories } from './workspaces/test-directories';
 
 /*
@@ -217,11 +220,82 @@ describe('the core’s notifications', { timeout: 30_000 }, () => {
     await untilTheOk(started);
     await new Promise((resolve) => setTimeout(resolve, 600));
     expect(shown).toEqual([]);
-    // Never in what settings.get says, to a token or to you (B22a adds it, yours alone).
-    for (const caller of [CALLERS.you, CALLERS['outside-read']]) {
-      const settings = await started.call('settings.get', {}, caller);
-      expect(settings.ok).toBe(true);
-      expect(JSON.stringify(settings)).not.toContain('notifications');
+    // In what settings.get says to you alone (B22a C2), never to a token.
+    expect(await started.call('settings.get', {}, CALLERS.you)).toMatchObject({
+      ok: true,
+      value: { notifications: { enabled: false, lastDelivery: null } },
+    });
+    const theirs = await started.call('settings.get', {}, CALLERS['outside-read']);
+    expect(theirs.ok).toBe(true);
+    expect(JSON.stringify(theirs)).not.toContain('notifications');
+  });
+
+  it('turns them off through settings.set before it answers: what was shown closes, nothing new goes or replays (B22a C6)', async () => {
+    const started = await start();
+    await started.engines.open(CANVAS);
+    await untilTheOk(started);
+    await eventually(() => {
+      expect(shown).toHaveLength(1);
+    });
+    const [{ handle }] = shown as [NotificationRequest];
+    // The settings' own re-read never comes: only the setter's boundary may turn them off.
+    const reread = vi
+      .spyOn(Settings.prototype, 'notificationsEnabled')
+      .mockReturnValue(new Promise<boolean>(() => undefined));
+    try {
+      expect(
+        await started.call('settings.set', { notifications: { enabled: false } }, CALLERS.you),
+      ).toMatchObject({ ok: true, value: { notifications: { enabled: false } } });
+      // Closed before the setter answered.
+      expect(closed).toEqual([handle]);
+      // Something new for you on another agent: nothing goes while they are off.
+      const asked = await started.call(
+        'message',
+        { canvas: CANVAS, to: 'helper', body: '/question Go on?' },
+        CALLERS.you,
+      );
+      expect(asked.ok).toBe(true);
+      await eventually(async () => {
+        expect((await waiting(started)).some((item) => item.kind === 'prompt')).toBe(true);
+      });
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      expect(shown).toHaveLength(1);
+      // On again: what was dropped is never replayed.
+      expect(
+        await started.call('settings.set', { notifications: { enabled: true } }, CALLERS.you),
+      ).toMatchObject({ ok: true });
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      expect(shown).toHaveLength(1);
+    } finally {
+      reread.mockRestore();
+    }
+  });
+
+  it('publishes how the last one went to your settings as it changes, never to a token (B22a C2)', async () => {
+    const started = await start();
+    const window = openWindow(new WindowPorts(started), 7);
+    const heard: unknown[] = [];
+    window.link.on('topic', (batch) => {
+      for (const change of batch)
+        if (change.topic === 'settings' && 'replace' in change) heard.push(change.replace);
+    });
+    try {
+      await window.link.request('call', 'topics.subscribe', { topic: 'settings' });
+      await started.engines.open(CANVAS);
+      await untilTheOk(started);
+      await eventually(() => {
+        expect(heard.at(-1)).toMatchObject({
+          notifications: { enabled: true, lastDelivery: 'shown' },
+        });
+      });
+      expect(await started.call('settings.get', {}, CALLERS.you)).toMatchObject({
+        ok: true,
+        value: { notifications: { lastDelivery: 'shown' } },
+      });
+      const theirs = await started.call('settings.get', {}, CALLERS['outside-read']);
+      expect(JSON.stringify(theirs)).not.toMatch(/notifications|shown/);
+    } finally {
+      window.close();
     }
   });
 

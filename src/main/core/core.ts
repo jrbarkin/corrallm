@@ -1003,14 +1003,31 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
   usage.subscribe((_state, by) => {
     topics.changed('usage', by);
   });
+  /** Each change of `notifying`: a re-read begun before the latest change applies nothing. */
+  let preference = 0;
+  /**
+   * OS notifications turned on or off, at once (B22a C6): the notifier drops what waits and closes
+   * what it shows before whoever turned them off is answered, and main hears the new bit.
+   */
+  const notificationsChanged = (on: boolean) => {
+    preference += 1;
+    notifying = on;
+    notifier?.preferenceChanged();
+    // Main asks the OS for authorization only while it is on: told whenever it changes.
+    presenceChanged();
+  };
   settings.subscribe(() => {
     topics.changed('settings', 'you');
+    // Read again as any write lands (a file unreadable at start, readable since): never over a
+    // change made after this read began.
+    const asked = (preference += 1);
     void settings.notificationsEnabled().then((on) => {
-      notifying = on;
-      notifier?.preferenceChanged();
-      // Main asks the OS for authorization only while it is on: told whenever it changes.
-      presenceChanged();
+      if (asked === preference && on !== notifying) notificationsChanged(on);
     });
+  });
+  // The sites you open without asking, and how the last notification went: your settings too.
+  links.subscribe(() => {
+    topics.changed('settings', 'you');
   });
   // The proposals waiting for you (R4): their proposers' records go to each canvas's messages,
   // and what waits on a canvas is read again as one is raised or settled.
@@ -1253,6 +1270,9 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
           unnotify: (handle) => {
             host.unnotify(handle);
           },
+          statusChanged: () => {
+            topics.changed('settings', 'corrallm');
+          },
           ...(config.notifier === undefined ? {} : { timing: config.notifier }),
         });
   // Whether the run of each canvas the core runs is running, as canvas.list says it from the live
@@ -1456,6 +1476,14 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
           settings,
           api: () => api,
           links,
+          notifications: {
+            set: async (enabled) => {
+              const written = await settings.setNotifications(enabled);
+              if (written) notificationsChanged(enabled);
+              return written;
+            },
+            status: () => notifier?.status(),
+          },
           reveal,
           windows,
           sessions,
