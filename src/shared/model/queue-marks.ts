@@ -2,6 +2,7 @@ import { isApproval, isMessage, isRepeat, isRepeatEnds, isWait } from './queue';
 import type { QueueItem, QueueRepeat } from './queue';
 import type { EngineCatalog } from './catalog';
 import { taskState } from './run-display';
+import type { AttemptReport } from './results';
 import type { RunSnapshot } from './views';
 import { holdText } from './words';
 
@@ -32,6 +33,8 @@ export function taskKey(lane: string, item: string | null): string {
  * shows; not for a session that would not start), at an OK, `data-asked` (the last changes asked for there, this run) with
  * `data-asked-times` (how many times, when more than once), and at a repeat, `data-round` (the
  * round it is on, "Round 2 of 3", while the run is in it; once over, how many it took, "2 rounds").
+ * `data-reports` (B21 X3): what the agent reported of its attempts or waits for, by attempt id (a JSON
+ * object), from `reports`: an open ask of an attempt's own turn, or its `complete`'s outcome and summary.
  * Where a usage rule holds the agent before a task: `data-usage` (why, the backend named by
  * `catalog`), `data-usage-backend` (whose usage) and `data-usage-reset` (when its window resets, in
  * epoch ms, if known).
@@ -42,6 +45,7 @@ export function queueMarks(
   asking: ReadonlySet<string>,
   catalog: EngineCatalog,
   activeEnds: ReadonlySet<string> = new Set(),
+  reports: ReadonlyMap<string, AttemptReport> = new Map(),
 ): (lane: string, item: string | null) => RowMarks {
   const handed = new Set(
     links.flatMap((l) => (l.kind === 'handoff' ? [taskKey(l.from.lane, l.from.item)] : [])),
@@ -97,6 +101,12 @@ export function queueMarks(
     const problem = at?.current === item ? at.problem : undefined;
     const attempts = item === null ? undefined : at?.attempts?.[item];
     const until = held ? at.until : undefined;
+    const reported = Object.fromEntries(
+      (attempts ?? []).flatMap(({ id }) => {
+        const report = reports.get(id);
+        return report ? [[id, report] as const] : [];
+      }),
+    );
     const asked = item === null ? undefined : at?.changes?.[item];
     const usage = held ? at.usage : undefined;
     const expected = item === null ? undefined : at?.asExpected?.[item];
@@ -118,6 +128,7 @@ export function queueMarks(
       'data-problem-condition': problem?.conditionKey,
       'data-refused': at?.current === item && at.refused ? '' : undefined,
       'data-attempts': attempts?.length ? JSON.stringify(attempts) : undefined,
+      'data-reports': Object.keys(reported).length > 0 ? JSON.stringify(reported) : undefined,
       'data-asked': asked?.at(-1),
       'data-asked-times': asked && asked.length > 1 ? String(asked.length) : undefined,
       'data-usage':

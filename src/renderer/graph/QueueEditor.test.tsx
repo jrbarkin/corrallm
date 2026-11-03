@@ -146,6 +146,48 @@ describe('task recovery in the shared queue row', () => {
       reply: 'Use the cached dependencies',
     });
   });
+  it('shows a waiting attempt as running with its open ask, and a reported verdict with its summary', () => {
+    const edit = edits();
+    const reports = new Map([
+      ['first', { outcome: 'succeeded' as const, summary: 'Ran the suite, all green.' }],
+      ['second', { waiting: true as const }],
+    ]);
+    const marks = queueMarks(
+      lanesOf([node]),
+      {
+        running: true,
+        agents: {
+          a: {
+            current: 'work',
+            status: 'running',
+            outcomes: {},
+            attempts: {
+              work: [
+                { id: 'first', startedAt: 1000, endedAt: 2000, status: 'succeeded' as const },
+                { id: 'second', startedAt: 3000, status: 'running' as const },
+              ],
+            },
+          },
+        },
+      },
+      new Set(),
+      runCatalog(),
+      new Set(),
+      reports,
+    );
+    render(
+      <QueueEditor
+        node={node}
+        nodes={[node]}
+        agent="Claude"
+        actions={actionsOf('claude-code')}
+        {...editsOf(edit, 'a')}
+        marks={(id) => marks('a', id)}
+      />,
+    );
+    expect(screen.getByText('Running · waiting for an answer')).toBeTruthy();
+    expect(screen.getByText('Reported succeeded: Ran the suite, all green.')).toBeTruthy();
+  });
   it('shows the reason while paused, with Resume and Run again instead of recovery actions', () => {
     const resume = vi.fn();
     const again = vi.fn();
