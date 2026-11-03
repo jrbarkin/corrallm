@@ -347,7 +347,7 @@ export class Delivery {
     // B11a C7: a carrying send cut off unsent leaves its carry to the next, in this same write.
     this.#deps.handoff?.recover();
     await this.#deps.store.durable();
-    this.schedule();
+    this.#pump();
   }
 
   /** Whether a message is the live run's send of an attempt it still runs (its own to settle). */
@@ -453,10 +453,12 @@ export class Delivery {
   schedule(): void {
     if (this.#scheduled || !this.#started || this.#closed) return;
     this.#scheduled = true;
-    queueMicrotask(() => {
+    const check = () => {
       this.#scheduled = false;
+      if (this.#closed) return;
       this.#pump();
-    });
+    };
+    queueMicrotask(check);
   }
 
   /**
