@@ -1373,3 +1373,75 @@ it('starts the SDK without a channel entry when a managed source is deployed', a
     await rm(folder, { recursive: true, force: true });
   }
 });
+
+it.each(['user', 'project', 'local'] as const)(
+  'honors %s settings denying the session server before installing its SDK channel',
+  async (scope) => {
+    const folder = await mkdtemp(path.join(tmpdir(), 'corrallm-sdk-policy-'));
+    try {
+      const config = path.join(folder, 'config');
+      const file =
+        scope === 'user'
+          ? path.join(config, 'settings.json')
+          : path.join(folder, '.claude', `settings${scope === 'local' ? '.local' : ''}.json`);
+      await mkdir(path.dirname(file), { recursive: true });
+      const { sdk, host, query, events } = connector({ managed: path.join(folder, 'managed') });
+      for (const serverName of ['another-server', 'corrallm']) {
+        await writeFile(
+          file,
+          JSON.stringify({
+            allowedMcpServers: [{ serverName: 'another-server' }],
+            deniedMcpServers: [{ serverName }],
+          }),
+        );
+        const list = vi.fn(() => []);
+        const call = vi.fn();
+        const session = await sdk.start(
+          {
+            ...SPEC,
+            cwd: folder,
+            env: { ...SPEC.env, HOME: folder, CLAUDE_CONFIG_DIR: config },
+            api: {
+              kind: 'channel',
+              server: 'corrallm',
+              tools: [{ name: 'probe_read', destructive: false }],
+              off: ['corrallm-server', 'corrallm-server-dev'],
+              channel: { list, call },
+            },
+          },
+          host,
+        );
+        try {
+          const available = serverName !== 'corrallm';
+          expect(events.findLast((one) => one.type === 'started')).toMatchObject({
+            api: available,
+          });
+          if (available) {
+            expect(query().options.mcpServers).toHaveProperty('corrallm');
+            expect(query().options.allowedTools).toEqual(['mcp__corrallm__probe_read']);
+          } else {
+            expect(query().options.mcpServers).toBeUndefined();
+            expect(query().options.allowedTools).toBeUndefined();
+            expect(query().options.settings).toEqual({
+              deniedMcpServers: [
+                { serverName: 'corrallm-server' },
+                { serverName: 'corrallm-server-dev' },
+              ],
+            });
+            expect(list).not.toHaveBeenCalled();
+            expect(call).not.toHaveBeenCalled();
+            expect(events.filter((one) => one.type === 'notice')).toEqual([
+              expect.objectContaining({
+                text: 'Your settings keep corrallm’s API off for this session.',
+              }),
+            ]);
+          }
+        } finally {
+          await session.close();
+        }
+      }
+    } finally {
+      await rm(folder, { recursive: true, force: true });
+    }
+  },
+);

@@ -76,6 +76,23 @@ describe('loginShellEnvironment on Windows', () => {
 });
 
 describe('agentEnvironment', () => {
+  it('cleans inherited credentials and session markers regardless of environment key casing', () => {
+    const env = agentEnvironment({
+      corralLm_OUTSIDE_TOKEN: 'outside-credential-canary',
+      corrallm_outside_token_file: '/outside/token',
+      Corrallm_SESSION_TOKEN: 'parent-session-credential-canary',
+      corrallm_agent_session: 'parent',
+      Corrallm_URL: 'http://127.0.0.1:42',
+      PATH: '/bin',
+    });
+    expect(env).toEqual({
+      PATH: '/bin',
+      CORRALLM_AGENT_SESSION: '1',
+      NO_PROXY: '127.0.0.1,localhost,::1',
+      no_proxy: '127.0.0.1,localhost,::1',
+    });
+  });
+
   it('marks its own agents after cleaning the outside orchestrator’s credentials', () => {
     expect(
       agentEnvironment({

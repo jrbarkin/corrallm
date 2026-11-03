@@ -4,6 +4,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { SessionApi } from '../connector';
 import { ClaudeCode } from './claude-code';
+import { channelApiReason } from './mcp-entry';
 
 const TOKEN = 'session-credential-canary';
 const API: Extract<SessionApi, { kind: 'http' }> = {
@@ -114,6 +115,32 @@ describe('Terminal session MCP entry', () => {
     },
   );
 });
+
+it.each(['user', 'project', 'local'] as const)(
+  'leaves the channel off when %s settings cannot be read as an object',
+  async (scope) => {
+    const config = path.join(dir, 'config');
+    const file =
+      scope === 'user'
+        ? path.join(config, 'settings.json')
+        : path.join(dir, '.claude', `settings${scope === 'local' ? '.local' : ''}.json`);
+    const check = () =>
+      channelApiReason(dir, { HOME: dir, CLAUDE_CONFIG_DIR: config }, path.join(dir, 'managed'));
+    expect(await check()).toBeUndefined();
+    await mkdir(path.dirname(file), { recursive: true });
+    for (const content of ['{private-setting-canary', 'null', '[]']) {
+      await writeFile(file, content);
+      expect(await check()).toBe(
+        'Claude Code’s settings could not be read; corrallm’s API is off for this session.',
+      );
+    }
+    await rm(file);
+    await mkdir(file);
+    expect(await check()).toBe(
+      'Claude Code’s settings could not be read; corrallm’s API is off for this session.',
+    );
+  },
+);
 
 it('retries only a documented sideload refusal once, with the entry and grants removed', async () => {
   const one = cli();

@@ -30,6 +30,49 @@ export async function managedApiReason(
   return undefined;
 }
 
+/** The native settings sources read for a session, without its own flag settings. */
+function settingsFiles(cwd: string, env: Readonly<Record<string, string>>): string[] {
+  const config = env.CLAUDE_CONFIG_DIR ?? path.join(env.HOME ?? homedir(), '.claude');
+  return [
+    path.join(cwd, '.claude', 'settings.local.json'),
+    path.join(cwd, '.claude', 'settings.json'),
+    path.join(config, 'settings.json'),
+  ];
+}
+
+/** A channel is installed only where the native settings permit its server name. */
+export async function channelApiReason(
+  cwd: string,
+  env: Readonly<Record<string, string>>,
+  managed?: string,
+): Promise<string | undefined> {
+  const policy = await managedApiReason(managed);
+  if (policy !== undefined) return policy;
+  for (const file of settingsFiles(cwd, env)) {
+    try {
+      const settings: unknown = JSON.parse(await readFile(file, 'utf8'));
+      if (typeof settings !== 'object' || settings === null || Array.isArray(settings))
+        throw new Error('Invalid settings.');
+      const denied = (settings as Record<string, unknown>).deniedMcpServers;
+      if (Array.isArray(denied)) {
+        if (
+          denied.some(
+            (one: unknown) =>
+              typeof one === 'object' &&
+              one !== null &&
+              (one as Record<string, unknown>).serverName === 'corrallm',
+          )
+        )
+          return 'Your settings keep corrallm’s API off for this session.';
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT')
+        return 'Claude Code’s settings could not be read; corrallm’s API is off for this session.';
+    }
+  }
+  return undefined;
+}
+
 /**
  * Whether the settings Claude Code reads for a session in `cwd` (the project's local and shared
  * settings, then the user's, in CLAUDE_CONFIG_DIR or ~/.claude) hold an MCP server allowlist
@@ -41,14 +84,8 @@ export async function mcpAllowlisted(
   cwd: string,
   env: Readonly<Record<string, string>>,
 ): Promise<boolean> {
-  const config = env.CLAUDE_CONFIG_DIR ?? path.join(env.HOME ?? homedir(), '.claude');
-  const files = [
-    path.join(cwd, '.claude', 'settings.local.json'),
-    path.join(cwd, '.claude', 'settings.json'),
-    path.join(config, 'settings.json'),
-  ];
   const held = await Promise.all(
-    files.map(async (file) => {
+    settingsFiles(cwd, env).map(async (file) => {
       try {
         const settings: unknown = JSON.parse(await readFile(file, 'utf8'));
         return (

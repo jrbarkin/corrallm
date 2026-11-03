@@ -2,6 +2,7 @@ import { execFile } from '../process';
 import { readdir } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import path from 'node:path';
+import { gte, valid } from 'semver';
 
 import { canRun, findExecutable, searchPath } from '../executables';
 
@@ -78,17 +79,9 @@ export function parseVersion(output: string): string | undefined {
  */
 export const MIN_API_CODEX_VERSION = '0.162.1';
 
-/** Whether Codex `version` is `min` or later (by major, minor and patch). */
+/** Whether a valid Codex release is `min` or later, including prerelease ordering. */
 export function versionAtLeast(version: string, min: string): boolean {
-  const parts = (value: string) => value.split(/[.-]/).slice(0, 3).map(Number);
-  const have = parts(version);
-  const need = parts(min);
-  for (let i = 0; i < need.length; i += 1) {
-    const a = have[i] ?? 0;
-    const b = need[i] ?? 0;
-    if (a !== b) return a > b;
-  }
-  return true;
+  return valid(version) !== null && gte(version, min);
 }
 
 /** Why a Codex of `version` is too old for corrallm, or undefined if it is not. */
