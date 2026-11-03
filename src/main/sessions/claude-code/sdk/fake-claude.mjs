@@ -335,7 +335,8 @@ function request(body) {
   );
   return new Promise((resolve) =>
     asked.set(requestId, (answer) => {
-      if (process.env.FAKE_CLAUDE_ANSWERS)
+      // Native control answers only: its MCP traffic to corrallm's entry is no answer to a prompt.
+      if (process.env.FAKE_CLAUDE_ANSWERS && body.subtype !== 'mcp_message')
         appendFileSync(
           process.env.FAKE_CLAUDE_ANSWERS,
           `${JSON.stringify({ request: body, answer })}\n`,

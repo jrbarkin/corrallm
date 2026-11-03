@@ -213,16 +213,21 @@ test('holds a missing verdict and retries only when asked, retaining both unreso
   await expect(objective).toHaveAttribute('data-problem', 'uncertain');
   const sent = await prompts();
   expect(sent).toHaveLength(2);
-  expect(sent[1]).toMatchObject({ sessionId: sent[0]?.sessionId, text: sent[0]?.text });
+  // The same step again, in the same session. (Its last paragraph may differ: once the session
+  // has listed corrallm's complete, a step's text names its own attempt, B21 C8.)
+  const step = (text = '') => text.split('\n\n')[0];
+  expect(sent[1]?.sessionId).toBe(sent[0]?.sessionId);
+  expect(step(sent[1]?.text)).toBe(step(sent[0]?.text));
+  expect(step(sent[0]?.text)).toContain('recovery-missing: inspect the checklist');
   await objective.locator('summary').click();
   await expect(objective.getByText('Attempt 1 · Uncertain', { exact: true })).toBeVisible();
   await expect(objective.getByText('Attempt 2 · Uncertain', { exact: true })).toBeVisible();
   // Resolving is a human decision, without another backend attempt or replay of the old prompt.
   await objective.getByRole('button', { name: 'Mark resolved', exact: true }).click();
   await expect(queues.getByRole('status')).toHaveText('All done');
-  expect((await prompts()).map(({ text }) => text)).toEqual([
-    sent[0]?.text,
-    sent[0]?.text,
+  expect((await prompts()).map(({ text }) => step(text))).toEqual([
+    step(sent[0]?.text),
+    step(sent[0]?.text),
     'recovery-followup',
   ]);
 });
