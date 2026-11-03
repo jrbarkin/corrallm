@@ -523,6 +523,29 @@ describe('an ask', () => {
     });
   });
 
+  it.each(['a'.repeat(16_330), '🙂'.repeat(4082)])(
+    'keeps an ask open until its structured answer fits its rendered message: case %#',
+    async (text) => {
+      await keepCanvas();
+      await start();
+      const id = await ask({ party: 'you' }, OUTSIDE);
+      expect(
+        await call('reply', { to: `ask/${id}`, answer: { answers: { scope: { text } } } }, YOU),
+      ).toMatchObject({ ok: false, error: { code: 'refused' } });
+      expect((await find(id))?.settled).toBeUndefined();
+      expect((await inbox(OUTSIDE)).filter((one) => one.replyTo === id)).toEqual([]);
+      const shorter = `${text.slice(0, 8000)}END`;
+      const answered = await ok<{ id: string }>(
+        'reply',
+        { to: `ask/${id}`, answer: { answers: { scope: { text: shorter } } } },
+        YOU,
+      );
+      expect((await find(answered.id, OUTSIDE))?.body).toContain(shorter);
+      await restart();
+      expect((await find(answered.id, OUTSIDE))?.body).toContain(shorter);
+    },
+  );
+
   it('takes an answer to every question, and only labels it offers', async () => {
     await keepCanvas();
     await start();
@@ -741,6 +764,57 @@ describe('an ask', () => {
       ok: false,
       error: { code: 'conflict', sentence: `ask/${id} expired unanswered.` },
     });
+  });
+
+  it.each([{ answers: { scope: { picked: ['All'] } } }, { choice: 'dismiss' }])(
+    'honours the wall-clock deadline before its timer runs: %j',
+    async (answer) => {
+      await keepCanvas();
+      await start();
+      const id = await ask({ party: 'you' }, OUTSIDE, { deadlineSeconds: 60 });
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(Date.now() + 60_000);
+      expect(await call('reply', { to: `ask/${id}`, answer }, YOU)).toMatchObject({
+        ok: false,
+        error: { code: 'conflict', sentence: `ask/${id} expired unanswered.` },
+      });
+      expect(await find(id)).toMatchObject({ state: 'expired', by: 'corrallm' });
+      expect((await inbox(OUTSIDE)).filter((message) => message.replyTo === id)).toMatchObject([
+        { kind: 'settled', settled: { outcome: { type: 'expired' } } },
+      ]);
+    },
+  );
+
+  it('expires a turn’s answer at the wall-clock deadline before its timer runs', async () => {
+    await keepCanvas();
+    const held = gate();
+    const builder = new FakeConnector({ adapter: 'codex', step: held.step });
+    await start(builder);
+    const id = await ask('builder', OUTSIDE, { deadlineSeconds: 60 });
+    await vi.waitFor(() => {
+      expect(sent(builder)).toHaveLength(1);
+    });
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(Date.now() + 60_000);
+    held.open();
+    await vi.waitFor(async () => {
+      expect((await find(id))?.state).toBe('expired');
+    });
+    expect((await inbox(OUTSIDE)).filter((message) => message.replyTo === id)).toMatchObject([
+      { kind: 'settled', settled: { outcome: { type: 'expired' } } },
+    ]);
+  });
+
+  it('admits a new ask after the previous deadline before its timer runs', async () => {
+    await keepCanvas();
+    await start();
+    const id = await ask({ party: 'you' }, OUTSIDE, { deadlineSeconds: 60 });
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(Date.now() + 60_000);
+    const next = await ask({ party: 'you' }, OUTSIDE);
+    expect(next).not.toBe(id);
+    expect((await find(id))?.state).toBe('expired');
+    expect((await needsOf()).map(({ id }) => id)).toEqual([`ask/${next}`]);
   });
 
   it('expires as its canvas opens when its deadline passed while corrallm was down', async () => {
