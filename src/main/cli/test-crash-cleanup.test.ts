@@ -109,7 +109,10 @@ it('polls until a killed group actually disappears under load, beyond 250 ms', a
   expect(existsSync(directory)).toBe(false);
 });
 
-it('waits for an already exiting group whose leader has disappeared, without signalling it', async () => {
+it('stops what a recorded CLI whose leader has exited left running in its group', async () => {
+  // G3: the fake codex exits at once on a message starting "crash" (process.exit), leaving the
+  // sleeping command of an earlier slow turn in its group. No process can take a pid that still
+  // names a living group: it is the recorded leader's, and stopped as its group would be.
   const { groups, system, record } = fixture();
   await record([42]);
   let elapsed = 0;
@@ -122,7 +125,7 @@ it('waits for an already exiting group whose leader has disappeared, without sig
     return Promise.resolve();
   };
   await cleanupCrash(directory, profile, { close: () => Promise.resolve() }, system);
-  expect(system.signal).not.toHaveBeenCalled();
+  expect(vi.mocked(system.signal).mock.calls).toEqual([[42, 'SIGTERM']]);
   expect(elapsed).toBe(800);
   expect(existsSync(directory)).toBe(false);
 });
@@ -163,16 +166,28 @@ it('keeps the folder if serve itself cannot be confirmed stopped', async () => {
   expect(existsSync(directory)).toBe(true);
 });
 
-it.each(['missing', 'reused'] as const)(
-  'keeps the folder if a %s leader leaves a live group that cannot be safely signalled',
-  async (kind) => {
-    const { system, record } = fixture();
-    await record([42]);
-    system.inspect = () => (kind === 'missing' ? undefined : { started: 2000, group: 42 });
-    await expect(
-      cleanupCrash(directory, profile, { close: () => Promise.resolve() }, system),
-    ).rejects.toThrow(/folder was kept/);
-    expect(system.signal).not.toHaveBeenCalled();
-    expect(existsSync(directory)).toBe(true);
-  },
-);
+it('keeps the folder if a reused leader pid leaves a live group that cannot be safely signalled', async () => {
+  const { system, record } = fixture();
+  await record([42]);
+  system.inspect = () => ({ started: 2000, group: 42 });
+  await expect(
+    cleanupCrash(directory, profile, { close: () => Promise.resolve() }, system),
+  ).rejects.toThrow(/has no matching process identity.*folder was kept/);
+  expect(system.signal).not.toHaveBeenCalled();
+  expect(existsSync(directory)).toBe(true);
+});
+
+it('keeps the folder if what a missing leader left running survives SIGKILL', async () => {
+  const { system, record } = fixture();
+  await record([42]);
+  system.inspect = () => undefined;
+  system.signal = vi.fn();
+  await expect(
+    cleanupCrash(directory, profile, { close: () => Promise.resolve() }, system),
+  ).rejects.toThrow(/did not stop.*folder was kept/);
+  expect(vi.mocked(system.signal).mock.calls).toEqual([
+    [42, 'SIGTERM'],
+    [42, 'SIGKILL'],
+  ]);
+  expect(existsSync(directory)).toBe(true);
+});

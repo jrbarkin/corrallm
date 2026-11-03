@@ -114,10 +114,30 @@ export async function stopTestGroup(record: TestGroup, system = TEST_GROUP_SYSTE
     }
     return true;
   };
+  /**
+   * With its leader gone, whether members of the group still live, read whole: they are the
+   * leader's descendants, ours to stop, since no process can be given a pid that still names a
+   * living group. An inconclusive read never establishes that, nor Windows' probe, which reads a
+   * pid, not a group's members.
+   */
+  const leftBehind = () => {
+    if (system.platform === 'win32') return false;
+    try {
+      const alive = system.alive(record.pid);
+      probeFault = undefined;
+      return alive;
+    } catch (error) {
+      probeFault = words(error);
+      return false;
+    }
+  };
   const identityFault = (leaderMayHaveExited: boolean): string | undefined => {
     try {
       const found = system.inspect(record.pid);
-      if (matches(found) || (leaderMayHaveExited && found === undefined)) return undefined;
+      // A leader may exit at any time and leave members of its group running (G3: a fake codex's
+      // sleeping command). Before a signal, only a complete read of them makes them ours.
+      if (matches(found) || (found === undefined && (leaderMayHaveExited || leftBehind())))
+        return undefined;
       return leaderMayHaveExited ? 'changed identity' : 'has no matching process identity';
     } catch (error) {
       return `could not read its process identity (${words(error)})`;
@@ -126,7 +146,8 @@ export async function stopTestGroup(record: TestGroup, system = TEST_GROUP_SYSTE
   const unverified = async (reason: string) => {
     // A ps failure says nothing about whether the group still runs. It may have exited
     // during that read, or be awaiting reaping after an earlier shutdown. Confirm that
-    // separately, without letting an absent, reused or unread identity authorize a signal.
+    // separately, without letting a reused or unread identity, or an absent one whose group's
+    // living members no complete read confirmed, authorize a signal.
     if (await gone(5000)) return;
     throw failure(reason);
   };
