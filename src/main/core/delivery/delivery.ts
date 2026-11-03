@@ -1446,17 +1446,19 @@ export class Delivery {
       this.schedule();
       return;
     }
-    store.update(id, { state: 'replied' });
     // B21 C7: a continuation's turn is its task's attempt's own: the run hears it end, in this
     // same tick, so one write holds its reply's end and what the run judged of it.
     const { task } = message;
-    if (task !== undefined && isContinuation(message)) {
-      this.#deps.engine.run.continued(task, {
-        failed: result.status !== 'completed',
-        reply,
-        result,
-      });
-    }
+    store.judging(id, () => {
+      store.update(id, { state: 'replied' });
+      if (task !== undefined && isContinuation(message)) {
+        this.#deps.engine.run.continued(task, {
+          failed: result.status !== 'completed',
+          reply,
+          result,
+        });
+      }
+    });
     // A reply never makes a reply; nor does an answer, or an ask's end, its asker was sent.
     if (message.turn === undefined && message.kind === 'text' && message.ask === undefined) {
       store.add({

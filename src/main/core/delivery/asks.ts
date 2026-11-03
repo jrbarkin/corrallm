@@ -26,7 +26,7 @@ import { partyName, partyText, quotedName, quotedParty } from '../parties';
 import { DeliveryError } from './errors';
 import { capBody } from './messages';
 import type { MessageStore } from './messages';
-import { continuationsOf, openAsksOf } from './tasks';
+import { continuationsOf, openAsksOf, resultKey } from './tasks';
 
 /*
  * Asks and messages to you (B21 Design §9.2 C5, C6), on one canvas: no second inbox, only typed
@@ -178,6 +178,12 @@ export class Asks {
         throw new DeliveryError('conflict', 'That request id was used for another ask.');
       }
       return before;
+    }
+    if (task !== undefined && store.toldAs(resultKey(task.attempt)) !== undefined) {
+      throw new DeliveryError(
+        'conflict',
+        'This step was already reported; it cannot ask another question.',
+      );
     }
     const open = this.#asks();
     const pair = open.find((one) => one.from === from && one.to === to);

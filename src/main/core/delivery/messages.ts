@@ -213,6 +213,10 @@ export class MessageStore {
   readonly #parties = new Map<PartyId, Sequence>();
   /** Records that may just have fallen outside both parties’ newest-message quotas. */
   readonly #candidates = new Set<string>();
+  /** Results by the native turn they report: its unsettled turn keeps its fixed verdict. */
+  readonly #results = new Map<string, Set<string>>();
+  /** Settling a turn and judging its report are one synchronous action. */
+  readonly #judging = new Set<string>();
   #bytes = 0;
   /** What hears each message added. */
   readonly #listeners = new Set<(message: Message) => void>();
@@ -283,6 +287,25 @@ export class MessageStore {
 
   get(id: string): Message | undefined {
     return this.#kept.get(id)?.message;
+  }
+
+  /** Keeps a turn's result readable through settlement and the judgment that immediately follows. */
+  judging(id: string, use: () => void): void {
+    if (!this.#results.has(id) || this.#judging.has(id)) {
+      use();
+      return;
+    }
+    this.#judging.add(id);
+    try {
+      use();
+    } finally {
+      this.#judging.delete(id);
+      for (const result of this.#results.get(id) ?? []) {
+        const kept = this.#kept.get(result);
+        if (kept !== undefined && this.#prunable(kept)) this.#settle(kept);
+      }
+      this.#prune();
+    }
   }
 
   /** A message's place in the store's order, if it is kept. */
@@ -585,8 +608,8 @@ export class MessageStore {
     const { id } = kept.message;
     const before = this.#kept.get(id);
     this.#bytes += kept.bytes - (before?.bytes ?? 0);
-    const was = before !== undefined && prunable(before);
-    const now = prunable(kept);
+    const was = before !== undefined && this.#prunable(before);
+    const now = this.#prunable(kept);
     const same =
       was &&
       now &&
@@ -595,7 +618,17 @@ export class MessageStore {
       before.message.to === kept.message.to;
     if (was && !same) this.#unsettle(before);
     this.#kept.set(id, kept);
+    this.#indexResult(before, false);
+    this.#indexResult(kept, true);
     if (now && !same) this.#settle(kept);
+    if (before !== undefined && isSettled(before.message) !== isSettled(kept.message)) {
+      for (const result of this.#results.get(id) ?? []) {
+        const row = this.#kept.get(result);
+        if (row === undefined || !prunable(row)) continue;
+        if (isSettled(kept.message) && !this.#judging.has(id)) this.#settle(row);
+        else this.#unsettle(row);
+      }
+    }
     if (!isActive(kept.message)) {
       this.#active.delete(id);
     } else if (this.#active.has(id) || kept.seq > this.#activeLast) {
@@ -614,7 +647,8 @@ export class MessageStore {
     const kept = this.#kept.get(id);
     if (kept) {
       this.#bytes -= kept.bytes;
-      if (prunable(kept)) this.#unsettle(kept);
+      if (this.#prunable(kept)) this.#unsettle(kept);
+      this.#indexResult(kept, false);
     }
     this.#kept.delete(id);
     this.#active.delete(id);
@@ -639,6 +673,24 @@ export class MessageStore {
         if (candidate !== undefined) this.#candidates.add(candidate);
       }
     }
+  }
+
+  #indexResult(kept: Kept | undefined, add: boolean): void {
+    const message = kept?.message;
+    if (message?.verdict === undefined || message.replyTo === undefined) return;
+    const ids = this.#results.get(message.replyTo) ?? new Set<string>();
+    if (add) ids.add(message.id);
+    else ids.delete(message.id);
+    if (ids.size === 0) this.#results.delete(message.replyTo);
+    else this.#results.set(message.replyTo, ids);
+  }
+
+  #prunable(kept: Kept): boolean {
+    if (!prunable(kept)) return false;
+    const { verdict, replyTo } = kept.message;
+    if (verdict !== undefined && replyTo !== undefined && this.#judging.has(replyTo)) return false;
+    const turn = replyTo === undefined ? undefined : this.#kept.get(replyTo)?.message;
+    return verdict === undefined || turn === undefined || isSettled(turn);
   }
 
   #unsettle({ seq, message: { id, from, to } }: Kept): void {
@@ -676,7 +728,7 @@ export class MessageStore {
   #prune(): void {
     for (const id of this.#candidates) {
       const kept = this.#kept.get(id);
-      if (!kept || !prunable(kept)) continue;
+      if (!kept || !this.#prunable(kept)) continue;
       const { from, to } = kept.message;
       const wanted = [from, to].some((party) => {
         const sequence = this.#parties.get(party);

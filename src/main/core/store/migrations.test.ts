@@ -1667,7 +1667,7 @@ const ASK = JSON.stringify({
 });
 
 describe('migration 9', () => {
-  it('adds an ask to every message of a schema-8 database, keeping every row, which a schema-6 corrallm may still open', () => {
+  it('adds an ask to every message of a schema-8 database, keeping every row and requiring reader 9', () => {
     migrate(connection, MIGRATIONS.slice(0, 8));
     connection.exec('PRAGMA foreign_keys = ON');
     addCanvas();
@@ -1677,8 +1677,7 @@ describe('migration 9', () => {
     migrate(connection, MIGRATIONS.slice(0, 9));
 
     expect(schemaOf(connection)).toBe(9);
-    // A column only: a corrallm of schema 6 still reads and writes its own columns.
-    expect(minReaderOf(connection)).toBe(6);
+    expect(minReaderOf(connection)).toBe(9);
     expect(connection.prepare('SELECT * FROM message').all()).toEqual(
       before.map((row) => ({ ...row, ask: null })),
     );
@@ -1703,7 +1702,7 @@ describe('migration 9', () => {
 const VERDICT = JSON.stringify({ v: 1, outcome: 'succeeded', summary: 'All 12 tests pass.' });
 
 describe('migration 10', () => {
-  it('adds a verdict to every message of a schema-9 database, keeping every row, which a schema-6 corrallm may still open', () => {
+  it('adds a verdict to every message of a schema-9 database, keeping every row and requiring reader 10', () => {
     migrate(connection, MIGRATIONS.slice(0, 9));
     connection.exec('PRAGMA foreign_keys = ON');
     addCanvas();
@@ -1713,8 +1712,7 @@ describe('migration 10', () => {
     migrate(connection, MIGRATIONS.slice(0, 10));
 
     expect(schemaOf(connection)).toBe(10);
-    // A column only: a corrallm of schema 6 still reads and writes its own columns.
-    expect(minReaderOf(connection)).toBe(6);
+    expect(minReaderOf(connection)).toBe(10);
     expect(connection.prepare('SELECT * FROM message').all()).toEqual(
       before.map((row) => ({ ...row, verdict: null })),
     );

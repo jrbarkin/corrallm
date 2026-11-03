@@ -508,6 +508,118 @@ describe('an ask during a task (C7)', () => {
 });
 
 describe('complete (C8)', () => {
+  it.each(['step', 'continuation'])(
+    'applies a live report at the %s turn’s native end after later traffic exceeds retention',
+    async (turn) => {
+      await keepCanvas([BUILD]);
+      const cli = driven();
+      const core = await start(cli.connector);
+      await run(core, cli);
+      if (turn === 'continuation') {
+        const asked = await ask(core, { party: 'you' }, PLANNER);
+        cli.reply('planner', 'Asked the user.');
+        await ok(
+          core,
+          'reply',
+          { to: `ask/${asked}`, answer: { answers: { scope: { picked: ['All'] } } } },
+          YOU,
+        );
+        await vi.waitFor(() => {
+          expect(cli.sentTo('planner')).toHaveLength(2);
+        });
+      }
+      await ok(
+        core,
+        'complete',
+        { task: attemptOf(core), outcome: 'succeeded', summary: 'Done.' },
+        PLANNER,
+      );
+      const store = core.engines.canvas(CANVAS)?.messages;
+      if (store === undefined) throw new Error('No open canvas.');
+      for (let n = 0; n < 450; n++)
+        store.add({
+          from: 'agent:planner',
+          to: 'corrallm',
+          kind: 'notice',
+          origin: 'party',
+          body: 'Later notice',
+          state: 'delivered',
+        });
+      await store.durable();
+      cli.reply('planner', 'Done.');
+      await vi.waitFor(() => {
+        expect(planner(core)?.outcomes.build).toBe('succeeded');
+      });
+    },
+  );
+
+  it('keeps the reported outcome fixed when another ask is attempted before native end', async () => {
+    await keepCanvas([BUILD]);
+    const cli = driven();
+    const core = await start(cli.connector);
+    await run(core, cli);
+    await ok(
+      core,
+      'complete',
+      { task: attemptOf(core), outcome: 'succeeded', summary: 'Done.' },
+      PLANNER,
+    );
+    expect(
+      await call(core, 'ask', { to: { party: 'you' }, questions: [QUESTION] }, PLANNER),
+    ).toMatchObject({
+      ok: false,
+      error: { code: 'conflict' },
+    });
+    expect(messagesOf(core).filter((message) => message.ask?.type === 'question')).toEqual([]);
+    cli.reply('planner', 'Done.');
+    await vi.waitFor(() => {
+      expect(planner(core)?.outcomes.build).toBe('succeeded');
+    });
+  });
+
+  it('keeps a live report through retention and restart, then prunes it once its turn settles', async () => {
+    await keepCanvas([BUILD]);
+    const cli = driven();
+    let core = await start(cli.connector);
+    await run(core, cli);
+    const task = attemptOf(core);
+    await ok(core, 'complete', { task, outcome: 'failed', summary: 'Two tests fail.' }, PLANNER);
+    const result = messagesOf(core).find((message) => message.kind === 'result');
+    if (result?.replyTo === undefined) throw new Error('No report of a native turn.');
+    const mailbox = () => {
+      const store = core.engines.canvas(CANVAS)?.messages;
+      if (store === undefined) throw new Error('No open canvas.');
+      return store;
+    };
+    const later = async () => {
+      const store = mailbox();
+      for (let n = 0; n < 450; n++)
+        store.add({
+          from: 'agent:planner',
+          to: 'corrallm',
+          kind: 'notice',
+          origin: 'party',
+          body: 'Later notice',
+          state: 'delivered',
+        });
+      await store.durable();
+    };
+    await later();
+    expect(
+      await call(core, 'complete', { task, outcome: 'succeeded', summary: 'Second.' }, PLANNER),
+    ).toMatchObject({
+      ok: false,
+      error: { code: 'conflict' },
+    });
+    core = await restart(cli.connector);
+    expect(planner(core)?.problem?.text).toContain('The agent had reported this step failed.');
+    await later();
+    expect(messageOf(core, result.id)?.verdict?.outcome).toBe('failed');
+    mailbox().update(result.replyTo, { state: 'replied' });
+    await later();
+    expect(messageOf(core, result.id)).toBeUndefined();
+  });
+
   it('reports only the caller’s own tool step, in its own turn, once', async () => {
     await keepCanvas();
     const cli = driven();

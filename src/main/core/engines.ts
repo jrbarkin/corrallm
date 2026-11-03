@@ -1422,6 +1422,9 @@ function runMailbox(
 ): RunMailbox {
   const carried = new Map<string, () => void>();
   return {
+    judging: (id, use) => {
+      messages.judging(id, use);
+    },
     record: ({ to, owner, text: given, task, images, typed }) => {
       const carrying = typed === undefined ? carry?.(to, given, owner) : undefined;
       const text = carrying?.text ?? given;
