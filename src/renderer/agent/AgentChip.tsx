@@ -6,6 +6,7 @@ import { adapterAccent, catalog } from '../catalog';
 import { AdapterLogo } from '../AdapterLogo';
 import { agentLabel, connectedAgents, connectionInfo, connectionsOf } from '../graph/agents';
 import type { AgentConnection } from '../graph/agents';
+import { ChainControl } from './Fallback';
 import { SearchPicker } from '../search/SearchPicker';
 
 /** A choice in the agent chip: an adapter and how it runs, or continuing the conversation. */
@@ -23,10 +24,12 @@ interface Choice {
 export function AgentChip({
   adapter,
   connection,
+  agentId,
   initiallyOpen = false,
   onChange,
   onContinueInTerminal,
 }: {
+  agentId?: string;
   adapter: AdapterId | undefined;
   connection: AgentConnection | undefined;
   initiallyOpen?: boolean;
@@ -72,6 +75,7 @@ export function AgentChip({
         <AdapterLogo adapter={adapter} size={16} />
         {label}
       </button>
+      {agentId && <ChainControl agent={agentId} />}
       {open && (
         <SearchPicker
           label="Agent"

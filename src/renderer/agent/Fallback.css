@@ -1,0 +1,104 @@
+.fallback-control {
+  font-size: 11px;
+}
+.fallback-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  background: #0006;
+  display: grid;
+  place-items: center;
+}
+.fallback-dialog {
+  color: CanvasText;
+  background: Canvas;
+  border: 1px solid #8886;
+  border-radius: 12px;
+  padding: 20px;
+  width: min(560px, 90vw);
+  max-height: 85vh;
+  overflow: auto;
+  box-shadow: 0 12px 50px #0004;
+}
+.fallback-dialog header,
+.handoff-tile header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.fallback-dialog h2,
+.handoff-tile h3 {
+  margin: 0;
+}
+.fallback-dialog label {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 8px 0;
+}
+.fallback-dialog select,
+.fallback-dialog input:not([type='checkbox']) {
+  min-width: 0;
+  flex: 1;
+}
+.fallback-dialog fieldset {
+  margin: 12px 0;
+  border: 1px solid #8886;
+  border-radius: 6px;
+}
+.fallback-dialog footer {
+  display: flex;
+  gap: 8px;
+  margin-top: 16px;
+}
+.fallback-dialog pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.fallback-mark {
+  display: block;
+  font-size: 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+  color: var(--muted);
+}
+.graph-card .fallback-mark {
+  position: absolute;
+  top: -8px;
+  left: -8px;
+  padding: 0 4px;
+  border-radius: 6px;
+  border: 1px solid var(--float-line);
+  background: Canvas;
+  font-size: 9px;
+}
+.handoff-tile {
+  padding: 12px;
+  border-bottom: 1px solid #8884;
+  font-size: 11px;
+}
+.handoff-tile p {
+  margin: 6px 0;
+}
+
+.fallback-control {
+  max-width: 230px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fallback-control [data-current] {
+  font-weight: 700;
+  text-decoration: underline;
+}
+.fallback-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}

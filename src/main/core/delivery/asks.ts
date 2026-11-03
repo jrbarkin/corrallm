@@ -360,6 +360,17 @@ export class Asks {
    */
   async answer(need: string, by: PartyId, answer: AskAnswer): Promise<Message> {
     const ask = this.#openOrGone(need);
+    if (
+      'answers' in answer &&
+      ask.ask?.type === 'question' &&
+      new TextEncoder().encode(answerBody(ask.id, ask.ask.questions, answer)).length >
+        MAX_MESSAGE_BYTES
+    ) {
+      throw new DeliveryError(
+        'refused',
+        'The answers with their question headings exceed 16 KB of text: reply in fewer words.',
+      );
+    }
     const row = this.#settle(
       ask,
       'answers' in answer
@@ -430,9 +441,11 @@ export class Asks {
    * completed with something said, that answers it (capped, as replies are); otherwise it stays
    * open, its turn over, and its asker is told once.
    */
-  turnEnded(ask: Message, reply: string, result: TurnResult): void {
+  turnEnded(message: Message, reply: string, result: TurnResult): void {
     const { store } = this.#deps;
-    if (!isOpenAsk(ask)) return;
+    this.sweep();
+    const ask = store.get(message.id);
+    if (ask === undefined || !isOpenAsk(ask)) return;
     if (result.status === 'completed' && reply.trim() !== '') {
       this.#settle(ask, { type: 'text' }, ask.to, 'answer', {
         text: capBody(reply.trim(), 'reply'),
@@ -493,16 +506,21 @@ export class Asks {
 
   /**
    * Withdraws each open ask whose asker or recipient is an agent no longer on the canvas: its
-   * asker's with nothing sent; its recipient's, its asker sent a record of it. And (B21 C7) the
-   * asks of a task's attempt no longer running, with its continuations still to come: its task
-   * stopped (Stop, Kill, a native failure, Run again, a restart that holds it uncertain).
+   * asker's with nothing sent; its recipient's, its asker sent a record of it. Expires those whose
+   * wall-clock deadline passed, including when a caller or a turn completes before the deadline's
+   * timer gets to run. And (B21 C7) withdraws the asks of a task's attempt no longer running, with
+   * its continuations still to come: its task stopped (Stop, Kill, a native failure, Run again, a
+   * restart that holds it uncertain).
    */
   sweep(): void {
     const here = this.#here();
+    const now = this.#deps.now();
     let changed = false;
     for (const ask of this.#asks()) {
       if (gone(ask.from, here)) this.#settle(ask, withdrawn('asker'), 'corrallm', 'none');
       else if (gone(ask.to, here)) this.#settle(ask, withdrawn('recipient'), 'corrallm', 'record');
+      else if (ask.ask?.type === 'question' && ask.ask.deadline <= now)
+        this.#settle(ask, { type: 'expired' }, 'corrallm', 'record');
       else continue;
       changed = true;
     }

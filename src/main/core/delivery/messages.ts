@@ -77,7 +77,7 @@ export type Draft = Omit<Message, 'id' | 'canvas' | 'at'> & Provenance;
  */
 export interface Staged {
   reveal(): void;
-  undo(): void;
+  undo(error?: unknown): void;
 }
 
 /**
@@ -137,8 +137,8 @@ export class MessageTable {
   }
 
   /** Queues `write` for the database's next commit: resolves once that commit has returned. */
-  write<T>(write: () => T): Promise<T> {
-    return this.#store.write(write);
+  write<T>(write: () => T, failed?: (error: unknown) => void): Promise<T> {
+    return this.#store.write(write, failed);
   }
 
   /** Within a write: gives the canvas its row, if it has none, for its messages to refer to. */
@@ -219,10 +219,12 @@ export class MessageStore {
   /** What hears each message kept, changed or no longer kept (its id): the topics' source. */
   readonly #watchers = new Set<(id: string) => void>();
   /**
-   * The messages changed (or deleted) whose rows aren't on disk as they are yet, each with the
-   * number of its last change: a write marks a row on disk only if it has not changed since.
+   * Changes that still need SQL, each with its last change number. Issued SQL moves to #inFlight
+   * until the containing write flushes; a rollback restores it here before the next write runs.
    */
   readonly #changed = new Map<string, number>();
+  /** The latest issued write's flush covers the preceding SQL too: the store flushes a prefix. */
+  #inFlight: Promise<void> | undefined;
   #changes = 0;
   #scheduled = false;
   /** The write queued that hasn't run yet: it writes every change made before it runs. */
@@ -505,19 +507,25 @@ export class MessageStore {
     if (this.#unjournaled !== undefined) {
       return this.#lost ? Promise.reject(new Error(this.#unjournaled)) : Promise.resolve();
     }
-    if (this.#changed.size === 0) return Promise.resolve();
+    if (this.#changed.size === 0) return this.#inFlight ?? Promise.resolve();
     if (this.#queued) return this.#queued;
     let written: () => void = () => undefined;
+    let mine: Staged | undefined;
     const write = this.#table
-      .write(() => {
-        if (this.#queued === write) this.#queued = undefined;
-        const others = this.#alongside?.();
-        const mine = this.changes();
-        written = () => {
-          others?.();
-          mine();
-        };
-      })
+      .write(
+        () => {
+          if (this.#queued === write) this.#queued = undefined;
+          const others = this.#alongside?.();
+          mine = this.changes();
+          written = () => {
+            others?.();
+            mine?.reveal();
+          };
+        },
+        (error) => {
+          mine?.undo(error);
+        },
+      )
       .then(() => {
         written();
       });
@@ -529,14 +537,14 @@ export class MessageStore {
   }
 
   /**
-   * Within a write: writes every change whose row isn't on disk as it is now; returns what marks
-   * them on disk once the write's commit returned. Throws if the store journals nothing but
+   * Within a write: issues SQL for changes not already in a pending write. Reveal once flushed,
+   * or undo in the containing write's failure callback. Throws if the store journals nothing but
    * something changed.
    */
-  changes(): () => void {
+  changes(): Staged {
     if (this.#unjournaled !== undefined) {
       if (this.#lost) throw new Error(this.#unjournaled);
-      return () => undefined;
+      return { reveal: () => undefined, undo: () => undefined };
     }
     const written = new Map(this.#changed);
     if (written.size > 0) this.#table.ensure(this.canvas);
@@ -545,10 +553,30 @@ export class MessageStore {
       if (kept) this.#table.keep(kept);
       else this.#table.forget(id);
     }
-    return () => {
-      for (const [id, change] of written) {
-        if (this.#changed.get(id) === change) this.#changed.delete(id);
-      }
+    if (written.size === 0) return { reveal: () => undefined, undo: () => undefined };
+    for (const id of written.keys()) this.#changed.delete(id);
+    const flushed = Promise.withResolvers<undefined>();
+    this.#inFlight = flushed.promise;
+    // A containing write may be awaited directly, rather than through durable().
+    void flushed.promise.catch(() => undefined);
+    let settled = false;
+    return {
+      reveal: () => {
+        if (settled) return;
+        settled = true;
+        if (this.#inFlight === flushed.promise) this.#inFlight = undefined;
+        for (const [id, change] of written)
+          if ((this.#changed.get(id) ?? Infinity) <= change) this.#changed.delete(id);
+        flushed.resolve(undefined);
+      },
+      undo: (error) => {
+        if (settled) return;
+        settled = true;
+        if (this.#inFlight === flushed.promise) this.#inFlight = undefined;
+        for (const [id, change] of written)
+          this.#changed.set(id, Math.max(change, this.#changed.get(id) ?? 0));
+        flushed.reject(error ?? new Error('The message write failed.'));
+      },
     };
   }
 
