@@ -6,10 +6,27 @@ import { isUuid } from '../id';
 import { AppServerConnector } from './app-server/connector';
 import { CodexTerminalConnector } from './terminal/connector';
 import { codexOptions } from './options';
-import { FakeConnector, FAKE_CODEX_MODELS } from '../fake';
+import { FakeConnector } from '../fake';
+import { fakePlan } from '../fake-prompts';
+import type { ModelChoice } from '../../../shared/session';
 import logo from './logo.svg?raw';
 import { UsageReader } from './terminal/usage';
 import { codexConversations } from './conversations';
+
+/** The models a fake Codex session offers: with reasoning efforts to choose, as Codex's have. */
+const FAKE_CODEX_MODELS: ModelChoice[] = [
+  {
+    value: 'default',
+    label: 'Default',
+    description: 'The fake’s default model',
+    efforts: [
+      { value: 'low', label: 'Low', description: 'Fast responses' },
+      { value: 'high', label: 'High', description: 'Deeper reasoning' },
+    ],
+    defaultEffort: 'low',
+  },
+  { value: 'fast', label: 'Fast', description: 'Another model to pick' },
+];
 
 const HOUR = 60 * 60 * 1000;
 
@@ -191,8 +208,23 @@ export const codex: Adapter = {
   conversations: ({ executable }) => ({
     list: async (cwd, env) => codexConversations({ codex: await executable(env), cwd, env }),
   }),
-  fake: (pause, consent) =>
-    new FakeConnector({ pause, adapter: 'codex', ...(consent === undefined ? {} : { consent }) }),
+  fake: (options) =>
+    new FakeConnector({
+      ...options,
+      profile: {
+        mode: 'auto',
+        models: FAKE_CODEX_MODELS,
+        effort: true,
+        plan: fakePlan,
+        askingModes: ['manual', 'plan', 'read-only'],
+        tool: { tool: 'Bash', summary: 'echo hello' },
+        features: {
+          role: codex.descriptor.role,
+          resume: codex.descriptor.resume,
+          list: codex.descriptor.list,
+        },
+      },
+    }),
   fakeOptions: {
     models: FAKE_CODEX_MODELS,
     // The fake's own default, Codex's Default, asks.

@@ -40,19 +40,19 @@ Each connection declares `api: 'http' | 'channel' | null` in `ConnectionDescript
 
 Shipped templates declare `Job`s directly in their own format; `templates.list` reports only each role's id, name and received jobs, with no adapter. The gallery compares those jobs with each adapter's declared actions, without inferring capability from a CLI name or installation. At the core's template boundary, each job becomes the recipient's first action declaring that job; an unsupported job is invalid before a canvas change or workspace allocation. Runtime action translation for an explicit adapter change remains separate.
 
-## Platform-neutral remainder after B12 X6
+## Platform-neutral remainder after B16 X1
 
 `src/main/platform-neutral.test.ts` pins the remaining names exactly. Every remaining row below is assigned to a later part; no count may grow. B13 X11 removed the old prompt path before this closeout. Comment-only examples were made neutral, and the conversation-cleared divider now names the agent rather than a tool. Removing those words does not claim that a native protocol or capability has been generalized.
 
-| File                                         | Count | Removes it | Why it stays until that part                                                                                                                                                                   |
-| -------------------------------------------- | ----: | ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `src/main/sessions/fake.ts`                  |    12 | B16        | Its native model, effort and mode fixtures are still used by connection regressions. Capability-driven fake connections must replace those branches while retaining that coverage.             |
-| `src/renderer/agent/AgentView.tsx`           |    21 | B16        | Native structured-connection checks still select terminal-only command interception, continuation and its notices. Descriptor wiring must retain command precedence and the same conversation. |
-| `src/renderer/agent/commands.ts`             |    15 | B16        | The native terminal command table and shell-prefix interpretation still drive continuation. They must move into descriptors before interactive commands can safely leave this table.           |
-| `src/renderer/terminal/screen.ts`            |     4 | B16        | The fixed Shift+Enter bytes still encode one native terminal binding. Per-connection keys need their recorded evidence; B12 cannot guess another CLI's input sequence.                         |
-| `src/main/core/engine/transcript/receive.ts` |     5 | B16        | The editor-only disconnected backend still returns fixed installation keys. Its catalog/capability input must be made explicit without changing standalone-editor behavior by assumption.      |
-| `src/shared/model/session.ts`                |     4 | B16        | Rewind points still filter one native conversation owner. Other connections need proven message identifiers and effective rewind support before sharing this path.                             |
-| `src/shared/session.ts`                      |     5 | B15        | Native permission/mode unions still validate events and changes. Their replacement requires the mode authority and confirmation contract, not renaming the aliases.                            |
+| File                               | Count | Removes it | Why it stays until that part                                                                                                                                                                   |
+| ---------------------------------- | ----: | ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `src/renderer/agent/AgentView.tsx` |    21 | B16        | Native structured-connection checks still select terminal-only command interception, continuation and its notices. Descriptor wiring must retain command precedence and the same conversation. |
+| `src/renderer/agent/commands.ts`   |    15 | B16        | The native terminal command table and shell-prefix interpretation still drive continuation. They must move into descriptors before interactive commands can safely leave this table.           |
+| `src/renderer/terminal/screen.ts`  |     4 | B16        | The fixed Shift+Enter bytes still encode one native terminal binding. Per-connection keys need their recorded evidence; B12 cannot guess another CLI's input sequence.                         |
+| `src/shared/model/session.ts`      |     4 | B16        | Rewind points still filter one native conversation owner. Other connections need proven message identifiers and effective rewind support before sharing this path.                             |
+| `src/shared/session.ts`            |     5 | B15        | Native permission/mode unions still validate events and changes. Their replacement requires the mode authority and confirmation contract, not renaming the aliases.                            |
+
+B16 X1 removed the generic fake’s native branches and the disconnected backend’s unused installation method, leaving **5 files / 49 matches**. Native fake profiles now come from each adapter through the registry; installation discovery remains `catalog.installed`.
 
 There are no remaining B13 or B17 name exceptions in this table. B17's arbitrary usage-window work remains outside B12; the catalog-driven backend display is already in place. The remaining B15/B16 sites are deferred work, not a claim that every connection supports every control.
 

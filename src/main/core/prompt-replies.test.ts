@@ -10,7 +10,7 @@ import type { NeedsItem } from '../../shared/model/needs';
 import type { PromptAnswer } from '../../shared/model/prompts';
 import type { SessionMode } from '../../shared/session';
 import type { Connector, LiveSession, SessionHost } from '../sessions/connector';
-import { FakeConnector } from '../sessions/fake';
+import { fakeConnector } from '../sessions/test-fake';
 import { callTool } from '../api/mcp';
 import { toolName } from '../../shared/api/registry';
 import { WindowPorts } from './gui';
@@ -109,7 +109,7 @@ interface Raising {
  * arrives, and answers them on its own `prompts`.
  */
 function raising(prompts: object[]) {
-  const fake = new FakeConnector({ mode: 'acceptEdits' });
+  const fake = fakeConnector({ mode: 'acceptEdits' });
   const sessions: Raising[] = [];
   const connector: Connector<SessionMode> = {
     start: async (spec, host) => {
@@ -528,7 +528,7 @@ describe('a prompt the core owns', () => {
   });
 
   it('shows a reached token an MCP server’s request only in the core’s words, while you see its form', async () => {
-    const fake = new FakeConnector({ mode: 'acceptEdits' });
+    const fake = fakeConnector({ mode: 'acceptEdits' });
     const url = 'https://tracker.example.test/sign-in?state=link-private';
     const connector: Connector<SessionMode> = {
       start: async (spec, host) => {

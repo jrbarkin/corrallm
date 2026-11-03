@@ -4,10 +4,77 @@ import path from 'node:path';
 
 import { describe, expect, it, vi } from 'vitest';
 import type { HostEvent } from './connector';
-import { FakeConnector, fakeScript } from './fake';
+import { fakeConnector } from './test-fake';
+import { fakeScript } from './fake';
 import { PromptEnded, PromptEvent } from '../../shared/model/prompts';
 import type { PromptAnswer } from '../../shared/model/prompts';
 import type { FakeScript } from './fake';
+import { ADAPTERS } from './adapters';
+
+it.each([
+  { adapter: 'claude-code', mode: 'manual', effort: undefined },
+  { adapter: 'codex', mode: 'auto', effort: 'high' },
+])(
+  'keeps $adapter’s registered fake defaults, model choices and resumed identity',
+  async ({ adapter, mode, effort }) => {
+    const fixture = ADAPTERS.find((one) => one.descriptor.id === adapter);
+    if (!fixture) throw new Error(`No fake fixture for ${adapter}`);
+    const emit = vi.fn();
+    const remember = vi.fn();
+    const session = await fakeConnector({ adapter }).start(
+      {
+        agentId: 'a',
+        cwd: '/unused',
+        env: {},
+        model: null,
+        mode: null,
+        resume: 'kept',
+        effort: 'high',
+      },
+      { emit, remember },
+    );
+    try {
+      const report = emit.mock.calls
+        .map(([event]) => event as HostEvent)
+        .find((event) => event.type === 'started');
+      expect(report).toEqual({
+        type: 'started',
+        model: 'default',
+        mode,
+        models: fixture.fakeOptions?.models,
+        role: fixture.descriptor.role,
+        resume: fixture.descriptor.resume,
+        list: fixture.descriptor.list,
+        ...(effort === undefined ? {} : { effort }),
+      });
+      expect(remember).toHaveBeenCalledExactlyOnceWith('kept');
+    } finally {
+      await session.close();
+    }
+  },
+);
+
+it.each(['claude-code', 'codex'])(
+  'keeps %s’s explicit settings and an unreported native default mode',
+  async (adapter) => {
+    const emit = vi.fn();
+    const session = await fakeConnector({ adapter, mode: null, asks: false }).start(
+      { agentId: 'a', cwd: '/unused', env: {}, model: 'fast', mode: null, resume: null },
+      { emit, remember: vi.fn() },
+    );
+    try {
+      expect(emit).toHaveBeenCalledWith(
+        expect.objectContaining({ type: 'started', model: 'fast', mode: null, asks: false }),
+      );
+      await session.setMode('plan');
+      await session.setModel('chosen');
+      expect(emit).toHaveBeenCalledWith({ type: 'mode', mode: 'plan' });
+      expect(emit).toHaveBeenCalledWith({ type: 'model', model: 'chosen' });
+    } finally {
+      await session.close();
+    }
+  },
+);
 
 it.each([
   { text: 'Hello', kind: 'approval', answer: { kind: 'choice', value: 'allow' } },
@@ -21,7 +88,7 @@ it.each([
   'the app fake raises $kind through the owner and accepts its answer once',
   async ({ text, kind, answer }) => {
     const events: HostEvent[] = [];
-    const session = await new FakeConnector({}).start(
+    const session = await fakeConnector({}).start(
       { agentId: 'a', cwd: '/unused', env: {}, model: null, mode: 'manual', resume: null },
       { emit: (event) => events.push(event), remember: vi.fn() },
     );
@@ -45,7 +112,7 @@ it.each([
 
 it('the app fake withdraws its owner occurrence when a waiting turn is interrupted', async () => {
   const events: HostEvent[] = [];
-  const session = await new FakeConnector({}).start(
+  const session = await fakeConnector({}).start(
     { agentId: 'a', cwd: '/unused', env: {}, model: null, mode: 'manual', resume: null },
     { emit: (event) => events.push(event), remember: vi.fn() },
   );
@@ -94,7 +161,7 @@ describe('a fake connection that asks a consent (B22a C4, for the app’s e2e)',
 
   async function started(consent?: ReturnType<typeof owner>['consent']) {
     const events: HostEvent[] = [];
-    const session = await new FakeConnector(
+    const session = await fakeConnector(
       consent === undefined ? {} : { consent: { key: 'credits', handle: consent } },
     ).start(
       // A mode that never asks to run its command: only the consent asks.
@@ -187,7 +254,7 @@ describe('a fake connection that asks a consent (B22a C4, for the app’s e2e)',
 
 it('reports context before a fake turn ends', async () => {
   const events: HostEvent[] = [];
-  const session = await new FakeConnector().start(
+  const session = await fakeConnector().start(
     {
       agentId: 'a',
       cwd: '/unused',
@@ -245,7 +312,7 @@ describe('a scripted fake (CORRALLM_FAKE_SCRIPT, for the README media only)', ()
 
   async function turn(text: string, given = script) {
     const events: HostEvent[] = [];
-    const session = await new FakeConnector({ script: given }).start(
+    const session = await fakeConnector({ script: given }).start(
       { agentId: 'a', cwd: '/unused', env: {}, model: null, mode: 'manual', resume: null },
       {
         emit: (event) => {

@@ -8,7 +8,7 @@ import { SURFACE } from '../../../shared/api/surface';
 import type { CanvasDocument } from '../../../shared/model/canvas';
 import { toFile } from '../../../shared/model/file';
 import { findItem } from '../../../shared/model/queue';
-import { FakeConnector } from '../../sessions/fake';
+import { fakeConnector } from '../../sessions/test-fake';
 import { drainsOf } from '../call';
 import { createCore } from '../core';
 import type { Core } from '../core';
@@ -53,7 +53,7 @@ beforeEach(async () => {
       check: true,
       distribution: 'local',
       sessions: {
-        connectors: { 'codex.app-server': new FakeConnector({ adapter: 'codex' }) },
+        connectors: { 'codex.app-server': fakeConnector({ adapter: 'codex' }) },
         environment: () => Promise.resolve({}),
       },
     },

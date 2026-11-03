@@ -4,7 +4,8 @@ import { pathToFileURL } from 'node:url';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { createCore } from './core';
 import type { Core, CoreConfig } from './core';
-import { FakeConnector } from '../sessions/fake';
+import { fakeConnector } from '../sessions/test-fake';
+import type { FakeConnector } from '../sessions/fake';
 import * as connectors from '../sessions/connectors';
 import type { Conversations } from '../sessions/adapter';
 import { keepCanvases, readOnDisk } from './store/test-store';
@@ -49,7 +50,7 @@ beforeEach(async () => {
     }),
   );
   await keepCanvases(profile, { [CANVAS]: { file, project } });
-  fake = new FakeConnector({ adapter: 'codex' });
+  fake = fakeConnector({ adapter: 'codex' });
   config = {
     profile,
     app: { name: 'corrallm', version: '1' },

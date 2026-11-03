@@ -6,7 +6,7 @@ import type { Core } from './core';
 import { createCore } from './core';
 import { CALLERS, CANVAS, NO_DESKTOP } from './test-registry';
 import { keepCanvases } from './store/test-store';
-import { FakeConnector } from '../sessions/fake';
+import { fakeConnector } from '../sessions/test-fake';
 import type { Connector } from '../sessions/connector';
 import type { SessionMode } from '../../shared/session';
 import { gitEnvironment } from './workspaces/test-git';
@@ -69,7 +69,7 @@ async function setup(holdRetry = false) {
     return Promise.reject(new Error('This login cannot run here.'));
   });
   const sdk: Connector<SessionMode> = { start };
-  const terminal = new FakeConnector({ mode: 'acceptEdits', step: () => Promise.resolve() });
+  const terminal = fakeConnector({ mode: 'acceptEdits', step: () => Promise.resolve() });
   const env = gitEnvironment(path.join(root, 'home'));
   core = await createCore(
     {

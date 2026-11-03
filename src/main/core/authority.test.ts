@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { TOKEN_REPLACED } from '../../shared/api/errors';
 import type { CanvasId } from '../../shared/canvas';
-import { FakeConnector } from '../sessions/fake';
+import { fakeConnector } from '../sessions/test-fake';
 import type { OutsideCaller } from './caller';
 import { createCore } from './core';
 import type { Core } from './core';
@@ -87,7 +87,7 @@ async function start(): Promise<{ hold: () => () => void }> {
         },
       },
       sessions: {
-        connectors: { 'codex.app-server': new FakeConnector({ adapter: 'codex' }) },
+        connectors: { 'codex.app-server': fakeConnector({ adapter: 'codex' }) },
         environment: () => Promise.resolve({}),
       },
     },

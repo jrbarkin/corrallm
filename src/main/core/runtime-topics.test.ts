@@ -21,7 +21,7 @@ import { runView } from '../../shared/model/views';
 import type { EntryView, MessageView, RunView, SessionSummary } from '../../shared/model/views';
 import type { SessionEvent, SessionMode } from '../../shared/session';
 import type { Connector, SessionHost, SessionSpec } from '../sessions/connector';
-import { FakeConnector } from '../sessions/fake';
+import { fakeConnector } from '../sessions/test-fake';
 import type { OpContext, ReceiptTopic } from './call';
 import type { AgentCaller, Caller, OutsideCaller } from './caller';
 import { Documents } from './canvas/documents';
@@ -124,7 +124,7 @@ async function keepWorld(
 
 async function start(
   folder: string,
-  connector: Connector<SessionMode> = new FakeConnector({ adapter: 'codex' }),
+  connector: Connector<SessionMode> = fakeConnector({ adapter: 'codex' }),
   leads = (canvas: string, agent: string) => canvas === CANVAS && agent === 'lead',
 ): Promise<Core> {
   const core = await createCore(
@@ -727,7 +727,7 @@ describe('runtime topics: what isn’t reached is refused', () => {
 
 /** A connector whose sessions start with `history` (each a turn of a message, its reply and end). */
 function withHistory(history: (agent: string) => SessionEvent[]): Connector<SessionMode> {
-  const fake = new FakeConnector({ adapter: 'codex' });
+  const fake = fakeConnector({ adapter: 'codex' });
   return {
     start: async (spec: SessionSpec<SessionMode>, host: SessionHost) => {
       const live = await fake.start(spec, host);
@@ -1054,7 +1054,7 @@ describe('runtime topics: long histories', () => {
   it('streams to many partial copies without scanning history or sending summaries again', async () => {
     folder = await keepWorld([{ id: 'worker' }], []);
     let host: SessionHost | undefined;
-    const fake = new FakeConnector({ adapter: 'codex' });
+    const fake = fakeConnector({ adapter: 'codex' });
     const core = await start(folder, {
       start: async (spec, sessionHost) => {
         host = sessionHost;
@@ -1106,7 +1106,7 @@ describe('runtime topics: long histories', () => {
   it('takes a turn after a long history from where its entries differ, subscribed or not', async () => {
     folder = await keepWorld([{ id: 'worker' }], []);
     let host: SessionHost | undefined;
-    const fake = new FakeConnector({ adapter: 'codex' });
+    const fake = fakeConnector({ adapter: 'codex' });
     const core = await start(folder, {
       start: async (spec, sessionHost) => {
         host = sessionHost;

@@ -5,7 +5,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { CanvasId } from '../../shared/canvas';
-import { FakeConnector } from '../sessions/fake';
+import { fakeConnector } from '../sessions/test-fake';
 import { createCore } from './core';
 import type { Core } from './core';
 import { Settings } from '../settings';
@@ -95,7 +95,7 @@ async function start(): Promise<Core> {
       directoryResolver: legacyDirectories,
       sessions: {
         connectors: {
-          'codex.app-server': new FakeConnector({
+          'codex.app-server': fakeConnector({
             adapter: 'codex',
             step: () =>
               held

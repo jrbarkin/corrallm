@@ -7,6 +7,7 @@ import type {
 import type { PastSession, SessionMode, SettingsOptions } from '../../shared/session';
 import type { UsageWindows } from '../../shared/usage';
 import type { Connector } from './connector';
+import type { FakeConnector, FakeOptions } from './fake';
 
 /*
  * An adapter, as main's registry keeps it (adapters.ts): one per agent, from that agent's own
@@ -27,7 +28,7 @@ export interface Adapter {
    * The fake used in unpackaged test builds, shared by its connections; a connection that
    * declares a consent gets its own, given that consent (B22a C4).
    */
-  readonly fake?: (pause: number, consent?: FakeConsent) => Connector<SessionMode>;
+  readonly fake?: (options?: FakeOptions) => FakeConnector;
   readonly fakeOptions?: SettingsOptions;
   /** Conversations the CLI keeps, when it can list and fork them. */
   readonly conversations?: (context: Pick<ConnectorContext, 'executable'>) => Conversations;

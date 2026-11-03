@@ -12,7 +12,7 @@ import { workspaceOwners } from '../../../shared/model/workspaces';
 import { fromFile, toFile } from '../../../shared/model/file';
 import { arrange } from '../../../shared/model/layout';
 import { CATALOG } from '../../sessions/adapters';
-import { FakeConnector } from '../../sessions/fake';
+import { fakeConnector } from '../../sessions/test-fake';
 import { createCore } from '../core';
 import type { Core } from '../core';
 import { CALLERS, CANVAS, NO_DESKTOP, isLead } from '../test-registry';
@@ -56,7 +56,7 @@ beforeEach(async () => {
       sessions: {
         // Its agent callers are made up: no session authority issued them.
         callers: () => true,
-        connectors: { 'codex.app-server': new FakeConnector({ adapter: 'codex' }) },
+        connectors: { 'codex.app-server': fakeConnector({ adapter: 'codex' }) },
         environment: () => Promise.resolve({}),
       },
     },

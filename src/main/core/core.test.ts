@@ -13,7 +13,7 @@ import { EXAMPLES } from '../../shared/examples';
 import type { Job } from '../../shared/adapter';
 import { listTools } from '../api/mcp';
 import { ADAPTERS, CATALOG } from '../sessions/adapters';
-import { FakeConnector } from '../sessions/fake';
+import { fakeConnector } from '../sessions/test-fake';
 import { Settings } from '../settings';
 import { createCore } from './core';
 import type { Core, CoreConfig } from './core';
@@ -434,7 +434,7 @@ describe('the core’s database', () => {
     await (await openTestStore(profile)).close();
     writeOnDisk(profile, 'UPDATE meta SET min_reader = 999');
     const logged = vi.spyOn(console, 'error').mockImplementation(() => undefined);
-    const codex = new FakeConnector({ adapter: 'codex' });
+    const codex = fakeConnector({ adapter: 'codex' });
     const started = await start({
       connectors: { 'codex.app-server': codex },
       environment: () => Promise.resolve({}),

@@ -20,7 +20,7 @@ export function createConnectors({
   return Object.fromEntries(
     ADAPTERS.flatMap((adapter) => {
       if (fake) {
-        const connector = adapter.fake?.(40);
+        const connector = adapter.fake?.({ pause: 40 });
         if (connector === undefined) return [];
         // A connection declaring a consent asks it, through the core's owner (B22a C4).
         return adapter.descriptor.connections.map(({ id }) => {
@@ -29,7 +29,10 @@ export function createConnectors({
           );
           if (declared === undefined) return [id, connector];
           const handle = consent(adapter.descriptor.id, declared.key);
-          return [id, adapter.fake?.(40, { key: declared.key, handle }) ?? connector];
+          return [
+            id,
+            adapter.fake?.({ pause: 40, consent: { key: declared.key, handle } }) ?? connector,
+          ];
         });
       }
       return Object.entries(

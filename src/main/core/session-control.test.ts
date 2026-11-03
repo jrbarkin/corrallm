@@ -12,6 +12,7 @@ import type { FilesRewind, McpChange, McpServer, SessionMode } from '../../share
 import { MAX_MESSAGE_LENGTH } from '../../shared/session';
 import type { KeptConversation } from '../sessions/adapter';
 import type { Connector, LiveSession, SessionHost } from '../sessions/connector';
+import { fakeConnector } from '../sessions/test-fake';
 import { FakeConnector } from '../sessions/fake';
 import { SessionManager } from '../sessions/manager';
 import type { OutsideCaller } from './caller';
@@ -164,8 +165,8 @@ async function start(
   // A turn holds where it is while the test holds it: a turn going on.
   const step = () => holding?.promise ?? Promise.resolve();
   // In a mode that doesn't ask: its turns run to their end.
-  const sdk = new FakeConnector({ step, mode: 'acceptEdits' });
-  const terminal = new FakeConnector({ step, mode: 'acceptEdits' });
+  const sdk = fakeConnector({ step, mode: 'acceptEdits' });
+  const terminal = fakeConnector({ step, mode: 'acceptEdits' });
   const core = await createCore(
     {
       profile,

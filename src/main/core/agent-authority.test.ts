@@ -10,7 +10,8 @@ import type { CanvasId } from '../../shared/canvas';
 import type { TopicUpdate } from '../../shared/api/topics';
 import type { SessionMode } from '../../shared/session';
 import type { Connector, SessionApi, SessionHost } from '../sessions/connector';
-import { FakeConnector } from '../sessions/fake';
+import { fakeConnector } from '../sessions/test-fake';
+import type { FakeConnector } from '../sessions/fake';
 import { connectChannel, connectHttp } from '../sessions/fake-mcp-client.mjs';
 import type { AgentCaller, OutsideCaller } from './caller';
 import { createCore } from './core';
@@ -39,7 +40,7 @@ let hosts: SessionHost[];
 
 beforeEach(async () => {
   profile = await mkdtemp(path.join(tmpdir(), 'corrallm-agent-authority-'));
-  fake = new FakeConnector({ adapter: 'codex' });
+  fake = fakeConnector({ adapter: 'codex' });
   hosts = [];
 });
 

@@ -11,7 +11,7 @@ import type { Run } from './engine/run/runner';
 import type { QueueItem } from '../../shared/model/queue';
 import type { SessionMode, UserMessage } from '../../shared/session';
 import type { Connector, SessionHost } from '../sessions/connector';
-import { FakeConnector } from '../sessions/fake';
+import { fakeConnector } from '../sessions/test-fake';
 import type { Caller, OutsideCaller } from './caller';
 import { createCore } from './core';
 import type { Core } from './core';
@@ -106,7 +106,7 @@ async function start(codex: Connector<SessionMode>, at = profile): Promise<Core>
  * fails it.
  */
 function controlled({ starting = false }: { starting?: boolean } = {}) {
-  const codex = new FakeConnector({ adapter: 'codex' });
+  const codex = fakeConnector({ adapter: 'codex' });
   const hung: ((error: Error) => void)[] = [];
   const release = () => {
     for (const fail of hung.splice(0)) fail(new Error('The test let go of it.'));
