@@ -3,33 +3,33 @@ import { readFileSync } from 'node:fs';
 
 import { z } from 'zod';
 
-import type { AdapterId } from '../../shared/adapter';
+import type { AdapterDescriptor } from '../../shared/adapter';
 import type { ModelChoice, SessionMode, UserMessage } from '../../shared/session';
 import type { Connector, LiveSession, PromptAnswers, SessionHost, SessionSpec } from './connector';
 import { checkPromptAnswer } from '../../shared/model/prompts';
-import { fakeApproval, fakeQuestions, fakePlan } from './fake-prompts';
+import { fakeApproval, fakeQuestions } from './fake-prompts';
 import type { AdapterPrompt, PromptAnswer } from '../../shared/model/prompts';
 
-/** The models a fake session offers. */
-export const FAKE_MODELS: ModelChoice[] = [
-  { value: 'default', label: 'Default', description: 'The fake’s default model' },
-  { value: 'fast', label: 'Fast', description: 'Another model to pick' },
-];
+/** Explicit fixture data; the connector never selects behaviour from an adapter id. */
+export interface FakeProfile {
+  mode: SessionMode | null;
+  models: readonly ModelChoice[];
+  effort: boolean;
+  askingModes: readonly SessionMode[];
+  /** Prepared started metadata for C1; this fake does not enforce production capabilities. */
+  features?: Pick<AdapterDescriptor, 'role' | 'resume' | 'list'>;
+  tool?: { tool: string; summary: string };
+  plan: () => AdapterPrompt;
+}
 
-/** The models a fake Codex session offers: with reasoning efforts to choose, as Codex's have. */
-export const FAKE_CODEX_MODELS: ModelChoice[] = [
-  {
-    value: 'default',
-    label: 'Default',
-    description: 'The fake’s default model',
-    efforts: [
-      { value: 'low', label: 'Low', description: 'Fast responses' },
-      { value: 'high', label: 'High', description: 'Deeper reasoning' },
-    ],
-    defaultEffort: 'low',
-  },
-  { value: 'fast', label: 'Fast', description: 'Another model to pick' },
-];
+/** Scheduling and native-default overrides for one test connector. */
+export interface FakeOptions {
+  pause?: number;
+  mode?: SessionMode | null;
+  asks?: boolean;
+  step?: () => Promise<void>;
+  script?: FakeScript | undefined;
+}
 
 const SCRIPT = z.strictObject({
   pause: z.number().int().min(0).max(60_000),
@@ -77,11 +77,10 @@ export function fakeScript(env: NodeJS.ProcessEnv = process.env): FakeScript | u
 }
 
 /**
- * A connector that runs no CLI, for tests, standing in for any connection of `adapter`. Each turn
- * echoes the message, thinks, and runs a command, asking first in the modes
- * that ask (Manual and Plan; Codex's Read only); a message starting "/question" asks the user a
+ * A connector that runs no CLI, for tests, using its supplied fixture profile. Each turn
+ * echoes the message, thinks, and runs a command, asking in the supplied modes; a message starting "/question" asks the user a
  * question instead, and one starting "/plan" asks to approve a plan. It honours interrupts, modes,
- * models and (for Codex, whose models offer them) reasoning efforts, and remembers a made-up
+ * models and reasoning efforts where supplied, and remembers a made-up
  * session id.
  *
  * The manager's tests use it, and so do the e2e tests (CORRALLM_FAKE_SESSIONS=1, honoured only by
@@ -96,11 +95,11 @@ export class FakeConnector implements Connector<SessionMode> {
   readonly #step: () => Promise<void>;
   readonly #mode: SessionMode | null;
   readonly #asks: boolean | undefined;
-  readonly #adapter: AdapterId;
+  readonly #profile: FakeProfile;
   readonly #script: FakeScript | undefined;
 
   /**
-   * `pause`: how long (ms) between the events of a turn; `adapter`: the one it stands in for;
+   * `profile`: the explicit models, modes and feature reports; `pause`: ms between events;
    * `mode`: its native setting, which applies when no mode is chosen (null: one it never reports,
    * as a CLI that never says its mode); `asks`: whether that setting asks, as it says where its
    * mode doesn't (a policy that is no mode). `step` replaces the delay with a test-controlled
@@ -109,23 +108,17 @@ export class FakeConnector implements Connector<SessionMode> {
    */
   constructor({
     pause = 0,
-    adapter = 'claude-code',
+    profile,
     mode,
     asks,
     step = () => new Promise<void>((resolve) => setTimeout(resolve, pause)),
     script = fakeScript(),
-  }: {
-    pause?: number;
-    adapter?: AdapterId;
-    mode?: SessionMode | null;
-    asks?: boolean;
-    step?: () => Promise<void>;
-    script?: FakeScript | undefined;
-  } = {}) {
+  }: FakeOptions & { profile: FakeProfile }) {
     this.#step = step;
     this.#script = script;
-    this.#adapter = adapter;
-    this.#mode = mode === undefined ? (adapter === 'codex' ? 'auto' : 'manual') : mode;
+    const { plan, ...data } = profile;
+    this.#profile = { ...structuredClone(data), plan };
+    this.#mode = mode === undefined ? profile.mode : mode;
     this.#asks = asks;
   }
 
@@ -139,16 +132,18 @@ export class FakeConnector implements Connector<SessionMode> {
     }
     // The fake's native setting applies when no mode was chosen.
     const mode = spec.mode ?? this.#mode;
-    const codex = this.#adapter === 'codex';
-    host.emit({
-      type: 'started',
-      model: spec.model ?? 'default',
+    const profile = this.#profile;
+    const started = {
+      type: 'started' as const,
+      ...profile.features,
+      model: spec.model ?? profile.models[0]?.value ?? null,
       mode,
-      models: codex ? FAKE_CODEX_MODELS : FAKE_MODELS,
-      ...(codex ? { effort: spec.effort ?? null } : {}),
+      models: structuredClone([...profile.models]),
+      ...(profile.effort ? { effort: spec.effort ?? null } : {}),
       ...(spec.mode === null && this.#asks !== undefined ? { asks: this.#asks } : {}),
-    });
-    const session = new FakeSession(mode, host, this.#step, this.#script);
+    };
+    host.emit(started);
+    const session = new FakeSession(mode, host, this.#step, profile, this.#script);
     this.sessions.push(session);
     return Promise.resolve(session);
   }
@@ -166,9 +161,6 @@ interface Turn {
   wake?: (() => void) | undefined;
 }
 
-/** The modes in which a fake session asks before running its command. */
-const ASKING: readonly SessionMode[] = ['manual', 'plan', 'read-only'];
-
 class FakeSession implements LiveSession<SessionMode> {
   /** Every message it was sent, in order. */
   readonly sent: UserMessage[] = [];
@@ -176,6 +168,7 @@ class FakeSession implements LiveSession<SessionMode> {
   readonly #host: SessionHost;
   readonly #step: () => Promise<void>;
   readonly #script: FakeScript | undefined;
+  readonly #profile: FakeProfile;
   #turn: Turn | undefined;
   #turns = 0;
   readonly prompts: PromptAnswers;
@@ -185,11 +178,13 @@ class FakeSession implements LiveSession<SessionMode> {
     mode: SessionMode | null,
     host: SessionHost,
     step: () => Promise<void>,
+    profile: FakeProfile,
     script?: FakeScript,
   ) {
     this.#mode = mode;
     this.#host = host;
     this.#step = step;
+    this.#profile = profile;
     this.#script = script;
     this.prompts = {
       answer: (key, answer) => {
@@ -297,12 +292,20 @@ class FakeSession implements LiveSession<SessionMode> {
       }
 
       if (text.startsWith('/plan')) {
-        const answer = await ask(fakePlan());
+        const prompt = this.#profile.plan();
+        const answer = await ask(prompt);
         if (answer?.kind !== 'choice') return false;
         emit({ type: 'status', status: 'working' });
-        if (answer.value !== 'keep-planning') {
-          this.#mode = answer.value === 'accept-edits' ? 'acceptEdits' : 'manual';
-          emit({ type: 'mode', mode: answer.value === 'accept-edits' ? 'acceptEdits' : 'manual' });
+        const choice =
+          'choices' in prompt
+            ? prompt.choices.find((one) => one.value === answer.value)
+            : undefined;
+        if (choice?.hint === 'allow_once' || choice?.hint === 'allow_always') {
+          const mode = choice.effects?.mode as SessionMode | undefined;
+          if (mode !== undefined) {
+            this.#mode = mode;
+            emit({ type: 'mode', mode });
+          }
           emit({ type: 'text', id: `${id}/approved`, text: 'Carrying out the plan.' });
         } else {
           emit({ type: 'text', id: `${id}/revise`, text: `Revising: ${answer.feedback ?? ''}` });
@@ -311,10 +314,10 @@ class FakeSession implements LiveSession<SessionMode> {
       }
 
       const tool = `${id}/tool`;
-      const command = { tool: 'Bash', summary: 'echo hello' };
+      const command = this.#profile.tool ?? { tool: 'command', summary: 'echo hello' };
       turn.tool = tool;
       emit({ type: 'tool', id: tool, ...command, status: 'running' });
-      if (this.#mode !== null && ASKING.includes(this.#mode)) {
+      if (this.#mode !== null && this.#profile.askingModes.includes(this.#mode)) {
         const answer = await ask(fakeApproval());
         if (answer === undefined) return false;
         emit({ type: 'status', status: 'working' });
@@ -352,8 +355,7 @@ class FakeSession implements LiveSession<SessionMode> {
         emit({
           type: 'tool',
           id: turn.tool,
-          tool: 'Bash',
-          summary: 'echo hello',
+          ...(this.#profile.tool ?? { tool: 'command', summary: 'echo hello' }),
           status: 'interrupted',
         });
       }

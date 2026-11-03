@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { CanvasId } from '../../shared/canvas';
 import type { NeedsItem } from '../../shared/model/needs';
-import { FakeConnector } from '../sessions/fake';
+import { fakeConnector } from '../sessions/test-fake';
 import { createCore } from './core';
 import type { Core } from './core';
 import type { NotificationRequest } from './presence';
@@ -90,7 +90,7 @@ async function start(notifications?: false, presenceEveryMs?: number): Promise<C
       notifier: { coalesceMs: 50 },
       ...(presenceEveryMs === undefined ? {} : { presenceEveryMs }),
       sessions: {
-        connectors: { 'codex.app-server': new FakeConnector({ adapter: 'codex' }) },
+        connectors: { 'codex.app-server': fakeConnector({ adapter: 'codex' }) },
         environment: () => Promise.resolve({}),
       },
     },

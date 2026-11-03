@@ -7,7 +7,7 @@ import type { CanvasDocument } from '../../shared/model/canvas';
 import { toFile } from '../../shared/model/file';
 import { Documents } from './canvas/documents';
 import { commitDocument } from './canvas/test-documents';
-import { FakeConnector } from '../sessions/fake';
+import { fakeConnector } from '../sessions/test-fake';
 import { createCore } from './core';
 import { SYSTEM_DEPS } from './store/store';
 import { keepCanvases, openedLast } from './store/test-store';
@@ -82,7 +82,7 @@ async function world() {
       sessions: {
         // Its agent callers are made up: no session authority issued them.
         callers: () => true,
-        connectors: { 'codex.app-server': new FakeConnector({ adapter: 'codex' }) },
+        connectors: { 'codex.app-server': fakeConnector({ adapter: 'codex' }) },
         environment: () => Promise.resolve({}),
       },
     },

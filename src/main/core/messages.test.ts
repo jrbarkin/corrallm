@@ -22,7 +22,8 @@ import { callTool } from '../api/mcp';
 import type { Connector, SessionHost } from '../sessions/connector';
 import { CanvasMemory } from '../memory';
 import { CATALOG } from '../sessions/adapters';
-import { FakeConnector } from '../sessions/fake';
+import { fakeConnector } from '../sessions/test-fake';
+import type { FakeConnector } from '../sessions/fake';
 import { TerminalConnector } from '../sessions/claude-code/connector';
 import { FakeClaude } from '../sessions/claude-code/fake-claude';
 import { CodexTerminalConnector } from '../sessions/codex/terminal/connector';
@@ -131,8 +132,8 @@ async function makeFixture(): Promise<void> {
   profile = await mkdtemp(path.join(tmpdir(), 'corrallm-delivery-'));
   project = path.join(profile, 'project');
   await mkdir(project);
-  appServer = new FakeConnector({ adapter: 'codex' });
-  terminal = new FakeConnector({ adapter: 'codex' });
+  appServer = fakeConnector({ adapter: 'codex' });
+  terminal = fakeConnector({ adapter: 'codex' });
   readUsage = undefined;
   options = undefined;
   leads = undefined;
@@ -374,7 +375,7 @@ describe('native file mentions in messages', () => {
       ],
       [],
     );
-    const running = await start({ claude: new FakeConnector({ adapter: 'claude-code' }) });
+    const running = await start({ claude: fakeConnector({ adapter: 'claude-code' }) });
     const native = vi.fn().mockResolvedValue(undefined);
     await expect(
       running.engines.sending(
@@ -413,7 +414,7 @@ describe('native file mentions in messages', () => {
       ],
       [['builder', 'helper']],
     );
-    const claude = new FakeConnector({ adapter: 'claude-code' });
+    const claude = fakeConnector({ adapter: 'claude-code' });
     await start({ claude });
     for (const caller of [OUTSIDE, BUILDER]) {
       for (const body of [
@@ -451,7 +452,7 @@ describe('native file mentions in messages', () => {
       ],
       [],
     );
-    const claude = new FakeConnector({ adapter: 'claude-code' });
+    const claude = fakeConnector({ adapter: 'claude-code' });
     await start({ claude });
     await ok('run.pause', { target: { agent: 'helper' } }, YOU);
     for (const body of ['a@b.com', 'a@/x', 'a lone @ before whitespace']) {
@@ -955,7 +956,7 @@ describe('delivery', () => {
     expect(appServer.started).toEqual([]);
 
     // A slow turn: withdrawn once delivered, it is interrupted.
-    await restart({ appServer: new FakeConnector({ adapter: 'codex', pause: 200 }) });
+    await restart({ appServer: fakeConnector({ adapter: 'codex', pause: 200 }) });
     const going = await send('builder', 'Take your time');
     await vi.waitFor(async () => {
       expect((await find(going))?.state).toBe('delivered');
@@ -1265,7 +1266,7 @@ describe('delivery', () => {
 
   it('takes back only what its sender may, and says why it can’t', async () => {
     await keepCanvas();
-    await start({ appServer: new FakeConnector({ adapter: 'codex', pause: 200 }) });
+    await start({ appServer: fakeConnector({ adapter: 'codex', pause: 200 }) });
     await ok('run.pause', { target: { agent: 'builder' } }, YOU);
     const waiting = await send('builder', 'Wait for me');
     // Builder may name a message sent to it, but takes back only what it sent.
@@ -1499,7 +1500,7 @@ describe('a mode that never asks', () => {
     await keepCanvas();
     vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
     codexDefault(true);
-    terminal = new FakeConnector({ adapter: 'codex', mode: null });
+    terminal = fakeConnector({ adapter: 'codex', mode: null });
     const engine = await (await start()).engines.open(CANVAS);
     await engine.sessions.ready('shell');
     const raised: string[] = [];
@@ -1525,7 +1526,7 @@ describe('a mode that never asks', () => {
   it('releases the silent startup hold when a Terminal hook reports that it asks', async () => {
     await keepCanvas();
     codexDefault(true);
-    terminal = new FakeConnector({ adapter: 'codex', mode: null });
+    terminal = fakeConnector({ adapter: 'codex', mode: null });
     const engine = await (await start()).engines.open(CANVAS);
     await engine.sessions.ready('shell');
     const id = await send('shell', 'A late permission hook');
@@ -1549,7 +1550,7 @@ describe('a mode that never asks', () => {
     async (asks) => {
       await keepCanvas();
       codexDefault(true);
-      appServer = new FakeConnector({
+      appServer = fakeConnector({
         adapter: 'codex',
         mode: null,
         ...(asks === undefined ? {} : { asks }),
@@ -1600,7 +1601,7 @@ describe('a mode that never asks', () => {
   it('holds a party’s message for an agent yet to start whose CLI defaults to a mode that never asks; yours start it', async () => {
     await keepCanvas();
     const codex = codexDefault(false);
-    appServer = new FakeConnector({ adapter: 'codex', mode: 'full-access' });
+    appServer = fakeConnector({ adapter: 'codex', mode: 'full-access' });
     await start();
     const first = await send('builder', 'First');
     await vi.waitFor(async () => {
@@ -1747,7 +1748,7 @@ describe('a mode that never asks', () => {
     await keepCanvas();
     // Codex's settings say its default asks; the thread says otherwise (no sandbox, on-failure).
     codexDefault(true);
-    appServer = new FakeConnector({ adapter: 'codex', mode: null, asks: false });
+    appServer = fakeConnector({ adapter: 'codex', mode: null, asks: false });
     const engine = await (await start()).engines.open(CANVAS);
     const started = await send('builder', 'Start', YOU);
     await vi.waitFor(async () => {
@@ -1770,7 +1771,7 @@ describe('a mode that never asks', () => {
     await keepCanvas();
     // Shell's terminal has not reported its permissions; its earlier default cannot vouch for it.
     const codex = codexDefault(false);
-    terminal = new FakeConnector({ adapter: 'codex', mode: null });
+    terminal = fakeConnector({ adapter: 'codex', mode: null });
     const engine = await (await start()).engines.open(CANVAS);
     const started = await send('shell', 'Start', YOU);
     await vi.waitFor(async () => {
@@ -1812,7 +1813,7 @@ describe('a mode that never asks', () => {
       },
     ]);
     const codex = codexDefault(false);
-    terminal = new FakeConnector({ adapter: 'codex', mode: null });
+    terminal = fakeConnector({ adapter: 'codex', mode: null });
     await start();
     const first = await send('shell', 'First');
     await vi.waitFor(() => {
@@ -1825,7 +1826,7 @@ describe('a mode that never asks', () => {
 describe('an agent that isn’t idle', () => {
   it('keeps a party’s message waiting while a turn of yours goes on, and delivers it after', async () => {
     await keepCanvas();
-    const slow = new FakeConnector({ adapter: 'codex', pause: 150 });
+    const slow = fakeConnector({ adapter: 'codex', pause: 150 });
     await start({ appServer: slow });
     const yours = await send('builder', 'A long job', YOU);
     await vi.waitFor(async () => {
@@ -2064,7 +2065,7 @@ async function startStuck() {
   await keepCanvas();
   const interrupted = Promise.withResolvers<undefined>();
   const turnEnd = Promise.withResolvers<undefined>();
-  const stuck = new FakeConnector({ adapter: 'codex', step: () => turnEnd.promise });
+  const stuck = fakeConnector({ adapter: 'codex', step: () => turnEnd.promise });
   const live = await start({
     appServer: {
       start: async (spec, host) => {
@@ -2167,8 +2168,8 @@ async function startAtTrust() {
 
 describe('telling an agent of a withdrawal after receipt', () => {
   beforeEach(() => {
-    appServer = new FakeConnector({ adapter: 'codex', pause: 100 });
-    terminal = new FakeConnector({ adapter: 'codex', pause: 100 });
+    appServer = fakeConnector({ adapter: 'codex', pause: 100 });
+    terminal = fakeConnector({ adapter: 'codex', pause: 100 });
   });
 
   /** Keep the original and then its separate note running until their real interrupts. */
@@ -2176,7 +2177,7 @@ describe('telling an agent of a withdrawal after receipt', () => {
     let waiting: Promise<void> | undefined;
     let release: (() => void) | undefined;
     let sent = 0;
-    const fake = new FakeConnector({
+    const fake = fakeConnector({
       adapter: 'codex',
       step: () => waiting ?? Promise.resolve(),
     });
@@ -2540,14 +2541,14 @@ describe('telling an agent of a withdrawal after receipt', () => {
         disk.prepare('SELECT withdrawal FROM message WHERE id = ?').get(id),
       ),
     ).toEqual({ withdrawal: JSON.stringify({ text: withdrawalNote(id) }) });
-    appServer = new FakeConnector({ adapter: 'codex' });
+    appServer = fakeConnector({ adapter: 'codex' });
     await restart({ appServer });
     const next = await send('builder', 'After restarting', OTHER);
     await vi.waitFor(async () => {
       expect((await find(next, OTHER))?.state).toBe('replied');
     });
     expect(sent(appServer)[0]).toContain(withdrawalNote(id));
-    appServer = new FakeConnector({ adapter: 'codex' });
+    appServer = fakeConnector({ adapter: 'codex' });
     await restart({ appServer });
     const later = await send('builder', 'After restarting again', OTHER);
     await vi.waitFor(async () => {
@@ -2651,7 +2652,7 @@ describe('telling an agent of a withdrawal after receipt', () => {
       expect((await find(failed, OTHER))?.state).toBe('replied');
     });
     fail.mockRestore();
-    appServer = new FakeConnector({ adapter: 'codex' });
+    appServer = fakeConnector({ adapter: 'codex' });
     await restart({ appServer });
     const next = await send('builder', 'Try again', OTHER);
     await vi.waitFor(async () => {
@@ -2666,7 +2667,7 @@ describe('telling an agent of a withdrawal after receipt', () => {
     const id = await withdrawReceived();
     await core?.close();
     core = undefined;
-    appServer = new FakeConnector({ adapter: 'codex' });
+    appServer = fakeConnector({ adapter: 'codex' });
     const started = await start({}, false);
     expect(started.engines.opened()).toEqual([]);
     expect(await started.call('window.get', {}, asHuman(7))).toMatchObject({
@@ -2714,7 +2715,7 @@ function sentTo(connector: FakeConnector, agent: string): string[] {
 
 describe('telling an agent of a kill after receipt', () => {
   beforeEach(() => {
-    appServer = new FakeConnector({ adapter: 'codex', pause: 100 });
+    appServer = fakeConnector({ adapter: 'codex', pause: 100 });
   });
 
   /** Builder and Helper in the group Team. */
@@ -2937,13 +2938,13 @@ describe('telling an agent of a kill after receipt', () => {
         disk.prepare('SELECT withdrawal FROM message WHERE id = ?').get(id),
       ),
     ).toEqual({ withdrawal: JSON.stringify({ text: note }) });
-    appServer = new FakeConnector({ adapter: 'codex', pause: 100 });
+    appServer = fakeConnector({ adapter: 'codex', pause: 100 });
     await restart({ appServer });
     await ok('run.unpause', { target: { agent: 'builder' } }, YOU);
     // A note starts no turn by itself.
     expect(sent(appServer)).toEqual([]);
     expect(await next('builder')).toContain(note);
-    appServer = new FakeConnector({ adapter: 'codex', pause: 100 });
+    appServer = fakeConnector({ adapter: 'codex', pause: 100 });
     await restart({ appServer });
     expect(await next('builder')).not.toContain(id);
   });
@@ -3006,8 +3007,7 @@ describe('exhausted usage', () => {
   } = {}): Promise<void> {
     vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
     vi.setSystemTime(NOW);
-    if (immediate)
-      appServer = new FakeConnector({ adapter: 'codex', step: () => Promise.resolve() });
+    if (immediate) appServer = fakeConnector({ adapter: 'codex', step: () => Promise.resolve() });
     await keepCanvas();
     if (manual) await openedLast(profile, CANVAS);
     if (another) {
@@ -3771,12 +3771,12 @@ describe('usage', () => {
 describe('a restart', () => {
   it('leaves a message cut off mid-turn unresolved, tells its sender, and never sends it again', async () => {
     await keepCanvas();
-    await start({ appServer: new FakeConnector({ adapter: 'codex', pause: 5000 }) });
+    await start({ appServer: fakeConnector({ adapter: 'codex', pause: 5000 }) });
     const id = await send('builder', 'A long job');
     await vi.waitFor(async () => {
       expect((await find(id))?.state).toBe('delivered');
     });
-    const restarted = new FakeConnector({ adapter: 'codex' });
+    const restarted = fakeConnector({ adapter: 'codex' });
     await restart({ appServer: restarted });
     expect(await find(id)).toMatchObject({ state: 'unresolved' });
     expect((await inbox()).filter((message) => message.kind === 'notice')).toEqual([
@@ -4153,7 +4153,7 @@ describe('a kill', () => {
 
   it('takes back what waits for a killed agent and interrupts its turn, telling each sender', async () => {
     await keepCanvas();
-    await start({ appServer: new FakeConnector({ adapter: 'codex', pause: 200 }) });
+    await start({ appServer: fakeConnector({ adapter: 'codex', pause: 200 }) });
     const going = await send('builder', 'A long job');
     await vi.waitFor(async () => {
       expect((await find(going))?.state).toBe('delivered');

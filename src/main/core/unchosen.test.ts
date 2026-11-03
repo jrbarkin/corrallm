@@ -6,7 +6,8 @@ import type { CanvasId } from '../../shared/canvas';
 import { EXAMPLES } from '../../shared/examples';
 import { templateInfo } from '../../shared/templates';
 import { CATALOG } from '../sessions/adapters';
-import { FakeConnector } from '../sessions/fake';
+import { fakeConnector } from '../sessions/test-fake';
+import type { FakeConnector } from '../sessions/fake';
 import { createCore } from './core';
 import { asHuman } from './gui';
 import type { Core } from './core';
@@ -48,7 +49,7 @@ beforeEach(async () => {
     }),
   );
   await keepCanvases(profile, { [CANVAS]: { file, project } });
-  fake = new FakeConnector({ mode: 'manual' });
+  fake = fakeConnector({ mode: 'manual' });
   core = await createCore(
     {
       profile,

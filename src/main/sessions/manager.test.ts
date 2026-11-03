@@ -17,7 +17,8 @@ import { CanvasMemory, conversationsIn, PROJECT_WORKSPACE } from '../memory';
 import type { ConversationsByAdapter, Remembered } from '../memory';
 import type { Connector, LiveSession, SessionHost, SessionSpec } from './connector';
 import { unavailable } from './connector';
-import { FakeConnector } from './fake';
+import { fakeConnector } from './test-fake';
+import type { FakeConnector } from './fake';
 import { CATALOG } from './adapters';
 import { SessionManager, STALLED_INTERRUPT_MS } from './manager';
 import type { SessionManagerDeps } from './manager';
@@ -133,8 +134,8 @@ beforeEach(async () => {
   dir = await mkdtemp(path.join(tmpdir(), 'corrallm-sessions-'));
   store = await openTestStore(dir);
   memory = new CanvasMemory(store);
-  fake = new FakeConnector();
-  terminal = new FakeConnector();
+  fake = fakeConnector();
+  terminal = fakeConnector();
   projects = new Map();
   workspaces = new Map();
   adapters = new Map();
@@ -264,7 +265,7 @@ describe('SessionManager', () => {
   ] as const)(
     'remembers the launched role for %s and shares it across its connections',
     async (connection, other, cli) => {
-      const codex = new FakeConnector({ adapter: 'codex' });
+      const codex = fakeConnector({ adapter: 'codex' });
       const sessions = manager({ 'codex.app-server': codex, 'codex.terminal': codex });
       const connector = connection === 'claude-code.sdk' ? fake : codex;
       const canvas = shownCanvas();
@@ -322,7 +323,7 @@ describe('SessionManager', () => {
       await memory.update(canvas, () => ({
         conversations: inProject({ [adapter]: { a: { id } } }),
       }));
-      const codex = new FakeConnector({ adapter: 'codex' });
+      const codex = fakeConnector({ adapter: 'codex' });
       const sessions = manager({ 'codex.app-server': codex });
       const connector = connection === 'claude-code.sdk' ? fake : codex;
       await sessions.start(canvas, 'a', { ...OPTIONS, connection });
@@ -367,7 +368,7 @@ describe('SessionManager', () => {
   });
 
   it('starts a fresh native conversation only for the chosen CLI, preserving other agents and histories', async () => {
-    const codex = new FakeConnector({ adapter: 'codex' });
+    const codex = fakeConnector({ adapter: 'codex' });
     const sessions = manager({ 'codex.app-server': codex });
     const canvas = shownCanvas();
     const options = { connection: 'codex.app-server', model: null, mode: 'auto' } as const;
@@ -507,7 +508,15 @@ describe('SessionManager', () => {
     expect(heard.get(one)?.[0]).toEqual([
       'a',
       'claude-code.sdk',
-      { type: 'started', model: 'fast', mode: 'acceptEdits', models: expect.any(Array) as unknown },
+      {
+        type: 'started',
+        model: 'fast',
+        mode: 'acceptEdits',
+        models: expect.any(Array) as unknown,
+        role: 'append',
+        resume: true,
+        list: true,
+      },
     ]);
 
     await sessions.send(one, 'a', { id: 'm1', text: 'Hello' });
@@ -626,7 +635,7 @@ describe('SessionManager', () => {
   });
 
   it('keeps an agent’s Codex thread apart from its Claude Code session, each resumed in turn', async () => {
-    const codex = new FakeConnector({ adapter: 'codex' });
+    const codex = fakeConnector({ adapter: 'codex' });
     const sessions = manager({ 'codex.app-server': codex, 'codex.terminal': codex });
     const canvas = shownCanvas();
     await sessions.start(canvas, 'a', OPTIONS);
@@ -660,7 +669,7 @@ describe('SessionManager', () => {
   });
 
   it('starts and switches a session only in modes of its CLI', async () => {
-    const codex = new FakeConnector({ adapter: 'codex' });
+    const codex = fakeConnector({ adapter: 'codex' });
     const sessions = manager({ 'codex.app-server': codex });
     const canvas = shownCanvas();
     await expect(
@@ -1241,7 +1250,7 @@ describe('SessionManager and kept conversations', () => {
     },
   );
   it('lists and resumes a Codex agent’s own threads without reading or changing Claude’s ids', async () => {
-    const codex = new FakeConnector({ adapter: 'codex' });
+    const codex = fakeConnector({ adapter: 'codex' });
     const list = vi
       .fn<Conversations['list']>()
       .mockResolvedValue([{ id: KEPT_TWO, title: 'Codex thread', modified: 2000 }]);

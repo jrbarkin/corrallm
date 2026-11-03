@@ -12,7 +12,8 @@ import type { Message } from '../../shared/model/messages';
 import type { NeedsItem } from '../../shared/model/needs';
 import type { SessionMode } from '../../shared/session';
 import type { Connector, LiveSession } from '../sessions/connector';
-import { FakeConnector } from '../sessions/fake';
+import { fakeConnector } from '../sessions/test-fake';
+import type { FakeConnector } from '../sessions/fake';
 import { Prompts as CodexPrompts } from '../sessions/codex/app-server/prompts';
 import type { AgentCaller, Caller, OutsideCaller } from './caller';
 import { createCore } from './core';
@@ -166,7 +167,7 @@ function refusing(): Connector<SessionMode> {
 
 /** A connector whose sessions ask an MCP server's form for a token, recording what was answered. */
 function eliciting(answers: PromptAnswer[]): Connector<SessionMode> {
-  const fake = new FakeConnector({ mode: 'acceptEdits' });
+  const fake = fakeConnector({ mode: 'acceptEdits' });
   return {
     start: async (spec, host) => {
       const session = await fake.start(spec, host);
@@ -217,7 +218,7 @@ function eliciting(answers: PromptAnswer[]): Connector<SessionMode> {
  * the order they started) took each answer.
  */
 function reasking(taken: { session: number; given: PromptAnswer }[]): Connector<SessionMode> {
-  const fake = new FakeConnector({ mode: 'acceptEdits' });
+  const fake = fakeConnector({ mode: 'acceptEdits' });
   let started = 0;
   return {
     start: async (spec, host) => {
@@ -246,7 +247,7 @@ function reasking(taken: { session: number; given: PromptAnswer }[]): Connector<
 
 /** A fake session driven by the App Server's native request handler. */
 function codexAsking() {
-  const fake = new FakeConnector({ adapter: 'codex', mode: 'auto' });
+  const fake = fakeConnector({ adapter: 'codex', mode: 'auto' });
   let prompts: CodexPrompts | undefined;
   const connector: Connector<SessionMode> = {
     start: async (spec, host) => {
@@ -296,8 +297,8 @@ async function start(
   connectors: Partial<Record<string, Connector<SessionMode>>> = {},
 ): Promise<{ core: Core; sdk: FakeConnector; terminal: FakeConnector }> {
   // In a mode that doesn't ask, unless an agent's settings say otherwise: its turns run to their end.
-  const sdk = new FakeConnector({ mode: 'acceptEdits' });
-  const terminal = new FakeConnector({ adapter: 'codex', mode: 'auto' });
+  const sdk = fakeConnector({ mode: 'acceptEdits' });
+  const terminal = fakeConnector({ adapter: 'codex', mode: 'auto' });
   const core = await createCore(
     {
       profile,

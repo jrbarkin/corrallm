@@ -12,7 +12,7 @@ import { arrange } from '../../../shared/model/layout';
 import * as structure from '../../../shared/model/structure';
 import { itemKey, linkKey, nodeKey } from '../../../shared/model/rows';
 import { CATALOG } from '../../sessions/adapters';
-import { FakeConnector } from '../../sessions/fake';
+import { fakeConnector } from '../../sessions/test-fake';
 import { createDispatcher } from '../call';
 import type { Dispatcher, OpContext } from '../call';
 import * as changes from '../canvas/change';
@@ -71,7 +71,7 @@ beforeEach(async () => {
       check: true,
       distribution: 'local',
       sessions: {
-        connectors: { 'codex.app-server': new FakeConnector({ adapter: 'codex' }) },
+        connectors: { 'codex.app-server': fakeConnector({ adapter: 'codex' }) },
         environment: () => Promise.resolve({}),
       },
     },

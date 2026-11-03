@@ -4,7 +4,6 @@ import { isSessionMode } from '../../../../shared/session';
 import type {
   AgentStartSettings,
   FilesRewind,
-  InstalledClis,
   McpChange,
   McpServer,
   PastSession,
@@ -32,8 +31,6 @@ export interface SessionBackend {
   availability?(agentId: string): Promise<SessionAvailability>;
   onAvailability?(listener: () => void): () => void;
   start(agentId: string, options: SessionOptions): Promise<null>;
-  /** Which CLIs the user has (main finds them as its connections would run them). */
-  installed(): Promise<InstalledClis>;
   send(agentId: string, message: UserMessage): Promise<null>;
   interrupt(agentId: string): Promise<null>;
   setMode(agentId: string, mode: SessionMode): Promise<null>;
@@ -47,7 +44,7 @@ export interface SessionBackend {
   files(query: string, agentId?: string): Promise<string[]>;
   /** What an agent of `adapter` can be set to run with, and the user's own defaults (session:options). */
   options(adapter: AdapterId, agentId?: string): Promise<SettingsOptions>;
-  /** The conversations Claude Code kept for the project folder (/resume), the agent's marked. */
+  /** The conversations its adapter kept for the project folder, the agent's marked. */
   sessions(agentId: string): Promise<PastSession[]>;
   /** Makes one of them the agent's own: its session ends, and resumes it when it starts again. */
   resume(agentId: string, sessionId: string): Promise<null>;
@@ -74,7 +71,6 @@ export const NO_BACKEND: SessionBackend = (() => {
     Promise.reject(new Error('Connected sessions run only in the corrallm app.'));
   return {
     start: refuse,
-    installed: () => Promise.resolve({ claude: false, codex: false }),
     send: refuse,
     interrupt: refuse,
     setMode: refuse,
@@ -108,7 +104,7 @@ interface SentTurn {
 }
 
 /**
- * Drives a connected agent's session: one main's SessionManager runs (Claude Code or Codex, in a
+ * Drives a connected agent's session: one main's SessionManager runs (in a
  * terminal or through a structured interface; src/main/sessions/), over IPC from the renderer or in
  * the core's own process (SessionBackend). It starts the session when
  * first needed (with what the agent is set to run with in its CLI: its settings' model, effort and

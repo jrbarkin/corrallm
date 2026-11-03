@@ -14,7 +14,7 @@ import type { CoreLink } from '../../shared/link';
 import { toFile } from '../../shared/model/file';
 import type { TerminalEvent } from '../../shared/terminal';
 import type { SessionHost } from '../sessions/connector';
-import { FakeConnector } from '../sessions/fake';
+import { fakeConnector } from '../sessions/test-fake';
 import { RunJournal } from '../run-journal';
 import { createCore } from './core';
 import type { Core, CoreConfig } from './core';
@@ -151,7 +151,7 @@ describe('working-directory routing', () => {
   afterEach(() => vi.restoreAllMocks());
 
   async function setup() {
-    const fake = new FakeConnector({ adapter: 'codex' });
+    const fake = fakeConnector({ adapter: 'codex' });
     const options = vi.fn(() =>
       Promise.resolve({
         models: [],
@@ -195,7 +195,7 @@ describe('working-directory routing', () => {
   const KEPT = '0199a3f0-1234-7000-8000-123456789abc';
   async function listing() {
     const { connect } = await app({
-      connectors: { 'claude-code.sdk': new FakeConnector() },
+      connectors: { 'claude-code.sdk': fakeConnector() },
       environment: () => Promise.resolve({ HOME: profile }),
       conversations: {
         'claude-code': { list: () => Promise.resolve([{ id: KEPT, title: 'Kept', modified: 1 }]) },
@@ -472,7 +472,7 @@ describe('the app’s core and window channels', () => {
   });
 
   it('routes an attached terminal’s screen to its canvas’s window', async () => {
-    const fake = new FakeConnector({ adapter: 'codex' });
+    const fake = fakeConnector({ adapter: 'codex' });
     const start = fake.start.bind(fake);
     vi.spyOn(fake, 'start').mockImplementation(async (spec, host) =>
       Object.assign(await start(spec, host), {
@@ -531,7 +531,7 @@ describe('the app’s core and window channels', () => {
       }),
     );
     // In a mode that runs its command without asking, so its turn goes to its end.
-    const fake = new FakeConnector({ adapter: 'claude-code', mode: 'acceptEdits' });
+    const fake = fakeConnector({ adapter: 'claude-code', mode: 'acceptEdits' });
     const start = fake.start.bind(fake);
     // Its turn ends as Claude Code's Terminal ends one at its limit: usage-limit, saying no reset.
     vi.spyOn(fake, 'start').mockImplementation((spec, host) =>
@@ -568,7 +568,7 @@ describe('the app’s core and window channels', () => {
   });
 
   it('keeps the canvas and its sessions across a reload, a crash or a close: the core runs it', async () => {
-    const fake = new FakeConnector({ adapter: 'codex' });
+    const fake = fakeConnector({ adapter: 'codex' });
     const { core, connect, served } = await app({
       connectors: { 'codex.app-server': fake },
       environment: () => Promise.resolve({}),
@@ -598,7 +598,7 @@ describe('the app’s core and window channels', () => {
     const gate = Promise.withResolvers<undefined>();
     const entered = Promise.withResolvers<undefined>();
     let held = true;
-    const fake = new FakeConnector({
+    const fake = fakeConnector({
       adapter: 'codex',
       step: () => {
         entered.resolve(undefined);
@@ -951,7 +951,7 @@ it('keeps your messages in the core mailbox, and refuses them at the shutdown ba
 });
 it('records a view-handled session command durably without dispatching it, and not while quitting', async () => {
   const { core, connect } = await app({
-    connectors: { 'claude-code.sdk': new FakeConnector() },
+    connectors: { 'claude-code.sdk': fakeConnector() },
     environment: () => Promise.resolve({}),
   });
   const window = connect(7);

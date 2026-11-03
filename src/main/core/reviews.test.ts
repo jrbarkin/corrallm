@@ -12,7 +12,7 @@ import type { OpResult } from '../../shared/api/errors';
 import type { OpName } from '../../shared/api/surface';
 import type { CanvasId } from '../../shared/canvas';
 import type { NeedsItem } from '../../shared/model/needs';
-import { FakeConnector } from '../sessions/fake';
+import { fakeConnector } from '../sessions/test-fake';
 import type { Caller, OutsideCaller } from './caller';
 import type { WatchFolder } from './canvas/watch';
 import { createCore } from './core';
@@ -105,7 +105,7 @@ async function start(watch: 'fs' | 'none' = 'none'): Promise<Core> {
       })(),
       ...(watch === 'fs' ? {} : { watchFolder: NO_WATCH }),
       sessions: {
-        connectors: { 'codex.app-server': new FakeConnector({ adapter: 'codex' }) },
+        connectors: { 'codex.app-server': fakeConnector({ adapter: 'codex' }) },
         environment: () => Promise.resolve({}),
       },
     },

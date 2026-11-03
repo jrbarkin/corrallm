@@ -16,7 +16,7 @@ import type { CanvasId } from '../../../shared/canvas';
 import type { CanvasDocument } from '../../../shared/model/canvas';
 import type { NeedsItem } from '../../../shared/model/needs';
 import type { QueueItem } from '../../../shared/model/queue';
-import { FakeConnector } from '../../sessions/fake';
+import { fakeConnector } from '../../sessions/test-fake';
 import { SessionManager } from '../../sessions/manager';
 import type { Caller, OutsideCaller } from '../caller';
 import { createCore } from '../core';
@@ -94,7 +94,7 @@ async function start(): Promise<Core> {
         return () => (now += 1000);
       })(),
       sessions: {
-        connectors: { 'codex.app-server': new FakeConnector({ adapter: 'codex' }) },
+        connectors: { 'codex.app-server': fakeConnector({ adapter: 'codex' }) },
         environment: () => Promise.resolve({}),
       },
     },

@@ -10,7 +10,7 @@ import type { Message } from '../../shared/model/messages';
 import type { NeedsItem } from '../../shared/model/needs';
 import type { SessionMode, TurnResult, UserMessage } from '../../shared/session';
 import type { Connector, SessionHost } from '../sessions/connector';
-import { FakeConnector } from '../sessions/fake';
+import { fakeConnector } from '../sessions/test-fake';
 import type { AgentCaller, Caller, OutsideCaller } from './caller';
 import { createCore } from './core';
 import type { Core } from './core';
@@ -96,7 +96,7 @@ const SHIP = { id: 'ship', message: 'Ship it' };
 
 /** A connector whose turns the test ends: what each agent's sessions were sent, and `reply`. */
 function driven() {
-  const fake = new FakeConnector({ adapter: 'codex', mode: 'auto' });
+  const fake = fakeConnector({ adapter: 'codex', mode: 'auto' });
   const to = new Map<string, { host: SessionHost; sent: UserMessage[] }>();
   const connector: Connector<SessionMode> = {
     start: async (spec, given) => {

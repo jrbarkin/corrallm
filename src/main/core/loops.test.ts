@@ -9,7 +9,8 @@ import { LOOP_TURNS } from '../../shared/api/limits';
 import type { OpResult } from '../../shared/api/errors';
 import type { Message } from '../../shared/model/messages';
 import type { NeedsItem } from '../../shared/model/needs';
-import { FakeConnector } from '../sessions/fake';
+import { fakeConnector } from '../sessions/test-fake';
+import type { FakeConnector } from '../sessions/fake';
 import type { AgentCaller, Caller, OutsideCaller } from './caller';
 import { createCore } from './core';
 import type { Core } from './core';
@@ -54,7 +55,7 @@ let sends = 0;
 
 beforeEach(async () => {
   profile = await mkdtemp(path.join(tmpdir(), 'corrallm-loops-'));
-  appServer = new FakeConnector({ adapter: 'codex' });
+  appServer = fakeConnector({ adapter: 'codex' });
   sends = 0;
 });
 

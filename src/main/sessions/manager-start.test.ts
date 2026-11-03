@@ -17,7 +17,7 @@ import { ProjectDirectories } from '../core/workspaces/resolver';
 import { CanvasMemory } from '../memory';
 import { CATALOG } from './adapters';
 import type { Connector } from './connector';
-import { FakeConnector } from './fake';
+import { fakeConnector } from './test-fake';
 import { SessionManager } from './manager';
 import { beforeSpawn, recordPty, spawn } from './process';
 
@@ -67,7 +67,7 @@ function fixture(connection: string) {
   const children = new Children(dir, system);
   const starting = Promise.withResolvers<undefined>();
   const finish = Promise.withResolvers<undefined>();
-  const fake = new FakeConnector({ adapter: adapter.adapter.id });
+  const fake = fakeConnector({ adapter: adapter.adapter.id });
   const closed = vi.fn();
   let first = true;
   const connector: Connector = {

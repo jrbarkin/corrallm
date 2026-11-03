@@ -13,7 +13,7 @@ import type { CoreProcess } from './core-process';
 import { keepCanvases } from '../core/store/test-store';
 import { CALLERS, NO_DESKTOP } from '../core/test-registry';
 import { legacyDirectories } from '../core/workspaces/test-directories';
-import { FakeConnector } from '../sessions/fake';
+import { fakeConnector } from '../sessions/test-fake';
 
 // Electron's main-process Notification, faked: what the OS would be asked and told.
 const { FakeNotification } = await vi.hoisted(async () => ({
@@ -140,7 +140,7 @@ async function start(settings?: object, presenceEveryMs?: number): Promise<Core>
       ...(presenceEveryMs === undefined ? {} : { presenceEveryMs }),
       sessions: {
         connectors: {
-          'codex.app-server': new FakeConnector({
+          'codex.app-server': fakeConnector({
             adapter: 'codex',
             step: () =>
               held
