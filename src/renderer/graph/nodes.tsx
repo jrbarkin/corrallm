@@ -14,6 +14,7 @@ import { startTransition, useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 
 import { AdapterLogo } from '../AdapterLogo';
+import { FallbackMark } from '../agent/Fallback';
 import { WorkspaceBadge } from '../workspaces/Workspace';
 import { BranchControls } from '../workspaces/BranchReview';
 import { useLabel } from '../useDraft';
@@ -57,6 +58,7 @@ export function AgentNodeView({ id, data, parentId }: NodeProps<GraphNode>) {
         {card.line}
       </div>
       <WorkspaceBadge agent={id} card />
+      <FallbackMark agent={id} card />
       <div
         className="graph-card-progress"
         role="progressbar"
