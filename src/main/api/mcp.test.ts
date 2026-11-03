@@ -5,7 +5,8 @@ import path from 'node:path';
 
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
-import { afterEach, beforeEach, describe, expect, expectTypeOf, it } from 'vitest';
+import { Server } from '@modelcontextprotocol/sdk/server/index.js';
+import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from 'vitest';
 import { z } from 'zod';
 
 import { TOKEN_REPLACED } from '../../shared/api/errors';
@@ -340,6 +341,26 @@ describe('the MCP server’s request checks', () => {
 });
 
 describe('the MCP server’s tools', () => {
+  it('builds one JSON Schema validator for every request it serves, never one each', async () => {
+    // G2: each request (a message, a wait, a doc op) built its own MCP server with a validator of
+    // its own (Ajv, its formats and vocabularies compiled anew), which only an elicitation uses.
+    // eslint-disable-next-line @typescript-eslint/no-deprecated -- The server's own low-level one.
+    const connecting = vi.spyOn(Server.prototype, 'connect');
+    let servers: unknown[];
+    try {
+      const client = await connect();
+      for (let i = 0; i < 5; i++) await client.listTools();
+    } finally {
+      servers = [...connecting.mock.contexts];
+      vi.restoreAllMocks();
+    }
+    const validators = new Set(
+      servers.map((server) => (server as { _jsonSchemaValidator: unknown })._jsonSchemaValidator),
+    );
+    expect(servers.length).toBeGreaterThan(5);
+    expect(validators.size).toBe(1);
+  });
+
   it.each(Object.entries(TOKENS))(
     'lists to %s the tools of its party, with their schemas and hints',
     async (token, party) => {

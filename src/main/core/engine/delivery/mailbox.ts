@@ -56,7 +56,8 @@ interface Driving {
  */
 export class SessionStore {
   #sessions: Readonly<Record<string, Session>> = {};
-  readonly #listeners = new Set<() => void>();
+  /** What hears each change, with the action that made it (none: a change no action made). */
+  readonly #listeners = new Set<(action?: SessionAction) => void>();
   /** What hears each action reduced onto a session, just before its listeners hear the change. */
   readonly #observers = new Set<(agentId: string, action: SessionAction) => void>();
   readonly #catalog: EngineCatalog;
@@ -186,7 +187,12 @@ export class SessionStore {
     this.#observer = observer;
   }
 
-  subscribe = (listener: () => void): (() => void) => {
+  /**
+   * Hears each change to a session, with the action reduced to make it (none for a change no action
+   * made: an agent forgotten, submissions restored): a listener may pass over a streamed word
+   * (`streamed`), which changes nothing but that entry's text.
+   */
+  subscribe = (listener: (action?: SessionAction) => void): (() => void) => {
     this.#listeners.add(listener);
     return () => {
       this.#listeners.delete(listener);
@@ -1022,7 +1028,7 @@ export class SessionStore {
       },
     };
     for (const observer of this.#observers) observer(agentId, action);
-    this.#notify();
+    this.#notify(action);
     if (created && !this.#runMessages.has(created.id)) this.#observer.submitted?.(agentId, created);
     for (const message of ended) {
       if (this.#runMessages.has(message.id)) continue;
@@ -1087,8 +1093,8 @@ export class SessionStore {
     this.#notify();
   }
 
-  #notify(): void {
-    for (const listener of this.#listeners) listener();
+  #notify(action?: SessionAction): void {
+    for (const listener of this.#listeners) listener(action);
   }
 }
 
