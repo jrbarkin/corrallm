@@ -274,6 +274,28 @@ describe('ten delivered turns between two agents', () => {
     ]);
   });
 
+  it('tells the oldest held turn’s sender once across both directions and a restart', async () => {
+    await keepCanvas();
+    await start();
+    await passTurns();
+    const first = await eleventh();
+    const second = (
+      await ok<{ id: string }>('message', { to: 'planner', body: 'And back' }, BUILDER)
+    ).id;
+    const notices = async () =>
+      (await inbox(YOU))
+        .filter(
+          (message) => message.kind === 'notice' && [first, second].includes(message.replyTo ?? ''),
+        )
+        .map(({ to, replyTo }) => ({ to, replyTo }));
+    expect(await notices()).toEqual([{ to: 'agent:planner', replyTo: first }]);
+    await restart();
+    expect(await notices()).toEqual([{ to: 'agent:planner', replyTo: first }]);
+    expect((await needsOf()).filter(({ id }) => id.startsWith('loop/'))).toHaveLength(1);
+    expect(await delivered(first)).toBe(false);
+    expect(await delivered(second)).toBe(false);
+  });
+
   it('is counted from asks, their answers and the settlement of an ask between agents', async () => {
     await keepCanvas();
     await start();
@@ -644,6 +666,37 @@ describe('the counts and the hold across a restart and a failed write', () => {
     expect(sent()).toEqual([]);
     expect(open.loops.turns('planner', 'builder')).toBe(0);
     expect(pairsOnDisk()).toEqual([]);
+  });
+
+  it('journals an unsent withdrawal with no turn counted while session readiness waits', async () => {
+    await keepCanvas();
+    await start();
+    const open = core?.engines.canvas(CANVAS);
+    if (open === undefined) throw new Error('The canvas is not open.');
+    let release: () => void = () => undefined;
+    const ready = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const original = open.engine.sessions.ready.bind(open.engine.sessions);
+    vi.spyOn(open.engine.sessions, 'ready').mockImplementation(async (agent) => {
+      await ready;
+      return original(agent);
+    });
+    try {
+      const { id } = await ok<{ id: string }>(
+        'message',
+        { to: 'builder', body: 'A turn waiting for startup' },
+        PLANNER,
+      );
+      expect(open.messages.get(id)?.state).toBe('delivering');
+      await open.delivery.withdraw(id, 'agent:planner');
+      expect(open.messages.get(id)?.state).toBe('withdrawn');
+      expect(sent()).toEqual([]);
+      expect(pairsOnDisk()).toEqual([]);
+      expect(open.loops.turns('planner', 'builder')).toBe(0);
+    } finally {
+      release();
+    }
   });
 
   it('go with an agent that leaves the canvas', async () => {

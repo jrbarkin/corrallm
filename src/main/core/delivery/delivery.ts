@@ -986,6 +986,18 @@ export class Delivery {
     if (lostImages) messages = store.active();
     /** What waits for each agent, in the order it came, once its record is on disk. */
     const waiting = this.#waiting(messages.filter(({ id }) => !this.#recording.has(id)));
+    // Both directions share a pair's notice: choose its oldest party send before walking agents.
+    const loopNotices = new Map<string, string>();
+    const turnPairs = new Map<string, Pair>();
+    for (const message of messages) {
+      if (message.state !== 'pending') continue;
+      const pair = this.#turnPair(message);
+      if (pair === undefined) continue;
+      turnPairs.set(message.id, pair);
+      if (message.from === 'corrallm') continue;
+      const key = JSON.stringify(pair);
+      if (!loopNotices.has(key)) loopNotices.set(key, message.id);
+    }
     // A handoff request whose record is on its way to disk is first in line already: no party's
     // message to its agent goes before it.
     const asking = new Set(
@@ -1031,12 +1043,10 @@ export class Delivery {
               : undefined)),
       };
       let next: Message | undefined;
-      /** The pairs a message of waits is held for, and told so (B21 C6). */
-      const looped = new Set<string>();
       for (const message of waits) {
         // B21 C6: the eleventh turn between two agents waits for you, whatever else holds or frees
         // the agent; nothing of yours, the run's or an outside party's is ever one.
-        const pair = this.#turnPair(message);
+        const pair = turnPairs.get(message.id);
         const hold: Hold | undefined =
           pair !== undefined && this.#deps.loops.held(...pair)
             ? { kind: 'loop' }
@@ -1056,10 +1066,8 @@ export class Delivery {
         if (
           hold.kind === 'loop' &&
           pair !== undefined &&
-          message.from !== 'corrallm' &&
-          !looped.has(pair.join('\u0000'))
+          loopNotices.get(JSON.stringify(pair)) === message.id
         ) {
-          looped.add(pair.join('\u0000'));
           this.#tell(
             `loop:${message.id}`,
             message,
@@ -1704,6 +1712,7 @@ export class Delivery {
     const takeBack = this.#sent.get(message.id);
     if (!takeBack) {
       // Still being journaled: it is never sent.
+      this.#uncount(message.id);
       this.#withdrawn(message, by);
       return { reached: false, interrupted: false };
     }
