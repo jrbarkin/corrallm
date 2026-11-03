@@ -60,10 +60,19 @@ export interface AdapterReadContext extends UsageReadContext {
 /** How this build of corrallm is offered, set by CORRALLM_DISTRIBUTION when building. */
 export type Distribution = 'local' | 'commercial' | 'hosted';
 
-/** A consent only the user gives, kept by adapter and key in settings.ts. */
+/**
+ * A consent only the user gives, kept by adapter and key in settings.ts. Its generation moves each
+ * time you take it back in Settings (B22a C4): a connection that allowed it, for good or for its
+ * session, at an older generation asks again before its next qualifying turn, and gives it only at
+ * the generation it asked at.
+ */
 export interface Consent {
+  /** Its generation now, read at once. */
+  generation(): number;
+  /** Whether it is given for good now. */
   given(): Promise<boolean>;
-  give(): Promise<void>;
+  /** Keeps it for good, unless it was taken back since `generation` (then nothing is kept). */
+  give(generation: number): Promise<void>;
 }
 
 /** What every adapter's connectors run with. */

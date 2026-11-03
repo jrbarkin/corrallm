@@ -92,7 +92,11 @@ describe('the catalog', () => {
         fake,
         clientApp: 'corrallm/test',
         distribution: 'local',
-        consent: () => ({ given: () => Promise.resolve(false), give: () => Promise.resolve() }),
+        consent: () => ({
+          generation: () => 0,
+          given: () => Promise.resolve(false),
+          give: () => Promise.resolve(),
+        }),
       });
       expect(Object.keys(connectors).sort()).toEqual(connections);
       expect(Object.keys(createOptions({ fake })).sort()).toEqual(ids(CATALOG.adapters).sort());
@@ -111,7 +115,11 @@ describe('the catalog', () => {
         executable: () => Promise.reject(new Error('Tests never find a CLI.')),
         consent: (key) => {
           asked.add(key);
-          return { given: () => Promise.resolve(false), give: () => Promise.resolve() };
+          return {
+            generation: () => 0,
+            given: () => Promise.resolve(false),
+            give: () => Promise.resolve(),
+          };
         },
       });
       expect([...asked].sort(), descriptor.id).toEqual(declared.map(({ key }) => key).sort());
