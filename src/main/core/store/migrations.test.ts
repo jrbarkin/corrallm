@@ -119,6 +119,7 @@ describe('the schema', () => {
       { name: 'file_review', strict: 1, wr: 0 },
       { name: 'handoff', strict: 1, wr: 1 },
       { name: 'link', strict: 1, wr: 1 },
+      { name: 'loop_pair', strict: 1, wr: 1 },
       { name: 'merge_job', strict: 1, wr: 0 },
       { name: 'message', strict: 1, wr: 0 },
       { name: 'meta', strict: 1, wr: 0 },
@@ -1732,5 +1733,53 @@ describe('migration 10', () => {
     });
     keep.run(null, seq);
     expect(() => keep.run('not JSON', seq)).toThrow(/CHECK constraint failed/);
+  });
+});
+
+describe('migration 11', () => {
+  /** Keeps a loop_pair row of the agents `a` and `b`, with `turns`. */
+  const keepPair = (a: string, b: string, turns: number | string | null, canvas = CANVAS) =>
+    connection
+      .prepare('INSERT INTO loop_pair (canvas_id, a, b, turns) VALUES (?, ?, ?, ?)')
+      .run(canvas, a, b, turns);
+
+  it('adds the loop breaker’s pair counts, keeping every row, which a schema-6 corrallm still opens', () => {
+    migrate(connection, MIGRATIONS.slice(0, 10));
+    addCanvas();
+    addMessage('kept');
+    const before = connection.prepare('SELECT * FROM message').all();
+
+    migrate(connection, MIGRATIONS.slice(0, 11));
+
+    expect(schemaOf(connection)).toBe(11);
+    // A table only: a corrallm of schema 6 reads every table it knows as it was.
+    expect(minReaderOf(connection)).toBe(6);
+    expect(connection.prepare('SELECT * FROM message').all()).toEqual(before);
+    expect(connection.prepare('SELECT * FROM loop_pair').all()).toEqual([]);
+  });
+
+  it('keeps one positive count a pair of two agents, and forgets it with its canvas', () => {
+    migrate(connection);
+    connection.exec('PRAGMA foreign_keys = ON');
+    addCanvas();
+    keepPair('a', 'b', 3);
+    keepPair('a', 'c', 10);
+    for (const [a, b, turns] of [
+      ['a', 'b', 4],
+      ['x', 'x', 1],
+      ['x', 'y', 0],
+      ['x', 'y', -1],
+      ['x', 'y', 1.5],
+      ['x', 'y', 'many'],
+      ['x', 'y', null],
+    ] as const)
+      expect(() => keepPair(a, b, turns), JSON.stringify([a, b, turns])).toThrow(
+        /constraint failed|cannot store/,
+      );
+    // It belongs to a canvas that exists.
+    expect(() => keepPair('a', 'b', 1, 'ghost')).toThrow(/FOREIGN KEY constraint failed/);
+    expect(count('loop_pair')).toBe(2);
+    connection.prepare('DELETE FROM canvas WHERE id = ?').run(CANVAS);
+    expect(count('loop_pair')).toBe(0);
   });
 });

@@ -660,6 +660,27 @@ export const MIGRATIONS: readonly Migration[] = [
       ALTER TABLE message ADD COLUMN verdict TEXT CHECK (verdict IS NULL OR json_valid(verdict));
     `,
   },
+  {
+    // B21's loop breaker (B21 Design §9.2 C9): how many turns two agents have passed between them
+    // since the user last spoke to either. Only a table is added, so a corrallm of schema 6 to 10
+    // reads everything it knows as it was and never writes this one, so it may still open it.
+    version: 11,
+    minReader: 6,
+    sql: `
+      -- One row per pair of agents of a canvas while it counts turns (turns > 0): the two agents'
+      -- ids, ordered (a before b, by their UTF-8 bytes), and the turns delivered between them
+      -- since the user last gave either input. A pair at zero has no row; either agent leaving
+      -- the canvas deletes it. Counts only: no text, and no message id.
+      CREATE TABLE loop_pair (
+        canvas_id TEXT NOT NULL REFERENCES canvas (id) ON DELETE CASCADE,
+        a TEXT NOT NULL,
+        b TEXT NOT NULL,
+        turns INTEGER NOT NULL CHECK (turns >= 1),
+        CHECK (a <> b),
+        PRIMARY KEY (canvas_id, a, b)
+      ) STRICT, WITHOUT ROWID;
+    `,
+  },
 ];
 
 /** The schema this code makes and reads. */
