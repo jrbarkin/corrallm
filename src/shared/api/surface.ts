@@ -399,8 +399,28 @@ export const SURFACE = {
   },
   withdraw: { access: M, kind: 'command', scope: 'canvas', preempt: true, destructive: true },
   // Answers a Needs item its caller may answer: in B9, a proposal (yours alone, R3); in B9a, a
-  // worktree's setup card, yours alone too.
+  // worktree's setup card, yours alone too; in B21, an ask (its recipient's or yours) and a
+  // party's message to you (yours alone).
   reply: { access: M, kind: 'command', scope: 'canvas', rules: ['human-choice'] },
+  // B21 C4, C6: a party's questions to a reached agent, to you or to its manager (you, until B24):
+  // asked by agents and outside writers, answered by you, never asked by you (the caller-bound
+  // deviation, D10). An agent target runs in its scope; a party target in its canvas's.
+  ask: {
+    access: { lead: 'linked', worker: 'linked', 'outside-write': 'canvas' },
+    kind: 'command',
+    scope: 'agent',
+    rules: ['shell-text', 'file-mentions'],
+    self: 'refused',
+  },
+  // B21 C5 (Design §9.2 C4, C8): an agent's report of its own tool step's attempt, during that
+  // step's own turn (the AttemptId's reach, `own`, resolves nothing else); never yours, nor an
+  // outside orchestrator's (the caller-bound deviation, D10). It names no agent: its canvas's scope.
+  complete: {
+    access: { lead: 'own', worker: 'own' },
+    kind: 'command',
+    scope: 'canvas',
+    self: 'allowed',
+  },
   'session.open': { access: L, kind: 'command', scope: 'agent', self: 'allowed' },
   // D9: the mode an agent runs in is yours alone.
   'session.setMode': { access: Y, kind: 'command', scope: 'agent' },

@@ -21,6 +21,7 @@ import { MAX_FILE_QUERY_LENGTH, MAX_MESSAGE_LENGTH, MAX_ROLE_LENGTH } from '../.
 import type { Connector } from '../sessions/connector';
 import { CATALOG } from '../sessions/adapters';
 import { FakeConnector } from '../sessions/fake';
+import { ownTurn } from './attempts';
 import type { OutsideCaller } from './caller';
 import { mintTrustedPath } from './host';
 import { createCore } from './core';
@@ -65,7 +66,9 @@ import type { OpFixture, OutOfReach } from './test-registry';
  * a delay of an hour for one party to end with Go on now, and `spender`, on a backend no other agent
  * spends, whose usage rule (set as the core starts) holds its task for the window's reset, which
  * only you go on past (R3). Their sessions are sent nothing, or play no turn. A token's start meets
- * R9 once you stopped the run (`meeting`, for run.start and run.resume).
+ * R9 once you stopped the run (`meeting`, for run.start and run.resume). The lead and the worker
+ * each have a tool step (`report`), which the run's start sends them and their sessions hold until
+ * interrupted: what each reports with `complete` (B21 C5), once the world is `ready` for it.
  *
  * Beside it, the profile keeps canvases a canvas's lifetime acts on (FILED), none of them open:
  * `closing`, which you close; `replaced`, which your canvas.create replaces; `discard-close` and
@@ -85,6 +88,27 @@ export const SEEDED = {
 
 /** The notice corrallm sent the read-only token's party (`watcher`) before the core started. */
 export const NOTICE = '1b2c3d4e-5f60-4718-8a9b-0c1d2e3f4a54';
+
+/**
+ * B21 C5, C6: what another outside party (`other`) asked and sent before the core started, each
+ * open: a question waiting for `peer` (whose Needs item no token reaches: only `peer` and you may
+ * answer it), a question to you (which you answer) and a message to you (which you dismiss).
+ */
+export const ASKED = {
+  peer: '1b2c3d4e-5f60-4718-8a9b-0c1d2e3f4a5a',
+  you: '1b2c3d4e-5f60-4718-8a9b-0c1d2e3f4a5b',
+  message: '1b2c3d4e-5f60-4718-8a9b-0c1d2e3f4a5c',
+} as const;
+
+/** A question the world's asks ask: one choice, or words of one's own. */
+const QUESTION = {
+  id: 'scope',
+  header: 'Scope',
+  text: 'How much of it?',
+  options: [{ label: 'All' }, { label: 'Some', description: 'Only what changed' }],
+  multiple: false,
+  other: true,
+} as const;
 
 /** A retained tree whose checkout is gone: removal must ask, never assume it safe. */
 export const KEPT_WORKTREE = '1b2c3d4e-5f60-4718-8a9b-0c1d2e3f4a55';
@@ -157,6 +181,48 @@ const SPENDING =
 const SPENDING_BACKEND = SPENDING.connection.usage ?? '';
 /** A delay none of the generated tests waits out: an hour. */
 const NAP = { id: 'nap', delay: { seconds: 3600 } };
+/** B21 C5: the lead's and the worker's tool step, which each reports with `complete`. */
+const REPORT = { id: 'report', action: 'exec_command', instruction: 'Report' };
+/** An attempt no run made (B21 C5): what `complete`'s fixtures name until the world is `ready`. */
+const NO_ATTEMPT = '1b2c3d4e-5f60-4718-8a9b-0c1d2e3f4aaa';
+/**
+ * The attempts the lead and the worker each are on, as the world found them `ready` for
+ * `complete`: none (NO_ATTEMPT) until then, and again as each world starts.
+ */
+const REPORTING: Record<'lead' | 'worker', string> = { lead: NO_ATTEMPT, worker: NO_ATTEMPT };
+
+/**
+ * Sessions of `fake`'s that play their turns, but the lead's and the worker's (B21 C5): each holds
+ * every turn it is sent until it is interrupted (a Stop, a kill, Run again), so that each one's step
+ * is in flight as it reports it with `complete`.
+ */
+function holding(fake: FakeConnector): Connector<SessionMode> {
+  return {
+    start: async (spec, host) => {
+      const session = await fake.start(spec, host);
+      if (spec.agentId !== 'lead' && spec.agentId !== 'worker') return session;
+      let going: string | undefined;
+      session.send = (message) => {
+        going = message.id;
+        host.emit({ type: 'user', id: message.id, text: message.text });
+        host.emit({ type: 'status', status: 'working' });
+        return Promise.resolve();
+      };
+      session.interrupt = () => {
+        if (going !== undefined)
+          host.emit({
+            type: 'end',
+            messages: [going],
+            seconds: 1,
+            result: { status: 'cancelled', reason: 'interrupted' },
+          });
+        going = undefined;
+        return Promise.resolve();
+      };
+      return session;
+    },
+  };
+}
 /** Sessions that start, and play no turn of what they are sent. */
 function silent(adapter: string): Connector<SessionMode> {
   const fake = new FakeConnector({ adapter });
@@ -439,8 +505,16 @@ export async function startWorld(): Promise<{
    * stopped the run (your own call, after, starts or resumes it again).
    */
   meeting(rule: Rule, op?: string): () => void;
+  /**
+   * Readies the world for op `op`'s valid calls, before they are made: for `complete` (B21 C5),
+   * waits until the lead's and the worker's steps are in flight (the run's start sent them), and
+   * names their attempts in its fixtures.
+   */
+  ready(op: string): Promise<void>;
   close(): Promise<void>;
 }> {
+  REPORTING.lead = NO_ATTEMPT;
+  REPORTING.worker = NO_ATTEMPT;
   const profile = await mkdtemp(path.join(tmpdir(), 'corrallm-world-'));
   const project = path.join(profile, 'project');
   await mkdir(project);
@@ -487,7 +561,9 @@ export async function startWorld(): Promise<{
                   ? { queue: [NAP] }
                   : id === 'spender'
                     ? { queue: [{ id: 'spend', message: 'Spend' }] }
-                    : {}),
+                    : id === 'lead' || id === 'worker'
+                      ? { queue: [REPORT] }
+                      : {}),
           ...(connection === undefined ? {} : { connection }),
           ...(parent === undefined ? {} : { parent }),
         })),
@@ -639,6 +715,34 @@ export async function startWorld(): Promise<{
         at: 1,
       },
     },
+    ...(['peer', 'you'] as const).map((to) => ({
+      message: {
+        id: ASKED[to],
+        from: 'outside:other' as const,
+        to: to === 'you' ? ('you' as const) : ('agent:peer' as const),
+        kind: 'prompt' as const,
+        body: '"other" asks: Scope',
+        state: to === 'you' ? ('delivered' as const) : ('pending' as const),
+        ask: {
+          v: 1 as const,
+          type: 'question' as const,
+          questions: [{ ...QUESTION, options: [...QUESTION.options] }],
+          deadline: Date.now() + 86_400_000,
+        },
+        at: 1,
+      },
+    })),
+    {
+      message: {
+        id: ASKED.message,
+        from: 'outside:other' as const,
+        to: 'you' as const,
+        kind: 'text' as const,
+        body: 'For you',
+        state: 'delivered' as const,
+        at: 1,
+      },
+    },
   ]);
   let clock = 0;
   let cap = MAX_CREATED_AGENTS;
@@ -679,7 +783,7 @@ export async function startWorld(): Promise<{
       proposalIds: () => proposals.shift() ?? crypto.randomUUID(),
       sessions: {
         connectors: {
-          'codex.app-server': new FakeConnector({ adapter: 'codex' }),
+          'codex.app-server': holding(new FakeConnector({ adapter: 'codex' })),
           'codex.terminal': REFUSING,
           'claude-code.terminal': REFUSING,
           [CONTROL.connection.id]: controlConnector(),
@@ -852,6 +956,23 @@ export async function startWorld(): Promise<{
         cap = MAX_CREATED_AGENTS;
       };
     },
+    ready: async (op) => {
+      if (op !== 'complete') return;
+      const reporting = () => {
+        const open = core.engines.canvas(CANVAS);
+        return open === undefined
+          ? []
+          : (['lead', 'worker'] as const).flatMap((agent) => {
+              const own = ownTurn(open, agent);
+              return own === undefined ? [] : [[agent, own.task.attempt] as const];
+            });
+      };
+      for (let tries = 0; reporting().length < 2; tries++) {
+        if (tries > 500) throw new Error('The lead’s and the worker’s steps never reached them.');
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      for (const [agent, attempt] of reporting()) REPORTING[agent] = attempt;
+    },
     close: async () => {
       await core.close();
       await rm(profile, { recursive: true, force: true });
@@ -861,6 +982,8 @@ export async function startWorld(): Promise<{
 
 /** A request id for each fixture that writes, so that a call repeated through another transport dedupes. */
 const request = (n: number) => `2c3d4e5f-6071-4829-9bac-1d2e3f4a5b${String(n).padStart(2, '0')}`;
+/** B21's asks' and their answers' request ids. */
+const asked = (n: number) => `5d4e5f60-7182-4930-8bad-2e3f4a5b6c${String(n).padStart(2, '0')}`;
 const INSERT_REQUEST = '3c3d4e5f-6071-4829-9bac-1d2e3f4a5b00';
 const ARRANGE_REQUEST = '3c3d4e5f-6071-4829-9bac-1d2e3f4a5b01';
 const SHOW_REQUEST = '3c3d4e5f-6071-4829-9bac-1d2e3f4a5b02';
@@ -895,6 +1018,22 @@ const TARGETS = [
 
 /** An absent item in the lead’s team: a stable expectation that also exercises EntityKey reach. */
 const NO_ITEM = { 'item/helper/none': 0 };
+
+/**
+ * B21 C5: what `agent` reports of its step with `complete`: its attempt read as each call is made
+ * (REPORTING, once the world is `ready`), so a run started afresh names its new attempt.
+ */
+function reportOf(agent: 'lead' | 'worker', request: string) {
+  return {
+    canvas: CANVAS,
+    get task() {
+      return REPORTING[agent];
+    },
+    outcome: 'succeeded',
+    summary: 'Reported.',
+    request,
+  };
+}
 
 /** What the generated tests call each of the registry's operations with. */
 export const REAL_FIXTURES: Readonly<Record<OpName, OpFixture>> = {
@@ -1755,11 +1894,29 @@ export const REAL_FIXTURES: Readonly<Record<OpName, OpFixture>> = {
             replyTo: SEEDED[party === 'outside-write' ? 'orchestrator' : party],
             request: request(10 + i),
           },
+          // B21 C5: to you, and to an agent's manager (you, until B24); no party for you.
+          ...(party === 'you'
+            ? []
+            : [
+                { canvas: CANVAS, to: { party: 'you' }, body: 'For you', request: request(44 + i) },
+              ]),
+          ...(party === 'lead' || party === 'worker'
+            ? [
+                {
+                  canvas: CANVAS,
+                  to: { party: 'manager' },
+                  body: 'For my manager',
+                  request: request(49 + i),
+                },
+              ]
+            : []),
         ],
       ]),
     ),
     fresh: ['id'],
     invalid: [
+      { canvas: CANVAS, to: { party: 'nobody' }, body: 'Hello' },
+      { canvas: CANVAS, to: { party: 'you', agent: 'peer' }, body: 'Hello' },
       { canvas: CANVAS, to: 'peer', body: '' },
       { canvas: CANVAS, to: 'peer', body: ' \n' },
       { canvas: CANVAS, to: 'peer', body: 'x'.repeat(MAX_MESSAGE_LENGTH + 1) },
@@ -1774,6 +1931,49 @@ export const REAL_FIXTURES: Readonly<Record<OpName, OpFixture>> = {
         to: 'peer',
         body: 'x'.repeat(MAX_MESSAGE_BYTES + 1),
         request: controlRequest(350),
+      },
+    },
+  },
+  // B21 C4, C6: to a reached agent, and to you; never asked by you.
+  ask: {
+    valid: [
+      { canvas: CANVAS, to: 'peer', questions: [QUESTION], request: asked(1) },
+      { canvas: CANVAS, to: { party: 'you' }, questions: [QUESTION], request: asked(2) },
+    ],
+    fresh: ['id', 'revs'],
+    invalid: [
+      { canvas: CANVAS, to: 'peer', questions: [] },
+      { canvas: CANVAS, to: 'peer', questions: [{ ...QUESTION, secret: true }] },
+      { canvas: CANVAS, to: 'peer', questions: [QUESTION, QUESTION] },
+      {
+        canvas: CANVAS,
+        to: 'peer',
+        questions: ['a', 'b', 'c', 'd', 'e'].map((id) => ({ ...QUESTION, id })),
+      },
+      { canvas: CANVAS, to: 'peer', questions: [QUESTION], deadlineSeconds: 59 },
+      { canvas: CANVAS, to: 'peer', questions: [QUESTION], deadlineSeconds: 86_401 },
+      {
+        canvas: CANVAS,
+        to: 'peer',
+        questions: [{ ...QUESTION, options: [{ label: 'All', preview: 'Everything' }] }],
+      },
+      // The whole ask past 16 KiB of JSON, though each part fits.
+      { canvas: CANVAS, to: 'peer', questions: [{ ...QUESTION, text: 'x'.repeat(17_000) }] },
+      { canvas: CANVAS, to: { party: 'nobody' }, questions: [QUESTION] },
+      { canvas: CANVAS, questions: [QUESTION] },
+    ],
+    meetsRule: {
+      'shell-text': {
+        canvas: CANVAS,
+        to: 'shell',
+        questions: [{ ...QUESTION, text: '!ls' }],
+        request: asked(3),
+      },
+      'file-mentions': {
+        canvas: CANVAS,
+        to: 'shell',
+        questions: [{ ...QUESTION, text: 'Read @link' }],
+        request: asked(4),
       },
     },
   },
@@ -1803,6 +2003,19 @@ export const REAL_FIXTURES: Readonly<Record<OpName, OpFixture>> = {
           to: PROPOSED.refused,
           answer: { choice: 'refuse' },
           request: request(87),
+        },
+        // B21 C5, C6: a party's message to you, dismissed; its question to you, answered.
+        {
+          canvas: CANVAS,
+          to: `message/${ASKED.message}`,
+          answer: { choice: 'dismiss' },
+          request: asked(5),
+        },
+        {
+          canvas: CANVAS,
+          to: `ask/${ASKED.you}`,
+          answer: { answers: { scope: { picked: ['All'] } } },
+          request: asked(6),
         },
       ],
     },
@@ -2307,15 +2520,34 @@ export const REAL_FIXTURES: Readonly<Record<OpName, OpFixture>> = {
   },
   // The run's controls, last: nothing before them starts the canvas's run. A token starts it
   // first, on a run no one began; yours starts it afresh (Run again); once you stopped it (the
-  // world's `meeting`), a token's start is refused. Then resume (of a run going, which changes
-  // nothing; of yours, after you stopped it), each party's Go on now of its napper, the
-  // spender's usage hold (yours alone), and Stop.
+  // world's `meeting`), a token's start is refused. Then the lead's and the worker's reports of
+  // their steps (complete: B21 C5), sent them as the run started; then resume (of a run going,
+  // which changes nothing; of yours, after you stopped it), each party's Go on now of its napper,
+  // the spender's usage hold (yours alone), and Stop.
   'run.start': {
     fresh: ['revs'],
     valid: [{ canvas: CANVAS, request: controlRequest(330) }],
     by: { 'outside-write': [{ canvas: CANVAS, request: controlRequest(331) }] },
     invalid: [{ canvas: 'nope' }, { canvas: CANVAS, from: 'top' }],
     meetsRule: { sticky: { canvas: CANVAS, request: controlRequest(332) } },
+  },
+  // B21 C5: each agent party reports its own step's attempt, in flight since the run started, as
+  // the world found it `ready`; another's, one no run made and another canvas are not found.
+  complete: {
+    fresh: ['revs'],
+    valid: [],
+    by: {
+      lead: [reportOf('lead', asked(7))],
+      worker: [reportOf('worker', asked(8))],
+    },
+    invalid: [
+      { canvas: CANVAS, task: 'native-turn', outcome: 'succeeded', summary: 'Done.' },
+      { canvas: CANVAS, task: NO_ATTEMPT, outcome: 'cancelled', summary: 'Done.' },
+      { canvas: CANVAS, task: NO_ATTEMPT, outcome: 'succeeded', summary: ' \n' },
+      { canvas: CANVAS, task: NO_ATTEMPT, outcome: 'succeeded', summary: 'x'.repeat(4097) },
+      { canvas: CANVAS, task: NO_ATTEMPT, outcome: 'succeeded' },
+      { canvas: CANVAS, task: NO_ATTEMPT, outcome: 'failed', summary: 'Done.', agent: 'lead' },
+    ],
   },
   'run.resume': {
     fresh: ['revs'],
@@ -2425,9 +2657,23 @@ export const REAL_OUT_OF_REACH: OutOfReach = {
   TaskId: () => ['missing-task'],
   // A conversation no list showed the caller, kept or not (B11 §7).
   ConversationId: () => ['0c1d2e3f-4a5b-4c6d-8e7f-9a0b1c2d3eff', WORLD_KEPT[1].id],
-  // Neither a missing proposal nor a textual owner id at another generation resolves.
+  // B21 C5: an agent reaches its own step's attempt alone, in its own turn: never another agent's,
+  // nor one no run made.
+  AttemptId: (caller) =>
+    caller.kind === 'agent'
+      ? [
+          REPORTING[caller.agent === 'lead' ? 'worker' : 'lead'],
+          '1b2c3d4e-5f60-4718-8a9b-0c1d2e3f4aab',
+        ]
+      : [],
+  // Neither a missing proposal nor a textual owner id at another generation resolves; nor does
+  // a question only `peer` and you may answer, a party's message to you, or either unknown.
   NeedId: () => [
     'proposal/1b2c3d4e-5f60-4718-8a9b-0c1d2e3f4aff',
     `prompt/${CONTROL_AGENT}/0/1b2c3d4e-5f60-4718-8a9b-0c1d2e3f4aff`,
+    `ask/${ASKED.peer}`,
+    `message/${ASKED.message}`,
+    'ask/1b2c3d4e-5f60-4718-8a9b-0c1d2e3f4aff',
+    'message/1b2c3d4e-5f60-4718-8a9b-0c1d2e3f4aff',
   ],
 };

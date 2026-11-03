@@ -8,6 +8,8 @@ export function withPublication(ops: Implementations): Implementations {
     'message',
     'withdraw',
     'reply',
+    'ask',
+    'complete',
     'session.open',
     'session.setMode',
     'session.setModel',

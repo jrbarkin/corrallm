@@ -11,7 +11,7 @@ import type { Admission, AdmittedWork, RunMailbox } from './engine/run/runner';
 import type { SessionBackend } from './engine/transcript/receive';
 import type { CanvasDocument } from '../../shared/model/canvas';
 import type { Message, MessageDisplay, PartyId } from '../../shared/model/messages';
-import { agentParty } from '../../shared/model/messages';
+import { agentParty, isContinuation } from '../../shared/model/messages';
 import type { NeedsItem } from '../../shared/model/needs';
 import type { HandoffView } from '../../shared/model/handoff';
 import type { RunCheckpoint } from '../../shared/run';
@@ -28,8 +28,11 @@ import type { UsageReadings } from '../usage';
 import type { Documents } from './canvas/documents';
 import { recoverDecisions } from './decisions';
 import { Delivery, HANDOFF_CARRIED } from './delivery/delivery';
+import { mailboxTasks } from './delivery/tasks';
 import { HandoffStore } from './delivery/handoffs';
 import type { HandoffTable } from './delivery/handoffs';
+import { LoopStore } from './delivery/loops';
+import type { LoopTable } from './delivery/loops';
 import { capBody, MessageStore, sentByRun } from './delivery/messages';
 import type { MessageTable, Staged } from './delivery/messages';
 import { WithdrawalNotes } from './delivery/withdrawals';
@@ -92,6 +95,8 @@ export interface EnginesDeps {
   messages: MessageTable;
   /** Every canvas's agents' latest handoffs, in the profile's database (B11a C7). */
   handoffs: HandoffTable;
+  /** Every canvas's loop breaker counts, in the profile's database (B21 C6). */
+  loops: LoopTable;
   /** The profile's database, whose commits hold what changes together. */
   store: Pick<Database, 'write'>;
   usage: Pick<UsageReadings, 'state' | 'subscribe' | 'exhaust' | 'exhausted'>;
@@ -142,6 +147,11 @@ export interface EnginesDeps {
     recover(canvas: CanvasId): void;
     view(canvas: CanvasId, agent: string): HandoffView | null;
   };
+  /**
+   * B21 C8: whether an agent's session now has listed corrallm's `complete` (the session
+   * authority's observation): its steps then ask for that call. None: never.
+   */
+  completes?: (canvas: CanvasId, agent: string) => boolean;
 }
 
 /**
@@ -164,6 +174,8 @@ export interface OpenCanvas {
   messages: MessageStore;
   /** Its agents' latest handoffs (B11a C7). */
   handoffs: HandoffStore;
+  /** The turns delivered between its pairs of agents since you last spoke to either (B21 C6). */
+  loops: LoopStore;
   delivery: Delivery;
   /** Where each party's `wait` has read to in its messages. */
   reads: ReadPositions;
@@ -262,7 +274,12 @@ export class Engines {
   readonly #canvases = new Map<CanvasId, Running>();
   readonly #mail = new Map<
     CanvasId,
-    Promise<{ messages: MessageStore; notes: WithdrawalNotes; handoffs: HandoffStore }>
+    Promise<{
+      messages: MessageStore;
+      notes: WithdrawalNotes;
+      handoffs: HandoffStore;
+      loops: LoopStore;
+    }>
   >();
   readonly #watchers = new Set<Watcher>();
   readonly #events = new Map<string, Promise<void>>();
@@ -393,8 +410,9 @@ export class Engines {
     );
     if (this.#running.has(canvas)) {
       const open = this.#canvases.get(canvas);
+      // B21 C7: a task's continuation in it is that task's attempt's turn too, retried as one.
       const attempts = (open?.messages.active() ?? []).flatMap((message) =>
-        sentByRun(message) &&
+        (sentByRun(message) || isContinuation(message)) &&
         message.task !== undefined &&
         message.to === agentParty(agent) &&
         message.delivery !== undefined &&
@@ -681,8 +699,10 @@ export class Engines {
     const originals = store.all().filter(
       (m) =>
         m.kind === 'text' &&
-        // The run retries its own attempts (retryAttempt): never copied as a party's.
+        // The run retries its own attempts (retryAttempt), and a task's continuation with its
+        // attempt (B21 C7): never copied as a party's.
         !sentByRun(m) &&
+        !isContinuation(m) &&
         m.to === agentParty(agent) &&
         m.delivery &&
         request.ids.includes(m.delivery.as) &&
@@ -875,6 +895,8 @@ export class Engines {
       return;
     }
     this.#canvases.delete(canvas);
+    // Closed for good (B21 C6): its open asks are withdrawn, nothing sent, in its last write.
+    running.delivery.asks.closing();
     try {
       await this.#stop(running);
     } finally {
@@ -995,11 +1017,12 @@ export class Engines {
     const { document } = await documents.review(canvas);
     if (context.checkpoint) Engine.check(context.checkpoint);
     const listeners: Running['listeners'] = new Set();
-    const { messages, handoffs } = await this.#mailOf(canvas);
+    const { messages, handoffs, loops } = await this.#mailOf(canvas);
     const warnings: readonly string[] = [
       context.warning,
       messages.warning,
       handoffs.warning,
+      loops.warning,
     ].filter((one) => one !== undefined);
     // B11a C7: the handoffs of agents no longer on the canvas go as it opens.
     handoffs.prune(
@@ -1008,6 +1031,11 @@ export class Engines {
     await handoffs.durable().catch((error: unknown) => {
       console.error('Could not forget the handoffs of agents no longer on the canvas:', error);
     });
+    // B21 C6: and the loop counts of pairs with one of them.
+    loops.prune(new Set(document.nodes.flatMap(({ id, type }) => (type === 'agent' ? [id] : []))));
+    await loops.durable().catch((error: unknown) => {
+      console.error('Could not forget the loop counts of agents no longer on the canvas:', error);
+    });
     // The engine and what journals it need each other.
     const running = {
       get document() {
@@ -1015,6 +1043,7 @@ export class Engines {
       },
       messages,
       handoffs,
+      loops,
       warnings,
       unwatch: messages.subscribe((message) => {
         for (const watcher of this.#watchers) watcher.message?.(message);
@@ -1046,6 +1075,8 @@ export class Engines {
         for (const one of done) one();
       };
     });
+    // A turn journaled as delivering is counted in that same write, whoever makes it (B21 C6).
+    messages.writeAlso(() => loops.changes());
     const engine: Engine = new Engine({
       catalog: this.#deps.engineCatalog,
       backend: this.#backend(canvas, listeners),
@@ -1082,6 +1113,13 @@ export class Engines {
           }),
       // B11a C7: an agent's next task waits while corrallm's handoff request to it waits or runs.
       ...(handoff === undefined ? {} : { handoff: (agent) => handoff.asking(canvas, agent) }),
+      // B21 C7, C8: what its messages hold of its tasks' asks and results, which the run reads as
+      // they end and as it is held or restored; a stopped task's continuation in flight is taken
+      // back by its delivery (none before it is made, as the run is restored).
+      tasks: mailboxTasks(messages, (task) => {
+        (running.delivery as Delivery | undefined)?.interruptTask(task);
+      }),
+      completes: (agent) => this.#deps.completes?.(canvas, agent) === true,
     });
     running.engine = engine;
     engine.update(document.nodes);
@@ -1091,6 +1129,7 @@ export class Engines {
       canvas,
       engine,
       store: messages,
+      loops,
       nodes: () => running.document.nodes,
       usage: this.#deps.usage,
       now: () => Date.now(),
@@ -1183,9 +1222,12 @@ export class Engines {
     return running;
   }
 
-  #mailOf(
-    canvas: CanvasId,
-  ): Promise<{ messages: MessageStore; notes: WithdrawalNotes; handoffs: HandoffStore }> {
+  #mailOf(canvas: CanvasId): Promise<{
+    messages: MessageStore;
+    notes: WithdrawalNotes;
+    handoffs: HandoffStore;
+    loops: LoopStore;
+  }> {
     let mail = this.#mail.get(canvas);
     if (!mail) {
       mail = (async () => {
@@ -1193,6 +1235,8 @@ export class Engines {
         await messages.load();
         const handoffs = new HandoffStore(canvas, this.#deps.handoffs);
         handoffs.load();
+        const loops = new LoopStore(canvas, this.#deps.loops);
+        loops.load();
         // A decision a crash cut off as it was being made is unresolved, never made again.
         if (recoverDecisions(messages)) {
           await messages.durable().catch((error: unknown) => {
@@ -1203,6 +1247,7 @@ export class Engines {
           messages,
           notes: new WithdrawalNotes(messages, this.#deps.engineCatalog.shellPrefixes),
           handoffs,
+          loops,
         };
       })();
       this.#mail.set(canvas, mail);
@@ -1230,6 +1275,8 @@ export class Engines {
       if (![...this.#watchers].some((watcher) => watcher.need !== undefined)) return;
       const items = [
         ...needs(needsInput(running, this.#deps.locale)),
+        // B21 C5, C6: its asks, and parties' messages to you.
+        ...running.delivery.items(),
         ...(this.#deps.needs?.(running.document.id) ?? []),
       ];
       for (const item of items) {
@@ -1402,6 +1449,9 @@ function runMailbox(
 ): RunMailbox {
   const carried = new Map<string, () => void>();
   return {
+    judging: (id, use) => {
+      messages.judging(id, use);
+    },
     record: ({ to, owner, text: given, task, images, typed }) => {
       const carrying = typed === undefined ? carry?.(to, given, owner) : undefined;
       const text = carrying?.text ?? given;

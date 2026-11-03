@@ -7,6 +7,7 @@ import type { NeedsItem } from '../../shared/model/needs';
 import { areLinked, groupMembers, isGroup, managerOf, teamOf } from '../../shared/model/queries';
 import { findItem } from '../../shared/model/queue';
 import { itemKey, linkKey, nodeKey } from '../../shared/model/rows';
+import { ownTurn } from './attempts';
 import { callerKey, canvasesOf, partyIdOf } from './caller';
 import type { Caller, TokenCaller } from './caller';
 import type { Engines } from './engines';
@@ -325,6 +326,9 @@ export function resolvers(
         id,
         agentsReached(open.document, caller, reach, lead(caller, canvas as CanvasId)),
       );
+      // An ask is on no agent: only a party it names to answer it reaches it (B21 C6); a message
+      // to you, only you.
+      if (item !== undefined && id.startsWith('ask/')) return item.by.includes(partyIdOf(caller));
       if (item?.agent === undefined) return false;
       return reachesAgent(
         open.document,
@@ -333,6 +337,14 @@ export function resolvers(
         item.agent,
         lead(caller, canvas as CanvasId),
       );
+    },
+    // B21 C4, C8: an attempt only its own agent names, during that attempt's own turn (`ownTurn`):
+    // never another agent's, one ended, a message item's, a slash command's, or an outside party's.
+    AttemptId: (id, caller, _reach, { canvas }) => {
+      if (caller.kind !== 'agent' || canvas === undefined) return false;
+      if (!canvasesOf(caller).includes(canvas as CanvasId)) return false;
+      const open = engines.canvas(canvas as CanvasId);
+      return open !== undefined && ownTurn(open, caller.agent)?.task.attempt === id;
     },
     MessageId: (id, caller, _reach, { canvas }) => {
       // An op that takes no canvas (`wait`) names a message on any of the caller's open ones.

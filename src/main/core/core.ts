@@ -82,6 +82,7 @@ import type { Viewer, WorktreeListing } from './workspaces/list';
 import type { CanvasDocument } from '../../shared/model/canvas';
 import type { AgentCaller, Caller, TokenCaller } from './caller';
 import { HandoffTable } from './delivery/handoffs';
+import { LoopTable } from './delivery/loops';
 import { MessageTable } from './delivery/messages';
 import { Engines, needsInput } from './engines';
 import { FallbackService } from './fallback';
@@ -1039,6 +1040,8 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     const open = engines.canvas(canvas);
     return [
       ...(open ? needs(needsInput(open, config.locale)) : []),
+      // B21 C5, C6: its asks, and parties' messages to you.
+      ...(open ? open.delivery.items() : []),
       ...prompts.items(canvas),
       ...proposals.items(canvas, reach),
       ...reviews.items(canvas),
@@ -1099,6 +1102,7 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     documents,
     messages: new MessageTable(store, memory),
     handoffs: new HandoffTable(store, memory),
+    loops: new LoopTable(store, memory),
     store,
     usage,
     files,
@@ -1141,6 +1145,8 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
       },
       view: (canvas, agent) => handoff.view(canvas, agent),
     },
+    // B21 C8: a step asks for complete once its agent's session listed it (C1's observation).
+    completes: (canvas, agent) => authority.hasListedTool(canvas, agent, 'complete'),
   });
   /** A canvas the core runs, executing (its delivery started): what B11a's services act on. */
   const executing = (canvas: CanvasId) => {

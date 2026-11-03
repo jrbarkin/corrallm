@@ -46,6 +46,8 @@ interface Setup {
   core: Dispatcher;
   /** Readies it for a call of op `op` meeting `rule`: what undoes that. */
   meeting?(rule: Rule, op: string): () => void;
+  /** Readies it for op `op`'s valid calls (B21's complete: its agents' steps in flight). */
+  ready?(op: string): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -231,6 +233,7 @@ describe.each(REGISTRIES)('T3b on %s', (_label, fixtures, world, start) => {
           PROPOSING_RULES.includes(rule),
         );
         const audience = PARTIES.filter((p) => inAudience(name, p));
+        await setup.ready?.(name);
         // A party with arguments of its own takes them, and is answered.
         for (const party of audience.filter((p) => fixture.by?.[p] !== undefined)) {
           for (const args of validFor(fixture, party)) {
@@ -295,6 +298,8 @@ describe.each(REGISTRIES)('T3b on %s', (_label, fixtures, world, start) => {
         } finally {
           met?.();
         }
+        // An op you never call (B21's ask: you answer questions) has no call of yours to apply.
+        if (!inAudience(name, 'you')) continue;
         const yours = await setup.core.call(name, args, CALLERS.you);
         expect(yours.ok, `${rule}: ${JSON.stringify(yours)}`).toBe(true);
         if (yours.ok)

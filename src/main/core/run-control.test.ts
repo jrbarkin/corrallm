@@ -543,6 +543,25 @@ describe('run.goOn', () => {
     });
   });
 
+  it('is your input to its agent for the loop breaker, and no token’s (B21 C6)', async () => {
+    await keep({
+      worker: [
+        { id: 'nap', delay: HOUR },
+        { id: 'rest', delay: HOUR },
+      ],
+    });
+    const core = await start(controlled().connector);
+    await core.engines.open(CANVAS);
+    const open = core.engines.canvas(CANVAS);
+    if (open === undefined) throw new Error('The canvas is not open.');
+    const heard = vi.spyOn(open.delivery, 'heard');
+    ok(await call(core, 'run.start', {}));
+    ok(await call(core, 'run.goOn', { agent: 'worker', item: 'nap' }, ORCHESTRATOR));
+    expect(heard).not.toHaveBeenCalled();
+    ok(await call(core, 'run.goOn', { agent: 'worker', item: 'rest' }));
+    expect(heard).toHaveBeenCalledWith(['worker']);
+  });
+
   it('refuses while the run is stopped or the agent is paused, saying who holds it', async () => {
     await keep({ worker: [{ id: 'nap', delay: HOUR }] });
     const core = await start(controlled().connector);

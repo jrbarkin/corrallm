@@ -183,6 +183,21 @@ export class SessionAuthority implements AgentApi {
     return entry?.listed === true && this.current(entry.caller);
   }
 
+  /**
+   * Whether the agent's session now has listed corrallm's tool `tool` (B21 C8: `complete`, which
+   * its steps then ask for): it has listed corrallm's tools, and its party's listing names that one.
+   */
+  hasListedTool(canvas: CanvasId, agent: string, tool: string): boolean {
+    const generation = this.#deps.generationOf(canvas, agent);
+    if (generation === undefined) return false;
+    const entry = this.#entries.get(keyOf(canvas, agent, generation));
+    return (
+      entry?.listed === true &&
+      this.current(entry.caller) &&
+      this.#tools(entry.caller).some(({ name }) => name === tool)
+    );
+  }
+
   /** What it keeps, for tests: how many entries, and each one's hash and caller (never a credential). */
   inspect(): {
     entries: number;

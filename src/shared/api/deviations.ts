@@ -19,7 +19,7 @@ export const REASONS = {
   consent: 'Consent is yours alone to give.',
   permissions: 'Who leads, and what an agent runs as (its mode, connection and CLI), are yours.',
   'caller-bound':
-    'It acts for the calling agent itself, which neither you nor an outside caller is.',
+    'It acts for its caller itself (a question it asks, an agent’s own work), which you never are: you answer questions.',
   'native-menu':
     'Main’s native menus call it as you (the Dock, the menu-bar item, the tray): no window or token does.',
 } as const;
@@ -57,4 +57,6 @@ export const DEVIATIONS: Partial<Record<OpName, Reason>> = {
   'terminal.resize': 'view',
   'terminal.drop': 'os-action',
   wait: 'transport',
+  ask: 'caller-bound',
+  complete: 'caller-bound',
 };

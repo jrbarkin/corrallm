@@ -632,6 +632,53 @@ export const MIGRATIONS: readonly Migration[] = [
       ) STRICT, WITHOUT ROWID;
     `,
   },
+  {
+    // B21's durable asks (B21 Design §9.2 C6): an ask is a message, of kind `prompt`, whose
+    // questions and deadline this column keeps, as an answer's keeps its answers. Reader 9 keeps
+    // the ask's ownership, waiting state and framed answer throughout its lifetime.
+    version: 9,
+    minReader: 9,
+    sql: `
+      -- On an ask's row: its questions (bounded, never secret), its deadline, whether it was sent
+      -- to the asker's manager, and its task; on an answer's row: the ask it answers, and the
+      -- answers by question id, or the reply text that answered it. None for every other message.
+      ALTER TABLE message ADD COLUMN ask TEXT CHECK (ask IS NULL OR json_valid(ask));
+    `,
+  },
+  {
+    // B21's completions (B21 Design §9.2 C8): a task's result is a message, of kind `result`, from
+    // its agent to corrallm, whose verdict this column keeps. Reader 10 preserves that fixed
+    // report when judging or recovering the attempt.
+    version: 10,
+    minReader: 10,
+    sql: `
+      -- On a result record: the outcome its agent reported of its task's attempt (succeeded or
+      -- failed) and its summary, in the agent's own words (at most 4 KiB). None for every other
+      -- message.
+      ALTER TABLE message ADD COLUMN verdict TEXT CHECK (verdict IS NULL OR json_valid(verdict));
+    `,
+  },
+  {
+    // B21's loop breaker (B21 Design §9.2 C9): how many turns two agents have passed between them
+    // since the user last spoke to either. A corrallm without the breaker would send a turn it
+    // holds, so none older may open the database once this ran (decided Nov 2).
+    version: 11,
+    minReader: 11,
+    sql: `
+      -- One row per pair of agents of a canvas while it counts turns (turns > 0): the two agents'
+      -- ids, ordered (a before b, by their UTF-8 bytes), and the turns delivered between them
+      -- since the user last gave either input. A pair at zero has no row; either agent leaving
+      -- the canvas deletes it. Counts only: no text, and no message id.
+      CREATE TABLE loop_pair (
+        canvas_id TEXT NOT NULL REFERENCES canvas (id) ON DELETE CASCADE,
+        a TEXT NOT NULL,
+        b TEXT NOT NULL,
+        turns INTEGER NOT NULL CHECK (turns >= 1),
+        CHECK (a <> b),
+        PRIMARY KEY (canvas_id, a, b)
+      ) STRICT, WITHOUT ROWID;
+    `,
+  },
 ];
 
 /** The schema this code makes and reads. */

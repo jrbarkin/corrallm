@@ -1,5 +1,6 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { Delivery } from './delivery';
+import { LoopStore, LoopTable } from './loops';
 import { MessageStore, MessageTable } from './messages';
 import { unopened } from '../store/store';
 import { Engine } from '../engine/engine';
@@ -38,6 +39,12 @@ it('settles withdrawals and tells their senders before the next event loop turn,
     later: () => () => undefined,
     changed: () => undefined,
     defaultAsks: () => Promise.resolve(true),
+    loops: new LoopStore(
+      CANVAS,
+      new LoopTable(unopened('No database needed for an empty canvas'), {
+        ensure: () => undefined,
+      }),
+    ),
   });
   try {
     await delivery.start();

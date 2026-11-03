@@ -451,6 +451,21 @@ describe('a run’s hold', () => {
     });
   });
 
+  it('is your input to its agent for the loop breaker once answered, and nothing a refused answer does (B21 C6)', async () => {
+    const { core } = await start();
+    const open = core.engines.canvas(CANVAS);
+    if (open === undefined) throw new Error('The canvas is not open.');
+    const heard = vi.spyOn(open.delivery, 'hear');
+    open.engine.run.start();
+    const hold = await waitingFor(core, isHold('a'));
+    expect(
+      await call(core, 'reply', { to: hold.id, answer: { choice: 'approve' } }, ORCHESTRATOR),
+    ).toMatchObject({ ok: false });
+    expect(heard).not.toHaveBeenCalled();
+    await ok(core, 'reply', { to: hold.id, answer: { choice: 'approve' } });
+    expect(heard).toHaveBeenCalledWith(['a']);
+  });
+
   it('is never answered while a pause holds its agent, and no answer releases one (R9)', async () => {
     const { core } = await start();
     const open = core.engines.canvas(CANVAS);

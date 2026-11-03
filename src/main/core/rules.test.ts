@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { ArgsOf } from '../../shared/api/registry';
 import type { CanvasDocument } from '../../shared/model/canvas';
+import type { AskQuestion } from '../../shared/model/asks';
 import { engineCatalog } from '../../shared/model/catalog';
 import { MADE_UP, TWO_MADE_UP as TWO } from '../../shared/test-made-up';
 import type { TokenCaller } from './caller';
@@ -115,6 +116,50 @@ describe('file mentions over the resolver', () => {
     expect(await send('zed', 'Read @src/x')).toBeUndefined();
     expect(await send('shell', 'Read @src/x')).toEqual({
       refuse: expect.stringContaining('Yak Agent · Terminal') as string,
+    });
+  });
+});
+
+describe('ask fields use the recipient’s text rules', () => {
+  const question: AskQuestion = {
+    id: 'scope',
+    header: 'Scope',
+    text: 'Which scope?',
+    options: [{ label: 'All', description: 'Everything' }],
+    multiple: false,
+    other: true,
+  };
+  const fields = ['id', 'header', 'text', 'label', 'description'] as const;
+
+  describe.each([
+    ['shell-text', '$ ls'],
+    ['file-mentions', '@src/x'],
+  ] as const)('%s', (rule, text) => {
+    it.each(fields)('checks a question’s %s and permits ordinary words', async (field) => {
+      const check = ruleChecks(ENGINES, TWO)[rule].ask;
+      const send = (value: string) => {
+        const one =
+          field === 'label' || field === 'description'
+            ? {
+                ...question,
+                options: [{ label: 'All', description: 'Everything', [field]: value }],
+              }
+            : { ...question, [field]: value };
+        return check(
+          {
+            canvas: CANVAS,
+            to: 'shell',
+            questions: [one],
+            deadlineSeconds: 60,
+          } as unknown as ArgsOf<'ask'>,
+          {
+            caller: CALLERS['outside-write'] as TokenCaller,
+            party: 'outside-write',
+          },
+        );
+      };
+      expect(await send(text)).toEqual({ refuse: expect.any(String) as string });
+      expect(await send('Ordinary words')).toBeUndefined();
     });
   });
 });

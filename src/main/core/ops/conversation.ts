@@ -10,9 +10,13 @@ import type { NeedsItem } from '../../../shared/model/needs';
 import { agentName, areLinked, teamOf } from '../../../shared/model/queries';
 import { OpFailure } from '../call';
 import type { OpContext } from '../call';
+import { ownTurn } from '../attempts';
 import { canvasesOf, isTokenCaller, partyIdOf, promptReaderOf } from '../caller';
-import { DeliveryError } from '../delivery/delivery';
-import { cursorOf, readCursor } from '../delivery/messages';
+import type { MessageId } from '../../../shared/api/ids';
+import { agentParty } from '../../../shared/model/messages';
+import { DeliveryError } from '../delivery/errors';
+import { capBody, cursorOf, readCursor } from '../delivery/messages';
+import { resultKey } from '../delivery/tasks';
 import { needsInput } from '../engines';
 import type { OpenCanvas } from '../engines';
 import { agentsReached } from '../reach';
@@ -23,7 +27,10 @@ import type { Implementations, OpServices } from '.';
 /** Conversation (Core Server §4 H; API Spec §7.2). */
 export function conversationOps(
   services: OpServices,
-): Pick<Implementations, 'agents' | 'status' | 'needs' | 'messages' | 'message' | 'withdraw'> {
+): Pick<
+  Implementations,
+  'agents' | 'status' | 'needs' | 'messages' | 'message' | 'withdraw' | 'ask' | 'complete'
+> {
   const { engines, states, isLead, locale, proposals, reviews, stalled } = services;
   const lead = (canvas: CanvasId, { caller }: OpContext) =>
     caller.kind === 'agent' && isLead(canvas, caller.agent);
@@ -45,6 +52,8 @@ export function conversationOps(
     const reader = promptReaderOf(ctx.caller);
     const items = [
       ...needs(needsInput(open, locale)).map((item) => needFor(item, reader)),
+      // B21 C5, C6: its asks, parties’ messages to you and the pairs held after ten turns (yours alone).
+      ...open.delivery.items().map((item) => needFor(item, reader)),
       ...(services.prompts?.items(id, reader) ?? []),
       ...[
         ...proposals.items(id, ctx.caller.kind === 'human' ? undefined : reach),
@@ -60,10 +69,13 @@ export function conversationOps(
     if (ctx.caller.kind === 'human') return items;
     const { caller } = ctx;
     const team = caller.kind === 'agent' ? teamOf(open.document.nodes, caller.agent) : [];
-    return items.filter(
-      (item) =>
-        item.agent !== undefined &&
-        (reach.includes(item.agent) || (item.kind === 'prompt' && team.includes(item.agent))),
+    const party = partyIdOf(caller);
+    return items.filter((item) =>
+      // An ask is on no agent: its recipient sees it, as one it may answer (B21 C6).
+      item.id.startsWith('ask/')
+        ? item.by.includes(party)
+        : item.agent !== undefined &&
+          (reach.includes(item.agent) || (item.kind === 'prompt' && team.includes(item.agent))),
     );
   };
 
@@ -169,10 +181,25 @@ export function conversationOps(
     },
     message: async ({ canvas, to, body, images, replyTo }, ctx) => {
       const open = openCanvas(engines, canvas);
-      const node = agentOf(open, to);
       if (replyTo !== undefined && !open.messages.get(replyTo)) {
         throw new OpFailure('not-found', `There is no message ${replyTo}.`);
       }
+      // B21 C5: to you, or to the sender's manager (you, until B24): a record and a Needs item.
+      if (typeof to !== 'string') {
+        const { via } = partyTarget(to, ctx);
+        try {
+          const sent = await open.delivery.asks.toYou({
+            from: partyIdOf(ctx.caller),
+            body,
+            ...(replyTo === undefined ? {} : { replyTo }),
+            ...(via === undefined ? {} : { via }),
+          });
+          return { id: sent.id };
+        } catch (error) {
+          return failed(error);
+        }
+      }
+      const node = agentOf(open, to);
       // Images only of the kinds, number and size its connection takes (yours alone: human-text).
       const pasted = images ?? [];
       if (pasted.length > 0) {
@@ -207,6 +234,74 @@ export function conversationOps(
         return failed(error);
       }
     },
+    // B21 C4, C6: on disk before it returns; its answer comes later, as a message.
+    ask: async ({ canvas, to, questions, deadlineSeconds, request }, ctx) => {
+      const open = openCanvas(engines, canvas);
+      const recipient =
+        typeof to === 'string'
+          ? { to: agentParty(agentOf(open, to).id) }
+          : { to: 'you' as const, ...partyTarget(to, ctx) };
+      // B21 C7: asked during one of its task's attempt's own turns, it belongs to that task.
+      const own = ctx.caller.kind === 'agent' ? ownTurn(open, ctx.caller.agent) : undefined;
+      try {
+        const asked = await open.delivery.asks.ask({
+          from: partyIdOf(ctx.caller),
+          ...recipient,
+          questions,
+          seconds: deadlineSeconds,
+          ...(request === undefined ? {} : { request }),
+          ...(own === undefined ? {} : { task: own.task }),
+        });
+        return { id: asked.id as MessageId };
+      } catch (error) {
+        return failed(error);
+      }
+    },
+    // B21 C5 (Design §9.2 C8): the caller's own tool step's attempt, during its own turn, once; a
+    // result record on disk before it returns, its verdict fixed then and applied as that turn ends.
+    complete: async ({ canvas, task, outcome, summary }, ctx) => {
+      const open = openCanvas(engines, canvas);
+      const { caller } = ctx;
+      // Its reach resolved it as the caller's own (`ownTurn`): read again here, nothing awaited.
+      const own = caller.kind === 'agent' ? ownTurn(open, caller.agent) : undefined;
+      if (own?.task.attempt !== task) {
+        throw new OpFailure('not-found', `There is no attempt ${task}.`);
+      }
+      const { messages } = open;
+      const first = messages.toldAs(resultKey(task));
+      if (first !== undefined) {
+        throw new OpFailure(
+          'conflict',
+          `This step was already reported ${first.verdict?.outcome ?? 'once'}.`,
+        );
+      }
+      messages.add(
+        {
+          from: partyIdOf(caller),
+          to: 'corrallm',
+          kind: 'result',
+          origin: 'party',
+          body: capBody(`${outcome === 'succeeded' ? 'Succeeded' : 'Failed'}: ${summary}`, 'reply'),
+          replyTo: own.message.id,
+          task: own.task,
+          state: 'delivered',
+          verdict: { v: 1, outcome, summary },
+        },
+        resultKey(task),
+      );
+      // At once: its open asks and its continuations to come are withdrawn, so no later turn joins
+      // its task; nothing downstream moves before its turn's native end.
+      open.delivery.asks.withdrawTask(own.task, 'completed');
+      try {
+        await messages.durable();
+      } catch (error) {
+        throw new OpFailure(
+          'unavailable',
+          `The report stands now, but it could not be saved and may not survive a restart (${error instanceof Error ? error.message : String(error)}).`,
+        );
+      }
+      return {};
+    },
     withdraw: async ({ canvas, id }, ctx) => {
       const open = openCanvas(engines, canvas);
       try {
@@ -216,6 +311,27 @@ export function conversationOps(
       }
     },
   };
+}
+
+/**
+ * Where a party target goes (B21 C4, C5): you, or the caller's manager, which is the nearest lead
+ * its tree grants questions, else you; until B24 grants none, you, `via` it. You name neither (you
+ * message agents), and an outside orchestrator has no manager.
+ */
+function partyTarget(
+  { party }: { party: 'you' | 'manager' },
+  { caller }: OpContext,
+): { via?: 'manager' } {
+  if (caller.kind === 'human') {
+    throw new OpFailure('invalid', 'You message agents: name an agent, not a party.');
+  }
+  if (party === 'manager' && caller.kind === 'outside') {
+    throw new OpFailure(
+      'invalid',
+      "An outside orchestrator has no manager: name an agent, or { party: 'you' }.",
+    );
+  }
+  return party === 'manager' ? { via: 'manager' } : {};
 }
 
 /**

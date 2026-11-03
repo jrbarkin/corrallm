@@ -5,11 +5,13 @@ import { HandoffViewSchema } from '../../model/handoff';
 import { MESSAGE_KINDS, MESSAGE_STATES, PARTY_PATTERN } from '../../model/messages';
 import { NEED_KINDS } from '../../model/needs';
 import { Choice, PromptNeedView, PromptReplyAnswer } from '../../model/prompts';
-import { SettledDecision } from '../../model/settled';
+import { AskColumn } from '../../model/asks';
+import { Verdict } from '../../model/results';
+import { Settled } from '../../model/settled';
 import { TURN_REASONS } from '../../session';
 import { define } from '../define';
 import type { OpDef } from '../define';
-import { AgentId, MessageId, NeedId, OpCanvas } from '../ids';
+import { MessageId, NeedId, OpCanvas, Target } from '../ids';
 import { MAX_PAGE, MAX_WAIT_SECONDS } from '../limits';
 import type { OpName } from '../surface';
 import { Body as B11Body, Images, ManualBody } from './b11-data';
@@ -47,8 +49,15 @@ export const Message = z.strictObject({
   state: z.enum(MESSAGE_STATES),
   delivery: z.strictObject({ at: z.number(), as: z.string(), attempt: z.int() }).optional(),
   by: Party.optional(),
-  /** A record of a native prompt's decision: what was decided, value-free. Yours alone. */
-  settled: SettledDecision.optional(),
+  /**
+   * A record of a native prompt's decision: what was decided, value-free, yours alone; or how an
+   * ask ended (B21 C6), value-free, on the ask and on the record its asker is sent.
+   */
+  settled: Settled.optional(),
+  /** An ask's questions and deadline, or an answer's answers (B21 C6). */
+  ask: AskColumn.optional(),
+  /** A result record's verdict (B21 C8): the outcome its agent reported, and its summary. */
+  verdict: Verdict.optional(),
   at: z.number(),
 });
 
@@ -187,11 +196,13 @@ export const conversationOps = {
       'Sends an agent a message, delivered as soon as it is idle and nothing holds it, with a ' +
       'first line saying who it is from. Its reply comes back to you as a message. Returns at ' +
       'once, with the message’s id. Yours is at most 16 KB of text: only the user’s own ' +
-      'messages are longer, or carry images.',
+      'messages are longer, or carry images. `to` is an agent’s id, or { party: "you" } for the ' +
+      'user (or "manager" for your manager, which is the user for now): the user sees it in Needs ' +
+      'and may reply or dismiss it; it asks and approves nothing.',
     input: z
       .strictObject({
         canvas,
-        to: AgentId,
+        to: Target,
         body: ManualBody,
         images: Images.optional(),
         replyTo: MessageId.optional(),

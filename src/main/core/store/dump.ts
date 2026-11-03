@@ -101,6 +101,8 @@ export async function dump(file: string, print: (line: string) => Promise<void>)
             'delivery',
             'withdrawal',
             'settled',
+            'ask',
+            'verdict',
           ]),
         }),
       );

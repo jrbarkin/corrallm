@@ -154,6 +154,8 @@ export class RunControl {
       throw new OpFailure('conflict', `${name}’s hold at ${item} doesn’t take Go on now.`);
     }
     await saved(open.journal(), GO_ON_UNSAVED);
+    // Your decision naming an agent is input to it (the loop breaker, B21 C6).
+    if (ctx.caller.kind === 'human') await open.delivery.hear([agent]);
     return {};
   }
 }

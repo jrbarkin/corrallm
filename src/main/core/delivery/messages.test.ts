@@ -8,6 +8,8 @@ import { STORE_BYTES, STORE_SETTLED_PER_PARTY } from '../../../shared/api/limits
 import type { CanvasId } from '../../../shared/canvas';
 import { MESSAGE_KINDS, MESSAGE_STATES } from '../../../shared/model/messages';
 import type { Message } from '../../../shared/model/messages';
+import { AskColumn, AskSettlement } from '../../../shared/model/asks';
+import { Verdict } from '../../../shared/model/results';
 import { SettledDecision } from '../../../shared/model/settled';
 import { CanvasMemory } from '../../memory';
 import { STORE_FILE } from '../store/open';
@@ -15,7 +17,7 @@ import { settleRestored } from '../store/restored';
 import { connect } from '../store/sqlite';
 import { Store, SYSTEM_DEPS, unopened } from '../store/store';
 import type { StoreDeps } from '../store/store';
-import { openTestStore, readOnDisk, refuseWrites } from '../store/test-store';
+import { openTestStore, readOnDisk, refuseWrites, writeOnDisk } from '../store/test-store';
 import { isActive, MessageStore, MessageTable } from './messages';
 import type { Draft, Staged } from './messages';
 import { scanPrune } from './test-prune';
@@ -451,6 +453,157 @@ describe('the message store', () => {
         disk.prepare('SELECT settled FROM message WHERE id = ?').get(record.id),
       ),
     ).toEqual({ settled: JSON.stringify(settled) });
+  });
+
+  it('keeps an ask’s questions and its answer’s answers, and its settlement once it ends, never changing either after', async () => {
+    const messages = await store();
+    const ask = AskColumn.parse({
+      v: 1,
+      type: 'question',
+      questions: [
+        {
+          id: 'scope',
+          header: 'Scope',
+          text: 'How much?',
+          options: [{ label: 'All' }, { label: 'Some' }],
+          multiple: false,
+          other: false,
+        },
+      ],
+      deadline: 90_000,
+    });
+    const asked = messages.add({
+      from: 'agent:planner',
+      to: 'agent:builder',
+      kind: 'prompt',
+      origin: 'party',
+      body: 'Planner asks: Scope',
+      state: 'pending',
+      ask,
+    });
+    await messages.durable();
+    // Settled as it ends, with its answer in the same write.
+    const settled = AskSettlement.parse({
+      v: 1,
+      ask: { questions: 1 },
+      outcome: { type: 'answers', count: 1 },
+    });
+    messages.update(asked.id, { state: 'answered', by: 'agent:builder', settled });
+    const answer = messages.add({
+      from: 'agent:builder',
+      to: 'agent:planner',
+      kind: 'text',
+      origin: 'party',
+      body: 'Scope: All',
+      replyTo: asked.id,
+      state: 'pending',
+      ask: { v: 1, type: 'answer', of: asked.id, answers: { scope: { picked: ['All'] } } },
+    });
+    await messages.durable();
+    // A later change of the row never writes another settlement over it.
+    messages.update(asked.id, {
+      settled: { v: 1, ask: { questions: 1 }, outcome: { type: 'expired' } },
+    });
+    await messages.durable();
+    await restart();
+    const again = await store();
+    expect(again.get(asked.id)).toEqual({
+      ...asked,
+      state: 'answered',
+      by: 'agent:builder',
+      settled,
+    });
+    expect(again.get(answer.id)).toEqual(answer);
+    expect(
+      readOnDisk(profile, (disk) =>
+        disk.prepare('SELECT ask, settled FROM message WHERE id = ?').get(asked.id),
+      ),
+    ).toEqual({ ask: JSON.stringify(ask), settled: JSON.stringify(settled) });
+  });
+
+  it('leaves a row whose ask it doesn’t read as it is', async () => {
+    const messages = await store();
+    const read = messages.add(draft('you', 'agent:builder'));
+    await messages.durable();
+    database.tx(() =>
+      database
+        .prepare(
+          `INSERT INTO message (id, canvas_id, from_party, to_party, kind, origin, body, state,
+             sent_at, ask)
+           VALUES ('newer ask', ?, 'agent:a', 'agent:b', 'prompt', 'party', 'Asks', 'pending', 1,
+             '{"v":2,"type":"question"}')`,
+        )
+        .run(CANVAS),
+    );
+    await restart();
+    const again = await store();
+    expect(again.all().map(({ id }) => id)).toEqual([read.id]);
+    again.add(draft('outside:orchestrator', 'agent:builder'));
+    await again.durable();
+    expect(rows().map(({ id }) => id)).toContain('newer ask');
+  });
+
+  it('keeps a result’s verdict with its row, never changing it after, and leaves one it can’t read as it is', async () => {
+    const messages = await store();
+    const verdict = Verdict.parse({ v: 1, outcome: 'failed', summary: 'Two tests fail.' });
+    const result = messages.add({
+      from: 'agent:builder',
+      to: 'corrallm',
+      kind: 'result',
+      origin: 'party',
+      body: 'Failed: Two tests fail.',
+      task: { agent: 'builder', item: 'tests', attempt: '0c1d2e3f-4a5b-4c6d-8e7f-9a0b1c2d3e4f' },
+      state: 'delivered',
+      verdict,
+    });
+    await messages.durable();
+    // A later change of the row never writes another verdict over it.
+    messages.update(result.id, { verdict: { ...verdict, outcome: 'succeeded' } });
+    await messages.durable();
+    expect(
+      readOnDisk(profile, (disk) =>
+        disk.prepare('SELECT verdict FROM message WHERE id = ?').get(result.id),
+      ),
+    ).toEqual({ verdict: JSON.stringify(verdict) });
+    // One a newer corrallm might keep: read as nothing, and left as it is.
+    writeOnDisk(
+      profile,
+      `UPDATE message SET verdict = '${JSON.stringify({ v: 2, outcome: 'partial' })}' WHERE id = '${result.id}'`,
+    );
+    await restart();
+    const again = await store();
+    expect(again.get(result.id)).toBeUndefined();
+  });
+
+  it('never drops an open ask, or your message waiting on you, past its party’s quota', async () => {
+    const messages = await store();
+    const ask = messages.add({
+      from: 'agent:planner',
+      to: 'you',
+      kind: 'prompt',
+      origin: 'party',
+      body: 'Planner asks: Scope',
+      state: 'delivered',
+      ask: AskColumn.parse({
+        v: 1,
+        type: 'question',
+        questions: [
+          { id: 'q', header: 'Q', text: 'Why?', options: [], multiple: false, other: true },
+        ],
+        deadline: 90_000,
+      }),
+    });
+    const toYou = messages.add(draft('agent:planner', 'you', 'delivered'));
+    // Settled messages enough to push both past the planner's quota and yours.
+    for (let i = 0; i < STORE_SETTLED_PER_PARTY + 2; i++)
+      messages.add(draft('you', 'agent:planner', 'replied'));
+    expect(messages.get(ask.id)).toBeDefined();
+    expect(messages.get(toYou.id)).toBeDefined();
+    // Once you dismiss it, it is a record like any other.
+    messages.update(toYou.id, { state: 'answered', by: 'you' });
+    messages.add(draft('you', 'agent:planner', 'replied'));
+    expect(messages.get(toYou.id)).toBeUndefined();
+    expect(messages.get(ask.id)).toBeDefined();
   });
 
   it('leaves a row whose settled decision it doesn’t read as it is', async () => {

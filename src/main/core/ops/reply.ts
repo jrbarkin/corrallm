@@ -5,8 +5,16 @@ import { cleanupOf, isDocOp, itemOf } from '../canvas/proposals';
 import type { Outcome } from '../canvas/proposals';
 import { itemOf as reviewItemOf } from '../canvas/reviews';
 import { partyText } from '../parties';
-import { notFound, ReplyRouter } from '../replies';
+import { notFound, ReplyRouter, said } from '../replies';
+import type { CanvasId } from '../../../shared/canvas';
 import type { Answer, ReplyHandler, ReplyResult } from '../replies';
+import { MAX_ASK_BYTES } from '../../../shared/api/limits';
+import { agentOf } from '../../../shared/model/messages';
+import { promptJsonBytes } from '../../../shared/model/prompt-data';
+import { checkQuestionAnswers } from '../../../shared/model/prompts';
+import { partyIdOf } from '../caller';
+import { DeliveryError } from '../delivery/errors';
+import { mentionRefusal, shellRefusal } from '../rules';
 import { SetupError } from '../workspaces/setup';
 import type { Implementations, OpServices } from '.';
 
@@ -51,6 +59,7 @@ const STALE = new Set(['conflict', 'not-found', 'invalid', 'refused']);
 const ENTITY = /^(?:(?:node|link|item)\/|meta$)/;
 
 export function replyOps({
+  catalog,
   proposals,
   reviews,
   documents,
@@ -65,10 +74,10 @@ export function replyOps({
   workspaceReplies,
 }: Pick<
   OpServices,
-  'proposals' | 'reviews' | 'needOf' | 'setups' | 'replies' | 'workspaceReplies'
+  'catalog' | 'proposals' | 'reviews' | 'needOf' | 'setups' | 'replies' | 'workspaceReplies'
 > & {
   documents: Pick<OpServices['documents'], 'applyFile' | 'keepFile'>;
-  engines: Pick<OpServices['engines'], 'changed' | 'resendAfter' | 'cancelResend'>;
+  engines: Pick<OpServices['engines'], 'canvas' | 'changed' | 'resendAfter' | 'cancelResend'>;
   lifecycle: Pick<Lifecycle, 'touched'>;
   windows: Pick<OpServices['windows'], 'shownIn'>;
   stalled: OpServices['stalled'];
@@ -254,6 +263,126 @@ export function replyOps({
     },
   };
 
+  /** The canvas's asks and messages to you (B21 C5, C6), where the core runs it. */
+  const asksOf = (canvas: string) => engines.canvas(canvas as CanvasId)?.delivery.asks;
+  /** What the ask service couldn't do, as the op's failure. */
+  const asOp = (error: unknown): never => {
+    if (error instanceof DeliveryError) throw new OpFailure(error.code, error.message);
+    throw error;
+  };
+
+  // B21 C6: an ask, answered by its recipient or by you, every question at once; one to you you
+  // may dismiss. The first answer wins; a later one is a conflict naming who answered.
+  const ask: ReplyHandler = {
+    prefixes: ['ask'],
+    current: (canvas, to) => asksOf(canvas)?.askItem(to),
+    gone: (canvas, to) => {
+      const why = asksOf(canvas)?.askGone(to);
+      return why === undefined ? undefined : new OpFailure('conflict', why);
+    },
+    fits: (item, answer) => {
+      const dismissable = item.choices.some(({ value }) => value === 'dismiss');
+      if ('answers' in answer) {
+        try {
+          checkQuestionAnswers(item.questions ?? [], answer.answers);
+        } catch (error) {
+          return error instanceof Error ? error.message : String(error);
+        }
+        return promptJsonBytes(answer.answers) > MAX_ASK_BYTES
+          ? 'The answers are at most 16 KB of JSON.'
+          : undefined;
+      }
+      if (
+        dismissable &&
+        'choice' in answer &&
+        answer.choice === 'dismiss' &&
+        Object.keys(answer).length === 1
+      )
+        return undefined;
+      return `${item.id} takes answers to its questions${dismissable ? ', or Dismiss' : ''}.`;
+    },
+    act: async (canvas, item, answer, ctx) => {
+      const asks = asksOf(canvas);
+      const open = engines.canvas(canvas);
+      if (asks === undefined || open === undefined) throw notFound(item.id);
+      try {
+        if (!('answers' in answer)) {
+          const record = await asks.dismiss(item.id);
+          return { ...(record === undefined ? {} : { id: record.id }), outcome: 'dismissed' };
+        }
+        // R1 and file mentions (B21 §4.6, §9.7 A1): a token's own words reach an agent asker's
+        // connection, as a message's body would.
+        const asker = asks.askOf(item.id)?.from;
+        const to = asker === undefined ? undefined : agentOf(asker);
+        if (ctx.caller.kind !== 'human' && to !== undefined) {
+          const words = Object.values(answer.answers).flatMap((one) =>
+            'text' in one ? [one.text] : [],
+          );
+          const refusal =
+            shellRefusal(open, catalog, to, words) ?? mentionRefusal(open, catalog, to, words);
+          if (refusal !== undefined) throw new OpFailure('refused', refusal.refuse);
+        }
+        const row = await asks.answer(item.id, partyIdOf(ctx.caller), {
+          answers: answer.answers,
+        });
+        return { id: row.id, outcome: 'answered' };
+      } catch (error) {
+        return asOp(error);
+      }
+    },
+  };
+
+  // B21 C5: a party's message to you, yours alone: Dismiss, or Reply in words.
+  const message: ReplyHandler = {
+    prefixes: ['message'],
+    current: (canvas, to) => asksOf(canvas)?.messageItem(to),
+    gone: (canvas, to) => {
+      const why = asksOf(canvas)?.messageGone(to);
+      return why === undefined ? undefined : new OpFailure('conflict', why);
+    },
+    fits: (item, answer) => {
+      if ('choice' in answer && answer.choice === 'dismiss' && Object.keys(answer).length === 1)
+        return undefined;
+      if ('text' in answer && !('choice' in answer) && answer.images === undefined)
+        return said(answer.text) ? undefined : 'A reply has words.';
+      return `${item.id} takes Dismiss, or a reply in words with no images.`;
+    },
+    act: async (canvas, item, answer) => {
+      const asks = asksOf(canvas);
+      if (asks === undefined) throw notFound(item.id);
+      try {
+        if ('text' in answer && !('choice' in answer)) {
+          const reply = await asks.replyToMessage(item.id, answer.text);
+          return { id: reply.id, outcome: 'answered' };
+        }
+        await asks.dismissMessage(item.id);
+        return { outcome: 'dismissed' };
+      } catch (error) {
+        return asOp(error);
+      }
+    },
+  };
+
+  // B21 C6: two agents held after ten turns between them without you: Go on, yours alone. No token
+  // sees it (it names no agent they reach), and a call that got here is refused all the same.
+  const loop: ReplyHandler = {
+    prefixes: ['loop'],
+    current: (canvas, to) => engines.canvas(canvas)?.delivery.loopItem(to),
+    act: async (canvas, item, _answer, ctx) => {
+      if (ctx.caller.kind !== 'human') {
+        throw new OpFailure('human-only', 'Only the user lets agents that looped go on.');
+      }
+      const open = engines.canvas(canvas);
+      if (open === undefined) throw notFound(item.id);
+      try {
+        await open.delivery.goOn(item.id);
+        return { outcome: 'answered' };
+      } catch (error) {
+        return asOp(error);
+      }
+    },
+  };
+
   // Without the runtime's handlers, what it asks is answered in corrallm's window.
   const window: ReplyHandler = {
     prefixes: ['hold', 'start', 'unasking', 'limited', 'prompt'],
@@ -268,14 +397,20 @@ export function replyOps({
       ),
   };
 
-  const router = new ReplyRouter([
-    proposal,
-    review,
-    silent,
-    setup,
-    ...(workspaceReplies ?? []),
-    ...(replies ?? [window]),
-  ]);
+  const router = new ReplyRouter(
+    [
+      proposal,
+      review,
+      silent,
+      setup,
+      ask,
+      message,
+      loop,
+      ...(workspaceReplies ?? []),
+      ...(replies ?? [window]),
+    ],
+    (canvas, agent) => engines.canvas(canvas)?.delivery.hear([agent]) ?? Promise.resolve(),
+  );
 
   const answer = (
     args: { canvas?: string | undefined; to: string; answer: Answer },

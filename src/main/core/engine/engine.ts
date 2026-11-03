@@ -46,6 +46,10 @@ export interface EngineIO {
   limitNote?: RunIO['limitNote'];
   /** B11a C7: whether a handoff request holds an agent's next task (RunIO.handoff). */
   handoff?: RunIO['handoff'];
+  /** B21 C7, C8: what the canvas's mailbox holds of its tasks' asks and results (RunIO.tasks). */
+  tasks?: RunIO['tasks'];
+  /** B21 C8: whether an agent's session listed corrallm's complete (RunIO.completes). */
+  completes?: RunIO['completes'];
 }
 
 /** How often a held retry (Interrupt and resend) is checked again while something holds it. */
@@ -138,6 +142,8 @@ export class Engine {
       ...(io.admit === undefined ? {} : { admit: io.admit }),
       ...(io.limitNote === undefined ? {} : { limitNote: io.limitNote }),
       ...(io.handoff === undefined ? {} : { handoff: io.handoff }),
+      ...(io.tasks === undefined ? {} : { tasks: io.tasks }),
+      ...(io.completes === undefined ? {} : { completes: io.completes }),
     });
     this.run.subscribe(() => {
       this.#checkRetries();

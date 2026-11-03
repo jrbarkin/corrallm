@@ -1,7 +1,9 @@
 import type { CanvasId } from '../canvas';
 import type { TurnResult } from '../session';
 import { MAX_NODE_ID } from './canvas';
-import type { SettledDecision } from './settled';
+import type { AskColumn } from './asks';
+import type { Verdict } from './results';
+import type { Settled } from './settled';
 
 /*
  * Messages (API Spec §5): what parties send each other on a canvas, as the core keeps them (its
@@ -62,9 +64,9 @@ export const MESSAGE_STATES = [
 export type MessageState = (typeof MESSAGE_STATES)[number];
 
 /**
- * What a message is: text from a party (`message`, an agent's reply); a prompt carried to another
- * answerer than you; or a record: a task's verdict (`result`), a prompt's end (`settled`), or
- * corrallm telling a party something (`notice`).
+ * What a message is: text from a party (`message`, an agent's reply, an answer to an ask); a prompt
+ * carried to another answerer than you (an ask, B21 C6); or a record: a task's verdict (`result`), a
+ * prompt's or an ask's end (`settled`), or corrallm telling a party something (`notice`).
  */
 export const MESSAGE_KINDS = ['text', 'prompt', 'result', 'settled', 'notice'] as const;
 export type MessageKind = (typeof MESSAGE_KINDS)[number];
@@ -91,6 +93,8 @@ export interface MessageDisplay {
   readonly text?: string;
   readonly images?: number;
   readonly requiresImages?: true;
+  /** A party's message to you sent to its manager, which was you (B21 C5): B24 routes it again. */
+  readonly via?: 'manager';
 }
 
 /**
@@ -101,7 +105,12 @@ export interface MessageDisplay {
  * withdrew it. `resendOf`: the message it sends again, at your request (never a reply to it:
  * `replyTo` is only a reply's, or a record's about another message). `settled`: for a record of a
  * native prompt's decision, what was decided, typed and value-free (./settled.ts), never changed
- * after; yours alone to read. Images a message carried are never kept.
+ * after; yours alone to read; for an ask (B21 C6), how it ended, value-free, set once as it ends,
+ * on its row and on the record its asker is sent. `ask`: an ask's questions and deadline, or an
+ * answer's answers (./asks.ts), written with its row and never changed after. `verdict`: on a
+ * `result` record (B21 C8), the outcome and summary its agent reported of its task's attempt with
+ * `complete` (./results.ts), written with its row and never changed after. Images a message carried
+ * are never kept.
  */
 export interface Message {
   id: string;
@@ -118,23 +127,81 @@ export interface Message {
   state: MessageState;
   delivery?: { at: number; as: string; attempt: number };
   by?: PartyId;
-  settled?: SettledDecision;
+  settled?: Settled;
+  ask?: AskColumn;
+  verdict?: Verdict;
   /** When it was sent, in epoch ms. */
   at: number;
 }
 
 /**
+ * Whether a message continues a queue task (B21 Design §9.2 C7): what an ask made during one of a
+ * task's attempt's own turns sends its asker as it ends (the answer, or the record of how it ended),
+ * carrying that attempt as its `task`. Its turn is the attempt's own, first in line for its agent.
+ */
+export function isContinuation(
+  message: Pick<Message, 'kind' | 'task' | 'ask' | 'settled'>,
+): boolean {
+  return (
+    message.task !== undefined &&
+    (message.ask?.type === 'answer' ||
+      (message.kind === 'settled' && message.settled !== undefined && 'ask' in message.settled))
+  );
+}
+
+/**
+ * Whether a message to an agent is delivered to it as a turn: a party's text (an answer to an ask
+ * among them), an ask (B21 C6), or the record of how an ask ended, sent its asker. Every other
+ * record is only kept, for its party to read.
+ */
+export function isTurn(message: Pick<Message, 'kind' | 'settled'>): boolean {
+  return (
+    message.kind === 'text' ||
+    message.kind === 'prompt' ||
+    (message.kind === 'settled' && message.settled !== undefined && 'ask' in message.settled)
+  );
+}
+
+/**
+ * Whether a message is a party's message to you (B21 C5): an agent's or an outside orchestrator's
+ * text sent you, never a reply (which has its turn's result) nor corrallm's.
+ */
+export function isMessageToYou(message: Message): boolean {
+  return (
+    message.kind === 'text' &&
+    message.to === 'you' &&
+    message.turn === undefined &&
+    (agentOf(message.from) !== undefined || outsideOf(message.from) !== undefined)
+  );
+}
+
+/** Whether an ask (B21 C6) is open: asked, and not answered, dismissed, expired or withdrawn. */
+export function isOpenAsk(message: Message): boolean {
+  return (
+    message.kind === 'prompt' && message.ask?.type === 'question' && message.settled === undefined
+  );
+}
+
+/** Whether a party's message to you waits on you (B21 C5): you neither replied nor dismissed it. */
+export function isOpenToYou(message: Message): boolean {
+  return isMessageToYou(message) && message.state === 'delivered' && message.by === undefined;
+}
+
+/**
  * Whether a message is settled: nothing more will happen to it. A message to an agent isn't while
  * it waits, is being delivered or its turn goes on; one cut off isn't either, so it can be retried.
+ * An open ask isn't, whatever its turn did, nor a party's message to you that waits on you: neither
+ * is ever dropped while it waits.
  */
 export function isSettled(message: Message): boolean {
+  if (isOpenAsk(message) || isOpenToYou(message)) return false;
   switch (message.state) {
     case 'pending':
     case 'delivering':
     case 'unresolved':
       return false;
     case 'delivered':
-      return agentOf(message.to) === undefined || message.kind !== 'text';
+      return agentOf(message.to) === undefined || !isTurn(message);
     default:
       return true;
   }

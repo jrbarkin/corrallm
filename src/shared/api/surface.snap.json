@@ -101,6 +101,7 @@
       "agent_setSettings",
       "agents",
       "app_info",
+      "ask",
       "branch_diff",
       "canvas_addAgent",
       "canvas_addParent",
@@ -118,6 +119,7 @@
       "canvas_unlink",
       "catalog_get",
       "catalog_installed",
+      "complete",
       "message",
       "messages",
       "needs",
@@ -157,8 +159,10 @@
     "worker": [
       "agents",
       "app_info",
+      "ask",
       "branch_diff",
       "catalog_get",
+      "complete",
       "message",
       "messages",
       "needs",
@@ -200,6 +204,7 @@
       "agent_setSettings",
       "agents",
       "app_info",
+      "ask",
       "branch_diff",
       "branch_merge",
       "canvas_addAgent",
@@ -266,10 +271,10 @@
     ]
   },
   "counts": {
-    "lead": 56,
-    "worker": 13,
+    "lead": 58,
+    "worker": 15,
     "outside-read": 24,
-    "outside-write": 67
+    "outside-write": 68
   },
   "deviations": {
     "canvas.open": "trust-gate",
@@ -301,12 +306,14 @@
     "terminal.input": "acts-as-you",
     "terminal.resize": "view",
     "terminal.drop": "os-action",
-    "wait": "transport"
+    "wait": "transport",
+    "ask": "caller-bound",
+    "complete": "caller-bound"
   },
   "schemas": {
     "topics.subscribe": {
       "input": "8c5be84f0a1a163a",
-      "output": "a92c457fc658ed1a"
+      "output": "e0ad379f6c6a899d"
     },
     "topics.unsubscribe": {
       "input": "8c5be84f0a1a163a",
@@ -498,15 +505,15 @@
     },
     "messages": {
       "input": "aa02e84f7d3e9a8e",
-      "output": "9677fd00b1381128"
+      "output": "ebcffdddb1f95662"
     },
     "message": {
-      "input": "cccd0ef6b7530971",
+      "input": "1bc3cefb59c8f144",
       "output": "49e43c944945473f"
     },
     "wait": {
       "input": "d429567b08fb223f",
-      "output": "50a2dfd89653c978"
+      "output": "c7b55e47bd14bafa"
     },
     "reply": {
       "input": "21ada39b9ec4d54c",
@@ -595,6 +602,14 @@
     "session.changeMcpServer": {
       "input": "bc73906df40f4fb0",
       "output": "95aeb65f2f5b10a3"
+    },
+    "ask": {
+      "input": "8e733d625972482d",
+      "output": "49e43c944945473f"
+    },
+    "complete": {
+      "input": "63ee8a34006d30ca",
+      "output": "647bbd6cc7b4f077"
     },
     "settings.get": {
       "input": "e5fa5cc18e054cdd",

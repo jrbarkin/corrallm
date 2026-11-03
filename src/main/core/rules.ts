@@ -32,7 +32,8 @@ import type { ChangeSet } from './canvas/change';
 import type { ChangeRule } from './canvas/commit';
 import { partyIdOf } from './caller';
 import type { TokenCaller } from './caller';
-import type { Engines } from './engines';
+import type { Engines, OpenCanvas } from './engines';
+import type { AskQuestion } from '../../shared/model/asks';
 import { nameOf, partyText, pausesText, RELEASES } from './parties';
 import { resumeUndoes, startUndoes, usageGoOn } from './run-control';
 
@@ -120,6 +121,98 @@ export function onEveryCarrier<R extends ArgumentRule>(
   ) as ArgumentChecks[R];
 }
 
+/** The canvas an R1 or file-mention check reads: its document and its engine's catalog. */
+type Checked = Pick<OpenCanvas, 'document' | 'engine'> | undefined;
+
+/**
+ * R1 (`shell-text`) of `texts` sent agent `to` (an agent's id; a party, you, runs nothing): why a
+ * token may not send them, if one starts with the shell prefix its connection runs without asking,
+ * or any catalog prefix where it runs none yet.
+ */
+export function shellRefusal(
+  open: Checked,
+  catalog: Catalog,
+  to: unknown,
+  texts: readonly string[],
+): { refuse: string } | undefined {
+  const node =
+    typeof to === 'string' ? open?.document.nodes.find((one) => one.id === to) : undefined;
+  if (!open || node?.type !== 'agent') return undefined;
+  const endpoint = agentEndpoint(node.data, catalog);
+  if (endpoint.kind === 'known') {
+    const runs = connectionIn(catalog, endpoint.connection);
+    const prefix = runs?.connection.shellPrefix;
+    if (
+      runs === undefined ||
+      prefix === undefined ||
+      !texts.some((text) => startsWithShell(text, prefix))
+    )
+      return undefined;
+    return {
+      refuse: `It starts with "${prefix}", which ${runs.adapter.name} · ${runs.connection.label} runs as a shell command without asking: only the user may send that.`,
+    };
+  }
+  const prefix = shellPrefixesIn(catalog).find((one) =>
+    texts.some((text) => startsWithShell(text, one)),
+  );
+  if (prefix === undefined) return undefined;
+  const name = nameOf(open.document.nodes, node.id);
+  const runs =
+    endpoint.kind === 'unchosen' ? 'has no agent chosen yet' : 'runs none this build has';
+  return {
+    refuse: `It starts with "${prefix}", which an agent may run as a shell command without asking, and ${name} ${runs}: only the user may send that.`,
+  };
+}
+
+/**
+ * The file-mention rule (B21 §9.7 A1) of `texts` sent agent `to`: why a token may not send them,
+ * if its connection expands a mention one holds without asking, or any connection may where it
+ * runs none yet.
+ */
+export function mentionRefusal(
+  open: Checked,
+  catalog: Catalog,
+  to: unknown,
+  texts: readonly string[],
+): { refuse: string } | undefined {
+  const node =
+    typeof to === 'string' ? open?.document.nodes.find((one) => one.id === to) : undefined;
+  if (!open || node?.type !== 'agent') return undefined;
+  // How the agent runs, as the one resolver reads it (B12 C3), never a default.
+  const endpoint = agentEndpoint(node.data, catalog);
+  if (endpoint.kind === 'known') {
+    for (const text of texts) {
+      const sentence = fileMentionRefusal(open.engine.catalog, endpoint.connection, text);
+      if (sentence !== undefined) return { refuse: sentence };
+    }
+    return undefined;
+  }
+  // Unchosen or unavailable: refused when any connection may expand a mention, as R1 refuses any
+  // catalog shell prefix for such an agent.
+  const expands = catalog.adapters.some(({ connections }) =>
+    connections.some((one) => one.fileMentions === true),
+  );
+  if (!expands || !texts.some((text) => hasFileMention(text))) return undefined;
+  const name = nameOf(open.document.nodes, node.id);
+  const runs =
+    endpoint.kind === 'unchosen' ? 'has no agent chosen yet' : 'runs none this build has';
+  return {
+    refuse: `Not sent: it contains a file mention, which an agent may read without asking, and ${name} ${runs}: only the user may send that.`,
+  };
+}
+
+/** Every text an ask sends its recipient: each question's id, header and words, each option's. */
+export function askTexts(questions: readonly AskQuestion[]): string[] {
+  return questions.flatMap((question) => [
+    question.id,
+    question.header,
+    question.text,
+    ...question.options.flatMap(({ label, description }) =>
+      description === undefined ? [label] : [label, description],
+    ),
+  ]);
+}
+
 /** An item's title as C11 permits the caller to read it. */
 function tokenTitle(item: NeedsItem): string {
   return needFor(item, 'token').title;
@@ -180,54 +273,17 @@ export function ruleChecks(
     // shell prefix would (src/shared/adapter.ts ConnectionDescriptor.shellPrefix), its recipient
     // read through the one resolver (B12 C3). One that runs no connection yet (unchosen, or one
     // this build lacks) may come to run any: every prefix the catalog declares is refused to it.
+    // An ask's every text, each read alone (B21 C6): none may start with its recipient's prefix.
     'shell-text': {
-      message: ({ canvas, to, body }) => {
-        const open = openOf(canvas);
-        const node = open?.document.nodes.find((one) => one.id === to);
-        if (!open || node?.type !== 'agent') return undefined;
-        const endpoint = agentEndpoint(node.data, catalog);
-        if (endpoint.kind === 'known') {
-          const runs = connectionIn(catalog, endpoint.connection);
-          const prefix = runs?.connection.shellPrefix;
-          if (runs === undefined || !startsWithShell(body, prefix)) return undefined;
-          return {
-            refuse: `It starts with "${prefix}", which ${runs.adapter.name} · ${runs.connection.label} runs as a shell command without asking: only the user may send that.`,
-          };
-        }
-        const prefix = shellPrefixesIn(catalog).find((one) => startsWithShell(body, one));
-        if (prefix === undefined) return undefined;
-        const name = nameOf(open.document.nodes, to);
-        const runs =
-          endpoint.kind === 'unchosen' ? 'has no agent chosen yet' : 'runs none this build has';
-        return {
-          refuse: `It starts with "${prefix}", which an agent may run as a shell command without asking, and ${name} ${runs}: only the user may send that.`,
-        };
-      },
+      message: ({ canvas, to, body }) => shellRefusal(openOf(canvas), catalog, to, [body]),
+      ask: ({ canvas, to, questions }) =>
+        shellRefusal(openOf(canvas), catalog, to, askTexts(questions)),
     },
+    // B21 §9.7 A1: an ask's texts reach its recipient's connection as a message's body does.
     'file-mentions': {
-      message: ({ canvas, to, body }) => {
-        const open = openOf(canvas);
-        const node = open?.document.nodes.find((one) => one.id === to);
-        if (!open || node?.type !== 'agent') return undefined;
-        // How the agent runs, as the one resolver reads it (B12 C3), never a default.
-        const endpoint = agentEndpoint(node.data, catalog);
-        if (endpoint.kind === 'known') {
-          const sentence = fileMentionRefusal(open.engine.catalog, endpoint.connection, body);
-          return sentence === undefined ? undefined : { refuse: sentence };
-        }
-        // Unchosen or unavailable: refused when any connection may expand a mention, as R1
-        // refuses any catalog shell prefix for such an agent.
-        const expands = catalog.adapters.some(({ connections }) =>
-          connections.some((one) => one.fileMentions === true),
-        );
-        if (!expands || !hasFileMention(body)) return undefined;
-        const name = nameOf(open.document.nodes, to);
-        const runs =
-          endpoint.kind === 'unchosen' ? 'has no agent chosen yet' : 'runs none this build has';
-        return {
-          refuse: `Not sent: it contains a file mention, which an agent may read without asking, and ${name} ${runs}: only the user may send that.`,
-        };
-      },
+      message: ({ canvas, to, body }) => mentionRefusal(openOf(canvas), catalog, to, [body]),
+      ask: ({ canvas, to, questions }) =>
+        mentionRefusal(openOf(canvas), catalog, to, askTexts(questions)),
     },
     // B11 §16.6: past 16 KiB of text, or with images, a message is your composer's alone; a
     // token's is refused, never cut or stripped.

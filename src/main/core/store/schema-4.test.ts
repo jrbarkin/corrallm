@@ -189,8 +189,8 @@ const submissionsOf = (canvas: CanvasId) =>
   decodeSubmissions(JSON.stringify(legacy(canvas).messages));
 
 /**
- * The message rows the fixture has, as migration 4 classifies each by what made it (and migration
- * 6 leaves them: no settled decision).
+ * The message rows the fixture has, as migration 4 classifies each by what made it (and migrations
+ * 7, 9 and 10 leave them: no settled decision, no ask, no verdict).
  */
 function classified(): Row[] {
   return (FIXTURE.tables.message ?? []).map((row) => {
@@ -206,6 +206,8 @@ function classified(): Row[] {
       resend_of: resend ? replyTo : null,
       told: resend ? null : row.told,
       settled: null,
+      ask: null,
+      verdict: null,
     };
   });
 }

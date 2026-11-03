@@ -6,9 +6,12 @@ import {
   STORE_SETTLED_PER_PARTY,
 } from '../../../shared/api/limits';
 import type { CanvasId } from '../../../shared/canvas';
+import { AskColumn } from '../../../shared/model/asks';
+import { Verdict } from '../../../shared/model/results';
 import {
   agentOf,
   isSettled,
+  isTurn,
   MESSAGE_KINDS,
   MESSAGE_ORIGINS,
   MESSAGE_STATES,
@@ -20,7 +23,7 @@ import type {
   MessageOrigin,
   PartyId,
 } from '../../../shared/model/messages';
-import { SettledDecision } from '../../../shared/model/settled';
+import { Settled } from '../../../shared/model/settled';
 import type { CanvasMemory } from '../../memory';
 import type { Database } from '../store/store';
 import { Sequence } from './sequence';
@@ -30,9 +33,12 @@ import { Sequence } from './sequence';
  * order they came, and in the profile's database (Core Database §5), each a row of `message`, with
  * the key of what it tells, for a notice (`told`), the note its recipient must still be told of
  * a withdrawal (`withdrawal`), how it came to be (`origin`, which its caller says, never a party:
- * B11 Design §3), what a view shows of it beside its body (`display`) and, for a record of a native
+ * B11 Design §3), what a view shows of it beside its body (`display`), for a record of a native
  * prompt's decision, what was decided (`settled`: B13 §9.2 C9, written with its row and never
- * changed after). Their order (`seq`) is one every canvas's messages share, whose
+ * changed after), or for an ask, how it ended (B21 C6: written once, as it ends, never after), and
+ * an ask's questions or an answer's answers (`ask`: B21 C6, migration 9, written with its row and
+ * never changed after), and a result's verdict (`verdict`: B21 C8, migration 10, written with its
+ * row and never changed after). Their order (`seq`) is one every canvas's messages share, whose
  * places are never given again (MessageTable), so a cursor into it survives pruning, restarts and
  * restores. It keeps the newest STORE_SETTLED_PER_PARTY settled messages of each party within
  * STORE_BYTES, and every pending and unresolved one, deleting the oldest settled first (delivery
@@ -110,7 +116,7 @@ export class MessageTable {
     return this.#store
       .prepare(
         `SELECT seq, id, from_party, to_party, kind, origin, body, display, reply_to, resend_of,
-           task, turn, state, delivery, by_party, sent_at, told, withdrawal, settled
+           task, turn, state, delivery, by_party, sent_at, told, withdrawal, settled, ask, verdict
          FROM message WHERE canvas_id = ? ORDER BY seq`,
       )
       .all(canvas);
@@ -143,20 +149,22 @@ export class MessageTable {
   /**
    * Within a write: a message's row, as kept (each column written by name, so that what a newer
    * corrallm keeps beside them stays). A record's settled decision is written with its row and
-   * never after: no change writes it again.
+   * never after: no change writes it again; an ask's settlement is written once, as it ends (a
+   * row that has one keeps it). An ask's questions or an answer's answers, and a result's verdict,
+   * are written with its row and never after.
    */
   keep({ seq, message, origin, display, told, withdrawal }: Kept): void {
     this.#store
       .prepare(
         `INSERT INTO message (seq, id, canvas_id, from_party, to_party, kind, origin, body, display,
            reply_to, resend_of, task, turn, state, delivery, by_party, sent_at, told, withdrawal,
-           settled)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           settled, ask, verdict)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT (id) DO UPDATE SET
            body = excluded.body, display = excluded.display, reply_to = excluded.reply_to,
            task = excluded.task, turn = excluded.turn, state = excluded.state,
            delivery = excluded.delivery, by_party = excluded.by_party, told = excluded.told,
-           withdrawal = excluded.withdrawal`,
+           withdrawal = excluded.withdrawal, settled = coalesce(message.settled, excluded.settled)`,
       )
       .run(
         seq,
@@ -179,6 +187,8 @@ export class MessageTable {
         told ?? null,
         json(withdrawal),
         json(message.settled),
+        json(message.ask),
+        json(message.verdict),
       );
   }
 
@@ -203,6 +213,10 @@ export class MessageStore {
   readonly #parties = new Map<PartyId, Sequence>();
   /** Records that may just have fallen outside both parties’ newest-message quotas. */
   readonly #candidates = new Set<string>();
+  /** Results by the native turn they report: its unsettled turn keeps its fixed verdict. */
+  readonly #results = new Map<string, Set<string>>();
+  /** Settling a turn and judging its report are one synchronous action. */
+  readonly #judging = new Set<string>();
   #bytes = 0;
   /** What hears each message added. */
   readonly #listeners = new Set<(message: Message) => void>();
@@ -221,6 +235,11 @@ export class MessageStore {
   #queued: Promise<void> | undefined;
   /** What its canvas writes with its changes, within the same write. */
   #alongside: (() => () => void) | undefined;
+  /**
+   * What is written with its changes in every write that holds them, whoever makes it (B21 C6: the
+   * loop breaker's counts, which a turn journaled as delivering is counted in).
+   */
+  #companion: (() => () => void) | undefined;
   /** Why the store journals nothing, if it can't. */
   #unjournaled: string | undefined;
   /** Whether anything changed that wasn't journaled, as the store journals nothing. */
@@ -273,6 +292,25 @@ export class MessageStore {
 
   get(id: string): Message | undefined {
     return this.#kept.get(id)?.message;
+  }
+
+  /** Keeps a turn's result readable through settlement and the judgment that immediately follows. */
+  judging(id: string, use: () => void): void {
+    if (!this.#results.has(id) || this.#judging.has(id)) {
+      use();
+      return;
+    }
+    this.#judging.add(id);
+    try {
+      use();
+    } finally {
+      this.#judging.delete(id);
+      for (const result of this.#results.get(id) ?? []) {
+        const kept = this.#kept.get(result);
+        if (kept !== undefined && this.#prunable(kept)) this.#settle(kept);
+      }
+      this.#prune();
+    }
   }
 
   /** A message's place in the store's order, if it is kept. */
@@ -490,6 +528,15 @@ export class MessageStore {
   }
 
   /**
+   * What every write that holds this store's changes writes with them, within the same write
+   * (none: nothing): `companion` writes it, and returns what marks it on disk once the write's
+   * commit returned.
+   */
+  writeAlso(companion: (() => () => void) | undefined): void {
+    this.#companion = companion;
+  }
+
+  /**
    * Resolves once every change so far is on disk, with what its canvas writes with it; rejects if
    * it couldn't be.
    */
@@ -543,7 +590,15 @@ export class MessageStore {
       if (kept) this.#table.keep(kept);
       else this.#table.forget(id);
     }
-    if (written.size === 0) return { reveal: () => undefined, undo: () => undefined };
+    // B21 C6: the loop counts go in the same write; marked on disk only once it flushed.
+    const also = this.#companion?.();
+    if (written.size === 0)
+      return {
+        reveal: () => {
+          also?.();
+        },
+        undo: () => undefined,
+      };
     for (const id of written.keys()) this.#changed.delete(id);
     const flushed = Promise.withResolvers<undefined>();
     this.#inFlight = flushed.promise;
@@ -554,6 +609,7 @@ export class MessageStore {
       reveal: () => {
         if (settled) return;
         settled = true;
+        also?.();
         if (this.#inFlight === flushed.promise) this.#inFlight = undefined;
         for (const [id, change] of written)
           if ((this.#changed.get(id) ?? Infinity) <= change) this.#changed.delete(id);
@@ -575,8 +631,8 @@ export class MessageStore {
     const { id } = kept.message;
     const before = this.#kept.get(id);
     this.#bytes += kept.bytes - (before?.bytes ?? 0);
-    const was = before !== undefined && prunable(before);
-    const now = prunable(kept);
+    const was = before !== undefined && this.#prunable(before);
+    const now = this.#prunable(kept);
     const same =
       was &&
       now &&
@@ -585,7 +641,17 @@ export class MessageStore {
       before.message.to === kept.message.to;
     if (was && !same) this.#unsettle(before);
     this.#kept.set(id, kept);
+    this.#indexResult(before, false);
+    this.#indexResult(kept, true);
     if (now && !same) this.#settle(kept);
+    if (before !== undefined && isSettled(before.message) !== isSettled(kept.message)) {
+      for (const result of this.#results.get(id) ?? []) {
+        const row = this.#kept.get(result);
+        if (row === undefined || !prunable(row)) continue;
+        if (isSettled(kept.message) && !this.#judging.has(id)) this.#settle(row);
+        else this.#unsettle(row);
+      }
+    }
     if (!isActive(kept.message)) {
       this.#active.delete(id);
     } else if (this.#active.has(id) || kept.seq > this.#activeLast) {
@@ -604,7 +670,8 @@ export class MessageStore {
     const kept = this.#kept.get(id);
     if (kept) {
       this.#bytes -= kept.bytes;
-      if (prunable(kept)) this.#unsettle(kept);
+      if (this.#prunable(kept)) this.#unsettle(kept);
+      this.#indexResult(kept, false);
     }
     this.#kept.delete(id);
     this.#active.delete(id);
@@ -629,6 +696,24 @@ export class MessageStore {
         if (candidate !== undefined) this.#candidates.add(candidate);
       }
     }
+  }
+
+  #indexResult(kept: Kept | undefined, add: boolean): void {
+    const message = kept?.message;
+    if (message?.verdict === undefined || message.replyTo === undefined) return;
+    const ids = this.#results.get(message.replyTo) ?? new Set<string>();
+    if (add) ids.add(message.id);
+    else ids.delete(message.id);
+    if (ids.size === 0) this.#results.delete(message.replyTo);
+    else this.#results.set(message.replyTo, ids);
+  }
+
+  #prunable(kept: Kept): boolean {
+    if (!prunable(kept)) return false;
+    const { verdict, replyTo } = kept.message;
+    if (verdict !== undefined && replyTo !== undefined && this.#judging.has(replyTo)) return false;
+    const turn = replyTo === undefined ? undefined : this.#kept.get(replyTo)?.message;
+    return verdict === undefined || turn === undefined || isSettled(turn);
   }
 
   #unsettle({ seq, message: { id, from, to } }: Kept): void {
@@ -666,7 +751,7 @@ export class MessageStore {
   #prune(): void {
     for (const id of this.#candidates) {
       const kept = this.#kept.get(id);
-      if (!kept || !prunable(kept)) continue;
+      if (!kept || !this.#prunable(kept)) continue;
       const { from, to } = kept.message;
       const wanted = [from, to].some((party) => {
         const sequence = this.#parties.get(party);
@@ -705,10 +790,12 @@ function prunable({ message, withdrawal }: Kept): boolean {
 /**
  * Whether a message is one of the run's sends of a task's attempt (B11 Design §3): a text with a
  * task link, which only the runtime's mailbox gives a message (Engines), never a caller. The run
- * sends it and settles it; delivery never delivers, takes back or kills it as a party's.
+ * sends it and settles it; delivery never delivers, takes back or kills it as a party's. An answer
+ * to an ask a task's attempt made carries its task too (B21 C7: a continuation), but is no send of
+ * the run's: delivery delivers it, as the attempt's own turn.
  */
 export function sentByRun(message: Message): boolean {
-  return message.kind === 'text' && message.task !== undefined;
+  return message.kind === 'text' && message.task !== undefined && message.ask === undefined;
 }
 
 /**
@@ -727,15 +814,16 @@ export function capBody(text: string, whole: 'reply' | 'prompt'): string {
 }
 
 /**
- * Whether delivery still acts on a message: it waits, is being delivered, or is a text to an agent
- * whose turn goes on (delivered, not yet replied to). Delivery never acts on one settled or
- * unresolved again.
+ * Whether delivery still acts on a message: it waits, is being delivered, or is a turn to an agent
+ * that goes on (delivered, not yet replied to: a text, an ask, an ask's end its asker is sent).
+ * Delivery never acts on one settled or unresolved again.
  */
-export function isActive({ state, kind, to }: Message): boolean {
+export function isActive(message: Message): boolean {
+  const { state, to } = message;
   return (
     state === 'pending' ||
     state === 'delivering' ||
-    (state === 'delivered' && kind === 'text' && agentOf(to) !== undefined)
+    (state === 'delivered' && isTurn(message) && agentOf(to) !== undefined)
   );
 }
 
@@ -808,8 +896,18 @@ function keptOf(row: Record<string, unknown>, canvas: CanvasId): Kept | undefine
   const decided =
     row.settled === null || row.settled === undefined
       ? undefined
-      : SettledDecision.safeParse(parsed(row.settled));
+      : Settled.safeParse(parsed(row.settled));
   if (decided?.success === false) return undefined;
+  // An ask this code doesn't read (another version's): the row is left as it is too.
+  const asked =
+    row.ask === null || row.ask === undefined ? undefined : AskColumn.safeParse(parsed(row.ask));
+  if (asked?.success === false) return undefined;
+  // A verdict this code doesn't read (another version's): the row is left as it is too.
+  const verdict =
+    row.verdict === null || row.verdict === undefined
+      ? undefined
+      : Verdict.safeParse(parsed(row.verdict));
+  if (verdict?.success === false) return undefined;
   const task = parsed(row.task);
   const turn = parsed(row.turn);
   const delivery = parsed(row.delivery);
@@ -829,6 +927,8 @@ function keptOf(row: Record<string, unknown>, canvas: CanvasId): Kept | undefine
     ...(delivery === undefined ? {} : { delivery }),
     ...(party(by) ? { by } : {}),
     ...(decided === undefined ? {} : { settled: decided.data }),
+    ...(asked === undefined ? {} : { ask: asked.data }),
+    ...(verdict === undefined ? {} : { verdict: verdict.data }),
     at,
   } as unknown as Message;
   const kept: Kept = {
@@ -856,9 +956,10 @@ function keptOf(row: Record<string, unknown>, canvas: CanvasId): Kept | undefine
  */
 function displayOf(value: Record<string, unknown> | undefined): MessageDisplay | null {
   if (value === undefined) return null;
-  const { after, task, text, images, requiresImages, ...others } = value;
+  const { after, task, text, images, requiresImages, via, ...others } = value;
   const ok =
     Object.keys(others).length === 0 &&
+    (via === undefined || via === 'manager') &&
     (after === undefined || typeof after === 'string') &&
     (text === undefined || typeof text === 'string') &&
     (images === undefined || (Number.isSafeInteger(images) && (images as number) >= 0)) &&

@@ -119,6 +119,7 @@ describe('the schema', () => {
       { name: 'file_review', strict: 1, wr: 0 },
       { name: 'handoff', strict: 1, wr: 1 },
       { name: 'link', strict: 1, wr: 1 },
+      { name: 'loop_pair', strict: 1, wr: 1 },
       { name: 'merge_job', strict: 1, wr: 0 },
       { name: 'message', strict: 1, wr: 0 },
       { name: 'meta', strict: 1, wr: 0 },
@@ -1646,5 +1647,137 @@ describe('migration 8', () => {
     // Its canvas forgotten, its handoffs go with it.
     connection.prepare('DELETE FROM canvas WHERE id = ?').run(CANVAS);
     expect(count('handoff')).toBe(0);
+  });
+});
+
+/** An ask's question, as B21 C6 keeps it on its message (the `ask` column). */
+const ASK = JSON.stringify({
+  v: 1,
+  type: 'question',
+  questions: [
+    {
+      id: 'scope',
+      header: 'Scope',
+      text: 'How much?',
+      options: [{ label: 'All' }],
+      multiple: false,
+      other: true,
+    },
+  ],
+  deadline: 86_400_000,
+});
+
+describe('migration 9', () => {
+  it('adds an ask to every message of a schema-8 database, keeping every row and requiring reader 9', () => {
+    migrate(connection, MIGRATIONS.slice(0, 8));
+    connection.exec('PRAGMA foreign_keys = ON');
+    addCanvas();
+    addMessage('kept');
+    const before = connection.prepare('SELECT * FROM message').all();
+
+    migrate(connection, MIGRATIONS.slice(0, 9));
+
+    expect(schemaOf(connection)).toBe(9);
+    expect(minReaderOf(connection)).toBe(9);
+    expect(connection.prepare('SELECT * FROM message').all()).toEqual(
+      before.map((row) => ({ ...row, ask: null })),
+    );
+  });
+
+  it('keeps a message’s ask as valid JSON, or none', () => {
+    migrate(connection);
+    connection.exec('PRAGMA foreign_keys = ON');
+    addCanvas();
+    const seq = addMessage('ask');
+    const keep = connection.prepare('UPDATE message SET ask = ? WHERE seq = ?');
+    keep.run(ASK, seq);
+    expect(connection.prepare('SELECT ask FROM message WHERE seq = ?').get(seq)).toEqual({
+      ask: ASK,
+    });
+    keep.run(null, seq);
+    expect(() => keep.run('not JSON', seq)).toThrow(/CHECK constraint failed/);
+  });
+});
+
+/** A task's reported result, as B21 C8 keeps it on its `result` record (the `verdict` column). */
+const VERDICT = JSON.stringify({ v: 1, outcome: 'succeeded', summary: 'All 12 tests pass.' });
+
+describe('migration 10', () => {
+  it('adds a verdict to every message of a schema-9 database, keeping every row and requiring reader 10', () => {
+    migrate(connection, MIGRATIONS.slice(0, 9));
+    connection.exec('PRAGMA foreign_keys = ON');
+    addCanvas();
+    addMessage('kept');
+    const before = connection.prepare('SELECT * FROM message').all();
+
+    migrate(connection, MIGRATIONS.slice(0, 10));
+
+    expect(schemaOf(connection)).toBe(10);
+    expect(minReaderOf(connection)).toBe(10);
+    expect(connection.prepare('SELECT * FROM message').all()).toEqual(
+      before.map((row) => ({ ...row, verdict: null })),
+    );
+  });
+
+  it('keeps a message’s verdict as valid JSON, or none', () => {
+    migrate(connection);
+    connection.exec('PRAGMA foreign_keys = ON');
+    addCanvas();
+    const seq = addMessage('result');
+    const keep = connection.prepare('UPDATE message SET verdict = ? WHERE seq = ?');
+    keep.run(VERDICT, seq);
+    expect(connection.prepare('SELECT verdict FROM message WHERE seq = ?').get(seq)).toEqual({
+      verdict: VERDICT,
+    });
+    keep.run(null, seq);
+    expect(() => keep.run('not JSON', seq)).toThrow(/CHECK constraint failed/);
+  });
+});
+
+describe('migration 11', () => {
+  /** Keeps a loop_pair row of the agents `a` and `b`, with `turns`. */
+  const keepPair = (a: string, b: string, turns: number | string | null, canvas = CANVAS) =>
+    connection
+      .prepare('INSERT INTO loop_pair (canvas_id, a, b, turns) VALUES (?, ?, ?, ?)')
+      .run(canvas, a, b, turns);
+
+  it('adds the loop breaker’s pair counts, keeping every row, which no corrallm older than schema 11 may open', () => {
+    migrate(connection, MIGRATIONS.slice(0, 10));
+    addCanvas();
+    addMessage('kept');
+    const before = connection.prepare('SELECT * FROM message').all();
+
+    migrate(connection, MIGRATIONS.slice(0, 11));
+
+    expect(schemaOf(connection)).toBe(11);
+    // A table only: a corrallm of schema 6 reads every table it knows as it was.
+    expect(minReaderOf(connection)).toBe(11);
+    expect(connection.prepare('SELECT * FROM message').all()).toEqual(before);
+    expect(connection.prepare('SELECT * FROM loop_pair').all()).toEqual([]);
+  });
+
+  it('keeps one positive count a pair of two agents, and forgets it with its canvas', () => {
+    migrate(connection);
+    connection.exec('PRAGMA foreign_keys = ON');
+    addCanvas();
+    keepPair('a', 'b', 3);
+    keepPair('a', 'c', 10);
+    for (const [a, b, turns] of [
+      ['a', 'b', 4],
+      ['x', 'x', 1],
+      ['x', 'y', 0],
+      ['x', 'y', -1],
+      ['x', 'y', 1.5],
+      ['x', 'y', 'many'],
+      ['x', 'y', null],
+    ] as const)
+      expect(() => keepPair(a, b, turns), JSON.stringify([a, b, turns])).toThrow(
+        /constraint failed|cannot store/,
+      );
+    // It belongs to a canvas that exists.
+    expect(() => keepPair('a', 'b', 1, 'ghost')).toThrow(/FOREIGN KEY constraint failed/);
+    expect(count('loop_pair')).toBe(2);
+    connection.prepare('DELETE FROM canvas WHERE id = ?').run(CANVAS);
+    expect(count('loop_pair')).toBe(0);
   });
 });

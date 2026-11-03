@@ -1158,13 +1158,16 @@ describe('the record of a decision (B13 C9)', () => {
       '3c9e4b5d-6f70-4a82-9d3e-4f5a6b7c8d9e',
     );
     await answer(only(), { form: { action: 'accept', values: { key: 'private-form-value' } } });
-    expect(settledRecords().map(({ settled }) => [settled?.prompt.kind, settled?.outcome])).toEqual(
-      [
-        ['plan', { type: 'choice', value: 'yes', hint: 'allow_once' }],
-        ['question', { type: 'answers', count: 2 }],
-        ['form', { type: 'form', action: 'accept' }],
-      ],
-    );
+    expect(
+      settledRecords().map(({ settled }) => [
+        settled && 'prompt' in settled ? settled.prompt.kind : undefined,
+        settled?.outcome,
+      ]),
+    ).toEqual([
+      ['plan', { type: 'choice', value: 'yes', hint: 'allow_once' }],
+      ['question', { type: 'answers', count: 2 }],
+      ['form', { type: 'form', action: 'accept' }],
+    ]);
     expect(settledRecords().map(({ body }) => body)).toEqual([
       'You approved Reviewer’s plan.',
       'You answered Reviewer’s questions.',
@@ -1203,7 +1206,9 @@ describe('the record of a decision (B13 C9)', () => {
     });
     await answer(only(), { choice: 'yes' });
     const [record] = settledRecords();
-    expect(record?.settled?.prompt).toEqual({ id: expect.any(String) as string, kind: 'approval' });
+    expect(
+      record?.settled && 'prompt' in record.settled ? record.settled.prompt : undefined,
+    ).toEqual({ id: expect.any(String) as string, kind: 'approval' });
     expect(record?.body).toBe('You allowed Reviewer’s request once.');
     expect(recorded()).not.toContain('private-extension');
   });

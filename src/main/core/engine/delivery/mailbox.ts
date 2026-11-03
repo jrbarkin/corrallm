@@ -214,6 +214,14 @@ export class SessionStore {
   }
 
   /**
+   * The id of the message whose turn agent `agentId`'s session is on now (one started, its end not
+   * heard yet), if one is: what B21's own-turn check reads (a task's attempt's turn in flight).
+   */
+  turnOf(agentId: string): string | undefined {
+    return this.#turns.get(agentId);
+  }
+
+  /**
    * The agents on the canvas, how each runs, and what each is set to run with (its settings, by
    * CLI: what its connected sessions start with). The session of an agent that is gone ends and is
    * forgotten; one whose agent runs another way now ends its turn and goes on with a new driver. A
