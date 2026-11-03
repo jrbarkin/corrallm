@@ -1,4 +1,4 @@
-import { expect } from 'vitest';
+import { deepStrictEqual } from 'node:assert';
 
 import type { CanvasNode } from '../../../../shared/model/canvas';
 import type { EngineCatalog } from '../../../../shared/model/catalog';
@@ -66,9 +66,11 @@ export function expectRestorable(): void {
     });
     restored.update(nodes);
     restored.restore(store.checkpoint());
-    expect(restored.snapshot(), 'the run, restored from its checkpoint').toEqual(store.snapshot());
-    expect(JSON.parse(restored.checkpoint()), 'its checkpoint, once restored').toEqual(
+    deepStrictEqual(restored.snapshot(), store.snapshot(), 'the run, restored from its checkpoint');
+    deepStrictEqual(
+      JSON.parse(restored.checkpoint()),
       JSON.parse(store.checkpoint()),
+      'its checkpoint, once restored',
     );
   }
 }

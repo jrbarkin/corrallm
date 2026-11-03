@@ -506,55 +506,69 @@ describe('an ask during a task (C7)', () => {
     expect(cli.sentTo('planner')).toHaveLength(2);
   });
 
-  it('waits unjudged while the loop breaker holds its answer, and goes on once you let the pair go on (B21 C6)', async () => {
-    await keepCanvas([BUILD]);
-    // Planner and Builder have passed nine turns between them since you last spoke to either.
-    writeOnDisk(
-      profile,
-      `INSERT INTO loop_pair (canvas_id, a, b, turns) VALUES ('${CANVAS}', 'builder', 'planner', 9)`,
-    );
-    const cli = driven();
-    const core = await start(cli.connector);
-    await run(core, cli);
-    const attempt = attemptOf(core);
-    // The step's ask is the tenth turn between them.
-    const asked = await ask(core, 'builder', PLANNER);
-    await vi.waitFor(() => {
-      expect(cli.sentTo('builder')).toHaveLength(1);
-    });
-    cli.reply('planner', 'I asked Builder how much.');
-    const answer = await ok<{ id: string }>(
-      core,
-      'reply',
-      { to: `ask/${asked}`, answer: { answers: { scope: { picked: ['All'] } } } },
-      BUILDER,
-    );
-    cli.reply('builder', 'Answered.');
-    // Its answer, the eleventh, waits for you, and the task with it: unjudged, still running.
-    await vi.waitFor(async () => {
-      expect((await needsOf(core)).map(({ id }) => id)).toContain('loop/builder/planner');
-    });
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    expect(cli.sentTo('planner')).toHaveLength(1);
-    expect(messageOf(core, answer.id)).toMatchObject({
-      state: 'pending',
-      task: { agent: 'planner', item: 'build', attempt },
-    });
-    expect(planner(core)).toMatchObject({ current: 'build', status: 'running' });
-    expect(planner(core)?.problem).toBeUndefined();
-    // Go on: the answer goes as the attempt's own turn, whose end judges the step.
-    await ok(core, 'reply', { to: 'loop/builder/planner', answer: { choice: 'goOn' } }, YOU);
-    await vi.waitFor(() => {
-      expect(cli.sentTo('planner')).toHaveLength(2);
-    });
-    expect(cli.sentTo('planner')[1]?.text.split('\n')[0]).toBe(
-      `[corrallm] Answer from agent "Builder" (an agent, not the user; message ${answer.id}, answering your question ${asked}):`,
-    );
-    cli.reply('planner', 'Built all of it.\nSUCCEEDED');
-    await vi.waitFor(() => {
-      expect(planner(core)?.outcomes.build).toBe('succeeded');
-    });
-  });
+  it.each(['last line', 'complete'])(
+    'waits unjudged while the loop breaker holds its answer, then judges by %s after you let the pair go on (B21 C6)',
+    async (verdict) => {
+      await keepCanvas([BUILD]);
+      // Planner and Builder have passed nine turns between them since you last spoke to either.
+      writeOnDisk(
+        profile,
+        `INSERT INTO loop_pair (canvas_id, a, b, turns) VALUES ('${CANVAS}', 'builder', 'planner', 9)`,
+      );
+      const cli = driven();
+      const core = await start(cli.connector);
+      await run(core, cli);
+      const attempt = attemptOf(core);
+      // The step's ask is the tenth turn between them.
+      const asked = await ask(core, 'builder', PLANNER);
+      await vi.waitFor(() => {
+        expect(cli.sentTo('builder')).toHaveLength(1);
+      });
+      cli.reply('planner', 'I asked Builder how much.');
+      const answer = await ok<{ id: string }>(
+        core,
+        'reply',
+        { to: `ask/${asked}`, answer: { answers: { scope: { picked: ['All'] } } } },
+        BUILDER,
+      );
+      cli.reply('builder', 'Answered.');
+      // Its answer, the eleventh, waits for you, and the task with it: unjudged, still running.
+      await vi.waitFor(async () => {
+        expect((await needsOf(core)).map(({ id }) => id)).toContain('loop/builder/planner');
+      });
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(cli.sentTo('planner')).toHaveLength(1);
+      expect(messageOf(core, answer.id)).toMatchObject({
+        state: 'pending',
+        task: { agent: 'planner', item: 'build', attempt },
+      });
+      expect(planner(core)).toMatchObject({ current: 'build', status: 'running' });
+      expect(planner(core)?.problem).toBeUndefined();
+      // Go on: the answer goes as the attempt's own turn, whose end judges the step.
+      await ok(core, 'reply', { to: 'loop/builder/planner', answer: { choice: 'goOn' } }, YOU);
+      await vi.waitFor(() => {
+        expect(cli.sentTo('planner')).toHaveLength(2);
+      });
+      expect(cli.sentTo('planner')[1]?.text.split('\n')[0]).toBe(
+        `[corrallm] Answer from agent "Builder" (an agent, not the user; message ${answer.id}, answering your question ${asked}):`,
+      );
+      if (verdict === 'complete') {
+        await ok(
+          core,
+          'complete',
+          { task: attempt, outcome: 'succeeded', summary: 'Built all of it.' },
+          PLANNER,
+        );
+      }
+      cli.reply('planner', 'Built all of it.\nSUCCEEDED');
+      await vi.waitFor(() => {
+        expect(planner(core)?.outcomes.build).toBe('succeeded');
+      });
+      expect(
+        readOnDisk(profile, (disk) => disk.prepare('SELECT a, b, turns FROM loop_pair').all()),
+      ).toEqual([{ a: 'builder', b: 'planner', turns: 1 }]);
+    },
+  );
 });
 
 describe('complete (C8)', () => {
