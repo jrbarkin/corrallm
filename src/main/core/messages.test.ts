@@ -250,6 +250,8 @@ async function start(
       sessions: {
         // Its agent callers are made up: no session authority issued them.
         callers: () => true,
+        // Its fake connectors take no route to corrallm's server, so none is issued or missed.
+        api: { 'codex.app-server': null, 'codex.terminal': null, 'claude-code.terminal': null },
         connectors: {
           'codex.app-server': connectors.appServer ?? appServer,
           'codex.terminal': connectors.terminal ?? terminal,

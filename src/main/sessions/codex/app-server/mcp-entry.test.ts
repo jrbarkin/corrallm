@@ -105,9 +105,9 @@ const PLANNED = {
 };
 
 describe("Codex · App Server's corrallm entry (B21 C10)", () => {
-  it('keeps api null until the connection is turned on, and records its version', () => {
+  it('turns api on over http on this recording (C7), and records its version', () => {
     const connection = codex.descriptor.connections.find((one) => one.id === 'codex.app-server');
-    expect((connection as { api?: unknown } | undefined)?.api ?? null).toBeNull();
+    expect(connection?.api).toBe('http');
     expect(fixture.recordedWith.codex).toBe('0.162.1');
     expect(fixture.minimumVersion).toBe('0.162.1');
   });
