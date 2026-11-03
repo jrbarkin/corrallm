@@ -31,7 +31,7 @@ import { Delivery, HANDOFF_CARRIED } from './delivery/delivery';
 import { HandoffStore } from './delivery/handoffs';
 import type { HandoffTable } from './delivery/handoffs';
 import { capBody, MessageStore, sentByRun } from './delivery/messages';
-import type { MessageTable } from './delivery/messages';
+import type { MessageTable, Staged } from './delivery/messages';
 import { WithdrawalNotes } from './delivery/withdrawals';
 import { ReadPositions } from './delivery/reads';
 import type { Database } from './store/store';
@@ -559,14 +559,19 @@ export class Engines {
       return running && seq > running.reads.of(party) ? [{ running, seq }] : [];
     });
     if (moving.length === 0) return;
-    const done: (() => void)[] = [];
-    await this.#deps.store.write(() => {
-      for (const { running, seq } of moving) {
-        done.push(this.#journalWithin(running, false));
-        this.#deps.journal.moveRead(running.document.id, party, seq);
-      }
-    });
-    for (const one of done) one();
+    const done: Staged[] = [];
+    await this.#deps.store.write(
+      () => {
+        for (const { running, seq } of moving) {
+          done.push(this.#journalWithin(running, false));
+          this.#deps.journal.moveRead(running.document.id, party, seq);
+        }
+      },
+      (error) => {
+        for (const one of done) one.undo(error);
+      },
+    );
+    for (const one of done) one.reveal();
     for (const { running, seq } of moving) running.reads.moved(party, seq);
   }
 
@@ -1262,11 +1267,16 @@ export class Engines {
   async #write(running: Running): Promise<void> {
     clearTimeout(running.timer);
     running.timer = undefined;
-    let done: () => void = () => undefined;
-    await this.#deps.store.write(() => {
-      done = this.#journalWithin(running, true);
-    });
-    done();
+    let done: Staged | undefined;
+    await this.#deps.store.write(
+      () => {
+        done = this.#journalWithin(running, true);
+      },
+      (error) => {
+        done?.undo(error);
+      },
+    );
+    done?.reveal();
   }
 
   /**
@@ -1274,14 +1284,19 @@ export class Engines {
    * journal last had it on disk) and every change to its messages not on disk yet; returns what
    * marks them on disk once the write's commit returned.
    */
-  #journalWithin(running: Running, run: boolean): () => void {
-    const done = [
-      this.#runWithin(running, run),
-      running.messages.changes(),
-      running.handoffs.changes(),
-    ];
-    return () => {
-      for (const one of done) one();
+  #journalWithin(running: Running, run: boolean): Staged {
+    const runDone = this.#runWithin(running, run);
+    const handoffDone = running.handoffs.changes();
+    const messages = running.messages.changes();
+    return {
+      reveal: () => {
+        runDone();
+        handoffDone();
+        messages.reveal();
+      },
+      undo: (error) => {
+        messages.undo(error);
+      },
     };
   }
 

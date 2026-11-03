@@ -9,7 +9,7 @@ import type { PartyId } from '../shared/model/messages';
 import type { NeedsItem } from '../shared/model/needs';
 import { MAX_RUN_BYTES, parseRunCheckpoint } from '../shared/run';
 import type { RunCheckpoint, RunContext } from '../shared/run';
-import type { MessageStore } from './core/delivery/messages';
+import type { MessageStore, Staged } from './core/delivery/messages';
 import { keepSubmissions, recordsIn, submissionsOf } from './core/delivery/submissions';
 import { mintTrustedPath } from './core/host';
 import type { TrustedPath } from './core/host';
@@ -222,14 +222,19 @@ export class RunJournal {
   async save(canvas: CanvasId, token: string, checkpoint: RunCheckpoint | null): Promise<void> {
     this.check(canvas, token);
     const messages = await this.#deps.messages(canvas);
-    let written: () => void = () => undefined;
-    const problem = await this.#write(() => {
-      this.#markOpen(canvas);
-      const kept = this.keep(canvas, token, checkpoint, messages);
-      written = messages.changes();
-      return kept;
-    });
-    written();
+    let written: Staged | undefined;
+    const problem = await this.#write(
+      () => {
+        this.#markOpen(canvas);
+        const kept = this.keep(canvas, token, checkpoint, messages);
+        written = messages.changes();
+        return kept;
+      },
+      (error) => {
+        written?.undo(error);
+      },
+    );
+    written?.reveal();
     this.kept(canvas, problem);
     if (problem !== undefined) throw new RangeError(problem);
   }
@@ -404,8 +409,8 @@ export class RunJournal {
   }
 
   /** Writes to the database: resolves once the commit holding it returned. */
-  #write<T>(write: () => T): Promise<T> {
-    const written = this.#deps.store.write(write);
+  #write<T>(write: () => T, failed?: (error: unknown) => void): Promise<T> {
+    const written = this.#deps.store.write(write, failed);
     this.#writing = Promise.all([this.#writing, written.catch(() => undefined)]);
     return written;
   }

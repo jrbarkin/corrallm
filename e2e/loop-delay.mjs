@@ -4,7 +4,18 @@
 // milliseconds, to the file LOOP_DELAY_FILE names (whole, then renamed into place, so a reader
 // never sees half of it): the whole, and each span that has ended.
 import { renameSync, writeFileSync } from 'node:fs';
+import { writeFile } from 'node:fs/promises';
+import { Session } from 'node:inspector/promises';
 import { monitorEventLoopDelay } from 'node:perf_hooks';
+
+// Opt-in diagnostics start before the CLI, outside the measured spans, and survive a failed gate.
+const cpuFile = process.env.CORRALLM_LOAD_CPU_PROFILE;
+const cpu = cpuFile ? new Session() : undefined;
+if (cpu) {
+  cpu.connect();
+  await cpu.post('Profiler.enable');
+  await cpu.post('Profiler.start');
+}
 
 const whole = monitorEventLoopDelay({ resolution: 1 });
 const span = monitorEventLoopDelay({ resolution: 1 });
@@ -25,8 +36,24 @@ process.on('SIGUSR2', () => {
   const file = process.env.LOOP_DELAY_FILE;
   if (measuring && file) {
     spans.push(of(span));
-    writeFileSync(`${file}.part`, JSON.stringify({ ...of(whole), spans }));
-    renameSync(`${file}.part`, file);
+    const result = JSON.stringify({ ...of(whole), spans });
+    const publish = () => {
+      writeFileSync(`${file}.part`, result);
+      renameSync(`${file}.part`, file);
+    };
+    if (cpu && spans.length === 3) {
+      // The test may stop the CLI as soon as it reads the last span, even on a failed assertion.
+      void cpu
+        .post('Profiler.stop')
+        .then(({ profile }) => writeFile(cpuFile, JSON.stringify(profile), { mode: 0o600 }))
+        .catch(() => {
+          process.stderr.write('G2 CPU profile could not be written.\n');
+        })
+        .finally(() => {
+          cpu.disconnect();
+          publish();
+        });
+    } else publish();
   } else {
     whole.reset();
   }

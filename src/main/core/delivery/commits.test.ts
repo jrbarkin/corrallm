@@ -138,8 +138,8 @@ async function holdCommits(only?: 'messages'): Promise<() => void> {
     const { value: write } = Object.getOwnPropertyDescriptor(Store.prototype, 'write') as {
       value: Store['write'];
     };
-    vi.spyOn(Store.prototype, 'write').mockImplementation(function (this: Store, run) {
-      return held.promise.then(() => write.call(this, run));
+    vi.spyOn(Store.prototype, 'write').mockImplementation(function (this: Store, run, failed) {
+      return held.promise.then(() => write.call(this, run, failed));
     });
   }
   return () => {
