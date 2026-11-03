@@ -10,18 +10,19 @@ import { rollback, savepoint, transaction } from './transaction';
  * The core's database (Core Database §4, §5), open: one connection to <profile>/core.db, which only
  * the core writes (it holds core.lock). openStore (open.ts) opens it.
  *
- * Writes go through one lane (group commit): the writes queued within one turn of the core's loop
- * share one transaction, each in a savepoint of its own, so one that fails rolls back only itself
- * and rejects only its caller. Each resolves with what its function returned only once the commit
+ * Writes go through one FIFO lane (group commit), each in a savepoint of its own, so one that
+ * fails rolls back only itself and rejects only its caller. A transaction stops between writes
+ * after 32 changed rows or 16 writes; one atomic write is never split. Each resolves with what its function returned only once the commit
  * that holds it has returned and the log it was written to has been flushed to the drive: a write
  * is on disk when its promise resolves, which is what "its record on disk before it is sent"
  * means. A commit that fails rejects every write it held, and the writes after it are a batch of
  * their own. A commit runs on the loop (node:sqlite is synchronous), but SQLite syncs nothing as
  * it commits (synchronous NORMAL: open.ts): the store flushes the log itself, off the loop, on
  * Node's thread pool (Node's fsync, F_FULLFSYNC on macOS, which flushes the drive's cache too),
- * one flush at a time, each for every commit made before it began. So the drive's flush,
- * milliseconds at best and far more while other programs write, never waits on the loop while the
- * store is open, and one flush covers every commit made while the last went on. The commit's own
+ * one flush at a time. The lane waits for it before appending again, so native WAL writes do not
+ * contend with our own flush; queued writes keep their order and take the next bounded commit.
+ * The drive's flush, milliseconds at best and far more while other programs write, never waits
+ * on the loop while the store is open. The commit's own
  * writes into the log do run on the loop: into the system's cache, which is quick, but which the
  * system holds back while other programs fill it, as heavy writing to the same drive does (Core
  * Database §4, G2: e2e/load.e2e.ts holds the loop within its budget on a quiet drive, and only a
@@ -88,6 +89,9 @@ export const SYSTEM_DEPS: StoreDeps = {
  * between bursts of work, not in their middle.
  */
 const CHECKPOINT_IDLE_MS = 1000;
+/** Bound aggregation between atomic writes; an individual write is never split. */
+const COMMIT_ROWS = 32;
+const COMMIT_WRITES = 16;
 /** The longest between checkpoints, except while a snapshot occupies the worker. */
 const CHECKPOINT_AT_MOST_MS = 30_000;
 /**
@@ -238,8 +242,7 @@ export class Store {
   }
 
   /**
-   * Queues `run` (synchronous, with no await inside) for the lane's next commit, with the other
-   * writes queued in this turn of the loop. Resolves with what it returned once that commit has
+   * Queues `run` (synchronous, with no await inside) for the FIFO lane's next bounded commit. Resolves with what it returned once that commit has
    * returned; rejects, keeping nothing of it, if it threw or the commit failed. Refused once the
    * store is closing. `failed` restores in-memory staging synchronously on rejection, before the
    * next savepoint runs; it must not throw. A successful write still waits for the log flush.
@@ -258,12 +261,7 @@ export class Store {
           reject(error);
         },
       });
-      if (this.#scheduled) return;
-      this.#scheduled = true;
-      setImmediate(() => {
-        this.#scheduled = false;
-        this.#flush();
-      });
+      this.#schedule();
     });
   }
 
@@ -371,8 +369,10 @@ export class Store {
     this.#cancelCheckpoint?.();
     // The writes queued commit now, or once the checkpoint going on is done.
     while (this.#checkpointing !== undefined) await this.#checkpointing.catch(() => undefined);
-    this.#flush();
-    while (this.#flushing !== undefined) await this.#flushing;
+    while (this.#queue.length > 0 || this.#flushing !== undefined) {
+      this.#flush();
+      if (this.#flushing !== undefined) await this.#flushing;
+    }
     // Failed closed, it took back what it hadn't flushed, and closed its connection then.
     if (this.#forgetting !== undefined) {
       await this.#forgetting;
@@ -394,18 +394,29 @@ export class Store {
     if (this.#log !== undefined) closeSync(this.#log);
   }
 
-  /** Commits every write queued, a batch at a time, unless a checkpoint goes on. */
+  /** Schedules the FIFO lane; delivery and publication keep their own microtask ordering. */
+  #schedule(): void {
+    if (this.#scheduled || this.#queue.length === 0 || this.#flushing !== undefined) return;
+    this.#scheduled = true;
+    setImmediate(() => {
+      this.#scheduled = false;
+      this.#flush();
+    });
+  }
+
+  /** One bounded commit, with no appends competing with the log's off-loop flush. */
   #flush(): void {
-    if (this.#checkpointing !== undefined) return;
-    let batch = this.#queue;
+    if (this.#checkpointing !== undefined || this.#flushing !== undefined) return;
+    const batch = this.#queue;
     this.#queue = [];
-    while (batch.length > 0) {
-      if (this.#failed !== undefined) {
-        for (const write of batch) write.reject(this.#failed);
-        return;
-      }
-      batch = this.#commit(batch);
+    if (batch.length === 0) return;
+    if (this.#failed !== undefined) {
+      for (const write of batch) write.reject(this.#failed);
+      return;
     }
+    const remaining = this.#commit(batch);
+    this.#queue = [...remaining, ...this.#queue];
+    this.#schedule();
   }
 
   /** Commits a batch of writes in one transaction; returns those it didn't run. */
@@ -419,6 +430,9 @@ export class Store {
       return [];
     }
     const done: [write: Queued, value: unknown][] = [];
+    const changed = () => Number(this.#prepare('SELECT total_changes() AS count').get()?.count);
+    const start = changed();
+    let remaining: Queued[] = [];
     for (const [i, write] of batch.entries()) {
       try {
         done.push([write, savepoint(this.#connection, write.run)]);
@@ -431,13 +445,17 @@ export class Store {
           return batch.slice(i + 1);
         }
       }
+      if (i + 1 >= COMMIT_WRITES || changed() - start >= COMMIT_ROWS) {
+        remaining = batch.slice(i + 1);
+        break;
+      }
     }
     try {
       this.#connection.exec('COMMIT');
     } catch (error) {
       rollback(this.#connection);
       for (const [lost] of done) lost.reject(error);
-      return [];
+      return remaining;
     }
     this.#unflushed.push({
       resolve: () => {
@@ -451,13 +469,12 @@ export class Store {
     });
     this.#flushLog();
     this.#committed();
-    return [];
+    return remaining;
   }
 
   /**
-   * Flushes the log to the drive, off the loop, for every commit made since the last flush began:
-   * one flush at a time, the commits made meanwhile settled by the next. A flush that fails fails
-   * the store closed (`#fail`).
+   * Flushes the committed log off the loop. The queued lane appends again only after this flush
+   * settles, on its next turn; a failed flush fails the store closed (`#fail`).
    */
   #flushLog(): void {
     if (this.#flushing !== undefined || this.#unflushed.length === 0) return;
@@ -481,6 +498,7 @@ export class Store {
     void flushing.then(() => {
       this.#flushing = undefined;
       this.#flushLog();
+      this.#schedule();
     });
   }
 
@@ -513,13 +531,13 @@ export class Store {
     this.#unflushed = [];
     const queued = this.#queue;
     this.#queue = [];
-    for (const write of queued) write.reject(failed);
     const first = [...lost, ...(also === undefined ? [] : [also])].reduce((earliest, commit) =>
       commit.commit < earliest.commit ? commit : earliest,
     );
     this.#forgetting = this.#forget(first).finally(() => {
       // Refuse new work at once, and finish the best-effort rollback before rejecting commits.
       for (const commit of lost) commit.reject(failed);
+      for (const write of queued) write.reject(failed);
     });
     void this.#forgetting.catch((error: unknown) => {
       console.error('Could not finish closing the core’s database after its failed flush:', error);

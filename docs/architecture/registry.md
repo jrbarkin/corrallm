@@ -2,7 +2,7 @@
 
 [Architecture index](overview.md) · [Canonical instructions](../../AGENTS.md)
 
-Runtime topics reuse session summaries across queue, label and position edits, invalidating only changed endpoints, fallback or handoff settings, and the sessions whose runtime state changed. Background publication yields after eight passes per event-loop turn; reads and receipt publication retain their request ordering, canonical revisions and append frames.
+Runtime topics reuse session summaries across queue, label and position edits, invalidating only changed endpoints, fallback or handoff settings, and the sessions whose runtime state changed. Runtime publication stays in its microtask queue throughout a burst, retaining its ordering with reads and receipts, canonical revisions and append frames.
 
 ## `src/main/api/`
 

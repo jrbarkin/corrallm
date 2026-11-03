@@ -98,7 +98,7 @@ const rows = (canvas = CANVAS) =>
   );
 
 describe('the message store', () => {
-  it('writes each changed row once while an earlier log flush is pending', async () => {
+  it('writes each changed row once across containing savepoints before their log flush', async () => {
     const gate = Promise.withResolvers<undefined>();
     let held = false;
     await restart({
@@ -117,13 +117,23 @@ describe('the message store', () => {
     const pending: Promise<void>[] = [];
     held = true;
     try {
-      for (let i = 0; i < 6; i++) {
-        const next = messages.add(draft('agent:builder', 'outside:orchestrator', 'delivered'));
-        pending.push(messages.durable());
-        await vi.waitFor(() => {
-          expect(keep.mock.calls.some(([kept]) => kept.message.id === next.id)).toBe(true);
-        });
-      }
+      // Several containing savepoints may stage rows in one commit, all still unflushed.
+      const staged: Staged[] = [];
+      pending.push(
+        database
+          .write(() => {
+            for (let i = 0; i < 6; i++) {
+              messages.add(draft('agent:builder', 'outside:orchestrator', 'delivered'));
+              staged.push(database.tx(() => messages.changes()));
+            }
+          })
+          .then(() => {
+            for (const change of staged) change.reveal();
+          }),
+      );
+      await vi.waitFor(() => {
+        expect(keep).toHaveBeenCalledTimes(6);
+      });
       expect(keep).toHaveBeenCalledTimes(6);
       expect(forget).toHaveBeenCalledTimes(6);
       let durable = false;

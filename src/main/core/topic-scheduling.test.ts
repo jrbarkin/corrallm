@@ -1,10 +1,10 @@
-import { setImmediate } from 'node:timers/promises';
 import { expect, it, vi } from 'vitest';
 import type { CanvasId } from '../../shared/canvas';
 import { Topics } from './topics';
 import { CANVAS } from './test-registry';
 
-it('bounds background runtime publications between event loop turns', async () => {
+it('publishes runtime changes in order before the next event loop turn, throughout a burst', async () => {
+  vi.useFakeTimers({ toFake: ['setImmediate', 'clearImmediate'] });
   let changed: ((canvas: CanvasId) => void) | undefined;
   const take = vi.fn(() => undefined);
   const topics = new Topics({
@@ -32,12 +32,11 @@ it('bounds background runtime publications between event loop turns', async () =
   try {
     for (let i = 0; i < 200; i++) {
       changed?.(CANVAS);
-      await Promise.resolve();
+      for (let step = 0; step < 10; step++) await Promise.resolve();
+      expect(take).toHaveBeenCalledTimes(i + 1);
     }
-    expect(take).toHaveBeenCalledTimes(8);
-    await setImmediate();
-    expect(take).toHaveBeenCalledTimes(9);
   } finally {
     topics.close();
+    vi.useRealTimers();
   }
 });

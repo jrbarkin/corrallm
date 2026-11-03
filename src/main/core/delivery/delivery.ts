@@ -221,8 +221,6 @@ const REASON = 1000;
 const RECORD_RETRY = 1000;
 /** A Terminal with hooks enabled may still be starting; do not raise a false permission hold. */
 const PERMISSION_STARTUP_MS = 30_000;
-/** Bound background checks in a microtask burst while preserving prompt foreground holds. */
-const DELIVERY_CHECKS_PER_TURN = 8;
 
 export class Delivery {
   readonly #deps: DeliveryDeps;
@@ -314,8 +312,6 @@ export class Delivery {
   #unrecordable: (() => void) | undefined;
   readonly #images = new Map<string, NonNullable<UserMessage['images']>>();
   #scheduled = false;
-  #checks = 0;
-  #resetChecks: ReturnType<typeof setImmediate> | undefined;
   /** Whether it delivers yet: not until it starts, though messages may be sent before. */
   #started = false;
   #closed = false;
@@ -368,7 +364,6 @@ export class Delivery {
    */
   async close(): Promise<void> {
     this.#closed = true;
-    clearImmediate(this.#resetChecks);
     this.#images.clear();
     this.#carried.clear();
     for (const stop of this.#stop) stop();
@@ -461,15 +456,9 @@ export class Delivery {
     const check = () => {
       this.#scheduled = false;
       if (this.#closed) return;
-      this.#checks += 1;
-      this.#resetChecks ??= setImmediate(() => {
-        this.#resetChecks = undefined;
-        this.#checks = 0;
-      });
       this.#pump();
     };
-    if (this.#checks >= DELIVERY_CHECKS_PER_TURN) setImmediate(check);
-    else queueMicrotask(check);
+    queueMicrotask(check);
   }
 
   /**

@@ -4,7 +4,7 @@
 
 ## Messages
 
-Message writes distinguish changes still needing SQL from rows already written but awaiting their log flush. Each version is written once; containing writes restore their staged changes on failure before the next savepoint runs, and `durable()` waits for every covered flush. Background delivery checks yield after eight passes in one event-loop turn; foreground admission and hold notices keep their existing ordering.
+Message writes distinguish changes still needing SQL from rows already written but awaiting their log flush. Each version is written once; containing writes restore their staged changes on failure before the next savepoint runs, and `durable()` waits for every covered flush. Delivery checks coalesce within a microtask and run before the next event-loop turn, so holds, replies and recovery notices retain their ordering throughout a burst.
 
 What parties send a canvas's agents (API Spec §5, Core Server §5.9), served by the core from B6 (headless; the app from B11, whose composer's submissions its run journal keeps as your messages until then: [Run recovery](run-recovery.md)), each with how it came to be (`MessageOrigin`, `src/shared/model/messages.ts`: `manual`, typed by you; `party`, a party's or corrallm's; `run`, the run's own; `resend`, one you asked to send again), which the core records and no caller gives. A party is you, `corrallm`, `agent:<id>` or `outside:<name>` (`PartyId`, `src/shared/model/messages.ts`); no token is ever you. An agent's id is its node's: any text (line breaks too) of at most `MAX_NODE_ID` characters (`model/canvas.ts`), which a canvas file, the API's ids and a party id all hold to.
 
