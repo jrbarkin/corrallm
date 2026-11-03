@@ -10,7 +10,7 @@ import type { CanvasId } from '../../shared/canvas';
 import type { SessionMode } from '../../shared/session';
 import { MAX_RUN_BYTES } from '../../shared/run';
 import type { Connector } from '../sessions/connector';
-import { FakeConnector } from '../sessions/fake';
+import { fakeConnector } from '../sessions/test-fake';
 import { Settings } from '../settings';
 import { UsageReadings } from '../usage';
 import { createCore } from './core';
@@ -94,7 +94,7 @@ describe('the core runs each canvas’s engine', () => {
     'holds its next queue send when the checkpoint is %s while a token’s message still reaches the agent',
     async (limit) => {
       await keepCanvas();
-      const codex = new FakeConnector({ adapter: 'codex' });
+      const codex = fakeConnector({ adapter: 'codex' });
       const started = await start(codex);
       const engine = await started.engines.open(CANVAS);
       const checkpoint = engine.checkpoint();
@@ -171,7 +171,7 @@ describe('the core runs each canvas’s engine', () => {
 
   it('records and delivers messages while its run is too large to keep, and says why', async () => {
     await keepCanvas();
-    const codex = new FakeConnector({ adapter: 'codex' });
+    const codex = fakeConnector({ adapter: 'codex' });
     const recordAtSend: unknown[] = [];
     const watched: Connector<SessionMode> = {
       start: async (spec, host) => {
@@ -224,7 +224,7 @@ describe('the core runs each canvas’s engine', () => {
   });
   it('keeps one core runtime and document edits when a window sends a manual message', async () => {
     await keepCanvas();
-    await (await start(new FakeConnector({ adapter: 'codex' }))).engines.open(CANVAS);
+    await (await start(fakeConnector({ adapter: 'codex' }))).engines.open(CANVAS);
     await core?.close();
     core = undefined;
     await keepMessages(profile, CANVAS, [
@@ -241,7 +241,7 @@ describe('the core runs each canvas’s engine', () => {
       },
     ]);
 
-    const app = await start(new FakeConnector({ adapter: 'codex' }));
+    const app = await start(fakeConnector({ adapter: 'codex' }));
     expect(await app.call('window.get', {}, asHuman(7))).toMatchObject({
       ok: true,
       value: { canvas: CANVAS },
@@ -283,7 +283,7 @@ describe('the core runs each canvas’s engine', () => {
 
   it('runs a message to a Codex agent, keeps its reply as the evidence and journals the run', async () => {
     await keepCanvas();
-    const codex = new FakeConnector({ adapter: 'codex' });
+    const codex = fakeConnector({ adapter: 'codex' });
     /** What the journal held each time a message reached the agent's session. */
     const before: unknown[] = [];
     const watched: Connector<SessionMode> = {
@@ -321,14 +321,14 @@ describe('the core runs each canvas’s engine', () => {
 
   it('restores a canvas’s journaled run paused, its evidence kept, sending nothing again', async () => {
     await keepCanvas();
-    const first = await (await start(new FakeConnector({ adapter: 'codex' }))).engines.open(CANVAS);
+    const first = await (await start(fakeConnector({ adapter: 'codex' }))).engines.open(CANVAS);
     first.run.start();
     await vi.waitFor(() => {
       expect(first.run.snapshot().agents.worker?.status).toBe('done');
     });
     await core?.close();
 
-    const codex = new FakeConnector({ adapter: 'codex' });
+    const codex = fakeConnector({ adapter: 'codex' });
     const engine = await (await start(codex)).engines.open(CANVAS);
     expect(engine.run.snapshot()).toMatchObject({
       running: false,
@@ -344,7 +344,7 @@ describe('the core runs each canvas’s engine', () => {
   it('restores a run from a snapshot taken while its message was out paused, sending nothing again', async () => {
     await keepCanvas();
     // Its agent takes the run's message, and its turn goes on as long as the test does.
-    const codex = new FakeConnector({ adapter: 'codex' });
+    const codex = fakeConnector({ adapter: 'codex' });
     const sent: string[] = [];
     const busy: Connector<SessionMode> = {
       start: async (spec, host) => {
@@ -371,7 +371,7 @@ describe('the core runs each canvas’s engine', () => {
     for (const other of await snapshots(profile)) if (other !== kept) await rm(other);
     await writeFile(path.join(profile, STORE_FILE), 'not a database');
 
-    const again = new FakeConnector({ adapter: 'codex' });
+    const again = fakeConnector({ adapter: 'codex' });
     const restarted = await start(again);
     const restored = await restarted.engines.open(CANVAS);
     expect(restarted.engines.canvas(CANVAS)?.warnings).toEqual([
@@ -386,7 +386,7 @@ describe('the core runs each canvas’s engine', () => {
 
   it('closes every session as it closes, and writes out what it keeps, though a run can’t be journaled', async () => {
     await keepCanvas();
-    const codex = new FakeConnector({ adapter: 'codex' });
+    const codex = fakeConnector({ adapter: 'codex' });
     let closed = 0;
     const watched: Connector<SessionMode> = {
       start: async (spec, host) => {
@@ -421,7 +421,7 @@ describe('the core runs each canvas’s engine', () => {
 
   it('reports the journal failing, not the disk, when a message and the run were not on disk yet', async () => {
     await keepCanvas();
-    const codex = new FakeConnector({ adapter: 'codex' });
+    const codex = fakeConnector({ adapter: 'codex' });
     const started = await start(codex);
     const engine = await started.engines.open(CANVAS);
     engine.run.start();
@@ -449,7 +449,7 @@ describe('the core runs each canvas’s engine', () => {
 
   it('keeps a usable core when preparing to close cannot save its run', async () => {
     await keepCanvas();
-    const codex = new FakeConnector({ adapter: 'codex' });
+    const codex = fakeConnector({ adapter: 'codex' });
     const started = await start(codex);
     const engine = await started.engines.open(CANVAS);
     engine.run.start();
@@ -490,7 +490,7 @@ describe('the core runs each canvas’s engine', () => {
 
   it('refuses a canvas the profile keeps no project folder for, starting nothing', async () => {
     await keepCanvas({ folder: false });
-    const codex = new FakeConnector({ adapter: 'codex' });
+    const codex = fakeConnector({ adapter: 'codex' });
     await expect((await start(codex)).engines.open(CANVAS)).rejects.toThrow(/project folder/);
     expect(codex.started).toEqual([]);
   });
@@ -499,9 +499,7 @@ describe('the core runs each canvas’s engine', () => {
     await journalRun();
     // Its file forgotten: the profile keeps its folder, its run and its document, and no file.
     await keepCanvases(profile, { [CANVAS]: { project } });
-    const engine = await (
-      await start(new FakeConnector({ adapter: 'codex' }))
-    ).engines.open(CANVAS);
+    const engine = await (await start(fakeConnector({ adapter: 'codex' }))).engines.open(CANVAS);
     expect(engine.run.snapshot()).toMatchObject({
       paused: true,
       agents: { worker: { status: 'done' } },
@@ -512,13 +510,13 @@ describe('the core runs each canvas’s engine', () => {
     const draft = '6e5d4c3b-2a19-4f08-8e7d-6c5b4a392817' as CanvasId;
     await keepCanvases(profile, { [draft]: { project } });
     await expect(
-      (await start(new FakeConnector({ adapter: 'codex' }))).engines.open(draft),
+      (await start(fakeConnector({ adapter: 'codex' }))).engines.open(draft),
     ).rejects.toThrow(/isn’t saved/);
   });
 
   it('closes a canvas it runs: its run held and journaled, its sessions closed, open again paused', async () => {
     await keepCanvas();
-    const codex = new FakeConnector({ adapter: 'codex' });
+    const codex = fakeConnector({ adapter: 'codex' });
     const started = await start(codex);
     const engine = await started.engines.open(CANVAS);
     expect(
@@ -549,7 +547,7 @@ describe('the core runs each canvas’s engine', () => {
     );
     await writeFile(path.join(profile, 'worker.corral'), another);
     await expect(
-      (await start(new FakeConnector({ adapter: 'codex' }))).engines.open(CANVAS),
+      (await start(fakeConnector({ adapter: 'codex' }))).engines.open(CANVAS),
     ).rejects.toThrow(/another canvas/);
   });
 });
@@ -557,7 +555,7 @@ describe('the core runs each canvas’s engine', () => {
 /** Keeps the fixture's canvas, runs its queue to the end and closes the core: its run journaled. */
 async function journalRun(): Promise<void> {
   await keepCanvas();
-  const engine = await (await start(new FakeConnector({ adapter: 'codex' }))).engines.open(CANVAS);
+  const engine = await (await start(fakeConnector({ adapter: 'codex' }))).engines.open(CANVAS);
   engine.run.start();
   await vi.waitFor(() => {
     expect(engine.run.snapshot().agents.worker?.status).toBe('done');

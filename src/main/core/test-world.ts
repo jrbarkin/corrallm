@@ -20,7 +20,8 @@ import type { SessionMode } from '../../shared/session';
 import { MAX_FILE_QUERY_LENGTH, MAX_MESSAGE_LENGTH, MAX_ROLE_LENGTH } from '../../shared/session';
 import type { Connector } from '../sessions/connector';
 import { CATALOG } from '../sessions/adapters';
-import { FakeConnector } from '../sessions/fake';
+import { fakeConnector } from '../sessions/test-fake';
+import type { FakeConnector } from '../sessions/fake';
 import { ownTurn } from './attempts';
 import type { OutsideCaller } from './caller';
 import { mintTrustedPath } from './host';
@@ -225,7 +226,7 @@ function holding(fake: FakeConnector): Connector<SessionMode> {
 }
 /** Sessions that start, and play no turn of what they are sent. */
 function silent(adapter: string): Connector<SessionMode> {
-  const fake = new FakeConnector({ adapter });
+  const fake = fakeConnector({ adapter });
   return {
     start: async (spec, host) => {
       const session = await fake.start(spec, host);
@@ -351,7 +352,7 @@ const OWNER_CASES: {
 }));
 
 function controlConnector(): Connector<SessionMode> {
-  const fake = new FakeConnector({ adapter: CONTROL.adapter.id });
+  const fake = fakeConnector({ adapter: CONTROL.adapter.id });
   return {
     start: async (spec, host) => {
       const live = await fake.start(spec, host);
@@ -783,7 +784,7 @@ export async function startWorld(): Promise<{
       proposalIds: () => proposals.shift() ?? crypto.randomUUID(),
       sessions: {
         connectors: {
-          'codex.app-server': holding(new FakeConnector({ adapter: 'codex' })),
+          'codex.app-server': holding(fakeConnector({ adapter: 'codex' })),
           'codex.terminal': REFUSING,
           'claude-code.terminal': REFUSING,
           [CONTROL.connection.id]: controlConnector(),

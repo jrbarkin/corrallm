@@ -11,7 +11,8 @@ import { MAX_MESSAGE_BYTES, TOKEN_WAITS } from '../../shared/api/limits';
 import type { CanvasId } from '../../shared/canvas';
 import type { Message } from '../../shared/model/messages';
 import { callTool } from '../api/mcp';
-import { FakeConnector } from '../sessions/fake';
+import { fakeConnector } from '../sessions/test-fake';
+import type { FakeConnector } from '../sessions/fake';
 import type { OutsideCaller } from './caller';
 import { createCore } from './core';
 import type { Core } from './core';
@@ -37,7 +38,7 @@ let connector: FakeConnector;
 
 beforeEach(async () => {
   profile = await mkdtemp(path.join(tmpdir(), 'corrallm-wait-'));
-  connector = new FakeConnector({ adapter: 'codex' });
+  connector = fakeConnector({ adapter: 'codex' });
 });
 
 afterEach(async () => {
@@ -267,7 +268,7 @@ describe('wait', () => {
 
   it('is the party’s: a token renewed by name mid-turn revokes the old at once, and the new one gets the reply', async () => {
     const turn = Promise.withResolvers<undefined>();
-    connector = new FakeConnector({ adapter: 'codex', step: () => turn.promise });
+    connector = fakeConnector({ adapter: 'codex', step: () => turn.promise });
     try {
       await keep();
       await start();

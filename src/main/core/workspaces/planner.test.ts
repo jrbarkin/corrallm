@@ -9,7 +9,7 @@ import type { CanvasDocument, CanvasNode } from '../../../shared/model/canvas';
 import { toFile } from '../../../shared/model/file';
 import { CanvasMemory } from '../../memory';
 import { CATALOG } from '../../sessions/adapters';
-import { FakeConnector } from '../../sessions/fake';
+import { fakeConnector } from '../../sessions/test-fake';
 import { OpFailure } from '../call';
 import { Documents } from '../canvas/documents';
 import { FileReviews } from '../canvas/reviews';
@@ -529,7 +529,7 @@ describe('through the core', () => {
         check: true,
         distribution: 'local',
         sessions: {
-          connectors: { 'claude-code.terminal': new FakeConnector() },
+          connectors: { 'claude-code.terminal': fakeConnector() },
           environment: () => Promise.resolve({}),
         },
         watchFolder: () => ({ close: () => undefined }),

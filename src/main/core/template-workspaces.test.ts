@@ -8,7 +8,7 @@ import { EXAMPLES } from '../../shared/examples';
 import { toFile } from '../../shared/model/file';
 import { compileTemplate, fillTemplate } from '../../shared/model/templates';
 import { CATALOG } from '../sessions/adapters';
-import { FakeConnector } from '../sessions/fake';
+import { fakeConnector } from '../sessions/test-fake';
 import type { SessionSpec } from '../sessions/connector';
 import { createCore } from './core';
 import type { Core } from './core';
@@ -60,8 +60,8 @@ async function prepare(name: string, owned = true) {
   const file = path.join(root, 'template.corral');
   writeFileSync(file, toFile(doc));
   await keepCanvases(profile, { [doc.id]: { file, project } });
-  const claude = new FakeConnector({ adapter: 'claude-code' });
-  const codex = new FakeConnector({ adapter: 'codex' });
+  const claude = fakeConnector({ adapter: 'claude-code' });
+  const codex = fakeConnector({ adapter: 'codex' });
   core = await createCore(
     {
       profile,

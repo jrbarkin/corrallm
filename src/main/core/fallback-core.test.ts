@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CanvasId } from '../../shared/canvas';
 import type { SessionMode, TurnResult, UserMessage } from '../../shared/session';
 import type { Connector, SessionHost } from '../sessions/connector';
-import { FakeConnector } from '../sessions/fake';
+import { fakeConnector } from '../sessions/test-fake';
 import type { OutsideCaller } from './caller';
 import { createCore } from './core';
 import type { Core } from './core';
@@ -76,7 +76,7 @@ afterEach(async () => {
 
 /** A connector whose agent takes each message and works on it until the test ends its turn. */
 function heldConnector(adapter: 'codex' | 'claude-code') {
-  const fake = new FakeConnector({ adapter, mode: adapter === 'codex' ? 'auto' : 'acceptEdits' });
+  const fake = fakeConnector({ adapter, mode: adapter === 'codex' ? 'auto' : 'acceptEdits' });
   const sent: UserMessage[] = [];
   const listeners = new Set<() => void>();
   let host: SessionHost | undefined;

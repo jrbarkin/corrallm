@@ -14,9 +14,6 @@ export function fakeBackend() {
     ((agentId: string, connection: ConnectionId, event: SessionEvent) => void) | undefined;
   const backend = {
     start: vi.fn<SessionBackend['start']>().mockResolvedValue(null),
-    installed: vi
-      .fn<SessionBackend['installed']>()
-      .mockResolvedValue({ 'claude-code': false, codex: false }),
     send: vi.fn<SessionBackend['send']>().mockResolvedValue(null),
     interrupt: vi.fn<SessionBackend['interrupt']>().mockResolvedValue(null),
     setMode: vi.fn<SessionBackend['setMode']>().mockResolvedValue(null),

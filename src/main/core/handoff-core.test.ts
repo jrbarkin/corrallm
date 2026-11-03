@@ -11,7 +11,7 @@ import type { SessionContext } from '../../shared/model/fallback';
 import type { SessionEvent, SessionMode, TurnResult, UserMessage } from '../../shared/session';
 import type { Connector, SessionHost } from '../sessions/connector';
 import { CATALOG } from '../sessions/adapters';
-import { FakeConnector } from '../sessions/fake';
+import { fakeConnector } from '../sessions/test-fake';
 import type { Caller, OutsideCaller } from './caller';
 import { createCore } from './core';
 import type { Core } from './core';
@@ -125,7 +125,7 @@ function driven(
   /** Whether its CLI never says it got what it is sent (it never reaches it). */
   silent = false,
 ) {
-  const fake = new FakeConnector({
+  const fake = fakeConnector({
     adapter,
     mode: mode ?? (adapter === 'codex' ? 'auto' : 'acceptEdits'),
   });

@@ -23,7 +23,6 @@ import type { ProjectFiles } from '../files';
 import type { ProjectFolders } from '../project';
 import type { DirectoryResolver } from './workspaces/resolver';
 import type { RunJournal } from '../run-journal';
-import { installedClis } from '../sessions/installed';
 import type { SessionManager } from '../sessions/manager';
 import type { UsageReadings } from '../usage';
 import type { Documents } from './canvas/documents';
@@ -1387,7 +1386,7 @@ export class Engines {
 
   /** Where a canvas's agents' sessions run: the core's SessionManager, in this process. */
   #backend(canvas: CanvasId, listeners: Running['listeners']): SessionBackend {
-    const { sessions, directories, files, environment } = this.#deps;
+    const { sessions, directories, files } = this.#deps;
     const run = <T>(call: () => T): T => this.#deps.processes.run(call);
     const done = (call: () => Promise<unknown>) => run(() => call().then(() => null));
     return {
@@ -1401,7 +1400,6 @@ export class Engines {
           for (const event of this.#reports.get(`${canvas}\u0000${agentId}`)?.values() ?? [])
             for (const listener of listeners) listener(agentId, options.connection, event);
         }),
-      installed: () => run(async () => installedClis(await environment())),
       send: (agentId, message) => done(() => sessions.send(canvas, agentId, message)),
       interrupt: (agentId) => done(() => sessions.interrupt(canvas, agentId)),
       setMode: (agentId, mode) => done(() => sessions.setMode(canvas, agentId, mode)),

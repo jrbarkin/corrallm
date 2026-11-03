@@ -1,7 +1,9 @@
 import { MAX_IMAGE_BYTES, MAX_IMAGES } from '../../../shared/api/limits';
 import { IMAGE_TYPES } from '../../../shared/session';
 import type { Adapter } from '../adapter';
-import { FakeConnector, FAKE_MODELS } from '../fake';
+import { FakeConnector } from '../fake';
+import { fakePlan } from '../fake-prompts';
+import type { ModelChoice } from '../../../shared/session';
 import { CLAUDE_FEATURES } from './features';
 import { findClaude } from './claude';
 import { isUuid } from '../id';
@@ -11,6 +13,12 @@ import { SdkConnector } from './sdk/connector';
 import { Conversations } from './sdk/conversations';
 import { checkAgentSdk } from './selftest';
 import logo from './logo.svg?raw';
+
+/** The models a fake session offers. */
+const FAKE_MODELS: ModelChoice[] = [
+  { value: 'default', label: 'Default', description: 'The fake’s default model' },
+  { value: 'fast', label: 'Fast', description: 'Another model to pick' },
+];
 
 const HOUR = 60 * 60 * 1000;
 
@@ -214,7 +222,19 @@ export const claudeCode: Adapter = {
     'claude-code.sdk': new SdkConnector({ clientApp, findClaude: executable }),
   }),
   readOptions: ({ env, cwd }) => claudeOptions(env, cwd),
-  fake: (pause) => new FakeConnector({ pause, features: CLAUDE_FEATURES }),
+  fake: (options) =>
+    new FakeConnector({
+      ...options,
+      profile: {
+        mode: 'manual',
+        models: FAKE_MODELS,
+        effort: false,
+        plan: fakePlan,
+        askingModes: ['manual', 'plan', 'read-only'],
+        tool: { tool: 'Bash', summary: 'echo hello' },
+        features: CLAUDE_FEATURES,
+      },
+    }),
   fakeOptions: {
     models: FAKE_MODELS,
     // The fake's own default, Manual, asks.

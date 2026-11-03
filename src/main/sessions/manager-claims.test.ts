@@ -17,7 +17,7 @@ import { CanvasMemory, conversationsIn, PROJECT_WORKSPACE } from '../memory';
 import type { Conversations } from './adapter';
 import { ConversationClaims } from './claims';
 import type { Connector, LiveSession, SessionHost } from './connector';
-import { FakeConnector } from './fake';
+import { fakeConnector } from './test-fake';
 import { CATALOG } from './adapters';
 import { SessionManager } from './manager';
 
@@ -157,7 +157,7 @@ const options = (connection: ConnectionId = 'claude-code.sdk'): SessionOptions =
 
 /** A connector over a fake whose sessions' closes are counted, and their hosts kept. */
 function counted(adapter: AdapterId = 'claude-code') {
-  const fake = new FakeConnector({ adapter });
+  const fake = fakeConnector({ adapter });
   const hosts: SessionHost[] = [];
   const closed: number[] = [];
   const connector: Connector<SessionMode> = {
@@ -299,7 +299,7 @@ describe('conversation claims', () => {
   });
 
   it('reserves only the conversation an agent’s next session resumes: a newer resume or rewind lets the earlier go', async () => {
-    const fake = new FakeConnector();
+    const fake = fakeConnector();
     const sessions = manager({ 'claude-code.sdk': fake });
     const canvas = newCanvasId();
     await sessions.listSessions(canvas, 'a', WINDOW);
@@ -320,7 +320,7 @@ describe('conversation claims', () => {
   });
 
   it('releases a conversation only once its session has actually closed, never a successor’s claim', async () => {
-    const fake = new FakeConnector();
+    const fake = fakeConnector();
     const closing = Promise.withResolvers<undefined>();
     let first = true;
     const slow: Connector<SessionMode> = {
@@ -355,7 +355,7 @@ describe('conversation claims', () => {
   });
 
   it('releases the claim a failed start made, and only that', async () => {
-    const fake = new FakeConnector();
+    const fake = fakeConnector();
     const failing: Connector<SessionMode> = {
       start: (spec, host) =>
         spec.agentId === 'broken'
@@ -423,7 +423,7 @@ describe('conversation claims', () => {
   });
 
   it('reserves a rewind’s copy for its agent until its next session resumes it', async () => {
-    const fake = new FakeConnector();
+    const fake = fakeConnector();
     const rewinding: Connector<SessionMode> = {
       start: async (spec, host) => {
         const session: LiveSession<SessionMode> = await fake.start(spec, host);
@@ -479,7 +479,7 @@ describe('conversation claims', () => {
   });
 
   it('refuses to start a restart over a session that hasn’t finished closing, saying so', async () => {
-    const fake = new FakeConnector();
+    const fake = fakeConnector();
     const closing = Promise.withResolvers<undefined>();
     let first = true;
     const slow: Connector<SessionMode> = {
@@ -516,7 +516,7 @@ describe('conversation claims', () => {
   });
 
   it('says when a close it stopped waiting for has really finished (B11a C4’s lane waits)', async () => {
-    const fake = new FakeConnector();
+    const fake = fakeConnector();
     const closing = Promise.withResolvers<undefined>();
     const slow: Connector<SessionMode> = {
       start: async (spec, host) => {
@@ -559,7 +559,7 @@ describe('conversation claims', () => {
   });
 
   it('sees no other profile’s claims: two cores may each resume one conversation (no OS-wide lock)', async () => {
-    const fake = new FakeConnector();
+    const fake = fakeConnector();
     const [one, two] = [manager({ 'claude-code.sdk': fake }), manager({ 'claude-code.sdk': fake })];
     const canvas = newCanvasId();
     const other = newCanvasId();
@@ -575,7 +575,7 @@ describe('conversation claims', () => {
 
 describe('conversation admission', () => {
   it('admits a resume only from its own caller’s current list for the agent', async () => {
-    const sessions = manager({ 'claude-code.sdk': new FakeConnector() });
+    const sessions = manager({ 'claude-code.sdk': fakeConnector() });
     const canvas = newCanvasId();
     await sessions.listSessions(canvas, 'a', WINDOW);
     // Another caller was listed nothing.
@@ -595,7 +595,7 @@ describe('conversation admission', () => {
   });
 
   it('expires a list after a while', async () => {
-    const sessions = manager({ 'claude-code.sdk': new FakeConnector() });
+    const sessions = manager({ 'claude-code.sdk': fakeConnector() });
     const canvas = newCanvasId();
     await sessions.listSessions(canvas, 'a', WINDOW);
     now += 10 * 60 * 1000 + 1;
@@ -603,7 +603,7 @@ describe('conversation admission', () => {
   });
 
   it('keeps a list only for the directory and generation it was made in', async () => {
-    const sessions = manager({ 'claude-code.sdk': new FakeConnector() });
+    const sessions = manager({ 'claude-code.sdk': fakeConnector() });
     const canvas = newCanvasId();
     const key = `${canvas}\u0000a`;
     directories.set(key, ready('/work/tree', 1, 'w1'));
@@ -617,7 +617,7 @@ describe('conversation admission', () => {
   });
 
   it('bounds how many callers’ lists it keeps for an agent', async () => {
-    const sessions = manager({ 'claude-code.sdk': new FakeConnector() });
+    const sessions = manager({ 'claude-code.sdk': fakeConnector() });
     const canvas = newCanvasId();
     for (let index = 0; index <= 8; index += 1) {
       await sessions.listSessions(canvas, 'a', `window:${String(index)}`);
@@ -698,7 +698,7 @@ describe('workspace generations', () => {
 
   it('keeps the old session while a rebind is pending, even as another connection is asked for', async () => {
     const sdk = counted();
-    const terminal = new FakeConnector();
+    const terminal = fakeConnector();
     const sessions = manager({
       'claude-code.sdk': sdk.connector,
       'claude-code.terminal': terminal,
@@ -727,7 +727,7 @@ describe('workspace generations', () => {
   });
 
   it('refuses a new session while a rebind is pending, launching nothing', async () => {
-    const fake = new FakeConnector();
+    const fake = fakeConnector();
     const sessions = manager({ 'claude-code.sdk': fake });
     const canvas = newCanvasId();
     directories.set(`${canvas}\u0000a`, PENDING);
@@ -736,7 +736,7 @@ describe('workspace generations', () => {
   });
 
   it('says the binding a session runs in, for what checks it before a mutation', async () => {
-    const sessions = manager({ 'claude-code.sdk': new FakeConnector() });
+    const sessions = manager({ 'claude-code.sdk': fakeConnector() });
     const canvas = newCanvasId();
     const key = `${canvas}\u0000a`;
     directories.set(key, ready('/work/tree', 3, 'w1'));
@@ -756,7 +756,7 @@ describe('workspace generations', () => {
   });
 
   it('holds a send and a launch while another agent’s mutation of its tree goes on', async () => {
-    const fake = new FakeConnector();
+    const fake = fakeConnector();
     const passing = Promise.withResolvers<undefined>();
     let holding: string | undefined =
       'Its folder is being restored: its new work waits until then.';

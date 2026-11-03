@@ -4,7 +4,7 @@ import path from 'node:path';
 import { afterEach, expect, it, vi } from 'vitest';
 
 import { newCanvasId } from '../../shared/canvas';
-import { FakeConnector } from '../sessions/fake';
+import { fakeConnector } from '../sessions/test-fake';
 import { createCore } from './core';
 import type { Core } from './core';
 import { asHuman } from './gui';
@@ -52,8 +52,8 @@ async function setup() {
     }),
   );
   await keepCanvases(root, { [canvas]: { file, project } });
-  const sdk = new FakeConnector();
-  const terminal = new FakeConnector();
+  const sdk = fakeConnector();
+  const terminal = fakeConnector();
   const listeners = new Set<() => void>();
   let held = false;
   let generation = 0;

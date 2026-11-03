@@ -9,7 +9,7 @@ import type { Party } from '../../shared/api/surface';
 import { toolName } from '../../shared/api/registry';
 import type { NeedsItem } from '../../shared/model/needs';
 import { listTools } from '../api/mcp';
-import { FakeConnector } from '../sessions/fake';
+import { fakeConnector } from '../sessions/test-fake';
 import { createCore } from './core';
 import type { Core } from './core';
 import { keepCanvases, readOnDisk } from './store/test-store';
@@ -90,7 +90,7 @@ beforeEach(async () => {
       sessions: {
         // Its agent callers are made up: no session authority issued them.
         callers: () => true,
-        connectors: { 'codex.app-server': new FakeConnector({ adapter: 'codex' }) },
+        connectors: { 'codex.app-server': fakeConnector({ adapter: 'codex' }) },
         environment: () => Promise.resolve(env),
       },
       setups: ({ store, processes, directories, profile: at, changed }) => {

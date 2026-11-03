@@ -10,7 +10,8 @@ import { SURFACE } from '../../shared/api/surface';
 import type { Message } from '../../shared/model/messages';
 import type { NeedsItem } from '../../shared/model/needs';
 import type { OpResult } from '../../shared/api/errors';
-import { FakeConnector } from '../sessions/fake';
+import { fakeConnector } from '../sessions/test-fake';
+import type { FakeConnector } from '../sessions/fake';
 import type { AgentCaller, Caller, OutsideCaller } from './caller';
 import { scopeOf } from './call';
 import { createCore } from './core';
@@ -53,7 +54,7 @@ let appServer: FakeConnector;
 
 beforeEach(async () => {
   profile = await mkdtemp(path.join(tmpdir(), 'corrallm-asks-'));
-  appServer = new FakeConnector({ adapter: 'codex' });
+  appServer = fakeConnector({ adapter: 'codex' });
 });
 
 afterEach(async () => {
@@ -115,7 +116,7 @@ async function start(connector: FakeConnector = appServer): Promise<Core> {
         callers: () => true,
         connectors: {
           'codex.app-server': connector,
-          'codex.terminal': new FakeConnector({ adapter: 'codex' }),
+          'codex.terminal': fakeConnector({ adapter: 'codex' }),
         },
         environment: () => Promise.resolve({}),
       },
@@ -635,7 +636,7 @@ describe('an ask', () => {
   it('is answered by its recipient during its turn, and that turn’s text is never a second answer', async () => {
     await keepCanvas();
     const held = gate();
-    const builder = new FakeConnector({ adapter: 'codex', step: held.step });
+    const builder = fakeConnector({ adapter: 'codex', step: held.step });
     await start(builder);
     const id = await ask('builder', OUTSIDE);
     await vi.waitFor(() => {
@@ -673,7 +674,7 @@ describe('an ask', () => {
   it('stays open when its turn is cancelled, its asker told once', async () => {
     await keepCanvas();
     const held = gate();
-    const builder = new FakeConnector({ adapter: 'codex', step: held.step });
+    const builder = fakeConnector({ adapter: 'codex', step: held.step });
     await start(builder);
     const id = await ask('builder', OUTSIDE);
     await vi.waitFor(() => {
@@ -704,7 +705,7 @@ describe('an ask', () => {
   it('refuses a token’s own words that its agent asker’s connection would run as a shell command', async () => {
     await keepCanvas();
     const held = gate();
-    const builder = new FakeConnector({ adapter: 'codex', step: held.step });
+    const builder = fakeConnector({ adapter: 'codex', step: held.step });
     await start(builder);
     const id = await ask('builder', agentCaller('shell'));
     await vi.waitFor(() => {
@@ -788,7 +789,7 @@ describe('an ask', () => {
   it('expires a turn’s answer at the wall-clock deadline before its timer runs', async () => {
     await keepCanvas();
     const held = gate();
-    const builder = new FakeConnector({ adapter: 'codex', step: held.step });
+    const builder = fakeConnector({ adapter: 'codex', step: held.step });
     await start(builder);
     const id = await ask('builder', OUTSIDE, { deadlineSeconds: 60 });
     await vi.waitFor(() => {
@@ -833,7 +834,7 @@ describe('an ask', () => {
   it('is withdrawn when its recipient leaves (its asker told) or its asker leaves (nothing sent)', async () => {
     await keepCanvas();
     const held = gate();
-    const builder = new FakeConnector({ adapter: 'codex', step: held.step });
+    const builder = fakeConnector({ adapter: 'codex', step: held.step });
     await start(builder);
     // Builder is busy, so Planner's question to it waits.
     await ok('message', { to: 'builder', body: 'Hold on' }, YOU);

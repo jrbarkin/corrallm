@@ -20,7 +20,7 @@ export function createConnectors({
   return Object.fromEntries(
     ADAPTERS.flatMap((adapter) => {
       if (fake) {
-        const connector = adapter.fake?.(40);
+        const connector = adapter.fake?.({ pause: 40 });
         return connector === undefined
           ? []
           : adapter.descriptor.connections.map(({ id }) => [id, connector]);
