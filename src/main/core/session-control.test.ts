@@ -44,7 +44,7 @@ const YOU = CALLERS.you;
 const OTHER = '3f1a2b3c-4d5e-4f60-8a1b-2c3d4e5f6a7b' as CanvasId;
 
 /** Three Claude Code agents on the Agent SDK, sharing the faked project directory. */
-function canvasText(team = false): string {
+function canvasText(team = false, queued = false): string {
   const agent = (id: string, label: string, x: number) => ({
     id,
     kind: 'agent',
@@ -58,7 +58,10 @@ function canvasText(team = false): string {
     version: 2,
     id: CANVAS,
     nodes: [
-      agent('a', 'Builder', 0),
+      {
+        ...agent('a', 'Builder', 0),
+        ...(queued ? { queue: [{ id: 'fix', message: 'Fix the bug' }] } : {}),
+      },
       { ...agent('b', 'Reviewer', 300), ...(team ? { parent: 'a' } : {}) },
       agent('c', 'Tester', 600),
     ],
@@ -150,10 +153,11 @@ async function start(
     other = false,
     team = false,
     features,
-  }: { other?: boolean; team?: boolean; features?: EffectiveFeatures } = {},
+    queued = false,
+  }: { other?: boolean; team?: boolean; features?: EffectiveFeatures; queued?: boolean } = {},
 ): Promise<{ core: Core; sdk: FakeConnector; terminal: FakeConnector }> {
   const file = path.join(profile, 'team.corral');
-  await writeFile(file, canvasText(team));
+  await writeFile(file, canvasText(team, queued));
   // With `other`: a canvas of its own whose agent x (Writer) works in the same project folder.
   const second = path.join(profile, 'other.corral');
   if (other) {
@@ -1224,5 +1228,86 @@ describe('images a connection takes (B16 C3)', () => {
       });
     });
     expect(terminal.sessions.flatMap(({ sent }) => sent)).toEqual([]);
+  });
+});
+
+describe('what a rewind can go back to (B16 C4)', () => {
+  it('rewinds only to a message its conversation has, since its last clear, refusing anything else before any effect', async () => {
+    const { core } = await start();
+    const first = await turn(core, 'a', 'Write the app');
+    const open = core.engines.canvas(CANVAS);
+    const entries = () => open?.engine.sessions.of('a').entries ?? [];
+    // Not a message of it: its turn's end, another agent's message, a made-up id.
+    const end = entries().find((entry) => entry.kind === 'end')?.id ?? '';
+    const other = await turn(core, 'b', 'Review it');
+    for (const message of [end, other, 'no-such-message']) {
+      for (const [op, args] of [
+        ['session.rewind', { agent: 'a', message, restore: 'code' }],
+        ['session.rewindPreview', { agent: 'a', message }],
+      ] as const) {
+        const refused = await fails(core, op, args);
+        expect(refused).toMatchObject({ code: 'not-found' });
+        expect(refused.sentence).toMatch(/Builder can’t rewind to that message/);
+      }
+    }
+    expect(rewinds).toEqual([]);
+    // Before its last clear: another conversation now.
+    hosts.get('a')?.emit({ type: 'cleared', id: 'clear-1' });
+    await vi.waitFor(() => {
+      expect(entries().some((entry) => entry.kind === 'cleared')).toBe(true);
+    });
+    expect(
+      await fails(core, 'session.rewind', { agent: 'a', message: first, restore: 'code' }),
+    ).toMatchObject({ code: 'not-found' });
+    expect(rewinds).toEqual([]);
+    // What it has since: rewound.
+    const second = await turn(core, 'a', 'Write it again');
+    expect(
+      await ok(core, 'session.rewind', { agent: 'a', message: second, restore: 'code' }),
+    ).toMatchObject({ conversation: false });
+  });
+
+  it('refuses a restore its connection doesn’t declare, before anything, whoever asks', async () => {
+    const { core } = await start();
+    const message = await turn(core, 'a', 'Write the app');
+    await ok(core, 'agent.setConnection', { agent: 'a', connection: 'claude-code.terminal' });
+    for (const restore of ['code', 'conversation', 'both']) {
+      for (const caller of [YOU, ORCHESTRATOR]) {
+        const refused = await fails(
+          core,
+          'session.rewind',
+          { agent: 'a', message, restore },
+          caller,
+        );
+        expect(refused).toMatchObject({ code: 'refused' });
+        expect(refused.sentence).toMatch(/Builder’s connection can’t rewind/);
+      }
+    }
+    expect(rewinds).toEqual([]);
+    const { items } = (await ok(core, 'needs', {})) as { items: { kind: string }[] };
+    expect(items.filter(({ kind }) => kind === 'proposal')).toEqual([]);
+  });
+});
+
+describe('what an attempt keeps of its session (B16 C4)', () => {
+  it('records that the session it went to can’t continue its conversation, as run.get shows it', async () => {
+    const { core } = await start(
+      {},
+      { queued: true, features: { role: 'append', resume: false, list: false } },
+    );
+    // Its session ready first: what it can do is known as the attempt is made.
+    await ok(core, 'session.open', { agent: 'a' });
+    await vi.waitFor(async () => {
+      expect(await ok(core, 'session.get', { agent: 'a' })).toMatchObject({
+        features: { resume: false },
+      });
+    });
+    holding = Promise.withResolvers<undefined>();
+    await ok(core, 'run.start', {});
+    await vi.waitFor(async () => {
+      expect(await ok(core, 'run.get', {})).toMatchObject({
+        agents: { a: { attempts: { fix: [{ status: 'running', resumes: false }] } } },
+      });
+    });
   });
 });

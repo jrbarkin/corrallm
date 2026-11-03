@@ -56,6 +56,8 @@ const attempt = (v: unknown): v is TaskAttempt =>
   optional(v, 'retryOf', string) &&
   optional(v, 'messageId', string) &&
   optional(v, 'endedAt', number) &&
+  // B16 C4: whether its session could continue its conversation; absent: not known.
+  optional(v, 'resumes', boolean) &&
   ['reason', 'text', 'message'].every((key) => optional(v, key, string));
 
 function agent(v: unknown): v is AgentRun {

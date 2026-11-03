@@ -231,6 +231,13 @@ export interface RunIO {
    * steps then ask for that call, with their attempt's id, before the last line. None: never.
    */
   completes?: (agent: string) => boolean;
+  /**
+   * B16 C4: whether `agent`'s session can continue its conversation, as known now: false where its
+   * adapter, or its ready session generation, can't; true only where a ready generation said it
+   * can; undefined where it can't be told (no generation ready yet). Kept on each attempt as it is
+   * made (`TaskAttempt.resumes`). None: never known.
+   */
+  resumes?: (agent: string) => boolean | undefined;
 }
 
 /**
@@ -513,7 +520,11 @@ export class RunStore {
           problem: {
             kind: 'uncertain',
             reason: 'interrupted',
-            text: this.#heldText('This task was in progress when the session ended.', task),
+            text: this.#heldText(
+              'This task was in progress when the session ended.',
+              task,
+              last?.resumes,
+            ),
             agent: item && isMessage(item) ? (item.target ?? id) : id,
             ...(condition ? { conditionKey: condition } : {}),
           },
@@ -608,7 +619,11 @@ export class RunStore {
       if (waiting.some(([one]) => one === agent)) continue;
       this.#interrupt(
         'uncertain',
-        this.#heldText('The session was interrupted.', this.#runningTask(agent)),
+        this.#heldText(
+          'The session was interrupted.',
+          this.#runningTask(agent),
+          this.#runningAttempt(agent)?.resumes,
+        ),
         new Set([agent]),
         false,
       );
@@ -1137,10 +1152,17 @@ export class RunStore {
   /** The attempt agent `agent` runs now, if one is: its current task's last, running. */
   #runningTask(agent: string): TaskMessage | undefined {
     const at = this.#run.agents[agent];
-    const last = at?.current === undefined ? undefined : at.attempts?.[at.current]?.at(-1);
-    return at?.current === undefined || last?.status !== 'running'
+    const last = this.#runningAttempt(agent);
+    return at?.current === undefined || last === undefined
       ? undefined
       : { agent, item: at.current, attempt: last.id };
+  }
+
+  /** The attempt `agent` is running at its current task, if one runs. */
+  #runningAttempt(agent: string): TaskAttempt | undefined {
+    const at = this.#run.agents[agent];
+    const last = at?.current === undefined ? undefined : at.attempts?.[at.current]?.at(-1);
+    return last?.status === 'running' ? last : undefined;
   }
 
   /**
@@ -1164,14 +1186,20 @@ export class RunStore {
   /**
    * Why a task whose turn was going is held uncertain (`what`: the run held as quitting holds it,
    * or restored after its session ended), with what its attempt's rows add (B21 C7, C8): that an
-   * answer to a question it asked had reached its agent, or what its agent had reported.
+   * answer to a question it asked had reached its agent, or what its agent had reported; and that
+   * the session it went to couldn't continue its conversation, where its attempt kept that (B16 C4:
+   * `resumes`, false; unknown promises nothing either way).
    */
-  #heldText(what: string, task: TaskMessage | undefined): string {
+  #heldText(what: string, task: TaskMessage | undefined, resumes?: boolean): string {
     const tasks = this.#io.tasks;
     const recovered = task === undefined ? undefined : tasks?.recover(task);
     const reported = task === undefined ? undefined : tasks?.reported(task);
     return [
       what,
+      // B16 C4: what its attempt recorded as it went, never what its agent runs now.
+      resumes === false
+        ? 'Its session couldn’t continue its conversation, so starting it again starts a new one.'
+        : undefined,
       recovered?.waiting === false && recovered.answered
         ? 'An answer to a question it asked had reached the agent.'
         : undefined,
@@ -1206,7 +1234,7 @@ export class RunStore {
     const next = {
       ...at,
       status: 'running' as const,
-      attempts: this.#attempts(at, at.current, text),
+      attempts: this.#attempts(at, at.current, text, session),
     };
     delete next.problem;
     this.#observed.set(JSON.stringify([session, message]), { owner, item: at.current, token });
@@ -1233,15 +1261,19 @@ export class RunStore {
   #attempts(
     at: AgentRun | undefined,
     item: string,
-    message?: string,
+    message: string | undefined,
+    recipient: string,
   ): NonNullable<AgentRun['attempts']> {
     const prior = at?.attempts?.[item]?.at(-1);
+    // B16 C4: whether the session it goes to can continue its conversation, as known now.
+    const resumes = this.#io.resumes?.(recipient);
     const attempt: TaskAttempt = {
       ...(prior && prior.status !== 'running' ? { retryOf: prior.id } : {}),
       id: crypto.randomUUID(),
       startedAt: this.#io.now(),
       status: 'running',
       ...(message ? { message } : {}),
+      ...(resumes === undefined ? {} : { resumes }),
     };
     return { ...at?.attempts, [item]: [...(at?.attempts?.[item] ?? []), attempt] };
   }
@@ -1950,7 +1982,7 @@ export class RunStore {
   ): AgentRun {
     const token = {};
     this.#busy.set(node.id, token);
-    const attempts = this.#attempts(this.#run.agents[node.id], current);
+    const attempts = this.#attempts(this.#run.agents[node.id], current, undefined, node.id);
     this.#send(node, conditionQuestion(condition), {
       holder: { agent: node.id, token },
       task: taskMessage(node.id, current, attempts),
@@ -2112,7 +2144,9 @@ export class RunStore {
     }
     const token = {};
     this.#busy.set(agent, token);
-    const attempts = this.#attempts(previous, task.id, correction?.note);
+    // Its recipient: a message's target, if another agent's; else the agent itself.
+    const recipient = isMessage(task) && task.target !== undefined ? task.target : agent;
+    const attempts = this.#attempts(previous, task.id, correction?.note, recipient);
     const ended = (turn: TurnEnd) => {
       this.#taskEnded(agent, task, token, turn);
     };

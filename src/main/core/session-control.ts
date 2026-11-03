@@ -12,7 +12,7 @@ import type { CanvasId } from '../../shared/canvas';
 import * as agentEdits from '../../shared/model/agent-ops';
 import type { AgentNode } from '../../shared/model/canvas';
 import { imageRefusal } from '../../shared/images';
-import { threadTitle } from '../../shared/model/session';
+import { rewindPointsOf, threadTitle } from '../../shared/model/session';
 import { andList } from '../../shared/model/words';
 import { MAX_MCP_ERROR_LENGTH, MAX_MCP_NAME_LENGTH, MAX_MCP_SERVERS } from '../../shared/session';
 import type {
@@ -571,7 +571,11 @@ export class SessionControl {
     agent: string;
     message: string;
   }): Promise<FilesRewind> {
-    const { open } = this.#target(canvas, agent);
+    const target = this.#target(canvas, agent);
+    const { open } = target;
+    // A preview is of its files: only where its connection restores them (B16 C4).
+    const refusal = this.#rewindRefusal(target, message, ['code', 'both']);
+    if (refusal !== undefined) throw refusal;
     return this.#effect(() => this.#deps.sessions.previewRewind(open.document.id, agent, message));
   }
 
@@ -591,6 +595,9 @@ export class SessionControl {
   ): Promise<RewindResult> {
     const target = this.#target(canvas, agent);
     const { open, name } = target;
+    // B16 C4: only a restore its connection declares, to a point the core proves, before anything.
+    const refusal = this.#rewindRefusal(target, message, [restore]);
+    if (refusal !== undefined) throw refusal;
     // A conversation rewind ends its session, to resume the copy: only where it can start again.
     if (restore !== 'code') await this.#launchable(target, 'rewind its conversation');
     // Idle as it rewinds: nothing awaited between this check and a conversation's rewind (a code
@@ -636,6 +643,9 @@ export class SessionControl {
   ): Promise<RuleOutcome> {
     if (args.restore === 'conversation') return undefined;
     const target = this.#target(args.canvas, args.agent);
+    // Never a proposal of what the handler would refuse (B16 C4).
+    const refusal = this.#rewindRefusal(target, args.message, [args.restore]);
+    if (refusal !== undefined) return { refuse: refusal.message };
     let guard: RewindGuard;
     try {
       guard = await this.#guard(target, args.message);
@@ -678,6 +688,32 @@ export class SessionControl {
       guard,
     });
     return { propose: id };
+  }
+
+  /**
+   * Why a rewind of `target` to `message` restoring one of `restores` is refused before anything
+   * (B16 C4): none of them is a restore its connection declares; or `message` isn't a point its
+   * actual conversation has, as the core proves it (`rewindPointsOf`: one its CLI has, of its
+   * adapter's conversation, since its last clear). Its generation's own features, and the native
+   * conversation, are checked again by the manager before any fork or file write.
+   */
+  #rewindRefusal(
+    { open, node, adapter, connection, name }: Target,
+    message: string,
+    restores: readonly RewindRestore[],
+  ): OpFailure | undefined {
+    const declared = connectionIn(this.#deps.catalog, connection)?.connection.panels.rewind;
+    if (!restores.some((one) => declared?.restores.includes(one) === true)) {
+      return new OpFailure('refused', `${name}’s connection can’t rewind that here.`);
+    }
+    const points = rewindPointsOf(open.engine.sessions.of(node.id).entries, adapter);
+    if (!points.some(({ id }) => id === message)) {
+      return new OpFailure(
+        'not-found',
+        `${name} can’t rewind to that message: it isn’t one its conversation has since its last clear.`,
+      );
+    }
+    return undefined;
   }
 
   /** Its connection's /mcp panel, as the catalog declares it: refused where it has none. */

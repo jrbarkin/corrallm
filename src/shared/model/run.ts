@@ -34,6 +34,13 @@ export interface TaskAttempt {
   reason?: string;
   text?: string;
   message?: string;
+  /**
+   * B16 C4: whether the session it went to could continue its conversation, as known when it was
+   * made (false: its adapter, or its session, couldn't); absent where that wasn't known, as in an
+   * older record. Only false says anything: an interrupted attempt that kept it says its
+   * conversation can't be continued, whatever its agent runs since.
+   */
+  resumes?: boolean;
 }
 
 /** Where a repeat is: the round it is on (or ended on), and how many rounds the user added. */

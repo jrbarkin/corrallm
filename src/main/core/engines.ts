@@ -157,6 +157,8 @@ export interface EnginesDeps {
   listed?: (canvas: CanvasId, agent: string) => boolean;
   /** What the agent's ready session generation can do (B16 C1: the manager's), else null. */
   features?: (canvas: CanvasId, agent: string) => SessionFeatures | null;
+  /** B16 C4: whether the agent's session can continue its conversation, as known (RunIO.resumes). */
+  resumes?: (canvas: CanvasId, agent: string) => boolean | undefined;
 }
 
 /**
@@ -1131,6 +1133,7 @@ export class Engines {
         (running.delivery as Delivery | undefined)?.interruptTask(task);
       }),
       completes: (agent) => this.#deps.completes?.(canvas, agent) === true,
+      resumes: (agent) => this.#deps.resumes?.(canvas, agent),
     });
     running.engine = engine;
     engine.update(document.nodes);

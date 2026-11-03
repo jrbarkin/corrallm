@@ -4,7 +4,7 @@ import { readFile, realpath, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import path from 'node:path';
 
-import { connectionIn } from '../../shared/adapter';
+import { adapterIn, connectionIn } from '../../shared/adapter';
 import type { AdapterId, ConnectionId, UsageBackendId } from '../../shared/adapter';
 import { canvasIdOf } from '../../shared/canvas';
 import type { CanvasId } from '../../shared/canvas';
@@ -1155,6 +1155,16 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     completes: (canvas, agent) => authority.hasListedTool(canvas, agent, 'complete'),
     listed: (canvas, agent) => authority.hasListed(canvas, agent),
     features: (canvas, agent) => sessions.features(canvas, agent),
+    // B16 C4: what each attempt keeps of whether its session can continue its conversation.
+    resumes: (canvas, agent) => {
+      const node = documents
+        .loaded(canvas)
+        ?.document.nodes.find((one) => one.id === agent && one.type === 'agent');
+      const endpoint = node?.type === 'agent' ? agentEndpoint(node.data, CATALOG) : undefined;
+      if (endpoint?.kind !== 'known') return undefined;
+      if (adapterIn(CATALOG, endpoint.adapter)?.resume !== true) return false;
+      return sessions.features(canvas, agent)?.resume;
+    },
   });
   /** A canvas the core runs, executing (its delivery started): what B11a's services act on. */
   const executing = (canvas: CanvasId) => {

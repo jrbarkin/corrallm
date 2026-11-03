@@ -91,6 +91,8 @@ export const Attempt = z.strictObject({
   reason: z.string().optional(),
   text: z.string().optional(),
   message: z.string().optional(),
+  // B16 C4: whether the session it went to could continue its conversation; absent: not known.
+  resumes: z.boolean().optional(),
 });
 const AgentRun = z.strictObject({
   pauses: z.array(Party).optional(),
