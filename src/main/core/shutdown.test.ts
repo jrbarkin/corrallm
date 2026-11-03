@@ -8,7 +8,8 @@ import type { CanvasId } from '../../shared/canvas';
 import type { Message } from '../../shared/model/messages';
 import type { SessionMode } from '../../shared/session';
 import type { Connector } from '../sessions/connector';
-import { FakeConnector } from '../sessions/fake';
+import { fakeConnector } from '../sessions/test-fake';
+import type { FakeConnector } from '../sessions/fake';
 import type { OutsideCaller } from './caller';
 import { createCore } from './core';
 import type { Core } from './core';
@@ -70,7 +71,7 @@ function release(): void {
 
 /** A Codex App Server whose turns wait at each step while `held`. */
 function connector(): FakeConnector {
-  return new FakeConnector({
+  return fakeConnector({
     adapter: 'codex',
     step: () =>
       held

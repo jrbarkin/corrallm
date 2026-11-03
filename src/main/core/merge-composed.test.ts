@@ -10,7 +10,8 @@ import { createCore } from './core';
 import type { Core, CoreConfig } from './core';
 import * as ops from './ops';
 import type { WorktreeServices } from './ops/worktree';
-import { FakeConnector } from '../sessions/fake';
+import { fakeConnector } from '../sessions/test-fake';
+import type { FakeConnector } from '../sessions/fake';
 import * as connectors from '../sessions/connectors';
 import type { Conversations } from '../sessions/adapter';
 import { keepCanvases, readOnDisk, writeOnDisk } from './store/test-store';
@@ -68,7 +69,7 @@ beforeEach(async () => {
     }),
   );
   await keepCanvases(profile, { [CANVAS]: { file, project } });
-  fake = new FakeConnector({ adapter: 'codex' });
+  fake = fakeConnector({ adapter: 'codex' });
   config = {
     profile,
     app: { name: 'corrallm', version: '1' },

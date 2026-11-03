@@ -15,7 +15,7 @@ import type { DirectoryResolver, WorkingDirectory } from '../core/workspaces/res
 import { CanvasMemory } from '../memory';
 import { CATALOG } from './adapters';
 import type { Connector, SessionApi, SessionHost } from './connector';
-import { FakeConnector } from './fake';
+import { fakeConnector } from './test-fake';
 import { SessionManager } from './manager';
 import { ProcessScope } from './process';
 import type { PromptSink } from './manager';
@@ -116,7 +116,7 @@ function manager(
 }
 
 /** A fake connector that logs each start, with the route its spec carried, keeping its hosts. */
-function logged(fake = new FakeConnector(), hosts: SessionHost[] = []): Connector<SessionMode> {
+function logged(fake = fakeConnector(), hosts: SessionHost[] = []): Connector<SessionMode> {
   return {
     start: (spec, host) => {
       log.push(`start ${spec.agentId} ${spec.api?.kind === 'http' ? spec.api.token : 'none'}`);
@@ -158,7 +158,7 @@ afterEach(async () => {
 
 describe('a session generation’s route', () => {
   it('is issued once as it launches, after its folder is admitted, and goes to its connector alone', async () => {
-    const fake = new FakeConnector();
+    const fake = fakeConnector();
     const sessions = manager({ 'claude-code.sdk': logged(fake) });
     const canvas = newCanvasId();
     await sessions.start(canvas, 'b', SDK);
@@ -174,7 +174,7 @@ describe('a session generation’s route', () => {
   });
 
   it('is left out of the spec when the core issues none, and the session starts without it', async () => {
-    const fake = new FakeConnector();
+    const fake = fakeConnector();
     const sessions = manager({ 'claude-code.sdk': logged(fake) }, { issue: () => undefined });
     const canvas = newCanvasId();
     await sessions.start(canvas, 'b', SDK);
@@ -185,7 +185,7 @@ describe('a session generation’s route', () => {
   });
 
   it('says once why, when its connection has a route but the core issued none', async () => {
-    const fake = new FakeConnector();
+    const fake = fakeConnector();
     const sessions = manager(
       { 'claude-code.sdk': logged(fake) },
       { issue: () => undefined, catalog: routed('claude-code.sdk') },
@@ -261,7 +261,7 @@ describe('a session generation’s credential', () => {
       start: () => Promise.reject(new Error('It won’t start here.')),
     };
     const sessions = manager({
-      'claude-code.sdk': logged(new FakeConnector(), hosts),
+      'claude-code.sdk': logged(fakeConnector(), hosts),
       'claude-code.terminal': logged(),
       'codex.app-server': failing,
     });
@@ -295,7 +295,7 @@ describe('a session generation’s credential', () => {
   });
 
   it('is revoked as soon as its install is found unheard, before its session has closed', async () => {
-    const fake = new FakeConnector();
+    const fake = fakeConnector();
     const closing = Promise.withResolvers<undefined>();
     let revokedBeforeClose: boolean | undefined;
     const late: Connector<SessionMode> = {

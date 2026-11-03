@@ -5,7 +5,8 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { CanvasId } from '../../shared/canvas';
-import { FakeConnector } from '../sessions/fake';
+import { fakeConnector } from '../sessions/test-fake';
+import type { FakeConnector } from '../sessions/fake';
 import type { OutsideCaller } from './caller';
 import { createCore } from './core';
 import type { Core } from './core';
@@ -77,7 +78,7 @@ beforeEach(async () => {
   await keepCanvases(profile, kept);
   held = false;
   waiting = [];
-  fake = new FakeConnector({
+  fake = fakeConnector({
     adapter: 'codex',
     step: () =>
       held

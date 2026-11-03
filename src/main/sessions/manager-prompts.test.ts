@@ -16,7 +16,7 @@ import type { DirectoryResolver } from '../core/workspaces/resolver';
 import { CanvasMemory } from '../memory';
 import { CATALOG } from './adapters';
 import type { Connector, LiveSession, PromptAnswers, SessionHost } from './connector';
-import { FakeConnector } from './fake';
+import { fakeConnector } from './test-fake';
 import { SessionManager } from './manager';
 import type { PromptOrigin, PromptSink } from './manager';
 
@@ -107,7 +107,7 @@ interface Raising extends LiveSession<SessionMode> {
  * as its session starts, before the start resolves (a raise as a session starts).
  */
 function raising(starting?: (host: SessionHost) => Promise<void> | void) {
-  const fake = new FakeConnector({ mode: 'plan' });
+  const fake = fakeConnector({ mode: 'plan' });
   const sessions: Raising[] = [];
   const connector: Connector<SessionMode> = {
     start: async (spec, host) => {

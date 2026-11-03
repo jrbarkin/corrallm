@@ -9,7 +9,8 @@ import type { CanvasId } from '../../shared/canvas';
 import type { Message } from '../../shared/model/messages';
 import type { SessionMode } from '../../shared/session';
 import type { Connector } from '../sessions/connector';
-import { FakeConnector } from '../sessions/fake';
+import { fakeConnector } from '../sessions/test-fake';
+import type { FakeConnector } from '../sessions/fake';
 import { SessionManager } from '../sessions/manager';
 import { RunJournal } from '../run-journal';
 import { createCore } from './core';
@@ -100,7 +101,7 @@ function party(state: 'pending' | 'delivering', body: string) {
 
 /** A connector whose agent takes each message and works on it until the test ends its turn. */
 function busy(): { connector: Connector<SessionMode>; codex: FakeConnector; sent: string[] } {
-  const codex = new FakeConnector({ adapter: 'codex' });
+  const codex = fakeConnector({ adapter: 'codex' });
   const sent: string[] = [];
   const connector: Connector<SessionMode> = {
     start: async (spec, host) => {
@@ -134,7 +135,7 @@ describe('the canvas runtime', () => {
     await keepCanvas(profile, { folder: false });
     const waiting = party('pending', 'Waiting work');
     await keepMessages(profile, CANVAS, [waiting]);
-    const codex = new FakeConnector({ adapter: 'codex' });
+    const codex = fakeConnector({ adapter: 'codex' });
     const core = await start(codex);
 
     const engine = await core.engines.load(CANVAS);
@@ -163,7 +164,7 @@ describe('the canvas runtime', () => {
     const waiting = party('pending', 'Waiting work');
     await keepMessages(profile, CANVAS, [cut, waiting]);
     const read = vi.spyOn(RunJournal.prototype, 'get');
-    const codex = new FakeConnector({ adapter: 'codex' });
+    const codex = fakeConnector({ adapter: 'codex' });
     const core = await start(codex);
 
     const [first, second, loaded, opened] = await Promise.all([
@@ -242,7 +243,7 @@ describe('the canvas runtime', () => {
 
   it('initializes no canvas closed since, and a token naming it reaches nothing', async () => {
     await keepCanvas();
-    const core = await start(new FakeConnector({ adapter: 'codex' }));
+    const core = await start(fakeConnector({ adapter: 'codex' }));
     await core.engines.open(CANVAS);
     expect(await core.call('canvas.close', { canvas: CANVAS }, CALLERS.you)).toMatchObject({
       ok: true,
@@ -250,7 +251,7 @@ describe('the canvas runtime', () => {
     await core.close();
     cores.splice(0);
 
-    const codex = new FakeConnector({ adapter: 'codex' });
+    const codex = fakeConnector({ adapter: 'codex' });
     const restarted = await start(codex);
     expect(await restarted.engines.initialize()).toEqual([]);
     expect(restarted.engines.opened()).toEqual([]);
@@ -266,7 +267,7 @@ describe('the canvas runtime', () => {
 
   it('allocates a canvas being closed again only once its close has finished: one runtime at a time', async () => {
     await keepCanvas();
-    const core = await start(new FakeConnector({ adapter: 'codex' }));
+    const core = await start(fakeConnector({ adapter: 'codex' }));
     const engine = await core.engines.open(CANVAS);
     const closed = Promise.withResolvers<undefined>();
     const order: string[] = [];

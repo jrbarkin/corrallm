@@ -11,7 +11,7 @@ import type { PromptAnswer } from '../../shared/model/prompts';
 import type { Entry } from '../../shared/model/session';
 import type { SessionMode } from '../../shared/session';
 import type { Connector, LiveSession } from '../sessions/connector';
-import { FakeConnector } from '../sessions/fake';
+import { fakeConnector } from '../sessions/test-fake';
 import type { AgentCaller, Caller, OutsideCaller } from './caller';
 import { createCore } from './core';
 import type { Core } from './core';
@@ -168,7 +168,7 @@ const cores: Core[] = [];
  * and answers both.
  */
 function raising(prompts: object[]) {
-  const fake = new FakeConnector({ mode: 'acceptEdits' });
+  const fake = fakeConnector({ mode: 'acceptEdits' });
   const answered: [string, PromptAnswer][] = [];
   const connector: Connector<SessionMode> = {
     start: async (spec, host) => {
@@ -224,7 +224,7 @@ async function start(connector: Connector<SessionMode>): Promise<Core> {
         connectors: {
           'claude-code.sdk': connector,
           // The Worker's CLI asks before it runs a command, and plays /question and /plan.
-          'codex.app-server': new FakeConnector({ adapter: 'codex', mode: 'read-only' }),
+          'codex.app-server': fakeConnector({ adapter: 'codex', mode: 'read-only' }),
         },
         environment: () => Promise.resolve({}),
       },
@@ -444,7 +444,7 @@ describe('the counts agents and session.get give', () => {
 
 describe('session.transcript and the session topic', () => {
   it('keep restored prompt-reply text yours alone at both read boundaries', async () => {
-    const fake = new FakeConnector({ mode: 'acceptEdits' });
+    const fake = fakeConnector({ mode: 'acceptEdits' });
     const core = await start({
       start: async (spec, host) => {
         const session = await fake.start(spec, host);
@@ -752,7 +752,7 @@ describe('an approval of an MCP serverâ€™s tool: its words yours alone, a tokenâ
    * App Server's adapters raise it through the core's owner, its title the server's words.
    */
   function asking(adapter: 'claude-code' | 'codex'): Connector<SessionMode> {
-    const fake = new FakeConnector({ adapter, mode: adapter === 'codex' ? 'read-only' : 'manual' });
+    const fake = fakeConnector({ adapter, mode: adapter === 'codex' ? 'read-only' : 'manual' });
     return {
       start: async (spec, host) => {
         const session = await fake.start(spec, host);

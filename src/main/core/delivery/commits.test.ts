@@ -7,7 +7,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 
 import type { SessionMode } from '../../../shared/session';
 import type { Connector, SessionHost } from '../../sessions/connector';
-import { FakeConnector } from '../../sessions/fake';
+import { fakeConnector } from '../../sessions/test-fake';
 import type { Caller, OutsideCaller } from '../caller';
 import { legacyDirectories } from '../workspaces/test-directories';
 import { createCore } from '../core';
@@ -168,7 +168,7 @@ function onDisk(id: string): { state: string; as: string | undefined } | undefin
 
 /** A connector on the fake whose sessions tell `sent` each message as it reaches them. */
 function watching(sent: (text: string, id: string) => void): Connector<SessionMode> {
-  const codex = new FakeConnector({ adapter: 'codex' });
+  const codex = fakeConnector({ adapter: 'codex' });
   return {
     start: async (spec, host) => {
       const session = await codex.start(spec, host);
@@ -185,7 +185,7 @@ function watching(sent: (text: string, id: string) => void): Connector<SessionMo
 it.each(['run.pause', 'run.kill', 'run.unpause'] as const)(
   '%s takes effect at once but returns only once its run record is on disk',
   async (op) => {
-    const { engines } = await start(new FakeConnector({ adapter: 'codex' }));
+    const { engines } = await start(fakeConnector({ adapter: 'codex' }));
     const target = { agent: 'builder' };
     if (op === 'run.unpause') await ok('run.pause', { target });
     const release = await holdCommits();
@@ -218,7 +218,7 @@ it.each(['run.pause', 'run.kill', 'run.unpause'] as const)(
 it.each(['run.pause', 'run.kill', 'run.unpause'] as const)(
   '%s says its immediate change may not survive a restart when its record cannot be written',
   async (op) => {
-    const { engines } = await start(new FakeConnector({ adapter: 'codex' }));
+    const { engines } = await start(fakeConnector({ adapter: 'codex' }));
     const target = { agent: 'builder' };
     if (op === 'run.unpause') await ok('run.pause', { target });
     const allow = refuseWrites(profile, 'run', 'The disk is full');
@@ -247,7 +247,7 @@ it.each(['run.pause', 'run.kill', 'run.unpause'] as const)(
 );
 
 it('returns from a kill only once its hold and every withdrawal it made are on disk', async () => {
-  const { engines } = await start(new FakeConnector({ adapter: 'codex', pause: 100 }));
+  const { engines } = await start(fakeConnector({ adapter: 'codex', pause: 100 }));
   const open = engines.canvas(CANVAS);
   const active = await ok<{ id: string }>('message', { to: 'builder', body: 'Working' });
   await vi.waitFor(() => {
@@ -279,7 +279,7 @@ it('returns from a kill only once its hold and every withdrawal it made are on d
 });
 
 it('commits a kill’s hold with the withdrawals it makes at once, or neither', async () => {
-  const { engines } = await start(new FakeConnector({ adapter: 'codex' }));
+  const { engines } = await start(fakeConnector({ adapter: 'codex' }));
   const open = engines.canvas(CANVAS);
   await ok('run.pause', { target: { agent: 'builder' } }, CALLERS.you);
   const waiting = await ok<{ id: string }>('message', { to: 'builder', body: 'Waits' });
@@ -307,7 +307,7 @@ it('commits a kill’s hold with the withdrawals it makes at once, or neither', 
 });
 
 it('returns from a withdrawal of a waiting message only once it is on disk', async () => {
-  const { engines } = await start(new FakeConnector({ adapter: 'codex' }));
+  const { engines } = await start(fakeConnector({ adapter: 'codex' }));
   const open = engines.canvas(CANVAS);
   await ok('run.pause', { target: { agent: 'builder' } }, CALLERS.you);
   const { id } = await ok<{ id: string }>('message', { to: 'builder', body: 'Deploy to prod' });
@@ -339,7 +339,7 @@ it('returns from a withdrawal of a waiting message only once it is on disk', asy
 });
 
 it('says a withdrawal may not survive a restart when it can’t be written', async () => {
-  const { engines } = await start(new FakeConnector({ adapter: 'codex' }));
+  const { engines } = await start(fakeConnector({ adapter: 'codex' }));
   const open = engines.canvas(CANVAS);
   await ok('run.pause', { target: { agent: 'builder' } }, CALLERS.you);
   const { id } = await ok<{ id: string }>('message', { to: 'builder', body: 'Deploy to prod' });
@@ -370,7 +370,7 @@ it.each([false, true])(
     const entered = Promise.withResolvers<undefined>();
     const release = Promise.withResolvers<undefined>();
     let withdrawing: string | undefined;
-    const { engines } = await start(new FakeConnector({ adapter: 'codex' }), undefined, {
+    const { engines } = await start(fakeConnector({ adapter: 'codex' }), undefined, {
       ...SYSTEM_DEPS,
       flush: async (fd) => {
         if (withdrawing !== undefined && onDisk(withdrawing)?.state === 'withdrawn') {
@@ -414,7 +414,7 @@ it.each([false, true])(
       await core?.close();
     }
     core = undefined;
-    const restarted = await reopen(new FakeConnector({ adapter: 'codex' }));
+    const restarted = await reopen(fakeConnector({ adapter: 'codex' }));
     expect(restarted.engines.canvas(CANVAS)?.messages.get(id)?.state).toBe(
       fail ? 'pending' : 'withdrawn',
     );
@@ -426,7 +426,7 @@ it('commits a turn’s reply with what its end changed in the run, or neither', 
   // Builder's turns go on until the test ends them.
   let host: SessionHost | undefined;
   let turn = '';
-  const codex = new FakeConnector({ adapter: 'codex' });
+  const codex = fakeConnector({ adapter: 'codex' });
   const { engines } = await start({
     start: async (spec, given) => {
       host = given;
@@ -520,7 +520,7 @@ it('sends the run’s own message only once the run’s record is on disk (Core 
 });
 
 it('delivers the next message once one taken back while it was journaled is withdrawn', async () => {
-  const codex = new FakeConnector({ adapter: 'codex' });
+  const codex = fakeConnector({ adapter: 'codex' });
   const messages = (await start(codex)).engines.canvas(CANVAS)?.messages;
   await ok('run.pause', { target: { agent: 'builder' } }, CALLERS.you);
   const first = await ok<{ id: string }>('message', { to: 'builder', body: 'First' });
@@ -566,7 +566,7 @@ it('delivers the next message once one taken back while it was journaled is with
 });
 
 it('keeps waiting what it couldn’t record as delivering, and sends it once its disk works again', async () => {
-  const codex = new FakeConnector({ adapter: 'codex' });
+  const codex = fakeConnector({ adapter: 'codex' });
   const messages = (await start(codex)).engines.canvas(CANVAS)?.messages;
   await ok('run.pause', { target: { agent: 'builder' } }, CALLERS.you);
   const first = await ok<{ id: string }>('message', { to: 'builder', body: 'First' });
@@ -611,7 +611,7 @@ it('keeps waiting what it couldn’t record as delivering, and sends it once its
 });
 
 it('holds a party’s message in its session’s queue when its agent is paused while it was journaled', async () => {
-  const codex = new FakeConnector({ adapter: 'codex' });
+  const codex = fakeConnector({ adapter: 'codex' });
   const messages = (await start(codex)).engines.canvas(CANVAS)?.messages;
   await ok('run.pause', { target: { agent: 'builder' } }, CALLERS.you);
   const { id } = await ok<{ id: string }>('message', { to: 'builder', body: 'Wait for me' });
@@ -636,7 +636,7 @@ it('holds a party’s message in its session’s queue when its agent is paused 
 });
 
 it('refuses a message whose record can’t be committed, and never sends it', async () => {
-  const codex = new FakeConnector({ adapter: 'codex' });
+  const codex = fakeConnector({ adapter: 'codex' });
   const messages = (await start(codex)).engines.canvas(CANVAS)?.messages;
   const allow = refuseWrites(profile, 'message', 'The disk is full');
   try {

@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { NeedsItem } from '../../../shared/model/needs';
 import { CanvasMemory } from '../../memory';
 import { CATALOG } from '../../sessions/adapters';
-import { FakeConnector } from '../../sessions/fake';
+import { fakeConnector } from '../../sessions/test-fake';
 import type { Caller, OutsideCaller } from '../caller';
 import { Documents } from '../canvas/documents';
 import { createCore } from '../core';
@@ -118,7 +118,7 @@ async function start({ file = true }: { file?: boolean } = {}): Promise<{
   await keepCanvases(made.profile, {
     [CANVAS]: { ...(file ? { file: at } : {}), project: made.app },
   });
-  const terminal = new FakeConnector({ mode: 'acceptEdits' });
+  const terminal = fakeConnector({ mode: 'acceptEdits' });
   core = await createCore(
     {
       profile: made.profile,

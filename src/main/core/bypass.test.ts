@@ -21,7 +21,7 @@ import { findItem } from '../../shared/model/queue';
 import type { QueueItem } from '../../shared/model/queue';
 import { CanvasMemory } from '../memory';
 import { CATALOG } from '../sessions/adapters';
-import { FakeConnector } from '../sessions/fake';
+import { fakeConnector } from '../sessions/test-fake';
 import { committer } from './canvas/commit';
 import type { Committer } from './canvas/commit';
 import { Documents } from './canvas/documents';
@@ -162,7 +162,7 @@ async function start(): Promise<Core> {
       sessions: {
         // Its agent callers are made up: no session authority issued them.
         callers: () => true,
-        connectors: { 'codex.app-server': new FakeConnector({ adapter: 'codex' }) },
+        connectors: { 'codex.app-server': fakeConnector({ adapter: 'codex' }) },
         environment: () => Promise.resolve({}),
       },
     },
@@ -2189,7 +2189,7 @@ describe('workspace-safety and the worktree list', () => {
         sessions: {
           // Its agent callers are made up: no session authority issued them.
           callers: () => true,
-          connectors: { 'codex.app-server': new FakeConnector({ adapter: 'codex' }) },
+          connectors: { 'codex.app-server': fakeConnector({ adapter: 'codex' }) },
           environment: () => Promise.resolve(made.env),
         },
       },

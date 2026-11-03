@@ -13,7 +13,7 @@ import type { MessageView, RunAgentView } from '../../shared/model/views';
 import type { SessionHost } from '../sessions/connector';
 import type { SessionMode, UserMessage } from '../../shared/session';
 import type { Connector } from '../sessions/connector';
-import { FakeConnector } from '../sessions/fake';
+import { fakeConnector } from '../sessions/test-fake';
 import type { OpContext } from './call';
 import type { OutsideCaller } from './caller';
 import { createCore } from './core';
@@ -129,7 +129,7 @@ function attemptsOnDisk(at = profile): { id: string; status: string; messageId?:
 
 /** A connector whose agent takes each message and works on it until the test ends its turn. */
 function busy() {
-  const codex = new FakeConnector({ adapter: 'codex' });
+  const codex = fakeConnector({ adapter: 'codex' });
   const sent: UserMessage[] = [];
   let host: SessionHost | undefined;
   const connector: Connector<SessionMode> = {
@@ -164,7 +164,7 @@ async function messageOf(core: Core, id: string): Promise<Message | undefined> {
 
 describe('the run’s own sends', () => {
   it('records each attempt’s message and its link on disk before the agent’s session gets it', async () => {
-    const codex = new FakeConnector({ adapter: 'codex' });
+    const codex = fakeConnector({ adapter: 'codex' });
     /** What was on disk each time a message reached the agent's session. */
     const before: { rows: Row[]; attempts: ReturnType<typeof attemptsOnDisk> }[] = [];
     const ids: string[] = [];
@@ -253,7 +253,7 @@ describe('the run’s own sends', () => {
   });
 
   it('never sends a run message whose record can’t be kept', async () => {
-    const codex = new FakeConnector({ adapter: 'codex' });
+    const codex = fakeConnector({ adapter: 'codex' });
     const core = await start(codex);
     const engine = await core.engines.open(CANVAS);
     const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined);
@@ -274,7 +274,7 @@ describe('the run’s own sends', () => {
   });
 
   it('withdraws a run message taken back before it goes, never sending it', async () => {
-    const codex = new FakeConnector({ adapter: 'codex' });
+    const codex = fakeConnector({ adapter: 'codex' });
     const core = await start(codex);
     const engine = await core.engines.open(CANVAS);
     engine.run.start();
@@ -295,7 +295,7 @@ describe('the run’s own sends', () => {
   });
 
   it('settles a message once, whatever its native ends name, and its result arriving before the send returns', async () => {
-    const codex = new FakeConnector({ adapter: 'codex' });
+    const codex = fakeConnector({ adapter: 'codex' });
     let ends = 0;
     // The CLI ends the turn before its send even returns, then says it ended again with another.
     const eager: Connector<SessionMode> = {
@@ -619,7 +619,7 @@ describe('the run’s own sends on the runtime topics', () => {
   });
 
   it('lists a canvas the core runs as running from its live run, not from what the journal last kept', async () => {
-    const codex = new FakeConnector({ adapter: 'codex' });
+    const codex = fakeConnector({ adapter: 'codex' });
     const core = await start(codex);
     const engine = await core.engines.open(CANVAS);
     const listed = async () => {

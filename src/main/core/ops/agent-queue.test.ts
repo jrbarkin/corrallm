@@ -13,7 +13,7 @@ import { findItem, isIf, isRepeat } from '../../../shared/model/queue';
 import type { QueueChange, QueueItem } from '../../../shared/model/queue';
 import { itemKey, nodeKey } from '../../../shared/model/rows';
 import { CATALOG } from '../../sessions/adapters';
-import { FakeConnector } from '../../sessions/fake';
+import { fakeConnector } from '../../sessions/test-fake';
 import { createDispatcher } from '../call';
 import type { Dispatcher, OpContext } from '../call';
 import { createCore } from '../core';
@@ -87,7 +87,7 @@ beforeEach(async () => {
       check: true,
       distribution: 'local',
       sessions: {
-        connectors: { 'codex.app-server': new FakeConnector({ adapter: 'codex' }) },
+        connectors: { 'codex.app-server': fakeConnector({ adapter: 'codex' }) },
         environment: () => Promise.resolve({}),
       },
     },
