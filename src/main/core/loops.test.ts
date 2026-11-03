@@ -230,6 +230,7 @@ describe('ten delivered turns between two agents', () => {
         for: 'you',
         by: ['you'],
         title: 'Builder and Planner have passed 10 turns between them without the user',
+        loop: { pair: ['builder', 'planner'], held: [held] },
         choices: [
           {
             value: 'goOn',
@@ -268,6 +269,9 @@ describe('ten delivered turns between two agents', () => {
     expect(await delivered(second)).toBe(false);
     // The pair's one item stands for them all.
     expect((await needsOf()).filter(({ id }) => id.startsWith('loop/'))).toHaveLength(1);
+    expect((await needsOf()).find(({ id }) => id === HOLD)).toMatchObject({
+      loop: { pair: ['builder', 'planner'], held: [first, second] },
+    });
     expect(pairsOnDisk()).toEqual([
       { a: 'builder', b: 'planner', turns: LOOP_TURNS },
       { a: 'builder', b: 'stranger', turns: 2 },
@@ -583,6 +587,9 @@ describe('the counts and the hold across a restart and a failed write', () => {
     );
     expect(ended).toMatchObject({ from: 'corrallm', to: 'agent:planner', state: 'pending' });
     expect((await needsOf()).map((item) => item.id)).toContain(HOLD);
+    expect((await needsOf()).find(({ id }) => id === HOLD)).toMatchObject({
+      loop: { pair: ['builder', 'planner'], held: [ended?.id] },
+    });
     // Builder's turn behind it waits with its pair, and Builder is told so, once.
     const { id: behind } = await ok<{ id: string }>(
       'message',

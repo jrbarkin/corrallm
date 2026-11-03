@@ -2,6 +2,8 @@
 
 [Architecture index](overview.md) · [Canonical instructions](../../AGENTS.md)
 
+B21's waiting and reported-verdict marks are read projections of the current messages topic keyed by attempt: an unsettled task ask marks waiting, and a result row supplies the agent's reported outcome and summary. Both the agent queue and All queues use that projection. These marks do not alter the checkpoint, replace native failure/cancellation precedence or judge an attempt; recovery and the runner remain authoritative.
+
 ## `src/renderer/run/`
 
 `e2e/core-continuity.e2e.ts` holds a native SDK turn across a reload and a Terminal turn across renderer death (one case per mode, each losing its view a different way; both Electron and Playwright observe the death before its window is replaced), then checks that its reply satisfies the following condition and the next task completes, with one native start and no repeated prompt. `e2e/window-closed.e2e.ts` closes the only window mid-turn, reads the live runtime through MCP, lets the run finish without a window, exchanges an outside message and reply, then reopens the same canvas through Canvases. Both distinguish the live core's identity from the new owner used by the existing core-crash and quit/relaunch recovery tests.

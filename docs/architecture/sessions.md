@@ -2,6 +2,8 @@
 
 [Architecture index](overview.md) · [Canonical instructions](../../AGENTS.md)
 
+The session summary's `api` is the core authority's observation that this current generation listed corrallm's tools, never the adapter's startup claim. Listing and revocation update both summary topics independently of session status. The window's API mark reads that boolean through the shared provider, with no additional `agents` request or second permission check in the view.
+
 Every connection's complete connector start (spawn, handshake and first thread or ready state) has the shared 90-second `START_MS` budget in `sessions/manager.ts`: expiry ends the generation as failed with a fixed connection-named error, stops its owned groups through `sessions/process.ts`'s `ProcessScope` and `core/children.ts`'s identity checks, refuses late spawns and events, rejects waiting opens and restarts, and lets a later open start afresh.
 
 ## Prompt protocol

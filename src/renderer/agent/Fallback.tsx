@@ -565,31 +565,11 @@ export function FallbackMark({ agent, card = false }: { agent: string; card?: bo
 }
 
 /**
- * A mark on an agent whose session has listed corrallm's tools (B21): the core observes it, as the
- * session's tool listing is heard, so it is read as the session changes state; `agents` has no topic.
+ * The authority's observed tool listing arrives with the session summary, including revocation.
  */
 export function ApiMark({ agent }: { agent: string }) {
-  const { context, summary } = useAgent(agent);
-  const [listed, setListed] = useState(false);
-  const canvas = context?.canvas;
-  const client = context?.client;
-  const status = summary?.status;
-  useEffect(() => {
-    if (!canvas || !client || status === undefined) return;
-    let live = true;
-    void client.agents({ canvas }).then(
-      ({ agents }) => {
-        if (live) setListed(agents.find((one) => one.id === agent)?.api === true);
-      },
-      () => {
-        if (live) setListed(false);
-      },
-    );
-    return () => {
-      live = false;
-    };
-  }, [agent, canvas, client, status]);
-  if (!listed) return null;
+  const { summary } = useAgent(agent);
+  if (summary?.api !== true) return null;
   return (
     <span
       className="api-mark"

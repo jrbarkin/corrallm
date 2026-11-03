@@ -54,4 +54,14 @@ describe('attemptReports', () => {
       summary: 'Built it.',
     });
   });
+
+  it('uses an open question’s own task and ignores answer rows and non-result verdicts', () => {
+    const other = '22222222-2222-4222-8222-222222222222';
+    const reports = attemptReports([
+      { kind: 'text', task, verdict },
+      { kind: 'prompt', task, ask: { type: 'answer', task } },
+      { kind: 'prompt', task, ask: { type: 'question', task: { attempt: other } } },
+    ]);
+    expect([...reports]).toEqual([[other, { waiting: true }]]);
+  });
 });

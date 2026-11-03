@@ -13,6 +13,7 @@ import type { FieldQuestion } from '../agent/PromptCard';
 import type { RuntimeTopicStates } from '../../shared/api/topics';
 import type { CanvasNode } from '../../shared/model/canvas';
 import type { ArgsOf } from '../../shared/api/registry';
+import { MessageId } from '../../shared/api/ids';
 import { agentName } from '../../shared/model/queries';
 import { FloatPopover } from './FloatPopover';
 import { ToolDetailView } from '../agent/ToolDetail';
@@ -37,17 +38,6 @@ function NeedDetail({ text }: { text: string }) {
   return <p className="graph-question-detail">{text}</p>;
 }
 
-/** The two agents a loop hold (`loop/<a>/<b>`, each part URI-encoded) names, in the core's order. */
-function loopPair(id: string): [string, string] | undefined {
-  const parts = id.split('/');
-  if (parts.length !== 3 || parts[0] !== 'loop') return undefined;
-  try {
-    return [decodeURIComponent(parts[1] ?? ''), decodeURIComponent(parts[2] ?? '')];
-  } catch {
-    return undefined;
-  }
-}
-
 /** What a card is, in a chip above it. */
 function headerOf(item: CoreNeed, nodes: readonly CanvasNode[]): string {
   if (item.kind === 'file') return 'File review';
@@ -66,24 +56,22 @@ function headerOf(item: CoreNeed, nodes: readonly CanvasNode[]): string {
 
 /** The messages a loop hold keeps back, between its two agents (the hold's own words name no text). */
 function HeldMessages({
-  pair,
+  loop,
   messages,
   nodes,
 }: {
-  pair: [string, string] | undefined;
+  loop: CoreNeed['loop'];
   messages: Messages | undefined;
   nodes: readonly CanvasNode[];
 }) {
-  if (!pair || !messages) return null;
-  const parties = new Set(pair.map((agent) => `agent:${agent}`));
-  const held = messages.order.flatMap((id) => {
-    const message = messages.items[id];
-    return message?.state === 'pending' && parties.has(message.from) && parties.has(message.to)
-      ? [message]
-      : [];
+  if (!loop || !messages) return null;
+  const held = loop.held.flatMap((id) => {
+    const message = messages.items[MessageId.parse(id)];
+    return message?.state === 'pending' ? [message] : [];
   });
   if (held.length === 0) return null;
-  const name = (party: string) => agentName(nodes, party.slice('agent:'.length));
+  const name = (party: string) =>
+    party.startsWith('agent:') ? agentName(nodes, party.slice('agent:'.length)) : party;
   return (
     <ul className="graph-question-held" aria-label="Held messages">
       {held.map((message) => (
@@ -273,7 +261,7 @@ export function NeedsSidebar({
                 )}
                 {!item.prompt && item.detail && <NeedDetail text={item.detail} />}
                 {item.id.startsWith('loop/') && (
-                  <HeldMessages pair={loopPair(item.id)} messages={messages} nodes={nodes} />
+                  <HeldMessages loop={item.loop} messages={messages} nodes={nodes} />
                 )}
                 {settlement?.outcome ? (
                   <p role="status">

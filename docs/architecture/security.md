@@ -2,6 +2,8 @@
 
 [Architecture index](overview.md) · [Canonical instructions](../../AGENTS.md)
 
+B21's loop Needs metadata (`pair` and held row ids) remains yours alone under the existing selector; no message text enters its title or notification. Its window lists only the held ids the core supplies, joined to the human messages projection. The API mark projects only the current generation's observed listing boolean, with no credential, hash or native configuration. Shared question controls preserve B13's owner-selected fields and one-reply answer checks.
+
 ## `src/main/loopback.ts`
 
 What both local servers (MCP, hooks) check before the token: their own Host, no Origin (see Security rules).

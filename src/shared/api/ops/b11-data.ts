@@ -157,6 +157,7 @@ export const ModelChoice = z.strictObject({
 export const SessionSummarySchema = z.strictObject({
   agent: z.string(),
   connection: z.string().nullable(),
+  api: z.boolean(),
   // B11a C11: where the agent is in the fallback chain you set, and whether corrallm switches it.
   fallback: FallbackViewSchema.nullable(),
   // B11a C11: its handoff: when its latest was kept, how long, and its state; never its text.

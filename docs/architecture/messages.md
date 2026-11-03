@@ -2,6 +2,8 @@
 
 [Architecture index](overview.md) · [Canonical instructions](../../AGENTS.md)
 
+The window answers an agent's ask with one `reply { answers }` for every question, dismisses only the core's offered asks-to-you or message choices, and replies to a message with `{ text }`. A loop hold's `loop.pair` and `loop.held` identify exactly the pending turn rows it holds, including an expired ask's settlement from corrallm; the human window joins those ids to its messages topic and never infers the hold from sender pairs. The title contains no message text. Attempt reports read only result-row verdicts and open question rows' own `ask.task`, shared by the agent queue and All queues.
+
 ## Messages
 
 Message writes distinguish changes still needing SQL from rows already written but awaiting their log flush. Each version is written once; containing writes restore their staged changes on failure before the next savepoint runs, and `durable()` waits for every covered flush. Delivery checks coalesce within a microtask and run before the next event-loop turn, so holds, replies and recovery notices retain their ordering throughout a burst.

@@ -5,7 +5,7 @@ import { newCanvasId } from '../../shared/canvas';
 import type { AgentNode } from '../../shared/model/canvas';
 import { NEW_SESSION } from '../../shared/model/session';
 import { sessionView } from '../../shared/model/views';
-import { expectOneRead, fakeCore } from '../test-api';
+import { fakeCore } from '../test-api';
 import { ApiMark, FallbackProvider } from './Fallback';
 
 const cores: ReturnType<typeof fakeCore>[] = [];
@@ -21,26 +21,15 @@ const node: AgentNode = {
   position: { x: 0, y: 0 },
   data: { label: 'Writer' },
 };
-const row = (api: boolean) => ({
-  id: 'a',
-  name: 'Writer',
-  adapter: null,
-  connection: null,
-  state: 'idle',
-  prompts: 0,
-  linked: [],
-  api,
-  fallback: null,
-  handoff: null,
-});
-
-function show(api: boolean) {
+function show(api?: boolean) {
   const core = fakeCore();
   cores.push(core);
   const canvas = newCanvasId();
-  const summary = sessionView(AgentId.parse('a'), 'zed.acp', NEW_SESSION).summary;
+  const summary = {
+    ...sessionView(AgentId.parse('a'), 'zed.acp', NEW_SESSION).summary,
+    api: api === true,
+  };
   core.snapshot(`sessions:${canvas}`, { agents: { [AgentId.parse('a')]: summary } });
-  core.respond('agents', { agents: [row(api)] });
   render(
     <FallbackProvider canvas={canvas} client={core.api} mirror={core.topics} nodes={[node]}>
       <ApiMark agent="a" />
@@ -49,33 +38,66 @@ function show(api: boolean) {
   return { core, canvas, summary };
 }
 
-it('marks an agent whose session has listed corrallm’s tools, with one read and no operation', async () => {
-  const { core, canvas } = show(true);
+it('renders under the default fake core without an unhandled read failure', async () => {
+  const { core, canvas } = show();
+  await waitFor(() => {
+    expect(core.topics.snapshot(`sessions:${canvas}`)).toBeDefined();
+  });
+  expect(core.reads).toEqual([]);
+  expect(await core.api.agents({ canvas })).toEqual({ agents: [] });
+  expect(screen.queryByLabelText('Uses corrallm’s tools')).toBeNull();
+});
+
+it('marks an agent whose session has listed corrallm’s tools, without another read or operation', async () => {
+  const { core } = show(true);
   expect(await screen.findByLabelText('Uses corrallm’s tools')).toBeTruthy();
-  expectOneRead(core, 'agents', { canvas });
+  expect(core.reads).toEqual([]);
   expect(core.operations).toEqual([]);
 });
 
 it('shows no mark for an agent whose session has not listed them', async () => {
-  const { core } = show(false);
+  const { core, canvas } = show(false);
   await waitFor(() => {
-    expect(core.reads).toHaveLength(1);
+    expect(core.topics.snapshot(`sessions:${canvas}`)).toBeDefined();
   });
   expect(screen.queryByLabelText('Uses corrallm’s tools')).toBeNull();
 });
 
-it('reads again when the session’s status changes, since listing happens as it starts', async () => {
+it.each(['failed', 'malformed'])(
+  'uses the summary when an agents read would be %s',
+  async (kind) => {
+    const { core } = show(true);
+    core.reply(
+      'agents',
+      kind === 'failed'
+        ? { ok: false, error: { code: 'unavailable', sentence: 'The core is closing.' } }
+        : { ok: true, value: {} },
+    );
+    expect(await screen.findByLabelText('Uses corrallm’s tools')).toBeTruthy();
+    expect(core.reads).toEqual([]);
+  },
+);
+
+it('updates listing and revocation from the summary without a status change', async () => {
   const { core, canvas, summary } = show(false);
   await waitFor(() => {
-    expect(core.reads).toHaveLength(1);
+    expect(core.topics.snapshot(`sessions:${canvas}`)).toBeDefined();
   });
-  core.respond('agents', { agents: [row(true)] });
   act(() => {
     core.change({
       topic: `sessions:${canvas}`,
       rev: 1,
-      agents: { set: { [AgentId.parse('a')]: { ...summary, status: 'working' } } },
+      agents: { set: { [AgentId.parse('a')]: { ...summary, api: true } } },
     });
   });
   expect(await screen.findByLabelText('Uses corrallm’s tools')).toBeTruthy();
+  act(() => {
+    core.change({
+      topic: `sessions:${canvas}`,
+      rev: 2,
+      agents: { set: { [AgentId.parse('a')]: { ...summary, api: false } } },
+    });
+  });
+  expect(screen.queryByLabelText('Uses corrallm’s tools')).toBeNull();
+  expect(core.reads).toEqual([]);
 });

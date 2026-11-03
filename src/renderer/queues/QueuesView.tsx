@@ -27,6 +27,7 @@ import { queueControlText } from '../../shared/model/run-display';
 import { lanesOf } from './lanes';
 import type { Lane, Lanes, Link } from './lanes';
 import { queueMarks, taskKey as at } from '../../shared/model/queue-marks';
+import type { AttemptReport } from '../../shared/model/results';
 import { piecePaths, piecesIn, ribbonsOf } from './ribbons';
 import type { Span } from './ribbons';
 import './QueuesView.css';
@@ -84,9 +85,12 @@ export function QueuesView({
   onOpenSettings,
   settingsOptions,
   renderPrompts,
+  reports,
   onClose,
 }: {
   renderPrompts?: ((agent: string) => ReactNode) | undefined;
+  /** The canvas's projected ask/result rows, shared with its other queue views. */
+  reports?: ReadonlyMap<string, AttemptReport>;
   nodes: readonly CanvasNode[];
   sessions: Readonly<Record<string, Session>>;
   run: RunSnapshot;
@@ -201,7 +205,7 @@ export function QueuesView({
     lanes.flatMap(({ agent: { id } }) => (sessions[id]?.status === 'waiting' ? [id] : [])),
   );
   /** Every task's marks: where it is measured, how links mark it, and where the run is. */
-  const marks = queueMarks(layout, run, asking, engine, activeEnds);
+  const marks = queueMarks(layout, run, asking, engine, activeEnds, reports);
   /** What the wait being picked waits for now, in the lane it is picked in: undefined for all. */
   const waitChosen = choosing
     ? findItem(

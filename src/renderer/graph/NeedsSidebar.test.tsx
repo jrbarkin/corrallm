@@ -160,6 +160,7 @@ async function setup(items: NeedsItem[], nodes: CanvasNode[] = [], request?: { i
   const core = fakeCore();
   cores.push(core);
   core.snapshot(`needs:${canvas}`, { items });
+  core.snapshot(`messages:${canvas}`, { items: {}, order: [], next: '' });
   render(
     <NeedsSidebar
       canvas={canvas}
@@ -455,6 +456,46 @@ it('dismisses an ask to you with exactly one reply', async () => {
   expectOneOp(core, 'reply', { canvas, to: toYou.id, answer: { choice: 'dismiss' } });
 });
 
+it('sends picked and typed answers to every question together, retaining the draft on refusal', async () => {
+  const item: NeedsItem = {
+    ...toYou,
+    questions: [
+      question,
+      {
+        ...question,
+        id: 'q2',
+        header: 'Reason',
+        text: 'Why this database?',
+        options: [],
+        other: true,
+      },
+    ],
+  };
+  const core = await setup([item], [asker]);
+  core.reply('reply', {
+    ok: false,
+    error: { code: 'conflict', sentence: 'This question changed.' },
+  });
+  const send = screen.getByRole('button', { name: 'Send answers' });
+  await events.click(screen.getByRole('radio', { name: 'SQLite' }));
+  expect(send).toHaveProperty('disabled', true);
+  await events.change(screen.getByRole('textbox', { name: 'Why this database?' }), {
+    target: { value: 'Keep it local.' },
+  });
+  await events.click(send);
+  expectOneOp(core, 'reply', {
+    canvas,
+    to: item.id,
+    answer: { answers: { q1: { picked: ['SQLite'] }, q2: { text: 'Keep it local.' } } },
+  });
+  expect(screen.getByRole('alert').textContent).toBe('This question changed.');
+  expect(screen.getByRole('radio', { name: 'SQLite' })).toHaveProperty('checked', true);
+  expect(screen.getByRole('textbox', { name: 'Why this database?' })).toHaveProperty(
+    'value',
+    'Keep it local.',
+  );
+});
+
 it('lets you answer an ask to an agent, which offers no Dismiss', async () => {
   const item: NeedsItem = { ...toYou, for: 'agent:b', by: ['agent:b', 'you'], choices: [] };
   const core = await setup([item], [asker]);
@@ -515,6 +556,7 @@ const loop: NeedsItem = {
   title: 'Builder and Reviewer have passed 10 turns between them without the user',
   choices: [{ value: 'goOn', label: 'Go on', humanOnly: 'Only you let agents go on.' }],
   answerIn: 'api',
+  loop: { pair: ['a', 'b'], held: ['55555555-5555-4555-8555-555555555555'] },
 };
 
 it('shows the loop hold as the agents going back and forth, not as a run hold', async () => {
@@ -538,12 +580,28 @@ it('shows the loop hold’s held message and its pair beside Go on, and no other
     origin: 'agent',
   } as const;
   const other = { ...held, id: '66666666-6666-4666-8666-666666666666', to: 'agent:c', body: 'x' };
+  const unheld = {
+    ...held,
+    id: '77777777-7777-4777-8777-777777777777',
+    to: 'agent:a',
+    body: 'Not in this hold',
+  };
+  const ended = {
+    ...held,
+    id: '88888888-8888-4888-8888-888888888888',
+    from: 'corrallm',
+    to: 'agent:a',
+    kind: 'settled',
+    body: 'The question expired.',
+  };
   const core = fakeCore();
   cores.push(core);
-  core.snapshot(`needs:${canvas}`, { items: [loop] });
+  core.snapshot(`needs:${canvas}`, {
+    items: [{ ...loop, loop: { pair: ['a', 'b'], held: [ended.id, held.id] } }],
+  });
   core.snapshot(`messages:${canvas}`, {
-    order: [held.id, other.id],
-    items: { [held.id]: held, [other.id]: other },
+    order: [held.id, other.id, unheld.id, ended.id],
+    items: { [held.id]: held, [other.id]: other, [unheld.id]: unheld, [ended.id]: ended },
   } as never);
   render(
     <NeedsSidebar
@@ -561,5 +619,9 @@ it('shows the loop hold’s held message and its pair beside Go on, and no other
   const list = screen.getByRole('list', { name: 'Held messages' });
   expect(list.textContent).toContain('Builder to Reviewer');
   expect(list.textContent).toContain('Please look at it once more');
-  expect(list.querySelectorAll('li')).toHaveLength(1);
+  expect(list.textContent).toContain('corrallm to Builder');
+  expect(list.textContent).toContain('The question expired.');
+  expect(list.textContent).not.toContain('Not in this hold');
+  expect(list.querySelectorAll('li')).toHaveLength(2);
+  expect(list.querySelector('li')?.textContent).toContain('The question expired.');
 });

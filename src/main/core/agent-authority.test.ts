@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ConnectionId } from '../../shared/adapter';
 import { SESSION_ENDED, TOKEN_REPLACED } from '../../shared/api/errors';
 import type { CanvasId } from '../../shared/canvas';
+import type { TopicUpdate } from '../../shared/api/topics';
 import type { SessionMode } from '../../shared/session';
 import type { Connector, SessionApi, SessionHost } from '../sessions/connector';
 import { FakeConnector } from '../sessions/fake';
@@ -257,6 +258,65 @@ describe('an agent session’s route', () => {
 });
 
 describe('an agent session’s credential', () => {
+  it('publishes tool listing and revocation in both session summaries while status stays idle', async () => {
+    await keep();
+    await start('channel', false);
+    current().served({ state: 'listening', port: 12345, url: 'http://127.0.0.1:12345/mcp' });
+    const api = await open();
+    if (api?.kind !== 'channel') throw new Error('No channel');
+    const updates: TopicUpdate[] = [];
+    const sessions = await current().topics.follow(CALLERS.you, `sessions:${M1}`, (changes) => {
+      updates.push(...changes);
+    });
+    const session = await current().topics.follow(
+      CALLERS.you,
+      `session:${M1}:builder`,
+      (changes) => {
+        updates.push(...changes);
+      },
+    );
+    try {
+      expect(sessions.snapshot).toMatchObject({ state: { agents: { builder: { api: false } } } });
+      expect(session.snapshot).toMatchObject({
+        state: { summary: { api: false, status: 'idle' } },
+      });
+      api.channel.list();
+      await vi.waitFor(() => {
+        expect(updates.findLast((change) => change.topic === `sessions:${M1}`)).toMatchObject({
+          agents: { set: { builder: { api: true, status: 'idle' } } },
+        });
+        expect(
+          updates.findLast((change) => change.topic === `session:${M1}:builder`),
+        ).toMatchObject({
+          summary: { api: true, status: 'idle' },
+        });
+      });
+      updates.length = 0;
+      expect(
+        await current().call('session.restart', { canvas: M1, agent: 'builder' }, CALLERS.you),
+      ).toMatchObject({ ok: true });
+      await vi.waitFor(() => {
+        expect(updates.findLast((change) => change.topic === `sessions:${M1}`)).toMatchObject({
+          agents: { set: { builder: { api: false } } },
+        });
+        expect(
+          updates.findLast((change) => change.topic === `session:${M1}:builder`),
+        ).toMatchObject({
+          summary: { api: false },
+        });
+      });
+      const read = await current().call(
+        'session.get',
+        { canvas: M1, agent: 'builder' },
+        CALLERS.you,
+      );
+      expect(read).toMatchObject({ ok: true, value: { api: false } });
+    } finally {
+      sessions.stop();
+      session.stop();
+    }
+  });
+
   it('ends as its session restarts: the old caller is refused, its credential a plain 401, and the new generation must list again', async () => {
     await keep();
     await start('http');

@@ -12,6 +12,7 @@ import type { Graph, GraphNode } from '../graph/flow';
 import type { QueueItem } from '../../shared/model/queue';
 import { Prompt, PromptId } from '../../shared/model/prompts';
 import { promptNeed } from '../../shared/model/prompt-views';
+import { MessageId } from '../../shared/api/ids';
 
 vi.mock('../terminal/screen', async () => {
   const { fakeScreens } = await import('../terminal/test-screen');
@@ -69,6 +70,92 @@ afterEach(() => {
 });
 
 describe('the queues view', () => {
+  it('updates a waiting attempt and its reported verdict from the canvas messages', async () => {
+    const { queues, canvas } = await setup();
+    await events.click(screen.getByRole('button', { name: 'Show all queues' }));
+    const id = '11111111-1111-4111-8111-111111111111';
+    const askId = MessageId.parse('22222222-2222-4222-8222-222222222222');
+    const resultId = MessageId.parse('33333333-3333-4333-8333-333333333333');
+    const topic = `messages:${canvas.document.id}` as const;
+    const ask = {
+      id: askId,
+      canvas: canvas.document.id,
+      from: 'agent:a',
+      to: 'you',
+      kind: 'prompt',
+      body: '',
+      at: 1,
+      state: 'delivered',
+      origin: 'party',
+      ask: {
+        v: 1,
+        type: 'question',
+        questions: [
+          {
+            id: 'q',
+            header: 'Choice',
+            text: 'Continue?',
+            options: [],
+            multiple: false,
+            other: true,
+            secret: false,
+          },
+        ],
+        deadline: 1,
+        task: { owner: 'a', item: 'research', attempt: id },
+      },
+    } as const;
+    act(() => {
+      canvas.run({
+        running: true,
+        agents: {
+          a: {
+            status: 'running',
+            current: 'research',
+            outcomes: {},
+            attempts: { research: [{ id, startedAt: 1000, status: 'running' }] },
+          },
+        },
+      });
+      canvas.core.change({
+        topic,
+        rev: (canvas.core.state(topic)?.rev ?? 0) + 1,
+        set: { [askId]: ask },
+      });
+    });
+    expect(within(queues()).getByText('Running · waiting for an answer')).toBeTruthy();
+    const result = {
+      id: resultId,
+      canvas: canvas.document.id,
+      from: 'agent:a',
+      to: 'corrallm',
+      kind: 'result',
+      body: '',
+      at: 2,
+      state: 'delivered',
+      origin: 'party',
+      task: { agent: 'a', item: 'research', attempt: id },
+      verdict: { v: 1, outcome: 'failed', summary: 'The checks found a missing input.' },
+    } as const;
+    act(() => {
+      canvas.core.change({
+        topic,
+        rev: (canvas.core.state(topic)?.rev ?? 0) + 1,
+        set: {
+          [askId]: {
+            ...ask,
+            settled: { v: 1, ask: { questions: 1 }, outcome: { type: 'answers', count: 1 } },
+          },
+          [resultId]: result,
+        },
+      });
+    });
+    expect(within(queues()).queryByText('Running · waiting for an answer')).toBeNull();
+    expect(
+      within(queues()).getByText('Reported failed: The checks found a missing input.'),
+    ).toBeTruthy();
+  });
+
   it('keeps a long owner prompt in the scrolling lane, below the sticky agent controls', async () => {
     const { queues, canvas } = await setup();
     await events.click(screen.getByRole('button', { name: 'Show all queues' }));

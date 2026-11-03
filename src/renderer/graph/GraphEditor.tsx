@@ -1511,6 +1511,7 @@ function Editor({
         )}
         {queues && (
           <QueuesView
+            reports={reports}
             renderPrompts={(agent) =>
               coreNeeds?.items
                 .filter((item) => item.agent === agent && item.prompt)
