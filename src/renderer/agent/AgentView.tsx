@@ -44,7 +44,7 @@ import { QueueLinks } from './QueueLinks';
 import { Rail } from './Rail';
 import { ResumePicker } from './ResumePicker';
 import { Rewind } from './Rewind';
-import { HandoffTile } from './Fallback';
+import { ApiMark, HandoffTile } from './Fallback';
 import { AgentChip } from './AgentChip';
 import { WorkspaceBadge, WorkspaceWait } from '../workspaces/Workspace';
 import { BranchControls } from '../workspaces/BranchReview';
@@ -518,6 +518,7 @@ export function AgentView({
                   onContinueInTerminal();
                 }}
               />
+              <ApiMark agent={node.id} />
             </header>
             <WorkspaceWait agent={node.id} />
             <div ref={body} className="agent-body">

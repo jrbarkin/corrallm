@@ -50,6 +50,7 @@ import { draftCall, flushDrafts } from '../useDraft';
 import { QueuesView } from '../queues/QueuesView';
 import { lanesOf } from '../queues/lanes';
 import { queueMarks } from '../../shared/model/queue-marks';
+import { attemptReports } from '../../shared/model/results';
 import { messageQueues } from '../queues/messages';
 import { useRunView, useSessionSummaries } from '../api/runtime';
 import {
@@ -388,6 +389,10 @@ function Editor({
     [model.nodes, messages, front, frontSession.submissions],
   );
   const layout = useMemo(() => lanesOf(displayNodes), [displayNodes]);
+  const reports = useMemo(
+    () => attemptReports(messages ? Object.values(messages.items) : []),
+    [messages],
+  );
   const marks = useMemo(
     () =>
       queueMarks(
@@ -399,8 +404,10 @@ function Editor({
           ),
         ),
         engineCatalog,
+        undefined,
+        reports,
       ),
-    [layout, run, sessions, engineCatalog],
+    [layout, run, sessions, engineCatalog, reports],
   );
   const frontControls = useMemo(
     () => (front === undefined ? undefined : sessionCommands(api, canvasId, front, mirror, report)),
@@ -1504,6 +1511,7 @@ function Editor({
         )}
         {queues && (
           <QueuesView
+            reports={reports}
             renderPrompts={(agent) =>
               coreNeeds?.items
                 .filter((item) => item.agent === agent && item.prompt)

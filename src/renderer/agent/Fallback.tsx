@@ -564,6 +564,24 @@ export function FallbackMark({ agent, card = false }: { agent: string; card?: bo
   );
 }
 
+/**
+ * The authority's observed tool listing arrives with the session summary, including revocation.
+ */
+export function ApiMark({ agent }: { agent: string }) {
+  const { summary } = useAgent(agent);
+  if (summary?.api !== true) return null;
+  return (
+    <span
+      className="api-mark"
+      role="img"
+      aria-label="Uses corrallm’s tools"
+      title="Uses corrallm’s tools"
+    >
+      API
+    </span>
+  );
+}
+
 const HANDOFF_WORDS = {
   kept: 'Latest handoff kept',
   asking: 'Asking for a handoff…',

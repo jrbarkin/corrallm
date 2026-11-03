@@ -53,6 +53,29 @@ it('keeps what a view reads apart from a gesture’s intents', async () => {
   core.dispose();
 });
 
+it('answers an agents read with an empty list until a fixture supplies agents', async () => {
+  const core = fakeCore();
+  try {
+    expect(await core.api.agents({})).toEqual({ agents: [] });
+    const agent = {
+      id: 'writer',
+      name: 'Writer',
+      adapter: null,
+      connection: null,
+      state: 'idle',
+      prompts: 0,
+      linked: [],
+      api: true,
+      fallback: null,
+      handoff: null,
+    };
+    core.respond('agents', { agents: [agent] });
+    expect(await core.api.agents({})).toEqual({ agents: [agent] });
+  } finally {
+    core.dispose();
+  }
+});
+
 it('keeps settings changes in its topic and returns the settled revision with one intent', async () => {
   const core = fakeCore();
   try {

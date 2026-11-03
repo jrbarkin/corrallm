@@ -52,6 +52,8 @@ export interface RunView extends Omit<
 export interface SessionSummary {
   readonly agent: string;
   readonly connection: ConnectionId | null;
+  /** Its current session generation has listed corrallm's tools, as the core observed. */
+  readonly api: boolean;
   /** Where it is in the fallback chain you set, and whether corrallm switches it (B11a C11). */
   readonly fallback: ReadonlyData<FallbackView> | null;
   /** Its handoff: when its latest was kept, how long, and its state (B11a C11); no text. */
@@ -186,6 +188,7 @@ export function sessionView(
   const summary: SessionSummary = {
     agent,
     connection: connection ?? null,
+    api: false,
     fallback,
     handoff,
     status: session.status,

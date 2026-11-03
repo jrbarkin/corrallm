@@ -85,4 +85,6 @@ export interface NeedsItem {
    * only you may answer it; as each reader may see it (C11: shared/model/prompt-views.ts).
    */
   prompt?: PromptNeedView;
+  /** Human-only loop hold: the core's pair and exactly the pending turn rows it holds. */
+  loop?: { pair: [string, string]; held: string[] };
 }

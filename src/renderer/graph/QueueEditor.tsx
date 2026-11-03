@@ -9,6 +9,7 @@ import { answersOf, usageAnswers } from '../../shared/model/run-words';
 import type { Answers } from '../../shared/model/run-words';
 import type { EngineCatalog } from '../../shared/model/catalog';
 import type { Answer, TaskAttempt, TaskProblem } from '../../shared/model/run';
+import type { AttemptReport } from '../../shared/model/results';
 import { SearchPicker } from '../search/SearchPicker';
 import { useDraft } from '../useDraft';
 import {
@@ -999,11 +1000,16 @@ function TaskResult({
     ? (JSON.parse(marks['data-attempts']) as TaskAttempt[])
     : [];
   if (!problem && attempts.length === 0) return null;
+  const reports = marks['data-reports']
+    ? (JSON.parse(marks['data-reports']) as Record<string, AttemptReport>)
+    : {};
   const latest = attempts.at(-1);
-  const label = (status: string) =>
+  const label = (status: string, id?: string) =>
     status === 'running' && marks['data-refused'] !== undefined
       ? 'Not sent'
-      : status.charAt(0).toUpperCase() + status.slice(1);
+      : status === 'running' && id !== undefined && reports[id]?.waiting
+        ? 'Running · waiting for an answer'
+        : status.charAt(0).toUpperCase() + status.slice(1);
   return (
     <div className="graph-queue-result">
       {problem && <p className="graph-queue-problem">{problem.text}</p>}
@@ -1014,7 +1020,7 @@ function TaskResult({
               {attempts.length} {attempts.length === 1 ? 'attempt' : 'attempts'}
             </span>
             <span>
-              {label(latest?.status ?? '')}
+              {label(latest?.status ?? '', latest?.id)}
               {latest?.reason ? ` · ${latest.reason.replace(/[_-]/g, ' ')}` : ''}
             </span>
           </summary>
@@ -1022,7 +1028,7 @@ function TaskResult({
             {attempts.map((attempt, index) => (
               <li key={attempt.id}>
                 <span>
-                  Attempt {index + 1} · {label(attempt.status)}
+                  Attempt {index + 1} · {label(attempt.status, attempt.id)}
                 </span>
                 <time dateTime={new Date(attempt.startedAt).toISOString()}>
                   {new Date(attempt.startedAt).toLocaleTimeString()}
@@ -1037,6 +1043,11 @@ function TaskResult({
                 )}
                 {attempt.text && <p>{attempt.text}</p>}
                 {!attempt.text && attempt.reason && <p>{attempt.reason.replace(/[_-]/g, ' ')}</p>}
+                {reports[attempt.id]?.outcome && (
+                  <p>
+                    Reported {reports[attempt.id]?.outcome}: {reports[attempt.id]?.summary}
+                  </p>
+                )}
                 {attempt.message && (
                   <p>
                     You asked: <span>{attempt.message}</span>

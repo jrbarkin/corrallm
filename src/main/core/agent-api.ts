@@ -30,7 +30,8 @@ import type { AgentCaller } from './caller';
  *
  * The core marks a generation listed when it hears that generation list corrallm's tools (an http
  * `tools/list` with its credential, which api/mcp.ts reports; the channel's `list()`): `agents`
- * reports it as an agent's `api`, observed, never claimed by an adapter.
+ * and the session summary report it as `api`, observed, never claimed by an adapter. Listing or
+ * revocation publishes that agent's summary even when session status does not change.
  */
 
 export interface AgentApi {
@@ -66,6 +67,8 @@ export interface AgentApiDeps {
   generationOf: (canvas: CanvasId, agent: string) => number | undefined;
   /** Whether the agent is on the canvas now. */
   onCanvas: (canvas: CanvasId, agent: string) => boolean;
+  /** Tool-listing observation changed: publish that agent's session summary. */
+  changed?: (canvas: CanvasId, agent: string) => void;
 }
 
 /** The outside registrations a session switches off for itself: orchestrators' names (C3). */
@@ -151,6 +154,7 @@ export class SessionAuthority implements AgentApi {
     if (entry === undefined) return;
     this.#entries.delete(key);
     if (entry.hash !== undefined) this.#byHash.delete(entry.hash);
+    if (entry.listed) this.#deps.changed?.(canvas, agent);
   }
 
   lookup(token: string): AgentCaller | undefined {
@@ -162,7 +166,10 @@ export class SessionAuthority implements AgentApi {
   listed(caller: AgentCaller): void {
     if (!this.current(caller)) return;
     const entry = this.#entries.get(keyOf(caller.canvas, caller.agent, caller.generation));
-    if (entry !== undefined) entry.listed = true;
+    if (entry !== undefined && !entry.listed) {
+      entry.listed = true;
+      this.#deps.changed?.(caller.canvas, caller.agent);
+    }
   }
 
   current(caller: AgentCaller): boolean {

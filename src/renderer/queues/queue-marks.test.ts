@@ -96,6 +96,28 @@ describe('queueMarks', () => {
     expect(paused('a', 'ok')['data-problem']).toBeUndefined();
   });
 
+  it('marks a task’s attempts with what their agents reported or wait for', () => {
+    const attempt = { id: 'at1', startedAt: 1000, status: 'running' as const };
+    const recovery = {
+      status: 'running' as const,
+      current: 'build',
+      outcomes: {},
+      attempts: { build: [attempt] },
+    };
+    const reports = new Map([['at1', { waiting: true as const }]]);
+    const marks = queueMarks(
+      layout,
+      { running: true, agents: { a: recovery } },
+      new Set(),
+      engine,
+      new Set(),
+      reports,
+    );
+    expect(marks('a', 'build')['data-reports']).toBe(JSON.stringify({ at1: { waiting: true } }));
+    expect(marks('a', 'ok')['data-reports']).toBeUndefined();
+    expect(marksOf(recovery)('a', 'build')['data-reports']).toBeUndefined();
+  });
+
   it.each(['queued', 'running', 'completed', 'failed', 'cancelled'] as const)(
     'marks a submitted message %s independently of the workflow run',
     (status) => {

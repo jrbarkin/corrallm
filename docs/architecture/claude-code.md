@@ -2,6 +2,8 @@
 
 [Architecture index](overview.md) · [Canonical instructions](../../AGENTS.md)
 
+The window's API mark uses the session summary's authority-observed tool listing, shared by both connections: installing an entry or emitting `started.api` alone never lights it. Revocation clears the mark through the normal summary topic; native credentials and configuration never enter that view.
+
 ## `src/main/sessions/claude-code/`
 
 Claude Code's adapter: adapter.ts declares it (with logo.svg), claude.ts finds the executable and flags, claude-errors.ts reads failures, claude-settings.ts reads startup choices, and efforts.ts labels its effort levels. connector.ts starts its Terminal connection, with claude-code.ts as its TerminalCli (command line, hook signals, prompt draft parser and usage); typing.ts types its prompt, first-run.ts takes turns starting it until its folder is trusted, hooks.ts writes its hook settings, hooks-off.ts reads settings that disable them, and statusline.ts wraps the user's status line to read usage. fake-claude.ts fakes its terminal for tests. selftest.ts checks the bundled SDK against its own tiny selftest-claude.mjs, exposed through the adapter to the native self-test.

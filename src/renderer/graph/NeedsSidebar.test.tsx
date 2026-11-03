@@ -160,6 +160,7 @@ async function setup(items: NeedsItem[], nodes: CanvasNode[] = [], request?: { i
   const core = fakeCore();
   cores.push(core);
   core.snapshot(`needs:${canvas}`, { items });
+  core.snapshot(`messages:${canvas}`, { items: {}, order: [], next: '' });
   render(
     <NeedsSidebar
       canvas={canvas}
@@ -402,3 +403,225 @@ it.each(['permission', 'trust'] as const)(
     expect(opened).toHaveBeenCalledExactlyOnceWith('a');
   },
 );
+
+// B21 X3: asks and messages to you, and the loop breaker's hold, from the same Needs topic.
+const asker: CanvasNode = {
+  id: 'a',
+  type: 'agent',
+  position: { x: 0, y: 0 },
+  data: { label: 'Builder' },
+};
+const question = {
+  id: 'q1',
+  header: 'Plan',
+  text: 'Which database?',
+  options: [{ label: 'SQLite' }, { label: 'Postgres', description: 'Needs a server' }],
+  multiple: false,
+  other: false,
+};
+const toYou: NeedsItem = {
+  id: 'ask/33333333-3333-4333-8333-333333333333',
+  canvas,
+  kind: 'prompt',
+  for: 'you',
+  by: ['you'],
+  title: 'Builder asks: Which database?',
+  choices: [
+    { value: 'dismiss', label: 'Dismiss', humanOnly: 'Only you dismiss a question to you.' },
+  ],
+  questions: [question],
+  answerIn: 'api',
+};
+
+it('answers an ask to you with the question card, in one reply carrying every answer', async () => {
+  const core = await setup([toYou], [asker]);
+  const card = screen.getByRole('article', { name: toYou.title });
+  expect(within(card).getByText('Question')).toBeTruthy();
+  expect(within(card).queryByText('Proposal')).toBeNull();
+  expect(within(card).getByText(/Which database\?/)).toBeTruthy();
+  const send = within(card).getByRole('button', { name: 'Send answers' });
+  expect(send).toHaveProperty('disabled', true);
+  await events.click(within(card).getByRole('radio', { name: 'Postgres' }));
+  await events.click(send);
+  expectOneOp(core, 'reply', {
+    canvas,
+    to: toYou.id,
+    answer: { answers: { q1: { picked: ['Postgres'] } } },
+  });
+});
+
+it('dismisses an ask to you with exactly one reply', async () => {
+  const core = await setup([toYou], [asker]);
+  await events.click(screen.getByRole('button', { name: 'Dismiss' }));
+  expectOneOp(core, 'reply', { canvas, to: toYou.id, answer: { choice: 'dismiss' } });
+});
+
+it('sends picked and typed answers to every question together, retaining the draft on refusal', async () => {
+  const item: NeedsItem = {
+    ...toYou,
+    questions: [
+      question,
+      {
+        ...question,
+        id: 'q2',
+        header: 'Reason',
+        text: 'Why this database?',
+        options: [],
+        other: true,
+      },
+    ],
+  };
+  const core = await setup([item], [asker]);
+  core.reply('reply', {
+    ok: false,
+    error: { code: 'conflict', sentence: 'This question changed.' },
+  });
+  const send = screen.getByRole('button', { name: 'Send answers' });
+  await events.click(screen.getByRole('radio', { name: 'SQLite' }));
+  expect(send).toHaveProperty('disabled', true);
+  await events.change(screen.getByRole('textbox', { name: 'Why this database?' }), {
+    target: { value: 'Keep it local.' },
+  });
+  await events.click(send);
+  expectOneOp(core, 'reply', {
+    canvas,
+    to: item.id,
+    answer: { answers: { q1: { picked: ['SQLite'] }, q2: { text: 'Keep it local.' } } },
+  });
+  expect(screen.getByRole('alert').textContent).toBe('This question changed.');
+  expect(screen.getByRole('radio', { name: 'SQLite' })).toHaveProperty('checked', true);
+  expect(screen.getByRole('textbox', { name: 'Why this database?' })).toHaveProperty(
+    'value',
+    'Keep it local.',
+  );
+});
+
+it('lets you answer an ask to an agent, which offers no Dismiss', async () => {
+  const item: NeedsItem = { ...toYou, for: 'agent:b', by: ['agent:b', 'you'], choices: [] };
+  const core = await setup([item], [asker]);
+  expect(screen.queryByRole('button', { name: 'Dismiss' })).toBeNull();
+  await events.click(screen.getByRole('radio', { name: 'SQLite' }));
+  await events.click(screen.getByRole('button', { name: 'Send answers' }));
+  expectOneOp(core, 'reply', {
+    canvas,
+    to: item.id,
+    answer: { answers: { q1: { picked: ['SQLite'] } } },
+  });
+});
+
+it('counts an ask as one thing waiting, however many questions it has', async () => {
+  const item = { ...toYou, questions: [question, { ...question, id: 'q2' }] };
+  await setup([item], [asker]);
+  expect(screen.getByRole('heading', { name: /Needs you/ }).textContent).toContain('1');
+});
+
+const message: NeedsItem = {
+  id: 'message/44444444-4444-4444-8444-444444444444',
+  canvas,
+  kind: 'message',
+  for: 'you',
+  by: ['you'],
+  title: 'Message from Builder',
+  detail: 'The migration is done.',
+  choices: [{ value: 'dismiss', label: 'Dismiss' }],
+  text: { placeholder: 'Reply' },
+  answerIn: 'api',
+};
+
+it('shows a message to you as a message, and dismisses it with one reply', async () => {
+  const core = await setup([message], [asker]);
+  const card = screen.getByRole('article', { name: message.title });
+  expect(within(card).getByText('Message')).toBeTruthy();
+  expect(within(card).queryByText('Proposal')).toBeNull();
+  expect(card.textContent).toContain('The migration is done.');
+  await events.click(within(card).getByRole('button', { name: 'Dismiss' }));
+  expectOneOp(core, 'reply', { canvas, to: message.id, answer: { choice: 'dismiss' } });
+});
+
+it('replies to a message to you in your words, with one reply', async () => {
+  const core = await setup([message], [asker]);
+  await events.change(screen.getByRole('textbox', { name: 'Reply' }), {
+    target: { value: 'Thanks, go on' },
+  });
+  await events.click(screen.getByRole('button', { name: 'Reply' }));
+  expectOneOp(core, 'reply', { canvas, to: message.id, answer: { text: 'Thanks, go on' } });
+});
+
+const loop: NeedsItem = {
+  id: 'loop/a/b',
+  canvas,
+  kind: 'hold',
+  for: 'you',
+  by: ['you'],
+  title: 'Builder and Reviewer have passed 10 turns between them without the user',
+  choices: [{ value: 'goOn', label: 'Go on', humanOnly: 'Only you let agents go on.' }],
+  answerIn: 'api',
+  loop: { pair: ['a', 'b'], held: ['55555555-5555-4555-8555-555555555555'] },
+};
+
+it('shows the loop hold as the agents going back and forth, not as a run hold', async () => {
+  const core = await setup([loop], [asker]);
+  const card = screen.getByRole('article', { name: loop.title });
+  expect(within(card).getByText('Agents going back and forth')).toBeTruthy();
+  expect(within(card).queryByText('Run')).toBeNull();
+  await events.click(within(card).getByRole('button', { name: 'Go on' }));
+  expectOneOp(core, 'reply', { canvas, to: loop.id, answer: { choice: 'goOn' } });
+});
+
+it('shows the loop hold’s held message and its pair beside Go on, and no other message', async () => {
+  const held = {
+    id: '55555555-5555-4555-8555-555555555555',
+    canvas,
+    from: 'agent:a',
+    to: 'agent:b',
+    kind: 'text',
+    body: 'Please look at it once more',
+    state: 'pending',
+    origin: 'agent',
+  } as const;
+  const other = { ...held, id: '66666666-6666-4666-8666-666666666666', to: 'agent:c', body: 'x' };
+  const unheld = {
+    ...held,
+    id: '77777777-7777-4777-8777-777777777777',
+    to: 'agent:a',
+    body: 'Not in this hold',
+  };
+  const ended = {
+    ...held,
+    id: '88888888-8888-4888-8888-888888888888',
+    from: 'corrallm',
+    to: 'agent:a',
+    kind: 'settled',
+    body: 'The question expired.',
+  };
+  const core = fakeCore();
+  cores.push(core);
+  core.snapshot(`needs:${canvas}`, {
+    items: [{ ...loop, loop: { pair: ['a', 'b'], held: [ended.id, held.id] } }],
+  });
+  core.snapshot(`messages:${canvas}`, {
+    order: [held.id, other.id, unheld.id, ended.id],
+    items: { [held.id]: held, [other.id]: other, [unheld.id]: unheld, [ended.id]: ended },
+  } as never);
+  render(
+    <NeedsSidebar
+      canvas={canvas}
+      mirror={core.topics}
+      nodes={[asker, { ...asker, id: 'b', data: { label: 'Reviewer' } }]}
+      onOpen={() => undefined}
+      onReply={(to, answer) => core.api.reply({ canvas, to, answer })}
+    />,
+  );
+  await waitFor(() => {
+    expect(screen.getByRole('button', { name: 'Needs you' })).not.toHaveProperty('disabled', true);
+  });
+  await events.click(screen.getByRole('button', { name: 'Needs you' }));
+  const list = screen.getByRole('list', { name: 'Held messages' });
+  expect(list.textContent).toContain('Builder to Reviewer');
+  expect(list.textContent).toContain('Please look at it once more');
+  expect(list.textContent).toContain('corrallm to Builder');
+  expect(list.textContent).toContain('The question expired.');
+  expect(list.textContent).not.toContain('Not in this hold');
+  expect(list.querySelectorAll('li')).toHaveLength(2);
+  expect(list.querySelector('li')?.textContent).toContain('The question expired.');
+});

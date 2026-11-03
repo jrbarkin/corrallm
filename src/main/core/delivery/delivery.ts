@@ -697,7 +697,11 @@ export class Delivery {
       const pair = this.#turnPair(message);
       if (pair === undefined || !this.#deps.loops.held(...pair)) continue;
       const key = pair.join('\u0000');
-      if (holds.has(key)) continue;
+      const previous = holds.get(key);
+      if (previous) {
+        previous.item.loop?.held.push(message.id);
+        continue;
+      }
       const id = `loop/${encodeURIComponent(pair[0])}/${encodeURIComponent(pair[1])}`;
       // An id too long for the API is no item; the pair is still held, and speaking to either frees it.
       if (id.length > MAX_NEED_ID) continue;
@@ -711,6 +715,7 @@ export class Delivery {
           for: 'you',
           by: ['you'],
           title: `${partyName(nodes, agentParty(pair[0]))} and ${partyName(nodes, agentParty(pair[1]))} have passed ${String(LOOP_TURNS)} turns between them without the user`,
+          loop: { pair: [...pair], held: [message.id] },
           choices: [
             {
               value: 'goOn',
