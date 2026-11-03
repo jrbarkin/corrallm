@@ -9,6 +9,7 @@ import { needs } from '../../shared/model/needs-selectors';
 import type { NeedsInput } from '../../shared/model/needs-selectors';
 import type { Admission, AdmittedWork, RunMailbox } from './engine/run/runner';
 import type { SessionBackend } from './engine/transcript/receive';
+import { streamed } from './engine/transcript/reduce';
 import type { CanvasDocument } from '../../shared/model/canvas';
 import type { Message, MessageDisplay, PartyId } from '../../shared/model/messages';
 import { agentParty, isContinuation } from '../../shared/model/messages';
@@ -1196,7 +1197,10 @@ export class Engines {
       engine.run.subscribe(changed),
       engine.sessions.subscribe(changed),
       engine.run.subscribe(look),
-      engine.sessions.subscribe(look),
+      // A streamed word changes nothing that waits for you: a reply's many never look again.
+      engine.sessions.subscribe((action) => {
+        if (!streamed(action)) look();
+      }),
       // A message to an agent that can't start, or runs in a mode that never asks, waits for you.
       messages.subscribe(look),
       this.#deps.sessions.onAvailability(canvas, () => {
