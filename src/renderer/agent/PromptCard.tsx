@@ -44,14 +44,12 @@ function Card({
   onOpenTerminal,
   openLink = (url) => api.linkOpen({ url }),
 }: Props) {
-  const draftId = useId();
   const [busy, setBusy] = useState(false);
   const [sent, setSent] = useState(false);
   const [problem, setProblem] = useState<string>();
   const [all, setAll] = useState(false);
   const [picked, setPicked] = useState<NeedChoice>();
   const [feedback, setFeedback] = useState('');
-  const [answers, setAnswers] = useState<QuestionAnswers>({});
   const prompt = entry.prompt;
   const act = async (call: () => Promise<unknown>, settles = true) => {
     if (busy || sent) return;
@@ -77,13 +75,6 @@ function Card({
   const long = body.some((part) => part.length > 4000 || part.split('\n').length > 12);
   const reviewed = (!long || all) && entry.cut !== true;
   const questions = live.kind === 'question' ? live.questions : [];
-  const complete = questions.every((question) => {
-    const answer = answerOf(answers, question.id);
-    return (
-      answer !== undefined &&
-      ('text' in answer ? answer.text.trim() !== '' : answer.picked.length > 0)
-    );
-  });
   const choices = live.choices;
   const choose = (choice: NeedChoice) => {
     if (choice.feedback && choice.feedback !== 'none') setPicked(choice);
@@ -145,70 +136,10 @@ function Card({
             </>
           )}
           {live.answerIn !== 'terminal' && live.kind === 'question' && (
-            <>
-              {questions.map((question) => (
-                <fieldset key={question.id}>
-                  <legend>
-                    {question.header ? `${question.header}: ` : ''}
-                    {question.text}
-                  </legend>
-                  {question.options.map((option) => {
-                    const given = answerOf(answers, question.id);
-                    const chosen = given && 'picked' in given ? given.picked : [];
-                    return (
-                      <label key={option.label}>
-                        <input
-                          type={question.multiple ? 'checkbox' : 'radio'}
-                          name={`${draftId}/${question.id}`}
-                          aria-label={option.label}
-                          checked={chosen.includes(option.label)}
-                          onChange={(event) => {
-                            setAnswers((before) => ({
-                              ...before,
-                              [question.id]: {
-                                picked: question.multiple
-                                  ? event.target.checked
-                                    ? [...chosen, option.label]
-                                    : chosen.filter((label) => label !== option.label)
-                                  : [option.label],
-                              },
-                            }));
-                          }}
-                        />
-                        {option.label}
-                        {option.description && <span>{option.description}</span>}
-                        {option.preview && <pre>{option.preview}</pre>}
-                      </label>
-                    );
-                  })}
-                  {question.other && (
-                    <label>
-                      In your own words
-                      <input
-                        type={question.secret ? 'password' : 'text'}
-                        autoComplete="off"
-                        aria-label={question.text}
-                        maxLength={MAX_ANSWER_LENGTH}
-                        value={answerText(answerOf(answers, question.id))}
-                        onChange={(event) => {
-                          setAnswers((before) => ({
-                            ...before,
-                            [question.id]: { text: event.target.value },
-                          }));
-                        }}
-                      />
-                    </label>
-                  )}
-                </fieldset>
-              ))}
-              <button
-                type="button"
-                disabled={!complete}
-                onClick={() => void act(() => onReply({ answers }))}
-              >
-                Send answers
-              </button>
-            </>
+            <QuestionFields
+              questions={questions}
+              onSend={(answers) => void act(() => onReply({ answers }))}
+            />
           )}
           {live.answerIn !== 'terminal' &&
             form &&
@@ -314,6 +245,110 @@ function Card({
         </fieldset>
       )}
     </section>
+  );
+}
+/** A question's shape, whether a prompt's or an ask's. */
+export interface FieldQuestion {
+  id: string;
+  header: string;
+  text: string;
+  options: readonly {
+    label: string;
+    description?: string | undefined;
+    preview?: string | undefined;
+  }[];
+  multiple: boolean;
+  other: boolean;
+  secret?: boolean | undefined;
+}
+
+/**
+ * The questions of a prompt or an ask to you, one card for both (B13): pick or type each answer,
+ * then send them all at once. A draft belongs to this occurrence of the card.
+ */
+export function QuestionFields({
+  questions,
+  onSend,
+}: {
+  questions: readonly FieldQuestion[];
+  onSend: (answers: QuestionAnswers) => void;
+}) {
+  const draftId = useId();
+  const [answers, setAnswers] = useState<QuestionAnswers>({});
+  const complete = questions.every((question) => {
+    const answer = answerOf(answers, question.id);
+    return (
+      answer !== undefined &&
+      ('text' in answer ? answer.text.trim() !== '' : answer.picked.length > 0)
+    );
+  });
+  return (
+    <>
+      {questions.map((question) => (
+        <fieldset key={question.id}>
+          <legend>
+            {question.header ? `${question.header}: ` : ''}
+            {question.text}
+          </legend>
+          {question.options.map((option) => {
+            const given = answerOf(answers, question.id);
+            const chosen = given && 'picked' in given ? given.picked : [];
+            return (
+              <label key={option.label}>
+                <input
+                  type={question.multiple ? 'checkbox' : 'radio'}
+                  name={`${draftId}/${question.id}`}
+                  aria-label={option.label}
+                  checked={chosen.includes(option.label)}
+                  onChange={(event) => {
+                    setAnswers((before) => ({
+                      ...before,
+                      [question.id]: {
+                        picked: question.multiple
+                          ? event.target.checked
+                            ? [...chosen, option.label]
+                            : chosen.filter((label) => label !== option.label)
+                          : [option.label],
+                      },
+                    }));
+                  }}
+                />
+                {option.label}
+                {option.description && <span>{option.description}</span>}
+                {option.preview && <pre>{option.preview}</pre>}
+              </label>
+            );
+          })}
+          {question.other && (
+            <label>
+              In your own words
+              <input
+                type={question.secret ? 'password' : 'text'}
+                autoComplete="off"
+                aria-label={question.text}
+                maxLength={MAX_ANSWER_LENGTH}
+                value={answerText(answerOf(answers, question.id))}
+                onChange={(event) => {
+                  setAnswers((before) => ({
+                    ...before,
+                    [question.id]: { text: event.target.value },
+                  }));
+                }}
+              />
+            </label>
+          )}
+        </fieldset>
+      ))}
+      <button
+        type="button"
+        disabled={!complete}
+        onClick={() => {
+          onSend(answers);
+        }}
+      >
+        Send answers
+      </button>
+    </>
   );
 }
 function hostOf(url: string) {

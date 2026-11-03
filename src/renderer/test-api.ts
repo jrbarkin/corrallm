@@ -81,6 +81,7 @@ export function fakeCore() {
                 };
           }
           (SURFACE[op].kind === 'read' ? reads : operations).push({ op, args });
+          if (!replies.has(op) && op === 'agents') return { ok: true, value: { agents: [] } };
           if (!replies.has(op) && (op === 'settings.get' || op === 'settings.set')) {
             const previous = core.state('settings');
             if (!previous) throw new Error('No settings fixture');

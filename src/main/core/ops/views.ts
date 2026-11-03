@@ -84,6 +84,7 @@ export function sessionSummary(open: OpenCanvas, agent: string, yours = true) {
   return {
     agent,
     connection: engine.catalog.connectionOf(node.data) ?? null,
+    api: open.api?.(agent) === true,
     fallback: fallbackOf(open, agent),
     handoff: handoffOf(open, agent),
     status: session.status,

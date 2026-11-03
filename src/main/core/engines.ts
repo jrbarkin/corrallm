@@ -152,6 +152,8 @@ export interface EnginesDeps {
    * authority's observation): its steps then ask for that call. None: never.
    */
   completes?: (canvas: CanvasId, agent: string) => boolean;
+  /** Whether the agent's current session generation has listed corrallm's tools. */
+  listed?: (canvas: CanvasId, agent: string) => boolean;
 }
 
 /**
@@ -209,6 +211,8 @@ export interface OpenCanvas {
   switching?: (agent: string) => boolean;
   /** An agent's handoff as its views show it (B11a C11): none where no service is composed. */
   handoff?: (agent: string) => HandoffView | null;
+  /** The session authority's observed tool listing, never the adapter's declaration. */
+  api?: (agent: string) => boolean;
 }
 
 /** How a canvas opens. */
@@ -1062,6 +1066,7 @@ export class Engines {
     running.reads = new ReadPositions(await journal.reads(canvas));
     running.sessionGeneration = (agent) => this.#deps.sessions.generationOf(canvas, agent);
     running.ownedPrompts = (agent) => this.#deps.prompts?.count(canvas, agent) ?? 0;
+    running.api = (agent) => this.#deps.listed?.(canvas, agent) === true;
     running.waitingOn = (agent) => this.#deps.prompts?.waiting(canvas, agent);
     const { fallback, handoff } = this.#deps;
     if (fallback !== undefined) running.switching = (agent) => fallback.switching(canvas, agent);

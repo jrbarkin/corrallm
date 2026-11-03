@@ -117,6 +117,9 @@ export const NeedsItem = z.strictObject({
    * subject and a plan's first lines, as the caller may read them (C11).
    */
   prompt: PromptNeedView.optional(),
+  loop: z
+    .strictObject({ pair: z.tuple([z.string(), z.string()]), held: z.array(z.uuid()) })
+    .optional(),
 });
 
 /** How an agent is now: waiting for you, working, paused (its queue held), or idle. */

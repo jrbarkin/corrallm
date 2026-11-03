@@ -2,6 +2,8 @@
 
 [Architecture index](overview.md) · [Canonical instructions](../../AGENTS.md)
 
+B21's window cards add no headless authority: asks and messages retain their caller-specific readers and reply routes, and loop Needs remain human-only. `session.get` reports the same observed `api` boolean as the session topics, independent of whether a window exists. Queue waiting/verdict presentation derives from durable ask/result rows, not a window-maintained run state.
+
 ## `src/main/cli/`
 
 The `corrallm` Node CLI, the core's code under plain Node, built into dist-cli/ (git-ignored) by `pnpm build:cli` (see Headless): index.ts, its entry, checks the Node it runs on (node.ts) before it imports the CLI itself (main.ts); args.ts reads its command lines (never a project folder, never a token), serve.ts is `corrallm serve`, wait.ts `corrallm wait`, token.ts `corrallm token`, register.ts the registration commands each adapter's descriptor gives, token-file.ts a token file's reader; with CORRALLM_NATIVE_SELFTEST=1 it runs the native self-test. The profile's api.json is `src/main/core/api-file.ts`'s, and the MCP endpoint that writes it `src/main/core/endpoint.ts`'s, shared with the app's core.

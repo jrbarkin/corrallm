@@ -2,6 +2,8 @@
 
 [Architecture index](overview.md) · [Canonical instructions](../../AGENTS.md)
 
+The window's API mark uses the session summary's authority-observed tool listing, shared by both connections: installing an entry or emitting `started.api` alone never lights it. Revocation clears the mark through the normal summary topic; native credentials and configuration never enter that view.
+
 ## `src/main/sessions/codex/`
 
 Codex (see Codex below): codex.ts finds the user's `codex` and its version, rpc.ts runs `codex app-server` and speaks its JSON-RPC, login.ts says which login Codex has and what it allows, limits.ts reads its usage limits (account/rateLimits) as usage windows, for both connections, options.ts what a Codex agent can be set to run with (see Agent settings), fake-codex.mjs fakes the CLI; terminal/ and app-server/ hold its two connections (their connectors, fixtures recorded from the real CLI). terminal/: connector.ts starts Codex's TUI on the shared Terminal session with its TerminalCli (tui.ts: its command line, its window title's states, its hooks, pasting in), composer.ts reads its composer's draft, hooks.ts makes its session hooks (commands posting to hooks.ts's server) and their trust, trust.ts checks that trust with Codex itself and usage.ts reads its usage limits, each from a private app server (rpc.ts askAppServer), recorded.ts reads the fixtures.

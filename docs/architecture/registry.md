@@ -2,6 +2,8 @@
 
 [Architecture index](overview.md) · [Canonical instructions](../../AGENTS.md)
 
+B21's session summary carries `api`, the current generation's observed tool listing, on `session.get`, `sessions:<c>` and `session:<c>:<agent>`. Listing and revocation publish only the affected agent's summary even when its status stays idle. A human-only loop Needs item carries `loop: { pair, held }`: the core's ordered pair and pending message ids in delivery order, including ask-settlement turns from corrallm. Its title contains names and the turn count only; message bodies remain in their authorized messages projection. These are additive read fields, with no new operation, audience or reply shape.
+
 Runtime topics reuse session summaries across queue, label and position edits, invalidating only changed endpoints, fallback or handoff settings, and the sessions whose runtime state changed. Runtime publication stays in its microtask queue throughout a burst, retaining its ordering with reads and receipts, canonical revisions and append frames.
 
 ## `src/main/api/`

@@ -706,6 +706,9 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
   // call corrallm's MCP server by, each for one generation of its session, while the endpoint
   // listens; handed to the session manager alone, which issues and revokes them.
   const authority = new SessionAuthority({
+    changed: (canvas, agent) => {
+      runtime.apiChanged(canvas, agent);
+    },
     route: (connection) => {
       const given = config.sessions?.api;
       if (given !== undefined && Object.hasOwn(given, connection)) return given[connection] ?? null;
@@ -1164,6 +1167,7 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     },
     // B21 C8: a step asks for complete once its agent's session listed it (C1's observation).
     completes: (canvas, agent) => authority.hasListedTool(canvas, agent, 'complete'),
+    listed: (canvas, agent) => authority.hasListed(canvas, agent),
   });
   /** A canvas the core runs, executing (its delivery started): what B11a's services act on. */
   const executing = (canvas: CanvasId) => {

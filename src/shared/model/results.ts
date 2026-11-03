@@ -39,3 +39,47 @@ export const Verdict = z.strictObject({
   summary: Summary,
 });
 export type Verdict = z.infer<typeof Verdict>;
+
+/** What a queue row says of one attempt beyond the run's own record (B21 X3). */
+export interface AttemptReport {
+  /** An ask made in the attempt's own turn is open: the attempt is running, waiting for its answer. */
+  waiting?: true;
+  /** The outcome and summary its agent reported with `complete`. */
+  outcome?: ReportedOutcome;
+  summary?: string;
+}
+
+/** The parts of a message that `attemptReports` reads. */
+interface ReportRow {
+  readonly kind: string;
+  readonly settled?: unknown;
+  readonly task?: { readonly attempt: string };
+  readonly verdict?: { readonly outcome: ReportedOutcome; readonly summary: string };
+  readonly ask?: {
+    readonly type: string;
+    readonly task?: { readonly attempt: string } | undefined;
+  };
+}
+
+/**
+ * The reports of attempts, by attempt id, from the canvas's messages: a `result` record's verdict
+ * (by its `task.attempt`), and an open ask that an attempt's own turn made (a waiting attempt).
+ */
+export function attemptReports(rows: Iterable<ReportRow>): Map<string, AttemptReport> {
+  const reports = new Map<string, AttemptReport>();
+  const note = (attempt: string, report: AttemptReport) => {
+    reports.set(attempt, { ...reports.get(attempt), ...report });
+  };
+  for (const row of rows) {
+    if (row.kind === 'result' && row.task && row.verdict)
+      note(row.task.attempt, { outcome: row.verdict.outcome, summary: row.verdict.summary });
+    else if (
+      row.kind === 'prompt' &&
+      row.ask?.type === 'question' &&
+      row.settled === undefined &&
+      row.ask.task
+    )
+      note(row.ask.task.attempt, { waiting: true });
+  }
+  return reports;
+}
