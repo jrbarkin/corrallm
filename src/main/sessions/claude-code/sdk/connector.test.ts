@@ -1324,9 +1324,10 @@ it('delivers its own channel server, listing and calling it before a turn withou
     expect(list).toHaveBeenCalledOnce();
     expect(call).toHaveBeenCalledWith('probe_read', {}, expect.any(AbortSignal));
     expect(query().options.allowedTools).toEqual(['mcp__corrallm__probe_read']);
-    expect(query().options.settings).toMatchObject({
+    // The recorded SDK entry's settings: the outside names denied, and nothing else (no
+    // allowlist where yours has none; allowedTools pre-approves).
+    expect(query().options.settings).toEqual({
       deniedMcpServers: [{ serverName: 'corrallm-server' }, { serverName: 'corrallm-server-dev' }],
-      allowedMcpServers: [{ serverName: 'corrallm' }],
     });
     expect(events.find((one) => one.type === 'started')).toMatchObject({ api: true });
     expect(query().mcpServerStatus).not.toHaveBeenCalled();

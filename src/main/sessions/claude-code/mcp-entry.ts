@@ -1,4 +1,5 @@
-import { lstat, readdir } from 'node:fs/promises';
+import { lstat, readdir, readFile } from 'node:fs/promises';
+import { homedir } from 'node:os';
 import path from 'node:path';
 import type { SessionApi } from '../connector';
 import { managedSettingsFolder } from './hooks-off';
@@ -29,13 +30,60 @@ export async function managedApiReason(
   return undefined;
 }
 
-/** Only exact non-destructive names from this generation are pre-approved. */
-export function entrySettings(api: SessionApi, available: boolean): Record<string, unknown> {
+/**
+ * Whether the settings Claude Code reads for a session in `cwd` (the project's local and shared
+ * settings, then the user's, in CLAUDE_CONFIG_DIR or ~/.claude) hold an MCP server allowlist
+ * (`allowedMcpServers`). Lists merge across them, so the session's own entry joins yours only where
+ * you have one: one naming corrallm alone would block your other servers in that session. Managed
+ * settings aren't read: any of them keeps corrallm's API off (managedApiReason). Never written.
+ */
+export async function mcpAllowlisted(
+  cwd: string,
+  env: Readonly<Record<string, string>>,
+): Promise<boolean> {
+  const config = env.CLAUDE_CONFIG_DIR ?? path.join(env.HOME ?? homedir(), '.claude');
+  const files = [
+    path.join(cwd, '.claude', 'settings.local.json'),
+    path.join(cwd, '.claude', 'settings.json'),
+    path.join(config, 'settings.json'),
+  ];
+  const held = await Promise.all(
+    files.map(async (file) => {
+      try {
+        const settings: unknown = JSON.parse(await readFile(file, 'utf8'));
+        return (
+          typeof settings === 'object' &&
+          settings !== null &&
+          Array.isArray((settings as Record<string, unknown>).allowedMcpServers)
+        );
+      } catch {
+        return false;
+      }
+    }),
+  );
+  return held.includes(true);
+}
+
+/** The session's MCP allowlist entry: only where yours holds an allowlist (mcpAllowlisted). */
+function allowlist(api: SessionApi, allowlisted: boolean): Record<string, unknown> {
+  return allowlisted ? { allowedMcpServers: [{ serverName: api.server }] } : {};
+}
+
+/**
+ * Terminal's session settings: the outside names denied; with the entry, the server let through
+ * your allowlist if you have one, and only exact non-destructive names from this generation
+ * pre-approved.
+ */
+export function entrySettings(
+  api: SessionApi,
+  available: boolean,
+  allowlisted: boolean,
+): Record<string, unknown> {
   return {
     deniedMcpServers: api.off.map((serverName) => ({ serverName })),
     ...(available
       ? {
-          allowedMcpServers: [{ serverName: api.server }],
+          ...allowlist(api, allowlisted),
           permissions: {
             allow: api.tools
               .filter((tool) => !tool.destructive)
@@ -43,6 +91,21 @@ export function entrySettings(api: SessionApi, available: boolean): Record<strin
           },
         }
       : {}),
+  };
+}
+
+/**
+ * The Agent SDK's flag settings, as its recording gave them: the outside names denied and, with
+ * the entry, the server let through your allowlist if you have one. Its `allowedTools` pre-approves.
+ */
+export function sdkSettings(
+  api: SessionApi,
+  available: boolean,
+  allowlisted: boolean,
+): Record<string, unknown> {
+  return {
+    deniedMcpServers: api.off.map((serverName) => ({ serverName })),
+    ...(available ? allowlist(api, allowlisted) : {}),
   };
 }
 

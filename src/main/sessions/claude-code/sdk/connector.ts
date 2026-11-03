@@ -35,7 +35,7 @@ import { modeSettings } from './settings';
 import type { Places } from './tools';
 import { sdkMode, Translator } from './translate';
 import { channelServer } from './api';
-import { entrySettings, managedApiReason } from '../mcp-entry';
+import { managedApiReason, mcpAllowlisted, sdkSettings } from '../mcp-entry';
 
 /*
  * The Agent SDK connection: a Claude agent runs as a real Claude Code session, through the
@@ -183,11 +183,12 @@ export class SdkConnector implements Connector {
       spec.api === undefined ? undefined : await managedApiReason(this.#deps.managed);
     const api = apiReason === undefined && spec.api?.kind === 'channel' ? spec.api : undefined;
     const instance = api === undefined ? undefined : channelServer(api.channel);
+    const allowlisted = api !== undefined && (await mcpAllowlisted(spec.cwd, spec.env));
     const options: Options = {
       ...(spec.api === undefined
         ? {}
         : {
-            settings: entrySettings(spec.api, api !== undefined),
+            settings: sdkSettings(spec.api, api !== undefined, allowlisted),
             ...(api === undefined
               ? {}
               : {

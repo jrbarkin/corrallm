@@ -57,14 +57,42 @@ describe('Terminal session MCP entry', () => {
     >;
     expect(settings).toMatchObject({
       permissions: { allow: ['mcp__corrallm__probe_read'] },
-      allowedMcpServers: [{ serverName: 'corrallm' }],
       deniedMcpServers: API.off.map((serverName) => ({ serverName })),
     });
+    // No allowlist of its own where yours has none: one naming corrallm alone would block your
+    // other servers in this session (the recordings' entry, `settings`, has none).
+    expect(settings).not.toHaveProperty('allowedMcpServers');
     expect(JSON.stringify(settings)).not.toContain(TOKEN);
     const args = one.args({ dir, cwd: dir, id: null, resume: false, model: null, mode: null });
     expect(args).toContain(`--mcp-config=${file}`);
     expect(JSON.stringify(args)).not.toContain(TOKEN);
   });
+  it.each([
+    ['your user settings', (config: string) => path.join(config, 'settings.json')],
+    ['the project’s shared settings', () => path.join(dir, '.claude', 'settings.json')],
+    ['the project’s local settings', () => path.join(dir, '.claude', 'settings.local.json')],
+  ])(
+    'names corrallm in an MCP allowlist only where %s already hold one, which it joins (A5)',
+    async (_where, file) => {
+      const config = path.join(dir, 'config');
+      const where = file(config);
+      await mkdir(path.dirname(where), { recursive: true });
+      await writeFile(where, JSON.stringify({ allowedMcpServers: [{ serverName: 'github' }] }));
+      const one = new ClaudeCode({
+        cwd: dir,
+        home: dir,
+        env: { HOME: dir, CLAUDE_CONFIG_DIR: config },
+        managed: path.join(dir, 'managed'),
+        api: API,
+      });
+      await one.prepare(dir, hooks);
+      const settings = JSON.parse(
+        await readFile(path.join(dir, 'settings.json'), 'utf8'),
+      ) as Record<string, unknown>;
+      expect(settings.allowedMcpServers).toEqual([{ serverName: 'corrallm' }]);
+      expect(one.api()).toEqual({ available: true });
+    },
+  );
   it.each(['managed-mcp.json', 'managed-settings.json', 'managed-settings.d/one.json'])(
     'starts without an entry when %s is deployed',
     async (name) => {
