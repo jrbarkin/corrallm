@@ -23,8 +23,11 @@ export interface Adapter {
   readonly connectors?: (context: ConnectorContext) => Record<ConnectionId, Connector<SessionMode>>;
   /** Reads the user's settings and choices without a session or a prompt. */
   readonly readOptions?: (context: AdapterReadContext) => Promise<SettingsOptions>;
-  /** The fake used in unpackaged test builds, shared by its connections. */
-  readonly fake?: (pause: number) => Connector<SessionMode>;
+  /**
+   * The fake used in unpackaged test builds, shared by its connections; a connection that
+   * declares a consent gets its own, given that consent (B22a C4).
+   */
+  readonly fake?: (pause: number, consent?: FakeConsent) => Connector<SessionMode>;
   readonly fakeOptions?: SettingsOptions;
   /** Conversations the CLI keeps, when it can list and fork them. */
   readonly conversations?: (context: Pick<ConnectorContext, 'executable'>) => Conversations;
@@ -73,6 +76,12 @@ export interface Consent {
   given(): Promise<boolean>;
   /** Keeps it for good, unless it was taken back since `generation` (then nothing is kept). */
   give(generation: number): Promise<void>;
+}
+
+/** The consent a test build's fake connection asks before a "/consent" turn (sessions/fake.ts). */
+export interface FakeConsent {
+  key: string;
+  handle: Consent;
 }
 
 /** What every adapter's connectors run with. */

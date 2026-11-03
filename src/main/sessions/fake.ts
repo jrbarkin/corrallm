@@ -7,7 +7,8 @@ import type { AdapterId } from '../../shared/adapter';
 import type { ModelChoice, SessionMode, UserMessage } from '../../shared/session';
 import type { Connector, LiveSession, PromptAnswers, SessionHost, SessionSpec } from './connector';
 import { checkPromptAnswer } from '../../shared/model/prompts';
-import { fakeApproval, fakeQuestions, fakePlan } from './fake-prompts';
+import { fakeApproval, fakeConsent, fakeQuestions, fakePlan } from './fake-prompts';
+import type { FakeConsent } from './adapter';
 import type { AdapterPrompt, PromptAnswer } from '../../shared/model/prompts';
 
 /** The models a fake session offers. */
@@ -80,7 +81,11 @@ export function fakeScript(env: NodeJS.ProcessEnv = process.env): FakeScript | u
  * A connector that runs no CLI, for tests, standing in for any connection of `adapter`. Each turn
  * echoes the message, thinks, and runs a command, asking first in the modes
  * that ask (Manual and Plan; Codex's Read only); a message starting "/question" asks the user a
- * question instead, and one starting "/plan" asks to approve a plan. It honours interrupts, modes,
+ * question instead, and one starting "/plan" asks to approve a plan. Given its connection's
+ * consent (`consent`, B22a C4), a message starting "/consent" first asks it, as a connection asks
+ * before a turn uses what the consent covers, unless allowed for the session or for good at the
+ * consent's generation now: taken back since, it asks again; an answer to a question asked before
+ * that grants nothing. It honours interrupts, modes,
  * models and (for Codex, whose models offer them) reasoning efforts, and remembers a made-up
  * session id.
  *
@@ -98,6 +103,7 @@ export class FakeConnector implements Connector<SessionMode> {
   readonly #asks: boolean | undefined;
   readonly #adapter: AdapterId;
   readonly #script: FakeScript | undefined;
+  readonly #consent: FakeConsent | undefined;
 
   /**
    * `pause`: how long (ms) between the events of a turn; `adapter`: the one it stands in for;
@@ -105,7 +111,8 @@ export class FakeConnector implements Connector<SessionMode> {
    * as a CLI that never says its mode); `asks`: whether that setting asks, as it says where its
    * mode doesn't (a policy that is no mode). `step` replaces the delay with a test-controlled
    * scheduler, so tests of another clock can run turns without advancing that clock. `script`:
-   * the turns it plays instead (FakeScript), by default CORRALLM_FAKE_SCRIPT's.
+   * the turns it plays instead (FakeScript), by default CORRALLM_FAKE_SCRIPT's. `consent`: the one
+   * its connection asks before a "/consent" turn, if any.
    */
   constructor({
     pause = 0,
@@ -114,6 +121,7 @@ export class FakeConnector implements Connector<SessionMode> {
     asks,
     step = () => new Promise<void>((resolve) => setTimeout(resolve, pause)),
     script = fakeScript(),
+    consent,
   }: {
     pause?: number;
     adapter?: AdapterId;
@@ -121,9 +129,11 @@ export class FakeConnector implements Connector<SessionMode> {
     asks?: boolean;
     step?: () => Promise<void>;
     script?: FakeScript | undefined;
+    consent?: FakeConsent;
   } = {}) {
     this.#step = step;
     this.#script = script;
+    this.#consent = consent;
     this.#adapter = adapter;
     this.#mode = mode === undefined ? (adapter === 'codex' ? 'auto' : 'manual') : mode;
     this.#asks = asks;
@@ -148,7 +158,7 @@ export class FakeConnector implements Connector<SessionMode> {
       ...(codex ? { effort: spec.effort ?? null } : {}),
       ...(spec.mode === null && this.#asks !== undefined ? { asks: this.#asks } : {}),
     });
-    const session = new FakeSession(mode, host, this.#step, this.#script);
+    const session = new FakeSession(mode, host, this.#step, this.#script, this.#consent);
     this.sessions.push(session);
     return Promise.resolve(session);
   }
@@ -180,17 +190,22 @@ class FakeSession implements LiveSession<SessionMode> {
   #turns = 0;
   readonly prompts: PromptAnswers;
   #owned: { prompt: AdapterPrompt; key: string } | undefined;
+  readonly #consent: FakeConsent | undefined;
+  /** The consent's generation at which this session may go on: none until it is allowed. */
+  #allowed: number | undefined;
 
   constructor(
     mode: SessionMode | null,
     host: SessionHost,
     step: () => Promise<void>,
     script?: FakeScript,
+    consent?: FakeConsent,
   ) {
     this.#mode = mode;
     this.#host = host;
     this.#step = step;
     this.#script = script;
+    this.#consent = consent;
     this.prompts = {
       answer: (key, answer) => {
         const owned = this.#owned;
@@ -272,9 +287,34 @@ class FakeSession implements LiveSession<SessionMode> {
         emit({ type: 'prompt', key, prompt });
         emit({ type: 'status', status: 'waiting' });
       });
+    /**
+     * Whether a "/consent" turn may go on: at once while allowed at the consent's generation now,
+     * else once you say so; an answer to a question asked before it was taken back asks again.
+     */
+    const allowed = async (): Promise<boolean> => {
+      const consent = this.#consent;
+      if (consent === undefined || !text.startsWith('/consent')) return true;
+      for (;;) {
+        const generation = consent.handle.generation();
+        if (this.#allowed === generation) return true;
+        const given = await consent.handle.given().catch(() => false);
+        if (turn.stopped) return false;
+        if (consent.handle.generation() !== generation) continue;
+        if (!given) {
+          const answer = await ask(fakeConsent(consent.key));
+          if (answer?.kind !== 'choice' || answer.value === 'no') return false;
+          if (consent.handle.generation() !== generation) continue;
+          if (answer.value === 'always') void consent.handle.give(generation);
+          emit({ type: 'status', status: 'working' });
+        }
+        this.#allowed = generation;
+        return true;
+      }
+    };
     const run = async (): Promise<boolean> => {
       emit({ type: 'user', id, text });
       emit({ type: 'status', status: 'working' });
+      if (!(await allowed())) return false;
       if (!(await step())) return false;
       emit({ type: 'thinking', id: `${id}/thinking`, text: `They wrote “${text}”.` });
       if (!(await step())) return false;

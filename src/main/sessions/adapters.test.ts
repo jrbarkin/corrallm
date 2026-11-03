@@ -1,9 +1,10 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { ID_PATTERN } from '../../shared/adapter';
 import type { AdapterDescriptor } from '../../shared/adapter';
 import { OPS } from '../../shared/api/registry';
 import type { Adapter } from './adapter';
+import type { HostEvent } from './connector';
 import { ADAPTERS, CATALOG, catalogOf } from './adapters';
 import { createConnectors, createOptions } from './connectors';
 
@@ -130,6 +131,62 @@ describe('the catalog', () => {
       }
     }
     expect(OPS['catalog.get'].output.safeParse(CATALOG).success).toBe(true);
+  });
+
+  it('asks, in a test build, each consent on the connections that declare it, through the core’s owner', async () => {
+    const asked: string[] = [];
+    const connectors = createConnectors({
+      fake: true,
+      clientApp: 'corrallm/test',
+      distribution: 'local',
+      consent: (adapter, key) => {
+        asked.push(`${adapter}/${key}`);
+        return {
+          generation: () => 0,
+          given: () => Promise.resolve(false),
+          give: () => Promise.resolve(),
+        };
+      },
+    });
+    const declared = CATALOG.adapters.flatMap((adapter) =>
+      (adapter.consents ?? []).map((consent) => ({ adapter: adapter.id, ...consent })),
+    );
+    expect(asked.sort()).toEqual(
+      declared
+        .flatMap(({ adapter, key, connections }) => connections.map(() => `${adapter}/${key}`))
+        .sort(),
+    );
+    for (const adapter of CATALOG.adapters) {
+      for (const { id } of adapter.connections) {
+        const consent = (adapter.consents ?? []).find((one) => one.connections.includes(id));
+        const events: HostEvent[] = [];
+        const session = await connectors[id]?.start(
+          // A mode in which no fake asks to run its command: only a consent asks.
+          { agentId: 'a', cwd: '/unused', env: {}, model: null, mode: 'acceptEdits', resume: null },
+          { emit: (event) => events.push(event), remember: () => undefined },
+        );
+        try {
+          await session?.send({ id: 'm1', text: '/consent please' });
+          const subject = { type: 'consent', key: consent?.key };
+          await vi.waitFor(() => {
+            expect(
+              events.some(
+                (event) =>
+                  (event.type === 'prompt' &&
+                    event.prompt.kind === 'approval' &&
+                    event.prompt.subject?.type === 'consent') ||
+                  event.type === 'end',
+              ),
+            ).toBe(true);
+          });
+          const raised = events.find((event) => event.type === 'prompt');
+          if (consent === undefined) expect(raised, id).toBeUndefined();
+          else expect(raised, id).toMatchObject({ prompt: { subject } });
+        } finally {
+          await session?.close();
+        }
+      }
+    }
   });
 
   it('is plain data, so that it crosses to the renderer as it is', () => {
