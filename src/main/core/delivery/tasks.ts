@@ -72,8 +72,11 @@ export function recoveredOf(
   const answered = continuations.some(
     ({ state }) => state === 'delivering' || state === 'delivered' || state === 'unresolved',
   );
-  const sends = store.all().filter((message) => sentByRun(message) && of(message, task));
-  const over = sends.length > 0 && sends.every(({ state }) => state === 'replied');
+  // Its own turn is over once its send is replied, or pruned since, settled: a send in flight or
+  // cut off is kept until it is settled, and none ends unsent with its attempt still running.
+  const over = store
+    .all()
+    .every((message) => !sentByRun(message) || !of(message, task) || message.state === 'replied');
   return !answered && over && waitsOn(store, task)
     ? { waiting: true }
     : { waiting: false, answered };
