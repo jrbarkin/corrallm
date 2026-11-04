@@ -7,7 +7,6 @@ import type { ConnectionId } from '../../shared/adapter';
 import { connectionInfo } from '../graph/agents';
 import { Markdown } from './Markdown';
 import { ToolDetailView } from './ToolDetail';
-import { rewindPoints } from '../../shared/model/session';
 import type { BackgroundTask, Entry, Session, ToolProgress } from '../../shared/model/session';
 
 /** What the transcript does with the user's answers to prompts (and its Stops). */
@@ -16,8 +15,10 @@ export interface TranscriptAnswers {
     ((need: string, answer: ArgsOf<'reply'>['answer']) => Promise<unknown>) | undefined;
   /** Switches the agent to another connection, as a notice offers (Terminal, for a login). */
   onSwitch?: (connection: ConnectionId) => void;
-  /** Rewinds to before one of the user's messages: offered on each, where it can be done. */
+  /** Rewinds to before one of the user's messages: offered on each of `rewindPoints`. */
   onRewind?: (messageId: string) => void;
+  /** The messages a rewind can go back to, as the agent view proves them (`rewindPointsOf`). */
+  rewindPoints?: readonly string[];
   /** Stops a task a connected session runs in the background, from its tool call's line. */
   onStopTask?: (taskId: string) => void;
 }
@@ -48,10 +49,8 @@ export function Transcript({
     const element = log.current;
     if (element && atEnd.current) element.scrollTop = element.scrollHeight;
   }, [session.entries, session.status]);
-  /** The user's messages offered "Rewind to here": the conversation's since the last /clear. */
-  const rewindable = new Set(
-    answers.onRewind ? rewindPoints(session.entries).map((point) => point.id) : [],
-  );
+  /** The user's messages offered "Rewind to here": the agent view's points, no others. */
+  const rewindable = new Set(answers.onRewind ? (answers.rewindPoints ?? []) : []);
 
   return (
     <div

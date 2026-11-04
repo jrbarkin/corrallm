@@ -237,3 +237,49 @@ describe('an unfamiliar connection’s /resume', () => {
     });
   });
 });
+
+describe('an unfamiliar connection’s rewind points (B16 X5)', () => {
+  /** Agent a on `zed.acp` (declaring a conversation rewind), after its turns on `texts`. */
+  async function talked(texts: readonly string[]) {
+    const opened = await open('zed.acp', withPanels({ rewind: { restores: ['conversation'] } }));
+    opened.emit(STARTED);
+    const ids: string[] = [];
+    for (const text of texts) {
+      await opened.send(text);
+      const id = opened.sent();
+      ids.push(id);
+      opened.emit(
+        { type: 'user', id, text },
+        { type: 'text', id: `${id}:0`, text: `Done: ${text}` },
+        {
+          type: 'end',
+          messages: [id],
+          seconds: 1,
+          result: { status: 'completed', reason: 'completed' },
+        },
+      );
+    }
+    await settle();
+    const transcript = within(opened.view.getByRole('log', { name: 'Transcript' }));
+    return { ...opened, ids, transcript };
+  }
+
+  it('offers each message its own conversation has, since its last clear, as the core proves them', async () => {
+    const { transcript, emit, ids } = await talked(['First', 'Second']);
+    expect(transcript.getAllByRole('button', { name: 'Rewind to here' })).toHaveLength(2);
+    // After a clear, what came before is another conversation's: only what follows is a point.
+    emit({ type: 'cleared', id: 'c1' });
+    await settle();
+    expect(transcript.queryAllByRole('button', { name: 'Rewind to here' })).toHaveLength(0);
+    expect(ids).toHaveLength(2);
+  });
+
+  it('offers no message its CLI never had', async () => {
+    const opened = await open('zed.acp', withPanels({ rewind: { restores: ['conversation'] } }));
+    opened.emit(STARTED);
+    await opened.send('Not echoed yet');
+    await settle();
+    const transcript = within(opened.view.getByRole('log', { name: 'Transcript' }));
+    expect(transcript.queryAllByRole('button', { name: 'Rewind to here' })).toHaveLength(0);
+  });
+});

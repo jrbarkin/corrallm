@@ -33,8 +33,6 @@ const NAMES = /claude|codex|anthropic|openai|chatgpt|(['"])(?:sdk|app-server)\1/
 const ALLOWED: Readonly<Record<string, number>> = {
   // B16: NEW_LINE still encodes one native Shift+Enter binding; only recorded per-connection keys can replace it without guessing input bytes.
   'src/renderer/terminal/screen.ts': 4,
-  // B16: rewindPoints still filters by one native conversation owner; another connection needs proven rewind identifiers and effective support.
-  'src/shared/model/session.ts': 4,
   // B15: native permission/mode unions still validate session events and changes; replacing them needs the mode authority/confirmation contract, not a type alias rename.
   'src/shared/session.ts': 5,
 };

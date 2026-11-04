@@ -62,7 +62,7 @@ import { BranchControls } from '../workspaces/BranchReview';
 import { AgentSettingsSummary } from './AgentSettings';
 import type { Relation, StackedAgent } from './Rail';
 import type { ComposerControls } from './Composer';
-import { chatStart, rewindPoints, threadTitle } from '../../shared/model/session';
+import { chatStart, rewindPointsOf, threadTitle } from '../../shared/model/session';
 import type { MessageImage, Session } from '../../shared/model/session';
 import { Transcript } from './Transcript';
 import './AgentView.css';
@@ -344,10 +344,13 @@ export function AgentView({
   };
 
   const working = session.status !== 'idle';
-  /** The user's messages it can rewind to (since the last /clear), oldest first. */
-  const points = rewindPoints(session.entries);
   /** Whether its connection offers rewind now: idle, with a message of the user's. */
   const found = connectionIn(catalog(), connection);
+  /**
+   * The user's messages it can rewind to, oldest first: its actual conversation's (its connection's
+   * adapter's), since its last clear, as the core proves them (`rewindPointsOf`).
+   */
+  const points = found === undefined ? [] : rewindPointsOf(session.entries, found.adapter.id);
   const declared = found?.connection;
   /** What its ready session can do now: none while no generation is ready. */
   const features = session.features ?? null;
@@ -755,6 +758,7 @@ export function AgentView({
                               setRewindTo(messageId);
                               setOpened('rewind');
                             },
+                            rewindPoints: points.map((point) => point.id),
                           }
                         : {}),
                       ...(offered.stopTask ? { onStopTask: offered.stopTask } : {}),
