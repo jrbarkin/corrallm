@@ -363,6 +363,37 @@ describe('a connection that can’t continue a conversation (B16 C4)', () => {
     expect(claims.holder('zed', REMEMBERED)).toBeUndefined();
     await sessions.closeEverything();
   });
+
+  it.each([
+    ['says it can’t continue one', { role: 'append-new', resume: false, list: false }, []],
+    [
+      'can’t be read',
+      { role: 'everything' },
+      [
+        'Zed Agent · ACP didn’t say what it supports, so corrallm offers none of its conversation features in this session.',
+      ],
+    ],
+  ])(
+    'keeps the conversation its session remembered claimed when its report %s, so no other agent shares it',
+    async (_name, report, said) => {
+      // Its session loaded the conversation it was given and remembered it, whatever it reports.
+      const made = connector({ report, remember: REMEMBERED });
+      const { canvas, sessions } = shown(RESUMING, made.one);
+      await memory.update(canvas, () => ({
+        conversations: {
+          [PROJECT_WORKSPACE]: { zed: { a: { id: REMEMBERED }, b: { id: REMEMBERED } } },
+        },
+      }));
+      await sessions.start(canvas, 'a', OPTIONS);
+      expect(made.specs[0]?.resume).toBe(REMEMBERED);
+      expect(claims.holder('zed', REMEMBERED)).toMatchObject({ agent: 'a' });
+      // Nor is it said to have started a new one (or, unread, to do anything with a role).
+      expect(notices()).toEqual(said);
+      await sessions.start(canvas, 'b', OPTIONS);
+      expect(made.specs[1]?.resume).not.toBe(REMEMBERED);
+      await sessions.closeEverything();
+    },
+  );
 });
 
 describe('a role the connection can’t apply (B16 C4)', () => {

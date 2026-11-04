@@ -1489,7 +1489,8 @@ export class SessionManager {
    * A heard generation's `started` (B16 C1): its features read against its adapter's maxima (a
    * report that can't be read is refused, giving none, said once in fixed words), each later report
    * only narrowing what it said before, and passed on as they come to. A conversation it was given
-   * and can't continue is let go, said once (C4); so is a role it was given and can't apply.
+   * and can't continue is let go, said once (C4), unless its session remembered it (it runs in it);
+   * a role it was given and can't apply is said once too. One that can't be read claims neither.
    */
   #reported(
     canvas: CanvasId,
@@ -1520,17 +1521,18 @@ export class SessionManager {
     agent.reported = agent.reported === undefined ? now : narrowed(agent.reported, now);
     this.#deps.emit(canvas, agentId, connection, { ...started, ...agent.reported });
     if (effective === undefined) tell('malformed', MALFORMED(named));
-    if (resumed !== undefined && !agent.reported.resume) {
+    const { conversation: since } = agent;
+    // Remembering the conversation it was given, it runs in it, whatever it reports: that stays
+    // claimed, so no other agent is given it, and nothing says it started a new one.
+    if (resumed !== undefined && !agent.reported.resume && since !== resumed.id) {
       // What it was given and didn't load is no longer claimed for it; what it remembered since is.
-      const { adapter, id, owner } = resumed;
-      const since = agent.conversation;
-      this.#claims.release(
-        owner,
-        since === undefined || since === id ? undefined : { adapter, id: since },
-      );
-      tell('resume', STARTED_NEW(named));
+      const { adapter, owner } = resumed;
+      this.#claims.release(owner, since === undefined ? undefined : { adapter, id: since });
+      // A report that can't be read says nothing of what the session did: its notice is all.
+      if (effective !== undefined) tell('resume', STARTED_NEW(named));
     }
-    if (role && agent.reported.role === 'none') tell('role', NO_ROLE(named));
+    if (role && effective !== undefined && agent.reported.role === 'none')
+      tell('role', NO_ROLE(named));
     this.#ready(canvas, agentId, agent);
   }
 
