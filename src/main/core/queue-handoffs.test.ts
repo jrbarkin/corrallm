@@ -15,6 +15,8 @@ import { fakeConnector } from '../sessions/test-fake';
 import { createCore } from './core';
 import type { Core } from './core';
 import type { Engine } from './engine/engine';
+import { expectRestorable, liveRunOf } from './engine/run/test-restore';
+import { mailboxTasks } from './delivery/tasks';
 import { keepCanvases, readOnDisk } from './store/test-store';
 import type { OutsideCaller } from './caller';
 import { CALLERS, NO_DESKTOP } from './test-registry';
@@ -102,6 +104,8 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  // Every run made here restores from its checkpoint, over the same rows, as it was.
+  expectRestorable();
   vi.restoreAllMocks();
   for (const core of cores.splice(0)) await core.close().catch(() => undefined);
   await rm(profile, { recursive: true, force: true });
@@ -219,6 +223,9 @@ function attemptsOnDisk(): { id: string; status: string; messageId?: string }[] 
 async function opened(core: Core): Promise<{ engine: Engine; messages: () => Message[] }> {
   const engine = await core.engines.open(CANVAS);
   const store = await core.engines.messagesOf(CANVAS);
+  // Kept to check that it restores (expectRestorable), over the canvas's own mailbox.
+  liveRunOf(engine.run, engine.catalog, () => Date.now(), mailboxTasks(store));
+  engine.run.update(core.engines.canvas(CANVAS)?.document.nodes ?? []);
   return { engine, messages: () => store.all() };
 }
 
