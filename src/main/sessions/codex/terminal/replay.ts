@@ -25,6 +25,7 @@ export class Replay implements Pty {
   readonly #records: TerminalRecord[];
   readonly #data = new Set<(data: string) => void>();
   readonly #exit = new Set<(exit: { exitCode: number }) => void>();
+  readonly #played: (record: TerminalRecord) => void | Promise<void>;
   /** Writes not yet matched against the keys the recording waits for. */
   #unread: string[] = [];
   #wake: (() => void) | undefined;
@@ -37,7 +38,13 @@ export class Replay implements Pty {
     options: PtyOptions,
     without: (record: TerminalRecord) => boolean = () => false,
     apiFetch?: typeof fetch,
+    /**
+     * Told each record as it is played: a test may hold the recording up there, as a CLI a busy
+     * host descheduled mid-frame is held up (what it returns is waited for).
+     */
+    played: (record: TerminalRecord) => void | Promise<void> = () => undefined,
   ) {
+    this.#played = played;
     this.#records = recordedTerminal(name).filter((record) => !without(record));
     this.args = args;
     this.options = options;
@@ -147,6 +154,8 @@ export class Replay implements Pty {
         default:
           break;
       }
+      await this.#played(record);
+      due = Math.max(due, performance.now());
     }
   }
 

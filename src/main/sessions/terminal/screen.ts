@@ -57,6 +57,9 @@ export class Screen {
   /** Characters written and not yet on the screen, and whether its CLI was paused for them. */
   #pending = 0;
   #paused = false;
+  /** What waits for a frame the CLI is drawing to be drawn (`drawn`). */
+  readonly #drawing = new Set<() => void>();
+  #disposed = false;
 
   constructor({ cols, rows, reply, status, title, answersQueries, flow }: ScreenOptions) {
     this.#flow = flow;
@@ -108,6 +111,9 @@ export class Screen {
     this.#pending += data.length;
     this.#terminal.write(data, () => {
       this.#pending -= data.length;
+      if (this.#drawing.size > 0 && !this.#terminal.modes.synchronizedOutputMode) {
+        for (const done of [...this.#drawing]) done();
+      }
       if (this.#paused && this.#pending < LOW_WATER) {
         this.#paused = false;
         this.#flow?.(false);
@@ -123,10 +129,32 @@ export class Screen {
     this.#terminal.resize(cols, rows);
   }
 
-  /** Resolves once everything written so far is on the screen. */
+  /** Resolves once everything written so far is on the screen (at once, once it is disposed). */
   settled(): Promise<void> {
+    if (this.#disposed) return Promise.resolve();
     return new Promise((resolve) => {
       this.#terminal.write('', resolve);
+    });
+  }
+
+  /**
+   * Resolves once what the CLI has printed so far is on the screen and it is drawing no frame (a
+   * synchronized update, DEC mode 2026, that it opened and hasn't closed), or once `limit` ms pass
+   * with one still open. It first lets what was already printed but not yet read come in, so a
+   * screen read after a delay that a busy host overran is of a whole frame, never half of one.
+   */
+  async drawn(limit: number): Promise<void> {
+    await new Promise((resolve) => setImmediate(resolve));
+    await this.settled();
+    if (this.#disposed || !this.#terminal.modes.synchronizedOutputMode) return;
+    await new Promise<void>((resolve) => {
+      const done = () => {
+        clearTimeout(timer);
+        this.#drawing.delete(done);
+        resolve();
+      };
+      const timer = setTimeout(done, limit);
+      this.#drawing.add(done);
     });
   }
 
@@ -186,6 +214,8 @@ export class Screen {
   }
 
   dispose(): void {
+    this.#disposed = true;
+    for (const done of [...this.#drawing]) done();
     this.#terminal.dispose();
   }
 }

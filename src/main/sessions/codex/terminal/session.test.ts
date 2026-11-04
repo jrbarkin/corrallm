@@ -42,6 +42,8 @@ let runs: Replay[];
 let sessions: LiveSession<CodexMode>[];
 /** What of its recordings the pseudo-terminals leave out. */
 let without: (record: TerminalRecord) => boolean;
+/** Told each record its pseudo-terminals play, which wait for what it returns. */
+let played: (record: TerminalRecord) => void | Promise<void>;
 
 beforeEach(async () => {
   dir = await mkdtemp(path.join(tmpdir(), 'corrallm-codex-terminal-'));
@@ -51,6 +53,7 @@ beforeEach(async () => {
   runs = [];
   sessions = [];
   without = () => false;
+  played = () => undefined;
 });
 afterEach(async () => {
   await Promise.all(sessions.map((session) => session.close()));
@@ -78,7 +81,14 @@ async function start(
     // Codex is not asked: the computed trust.
     truster: new HookTruster({ start: () => Promise.reject(new Error('not here')) }),
     spawn: (_file, args, options) => {
-      const run = new Replay(recordings[runs.length] ?? 'prompts', args, options, without);
+      const run = new Replay(
+        recordings[runs.length] ?? 'prompts',
+        args,
+        options,
+        without,
+        undefined,
+        (record) => played(record),
+      );
       runs.push(run);
       return Promise.resolve(run);
     },
@@ -358,6 +368,36 @@ describe('Codex in a terminal, as the real one ran', () => {
       'end:interrupted',
     ]);
     expect(remembered).toEqual([RECORDED_TURNS_SESSION]);
+  });
+
+  it('reads what Action Required waits for from its whole dialog, though the host is held up as it is drawn', async () => {
+    // Its title says it, and it starts drawing its dialog (a synchronized update), then is held up
+    // (a busy host), longer than the screen is let settle before it is read.
+    let titled = false;
+    played = async (record) => {
+      if (record.kind === 'title' && record.data.includes('Action Required')) titled = true;
+      if (!titled || record.kind !== 'out' || !record.data.includes('\x1b[?2026h')) return;
+      titled = false;
+      await new Promise((resolve) => setTimeout(resolve, 60));
+    };
+    const session = await start(['prompts']);
+    await session.send({ id: 'm1', text: 'Say hi in one word.' });
+    await until(() => {
+      expect(ends()).toBe(1);
+    });
+    await session.send({ id: 'm2', text: 'Create a file named bye.txt containing the word bye.' });
+    await until(() => {
+      expect(prompts).toHaveLength(1);
+    });
+    const [raised] = prompts;
+    if (raised?.type !== 'prompt') throw new Error('Nothing was raised');
+    const detail = raised.prompt.detail?.kind === 'output' ? raised.prompt.detail.text : '';
+    expect(detail).toContain('Would you like to run the following command?');
+    expect(detail.split('\n').at(-1)).toBe('  Press enter to confirm or esc to cancel');
+    session.terminal?.input('y');
+    await until(() => {
+      expect(ends()).toBe(2);
+    });
   });
 
   it('raises Action Required to the core’s prompt owner in its own words, with its screen’s last rows, once; answered there as it goes on', async () => {
