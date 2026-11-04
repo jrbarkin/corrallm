@@ -1173,6 +1173,8 @@ export class Engines {
       },
       // B13 C9: a party's message waits while its agent waits on a prompt the core's owner holds.
       waitingOn: (agent) => this.#deps.prompts?.waiting(canvas, agent),
+      // B19 C1: a queue hand-off never goes while its run can't be kept on disk.
+      unsaved: () => journal.problem(canvas),
       defaultAsks: (adapter, agent) =>
         this.#deps.processes
           .run(() => this.#deps.sessions.settingsOptions(canvas, adapter, agent))

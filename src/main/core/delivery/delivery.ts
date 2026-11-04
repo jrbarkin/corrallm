@@ -119,6 +119,12 @@ export interface DeliveryDeps {
    */
   admit?: (agent: string, work: AdmittedWork) => Admission;
   /**
+   * B19 C1: why the canvas's run can't be kept on disk now (its checkpoint too large or complex),
+   * if it can't: a queue hand-off, the run's work, is never sent while it can't, as the run's own
+   * sends are not. None: it always can.
+   */
+  unsaved?: () => string | undefined;
+  /**
    * B11a C7: the core's handoff service, for corrallm's handoff requests (`ask`) and what the first
    * send after a switch carries. None: a request is withdrawn, and nothing is carried.
    */
@@ -1994,7 +2000,24 @@ export class Delivery {
               current?.type === 'agent' && isQueueHandoff(message)
                 ? this.#handOffRefusal(current, message)
                 : undefined;
-            if (declined !== undefined) {
+            // B19 C1: nor does one go whose run, which links its attempt to it, isn't on disk.
+            const unsaved = isQueueHandoff(message) ? this.#deps.unsaved?.() : undefined;
+            if (unsaved !== undefined) {
+              this.#uncarry(message.id);
+              this.#uncount(message.id);
+              const turn: TurnResult = {
+                status: 'failed',
+                reason: 'error',
+                message: threadTitle(
+                  `The run could not be saved, so the message was not handed over: ${unsaved}`,
+                  REASON,
+                ),
+              };
+              this.#deps.store.update(message.id, { state: 'unresolved', turn });
+              this.#handOffEnded(message, '', turn);
+              this.#freeSlotOf(message.id);
+              this.schedule();
+            } else if (declined !== undefined) {
               this.#uncarry(message.id);
               this.#uncount(message.id);
               this.#decline(message, declined);

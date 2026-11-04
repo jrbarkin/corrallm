@@ -6,6 +6,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { CanvasId } from '../../shared/canvas';
+import { MAX_RUN_BYTES } from '../../shared/run';
 import type { Message } from '../../shared/model/messages';
 import type { SessionHost } from '../sessions/connector';
 import type { SessionMode, UserMessage } from '../../shared/session';
@@ -348,6 +349,31 @@ describe('a queue hand-off in the core (B19 C1)', () => {
         ORCHESTRATOR,
       ),
     ).toMatchObject({ ok: false, error: { code: 'invalid' } });
+  });
+
+  it('is never sent while its run can’t be kept on disk: unresolved, its item held, its recipient sent nothing', async () => {
+    const { connector, sent } = sessions();
+    const core = await start(connector);
+    const { engine, messages } = await opened(core);
+    const checkpoint = engine.checkpoint();
+    vi.spyOn(engine, 'checkpoint').mockReturnValue({
+      ...checkpoint,
+      state: JSON.stringify({ text: 'x'.repeat(MAX_RUN_BYTES) }),
+    });
+    engine.run.start();
+    await vi.waitFor(() => {
+      expect(handoffs(messages())[0]?.state).toBe('unresolved');
+    });
+    expect(handoffs(messages())[0]?.turn).toMatchObject({
+      status: 'failed',
+      message: expect.stringMatching(/could not be saved/u) as unknown,
+    });
+    expect(engine.run.snapshot().agents.lead?.problem).toMatchObject({
+      kind: 'failed',
+      text: expect.stringMatching(/too large/u) as unknown,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(sent).toEqual([]);
   });
 
   it('is the run’s own: no party takes it or its evidence back', async () => {
