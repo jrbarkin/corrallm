@@ -44,6 +44,7 @@ import type { ViewCommand } from './commands';
 import type { Route } from '../../shared/routing';
 import { routeRefusal } from '../../shared/routing';
 import { imageRefusal } from '../../shared/images';
+import type { SessionFeatures } from '../../shared/features';
 import { Composer } from './Composer';
 import { isCommand } from './completion';
 import { queueLinks } from './links';
@@ -87,6 +88,23 @@ export interface SessionControls extends ComposerControls {
   /** Its session's MCP servers (/mcp), and a change to one (resolving with them all then). */
   mcpServers: () => Promise<McpServer[]>;
   changeMcpServer: (server: string, change: McpChange) => Promise<McpServer[]>;
+}
+
+/**
+ * `controls` with the live ones its ready generation can't use left out (B16 C1): effort and task
+ * Stop are offered only where `features` says its connection declares them and its session has the
+ * method, so nothing that would only be refused is shown. None while no generation is ready.
+ */
+function liveControlsOf(
+  controls: SessionControls,
+  features: SessionFeatures | null,
+): SessionControls {
+  const { setEffort, stopTask, ...rest } = controls;
+  return {
+    ...rest,
+    ...(features?.live.effort && setEffort ? { setEffort } : {}),
+    ...(features?.live.stopTask && stopTask ? { stopTask } : {}),
+  };
 }
 
 /**
@@ -337,6 +355,8 @@ export function AgentView({
   const target = continuationOf(connection);
   const rewindable = panelOpens('rewind', features) && !working && points.length > 0;
   const { stop } = controls;
+  /** The controls its composer and transcript get: a live one (effort, task Stop) only where `features` says. */
+  const offered = liveControlsOf(controls, features);
   const composer = useRef<HTMLTextAreaElement>(null);
   const body = useRef<HTMLDivElement>(null);
   /** The agent whose queue is shown beside this one. */
@@ -717,7 +737,7 @@ export function AgentView({
                             },
                           }
                         : {}),
-                      ...(controls.stopTask ? { onStopTask: controls.stopTask } : {}),
+                      ...(offered.stopTask ? { onStopTask: offered.stopTask } : {}),
                     }}
                   />
                   <Composer
@@ -729,7 +749,7 @@ export function AgentView({
                     session={session}
                     commands={commands}
                     imageRules={imageRules}
-                    controls={{ ...controls, send, refuses }}
+                    controls={{ ...offered, send, refuses }}
                     field={composer}
                     {...(ask?.reply ? { placeholder: ask.reply.label } : {})}
                     above={

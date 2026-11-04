@@ -1776,6 +1776,16 @@ describe('a connected agent', () => {
       connection: 'claude-code.sdk',
     });
     await send('Start the dev server, and survey the code meanwhile');
+    // Stop is offered once its generation is ready (B16 C1).
+    emit({
+      type: 'started',
+      role: 'append',
+      resume: true,
+      list: true,
+      model: 'opus',
+      mode: 'manual',
+      models: [],
+    });
     emit(
       { type: 'tool', id: 'toolu_dev', tool: 'Bash', summary: 'npm run dev', status: 'running' },
       {
