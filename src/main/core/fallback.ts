@@ -25,7 +25,7 @@ import { CommitFailed } from './canvas/documents';
 import type { Documents, LiveDocument } from './canvas/documents';
 import type { Delivery } from './delivery/delivery';
 import type { MessageStore, Staged } from './delivery/messages';
-import { sentByRun } from './delivery/messages';
+import { runOwned } from './delivery/messages';
 import type { Engine } from './engine/engine';
 import type { Admission, AdmittedWork } from './engine/run/runner';
 import { nameOf } from './parties';
@@ -684,7 +684,8 @@ export class FallbackService {
       const original = reply.replyTo === undefined ? undefined : store.get(reply.replyTo);
       if (
         original === undefined ||
-        sentByRun(original) ||
+        // The run's own work (a queue hand-off too, B19 C1) carries on as its task.
+        runOwned(original) ||
         original.from === 'you' ||
         original.from === 'corrallm' ||
         store.hasTold(`carries-on:${original.id}`)

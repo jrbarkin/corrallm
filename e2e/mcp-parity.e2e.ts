@@ -95,12 +95,25 @@ test('the window and outside MCP share document, messages and session, respectin
           }),
         ]),
       );
+    // B19 C2: a party's message waits while the queue is held for your OK, unlike yours, which
+    // went past it; the OK's gap, once you approve, delivers it.
     const sent = await world.call('message', {
       canvas,
       to: 'builder',
       body: 'parity-from-outside',
     });
-    await expect(transcript).toContainText('parity-from-outside');
+    const stateOf = async () =>
+      (await world.call('messages', { canvas })).items.find((one) => one.id === sent.id)?.state;
+    await expect.poll(stateOf).toBe('pending');
+    await expect(transcript).not.toContainText('parity-from-outside');
+
+    // Approve is a human gesture; the token couldn't erase the gate to get here.
+    // The window shows the open OK twice (in its queue, and as the Needs you card); either answers.
+    await view
+      .getByRole('group', { name: 'Needs you' })
+      .getByRole('button', { name: 'Approve', exact: true })
+      .click();
+    await expect(transcript).toContainText('parity-from-outside', { timeout: 15_000 });
     await expect
       .poll(async () => (await world.call('messages', { canvas })).items, { timeout: 15_000 })
       .toEqual(
@@ -112,6 +125,8 @@ test('the window and outside MCP share document, messages and session, respectin
           }),
         ]),
       );
+    await view.getByRole('button', { name: 'All queues', exact: true }).click();
+    await expect(world.queues().getByRole('status')).toHaveText('All done');
     const session = await world.call('session.get', args);
     expect(session.status).toBe('idle');
     expect(await page.evaluate((args) => window.api.sessionGet(args), args)).toMatchObject({
@@ -119,15 +134,6 @@ test('the window and outside MCP share document, messages and session, respectin
       value: { status: session.status, connection: session.connection },
     });
     expect(await world.sessions()).toHaveLength(1);
-
-    // Approve is a human gesture; the token couldn't erase the gate to get here.
-    // The window shows the open OK twice (in its queue, and as the Needs you card); either answers.
-    await view
-      .getByRole('group', { name: 'Needs you' })
-      .getByRole('button', { name: 'Approve', exact: true })
-      .click();
-    await view.getByRole('button', { name: 'All queues', exact: true }).click();
-    await expect(world.queues().getByRole('status')).toHaveText('All done');
     // R7 protects even a completed OK. Only the person removes it before a token may propose
     // deleting this agent; the token's attempt above changed nothing.
     await world

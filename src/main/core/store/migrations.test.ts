@@ -1781,3 +1781,40 @@ describe('migration 11', () => {
     expect(count('loop_pair')).toBe(0);
   });
 });
+
+/** A queue hand-off's purpose, as B19 C1 keeps it on its message (the `purpose` column). */
+const PURPOSE = JSON.stringify({ v: 1, type: 'handoff' });
+
+describe('migration 12', () => {
+  it('adds a purpose to every message of a schema-11 database, keeping every row, which no corrallm older than schema 12 may open', () => {
+    migrate(connection, MIGRATIONS.slice(0, 11));
+    connection.exec('PRAGMA foreign_keys = ON');
+    addCanvas();
+    addMessage('kept');
+    const before = connection.prepare('SELECT * FROM message').all();
+
+    migrate(connection, MIGRATIONS.slice(0, 12));
+
+    expect(schemaOf(connection)).toBe(12);
+    // An older corrallm would deliver a hand-off as the run's own send, or a hand-off's evidence
+    // as a turn: none may open the database once this ran.
+    expect(minReaderOf(connection)).toBe(12);
+    expect(connection.prepare('SELECT * FROM message').all()).toEqual(
+      before.map((row) => ({ ...row, purpose: null })),
+    );
+  });
+
+  it('keeps a message’s purpose as valid JSON, or none', () => {
+    migrate(connection);
+    connection.exec('PRAGMA foreign_keys = ON');
+    addCanvas();
+    const seq = addMessage('handoff', CANVAS, 'run');
+    const keep = connection.prepare('UPDATE message SET purpose = ? WHERE seq = ?');
+    keep.run(PURPOSE, seq);
+    expect(connection.prepare('SELECT purpose FROM message WHERE seq = ?').get(seq)).toEqual({
+      purpose: PURPOSE,
+    });
+    keep.run(null, seq);
+    expect(() => keep.run('not JSON', seq)).toThrow(/CHECK constraint failed/);
+  });
+});

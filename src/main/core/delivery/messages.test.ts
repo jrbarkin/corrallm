@@ -6,9 +6,18 @@ import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 
 
 import { STORE_BYTES, STORE_SETTLED_PER_PARTY } from '../../../shared/api/limits';
 import type { CanvasId } from '../../../shared/canvas';
-import { MESSAGE_KINDS, MESSAGE_STATES } from '../../../shared/model/messages';
+import {
+  isHandoffEvidence,
+  isMessageToYou,
+  isQueueHandoff,
+  isSettled,
+  isTurn,
+  MESSAGE_KINDS,
+  MESSAGE_STATES,
+} from '../../../shared/model/messages';
 import type { Message } from '../../../shared/model/messages';
 import { AskColumn, AskSettlement } from '../../../shared/model/asks';
+import { Purpose } from '../../../shared/model/purpose';
 import { Verdict } from '../../../shared/model/results';
 import { SettledDecision } from '../../../shared/model/settled';
 import { CanvasMemory } from '../../memory';
@@ -18,7 +27,7 @@ import { connect } from '../store/sqlite';
 import { Store, SYSTEM_DEPS, unopened } from '../store/store';
 import type { StoreDeps } from '../store/store';
 import { openTestStore, readOnDisk, refuseWrites, writeOnDisk } from '../store/test-store';
-import { isActive, MessageStore, MessageTable } from './messages';
+import { isActive, MessageStore, MessageTable, runOwned, sentByRun } from './messages';
 import type { Draft, Staged } from './messages';
 import { scanPrune } from './test-prune';
 import type { PruneRecord } from './test-prune';
@@ -575,6 +584,79 @@ describe('the message store', () => {
     expect(again.get(result.id)).toBeUndefined();
   });
 
+  it('keeps a queue hand-off’s purpose and its evidence’s with their rows, never changing either after, and leaves one it can’t read as it is', async () => {
+    const messages = await store();
+    const task = {
+      agent: 'lead',
+      item: 'handoff',
+      attempt: '0c1d2e3f-4a5b-4c6d-8e7f-9a0b1c2d3e4f',
+    };
+    const handoff = messages.add({
+      from: 'agent:lead',
+      to: 'agent:builder',
+      kind: 'text',
+      origin: 'run',
+      body: 'Build it',
+      task,
+      state: 'pending',
+      purpose: Purpose.parse({ v: 1, type: 'handoff' }),
+    });
+    await messages.durable();
+    messages.update(handoff.id, {
+      state: 'replied',
+      turn: { status: 'completed', reason: 'completed' },
+    });
+    const evidence = messages.add({
+      from: 'agent:builder',
+      to: 'agent:lead',
+      kind: 'text',
+      origin: 'run',
+      body: 'Built.',
+      replyTo: handoff.id,
+      task,
+      turn: { status: 'completed', reason: 'completed' },
+      state: 'delivered',
+      purpose: Purpose.parse({ v: 1, type: 'evidence' }),
+    });
+    await messages.durable();
+    // A later change of the row never writes another purpose over it, nor gives one in memory.
+    messages.update(handoff.id, { purpose: { v: 1, type: 'evidence' } });
+    expect(messages.get(handoff.id)?.purpose).toEqual({ v: 1, type: 'handoff' });
+    const party = messages.add({
+      from: 'agent:lead',
+      to: 'agent:builder',
+      kind: 'text',
+      origin: 'party',
+      body: 'Plain',
+      state: 'pending',
+    });
+    messages.update(party.id, { purpose: { v: 1, type: 'handoff' } });
+    expect(messages.get(party.id)).not.toHaveProperty('purpose');
+    await messages.durable();
+    expect(
+      readOnDisk(profile, (disk) =>
+        disk.prepare('SELECT purpose FROM message WHERE id = ?').get(handoff.id),
+      ),
+    ).toEqual({ purpose: JSON.stringify({ v: 1, type: 'handoff' }) });
+    await restart();
+    const again = await store();
+    expect(again.get(handoff.id)).toEqual({
+      ...handoff,
+      state: 'replied',
+      turn: { status: 'completed', reason: 'completed' },
+    });
+    expect(again.get(evidence.id)).toEqual(evidence);
+    // One a newer corrallm might keep: read as nothing, and left as it is.
+    writeOnDisk(
+      profile,
+      `UPDATE message SET purpose = '${JSON.stringify({ v: 2, type: 'copy' })}' WHERE id = '${evidence.id}'`,
+    );
+    await restart();
+    const later = await store();
+    expect(later.get(evidence.id)).toBeUndefined();
+    expect(later.get(handoff.id)).toBeDefined();
+  });
+
   it('never drops an open ask, or your message waiting on you, past its party’s quota', async () => {
     const messages = await store();
     const ask = messages.add({
@@ -940,6 +1022,9 @@ describe('what delivery acts on', () => {
   /** What `active()` must list: the messages kept that delivery acts on, in the store's order. */
   const expectIndexed = (messages: MessageStore) => {
     expect(messages.active()).toEqual(messages.all().filter(isActive));
+    // B19 C2: and each recipient's line of it, read alone.
+    for (const to of new Set(messages.all().map((message) => message.to)))
+      expect(messages.activeTo(to)).toEqual(messages.active().filter((one) => one.to === to));
   };
 
   it('lists the messages waiting, being delivered or whose turn goes on, as they change', async () => {
@@ -1070,6 +1155,66 @@ describe('what delivery acts on', () => {
         expect(messages.active().length).toBeGreaterThan(0);
       }),
   );
+});
+
+describe('what a message’s purpose makes it (B19 C1)', () => {
+  const task = { agent: 'lead', item: 'hand', attempt: '0c1d2e3f-4a5b-4c6d-8e7f-9a0b1c2d3e4f' };
+  const base = {
+    id: '6d0c2f4e-1a2b-4c3d-8e9f-0a1b2c3d4e5f',
+    canvas: '0a6f6a5e-4bb3-4c3e-8a8c-3f7f2c1e9d10' as CanvasId,
+    kind: 'text' as const,
+    body: 'Review this',
+    at: 1,
+  };
+  /** A run's direct send of its owner's own step, as before B19: no purpose. */
+  const send: Message = { ...base, from: 'corrallm', to: 'agent:lead', task, state: 'delivering' };
+  const handoff: Message = {
+    ...base,
+    from: 'agent:lead',
+    to: 'agent:worker',
+    task,
+    state: 'pending',
+    purpose: { v: 1, type: 'handoff' },
+  };
+  const evidence: Message = {
+    ...base,
+    from: 'agent:worker',
+    to: 'agent:lead',
+    body: 'APPROVED',
+    replyTo: handoff.id,
+    task,
+    turn: { status: 'completed', reason: 'completed' },
+    state: 'delivered',
+    purpose: { v: 1, type: 'evidence' },
+  };
+  const party: Message = { ...base, from: 'agent:lead', to: 'agent:worker', state: 'pending' };
+
+  it('keeps a row with no purpose as it was: a text with a task is the run’s own send', () => {
+    expect(sentByRun(send)).toBe(true);
+    expect(runOwned(send)).toBe(true);
+    expect(sentByRun(party)).toBe(false);
+    expect(runOwned(party)).toBe(false);
+  });
+
+  it('makes a hand-off the run’s work, which delivery delivers as a turn: no direct send of the run’s', () => {
+    expect(sentByRun(handoff)).toBe(false);
+    expect(runOwned(handoff)).toBe(true);
+    expect(isQueueHandoff(handoff)).toBe(true);
+    expect(isTurn(handoff)).toBe(true);
+    expect(isActive(handoff)).toBe(true);
+    expect(isSettled(handoff)).toBe(false);
+  });
+
+  it('makes its evidence a record: never a turn, never pending, never the run’s send, whatever its parent row', () => {
+    expect(isHandoffEvidence(evidence)).toBe(true);
+    expect(isQueueHandoff(evidence)).toBe(false);
+    expect(isTurn(evidence)).toBe(false);
+    expect(sentByRun(evidence)).toBe(false);
+    expect(runOwned(evidence)).toBe(false);
+    expect(isActive(evidence)).toBe(false);
+    expect(isSettled(evidence)).toBe(true);
+    expect(isMessageToYou(evidence)).toBe(false);
+  });
 });
 
 describe('the message store, when its database fails', () => {

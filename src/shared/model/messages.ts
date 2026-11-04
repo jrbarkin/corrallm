@@ -2,6 +2,7 @@ import type { CanvasId } from '../canvas';
 import type { TurnResult } from '../session';
 import { MAX_NODE_ID } from './canvas';
 import type { AskColumn } from './asks';
+import type { Purpose } from './purpose';
 import type { Verdict } from './results';
 import type { Settled } from './settled';
 
@@ -109,8 +110,9 @@ export interface MessageDisplay {
  * on its row and on the record its asker is sent. `ask`: an ask's questions and deadline, or an
  * answer's answers (./asks.ts), written with its row and never changed after. `verdict`: on a
  * `result` record (B21 C8), the outcome and summary its agent reported of its task's attempt with
- * `complete` (./results.ts), written with its row and never changed after. Images a message carried
- * are never kept.
+ * `complete` (./results.ts), written with its row and never changed after. `purpose` (B19 C1): a
+ * queue hand-off's, or its evidence's, core-minted (./purpose.ts). Images a message carried are
+ * never kept.
  */
 export interface Message {
   id: string;
@@ -130,6 +132,11 @@ export interface Message {
   settled?: Settled;
   ask?: AskColumn;
   verdict?: Verdict;
+  /**
+   * B19 C1: what the core made it for, where it is a queue hand-off or a hand-off's evidence
+   * (./purpose.ts), written with its row and never changed after; none for every other message.
+   */
+  purpose?: Purpose;
   /** When it was sent, in epoch ms. */
   at: number;
 }
@@ -150,11 +157,29 @@ export function isContinuation(
 }
 
 /**
- * Whether a message to an agent is delivered to it as a turn: a party's text (an answer to an ask
- * among them), an ask (B21 C6), or the record of how an ask ended, sent its asker. Every other
- * record is only kept, for its party to read.
+ * Whether a message is a queue hand-off (B19 C1): one queue's Message item for another agent, the
+ * queue's agent's message to it, as its purpose says (never as its task, parties or origin do).
  */
-export function isTurn(message: Pick<Message, 'kind' | 'settled'>): boolean {
+export function isQueueHandoff(message: Pick<Message, 'purpose'>): boolean {
+  return message.purpose?.type === 'handoff';
+}
+
+/**
+ * Whether a message is a queue hand-off's evidence (B19 C1): its recipient's reply, kept for the
+ * queue's item as a record, as its purpose says, whether or not the hand-off's row is still kept.
+ */
+export function isHandoffEvidence(message: Pick<Message, 'purpose'>): boolean {
+  return message.purpose?.type === 'evidence';
+}
+
+/**
+ * Whether a message to an agent is delivered to it as a turn: a party's text (an answer to an ask
+ * and a queue hand-off among them), an ask (B21 C6), or the record of how an ask ended, sent its
+ * asker. Every other record is only kept, for its party to read: a hand-off's evidence (B19 C1)
+ * too, though it is text.
+ */
+export function isTurn(message: Pick<Message, 'kind' | 'settled' | 'purpose'>): boolean {
+  if (isHandoffEvidence(message)) return false;
   return (
     message.kind === 'text' ||
     message.kind === 'prompt' ||

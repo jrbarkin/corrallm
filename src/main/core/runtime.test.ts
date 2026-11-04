@@ -208,7 +208,13 @@ describe('the canvas runtime', () => {
       expect(sent).toEqual([expect.stringContaining('Party work')]);
     });
     engine.run.start();
-    // The run's own message waits behind the party's turn, its attempt on disk.
+    // B19 C2: the party's turn holds the agent's slot: the run's own task waits for it, unsent, as
+    // the run on disk says.
+    expect(engine.run.snapshot().agents.worker).toMatchObject({
+      current: 'hello',
+      status: 'waiting',
+    });
+    await core.engines.canvas(CANVAS)?.journal();
 
     // The process dies: what is on disk now is all the next core has.
     const crashed = await mkdtemp(path.join(tmpdir(), 'corrallm-crashed-'));
@@ -227,9 +233,11 @@ describe('the canvas runtime', () => {
       expect(initialized.map(({ canvas }) => canvas)).toEqual([CANVAS]);
       const restored = restarted.engines.canvas(CANVAS);
       expect(restored?.engine.run.snapshot()).toMatchObject({ running: false, paused: true });
-      expect(restored?.engine.run.snapshot().agents.worker?.attempts?.hello).toMatchObject([
-        { status: 'uncertain' },
-      ]);
+      expect(restored?.engine.run.snapshot().agents.worker).toMatchObject({
+        current: 'hello',
+        status: 'waiting',
+      });
+      expect(restored?.engine.run.snapshot().agents.worker?.attempts).toBeUndefined();
       expect((await find(restarted, message.value.id))?.state).toBe('unresolved');
       await restarted.engines.initialize();
       await new Promise((resolve) => setTimeout(resolve, 50));

@@ -1,3 +1,4 @@
+import { MAX_MESSAGE_BYTES } from '../../../../shared/api/limits';
 import { endpointRefusal } from '../../../../shared/model/catalog';
 import type { MessageImage, TaskMessage, TurnResult } from '../../../../shared/session';
 import { WINDOW_NAMES, windowNow } from '../../../../shared/usage';
@@ -141,6 +142,76 @@ export interface RunMailbox {
 }
 
 /**
+ * B19 C1: a queue hand-off, as the run records it (RunHandOffs.record): one queue's Message item for
+ * another agent.
+ */
+export interface RunHandOff {
+  /** The agent whose queue's item it is: it is sent from that agent. */
+  owner: string;
+  /** The agent it is for. */
+  to: string;
+  /** The item's words, as written: never framed, cut or carrying anything. */
+  text: string;
+  /** The attempt it is: owner, item and attempt. */
+  task: TaskMessage;
+}
+
+/**
+ * B19 C1: where the run's queue hand-offs go, the core's delivery: each recorded pending (`record`,
+ * in memory, written with the run that links its attempt to it), delivered at its recipient's
+ * delivery point under every hold a party's message waits on there, and its turn's end told back
+ * (RunStore.handedOff) in the same tick as its evidence is kept. Unit harnesses may omit it: the
+ * run then sends a hand-off to its recipient's session itself, as before B19.
+ */
+export interface RunHandOffs {
+  /**
+   * Records hand-off `send`, pending: its message's id; none, nothing recorded, while its owner has
+   * as many messages waiting for its recipient as a party may (MAX_WAITING): the item waits unsent,
+   * and goes once one of them does (RunStore.admissionChanged).
+   */
+  record(send: RunHandOff): string | undefined;
+  /**
+   * Takes back attempt `task`'s hand-off for the run (Stop, Run again): withdrawn unsent while it
+   * waits, else its turn interrupted, its recipient told with its next message.
+   */
+  withdraw(task: TaskMessage): void;
+}
+
+/**
+ * B19 C2: a hold of an agent's queue's that holds a party's message to it while the run goes: a
+ * delay, an OK, a task held for you, a condition (an If's or a round's) waiting on you.
+ */
+export type QueueHold = 'delay' | 'approval' | 'problem' | 'condition';
+
+/**
+ * B19 C2: where an agent's queue is, for delivery (RunStore.point): whether a party's message may
+ * go to it now. `open`: no run goes for it, its queue is done or stopped, at an authored wait, or
+ * (B21 C7) at a step deferred on its asks. `gap`: between two of its queue's items (never just
+ * before an If) or a repeat's rounds once the round's condition is decided, the queue waiting to
+ * go on: what waited as the gap opened may go first. `protected`: its queue runs a stretch nothing
+ * enters (an item, an If and its steps, a round). `held`: its queue waits on a hold of its own.
+ * The core's alone, never persisted: it is read from the run as it is.
+ */
+export type DeliveryPoint =
+  | { kind: 'open' }
+  | { kind: 'gap'; gap: string }
+  | { kind: 'protected' }
+  | { kind: 'held'; hold: QueueHold };
+
+/**
+ * B19 C2: delivery's half of the delivery points (the core's): at each gap an agent's queue reaches
+ * the run offers it the agent's next native turn, synchronously, before it starts the next item.
+ */
+export interface RunPoints {
+  /**
+   * Agent `agent`'s queue is at gap `gap`: whether delivery takes the agent's next native turn first,
+   * holding its slot under `token` until it releases it (RunStore.release). The queue waits
+   * meanwhile, and offers the same gap again once it is released.
+   */
+  offer(agent: string, gap: string, token: object): boolean;
+}
+
+/**
  * What admission says before automated work reaches an agent (B11a C3): it goes (or is held as it
  * would have been); corrallm switches the agent's backend first, and the work waits; or a fallback
  * rule that can't switch the agent asks, as `ask` does.
@@ -163,6 +234,10 @@ export interface RunIO {
   beforeSend?: () => Promise<void>;
   /** Where the run's sends of its tasks' attempts are recorded first: the core's alone. */
   mailbox?: RunMailbox;
+  /** B19 C1: where its queue hand-offs go, the core's delivery. None: it sends them itself. */
+  handOffs?: RunHandOffs;
+  /** B19 C2: delivery's half of its delivery points. None: no gap is ever taken. */
+  points?: RunPoints;
   /** Holds queued session dispatch without blocking a fresh manual console intervention. */
   hold?: (agentId: string, held: boolean) => void;
   /**
@@ -262,6 +337,11 @@ export interface RunTasks {
    * delivery next looks (they belong to an attempt no longer running).
    */
   interrupt(task: TaskMessage): void;
+  /**
+   * B19 C1: whether attempt `task`'s queue hand-off waits, unsent, in the mailbox: as the run is
+   * held or restored, it waits for it again, never uncertain. None: never.
+   */
+  pending?(task: TaskMessage): boolean;
 }
 
 /**
@@ -309,6 +389,11 @@ const UNHEARD =
   'verdict; output checks and conditions in your words wait for your judgment.';
 
 const IDLE: Run = { running: false, agents: {} };
+
+/** B19 C2: a point where a party's message may go. */
+const OPEN: DeliveryPoint = Object.freeze({ kind: 'open' });
+/** B19 C2: a stretch of a queue no party's message enters. */
+const PROTECTED: DeliveryPoint = Object.freeze({ kind: 'protected' });
 
 /**
  * When the run next moves by itself, if it will: the soonest delay's or wait's time, or usage
@@ -444,6 +529,30 @@ export class RunStore {
    * The attempt's next turn's end (`continued`) judges it, or waits again.
    */
   readonly #deferred = new Map<string, { token: object; step: QueueStep; attempt: string }>();
+  /**
+   * B19 C1: each agent whose queue's hand-off delivery has (RunIO.handOffs), by its owner: the token
+   * it is busy with and the attempt. Its end (`handedOff`) finishes the item, once.
+   */
+  readonly #handing = new Map<string, { token: object; task: TaskMessage; to: string }>();
+  /**
+   * B19 C2: the agents whose next native turn delivery holds (`reserve`, or a gap it took), by the
+   * token it holds it under: no task of the run's goes to such an agent until it is released.
+   * Delivery's alone: neither a run started nor one stopped releases it.
+   */
+  readonly #reserved = new Map<string, object>();
+  /**
+   * B19 C2: the agents whose queues waited for a slot delivery holds (at a gap it took, or a task
+   * or a question that would have gone): releasing one moves the run on; any other costs nothing.
+   */
+  readonly #yielded = new Set<string>();
+  /** The canvas's agents by id, as last given (`update`): what `point` reads, never a walk. */
+  readonly #byId = new Map<string, AgentNode>();
+  /** B19 C2: the gap each agent's queue waits at while delivery has it, by agent. */
+  readonly #gaps = new Map<string, string>();
+  /** B19 C2: the last gap each agent's queue went past, by agent: never offered again. */
+  readonly #passed = new Map<string, string>();
+  /** B19 C2: which run this is, since the store was made: a fresh run's gaps are new ones. */
+  #epoch = 0;
 
   constructor(catalog: EngineCatalog, io: RunIO) {
     this.#catalog = catalog;
@@ -478,6 +587,7 @@ export class RunStore {
 
   restore(text: string): void {
     const saved = readRun(text);
+    this.#newEpoch();
     const causes = this.#pauseCauses(saved.run);
     for (const id of this.#pausedMembers(causes)) this.#hold(id, true);
     this.#cancel();
@@ -493,6 +603,8 @@ export class RunStore {
     const agents: Record<string, AgentRun> = {};
     /** B21 C7: the attempts that wait on their asks, derived from the canvas's mailbox. */
     const waiting: [string, { step: QueueStep; attempt: string }][] = [];
+    /** B19 C1: the attempts whose hand-offs still wait, unsent, in the canvas's mailbox. */
+    const handing: [string, TaskMessage, string][] = [];
     for (const [id, at] of Object.entries(saved.run.agents)) {
       if (
         at.status === 'running' &&
@@ -511,6 +623,17 @@ export class RunStore {
         if (step !== undefined && task !== undefined) {
           agents[id] = at;
           waiting.push([id, { step, attempt: task.attempt }]);
+          continue;
+        }
+        // B19 C1: its hand-off still waits, unsent: it waits for it again, the same attempt.
+        if (
+          task !== undefined &&
+          item !== undefined &&
+          isHandOff(id, item) &&
+          this.#io.tasks?.pending?.(task) === true
+        ) {
+          agents[id] = at;
+          handing.push([id, task, item.target ?? id]);
           continue;
         }
         const condition = conditionKey(id, item, at.rounds);
@@ -571,12 +694,19 @@ export class RunStore {
       this.#busy.set(id, token);
       this.#deferred.set(id, { token, step, attempt });
     }
+    // And each attempt whose hand-off waits, until delivery tells how its turn ended.
+    for (const [id, task, to] of handing) {
+      const token = {};
+      this.#busy.set(id, token);
+      this.#handing.set(id, { token, task, to });
+    }
     this.#applyPauses();
     this.#set({ ...this.#run });
   }
 
   /** Runs every queue from the top. */
   start(): void {
+    this.#newEpoch();
     const causes = this.#pauseCauses();
     this.#cancel();
     this.#forget();
@@ -616,8 +746,13 @@ export class RunStore {
       ([agent, { step, attempt }]) =>
         this.#io.tasks?.recover({ agent, item: step.id, attempt }).waiting === true,
     );
+    // B19 C1: a hand-off that waits, unsent, is held as it is too: its recipient never had it.
+    const pending = [...this.#handing].filter(
+      ([, { task }]) => this.#io.tasks?.pending?.(task) === true,
+    );
     for (const agent of this.#busy.keys()) {
       if (waiting.some(([one]) => one === agent)) continue;
+      if (pending.some(([one]) => one === agent)) continue;
       this.#interrupt(
         'uncertain',
         this.#heldText(
@@ -633,6 +768,10 @@ export class RunStore {
     for (const [agent, deferred] of waiting) {
       this.#busy.set(agent, deferred.token);
       this.#deferred.set(agent, deferred);
+    }
+    for (const [agent, handing] of pending) {
+      this.#busy.set(agent, handing.token);
+      this.#handing.set(agent, handing);
     }
     this.#halt('corrallm');
   }
@@ -743,6 +882,125 @@ export class RunStore {
   }
 
   /**
+   * B19 C2: where agent `agent`'s queue is, for delivery (DeliveryPoint): read from the run as it is
+   * now, never kept. A whole-run Stop, a restart's pause and its own pause are no queue holds: the
+   * run doesn't go for it then (its pause holds a party's message by itself).
+   */
+  point(agent: string): DeliveryPoint {
+    if (!this.#run.running) return OPEN;
+    const at = this.#run.agents[agent];
+    if (at === undefined || at.paused === true || this.#deferred.has(agent)) return OPEN;
+    if (at.status === 'done' || at.status === 'stopped') return OPEN;
+    if (at.problem !== undefined)
+      return {
+        kind: 'held',
+        hold: at.problem.conditionKey === undefined ? 'problem' : 'condition',
+      };
+    if (at.refused !== undefined) return { kind: 'held', hold: 'problem' };
+    if (this.#busy.has(agent)) return PROTECTED;
+    const gap = this.#gaps.get(agent);
+    if (gap !== undefined) return { kind: 'gap', gap };
+    // A usage rule's hold is delivery's to read for a party's message, as it always was.
+    if (at.usage !== undefined) return OPEN;
+    // Its own node by id, never a walk of the canvas's: delivery asks this of each agent it looks at.
+    const queue = this.#byId.get(agent)?.data.queue ?? [];
+    const item = at.current === undefined ? undefined : findItem(queue, at.current)?.item;
+    if (at.status === 'asking')
+      return {
+        kind: 'held',
+        hold: item !== undefined && isApproval(item) ? 'approval' : 'condition',
+      };
+    if (at.status === 'waiting' && item !== undefined) {
+      if (isWait(item)) return OPEN;
+      if (isDelay(item)) return { kind: 'held', hold: 'delay' };
+    }
+    return PROTECTED;
+  }
+
+  /**
+   * B19 C2: delivery takes agent `agent`'s next native turn for a party's message, where its queue
+   * is at a point (open, or a gap) and the run has nothing on its way to it: the token it holds it
+   * under, or none. No task of the run's goes to it until delivery releases it (`release`).
+   */
+  reserve(agent: string): object | undefined {
+    if (this.#reserved.has(agent) || this.sending(agent)) return undefined;
+    const { kind } = this.point(agent);
+    if (kind === 'protected' || kind === 'held') return undefined;
+    const token = {};
+    this.#reserved.set(agent, token);
+    return token;
+  }
+
+  /**
+   * B19 C1: the agent whose turn agent `agent`'s queue waits on, its hand-off to it delivery has
+   * (its item running meanwhile, no delivery point for others'); none if it waits on none.
+   */
+  handingTo(agent: string): string | undefined {
+    return this.#handing.get(agent)?.to;
+  }
+
+  /**
+   * B19 C2: whether delivery holds agent `agent`'s slot under `token` still: the run yields to it,
+   * wherever its queue has moved since (its next task waits for the turn it was taken for).
+   */
+  holds(agent: string, token: object): boolean {
+    return this.#reserved.get(agent) === token;
+  }
+
+  /**
+   * B19 C2: delivery is done with agent `agent`'s slot: the turn it took ended, or never went, and
+   * the queue goes on from where it is, offering the gap it waits at again; or (`passed`) it had
+   * nothing to deliver in the gap it took after all, and the queue goes on past it, never offering
+   * it again. Nothing for a token not the one it holds the slot under.
+   */
+  release(agent: string, token: object, passed = false): void {
+    if (this.#reserved.get(agent) !== token) return;
+    this.#reserved.delete(agent);
+    const gap = this.#gaps.get(agent);
+    if (passed && gap !== undefined) {
+      this.#gaps.delete(agent);
+      this.#passed.set(agent, gap);
+    }
+    // Only a queue that waited for it moves on: a party's turn at an idle agent costs no settle.
+    if (!this.#yielded.delete(agent)) return;
+    if (this.#run.running && !this.#frozen && !this.#busy.has(agent)) this.#settle(false);
+  }
+
+  /** B19 C2: a run of its own: its gaps are new, and none is taken or passed yet. */
+  #newEpoch(): void {
+    this.#epoch += 1;
+    this.#gaps.clear();
+    this.#passed.clear();
+  }
+
+  /**
+   * B19 C2: the gap before `item`, the next of agent `agent`'s queue's to go (`key` names it), where
+   * delivery is offered the agent's next native turn first, once: taken, the queue waits there
+   * until delivery releases it, then offers the same gap again; declined, it goes on past it.
+   */
+  #gapAt(
+    agent: string,
+    item: QueueItem,
+    key: string,
+    outcomes: Record<string, Outcome>,
+  ): AgentRun | undefined {
+    const points = this.#io.points;
+    if (points === undefined || this.#passed.get(agent) === key) return undefined;
+    if (!this.#reserved.has(agent)) {
+      const token = {};
+      if (!points.offer(agent, key, token)) {
+        this.#gaps.delete(agent);
+        this.#passed.set(agent, key);
+        return undefined;
+      }
+      this.#reserved.set(agent, token);
+    }
+    this.#gaps.set(agent, key);
+    this.#yielded.add(agent);
+    return { current: item.id, status: 'waiting', outcomes };
+  }
+
+  /**
    * Every pause that holds `target` now, oldest first: one on it, or on a group it is in (an
    * agent's groups, or the groups a group is nested in).
    */
@@ -771,7 +1029,11 @@ export class RunStore {
       'This task was interrupted by Kill. Inspect its session before resolving or retrying.',
       new Set(affected.keys()),
     );
-    for (const owner of affected.keys()) this.#busy.delete(owner);
+    // B19 C1: a hand-off between them is delivery's to take back, with the kill's note.
+    for (const owner of affected.keys()) {
+      this.#busy.delete(owner);
+      this.#handing.delete(owner);
+    }
     for (const [key, observed] of this.#observed)
       if (affected.has(observed.owner)) this.#observed.delete(key);
     for (const [cancel, holder] of this.#timers) {
@@ -1046,11 +1308,19 @@ export class RunStore {
    */
   update(nodes: readonly CanvasNode[]): void {
     this.#nodes = nodes;
+    this.#byId.clear();
+    for (const node of nodes) if (node.type === 'agent') this.#byId.set(node.id, node);
     // B21 C7: an agent gone while its attempt waited on its asks waits for nothing more (its asks
     // are withdrawn as it goes).
     for (const [agent, { token }] of this.#deferred) {
       if (nodes.some((node) => node.id === agent && node.type === 'agent')) continue;
       this.#deferred.delete(agent);
+      if (this.#busy.get(agent) === token) this.#busy.delete(agent);
+    }
+    // B19 C1: nor does one whose hand-off waits (delivery withdraws what it sent as it goes).
+    for (const [agent, { token }] of this.#handing) {
+      if (nodes.some((node) => node.id === agent && node.type === 'agent')) continue;
+      this.#handing.delete(agent);
       if (this.#busy.get(agent) === token) this.#busy.delete(agent);
     }
     const changed = this.#applyPauses();
@@ -1125,6 +1395,33 @@ export class RunStore {
       return;
     this.#deferred.delete(task.agent);
     this.#taskEnded(task.agent, deferred.step, deferred.token, turn);
+  }
+
+  /**
+   * B19 C1: how a queue hand-off's turn ended (delivery's: its recipient's native end, in the same
+   * tick as its evidence is kept; or that it never went, taken back or cut off): the item's
+   * evidence, judged as a message item's turn is, its whole reply what the queue's Ifs and waits
+   * read. Never a turn of its owner's. Nothing for an attempt not handed off so now (stopped,
+   * killed, retried, another's).
+   */
+  handedOff(task: TaskMessage, turn: TurnEnd): void {
+    const handing = this.#handing.get(task.agent);
+    if (
+      handing?.task.attempt !== task.attempt ||
+      handing.task.item !== task.item ||
+      this.#busy.get(task.agent) !== handing.token
+    )
+      return;
+    this.#handing.delete(task.agent);
+    const node = this.#agents().find((n) => n.id === task.agent);
+    const item = node && findItem(node.data.queue ?? [], task.item)?.item;
+    if (item === undefined || !isMessage(item)) {
+      // Edited away meanwhile: the queue goes on from where it is now.
+      this.#busy.delete(task.agent);
+      this.#settle(true);
+      return;
+    }
+    this.#taskEnded(task.agent, item, handing.token, turn);
   }
 
   /**
@@ -1504,6 +1801,12 @@ export class RunStore {
       // Stopped at an OK: nothing after it runs.
       if (outcomes[item.id] === 'stopped') return { current: item.id, status: 'stopped', outcomes };
       if (outcomes[item.id] !== undefined) continue;
+      // B19 C2: the gap between two items, but before an If (and a wait, itself a point): delivery
+      // may take the agent's next native turn first. None before the first: no item went before it.
+      if (index > 0 && !isIf(item) && !isWait(item)) {
+        const gap = this.#gapAt(node.id, item, JSON.stringify([this.#epoch, item.id]), outcomes);
+        if (gap !== undefined) return gap;
+      }
       // Only the user moves the queue on from an OK (decide).
       if (isApproval(item)) return { current: item.id, status: 'asking', outcomes };
       const at = isRepeat(item)
@@ -1613,6 +1916,17 @@ export class RunStore {
     let state = rounds[repeat.id] ?? { round: 1 };
     rounds[repeat.id] = state;
     for (;;) {
+      // B19 C2: between rounds, once the round's condition is decided, before the next round.
+      const [first] = repeat.repeat;
+      if (
+        first !== undefined &&
+        state.round > 1 &&
+        repeat.repeat.every((one) => outcomes[one.id] === undefined)
+      ) {
+        const key = JSON.stringify([this.#epoch, repeat.id, state.round]);
+        const gap = this.#gapAt(node.id, first, key, outcomes);
+        if (gap !== undefined) return gap;
+      }
       for (const item of repeat.repeat) {
         if (outcomes[item.id] !== undefined) continue;
         const at = this.#reach(node.id, item, state.round, outcomes, agents, now);
@@ -1738,15 +2052,19 @@ export class RunStore {
     outcomes: Record<string, Outcome>,
     now: number,
   ): AgentRun | undefined {
+    // B19 C1: a queue hand-off delivery delivers is recorded pending while its recipient is paused
+    // or can't start (delivery holds it there, visibly); its admission and its recipient's usage
+    // rule are the run's, read below, as for any task's attempt.
+    const handedOff = this.#io.handOffs !== undefined && isHandOff(agent, task);
     const destination = isMessage(task) ? (task.target ?? agent) : agent;
-    if (this.#run.agents[destination]?.paused)
+    if (!handedOff && this.#run.agents[destination]?.paused)
       return { current: task.id, status: 'waiting', outcomes };
     // B11a C7: corrallm's handoff request to the recipient goes first, never triggering admission;
     // the task waits until its turn has ended, and a switch is admitted then.
     if (this.#io.handoff?.(destination) === true)
       return { current: task.id, status: 'waiting', outcomes };
     const to = this.#agents().find((n) => n.id === destination);
-    if (to && this.#catalog.connectionOf(to.data) === undefined)
+    if (!handedOff && to && this.#catalog.connectionOf(to.data) === undefined)
       return {
         current: task.id,
         status: 'asking',
@@ -1759,8 +2077,9 @@ export class RunStore {
             'Choose an agent in its settings.',
         },
       };
-    // B11a C3: admission, before the attempt goes to its recipient. A fallback rule is read
-    // against the recipient's backend; warn, ask and wait keep the owner's, as built (F3).
+    // B11a C3: admission, before the attempt goes to its recipient (a hand-off's too, as run work,
+    // so a switch it starts ends if the run stops). A fallback rule is read against the
+    // recipient's backend.
     const fallback = this.usageRule(destination, now);
     const rule = fallback?.action === 'fallback' ? { rule: fallback.hold } : {};
     const admitted =
@@ -1768,11 +2087,13 @@ export class RunStore {
     if (admitted === 'switching') return { current: task.id, status: 'waiting', outcomes };
     if (admitted === 'ask' && 'rule' in rule)
       return { current: task.id, status: 'asking', outcomes, usage: rule.rule };
-    const owned = this.usageRule(agent, now);
+    // B19 C1: warn, ask and wait are read against the recipient too: a hand-off's owner's rule
+    // never holds work that another agent's backend spends.
+    const owned = this.usageRule(destination, now);
     if (!owned || owned.action === 'fallback') return undefined;
     const { hold, action } = owned;
     if (action === 'warn') {
-      this.warnUsage(agent, hold, now);
+      this.warnUsage(destination, hold, now);
       return undefined;
     }
     if (action === 'waitForReset' && hold.resetsAt !== null) {
@@ -1981,6 +2302,11 @@ export class RunStore {
     condition: string,
     { current, outcomes }: { current: string; outcomes: Record<string, Outcome> },
   ): AgentRun {
+    // B19 C2: delivery holds the agent's next native turn: the question waits for it.
+    if (this.#reserved.has(node.id)) {
+      this.#yielded.add(node.id);
+      return { current, status: 'waiting', outcomes };
+    }
     const token = {};
     this.#busy.set(node.id, token);
     const attempts = this.#attempts(this.#run.agents[node.id], current, undefined, node.id);
@@ -2143,6 +2469,29 @@ export class RunStore {
       }
       task = { ...task, action: resolved.action };
     }
+    // B19 C1: a queue hand-off goes to delivery, pending, unless it's your correction of one.
+    const { handOffs } = this.#io;
+    if (
+      handOffs !== undefined &&
+      correction === undefined &&
+      isMessage(task) &&
+      isHandOff(agent, task) &&
+      task.message.trim() !== '' &&
+      this.#agents().some((n) => n.id === task.target)
+    )
+      return this.#handOff(agent, task, outcomes, previous, handOffs);
+    // B19 C2: delivery holds the agent's next native turn: the task waits for it (yours goes now).
+    const destination = isMessage(task) ? (task.target ?? agent) : agent;
+    if (correction === undefined && this.#reserved.has(destination)) {
+      this.#yielded.add(destination);
+      return {
+        current: task.id,
+        status: 'waiting',
+        outcomes,
+        ...(previous?.attempts ? { attempts: previous.attempts } : {}),
+        ...(previous?.paused ? { paused: true } : {}),
+      };
+    }
     const token = {};
     this.#busy.set(agent, token);
     // Its recipient: a message's target, if another agent's; else the agent itself.
@@ -2228,6 +2577,54 @@ export class RunStore {
       outcomes,
       attempts,
       ...(previous?.paused ? { paused: true } : {}),
+    };
+  }
+
+  /**
+   * B19 C1: hands a queue's Message item for another agent to delivery (RunIO.handOffs): recorded
+   * pending, from the queue's agent, as a fresh attempt linked to its message, in the write that
+   * journals the run. Its agent is busy with it until delivery tells how its recipient's turn
+   * ended (`handedOff`). One longer than a message holds is held for you, never cut; one whose
+   * recipient's line is full waits unsent, no attempt made.
+   */
+  #handOff(
+    agent: string,
+    task: QueueMessage,
+    outcomes: Record<string, Outcome>,
+    previous: AgentRun | undefined,
+    handOffs: RunHandOffs,
+  ): AgentRun {
+    const to = task.target ?? agent;
+    const kept = {
+      ...(previous?.attempts ? { attempts: previous.attempts } : {}),
+      ...(previous?.paused ? { paused: true } : {}),
+    };
+    if (new TextEncoder().encode(task.message).length > MAX_MESSAGE_BYTES)
+      return {
+        current: task.id,
+        status: 'asking',
+        outcomes,
+        ...kept,
+        problem: { kind: 'failed', reason: 'too-long', text: TOO_LONG, agent: to },
+      };
+    const attempts = this.#attempts(previous, task.id, undefined, to);
+    const message = taskMessage(agent, task.id, attempts);
+    const id = handOffs.record({ owner: agent, to, text: task.message, task: message });
+    if (id === undefined) return { current: task.id, status: 'waiting', outcomes, ...kept };
+    const token = {};
+    this.#busy.set(agent, token);
+    this.#handing.set(agent, { token, task: message, to });
+    return {
+      current: task.id,
+      status: 'running',
+      outcomes,
+      ...kept,
+      attempts: {
+        ...attempts,
+        [task.id]: (attempts[task.id] ?? []).map((one) =>
+          one.id === message.attempt ? { ...one, messageId: id } : one,
+        ),
+      },
     };
   }
 
@@ -2732,6 +3129,10 @@ export class RunStore {
     if (takeBack)
       for (const [agent, { step, attempt }] of deferred)
         this.#io.tasks?.interrupt({ agent, item: step.id, attempt });
+    // B19 C1: and each hand-off delivery has, unless the run is only held.
+    const handing = [...this.#handing.values()];
+    this.#handing.clear();
+    if (takeBack) for (const { task } of handing) this.#io.handOffs?.withdraw(task);
     this.#busy.clear();
     this.#alarm?.cancel();
     this.#alarm = undefined;
@@ -2824,6 +3225,14 @@ function lastRan(
     return outcome !== undefined && outcome !== 'skipped' && !isPause(item);
   });
 }
+
+/** B19 C1: whether `item`, in agent `owner`'s queue, is a queue hand-off: a Message for another. */
+function isHandOff(owner: string, item: QueueItem): item is QueueMessage {
+  return isMessage(item) && item.target !== undefined && item.target !== owner;
+}
+
+/** What a hand-off longer than a message holds is held for you with (B19 C1): never cut. */
+const TOO_LONG = `This message is longer than ${String(MAX_MESSAGE_BYTES / 1024)} KiB, the most a message holds, so it wasn’t handed over. Shorten it, then retry.`;
 
 /** Whether a queue item is a step (a tool's, or a slash command's). */
 function isStep(item: QueueItem): item is QueueStep {

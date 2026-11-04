@@ -383,6 +383,31 @@ export function replyOps({
     },
   };
 
+  // B19 C2: queues waiting on each other's hand-offs: Stop, yours alone (it names no agent a token
+  // reaches), which takes their hand-offs back as the run's Stop does.
+  const cycle: ReplyHandler = {
+    prefixes: ['cycle'],
+    current: (canvas, to) => engines.canvas(canvas)?.delivery.cycleItem(to),
+    act: async (canvas, item, _answer, ctx) => {
+      if (ctx.caller.kind !== 'human') {
+        throw new OpFailure('human-only', 'Only the user stops the run from here.');
+      }
+      const open = engines.canvas(canvas);
+      if (open === undefined) throw notFound(item.id);
+      open.engine.run.stop('you');
+      // What it took back is settled in the run's write: both on disk, or neither.
+      try {
+        await open.journal().then(() => open.messages.durable());
+      } catch {
+        throw new OpFailure(
+          'unavailable',
+          'The run is stopped now, but that could not be saved and may not survive a restart.',
+        );
+      }
+      return { outcome: 'answered' };
+    },
+  };
+
   // Without the runtime's handlers, what it asks is answered in corrallm's window.
   const window: ReplyHandler = {
     prefixes: ['hold', 'start', 'unasking', 'limited', 'prompt'],
@@ -406,6 +431,7 @@ export function replyOps({
       ask,
       message,
       loop,
+      cycle,
       ...(workspaceReplies ?? []),
       ...(replies ?? [window]),
     ],

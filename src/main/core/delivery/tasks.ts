@@ -1,4 +1,4 @@
-import { isContinuation, isOpenAsk } from '../../../shared/model/messages';
+import { isContinuation, isOpenAsk, isQueueHandoff } from '../../../shared/model/messages';
 import type { Message } from '../../../shared/model/messages';
 import type { Verdict } from '../../../shared/model/results';
 import type { TaskMessage } from '../../../shared/session';
@@ -11,7 +11,8 @@ import type { MessageStore } from './messages';
  * rows alone: the asks it made (their `ask` column naming it), the continuations their settlements
  * send its agent (`task` naming it), its own sends (the run's), and the result its agent reported
  * with `complete`. The open asks are the durable state: the run's checkpoint keeps no copy, and a
- * restart derives from these rows whether an attempt waits, as the canvas opens.
+ * restart derives from these rows whether an attempt waits, as the canvas opens; so is a queue
+ * hand-off still pending (B19 C1), which a restored run waits for again.
  */
 
 /** The told key a result record is kept with: one per attempt. */
@@ -83,6 +84,16 @@ export function recoveredOf(
 }
 
 /**
+ * B19 C1: whether attempt `task`'s queue hand-off waits, unsent, in the mailbox (pending): one
+ * delivering, delivered or cut off was, or may have been, sent.
+ */
+export function handOffPending(store: MessageStore, task: TaskMessage): boolean {
+  return store
+    .active()
+    .some((message) => isQueueHandoff(message) && of(message, task) && message.state === 'pending');
+}
+
+/**
  * The run's view of a canvas's mailbox (RunIO.tasks): its rows, and `interrupt`, which takes back a
  * stopped attempt's continuation in flight (delivery's; none before delivery starts).
  */
@@ -95,5 +106,6 @@ export function mailboxTasks(
     reported: (task) => reportedOf(store, task)?.outcome,
     recover: (task) => recoveredOf(store, task),
     interrupt,
+    pending: (task) => handOffPending(store, task),
   };
 }

@@ -439,6 +439,26 @@ it('dumps a result’s verdict decoded, as other JSON columns are', async () => 
   });
 });
 
+it('dumps a message’s purpose decoded, as other JSON columns are', async () => {
+  const record = messages.all()[0];
+  if (record === undefined) throw new Error('No message');
+  const purpose = { v: 1, type: 'evidence' };
+  await store.write(() => {
+    store
+      .prepare('UPDATE message SET purpose = ? WHERE id = ?')
+      .run(JSON.stringify(purpose), record.id);
+  });
+  const lines: string[] = [];
+  await dump(store.file, (line) => {
+    lines.push(line);
+    return Promise.resolve();
+  });
+  expect(lines.map((line) => JSON.parse(line) as unknown).at(-1)).toMatchObject({
+    type: 'message',
+    data: { id: record.id, purpose },
+  });
+});
+
 it('dumps a schema-3 database without migrating it: its runs and messages as schema 3 kept them', async () => {
   const older = await mkdtemp(path.join(tmpdir(), 'corrallm-dump-3-'));
   try {
