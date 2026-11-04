@@ -71,7 +71,7 @@ it('opens from the dock and Back returns focus to the dock button', async () => 
   await events.click(dock);
   expect(await screen.findByRole('dialog', { name: 'Settings' })).toBeTruthy();
   expect(screen.getByRole('button', { name: 'Canvas menu' })).toBeTruthy();
-  await events.click(screen.getByRole('button', { name: 'Close Settings' }));
+  await events.click(screen.getByRole('button', { name: 'Back' }));
   await waitFor(() => {
     expect(page()).toBeNull();
   });

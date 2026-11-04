@@ -37,6 +37,8 @@ interface Mirrored {
   state?: MirrorSnapshot['state'];
   rev?: number;
   error?: string;
+  /** The sentence of a subscribe refused as unavailable, until a snapshot, retry or new epoch. */
+  unreadable?: string;
   listeners: Set<() => void>;
   waiters: Set<{ rev: number; resolve: () => void; reject: (error: unknown) => void }>;
   live: boolean;
@@ -98,6 +100,24 @@ export class TopicMirror {
 
   failure(topic: MirrorTopicKey): string | undefined {
     return this.#topics.get(topic)?.error;
+  }
+
+  /**
+   * Why a subscribe was refused as unavailable (the core closing, or the topic unreadable): not a
+   * `failure`, which this stays apart from, but a view with no snapshot can say it.
+   */
+  unreadable(topic: MirrorTopicKey): string | undefined {
+    return this.#topics.get(topic)?.unreadable;
+  }
+
+  /** Asks again for a topic whose subscribe was refused. */
+  retry(topic: MirrorTopicKey): void {
+    const entry = this.#topics.get(topic);
+    if (!entry?.live || entry.rev !== undefined) return;
+    delete entry.unreadable;
+    delete entry.error;
+    this.#tell(entry);
+    this.#read(entry, true);
   }
 
   subscribe(topic: MirrorTopicKey, listener: () => void): () => void {
@@ -191,6 +211,7 @@ export class TopicMirror {
             );
           delete entry.rev;
           delete entry.error;
+          delete entry.unreadable;
           if (restarted) this.#tell(entry);
           this.#read(entry, true);
         }
@@ -247,6 +268,10 @@ export class TopicMirror {
         // fault: nothing is shown, and the entry stays live, for the next epoch to subscribe afresh.
         const closing = error instanceof ApiError && error.code === 'unavailable';
         if (!closing) entry.error = ipcErrorMessage(error);
+        else {
+          entry.unreadable = ipcErrorMessage(error);
+          this.#tell(entry);
+        }
         this.#reject(entry, error);
         if (closing) return;
         this.#tell(entry);
@@ -276,6 +301,7 @@ export class TopicMirror {
       ) as MirrorSnapshot['state'];
     entry.rev = rev;
     delete entry.error;
+    delete entry.unreadable;
     this.#tell(entry);
   }
 

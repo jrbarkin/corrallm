@@ -90,11 +90,12 @@
   padding: 4px 9px;
   cursor: pointer;
 }
-.settings-page button:disabled {
+.settings-page button:disabled,
+.settings-page [aria-disabled='true'] {
   opacity: 0.5;
   cursor: default;
 }
-.settings-page button:hover:not(:disabled) {
+.settings-page button:hover:not(:disabled, [aria-disabled='true']) {
   background: var(--float-hover);
 }
 .settings-page button:focus-visible,

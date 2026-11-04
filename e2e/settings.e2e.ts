@@ -62,7 +62,7 @@ async function openFromDock(page: Page) {
   return panel;
 }
 async function closeSettings(page: Page) {
-  await settingsOf(page).getByRole('button', { name: 'Close Settings', exact: true }).click();
+  await settingsOf(page).getByRole('button', { name: 'Back', exact: true }).click();
   await expect(settingsOf(page)).toHaveCount(0);
 }
 
@@ -207,7 +207,7 @@ test('taking back a declared consent in Settings makes the live session ask agai
       .getByRole('button', { name: "Yes, and don't ask again on this computer", exact: true })
       .click();
 
-    // Taken back while that turn may still be running: it finishes, and is not interrupted.
+    // Taken back after that turn finished: its answer stays, and nothing is interrupted.
     const settings = await openFromDock(page);
     const row = settings.getByRole('listitem').filter({ hasText: consentTitle('codex') });
     await expect(row.getByText('Kept for good')).toBeVisible();
@@ -349,6 +349,7 @@ test('turning notifications off in Settings persists across a restart', async ()
     running = await launchApp(options);
     closed = false;
     page = await running.app.firstWindow();
+    const restarted = watch(page);
     await page.waitForLoadState('load');
     await dismissStart(page);
     settings = await openFromDock(page);
@@ -356,12 +357,72 @@ test('turning notifications off in Settings persists across a restart', async ()
       settings.getByRole('switch', { name: 'OS notifications', exact: true }),
     ).not.toBeChecked();
     expect(problems).toEqual([]);
+    expect(restarted).toEqual([]);
   } finally {
     if (!closed) await running.close();
   }
 });
 
-test.fixme('the notification host sees notifications off after the switch', () => {
-  // e2e has no notification host fake: the hidden window suppresses before the Electron backend
-  // is asked, and adding a production switch for one is not allowed.
+/** Raises a Need for you (a consent card) from a connected agent, with the window unfocused. */
+async function raiseNeed(app: ElectronApplication, page: Page) {
+  await dismissStart(page);
+  await pickFolder(app, page);
+  await page.locator('.react-flow__pane').dblclick({ position: { x: 400, y: 300 } });
+  await chooseAddedAgent(page, 'codex', 'codex.app-server');
+  await page.locator('.react-flow__node-agent').dblclick();
+  const view = page.getByRole('dialog', { name: 'Agent 1', exact: true });
+  const composer = view.getByRole('textbox', { name: 'Message Agent 1', exact: true });
+  await composer.fill('/consent ping');
+  await composer.press('Enter');
+  await expect(
+    view
+      .getByRole('log', { name: 'Transcript', exact: true })
+      .getByRole('group', { name: 'Use your made-up plan here?', exact: true }),
+  ).toHaveCount(1);
+}
+const lastNotification = (page: Page) =>
+  settingsOf(page).getByText(
+    /^(Last notification|No notification attempted|OS notifications aren|The last notification)/,
+  );
+
+test('with notifications on, a Need for you reaches the host, which suppresses it in the hidden window', async () => {
+  const { app, close } = await launchApp({ env: { CORRALLM_FAKE_SESSIONS: '1' } });
+  try {
+    const page = await app.firstWindow();
+    const problems = watch(page);
+    await page.waitForLoadState('load');
+    await raiseNeed(app, page);
+    await openFromDock(page);
+    await expect(lastNotification(page)).toHaveText('Last notification was suppressed', {
+      timeout: 15_000,
+    });
+    expect(problems).toEqual([]);
+  } finally {
+    await close();
+  }
+});
+
+test('with notifications off, the same Need never reaches the host', async () => {
+  const { app, close } = await launchApp({ env: { CORRALLM_FAKE_SESSIONS: '1' } });
+  try {
+    const page = await app.firstWindow();
+    const problems = watch(page);
+    await page.waitForLoadState('load');
+    await dismissStart(page);
+    const settings = await openFromDock(page);
+    const toggle = settings.getByRole('switch', { name: 'OS notifications', exact: true });
+    await toggle.click();
+    await expect(toggle).not.toBeChecked();
+    await closeSettings(page);
+    await raiseNeed(app, page);
+    // Past the coalescing window (2s) and the Need poll, the host was still never asked.
+    await page.waitForTimeout(4000);
+    await openFromDock(page);
+    await expect(lastNotification(page)).toHaveText(
+      'No notification attempted since corrallm started',
+    );
+    expect(problems).toEqual([]);
+  } finally {
+    await close();
+  }
 });

@@ -1,10 +1,12 @@
-import { act, cleanup, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 import type { TopicStates } from '../../shared/api/topics';
 import { MADE_UP, TWO_MADE_UP } from '../../shared/test-made-up';
 import { expectOneOp, fakeCore } from '../test-api';
 import { useCatalog } from '../test-catalog';
 import { events, renderReady } from '../test-render';
+import { ApiError } from '../api/bridge';
+import { TopicMirror } from '../api/topics';
 import { SettingsPage } from './SettingsPage';
 
 afterEach(cleanup);
@@ -22,6 +24,9 @@ function setup(change?: (state: Settings) => Settings) {
     renderReady(<SettingsPage client={core.api} mirror={core.topics} onClose={onClose} />);
   return { core, onClose, render };
 }
+/** Whether a control refuses a gesture: really disabled, or aria-disabled (which keeps focus). */
+const off = (element: HTMLElement) =>
+  (element as HTMLButtonElement).disabled || element.getAttribute('aria-disabled') === 'true';
 const feed = (core: Core, state: Settings) => {
   const rev = (core.state('settings')?.rev ?? 0) + 1;
   core.change({ topic: 'settings', rev, replace: state });
@@ -54,7 +59,7 @@ it('shows the page with its sections in order and sends nothing for opening, rea
     ).toBeTruthy();
     await events.keyDown(page, { key: 'Escape' });
     expect(onClose).toHaveBeenCalledTimes(1);
-    await events.click(screen.getByRole('button', { name: 'Close Settings' }));
+    await events.click(screen.getByRole('button', { name: 'Back' }));
     expect(onClose).toHaveBeenCalledTimes(2);
     expect(core.operations).toEqual([]);
   } finally {
@@ -130,14 +135,14 @@ it('toggles notifications with one operation, showing the topic value only once 
       expectOneOp(core, 'settings.set', { notifications: { enabled: false } });
     });
     expect(toggle.checked).toBe(true);
-    expect(toggle.disabled).toBe(true);
+    expect(toggle.getAttribute('aria-disabled')).toBe('true');
     // Only the pending row is disabled.
-    expect(screen.getByRole('button', { name: 'Choose…' })).toHaveProperty('disabled', false);
+    expect(off(screen.getByRole('button', { name: 'Choose…' }))).toBe(false);
     write.resolve(undefined);
     await waitFor(() => {
       expect(toggle.checked).toBe(false);
     });
-    expect(toggle.disabled).toBe(false);
+    expect(toggle.getAttribute('aria-disabled')).toBeNull();
     expect(core.operations).toHaveLength(1);
   } finally {
     write.resolve(undefined);
@@ -156,8 +161,8 @@ it('keeps the notification value and the core sentence at its row after a refusa
     const alert = await screen.findByRole('alert');
     expect(alert.textContent).toBe(sentence);
     expect(toggle.checked).toBe(true);
-    expect(toggle.disabled).toBe(false);
-    expect(alert.closest('section')?.getAttribute('aria-label')).toBe('Notifications');
+    expect(toggle.getAttribute('aria-disabled')).toBeNull();
+    expect(alert.closest('section')?.querySelector('h3')?.textContent).toBe('Notifications');
     core.operations.length = 0;
     core.reply('settings.set', () => {
       feed(core, { ...current(core), notifications: { enabled: false, lastDelivery: null } });
@@ -185,7 +190,7 @@ it('leaves the switch operable when notifications are unsupported', async () => 
   try {
     await render();
     const toggle = screen.getByRole<HTMLInputElement>('switch', { name: 'OS notifications' });
-    expect(toggle.disabled).toBe(false);
+    expect(toggle.getAttribute('aria-disabled')).toBeNull();
     await events.click(toggle);
     expectOneOp(core, 'settings.set', { notifications: { enabled: false } });
   } finally {
@@ -231,20 +236,14 @@ it('keeps the last complete page, inert, until the new epoch delivers its snapsh
       core.epoch('next-core');
     });
     // The new epoch's snapshot has not arrived yet: the last complete page stays, inert.
-    expect(screen.getByRole('switch', { name: 'OS notifications' })).toHaveProperty(
-      'disabled',
-      true,
-    );
+    expect(off(screen.getByRole('switch', { name: 'OS notifications' }))).toBe(true);
     expect(screen.getByText('https://example.org')).toBeTruthy();
     for (const button of screen.getAllByRole('button')) {
-      if (button.getAttribute('aria-label') === 'Close Settings') continue;
-      expect(button).toHaveProperty('disabled', true);
+      if (button.textContent === 'Back') continue;
+      expect(off(button)).toBe(true);
     }
     await act(() => Promise.resolve());
-    expect(screen.getByRole('switch', { name: 'OS notifications' })).toHaveProperty(
-      'disabled',
-      false,
-    );
+    expect(off(screen.getByRole('switch', { name: 'OS notifications' }))).toBe(false);
     expect(core.operations).toEqual([]);
   } finally {
     core.dispose();
@@ -262,7 +261,7 @@ it('leaves the default and notifications usable when the site list cannot be rea
     expect(screen.getByText(sentence)).toBeTruthy();
     expect(screen.queryByText('No sites remembered.')).toBeNull();
     expect(screen.queryByRole('button', { name: /Ask next time/ })).toBeNull();
-    expect(screen.getByRole('button', { name: 'Choose…' })).toHaveProperty('disabled', false);
+    expect(off(screen.getByRole('button', { name: 'Choose…' }))).toBe(false);
     await events.click(screen.getByRole('switch', { name: 'OS notifications' }));
     expectOneOp(core, 'settings.set', { notifications: { enabled: false } });
   } finally {
@@ -321,24 +320,19 @@ it('says no sites are remembered and disables only the pending site row', async 
   try {
     await two.render();
     await events.click(screen.getByRole('button', { name: 'Ask next time: https://a.example' }));
-    expect(screen.getByRole('button', { name: 'Ask next time: https://a.example' })).toHaveProperty(
-      'disabled',
+    expect(off(screen.getByRole('button', { name: 'Ask next time: https://a.example' }))).toBe(
       true,
     );
-    expect(screen.getByRole('button', { name: 'Ask next time: https://b.example' })).toHaveProperty(
-      'disabled',
+    expect(off(screen.getByRole('button', { name: 'Ask next time: https://b.example' }))).toBe(
       false,
     );
-    expect(screen.getByRole('switch', { name: 'OS notifications' })).toHaveProperty(
-      'disabled',
-      false,
-    );
+    expect(off(screen.getByRole('switch', { name: 'OS notifications' }))).toBe(false);
     write.resolve(undefined);
     // A call that changed nothing is fine: the row simply stays, enabled again.
     await waitFor(() => {
-      expect(
-        screen.getByRole('button', { name: 'Ask next time: https://a.example' }),
-      ).toHaveProperty('disabled', false);
+      expect(off(screen.getByRole('button', { name: 'Ask next time: https://a.example' }))).toBe(
+        false,
+      );
     });
     expect(screen.queryByRole('alert')).toBeNull();
   } finally {
@@ -361,8 +355,7 @@ it('keeps a site and shows the core sentence at its row after a refusal', async 
     expect(alert.textContent).toBe(sentence);
     expect(alert.closest('li')?.textContent).toContain('https://a.example');
     expect(screen.getByText('https://b.example')).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Ask next time: https://a.example' })).toHaveProperty(
-      'disabled',
+    expect(off(screen.getByRole('button', { name: 'Ask next time: https://a.example' }))).toBe(
       false,
     );
   } finally {
@@ -456,7 +449,7 @@ it('keeps a consent and shows the core sentence at its row after a refusal, then
     const alert = await screen.findByRole('alert');
     expect(alert.textContent).toBe(sentence);
     expect(alert.closest('li')?.textContent).toContain('Kept for good');
-    expect(screen.getByRole('button', { name: label })).toHaveProperty('disabled', false);
+    expect(off(screen.getByRole('button', { name: label }))).toBe(false);
     core.operations.length = 0;
     await events.click(screen.getByRole('button', { name: label }));
     expectOneOp(core, 'settings.set', {
@@ -475,6 +468,150 @@ it('tells when the catalog declares no consents', async () => {
   try {
     await render();
     expect(screen.getByText('No consents to review.')).toBeTruthy();
+  } finally {
+    core.dispose();
+  }
+});
+
+it('closes on Escape wherever focus is, since a row gesture can drop it to the body', async () => {
+  const { core, onClose, render } = setup((state) => ({
+    ...state,
+    links: { state: 'ready', sites: ['https://a.example', 'https://b.example'], builtIn: [] },
+  }));
+  try {
+    await render();
+    const removal = screen.getByRole('button', { name: 'Ask next time: https://a.example' });
+    removal.focus();
+    await events.click(removal);
+    await waitFor(() => {
+      expect(screen.queryByText('https://a.example')).toBeNull();
+    });
+    // The removed row's button is gone, but focus stays inside the panel.
+    expect(screen.getByRole('dialog', { name: 'Settings' }).contains(document.activeElement)).toBe(
+      true,
+    );
+    await events.keyDown(document.body, { key: 'Escape' });
+    expect(onClose).toHaveBeenCalledTimes(1);
+    await events.keyDown(document.activeElement ?? document.body, { key: 'Escape' });
+    expect(onClose).toHaveBeenCalledTimes(2);
+  } finally {
+    core.dispose();
+  }
+});
+
+it('keeps focus on a pending row (aria-disabled, not disabled) and ignores a second click', async () => {
+  const { core, render } = setup();
+  const write = Promise.withResolvers<undefined>();
+  core.reply('settings.set', async () => {
+    await write.promise;
+    return { ok: true, value: { notifications: { enabled: true } } };
+  });
+  try {
+    await render();
+    const toggle = screen.getByRole<HTMLInputElement>('switch', { name: 'OS notifications' });
+    toggle.focus();
+    await events.click(toggle);
+    expect(toggle.hasAttribute('disabled')).toBe(false);
+    expect(document.activeElement).toBe(toggle);
+    await events.click(toggle);
+    expect(core.operations).toHaveLength(1);
+    write.resolve(undefined);
+  } finally {
+    write.resolve(undefined);
+    core.dispose();
+  }
+});
+
+it('does not close when a click lands on the backdrop and keeps focus in the panel', async () => {
+  const { core, onClose, render } = setup();
+  try {
+    await render();
+    const panel = screen.getByRole('dialog', { name: 'Settings' });
+    const backdrop = panel.parentElement;
+    if (!backdrop) throw new Error('No backdrop');
+    const toggle = screen.getByRole('switch', { name: 'OS notifications' });
+    toggle.focus();
+    // The default action of a mouse press on the backdrop (moving focus away) is prevented.
+    const proceeded = fireEvent.mouseDown(backdrop);
+    expect(proceeded).toBe(false);
+    expect(onClose).not.toHaveBeenCalled();
+  } finally {
+    core.dispose();
+  }
+});
+
+/** A mirror whose subscribe answers as the test says. */
+function mirrorOf(subscribe: () => Promise<unknown>) {
+  const stops = () => () => undefined;
+  return new TopicMirror({
+    topicsSubscribe: subscribe,
+    topicsUnsubscribe: () => Promise.resolve({}),
+    topicsOnChange: stops,
+    topicsOnEpoch: (listener: (epoch: string) => void) => {
+      listener('e');
+      return () => undefined;
+    },
+  } as never);
+}
+
+it('shows neutral loading rows, never guessed values, until the first snapshot', async () => {
+  const mirror = mirrorOf(() => new Promise(() => undefined));
+  try {
+    await renderReady(
+      <SettingsPage client={{ settingsSet: vi.fn() }} mirror={mirror} onClose={vi.fn()} />,
+    );
+    expect(screen.queryByRole('switch')).toBeNull();
+    expect(screen.queryByText('No notification attempted since corrallm started')).toBeNull();
+    expect(screen.queryByText('Not kept for good')).toBeNull();
+    expect(screen.getAllByText('Loading…').length).toBeGreaterThan(0);
+    expect(screen.queryByRole('alert')).toBeNull();
+  } finally {
+    mirror.dispose();
+  }
+});
+
+it('shows a retryable read error when the settings cannot be read, then the page once they can', async () => {
+  const sentence = 'corrallm couldn’t read your settings.';
+  const state = {
+    defaultAdapter: null,
+    consents: {},
+    api: { state: 'stopped', port: null },
+    notifications: { enabled: false, lastDelivery: null },
+    links: { state: 'ready', sites: [], builtIn: [] },
+  };
+  const subscribe = vi
+    .fn()
+    .mockRejectedValueOnce(new ApiError({ code: 'unavailable', sentence }))
+    .mockResolvedValue({ epoch: 'e', rev: 0, state });
+  const mirror = mirrorOf(subscribe);
+  try {
+    await renderReady(
+      <SettingsPage client={{ settingsSet: vi.fn() }} mirror={mirror} onClose={vi.fn()} />,
+    );
+    const alert = await screen.findByRole('alert');
+    expect(alert.textContent).toContain(sentence);
+    expect(screen.queryByRole('switch')).toBeNull();
+    await events.click(screen.getByRole('button', { name: 'Retry' }));
+    const toggle = await screen.findByRole<HTMLInputElement>('switch', {
+      name: 'OS notifications',
+    });
+    expect(toggle.checked).toBe(false);
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(subscribe).toHaveBeenCalledTimes(2);
+  } finally {
+    mirror.dispose();
+  }
+});
+
+it('notes that a remembered site that is also built in still opens without asking', async () => {
+  const { core, render } = setup((state) => ({
+    ...state,
+    links: { state: 'ready', sites: ['https://github.com'], builtIn: ['https://github.com'] },
+  }));
+  try {
+    await render();
+    const item = screen.getByRole('list', { name: 'Remembered sites' }).querySelector('li');
+    expect(item?.textContent).toContain('still opens without asking');
   } finally {
     core.dispose();
   }

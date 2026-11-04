@@ -223,6 +223,33 @@ describe('the topic mirror', () => {
     log.mockRestore();
   });
 
+  it('exposes an unavailable subscribe as unreadable without calling it a failure, until a retry or snapshot', async () => {
+    const remote = source();
+    const log = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const closing = new ApiError({ code: 'unavailable', sentence: 'corrallm couldn’t read it.' });
+    remote.api.topicsSubscribe = vi
+      .fn()
+      .mockRejectedValueOnce(closing)
+      .mockResolvedValue({ epoch: 'one', rev: 0, revs: {}, state: empty });
+    const mirror = new TopicMirror(remote.api);
+    const told = vi.fn();
+    mirror.subscribe('usage', told);
+    await vi.waitFor(() => {
+      expect(mirror.unreadable('usage')).toBe('corrallm couldn’t read it.');
+    });
+    expect(mirror.failure('usage')).toBeUndefined();
+    expect(told).toHaveBeenCalled();
+    mirror.retry('usage');
+    expect(mirror.unreadable('usage')).toBeUndefined();
+    await vi.waitFor(() => {
+      expect(mirror.snapshot('usage')).toBe(empty);
+    });
+    expect(mirror.unreadable('usage')).toBeUndefined();
+    expect(remote.api.topicsSubscribe).toHaveBeenCalledTimes(2);
+    mirror.dispose();
+    log.mockRestore();
+  });
+
   it('still logs a subscribe refused for any other reason', async () => {
     const remote = source();
     const log = vi.spyOn(console, 'error').mockImplementation(() => undefined);

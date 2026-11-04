@@ -77,7 +77,36 @@ export function SettingsPage({
   );
   const current = settings !== undefined && revision !== undefined;
   const { pending, problems, send } = useRows(client);
+  const readError = useSyncExternalStore(
+    useCallback((listener: () => void) => mirror.subscribe('settings', listener), [mirror]),
+    () => mirror.failure('settings') ?? mirror.unreadable('settings'),
+  );
   const panel = useRef<HTMLDivElement>(null);
+  const closing = useRef(onClose);
+  useEffect(() => {
+    closing.current = onClose;
+  });
+  // Escape closes the page wherever focus is: a row gesture can leave it on the body, and what
+  // lies under the page (an agent window, All queues) must not hear that Escape. A picker open in
+  // the page takes its own Escape first.
+  useEffect(() => {
+    const escape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape' || event.isComposing) return;
+      if (event.target instanceof Element && event.target.closest('.search-picker')) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      closing.current();
+    };
+    document.addEventListener('keydown', escape, true);
+    return () => {
+      document.removeEventListener('keydown', escape, true);
+    };
+  }, []);
+  // A removed row takes the focused element with it: keep the keyboard in the page.
+  useEffect(() => {
+    const active = document.activeElement;
+    if (active === null || active === document.body) panel.current?.focus();
+  });
   useEffect(() => {
     const element = panel.current;
     element?.focus();
@@ -104,7 +133,10 @@ export function SettingsPage({
   const problem = (row: string): ReactNode =>
     problems[row] !== undefined && <p role="alert">{problems[row]}</p>;
 
+  /** A row refuses a gesture while pending or stale, yet stays focusable (aria-disabled). */
+  const off = (row: string) => !current || pending.has(row);
   const notifications = settings?.notifications;
+  // An absent field is already on (the core's own default for the preference).
   const enabled = notifications?.enabled ?? true;
   const delivery = notifications?.lastDelivery ? DELIVERY[notifications.lastDelivery] : NO_DELIVERY;
 
@@ -121,11 +153,9 @@ export function SettingsPage({
   return (
     <div
       className="graph-detail-backdrop graph-start-backdrop"
-      onKeyDown={(event) => {
-        if (event.key === 'Escape') {
-          event.stopPropagation();
-          onClose();
-        }
+      onMouseDown={(event) => {
+        // A press beside the panel must not take focus out of it.
+        if (event.target === event.currentTarget) event.preventDefault();
       }}
     >
       <div
@@ -141,39 +171,63 @@ export function SettingsPage({
             <h2>Settings</h2>
             <p>For corrallm on this machine.</p>
           </div>
-          <button type="button" aria-label="Close Settings" onClick={onClose}>
+          <button type="button" onClick={onClose}>
             Back
           </button>
         </header>
         <div className="settings-page-body">
+          {readError !== undefined && (
+            <div className="settings-read-error">
+              <p role="alert">{readError}</p>
+              <button
+                type="button"
+                onClick={() => {
+                  mirror.retry('settings');
+                }}
+              >
+                Retry
+              </button>
+            </div>
+          )}
           <section aria-labelledby="settings-default">
             <h3 id="settings-default">Default agent</h3>
             <p>For new agents; existing agents keep their choices.</p>
             <DefaultAgentControl client={client} mirror={mirror} disabled={!current} />
           </section>
 
-          <section aria-label="Notifications" aria-labelledby="settings-notifications">
+          <section aria-labelledby="settings-notifications">
             <h3 id="settings-notifications">Notifications</h3>
-            <label className="settings-switch">
-              <input
-                type="checkbox"
-                role="switch"
-                checked={enabled}
-                disabled={!current || pending.has('notifications')}
-                onChange={() => {
-                  void send('notifications', { notifications: { enabled: !enabled } });
-                }}
-              />
-              OS notifications
-            </label>
-            <p>When corrallm is in the background, for work that needs you and runs that end.</p>
-            <p role="status">{delivery}</p>
+            {settings === undefined ? (
+              <p role="status">Loading…</p>
+            ) : (
+              <>
+                <label className="settings-switch">
+                  <input
+                    type="checkbox"
+                    role="switch"
+                    checked={enabled}
+                    aria-disabled={off('notifications') || undefined}
+                    onChange={() => {
+                      if (off('notifications')) return;
+                      void send('notifications', { notifications: { enabled: !enabled } });
+                    }}
+                  />
+                  OS notifications
+                </label>
+                <p>
+                  When corrallm is in the background, for work that needs you and runs that end.
+                </p>
+                <p role="status">{delivery}</p>
+              </>
+            )}
             {problem('notifications')}
           </section>
 
           <section aria-labelledby="settings-consents">
             <h3 id="settings-consents">Consents</h3>
-            {declared.length === 0 && undeclared.length === 0 ? (
+            {settings === undefined ? (
+              <p role="status">Loading…</p>
+            ) : declared.length === 0 && undeclared.length === 0 ? (
               <p>No consents to review.</p>
             ) : (
               <>
@@ -184,7 +238,7 @@ export function SettingsPage({
                 <ul aria-label="Consents">
                   {declared.map(({ adapter, consent }) => {
                     const row = adapterKey(adapter.id, consent.key);
-                    const kept = settings?.consents[adapter.id]?.[consent.key] === true;
+                    const kept = settings.consents[adapter.id]?.[consent.key] === true;
                     const where = consent.connections
                       .map((id) => adapter.connections.find((one) => one.id === id)?.label ?? id)
                       .join(', ');
@@ -199,8 +253,9 @@ export function SettingsPage({
                         <button
                           type="button"
                           aria-label={`Ask again: ${consent.title} (${adapter.name})`}
-                          disabled={!current || pending.has(row)}
+                          aria-disabled={off(row) || undefined}
                           onClick={() => {
+                            if (off(row)) return;
                             take(row, { kind: 'adapter', adapter: adapter.id, key: consent.key });
                           }}
                         >
@@ -219,8 +274,9 @@ export function SettingsPage({
                         <button
                           type="button"
                           aria-label={`Remove saved consent ${adapter} · ${key}`}
-                          disabled={!current || pending.has(row)}
+                          aria-disabled={off(row) || undefined}
                           onClick={() => {
+                            if (off(row)) return;
                             take(row, { kind: 'adapter', adapter, key });
                           }}
                         >
@@ -250,11 +306,15 @@ export function SettingsPage({
                       return (
                         <li key={origin}>
                           <span className="settings-origin">{origin}</span>
+                          {links.builtIn.includes(origin) && (
+                            <span>Also a built-in site, which still opens without asking.</span>
+                          )}
                           <button
                             type="button"
                             aria-label={`Ask next time: ${origin}`}
-                            disabled={!current || pending.has(row)}
+                            aria-disabled={off(row) || undefined}
                             onClick={() => {
+                              if (off(row)) return;
                               take(row, { kind: 'site', origin });
                             }}
                           >
