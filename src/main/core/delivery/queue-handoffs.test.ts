@@ -119,3 +119,25 @@ it('never sends a hand-off its recipient’s connection would run as a shell com
     await stop();
   }
 });
+
+it('offers no gap a walk of every message delivery acts on: only what waits for its agent is read', async () => {
+  const nodes = [agentNode('lead', 'claude-code.sdk'), agentNode('worker', 'claude-code.sdk')];
+  const { messages, delivery, stop } = await worldOf(nodes);
+  try {
+    // A backlog for another agent, which a gap of Worker's never reads.
+    for (let i = 0; i < 50; i++)
+      messages.add({
+        from: 'outside:orchestrator',
+        to: 'agent:lead',
+        kind: 'text',
+        origin: 'party',
+        body: `Work ${String(i)}`,
+        state: 'pending',
+      });
+    const walks = vi.spyOn(messages, 'active');
+    expect(delivery.offer('worker', 'gap', {})).toBe(false);
+    expect(walks).not.toHaveBeenCalled();
+  } finally {
+    await stop();
+  }
+});

@@ -713,7 +713,8 @@ export class Delivery {
     if (node?.type !== 'agent') return false;
     const cutoff = this.#cutoff(agent, gap);
     const { store } = this.#deps;
-    const prefix = (this.#waiting().get(agent) ?? []).filter(
+    // What waits for this agent alone, read from its line, never every message delivery acts on.
+    const prefix = (this.#waiting(store.activeTo(agentParty(agent))).get(agent) ?? []).filter(
       (message) => this.#theirs(message) && (store.seqOf(message.id) ?? Infinity) <= cutoff,
     );
     if (prefix.length === 0) return false;
@@ -829,7 +830,9 @@ export class Delivery {
 
   /** How many messages `from` has waiting for agent `agent` (asks count: MAX_WAITING). */
   waitingFrom(agent: string, from: PartyId): number {
-    return (this.#waiting().get(agent) ?? []).filter((message) => message.from === from).length;
+    return (this.#waiting(this.#deps.store.activeTo(agentParty(agent))).get(agent) ?? []).filter(
+      (message) => message.from === from,
+    ).length;
   }
 
   /** Looks again, soon, at what waits: once, however often asked before then. */
@@ -861,11 +864,7 @@ export class Delivery {
     { images, told }: { images?: UserMessage['images']; told?: string } = {},
   ): Promise<Message> {
     const { store } = this.#deps;
-    if (
-      from !== 'you' &&
-      (this.#waiting().get(to) ?? []).filter((message) => message.from === from).length >=
-        MAX_WAITING
-    ) {
+    if (from !== 'you' && this.waitingFrom(to, from) >= MAX_WAITING) {
       throw new DeliveryError(
         'refused',
         `${this.#name(to)} already has ${String(MAX_WAITING)} of your messages waiting; send another once one of them goes.`,

@@ -213,6 +213,12 @@ export class MessageStore {
   #active = new Map<string, Kept>();
   /** The latest place of a message `#active` has taken: one placed later goes last in it. */
   #activeLast = 0;
+  /**
+   * B19 C2: the messages delivery still acts on, by their recipient, each in the store's order, with
+   * the latest place each line has taken: what reads one agent's line (a gap offered it) reads it
+   * alone, never every message delivery acts on.
+   */
+  readonly #activeTo = new Map<PartyId, { line: Map<string, Kept>; last: number }>();
   /** Only records eligible for pruning: globally, and by both parties, in original order. */
   readonly #settled = new Sequence();
   readonly #parties = new Map<PartyId, Sequence>();
@@ -285,6 +291,15 @@ export class MessageStore {
   /** Every message kept, in the store's order. */
   all(): Message[] {
     return Array.from(this.#kept.values(), ({ message }) => message);
+  }
+
+  /**
+   * B19 C2: the messages kept that delivery still acts on (isActive) to party `to`, in the store's
+   * order: what waits for one agent, read without a walk of the rest.
+   */
+  activeTo(to: PartyId): Message[] {
+    const kept = this.#activeTo.get(to);
+    return kept === undefined ? [] : Array.from(kept.line.values(), ({ message }) => message);
   }
 
   /**
@@ -661,6 +676,7 @@ export class MessageStore {
         else this.#unsettle(row);
       }
     }
+    this.#lineOf(before, kept);
     if (!isActive(kept.message)) {
       this.#active.delete(id);
     } else if (this.#active.has(id) || kept.seq > this.#activeLast) {
@@ -684,6 +700,37 @@ export class MessageStore {
     }
     this.#kept.delete(id);
     this.#active.delete(id);
+    if (kept !== undefined) this.#lineOf(kept, undefined);
+  }
+
+  /**
+   * B19 C2: keeps a message's recipient's line (`#activeTo`) as it is now (`kept`, none: gone), as
+   * `#active` is kept: in its place, or last, or (active again behind one taken since) in order.
+   */
+  #lineOf(before: Kept | undefined, kept: Kept | undefined): void {
+    const id = (kept ?? before)?.message.id;
+    if (id === undefined) return;
+    if (before !== undefined && before.message.to !== kept?.message.to) {
+      const old = this.#activeTo.get(before.message.to);
+      old?.line.delete(id);
+      if (old?.line.size === 0) this.#activeTo.delete(before.message.to);
+    }
+    if (kept === undefined) return;
+    const { to } = kept.message;
+    let line = this.#activeTo.get(to);
+    if (!isActive(kept.message)) {
+      line?.line.delete(id);
+      if (line?.line.size === 0) this.#activeTo.delete(to);
+      return;
+    }
+    if (line === undefined) this.#activeTo.set(to, (line = { line: new Map(), last: 0 }));
+    if (line.line.has(id) || kept.seq > line.last) {
+      line.line.set(id, kept);
+      line.last = Math.max(line.last, kept.seq);
+    } else {
+      line.line.set(id, kept);
+      line.line = new Map([...line.line].sort(([, a], [, b]) => a.seq - b.seq));
+    }
   }
 
   #settle({ seq, message: { id, from, to } }: Kept): void {

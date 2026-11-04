@@ -1,10 +1,11 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { ConnectionId } from '../../../../shared/adapter';
 import type { AgentNode } from '../../../../shared/model/canvas';
 import type { QueueItem } from '../../../../shared/model/queue';
 import type { RunPoints } from './runner';
-import { expectRestorable } from './test-restore';
+import { expectRestorable, liveRun } from './test-restore';
+import { TEST_ENGINE } from '../test-engine';
 import { manual, setup } from './test-run';
 
 /*
@@ -214,5 +215,45 @@ describe('delivery points (B19 C2)', () => {
     expect(run.sent.map(({ text }) => text)).toEqual(['Two']);
     // Busy with the run's own task, its slot is the run's.
     expect(run.store.reserve('a')).toBeUndefined();
+  });
+
+  it('costs a released slot nothing where its queue never waited for it, and reads no node list for a point', () => {
+    let reads = 0;
+    const many = Array.from({ length: 50 }, (_, i) => agent(`x${String(i)}`));
+    const all = [agent('a', [one]), agent('b', [{ id: 'd', delay: { seconds: 300 } }]), ...many];
+    const nodes = new Proxy(all, {
+      get: (target, key, receiver): unknown => {
+        if (typeof key === 'string' && /^\d+$/u.test(key)) reads += 1;
+        return Reflect.get(target, key, receiver) as unknown;
+      },
+    });
+    const now = vi.fn(() => 0);
+    const sent: (() => void)[] = [];
+    const store = liveRun(TEST_ENGINE, {
+      send: (_to, _text, done) => {
+        sent.push(() => {
+          done({ failed: false, reply: '' });
+        });
+        return () => undefined;
+      },
+      tell: () => undefined,
+      later: () => () => undefined,
+      now,
+      points: { offer: () => false },
+    });
+    store.update(nodes);
+    store.start();
+    sent.shift()?.();
+    expect(store.snapshot().agents.a?.status).toBe('done');
+    // Its queue done, no task of the run's waits for the slot delivery takes.
+    const token = store.reserve('a');
+    now.mockClear();
+    store.release('a', token ?? {});
+    expect(now).not.toHaveBeenCalled();
+    // Where an agent's queue is, delivery reads without a walk of the canvas's nodes.
+    reads = 0;
+    expect(store.point('b')).toMatchObject({ kind: 'held', hold: 'delay' });
+    store.point('x7');
+    expect(reads).toBe(0);
   });
 });

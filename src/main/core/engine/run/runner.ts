@@ -540,6 +540,13 @@ export class RunStore {
    * Delivery's alone: neither a run started nor one stopped releases it.
    */
   readonly #reserved = new Map<string, object>();
+  /**
+   * B19 C2: the agents whose queues waited for a slot delivery holds (at a gap it took, or a task
+   * or a question that would have gone): releasing one moves the run on; any other costs nothing.
+   */
+  readonly #yielded = new Set<string>();
+  /** The canvas's agents by id, as last given (`update`): what `point` reads, never a walk. */
+  readonly #byId = new Map<string, AgentNode>();
   /** B19 C2: the gap each agent's queue waits at while delivery has it, by agent. */
   readonly #gaps = new Map<string, string>();
   /** B19 C2: the last gap each agent's queue went past, by agent: never offered again. */
@@ -893,10 +900,11 @@ export class RunStore {
     if (this.#busy.has(agent)) return PROTECTED;
     const gap = this.#gaps.get(agent);
     if (gap !== undefined) return { kind: 'gap', gap };
-    const queue = this.#agents().find((n) => n.id === agent)?.data.queue ?? [];
-    const item = at.current === undefined ? undefined : findItem(queue, at.current)?.item;
     // A usage rule's hold is delivery's to read for a party's message, as it always was.
     if (at.usage !== undefined) return OPEN;
+    // Its own node by id, never a walk of the canvas's: delivery asks this of each agent it looks at.
+    const queue = this.#byId.get(agent)?.data.queue ?? [];
+    const item = at.current === undefined ? undefined : findItem(queue, at.current)?.item;
     if (at.status === 'asking')
       return {
         kind: 'held',
@@ -953,6 +961,8 @@ export class RunStore {
       this.#gaps.delete(agent);
       this.#passed.set(agent, gap);
     }
+    // Only a queue that waited for it moves on: a party's turn at an idle agent costs no settle.
+    if (!this.#yielded.delete(agent)) return;
     if (this.#run.running && !this.#frozen && !this.#busy.has(agent)) this.#settle(false);
   }
 
@@ -986,6 +996,7 @@ export class RunStore {
       this.#reserved.set(agent, token);
     }
     this.#gaps.set(agent, key);
+    this.#yielded.add(agent);
     return { current: item.id, status: 'waiting', outcomes };
   }
 
@@ -1297,6 +1308,8 @@ export class RunStore {
    */
   update(nodes: readonly CanvasNode[]): void {
     this.#nodes = nodes;
+    this.#byId.clear();
+    for (const node of nodes) if (node.type === 'agent') this.#byId.set(node.id, node);
     // B21 C7: an agent gone while its attempt waited on its asks waits for nothing more (its asks
     // are withdrawn as it goes).
     for (const [agent, { token }] of this.#deferred) {
@@ -2290,7 +2303,10 @@ export class RunStore {
     { current, outcomes }: { current: string; outcomes: Record<string, Outcome> },
   ): AgentRun {
     // B19 C2: delivery holds the agent's next native turn: the question waits for it.
-    if (this.#reserved.has(node.id)) return { current, status: 'waiting', outcomes };
+    if (this.#reserved.has(node.id)) {
+      this.#yielded.add(node.id);
+      return { current, status: 'waiting', outcomes };
+    }
     const token = {};
     this.#busy.set(node.id, token);
     const attempts = this.#attempts(this.#run.agents[node.id], current, undefined, node.id);
@@ -2466,7 +2482,8 @@ export class RunStore {
       return this.#handOff(agent, task, outcomes, previous, handOffs);
     // B19 C2: delivery holds the agent's next native turn: the task waits for it (yours goes now).
     const destination = isMessage(task) ? (task.target ?? agent) : agent;
-    if (correction === undefined && this.#reserved.has(destination))
+    if (correction === undefined && this.#reserved.has(destination)) {
+      this.#yielded.add(destination);
       return {
         current: task.id,
         status: 'waiting',
@@ -2474,6 +2491,7 @@ export class RunStore {
         ...(previous?.attempts ? { attempts: previous.attempts } : {}),
         ...(previous?.paused ? { paused: true } : {}),
       };
+    }
     const token = {};
     this.#busy.set(agent, token);
     // Its recipient: a message's target, if another agent's; else the agent itself.

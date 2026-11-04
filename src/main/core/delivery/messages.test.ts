@@ -1022,6 +1022,9 @@ describe('what delivery acts on', () => {
   /** What `active()` must list: the messages kept that delivery acts on, in the store's order. */
   const expectIndexed = (messages: MessageStore) => {
     expect(messages.active()).toEqual(messages.all().filter(isActive));
+    // B19 C2: and each recipient's line of it, read alone.
+    for (const to of new Set(messages.all().map((message) => message.to)))
+      expect(messages.activeTo(to)).toEqual(messages.active().filter((one) => one.to === to));
   };
 
   it('lists the messages waiting, being delivered or whose turn goes on, as they change', async () => {
