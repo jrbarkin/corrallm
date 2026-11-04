@@ -619,8 +619,19 @@ describe('the message store', () => {
       purpose: Purpose.parse({ v: 1, type: 'evidence' }),
     });
     await messages.durable();
-    // A later change of the row never writes another purpose over it.
+    // A later change of the row never writes another purpose over it, nor gives one in memory.
     messages.update(handoff.id, { purpose: { v: 1, type: 'evidence' } });
+    expect(messages.get(handoff.id)?.purpose).toEqual({ v: 1, type: 'handoff' });
+    const party = messages.add({
+      from: 'agent:lead',
+      to: 'agent:builder',
+      kind: 'text',
+      origin: 'party',
+      body: 'Plain',
+      state: 'pending',
+    });
+    messages.update(party.id, { purpose: { v: 1, type: 'handoff' } });
+    expect(messages.get(party.id)).not.toHaveProperty('purpose');
     await messages.durable();
     expect(
       readOnDisk(profile, (disk) =>

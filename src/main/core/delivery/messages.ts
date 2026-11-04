@@ -496,7 +496,11 @@ export class MessageStore {
   ): Message | undefined {
     const kept = this.#kept.get(id);
     if (!kept) return undefined;
-    const message = { ...kept.message, ...change };
+    // B19 C1: a purpose is the row's from its first write, as its column keeps it: never changed.
+    const { purpose } = kept.message;
+    const message: Message = { ...kept.message, ...change };
+    if (purpose === undefined) delete message.purpose;
+    else message.purpose = purpose;
     this.#keep({
       ...kept,
       message,
