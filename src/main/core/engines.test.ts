@@ -143,6 +143,19 @@ describe('the core runs each canvas’s engine', () => {
         },
       );
       expect(message).toMatchObject({ ok: true });
+      // B19 C2: while the run goes, the task it holds for you holds a party's message to its agent
+      // too, its sender told once; stopped, the run holds none.
+      await vi.waitFor(() => {
+        expect(
+          started.engines
+            .canvas(CANVAS)
+            ?.messages.all()
+            .filter((item) => item.kind === 'notice')
+            .map(({ body }) => body),
+        ).toEqual([expect.stringContaining('queue holds a task for the user')]);
+      });
+      expect(codex.sessions).toEqual([]);
+      engine.run.stop();
       await vi.waitFor(() => {
         expect(codex.sessions[0]?.sent).toHaveLength(1);
       });

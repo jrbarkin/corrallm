@@ -40,6 +40,8 @@ export interface EngineIO {
   mailbox?: RunMailbox;
   /** B19 C1: where the run's queue hand-offs go (RunIO.handOffs): the core's delivery. */
   handOffs?: RunIO['handOffs'];
+  /** B19 C2: delivery's half of the run's delivery points (RunIO.points): the core's delivery. */
+  points?: RunIO['points'];
   /** The locale the run tells times of day in (the host's): the runtime's own, when none. */
   locale?: string;
   /** B11a C3: admission before the run's tasks go (RunIO.admit): the core's fallback service. */
@@ -115,6 +117,7 @@ export class Engine {
       ...(io.beforeSend ? { beforeSend: io.beforeSend } : {}),
       ...(io.mailbox ? { mailbox: io.mailbox } : {}),
       ...(io.handOffs ? { handOffs: io.handOffs } : {}),
+      ...(io.points ? { points: io.points } : {}),
       send: (agent, text, done, images, refused, origin, displayText, task, id, resolvedStep) =>
         sessions.send(
           agent.id,

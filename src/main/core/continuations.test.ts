@@ -302,15 +302,16 @@ describe('an ask during a task (C7)', () => {
       expect(planner(core)?.outcomes.build).toBe('succeeded');
     });
     expect(messageOf(core, answer.id)?.state).toBe('replied');
-    // Then the run's next item, then the party's message.
+    // Then, in the gap before the run's next item (B19 C2), the party's message that waited; then
+    // the item.
     await vi.waitFor(() => {
-      expect(cli.sentTo('planner').at(-1)?.text).toBe('Ship it');
-    });
-    cli.reply('planner', 'Shipped.');
-    await vi.waitFor(() => {
-      expect(cli.sentTo('planner').map(({ text }) => text)).toContain(
+      expect(cli.sentTo('planner').at(-1)?.text).toBe(
         `[corrallm] Message from "orchestrator" (an orchestrator outside corrallm, not the user; message ${theirs.id}):\nHi`,
       );
+    });
+    cli.reply('planner', 'Hello.');
+    await vi.waitFor(() => {
+      expect(cli.sentTo('planner').at(-1)?.text).toBe('Ship it');
     });
   });
 

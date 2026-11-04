@@ -480,3 +480,285 @@ describe('a queue hand-off in the core (B19 C1)', () => {
     expect(again.sent).toEqual([]);
   });
 });
+
+/** Says `body` to agent `to` as the orchestrator outside corrallm. */
+async function say(core: Core, to: string, body: string): Promise<void> {
+  expect(await core.call('message', { canvas: CANVAS, to, body }, ORCHESTRATOR)).toMatchObject({
+    ok: true,
+  });
+}
+
+/** What each session was sent, in order, as `[agent, words]`: a party's message by its body. */
+const order = (sent: (UserMessage & { agent: string })[]) =>
+  sent.map(({ agent, text }) => [agent, text.split('\n').at(-1) ?? text]);
+
+describe('delivery points (B19 C2)', () => {
+  async function team(lead: unknown[], worker: unknown[] = []) {
+    await canvas(lead, worker);
+    await keepCanvases(profile, { [CANVAS]: { file, project } });
+    const turns = sessions();
+    const core = await start(turns.connector);
+    const { engine, messages } = await opened(core);
+    return { ...turns, core, engine, messages };
+  }
+  const ONE = { id: 'one', message: 'One' };
+  const TWO = { id: 'two', message: 'Two' };
+
+  it('delivers a party’s message waiting as one item ends in the gap before the next', async () => {
+    const { core, engine, sent, end } = await team([ONE, TWO]);
+    engine.run.start();
+    await vi.waitFor(() => {
+      expect(sent).toHaveLength(1);
+    });
+    await say(core, 'lead', 'Hello');
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(sent).toHaveLength(1);
+    end('lead', 'One done.');
+    await vi.waitFor(() => {
+      expect(sent).toHaveLength(2);
+    });
+    expect(engine.run.snapshot().agents.lead).toMatchObject({ current: 'two', status: 'waiting' });
+    end('lead', 'Hi.');
+    await vi.waitFor(() => {
+      expect(sent).toHaveLength(3);
+    });
+    expect(order(sent)).toEqual([
+      ['lead', 'One'],
+      ['lead', 'Hello'],
+      ['lead', 'Two'],
+    ]);
+  });
+
+  it('keeps it waiting through an If and its steps, to the gap after them', async () => {
+    const { core, engine, sent, end } = await team([
+      ONE,
+      { id: 'check', if: { kind: 'succeeded' }, then: [{ id: 'x', message: 'X' }] },
+      TWO,
+    ]);
+    engine.run.start();
+    await vi.waitFor(() => {
+      expect(sent).toHaveLength(1);
+    });
+    await say(core, 'lead', 'Hello');
+    end('lead', 'One done.');
+    await vi.waitFor(() => {
+      expect(sent).toHaveLength(2);
+    });
+    end('lead', 'X done.');
+    await vi.waitFor(() => {
+      expect(sent).toHaveLength(3);
+    });
+    end('lead', 'Hi.');
+    await vi.waitFor(() => {
+      expect(sent).toHaveLength(4);
+    });
+    expect(order(sent)).toEqual([
+      ['lead', 'One'],
+      ['lead', 'X'],
+      ['lead', 'Hello'],
+      ['lead', 'Two'],
+    ]);
+  });
+
+  it('delivers in a gap only what waited as it opened: a later message waits for a later point', async () => {
+    const { core, engine, sent, end } = await team([ONE, TWO]);
+    engine.run.start();
+    await vi.waitFor(() => {
+      expect(sent).toHaveLength(1);
+    });
+    await say(core, 'lead', 'First');
+    end('lead', 'One done.');
+    await vi.waitFor(() => {
+      expect(sent).toHaveLength(2);
+    });
+    // Arrives while the gap's first message runs.
+    await say(core, 'lead', 'Second');
+    end('lead', 'Got it.');
+    await vi.waitFor(() => {
+      expect(sent).toHaveLength(3);
+    });
+    end('lead', 'Two done.');
+    // Its queue done, the later message goes.
+    await vi.waitFor(() => {
+      expect(sent).toHaveLength(4);
+    });
+    expect(order(sent)).toEqual([
+      ['lead', 'One'],
+      ['lead', 'First'],
+      ['lead', 'Two'],
+      ['lead', 'Second'],
+    ]);
+  });
+
+  it('delivers a party’s message at an authored wait', async () => {
+    const waiting = await team([{ id: 'w', waitFor: [{ agent: 'worker' }] }], [ONE]);
+    waiting.engine.run.start();
+    await vi.waitFor(() => {
+      expect(waiting.sent).toHaveLength(1);
+    });
+    await say(waiting.core, 'lead', 'Hello');
+    await vi.waitFor(() => {
+      expect(order(waiting.sent)).toEqual([
+        ['worker', 'One'],
+        ['lead', 'Hello'],
+      ]);
+    });
+  });
+
+  it('holds a party’s message at a delay, telling its sender once, and delivers it in the gap after', async () => {
+    const delayed = await team([{ id: 'd', delay: { seconds: 3600 } }, TWO]);
+    delayed.engine.run.start();
+    await say(delayed.core, 'lead', 'Hello');
+    await say(delayed.core, 'lead', 'Again');
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(delayed.sent).toEqual([]);
+    const notices = delayed.messages().filter((one) => one.kind === 'notice');
+    expect(notices).toEqual([
+      expect.objectContaining({
+        to: 'outside:orchestrator',
+        body: expect.stringContaining('delay') as unknown,
+      }),
+    ]);
+    // Go on now: the delay ends, and what waited goes in the gap before the next item.
+    delayed.engine.run.goOn('lead', 'd');
+    await vi.waitFor(() => {
+      expect(delayed.sent).toHaveLength(1);
+    });
+    delayed.end('lead', 'Hi.');
+    await vi.waitFor(() => {
+      expect(delayed.sent).toHaveLength(2);
+    });
+    delayed.end('lead', 'Hi again.');
+    await vi.waitFor(() => {
+      expect(delayed.sent).toHaveLength(3);
+    });
+    expect(order(delayed.sent)).toEqual([
+      ['lead', 'Hello'],
+      ['lead', 'Again'],
+      ['lead', 'Two'],
+    ]);
+  });
+
+  it('holds an agent’s slot from a message’s delivering record to its turn’s end: its queue moving on meanwhile sends nothing', async () => {
+    const { core, engine, sent, end } = await team(
+      [{ id: 'w', waitFor: [{ agent: 'worker' }] }, TWO],
+      [ONE],
+    );
+    engine.run.start();
+    await vi.waitFor(() => {
+      expect(sent).toHaveLength(1);
+    });
+    // Lead's session is slow to be ready: what delivery journaled for it waits on that.
+    const ready = engine.sessions.ready.bind(engine.sessions);
+    const held = Promise.withResolvers<undefined>();
+    vi.spyOn(engine.sessions, 'ready').mockImplementation((agent) =>
+      agent === 'lead' ? held.promise.then(() => ready(agent)) : ready(agent),
+    );
+    await say(core, 'lead', 'Hello');
+    // Worker's One ends: Lead's wait is over, but its next item waits for the slot.
+    end('worker', 'One done.');
+    await vi.waitFor(() => {
+      expect(engine.run.snapshot().agents.lead).toMatchObject({
+        current: 'two',
+        status: 'waiting',
+      });
+    });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(order(sent)).toEqual([['worker', 'One']]);
+    held.resolve(undefined);
+    await vi.waitFor(() => {
+      expect(sent).toHaveLength(2);
+    });
+    end('lead', 'Hi.');
+    await vi.waitFor(() => {
+      expect(sent).toHaveLength(3);
+    });
+    expect(order(sent)).toEqual([
+      ['worker', 'One'],
+      ['lead', 'Hello'],
+      ['lead', 'Two'],
+    ]);
+  });
+
+  it('delivers a hand-off at its recipient’s authored wait, which its reply then satisfies', async () => {
+    const { engine, sent, end } = await team(
+      [{ id: 'hand', message: 'Review this', target: 'worker' }],
+      [{ id: 'w', waitFor: [{ agent: 'lead' }] }],
+    );
+    engine.run.start();
+    await vi.waitFor(() => {
+      expect(sent).toHaveLength(1);
+    });
+    expect(sent[0]).toMatchObject({ agent: 'worker' });
+    end('worker', 'APPROVED');
+    await vi.waitFor(() => {
+      expect(engine.run.snapshot().agents).toMatchObject({
+        lead: { status: 'done', outcomes: { hand: 'succeeded' } },
+        worker: { status: 'done', outcomes: { w: 'succeeded' } },
+      });
+    });
+  });
+
+  it('leaves two queues handing off to each other waiting, nothing sent and nothing spinning, until Stop', async () => {
+    const { core, engine, sent, messages } = await team(
+      [{ id: 'hand', message: 'Review this', target: 'worker' }],
+      [{ id: 'back', message: 'Check mine', target: 'lead' }],
+    );
+    const open = core.engines.canvas(CANVAS);
+    if (open === undefined) throw new Error('No open canvas');
+    engine.run.start();
+    await vi.waitFor(() => {
+      expect(handoffs(messages())).toHaveLength(2);
+    });
+    // Each agent runs its own hand-off: neither is at a point for the other's.
+    const checks = vi.spyOn(open.messages, 'active');
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(sent).toEqual([]);
+    expect(checks.mock.calls.length).toBeLessThan(20);
+    expect(handoffs(messages()).map(({ state }) => state)).toEqual(['pending', 'pending']);
+    engine.run.stop();
+    await vi.waitFor(() => {
+      expect(handoffs(messages()).map(({ state }) => state)).toEqual(['withdrawn', 'withdrawn']);
+    });
+    expect(sent).toEqual([]);
+  });
+
+  it('keeps a hand-off to an agent running its own queue for that agent’s next point', async () => {
+    const { engine, sent, end } = await team(
+      [
+        { id: 'prep', message: 'Prep' },
+        { id: 'hand', message: 'Review this', target: 'worker' },
+      ],
+      [ONE, TWO],
+    );
+    engine.run.start();
+    await vi.waitFor(() => {
+      expect(sent).toHaveLength(2);
+    });
+    // Handed off while Worker's One runs: it waits for the gap after it.
+    end('lead', 'Prepared.');
+    await vi.waitFor(() => {
+      expect(engine.run.snapshot().agents.lead?.current).toBe('hand');
+    });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(sent).toHaveLength(2);
+    end('worker', 'One done.');
+    await vi.waitFor(() => {
+      expect(sent).toHaveLength(3);
+    });
+    end('worker', 'Reviewed.');
+    await vi.waitFor(() => {
+      expect(sent).toHaveLength(4);
+    });
+    expect(order(sent)).toEqual([
+      ['lead', 'Prep'],
+      ['worker', 'One'],
+      ['worker', 'Review this'],
+      ['worker', 'Two'],
+    ]);
+    expect(engine.run.snapshot().agents.lead?.outcomes).toEqual({
+      prep: 'succeeded',
+      hand: 'succeeded',
+    });
+  });
+});

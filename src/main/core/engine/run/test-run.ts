@@ -36,7 +36,7 @@ export function setup(
    */
   more: Pick<
     RunIO,
-    'admit' | 'limitNote' | 'handoff' | 'mailbox' | 'beforeSend' | 'handOffs' | 'tasks'
+    'admit' | 'limitNote' | 'handoff' | 'mailbox' | 'beforeSend' | 'handOffs' | 'tasks' | 'points'
   > = {},
 ) {
   let clock = 0;

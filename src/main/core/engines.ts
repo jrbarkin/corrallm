@@ -1118,6 +1118,11 @@ export class Engines {
           (running.delivery as Delivery | undefined)?.withdrawHandOff(task);
         },
       },
+      // B19 C2: at each gap a queue reaches, its delivery may take the agent's next turn first.
+      points: {
+        offer: (agent, gap, token) =>
+          (running.delivery as Delivery | undefined)?.offer(agent, gap, token) ?? false,
+      },
       // Each attempt the run sends is a message first, written with the run (B11 Design §3); the
       // first to an agent since a switch carries its handoff (B11a C7).
       mailbox: runMailbox(
