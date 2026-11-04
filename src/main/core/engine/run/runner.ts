@@ -533,7 +533,7 @@ export class RunStore {
    * B19 C1: each agent whose queue's hand-off delivery has (RunIO.handOffs), by its owner: the token
    * it is busy with and the attempt. Its end (`handedOff`) finishes the item, once.
    */
-  readonly #handing = new Map<string, { token: object; task: TaskMessage }>();
+  readonly #handing = new Map<string, { token: object; task: TaskMessage; to: string }>();
   /**
    * B19 C2: the agents whose next native turn delivery holds (`reserve`, or a gap it took), by the
    * token it holds it under: no task of the run's goes to such an agent until it is released.
@@ -597,7 +597,7 @@ export class RunStore {
     /** B21 C7: the attempts that wait on their asks, derived from the canvas's mailbox. */
     const waiting: [string, { step: QueueStep; attempt: string }][] = [];
     /** B19 C1: the attempts whose hand-offs still wait, unsent, in the canvas's mailbox. */
-    const handing: [string, TaskMessage][] = [];
+    const handing: [string, TaskMessage, string][] = [];
     for (const [id, at] of Object.entries(saved.run.agents)) {
       if (
         at.status === 'running' &&
@@ -626,7 +626,7 @@ export class RunStore {
           this.#io.tasks?.pending?.(task) === true
         ) {
           agents[id] = at;
-          handing.push([id, task]);
+          handing.push([id, task, item.target ?? id]);
           continue;
         }
         const condition = conditionKey(id, item, at.rounds);
@@ -688,10 +688,10 @@ export class RunStore {
       this.#deferred.set(id, { token, step, attempt });
     }
     // And each attempt whose hand-off waits, until delivery tells how its turn ended.
-    for (const [id, task] of handing) {
+    for (const [id, task, to] of handing) {
       const token = {};
       this.#busy.set(id, token);
-      this.#handing.set(id, { token, task });
+      this.#handing.set(id, { token, task, to });
     }
     this.#applyPauses();
     this.#set({ ...this.#run });
@@ -921,6 +921,14 @@ export class RunStore {
     const token = {};
     this.#reserved.set(agent, token);
     return token;
+  }
+
+  /**
+   * B19 C1: the agent whose turn agent `agent`'s queue waits on, its hand-off to it delivery has
+   * (its item running meanwhile, no delivery point for others'); none if it waits on none.
+   */
+  handingTo(agent: string): string | undefined {
+    return this.#handing.get(agent)?.to;
   }
 
   /**
@@ -2587,7 +2595,7 @@ export class RunStore {
     if (id === undefined) return { current: task.id, status: 'waiting', outcomes, ...kept };
     const token = {};
     this.#busy.set(agent, token);
-    this.#handing.set(agent, { token, task: message });
+    this.#handing.set(agent, { token, task: message, to });
     return {
       current: task.id,
       status: 'running',

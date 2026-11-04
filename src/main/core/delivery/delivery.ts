@@ -34,7 +34,7 @@ import { HANDOFF_EVIDENCE, QUEUE_HANDOFF } from '../../../shared/model/purpose';
 import type { Session } from '../../../shared/model/session';
 import type { Message, PartyId } from '../../../shared/model/messages';
 import { threadTitle } from '../../../shared/model/session';
-import { holdText, resetTime } from '../../../shared/model/words';
+import { andList, holdText, resetTime } from '../../../shared/model/words';
 import { isSessionMode } from '../../../shared/session';
 import type { TaskMessage, TurnReason, TurnResult, UserMessage } from '../../../shared/session';
 import type { UsageHold } from '../../../shared/usage';
@@ -405,6 +405,13 @@ export class Delivery {
   readonly #gaps = new Map<string, { gap: string; cutoff: number }>();
   /** B19 C2: the agents whose senders were told of a hold of their queues'. */
   readonly #queueTold = new Set<string>();
+  /**
+   * B19 C2: the queues that wait on each other's hand-offs, each running its own (so none is at a
+   * delivery point for the one it is handed), as delivery last looked: each cycle's agents, in
+   * order, from the first by its UTF-8 bytes, and its Needs item's id. Read from what it looked at.
+   */
+  #cycles: { id: string; agents: string[] }[] = [];
+  #cycleKey = '';
   #scheduled = false;
   /** Whether it delivers yet: not until it starts, though messages may be sent before. */
   #started = false;
@@ -483,6 +490,7 @@ export class Delivery {
    */
   async close(): Promise<void> {
     this.#closed = true;
+    this.#cycles = [];
     this.asks.close();
     this.#images.clear();
     this.#carried.clear();
@@ -762,9 +770,8 @@ export class Delivery {
           ? undefined
           : LATER;
       case 'protected':
-        // fixme(B19 C2): two queues handing off to each other wait here for good, each running its
-        // own hand-off (no point for the other's): visible as their pending rows and stoppable, but
-        // nothing yet says why they wait (no Needs item or notice names the cycle).
+        // Queues handing off to each other wait here, each running its own: their cycle is a Needs
+        // item of its own (#findCycles), with Stop.
         return LATER;
       case 'held':
         return this.#queueHold(node, point);
@@ -916,7 +923,75 @@ export class Delivery {
    * to you, and the pairs of agents held for ten turns without you.
    */
   items(): NeedsItem[] {
-    return [...this.asks.items(), ...this.#holds().map(({ item }) => item)];
+    return [...this.asks.items(), ...this.#holds().map(({ item }) => item), ...this.#cycleItems()];
+  }
+
+  /** B19 C2: the hand-off cycle `cycle/<agent>` names, as you see it in Needs, if one holds now. */
+  cycleItem(need: string): NeedsItem | undefined {
+    return this.#cycleItems().find(({ id }) => id === need);
+  }
+
+  /**
+   * B19 C2: each cycle of queues waiting on each other's hand-offs, as a Needs item for you alone
+   * (it names no agent a token reaches): what it is, in corrallm's words and the agents' names, and
+   * Stop, yours, which takes the hand-offs back.
+   */
+  #cycleItems(): NeedsItem[] {
+    if (this.#cycles.length === 0) return [];
+    const nodes = this.#deps.nodes();
+    return this.#cycles.map(({ id, agents }) => {
+      const names = agents.map((agent) => partyName(nodes, agentParty(agent)));
+      return {
+        id,
+        canvas: this.#deps.canvas,
+        kind: 'hold',
+        for: 'you',
+        by: ['you'],
+        title:
+          names.length === 2
+            ? `${andList(names)} each wait on a hand-off to the other, so neither can be delivered: stop the run to end it.`
+            : `${andList(names)} each wait on a hand-off to the next, so none can be delivered: stop the run to end it.`,
+        choices: [{ value: 'stop', label: 'Stop the run', humanOnly: CYCLE_STOP }],
+        answerIn: 'api',
+      };
+    });
+  }
+
+  /**
+   * B19 C2: the cycles among `edges` (each queue's agent and the agent its pending hand-off waits
+   * for, that agent running its own hand-off), found in one walk of the edges alone; Needs is
+   * looked at again only as they change.
+   */
+  #findCycles(edges: ReadonlyMap<string, string>): void {
+    const cycles: { id: string; agents: string[] }[] = [];
+    const done = new Set<string>();
+    for (const start of edges.size > 1 ? edges.keys() : []) {
+      const path: string[] = [];
+      const seen = new Map<string, number>();
+      let agent: string | undefined = start;
+      while (agent !== undefined && !done.has(agent) && !seen.has(agent)) {
+        seen.set(agent, path.length);
+        path.push(agent);
+        agent = edges.get(agent);
+      }
+      const from = agent === undefined ? undefined : seen.get(agent);
+      for (const one of path) done.add(one);
+      if (from === undefined) continue;
+      const ring = path.slice(from);
+      const first = ring.reduce((a, b) =>
+        Buffer.compare(Buffer.from(a), Buffer.from(b)) <= 0 ? a : b,
+      );
+      const at = ring.indexOf(first);
+      const id = `cycle/${encodeURIComponent(first)}`;
+      // An id too long for the API is no item; the cycle still holds, and Stop still ends it.
+      if (id.length <= MAX_NEED_ID)
+        cycles.push({ id, agents: [...ring.slice(at), ...ring.slice(0, at)] });
+    }
+    const key = JSON.stringify(cycles.map(({ agents }) => agents));
+    this.#cycles = cycles;
+    if (key === this.#cycleKey) return;
+    this.#cycleKey = key;
+    this.#deps.changed();
   }
 
   /** The pair hold `loop/<a>/<b>` names, as you see it in Needs, if it holds now. */
@@ -1367,6 +1442,8 @@ export class Delivery {
     this.#tellWaiting(messages);
     this.#followDefaults();
     let alarm: number | undefined;
+    /** B19 C2: each queue's agent whose pending hand-off waits for an agent running its own. */
+    const edges = new Map<string, string>();
     for (const node of this.#deps.nodes()) {
       if (node.type !== 'agent') continue;
       this.#forgetReleased(node);
@@ -1452,6 +1529,15 @@ export class Delivery {
           continue;
         }
         if (hold.kind === 'busy' && this.#theirs(message)) checking = true;
+        if (
+          hold === LATER &&
+          point?.kind === 'protected' &&
+          isQueueHandoff(message) &&
+          engine.run.handingTo(node.id) !== undefined
+        ) {
+          const owner = agentOf(message.from);
+          if (owner !== undefined) edges.set(owner, node.id);
+        }
         if (hold.kind === 'queue') {
           this.#queueTold.add(node.id);
           this.#tell(
@@ -1541,6 +1627,7 @@ export class Delivery {
       this.#directories.delete(node.id);
       this.#deliver(node, next);
     }
+    this.#findCycles(edges);
     this.#arm(alarm);
   }
 
@@ -2563,6 +2650,9 @@ function isAskEnd(message: Message): boolean {
 
 /** The kinds of hold a sender is told of, by the agent they hold. */
 type HoldKind = 'workspace' | 'paused' | 'stuck' | 'unasking' | 'usage' | 'limited' | 'queue';
+
+/** B19 C2: why only you stop the run from a hand-off cycle's Needs item. */
+const CYCLE_STOP = 'Only you stop the run from here; a token stops it with run.stop.';
 
 /** B19 C2: a party's message not at its agent's delivery point: it waits for a later one. */
 const LATER: Hold = Object.freeze({ kind: 'later' });

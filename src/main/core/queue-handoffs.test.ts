@@ -166,6 +166,8 @@ async function start(connector: Connector<SessionMode>): Promise<Core> {
       sessions: {
         connectors: { 'codex.app-server': connector },
         environment: () => Promise.resolve({}),
+        // Its agent callers are made up: no session authority issued them.
+        callers: () => true,
       },
       watchFolder: () => ({ close: () => undefined }),
     },
@@ -905,7 +907,7 @@ describe('delivery points (B19 C2)', () => {
     });
   });
 
-  it('leaves two queues handing off to each other waiting, nothing sent and nothing spinning, until Stop', async () => {
+  it('says in Needs that two queues hand off to each other, offering you Stop, until the cycle breaks', async () => {
     const { core, engine, sent, messages } = await team(
       [{ id: 'hand', message: 'Review this', target: 'worker' }],
       [{ id: 'back', message: 'Check mine', target: 'lead' }],
@@ -916,17 +918,106 @@ describe('delivery points (B19 C2)', () => {
     await vi.waitFor(() => {
       expect(handoffs(messages())).toHaveLength(2);
     });
-    // Each agent runs its own hand-off: neither is at a point for the other's.
+    // Each agent runs its own hand-off: neither is at a point for the other's. Nothing spins.
     const checks = vi.spyOn(open.messages, 'active');
+    const needsOf = async (caller = CALLERS.you) => {
+      const needs = await core.call('needs', { canvas: CANVAS }, caller);
+      if (!needs.ok) throw new Error(needs.error.sentence);
+      return needs.value.items;
+    };
+    await vi.waitFor(async () => {
+      expect((await needsOf()).filter(({ id }) => id.startsWith('cycle/'))).toHaveLength(1);
+    });
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(sent).toEqual([]);
     expect(checks.mock.calls.length).toBeLessThan(20);
-    expect(handoffs(messages()).map(({ state }) => state)).toEqual(['pending', 'pending']);
-    engine.run.stop();
+    const [cycle] = (await needsOf()).filter(({ id }) => id.startsWith('cycle/'));
+    expect(cycle).toMatchObject({
+      id: 'cycle/lead',
+      kind: 'hold',
+      for: 'you',
+      by: ['you'],
+      title:
+        'Lead and Worker each wait on a hand-off to the other, so neither can be delivered: stop the run to end it.',
+      choices: [{ value: 'stop', label: 'Stop the run', humanOnly: expect.any(String) as unknown }],
+    });
+    expect(cycle).not.toHaveProperty('agent');
+    // No token reaches it, nor answers it.
+    expect((await needsOf(ORCHESTRATOR)).some(({ id }) => id.startsWith('cycle/'))).toBe(false);
+    expect(
+      await core.call(
+        'reply',
+        { canvas: CANVAS, to: 'cycle/lead', answer: { choice: 'stop' } },
+        ORCHESTRATOR,
+      ),
+    ).toMatchObject({ ok: false });
+    // Stop, from it: both are taken back, and it is gone.
+    expect(
+      await core.call(
+        'reply',
+        { canvas: CANVAS, to: 'cycle/lead', answer: { choice: 'stop' } },
+        CALLERS.you,
+      ),
+    ).toMatchObject({ ok: true });
     await vi.waitFor(() => {
       expect(handoffs(messages()).map(({ state }) => state)).toEqual(['withdrawn', 'withdrawn']);
     });
+    expect(engine.run.snapshot()).toMatchObject({ running: false, pausedBy: 'you' });
+    await vi.waitFor(async () => {
+      expect((await needsOf()).filter(({ id }) => id.startsWith('cycle/'))).toEqual([]);
+    });
     expect(sent).toEqual([]);
+  });
+
+  it('keeps its recipient’s question back to the queue’s agent, asked in the hand-off’s turn, for that agent’s next point', async () => {
+    const { core, engine, sent, end, messages } = await team([
+      { id: 'hand', message: 'Review this', target: 'worker' },
+    ]);
+    engine.run.start();
+    await vi.waitFor(() => {
+      expect(sent).toHaveLength(1);
+    });
+    // Worker asks Lead during the hand-off's turn: taskless (the task is Lead's, not Worker's).
+    const worker = {
+      kind: 'agent',
+      canvas: CANVAS,
+      agent: 'worker',
+      generation: 1,
+      session: 'worker-session',
+    } as const;
+    const asked = await core.call(
+      'ask',
+      {
+        canvas: CANVAS,
+        to: 'lead',
+        questions: [
+          {
+            id: 'scope',
+            header: 'Scope',
+            text: 'How much?',
+            options: [{ label: 'All' }],
+            multiple: false,
+            other: true,
+          },
+        ],
+      },
+      worker,
+    );
+    if (!asked.ok) throw new Error(asked.error.sentence);
+    const id = (asked.value as { id: string }).id;
+    expect(messages().find((one) => one.id === id)?.ask).not.toHaveProperty('task');
+    // Lead waits on its hand-off, no delivery point: the question waits, open.
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(order(sent)).toEqual([['worker', 'Review this']]);
+    expect(messages().find((one) => one.id === id)?.state).toBe('pending');
+    // The hand-off's turn ends: its item is done, and Lead, its queue done, is asked.
+    end('worker', 'Asked Lead how much.');
+    await vi.waitFor(() => {
+      expect(sent).toHaveLength(2);
+    });
+    expect(sent[1]).toMatchObject({ agent: 'lead' });
+    expect(sent[1]?.text).toContain('Question from agent "Worker"');
+    expect(engine.run.snapshot().agents.lead?.outcomes).toEqual({ hand: 'succeeded' });
   });
 
   it('keeps a hand-off to an agent running its own queue for that agent’s next point', async () => {
