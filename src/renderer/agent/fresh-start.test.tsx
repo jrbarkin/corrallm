@@ -38,7 +38,7 @@ async function sheet(resume: boolean, started: Record<string, unknown> = {}) {
     list: resume,
     running: { role: 'Earlier role' },
     ...started,
-  } as typeof STARTED);
+  } as unknown as typeof STARTED);
   await events.click(fixture.view.getByRole('button', { name: 'Agent settings: a' }));
   const panel = within(screen.getByRole('dialog', { name: 'Agent settings: a' }));
   return { ...fixture, panel };

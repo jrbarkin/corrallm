@@ -4,7 +4,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ConnectionDescriptor } from '../../shared/adapter';
 import { expectOneOp } from '../test-api';
 import { events } from '../test-render';
-import { made, open, settle, STARTED } from './test-agent-view';
+import type { SessionEvent } from '../../shared/session';
+import { made, open, settle } from './test-agent-view';
 
 // jsdom cannot draw xterm.js: a fake terminal stands in.
 vi.mock('../terminal/screen', async () => {
@@ -29,7 +30,17 @@ const MODEL_WITH_EFFORTS = {
     { value: 'high', label: 'High' },
   ],
 };
-const STARTED_MODELS = { ...STARTED, model: 'm', models: [MODEL_WITH_EFFORTS] };
+const started = (extra: Partial<Extract<SessionEvent, { type: 'started' }>>): SessionEvent => ({
+  type: 'started',
+  role: 'append',
+  resume: true,
+  list: true,
+  model: null,
+  mode: null,
+  models: [],
+  ...extra,
+});
+const STARTED_MODELS = started({ model: 'm', models: [MODEL_WITH_EFFORTS] });
 const TASKS = {
   type: 'tasks' as const,
   tasks: [{ id: 't1', description: 'Survey the code', kind: 'agent' as const }],
@@ -61,7 +72,7 @@ describe('a declared live control', () => {
   it('is absent when its report was refused, though the session shows models and tasks', async () => {
     const { view, emit } = await open('zed.acp', withLive({ effort: true, stopTask: true }));
     // A report that can't be read leaves the generation without features.
-    emit({ ...STARTED_MODELS, role: 'bogus' } as unknown as typeof STARTED, TASKS);
+    emit({ ...STARTED_MODELS, role: 'bogus' } as unknown as SessionEvent, TASKS);
     expect(effort(view)).toBeNull();
     expect(strip(view)).toBeNull();
     expect(view.queryByRole('button', { name: /^Stop Survey/ })).toBeNull();
@@ -90,7 +101,7 @@ describe('a declared live control', () => {
 
   it('offers no effort for a model that has none to choose', async () => {
     const { view, emit } = await open('zed.acp', withLive({ effort: true, stopTask: true }));
-    emit({ ...STARTED, model: 'm', models: [{ value: 'm', label: 'Plain' }] });
+    emit(started({ model: 'm', models: [{ value: 'm', label: 'Plain' }] }));
     expect(effort(view)).toBeNull();
   });
 

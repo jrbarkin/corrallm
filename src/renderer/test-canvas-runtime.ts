@@ -625,7 +625,7 @@ export function canvasRuntime(
         const name = label === '' ? agent : label;
         const refuse = (sentence: string) => ({
           ok: false as const,
-          error: { code: 'refused', sentence },
+          error: { code: 'refused' as const, sentence },
         });
         if (
           op === 'session.restart' &&

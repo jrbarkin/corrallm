@@ -48,7 +48,7 @@ export interface ComposerControls {
 export interface ImageRules {
   /** The connection's `images`; undefined for one the catalog doesn't know (it takes none). */
   declared: ConnectionDescriptor['images'] | undefined;
-  /** Whose limits they are, as a sentence names them ("Claude Code · SDK"). */
+  /** Whose limits they are, as a sentence names them (an adapter and its connection). */
   subject: string;
 }
 
