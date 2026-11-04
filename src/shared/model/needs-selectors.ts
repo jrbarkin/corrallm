@@ -29,7 +29,7 @@ export interface NeedsInput {
    * The agents whose sessions would not start while parties' messages to them wait, why, and what
    * would let them (a sentence).
    */
-  stuck?: readonly { agent: string; text: string; clears: string }[];
+  stuck?: readonly { agent: string; text: string; clears: string; images?: true }[];
   /**
    * The agents that would act on parties' messages without asking while those wait, and why: their
    * sessions run in a mode that never asks, their CLIs default to one, or corrallm can't tell.
@@ -49,7 +49,7 @@ export type UnaskingWhy = 'mode' | 'default' | 'unknown' | 'unknown-running';
 /** Something that waits for you, as derived: whose it is, and what it is. */
 export type Need =
   | { kind: 'hold'; agent: AgentNode; ask: HeldAsk }
-  | { kind: 'stuck'; agent: AgentNode; text: string; clears: string }
+  | { kind: 'stuck'; agent: AgentNode; text: string; clears: string; images?: true }
   | { kind: 'unasking'; agent: AgentNode; why: UnaskingWhy }
   | { kind: 'limited'; agent: AgentNode; backend: string; until: number };
 
@@ -84,9 +84,11 @@ export function needsOf({
       agent: ask.agent,
       ask,
     })),
-    ...stuck.flatMap(({ agent: id, text, clears }): Need[] => {
+    ...stuck.flatMap(({ agent: id, text, clears, images }): Need[] => {
       const found = agent(id);
-      return found ? [{ kind: 'stuck', agent: found, text, clears }] : [];
+      return found
+        ? [{ kind: 'stuck', agent: found, text, clears, ...(images ? { images } : {}) }]
+        : [];
     }),
     ...unasking.flatMap(({ agent: id, why }): Need[] => {
       const found = agent(id);
@@ -140,7 +142,10 @@ export function needsItem(
         id: idOf('start', need.agent.id),
         ...yours,
         kind: 'hold',
-        title: `${agentName(nodes, need.agent.id)} can’t start: ${need.text}`,
+        // Held for a message's images (B16 C3), its session runs: only that message can't go.
+        title: need.images
+          ? `${agentName(nodes, need.agent.id)} can’t be sent a message: ${need.text}`
+          : `${agentName(nodes, need.agent.id)} can’t start: ${need.text}`,
         detail: `Messages to it wait until it can. ${need.clears}`,
         choices: [],
         answerIn: 'api',

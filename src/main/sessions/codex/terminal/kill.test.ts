@@ -2,6 +2,7 @@ import { auditKill } from '../../test-kill';
 import { CommandHooks, CommandPty } from '../../terminal/test-command';
 import { TerminalSession, TIMING } from '../../terminal/session';
 import { CodexTui } from './tui';
+import { CODEX_FEATURES } from '../features';
 
 auditKill('codex', 'codex.terminal', (folder, log) => ({
   start: async (spec, host) => {
@@ -13,6 +14,7 @@ auditKill('codex', 'codex.terminal', (folder, log) => ({
       tmp: folder,
       env: () => ({}),
       timing: { ...TIMING, key: 0, enter: 1, settle: 5, batch: 1, kill: 300 },
+      features: CODEX_FEATURES,
       spawn: () =>
         Promise.resolve(
           new CommandPty(

@@ -150,6 +150,11 @@ export interface SettledPromptEntry {
 export interface Refusal {
   text: string;
   switchTo?: ConnectionId;
+  /**
+   * The turn's images are what its connection can't take (B16 C3), not the session: its message
+   * waits, whole, until its agent runs where they can go, or it is taken back.
+   */
+  images?: true;
 }
 
 export interface Session {
@@ -237,6 +242,30 @@ export function rewindPoints(entries: readonly Entry[]): { id: string; text: str
   return messagesOf(entries, 'claude-code').flatMap((entry) =>
     entry.reached === true ? [{ id: entry.id, text: entry.text }] : [],
   );
+}
+
+/**
+ * The user's messages a rewind of `conversation` can go back to, oldest first (B16 C4): those its
+ * CLI has (`reached`), marked as that conversation's (an unmarked one proves nothing), since its
+ * last clear (one marked as its, or unmarked). Its owner is the agent's actual adapter, which the
+ * caller names: no conversation is taken for another's.
+ */
+export function rewindPointsOf(
+  entries: readonly Entry[],
+  conversation: Conversation,
+): { id: string; text: string }[] {
+  const ours = entries.filter(
+    (entry) =>
+      (entry.kind === 'user' && entry.conversation === conversation) ||
+      (entry.kind === 'cleared' &&
+        (entry.conversation === undefined || entry.conversation === conversation)),
+  );
+  const cleared = ours.findLastIndex((entry) => entry.kind === 'cleared');
+  return ours
+    .slice(cleared + 1)
+    .flatMap((entry) =>
+      entry.kind === 'user' && entry.reached === true ? [{ id: entry.id, text: entry.text }] : [],
+    );
 }
 
 /**

@@ -4,6 +4,7 @@ import type { AgentId } from '../api/ids';
 import type { ConnectionId } from '../adapter';
 import type { FallbackView } from './fallback';
 import type { HandoffView } from './handoff';
+import type { SessionFeatures } from '../features';
 import type { BackgroundTask, SlashCommand } from '../session';
 import type { Message, MessageDisplay, MessageOrigin } from './messages';
 import type { QueueItem } from './queue';
@@ -54,6 +55,12 @@ export interface SessionSummary {
   readonly connection: ConnectionId | null;
   /** Its current session generation has listed corrallm's tools, as the core observed. */
   readonly api: boolean;
+  /**
+   * What its ready session generation can do (B16 C1): its effective role, resume and list, and the
+   * usable part of its connection's panels and live controls; null while none is ready, never a
+   * grant. No role text, path or native value: what any reader that reaches the agent may see.
+   */
+  readonly features: ReadonlyData<SessionFeatures> | null;
   /** Where it is in the fallback chain you set, and whether corrallm switches it (B11a C11). */
   readonly fallback: ReadonlyData<FallbackView> | null;
   /** Its handoff: when its latest was kept, how long, and its state (B11a C11); no text. */
@@ -189,6 +196,7 @@ export function sessionView(
     agent,
     connection: connection ?? null,
     api: false,
+    features: null,
     fallback,
     handoff,
     status: session.status,

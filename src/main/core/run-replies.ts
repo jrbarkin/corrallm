@@ -1,4 +1,5 @@
 import type { CanvasId } from '../../shared/canvas';
+import { imageRefusal } from '../../shared/images';
 import { holdGeneration, needs } from '../../shared/model/needs-selectors';
 import type { Answer as RunAnswer } from './engine/run/runner';
 import type { PartyId } from '../../shared/model/messages';
@@ -152,6 +153,19 @@ export function runReplies({ engines, prompts: owner, locale }: RunRepliesDeps):
       const at = run.snapshot().agents[id.agent];
       if (picked(answer) === 'switch') return switched(open, item, id, ctx);
       const before = holdGeneration(at);
+      // B16 C3: words' images only where the agent they go to now takes them: none decided else.
+      if ('text' in answer && answer.images !== undefined && answer.images.length > 0) {
+        const to = at?.problem?.agent ?? id.agent;
+        const node = open.document.nodes.find((one) => one.id === to);
+        const connection =
+          node?.type === 'agent' ? open.engine.catalog.connectionOf(node.data) : undefined;
+        const refusal = imageRefusal(
+          answer.images,
+          open.engine.catalog.images(connection),
+          `${nameOf(open.document.nodes, to)}’s connection`,
+        );
+        if (refusal !== undefined) throw new OpFailure('refused', refusal);
+      }
       const given: RunAnswer =
         'text' in answer && answer.text !== undefined
           ? {

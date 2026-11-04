@@ -2,6 +2,7 @@ import { auditKill } from '../test-kill';
 import { CommandHooks, CommandPty } from '../terminal/test-command';
 import { TerminalSession, TIMING } from '../terminal/session';
 import { ClaudeCode } from './claude-code';
+import { CLAUDE_FEATURES } from './features';
 
 auditKill('claude-code', 'claude-code.terminal', (folder, log) => ({
   start: async (spec, host) => {
@@ -13,6 +14,7 @@ auditKill('claude-code', 'claude-code.terminal', (folder, log) => ({
       tmp: folder,
       env: () => ({}),
       timing: { ...TIMING, key: 0, enter: 1, settle: 5, batch: 1, kill: 300 },
+      features: CLAUDE_FEATURES,
       spawn: () =>
         Promise.resolve(
           new CommandPty(log, hooks, (draft, state) => {

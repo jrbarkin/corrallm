@@ -202,7 +202,15 @@ describe('a connected Codex agent', () => {
       adapter: 'codex',
       connection: 'codex.app-server',
     });
-    emit({ type: 'started', model: null, mode: 'auto', models: [] });
+    emit({
+      type: 'started',
+      role: 'append',
+      resume: true,
+      list: true,
+      model: null,
+      mode: 'auto',
+      models: [],
+    });
     const mode = () => view.getByRole('button', { name: /^Mode: / });
     expect(mode().getAttribute('aria-label')).toBe('Mode: Default');
     await events.click(mode());
@@ -325,7 +333,15 @@ it.each(['claude-code', 'codex'])(
     const connection = adapter === 'codex' ? 'codex.app-server' : 'claude-code.sdk';
     const { view, emit } = await open({ adapter, connection });
     expect(view.getByRole('button', { name: 'Mode: Your default' })).toBeTruthy();
-    emit({ type: 'started', model: null, mode: 'plan', models: [] });
+    emit({
+      type: 'started',
+      role: 'append',
+      resume: true,
+      list: true,
+      model: null,
+      mode: 'plan',
+      models: [],
+    });
     expect(view.getByRole('button', { name: 'Mode: Plan' })).toBeTruthy();
   },
 );
@@ -335,6 +351,9 @@ describe('a Codex agent’s reasoning effort', () => {
     const { view, emit } = await open({ adapter: 'codex', connection: 'codex.app-server' });
     emit({
       type: 'started',
+      role: 'append',
+      resume: true,
+      list: true,
       model: 'test-model',
       mode: 'auto',
       models: [
@@ -358,6 +377,9 @@ describe('a Codex agent’s reasoning effort', () => {
     expect(view.queryByRole('button', { name: /^Effort: / })).toBeNull();
     emit({
       type: 'started',
+      role: 'append',
+      resume: true,
+      list: true,
       model: 'gpt-6.1-sol',
       mode: 'auto',
       models: CODEX_MODELS,
@@ -404,7 +426,15 @@ describe('a Codex agent’s reasoning effort', () => {
 describe('a connected agent', () => {
   it('sends one composite per live setting and interrupt gesture, keeping permission confirmation in the page', async () => {
     const { canvas, view, emit, composer } = await open({ connection: 'claude-code.sdk' });
-    emit({ type: 'started', model: 'opus', mode: 'manual', models: MODELS });
+    emit({
+      type: 'started',
+      role: 'append',
+      resume: true,
+      list: true,
+      model: 'opus',
+      mode: 'manual',
+      models: MODELS,
+    });
     const scope = { canvas: canvas.document.id, agent: 'a' };
     canvas.core.operations.length = 0;
     await events.click(view.getByRole('button', { name: 'Model: Opus' }));
@@ -721,7 +751,15 @@ describe('a connected agent', () => {
 
   it('switches to bypassing permissions once confirmed, and hides it where the CLI turns it off', async () => {
     const { replies, view, emit } = await open({ connection: 'claude-code.sdk' });
-    emit({ type: 'started', model: 'opus', mode: 'manual', models: MODELS });
+    emit({
+      type: 'started',
+      role: 'append',
+      resume: true,
+      list: true,
+      model: 'opus',
+      mode: 'manual',
+      models: MODELS,
+    });
     await events.click(view.getByRole('button', { name: 'Mode: Manual' }));
     await events.click(view.getByRole('menuitemradio', { name: /^Bypass permissions/ }));
     expect(replies.setMode).not.toHaveBeenCalled();
@@ -734,6 +772,9 @@ describe('a connected agent', () => {
       { type: 'closed' },
       {
         type: 'started',
+        role: 'append',
+        resume: true,
+        list: true,
         model: 'opus',
         mode: 'manual',
         models: MODELS,
@@ -754,7 +795,15 @@ describe('a connected agent', () => {
     const { replies, view, send, transcript, emit, sent } = await open({
       connection: 'claude-code.sdk',
     });
-    emit({ type: 'started', model: 'opus', mode: 'manual', models: MODELS });
+    emit({
+      type: 'started',
+      role: 'append',
+      resume: true,
+      list: true,
+      model: 'opus',
+      mode: 'manual',
+      models: MODELS,
+    });
     const model = view.getByRole('button', { name: /^Model: / });
     expect(model.getAttribute('aria-label')).toBe('Model: Opus');
     await events.click(model);
@@ -1787,6 +1836,9 @@ describe('a connected agent', () => {
     const { replies, view, emit, send } = await open({ connection: 'claude-code.sdk' });
     emit({
       type: 'started',
+      role: 'append',
+      resume: true,
+      list: true,
       model: 'opus',
       mode: 'manual',
       models: [
@@ -1833,7 +1885,15 @@ describe('a connected agent', () => {
 
   it('is set to what its composer chooses, in Terminal too; never to a mode that never asks', async () => {
     const { replies, view, emit, card } = await open({ connection: 'claude-code.sdk' });
-    emit({ type: 'started', model: 'opus', mode: 'manual', models: MODELS });
+    emit({
+      type: 'started',
+      role: 'append',
+      resume: true,
+      list: true,
+      model: 'opus',
+      mode: 'manual',
+      models: MODELS,
+    });
     await events.click(view.getByRole('button', { name: 'Model: Opus' }));
     await events.click(view.getByRole('menuitemradio', { name: /^Haiku/ }));
     await events.click(view.getByRole('button', { name: 'Mode: Manual' }));
@@ -1884,7 +1944,15 @@ describe('an Agent SDK agent continued in Terminal', () => {
     const { replies, composer, view, emit, card, operations } = await open({
       connection: 'claude-code.sdk',
     });
-    emit({ type: 'started', model: 'opus', mode: 'manual', models: MODELS });
+    emit({
+      type: 'started',
+      role: 'append',
+      resume: true,
+      list: true,
+      model: 'opus',
+      mode: 'manual',
+      models: MODELS,
+    });
     await events.change(composer, { target: { value: '/perm', selectionStart: 5 } });
     const menu = within(view.getByRole('listbox', { name: 'Commands' }));
     expect(menu.getByRole('option').textContent).toBe(

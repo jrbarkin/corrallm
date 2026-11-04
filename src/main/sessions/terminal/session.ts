@@ -3,6 +3,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 import { MAX_DETAIL_LINES, MAX_PROMPT_TEXT_LENGTH } from '../../../shared/api/limits';
+import type { EffectiveFeatures } from '../../../shared/features';
 import type { AdapterPrompt } from '../../../shared/model/prompts';
 import type {
   PermissionMode,
@@ -216,6 +217,11 @@ export interface TerminalSessionDeps<M extends SessionMode = PermissionMode> {
    * it: told once the CLI is past its first-run dialogs, or gone before.
    */
   firstRun?: FirstRunTurn;
+  /**
+   * What its CLI does (B16 C1), as its adapter supplies it: what its `started` reports, since the
+   * toolkit names no CLI and knows none of them.
+   */
+  features: EffectiveFeatures;
 }
 
 export class TerminalSession<M extends SessionMode = PermissionMode> implements LiveSession<M> {
@@ -379,6 +385,7 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
         : {}),
       // The terminal is its own model picker.
       models: [],
+      ...this.#deps.features,
     });
     if (unheard !== undefined) this.#emit({ type: 'unheard', text: unheard });
     const apiReason = this.#cli.api?.().reason;

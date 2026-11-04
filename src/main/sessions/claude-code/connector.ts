@@ -13,6 +13,7 @@ import { HookServer } from '../terminal/hooks';
 import { spawnPty } from '../terminal/pty';
 import type { SpawnPty } from '../terminal/pty';
 import { TerminalSession, TIMING } from '../terminal/session';
+import { CLAUDE_FEATURES } from './features';
 import type { TerminalTiming } from '../terminal/session';
 
 /*
@@ -138,6 +139,7 @@ export class TerminalConnector implements Connector {
       timing: this.#timing,
       usage: (windows) => this.#usage?.(CLAUDE_USAGE, windows),
       firstRun: this.#firstRuns.take(folder),
+      features: CLAUDE_FEATURES,
     });
     await session.launch();
     return session;

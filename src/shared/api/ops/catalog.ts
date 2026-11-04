@@ -11,10 +11,12 @@ import type { OpName } from '../surface';
 
 /** The catalog (Core Server §4 A; src/shared/adapter.ts): what every adapter declares. */
 
-const Command = z.strictObject({
+/** A continuation command (B16 C2): `bare` only here, never on a session's own commands. */
+const ContinuationCommand = z.strictObject({
   name: z.string(),
   description: z.string(),
   argumentHint: z.string(),
+  bare: z.literal(true).optional(),
 });
 
 const Mode = z.strictObject({
@@ -48,7 +50,7 @@ const Connection = z.strictObject({
   continueIn: z
     .strictObject({
       connection: z.string(),
-      commands: z.array(Command),
+      commands: z.array(ContinuationCommand),
       shell: z.boolean(),
       mcpSignIn: z.boolean(),
     })

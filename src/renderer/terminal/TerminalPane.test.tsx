@@ -543,7 +543,15 @@ describe('a Terminal agent', () => {
     const { card, view, session } = await open();
     // Started fresh, no turn going on: its folder trust dialog, whose default is "No, exit".
     session(
-      { type: 'started', model: null, mode: 'manual', models: [] },
+      {
+        type: 'started',
+        role: 'append',
+        resume: true,
+        list: true,
+        model: null,
+        mode: 'manual',
+        models: [],
+      },
       ...[
         testPromptEvent(
           {
@@ -919,7 +927,15 @@ describe('a Terminal agent', () => {
       'Claude Code’s settings turn off its hooks (disableAllHooks in ~/.claude/settings.json), so ' +
       'corrallm can’t hear this agent’s replies.';
     session(
-      { type: 'started', model: null, mode: 'manual', models: [] },
+      {
+        type: 'started',
+        role: 'append',
+        resume: true,
+        list: true,
+        model: null,
+        mode: 'manual',
+        models: [],
+      },
       { type: 'unheard', text: unheard },
     );
     const terminalSession = within(view.getByRole('region', { name: 'Session' }));

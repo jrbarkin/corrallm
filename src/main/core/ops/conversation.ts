@@ -1,6 +1,7 @@
 import { connectionIn } from '../../../shared/adapter';
+import { routeOf, routeRefusal } from '../../../shared/routing';
 import { DEFAULT_PAGE } from '../../../shared/api/limits';
-import { imageBytes } from '../../../shared/session';
+import { imageRefusal } from '../../../shared/images';
 import { nameOf } from '../parties';
 import type { AGENT_STATES } from '../../../shared/api/ops/conversation';
 import { needs } from '../../../shared/model/needs-selectors';
@@ -200,26 +201,20 @@ export function conversationOps(
         }
       }
       const node = agentOf(open, to);
+      // B16 C2: command text is routed by the recipient's connection, the same for every caller,
+      // on the body as given: what its view answers, or only another connection runs, never goes.
+      const routed = commandRefusal(open, services, to, body);
+      if (routed !== undefined) throw new OpFailure('refused', routed);
       // Images only of the kinds, number and size its connection takes (yours alone: human-text).
       const pasted = images ?? [];
       if (pasted.length > 0) {
         const connection = open.engine.catalog.connectionOf(node.data);
-        const takes =
-          (connection === undefined ? undefined : connectionIn(services.catalog, connection))
-            ?.connection.images ?? null;
-        const name = nameOf(open.document.nodes, to);
-        if (takes === null) throw new OpFailure('refused', `${name}’s connection takes no images.`);
-        if (pasted.length > takes.max) {
-          throw new OpFailure('refused', `${name} takes at most ${String(takes.max)} images.`);
-        }
-        if (
-          pasted.some(
-            ({ mediaType, data }) =>
-              !takes.types.includes(mediaType) || imageBytes(data) > takes.maxBytes,
-          )
-        ) {
-          throw new OpFailure('refused', `${name} takes none of those images, or not that large.`);
-        }
+        const refusal = imageRefusal(
+          pasted,
+          open.engine.catalog.images(connection),
+          `${nameOf(open.document.nodes, to)}’s connection`,
+        );
+        if (refusal !== undefined) throw new OpFailure('refused', refusal);
       }
       try {
         const sent = await open.delivery.send(
@@ -356,4 +351,33 @@ export function stateOf(
   if (session.status === 'working') return 'working';
   if (delivery.limited().some(({ agent }) => agent === id)) return 'limited';
   return engine.run.snapshot().agents[id]?.paused ? 'paused' : 'idle';
+}
+
+/**
+ * Why `body` isn't sent to agent `to` as a message (B16 C2, the API Spec's §5.6): its current
+ * connection's view answers it in a panel, or it runs only in that connection's `continueIn`
+ * connection (a command, or shell text by that connection's own prefix). None: it goes.
+ */
+function commandRefusal(
+  open: OpenCanvas,
+  services: Pick<OpServices, 'catalog'>,
+  to: string,
+  body: string,
+): string | undefined {
+  const node = agentOf(open, to);
+  const id = open.engine.catalog.connectionOf(node.data);
+  const found = id === undefined ? undefined : connectionIn(services.catalog, id);
+  if (found === undefined) return undefined;
+  const { connection } = found;
+  const target =
+    connection.continueIn === undefined
+      ? undefined
+      : connectionIn(services.catalog, connection.continueIn.connection);
+  const route = routeOf(body, {
+    connection,
+    target: target?.connection,
+    offered: open.engine.sessions.of(to).commands,
+  });
+  const named = target === undefined ? '' : `${target.adapter.name} · ${target.connection.label}`;
+  return routeRefusal(route, nameOf(open.document.nodes, to), named);
 }

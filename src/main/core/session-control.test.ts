@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MAX_MESSAGE_BYTES } from '../../shared/api/limits';
 import { RULES } from '../../shared/api/rules';
 import type { CanvasId } from '../../shared/canvas';
+import type { EffectiveFeatures } from '../../shared/features';
 import type { FilesRewind, McpChange, McpServer, SessionMode } from '../../shared/session';
 import { MAX_MESSAGE_LENGTH } from '../../shared/session';
 import type { KeptConversation } from '../sessions/adapter';
@@ -44,7 +45,7 @@ const YOU = CALLERS.you;
 const OTHER = '3f1a2b3c-4d5e-4f60-8a1b-2c3d4e5f6a7b' as CanvasId;
 
 /** Three Claude Code agents on the Agent SDK, sharing the faked project directory. */
-function canvasText(team = false): string {
+function canvasText(team = false, queued = false): string {
   const agent = (id: string, label: string, x: number) => ({
     id,
     kind: 'agent',
@@ -58,7 +59,10 @@ function canvasText(team = false): string {
     version: 2,
     id: CANVAS,
     nodes: [
-      agent('a', 'Builder', 0),
+      {
+        ...agent('a', 'Builder', 0),
+        ...(queued ? { queue: [{ id: 'fix', message: 'Fix the bug' }] } : {}),
+      },
       { ...agent('b', 'Reviewer', 300), ...(team ? { parent: 'a' } : {}) },
       agent('c', 'Tester', 600),
     ],
@@ -146,10 +150,15 @@ function restoring(fake: FakeConnector): Connector<SessionMode> {
 
 async function start(
   conversations: Record<string, { id: string }> = {},
-  { other = false, team = false }: { other?: boolean; team?: boolean } = {},
+  {
+    other = false,
+    team = false,
+    features,
+    queued = false,
+  }: { other?: boolean; team?: boolean; features?: EffectiveFeatures; queued?: boolean } = {},
 ): Promise<{ core: Core; sdk: FakeConnector; terminal: FakeConnector }> {
   const file = path.join(profile, 'team.corral');
-  await writeFile(file, canvasText(team));
+  await writeFile(file, canvasText(team, queued));
   // With `other`: a canvas of its own whose agent x (Writer) works in the same project folder.
   const second = path.join(profile, 'other.corral');
   if (other) {
@@ -165,7 +174,11 @@ async function start(
   // A turn holds where it is while the test holds it: a turn going on.
   const step = () => holding?.promise ?? Promise.resolve();
   // In a mode that doesn't ask: its turns run to their end.
-  const sdk = fakeConnector({ step, mode: 'acceptEdits' });
+  const sdk = fakeConnector({
+    step,
+    mode: 'acceptEdits',
+    ...(features === undefined ? {} : { features }),
+  });
   const terminal = fakeConnector({ step, mode: 'acceptEdits' });
   const core = await createCore(
     {
@@ -1006,5 +1019,386 @@ describe('what your session view shows beside its state', () => {
       expect(JSON.stringify(token)).not.toContain('Run the tests');
       expect(JSON.stringify(token)).not.toContain('perm-1');
     }
+  });
+});
+
+describe('what a session can do (B16 C1)', () => {
+  /** What the Agent SDK's fake can do here: its methods, and a listing without a fork. */
+  const FEATURES = {
+    role: 'append',
+    resume: true,
+    list: true,
+    live: { effort: true, stopTask: false },
+    panels: {
+      resume: true,
+      mcp: { changes: ['reconnect', 'enable', 'disable'] },
+      rewind: { restores: ['code'] },
+    },
+  };
+
+  it('says what its ready generation can do in session.get and both topics, none before it runs or once it stops', async () => {
+    const { core } = await start();
+    expect(await ok(core, 'session.get', { agent: 'a' })).toMatchObject({ features: null });
+    await ok(core, 'session.open', { agent: 'a' });
+    await vi.waitFor(async () => {
+      expect(await ok(core, 'session.get', { agent: 'a' })).toMatchObject({ features: FEATURES });
+    });
+    // A token that reaches the agent reads the same capabilities, and the topics agree.
+    expect(await ok(core, 'session.get', { agent: 'a' }, ORCHESTRATOR)).toMatchObject({
+      features: FEATURES,
+    });
+    for (const caller of [YOU, ORCHESTRATOR]) {
+      expect(await core.topics.read(`sessions:${CANVAS}`, caller)).toMatchObject({
+        ok: true,
+        value: { agents: { a: { features: FEATURES }, b: { features: null } } },
+      });
+      expect(await core.topics.read(`session:${CANVAS}:a`, caller)).toMatchObject({
+        ok: true,
+        value: { summary: { features: FEATURES } },
+      });
+    }
+    // Its session stops by itself: what it could do goes with it.
+    hosts.get('a')?.emit({ type: 'closed' });
+    await vi.waitFor(async () => {
+      expect(await ok(core, 'session.get', { agent: 'a' })).toMatchObject({ features: null });
+    });
+  });
+
+  it('says what a narrower generation can do: no /resume listing, no restart', async () => {
+    const { core, sdk } = await start(
+      { a: { id: KEPT } },
+      {
+        features: { role: 'append', resume: false, list: false },
+      },
+    );
+    await ok(core, 'session.open', { agent: 'a' });
+    await vi.waitFor(async () => {
+      expect(await ok(core, 'session.get', { agent: 'a' })).toMatchObject({
+        features: { resume: false, list: false, panels: { rewind: { restores: ['code'] } } },
+      });
+    });
+    const summary = (await ok(core, 'session.get', { agent: 'a' })) as {
+      features: { panels: object };
+    };
+    expect(summary.features.panels).not.toHaveProperty('resume');
+    const listed = await fails(core, 'session.conversations', { agent: 'a' });
+    expect(listed.code).toBe('refused');
+    // B16 C4: a restart would promise the conversation it can't keep; a new conversation is the way.
+    const restart = await fails(core, 'session.restart', { agent: 'a' });
+    expect(restart).toMatchObject({ code: 'refused' });
+    expect(restart.sentence).toMatch(
+      /Builder’s connection can’t continue.*start a new conversation/,
+    );
+    const before = sdk.started.length;
+    await ok(core, 'session.newConversation', { agent: 'a' });
+    expect(sdk.started.slice(before).map(({ resume }) => resume)).toEqual([null]);
+  });
+});
+
+describe('command text in a message (B16 C2)', () => {
+  it('refuses a panel’s command, a Terminal-only command or shell text for every caller, keeping nothing', async () => {
+    const { core, sdk } = await start();
+    await ok(core, 'session.open', { agent: 'a' });
+    // What the session offers itself: its own /config takes a setting.
+    hosts.get('a')?.emit({
+      type: 'commands',
+      commands: [{ name: 'config', description: 'Set a setting', argumentHint: '<key> <value>' }],
+    });
+    await vi.waitFor(() => {
+      expect(core.engines.canvas(CANVAS)?.engine.sessions.of('a').commands).toHaveLength(1);
+    });
+    const before = core.engines.canvas(CANVAS)?.messages.all().length;
+    for (const caller of [YOU, ORCHESTRATOR]) {
+      const resume = await fails(core, 'message', { to: 'a', body: '/resume' }, caller);
+      expect(resume).toEqual({
+        code: 'refused',
+        sentence:
+          'Builder’s /resume is answered by its view, never sent as a message: list its conversations with session.conversations and resume one with session.resumeConversation.',
+      });
+      const login = await fails(core, 'message', { to: 'a', body: ' /login\n' }, caller);
+      expect(login.code).toBe('refused');
+      expect(login.sentence).toBe(
+        '/login runs only in Builder’s Claude Code · Terminal: it runs there once you switch the agent to it (session.continueIn), which only you do.',
+      );
+      expect(await fails(core, 'message', { to: 'a', body: '/config' }, caller)).toMatchObject({
+        code: 'refused',
+      });
+      // Shell text by the Terminal's own prefix, though this connection has none of its own.
+      expect(await fails(core, 'message', { to: 'a', body: '!ls -la' }, caller)).toMatchObject({
+        code: 'refused',
+        sentence: expect.stringMatching(/^That shell command runs only in Builder’s/) as unknown,
+      });
+    }
+    expect(core.engines.canvas(CANVAS)?.messages.all().length).toBe(before);
+    expect(sdk.sessions[0]?.sent ?? []).toEqual([]);
+
+    // The session's own command with its setting, and a path, go as typed.
+    await ok(core, 'message', { to: 'a', body: '/config theme dark' });
+    await ok(core, 'message', { to: 'a', body: '/usr/local/bin is slow' });
+    await vi.waitFor(() => {
+      expect(sdk.sessions[0]?.sent.map(({ text }) => text)).toEqual([
+        '/config theme dark',
+        '/usr/local/bin is slow',
+      ]);
+    });
+  });
+
+  it('sends the same command text to a connection that runs it', async () => {
+    const { core, terminal } = await start();
+    await ok(core, 'session.continueIn', { agent: 'b', connection: 'claude-code.terminal' });
+    await ok(core, 'message', { to: 'b', body: '/resume' });
+    await vi.waitFor(() => {
+      expect(terminal.sessions[0]?.sent.map(({ text }) => text)).toEqual(['/resume']);
+    });
+  });
+});
+
+describe('images a connection takes (B16 C3)', () => {
+  const IMAGE = { mediaType: 'image/png' as const, data: 'iVBORw0KGgo=' };
+  const connectionOf = (core: Core, agent: string) =>
+    (
+      core.engines.canvas(CANVAS)?.document.nodes.find((node) => node.id === agent) as
+        { data: { connection?: string } } | undefined
+    )?.data.connection;
+
+  it('refuses a continuation carrying images its destination takes none of, before anything switches', async () => {
+    const { core, sdk, terminal } = await start();
+    await ok(core, 'session.open', { agent: 'a' });
+    const before = core.engines.canvas(CANVAS)?.messages.all().length;
+    const refused = await fails(core, 'session.continueIn', {
+      agent: 'a',
+      connection: 'claude-code.terminal',
+      then: { text: 'Look at this', images: [IMAGE] },
+      request: crypto.randomUUID(),
+    });
+    expect(refused).toEqual({
+      code: 'refused',
+      sentence: 'Claude Code · Terminal takes no images.',
+    });
+    // Nothing switched, closed, started or kept: its input is yours to correct.
+    expect(connectionOf(core, 'a')).toBe('claude-code.sdk');
+    expect(core.engines.canvas(CANVAS)?.messages.all().length).toBe(before);
+    expect(terminal.started).toEqual([]);
+    expect(sdk.started).toHaveLength(1);
+    // Without them, it continues.
+    await ok(core, 'session.continueIn', {
+      agent: 'a',
+      connection: 'claude-code.terminal',
+      then: { text: 'Look at this' },
+    });
+    expect(connectionOf(core, 'a')).toBe('claude-code.terminal');
+  });
+
+  it('keeps a queued message whole and unsent once its agent runs where its images can’t go', async () => {
+    const { core, sdk, terminal } = await start();
+    holding = Promise.withResolvers<undefined>();
+    await ok(core, 'message', { to: 'a', body: 'Keep working' });
+    const open = core.engines.canvas(CANVAS);
+    await vi.waitFor(() => {
+      expect(open?.engine.sessions.of('a').status).toBe('working');
+    });
+    // Queued behind that turn, with its image, as the Agent SDK takes them.
+    const { id } = (await ok(core, 'message', { to: 'a', body: 'Then this', images: [IMAGE] })) as {
+      id: string;
+    };
+    // The agent now runs in a Terminal, which takes no images.
+    await ok(core, 'agent.setConnection', { agent: 'a', connection: 'claude-code.terminal' });
+    holding.resolve(undefined);
+    holding = undefined;
+    await vi.waitFor(() => {
+      expect(
+        open?.engine.sessions
+          .of('a')
+          .entries.some(
+            (entry) => entry.kind === 'notice' && entry.text.includes('takes no images'),
+          ),
+      ).toBe(true);
+    });
+    // Never sent, as text alone or at all: still its message, waiting, with its image.
+    expect(terminal.sessions.flatMap(({ sent }) => sent)).toEqual([]);
+    expect(sdk.sessions.flatMap(({ sent }) => sent.map(({ text }) => text))).toEqual([
+      'Keep working',
+    ]);
+    expect(open?.messages.get(id)?.state).toBe('pending');
+    // Once it runs where they can go again, it goes, whole, once.
+    await ok(core, 'agent.setConnection', { agent: 'a', connection: 'claude-code.sdk' });
+    await vi.waitFor(() => {
+      expect(sdk.sessions.flatMap(({ sent }) => sent).at(-1)).toMatchObject({
+        text: 'Then this',
+        images: [IMAGE],
+      });
+    });
+    expect(terminal.sessions.flatMap(({ sent }) => sent)).toEqual([]);
+  });
+
+  it('holds a queued message its connection can’t send once refused, trying it no more until the agent runs another way', async () => {
+    const { core, sdk, terminal } = await start();
+    holding = Promise.withResolvers<undefined>();
+    await ok(core, 'message', { to: 'a', body: 'Keep working' });
+    const open = core.engines.canvas(CANVAS);
+    await vi.waitFor(() => {
+      expect(open?.engine.sessions.of('a').status).toBe('working');
+    });
+    const { id } = (await ok(core, 'message', { to: 'a', body: 'Then this', images: [IMAGE] })) as {
+      id: string;
+    };
+    await ok(core, 'agent.setConnection', { agent: 'a', connection: 'claude-code.terminal' });
+    let refusals = 0;
+    let starts = 0;
+    open?.engine.sessions.subscribe((action) => {
+      if (action?.type === 'refuse') refusals += 1;
+      if (action?.type === 'start') starts += 1;
+    });
+    holding.resolve(undefined);
+    holding = undefined;
+    // Refused at the send, it holds its agent's messages, saying what would let it go.
+    await vi.waitFor(() => {
+      expect(open?.delivery.stuck()).toEqual([
+        {
+          agent: 'a',
+          text: 'Claude Code · Terminal takes no images.',
+          clears: expect.stringContaining('takes its images') as unknown,
+          images: true,
+        },
+      ]);
+    });
+    // You see it in Needs as what it is: a message that can't go, not a session that won't start.
+    const { items } = (await ok(core, 'needs', {})) as { items: { id: string; title: string }[] };
+    expect(items.find((item) => item.id.startsWith('start/'))?.title).toMatch(
+      /can’t be sent a message: Claude Code · Terminal takes no images\.$/,
+    );
+    const attempt = open?.messages.get(id)?.delivery?.attempt;
+    // Another message, and the pass it schedules, try it no more: it was refused once.
+    const { id: next } = (await ok(core, 'message', { to: 'a', body: 'And this' })) as {
+      id: string;
+    };
+    await vi.waitFor(() => {
+      expect(open?.messages.get(next)?.state).toBe('pending');
+    });
+    expect({ refusals, starts, attempt: open?.messages.get(id)?.delivery?.attempt }).toEqual({
+      refusals: 1,
+      starts: 1,
+      attempt,
+    });
+    expect(open?.messages.get(id)?.state).toBe('pending');
+    expect(terminal.sessions.flatMap(({ sent }) => sent)).toEqual([]);
+    // Where its images can go, both go, in order, the first whole.
+    await ok(core, 'agent.setConnection', { agent: 'a', connection: 'claude-code.sdk' });
+    await vi.waitFor(() => {
+      expect(sdk.sessions.flatMap(({ sent }) => sent.map(({ text }) => text)).slice(-2)).toEqual([
+        'Then this',
+        'And this',
+      ]);
+    });
+    expect(sdk.sessions.flatMap(({ sent }) => sent).at(-2)?.images).toEqual([IMAGE]);
+  });
+
+  it('lets what waits behind a refused image message go once that message is taken back', async () => {
+    const { core, terminal } = await start();
+    holding = Promise.withResolvers<undefined>();
+    await ok(core, 'message', { to: 'a', body: 'Keep working' });
+    const open = core.engines.canvas(CANVAS);
+    await vi.waitFor(() => {
+      expect(open?.engine.sessions.of('a').status).toBe('working');
+    });
+    const { id } = (await ok(core, 'message', { to: 'a', body: 'Then this', images: [IMAGE] })) as {
+      id: string;
+    };
+    await ok(core, 'agent.setConnection', { agent: 'a', connection: 'claude-code.terminal' });
+    holding.resolve(undefined);
+    holding = undefined;
+    await vi.waitFor(() => {
+      expect(open?.delivery.stuck().map(({ agent }) => agent)).toEqual(['a']);
+    });
+    await ok(core, 'message', { to: 'a', body: 'And this' });
+    await ok(core, 'withdraw', { id });
+    // Nothing it can't send waits first: what does goes, to the connection it runs now.
+    await vi.waitFor(() => {
+      expect(terminal.sessions.flatMap(({ sent }) => sent.map(({ text }) => text))).toEqual([
+        'And this',
+      ]);
+    });
+    expect(open?.delivery.stuck()).toEqual([]);
+  });
+});
+
+describe('what a rewind can go back to (B16 C4)', () => {
+  it('rewinds only to a message its conversation has, since its last clear, refusing anything else before any effect', async () => {
+    const { core } = await start();
+    const first = await turn(core, 'a', 'Write the app');
+    const open = core.engines.canvas(CANVAS);
+    const entries = () => open?.engine.sessions.of('a').entries ?? [];
+    // Not a message of it: its turn's end, another agent's message, a made-up id.
+    const end = entries().find((entry) => entry.kind === 'end')?.id ?? '';
+    const other = await turn(core, 'b', 'Review it');
+    for (const message of [end, other, 'no-such-message']) {
+      for (const [op, args] of [
+        ['session.rewind', { agent: 'a', message, restore: 'code' }],
+        ['session.rewindPreview', { agent: 'a', message }],
+      ] as const) {
+        const refused = await fails(core, op, args);
+        expect(refused).toMatchObject({ code: 'not-found' });
+        expect(refused.sentence).toMatch(/Builder can’t rewind to that message/);
+      }
+    }
+    expect(rewinds).toEqual([]);
+    // Before its last clear: another conversation now.
+    hosts.get('a')?.emit({ type: 'cleared', id: 'clear-1' });
+    await vi.waitFor(() => {
+      expect(entries().some((entry) => entry.kind === 'cleared')).toBe(true);
+    });
+    expect(
+      await fails(core, 'session.rewind', { agent: 'a', message: first, restore: 'code' }),
+    ).toMatchObject({ code: 'not-found' });
+    expect(rewinds).toEqual([]);
+    // What it has since: rewound.
+    const second = await turn(core, 'a', 'Write it again');
+    expect(
+      await ok(core, 'session.rewind', { agent: 'a', message: second, restore: 'code' }),
+    ).toMatchObject({ conversation: false });
+  });
+
+  it('refuses a restore its connection doesn’t declare, before anything, whoever asks', async () => {
+    const { core } = await start();
+    const message = await turn(core, 'a', 'Write the app');
+    await ok(core, 'agent.setConnection', { agent: 'a', connection: 'claude-code.terminal' });
+    for (const restore of ['code', 'conversation', 'both']) {
+      for (const caller of [YOU, ORCHESTRATOR]) {
+        const refused = await fails(
+          core,
+          'session.rewind',
+          { agent: 'a', message, restore },
+          caller,
+        );
+        expect(refused).toMatchObject({ code: 'refused' });
+        expect(refused.sentence).toMatch(/Builder’s connection can’t rewind/);
+      }
+    }
+    expect(rewinds).toEqual([]);
+    const { items } = (await ok(core, 'needs', {})) as { items: { kind: string }[] };
+    expect(items.filter(({ kind }) => kind === 'proposal')).toEqual([]);
+  });
+});
+
+describe('what an attempt keeps of its session (B16 C4)', () => {
+  it('records that the session it went to can’t continue its conversation, as run.get shows it', async () => {
+    const { core } = await start(
+      {},
+      { queued: true, features: { role: 'append', resume: false, list: false } },
+    );
+    // Its session ready first: what it can do is known as the attempt is made.
+    await ok(core, 'session.open', { agent: 'a' });
+    await vi.waitFor(async () => {
+      expect(await ok(core, 'session.get', { agent: 'a' })).toMatchObject({
+        features: { resume: false },
+      });
+    });
+    holding = Promise.withResolvers<undefined>();
+    await ok(core, 'run.start', {});
+    await vi.waitFor(async () => {
+      expect(await ok(core, 'run.get', {})).toMatchObject({
+        agents: { a: { attempts: { fix: [{ status: 'running', resumes: false }] } } },
+      });
+    });
   });
 });

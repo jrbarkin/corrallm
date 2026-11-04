@@ -4,6 +4,7 @@ import type { Adapter } from '../adapter';
 import { FakeConnector } from '../fake';
 import { fakePlan } from '../fake-prompts';
 import type { ModelChoice } from '../../../shared/session';
+import { CLAUDE_FEATURES } from './features';
 import { findClaude } from './claude';
 import { isUuid } from '../id';
 import { claudeOptions } from './claude-settings';
@@ -73,9 +74,7 @@ export const claudeCode: Adapter = {
       rank: RANKS[mode.id],
     })),
     runtimeModes: false,
-    role: 'append',
-    resume: true,
-    list: true,
+    ...CLAUDE_FEATURES,
     // https://code.claude.com/docs/en/tools-reference.md, https://code.claude.com/docs/en/commands.md
     // (read 2026-10-11, Claude Code v2.1.287)
     actions: [
@@ -178,7 +177,8 @@ export const claudeCode: Adapter = {
               description: 'Export the current conversation to a file or clipboard',
             },
             { name: 'add-dir', description: 'Add a new working directory' },
-            { name: 'config', description: 'Open settings' },
+            // Bare only: `/config <key> <value>` is the session's own command.
+            { name: 'config', description: 'Open settings', bare: true as const },
             { name: 'theme', description: 'Change the theme' },
             { name: 'ide', description: 'Manage IDE integrations and show status' },
             { name: 'plugin', description: 'Manage Claude Code plugins' },
@@ -234,11 +234,7 @@ export const claudeCode: Adapter = {
         plan: fakePlan,
         askingModes: ['manual', 'plan', 'read-only'],
         tool: { tool: 'Bash', summary: 'echo hello' },
-        features: {
-          role: claudeCode.descriptor.role,
-          resume: claudeCode.descriptor.resume,
-          list: claudeCode.descriptor.list,
-        },
+        features: CLAUDE_FEATURES,
       },
     }),
   fakeOptions: {

@@ -9,6 +9,7 @@ import { codexOptions } from './options';
 import { FakeConnector } from '../fake';
 import { fakePlan } from '../fake-prompts';
 import type { ModelChoice } from '../../../shared/session';
+import { CODEX_FEATURES } from './features';
 import logo from './logo.svg?raw';
 import { UsageReader } from './terminal/usage';
 import { codexConversations } from './conversations';
@@ -98,9 +99,7 @@ export const codex: Adapter = {
     })),
     runtimeModes: false,
     // A resumed thread keeps the developer instructions it started with (openai/codex#19045).
-    role: 'append-new',
-    resume: true,
-    list: false,
+    ...CODEX_FEATURES,
     // https://developers.openai.com/codex/cli/slash-commands (now learn.chatgpt.com) and the CLI's
     // source, openai/codex rust-v0.162.1 (read 2026-10-11)
     actions: [
@@ -220,11 +219,7 @@ export const codex: Adapter = {
         plan: fakePlan,
         askingModes: ['manual', 'plan', 'read-only'],
         tool: { tool: 'Bash', summary: 'echo hello' },
-        features: {
-          role: codex.descriptor.role,
-          resume: codex.descriptor.resume,
-          list: codex.descriptor.list,
-        },
+        features: CODEX_FEATURES,
       },
     }),
   fakeOptions: {

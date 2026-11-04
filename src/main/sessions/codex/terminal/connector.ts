@@ -19,6 +19,7 @@ import type { InstructionsContext } from './instructions';
 import { HookTruster } from './trust';
 import { CodexTui } from './tui';
 import { UsageReader } from './usage';
+import { CODEX_FEATURES } from '../features';
 import { prepareApi } from '../mcp';
 import type { startAppServer } from '../rpc';
 
@@ -170,6 +171,7 @@ export class CodexTerminalConnector implements Connector<CodexMode> {
       tmp: this.#tmp,
       env: () => codexEnvironment(api?.env ?? spec.env),
       timing: this.#timing,
+      features: CODEX_FEATURES,
       ...(usage === undefined
         ? {}
         : {
