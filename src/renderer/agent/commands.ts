@@ -66,8 +66,12 @@ export function panelWords(
   panel: Panel,
   features: SessionFeatures | null | undefined,
   connection: string,
+  reported = false,
 ): string {
   const command = `/${panel}`;
+  if (!features && reported) {
+    return `${command} isn’t available: this agent’s session is running but didn’t say what it supports, so none of its conversation features are offered. Nothing was sent.`;
+  }
   if (!features) {
     return `${command} can’t open yet: this agent’s session isn’t ready. Nothing was sent; try it once the session has started.`;
   }

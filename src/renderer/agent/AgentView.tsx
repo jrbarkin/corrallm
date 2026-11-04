@@ -7,7 +7,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { flushSync } from 'react-dom';
 import { useLabel } from '../useDraft';
 
-import type { AdapterId, ConnectionDescriptor } from '../../shared/adapter';
+import type { AdapterId, ConnectionDescriptor, ConnectionId } from '../../shared/adapter';
 import type { ProjectFolder } from '../../shared/canvas';
 import type {
   McpChange,
@@ -42,6 +42,8 @@ import {
 } from './commands';
 import type { ViewCommand } from './commands';
 import type { Route } from '../../shared/routing';
+import { routeRefusal } from '../../shared/routing';
+import { imageRefusal } from '../../shared/images';
 import { Composer } from './Composer';
 import { isCommand } from './completion';
 import { queueLinks } from './links';
@@ -188,7 +190,12 @@ export function AgentView({
   /** Opens its Agent settings sheet (AgentSettings.tsx). */
   onOpenSettings: () => void;
   /** Switches it to its continuation connection, resuming its conversation, and runs `command` there if given. */
-  onContinue: (request: string, command?: string, images?: MessageImage[]) => void;
+  onContinue: (
+    request: string,
+    connection: ConnectionId,
+    command?: string,
+    images?: MessageImage[],
+  ) => Promise<unknown> | undefined;
   /** What changes its queue, and the queue shown beside it. */
   edits: QueueEdits;
   /** How each agent's tasks are marked: links, and where the queues' run is (src/shared/model/queue-marks.ts). */
@@ -352,7 +359,18 @@ export function AgentView({
   /** The message picked to rewind to, while /rewind's panel is open (none: it asks which). */
   const [rewindTo, setRewindTo] = useState<string>();
   /** What the composer starts with, and its turn (a new one starts it afresh with that). */
-  const [draft, setDraft] = useState({ text: '', turn: 0 });
+  // A stale offer, panel or note names a connection the agent no longer has.
+  const [shownFor, setShownFor] = useState(connection);
+  if (shownFor !== connection) {
+    setShownFor(connection);
+    setOffer(undefined);
+    setOpened(undefined);
+    setUnavailable(undefined);
+  }
+  const [draft, setDraft] = useState<{ text: string; images?: MessageImage[]; turn: number }>({
+    text: '',
+    turn: 0,
+  });
   /** The first Esc of a double one, in an empty composer: what closes the view if no second comes. */
   const firstEsc = useRef<ReturnType<typeof setTimeout>>(undefined);
   useEffect(
@@ -446,23 +464,45 @@ export function AgentView({
    * offered there instead; while the run asks (`ask.reply`), the answer, unless it is a command
    * the session runs.
    */
+  /** Why text it would offer to continue elsewhere can't go with its images, if so. */
+  const refuses = (text: string, images: MessageImage[]) => {
+    const route = routeText(text, connection, session.commands);
+    return (route.kind === 'continue' || route.kind === 'shell') && target
+      ? imageRefusal(images, target.images, target.label)
+      : undefined;
+  };
   const send = (text: string, images?: MessageImage[]) => {
     const route = routeText(text, connection, session.commands);
+    // Whatever was said before is stale once something else is sent.
+    setUnavailable(undefined);
     if (route.kind === 'panel') {
       if (!panelOpens(route.panel, features)) {
         setOffer(undefined);
         setOpened(undefined);
-        setUnavailable(panelWords(route.panel, features, declared?.label ?? 'This connection'));
+        setUnavailable(
+          panelWords(
+            route.panel,
+            features,
+            declared?.label ?? 'This connection',
+            session.mode !== null || (session.models?.length ?? 0) > 0,
+          ),
+        );
         return;
       }
       controls.recordCommand?.(text);
       setRewindTo(undefined);
-      setUnavailable(undefined);
       if (route.panel === 'mcp') signInRequest.current = crypto.randomUUID();
       setOpened(route.panel);
       return;
     }
+    if ((route.kind === 'continue' || route.kind === 'shell') && target === undefined) {
+      // The core decides the same and refuses; the view says so without asking it.
+      setOffer(undefined);
+      setUnavailable(routeRefusal(route, name, '') ?? '');
+      return;
+    }
     if ((route.kind === 'continue' || route.kind === 'shell') && target !== undefined) {
+      setOpened(undefined);
       setOffer({
         text,
         route,
@@ -471,7 +511,13 @@ export function AgentView({
       });
       return;
     }
-    if (ask?.reply && !(connection !== undefined && isCommand(text, session.commands))) {
+    // A command the session offers runs as a command; unknown commands: any /name does.
+    const command =
+      route.kind === 'command' ||
+      (connection !== undefined &&
+        session.commands === undefined &&
+        isCommand(text.trimStart(), undefined));
+    if (ask?.reply && !command) {
       own.onDecide(ask.item.id, {
         reply: text,
         ...(images === undefined || images.length === 0 ? {} : { images }),
@@ -549,8 +595,8 @@ export function AgentView({
                 adapter={agent}
                 connection={connection}
                 onChange={onAgent}
-                onContinue={(request) => {
-                  onContinue(request);
+                onContinue={(request, to) => {
+                  void onContinue(request, to);
                 }}
               />
               <ApiMark agent={node.id} />
@@ -671,11 +717,12 @@ export function AgentView({
                   <Composer
                     key={draft.turn}
                     initialDraft={draft.text}
+                    {...(draft.images ? { initialImages: draft.images } : {})}
                     agentName={name}
                     agent={agent}
                     session={session}
                     commands={commands}
-                    controls={{ ...controls, send }}
+                    controls={{ ...controls, send, refuses }}
                     field={composer}
                     {...(ask?.reply ? { placeholder: ask.reply.label } : {})}
                     above={
@@ -708,8 +755,9 @@ export function AgentView({
                                     label: target.label,
                                     onSignIn: () => {
                                       setOpened(undefined);
-                                      onContinue(
+                                      void onContinue(
                                         signInRequest.current ?? crypto.randomUUID(),
+                                        target.id,
                                         '/mcp',
                                       );
                                     },
@@ -741,7 +789,6 @@ export function AgentView({
                             <p>{unavailable}</p>
                             <button
                               type="button"
-                              autoFocus
                               onClick={() => {
                                 setUnavailable(undefined);
                                 composer.current?.focus();
@@ -756,8 +803,18 @@ export function AgentView({
                             target={target}
                             words={offerWords(offer.text, offer.route, target)}
                             onContinue={() => {
+                              const { text, images, request, route } = offer;
                               setOffer(undefined);
-                              onContinue(offer.request, offer.text, offer.images);
+                              // A refusal puts what was typed back, with its images, to correct.
+                              void onContinue(request, route.connection, text, images)?.catch(
+                                () => {
+                                  setDraft(({ turn }) => ({
+                                    text,
+                                    ...(images ? { images } : {}),
+                                    turn: turn + 1,
+                                  }));
+                                },
+                              );
                             }}
                             onCancel={() => {
                               setOffer(undefined);

@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react';
 
 import { connectionIn } from '../../shared/adapter';
-import type { AdapterId } from '../../shared/adapter';
+import type { AdapterId, ConnectionId } from '../../shared/adapter';
 import { adapterAccent, catalog } from '../catalog';
 import { AdapterLogo } from '../AdapterLogo';
 import { continuationOf } from './commands';
@@ -36,7 +36,7 @@ export function AgentChip({
   initiallyOpen?: boolean;
   onChange: (adapter: AdapterId, connection: AgentConnection) => void;
   /** Continues there; `request` is this offer's id, the same for a retry of it. */
-  onContinue: (request: string) => void;
+  onContinue: (request: string, connection: ConnectionId) => void;
 }) {
   const [open, setOpen] = useState(initiallyOpen);
   const button = useRef<HTMLButtonElement>(null);
@@ -103,7 +103,8 @@ export function AgentChip({
             choice.continues ? 'continue' : `${choice.adapter}/${choice.connection}`
           }
           onPick={(choice) => {
-            if (choice.continues) onContinue(request.current ?? crypto.randomUUID());
+            if (choice.continues)
+              onContinue(request.current ?? crypto.randomUUID(), choice.connection);
             else onChange(choice.adapter, choice.connection);
             setOpen(false);
             button.current?.focus();

@@ -154,6 +154,16 @@ describe('routeRefusal', () => {
     expect(words('/usr/bin')).toBeUndefined();
     expect(words('Hello')).toBeUndefined();
   });
+
+  it('names no target where the connection’s own is missing, without a dangling name', () => {
+    const missing = (text: string) => routeRefusal(routeOf(text, context([])), 'Builder', '');
+    expect(missing('/login')).toBe(
+      '/login runs only in the connection Builder continues in, which this build lacks: nothing was sent, and only you can switch the agent.',
+    );
+    expect(missing('$ ls')).toBe(
+      'That shell command runs only in the connection Builder continues in, which this build lacks: nothing was sent, and only you can switch the agent.',
+    );
+  });
 });
 
 describe('the strict catalog schema', () => {

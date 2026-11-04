@@ -1941,10 +1941,25 @@ describe('a connected agent', () => {
 });
 
 describe('an Agent SDK agent continued in Terminal', () => {
-  it('continues the exact pending input and its images in one operation', async () => {
+  it('keeps the input and its images, and offers nothing, for a destination that takes no images', async () => {
     const { replies, composer, view, operations } = await open({ connection: 'claude-code.sdk' });
     const file = new File(['image'], 'diagram.png', { type: 'image/png' });
     await events.drop(composer, { dataTransfer: { files: [file] } });
+    const input = '  !printf "hello"\n  ';
+    await events.change(composer, { target: { value: input } });
+    const before = operations().length;
+    await events.keyDown(composer, { key: 'Enter' });
+    await settle();
+    expect(view.queryByRole('group', { name: 'Continue in Terminal?' })).toBeNull();
+    expect(view.getByText('Terminal takes no images.')).toBeTruthy();
+    expect(composer.value).toBe(input);
+    expect(view.getByRole('list', { name: 'Images' })).toBeTruthy();
+    expect(operations().slice(before)).toEqual([]);
+    expect(replies.send).not.toHaveBeenCalled();
+  });
+
+  it('continues the exact pending input in one operation', async () => {
+    const { replies, composer, view, operations } = await open({ connection: 'claude-code.sdk' });
     const input = '  !printf "hello"\n  ';
     await events.change(composer, { target: { value: input } });
     await events.keyDown(composer, { key: 'Enter' });
@@ -1957,7 +1972,7 @@ describe('an Agent SDK agent continued in Terminal', () => {
       agent: 'a',
       connection: 'claude-code.terminal',
       request: expect.stringMatching(UUID) as unknown,
-      then: { text: input, images: [{ mediaType: 'image/png', data: 'aW1hZ2U=' }] },
+      then: { text: input },
     });
     expect(replies.send).toHaveBeenCalledOnce();
   });
@@ -2391,6 +2406,38 @@ describe('an Agent SDK agent rewound', () => {
     expect(box.value).toBe('Now the cart');
     expect(composer).not.toBe(box);
   });
+
+  it.each(['conversation', 'code'] as const)(
+    'restores %s alone in one operation',
+    async (restore) => {
+      const { view, ids, canvas } = await talked((fake) => {
+        fake.replies.previewRewind.mockResolvedValue({
+          possible: true,
+          files: ['src/cart.ts'],
+          added: 4,
+          removed: 10,
+        });
+        fake.replies.rewind.mockResolvedValue({ conversation: restore === 'conversation' });
+      });
+      const rewinds = view.getAllByRole('button', { name: 'Rewind to here' });
+      await events.click(rewinds[1] ?? document.body);
+      await settle();
+      const panel = within(view.getByRole('group', { name: 'Rewind' }));
+      const before = canvas.core.operations.length;
+      await events.click(
+        panel.getByRole('button', {
+          name: restore === 'code' ? 'Restore code' : 'Restore conversation',
+        }),
+      );
+      await settle();
+      expectOneOp({ operations: canvas.core.operations.slice(before) }, 'session.rewind', {
+        canvas: canvas.document.id,
+        agent: 'a',
+        message: ids[1],
+        restore,
+      });
+    },
+  );
 
   it('offers the conversation alone where no files changed, or they can’t be restored', async () => {
     const { replies, view, transcript, ids } = await talked((fake) => {

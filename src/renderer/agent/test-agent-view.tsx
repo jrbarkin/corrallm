@@ -129,3 +129,57 @@ export const settle = () =>
   act(async () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
   });
+
+/** Agent `a` on `connection`, held by the run at an OK (its composer's text answers it). */
+export async function openHeld(connection: string, catalog: Catalog) {
+  await adoptCatalog(catalog);
+  const fake = fakeSessions();
+  const graph: Graph = {
+    nodes: [
+      {
+        id: 'a',
+        type: 'agent',
+        position: { x: 0, y: 0 },
+        data: {
+          label: 'a',
+          connection: connection,
+          queue: [{ id: 'ok', approve: 'the spec' }],
+        },
+      },
+    ],
+    edges: [],
+  };
+  const box: { canvas?: FakeCanvas } = {};
+  const { container } = await renderReady(
+    <GraphEditor
+      initialGraph={graph}
+      sessionReplies={fake.replies}
+      onCanvas={(made) => {
+        box.canvas = made;
+      }}
+    />,
+  );
+  const canvas = box.canvas;
+  if (!canvas) throw new Error('No fake canvas');
+  act(() => {
+    canvas.run({ running: true, agents: { a: { current: 'ok', status: 'asking', outcomes: {} } } });
+  });
+  const card = container.querySelector<HTMLElement>('.react-flow__node[data-id="a"]');
+  if (!card) throw new Error('no agent');
+  await events.doubleClick(card);
+  await settle();
+  const view = within(screen.getByRole('dialog', { name: 'a' }));
+  const composer = view.getByRole<HTMLTextAreaElement>('textbox', { name: 'Message a' });
+  act(() => {
+    fake.emit('a', connection, STARTED, {
+      type: 'commands',
+      commands: [{ name: 'compact', description: 'Compact', argumentHint: '' }],
+    });
+  });
+  const send = async (text: string) => {
+    await events.change(composer, { target: { value: text } });
+    await events.keyDown(composer, { key: 'Enter' });
+    await settle();
+  };
+  return { ...fake, canvas, view, composer, send };
+}
